@@ -196,13 +196,13 @@ impl RuntimeCore {
     /// Own the touched viewport's panned axis through momentum and its edge return. Other
     /// viewports use the native wheel path, including native clamping and stick-to-bottom.
     pub(in crate::runtime) fn step_touch_scroll(&mut self, id: NodeId, overflow: f64, dt: f32, horizontal: bool) -> Option<bool> {
-        let effects = step(&mut self.pointer.touch.scroll, TouchEvent::Tick { id, horizontal, overflow, dt });
+        let effects = step(self.pointer.touch_scroll_mut(), TouchEvent::Tick { id, horizontal, overflow, dt });
         self.apply_touch(effects)
     }
 
     /// Step the pan and carry out what the transition asked for.
     fn step_touch(&mut self, event: TouchEvent) {
-        let effects = step(&mut self.pointer.touch.scroll, event);
+        let effects = step(self.pointer.touch_scroll_mut(), event);
         let _ = self.apply_touch(effects);
     }
 
@@ -233,7 +233,7 @@ impl RuntimeCore {
                     *offset = edge + over * 0.55 / (1.0 + over.abs() * 0.55 / 300.0);
                     if !horizontal { st.mode = st.mode.to_rest(); }
                     st.moved();
-                    self.scroll_cancels_press(id);
+                    self.pointer.scroll_cancels_press(&self.tree.nodes, id);
                 }
                 TouchEffect::Hold { id, horizontal, overflow } => {
                     let Some(st) = self.scroll.scrolls.get_mut(&id) else { continue };

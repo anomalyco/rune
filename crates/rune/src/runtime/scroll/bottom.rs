@@ -106,6 +106,13 @@ pub(in crate::runtime) fn glide(st: &mut ScrollState, dt: f32) -> bool {
     moving
 }
 
+impl requests::ScrollTables {
+    #[inline]
+    pub(in crate::runtime) fn at_bottom(&self, id: NodeId) -> Option<bool> {
+        self.scrolls.get(&id).map(|st| st.offset >= st.max - AT_BOTTOM)
+    }
+}
+
 impl RuntimeCore {
     /// The scroll viewport `key` names (`Node::named`), or the nearest one containing it.
     pub(in crate::runtime) fn scroll_viewport(&self, key: &str) -> Option<usize> {
@@ -329,7 +336,7 @@ impl RuntimeCore {
     /// as of the last frame.
     pub fn scroll_at_bottom(&self, key: &str) -> Option<bool> {
         let i = self.scroll_viewport(key)?;
-        self.scroll.scrolls.get(&self.tree.nodes[i].id).map(|st| st.offset >= st.max - AT_BOTTOM)
+        self.scroll.at_bottom(self.tree.nodes[i].id)
     }
 }
 

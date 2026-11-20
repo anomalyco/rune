@@ -387,9 +387,9 @@ fn type_select_matches_prefixes_and_cycles_a_repeated_letter() {
     let mut rt = menu_runtime(Menu { open: true, ..Default::default() });
     press(&mut rt, Key::Text("b".into())); assert_eq!(focused(&rt), "Beta");
     press(&mut rt, Key::Text("r".into())); assert_eq!(focused(&rt), "Bravo");
-    if let focus_machine::TypeSelect::Typing { at, .. } = &mut rt.kbd.type_select { *at -= focus_machine::TYPE_SELECT_PAUSE + 0.1; }
+    rt.kbd.age_type_select(focus_machine::TYPE_SELECT_PAUSE + 0.1);
     press(&mut rt, Key::Text("c".into())); assert_eq!(focused(&rt), "Charlie", "a pause starts a new prefix");
-    if let focus_machine::TypeSelect::Typing { at, .. } = &mut rt.kbd.type_select { *at -= focus_machine::TYPE_SELECT_PAUSE + 0.1; }
+    rt.kbd.age_type_select(focus_machine::TYPE_SELECT_PAUSE + 0.1);
     press(&mut rt, Key::Text("b".into())); assert_eq!(focused(&rt), "Beta");
     press(&mut rt, Key::Text("b".into())); assert_eq!(focused(&rt), "Bravo");
     press(&mut rt, Key::Text("b".into())); assert_eq!(focused(&rt), "Beta");

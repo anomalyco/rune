@@ -93,13 +93,27 @@ impl ModalFocus {
     }
 }
 
+impl focus_machine::KeyboardState {
+    #[inline]
+    pub(super) fn modal_top(&self) -> Option<&str> {
+        self.modal_focus.top()
+    }
+
+    #[inline]
+    pub(super) fn step_modal(&mut self, event: ModalEvent) -> Vec<ModalEffect> {
+        let (state, effects) = std::mem::take(&mut self.modal_focus).step(event);
+        self.modal_focus = state;
+        effects
+    }
+}
+
 impl RuntimeCore {
     /// Feeds the modal focus machine what this commit shows: modals that went (innermost first),
     /// a modal that opened, and focus that left the top modal.
     pub(in crate::runtime) fn sync_modals(&mut self, app: &mut dyn AppDriver) {
-        let returned = std::mem::take(&mut self.kbd.focus_returned);
+        let returned = self.kbd.take_focus_returned();
         // Exiting visuals are already inert, so a closing modal counts as gone.
-        while let Some(top) = self.kbd.modal_focus.top().map(str::to_owned).filter(|p| self.node(p).is_none()) {
+        while let Some(top) = self.kbd.modal_top().map(str::to_owned).filter(|p| self.node(p).is_none()) {
             let inside = |f: &str| f.strip_prefix(top.as_str()).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
             let kept = self.kbd.focus.path().is_some_and(|f| !inside(f) && self.node(f).is_some());
             self.modal_step(app, ModalEvent::TopRemoved { kept });
@@ -122,13 +136,12 @@ impl RuntimeCore {
     }
 
     fn modal_step(&mut self, app: &mut dyn AppDriver, event: ModalEvent) {
-        let (state, effects) = std::mem::take(&mut self.kbd.modal_focus).step(event);
-        self.kbd.modal_focus = state;
+        let effects = self.kbd.step_modal(event);
         for effect in effects {
             match effect {
                 ModalEffect::CancelGestures => {
                     self.drop_press();
-                    self.pointer.secondary = capture::Secondary::Up;
+                    self.pointer.clear_secondary();
                     self.pointer.hovered = None;
                 }
                 ModalEffect::FocusInitial => {

@@ -416,6 +416,67 @@ impl ScrollState {
     }
 }
 
+impl requests::ScrollTables {
+    /// A delta arrived: a gesture idle too long, or ended and not followed by its momentum,
+    /// is over, and this delta starts the next. Without phases, a delta wholly on the other
+    /// axis (Shift let go, a tilt, a second wheel) also starts a new gesture.
+    #[inline]
+    pub(in crate::runtime) fn wheel_delta(&mut self, now: f64, dx: f32, dy: f32, pending: Option<Attempt>) {
+        self.drop_holds();
+        self.wheel_lock.delta(now, dx, dy, pending);
+    }
+
+    #[inline]
+    pub(super) fn wheel_began_at(&mut self, now: f64, queued: bool, pending: Option<Attempt>) {
+        let active = self.wheel_lock.owner() != &WheelOwner::Unpicked;
+        self.wheel_lock.began(now, active, queued, pending);
+    }
+
+    #[inline]
+    pub(super) fn wheel_ended_at(&mut self, now: f64) {
+        self.wheel_lock.ended_at(now);
+    }
+
+    #[inline]
+    pub(super) fn wheel_lost(&mut self, pending: Option<Attempt>) {
+        self.wheel_lock.lost(pending);
+    }
+
+    /// Steps viewport `id`'s horizontal limit and momentum once `overflow` is known.
+    pub(super) fn step_x_state(&mut self, id: NodeId, overflow: f64, dt: f32, catch_up: bool, scale: f64, land_wheel: bool) -> bool {
+        let Some(st) = self.scrolls.get_mut(&id) else { return false };
+        st.x.max = overflow.max(0.0);
+        let mut moving = false;
+        match st.x.motion {
+            XMotion::Glide { v, aim } => {
+                let mut glide = Some(v);
+                moving = scroll_offset::glide_axis(st.glide_spring(), &mut st.x.offset, &mut glide, aim.min(st.x.max), dt);
+                st.x.motion = glide.map_or(XMotion::Rest, |v| XMotion::Glide { v, aim });
+            }
+            XMotion::Momentum(v) if v.abs() > 1.0 => {
+                let decay = (-SCROLL_DECAY * dt).exp();
+                st.x.offset += f64::from(v * (1.0 - decay) / SCROLL_DECAY);
+                let edge = st.x.offset <= 0.0 || st.x.offset >= st.x.max;
+                st.x.motion = if edge { XMotion::Rest } else { XMotion::Momentum(v * decay) };
+                moving = true;
+            }
+            XMotion::Momentum(_) => st.x.motion = XMotion::Rest,
+            XMotion::Wheel(mut curve) => {
+                curve.follow(st.x.offset);
+                if curve.target() > st.x.max { curve.retarget(st.x.max, scale); }
+                if land_wheel { curve.advance(f64::INFINITY, false) } else { curve.advance(f64::from(dt), catch_up) }
+                st.x.offset = scroll_wheel::on_grid_or_end(curve.value(), st.x.max, scale);
+                curve.applied(st.x.offset);
+                st.moved();
+                if curve.done() { st.x.motion = XMotion::Rest; } else { st.x.motion = XMotion::Wheel(curve); moving = true; }
+            }
+            XMotion::Rest => {}
+        }
+        st.x.offset = st.x.offset.clamp(0.0, st.x.max);
+        moving
+    }
+}
+
 impl RuntimeCore {
     /// A wheel or trackpad delta in points on both axes (positive moves content right and
     /// down). The gesture's first delta picks the axis and the rest of the gesture keeps it:
@@ -427,16 +488,6 @@ impl RuntimeCore {
     pub fn wheel_xy(&mut self, x: f32, y: f32, dx: f32, dy: f32) {
         if dx == 0.0 && dy == 0.0 { return; }
         self.wheel_event(crate::WheelEvent::new(dx, dy).at(x, y));
-    }
-
-    /// A delta arrived: a gesture idle too long, or ended and not followed by its momentum,
-    /// is over, and this delta starts the next. Without phases, a delta wholly on the other
-    /// axis (Shift let go, a tilt, a second wheel) also starts a new gesture.
-    pub(in crate::runtime) fn wheel_delta_arrived(&mut self, dx: f32, dy: f32) {
-        self.drop_scroll_holds();
-        let now = self.now_clock();
-        let pending = self.wheel_pending();
-        self.scroll.wheel_lock.delta(now, dx, dy, pending);
     }
 
     /// The gesture the oldest wheel delta still waiting for `on_wheel` handlers belongs to: the
@@ -485,20 +536,19 @@ impl RuntimeCore {
         // A delta queued for `on_wheel` handlers hasn't picked who has the gesture yet.
         let queued = self.wheel_queued(Some(gesture));
         let pending = self.wheel_pending();
-        let active = self.scroll.wheel_lock.owner() != &WheelOwner::Unpicked;
-        self.scroll.wheel_lock.began(now, active, queued, pending);
+        self.scroll.wheel_began_at(now, queued, pending);
     }
 
     /// The platform ended a trackpad gesture (`TouchPhase::Ended` or `Cancelled`).
     pub fn wheel_ended(&mut self) {
         let now = self.now_clock();
-        self.scroll.wheel_lock.ended_at(now);
+        self.scroll.wheel_ended_at(now);
     }
 
     /// The window lost the pointer or focus: a gesture in progress won't report its end here.
     pub(in crate::runtime) fn wheel_lost(&mut self) {
         let pending = self.wheel_pending();
-        self.scroll.wheel_lock.lost(pending);
+        self.scroll.wheel_lost(pending);
     }
 
     /// Scrolls the horizontal viewport latched for `gesture` (or the innermost one at (x, y)) by
@@ -528,14 +578,14 @@ impl RuntimeCore {
             st.x.motion = XMotion::Wheel(curve);
             st.moved();
             log_event!(self, "wheel-x-notch {dx:.1}");
-            self.scroll_cancels_press(id);
+            self.pointer.scroll_cancels_press(&self.tree.nodes, id);
             return;
         }
         st.x.offset = (st.x.offset + st.x.toward(f64::from(dx))).clamp(0.0, st.x.max);
         st.x.motion = XMotion::Rest;
         st.moved();
         log_event!(self, "wheel-x {dx:.1}");
-        if st.x.offset != before { self.scroll_cancels_press(id); }
+        if st.x.offset != before { self.pointer.scroll_cancels_press(&self.tree.nodes, id); }
     }
 
     /// Releases a scroll with velocity (vx, vy) in points per second (positive moves content
@@ -552,7 +602,7 @@ impl RuntimeCore {
         if let Some(st) = self.scroll.scrolls.get_mut(&id) {
             st.x.motion = XMotion::Momentum(st.x.toward(f64::from(vx)) as f32);
             log_event!(self, "fling-x {vx:.0}");
-            if vx != 0.0 { self.scroll_cancels_press(id); }
+            if vx != 0.0 { self.pointer.scroll_cancels_press(&self.tree.nodes, id); }
         }
     }
 
@@ -575,36 +625,7 @@ impl RuntimeCore {
         if let Some(active) = self.step_touch_scroll(id, overflow, dt, true) { return active; }
         let scale = f64::from(self.env.scale * self.zoom());
         let land_wheel = !self.wheel_glides();
-        let Some(st) = self.scroll.scrolls.get_mut(&id) else { return false };
-        st.x.max = overflow.max(0.0);
-        let mut moving = false;
-        match st.x.motion {
-            XMotion::Glide { v, aim } => {
-                let mut glide = Some(v);
-                moving = scroll_offset::glide_axis(st.glide_spring(), &mut st.x.offset, &mut glide, aim.min(st.x.max), dt);
-                st.x.motion = glide.map_or(XMotion::Rest, |v| XMotion::Glide { v, aim });
-            }
-            XMotion::Momentum(v) if v.abs() > 1.0 => {
-                let decay = (-SCROLL_DECAY * dt).exp();
-                st.x.offset += f64::from(v * (1.0 - decay) / SCROLL_DECAY);
-                let edge = st.x.offset <= 0.0 || st.x.offset >= st.x.max;
-                st.x.motion = if edge { XMotion::Rest } else { XMotion::Momentum(v * decay) };
-                moving = true;
-            }
-            XMotion::Momentum(_) => st.x.motion = XMotion::Rest,
-            XMotion::Wheel(mut curve) => {
-                curve.follow(st.x.offset);
-                if curve.target() > st.x.max { curve.retarget(st.x.max, scale); }
-                if land_wheel { curve.advance(f64::INFINITY, false) } else { curve.advance(f64::from(dt), catch_up) }
-                st.x.offset = scroll_wheel::on_grid_or_end(curve.value(), st.x.max, scale);
-                curve.applied(st.x.offset);
-                st.moved();
-                if curve.done() { st.x.motion = XMotion::Rest; } else { st.x.motion = XMotion::Wheel(curve); moving = true; }
-            }
-            XMotion::Rest => {}
-        }
-        st.x.offset = st.x.offset.clamp(0.0, st.x.max);
-        moving
+        self.scroll.step_x_state(id, overflow, dt, catch_up, scale, land_wheel)
     }
 
     /// `Tx::scroll_into_view` on x: scrolls the nearest horizontal viewport around row `key`

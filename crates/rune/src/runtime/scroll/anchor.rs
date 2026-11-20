@@ -4,6 +4,19 @@
 //! layout springs too; a commit that changes nothing above the row moves nothing.
 use super::*;
 
+impl requests::ScrollTables {
+    /// Whether viewport `s` anchors now: scrolled off its top, not following its bottom, still
+    /// (a hold would stop a fling or a glide where it is), and not already holding a row or
+    /// revealing one.
+    pub(super) fn anchor_holds(&self, nodes: &[Node], s: usize) -> bool {
+        let path = &nodes[s].path;
+        if self.requests.owns(path) { return false; }
+        self.scrolls.get(&nodes[s].id).is_some_and(|st| {
+            st.offset > 0.5 && !st.pinned() && !st.scrolling() && !st.direct() && st.coast() == 0.0 && st.glide().is_none()
+        })
+    }
+}
+
 impl RuntimeCore {
     /// Before a commit: puts each anchored viewport's top row ahead of the app's own
     /// `Tx::keep_on_screen` keys, which win when they name a row in the same viewport.
@@ -11,23 +24,12 @@ impl RuntimeCore {
         if !self.tree.built || self.paint.drawn.len() != self.tree.nodes.len() { return; }
         let rows: Vec<String> = (0..self.tree.nodes.len())
             .filter(|&s| self.tree.nodes[s].scroll_edges.anchor && self.tree.nodes[s].scroll_axes.y())
-            .filter(|&s| self.anchor_holds(s))
+            .filter(|&s| self.scroll.anchor_holds(&self.tree.nodes, s))
             .filter_map(|s| self.anchor_row(s))
             .map(|i| self.tree.nodes[i].path.clone())
             .collect();
         if rows.is_empty() { return; }
         tx.keep_on_screen.splice(0..0, rows);
-    }
-
-    /// Whether viewport `s` anchors now: scrolled off its top, not following its bottom, still
-    /// (a hold would stop a fling or a glide where it is), and not already holding a row or
-    /// revealing one.
-    fn anchor_holds(&self, s: usize) -> bool {
-        let path = &self.tree.nodes[s].path;
-        if self.scroll.requests.owns(path) { return false; }
-        self.scroll.scrolls.get(&self.tree.nodes[s].id).is_some_and(|st| {
-            st.offset > 0.5 && !st.pinned() && !st.scrolling() && !st.direct() && st.coast() == 0.0 && st.glide().is_none()
-        })
     }
 
     /// The row viewport `s` anchors to: the first child drawn in its view, or inside a child

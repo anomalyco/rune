@@ -225,18 +225,18 @@ pub(crate) struct KeyboardState {
     /// What has focus, how it shows and where Tab starts (`runtime/input/focus_machine.rs`).
     pub(crate) focus: FocusState,
     /// Type-select's typed prefix and when its last key arrived (`now_clock`).
-    pub(in crate::runtime) type_select: TypeSelect,
+    type_select: TypeSelect,
     /// The activation key (Enter, Escape, Space) held down and the focus it was first pressed
     /// on. Its repeats are dropped once focus has moved, so a held key that closed something
     /// can't act again on whatever took focus next.
     pub(in crate::runtime) held: crate::runtime::physical_dispatch::Activation,
     /// Modifier keys down, for `Key::Modifier` (off unless the app opts in).
-    pub(in crate::runtime) modifier_keys: crate::runtime::modifier_keys::ModifierKeys,
+    pub(super) modifier_keys: crate::runtime::modifier_keys::ModifierKeys,
     /// Key releases an input method takes, and the focus where the held non-IME key(s) went
     /// down, so a release after focus moves still reaches that element first.
-    pub(in crate::runtime) key_releases: crate::runtime::key_releases::KeyReleases,
+    key_releases: crate::runtime::key_releases::KeyReleases,
     /// The open modals and where focus returns as each closes (`modal_focus`).
-    pub(in crate::runtime) modal_focus: crate::runtime::modal_focus::ModalFocus,
+    pub(super) modal_focus: crate::runtime::modal_focus::ModalFocus,
     /// Focus when the running commit began, before a new view's focus request applied: what a
     /// modal that opens in this commit returns focus to.
     pub(in crate::runtime) focus_before_commit: Option<String>,
@@ -246,9 +246,9 @@ pub(crate) struct KeyboardState {
     pub(in crate::runtime) focus_owed: Option<(String, bool)>,
     /// Focused text fields that unmounted without being blurred: while another field holds focus,
     /// remounting one with its old `focused = true` flag does not steal focus back.
-    pub(in crate::runtime) unmounted_focused: Vec<std::sync::Weak<crate::edit::History>>,
+    pub(super) unmounted_focused: Vec<std::sync::Weak<crate::edit::History>>,
     /// The modifiers `App::on_modifiers` last heard.
-    pub(in crate::runtime) mods_heard: crate::Mods,
+    mods_heard: crate::Mods,
     /// Modifier keys held now, as the window last reported them (`Tx::mods`).
     pub(in crate::runtime) held_mods: crate::Mods,
     /// `keys_lost` queued its `FocusLost` since the window last had focus.
@@ -260,7 +260,7 @@ pub(crate) struct KeyboardState {
     pub(in crate::runtime) tab_visits_controls: bool,
     /// This commit's focus is a `Tx::return_focus` hand-back, which a modal opening in it
     /// doesn't take as where focus was.
-    pub(in crate::runtime) focus_returned: bool,
+    focus_returned: bool,
 }
 
 impl KeyboardState {
@@ -287,5 +287,100 @@ impl KeyboardState {
             unmounted_focused: Vec::new(),
             modal_scope: None,
         }
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn has_focus(&self) -> bool {
+        self.focus.path().is_some()
+    }
+
+    /// The focused element's index. Unlike `RuntimeCore::node`, this finds it while it exits.
+    #[inline]
+    pub(in crate::runtime) fn focused_index(&self, nodes: &[crate::runtime::Node]) -> Option<usize> {
+        let path = self.focus.path()?;
+        nodes.iter().position(|n| n.path == path)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn highlight_visible(&self, nodes: &[crate::runtime::Node], i: usize) -> bool {
+        self.focus.shown() && self.focus.is(&nodes[i].path)
+    }
+
+    /// Focus is on node `i` or inside it (CSS `:focus-within`), however it got there.
+    #[inline]
+    pub(in crate::runtime) fn focus_within(&self, nodes: &[crate::runtime::Node], i: usize) -> bool {
+        let path = nodes[i].path.as_str();
+        self.focus.path().is_some_and(|f| f.strip_prefix(path).is_some_and(|rest| rest.is_empty() || rest.starts_with('/')))
+    }
+
+    #[inline]
+    pub(super) fn tab_visits_all(&self) -> bool {
+        self.full_keyboard_access || self.tab_visits_controls
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn ime_took_key(&mut self) {
+        self.key_releases.ime_took_key();
+    }
+
+    #[inline]
+    pub(super) fn note_key_down(&mut self, composing: bool, repeat: bool) {
+        let focus = &self.focus;
+        self.key_releases.down(composing, repeat, || focus.owned());
+    }
+
+    #[inline]
+    pub(super) fn eat_ime_key_up(&mut self, composing: bool) -> bool {
+        self.key_releases.eat(composing)
+    }
+
+    #[inline]
+    pub(super) fn route_key_release(&mut self) -> Option<String> {
+        self.key_releases.route()
+    }
+
+    #[inline]
+    pub(super) fn composing_release(&mut self) {
+        self.key_releases.composing_release();
+    }
+
+    #[inline]
+    pub(super) fn key_releases_lost(&mut self) {
+        self.key_releases.lost();
+    }
+
+    #[inline]
+    pub(super) fn type_select_typed(&mut self, typed: &str, now: f64) -> &str {
+        self.type_select.typed(typed, now)
+    }
+
+    #[inline]
+    pub(super) fn reset_type_select(&mut self) {
+        self.type_select.reset();
+    }
+
+    #[cfg(test)]
+    pub(super) fn age_type_select(&mut self, delta: f64) {
+        if let TypeSelect::Typing { at, .. } = &mut self.type_select {
+            *at -= delta;
+        }
+    }
+
+    #[inline]
+    pub(super) fn set_focus_returned(&mut self, returned: bool) {
+        self.focus_returned = returned;
+    }
+
+    #[inline]
+    pub(super) fn take_focus_returned(&mut self) -> bool {
+        std::mem::take(&mut self.focus_returned)
+    }
+
+    /// Updates the last-reported modifiers and returns them if they changed.
+    #[inline]
+    pub(super) fn take_mods_changed(&mut self) -> Option<crate::Mods> {
+        if self.held_mods == self.mods_heard { return None; }
+        self.mods_heard = self.held_mods;
+        Some(self.mods_heard)
     }
 }

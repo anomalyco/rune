@@ -15,8 +15,8 @@ impl RuntimeCore {
         if moved { self.pointer.hover_paused = false; self.release_hover_hold(); }
         self.pointer.pos = Some((x, y));
         self.autoscroll_moved(x, y);
-        if self.in_viewport(x, y) { self.set_left(false); }
-        for &(id, rect) in &self.hit.hits {
+        if self.in_viewport(x, y) { self.pointer.set_left(false); }
+        for &(id, rect) in self.hit.hits() {
             if self.hit_contains(id, rect, x, y)
                 && let Some(&i) = self.tree.node_index.get(&id)
                 && self.tree.nodes[i].handlers.get().is_some_and(|h| h.on_pointer_move.is_some())
@@ -47,10 +47,11 @@ impl RuntimeCore {
         // pointer moving decides whether it's still inside: a button that springs out from
         // under a still pointer stays pressed, as AppKit only re-tracks on a drag.
         if moved && self.pointer.press.held().is_some_and(|h| h.hit != capture::Hit::Cancelled) {
-            let mut hits = self.hit.hits.iter().filter(|(hit, _)| *hit == id).peekable();
-            let inside = if self.host.native_overlay || hits.peek().is_some() {
-                hits.any(|&(id, r)| self.hit_contains(id, r, x, y))
-            } else { contains(r, x, y) };
+            let inside = match self.hit.has_node_hit(id, |id, r| self.hit_contains(id, r, x, y)) {
+                Some(hit) => hit,
+                None if self.host.native_overlay => false,
+                None => contains(r, x, y),
+            };
             if let Some(held) = self.pointer.press.held_mut() {
                 held.hit = if inside { capture::Hit::Inside } else { capture::Hit::Outside };
             }
@@ -63,12 +64,6 @@ impl RuntimeCore {
         }
     }
 
-    /// The pointer left the window (`true`) or came back (`false`) while a press holds it.
-    fn set_left(&mut self, out: bool) {
-        if let Some(held) = self.pointer.press.held_mut() { held.left = out; }
-        if let capture::Secondary::Held { left, .. } = &mut self.pointer.secondary { *left = out; }
-    }
-
     /// Overlay observation updates coordinates without presenting unchanged hover pixels.
     pub(crate) fn observe_pointer(&mut self, app: &dyn ViewDriver, x: f32, y: f32) -> bool {
         if self.pointer.pos == Some((x, y)) { return false; }
@@ -79,14 +74,15 @@ impl RuntimeCore {
         });
         // Reaching or leaving a help element starts or ends its tooltip's wait.
         let help_changed = self.help_target_changes(x, y);
-        let (queued, capture_inside) = (self.frame.queue.len(), self.pointer.press.inside());
+        let (queued, capture_inside) = (self.frame.queue.len(), self.pointer.press_inside());
         self.pointer_move(app, x, y);
-        visual_changed || help_changed || self.frame.queue.len() != queued || self.pointer.press.inside() != capture_inside
+        visual_changed || help_changed || self.frame.queue.len() != queued || self.pointer.press_inside() != capture_inside
     }
 
     /// A button holds the pointer: the OS keeps sending its moves to this window, and a leave
     /// waits for the release.
-    pub(crate) fn pointer_captured(&self) -> bool { self.pointer.press.is_held() || self.pointer.secondary.is_held() || self.pointer.tint.path().is_some() }
+    #[inline]
+    pub(crate) fn pointer_captured(&self) -> bool { self.pointer.captured() }
 
     /// The host's window content top-left in desktop pixels; `None` where it has none.
     pub(crate) fn set_window_pixels(&mut self, pixels: Option<(i32, i32)>) {
@@ -102,21 +98,21 @@ impl RuntimeCore {
     /// The host moved its window by (dx, dy) points under a still pointer. Keep the pointer and
     /// a held press's origin in window points, so a drag that moves its own window still reports
     /// pointer travel in `Drag::dx`/`dy`.
+    #[inline]
     pub(crate) fn window_moved(&mut self, dx: f32, dy: f32) {
-        if let Some((x, y)) = self.pointer.pos { self.pointer.pos = Some((x - dx, y - dy)); }
-        if let Some(held) = self.pointer.press.held_mut() { held.at = (held.at.0 - dx, held.at.1 - dy); }
+        self.pointer.window_moved(dx, dy);
     }
 
     pub(crate) fn cancel_pointer(&mut self) {
         // differs from dev: a cancelled press cannot pair with a click after refocusing.
         self.host.titlebar.clear();
-        self.autoscroll_cancel();
+        self.pointer.autoscroll_cancel();
         self.cancel_drag();
         self.drop_drag_out_request();
         self.edit.input_click.clear();
         self.drop_press();
-        self.pointer.secondary = capture::Secondary::Up;
-        self.pointer.tint = capture::Tint::Up;
+        self.pointer.clear_secondary();
+        self.pointer.clear_tint();
         self.pointer_leave();
         self.drag_files_leave();
     }
@@ -153,14 +149,15 @@ impl RuntimeCore {
         let Some(held) = self.drop_press() else { return false };
         let d = Drag { phase: Phase::Up, x: lx, y: ly, dx, dy, cancelled: true, window: [x, y], screen, ..held.drag };
         self.frame.queue.push(Action::Drag(held.path, d, held.button));
-        self.end_press_repeat();
+        self.pointer.end_press_repeat();
         true
     }
 
     /// The button is up, so the held press can no longer start a drag-out; it stays a press.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[inline]
     pub(crate) fn disarm_drag_out(&mut self) {
-        if let Some(held) = self.pointer.press.held_mut() { held.drag_out = None; }
+        self.pointer.disarm_drag_out();
     }
 
     /// The held press crossed the drag threshold on a `drag_out` element: ask the host for an
@@ -211,7 +208,7 @@ impl RuntimeCore {
     /// down (`El::press_on_down` is a mouse's).
     pub(in crate::runtime) fn press_down(&mut self, app: &mut dyn AppDriver, x: f32, y: f32, touch: bool) {
         // A press ends a middle-click autoscroll, and does nothing else.
-        if self.autoscroll_press(crate::PointerButton::Primary) { self.pointer.pos = Some((x, y)); return; }
+        if self.pointer.autoscroll_press(crate::PointerButton::Primary) { self.pointer.pos = Some((x, y)); return; }
         if self.pointer.press.held().is_some_and(|h| h.button != crate::PointerButton::Primary) {
             self.pointer.pos = Some((x, y));
             return;
@@ -225,7 +222,7 @@ impl RuntimeCore {
         self.kbd.focus.step(focus_machine::FocusEvent::Pointed);
         self.dismiss_help();
         // A press cancels the waits to report an enter; the next move after it starts them again.
-        self.press_hover_delays();
+        self.pointer.press_hover_delays();
         self.pointer.hover_paused = true;
         let target = self.primary_target(x, y);
         if target.and_then(|t| self.textbox_input(t)).is_none() {
@@ -266,7 +263,7 @@ impl RuntimeCore {
             return;
         }
         let n = &self.tree.nodes[ti];
-        let clicks = self.pointer.press_clicks.press(&n.path, now, (x, y), self.double_click_interval);
+        let clicks = self.pointer.press_click(&n.path, now, (x, y), self.double_click_interval);
         let second = n.handlers.on_double_press.is_some() && pending.is_some_and(|first| {
             first.path == n.path && press_run::follows(first.at, first.point, now, (x, y), self.double_click_interval)
         });
@@ -340,7 +337,7 @@ impl RuntimeCore {
     }
 
     pub(crate) fn pointer_up(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
-        if self.autoscroll_release(crate::PointerButton::Primary) { self.pointer.pos = Some((x, y)); return; }
+        if self.pointer.autoscroll_release(crate::PointerButton::Primary) { self.pointer.pos = Some((x, y)); return; }
         #[cfg(target_os = "linux")]
         self.primary_released();
         if self.pointer.press.held().is_some_and(|h| h.button != crate::PointerButton::Primary) {
@@ -358,7 +355,7 @@ impl RuntimeCore {
             .map(|h| (h.left, h.moved || !press_run::within_slop(h.at, (x, y))));
         if let Some((left, moved)) = held && self.cancel_drag_at(Some((x, y))) {
             // As a normal release: a press that dragged ends the run of clicks.
-            if moved { self.pointer.press_clicks.clear(); }
+            if moved { self.pointer.clear_press_clicks(); }
             self.move_pointer(app, x, y, false);
             self.leave_after_release(left);
         } else {
@@ -379,9 +376,9 @@ impl RuntimeCore {
     }
 
     #[cfg(all(test, target_os = "macos"))]
+    #[inline]
     pub(crate) fn end_click_run(&mut self) {
-        self.pointer.press_clicks.clear();
-        self.pointer.press.take_first();
+        self.pointer.end_click_run();
     }
 
     pub(in crate::runtime) fn release_capture(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
@@ -400,7 +397,7 @@ impl RuntimeCore {
         let selected = self.selected_by_drag();
         self.select_step(selectable::phase::Event::Release);
         let input_capture = self.edit.input_click.end_press();
-        self.end_press_repeat();
+        self.pointer.end_press_repeat();
         let now = self.now_clock();
         let interval = self.double_click_interval;
         let Some(h) = self.pointer.press.held() else { return };
@@ -413,7 +410,7 @@ impl RuntimeCore {
         let inside = held.inside();
         let capture::Held { path, drag: d, button, at, down_at, moved, second: double, link, pressed_on_down, .. } = *held;
         self.refresh_hover_within();
-        if moved { self.pointer.press_clicks.clear(); }
+        if moved { self.pointer.clear_press_clicks(); }
         if input_capture { return; }
         let Some(i) = self.live_index(&path) else { return };
         let n = &self.tree.nodes[i];
@@ -442,25 +439,28 @@ impl RuntimeCore {
 
     pub fn pointer_leave(&mut self) {
         self.wheel_lost();
-        if !self.pointer_captured() {
+        if !self.pointer.captured() {
             self.pointer.pos = None;
             self.pointer.hovered = None;
             self.refresh_hover_within();
         } else {
-            self.set_left(true);
+            self.pointer.set_left(true);
         }
     }
 
     /// A press on an element is held (the hand drives whatever follows it).
+    #[inline]
     pub fn pressing(&self) -> bool {
-        self.pointer.press.is_held()
+        self.pointer.pressing()
     }
+    #[inline]
     pub fn pointer(&self) -> Option<(f32, f32)> {
-        self.pointer.pos
+        self.pointer.pos()
     }
 
     /// Native overlay regions from the most recent frame, in logical window points (x0,y0,x1,y1).
-    pub fn hit_regions(&self) -> &[[f32; 4]] { &self.hit.overlay_hits }
+    #[inline]
+    pub fn hit_regions(&self) -> &[[f32; 4]] { self.hit.overlay_hits() }
 
     /// The pointer shape the shell should show: the pressed element's while a gesture holds
     /// the pointer, else the one under it in the current frame (the held hover while moving
@@ -596,31 +596,26 @@ impl RuntimeCore {
         st.land(stick);
         log_event!(self, "wheel {dy:.1}");
         let moved = st.offset != before;
-        if moved { self.scroll_cancels_press(id); }
-        self.scroll.wheel_lock.ran_vertical(id, now, x, y, dy, moved, held);
+        if moved { self.pointer.scroll_cancels_press(&self.tree.nodes, id); }
+        self.scroll.ran_wheel_vertical(id, now, x, y, dy, moved, held);
     }
 
     /// The vertical viewport a delta `dy` at (x, y) at `now` scrolls, and whether it continues the
     /// run (`WheelLock::vertical_run`) rather than starting one (`Self::wheel_target`). None ends
     /// the run.
     fn wheel_run(&mut self, now: f64, x: f32, y: f32, dy: f32, start: crate::runtime::gesture_dispatch::WheelStart) -> Option<(NodeId, bool)> {
-        let held = self.scroll.wheel_lock.vertical_run(now, x, y, dy).filter(|id| {
+        let held = self.scroll.wheel_vertical_run(now, x, y, dy).filter(|id| {
             self.tree.node_index.get(id).is_some_and(|&i| self.is_scroll_viewport(i, false))
         });
         let picked = held.map(|id| (id, true)).or_else(|| self.wheel_target(x, y, dy, start).map(|id| (id, false)));
-        if picked.is_none() { self.scroll.wheel_lock.end_vertical(); }
+        if picked.is_none() { self.scroll.end_wheel_vertical(); }
         picked
     }
 
     /// Whether whole notches of a mouse wheel ease rather than jump: the app hasn't turned it off
-    /// (`Self::set_wheel_glide`), and motion isn't reduced or settled.
-    pub(in crate::runtime) fn wheel_glides(&self) -> bool { self.scroll.wheel_glide && !self.reduced_motion && !self.settled }
-
-    /// Whether whole notches of a mouse wheel that no [`El::on_wheel`] handler takes ease to
-    /// where they send a scroll viewport, as the platform's browsers do (on by default; a notch
-    /// jumps with reduced motion). Off, every notch moves the offset at once. A handler hears
-    /// the notch as it arrives either way ([`crate::WheelEvent::notch`]) and moves what it moves.
-    pub fn set_wheel_glide(&mut self, on: bool) { self.scroll.wheel_glide = on; }
+    /// (`Runtime::set_wheel_glide`), and motion isn't reduced or settled.
+    #[inline]
+    pub(in crate::runtime) fn wheel_glides(&self) -> bool { self.scroll.wheel_glides(self.reduced_motion, self.settled) }
 
     /// Whole notches of a mouse wheel, `dy` points (positive moves content down): the offset
     /// eases to where they send it as Chromium's does (`runtime/scroll/wheel.rs`), a notch that
@@ -650,13 +645,13 @@ impl RuntimeCore {
             st.mode = st.mode.to_wheel(curve);
             st.moved();
             log_event!(self, "wheel-notch {dy:.1}");
-            self.scroll_cancels_press(id);
+            self.pointer.scroll_cancels_press(&self.tree.nodes, id);
         } else if easing {
             // Sent back to where it is (a flick back before the next frame): it stays put, as
             // Chromium's does, rather than finishing the ease the notch before started.
             st.land(stick);
         }
-        self.scroll.wheel_lock.ran_vertical(id, now, x, y, dy, moved, held);
+        self.scroll.ran_wheel_vertical(id, now, x, y, dy, moved, held);
     }
 
     /// Releases a scroll with `velocity` (points per second, positive moves content down);
@@ -669,27 +664,12 @@ impl RuntimeCore {
         if let Some(st) = self.scroll.scrolls.get_mut(&id) {
             st.mode = st.mode.to_momentum(-velocity);
             log_event!(self, "fling {velocity:.0}");
-            if velocity != 0.0 { self.scroll_cancels_press(id); }
+            if velocity != 0.0 { self.pointer.scroll_cancels_press(&self.tree.nodes, id); }
         }
     }
 
     pub fn has_pending_input(&self) -> bool {
         !self.frame.queue.is_empty()
-    }
-
-    /// Scrolling viewport `id` under a held press inside it cancels the press, as a UIScrollView
-    /// cancels its content's touches: the row lets go and the release doesn't press. A drag
-    /// keeps its capture.
-    pub(in crate::runtime) fn scroll_cancels_press(&mut self, id: NodeId) {
-        let Some(path) = self.pointer.press.path() else { return };
-        let Some(i) = self.tree.nodes.iter().position(|n| n.path == path) else { return };
-        let inside = std::iter::successors(self.tree.nodes[i].parent, |&p| self.tree.nodes[p].parent).any(|p| self.tree.nodes[p].id == id);
-        if inside && self.tree.nodes[i].handlers.on_drag.is_none() {
-            if let Some(held) = self.pointer.press.held_mut() {
-                held.hit = capture::Hit::Cancelled;
-                held.second = false;
-            }
-        }
     }
 }
 

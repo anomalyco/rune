@@ -88,48 +88,152 @@ fn sync_input_focus(input: &mut crate::el::InputSpec, states: crate::states::Sta
     changed
 }
 
-impl RuntimeCore {
-    pub(crate) fn active_modal(&self) -> Option<usize> {
-        self.kbd.modal_scope.as_ref().map(|m| m.index)
+/// Whether node `i` in `nodes` is a landmark F6 cycles between.
+fn is_landmark(nodes: &[Node], i: usize) -> bool {
+    let n = &nodes[i];
+    LANDMARK_ROLES.contains(&n.role) || (n.role == "region" && n.label.as_deref().is_some_and(|l| !l.trim().is_empty()))
+}
+
+/// Node `j` is node `i` or inside it.
+fn path_inside(nodes: &[Node], j: usize, i: usize) -> bool {
+    let (p, root) = (nodes[j].path.as_str(), nodes[i].path.as_str());
+    p == root || root.is_empty() || (p.len() > root.len() && p.starts_with(root) && p.as_bytes()[root.len()] == b'/')
+}
+
+/// The innermost landmark around node `i`, for F6 to come back to what had focus in it.
+fn landmark_of(nodes: &[Node], mut i: usize) -> Option<usize> {
+    loop {
+        if is_landmark(nodes, i) { return Some(i); }
+        i = nodes[i].parent?;
     }
-    /// Node `i` (its subtree ending before `end`) holds the open modal.
-    pub(crate) fn modal_ancestor(&self, i: usize, end: usize) -> bool {
-        self.kbd.modal_scope.as_ref().is_some_and(|m| m.index > i && m.index < end)
-    }
-    /// Node `i` is inside the open modal's scope, or no modal is open.
-    pub(crate) fn modal_member(&self, i: usize) -> bool {
-        self.kbd.modal_scope.as_ref().is_none_or(|m| m.members.get(i).copied().unwrap_or(false))
-    }
-    pub(in crate::runtime) fn refresh_modal_index(&mut self) {
-        let Some(index) = self.tree.nodes.iter().enumerate().rev()
-            .find(|(i, n)| n.handlers.get().is_some_and(|h| h.modal.is_some()) && !self.subtree_exiting(*i) && !self.subtree_unmounted(*i)).map(|(i, _)| i)
-        else {
-            self.kbd.modal_scope = None;
-            return;
-        };
+}
+
+impl ModalScope {
+    fn build(nodes: &[Node], is_exiting: impl Fn(usize) -> bool, is_unmounted: impl Fn(usize) -> bool) -> Option<Self> {
+        let index = nodes.iter().enumerate().rev()
+            .find(|(i, n)| n.handlers.get().is_some_and(|h| h.modal.is_some()) && !is_exiting(*i) && !is_unmounted(*i)).map(|(i, _)| i)?;
         // The Windows caption buttons are the window's, not the view's: a modal in the view
         // leaves them to the pointer and assistive technology, as the native ones are.
         let caption = |n: &Node| n.key.as_deref() == Some(crate::titlebar::BUTTONS_KEY)
-            && n.parent.is_some_and(|p| self.tree.nodes[p].key.as_deref() == Some(crate::titlebar::FRAME_KEY));
-        let mut members: Vec<bool> = self.tree.nodes.iter().enumerate().map(|(i, n)| i >= index || caption(n)).collect();
+            && n.parent.is_some_and(|p| nodes[p].key.as_deref() == Some(crate::titlebar::FRAME_KEY));
+        let mut members: Vec<bool> = nodes.iter().enumerate().map(|(i, n)| i >= index || caption(n)).collect();
         // Portals are root siblings. Follow their anchor ownership, including chained
         // popovers, rather than requiring their layout parent to be the modal.
         loop {
             let mut changed = false;
-            for (i, n) in self.tree.nodes.iter().enumerate() {
-                if members[i] || self.subtree_exiting(i) { continue; }
+            for (i, n) in nodes.iter().enumerate() {
+                if members[i] || is_exiting(i) { continue; }
                 let parent_inside = n.parent.is_some_and(|p| members[p]);
-                let anchor_inside = n.above.as_ref().is_some_and(|a| self.tree.nodes.iter().enumerate()
+                let anchor_inside = n.above.as_ref().is_some_and(|a| nodes.iter().enumerate()
                     .any(|(j, anchor)| anchor.key.as_deref() == Some(&a.key) && members[j]));
                 if parent_inside || anchor_inside { members[i] = true; changed = true; }
             }
             if !changed { break; }
         }
-        self.kbd.modal_scope = Some(ModalScope { index, members });
+        Some(Self { index, members })
+    }
+}
+
+impl focus_machine::KeyboardState {
+    #[inline]
+    pub(in crate::runtime) fn active_modal(&self) -> Option<usize> {
+        self.modal_scope.as_ref().map(|m| m.index)
+    }
+
+    /// Node `i` (its subtree ending before `end`) holds the open modal.
+    #[inline]
+    pub(in crate::runtime) fn modal_ancestor(&self, i: usize, end: usize) -> bool {
+        self.modal_scope.as_ref().is_some_and(|m| m.index > i && m.index < end)
+    }
+
+    /// Node `i` is inside the open modal's scope, or no modal is open.
+    #[inline]
+    pub(in crate::runtime) fn modal_member(&self, i: usize) -> bool {
+        self.modal_scope.as_ref().is_none_or(|m| m.members.get(i).copied().unwrap_or(false))
+    }
+
+    /// Input may reach node `i`: it's outside any `El::inert` subtree and not behind a modal.
+    #[inline]
+    pub(in crate::runtime) fn allowed(&self, nodes: &[Node], i: usize) -> bool {
+        !nodes.get(i).is_some_and(|n| n.inert) && self.modal_member(i)
+    }
+
+    #[inline]
+    pub(super) fn set_modal_scope(&mut self, scope: Option<ModalScope>) {
+        self.modal_scope = scope;
+    }
+
+    pub(super) fn record_unmounted_focused(
+        &mut self,
+        old_nodes: &[Node],
+        new_nodes: &[Node],
+        virtual_inputs: &HashMap<String, Box<InputSpec>>,
+    ) {
+        for old in old_nodes {
+            if let Some(input) = &old.input
+                && input.edit.focused
+                && !new_nodes.iter().any(|n| n.path == old.path || n.input.as_ref().is_some_and(|i| i.edit.same_model(&input.edit)))
+                && !virtual_inputs.values().any(|i| i.edit.same_model(&input.edit))
+                && !self.unmounted_focused.iter().any(|w| input.edit.matches_history(w))
+            {
+                self.unmounted_focused.push(input.edit.weak_history());
+            }
+        }
+    }
+
+    #[inline]
+    pub(super) fn was_unmounted_focused(&self, edit: &crate::edit::TextEdit) -> bool {
+        self.unmounted_focused.iter().any(|w| edit.matches_history(w))
+    }
+
+    pub(super) fn prune_unmounted_focused(
+        &mut self,
+        new_nodes: &[Node],
+        virtual_inputs: &HashMap<String, Box<InputSpec>>,
+    ) {
+        self.unmounted_focused.retain(|w| {
+            w.strong_count() > 0
+                && !new_nodes.iter().any(|n| n.input.as_ref().is_some_and(|i| i.edit.matches_history(w)))
+                && !virtual_inputs.values().any(|i| i.edit.matches_history(w))
+        });
+    }
+
+    /// Type-select: the typed prefix picks the first item whose label starts with it. A
+    /// repeated letter cycles the items starting with it. The prefix resets after a pause.
+    pub(super) fn type_select(&mut self, nodes: &[Node], items: &[usize], pos: usize, typed: &str, now: f64) -> Option<usize> {
+        let buffer = self.type_select_typed(typed, now).to_owned();
+        let label = |j: usize| nodes[items[j]].label.as_deref().unwrap_or("").to_lowercase();
+        let first = buffer.chars().next()?;
+        let cycle = buffer.chars().all(|c| c == first);
+        let order = (0..items.len()).map(|k| if cycle { (pos + 1 + k) % items.len() } else { k });
+        let prefix = if cycle { first.to_string() } else { buffer.clone() };
+        order.into_iter().find(|&j| label(j).starts_with(&prefix))
+    }
+}
+
+impl RuntimeCore {
+    #[inline]
+    pub(crate) fn active_modal(&self) -> Option<usize> {
+        self.kbd.active_modal()
+    }
+    /// Node `i` (its subtree ending before `end`) holds the open modal.
+    #[inline]
+    pub(crate) fn modal_ancestor(&self, i: usize, end: usize) -> bool {
+        self.kbd.modal_ancestor(i, end)
+    }
+    /// Node `i` is inside the open modal's scope, or no modal is open.
+    #[inline]
+    pub(crate) fn modal_member(&self, i: usize) -> bool {
+        self.kbd.modal_member(i)
+    }
+    pub(in crate::runtime) fn refresh_modal_index(&mut self) {
+        let scope = ModalScope::build(&self.tree.nodes, |i| self.subtree_exiting(i), |i| self.subtree_unmounted(i));
+        self.kbd.set_modal_scope(scope);
     }
     /// Input may reach node `i`: it's outside any `El::inert` subtree and not behind a modal.
+    #[inline]
     pub(crate) fn allowed(&self, i: usize) -> bool {
-        !self.tree.nodes.get(i).is_some_and(|n| n.inert) && self.modal_member(i)
+        self.kbd.allowed(&self.tree.nodes, i)
     }
     /// `El::focusable`, or under `Cx::web_focus` a pressable control that didn't opt out.
     pub(crate) fn takes_focus(&self, n: &Node) -> bool {
@@ -150,7 +254,7 @@ impl RuntimeCore {
     /// link, a `focus_highlight` row, or an item of a menu, list, tree or grid group.
     /// Under `Cx::web_focus` a focused button presses on Return too, as an HTML one does.
     fn takes_return(&self, i: usize) -> bool {
-        self.link_focused(i) || self.tree.nodes[i].focus.highlight.is_some()
+        self.edit.link_focused(&self.tree.nodes[i]) || self.tree.nodes[i].focus.highlight.is_some()
             || (self.commit.defaults.web_focus && self.tree.nodes[i].handlers.on_press.is_some() && self.takes_focus(&self.tree.nodes[i]))
             || self.focus_group(i).is_some_and(|g| LIST_ROLES.contains(&self.tree.nodes[g].role) || VERTICAL_ROLES.contains(&self.tree.nodes[g].role))
     }
@@ -191,13 +295,14 @@ impl RuntimeCore {
             i = n.parent?;
         }
     }
+    #[inline]
     pub(in crate::runtime) fn highlight_visible(&self, i: usize) -> bool {
-        self.kbd.focus.shown() && self.kbd.focus.is(&self.tree.nodes[i].path)
+        self.kbd.highlight_visible(&self.tree.nodes, i)
     }
     /// Focus is on node `i` or inside it (CSS `:focus-within`), however it got there.
+    #[inline]
     pub(in crate::runtime) fn focus_within(&self, i: usize) -> bool {
-        let path = self.tree.nodes[i].path.as_str();
-        self.kbd.focus.path().is_some_and(|f| f.strip_prefix(path).is_some_and(|rest| rest.is_empty() || rest.starts_with('/')))
+        self.kbd.focus_within(&self.tree.nodes, i)
     }
     pub(in crate::runtime) fn focus_ring_visible(&self, mut i: usize) -> bool {
         // `Cx::force_focus_rings`: the ring of whichever control owns node `i`.
@@ -224,7 +329,7 @@ impl RuntimeCore {
         let n = &self.tree.nodes[i];
         // A focused link shows its focus with its own hover look.
         // A modal that holds focus itself (`Cx::web_focus`) shows none, as a web dialog doesn't.
-        if n.input.is_some() || n.focus.highlight.is_some() || self.link_focused(i) || !self.can_focus(i) { return None; }
+        if n.input.is_some() || n.focus.highlight.is_some() || self.edit.link_focused(n) || !self.can_focus(i) { return None; }
         if self.focus_group(i).is_some_and(|g| LIST_ROLES.contains(&self.tree.nodes[g].role) || VERTICAL_ROLES.contains(&self.tree.nodes[g].role)) {
             return None;
         }
@@ -238,7 +343,7 @@ impl RuntimeCore {
     pub(in crate::runtime) fn forced_default_ring(&self, i: usize) -> bool {
         if !self.commit.defaults.force_focus_rings || !self.can_focus(i) { return false; }
         let n = &self.tree.nodes[i];
-        if n.input.is_some() || n.focus.highlight.is_some() || self.link_count(i) > 0 { return false; }
+        if n.input.is_some() || n.focus.highlight.is_some() || links::link_count(n) > 0 { return false; }
         if self.focus_group(i).is_some_and(|g| LIST_ROLES.contains(&self.tree.nodes[g].role) || VERTICAL_ROLES.contains(&self.tree.nodes[g].role)) {
             return false;
         }
@@ -291,11 +396,11 @@ impl RuntimeCore {
                 focus_machine::FocusEffect::Moved => {
                     self.ime_area = None;
                     self.edit.ime_reset = true;
-                    self.blur_links();
+                    self.edit.blur_links();
                 }
             }
         }
-        if let Some((mark, at)) = self.focused_index().and_then(|f| self.landmark_of(f).map(|m| (m, f))) {
+        if let Some((mark, at)) = self.focused_index().and_then(|f| landmark_of(&self.tree.nodes, f).map(|m| (m, f))) {
             let (mark, at) = (self.tree.nodes[mark].path.clone(), self.tree.nodes[at].path.clone());
             self.kbd.focus.remember_scope(mark, at);
         }
@@ -315,16 +420,7 @@ impl RuntimeCore {
         let owed = self.kbd.focus_owed.take().map(|(key, ring)| (key, ring, crate::el::FocusAsk::WhenShown));
         let asked = self.kbd.focus_request.take().or(owed);
         let waits = asked.as_ref().filter(|(.., ask)| *ask == crate::el::FocusAsk::WhenShown).map(|(key, ring, _)| (key.clone(), *ring));
-        for old in &self.tree.nodes {
-            if let Some(input) = &old.input
-                && input.edit.focused
-                && !nodes.iter().any(|n| n.path == old.path || n.input.as_ref().is_some_and(|i| i.edit.same_model(&input.edit)))
-                && !self.commit.virtual_inputs.values().any(|i| i.edit.same_model(&input.edit))
-                && !self.kbd.unmounted_focused.iter().any(|w| input.edit.matches_history(w))
-            {
-                self.kbd.unmounted_focused.push(input.edit.weak_history());
-            }
-        }
+        self.kbd.record_unmounted_focused(&self.tree.nodes, nodes, &self.commit.virtual_inputs);
         let within = |path: &str, root: &str| {
             path == root || (path.len() > root.len() && path.starts_with(root) && path.as_bytes()[root.len()] == b'/')
         };
@@ -367,7 +463,7 @@ impl RuntimeCore {
         let was_focused = |edit: &crate::edit::TextEdit, path: &str| {
             self.tree.nodes.iter().any(|old| {
                 old.input.as_ref().is_some_and(|i| i.edit.focused && (old.path == path || i.edit.same_model(edit)))
-            }) || (input_focused && self.kbd.unmounted_focused.iter().any(|w| edit.matches_history(w)))
+            }) || (input_focused && self.kbd.was_unmounted_focused(edit))
         };
         let virtual_req = || self.commit.virtual_inputs.iter()
             .filter(|(_, i)| i.edit.focused)
@@ -399,7 +495,7 @@ impl RuntimeCore {
             Some((p, ring, _)) if next.as_deref() == Some(p.as_str()) => *ring,
             _ => self.kbd.focus.keyboard(),
         };
-        self.kbd.focus_returned = matches!(&asked, Some((p, _, crate::el::FocusAsk::Return)) if next.as_deref() == Some(p.as_str()));
+        self.kbd.set_focus_returned(matches!(&asked, Some((p, _, crate::el::FocusAsk::Return)) if next.as_deref() == Some(p.as_str())));
         if asked.is_none() && let Some(owed) = waits { self.kbd.focus_owed = Some(owed); }
         std::mem::swap(&mut self.tree.nodes, nodes);
         self.nodes_replaced();
@@ -412,11 +508,7 @@ impl RuntimeCore {
         if !self.pointer.press.is_held() {
             self.kbd.focus.step(focus_machine::FocusEvent::Settled);
         }
-        self.kbd.unmounted_focused.retain(|w| {
-            w.strong_count() > 0
-                && !nodes.iter().any(|n| n.input.as_ref().is_some_and(|i| i.edit.matches_history(w)))
-                && !self.commit.virtual_inputs.values().any(|i| i.edit.matches_history(w))
-        });
+        self.kbd.prune_unmounted_focused(nodes, &self.commit.virtual_inputs);
         changed
     }
     /// Where focus goes when the element holding it leaves the tree or can't hold it anymore (a
@@ -519,11 +611,11 @@ impl RuntimeCore {
         if self.active_modal().is_some() { return false; }
         let order = self.tab_order();
         let marks: Vec<(usize, usize)> = (0..self.tree.nodes.len())
-            .filter(|&i| self.is_landmark(i) && self.allowed(i) && !self.subtree_exiting(i) && self.tree.nodes[i].local.w > 0.0 && self.tree.nodes[i].local.h > 0.0)
-            .filter_map(|i| order.iter().copied().find(|&j| self.inside(j, i)).map(|first| (i, first)))
+            .filter(|&i| is_landmark(&self.tree.nodes, i) && self.allowed(i) && !self.subtree_exiting(i) && self.tree.nodes[i].local.w > 0.0 && self.tree.nodes[i].local.h > 0.0)
+            .filter_map(|i| order.iter().copied().find(|&j| path_inside(&self.tree.nodes, j, i)).map(|first| (i, first)))
             .collect();
         if marks.is_empty() { return false; }
-        let here = self.focused_index().and_then(|f| marks.iter().rposition(|&(m, _)| self.inside(f, m)));
+        let here = self.focused_index().and_then(|f| marks.iter().rposition(|&(m, _)| path_inside(&self.tree.nodes, f, m)));
         let next = match here {
             Some(k) if back => (k + marks.len() - 1) % marks.len(),
             Some(k) => (k + 1) % marks.len(),
@@ -537,34 +629,6 @@ impl RuntimeCore {
         self.set_focus(app, Some(path.clone()), true);
         tx.scroll_to.push(crate::runtime::ScrollReveal::into_view(None, path));
         true
-    }
-    fn is_landmark(&self, i: usize) -> bool {
-        let n = &self.tree.nodes[i];
-        LANDMARK_ROLES.contains(&n.role) || (n.role == "region" && n.label.as_deref().is_some_and(|l| !l.trim().is_empty()))
-    }
-    /// Node `j` is node `i` or inside it.
-    fn inside(&self, j: usize, i: usize) -> bool {
-        let (p, root) = (self.tree.nodes[j].path.as_str(), self.tree.nodes[i].path.as_str());
-        p == root || root.is_empty() || (p.len() > root.len() && p.starts_with(root) && p.as_bytes()[root.len()] == b'/')
-    }
-    /// The innermost landmark around node `i`, for F6 to come back to what had focus in it.
-    fn landmark_of(&self, mut i: usize) -> Option<usize> {
-        loop {
-            if self.is_landmark(i) { return Some(i); }
-            i = self.tree.nodes[i].parent?;
-        }
-    }
-    /// Type-select: the typed prefix picks the first item whose label starts with it. A
-    /// repeated letter cycles the items starting with it. The prefix resets after a pause.
-    fn type_select(&mut self, items: &[usize], pos: usize, typed: &str) -> Option<usize> {
-        let now = self.now_clock();
-        let buffer = self.kbd.type_select.typed(typed, now).to_owned();
-        let label = |j: usize| self.tree.nodes[items[j]].label.as_deref().unwrap_or("").to_lowercase();
-        let first = buffer.chars().next()?;
-        let cycle = buffer.chars().all(|c| c == first);
-        let order = (0..items.len()).map(|k| if cycle { (pos + 1 + k) % items.len() } else { k });
-        let prefix = if cycle { first.to_string() } else { buffer.clone() };
-        order.into_iter().find(|&j| label(j).starts_with(&prefix))
     }
     /// `shown`: the focus highlight was visible before this key arrived.
     pub(in crate::runtime) fn focus_key(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, shown: bool, tx: &mut Tx) -> bool {
@@ -583,9 +647,9 @@ impl RuntimeCore {
             return self.cycle_landmark(app, ev.mods.shift, tx);
         }
         if ev.key == Key::Tab {
-            if self.link_tab(ev.mods.shift) { return true; }
+            if self.focused_index().is_some_and(|i| self.edit.link_tab(&self.tree.nodes[i], ev.mods.shift)) { return true; }
             let mut order = self.tab_order();
-            if !self.kbd.full_keyboard_access && !self.kbd.tab_visits_controls {
+            if !self.kbd.tab_visits_all() {
                 // A control that owns its keyboard (`El::on_key`) is a list of its own.
                 order.retain(|&i| self.tree.nodes[i].input.is_some() || self.tree.nodes[i].focus.key.is_some()
                     || self.focus_group(i).is_some_and(|g| LIST_ROLES.contains(&self.tree.nodes[g].role)));
@@ -608,7 +672,7 @@ impl RuntimeCore {
             let path = self.tree.nodes[order[next]].path.clone();
             self.set_focus(app, Some(path.clone()), true);
             tx.scroll_to.push(crate::runtime::ScrollReveal::into_view(None, path));
-            self.enter_links(order[next], ev.mods.shift);
+            self.edit.enter_links(&self.tree.nodes[order[next]], ev.mods.shift);
             return true;
         }
         let Some(i) = self.focused_index() else { return false; };
@@ -644,7 +708,7 @@ impl RuntimeCore {
             let pos = items.iter().position(|&j| j == i).unwrap();
             let page = matches!(ev.key, Key::PageUp | Key::PageDown) && PAGED_ROLES.contains(&self.tree.nodes[g].role);
             let next = if backward || forward || page || matches!(ev.key, Key::Home | Key::End) {
-                self.kbd.type_select.reset();
+                self.kbd.reset_type_select();
                 Some(match ev.key {
                     Key::Home => 0, Key::End => items.len() - 1,
                     Key::PageUp | Key::PageDown => self.page_item(&items, pos, ev.key == Key::PageDown),
@@ -658,7 +722,8 @@ impl RuntimeCore {
                     _ => (pos + 1) % items.len(),
                 })
             } else if let Key::Text(t) = &ev.key && TYPE_SELECT_ROLES.contains(&self.tree.nodes[g].role) && !t.trim().is_empty() {
-                self.type_select(&items, pos, t)
+                let now = self.now_clock();
+                self.kbd.type_select(&self.tree.nodes, &items, pos, t, now)
             } else { None };
             if let Some(next) = next {
                 let n = &self.tree.nodes[items[next]];

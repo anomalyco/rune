@@ -29,17 +29,13 @@ pub(in crate::runtime) fn reveal(offset: f64, top: f64, height: f64, viewport: f
     else { offset }
 }
 
-impl RuntimeCore {
-    /// Node `i`'s own soft-clip widths `f` (points) as a device-pixel fade and the rect its ramps
-    /// start from. With `scroll_edge_fade`, top and bottom follow the content hidden under them:
-    /// the ramp starts outside `r` so the edge itself only partly fades. `bottom` is the
-    /// presented bottom edge (see `stuck_offset`).
-    pub(in crate::runtime) fn scroll_edge_fade(&self, i: usize, f: [f32; 4], r: [f32; 4], k: f32, bottom: f32) -> ([f32; 4], [f32; 4]) {
-        let n = &self.tree.nodes[i];
+impl requests::ScrollTables {
+    /// Node `n`'s own soft-clip widths `f` (points) as a device-pixel fade and the rect its ramps
+    /// start from, given its optional stuck-to-bottom offset.
+    pub(super) fn edge_fade(&self, n: &Node, f: [f32; 4], r: [f32; 4], k: f32, stuck: Option<f64>) -> ([f32; 4], [f32; 4]) {
         let mut own = f.map(|v| v * k);
         let width = n.scroll_edges.fade;
-        let Some(st) = self.scroll.scrolls.get(&n.id).filter(|_| width > 0.0 && n.scroll.is_some()) else { return (own, r) };
-        let stuck = self.stuck_offset(i, bottom);
+        let Some(st) = self.scrolls.get(&n.id).filter(|_| width > 0.0 && n.scroll.is_some()) else { return (own, r) };
         let offset = stuck.unwrap_or(st.offset) + f64::from(st.slack.height());
         let below = if stuck.is_some() { 0.0 } else { st.max - offset };
         let mut origin = r;
@@ -56,6 +52,18 @@ impl RuntimeCore {
             origin[edge] = r[edge] + out * o * w.abs();
         }
         (own, origin)
+    }
+}
+
+impl RuntimeCore {
+    /// Node `i`'s own soft-clip widths `f` (points) as a device-pixel fade and the rect its ramps
+    /// start from. With `scroll_edge_fade`, top and bottom follow the content hidden under them:
+    /// the ramp starts outside `r` so the edge itself only partly fades. `bottom` is the
+    /// presented bottom edge (see `stuck_offset`).
+    pub(in crate::runtime) fn scroll_edge_fade(&self, i: usize, f: [f32; 4], r: [f32; 4], k: f32, bottom: f32) -> ([f32; 4], [f32; 4]) {
+        let n = &self.tree.nodes[i];
+        let stuck = if n.scroll_edges.fade > 0.0 && n.scroll.is_some() { self.stuck_offset(i, bottom) } else { None };
+        self.scroll.edge_fade(n, f, r, k, stuck)
     }
 
     /// Under [`crate::ScrollFade::below_sticky`], the fade under the header heading `section`

@@ -73,7 +73,7 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     pub fn wheel(&mut self, x: f32, y: f32, dy: f32) { self.core_mut().wheel(x, y, dy); }
     #[inline(always)]
-    pub fn set_wheel_glide(&mut self, on: bool) { self.core_mut().set_wheel_glide(on); }
+    pub fn set_wheel_glide(&mut self, on: bool) { self.core_mut().scroll.set_wheel_glide(on); }
     #[inline(always)]
     pub fn fling(&mut self, x: f32, y: f32, velocity: f32) { self.core_mut().fling(x, y, velocity); }
     #[inline(always)]

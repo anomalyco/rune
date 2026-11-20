@@ -72,6 +72,14 @@ impl Mode {
     fn horizontal(self) -> bool { matches!(self, Mode::Pan { horizontal: true, .. }) }
 }
 
+impl capture::PointerState {
+    /// Whether a finger is down: a host ignores the mouse events its system makes up from it.
+    #[inline]
+    pub(in crate::runtime) fn touching(&self) -> bool {
+        self.touch.finger.is_some()
+    }
+}
+
 impl RuntimeCore {
     /// One touch event at (x, y) in window points, `time` in seconds on any steady clock. A
     /// host with touches calls this for every one; `id` tells fingers apart.
@@ -84,8 +92,9 @@ impl RuntimeCore {
     }
 
     /// Whether a finger is down: a host ignores the mouse events its system makes up from it.
+    #[inline]
     pub(crate) fn touching(&self) -> bool {
-        self.pointer.touch.finger.is_some()
+        self.pointer.touching()
     }
 
     fn touch_down(&mut self, app: &mut dyn AppDriver, id: u64, x: f32, y: f32, time: f64) {

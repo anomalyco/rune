@@ -151,6 +151,24 @@ fn target_shift(nodes: &[Node], scrolls: &HashMap<NodeId, ScrollState>, j: usize
     total
 }
 
+impl requests::ScrollTables {
+    /// Node `i`, or the header holding it, if it's drawn stuck to the top of viewport `s`.
+    pub(super) fn stuck_header(&self, nodes: &[Node], has_sticky: bool, i: usize, s: usize) -> Option<usize> {
+        if !has_sticky || self.stuck.len() != nodes.len() { return None; }
+        std::iter::successors(Some(i), |&p| nodes[p].parent)
+            .take_while(|&p| p != s)
+            .find(|&h| self.stuck[h] > 0.0 && self.sticky_of(nodes, h).is_some_and(|(edge, ..)| edge == StickyEdge::Top))
+    }
+
+    /// Node `i`'s sticky edge, inset and whether the inset counts from its bottom: a `Hold`'s,
+    /// else its own.
+    #[inline]
+    pub(in crate::runtime) fn sticky_of(&self, nodes: &[Node], i: usize) -> Option<(StickyEdge, f32, bool)> {
+        if let Some(h) = self.hold_of(&nodes[i].path) { return Some((StickyEdge::Top, h.inset, false)); }
+        nodes[i].sticky.as_ref().and_then(|s| Some((s.edge?, s.inset, s.tail)))
+    }
+}
+
 impl RuntimeCore {
     /// Replay just one inherited fade edge without the nearest viewport's content-aware
     /// fade. Explicit clips inside it and fades outside it still apply. Recursion follows
@@ -197,7 +215,7 @@ impl RuntimeCore {
         for key in keys {
             let Some(i) = self.live_named(None, &key) else { continue };
             let Some(s) = self.viewport_of(i) else { continue };
-            let hold = self.stuck_header(i, s).map(|h| Hold {
+            let hold = self.scroll.stuck_header(&self.tree.nodes, self.tree.has_sticky, i, s).map(|h| Hold {
                 path: self.tree.nodes[h].path.clone(),
                 inset: keep_y(&self.paint.drawn, &self.paint.drawn_scale, h, s),
             });
@@ -221,30 +239,17 @@ impl RuntimeCore {
         }
     }
 
-    /// Node `i`, or the header holding it, if it's drawn stuck to the top of viewport `s`.
-    fn stuck_header(&self, i: usize, s: usize) -> Option<usize> {
-        if !self.tree.has_sticky || self.scroll.stuck.len() != self.tree.nodes.len() { return None; }
-        std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent)
-            .take_while(|&p| p != s)
-            .find(|&h| self.scroll.stuck[h] > 0.0 && self.sticky_of(h).is_some_and(|(edge, ..)| edge == StickyEdge::Top))
-    }
-
     /// Whether a `Tx::keep_on_screen` holds a stuck header (`Hold`).
+    #[inline]
     pub(in crate::runtime) fn holding(&self) -> bool {
-        self.scroll.requests.keeps().any(|k| k.hold.is_some())
-    }
-
-    fn hold_of(&self, i: usize) -> Option<&Hold> {
-        if !self.scroll.requests.has_keeps() { return None; }
-        let path = &self.tree.nodes[i].path;
-        self.scroll.requests.keeps().find_map(|k| k.hold.as_ref().filter(|h| h.path == *path))
+        self.scroll.holding()
     }
 
     /// Node `i`'s sticky edge, inset and whether the inset counts from its bottom: a `Hold`'s,
     /// else its own.
+    #[inline]
     pub(in crate::runtime) fn sticky_of(&self, i: usize) -> Option<(StickyEdge, f32, bool)> {
-        if let Some(h) = self.hold_of(i) { return Some((StickyEdge::Top, h.inset, false)); }
-        self.tree.nodes[i].sticky.as_ref().and_then(|s| Some((s.edge?, s.inset, s.tail)))
+        self.scroll.sticky_of(&self.tree.nodes, i)
     }
 
     /// `El::stuck_fade`: how much of node `i`'s children show, drawn with its top at `drawn`
@@ -289,7 +294,7 @@ impl RuntimeCore {
         // A held header's parent may have shrunk in the commit while the growth row it's drawn
         // in folds: it stops at that row's drawn bottom, less what the row lays out below the
         // parent, so it rests where its parent ends once the row settles.
-        if !horizontal && self.hold_of(i).is_some() && let Some(p) = n.parent {
+        if !horizontal && self.scroll.hold_of(&n.path).is_some() && let Some(p) = n.parent {
             let r = std::iter::successors(Some(p), |&a| self.tree.nodes[a].parent)
                 .take_while(|&a| Some(a) != viewport)
                 .find(|&a| self.paint.row_h[a] >= 0.0)
@@ -424,8 +429,9 @@ impl RuntimeCore {
     }
 
     /// A user or explicit scroll ends the holds and reveals that would pull the view back.
+    #[inline]
     pub(in crate::runtime) fn drop_scroll_holds(&mut self) {
-        self.scroll.requests.step(requests::Event::Cancel);
+        self.scroll.drop_holds();
     }
 
     /// Colour, hover or decorative motion must not extend the anchor's lifetime.

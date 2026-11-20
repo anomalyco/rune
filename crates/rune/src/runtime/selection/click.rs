@@ -152,7 +152,7 @@ impl RuntimeCore {
         let z = if valid { self.paint.drawn_scale.get(i).copied().unwrap_or(1.0).max(1e-4) } else { 1.0 };
         let [mut ox, oy] = links::origin(n, spec, flow, rect, s, z);
         if inp.single_line {
-            ox -= self.edit.input_scroll.get(&n.path).copied().unwrap_or(0.0) * z;
+            ox -= self.edit.single_line_scroll(&n.path) * z;
         }
         Some([(ux - ox) / z, (uy - oy) / z])
     }
@@ -192,7 +192,7 @@ impl RuntimeCore {
             window: [x, y],
             screen: self.screen_at(x, y),
         };
-        self.pointer.press.hold(capture::Held::new(path, d, crate::PointerButton::Primary, (x, y), down_at, second, None));
+        self.pointer.hold_press(capture::Held::new(path, d, crate::PointerButton::Primary, (x, y), down_at, second, None));
     }
 
     /// Focuses text field `ji` with its caret at (x, y), as a single click does, but holds no
@@ -210,7 +210,7 @@ impl RuntimeCore {
             return;
         }
         let Some(path) = self.edit.input_click.dragging_path().map(str::to_owned) else { return };
-        if self.pointer.press.held().is_some_and(|h| !press_run::within_slop(h.at, (x, y))) {
+        if self.pointer.press_held().is_some_and(|h| !press_run::within_slop(h.at, (x, y))) {
             self.edit.input_click.presses.clear();
         }
         if !self.tree.nodes.iter().enumerate().any(|(i, n)| n.path == path && !self.subtree_exiting(i) && n.input.is_some()) {

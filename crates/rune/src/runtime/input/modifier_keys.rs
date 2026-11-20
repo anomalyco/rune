@@ -146,35 +146,59 @@ impl ModifierKeys {
     }
 }
 
+impl focus_machine::KeyboardState {
+    /// Send `Key::Modifier` presses and releases to `on_key` and the focused input's key
+    /// handler. Off by default: handlers written before it may act on any key.
+    #[inline]
+    pub(in crate::runtime) fn set_modifier_keys(&mut self, enabled: bool) {
+        if self.modifier_keys.enabled != enabled { self.modifier_keys.held = 0; }
+        self.modifier_keys.enabled = enabled;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn modifier_keys(&self) -> bool { self.modifier_keys.enabled }
+
+    /// Whether `event` presses or releases a modifier key, which needs a frame to deliver.
+    #[inline]
+    pub(super) fn modifier_pending(&self, event: &PhysicalInput) -> bool { self.modifier_keys.pending(event) }
+
+    #[inline]
+    pub(super) fn disarm_direction_chord(&mut self) {
+        self.modifier_keys.chord = crate::edit::DirChord::Idle;
+    }
+
+    /// Steps Ctrl+Shift's direction chord; returns the flow direction when the release completes it.
+    pub(super) fn step_direction_chord(&mut self, event: &PhysicalInput) -> Option<crate::el::Flow> {
+        let PhysicalInput::Key { key, mods, pressed, repeat: false } = *event else { return None };
+        let Some(m) = modifier(key) else {
+            if pressed { self.modifier_keys.chord = crate::edit::DirChord::Idle; }
+            return None;
+        };
+        let after = with(mods, m, pressed);
+        let (next, set) = crate::edit::step_dir_chord(self.modifier_keys.chord, m, pressed, after.ctrl, after.shift);
+        self.modifier_keys.chord = next;
+        set
+    }
+
+    #[inline]
+    pub(super) fn apply_modifier_keys(&mut self, event: &PhysicalInput, consumed: bool) -> Vec<KeyEvent> {
+        self.modifier_keys.apply(event, consumed, ALTGR_CLEARS_FLAGS)
+    }
+}
+
 impl RuntimeCore {
     /// Send `Key::Modifier` presses and releases to `on_key` and the focused input's key
     /// handler. Off by default: handlers written before it may act on any key.
-    pub(crate) fn set_modifier_keys(&mut self, enabled: bool) {
-        if self.kbd.modifier_keys.enabled != enabled { self.kbd.modifier_keys.held = 0; }
-        self.kbd.modifier_keys.enabled = enabled;
-    }
+    #[inline]
+    pub(crate) fn set_modifier_keys(&mut self, enabled: bool) { self.kbd.set_modifier_keys(enabled); }
 
-    pub(crate) fn modifier_keys(&self) -> bool { self.kbd.modifier_keys.enabled }
-
-    /// Whether `event` presses or releases a modifier key, which needs a frame to deliver.
-    pub(in crate::runtime) fn modifier_pending(&self, event: &PhysicalInput) -> bool { self.kbd.modifier_keys.pending(event) }
-
-    pub(in crate::runtime) fn disarm_direction_chord(&mut self) {
-        self.kbd.modifier_keys.chord = crate::edit::DirChord::Idle;
-    }
+    #[inline]
+    pub(crate) fn modifier_keys(&self) -> bool { self.kbd.modifier_keys() }
 
     /// Ctrl+Left Shift and Ctrl+Right Shift: every physical key steps the chord (`edit::direction_keys`),
     /// and its release sets the focused field's direction. Any other key disarms it. True if it set one.
     pub(in crate::runtime) fn direction_chord(&mut self, app: &mut dyn AppDriver, event: &PhysicalInput, tx: &mut Tx) -> bool {
-        let PhysicalInput::Key { key, mods, pressed, repeat: false } = *event else { return false };
-        let Some(m) = modifier(key) else {
-            if pressed { self.kbd.modifier_keys.chord = crate::edit::DirChord::Idle; }
-            return false;
-        };
-        let after = with(mods, m, pressed);
-        let (next, set) = crate::edit::step_dir_chord(self.kbd.modifier_keys.chord, m, pressed, after.ctrl, after.shift);
-        self.kbd.modifier_keys.chord = next;
-        let Some(flow) = set.filter(|_| self.focused_input().is_some()) else { return false };
+        let Some(flow) = self.kbd.step_direction_chord(event).filter(|_| self.focused_input().is_some()) else { return false };
         self.with_focused(app, |e| { e.force_dir(flow); crate::edit::EditOutcome::default() }, tx)
     }
 
@@ -183,7 +207,7 @@ impl RuntimeCore {
     pub(in crate::runtime) fn modifier_dispatch(&mut self, app: &mut dyn AppDriver, event: &PhysicalInput, consumed: bool, tx: &mut Tx, live: &mut Option<bool>) -> bool {
         let mut ran = false;
         let code = match *event { PhysicalInput::Key { key, .. } => Some(key), _ => None };
-        for ev in self.kbd.modifier_keys.apply(event, consumed, ALTGR_CLEARS_FLAGS) {
+        for ev in self.kbd.apply_modifier_keys(event, consumed) {
             let mut one = self.transaction(app);
             one.physical_key = code;
             let took = self.route_modifier(app, &ev, &mut one);
@@ -197,7 +221,7 @@ impl RuntimeCore {
     /// A modifier key goes to the app and the focused input's key handler, in `route_key`'s
     /// order, and to nothing built in: no editing, selection, focus traversal or focus ring.
     pub(in crate::runtime) fn route_modifier(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, one: &mut Tx) -> bool {
-        if !self.kbd.modifier_keys.enabled { return false; }
+        if !self.kbd.modifier_keys() { return false; }
         one.key_repeat = false;
         let app_first = self.kbd.focus.path().is_none();
         if app_first && app.has_on_key() && Tx::took(app.on_key(ev, one), one) { return true; }

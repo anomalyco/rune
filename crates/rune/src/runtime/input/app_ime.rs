@@ -19,7 +19,7 @@ impl AppComposition {
     }
 
     /// Steps the composition with what the app is about to hear.
-    fn step(&mut self, ev: &Ime) {
+    pub(in crate::runtime) fn step(&mut self, ev: &Ime) {
         match ev {
             Ime::Preedit(s, ..) => self.replace(if s.is_empty() { AppComposition::Idle } else { AppComposition::Composing(s.clone()) }),
             Ime::Commit(_) => self.replace(AppComposition::Idle),
@@ -27,7 +27,7 @@ impl AppComposition {
         }
     }
 
-    fn take_composing(&mut self) -> Option<String> {
+    pub(in crate::runtime) fn take_composing(&mut self) -> Option<String> {
         match std::mem::take(self) {
             AppComposition::Composing(text) => Some(text),
             AppComposition::Idle => None,
@@ -48,7 +48,7 @@ pub(in crate::runtime) fn area(r: [f32; 4], s: f32) -> [f32; 4] {
 impl RuntimeCore {
     /// Whether the app's own editor currently holds an open composition.
     pub(in crate::runtime) fn app_ime_composing(&self, app: &dyn AppDriver) -> bool {
-        app.has_on_ime() && self.edit.app_ime_comp.composing()
+        app.has_on_ime() && self.edit.app_ime_composing()
     }
 
     /// An input method event goes to the focused text field, else to `App::on_ime`. A
@@ -59,7 +59,7 @@ impl RuntimeCore {
         let active = self.composing(app) || matches!(&ev, Ime::Preedit(s, ..) | Ime::Commit(s) if !s.is_empty());
         let ran = if app_target { self.app_ime_event(app, &ev, one) } else { self.with_focused(app, |e| e.ime(&ev), one) };
         // The key that confirmed or cancelled a composition comes back up unheard.
-        if ran && active { self.kbd.key_releases.ime_took_key(); }
+        if ran && active { self.kbd.ime_took_key(); }
         ran
     }
 
@@ -67,7 +67,7 @@ impl RuntimeCore {
     /// app's editor hears its last preedit committed.
     pub(in crate::runtime) fn finish_ime(&mut self, app: &mut dyn AppDriver, one: &mut Tx) -> bool {
         if self.app_ime_composing(app) {
-            let Some(text) = self.edit.app_ime_comp.take_composing() else { return false };
+            let Some(text) = self.edit.take_app_ime_composing() else { return false };
             return self.app_ime_event(app, &Ime::Commit(text), one);
         }
         self.finish_field_composition(app, one)
@@ -85,7 +85,7 @@ impl RuntimeCore {
 
     fn app_ime_event(&mut self, app: &mut dyn AppDriver, ev: &Ime, one: &mut Tx) -> bool {
         if !app.has_on_ime() { return false; }
-        self.edit.app_ime_comp.step(ev);
+        self.edit.step_app_ime(ev);
         app.on_ime(ev, one)
     }
 }

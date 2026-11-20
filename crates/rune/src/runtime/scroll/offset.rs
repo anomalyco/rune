@@ -72,7 +72,7 @@ impl RuntimeCore {
                 }
             }
         }
-        self.apply_jumps(&jumps);
+        self.scroll.apply_jumps(&self.tree.nodes, self.clock, &jumps);
         // Landing mounts the virtual rows there, which measure and can move the end it clamped to.
         for _ in 0..3 {
             if !self.virtual_window_changed() { break; }
@@ -82,30 +82,7 @@ impl RuntimeCore {
             for (j, key, at) in &anchors {
                 if let Some((_, to)) = self.anchor_offset(key, *at) { jumps[*j].2 = to; }
             }
-            self.apply_jumps(&jumps);
-        }
-    }
-
-    fn apply_jumps(&mut self, jumps: &[(NodeId, bool, f64)]) {
-        let now = self.clock;
-        for &(id, horizontal, to) in jumps {
-            let stick = self.tree.nodes.iter().find(|n| n.id == id).and_then(|n| n.scroll).is_some_and(|s| s.stick_bottom);
-            let Some(st) = self.scroll.scrolls.get_mut(&id) else { continue };
-            st.moved();
-            let was = if horizontal { st.x.offset } else { st.offset };
-            if horizontal {
-                st.x.offset = to.min(st.x.max);
-            } else {
-                st.offset = to.min(st.max);
-                // The jump halted the old motion when queued. Don't cancel a later
-                // request in the same transaction to glide from the new offset.
-                if st.glide().is_none() { st.land(stick); }
-            }
-            if (if horizontal { st.x.offset } else { st.offset } - was).abs() > 1e-3 {
-                // The arm's due is taken back from the state each frame (`step_nudges`), so a
-                // later arm in the same frame wins and nothing here has to keep it.
-                let _ = st.nudge.arm(now);
-            }
+            self.scroll.apply_jumps(&self.tree.nodes, self.clock, &jumps);
         }
     }
 
@@ -288,17 +265,45 @@ impl ScrollState {
     pub(in crate::runtime) fn hold_at(&self, now: f64) -> bool { self.nudge.hold_at(now) }
 }
 
-impl RuntimeCore {
+impl requests::ScrollTables {
+    pub(super) fn apply_jumps(&mut self, nodes: &[Node], now: f64, jumps: &[(NodeId, bool, f64)]) {
+        for &(id, horizontal, to) in jumps {
+            let stick = nodes.iter().find(|n| n.id == id).and_then(|n| n.scroll).is_some_and(|s| s.stick_bottom);
+            let Some(st) = self.scrolls.get_mut(&id) else { continue };
+            st.moved();
+            let was = if horizontal { st.x.offset } else { st.offset };
+            if horizontal {
+                st.x.offset = to.min(st.x.max);
+            } else {
+                st.offset = to.min(st.max);
+                // The jump halted the old motion when queued. Don't cancel a later
+                // request in the same transaction to glide from the new offset.
+                if st.glide().is_none() { st.land(stick); }
+            }
+            if (if horizontal { st.x.offset } else { st.offset } - was).abs() > 1e-3 {
+                // The arm's due is taken back from the state each frame (`step_nudges`), so a
+                // later arm in the same frame wins and nothing here has to keep it.
+                let _ = st.nudge.arm(now);
+            }
+        }
+    }
+
     /// Steps the holds an app's instant scrolls armed, and returns the earliest due one still
     /// pending: the frame that carries it resolves hover at the pointer. A held nudge asks for
     /// no frame itself, so the frame's end wakes for that one, however often the app re-armed it.
-    pub(in crate::runtime) fn step_nudges(&mut self) -> Option<f64> {
-        let now = self.clock;
+    pub(in crate::runtime) fn step_nudges(&mut self, now: f64) -> Option<f64> {
         let mut due: Option<f64> = None;
-        for st in self.scroll.scrolls.values_mut() {
+        for st in self.scrolls.values_mut() {
             st.nudge.tick(now);
             if let Some(at) = st.nudge.due() { due = Some(due.map_or(at, |d: f64| d.min(at))); }
         }
         due
+    }
+}
+
+impl RuntimeCore {
+    #[inline]
+    pub(in crate::runtime) fn step_nudges(&mut self) -> Option<f64> {
+        self.scroll.step_nudges(self.clock)
     }
 }
