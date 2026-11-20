@@ -624,7 +624,7 @@ impl RuntimeCore {
         // Focus that was in a roving group (on an item, or on a control inside one: a tab's Close
         // button) may go to another item of that group: the group is one Tab stop, and its items
         // are where the keys move inside it (the next tab, not the next tab's Close button).
-        let home = self.roving_home_in(&self.tree.nodes, at).and_then(&at_new);
+        let home = self.roving_home_in(&self.tree.nodes, at).and_then(at_new);
         let tab = |i: usize| survivor(i).filter(|&j| self.tab_stop_in(nodes, j) || (home.is_some() && self.group_in(nodes, j) == home));
         let lost_tab_stop = self.tree.nodes[at].focus.order >= 0 && self.focus_group(at).is_none();
         rescue(lost_tab_stop, at, &scopes, &tab, &survivor).map(|j| nodes[j].path.clone())
