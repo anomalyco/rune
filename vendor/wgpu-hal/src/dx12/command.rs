@@ -389,22 +389,22 @@ impl crate::CommandEncoder for super::CommandEncoder {
     type A = super::Api;
 
     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
-        let list = loop {
-            if let Some(list) = self.free_lists.pop() {
+        let reused = loop {
+            if let Some((list, list2)) = self.free_lists.pop() {
                 // TODO: Is an error expected here and should we print it?
                 let reset_result = unsafe { list.Reset(&self.allocator, None) };
                 if reset_result.is_ok() {
-                    break Some(list);
+                    break Some((list, list2));
                 }
             } else {
                 break None;
             }
         };
 
-        let list = if let Some(list) = list {
-            list
+        let (list, list2) = if let Some(pair) = reused {
+            pair
         } else {
-            unsafe {
+            let list: Direct3D12::ID3D12GraphicsCommandList = unsafe {
                 self.device.CreateCommandList(
                     0,
                     Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT,
@@ -412,7 +412,13 @@ impl crate::CommandEncoder for super::CommandEncoder {
                     None,
                 )
             }
-            .into_device_result("Create command list")?
+            .into_device_result("Create command list")?;
+            let list2 = if self.shared.drain.has_marker() {
+                list.cast::<Direct3D12::ID3D12GraphicsCommandList2>().ok()
+            } else {
+                None
+            };
+            (list, list2)
         };
 
         if let Some(label) = label {
@@ -425,24 +431,34 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.end_of_pass_timer_query = None;
 
         self.list = Some(list);
+        self.list2 = list2;
         Ok(())
     }
     unsafe fn discard_encoding(&mut self) {
+        let list2 = self.list2.take();
         if let Some(list) = self.list.take() {
             if unsafe { list.Close() }.is_ok() {
-                self.free_lists.push(list);
+                self.free_lists.push((list, list2));
             }
         }
     }
     unsafe fn end_encoding(&mut self) -> Result<super::CommandBuffer, crate::DeviceError> {
         let raw = self.list.take().unwrap();
+        let list2 = self.list2.take();
+        let marker = self.shared.drain.record(list2.as_ref());
         unsafe { raw.Close() }.into_device_result("GraphicsCommandList::close")?;
-        Ok(super::CommandBuffer { raw })
+        Ok(super::CommandBuffer { raw, list2, marker })
     }
     unsafe fn reset_all<I: Iterator<Item = super::CommandBuffer>>(&mut self, command_buffers: I) {
         self.intermediate_copy_bufs.clear();
         for cmd_buf in command_buffers {
-            self.free_lists.push(cmd_buf.raw);
+            self.free_lists.push((cmd_buf.raw, cmd_buf.list2));
+        }
+        // Rune: never reset a command allocator on a removed device; no new commands will ever
+        // be recorded on it, and a timed-out drain on a removed device could still have the
+        // driver unwinding a list recorded in this allocator.
+        if self.shared.drain.is_removed() {
+            return;
         }
         if let Err(e) = unsafe { self.allocator.Reset() } {
             log::error!("ID3D12CommandAllocator::Reset() failed with {e}");
