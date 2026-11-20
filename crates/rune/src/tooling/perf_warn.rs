@@ -115,7 +115,7 @@ impl Stall {
     pub(crate) fn start() -> Self {
         Stall {
             #[cfg(debug_assertions)]
-            start: if enabled() { crate::frame::profile::cpu_ms().map(|cpu| (Instant::now(), cpu, runq::wait_ms())) } else { None },
+            start: if enabled() { crate::frame::profile::cpu_ms().map(|cpu| (crate::time::now(), cpu, runq::wait_ms())) } else { None },
         }
     }
 

@@ -112,21 +112,21 @@ impl RuntimeCore {
             "div"
         };
         if matches!(tag, "a" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6") || roles::container_tag(n.role).is_some() {
-            if let Some(id) = anchor_id(n.key.as_deref()) { let _ = write!(attrs, " id=\"{id}\""); }
+            if let Some(id) = anchor_id(n.key.as_deref()) { write!(attrs, " id=\"{id}\"").ok(); }
         }
-        if let Some(role) = roles::container_aria(n.role) { let _ = write!(attrs, " role=\"{role}\""); }
-        if let Some(h) = &href { let _ = write!(attrs, " href=\"{}\"", escape(h)); }
+        if let Some(role) = roles::container_aria(n.role) { write!(attrs, " role=\"{role}\"").ok(); }
+        if let Some(h) = &href { write!(attrs, " href=\"{}\"", escape(h)).ok(); }
         if let Some(url) = pixels_url {
             let [x0, y0, x1, y1] = n.target;
-            let _ = write!(attrs, " src=\"{}\" alt=\"{}\" width=\"{}\" height=\"{}\" decoding=\"async\"",
-                escape(url), escape(label.unwrap_or("")), (x1 - x0).round(), (y1 - y0).round());
+            write!(attrs, " src=\"{}\" alt=\"{}\" width=\"{}\" height=\"{}\" decoding=\"async\"",
+                escape(url), escape(label.unwrap_or("")), (x1 - x0).round(), (y1 - y0).round()).ok();
             // `page` adds `sizes`, which needs every width.
-            if let Some(set) = pixels.and_then(|p| p.source_set()) { let _ = write!(attrs, " srcset=\"{}\"", escape(set)); }
+            if let Some(set) = pixels.and_then(|p| p.source_set()) { write!(attrs, " srcset=\"{}\"", escape(set)).ok(); }
             // Images below the first screen wait until the reader scrolls near them.
             if y0 > 900.0 { attrs.push_str(" loading=\"lazy\""); }
         } else if let Some(l) = label.filter(|_| n.text.is_none() && tag != "a") {
             let role = matches!(n.role, "image" | "img").then_some(" role=\"img\"").unwrap_or("");
-            let _ = write!(attrs, "{role} aria-label=\"{}\"", escape(l));
+            write!(attrs, "{role} aria-label=\"{}\"", escape(l)).ok();
         }
         if n.a11y.hidden { attrs.push_str(" aria-hidden=\"true\""); }
         let mut decls = css::layout(&self.commit.layout.style(n.taffy).to_style(), i == 0);

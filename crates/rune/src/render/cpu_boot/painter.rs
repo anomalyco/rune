@@ -89,13 +89,13 @@ impl CpuPainter {
     /// `forget` was called since.
     pub fn paint(&mut self, scene: &Scene<'_>, target: &mut Target<'_>) -> Result<Painted, NeedsGpu> {
         super::check_target(scene, target)?;
-        let start = Instant::now();
+        let start = crate::time::now();
         // A recoloured frame draws what the last one did, so whatever it needed it still does.
         if self.flags == Some(scene.flags()) && let Some(p) = self.recoloured(scene, target, start) { return Ok(p); }
         if let Some(why) = scene.needs_gpu() { return Err(why); }
         self.flags = Some(scene.flags());
         let bins = Bins::of(scene);
-        let binned = Instant::now();
+        let binned = crate::time::now();
         damage::hashes(scene, &bins, &mut self.each, &mut self.next);
         // Pixels stay where they were only in rows as far apart as before.
         if self.stride != target.stride { self.hashes.clear(); }
@@ -126,7 +126,7 @@ impl CpuPainter {
         let by_hash = (0..self.next.len()).filter(|&t| changed(t)).count();
         // Only a frame that changed many tiles can be a scroll; and a move is kept only when it
         // leaves fewer tiles to paint than the hashes alone do.
-        let planning = Instant::now();
+        let planning = crate::time::now();
         let shift = if all || resized || by_hash < MIN_SCROLL_TILES { None } else { self.prev.as_ref().and_then(|p| scroll::plan(p, scene, &bins, &Threads { pool: &self.pool, extra: self.pool.threads() - 1 })) };
         let touched = |s: &scroll::Shift, t: usize| {
             let (tx, ty) = (t as u32 % bins.cols, t as u32 / bins.cols);
@@ -138,21 +138,21 @@ impl CpuPainter {
             _ => changed(t),
         };
         let shift = shift.filter(|s| (0..self.next.len()).filter(|&t| dirty(Some(s), t)).count() < by_hash);
-        let moving = Instant::now();
+        let moving = crate::time::now();
         if let Some(s) = &shift {
             let movers = (s.clean.iter().filter(|&&c| c).count() / TILES_PER_THREAD).min(self.pool.threads() - 1);
             move_tiles(&Threads { pool: &self.pool, extra: movers }, target, scene.size, bins.cols, &s.clean, s.dy);
         }
-        let moved = Instant::now();
+        let moved = crate::time::now();
         self.dirty.extend((0..self.next.len() as u32).filter(|&t| dirty(shift.as_ref(), t as usize)));
         std::mem::swap(&mut self.hashes, &mut self.next);
         self.size = scene.size;
         self.stride = target.stride;
         self.resets = scene.atlas_resets;
-        let hashed = Instant::now();
+        let hashed = crate::time::now();
         let extra = (self.dirty.len() / TILES_PER_THREAD).min(self.pool.threads() - 1);
         let mut report = raster::run(scene, &bins, target, &self.dirty, &Threads { pool: &self.pool, extra }, &Threads { pool: &self.pool, extra: self.pool.threads() - 1 });
-        let done = Instant::now();
+        let done = crate::time::now();
         report.bin_ns = super::ns(binned - start);
         report.raster_ns = super::ns(done - hashed);
         report.total_ns = super::ns(done - start);
@@ -220,10 +220,10 @@ impl CpuPainter {
         for &t in &self.dirty {
             self.hashes[t as usize] = damage::rehash(scene, bins, &self.each, t as usize);
         }
-        let hashed = Instant::now();
+        let hashed = crate::time::now();
         let extra = (self.dirty.len() / TILES_PER_THREAD).min(self.pool.threads() - 1);
         let mut report = if self.dirty.is_empty() { Report::default() } else { raster::run(scene, bins, target, &self.dirty, &Threads { pool: &self.pool, extra }, &Threads { pool: &self.pool, extra: self.pool.threads() - 1 }) };
-        let done = Instant::now();
+        let done = crate::time::now();
         report.raster_ns = super::ns(done - hashed);
         report.total_ns = super::ns(done - start);
         report.tiles = tiles;

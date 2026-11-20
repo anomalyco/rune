@@ -31,7 +31,7 @@ static TIDY: OnceLock<fn()> = OnceLock::new();
 /// own long-lived threads call [`idle`]. Threads in an app that never sets a hook arm no tidy
 /// timer. The first call wins.
 pub fn on_idle(tidy: fn()) {
-    let _ = TIDY.set(tidy);
+    TIDY.set(tidy).ok();
 }
 
 /// Runs what [`on_idle`] set, on this thread: for a thread of the app's own that has waited
@@ -144,14 +144,14 @@ pub fn serve<T: Send + 'static>(
             let mut tidy = Tidy::new();
             loop {
                 // Without a hook, or before the first message and after a tidy, wait untimed.
-                let got = match tidy.wait(crate::time::Instant::now()) {
+                let got = match tidy.wait(crate::time::now()) {
                     Some(wait) => rx.recv_timeout(wait),
                     None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
                 };
                 let message = match got {
                     Ok(message) => message,
                     Err(RecvTimeoutError::Timeout) => {
-                        if tidy.take_due(crate::time::Instant::now()) {
+                        if tidy.take_due(crate::time::now()) {
                             idle();
                         }
                         continue;
@@ -161,7 +161,7 @@ pub fn serve<T: Send + 'static>(
                 if each(message).is_break() {
                     return;
                 }
-                tidy = tidy.on_work(crate::time::Instant::now());
+                tidy = tidy.on_work(crate::time::now());
             }
         }).map(drop)
     }

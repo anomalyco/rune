@@ -37,7 +37,7 @@ impl Spot {
 
 impl Drop for Spot {
     fn drop(&mut self) {
-        let _ = SPOTS.try_with(|s| s.borrow_mut().remove(&self.0));
+        SPOTS.try_with(|s| s.borrow_mut().remove(&self.0)).ok();
     }
 }
 

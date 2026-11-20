@@ -187,7 +187,7 @@ impl TextSystem {
     pub fn fill_paragraphs(&mut self, laid: &ParagraphLayout, budget: std::time::Duration, rows: (f32, f32), reach: f32) -> Option<(Rc<ParagraphLayout>, bool)> {
         let lazy = laid.lazy.clone()?;
         // The crate's clock: the standard library's has none in a browser, and panics there.
-        let start = rune_core::time::Instant::now();
+        let start = rune_core::time::now();
         let distance = |p: &Paragraph| if p.y + p.height >= rows.0 && p.y <= rows.1 { 0.0 } else { (rows.0 - p.y - p.height).max(p.y - rows.1) };
         let mut paragraphs = laid.paragraphs.clone();
         let (mut moved, mut shaped_any) = (false, false);

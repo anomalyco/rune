@@ -4,7 +4,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::handoff::{ACCEPTED, ANSWER_WITHIN, HANDED_WAIT, MAGIC, MAX_MESSAGE, QUITTING, REACH_FOR, arguments, message, relaunched};
 
@@ -21,14 +21,14 @@ static RELEASED: AtomicBool = AtomicBool::new(false);
 pub(super) fn claim(id: &str) -> bool {
     // No runtime folder of the user's own: run unclaimed rather than not at all.
     let Some(path) = socket_path(id) else { return true };
-    let handed = crate::relaunch::handed_from().map(|pid| (pid, Instant::now() + HANDED_WAIT));
+    let handed = crate::relaunch::handed_from().map(|pid| (pid, crate::time::now() + HANDED_WAIT));
     // One launch at a time decides: between finding the socket stale (or its process hung) and
     // binding its own, no other launch looks. The kernel lets go of a killed holder's lock.
     let Ok(lock) = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(path.with_extension("lock")) else { return true };
     if lock.lock().is_err() {
         return true;
     }
-    let deadline = Instant::now() + REACH_FOR;
+    let deadline = crate::time::now() + REACH_FOR;
     loop {
         match UnixListener::bind(&path) {
             Ok(listener) => return claimed(path, listener),
@@ -37,7 +37,7 @@ pub(super) fn claim(id: &str) -> bool {
         }
         // A launch a quitting process handed on waits for it to let go (`release_instance`).
         if let Some((pid, until)) = handed
-            && Instant::now() < until
+            && crate::time::now() < until
             && crate::relaunch::alive(pid)
         {
             std::thread::sleep(Duration::from_millis(1));
@@ -52,7 +52,7 @@ pub(super) fn claim(id: &str) -> bool {
                 std::fs::remove_file(&path).ok();
             }
             // Removed between the bind and the connect: bind again.
-            Sent::Gone if Instant::now() < deadline => {}
+            Sent::Gone if crate::time::now() < deadline => {}
             Sent::Gone => return true,
         }
     }
@@ -164,14 +164,14 @@ enum Sent {
 /// Sends this launch's arguments to the process listening at `path` and waits, at most
 /// `ANSWER_WITHIN`, for its answer.
 fn send(path: &Path) -> Sent {
-    let deadline = Instant::now() + ANSWER_WITHIN;
+    let deadline = crate::time::now() + ANSWER_WITHIN;
     let mut stream = match UnixStream::connect(path) {
         Ok(stream) => stream,
         Err(e) if e.kind() == ErrorKind::ConnectionRefused => return Sent::Refused,
         Err(e) if e.kind() == ErrorKind::NotFound => return Sent::Gone,
         Err(_) => return Sent::Nobody,
     };
-    let left = || Some(deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(1)));
+    let left = || Some(deadline.saturating_duration_since(crate::time::now()).max(Duration::from_millis(1)));
     stream.set_write_timeout(left()).ok();
     let mut answer = [0u8; 1];
     let answered = stream.write_all(&message()).is_ok() && {
@@ -190,8 +190,8 @@ fn send(path: &Path) -> Sent {
 /// Waits, at most `HANDED_WAIT`, for a quitting process to remove its socket (or to die with
 /// it); a socket still there then is taken over.
 fn wait_free(path: &Path) {
-    let until = Instant::now() + HANDED_WAIT;
-    while Instant::now() < until {
+    let until = crate::time::now() + HANDED_WAIT;
+    while crate::time::now() < until {
         match UnixStream::connect(path) {
             Err(e) if e.kind() == ErrorKind::NotFound => return,
             Err(e) if e.kind() == ErrorKind::ConnectionRefused => break,

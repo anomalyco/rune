@@ -91,7 +91,7 @@ impl FillSet {
             }
             // Let the workers reach their spin before the clock starts.
             std::thread::sleep(std::time::Duration::from_millis(2));
-            let start = std::time::Instant::now();
+            let start = rune_core::time::now();
             let mut groups = outline::share_rows(&self.fills);
             let size = |g: &Vec<u32>| g.iter().map(|&i| self.fills[i as usize].rect[2] * self.fills[i as usize].rect[3]).sum::<u32>();
             groups.sort_by_key(|g| std::cmp::Reverse(size(g)));

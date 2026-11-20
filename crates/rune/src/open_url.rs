@@ -188,7 +188,7 @@ fn percent_encode_non_ascii(url: &str) -> std::borrow::Cow<'_, str> {
             out.push(b as char);
         } else {
             use std::fmt::Write;
-            let _ = write!(out, "%{b:02X}");
+            write!(out, "%{b:02X}").ok();
         }
     }
     std::borrow::Cow::Owned(out)
@@ -213,7 +213,7 @@ fn open(url: &str) -> Result<(), OpenUrlError> {
         .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
         .spawn().map_err(|e| OpenUrlError::Failed(e.to_string()))?;
     // Reap it so it doesn't linger as a zombie.
-    std::thread::spawn(move || { let _ = child.wait(); });
+    std::thread::spawn(move || { child.wait().ok(); });
     Ok(())
 }
 

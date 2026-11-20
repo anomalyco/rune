@@ -1,7 +1,6 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::time::Instant;
 
 /// A waker that counts its calls.
 fn counter() -> (Waker, Arc<AtomicUsize>) {
@@ -20,9 +19,9 @@ fn latest<T: Send + 'static>() -> (Latest<T>, Arc<AtomicUsize>) {
 }
 
 fn eventually(what: &str, done: impl Fn() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = crate::time::now() + Duration::from_secs(5);
     while !done() {
-        assert!(Instant::now() < deadline, "timed out waiting until {what}");
+        assert!(crate::time::now() < deadline, "timed out waiting until {what}");
         std::thread::sleep(Duration::from_millis(1));
     }
 }
@@ -34,7 +33,7 @@ fn gate() -> (Gate, impl FnOnce() + Send + 'static) {
     let (open, wait) = mpsc::channel();
     let started = Arc::new(AtomicUsize::new(0));
     let flag = started.clone();
-    (Gate { open, started }, move || { flag.store(1, Ordering::SeqCst); let _ = wait.recv(); })
+    (Gate { open, started }, move || { flag.store(1, Ordering::SeqCst); wait.recv().ok(); })
 }
 
 impl Gate {
@@ -53,7 +52,7 @@ fn slot() -> (Slot<u32>, Arc<AtomicUsize>) {
 }
 
 fn ask(slot: &mut Slot<u32>, n: u32) {
-    slot.wait(crate::time::Instant::now(), Box::new(move || Some(n)));
+    slot.wait(crate::time::now(), Box::new(move || Some(n)));
 }
 
 /// Starts the waiting request and returns its attempt.
@@ -173,7 +172,7 @@ fn debounce_runs_only_the_last_request_of_a_burst_after_a_quiet_wait() {
     let quiet = Duration::from_millis(250);
     let search = Latest::on(pool(), Some(waker)).debounce(quiet);
     let ran = Arc::new(Mutex::new(Vec::new()));
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut last = Duration::ZERO;
     for q in ["a", "ab", "abc"] {
         let ran = ran.clone();
@@ -193,7 +192,7 @@ fn debounce_runs_only_the_last_request_of_a_burst_after_a_quiet_wait() {
 fn debounce_waits_before_a_lone_request() {
     let (waker, wakes) = counter();
     let search = Latest::on(pool(), Some(waker)).debounce(Duration::from_millis(30));
-    let start = Instant::now();
+    let start = crate::time::now();
     search.request((), move |_| start.elapsed());
     assert!(search.is_pending());
     eventually("it lands", || wakes.load(Ordering::SeqCst) == 1);
@@ -321,7 +320,7 @@ fn request_if_changed_ignores_an_unchanged_key() {
 fn request_if_changed_does_not_push_back_the_debounce() {
     let (waker, wakes) = counter();
     let search = Latest::<usize>::on(pool(), Some(waker)).debounce(Duration::from_millis(250));
-    let start = Instant::now();
+    let start = crate::time::now();
     search.request_if_changed(&1usize, |n| n);
     while start.elapsed() < Duration::from_millis(150) {
         search.request_if_changed(&1usize, |n| n);

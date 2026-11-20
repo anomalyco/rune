@@ -15,7 +15,7 @@ mod mac {
     use std::cell::RefCell;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Mutex, mpsc};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
     use objc2_foundation::{NSPoint, NSString};
@@ -62,7 +62,7 @@ mod mac {
     }
 
     fn wait(what: &str, limit: Duration, f: impl Fn() -> bool) -> bool {
-        let start = Instant::now();
+        let start = rune::time::now();
         while !f() {
             if start.elapsed() > limit { println!("popup_menu_macos: no {what} within {limit:?}"); return false; }
             std::thread::sleep(Duration::from_millis(5));
@@ -73,7 +73,7 @@ mod mac {
     /// Runs `f` on the main thread through an update and waits for it.
     fn on_main<T: Send + 'static>(handle: &AppHandle<State>, f: impl FnOnce(&mut State, &mut Tx) -> T + Send + 'static) -> T {
         let (tx, rx) = mpsc::channel();
-        handle.update(move |s, t| { let _ = tx.send(f(s, t)); });
+        handle.update(move |s, t| { tx.send(f(s, t)).ok(); });
         rx.recv_timeout(Duration::from_secs(5)).expect("an update runs on the main thread")
     }
 
@@ -184,11 +184,11 @@ mod mac {
         assert!(popup_menu_supported());
         let spec = AppSpec { poll: Some(poll), ..AppSpec::new("popup menu", (320.0, 160.0), || State { theme: "system".into() }, view) };
         let (ready_tx, ready_rx) = mpsc::channel();
-        let app = App::new(spec).args(Vec::new()).on_ready(move |_| { let _ = ready_tx.send(()); });
+        let app = App::new(spec).args(Vec::new()).on_ready(move |_| { ready_tx.send(()).ok(); });
         let handle = app.handle();
         let worker = std::thread::spawn(move || {
             let run = std::panic::catch_unwind(|| {
-                let started = Instant::now();
+                let started = rune::time::now();
                 ready_rx.recv_timeout(Duration::from_secs(60)).expect("window ready");
                 println!("popup_menu_macos: ready after {:?}", started.elapsed());
                 std::thread::sleep(Duration::from_millis(300));

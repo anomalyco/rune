@@ -54,6 +54,6 @@ impl Drop for MouseWatch {
         // wait_for_event without touching winit's display or waiting for another input event.
         // SAFETY: `self.connection` owns a live open socket FD until `Drop` finishes (`SHUT_RDWR == 2`).
         unsafe { shutdown(self.connection.stream().as_raw_fd(), 2); }
-        if let Some(thread) = self.thread.take() { let _ = thread.join(); }
+        if let Some(thread) = self.thread.take() { thread.join().ok(); }
     }
 }

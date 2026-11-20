@@ -83,9 +83,9 @@ async fn bind(conn: &Connection, portal_proxy: &Proxy<'_>, id: ShortcutId, short
             let bindings = response.get("shortcuts").and_then(|v| v.try_clone().ok())
                 .and_then(|v| Vec::<(String, HashMap<String, OwnedValue>)>::try_from(v).ok());
             if bindings.as_ref().is_some_and(|v| v.iter().any(|(key, _)| key == &id.0.to_string())) { Ok(session) }
-            else { let _ = close(conn, &session).await; Err(ShortcutError::PermissionDenied) }
+            else { close(conn, &session).await.ok(); Err(ShortcutError::PermissionDenied) }
         }
-        Err(e) => { let _ = close(conn, &session).await; Err(e) }
+        Err(e) => { close(conn, &session).await.ok(); Err(e) }
     }
 }
 
@@ -106,8 +106,8 @@ impl Native {
                     Ok::<_, ShortcutError>((conn, portal, events))
                 }).await.unwrap_or(Err(ShortcutError::Unsupported));
                 let (conn, portal, mut events) = match setup {
-                    Ok(v) => { let _ = ready.send(Ok(())); v },
-                    Err(e) => { let _ = ready.send(Err(e)); return; }
+                    Ok(v) => { ready.send(Ok(())).ok(); v },
+                    Err(e) => { ready.send(Err(e)).ok(); return; }
                 };
                 let mut sessions: HashMap<ShortcutId, OwnedObjectPath> = HashMap::new();
                 enum Wake {
@@ -121,7 +121,7 @@ impl Native {
                     match next {
                         Wake::Command(Some(Command::Register(id, shortcut, reply))) => {
                             let result = bind(&conn, &portal, id, &shortcut).await.map(|session| { sessions.insert(id, session); });
-                            let _ = reply.send(result);
+                            reply.send(result).ok();
                         }
                         Wake::Command(Some(Command::Unregister(id, reply))) => {
                             let result = match sessions.get(&id) {
@@ -129,7 +129,7 @@ impl Native {
                                 None => Err(ShortcutError::UnknownId),
                             };
                             if result.is_ok() { sessions.remove(&id); }
-                            let _ = reply.send(result);
+                            reply.send(result).ok();
                         }
                         Wake::Command(None) | Wake::Event(None) => break,
                         Wake::Event(Some(event)) => {
@@ -142,8 +142,8 @@ impl Native {
                         }
                     }
                 }
-                for session in sessions.values() { let _ = close(&conn, session).await; }
-                let _ = conn.close().await;
+                for session in sessions.values() { close(&conn, session).await.ok(); }
+                conn.close().await.ok();
             });
         }).map_err(|e| ShortcutError::Backend(e.to_string()))?;
         let mut native = Self { commands: Some(commands), worker: Some(worker) };
@@ -166,7 +166,7 @@ impl Backend for Native {
 impl Drop for Native {
     fn drop(&mut self) {
         self.commands.take();
-        if let Some(worker) = self.worker.take() { let _ = worker.join(); }
+        if let Some(worker) = self.worker.take() { worker.join().ok(); }
     }
 }
 

@@ -142,7 +142,7 @@ pub(super) fn apply(shared: &Arc<Shared>) {
     // Being pulled further up this stack: that pull folds it in.
     let Ok(mut native) = shared.native.try_lock() else { return };
     let mut c = shared.ctl.lock().unwrap();
-    let target = vsync::snap(Instant::now());
+    let target = vsync::snap(rune_core::time::now());
     // Video opens when a frame draws it.
     native.reconcile(shared, &mut c, target, false);
     drop(c);
@@ -156,7 +156,7 @@ pub(super) fn apply(shared: &Arc<Shared>) {
 pub(super) fn drive(shared: &Arc<Shared>) {
     let Ok(mut native) = shared.native.try_lock() else { return };
     let mut c = shared.ctl.lock().unwrap();
-    let now = Instant::now();
+    let now = rune_core::time::now();
     native.reconcile(shared, &mut c, now, true);
     match native.phase {
         Phase::Buffering { at, .. } => {
@@ -195,7 +195,7 @@ pub(crate) fn unlayer(shared: &Arc<Shared>, surface: &NativeSurface) {
     let mut c = shared.ctl.lock().unwrap();
     native.layered = false;
     let lead = vsync::period().as_secs_f64() / 2.0;
-    native.show(shared, &mut c, surface, vsync::snap(Instant::now()), lead);
+    native.show(shared, &mut c, surface, vsync::snap(rune_core::time::now()), lead);
 }
 
 /// Audio, and video on its layer: where the clock has it now. The clock runs only while the sound
@@ -207,7 +207,7 @@ pub(super) fn live_time(shared: &Shared, _: bool) -> Option<f64> {
     }
     let clock = native.clock.get()?;
     let duration = native.facts.map(|f| f.meta.duration).filter(|d| *d > 0.0)?;
-    Some(clock.position(Instant::now()).rem_euclid(duration))
+    Some(clock.position(rune_core::time::now()).rem_euclid(duration))
 }
 
 /// When the frame that draws the clip next should come; None while nothing is due.
@@ -216,7 +216,7 @@ pub(super) fn due(shared: &Shared) -> Option<Instant> {
 }
 
 pub(super) fn pull(shared: &Arc<Shared>, surface: &NativeSurface, target: Instant) -> bool {
-    let now = Instant::now();
+    let now = rune_core::time::now();
     let target = vsync::snap(target.max(now));
     let mut native = shared.native.lock().unwrap();
     let mut c = shared.ctl.lock().unwrap();
@@ -294,7 +294,7 @@ impl Native {
                 }
             }),
             clock: self.clock.clone(),
-            started: Instant::now(),
+            started: rune_core::time::now(),
         };
         self.opened = Some(job.started);
         self.pipe = Some(decoder::start(job));

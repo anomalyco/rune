@@ -1,5 +1,6 @@
 use super::composite::{MAX_BACKDROP, fit_backdrop, pixels};
 use super::*;
+use crate::time::Instant;
 
 #[test]
 fn backdrop_is_cropped_to_the_output_aspect_then_scaled() {

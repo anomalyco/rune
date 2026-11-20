@@ -17,8 +17,8 @@ fn logging() -> (Log, OnFrameEncoded) {
 fn reports_number_each_frame_of_their_window() {
     let (log, hook) = logging();
     let mut reports = FrameReports::new(Some(hook), Some("main"));
-    let target = Instant::now() + Duration::from_millis(8);
-    let started = Instant::now();
+    let target = crate::time::now() + Duration::from_millis(8);
+    let started = crate::time::now();
     let encoded = reports.stamp();
     assert!(encoded.is_some(), "a hook takes the encode time");
     reports.drawn(encoded, Some(target), started, 0.0);
@@ -39,7 +39,7 @@ fn reports_number_each_frame_of_their_window() {
 fn a_drawn_frame_splits_its_work_into_update_and_encode() {
     let (log, hook) = logging();
     let mut reports = FrameReports::new(Some(hook), Some("main"));
-    let started = Instant::now();
+    let started = crate::time::now();
     let encoded = started + Duration::from_millis(5);
     reports.drawn(Some(encoded), None, started, 2.0);
     // A clock step can put the stamp before the update ended: encode time is never negative.
@@ -64,7 +64,7 @@ fn reports_carry_the_display_refresh_the_host_last_set() {
     reports.skipped();
     reports.set_refresh(Some(120.0));
     reports.unchanged(None);
-    reports.drawn(reports.stamp(), None, Instant::now(), 0.0);
+    reports.drawn(reports.stamp(), None, crate::time::now(), 0.0);
     reports.set_refresh(Some(0.0));
     reports.skipped();
     let hz: Vec<_> = log.borrow().iter().map(FrameEncoded::refresh_hz).collect();
@@ -75,7 +75,7 @@ fn reports_carry_the_display_refresh_the_host_last_set() {
 fn without_a_hook_nothing_is_timed_or_counted() {
     let mut reports = FrameReports::new(None, Some("main"));
     assert_eq!(reports.stamp(), None);
-    reports.drawn(None, None, Instant::now(), 1.0);
+    reports.drawn(None, None, crate::time::now(), 1.0);
     reports.unchanged(None);
     reports.skipped();
     reports.set_refresh(Some(60.0));

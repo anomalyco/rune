@@ -205,9 +205,9 @@ impl Windows {
             let (slot, proxy) = (self.hosts.len(), self.proxy.clone());
             let frame_proxy = proxy.clone();
             let slot_proxy = proxy.clone();
-            overlay.connect(Arc::new(move || { let _ = proxy.send_event(WakeEvent::App(slot)); }),
-                Arc::new(move || { let _ = frame_proxy.send_event(WakeEvent::DisplayTick(slot)); }),
-                Arc::new(move || { let _ = slot_proxy.send_event(WakeEvent::FrameSlot(slot)); }), self.gpu.clone());
+            overlay.connect(Arc::new(move || { proxy.send_event(WakeEvent::App(slot)).ok(); }),
+                Arc::new(move || { frame_proxy.send_event(WakeEvent::DisplayTick(slot)).ok(); }),
+                Arc::new(move || { slot_proxy.send_event(WakeEvent::FrameSlot(slot)).ok(); }), self.gpu.clone());
             overlay.resumed(event_loop);
             self.hosts.push(Some(overlay));
         }
@@ -384,7 +384,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
         }
         // The frames windows want next (`redraw`), and on Windows the paints the system keeps
         // putting off behind another window's.
-        let now = Instant::now();
+        let now = crate::time::now();
         for host in self.hosts.iter_mut().flatten() { host.turn_ends(event_loop, now); }
         // Layer surfaces have no redraw events: keep turning while one animates (its vsync
         // paces the loop). Hosts whose only motion is an ambient loop sleep until its next step.
@@ -503,6 +503,6 @@ pub(crate) fn touch_core(rt: &mut RuntimeCore, app: &mut dyn AppDriver, touch: &
         TouchPhase::Ended => crate::TouchPhase::Ended,
         TouchPhase::Cancelled => crate::TouchPhase::Cancelled,
     };
-    let time = START.get_or_init(crate::time::Instant::now).elapsed().as_secs_f64();
+    let time = START.get_or_init(crate::time::now).elapsed().as_secs_f64();
     rt.touch(app, touch.id, phase, touch.location.x as f32 / scale, touch.location.y as f32 / scale, time);
 }

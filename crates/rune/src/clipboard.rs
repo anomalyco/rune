@@ -68,7 +68,7 @@ impl ClipboardWrite {
     pub(crate) fn is_secret(&self) -> bool { self.clear_after.is_some() }
     fn slot(&self) -> Option<&Arc<Slot>> { self.secret.as_ref().map(|u| &u.0) }
     fn bind(&self, route: Route) {
-        if let Some(slot) = self.slot() { let _ = slot.route.set(route); }
+        if let Some(slot) = self.slot() { slot.route.set(route).ok(); }
     }
 }
 impl std::ops::Deref for ClipboardWrite {
@@ -86,7 +86,7 @@ enum Route { System(mpsc::Sender<Request>), Memory(MemoryClipboard) }
 impl Route {
     fn send(&self, request: Request) {
         match self {
-            Route::System(worker) => { let _ = worker.send(request); }
+            Route::System(worker) => { worker.send(request).ok(); }
             Route::Memory(m) => m.handle(request),
         }
     }
@@ -312,7 +312,7 @@ trait WriteSteps {
 }
 struct RealTime;
 impl WriteSteps for RealTime {
-    fn now(&self) -> Instant { Instant::now() }
+    fn now(&self) -> Instant { crate::time::now() }
 }
 
 /// The clipboard owner's bookkeeping, shared by the OS worker and the memory clipboard.
@@ -320,7 +320,7 @@ impl WriteSteps for RealTime {
 struct Core { keys: RandomState, seq: Seq, hold: Hold, alarm: Option<Alarm>, own_pills: Option<OwnPills> }
 impl Core {
     fn next_check(&self) -> Option<Instant> {
-        self.hold.next_check(Instant::now() + WATCH)
+        self.hold.next_check(crate::time::now() + WATCH)
     }
 
     fn handle<B: Backend>(&mut self, cb: &mut B, request: Request) {
@@ -429,7 +429,7 @@ impl Core {
     }
 
     /// Expire the held secret, or let it go if the clipboard changed under it.
-    fn tick<B: Backend>(&mut self, cb: &mut B) { self.tick_at(cb, Instant::now()); }
+    fn tick<B: Backend>(&mut self, cb: &mut B) { self.tick_at(cb, crate::time::now()); }
 
     fn tick_at<B: Backend>(&mut self, cb: &mut B, now: Instant) {
         if let Some(own) = &self.own_pills

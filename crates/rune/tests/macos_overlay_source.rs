@@ -215,7 +215,7 @@ mod mac {
 
     fn on_main(handle: &rune::AppHandle<()>, f: impl FnOnce() + Send + 'static) {
         let (tx, rx) = std::sync::mpsc::channel();
-        handle.update(move |_, _| { f(); let _ = tx.send(()); });
+        handle.update(move |_, _| { f(); tx.send(()).ok(); });
         rx.recv_timeout(Duration::from_secs(10)).expect("event thread stalled");
     }
 
@@ -237,7 +237,7 @@ mod mac {
         assert!(CREATED.load(Ordering::SeqCst), "overlay was not created");
         std::thread::sleep(Duration::from_millis(500));
         let (tx, rx) = std::sync::mpsc::channel();
-        handle.update(move |_, _| { let _ = tx.send(pairs()); });
+        handle.update(move |_, _| { tx.send(pairs()).ok(); });
         let pairs = rx.recv_timeout(Duration::from_secs(10)).unwrap();
         assert!(pairs.iter().any(|p| p.overlay) && pairs.iter().any(|p| !p.overlay), "expected an overlay and a launcher panel");
         let overlay = *pairs.iter().find(|p| p.overlay).unwrap();
@@ -275,7 +275,7 @@ mod mac {
         }
 
         let (tx, rx) = std::sync::mpsc::channel();
-        handle.update(move |_, _| { let _ = tx.send(rotation_lock(true)); });
+        handle.update(move |_, _| { tx.send(rotation_lock(true)).ok(); });
         if rx.recv_timeout(Duration::from_secs(10)).unwrap() {
             // ReplayKit restyles on a later main-queue turn.
             std::thread::sleep(Duration::from_millis(300));

@@ -17,7 +17,7 @@ impl Backend for Fake {
 impl Drop for Fake {
     fn drop(&mut self) {
         self.state.lock().unwrap().drops += 1;
-        if let Some(dropped) = &self.dropped { let _ = dropped.send(()); }
+        if let Some(dropped) = &self.dropped { dropped.send(()).ok(); }
     }
 }
 
@@ -64,7 +64,7 @@ fn shutdown_does_not_wait_indefinitely_for_a_blocked_backend() {
     });
     worker.sender.send(Request::Write(ClipboardWrite::secret("fixture".into(), LONG).0, None)).unwrap();
     waiting.recv_timeout(Duration::from_secs(1)).unwrap();
-    let start = Instant::now();
+    let start = crate::time::now();
     worker.stop();
     assert!(start.elapsed() < Duration::from_secs(1));
     release.send(()).unwrap();
@@ -78,7 +78,7 @@ fn worker_reports_the_write_and_watches_for_outside_changes() {
     let shared = state.clone();
     let worker = Worker::spawn(move || Some(Fake { state: shared.clone(), dropped: None }));
     let (woke, wakes) = mpsc::channel();
-    let notify = Notify { changed: Arc::default(), wake: Arc::new(move || { let _ = woke.send(()); }) };
+    let notify = Notify { changed: Arc::default(), wake: Arc::new(move || { woke.send(()).ok(); }) };
     let (write, handle) = ClipboardWrite::secret("fixture".into(), LONG);
     write.bind(Route::System(worker.sender.clone()));
     worker.sender.send(Request::Write(write, Some(notify.clone()))).unwrap();

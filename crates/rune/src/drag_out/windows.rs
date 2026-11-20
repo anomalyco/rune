@@ -110,7 +110,7 @@ unsafe extern "system" fn procedure(hwnd: windows_sys::Win32::Foundation::HWND, 
             let mut slot = p.borrow_mut();
             slot.as_ref().is_some_and(|cur| cur.hwnd == hwnd as usize && cur.id == id).then(|| slot.take()).flatten()
         }) {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (p.done)(DragOutcome::Cancelled)));
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (p.done)(DragOutcome::Cancelled))).ok();
         }
     }
     // SAFETY: passes every other message on.
@@ -124,7 +124,7 @@ fn run(hwnd: usize, id: usize) {
         slot.as_ref().is_some_and(|cur| cur.hwnd == hwnd && cur.id == id).then(|| slot.take()).flatten()
     }) else { return };
     if DRAGGING.with(|d| d.replace(true)) {
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (p.done)(DragOutcome::Cancelled)));
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (p.done)(DragOutcome::Cancelled))).ok();
         return;
     }
     let _guard = DragGuard;
@@ -143,7 +143,7 @@ fn session(p: &Pending) -> Option<DragOutcome> {
     // Every object made here is released when it drops; media handed to `SetData` with
     // `fRelease` belong to the data object.
     unsafe {
-        let _ = OleInitialize(None);
+        OleInitialize(None).ok();
         let data = data_object(item)?;
         if let Some(png) = item.png_data() { set(&data, png_format(), hglobal(png)?); }
         let text = item.plain_text().map(str::to_owned).or_else(|| item.paths().first().map(|f| native(f)));
@@ -156,7 +156,7 @@ fn session(p: &Pending) -> Option<DragOutcome> {
             match picture {
                 Some(shdi) => if helper.InitializeFromBitmap(&shdi, &data).is_err() { windows_sys::Win32::Graphics::Gdi::DeleteObject(shdi.hbmpDragImage.0); },
                 // The shell's own picture of the files, under the pointer.
-                None if !item.paths().is_empty() => { let _ = helper.InitializeFromWindow(None, None, &data); }
+                None if !item.paths().is_empty() => { helper.InitializeFromWindow(None, None, &data).ok(); }
                 None => {}
             }
         }
@@ -222,7 +222,7 @@ unsafe fn set(data: &IDataObject, format: u16, medium: HGLOBAL) {
     let format = FORMATETC { cfFormat: format, ptd: std::ptr::null_mut(), dwAspect: DVASPECT_CONTENT.0, lindex: -1, tymed: TYMED_HGLOBAL.0 as u32 };
     let medium = STGMEDIUM { tymed: TYMED_HGLOBAL.0 as u32, u: STGMEDIUM_0 { hGlobal: medium }, pUnkForRelease: std::mem::ManuallyDrop::new(None) };
     // SAFETY: a valid format and an HGLOBAL medium the call takes ownership of.
-    unsafe { let _ = data.SetData(&format, &medium, true); }
+    unsafe { data.SetData(&format, &medium, true).ok(); }
 }
 
 fn png_format() -> u16 {

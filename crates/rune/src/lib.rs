@@ -266,6 +266,7 @@ pub use render::warm_gpu;
 pub use render::warm_gpu_with;
 pub use rune_core::color;
 pub use rune_core::dirs;
+pub use rune_core::env;
 pub use rune_core::growth;
 pub use rune_core::latest;
 pub use rune_core::live;

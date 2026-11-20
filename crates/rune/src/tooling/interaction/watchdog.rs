@@ -364,7 +364,7 @@ mod mac {
 
     fn epoch() -> Instant {
         static AT: OnceLock<Instant> = OnceLock::new();
-        *AT.get_or_init(Instant::now)
+        *AT.get_or_init(crate::time::now)
     }
 
     fn now_ns() -> u64 { epoch().elapsed().as_nanos() as u64 + 1 }

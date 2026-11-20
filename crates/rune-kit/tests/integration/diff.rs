@@ -747,16 +747,15 @@ fn a_live_only_event_while_hovering_scrolling_or_selecting_builds_nothing_new() 
 #[test]
 #[ignore]
 fn diff_50k_time() {
-    use std::time::Instant;
     let (old, new) = numbered(50_000, 7);
-    let start = Instant::now();
+    let start = rune::time::now();
     let file = FileDiff::from_texts("big.rs", &old, &new);
     let diff_ms = start.elapsed().as_secs_f64() * 1e3;
-    let start = Instant::now();
+    let start = rune::time::now();
     let state = DiffState::new(vec![file]);
     let rows_ms = start.elapsed().as_secs_f64() * 1e3;
     let app = App { diff: state, selections: Vec::new(), comments: Vec::new(), visible: Vec::new(), actions: Vec::new() };
-    let start = Instant::now();
+    let start = rune::time::now();
     let mut rt = Runtime::new(app, view, (1200.0, 900.0), Env::new(true, 2.0));
     rt.frame(0.0);
     let open_ms = start.elapsed().as_secs_f64() * 1e3;
@@ -772,7 +771,7 @@ fn diff_50k_time() {
         let mut times = Vec::new();
         for _ in 0..200 {
             small.invalidate();
-            let start = Instant::now();
+            let start = rune::time::now();
             small.frame(1.0 / 120.0);
             times.push(start.elapsed().as_secs_f64() * 1e3);
         }
@@ -785,7 +784,7 @@ fn diff_50k_time() {
     let mut times = Vec::new();
     for _ in 0..200 {
         rt.invalidate();
-        let start = Instant::now();
+        let start = rune::time::now();
         rt.frame(1.0 / 120.0);
         times.push(start.elapsed().as_secs_f64() * 1e3);
     }
@@ -793,7 +792,7 @@ fn diff_50k_time() {
     println!("commit, 50k lines: p50 {:.2} ms, p90 {:.2} ms", times[100], times[180]);
     let mut times = Vec::new();
     for _ in 0..200 {
-        let start = Instant::now();
+        let start = rune::time::now();
         rt.frame(1.0 / 120.0);
         times.push(start.elapsed().as_secs_f64() * 1e3);
     }
@@ -803,7 +802,7 @@ fn diff_50k_time() {
         let mut times = Vec::new();
         for _ in 0..600 {
             rt.wheel(600.0, 450.0, dy);
-            let start = Instant::now();
+            let start = rune::time::now();
             rt.frame(1.0 / 120.0);
             times.push(start.elapsed().as_secs_f64() * 1e3);
         }
@@ -813,7 +812,7 @@ fn diff_50k_time() {
     let mut jumps = Vec::new();
     for i in 0..20 {
         rt.wheel(600.0, 450.0, if i % 2 == 0 { -300_000.0 } else { 150_000.0 });
-        let start = Instant::now();
+        let start = rune::time::now();
         rt.frame(1.0 / 120.0);
         jumps.push(start.elapsed().as_secs_f64() * 1e3);
     }

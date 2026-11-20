@@ -42,7 +42,7 @@ impl Announcement {
         self.text = text;
         self.how = how;
         self.said = self.said.wrapping_add(1);
-        self.at = Some(crate::time::Instant::now());
+        self.at = Some(crate::time::now());
     }
 
     pub(crate) fn said(&self) -> u32 { self.said }
@@ -195,7 +195,7 @@ impl AccessibilityLink {
 
     fn update(&mut self, rt: &mut crate::runtime::RuntimeCore) -> Option<TreeUpdate> {
         self.adopt(rt);
-        let started = log().then(crate::time::Instant::now);
+        let started = log().then(crate::time::now);
         let update = rt.a11y_update()?;
         if let Some(t) = started { eprintln!("rune: a11y update: {} nodes in {:.0} us", update.nodes.len(), t.elapsed().as_secs_f64() * 1e6); }
         Some(update)

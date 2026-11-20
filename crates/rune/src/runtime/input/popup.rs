@@ -152,7 +152,7 @@ impl RuntimeCore {
     /// [`Runtime::resolve_popup`], and one that can't open answers `None` now.
     pub(crate) fn open_popup_headless(&mut self, app: &mut dyn AppDriver) {
         while let Some(None) = self.take_popup() {
-            let _ = self.resolve_popup(app, None);
+            self.resolve_popup(app, None).ok();
         }
     }
 

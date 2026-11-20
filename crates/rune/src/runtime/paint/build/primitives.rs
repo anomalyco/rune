@@ -285,7 +285,7 @@ impl RuntimeCore {
                 if let Some(pulled) = surface.pull_video(video_clock, self.frame.live.waker()) {
                     // A clip whose next picture isn't due for a while wakes the window
                     // then, instead of drawing every refresh in between.
-                    let wait = pulled.due.map(|due| due.saturating_duration_since(crate::time::Instant::now()).as_secs_f64());
+                    let wait = pulled.due.map(|due| due.saturating_duration_since(crate::time::now()).as_secs_f64());
                     match wait {
                         Some(wait) if pulled.active && wait > crate::video::WAKE_MIN => {
                             let wake = self.clock + wait;

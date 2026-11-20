@@ -4,18 +4,18 @@ use super::*;
 
 impl Client {
     pub(super) fn read_for(&self, purpose: Purpose) {
-        let _ = worker().send(Request::Read { purpose, reply: self.sender.clone(), wake: self.wake.clone() });
+        worker().send(Request::Read { purpose, reply: self.sender.clone(), wake: self.wake.clone() }).ok();
     }
     pub(crate) fn flush_core(&self, rt: &mut crate::runtime::RuntimeCore) {
         if rt.edit.clipboard.is_some() { return flush_memory(rt); }
         #[cfg(target_os = "linux")]
         self.flush_primary(rt);
         // Nothing to clear before the first write.
-        if std::mem::take(&mut rt.edit.clear_secret_request) && let Some(w) = WORKER.get() { let _ = w.sender.send(Request::Clear(None)); }
+        if std::mem::take(&mut rt.edit.clear_secret_request) && let Some(w) = WORKER.get() { w.sender.send(Request::Clear(None)).ok(); }
         if let Some(copy) = rt.copy_request.take() {
             let worker = worker();
             copy.bind(Route::System(worker.clone()));
-            let _ = worker.send(Request::Write(copy, Some(Notify { changed: self.changed.clone(), wake: self.wake.clone() })));
+            worker.send(Request::Write(copy, Some(Notify { changed: self.changed.clone(), wake: self.wake.clone() }))).ok();
         }
         if let Some(target) = rt.edit.paste_request.take() { self.read_for(Purpose::paste(rt, target)); }
         for id in std::mem::take(&mut rt.edit.read_requests) { self.read_for(Purpose::Read(id)); }
@@ -34,15 +34,15 @@ impl Worker {
         let handle = std::thread::Builder::new().name("rune-clipboard".into()).spawn(move || {
             run_worker(recv, open);
             // Backend dropped (including Linux handoff) before acknowledging completion.
-            let _ = done.send(());
+            done.send(()).ok();
         }).expect("clipboard worker");
         Self { sender, join: Mutex::new(Some((handle, completed))) }
     }
     pub(super) fn stop(&self) {
         let Some((handle, completed)) = self.join.lock().unwrap().take() else { return };
-        let _ = self.sender.send(Request::Shutdown);
+        self.sender.send(Request::Shutdown).ok();
         // A hung clipboard owner must not hang application exit. Join only after completion.
-        if completed.recv_timeout(Duration::from_millis(250)).is_ok() { let _ = handle.join(); }
+        if completed.recv_timeout(Duration::from_millis(250)).is_ok() { handle.join().ok(); }
     }
 }
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
@@ -59,7 +59,7 @@ fn worker() -> &'static mpsc::Sender<Request> {
 /// `clipboard::clear_secret_now`: the worker clears the last secret if it still holds the clipboard.
 #[cfg(target_os = "windows")]
 pub(super) fn clear_secret_now() {
-    if let Some(w) = WORKER.get() { let _ = w.sender.send(Request::Clear(None)); }
+    if let Some(w) = WORKER.get() { w.sender.send(Request::Clear(None)).ok(); }
 }
 
 pub(super) fn shutdown() {
@@ -105,7 +105,7 @@ fn run_worker<B: Backend>(recv: mpsc::Receiver<Request>, mut open: impl FnMut() 
     let mut core = Core::default();
     loop {
         let request = match core.next_check() {
-            Some(at) => recv.recv_timeout(at.saturating_duration_since(Instant::now())),
+            Some(at) => recv.recv_timeout(at.saturating_duration_since(crate::time::now())),
             None => recv.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
         };
         if let Some(cb) = &mut clipboard { core.tick(cb); }

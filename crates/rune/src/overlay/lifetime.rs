@@ -31,7 +31,7 @@ impl OverlayCore {
             if self.surface.live().is_none() { return; }
             // Retained alpha-zero hosts already have pixels. A hidden update must reach
             // the surface before exposing it, rather than flashing the old frame.
-            if !fading { self.refresh_for_reveal_at(app, Instant::now()); }
+            if !fading { self.refresh_for_reveal_at(app, crate::time::now()); }
             self.show_window(&window, fade);
         }
         let effects = self.presence.step(presence::Event::Show, self.release);
@@ -146,7 +146,7 @@ impl OverlayCore {
         self.fn_key(app);
         // Only macOS and Windows fade the window; elsewhere it goes at once, and so does drawing.
         let fade = if cfg!(any(target_os = "macos", target_os = "windows")) { fade } else { Duration::ZERO };
-        let effects = self.presence.step(presence::Event::Hide { fade, now: Instant::now() }, self.release);
+        let effects = self.presence.step(presence::Event::Hide { fade, now: crate::time::now() }, self.release);
         self.carry_out(app, effects);
     }
 
@@ -320,7 +320,7 @@ impl OverlayCore {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = window.set_cursor_hittest(self.options.input.resolved(self.interactive) == OverlayInput::All);
+            window.set_cursor_hittest(self.options.input.resolved(self.interactive) == OverlayInput::All).ok();
             #[cfg(all(unix, not(target_os = "ios"), not(target_os = "android")))]
             {
                 self.x11 = crate::platform::x11::overlay::InputWindow::new(&window, self.shared.wake.lock().unwrap().clone(), self.options.input.resolved(self.interactive), self.options.follow_pointer, self.options.keys);

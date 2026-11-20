@@ -4,11 +4,11 @@ struct Dir(PathBuf);
 impl Dir {
     fn new(name: &str) -> Dir {
         let dir = std::env::temp_dir().join(format!("rune-prefs-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::remove_dir_all(&dir).ok();
         Dir(dir)
     }
 }
-impl Drop for Dir { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
+impl Drop for Dir { fn drop(&mut self) { std::fs::remove_dir_all(&self.0).ok(); } }
 
 #[test]
 fn values_round_trip_through_the_file() {

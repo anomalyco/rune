@@ -64,8 +64,8 @@ fn modal_turn_trampoline_blocks_reentrancy_and_keeps_outer_timer_alive() {
     let inner = turns(hwnd);
     drop(inner);
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
-    while fired.load(Ordering::SeqCst) == 0 && std::time::Instant::now() < deadline {
+    let deadline = crate::time::now() + std::time::Duration::from_millis(250);
+    while fired.load(Ordering::SeqCst) == 0 && crate::time::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(10));
         // SAFETY: pumps messages for this thread's test window.
         unsafe {

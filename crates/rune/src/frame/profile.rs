@@ -30,7 +30,7 @@ mod enabled {
 
     pub(crate) struct Scope(Phase, Instant, Option<f64>);
     impl Scope {
-        pub(crate) fn new(phase: Phase) -> Self { Self(phase, Instant::now(), cpu_ms()) }
+        pub(crate) fn new(phase: Phase) -> Self { Self(phase, crate::time::now(), cpu_ms()) }
     }
     impl Drop for Scope {
         fn drop(&mut self) {
@@ -156,7 +156,7 @@ pub(crate) struct Scope(Option<(Phase, crate::time::Instant)>);
 impl Scope {
     #[inline(always)]
     pub(crate) fn new(phase: Phase) -> Self {
-        Self((crate::tooling::perf_warn::budget::on() || crate::tooling::interaction::active()).then(|| (phase, crate::time::Instant::now())))
+        Self((crate::tooling::perf_warn::budget::on() || crate::tooling::interaction::active()).then(|| (phase, crate::time::now())))
     }
 }
 #[cfg(not(feature = "frame-profile"))]

@@ -45,8 +45,8 @@ thread_local! {
 
 fn counted(size: usize) {
     ALLOCS.fetch_add(1, Relaxed);
-    let _ = THREAD_ALLOCS.try_with(|c| c.set(c.get() + 1));
-    let _ = THREAD_BYTES.try_with(|c| c.set(c.get().wrapping_add(size as u64)));
+    THREAD_ALLOCS.try_with(|c| c.set(c.get() + 1)).ok();
+    THREAD_BYTES.try_with(|c| c.set(c.get().wrapping_add(size as u64))).ok();
 }
 
 /// Allocations (and reallocations) made on this thread so far; 0 unless [`Counting`] is the

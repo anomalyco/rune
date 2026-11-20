@@ -41,7 +41,7 @@ unsafe extern "C" fn activated(_: Ref, event: Ref, data: Ref) -> i32 {
         let context = &*data.cast::<Context>();
         if !context.keys.borrow().contains_key(&ShortcutId(id.id)) { return NOT_HANDLED; }
         // Never unwind across Carbon. Application handlers themselves run later, in Rune.
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (context.sink)(ShortcutId(id.id), None)));
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (context.sink)(ShortcutId(id.id), None))).ok();
         0
     }
 }

@@ -8,7 +8,7 @@ use rune::*;
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 struct Gui;
 
@@ -24,7 +24,7 @@ fn view(_: &Gui, _: &mut Cx<Gui>) -> El {
 }
 
 fn wait(what: &str, limit: Duration, f: impl Fn() -> bool) {
-    let start = Instant::now();
+    let start = rune::time::now();
     while !f() {
         assert!(
             start.elapsed() < limit,
@@ -39,7 +39,7 @@ fn wait(what: &str, limit: Duration, f: impl Fn() -> bool) {
 }
 
 fn wait_for(what: &str, limit: Duration, f: impl Fn() -> bool) {
-    let start = Instant::now();
+    let start = rune::time::now();
     while !f() {
         assert!(start.elapsed() < limit, "timed out waiting for {what}");
         std::thread::sleep(Duration::from_millis(5));

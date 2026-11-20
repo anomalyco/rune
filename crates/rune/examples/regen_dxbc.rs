@@ -40,7 +40,7 @@ fn main() {
     let dual_end = pinned_logged.first().map_or(logged.len(), |p| p.1);
     let (dual_vertex, dual_fragment) = (stage(&logged[uber_logged..dual_end], "vs"), stage(&logged[uber_logged..dual_end], "fs"));
     let (vs, fs) = (fxc(&vertex, "vs", "vs_5_1"), fxc(&fragment, "fs", "ps_5_1"));
-    let started = std::time::Instant::now();
+    let started = rune::time::now();
     let (vs_dual, fs_dual) = (fxc(&dual_vertex, "vs", "vs_5_1"), fxc(&dual_fragment, "fs", "ps_5_1"));
     println!("FXC took {:.1} s for the subpixel variant", started.elapsed().as_secs_f64());
     // The hash the build took of the WGSL it joined, CRLF read as LF (crates/rune/build.rs).
@@ -57,7 +57,7 @@ fn main() {
     let mut pinned_fs = Vec::new();
     for (n, &(kind, at)) in pinned_logged.iter().enumerate() {
         let end = pinned_logged.get(n + 1).map_or(logged.len(), |p| p.1);
-        let started = std::time::Instant::now();
+        let started = rune::time::now();
         let fs_pinned = fxc(&stage(&logged[at..end], "fs"), "fs", "ps_5_1");
         std::fs::write(format!("{dxbc_dir}/uber.fs-k{kind}.dxbc"), &fs_pinned).unwrap();
         pinned_fs.push(format!("\"{}\"", blake3::hash(&fs_pinned).to_hex()));

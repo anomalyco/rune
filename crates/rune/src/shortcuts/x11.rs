@@ -132,8 +132,8 @@ impl Backend for Native {
 }
 impl Drop for Native {
     fn drop(&mut self) {
-        let _ = self.stop.write_all(&[0]);
-        if let Some(listener) = self.listener.take() { let _ = listener.join(); }
+        self.stop.write_all(&[0]).ok();
+        if let Some(listener) = self.listener.take() { listener.join().ok(); }
         // Closing this dedicated connection releases every passive grab, including a partial failure.
     }
 }

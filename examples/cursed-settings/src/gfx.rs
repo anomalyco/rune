@@ -348,7 +348,7 @@ impl Compositor<Cursed> for Gfx {
             self.res = Some(Res::new(f.device, f.queue, f.size, f.format, f.ui));
         }
         self.view_pending = false;
-        let _ = f.device.poll(wgpu::PollType::Poll);
+        f.device.poll(wgpu::PollType::Poll).ok();
         let res = self.res.as_mut().unwrap();
         let gpu_ms = res.timer.as_mut().and_then(|t| t.begin(f.encoder));
         let rt = &mut *f.rt;

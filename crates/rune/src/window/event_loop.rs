@@ -87,7 +87,7 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     {
         // SAFETY: no arguments; this thread runs the loop.
         let thread = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
-        let _ = std::thread::Builder::new().name("rune-keyboard-layout".into()).spawn(move || winit::platform::windows::warm_keyboard_layout(thread));
+        std::thread::Builder::new().name("rune-keyboard-layout".into()).spawn(move || winit::platform::windows::warm_keyboard_layout(thread)).ok();
     }
     event_loop.set_control_flow(ControlFlow::Wait);
     #[cfg(target_os = "macos")]
@@ -143,7 +143,7 @@ impl Windows {
             return;
         }
         let _reset = Reset;
-        let now = std::time::Instant::now();
+        let now = crate::time::now();
         for host in self.hosts.iter_mut().flatten() {
             if let Some(due) = host.wake_deadline().filter(|&due| due <= now) {
                 host.new_events(event_loop, winit::event::StartCause::ResumeTimeReached { start: due, requested_resume: due });

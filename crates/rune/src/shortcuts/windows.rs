@@ -20,7 +20,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             if let Some(context) = p.as_ref() {
                 let id = context.ids.borrow().get(&(w as i32)).copied();
                 if let Some(id) = id {
-                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (context.sink)(id, None)));
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (context.sink)(id, None))).ok();
                 }
             }
             return 0;

@@ -88,7 +88,7 @@ fn main() {
                 if args.get(5).is_some_and(|a| a == "gpu") {
                     renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &[], (out.width, out.height));
                 }
-                let t0 = std::time::Instant::now();
+                let t0 = rune::time::now();
                 rt.frame(0.0);
                 println!("first frame {:.2} ms", t0.elapsed().as_secs_f64() * 1000.0);
                 snap(&gpu, &mut renderer, &mut rt, &out, &dir.join(format!("rest-{tag}.png")));

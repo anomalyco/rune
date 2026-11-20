@@ -10,7 +10,7 @@ fn main() { mac::main() }
 
 #[cfg(target_os = "macos")]
 mod mac {
-    use std::{os::unix::process::ExitStatusExt, process::Command, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
+    use std::{os::unix::process::ExitStatusExt, process::Command, sync::atomic::{AtomicBool, Ordering}, time::Duration};
     use objc2::{class, msg_send, runtime::AnyObject};
     use objc2_foundation::{NSString, ns_string};
     use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{ActiveEventLoop, ControlFlow, EventLoop}, window::{Theme, Window, WindowId}};
@@ -29,10 +29,10 @@ mod mac {
         if std::env::var_os(CASE).is_some() {
             std::thread::spawn(|| { std::thread::sleep(Duration::from_secs(60)); eprintln!("timeout"); std::process::exit(2) });
         }
-        match std::env::var(CASE).as_deref() {
-            Ok("unguarded") => winit_case(false),
-            Ok("guarded") => winit_case(true),
-            Ok("rune") => rune_case(),
+        match rune::env::var(CASE).as_deref() {
+            Some("unguarded") => winit_case(false),
+            Some("guarded") => winit_case(true),
+            Some("rune") => rune_case(),
             _ => parent(),
         }
     }
@@ -101,7 +101,7 @@ mod mac {
             if self.window.is_some() { return; }
             self.window = Some(event_loop.create_window(Window::default_attributes().with_visible(false)).unwrap());
             if self.guarded { rune::macos_appearance::install(); }
-            event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(20)));
+            event_loop.set_control_flow(ControlFlow::WaitUntil(rune::time::now() + Duration::from_millis(20)));
         }
         fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
             if let WindowEvent::ThemeChanged(theme) = event { self.themes.push(theme); }
@@ -132,7 +132,7 @@ mod mac {
                 }
                 _ => {}
             }
-            event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(20)));
+            event_loop.set_control_flow(ControlFlow::WaitUntil(rune::time::now() + Duration::from_millis(20)));
         }
     }
 
@@ -184,9 +184,9 @@ mod mac {
         let handle = app.handle();
         // Launch can take seconds on a busy machine: stress once the overlay's panel exists.
         std::thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(45);
+            let deadline = rune::time::now() + Duration::from_secs(45);
             while !OVERLAY_CREATED.load(Ordering::Acquire) {
-                if Instant::now() > deadline { eprintln!("overlay was not created within 45 s"); std::process::exit(3) }
+                if rune::time::now() > deadline { eprintln!("overlay was not created within 45 s"); std::process::exit(3) }
                 std::thread::sleep(Duration::from_millis(20));
             }
             handle.update(|_, _| stress());

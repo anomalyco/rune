@@ -178,7 +178,7 @@ pub(super) fn gpu_side(gpu: Gpu, surface: wgpu::Surface<'static>, size: (u32, u3
     surface.configure(&gpu.device, &config);
     health::watch(&gpu.device, move |why| {
         *lost.borrow_mut() = Some(if is_gl { Loss::WebGl(why) } else { Loss::WebGpu(why) });
-        let _ = proxy.send_event(Wake::App);
+        proxy.send_event(Wake::App).ok();
     });
     let mut renderer = Renderer::new(&gpu.device, format);
     renderer.set_srgb_blend(!format.is_srgb());
@@ -357,7 +357,7 @@ pub(super) fn encode_gpu_frame(
         });
     }
     // Every frame: one drawn whole leaves the kept frame behind.
-    let _ = side.renderer.damage_drawn();
+    side.renderer.damage_drawn().ok();
     comp_animating
 }
 
@@ -445,7 +445,7 @@ pub(super) fn when_done(side: &GpuSide, proxy: &EventLoopProxy<Wake>) -> Rc<Cell
     side.gpu.queue.on_submitted_work_done(move || {
         let PageOnly((flag, proxy)) = &set;
         flag.set(true);
-        let _ = proxy.send_event(Wake::App);
+        proxy.send_event(Wake::App).ok();
     });
     if super::web_math::needs_device_poll(side.backend) {
         poll_until_done(side.gpu.device.clone(), &flag, Instant::now() + FINISH_LIMIT);

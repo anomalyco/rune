@@ -101,7 +101,7 @@ mod mac {
         *FILE.lock().unwrap() = Some(file.clone());
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let app = App::new(AppSpec::new("drag out", (240.0, 120.0), || (), view)).args(Vec::new())
-            .on_ready(move |_| { let _ = ready_tx.send(()); });
+            .on_ready(move |_| { ready_tx.send(()).ok(); });
         let handle = app.handle();
         let result = std::sync::Arc::new(Mutex::new(None));
         let out = result.clone();
@@ -111,7 +111,7 @@ mod mac {
                 ready_rx.recv_timeout(Duration::from_secs(30)).expect("window ready");
                 if !drive(handle.clone(), f.clone()) {
                     // The live session's tracking loop holds the event loop, so quit can't land.
-                    let _ = std::fs::remove_file(&f);
+                    std::fs::remove_file(&f).ok();
                     println!("macos_drag_out: ok (session start and pasteboard only)");
                     std::process::exit(0);
                 }
@@ -120,7 +120,7 @@ mod mac {
             handle.quit();
         });
         app.run();
-        let _ = std::fs::remove_file(&file);
+        std::fs::remove_file(&file).ok();
         assert_eq!(*result.lock().unwrap(), Some(true), "macos_drag_out failed");
         println!("macos_drag_out: ok");
     }

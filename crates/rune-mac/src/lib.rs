@@ -129,10 +129,10 @@ pub fn busy(on: bool) {
         let dir = std::path::PathBuf::from(home).join("Library/Caches/mac-app/busy");
         let path = dir.join(std::process::id().to_string());
         if on {
-            let _ = std::fs::create_dir_all(&dir);
-            let _ = std::fs::write(path, "");
+            std::fs::create_dir_all(&dir).ok();
+            std::fs::write(path, "").ok();
         } else {
-            let _ = std::fs::remove_file(path);
+            std::fs::remove_file(path).ok();
         }
     }
 }

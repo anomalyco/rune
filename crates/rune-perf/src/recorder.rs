@@ -38,7 +38,7 @@ impl Recorder {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let (out, rx) = sync_channel(QUEUE);
-            let start = Instant::now();
+            let start = crate::now();
             let health = Arc::new(Health::default());
             let h = health.clone();
             // All filesystem work, including mkdir/open/locking, belongs to this thread.

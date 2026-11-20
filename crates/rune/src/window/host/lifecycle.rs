@@ -11,7 +11,6 @@ use winit::window::WindowLevel;
 use super::Host;
 use crate::app::{Activation, WindowRequest};
 use crate::el::Shell;
-use crate::time::Instant;
 use crate::window::chrome::{self, sync_chrome_core};
 use crate::window::file_drop::FileDrop;
 use crate::window::handle::native_window_number;
@@ -290,7 +289,7 @@ impl Host {
     pub(in crate::window) fn refresh_hidden(&mut self) -> bool {
         let now_due = self.hidden_launcher_renders();
         let Some(w) = &mut self.win else { return false };
-        let render = now_due || w.first_frame.deadline().is_some() || w.hidden_pace.changed(Instant::now());
+        let render = now_due || w.first_frame.deadline().is_some() || w.hidden_pace.changed(crate::time::now());
         if render { w.request_redraw(); }
         render
     }
@@ -342,7 +341,7 @@ impl Host {
             let paints = self.shown_win().is_some_and(|w| !self.life.covered() && !w.minimized());
             // A painting macOS window moves its frame over its next frames (`redraw`).
             if self.app.rt().host.window_frame.is_some() && !(paints && cfg!(target_os = "macos")) {
-                self.take_frame_request(self.frame_secs(Instant::now()), false);
+                self.take_frame_request(self.frame_secs(crate::time::now()), false);
             }
             let shown = self.win.as_ref().filter(|_| self.life.shown());
             let window = shown.map(|w| &w.window);
@@ -557,7 +556,7 @@ impl Host {
             // polled: a poll costs the next two frames' submits 4-9 ms each on an Iris Xe.
             if all {
                 gpu.queue.submit(std::iter::empty());
-                let _ = rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely());
+                rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
                 renderer.trim_uploads();
             }
         }

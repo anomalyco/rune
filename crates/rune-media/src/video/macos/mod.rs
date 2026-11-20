@@ -246,7 +246,7 @@ pub(super) fn apply(shared: &Arc<Shared>) {
     }
     let playing = {
         let mut c = shared.ctl.lock().unwrap();
-        turn::reconcile(&mut c, &mut Av::new(shared, &mut native, Some(mtm), None), Instant::now());
+        turn::reconcile(&mut c, &mut Av::new(shared, &mut native, Some(mtm), None), rune_core::time::now());
         c.playing()
     };
     drop(native);
@@ -271,7 +271,7 @@ pub(super) fn live_time(shared: &Shared, live: bool) -> Option<f64> {
 }
 
 pub(super) fn pull(shared: &Arc<Shared>, surface: &NativeSurface, target: Instant) -> bool {
-    let now = Instant::now();
+    let now = rune_core::time::now();
     let mut native = shared.native.lock().unwrap();
     let mut c = shared.ctl.lock().unwrap();
     let mut av = Av::new(shared, &mut native, None, Some((surface, target)));
@@ -320,7 +320,7 @@ pub(super) fn drive(shared: &Arc<Shared>) {
 /// Returns whether the clip needs ticking.
 fn step_audio(shared: &Arc<Shared>) -> bool {
     let Some(mtm) = MainThreadMarker::new() else { return false };
-    let now = Instant::now();
+    let now = rune_core::time::now();
     // Already being driven further up this stack (a waker that edits the clip).
     let Ok(mut native) = shared.native.try_lock() else { return true };
     let mut c = shared.ctl.lock().unwrap();

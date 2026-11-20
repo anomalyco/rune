@@ -297,7 +297,7 @@ impl<T: Send + 'static> Latest<T> {
         slot.key = key;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            slot.wait(crate::time::Instant::now() + self.debounce, work);
+            slot.wait(crate::time::now() + self.debounce, work);
             self.inner.changed.notify_all();
             if !slot.driven {
                 slot.driven = true;
@@ -315,11 +315,11 @@ impl<T: Send + 'static> Latest<T> {
                     sleep(debounce).await;
                 }
                 // On the task fibers, where work that waits on the network doesn't hold the page.
-                let _ = crate::task::spawn("latest", move || {
+                crate::task::spawn("latest", move || {
                     if inner.slot.lock().unwrap().runs(attempt) {
                         inner.land(attempt, Ok(work()));
                     }
-                });
+                }).ok();
             });
         }
     }
@@ -372,10 +372,10 @@ async fn sleep(wait: Duration) {
     let promise = js_sys::Promise::new(&mut |resolve, _| {
         let set = web_sys::window().map(|w| w.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms));
         if !matches!(set, Some(Ok(_))) {
-            let _ = resolve.call0(&wasm_bindgen::JsValue::NULL);
+            resolve.call0(&wasm_bindgen::JsValue::NULL).ok();
         }
     });
-    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+    wasm_bindgen_futures::JsFuture::from(promise).await.ok();
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

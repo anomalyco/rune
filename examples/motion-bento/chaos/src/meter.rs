@@ -122,6 +122,8 @@ impl Meter {
         let mut m = Meter {
             framework: framework.into(),
             refresh_hz,
+            // motion-bento-chaos is a framework-independent native benchmark crate.
+            #[allow(clippy::disallowed_methods)]
             t0: Instant::now(),
             cpu0: cpu_seconds(),
             frames: Vec::with_capacity(8192),

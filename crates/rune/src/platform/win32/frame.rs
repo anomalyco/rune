@@ -169,7 +169,7 @@ unsafe extern "system" fn menu_procedure(hwnd: HWND, message: u32, w: WPARAM, l:
         unsafe { RemoveWindowSubclass(hwnd, Some(menu_procedure), id) };
         if message != WM_NCDESTROY {
             let (x, y) = ((point & 0xffff) as u16 as i16 as i32, (point >> 16 & 0xffff) as u16 as i16 as i32);
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| track_window_menu(hwnd, x, y)));
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| track_window_menu(hwnd, x, y))).ok();
             return 0;
         }
     }

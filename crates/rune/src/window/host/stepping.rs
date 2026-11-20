@@ -82,7 +82,7 @@ impl Host {
         let visible = self.life.shown();
         let Some(w) = &mut self.win else { return };
         w.hidden_pace.reset();
-        if !w.first_frame.request_reveal(stale, visible, Instant::now()) {
+        if !w.first_frame.request_reveal(stale, visible, crate::time::now()) {
             w.request_redraw();
             return;
         }
@@ -96,7 +96,7 @@ impl Host {
         if !w.first_frame.pending() {
             // No first frame to wait for (`FirstFrame::skipped`, `READY_FALLBACK`): the app's live
             // work starts anyway. The window isn't ready (`is_ready`) until it draws.
-            if w.first_frame.ready_due(Instant::now()) && w.first_frame.take_ready() { self.ready_owed(); }
+            if w.first_frame.ready_due(crate::time::now()) && w.first_frame.take_ready() { self.ready_owed(); }
             return;
         }
         let reveal = w.first_frame.complete();

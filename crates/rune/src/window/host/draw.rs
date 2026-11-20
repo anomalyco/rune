@@ -77,7 +77,7 @@ impl Host {
         crate::frame::live_log::missed(match missed { Missed::Occluded => 0, Missed::Timeout => 1, Missed::Outdated => 2, Missed::Unconfigured => 3 });
         let Some(l) = self.win.as_mut() else { return };
         l.timer_frame.drawn();
-        let now = Instant::now();
+        let now = crate::time::now();
         let occluded = missed == Missed::Occluded;
         if occluded {
             crate::marks::mark_once(&FIRST_OCCLUDED, "frame.occluded");
@@ -123,10 +123,10 @@ impl Host {
         l.presented = None;
         l.stop_pacing();
         let shown = self.life.shown();
-        l.first_frame.skipped(Instant::now());
+        l.first_frame.skipped(crate::time::now());
         // Covered by other windows, it still draws what changed, later (`CoveredDraw`).
         #[cfg(target_os = "windows")]
-        if shown && self.life.covered() && !l.minimized() { l.covered_draw = l.covered_draw.step(CoveredDrawEvent::Asked(Instant::now())); }
+        if shown && self.life.covered() && !l.minimized() { l.covered_draw = l.covered_draw.step(CoveredDrawEvent::Asked(crate::time::now())); }
         self.land_frame();
         if shown {
             self.app.set_live_visible(false);
@@ -222,7 +222,7 @@ impl FrameHost for WindowFrame<'_> {
         if owed { self.host.app.rt_mut().settle_all(); }
         // A missed frame's retry, or the timer pacing unpaced motion: input waits for it, and
         // `new_events` runs due timers meanwhile.
-        if !self.resizing && l.backing_off(Instant::now()) { return Gate::Skip; }
+        if !self.resizing && l.backing_off(crate::time::now()) { return Gate::Skip; }
         // A device that died (a driver reset, a GPU removed, a resume from Modern Standby) and a
         // surface that refused its configuration can draw nothing: the window makes both again
         // before this frame, or waits out a retry of its own (`SurfaceRetries`) and then gives
@@ -271,7 +271,7 @@ impl FrameHost for WindowFrame<'_> {
         // decides that before starting the display link, which would draw it at once anyway.
         #[cfg(target_os = "macos")]
         let deferred = l.timer_frame.quiet() && !hidden && !self.resizing && !l.native.prime.presumes()
-            && l.native.pacing.as_ref().is_some_and(|p| p.defers_start(Instant::now()));
+            && l.native.pacing.as_ref().is_some_and(|p| p.defers_start(crate::time::now()));
         #[cfg(not(target_os = "macos"))]
         let deferred = false;
         #[cfg(target_os = "macos")]
@@ -360,7 +360,7 @@ impl FrameHost for WindowFrame<'_> {
         // The frame moves before the drawable is acquired, so it has the new size; never while
         // the user holds the window's edge in a live resize.
         if !self.state.hidden && !self.state.live_resize {
-            self.host.step_frame(self.state.target.unwrap_or_else(Instant::now));
+            self.host.step_frame(self.state.target.unwrap_or_else(crate::time::now));
         }
         let Some(l) = self.host.win.as_mut() else { return };
         #[cfg(target_os = "macos")]
@@ -379,7 +379,7 @@ impl FrameHost for WindowFrame<'_> {
     fn reblend(&mut self) -> bool { self.reblend_surface() }
 
     fn step_quiet(&mut self) -> StepInfo {
-        let now = Instant::now();
+        let now = crate::time::now();
         self.state.now = Some(now);
         self.host.app.rt_mut().host.window_resting = true;
         let at = self.state.target.unwrap_or(now);
@@ -402,7 +402,7 @@ impl FrameHost for WindowFrame<'_> {
 
     fn is_unchanged(&mut self, info: &StepInfo) -> bool {
         let (Some(l), Some((_, renderer))) = (self.host.win.as_ref(), self.host.gpu.as_ref()) else { return false };
-        let now = self.state.now.unwrap_or_else(Instant::now);
+        let now = self.state.now.unwrap_or_else(crate::time::now);
         #[cfg(target_os = "macos")]
         let next_tick = if self.state.deferred { l.native.pacing.as_ref().map(|p| p.tick_after(now)) } else { l.next_tick(now) };
         #[cfg(not(target_os = "macos"))]
@@ -455,7 +455,7 @@ impl FrameHost for WindowFrame<'_> {
                     l.native.pacing = crate::platform::display_link::DisplayLink::new(&l.window, self.host.frame_wake.clone());
                 }
             }
-            let now = *self.state.now.get_or_insert_with(Instant::now);
+            let now = *self.state.now.get_or_insert_with(crate::time::now);
             open_trace_if_needed(self.host, now);
         }
         #[cfg(target_os = "macos")]
@@ -466,7 +466,7 @@ impl FrameHost for WindowFrame<'_> {
     }
 
     fn step_runtime(&mut self) -> StepInfo {
-        let now = *self.state.now.get_or_insert_with(Instant::now);
+        let now = *self.state.now.get_or_insert_with(crate::time::now);
         let frame_time = self.state.target.unwrap_or(now);
         #[cfg(target_os = "macos")]
         { self.state.frame_time = Some(frame_time); }
@@ -546,7 +546,7 @@ impl FrameHost for WindowFrame<'_> {
                 l.first_frame.missed();
                 l.backoff_step(BackoffEvent::HiddenMissed {
                     preparing: l.first_frame.deadline().is_some(),
-                    now: Instant::now(),
+                    now: crate::time::now(),
                 });
             }
             self.host.frame_reports.skipped();
@@ -558,7 +558,7 @@ impl FrameHost for WindowFrame<'_> {
     fn sync_after_step(&mut self, info: &mut StepInfo) {
         #[cfg(target_os = "macos")]
         self.state.shown.take();
-        let now = self.state.now.unwrap_or_else(Instant::now);
+        let now = self.state.now.unwrap_or_else(crate::time::now);
         let Some(l) = self.host.win.as_mut() else { return };
         l.backoff_step(BackoffEvent::Presented);
         if self.state.hidden { l.hidden_pace.rendered(now); }

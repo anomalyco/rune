@@ -267,5 +267,5 @@ todo = "warn"
 unwrap_used = "warn"
 # shared-lints end
 undocumented_unsafe_blocks = "warn" # shared: deny; errors left
-let_underscore_must_use = "warn" # shared: deny; errors left
-disallowed_methods = "warn" # shared: deny; errors left
+let_underscore_must_use = "deny"
+disallowed_methods = "deny"

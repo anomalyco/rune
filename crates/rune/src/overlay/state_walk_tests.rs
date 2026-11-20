@@ -185,7 +185,7 @@ fn occluded_wait(backoff: Backoff, now: Instant) -> Duration {
 
 #[test]
 fn turn_matches_dev_for_every_gate() {
-    let now = Instant::now();
+    let now = crate::time::now();
     let ms = Duration::from_millis(1);
     let retries = [None, Some(now - ms), Some(now), Some(now + ms)];
     let waits = [OCCLUDED_RETRY, Duration::from_millis(600), OCCLUDED_MAX];
@@ -216,7 +216,7 @@ struct TurnOp { delta: Duration, occluded: bool }
 
 #[test]
 fn occluded_misses_back_off_like_dev() {
-    let base = Instant::now();
+    let base = crate::time::now();
     let alphabet = [
         TurnOp { delta: Duration::ZERO, occluded: true },
         TurnOp { delta: Duration::from_millis(100), occluded: true },
@@ -284,7 +284,7 @@ enum BackoffOp {
 /// Both sides take `seq` on a manual clock, checked after every event. `prewarm`: a prewarm
 /// frame, which leaves the wait alone. `scale`: how far each event is from the last.
 fn holds_up(seq: &[BackoffOp], prewarm: bool, scale: u32) {
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let mut dev = DevBackoff::new(OCCLUDED_RETRY);
     let mut ours = Backoff::default();
     for (k, &op) in seq.iter().enumerate() {

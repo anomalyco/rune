@@ -210,7 +210,7 @@ impl FrameHost for FakeHost {
 
 #[test]
 fn normal_frame_follows_canonical_order() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut host = FakeHost::new(start);
     assert_eq!(run(&mut host), Outcome::Presented);
     assert_eq!(
@@ -234,7 +234,7 @@ fn normal_frame_follows_canonical_order() {
 
 #[test]
 fn hidden_or_occluded_gate_skips_without_touching_surface() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut host = FakeHost::new(start);
     host.gate = Gate::Skip;
     assert_eq!(run(&mut host), Outcome::Skipped);
@@ -243,7 +243,7 @@ fn hidden_or_occluded_gate_skips_without_touching_surface() {
 
 #[test]
 fn missed_drawable_before_step_reports_stepped_false() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut host = FakeHost::new(start);
     host.acquires = VecDeque::from([Err(Missed::Timeout)]);
     assert_eq!(run(&mut host), Outcome::Missed);
@@ -261,7 +261,7 @@ fn missed_drawable_before_step_reports_stepped_false() {
 
 #[test]
 fn pre_reblend_failure_reports_unconfigured_with_stepped_false() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut host = FakeHost::new(start);
     host.pre_reblend_needed = true;
     host.pre_reblend_ok = false;
@@ -280,7 +280,7 @@ fn pre_reblend_failure_reports_unconfigured_with_stepped_false() {
 
 #[test]
 fn resize_runs_before_reblend_and_acquire() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut host = FakeHost::new(start);
     host.pre_reblend_needed = true;
     assert_eq!(run(&mut host), Outcome::Presented);
@@ -293,7 +293,7 @@ fn resize_runs_before_reblend_and_acquire() {
 
 #[test]
 fn quiet_timer_frame_unchanged_never_acquires_or_presents() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut host = FakeHost::new(start);
     host.gate = Gate::QuietTimer;
     host.quiet_unchanged = true;
@@ -311,7 +311,7 @@ fn quiet_timer_frame_unchanged_never_acquires_or_presents() {
 
 #[test]
 fn quiet_timer_frame_changed_draws_without_stepping_twice() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut host = FakeHost::new(start);
     host.gate = Gate::QuietTimer;
     host.quiet_unchanged = false;
@@ -337,7 +337,7 @@ fn quiet_timer_frame_changed_draws_without_stepping_twice() {
 
 #[test]
 fn quiet_timer_frame_that_misses_acquire_reports_stepped_true() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut host = FakeHost::new(start);
     host.gate = Gate::QuietTimer;
     host.quiet_unchanged = false;
@@ -358,7 +358,7 @@ fn quiet_timer_frame_that_misses_acquire_reports_stepped_true() {
 
 #[test]
 fn post_step_materials_and_reblend_drop_drawable_before_reacquiring() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut host = FakeHost::new(start);
     host.acquires = VecDeque::from([Ok(()), Ok(()), Ok(())]);
     host.post_checks = VecDeque::from([
@@ -396,7 +396,7 @@ fn post_step_materials_and_reblend_drop_drawable_before_reacquiring() {
 
 #[test]
 fn post_step_reblend_failure_drops_drawable_and_misses_with_stepped_true() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut host = FakeHost::new(start);
     host.post_checks = VecDeque::from([PostStepCheck::Reacquire(ReacquireReason::Reblend)]);
     host.reacquire_ok = VecDeque::from([false]);
@@ -419,7 +419,7 @@ fn post_step_reblend_failure_drops_drawable_and_misses_with_stepped_true() {
 
 #[test]
 fn first_frame_and_compositor_preserve_runtime_and_compositor_animating() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut host = FakeHost::new(start);
     host.first_frame = true;
     host.compositor_animating = true;
@@ -432,7 +432,7 @@ fn first_frame_and_compositor_preserve_runtime_and_compositor_animating() {
 
 #[test]
 fn presented_records_clock_overrun_so_new_motion_does_not_jump() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let frame = Duration::from_micros(16_667);
     let overrun = Duration::from_millis(50);
     let mut host = FakeHost::new(start);
@@ -474,7 +474,7 @@ fn presented_records_clock_overrun_so_new_motion_does_not_jump() {
 
 #[test]
 fn pre_stepped_path_reblends_acquires_renders_and_records_presented() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut host = FakeHost::new(start);
     host.clock = None;
     host.pre_reblend_needed = true;
@@ -506,7 +506,7 @@ fn pre_stepped_path_reblends_acquires_renders_and_records_presented() {
 
 #[test]
 fn prepare_abort_stops_before_render_or_present() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut host = FakeHost::new(start);
     host.prepare_abort = true;
     assert_eq!(run(&mut host), Outcome::Aborted);
@@ -527,7 +527,7 @@ fn prepare_abort_stops_before_render_or_present() {
 
 #[test]
 fn post_step_forced_miss_drops_drawable_and_reports_stepped_true() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut host = FakeHost::new(start);
     host.post_checks = VecDeque::from([PostStepCheck::Missed(Missed::Timeout)]);
     assert_eq!(run(&mut host), Outcome::Missed);
@@ -548,7 +548,7 @@ fn post_step_forced_miss_drops_drawable_and_reports_stepped_true() {
 
 #[test]
 fn post_step_reacquire_miss_reports_stepped_true() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut host = FakeHost::new(start);
     host.acquires = VecDeque::from([Ok(()), Err(Missed::Outdated)]);
     host.post_checks = VecDeque::from([PostStepCheck::Reacquire(ReacquireReason::Reblend)]);

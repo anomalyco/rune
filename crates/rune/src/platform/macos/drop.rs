@@ -181,7 +181,7 @@ fn extension(uti: &str) -> Option<&'static str> {
 fn drop_dir() -> Option<PathBuf> {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+    let stamp = crate::time::system_now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
     let dir = std::env::temp_dir().join("rune-drops").join(format!("{}-{stamp}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).ok().map(|_| dir)
 }

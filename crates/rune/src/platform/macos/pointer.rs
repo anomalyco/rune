@@ -135,7 +135,7 @@ impl PointerState {
             NSScreen::screens(mtm).iter().find(|s| contains_pointer(s, pointer))
                 .is_some_and(|s| self.display.replace(Some(screen_id(&s))) != Some(screen_id(&s)))
         });
-        let moved = self.read(buttons, Instant::now(), (x, y), inside, display_changed);
+        let moved = self.read(buttons, crate::time::now(), (x, y), inside, display_changed);
         let ignore = !self.hit(x, y);
         if panel.ignoresMouseEvents() != ignore {
             panel.setIgnoresMouseEvents(ignore);
@@ -207,7 +207,7 @@ impl Panel {
     pub(super) fn refresh_monitors(&self) {
         if !self.presence.get().visible() { return; }
         if self.pointer.input.get() == OverlayInput::Regions {
-            if self.pointer_poll.get().is_none() { self.pointer_poll.set(Some(Instant::now())); }
+            if self.pointer_poll.get().is_none() { self.pointer_poll.set(Some(crate::time::now())); }
         } else { self.pointer_poll.set(None); }
         if self.needs_monitors() { self.start_monitors(); }
         else { self.monitors.borrow_mut().take(); }

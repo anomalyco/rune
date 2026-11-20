@@ -169,7 +169,7 @@ impl Painter<'_> {
         let t = self.transform();
         let mut pen = Pen { t: &t, path: Vec::new() };
         if let Some(outline) = self.outlines.get(glyph) {
-            let _ = outline.draw(DrawSettings::unhinted(Size::unscaled(), self.location), &mut pen);
+            outline.draw(DrawSettings::unhinted(Size::unscaled(), self.location), &mut pen).ok();
         }
         pen.path
     }

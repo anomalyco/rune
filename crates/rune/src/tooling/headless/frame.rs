@@ -287,7 +287,7 @@ impl<F: FnMut(Shot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
         s.renderer.submit(&s.gpu.queue, prepared.encoder);
         self.encoded_stamp = s.reports.stamp();
         if self.want_pixels { s.readback.submitted(); }
-        Instant::now()
+        crate::time::now()
     }
 
     #[inline]
@@ -329,7 +329,7 @@ impl<F: FnMut(Shot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
         }
         if let Some(g) = s.gate.as_mut() { self.app.gate_frame(g, info.animating); }
         if self.first_pixels {
-            let wait = Instant::now();
+            let wait = crate::time::now();
             let done = s.readback.finish(&s.gpu.device);
             let marker = json!({
                 "headless_ms": s.launched.elapsed().as_secs_f64() * 1000.0,

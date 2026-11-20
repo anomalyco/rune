@@ -179,7 +179,7 @@ impl<const N: usize> Passes<N> {
                     multiview_mask: None,
                     cache: None,
                 });
-                let _ = slots[i].set(pipeline);
+                slots[i].set(pipeline).ok();
             });
             slots.map(|s| s.into_inner().expect("built"))
         })

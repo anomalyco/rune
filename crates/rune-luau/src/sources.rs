@@ -235,7 +235,7 @@ static PRECOMPILED: std::sync::OnceLock<std::collections::HashMap<&'static str, 
 pub fn precompiled(modules: impl IntoIterator<Item = (&'static str, &'static [u8])>) {
     let version = compiler().compile("return nil").ok().and_then(|code| code.first().copied());
     let table = modules.into_iter().filter(|(_, code)| code.first().copied() == version).collect();
-    let _ = PRECOMPILED.set(table);
+    PRECOMPILED.set(table).ok();
 }
 
 pub(crate) fn compiler() -> mlua::chunk::Compiler {

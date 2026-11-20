@@ -42,7 +42,7 @@ fn the_cache_loads_a_url_once_and_wakes_when_it_lands() {
     let path = dir.join("dot.png");
     image::RgbaImage::from_pixel(3, 2, image::Rgba([10, 20, 30, 255])).save(&path).unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
-    let cache = ImageCache::new(Arc::new(move || { let _ = tx.send(()); }));
+    let cache = ImageCache::new(Arc::new(move || { tx.send(()).ok(); }));
     let by_path = cache.url(path.to_str().unwrap(), 16.0, 2.0);
     assert!(Arc::ptr_eq(&by_path.0, &cache.url(path.to_str().unwrap(), 16.0, 2.0).0), "one handle per URL, size and scale");
     rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();

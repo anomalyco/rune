@@ -188,7 +188,7 @@ impl SurfaceMeter {
     pub(crate) fn new(name: &str, shared: Arc<Mutex<SurfaceStats>>) -> Self {
         shared.lock().unwrap().name = name.to_owned();
         Self {
-            totals: SurfaceCounts::default(), base: SurfaceCounts::default(), started: Instant::now(), pacing: Pacing::Idle,
+            totals: SurfaceCounts::default(), base: SurfaceCounts::default(), started: crate::time::now(), pacing: Pacing::Idle,
             waited: false, spin: Spin::Calm, shared,
         }
     }
@@ -203,7 +203,7 @@ impl SurfaceMeter {
         self.totals.redraws += 1;
         if !paced && !self.waited { self.totals.unpaced += 1; }
         self.waited = false;
-        self.tick(Instant::now());
+        self.tick(crate::time::now());
     }
 
     /// An event the surface's host handled, which may ask for the next redraw.
@@ -211,13 +211,13 @@ impl SurfaceMeter {
 
     pub(crate) fn presented(&mut self) {
         self.totals.presents += 1;
-        self.tick(Instant::now());
+        self.tick(crate::time::now());
     }
 
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn skipped(&mut self) {
         self.totals.skipped += 1;
-        self.tick(Instant::now());
+        self.tick(crate::time::now());
     }
 
     pub(crate) fn failed(&mut self, missed: Missed) {
@@ -226,7 +226,7 @@ impl SurfaceMeter {
             Missed::Timeout => self.totals.timeouts += 1,
             Missed::Outdated | Missed::Unconfigured => self.totals.outdated += 1,
         }
-        self.tick(Instant::now());
+        self.tick(crate::time::now());
     }
 
     /// An event-loop turn, `woke` by a deadline or poll rather than an event. A deadline that
@@ -235,7 +235,7 @@ impl SurfaceMeter {
         self.totals.turns += 1;
         if woke { self.totals.wakes += 1; }
         self.waited |= waited;
-        self.tick(Instant::now());
+        self.tick(crate::time::now());
     }
 
     pub(crate) fn set_pacing(&mut self, pacing: Pacing) {
@@ -278,7 +278,7 @@ pub(crate) fn slept(cause: winit::event::StartCause) -> bool {
 
 /// The published stats, with rates zeroed once they are stale.
 pub(crate) fn read(shared: &Mutex<SurfaceStats>) -> SurfaceStats {
-    shared.lock().unwrap().clone().aged(Instant::now())
+    shared.lock().unwrap().clone().aged(crate::time::now())
 }
 
 #[cfg(test)]

@@ -40,7 +40,7 @@ impl AnyHost for Host {
         // The next display tick consumes due timers too. Leaving an overdue timer
         // armed while its redraw waits for that tick would spin the event loop. Without a
         // running link, a timer due sooner than a frame waits a frame (`timer_deadline`).
-        let now = Instant::now();
+        let now = crate::time::now();
         let win = self.win.as_ref();
         // A frame waiting for room in the swap chain comes when there is (`slot`): its timers
         // would turn the loop at once until then.
@@ -184,16 +184,16 @@ impl Host {
         self.meter.turn(matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll), crate::frame::surface_stats::slept(cause));
         if matches!(cause, StartCause::ResumeTimeReached { .. }) && let Some(w) = &self.win { w.cursor.reassert(); }
         #[cfg(target_os = "windows")]
-        if let Some(w) = &self.win { w.native.cloak.lift_if_due(&w.window, Instant::now()); }
+        if let Some(w) = &self.win { w.native.cloak.lift_if_due(&w.window, crate::time::now()); }
         #[cfg(target_os = "windows")]
-        self.watch_handover(Instant::now());
+        self.watch_handover(crate::time::now());
         #[cfg(target_os = "windows")]
-        if let Some(w) = &mut self.win && w.covered_draw.due(Instant::now()) {
+        if let Some(w) = &mut self.win && w.covered_draw.due(crate::time::now()) {
             w.covered_draw = w.covered_draw.step(CoveredDrawEvent::Due);
             w.request_redraw();
         }
-        if let Some(w) = &mut self.win && let Some((retry, until)) = w.first_frame.deadline() && retry <= Instant::now() {
-            if until <= Instant::now() {
+        if let Some(w) = &mut self.win && let Some((retry, until)) = w.first_frame.deadline() && retry <= crate::time::now() {
+            if until <= crate::time::now() {
                 let notified = w.first_frame.notified();
                 if w.first_frame.expire() {
                     self.reveal(event_loop, Reveal::Cached, None);
@@ -206,29 +206,29 @@ impl Host {
             } else {
                 // Bounded retries while the frame prepares, whatever stops each one (occlusion,
                 // no drawable). A retry left due would turn the loop at once until it gives up.
-                w.first_frame.retry_at(Instant::now() + Duration::from_millis(16));
+                w.first_frame.retry_at(crate::time::now() + Duration::from_millis(16));
                 w.request_redraw();
             }
         }
         let launcher = self.launcher();
-        if let Some(w) = &mut self.win && w.backoff.deadline().is_some_and(|at| at <= Instant::now()) {
+        if let Some(w) = &mut self.win && w.backoff.deadline().is_some_and(|at| at <= crate::time::now()) {
             w.backoff_step(BackoffEvent::Lapsed);
             // A missed frame marked it occluded; look at the surface again.
             self.life.cover(Cover::Surface, false);
             if launcher || self.life.shown() { w.request_redraw(); }
         }
-        self.rest_step(RestEvent::Woke { now: Instant::now() });
-        if let Some(w) = &mut self.win && !self.life.shown() && w.hidden_pace.take_due(Instant::now()) {
+        self.rest_step(RestEvent::Woke { now: crate::time::now() });
+        if let Some(w) = &mut self.win && !self.life.shown() && w.hidden_pace.take_due(crate::time::now()) {
             w.request_redraw();
         }
         // A covered window with motion on screen looks again whether it's still covered (`look`),
         // without a frame: asked for while covered, one would draw (`CoveredDraw`) for no one.
         #[cfg(target_os = "windows")]
-        if self.win.as_ref().is_some_and(|w| look_deadline(Some(w)).is_some_and(|at| at <= Instant::now())) && self.life.covered() {
+        if self.win.as_ref().is_some_and(|w| look_deadline(Some(w)).is_some_and(|at| at <= crate::time::now())) && self.life.covered() {
             self.look();
         }
         if matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll)
-            && timer_deadline_core(self.app.rt()).is_some_and(|deadline| deadline <= Instant::now())
+            && timer_deadline_core(self.app.rt()).is_some_and(|deadline| deadline <= crate::time::now())
             && !self.win.as_ref().is_some_and(Win::waits_for_slot)
         {
             let hidden = self.shown_win().is_none();
@@ -241,8 +241,8 @@ impl Host {
                 if changed && launcher { self.refresh_hidden(); }
             // A redraw while the window backs off would draw nothing and leave the timer due.
             } else if self.win.as_ref().is_some_and(|w| (launcher || self.life.uncovered()) && !w.minimized()
-                && !w.backing_off(Instant::now())) {
-                let now = Instant::now();
+                && !w.backing_off(crate::time::now())) {
+                let now = crate::time::now();
                 // A frame the due timer asked for that the window never drew (a Wayland surface
                 // covered before its frame callback fires) would come back here for the same
                 // overdue timer and turn the loop at once. Let the timer run covered, and give

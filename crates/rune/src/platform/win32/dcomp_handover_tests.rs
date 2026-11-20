@@ -16,7 +16,7 @@ impl Drop for TempDll {
             // SAFETY: module handle returned by `load_dll` in this test.
             unsafe { FreeLibrary(self.loaded); }
         }
-        let _ = std::fs::remove_file(&self.path);
+        std::fs::remove_file(&self.path).ok();
     }
 }
 

@@ -31,7 +31,7 @@ fn poll(s: &mut App, _: f64, tx: &mut Tx) -> bool {
 fn runtime(app: App) -> Runtime<App> {
     let mut rt = Runtime::new(app, view, (200.0, 50.0), Env::default());
     rt.poll = Some(poll);
-    rt.wall_start = Some(crate::time::Instant::now());
+    rt.wall_start = Some(crate::time::now());
     rt.frame(0.0);
     rt.frame(crate::frame::clock::RESUME_STEP);
     assert!(!rt.animating);

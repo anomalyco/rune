@@ -134,7 +134,7 @@ pub(super) struct Job {
 /// Starts a decoder thread; it runs until `stop` or parking.
 pub(super) fn start(job: Job) -> Arc<Pipe> {
     let pipe = Arc::new(Pipe {
-        inbox: Mutex::new(Inbox { looping: job.looping, sound: job.sound, touched: Some(Instant::now()), ..Inbox::default() }),
+        inbox: Mutex::new(Inbox { looping: job.looping, sound: job.sound, touched: Some(rune_core::time::now()), ..Inbox::default() }),
         wake: Condvar::new(),
     });
     let thread_pipe = pipe.clone();
@@ -183,7 +183,7 @@ pub(super) use log;
 /// Microseconds since the first `log!` line: one clock for every line, wherever it's written.
 pub(super) fn log_clock() -> u128 {
     static T0: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-    T0.get_or_init(Instant::now).elapsed().as_micros()
+    T0.get_or_init(rune_core::time::now).elapsed().as_micros()
 }
 
 /// Microseconds from `t0` to now.
@@ -195,11 +195,11 @@ pub(super) fn us(t0: Instant) -> u128 {
 /// makes its GPU after its first frame, and a clip that opens before then would decode on the CPU
 /// for good: it waits for the GPU as long as one takes to come, while the source resolves.
 fn rune_device() -> Option<Arc<gpu::Device>> {
-    let deadline = Instant::now() + GPU_WAIT;
+    let deadline = rune_core::time::now() + GPU_WAIT;
     loop {
         match gpu::device() {
             Ok(device) => return Some(device),
-            Err(_) if crate::native_surface::windows::presenting_device().is_none() && Instant::now() < deadline => {
+            Err(_) if crate::native_surface::windows::presenting_device().is_none() && rune_core::time::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(5));
             }
             Err(_) => return None,
@@ -322,7 +322,7 @@ impl Decoder {
         }
         if let Some(index) = self.audio {
             // SAFETY: stream selection on this thread's reader.
-            let _ = unsafe { self.reader.SetStreamSelection(index, self.output.is_some()) };
+            unsafe { self.reader.SetStreamSelection(index, self.output.is_some()) }.ok();
         }
         self.audio_open = self.output.is_some();
     }
@@ -334,7 +334,7 @@ impl Decoder {
         // Added to stream times: the loops so far times the duration.
         let mut epoch = 0.0;
         let mut first = true;
-        let mut waiting_since = Instant::now();
+        let mut waiting_since = rune_core::time::now();
         // Audio alone: the clip's end, until the clock passes it and the clip hears so.
         let mut end_due: Option<f64> = None;
         loop {
@@ -383,7 +383,7 @@ impl Decoder {
                     let touched = s.touched.unwrap_or(waiting_since);
                     let playing_sound = self.output.as_ref().is_some_and(|o| !o.idle());
                     let heard_end = end_due.and_then(|end| job.clock.get().map(|clock| clock.when(end)));
-                    if let Some(at) = heard_end.filter(|at| *at <= Instant::now()) {
+                    if let Some(at) = heard_end.filter(|at| *at <= rune_core::time::now()) {
                         let _ = at;
                         end_due = None;
                         drop(s);
@@ -398,7 +398,7 @@ impl Decoder {
                         return Ok(());
                     }
                     let patience = if (room && !texture) || sound_full { RING_POLL } else { PARK };
-                    let patience = heard_end.map_or(patience, |at| patience.min(at.saturating_duration_since(Instant::now()) + Duration::from_millis(1)));
+                    let patience = heard_end.map_or(patience, |at| patience.min(at.saturating_duration_since(rune_core::time::now()) + Duration::from_millis(1)));
                     s = pipe.wake.wait_timeout(s, patience).unwrap().0;
                     waiting_since = waiting_since.max(touched);
                 }
@@ -436,7 +436,7 @@ impl Decoder {
                                     unread.push(planes);
                                 }
                             }
-                            s.touched = Some(Instant::now());
+                            s.touched = Some(rune_core::time::now());
                         }
                         drop(s);
                         if let Some(ring) = &mut self.ring {
@@ -555,7 +555,7 @@ impl Decoder {
             if s.stop || s.seek.is_some() || s.layer.is_none() {
                 return false;
             }
-            let now = Instant::now();
+            let now = rune_core::time::now();
             if now >= at {
                 break;
             }

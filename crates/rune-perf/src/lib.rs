@@ -21,6 +21,19 @@ pub(crate) const WINDOW_MS: u64 = 60_000;
 pub(crate) const SLOW_MS: f64 = 1000.0 / 60.0;
 pub(crate) const LARGE_BYTES: u64 = 8 << 20;
 
+// rune-perf is native-only and has no rune-core dependency.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+#[allow(clippy::disallowed_methods)]
+pub(crate) fn now() -> std::time::Instant { std::time::Instant::now() }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+#[allow(clippy::disallowed_methods)]
+pub(crate) fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+}
+
 /// How long the recorder waits with nothing to write before [`Config::on_idle`] runs.
 pub const IDLE: std::time::Duration = std::time::Duration::from_secs(10);
 

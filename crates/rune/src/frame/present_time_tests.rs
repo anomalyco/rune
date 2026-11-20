@@ -13,7 +13,7 @@ fn written(out: &[u8]) -> Vec<serde_json::Value> {
 
 #[test]
 fn lines_wait_for_their_present_time_and_keep_their_order() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let ms = |n: u64| start + Duration::from_micros(n);
     let fake = Arc::new(Fake::default());
     let mut presents = Presents::new(fake.clone(), start);
@@ -43,7 +43,7 @@ fn lines_wait_for_their_present_time_and_keep_their_order() {
 
 #[test]
 fn idle_gaps_and_lost_presents_do_not_count_as_intervals() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let fake = Arc::new(Fake::default());
     let mut presents = Presents::new(fake.clone(), start);
     let mut out = Vec::new();
@@ -64,7 +64,7 @@ fn idle_gaps_and_lost_presents_do_not_count_as_intervals() {
 /// Frames `(seq, continuous, present ms)` around a gap; `None` present: never reported.
 /// Returns the last line, which presented 508 ms in, right after the frame before it.
 fn after_gap(frames: &[(Option<u64>, bool, Option<Option<u64>>)]) -> serde_json::Value {
-    let start = Instant::now();
+    let start = crate::time::now();
     let fake = Arc::new(Fake::default());
     let mut presents = Presents::new(fake.clone(), start);
     let mut out = Vec::new();

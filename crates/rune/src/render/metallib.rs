@@ -225,10 +225,7 @@ pub(super) fn metallib_enabled() -> bool {
     if let Some(forced) = FORCE_METALLIB.with(std::cell::Cell::get) {
         return forced;
     }
-    !matches!(
-        std::env::var("RUNE_DISABLE_METALLIB").as_deref(),
-        Ok("1" | "true" | "TRUE" | "yes")
-    )
+    !rune_core::env::flag("RUNE_DISABLE_METALLIB")
 }
 
 #[cfg(all(test, target_os = "macos"))]

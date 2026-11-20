@@ -108,7 +108,7 @@ impl DisplayLink {
         // Every display asleep fails this until one wakes, so say so once per sleep.
         if status != 0 {
             if !CREATE_FAILED.swap(true, Ordering::Relaxed) { eprintln!("display link creation failed: {status}"); }
-            *LAST_FAILURE.lock().unwrap() = Some((status, Instant::now()));
+            *LAST_FAILURE.lock().unwrap() = Some((status, crate::time::now()));
             return None;
         }
         if CREATE_FAILED.swap(false, Ordering::Relaxed) { eprintln!("display link created once a display woke"); }
@@ -164,7 +164,7 @@ impl DisplayLink {
     pub(crate) fn next_frame(&mut self) -> Opportunity {
         if !self.start() { return Opportunity::Now; }
         let host_target = self.callback.target.swap(0, Ordering::Acquire);
-        let now = Instant::now();
+        let now = crate::time::now();
         let tick = (host_target != 0).then(|| target_time(now, CVGetCurrentHostTime(), host_target, self.callback.host_frequency));
         let next = opportunity(tick, self.last_present, self.last_target, now, self.frame_period());
         match next {
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn a_frame_defers_starting_the_link_only_when_it_would_draw_at_once_anyway() {
-        let t = Instant::now();
+        let t = crate::time::now();
         let ms = |n| t + Duration::from_millis(n);
         let period = Duration::from_millis(8);
         // A timer 33 ms after the last frame: whenever it starts the link, it draws at once.
@@ -282,7 +282,7 @@ mod tests {
     }
     #[test]
     fn late_frames_and_idle_restarts_cannot_catch_up_in_a_burst() {
-        let t = Instant::now();
+        let t = crate::time::now();
         let ms = |n| t + Duration::from_millis(n);
         let period = Duration::from_millis(16);
         assert!(permits(None, None, ms(16), ms(1), period));
@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn a_capped_period_skips_ticks_between_frames() {
-        let t = Instant::now();
+        let t = crate::time::now();
         let ms = |n| t + Duration::from_millis(n);
         let capped = Duration::from_millis(16);
         assert!(!permits(Some(ms(0)), Some(ms(8)), ms(16), ms(9), capped));
@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn input_at_rest_draws_without_waiting_for_a_tick() {
-        let t = Instant::now();
+        let t = crate::time::now();
         let ms = |n| t + Duration::from_millis(n);
         let period = Duration::from_millis(8);
         // The link just started after idle: no tick yet, the last frame long gone.
@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn a_frame_still_on_its_way_to_the_display_waits_for_a_tick() {
-        let t = Instant::now();
+        let t = crate::time::now();
         let ms = |n| t + Duration::from_millis(n);
         let period = Duration::from_millis(8);
         // Submitted under a refresh and a half ago: it may still be queued.

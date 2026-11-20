@@ -242,7 +242,7 @@ pub(crate) fn reattach(panel: &NSPanel) -> bool {
         if key_window.as_bool() { let _: Bool = msg_send![panel, makeFirstResponder: view]; }
     }
     REATTACHED.fetch_add(1, Ordering::Relaxed);
-    let _ = LOST.try_with(|lost| lost.borrow_mut().insert(key));
+    LOST.try_with(|lost| lost.borrow_mut().insert(key)).ok();
     true
 }
 

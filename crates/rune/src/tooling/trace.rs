@@ -48,7 +48,7 @@ impl Trace {
 
     pub(crate) fn open_clock(path: &PathBuf, size: (f32, f32), fps: f64, scale: f32, clock: &str) -> Trace {
         if let Some(d) = path.parent() {
-            let _ = std::fs::create_dir_all(d);
+            std::fs::create_dir_all(d).ok();
         }
         let file = std::fs::File::create(path).unwrap_or_else(|e| die(&format!("{}: {e}", path.display())));
         let mut out = std::io::BufWriter::new(file);
@@ -57,7 +57,7 @@ impl Trace {
             "hz": fps, "scale": scale, "platform": "rune", "units": "pt", "clock": clock,
         });
         if clock == "wall" { header["timestamp"] = "cpu-submit".into(); }
-        let _ = writeln!(out, "{header}");
+        writeln!(out, "{header}").ok();
         Trace { out, ids: HashMap::new(), described: HashMap::new(), states: HashMap::new(), scrolled: HashMap::new(), effects: HashMap::new(),
             goals: HashMap::new(), channels: Default::default(), path: path.clone(), all: false, presents: None, surface: None }
     }
@@ -81,8 +81,8 @@ impl Trace {
         let Some(presents) = self.presents.as_mut() else { return };
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let until = Instant::now() + wait;
-            while presents.waiting() && Instant::now() < until {
+            let until = crate::time::now() + wait;
+            while presents.waiting() && crate::time::now() < until {
                 std::thread::sleep(std::time::Duration::from_millis(2));
             }
         }
@@ -284,7 +284,7 @@ impl Trace {
             return;
         }
         line.push('}');
-        let _ = writeln!(self.out, "{line}");
+        writeln!(self.out, "{line}").ok();
     }
 }
 
@@ -296,7 +296,7 @@ impl Drop for Trace {
         }
         if self.presents.is_none() { return; }
         self.settle_presents(crate::frame::present_time::SETTLE);
-        let _ = self.out.flush();
+        self.out.flush().ok();
         if let Some(summary) = std::fs::read_to_string(&self.path).ok().as_deref().and_then(crate::frame::present_time::Summary::of_trace) {
             eprintln!("{summary}");
         }

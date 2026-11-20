@@ -22,8 +22,6 @@
 //!
 //! Nothing here runs or allocates until it's called: no statics to initialise, no tables.
 
-use crate::time::Instant;
-
 use super::{Instance, Kind};
 use crate::pixels::ImageAtlas;
 use crate::text::{Atlas, FontSmoothing};
@@ -278,12 +276,12 @@ pub struct Report {
 pub fn paint(scene: &Scene<'_>, target: &mut Target<'_>, threads: usize) -> Result<Report, NeedsGpu> {
     if let Some(why) = scene.needs_gpu() { return Err(why); }
     check_target(scene, target)?;
-    let start = Instant::now();
+    let start = crate::time::now();
     let bins = bin::Bins::of(scene);
-    let binned = Instant::now();
+    let binned = crate::time::now();
     let tiles: Vec<u32> = (0..bins.tile_count() as u32).collect();
     let mut report = raster::run(scene, &bins, target, &tiles, &raster::Spawn(threads.max(1)), &raster::Spawn(threads.max(1)));
-    let done = Instant::now();
+    let done = crate::time::now();
     report.bin_ns = ns(binned - start);
     report.raster_ns = ns(done - binned);
     report.total_ns = ns(done - start);

@@ -2,7 +2,6 @@
 //! for rune-light's `shader_first_use` example and `builtin_shaders` test, which between them
 //! build every pipeline Rune and its effect crates ship.
 
-use crate::time::Instant;
 
 use super::{Renderer, backdrop_blur::BackdropBlur, layer_blur, surface_alpha::AlphaSurface};
 
@@ -18,7 +17,7 @@ impl Renderer {
     #[doc(hidden)]
     pub fn first_use_ms(&self, device: &wgpu::Device) -> Vec<(&'static str, f64)> {
         fn ms(f: impl FnOnce()) -> f64 {
-            let start = Instant::now();
+            let start = crate::time::now();
             f();
             start.elapsed().as_secs_f64() * 1e3
         }

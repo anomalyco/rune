@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use objc2::{class, msg_send, rc::Retained, runtime::{AnyObject, Bool}};
 use objc2_foundation::{NSArray, NSPoint, NSString};
 use rune::AppHandle;
@@ -27,13 +27,13 @@ unsafe extern "C" {
 pub fn on_main<S: 'static, T: Send + 'static>(handle: &AppHandle<S>, f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = std::sync::mpsc::channel();
     handle.update(move |_, _| {
-        let _ = tx.send(f());
+        tx.send(f()).ok();
     });
     rx.recv_timeout(Duration::from_secs(10)).expect("event thread stalled")
 }
 
 pub fn wait(what: &str, f: impl Fn() -> bool) {
-    let start = Instant::now();
+    let start = rune::time::now();
     while !f() {
         assert!(start.elapsed() < Duration::from_secs(10), "timed out waiting for {what}");
         std::thread::sleep(Duration::from_millis(10));
@@ -112,7 +112,7 @@ pub fn activate_helper(handle: &AppHandle<()>, pid: i32) {
         let _: Bool = msg_send![app, activateWithOptions: 1usize << 1];
     });
     let helper_front = || on_main(handle, move || frontmost_pid() == pid);
-    let start = Instant::now();
+    let start = rune::time::now();
     while !helper_front() && start.elapsed() < Duration::from_secs(1) {
         std::thread::sleep(Duration::from_millis(20));
     }

@@ -1,5 +1,4 @@
 use super::*;
-use crate::time::Instant;
 
 #[test]
 fn trace_annotations_from_hidden_poll_survive_idle_catch_up_once() {
@@ -96,7 +95,7 @@ fn native_traces_add_target_and_present_times_without_changing_other_fields() {
     let run = |name: &str, timed: bool| {
         let mut rt = Runtime::new(false, view, (100.0, 100.0), Env { scale: 1.0, system_dark: true });
         let path = std::env::temp_dir().join(format!("rune-present-{name}-{}.jsonl", std::process::id()));
-        let start = Instant::now();
+        let start = crate::time::now();
         let source = std::sync::Arc::new(Presents(Default::default()));
         {
             let mut trace = Trace::open_clock(&path, rt.viewport, 120.0, 1.0, "wall");

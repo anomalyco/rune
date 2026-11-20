@@ -466,10 +466,10 @@ impl Drop for MenuGuard {
         }
         // The bar waits for the next window to take focus (`claim`).
         #[cfg(target_os = "macos")]
-        let _ = BAR.try_with(|bar| {
+        BAR.try_with(|bar| {
             let mut bar = bar.borrow_mut();
             if matches!(&*bar, Bar::Owned { guard, .. } if *guard == self.id) { *bar = Bar::Free; }
-        });
+        }).ok();
     }
 }
 

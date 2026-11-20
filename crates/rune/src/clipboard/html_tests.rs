@@ -89,7 +89,7 @@ fn clean_is_stable() {
 
 #[test]
 fn stays_linear_and_panic_free_on_huge_and_nested_inputs() {
-    let start = std::time::Instant::now();
+    let start = crate::time::now();
     let many_scripts = "<script>alert(1)</script><b>ok</b>".repeat(5_000);
     assert_eq!(clean(&many_scripts), "<b>ok</b>".repeat(5_000));
 

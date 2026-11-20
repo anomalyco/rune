@@ -7,7 +7,6 @@
 //!   on a 25-card text-heavy canvas, plus a settled rest frame at an off-bucket scale (1.13).
 //! - `font_sweep_10s`: 10 s (1,200 frames at 120 Hz) continuous authored font-size sweep forcing
 //!   repeated glyph-atlas page recycling, verifying zero dropped glyphs after sweep.
-use std::time::Instant;
 
 use rune::render::{Gpu, KIND_GLYPH, OFFSCREEN_FORMAT, Offscreen, Renderer};
 use rune::text::TextSystem;
@@ -152,11 +151,11 @@ fn run_case(gpu: &Gpu, out: &Offscreen, case: &str) {
             rt.state.font_scale = 0.6 + u * 1.4;
             rt.invalidate();
         }
-        let t0 = Instant::now();
+        let t0 = rune::time::now();
         rt.frame(1.0 / 120.0);
         let b_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
-        let e0 = Instant::now();
+        let e0 = rune::time::now();
         renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (out.width, out.height));
         let mut enc = gpu.device.create_command_encoder(&Default::default());
         renderer.draw(&mut enc, &out.view, rt.clear_color());

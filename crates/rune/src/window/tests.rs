@@ -35,7 +35,7 @@ fn updates_that_change_nothing_ask_no_window_for_a_frame() {
 #[test]
 fn updates_that_change_nothing_do_not_delay_due_timers() {
     let mut rt = Runtime::new(0u32, |_, _| crate::el(), (10.0, 10.0), crate::Env::default());
-    rt.wall_start = Some(Instant::now());
+    rt.wall_start = Some(crate::time::now());
     rt.frame(0.0);
     // A second idle since that frame.
     rt.wall_start = rt.wall_start.map(|t| t - Duration::from_secs(1));
@@ -43,7 +43,7 @@ fn updates_that_change_nothing_do_not_delay_due_timers() {
     rt.update_if(|_, tx| { tx.wake_after(Duration::ZERO); false });
     rt.schedule_pending_wakes();
     let due = timer_deadline(&rt).expect("armed");
-    assert!(due <= Instant::now(), "due now, not a frame interval from now");
+    assert!(due <= crate::time::now(), "due now, not a frame interval from now");
     for _ in 0..20 {
         std::thread::sleep(Duration::from_millis(2));
         rt.update_if(|_, _| false);
@@ -60,7 +60,7 @@ fn a_timer_asking_for_the_next_frame_waits_a_frame_without_a_display_link() {
     fn poll(polls: &mut u32, _: f64, tx: &mut Tx) -> bool { *polls += 1; tx.wake_after(Duration::ZERO); false }
     let mut rt = Runtime::new(0u32, |_, _| crate::el(), (10.0, 10.0), crate::Env::default());
     rt.poll = Some(poll);
-    let start = Instant::now() - Duration::from_secs(1);
+    let start = crate::time::now() - Duration::from_secs(1);
     rt.wall_start = Some(start);
     rt.frame(0.0);
     assert_eq!(rt.state, 1);
@@ -129,7 +129,7 @@ fn a_timer_frame_that_draws_the_same_still_draws_while_a_poll_steps() {
     }
     let mut rt = Runtime::new(false, |_, _| crate::el().size(20.0, 20.0), (20.0, 20.0), crate::Env::default());
     rt.poll = Some(poll);
-    rt.wall_start = Some(Instant::now());
+    rt.wall_start = Some(crate::time::now());
     rt.frame(0.0);
     let config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -145,7 +145,7 @@ fn a_timer_frame_that_draws_the_same_still_draws_while_a_poll_steps() {
     let mut presented = None;
     Presented::record(&mut presented, &rt, &config, false);
     let p = presented.as_ref().unwrap();
-    let next_tick = Some(Instant::now() + Duration::from_millis(8));
+    let next_tick = Some(crate::time::now() + Duration::from_millis(8));
     assert!(p.unchanged(&rt, &config, false, next_tick), "a slow timer leaves the drawable");
     rt.state = true;
     rt.frame(0.0);
@@ -168,7 +168,7 @@ fn launch_frames_hold_two_drawables_until_the_window_rests() {
         view_formats: vec![],
         color_space: Default::default(),
     };
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let mut launch = LaunchDrawables::cap(&mut config);
     assert_eq!(config.desired_maximum_frame_latency, 1, "Metal makes latency + 1 drawables");
     assert_eq!(launch.settle(false, t0), None);
@@ -250,7 +250,7 @@ impl CompHost {
     /// As `draw`: a quiet frame (only a timer asked for it) that draws what's on screen presents
     /// nothing, unless a compositor draws it. Returns whether it presented.
     fn frame(&mut self, quiet: bool) -> bool {
-        let started = Instant::now();
+        let started = crate::time::now();
         self.rt.frame.test_clock.as_mut().unwrap().step();
         let animating = self.rt.frame(crate::frame::clock::RESUME_STEP);
         let update_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -396,7 +396,7 @@ fn reporting_frames_changes_no_frame_skip_or_redraw() {
 
 #[test]
 fn hidden_pace_renders_a_change_at_once_then_at_most_every_refresh() {
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let mut pace = HiddenPace::default();
     assert!(pace.changed(t0), "the first change renders at once");
     pace.rendered(t0);
@@ -418,7 +418,7 @@ fn hidden_pace_renders_a_change_at_once_then_at_most_every_refresh() {
 #[test]
 fn missed_frames_never_poll() {
     use wgpu::CurrentSurfaceTexture as S;
-    let now = Instant::now();
+    let now = crate::time::now();
     for status in [S::Occluded, S::Timeout, S::Outdated, S::Lost, S::Validation] {
         let missed = Missed::of(status).err().expect("a miss");
         for paced in [false, true] {
@@ -469,15 +469,15 @@ fn a_timer_frame_that_never_comes_runs_its_timer_covered_instead_of_spinning() {
     }
     let mut rt = Runtime::new(Due::default(), |_, _| crate::el().size(20.0, 20.0), (20.0, 20.0), crate::Env::default());
     rt.poll = Some(poll);
-    rt.wall_start = Some(Instant::now());
+    rt.wall_start = Some(crate::time::now());
     rt.frame(0.0);
     // A change since that frame, as a `wake` whose poll it hasn't drawn leaves it.
     rt.invalidate();
     assert!(rt.stale() && !rt.rests(), "the window doesn't rest: its frame is still to come");
     // As `new_events` at the timer, which is due by the time the loop runs for it.
     let due = timer_deadline(&rt).expect("a timer is armed");
-    rt.wall_start = rt.wall_start.map(|t| t - due.saturating_duration_since(Instant::now()) - Duration::from_millis(1));
-    let now = Instant::now();
+    rt.wall_start = rt.wall_start.map(|t| t - due.saturating_duration_since(crate::time::now()) - Duration::from_millis(1));
+    let now = crate::time::now();
     assert!(timer_deadline(&rt).expect("armed") <= now, "the timer is due: this is what turned the loop");
 
     let mut frame = TimerFrame::default();
@@ -491,11 +491,11 @@ fn a_timer_frame_that_never_comes_runs_its_timer_covered_instead_of_spinning() {
     covered_step(&mut rt);
     assert_eq!(rt.state.polls, polls + 1, "the due timer polled");
     let next = timer_deadline(&rt).expect("its next timer is armed");
-    assert!(next > Instant::now(), "the next timer is ahead: {next:?}");
+    assert!(next > crate::time::now(), "the next timer is ahead: {next:?}");
     // The covered step takes the frame's place, and a timer still ahead keeps its own time.
     frame.drawn();
-    frame.asked_quiet(Instant::now());
-    assert_eq!(frame.wait(timer_deadline(&rt), Instant::now()), Some(next), "the loop sleeps until its next timer");
+    frame.asked_quiet(crate::time::now());
+    assert_eq!(frame.wait(timer_deadline(&rt), crate::time::now()), Some(next), "the loop sleeps until its next timer");
     frame.drawn();
     assert!(!frame.stalled(now + TIMER_FRAME_STALL), "a frame that comes clears it");
 }
@@ -652,7 +652,7 @@ fn a_destroyed_device_that_has_not_reported_its_loss_is_not_configured() {
 #[test]
 fn surface_replacements_give_up_after_a_bounded_number_of_tries() {
     use super::surface::win::{SurfaceStep, SURFACE_TRIES};
-    let now = Instant::now();
+    let now = crate::time::now();
     let mut retries = SurfaceRetries::default();
     let mut waits = Vec::new();
     loop {

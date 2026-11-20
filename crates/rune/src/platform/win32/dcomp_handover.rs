@@ -68,7 +68,7 @@ impl Handover {
     /// Takes a visual `add_under` made out of the tree, uncommitted.
     pub(crate) fn remove(&self, visual: &IDCompositionVisual) {
         // SAFETY: a COM call on our root visual.
-        let _ = unsafe { self.root.RemoveVisual(visual) };
+        unsafe { self.root.RemoveVisual(visual) }.ok();
     }
 
     /// Commits, and returns once DWM has taken the commit: a frame presented after this shows

@@ -69,7 +69,7 @@ impl<T> Readback<T> {
 
     /// Finished frames in submission order, without waiting.
     pub(crate) fn ready(&mut self, device: &wgpu::Device) -> Vec<(T, Vec<u8>)> {
-        let _ = rune_gpu::health::poll(device, wgpu::PollType::Poll);
+        rune_gpu::health::poll(device, wgpu::PollType::Poll).ok();
         let mut done = Vec::new();
         while let Some(frame) = self.pop(device, false) { done.push(frame); }
         done
@@ -174,8 +174,8 @@ struct Encoder(std::process::Child);
 impl Drop for Encoder {
     fn drop(&mut self) {
         if !matches!(self.0.try_wait(), Ok(Some(_))) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
+            self.0.kill().ok();
+            self.0.wait().ok();
         }
     }
 }

@@ -501,7 +501,7 @@ impl Host {
                             // AppKit needs the drag started inside this mouse-down.
                             match app.rt_mut().take_titlebar_action() {
                                 Some(TitlebarAction::Drag) => {
-                                    let _ = l.window.drag_window();
+                                    l.window.drag_window().ok();
                                 }
                                 Some(TitlebarAction::DoubleClick) => titlebar_double_click(&l.window),
                                 None => {}

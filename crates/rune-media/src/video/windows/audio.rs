@@ -6,7 +6,6 @@
 
 use super::machine::Anchor;
 use super::mf::Sound;
-use rune_core::time::Instant;
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -43,7 +42,7 @@ impl Clock {
     fn wait_while_stopped(&self, patience: Duration) {
         let anchor = self.anchor.lock().unwrap();
         if anchor.is_none_or(|a| (a.rate - 1.0).abs() >= 1e-6) {
-            let _ = self.changed.wait_timeout(anchor, patience);
+            self.changed.wait_timeout(anchor, patience).ok();
         }
     }
 }
@@ -83,11 +82,11 @@ impl Output {
                 let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
                 match Stream::new(sound) {
                     Ok(stream) => {
-                        let _ = ready.send(Ok(()));
+                        ready.send(Ok(())).ok();
                         stream.run(&thread_feed, &thread_clock, sound);
                     }
                     Err(e) => {
-                        let _ = ready.send(Err(e));
+                        ready.send(Err(e)).ok();
                     }
                 }
                 if com {
@@ -157,7 +156,7 @@ fn samples(sample: &IMFSample) -> Option<Vec<f32>> {
         let (mut base, mut len) = (std::ptr::null_mut(), 0u32);
         buffer.Lock(&mut base, None, Some(&mut len)).ok()?;
         let values = std::slice::from_raw_parts(base.cast::<f32>(), len as usize / 4).to_vec();
-        let _ = buffer.Unlock();
+        buffer.Unlock().ok();
         Some(values)
     }
 }
@@ -217,8 +216,8 @@ impl Stream {
                 if started {
                     // SAFETY: stops and empties this stream.
                     unsafe {
-                        let _ = self.client.Stop();
-                        let _ = self.client.Reset();
+                        self.client.Stop().ok();
+                        self.client.Reset().ok();
                     }
                     started = false;
                     feed.lock().unwrap().cursor = None;
@@ -237,9 +236,9 @@ impl Stream {
                 }
                 let Ok(data) = self.render.GetBuffer(free) else { continue };
                 let out = std::slice::from_raw_parts_mut(data.cast::<f32>(), free as usize * channels);
-                let heard = Instant::now() + self.latency + Duration::from_secs_f64(f64::from(padding) / rate);
+                let heard = rune_core::time::now() + self.latency + Duration::from_secs_f64(f64::from(padding) / rate);
                 fill(&mut feed.lock().unwrap(), out, channels, rate, anchor.position(heard));
-                let _ = self.render.ReleaseBuffer(free, 0);
+                self.render.ReleaseBuffer(free, 0).ok();
                 if !started {
                     started = self.client.Start().is_ok();
                 }
@@ -247,8 +246,8 @@ impl Stream {
         }
         // SAFETY: stops this stream and closes its event.
         unsafe {
-            let _ = self.client.Stop();
-            let _ = CloseHandle(self.event);
+            self.client.Stop().ok();
+            CloseHandle(self.event).ok();
         }
     }
 }

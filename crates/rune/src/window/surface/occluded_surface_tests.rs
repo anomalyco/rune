@@ -7,7 +7,6 @@ use std::time::Duration;
 use super::*;
 use crate::frame::surface_stats::SurfaceMeter;
 use crate::render::Gpu;
-use crate::time::Instant;
 use objc2::{ClassType, define_class, msg_send, rc::Retained, runtime::{AnyClass, AnyObject, NSObject}};
 
 /// The fake window's `occlusionState`: 0 covered, 2 (`NSWindowOcclusionStateVisible`) shown.
@@ -49,7 +48,7 @@ fn an_occluded_surface_never_asks_wgpu_and_draws_once_visible() {
     OCCLUSION.store(0, Ordering::Relaxed);
     assert!(unsafe { crate::platform::macos::layer_occluded(&layer) });
     let mut meter = SurfaceMeter::new("occluded", Arc::default());
-    let start = Instant::now();
+    let start = crate::time::now();
     let (mut at, mut backoff, mut checks) = (start, Backoff::default(), 0u64);
     while at < start + Duration::from_secs(3600) {
         if let Ok(_frame) = acquire(&surface, &gpu, &config, true, 1, &mut meter) { panic!("an occluded surface got a drawable"); }

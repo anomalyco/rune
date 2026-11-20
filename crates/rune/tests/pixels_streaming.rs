@@ -7,9 +7,9 @@ thread_local! {
 }
 struct Allocator;
 fn allocated() {
-    let _ = COUNT.try_with(|count| {
+    COUNT.try_with(|count| {
         if let Some(n) = count.get() { count.set(Some(n + 1)); }
-    });
+    }).ok();
 }
 unsafe impl GlobalAlloc for Allocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {

@@ -6,7 +6,7 @@ const FRAME: Duration = Duration::from_micros(16_667);
 
 #[test]
 fn running_motion_keeps_real_time_and_new_motion_takes_one_small_step() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let ms = |n: u64| Duration::from_millis(n);
     let mut clock = FrameClock::new(start);
     let fresh = Step { catch_up: 0.0, dt: RESUME_STEP };
@@ -49,7 +49,7 @@ fn width(rt: &Runtime<Pair>, key: &str) -> f32 {
 /// The window host's path: `a` springs from `FRAME`, frames present at `times` and `on`
 /// runs just before the frame at `at`. Returns `(time, a, b)` after each frame.
 fn run(times: &[Duration], at: Duration, on: fn(&mut Runtime<Pair>)) -> Vec<(Duration, f32, f32)> {
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut clock = FrameClock::new(start);
     let mut rt = runtime();
     times.iter().map(|&t| {
@@ -90,7 +90,7 @@ fn window_late_frame_lands_where_an_unbroken_cadence_would() {
 #[test]
 fn window_motion_starting_after_idle_takes_one_frame_step() {
     let first_pose = |idle: Duration| {
-        let start = Instant::now();
+        let start = crate::time::now();
         let mut clock = FrameClock::new(start);
         let mut rt = runtime();
         clock.advance(&mut rt, start, false);
@@ -108,7 +108,7 @@ fn window_motion_starting_after_idle_takes_one_frame_step() {
 #[test]
 fn motion_starting_on_a_late_frame_takes_one_small_step_while_running_motion_catches_up() {
     let fresh = {
-        let start = Instant::now();
+        let start = crate::time::now();
         let mut clock = FrameClock::new(start);
         let mut rt = runtime();
         clock.advance(&mut rt, start, false);
@@ -132,7 +132,7 @@ fn motion_a_frame_starts_and_runs_late_on_moves_one_frame_next_while_running_mot
     let starts = 3 * FRAME;
     let next = starts + overrun + FRAME;
     let poses = |late: bool| {
-        let start = Instant::now();
+        let start = crate::time::now();
         let mut clock = FrameClock::new(start);
         let mut rt = runtime();
         for t in [Duration::ZERO, FRAME, 2 * FRAME, starts, next] {
@@ -144,7 +144,7 @@ fn motion_a_frame_starts_and_runs_late_on_moves_one_frame_next_while_running_mot
         (width(&rt, "a"), width(&rt, "b"))
     };
     let one_frame_on = {
-        let start = Instant::now();
+        let start = crate::time::now();
         let mut clock = FrameClock::new(start);
         let mut rt = runtime();
         clock.advance(&mut rt, start, false);
@@ -181,7 +181,7 @@ fn a_spring_retargeted_on_a_late_frame_turns_from_its_pose_at_that_time() {
 
 #[test]
 fn one_presented_frame_is_one_runtime_pass() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut clock = FrameClock::new(start);
     let mut rt = runtime();
     let (trace, buffer) = rune_motion::MotionTrace::in_memory(&rune_motion::TraceHeader {

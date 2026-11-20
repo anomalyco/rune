@@ -65,12 +65,12 @@ pub(super) fn live() -> Option<Arc<Gpu>> {
 pub(super) fn warm(features: wgpu::Features, prepare: Option<Box<dyn FnOnce(&wgpu::Device) + Send>>) {
     if let Some(gpu) = live() {
         if let Some(prepare) = prepare {
-            let _ = std::thread::Builder::new().name("rune-gpu-warm".into()).spawn(move || prepare(&gpu.device));
+            std::thread::Builder::new().name("rune-gpu-warm".into()).spawn(move || prepare(&gpu.device)).ok();
         }
         return;
     }
     let mut state = lock(&SLOT.state);
-    let until = Instant::now() + LINGER;
+    let until = crate::time::now() + LINGER;
     match &mut *state {
         State::Making { until: at } | State::Ready { until: at, .. } => { *at = (*at).max(until); return; }
         State::Idle => *state = State::Making { until },
@@ -100,7 +100,7 @@ pub(super) fn warm(features: wgpu::Features, prepare: Option<Box<dyn FnOnce(&wgp
 fn wait_for_surface(mut state: std::sync::MutexGuard<'_, State>) {
     loop {
         let State::Ready { until, .. } = &*state else { return };
-        let now = Instant::now();
+        let now = crate::time::now();
         if now >= *until { break; }
         let wait = *until - now;
         state = SLOT.changed.wait_timeout(state, wait).unwrap_or_else(|e| e.into_inner()).0;
@@ -116,11 +116,11 @@ fn wait_for_surface(mut state: std::sync::MutexGuard<'_, State>) {
 /// already waits in the slot, this one goes; so does a device that died while it was hidden.
 pub(crate) fn park(gpu: Gpu, renderer: Renderer, linger: Duration) {
     if gpu.is_lost() { return; }
-    let _ = rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely());
+    rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
     if renderer.surfaces.is_some() { return; }
     let mut state = lock(&SLOT.state);
     if !matches!(*state, State::Idle) { return; }
-    *state = State::Ready { warmed: Warmed(gpu, renderer), until: Instant::now() + linger };
+    *state = State::Ready { warmed: Warmed(gpu, renderer), until: crate::time::now() + linger };
     SLOT.changed.notify_all();
     drop(state);
     let spawned = std::thread::Builder::new().name("rune-gpu-parked".into()).spawn(|| wait_for_surface(lock(&SLOT.state)));
@@ -145,7 +145,7 @@ fn make(features: wgpu::Features) -> Option<Warmed> {
         ..Default::default()
     }));
     gpu.queue.submit([encoder.finish()]);
-    let _ = rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely());
+    rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
     super::gpu_events::presented();
     Some(Warmed(gpu, renderer))
 }
@@ -171,6 +171,6 @@ pub(super) fn start() {}
 pub(super) fn discard() {
     let mut state = lock(&SLOT.state);
     if let State::Ready { .. } = &*state { drop(std::mem::take(&mut *state)); }
-    else if let State::Making { until } = &mut *state { *until = Instant::now(); }
+    else if let State::Making { until } = &mut *state { *until = crate::time::now(); }
     SLOT.changed.notify_all();
 }

@@ -160,7 +160,7 @@ impl HostWaker {
         let woken = app_woken.clone();
         let waker: Waker = Arc::new(move || {
             woken.store(true, Ordering::Release);
-            let _ = proxy.send_event(WakeEvent::App(slot));
+            proxy.send_event(WakeEvent::App(slot)).ok();
         });
         let prepared = Self {
             app_woken,
@@ -344,11 +344,11 @@ impl Host {
             crate::platform::scroll_bars::watch();
             rt.set_system_scroll_bars_state(crate::platform::scroll_bars::current().with_override(args.scroll_bars));
             rt.frame.trace_channels = args.trace.as_ref().map(|_| Default::default());
-            rt.set_live_waker(Arc::new(move || { let _ = live_proxy.send_event(WakeEvent::Live(slot)); }));
+            rt.set_live_waker(Arc::new(move || { live_proxy.send_event(WakeEvent::Live(slot)).ok(); }));
             rt.set_os_drag(crate::drag_out::SUPPORTED);
             rt.transparent = options.transparent;
             rt.track_marks = has_comp;
-            rt.wall_start = Some(Instant::now());
+            rt.wall_start = Some(crate::time::now());
             rt.host.open_urls_natively = args.script.is_none() && args.trace.is_none() && args.frames.is_none();
             rt.frame.record_events = false;
             rt.host.surface_stats = Some(meter.shared());
@@ -396,7 +396,7 @@ impl Host {
             gpu_pool,
             shown: false,
             started: false,
-            clock: FrameClock::new(Instant::now()),
+            clock: FrameClock::new(crate::time::now()),
             idle: true,
             rest: Rest::default(),
             mods: ModifiersState::empty(),
@@ -414,7 +414,7 @@ impl Host {
             #[cfg(target_os = "macos")]
             present_log,
             #[cfg(target_os = "macos")]
-            frame_wake: Arc::new(move || { let _ = frame_proxy.send_event(WakeEvent::DisplayTick(slot)); }),
+            frame_wake: Arc::new(move || { frame_proxy.send_event(WakeEvent::DisplayTick(slot)).ok(); }),
         }
     }
 

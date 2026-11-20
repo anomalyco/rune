@@ -26,7 +26,7 @@ pub(crate) fn window_focus(window: &winit::window::Window, focused: bool) {
     };
     if id == 0 { return; }
     if focused { PARENT.store(id, Ordering::Relaxed); }
-    else { let _ = PARENT.compare_exchange(id, 0, Ordering::Relaxed, Ordering::Relaxed); }
+    else { PARENT.compare_exchange(id, 0, Ordering::Relaxed, Ordering::Relaxed).ok(); }
 }
 
 fn unavailable() -> FileDialogError { FileDialogError("no XDG desktop portal FileChooser is available".into()) }
@@ -73,8 +73,8 @@ async fn run(kind: FileDialogKind, options: FileDialogOptions, parent: String, r
     })).await {
         Some(Ok(Some(conn))) => conn,
         Some(Ok(None)) => return,
-        Some(Err(e)) => { let _ = reply.try_send(Err(e)); return; }
-        None => { let _ = reply.try_send(Err(FileDialogError("file dialog portal timed out".into()))); return; }
+        Some(Err(e)) => { reply.try_send(Err(e)).ok(); return; }
+        None => { reply.try_send(Err(FileDialogError("file dialog portal timed out".into()))).ok(); return; }
     };
     let portal_proxy = match portal::timeout(RPC_TIMEOUT, async {
         reply.closed().await;
@@ -83,9 +83,9 @@ async fn run(kind: FileDialogKind, options: FileDialogOptions, parent: String, r
         Proxy::new(&conn, DEST, PATH, INTERFACE).await.map(Some).map_err(dbus_error)
     })).await {
         Some(Ok(Some(proxy))) => proxy,
-        Some(Ok(None)) => { let _ = conn.close().await; return; }
-        Some(Err(e)) => { let _ = conn.close().await; let _ = reply.try_send(Err(e)); return; }
-        None => { let _ = conn.close().await; let _ = reply.try_send(Err(FileDialogError("file dialog portal timed out".into()))); return; }
+        Some(Ok(None)) => { conn.close().await.ok(); return; }
+        Some(Err(e)) => { conn.close().await.ok(); reply.try_send(Err(e)).ok(); return; }
+        None => { conn.close().await.ok(); reply.try_send(Err(FileDialogError("file dialog portal timed out".into()))).ok(); return; }
     };
     // A folder is OpenFile's `directory` choice (portal version 3).
     let method = match kind { FileDialogKind::Open | FileDialogKind::Folder => "OpenFile", FileDialogKind::Save => "SaveFile" };
@@ -99,14 +99,14 @@ async fn run(kind: FileDialogKind, options: FileDialogOptions, parent: String, r
         RequestTimeouts { rpc: RPC_TIMEOUT, response: None },
         reply.closed(),
     ).await;
-    let _ = conn.close().await;
+    conn.close().await.ok();
     match response {
-        Ok((status, results)) => { let _ = reply.try_send(outcome(status, &uris(&results))); }
+        Ok((status, results)) => { reply.try_send(outcome(status, &uris(&results))).ok(); }
         Err(RequestError::Cancelled) => {}
-        Err(RequestError::Dbus(e)) => { let _ = reply.try_send(Err(dbus_error(e))); }
-        Err(RequestError::Unavailable) => { let _ = reply.try_send(Err(unavailable())); }
-        Err(RequestError::TimedOut) => { let _ = reply.try_send(Err(FileDialogError("file dialog portal timed out".into()))); }
-        Err(RequestError::Disconnected) => { let _ = reply.try_send(Err(FileDialogError("file dialog portal disconnected".into()))); }
+        Err(RequestError::Dbus(e)) => { reply.try_send(Err(dbus_error(e))).ok(); }
+        Err(RequestError::Unavailable) => { reply.try_send(Err(unavailable())).ok(); }
+        Err(RequestError::TimedOut) => { reply.try_send(Err(FileDialogError("file dialog portal timed out".into()))).ok(); }
+        Err(RequestError::Disconnected) => { reply.try_send(Err(FileDialogError("file dialog portal disconnected".into()))).ok(); }
     }
 }
 

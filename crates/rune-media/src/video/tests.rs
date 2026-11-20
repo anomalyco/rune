@@ -439,7 +439,7 @@ fn serve_with_auth(body: Vec<u8>, content_type: &'static str) -> (String, Arc<st
                     }
                     if !authorized {
                         count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        let _ = stream.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n");
+                        stream.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n").ok();
                         continue;
                     }
                     let len = body.len();
@@ -504,7 +504,7 @@ fn preload_decodes_the_first_frame_before_anything_draws_it() {
     assert_eq!(macos::test_poster(&v.shared), None);
     // Preload is a no-op headless (frames decode as they draw), so call the backend directly.
     macos::preload(&v.shared);
-    let start = std::time::Instant::now();
+    let start = rune_core::time::now();
     while macos::test_poster(&v.shared).is_none() && start.elapsed() < std::time::Duration::from_secs(10) {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }

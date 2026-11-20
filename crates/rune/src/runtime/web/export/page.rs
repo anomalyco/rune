@@ -74,25 +74,25 @@ pub(crate) fn page(widths: &[(f32, Vec<ExportNode>)]) -> (String, String) {
         let mut block = String::new();
         let mut sorted: Vec<(&String, &String)> = rules.iter().collect();
         sorted.sort_by(|a, b| a.1.len().cmp(&b.1.len()).then(a.1.cmp(b.1)));
-        for (decls, name) in sorted { let _ = write!(block, ".{name}{{{decls}}}"); }
+        for (decls, name) in sorted { write!(block, ".{name}{{{decls}}}").ok(); }
         if k == 0 { css.push_str(&block); } else if !block.is_empty() {
-            let _ = write!(css, "@media (min-width:{}px){{{block}}}", widths[k].0);
+            write!(css, "@media (min-width:{}px){{{block}}}", widths[k].0).ok();
         }
     }
     let mut body = String::new();
     let mut open: Vec<&'static str> = Vec::new();
     for (node, cls) in primary.iter().zip(&node_classes) {
-        while open.len() > node.depth { let _ = write!(body, "</{}>", open.pop().unwrap()); }
+        while open.len() > node.depth { write!(body, "</{}>", open.pop().unwrap()).ok(); }
         let names: Vec<&str> = node.text.then_some("t").into_iter().chain(cls.iter().map(String::as_str)).collect();
         let class = if names.is_empty() { String::new() } else { format!(" class=\"{}\"", names.join(" ")) };
         let root = if node.depth == 0 { " data-rune-static" } else { "" };
         let sizes = if node.attrs.contains(" srcset=") { sizes(node, widths, &by_path) } else { String::new() };
-        let _ = write!(body, "<{}{root}{class}{}{sizes}>", node.tag, node.attrs);
+        write!(body, "<{}{root}{class}{}{sizes}>", node.tag, node.attrs).ok();
         if node.tag == "img" { continue; }
         body.push_str(&node.inner);
         open.push(node.tag);
     }
-    while let Some(tag) = open.pop() { let _ = write!(body, "</{tag}>"); }
+    while let Some(tag) = open.pop() { write!(body, "</{tag}>").ok(); }
     (body, css)
 }
 

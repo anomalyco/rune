@@ -73,7 +73,7 @@ impl Sched {
     pub(crate) fn new(shared: Arc<Shared>, clock: f64) -> Self {
         Sched {
             clock,
-            read_at: Instant::now(),
+            read_at: rune::time::now(),
             timers: BinaryHeap::new(),
             parked: FxHashMap::default(),
             by_thread: FxHashMap::default(),
@@ -90,7 +90,7 @@ impl Sched {
     /// moment it runs).
     pub(crate) fn set_clock(&mut self, clock: f64) {
         self.clock = clock;
-        self.read_at = Instant::now();
+        self.read_at = rune::time::now();
     }
 
     /// The frame clock now: the last poll's reading plus the wall time since.
@@ -243,7 +243,7 @@ fn park(lua: &Lua, thread: &Thread, out: MultiValue) {
 pub(crate) fn poll(lua: &Lua, now: f64) -> usize {
     let Some((done, due)) = with(lua, |s| {
         s.clock = now;
-        s.read_at = Instant::now();
+        s.read_at = rune::time::now();
         let done: Vec<_> =
             s.shared.take_completions().into_iter().filter_map(|(id, value)| Some((s.jobs.remove(&id)?, value))).collect();
         let mut due = Vec::new();

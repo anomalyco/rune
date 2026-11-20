@@ -101,7 +101,7 @@ pub(in crate::runtime) fn node_path(parent: &str, key: Option<&str>, index: usiz
             use std::fmt::Write;
             let mut path = String::with_capacity(parent.len() + 22);
             path.push_str(parent);
-            let _ = write!(path, "/#{index}");
+            write!(path, "/#{index}").ok();
             path
         }
     }

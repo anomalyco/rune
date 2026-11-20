@@ -2,7 +2,6 @@
 //! scrolling list, against the same bar with a plain fill.
 //!
 //! `cargo test -p rune --profile perf --test integration backdrop_blur_cost:: -- --ignored --nocapture`
-use std::time::Instant;
 
 use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
 use rune::{Color, Cx, El, Env, Runtime, ScrollSpec, col, el, oklch, row};
@@ -31,7 +30,7 @@ fn gpu_time(gpu: &Gpu, mut draw: impl FnMut(&mut wgpu::CommandEncoder)) -> f64 {
     for _ in 0..K { draw(&mut enc); }
     let commands = enc.finish();
     gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    let t0 = Instant::now();
+    let t0 = rune::time::now();
     gpu.queue.submit([commands]);
     gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     t0.elapsed().as_secs_f64() * 1000.0 / f64::from(K)
@@ -69,9 +68,9 @@ fn frosted_bar_cost() {
                 let mut frames = Vec::new();
                 let ms_scroll = gpu_time(&gpu, |enc| {
                     rt.wheel(w * 0.5, h * 0.5, dir);
-                    let t0 = Instant::now();
+                    let t0 = rune::time::now();
                     rt.frame(1.0 / 120.0);
-                    let t1 = Instant::now();
+                    let t1 = rune::time::now();
                     renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, size);
                     renderer.draw(enc, &target.view, [1.0; 4]);
                     frames.push(((t1 - t0).as_secs_f64() * 1000.0, t1.elapsed().as_secs_f64() * 1000.0));

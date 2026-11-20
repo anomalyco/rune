@@ -99,7 +99,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                     _ => None,
                 };
                 if let Some(event) = event {
-                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (context.on_event)(event)));
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (context.on_event)(event))).ok();
                 }
                 0
             }
@@ -143,11 +143,11 @@ impl Native {
             let taskbar_created = unsafe { RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()) };
             let mut context = Box::new(Context { model: shared, on_event, icon, taskbar_created });
             match create(&mut context) {
-                Ok(hwnd) => { let _ = ready.send(Ok(hwnd as isize)); }
+                Ok(hwnd) => { ready.send(Ok(hwnd as isize)).ok(); }
                 Err(e) => {
                     // SAFETY: The icon was created above and nothing else holds it.
                     if !icon.is_null() { unsafe { DestroyIcon(icon) }; }
-                    let _ = ready.send(Err(e));
+                    ready.send(Err(e)).ok();
                     return;
                 }
             }
@@ -164,8 +164,8 @@ impl Native {
                 LIVE.lock().unwrap_or_else(|e| e.into_inner()).push(window);
                 Ok(Self { window, model, worker: Some(worker) })
             }
-            Ok(Err(e)) => { let _ = worker.join(); Err(e) }
-            Err(_) => { let _ = worker.join(); Err(TrayError::Backend("tray thread exited".into())) }
+            Ok(Err(e)) => { worker.join().ok(); Err(e) }
+            Err(_) => { worker.join().ok(); Err(TrayError::Backend("tray thread exited".into())) }
         }
     }
     fn update(&self) {
@@ -194,6 +194,6 @@ impl Drop for Native {
         LIVE.lock().unwrap_or_else(|e| e.into_inner()).retain(|&w| w != self.window);
         // SAFETY: WM_CLOSE destroys the window on its own thread, which then quits its loop.
         unsafe { PostMessageW(self.window as HWND, WM_CLOSE, 0, 0) };
-        if let Some(worker) = self.worker.take() { let _ = worker.join(); }
+        if let Some(worker) = self.worker.take() { worker.join().ok(); }
     }
 }

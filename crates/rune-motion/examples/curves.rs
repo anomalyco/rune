@@ -37,10 +37,10 @@ fn svg(panels: &[Panel], cols: usize, pw: f32, ph: f32, title: &str) -> String {
     let side = (cols as f32 * pw).max(rows as f32 * ph + 40.0);
     let (w, h) = (side, side);
     let mut s = String::new();
-    let _ = write!(
+    write!(
         s,
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" font-family="-apple-system, Helvetica, sans-serif"><rect width="100%" height="100%" fill="white"/><text x="16" y="26" font-size="16" font-weight="600" fill="#222">{title}</text>"##
-    );
+    ).ok();
     for (i, p) in panels.iter().enumerate() {
         let (ox, oy) = ((i % cols) as f32 * pw, (i / cols) as f32 * ph + 40.0);
         let (l, t, r, b) = (ox + 44.0, oy + 28.0, ox + pw - 14.0, oy + ph - 26.0);
@@ -52,29 +52,29 @@ fn svg(panels: &[Panel], cols: usize, pw: f32, ph: f32, title: &str) -> String {
         }
         let px = |x: f32| l + (x - x0) / (x1 - x0) * (r - l);
         let py = |y: f32| if p.equal_axes { t + (y - y0) / (y1 - y0) * (b - t) } else { b - (y - y0) / (y1 - y0) * (b - t) };
-        let _ = write!(s, r##"<rect x="{l}" y="{t}" width="{}" height="{}" fill="#fafbfc" stroke="#e3e6ea"/>"##, r - l, b - t);
-        let _ = write!(s, r##"<text x="{l}" y="{}" font-size="12" font-weight="600" fill="#333">{}</text>"##, t - 9.0, p.title);
+        write!(s, r##"<rect x="{l}" y="{t}" width="{}" height="{}" fill="#fafbfc" stroke="#e3e6ea"/>"##, r - l, b - t).ok();
+        write!(s, r##"<text x="{l}" y="{}" font-size="12" font-weight="600" fill="#333">{}</text>"##, t - 9.0, p.title).ok();
         if !p.equal_axes {
             for v in [0.0f32, 1.0] {
                 if v >= y0 && v <= y1 {
-                    let _ = write!(s, r##"<line x1="{l}" x2="{r}" y1="{0}" y2="{0}" stroke="#d5d9de" stroke-dasharray="3 3"/><text x="{1}" y="{2}" font-size="9" fill="#888" text-anchor="end">{v}</text>"##, py(v), l - 4.0, py(v) + 3.0);
+                    write!(s, r##"<line x1="{l}" x2="{r}" y1="{0}" y2="{0}" stroke="#d5d9de" stroke-dasharray="3 3"/><text x="{1}" y="{2}" font-size="9" fill="#888" text-anchor="end">{v}</text>"##, py(v), l - 4.0, py(v) + 3.0).ok();
                 }
             }
-            let _ = write!(s, r##"<text x="{r}" y="{}" font-size="9" fill="#888" text-anchor="end">{:.2} s</text>"##, b + 14.0, x1);
+            write!(s, r##"<text x="{r}" y="{}" font-size="9" fill="#888" text-anchor="end">{:.2} s</text>"##, b + 14.0, x1).ok();
         }
         for m in &p.marks {
-            let _ = write!(s, r##"<line x1="{0}" x2="{0}" y1="{t}" y2="{b}" stroke="{RED}" stroke-width="1" stroke-dasharray="2 3"/>"##, px(*m));
+            write!(s, r##"<line x1="{0}" x2="{0}" y1="{t}" y2="{b}" stroke="{RED}" stroke-width="1" stroke-dasharray="2 3"/>"##, px(*m)).ok();
         }
         for (k, se) in p.series.iter().enumerate() {
             let mut d = String::new();
             for (j, &(x, y)) in se.points.iter().enumerate() {
-                let _ = write!(d, "{}{:.2},{:.2} ", if j == 0 { "M" } else { "L" }, px(x), py(y));
+                write!(d, "{}{:.2},{:.2} ", if j == 0 { "M" } else { "L" }, px(x), py(y)).ok();
             }
             let dash = if se.dashed { r#" stroke-dasharray="4 3""# } else { "" };
-            let _ = write!(s, r#"<path d="{d}" fill="none" stroke="{}" stroke-width="1.8"{dash}/>"#, se.color);
+            write!(s, r#"<path d="{d}" fill="none" stroke="{}" stroke-width="1.8"{dash}/>"#, se.color).ok();
             if !se.label.is_empty() {
                 let ly = t + 12.0 + k as f32 * 12.0;
-                let _ = write!(s, r#"<text x="{}" y="{ly}" font-size="9" fill="{}" text-anchor="end">{}</text>"#, r - 4.0, se.color, se.label);
+                write!(s, r#"<text x="{}" y="{ly}" font-size="9" fill="{}" text-anchor="end">{}</text>"#, r - 4.0, se.color, se.label).ok();
             }
         }
     }

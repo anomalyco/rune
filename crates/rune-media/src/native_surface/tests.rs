@@ -83,14 +83,14 @@ impl Gpu {
     /// What a GPU callback sends on `heard` within `within`, failing the test as soon as the
     /// device is lost: a lost device's callbacks may never come.
     pub(super) fn wait<T>(&self, heard: &std::sync::mpsc::Receiver<T>, within: std::time::Duration) -> Option<T> {
-        let until = std::time::Instant::now() + within;
+        let until = rune_core::time::now() + within;
         loop {
             if let Ok(value) = heard.recv_timeout(std::time::Duration::from_millis(5)) {
                 self.assert_alive();
                 return Some(value);
             }
             self.assert_alive();
-            if std::time::Instant::now() >= until {
+            if rune_core::time::now() >= until {
                 return None;
             }
         }
@@ -224,7 +224,7 @@ pub(super) fn render(gpu: &Gpu, renderer: &mut SurfaceRenderer, draws: &[Surface
         let completed = completed.clone();
         d.surface.set_observer(Arc::new(move |t| {
             if t.completed_at.is_some() {
-                let _ = completed.send(());
+                completed.send(()).ok();
             }
         }));
     }
@@ -314,7 +314,7 @@ fn srgb(x: f32) -> u8 {
 #[test]
 fn completion_worker_preserves_cpu_gpu_overlap() {
     use std::sync::mpsc::TryRecvError;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     const INVOCATIONS: u32 = 1024 * 64;
     const CHUNK: u32 = 16_384;
     const PLANNED_MOST: Duration = Duration::from_millis(100);
@@ -391,7 +391,7 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
         gpu.queue.submit([encoder.finish()])
     };
     let time = |bind: &wgpu::BindGroup| {
-        let started = Instant::now();
+        let started = rune_core::time::now();
         let index = submit(bind);
         if gpu.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: Some(Duration::from_secs(5)) }).is_err() {
             gpu.assert_alive();
@@ -441,7 +441,7 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
             usage: wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let submitted = Instant::now();
+        let submitted = rune_core::time::now();
         for _ in 0..chunks {
             submit(chunk);
         }
@@ -452,7 +452,7 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
         }
         let (done, completed) = std::sync::mpsc::channel();
         encoder.on_submitted_work_done(move || {
-            let _ = done.send(Instant::now());
+            done.send(rune_core::time::now()).ok();
         });
         renderer.submit(&gpu.queue, encoder);
         // The worker has taken submit's wakeup once its one-slot channel has room again: it is
@@ -512,7 +512,7 @@ fn queued_video_frames_then_readback_on(gpu: Gpu) {
             let done = done.clone();
             s.set_observer(Arc::new(move |t| {
                 if t.completed_at.is_some() {
-                    let _ = done.send(t);
+                    done.send(t).ok();
                 }
             }));
             draw(s, [(i % 2) as f32 * 640.0, (i / 2) as f32 * 360.0, 640.0, 360.0])

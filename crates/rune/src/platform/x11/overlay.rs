@@ -34,10 +34,10 @@ impl InputWindow {
         });
         for level in [crate::OverlayLevel::Status, crate::OverlayLevel::AboveStatus, crate::OverlayLevel::AboveOverlays] {
             for (id, at) in &windows {
-                if *at == level { let _ = self.connection.configure_window(*id, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE)); }
+                if *at == level { self.connection.configure_window(*id, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE)).ok(); }
             }
         }
-        let _ = self.connection.flush();
+        self.connection.flush().ok();
     }
     pub fn hide(&self) { self.visible.set(false); self.watch.borrow_mut().take(); SHOWN.with(|shown| shown.borrow_mut().retain(|(id, _)| *id != self.window)); }
     pub fn new(window: &winit::window::Window, wake: Option<crate::Waker>, input: crate::OverlayInput, follow: bool, keys: crate::KeyPolicy) -> Option<Self> {

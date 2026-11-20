@@ -20,7 +20,7 @@ fn main() { mac::main() }
 mod mac {
     use std::process::Command;
     use std::sync::Mutex;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     use objc2::{class, msg_send, rc::Retained, runtime::{AnyObject, Bool}};
     use objc2_foundation::{NSArray, NSPoint, NSSize};
     use rune::*;
@@ -83,7 +83,7 @@ mod mac {
 
     /// Waits for the window server's cursor to take `want`'s shape.
     fn expect_cursor(handle: &AppHandle<()>, what: &str, want: impl Fn(Shape, Shape) -> Shape + Send + Copy + 'static) {
-        let start = Instant::now();
+        let start = rune::time::now();
         loop {
             let (current, hand, arrow) = on_main(handle, shapes);
             let want = want(hand, arrow);
@@ -188,8 +188,8 @@ mod mac {
             handle.quit();
         });
         app.run();
-        let _ = child.kill();
-        let _ = child.wait();
+        child.kill().ok();
+        child.wait().ok();
         assert_eq!(*result.lock().unwrap(), Some(true), "macos_overlay_cursor failed");
         println!("macos_overlay_cursor: ok");
     }

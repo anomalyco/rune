@@ -125,7 +125,7 @@ impl Bridge {
 }
 impl Drop for Bridge {
     fn drop(&mut self) {
-        let _ = self.dispose_viewport.call0(&JsValue::NULL);
+        self.dispose_viewport.call0(&JsValue::NULL).ok();
         destroy(&self.handle);
     }
 }
@@ -321,7 +321,7 @@ impl Running {
                         &mut self.input.control_click,
                     );
                     hide_menu(&self.input.handle);
-                    let _ = self.app.resolve_popup(None);
+                    self.app.resolve_popup(None).ok();
                     self.cursor.apply(window, crate::el::Cursor::Default, false);
                     // Commit cancellation, FocusLost, FinishIme and poll now: browsers pause rAF
                     // while the tab is hidden.
@@ -364,7 +364,7 @@ impl Running {
             Some("a11y_press" | "a11y_link") => { let _ = self.app.rt_mut().web_a11y_action(event); }
             // The page's menu (`showMenu`) was picked from or dismissed.
             Some("menu") => {
-                if self.app.resolve_popup(event["id"].as_str()).is_err() { let _ = self.app.resolve_popup(None); }
+                if self.app.resolve_popup(event["id"].as_str()).is_err() { self.app.resolve_popup(None).ok(); }
             }
             // The browser's menu takes this right-click (bridge.js): its release opens none of Rune's.
             Some("secondary_browser") => { self.app.rt_mut().secondary_abandon(); return false; }

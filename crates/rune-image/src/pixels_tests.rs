@@ -3,7 +3,7 @@ use super::*;
 #[test]
 #[ignore = "manual staging benchmark; reports measurements, not a timing threshold"]
 fn image_staging_costs() {
-    use std::{hint::black_box, time::Instant};
+    use std::hint::black_box;
     let stream = Pixels::new();
     stream.set(224, 128, vec![0; 224 * 128 * 4]);
     let mut atlas = ImageAtlas::default();
@@ -11,7 +11,7 @@ fn image_staging_costs() {
     atlas.end_frame();
     atlas.pages[0].dirty = None;
     let buffers: Vec<_> = (0..120).map(|_| vec![128; 224 * 128 * 4]).collect();
-    let start = Instant::now();
+    let start = rune_core::time::now();
     let mut upload_bytes = 0u64;
     for bytes in buffers {
         stream.set(224, 128, bytes);
@@ -29,7 +29,7 @@ fn image_staging_costs() {
     for icon in &icons { atlas.place(icon.pixels(), [32.0; 2]); }
     atlas.end_frame();
     for page in &mut atlas.pages { page.dirty = None; }
-    let start = Instant::now();
+    let start = rune_core::time::now();
     for _ in 0..120 {
         for icon in &icons { black_box(atlas.place(icon.pixels(), [32.0; 2])); }
         atlas.end_frame();

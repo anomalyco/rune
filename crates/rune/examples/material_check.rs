@@ -18,7 +18,7 @@ mod mac {
     use rune::{App, AppHandle, AppSpec, Cx, DisplayTarget, El, KeyPolicy, OverlayInput, OverlayOptions, OverlayPlacement,
         OverlaySpec, RunOptions, SystemMaterial, WindowOptions, WindowSpec, el};
     use std::sync::Mutex;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     const PREWARMED: f64 = 300.0;
     const FADING: f64 = 260.0;
@@ -96,8 +96,8 @@ mod mac {
 
     fn on_main(handle: &AppHandle<State>, f: impl FnOnce(&mut State, &mut rune::Tx) + Send + 'static) {
         let (tx, rx) = std::sync::mpsc::channel();
-        handle.update(move |s, t| { f(s, t); let _ = tx.send(()); });
-        let _ = rx.recv_timeout(Duration::from_secs(5));
+        handle.update(move |s, t| { f(s, t); tx.send(()).ok(); });
+        rx.recv_timeout(Duration::from_secs(5)).ok();
     }
 
     pub fn run() {
@@ -154,11 +154,11 @@ mod mac {
                 on_main(&handle, |_, _| { let t = transactions(&window(None).unwrap()); check("a landed resize leaves transactions on", t == Some(true), format!("{t:?}")); });
                 for (name, overlay, width) in [("fading-in overlay", &fading, FADING), ("fading-in prewarmed overlay", &prewarmed, PREWARMED)] {
                     overlay.fade_in(Duration::from_millis(300));
-                    let start = Instant::now();
+                    let start = rune::time::now();
                     let mut seen = Vec::new();
                     while start.elapsed() < Duration::from_millis(120) {
                         let (tx, rx) = std::sync::mpsc::channel();
-                        handle.update(move |_, _| { let _ = tx.send(window(Some(width)).map(|w| occluded(&w))); });
+                        handle.update(move |_, _| { tx.send(window(Some(width)).map(|w| occluded(&w))).ok(); });
                         if let Ok(Some(o)) = rx.recv_timeout(Duration::from_secs(1)) { seen.push((start.elapsed().as_millis(), o)); }
                         sleep(4);
                     }

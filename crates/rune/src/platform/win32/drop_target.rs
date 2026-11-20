@@ -67,7 +67,7 @@ pub(crate) fn install(window: &winit::window::Window) {
             return;
         }
         let target: IDropTarget = Target { hwnd: hwnd.0 as isize }.into();
-        let _ = RegisterDragDrop(hwnd, &target);
+        RegisterDragDrop(hwnd, &target).ok();
     }
 }
 

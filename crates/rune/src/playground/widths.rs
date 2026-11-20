@@ -38,14 +38,14 @@ impl Widths {
             save: Some(Rc::new(move |sidebar, side| {
                 let mut p = Prefs::open(&save_id);
                 if (sidebar - SIDEBAR).abs() < 0.5 {
-                    let _ = p.remove(PREF_SIDEBAR);
+                    p.remove(PREF_SIDEBAR).ok();
                 } else {
-                    let _ = p.set(PREF_SIDEBAR, &sidebar);
+                    p.set(PREF_SIDEBAR, &sidebar).ok();
                 }
                 if (side - SIDE).abs() < 0.5 {
-                    let _ = p.remove(PREF_SIDE);
+                    p.remove(PREF_SIDE).ok();
                 } else {
-                    let _ = p.set(PREF_SIDE, &side);
+                    p.set(PREF_SIDE, &side).ok();
                 }
             })),
         }

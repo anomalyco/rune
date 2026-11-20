@@ -62,7 +62,7 @@ impl State {
             images: None,
             seen: HashSet::new(),
             copied_until: None,
-            clock: (0.0, Instant::now()),
+            clock: (0.0, rune::time::now()),
             not_found: not_found(),
         }
     }
@@ -79,14 +79,11 @@ impl State {
 
 /// The 404 page is exported natively with `RUNE_WWW_PAGE=404`; the browser never runs it.
 fn not_found() -> bool {
-    #[cfg(not(target_arch = "wasm32"))]
-    return std::env::var("RUNE_WWW_PAGE").is_ok_and(|p| p == "404");
-    #[cfg(target_arch = "wasm32")]
-    false
+    rune::env::var("RUNE_WWW_PAGE").is_some_and(|p| p == "404")
 }
 
 fn poll(s: &mut State, t: f64, tx: &mut Tx) -> bool {
-    s.clock = (t, Instant::now());
+    s.clock = (t, rune::time::now());
     let mut changed = false;
     let mut moving = false;
     let was = s.spring.running();

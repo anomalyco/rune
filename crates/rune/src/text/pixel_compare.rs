@@ -330,7 +330,7 @@ pub fn layout_digest(set: Set, scale: f32) -> Result<String, String> {
 pub fn layout_file(set: Set) -> Result<String, String> {
     let mut out = String::new();
     for scale in SCALES {
-        let _ = writeln!(out, "{scale}x {}", layout_digest(set, scale)?);
+        writeln!(out, "{scale}x {}", layout_digest(set, scale)?).ok();
     }
     Ok(out)
 }
@@ -566,7 +566,7 @@ pub fn run(o: Options, mut keep: impl FnMut(Pair, f32, &Image, &Image)) -> Resul
 }
 
 fn line(out: &mut String, label: &str, s: &Stats) {
-    let _ = writeln!(
+    writeln!(
         out,
         "{label:<28} {:>7.2}% {:>7.2}% {:>4} {:>8.3} {:>7.3}",
         100.0 * s.differing_share(),
@@ -574,7 +574,7 @@ fn line(out: &mut String, label: &str, s: &Stats) {
         s.max,
         s.meanabs(),
         s.ink_ratio()
-    );
+    ).ok();
 }
 
 /// The paragraph's stats for `pair` at `scale`, the report's headline numbers.
@@ -597,17 +597,17 @@ const HEAD: &str = "case                           differ       >8  max  meanabs
 pub fn table(o: &Options, rows: &[Row]) -> String {
     let mut out = String::new();
     let against = match o.reference() { Reference::Smoothed => "smoothing on", Reference::Unsmoothed => "smoothing off" };
-    let _ = writeln!(out, "{}: Rune {:?} ({} blending) vs CoreText with {against}", o.set.name(), o.smoothing(), if o.srgb_blend() { "sRGB" } else { "linear" });
+    writeln!(out, "{}: Rune {:?} ({} blending) vs CoreText with {against}", o.set.name(), o.smoothing(), if o.srgb_blend() { "sRGB" } else { "linear" }).ok();
     for scale in SCALES {
         for pair in o.reference().pairs() {
-            let _ = writeln!(out, "\n{} ({} on {}), {scale}x", pair.name, pair.fg, pair.bg);
+            writeln!(out, "\n{} ({} on {}), {scale}x", pair.name, pair.fg, pair.bg).ok();
             out += HEAD;
             for r in rows.iter().filter(|r| r.pair.name == pair.name && r.scale == scale) {
                 line(&mut out, &r.case.name, &r.stats);
             }
         }
     }
-    let _ = writeln!(out, "\nsummary: paragraph (report band) and all sample rows pooled");
+    writeln!(out, "\nsummary: paragraph (report band) and all sample rows pooled").ok();
     out += HEAD;
     for scale in SCALES.iter().rev() {
         for pair in o.reference().pairs() {

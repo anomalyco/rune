@@ -232,7 +232,7 @@ fn long_lists_build_only_the_rows_near_the_viewport() {
     assert_eq!(rt.state.picked, 2, "the keyboard works in a virtualised list");
 
     // During the sidebar's disclosure spring, rows outside the viewport must not lay out.
-    let t_spring = std::time::Instant::now();
+    let t_spring = rune::time::now();
     rt.key(toggle_shortcut());
     for _ in 0..30 {
         rt.frame(1.0 / 60.0);
@@ -245,7 +245,7 @@ fn long_lists_build_only_the_rows_near_the_viewport() {
 
     // Measure scrolling across 60 frames in the 5,000-row virtual list.
     let (x, y) = rt.find("sidebar-scroll").expect("scroll");
-    let t_scroll = std::time::Instant::now();
+    let t_scroll = rune::time::now();
     for _ in 0..60 {
         rt.wheel(x, y, -40.0);
         rt.frame(1.0 / 60.0);
@@ -261,7 +261,7 @@ fn long_lists_build_only_the_rows_near_the_viewport() {
         s.edit.focused = true;
     });
     rt.frame(1.0 / 60.0);
-    let t_key = std::time::Instant::now();
+    let t_key = rune::time::now();
     for _ in 0..20 {
         press(&mut rt, Key::Text("a".into()));
     }

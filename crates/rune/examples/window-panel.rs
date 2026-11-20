@@ -67,7 +67,7 @@ fn main() {
         #[cfg(not(unix))]
         let _ = native_rx;
         #[cfg(unix)]
-        if let Ok(path) = std::env::var("WINDOW_PANEL_SOCKET") {
+        if let Some(path) = rune::env::var("WINDOW_PANEL_SOCKET") {
             let listener = std::os::unix::net::UnixListener::bind(path).unwrap();
             let (main, quick) = (main_handle.clone(), quick_handle.clone());
             std::thread::spawn(move || {
@@ -106,7 +106,7 @@ fn main() {
                 borderless: true, min_size: Some((0.0, 0.0)), ..Default::default()
             }.macos(MacWindowOptions::default().nonactivating_panel(true)) })
                 .on_created(move |h| {
-                    let _ = native_tx.send(h.clone());
+                    native_tx.send(h.clone()).ok();
                     quick_handle.update(move |s, _| s.native = Some(h));
                 })
                 .on_ready(|h| {

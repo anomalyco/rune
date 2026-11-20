@@ -115,7 +115,7 @@ fn text_probe() {
     let lines = wasm_bindgen::closure::Closure::<dyn Fn(String, f32, f32, f32) -> Vec<u32>>::new(|text: String, size: f32, weight: f32, width: f32| {
         crate::text::line_starts(&text, size, weight, width).into_iter().map(|b| text[..b].encode_utf16().count() as u32).collect::<Vec<u32>>()
     });
-    let _ = js_sys::Reflect::set(&global, &"__runeLines".into(), lines.as_ref());
+    js_sys::Reflect::set(&global, &"__runeLines".into(), lines.as_ref()).ok();
     lines.forget();
 }
 
@@ -131,7 +131,7 @@ fn spawn(mut app: PendingApp) -> Result<(), String> {
     let proxy = event_loop.create_proxy();
     let shared = app.shared.clone();
     let wake = proxy.clone();
-    shared.connect(Arc::new(move || { let _ = wake.send_event(Wake::App); }));
+    shared.connect(Arc::new(move || { wake.send_event(Wake::App).ok(); }));
     page::occupy(quitting(&shared), app.same_tab_router.take());
     event_loop.spawn_app(Browser { app: Some(app), shared, proxy, window: None, embedded: false, document: false, owns_canvas: true,
         borrowed: page::Borrowed::default(), start: Start::GpuFirst, fonts: Rc::default(), pending: Rc::default(), warmed: Rc::default(), running: Rc::default(),
@@ -238,13 +238,13 @@ fn error(message: &str, target: Option<&web_sys::HtmlCanvasElement>, embedded: b
     if let Ok(label) = doc.create_element("pre") {
         label.set_text_content(Some(message));
         if embedded && let Some(canvas) = target && let Some(parent) = canvas.parent_element() {
-            let _ = label.set_attribute("style", "margin:0;padding:16px;white-space:pre-wrap;background:Canvas;color:CanvasText;border:1px solid #444;border-radius:8px");
-            let _ = parent.insert_before(&label, Some(canvas));
+            label.set_attribute("style", "margin:0;padding:16px;white-space:pre-wrap;background:Canvas;color:CanvasText;border:1px solid #444;border-radius:8px").ok();
+            parent.insert_before(&label, Some(canvas)).ok();
             return;
         }
         if let Some(body) = doc.body() {
-            let _ = label.set_attribute("style", "position:fixed;inset:0;z-index:1;padding:24px;white-space:pre-wrap;background:Canvas;color:CanvasText");
-            let _ = body.append_child(&label);
+            label.set_attribute("style", "position:fixed;inset:0;z-index:1;padding:24px;white-space:pre-wrap;background:Canvas;color:CanvasText").ok();
+            body.append_child(&label).ok();
         }
     }
 }
@@ -304,7 +304,7 @@ impl Browser {
         let mut size = winit::dpi::PhysicalSize::new(fixed.0, fixed.1);
         let dark = web_sys::window().and_then(|w| w.match_media("(prefers-color-scheme: dark)").ok().flatten()).is_some_and(|q| q.matches());
         let proxy = self.proxy.clone();
-        let wake: crate::Waker = Arc::new(move || { let _ = proxy.send_event(Wake::App); });
+        let wake: crate::Waker = Arc::new(move || { proxy.send_event(Wake::App).ok(); });
         let app::StartedWebApp { mut app, menus, shortcuts, fonts: spec_fonts } = pending.start(
             fonts,
             (size.width as f32 / scale, size.height as f32 / scale),
@@ -329,7 +329,7 @@ impl Browser {
             app.rt_mut().set_viewport((w, h), scale);
             size.height = (h * scale).round().max(1.0) as u32;
             if let Some(canvas) = window.canvas() {
-                let _ = canvas.style().set_property("height", &format!("{h}px"));
+                canvas.style().set_property("height", &format!("{h}px")).ok();
             }
         }
         let now = Instant::now();
@@ -420,19 +420,19 @@ impl ApplicationHandler<Wake> for Browser {
         };
         let canvas = window.canvas().expect("winit web canvas");
         if !canvas.has_attribute("tabindex") {
-            let _ = canvas.set_attribute("tabindex", "0");
+            canvas.set_attribute("tabindex", "0").ok();
         }
         if self.document {
             // The browser scrolls the page over a canvas that is part of the document, not fixed
             // to the screen: the compositor moves the pixels Rune drew at the display's own rate,
             // and a frame is only drawn when the window nears the band's edge. Rune puts it in a
             // clipper as tall as the page (the bridge) and translates it to `page.top`.
-            let _ = canvas.set_attribute("tabindex", "-1");
+            canvas.set_attribute("tabindex", "-1").ok();
             canvas.style().set_css_text("position:absolute;left:0;top:0;width:100%;display:block;transform:translate3d(0,0,0);will-change:transform;pointer-events:auto;touch-action:pan-y pinch-zoom;outline:none;user-select:none;-webkit-user-select:none");
             if let Some(document) = web_sys::window().and_then(|w| w.document()) {
                 self.borrowed.viewport(&document);
                 document.set_title(app.title);
-                if let Some(body) = document.body() { let _ = body.style().set_property("margin", "0"); }
+                if let Some(body) = document.body() { body.style().set_property("margin", "0").ok(); }
             }
         } else if self.embedded {
             let touch = if app.fit_height { "pan-y" } else { "none" };
@@ -448,7 +448,7 @@ impl ApplicationHandler<Wake> for Browser {
                 if let Some(body) = document.body() {
                     let style = body.style();
                     for (name, value) in [("margin", "0"), ("overflow", "hidden"), ("overscroll-behavior", "none")] {
-                        let _ = style.set_property(name, value);
+                        style.set_property(name, value).ok();
                     }
                 }
             }
@@ -466,7 +466,7 @@ impl ApplicationHandler<Wake> for Browser {
         } else {
             Start::CpuFirst
         };
-        if self.start != Start::GpuFirst { let _ = canvas.style().set_property("opacity", "0"); }
+        if self.start != Start::GpuFirst { canvas.style().set_property("opacity", "0").ok(); }
         // The fonts download while the GPU starts; the CPU's first frame needs only them.
         let fonts: Vec<_> = app.font_urls.iter().map(|url| (url.clone(), platform::fetch_bytes(url))).collect();
         self.window = Some(window);
@@ -480,7 +480,7 @@ impl ApplicationHandler<Wake> for Browser {
                 }
             }
             *slot.borrow_mut() = Some(loaded);
-            let _ = proxy.send_event(Wake::Start);
+            proxy.send_event(Wake::Start).ok();
         });
         // A page that starts on the CPU asks for the GPU once its first frames are up and it's
         // quiet (`maybe_start_gpu`): asked at once, the browser's GPU process makes the adapter
@@ -589,6 +589,6 @@ impl ApplicationHandler<Wake> for Browser {
 fn after(delay: Duration, f: impl FnOnce() + 'static) {
     let callback = wasm_bindgen::closure::Closure::once_into_js(f);
     if let Some(window) = web_sys::window() {
-        let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(callback.unchecked_ref(), delay.as_millis().min(i32::MAX as u128) as i32);
+        window.set_timeout_with_callback_and_timeout_and_arguments_0(callback.unchecked_ref(), delay.as_millis().min(i32::MAX as u128) as i32).ok();
     }
 }

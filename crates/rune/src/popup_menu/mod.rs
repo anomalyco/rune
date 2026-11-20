@@ -407,7 +407,7 @@ impl Presenter {
         self.session = None;
         if let Err(error) = rt.resolve_popup(app, picked.as_deref()) {
             eprintln!("rune: {error}");
-            let _ = rt.resolve_popup(app, None);
+            rt.resolve_popup(app, None).ok();
         }
         // In window points; the view's are over its zoom.
         if let Some((x, y)) = pointer && rt.pointer().is_none() { rt.pointer_move(app, x / rt.zoom(), y / rt.zoom()); }
@@ -441,7 +441,7 @@ impl Presenter {
                     return true;
                 }
             }
-            let _ = rt.resolve_popup(app, None);
+            rt.resolve_popup(app, None).ok();
         }
     }
 

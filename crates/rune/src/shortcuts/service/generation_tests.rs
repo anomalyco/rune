@@ -105,7 +105,7 @@ impl Place {
     /// Starts a step on the host's own thread without waiting for it.
     fn start<T: Send + 'static>(&self, step: impl FnOnce(&mut Host) -> T + Send + 'static) -> mpsc::Receiver<T> {
         let (answer, answered) = mpsc::channel();
-        self.sender().send(Box::new(move |host| { let _ = answer.send(step(host)); })).unwrap();
+        self.sender().send(Box::new(move |host| { answer.send(step(host)).ok(); })).unwrap();
         answered
     }
 
@@ -377,7 +377,7 @@ fn a_replaced_host_leaves_waiting_calls_to_the_newest_engine() {
             place.run(move |host| host.guard = Some(Guard::attach(&shared, Arc::new(|| {}), true, false)));
         }
         let (wake, woke) = mpsc::channel();
-        let b = Guard::attach(&app.shared, Arc::new(move || { let _ = wake.send(()); }), true, false);
+        let b = Guard::attach(&app.shared, Arc::new(move || { wake.send(()).ok(); }), true, false);
         let shortcut = chord("ctrl+alt+super+f7");
         let waiting = || matches!(&*control.attachment.lock().unwrap(), Attachment::Attached { jobs, .. } if jobs.len() == 1);
         let on_a = |place: &mut Place| { let shortcut = shortcut.clone(); place.run(move |_| held(key, &shortcut)) };
@@ -414,7 +414,7 @@ fn a_host_that_installed_first_but_routed_last_runs_its_calls_and_activations() 
     for (place, connect) in [(&mut a, connects[0]), (&mut b, connects[1])] {
         // The host's wake asks its own thread to drain, as its event loop does.
         let send = place.sender();
-        let wake: Waker = Arc::new(move || { let _ = send.send(Box::new(|host: &mut Host| if let Some(guard) = &host.guard { guard.drain() })); });
+        let wake: Waker = Arc::new(move || { send.send(Box::new(|host: &mut Host| if let Some(guard) = &host.guard { guard.drain() })).ok(); });
         let shared = app.shared.clone();
         place.run(move |host| host.attaching = Some(Guard::install(&shared, wake, false, false, connect)));
     }
@@ -426,7 +426,7 @@ fn a_host_that_installed_first_but_routed_last_runs_its_calls_and_activations() 
     let (answer, answered) = mpsc::channel();
     {
         let (handle, shortcut) = (handle.clone(), shortcut.clone());
-        std::thread::spawn(move || { let _ = answer.send(handle.register_shortcut(shortcut, |state, _| *state += 1)); });
+        std::thread::spawn(move || { answer.send(handle.register_shortcut(shortcut, |state, _| *state += 1)).ok(); });
     }
     let id = answered.recv_timeout(PATIENCE).expect("A's wake drained the waiting call").unwrap();
     let on = |place: &mut Place| { let shortcut = shortcut.clone(); place.run(move |_| held(key, &shortcut)) };
@@ -455,7 +455,7 @@ fn a_host_paused_before_it_takes_the_calls_leaves_them_to_the_host_routed_meanwh
     let (a_woken, a_woke) = mpsc::channel();
     {
         let shared = app.shared.clone();
-        a.run(move |host| host.guard = Some(Guard::attach(&shared, Arc::new(move || { let _ = a_woken.send(()); }), true, false)));
+        a.run(move |host| host.guard = Some(Guard::attach(&shared, Arc::new(move || { a_woken.send(()).ok(); }), true, false)));
     }
     let shortcut = chord("ctrl+alt+super+f9");
     let caller = { let (handle, shortcut) = (handle.clone(), shortcut.clone()); std::thread::spawn(move || handle.register_shortcut(shortcut, |_, _| {})) };
@@ -471,7 +471,7 @@ fn a_host_paused_before_it_takes_the_calls_leaves_them_to_the_host_routed_meanwh
     });
     pauses.recv_timeout(PATIENCE).expect("A paused before it took the calls");
     let (b_woken, b_woke) = mpsc::channel();
-    let b = Guard::attach(&app.shared, Arc::new(move || { let _ = b_woken.send(()); }), true, false);
+    let b = Guard::attach(&app.shared, Arc::new(move || { b_woken.send(()).ok(); }), true, false);
     resume.send(()).unwrap();
     drained.recv_timeout(PATIENCE).expect("A's drain finished");
 
@@ -500,18 +500,18 @@ fn a_host_that_takes_over_a_waiting_call_is_woken_for_it() {
     let (a_woken, a_woke) = mpsc::channel();
     {
         let shared = app.shared.clone();
-        a.run(move |host| host.guard = Some(Guard::attach(&shared, Arc::new(move || { let _ = a_woken.send(()); }), true, false)));
+        a.run(move |host| host.guard = Some(Guard::attach(&shared, Arc::new(move || { a_woken.send(()).ok(); }), true, false)));
     }
     let shortcut = chord("ctrl+alt+super+f10");
     let (answer, answered) = mpsc::channel();
     {
         let (handle, shortcut) = (handle.clone(), shortcut.clone());
-        std::thread::spawn(move || { let _ = answer.send(handle.register_shortcut(shortcut, |_, _| {})); });
+        std::thread::spawn(move || { answer.send(handle.register_shortcut(shortcut, |_, _| {})).ok(); });
     }
     a_woke.recv_timeout(PATIENCE).expect("the call woke A");
     // B's wake asks B's thread to drain, as its event loop does.
     let send = b.sender();
-    let wake: Waker = Arc::new(move || { let _ = send.send(Box::new(|host: &mut Host| if let Some(guard) = &host.guard { guard.drain() })); });
+    let wake: Waker = Arc::new(move || { send.send(Box::new(|host: &mut Host| if let Some(guard) = &host.guard { guard.drain() })).ok(); });
     {
         let shared = app.shared.clone();
         b.run(move |host| host.guard = Some(Guard::attach(&shared, wake, true, false)));

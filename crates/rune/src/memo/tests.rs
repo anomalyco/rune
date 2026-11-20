@@ -394,7 +394,7 @@ fn memo_build_time() {
                 commit(&mut rt);
             }
             let frames = 300;
-            let start = std::time::Instant::now();
+            let start = crate::time::now();
             for _ in 0..frames {
                 rt.state.tick += 1;
                 commit(&mut rt);

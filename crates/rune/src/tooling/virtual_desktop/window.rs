@@ -733,7 +733,7 @@ impl FrameHost for DesktopFrame<'_> {
         let renderer = self.window.renderer.as_mut().expect("renderer ensured by pre-reblend");
         renderer.submit(&self.gpu.queue, encoder);
         self.encoded_stamp = self.window.reports.stamp();
-        Instant::now()
+        crate::time::now()
     }
 
     #[inline]

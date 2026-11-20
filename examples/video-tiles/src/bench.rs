@@ -2,7 +2,7 @@
 use rune::native_surface::{NativeSurface, SurfaceDraw, SurfaceFit, SurfaceRenderer, synthetic};
 use rune::render::{Gpu, OFFSCREEN_FORMAT};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub fn run() {
     let gpu = Gpu::new(Gpu::instance(), None);
@@ -31,7 +31,7 @@ pub fn run() {
                 times.lock().unwrap().push((b - a) * 1000.0);
             }
             if t.completed_at.is_some() {
-                let _ = completed.send(());
+                completed.send(()).ok();
             }
         }));
         let draws: Vec<_> = surfaces
@@ -63,7 +63,7 @@ pub fn run() {
             timings.lock().unwrap().clear();
             let mut cpu = Vec::new();
             for frame in 0..30 {
-                let begin = Instant::now();
+                let begin = rune::time::now();
                 for (i, s) in surfaces.iter().enumerate() {
                     #[cfg(target_os = "macos")]
                     s.push(buffers[i][frame % 3].clone(), (run * 30 + frame) as u64).unwrap();

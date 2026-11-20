@@ -51,7 +51,7 @@ fn create_player(source: &MediaSource, headers: &[(String, String)], kind: Kind,
 
 /// Seconds on the host clock (`CACurrentMediaTime`'s) for an `Instant`.
 fn host_seconds(at: Instant) -> f64 {
-    let now = Instant::now();
+    let now = rune_core::time::now();
     let host = CVGetCurrentHostTime() as f64 / CVGetHostClockFrequency();
     if at >= now { host + (at - now).as_secs_f64() } else { host - (now - at).as_secs_f64() }
 }
@@ -116,7 +116,7 @@ impl Port for Av<'_> {
         let shared = self.shared;
         let objects = create_player(&shared.source, &shared.headers, shared.kind, &self.native.decoded, self.mtm.unwrap())?;
         self.native.player = Some(Player::new(objects));
-        Ok(Instant::now())
+        Ok(rune_core::time::now())
     }
 
     fn drop_player(&mut self) {

@@ -76,7 +76,7 @@ fn smooth_passes_through_its_points() {
 
 fn hostile(src: &str, draws: bool) {
     let paint = DiagramStyle::neutral(true);
-    let t = std::time::Instant::now();
+    let t = rune::time::now();
     let scene = scene(src, &paint, None);
     let took = t.elapsed();
     assert_eq!(scene.is_some(), draws, "{}…", &src[..src.len().min(80)]);
@@ -130,7 +130,7 @@ fn the_biggest_allowed_charts_draw_in_bounded_time() {
     let src = lines.join("\n");
     assert!(parse(&src).is_some());
     let paint = DiagramStyle::neutral(true);
-    let t = std::time::Instant::now();
+    let t = rune::time::now();
     let drawn = scene(&src, &paint, None).is_some();
     assert!(!drawn, "dense 260-edge random graph hits MAX_DUMMIES and falls back");
     assert!(t.elapsed().as_secs_f32() < 5.0, "{:?}", t.elapsed());
@@ -145,7 +145,7 @@ fn the_biggest_allowed_charts_draw_in_bounded_time() {
     for k in 0..40 {
         big.push_str(&format!("N{} --> N{}\n", k % 20, k % 20 + 37));
     }
-    let t = std::time::Instant::now();
+    let t = rune::time::now();
     assert!(scene(&big, &paint, None).is_some());
     assert!(t.elapsed().as_secs_f32() < 5.0, "{:?}", t.elapsed());
     let mut nested = String::from("graph TD\n");

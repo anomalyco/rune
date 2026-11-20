@@ -29,6 +29,7 @@ test-gpu-counters = ["wgpu/counters"]
 
 [dependencies]
 bytemuck = { workspace = true }
+rune-core = { workspace = true }
 rune-motion = { workspace = true }
 # `health::poll` lives there, below every crate that waits on the GPU.
 rune-staging = { workspace = true }

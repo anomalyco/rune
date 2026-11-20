@@ -413,7 +413,7 @@ fn a11y_cost() {
     let mut rt = Runtime::new(Big { on: vec![false; 2000] }, big, (800.0, 600.0), Env::new(true, 2.0));
     rt.frame(0.0);
     let toggle = |rt: &mut Runtime<Big>, i: usize| { rt.update(|s, _| s.on[i] = !s.on[i]); rt.frame(0.0); };
-    let time = |f: &mut dyn FnMut()| { let t = std::time::Instant::now(); f(); t.elapsed().as_secs_f64() * 1e6 };
+    let time = |f: &mut dyn FnMut()| { let t = crate::time::now(); f(); t.elapsed().as_secs_f64() * 1e6 };
     let off: Vec<f64> = (0..30).map(|i| time(&mut || toggle(&mut rt, i))).collect();
     rt.a11y_activate("Big");
     let full: Vec<f64> = (0..10).map(|_| { rt.a11y_activate("Big"); time(&mut || { rt.a11y_update(); }) }).collect();

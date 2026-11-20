@@ -4,7 +4,6 @@
 //! target/perf/examples/cache_pan_zoom [--samples 15] [--cards 25] [--frames 60]
 //!
 //! Prints `METRIC mode=.. case=.. metric=.. median=.. p95=.. n=..` per measurement.
-use std::time::Instant;
 
 use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
 use rune::text::TextSystem;
@@ -209,7 +208,7 @@ fn run_sample(
         let phases = rune::take_frame_phases();
         let paint = phases[rune::PHASES + 4];
 
-        let enc0 = Instant::now();
+        let enc0 = rune::time::now();
         renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (out.width, out.height));
         let mut enc = gpu.device.create_command_encoder(&Default::default());
         renderer.draw(&mut enc, &out.view, rt.clear_color());

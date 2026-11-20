@@ -17,7 +17,7 @@ fn main() { mac::main() }
 mod mac {
     use std::process::Command;
     use std::sync::Mutex;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     use objc2::{class, msg_send, runtime::AnyObject};
     use objc2_foundation::NSString;
     use rune::*;
@@ -50,7 +50,7 @@ mod mac {
 
     fn expect_active(handle: &AppHandle<()>, title: &'static str, what: &str) {
         let me = std::process::id() as i32;
-        let start = Instant::now();
+        let start = rune::time::now();
         loop {
             let (active, front, key) = on_main(handle, || (app_active(), frontmost_pid(), key_title()));
             if active && front == me && key.as_deref() == Some(title) { return }
@@ -120,8 +120,8 @@ mod mac {
             main.quit();
         });
         app.run();
-        let _ = child.kill();
-        let _ = child.wait();
+        child.kill().ok();
+        child.wait().ok();
         assert_eq!(*result.lock().unwrap(), Some(true), "open_activates failed");
         println!("open_activates: ok");
     }

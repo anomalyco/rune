@@ -4,7 +4,7 @@
 use super::*;
 
 fn clip(audio: bool, script: &[Sym]) -> New {
-    let mut new = New::new(audio, Instant::now());
+    let mut new = New::new(audio, rune_core::time::now());
     for &sym in script {
         new.run(sym);
     }
@@ -162,11 +162,11 @@ fn a_superseded_poster_keeps_the_clips_frame_timing() {
     let mut c = Control::default();
     let AskPoster(0.0, stale) = only(step(&mut c, Event::Preload)) else { panic!("asks for a poster") };
     step(&mut c, Event::Play);
-    step(&mut c, Event::PlayerMade { created: Instant::now() });
+    step(&mut c, Event::PlayerMade { created: rune_core::time::now() });
     // The poster lands after the player took over, before its item is ready.
     let sixty = Meta { duration: 1.0, size: Some((64, 36)), frame: 1.0 / 60.0, sound: false };
     assert!(step(&mut c, Event::PosterDone { attempt: stale, result: Ok(sixty) }).is_empty());
-    let now = Instant::now();
+    let now = rune_core::time::now();
     for effect in step(&mut c, Event::Item { item: Item::Ready, now }) {
         if effect == Effect::ReadFacts {
             // What a ready item reports, which has no frame timing of its own.
