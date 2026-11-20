@@ -224,7 +224,7 @@ mod win {
         for i in 0..130 {
             let mut enc = device.create_command_encoder(&Default::default());
             for _ in 0..64 {
-                let _pass = enc.begin_compute_pass(&Default::default());
+                drop(enc.begin_compute_pass(&Default::default()));
             }
             queue.submit([enc.finish()]);
             if i % 16 == 15 {
@@ -240,7 +240,7 @@ mod win {
         // that zero entries from the >16,384 lists remained stuck in `in_flight`.
         {
             let mut enc = device.create_command_encoder(&Default::default());
-            let _pass = enc.begin_compute_pass(&Default::default());
+            drop(enc.begin_compute_pass(&Default::default()));
             queue.submit([enc.finish()]);
         }
         let pruned_after_wrap = wgpu::hal::dx12::proof_last_pruned_len();
