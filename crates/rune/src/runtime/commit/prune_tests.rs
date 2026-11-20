@@ -12,7 +12,7 @@ fn static_scales_entry_is_pruned_when_exit_finishes() {
     let mut rt = Runtime::new(true, view, (200.0, 200.0), Env::new(true, 1.0));
     rt.frame(0.0);
     let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("scaled")).unwrap().id;
-    assert!(rt.paint.static_scales.contains_key(&id), "scaled node is tracked in static_scales");
+    assert!(rt.paint.tracks_static_scale(id), "scaled node is tracked in static_scales");
 
     rt.update(|on, _| *on = false);
     for _ in 0..180 {
@@ -20,7 +20,7 @@ fn static_scales_entry_is_pruned_when_exit_finishes() {
         if !rt.tree.nodes.iter().any(|n| n.id == id) { break; }
     }
     assert!(!rt.tree.nodes.iter().any(|n| n.id == id), "scaled node finished exiting");
-    assert!(!rt.paint.static_scales.contains_key(&id), "exited node's static_scales entry must be pruned without waiting for another commit");
+    assert!(!rt.paint.tracks_static_scale(id), "exited node's static_scales entry must be pruned without waiting for another commit");
 }
 
 #[test]
@@ -43,7 +43,7 @@ fn launch_for_exited_flight_is_dropped_when_exit_finishes() {
     rt.frame(1.0 / 60.0);
     let dst_id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("dst")).unwrap().id;
     assert!(rt.motion.flying.iter().any(|f| f.0 == dst_id), "launched node is flying");
-    assert!(rt.motion.launches.flying(dst_id), "launch state tracks airborne flight");
+    assert!(rt.motion.launches().flying(dst_id), "launch state tracks airborne flight");
 
     // Remove the flying destination with an animated exit while still airborne.
     rt.update(|s, _| s.show_target = false);
@@ -58,7 +58,7 @@ fn launch_for_exited_flight_is_dropped_when_exit_finishes() {
     }
     assert!(!rt.tree.nodes.iter().any(|n| n.id == dst_id), "destination finished exiting");
     assert!(!rt.motion.flying.iter().any(|f| f.0 == dst_id), "exited flight left flying");
-    assert!(!rt.motion.launches.flying(dst_id), "airborne launch entry must be dropped when its exiting flight is pruned");
+    assert!(!rt.motion.launches().flying(dst_id), "airborne launch entry must be dropped when its exiting flight is pruned");
 }
 
 #[test]
@@ -83,8 +83,8 @@ fn reveals_stay_bounded_across_instant_unmounts_in_commit_apply() {
         rt.state.present = false;
         rt.commit(&instant_tx);
     }
-    assert_eq!(rt.motion.reveals.len(), REVEALS_KEPT, "commit apply must cap orphan reveals even without prune_exited");
-    assert!(rt.motion.reveals_kept.len() <= REVEALS_KEPT, "{} orphans tracked", rt.motion.reveals_kept.len());
+    assert_eq!(rt.motion.reveals_map().len(), REVEALS_KEPT, "commit apply must cap orphan reveals even without prune_exited");
+    assert!(rt.motion.reveals_kept_len() <= REVEALS_KEPT, "{} orphans tracked", rt.motion.reveals_kept_len());
     // At most the mounted paths, the REVEALS_KEPT orphan reveal paths, and the last unmounted parent still waiting for prune_exited.
     assert!(rt.tree.path_ids.len() <= mounted + REVEALS_KEPT + 1, "{} paths kept", rt.tree.path_ids.len());
 }

@@ -11,16 +11,16 @@ pub(crate) struct PaintState {
     pub(in crate::runtime) inh_scratch: Vec<Inh>,
     /// Drawn rect per node (points, root space), for tools and hit tests.
     pub(crate) drawn: Vec<[f32; 4]>,
-    pub(in crate::runtime) quads_frame: u64,
+    pub(super) quads_frame: u64,
     /// Opt-in gamma-space (sRGB) blending for translucent fills, shadows and blurs.
-    pub(crate) srgb_blend: bool,
+    pub(in crate::runtime) srgb_blend: bool,
     /// The shell shows native views for the first `MAX_NATIVE_MATERIALS` of `materials`; their
     /// elements skip their fill and cut their shadows out of their interior.
-    pub(crate) native_materials: bool,
+    pub(super) native_materials: bool,
     /// A drawn video is playing or seeking: keep drawing frames.
-    pub(in crate::runtime) videos_active: bool,
+    pub(super) videos_active: bool,
     /// Frame requested by scale settling or pixel snapping in the last paint.
-    pub(in crate::runtime) scale_frame: Option<AnotherFrame>,
+    pub(super) scale_frame: Option<AnotherFrame>,
     /// Per node index this frame: presented row top dy, row height override, and bottom feather mask.
     pub(in crate::runtime) row_dy: Vec<f32>,
     pub(in crate::runtime) row_h: Vec<f32>,
@@ -28,49 +28,49 @@ pub(crate) struct PaintState {
     /// The scale each node's text drew at (its own and its ancestors'), for text hit tests.
     pub(crate) drawn_scale: Vec<f32>,
     /// Per node: it drew inside its clip and the window in the last build.
-    pub(in crate::runtime) seen: Vec<bool>,
+    pub(super) seen: Vec<bool>,
     /// Drawn videos' state generations; a change re-runs the view.
-    pub(in crate::runtime) video_signature: u64,
-    pub(in crate::runtime) pixel_snap: pixel_snap::Glides,
+    pub(super) video_signature: u64,
+    pub(super) pixel_snap: pixel_snap::Glides,
     /// Last scale observation per node that has a scale or had one. See [`ScaleMotion`].
-    pub(in crate::runtime) static_scales: HashMap<NodeId, ScaleSettle>,
+    pub(super) static_scales: HashMap<NodeId, ScaleSettle>,
     /// What the last paint painted, for subtrees that would paint it again (`paint_keep`).
-    pub(in crate::runtime) keep: paint_keep::PaintKeep,
+    pub(super) keep: paint_keep::PaintKeep,
     /// The composed turns `Inh::turn` points into, rebuilt each paint.
     pub(in crate::runtime) turn_scratch: Vec<Turn>,
     /// For nodes inside a turned layer: `(unturned_rect_pt, unturned_clip_px)`. Empty unless a
     /// node turns.
     pub(in crate::runtime) unturned_drawn: Vec<([f32; 4], [f32; 4])>,
     /// Growth rows whose contents draw lifted this frame (`GrowTrack::hide_above`): index, points.
-    pub(in crate::runtime) row_lifts: Vec<(usize, f32)>,
+    pub(super) row_lifts: Vec<(usize, f32)>,
     /// Only nonempty when retained exit nodes or matched flights make storage order differ
     /// from paint order.
-    pub(in crate::runtime) layer_paint_order: Vec<usize>,
-    pub(in crate::runtime) dissolve_scratch: Vec<bool>,
+    pub(super) layer_paint_order: Vec<usize>,
+    pub(super) dissolve_scratch: Vec<bool>,
     pub(in crate::runtime) glyph_scratch: Vec<GlyphQuad>,
-    pub(in crate::runtime) deco_scratch: Vec<PaintedDeco>,
-    pub(in crate::runtime) layer_scratch: Vec<(usize, usize, usize)>,
+    pub(super) deco_scratch: Vec<PaintedDeco>,
+    pub(super) layer_scratch: Vec<(usize, usize, usize)>,
     pub(in crate::runtime) cache_live_scratch: Vec<bool>,
-    pub(in crate::runtime) cache_check_scratch: Vec<bool>,
-    pub(in crate::runtime) cache_paint_scratch: Vec<u64>,
-    pub(in crate::runtime) cache_inside_scratch: Vec<bool>,
+    pub(super) cache_check_scratch: Vec<bool>,
+    pub(super) cache_paint_scratch: Vec<u64>,
+    pub(super) cache_inside_scratch: Vec<bool>,
     pub(in crate::runtime) node_caches: HashMap<NodeId, NodeCache>,
     /// The device rows of each field with waiting paragraphs its last paint showed (`text_fill`).
     pub(in crate::runtime) text_rows: HashMap<NodeId, (f32, f32)>,
     /// Each still text's quads as it drew them, by node and layout id, and the paint they were
     /// last used in (`paint_content`): a frame that draws it the same copies them.
-    pub(in crate::runtime) text_quads: HashMap<(NodeId, crate::text::LayoutId), (crate::el::grid::DrawnRow, u64)>,
+    pub(super) text_quads: HashMap<(NodeId, crate::text::LayoutId), (crate::el::grid::DrawnRow, u64)>,
     /// `El::system_material` elements built this frame, in paint order.
-    pub(crate) materials: Vec<crate::system_material::MaterialDraw>,
+    pub(super) materials: Vec<crate::system_material::MaterialDraw>,
     /// Each node's place in the paint order, kept by the frame build while `Some` (the motion
     /// gate's `z-order`).
-    pub(crate) paint_rank: Option<Vec<u32>>,
+    pub(super) paint_rank: Option<Vec<u32>>,
     /// While `paint_rank` is kept: this frame's icons drawn through their transparent one-texel
     /// apron (`icon_inst` off the pixel grid), by atlas place (`apron_key`), for the gate's raster.
-    pub(crate) icon_aprons: Vec<[u32; 3]>,
+    pub(super) icon_aprons: Vec<[u32; 3]>,
     /// Still texts that copied their quads, for tests.
     #[cfg(test)]
-    pub(in crate::runtime) quads_copied: u64,
+    pub(super) quads_copied: u64,
 }
 
 impl PaintState {
@@ -116,5 +116,217 @@ impl PaintState {
             #[cfg(test)]
             quads_copied: 0,
         }
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn srgb_blend(&self) -> bool {
+        self.srgb_blend
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn set_srgb_blend(&mut self, enabled: bool) -> bool {
+        let changed = self.srgb_blend != enabled;
+        self.srgb_blend = enabled;
+        changed
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn native_materials(&self) -> bool {
+        self.native_materials
+    }
+
+    #[cfg(any(test, target_os = "macos"))]
+    #[inline]
+    pub(crate) fn set_native_materials(&mut self, native: bool) {
+        self.native_materials = native;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn videos_active(&self) -> bool {
+        self.videos_active
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn scale_settling(&self) -> bool {
+        self.scale_frame.is_some() || self.pixel_snap.easing()
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn seen(&self) -> &[bool] {
+        &self.seen
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn was_seen(&self, i: usize, default: bool) -> bool {
+        self.seen.get(i).copied().unwrap_or(default)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn prune_static_scales(&mut self, scene: &Scene) {
+        if !self.static_scales.is_empty() {
+            self.static_scales.retain(|id, _| scene.contains(*id));
+        }
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(in crate::runtime) fn tracks_static_scale(&self, id: NodeId) -> bool {
+        self.static_scales.contains_key(&id)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn prune_caches(
+        &mut self,
+        has_cache: bool,
+        scene: &Scene,
+        resident_caches: &mut std::collections::HashMap<u64, u64>,
+    ) {
+        if !has_cache {
+            if !self.node_caches.is_empty() { self.node_caches.clear(); }
+            if !resident_caches.is_empty() { resident_caches.clear(); }
+        } else {
+            if !self.node_caches.is_empty() {
+                self.node_caches.retain(|id, _| scene.contains(*id));
+            }
+            if !resident_caches.is_empty() {
+                resident_caches.retain(|id, _| scene.contains(NodeId(*id)));
+            }
+        }
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn begin_frame(&mut self) {
+        self.keep.frame += 1;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn record_moved(&mut self, ids: impl IntoIterator<Item = NodeId>) {
+        self.keep.moved.extend(ids);
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn note_cycle_other_deadline(&mut self) {
+        self.keep.cycles.other_deadline();
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn take_cycle_check_clock(&mut self) -> Option<f64> {
+        self.keep.cycles.check_clock.take()
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn clear_row_lifts(&mut self) {
+        self.row_lifts.clear();
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn push_row_lift(&mut self, ri: usize, lift: f32) {
+        self.row_lifts.push((ri, lift));
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn row_lifts(&self) -> &[(usize, f32)] {
+        &self.row_lifts
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn layer_paint_order(&self) -> &[usize] {
+        &self.layer_paint_order
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn clear_layer_paint_order(&mut self) {
+        self.layer_paint_order.clear();
+    }
+
+    /// Subtree (preorder) paint order, then each flying or raised element's subtree on top.
+    /// A sticky element paints after its normal siblings (and before overlay siblings), so it
+    /// covers the rows it's stuck over.
+    pub(in crate::runtime) fn update_layer_paint_order(
+        &mut self,
+        tree: &types::TreeState,
+        flying: &[(NodeId, MRect)],
+        sticky_of: impl Fn(usize) -> bool,
+    ) {
+        let n = tree.nodes.len();
+        let mut first = vec![n; n + 1];
+        let mut next = vec![n; n];
+        // Siblings paint by `El::paint_order`, then (with sticky elements about) sticky ones over
+        // the rows they're stuck over and anchored overlays and modals over both.
+        let rank = |i: usize| {
+            let nd = &tree.nodes[i];
+            let place = if !tree.has_sticky { 0 }
+                else if nd.above.is_some() || nd.handlers.modal.is_some() { 2 }
+                else if sticky_of(i) { 1 }
+                else { 0 };
+            (nd.vis.paint_order, place)
+        };
+        if tree.has_sticky || tree.has_paint_order {
+            let mut ranks: Vec<_> = (0..n).map(|i| (rank(i), i)).collect();
+            ranks.sort_unstable();
+            for &(_, i) in ranks.iter().rev() {
+                let parent = tree.nodes[i].parent.map_or(0, |p| p + 1);
+                next[i] = first[parent]; first[parent] = i;
+            }
+        } else {
+            for i in (0..n).rev() {
+                let parent = tree.nodes[i].parent.map_or(0, |p| p + 1);
+                next[i] = first[parent]; first[parent] = i;
+            }
+        }
+        let mut lifted: Vec<usize> = flying.iter().filter_map(|(id, _)| tree.node_index.get(id).copied()).collect();
+        if tree.has_raise { lifted.extend((0..n).filter(|&i| tree.nodes[i].vis_flags.raise())); }
+        lifted.sort_unstable();
+        lifted.dedup();
+        self.layer_paint_order.clear();
+        for top in std::iter::once(None).chain(lifted.iter().map(|&r| Some(r))) {
+            let mut i = top.unwrap_or(first[0]);
+            while i < n {
+                // A flying subtree paints in its own pass, not where the tree reaches it.
+                if top == Some(i) || lifted.binary_search(&i).is_err() {
+                    self.layer_paint_order.push(i);
+                    if first[i + 1] < n { i = first[i + 1]; continue; }
+                }
+                loop {
+                    if top == Some(i) { i = n; break; }
+                    if next[i] < n { i = next[i]; break; }
+                    match tree.nodes[i].parent { Some(parent) => i = parent, None => { i = n; break; } }
+                }
+            }
+        }
+        if self.layer_paint_order.iter().copied().eq(0..n) { self.layer_paint_order.clear(); }
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(in crate::runtime) fn dissolve_scratch(&self) -> &[bool] {
+        &self.dissolve_scratch
+    }
+
+    #[inline]
+    pub(crate) fn materials(&self) -> &[crate::system_material::MaterialDraw] {
+        &self.materials
+    }
+
+    #[inline]
+    pub(crate) fn enable_paint_rank(&mut self) {
+        self.paint_rank = Some(Vec::new());
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn paint_rank(&self, i: usize) -> u32 {
+        self.paint_rank.as_ref().and_then(|r| r.get(i)).copied().unwrap_or(i as u32)
+    }
+
+    #[inline]
+    pub(crate) fn icon_aprons(&self) -> &[[u32; 3]] {
+        &self.icon_aprons
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(in crate::runtime) fn quads_copied(&self) -> u64 {
+        self.quads_copied
     }
 }

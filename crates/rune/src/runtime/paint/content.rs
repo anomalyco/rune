@@ -86,7 +86,7 @@ impl RuntimeCore {
             .map(|c| self.color(node_id, P_TEXT, c));
         // A terminal's cell grid paints its rows itself (`grid.rs`).
         if let Some(g) = self.tree.nodes[i].vis.grid.clone() {
-            self.paint_grid(i, &g, r, r_exact, clip, fade, o, glyph_count);
+            self.paint.paint_grid(node_id, self.tree.nodes[i].flow, s, &g, r, r_exact, clip, fade, o, glyph_count, &mut self.text, &mut self.images, &mut self.instances);
         }
         self.fill_visible_by_line(i, r, exact_off, sc, cover, scale_motion, rest, gliding, shown);
         let n = &self.tree.nodes[i];
@@ -129,7 +129,7 @@ impl RuntimeCore {
             if let Some((_, Some(at))) = placed && self.frame.live.visible() && self.time_scale > 0.0 {
                 let wake = self.clock + (at - now).max(0.0) / self.time_scale as f64;
                 self.paint.keep.cycles.other_deadline();
-                if self.motion.loop_wake.is_none_or(|w| wake < w.0) { self.motion.loop_wake = Some((wake, at)); }
+                self.motion.arm_loop_wake(wake, at);
             }
             if let Some((image, _)) = placed {
                 let [x, y, iw, ih] = image.rect.map(|v| v as f32);
@@ -307,7 +307,7 @@ impl RuntimeCore {
                 // spelling marks are drawn in; the newline after the last one included.
                 let (top, bottom) = if tk > 1e-4 { ((shown[0] - origin[1]) / tk, (shown[1] - origin[1]) / tk) } else { (f32::NEG_INFINITY, f32::INFINITY) };
                 let (shown_a, shown_b) = flow.pieces_in(top, bottom).fold((usize::MAX, 0), |(lo, hi), p| (lo.min(p.start), hi.max(p.end.saturating_add(1))));
-                let departing = self.motion.flights.iter().any(|f| f.departs(&n.path, n.key.as_deref())
+                let departing = self.motion.flights().iter().any(|f| f.departs(&n.path, n.key.as_deref())
                     && f.alphas(f.destination, now, self.reduced_motion).0 > 0.0);
                 if e.text.is_empty() && e.preedit().is_none() && !inp.placeholder.is_empty() && !departing {
                     let pl_indent = spec.cold.blocks.first().map_or(0.0, |b| (b.indent_pt(spec.style.size) * s).round() * tk);
@@ -415,7 +415,7 @@ impl RuntimeCore {
             }
             let (base_origin, base_rest) = (origin, rest_origin);
             let base_d_origin = if scale_motion == ScaleMotion::Still && tk == 1.0 { base_rest } else { [0.0, 0.0] };
-            let reveal = self.motion.reveals.get(&n.id).filter(|_| spec.cold.advance_in.is_none()).and_then(RevealPhase::fade);
+            let reveal = if spec.cold.advance_in.is_none() { self.motion.reveal_fade(n.id) } else { None };
             let drawn_len = n.elided.map_or(spec.content.len(), |e| e.drawn_len(spec.content.len()));
             self.paint.deco_scratch.clear();
             let mut pill_icons = Vec::new();
@@ -610,7 +610,7 @@ impl RuntimeCore {
                     let secret = spec.redacted || n.input.as_ref().is_some_and(|i| i.edit.is_secure());
                     let shared = piece.shared.or(laid.single());
                     let still = scale_motion == ScaleMotion::Still && glide == [0.0; 2] && !bytes && !place_masks
-                        && !self.motion.flights.iter().any(|f| f.lands(&n.path, n.key.as_deref()));
+                        && !self.motion.flights().iter().any(|f| f.lands(&n.path, n.key.as_deref()));
                     // A layout whose stamp the id table dropped draws from its glyphs, uncopied.
                     if let Some(l) = shared.filter(|_| still && !direct && !secret)
                         && let Some(layout_id) = self.text.layout_id(l)
@@ -658,7 +658,7 @@ impl RuntimeCore {
                 };
                 self.text.set_glide([0.0; 2]);
                 let base = premul(color, o, srgb);
-                let lands = self.motion.flights.iter().any(|f| f.lands(&n.path, n.key.as_deref()));
+                let lands = self.motion.flights().iter().any(|f| f.lands(&n.path, n.key.as_deref()));
                 for q in if lands { &[][..] } else { &self.paint.glyph_scratch[..] } {
                     let [x0, y0] = if zoom == 1.0 && origin == r_origin { [q.rect[0], q.rect[1]] } else {
                         std::array::from_fn(|k| origin[k] + (q.rect[k] - r_origin[k]) * zoom)

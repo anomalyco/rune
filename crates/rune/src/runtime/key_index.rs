@@ -143,7 +143,7 @@ impl RuntimeCore {
     /// The kept index, when `nodes` are the current nodes it describes.
     #[inline]
     pub(super) fn key_index_for(&self, nodes: &[Node]) -> Option<&KeyIndex> {
-        self.tree.key_index_for(nodes, self.commit.commit_gen)
+        self.tree.key_index_for(nodes, self.commit.commit_gen())
     }
 
     /// `self.nodes` changed without a commit: kept per-node answers no longer hold.

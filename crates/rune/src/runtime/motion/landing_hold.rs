@@ -19,37 +19,54 @@ impl LandingHolds {
     }
 }
 
-impl RuntimeCore {
+impl tracks::MotionState {
     /// Marks in `held`, per node of `nodes`, those this commit lands under an
     /// `El::hold_landing_width` element whose width changes, and returns each such element's
     /// index with how far it shifts so its anchor child stays where it was drawn. `held` stays
     /// empty when nothing holds.
-    pub(in crate::runtime) fn landing_holds(&mut self, nodes: &[Node], animated: bool, held: &mut Vec<bool>) -> Vec<(usize, f32)> {
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::runtime) fn landing_holds(
+        &mut self,
+        nodes: &[Node],
+        old_nodes: &[Node],
+        seen: &[bool],
+        scene: &Scene,
+        animated: bool,
+        reduced_motion: bool,
+        held: &mut Vec<bool>,
+    ) -> Vec<(usize, f32)> {
         held.clear();
         let mut out = Vec::new();
-        if !animated || self.reduced_motion {
+        if !animated || reduced_motion {
             return out;
         }
         let mut last = paint_tracks::Finder::default();
         for (i, n) in nodes.iter().enumerate() {
-            if !n.vis.cold.get().is_some_and(|c| c.hold_landing) || !self.scene.contains(n.id) {
+            if !n.vis.cold.get().is_some_and(|c| c.hold_landing) || !scene.contains(n.id) {
                 continue;
             }
-            let Some(drawn) = self.scene.get(n.id, prop::FRAME) else { continue };
-            let was = self.scene.store().target(n.id, prop::FRAME).unwrap_or(drawn);
+            let Some(drawn) = scene.get(n.id, prop::FRAME) else { continue };
+            let was = scene.store().target(n.id, prop::FRAME).unwrap_or(drawn);
             if (was.w - n.local.w).abs() < 0.5 {
                 continue;
             }
             let end = subtree_end(nodes, i);
             let present: Vec<usize> = (i + 1..end)
-                .filter(|&c| nodes[c].parent == Some(i) && self.scene.contains(nodes[c].id) && !self.is_exiting(nodes[c].id))
+                .filter(|&c| {
+                    let cid = nodes[c].id;
+                    nodes[c].parent == Some(i)
+                        && scene.contains(cid)
+                        && !matches!(scene.phase(cid), Some(PresencePhase::Exiting { .. }))
+                })
                 .collect();
-            let anchor = present.iter().copied().find(|&c| last.find(&self.tree.nodes, nodes[c].id).is_some_and(|o| self.drew(o))).or(present.first().copied());
-            let jump = anchor.and_then(|c| self.scene.get(nodes[c].id, prop::FRAME).map(|r| r.x - nodes[c].local.x)).unwrap_or(0.0);
+            let anchor = present.iter().copied()
+                .find(|&c| last.find(old_nodes, nodes[c].id).is_some_and(|o| Self::drew(old_nodes, seen, o)))
+                .or(present.first().copied());
+            let jump = anchor.and_then(|c| scene.get(nodes[c].id, prop::FRAME).map(|r| r.x - nodes[c].local.x)).unwrap_or(0.0);
             held.resize(nodes.len(), false);
             for (j, h) in held.iter_mut().enumerate().take(end).skip(i) {
                 *h = true;
-                self.motion.landing_holds.0.insert(nodes[j].id);
+                self.landing_holds.0.insert(nodes[j].id);
             }
             out.push((i, drawn.x - n.local.x + jump));
         }
@@ -57,8 +74,8 @@ impl RuntimeCore {
     }
 
     /// Whether old node `o`, or anything under it, drew in the last build.
-    fn drew(&self, o: usize) -> bool {
-        self.paint.seen.len() == self.tree.nodes.len() && (o..subtree_end(&self.tree.nodes, o)).any(|j| self.paint.seen[j])
+    fn drew(old_nodes: &[Node], seen: &[bool], o: usize) -> bool {
+        seen.len() == old_nodes.len() && (o..subtree_end(old_nodes, o)).any(|j| seen[j])
     }
 }
 

@@ -19,10 +19,7 @@ impl RuntimeCore {
 
     /// A live-edit patch arrived that the next frame hasn't rebuilt the view with yet.
     pub(crate) fn patch_pending(&self) -> bool {
-        #[cfg(feature = "hot")]
-        return self.frame.hot.as_ref().is_some_and(crate::hot::Session::pending);
-        #[cfg(not(feature = "hot"))]
-        false
+        self.frame.hot_pending()
     }
 
     /// Marks app state changed outside a handler (the next frame re-runs the view).
@@ -33,7 +30,7 @@ impl RuntimeCore {
     /// Lands every track before the next frame: growth, reveals and follow-the-end (guarantee 8,
     /// for returning to a window or session).
     pub fn settle_all(&mut self) {
-        self.commit.settle = true;
+        self.commit.request_settle();
         self.commit.dirty = true;
     }
 
@@ -139,10 +136,10 @@ impl RuntimeCore {
         self.follow_font_families();
         for v in self.commit.virtuals.values_mut() { v.frame_begins(); }
         #[cfg(feature = "hot")]
-        if self.frame.hot.as_mut().is_some_and(crate::hot::Session::changed) {
+        if self.frame.hot_changed() {
             // Replace handler trait objects before queued input can call an old vtable.
             // A regular commit preserves keyed nodes, scrolls and spring velocities.
-            self.commit.memo.clear();
+            self.commit.clear_memo();
             self.commit(app, &Tx::default());
         }
         let mut tx = std::mem::take(&mut self.frame.pending);
@@ -152,16 +149,16 @@ impl RuntimeCore {
         let commits0 = self.commit.commits;
         let shaped0 = self.text.shaped;
         self.settled = false;
-        self.motion.landing_holds.clear();
+        self.motion.clear_landing_holds();
         // `RUNE_LOOP_CHECK=1`: the frame that runs instead of a checked step samples at its clock.
-        self.clock = self.paint.keep.cycles.check_clock.take().unwrap_or_else(|| self.wall_clock().unwrap_or(self.clock + elapsed));
+        self.clock = self.paint.take_cycle_check_clock().unwrap_or_else(|| self.wall_clock().unwrap_or(self.clock + elapsed));
         if self.wall_start.is_none() {
             crate::video::headless_frame(self.clock);
             // Fake recorders publish this frame's level to bound meters, drawn this frame.
             crate::recorder::headless_frame(self.clock);
             live_woke |= self.take_live_wake();
         }
-        if let Some((deadline, animation_time)) = self.motion.loop_wake
+        if let Some((deadline, animation_time)) = self.motion.loop_wake()
             && !self.animating
         {
             // Native shells cap dt after idle. Advance the sleeping part of the
@@ -169,17 +166,16 @@ impl RuntimeCore {
             let elapsed = animation_time - (deadline - self.clock).max(0.0) * self.time_scale as f64;
             self.t += (elapsed - self.t - (catch_up + dt) * self.time_scale as f64).max(0.0);
             self.scene.set_time(self.t);
-            if self.clock >= deadline { self.motion.loop_wake = None; }
+            if self.clock >= deadline { self.motion.clear_loop_wake(); }
         }
         // Bring old tracks, growth and scroll to this frame's time before a poll or update
         // retargets them. Presenting waits for `step_motion`, so the frame is sampled and
         // built once.
         if catch_up > 0.0 { self.catch_up_motion(catch_up); }
-        self.keep_loops_on_clock(dt);
-        let polled = self.frame.timer_wake.frame_polled(self.frame.wake_deadlines.first().is_some_and(|t| *t <= self.clock));
-        let due = self.frame.wake_deadlines.partition_point(|t| *t <= self.clock);
-        self.idle_frame_begins(polled || due > 0, live_woke);
-        self.frame.wake_deadlines.drain(..due);
+        self.motion.keep_loops_on_clock(&self.scene, self.t, self.clock, self.time_scale, dt);
+        let (polled, due) = self.frame.begin_frame_poll(self.clock);
+        self.frame.idle_frame_begins(self.animating, polled || due > 0, live_woke);
+        self.frame.drain_due_wakes(due);
         self.fire_hover_delays();
         self.fire_press_repeat();
         self.fire_edge_scroll();
@@ -193,7 +189,7 @@ impl RuntimeCore {
             let mut one = self.transaction(app);
             one.input_waiting = self.frame.queue.has_input();
             // Scheduling does not imply a model change.
-            if self.frame.idle_meter.polled(crate::tooling::perf_warn::timed("poll", || app.poll(self.clock, &mut one))) {
+            if self.frame.record_poll(crate::tooling::perf_warn::timed("poll", || app.poll(self.clock, &mut one))) {
                 ran = true;
                 why |= CommitWhy::POLL;
                 self.commit.watch.meter.poll();
@@ -222,7 +218,7 @@ impl RuntimeCore {
         // A host settle (an uncover, a restore, a shown window) lands the tree the frame began
         // with, before this frame's input runs. The input's own commit below then animates, so
         // a dialog the first press closes still plays its exit.
-        if self.commit.settle && queue.has_input_action() {
+        if self.commit.is_settling() && queue.has_input_action() {
             self.settle_before_input(app, &mut tx, &mut why);
             ran = false;
         }
@@ -249,7 +245,7 @@ impl RuntimeCore {
             // Both callbacks see ordinary &mut S. After the next mutation a single view
             // cannot tell which one introduced a row. Observe the poll's tree now, without
             // drawing it or advancing time. A key already needed this same routing boundary.
-            let split = self.motion.motion_needs_cause && why & CommitWhy::POLL != 0 && (input || routed);
+            let split = self.motion.motion_needs_cause() && why & CommitWhy::POLL != 0 && (input || routed);
             if split || (ran || self.commit.dirty || !tx.scroll_to.is_empty()) && routed {
                 if split {
                     let links = std::mem::take(&mut tx.open_urls);
@@ -257,19 +253,19 @@ impl RuntimeCore {
                     tx.open_urls = links;
                 }
                 if ran || self.commit.dirty {
-                    self.capture_flights(&mut tx);
-                    if self.commit.settle { tx.settle(); }
+                    self.motion.capture_flights(&self.tree.nodes, &mut self.paint, &mut self.text, self.env.scale, self.viewport, self.t, &mut tx);
+                    if self.commit.is_settling() { tx.settle(); }
                     self.settled |= tx.commit.lands();
                     #[cfg(debug_assertions)]
-                    if ran_other || self.commit.dirty || ran_layout { self.frame.live_check = None; }
+                    if ran_other || self.commit.dirty || ran_layout { self.frame.clear_live_check(); }
                     self.capture_keeps(&mut tx);
-                    tx.unprompted = self.motion.motion_needs_cause && why & CommitWhy::INPUT == 0 && !tx.asked_motion;
+                    tx.unprompted = self.motion.motion_needs_cause() && why & CommitWhy::INPUT == 0 && !tx.asked_motion;
                     if split && tx.unprompted { tx.commit = tx.commit.without_input(); }
                     if routed { why |= CommitWhy::ROUTE; }
                     if self.commit.dirty { why |= CommitWhy::DIRTY; }
                     self.commit_for(app, &tx, std::mem::take(&mut why));
                     #[cfg(debug_assertions)]
-                    { let check = self.frame.live_check.take(); self.compare_live_check(check); ran_other = false; }
+                    { let check = self.frame.take_live_check(); self.compare_live_check(check); ran_other = false; }
                     self.apply_keeps(app);
                     ran = false;
                 }
@@ -301,10 +297,10 @@ impl RuntimeCore {
                 ran_layout |= self.run_action(app, action, &mut tx);
             } else {
                 #[cfg(debug_assertions)]
-                let checks = self.frame.live_checks;
+                let checks = self.frame.live_checks();
                 let r = self.run_action(app, action, &mut tx);
                 #[cfg(debug_assertions)]
-                { ran_other |= r && checks == self.frame.live_checks; }
+                { ran_other |= r && checks == self.frame.live_checks(); }
                 ran |= r;
                 if r { why |= if input { CommitWhy::INPUT } else { CommitWhy::DIRTY }; }
             }
@@ -313,10 +309,10 @@ impl RuntimeCore {
         // Once a frame, however often a drag moved the selection, and in time for this commit.
         for action in self.selection_changes(app) {
             #[cfg(debug_assertions)]
-            let checks = self.frame.live_checks;
+            let checks = self.frame.live_checks();
             let r = self.run_action(app, action, &mut tx);
             #[cfg(debug_assertions)]
-            { ran_other |= r && checks == self.frame.live_checks; }
+            { ran_other |= r && checks == self.frame.live_checks(); }
             if r { ran = true; why |= CommitWhy::DIRTY; }
         }
         #[cfg(target_os = "linux")]
@@ -328,10 +324,10 @@ impl RuntimeCore {
             for queued in std::mem::take(&mut self.frame.queue) {
                 if !matches!(queued.action, Action::HoverChange(..)) { self.frame.queue.push_queued(queued); continue; }
                 #[cfg(debug_assertions)]
-                let checks = self.frame.live_checks;
+                let checks = self.frame.live_checks();
                 let r = self.run_action(app, queued.action, &mut tx);
                 #[cfg(debug_assertions)]
-                { ran_other |= r && checks == self.frame.live_checks; }
+                { ran_other |= r && checks == self.frame.live_checks(); }
                 if r { ran = true; why |= if queued.input { CommitWhy::INPUT } else { CommitWhy::DIRTY }; }
             }
             open_urls.extend(std::mem::take(&mut tx.open_urls));
@@ -339,42 +335,43 @@ impl RuntimeCore {
         }
         self.release_files();
         self.schedule_wakes(tx.wakes.drain(..));
-        self.capture_flights(&mut tx);
+        self.motion.capture_flights(&self.tree.nodes, &mut self.paint, &mut self.text, self.env.scale, self.viewport, self.t, &mut tx);
         if self.edit.caret_watch && self.caret_moved(None) { self.commit.dirty = true; }
         let read_moved = self.layout_reads_moved();
-        self.commit.reuse.read_moved = read_moved;
+        self.commit.set_read_moved(read_moved);
         if self.tree.has_pixel_aspect && self.pixel_aspect_changed() { self.commit.relayout = true; }
-        let shifted = !(self.commit.dirty || self.commit.relayout || self.commit.settle) && self.virtual_window_changed();
-        let besides = self.commit.dirty || self.commit.relayout || self.commit.settle || shifted;
+        let settling = self.commit.is_settling();
+        let shifted = !(self.commit.dirty || self.commit.relayout || settling) && self.virtual_window_changed();
+        let besides = self.commit.dirty || self.commit.relayout || settling || shifted;
         let other = ran || besides;
         self.count_layout_echo(ran_layout || read_moved, other);
         if other || ran_layout || read_moved {
             if self.commit.relayout && !ran && !self.commit.dirty {
-                if self.commit.viewport_stepped { tx.window_step = true } else { tx.relayout = true }
+                if self.commit.is_viewport_stepped() { tx.window_step = true } else { tx.relayout = true }
             }
-            if self.commit.settle {
+            if settling {
                 tx.commit = Commit::Settle;
             }
             self.settled = tx.commit.lands();
-            self.commit.state_unchanged = !ran && !self.commit.dirty && !ran_layout && !self.commit.settle && self.commit.commits > 0;
+            self.commit.set_state_unchanged(!ran && !self.commit.dirty && !ran_layout && !settling && self.commit.commits > 0);
             #[cfg(debug_assertions)]
-            if ran_other || besides || ran_layout || read_moved { self.frame.live_check = None; }
+            if ran_other || besides || ran_layout || read_moved { self.frame.clear_live_check(); }
             self.capture_keeps(&mut tx);
             let flag = |on: bool, bit: u16| if on { bit } else { 0 };
             // Motion has a cause: the user, in this window. A commit nothing in this frame's
             // input asked for shows what it brings in its final state (`Tx::unprompted`).
-            tx.unprompted = self.motion.motion_needs_cause && why & CommitWhy::INPUT == 0 && !tx.asked_motion;
+            tx.unprompted = self.motion.motion_needs_cause() && why & CommitWhy::INPUT == 0 && !tx.asked_motion;
             // Its layout lands too, as an instant change's does: a container that grows to fit what a
             // server brought doesn't ease to its height (motion already running keeps on).
             if tx.unprompted { tx.commit = tx.commit.without_input(); }
-            self.commit_for(app, &tx, why | flag(self.commit.dirty, CommitWhy::DIRTY) | flag(self.commit.relayout, CommitWhy::RELAYOUT) | flag(self.commit.settle, CommitWhy::SETTLE)
+            self.commit_for(app, &tx, why | flag(self.commit.dirty, CommitWhy::DIRTY) | flag(self.commit.relayout, CommitWhy::RELAYOUT) | flag(settling, CommitWhy::SETTLE)
                 | flag(shifted, CommitWhy::VIRTUAL) | flag(ran_layout, CommitWhy::LAYOUT) | flag(read_moved, CommitWhy::READ));
             #[cfg(debug_assertions)]
-            { let check = self.frame.live_check.take(); self.compare_live_check(check); }
+            { let check = self.frame.take_live_check(); self.compare_live_check(check); }
             self.apply_keeps(app);
         }
         #[cfg(debug_assertions)]
-        { self.frame.live_check = None; }
+        { self.frame.clear_live_check(); }
         tx.keep_on_screen.clear();
         for (path, v) in &mut self.commit.virtuals {
             if let Some(key) = v.reveal_selected.take() && !pointer_hover {
@@ -386,7 +383,10 @@ impl RuntimeCore {
             }
         }
         #[cfg(debug_assertions)]
-        self.watch_frame(commits0, tx.scroll_offsets.iter().find(|r| tx.commit.snaps() || r.glide.is_none()).map(|r| r.key.as_str()));
+        {
+            let scrolling = self.scrolling();
+            self.commit.watch_frame(commits0, scrolling, tx.scroll_offsets.iter().find(|r| tx.commit.snaps() || r.glide.is_none()).map(|r| r.key.as_str()));
+        }
         let follow = std::mem::take(&mut self.edit.caret_follow);
         self.finish_scroll_requests(app, &mut tx, follow);
         // Those scrolls moved the caret after the commit a view placed from it saw.
@@ -414,11 +414,14 @@ impl RuntimeCore {
         let animating = self.step_motion(app, dt, instant_scroll) || live_animating;
         self.stats.shaped = self.text.shaped - shaped0;
         let filling = self.virtual_filling();
-        if live_animating { self.motion.anim_sources |= AnimSource::LIVE; }
-        if self.time_scale <= 0.0 { self.motion.anim_sources = 0; }
-        if filling { self.motion.anim_sources |= AnimSource::VIRTUAL_FILL; }
+        if live_animating { self.motion.add_anim_sources(AnimSource::LIVE); }
+        if self.time_scale <= 0.0 { self.motion.set_anim_sources(0); }
+        if filling { self.motion.add_anim_sources(AnimSource::VIRTUAL_FILL); }
         self.animating = (animating && self.time_scale > 0.0) || filling;
-        self.idle_frame_ends();
+        let clear = self.clear_color();
+        let opaque = !self.surfaces.is_empty() || !self.paint.materials().is_empty() || self.paint.videos_active();
+        let title = self.host.window_title.current();
+        self.frame.idle_frame_ends(self.clock, self.animating, clear, self.viewport, self.env.scale, self.paint.srgb_blend(), self.transparent, self.images.copies, &self.instances, opaque, title);
         self.interaction_built();
         if !open_urls.is_empty() { self.open_urls(open_urls); }
         self.animating
@@ -431,7 +434,7 @@ impl RuntimeCore {
         let links = std::mem::take(&mut tx.open_urls);
         self.latch_requests(app, tx);
         tx.open_urls = links;
-        self.capture_flights(tx);
+        self.motion.capture_flights(&self.tree.nodes, &mut self.paint, &mut self.text, self.env.scale, self.viewport, self.t, tx);
         tx.settle();
         self.settled |= tx.commit.lands();
         self.capture_keeps(tx);

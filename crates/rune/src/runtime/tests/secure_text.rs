@@ -683,7 +683,7 @@ fn secure_rich_labels_have_no_links_flights_or_retained_measure_hashes() {
     assert!(!rt.element_is_secure("missing"));
     assert!(!crate::tooling::tree_json(&rt, 0.0).to_string().contains("fictional-"));
     rt.capture_text_flight("secret".into(), "target".into());
-    assert!(rt.motion.flights.is_empty(), "a revealed secret must not survive as flying glyphs");
+    assert!(rt.motion.flights().is_empty(), "a revealed secret must not survive as flying glyphs");
     rt.update(|s, _| *s = false);
     rt.frame(0.0);
     let n = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("secret")).unwrap();

@@ -80,63 +80,75 @@ pub(in crate::runtime) fn paint_pose_springing(store: &rune_motion::AnimationSto
 /// Seconds a changed `El::scale` holds still before its text rasterizes at that size.
 pub(in crate::runtime) const STATIC_SCALE_SETTLE: f64 = 0.1;
 
-impl RuntimeCore {
-    /// Moves node `id`'s group-opacity rest to `group`'s on its opacity motion (the
-    /// transaction's spring without one), or lands it when `quiet`: an instant change or motion,
-    /// a mount, reduced motion. No group opacity draws at full, so an element that takes one on
-    /// or drops it fades from or to 1. Returns whether a dropped one is still fading to full.
-    pub(in crate::runtime) fn set_group_rest(&mut self, id: NodeId, group: Option<[f32; 2]>, motion: Option<Anim>, spring: Spring, quiet: bool) -> bool {
-        let store = self.scene.store();
-        let had = store.has(id, P_GROUP_REST);
-        let motion = motion.unwrap_or(spring.into());
-        let quiet = quiet || matches!(motion.curve, rune_motion::Curve::Instant);
-        let settled = !store.is_animating(id, P_GROUP_REST) && store.get(id, P_GROUP_REST) == Some(1.0);
-        let to = group.map_or(1.0, |g| g[0]);
-        if group.is_none() && (!had || quiet || settled) {
-            if had { self.scene.store_mut().remove(id, P_GROUP_REST); }
-            return false;
-        }
-        if quiet {
-            self.scene.set(id, P_GROUP_REST, to);
-        } else if !had {
-            self.scene.set(id, P_GROUP_REST, 1.0);
-            self.scene.animate(id, P_GROUP_REST, to, motion);
-        } else if store.target(id, P_GROUP_REST) != Some(to) {
-            self.scene.animate(id, P_GROUP_REST, to, motion);
-        }
-        group.is_none()
+/// Moves node `id`'s group-opacity rest to `group`'s on its opacity motion (the
+/// transaction's spring without one), or lands it when `quiet`: an instant change or motion,
+/// a mount, reduced motion. No group opacity draws at full, so an element that takes one on
+/// or drops it fades from or to 1. Returns whether a dropped one is still fading to full.
+pub(in crate::runtime) fn set_group_rest(
+    scene: &mut Scene,
+    id: NodeId,
+    group: Option<[f32; 2]>,
+    motion: Option<Anim>,
+    spring: Spring,
+    quiet: bool,
+) -> bool {
+    let store = scene.store();
+    let had = store.has(id, P_GROUP_REST);
+    let motion = motion.unwrap_or(spring.into());
+    let quiet = quiet || matches!(motion.curve, rune_motion::Curve::Instant);
+    let settled = !store.is_animating(id, P_GROUP_REST) && store.get(id, P_GROUP_REST) == Some(1.0);
+    let to = group.map_or(1.0, |g| g[0]);
+    if group.is_none() && (!had || quiet || settled) {
+        if had { scene.store_mut().remove(id, P_GROUP_REST); }
+        return false;
     }
+    if quiet {
+        scene.set(id, P_GROUP_REST, to);
+    } else if !had {
+        scene.set(id, P_GROUP_REST, 1.0);
+        scene.animate(id, P_GROUP_REST, to, motion);
+    } else if store.target(id, P_GROUP_REST) != Some(to) {
+        scene.animate(id, P_GROUP_REST, to, motion);
+    }
+    group.is_none()
+}
 
-    /// Drops the rest track of each dropped group opacity whose fade to full landed this frame.
-    pub(in crate::runtime) fn land_group_fades(&mut self) {
-        let landed: Vec<usize> = self.scene.store().events().iter()
-            .filter_map(|e| match *e {
-                rune_motion::MotionEvent::Settled { node, prop, .. } if prop == P_GROUP_REST.id => self.tree.node_index.get(&node).copied(),
-                _ => None,
-            })
-            .filter(|&i| self.tree.nodes[i].group_fade && !self.scene.store().is_animating(self.tree.nodes[i].id, P_GROUP_REST))
-            .collect();
-        for i in landed {
-            self.tree.nodes[i].group_fade = false;
-            self.scene.store_mut().remove(self.tree.nodes[i].id, P_GROUP_REST);
-        }
+/// Drops the rest track of each dropped group opacity whose fade to full landed this frame.
+pub(in crate::runtime) fn land_group_fades(scene: &mut Scene, nodes: &mut [Node], node_index: &HashMap<NodeId, usize>) {
+    let landed: Vec<usize> = scene.store().events().iter()
+        .filter_map(|e| match *e {
+            rune_motion::MotionEvent::Settled { node, prop, .. } if prop == P_GROUP_REST.id => node_index.get(&node).copied(),
+            _ => None,
+        })
+        .filter(|&i| nodes[i].group_fade && !scene.store().is_animating(nodes[i].id, P_GROUP_REST))
+        .collect();
+    for i in landed {
+        nodes[i].group_fade = false;
+        scene.store_mut().remove(nodes[i].id, P_GROUP_REST);
     }
+}
 
-    /// The opacity factor `El::group_opacity` gives node `n` under a hover group at `group`.
-    /// A dropped one fading to full shows at full under the hover.
-    pub(in crate::runtime) fn group_factor(&self, n: &Node, group: f32) -> f32 {
-        let [rest, hovered] = match n.vis.group_opacity {
-            Some(g) => g,
-            None if n.group_fade => [1.0, 1.0],
-            None => return 1.0,
-        };
-        let rest = self.scene.get(n.id, P_GROUP_REST).unwrap_or(rest);
-        // A control the keyboard reached shows as if hovered, as CSS reveals a hover-only button
-        // on `:focus-visible` (or `:focus-within` around it): focus is never on something unseen.
-        let focused = self.kbd.focus.keyboard() && self.kbd.focus.path().is_some_and(|f| {
-            f.strip_prefix(n.path.as_str()).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
-        });
-        let group = if focused { 1.0 } else { group };
-        rest + (hovered - rest) * group
-    }
+/// The opacity factor `El::group_opacity` gives node `n` under a hover group at `group`.
+/// A dropped one fading to full shows at full under the hover.
+#[inline]
+pub(in crate::runtime) fn group_factor(
+    scene: &Scene,
+    focus_keyboard: bool,
+    focus_path: Option<&str>,
+    n: &Node,
+    group: f32,
+) -> f32 {
+    let [rest, hovered] = match n.vis.group_opacity {
+        Some(g) => g,
+        None if n.group_fade => [1.0, 1.0],
+        None => return 1.0,
+    };
+    let rest = scene.get(n.id, P_GROUP_REST).unwrap_or(rest);
+    // A control the keyboard reached shows as if hovered, as CSS reveals a hover-only button
+    // on `:focus-visible` (or `:focus-within` around it): focus is never on something unseen.
+    let focused = focus_keyboard && focus_path.is_some_and(|f| {
+        f.strip_prefix(n.path.as_str()).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    });
+    let group = if focused { 1.0 } else { group };
+    rest + (hovered - rest) * group
 }

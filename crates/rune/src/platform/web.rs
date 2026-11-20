@@ -338,7 +338,7 @@ impl Browser {
             rt.set_os_drag(false);
             rt.wall_start = Some(now);
             rt.host.open_urls_natively = true;
-            rt.frame.record_events = false;
+            rt.frame.set_record_events(false);
         }
         let mut clipboard = crate::clipboard::Client::default();
         clipboard.connect(wake);

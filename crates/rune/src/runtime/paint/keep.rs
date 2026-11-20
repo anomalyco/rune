@@ -203,7 +203,7 @@ impl RuntimeCore {
         // Paint goes depth first, siblings in paint order (`update_layer_paint_order`), so a subtree
         // paints in one run unless it holds a node lifted out to paint last.
         let lifted = !self.motion.flying.is_empty() || self.tree.has_raise;
-        let shareable = !lifted && self.motion.flights.is_empty() && self.paint.paint_rank.is_none()
+        let shareable = !lifted && self.motion.flights().is_empty() && self.paint.paint_rank.is_none()
             && self.kbd.modal_scope.is_none() && !self.commit.defaults.force_focus_rings && !disabled();
         let key = shareable.then(|| {
             let mut h = rune_motion::Fx::default();
@@ -217,7 +217,7 @@ impl RuntimeCore {
             h.finish()
         });
         if logging() && !shareable {
-            eprintln!("rune: paint keep off: raise {}, text flights {}, flying {}, rank {}, modal {}", self.tree.has_raise, self.motion.flights.len(), self.motion.flying.len(), self.paint.paint_rank.is_some(), self.kbd.modal_scope.is_some());
+            eprintln!("rune: paint keep off: raise {}, text flights {}, flying {}, rank {}, modal {}", self.tree.has_raise, self.motion.flights().len(), self.motion.flying.len(), self.paint.paint_rank.is_some(), self.kbd.modal_scope.is_some());
         }
         let k = &mut self.paint.keep;
         k.recording = !lifted;
@@ -310,7 +310,7 @@ impl RuntimeCore {
 
     /// Opens node `i`'s record, before it paints anything.
     pub(in crate::runtime) fn keep_open(&mut self, i: usize, glyphs: usize, sel: &[(usize, usize, usize)], marks: &[(usize, usize, usize)]) {
-        self.slide_node_opens(i);
+        self.paint.slide_node_opens(i, self.instances.len(), self.env.scale);
         if !self.paint.keep.recording { return; }
         let rec = PaintRec {
             id: self.tree.nodes[i].id,
@@ -456,7 +456,7 @@ impl RuntimeCore {
                 let before = self.instances.len();
                 if active_cache.is_some_and(|ac| ac.instance_start == start) {
                     let ac = active_cache.take().unwrap();
-                    self.close_cached_layer(ac, start, surface_start, glyph_count);
+                    self.paint.close_cached_layer(&self.tree.nodes, &mut self.instances, &mut self.surfaces, &mut self.marks, self.track_marks, &mut self.text, self.commit.commit_gen(), ac, start, surface_start, glyph_count);
                 } else {
                     crate::render::end_layer(&mut self.instances, &mut self.surfaces, &mut self.marks, start, surface_start);
                 }
@@ -495,7 +495,7 @@ impl RuntimeCore {
 
     /// The end of a paint: what was moved is painted, and what wasn't kept is said.
     pub(in crate::runtime) fn keep_end(&mut self) {
-        self.close_slide();
+        self.paint.close_slide(self.instances.len(), self.env.scale);
         let k = &mut self.paint.keep;
         k.moved.clear();
         if !k.recording {
@@ -590,8 +590,8 @@ fn static_ok(n: &Node) -> bool {
 fn dynamic_ok(rt: &RuntimeCore, i: usize, sel: &[(usize, usize, usize)], marks: &[(usize, usize, usize)]) -> bool {
     let id = rt.tree.nodes[i].id;
     !sel.iter().any(|r| r.0 == i) && !marks.iter().any(|r| r.0 == i)
-        && (rt.motion.reveals.is_empty() || !rt.motion.reveals.contains_key(&id))
-        && (rt.motion.loops.is_empty() || !rt.motion.loops.contains_key(&id))
+        && !rt.motion.has_reveal(id)
+        && !rt.motion.has_loop(id)
         && (rt.paint.static_scales.is_empty() || !rt.paint.static_scales.contains_key(&id))
         && rt.paint.row_mask[i] < 0.0
 }

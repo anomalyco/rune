@@ -185,7 +185,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
         let height = crate::window::frame::clamp_size((size.0, app.content_height()), limits.0, limits.1).1;
         app.rt_mut().set_viewport((size.0, height), scale);
     }
-    if args.tree.is_some() { app.rt_mut().commit.key_warnings = Some(Vec::new()); }
+    if args.tree.is_some() { app.rt_mut().commit.enable_key_warnings(); }
     let has_comp = app.has_compositor();
     app.rt_mut().track_marks = has_comp;
     let runtime_ms = launched.elapsed().as_secs_f64() * 1000.0 - state_ms;
@@ -222,7 +222,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
         trace.all = args.trace_all;
         trace
     });
-    app.rt_mut().frame.trace_channels = trace.as_ref().map(|_| Default::default());
+    app.rt_mut().frame.enable_trace_channels(trace.is_some());
     let gate_out = std::env::var_os("RUNE_MOTION_GATE").map(std::path::PathBuf::from);
     let gate = gate_out.as_ref().map(|_| app.new_gate(fps as f64));
     app.rt_mut().scene.store_mut().audit_retargets(trace.is_some());

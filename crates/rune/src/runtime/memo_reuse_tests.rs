@@ -197,7 +197,7 @@ fn steady_commits_moving_ancestors_rebase_exits_and_modifiers_match_fresh_build(
     let mut rt_m = Runtime::new(init(true), cards_view, (560.0, 520.0), Env::new(true, 2.0));
     let mut rt_f = Runtime::new(init(false), cards_view, (560.0, 520.0), Env::new(true, 2.0));
     step_both(&mut rt_m, &mut rt_f, 0.0, "initial", |_| {});
-    let first_builds = rt_m.commit.memo.builds;
+    let first_builds = rt_m.commit.memo_builds();
     assert!(first_builds >= 4);
 
     // Steady commits: nothing moves, Stage (b) + Stage (c) skip flatten and apply on all cards.
@@ -206,7 +206,7 @@ fn steady_commits_moving_ancestors_rebase_exits_and_modifiers_match_fresh_build(
             rt.update(|s, _| s.tick += 1);
         });
     }
-    assert_eq!(rt_m.commit.memo.builds, first_builds, "no memo rebuilt during steady ticks");
+    assert_eq!(rt_m.commit.memo_builds(), first_builds, "no memo rebuilt during steady ticks");
 
     // Ancestor move: banner expands, shifting every card's window rect while keeping interior local rects.
     step_both(&mut rt_m, &mut rt_f, 1.0 / 120.0, "banner-grow", |rt| {
@@ -342,10 +342,10 @@ fn hover_press_focus_selection_env_blend_and_hot_clear_match_fresh_build() {
     });
     step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "reduced-motion", |rt| rt.set_system_reduced_motion(true));
 
-    let before_hot = rt_m.commit.memo.builds;
-    rt_m.commit.memo.clear();
+    let before_hot = rt_m.commit.memo_builds();
+    rt_m.commit.clear_memo();
     step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "hot-clear-rebuild", |rt| rt.update(|s, _| s.tick += 1));
-    assert!(rt_m.commit.memo.builds > before_hot, "hot clear rebuilds memos cleanly");
+    assert!(rt_m.commit.memo_builds() > before_hot, "hot clear rebuilds memos cleanly");
 }
 
 struct WorkspaceState {
@@ -448,8 +448,8 @@ fn virtual_rows_inside_memos_layout_reads_live_values_and_duplicate_keys_match_f
     let mut rt_f = Runtime::new(make(false), workspace_view, (420.0, 380.0), Env::new(true, 2.0));
     rt_m.set_live_visible(true);
     rt_f.set_live_visible(true);
-    rt_m.commit.key_warnings = Some(Vec::new());
-    rt_f.commit.key_warnings = Some(Vec::new());
+    rt_m.commit.enable_key_warnings();
+    rt_f.commit.enable_key_warnings();
 
     step_both(&mut rt_m, &mut rt_f, 0.0, "init", |_| {});
     for f in 0..8 {
@@ -506,7 +506,7 @@ fn virtual_rows_inside_memos_layout_reads_live_values_and_duplicate_keys_match_f
     step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "dup-keys", |rt| {
         rt.update(|s, _| s.dup_keys = true);
     });
-    assert_eq!(rt_m.commit.key_warnings, rt_f.commit.key_warnings, "duplicate-key warnings match");
+    assert_eq!(rt_m.commit.key_warnings(), rt_f.commit.key_warnings(), "duplicate-key warnings match");
 }
 
 #[test]

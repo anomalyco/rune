@@ -18,8 +18,8 @@ impl RuntimeCore {
     /// Queues `on_visible` for elements that came on screen or left it since the last frame.
     /// True when it queued any.
     pub(super) fn report_visible(&mut self) -> bool {
-        if !self.tree.has_drawn_layout() && self.commit.visible_fired.is_empty() { return false; }
-        let last = std::mem::take(&mut self.commit.visible_fired);
+        if !self.tree.has_drawn_layout() && self.commit.visible_fired_empty() { return false; }
+        let last = self.commit.take_visible_fired();
         let mut seen = HashMap::with_capacity_and_hasher(last.len(), Default::default());
         let mut queued = false;
         // A page draws a band that starts above the window and ends below it; what's on screen is
@@ -38,7 +38,7 @@ impl RuntimeCore {
                 queued = true;
             }
         }
-        self.commit.visible_fired = seen;
+        self.commit.set_visible_fired(seen);
         queued
     }
 }

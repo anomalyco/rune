@@ -343,14 +343,14 @@ impl Host {
             rt.set_system_accent(crate::system_accent());
             crate::platform::scroll_bars::watch();
             rt.set_system_scroll_bars_state(crate::platform::scroll_bars::current().with_override(args.scroll_bars));
-            rt.frame.trace_channels = args.trace.as_ref().map(|_| Default::default());
+            rt.frame.enable_trace_channels(args.trace.is_some());
             rt.set_live_waker(Arc::new(move || { live_proxy.send_event(WakeEvent::Live(slot)).ok(); }));
             rt.set_os_drag(crate::drag_out::SUPPORTED);
             rt.transparent = options.transparent;
             rt.track_marks = has_comp;
             rt.wall_start = Some(crate::time::now());
             rt.host.open_urls_natively = args.script.is_none() && args.trace.is_none() && args.frames.is_none();
-            rt.frame.record_events = false;
+            rt.frame.set_record_events(false);
             rt.host.surface_stats = Some(meter.shared());
         }
         app.set_live_visible(false);

@@ -21,7 +21,7 @@ impl RuntimeCore {
         ordered: bool,
     ) -> (bool, Option<std::num::NonZeroU64>) {
         stall.end_named("an `update` closure");
-        let stale = changed || one.frame_work() || one.window_frame.is_some() || one.srgb_blend.is_some_and(|b| b != self.paint.srgb_blend) || one.font_smoothing.is_some_and(|m| m != self.text.font_smoothing())
+        let stale = changed || one.frame_work() || one.window_frame.is_some() || one.srgb_blend.is_some_and(|b| b != self.paint.srgb_blend()) || one.font_smoothing.is_some_and(|m| m != self.text.font_smoothing())
             || self.changes_families(&one)
             || (one.blur && self.kbd.focus.path().is_some());
         let minimize = if ordered {
@@ -99,7 +99,7 @@ impl RuntimeCore {
         if let Some(mode) = tx.font_smoothing.take() { self.set_font_smoothing(mode); }
         if let Some((sans, mono)) = tx.font_families.take() { self.set_font_families(&sans, &mono); }
         if let Some(srgb) = tx.srgb_blend.take() { self.set_srgb_blend(srgb); }
-        if let Some(rewind) = tx.rewind.take() { self.motion.rewind = rewind; }
+        if let Some(rewind) = tx.rewind.take() { self.motion.set_rewind(rewind); }
         if std::mem::take(&mut tx.blur) {
             if self.kbd.focus.path().is_some() {
                 self.set_focus(app, None, self.kbd.focus.keyboard());
@@ -123,7 +123,7 @@ impl RuntimeCore {
         crate::clipboard::flush_memory(self);
     }
 
-    pub fn tracing(&self) -> bool { self.frame.trace_channels.is_some() || self.scene.tracing() }
+    pub fn tracing(&self) -> bool { self.frame.tracing_channels() || self.scene.tracing() }
 
     pub(in crate::runtime) fn transaction(&self, app: &dyn ViewDriver) -> Tx {
         Tx { trace: self.tracing().then(crate::el::TraceCalls::default), mods: self.kbd.held_mods, selection: self.selection_snapshot(app),
@@ -133,7 +133,7 @@ impl RuntimeCore {
     /// A scalar from the actual draw path (e.g. `shell.width`). Values hold until resampled.
     /// Call before the tooling writer records the frame; scene traces sample in `frame`.
     pub fn trace_channel(&mut self, name: &'static str, kind: &'static str, value: f32) {
-        if let Some(channels) = &mut self.frame.trace_channels { channels.insert(name, (kind, value)); }
+        self.frame.record_trace_channel(name, kind, value);
         if let Some(trace) = self.scene.trace_mut() { trace.channel(name, kind, value); }
     }
 
@@ -144,7 +144,7 @@ impl RuntimeCore {
     }
 
     pub(crate) fn trace_event_dyn(&mut self, event: &dyn std::fmt::Display) {
-        if self.frame.trace_channels.is_some() { event_log::push(&mut self.events, event.to_string()); }
+        if self.frame.tracing_channels() { event_log::push(&mut self.events, event.to_string()); }
         if let Some(trace) = self.scene.trace_mut() { trace.event(event); }
     }
 }

@@ -42,7 +42,7 @@ impl RuntimeCore {
         if swaps && !keep && self.kbd.focus.path().is_some() { self.set_focus(app, None, false); }
         let clock = self.clock;
         if !app.playground_apply(clock) { return; }
-        self.commit.memo.clear();
+        self.commit.clear_memo();
         if swaps { self.leave_stage(app, was_open); }
         // A new stage state gets its first poll on the next frame, as an app's does.
         if app.playground().is_some_and(|p| p.polls()) { self.schedule_wakes([std::time::Duration::ZERO]); }

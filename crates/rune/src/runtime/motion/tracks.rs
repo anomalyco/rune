@@ -12,44 +12,44 @@ pub(in crate::runtime) const SCROLL_DECAY: f32 = 2.002;
 pub(crate) struct MotionState {
     /// Elements flying from a matched one, with their scene target. They paint last.
     pub(in crate::runtime) flying: Vec<(NodeId, MRect)>,
-    pub(in crate::runtime) flights: Vec<TextFlight>,
-    pub(in crate::runtime) caught_up: f32,
-    pub(in crate::runtime) slack_dt: f32,
+    pub(super) flights: Vec<TextFlight>,
+    caught_up: f32,
+    slack_dt: f32,
     /// Why the last frame was animating, as [`AnimSource`] bits, for traces.
-    pub(crate) anim_sources: u16,
-    pub(in crate::runtime) loops_active: bool,
+    pub(in crate::runtime) anim_sources: u16,
+    loops_active: bool,
     /// Some node ran on a scaled clock (`El::time_scale`) at the last commit.
-    pub(in crate::runtime) time_scaled: bool,
+    time_scaled: bool,
     /// Motion has a cause (`Tx::unprompted`): a commit no input in this window caused mounts and
     /// unmounts at once. On for every window an app opens (`tooling::runtime_for`); a bare
     /// `Runtime` keeps every commit's motion.
-    pub(crate) motion_needs_cause: bool,
-    pub(in crate::runtime) loops: HashMap<NodeId, rune_motion::LoopTrack>,
+    pub(in crate::runtime) motion_needs_cause: bool,
+    pub(super) loops: HashMap<NodeId, rune_motion::LoopTrack>,
     /// Shared host deadline: unscaled wake time and corresponding animation time.
-    pub(in crate::runtime) loop_wake: Option<(f64, f64)>,
+    loop_wake: Option<(f64, f64)>,
     /// `Tx::launch` flights, waiting for their commit or in the air.
-    pub(in crate::runtime) launches: flights::Launches,
+    pub(super) launches: flights::Launches,
     pub(in crate::runtime) grows: HashMap<NodeId, GrowTrack>,
     pub(in crate::runtime) stacks: HashMap<NodeId, Stack>,
     /// The header each lifted fold shuts under, by the fold's id, which draws where it's laid out.
-    pub(in crate::runtime) fold_headers: HashMap<NodeId, String>,
+    pub(super) fold_headers: HashMap<NodeId, String>,
     /// What this frame's commits held at their landing width (`El::hold_landing_width`).
-    pub(in crate::runtime) landing_holds: landing_hold::LandingHolds,
-    pub(in crate::runtime) reveals: HashMap<NodeId, RevealPhase>,
+    pub(super) landing_holds: landing_hold::LandingHolds,
+    pub(super) reveals: HashMap<NodeId, RevealPhase>,
     /// The reveal states `reveals` keeps for texts that have left the tree, newest first, at
     /// most `prune::REVEALS_KEPT` of them (see `prune_exited`).
-    pub(in crate::runtime) reveals_kept: Vec<NodeId>,
+    reveals_kept: Vec<NodeId>,
     /// The newest streamed word of any text, which the next text's words queue behind.
-    pub(in crate::runtime) reveal_chain: RevealChain,
+    reveal_chain: RevealChain,
     /// The last commit's `El::matched` ids, one present element each (the last in tree order).
-    pub(in crate::runtime) matched: Vec<(Rc<str>, NodeId)>,
-    pub(in crate::runtime) loop_clock: loop_clock::LoopClock,
+    pub(super) matched: Vec<(Rc<str>, NodeId)>,
+    pub(super) loop_clock: loop_clock::LoopClock,
     /// `motion_elements`' per-node scratch, kept so a frame doesn't allocate.
     pub(in crate::runtime) motion_scratch: std::cell::RefCell<Vec<(u32, u16, bool)>>,
     /// The recorder `Tx::record_rewind` attached (`runtime/motion/rewind.rs`).
-    pub(in crate::runtime) rewind: Option<crate::rewind::Rewind>,
+    pub(super) rewind: Option<crate::rewind::Rewind>,
     #[cfg(debug_assertions)]
-    pub(in crate::runtime) matched_warned: HashSet<Rc<str>>,
+    pub(super) matched_warned: HashSet<Rc<str>>,
 }
 
 impl MotionState {
@@ -83,6 +83,414 @@ impl MotionState {
             #[cfg(debug_assertions)]
             matched_warned: HashSet::default(),
         }
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn flights(&self) -> &[TextFlight] {
+        &self.flights
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn flights_mut(&mut self) -> &mut Vec<TextFlight> {
+        &mut self.flights
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn clear_flights(&mut self) {
+        self.flights.clear();
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn add_caught_up(&mut self, step: f32) {
+        self.caught_up += step;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn begin_slack_step(&mut self, step: f32) {
+        self.slack_dt = std::mem::take(&mut self.caught_up) + step;
+    }
+
+    #[inline]
+    pub(crate) fn anim_sources(&self) -> u16 {
+        self.anim_sources
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn set_anim_sources(&mut self, sources: u16) {
+        self.anim_sources = sources;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn add_anim_sources(&mut self, bits: u16) {
+        self.anim_sources |= bits;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn loops_active(&self) -> bool {
+        self.loops_active
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn reset_loops_active(&mut self) {
+        self.loops_active = false;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn mark_loops_active(&mut self, active: bool) {
+        self.loops_active |= active;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn time_scaled(&self) -> bool {
+        self.time_scaled
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn set_time_scaled(&mut self, scaled: bool) {
+        self.time_scaled = scaled;
+    }
+
+    #[inline]
+    pub(crate) fn enable_motion_needs_cause(&mut self) {
+        self.motion_needs_cause = true;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn motion_needs_cause(&self) -> bool {
+        self.motion_needs_cause
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn loop_track(&self, id: NodeId) -> Option<&rune_motion::LoopTrack> {
+        self.loops.get(&id)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn has_loop(&self, id: NodeId) -> bool {
+        self.loops.contains_key(&id)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn loops_is_empty(&self) -> bool {
+        self.loops.is_empty()
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn loops_len(&self) -> usize {
+        self.loops.len()
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn loop_ids(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.loops.keys().copied()
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn loop_active(&self, id: NodeId, node_time: f64) -> bool {
+        self.loops.get(&id).is_some_and(|l| l.active(node_time))
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn loop_offset(&self, id: NodeId, time: f64, reduced_motion: bool) -> Option<[f32; 2]> {
+        self.loops.get(&id)?.offset(time, reduced_motion)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn loop_wake(&self) -> Option<(f64, f64)> {
+        self.loop_wake
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn clear_loop_wake(&mut self) {
+        self.loop_wake = None;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn set_loop_wake(&mut self, wake: (f64, f64)) {
+        self.loop_wake = Some(wake);
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn arm_loop_wake(&mut self, wake: f64, at: f64) {
+        if self.loop_wake.is_none_or(|w| wake < w.0) {
+            self.loop_wake = Some((wake, at));
+        }
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn launches(&self) -> &flights::Launches {
+        &self.launches
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn launches_mut(&mut self) -> &mut flights::Launches {
+        &mut self.launches
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn insert_fold_header(&mut self, id: NodeId, header: String) {
+        self.fold_headers.insert(id, header);
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn clear_landing_holds(&mut self) {
+        self.landing_holds.clear();
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn holds_landing(&self, id: NodeId) -> bool {
+        self.landing_holds.holds(id)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn has_reveal(&self, id: NodeId) -> bool {
+        !self.reveals.is_empty() && self.reveals.contains_key(&id)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn reveal_fading(&self, id: NodeId) -> bool {
+        self.reveals.get(&id).is_some_and(RevealPhase::fading)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn reveal_caught_up(&self, id: NodeId, len: usize) -> bool {
+        self.reveals.get(&id).is_some_and(|r| r.caught_up(len))
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn reveal_fade(&self, id: NodeId) -> Option<reveal_phase::Fade<'_>> {
+        self.reveals.get(&id).and_then(RevealPhase::fade)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn remove_reveal(&mut self, id: NodeId) {
+        self.reveals.remove(&id);
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn has_matched(&self) -> bool {
+        !self.matched.is_empty()
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn set_rewind(&mut self, rewind: Option<crate::rewind::Rewind>) {
+        self.rewind = rewind;
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(in crate::runtime) fn reveals_map(&self) -> &HashMap<NodeId, RevealPhase> {
+        &self.reveals
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(in crate::runtime) fn clear_reveals_for_test(&mut self) {
+        self.reveals.clear();
+        self.reveal_chain = RevealChain::default();
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(in crate::runtime) fn reveals_kept_len(&self) -> usize {
+        self.reveals_kept.len()
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(in crate::runtime) fn reveal_chain_until(&self) -> f64 {
+        self.reveal_chain.until()
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(in crate::runtime) fn matched_ids(&self) -> Vec<NodeId> {
+        self.matched.iter().map(|m| m.1).collect()
+    }
+
+    /// Commits streaming word reveal state for node `id` during `apply`.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::runtime) fn commit_reveal(
+        &mut self,
+        id: NodeId,
+        content: &str,
+        fade: f32,
+        now: f64,
+        time_scaled: bool,
+        was_present: bool,
+        instant: bool,
+        unprompted: bool,
+        virtual_mount: bool,
+        reduced_motion: bool,
+    ) {
+        use std::collections::hash_map::Entry;
+        // A text that has never faded here starts level with its content, or at none when
+        // it is entering. A state that outlived its node (an instant parent unmount keeps
+        // the reveal, and its path, for the child's return) keeps its words.
+        let mounted_late = !was_present && !instant && !unprompted && !virtual_mount;
+        let (st, vacant) = match self.reveals.entry(id) {
+            Entry::Occupied(st) => (st.into_mut(), false),
+            Entry::Vacant(st) => {
+                let shown = if mounted_late { 0 } else { content.len() };
+                (st.insert(RevealPhase::Idle { shown }), true)
+            }
+        };
+        let arrival = if instant || (!was_present && virtual_mount) || content.len() < st.shown() || !content.is_char_boundary(st.shown()) {
+            Arrival::Replaced
+        } else if !vacant {
+            Arrival::Kept
+        } else if mounted_late {
+            Arrival::Entering
+        } else {
+            Arrival::Landed
+        };
+        let chain = if time_scaled { None } else { Some(&self.reveal_chain) };
+        let effects = st.step(RevealEvent::Commit {
+            content,
+            fade,
+            arrival,
+            chain,
+            now,
+            reduced_motion,
+        });
+        for effect in effects {
+            match effect {
+                RevealEffect::Started(at) => self.reveal_chain.started(at),
+            }
+        }
+    }
+
+    /// Reconciles loop tracks after a commit, catching running loops up on the app clock first.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::runtime) fn sync_loops(
+        &mut self,
+        nodes: &[Node],
+        scene: &Scene,
+        t: f64,
+        clock: f64,
+        time_scale: f32,
+        time_scaled: bool,
+        any_loop: bool,
+        land_loops: bool,
+    ) {
+        self.catch_loops_up(scene, t, clock, time_scale);
+        if any_loop || !self.loops.is_empty() {
+            for n in nodes {
+                let t = if time_scaled { scene.store().node_time(n.id) } else { t };
+                if let Some(&spec) = n.looping.as_deref() {
+                    let start = self.loop_start(scene, n.id, t);
+                    let track = self.loops.entry(n.id).and_modify(|l| { l.retime(spec, t); l.enabled(true, t); })
+                        .or_insert_with(|| rune_motion::LoopTrack::new(spec, start));
+                    if land_loops { track.finish(); }
+                } else if let Some(l) = self.loops.get_mut(&n.id) {
+                    l.enabled(false, t);
+                }
+            }
+        }
+    }
+
+    /// Writes each active slide loop's current offset into `scene` before stepping tracks.
+    pub(in crate::runtime) fn step_loops_into_scene(
+        &self,
+        nodes: &[Node],
+        node_index: &HashMap<NodeId, usize>,
+        scene: &mut Scene,
+        reduced_motion: bool,
+    ) {
+        for (id, track) in &self.loops {
+            if let Some([x, y]) = track.offset(scene.store().node_time(*id), reduced_motion)
+                && let Some(n) = node_index.get(id).map(|&i| &nodes[i])
+            {
+                let offset = rune_motion::Vec2::new(x * n.local.w, y * n.local.h);
+                if scene.get(*id, prop::OFFSET) != Some(offset) {
+                    scene.set(*id, prop::OFFSET, offset);
+                }
+            }
+        }
+    }
+
+    /// Drops landed matched/launch flights from `flying` and `launches`; returns whether any left.
+    pub(in crate::runtime) fn prune_landed_flights(&mut self, scene: &Scene) -> bool {
+        if self.flying.is_empty() {
+            return false;
+        }
+        let before = self.flying.len();
+        // Screen travel ends once it lands and no ancestor still moves. An exiting flight
+        // stays lifted until it's gone.
+        self.flying.retain(|(id, _)| scene.store().has(*id, prop::TRAVEL)
+            || matches!(scene.phase(*id), Some(PresencePhase::Exiting { .. })));
+        if self.flying.len() != before {
+            self.launches.keep(&self.flying);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Keeps at most the newest `limit` reveal states for texts that have left `node_index`,
+    /// dropping the oldest first.
+    pub(in crate::runtime) fn cap_reveals(&mut self, node_index: &HashMap<NodeId, usize>, limit: usize) {
+        if self.reveals.is_empty() {
+            self.reveals_kept.clear();
+            return;
+        }
+        // A text's reveal state and the id its path maps to outlive the node, so a keyed child
+        // that comes back under its old path keeps its words (r349). Nodes dropped during an
+        // instant parent unmount leave their reveal behind, so bound those orphans here.
+        let mut kept = std::mem::take(&mut self.reveals_kept);
+        kept.retain(|id| self.reveals.contains_key(id) && !node_index.contains_key(id));
+        let mut gone: Vec<NodeId> = self.reveals.keys().copied()
+            .filter(|id| !node_index.contains_key(id) && !kept.contains(id))
+            .collect();
+        if !gone.is_empty() {
+            gone.sort_unstable_by(|a, b| b.cmp(a));
+            gone.append(&mut kept);
+            kept = gone;
+        }
+        if kept.len() > limit {
+            for id in kept.split_off(limit) { self.reveals.remove(&id); }
+        }
+        self.reveals_kept = kept;
+    }
+
+    /// Prunes loop, reveal, flying and launch entries for detached nodes.
+    pub(in crate::runtime) fn prune_detached(
+        &mut self,
+        scene: &Scene,
+        node_index: &HashMap<NodeId, usize>,
+        reveals_limit: usize,
+    ) {
+        if !self.loops.is_empty() {
+            self.loops.retain(|id, _| scene.contains(*id));
+        }
+        self.cap_reveals(node_index, reveals_limit);
+        // A flight that left the tree stays lifted and covered while it exits, so it doesn't pop.
+        self.flying.retain(|(id, _)| node_index.contains_key(id));
+        self.launches.keep(&self.flying);
+    }
+
+    /// Advances all reveal phases against `scene`'s node clocks; returns whether any are still fading.
+    pub(in crate::runtime) fn reveals_active(&mut self, scene: &Scene) -> bool {
+        let store = scene.store();
+        let mut any = false;
+        for (id, st) in self.reveals.iter_mut() {
+            let now = store.node_time(*id);
+            st.step(RevealEvent::Tick { now });
+            any |= st.fading() && store.node_time_scale(*id) > 0.0;
+        }
+        any
+    }
+
+    /// Presented content extent of node `c` if it is a growth stack (points).
+    #[inline]
+    pub(in crate::runtime) fn stack_extent(&self, nodes: &[Node], c: usize) -> Option<f64> {
+        let n = &nodes[c];
+        n.growth.as_ref()?;
+        let stack = self.stacks.get(&n.id)?;
+        let mut count = 0usize;
+        let rows: f64 = stack.order.iter().filter_map(|id| self.grows.get(id)).map(|g| { count += 1; f64::from(g.h) }).sum();
+        let gaps = f64::from(stack.gap) * count.saturating_sub(1) as f64;
+        Some(f64::from(stack.pad_top) + rows + gaps + f64::from(stack.pad_bottom))
     }
 }
 
@@ -146,7 +554,7 @@ impl RuntimeCore {
             let n_rows = stack.order.len();
             let mut st_growing = !stack.pending_heights.is_empty();
             let mut st_moving = st_growing;
-            let (in_runs, run_grown) = Self::step_growth_runs(stack, &mut self.motion.grows, steps, spec);
+            let (in_runs, run_grown) = MotionState::step_growth_runs(stack, &mut self.motion.grows, steps, spec);
             stack.grown += run_grown;
             for (k, id) in stack.order.iter().enumerate() {
                 let Some(g) = self.motion.grows.get_mut(id) else { continue };
@@ -177,7 +585,7 @@ impl RuntimeCore {
                 // A row nobody saw last frame draws no feather: it has none to ease, and grows one
                 // again as it comes into view.
                 if g.mask > 0.0 && self.tree.built
-                    && self.tree.node_index.get(id).is_some_and(|&i| !self.paint.seen.get(i).copied().unwrap_or(true))
+                    && self.tree.node_index.get(id).is_some_and(|&i| !self.paint.was_seen(i, true))
                 {
                     g.mask = 0.0;
                 }
@@ -214,14 +622,9 @@ impl RuntimeCore {
     }
 
     /// Presented content extent of node `c` if it is a growth stack (points).
+    #[inline]
     pub(in crate::runtime) fn stack_extent(&self, c: usize) -> Option<f64> {
-        let n = &self.tree.nodes[c];
-        n.growth.as_ref()?;
-        let stack = self.motion.stacks.get(&n.id)?;
-        let mut count = 0usize;
-        let rows: f64 = stack.order.iter().filter_map(|id| self.motion.grows.get(id)).map(|g| { count += 1; f64::from(g.h) }).sum();
-        let gaps = f64::from(stack.gap) * count.saturating_sub(1) as f64;
-        Some(f64::from(stack.pad_top) + rows + gaps + f64::from(stack.pad_bottom))
+        self.motion.stack_extent(&self.tree.nodes, c)
     }
 
     /// How far scroll viewport `i`'s content reaches past its bottom, negative while it fits.
@@ -314,16 +717,5 @@ impl RuntimeCore {
             if sp.stick_bottom && axes.y() && slack_dt > 0.0 { moving |= self.step_slack(i, slack_dt); }
         }
         moving
-    }
-
-    pub(in crate::runtime) fn reveals_active(&mut self) -> bool {
-        let store = self.scene.store();
-        let mut any = false;
-        for (id, st) in self.motion.reveals.iter_mut() {
-            let now = store.node_time(*id);
-            st.step(RevealEvent::Tick { now });
-            any |= st.fading() && store.node_time_scale(*id) > 0.0;
-        }
-        any
     }
 }

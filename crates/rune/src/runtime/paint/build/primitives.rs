@@ -290,9 +290,7 @@ impl RuntimeCore {
                         Some(wait) if pulled.active && wait > crate::video::WAKE_MIN => {
                             let wake = self.clock + wait;
                             self.paint.keep.cycles.other_deadline();
-                            if self.motion.loop_wake.is_none_or(|w| wake < w.0) {
-                                self.motion.loop_wake = Some((wake, now + wait * self.time_scale as f64));
-                            }
+                            self.motion.arm_loop_wake(wake, now + wait * self.time_scale as f64);
                         }
                         _ => self.paint.videos_active |= pulled.active,
                     }

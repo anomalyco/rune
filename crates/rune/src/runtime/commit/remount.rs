@@ -34,35 +34,31 @@ struct ListPlan {
     built_rows: Vec<(usize, El)>,
 }
 
-impl RuntimeCore {
+impl CommitState {
     /// Whether a commit that resized nothing and changed nothing the view reads
     /// ([`Runtime::commit_kind`]) only shifts or fills `virtual_rows` windows, so `view` and
     /// already mounted subtrees need not rebuild.
-    pub(in crate::runtime) fn virtual_only(&self) -> bool {
-        #[cfg(feature = "hot")]
-        if self.frame.hot.is_some() {
+    pub(in crate::runtime) fn virtual_only(&self, tree: &types::TreeState, hot: bool, checking_live_only: bool) -> bool {
+        if hot || checking_live_only || self.virtuals.is_empty() || tree.nodes.is_empty() {
             return false;
         }
-        if self.checking_live_only() || self.commit.virtuals.is_empty() || self.tree.nodes.is_empty() {
-            return false;
-        }
-        if !self.tree.nodes.iter().all(|n| {
+        if !tree.nodes.iter().all(|n| {
             relayout::reusable(n) && n.text.as_ref().is_none_or(|t| !t.redacted && t.cold.live.is_none())
         }) {
             return false;
         }
-        for (path, v) in &self.commit.virtuals {
+        for (path, v) in &self.virtuals {
             if !v.indexed || !v.selection.pins.source().and_then(|s| s.rebuild()).is_some_and(|s| s.count == v.keys.len()) {
                 return false;
             }
-            let Some(&list_id) = self.tree.path_ids.get(path) else { return false };
-            let Some(&list_idx) = self.tree.node_index.get(&list_id) else { return false };
-            if !self.tree.nodes.get(list_idx).is_some_and(|n| n.id == list_id && n.path == *path && n.growth.is_some()) {
+            let Some(&list_id) = tree.path_ids.get(path) else { return false };
+            let Some(&list_idx) = tree.node_index.get(&list_id) else { return false };
+            if !tree.nodes.get(list_idx).is_some_and(|n| n.id == list_id && n.path == *path && n.growth.is_some()) {
                 return false;
             }
-            let Some(&scroll_id) = self.tree.path_ids.get(&v.scroll_path) else { return false };
-            let Some(&scroll_idx) = self.tree.node_index.get(&scroll_id) else { return false };
-            if !self.tree.nodes.get(scroll_idx).is_some_and(|n| {
+            let Some(&scroll_id) = tree.path_ids.get(&v.scroll_path) else { return false };
+            let Some(&scroll_idx) = tree.node_index.get(&scroll_id) else { return false };
+            if !tree.nodes.get(scroll_idx).is_some_and(|n| {
                 n.id == scroll_id
                     && n.path == v.scroll_path
                     && n.scroll.is_some()
@@ -71,7 +67,7 @@ impl RuntimeCore {
             }) {
                 return false;
             }
-            if self.commit.virtuals.keys().any(|other| {
+            if self.virtuals.keys().any(|other| {
                 other != path && other.strip_prefix(path.as_str()).is_some_and(|r| r.starts_with('/'))
             }) {
                 return false;

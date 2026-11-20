@@ -299,7 +299,7 @@ impl Walk {
         self.rt.edit.selectable = Default::default();
         self.rt.sync_selection_pins();
         self.rt.frame.queue.retain(|_| false);
-        self.rt.frame.wake_deadlines.clear();
+        self.rt.frame.clear_wake_deadlines();
         if self.offset() != 0.0 {
             self.rt.wheel(150.0, 60.0, 10_000.0);
             self.settle();

@@ -171,7 +171,7 @@ impl FrameHost for OverlayFrame<'_> {
         self.now = Some(now);
         #[cfg(target_os = "macos")]
         if let Some(live) = self.core.surface.live() {
-            self.app.rt_mut().paint.native_materials = live.materials.native();
+            self.app.rt_mut().paint.set_native_materials(live.materials.native());
         }
         let (animating, dt) = self.app.clock_advance(&mut self.core.clock, now, false);
         StepInfo { runtime_animating: animating, animating, dt, update_ms: 0.0, presents_at: None }
@@ -239,7 +239,7 @@ impl FrameHost for OverlayFrame<'_> {
         let frame_time = self.target.unwrap_or(now);
         #[cfg(target_os = "macos")]
         if let Some(live) = self.core.surface.live() {
-            self.app.rt_mut().paint.native_materials = live.materials.native();
+            self.app.rt_mut().paint.set_native_materials(live.materials.native());
         }
         let (animating, dt) = if !self.prewarm && frame::rests(self.app, self.core.runtime_idle, self.core.dirty) {
             frame::rest(self.app, &mut self.core.clock, frame_time)
@@ -259,7 +259,7 @@ impl FrameHost for OverlayFrame<'_> {
             self.materials_checked = true;
             if let Some(live) = self.core.surface.live_mut() {
                 let Backing::Window(window) = &live.backing;
-                if live.materials.update(self.app.rt().transparent, !self.app.rt().paint.materials.is_empty(), window, &live.surface) {
+                if live.materials.update(self.app.rt().transparent, !self.app.rt().paint.materials().is_empty(), window, &live.surface) {
                     return PostStepCheck::Reacquire(ReacquireReason::NativeMaterials);
                 }
             }
@@ -276,7 +276,7 @@ impl FrameHost for OverlayFrame<'_> {
             ReacquireReason::NativeMaterials => {
                 // This drawable presents without the views: build again natively into a new one,
                 // so prewarm and reveal show the material from this frame.
-                self.app.rt_mut().paint.native_materials = true;
+                self.app.rt_mut().paint.set_native_materials(true);
                 let more = self.app.frame(0.0);
                 info.runtime_animating |= more;
                 info.animating |= more;

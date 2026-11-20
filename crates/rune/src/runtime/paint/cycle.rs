@@ -102,11 +102,11 @@ impl RuntimeCore {
     /// is due: another deadline, the app's timer, input, a commit, a changed scene.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn paint_cycle_tick(&mut self) -> bool {
-        let Some((due, _)) = self.motion.loop_wake else { return false };
+        let Some((due, _)) = self.motion.loop_wake() else { return false };
         let wall = self.now_clock();
         let keep = &self.paint.keep.cycles;
         if wall < due || keep.mixed || keep.generation != self.commit.commits || keep.slots.is_empty()
-            || keep.slots.len() != self.motion.loops.len() || self.reduced_motion || self.time_scale <= 0.0
+            || keep.slots.len() != self.motion.loops_len() || self.reduced_motion || self.time_scale <= 0.0
             || !self.live_visible() || !self.rests_except_loop() || self.tracing()
             || self.poll_wake_deadline().is_some_and(|d| d <= wall)
         { return false; }
@@ -131,7 +131,7 @@ impl RuntimeCore {
         let wall = if virtual_check { self.clock + dt } else { self.now_clock() };
         let keep = &self.paint.keep.cycles;
         let loops = keep.slots.len() + 2 * keep.slides.len();
-        let why = if self.motion.loops.is_empty() { "no loop" } else if loops != self.motion.loops.len() { self.loop_refusal() }
+        let why = if self.motion.loops_is_empty() { "no loop" } else if loops != self.motion.loops_len() { self.loop_refusal() }
             else if keep.mixed || keep.generation != self.commit.commits { "other motion or a commit" }
             else if (self.wall_start.is_none() && !virtual_check) || self.reduced_motion || self.time_scale <= 0.0 || !self.live_visible() || self.tracing() { "not live" }
             else if !(0.0..=1.0 / 30.0).contains(&dt) { "late" }
@@ -141,7 +141,7 @@ impl RuntimeCore {
             else { "" };
         if !why.is_empty() { return Err(why); }
         // Running, only loops move; resting, a stepped cycle's wake is due.
-        let due = self.motion.loop_wake.is_some_and(|(due, _)| wall >= due);
+        let due = self.motion.loop_wake().is_some_and(|(due, _)| wall >= due);
         if self.animating && self.motion.anim_sources != AnimSource::LOOP {
             let other = [(AnimSource::TRACKS, "motion: a track"), (AnimSource::GROWTH, "motion: growth"), (AnimSource::SCROLL, "motion: a scroll"),
                 (AnimSource::REVEAL, "motion: a reveal"), (AnimSource::LIVE, "motion: a live value"), (AnimSource::TEXT_FILL, "motion: text filling"),
@@ -152,7 +152,7 @@ impl RuntimeCore {
         if !self.animating && !due { return Err("no loop due"); }
         if !self.slots_hold() || (due && self.ambient.is_none()) { return Err("a slot moved"); }
         let t = self.t + dt * f64::from(self.time_scale);
-        let poses = self.slide_poses(t)?;
+        let poses = self.paint.slide_poses(&self.tree.nodes, &self.motion, &self.scene, &self.instances, self.t, self.reduced_motion, t)?;
         if checking() {
             // What the step would draw, for the ordinary frame that runs instead (`loop_checked`).
             let mut predicted = self.instances.clone();
@@ -174,7 +174,7 @@ impl RuntimeCore {
         let _ = self.text.mask_cache_frame(false);
         let mut patched = Vec::new();
         self.sample_cycles(&mut patched);
-        self.apply_slides(&poses, &mut patched);
+        self.paint.apply_slides(&poses, &mut self.instances, &mut patched);
         patched.sort_unstable();
         Ok(patched)
     }
@@ -187,8 +187,8 @@ impl RuntimeCore {
     fn loop_refusal(&self) -> &'static str {
         let c = &self.paint.keep.cycles;
         if let Some(why) = c.missed { return why; }
-        for id in self.motion.loops.keys() {
-            let Some(&i) = self.tree.node_index.get(id) else { continue };
+        for id in self.motion.loop_ids() {
+            let Some(&i) = self.tree.node_index.get(&id) else { continue };
             if c.slots.iter().any(|s| s.node == i) || c.slides.iter().any(|s| s.window == i || s.counter == i) { continue; }
             let n = &self.tree.nodes[i];
             let Some(rune_motion::LoopKind::OpacityCycle(_)) = n.looping.as_ref().map(|l| l.kind) else { return "a loop that isn't a cycle or a window" };
@@ -250,8 +250,8 @@ impl RuntimeCore {
             // differ from what it holds.
             patched.push(s.at as u32);
         }
-        if let (Some((due, phase)), Some(dt)) = (self.motion.loop_wake, self.ambient.map(f64::from)) && self.clock >= due {
-            self.motion.loop_wake = Some((self.clock + dt, phase + (self.clock + dt - due) * f64::from(self.time_scale)));
+        if let (Some((due, phase)), Some(dt)) = (self.motion.loop_wake(), self.ambient.map(f64::from)) && self.clock >= due {
+            self.motion.set_loop_wake((self.clock + dt, phase + (self.clock + dt - due) * f64::from(self.time_scale)));
         }
     }
 }

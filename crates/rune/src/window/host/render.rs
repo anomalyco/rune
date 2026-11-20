@@ -153,7 +153,7 @@ impl FrameProfile {
                     shaped: rt.stats.shaped,
                     instances: rt.instances.len(),
                     animating,
-                    why: std::mem::take(&mut rt.commit.commit_why),
+                    why: rt.commit.take_commit_why(),
                     next: 0,
                     poll_due: None,
                     loop_due: None,
@@ -363,7 +363,7 @@ pub(super) fn submit_and_present_window(
     #[cfg(target_os = "macos")]
     {
         let rt = host.app.rt();
-        l.native.materials.present(&rt.paint.materials, rt.env.scale, || gpu.queue.present(prepared.frame));
+        l.native.materials.present(rt.paint.materials(), rt.env.scale, || gpu.queue.present(prepared.frame));
     }
     #[cfg(target_os = "windows")]
     if let (Some(rects), Some(surface)) = (&prepared.present_rect, l.surface.as_ref())

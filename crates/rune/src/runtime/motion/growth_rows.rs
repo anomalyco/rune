@@ -17,7 +17,7 @@ impl RuntimeCore {
         self.paint.row_h.resize(n_nodes, -1.0);
         self.paint.row_mask.clear();
         self.paint.row_mask.resize(n_nodes, -1.0);
-        self.paint.row_lifts.clear();
+        self.paint.clear_row_lifts();
         let mut emptied = Vec::new();
         for (cid, stack) in &self.motion.stacks {
             let Some(&ci) = self.tree.node_index.get(cid) else { continue };
@@ -49,7 +49,7 @@ impl RuntimeCore {
                     }
                     let lift = if landed && !folded { 0.0 } else { g.lift() };
                     if lift > 0.0 {
-                        self.paint.row_lifts.push((ri, lift));
+                        self.paint.push_row_lift(ri, lift);
                     }
                 }
                 y = cur + g.h;
@@ -65,7 +65,8 @@ impl RuntimeCore {
         }
         // A fold's lifted contents (`GrowTrack::hide_above`) draw that far up inside it, all but
         // the header it shuts under.
-        for &(ri, lift) in &self.paint.row_lifts {
+        for idx in 0..self.paint.row_lifts().len() {
+            let (ri, lift) = self.paint.row_lifts()[idx];
             let mut k = ri + 1;
             while k < n_nodes && self.tree.nodes[k].parent.is_some_and(|p| p >= ri) {
                 if self.tree.nodes[k].parent == Some(ri) { self.paint.row_dy[k] -= lift; }
@@ -76,7 +77,7 @@ impl RuntimeCore {
         }
         self.place_joined_rows();
         if !self.motion.fold_headers.is_empty() {
-            let lifted: Vec<NodeId> = self.paint.row_lifts.iter().map(|&(ri, _)| self.tree.nodes[ri].id).collect();
+            let lifted: Vec<NodeId> = self.paint.row_lifts().iter().map(|&(ri, _)| self.tree.nodes[ri].id).collect();
             self.motion.fold_headers.retain(|id, _| lifted.contains(id));
         }
     }

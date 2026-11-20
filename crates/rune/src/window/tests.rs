@@ -226,7 +226,7 @@ impl CompHost {
     fn new(comp: Option<bool>, poll: fn(&mut u32, f64, &mut Tx) -> bool) -> Self {
         fn view(_: &u32, _: &mut crate::Cx<u32>) -> crate::El { crate::el().key("box").size(20.0, 20.0).fill(crate::Color::WHITE) }
         let mut rt = Runtime::new(0u32, view, (20.0, 20.0), crate::Env::default());
-        rt.frame.test_clock = Some(crate::Clock::manual(1.0 / crate::frame::clock::RESUME_STEP));
+        rt.frame.set_test_clock(crate::Clock::manual(1.0 / crate::frame::clock::RESUME_STEP));
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: wgpu::TextureFormat::Bgra8UnormSrgb,
@@ -251,7 +251,7 @@ impl CompHost {
     /// nothing, unless a compositor draws it. Returns whether it presented.
     fn frame(&mut self, quiet: bool) -> bool {
         let started = crate::time::now();
-        self.rt.frame.test_clock.as_mut().unwrap().step();
+        self.rt.frame.test_clock_mut().unwrap().step();
         let animating = self.rt.frame(crate::frame::clock::RESUME_STEP);
         let update_ms = started.elapsed().as_secs_f64() * 1000.0;
         if quiet && self.comp.is_none() && self.presented.as_ref().is_some_and(|p| p.unchanged(&self.rt, &self.config, animating, None)) {
@@ -271,7 +271,7 @@ impl CompHost {
     fn timer_wake(&mut self) -> bool {
         let due = self.rt.wake_deadline().expect("a timer is armed");
         // Advance host time, not rt.clock: rests() still examines the last poll's time.
-        let clock = self.rt.frame.test_clock.as_mut().unwrap();
+        let clock = self.rt.frame.test_clock_mut().unwrap();
         clock.seek(clock.now().max(due));
         let rests = self.idle && !composing(self.comp.as_deref()) && self.presented.is_some();
         let frame = match rests.then(|| self.rt.resting_wake()).flatten() {

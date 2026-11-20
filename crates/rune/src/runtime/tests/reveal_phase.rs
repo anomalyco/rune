@@ -248,7 +248,7 @@ impl Walk {
         rt.frame(0.0);
         assert!(!rt.reduced_motion && !rt.host.system_reduced_motion, "the walk takes a window that doesn't reduce motion");
         assert!(!rt.motion.motion_needs_cause, "the walk takes a window where every commit keeps its motion");
-        assert!(!rt.motion.time_scaled && rt.time_scale == 1.0, "the walk takes a text on the window's clock");
+        assert!(!rt.motion.time_scaled() && rt.time_scale == 1.0, "the walk takes a text on the window's clock");
         let mut walk = Self { rt, doc: Doc::default(), dev: Dev::default(), present: true, id: None };
         walk.reset();
         walk
@@ -258,15 +258,14 @@ impl Walk {
     /// starts from the same state on both sides.
     fn reset(&mut self) {
         self.doc = Doc { mounts: self.doc.mounts + 1, parent: true, ..Doc::default() };
-        self.rt.motion.reveals.clear();
-        self.rt.motion.reveal_chain = RevealChain::default();
+        self.rt.motion.clear_reveals_for_test();
         self.dev = Dev::default();
         self.present = false;
         self.commit(true).expect("a reset starts level");
         // One long frame: the faded-out texts of the last sequence leave the scene, so their
         // nodes and reveal state don't pile up across sequences. Nothing fades on the new text.
         self.rt.frame(1.0);
-        assert_eq!(self.rt.motion.reveals.len(), 1, "only the live text keeps reveal state");
+        assert_eq!(self.rt.motion.reveals_map().len(), 1, "only the live text keeps reveal state");
     }
 
     /// An edit and its frame: the commit at the frame's clock, then the frame's reveal step at
@@ -359,7 +358,7 @@ impl Walk {
         if node.is_none() && self.doc.parent {
             return Err(format!("no text at {path}"));
         }
-        let ours = self.rt.motion.reveals.get(&id);
+        let ours = self.rt.motion.reveals_map().get(&id);
         let theirs = self.dev.state.as_ref();
         match (ours, theirs) {
             (None, None) => {}
@@ -377,8 +376,8 @@ impl Walk {
             }
             (phase, st) => return Err(format!("reveal {phase:?}, dev {st:?}")),
         }
-        if self.rt.motion.reveal_chain.until() != self.dev.chain {
-            return Err(format!("chain {}, dev {}", self.rt.motion.reveal_chain.until(), self.dev.chain));
+        if self.rt.motion.reveal_chain_until() != self.dev.chain {
+            return Err(format!("chain {}, dev {}", self.rt.motion.reveal_chain_until(), self.dev.chain));
         }
         // Out of the tree, nothing draws: its state is all there is to compare.
         let Some(_) = node else { return Ok(()) };
@@ -464,13 +463,13 @@ fn a_chunk_fades_its_words_and_the_chain_follows() {
     let mut walk = Walk::new();
     walk.play(Letter::Chunk).unwrap();
     let id = walk.rt.tree.nodes.iter().find(|n| n.path == walk.doc.path()).unwrap().id;
-    let RevealPhase::Fading { words, .. } = walk.rt.motion.reveals.get(&id).unwrap() else {
+    let RevealPhase::Fading { words, .. } = walk.rt.motion.reveals_map().get(&id).unwrap() else {
         panic!("a chunk's words fade");
     };
     assert_eq!(words.len(), CHUNK, "every word of the chunk fades");
-    assert!(walk.rt.motion.reveal_chain.until() >= words.last().unwrap().1, "the chain holds the newest word");
+    assert!(walk.rt.motion.reveal_chain_until() >= words.last().unwrap().1, "the chain holds the newest word");
     let now = walk.rt.scene.store().node_time(id);
-    assert!(walk.rt.motion.reveal_chain.until() - now > f64::from(FADE), "a chunk's run outlasts a fade, so a later one meets a chain longer than it");
+    assert!(walk.rt.motion.reveal_chain_until() - now > f64::from(FADE), "a chunk's run outlasts a fade, so a later one meets a chain longer than it");
 }
 
 /// A remounted text fades in from none: it is new, and its entrance is still playing.
@@ -480,7 +479,7 @@ fn a_remount_starts_its_words_from_none() {
     walk.play(Letter::Chunk).unwrap();
     walk.play(Letter::Remount).unwrap();
     let id = walk.rt.tree.nodes.iter().find(|n| n.path == walk.doc.path()).unwrap().id;
-    let phase = walk.rt.motion.reveals.get(&id).unwrap();
+    let phase = walk.rt.motion.reveals_map().get(&id).unwrap();
     let RevealPhase::Fading { words, .. } = phase else { panic!("a remount fades its words in") };
     assert_eq!(words.first().unwrap().0, 0, "it starts at its first word");
 }
@@ -504,18 +503,18 @@ fn a_returning_child_keeps_its_words_after_an_instant_parent_unmount() {
     rt.frame(0.0);
     rt.frame(0.1);
     let id = rt.tree.nodes.iter().find(|n| n.path == "root/p/t").unwrap().id;
-    assert!(rt.motion.reveals.get(&id).is_some_and(|p| p.caught_up(5)), "the first words have shown");
+    assert!(rt.motion.reveals_map().get(&id).is_some_and(|p| p.caught_up(5)), "the first words have shown");
     rt.update(|s, tx| {
         s.parent = false;
         tx.instant();
     });
     rt.frame(0.0);
-    assert!(rt.motion.reveals.contains_key(&id), "the unmounted child keeps its reveal state");
+    assert!(rt.motion.reveals_map().contains_key(&id), "the unmounted child keeps its reveal state");
     rt.update(|s, _| s.parent = true);
     rt.frame(0.0);
     let back = rt.tree.nodes.iter().find(|n| n.path == "root/p/t").unwrap().id;
     assert_eq!(back, id, "the same key returns under the same id");
-    let phase = rt.motion.reveals.get(&id).unwrap();
+    let phase = rt.motion.reveals_map().get(&id).unwrap();
     assert!(phase.caught_up(5), "it comes back showing its words, not replaying them: {phase:?}");
 }
 
@@ -535,10 +534,10 @@ fn an_instant_commit_clears_a_fade() {
     rt.update(|s, _| s.longer = true);
     rt.frame(0.0);
     let id = rt.tree.nodes.iter().find(|n| n.path == "root/t").unwrap().id;
-    assert!(rt.motion.reveals.get(&id).is_some_and(RevealPhase::fading), "the new words fade");
+    assert!(rt.motion.reveals_map().get(&id).is_some_and(RevealPhase::fading), "the new words fade");
     rt.update(|_, tx| tx.instant());
     rt.frame(0.0);
-    assert!(rt.motion.reveals.get(&id).is_some_and(|p| p.caught_up(5)), "the instant commit shows them at once");
+    assert!(rt.motion.reveals_map().get(&id).is_some_and(|p| p.caught_up(5)), "the instant commit shows them at once");
 }
 
 /// A commit no input caused lands a new text whole: `Tx::unprompted` takes dev's reset, not the
@@ -558,7 +557,7 @@ fn an_unprompted_commit_lands_a_new_text_whole() {
     rt.update(|s, _| s.shown = true);
     rt.frame(0.0);
     let id = rt.tree.nodes.iter().find(|n| n.path == "root/t").unwrap().id;
-    assert!(rt.motion.reveals.get(&id).is_some_and(|p| p.caught_up(7)), "no input caused it, so it shows whole");
+    assert!(rt.motion.reveals_map().get(&id).is_some_and(|p| p.caught_up(7)), "no input caused it, so it shows whole");
 }
 
 /// A byte that no longer starts a word shows whole: dev's boundary check clears the fade rather
@@ -577,11 +576,11 @@ fn a_cut_through_a_character_shows_whole() {
     rt.update(|s, _| s.content = "aaa bbbb".to_owned());
     rt.frame(0.0);
     let id = rt.tree.nodes.iter().find(|n| n.path == "root/t").unwrap().id;
-    assert!(rt.motion.reveals.get(&id).is_some_and(RevealPhase::fading), "the first chunk fades");
+    assert!(rt.motion.reveals_map().get(&id).is_some_and(RevealPhase::fading), "the first chunk fades");
     // Byte 8 is inside "é" (bytes 7 and 8) now, so the old end still fading can't be kept.
     rt.update(|s, _| s.content = "aaaaaaaé".to_owned());
     rt.frame(0.0);
-    assert!(rt.motion.reveals.get(&id).is_some_and(|p| p.caught_up("aaaaaaaé".len())), "a moved boundary shows whole");
+    assert!(rt.motion.reveals_map().get(&id).is_some_and(|p| p.caught_up("aaaaaaaé".len())), "a moved boundary shows whole");
 }
 
 /// A directed walk's window: one streaming text whose reveal, clock and window can change between
@@ -686,7 +685,7 @@ impl Driven {
     /// phase fades exactly while dev has words, and only a fade on a running clock asks for frames.
     fn check(&self) -> Result<(), String> {
         let Some(id) = self.id() else { return Err("no text".to_owned()) };
-        let ours = self.rt.motion.reveals.get(&id);
+        let ours = self.rt.motion.reveals_map().get(&id);
         let theirs = self.dev.state.as_ref();
         match (ours, theirs) {
             (None, None) => {}
@@ -706,8 +705,8 @@ impl Driven {
             }
             (phase, st) => return Err(format!("reveal {phase:?}, dev {st:?}")),
         }
-        if self.rt.motion.reveal_chain.until() != self.dev.chain {
-            return Err(format!("chain {}, dev {}", self.rt.motion.reveal_chain.until(), self.dev.chain));
+        if self.rt.motion.reveal_chain_until() != self.dev.chain {
+            return Err(format!("chain {}, dev {}", self.rt.motion.reveal_chain_until(), self.dev.chain));
         }
         let now = self.now();
         for byte in 0..=self.state.content.len() as u32 {
@@ -738,7 +737,7 @@ fn a_reveal_turned_off_mid_fade_keeps_what_arrives_for_later() {
     w.tick(1.0).unwrap();
     w.set(|s| s.content = "a b c d  ef".to_owned()).unwrap();
     w.set(|s| s.reveal = FADE).unwrap();
-    assert!(w.rt.motion.reveals.values().any(|p| p.words().iter().any(|w| w.0 >= 8)), "the bytes that arrived while off fade in: {:?}", w.rt.motion.reveals);
+    assert!(w.rt.motion.reveals_map().values().any(|p| p.words().iter().any(|w| w.0 >= 8)), "the bytes that arrived while off fade in: {:?}", w.rt.motion.reveals_map());
     w.set(|s| s.content = "a b c d  efg".to_owned()).unwrap();
     w.tick(0.3).unwrap();
 }
@@ -759,7 +758,7 @@ fn reduced_motion_fades_every_word_together() {
     let mut w = Driven::new(Stream::streamed("a b"));
     w.set(|s| s.reduced = true).unwrap();
     w.set(|s| s.content = "a b c d e f".to_owned()).unwrap();
-    let times: Vec<f64> = w.rt.motion.reveals.values().flat_map(|p| p.words().iter().map(|w| w.1)).collect();
+    let times: Vec<f64> = w.rt.motion.reveals_map().values().flat_map(|p| p.words().iter().map(|w| w.1)).collect();
     assert!(times.len() > 1, "the chunk's words fade: {times:?}");
     assert!(times.windows(2).all(|p| p[0] == p[1]), "no stagger, so they start together: {times:?}");
     w.tick(0.2).unwrap();
@@ -774,21 +773,21 @@ fn reduced_motion_fades_every_word_together() {
 fn a_paused_clock_freezes_the_fade_and_its_resume_shifts_the_words() {
     let mut w = Driven::new(Stream::streamed("a b"));
     w.set(|s| s.content = "a b c d".to_owned()).unwrap();
-    let before: Vec<f64> = w.rt.motion.reveals.values().flat_map(|p| p.words().iter().map(|w| w.1)).collect();
-    let chain = w.rt.motion.reveal_chain.until();
+    let before: Vec<f64> = w.rt.motion.reveals_map().values().flat_map(|p| p.words().iter().map(|w| w.1)).collect();
+    let chain = w.rt.motion.reveal_chain_until();
     w.set(|s| s.paused = true).unwrap();
     w.tick(0.2).unwrap();
-    assert_eq!(before, w.rt.motion.reveals.values().flat_map(|p| p.words().iter().map(|w| w.1)).collect::<Vec<_>>(), "a frozen clock doesn't fade");
+    assert_eq!(before, w.rt.motion.reveals_map().values().flat_map(|p| p.words().iter().map(|w| w.1)).collect::<Vec<_>>(), "a frozen clock doesn't fade");
     w.set(|s| s.content = "a b c d e".to_owned()).unwrap();
     let frozen = w.now();
     w.set(|s| s.content = "a b c d e f".to_owned()).unwrap();
-    let added: Vec<f64> = w.rt.motion.reveals.values().flat_map(|p| p.words().iter().filter(|w| w.0 >= 9).map(|w| w.1)).collect();
+    let added: Vec<f64> = w.rt.motion.reveals_map().values().flat_map(|p| p.words().iter().filter(|w| w.0 >= 9).map(|w| w.1)).collect();
     assert!(added.iter().all(|t| *t >= frozen), "a chunk on a scaled clock starts at its own time: {added:?} from {frozen}");
-    assert_eq!(chain, w.rt.motion.reveal_chain.until(), "a scaled clock never joins the chain");
+    assert_eq!(chain, w.rt.motion.reveal_chain_until(), "a scaled clock never joins the chain");
     w.set(|s| s.paused = false).unwrap();
     let resumed = w.now();
     assert!(resumed > frozen, "the clock jumped on resume: {resumed} from {frozen}");
-    let shifted: Vec<f64> = w.rt.motion.reveals.values().flat_map(|p| p.words().iter().map(|w| w.1)).collect();
+    let shifted: Vec<f64> = w.rt.motion.reveals_map().values().flat_map(|p| p.words().iter().map(|w| w.1)).collect();
     assert!(shifted.iter().zip(&before).all(|(a, b)| a - b >= resumed - frozen - 1e-9), "every word moved with the clock: {shifted:?} from {before:?}");
     w.tick(0.2).unwrap();
     w.set(|s| s.content = "a b c d e f g".to_owned()).unwrap();
@@ -827,8 +826,8 @@ fn removed_children_keep_at_most_the_newest_reveals() {
         });
         rt.frame(0.0);
     }
-    assert_eq!(rt.motion.reveals.len(), REVEALS_KEPT, "the newest keys' reveals stay and the oldest left");
-    assert!(rt.motion.reveals_kept.len() <= REVEALS_KEPT, "{} orphans tracked", rt.motion.reveals_kept.len());
+    assert_eq!(rt.motion.reveals_map().len(), REVEALS_KEPT, "the newest keys' reveals stay and the oldest left");
+    assert!(rt.motion.reveals_kept_len() <= REVEALS_KEPT, "{} orphans tracked", rt.motion.reveals_kept_len());
     // A dropped reveal's path leaves with the next commit's `prune_path_ids`.
     rt.update(|s, _| s.n += 1);
     rt.frame(0.0);
@@ -865,7 +864,7 @@ fn a_child_returning_within_the_bound_keeps_its_words() {
     rt.frame(0.0);
     rt.frame(0.1);
     let id = rt.tree.nodes.iter().find(|n| n.path == "root/p/t").unwrap().id;
-    assert!(rt.motion.reveals.get(&id).is_some_and(|p| p.caught_up(5)), "the first words have shown");
+    assert!(rt.motion.reveals_map().get(&id).is_some_and(|p| p.caught_up(5)), "the first words have shown");
     rt.update(|s, tx| {
         s.parent = false;
         tx.instant();
@@ -884,11 +883,11 @@ fn a_child_returning_within_the_bound_keeps_its_words() {
         });
         rt.frame(0.0);
     }
-    assert!(rt.motion.reveals.contains_key(&id), "the returning child's reveal is still within the bound");
+    assert!(rt.motion.reveals_map().contains_key(&id), "the returning child's reveal is still within the bound");
     rt.update(|s, _| s.parent = true);
     rt.frame(0.0);
     let back = rt.tree.nodes.iter().find(|n| n.path == "root/p/t").unwrap().id;
     assert_eq!(back, id, "the same key returns under the same id");
-    let phase = rt.motion.reveals.get(&back).unwrap();
+    let phase = rt.motion.reveals_map().get(&back).unwrap();
     assert!(phase.caught_up(5), "it comes back showing its words, not replaying them: {phase:?}");
 }

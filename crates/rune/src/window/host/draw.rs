@@ -346,7 +346,7 @@ impl FrameHost for WindowFrame<'_> {
             l.set_live_resize(false);
             l.backoff_step(BackoffEvent::Lapsed);
             #[cfg(target_os = "macos")]
-            { self.host.app.rt_mut().paint.native_materials = l.native.materials.native(); }
+            { self.host.app.rt_mut().paint.set_native_materials(l.native.materials.native()); }
             if self.host.frame_reports.wanted() { self.host.frame_reports.set_refresh(display_hz(l)); }
             Gate::QuietTimer
         } else {
@@ -368,7 +368,7 @@ impl FrameHost for WindowFrame<'_> {
         // Acquire before latching live values so a drawable wait cannot age the input.
         l.backoff_step(BackoffEvent::Lapsed);
         #[cfg(target_os = "macos")]
-        { self.host.app.rt_mut().paint.native_materials = l.native.materials.native(); }
+        { self.host.app.rt_mut().paint.set_native_materials(l.native.materials.native()); }
         if self.host.frame_reports.wanted() { self.host.frame_reports.set_refresh(display_hz(l)); }
     }
 
@@ -507,7 +507,7 @@ impl FrameHost for WindowFrame<'_> {
         if !self.state.materials_checked {
             self.state.materials_checked = true;
             if let Some(l) = self.host.win.as_mut()
-                && l.surface.as_ref().is_some_and(|surface| l.native.materials.update(self.host.app.rt().transparent, !self.host.app.rt().paint.materials.is_empty(), &l.window, surface))
+                && l.surface.as_ref().is_some_and(|surface| l.native.materials.update(self.host.app.rt().transparent, !self.host.app.rt().paint.materials().is_empty(), &l.window, surface))
             {
                 return PostStepCheck::Reacquire(ReacquireReason::NativeMaterials);
             }
@@ -523,7 +523,7 @@ impl FrameHost for WindowFrame<'_> {
             #[cfg(any(test, target_os = "macos"))]
             ReacquireReason::NativeMaterials => {
                 // This drawable presents without the views: build again natively into a new one.
-                self.host.app.rt_mut().paint.native_materials = true;
+                self.host.app.rt_mut().paint.set_native_materials(true);
                 let more = self.host.app.frame(0.0);
                 info.runtime_animating |= more;
                 info.animating |= more;
@@ -662,7 +662,7 @@ fn loop_step(clock: &mut FrameClock, rt: &mut RuntimeCore, at: Instant) -> Resul
     let dt = at.saturating_duration_since(clock.last()).as_secs_f64();
     let patched = rt.loop_step(dt)?;
     clock.frame_step(at, true);
-    rt.frame.frame_target = Some(at);
+    rt.frame.set_frame_target(at);
     Ok((patched, dt))
 }
 

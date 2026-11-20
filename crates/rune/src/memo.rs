@@ -169,7 +169,7 @@ impl MemoCache {
 
 impl crate::runtime::RuntimeCore {
     pub(crate) fn invalidate_memos_by_prefix(&mut self, prefix: &str) {
-        self.commit.memo.evict_prefix(prefix);
+        self.commit.evict_memo_prefix(prefix);
         self.invalidate();
     }
 }

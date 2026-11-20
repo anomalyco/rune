@@ -105,7 +105,7 @@ impl ContentSlides {
     }
 }
 
-impl RuntimeCore {
+impl tracks::MotionState {
     /// Before node `id`, a child of `parent` whose contents' top moved `dy` points down in its
     /// growth row (drawn less new), takes that slide: with the row's growth where it opens
     /// toward them. How far it still has to slide from where it was drawn.
@@ -114,7 +114,7 @@ impl RuntimeCore {
             .find(|&r| nodes[r].parent.is_some_and(|c| nodes[c].growth.is_some()))
         else { return dy };
         let Some(c) = nodes[row].parent else { return dy };
-        let (Some(stack), Some(g)) = (self.motion.stacks.get_mut(&nodes[c].id), self.motion.grows.get(&nodes[row].id)) else { return dy };
+        let (Some(stack), Some(g)) = (self.stacks.get_mut(&nodes[c].id), self.grows.get(&nodes[row].id)) else { return dy };
         stack.slides.follow(id, nodes[row].id, g, dy)
     }
 }

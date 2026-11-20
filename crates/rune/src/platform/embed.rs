@@ -116,7 +116,7 @@ impl LayerHostCore {
         rt.set_srgb_blend(true);
         rt.set_os_drag(false);
         rt.wall_start = Some(now);
-        rt.frame.record_events = false;
+        rt.frame.set_record_events(false);
         let target_format = if rt.srgb_blend() { self.config.format.remove_srgb_suffix() } else { self.config.format };
         crate::window::rebuild_renderer_core(&self.gpu.device, &mut self.renderer, target_format, rt);
     }

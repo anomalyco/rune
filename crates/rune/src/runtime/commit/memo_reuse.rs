@@ -62,89 +62,57 @@ pub(in crate::runtime) fn is_in_clean_spans(spans: &[CleanApplySpan], i: usize) 
     }
 }
 
-impl RuntimeCore {
-    fn node_clean_for_apply(&self, new_n: &Node, old_n: &Node, any_animating: bool) -> bool {
+impl CommitState {
+    fn node_clean_for_apply(tree: &types::TreeState, scene: &Scene, motion: &tracks::MotionState, new_n: &Node, old_n: &Node, any_animating: bool) -> bool {
         new_n.id == old_n.id
             && new_n.local == old_n.local
-            && (!any_animating || !self.scene.store().is_node_animating(new_n.id))
-            && self.scene.phase(new_n.id) == Some(PresencePhase::Present)
+            && (!any_animating || !scene.store().is_node_animating(new_n.id))
+            && scene.phase(new_n.id) == Some(PresencePhase::Present)
             && !old_n.group_fade
             && new_n.cold.get().is_none_or(|c| c.matched.is_none() && c.looping.is_none())
-            && (self.motion.flying.is_empty() || !self.motion.flying.iter().any(|f| f.0 == new_n.id))
-            && (self.tree.aspect_snap.is_empty() || !self.tree.aspect_snap.contains(&new_n.id))
-            && new_n.text.as_ref().is_none_or(|t| {
-                t.reveal < 0.0 || self.motion.reveals.get(&new_n.id).is_some_and(|r| r.caught_up(t.content.len()))
-            })
+            && (motion.flying.is_empty() || !motion.flying.iter().any(|f| f.0 == new_n.id))
+            && (tree.aspect_snap.is_empty() || !tree.aspect_snap.contains(&new_n.id))
+            && new_n.text.as_ref().is_none_or(|t| t.reveal < 0.0 || motion.reveal_caught_up(new_n.id, t.content.len()))
     }
 
     /// Fills `out` with the reused memo slices that can skip `apply`'s per-node diff loop.
-    pub(in crate::runtime) fn clean_apply_spans(
-        &self,
-        nodes: &[Node],
-        reused: &[ReusedSpan],
-        can_skip: bool,
-        out: &mut Vec<CleanApplySpan>,
-    ) {
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::runtime) fn clean_apply_spans(&self, tree: &types::TreeState, scene: &Scene, motion: &tracks::MotionState, nodes: &[Node], reused: &[ReusedSpan], can_skip: bool, reorder_jump: impl Fn(usize) -> f32, out: &mut Vec<CleanApplySpan>) {
         out.clear();
-        if !can_skip || reused.is_empty() {
-            return;
-        }
+        if !can_skip || reused.is_empty() { return; }
         out.reserve(reused.len());
-        let any_animating = self.scene.store().active_len() > 0;
+        let any_animating = scene.store().active_len() > 0;
         for span in reused {
-            if !span.same_path || span.len == 0 || span.old_start + span.len > self.tree.nodes.len() || span.new_start + span.len > nodes.len() {
-                continue;
-            }
-            let r_new = &nodes[span.new_start];
-            let r_old = &self.tree.nodes[span.old_start];
-            if !self.scene.contains(r_new.id) || self.is_exiting(r_new.id) {
-                continue;
-            }
+            if !span.same_path || span.len == 0 || span.old_start + span.len > tree.nodes.len() || span.new_start + span.len > nodes.len() { continue; }
+            let (r_new, r_old) = (&nodes[span.new_start], &tree.nodes[span.old_start]);
+            if !scene.contains(r_new.id) || matches!(scene.phase(r_new.id), Some(PresencePhase::Exiting { .. })) { continue; }
             let mut scene_rect = r_new.local;
-            if !self.commit.virtuals.is_empty()
-                && let Some(v) = r_new.parent.and_then(|p| self.commit.virtuals.get(&nodes[p].path))
-            {
-                scene_rect.y -= v.before;
-            }
+            if !self.virtuals.is_empty() && let Some(v) = r_new.parent.and_then(|p| self.virtuals.get(&nodes[p].path)) { scene_rect.y -= v.before; }
             let parent_top_clean = r_new.in_row != RowLayout::Snaps
                 || r_new.parent.is_none_or(|p| {
                     nodes.get(p + 1).is_none_or(|first_sib| {
                         let mut sr = first_sib.local;
-                        if !self.commit.virtuals.is_empty()
-                            && let Some(v) = self.commit.virtuals.get(&nodes[p].path)
-                        {
-                            sr.y -= v.before;
-                        }
-                        self.scene.get(first_sib.id, prop::FRAME) == Some(sr)
+                        if !self.virtuals.is_empty() && let Some(v) = self.virtuals.get(&nodes[p].path) { sr.y -= v.before; }
+                        scene.get(first_sib.id, prop::FRAME) == Some(sr)
                     })
                 });
-            let root_clean = self.node_clean_for_apply(r_new, r_old, any_animating)
+            let root_clean = Self::node_clean_for_apply(tree, scene, motion, r_new, r_old, any_animating)
                 && parent_top_clean
-                && r_new.parent.map(|p| nodes[p].id) == r_old.parent.map(|p| self.tree.nodes[p].id)
-                && (self.commit.virtuals.is_empty() || !self.commit.virtuals.contains_key(&r_new.path))
-                && self.scene.is_resting_at(r_new.id, scene_rect)
-                && (self.motion.stacks.is_empty() || self.reorder_jump(nodes, span.new_start) == 0.0)
-                && (self.commit.virtuals.is_empty()
-                    || !r_new.parent.and_then(|p| self.commit.virtuals.get(&nodes[p].path)).is_some_and(crate::el::virtual_list::VirtualList::replaced_view));
-
-            if !root_clean && !self.motion.flying.is_empty() {
-                continue;
-            }
+                && r_new.parent.map(|p| nodes[p].id) == r_old.parent.map(|p| tree.nodes[p].id)
+                && (self.virtuals.is_empty() || !self.virtuals.contains_key(&r_new.path))
+                && scene.is_resting_at(r_new.id, scene_rect)
+                && (motion.stacks.is_empty() || reorder_jump(span.new_start) == 0.0)
+                && (self.virtuals.is_empty()
+                    || !r_new.parent.and_then(|p| self.virtuals.get(&nodes[p].path)).is_some_and(crate::el::virtual_list::VirtualList::replaced_view));
+            if !root_clean && !motion.flying.is_empty() { continue; }
             let offset = if root_clean { 0 } else { 1 };
-            if offset >= span.len {
-                continue;
-            }
+            if offset >= span.len { continue; }
             let interior_clean = (offset..span.len).all(|k| {
-                self.node_clean_for_apply(&nodes[span.new_start + k], &self.tree.nodes[span.old_start + k], any_animating)
+                Self::node_clean_for_apply(tree, scene, motion, &nodes[span.new_start + k], &tree.nodes[span.old_start + k], any_animating)
             });
             if interior_clean {
-                let new_start = span.new_start + offset;
-                let old_start = span.old_start + offset;
-                let len = span.len - offset;
-                if let Some(last) = out.last_mut()
-                    && last.new_start + last.len == new_start
-                    && last.old_start + last.len == old_start
-                {
+                let (new_start, old_start, len) = (span.new_start + offset, span.old_start + offset, span.len - offset);
+                if let Some(last) = out.last_mut() && last.new_start + last.len == new_start && last.old_start + last.len == old_start {
                     last.len += len;
                 } else {
                     out.push(CleanApplySpan { new_start, old_start, len });

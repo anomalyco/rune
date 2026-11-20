@@ -96,7 +96,7 @@ impl Presented {
         let atlas = &rt.text.atlas;
         !self.composed && self.size == (config.width, config.height) && self.format == config.format && self.srgb == rt.srgb_blend()
             && self.scale == rt.env.scale && self.clear == rt.clear_color() && self.transparent == rt.transparent
-            && rt.surfaces.is_empty() && rt.paint.materials.is_empty()
+            && rt.surfaces.is_empty() && rt.paint.materials().is_empty()
             && atlas.dirty.is_none() && atlas.pages.iter().all(|p| p.dirty.is_none())
             && rt.images.pages.iter().all(|p| p.dirty.is_none())
             && bytemuck::cast_slice::<_, u8>(&self.instances) == bytemuck::cast_slice::<_, u8>(&rt.instances)

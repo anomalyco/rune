@@ -31,7 +31,7 @@ impl RuntimeCore {
     }
 
     pub(in crate::runtime) fn measure_retry(&mut self, app: &dyn ViewDriver, tx: &Tx) -> Measured {
-        let _blend = crate::theme::scope(self.paint.srgb_blend);
+        let _blend = crate::theme::scope(self.paint.srgb_blend());
         let _bars = crate::platform::scroll_bars::scope(self.host.scroll_bars.state, self.host.scroll_bars.runtime_id);
         let selection = self.selection_by_path();
         Measured { selection, ..self.measurement(app, true).finish_from(tx, 1) }
@@ -39,7 +39,7 @@ impl RuntimeCore {
 
     /// `committing` when the result is applied, so the last commit's text layouts can go.
     pub(in crate::runtime) fn measure_pass(&mut self, app: &dyn ViewDriver, tx: &Tx, committing: bool) -> Measured {
-        let _blend = crate::theme::scope(self.paint.srgb_blend);
+        let _blend = crate::theme::scope(self.paint.srgb_blend());
         let _bars = crate::platform::scroll_bars::scope(self.host.scroll_bars.state, self.host.scroll_bars.runtime_id);
         let selection = self.selection_by_path();
         Measured { selection, ..self.measurement(app, committing).finish(tx) }

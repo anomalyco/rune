@@ -7,7 +7,7 @@ fn trace_annotations_from_hidden_poll_survive_idle_catch_up_once() {
         launch: "hidden".into(), width: 100.0, height: 100.0, hz: 60.0, scale: 1.0,
     });
     rt.scene.set_trace(Some(trace));
-    rt.frame.trace_channels = Some(Default::default());
+    rt.frame.enable_trace_channels(true);
     rt.poll = Some(|pending, _, tx| {
         if !std::mem::take(pending) { return false; }
         tx.trace_event("hidden:ready");
@@ -22,7 +22,7 @@ fn trace_annotations_from_hidden_poll_survive_idle_catch_up_once() {
     rt.frame_split(1.0, 0.0);
     rt.frame(0.02);
     assert_eq!(rt.events, ["hidden:ready"]);
-    assert_eq!(rt.frame.trace_channels.as_ref().unwrap()["shell.width"], ("position", 40.0));
+    assert_eq!(rt.frame.trace_channels().unwrap()["shell.width"], ("position", 40.0));
     rt.scene.take_trace().unwrap().flush().unwrap();
     let lines: Vec<Value> = buffer.contents().lines().map(|s| serde_json::from_str(s).unwrap()).collect();
     assert_eq!(lines.iter().filter(|line| line["ev"] == json!(["hidden:ready"])).count(), 1);
@@ -41,7 +41,7 @@ fn trace_annotations_reach_both_writers_once() {
         launch: "pill".into(), width: 100.0, height: 100.0, hz: 60.0, scale: 1.0,
     });
     rt.scene.set_trace(Some(trace));
-    rt.frame.trace_channels = Some(Default::default());
+    rt.frame.enable_trace_channels(true);
     let path = std::env::temp_dir().join(format!("rune-annotations-{}.jsonl", std::process::id()));
     {
         let mut trace = Trace::open(&path, rt.viewport, 60.0, 1.0);

@@ -59,7 +59,7 @@ impl RuntimeCore {
     /// the last commit built it, checked here once for both.
     pub(in crate::runtime) fn commit_kind(&self, tx: &Tx) -> CommitKind {
         let unchanged = self.commit.state_unchanged && !tx.commit.lands() && !self.commit.reuse.read_moved
-            && self.commit.reuse.scale == self.env.scale && self.commit.reuse.srgb == Some(self.paint.srgb_blend)
+            && self.commit.reuse.scale == self.env.scale && self.commit.reuse.srgb == Some(self.paint.srgb_blend())
             && !self.tree.has_playground && !self.patch_pending()
             // Exiting nodes left the layout tree.
             && self.commit.layout.live_count() == self.tree.nodes.len();
@@ -68,7 +68,7 @@ impl RuntimeCore {
             // The nodes it built are all there, in the layout tree's order.
             return if self.tree.nodes.iter().all(reusable) { CommitKind::Relayout } else { CommitKind::Rebuild };
         }
-        if self.virtual_only() { CommitKind::Remount } else { CommitKind::Rebuild }
+        if self.commit.virtual_only(&self.tree, self.frame.has_hot(), self.checking_live_only()) { CommitKind::Remount } else { CommitKind::Rebuild }
     }
 
     /// Measures a commit: lays the last tree out again when only the viewport changed since it
@@ -93,7 +93,7 @@ impl RuntimeCore {
             };
         }
         if kind == CommitKind::Remount {
-            let _blend = crate::theme::scope(self.paint.srgb_blend);
+            let _blend = crate::theme::scope(self.paint.srgb_blend());
             let _bars = crate::platform::scroll_bars::scope(self.host.scroll_bars.state, self.host.scroll_bars.runtime_id);
             let reads = self.commit.layout_seen.reads.clone();
             let caret_read = self.edit.caret_watch;

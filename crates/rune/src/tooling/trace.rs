@@ -240,7 +240,7 @@ impl Trace {
             "cpu_ms": cpu_ms, "scene_edges": edges, "position_error_px": position_error,
             "retarget_lanes": retarget.lanes, "velocity_error_pt_s": retarget.max_velocity_error,
             "animating": rt.animating,
-            "why": crate::runtime::AnimSource::names(if rt.animating { rt.motion.anim_sources } else { 0 }),
+            "why": crate::runtime::AnimSource::names(if rt.animating { rt.motion.anim_sources() } else { 0 }),
         });
         // What the motion store spent this frame on, by traced element id (or path when untraced).
         let touched = rt.touched_tracks();
@@ -270,7 +270,7 @@ impl Trace {
         if !cuts.is_empty() {
             line["ai"] = cuts.into();
         }
-        if let Some(channels) = &rt.frame.trace_channels {
+        if let Some(channels) = rt.frame.trace_channels() {
             for (&name, &(kind, value)) in channels { self.channels.sample(name, kind, value); }
         }
         let mut line = line.to_string();
@@ -397,7 +397,7 @@ pub(crate) fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> V
         "time_scale": rt.time_scale,
         "animating": rt.animating,
         "elements": els,
-        "warnings": rt.commit.key_warnings.as_deref().unwrap_or_default(),
+        "warnings": rt.commit.key_warnings().unwrap_or_default(),
     });
     if let Some(menu) = rt.popup_json() { tree["popupMenu"] = menu; }
     if let Some(dialog) = rt.file_dialog_json() { tree["fileDialog"] = dialog; }

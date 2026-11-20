@@ -17,7 +17,7 @@ impl RuntimeCore {
         if self.tree.path_ids.len() <= self.tree.node_index.len() { return; }
         let Self { tree, scroll, motion, .. } = self;
         tree.path_ids.retain(|_, id| {
-            tree.node_index.contains_key(id) || scroll.scrolls.contains_key(id) || motion.stacks.contains_key(id) || motion.grows.contains_key(id) || motion.reveals.contains_key(id)
+            tree.node_index.contains_key(id) || scroll.scrolls.contains_key(id) || motion.stacks.contains_key(id) || motion.grows.contains_key(id) || motion.has_reveal(*id)
         });
     }
 
@@ -51,63 +51,11 @@ impl RuntimeCore {
         any_loop
     }
 
-    /// Keeps at most the newest `REVEALS_KEPT` reveal states for texts that have left `self.nodes`,
-    /// dropping the oldest first.
-    fn cap_reveals(&mut self) {
-        if self.motion.reveals.is_empty() {
-            self.motion.reveals_kept.clear();
-            return;
-        }
-        // A text's reveal state and the id its path maps to outlive the node, so a keyed child
-        // that comes back under its old path keeps its words (r349). Nodes dropped during an
-        // instant parent unmount leave their reveal behind, so bound those orphans here.
-        let mut kept = std::mem::take(&mut self.motion.reveals_kept);
-        kept.retain(|id| self.motion.reveals.contains_key(id) && !self.tree.node_index.contains_key(id));
-        let mut gone: Vec<NodeId> = self.motion.reveals.keys().copied()
-            .filter(|id| !self.tree.node_index.contains_key(id) && !kept.contains(id))
-            .collect();
-        if !gone.is_empty() {
-            gone.sort_unstable_by(|a, b| b.cmp(a));
-            gone.append(&mut kept);
-            kept = gone;
-        }
-        if kept.len() > REVEALS_KEPT {
-            for id in kept.split_off(REVEALS_KEPT) { self.motion.reveals.remove(&id); }
-        }
-        self.motion.reveals_kept = kept;
-    }
-
-    /// Recomputes node-derived flags and prunes tables keyed by detached nodes.
-    /// Shared by commit apply (`prune_paths = true`) and finished-exit pruning (`prune_paths = false`).
-    ///
-    /// Returns whether any node in `self.nodes` carries a loop spec.
-    ///
-    /// Finished-exit pruning leaves `path_ids` reclamation to the next commit: `path_ids` cannot
-    /// grow without a commit, and keeping a directly-unmounted path until a subsequent commit lets
-    /// an immediate remount reclaim its id.
     pub(in crate::runtime) fn prune_detached_tables(&mut self, prune_paths: bool) -> bool {
         let any_loop = self.refresh_node_flags();
-        if !self.tree.has_cache {
-            if !self.paint.node_caches.is_empty() { self.paint.node_caches.clear(); }
-            if !self.text.atlas.resident_caches.is_empty() { self.text.atlas.resident_caches.clear(); }
-        } else {
-            if !self.paint.node_caches.is_empty() {
-                self.paint.node_caches.retain(|id, _| self.scene.contains(*id));
-            }
-            if !self.text.atlas.resident_caches.is_empty() {
-                self.text.atlas.resident_caches.retain(|id, _| self.scene.contains(NodeId(*id)));
-            }
-        }
-        if !self.motion.loops.is_empty() {
-            self.motion.loops.retain(|id, _| self.scene.contains(*id));
-        }
-        if !self.paint.static_scales.is_empty() {
-            self.paint.static_scales.retain(|id, _| self.scene.contains(*id));
-        }
-        self.cap_reveals();
-        // A flight that left the tree stays lifted and covered while it exits, so it doesn't pop.
-        self.motion.flying.retain(|(id, _)| self.tree.node_index.contains_key(id));
-        self.motion.launches.keep(&self.motion.flying);
+        self.paint.prune_caches(self.tree.has_cache, &self.scene, &mut self.text.atlas.resident_caches);
+        self.paint.prune_static_scales(&self.scene);
+        self.motion.prune_detached(&self.scene, &self.tree.node_index, REVEALS_KEPT);
         if !self.commit.virtuals.is_empty() {
             let Self { commit, tree, .. } = self;
             commit.virtuals.retain(|path, _| tree.path_ids.get(path).is_some_and(|id| tree.node_index.contains_key(id)));
@@ -133,7 +81,7 @@ impl RuntimeCore {
         for (old_idx, mut n) in old.drain(..).enumerate() {
             if !self.scene.contains(n.id) {
                 self.hover_pruned(&n);
-                self.motion.reveals.remove(&n.id);
+                self.motion.remove_reveal(n.id);
                 self.scroll.scrolls.remove(&n.id);
                 continue;
             }
@@ -148,9 +96,9 @@ impl RuntimeCore {
         remap.clear();
         self.commit.apply_scratch.remap = remap;
         self.prune_detached_tables(false);
-        if !self.paint.layer_paint_order.is_empty() || !self.motion.flying.is_empty() || self.tree.has_sticky || self.tree.has_raise || self.tree.has_paint_order { self.update_layer_paint_order(); }
+        if !self.paint.layer_paint_order().is_empty() || !self.motion.flying.is_empty() || self.tree.has_sticky || self.tree.has_raise || self.tree.has_paint_order { self.update_layer_paint_order(); }
         // A removed element's live sources (a `Pixels` stream) stop waking this window.
-        if !self.frame.live_subscriptions.is_empty() {
+        if self.frame.has_live_subscriptions() {
             let keep = self.frame.live.dirty();
             self.subscribe_live();
             self.frame.live.pruned(keep);

@@ -67,7 +67,7 @@ pub(super) enum FeedbackEvent {
 
 impl Feedback {
     /// The state after `event`.
-    fn step(self, event: FeedbackEvent) -> Feedback {
+    pub(in crate::runtime) fn step(self, event: FeedbackEvent) -> Feedback {
         match (self, event) {
             (_, FeedbackEvent::Reopened) => Feedback::Open { run: 0 },
             (_, FeedbackEvent::Commit { other: true, .. }) => Feedback::Open { run: 0 },
@@ -82,7 +82,7 @@ impl Feedback {
     }
 
     /// Whether feedback may still cause a commit.
-    fn open(self) -> bool { matches!(self, Feedback::Open { .. }) }
+    pub(in crate::runtime) fn open(self) -> bool { matches!(self, Feedback::Open { .. }) }
 }
 /// A rect counts as moved when an edge moves more than this (points).
 const MOVED: f32 = 0.5;
@@ -433,8 +433,8 @@ impl RuntimeCore {
                 (nodes, own.as_ref())
             }
             None => {
-                self.tree.prepare_key_index(self.commit.commit_gen, reads.len());
-                (&self.tree.nodes[..], self.tree.key_index_for(&self.tree.nodes, self.commit.commit_gen))
+                self.tree.prepare_key_index(self.commit.commit_gen(), reads.len());
+                (&self.tree.nodes[..], self.tree.key_index_for(&self.tree.nodes, self.commit.commit_gen()))
             }
         };
         let now: Vec<Option<[f32; 4]>> = reads.iter().map(|r| self.layout_of(nodes, index, &r.key)).collect();
@@ -465,8 +465,8 @@ impl RuntimeCore {
     /// current rect, since it re-runs anyway.
     pub(super) fn refresh_layout_seen(&mut self) {
         if self.commit.layout_seen.rects.is_empty() { return; }
-        self.tree.prepare_key_index(self.commit.commit_gen, self.commit.layout_seen.rects.len());
-        let index = self.tree.key_index_for(&self.tree.nodes, self.commit.commit_gen);
+        self.tree.prepare_key_index(self.commit.commit_gen(), self.commit.layout_seen.rects.len());
+        let index = self.tree.key_index_for(&self.tree.nodes, self.commit.commit_gen());
         let now: Vec<_> = self.commit.layout_seen.rects.keys().map(|k| self.layout_of(&self.tree.nodes, index, k)).collect();
         for (seen, rect) in self.commit.layout_seen.rects.values_mut().zip(now) { *seen = rect; }
         if self.commit.layout_seen.rects.contains_key(SELECTION) { self.commit.layout_seen.rects.selection = self.selection_boxes().into(); }
@@ -476,7 +476,7 @@ impl RuntimeCore {
     /// feedback first, so the first scroll frame after feedback stopped still checks.
     pub(super) fn layout_reads_moved(&mut self) -> bool {
         if self.commit.layout_seen.is_empty() { return false; }
-        if self.scrolling() { self.commit.feedback = self.commit.feedback.step(FeedbackEvent::Reopened); }
+        if self.scrolling() { self.commit.step_feedback(FeedbackEvent::Reopened); }
         if self.selection_read_moved() { self.commit.dirty = true; }
         self.layout_feedback_open() && self.layout_moved(None, None, false)
     }
@@ -508,14 +508,14 @@ impl RuntimeCore {
 
     /// Whether layout feedback may still cause a commit (see the module docs).
     pub(super) fn layout_feedback_open(&self) -> bool {
-        self.commit.feedback.open()
+        self.commit.feedback_open()
     }
 
     /// Counts a frame's commit toward [`ECHOES`]: `feedback` when layout reads or `on_layout`
     /// caused it, `other` when anything else did.
     pub(super) fn count_layout_echo(&mut self, feedback: bool, other: bool) {
         let event = if other || self.scrolling() { FeedbackEvent::Reopened } else { FeedbackEvent::Commit { feedback, other } };
-        self.commit.feedback = self.commit.feedback.step(event);
+        self.commit.step_feedback(event);
     }
 
     /// A hand, momentum, an instant scroll or a glide moves a viewport.
@@ -537,7 +537,7 @@ impl RuntimeCore {
     /// scroll, so it reopens layout feedback (see the module docs).
     pub(crate) fn set_window_origin(&mut self, origin: (f32, f32)) -> bool {
         if !self.host.set_window_origin(origin) { return false; }
-        self.commit.feedback = self.commit.feedback.step(FeedbackEvent::Reopened);
+        self.commit.step_feedback(FeedbackEvent::Reopened);
         self.report_rects(false, true)
     }
 
@@ -546,10 +546,10 @@ impl RuntimeCore {
     /// layout feedback and falls quiet with the rest of it; one it doesn't (a live value) always
     /// reports, as scrolling reopens feedback. True when it queued any.
     pub(super) fn report_drawn(&mut self) -> bool {
-        if !self.tree.has_drawn_layout() && self.commit.drawn_fired.is_empty() { return false; }
+        if !self.tree.has_drawn_layout() && self.commit.drawn_fired_empty() { return false; }
         let mut queued = false;
         let quiet = !self.layout_feedback_open();
-        let last = std::mem::take(&mut self.commit.drawn_fired);
+        let last = self.commit.take_drawn_fired();
         let mut fired = HashMap::with_capacity_and_hasher(last.len(), Default::default());
         for i in 0..self.tree.nodes.len() {
             let n = &self.tree.nodes[i];
@@ -577,7 +577,7 @@ impl RuntimeCore {
             fired.insert(id, (drawn, laid));
             queued = true;
         }
-        self.commit.drawn_fired = fired;
+        self.commit.set_drawn_fired(fired);
         queued
     }
 
@@ -598,7 +598,7 @@ impl RuntimeCore {
     pub(super) fn rect_springing(&self, i: usize) -> bool {
         let store = self.scene.store();
         let n = &self.tree.nodes[i];
-        self.motion.flights.iter().any(|f| f.lands(&n.path, n.key.as_deref()))
+        self.motion.flights().iter().any(|f| f.lands(&n.path, n.key.as_deref()))
             || std::iter::successors(Some(i), |&p| step_up(&self.tree.nodes, p)).any(|p| {
                 let id = self.tree.nodes[p].id;
                 store.is_animating(id, prop::FRAME) || store.is_animating(id, prop::TRAVEL) || store.is_animating(id, prop::PRESENCE)
@@ -613,7 +613,7 @@ impl RuntimeCore {
     /// Queues `on_layout`, or `on_screen_layout` when `screen`, for rects that moved; true when
     /// it queued any.
     fn report_rects(&mut self, quiet: bool, screen: bool) -> bool {
-        let last = std::mem::take(if screen { &mut self.commit.screen_fired } else { &mut self.commit.layout_fired });
+        let last = self.commit.take_layout_fired(screen);
         // On screen, the view's points are the window's over its zoom.
         let ((ox, oy), k) = if screen { (self.host.window_origin(), self.host.zoom()) } else { ((0.0, 0.0), 1.0) };
         let mut fired = HashMap::with_capacity_and_hasher(last.len(), Default::default());
@@ -641,7 +641,7 @@ impl RuntimeCore {
             }
             fired.insert(id, r);
         }
-        *(if screen { &mut self.commit.screen_fired } else { &mut self.commit.layout_fired }) = fired;
+        self.commit.set_layout_fired(screen, fired);
         queued
     }
 }

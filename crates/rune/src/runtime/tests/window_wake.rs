@@ -124,7 +124,7 @@ fn timed_wakes_are_exact_coalesced_and_do_not_commit_or_animate() {
     let mut rt = Runtime::new(Vec::new(), view, (100.0, 100.0), Env::new(true, 1.0));
     rt.poll = Some(poll);
     assert!(!rt.frame(0.0));
-    assert_eq!(rt.frame.wake_deadlines, [0.25, 0.375]);
+    assert_eq!(rt.frame.wake_deadlines(), [0.25, 0.375]);
     assert!(!rt.frame(0.5));
     assert_eq!(rt.state, [0.0, 0.25, 0.375, 0.5]);
     assert_eq!(rt.commit.commits, 1);
@@ -152,7 +152,7 @@ fn wakes_a_poll_keeps_asking_for_collapse_to_one_poll_a_frame() {
             rt.frame(1.0 / 60.0);
             assert_eq!(rt.state.0, 1, "delay {delay}: frame {frame} polled {} times", rt.state.0);
         }
-        assert!(rt.frame.wake_deadlines.len() <= 32, "delay {delay}: {} deadlines pending", rt.frame.wake_deadlines.len());
+        assert!(rt.frame.wake_deadlines().len() <= 32, "delay {delay}: {} deadlines pending", rt.frame.wake_deadlines().len());
     }
 }
 
