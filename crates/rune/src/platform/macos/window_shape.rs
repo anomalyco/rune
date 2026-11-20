@@ -118,8 +118,7 @@ impl Shadow {
         let mut state = self.state.get();
         if state == Resample::Idle { return; }
         if state.turn(self.log.on_screen()) {
-            // SAFETY: an AppKit call on the main thread, where run loop turns start.
-            unsafe { self.window.invalidateShadow() };
+            self.window.invalidateShadow();
         }
         self.state.set(state);
         self.log.watch(state != Resample::Idle);

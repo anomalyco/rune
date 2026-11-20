@@ -97,7 +97,7 @@ mod mac {
                 let count: usize = msg_send![windows, count];
                 for i in 0..count {
                     let w: *mut AnyObject = msg_send![windows, objectAtIndex: i];
-                    let name = (*w).class().name().to_string();
+                    let name = (*w).class().name().to_string_lossy();
                     let visible: bool = msg_send![w, isVisible];
                     if visible && name.contains("ToolTip") {
                         let f: NSRect = msg_send![w, frame];

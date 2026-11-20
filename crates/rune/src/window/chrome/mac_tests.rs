@@ -11,7 +11,7 @@ fn drag_subclass_changes_only_the_selected_instance() {
         let selected_ptr = Retained::as_ptr(&selected).cast_mut().cast();
         let sibling_ptr = Retained::as_ptr(&sibling).cast_mut().cast();
         let base = ffi::object_getClass(selected_ptr);
-        let selector = sel!(mouseDownCanMoveWindow).as_ptr();
+        let selector = sel!(mouseDownCanMoveWindow);
         let original = ffi::class_getInstanceMethod(base, selector);
         scope_drag_regions(&selected);
         let scoped = ffi::object_getClass(selected_ptr);

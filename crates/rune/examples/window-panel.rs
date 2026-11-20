@@ -45,7 +45,7 @@ fn inspect(s: &State) -> serde_json::Value {
             let frontmost: *mut AnyObject = msg_send![workspace, frontmostApplication];
             let frontmost_pid: i32 = msg_send![frontmost, processIdentifier];
             let frame: objc2_foundation::NSRect = msg_send![window, frame];
-            let app = objc2_app_kit::NSApplication::sharedApplication(objc2_foundation::MainThreadMarker::new().unwrap());
+            let app = objc2_app_kit::NSApplication::sharedApplication(objc2::MainThreadMarker::new().unwrap());
             serde_json::json!({"key":key,"visible":visible,"alpha":alpha,"ignores_mouse":ignores_mouse,
                 "ready":s.native.as_ref().unwrap().is_ready(),"style":style,"active":app.isActive(),
                 "frontmost_pid":frontmost_pid,"number":s.native.as_ref().unwrap().window_number(),

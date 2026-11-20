@@ -307,7 +307,7 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
 
-    use objc2_video::{
+    use objc2::{
         msg_send,
         rc::Retained,
         runtime::{AnyClass, AnyObject},

@@ -48,7 +48,7 @@ unsafe extern "C" fn activated(_: Ref, event: Ref, data: Ref) -> i32 {
 
 impl Native {
     pub(super) fn new(sink: Sink) -> Result<Self, ShortcutError> {
-        if objc2_foundation::MainThreadMarker::new().is_none() { return Err(ShortcutError::Backend("Carbon requires the main thread".into())); }
+        if objc2::MainThreadMarker::new().is_none() { return Err(ShortcutError::Backend("Carbon requires the main thread".into())); }
         let mut context = Box::new(Context { sink, keys: RefCell::default() });
         let mut handler = ptr::null_mut();
         // SAFETY: Context's address remains stable until after RemoveEventHandler in Drop.
@@ -127,7 +127,7 @@ const MODS: u32 = CMD | SHIFT_KEY | OPTION | CONTROL;
 /// An enabled macOS symbolic hotkey on this chord: its name when it is a known shortcut assigned
 /// there (by default or remapped), otherwise "macOS". None off the main thread (HIToolbox).
 pub(super) fn system_owner(shortcut: &Shortcut) -> Option<String> {
-    objc2_foundation::MainThreadMarker::new()?;
+    objc2::MainThreadMarker::new()?;
     let chord = (keycode(shortcut.key_name())?, carbon_mods(shortcut));
     if !enabled_symbolic().contains(&chord) { return None; }
     Some(named(chord, &remapped()).unwrap_or("macOS").into())

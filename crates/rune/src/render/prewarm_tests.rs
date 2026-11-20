@@ -11,7 +11,7 @@ fn prewarm_gpu_on_chooses_before_it_starts() {
 #[cfg(target_os = "macos")]
 mod macos {
     use super::super::{Gpu, Renderer};
-    use objc2_video::{rc::Retained, runtime::{AnyClass, AnyObject}, msg_send};
+    use objc2::{rc::Retained, runtime::{AnyClass, AnyObject}, msg_send};
 
     fn layer() -> Retained<AnyObject> {
         unsafe { msg_send![AnyClass::get(c"CAMetalLayer").expect("QuartzCore"), new] }

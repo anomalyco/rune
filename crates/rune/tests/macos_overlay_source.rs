@@ -16,7 +16,7 @@ fn main() { mac::main() }
 mod mac {
     use std::sync::{Mutex, atomic::{AtomicBool, AtomicUsize, Ordering}};
     use std::time::Duration;
-    use objc2::{class, msg_send, sel, declare::ClassBuilder, runtime::{AnyClass, AnyObject, Bool, Sel}};
+    use objc2::{class, msg_send, sel, runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel}};
     use objc2_foundation::{NSPoint, NSRect, NSSize};
 
     #[link(name = "ReplayKit", kind = "framework")]
@@ -47,7 +47,7 @@ mod mac {
     }
 
     fn class_name(class: *const AnyClass) -> String {
-        if class.is_null() { "NULL".into() } else { unsafe { (*class).name().to_string() } }
+        if class.is_null() { "NULL".into() } else { unsafe { (*class).name().to_string_lossy().into_owned() } }
     }
 
     fn windows() -> Vec<*mut AnyObject> {
@@ -94,7 +94,7 @@ mod mac {
                 if name.starts_with("NSKVONotifying_") {
                     let mut count = 0;
                     let list = class_copyMethodList(class, &mut count);
-                    let methods: Vec<String> = (0..count as usize).map(|i| method_getName(*list.add(i)).name().to_string()).collect();
+                    let methods: Vec<String> = (0..count as usize).map(|i| method_getName(*list.add(i)).name().to_string_lossy().into_owned()).collect();
                     free(list.cast());
                     println!("kvo class {name} overrides {methods:?}");
                 }
@@ -190,7 +190,7 @@ mod mac {
             TITLE_CHANGES.fetch_add(1, Ordering::SeqCst);
         }
         let class = *CLASS.get_or_init(|| {
-            let mut builder = ClassBuilder::new("RuneOverlaySourceTitleObserver", class!(NSObject)).unwrap();
+            let mut builder = ClassBuilder::new(c"RuneOverlaySourceTitleObserver", class!(NSObject)).unwrap();
             unsafe {
                 builder.add_method(sel!(observeValueForKeyPath:ofObject:change:context:),
                     observe as extern "C" fn(*mut AnyObject, Sel, *mut AnyObject, *mut AnyObject, *mut AnyObject, *mut std::ffi::c_void));

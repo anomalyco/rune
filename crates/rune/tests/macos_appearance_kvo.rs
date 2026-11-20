@@ -156,8 +156,8 @@ mod mac {
                 let window: *mut AnyObject = msg_send![windows, objectAtIndex: i];
                 let delegate: *mut AnyObject = msg_send![window, delegate];
                 // The real isa, which KVO subclasses at runtime.
-                let class = (*window).class().name().to_string();
-                let winit = !delegate.is_null() && (*delegate).class().name() == "WinitWindowDelegate";
+                let class = (*window).class().name().to_string_lossy().into_owned();
+                let winit = !delegate.is_null() && (*delegate).class().name() == c"WinitWindowDelegate";
                 for _ in 0..50 {
                     toggle_style_mask(window, 2);
                     if winit {

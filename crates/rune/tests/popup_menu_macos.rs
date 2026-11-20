@@ -17,7 +17,7 @@ mod mac {
     use std::sync::{Mutex, mpsc};
     use std::time::{Duration, Instant};
 
-    use objc2::{class, msg_send, msg_send_id, rc::Retained, runtime::AnyObject};
+    use objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
     use objc2_foundation::{NSPoint, NSString};
     use rune::*;
 
@@ -153,7 +153,7 @@ mod mac {
                     MENU.with(|slot| *slot.borrow_mut() = if begin { Retained::retain(menu) } else { None });
                     TRACKING.store(begin, Ordering::SeqCst);
                 });
-                let token: Option<Retained<AnyObject>> = msg_send_id![center, addObserverForName: &*NSString::from_str(name),
+                let token: Option<Retained<AnyObject>> = msg_send![center, addObserverForName: &*NSString::from_str(name),
                     object: std::ptr::null::<AnyObject>(), queue: std::ptr::null::<AnyObject>(), usingBlock: &*block];
                 OBSERVERS.with(|o| o.borrow_mut().extend(token));
             }

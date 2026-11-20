@@ -315,7 +315,7 @@ impl Drop for Bridge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use objc2::{class, declare::ClassBuilder};
+    use objc2::{class, runtime::ClassBuilder};
 
     thread_local! { static RECEIVED: RefCell<Vec<String>> = RefCell::default(); }
     fn received(message: String) { RECEIVED.with(|r| r.borrow_mut().push(message)); }
@@ -334,9 +334,9 @@ mod tests {
     #[test]
     fn trampolines_pass_the_arguments_and_the_sender() {
         use objc2::ClassType;
-        let window_class = ClassBuilder::new("RuneBridgeTestWindow", NSWindow::class()).unwrap().register();
+        let window_class = ClassBuilder::new(c"RuneBridgeTestWindow", NSWindow::class()).unwrap().register();
         assert!(install(window_class, NSWindow::class(), &window_forwards()));
-        let mut panel_class = ClassBuilder::new("RuneBridgeTestPanel", class!(NSObject)).unwrap();
+        let mut panel_class = ClassBuilder::new(c"RuneBridgeTestPanel", class!(NSObject)).unwrap();
         // SAFETY: each test handler's C ABI matches the corresponding `NSWindow` selector.
         unsafe {
             panel_class.add_method(sel!(setFrame:display:), got_frame as extern "C" fn(*mut AnyObject, Sel, NSRect, Bool));

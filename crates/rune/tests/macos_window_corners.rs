@@ -39,7 +39,7 @@ mod mac {
 
     /// Counts every `invalidateShadow` on any window that doesn't override it.
     fn count_invalidations() {
-        let method = AnyClass::get("NSWindow").and_then(|c| c.instance_method(sel!(invalidateShadow))).expect("NSWindow.invalidateShadow");
+        let method = AnyClass::get(c"NSWindow").and_then(|c| c.instance_method(sel!(invalidateShadow))).expect("NSWindow.invalidateShadow");
         // SAFETY: the replacement has the method's signature and calls through to the original.
         let original = unsafe { method.set_implementation(std::mem::transmute::<unsafe extern "C" fn(*mut AnyObject, Sel), Imp>(counted)) };
         let _ = ORIGINAL.set(original as usize);

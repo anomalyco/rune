@@ -8,7 +8,7 @@ use super::*;
 use crate::frame::surface_stats::SurfaceMeter;
 use crate::render::Gpu;
 use crate::time::Instant;
-use objc2_video::{ClassType, define_class, msg_send, rc::Retained, runtime::{AnyClass, AnyObject, NSObject}};
+use objc2::{ClassType, define_class, msg_send, rc::Retained, runtime::{AnyClass, AnyObject, NSObject}};
 
 /// The fake window's `occlusionState`: 0 covered, 2 (`NSWindowOcclusionStateVisible`) shown.
 static OCCLUSION: AtomicUsize = AtomicUsize::new(0);

@@ -227,8 +227,8 @@ mod mac {
     use std::sync::OnceLock;
     use objc2::rc::autoreleasepool;
     use objc2::runtime::{AnyClass, AnyObject, ClassBuilder, NSObject, Sel};
-    use objc2::{ClassType, class, msg_send, sel};
-    use objc2_foundation::{MainThreadMarker, NSString};
+    use objc2::{ClassType, MainThreadMarker, class, msg_send, sel};
+    use objc2_foundation::NSString;
 
     /// `'GURL'`: `kInternetEventClass` and `kAEGetURL`.
     const GET_URL: u32 = u32::from_be_bytes(*b"GURL");
@@ -269,7 +269,7 @@ mod mac {
     fn handler() -> Option<*mut AnyObject> {
         static HANDLER: OnceLock<usize> = OnceLock::new();
         let made = *HANDLER.get_or_init(|| {
-            const NAME: &str = "RuneOpenUrlHandler";
+            const NAME: &std::ffi::CStr = c"RuneOpenUrlHandler";
             let class = AnyClass::get(NAME).or_else(|| {
                 let mut builder = ClassBuilder::new(NAME, NSObject::class())?;
                 // SAFETY: the function matches `handleGetURLEvent:withReplyEvent:` (two objects, void).

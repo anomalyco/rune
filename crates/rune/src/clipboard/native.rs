@@ -72,8 +72,7 @@ impl Backend for arboard::Clipboard {
     fn text(&mut self) -> Option<Zeroizing<String>> { self.get_text().ok().map(Zeroizing::new) }
     #[cfg(target_os = "macos")]
     fn content(&mut self, all: bool) -> Option<ClipboardContent> {
-        // SAFETY: `generalPasteboard` returns the live shared `NSPasteboard`, serialized on this worker.
-        macos::read(&*unsafe { objc2_app_kit::NSPasteboard::generalPasteboard() }, all)
+        macos::read(&objc2_app_kit::NSPasteboard::generalPasteboard(), all)
     }
     /// Text, HTML, and with `all` an image and files; RTF isn't read here. Windows and Linux
     /// images come through arboard as pixels (Windows `PNG` or `CF_DIBV5`, Linux `image/png`),
@@ -135,8 +134,7 @@ fn write(cb: &mut arboard::Clipboard, copy: &ClipboardWrite) -> Result<(), Strin
     let content = &copy.content;
     if copy.clear_after.is_none() && content.is_rich() {
         #[cfg(target_os = "macos")]
-        // SAFETY: `generalPasteboard` returns the live shared `NSPasteboard`, serialized on this worker.
-        { return macos::write(&*unsafe { objc2_app_kit::NSPasteboard::generalPasteboard() }, content); }
+        { return macos::write(&objc2_app_kit::NSPasteboard::generalPasteboard(), content); }
         #[cfg(not(target_os = "macos"))]
         return write_one_form(cb, content);
     }
@@ -177,8 +175,7 @@ fn write_text(cb: &mut arboard::Clipboard, copy: &ClipboardWrite) -> Result<(), 
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 fn revision() -> Option<u64> {
     #[cfg(target_os = "macos")]
-    // SAFETY: `generalPasteboard` returns the live shared `NSPasteboard` and `changeCount` reads its generation.
-    { return Some(unsafe { objc2_app_kit::NSPasteboard::generalPasteboard().changeCount() } as u64); }
+    { return Some(objc2_app_kit::NSPasteboard::generalPasteboard().changeCount() as u64); }
     #[cfg(target_os = "windows")]
     // SAFETY: `GetClipboardSequenceNumber` takes no pointers and is safe to call from any thread.
     { return Some(unsafe { windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber() } as u64); }

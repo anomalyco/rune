@@ -35,8 +35,8 @@ fn a_click_reaches_the_handler_and_completes() {
         unsafe { mac::dictionary(&[("session".into(), "ses_7".into()), ("server".into(), "http://127.0.0.1:4096".into())]) }
     }
 
-    let fake = AnyClass::get("RuneMacFakeResponse").unwrap_or_else(|| {
-        let mut b = ClassBuilder::new("RuneMacFakeResponse", class!(NSObject)).unwrap();
+    let fake = AnyClass::get(c"RuneMacFakeResponse").unwrap_or_else(|| {
+        let mut b = ClassBuilder::new(c"RuneMacFakeResponse", class!(NSObject)).unwrap();
         unsafe {
             b.add_method(sel!(notification), this as extern "C" fn(_, _) -> _);
             b.add_method(sel!(request), this as extern "C" fn(_, _) -> _);

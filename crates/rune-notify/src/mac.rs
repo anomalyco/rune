@@ -9,7 +9,7 @@ use super::{Action, Click, Notification};
 use block2::{Block, RcBlock};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, AnyProtocol, Bool, ClassBuilder, Sel};
-use objc2::{class, msg_send, msg_send_id, sel};
+use objc2::{class, msg_send, sel};
 
 #[link(name = "UserNotifications", kind = "framework")]
 unsafe extern "C" {}
@@ -58,7 +58,7 @@ pub(super) fn post(n: Notification) {
 
 unsafe fn add(n: &Notification) {
     objc2::rc::autoreleasepool(|_| unsafe {
-        let content: Retained<AnyObject> = msg_send_id![class!(UNMutableNotificationContent), new];
+        let content: Retained<AnyObject> = msg_send![class!(UNMutableNotificationContent), new];
         let content = Retained::as_ptr(&content).cast_mut();
         let _: () = msg_send![content, setTitle: ns(&n.title)];
         let _: () = msg_send![content, setBody: ns(&n.body)];
@@ -101,7 +101,7 @@ unsafe fn category(actions: &[Action]) -> Option<String> {
         }).collect();
         let array: *mut AnyObject = msg_send![class!(NSArray), arrayWithObjects: made.as_ptr(), count: made.len()];
         let empty: *mut AnyObject = msg_send![class!(NSArray), array];
-        let category: Retained<AnyObject> = msg_send_id![class!(UNNotificationCategory), categoryWithIdentifier: ns(&id), actions: array, intentIdentifiers: empty, options: 0usize];
+        let category: Retained<AnyObject> = msg_send![class!(UNNotificationCategory), categoryWithIdentifier: ns(&id), actions: array, intentIdentifiers: empty, options: 0usize];
         CATEGORIES.with_borrow_mut(|c| c.push((id.clone(), category)));
         let all: Vec<*mut AnyObject> = CATEGORIES.with_borrow(|c| c.iter().map(|(_, k)| Retained::as_ptr(k).cast_mut()).collect());
         let set: *mut AnyObject = msg_send![class!(NSSet), setWithObjects: all.as_ptr(), count: all.len()];
@@ -175,12 +175,12 @@ extern "C" fn will_present(_this: *mut AnyObject, _cmd: Sel, _center: *mut AnyOb
 }
 
 pub(super) fn delegate_class() -> &'static AnyClass {
-    const NAME: &str = "RuneMacNotificationDelegate";
+    const NAME: &std::ffi::CStr = c"RuneMacNotificationDelegate";
     if let Some(c) = AnyClass::get(NAME) {
         return c;
     }
     let mut b = ClassBuilder::new(NAME, class!(NSObject)).expect("delegate class");
-    if let Some(p) = AnyProtocol::get("UNUserNotificationCenterDelegate") {
+    if let Some(p) = AnyProtocol::get(c"UNUserNotificationCenterDelegate") {
         b.add_protocol(p);
     }
     unsafe {

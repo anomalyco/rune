@@ -1,9 +1,9 @@
 //! Display selection and window geometry in AppKit and Rune coordinates.
 
 use crate::{DisplayTarget, OverlayOptions};
-use objc2::msg_send;
+use objc2::{MainThreadMarker, msg_send};
 use objc2_app_kit::{NSEvent, NSScreen};
-use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
+use objc2_foundation::{NSPoint, NSRect, NSSize};
 use super::ns_window;
 
 #[link(name = "CoreGraphics", kind = "framework")]
@@ -77,8 +77,7 @@ pub(crate) fn backing_scale(window: &winit::window::Window) -> Option<f32> {
 /// The outer size of a window whose content is `content` points.
 pub(crate) fn outer_size(window: &winit::window::Window, (w, h): (f32, f32)) -> Option<(f32, f32)> {
     let ns = ns_window(window)?;
-    // SAFETY: plain geometry on a live window.
-    let frame = unsafe { ns.frameRectForContentRect(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(f64::from(w), f64::from(h)))) };
+    let frame = ns.frameRectForContentRect(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(f64::from(w), f64::from(h))));
     Some((frame.size.width as f32, frame.size.height as f32))
 }
 
@@ -125,8 +124,7 @@ pub(super) fn overlay_rect_on(at: crate::overlay::Placement, options: &OverlayOp
     use winit::platform::macos::MonitorHandleExtMacOS;
     let mtm = MainThreadMarker::new()?;
     let screens = NSScreen::screens(mtm);
-    // SAFETY: `mtm` proves AppKit main-thread execution for `NSEvent::mouseLocation`.
-    let pointer = unsafe { NSEvent::mouseLocation() };
+    let pointer = NSEvent::mouseLocation();
     let screen = screens.iter().find(|screen| match &options.display {
         DisplayTarget::UnderPointer => {
             contains_pointer(screen, pointer)

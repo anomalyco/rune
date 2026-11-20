@@ -28,7 +28,7 @@ serde_json = { workspace = true }
 windows = { workspace = true, features = ["Win32_Foundation", "Win32_Globalization"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSLocale", "NSString"] }
+objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSEnumerator", "NSLocale", "NSString"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true }
