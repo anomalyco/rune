@@ -7,17 +7,21 @@ use objc2_foundation::NSData;
 fn pasteboard_available() -> bool {
     static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *AVAILABLE.get_or_init(|| {
-        let probe = std::panic::catch_unwind(|| unsafe {
-            let pb: Option<Retained<NSPasteboard>> = msg_send![class!(NSPasteboard), pasteboardWithUniqueName];
-            let Some(pb) = pb else { return false };
-            pb.clearContents();
-            let item = NSPasteboardItem::new();
-            let kind = NSString::from_str("public.utf8-plain-text");
-            let ok = item.setString_forType(&NSString::from_str("probe"), &kind)
-                && pb.writeObjects(&NSArray::from_retained_slice(&[objc2::runtime::ProtocolObject::from_retained(item)]))
-                && pb.stringForType(&kind).is_some_and(|s| s.to_string() == "probe");
-            let () = msg_send![&*pb, releaseGlobally];
-            ok
+        let probe = std::panic::catch_unwind(|| {
+            // SAFETY: probes whether the session's pasteboard server accepts a temporary unique
+            // pasteboard and releases it before returning.
+            unsafe {
+                let pb: Option<Retained<NSPasteboard>> = msg_send![class!(NSPasteboard), pasteboardWithUniqueName];
+                let Some(pb) = pb else { return false };
+                pb.clearContents();
+                let item = NSPasteboardItem::new();
+                let kind = NSString::from_str("public.utf8-plain-text");
+                let ok = item.setString_forType(&NSString::from_str("probe"), &kind)
+                    && pb.writeObjects(&NSArray::from_retained_slice(&[objc2::runtime::ProtocolObject::from_retained(item)]))
+                    && pb.stringForType(&kind).is_some_and(|s| s.to_string() == "probe");
+                let () = msg_send![&*pb, releaseGlobally];
+                ok
+            }
         });
         let ok = probe.unwrap_or(false);
         if !ok { eprintln!("macos_drop: no pasteboard in this session (headless?); skipping pasteboard round-trip tests"); }
@@ -29,7 +33,10 @@ fn pasteboard_available() -> bool {
 struct Board(Retained<NSPasteboard>);
 
 impl Drop for Board {
-    fn drop(&mut self) { unsafe { msg_send![&*self.0, releaseGlobally] } }
+    fn drop(&mut self) {
+        // SAFETY: `self.0` is a private pasteboard created via `pasteboardWithUniqueName` and released once on drop.
+        unsafe { msg_send![&*self.0, releaseGlobally] }
+    }
 }
 
 impl std::ops::Deref for Board {
@@ -61,7 +68,10 @@ fn png() -> Vec<u8> {
     out
 }
 
-fn found(pb: &NSPasteboard) -> Vec<Item> { unsafe { items(pb) }.into_iter().map(|(_, i)| i).collect() }
+fn found(pb: &NSPasteboard) -> Vec<Item> {
+    // SAFETY: `pb` is a live `NSPasteboard` created by this test.
+    unsafe { items(pb) }.into_iter().map(|(_, i)| i).collect()
+}
 
 #[test]
 fn a_file_url_is_its_path() {
@@ -128,8 +138,15 @@ fn text_alone_gives_nothing() {
 fn images_are_written_named_for_their_url() {
     let Some(pb) = board(&[&[("public.png", &png())], &[("public.png", &png())], &[("public.url", b"https://e.com/img/kitten.jpg?w=2"), ("public.png", &png())]]) else { return };
     let dir = drop_dir().unwrap();
-    let paths: Vec<PathBuf> = unsafe { items(&pb) }.iter()
-        .filter_map(|(item, f)| match f { Item::Image(k, e) => unsafe { write_image(item, k, e, &dir) }, _ => None }).collect();
+    // SAFETY: `pb` is a live `NSPasteboard` created by this test.
+    let entries = unsafe { items(&pb) };
+    let paths: Vec<PathBuf> = entries.iter().filter_map(|(item, f)| match f {
+        Item::Image(k, e) => {
+            // SAFETY: `item` is a live `NSPasteboardItem` returned from `items(&pb)`.
+            unsafe { write_image(item, k, e, &dir) }
+        }
+        _ => None,
+    }).collect();
     let names: Vec<_> = paths.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
     assert_eq!(names, ["Image.png", "Image 2.png", "kitten.png"]);
     assert_eq!(std::fs::read(&paths[0]).unwrap(), png());

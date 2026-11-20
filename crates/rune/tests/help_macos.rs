@@ -129,15 +129,17 @@ mod mac {
         let worker = std::thread::spawn(move || {
             let run = std::panic::catch_unwind(|| {
                 ready_rx.recv_timeout(Duration::from_secs(60)).expect("window ready");
-                on_main(&handle, || unsafe {
-                    // SAFETY: main thread.
-                    let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-                    let _: () = msg_send![app, activateIgnoringOtherApps: true];
-                    // Lower left, clear of anything centred on screen.
-                    let windows: *mut AnyObject = msg_send![app, windows];
-                    let window: *mut AnyObject = msg_send![windows, firstObject];
-                    let _: () = msg_send![window, setFrameTopLeftPoint: NSPoint::new(40.0, 400.0)];
-                    let _: () = msg_send![window, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
+                on_main(&handle, || {
+                    // SAFETY: runs on the AppKit main thread (`on_main`) to activate and position the test window.
+                    unsafe {
+                        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+                        let _: () = msg_send![app, activateIgnoringOtherApps: true];
+                        // Lower left, clear of anything centred on screen.
+                        let windows: *mut AnyObject = msg_send![app, windows];
+                        let window: *mut AnyObject = msg_send![windows, firstObject];
+                        let _: () = msg_send![window, setFrameTopLeftPoint: NSPoint::new(40.0, 400.0)];
+                        let _: () = msg_send![window, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
+                    }
                 });
                 std::thread::sleep(Duration::from_millis(500));
                 assert!(tooltip(&handle).is_none(), "no tooltip before the pointer arrives");

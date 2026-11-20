@@ -82,6 +82,7 @@ mod embedded {
     fn process_cpu_us() -> f64 {
         // SAFETY: a zeroed rusage is valid, and getrusage only writes it.
         let mut u: libc::rusage = unsafe { std::mem::zeroed() };
+        // SAFETY: `u` is a live, writable `libc::rusage` for `RUSAGE_SELF`.
         unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut u) };
         let us = |t: libc::timeval| t.tv_sec as f64 * 1e6 + t.tv_usec as f64;
         us(u.ru_utime) + us(u.ru_stime)

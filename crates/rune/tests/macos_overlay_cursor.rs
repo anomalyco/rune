@@ -46,6 +46,7 @@ mod mac {
 
     /// The panel with CGWindowID `number`: (key, ignores mouse events).
     fn panel(number: u32) -> Option<(bool, bool)> {
+        // SAFETY: invoked on the AppKit main thread (`on_main`); queries live `NSWindow` properties.
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             let windows: Retained<NSArray<AnyObject>> = msg_send![app, windows];
@@ -62,6 +63,7 @@ mod mac {
 
     fn shape(cursor: *mut AnyObject) -> Option<Shape> {
         if cursor.is_null() { return None }
+        // SAFETY: `cursor` is checked non-null and is a live `NSCursor` on the main thread; `image` is checked non-null before messaging.
         unsafe {
             let hot: NSPoint = msg_send![cursor, hotSpot];
             let image: *mut AnyObject = msg_send![cursor, image];
@@ -73,6 +75,7 @@ mod mac {
 
     /// (the window server's current cursor, the open hand, the arrow).
     fn shapes() -> (Option<Shape>, Shape, Shape) {
+        // SAFETY: standard `NSCursor` class getters called on the AppKit main thread (`on_main`).
         unsafe {
             let current: *mut AnyObject = msg_send![class!(NSCursor), currentSystemCursor];
             let hand: *mut AnyObject = msg_send![class!(NSCursor), openHandCursor];
@@ -140,6 +143,7 @@ mod mac {
     /// Whether the panel with CGWindowID `number` is still ordered in (a fade-out orders it out
     /// when it ends).
     fn ordered_in(number: u32) -> bool {
+        // SAFETY: invoked on the AppKit main thread (`on_main`); queries live `NSWindow` properties.
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             let windows: Retained<NSArray<AnyObject>> = msg_send![app, windows];

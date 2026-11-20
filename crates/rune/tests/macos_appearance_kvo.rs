@@ -61,13 +61,18 @@ mod mac {
 
     fn appearance(name: &str) -> *mut AnyObject {
         let name = NSString::from_str(name);
+        // SAFETY: `NSAppearance +appearanceNamed:` is called on the main thread with a live `NSString`.
         unsafe { msg_send![class!(NSAppearance), appearanceNamed: &*name] }
     }
 
-    fn null() -> *mut AnyObject { unsafe { msg_send![class!(NSNull), null] } }
+    fn null() -> *mut AnyObject {
+        // SAFETY: `+[NSNull null]` returns the process-lifetime singleton pointer.
+        unsafe { msg_send![class!(NSNull), null] }
+    }
 
     /// Exactly what AppKit's KVO delivers to winit: `old`/`new` may be `NSNull`.
     fn notify(window: *mut AnyObject, old: *mut AnyObject, new: *mut AnyObject) {
+        // SAFETY: called on the AppKit main thread with a live `NSWindow` and non-null `NSAppearance`/`NSNull` pointers.
         unsafe {
             let delegate: *mut AnyObject = msg_send![window, delegate];
             let change: *mut AnyObject = msg_send![class!(NSMutableDictionary), dictionary];
@@ -80,6 +85,7 @@ mod mac {
 
     fn toggle_style_mask(window: *mut AnyObject, times: usize) {
         const RESIZABLE: usize = 1 << 3;
+        // SAFETY: called on the AppKit main thread with a live `NSWindow`.
         unsafe {
             let mask: usize = msg_send![window, styleMask];
             for i in 0..times {
@@ -91,6 +97,7 @@ mod mac {
 
     fn ns_window(window: &Window) -> *mut AnyObject {
         let RawWindowHandle::AppKit(handle) = window.window_handle().unwrap().as_raw() else { unreachable!() };
+        // SAFETY: `handle.ns_view` is a live `NSView` owned by `window` on the AppKit main thread.
         unsafe { msg_send![handle.ns_view.as_ptr().cast::<AnyObject>(), window] }
     }
 
@@ -148,6 +155,8 @@ mod mac {
     fn stress() {
         let (aqua, dark) = (appearance("NSAppearanceNameAqua"), appearance("NSAppearanceNameDarkAqua"));
         let mut observed = Vec::new();
+        // SAFETY: invoked on the AppKit main thread (`handle.update`); every `i` is `< count`
+        // and `delegate` is checked non-null before dereferencing.
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             let windows: *mut AnyObject = msg_send![app, windows];

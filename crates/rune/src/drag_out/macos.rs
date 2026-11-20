@@ -47,8 +47,10 @@ define_class!(
     #[ivars = Ivars]
     struct Source;
 
+    // SAFETY: `Source` inherits from `NSObject`, which implements `NSObjectProtocol`.
     unsafe impl NSObjectProtocol for Source {}
 
+    // SAFETY: `Source` is `MainThreadOnly` and each method matches AppKit's `NSDraggingSource` selector ABI.
     unsafe impl NSDraggingSource for Source {
         #[unsafe(method(draggingSession:sourceOperationMaskForDraggingContext:))]
         fn mask(&self, _session: &NSDraggingSession, context: NSDraggingContext) -> NSDragOperation {

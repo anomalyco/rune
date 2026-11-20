@@ -47,10 +47,16 @@ mod mac {
     }
 
     fn class_name(class: *const AnyClass) -> String {
-        if class.is_null() { "NULL".into() } else { unsafe { (*class).name().to_string_lossy().into_owned() } }
+        if class.is_null() {
+            "NULL".into()
+        } else {
+            // SAFETY: `class` is checked non-null and points to a valid Objective-C class metadata object.
+            unsafe { (*class).name().to_string_lossy().into_owned() }
+        }
     }
 
     fn windows() -> Vec<*mut AnyObject> {
+        // SAFETY: invoked on the AppKit main thread; each `i` is `< count` in `NSApp.windows`.
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             let windows: *mut AnyObject = msg_send![app, windows];
@@ -64,6 +70,7 @@ mod mac {
     fn pairs() -> Vec<Pair> {
         let mut pairs = Vec::new();
         for window in windows() {
+            // SAFETY: invoked on the AppKit main thread; `window` is a live `NSWindow` from `NSApp.windows`.
             unsafe {
                 let name = class_name(object_getClass(window));
                 let reported: *const AnyClass = msg_send![window, class];
@@ -87,6 +94,8 @@ mod mac {
     }
 
     fn kvo_report(source: *mut AnyObject) {
+        // SAFETY: `source` is a live `NSWindow` on the main thread; `class_copyMethodList` allocates
+        // `count` entries that are read within bounds and freed once with `free`.
         unsafe {
             let mut class = object_getClass(source);
             while !class.is_null() {
@@ -105,6 +114,7 @@ mod mac {
     }
 
     fn check(pair: Pair, path: &str) {
+        // SAFETY: invoked on the AppKit main thread; `pair.panel` and `pair.view` are live AppKit objects from `pairs()`.
         unsafe {
             let (panel, view) = (pair.panel as *mut AnyObject, pair.view as *mut AnyObject);
             let content: *mut AnyObject = msg_send![panel, contentView];
@@ -116,6 +126,7 @@ mod mac {
     }
 
     fn click(panel: *mut AnyObject) {
+        // SAFETY: invoked on the AppKit main thread; `panel` is a live `NSWindow` and synthetic `NSEvent`s are posted to `NSApplication`.
         unsafe {
             let frame: NSRect = msg_send![panel, frame];
             let at = NSPoint::new(frame.size.width / 2.0, frame.size.height / 2.0);
@@ -134,52 +145,94 @@ mod mac {
     /// AppKit calls that restyle a window or replace its content, made on the hidden source
     /// window the way an unrelated framework would.
     fn paths() -> Vec<(&'static str, Box<dyn Fn(*mut AnyObject)>)> {
-        unsafe fn mask(w: *mut AnyObject) -> usize { unsafe { msg_send![w, styleMask] } }
-        unsafe fn set(w: *mut AnyObject, m: usize) { unsafe { let _: () = msg_send![w, setStyleMask: m]; } }
+        unsafe fn mask(w: *mut AnyObject) -> usize {
+            // SAFETY: caller passes a live `NSWindow` on the AppKit main thread.
+            unsafe { msg_send![w, styleMask] }
+        }
+        unsafe fn set(w: *mut AnyObject, m: usize) {
+            // SAFETY: caller passes a live `NSWindow` on the AppKit main thread.
+            unsafe { let _: () = msg_send![w, setStyleMask: m]; }
+        }
         vec![
-            ("setStyleMask: (same)", Box::new(|w| unsafe { set(w, mask(w)) })),
-            ("setStyleMask: (resizable)", Box::new(|w| unsafe { let m = mask(w); set(w, m ^ RESIZABLE); set(w, m) })),
-            ("setStyleMask: (titled)", Box::new(|w| unsafe { let m = mask(w); set(w, m ^ TITLED); set(w, m) })),
-            ("setStyleMask: (full size content)", Box::new(|w| unsafe { let m = mask(w); set(w, m ^ FULL_SIZE_CONTENT); set(w, m) })),
-            ("setTitlebarAppearsTransparent:", Box::new(|w| unsafe {
-                let t: Bool = msg_send![w, titlebarAppearsTransparent];
-                let _: () = msg_send![w, setTitlebarAppearsTransparent: Bool::new(!t.as_bool())];
-                let _: () = msg_send![w, setTitlebarAppearsTransparent: t];
+            ("setStyleMask: (same)", Box::new(|w| {
+                // SAFETY: called on the AppKit main thread with a live source `NSWindow`.
+                unsafe { set(w, mask(w)) }
             })),
-            ("setTitleVisibility:", Box::new(|w| unsafe {
-                let v: isize = msg_send![w, titleVisibility];
-                let _: () = msg_send![w, setTitleVisibility: 1 - v];
-                let _: () = msg_send![w, setTitleVisibility: v];
+            ("setStyleMask: (resizable)", Box::new(|w| {
+                // SAFETY: called on the AppKit main thread with a live source `NSWindow`.
+                unsafe { let m = mask(w); set(w, m ^ RESIZABLE); set(w, m) }
             })),
-            ("setToolbar:", Box::new(|w| unsafe {
-                let toolbar: *mut AnyObject = msg_send![class!(NSToolbar), new];
-                let _: () = msg_send![w, setToolbar: toolbar];
-                let _: () = msg_send![w, setToolbar: std::ptr::null_mut::<AnyObject>()];
-                let _: () = msg_send![toolbar, release];
+            ("setStyleMask: (titled)", Box::new(|w| {
+                // SAFETY: called on the AppKit main thread with a live source `NSWindow`.
+                unsafe { let m = mask(w); set(w, m ^ TITLED); set(w, m) }
             })),
-            ("setContentSize:", Box::new(|w| unsafe {
-                let frame: NSRect = msg_send![w, frame];
-                let _: () = msg_send![w, setContentSize: NSSize::new(frame.size.width + 7.0, frame.size.height + 5.0)];
-                let _: () = msg_send![w, setContentSize: frame.size];
+            ("setStyleMask: (full size content)", Box::new(|w| {
+                // SAFETY: called on the AppKit main thread with a live source `NSWindow`.
+                unsafe { let m = mask(w); set(w, m ^ FULL_SIZE_CONTENT); set(w, m) }
             })),
-            ("setFrame:display:", Box::new(|w| unsafe {
-                let frame: NSRect = msg_send![w, frame];
-                let _: () = msg_send![w, setFrame: NSRect::new(frame.origin, NSSize::new(frame.size.width + 9.0, frame.size.height + 3.0)), display: Bool::YES];
-                let _: () = msg_send![w, setFrame: frame, display: Bool::YES];
+            ("setTitlebarAppearsTransparent:", Box::new(|w| {
+                // SAFETY: called on the AppKit main thread with a live source `NSWindow`.
+                unsafe {
+                    let t: Bool = msg_send![w, titlebarAppearsTransparent];
+                    let _: () = msg_send![w, setTitlebarAppearsTransparent: Bool::new(!t.as_bool())];
+                    let _: () = msg_send![w, setTitlebarAppearsTransparent: t];
+                }
             })),
-            ("setContentView:", Box::new(|w| unsafe {
-                let view: *mut AnyObject = msg_send![class!(NSView), new];
-                let _: () = msg_send![w, setContentView: view];
-                let _: () = msg_send![w, setContentView: std::ptr::null_mut::<AnyObject>()];
-                let _: () = msg_send![view, release];
+            ("setTitleVisibility:", Box::new(|w| {
+                // SAFETY: called on the AppKit main thread with a live source `NSWindow`.
+                unsafe {
+                    let v: isize = msg_send![w, titleVisibility];
+                    let _: () = msg_send![w, setTitleVisibility: 1 - v];
+                    let _: () = msg_send![w, setTitleVisibility: v];
+                }
             })),
-            ("setAppearance:", Box::new(|w| unsafe {
-                let name = objc2_foundation::NSString::from_str("NSAppearanceNameDarkAqua");
-                let dark: *mut AnyObject = msg_send![class!(NSAppearance), appearanceNamed: &*name];
-                let _: () = msg_send![w, setAppearance: dark];
-                let _: () = msg_send![w, setAppearance: std::ptr::null_mut::<AnyObject>()];
+            ("setToolbar:", Box::new(|w| {
+                // SAFETY: called on the AppKit main thread with a live source `NSWindow`; releases the temporary `NSToolbar`.
+                unsafe {
+                    let toolbar: *mut AnyObject = msg_send![class!(NSToolbar), new];
+                    let _: () = msg_send![w, setToolbar: toolbar];
+                    let _: () = msg_send![w, setToolbar: std::ptr::null_mut::<AnyObject>()];
+                    let _: () = msg_send![toolbar, release];
+                }
             })),
-            ("displayIfNeeded", Box::new(|w| unsafe { let _: () = msg_send![w, displayIfNeeded]; let _: () = msg_send![w, layoutIfNeeded]; })),
+            ("setContentSize:", Box::new(|w| {
+                // SAFETY: called on the AppKit main thread with a live source `NSWindow`.
+                unsafe {
+                    let frame: NSRect = msg_send![w, frame];
+                    let _: () = msg_send![w, setContentSize: NSSize::new(frame.size.width + 7.0, frame.size.height + 5.0)];
+                    let _: () = msg_send![w, setContentSize: frame.size];
+                }
+            })),
+            ("setFrame:display:", Box::new(|w| {
+                // SAFETY: called on the AppKit main thread with a live source `NSWindow`.
+                unsafe {
+                    let frame: NSRect = msg_send![w, frame];
+                    let _: () = msg_send![w, setFrame: NSRect::new(frame.origin, NSSize::new(frame.size.width + 9.0, frame.size.height + 3.0)), display: Bool::YES];
+                    let _: () = msg_send![w, setFrame: frame, display: Bool::YES];
+                }
+            })),
+            ("setContentView:", Box::new(|w| {
+                // SAFETY: called on the AppKit main thread with a live source `NSWindow`; releases the temporary `NSView`.
+                unsafe {
+                    let view: *mut AnyObject = msg_send![class!(NSView), new];
+                    let _: () = msg_send![w, setContentView: view];
+                    let _: () = msg_send![w, setContentView: std::ptr::null_mut::<AnyObject>()];
+                    let _: () = msg_send![view, release];
+                }
+            })),
+            ("setAppearance:", Box::new(|w| {
+                // SAFETY: called on the AppKit main thread with a live source `NSWindow`.
+                unsafe {
+                    let name = objc2_foundation::NSString::from_str("NSAppearanceNameDarkAqua");
+                    let dark: *mut AnyObject = msg_send![class!(NSAppearance), appearanceNamed: &*name];
+                    let _: () = msg_send![w, setAppearance: dark];
+                    let _: () = msg_send![w, setAppearance: std::ptr::null_mut::<AnyObject>()];
+                }
+            })),
+            ("displayIfNeeded", Box::new(|w| {
+                // SAFETY: called on the AppKit main thread with a live source `NSWindow`.
+                unsafe { let _: () = msg_send![w, displayIfNeeded]; let _: () = msg_send![w, layoutIfNeeded]; }
+            })),
         ]
     }
 
@@ -191,16 +244,19 @@ mod mac {
         }
         let class = *CLASS.get_or_init(|| {
             let mut builder = ClassBuilder::new(c"RuneOverlaySourceTitleObserver", class!(NSObject)).unwrap();
+            // SAFETY: `observe` matches the Objective-C ABI for `observeValueForKeyPath:ofObject:change:context:`.
             unsafe {
                 builder.add_method(sel!(observeValueForKeyPath:ofObject:change:context:),
                     observe as extern "C" fn(*mut AnyObject, Sel, *mut AnyObject, *mut AnyObject, *mut AnyObject, *mut std::ffi::c_void));
             }
             builder.register() as *const AnyClass as usize
         });
+        // SAFETY: `class` is the `'static` Objective-C class returned by `ClassBuilder::register`.
         unsafe { &*(class as *const AnyClass) }
     }
 
     fn rotation_lock(lock: bool) -> bool {
+        // SAFETY: invoked on the AppKit main thread; guards `setWindowRotationLocked:` with `respondsToSelector:`.
         unsafe {
             let recorder: *mut AnyObject = msg_send![class!(RPScreenRecorder), sharedRecorder];
             let responds: Bool = msg_send![recorder, respondsToSelector: sel!(setWindowRotationLocked:)];
@@ -255,9 +311,11 @@ mod mac {
                 let resizes = matches!(path, "setContentSize:" | "setFrame:display:");
                 for pair in &pairs {
                     let panel = pair.panel as *mut AnyObject;
+                    // SAFETY: invoked on the AppKit main thread (`on_main`); `panel` is a live `NSWindow`.
                     let (frame, level): (NSRect, isize) = unsafe { (msg_send![panel, frame], msg_send![panel, level]) };
                     apply(pair.source as *mut AnyObject);
                     check(*pair, path);
+                    // SAFETY: invoked on the AppKit main thread (`on_main`); `panel` is still a live `NSWindow`.
                     let (after, after_level): (NSRect, isize) = unsafe { (msg_send![panel, frame], msg_send![panel, level]) };
                     if !resizes && (after != frame || after_level != level) {
                         fail(format!("{path}: restyling the source moved the panel ({frame:?} level {level} -> {after:?} level {after_level})"));
@@ -265,11 +323,14 @@ mod mac {
                 }
             });
             expect_click(&handle, overlay, path);
-            on_main(&handle, move || unsafe {
+            on_main(&handle, move || {
                 // Reattach for the next path so each failure is reported on its own.
-                for pair in &again {
-                    let content: *mut AnyObject = msg_send![pair.panel as *mut AnyObject, contentView];
-                    if content != pair.view as *mut AnyObject { let _: () = msg_send![pair.panel as *mut AnyObject, setContentView: pair.view as *mut AnyObject]; }
+                // SAFETY: invoked on the AppKit main thread (`on_main`); each `pair.panel` and `pair.view` is live.
+                unsafe {
+                    for pair in &again {
+                        let content: *mut AnyObject = msg_send![pair.panel as *mut AnyObject, contentView];
+                        if content != pair.view as *mut AnyObject { let _: () = msg_send![pair.panel as *mut AnyObject, setContentView: pair.view as *mut AnyObject]; }
+                    }
                 }
             });
         }
@@ -294,40 +355,47 @@ mod mac {
         // reports winit's class, and the setter override KVO adds still reaches the panel
         // and keeps the source's own title, which winit's `title()` reads.
         let pairs_kvo = pairs.clone();
-        on_main(&handle, move || unsafe {
-            let observer: *mut AnyObject = msg_send![observer_class(), new];
-            let key = objc2_foundation::NSString::from_str("title");
-            for pair in &pairs_kvo {
-                let _: () = msg_send![pair.source as *mut AnyObject, addObserver: observer, forKeyPath: &*key, options: 0usize, context: std::ptr::null_mut::<std::ffi::c_void>()];
-            }
-            for pair in &pairs_kvo {
-                let source = pair.source as *mut AnyObject;
-                let reported: *const AnyClass = msg_send![source, class];
-                if class_name(reported) != "WinitWindow" { fail(format!("-class with a KVO observer: {}", class_name(reported))); }
-                if !pair.overlay {
-                    let before = TITLE_CHANGES.load(Ordering::SeqCst);
-                    let title = objc2_foundation::NSString::from_str("retitled");
-                    let _: () = msg_send![source, setTitle: &*title];
-                    for (window, name) in [(pair.panel as *mut AnyObject, "panel"), (source, "source")] {
-                        let shown: *mut AnyObject = msg_send![window, title];
-                        let equal: Bool = msg_send![shown, isEqualToString: &*title];
-                        if !equal.as_bool() { fail(format!("launcher setTitle: under KVO didn't reach the {name}")); }
-                    }
-                    if TITLE_CHANGES.load(Ordering::SeqCst) == before { fail("the title observer was never notified".into()); }
+        on_main(&handle, move || {
+            // SAFETY: invoked on the AppKit main thread (`on_main`); adds and removes a KVO observer
+            // on live source windows and releases the observer before returning.
+            unsafe {
+                let observer: *mut AnyObject = msg_send![observer_class(), new];
+                let key = objc2_foundation::NSString::from_str("title");
+                for pair in &pairs_kvo {
+                    let _: () = msg_send![pair.source as *mut AnyObject, addObserver: observer, forKeyPath: &*key, options: 0usize, context: std::ptr::null_mut::<std::ffi::c_void>()];
                 }
+                for pair in &pairs_kvo {
+                    let source = pair.source as *mut AnyObject;
+                    let reported: *const AnyClass = msg_send![source, class];
+                    if class_name(reported) != "WinitWindow" { fail(format!("-class with a KVO observer: {}", class_name(reported))); }
+                    if !pair.overlay {
+                        let before = TITLE_CHANGES.load(Ordering::SeqCst);
+                        let title = objc2_foundation::NSString::from_str("retitled");
+                        let _: () = msg_send![source, setTitle: &*title];
+                        for (window, name) in [(pair.panel as *mut AnyObject, "panel"), (source, "source")] {
+                            let shown: *mut AnyObject = msg_send![window, title];
+                            let equal: Bool = msg_send![shown, isEqualToString: &*title];
+                            if !equal.as_bool() { fail(format!("launcher setTitle: under KVO didn't reach the {name}")); }
+                        }
+                        if TITLE_CHANGES.load(Ordering::SeqCst) == before { fail("the title observer was never notified".into()); }
+                    }
+                }
+                for pair in &pairs_kvo {
+                    let _: () = msg_send![pair.source as *mut AnyObject, removeObserver: observer, forKeyPath: &*key];
+                }
+                let _: () = msg_send![observer, release];
             }
-            for pair in &pairs_kvo {
-                let _: () = msg_send![pair.source as *mut AnyObject, removeObserver: observer, forKeyPath: &*key];
-            }
-            let _: () = msg_send![observer, release];
         });
 
         // Anything else that takes the view: the panel takes it back on the next event-loop
         // turn or input, and the click still lands.
         let before = CLICKS.load(Ordering::SeqCst);
-        on_main(&handle, move || unsafe {
-            let _: () = msg_send![overlay.view as *mut AnyObject, removeFromSuperview];
-            click(overlay.panel as *mut AnyObject);
+        on_main(&handle, move || {
+            // SAFETY: invoked on the AppKit main thread (`on_main`); detaches the live overlay view before posting a click.
+            unsafe {
+                let _: () = msg_send![overlay.view as *mut AnyObject, removeFromSuperview];
+                click(overlay.panel as *mut AnyObject);
+            }
         });
         for _ in 0..100 {
             if CLICKS.load(Ordering::SeqCst) > before { break; }
@@ -337,15 +405,21 @@ mod mac {
         on_main(&handle, move || check(overlay, "detached view"));
         expect_click(&handle, overlay, "after reattaching");
         let launcher = *pairs.iter().find(|p| !p.overlay).unwrap();
-        on_main(&handle, move || unsafe { let _: () = msg_send![launcher.view as *mut AnyObject, removeFromSuperview]; });
+        on_main(&handle, move || {
+            // SAFETY: invoked on the AppKit main thread (`on_main`); `launcher.view` is a live `NSView`.
+            unsafe { let _: () = msg_send![launcher.view as *mut AnyObject, removeFromSuperview]; }
+        });
         handle.open();
         std::thread::sleep(Duration::from_millis(300));
         on_main(&handle, move || check(launcher, "detached launcher view, then open"));
         // Synthesized clicks don't reach a launcher's view here, so only check that input
         // brings the view back.
-        on_main(&handle, move || unsafe {
-            let _: () = msg_send![launcher.view as *mut AnyObject, removeFromSuperview];
-            click(launcher.panel as *mut AnyObject);
+        on_main(&handle, move || {
+            // SAFETY: invoked on the AppKit main thread (`on_main`); detaches the live launcher view before posting a click.
+            unsafe {
+                let _: () = msg_send![launcher.view as *mut AnyObject, removeFromSuperview];
+                click(launcher.panel as *mut AnyObject);
+            }
         });
         std::thread::sleep(Duration::from_millis(200));
         on_main(&handle, move || check(launcher, "detached launcher view, then click"));

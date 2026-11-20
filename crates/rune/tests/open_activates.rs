@@ -31,6 +31,7 @@ mod mac {
 
     /// The key window's title, if this app has a key window.
     fn key_title() -> Option<String> {
+        // SAFETY: invoked on the AppKit main thread (`on_main`); `window` and `title` are checked non-null before use.
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             let window: *mut AnyObject = msg_send![app, keyWindow];

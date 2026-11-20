@@ -81,15 +81,19 @@ mod mac {
     /// The Metal layer's `presentsWithTransaction`.
     fn transactions(window: &NSWindow) -> Option<bool> {
         fn find(layer: &AnyObject) -> Option<bool> {
+            // SAFETY: `layer` is a live `CAMetalLayer` on the AppKit main thread; `presentsWithTransaction` returns `bool`.
             if class_name(layer).contains("MetalLayer") { return Some(unsafe { msg_send![layer, presentsWithTransaction] }); }
+            // SAFETY: `layer` is a live `CALayer` on the AppKit main thread; `sublayers` returns an optional `NSArray<CALayer>`.
             let subs: Option<Retained<NSArray<AnyObject>>> = unsafe { msg_send![layer, sublayers] };
             subs?.iter().find_map(|l| find(&l))
         }
+        // SAFETY: `window.contentView()` is a live `NSView` on the AppKit main thread; `layer` returns an optional `CALayer`.
         let layer: Option<Retained<AnyObject>> = unsafe { msg_send![&*window.contentView()?, layer] };
         find(&*layer?)
     }
 
     fn occluded(window: &NSWindow) -> bool {
+        // SAFETY: `window` is a live `NSWindow` on the AppKit main thread; `occlusionState` returns `NSWindowOcclusionState` (`usize`).
         let state: usize = unsafe { msg_send![window, occlusionState] };
         state & 2 == 0
     }

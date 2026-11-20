@@ -42,6 +42,7 @@ mod cg {
     use std::ffi::c_void;
     #[repr(C)]
     pub struct CGEvent { _private: [u8; 0] }
+    // SAFETY: `CGEvent` is CoreGraphics' opaque `struct __CGEvent`, passed by pointer as `CGEventRef`.
     unsafe impl RefEncode for CGEvent { const ENCODING_REF: Encoding = Encoding::Pointer(&Encoding::Struct("__CGEvent", &[])); }
     #[link(name = "CoreGraphics", kind = "framework")]
     unsafe extern "C" {
@@ -78,6 +79,7 @@ fn main() {
     let code_typing = |c: &str| (0..128u16).find(|&code| event(code, COMMAND).charactersIgnoringModifiers()
         .is_some_and(|s| s.to_string() == c));
 
+    // SAFETY: initializes a freshly allocated `Target` subclass of `NSObject` on the main thread.
     let target: Retained<target::Target> = unsafe { msg_send![super(mtm.alloc().set_ivars(())), init] };
     let cases: [(&str, &str, usize); 8] = [
         ("cmd+b", "b", COMMAND), ("cmd+=", "=", COMMAND), ("ctrl+cmd+f", "f", CONTROL | COMMAND),

@@ -11,20 +11,25 @@ fn allocated() {
         if let Some(n) = count.get() { count.set(Some(n + 1)); }
     }).ok();
 }
+// SAFETY: forwards every allocation call to `System`, only counting allocations on this thread.
 unsafe impl GlobalAlloc for Allocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         allocated();
+        // SAFETY: delegates allocation with the caller's layout to `System`.
         unsafe { System.alloc(layout) }
     }
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         allocated();
+        // SAFETY: delegates zeroed allocation with the caller's layout to `System`.
         unsafe { System.alloc_zeroed(layout) }
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
         allocated();
+        // SAFETY: delegates reallocation of `ptr`, `layout` and `size` to `System`.
         unsafe { System.realloc(ptr, layout, size) }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: delegates deallocation of `ptr` and `layout` to `System`.
         unsafe { System.dealloc(ptr, layout) }
     }
 }

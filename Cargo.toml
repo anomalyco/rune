@@ -261,11 +261,11 @@ unsafe_code = "allow" # shared: forbid; GPU and FFI code needs unsafe
 await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
 dbg_macro = "deny"
+disallowed_methods = "deny"
 disallowed_types = "deny"
 expect_used = "warn"
+let_underscore_must_use = "deny"
 todo = "warn"
+undocumented_unsafe_blocks = "deny"
 unwrap_used = "warn"
 # shared-lints end
-undocumented_unsafe_blocks = "warn" # shared: deny; errors left
-let_underscore_must_use = "deny"
-disallowed_methods = "deny"

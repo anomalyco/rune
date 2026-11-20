@@ -169,17 +169,19 @@ mod mac {
 
     /// Posts a left mouse event at `at`, in the window's coordinates, to the app's queue.
     fn post(kind: usize, at: CGPoint, window_number: isize) {
-        autoreleasepool(|_| unsafe {
+        autoreleasepool(|_| {
             // SAFETY: NSEvent and NSApplication class methods; postEvent:atStart: may be called
             // from any thread.
-            let info: Retained<AnyObject> = msg_send![AnyClass::get(c"NSProcessInfo").unwrap(), processInfo];
-            let now: f64 = msg_send![&*info, systemUptime];
-            let event: Option<Retained<AnyObject>> = msg_send![AnyClass::get(c"NSEvent").unwrap(),
-                mouseEventWithType: kind, location: at, modifierFlags: 0usize, timestamp: now,
-                windowNumber: window_number, context: std::ptr::null_mut::<AnyObject>(), eventNumber: 0isize,
-                clickCount: 1isize, pressure: if kind == UP { 0.0f32 } else { 1.0f32 }];
-            let app: Retained<AnyObject> = msg_send![AnyClass::get(c"NSApplication").unwrap(), sharedApplication];
-            let _: () = msg_send![&*app, postEvent: &*event.unwrap(), atStart: false];
+            unsafe {
+                let info: Retained<AnyObject> = msg_send![AnyClass::get(c"NSProcessInfo").unwrap(), processInfo];
+                let now: f64 = msg_send![&*info, systemUptime];
+                let event: Option<Retained<AnyObject>> = msg_send![AnyClass::get(c"NSEvent").unwrap(),
+                    mouseEventWithType: kind, location: at, modifierFlags: 0usize, timestamp: now,
+                    windowNumber: window_number, context: std::ptr::null_mut::<AnyObject>(), eventNumber: 0isize,
+                    clickCount: 1isize, pressure: if kind == UP { 0.0f32 } else { 1.0f32 }];
+                let app: Retained<AnyObject> = msg_send![AnyClass::get(c"NSApplication").unwrap(), sharedApplication];
+                let _: () = msg_send![&*app, postEvent: &*event.unwrap(), atStart: false];
+            }
         });
     }
 
@@ -320,6 +322,7 @@ mod mac {
             log(Ev::Mark("after"));
             on_main(&handle, |s, _| {
                 let (_, _, layer) = window().expect("Rune's window and its Metal layer");
+                // SAFETY: `layer` is a live `CAMetalLayer` queried on the AppKit main thread.
                 let sync: Bool = unsafe { msg_send![&*layer, presentsWithTransaction] };
                 check("ending the drag clears presentsWithTransaction while idle", !sync.as_bool(), format!("presentsWithTransaction: {}", sync.as_bool()));
                 s.n += 1;

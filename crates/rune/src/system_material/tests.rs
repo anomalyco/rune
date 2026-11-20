@@ -180,20 +180,28 @@ fn a_live_resize_keeps_transactions_on_until_it_ends() {
 fn live_resize_end_notification_turns_off_transactions_unless_materials_or_move_need_them() {
     use objc2::{msg_send, rc::Retained, runtime::{AnyClass, AnyObject, Bool}};
     use std::{cell::Cell, rc::Rc};
+    // SAFETY: `NSObject` and `CAMetalLayer` are standard classes whose `+new` returns a retained instance.
     let (window, layer): (Retained<AnyObject>, Retained<AnyObject>) = unsafe {
         (msg_send![AnyClass::get(c"NSObject").unwrap(), new], msg_send![AnyClass::get(c"CAMetalLayer").expect("QuartzCore"), new])
     };
     let flag = Rc::new(Cell::new(PresentFlag::default()));
     let token = macos::watch_live_end(&window, &layer, flag.clone()).expect("observer");
-    let sync = || -> bool { unsafe { let b: Bool = msg_send![&*layer, presentsWithTransaction]; b.as_bool() } };
-    let post_end = || unsafe {
-        let center: Retained<AnyObject> = msg_send![AnyClass::get(c"NSNotificationCenter").unwrap(), defaultCenter];
-        let name = objc2_foundation::NSString::from_str("NSWindowDidEndLiveResizeNotification");
-        let _: () = msg_send![&*center, postNotificationName: &*name, object: &*window];
+    let sync = || -> bool {
+        // SAFETY: `layer` is a live `CAMetalLayer` owned by this test; `presentsWithTransaction` returns `BOOL`.
+        unsafe { let b: Bool = msg_send![&*layer, presentsWithTransaction]; b.as_bool() }
+    };
+    let post_end = || {
+        // SAFETY: posts `NSWindowDidEndLiveResizeNotification` to the default notification center for the live test `window`.
+        unsafe {
+            let center: Retained<AnyObject> = msg_send![AnyClass::get(c"NSNotificationCenter").unwrap(), defaultCenter];
+            let name = objc2_foundation::NSString::from_str("NSWindowDidEndLiveResizeNotification");
+            let _: () = msg_send![&*center, postNotificationName: &*name, object: &*window];
+        }
     };
     let mut f = flag.get();
     assert_eq!(f.live(true), Some(true));
     flag.set(f);
+    // SAFETY: `layer` is a live `CAMetalLayer` owned by this test; `setPresentsWithTransaction:` takes `BOOL`.
     unsafe { let _: () = msg_send![&*layer, setPresentsWithTransaction: Bool::YES]; }
     assert!(sync());
     post_end();
@@ -204,6 +212,7 @@ fn live_resize_end_notification_turns_off_transactions_unless_materials_or_move_
     assert_eq!(f.materials(true), Some(true));
     assert_eq!(f.live(true), None);
     flag.set(f);
+    // SAFETY: `layer` is a live `CAMetalLayer` owned by this test; `setPresentsWithTransaction:` takes `BOOL`.
     unsafe { let _: () = msg_send![&*layer, setPresentsWithTransaction: Bool::YES]; }
     post_end();
     assert!(sync(), "materials keep transactions on after live resize ends");
