@@ -14,6 +14,8 @@
 //!
 //! Zero lights and no emitters: [`LightRenderer::render`] records nothing and returns `false`; draw the UI as usual.
 
+#![forbid(unsafe_code)]
+
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod abi_tests;
 pub mod cpu;

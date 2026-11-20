@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use rune::{AppSpec, Color, Cx, El, Icon, Live, Tx, WindowHandle, WindowOptions, WindowSpec, col, el, icon, text};
 

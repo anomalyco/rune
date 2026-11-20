@@ -3,6 +3,8 @@
 //! the band in view. `--html` exports the same tree as the static first frame, so the page reads
 //! before the wasm arrives and without it.
 
+#![forbid(unsafe_code)]
+
 use std::collections::HashSet;
 use std::time::Duration;
 

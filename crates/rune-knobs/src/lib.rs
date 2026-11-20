@@ -21,6 +21,8 @@
 //! // in on_key: if rune_knobs::key(&mut s.knobs, ev) { return true }
 //! ```
 
+#![forbid(unsafe_code)]
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use rune::KeyEvent;

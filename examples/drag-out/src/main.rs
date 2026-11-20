@@ -3,6 +3,8 @@
 //! app bundle. A tile dims while it's dragged; each drag's end prints
 //! `drag-end <tile> <outcome>`.
 
+#![forbid(unsafe_code)]
+
 use std::path::PathBuf;
 
 use rune::tok::{self, radius, space, type_};

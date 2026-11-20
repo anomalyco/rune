@@ -17,6 +17,8 @@
 //! the primary display's top left (default `80,80`). `GLASS_CARD_TRACE=card.jsonl` writes the
 //! card window's frame trace, with each drawable's on-screen present time.
 
+#![forbid(unsafe_code)]
+
 use std::time::Duration;
 
 use rune::{

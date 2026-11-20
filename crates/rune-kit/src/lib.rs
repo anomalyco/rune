@@ -13,6 +13,8 @@
 //! and their content as a separate `El` that the view mounts at the root with [`root`], so it
 //! draws above later siblings and escapes clipping ancestors.
 
+#![forbid(unsafe_code)]
+
 mod budget;
 mod containers;
 mod controls;

@@ -1,6 +1,8 @@
 //! Bounded local diagnostics. Apps explicitly choose a directory and install their hooks.
 //! No network, global allocator installation, redraws, or per-frame formatting.
 
+// Unit benchmark `recorder::tests::instrumentation_overhead` calls `GlobalAlloc::alloc`/`dealloc` directly.
+#![cfg_attr(not(test), forbid(unsafe_code))]
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
 #[cfg(not(target_arch = "wasm32"))]

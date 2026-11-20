@@ -22,6 +22,8 @@
 //! source, and the module's memory (three 64 KiB pages, plus room for the source and its
 //! tokens) per [`Highlighter`].
 
+#![forbid(unsafe_code)]
+
 mod env;
 mod langs;
 mod rt;

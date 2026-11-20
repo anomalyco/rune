@@ -7,6 +7,9 @@
 //! timer in a regular window instead. `OCCLUDED_TIMER_UPDATE=1` replaces the repeating timer
 //! with one 100 ms `wake_after` that an update from another thread sets each second, and also
 //! prints the latest that timer fired.
+
+#![forbid(unsafe_code)]
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use rune::{App, AppSpec, Color, Cx, El, OverlayInput, OverlayOptions, OverlaySpec, RunOptions, ScreenEdge, Tx, WindowOptions, WindowSpec, el, text};

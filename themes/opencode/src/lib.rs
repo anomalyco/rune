@@ -7,6 +7,8 @@
 //! rune_kit::Button::new("Save").build(k)
 //! ```
 
+#![forbid(unsafe_code)]
+
 pub mod app_icons;
 pub mod file_icons;
 pub mod icons;

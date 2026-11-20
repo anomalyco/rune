@@ -27,6 +27,8 @@
 //! `GLASS_PANEL_POPOVER` asks for the popover material everywhere, and `GLASS_PANEL_MARK`
 //! draws a marker that tells the two windows apart in a recording.
 
+#![forbid(unsafe_code)]
+
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
