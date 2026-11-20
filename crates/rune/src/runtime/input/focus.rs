@@ -276,8 +276,6 @@ impl RuntimeCore {
         f(app.states(), tx);
         true
     }
-    /// The focus group `i` is an item of. A control inside an item (a tab's close button) is
-    /// no item: it's a Tab stop of its own, as an HTML button inside a roving `tablist` is.
     /// In `nodes` (a tree being committed), whether node `j` is a Tab stop: in the Tab order
     /// (`El::tab_index` not negative) and not an item of a roving focus group, whatever it can take
     /// now (a control just disabled still was one).
@@ -291,6 +289,8 @@ impl RuntimeCore {
         }
         true
     }
+    /// The focus group `i` is an item of. A control inside an item (a tab's close button) is
+    /// no item: it's a Tab stop of its own, as an HTML button inside a roving `tablist` is.
     pub(crate) fn focus_group(&self, i: usize) -> Option<usize> {
         let mut p = self.tree.nodes[i].parent;
         while let Some(i) = p {
@@ -531,8 +531,9 @@ impl RuntimeCore {
     /// first inside its nearest container that survived and then further out:
     /// - **It was a Tab stop:** the next Tab stop after it in that container, else the one before,
     ///   else the container itself when it is one, then the same in the next container out; only
-    ///   when no container out to the root has a Tab stop left does focus go to any control. A keyboard user lands where Tab would go, as OpenCode Desktop's focus rescue
-    ///   does (opencode#64909), not on a control Tab never reaches.
+    ///   when no container out to the root has a Tab stop left does focus go to any control. A
+    ///   keyboard user lands where Tab would go, as OpenCode Desktop's focus rescue does
+    ///   (opencode#64909), not on a control Tab never reaches.
     /// - **It wasn't** (an item of a roving group, a control out of the Tab order): the next control
     ///   after it that can take focus, else the one before, else the container, as a native list
     ///   hands its selection to the neighbour.
@@ -830,10 +831,6 @@ impl RuntimeCore {
     }
 }
 
-#[cfg(test)]
-#[path = "focus_tests.rs"]
-mod tests;
-
 /// The rescue's pick for [`RuntimeCore::focus_fallback`] and [`RuntimeCore::fallback_in_new`]:
 /// `scopes` are the containers that survived, nearest first, each with the end of its
 /// descendants' span (indices in document order; `at` lost focus). In each container, the next
@@ -846,3 +843,7 @@ fn rescue(lost_tab_stop: bool, at: usize, scopes: &[(usize, usize)], tab: &dyn F
     });
     if lost_tab_stop { pass(tab).or_else(|| pass(any)) } else { pass(any) }
 }
+
+#[cfg(test)]
+#[path = "focus_tests.rs"]
+mod tests;
