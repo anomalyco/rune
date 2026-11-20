@@ -1,0 +1,1 @@
+- Focus: a control in a roving group (a tab's Close button) that loses focus hands it to the group's next item (the next tab), not to a control inside it.
