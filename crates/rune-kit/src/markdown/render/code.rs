@@ -164,7 +164,7 @@ fn line_overflows(
                 let u = ch as u32;
                 if (0x20..0x7f).contains(&u) {
                     ub += advance[(u - 0x20) as usize];
-                } else if u >= 0x7f {
+                } else {
                     ub += non_ascii_ub;
                 }
             }

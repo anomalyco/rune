@@ -102,9 +102,10 @@ fn with_state<R>(f: impl FnOnce(&mut Option<Fonts>) -> R) -> R {
         }
         None => match FONTS.lock() {
             Ok(mut slot) => {
+                let before = slot.as_ref().map(epoch_of);
                 let r = f(&mut slot);
-                if let Some(fonts) = slot.as_ref() {
-                    GLOBAL_EPOCH.store(epoch_of(fonts), Ordering::Relaxed);
+                if let Some(after) = slot.as_ref().map(epoch_of) && Some(after) != before {
+                    GLOBAL_EPOCH.store(after, Ordering::Release);
                 }
                 r
             }
@@ -161,7 +162,7 @@ pub(crate) fn note_families(sans: &str, mono: &str) {
 pub fn font_epoch() -> u64 {
     OVERRIDE.with_borrow(|o| match o {
         Some(f) => epoch_of(f),
-        None => GLOBAL_EPOCH.load(Ordering::Relaxed),
+        None => GLOBAL_EPOCH.load(Ordering::Acquire),
     })
 }
 

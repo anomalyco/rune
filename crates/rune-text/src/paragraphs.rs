@@ -688,18 +688,14 @@ impl TextSystem {
         let before = found.iter().zip(old).take_while(|(f, o)| f.3 == o.key).count();
         let after = found[before..].iter().rev().zip(old[before..].iter().rev()).take_while(|(f, o)| f.3 == o.key).count();
         let rebreak = prev.is_some_and(|p| p.max_width != max_width || p.align != align);
-        let same_align = prev.is_some_and(|p| p.align == align);
-        // A waiting run's lines already fit on one line at `prev.max_width`, so only a tighter
-        // finite width can force any of them to wrap.
-        let tighter = max_width.is_some_and(|m| prev.is_none_or(|p| p.max_width.is_none_or(|pm| m < pm)));
         let line = style.line_px() * scale;
         // Each record found with the one the last layout had for it. A waiting one broken at
-        // a tighter width is keyed again there: its lines may not all fit any more.
+        // another width is keyed again there: its lines may not all fit any more.
         let mut items: Vec<(Found, Option<&Paragraph>)> = Vec::with_capacity(n);
         for (k, f) in found.into_iter().enumerate() {
             let kept = if k < before { Some(&old[k]) } else if k >= n - after { Some(&old[old.len() - (n - k)]) } else { None };
             match kept {
-                Some(o) if !o.shaped && rebreak && tighter => {
+                Some(o) if !o.shaped && rebreak => {
                     let m = match &ascii { Some(m) => Some(m.clone()), None => self.ascii_line(style, scale, spec.wrap_anywhere) };
                     let mut again = Vec::new();
                     let from = items.last().map_or(start_flow, |(f, _)| f.2);
@@ -735,21 +731,9 @@ impl TextSystem {
             // The same paragraph at the other width (the same text, so the same index).
             let twin = other.and_then(|o| o.paragraphs.get(k)).filter(|o| !pretty_active && o.key == key && o.shaped);
             let kept = kept.filter(|_| !(rebreak && pretty_active));
-            // A single start-aligned LTR line whose full width still fits breaks identically at
-            // the new width, so keep its `Rc<Layout>` and GPU quad identity untouched.
-            let kept_fits = |o: &Paragraph| {
-                same_align
-                    && blocks.is_empty()
-                    && align == Alignment::Start
-                    && o.flow == Flow::Ltr
-                    && o.layout.len() <= 1
-                    && o.y_frac == 0.0
-                    && o.layout.inline_boxes().next().is_none()
-                    && max_width.is_none_or(|m| o.widths[1] + 0.5 <= m)
-            };
             // A kept paragraph broken at another width, or this text's own paragraph at the
             // other width measuring asks for, breaks again here rather than shaping anew.
-            let again = match kept { Some(o) if rebreak && !kept_fits(o) => Some(o), Some(_) => None, None => twin };
+            let again = match kept { Some(o) if rebreak => Some(o), Some(_) => None, None => twin };
             let mut layout = match (kept, again) {
                 (_, Some(o)) => {
                     fresh += b - a;
