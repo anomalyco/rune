@@ -278,6 +278,19 @@ impl RuntimeCore {
     }
     /// The focus group `i` is an item of. A control inside an item (a tab's close button) is
     /// no item: it's a Tab stop of its own, as an HTML button inside a roving `tablist` is.
+    /// In `nodes` (a tree being committed), whether node `j` is a Tab stop: in the Tab order
+    /// (`El::tab_index` not negative) and not an item of a roving focus group, whatever it can take
+    /// now (a control just disabled still was one).
+    fn tab_stop_in(&self, nodes: &[Node], j: usize) -> bool {
+        if nodes[j].focus.order < 0 { return false; }
+        let mut p = nodes[j].parent;
+        while let Some(i) = p {
+            if nodes[i].focus.group { return false; }
+            if self.takes_focus(&nodes[i]) { return true; }
+            p = nodes[i].parent;
+        }
+        true
+    }
     pub(crate) fn focus_group(&self, i: usize) -> Option<usize> {
         let mut p = self.tree.nodes[i].parent;
         while let Some(i) = p {
@@ -512,10 +525,17 @@ impl RuntimeCore {
         changed
     }
     /// Where focus goes when the element holding it leaves the tree or can't hold it anymore (a
-    /// deleted row, a closed tab, a decided prompt, a pane closed under it) and nothing else
-    /// asked for it: the next control after it in the old tree that is still here, else the one
-    /// before it, else that container itself, looking first inside its nearest container that
-    /// survived and then further out, as a native list hands its selection to the neighbour.
+    /// deleted row, a closed tab, a decided prompt, a control disabled while focused, a pane closed
+    /// under it) and nothing else asked for it. It and [`Self::fallback_in_new`] (a region kept
+    /// from an earlier commit, or a control rebuilt disabled) share one rule, [`rescue`], looking
+    /// first inside its nearest container that survived and then further out:
+    /// - **It was a Tab stop:** the next Tab stop after it in that container, else the one before,
+    ///   else the container itself when it is one, then the same in the next container out; only
+    ///   when no container out to the root has a Tab stop left does focus go to any control. A keyboard user lands where Tab would go, as OpenCode Desktop's focus rescue
+    ///   does (opencode#64909), not on a control Tab never reaches.
+    /// - **It wasn't** (an item of a roving group, a control out of the Tab order): the next control
+    ///   after it that can take focus, else the one before, else the container, as a native list
+    ///   hands its selection to the neighbour.
     /// Elements out of the Tab order count (a roving list's other rows take focus by arrows). Focus otherwise fell to
     /// nothing: a screen reader went back to the window and Tab started over at its top. A
     /// modal's own focus is left to the modal machine, which returns it where it was.
@@ -565,19 +585,20 @@ impl RuntimeCore {
             };
             root.is_empty() || (p.len() > root.len() && p.starts_with(root) && p.as_bytes()[root.len()] == b'/')
         };
+        // Each surviving container, nearest first, with its descendants' span in the old tree.
+        let mut scopes = Vec::new();
         let mut scope = self.tree.nodes[at].parent;
         while let Some(s) = scope {
             if at_new(s).is_some() {
-                let end = (s + 1..self.tree.nodes.len()).find(|&j| !within(j, s)).unwrap_or(self.tree.nodes.len());
-                // Then the container itself, when it takes focus (a list row whose comment box
-                // closed under it).
-                if let Some(j) = (at + 1..end).find_map(survivor).or_else(|| (s + 1..at).rev().find_map(survivor)).or_else(|| survivor(s)) {
-                    return Some(nodes[j].path.clone());
-                }
+                scopes.push((s, (s + 1..self.tree.nodes.len()).find(|&j| !within(j, s)).unwrap_or(self.tree.nodes.len())));
             }
             scope = self.tree.nodes[s].parent;
         }
-        None
+        // The container itself counts after its children, when it takes focus (a list row whose
+        // comment box closed under it).
+        let tab = |i: usize| survivor(i).filter(|&j| self.tab_stop_in(nodes, j));
+        let lost_tab_stop = self.tree.nodes[at].focus.order >= 0 && self.focus_group(at).is_none();
+        rescue(lost_tab_stop, at, &scopes, &tab, &survivor).map(|j| nodes[j].path.clone())
     }
     /// [`Self::focus_fallback`] when the old tree holds the part that had focus only as a moved
     /// stub (a region kept from an earlier commit, a virtual row): the nearest container of it in
@@ -592,17 +613,17 @@ impl RuntimeCore {
         let can = |j: usize| node_shown(nodes, j) && self.can_take_focus(&nodes[j]);
         if let Some(at) = nodes.iter().position(|n| n.path == gone) {
             if self.can_take_focus(&nodes[at]) { return None; }
+            let mut scopes = Vec::new();
             let mut p = gone;
             while let Some(k) = p.rfind('/') {
                 p = &p[..k];
                 let Some(c) = nodes.iter().position(|n| n.path == p) else { continue };
                 let inside = |m: usize| nodes[m].path.len() > p.len() && nodes[m].path.starts_with(p) && nodes[m].path.as_bytes()[p.len()] == b'/';
-                let end = (c + 1..nodes.len()).find(|&m| !inside(m)).unwrap_or(nodes.len());
-                if let Some(m) = (at + 1..end).find(|&m| can(m)).or_else(|| (c + 1..at).rev().find(|&m| can(m))).or_else(|| can(c).then_some(c)) {
-                    return Some(nodes[m].path.clone());
-                }
+                scopes.push((c, (c + 1..nodes.len()).find(|&m| !inside(m)).unwrap_or(nodes.len())));
             }
-            return None;
+            let any = |m: usize| can(m).then_some(m);
+            let tab = |m: usize| (can(m) && self.tab_stop_in(nodes, m)).then_some(m);
+            return rescue(self.tab_stop_in(nodes, at), at, &scopes, &tab, &any).map(|m| nodes[m].path.clone());
         }
         let mut p = gone;
         while let Some(k) = p.rfind('/') {
@@ -812,3 +833,16 @@ impl RuntimeCore {
 #[cfg(test)]
 #[path = "focus_tests.rs"]
 mod tests;
+
+/// The rescue's pick for [`RuntimeCore::focus_fallback`] and [`RuntimeCore::fallback_in_new`]:
+/// `scopes` are the containers that survived, nearest first, each with the end of its
+/// descendants' span (indices in document order; `at` lost focus). In each container, the next
+/// control after `at` and then the one before, then the container itself. A Tab stop that lost
+/// focus is handed only to Tab stops (`tab`) while any container out to the root has one; only
+/// then to any control (`any`). Anything else hands focus to any control.
+fn rescue(lost_tab_stop: bool, at: usize, scopes: &[(usize, usize)], tab: &dyn Fn(usize) -> Option<usize>, any: &dyn Fn(usize) -> Option<usize>) -> Option<usize> {
+    let pass = |ok: &dyn Fn(usize) -> Option<usize>| scopes.iter().find_map(|&(s, end)| {
+        (at + 1..end).find_map(ok).or_else(|| (s + 1..at).rev().find_map(ok)).or_else(|| ok(s))
+    });
+    if lost_tab_stop { pass(tab).or_else(|| pass(any)) } else { pass(any) }
+}
