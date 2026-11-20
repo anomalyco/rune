@@ -73,10 +73,13 @@ pub(super) const PAD: &str = "\u{202f}\u{202f}";
 /// unicode-bidi: isolate }`, so code reads left to right and moves as one inside Arabic text.
 pub(super) const OPEN: &str = "\u{202f}\u{202f}\u{2066}";
 pub(super) const CLOSE: &str = "\u{2069}\u{202f}\u{202f}";
+/// Inside a link, inline code keeps its directional isolate without pill padding (`a code { padding: 0 }`).
+pub(super) const LINK_OPEN: &str = "\u{2066}";
+pub(super) const LINK_CLOSE: &str = "\u{2069}";
 
 /// `text` without inline code's padding and isolates.
 pub(super) fn unpadded(text: &str) -> String {
-    text.replace(OPEN, "").replace(CLOSE, "")
+    text.replace(OPEN, "").replace(CLOSE, "").replace(LINK_OPEN, "").replace(LINK_CLOSE, "")
 }
 
 /// Parses `src` into blocks. Unclosed constructs are closed at the end of input.
@@ -369,13 +372,14 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
             }
             Event::Code(t) => {
                 let code_src = code_span_content_range(src, range, &t);
+                let (open, close) = if b.in_link() { (LINK_OPEN, LINK_CLOSE) } else { (OPEN, CLOSE) };
                 let inl = b.inline();
                 let a = inl.1.text.len();
-                inl.1.text.push_str(OPEN);
+                inl.1.text.push_str(open);
                 let start = inl.1.text.len();
                 inl.1.text.push_str(&t);
                 let end = inl.1.text.len();
-                inl.1.text.push_str(CLOSE);
+                inl.1.text.push_str(close);
                 inl.1.spans.push((a, start, Style::CodePad));
                 inl.1.spans.push((start, end, Style::Code));
                 inl.1.spans.push((end, inl.1.text.len(), Style::CodePad));
