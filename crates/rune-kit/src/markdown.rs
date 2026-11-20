@@ -102,7 +102,7 @@ use autolink::autolink_inline;
 use cache::{doc_cached, doc_cached_with_meta, stream_cached, stream_cached_with_meta};
 #[cfg(test)]
 use cache::{CACHE, PARSES};
-use parser::{BlockMap, CLOSE, Cut, PAD, ParsedDoc, Source, SpanMap, parse_doc, unpadded};
+use parser::{BlockMap, CLOSE, Cut, LINK_CLOSE, PAD, ParsedDoc, Source, SpanMap, parse_doc, unpadded};
 use render::{Renderer, hash_of, rendered_keys, source_copy};
 use stream::parse_streaming;
 
