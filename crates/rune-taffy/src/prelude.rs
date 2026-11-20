@@ -1,5 +1,7 @@
 //! Drop-in prelude matching `taffy::prelude`, re-exporting [`crate::LayoutEngine`] and compact types.
 
+#![forbid(unsafe_code)]
+
 pub use crate::{BoxLayout, CompactStyle, LayoutEngine, SlotId};
 pub use taffy::{
     geometry::{Line, Rect, Size},
