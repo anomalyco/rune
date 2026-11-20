@@ -98,6 +98,7 @@ fn single(mask: NSDragOperation) -> bool { mask.bits().count_ones() <= 1 }
 /// empty mask, so a drag let go over the app would end Copied without sliding back (and hand
 /// the app its own file). The app's drop-taking windows stop taking drops for the session.
 fn mute(mtm: MainThreadMarker) -> Muted {
+    // SAFETY: `NSFilenamesPboardType` is an immutable AppKit extern static valid for the process.
     let winit_types = || NSArray::from_id_slice(&[unsafe { NSFilenamesPboardType }.copy()]);
     // SAFETY: window and delegate calls on the main thread. NSWindow answers
     // `registeredDraggedTypes` like NSView, though only NSView declares it; without it, the

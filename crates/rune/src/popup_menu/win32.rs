@@ -207,8 +207,9 @@ pub(crate) fn turns(hwnd: HWND) -> Turns {
 
 impl Drop for Turns {
     fn drop(&mut self) {
-        // SAFETY: only kills the timer if the window is still alive on this thread.
+        // SAFETY: `IsWindow` safely validates `self.hwnd` on this thread before killing the timer.
         if self.armed && unsafe { IsWindow(self.hwnd) != 0 } {
+            // SAFETY: `self.hwnd` was just confirmed live and `self.id` is the timer `turns` armed on it.
             unsafe { KillTimer(self.hwnd, self.id) };
         }
     }

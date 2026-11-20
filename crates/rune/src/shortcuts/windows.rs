@@ -63,6 +63,7 @@ impl Backend for Native {
         let scan = shortcut.physical_key().to_scancode().ok_or_else(|| ShortcutError::InvalidAccelerator(shortcut.to_string()))?;
         // RegisterHotKey takes a virtual key. Resolve the physical scan code in the
         // current layout rather than assuming US letters. Re-register on layout changes.
+        // SAFETY: `MapVirtualKeyW` takes integer values only and reads the active keyboard layout.
         let key = unsafe { MapVirtualKeyW(scan, MAPVK_VSC_TO_VK_EX) };
         if key == 0 { return Err(ShortcutError::InvalidAccelerator(shortcut.to_string())); }
         // SAFETY: RegisterHotKey and its window run on the event-loop thread.

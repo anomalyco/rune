@@ -113,10 +113,10 @@ pub(crate) fn process_age() -> Option<std::time::Duration> {
     use std::time::Duration;
     #[cfg(target_os = "macos")]
     {
-        // SAFETY: `info` is a live, writable `proc_bsdinfo` of the size passed, and an all-zero
-        // `proc_bsdinfo` is a valid value of that plain C struct.
+        // SAFETY: `libc::proc_bsdinfo` is a plain C struct for which all zeroes is valid.
         let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
         let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        // SAFETY: `info` is a live, writable `proc_bsdinfo` of `size` bytes; `getpid` has no preconditions.
         let got = unsafe { libc::proc_pidinfo(libc::getpid(), libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
         if got != size { return None }
         let start = std::time::UNIX_EPOCH + Duration::new(info.pbi_start_tvsec, info.pbi_start_tvusec as u32 * 1000);

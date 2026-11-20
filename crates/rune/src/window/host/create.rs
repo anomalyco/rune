@@ -136,6 +136,7 @@ impl Host {
         }
         #[cfg(windows)]
         {
+            // SAFETY: `GetDoubleClickTime` takes no arguments and reads the system setting.
             let ms = unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime() };
             let rt = self.app.rt_mut();
             rt.double_click_interval = f64::from(ms) / 1000.0;

@@ -7,6 +7,8 @@ impl SecureInput {
         if active == self.0 { return; }
         // Tests never take the claim: it would block every other app's key events.
         #[cfg(all(target_os = "macos", not(test)))]
+        // SAFETY: Carbon secure-input FFI takes no pointers; `self.0` ensures `DisableSecureEventInput`
+        // only balances a prior successful `EnableSecureEventInput`.
         unsafe {
             if active {
                 self.0 = EnableSecureEventInput() == 0;

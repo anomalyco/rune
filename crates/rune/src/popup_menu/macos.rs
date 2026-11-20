@@ -77,6 +77,7 @@ pub(super) fn show(window: &Arc<Window>, show: Show, session: Rc<Session>, wake:
         (false, _) => show.at.0 as f64,
         // SAFETY: a main-thread menu this function owns, already built.
         (true, Some([x, _, w, _])) => (x + w) as f64 - unsafe { menu.size() }.width,
+        // SAFETY: a main-thread menu this function owns, already built.
         (true, None) => show.at.0 as f64 - unsafe { menu.size() }.width,
     };
     let at = NSPoint::new(x, show.at.1 as f64);
