@@ -2,17 +2,17 @@
 //! portal v1 (which cannot remove a binding from an existing session).
 use super::{Backend, Shortcut, ShortcutError, ShortcutId, Sink};
 use crate::platform::portal::{self, DEST, PATH, RequestError, RequestTimeouts};
-use futures_util::StreamExt;
+use async_channel::{Sender, unbounded};
+use futures_lite::{FutureExt, StreamExt};
 use std::{collections::HashMap, sync::mpsc, thread::JoinHandle, time::Duration};
-use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
-use zbus::{Connection, OwnedObjectPath, OwnedVariant, Proxy, Variant};
+use zbus::{Connection, Proxy, zvariant::{OwnedObjectPath, OwnedValue, Type, Value}};
 
 const INTERFACE: &str = "org.freedesktop.portal.GlobalShortcuts";
 const RPC_TIMEOUT: Duration = Duration::from_secs(5);
 const CONSENT_TIMEOUT: Duration = Duration::from_secs(120);
 type Reply = mpsc::SyncSender<Result<(), ShortcutError>>;
 enum Command { Register(ShortcutId, Shortcut, Reply), Unregister(ShortcutId, Reply) }
-pub(super) struct Native { commands: Option<UnboundedSender<Command>>, worker: Option<JoinHandle<()>> }
+pub(super) struct Native { commands: Option<Sender<Command>>, worker: Option<JoinHandle<()>> }
 
 fn dbus_error(e: zbus::Error) -> ShortcutError {
     if portal::is_unavailable(&e) {
@@ -33,8 +33,8 @@ fn response_status(status: u32) -> Result<(), ShortcutError> {
 }
 fn timed_out() -> ShortcutError { ShortcutError::Backend("portal request timed out".into()) }
 
-async fn request<B: serde::Serialize + zbus::Type>(conn: &Connection, portal_proxy: &Proxy<'_>, token: &str,
-    method: &str, body: &B) -> Result<HashMap<String, OwnedVariant>, ShortcutError> {
+async fn request<B: serde::Serialize + Type>(conn: &Connection, portal_proxy: &Proxy<'_>, token: &str,
+    method: &str, body: &B) -> Result<HashMap<String, OwnedValue>, ShortcutError> {
     let (status, values) = portal::request(
         conn,
         portal_proxy,
@@ -54,16 +54,16 @@ async fn request<B: serde::Serialize + zbus::Type>(conn: &Connection, portal_pro
 }
 
 async fn close(conn: &Connection, session: &OwnedObjectPath) -> Result<(), ShortcutError> {
-    tokio::time::timeout(RPC_TIMEOUT, async {
+    portal::timeout(RPC_TIMEOUT, async {
         let proxy = Proxy::new(conn, DEST, session.as_str(), "org.freedesktop.portal.Session").await.map_err(dbus_error)?;
         proxy.call::<_, _, ()>("Close", &()).await.map_err(dbus_error)
-    }).await.unwrap_or_else(|_| Err(timed_out()))
+    }).await.unwrap_or_else(|| Err(timed_out()))
 }
 
 async fn bind(conn: &Connection, portal_proxy: &Proxy<'_>, id: ShortcutId, shortcut: &Shortcut) -> Result<OwnedObjectPath, ShortcutError> {
     let create = portal::next_token("shortcuts_create");
     let session_token = portal::next_token("shortcuts_session");
-    let options = HashMap::from([("handle_token", Variant::from(create.as_str())), ("session_handle_token", Variant::from(session_token.as_str()))]);
+    let options = HashMap::from([("handle_token", Value::from(create.as_str())), ("session_handle_token", Value::from(session_token.as_str()))]);
     let response = request(conn, portal_proxy, &create, "CreateSession", &(options,)).await?;
     let value = response.get("session_handle").ok_or_else(|| ShortcutError::Backend("portal omitted session_handle".into()))?;
     let session = if let Ok(path) = <&str>::try_from(value) {
@@ -71,17 +71,17 @@ async fn bind(conn: &Connection, portal_proxy: &Proxy<'_>, id: ShortcutId, short
     } else { OwnedObjectPath::try_from(value.try_clone().map_err(|e| ShortcutError::Backend(e.to_string()))?)
         .map_err(|e| ShortcutError::Backend(e.to_string()))? };
     let bind_token = portal::next_token("shortcuts_bind");
-    let options = HashMap::from([("handle_token", Variant::from(bind_token.as_str()))]);
+    let options = HashMap::from([("handle_token", Value::from(bind_token.as_str()))]);
     let trigger = shortcut.portal_trigger();
     let description = format!("Shortcut {shortcut}");
-    let info = HashMap::from([("description", Variant::from(description.as_str())), ("preferred_trigger", Variant::from(trigger.as_str()))]);
+    let info = HashMap::from([("description", Value::from(description.as_str())), ("preferred_trigger", Value::from(trigger.as_str()))]);
     let shortcuts = vec![(id.0.to_string(), info)];
     match request(conn, portal_proxy, &bind_token, "BindShortcuts", &(&session, shortcuts, "", options)).await {
         Ok(response) => {
             // Success with no matching binding is not a registration. The compositor chooses
             // the actual trigger; a preferred-trigger conflict is not standardized by the portal.
             let bindings = response.get("shortcuts").and_then(|v| v.try_clone().ok())
-                .and_then(|v| Vec::<(String, HashMap<String, OwnedVariant>)>::try_from(v).ok());
+                .and_then(|v| Vec::<(String, HashMap<String, OwnedValue>)>::try_from(v).ok());
             if bindings.as_ref().is_some_and(|v| v.iter().any(|(key, _)| key == &id.0.to_string())) { Ok(session) }
             else { let _ = close(conn, &session).await; Err(ShortcutError::PermissionDenied) }
         }
@@ -91,14 +91,11 @@ async fn bind(conn: &Connection, portal_proxy: &Proxy<'_>, id: ShortcutId, short
 
 impl Native {
     pub(super) fn new(sink: Sink) -> Result<Self, ShortcutError> {
-        let (commands, mut receiver) = unbounded_channel();
+        let (commands, receiver) = unbounded();
         let (ready, result) = mpsc::sync_channel(1);
         let worker = std::thread::Builder::new().name("rune-shortcuts-portal".into()).spawn(move || {
-            let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-                Ok(r) => r, Err(e) => { let _ = ready.send(Err(ShortcutError::Backend(e.to_string()))); return; }
-            };
-            runtime.block_on(async move {
-                let setup = tokio::time::timeout(RPC_TIMEOUT, async {
+            async_io::block_on(async move {
+                let setup = portal::timeout(RPC_TIMEOUT, async {
                     // No session bus means this desktop cannot supply the portal.
                     let conn = Connection::session().await.map_err(|_| ShortcutError::Unsupported)?;
                     let portal = Proxy::new(&conn, DEST, PATH, INTERFACE).await.map_err(dbus_error)?;
@@ -113,26 +110,30 @@ impl Native {
                     Err(e) => { let _ = ready.send(Err(e)); return; }
                 };
                 let mut sessions: HashMap<ShortcutId, OwnedObjectPath> = HashMap::new();
+                enum Wake {
+                    Command(Option<Command>),
+                    Event(Option<zbus::Message>),
+                }
                 loop {
-                    tokio::select! {
-                        command = receiver.recv() => match command {
-                            Some(Command::Register(id, shortcut, reply)) => {
-                                let result = bind(&conn, &portal, id, &shortcut).await.map(|session| { sessions.insert(id, session); });
-                                let _ = reply.send(result);
-                            }
-                            Some(Command::Unregister(id, reply)) => {
-                                let result = match sessions.get(&id) {
-                                    Some(session) => close(&conn, session).await,
-                                    None => Err(ShortcutError::UnknownId),
-                                };
-                                if result.is_ok() { sessions.remove(&id); }
-                                let _ = reply.send(result);
-                            }
-                            None => break,
-                        },
-                        event = events.next() => {
-                            let Some(event) = event else { break };
-                            if let Ok((session, key, _, options)) = event.body().deserialize::<(OwnedObjectPath, String, u64, HashMap<String, OwnedVariant>)>()
+                    let next = async { Wake::Command(receiver.recv().await.ok()) }
+                        .or(async { Wake::Event(events.next().await) })
+                        .await;
+                    match next {
+                        Wake::Command(Some(Command::Register(id, shortcut, reply))) => {
+                            let result = bind(&conn, &portal, id, &shortcut).await.map(|session| { sessions.insert(id, session); });
+                            let _ = reply.send(result);
+                        }
+                        Wake::Command(Some(Command::Unregister(id, reply))) => {
+                            let result = match sessions.get(&id) {
+                                Some(session) => close(&conn, session).await,
+                                None => Err(ShortcutError::UnknownId),
+                            };
+                            if result.is_ok() { sessions.remove(&id); }
+                            let _ = reply.send(result);
+                        }
+                        Wake::Command(None) | Wake::Event(None) => break,
+                        Wake::Event(Some(event)) => {
+                            if let Ok((session, key, _, options)) = event.body().deserialize::<(OwnedObjectPath, String, u64, HashMap<String, OwnedValue>)>()
                                 && let Ok(id) = key.parse::<u32>().map(ShortcutId)
                                 && sessions.get(&id) == Some(&session) {
                                 let token = options.get("activation_token").and_then(|v| <&str>::try_from(v).ok()).map(str::to_owned);
@@ -154,7 +155,7 @@ impl Native {
     }
     fn send(&self, command: impl FnOnce(Reply) -> Command) -> Result<(), ShortcutError> {
         let (reply, result) = mpsc::sync_channel(1);
-        self.commands.as_ref().ok_or(ShortcutError::NotRunning)?.send(command(reply)).map_err(|_| ShortcutError::Backend("portal disconnected".into()))?;
+        self.commands.as_ref().ok_or(ShortcutError::NotRunning)?.try_send(command(reply)).map_err(|_| ShortcutError::Backend("portal disconnected".into()))?;
         result.recv().unwrap_or_else(|_| Err(ShortcutError::Backend("portal disconnected".into())))
     }
 }
