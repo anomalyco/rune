@@ -5,7 +5,7 @@
 //! `Rgba16Float` holds it, then the composite (backdrop_composite.wgsl) inside the record's rounded
 //! rect and clip. Only the record's region is blurred, as on the GPU.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
 
 use super::raster::{Exec, f16};
 use super::shade::{Clip, sd_rounded};
@@ -75,20 +75,35 @@ fn bilinear(uv: [f32; 2], w: u32, h: u32, texel: impl Fn(u32, u32) -> [f32; 4]) 
     mix(mix(texel(x0, y0), texel(x1, y0), fx), mix(texel(x0, y1), texel(x1, y1), fx), fy)
 }
 
-/// Runs `row(y, texels)` for rows `y0..y1` of `out`, a row at a time on `exec`'s threads.
+/// Runs `row(y, texels)` for rows `y0..y1` of `out`, in disjoint horizontal bands on `exec`'s
+/// threads.
 fn rows(exec: &dyn Exec, out: &mut Level, y0: u32, y1: u32, row: &(dyn Fn(u32, &mut [[f32; 4]]) + Sync)) {
-    struct Rows(*mut [f32; 4]);
-    // SAFETY: each row goes to one thread (the counter hands each out once), and rows don't
-    // overlap; `out` outlives the run, which joins before returning.
-    unsafe impl Sync for Rows {}
-    let (base, w) = (&Rows(out.px.as_mut_ptr()), out.w as usize);
-    let next = AtomicU32::new(y0);
+    if y1 <= y0 || out.w == 0 { return; }
+    let w = out.w as usize;
+    let slice = &mut out.px[y0 as usize * w..y1 as usize * w];
+    let total = (y1 - y0) as usize;
+    let threads = exec.threads().max(1);
+    if threads == 1 || total == 1 {
+        for (i, texels) in slice.chunks_exact_mut(w).enumerate() {
+            row(y0 + i as u32, texels);
+        }
+        return;
+    }
+    let band = (total / (threads * 4)).max(1);
+    let work = Mutex::new((y0, slice.chunks_mut(band * w)));
     exec.run(&|| loop {
-        let y = next.fetch_add(1, Ordering::Relaxed);
-        if y >= y1 { break; }
-        // SAFETY: row `y` is inside `out` (y < y1 <= h) and only this thread has it.
-        let texels = unsafe { std::slice::from_raw_parts_mut(base.0.add(y as usize * w), w) };
-        row(y, texels);
+        let next = {
+            let mut guard = work.lock().unwrap_or_else(|e| e.into_inner());
+            guard.1.next().map(|chunk| {
+                let y = guard.0;
+                guard.0 += (chunk.len() / w) as u32;
+                (y, chunk)
+            })
+        };
+        let Some((y_start, chunk)) = next else { break };
+        for (i, texels) in chunk.chunks_exact_mut(w).enumerate() {
+            row(y_start + i as u32, texels);
+        }
     });
 }
 

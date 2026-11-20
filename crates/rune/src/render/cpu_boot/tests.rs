@@ -326,3 +326,92 @@ fn plus_lighter_turned_and_scaled_layers_saturate_before_interpolation() {
         "PlusLighter layer interpolated unclamped texels: turned max={diff_turned} worst={worst_turned:?}; scaled max={diff_scaled} worst={worst_scaled:?}",
     );
 }
+
+#[test]
+fn backdrop_blur_multithreaded_matches_single_thread() {
+    let (w, h) = (320u32, 173u32);
+    let clear = Color { r: 0.05, g: 0.08, b: 0.12, a: 1.0 }.premul_srgb(1.0);
+    let mut instances = Vec::new();
+    for y in (0..h).step_by(12) {
+        for x in (0..w).step_by(12) {
+            let color = if ((x / 12) + (y / 12)) % 2 == 0 {
+                Color { r: 0.9, g: 0.2, b: 0.1, a: 1.0 }.premul_srgb(1.0)
+            } else {
+                Color { r: 0.1, g: 0.75, b: 0.85, a: 1.0 }.premul_srgb(1.0)
+            };
+            instances.push(rect([x as f32, y as f32, 12.0, 12.0], color, NO_CLIP));
+        }
+    }
+    for (k, sigma) in [2.5f32, 8.0, 24.0].into_iter().enumerate() {
+        let x = 10.0 + k as f32 * 96.0;
+        instances.push(Instance {
+            rect: [x, 12.0, 84.0, 149.0],
+            radii: [6.0; 4],
+            fill: [0.0, 0.0, 0.0, 1.0],
+            border: [0.0; 4],
+            params: [sigma, KIND_BACKDROP_BLUR, 0.0, 1.0],
+            uv: [0.0; 4],
+            clip: NO_CLIP,
+            fade: [0; 4],
+        });
+    }
+    let atlas = Atlas::new();
+    let images = ImageAtlas::default();
+    let scene = Scene::new(&instances, &atlas, &images, (w, h), clear).srgb_blend(true);
+    let mut single = vec![0u8; (w * h * 4) as usize];
+    let mut multi = vec![0u8; (w * h * 4) as usize];
+    paint(&scene, &mut Target::new(&mut single, w, h), 1).expect("single-thread paint");
+    paint(&scene, &mut Target::new(&mut multi, w, h), 4).expect("multi-thread paint");
+    assert_eq!(single, multi, "multi-threaded backdrop blur must match single-threaded pixels bit-for-bit");
+}
+
+#[test]
+fn move_tiles_matches_reference_across_shifts_strides_and_threads() {
+    use super::bin::{TILE_H, TILE_W};
+    let size = (275u32, 210u32);
+    let cols = size.0.div_ceil(TILE_W);
+    let tile_rows = size.1.div_ceil(TILE_H);
+    let row_bytes = size.0 as usize * 4;
+
+    for (stride, extra_tail) in [(row_bytes, 0usize), (row_bytes + 48, 0usize), (row_bytes + 48, (row_bytes + 48) * 3 + 12)] {
+        let buf_len = stride * (size.1 as usize - 1) + row_bytes + extra_tail;
+        let initial: Vec<u8> = (0..buf_len).map(|i| ((i.wrapping_mul(131) ^ (i >> 5)) & 0xff) as u8).collect();
+        for dy in [-130i32, -64, -33, -12, -1, 1, 12, 33, 64, 130] {
+            let mut clean = vec![false; (cols * tile_rows) as usize];
+            for ty in 0..tile_rows {
+                let y0 = ty * TILE_H;
+                let y1 = ((ty + 1) * TILE_H).min(size.1);
+                let in_bounds = y0 as i32 - dy >= 0 && y1 as i32 - dy <= size.1 as i32;
+                if !in_bounds { continue; }
+                for tx in 0..cols {
+                    // Mix gaps (static sidebar at tx=0, dirty tile at tx=2 on odd rows) with contiguous runs.
+                    if tx > 0 && !(tx == 2 && ty % 2 == 1) {
+                        clean[(ty * cols + tx) as usize] = true;
+                    }
+                }
+            }
+            let mut expected = initial.clone();
+            for ty in 0..tile_rows {
+                let y0 = ty * TILE_H;
+                let y1 = ((ty + 1) * TILE_H).min(size.1);
+                for tx in 0..cols {
+                    if !clean[(ty * cols + tx) as usize] { continue; }
+                    let x0 = (tx * TILE_W) as usize * 4;
+                    let x1 = ((tx + 1) * TILE_W).min(size.0) as usize * 4;
+                    for y in y0..y1 {
+                        let src_y = (y as i32 - dy) as usize;
+                        let dst_y = y as usize;
+                        expected[dst_y * stride + x0..dst_y * stride + x1]
+                            .copy_from_slice(&initial[src_y * stride + x0..src_y * stride + x1]);
+                    }
+                }
+            }
+            for threads in [1usize, 4] {
+                let mut actual = initial.clone();
+                let mut target = Target::with_stride(&mut actual, size.0, size.1, stride);
+                super::painter::move_tiles(&super::raster::Spawn(threads), &mut target, size, cols, &clean, dy);
+                assert_eq!(actual, expected, "mismatch for stride={stride} tail={extra_tail} dy={dy} threads={threads}");
+            }
+        }
+    }
+}
