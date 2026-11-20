@@ -168,6 +168,7 @@ type CodeWrapFn = Rc<dyn Fn(usize, &str) -> bool>;
 pub(super) struct CodeWire {
     pub(super) frame: Option<CodeFrameFn>,
     pub(super) wrap: Option<CodeWrapFn>,
+    pub(super) wrap_default: bool,
 }
 type QuoteWire = Rc<dyn Fn(El, &QuoteFrame<'_>) -> El>;
 
@@ -193,9 +194,27 @@ pub struct CodeFrame<'a> {
     pub open: bool,
     /// Whether this block currently wraps long lines instead of scrolling sideways.
     pub wrapped: bool,
-    /// Whether at least one unwrapped line exceeds this block's inner width (`MarkdownStyle::text_width`
-    /// less surrounding list/quote indents and block padding). Always `false` when `text_width` is unset.
-    pub overflows: bool,
+    pub(super) digest: Option<(u64, u64)>,
+    pub(super) font: TextStyle,
+    pub(super) text_width: Option<f32>,
+    pub(super) inset: f32,
+    pub(super) pad_x: f32,
+}
+
+impl CodeFrame<'_> {
+    /// Whether at least one unwrapped line exceeds this block's inner width at `scale = 1.0`
+    /// (`MarkdownStyle::text_width` less surrounding list/quote indents, padding, and snapped
+    /// border). Computed lazily on demand and cached per `(content, font, width, font_epoch)`.
+    /// Always `false` when `text_width` is unset or `source` is empty.
+    pub fn overflows(&self) -> bool {
+        self.overflows_at(1.0)
+    }
+
+    /// Like [`Self::overflows`], using the exact `border_layout()` border thickness for device
+    /// `scale` (for example `2.0 pt` total at `1.0`, `1.333 pt` at `1.5`, `1.0 pt` at `2.0`).
+    pub fn overflows_at(&self, scale: f32) -> bool {
+        render::code_overflows_at(self.source, self.digest, self.font, self.text_width, self.inset, self.pad_x, scale)
+    }
 }
 
 /// A diagram [`Markdown::diagram_frame`] is wrapping.
@@ -232,7 +251,7 @@ pub struct Markdown {
     selectable: bool,
     copy_source: bool,
     scroll_wide: bool,
-    wrap_code: Option<bool>,
+    wrap_code: bool,
     tentative: Option<rune::Direction>,
     highlighter: Highlighter,
     #[cfg(feature = "mermaid")]
@@ -253,7 +272,7 @@ thread_local! {
 impl Markdown {
     pub fn new(src: impl Into<String>) -> Markdown {
         Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: -1.0, streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_help: None, link_ring: None, code_link: None,
-            on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, wrap_code: None, tentative: None, highlighter: Highlighter::builtin(),
+            on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, wrap_code: false, tentative: None, highlighter: Highlighter::builtin(),
             #[cfg(feature = "mermaid")]
             diagram_frame: None, code_frame: None, code_wrap: None, quote_frame: None, link_favicon: None, images: None, on_image: None }
     }
@@ -417,17 +436,19 @@ impl Markdown {
         self
     }
 
-    /// Overrides [`MarkdownStyle::wrap_code`] for this Markdown block (`true` wraps long code
-    /// lines instead of scrolling sideways, keeping `El::by_line`, Find highlights and
-    /// screen-reader line runs).
+    /// Wraps long lines in code blocks (`white-space: pre-wrap; overflow-wrap: anywhere`,
+    /// overriding [`Self::scroll_wide`] for code blocks) instead of scrolling them sideways
+    /// (`false` by default). Wrapped blocks keep per-line shaping (`El::by_line`), syntax
+    /// highlighting, Find highlights, screen-reader line runs, and a stable text `NodeId` path
+    /// across toggles so reveal does not replay and active selection stays intact.
     pub fn wrap_code(mut self, wrap: bool) -> Self {
-        self.wrap_code = Some(wrap);
+        self.wrap_code = wrap;
         self
     }
 
-    /// Per-block override for code-block wrapping: called with `(block_index, source)` and returns
-    /// whether that block wraps long lines (overriding [`MarkdownStyle::wrap_code`] and
-    /// [`Self::wrap_code`]).
+    /// Per-block override for code-block wrapping: called with `(block_index, source)` (where
+    /// `block_index` counts both code and Mermaid blocks, matching [`CodeFrame::index`]) and
+    /// returns whether that block wraps long lines (overriding [`Self::wrap_code`]).
     pub fn code_wrap(mut self, f: impl Fn(usize, &str) -> bool + 'static) -> Self {
         self.code_wrap = Some(Rc::new(f));
         self
@@ -527,13 +548,9 @@ impl Markdown {
         };
         let dirs = bidi::Dirs::new(&blocks);
         let root_dir = dirs.of_slice(&blocks).or(self.tentative);
-        let mut s = style.clone();
-        if let Some(wrap) = self.wrap_code {
-            s.wrap_code = wrap;
-        }
-        let code_frame = (self.code_frame.is_some() || self.code_wrap.is_some())
-            .then(|| CodeWire { frame: self.code_frame, wrap: self.code_wrap });
-        let r = Renderer { s, highlights: self.highlights, reveal: self.reveal, streaming: self.streaming, on_link: self.on_link, on_link_secondary: self.on_link_secondary, link_look: self.link_look, link_help: self.link_help, link_ring: self.link_ring, code_link: self.code_link,
+        let code_frame = (self.code_frame.is_some() || self.code_wrap.is_some() || self.wrap_code)
+            .then(|| CodeWire { frame: self.code_frame, wrap: self.code_wrap, wrap_default: self.wrap_code });
+        let r = Renderer { s: style.clone(), highlights: self.highlights, reveal: self.reveal, streaming: self.streaming, on_link: self.on_link, on_link_secondary: self.on_link_secondary, link_look: self.link_look, link_help: self.link_help, link_ring: self.link_ring, code_link: self.code_link,
             on_task: self.on_task, tasks_read_only: self.tasks_read_only, selectable: self.selectable, scroll_wide: self.scroll_wide, tentative: self.tentative,
             highlighter: self.highlighter, sources, next_source: Cell::new(0), tasks, next_task: Cell::new(0),
             current_block_key: RefCell::new("b0".into()),

@@ -340,7 +340,12 @@ impl Renderer {
                                 (None, Some(num)) => Lead::Number(num + k as u64),
                                 (None, None) => Lead::Bullet,
                             };
-                            self.flow.set(Flow { lists: sf.lists + 1, inset: sf.inset + ind, cols: sf.cols + lead.width(), lead: Some((sf.cols, lead, if k == 0 && sf.lists == 0 { 2 } else { 1 })), ..sf });
+                            let item_inset = if task.is_some() {
+                                ind.max(self.s.task.left + self.s.task.size)
+                            } else {
+                                ind
+                            };
+                            self.flow.set(Flow { lists: sf.lists + 1, inset: sf.inset + item_inset, cols: sf.cols + lead.width(), lead: Some((sf.cols, lead, if k == 0 && sf.lists == 0 { 2 } else { 1 })), ..sf });
                             if task.is_none() && am && !item_open_tail {
                                 let (src_at, src_n) = (self.next_source.get(), ipre.map_or_else(|| item.iter().map(memo::source_count).sum::<usize>(), |p| p.src_n as usize));
                                 let (task_at, task_n) = (self.next_task.get(), ipre.map_or_else(|| item.iter().map(memo::task_count).sum::<usize>(), |p| p.task_n as usize));
@@ -470,10 +475,20 @@ impl Renderer {
                             }),
                             None => self.code(code, source, code_map, wrapped).key("card"),
                         };
-                        let overflows = self.code_overflows(code, source);
-                        f(card, &CodeFrame { index: n, source: code, language: source.and_then(|s| s.lang.as_deref()), open: source.is_some_and(|s| s.open), wrapped, overflows })
+                        f(card, &CodeFrame {
+                            index: n,
+                            source: code,
+                            language: source.and_then(|s| s.lang.as_deref()),
+                            open: source.is_some_and(|s| s.open),
+                            wrapped,
+                            digest: pre.map(|p| p.digest),
+                            font: self.s.code_block,
+                            text_width: self.s.text_width,
+                            inset: self.flow.get().inset,
+                            pad_x: self.s.code_block_pad[0],
+                        })
                     }
-                    None if self.code_frame.is_some() => match self.settled_code_card_digest(code, source, code_map, wrapped) {
+                    None if self.code_frame.as_ref().is_some_and(|w| w.wrap.is_some()) => match self.settled_code_card_digest(code, source, code_map, wrapped) {
                         Some(digest) => rune::memo::cached(digest, || {
                             memo::note_block_build();
                             self.code(code, source, code_map, wrapped)

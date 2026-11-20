@@ -13,7 +13,7 @@ use builder::{
 use map::{code_span_content_range, map_code_span};
 use table::pending_table;
 
-pub(super) use builder::{build_deep_tail, line_indent_cols, longest_line_stats};
+pub(super) use builder::{build_deep_tail, line_indent_cols};
 pub(super) use map::{BlockMap, SpanMap};
 
 /// What the source ends inside, from the last block-level start the walk met.
@@ -65,12 +65,6 @@ pub(super) struct Source {
     pub(super) coloured: usize,
     /// The fence's closing line hasn't arrived.
     pub(super) open: bool,
-    /// Byte range of the widest line (by tab-expanded columns) for O(1) overflow checks.
-    pub(super) max_line: Range<usize>,
-    /// Tab-expanded column count of `max_line` (non-ASCII chars counted as 2 cols to bias wide lines).
-    pub(super) max_cols: u32,
-    /// Whether `max_line` contains only printable ASCII (`0x20..0x7f`) and tabs.
-    pub(super) max_ascii: bool,
 }
 
 pub(super) const PAD: &str = "\u{202f}\u{202f}";
