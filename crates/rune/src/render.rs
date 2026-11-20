@@ -40,7 +40,7 @@ mod warmup;
 #[cfg(target_os = "macos")]
 mod windfoil_metallib;
 
-pub(crate) mod csd_corners;
+pub mod csd_corners;
 pub(crate) mod gpu_events;
 pub(crate) mod layer_blur;
 pub(crate) mod surface_alpha;
