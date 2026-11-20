@@ -237,24 +237,36 @@ mod dxgi {
         };
         if let Some(wanted) = rune_core::env::var("WGPU_ADAPTER_NAME") {
             let wanted_lower = wanted.to_lowercase();
-            // Software adapters too: `Microsoft Basic Render Driver` names WARP.
-            let Some((adapter, desc)) = all.iter().find(|(_, d)| description(d).to_lowercase().contains(&wanted_lower)) else {
-                return Some(Err(format!("no GPU adapter matches WGPU_ADAPTER_NAME={wanted:?}")));
-            };
-            without_patch::UNPATCHED.with(|unpatched| unpatched.set(false));
-            // SAFETY: `adapter` comes from a DXGI factory in this process, as `expose_adapter` asks.
-            let Some(exposed) = (unsafe { hal.expose_adapter(adapter) }) else {
-                if without_patch::UNPATCHED.with(|unpatched| unpatched.replace(false)) {
-                    return None;
+            // Software adapters too: `Microsoft Basic Render Driver` names WARP. Try every match
+            // in DXGI order: headless Windows lists a non-software WARP entry that `expose_adapter`
+            // rejects before the real software WARP adapter, and multi-adapter matches should skip
+            // unusable ones just like `by_name`.
+            let mut tried = Vec::new();
+            for (adapter, desc) in all.iter().filter(|(_, d)| description(d).to_lowercase().contains(&wanted_lower)) {
+                let label = description(desc);
+                without_patch::UNPATCHED.with(|unpatched| unpatched.set(false));
+                // SAFETY: `adapter` comes from a DXGI factory in this process, as `expose_adapter` asks.
+                let Some(exposed) = (unsafe { hal.expose_adapter(adapter) }) else {
+                    if without_patch::UNPATCHED.with(|unpatched| unpatched.replace(false)) {
+                        return None;
+                    }
+                    tried.push(format!("{label:?} (can't make a D3D12 device now)"));
+                    continue;
+                };
+                // SAFETY: `exposed` was exposed from this same DX12 `instance`'s HAL.
+                let adapter = unsafe { instance.create_adapter_from_hal(exposed) };
+                if surface.is_some_and(|s| !adapter.is_surface_supported(s)) {
+                    tried.push(format!("{label:?} (can't present to this window)"));
+                    continue;
                 }
-                return Some(Err(format!("WGPU_ADAPTER_NAME={wanted:?} names {:?}, which can't make a D3D12 device now", description(desc))));
-            };
-            // SAFETY: `exposed` was exposed from this same DX12 `instance`'s HAL.
-            let adapter = unsafe { instance.create_adapter_from_hal(exposed) };
-            if surface.is_some_and(|s| !adapter.is_surface_supported(s)) {
-                return Some(Err(format!("WGPU_ADAPTER_NAME={wanted:?} names {:?}, which can't present to this window", description(desc))));
+                return Some(Ok((Pick { adapter, reason: Reason::EnvName, compositor: None }, count)));
             }
-            return Some(Ok((Pick { adapter, reason: Reason::EnvName, compositor: None }, count)));
+            let error = if tried.is_empty() {
+                format!("no GPU adapter matches WGPU_ADAPTER_NAME={wanted:?}")
+            } else {
+                format!("WGPU_ADAPTER_NAME={wanted:?} matched {}, none usable", tried.join(", "))
+            };
+            return Some(Err(error));
         }
         let (adapter, reason) = if let Some(power) = wgpu::PowerPreference::from_env() {
             let preference = if power == wgpu::PowerPreference::HighPerformance { DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE } else { DXGI_GPU_PREFERENCE_MINIMUM_POWER };
