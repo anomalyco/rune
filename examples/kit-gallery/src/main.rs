@@ -11,6 +11,8 @@
 //! kit-gallery --scene ui-button--variants --snap out.png --theme dark --size 720x300
 //! ```
 
+#![forbid(unsafe_code)]
+
 mod stories;
 
 #[cfg(test)]

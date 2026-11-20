@@ -3,6 +3,8 @@
 //! perimeter, Dark mode turns the lights off. Effects come from rune-fx and rune-light, drawn
 //! inside Rune's frame through the compositor hook (`gfx.rs`); `gags/` decides what burns.
 
+#![forbid(unsafe_code)]
+
 mod gags;
 mod gfx;
 mod icons;

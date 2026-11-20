@@ -1,6 +1,8 @@
 //! A pencil over a canvas: `Cursor::Image` with a 2x PNG, its hot spot on the tip. Drag to
 //! draw. `cargo run -p sketch`. `scripts/pencil.py` draws `assets/pencil.png`.
 
+#![forbid(unsafe_code)]
+
 use rune::tok::{self, radius, space, type_};
 use rune::{AppSpec, Color, Cursor, CursorImage, Cx, El, LineCap, Phase, Shape, canvas, col, text};
 

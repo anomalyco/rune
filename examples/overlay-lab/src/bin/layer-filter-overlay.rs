@@ -1,4 +1,7 @@
 //! Static exit samples on a real native overlay, for capsule/filter integration review.
+
+#![forbid(unsafe_code)]
+
 use rune::{App, AppSpec, Color, Cx, DisplayTarget, El, OverlayInput, OverlayLevel,
     OverlayOptions, OverlaySpec, RunOptions, WindowSpec, el, text};
 

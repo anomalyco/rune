@@ -3,6 +3,8 @@
 //! transcendentals use pinned libm. The canonical output is sRGB RGBA8, quantized
 //! after each source-over operation, including clear. See research/24.
 
+#![forbid(unsafe_code)]
+
 pub mod blend;
 pub mod generate;
 #[cfg(feature = "gpu")]

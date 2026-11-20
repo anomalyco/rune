@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use rune::{AppSpec, Cx, El, ScrollSpec, TextEdit, Tx, col, el, row, text, text_input};
 use rune::tok::{self, type_};
 #[cfg(target_arch = "wasm32")]

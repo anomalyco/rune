@@ -1,5 +1,7 @@
 //! A small Settings window rendered entirely by Rune.
 
+#![forbid(unsafe_code)]
+
 use rune::tok::{self, Theme, motion, radius, space, type_};
 #[cfg(feature = "frame-profile")]
 #[global_allocator]

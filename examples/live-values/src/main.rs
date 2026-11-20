@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use rune::{AppSpec, Color, Cx, El, Env, Live, Runtime, Spring, Tx, col, el, row};
 use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
 

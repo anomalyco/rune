@@ -2,6 +2,8 @@
 //! seeded chaos schedule. The same schedule drives the GPUI build of the same window, so the two
 //! can be watched and measured side by side. See README.md.
 
+#![forbid(unsafe_code)]
+
 mod dock;
 mod stress;
 mod style;

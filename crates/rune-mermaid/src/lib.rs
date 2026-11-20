@@ -103,6 +103,8 @@
 //! [`render_with_hover`] do (they draw everything the frame it mounts), so a diagram settles in
 //! one glide once it has all arrived and doesn't move after.
 
+#![forbid(unsafe_code)]
+
 mod canvas;
 mod chart;
 mod graph;
