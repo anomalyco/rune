@@ -34,12 +34,11 @@ struct In {
 
 struct Out {
     @builtin(position) pos: vec4<f32>,
-    @location(0) p: vec2<f32>,
-    @location(1) @interpolate(flat) rect: vec4<f32>,
-    @location(2) @interpolate(flat) radii: vec4<f32>,
-    @location(3) @interpolate(flat) alpha: f32,
-    @location(4) @interpolate(flat) clip: vec4<f32>,
-    @location(5) @interpolate(flat) fade: vec4<u32>,
+    @location(0) @interpolate(flat) rect: vec4<f32>,
+    @location(1) @interpolate(flat) radii: vec4<f32>,
+    @location(2) @interpolate(flat) alpha: f32,
+    @location(3) @interpolate(flat) clip: vec4<f32>,
+    @location(4) @interpolate(flat) fade: vec4<u32>,
 };
 
 @vertex
@@ -50,7 +49,6 @@ fn vs(i: In) -> Out {
     let local = p - projection.xy;
     var o: Out;
     o.pos = vec4<f32>(local.x / size_px.x * 2.0 - 1.0, 1.0 - local.y / size_px.y * 2.0, 0.0, 1.0);
-    o.p = p;
     o.rect = i.rect;
     o.radii = i.radii;
     o.alpha = i.fill.a;
@@ -61,9 +59,13 @@ fn vs(i: In) -> Out {
 
 @fragment
 fn fs(i: Out) -> @location(0) vec4<f32> {
+    // Fragment position is the rasterizer's exact pixel centre; interpolated quad coordinates
+    // drift by subpixel ULPs on D3D12, leaving top/left edge coverage below 1.0 in Rgba16Float
+    // layers and shifting blur pyramid sample UVs.
+    let screen = i.pos.xy + projection.xy;
     let half = i.rect.zw * 0.5;
-    let d = sd_rounded(i.p - (i.rect.xy + half), half, i.radii);
-    let cov = clamp(0.5 - d, 0.0, 1.0) * clip_alpha(i.p, i.clip, i.fade) * i.alpha;
-    let col = textureSampleLevel(blurred, smp, (i.p - u.place.xy) / u.place.zw, 0.0);
+    let d = sd_rounded(screen - (i.rect.xy + half), half, i.radii);
+    let cov = clamp(0.5 - d, 0.0, 1.0) * clip_alpha(screen, i.clip, i.fade) * i.alpha;
+    let col = textureSampleLevel(blurred, smp, (screen - u.place.xy) / u.place.zw, 0.0);
     return col * cov;
 }

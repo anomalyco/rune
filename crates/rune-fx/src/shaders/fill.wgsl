@@ -530,9 +530,7 @@ fn halftone(i: Inst, c: Ctx, m: f32, px: vec2f) -> vec4f {
     return paint(mix(i.c1.rgb, i.c0.rgb, ink), m, i, px);
 }
 
-fn shade(in: VOut) -> vec4f {
-    let i = insts[in.id];
-    let px = pixel(in);
+fn shade(i: Inst, px: vec2f) -> vec4f {
     let c = ctx(i, px);
     let m = fill_mask(c, i.aux.x);
     if (m <= 0.0) { return vec4f(0.0); }

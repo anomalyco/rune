@@ -156,9 +156,8 @@ fn plasma(c: Ctx, i: Inst) -> vec4f {
     return vec4f(rgb, (E * 0.5 + halo * 0.1) * i.p2.w * 2.0);
 }
 
-fn shade(in: VOut) -> vec4f {
-    let i = insts[in.id];
-    let c = ctx(i, in.px);
+fn shade(i: Inst, px: vec2f) -> vec4f {
+    let c = ctx(i, px);
     let inten = i.p0.w;
     var o = vec4f(0.0);
     if (c.variant == 0) {
@@ -184,5 +183,5 @@ fn shade(in: VOut) -> vec4f {
         emis += flame_light(0.45 + T * 0.75, 6.0) * (core * 1.4 + halo) * T;
         alpha += core * T * 0.5;
     }
-    return finish(vec4f(emis * inten, min(alpha, 1.0) * inten), in.px);
+    return finish(vec4f(emis * inten, min(alpha, 1.0) * inten), px);
 }

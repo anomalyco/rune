@@ -39,9 +39,8 @@ fn bend_at(t: f32) -> f32 {
     return tan(tilt - bent);
 }
 
-fn shade(in: VOut) -> vec4f {
-    let i = insts[in.id];
-    let c = ctx(i, in.px);
+fn shade(i: Inst, px: vec2f) -> vec4f {
+    let c = ctx(i, px);
     let s = c.scale;
 
     if (c.variant == 0) {
@@ -129,7 +128,7 @@ fn shade(in: VOut) -> vec4f {
             col = mix(col, blr, i.xf.y);
             let k = presence * smoothstep(0.0, 0.6, frost);
             col = frosted(col, k);
-            let ip = vec2u(in.px);
+            let ip = vec2u(px);
             let n = u01(ip.x + pcg(ip.y + 7u)) - u01(ip.x * 7919u + pcg(ip.y + 31u));
             col = to_lin(max(to_srgb(col) + vec3f(n * 1.6 / 255.0 * k), vec3f(0.0)));
         } else {
@@ -139,7 +138,7 @@ fn shade(in: VOut) -> vec4f {
             let soften = min(pow(rim, 1.5) * 0.55, 1.0);
             if (soften > 1e-3 || frost > 0.0) {
                 let rad = mix(1.2, 10.0, frost);
-                let j = ign(in.px) * TAU;
+                let j = ign(px) * TAU;
                 var acc = vec3f(0.0);
                 for (var k = 0; k < 8; k++) {
                     let a = j + f32(k) * 2.39996;
@@ -189,7 +188,7 @@ fn shade(in: VOut) -> vec4f {
         let sl = 0.5 + 0.5 * cos(TAU * (c.p.y - i.rect.y) / per);
         col *= 1.0 - i.p0.z * (1.0 - sl);
         // Aperture grille, very subtle.
-        let col3 = u32(floor(in.px.x)) % 3u;
+        let col3 = u32(floor(px.x)) % 3u;
         let grille = select(select(vec3f(0.94, 0.94, 1.0), vec3f(0.94, 1.0, 0.94), col3 == 1u), vec3f(1.0, 0.94, 0.94), col3 == 0u);
         col *= grille;
         var roll = 0.0;
