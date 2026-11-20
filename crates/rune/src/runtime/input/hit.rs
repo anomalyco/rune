@@ -15,6 +15,9 @@ pub(in crate::runtime) struct HitState {
     /// This frame's help elements: (node, visible rect in points, `hits.len()` before it, the
     /// link of its text when the help is that link's).
     pub(in crate::runtime) help_hits: Vec<(NodeId, [f32; 4], usize, Option<usize>)>,
+    /// The first help element this frame that `El::help_open` holds open, noted as its hit is
+    /// pushed, so the tooltip finds it without walking `help_hits`.
+    pub(in crate::runtime) help_held: Option<NodeId>,
     /// This frame's drop targets: (node, visible rect in points, `hits.len()` before it). Kept
     /// apart from `hits`, so a drop zone doesn't cover the context menus and help under it.
     pub(in crate::runtime) drop_hits: Vec<(NodeId, [f32; 4], usize)>,
@@ -29,6 +32,7 @@ impl HitState {
             hits: Vec::new(),
             wheel_hits: Vec::new(),
             help_hits: Vec::new(),
+            help_held: None,
             drop_hits: Vec::new(),
             overlay_hits: Vec::new(),
         }
@@ -55,7 +59,7 @@ impl HitState {
     pub(in crate::runtime) fn has_help_hits(&self) -> bool { !self.help_hits.is_empty() }
 
     #[inline]
-    pub(in crate::runtime) fn clear_help_hits(&mut self) { self.help_hits.clear(); }
+    pub(in crate::runtime) fn clear_help_hits(&mut self) { self.help_hits.clear(); self.help_held = None; }
 
     #[inline]
     pub(in crate::runtime) fn clear_drop_hits(&mut self) { self.drop_hits.clear(); }
@@ -409,6 +413,8 @@ impl RuntimeCore {
             let c = if self.tree.nodes[i].parent.is_some() { pinh_clip } else { NO_CLIP };
             let r = [rect_pt[0].max(c[0] / s), rect_pt[1].max(c[1] / s), rect_pt[2].min(c[2] / s), rect_pt[3].min(c[3] / s)];
             self.hit.push_help_hit(self.tree.nodes[i].id, r, hits_before, None);
+            // The cold block the test above read: a held-open tooltip costs nothing to find later.
+            if self.hit.help_held.is_none() && r[2] > r[0] && r[3] > r[1] && self.tree.nodes[i].cold.get().is_some_and(|c| c.help_open) { self.hit.help_held = Some(self.tree.nodes[i].id); }
         }
         if self.tree.nodes[i].text.as_ref().is_some_and(|t| t.cold.links.iter().any(|l| l.help.is_some())) && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible {
             let c = if self.tree.nodes[i].parent.is_some() { pinh_clip } else { NO_CLIP };

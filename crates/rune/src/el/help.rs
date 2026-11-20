@@ -79,6 +79,13 @@ impl El {
     pub fn help_above(self) -> Self {
         self.help_side(crate::Side::Top)
     }
+    /// Keeps the tooltip showing whatever the pointer does while `open` is true, as a
+    /// `Tooltip forceOpen` does: a Copy button's "Copied" for a moment after the press, even
+    /// though a press hides a tooltip. Only one shows at a time; with several, the first drawn.
+    pub fn help_open(mut self, open: bool) -> Self {
+        if open || !self.cold.is_empty() { self.cold_mut().help_open = open; }
+        self
+    }
     /// Shows this element's [`El::help`] tooltip on `side` of it, as a web page's `placement`
     /// does: under it ([`HelpLook::gap`](crate::HelpLook::gap)'s first gap clear, the default),
     /// or above it, or left or right of it (its second gap clear), on the opposite side when
