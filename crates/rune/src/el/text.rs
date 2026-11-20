@@ -202,6 +202,17 @@ impl El {
         }
         self
     }
+
+    /// Secondary press (right-click or macOS control-click) on a [`Mark::Pill`](crate::Mark::Pill)
+    /// inside this [`text_input`](crate::text_input). Called with the pill's id and the press point
+    /// in window points; return `true` to handle it (opening a pill-specific menu) or `false` to
+    /// fall through to the field's standard context menu.
+    pub fn on_pill_secondary<S: 'static>(mut self, f: impl Fn(&mut S, &str, PointerPress, &mut Tx) -> bool + 'static) -> Self {
+        if let Some(inp) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
+            inp.on_pill_secondary = Some(Rc::new(move |s, id, press, tx| f(downcast::<S>(s), id, press, tx)));
+        }
+        self
+    }
     pub(super) fn sync_input_pills(&mut self) {
         let (Some(inp), Some(t)) = (&self.cold.input, &mut self.text) else { return };
         if inp.edit.is_plain() {
