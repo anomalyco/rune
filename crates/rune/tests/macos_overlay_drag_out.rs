@@ -80,6 +80,7 @@ mod mac {
 
     /// The panel with CGWindowID `number`: (level, style mask, key, frame in AppKit points).
     fn panel(number: u32) -> Option<(isize, usize, bool, NSRect)> {
+        // SAFETY: invoked on the AppKit main thread (`on_main`); queries live `NSWindow` properties.
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             let windows: Retained<NSArray<AnyObject>> = msg_send![app, windows];
@@ -91,6 +92,7 @@ mod mac {
     }
 
     fn primary_height() -> f64 {
+        // SAFETY: called on the AppKit main thread; queries `NSScreen.screens` and the first screen's `frame`.
         unsafe {
             let screens: Retained<NSArray<AnyObject>> = msg_send![class!(NSScreen), screens];
             let frame: NSRect = msg_send![&*screens.iter().next().expect("a screen"), frame];
@@ -100,6 +102,7 @@ mod mac {
 
     /// Posts mouse events to window `number`: (NSEventType, global top-left point).
     fn post(number: u32, events: &[(usize, (f64, f64))]) {
+        // SAFETY: invoked on the AppKit main thread (`on_main`); builds synthetic `NSEvent`s and posts them to `NSApplication`.
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             let (_, _, _, frame) = panel(number).expect("the overlay panel");
@@ -117,6 +120,8 @@ mod mac {
 
     /// On-screen windows at the dragging level, `[x, y, w, h]` in global top-left points.
     fn drag_windows() -> Vec<[f64; 4]> {
+        // SAFETY: `CGWindowListCopyWindowInfo` returns a newly retained `CFArray` (checked non-null
+        // and released with `CFRelease`); each element index is `< count` and dictionary values are null-checked.
         unsafe {
             let level = CGWindowLevelForKey(DRAGGING_LEVEL_KEY);
             let list = CGWindowListCopyWindowInfo(ON_SCREEN_ONLY, 0);

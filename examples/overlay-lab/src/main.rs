@@ -103,6 +103,7 @@ fn native_probe(pill: OverlayHandle<State>, app: rune::AppHandle<State>) {
             let Ok(mut stream) = stream else { break };
             let mut command = String::new();
             if BufReader::new(&stream).read_line(&mut command).is_err() { continue; }
+            // SAFETY: `CACurrentMediaTime` takes no arguments and is safe to call from any thread.
             let at = unsafe { CACurrentMediaTime() };
             match command.trim() {
                 "show" => pill.show(),
@@ -114,11 +115,11 @@ fn native_probe(pill: OverlayHandle<State>, app: rune::AppHandle<State>) {
                 "chips" => pill.update(|s, _| s.hit_only = false),
                 "status" => {},
                 "quit" => app.quit(),
-                _ => { let _ = writeln!(stream, "unknown command"); continue; }
+                _ => { writeln!(stream, "unknown command").ok(); continue; }
             }
             let line = format!("probe command={} time={at:.9} window={:?}", command.trim(), pill.window_number());
             eprintln!("{line}");
-            let _ = writeln!(stream, "{line}");
+            writeln!(stream, "{line}").ok();
         }
     });
 }

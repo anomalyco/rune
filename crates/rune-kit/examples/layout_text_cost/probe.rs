@@ -78,6 +78,7 @@ fn with_book<R>(f: impl FnOnce(&mut Book) -> R) -> R {
 
 pub struct Probe;
 
+// SAFETY: forwards every allocation call to `System`, recording main-thread allocation statistics.
 unsafe impl GlobalAlloc for Probe {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // SAFETY: forwarded unchanged.
@@ -359,6 +360,7 @@ mod mac {
         }
         // SAFETY: dladdr returned C strings owned by the loader.
         let image = unsafe { CStr::from_ptr(info.fname) }.to_string_lossy().into_owned();
+        // SAFETY: `info.sname` is checked non-null and points to a loader-owned NUL-terminated C string.
         let sym = if info.sname.is_null() { "?".into() } else { unsafe { CStr::from_ptr(info.sname) }.to_string_lossy().into_owned() };
         (image, info.fbase as u64, sym.replace(' ', "_"))
     }

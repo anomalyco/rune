@@ -7,6 +7,8 @@ fn drag_subclass_changes_only_the_selected_instance() {
     use objc2::{ffi, rc::Retained};
     let selected = objc2_foundation::NSObject::new();
     let sibling = objc2_foundation::NSObject::new();
+    // SAFETY: `selected` and `sibling` are live `NSObject` instances owned by this test; ObjC runtime
+    // class queries and `mouseDownCanMoveWindow` match the dynamic subclass installed by `scope_drag_regions`.
     unsafe {
         let selected_ptr = Retained::as_ptr(&selected).cast_mut().cast();
         let sibling_ptr = Retained::as_ptr(&sibling).cast_mut().cast();

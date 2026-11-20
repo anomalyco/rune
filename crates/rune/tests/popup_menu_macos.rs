@@ -79,7 +79,7 @@ mod mac {
 
     /// The app's window, its number, and a view point (top-left origin) in window coordinates.
     unsafe fn window_point(x: f64, y: f64) -> (*mut AnyObject, isize, NSPoint) {
-        // SAFETY (caller): main thread. Queries on the app's only window.
+        // SAFETY: caller invokes on the AppKit main thread; queries the app's only live window.
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             let windows: *mut AnyObject = msg_send![app, windows];
@@ -92,7 +92,7 @@ mod mac {
     }
 
     unsafe fn now() -> f64 {
-        // SAFETY (caller): a plain query.
+        // SAFETY: caller invokes on the AppKit main thread; `NSProcessInfo.processInfo.systemUptime` is a plain getter.
         unsafe {
             let info: *mut AnyObject = msg_send![class!(NSProcessInfo), processInfo];
             msg_send![info, systemUptime]

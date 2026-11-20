@@ -34,6 +34,7 @@ mod mac {
         INVALIDATIONS.fetch_add(1, Ordering::SeqCst);
         // SAFETY: the original -[NSWindow invalidateShadow] implementation.
         let original: unsafe extern "C" fn(*mut AnyObject, Sel) = unsafe { std::mem::transmute(*ORIGINAL.get().unwrap()) };
+        // SAFETY: forwards the exact `this` and `sel` received by the swizzled `invalidateShadow` IMP.
         unsafe { original(this, sel) }
     }
 

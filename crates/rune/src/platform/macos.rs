@@ -54,9 +54,12 @@ define_class!(
             // wgpu skips nextDrawable for occluded windows. Permit only the explicit
             // alpha-zero prewarm acquisition and a fade in or out, which AppKit reports as
             // occluded while its alpha is near zero; other visibility readbacks stay native.
-            if self.ivars().presence.get().draws_occluded() { 2 }
-            // SAFETY: `OverlayPanel` inherits from `NSPanel` (`MainThreadOnly`), whose `occlusionState` returns `NSWindowOcclusionState` (`usize`).
-            else { unsafe { msg_send![super(self), occlusionState] } }
+            if self.ivars().presence.get().draws_occluded() {
+                2
+            } else {
+                // SAFETY: `OverlayPanel` inherits from `NSPanel` (`MainThreadOnly`), whose `occlusionState` returns `NSWindowOcclusionState` (`usize`).
+                unsafe { msg_send![super(self), occlusionState] }
+            }
         }
         // AppKit keeps windows below the menu bar's level out from under it; an overlay goes
         // exactly where it's placed at any level.

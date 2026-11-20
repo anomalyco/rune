@@ -38,6 +38,8 @@ mod mac {
     /// Posts mouse events to the app's visible window: (NSEventType, x, y) in points from the
     /// window's top-left.
     fn post(events: &[(usize, f64, f64)]) {
+        // SAFETY: invoked on the AppKit main thread (`on_main`); queries the app's live windows
+        // and posts synthetic `NSEvent`s to `NSApplication`.
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             let windows: Retained<NSArray<AnyObject>> = msg_send![app, windows];

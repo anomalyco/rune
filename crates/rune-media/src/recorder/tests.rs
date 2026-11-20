@@ -575,6 +575,7 @@ fn the_macos_recorder_builds_without_capturing() {
     for (name, format) in [("a.m4a", RecordFormat::Aac), ("b.wav", RecordFormat::Wav)] {
         let opts = Options { format, sample_rate: 44_100, channels: 1, fake: None };
         let recorder = macos::make_recorder(&dir.join(name), &opts).unwrap_or_else(|e| panic!("{name}: {e}"));
+        // SAFETY: `recorder` is a live `AVAudioRecorder` returned by `make_recorder`; `isRecording` returns `BOOL`.
         let recording: Bool = unsafe { msg_send![&*recorder, isRecording] };
         assert!(!recording.as_bool());
     }
