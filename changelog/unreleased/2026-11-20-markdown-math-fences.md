@@ -1,0 +1,1 @@
+- `Markdown` renders closed ```` ```latex ```` and ```` ```math ```` fences as pure-Rust KaTeX display math behind the `math` feature (`ratex-parser` + `ratex-layout` + `ratex-katex-fonts` + `skrifa` + `tiny-skia`, bounded cache and hard size/depth/item/pixel caps), keeping open streaming fences and invalid TeX as highlighted code blocks.

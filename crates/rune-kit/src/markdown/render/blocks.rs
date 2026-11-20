@@ -460,6 +460,15 @@ impl Renderer {
                 let n = self.next_source.get();
                 self.next_source.set(n + 1);
                 let source = self.sources.get(n).filter(|src| src.len == code.len());
+                #[cfg(feature = "math")]
+                if !source.is_some_and(|s| s.open)
+                    && crate::math::is_math_fence(source.and_then(|s| s.lang.as_deref()))
+                {
+                    let avail = self.s.text_width.map(|w| (w - self.flow.get().inset).max(0.0));
+                    if let Some(el) = crate::math::render_with_avail(code, &self.s, avail) {
+                        return el;
+                    }
+                }
                 match &self.code_frame {
                     Some(f) => {
                         let card = match self.settled_code_card_digest(code, source, code_map) {

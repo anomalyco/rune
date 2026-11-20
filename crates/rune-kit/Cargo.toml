@@ -16,6 +16,13 @@ rune-motion = { workspace = true }
 icu_normalizer = { version = "2", default-features = false, features = ["compiled_data"] }
 unicode-segmentation = { workspace = true }
 pulldown-cmark = { version = "0.13", default-features = false, optional = true }
+ratex-font = { workspace = true, optional = true }
+ratex-katex-fonts = { workspace = true, optional = true }
+ratex-layout = { workspace = true, optional = true }
+ratex-parser = { workspace = true, optional = true }
+ratex-types = { workspace = true, optional = true }
+skrifa = { workspace = true, optional = true }
+tiny-skia = { workspace = true, optional = true }
 
 [features]
 default = ["syntax"]
@@ -27,6 +34,17 @@ syntax = ["dep:rune-highlights"]
 markdown = ["syntax", "dep:pulldown-cmark"]
 # Native ```mermaid diagrams in `Markdown` (flowcharts, sequence and state diagrams), and `mermaid`.
 mermaid = ["markdown", "dep:rune-mermaid"]
+# Pure-Rust LaTeX display math for closed ```latex and ```math fences in `Markdown`, and `math`.
+math = [
+    "markdown",
+    "dep:ratex-font",
+    "dep:ratex-katex-fonts",
+    "dep:ratex-layout",
+    "dep:ratex-parser",
+    "dep:ratex-types",
+    "dep:skrifa",
+    "dep:tiny-skia",
+]
 # Phase timings for the headless benches (`markdown_resize`).
 frame-profile = ["rune/frame-profile"]
 

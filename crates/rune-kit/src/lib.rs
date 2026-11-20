@@ -26,6 +26,8 @@ pub mod line_selection;
 mod list_nav;
 #[cfg(feature = "markdown")]
 pub mod markdown;
+#[cfg(feature = "math")]
+pub mod math;
 #[cfg(feature = "mermaid")]
 pub mod mermaid;
 #[cfg(feature = "markdown")]
