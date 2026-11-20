@@ -401,7 +401,7 @@ index fdb63bc..5f64a80 100644
 +    }
 +}
 diff --git a/src/dx12/mod.rs b/src/dx12/mod.rs
-index 285d635..d87b488 100644
+index 285d635..2fb4210 100644
 --- a/src/dx12/mod.rs
 +++ b/src/dx12/mod.rs
 @@ -92,7 +92,7 @@ mod suballocation;
@@ -479,7 +479,7 @@ index 285d635..d87b488 100644
      /// Returns the waitable handle associated with this swap chain, if any.
      /// Handle is only valid while the swap chain is alive.
      pub unsafe fn waitable_handle(&self) -> Option<Foundation::HANDLE> {
-@@ -741,6 +768,249 @@ struct Idler {
+@@ -741,6 +768,279 @@ struct Idler {
      fence: Direct3D12::ID3D12Fence,
  }
  
@@ -594,19 +594,29 @@ index 285d635..d87b488 100644
 +                .load(core::sync::atomic::Ordering::Acquire)
 +        }
 +    }
++}
 +
-+    /// True once `slot` holds `tag` or any later tag assigned to that slot (tags on a given slot
-+    /// advance by positive multiples of `DRAIN_MARKER_SLOTS`, skipping 0, so wrapped signed
-+    /// comparison stays valid across slot reuse and `u32` wrap-around up to 2^31 lists).
-+    fn is_done(&self, slot: u32, tag: u32) -> bool {
-+        let observed = self.read(slot);
-+        observed != 0 && (observed.wrapping_sub(tag) as i32) >= 0
++struct DrainInFlight {
++    /// Submitted `(slot, tag)` markers in FIFO submission order.
++    pending: VecDeque<(u32, u32)>,
++    /// Most recently submitted `tag` per slot (allocated only when `DrainMarker` is active).
++    /// Recording order can differ from submission order (for example `wgpu-core` records
++    /// `(wgpu internal) Transit` at submit time and pushes it ahead of earlier-recorded passes),
++    /// so a lower tag can overwrite a higher tag on the same wrapped slot. Tracking the last
++    /// submitted tag per slot lets earlier superseded entries retire immediately without
++    /// assuming monotonic execution order on a slot.
++    latest_tag: Vec<u32>,
++}
++
++impl DrainInFlight {
++    fn is_done(&self, state: &DrainMarker, slot: u32, tag: u32) -> bool {
++        self.latest_tag[slot as usize] != tag || state.read(slot) == tag
 +    }
 +}
 +
 +pub(super) struct DrainTracker {
 +    marker: Option<DrainMarker>,
-+    in_flight: Mutex<VecDeque<(u32, u32)>>,
++    in_flight: Mutex<DrainInFlight>,
 +    drain_gate: Mutex<()>,
 +    removed: core::sync::atomic::AtomicBool,
 +}
@@ -617,9 +627,18 @@ index 285d635..d87b488 100644
 +        let software = unsafe { adapter.GetDesc1() }.is_ok_and(|desc| {
 +            Dxgi::DXGI_ADAPTER_FLAG(desc.Flags as i32).contains(Dxgi::DXGI_ADAPTER_FLAG_SOFTWARE)
 +        });
++        let marker = if software { DrainMarker::new(device) } else { None };
++        let latest_tag = if marker.is_some() {
++            alloc::vec![0u32; DRAIN_MARKER_SLOTS]
++        } else {
++            Vec::new()
++        };
 +        Self {
-+            marker: if software { DrainMarker::new(device) } else { None },
-+            in_flight: Mutex::new(VecDeque::new()),
++            marker,
++            in_flight: Mutex::new(DrainInFlight {
++                pending: VecDeque::new(),
++                latest_tag,
++            }),
 +            drain_gate: Mutex::new(()),
 +            removed: core::sync::atomic::AtomicBool::new(false),
 +        }
@@ -665,23 +684,28 @@ index 285d635..d87b488 100644
 +        let Some(state) = self.marker.as_ref() else {
 +            return !self.is_removed();
 +        };
-+        let mut in_flight = self.in_flight.lock();
++        let mut guard = self.in_flight.lock();
++        let in_flight = &mut *guard;
 +        if self.removed.load(core::sync::atomic::Ordering::Acquire) {
 +            return false;
 +        }
-+        while let Some(&(slot, tag)) = in_flight.front() {
-+            if state.is_done(slot, tag) {
-+                in_flight.pop_front();
++        while let Some(&(slot, tag)) = in_flight.pending.front() {
++            if in_flight.is_done(state, slot, tag) {
++                in_flight.pending.pop_front();
 +            } else {
 +                break;
 +            }
 +        }
-+        if in_flight.len() > 64 {
-+            in_flight.retain(|&(slot, tag)| !state.is_done(slot, tag));
++        if in_flight.pending.len() > 64 {
++            let latest_tag = &in_flight.latest_tag;
++            in_flight
++                .pending
++                .retain(|&(slot, tag)| latest_tag[slot as usize] == tag && state.read(slot) != tag);
 +        }
 +        for cmd_buf in command_buffers {
-+            if let Some(marker) = cmd_buf.marker {
-+                in_flight.push_back(marker);
++            if let Some((slot, tag)) = cmd_buf.marker {
++                in_flight.latest_tag[slot as usize] = tag;
++                in_flight.pending.push_back((slot, tag));
 +            }
 +        }
 +        true
@@ -695,20 +719,26 @@ index 285d635..d87b488 100644
 +        };
 +        // Set `removed` under `in_flight`'s lock before draining so no concurrent
 +        // `track_submitted` can push un-executed markers after `Surface::unconfigure` drains.
++        // Drop any earlier superseded entries on the same slot now; every remaining entry owns
++        // its slot uniquely and waits for its exact tag to land.
 +        let mut pending = {
-+            let mut in_flight = self.in_flight.lock();
++            let mut guard = self.in_flight.lock();
++            let in_flight = &mut *guard;
 +            self.removed.store(true, core::sync::atomic::Ordering::Release);
-+            in_flight.retain(|&(slot, tag)| !state.is_done(slot, tag));
-+            if in_flight.is_empty() {
++            let latest_tag = &in_flight.latest_tag;
++            in_flight
++                .pending
++                .retain(|&(slot, tag)| latest_tag[slot as usize] == tag && state.read(slot) != tag);
++            if in_flight.pending.is_empty() {
 +                return;
 +            }
-+            mem::take(&mut *in_flight)
++            mem::take(&mut in_flight.pending)
 +        };
 +        let started = std::time::Instant::now();
 +        let mut last_progress = started;
 +        loop {
 +            let before = pending.len();
-+            pending.retain(|&(slot, tag)| !state.is_done(slot, tag));
++            pending.retain(|&(slot, tag)| state.read(slot) != tag);
 +            if pending.is_empty() {
 +                return;
 +            }
@@ -729,7 +759,7 @@ index 285d635..d87b488 100644
  #[derive(Debug, Clone)]
  struct CommandSignatures {
      draw: Direct3D12::ID3D12CommandSignature,
-@@ -756,6 +1026,7 @@ struct DeviceShared {
+@@ -756,6 +1056,7 @@ struct DeviceShared {
      heap_views: descriptor::GeneralHeap,
      sampler_heap: sampler::SamplerHeap,
      private_caps: PrivateCapabilities,
@@ -737,7 +767,7 @@ index 285d635..d87b488 100644
  }
  
  unsafe impl Send for DeviceShared {}
-@@ -810,6 +1081,7 @@ pub struct Queue {
+@@ -810,6 +1111,7 @@ pub struct Queue {
      idle_fence_value: AtomicU64,
      pending_waits: Mutex<Vec<(Direct3D12::ID3D12Fence, u64)>>,
      pending_signals: Mutex<Vec<(Direct3D12::ID3D12Fence, u64)>>,
@@ -745,7 +775,7 @@ index 285d635..d87b488 100644
  }
  
  impl Queue {
-@@ -992,7 +1264,11 @@ pub struct CommandEncoder {
+@@ -992,7 +1294,11 @@ pub struct CommandEncoder {
  
      null_rtv_handle: descriptor::Handle,
      list: Option<Direct3D12::ID3D12GraphicsCommandList>,
@@ -758,7 +788,7 @@ index 285d635..d87b488 100644
      pass: PassState,
      temp: Temp,
  
-@@ -1018,6 +1294,8 @@ impl fmt::Debug for CommandEncoder {
+@@ -1018,6 +1324,8 @@ impl fmt::Debug for CommandEncoder {
  #[derive(Debug)]
  pub struct CommandBuffer {
      raw: Direct3D12::ID3D12GraphicsCommandList,
@@ -767,7 +797,7 @@ index 285d635..d87b488 100644
  }
  
  impl crate::DynCommandBuffer for CommandBuffer {}
-@@ -1209,6 +1487,8 @@ unsafe impl Sync for QuerySet {}
+@@ -1209,6 +1517,8 @@ unsafe impl Sync for QuerySet {}
  #[derive(Debug)]
  pub struct Fence {
      raw: Direct3D12::ID3D12Fence,
@@ -776,7 +806,7 @@ index 285d635..d87b488 100644
  }
  
  impl crate::DynFence for Fence {}
-@@ -1535,7 +1815,9 @@ impl crate::Surface for Surface {
+@@ -1535,7 +1845,9 @@ impl crate::Surface for Surface {
                      BufferUsage: Dxgi::DXGI_USAGE_RENDER_TARGET_OUTPUT,
                      BufferCount: swap_chain_buffer,
                      Scaling: Dxgi::DXGI_SCALING_STRETCH,
@@ -787,7 +817,7 @@ index 285d635..d87b488 100644
                      Flags: flags.0 as u32,
                  };
                  let swap_chain1 = match self.target {
-@@ -1702,6 +1984,7 @@ impl crate::Surface for Surface {
+@@ -1702,6 +2014,7 @@ impl crate::Surface for Surface {
              present_mode: config.present_mode,
              format: config.format,
              size: config.extent,
@@ -795,7 +825,7 @@ index 285d635..d87b488 100644
          });
  
          Ok(())
-@@ -1768,6 +2051,14 @@ impl crate::Surface for Surface {
+@@ -1768,6 +2081,14 @@ impl crate::Surface for Surface {
      }
  }
  
@@ -810,7 +840,7 @@ index 285d635..d87b488 100644
  impl crate::Queue for Queue {
      type A = Api;
  
-@@ -1777,6 +2068,18 @@ impl crate::Queue for Queue {
+@@ -1777,6 +2098,18 @@ impl crate::Queue for Queue {
          _surface_textures: &[&Texture],
          (signal_fence, signal_value): (&Fence, crate::FenceValue),
      ) -> Result<(), crate::DeviceError> {
@@ -829,7 +859,7 @@ index 285d635..d87b488 100644
          let mut temp_lists = self.temp_lists.lock();
          temp_lists.clear();
          for cmd_buf in command_buffers {
-@@ -1790,25 +2093,48 @@ impl crate::Queue for Queue {
+@@ -1790,25 +2123,48 @@ impl crate::Queue for Queue {
          {
              let mut waits = self.pending_waits.lock();
              for (fence, value) in waits.drain(..) {
@@ -883,7 +913,7 @@ index 285d635..d87b488 100644
              }
          }
  
-@@ -1838,9 +2164,22 @@ impl crate::Queue for Queue {
+@@ -1838,9 +2194,22 @@ impl crate::Queue for Queue {
          };
  
          profiling::scope!("IDXGISwapchain3::Present");
@@ -909,7 +939,7 @@ index 285d635..d87b488 100644
  
          Ok(())
      }
-@@ -1851,18 +2190,51 @@ impl crate::Queue for Queue {
+@@ -1851,18 +2220,51 @@ impl crate::Queue for Queue {
      }
  
      unsafe fn wait_for_idle(&self) -> Result<(), crate::DeviceError> {

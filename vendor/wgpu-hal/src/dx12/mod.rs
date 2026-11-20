@@ -879,19 +879,29 @@ impl DrainMarker {
                 .load(core::sync::atomic::Ordering::Acquire)
         }
     }
+}
 
-    /// True once `slot` holds `tag` or any later tag assigned to that slot (tags on a given slot
-    /// advance by positive multiples of `DRAIN_MARKER_SLOTS`, skipping 0, so wrapped signed
-    /// comparison stays valid across slot reuse and `u32` wrap-around up to 2^31 lists).
-    fn is_done(&self, slot: u32, tag: u32) -> bool {
-        let observed = self.read(slot);
-        observed != 0 && (observed.wrapping_sub(tag) as i32) >= 0
+struct DrainInFlight {
+    /// Submitted `(slot, tag)` markers in FIFO submission order.
+    pending: VecDeque<(u32, u32)>,
+    /// Most recently submitted `tag` per slot (allocated only when `DrainMarker` is active).
+    /// Recording order can differ from submission order (for example `wgpu-core` records
+    /// `(wgpu internal) Transit` at submit time and pushes it ahead of earlier-recorded passes),
+    /// so a lower tag can overwrite a higher tag on the same wrapped slot. Tracking the last
+    /// submitted tag per slot lets earlier superseded entries retire immediately without
+    /// assuming monotonic execution order on a slot.
+    latest_tag: Vec<u32>,
+}
+
+impl DrainInFlight {
+    fn is_done(&self, state: &DrainMarker, slot: u32, tag: u32) -> bool {
+        self.latest_tag[slot as usize] != tag || state.read(slot) == tag
     }
 }
 
 pub(super) struct DrainTracker {
     marker: Option<DrainMarker>,
-    in_flight: Mutex<VecDeque<(u32, u32)>>,
+    in_flight: Mutex<DrainInFlight>,
     drain_gate: Mutex<()>,
     removed: core::sync::atomic::AtomicBool,
 }
@@ -902,9 +912,18 @@ impl DrainTracker {
         let software = unsafe { adapter.GetDesc1() }.is_ok_and(|desc| {
             Dxgi::DXGI_ADAPTER_FLAG(desc.Flags as i32).contains(Dxgi::DXGI_ADAPTER_FLAG_SOFTWARE)
         });
+        let marker = if software { DrainMarker::new(device) } else { None };
+        let latest_tag = if marker.is_some() {
+            alloc::vec![0u32; DRAIN_MARKER_SLOTS]
+        } else {
+            Vec::new()
+        };
         Self {
-            marker: if software { DrainMarker::new(device) } else { None },
-            in_flight: Mutex::new(VecDeque::new()),
+            marker,
+            in_flight: Mutex::new(DrainInFlight {
+                pending: VecDeque::new(),
+                latest_tag,
+            }),
             drain_gate: Mutex::new(()),
             removed: core::sync::atomic::AtomicBool::new(false),
         }
@@ -950,23 +969,28 @@ impl DrainTracker {
         let Some(state) = self.marker.as_ref() else {
             return !self.is_removed();
         };
-        let mut in_flight = self.in_flight.lock();
+        let mut guard = self.in_flight.lock();
+        let in_flight = &mut *guard;
         if self.removed.load(core::sync::atomic::Ordering::Acquire) {
             return false;
         }
-        while let Some(&(slot, tag)) = in_flight.front() {
-            if state.is_done(slot, tag) {
-                in_flight.pop_front();
+        while let Some(&(slot, tag)) = in_flight.pending.front() {
+            if in_flight.is_done(state, slot, tag) {
+                in_flight.pending.pop_front();
             } else {
                 break;
             }
         }
-        if in_flight.len() > 64 {
-            in_flight.retain(|&(slot, tag)| !state.is_done(slot, tag));
+        if in_flight.pending.len() > 64 {
+            let latest_tag = &in_flight.latest_tag;
+            in_flight
+                .pending
+                .retain(|&(slot, tag)| latest_tag[slot as usize] == tag && state.read(slot) != tag);
         }
         for cmd_buf in command_buffers {
-            if let Some(marker) = cmd_buf.marker {
-                in_flight.push_back(marker);
+            if let Some((slot, tag)) = cmd_buf.marker {
+                in_flight.latest_tag[slot as usize] = tag;
+                in_flight.pending.push_back((slot, tag));
             }
         }
         true
@@ -980,20 +1004,26 @@ impl DrainTracker {
         };
         // Set `removed` under `in_flight`'s lock before draining so no concurrent
         // `track_submitted` can push un-executed markers after `Surface::unconfigure` drains.
+        // Drop any earlier superseded entries on the same slot now; every remaining entry owns
+        // its slot uniquely and waits for its exact tag to land.
         let mut pending = {
-            let mut in_flight = self.in_flight.lock();
+            let mut guard = self.in_flight.lock();
+            let in_flight = &mut *guard;
             self.removed.store(true, core::sync::atomic::Ordering::Release);
-            in_flight.retain(|&(slot, tag)| !state.is_done(slot, tag));
-            if in_flight.is_empty() {
+            let latest_tag = &in_flight.latest_tag;
+            in_flight
+                .pending
+                .retain(|&(slot, tag)| latest_tag[slot as usize] == tag && state.read(slot) != tag);
+            if in_flight.pending.is_empty() {
                 return;
             }
-            mem::take(&mut *in_flight)
+            mem::take(&mut in_flight.pending)
         };
         let started = std::time::Instant::now();
         let mut last_progress = started;
         loop {
             let before = pending.len();
-            pending.retain(|&(slot, tag)| !state.is_done(slot, tag));
+            pending.retain(|&(slot, tag)| state.read(slot) != tag);
             if pending.is_empty() {
                 return;
             }
