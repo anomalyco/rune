@@ -421,7 +421,7 @@ impl RuntimeCore {
         #[cfg(debug_assertions)]
         {
             let clear = self.clear_color();
-            let opaque = !self.surfaces.is_empty() || !self.paint.materials().is_empty() || self.paint.videos_active();
+            let opaque = !self.surfaces.is_empty() || !self.paint.materials().is_empty() || self.paint.videos_active() || self.paint.animated_icons();
             let title = self.host.window_title.current();
             self.frame.idle_frame_ends(self.clock, self.animating, clear, self.viewport, self.env.scale, self.paint.srgb_blend(), self.transparent, self.images.copies, &self.instances, opaque, title);
         }

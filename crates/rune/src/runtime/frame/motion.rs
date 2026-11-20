@@ -10,11 +10,12 @@ impl RuntimeCore {
             .map(|(_, n)| n.path.clone()).collect()
     }
 
-    /// Whether a drawn node's loop runs (a spinner): what a window shows would fall behind it
-    /// while the window draws nothing.
+    /// Whether a drawn node's loop runs (a spinner or animated SVG icon): what a window shows
+    /// would fall behind it while the window draws nothing.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn loops_shown(&self) -> bool {
-        self.tree.nodes.iter().enumerate().any(|(i, n)| n.looping.is_some() && self.paint.was_seen(i, false) && self.motion.has_loop(n.id))
+        (!self.reduced_motion && self.paint.animated_icons_shown())
+            || self.tree.nodes.iter().enumerate().any(|(i, n)| n.looping.is_some() && self.paint.was_seen(i, false) && self.motion.has_loop(n.id))
     }
 
     /// Wakes when a delayed start at animation time `at` comes due, on the loops' wake: the
@@ -22,6 +23,14 @@ impl RuntimeCore {
     /// sleeps through it; showing it settles.
     fn wake_for_motion(&mut self, at: f64) {
         self.paint.note_cycle_other_deadline();
+        if !self.frame.live.visible() || self.time_scale <= 0.0 { return; }
+        let wake = self.clock + (at - self.t).max(0.0) / self.time_scale as f64;
+        self.motion.arm_loop_wake(wake, at);
+    }
+
+    /// Wakes for a paced animated SVG icon without marking `cycles.mixed`, so icon-only wakes take
+    /// the zero-paint-walk `loop_step` / `arm_loop` fast path.
+    fn wake_for_icon_anim(&mut self, at: f64) {
         if !self.frame.live.visible() || self.time_scale <= 0.0 { return; }
         let wake = self.clock + (at - self.t).max(0.0) / self.time_scale as f64;
         self.motion.arm_loop_wake(wake, at);
@@ -116,6 +125,7 @@ impl RuntimeCore {
         animating |= source(self.motion.loops_active(), AnimSource::LOOP);
         animating |= source(self.paint.scale_settling(), AnimSource::SCALE_SETTLE);
         animating |= source(self.paint.videos_active(), AnimSource::VIDEO);
+        animating |= source(self.paint.animated_icons(), AnimSource::ICON_ANIM);
         let flights_active = self.paint.draw_text_flights(
             self.motion.flights_mut(), &self.tree.nodes, &self.scene, &mut self.text, &mut self.images,
             &mut self.instances, self.env.scale, self.t, self.reduced_motion, self.viewport,
@@ -126,6 +136,7 @@ impl RuntimeCore {
             self.check_resting_raster();
         }
         if let Some(at) = waits { self.wake_for_motion(at); }
+        if let Some(at) = self.paint.icon_anim_wake() { self.wake_for_icon_anim(at); }
         // An instant scroll's hold draws nothing until it ends: wake for the one frame that
         // resolves hover then, taken from the state each frame so a re-arm moves it on.
         if let Some(due) = hold_wake { self.wake_for_clock(due); }

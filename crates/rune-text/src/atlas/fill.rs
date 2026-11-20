@@ -124,6 +124,7 @@ impl Atlas {
     /// Steps every entry on `page` with `event`, queueing those it asks to.
     #[doc(hidden)]
     pub fn rows_uploaded(&mut self, page: usize, rows: (u32, u32)) {
+        self.upload_gen = self.upload_gen.wrapping_add(1).max(1);
         let event = ResidencyEvent::RowsUploaded { page: page as u16, rows };
         let mut queued = Vec::new();
         for (key, entry) in self.map.iter_mut() {

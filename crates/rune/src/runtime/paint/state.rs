@@ -19,6 +19,18 @@ pub(crate) struct PaintState {
     pub(super) native_materials: bool,
     /// A drawn video is playing or seeking: keep drawing frames.
     pub(super) videos_active: bool,
+    /// A drawn animated SVG icon is advancing right now: keep drawing frames.
+    pub(super) animated_icons: bool,
+    /// A painted animated SVG icon is active (moving or waiting on a flat hold), even while the
+    /// window is covered: tells Windows occlusion polling (`loops_shown`) to watch for uncover.
+    pub(super) animated_icons_shown: bool,
+    /// Current node painted a live animated icon (moving or waiting): prevents `PaintKeep` from
+    /// freezing its quad across frames while active, without blocking sibling subtrees.
+    pub(super) node_animated_icon: bool,
+    /// Earliest runtime timestamp when a flat-hold animated icon resumes moving (`wake_for_motion`).
+    pub(super) icon_anim_wake: Option<f64>,
+    /// Mount time (runtime `t`) per `(NodeId, icon_ptr)` for finite-duration animated icons.
+    pub(super) icon_anim_mounts: HashMap<(NodeId, usize), f64>,
     /// Frame requested by scale settling or pixel snapping in the last paint.
     pub(super) scale_frame: Option<AnotherFrame>,
     /// Per node index this frame: presented row top dy, row height override, and bottom feather mask.
@@ -85,6 +97,11 @@ impl PaintState {
             srgb_blend: false,
             native_materials: false,
             videos_active: false,
+            animated_icons: false,
+            animated_icons_shown: false,
+            node_animated_icon: false,
+            icon_anim_wake: None,
+            icon_anim_mounts: HashMap::default(),
             scale_frame: None,
             row_dy: Vec::new(),
             row_h: Vec::new(),
@@ -145,6 +162,39 @@ impl PaintState {
     #[inline]
     pub(in crate::runtime) fn videos_active(&self) -> bool {
         self.videos_active
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn animated_icons(&self) -> bool {
+        self.animated_icons
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn animated_icons_shown(&self) -> bool {
+        self.animated_icons_shown
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn icon_anim_wake(&self) -> Option<f64> {
+        self.icon_anim_wake
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn note_icon_anim_wake(&mut self, at: f64) {
+        self.icon_anim_wake = Some(match self.icon_anim_wake {
+            Some(prev) => prev.min(at),
+            None => at,
+        });
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn icon_mount_time(&self, id: NodeId, icon_ptr: usize, fallback: f64) -> f64 {
+        self.icon_anim_mounts.get(&(id, icon_ptr)).copied().unwrap_or(fallback)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn get_or_insert_icon_mount(&mut self, id: NodeId, icon_ptr: usize, now: f64) -> f64 {
+        *self.icon_anim_mounts.entry((id, icon_ptr)).or_insert(now)
     }
 
     #[inline]
