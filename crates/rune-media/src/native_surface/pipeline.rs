@@ -92,6 +92,9 @@ pub struct SurfaceRenderer {
     queries_used: std::sync::atomic::AtomicBool,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(super) completion: std::sync::mpsc::SyncSender<()>,
+    /// The queue timestamp resolves go to, held here so their callbacks hold it weakly.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    timing_queue: std::sync::OnceLock<Arc<wgpu::Queue>>,
     pipeline: wgpu::RenderPipeline,
     format: wgpu::TextureFormat,
     extra: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
@@ -197,9 +200,10 @@ impl SurfaceRenderer {
                 // Nonblocking poll releases wgpu's snatch lock before sleeping. A fence wait here
                 // would keep that read lock and serialize queue.present's write lock behind GPU work.
                 // Wakeups are coalesced; the final frame still completes after the window goes idle.
+                // A lost device's work never finishes: the worker stops rather than poll it forever.
                 while receiver.recv().is_ok() {
                     loop {
-                        match poll_device.poll(wgpu::PollType::Poll) {
+                        match rune_gpu::health::poll(&poll_device, wgpu::PollType::Poll) {
                             Ok(wgpu::PollStatus::QueueEmpty) => break,
                             Ok(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
                             Err(_) => return,
@@ -220,6 +224,7 @@ impl SurfaceRenderer {
             queries: None,
             queries_used: std::sync::atomic::AtomicBool::new(false),
             completion,
+            timing_queue: std::sync::OnceLock::new(),
             pipeline,
             format,
             extra: Vec::new(),

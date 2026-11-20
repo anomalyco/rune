@@ -256,6 +256,27 @@ impl super::Device {
         signature.ok_or(crate::DeviceError::Unexpected)
     }
 
+    /// Rune: the highest value `fence` has reached, or None once the device is removed. A
+    /// removed device's fence reads `u64::MAX` (a GPU reset after a timeout, a driver update, a
+    /// GPU unplugged), which wgpu-core would take as every submission finished: each pending
+    /// work-done callback and buffer map would complete as if its work had run. Reporting the
+    /// value the fence last really reached leaves them pending, which they are: they will never
+    /// finish. An error here instead would make wgpu's `Device::poll` panic ("Parent device is
+    /// lost"). The removal itself is seen by the caller (Rune's `rune_gpu::health::removed`) and
+    /// by wgpu at the device's next submission, whose signal fails.
+    fn reached(&self, fence: &super::Fence) -> Option<crate::FenceValue> {
+        let value = unsafe { fence.raw.GetCompletedValue() };
+        if value == u64::MAX {
+            // Never stored: read a moment before D3D12 reports the removal, it would stay
+            // "everything finished" for good.
+            if unsafe { self.raw.GetDeviceRemovedReason() }.is_err() {
+                return None;
+            }
+            return Some(fence.reached.load(core::sync::atomic::Ordering::Relaxed));
+        }
+        Some(fence.reached.fetch_max(value, core::sync::atomic::Ordering::Relaxed).max(value))
+    }
+
     // Blocks until the dedicated present queue is finished with all of its work.
     //
     // Once this method completes, the surface is able to be resized or deleted.
@@ -2346,7 +2367,7 @@ impl crate::Device for super::Device {
 
         self.counters.fences.add(1);
 
-        Ok(super::Fence { raw })
+        Ok(super::Fence { raw, reached: Default::default() })
     }
     unsafe fn destroy_fence(&self, _fence: super::Fence) {
         self.counters.fences.sub(1);
@@ -2356,7 +2377,7 @@ impl crate::Device for super::Device {
         &self,
         fence: &super::Fence,
     ) -> Result<crate::FenceValue, crate::DeviceError> {
-        Ok(unsafe { fence.raw.GetCompletedValue() })
+        Ok(self.reached(fence).unwrap_or_else(|| fence.reached.load(core::sync::atomic::Ordering::Relaxed)))
     }
     unsafe fn wait(
         &self,
@@ -2367,7 +2388,8 @@ impl crate::Device for super::Device {
         let timeout = timeout.unwrap_or(Duration::MAX);
 
         // We first check if the fence has already reached the value we're waiting for.
-        let mut fence_value = unsafe { fence.raw.GetCompletedValue() };
+        // A removed device's fence never reaches `value`.
+        let Some(mut fence_value) = self.reached(fence) else { return Ok(false) };
         if fence_value >= value {
             return Ok(true);
         }
@@ -2408,17 +2430,23 @@ impl crate::Device for super::Device {
 
             log::trace!("Waiting for fence value {value} for {remaining_wait_duration:?}");
 
+            // Rune: in slices of at most 100 ms, reading the fence again after each. A fence can
+            // read `u64::MAX` a moment before D3D12 reports the removal; `reached` then gives the
+            // last real value, and the auto-reset event, already fired by that `u64::MAX`, never
+            // fires again: one wait for the whole timeout (`INFINITE` for `wait_indefinitely`)
+            // would never return. A slice that ends without the event costs a re-read
+            // (`GetCompletedValue`, and `GetDeviceRemovedReason` once the fence reads `u64::MAX`);
+            // a wait the GPU answers returns on the event, as before.
+            let slice = remaining_wait_duration.min(Duration::from_millis(100));
             match unsafe {
-                Threading::WaitForSingleObject(
-                    event.0,
-                    remaining_wait_duration.as_millis().min(u32::MAX as u128) as u32,
-                )
+                Threading::WaitForSingleObject(event.0, slice.as_millis().min(u32::MAX as u128) as u32)
             } {
                 Foundation::WAIT_OBJECT_0 => {}
                 Foundation::WAIT_ABANDONED | Foundation::WAIT_FAILED => {
                     log::error!("Wait failed!");
                     break Err(crate::DeviceError::Lost);
                 }
+                Foundation::WAIT_TIMEOUT if slice < remaining_wait_duration => {}
                 Foundation::WAIT_TIMEOUT => {
                     log::trace!("Wait timed out!");
                     break Ok(false);
@@ -2429,7 +2457,10 @@ impl crate::Device for super::Device {
                 }
             };
 
-            fence_value = unsafe { fence.raw.GetCompletedValue() };
+            fence_value = match self.reached(fence) {
+                Some(value) => value,
+                None => break Ok(false),
+            };
             log::trace!("Wait complete! Fence actual value: {fence_value}");
 
             if fence_value >= value {
