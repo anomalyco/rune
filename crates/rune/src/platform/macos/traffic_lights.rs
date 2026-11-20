@@ -59,6 +59,7 @@ fn place_in(win: &NSWindow, (x, y): (f64, f64)) {
     let [Some(close), Some(mini), Some(zoom)] = buttons else { return };
     // SAFETY: AppKit's own view hierarchy, on the main thread.
     let Some(parent) = (unsafe { close.superview() }) else { return };
+    // SAFETY: `parent` is a live `NSView` in AppKit's window hierarchy on the main thread.
     let Some(container) = (unsafe { parent.superview() }) else { return };
     // SAFETY: live views on the main thread.
     unsafe {
@@ -79,6 +80,7 @@ fn place_in(win: &NSWindow, (x, y): (f64, f64)) {
     frame.size.height = close.frame().size.height + 2.0 * y;
     frame.origin.y = win.frame().size.height - frame.size.height;
     let width = parent.frame().size.width;
+    // SAFETY: `container` and the standard window buttons are live `NSView`s updated on AppKit's main thread.
     unsafe {
         container.setFrame(frame);
         for (i, b) in [close, mini, zoom].iter().enumerate() {

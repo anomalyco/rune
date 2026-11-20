@@ -180,6 +180,7 @@ unsafe extern "system" fn menu_procedure(hwnd: HWND, message: u32, w: WPARAM, l:
 /// Shows the window menu at screen point (`x`, `y`) until it closes, and carries out the pick.
 fn track_window_menu(hwnd: HWND, x: i32, y: i32) {
     let Some(_modal) = crate::popup_menu::enter_menu_loop() else { return };
+    // SAFETY: `IsWindow` safely validates whether `hwnd` still refers to a live window.
     if unsafe { IsWindow(hwnd) == 0 } { return; }
     let _turns = crate::popup_menu::turns(hwnd);
     // SAFETY: Win32 calls on a live window this thread owns and its own system menu.

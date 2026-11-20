@@ -35,13 +35,18 @@ impl PointerState {
     fn trace(&self, panel: &NSPanel, source: &str, event: Option<&NSEvent>) {
         static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         if !*ENABLED.get_or_init(|| std::env::var_os("RUNE_OVERLAY_TRACE_INPUT").is_some()) { return; }
+        // SAFETY: `trace` is only called on AppKit's main thread.
         let cursor = unsafe { NSEvent::mouseLocation() };
         let frame = panel.frame();
         let local = (cursor.x - frame.origin.x, frame.origin.y + frame.size.height - cursor.y);
+        // SAFETY: `event` is a live `NSEvent` on the main thread; `type` returns `NSEventType` (`usize`).
         let kind: usize = event.map_or(0, |event| unsafe { msg_send![event, type] });
+        // SAFETY: `event` is a live `NSEvent` on the main thread; `locationInWindow` returns `NSPoint`.
         let event_point: NSPoint = event.map_or(NSPoint::new(0.0, 0.0), |event| unsafe { msg_send![event, locationInWindow] });
+        // SAFETY: class property read on `NSEvent` on the main thread; returns a bitmask (`usize`).
         let buttons: usize = unsafe { msg_send![NSEvent::class(), pressedMouseButtons] };
         eprintln!("overlay-input source={source} window={} kind={kind} event={event_point:?} cursor={cursor:?} local={local:?} frame={frame:?} input={:?} buttons={buttons} captured={} ignore={} regions={:?}",
+            // SAFETY: `panel` is a live `NSPanel` queried on AppKit's main thread.
             unsafe { panel.windowNumber() }, self.input.get(), self.captured(), unsafe { panel.ignoresMouseEvents() }, self.regions.borrow());
     }
     /// Carries a transition out; the point of a click winit dispatched.
@@ -125,6 +130,7 @@ impl PointerState {
     pub(super) fn observe(&self, panel: &NSPanel, wake: Option<&crate::Waker>) {
         // SAFETY: monitors and frame publication run on AppKit's main thread.
         let pointer = unsafe { NSEvent::mouseLocation() };
+        // SAFETY: class property read on `NSEvent` on AppKit's main thread; returns a bitmask (`usize`).
         let buttons: usize = unsafe { msg_send![NSEvent::class(), pressedMouseButtons] };
         let frame = panel.frame();
         let (x, y) = ((pointer.x - frame.origin.x) as f32, (frame.origin.y + frame.size.height - pointer.y) as f32);
@@ -135,6 +141,7 @@ impl PointerState {
         });
         let moved = self.read(buttons, Instant::now(), (x, y), inside, display_changed);
         let ignore = !self.hit(x, y);
+        // SAFETY: `panel` is a live `NSPanel` queried on AppKit's main thread.
         if unsafe { panel.ignoresMouseEvents() } != ignore {
             panel.setIgnoresMouseEvents(ignore);
             self.trace(panel, "flip", None);
@@ -230,14 +237,17 @@ impl Panel {
         let mask = movement | (1 << 1) | (1 << 2);
         let (pointer, panel, wake) = (self.pointer.clone(), self.panel.clone(), self.wake.clone());
         let global = block2::RcBlock::new(move |event: *mut NSEvent| {
+            // SAFETY: AppKit passes a valid `NSEvent` pointer (or null) for the monitor callback on the main thread.
             pointer.trace(&panel, "global", unsafe { event.as_ref() });
             pointer.reapply_cursor(&panel);
             if let Some(wake) = &wake { wake(); }
         });
         let (pointer, panel, wake) = (self.pointer.clone(), self.panel.clone(), self.wake.clone());
         let local = block2::RcBlock::new(move |event: *mut NSEvent| -> *mut NSEvent {
+            // SAFETY: AppKit passes a valid `NSEvent` pointer (or null) for the monitor callback on the main thread.
             pointer.trace(&panel, "local", unsafe { event.as_ref() });
             pointer.reapply_cursor(&panel);
+            // SAFETY: `event` is a live `NSEvent` on AppKit's main thread; `type`, `window`, and `locationInWindow` match `NSEvent`'s signatures.
             unsafe {
                 let kind: usize = msg_send![event, type];
                 let window: *mut NSWindow = msg_send![event, window];
@@ -252,6 +262,8 @@ impl Panel {
             event
         });
         let mut tokens = Vec::new();
+        // SAFETY: main-thread AppKit calls; `global` and `local` are valid `RcBlock`s copied by AppKit,
+        // and the returned monitor tokens are removed in `MouseMonitors::drop`.
         unsafe {
             let token: Option<Retained<NSObject>> = msg_send_id![NSEvent::class(), addGlobalMonitorForEventsMatchingMask: mask, handler: &*global];
             tokens.extend(token);

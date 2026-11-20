@@ -34,6 +34,8 @@ pub fn install() {
     if ORIGINAL.load(Ordering::Relaxed) != 0 { return; }
     let (Some(delegate), Some(object)) = (AnyClass::get("WinitWindowDelegate"), AnyClass::get("NSObject")) else { return };
     let selector = sel!(observeValueForKeyPath:ofObject:change:context:);
+    // SAFETY: called on the main thread after winit registers `WinitWindowDelegate`; `delegate` and `object`
+    // are valid classes, `ORIGINAL` is stored before swapping the IMP, and `observe` matches the KVO selector ABI.
     unsafe {
         let method = class_getInstanceMethod(delegate, selector);
         // Only winit's own override; never NSObject's inherited implementation.
@@ -45,10 +47,12 @@ pub fn install() {
 
 unsafe fn appearance(value: *mut AnyObject) -> bool {
     let Some(class) = AnyClass::get("NSAppearance") else { return false };
+    // SAFETY: `value` is checked non-null and caller guarantees it is a valid ObjC object; `class` is `NSAppearance`.
     !value.is_null() && unsafe { msg_send![value, isKindOfClass: class] }
 }
 
 unsafe fn remember(window: *mut AnyObject, value: *mut AnyObject) {
+    // SAFETY: caller guarantees `window` and `value` are valid ObjC objects; `&LAST_APPEARANCE` is a unique static key.
     unsafe { objc_setAssociatedObject(window, (&LAST_APPEARANCE as *const u8).cast(), value, RETAIN_NONATOMIC) }
 }
 
@@ -57,8 +61,12 @@ unsafe extern "C" fn observe(this: *mut AnyObject, cmd: Sel, key_path: *mut AnyO
     let original: Observe = unsafe { std::mem::transmute(ORIGINAL.load(Ordering::Relaxed)) };
     let key: &AnyObject = ns_string!("effectiveAppearance");
     let watched = !key_path.is_null() && !window.is_null() && !change.is_null()
+        // SAFETY: `key_path` is non-null and passed as an `NSString` by KVO; `key` is a valid `NSString`.
         && unsafe { msg_send![key_path, isEqualToString: key] };
+    // SAFETY: `original` is winit's original KVO IMP with the same ABI and arguments passed by AppKit.
     if !watched { return unsafe { original(this, cmd, key_path, window, change, context) } }
+    // SAFETY: KVO guarantees non-null `window` and `change` (`NSDictionary`) are live ObjC objects,
+    // `NSKeyValueChange*Key` are valid Foundation keys, and `patched` from `mutableCopy` is released after forwarding.
     unsafe {
         let old: *mut AnyObject = msg_send![change, objectForKey: NSKeyValueChangeOldKey];
         let new: *mut AnyObject = msg_send![change, objectForKey: NSKeyValueChangeNewKey];

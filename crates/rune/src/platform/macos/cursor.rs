@@ -133,9 +133,13 @@ pub(crate) fn set_ns_cursor(cursor: Cursor) {
             M::ZoomOut => named(class, &[objc2::sel!(zoomOutCursor), objc2::sel!(_zoomOutCursor)]),
             // No built-in NSCursor class method: loaded from the system/app image, falling back to
             // the arrow if unavailable.
+            // SAFETY: main thread; `class` is `NSCursor`.
             M::Transparent => TRANSPARENT.with(Clone::clone).or_else(|| unsafe { arrow(class) }),
+            // SAFETY: main thread; `class` is `NSCursor`.
             M::MoveImage => MOVE.with(Clone::clone).or_else(|| unsafe { arrow(class) }),
+            // SAFETY: main thread; `class` is `NSCursor`.
             M::CellImage => CELL.with(Clone::clone).or_else(|| unsafe { arrow(class) }),
+            // SAFETY: main thread; `class` is `NSCursor`.
             M::Custom(image) => native(image).or_else(|| unsafe { arrow(class) }),
         };
         if let Some(ns) = ns { let _: () = msg_send![&*ns, set]; }

@@ -82,6 +82,7 @@ impl LayerHostCore {
             return Err("null CAMetalLayer pointer".into());
         }
         let gpu = shared_gpu()?;
+        // SAFETY: caller guarantees non-null `layer` is a valid `CAMetalLayer` outliving this surface on an allowed thread.
         let surface = unsafe {
             gpu.instance
                 .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(layer))
@@ -215,6 +216,7 @@ impl<S: 'static> LayerHost<S> {
         dark: bool,
         wake: Waker,
     ) -> Result<Self, String> {
+        // SAFETY: caller upholds `from_core_animation_layer`'s safety contract (`layer` is a valid `CAMetalLayer` outliving `LayerHost`, on the UI thread).
         let (mut core, size, scale, now) = unsafe { LayerHostCore::new(layer, viewport, scale) }?;
         let mut rt = runtime_for(spec, state, size, Env::new(dark, scale), wake);
         core.configure_runtime(rt.core_mut(), now);
@@ -332,10 +334,12 @@ mod tests {
 
     #[test]
     fn layer_host_runs_compositor_with_tracked_marks() {
+        // SAFETY: `CAMetalLayer` is a QuartzCore class whose `+new` returns a retained instance.
         let layer: Retained<AnyObject> = unsafe { msg_send![AnyClass::get(c"CAMetalLayer").expect("QuartzCore"), new] };
         let seen = Arc::new(AtomicU32::new(0));
         let view = |_: &(), _: &mut Cx<()>| -> El { col().size(120.0, 80.0).child(effect(42).size(60.0, 20.0)) };
         let spec = AppSpec::new("embed-test", (120.0, 80.0), || (), view);
+        // SAFETY: `layer` is a valid retained `CAMetalLayer` owned by this test and outlives `host` (dropped before `layer`).
         let host = unsafe {
             LayerHost::from_core_animation_layer(
                 Retained::as_ptr(&layer) as *mut std::ffi::c_void,

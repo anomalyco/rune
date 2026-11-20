@@ -106,6 +106,7 @@ objc2_video::define_class!(
             _: *const objc2_video::runtime::AnyObject,
         ) -> *const objc2_video::runtime::AnyObject {
             let Some(null) = objc2_video::runtime::AnyClass::get(c"NSNull") else { return std::ptr::null() };
+            // SAFETY: `NSNull` is a Foundation class whose `+null` returns the process-lifetime singleton pointer.
             unsafe { objc2_video::msg_send![null, null] }
         }
     }
