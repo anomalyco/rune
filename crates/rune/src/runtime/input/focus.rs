@@ -289,6 +289,27 @@ impl RuntimeCore {
         }
         true
     }
+    /// In `nodes`, the focus group `j` is an item of, as [`Self::focus_group`] finds it in the
+    /// committed tree.
+    fn group_in(&self, nodes: &[Node], j: usize) -> Option<usize> {
+        let mut p = nodes[j].parent;
+        while let Some(i) = p {
+            if nodes[i].focus.group { return Some(i); }
+            if self.takes_focus(&nodes[i]) { return None; }
+            p = nodes[i].parent;
+        }
+        None
+    }
+    /// In `nodes`, the nearest roving focus group around `j`: the one it is an item of, or the one
+    /// whose item holds it (a tab's Close button is in its tab strip's group).
+    fn roving_home_in(&self, nodes: &[Node], j: usize) -> Option<usize> {
+        let mut p = nodes[j].parent;
+        while let Some(i) = p {
+            if nodes[i].focus.group { return Some(i); }
+            p = nodes[i].parent;
+        }
+        None
+    }
     /// The focus group `i` is an item of. A control inside an item (a tab's close button) is
     /// no item: it's a Tab stop of its own, as an HTML button inside a roving `tablist` is.
     pub(crate) fn focus_group(&self, i: usize) -> Option<usize> {
@@ -533,7 +554,9 @@ impl RuntimeCore {
     ///   else the container itself when it is one, then the same in the next container out; only
     ///   when no container out to the root has a Tab stop left does focus go to any control. A
     ///   keyboard user lands where Tab would go, as OpenCode Desktop's focus rescue does
-    ///   (opencode#64909), not on a control Tab never reaches.
+    ///   (opencode#64909), not on a control Tab never reaches. A roving group counts as one Tab
+    ///   stop: focus that was in one (on an item, or on a control inside one, a tab's Close button)
+    ///   may go to another of its items, the next tab rather than the next tab's Close button.
     /// - **It wasn't** (an item of a roving group, a control out of the Tab order): the next control
     ///   after it that can take focus, else the one before, else the container, as a native list
     ///   hands its selection to the neighbour.
@@ -598,7 +621,11 @@ impl RuntimeCore {
         }
         // The container itself counts after its children, when it takes focus (a list row whose
         // comment box closed under it).
-        let tab = |i: usize| survivor(i).filter(|&j| self.tab_stop_in(nodes, j));
+        // Focus that was in a roving group (on an item, or on a control inside one: a tab's Close
+        // button) may go to another item of that group: the group is one Tab stop, and its items
+        // are where the keys move inside it (the next tab, not the next tab's Close button).
+        let home = self.roving_home_in(&self.tree.nodes, at).and_then(&at_new);
+        let tab = |i: usize| survivor(i).filter(|&j| self.tab_stop_in(nodes, j) || (home.is_some() && self.group_in(nodes, j) == home));
         let lost_tab_stop = self.tree.nodes[at].focus.order >= 0 && self.focus_group(at).is_none();
         rescue(lost_tab_stop, at, &scopes, &tab, &survivor).map(|j| nodes[j].path.clone())
     }
@@ -624,7 +651,8 @@ impl RuntimeCore {
                 scopes.push((c, (c + 1..nodes.len()).find(|&m| !inside(m)).unwrap_or(nodes.len())));
             }
             let any = |m: usize| can(m).then_some(m);
-            let tab = |m: usize| (can(m) && self.tab_stop_in(nodes, m)).then_some(m);
+            let home = self.roving_home_in(nodes, at);
+            let tab = |m: usize| (can(m) && (self.tab_stop_in(nodes, m) || (home.is_some() && self.group_in(nodes, m) == home))).then_some(m);
             return rescue(self.tab_stop_in(nodes, at), at, &scopes, &tab, &any).map(|m| nodes[m].path.clone());
         }
         let mut p = gone;
