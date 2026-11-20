@@ -81,6 +81,9 @@ impl TextSystem {
         self.superseded.clear();
         self.elisions.clear();
         self.runs.clear();
+        self.ascii.clear();
+        self.paragraphs.clear();
+        self.last_paragraphs = None;
         self.primary_traks.clear();
         self.primary_axes.clear();
         self.glyph_cache.clear();
