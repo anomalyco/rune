@@ -95,8 +95,10 @@ exclude = ["tools/rune-dev-guard", "vendor/accesskit_macos", "vendor/accesskit_w
 # one adapter Rune picks through DXGI, with no device made on the others, `crates/rune-gpu/src/pick.rs`), FXC loaded on
 # the first compile rather than with the instance (Rune's uber shader is precompiled), partial presents
 # (`Surface::set_present_rects`: `Present1` dirty rectangles on a sequential flip-model swap chain, for
-# `render::damaged`), and Windows system DLLs (`d3d12.dll`, `dxgi.dll`, `dcomp.dll`, `d3dcompiler_47.dll`,
-# `opengl32.dll`) loaded with `LOAD_LIBRARY_SEARCH_SYSTEM32`. Re-made by
+# `render::damaged`), Windows system DLLs (`d3d12.dll`, `dxgi.dll`, `dcomp.dll`, `d3dcompiler_47.dll`,
+# `opengl32.dll`) loaded with `LOAD_LIBRARY_SEARCH_SYSTEM32`, and a removed D3D12 device's work left
+# pending rather than read as finished (`Device::reached`; Rune sees the removal through
+# `rune_gpu::health::removed`). Re-made by
 # `scripts/vendor-wgpu-hal.sh <version>` when wgpu is bumped. An app that builds Rune patches it too:
 # a dependency's `[patch]` doesn't apply to the workspace that depends on it.
 [patch.crates-io]

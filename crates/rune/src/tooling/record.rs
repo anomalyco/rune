@@ -59,9 +59,9 @@ impl<T> Readback<T> {
         for (slot, _, mapping) in self.pending.iter_mut().filter(|p| !p.2) {
             let ready = self.slots[*slot].ready.clone();
             ready.store(false, Ordering::Release);
+            // A lost device's map fails: the frame stays unready and `pop`'s wait says why.
             self.slots[*slot].readback.buffer().slice(..).map_async(wgpu::MapMode::Read, move |r| {
-                r.expect("map readback");
-                ready.store(true, Ordering::Release);
+                if r.is_ok() { ready.store(true, Ordering::Release); }
             });
             *mapping = true;
         }
@@ -69,7 +69,7 @@ impl<T> Readback<T> {
 
     /// Finished frames in submission order, without waiting.
     pub(crate) fn ready(&mut self, device: &wgpu::Device) -> Vec<(T, Vec<u8>)> {
-        let _ = device.poll(wgpu::PollType::Poll);
+        let _ = rune_gpu::health::poll(device, wgpu::PollType::Poll);
         let mut done = Vec::new();
         while let Some(frame) = self.pop(device, false) { done.push(frame); }
         done
@@ -89,7 +89,12 @@ impl<T> Readback<T> {
         if !ready.load(Ordering::Acquire) {
             if !wait { return None; }
             while !ready.load(Ordering::Acquire) {
-                device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+                match rune_gpu::health::poll(device, wgpu::PollType::wait_indefinitely()) {
+                    Err(error) => crate::tooling::args::die(&format!("{error} while a frame was read back; no image was written")),
+                    // Nothing left to wait for, and the map failed.
+                    Ok(wgpu::PollStatus::QueueEmpty) if !ready.load(Ordering::Acquire) => crate::tooling::args::die("a frame's readback failed; no image was written"),
+                    Ok(_) => {}
+                }
             }
         }
         let (slot, tag, _) = self.pending.pop_front().unwrap();

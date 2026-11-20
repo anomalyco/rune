@@ -4,18 +4,29 @@ pub(super) const NO_CLIP: [f32; 4] = [-1e6, -1e6, 1e6, 1e6];
 pub(super) const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
 static GPU_INIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
-/// On Windows DX12, running the heavy compute overlap workload beside other GPU tests triggers
-/// a driver TDR; serialize test GPU lifetimes on Windows so `cargo test -p rune-media` passes
-/// without `--test-threads=1`.
+/// One test's GPU at a time on Windows, so the overlap probe's pending workload is timed alone,
+/// not beside another test's GPU work.
 #[cfg(target_os = "windows")]
 static GPU_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// A test's GPU. A lost device (a GPU reset, a driver update, a GPU removed) fails the test that
+/// owns it, at the latest when the test ends: a loss also completes work and fires callbacks,
+/// which would otherwise read as the GPU having done what the test asked.
 pub(super) struct Gpu {
     pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    lost: Arc<std::sync::Mutex<Option<String>>>,
     #[cfg(target_os = "windows")]
     _serial: std::sync::MutexGuard<'static, ()>,
+}
+
+impl Drop for Gpu {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            self.assert_alive();
+        }
+    }
 }
 
 impl Gpu {
@@ -42,12 +53,46 @@ impl Gpu {
             ..Default::default()
         }))
         .expect("request GPU device");
+        let lost = Arc::new(std::sync::Mutex::new(None));
+        let heard = lost.clone();
+        device.set_device_lost_callback(move |reason, message| {
+            if reason != wgpu::DeviceLostReason::Destroyed {
+                *heard.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("{reason:?}: {message}"));
+            }
+        });
         Self {
             adapter: pick.adapter,
             device,
             queue,
+            lost,
             #[cfg(target_os = "windows")]
             _serial,
+        }
+    }
+
+    /// Fails the test if its device was lost.
+    pub(super) fn assert_alive(&self) {
+        if rune_gpu::health::removed(&self.device) {
+            panic!("the GPU device was removed during this test, on {}: nothing it read from the GPU since counts", self.adapter.get_info().name);
+        }
+        if let Some(why) = self.lost.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+            panic!("the GPU device was lost during this test ({why}), on {}: nothing it read from the GPU since counts", self.adapter.get_info().name);
+        }
+    }
+
+    /// What a GPU callback sends on `heard` within `within`, failing the test as soon as the
+    /// device is lost: a lost device's callbacks may never come.
+    pub(super) fn wait<T>(&self, heard: &std::sync::mpsc::Receiver<T>, within: std::time::Duration) -> Option<T> {
+        let until = std::time::Instant::now() + within;
+        loop {
+            if let Ok(value) = heard.recv_timeout(std::time::Duration::from_millis(5)) {
+                self.assert_alive();
+                return Some(value);
+            }
+            self.assert_alive();
+            if std::time::Instant::now() >= until {
+                return None;
+            }
         }
     }
 
@@ -112,7 +157,7 @@ impl Offscreen {
 
     pub(super) fn read(&self, device: &wgpu::Device) -> Vec<u8> {
         let slice = self.buffer.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback"));
+        slice.map_async(wgpu::MapMode::Read, |_| {});
         device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
         let row = (self.width * 4) as usize;
         let stride = self.padded_row as usize;
@@ -199,7 +244,7 @@ pub(super) fn render(gpu: &Gpu, renderer: &mut SurfaceRenderer, draws: &[Surface
     renderer.submit(&gpu.queue, encoder);
     let pixels = target.read(&gpu.device);
     for _ in draws {
-        completion.recv_timeout(std::time::Duration::from_secs(10)).expect("frame completion");
+        gpu.wait(&completion, std::time::Duration::from_secs(10)).expect("frame completion");
     }
     pixels
 }
@@ -248,10 +293,35 @@ fn srgb(x: f32) -> u8 {
 /// a fence wait would block `destroy` until the work completed, and the poll would then fire
 /// its callback. An attempt whose workload finished before the probe (a loaded machine
 /// delaying this thread) proves nothing either way, so it retries with more work.
+///
+/// The pending work is a queue of submissions of one fixed size, `CHUNK` loop iterations per
+/// invocation (1.07 billion in all, about 30 ms on a Ryzen 9950X3D's integrated GPU), ahead of
+/// the submission with the surface's draw and the callback: a worker that waited on the
+/// submission it serves, or on all of them, holds the lock until every one is done. Nothing
+/// measured changes a submission's size; a timing decides only how many are queued. The timing
+/// tells a submission's fixed round trip (a small submission's time) from its work (a full one's
+/// time beyond that), so an adapter with a slow round trip (Metal on an Apple M4: 6,094 us for
+/// a 64th of the work) isn't taken for a slow GPU. An overestimate only queues less, and a
+/// timed attempt's own run lowers it for the next; an adapter is never refused for being slow,
+/// and nothing it measures can size one submission past `CHUNK`. Before anything is known only
+/// `CHUNK / 64` is issued (about 1,400 us on that integrated GPU, round trip included, and 4,700
+/// to 6,700 us on WARP); each larger size, up by fours, only once four times the size below's
+/// whole time fits in `PLANNED_MOST`. An adapter too slow for that queues the smaller size, as
+/// WARP does. Windows resets a
+/// GPU whose one submission runs 2 s, and an AMD GPU preempts nothing smaller than a
+/// submission: 68.7 billion iterations in one submission ran past that on the same integrated
+/// GPU, and the reset's completion read as an overlap.
 #[test]
 fn completion_worker_preserves_cpu_gpu_overlap() {
     use std::sync::mpsc::TryRecvError;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
+    const INVOCATIONS: u32 = 1024 * 64;
+    const CHUNK: u32 = 16_384;
+    const PLANNED_MOST: Duration = Duration::from_millis(100);
+    const CHUNKS_MOST: u32 = 512;
+    /// However cheap a chunk's work measures, no attempt queues chunks whose full submit-to-done
+    /// times add up past this.
+    const QUEUED_MOST: Duration = Duration::from_secs(2);
     let gpu = Gpu::headless_wgpu();
     let surface = NativeSurface::new();
     surface.push_bytes(synthetic(16, 16, 0), 1).unwrap();
@@ -261,10 +331,11 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
         source: wgpu::ShaderSource::Wgsl(
             r#"
             @group(0) @binding(0) var<storage, read_write> result: array<u32>;
+            @group(0) @binding(1) var<uniform> iterations: vec4<u32>;
             @compute @workgroup_size(64)
             fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                 var x = id.x;
-                for (var i = 0u; i < 1048576u; i++) {
+                for (var i = 0u; i < iterations.x; i++) {
                     x = (x ^ (x >> 13u)) * 1664525u + 1013904223u;
                 }
                 result[id.x] = x;
@@ -283,20 +354,86 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
     });
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
-        size: 65536 * 4,
+        size: u64::from(INVOCATIONS) * 4,
         usage: wgpu::BufferUsages::STORAGE,
         mapped_at_creation: false,
     });
-    let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: None,
-        layout: &compute.get_bind_group_layout(0),
-        entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
-    });
+    let bind_for = |iterations: u32| {
+        let work = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("overlap iterations"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        gpu.queue.write_buffer(&work, 0, bytemuck::cast_slice(&[iterations, 0, 0, 0]));
+        gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &compute.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: work.as_entire_binding() },
+            ],
+        })
+    };
+    // A submission's sizes: `CHUNK / 64`, the only size issued before anything is known, then up
+    // by fours to `CHUNK`, each only when the one below predicts it fits (see the calibration).
+    let sizes = [CHUNK / 64, CHUNK / 16, CHUNK / 4, CHUNK];
+    let binds = sizes.map(bind_for);
+    let small = &binds[0];
+    let submit = |bind: &wgpu::BindGroup| {
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&compute);
+            pass.set_bind_group(0, bind, &[]);
+            pass.dispatch_workgroups(INVOCATIONS / 64, 1, 1);
+        }
+        gpu.queue.submit([encoder.finish()])
+    };
+    let time = |bind: &wgpu::BindGroup| {
+        let started = Instant::now();
+        let index = submit(bind);
+        if gpu.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: Some(Duration::from_secs(5)) }).is_err() {
+            gpu.assert_alive();
+            panic!("a calibration submission didn't complete in 5 s");
+        }
+        gpu.assert_alive();
+        started.elapsed()
+    };
+    // The first submission also pays for the pipeline's first use; it times nothing.
+    time(small);
+    let name = gpu.adapter.get_info().name;
+    let floor = time(small);
+    // Up by fours, while four times the last size's whole time (round trip and all, so an upper
+    // bound on the next size's time whatever the round trip is) fits in `PLANNED_MOST`. No
+    // submission is issued that a smaller one hasn't predicted fits. A software adapter (WARP)
+    // runs the work on the CPU, with no GPU to reset; it stays at the first size.
+    let software = gpu.adapter.get_info().device_type == wgpu::DeviceType::Cpu;
+    let mut step = (0, floor);
+    let mut steps = vec![floor.as_micros()];
+    while !software && step.0 + 1 < sizes.len() && step.1 * 4 <= PLANNED_MOST {
+        step = (step.0 + 1, time(&binds[step.0 + 1]));
+        steps.push(step.1.as_micros());
+    }
+    let (index, chunk_alone) = step;
+    let (chunk, size) = (&binds[index], sizes[index]);
+    // A chunk queued behind others pays for its work, not for another round trip: what it took
+    // beyond the first size's time, or all of it when it is the first size.
+    let mut per_chunk = if index == 0 { chunk_alone } else { chunk_alone.saturating_sub(floor).max(chunk_alone / 64) };
+    let chunks_most = ((QUEUED_MOST.as_secs_f64() / chunk_alone.as_secs_f64().max(1e-6)) as u32).clamp(1, CHUNKS_MOST);
+    let why = if size == CHUNK { "the full chunk".to_string() } else if software { "a software adapter".to_string() } else { format!("{} us x 4 would pass {} us", chunk_alone.as_micros(), PLANNED_MOST.as_micros()) };
+    eprintln!(
+        "overlap probe: on {name}, {} to {} iterations per invocation took {steps:?} us; queueing {size} per invocation ({why}), {} us alone, {} us of it work; at most {chunks_most} queued",
+        CHUNK / 64,
+        sizes[index],
+        chunk_alone.as_micros(),
+        per_chunk.as_micros()
+    );
     let target = Offscreen::new(&gpu.device, 16, 16);
     let mut outcomes = Vec::new();
-    // Each dispatch is one unit of work (a few hundred ms on a desktop GPU); later attempts
-    // queue more of them in the same submission rather than lengthening one dispatch.
-    for dispatches in [1, 2, 4, 8, 16] {
+    for planned in [25, 50, 100, 100, 100].map(Duration::from_millis) {
+        let planned = planned.min(PLANNED_MOST);
+        let chunks = (planned.as_secs_f64() / per_chunk.as_secs_f64().max(1e-6)).ceil().clamp(1.0, f64::from(chunks_most)) as u32;
         renderer.prepare(&gpu.device, &gpu.queue, &[draw(&surface, [0.0, 0.0, 16.0, 16.0])], (16, 16));
         let probe = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("present lock probe"),
@@ -304,22 +441,18 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
             usage: wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let mut encoder = gpu.device.create_command_encoder(&Default::default());
-        {
-            let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&compute);
-            pass.set_bind_group(0, &bind, &[]);
-            for _ in 0..dispatches {
-                pass.dispatch_workgroups(1024, 1, 1);
-            }
+        let submitted = Instant::now();
+        for _ in 0..chunks {
+            submit(chunk);
         }
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
         {
             let mut pass = clear_pass(&mut encoder, &target.view, wgpu::Color::BLACK, renderer.timestamp_writes());
             renderer.draw(&mut pass, 0);
         }
         let (done, completed) = std::sync::mpsc::channel();
         encoder.on_submitted_work_done(move || {
-            let _ = done.send(());
+            let _ = done.send(Instant::now());
         });
         renderer.submit(&gpu.queue, encoder);
         // The worker has taken submit's wakeup once its one-slot channel has room again: it is
@@ -328,26 +461,33 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
             std::thread::yield_now();
         }
         std::thread::sleep(Duration::from_millis(1));
-        let outcome = if completed.try_recv().is_ok() {
-            "finished before the probe"
+        let (outcome, finished) = if let Ok(at) = completed.try_recv() {
+            ("finished before the probe", at)
         } else {
             probe.destroy();
             gpu.device.poll(wgpu::PollType::Poll).unwrap();
             match completed.try_recv() {
                 Err(TryRecvError::Empty) => {
-                    completed.recv_timeout(Duration::from_secs(30)).expect("GPU workload completed");
-                    "overlapped"
+                    let at = gpu.wait(&completed, Duration::from_secs(30));
+                    ("overlapped", at.unwrap_or_else(|| panic!("{chunks} submissions planned at {} us never completed", planned.as_micros())))
                 }
-                _ => "finished by the time the write lock returned",
+                Ok(at) => ("finished by the time the write lock returned", at),
+                Err(TryRecvError::Disconnected) => panic!("the GPU workload's callback was dropped"),
             }
         };
-        eprintln!("overlap probe: {dispatches} dispatches, {outcome}");
+        // A lost device completes its submissions too, which is no overlap.
+        gpu.assert_alive();
+        eprintln!("overlap probe: {chunks} submissions planned at {} us, submit to done {} us, {outcome}", planned.as_micros(), (finished - submitted).as_micros());
         if outcome == "overlapped" {
             return;
         }
+        // Submit to done bounds the chunks' GPU time: the next plan can only come out shorter.
+        per_chunk = per_chunk.min((finished - submitted) / chunks);
         outcomes.push(outcome);
     }
-    panic!("the snatch write lock never returned while GPU work was pending: {outcomes:?}");
+    // Five attempts, none overlapping: either the write lock waited for the work every time (the
+    // fault this test is for), or the work never stayed pending long enough to tell.
+    panic!("on {name}, no attempt found the snatch write lock free while GPU work was pending: {outcomes:?}");
 }
 fn publish(s: &NativeSurface, b: ByteFrame, id: u64, native: bool) {
     #[cfg(target_os = "macos")]
@@ -372,7 +512,7 @@ fn queued_video_frames_then_readback_on(gpu: Gpu) {
             let done = done.clone();
             s.set_observer(Arc::new(move |t| {
                 if t.completed_at.is_some() {
-                    done.send(t).unwrap();
+                    let _ = done.send(t);
                 }
             }));
             draw(s, [(i % 2) as f32 * 640.0, (i / 2) as f32 * 360.0, 640.0, 360.0])
