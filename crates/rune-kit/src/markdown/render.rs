@@ -7,6 +7,8 @@ mod blocks;
 mod code;
 mod inline;
 
+pub(super) use code::code_overflows_at;
+
 pub(super) struct Renderer {
     pub(super) s: MarkdownStyle,
     pub(super) highlights: Vec<(Vec<Range<usize>>, Highlight)>,

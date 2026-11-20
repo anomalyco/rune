@@ -177,6 +177,7 @@ pub static OUTLINE_CHEVRON_DOWN: Icon = Icon { name: "outline-chevron-down", ..C
 pub static OUTLINE_CHEVRON_RIGHT: Icon = Icon { name: "outline-chevron-right", ..CHEVRON_RIGHT };
 pub static OUTLINE_ARROW_LEFT: Icon = Icon { name: "outline-arrow-left", ..ARROW_LEFT };
 pub static OUTLINE_ARROW_RIGHT: Icon = Icon { name: "outline-arrow-right", ..ARROW_RIGHT };
+pub static TEXT_WRAP: Icon = Icon { name: "text-wrap", view: 16.0, body: r#"<path d="M1.5 3.5H14.5M1.5 8H11.5C12.8807 8 14 9.11929 14 10.5C14 11.8807 12.8807 13 11.5 13H8.5M10 11.5L8.5 13L10 14.5M1.5 12.5H5" stroke-linecap="round" stroke-linejoin="round" stroke="currentColor"/>"# };
 
 /// Every icon by its catalog name, for a gallery or a name read from data.
 pub static ALL: &[&Icon] = &[
@@ -346,4 +347,5 @@ pub static ALL: &[&Icon] = &[
     &OUTLINE_CHEVRON_RIGHT,
     &OUTLINE_ARROW_LEFT,
     &OUTLINE_ARROW_RIGHT,
+    &TEXT_WRAP,
 ];

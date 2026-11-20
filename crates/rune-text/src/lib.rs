@@ -150,6 +150,8 @@ pub use layout::underline::underline_edges;
 pub use measure::FamiliesGuard;
 pub use measure::TextInk;
 pub use measure::advance;
+#[doc(hidden)]
+pub use measure::ascii_metrics;
 pub use measure::content_widths;
 pub use measure::font_epoch;
 pub use measure::ink;
