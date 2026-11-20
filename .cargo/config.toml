@@ -6,3 +6,11 @@ linker = "rust-lld"
 
 [target.aarch64-pc-windows-msvc]
 linker = "rust-lld"
+
+# Opt-in local developer shortcuts (default-members fast paths and wasm/webgl checks).
+[alias]
+lint = "clippy --lib --bins --tests"
+lint-all = "clippy --workspace --all-targets"
+check-wasm = "check -p rune --no-default-features --target wasm32-unknown-unknown"
+check-webgl = "check -p rune --no-default-features --features webgl --target wasm32-unknown-unknown"
+test-fast = "test -p rune -p rune-mermaid -p rune-kit --features rune-kit/markdown,rune-kit/mermaid"
