@@ -5,7 +5,9 @@ use std::{ffi::c_void, ptr};
 use crate::utils::Lazy;
 use windows_sys::core::PCSTR;
 use windows_sys::Win32::Foundation::{BOOL, HWND, NTSTATUS, S_OK};
-use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
+use windows_sys::Win32::System::LibraryLoader::{
+    GetProcAddress, LoadLibraryExA, LOAD_LIBRARY_SEARCH_SYSTEM32,
+};
 use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
 use windows_sys::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTA};
 use windows_sys::Win32::UI::Controls::SetWindowTheme;
@@ -138,7 +140,9 @@ fn should_apps_use_dark_mode() -> bool {
             return None;
         }
 
-        let module = LoadLibraryA("uxtheme.dll\0".as_ptr().cast());
+        // Rune: load uxtheme.dll from System32 only, not the app directory or CWD.
+        let module =
+            LoadLibraryExA("uxtheme.dll\0".as_ptr().cast(), 0, LOAD_LIBRARY_SEARCH_SYSTEM32);
 
         if module == 0 {
             return None;

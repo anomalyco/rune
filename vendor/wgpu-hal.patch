@@ -54,10 +54,51 @@ index fdb63bc..5f64a80 100644
 +    }
 +}
 diff --git a/src/dx12/mod.rs b/src/dx12/mod.rs
-index 285d635..dd1f19e 100644
+index 285d635..6d8043a 100644
 --- a/src/dx12/mod.rs
 +++ b/src/dx12/mod.rs
-@@ -615,6 +615,8 @@ struct SwapChain {
+@@ -134,6 +134,22 @@ impl DynLib {
+         unsafe { libloading::Library::new(filename) }.map(|inner| Self { inner })
+     }
+ 
++    // Rune: load Windows system DLLs from System32 only, not the app directory or CWD.
++    unsafe fn new_system<P>(filename: P) -> Result<Self, libloading::Error>
++    where
++        P: AsRef<std::ffi::OsStr>,
++    {
++        unsafe {
++            libloading::os::windows::Library::load_with_flags(
++                filename,
++                libloading::os::windows::LOAD_LIBRARY_SEARCH_SYSTEM32,
++            )
++        }
++        .map(|inner| Self {
++            inner: inner.into(),
++        })
++    }
++
+     unsafe fn get<T>(
+         &self,
+         symbol: &[u8],
+@@ -164,7 +180,7 @@ pub enum CreateDeviceError {
+ 
+ impl D3D12Lib {
+     fn new() -> Result<Self, libloading::Error> {
+-        unsafe { DynLib::new("d3d12.dll").map(|lib| Self { lib }) }
++        unsafe { DynLib::new_system("d3d12.dll").map(|lib| Self { lib }) }
+     }
+ 
+     fn create_device(
+@@ -328,7 +344,7 @@ pub(super) struct DxgiLib {
+ 
+ impl DxgiLib {
+     pub fn new() -> Result<Self, libloading::Error> {
+-        unsafe { DynLib::new("dxgi.dll").map(|lib| Self { lib }) }
++        unsafe { DynLib::new_system("dxgi.dll").map(|lib| Self { lib }) }
+     }
+ 
+     /// Will error with crate::DeviceError::Unexpected if DXGI 1.3 is not available.
+@@ -615,6 +631,8 @@ struct SwapChain {
      present_mode: wgt::PresentMode,
      format: wgt::TextureFormat,
      size: wgt::Extent3d,
@@ -66,7 +107,7 @@ index 285d635..dd1f19e 100644
  }
  
  enum SurfaceTarget {
-@@ -651,6 +653,15 @@ impl Surface {
+@@ -651,6 +669,15 @@ impl Surface {
          Some(self.swap_chain.read().as_ref()?.raw.clone())
      }
  
@@ -82,7 +123,7 @@ index 285d635..dd1f19e 100644
      /// Returns the waitable handle associated with this swap chain, if any.
      /// Handle is only valid while the swap chain is alive.
      pub unsafe fn waitable_handle(&self) -> Option<Foundation::HANDLE> {
-@@ -1209,6 +1220,8 @@ unsafe impl Sync for QuerySet {}
+@@ -1209,6 +1236,8 @@ unsafe impl Sync for QuerySet {}
  #[derive(Debug)]
  pub struct Fence {
      raw: Direct3D12::ID3D12Fence,
@@ -91,7 +132,7 @@ index 285d635..dd1f19e 100644
  }
  
  impl crate::DynFence for Fence {}
-@@ -1535,7 +1548,9 @@ impl crate::Surface for Surface {
+@@ -1535,7 +1564,9 @@ impl crate::Surface for Surface {
                      BufferUsage: Dxgi::DXGI_USAGE_RENDER_TARGET_OUTPUT,
                      BufferCount: swap_chain_buffer,
                      Scaling: Dxgi::DXGI_SCALING_STRETCH,
@@ -102,7 +143,7 @@ index 285d635..dd1f19e 100644
                      Flags: flags.0 as u32,
                  };
                  let swap_chain1 = match self.target {
-@@ -1702,6 +1717,7 @@ impl crate::Surface for Surface {
+@@ -1702,6 +1733,7 @@ impl crate::Surface for Surface {
              present_mode: config.present_mode,
              format: config.format,
              size: config.extent,
@@ -110,7 +151,7 @@ index 285d635..dd1f19e 100644
          });
  
          Ok(())
-@@ -1838,9 +1854,22 @@ impl crate::Queue for Queue {
+@@ -1838,9 +1870,22 @@ impl crate::Queue for Queue {
          };
  
          profiling::scope!("IDXGISwapchain3::Present");
@@ -136,7 +177,7 @@ index 285d635..dd1f19e 100644
  
          Ok(())
      }
-@@ -1862,7 +1891,16 @@ impl crate::Queue for Queue {
+@@ -1862,7 +1907,16 @@ impl crate::Queue for Queue {
                  .SetEventOnCompletion(value, self.idle_event.0)
          }
          .into_device_result("SetEventOnCompletion")?;
@@ -155,7 +196,7 @@ index 285d635..dd1f19e 100644
      }
  }
 diff --git a/src/dx12/shader_compilation.rs b/src/dx12/shader_compilation.rs
-index ff41e50..7961cbf 100644
+index ff41e50..dcb167c 100644
 --- a/src/dx12/shader_compilation.rs
 +++ b/src/dx12/shader_compilation.rs
 @@ -17,7 +17,8 @@ pub(super) enum CompilerContainer {
@@ -188,6 +229,15 @@ index ff41e50..7961cbf 100644
              ),
              CompilerContainer::DynamicDxc(CompilerDynamicDxc { compiler, .. })
              | CompilerContainer::StaticDxc(CompilerStaticDxc { compiler, .. }) => compile_dxc(
+@@ -164,7 +167,7 @@ impl FxcLib {
+ 
+     fn new_dynamic() -> Result<Self, GetContainerError> {
+         unsafe {
+-            let lib = crate::dx12::DynLib::new(Self::PATH)
++            let lib = crate::dx12::DynLib::new_system(Self::PATH)
+                 .map_err(|e| GetContainerError::FailedToLoad(FxcLib::PATH, e))?;
+             let d3dcompile_fn: D3DCompileFn = *lib.get::<D3DCompileFn>(c"D3DCompile".to_bytes())?;
+ 
 diff --git a/src/dx12/descriptor.rs b/src/dx12/descriptor.rs
 index f57ba46..475a9e3 100644
 --- a/src/dx12/descriptor.rs
@@ -342,3 +392,49 @@ index 63fb313..97b5f38 100644
              log::trace!("Wait complete! Fence actual value: {fence_value}");
  
              if fence_value >= value {
+diff --git a/src/dx12/dcomp.rs b/src/dx12/dcomp.rs
+index 46ef3da..035f9bd 100644
+--- a/src/dx12/dcomp.rs
++++ b/src/dx12/dcomp.rs
+@@ -19,7 +19,7 @@ impl DCompLib {
+     pub(crate) fn new() -> Self {
+         Self {
+             lib: Lazy::new(|| unsafe {
+-                DynLib::new("dcomp.dll").map_err(|err| {
++                DynLib::new_system("dcomp.dll").map_err(|err| {
+                     log::error!("Error loading dcomp.dll: {err}");
+                     crate::SurfaceError::Other("Error loading dcomp.dll")
+                 })
+diff --git a/src/gles/wgl.rs b/src/gles/wgl.rs
+index 09ee3e9..4edbf3b 100644
+--- a/src/gles/wgl.rs
++++ b/src/gles/wgl.rs
+@@ -455,14 +455,20 @@ impl crate::Instance for Instance {
+ 
+     unsafe fn init(desc: &crate::InstanceDescriptor<'_>) -> Result<Self, crate::InstanceError> {
+         profiling::scope!("Init OpenGL (WGL) Backend");
+-        let opengl_module =
+-            unsafe { LibraryLoader::LoadLibraryA(PCSTR(c"opengl32.dll".as_ptr().cast())) }
+-                .map_err(|e| {
+-                    crate::InstanceError::with_source(
+-                        String::from("unable to load the OpenGL library"),
+-                        e,
+-                    )
+-                })?;
++        // Rune: load opengl32.dll from System32 only, not the app directory or CWD.
++        let opengl_module = unsafe {
++            LibraryLoader::LoadLibraryExA(
++                PCSTR(c"opengl32.dll".as_ptr().cast()),
++                None,
++                LibraryLoader::LOAD_LIBRARY_SEARCH_SYSTEM32,
++            )
++        }
++        .map_err(|e| {
++            crate::InstanceError::with_source(
++                String::from("unable to load the OpenGL library"),
++                e,
++            )
++        })?;
+ 
+         let device = create_instance_device()?;
+         let dc = device.dc;
