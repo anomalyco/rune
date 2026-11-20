@@ -189,7 +189,12 @@ fn parse_f32(path: &str, what: &str, raw: &str) -> (f32, String) {
     let trimmed = raw.trim().strip_suffix('f').unwrap_or(raw.trim());
     let val: f32 = trimmed.parse().unwrap_or_else(|e| panic!("{path}: invalid f32 for {what} (`{raw}`): {e}"));
     assert!(val.is_finite(), "{path}: non-finite f32 for {what} (`{raw}`)");
-    let lit = if trimmed.contains('.') || trimmed.contains('e') || trimmed.contains('E') {
+    // Emit `core::f32::consts::PI` when the parsed WGSL literal has the exact same `f32` bits
+    // (for example `3.14159265_f32.to_bits() == core::f32::consts::PI.to_bits()`), avoiding
+    // `clippy::approx_constant` without perturbing shader hashes or bit parity.
+    let lit = if val.to_bits() == core::f32::consts::PI.to_bits() {
+        "core::f32::consts::PI".to_owned()
+    } else if trimmed.contains('.') || trimmed.contains('e') || trimmed.contains('E') {
         format!("{trimmed}_f32")
     } else {
         format!("{trimmed}.0_f32")

@@ -1,5 +1,7 @@
 //! Per-style fill parameter structs, presets, and catalog parameter tables.
 
+use std::f32::consts::PI;
+
 use super::{DitherPattern, FillAnchor, FillInput, GradientKind, MAX_STOPS, Stops};
 use crate::catalog::*;
 use crate::{Rgb, rgb};
@@ -81,7 +83,7 @@ params!(LiquidMetalParams {
     speed: "Speed" => num(0.0, 2.0, 0.01, Unit::PerSecond),
     bevel: "Bevel" => num(0.0, 48.0, 0.5, Unit::Pt),
     dome: "Dome" => num(0.0, 1.0, 0.01, Unit::Fraction),
-    angle: "Angle" => num(-3.14159, 3.14159, 0.01, Unit::Radians),
+    angle: "Angle" => num(-PI, PI, 0.01, Unit::Radians),
     iridescence: "Iridescence" => num(0.0, 1.0, 0.01, Unit::Fraction),
     contrast: "Contrast" => num(0.5, 2.0, 0.01, Unit::None),
     anchor: "Anchor" => ParamKind::Choice(FillAnchor::CHOICES),
@@ -128,7 +130,7 @@ params!(PlasticParams {
     roughness: "Roughness" => num(0.05, 1.0, 0.01, Unit::Fraction),
     dome: "Dome" => num(-1.0, 1.0, 0.01, Unit::None),
     bevel: "Bevel" => num(0.0, 48.0, 0.5, Unit::Pt),
-    angle: "Light angle" => num(-3.14159, 3.14159, 0.01, Unit::Radians),
+    angle: "Light angle" => num(-PI, PI, 0.01, Unit::Radians),
 });
 
 /// Colours pinned to points that drift slowly, blended smoothly in OKLab.
@@ -228,7 +230,7 @@ params!(DitherParams {
     input: "Input" => ParamKind::Choice(FillInput::CHOICES),
     colors: "Colours" => ParamKind::Colors { min: 2, max: MAX_STOPS },
     pixel: "Pixel" => num(0.5, 16.0, 0.5, Unit::Pt),
-    angle: "Angle" => num(-3.14159, 3.14159, 0.01, Unit::Radians),
+    angle: "Angle" => num(-PI, PI, 0.01, Unit::Radians),
     scale: "Noise scale" => num(8.0, 400.0, 1.0, Unit::Pt),
     speed: "Speed" => num(0.0, 2.0, 0.01, Unit::PerSecond),
     bias: "Bias" => num(-1.0, 1.0, 0.01, Unit::None),
@@ -276,7 +278,7 @@ impl GrainGradientParams {
 params!(GrainGradientParams {
     kind: "Kind" => ParamKind::Choice(GradientKind::CHOICES),
     colors: "Colours" => ParamKind::Colors { min: 2, max: MAX_STOPS },
-    angle: "Angle" => num(-3.14159, 3.14159, 0.01, Unit::Radians),
+    angle: "Angle" => num(-PI, PI, 0.01, Unit::Radians),
     center: "Centre" => ParamKind::Point,
     amount: "Grain" => num(0.0, 1.0, 0.01, Unit::Fraction),
     size: "Grain size" => num(0.5, 8.0, 0.25, Unit::Pt),
@@ -327,7 +329,7 @@ impl FlutedGlassParams {
 
 params!(FlutedGlassParams {
     rib: "Rib width" => num(2.0, 64.0, 0.5, Unit::Pt),
-    angle: "Angle" => num(-3.14159, 3.14159, 0.01, Unit::Radians),
+    angle: "Angle" => num(-PI, PI, 0.01, Unit::Radians),
     refraction: "Refraction" => num(0.0, 40.0, 0.5, Unit::Pt),
     frost: "Frost" => num(0.0, 1.0, 0.01, Unit::Fraction),
     dispersion: "Dispersion" => num(0.0, 1.0, 0.01, Unit::Fraction),
@@ -485,7 +487,7 @@ params!(WaveParams {
     amplitude: "Amplitude" => num(0.0, 0.25, 0.005, Unit::Fraction),
     frequency: "Frequency" => num(0.2, 6.0, 0.05, Unit::None),
     speed: "Speed" => num(0.0, 2.0, 0.01, Unit::PerSecond),
-    angle: "Angle" => num(-3.14159, 3.14159, 0.01, Unit::Radians),
+    angle: "Angle" => num(-PI, PI, 0.01, Unit::Radians),
     softness: "Softness" => num(0.0, 0.1, 0.001, Unit::Fraction),
 });
 
@@ -530,8 +532,8 @@ params!(HalftoneParams {
     ink: "Ink" => ParamKind::Color,
     base: "Base" => ParamKind::Color,
     cell: "Dot pitch" => num(2.0, 32.0, 0.5, Unit::Pt),
-    angle: "Screen angle" => num(-3.14159, 3.14159, 0.01, Unit::Radians),
-    ramp_angle: "Ramp angle" => num(-3.14159, 3.14159, 0.01, Unit::Radians),
+    angle: "Screen angle" => num(-PI, PI, 0.01, Unit::Radians),
+    ramp_angle: "Ramp angle" => num(-PI, PI, 0.01, Unit::Radians),
     scale: "Noise scale" => num(8.0, 400.0, 1.0, Unit::Pt),
     speed: "Speed" => num(0.0, 2.0, 0.01, Unit::PerSecond),
     bias: "Bias" => num(-1.0, 1.0, 0.01, Unit::None),
