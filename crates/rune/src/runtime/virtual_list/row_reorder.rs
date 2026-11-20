@@ -11,13 +11,12 @@
 use super::*;
 
 #[path = "handoff.rs"]
-pub(super) mod handoff;
-#[path = "row_reorder/joined.rs"]
-pub(super) mod joined;
+pub(in crate::runtime) mod handoff;
+pub(in crate::runtime) mod joined;
 
 /// One growth stack's rows that the last commit reordered.
 #[derive(Clone, Debug, Default)]
-pub(super) struct Reorder {
+pub(in crate::runtime) struct Reorder {
     /// How far each moved row's top jumped: where it was drawn, less where it now lays out.
     jumps: HashMap<NodeId, f32>,
 }
@@ -26,7 +25,7 @@ impl Reorder {
     /// Measures a commit taking the stack from `old` to `new` presented order, given each row's
     /// presented height (`None` for a row with none) and the gap between rows. A commit that
     /// lands its changes (`animates` false) moves nothing.
-    pub(super) fn measure(&mut self, animates: bool, old: &[NodeId], new: &[NodeId], gap: f32, h: impl Fn(NodeId) -> Option<f32>) {
+    pub(in crate::runtime) fn measure(&mut self, animates: bool, old: &[NodeId], new: &[NodeId], gap: f32, h: impl Fn(NodeId) -> Option<f32>) {
         self.jumps.clear();
         if !animates || old == new { return; }
         let old_at: HashMap<NodeId, usize> = old.iter().enumerate().filter(|(_, id)| h(**id).is_some()).map(|(k, id)| (*id, k)).collect();
@@ -48,13 +47,13 @@ impl Reorder {
         }
     }
 
-    pub(super) fn jump(&self, id: NodeId) -> f32 {
+    pub(in crate::runtime) fn jump(&self, id: NodeId) -> f32 {
         self.jumps.get(&id).copied().unwrap_or(0.0)
     }
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct LiveRow {
+pub(in crate::runtime) struct LiveRow {
     pub ink: bool,
     /// Some(0) for a resizing row: its inset still rides its height.
     pub shift: Option<f32>,
@@ -63,7 +62,7 @@ pub(super) struct LiveRow {
 }
 
 impl RuntimeCore {
-    pub(super) fn live_row(&self, row: &Node, reorder: &Reorder, ink: bool, joins: bool, list: &crate::el::virtual_list::VirtualList, range: &std::ops::Range<usize>) -> Option<(NodeId, LiveRow)> {
+    pub(in crate::runtime) fn live_row(&self, row: &Node, reorder: &Reorder, ink: bool, joins: bool, list: &crate::el::virtual_list::VirtualList, range: &std::ops::Range<usize>) -> Option<(NodeId, LiveRow)> {
         let jump = reorder.jump(row.id);
         let shift = (jump != 0.0 || ink && self.motion.grows.get(&row.id).is_some_and(|g| g.moving())).then_some(jump);
         if shift.is_none() && !joins { return None; }
@@ -74,7 +73,7 @@ impl RuntimeCore {
     /// Only a virtual list already showing its tail, in the same viewport, can grow it for a
     /// live arrival. If its viewport changes height too (a tray closing under it), landing
     /// both together avoids first moving by the tray's height and then back by the row's.
-    pub(super) fn live_tail(&self, nodes: &[Node], i: usize, tx: &Tx, stack: &mut Stack) -> Option<std::ops::Range<usize>> {
+    pub(in crate::runtime) fn live_tail(&self, nodes: &[Node], i: usize, tx: &Tx, stack: &mut Stack) -> Option<std::ops::Range<usize>> {
         let node = &nodes[i];
         if tx.commit != Commit::Unprompted || node.instant_changes || !tx.live_growth.iter().any(|(key, _)| node.named(key)) { return None; }
         let list = self.commit.virtuals.get(&node.path)?;
@@ -95,13 +94,13 @@ impl RuntimeCore {
     }
 
     /// How far node `i`, a growth row, jumped because its stack's rows changed order this commit.
-    pub(super) fn reorder_jump(&self, nodes: &[Node], i: usize) -> f32 {
+    pub(in crate::runtime) fn reorder_jump(&self, nodes: &[Node], i: usize) -> f32 {
         nodes[i].parent.and_then(|p| self.motion.stacks.get(&nodes[p].id)).map_or(0.0, |s| s.reorder.jump(nodes[i].id))
     }
 
     /// Starts row `id`'s offset `jump` points down from where it shows, so it stays where it was
     /// drawn, and springs it to `to` on `anim`, keeping the speed it had.
-    pub(super) fn slide_reordered(&mut self, id: NodeId, jump: f32, to: rune_motion::Vec2, anim: Anim) {
+    pub(in crate::runtime) fn slide_reordered(&mut self, id: NodeId, jump: f32, to: rune_motion::Vec2, anim: Anim) {
         let now = self.scene.get(id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
         let speed = self.scene.store().velocity(id, prop::OFFSET).filter(|v| *v != rune_motion::Vec2::ZERO);
         self.scene.set(id, prop::OFFSET, rune_motion::Vec2::new(now.x, now.y + jump));
@@ -115,6 +114,3 @@ impl RuntimeCore {
 #[cfg(test)]
 #[path = "../row_reorder_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-mod live_tail_tests;

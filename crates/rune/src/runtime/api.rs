@@ -407,7 +407,7 @@ impl<S: 'static> Runtime<S> {
     pub(crate) fn a11y_deactivate(&mut self) { self.core_mut().a11y_deactivate(); }
     #[cfg(test)]
     #[inline(always)]
-    pub(crate) fn a11y_changes(&self) -> a11y_tree::Changes { self.core().a11y_changes() }
+    pub(crate) fn a11y_changes(&self) -> crate::a11y::tree::Changes { self.core().a11y_changes() }
     #[cfg(test)]
     #[inline(always)]
     pub(crate) fn a11y_update(&mut self) -> Option<accesskit::TreeUpdate> { self.core_mut().a11y_update() }

@@ -4,12 +4,15 @@
 
 use accesskit::{Action as Ak, ActionData, ActionRequest, ScrollUnit};
 
-use super::*;
-use super::a11y_tree::{ROOT, split_id, sub_link};
+use super::text;
+use super::tree::{ROOT, split_id, sub_link};
+use crate::el::Tx;
+use crate::runtime::event_log::log_event;
+use crate::runtime::{AppDriver, RuntimeCore};
 
 /// An action request resolved against the tree it named, run at the next frame.
 #[derive(Debug)]
-pub(super) enum A11yAct {
+pub(crate) enum A11yAct {
     /// Focus the element, or one of its text's links.
     Focus(Option<usize>),
     Step(i32),
@@ -45,27 +48,29 @@ impl RuntimeCore {
         let (input, editable) = (n.input.is_some(), n.input.as_ref().is_some_and(|i| i.access.is_some()));
         let (expanded, steps, scrolls) = (n.a11y.expanded, n.focus.step.is_some(), n.scroll.is_some());
         let focusable = self.can_focus(i);
-        let action = match (request.action, link) {
-            (Ak::Click, Some(k)) => Action::Link(path, k, crate::PointerButton::Primary),
+        match (request.action, link) {
+            (Ak::Click, Some(k)) => self.queue_a11y_link(path, k),
             (Ak::ShowContextMenu, Some(k)) => {
                 let Some((_, r)) = self.link_boxes(i, self.drawn_box(i)).into_iter().find(|(j, _)| *j == k) else { return false };
-                Action::LinkSecondary(path, k, self.pointer_event(i, r[0], r[3]))
+                let ev = self.pointer_event(i, r[0], r[3]);
+                self.queue_a11y_link_secondary(path, k, ev);
             }
-            (Ak::Focus, Some(k)) if focusable => Action::A11y(path, A11yAct::Focus(Some(k))),
-            (Ak::Click, None) if pressable => Action::Press(path, crate::PointerButton::Primary, false),
-            (Ak::Click, None) if input => Action::A11y(path, A11yAct::Focus(None)),
-            (Ak::Focus, None) if focusable => Action::A11y(path, A11yAct::Focus(None)),
+            (Ak::Focus, Some(k)) if focusable => self.queue_a11y(path, A11yAct::Focus(Some(k))),
+            (Ak::Click, None) if pressable => self.queue_a11y_press(path),
+            (Ak::Click, None) if input => self.queue_a11y(path, A11yAct::Focus(None)),
+            (Ak::Focus, None) if focusable => self.queue_a11y(path, A11yAct::Focus(None)),
             (Ak::Expand | Ak::Collapse, None) if pressable && expanded == Some(request.action == Ak::Collapse) => {
-                Action::Press(path, crate::PointerButton::Primary, false)
+                self.queue_a11y_press(path);
             }
             (Ak::ShowContextMenu, None) if secondary => {
                 let r = self.drawn_box(i);
-                Action::SecondaryPress(path, self.pointer_event(i, r[0], r[3]))
+                let ev = self.pointer_event(i, r[0], r[3]);
+                self.queue_a11y_secondary_press(path, ev);
             }
-            (Ak::Increment, None) if steps => Action::A11y(path, A11yAct::Step(1)),
-            (Ak::Decrement, None) if steps => Action::A11y(path, A11yAct::Step(-1)),
+            (Ak::Increment, None) if steps => self.queue_a11y(path, A11yAct::Step(1)),
+            (Ak::Decrement, None) if steps => self.queue_a11y(path, A11yAct::Step(-1)),
             (Ak::SetValue, None) if editable => match &request.data {
-                Some(ActionData::Value(v)) => Action::A11y(path, A11yAct::SetValue(v.to_string())),
+                Some(ActionData::Value(v)) => self.queue_a11y(path, A11yAct::SetValue(v.to_string())),
                 _ => return false,
             },
             // A slider with a stated step takes a number as that many steps from its value.
@@ -77,10 +82,10 @@ impl RuntimeCore {
                     Some(((target - r.value) / step).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32)
                 }) else { return false };
                 if delta == 0 { return false; }
-                Action::A11y(path, A11yAct::Step(delta))
+                self.queue_a11y(path, A11yAct::Step(delta));
             }
             (Ak::ReplaceSelectedText, None) if editable => match &request.data {
-                Some(ActionData::Value(v)) => Action::A11y(path, A11yAct::Replace(v.to_string())),
+                Some(ActionData::Value(v)) => self.queue_a11y(path, A11yAct::Replace(v.to_string())),
                 _ => return false,
             },
             (Ak::SetTextSelection, None) if editable => {
@@ -89,19 +94,19 @@ impl RuntimeCore {
                 if let Some(input) = n.input.as_deref() && split_id(sel.anchor.node) == (id, 0) && split_id(sel.focus.node) == (id, 0) {
                     let at = |b: usize| input.edit.display_index(input.edit.text.floor_char_boundary(b.min(input.edit.text.len())));
                     let (a, b) = (at(sel.anchor.character_index), at(sel.focus.character_index));
-                    self.frame.queue.push(Action::A11y(path, A11yAct::Select(a, b)));
+                    self.queue_a11y(path, A11yAct::Select(a, b));
                     return true;
                 }
                 let Some((_, lines)) = self.a11y_lines(i) else { return false };
                 let byte = |p: accesskit::TextPosition| {
                     let (pid, line) = split_id(p.node);
                     if pid != id || line == 0 { return None; }
-                    super::a11y_text::byte_at(&lines, line as usize - 1, p.character_index)
+                    text::byte_at(&lines, line as usize - 1, p.character_index)
                 };
                 let (Some(a), Some(b)) = (byte(sel.anchor), byte(sel.focus)) else { return false };
-                Action::A11y(path, A11yAct::Select(a, b))
+                self.queue_a11y(path, A11yAct::Select(a, b));
             }
-            (Ak::ScrollIntoView, _) => Action::A11y(path, A11yAct::ScrollIntoView),
+            (Ak::ScrollIntoView, _) => self.queue_a11y(path, A11yAct::ScrollIntoView),
             (Ak::ScrollUp | Ak::ScrollDown | Ak::ScrollLeft | Ak::ScrollRight, None) if scrolls => {
                 let pages = !matches!(request.data, Some(ActionData::ScrollUnit(ScrollUnit::Item)));
                 let (x, y) = match request.action {
@@ -110,15 +115,14 @@ impl RuntimeCore {
                     Ak::ScrollLeft => (-1, 0),
                     _ => (1, 0),
                 };
-                Action::A11y(path, A11yAct::Scroll { x, y, pages })
+                self.queue_a11y(path, A11yAct::Scroll { x, y, pages });
             }
             (Ak::SetScrollOffset, None) if scrolls => match request.data {
-                Some(ActionData::SetScrollOffset(p)) => Action::A11y(path, A11yAct::ScrollTo(p.x as f32, p.y as f32)),
+                Some(ActionData::SetScrollOffset(p)) => self.queue_a11y(path, A11yAct::ScrollTo(p.x as f32, p.y as f32)),
                 _ => return false,
             },
             _ => return false,
-        };
-        self.frame.queue.push(action);
+        }
         true
     }
 
@@ -132,7 +136,7 @@ impl RuntimeCore {
     }
 
     /// Runs a queued accessibility action in its frame.
-    pub(super) fn run_a11y(&mut self, app: &mut dyn AppDriver, path: String, act: A11yAct, tx: &mut Tx) -> bool {
+    pub(crate) fn run_a11y(&mut self, app: &mut dyn AppDriver, path: String, act: A11yAct, tx: &mut Tx) -> bool {
         match act {
             A11yAct::Focus(link) => {
                 log_event!(self, "a11y focus {path}");

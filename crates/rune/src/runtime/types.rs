@@ -30,7 +30,7 @@ pub(crate) struct NodeCold {
     /// `El::matched` id, with the element's own (not inherited) layout spring.
     pub(super) matched: Option<(Rc<str>, Option<Spring>)>,
     pub(super) above: Option<crate::el::Anchor>,
-    pub(super) scroll: Option<ScrollSpec>,
+    pub(crate) scroll: Option<ScrollSpec>,
     pub(super) scroll_axes: crate::el::ScrollAxes,
     pub(super) scroll_edges: crate::el::ScrollEdges,
     /// `El::wheel_scrolls`: the viewport a wheel over this node scrolls, in place of what it
@@ -40,16 +40,16 @@ pub(crate) struct NodeCold {
     pub(super) sticky: Option<Box<crate::el::Sticky>>,
     pub(super) growth: Option<Box<GrowthSpec>>,
     pub(super) glide: Option<crate::growth::FoldGlide>,
-    pub(super) a11y: crate::el::A11y,
+    pub(crate) a11y: crate::el::A11y,
     /// The image ratio this picture's layout took, when it sizes one side from its pixels.
     pub(super) pixel_aspect: Option<f32>,
     /// `El::aspect_fit`: the ratio and the element's own style, which the fitted size replaces.
     pub(super) aspect_fit: Option<Box<(f32, CompactStyle)>>,
     pub(super) material: Option<crate::SystemMaterial>,
     /// `El::help`.
-    pub(super) help: Option<String>,
+    pub(crate) help: Option<String>,
     /// `El::help_when_truncated`.
-    pub(super) help_cut: bool,
+    pub(crate) help_cut: bool,
     /// `El::help_side`.
     pub(super) help_side: Option<crate::Side>,
     #[cfg(debug_assertions)]
@@ -101,9 +101,9 @@ pub(crate) struct Node {
     pub text_layout: Option<crate::text::TextLayout>,
     /// Where `text_layout` cut the text for `El::truncate` and its kin.
     pub(crate) elided: Option<Elision>,
-    pub(super) input: Option<Box<InputSpec>>,
-    pub(super) focus: crate::cold::Cold<crate::el::FocusSpec>,
-    pub(super) handlers: crate::cold::Cold<crate::el::Handlers>,
+    pub(crate) input: Option<Box<InputSpec>>,
+    pub(crate) focus: crate::cold::Cold<crate::el::FocusSpec>,
+    pub(crate) handlers: crate::cold::Cold<crate::el::Handlers>,
     pub(super) cold: crate::cold::Cold<NodeCold>,
     pub vis: Visual,
     pub(crate) vis_flags: crate::el::VisualFlags,
@@ -232,12 +232,12 @@ impl Node {
     }
 
     #[inline]
-    pub(super) fn is_moved_stub(&self) -> bool {
+    pub(crate) fn is_moved_stub(&self) -> bool {
         self.moved_stub
     }
 
     /// Whether its text is a secret: marked secure, redacted, or a secure field.
-    pub(super) fn is_secure(&self) -> bool {
+    pub(crate) fn is_secure(&self) -> bool {
         self.cold.get().is_some_and(|c| c.a11y.secure)
             || self.text.as_ref().is_some_and(|t| t.redacted)
             || self.input.as_ref().is_some_and(|i| i.edit.is_secure())
@@ -393,11 +393,11 @@ impl GlideTo {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(super) struct ScrollState {
-    pub(super) offset: f64,
+pub(crate) struct ScrollState {
+    pub(crate) offset: f64,
     /// What moves it, with the hand's latches for this frame (`runtime/scroll/mode.rs`).
     pub(super) mode: ScrollMode,
-    pub(super) max: f64,
+    pub(crate) max: f64,
     /// At-bottom state last sent to `El::on_at_bottom`.
     pub(super) at_bottom: Option<bool>,
     /// State last sent to `El::on_far_from_bottom`.
@@ -405,13 +405,13 @@ pub(super) struct ScrollState {
     /// Whether the last frame drew the content's bottom on the viewport's (see `stuck_offset`).
     pub(super) held: bool,
     /// The horizontal offset the last frame drew the content at, in points.
-    pub(super) drawn_x: f32,
+    pub(crate) drawn_x: f32,
     /// Where it drew the vertical offset, and the pinned end's hold (`scroll_drawn`).
-    pub(super) drawn: PixelHold,
+    pub(crate) drawn: PixelHold,
     /// Room freed under a pinned growth stack, held under its last row (see `step_slack`).
     pub(super) slack: scroll_bottom::Slack,
     /// The horizontal axis of `El::scroll_x` and `El::scroll_xy`; all zero on a vertical one.
-    pub(super) x: AxisScroll,
+    pub(crate) x: AxisScroll,
     /// What `El::on_scroll_offset` has been told, and which handler heard it
     /// (`runtime/scroll/watch.rs`).
     pub(super) watch: super::scroll_watch::Watch,
@@ -441,10 +441,10 @@ pub(super) enum XMotion {
 
 /// A scroll viewport's horizontal offset, motion and limit (points).
 #[derive(Clone, Copy, Debug, Default)]
-pub(super) struct AxisScroll {
-    pub(super) offset: f64,
+pub(crate) struct AxisScroll {
+    pub(crate) offset: f64,
     pub(super) motion: XMotion,
-    pub(super) max: f64,
+    pub(crate) max: f64,
     /// The viewport's flow (`El::dir`): right to left, its content starts at its right edge and
     /// `offset` counts how far it moved right, uncovering what is to the left.
     pub(super) flow: crate::el::Flow,
@@ -459,7 +459,7 @@ impl AxisScroll {
 
     /// `delta` points of physical movement (positive moving content right) as a change of
     /// `offset`.
-    pub(super) fn toward(&self, delta: f64) -> f64 {
+    pub(crate) fn toward(&self, delta: f64) -> f64 {
         match self.flow { crate::el::Flow::Ltr => -delta, crate::el::Flow::Rtl => delta }
     }
 
@@ -568,7 +568,7 @@ pub struct FrameStats {
 pub(crate) struct TreeState {
     pub(crate) nodes: Vec<Node>,
     /// Some element is `El::sticky_top` or `El::sticky_bottom` (see `runtime/scroll/sticky.rs`).
-    pub(in crate::runtime) has_sticky: bool,
+    pub(crate) has_sticky: bool,
     pub(in crate::runtime) has_dissolve: bool,
     /// Some element is `El::raise`d: paint order isn't tree order.
     pub(in crate::runtime) has_raise: bool,

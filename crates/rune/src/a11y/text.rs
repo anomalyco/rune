@@ -5,15 +5,15 @@
 use accesskit::{Action as Ak, Node as AkNode, NodeId as AkId, Rect as AkRect, Role, TextDirection, TextPosition, TextSelection};
 use std::borrow::Cow;
 
-use super::*;
-use super::a11y_tree::{element_id, line_id, lines_box_id, link_id, round};
+use super::tree::{LINK_BASE, Walk, element_id, line_id, lines_box_id, link_id, round};
+use crate::el::TextSpec;
+use crate::runtime::{RuntimeCore, caret_index, text_origin};
+use crate::text::TextFlow;
 
-#[path = "text/long_field.rs"]
 mod long_field;
-#[path = "text/runs.rs"]
 mod runs;
 
-pub(crate) use runs::{Line, byte_at, lines};
+pub(super) use runs::{Line, byte_at, lines};
 
 /// Text longer than this gets no per-character runs (a reader still gets its whole value). A field
 /// past it marks its selection on itself, publishes only its drawn visual lines under an
@@ -28,7 +28,7 @@ const FIELD_SELECTION: bool = cfg!(any(target_os = "windows", target_os = "macos
 impl RuntimeCore {
     /// Node `i`'s text as AccessKit sees it: the lines of a field or selectable text, and the
     /// links of any text, pushed after it as its children.
-    pub(super) fn a11y_text_nodes(&self, i: usize, w: &a11y_tree::Walk, out: &mut Vec<(AkId, AkNode)>) {
+    pub(super) fn a11y_text_nodes(&self, i: usize, w: &Walk, out: &mut Vec<(AkId, AkNode)>) {
         let n = &self.tree.nodes[i];
         if let Some(g) = n.vis.grid.as_deref() {
             return self.a11y_grid_rows(i, g, w, out);
@@ -109,7 +109,7 @@ impl RuntimeCore {
     /// A terminal grid's rows as its text lines, top to bottom: each row's text (its pinned
     /// cells in their columns) with every character's place on the cell grid, so a reader moves
     /// through the screen by character, word and line.
-    fn a11y_grid_rows(&self, i: usize, g: &crate::el::grid::Grid, w: &a11y_tree::Walk, out: &mut Vec<(AkId, AkNode)>) {
+    fn a11y_grid_rows(&self, i: usize, g: &crate::el::grid::Grid, w: &Walk, out: &mut Vec<(AkId, AkNode)>) {
         let n = &self.tree.nodes[i];
         let me = out.len() - 1;
         let r = self.paint.drawn[i];
@@ -193,7 +193,7 @@ impl RuntimeCore {
         let s = self.env.scale;
         let z = self.paint.drawn_scale.get(i).copied().unwrap_or(1.0).max(1e-4);
         let r = self.paint.drawn[i];
-        let [mut x, y] = links::origin(n, spec, layout, [r[0], r[1], r[0] + r[2], r[1] + r[3]], s, z);
+        let [mut x, y] = text_origin(n, spec, layout, [r[0], r[1], r[0] + r[2], r[1] + r[3]], s, z);
         if n.input.as_deref().is_some_and(|inp| inp.single_line) {
             x -= self.edit.input_scroll.get(&n.path).copied().unwrap_or(0.0) * z;
         }
@@ -221,7 +221,7 @@ impl RuntimeCore {
         let lines = lines(layout, &content, px, origin);
         // `line_id` holds up to `LINK_BASE - 2` (`32,766`) runs per node; if a block exceeds that
         // or its runs don't cover `content`, publish its whole value/label without `TextRun`s.
-        if lines.len() > (super::a11y_tree::LINK_BASE as usize - 2)
+        if lines.len() > (LINK_BASE as usize - 2)
             || lines.iter().map(|l| l.range.len()).sum::<usize>() != content.len()
         {
             return None;

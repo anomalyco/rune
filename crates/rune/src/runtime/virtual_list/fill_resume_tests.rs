@@ -6,7 +6,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use super::virtual_fill::{FILL_FRAMES, State};
+use super::fill::{FILL_FRAMES, State};
 use super::*;
 use crate::{GrowthSpec, ScrollSpec, col, el};
 

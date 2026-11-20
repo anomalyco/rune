@@ -16,7 +16,7 @@ use crate::machine::Effects;
 /// Retained scroll viewports, wheel gesture locking, scroll requests and per-frame sticky state.
 /// Ordered hot-first under `#[repr(C)]` so per-node sticky vectors and `scrolls` stay contiguous.
 #[repr(C)]
-pub(in crate::runtime) struct ScrollTables {
+pub(crate) struct ScrollTables {
     /// Each node's sticky shift this frame (points), while `has_sticky`.
     pub(in crate::runtime) stuck: Vec<f32>,
     /// Per node, what its children stick within: the nearest vertical viewport's top and
@@ -26,7 +26,7 @@ pub(in crate::runtime) struct ScrollTables {
     /// Sections whose rows fade under their stuck header this frame (`ScrollFade::below_sticky`),
     /// with the paint clip top the header keeps.
     pub(in crate::runtime) sticky_bands: Vec<(usize, f32)>,
-    pub(in crate::runtime) scrolls: HashMap<NodeId, ScrollState>,
+    pub(crate) scrolls: HashMap<NodeId, ScrollState>,
     /// `Tx::keep_on_screen` across the commit underway, and `Tx::scroll_into_view` requests that
     /// follow their target while growth/layout springs run.
     pub(in crate::runtime) requests: Requests,

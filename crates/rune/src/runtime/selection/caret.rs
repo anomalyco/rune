@@ -16,7 +16,7 @@ pub(crate) struct TextInputState {
     /// Multi-click and drag selection state for `text_input`.
     pub(in crate::runtime) input_click: input_click::InputClick,
     /// Sideways scroll of focused single-line fields, in points, keyed by node path.
-    pub(in crate::runtime) input_scroll: HashMap<String, f32>,
+    pub(crate) input_scroll: HashMap<String, f32>,
     /// The focused field's caret (path, window rect) the next view sees through `Cx::caret`.
     pub(in crate::runtime) caret: Option<(String, [f32; 4])>,
     /// The last view read the caret, so it re-runs when the caret moves.

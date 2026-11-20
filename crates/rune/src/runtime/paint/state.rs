@@ -10,7 +10,7 @@ use super::*;
 pub(crate) struct PaintState {
     pub(in crate::runtime) inh_scratch: Vec<Inh>,
     /// Drawn rect per node (points, root space), for tools and hit tests.
-    pub(in crate::runtime) drawn: Vec<[f32; 4]>,
+    pub(crate) drawn: Vec<[f32; 4]>,
     pub(in crate::runtime) quads_frame: u64,
     /// Opt-in gamma-space (sRGB) blending for translucent fills, shadows and blurs.
     pub(crate) srgb_blend: bool,
@@ -26,7 +26,7 @@ pub(crate) struct PaintState {
     pub(in crate::runtime) row_h: Vec<f32>,
     pub(in crate::runtime) row_mask: Vec<f32>,
     /// The scale each node's text drew at (its own and its ancestors'), for text hit tests.
-    pub(in crate::runtime) drawn_scale: Vec<f32>,
+    pub(crate) drawn_scale: Vec<f32>,
     /// Per node: it drew inside its clip and the window in the last build.
     pub(in crate::runtime) seen: Vec<bool>,
     /// Drawn videos' state generations; a change re-runs the view.

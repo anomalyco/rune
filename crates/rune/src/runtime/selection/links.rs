@@ -13,7 +13,7 @@ pub(in crate::runtime) struct LinkState {
 
 /// Where node `n`'s text starts inside its border box `rect` (points, x0 y0 x1 y1), its text
 /// drawn `k` times its size.
-pub(in crate::runtime) fn origin(n: &Node, spec: &TextSpec, flow: TextFlow<'_>, rect: [f32; 4], s: f32, k: f32) -> [f32; 2] {
+pub(crate) fn origin(n: &Node, spec: &TextSpec, flow: TextFlow<'_>, rect: [f32; 4], s: f32, k: f32) -> [f32; 2] {
     let x = text_x(spec, rect[0] + n.inset[0] * k, rect[2] - n.inset[2] * k, text_width(flow.full_width() * k) / s, flow.flow());
     [x, rect[1] + n.inset[1] * k]
 }
@@ -135,7 +135,7 @@ impl LinkFx {
 
 impl RuntimeCore {
     /// Node `i`'s border box as drawn this frame (points, x0 y0 x1 y1).
-    pub(in crate::runtime) fn drawn_box(&self, i: usize) -> [f32; 4] {
+    pub(crate) fn drawn_box(&self, i: usize) -> [f32; 4] {
         self.paint.drawn.get(i).filter(|d| d[2] > 0.0 || d[3] > 0.0)
             .map_or(self.tree.nodes[i].target, |d| [d[0], d[1], d[0] + d[2], d[1] + d[3]])
     }
@@ -160,7 +160,7 @@ impl RuntimeCore {
     }
 
     /// Node `i`'s link line boxes in window points (x0, y0, x1, y1) for border box `rect`.
-    pub(in crate::runtime) fn link_boxes(&self, i: usize, rect: [f32; 4]) -> Vec<(usize, [f32; 4])> {
+    pub(crate) fn link_boxes(&self, i: usize, rect: [f32; 4]) -> Vec<(usize, [f32; 4])> {
         self.link_boxes_in(&self.tree.nodes, i, rect, self.paint.drawn_scale.get(i).copied().unwrap_or(1.0))
     }
 
@@ -297,10 +297,10 @@ impl RuntimeCore {
     }
 
     /// The focused text's focused link, if any (it may not be in range for that text).
-    pub(in crate::runtime) fn link_focus(&self) -> Option<usize> { self.edit.links.focus }
+    pub(crate) fn link_focus(&self) -> Option<usize> { self.edit.links.focus }
 
     /// Focuses link `k` of the text about to take focus, as Tab into it does.
-    pub(in crate::runtime) fn set_link_focus(&mut self, k: usize) { self.edit.links.focus = Some(k); }
+    pub(crate) fn set_link_focus(&mut self, k: usize) { self.edit.links.focus = Some(k); }
 
     /// Whether focused node `i` has a link focused, which takes Return.
     pub(in crate::runtime) fn link_focused(&self, i: usize) -> bool {

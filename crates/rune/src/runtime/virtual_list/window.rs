@@ -1,14 +1,14 @@
 //! Virtual lists between commits: whether a window wants moving, and which rows show.
 
 use super::*;
-use super::virtual_fill::{FillEffect, FillEvent};
+use super::fill::{FillEffect, FillEvent};
 
 impl RuntimeCore {
-    pub(super) fn virtual_window_changed(&self) -> bool {
+    pub(in crate::runtime) fn virtual_window_changed(&self) -> bool {
         self.commit.virtuals.iter().any(|(path, v)| self.wants_window(path, v))
     }
 
-    pub(super) fn report_visible_rows(&mut self) -> bool {
+    pub(in crate::runtime) fn report_visible_rows(&mut self) -> bool {
         if self.commit.virtuals.is_empty() { return false; }
         let mut queued = false;
         for i in 0..self.tree.nodes.len() {
@@ -32,7 +32,7 @@ impl RuntimeCore {
 
     /// Notes each list's rows drawn inside its viewport on the last frame, so the next window
     /// keeps them mounted while they're still on screen.
-    pub(super) fn note_drawn_rows(&mut self) {
+    pub(in crate::runtime) fn note_drawn_rows(&mut self) {
         if self.commit.virtuals.is_empty() { return; }
         // The last frame's rects describe these nodes only until a commit replaces them.
         let fresh = self.tree.built && self.paint.drawn.len() == self.tree.nodes.len();
@@ -49,7 +49,7 @@ impl RuntimeCore {
         }
     }
 
-    pub(super) fn wants_window(&self, path: &str, v: &crate::el::virtual_list::VirtualList) -> bool {
+    pub(in crate::runtime) fn wants_window(&self, path: &str, v: &crate::el::virtual_list::VirtualList) -> bool {
         let Some(&i) = self.tree.path_ids.get(path).and_then(|id| self.tree.node_index.get(id)) else { return false };
         if self.subtree_exiting(i) { return false; }
         let (offset, pinned) = self.window_offset(v);
@@ -90,7 +90,7 @@ impl RuntimeCore {
     /// should draw another. Each such frame commits more rows; a few frames fill it. A list
     /// whose heights keep changing past those frames waits a few frames out and resumes, until
     /// the unfilled range stops shrinking.
-    pub(super) fn virtual_filling(&mut self) -> bool {
+    pub(in crate::runtime) fn virtual_filling(&mut self) -> bool {
         let now = self.clock;
         let (wanted, moved) = self.virtual_demand();
         // A wake must draw nothing for a list that finished, unmounted or stopped filling: it

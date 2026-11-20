@@ -89,7 +89,7 @@ fn sync_input_focus(input: &mut crate::el::InputSpec, states: crate::states::Sta
 }
 
 impl RuntimeCore {
-    pub(in crate::runtime) fn active_modal(&self) -> Option<usize> {
+    pub(crate) fn active_modal(&self) -> Option<usize> {
         self.kbd.modal_scope.as_ref().map(|m| m.index)
     }
     /// Node `i` (its subtree ending before `end`) holds the open modal.
@@ -128,18 +128,18 @@ impl RuntimeCore {
         self.kbd.modal_scope = Some(ModalScope { index, members });
     }
     /// Input may reach node `i`: it's outside any `El::inert` subtree and not behind a modal.
-    pub(in crate::runtime) fn allowed(&self, i: usize) -> bool {
+    pub(crate) fn allowed(&self, i: usize) -> bool {
         !self.tree.nodes.get(i).is_some_and(|n| n.inert) && self.modal_member(i)
     }
     /// `El::focusable`, or under `Cx::web_focus` a pressable control that didn't opt out.
-    pub(in crate::runtime) fn takes_focus(&self, n: &Node) -> bool {
+    pub(crate) fn takes_focus(&self, n: &Node) -> bool {
         n.focus.enabled || (self.commit.defaults.web_focus && !n.focus.opt_out && n.handlers.on_press.is_some() && PRESSABLE_ROLES.contains(&n.role))
     }
     /// Whether `n` can take keyboard focus itself or is an editable text field.
     fn can_take_focus(&self, n: &Node) -> bool {
         self.takes_focus(n) || n.input.as_ref().is_some_and(|s| s.access.is_some())
     }
-    pub(in crate::runtime) fn can_focus(&self, i: usize) -> bool {
+    pub(crate) fn can_focus(&self, i: usize) -> bool {
         self.can_take_focus(&self.tree.nodes[i]) && self.reachable(i)
     }
     /// Shown, sized, not exiting and not behind a modal.
@@ -174,7 +174,7 @@ impl RuntimeCore {
     }
     /// The focus group `i` is an item of. A control inside an item (a tab's close button) is
     /// no item: it's a Tab stop of its own, as an HTML button inside a roving `tablist` is.
-    pub(in crate::runtime) fn focus_group(&self, i: usize) -> Option<usize> {
+    pub(crate) fn focus_group(&self, i: usize) -> Option<usize> {
         let mut p = self.tree.nodes[i].parent;
         while let Some(i) = p {
             if self.tree.nodes[i].focus.group { return Some(i); }
@@ -257,7 +257,7 @@ impl RuntimeCore {
         self.commit.defaults.focus_ring
             .unwrap_or(crate::el::Outline { width: 3.0, offset: 0.0, color: self.host.system_accent.focus(self.env.system_dark) })
     }
-    pub(in crate::runtime) fn set_focus(&mut self, app: &mut dyn AppDriver, path: Option<String>, keyboard: bool) -> bool {
+    pub(crate) fn set_focus(&mut self, app: &mut dyn AppDriver, path: Option<String>, keyboard: bool) -> bool {
         self.edit.input_click.on_focus_change(path.as_deref());
         let moved = self.kbd.focus.path() != path.as_deref();
         // A field left mid-composition keeps what it showed, as a browser's does (Tab the input

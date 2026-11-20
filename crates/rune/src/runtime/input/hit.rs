@@ -43,7 +43,7 @@ impl RuntimeCore {
     }
 
     /// Window point (x, y) as node `i`'s handlers see it.
-    pub(in crate::runtime) fn pointer_event(&self, i: usize, x: f32, y: f32) -> PointerEvent {
+    pub(crate) fn pointer_event(&self, i: usize, x: f32, y: f32) -> PointerEvent {
         let [lx, ly] = self.to_local(i, x, y);
         PointerEvent { x: lx, y: ly, window_x: x, window_y: y }
     }
@@ -157,7 +157,7 @@ impl RuntimeCore {
         }
     }
 
-    pub(in crate::runtime) fn is_exiting(&self, id: NodeId) -> bool {
+    pub(crate) fn is_exiting(&self, id: NodeId) -> bool {
         matches!(self.scene.phase(id), Some(PresencePhase::Exiting { .. }))
     }
 

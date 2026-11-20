@@ -86,7 +86,7 @@ impl Fill {
 
     /// Whether an armed deadline is due at `now`, so a resting window draws the frame that
     /// resumes it.
-    pub(super) fn resuming(&self, now: f64) -> bool {
+    pub(in crate::runtime) fn resuming(&self, now: f64) -> bool {
         self.wake.is_some_and(|(_, due)| now >= due)
     }
 

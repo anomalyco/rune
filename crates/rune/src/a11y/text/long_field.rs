@@ -7,8 +7,8 @@ use std::hash::{Hash, Hasher};
 
 use super::RUN_MAX_BYTES;
 use super::runs::{self, Line, build_visual_line, push_piece_lines_in, push_span_chunks};
-use super::super::*;
-use super::super::a11y_tree::{LINES_BOX_CLASS, LINE_CLASS, drawn_line_id, lines_box_id, round};
+use super::super::tree::{LINES_BOX_CLASS, LINE_CLASS, Walk, drawn_line_id, lines_box_id, round};
+use crate::runtime::{RuntimeCore, caret_index};
 
 /// Cap on drawn visual lines published for one long field, applied before building cluster arrays.
 const MAX_DRAWN_LINES: usize = 512;
@@ -97,7 +97,7 @@ impl RuntimeCore {
     /// through the on-demand long-field path: past `RUN_MAX_BYTES`, waiting lazy paragraphs,
     /// elided (`truncate` / `max_lines`), or laid-out lines whose end byte does not cover the
     /// drawn text.
-    pub(in crate::runtime) fn a11y_uses_long_field(&self, i: usize) -> bool {
+    pub(in crate::a11y) fn a11y_uses_long_field(&self, i: usize) -> bool {
         let n = &self.tree.nodes[i];
         let (Some(spec), Some(tl), Some(input)) = (n.text.as_deref(), n.text_layout.as_ref(), n.input.as_deref()) else {
             return false;
@@ -124,7 +124,7 @@ impl RuntimeCore {
     }
 
     /// Lightweight O(1) fingerprint for long field `i`'s `lines_box_id` container (zero text hashing).
-    pub(in crate::runtime) fn a11y_lines_box_print(&self, i: usize, w: &a11y_tree::Walk) -> u64 {
+    pub(in crate::a11y) fn a11y_lines_box_print(&self, i: usize, w: &Walk) -> u64 {
         let n = &self.tree.nodes[i];
         let mut h = rustc_hash::FxHasher::default();
         n.text_layout.as_ref().map(crate::text::TextLayout::address).hash(&mut h);
@@ -145,7 +145,7 @@ impl RuntimeCore {
     }
 
     /// Builds `(lines_box_id, box_node)` followed by its drawn `(drawn_line_id, line_node)`s.
-    pub(in crate::runtime) fn a11y_build_lines_box(&self, i: usize, w: &a11y_tree::Walk) -> Vec<(AkId, AkNode)> {
+    pub(in crate::a11y) fn a11y_build_lines_box(&self, i: usize, w: &Walk) -> Vec<(AkId, AkNode)> {
         let n = &self.tree.nodes[i];
         let box_id = lines_box_id(n.id);
         let mut box_node = AkNode::new(Role::GenericContainer);

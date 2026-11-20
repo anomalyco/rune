@@ -24,7 +24,7 @@ pub(super) mod why;
 /// (`dirty`, `relayout`, `settle`) sit directly adjacent to [`FrameState`]'s `queue`/`live`.
 #[repr(C)]
 pub(crate) struct CommitState {
-    pub(in crate::runtime) dirty: bool,
+    pub(crate) dirty: bool,
     pub(in crate::runtime) relayout: bool,
     /// Every viewport change since the last commit came from the window's own resize
     /// animation (`step_viewport`), not the user or the system.
@@ -34,7 +34,7 @@ pub(crate) struct CommitState {
     pub(in crate::runtime) state_unchanged: bool,
     /// Why this frame committed, as [`commit_why::CommitWhy`] bits, until the frame log takes them.
     pub(crate) commit_why: u16,
-    pub(in crate::runtime) commits: u64,
+    pub(crate) commits: u64,
     pub(in crate::runtime) commit_gen: u64,
     /// The memo pass the current commit's first view build was. Memos none of its builds used
     /// go once it applies.
