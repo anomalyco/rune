@@ -15,6 +15,9 @@ enum Request {
 static WORKER: OnceLock<mpsc::Sender<Request>> = OnceLock::new();
 
 fn worker() -> &'static mpsc::Sender<Request> {
+    if cfg!(test) {
+        panic!("unit test reached the OS primary selection; install a test clipboard (`rt.use_clipboard` or `Client::use_memory`)");
+    }
     WORKER.get_or_init(|| {
         let (sender, requests) = mpsc::channel();
         std::thread::Builder::new().name("rune-primary".into()).spawn(move || run(requests)).ok();

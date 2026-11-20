@@ -829,6 +829,8 @@ fn overlay_render_registers_frame_wake_on_renderer() {
 #[test]
 fn overlay_post_step_unconfigured_miss_flushes_clipboard_and_drops_requests() {
     let mut overlay = width_overlay("reblend-miss");
+    let clipboard = crate::clipboard::memory();
+    overlay.core.clipboard.use_memory(&clipboard);
     overlay.presence = Presence::Shown { occluded: false };
     overlay.rt.update(|_, tx| {
         tx.copy("overlay-copy");
@@ -839,6 +841,11 @@ fn overlay_post_step_unconfigured_miss_flushes_clipboard_and_drops_requests() {
     // Simulate a post-step reblend or re-acquire Unconfigured failure routed through acquire_missed.
     overlay.acquire_missed(crate::window::Missed::Unconfigured, false, false, true);
     assert!(overlay.rt.copy_request.is_none(), "post-step Unconfigured miss must flush clipboard writes");
+    assert_eq!(
+        clipboard.text().as_deref().map(String::as_str),
+        Some("overlay-copy"),
+        "post-step Unconfigured miss must deliver clipboard writes to the clipboard"
+    );
     assert!(overlay.rt.shell_request.is_none(), "post-step Unconfigured miss must drop unsupported shell requests");
     assert!(!overlay.rt.host.minimize.field(), "post-step Unconfigured miss must clear minimize requests");
     assert!(!overlay.presence.shown(), "surface_refused hides the overlay");

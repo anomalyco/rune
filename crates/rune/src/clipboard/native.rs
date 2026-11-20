@@ -8,6 +8,8 @@ impl Client {
     }
     pub(crate) fn flush_core(&self, rt: &mut crate::runtime::RuntimeCore) {
         if rt.edit.has_clipboard() { return flush_memory(rt); }
+        #[cfg(test)]
+        if let Some(m) = &self.memory { return flush_to_memory(rt, m); }
         #[cfg(target_os = "linux")]
         self.flush_primary(rt);
         // Nothing to clear before the first write.
@@ -47,6 +49,9 @@ impl Worker {
 }
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 fn worker() -> &'static mpsc::Sender<Request> {
+    if cfg!(test) {
+        panic!("unit test reached the OS clipboard; install a test clipboard (`rt.use_clipboard` or `Client::use_memory`)");
+    }
     &WORKER.get_or_init(|| Worker::spawn(|| arboard::Clipboard::new().ok())).sender
 }
 
