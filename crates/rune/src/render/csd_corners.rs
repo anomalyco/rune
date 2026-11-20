@@ -25,7 +25,7 @@
 /// decodes the stored pixels, blends, and encodes the result — which is the space Rune's own
 /// blending there works in. The linear view `srgb_blend(true)` draws into needs no conversion at
 /// all, so the fade is the same on both; a fully faded pixel is clear either way.
-pub(crate) struct CsdCorners {
+pub struct CsdCorners {
     pipeline: wgpu::RenderPipeline,
     format: wgpu::TextureFormat,
     vertices: wgpu::Buffer,
