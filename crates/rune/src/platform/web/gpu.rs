@@ -73,6 +73,17 @@ impl Draw {
     pub(super) fn waiting_for_gpu(&self) -> bool {
         matches!(self, Draw::HandingOver { done: Some(done), .. } if !done.get())
     }
+
+    pub(super) fn kind(&self) -> super::web_math::WebDrawKind {
+        use super::web_math::WebDrawKind;
+        match self {
+            Draw::Cpu { .. } => WebDrawKind::Cpu,
+            Draw::HandingOver { .. } => WebDrawKind::HandingOver { waiting_for_gpu: self.waiting_for_gpu() },
+            Draw::Gpu(_) => WebDrawKind::Gpu,
+            Draw::ContextLost => WebDrawKind::ContextLost,
+            Draw::Moving => WebDrawKind::Moving,
+        }
+    }
 }
 
 /// Probes WebGPU for an adapter and device before touching `canvas`.
@@ -196,93 +207,171 @@ pub(super) fn canvas_config(gpu: &Gpu, surface: &wgpu::Surface<'static>, size: (
     Some((config, chosen.render))
 }
 
-/// A frame drawn on the GPU from the runtime's instances, presented; `Err` when the canvas gave
-/// no texture to draw into.
-pub(super) fn gpu_frame(side: &mut GpuSide, app: &mut dyn WebApp, now: Instant, dt: f64, readback: bool, tick: bool) -> Result<Option<Readback>, String> {
-    {
-        let rt = app.rt_mut();
-        if side.renderer.srgb_blend() != rt.srgb_blend() {
-            let caps = side.surface.get_capabilities(&side.gpu.adapter);
-            let backend = side.gpu.adapter.get_info().backend;
-            let chosen = super::web_math::select_surface_formats(side.config.format, &caps.formats, backend, rt.srgb_blend());
-            let mut reconfigure = side.config.format != chosen.surface;
-            side.config.format = chosen.surface;
-            if let Some(view) = chosen.view_format {
-                if !side.config.view_formats.contains(&view) {
-                    side.config.view_formats.push(view);
-                    reconfigure = true;
-                }
-            } else if !side.config.view_formats.is_empty() {
-                side.config.view_formats.clear();
-                reconfigure = true;
+/// Reconfigures the canvas surface and rebuilds the renderer when `rt.srgb_blend()` differs from
+/// the renderer's current blend mode.
+pub(super) fn reblend(side: &mut GpuSide, rt: &mut RuntimeCore) {
+    if side.renderer.srgb_blend() == rt.srgb_blend() { return; }
+    let caps = side.surface.get_capabilities(&side.gpu.adapter);
+    let backend = side.gpu.adapter.get_info().backend;
+    let chosen = super::web_math::select_surface_formats(side.config.format, &caps.formats, backend, rt.srgb_blend());
+    let mut reconfigure = side.config.format != chosen.surface;
+    side.config.format = chosen.surface;
+    if let Some(view) = chosen.view_format {
+        if !side.config.view_formats.contains(&view) {
+            side.config.view_formats.push(view);
+            reconfigure = true;
+        }
+    } else if !side.config.view_formats.is_empty() {
+        side.config.view_formats.clear();
+        reconfigure = true;
+    }
+    if reconfigure {
+        side.surface.configure(&side.gpu.device, &side.config);
+    }
+    if side.renderer.format() != chosen.render {
+        crate::window::rebuild_renderer_core(&side.gpu.device, &mut side.renderer, chosen.render, rt);
+    }
+    side.renderer.set_srgb_blend(chosen.srgb_blend());
+}
+
+/// Acquires the next canvas texture, reconfiguring and retrying once on `Outdated`/`Lost`.
+pub(super) fn acquire_texture(side: &mut GpuSide) -> Result<wgpu::SurfaceTexture, crate::window::Missed> {
+    use super::web_math::{WebAcquireAction, WebAcquireStatus, web_acquire_action};
+    let mut retries = 1u8;
+    loop {
+        let (frame, status) = match side.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
+                (Some(frame), WebAcquireStatus::Ready)
             }
-            if reconfigure {
+            wgpu::CurrentSurfaceTexture::Timeout => (None, WebAcquireStatus::Timeout),
+            wgpu::CurrentSurfaceTexture::Occluded => (None, WebAcquireStatus::Occluded),
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                (None, WebAcquireStatus::OutdatedOrLost)
+            }
+            wgpu::CurrentSurfaceTexture::Validation => (None, WebAcquireStatus::Validation),
+        };
+        match web_acquire_action(status, retries) {
+            WebAcquireAction::UseTexture => return Ok(frame.expect("ready acquisition carries texture")),
+            WebAcquireAction::ReconfigureAndRetry => {
                 side.surface.configure(&side.gpu.device, &side.config);
+                retries -= 1;
             }
-            if side.renderer.format() != chosen.render {
-                crate::window::rebuild_renderer_core(&side.gpu.device, &mut side.renderer, chosen.render, rt);
-            }
-            side.renderer.set_srgb_blend(chosen.srgb_blend());
+            WebAcquireAction::Miss(missed) => return Err(missed),
         }
     }
-    let frame = match side.surface.get_current_texture() {
-        wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
-        _ => return Err("WebGPU canvas acquisition failed".into()),
-    };
+}
+
+/// GPU frame resources prepared before encoding and submission.
+pub(super) struct PreparedGpu {
+    frame: wgpu::SurfaceTexture,
+    encoder: wgpu::CommandEncoder,
+    size: (u32, u32),
+    armed: bool,
+    readback: bool,
+    copy: Option<Readback>,
+}
+
+/// Uploads dirty images, registers the renderer's frame wake, arms a cycle-only frame when `tick`
+/// applies, and opens the command encoder.
+pub(super) fn prepare_gpu_frame(
+    side: &mut GpuSide,
+    rt: &mut RuntimeCore,
+    frame: wgpu::SurfaceTexture,
+    readback: bool,
+    tick: bool,
+) -> PreparedGpu {
     let size = (side.config.width, side.config.height);
-    let armed = {
-        let rt = app.rt_mut();
-        side.renderer.upload_images(&side.gpu.device, &side.gpu.queue, &mut rt.images);
-        // A loop-only step (`runtime/paint/cycle.rs`) writes only the dots it changed, and redraws
-        // only where they are, into the last frame the renderer keeps, which is copied to the canvas.
-        let (paint, slots) = rt.cycle_paint();
-        let armed = tick && side.config.usage.contains(wgpu::TextureUsages::COPY_DST)
-            && side.renderer.arm_cycle(&side.gpu.device, &side.gpu.queue, paint, &rt.instances, &slots, rt.clear_color(), size, side.config.format).is_ok();
-        side.renderer.next_instances(paint, tick.then_some(slots));
-        armed
-    };
-    let mut encoder = side.gpu.device.create_command_encoder(&Default::default());
-    if armed {
+    side.renderer.upload_images(&side.gpu.device, &side.gpu.queue, &mut rt.images);
+    side.renderer.set_frame_wake(rt.live_wake());
+    // A loop-only step (`runtime/paint/cycle.rs`) writes only the dots it changed, and redraws
+    // only where they are, into the last frame the renderer keeps, which is copied to the canvas.
+    let (paint, slots) = rt.cycle_paint();
+    let armed = tick && side.config.usage.contains(wgpu::TextureUsages::COPY_DST)
+        && side.renderer.arm_cycle(&side.gpu.device, &side.gpu.queue, paint, &rt.instances, &slots, rt.clear_color(), size, side.config.format).is_ok();
+    side.renderer.next_instances(paint, tick.then_some(slots));
+    let encoder = side.gpu.device.create_command_encoder(&Default::default());
+    PreparedGpu { frame, encoder, size, armed, readback, copy: None }
+}
+
+/// Encodes the UI or custom compositor pass (plus optional hand-over drift readback copy) into
+/// `prepared.encoder`. Returns `true` when a custom compositor reported it is still animating.
+pub(super) fn encode_gpu_frame(
+    side: &mut GpuSide,
+    app: &mut dyn WebApp,
+    prepared: &mut PreparedGpu,
+    dt: f64,
+    update_ms: f64,
+) -> bool {
+    let comp_animating = if prepared.armed {
         // Rune's default frame (a compositor that drew its own would have kept this a whole one):
         // nothing draws into the canvas but the copy of the kept frame.
         let rt = app.rt_mut();
-        side.renderer.prepare_ui(&side.gpu.device, &side.gpu.queue, &mut rt.text.atlas, &rt.instances, size);
-        side.renderer.draw_armed(&mut encoder, &frame.texture);
+        side.renderer.prepare_ui(&side.gpu.device, &side.gpu.queue, &mut rt.text.atlas, &rt.instances, prepared.size);
+        side.renderer.draw_armed(&mut prepared.encoder, &prepared.frame.texture);
+        false
     } else if app.has_compositor() {
-        let target = frame.texture.create_view(&wgpu::TextureViewDescriptor { format: Some(side.renderer.format()), ..Default::default() });
+        let target = prepared.frame.texture.create_view(&wgpu::TextureViewDescriptor { format: Some(side.renderer.format()), ..Default::default() });
         app.render_compositor(CompositorFrame {
             device: &side.gpu.device,
             queue: &side.gpu.queue,
-            encoder: &mut encoder,
+            encoder: &mut prepared.encoder,
             target: &target,
             format: side.renderer.format(),
-            size,
+            size: prepared.size,
             dt,
-            update_ms: now.elapsed().as_secs_f64() * 1000.0,
+            update_ms,
             ui: &mut side.renderer,
-        });
+        })
     } else {
-        let target = frame.texture.create_view(&wgpu::TextureViewDescriptor { format: Some(side.renderer.format()), ..Default::default() });
+        let target = prepared.frame.texture.create_view(&wgpu::TextureViewDescriptor { format: Some(side.renderer.format()), ..Default::default() });
         let rt = app.rt_mut();
-        side.renderer.prepare_ui(&side.gpu.device, &side.gpu.queue, &mut rt.text.atlas, &rt.instances, size);
-        side.renderer.draw(&mut encoder, &target, rt.clear_color());
-    }
+        let clear = rt.clear_color();
+        crate::frame::host_step::draw_ui(&mut side.renderer, &side.gpu, &mut prepared.encoder, &target, rt, prepared.size, clear);
+        false
+    };
     // A copy of the frame for counting how many of its pixels the CPU's differ in (drift).
-    let copy = (readback && side.config.usage.contains(wgpu::TextureUsages::COPY_SRC)).then(|| {
+    if prepared.readback && side.config.usage.contains(wgpu::TextureUsages::COPY_SRC) {
         let (width, height) = (side.config.width, side.config.height);
         let row = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let buffer = side.gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some("rune hand-over readback"), size: u64::from(row) * u64::from(height),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
-        encoder.copy_texture_to_buffer(frame.texture.as_image_copy(), wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(height) } },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 });
+        let buffer = side.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("rune hand-over readback"),
+            size: u64::from(row) * u64::from(height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        prepared.encoder.copy_texture_to_buffer(
+            prepared.frame.texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(height) },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
         let poll_device = super::web_math::needs_device_poll(side.backend).then(|| side.gpu.device.clone());
-        Readback { buffer, row, size: (width, height), rgba: matches!(side.config.format, wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb), poll_device }
-    });
+        prepared.copy = Some(Readback {
+            buffer,
+            row,
+            size: (width, height),
+            rgba: matches!(side.config.format, wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb),
+            poll_device,
+        });
+    }
     // Every frame: one drawn whole leaves the kept frame behind.
     let _ = side.renderer.damage_drawn();
-    side.renderer.submit(&side.gpu.queue, encoder);
-    side.gpu.queue.present(frame);
-    Ok(copy)
+    comp_animating
+}
+
+/// Submits the encoded GPU commands, runs `before_present` (e.g. `pre_present_notify`), and
+/// presents the canvas texture.
+pub(super) fn submit_gpu_frame(
+    side: &mut GpuSide,
+    prepared: PreparedGpu,
+    before_present: impl FnOnce(),
+) -> Option<Readback> {
+    side.renderer.submit(&side.gpu.queue, prepared.encoder);
+    before_present();
+    side.gpu.queue.present(prepared.frame);
+    prepared.copy
 }
 
 /// The GPU's hand-over frame, copied where the CPU can read it.
