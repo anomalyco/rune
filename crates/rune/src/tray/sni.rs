@@ -175,9 +175,9 @@ impl Native {
                     Ok::<_, zbus::Error>((conn, owners))
                 };
                 let (conn, mut owners) = match portal::timeout(RPC_TIMEOUT, setup).await {
-                    Some(Ok(v)) => { let _ = ready.send(Ok(())); v }
-                    Some(Err(e)) => { let _ = ready.send(Err(backend(e))); return; }
-                    None => { let _ = ready.send(Err(backend("session bus timed out"))); return; }
+                    Some(Ok(v)) => { ready.send(Ok(())).ok(); v }
+                    Some(Err(e)) => { ready.send(Err(backend(e))).ok(); return; }
+                    None => { ready.send(Err(backend("session bus timed out"))).ok(); return; }
                 };
                 register(&conn).await;
                 enum Wake {
@@ -191,11 +191,11 @@ impl Native {
                     match next {
                         Wake::Command(Some(Command::Menu(menu))) => {
                             let revision = { let mut m = model.lock().unwrap(); m.menu = menu; m.revision += 1; m.revision };
-                            if let Ok(emitter) = SignalEmitter::new(&conn, MENU_PATH) { let _ = Menu::layout_updated(&emitter, revision, ROOT).await; }
+                            if let Ok(emitter) = SignalEmitter::new(&conn, MENU_PATH) { Menu::layout_updated(&emitter, revision, ROOT).await.ok(); }
                         }
                         Wake::Command(Some(Command::Tooltip(tooltip))) => {
                             model.lock().unwrap().tooltip = tooltip;
-                            if let Ok(emitter) = SignalEmitter::new(&conn, ITEM_PATH) { let _ = Item::new_tool_tip(&emitter).await; }
+                            if let Ok(emitter) = SignalEmitter::new(&conn, ITEM_PATH) { Item::new_tool_tip(&emitter).await.ok(); }
                         }
                         Wake::Command(None) | Wake::Owner(None) => break,
                         Wake::Owner(Some(changed)) => {
@@ -205,27 +205,27 @@ impl Native {
                     }
                 }
                 // Closing the connection removes the icon at once.
-                let _ = conn.close().await;
+                conn.close().await.ok();
             });
         }).map_err(backend)?;
         match result.recv() {
             Ok(Ok(())) => Ok(Self { commands: Some(commands), worker: Some(worker) }),
-            Ok(Err(e)) => { let _ = worker.join(); Err(e) }
-            Err(_) => { let _ = worker.join(); Err(backend("tray thread exited")) }
+            Ok(Err(e)) => { worker.join().ok(); Err(e) }
+            Err(_) => { worker.join().ok(); Err(backend("tray thread exited")) }
         }
     }
     pub(super) fn set_menu(&self, menu: Vec<TrayItem>) {
-        if let Some(c) = &self.commands { let _ = c.try_send(Command::Menu(menu)); }
+        if let Some(c) = &self.commands { c.try_send(Command::Menu(menu)).ok(); }
     }
     pub(super) fn set_tooltip(&self, tooltip: String) {
-        if let Some(c) = &self.commands { let _ = c.try_send(Command::Tooltip(tooltip)); }
+        if let Some(c) = &self.commands { c.try_send(Command::Tooltip(tooltip)).ok(); }
     }
 }
 
 impl Drop for Native {
     fn drop(&mut self) {
         self.commands.take();
-        if let Some(worker) = self.worker.take() { let _ = worker.join(); }
+        if let Some(worker) = self.worker.take() { worker.join().ok(); }
     }
 }
 

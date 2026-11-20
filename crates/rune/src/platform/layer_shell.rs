@@ -330,7 +330,7 @@ impl Watch {
         let stop = Arc::new(AtomicBool::new(false));
         let turns = Arc::new((Mutex::new(0u64), Condvar::new()));
         let (stopped, seen) = (stop.clone(), turns.clone());
-        let _ = std::thread::Builder::new().name("rune-layer-watch".into()).spawn(move || {
+        std::thread::Builder::new().name("rune-layer-watch".into()).spawn(move || {
             while !stopped.load(Ordering::Relaxed) {
                 let mut poll = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
                 // SAFETY: one pollfd for a display socket. winit's outlives the event loop; an
@@ -340,9 +340,9 @@ impl Watch {
                 let (count, turned) = &*seen;
                 let before = *count.lock().unwrap();
                 wake();
-                let _ = turned.wait_timeout_while(count.lock().unwrap(), Duration::from_millis(100), |n| *n == before);
+                turned.wait_timeout_while(count.lock().unwrap(), Duration::from_millis(100), |n| *n == before).ok();
             }
-        });
+        }).ok();
         Watch { stop, turns }
     }
 
@@ -502,7 +502,7 @@ impl LayerSurface {
         if !keyboard::can_request_keys(self.options.keys, self.layer.version()) { return false; }
         self.layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
         self.surface.commit();
-        let _ = self.queue.flush();
+        self.queue.flush().ok();
         true
     }
 
@@ -522,13 +522,13 @@ impl LayerSurface {
             (_, None) => return,
         }
         self.state.over = Over::Inside { serial, cursor: Some(want) };
-        let _ = self.queue.flush();
+        self.queue.flush().ok();
     }
 
     /// Commit role state (placement) without a new buffer; wgpu's present commits buffers.
     pub fn commit(&mut self) {
         self.surface.commit();
-        let _ = self.queue.flush();
+        self.queue.flush().ok();
     }
 
     pub fn set_buffer_scale(&mut self, scale: i32) {
@@ -559,8 +559,8 @@ impl LayerSurface {
     }
 
     fn turn(&mut self) {
-        let _ = self.queue.dispatch_pending(&mut self.state);
-        let _ = self.queue.flush();
+        self.queue.dispatch_pending(&mut self.state).ok();
+        self.queue.flush().ok();
         if let Some(watch) = &self.watch { watch.turned(); }
     }
 
@@ -584,7 +584,7 @@ impl Drop for LayerSurface {
         if let Some(output) = self.output.take() && output.version() >= 3 { output.release(); }
         self.layer.destroy();
         self.surface.destroy();
-        let _ = self.queue.flush();
+        self.queue.flush().ok();
     }
 }
 

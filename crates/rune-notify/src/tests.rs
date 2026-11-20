@@ -38,6 +38,10 @@ fn a_click_reaches_the_handler_and_completes() {
         // SAFETY: invoked inside `did_receive`'s autorelease pool, so `mac::dictionary` returns an autoreleased `NSDictionary`.
         unsafe { mac::dictionary(&[("session".into(), "ses_7".into()), ("server".into(), "http://127.0.0.1:4096".into())]) }
     }
+    extern "C" fn action_identifier(_: *mut AnyObject, _: Sel) -> *mut AnyObject {
+        // SAFETY: invoked inside `did_receive`'s autorelease pool, so `mac::ns` returns an autoreleased `NSString`.
+        unsafe { mac::ns("com.apple.UNNotificationDefaultActionIdentifier") }
+    }
 
     let fake = AnyClass::get(c"RuneMacFakeResponse").unwrap_or_else(|| {
         let mut b = ClassBuilder::new(c"RuneMacFakeResponse", class!(NSObject)).unwrap();
@@ -48,6 +52,7 @@ fn a_click_reaches_the_handler_and_completes() {
             b.add_method(sel!(content), this as extern "C" fn(_, _) -> _);
             b.add_method(sel!(identifier), identifier as extern "C" fn(_, _) -> _);
             b.add_method(sel!(userInfo), user_info as extern "C" fn(_, _) -> _);
+            b.add_method(sel!(actionIdentifier), action_identifier as extern "C" fn(_, _) -> _);
         }
         b.register()
     });

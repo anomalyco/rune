@@ -76,13 +76,13 @@ impl Activator {
     /// ignored, or only marks the window urgent.
     pub fn activate(&mut self, token: &str) {
         self.activation.activate(token.to_owned(), &self.surface);
-        let _ = self.queue.flush();
+        self.queue.flush().ok();
     }
 }
 
 impl Drop for Activator {
     fn drop(&mut self) {
         self.activation.destroy();
-        let _ = self.queue.flush();
+        self.queue.flush().ok();
     }
 }
