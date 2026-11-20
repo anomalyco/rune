@@ -815,12 +815,15 @@ fn live_scale_zoom_sweep_buckets_during_motion_and_settles_crisp() {
     // Stop at an off-bucket scale (1.13) and let it settle: must re-rasterize crisp at 1.13 and stop animating.
     zoom.set(1.13);
     rt.frame(1.0 / 120.0);
-    assert!(rt.instances.iter().filter(|q| q.params[1] == KIND_GLYPH).any(|q| q.uv[2] > 0.0), "filtered while moving");
+    assert!(
+        rt.instances.iter().filter(|q| q.params[1] == KIND_GLYPH).any(|q| q.uv[2] > 0.0 || q.radii[3] > 0.0),
+        "filtered atlas masks or live outlines while moving"
+    );
     for _ in 0..20 {
         rt.frame(1.0 / 120.0);
     }
     assert!(
-        rt.instances.iter().filter(|q| q.params[1] == KIND_GLYPH).all(|q| q.uv[2] == 0.0),
+        rt.instances.iter().filter(|q| q.params[1] == KIND_GLYPH).all(|q| q.uv[2] == 0.0 && q.radii[3] == 0.0),
         "crisp 1:1 glyphs once live_scale settles at 1.13"
     );
     assert!(!rt.frame(1.0 / 120.0), "nothing keeps animating after live_scale settles");

@@ -72,7 +72,9 @@ fn video_interleaves_with_renderer_springs_and_external_timing_on(gpu: Gpu) {
             .fill(crate::Color::BLACK)
             .native_surface(s, SurfaceFit::Fit)
             .border(1.0, crate::Color::BLACK)
-            .child(el().w(2.0).h(2.0).fill(crate::Color::BLACK))
+            // 3x3 pt (6x6 px at 2x) puts the probed pixel (3, 3) clear of both the 2 px border
+            // and the child's outer anti-aliasing boundary.
+            .child(el().w(3.0).h(3.0).fill(crate::Color::BLACK))
     }
     let mut rt = Runtime::new(surface.clone(), view, (8.0, 4.0), Env::new(true, 2.0));
     rt.frame(0.0);

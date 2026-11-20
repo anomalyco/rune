@@ -16,14 +16,15 @@ fn text_inside_a_scale_draws_at_that_size() {
         };
         col().size(300.0, 200.0).child(card)
     }
-    // Device px: the glyphs' bounding box, and whether all of them sample their atlas 1:1.
+    // Device px: the glyphs' bounding box, and whether all of them sample their atlas 1:1
+    // (neither filtered atlas masks nor moving outline glyphs).
     fn glyphs(rt: &Runtime<State>) -> ([f32; 4], bool) {
         let gs: Vec<_> = rt.instances.iter().filter(|q| q.params[1] == KIND_GLYPH).collect();
         assert!(gs.len() >= 10, "the label draws its glyphs");
         let b = gs.iter().fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |b, q| {
             [b[0].min(q.rect[0]), b[1].min(q.rect[1]), b[2].max(q.rect[0] + q.rect[2]), b[3].max(q.rect[1] + q.rect[3])]
         });
-        (b, gs.iter().all(|q| q.uv[2] == 0.0))
+        (b, gs.iter().all(|q| q.uv[2] == 0.0 && q.radii[3] == 0.0))
     }
     let run = |k: f32, how: How| {
         let mut rt = Runtime::new(State { k, how, pressed: 0 }, view, (300.0, 200.0), Env::new(true, 2.0));
@@ -39,7 +40,9 @@ fn text_inside_a_scale_draws_at_that_size() {
         let rt = run(0.5, how);
         let (half, crisp) = glyphs(&rt);
         let (hw, hh) = (half[2] - half[0], half[3] - half[1]);
-        assert!((hw / w - 0.5).abs() < 0.03 && (hh / h - 0.5).abs() < 0.06, "glyphs draw at half size: {hw}x{hh} vs {w}x{h}");
+        // Windfoil mask quads include a fixed 3–4 px vertical apron (1 px either side plus the
+        // y-glide row) that does not shrink with scale, so at 0.5x `hh` sits ~2 px above `h / 2`.
+        assert!((hw / w - 0.5).abs() < 0.03 && (hh - h * 0.5).abs() <= 2.5, "glyphs draw at half size: {hw}x{hh} vs {w}x{h}");
         for axis in 0..2 {
             let want = c[axis] + (rest[axis] - c[axis]) * 0.5;
             assert!((half[axis] - want).abs() < 1.5, "about the card's centre: {} vs {want}", half[axis]);
@@ -147,7 +150,7 @@ fn a_changing_static_scale_keeps_the_glyph_atlas_bounded() {
             .child(el().key("card").size(200.0, 80.0).scale(s.k).scale_motion(rune_motion::Curve::Instant)
                 .child(crate::el::text("Hamburgefonstiv")))
     }
-    let crisp = |rt: &Runtime<State>| rt.instances.iter().filter(|q| q.params[1] == KIND_GLYPH).all(|q| q.uv[2] == 0.0);
+    let crisp = |rt: &Runtime<State>| rt.instances.iter().filter(|q| q.params[1] == KIND_GLYPH).all(|q| q.uv[2] == 0.0 && q.radii[3] == 0.0);
     let mut rt = Runtime::new(State { k: 1.0 }, view, (300.0, 200.0), Env::new(true, 2.0));
     rt.frame(0.0);
     let rest = rt.text.atlas.glyph_entries();

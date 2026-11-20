@@ -148,19 +148,22 @@ fn copy_select_all_and_the_context_menu() {
     assert_eq!(clipboard.text().as_deref().map(String::as_str), Some(CMD));
     wait(&mut rt);
 
-    // A right-click outside the selection selects the word there and offers Copy.
+    // A right-click outside the selection selects the word there on macOS (AppKit) and keeps
+    // the current selection elsewhere (Chromium), then offers Copy.
+    clipboard.set_text("stale");
     let p = glyphs(&rt, "para");
     rt.pointer_move(p[1].0, p[1].1);
     rt.secondary_down(p[1].0, p[1].1);
     rt.secondary_up(p[1].0, p[1].1);
     tick(&mut rt);
-    assert_eq!(rt.selected_text().as_deref(), Some("first"));
+    let expected = if cfg!(target_os = "macos") { "first" } else { CMD };
+    assert_eq!(rt.selected_text().as_deref(), Some(expected));
     let copy = rt.popup_menu().and_then(|m| m.find("copy")).expect("a Copy menu");
     assert!(copy.title() == "Copy" && copy.is_enabled());
     rt.resolve_popup(Some("copy")).unwrap();
     tick(&mut rt);
-    assert_eq!(clipboard.text().as_deref().map(String::as_str), Some("first"));
-    assert_eq!(rt.selected_text().as_deref(), Some("first"), "picking Copy keeps the selection");
+    assert_eq!(clipboard.text().as_deref().map(String::as_str), Some(expected));
+    assert_eq!(rt.selected_text().as_deref(), Some(expected), "picking Copy keeps the selection");
 }
 
 #[test]
