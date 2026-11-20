@@ -10,11 +10,12 @@ impl RuntimeCore {
             .map(|(_, n)| n.path.clone()).collect()
     }
 
-    /// Whether a drawn node's loop runs (a spinner): what a window shows would fall behind it
-    /// while the window draws nothing.
+    /// Whether a drawn node's loop runs (a spinner or animated SVG icon): what a window shows
+    /// would fall behind it while the window draws nothing.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn loops_shown(&self) -> bool {
-        self.tree.nodes.iter().enumerate().any(|(i, n)| n.looping.is_some() && self.paint.was_seen(i, false) && self.motion.has_loop(n.id))
+        (!self.reduced_motion && self.paint.animated_icons_shown())
+            || self.tree.nodes.iter().enumerate().any(|(i, n)| n.looping.is_some() && self.paint.was_seen(i, false) && self.motion.has_loop(n.id))
     }
 
     /// Wakes when a delayed start at animation time `at` comes due, on the loops' wake: the
@@ -127,6 +128,7 @@ impl RuntimeCore {
             self.check_resting_raster();
         }
         if let Some(at) = waits { self.wake_for_motion(at); }
+        if let Some(at) = self.paint.icon_anim_wake() { self.wake_for_motion(at); }
         // An instant scroll's hold draws nothing until it ends: wake for the one frame that
         // resolves hover then, taken from the state each frame so a re-arm moves it on.
         if let Some(due) = hold_wake { self.wake_for_clock(due); }

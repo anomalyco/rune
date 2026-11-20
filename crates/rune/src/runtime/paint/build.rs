@@ -41,6 +41,9 @@ impl RuntimeCore {
         self.paint.scale_frame = None;
         self.paint.videos_active = false;
         self.paint.animated_icons = false;
+        self.paint.animated_icons_shown = false;
+        self.paint.node_animated_icon = false;
+        self.paint.icon_anim_wake = None;
         let now = crate::time::now();
         let video_clock = match self.wall_start {
             None => crate::video::Clock::Virtual(self.clock),
@@ -471,6 +474,7 @@ impl RuntimeCore {
             let painted = !skip_paint && effective_opacity > 0.001 && o > 0.001 && paint_visible;
             // Unpulled out of sight, a video still counts, so a scroll across a clip edge doesn't commit.
             if !painted && let Some((surface, _)) = &n.vis.surface { video_signature = crate::video::fold_unpulled(video_signature, surface); }
+            self.paint.node_animated_icon = false;
             let faded_slot = if painted {
                 self.paint_node_box(
                     i,
@@ -628,7 +632,10 @@ impl RuntimeCore {
             if self.tree.has_sticky {
                 self.fade_below_header(i, s);
             }
-            self.keep_painted(i, own_turn.is_none() && !opens_snap_layer && snap_layer == 0 && !in_cache && !skip_paint && cover.is_none() && !lift && !raised);
+            self.keep_painted(i, !self.paint.node_animated_icon && own_turn.is_none() && !opens_snap_layer && snap_layer == 0 && !in_cache && !skip_paint && cover.is_none() && !lift && !raised);
+        }
+        if !self.paint.icon_anim_mounts.is_empty() {
+            self.paint.icon_anim_mounts.retain(|(id, _), _| self.tree.node_index.contains_key(id));
         }
         self.keep_close(None, &mut layers, &mut active_cache, &mut glyph_count);
         self.keep_end();

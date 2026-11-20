@@ -170,10 +170,13 @@ impl AccessibilityLink {
     fn receive(&mut self, rt: &mut crate::runtime::RuntimeCore, name: &str) -> bool {
         self.adopt(rt);
         let inbox = self.take();
+        let mut queued = false;
         if inbox.settings {
+            let was_dirty = rt.commit.dirty;
             rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
             rt.set_system_contrast(crate::platform::preferences::contrast());
             rt.set_system_increased_contrast(crate::platform::preferences::increased_contrast());
+            queued |= !was_dirty && rt.commit.dirty;
         }
         match inbox.asked {
             Asked::Activate => rt.a11y_activate(name),
@@ -184,7 +187,6 @@ impl AccessibilityLink {
             let said = if inbox.asked == Asked::Activate { "activated" } else { "deactivated" };
             eprintln!("rune: a11y {name:?}: {said}");
         }
-        let mut queued = false;
         for request in &inbox.actions {
             let ran = rt.a11y_action(request);
             if log() { eprintln!("rune: a11y {name:?}: {:?} on {:?} {}", request.action, request.target_node, if ran { "queued" } else { "refused" }); }

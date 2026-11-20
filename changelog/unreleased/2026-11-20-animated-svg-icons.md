@@ -1,1 +1,1 @@
-- Icons: support SMIL SVG animation elements (`<animate>`, `<animateTransform>`, `<set>`) on `Icon`, advancing on the runtime clock without resetting across view rebuilds and holding on the first frame under reduced motion.
+- **Icons**: Support monochrome (`currentColor`) SMIL SVG animation elements (`<animate>`, `<animateTransform>`, `<set>`) via bounded pre-parsed ASTs and double-buffered glyph-atlas tiles (preserving partial window damage, GPU tinting, rotation, scale, occlusion/flat-hold sleep, and reduced-motion `t = 0` hold); multi-colour icons remain static.
