@@ -149,10 +149,42 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
-        std::fs::rename(&tmp, path)
+        rename_replace(&tmp, path)
     })();
     if result.is_err() { std::fs::remove_file(&tmp).ok(); }
     result
+}
+
+#[cfg(windows)]
+fn rename_replace(tmp: &Path, path: &Path) -> io::Result<()> {
+    use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
+    // On Windows, renaming over an existing file fails transiently with ERROR_ACCESS_DENIED while
+    // a concurrent rename's replaced target is delete-pending or another reader holds the file,
+    // and with ERROR_SHARING_VIOLATION when another handle lacks delete sharing. Retry a bounded
+    // number of times (7 attempts, <= 31 ms sleep) on those two errors only.
+    const DELAYS_MS: [u64; 6] = [0, 1, 2, 4, 8, 16];
+    for delay in DELAYS_MS {
+        match std::fs::rename(tmp, path) {
+            Ok(()) => return Ok(()),
+            Err(err)
+                if err.kind() == io::ErrorKind::PermissionDenied
+                    || err.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32) =>
+            {
+                if delay == 0 {
+                    std::thread::yield_now();
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(delay));
+                }
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    std::fs::rename(tmp, path)
+}
+
+#[cfg(all(not(windows), not(target_arch = "wasm32")))]
+fn rename_replace(tmp: &Path, path: &Path) -> io::Result<()> {
+    std::fs::rename(tmp, path)
 }
 
 pub(crate) fn sanitize(app_id: &str) -> String {
