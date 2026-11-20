@@ -74,7 +74,6 @@ impl Checkbox {
         let (fill, border) = match self.state {
             State::Disabled => (c.surface_disabled, c.border_disabled),
             State::Hover => (c.surface_hover, c.border_hover),
-            State::Focus => (if on { c.surface_weak } else { Color::TRANSPARENT }, c.border_active),
             _ if on => (c.surface_weak, c.std_border),
             _ => (Color::TRANSPARENT, c.border_weak),
         };
@@ -96,7 +95,7 @@ impl Checkbox {
         }
         let disabled = self.state == State::Disabled;
         let mut root = row().role("checkbox").gap(12.0).center_y()
-            .child(control.focus_ring(1.0, 0.0, c.border_active).a11y_hidden());
+            .child(k.focus_ring_state(control, 2.0, 2.0, self.state == State::Focus).a11y_hidden());
         root = if self.indeterminate { root.checked_mixed() } else { root.checked(self.checked) };
         if let Some(d) = &self.description {
             root = root.description(d.clone());

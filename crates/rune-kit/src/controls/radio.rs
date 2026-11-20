@@ -73,7 +73,7 @@ impl RadioItem {
             hover,
             self.state == State::Rest && !self.checked,
         );
-        control = k.focus_ring_state(control, 2.0, 1.0, self.state == State::Focus);
+        control = k.focus_ring_state(control, 2.0, 2.0, self.state == State::Focus);
         if self.checked {
             let dot = c.knob_on;
             control = control.child(

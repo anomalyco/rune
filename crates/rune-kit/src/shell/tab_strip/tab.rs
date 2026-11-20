@@ -82,7 +82,9 @@ pub(super) fn build(item: TabItemCore<'_>, at: Place, prev: Option<&str>, st: &S
     let composite = [st.base, overlay];
     let h = if two_line { st.two_line_height } else { st.row_height };
 
-    let mut pill = row().key("pill").w_full().h(h).radius(RADIUS).center_y();
+    // The keyboard ring goes on the pill, inside it: the strip scrolls and would clip a ring
+    // drawn outside, and a vertical slot reaches into the gaps (`tabs.css`, opencode#64909).
+    let mut pill = row().key("pill").w_full().h(h).radius(RADIUS).center_y().focus_ring(2.0, -2.0, c.border_focus);
     pill = if lifted { grounded(pill, composite, RADIUS) } else { pill.fill(if at.active || editing || item.marked { overlay } else { Color::TRANSPARENT }) };
     // The hover wash, instant as the web's `:hover` is: the slot's own on a horizontal tab; a
     // vertical slot reaches into the gaps, so its pill carries the wash as a layer.
