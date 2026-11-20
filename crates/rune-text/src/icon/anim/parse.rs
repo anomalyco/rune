@@ -196,9 +196,22 @@ pub(crate) fn may_be_animated(body: &str) -> bool {
     body.len() <= MAX_SVG_BYTES && (body.contains("<animate") || body.contains("<set"))
 }
 
+/// Result of compiling an SVG icon body against the monochrome SMIL subset and hostile-input caps.
+pub(crate) enum CompileOutcome {
+    /// Valid monochrome animated SVG with at least one supported SMIL track.
+    Animated(CompiledAnim),
+    /// Well-formed SVG within all caps, but with no supported SMIL tracks (safe to draw static).
+    StaticOnly,
+    /// Exceeded a hostile-input cap or contained invalid XML/geometry/transforms (draw blank).
+    Rejected,
+}
+
 /// Compiles `body` (for an icon with square `view`) into a pre-parsed monochrome animation AST.
-/// Returns `None` if `body` has no valid SMIL tracks or exceeds any hostile-input cap.
-pub(crate) fn compile(body: &str, view: f32) -> Option<CompiledAnim> {
+pub(crate) fn compile(body: &str, view: f32) -> CompileOutcome {
+    compile_inner(body, view).unwrap_or(CompileOutcome::Rejected)
+}
+
+fn compile_inner(body: &str, view: f32) -> Option<CompileOutcome> {
     if !may_be_animated(body) || !view.is_finite() || !(MIN_VIEW_DIM..=MAX_VIEW_DIM).contains(&view) {
         return None;
     }
@@ -343,11 +356,14 @@ pub(crate) fn compile(body: &str, view: f32) -> Option<CompiledAnim> {
         }
     }
 
-    if !stack.is_empty() || tracks.is_empty() || shapes == 0 {
+    if !stack.is_empty() {
         return None;
     }
+    if tracks.is_empty() || shapes == 0 {
+        return Some(CompileOutcome::StaticOnly);
+    }
     let has_indefinite = tracks.iter().any(|t| !t.is_set && t.repeat.is_none());
-    Some(CompiledAnim { view, ops, tracks, node_count: next_node_id as usize, has_indefinite })
+    Some(CompileOutcome::Animated(CompiledAnim { view, ops, tracks, node_count: next_node_id as usize, has_indefinite }))
 }
 
 struct StackEntry<'a> {

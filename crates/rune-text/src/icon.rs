@@ -289,7 +289,11 @@ fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point) -> Vec<u8> {
         return acc;
     }
     if icon.body.contains("<animate") || icon.body.contains("<set") {
-        return anim::AnimatedIcons::render_rest_coverage(icon, px, size, origin).unwrap_or(acc);
+        match anim::AnimatedIcons::render_rest_coverage(icon, px, size, origin) {
+            anim::RestCoverage::Rendered(cov) => return cov,
+            anim::RestCoverage::Rejected => return acc,
+            anim::RestCoverage::StaticFallback => {}
+        }
     }
     let s = size / icon.view;
     // Each open group with an `opacity`: what it holds so far, and that opacity.

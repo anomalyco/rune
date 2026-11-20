@@ -19,11 +19,11 @@ use swash::zeno::{Cap, Fill, Join, Point, Transform};
 use super::area;
 use super::convex;
 use super::{Facing, Icon, then, union};
-use crate::atlas::{ATLAS_SIZE, Atlas, AtlasGlyph, GlyphQuad};
+use crate::atlas::{ATLAS_SIZE, Atlas, AtlasGlyph, GlyphQuad, InPlaceAtlas};
 use parse::{
     AttrKind, BaseGeom, CalcMode, CompiledAnim, KeyVal, MAX_COORD, MAX_LAYERS, MAX_SCALE, MAX_SKEW_DEG, MAX_STROKE_WIDTH, Op, PaintProps, Track, TransformKind, rotate_transform,
 };
-pub(crate) use parse::{compile, may_be_animated};
+pub(crate) use parse::{CompileOutcome, compile, may_be_animated};
 
 /// Hard cap on distinct compiled animation plans retained per `TextSystem`.
 const MAX_CACHED_PLANS: usize = 256;
@@ -73,6 +73,16 @@ pub struct AnimatedQuad {
     pub changed: bool,
 }
 
+/// Result of rendering an icon's static `t = 0` resting frame when SMIL tags are present.
+pub(crate) enum RestCoverage {
+    /// Compiled animated SVG rendered at `t = 0.0`.
+    Rendered(Vec<u8>),
+    /// Well-formed SVG within all caps with no supported SMIL tracks (safe for static parser).
+    StaticFallback,
+    /// Hostile/cap-exceeding or malformed SVG (caller must return empty coverage).
+    Rejected,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct SlotKey {
     icon_ptr: usize,
@@ -84,11 +94,34 @@ struct SlotKey {
 struct SlotEntry {
     slots: [Option<(AtlasGlyph, u64)>; 2],
     cur: u8,
+    /// `Atlas::upload_gen` at the time `slots[cur]` was last written, so missed drawables are
+    /// detected per-slot without horizontal shelf aliasing.
+    last_write_gen: u64,
     last_cov: Vec<u8>,
     last_t: f64,
     last_sample_t: f64,
     last_state: AnimState,
     used: bool,
+}
+
+impl SlotEntry {
+    #[inline]
+    fn pending_upload(&self, upload_gen: u64) -> bool {
+        upload_gen > 0 && self.last_write_gen == upload_gen
+    }
+
+    #[inline]
+    fn can_reuse(&self, t: f64, sample_t: f64) -> bool {
+        let same_ts = (self.last_sample_t - sample_t).abs() <= 1e-9;
+        let still_waiting = sample_t >= self.last_sample_t
+            && t >= self.last_t
+            && match self.last_state {
+                AnimState::Finished => true,
+                AnimState::WaitingUntil(wake) => t + 1e-6 < wake,
+                AnimState::Moving => false,
+            };
+        same_ts || still_waiting
+    }
 }
 
 #[derive(Default)]
@@ -148,67 +181,61 @@ impl AnimatedIcons {
         plan.state_at(sample_t, t) != AnimState::Finished
     }
 
-    /// Renders `icon_ptr`'s `t = 0.0` resting frame (for reduced motion / static fallback).
-    pub(crate) fn render_rest_coverage(icon: &Icon, px: u32, size: f32, origin: Point) -> Option<Vec<u8>> {
-        let plan = compile(icon.body, icon.view)?;
-        let len = (px as usize).checked_mul(px as usize)?;
+    /// Renders `icon_ptr`'s `t = 0.0` resting frame (for reduced motion / static fallback),
+    /// distinguishing hostile-cap rejection from benign SVGs with unsupported SMIL attributes.
+    pub(crate) fn render_rest_coverage(icon: &Icon, px: u32, size: f32, origin: Point) -> RestCoverage {
+        let plan = match compile(icon.body, icon.view) {
+            CompileOutcome::Animated(plan) => plan,
+            CompileOutcome::StaticOnly => return RestCoverage::StaticFallback,
+            CompileOutcome::Rejected => return RestCoverage::Rejected,
+        };
+        let Some(len) = (px as usize).checked_mul(px as usize) else {
+            return RestCoverage::Rejected;
+        };
         let mut cov = vec![0u8; len];
         let mut buf = vec![0u8; len];
         let mut layers = Vec::new();
         let mut ov = Vec::new();
         let mut scopes = Vec::with_capacity(parse::MAX_DEPTH);
         plan.render_into(px, size, origin, 0.0, 0.0, &mut cov, &mut buf, &mut layers, &mut ov, &mut scopes);
-        Some(cov)
+        RestCoverage::Rendered(cov)
     }
 
-    /// Evaluates `icon_ptr` at runtime time `t` (using `mount_t` when finite-only), updating its
-    /// double-buffered glyph-atlas tile ONLY when the quantized coverage bytes changed.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn frame_quad(
-        &mut self,
-        atlas: &mut Atlas,
+    /// True iff `icon_ptr` already has both double-buffered atlas tiles resident on non-evicted
+    /// pages, so `loop_step` can update it strictly via `write_bordered` without ever calling
+    /// `Atlas::put_bordered` or evicting a glyph page.
+    pub(crate) fn slots_ready(
+        &self,
+        atlas: &Atlas,
         icon_ptr: usize,
         (px, size): (u32, f32),
-        origin: [f32; 2],
+        facing: Facing,
+        scope_id: u64,
+    ) -> bool {
+        if px == 0 || px + 4 > ATLAS_SIZE {
+            return false;
+        }
+        let Some(plan) = self.plans.get(&icon_ptr) else { return false };
+        let key = slot_key(icon_ptr, px, size, facing, plan.has_indefinite, scope_id);
+        let Some(entry) = self.slots.get(&key) else { return false };
+        entry.slots.iter().all(|slot| {
+            slot.is_some_and(|(s, epoch)| s.w == px + 2 && s.h == px + 2 && atlas.page_gen(s.page) == epoch)
+        })
+    }
+
+    /// Evaluates `icon_ptr`'s compiled AST at `(t, sample_t)` into `self.scratch_cov` and paces
+    /// `Moving` into `WaitingUntil` at the next quantized pixel change (at <= 30 Hz). Pure CPU
+    /// evaluation; never touches the glyph atlas.
+    fn eval_into_scratch(
+        &mut self,
+        icon_ptr: usize,
+        px: u32,
+        snapped_size: f32,
         facing: Facing,
         t: f64,
-        mount_t: f64,
-        scope_id: u64,
-    ) -> Option<AnimatedQuad> {
-        if px == 0 || px + 4 > ATLAS_SIZE {
-            return None;
-        }
+        sample_t: f64,
+    ) -> Option<AnimState> {
         let plan = self.plans.get(&icon_ptr)?;
-        let is_indefinite = plan.has_indefinite;
-        let sample_t = if is_indefinite { t } else { (t - mount_t).max(0.0) };
-        let scope = if is_indefinite { 0 } else { scope_id };
-        let short = ((px as f32 - size) * 64.0).round().clamp(0.0, 63.0) as u32;
-        let px_packed = px | (short << 24) | (u32::from(facing == Facing::Mirrored) << 31);
-        let snapped_size = px as f32 - short as f32 / 64.0;
-        let key = SlotKey { icon_ptr, px_packed, scope };
-
-        // Same timestamp, active hold/paced interval, or finished finite animation: reuse the
-        // current atlas slot with zero re-rasterization or probing.
-        if let Some(entry) = self.slots.get_mut(&key)
-            && let Some((slot, epoch)) = entry.slots[entry.cur as usize]
-            && atlas.page_gen(slot.page) == epoch
-        {
-            let same_ts = (entry.last_sample_t - sample_t).abs() <= 1e-9;
-            let still_waiting = sample_t >= entry.last_sample_t
-                && t >= entry.last_t
-                && match entry.last_state {
-                    AnimState::Finished => true,
-                    AnimState::WaitingUntil(wake) => t + 1e-6 < wake,
-                    AnimState::Moving => false,
-                };
-            if same_ts || still_waiting {
-                entry.used = true;
-                atlas.touch(slot.page, slot.w * slot.h);
-                return Some(AnimatedQuad { quad: make_quad(slot, origin, px), state: entry.last_state, changed: false });
-            }
-        }
-
-        // Evaluate compiled AST directly into reusable scratch coverage (zero XML parse, zero clone).
         let needed = (px as usize).checked_mul(px as usize)?;
         self.scratch_cov.resize(needed, 0);
         self.scratch_buf.resize(needed, 0);
@@ -273,12 +300,49 @@ impl AnimatedIcons {
             }
             other => other,
         };
+        Some(state)
+    }
+
+    /// Evaluates `icon_ptr` at runtime time `t` (using `mount_t` when finite-only) during a full
+    /// paint, allocating its double-buffered glyph-atlas tile pair when needed and flipping
+    /// between them ONLY when the quantized coverage bytes changed.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn frame_quad(
+        &mut self,
+        atlas: &mut Atlas,
+        icon_ptr: usize,
+        (px, size): (u32, f32),
+        origin: [f32; 2],
+        facing: Facing,
+        t: f64,
+        mount_t: f64,
+        scope_id: u64,
+    ) -> Option<AnimatedQuad> {
+        if px == 0 || px + 4 > ATLAS_SIZE {
+            return None;
+        }
+        let is_indefinite = self.plans.get(&icon_ptr)?.has_indefinite;
+        let sample_t = if is_indefinite { t } else { (t - mount_t).max(0.0) };
+        let short = ((px as f32 - size) * 64.0).round().clamp(0.0, 63.0) as u32;
+        let snapped_size = px as f32 - short as f32 / 64.0;
+        let key = slot_key(icon_ptr, px, size, facing, is_indefinite, scope_id);
+
+        // Same timestamp, active hold/paced interval, or finished finite animation: reuse the
+        // current atlas slot with zero re-rasterization or probing.
+        if let Some(entry) = self.slots.get_mut(&key)
+            && let Some((slot, epoch)) = entry.slots[entry.cur as usize]
+            && atlas.page_gen(slot.page) == epoch
+            && entry.can_reuse(t, sample_t)
+        {
+            entry.used = true;
+            touch_entry_slots(atlas, &entry.slots);
+            let pending = entry.pending_upload(atlas.upload_gen);
+            return Some(AnimatedQuad { quad: make_quad(slot, origin, px), state: entry.last_state, changed: pending });
+        }
+
+        let state = self.eval_into_scratch(icon_ptr, px, snapped_size, facing, t, sample_t)?;
 
         if let Some(entry) = self.slots.get_mut(&key) {
-            entry.used = true;
-            entry.last_t = t;
-            entry.last_sample_t = sample_t;
-            entry.last_state = state;
             let cur_slot = entry.slots[entry.cur as usize];
             let valid_cur = cur_slot.filter(|&(s, g)| atlas.page_gen(s.page) == g);
             // If pixels are identical to what the active slot already holds, skip atlas write and
@@ -286,16 +350,21 @@ impl AnimatedIcons {
             if let Some((slot, _)) = valid_cur
                 && entry.last_cov.as_slice() == self.scratch_cov.as_slice()
             {
-                atlas.touch(slot.page, slot.w * slot.h);
-                return Some(AnimatedQuad { quad: make_quad(slot, origin, px), state, changed: false });
+                entry.used = true;
+                entry.last_t = t;
+                entry.last_sample_t = sample_t;
+                entry.last_state = state;
+                touch_entry_slots(atlas, &entry.slots);
+                let pending = entry.pending_upload(atlas.upload_gen);
+                return Some(AnimatedQuad { quad: make_quad(slot, origin, px), state, changed: pending });
             }
             // Write into the OTHER slot of the double-buffered pair so UV flips and Windows
             // `Damage::plan` / `arm_loop` sees ONLY this icon's `KIND_GLYPH` instance change.
-            // If `valid_cur` is still pending upload (the previous frame missed its drawable),
+            // If `pending_upload`, the previous frame missed its drawable before uploading:
             // overwrite `entry.cur` in place so we never overwrite the on-screen slot or flip UV
-            // back to match the last presented instance.
+            // back to match the last presented instance, with zero horizontal shelf aliasing.
             let next_idx = match valid_cur {
-                Some((s, _)) if atlas.slot_dirty(s) => entry.cur as usize,
+                Some(_) if entry.pending_upload(atlas.upload_gen) => entry.cur as usize,
                 Some(_) => 1 - entry.cur as usize,
                 None => 0,
             };
@@ -307,7 +376,17 @@ impl AnimatedIcons {
                     Some(fresh)
                 }
             }?;
+            if let Some((other, epoch)) = entry.slots[1 - next_idx]
+                && atlas.page_gen(other.page) == epoch
+            {
+                atlas.touch(other.page, other.w * other.h);
+            }
+            entry.used = true;
+            entry.last_t = t;
+            entry.last_sample_t = sample_t;
+            entry.last_state = state;
             entry.cur = next_idx as u8;
+            entry.last_write_gen = atlas.upload_gen;
             if entry.last_cov.len() != self.scratch_cov.len() {
                 self.cov_bytes = self.cov_bytes.saturating_sub(entry.last_cov.len()) + self.scratch_cov.len();
                 entry.last_cov.resize(self.scratch_cov.len(), 0);
@@ -316,15 +395,23 @@ impl AnimatedIcons {
             return Some(AnimatedQuad { quad: make_quad(placed.0, origin, px), state, changed: true });
         }
 
-        // First allocation for this (icon, size, facing, scope): only commit budget after `put_bordered` succeeds.
+        // First allocation for this (icon, size, facing, scope): pre-allocate both double-buffer
+        // slots during full paint so steady `loop_step` ticks never allocate or evict any live
+        // glyph page. Only commit budget after placement succeeds.
         let first = atlas.put_bordered(px, &self.scratch_cov)?;
+        let (slots, active) = match atlas.put_bordered(px, &self.scratch_cov) {
+            Some(second) if atlas.page_gen(first.0.page) == first.1 => ([Some(first), Some(second)], first),
+            Some(second) => ([Some(second), None], second),
+            None => ([Some(first), None], first),
+        };
         let last_cov = self.scratch_cov.clone();
         self.cov_bytes += last_cov.len();
         self.slots.insert(
             key,
             SlotEntry {
-                slots: [Some(first), None],
+                slots,
                 cur: 0,
+                last_write_gen: atlas.upload_gen,
                 last_cov,
                 last_t: t,
                 last_sample_t: sample_t,
@@ -332,8 +419,90 @@ impl AnimatedIcons {
                 used: true,
             },
         );
-        Some(AnimatedQuad { quad: make_quad(first.0, origin, px), state, changed: true })
+        Some(AnimatedQuad { quad: make_quad(active.0, origin, px), state, changed: true })
     }
+
+    /// Loop-step variant of [`Self::frame_quad`] taking [`InPlaceAtlas`], which by construction
+    /// cannot allocate in or evict from the glyph atlas or inflate `Shelf::live_texels`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn frame_quad_in_place(
+        &mut self,
+        mut atlas: InPlaceAtlas<'_>,
+        icon_ptr: usize,
+        (px, size): (u32, f32),
+        origin: [f32; 2],
+        facing: Facing,
+        t: f64,
+        mount_t: f64,
+        scope_id: u64,
+    ) -> Option<AnimatedQuad> {
+        if px == 0 || px + 4 > ATLAS_SIZE {
+            return None;
+        }
+        let is_indefinite = self.plans.get(&icon_ptr)?.has_indefinite;
+        let sample_t = if is_indefinite { t } else { (t - mount_t).max(0.0) };
+        let short = ((px as f32 - size) * 64.0).round().clamp(0.0, 63.0) as u32;
+        let snapped_size = px as f32 - short as f32 / 64.0;
+        let key = slot_key(icon_ptr, px, size, facing, is_indefinite, scope_id);
+
+        if let Some(entry) = self.slots.get_mut(&key)
+            && let Some((slot, epoch)) = entry.slots[entry.cur as usize]
+            && atlas.page_gen(slot.page) == epoch
+            && entry.can_reuse(t, sample_t)
+        {
+            entry.used = true;
+            let pending = entry.pending_upload(atlas.upload_gen());
+            return Some(AnimatedQuad { quad: make_quad(slot, origin, px), state: entry.last_state, changed: pending });
+        }
+
+        if !self.slots.contains_key(&key) {
+            return None;
+        }
+        let state = self.eval_into_scratch(icon_ptr, px, snapped_size, facing, t, sample_t)?;
+        let entry = self.slots.get_mut(&key)?;
+        let (cur_slot, _) = entry.slots[entry.cur as usize].filter(|&(s, g)| atlas.page_gen(s.page) == g)?;
+        let upload_gen = atlas.upload_gen();
+        if entry.last_cov.as_slice() == self.scratch_cov.as_slice() {
+            entry.used = true;
+            entry.last_t = t;
+            entry.last_sample_t = sample_t;
+            entry.last_state = state;
+            let pending = entry.pending_upload(upload_gen);
+            return Some(AnimatedQuad { quad: make_quad(cur_slot, origin, px), state, changed: pending });
+        }
+        let next_idx = if entry.pending_upload(upload_gen) { entry.cur as usize } else { 1 - entry.cur as usize };
+        let (slot, epoch) = entry.slots[next_idx]?;
+        if !atlas.write_bordered(slot, epoch, px, &self.scratch_cov) {
+            return None;
+        }
+        entry.used = true;
+        entry.last_t = t;
+        entry.last_sample_t = sample_t;
+        entry.last_state = state;
+        entry.cur = next_idx as u8;
+        entry.last_write_gen = upload_gen;
+        if entry.last_cov.len() != self.scratch_cov.len() {
+            self.cov_bytes = self.cov_bytes.saturating_sub(entry.last_cov.len()) + self.scratch_cov.len();
+            entry.last_cov.resize(self.scratch_cov.len(), 0);
+        }
+        entry.last_cov.copy_from_slice(&self.scratch_cov);
+        Some(AnimatedQuad { quad: make_quad(slot, origin, px), state, changed: true })
+    }
+}
+
+fn touch_entry_slots(atlas: &mut Atlas, slots: &[Option<(AtlasGlyph, u64)>; 2]) {
+    for &(slot, epoch) in slots.iter().flatten() {
+        if atlas.page_gen(slot.page) == epoch {
+            atlas.touch(slot.page, slot.w * slot.h);
+        }
+    }
+}
+
+fn slot_key(icon_ptr: usize, px: u32, size: f32, facing: Facing, is_indefinite: bool, scope_id: u64) -> SlotKey {
+    let short = ((px as f32 - size) * 64.0).round().clamp(0.0, 63.0) as u32;
+    let px_packed = px | (short << 24) | (u32::from(facing == Facing::Mirrored) << 31);
+    let scope = if is_indefinite { 0 } else { scope_id };
+    SlotKey { icon_ptr, px_packed, scope }
 }
 
 fn make_quad(a: AtlasGlyph, origin: [f32; 2], px: u32) -> GlyphQuad {

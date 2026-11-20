@@ -124,7 +124,7 @@ impl RuntimeCore {
         let Some((due, _)) = self.motion.loop_wake() else { return false };
         let wall = self.now_clock();
         let keep = &self.paint.keep.cycles;
-        if wall < due || keep.mixed || keep.generation != self.commit.commits || keep.slots.is_empty()
+        if wall < due || keep.mixed || !keep.icons.is_empty() || keep.generation != self.commit.commits || keep.slots.is_empty()
             || keep.slots.len() != self.motion.loops_len() || self.reduced_motion || self.time_scale <= 0.0
             || !self.live_visible() || !self.rests_except_loop() || self.tracing()
             || self.poll_wake_deadline().is_some_and(|d| d <= wall)
@@ -151,11 +151,12 @@ impl RuntimeCore {
         let keep = &self.paint.keep.cycles;
         let loops = keep.slots.len() + 2 * keep.slides.len();
         let has_icons = !keep.icons.is_empty();
-        let icons_only = has_icons && self.motion.loops_is_empty();
-        let why = if self.motion.loops_is_empty() && !has_icons { "no loop" } else if loops != self.motion.loops_len() { self.loop_refusal() }
+        let why = if self.motion.loops_is_empty() && !has_icons { "no loop" }
+            else if has_icons && !self.motion.loops_is_empty() { "an animated icon beside a loop" }
+            else if loops != self.motion.loops_len() { self.loop_refusal() }
             else if keep.mixed || keep.generation != self.commit.commits { "other motion or a commit" }
             else if (self.wall_start.is_none() && !virtual_check) || self.reduced_motion || self.time_scale <= 0.0 || !self.live_visible() || self.tracing() { "not live" }
-            else if dt < 0.0 || (!icons_only && dt > 1.0 / 30.0) { "late" }
+            else if dt < 0.0 || (!has_icons && dt > 1.0 / 30.0) { "late" }
             else if self.poll_wake_deadline().is_some_and(|d| d <= wall) { "timer due" }
             else if self.commit.virtual_fill.resuming(wall) { "a list filling" }
             else if let Some(work) = self.waiting_work() { work }
@@ -172,17 +173,25 @@ impl RuntimeCore {
             return Err(other.iter().find(|(bit, _)| self.motion.anim_sources & bit != 0).map_or("motion: unknown", |o| o.1));
         }
         if !self.animating && !due { return Err("no loop due"); }
-        if !self.slots_hold() || (due && self.ambient.is_none() && !has_icons) { return Err("a slot moved"); }
-        let t = if !self.animating && let Some((deadline, phase)) = self.motion.loop_wake() {
-            (phase + (wall - deadline).max(0.0) * f64::from(self.time_scale)).max(self.t)
-        } else {
-            self.t + dt * f64::from(self.time_scale)
-        };
+        if has_icons {
+            if self.animating || !self.slots_hold() { return Err("a slot moved"); }
+            if !self.icon_slots_ready() { return Err("an animated icon needs an atlas slot"); }
+            if checking() { return Err("checked against an ordinary frame"); }
+            let Some((deadline, phase)) = self.motion.loop_wake() else { return Err("no loop due"); };
+            let t = (phase + (wall - deadline).max(0.0) * f64::from(self.time_scale)).max(self.t);
+            self.clock = wall;
+            self.t = t;
+            self.scene.set_time(t);
+            let _ = self.text.mask_cache_frame(false);
+            let mut patched = Vec::new();
+            self.sample_icon_slots(&mut patched);
+            patched.sort_unstable();
+            return Ok(patched);
+        }
+        if !self.slots_hold() || (due && self.ambient.is_none()) { return Err("a slot moved"); }
+        let t = self.t + dt * f64::from(self.time_scale);
         let poses = self.paint.slide_poses(&self.tree.nodes, &self.motion, &self.scene, &self.instances, self.t, self.reduced_motion, t)?;
         if checking() {
-            if has_icons {
-                return Err("checked against an ordinary frame");
-            }
             // What the step would draw, for the ordinary frame that runs instead (`loop_checked`).
             let mut predicted = self.instances.clone();
             for s in &self.paint.keep.cycles.slots {
@@ -203,10 +212,8 @@ impl RuntimeCore {
         let _ = self.text.mask_cache_frame(false);
         let mut patched = Vec::new();
         self.sample_cycles(&mut patched);
-        self.sample_icon_slots(&mut patched);
         self.paint.apply_slides(&poses, &mut self.instances, &mut patched);
         patched.sort_unstable();
-        patched.dedup();
         Ok(patched)
     }
 
@@ -268,6 +275,12 @@ impl RuntimeCore {
             && self.paint.keep.cycles.icons.iter().all(|s| self.instances.get(s.at).is_some_and(|q| q.rect == s.rect && q.params[1] == KIND_GLYPH))
     }
 
+    /// True when every recorded animated icon already has both double-buffered atlas slots on
+    /// live (non-evicted) pages so `loop_step` never allocates or evicts a glyph page.
+    fn icon_slots_ready(&self) -> bool {
+        self.paint.keep.cycles.icons.iter().all(|s| self.text.icon_anim_slots_ready(s.ic, s.sized, s.facing, s.node_id.0))
+    }
+
     /// Evaluates animated SVG icon slots in place without rebuilding or walking the paint tree,
     /// patching only the `uv` and atlas page of instances whose quantized pixels actually changed
     /// and advancing the wake to the next quantized change timestamp.
@@ -285,7 +298,7 @@ impl RuntimeCore {
             } else {
                 0.0
             };
-            let Some(anim) = self.text.animated_icon_quad(s.ic, s.sized, s.origin, s.facing, self.t, mount_t, s.node_id.0) else {
+            let Some(anim) = self.text.animated_icon_quad_in_place(s.ic, s.sized, s.origin, s.facing, self.t, mount_t, s.node_id.0) else {
                 continue;
             };
             match anim.state {
@@ -308,9 +321,7 @@ impl RuntimeCore {
             }
         }
         self.paint.animated_icons_shown = any_live;
-        if self.motion.loops_is_empty() {
-            self.motion.clear_loop_wake();
-        }
+        self.motion.clear_loop_wake();
         if let Some(at) = next_wake && self.time_scale > 0.0 {
             let wake = self.clock + (at - self.t).max(0.0) / f64::from(self.time_scale);
             self.motion.arm_loop_wake(wake, at);

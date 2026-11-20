@@ -146,7 +146,7 @@ fn classify(icon: &'static Icon, animated: &mut anim::AnimatedIcons) -> Kind {
         return if b.contains("currentColor") { Kind::ColorAndCurrent } else { Kind::Color };
     }
     if anim::may_be_animated(b)
-        && let Some(plan) = anim::compile(b, icon.view)
+        && let anim::CompileOutcome::Animated(plan) = anim::compile(b, icon.view)
         && animated.insert_plan(icon as *const Icon as usize, plan)
     {
         return Kind::AnimatedMono;

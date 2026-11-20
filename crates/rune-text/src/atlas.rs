@@ -226,6 +226,10 @@ pub struct Atlas {
     /// Monotonic atlas-wide page generation counter so popped and recreated overflow pages never
     /// collide with stale reusable slot handles (`SlotEntry`).
     next_page_gen: u64,
+    /// Monotonic counter incremented each time the renderer consumes dirty atlas rows
+    /// (`rows_uploaded`), so double-buffered animated slots detect missed drawables per slot
+    /// without horizontal shelf aliasing.
+    pub(super) upload_gen: u64,
     pub(super) clock: u64,
     pub(super) map: GlyphMap<Residency>,
     /// Text draws subpixel masks this frame: the renderer blends by channel
@@ -313,6 +317,7 @@ impl Atlas {
             shelf: Shelf::new(1),
             page0_gen: 1,
             next_page_gen: 2,
+            upload_gen: 0,
             clock: 1,
             map: GlyphMap::default(),
             lcd: false,
@@ -510,6 +515,12 @@ impl Atlas {
         Some(AtlasGlyph { page: page as u16, x: ax, y: ay, w, h, left, top, lcd: false })
     }
 
+    /// Borrow of this atlas restricted to in-place icon slot updates (`loop_step`).
+    /// By construction, exposes no allocation or eviction methods and never touches `live_texels`.
+    pub(super) fn in_place(&mut self) -> InPlaceAtlas<'_> {
+        InPlaceAtlas(self)
+    }
+
     /// Allocates a `(px + 2) × (px + 2)` icon slot with a 1-texel transparent apron around `cov`
     /// (`px × px`), returning its placement and page eviction generation for later in-place reuse.
     pub(super) fn put_bordered(&mut self, px: u32, cov: &[u8]) -> Option<(AtlasGlyph, u64)> {
@@ -517,20 +528,10 @@ impl Atlas {
         let (page, ax, ay) = self.alloc(side, side)?;
         let epoch = self.page_gen(page as u16);
         let slot = AtlasGlyph { page: page as u16, x: ax, y: ay, w: side, h: side, left: 0, top: 0, lcd: false };
-        self.write_bordered_unchecked(slot, px, cov);
+        self.write_bordered_pixels(slot, px, cov);
+        self.touch(slot.page, side * side);
         self.rasterized += 1;
         Some((slot, epoch))
-    }
-
-    /// Returns whether `slot`'s row band still has un-uploaded pixels pending on `slot.page`.
-    pub(super) fn slot_dirty(&self, slot: AtlasGlyph) -> bool {
-        let dirty = if slot.page == 0 {
-            self.dirty
-        } else {
-            self.pages.get(slot.page as usize - 1).and_then(|p| p.dirty)
-        };
-        let (y0, y1) = (slot.y.saturating_sub(1), slot.y.saturating_add(slot.h + 1));
-        dirty.is_some_and(|(d0, d1)| d0 < y1 && d1 > y0)
     }
 
     /// Rewrites an existing `(px + 2) × (px + 2)` bordered icon slot in place if its page has not
@@ -539,11 +540,12 @@ impl Atlas {
         if slot.w != px + 2 || slot.h != px + 2 || self.page_gen(slot.page) != page_gen {
             return false;
         }
-        self.write_bordered_unchecked(slot, px, cov);
+        self.write_bordered_pixels(slot, px, cov);
+        self.touch(slot.page, slot.w * slot.h);
         true
     }
 
-    fn write_bordered_unchecked(&mut self, slot: AtlasGlyph, px: u32, cov: &[u8]) {
+    fn write_bordered_pixels(&mut self, slot: AtlasGlyph, px: u32, cov: &[u8]) {
         let (page, ax, ay, side) = (slot.page as usize, slot.x, slot.y, px + 2);
         let (data, dirty) = if page == 0 {
             (&mut self.data, &mut self.dirty)
@@ -570,6 +572,28 @@ impl Atlas {
         let (y0, y1) = (ay - 1, ay + side + 1);
         let d = dirty.get_or_insert((y0, y1));
         *d = (d.0.min(y0), d.1.max(y1));
-        self.touch(slot.page, side * side);
+    }
+}
+
+/// Restricted borrow of [`Atlas`] for `loop_step` in-place animated icon updates.
+/// By construction, it has no `alloc`, `place`, `put_bordered`, `evict_page`, or `touch` methods,
+/// so `loop_step` can never allocate in or evict from the glyph atlas or inflate `live_texels`.
+pub(super) struct InPlaceAtlas<'a>(&'a mut Atlas);
+
+impl InPlaceAtlas<'_> {
+    pub(super) fn page_gen(&self, page: u16) -> u64 {
+        self.0.page_gen(page)
+    }
+
+    pub(super) fn upload_gen(&self) -> u64 {
+        self.0.upload_gen
+    }
+
+    pub(super) fn write_bordered(&mut self, slot: AtlasGlyph, page_gen: u64, px: u32, cov: &[u8]) -> bool {
+        if slot.w != px + 2 || slot.h != px + 2 || self.0.page_gen(slot.page) != page_gen {
+            return false;
+        }
+        self.0.write_bordered_pixels(slot, px, cov);
+        true
     }
 }
