@@ -270,6 +270,7 @@ struct Decoder {
 impl Decoder {
     fn open(job: &Job) -> Result<Self, String> {
         let t0 = job.started;
+        let target = mf::Target::from_source(&job.source)?;
         let lib = mf::library()?;
         let t_mf = us(t0);
         rune_core::marks::mark("video.mf");
@@ -278,7 +279,7 @@ impl Decoder {
         // while this one resolves the source: the two don't depend on each other.
         let (device, source, t_device) = std::thread::scope(|s| {
             let device = (job.kind == Kind::Video).then(|| s.spawn(|| (rune_device(), us(t0))));
-            let source = lib.resolve(&job.source);
+            let source = lib.resolve(&target);
             let (device, t_device) = device.and_then(|d| d.join().ok()).unwrap_or((None, 0));
             (device, source, t_device)
         });
