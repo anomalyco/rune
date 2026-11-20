@@ -49,7 +49,17 @@ const OVERBUILD_RATIO: usize = 4;
 #[cfg(debug_assertions)]
 fn enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("RUNE_PERF_WARN").is_none_or(|v| v != "0"))
+    *ON.get_or_init(|| rune_core::env::var_os("RUNE_PERF_WARN").is_none_or(|v| v != "0"))
+}
+
+/// Initializes the cached `RUNE_PERF_WARN` flag up front so the first timed callback does not
+/// heap-allocate while reading the environment variable.
+#[inline(always)]
+pub(crate) fn warm() {
+    #[cfg(debug_assertions)]
+    {
+        let _ = enabled();
+    }
 }
 
 /// Prints `message` the first time `site` warns.
