@@ -32,7 +32,7 @@ fn book() -> std::sync::MutexGuard<'static, Book> {
 
 /// Records `name` at now, unless it was reached before. An app marks its own steps here too.
 pub fn mark(name: &'static str) {
-    let now = Instant::now();
+    let now = crate::time::now();
     let mut book = book();
     if !book.marks.iter().any(|(n, _)| *n == name) {
         book.marks.push((name, now));
@@ -47,7 +47,7 @@ fn page_mark(name: &str) {
     use wasm_bindgen::JsCast;
     let Ok(performance) = js_sys::Reflect::get(&js_sys::global(), &"performance".into()) else { return };
     let Ok(mark) = js_sys::Reflect::get(&performance, &"mark".into()) else { return };
-    if let Some(mark) = mark.dyn_ref::<js_sys::Function>() { let _ = mark.call1(&performance, &name.into()); }
+    if let Some(mark) = mark.dyn_ref::<js_sys::Function>() { mark.call1(&performance, &name.into()).ok(); }
 }
 
 /// [`mark`] behind a flag of the call site's own, for a step that runs every frame.
@@ -105,7 +105,7 @@ impl Timed {
     /// Times until it drops, while totals are kept and `when` holds.
     #[doc(hidden)]
     pub fn start(name: &'static str, when: bool) -> Timed {
-        Timed((when && counting()).then(|| (name, Instant::now())))
+        Timed((when && counting()).then(|| (name, crate::time::now())))
     }
 }
 

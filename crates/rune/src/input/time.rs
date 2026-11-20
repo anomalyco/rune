@@ -19,7 +19,7 @@ pub fn last_input() -> Option<Instant> { LAST.with(Cell::get) }
 /// Input the platform delivered outside a window event (a browser page's own text field): it
 /// counts for [`last_input`].
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-pub(crate) fn typed() { LAST.with(|c| c.set(Some(Instant::now()))); }
+pub(crate) fn typed() { LAST.with(|c| c.set(Some(crate::time::now()))); }
 
 /// The arrival time of the input being dispatched on this thread, if any.
 pub(crate) fn current() -> Option<Instant> { CURRENT.with(Cell::get) }
@@ -65,8 +65,8 @@ impl Kind {
 /// timestamp of the `NSEvent` AppKit is dispatching, when it is that kind of event; else now.
 pub(crate) fn arrived(event: &winit::event::WindowEvent) -> Option<Scope> {
     let kind = Kind::of(event)?;
-    LAST.with(|c| c.set(Some(Instant::now())));
-    Some(scope(Some(native(kind).unwrap_or_else(Instant::now))))
+    LAST.with(|c| c.set(Some(crate::time::now())));
+    Some(scope(Some(native(kind).unwrap_or_else(crate::time::now))))
 }
 
 #[cfg(target_os = "macos")]
@@ -88,7 +88,7 @@ fn native(kind: Kind) -> Option<Instant> {
         Kind::SmartMagnify => ty == T::SmartMagnify,
     };
     // The uptime is read after the event, so never before its timestamp.
-    matches.then(|| since_boot(Instant::now(), NSProcessInfo::processInfo().systemUptime(), timestamp))
+    matches.then(|| since_boot(crate::time::now(), NSProcessInfo::processInfo().systemUptime(), timestamp))
 }
 
 #[cfg(not(target_os = "macos"))]

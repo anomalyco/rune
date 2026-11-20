@@ -293,7 +293,7 @@ impl TextSystem {
         }
         let &sink = SINK.get()?;
         let placed = self.atlas.rasterized + self.color_placed;
-        let now = Instant::now();
+        let now = rune_core::time::now();
         let event = if frame { SavingEvent::Frame { now, placed } } else { SavingEvent::Poll { now, placed } };
         let mut write = false;
         let mut wake = None;
@@ -312,7 +312,7 @@ impl TextSystem {
             sink(snapshot.encode());
             done.store(true, Ordering::Release);
         });
-        if spawned.is_err() { self.masks.saving = Saving::Written { at: Instant::now(), placed }; }
+        if spawned.is_err() { self.masks.saving = Saving::Written { at: rune_core::time::now(), placed }; }
         wake
     }
 

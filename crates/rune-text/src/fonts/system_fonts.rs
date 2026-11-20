@@ -516,7 +516,7 @@ fn walk_font_dirs() -> Vec<(String, std::path::PathBuf)> {
             .or_else(|| home.as_ref().map(|h| h.join(".local/share")));
         dirs.extend(data_home.map(|d| d.join("fonts")));
         dirs.extend(home.map(|h| h.join(".fonts")));
-        let data_dirs = std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
+        let data_dirs = rune_core::env::var("XDG_DATA_DIRS").unwrap_or_else(|| "/usr/local/share:/usr/share".into());
         dirs.extend(data_dirs.split(':').filter(|d| !d.is_empty()).map(|d| std::path::Path::new(d).join("fonts")));
     }
     let mut found: Vec<(String, std::path::PathBuf)> = Vec::new();

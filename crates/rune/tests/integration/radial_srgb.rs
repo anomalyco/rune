@@ -461,7 +461,7 @@ fn srgb_blend_images_surfaces_keycaps_and_compositor() {
     struct CheckComp;
     impl Compositor<()> for CheckComp {
         fn render(&mut self, f: &mut Frame<'_, ()>) {
-            let _ = COMP_STATE.set((f.srgb_blend(), f.format));
+            COMP_STATE.set((f.srgb_blend(), f.format)).ok();
             f.draw_ui();
         }
     }

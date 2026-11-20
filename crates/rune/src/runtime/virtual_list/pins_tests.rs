@@ -155,7 +155,7 @@ fn commit(pins: &mut Pins, kind: Kind, focused: Option<&'static str>, stop: Opti
     }
     for (step, key) in steps(pins, kind, focused).into_iter().enumerate() {
         if stop == Some(step) {
-            let _ = catch_unwind(AssertUnwindSafe(|| panic!("row builder")));
+            catch_unwind(AssertUnwindSafe(|| panic!("row builder"))).ok();
             return;
         }
         if pins.rows().iter().any(|r| *r == key) {

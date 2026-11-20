@@ -1,5 +1,4 @@
 use std::cell::{Cell, RefCell};
-use std::time::Instant;
 
 use crate::{Cx, El, Env, GrowthSpec, Runtime, ScrollSpec, col, el, memo, text};
 
@@ -61,7 +60,7 @@ fn body(id: u64, markdown: bool) -> El {
 }
 
 fn view(s: &Chat, _: &mut Cx<Chat>) -> El {
-    let start = Instant::now();
+    let start = crate::time::now();
     let stack = col().key("rows").w_full().pt(s.pad).growth(GrowthSpec::default());
     let stack = match s.mode {
         Mode::Memo => stack.virtualize(72.0).children(s.ids.iter().map(|&id| memo(format!("m{id}"), 0, || body(id, s.markdown)))),
@@ -743,7 +742,7 @@ fn virtual_rows_time() {
             }
             let frames = 300;
             VIEW_NS.set(0);
-            let start = Instant::now();
+            let start = crate::time::now();
             for _ in 0..frames {
                 rt.state.tick += 1;
                 commit(&mut rt);
@@ -764,13 +763,13 @@ fn virtual_rows_time() {
             VIEW_NS.set(0);
             let first = rt.state.ids[0];
             rt.state.splice(0, first - 60..first);
-            let start = Instant::now();
+            let start = crate::time::now();
             commit(&mut rt);
             let ms = start.elapsed().as_secs_f64() * 1e3;
             // An index-built list mounts the rest of the page above over the next frames.
             let mut after = 0.0f64;
             for _ in 0..30 {
-                let start = Instant::now();
+                let start = crate::time::now();
                 rt.frame(1.0 / 120.0);
                 after = after.max(start.elapsed().as_secs_f64() * 1e3);
             }
@@ -786,7 +785,7 @@ fn virtual_rows_time() {
             rt.wheel(300.0, 400.0, 30.0);
             let (shaped, commits, views) = (rt.text.shaped, rt.stats.commits, VIEWS.get());
             VIEW_NS.set(0);
-            let start = Instant::now();
+            let start = crate::time::now();
             rt.frame(1.0 / 120.0);
             let us = start.elapsed().as_secs_f64() * 1e6;
             times.push(us);

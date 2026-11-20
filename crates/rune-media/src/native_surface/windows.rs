@@ -278,7 +278,7 @@ impl Importer {
         // SAFETY: `handle` is the live handle opened above; `object` receives a new reference.
         let opened = unsafe { device.OpenSharedHandle(handle, &mut object) };
         // SAFETY: `handle` is ours and closed once; the opened object keeps the resource alive.
-        let _ = unsafe { CloseHandle(handle) };
+        unsafe { CloseHandle(handle) }.ok();
         opened.map_err(|e| format!("open shared {name:?}: {e}"))?;
         object.ok_or_else(|| format!("open shared {name:?}: no object"))
     }
@@ -289,7 +289,7 @@ pub(crate) fn release_decoded(queue: &wgpu::Queue, planes: &DecodedPlanes, value
     // SAFETY: the raw queue only gets a signal, ordered after work wgpu already submitted.
     if let Some(raw) = unsafe { queue.as_hal::<Dx12>() } {
         // SAFETY: as above; the fence is live and belongs to this device.
-        let _ = unsafe { raw.as_raw().Signal(&planes.fences.release, value) };
+        unsafe { raw.as_raw().Signal(&planes.fences.release, value) }.ok();
     }
 }
 

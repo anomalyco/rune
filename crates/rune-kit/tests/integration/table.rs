@@ -305,7 +305,7 @@ fn table_time() {
     }
     for run in 0..3 {
         let app = App::new(100_000, true);
-        let t = Instant::now();
+        let t = rune::time::now();
         let mut rt = Runtime::new(app, big_view, (900.0, 900.0), Env::new(true, 2.0));
         rt.frame(0.0);
         let first = ms(t);
@@ -314,7 +314,7 @@ fn table_time() {
         for f in 1..=600 {
             rt.wheel(450.0, 450.0, -48.0);
             let c = rt.stats.commits;
-            let t = Instant::now();
+            let t = rune::time::now();
             rt.frame(f as f64 / 120.0);
             frames.push(ms(t));
             if rt.stats.commits > c {
@@ -327,13 +327,13 @@ fn table_time() {
         let mut rebuild = Vec::new();
         for _ in 0..30 {
             rt.invalidate();
-            let t = Instant::now();
+            let t = rune::time::now();
             rt.frame(5.0);
             rebuild.push(ms(t));
         }
         println!("  rebuild at rest p50 {:.3} ms, {} commits", percentile(&mut rebuild, 0.5), rt.stats.commits - commits);
         let r = header(&rt, "size").rect;
-        let t = Instant::now();
+        let t = rune::time::now();
         click(&mut rt, r[0] + 20.0, r[1] + r[3] * 0.5);
         let sort = ms(t);
         let handle = find(&rt, |e| e.label.as_deref() == Some("Resize Size")).remove(0).rect;
@@ -343,7 +343,7 @@ fn table_time() {
         let mut drag = Vec::new();
         for k in 1..=60 {
             rt.pointer_move(x + k as f32, y);
-            let t = Instant::now();
+            let t = rune::time::now();
             rt.frame(0.0);
             drag.push(ms(t));
         }

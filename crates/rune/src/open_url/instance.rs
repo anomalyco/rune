@@ -196,7 +196,7 @@ mod handoff {
                 drop(waiting);
                 return crate::relaunch::spawn_with(args);
             }
-            waiting.launches.push((Instant::now(), args));
+            waiting.launches.push((crate::time::now(), args));
             PENDING.store(true, Ordering::Release);
         }
         if links.is_empty() {

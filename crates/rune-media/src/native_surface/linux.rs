@@ -247,7 +247,7 @@ impl Importer {
         let (copy, submission) = self.copy(queue, &frame.buffer)?;
         frame.copies.lock().unwrap().push((self.device.clone(), copy.clone()));
         if let Some(f) = frame.tell() {
-            let _ = self.reads.send((submission, f));
+            self.reads.send((submission, f)).ok();
         }
         Ok([copy.clone(), copy])
     }

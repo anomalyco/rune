@@ -63,12 +63,12 @@ pub(super) fn release() {
 pub(super) fn claim(id: &str) -> bool {
     // A launch a quitting process handed on (`relaunch::spawn_with`) waits for that process to
     // let go of the name (`release_instance`, or its end): sending to it would only come back.
-    let handed = crate::relaunch::handed_from().map(|pid| (pid, Instant::now() + HANDED_WAIT));
+    let handed = crate::relaunch::handed_from().map(|pid| (pid, crate::time::now() + HANDED_WAIT));
     // A name held by a process that doesn't answer (killed, and still being torn down: its
     // pipe stays until the last of its threads goes) is passed over for the next.
     for generation in 0..GENERATIONS {
         let name = wide(&pipe_name(id, generation));
-        let deadline = Instant::now() + REACH_FOR;
+        let deadline = crate::time::now() + REACH_FOR;
         loop {
             match create(&name) {
                 Ok(pipe) => return claimed(name, pipe),
@@ -77,7 +77,7 @@ pub(super) fn claim(id: &str) -> bool {
                 Err(_) => return true,
             }
             if let Some((pid, until)) = handed
-                && Instant::now() < until
+                && crate::time::now() < until
                 && crate::relaunch::alive(pid)
             {
                 std::thread::sleep(Duration::from_millis(1));
@@ -91,7 +91,7 @@ pub(super) fn claim(id: &str) -> bool {
                     None => continue,
                 },
                 // The first process went between the two calls: claim the name again.
-                Sent::Gone if Instant::now() < deadline => continue,
+                Sent::Gone if crate::time::now() < deadline => continue,
                 Sent::Gone => return true,
                 Sent::Nobody => break,
             }
@@ -110,16 +110,16 @@ fn claimed(name: Vec<u16>, pipe: HANDLE) -> bool {
 /// Claims `name` as soon as the quitting `server` lets go of it, for at most `HANDED_WAIT`;
 /// none when it doesn't (then the name is asked again, and passed over if nobody answers).
 fn wait_free(name: &[u16], server: u32) -> Option<HANDLE> {
-    let until = Instant::now() + HANDED_WAIT;
+    let until = crate::time::now() + HANDED_WAIT;
     let mut gone_at = None;
-    while Instant::now() < until {
+    while crate::time::now() < until {
         match create(name) {
             Ok(pipe) => return Some(pipe),
             Err(ERROR_ACCESS_DENIED) => {}
             Err(_) => return None,
         }
         // Gone, yet its name is still held: not for long, or not by it.
-        if !crate::relaunch::alive(server) && gone_at.get_or_insert_with(Instant::now).elapsed() > ANSWER_WITHIN {
+        if !crate::relaunch::alive(server) && gone_at.get_or_insert_with(crate::time::now).elapsed() > ANSWER_WITHIN {
             return None;
         }
         std::thread::sleep(Duration::from_millis(1));
@@ -291,8 +291,8 @@ enum Sent {
 /// Sends this launch's arguments to the process that has the pipe and waits, at most
 /// `ANSWER_WITHIN`, for its answer.
 fn send(name: &[u16]) -> Sent {
-    let deadline = Instant::now() + ANSWER_WITHIN;
-    let left = || u32::try_from(deadline.saturating_duration_since(Instant::now()).as_millis()).unwrap_or(u32::MAX);
+    let deadline = crate::time::now() + ANSWER_WITHIN;
+    let left = || u32::try_from(deadline.saturating_duration_since(crate::time::now()).as_millis()).unwrap_or(u32::MAX);
     let pipe = loop {
         // SAFETY: `name` is NUL-terminated; opens the pipe's client end, overlapped so the
         // answer can be waited for with a deadline.
@@ -363,7 +363,7 @@ fn io(pipe: HANDLE, deadline: Instant, start: impl FnOnce(*mut OVERLAPPED) -> i3
     // operation is done or cancelled and waited for.
     let mut o: OVERLAPPED = unsafe { std::mem::zeroed() };
     o.hEvent = event;
-    let left = u32::try_from(deadline.saturating_duration_since(Instant::now()).as_millis()).unwrap_or(u32::MAX);
+    let left = u32::try_from(deadline.saturating_duration_since(crate::time::now()).as_millis()).unwrap_or(u32::MAX);
     // SAFETY: `o` outlives the operation: it's waited for, or cancelled and waited for, below.
     unsafe {
         let started = start(&mut o) != 0 || GetLastError() == ERROR_IO_PENDING;

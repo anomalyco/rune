@@ -46,7 +46,7 @@ fn capture_dir() -> Option<&'static std::path::Path> {
 fn enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
-        let off = matches!(std::env::var("RUNE_DISABLE_METALLIB").as_deref(), Ok("1" | "true" | "TRUE" | "yes"));
+        let off = rune_core::env::flag("RUNE_DISABLE_METALLIB");
         !LIBRARY.is_empty() && !off && capture_dir().is_none()
     })
 }

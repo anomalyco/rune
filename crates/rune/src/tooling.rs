@@ -114,7 +114,7 @@ static APP_ID: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
 /// The application id the window reports to the desktop (Wayland `app_id`, X11 `WM_CLASS`), so
 /// compositors match it to the app's `.desktop` entry, icon and window rules. Call before `run`.
 pub fn set_app_id(id: &'static str) {
-    let _ = APP_ID.set(id);
+    APP_ID.set(id).ok();
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]

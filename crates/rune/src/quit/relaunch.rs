@@ -131,8 +131,8 @@ pub(crate) fn alive(pid: u32) -> bool {
 
 #[cfg(all(not(target_os = "windows"), not(target_arch = "wasm32")))]
 fn wait(pid: u32) {
-    let deadline = std::time::Instant::now() + WAIT;
-    while alive(pid) && std::time::Instant::now() < deadline {
+    let deadline = crate::time::now() + WAIT;
+    while alive(pid) && crate::time::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
 }

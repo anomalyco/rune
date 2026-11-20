@@ -13,8 +13,6 @@ use std::time::Duration;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 
-use crate::time::Instant;
-
 type Work = Box<dyn FnOnce() + Send>;
 type Drain = Box<dyn FnMut() -> Served + Send>;
 
@@ -150,7 +148,7 @@ pub(super) fn wait(promise: &js_sys::Promise) -> Option<Result<JsValue, JsValue>
 pub(super) fn sleep(wait_for: Duration) {
     let timer = js_sys::Promise::new(&mut |resolve, _| {
         if let Some(window) = web_sys::window() {
-            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, millis(wait_for));
+            window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, millis(wait_for)).ok();
         }
     });
     let _ = wait(&timer);
@@ -159,7 +157,7 @@ pub(super) fn sleep(wait_for: Duration) {
 /// One fiber: takes what's waiting, a slice at a time, and rests when there's nothing.
 async fn fiber() {
     loop {
-        let start = Instant::now();
+        let start = crate::time::now();
         while start.elapsed() < SLICE {
             if !step() {
                 rest().await;
@@ -230,7 +228,7 @@ fn yield_to_page() -> impl std::future::Future<Output = ()> {
 /// slice is spent; what's left gets another task.
 fn run() {
     QUEUE.with(|q| q.borrow_mut().scheduled = false);
-    let start = Instant::now();
+    let start = crate::time::now();
     loop {
         drain_all();
         let next = QUEUE.with(|q| q.borrow_mut().work.pop_front());
@@ -280,6 +278,6 @@ fn millis(d: Duration) -> i32 {
 
 fn set_timeout(callback: &js_sys::Function, delay: Duration) {
     if let Some(window) = web_sys::window() {
-        let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(callback, millis(delay));
+        window.set_timeout_with_callback_and_timeout_and_arguments_0(callback, millis(delay)).ok();
     }
 }

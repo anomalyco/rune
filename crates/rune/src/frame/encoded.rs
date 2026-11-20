@@ -97,7 +97,7 @@ impl FrameReports {
     }
 
     /// The time to report a `Drawn` frame at, taken only when there's a hook.
-    pub(crate) fn stamp(&self) -> Option<Instant> { self.0.as_ref().map(|_| Instant::now()) }
+    pub(crate) fn stamp(&self) -> Option<Instant> { self.0.as_ref().map(|_| crate::time::now()) }
 
     /// Whether anyone reads the reports, so a host asks for what only they need.
     pub(crate) fn wanted(&self) -> bool { self.0.is_some() }
@@ -116,11 +116,11 @@ impl FrameReports {
     }
 
     pub(crate) fn unchanged(&mut self, presents_at: Option<Instant>) {
-        if self.0.is_some() { self.report(FrameOutcome::Unchanged, Instant::now(), presents_at, None); }
+        if self.0.is_some() { self.report(FrameOutcome::Unchanged, crate::time::now(), presents_at, None); }
     }
 
     pub(crate) fn skipped(&mut self) {
-        if self.0.is_some() { self.report(FrameOutcome::Skipped, Instant::now(), None, None); }
+        if self.0.is_some() { self.report(FrameOutcome::Skipped, crate::time::now(), None, None); }
     }
 
     fn report(&mut self, outcome: FrameOutcome, at: Instant, presents_at: Option<Instant>, work: Option<(Instant, f64, f64)>) {

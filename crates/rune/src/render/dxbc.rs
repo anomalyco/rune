@@ -306,7 +306,7 @@ std::thread_local! {
 /// `RUNE_DISABLE_DXBC=1` compiles the WGSL instead, as before.
 #[cfg(target_os = "windows")]
 fn enabled() -> bool {
-    FORCE.with(std::cell::Cell::get).unwrap_or_else(|| !matches!(std::env::var("RUNE_DISABLE_DXBC").as_deref(), Ok("1" | "true" | "TRUE" | "yes")))
+    FORCE.with(std::cell::Cell::get).unwrap_or_else(|| !rune_core::env::flag("RUNE_DISABLE_DXBC"))
 }
 
 #[cfg(all(test, target_os = "windows"))]

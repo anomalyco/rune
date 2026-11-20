@@ -128,7 +128,7 @@ pub(crate) mod freedesktop {
     pub(crate) fn data_dirs() -> Vec<PathBuf> {
         let home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")));
-        let system = std::env::var("XDG_DATA_DIRS").ok().filter(|dirs| !dirs.is_empty())
+        let system = rune_core::env::var("XDG_DATA_DIRS").filter(|dirs| !dirs.is_empty())
             .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
         home.into_iter().chain(system.split(':').filter(|d| !d.is_empty()).map(PathBuf::from)).collect()
     }

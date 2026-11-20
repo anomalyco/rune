@@ -57,7 +57,7 @@ impl Running {
         if self.band == Some(top) { return; }
         self.band = Some(top);
         if let Some(canvas) = window.canvas() {
-            let _ = canvas.style().set_property("transform", &format!("translate3d(0,{top}px,0)"));
+            canvas.style().set_property("transform", &format!("translate3d(0,{top}px,0)")).ok();
         }
     }
 
@@ -76,7 +76,7 @@ impl Running {
             && let Some((_, h)) = req.size
             && let Some(canvas) = window.canvas()
         {
-            let _ = canvas.style().set_property("height", &format!("{h}px"));
+            canvas.style().set_property("height", &format!("{h}px")).ok();
         }
     }
 }
@@ -99,7 +99,7 @@ pub(super) fn set_band_height(window: &Window, band: f32) {
     if let Some(canvas) = window.canvas() {
         let height = format!("{band}px");
         if canvas.style().get_property_value("height").unwrap_or_default() != height {
-            let _ = canvas.style().set_property("height", &height);
+            canvas.style().set_property("height", &height).ok();
         }
     }
 }
@@ -255,7 +255,7 @@ impl FrameHost for WebFrameHost<'_> {
                     let rt = self.r.app.rt();
                     self.r.input.show_menu(&show, rt.backdrop_dark().unwrap_or(rt.env.system_dark));
                 }
-                Some(None) => { let _ = self.r.app.resolve_popup(None); }
+                Some(None) => { self.r.app.resolve_popup(None).ok(); }
                 None => {}
             }
         }
@@ -343,7 +343,7 @@ impl FrameHost for WebFrameHost<'_> {
                         *done = Some(gpu::when_done(side, self.proxy));
                         *since = Instant::now();
                         let proxy = self.proxy.clone();
-                        after(FINISH_LIMIT + Duration::from_millis(50), move || { let _ = proxy.send_event(Wake::App); });
+                        after(FINISH_LIMIT + Duration::from_millis(50), move || { proxy.send_event(Wake::App).ok(); });
                         crate::marks::mark("web.handover.drawn");
                     }
                 }
@@ -379,7 +379,7 @@ impl FrameHost for WebFrameHost<'_> {
             // A browser that compiles pipelines asynchronously is asked in the task after this
             // frame: nothing waits for quiet there (`maybe_start_gpu`).
             let first_look = if pipelines::browser_compiles_async() { Duration::ZERO } else { QUIET };
-            after(first_look, move || { let _ = proxy.send_event(Wake::StartGpu); });
+            after(first_look, move || { proxy.send_event(Wake::StartGpu).ok(); });
             crate::marks::mark("web.first.presented");
             self.r.input.presented();
             // In a task of its own: a click or key that came with the first frame is handled
@@ -387,7 +387,7 @@ impl FrameHost for WebFrameHost<'_> {
             if let Some(mut ready) = self.r.on_ready.take() { after(Duration::ZERO, move || ready(&crate::WindowHandle::new("main"))); }
             page_fonts::share_later(self.r.fonts);
             let proxy = self.proxy.clone();
-            full_faces::fetch(std::mem::take(&mut self.r.late_fonts), !self.r.document, move || { let _ = proxy.send_event(Wake::App); });
+            full_faces::fetch(std::mem::take(&mut self.r.late_fonts), !self.r.document, move || { proxy.send_event(Wake::App).ok(); });
         }
         if self.r.app.rt_mut().shell_request.take().is_some() {
             self.should_end = true;

@@ -218,7 +218,7 @@ mod mac {
         *FILE.lock().unwrap() = Some(file.clone());
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let mut app = App::new(AppSpec::new("overlay drag out", (200.0, 100.0), || (), window_view)).args(Vec::new())
-            .on_ready(move |_| { let _ = ready_tx.send(()); });
+            .on_ready(move |_| { ready_tx.send(()).ok(); });
         let [x, y, width, height] = PANEL;
         let options = OverlayOptions {
             placement: Some(OverlayPlacement::Rect { x, y, width, height }),
@@ -237,7 +237,7 @@ mod mac {
                 ready_rx.recv_timeout(Duration::from_secs(30)).expect("window ready");
                 if !drive(handle.clone(), overlay.clone(), f.clone()) {
                     // The live session's tracking loop holds the event loop, so quit can't land.
-                    let _ = std::fs::remove_file(&f);
+                    std::fs::remove_file(&f).ok();
                     println!("macos_overlay_drag_out: ok (session start, image and pasteboard only)");
                     std::process::exit(0);
                 }
@@ -246,7 +246,7 @@ mod mac {
             handle.quit();
         });
         app.run();
-        let _ = std::fs::remove_file(&file);
+        std::fs::remove_file(&file).ok();
         assert_eq!(*result.lock().unwrap(), Some(true), "macos_overlay_drag_out failed");
         println!("macos_overlay_drag_out: ok");
     }

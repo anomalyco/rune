@@ -105,7 +105,7 @@ impl Image {
     fn finish(&self, decoded: Result<Decoded, ImageError>) {
         let decoded = decoded.map(Arc::new);
         let mips = decoded.as_ref().ok().cloned();
-        let _ = self.0.decoded.set(decoded);
+        self.0.decoded.set(decoded).ok();
         if let Some(mips) = mips { self.0.pixels.set_mips(mips); }
     }
 }
@@ -195,7 +195,7 @@ fn decoders() -> &'static mpsc::Sender<Job> {
         std::thread::Builder::new().name("rune-images".into()).spawn(move || {
             for _ in 1..count {
                 let receive = receive.clone();
-                let _ = std::thread::Builder::new().name("rune-images".into()).spawn(move || decode_jobs(&receive));
+                std::thread::Builder::new().name("rune-images".into()).spawn(move || decode_jobs(&receive)).ok();
             }
             decode_jobs(&first);
         }).expect("image worker");
@@ -357,7 +357,7 @@ impl ImageCache {
         }
         #[cfg(not(target_arch = "wasm32"))]
         if decoders().send(Job { image: image.clone(), input, waker: self.waker.clone() }).is_err() {
-            let _ = image.0.decoded.set(Err(ImageError("image worker stopped".into())));
+            image.0.decoded.set(Err(ImageError("image worker stopped".into()))).ok();
         }
         #[cfg(target_arch = "wasm32")]
         {

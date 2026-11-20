@@ -83,7 +83,7 @@ pub fn pick(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, pres
     let usable = |adapter: &wgpu::Adapter| surface.is_none_or(|s| adapter.is_surface_supported(s));
     let compositor = compositor_pci();
     let mut enumerated = None;
-    if let Ok(name) = std::env::var("WGPU_ADAPTER_NAME") {
+    if let Some(name) = rune_core::env::var("WGPU_ADAPTER_NAME") {
         let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
         let infos: Vec<_> = adapters.iter().map(|a| (a.get_info(), usable(a))).collect();
         let found = by_name(&name, &infos);
@@ -208,7 +208,7 @@ mod dxgi {
             let len = d.Description.iter().position(|&c| c == 0).unwrap_or(d.Description.len());
             String::from_utf16_lossy(&d.Description[..len]).to_lowercase()
         };
-        let (adapter, reason) = if let Some(wanted) = std::env::var("WGPU_ADAPTER_NAME").ok().map(|n| n.to_lowercase()) {
+        let (adapter, reason) = if let Some(wanted) = rune_core::env::var("WGPU_ADAPTER_NAME").map(|n| n.to_lowercase()) {
             let found = hardware.iter().find(|(_, d)| name(d).contains(&wanted))?;
             (found.0.clone(), Reason::EnvName)
         } else if let Some(power) = wgpu::PowerPreference::from_env() {
@@ -267,7 +267,7 @@ static DISPLAY_VENDOR: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::n
 /// first window needn't wait for it; a window that asks sooner waits for that thread.
 #[cfg(target_os = "windows")]
 pub fn find_display_vendor_soon() {
-    let _ = std::thread::Builder::new().name("rune-display-vendor".into()).spawn(display_vendor);
+    std::thread::Builder::new().name("rune-display-vendor".into()).spawn(display_vendor).ok();
 }
 
 /// The PCI vendor and device IDs of the GPUs driving a display on the desktop, the primary
@@ -418,7 +418,7 @@ mod dmabuf {
         }
         feedback.destroy();
         dmabuf.destroy();
-        let _ = queue.flush();
+        queue.flush().ok();
         state.main
     }
 }

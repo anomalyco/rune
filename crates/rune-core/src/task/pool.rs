@@ -61,14 +61,14 @@ fn worker() {
             drop(s);
             describe(&name);
             // A task that panics ends itself, not the thread (the panic hook has reported it).
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work));
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).ok();
             describe("idle");
-            tidy = tidy.on_work(crate::time::Instant::now());
+            tidy = tidy.on_work(crate::time::now());
             s = lock();
             continue;
         }
         s.idle += 1;
-        let now = crate::time::Instant::now();
+        let now = crate::time::now();
         let wait = match (s.threads > KEEP, tidy.wait(now)) {
             (true, Some(due)) => Some(LINGER.min(due)),
             (true, None) => Some(LINGER),
@@ -91,7 +91,7 @@ fn worker() {
                 s.threads -= 1;
                 return;
             }
-            if tidy.take_due(crate::time::Instant::now()) {
+            if tidy.take_due(crate::time::now()) {
                 drop(s);
                 super::idle();
                 s = lock();

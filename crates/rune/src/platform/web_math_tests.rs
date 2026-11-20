@@ -529,7 +529,7 @@ mod web_frame_host_tests {
 
     #[test]
     fn gpu_frame_acquires_before_step_and_delays_overrun_on_clock() {
-        let start = Instant::now();
+        let start = crate::time::now();
         let frame = Duration::from_micros(16_667);
         let overrun = Duration::from_millis(50);
         let mut host = MockWebHost::new(start, WebDrawKind::Gpu);
@@ -568,7 +568,7 @@ mod web_frame_host_tests {
 
     #[test]
     fn gpu_transient_and_outdated_acquire_follow_web_recovery_policy() {
-        let start = Instant::now();
+        let start = crate::time::now();
         let mut host = MockWebHost::new(start, WebDrawKind::Gpu);
         // Transient Timeout: missed before step -> runs covered_wake once, requests redraw, not fatal.
         host.acquires = VecDeque::from([WebAcquireStatus::Timeout]);
@@ -601,7 +601,7 @@ mod web_frame_host_tests {
 
     #[test]
     fn post_step_reblend_reacquires_once_and_does_not_loop_without_srgb_twin() {
-        let start = Instant::now();
+        let start = crate::time::now();
         let mut host = MockWebHost::new(start, WebDrawKind::Gpu);
         // Handler flips srgb_blend during step: drops old drawable, reblends, reacquires once.
         host.rt.state.switch_blend_to = Some(false);
@@ -625,7 +625,7 @@ mod web_frame_host_tests {
 
     #[test]
     fn cycle_tick_handover_and_native_surface_abort_follow_host_step() {
-        let start = Instant::now();
+        let start = crate::time::now();
         // Cycle tick holds clock without advancing runtime poll.
         let mut gpu_host = MockWebHost::new(start, WebDrawKind::Gpu);
         assert_eq!(host_step::run(&mut gpu_host), Outcome::Presented);

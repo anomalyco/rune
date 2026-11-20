@@ -16,5 +16,5 @@ fn busy_holds_a_marker_named_for_this_process() {
     assert!(marker.exists());
     crate::busy(false);
     assert!(!marker.exists());
-    let _ = std::fs::remove_dir_all(home);
+    std::fs::remove_dir_all(home).ok();
 }

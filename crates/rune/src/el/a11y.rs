@@ -99,7 +99,7 @@ impl El {
         self.cold_mut().a11y.more().href = Some(url.clone());
         self.set_role_name("link");
         self.handlers.on_press = Some(std::rc::Rc::new(move |_, tx: &mut crate::Tx| {
-            if url.contains(':') { let _ = tx.open_url(&url); }
+            if url.contains(':') { tx.open_url(&url).ok(); }
         }));
         self
     }

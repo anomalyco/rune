@@ -160,7 +160,7 @@ fn devices() -> bool {
 /// Seconds since the first recorder looked, for elapsed time in a window.
 fn wall_now() -> f64 {
     static ORIGIN: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-    ORIGIN.get_or_init(Instant::now).elapsed().as_secs_f64()
+    ORIGIN.get_or_init(rune_core::time::now).elapsed().as_secs_f64()
 }
 
 thread_local! {
@@ -456,7 +456,7 @@ impl Shared {
                 None
             }
             Unlocked::RemoveFile(path) => {
-                let _ = std::fs::remove_file(path);
+                std::fs::remove_file(path).ok();
                 None
             }
         }
@@ -563,7 +563,7 @@ impl Drop for Shared {
         };
         match source {
             Source::Fake(fake) => {
-                let _ = fake.write(c.elapsed);
+                fake.write(c.elapsed).ok();
             }
             Source::Device(session) => backend::finish(session),
         }

@@ -127,7 +127,7 @@ fn main() {
         rune::run_windows(|displays| {
             let mut state = init(); state.underlay = true;
             let app = App::new(spec()).init(move || state);
-            if let Ok(seconds) = std::env::var("OVERLAY_LAB_SECONDS").unwrap_or_default().parse::<u64>() {
+            if let Ok(seconds) = rune::env::var("OVERLAY_LAB_SECONDS").unwrap_or_default().parse::<u64>() {
                 let handle = app.handle();
                 std::thread::spawn(move || { std::thread::sleep(std::time::Duration::from_secs(seconds)); handle.quit(); });
             }
@@ -170,7 +170,7 @@ fn main() {
         if std::env::var_os("OVERLAY_LAB_PICKER").is_some() {
             let mut state = init(); state.handles = handles; show_picker(&mut state);
         }
-        if let Ok(seconds) = std::env::var("OVERLAY_LAB_SECONDS").unwrap_or_default().parse::<u64>() {
+        if let Ok(seconds) = rune::env::var("OVERLAY_LAB_SECONDS").unwrap_or_default().parse::<u64>() {
             let app_handle = app.handle();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(750));

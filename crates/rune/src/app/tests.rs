@@ -346,7 +346,7 @@ fn a_hidden_window_drains_its_inbox_on_wake_and_shows_it_when_reopened() {
         tx.wake_after(std::time::Duration::from_secs(60));
         true
     });
-    rt.wall_start = Some(std::time::Instant::now());
+    rt.wall_start = Some(crate::time::now());
     let (send, inbox) = std::sync::mpsc::channel();
     rt.state.inbox = Some(inbox);
     rt.frame(0.0);
@@ -373,7 +373,7 @@ fn a_hidden_window_drains_its_inbox_on_wake_and_shows_it_when_reopened() {
 fn an_update_arriving_without_frames_arms_its_timer() {
     let mut rt = Runtime::new(0_u32, |_: &u32, _: &mut Cx<u32>| el(), (100.0, 100.0), Env { system_dark: true, scale: 1.0 });
     rt.poll = Some(|polls: &mut u32, _, _: &mut Tx| { *polls += 1; false });
-    rt.wall_start = Some(std::time::Instant::now());
+    rt.wall_start = Some(crate::time::now());
     rt.frame(0.0);
     assert_eq!(rt.wake_deadline(), None);
     rt.update(|_, tx| tx.wake_after(std::time::Duration::from_secs(5)));
@@ -388,11 +388,11 @@ fn an_update_arriving_without_frames_arms_its_timer() {
 /// poll or not. The view waits, dirty, for the frame that shows the host.
 #[test]
 fn a_hidden_timer_polls_without_building_the_view() {
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     for with_poll in [true, false] {
         let mut rt = Runtime::new(0_u32, |_: &u32, _: &mut Cx<u32>| el(), (100.0, 100.0), Env { system_dark: true, scale: 1.0 });
         if with_poll { rt.poll = Some(|polls: &mut u32, _, _: &mut Tx| { *polls += 1; true }); }
-        let t0 = Instant::now();
+        let t0 = crate::time::now();
         rt.wall_start = Some(t0);
         rt.frame(0.0);
         let commits = rt.stats.commits;

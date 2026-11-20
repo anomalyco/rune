@@ -80,7 +80,7 @@ impl crate::window::host::Host {
     /// stale, and covers or uncovers it (`Cover::Windows`).
     pub(in crate::window) fn look(&mut self) {
         let Some(w) = self.win.as_mut() else { return };
-        let now = Instant::now();
+        let now = crate::time::now();
         let (look, effect) = w.native.look.step(LookEvent::Frame { now });
         w.native.look = look;
         if effect == LookEffect::None { return; }
@@ -97,7 +97,7 @@ impl crate::window::host::Host {
     /// The pointer reached the window, so some of it shows: no look needed.
     pub(in crate::window) fn sighted(&mut self) {
         if self.win.is_none() { return; }
-        self.look_found(true, false, Instant::now());
+        self.look_found(true, false, crate::time::now());
     }
 
     fn look_found(&mut self, seen: bool, moving: bool, now: Instant) {

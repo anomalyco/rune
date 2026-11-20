@@ -13,7 +13,7 @@ use rune_core::machine::Attempt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, Weak};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// The default input device is checked this many meter ticks apart (about twice a second).
 const DEVICE_CHECK_TICKS: u32 = 15;
@@ -203,11 +203,11 @@ pub(super) fn start(shared: &Arc<Shared>, attempt: Attempt, path: &Path, opts: &
 }
 
 pub(super) fn pause(session: &Session) {
-    let _ = session.commands.send(Command::Pause);
+    session.commands.send(Command::Pause).ok();
 }
 
 pub(super) fn resume(session: &Session) {
-    let _ = session.commands.send(Command::Resume);
+    session.commands.send(Command::Resume).ok();
 }
 
 pub(super) fn stop(session: Session) -> Result<f64, String> {
@@ -222,7 +222,7 @@ pub(super) fn stop(session: Session) -> Result<f64, String> {
 /// it instead, and the thread stops the recorder as soon as its report returns.
 pub(super) fn finish(session: Session) {
     if !ON_RECORDER_THREAD.try_with(|on| on.get()).unwrap_or(true) {
-        let _ = stop(session);
+        stop(session).ok();
     }
 }
 
@@ -240,7 +240,7 @@ pub(super) fn idle_session() -> (Session, Receiver<Command>) {
 pub(super) fn cancel(session: Session) {
     let (reply, done) = mpsc::channel();
     if session.commands.send(Command::Cancel(reply)).is_ok() {
-        let _ = done.recv_timeout(REPLY_PATIENCE);
+        done.recv_timeout(REPLY_PATIENCE).ok();
     }
 }
 
@@ -290,7 +290,7 @@ fn run(weak: Weak<Shared>, attempt: Attempt, path: PathBuf, opts: Options, comma
             let _: () = msg_send![recorder, stop];
         }
     };
-    let (mut meter, mut last, mut ticks, mut paused, mut recorded) = (Meter::default(), Instant::now(), 0u32, false, 0f64);
+    let (mut meter, mut last, mut ticks, mut paused, mut recorded) = (Meter::default(), rune_core::time::now(), 0u32, false, 0f64);
     loop {
         let command = commands.recv_timeout(Recorder::METER_INTERVAL);
         let done = autoreleasepool(|_| match command {
@@ -306,21 +306,21 @@ fn run(weak: Weak<Shared>, attempt: Attempt, path: PathBuf, opts: Options, comma
             Ok(Command::Resume) => {
                 // SAFETY: `recorder` is a live `AVAudioRecorder` on this thread and `-record` returns `BOOL`.
                 let _: Bool = unsafe { msg_send![recorder, record] };
-                (paused, last) = (false, Instant::now());
+                (paused, last) = (false, rune_core::time::now());
                 false
             }
             Ok(Command::Stop(reply)) => {
                 // currentTime reads 0 once stopped.
                 recorded = recorded.max(current_time());
                 stop();
-                let _ = reply.send(Ok(recorded));
+                reply.send(Ok(recorded)).ok();
                 true
             }
             Ok(Command::Cancel(reply)) => {
                 stop();
                 // SAFETY: `recorder` is a stopped `AVAudioRecorder` on this thread and `-deleteRecording` returns `BOOL`.
                 let _: Bool = unsafe { msg_send![recorder, deleteRecording] };
-                let _ = reply.send(());
+                reply.send(()).ok();
                 true
             }
             Err(RecvTimeoutError::Timeout) if paused => false,
@@ -335,7 +335,7 @@ fn run(weak: Weak<Shared>, attempt: Attempt, path: PathBuf, opts: Options, comma
                     (msg_send![recorder, peakPowerForChannel: 0usize], msg_send![recorder, averagePowerForChannel: 0usize], msg_send![recorder, isRecording])
                 };
                 recorded = recorded.max(current_time());
-                let now = Instant::now();
+                let now = rune_core::time::now();
                 meter.push_db(peak, average, (now - last).as_secs_f64());
                 last = now;
                 shared.metered(attempt, meter.level());

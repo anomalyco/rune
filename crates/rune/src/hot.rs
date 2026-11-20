@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, AtomicU64, Ordering}};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
@@ -210,7 +210,7 @@ fn hub() -> &'static Hub {
 
 fn connect() {
     // dioxus-devtools reads the same variables and connects silently, or not at all.
-    let var = |name| std::env::var(name).ok();
+    let var = rune_core::env::var;
     let Some(addr) = var("DIOXUS_DEVSERVER_IP").zip(var("DIOXUS_DEVSERVER_PORT"))
         .and_then(|(ip, port)| Some(std::net::SocketAddr::new(ip.parse().ok()?, port.parse().ok()?)))
     else {
@@ -322,7 +322,7 @@ fn headless<S: 'static>(spec: &AppSpec<S>, state: S, args: Args, runtime: crate:
     let size = args.size.unwrap_or(spec.size);
     let scale = args.scale.unwrap_or(2.0);
     let (wake, sleep) = std::sync::mpsc::channel();
-    let mut rt = runtime_for(spec, state, size, Env { system_dark: args.theme.as_deref() != Some("light"), scale }, Arc::new(move || { let _ = wake.send(()); }));
+    let mut rt = runtime_for(spec, state, size, Env { system_dark: args.theme.as_deref() != Some("light"), scale }, Arc::new(move || { wake.send(()).ok(); }));
     rt.configure(runtime);
     let state_addr = format!("{:p}", crate::runtime::handler_state_ref(&rt.state) as *const dyn Any as *const ());
     let (core, mut app) = rt.split_mut();
@@ -350,10 +350,10 @@ fn headless_core(
     let mut first = true;
     let mut paused = false;
     let mut command = Value::Null;
-    let mut previous = Instant::now();
+    let mut previous = crate::time::now();
     let mut woken = true;
     loop {
-        let now = Instant::now();
+        let now = crate::time::now();
         let elapsed = (now - previous).as_secs_f64();
         // `None`: a frame `elapsed` after the last, under the shared frame rule.
         let mut fixed = (first || paused).then_some(0.0);
@@ -398,7 +398,7 @@ fn headless_core(
             target.copy(&mut enc);
             gpu.queue.submit([enc.finish()]);
             let pixels = target.read(&gpu.device);
-            let pixels_ns = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+            let pixels_ns = crate::time::system_now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
             let temp = png.with_extension("tmp.png");
             if let Some(parent) = temp.parent() { std::fs::create_dir_all(parent).unwrap(); }
             let mut encoder = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(&temp).unwrap()), w, h);

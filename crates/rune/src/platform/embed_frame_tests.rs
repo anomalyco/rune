@@ -9,7 +9,7 @@ const FRAME_60HZ: Duration = Duration::from_micros(16_667);
 #[test]
 fn compositor_animating_keeps_real_frame_gap_instead_of_clamping_to_resume_step() {
     fn view(_: &(), _: &mut Cx<()>) -> El { el().size(40.0, 20.0) }
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut clock = FrameClock::new(start);
     let mut rt = Runtime::new((), view, (40.0, 20.0), Env::default());
     rt.wall_start = Some(start);
@@ -40,7 +40,7 @@ fn post_present_delays_overrunning_new_motion_and_reports_stale_and_requests_dro
     fn view(s: &S, _: &mut Cx<S>) -> El {
         el().child(el().key("box").size(s.width, 8.0))
     }
-    let start = Instant::now();
+    let start = crate::time::now();
     let overrun = Duration::from_millis(50);
 
     let run = |with_present: bool| {
@@ -90,7 +90,7 @@ fn missed_step_runs_poll_without_advancing_frame_clock() {
     #[derive(Default)]
     struct S { polls: u32 }
     fn view(_: &S, _: &mut Cx<S>) -> El { el() }
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut clock = FrameClock::new(start);
     let mut rt = Runtime::new(S::default(), view, (40.0, 20.0), Env::default());
     rt.poll = Some(|s, _, _| { s.polls += 1; false });
@@ -197,7 +197,7 @@ impl EmbedSurface for MockEmbedSurface {
 
     fn submit_and_present(&mut self, prepared: u32) -> Instant {
         self.log.push(format!("present:{prepared}"));
-        Instant::now()
+        crate::time::now()
     }
 
     fn clock_and_rt_mut(&mut self) -> (&mut FrameClock, &mut RuntimeCore) {
@@ -213,7 +213,7 @@ impl EmbedSurface for MockEmbedSurface {
 
 #[test]
 fn run_embed_frame_follows_shared_acquire_step_reblend_present_order() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut surface = MockEmbedSurface::new(start);
     surface.rt.state.switch_blend = true;
     surface.acquires = std::collections::VecDeque::from([Acquire::Ready(1), Acquire::Ready(2)]);
@@ -227,7 +227,7 @@ fn run_embed_frame_follows_shared_acquire_step_reblend_present_order() {
 
 #[test]
 fn run_embed_frame_suspended_touches_nothing() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut surface = MockEmbedSurface::new(start);
     surface.suspended = true;
     let out = run_embed_frame(&mut surface);
@@ -237,7 +237,7 @@ fn run_embed_frame_suspended_touches_nothing() {
 
 #[test]
 fn run_embed_frame_post_step_reblend_miss_preserves_stale_and_live_pending_without_double_step() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let mut surface = MockEmbedSurface::new(start);
     surface.rt.state.switch_blend = true;
     surface.reblend_succeeds = false;

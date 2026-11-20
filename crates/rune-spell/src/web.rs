@@ -145,7 +145,7 @@ pub(super) fn learn(word: &str) {
             if active.iter().any(|wanted| super::tags_match(tag, wanted))
                 && let Dict::Ready(d) = d
             {
-                let _ = d.add(word);
+                d.add(word).ok();
             }
         }
     });

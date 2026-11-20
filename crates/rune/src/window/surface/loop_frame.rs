@@ -25,6 +25,6 @@ pub(in crate::window) fn forced_miss() -> bool {
     use std::sync::atomic::{AtomicU64, Ordering};
     static EVERY: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     static SEEN: AtomicU64 = AtomicU64::new(0);
-    let every = *EVERY.get_or_init(|| std::env::var("RUNE_MISS_LOOP_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(0));
+    let every = *EVERY.get_or_init(|| rune_core::env::var("RUNE_MISS_LOOP_FRAMES").and_then(|v| v.parse().ok()).unwrap_or(0));
     every > 0 && SEEN.fetch_add(1, Ordering::Relaxed) % every == every - 1
 }

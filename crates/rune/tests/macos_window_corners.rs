@@ -17,7 +17,7 @@ mod mac {
     use rune::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{mpsc, Mutex, OnceLock};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     struct State { frame: u32 }
 
@@ -42,7 +42,7 @@ mod mac {
         let method = AnyClass::get(c"NSWindow").and_then(|c| c.instance_method(sel!(invalidateShadow))).expect("NSWindow.invalidateShadow");
         // SAFETY: the replacement has the method's signature and calls through to the original.
         let original = unsafe { method.set_implementation(std::mem::transmute::<unsafe extern "C" fn(*mut AnyObject, Sel), Imp>(counted)) };
-        let _ = ORIGINAL.set(original as usize);
+        ORIGINAL.set(original as usize).ok();
     }
 
     fn view(s: &State, _: &mut Cx<State>) -> El {
@@ -50,7 +50,7 @@ mod mac {
     }
 
     fn wait(what: &str, f: impl Fn() -> bool) {
-        let start = Instant::now();
+        let start = rune::time::now();
         while !f() {
             assert!(start.elapsed() < Duration::from_secs(5), "timed out waiting for {what}");
             std::thread::sleep(Duration::from_millis(5));
@@ -100,7 +100,7 @@ mod mac {
         let window = &WINDOW;
         let (ready_tx, ready_rx) = mpsc::channel();
         let app = App::new(spec).args(Vec::new()).keep_running().configured_options(options)
-            .on_ready(move |w| { let _ = window.set(w.clone()); let _ = ready_tx.send(()); });
+            .on_ready(move |w| { window.set(w.clone()).ok(); ready_tx.send(()).ok(); });
         let handle = app.handle();
         let result = std::sync::Arc::new(Mutex::new(None));
         let out = result.clone();
@@ -108,7 +108,7 @@ mod mac {
             let run = std::panic::catch_unwind(|| {
                 ready_rx.recv_timeout(Duration::from_secs(10)).expect("window ready");
                 let (tx, rx) = mpsc::channel();
-                handle.update(move |_, _| { let _ = tx.send(read(window.get().unwrap())); });
+                handle.update(move |_, _| { tx.send(read(window.get().unwrap())).ok(); });
                 let readback = rx.recv_timeout(Duration::from_secs(5)).expect("readback");
                 println!("macos_window_corners: layer {readback:?}");
                 assert_eq!(readback.radius, 16.0);

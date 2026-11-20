@@ -107,7 +107,7 @@ pub(crate) fn repaint_owed(window: &winit::window::Window) -> bool {
 /// since. Returns how many it raised.
 pub(crate) fn unidle_d3d_threads_soon() {
     static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| { let _ = std::thread::Builder::new().name("rune-unidle".into()).spawn(|| { unidle_d3d_threads(); std::thread::sleep(std::time::Duration::from_secs(2)); unidle_d3d_threads(); }); });
+    ONCE.call_once(|| { std::thread::Builder::new().name("rune-unidle".into()).spawn(|| { unidle_d3d_threads(); std::thread::sleep(std::time::Duration::from_secs(2)); unidle_d3d_threads(); }).ok(); });
 }
 
 /// This process's threads by name and priority, counted (`name (priority) xN`, unnamed ones as

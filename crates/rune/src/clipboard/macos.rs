@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn rtf_becomes_html_off_the_main_thread() {
         let (send, recv) = std::sync::mpsc::channel();
-        std::thread::spawn(move || { let _ = send.send(rtf_to_html(RTF.as_bytes())); });
+        std::thread::spawn(move || { send.send(rtf_to_html(RTF.as_bytes())).ok(); });
         let html = recv.recv_timeout(std::time::Duration::from_secs(20)).expect("conversion finished").expect("converted");
         let text: String = super::super::sanitize_html(&html);
         assert!(text.contains("Hello") && text.contains("bold") && text.contains("café"), "{text}");
@@ -316,7 +316,7 @@ mod tests {
     #[test]
     fn tiff_becomes_png_off_the_main_thread() {
         let (send, recv) = std::sync::mpsc::channel();
-        std::thread::spawn(move || { let _ = send.send(tiff_to_png(&tiff_of(&png_2x3())).map(|i| (i.size(), i.png().starts_with(b"\x89PNG")))); });
+        std::thread::spawn(move || { send.send(tiff_to_png(&tiff_of(&png_2x3())).map(|i| (i.size(), i.png().starts_with(b"\x89PNG")))).ok(); });
         let converted = recv.recv_timeout(std::time::Duration::from_secs(20)).expect("conversion finished");
         assert_eq!(converted, Some(((2, 3), true)));
         assert!(tiff_to_png(b"not a tiff").is_none());

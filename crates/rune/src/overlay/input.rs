@@ -217,7 +217,7 @@ impl OverlayCore {
         if let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut() { layer.commit(); }
     }
 
-    pub(super) fn advance(&mut self, app: &mut dyn OverlayApp) { self.advance_at(app, Instant::now()); }
+    pub(super) fn advance(&mut self, app: &mut dyn OverlayApp) { self.advance_at(app, crate::time::now()); }
 
     /// An overlay that draws nothing delivers queued input without drawing, such as the
     /// releases of the modifier keys held when it hid, rather than when it next shows.
@@ -350,7 +350,7 @@ impl OverlayCore {
     /// without drawing, as a hidden overlay does, unless it already `stepped`. The next try
     /// waits, with the display link stopped so no tick tries sooner.
     pub(super) fn missed(&mut self, app: &mut dyn OverlayApp, missed: crate::window::Missed, paced: bool, stepped: bool) {
-        let now = Instant::now();
+        let now = crate::time::now();
         self.quiet.step(frame::QuietEvent::Forget);
         self.turn_frame.step(frame::TurnEvent::FrameMissed);
         if stepped {

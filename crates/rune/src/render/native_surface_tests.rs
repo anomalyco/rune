@@ -122,7 +122,7 @@ fn video_interleaves_with_renderer_springs_and_external_timing_on(gpu: Gpu) {
         let (done, completion) = std::sync::mpsc::channel();
         surface.set_observer(Arc::new(move |t| {
             if t.completed_at.is_some() {
-                let _ = done.send(t);
+                done.send(t).ok();
             }
         }));
         renderer.prepare_surfaces(&gpu.device, &gpu.queue, &rt.surfaces, (16, 8));

@@ -81,10 +81,10 @@ struct HeadlessConfig {
 fn wait_for_profiler() -> Instant {
     // RUNE_HEADLESS_WAIT=SECS holds the run before it starts, so a sampling profiler can attach.
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(secs) = std::env::var("RUNE_HEADLESS_WAIT").ok().and_then(|s| s.parse::<f64>().ok()) {
+    if let Some(secs) = rune_core::env::var("RUNE_HEADLESS_WAIT").and_then(|s| s.parse::<f64>().ok()) {
         std::thread::sleep(std::time::Duration::from_secs_f64(secs));
     }
-    Instant::now()
+    crate::time::now()
 }
 
 fn single_window_list_only(args: &Args) -> bool {
@@ -196,7 +196,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
     let Timeline { fps, dt, start_frame, frames, snap_frame, last_frame } = timeline;
     reports.set_refresh(Some(fps));
 
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let features = app.compositor_features();
     let gpu = Gpu::try_with_features(Gpu::instance_for(features), None, features).unwrap_or_else(|e| die(&e));
     let srgb_blend = app.rt().srgb_blend();
@@ -229,7 +229,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
     let mut strip: Vec<Vec<u8>> = Vec::new();
     let crops_px: Vec<[u32; 4]> = args.crops.iter().map(|c| c.map(|v| (v * scale).round() as u32)).collect();
     let gap = (4.0 * scale) as u32;
-    let wall = Instant::now();
+    let wall = crate::time::now();
     let mut next_ev = 0;
     let mut last_down = (0.0f32, 0.0f32);
     // Events at t = 0 find keys and hit elements in a laid-out first frame, as input reaches a
@@ -338,7 +338,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
             let ahead = real_t - wall.elapsed().as_secs_f64();
             if ahead > 0.0 { std::thread::sleep(std::time::Duration::from_secs_f64(ahead)); }
         }
-        let frame_start = Instant::now();
+        let frame_start = crate::time::now();
         let script_before = next_ev;
         #[cfg(feature = "frame-profile")]
         let events0 = next_ev;
@@ -357,7 +357,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
                 Kind::Mark(name) if args.realtime => {
                     use std::io::Write as _;
                     println!("rune-mark {name} {}", e.t);
-                    let _ = std::io::stdout().flush();
+                    std::io::stdout().flush().ok();
                 }
                 Kind::Mark(_) => {}
                 // The one window always shows here.

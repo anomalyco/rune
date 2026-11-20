@@ -6,7 +6,6 @@ use rune::{
     text::TextSystem,
 };
 use rune_motion::{AnimationStore, NodeId, Prop, PropClass, Spring};
-use std::time::Instant;
 use wgpu::util::DeviceExt;
 
 fn buffer(device: &wgpu::Device, size: u64, usage: wgpu::BufferUsages) -> wgpu::Buffer {
@@ -271,7 +270,7 @@ fn bench(gpu: &Gpu, timing: bool) {
                 let mut gpu_times = Vec::new();
                 for frame in 0..120 {
                     let now = frame as f64 / 120.0;
-                    let start = Instant::now();
+                    let start = rune::time::now();
                     let renderer = if path == 0 {
                         store.tick_at(now);
                         for (i, inst) in instances.iter_mut().enumerate() {

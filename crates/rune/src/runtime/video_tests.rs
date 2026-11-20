@@ -199,7 +199,7 @@ fn serve_with_auth(body: Vec<u8>, content_type: &'static str) -> (String, Arc<st
                     }
                     if !authorized {
                         count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        let _ = stream.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n");
+                        stream.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n").ok();
                         continue;
                     }
                     let len = body.len();

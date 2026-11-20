@@ -214,7 +214,7 @@ impl VideoLayers {
         if self.entries.len() != before
             && let Some(h) = handover
         {
-            let _ = h.commit();
+            h.commit().ok();
         }
         self.follow_alpha(wanted || self.hold, premultiplied, handover.is_some());
         out
@@ -234,7 +234,7 @@ impl VideoLayers {
             release(handover, &e);
         }
         if let Some(h) = handover {
-            let _ = h.commit();
+            h.commit().ok();
         }
     }
 
@@ -250,7 +250,7 @@ impl VideoLayers {
         if !handed {
             return;
         }
-        let now = Instant::now();
+        let now = crate::time::now();
         if wanted {
             self.unused_since = None;
             if !premultiplied {

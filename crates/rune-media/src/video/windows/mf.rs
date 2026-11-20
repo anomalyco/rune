@@ -196,7 +196,7 @@ pub(super) fn open(lib: &Library, source: &IMFMediaSource, kind: Kind, decode: D
     let reader = lib.reader(source, &attributes)?;
     // SAFETY: stream selection and type negotiation on the reader this thread made.
     unsafe {
-        let _ = reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false);
+        reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false).ok();
         let (video, audio_index) = streams(&reader);
         let (video, picture) = match video.filter(|_| kind == Kind::Video) {
             Some(index) => {
@@ -254,7 +254,7 @@ unsafe fn sound(lib: &Library, reader: &IMFSourceReader, index: u32) -> Result<S
         wanted.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio).map_err(|e| e.message())?;
         wanted.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_Float).map_err(|e| e.message())?;
         if let Err(e) = reader.SetCurrentMediaType(index, None, &wanted) {
-            let _ = reader.SetStreamSelection(index, false);
+            reader.SetStreamSelection(index, false).ok();
             return Err(no_decoder(e, "audio"));
         }
         let current = reader.GetCurrentMediaType(index).map_err(|e| e.message())?;
@@ -418,8 +418,8 @@ pub(super) fn nv12_bytes(sample: &IMFSample, picture: &Picture) -> Result<ByteFr
             chroma.extend_from_slice(std::slice::from_raw_parts(uv.add(row * pitch + x), w));
         }
         match &two_d {
-            Some(b) if locked => { let _ = b.Unlock2D(); }
-            _ => { let _ = buffer.Unlock(); }
+            Some(b) if locked => { b.Unlock2D().ok(); }
+            _ => { buffer.Unlock().ok(); }
         }
         Ok(ByteFrame { width: w as u32, height: h as u32, format: picture.format, color: picture.color, planes: [luma, chroma] })
     }

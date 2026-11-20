@@ -5,7 +5,7 @@ use rune::{Cx, El, Env, GrowthSpec, Runtime, ScrollSpec, col, text};
 
 struct Counting;
 thread_local! { static ALLOCS: Cell<usize> = const { Cell::new(0) }; }
-fn bump() { let _ = ALLOCS.try_with(|c| c.set(c.get() + 1)); }
+fn bump() { ALLOCS.try_with(|c| c.set(c.get() + 1)).ok(); }
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: Layout) -> *mut u8 { bump(); unsafe { System.alloc(l) } }
     unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 { bump(); unsafe { System.alloc_zeroed(l) } }

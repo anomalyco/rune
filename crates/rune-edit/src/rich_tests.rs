@@ -374,7 +374,7 @@ fn html_parsing_is_linear_on_hostile_input() {
         "<a href=\"".to_owned() + &"&#x6a;".repeat(n) + "\">x</a>",
     ];
     for html in &cases {
-        let t = std::time::Instant::now();
+        let t = rune_core::time::now();
         let e = TextEdit::from_html(html);
         assert_invariants(&e, &html[..20]);
         let _ = e.to_html();
@@ -639,12 +639,12 @@ fn undo_groups_keep_typing_coalescing_and_record_nothing_when_empty() {
 #[test]
 fn undo_group_is_unwind_safe_and_interacts_with_clear_history_paste_and_soft_breaks() {
     let mut e = TextEdit::new("base").rich();
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         e.undo_group(|e| {
             e.insert("!");
             panic!("boom");
         });
-    }));
+    })).ok();
     assert!(!e.group.is_open(), "unwinding clears the active group");
     e.insert("?");
     assert_eq!(e.history.undo.len(), 1, "edits after a caught panic record again");
@@ -655,12 +655,12 @@ fn undo_group_is_unwind_safe_and_interacts_with_clear_history_paste_and_soft_bre
     e.clear_history();
     e.undo_group(|e| {
         e.insert("1");
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             e.undo_group(|e| {
                 e.insert("2");
                 panic!("nested boom");
             });
-        }));
+        })).ok();
         e.insert("3");
     });
     assert_eq!((e.text.as_str(), e.history.undo.len()), ("base!123", 1));

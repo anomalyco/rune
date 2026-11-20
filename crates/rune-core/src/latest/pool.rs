@@ -96,7 +96,7 @@ impl<T: Send + 'static> Drive for Inner<T> {
                 slot.driven = false;
                 return;
             };
-            let (due, now) = (job.due, crate::time::Instant::now());
+            let (due, now) = (job.due, crate::time::now());
             if due <= now {
                 slot.driven = false;
                 break slot.start().expect("a waiting request");

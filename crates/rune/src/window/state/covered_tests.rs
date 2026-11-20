@@ -2,7 +2,6 @@ use std::cell::Cell;
 use std::time::Duration;
 
 use crate::runtime::Runtime;
-use crate::time::Instant;
 use crate::window::covered_step;
 use crate::{Cx, El, Env, Spring, el, text};
 
@@ -27,7 +26,7 @@ fn shown_text(rt: &Runtime<Chat>) -> Option<String> {
 fn a_covered_window_builds_nothing_until_it_uncovers() {
     let mut rt = Runtime::new(Chat::default(), view, (200.0, 50.0), Env { system_dark: true, scale: 1.0 });
     rt.poll = Some(|chat, _, _| { chat.polls += 1; let unread = chat.read < chat.messages; chat.read = chat.messages; unread });
-    let start = Instant::now();
+    let start = crate::time::now();
     rt.wall_start = Some(start);
     rt.frame(0.0);
     assert_eq!(shown_text(&rt).as_deref(), Some("0 0"));

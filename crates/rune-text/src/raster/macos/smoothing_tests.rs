@@ -420,7 +420,7 @@ fn sf_corpus() {
     };
     let data = std::fs::read("/System/Library/Fonts/SFNS.ttf").unwrap();
     let font = FontRef::from_index(&data, 0).unwrap();
-    let stem: Option<f64> = std::env::var("SF_STEM").ok().and_then(|v| v.parse().ok());
+    let stem: Option<f64> = rune_core::env::var("SF_STEM").and_then(|v| v.parse().ok());
     let mut cx = ScaleContext::new();
     let coords = |p: &Value| -> Vec<i16> {
         font.variations().normalized_coords([("opsz", p["opsz"].as_f64().unwrap() as f32), ("wght", p["wght"].as_f64().unwrap() as f32)]).collect()
@@ -499,7 +499,6 @@ fn sf_corpus() {
 #[test]
 #[ignore = "timing; run in release"]
 fn rasterize_cost() {
-    use std::time::Instant;
     let font = FontRef::from_index(INTER, 0).unwrap();
     let mut cx = ScaleContext::new();
     let text = "The quick brown fox jumps over the lazy dog. SPHINX OF BLACK QUARTZ, JUDGE MY VOW! 0123456789 @&%?";
@@ -515,7 +514,7 @@ fn rasterize_cost() {
         let mut smoothing = Smoothing::default();
         smoothing.set_pipeline(ApplePipeline::SMOOTHED);
         let mut per_bucket = [0usize; 5];
-        let start = Instant::now();
+        let start = rune_core::time::now();
         for _ in 0..rounds {
             for &g in &glyphs {
                 for subpx in 0..4 {
@@ -527,7 +526,7 @@ fn rasterize_cost() {
         }
         let new = start.elapsed().as_secs_f64() * 1e6 / n;
         smoothing.set_pipeline(ApplePipeline::UNSMOOTHED);
-        let start = Instant::now();
+        let start = rune_core::time::now();
         for _ in 0..rounds {
             for &g in &glyphs {
                 for subpx in 0..4 {

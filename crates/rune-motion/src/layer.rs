@@ -258,6 +258,10 @@ mod bench {
     use std::hint::black_box;
     use std::time::Instant;
 
+    // rune-motion has no Rune dependencies; this benchmark runs natively.
+    #[allow(clippy::disallowed_methods)]
+    fn now() -> Instant { Instant::now() }
+
     #[test]
     #[ignore]
     fn bench_layer_kinds() {
@@ -267,7 +271,7 @@ mod bench {
                 .map(|i| Layer::spring(s, 0.0, -100.0 - (i % 13) as f32, 0.0, Eps { pos: 1e-3, vel: 1e-2 }))
                 .collect();
             let mut out = vec![0.0f32; n];
-            let t0 = Instant::now();
+            let t0 = now();
             for f in 0..120 {
                 let now = f as f64 / 120.0;
                 for (o, l) in out.iter_mut().zip(&layers) {
@@ -279,7 +283,7 @@ mod bench {
             println!("{name}: {:.2} ns/lane", t0.elapsed().as_nanos() as f64 / (120 * n) as f64);
         }
         let xs: Vec<f32> = (0..n).map(|i| -(i as f32) * 1e-4).collect();
-        let t0 = Instant::now();
+        let t0 = now();
         let mut acc = 0.0;
         for _ in 0..120 {
             for &x in &xs {
@@ -288,7 +292,7 @@ mod bench {
         }
         black_box(acc);
         println!("exp: {:.2} ns", t0.elapsed().as_nanos() as f64 / (120 * n) as f64);
-        let t0 = Instant::now();
+        let t0 = now();
         for _ in 0..120 {
             for &x in &xs {
                 let (s, c) = sin_cos(black_box(x * 100.0));

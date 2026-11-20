@@ -611,7 +611,7 @@ fn clicking_centered_end_aligned_rtl_and_multiline_inputs_hits_drawn_glyphs() {
     rt.secondary_up(pt2.0, pt2.1);
     rt.frame(1.0 / 60.0);
     assert_eq!(rt.state.centered.focus, 2, "centered field_menu right-click at drawn byte 2");
-    let _ = rt.resolve_popup(None);
+    rt.resolve_popup(None).ok();
 
     // End-aligned single-line input: click at byte 2.
     let pt = drawn_byte_pt(&rt, "end", 2);

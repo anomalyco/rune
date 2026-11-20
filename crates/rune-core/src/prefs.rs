@@ -130,7 +130,7 @@ fn load(path: &Path) -> BTreeMap<String, Value> {
     if let Ok(values) = serde_json::from_slice(&bytes) { return values; }
     let mut bad = path.as_os_str().to_owned();
     bad.push(".bad");
-    if std::fs::rename(path, &bad).is_err() { let _ = std::fs::write(&bad, &bytes); }
+    if std::fs::rename(path, &bad).is_err() { std::fs::write(&bad, &bytes).ok(); }
     BTreeMap::new()
 }
 
@@ -151,7 +151,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         drop(file);
         std::fs::rename(&tmp, path)
     })();
-    if result.is_err() { let _ = std::fs::remove_file(&tmp); }
+    if result.is_err() { std::fs::remove_file(&tmp).ok(); }
     result
 }
 

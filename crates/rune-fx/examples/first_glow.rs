@@ -6,14 +6,13 @@
 
 use rune::render::{Gpu, Offscreen};
 use rune_fx::*;
-use std::time::Instant;
 
 fn main() {
     let gpu = Gpu::headless();
     let format = wgpu::TextureFormat::Bgra8UnormSrgb;
     let target = Offscreen::with_format(&gpu.device, 96, 96, format);
     let layers = [Fx::glow(GlowParams::default()).on(Shape::rounded(24.0, 24.0, 48.0, 48.0, 8.0))];
-    let start = Instant::now();
+    let start = rune::time::now();
     let mut fx = FxRenderer::new(&gpu.device, format, FxOptions::default());
     let new = start.elapsed();
     fx.add_format(&gpu.device, wgpu::TextureFormat::Rgba16Float);

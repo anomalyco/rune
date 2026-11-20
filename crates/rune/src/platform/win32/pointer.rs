@@ -43,7 +43,7 @@ impl MouseWatch {
                 let id = windows_sys::Win32::System::Threading::GetCurrentThreadId();
                 let hook = SetWindowsHookExW(WH_MOUSE_LL, Some(hook), windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(std::ptr::null()), 0);
                 running.store(!hook.is_null(), Ordering::Release);
-                let _ = ready.send(id);
+                ready.send(id).ok();
                 if !hook.is_null() {
                     while GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) > 0 {
                         TranslateMessage(&message);
@@ -96,7 +96,7 @@ impl Drop for MouseWatch {
         if let Some((id, thread)) = thread {
             // SAFETY: `id` is the non-zero Win32 thread ID of the still-unjoined hook thread whose message queue was created before `id` was sent.
             if id != 0 { unsafe { PostThreadMessageW(id, WM_QUIT, 0, 0); } }
-            let _ = thread.join();
+            thread.join().ok();
         }
     }
 }

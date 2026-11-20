@@ -115,7 +115,7 @@ static ORDERLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 /// `last` or its quit hooks. Set it once, before the app runs; a later call does nothing. On the
 /// web the page's own lifetime applies instead.
 pub fn fast_exit(last: fn()) {
-    let _ = FAST_EXIT.set(last);
+    FAST_EXIT.set(last).ok();
 }
 
 /// Tears the process down in order when the app quits instead of ending it at once (the default,
@@ -197,11 +197,11 @@ const QUIT_REPORT_EVERY: std::time::Duration = std::time::Duration::from_secs(3)
 
 #[cfg(not(target_arch = "wasm32"))]
 fn watch_quit() {
-    let started = std::time::Instant::now();
-    let _ = std::thread::Builder::new().name("rune-quit-watch".into()).spawn(move || loop {
+    let started = crate::time::now();
+    std::thread::Builder::new().name("rune-quit-watch".into()).spawn(move || loop {
         std::thread::sleep(QUIT_REPORT_EVERY);
         eprintln!("rune: still quitting {} ms after the quit started: {}", started.elapsed().as_millis(), where_the_quit_is());
-    });
+    }).ok();
 }
 
 /// Ends the process `after` from now if it's still alive then, saying on stderr what it was
@@ -210,12 +210,12 @@ fn watch_quit() {
 /// that a quit always ends.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn exit_deadline(after: std::time::Duration) {
-    let _ = std::thread::Builder::new().name("rune-exit-deadline".into()).spawn(move || {
+    std::thread::Builder::new().name("rune-exit-deadline".into()).spawn(move || {
         std::thread::sleep(after);
         eprintln!("rune: the quit didn't end within {} ms of the app's last step, so the process ends itself: {}", after.as_millis(), where_the_quit_is());
         crate::marks::mark("quit.deadline");
         end_process();
-    });
+    }).ok();
 }
 
 /// The quit's last step reached and how long ago, and the process's threads.

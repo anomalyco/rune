@@ -119,7 +119,7 @@ impl Win {
 
     /// Asks for a frame: now, or at the turn's end while the window paints (`Redraw`).
     #[cfg_attr(feature = "frame-profile", track_caller)]
-    pub(in crate::window) fn request_redraw(&self) { self.redraw_step(RedrawEvent::Ask(Instant::now())); }
+    pub(in crate::window) fn request_redraw(&self) { self.redraw_step(RedrawEvent::Ask(crate::time::now())); }
 
     #[cfg_attr(feature = "frame-profile", track_caller)]
     pub(in crate::window) fn redraw_step(&self, event: RedrawEvent) {
@@ -158,7 +158,7 @@ impl Win {
 
 #[test]
 fn launcher_first_frame_holds_reveal_and_hide_cancels_late_completion() {
-    let now = Instant::now();
+    let now = crate::time::now();
     let mut frame = FirstFrame::default();
     frame.prepare(now);
     assert!(!frame.request_reveal(false, false, now));
@@ -178,7 +178,7 @@ fn launcher_first_frame_holds_reveal_and_hide_cancels_late_completion() {
 
 #[test]
 fn launcher_stale_reveal_waits_for_an_unsettled_hidden_frame() {
-    let now = Instant::now();
+    let now = crate::time::now();
     let mut frame = FirstFrame::drawn_notified();
     assert!(!frame.complete());
     assert!(frame.request_reveal(false, false, now), "unchanged state reveals the cached frame at once");
@@ -207,7 +207,7 @@ fn launcher_stale_reveal_waits_for_an_unsettled_hidden_frame() {
 
 #[test]
 fn launcher_refresh_with_no_drawable_retries_and_never_reveals_stale_pixels() {
-    let now = Instant::now();
+    let now = crate::time::now();
     let mut frame = FirstFrame::drawn_notified();
     let mut backoff = Backoff::default();
     let missed = |frame: &mut FirstFrame, backoff: &mut Backoff| {
@@ -245,7 +245,7 @@ impl Win {
         // What it presented before it was hidden is gone, or never was: cloaked until it draws.
         #[cfg(target_os = "windows")]
         {
-            self.native.cloak.hold(&self.window, Instant::now() + READY_FALLBACK, false);
+            self.native.cloak.hold(&self.window, crate::time::now() + READY_FALLBACK, false);
             self.request_redraw();
         }
         self.window.set_visible(true);
@@ -373,7 +373,7 @@ impl Win {
 /// when no frame comes at all; a window on screen still runs it after its first frame.
 #[test]
 fn on_ready_runs_for_a_window_launched_occluded_or_hidden() {
-    let now = Instant::now();
+    let now = crate::time::now();
     let ms = Duration::from_millis;
     let mut shown = FirstFrame::opened(now);
     assert!(!shown.ready_due(now + ms(16)), "a window on screen waits for its first frame");

@@ -353,26 +353,26 @@ fn tree_time() {
     use std::time::Instant;
     let ms = |t: Instant| t.elapsed().as_secs_f64() * 1e3;
     for run in 0..3 {
-        let t = Instant::now();
+        let t = rune::time::now();
         let files = big();
         let model = ms(t);
-        let t = Instant::now();
+        let t = rune::time::now();
         let mut rt = Runtime::new(App { files, picked: Vec::new(), opened: Vec::new() }, bench_view, (360.0, 900.0), Env::new(true, 2.0));
         rt.frame(0.0);
         let first = ms(t);
         let mut frames = Vec::new();
         for f in 1..=600 {
             rt.wheel(180.0, 450.0, -48.0);
-            let t = Instant::now();
+            let t = rune::time::now();
             rt.frame(f as f64 / 120.0);
             frames.push(ms(t));
         }
         let built = rows(&rt).len();
-        let t = Instant::now();
+        let t = rune::time::now();
         rt.update(|s, tx| { s.files.reveal("pkg499/file99.rs", tx); });
         rt.frame(5.1);
         let end = ms(t);
-        let t = Instant::now();
+        let t = rune::time::now();
         rt.update(|s, _| s.files.filter(|n| n.name.ends_with("7.rs")));
         rt.frame(5.2);
         let filter = ms(t);

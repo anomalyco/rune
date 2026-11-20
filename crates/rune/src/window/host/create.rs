@@ -8,7 +8,6 @@ use winit::window::Window;
 
 use super::Host;
 use crate::render::{Gpu, Renderer};
-use crate::time::Instant;
 #[cfg(target_os = "windows")]
 use crate::window::chrome;
 use crate::window::chrome::{frame_chrome, place_chrome, sync_chrome_core};
@@ -93,7 +92,7 @@ impl Host {
         #[cfg(target_os = "windows")]
         if visible && !cpu_first {
             // Unfocused (`App::open_inactive`), it never activates.
-            cloak.hold(&window, Instant::now() + win::READY_FALLBACK, focus);
+            cloak.hold(&window, crate::time::now() + win::READY_FALLBACK, focus);
             window.set_visible(true);
             chrome::open_as(&window, open_as);
         }
@@ -274,7 +273,7 @@ impl Host {
         };
         // Making the GPU and surface took part of the cloak's wait; the frame gets all of it.
         #[cfg(target_os = "windows")]
-        cloak.extend(Instant::now() + win::READY_FALLBACK);
+        cloak.extend(crate::time::now() + win::READY_FALLBACK);
         #[cfg(target_os = "windows")]
         let native = {
             Native { cloak, frame, a11y_start, ..Default::default() }
@@ -284,7 +283,7 @@ impl Host {
         self.win = Some(Win {
             a11y,
             native,
-            first_frame: FirstFrame::opened(Instant::now()),
+            first_frame: FirstFrame::opened(crate::time::now()),
             surface: Some(surface),
             config,
             surface_ok: true,
@@ -302,7 +301,7 @@ impl Host {
             covered_draw: CoveredDraw::Current,
             redraw: std::cell::Cell::new(Redraw::Idle),
         });
-        if launcher { self.win.as_mut().unwrap().first_frame.prepare(Instant::now()); }
+        if launcher { self.win.as_mut().unwrap().first_frame.prepare(crate::time::now()); }
         self.apply_placement(event_loop);
         #[cfg(target_os = "macos")]
         if visible && let Some(w) = &self.win && w.native.panel.is_some() { w.show(focus); }
@@ -514,7 +513,7 @@ impl Host {
         let lost = self.gpu.as_ref().is_none_or(|(gpu, _)| gpu.is_lost());
         let surface_missing = self.win.as_ref().is_some_and(|w| !w.surface_ok || w.surface.is_none());
         if !lost && !surface_missing { return true; }
-        let now = Instant::now();
+        let now = crate::time::now();
         let Some(step) = self.win.as_mut().map(|w| w.surface_retries.attempt()) else { return false };
         if step == SurfaceStep::GiveUp {
             return self.give_up_surface(format!("the window's GPU surface was replaced {SURFACE_TRIES} times without a frame reaching the screen"));

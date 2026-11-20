@@ -4,7 +4,6 @@
 //! `Tx::select_all_text` over a virtual list, `Tx::select_text` on an unbuilt row, and bounded
 //! off-screen collection.
 use std::cell::Cell;
-use std::time::Instant;
 
 use crate::runtime::ElementInfo;
 use crate::{Cx, El, Env, GrowthSpec, Key, KeyEvent, Mods, PhysicalInput, Runtime, ScrollSpec, TextStyle, col, row, text};
@@ -350,7 +349,7 @@ fn offscreen_collection_is_bounded_in_rows_and_bytes() {
     );
 
     BUILT_ROWS.set(0);
-    let start = Instant::now();
+    let start = crate::time::now();
     let copied = rt.selected_text().expect("bounded copy returns prefix");
     let elapsed = start.elapsed();
     let built_on_copy = BUILT_ROWS.get();

@@ -56,7 +56,7 @@ fn chosen() -> Option<GpuBackend> {
 }
 
 fn env() -> Option<String> {
-    std::env::var("RUNE_GPU_BACKEND").ok()
+    rune_core::env::var("RUNE_GPU_BACKEND")
 }
 
 /// The backend GPUs are made with: `RUNE_GPU_BACKEND` (`wgpu` or `metal`) over the app's

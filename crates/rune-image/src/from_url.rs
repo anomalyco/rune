@@ -101,7 +101,7 @@ pub(super) async fn land_in_slices(url: &str, fetched: Fetched, px: u32) -> Resu
     };
     let mut steps = super::mips::MipSteps::new(w, h, &bytes).map_err(named)?;
     while !steps.step(SLICE) {
-        let _ = wasm_bindgen_futures::JsFuture::from(next_task()).await;
+        wasm_bindgen_futures::JsFuture::from(next_task()).await.ok();
     }
     Ok(steps.finish())
 }

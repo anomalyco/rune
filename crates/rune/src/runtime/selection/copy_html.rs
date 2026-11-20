@@ -113,7 +113,7 @@ impl RuntimeCore {
 /// Opens `block`'s elements after `prev`'s closed: a list or table already open stays open.
 fn open(out: &mut String, prev: Option<Block>, block: Block) {
     match block {
-        Block::Heading(_, level) => { let _ = write!(out, "<h{level}>"); }
+        Block::Heading(_, level) => { write!(out, "<h{level}>").ok(); }
         // Lists open and close in `copy_html`, which nests them.
         Block::Item { .. } => {}
         Block::Cell { table, row, head, .. } => {
@@ -133,7 +133,7 @@ fn open(out: &mut String, prev: Option<Block>, block: Block) {
 /// Closes `block`'s elements before `next`'s open: a list or table `next` continues stays open.
 fn close(out: &mut String, block: Block, next: Option<Block>) {
     match block {
-        Block::Heading(_, level) => { let _ = write!(out, "</h{level}>"); }
+        Block::Heading(_, level) => { write!(out, "</h{level}>").ok(); }
         Block::Item { .. } => {}
         Block::Cell { table, row, head, .. } => {
             out.push_str(if head { "</th>" } else { "</td>" });
@@ -178,7 +178,7 @@ fn inline_html(spec: &crate::el::TextSpec, a: usize, b: usize) -> String {
         let link = links.iter().find(|l| inside(l.start, l.end)).map(|l| l.id.as_str()).filter(|id| id.contains("://") || id.starts_with("mailto:"));
         if href != link {
             if href.is_some() { out.push_str("</a>"); }
-            if let Some(h) = link { let _ = write!(out, "<a href=\"{}\">", escape(h)); }
+            if let Some(h) = link { write!(out, "<a href=\"{}\">", escape(h)).ok(); }
             href = link;
         }
         let mut piece = escape(&text).replace('\n', "<br>");

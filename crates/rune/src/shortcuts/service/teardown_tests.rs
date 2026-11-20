@@ -282,9 +282,9 @@ fn a_busy_replaced_engine_keeps_its_grab_and_owner_without_holding_up_the_new_ho
 
 /// Waits for `ready`, which another thread makes true.
 fn wait_until(ready: impl Fn() -> bool) {
-    let deadline = std::time::Instant::now() + PATIENCE;
+    let deadline = crate::time::now() + PATIENCE;
     while !ready() {
-        assert!(std::time::Instant::now() < deadline, "the other thread never got there");
+        assert!(crate::time::now() < deadline, "the other thread never got there");
         std::thread::yield_now();
     }
 }

@@ -14,7 +14,7 @@ fn main() { mac::main() }
 mod mac {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::mpsc;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use objc2::{class, msg_send, runtime::AnyObject};
     use objc2_foundation::{NSPoint, NSRect};
@@ -43,7 +43,7 @@ mod mac {
     }
 
     fn wait(limit: Duration, f: impl Fn() -> bool) -> bool {
-        let start = Instant::now();
+        let start = rune::time::now();
         while !f() {
             if start.elapsed() > limit { return false; }
             std::thread::sleep(Duration::from_millis(10));
@@ -53,7 +53,7 @@ mod mac {
 
     fn on_main<T: Send + 'static>(handle: &AppHandle<()>, f: impl FnOnce() -> T + Send + 'static) -> T {
         let (tx, rx) = mpsc::channel();
-        handle.update(move |_, _| { let _ = tx.send(f()); });
+        handle.update(move |_, _| { tx.send(f()).ok(); });
         rx.recv_timeout(Duration::from_secs(5)).expect("an update runs on the main thread")
     }
 
@@ -122,9 +122,9 @@ mod mac {
             return;
         }
         std::thread::spawn(|| { std::thread::sleep(Duration::from_secs(120)); eprintln!("timeout"); std::process::exit(2) });
-        let hold = std::env::var("RUNE_HELP_HOLD").ok().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+        let hold = rune::env::var("RUNE_HELP_HOLD").and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
         let (ready_tx, ready_rx) = mpsc::channel();
-        let app = App::new(AppSpec::new("help", (320.0, 160.0), || (), view)).args(Vec::new()).on_ready(move |_| { let _ = ready_tx.send(()); });
+        let app = App::new(AppSpec::new("help", (320.0, 160.0), || (), view)).args(Vec::new()).on_ready(move |_| { ready_tx.send(()).ok(); });
         let handle = app.handle();
         let worker = std::thread::spawn(move || {
             let run = std::panic::catch_unwind(|| {

@@ -156,8 +156,8 @@ pub(crate) fn frame(f: Frame) {
     line["loop_check"] = serde_json::json!(f.loop_check.map(|(n, d)| [n as f64, if d.is_finite() { f64::from(d) } else { -1.0 }]));
     OUT.with_borrow_mut(|out| {
         if let Some(Some(w)) = out.as_mut() {
-            let _ = writeln!(w, "{line}");
-            let _ = w.flush();
+            writeln!(w, "{line}").ok();
+            w.flush().ok();
         }
     });
 }

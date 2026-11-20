@@ -178,7 +178,7 @@ impl Presents {
             if !(all || !matches!(p.present, Present::Waiting { .. }) || p.age >= WAIT_FRAMES) { break; }
             let p = self.pending.pop_front().unwrap();
             let line = self.finish(p);
-            let _ = writeln!(out, "{line}");
+            writeln!(out, "{line}").ok();
         }
     }
 
@@ -187,8 +187,8 @@ impl Presents {
         for field in step(&mut self.cadence, Written { present: p.present, continuous: p.continuous }) {
             match field {
                 Field::At { at, dt } => {
-                    let _ = write!(line, r#","present_ms":{at}"#);
-                    if let Some(dt) = dt { let _ = write!(line, r#","present_dt_ms":{dt}"#); }
+                    write!(line, r#","present_ms":{at}"#).ok();
+                    if let Some(dt) = dt { write!(line, r#","present_dt_ms":{dt}"#).ok(); }
                 }
                 Field::Null => line.push_str(r#","present_ms":null"#),
             }
@@ -351,7 +351,7 @@ pub(crate) mod metal {
             let mut presented = self.presented.lock().unwrap();
             if presented.is_empty() { return; }
             // SAFETY: CACurrentMediaTime has no preconditions.
-            let (now, media_now) = (Instant::now(), unsafe { CACurrentMediaTime() });
+            let (now, media_now) = (crate::time::now(), unsafe { CACurrentMediaTime() });
             out.extend(presented.drain(..).map(|(seq, at)| (seq, (at > 0.0).then(|| instant_at(now, media_now, at)))));
         }
     }
@@ -477,7 +477,7 @@ pub(crate) mod metal {
     #[cfg(test)]
     #[test]
     fn host_time_maps_onto_instants() {
-        let now = Instant::now();
+        let now = crate::time::now();
         assert_eq!(instant_at(now, 100.0, 100.008), now + Duration::from_millis(8));
         assert_eq!(instant_at(now, 100.0, 99.992), now - Duration::from_millis(8));
     }

@@ -46,7 +46,7 @@ mod mac {
     pub fn run() {
         // Work after `run` returns below: the process tears down in order rather than ending at once.
         rune::orderly_exit();
-        let before = std::env::var("RUNE_MENU_ORDER").unwrap() == "before";
+        let before = rune::env::var("RUNE_MENU_ORDER").unwrap() == "before";
         let mut app = App::new(AppSpec::new("Rune Dock menu probe", (320.0, 120.0), State::default,
             |_, _| rune::text("Accessory → Regular menu probe")))
             .accessory().windowless().on_ready(|_| line("WINDOW_READY"));

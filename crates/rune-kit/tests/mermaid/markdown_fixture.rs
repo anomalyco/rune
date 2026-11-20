@@ -122,11 +122,11 @@ fn render(src: &'static str, dark: bool, streaming: bool, width: f32) -> String 
     let els = rt.elements();
     for (i, e) in els.iter().enumerate() {
         let r = e.rect;
-        let _ = write!(out, "{{\"path\":{:?},\"role\":{:?},\"rect\":[{:.2},{:.2},{:.2},{:.2}],\"fill\":{:?}", e.path, e.role, r[0], r[1], r[2], r[3], e.fill.hex());
-        if let Some(k) = &e.key { let _ = write!(out, ",\"key\":{k:?}"); }
-        if let Some(t) = &e.text { let _ = write!(out, ",\"text\":{t:?}"); }
-        if let Some(c) = e.text_color { let _ = write!(out, ",\"color\":{:?}", c.hex()); }
-        if e.opacity != 1.0 { let _ = write!(out, ",\"opacity\":{:.3}", e.opacity); }
+        write!(out, "{{\"path\":{:?},\"role\":{:?},\"rect\":[{:.2},{:.2},{:.2},{:.2}],\"fill\":{:?}", e.path, e.role, r[0], r[1], r[2], r[3], e.fill.hex()).ok();
+        if let Some(k) = &e.key { write!(out, ",\"key\":{k:?}").ok(); }
+        if let Some(t) = &e.text { write!(out, ",\"text\":{t:?}").ok(); }
+        if let Some(c) = e.text_color { write!(out, ",\"color\":{:?}", c.hex()).ok(); }
+        if e.opacity != 1.0 { write!(out, ",\"opacity\":{:.3}", e.opacity).ok(); }
         out.push('}');
         out.push_str(if i + 1 < els.len() { ",\n" } else { "\n" });
     }
@@ -191,9 +191,9 @@ fn parsed_blocks_and_highlights() {
     let blocks = parse(DOC);
     let mut out = format!("{blocks:#?}\n");
     if let Some(Block::Code(code)) = blocks.iter().find(|b| matches!(b, Block::Code(_))) {
-        let _ = writeln!(out, "-- highlights (ts)");
+        writeln!(out, "-- highlights (ts)").ok();
         for (range, paint) in syntax::builtin(Some("ts"), code) {
-            let _ = writeln!(out, "{range:?} {:?} {paint:?}", &code[range.clone()]);
+            writeln!(out, "{range:?} {:?} {paint:?}", &code[range.clone()]).ok();
         }
     }
     check_ext("blocks", "txt", out);

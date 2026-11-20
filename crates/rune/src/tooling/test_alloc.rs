@@ -10,11 +10,11 @@ thread_local! {
     static PEAK: Cell<isize> = const { Cell::new(0) };
 }
 fn track(allocs: usize, bytes: isize) {
-    let _ = ALLOCS.try_with(|c| c.set(c.get() + allocs));
-    let _ = LIVE.try_with(|live| {
+    ALLOCS.try_with(|c| c.set(c.get() + allocs)).ok();
+    LIVE.try_with(|live| {
         live.set(live.get() + bytes);
-        let _ = PEAK.try_with(|peak| peak.set(peak.get().max(live.get())));
-    });
+        PEAK.try_with(|peak| peak.set(peak.get().max(live.get()))).ok();
+    }).ok();
 }
 // SAFETY: forwards to the system allocator, counting calls and bytes on this thread.
 unsafe impl GlobalAlloc for Counting {

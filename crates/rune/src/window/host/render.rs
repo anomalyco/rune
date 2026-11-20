@@ -353,7 +353,7 @@ pub(super) fn submit_and_present_window(
     info: &StepInfo,
 ) -> Instant {
     let (Some(l), Some((gpu, renderer))) = (host.win.as_mut(), host.gpu.as_mut()) else {
-        return Instant::now();
+        return crate::time::now();
     };
     renderer.submit(&gpu.queue, prepared.encoder);
     profile.mark_submitted();
@@ -381,7 +381,7 @@ pub(super) fn submit_and_present_window(
     // A swap chain made again on a handed-over window's visual takes over now (`cpu_frame`).
     #[cfg(target_os = "windows")]
     if matches!(l.native.mode, handover::SurfaceMode::Rebinding { .. }) {
-        let _ = rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely());
+        rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
         if let handover::SurfaceMode::Rebinding { handover } = std::mem::take(&mut l.native.mode) {
             if let Err(error) = handover.commit() { eprintln!("rune: the window's new swap chain couldn't take over: {error}"); }
             l.native.mode = handover::SurfaceMode::Handed { handover };
@@ -409,7 +409,7 @@ pub(super) fn submit_and_present_window(
     // The window shows once the GPU has finished the frame it presents.
     #[cfg(target_os = "windows")]
     if l.native.cloak.held() {
-        let _ = rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely());
+        rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
         l.native.cloak.lift(&l.window);
         crate::marks::mark("window.shown");
     }
@@ -423,7 +423,7 @@ pub(super) fn submit_and_present_window(
     );
     #[cfg(not(feature = "frame-profile"))]
     let _ = (looped, info);
-    Instant::now()
+    crate::time::now()
 }
 
 pub(super) fn open_trace_if_needed(host: &mut Host, now: Instant) {

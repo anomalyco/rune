@@ -34,6 +34,12 @@ use std::time::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
+// procwatch has no Rune dependencies and runs natively.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+#[allow(clippy::disallowed_methods)]
+fn now() -> Instant { Instant::now() }
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Thread {
     /// The kernel's id for the thread, stable for its life.
@@ -76,7 +82,7 @@ impl Snapshot {
 
     pub fn to_json(&self) -> String {
         let mut s = String::new();
-        let _ = write!(
+        write!(
             s,
             "{{\"pid\":{},\"footprint\":{},\"footprint_peak\":{},\"resident\":{},\"cpu_s\":{:.3},\"exited_cpu_s\":{:.3},\"fds\":{},\"threads\":[",
             self.pid,
@@ -86,24 +92,24 @@ impl Snapshot {
             self.cpu_s,
             self.exited_cpu_s(),
             self.fds,
-        );
+        ).ok();
         for (i, t) in self.threads.iter().enumerate() {
-            let _ = write!(s, "{}{{\"name\":\"{}\",\"cpu_s\":{:.3}}}", if i > 0 { "," } else { "" }, clean(&t.name), t.cpu_s);
+            write!(s, "{}{{\"name\":\"{}\",\"cpu_s\":{:.3}}}", if i > 0 { "," } else { "" }, clean(&t.name), t.cpu_s).ok();
         }
         s.push(']');
         if let Some(h) = &self.heap {
-            let _ = write!(
+            write!(
                 s,
                 ",\"heap\":{{\"live\":{},\"peak\":{},\"allocations\":{},\"largest\":{},\"big_live\":{},\"big_blocks\":{},\"tags\":",
                 h.live, h.peak, h.allocations, h.largest, h.big_live, h.big_blocks
-            );
+            ).ok();
             json_map(&mut s, &h.tags);
             s.push('}');
         }
         s.push_str(",\"gauges\":");
         json_map(&mut s, &self.gauges);
         if let Some(bytes) = self.unaccounted() {
-            let _ = write!(s, ",\"unaccounted\":{bytes}");
+            write!(s, ",\"unaccounted\":{bytes}").ok();
         }
         s.push('}');
         s
@@ -117,7 +123,7 @@ fn clean(name: &str) -> String {
 fn json_map(s: &mut String, entries: &[(&'static str, i64)]) {
     s.push('{');
     for (i, (name, bytes)) in entries.iter().enumerate() {
-        let _ = write!(s, "{}\"{}\":{bytes}", if i > 0 { "," } else { "" }, clean(name));
+        write!(s, "{}\"{}\":{bytes}", if i > 0 { "," } else { "" }, clean(name)).ok();
     }
     s.push('}');
 }
@@ -363,11 +369,11 @@ pub fn watch_with(config: Config, on_warning: impl Fn(&Event, &Snapshot) + Send 
         if snapshot().is_none() {
             return;
         }
-        let _ = std::thread::Builder::new().name("procwatch".into()).spawn(move || {
+        std::thread::Builder::new().name("procwatch".into()).spawn(move || {
             let mut watcher = Watcher::new(config);
             loop {
                 if let Some(s) = snapshot() {
-                    for event in watcher.observe(Instant::now(), &s) {
+                    for event in watcher.observe(now(), &s) {
                         eprintln!("{event}");
                         if event.is_warning() {
                             on_warning(&event, &s);
@@ -377,7 +383,7 @@ pub fn watch_with(config: Config, on_warning: impl Fn(&Event, &Snapshot) + Send 
                 }
                 std::thread::sleep(watcher.config.every);
             }
-        });
+        }).ok();
     }
 }
 
@@ -535,10 +541,10 @@ fn memory_note(s: &Snapshot) -> String {
     };
     let top: Vec<String> = s.gauges.iter().filter(|(_, b)| *b > 0).take(3).map(|(n, b)| format!("{n} {}", mb(*b as u64))).collect();
     if !top.is_empty() {
-        let _ = write!(note, "; {}", top.join(", "));
+        write!(note, "; {}", top.join(", ")).ok();
     }
     if let Some(bytes) = s.unaccounted() {
-        let _ = write!(note, "; unaccounted {}", mb(bytes.max(0) as u64));
+        write!(note, "; unaccounted {}", mb(bytes.max(0) as u64)).ok();
     }
     note
 }
@@ -564,14 +570,14 @@ pub fn serve(addr: std::net::SocketAddr) -> std::io::Result<std::net::SocketAddr
             if !stream.peer_addr().is_ok_and(|p| p.ip().is_loopback()) {
                 continue;
             }
-            let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
-            let _ = stream.read(&mut [0; 1024]);
+            stream.set_read_timeout(Some(Duration::from_secs(1))).ok();
+            let _bytes = stream.read(&mut [0; 1024]).unwrap_or(0);
             let body = snapshot().map_or_else(|| "null".to_owned(), |s| s.to_json());
-            let _ = write!(
+            write!(
                 stream,
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                 body.len()
-            );
+            ).ok();
         }
     })?;
     Ok(bound)

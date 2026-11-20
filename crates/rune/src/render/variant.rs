@@ -509,14 +509,14 @@ fn compile(device: &wgpu::Device, wgsl: &str, make_pipeline: impl FnOnce(&dxbc::
 #[cfg(target_os = "windows")]
 fn make_pinned(device: &wgpu::Device, layout: &wgpu::PipelineLayout, format: wgpu::TextureFormat) -> Vec<Option<wgpu::RenderPipeline>> {
     #[cfg(feature = "frame-profile")]
-    let started = crate::time::Instant::now();
+    let started = crate::time::now();
     let pinned: Vec<_> = PINNED.iter().map(|&kind| dxbc::uber_pinned(device, kind, |shader| Renderer::pipeline(device, layout, shader, format, "vs", Blend::SourceOver)).map(|(_, p)| p)).collect();
     // Frame-profile builds: what making them costs, and what the run-time freshness check before `PINNED_FRESH`
     // cost (three `pinned_wgsl` and their hashes).
     #[cfg(feature = "frame-profile")]
     {
         let made = started.elapsed();
-        let checked = crate::time::Instant::now();
+        let checked = crate::time::now();
         let old: usize = PINNED.iter().filter_map(|&kind| super::pinned_wgsl_blake3(kind)).map(|h| h.len()).sum();
         eprintln!("rune-warm pinned pipelines: {:.0} us to make {} of 3 on their thread (the run-time check they replace: {:.0} us, {old} hex)", made.as_secs_f64() * 1e6, pinned.iter().filter(|p| p.is_some()).count(), checked.elapsed().as_secs_f64() * 1e6);
     }

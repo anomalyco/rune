@@ -7,7 +7,7 @@ const MS: Duration = Duration::from_millis(1);
 
 #[test]
 fn an_occluded_miss_backs_off_until_a_frame_presents() {
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let mut backoff = Backoff::default();
     assert_eq!(backoff.deadline(), None, "nothing waits");
     let miss = |backoff: &mut Backoff, missed, now| {
@@ -27,7 +27,7 @@ fn an_occluded_miss_backs_off_until_a_frame_presents() {
 
 #[test]
 fn a_display_link_draws_a_timeout_on_its_next_tick() {
-    let now = Instant::now();
+    let now = crate::time::now();
     let mut backoff = Backoff::default();
     assert!(backoff.step(BackoffEvent::Missed { missed: Missed::Timeout, paced: true, now }).is_empty());
     assert_eq!(backoff.deadline(), None, "a running link retries on its tick");
@@ -39,7 +39,7 @@ fn a_display_link_draws_a_timeout_on_its_next_tick() {
 
 #[test]
 fn a_wait_that_lapses_keeps_its_backoff_until_a_frame_presents() {
-    let now = Instant::now();
+    let now = crate::time::now();
     let mut backoff = Backoff::default();
     backoff.step(BackoffEvent::Missed { missed: Missed::Occluded, paced: false, now });
     backoff.step(BackoffEvent::Missed { missed: Missed::Occluded, paced: false, now });
@@ -51,7 +51,7 @@ fn a_wait_that_lapses_keeps_its_backoff_until_a_frame_presents() {
 
 #[test]
 fn an_uncovered_window_starts_the_occluded_wait_over_but_keeps_the_hidden_one() {
-    let now = Instant::now();
+    let now = crate::time::now();
     let mut backoff = Backoff::seeded(OCCLUDED_RETRY * 4, TIMEOUT_RETRY * 4);
     backoff.step(BackoffEvent::At(now + TIMER_FRAME));
     assert_eq!(backoff.deadline(), Some(now + TIMER_FRAME), "a timer paces the next frame");
@@ -65,7 +65,7 @@ fn an_uncovered_window_starts_the_occluded_wait_over_but_keeps_the_hidden_one() 
 
 #[test]
 fn a_hidden_refresh_backs_off_but_leaves_its_retry_to_the_first_frame_deadline() {
-    let now = Instant::now();
+    let now = crate::time::now();
     let mut backoff = Backoff::default();
     backoff.step(BackoffEvent::HiddenMissed { preparing: true, now });
     assert_eq!(backoff.deadline(), None, "a prepared first frame retries it itself");
@@ -82,7 +82,7 @@ fn a_hidden_refresh_backs_off_but_leaves_its_retry_to_the_first_frame_deadline()
 
 #[test]
 fn only_a_timer_asking_leaves_a_quiet_frame() {
-    let now = Instant::now();
+    let now = crate::time::now();
     let mut frame = TimerFrame::default();
     assert!(!frame.quiet() && !frame.stalled(now));
     frame.asked_quiet(now);
@@ -99,7 +99,7 @@ fn only_a_timer_asking_leaves_a_quiet_frame() {
 
 #[test]
 fn a_stalled_frame_is_asked_for_again_from_now_and_stays_quiet() {
-    let now = Instant::now();
+    let now = crate::time::now();
     let mut frame = TimerFrame::default();
     frame.asked_quiet(now);
     assert!(!frame.stalled(now + TIMER_FRAME_STALL - MS) && frame.stalled(now + TIMER_FRAME_STALL));
@@ -210,7 +210,7 @@ fn every_sequence(alphabet: &[Step], max: usize, mut f: impl FnMut(&[Step])) {
 }
 
 fn holds_up(seq: &[Step]) {
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let (mut backoff, mut frame, mut apart) = (Backoff::default(), TimerFrame::default(), Apart::new());
     for (k, step) in seq.iter().enumerate() {
         let now = t0 + MS * (11 * k as u32);

@@ -34,7 +34,7 @@ fn a_small_image_queued_behind_a_large_one_decodes_without_waiting_for_it() {
     if std::thread::available_parallelism().map_or(1, |n| n.get()) < 2 { return; }
     let (tx, rx) = mpsc::channel();
     let caller = std::thread::current().id();
-    let cache = ImageCache::new(Arc::new(move || { let _ = tx.send(std::thread::current().id()); }));
+    let cache = ImageCache::new(Arc::new(move || { tx.send(std::thread::current().id()).ok(); }));
     let (release, gate) = mpsc::channel();
     let input = Input::Rgba(128, 128, vec![128; 128 * 128 * 4].into());
     let large = cache.request([8; 32], Input::Gated(Box::new(input), gate));
@@ -83,7 +83,7 @@ fn a_fetch_is_wanted_while_a_handle_or_its_drawn_pixels_live() {
 #[test]
 fn drawn_pixels_keep_their_image_cached_after_the_handle_drops() {
     let (tx, rx) = mpsc::channel();
-    let cache = ImageCache::new(Arc::new(move || { let _ = tx.send(()); }));
+    let cache = ImageCache::new(Arc::new(move || { tx.send(()).ok(); }));
     let image = cache.rgba(1, 1, vec![20, 40, 60, 255]);
     assert_eq!(image.size(), Some([1, 1]));
     assert_eq!(rx.try_recv(), Ok(()), "a fresh inline decode wakes before returning");
@@ -275,7 +275,7 @@ fn a_small_app_icon_matches_the_large_one_scaled_down() {
     let app = synthetic_app(&dir);
     let small = app_icon_rgba(&app, 32).unwrap().2;
     let large = app_icon_rgba(&app, 256).unwrap().2;
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ok();
     let (mut total, mut count) = (0u32, 0u32);
     for y in 0..32 {
         for x in 0..32 {

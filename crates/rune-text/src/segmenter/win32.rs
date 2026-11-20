@@ -42,7 +42,7 @@ static FIRST_FRAME: std::sync::LazyLock<(std::sync::Mutex<bool>, std::sync::Cond
 fn warm() {
     static STARTED: AtomicBool = AtomicBool::new(false);
     if STARTED.swap(true, Ordering::Relaxed) { return; }
-    let _ = std::thread::Builder::new().name("rune-icu".into()).spawn(|| {
+    std::thread::Builder::new().name("rune-icu".into()).spawn(|| {
         let (shown, wake) = &*FIRST_FRAME;
         let shown = shown.lock().unwrap_or_else(|e| e.into_inner());
         drop(wake.wait_timeout_while(shown, std::time::Duration::from_secs(1), |shown| !*shown));
@@ -51,7 +51,7 @@ fn warm() {
             let _ = word_bounds(sample, language);
         }
         READY.store(true, Ordering::Release);
-    });
+    }).ok();
 }
 
 /// The word boundaries strictly inside `text` (byte offsets, ascending) for one dictionary

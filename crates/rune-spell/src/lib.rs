@@ -402,7 +402,7 @@ mod worker {
             std::thread::Builder::new().name("rune-spell".into()).spawn(move || run(take)).ok().map(|_| send)
         });
         if let Some(send) = jobs {
-            let _ = send.send(Job { generation, words, wake: wake.map(Arc::downgrade) });
+            send.send(Job { generation, words, wake: wake.map(Arc::downgrade) }).ok();
         }
     }
 

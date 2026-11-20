@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rune::{Cx, El, Env, Latest, Runtime, el, text};
 
@@ -23,9 +23,9 @@ fn poll_changes_state_once_per_answer() {
     rt.frame(0.0);
     let commits = rt.stats.commits;
     rt.state.results.request("rune".to_owned(), |q| format!("{q}.md"));
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = rune::time::now() + Duration::from_secs(5);
     while wakes.load(Ordering::SeqCst) != 1 {
-        assert!(Instant::now() < deadline, "timed out waiting until the answer lands");
+        assert!(rune::time::now() < deadline, "timed out waiting until the answer lands");
         std::thread::sleep(Duration::from_millis(1));
     }
     rt.frame(1.0 / 60.0);

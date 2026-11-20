@@ -85,7 +85,7 @@ impl Borrowed {
         if let Some((canvas, css, attributes)) = self.canvas {
             canvas.style().set_css_text(&css);
             for (name, value) in attributes {
-                let _ = match value { Some(value) => canvas.set_attribute(name, &value), None => canvas.remove_attribute(name) };
+                match value { Some(value) => canvas.set_attribute(name, &value).ok(), None => canvas.remove_attribute(name).ok() };
             }
         }
         let Some(document) = web_sys::window().and_then(|w| w.document()) else { return };

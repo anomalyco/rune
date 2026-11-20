@@ -32,7 +32,7 @@ static DIRECT: OnceLock<Direct> = OnceLock::new();
 
 /// Registers the process's `Direct` writer. The first one stays.
 pub fn set_direct(direct: Direct) {
-    let _ = DIRECT.set(direct);
+    DIRECT.set(direct).ok();
 }
 
 /// The size of a new chunk; a larger write gets a chunk sized to its next power of two.
@@ -301,7 +301,7 @@ impl Inner {
             let buffer = chunk.buffer.clone();
             let mut back = Return { chunk: Some(chunk), recycle: self.recycle.clone(), lost: staging.1.clone() };
             encoder.map_buffer_on_submit(&buffer, wgpu::MapMode::Write, .., move |mapped| {
-                if mapped.is_ok() && let Some(chunk) = back.chunk.take() { let _ = back.recycle.send(chunk); }
+                if mapped.is_ok() && let Some(chunk) = back.chunk.take() { back.recycle.send(chunk).ok(); }
             });
         }
         staging.2.store(false, Ordering::Release);

@@ -753,7 +753,7 @@ fn push_placeholder(surface: &NativeSurface) {
         color: ColorInfo { matrix: crate::native_surface::Matrix::Bt709, transfer: crate::native_surface::Transfer::Srgb },
         planes: [rgba, Vec::new()],
     };
-    let _ = surface.push_bytes(frame, u64::MAX);
+    surface.push_bytes(frame, u64::MAX).ok();
 }
 
 #[cfg(test)]

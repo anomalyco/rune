@@ -634,7 +634,7 @@ pub(crate) const CONTINUOUS_K: f32 = instance::shader_consts::CONTINUOUS_K;
 #[cfg(feature = "frame-profile")]
 pub(super) fn pinned_forced() -> Option<bool> {
     static FORCED: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
-    *FORCED.get_or_init(|| match std::env::var("RUNE_PINNED").as_deref() { Ok("all") => Some(true), Ok("off") => Some(false), _ => None })
+    *FORCED.get_or_init(|| match rune_core::env::var("RUNE_PINNED").as_deref() { Some("all") => Some(true), Some("off") => Some(false), _ => None })
 }
 
 #[cfg(feature = "frame-profile")]

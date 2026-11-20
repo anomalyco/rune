@@ -186,7 +186,7 @@ unsafe extern "system" fn turn(_: HWND, _: u32, _: usize, _: u32) {
     // Clone before invoking so the `RefCell` borrow is released before user code runs.
     let waker = TURN.with(|t| t.borrow().clone());
     if let Some(waker) = waker {
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker()));
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker())).ok();
     }
 }
 

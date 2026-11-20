@@ -322,7 +322,7 @@ impl SurfaceRenderer {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn submit(&self, queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) -> wgpu::SubmissionIndex {
-        let submitted_at = Instant::now();
+        let submitted_at = rune_core::time::now();
         let frames: Vec<_> = self
             .draws
             .iter()
@@ -376,7 +376,7 @@ impl SurfaceRenderer {
             // encoded into the same command buffer. Resolve after its completion fence; this
             // is timestamp metadata only, never a readback or wait on the video pixel path.
             encoder.on_submitted_work_done(move || {
-                let completed_at = Instant::now();
+                let completed_at = rune_core::time::now();
                 // The renderer is gone (its device lost and replaced, or the app closing): nothing
                 // resolves the times.
                 let Some(queue) = queue.upgrade() else {
@@ -413,19 +413,19 @@ impl SurfaceRenderer {
                     }
                 });
                 queue.submit([timestamps.finish()]);
-                let _ = completion.try_send(());
+                completion.try_send(()).ok();
             });
         } else {
             encoder.on_submitted_work_done(move || {
                 for (s, _, mut t) in frames {
-                    t.completed_at = Some(Instant::now());
+                    t.completed_at = Some(rune_core::time::now());
                     s.report(t);
                 }
             });
         }
         let index = queue.submit([encoder.finish()]);
         self.release_decoded(queue);
-        let _ = self.completion.try_send(());
+        self.completion.try_send(()).ok();
         index
     }
 

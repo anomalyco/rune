@@ -559,7 +559,7 @@ fn cached_inner((h1, h2): (u64, u64), build: &mut dyn FnMut() -> El) -> El {
                 s.cache.id_scratch.push_str(p);
                 s.cache.id_scratch.push('/');
             }
-            let _ = write!(s.cache.id_scratch, "\0{}:{h1:016x}:{h2:016x}:{occ}", s.virtual_row);
+            write!(s.cache.id_scratch, "\0{}:{h1:016x}:{h2:016x}:{occ}", s.virtual_row).ok();
         }
         let pass = s.cache.pass;
         let has_parent = !s.nested.is_empty();

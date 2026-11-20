@@ -273,24 +273,24 @@ pub(super) fn text_html(spec: &TextSpec) -> String {
         let link = spec.cold.links.iter().position(|l| (l.start as usize) <= a && b <= l.end as usize);
         if link != open_link {
             if open_link.is_some() { out.push_str("</a>"); }
-            if let Some(k) = link { let _ = write!(out, "<a href=\"{}\">", escape(&spec.cold.links[k].id)); }
+            if let Some(k) = link { write!(out, "<a href=\"{}\">", escape(&spec.cold.links[k].id)).ok(); }
             open_link = link;
         }
         let piece = escape(&content[a..b]);
         let mut style = String::new();
         if let Some(s) = spec.spans.iter().rev().find(|s| (s.start as usize) <= a && b <= s.end as usize) {
-            if let Some(w) = s.weight { let _ = write!(style, "font-weight:{};", num(w)); }
+            if let Some(w) = s.weight { write!(style, "font-weight:{};", num(w)).ok(); }
             if s.mono { style.push_str("font-family:var(--rune-mono);"); }
-            if let Some(z) = s.size { let _ = write!(style, "font-size:{};", px(z)); }
-            if let Some(c) = s.color { let _ = write!(style, "color:{};", color(c)); }
-            if let Some(c) = s.bg { let _ = write!(style, "background:{};border-radius:3px;padding:0 {};", color(c), px(s.bg_pad)); }
-            if let Some(c) = s.underline { let _ = write!(style, "text-decoration:underline {};", color(c)); }
+            if let Some(z) = s.size { write!(style, "font-size:{};", px(z)).ok(); }
+            if let Some(c) = s.color { write!(style, "color:{};", color(c)).ok(); }
+            if let Some(c) = s.bg { write!(style, "background:{};border-radius:3px;padding:0 {};", color(c), px(s.bg_pad)).ok(); }
+            if let Some(c) = s.underline { write!(style, "text-decoration:underline {};", color(c)).ok(); }
             if s.italic { style.push_str("font-style:italic;"); }
         }
         if style.is_empty() {
             out.push_str(&piece);
         } else {
-            let _ = write!(out, "<span style=\"{}\">{piece}</span>", style.trim_end_matches(';'));
+            write!(out, "<span style=\"{}\">{piece}</span>", style.trim_end_matches(';')).ok();
         }
     }
     if open_link.is_some() { out.push_str("</a>"); }
@@ -308,21 +308,21 @@ pub(super) fn svg(shape: &crate::Shape, size: (f32, f32)) -> String {
     // Consecutive fills of one colour share a path.
     let mut fill: Option<(Color, String)> = None;
     let flush = |out: &mut String, fill: &mut Option<(Color, String)>| {
-        if let Some((c, d)) = fill.take() { let _ = write!(out, "<path fill=\"{}\" d=\"{d}\"/>", color(c)); }
+        if let Some((c, d)) = fill.take() { write!(out, "<path fill=\"{}\" d=\"{d}\"/>", color(c)).ok(); }
     };
     for op in &shape.ops {
         match op {
             crate::shape::Op::Fill { points: pts, color: c } => {
                 if fill.as_ref().is_some_and(|(fc, _)| fc != c) { flush(&mut out, &mut fill); }
                 let d = &mut fill.get_or_insert_with(|| (*c, String::new())).1;
-                let _ = write!(d, "M{}Z", points(pts).replace(' ', "L"));
+                write!(d, "M{}Z", points(pts).replace(' ', "L")).ok();
             }
             crate::shape::Op::Stroke { points: pts, closed, width, cap, color: c } => {
                 flush(&mut out, &mut fill);
                 let el = if *closed { "polygon" } else { "polyline" };
                 let cap = if *cap == crate::shape::LineCap::Round { "round" } else { "butt" };
-                let _ = write!(out, "<{el} fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" stroke-linecap=\"{cap}\" stroke-linejoin=\"round\" vector-effect=\"non-scaling-stroke\" points=\"{}\"/>",
-                    color(*c), num(*width), points(pts));
+                write!(out, "<{el} fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" stroke-linecap=\"{cap}\" stroke-linejoin=\"round\" vector-effect=\"non-scaling-stroke\" points=\"{}\"/>",
+                    color(*c), num(*width), points(pts)).ok();
             }
         }
     }

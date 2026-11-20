@@ -474,7 +474,7 @@ impl OverlayCore {
         rt.set_system_accent(crate::system_accent());
         crate::platform::scroll_bars::watch();
         rt.set_system_scroll_bars_state(crate::platform::scroll_bars::current());
-        rt.wall_start = Some(Instant::now());
+        rt.wall_start = Some(crate::time::now());
         rt.host.native_overlay = true;
         rt.set_os_drag(crate::drag_out::SUPPORTED);
         rt.host.surface_stats = Some(meter.shared());
@@ -514,7 +514,7 @@ impl OverlayCore {
             runtime_idle: false,
             quiet: Default::default(),
             turn_frame: Default::default(),
-            clock: FrameClock::new(Instant::now()),
+            clock: FrameClock::new(crate::time::now()),
             #[cfg(target_os = "macos")]
             occlusion_read: false,
             backoff: Default::default(),
@@ -640,13 +640,13 @@ impl OverlayCore {
         // A parked window takes the size now; its surface is made at it.
         if let Some(Backing::Window(w)) = self.surface.parked() {
             let w = w.clone();
-            let _ = w.request_inner_size(LogicalSize::new(self.at.size.0 as f64, self.at.size.1 as f64));
+            let _size = w.request_inner_size(LogicalSize::new(self.at.size.0 as f64, self.at.size.1 as f64));
             return self.place_window(app.rt_mut(), event_loop, &w);
         }
         let Some(live) = self.surface.live_mut() else { return };
         match &mut live.backing {
             Backing::Window(w) => {
-                let _ = w.request_inner_size(LogicalSize::new(self.at.size.0 as f64, self.at.size.1 as f64));
+                let _size = w.request_inner_size(LogicalSize::new(self.at.size.0 as f64, self.at.size.1 as f64));
             }
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
             Backing::Layer(layer) => {

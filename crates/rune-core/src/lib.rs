@@ -7,6 +7,7 @@
 pub mod cold;
 pub mod color;
 pub mod dirs;
+pub mod env;
 pub mod growth;
 pub mod latest;
 pub mod live;

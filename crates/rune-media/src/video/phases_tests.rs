@@ -446,7 +446,7 @@ fn descend(new: &New, old: &Old, alphabet: &[Sym], depth: usize, seq: &mut Vec<S
 
 /// Each kind of clip, from the state `prefix` leaves it in.
 fn walk(prefix: &[Sym], alphabet: &[Sym], depth: usize) {
-    let now = Instant::now();
+    let now = rune_core::time::now();
     for audio in [false, true] {
         let (mut new, mut old) = (New::new(audio, now), Old::new(audio, now));
         let mut seq = Vec::new();
@@ -543,7 +543,7 @@ mod poster;
 
 #[test]
 fn the_newest_seek_replaces_an_earlier_one() {
-    let now = Instant::now();
+    let now = rune_core::time::now();
     let mut s = Settle::default();
     s.seek(3.0, false, now);
     assert!(s.waiting());
@@ -557,7 +557,7 @@ fn the_newest_seek_replaces_an_earlier_one() {
 
 #[test]
 fn a_seek_lands_with_a_frame_or_for_audio_at_its_position() {
-    let now = Instant::now();
+    let now = rune_core::time::now();
     let mut video = Settle::default();
     video.seek(2.0, false, now);
     video.observe(2.0, false, false);
@@ -575,7 +575,7 @@ fn a_seek_lands_with_a_frame_or_for_audio_at_its_position() {
 
 #[test]
 fn a_hold_ends_when_playback_moves_on_and_a_frame_does_not_end_it() {
-    let now = Instant::now();
+    let now = rune_core::time::now();
     let mut s = Settle::default();
     s.seek(0.5, true, now);
     s.framed();
@@ -586,7 +586,7 @@ fn a_hold_ends_when_playback_moves_on_and_a_frame_does_not_end_it() {
 
 #[test]
 fn a_seek_that_never_lands_expires() {
-    let now = Instant::now();
+    let now = rune_core::time::now();
     let mut s = Settle::default();
     s.seek(2.0, false, now);
     s.expire(now + SEEK_PATIENCE);

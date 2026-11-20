@@ -69,7 +69,7 @@ fn start() {
     let worker = std::thread::Builder::new().name("rune-appearance-portal".into()).spawn(move || {
         async_io::block_on(watch(ready));
     });
-    if worker.is_ok() { let _ = first.recv_timeout(FIRST_ANSWER); }
+    if worker.is_ok() { first.recv_timeout(FIRST_ANSWER).ok(); }
 }
 
 async fn watch(ready: mpsc::SyncSender<()>) {
@@ -86,12 +86,12 @@ async fn watch(ready: mpsc::SyncSender<()>) {
             },
         };
         if !portal::should_watch_settings(read_ok, unavailable) {
-            let _ = conn.close().await;
+            conn.close().await.ok();
             return None;
         }
         Some((conn, changes))
     }).await.flatten();
-    let _ = ready.send(());
+    ready.send(()).ok();
     let Some((_conn, mut changes)) = setup else { return };
     while let Some(message) = changes.next().await {
         if let Ok((namespace, key, value)) = message.body().deserialize::<(String, String, OwnedValue)>()

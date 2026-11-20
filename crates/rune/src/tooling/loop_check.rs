@@ -38,7 +38,7 @@ impl Tally {
         }
         if let Some(log) = self.log.as_mut() {
             let (n, d) = checked.map_or((serde_json::Value::Null, serde_json::Value::Null), |(n, d)| (n.into(), if d.is_finite() { f64::from(d).into() } else { "inf".into() }));
-            let _ = writeln!(log, "{}", serde_json::json!({ "t": t, "input": input, "why": why, "differ": n, "worst": d }));
+            writeln!(log, "{}", serde_json::json!({ "t": t, "input": input, "why": why, "differ": n, "worst": d })).ok();
         }
     }
 
@@ -47,7 +47,7 @@ impl Tally {
     /// run then exits non-zero); true when nothing asked (`RUNE_LOOP_CHECK` unset).
     pub(super) fn report(&mut self) -> bool {
         if !self.opened { return true; }
-        if let Some(log) = self.log.as_mut() { let _ = log.flush(); }
+        if let Some(log) = self.log.as_mut() { log.flush().ok(); }
         let why: Vec<String> = self.why.iter().map(|((input, w), n)| format!("{}{w}: {n}", if *input { "after an event, " } else { "" })).collect();
         eprintln!("rune: loop check: {} steps checked against ordinary frames, {} differ (at most {} instances, largest difference {}); asked: {}",
             self.checked, self.differ, self.most, self.worst, why.join(", "));

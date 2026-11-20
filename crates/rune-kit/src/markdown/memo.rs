@@ -412,7 +412,7 @@ impl Renderer {
                 Some((sp, lp)) => {
                     1u8.hash(h);
                     hash_span(&sp, h);
-                    let _ = std::fmt::write(&mut HashFmt(h), format_args!("{lp:?}"));
+                    std::fmt::write(&mut HashFmt(h), format_args!("{lp:?}")).ok();
                 }
             }
         }
@@ -425,7 +425,7 @@ impl Renderer {
         {
             match fav(url) {
                 None => 0u8.hash(h),
-                Some(px) => { 1u8.hash(h); let _ = std::fmt::write(&mut HashFmt(h), format_args!("{px:?}")); }
+                Some(px) => { 1u8.hash(h); std::fmt::write(&mut HashFmt(h), format_args!("{px:?}")).ok(); }
             }
         }
     }

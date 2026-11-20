@@ -570,7 +570,7 @@ mod prefix_layout_tests {
             let (core, app) = rt.split();
             assert_eq!(core.viewport, (640.0, 480.0));
             assert!(core.motion.motion_scratch.try_borrow().is_err());
-            let _ = std::ptr::from_ref(app.state);
+            let _ptr = std::ptr::from_ref(app.state);
         }
         assert_eq!(rt.core().motion.motion_scratch.borrow().as_slice(), &[(7, 3, true)]);
     }

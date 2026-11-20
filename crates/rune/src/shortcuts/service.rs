@@ -185,7 +185,7 @@ impl Engine {
     }
 
     fn release(&mut self) {
-        let _ = self.apply(BindEvent::Release);
+        self.apply(BindEvent::Release).ok();
     }
 
     fn native(&mut self) -> &mut NativeBackend {
@@ -284,7 +284,7 @@ impl Control {
                 let (done_tx, done_rx) = mpsc::sync_channel(1);
                 let posted = step_attachment(&mut route, AttachEvent::Post(Box::new(move |engine| {
                     run(engine);
-                    let _ = done_tx.send(());
+                    done_tx.send(()).ok();
                 })));
                 drop(route);
                 for effect in posted { if let AttachEffect::Wake(wake) = effect { wake(); } }
@@ -322,7 +322,7 @@ impl HubCore {
         self.errors.lock().unwrap().push(error);
     }
 
-    pub(crate) fn named(&self, title: &'static str) { let _ = self.title.set(title); }
+    pub(crate) fn named(&self, title: &'static str) { self.title.set(title).ok(); }
 
     pub(super) fn allow_unmodified(&self) { self.unmodified.store(true, Ordering::Relaxed); }
 

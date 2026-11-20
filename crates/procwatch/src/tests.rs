@@ -105,7 +105,7 @@ fn reads_this_process() {
     std::thread::spawn(|| {
         // Spin on the thread's own CPU clock: on a loaded machine 300 ms of wall time can
         // be well under 200 ms of CPU.
-        let t = Instant::now();
+        let t = now();
         let mut x = 0u64;
         while thread_cpu_s() < 0.3 && t.elapsed() < Duration::from_secs(10) {
             x = std::hint::black_box(x.wrapping_add(1));
@@ -150,7 +150,7 @@ fn warnings_name_where_the_memory_is() {
         gauges: vec![("video.frames", 300 << 20)],
         ..at(2 << 30, 0.0)
     };
-    let events = w.observe(Instant::now(), &s);
+    let events = w.observe(now(), &s);
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].kind, Kind::Footprint);
     assert!(events[0].line.contains("heap 100 MB live") && events[0].line.ends_with("; video.frames 300 MB; unaccounted 1.6 GB"), "{}", events[0].line);
@@ -159,7 +159,7 @@ fn warnings_name_where_the_memory_is() {
 #[test]
 fn warns_on_size_growth_and_cpu_once_per_window() {
     let mut w = Watcher::new(Config { report: None, ..Config::release("t") });
-    let t0 = Instant::now();
+    let t0 = now();
     let mut events = Vec::new();
     for i in 0..=12u64 {
         // 100 MB every 10 s, and a full core.
@@ -180,7 +180,7 @@ fn warns_on_size_growth_and_cpu_once_per_window() {
 
 #[test]
 fn a_gate_passes_once_per_window() {
-    let (mut g, t0, window) = (Gate::default(), Instant::now(), Duration::from_secs(60));
+    let (mut g, t0, window) = (Gate::default(), now(), Duration::from_secs(60));
     assert!(g.pass(t0, window), "the first goes out at once");
     assert!(!g.pass(t0 + Duration::from_secs(59), window));
     assert!(g.pass(t0 + Duration::from_secs(60), window));
@@ -190,7 +190,7 @@ fn a_gate_passes_once_per_window() {
 #[test]
 fn reports_once_per_period() {
     let mut w = Watcher::new(Config { report: Some(Duration::from_secs(30)), ..Config::release("t") });
-    let t0 = Instant::now();
+    let t0 = now();
     let reported: Vec<u64> = (0..=9u64)
         .filter(|i| w.observe(t0 + Duration::from_secs(i * 10), &at(50 << 20, 1.0)).iter().any(|e| e.kind == Kind::Report))
         .collect();
@@ -201,7 +201,7 @@ fn reports_once_per_period() {
 fn late_samples_still_fill_the_window() {
     // Sleeps that run 10 ms long leave no sample exactly 60 s back.
     let mut w = Watcher::new(Config { report: None, ..Config::release("t") });
-    let t0 = Instant::now();
+    let t0 = now();
     let mut events = Vec::new();
     for i in 0..=12u32 {
         let t = Duration::from_millis(10_010) * i;

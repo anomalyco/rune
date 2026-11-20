@@ -27,7 +27,7 @@ impl OverlayCore {
         let deadline = deadline.into_iter().chain(self.panel.as_ref().and_then(|p| p.pointer_deadline(self.presence.occluded()))).min();
         // A Windows fade-out steps its alpha once a frame.
         #[cfg(target_os = "windows")]
-        let deadline = deadline.into_iter().chain(self.presence.fading().then(|| Instant::now() + crate::window::TIMER_FRAME)).min();
+        let deadline = deadline.into_iter().chain(self.presence.fading().then(|| crate::time::now() + crate::window::TIMER_FRAME)).min();
         deadline.into_iter().chain(self.backoff.deadline().filter(|_| self.presence.drawing())).chain(self.presence.deadline())
             .chain(self.hidden_pace.deadline().filter(|_| !self.presence.drawing())).min()
     }
@@ -86,7 +86,7 @@ impl AnyHost for OverlayHost {
         #[cfg(target_os = "macos")]
         { self.core.occlusion_read = false; }
         if matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll) {
-            let now = Instant::now();
+            let now = crate::time::now();
             self.core.wake_due(&mut *self.app, now);
         }
     }
@@ -337,7 +337,7 @@ impl AnyHost for OverlayHost {
         #[cfg(target_os = "macos")]
         if core.surface.live().is_some() && let Some(panel) = &core.panel {
             // Covered or asleep, the 120 Hz regions poll rests; input events still sample.
-            panel.observe_pointer(Instant::now(), !core.presence.occluded());
+            panel.observe_pointer(crate::time::now(), !core.presence.occluded());
             let pointer = panel.pointer_state();
             if let Some((x, y)) = core.turn_position(app, &pointer) && app.rt().pointer() != Some((x, y)) {
                 core.observe_pointer(app, x, y);

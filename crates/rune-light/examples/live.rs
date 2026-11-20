@@ -269,7 +269,7 @@ impl State {
         let a = d.accent;
         let mut s = State {
             which: Which::Flashlight,
-            start: Instant::now(),
+            start: rune::time::now(),
             fake: None,
             cursor: [640.0, 400.0],
             x: Track::at(640.0),

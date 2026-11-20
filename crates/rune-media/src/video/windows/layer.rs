@@ -47,7 +47,7 @@ impl Drop for Layer {
     fn drop(&mut self) {
         // SAFETY: the handle this layer made and nobody else closes.
         unsafe {
-            let _ = CloseHandle(self.handle);
+            CloseHandle(self.handle).ok();
         }
     }
 }
@@ -69,7 +69,7 @@ impl Layer {
             let swap = match swap_chain(&device, handle, buffer) {
                 Ok(swap) => swap,
                 Err(e) => {
-                    let _ = CloseHandle(handle);
+                    CloseHandle(handle).ok();
                     return Err(e);
                 }
             };

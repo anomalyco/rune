@@ -13,7 +13,7 @@ thread_local! {
 }
 
 fn bump() {
-    let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+    ALLOCS.try_with(|c| c.set(c.get() + 1)).ok();
 }
 
 unsafe impl GlobalAlloc for Counting {

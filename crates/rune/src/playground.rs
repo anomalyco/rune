@@ -423,7 +423,7 @@ pub(crate) fn arg(argv: &[String], i: &mut usize) -> Option<String> {
 }
 
 fn hidden_by_env() -> bool {
-    std::env::var("RUNE_PLAYGROUND").is_ok_and(|v| v == "0")
+    rune_core::env::var("RUNE_PLAYGROUND").is_some_and(|v| v == "0")
 }
 
 pub(crate) fn offered_by_env() -> bool {

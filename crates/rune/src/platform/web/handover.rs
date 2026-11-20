@@ -34,11 +34,11 @@ impl Browser {
             move |why| {
                 restored_lost.set(false);
                 *lost.borrow_mut() = Some(Loss::WebGl(why));
-                let _ = proxy_lost.send_event(Wake::App);
+                proxy_lost.send_event(Wake::App).ok();
             },
             move || {
                 restored_ok.set(true);
-                let _ = proxy_restored.send_event(Wake::App);
+                proxy_restored.send_event(Wake::App).ok();
             },
         ));
     }
@@ -106,7 +106,7 @@ impl Browser {
         let atlas = &mut r.app.rt_mut().text.atlas;
         crate::render::cpu_boot::attach_text(atlas);
         atlas.refill_gpu_masks();
-        if let Some(c) = &canvas { let _ = c.style().set_property("opacity", "0"); }
+        if let Some(c) = &canvas { c.style().set_property("opacity", "0").ok(); }
         window.request_redraw();
         false
     }
@@ -214,7 +214,7 @@ impl Browser {
             r.draw = Draw::Cpu { cpu, failed: true };
             return;
         }
-        if let Some(c) = &canvas { let _ = c.style().remove_property("opacity"); }
+        if let Some(c) = &canvas { c.style().remove_property("opacity").ok(); }
         cpu.remove();
         // A harness checking the way back to the CPU (`globalThis.RUNE_LOSE_GPU_AFTER`, in ms)
         // has the device count as lost that long after the hand-over, as the browser reports it.
@@ -222,7 +222,7 @@ impl Browser {
             let (lost, proxy) = (self.lost.clone(), self.proxy.clone());
             after(Duration::from_millis(ms as u64), move || {
                 *lost.borrow_mut() = Some(Loss::WebGpu("RUNE_LOSE_GPU_AFTER".into()));
-                let _ = proxy.send_event(Wake::App);
+                proxy.send_event(Wake::App).ok();
             });
         }
         r.draw = Draw::Gpu(side);
@@ -275,6 +275,6 @@ impl Browser {
         let quiet = self.drawn_at.is_none_or(|at| at.elapsed() >= QUIET);
         if quiet || first.elapsed() >= QUIET_LIMIT || pipelines::browser_compiles_async() { return self.ask_gpu(); }
         let proxy = self.proxy.clone();
-        after(QUIET, move || { let _ = proxy.send_event(Wake::StartGpu); });
+        after(QUIET, move || { proxy.send_event(Wake::StartGpu).ok(); });
     }
 }

@@ -104,7 +104,7 @@ impl FrameHost for OverlayFrame<'_> {
             retry: self.core.backoff.deadline(),
             missed_this_turn: self.core.turn_frame.missed(),
         };
-        match frame::turn(gate, Instant::now) {
+        match frame::turn(gate, crate::time::now) {
             frame::Turn::Occluded { recheck } => {
                 if recheck {
                     self.core.meter.skipped();
@@ -137,7 +137,7 @@ impl FrameHost for OverlayFrame<'_> {
             && !self.app.rt().has_pending_input()
             && renderer.srgb_blend() == self.app.rt().srgb_blend();
         #[cfg(target_os = "macos")]
-        let quiet = quiet && live.pacing.as_ref().is_none_or(|p| p.defers_start(Instant::now()));
+        let quiet = quiet && live.pacing.as_ref().is_none_or(|p| p.defers_start(crate::time::now()));
         if quiet {
             return Gate::QuietTimer;
         }
@@ -167,7 +167,7 @@ impl FrameHost for OverlayFrame<'_> {
     fn reblend(&mut self) -> bool { self.reblend_surface() }
 
     fn step_quiet(&mut self) -> StepInfo {
-        let now = Instant::now();
+        let now = crate::time::now();
         self.now = Some(now);
         #[cfg(target_os = "macos")]
         if let Some(live) = self.core.surface.live() {
@@ -183,7 +183,7 @@ impl FrameHost for OverlayFrame<'_> {
         };
         #[cfg(target_os = "macos")]
         let next_tick = {
-            let now = self.now.unwrap_or_else(Instant::now);
+            let now = self.now.unwrap_or_else(crate::time::now);
             live.pacing.as_ref().map(|p| p.tick_after(now))
         };
         #[cfg(not(target_os = "macos"))]
@@ -231,7 +231,7 @@ impl FrameHost for OverlayFrame<'_> {
     }
 
     fn step_runtime(&mut self) -> StepInfo {
-        let now = Instant::now();
+        let now = crate::time::now();
         self.now = Some(now);
         #[cfg(not(target_os = "macos"))]
         let frame_time = now;
@@ -295,7 +295,7 @@ impl FrameHost for OverlayFrame<'_> {
     }
 
     fn sync_after_step(&mut self, info: &mut StepInfo) {
-        let now = self.now.unwrap_or_else(Instant::now);
+        let now = self.now.unwrap_or_else(crate::time::now);
         info.update_ms = if self.app.has_compositor() { now.elapsed().as_secs_f64() * 1000.0 } else { 0.0 };
         super::input::drop_window_requests(self.app.rt_mut());
         self.core.clipboard.flush_core(self.app.rt_mut());
@@ -360,14 +360,14 @@ impl FrameHost for OverlayFrame<'_> {
             self.core.renderer.as_ref(),
             self.core.gpu.as_ref(),
         ) else {
-            return Instant::now();
+            return crate::time::now();
         };
         frame::submit_and_present(live, renderer, gpu, self.app.rt(), prepared.encoder, prepared.frame, self.prewarm);
         // The next frame waits for the room this one took (`slot`).
         #[cfg(target_os = "windows")]
         live.slot.presented_surface(&live.surface);
         crate::render::gpu_events::presented();
-        Instant::now()
+        crate::time::now()
     }
 
     fn present_targets(&mut self) -> (Option<&mut FrameClock>, &mut RuntimeCore) {
@@ -424,7 +424,7 @@ impl FrameHost for OverlayFrame<'_> {
 impl OverlayCore {
     /// Draws a frame if one is due; true while it needs more (animating).
     pub(super) fn draw(&mut self, app: &mut dyn OverlayApp) -> bool {
-        self.presence_due(app, Instant::now());
+        self.presence_due(app, crate::time::now());
         if !self.presence.drawing() {
             self.drain_hidden(app);
             return false;
@@ -612,7 +612,7 @@ impl OverlayCore {
         app.frame(0.0);
         app.rt_mut().settle_all();
         app.frame(0.0);
-        self.clock.hold(Instant::now());
+        self.clock.hold(crate::time::now());
         self.warm_frame(app);
     }
 
@@ -623,7 +623,7 @@ impl OverlayCore {
             let _prewarm = panel.prewarm();
             self.dirty = true;
             self.draw_frame(app, true);
-            if let Some(gpu) = &self.gpu { let _ = rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()); }
+            if let Some(gpu) = &self.gpu { rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok(); }
             return;
         }
         let Some(live) = self.surface.live() else { return };
@@ -645,6 +645,6 @@ impl OverlayCore {
             dt: 0.0, update_ms: 0.0, ui: renderer,
         });
         renderer.submit(&gpu.queue, enc);
-        let _ = rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely());
+        rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
     }
 }

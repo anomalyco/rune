@@ -27,11 +27,11 @@ fn shared_gpu() -> Result<Arc<Gpu>, String> {
 pub fn prewarm() {
     static STARTED: OnceLock<()> = OnceLock::new();
     STARTED.get_or_init(|| {
-        let _ = std::thread::Builder::new().name("rune-embed-prewarm".into()).spawn(|| {
+        std::thread::Builder::new().name("rune-embed-prewarm".into()).spawn(|| {
             if let Ok(gpu) = shared_gpu() {
                 let _ = Renderer::new(&gpu.device, wgpu::TextureFormat::Bgra8Unorm);
             }
-        });
+        }).ok();
     });
 }
 
@@ -100,7 +100,7 @@ impl LayerHostCore {
         let mut renderer = Renderer::new(&gpu.device, target_format);
         renderer.set_srgb_blend(true);
         let size = (px_w as f32 / scale, px_h as f32 / scale);
-        let now = Instant::now();
+        let now = crate::time::now();
         let core = Self {
             gpu,
             surface,
@@ -186,7 +186,7 @@ impl LayerHostCore {
         self.renderer.submit(&self.gpu.queue, prepared.encoder);
         self.gpu.queue.present(prepared.frame);
         crate::render::gpu_events::presented();
-        Instant::now()
+        crate::time::now()
     }
 }
 

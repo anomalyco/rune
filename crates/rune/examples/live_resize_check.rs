@@ -45,7 +45,7 @@ mod mac {
     struct Slow(Duration);
     impl Compositor<State> for Slow {
         fn render(&mut self, f: &mut Frame<'_, State>) {
-            let start = Instant::now();
+            let start = rune::time::now();
             while start.elapsed() < self.0 { std::hint::spin_loop(); }
             f.draw_ui();
         }
@@ -75,9 +75,9 @@ mod mac {
         unsafe {
             let size: CGSize = msg_send![this, drawableSize];
             let sync: Bool = msg_send![this, presentsWithTransaction];
-            let start = Instant::now();
+            let start = rune::time::now();
             let drawable: *mut AnyObject = msg_send![super(this, *LAYER_BASE.get().unwrap()), nextDrawable];
-            log(Ev::Acquire { at: Instant::now(), px: (size.width, size.height), sync: sync.as_bool(), wait: start.elapsed() });
+            log(Ev::Acquire { at: rune::time::now(), px: (size.width, size.height), sync: sync.as_bool(), wait: start.elapsed() });
             drawable
         }
     }
@@ -112,7 +112,7 @@ mod mac {
                 let frame: CGRect = msg_send![view, frame];
                 let scale: f64 = msg_send![window, backingScaleFactor];
                 let live: Bool = msg_send![window, inLiveResize];
-                log(Ev::Resized { at: Instant::now(), px: (frame.size.width * scale, frame.size.height * scale), live: live.as_bool() });
+                log(Ev::Resized { at: rune::time::now(), px: (frame.size.width * scale, frame.size.height * scale), live: live.as_bool() });
                 store_frame(window);
             }
         });
@@ -203,7 +203,7 @@ mod mac {
 
     fn on_main(handle: &AppHandle<State>, f: impl FnOnce(&mut State, &mut Tx) + Send + 'static) {
         let (tx, rx) = std::sync::mpsc::channel();
-        handle.update(move |s, t| { f(s, t); let _ = tx.send(()); });
+        handle.update(move |s, t| { f(s, t); tx.send(()).ok(); });
         rx.recv_timeout(Duration::from_secs(5)).expect("the app answers");
     }
 
@@ -270,7 +270,7 @@ mod mac {
     }
 
     pub fn run() {
-        let slow = std::env::var("RUNE_LIVE_RESIZE_SLOW_MS").ok().and_then(|ms| ms.parse().ok()).map(Duration::from_millis);
+        let slow = rune::env::var("RUNE_LIVE_RESIZE_SLOW_MS").and_then(|ms| ms.parse().ok()).map(Duration::from_millis);
         let spec = AppSpec { min_size: Some((200.0, 200.0)), ..AppSpec::new("Live resize check", (480.0, 400.0), State::default, view) };
         let mut app = App::new(spec).args(vec![]);
         if let Some(slow) = slow { app = app.compositor(Slow(slow)); }
@@ -298,7 +298,7 @@ mod mac {
                     store_frame(&window);
                     hook_layer(&layer);
                     watch_resizes(&window, &view);
-                    let _ = tx.send(number);
+                    tx.send(number).ok();
                     // Held for the run: the observer reads the window and its view.
                     std::mem::forget((window, view, layer));
                 }

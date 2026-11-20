@@ -182,7 +182,7 @@ impl FrameHost for MockWindowFrame {
 
 #[test]
 fn post_step_reblend_failure_runs_missed_frame_cleanup_without_double_stepping() {
-    let now = Instant::now();
+    let now = crate::time::now();
     let outcomes = Rc::new(RefCell::new(Vec::new()));
     let mut host = MockWindowFrame::new(now, outcomes.clone());
     let polls_before = host.app.rt.state.polls;
@@ -200,7 +200,7 @@ fn post_step_reblend_failure_runs_missed_frame_cleanup_without_double_stepping()
 
 #[test]
 fn pre_step_reblend_failure_runs_covered_wake_once_and_schedules_backoff() {
-    let now = Instant::now();
+    let now = crate::time::now();
     let outcomes = Rc::new(RefCell::new(Vec::new()));
     let mut host = MockWindowFrame::new(now, outcomes.clone());
     let polls_before = host.app.rt.state.polls;

@@ -58,10 +58,10 @@ impl CpuCanvas {
         let css = over.style().css_text();
         // The GPU's canvas starts see-through: this one shows.
         canvas.style().set_css_text(&format!("{css};pointer-events:none;opacity:1"));
-        let _ = canvas.set_attribute("aria-hidden", "true");
+        canvas.set_attribute("aria-hidden", "true").ok();
         over.parent_node()?.insert_before(&canvas, Some(over)).ok()?;
         let options = js_sys::Object::new();
-        let _ = js_sys::Reflect::set(&options, &"alpha".into(), &JsValue::FALSE);
+        js_sys::Reflect::set(&options, &"alpha".into(), &JsValue::FALSE).ok();
         let ctx = canvas.get_context_with_context_options("2d", &options).ok()??.dyn_into().ok()?;
         Some(CpuCanvas { canvas, ctx, painter: CpuPainter::new(1), buffer: Vec::new(), size: (0, 0), rows: Vec::new(), staged: js_sys::Uint8ClampedArray::new_with_length(0), half: HalfRounding::default() })
     }
@@ -111,7 +111,7 @@ impl CpuCanvas {
             swizzle += began.elapsed();
             let staged = self.staged.subarray(0, len as u32);
             if let Ok(image) = web_sys::ImageData::new_with_js_u8_clamped_array_and_sh(&staged, rw, rh) {
-                let _ = self.ctx.put_image_data(&image, f64::from(x0), f64::from(y0));
+                self.ctx.put_image_data(&image, f64::from(x0), f64::from(y0)).ok();
             }
             px += u64::from(rw) * u64::from(rh);
         }

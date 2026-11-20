@@ -75,7 +75,7 @@ impl<E: EmbedSurface> FrameHost for EmbedFrameHost<'_, E> {
 
     #[inline]
     fn step_runtime(&mut self) -> StepInfo {
-        let t0 = Instant::now();
+        let t0 = crate::time::now();
         self.t0 = Some(t0);
         let compositing = self.surface.compositor_animating();
         let (animating, dt, update_ms) = self.surface.with_driver(|clock, rt, app| {
@@ -110,7 +110,7 @@ impl<E: EmbedSurface> FrameHost for EmbedFrameHost<'_, E> {
 
     #[inline]
     fn on_missed(&mut self, missed: Missed, stepped: bool) {
-        let t0 = self.t0.unwrap_or_else(Instant::now);
+        let t0 = self.t0.unwrap_or_else(crate::time::now);
         let retry_now = missed == Missed::Outdated;
         let comp_animating = self.surface.compositor_animating();
         self.summary = if stepped {

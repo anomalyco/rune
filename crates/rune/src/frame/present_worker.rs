@@ -102,7 +102,7 @@ impl Drop for PresentWorker {
     fn drop(&mut self) {
         if matches!(self.state, State::Busy(_)) && !std::thread::panicking() { self.wait(); }
         step(&mut self.state, Event::Close);
-        if let Some(thread) = self.thread.take() { let _ = thread.join(); }
+        if let Some(thread) = self.thread.take() { thread.join().ok(); }
     }
 }
 

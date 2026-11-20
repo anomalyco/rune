@@ -11,7 +11,6 @@ use serde_json::json;
 use crate::AnyWindowSpec;
 use crate::desktop::displays::VirtualDesktop;
 use crate::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
-use crate::time::Instant;
 use crate::tooling::headless_run::WindowFrame;
 use crate::tooling::{Args, Ev, Kind, Pos, Shot, Timeline, Trace, die};
 
@@ -317,7 +316,7 @@ impl Desk {
 /// `--scene`, `--tree` and `--trace` describe.
 /// `accessory` is `RunOptions::accessory`: reopening brings back no window.
 pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, accessory: bool) {
-    let launched = Instant::now();
+    let launched = crate::time::now();
     let backdrop = args.desktop.clone().expect("--desktop");
     if args.list_scenes { die("--list-scenes lists one window's scenes; drop --desktop"); }
     let source = crate::tooling::read_script(&args);
@@ -362,7 +361,7 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
     let initial = desk.topmost_visible();
     desk.focus(initial, true);
 
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let features = desk.members.iter().fold(wgpu::Features::empty(), |f, m| f | m.features());
     let gpu = Gpu::try_with_features(Gpu::instance_for(features), None, features).unwrap_or_else(|e| die(&e));
     let max = gpu.device.limits().max_texture_dimension_2d;
@@ -420,14 +419,14 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
         desk.drain(&desktop, 0.0);
     }
 
-    let wall = Instant::now();
+    let wall = crate::time::now();
     let mut cpu_ms = Vec::new();
     let mut next_ev = 0;
     let mut last_down = (0.0f32, 0.0f32);
     let mut drawn: Vec<(usize, bool)> = Vec::with_capacity(n);
     for k in 0..=last_frame {
         let real_t = k as f64 * dt;
-        let frame_start = Instant::now();
+        let frame_start = crate::time::now();
         while next_ev < script.len() && script[next_ev].t <= real_t + 1e-9 {
             let e = &script[next_ev];
             next_ev += 1;

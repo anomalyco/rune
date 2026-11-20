@@ -33,7 +33,7 @@ pub(crate) fn overloaded() -> bool {
         let got = unsafe { libc::getloadavg(load.as_mut_ptr(), 1) };
         let cores = std::thread::available_parallelism().map_or(1, usize::from) as f64;
         let busy = got == 1 && load[0] >= cores;
-        *cache = Some((Instant::now(), busy));
+        *cache = Some((crate::time::now(), busy));
         busy
     }
     #[cfg(not(unix))]

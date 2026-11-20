@@ -114,7 +114,7 @@ fn make(d3d12: ID3D12Device, luid: LUID, generation: u64) -> Result<Device, Stri
         let context = ID3D11DeviceContext::from_raw(context);
         // Decoders and players' threads share the device.
         if let Ok(mt) = device.cast::<ID3D11Multithread>() {
-            let _ = mt.SetMultithreadProtected(true);
+            let _prev = mt.SetMultithreadProtected(true);
         }
         let device5 = device.cast::<ID3D11Device5>().map_err(|_| "D3D11 fences need Windows 10 1703")?;
         let context = context.cast::<ID3D11DeviceContext4>().map_err(|_| "D3D11 fences need Windows 10 1703")?;
@@ -180,7 +180,7 @@ impl Ring {
             let handle = device.d3d12.CreateSharedHandle(&ready12, None, GENERIC_ALL.0, None).map_err(|e| format!("share fence: {}", e.message()))?;
             let mut ready: Option<ID3D11Fence> = None;
             let opened = device.device5.OpenSharedFence(handle, &mut ready);
-            let _ = CloseHandle(handle);
+            CloseHandle(handle).ok();
             opened.map_err(|e| format!("open fence: {}", e.message()))?;
             (Arc::new(VideoFences { ready: ready12, release }), ready.ok_or("open fence")?)
         };
@@ -247,7 +247,7 @@ impl Ring {
         self.slots[i].value = self.value;
         // SAFETY: a signal after the copy on the immediate context; the flush sends both to the GPU.
         unsafe {
-            let _ = self.device.context.Signal(&self.ready, self.value);
+            self.device.context.Signal(&self.ready, self.value).ok();
             self.device.context.Flush();
         }
         (self.slots[i].planes.clone(), self.value)
@@ -276,7 +276,7 @@ fn slot(device: &Device, fences: &Arc<VideoFences>, w: u32, h: u32) -> Result<Sl
         let handle = texture.cast::<IDXGIResource1>().and_then(|r| r.CreateSharedHandle(None, GENERIC_ALL.0, None)).map_err(|e| format!("share video texture: {}", e.message()))?;
         let mut resource: Option<ID3D12Resource> = None;
         let opened = device.d3d12.OpenSharedHandle(handle, &mut resource);
-        let _ = CloseHandle(handle);
+        CloseHandle(handle).ok();
         opened.map_err(|e| format!("open video texture: {}", e.message()))?;
         let planes = Arc::new(DecodedPlanes {
             resource: resource.ok_or("open video texture")?,

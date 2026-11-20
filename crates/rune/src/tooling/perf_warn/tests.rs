@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::*;
 use crate::el::{col, row};
@@ -55,7 +55,7 @@ fn a_callback_blocked_past_its_cpu_time_warns_once_per_site() {
 #[test]
 fn a_callback_that_computes_is_not_a_stall() {
     take_log();
-    let (wall, cpu) = (Instant::now(), crate::frame::profile::cpu_ms().unwrap());
+    let (wall, cpu) = (crate::time::now(), crate::frame::profile::cpu_ms().unwrap());
     let stall = Stall::start();
     let mut n = 0u64;
     while crate::frame::profile::cpu_ms().unwrap() - cpu < 30.0 { n = std::hint::black_box(n.wrapping_add(1)); }

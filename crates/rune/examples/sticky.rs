@@ -12,7 +12,6 @@
 //!
 //! Scroll frame benchmark (50 sticky sections, `--profile perf`):
 //!   cargo run --profile perf -p rune --example sticky -- --bench
-use std::time::Instant;
 
 use rune::tok::{self, type_};
 use rune::{
@@ -218,7 +217,7 @@ fn run_bench() {
         let mut us = Vec::with_capacity(240);
         for step in 0..240 {
             let dy = if (step / 120) % 2 == 0 { -35.0 } else { 35.0 };
-            let t0 = Instant::now();
+            let t0 = rune::time::now();
             rt.wheel(320.0, 240.0, dy);
             rt.frame(1.0 / 120.0);
             us.push(t0.elapsed().as_secs_f64() * 1e6);

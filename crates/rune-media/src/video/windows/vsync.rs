@@ -26,7 +26,7 @@ struct Grid {
 static GRID: Mutex<Option<Grid>> = Mutex::new(None);
 
 fn grid() -> Option<Grid> {
-    let now = Instant::now();
+    let now = rune_core::time::now();
     let mut slot = GRID.lock().unwrap();
     if let Some(g) = *slot
         && now.saturating_duration_since(g.read) < FRESH

@@ -73,7 +73,7 @@ fn a_script_paste_can_carry_html_rtf_and_an_image() {
         rt.paste_content(content);
     }
     rt.frame(0.0);
-    let _ = std::fs::remove_file(&png);
+    std::fs::remove_file(&png).ok();
     let texts: Vec<_> = rt.state.iter().map(|c| (c.text(), c.html(), c.rtf(), c.image().map(crate::ClipboardImage::size))).collect();
     assert_eq!(texts, [
         ("plain", None, None, None), ("short", None, None, None),

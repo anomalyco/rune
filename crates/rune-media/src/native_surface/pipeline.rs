@@ -153,11 +153,11 @@ impl SurfaceRenderer {
         let (punch_sender, punch) = std::sync::mpsc::sync_channel(1);
         let (device_for, layout_for) = (device.clone(), layout.clone());
         let spawned = std::thread::Builder::new().name("rune-video-pipeline".into()).spawn(move || {
-            let _ = sender.send(Self::pipeline(&device_for, &layout_for, format, Blend::SourceOver));
+            sender.send(Self::pipeline(&device_for, &layout_for, format, Blend::SourceOver)).ok();
             done();
             // A clip's layer (Windows) needs the punch; it compiles once the pictures can show.
             #[cfg(target_os = "windows")]
-            let _ = punch_sender.send(Self::pipeline_with(&device_for, &layout_for, format, PUNCH));
+            punch_sender.send(Self::pipeline_with(&device_for, &layout_for, format, PUNCH)).ok();
             #[cfg(not(target_os = "windows"))]
             drop(punch_sender);
         });
