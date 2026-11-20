@@ -1,0 +1,1 @@
+- Focus: `El::focus_visible_within_ring` draws a ring around an element while focus is on it or inside it and the keys put it there (Tab, an arrow in a group, `Tx::focus` with a ring), as a web field's keyboard-entry ring does: not for a click, a focus handed over without a ring, or the window coming back to the front with focus where it was.

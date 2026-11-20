@@ -64,6 +64,11 @@ impl RuntimeCore {
             {
                 self.commit.dirty = true;
             }
+            // Back to the front: a field's keyboard-entry ring stays off until the keys move focus.
+            if focused && self.host.window_focused == Some(false) && self.kbd.focus.entered_by_keys() {
+                self.kbd.focus.step(crate::runtime::input::focus_machine::FocusEvent::WindowReturned);
+                self.commit.dirty = true;
+            }
             self.host.window_focused = Some(focused);
             if app.has_on_focus() {
                 let (mut one, stall) = self.begin_update(app);

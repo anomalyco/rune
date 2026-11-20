@@ -352,7 +352,7 @@ impl RuntimeCore {
             faded_slot = paint_slots::push_effect(&mut self.instances, (effect, mark), ([r[0], r[1], w, h], radii, clip, fade), k_px, o);
         }
         let focus_ring = if default_ring == Some(i) || self.forced_default_ring(i) { Some(self.default_focus_ring()) }
-            else if n.focus.within { n.focus.ring.filter(|_| self.focus_within(i)) }
+            else if n.focus.within { n.focus.ring.filter(|_| self.focus_within(i) && (!n.focus.within_keyboard || self.kbd.focus.entered_by_keys())) }
             else { self.focus_ring_visible(i).then_some(n.focus.ring).flatten() };
         if let Some(ol) = focus_ring.or(n.vis.outline) {
             let c = if focus_ring.is_some() { ol.color } else { self.color(n.id, P_OUTLINE, ol.color) };
