@@ -42,7 +42,7 @@ objc2-core-foundation = { workspace = true, features = ["std", "CFCGTypes", "CFD
 objc2-core-graphics = { workspace = true, features = ["std", "CGBitmapContext", "CGColorSpace", "CGContext", "CGImage"] }
 objc2-core-media = { version = "0.3", default-features = false, features = ["std", "CMTime"] }
 objc2-core-video = { workspace = true, features = ["std", "CVBase", "CVBuffer", "CVHostTime", "CVImageBuffer", "CVMetalTexture", "CVMetalTextureCache", "CVPixelBuffer", "CVPixelBufferIOSurface", "CVReturn", "objc2", "objc2-io-surface", "objc2-metal"] }
-objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSObject", "NSString", "NSURL", "NSURLConnection", "NSURLRequest", "NSURLResponse"] }
+objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSObject", "NSString", "NSURL", "NSURLConnection", "NSURLRequest", "NSURLResponse", "NSValue"] }
 # Unused by name: `objc2-core-foundation` gives IOSurfaceRef the CF `Type` impl objc2-core-video needs.
 objc2-io-surface = { version = "0.3", default-features = false, features = ["std", "IOSurfaceRef", "objc2-core-foundation"] }
 objc2-metal = { workspace = true, features = ["std", "MTLAllocation", "MTLDevice", "MTLPixelFormat", "MTLResource", "MTLTexture"] }
