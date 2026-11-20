@@ -88,7 +88,6 @@ impl RuntimeCore {
             nodes: &mut nodes,
             committing: false,
             spare_nodes: &mut spare_nodes,
-            text: &mut self.text,
             layout: &mut layout,
             node_index: &mut node_index,
             path_ids: &mut path_ids,
@@ -107,7 +106,7 @@ impl RuntimeCore {
             windowed: HashMap::default(),
             kept_lists: Vec::new(),
         };
-        drop(m.finish(&Tx::default()));
+        drop(m.finish(&mut self.text, &Tx::default()));
         self.text.keep_prepared(&before, PREPARE_BYTES)
     }
 }

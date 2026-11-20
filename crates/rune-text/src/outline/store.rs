@@ -78,6 +78,11 @@ impl Default for OutlineStore {
 }
 
 impl OutlineStore {
+    /// An unallocated placeholder store, for [`crate::TextSystem::empty`].
+    pub(crate) fn empty() -> Self {
+        OutlineStore { texels: Vec::new(), used: 0, glyphs: Default::default(), hints: Default::default(), dirty: None, full: false, support: Support::Untried }
+    }
+
     /// The record of `key`, built by `build` the first time it's asked for.
     pub(crate) fn glyph(&mut self, key: Key, build: impl FnOnce() -> Option<Built>) -> Found {
         if let Some(g) = self.glyphs.get(&key) {

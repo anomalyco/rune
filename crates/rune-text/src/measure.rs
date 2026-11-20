@@ -50,20 +50,31 @@ thread_local! {
     /// This thread's [`with_families`] state: a private copy of `FONTS` that notes land in.
     static OVERRIDE: RefCell<Option<Fonts>> = const { RefCell::new(None) };
     /// The text system of the window whose view is running on this thread (`lend`), if any.
-    static LENT: std::cell::Cell<*mut TextSystem> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+    static LENT: RefCell<Option<TextSystem>> = const { RefCell::new(None) };
 }
 
 /// Runs `f` (a window's view) with [`measure`] and the rest using `text`, the window's own text
 /// system, rather than this thread's copy. The copy loads every font and fallback again (a title
 /// with one Arabic or emoji character costs 6-30 ms its first time), and its shapes aren't the ones
-/// the window lays out. `text` mustn't be used another way until `f` returns.
+/// the window lays out. Moves `text` into thread-local storage for the duration of `f` and restores
+/// it on return or unwind.
 #[doc(hidden)]
 pub fn lend<R>(text: &mut TextSystem, f: impl FnOnce() -> R) -> R {
-    struct Restore(*mut TextSystem);
-    impl Drop for Restore {
-        fn drop(&mut self) { LENT.with(|l| l.set(self.0)); }
+    struct Restore<'a> {
+        dest: &'a mut TextSystem,
+        previous: Option<TextSystem>,
     }
-    let _restore = Restore(LENT.with(|l| l.replace(text)));
+    impl Drop for Restore<'_> {
+        fn drop(&mut self) {
+            let previous = self.previous.take();
+            let returned = LENT.with_borrow_mut(|slot| std::mem::replace(slot, previous));
+            if let Some(lent) = returned {
+                *self.dest = lent;
+            }
+        }
+    }
+    let previous = LENT.with_borrow_mut(|slot| slot.replace(std::mem::replace(text, TextSystem::empty())));
+    let _restore = Restore { dest: text, previous };
     f()
 }
 
@@ -256,19 +267,22 @@ pub fn line_starts(text: &str, size: f32, weight: f32, width: f32) -> Vec<usize>
 /// Runs `f` on this thread's text system, built from the fonts the app was given.
 pub(super) fn with_text<R>(f: impl FnOnce(&mut TextSystem) -> R) -> R {
     // A view's measures use its window's text system, unless a `with_families` guard asks for
-    // other families. Taken while in use, so a measure inside `f` can't alias it.
-    let lent = LENT.with(|l| l.replace(std::ptr::null_mut()));
-    if !lent.is_null() && OVERRIDE.with_borrow(Option::is_none) {
-        struct Restore(*mut TextSystem);
-        impl Drop for Restore {
-            fn drop(&mut self) { LENT.with(|l| l.set(self.0)); }
+    // other families. Borrowed in place; a re-entrant call sees the active borrow and falls
+    // through to `MEASURER` instead of aliasing.
+    let f = if OVERRIDE.with_borrow(Option::is_none) {
+        match LENT.with(|cell| match cell.try_borrow_mut() {
+            Ok(mut slot) => match slot.as_mut() {
+                Some(text) => Ok(f(text)),
+                None => Err(f),
+            },
+            Err(_) => Err(f),
+        }) {
+            Ok(result) => return result,
+            Err(f) => f,
         }
-        let _restore = Restore(lent);
-        // SAFETY: `lend` set it from a live `&mut TextSystem` that nothing else uses until
-        // `lend` returns, and it's taken out of `LENT` while this borrow lives.
-        return f(unsafe { &mut *lent });
-    }
-    LENT.with(|l| l.set(lent));
+    } else {
+        f
+    };
     MEASURER.with_borrow_mut(|m| {
         let current = font_epoch();
         if m.as_ref().is_none_or(|m| m.generation != current) {
@@ -324,5 +338,82 @@ mod tests {
         assert!(plain_w > 120.0, "without wrap_anywhere the token runs past the width: {plain_w}");
         assert!(w <= 120.0 && h > plain_h * 2.0, "{w} {h} vs {plain_w} {plain_h}");
         assert_eq!(measure(link, &[], style, Some(120.0)), measure_with(link, &[], style, Some(120.0), RichLayoutOptions::new()));
+    }
+
+    #[test]
+    fn lend_uses_lent_text_system_and_restores_on_return_and_panic() {
+        let style = TextStyle::new(14.0, 400.0);
+        let mut text = TextSystem::default();
+        assert_eq!(text.shaped, 0);
+
+        let (w, h) = lend(&mut text, || measure("Lend normal return", &[], style, None));
+        assert!(w > 50.0 && h >= 17.0, "{w} {h}");
+        assert!(text.shaped > 0, "measure inside lend should shape on the lent TextSystem");
+        let after_normal = text.shaped;
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            lend(&mut text, || {
+                let _ = measure("Lend panic unwind", &[], style, None);
+                panic!("boom");
+            });
+        }));
+        assert!(panicked.is_err());
+        assert!(text.shaped > after_normal, "lent TextSystem must be restored intact after panic unwind");
+        assert!(LENT.with_borrow(Option::is_none), "LENT slot must be cleared after unwind");
+        // Subsequent measure and lend still work cleanly.
+        let after_panic = text.shaped;
+        let _ = lend(&mut text, || measure("Lend after panic", &[], style, None));
+        assert!(text.shaped > after_panic);
+    }
+
+    #[test]
+    fn lend_nests_and_restores_outer_on_return_and_panic() {
+        let style = TextStyle::new(14.0, 400.0);
+        let mut outer = TextSystem::default();
+        let mut inner = TextSystem::default();
+
+        lend(&mut outer, || {
+            let _ = measure("Outer before", &[], style, None);
+            lend(&mut inner, || {
+                let _ = measure("Inner normal", &[], style, None);
+            });
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                lend(&mut inner, || {
+                    let _ = measure("Inner panic", &[], style, None);
+                    panic!("inner boom");
+                });
+            }));
+            let _ = measure("Outer after", &[], style, None);
+        });
+
+        assert!(outer.shaped >= 2, "outer should receive both outer measures: {}", outer.shaped);
+        assert!(inner.shaped >= 2, "inner should receive both inner measures: {}", inner.shaped);
+        assert!(LENT.with_borrow(Option::is_none));
+    }
+
+    #[test]
+    fn with_text_reentrancy_and_override_bypass_lent() {
+        let style = TextStyle::new(14.0, 400.0);
+        let mut text = TextSystem::default();
+        let mut saw_nested = false;
+
+        lend(&mut text, || {
+            with_text(|outer| {
+                let before = outer.shaped;
+                // Re-entrant call sees active RefCell borrow and falls back to MEASURER without panicking.
+                let (w, _) = measure("Reentrant fallback", &[], style, None);
+                assert!(w > 50.0);
+                assert_eq!(outer.shaped, before, "re-entrant measure must not touch actively borrowed lent system");
+                saw_nested = true;
+            });
+            // A `with_families` override bypasses LENT without disturbing it.
+            let _guard = with_families("Inter", "IBM Plex Mono");
+            let (w, _) = measure("Override bypass", &[], style, None);
+            assert!(w > 50.0);
+        });
+
+        assert!(saw_nested);
+        assert_eq!(text.shaped, 0, "neither re-entrant nor overridden measure should shape on lent text");
+        assert!(LENT.with_borrow(Option::is_none));
     }
 }

@@ -171,3 +171,15 @@ fn a_cached_ink_probe_allocates_nothing() {
     }
     assert_eq!(allocs() - before, 0);
 }
+
+#[test]
+fn text_lend_allocates_nothing() {
+    let mut text = rune::text::TextSystem::default();
+    // Warm thread-local LENT slot initialization once before counting.
+    rune::text::lend(&mut text, || {});
+    let before = allocs();
+    for _ in 0..100 {
+        rune::text::lend(&mut text, || {});
+    }
+    assert_eq!(allocs() - before, 0, "lend must not heap-allocate when swapping placeholder");
+}

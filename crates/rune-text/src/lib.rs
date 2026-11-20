@@ -393,6 +393,27 @@ impl TextSystem {
         let (sans, mono) = families::slots(families.0, families.1);
         let mut text = TextSystem {
             font_cx: FontContext { collection, source_cache: SourceCache::default() },
+            families: (families.0.to_owned(), families.1.to_owned()),
+            sans,
+            mono,
+            slot_system_mono: names_system_mono(families.0) || names_system_mono(families.1),
+            fallbacks: system_fonts::Fallbacks::new(list, cjk),
+            atlas: Atlas::new(),
+            ..Self::empty()
+        };
+        text.load_installed(families.0);
+        text.load_installed(families.1);
+        text.load_slot_fallbacks();
+        text.follow_full_faces();
+        text
+    }
+
+    /// An unallocated placeholder swapped into a caller's slot while [`measure::lend`] holds the
+    /// live [`TextSystem`] in thread-local storage.
+    pub(crate) fn empty() -> Self {
+        let collection = Collection::new(CollectionOptions { shared: false, system_fonts: false });
+        TextSystem {
+            font_cx: FontContext { collection, source_cache: SourceCache::default() },
             layout_cx: LayoutContext::new(),
             scale_cx: ScaleContext::new(),
             layouts: Default::default(),
@@ -407,24 +428,25 @@ impl TextSystem {
             runs: Default::default(),
             generation: 0,
             layout_ids: LayoutIds::default(),
-            families: (families.0.to_owned(), families.1.to_owned()),
+            families: (String::new(), String::new()),
             chosen: 0,
             language: None,
             language_epoch: 0,
             faces_taken: 0,
-            sans, mono,
+            sans: String::new(),
+            mono: String::new(),
             symbol_families: Vec::new(),
             emoji: None,
             math: None,
             mono_scripts: None,
             system_mono: None,
-            slot_system_mono: names_system_mono(families.0) || names_system_mono(families.1),
+            slot_system_mono: false,
             scripts: 0,
             font_files: LoadedFiles::new(),
-            fallbacks: system_fonts::Fallbacks::new(list, cjk),
+            fallbacks: system_fonts::Fallbacks::default(),
             system_faces: Default::default(),
             installed: Default::default(),
-            atlas: Atlas::new(),
+            atlas: Atlas::empty(),
             color_glyphs: GlyphMap::default(),
             color_pixels: Vec::new(),
             color_bytes: 0,
@@ -448,12 +470,7 @@ impl TextSystem {
             paths: Default::default(),
             masks: Default::default(),
             face_kinds: Default::default(),
-        };
-        text.load_installed(families.0);
-        text.load_installed(families.1);
-        text.load_slot_fallbacks();
-        text.follow_full_faces();
-        text
+        }
     }
 
     /// The `trak` table of the font text in `family` at `weight` shapes with first.

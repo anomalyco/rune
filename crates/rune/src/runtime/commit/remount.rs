@@ -143,7 +143,7 @@ fn build_indexed_row(
 }
 
 impl Measurement<'_> {
-    pub(in crate::runtime) fn remount_virtuals(mut self) -> RemountOutcome {
+    pub(in crate::runtime) fn remount_virtuals(mut self, text: &mut TextSystem) -> RemountOutcome {
         self.virtual_culled.clear();
         self.virtual_inputs.clear();
 
@@ -511,7 +511,7 @@ impl Measurement<'_> {
         self.memo.path_scratch = path_buf;
         taffy.finish_flatten();
         let root_id = nodes[0].taffy;
-        let (layout, mut nodes) = self.solve(taffy, root_id, nodes);
+        let (layout, mut nodes) = self.solve(text, taffy, root_id, nodes);
         if self.measure_virtuals(&nodes, false) {
             memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused, &[]);
             nodes.clear();
@@ -547,6 +547,7 @@ impl<S: 'static> Runtime<S> {
     /// the fallback left in the lists before the full rebuild that follows it fills them again.
     pub(in crate::runtime) fn remount_falls_back(&mut self) -> bool {
         let (core, app) = self.split_mut();
-        matches!(core.measurement(&app, true).remount_virtuals(), RemountOutcome::Fallback)
+        let (m, text) = core.measurement(&app, true);
+        matches!(m.remount_virtuals(text), RemountOutcome::Fallback)
     }
 }

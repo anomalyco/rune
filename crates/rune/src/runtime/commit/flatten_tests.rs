@@ -189,3 +189,12 @@ fn cold_packing_handles_el_only_cold_meta_only_and_shared_clones() {
     assert_eq!(matched.label.as_deref(), Some("Card"));
     assert_eq!(matched.help.as_deref(), Some("Open card"));
 }
+
+#[test]
+fn push_usize_formats_single_and_multi_digit_indices() {
+    for n in [0usize, 1, 9, 10, 42, 999, 1_234_567, usize::MAX] {
+        let mut buf = String::from("root/#");
+        push_usize(&mut buf, n);
+        assert_eq!(buf, format!("root/#{n}"));
+    }
+}

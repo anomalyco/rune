@@ -370,7 +370,6 @@ pub(super) struct Measurement<'a> {
     pub(super) nodes: &'a mut [Node],
     pub(super) committing: bool,
     pub(super) spare_nodes: &'a mut Vec<Node>,
-    pub(super) text: &'a mut TextSystem,
     pub(super) layout: &'a mut LayoutEngine,
     pub(super) node_index: &'a mut HashMap<NodeId, usize>,
     pub(super) path_ids: &'a mut HashMap<String, NodeId>,
