@@ -52,6 +52,8 @@ pub(crate) struct NodeCold {
     pub(crate) help_cut: bool,
     /// `El::help_side`.
     pub(super) help_side: Option<crate::Side>,
+    /// `El::help_open`.
+    pub(super) help_open: bool,
     #[cfg(debug_assertions)]
     pub(super) scroll_source: Option<&'static std::panic::Location<'static>>,
 }
@@ -84,6 +86,7 @@ impl crate::cold::Empty for NodeCold {
         help: None,
         help_cut: false,
         help_side: None,
+        help_open: false,
         #[cfg(debug_assertions)]
         scroll_source: None,
     };
