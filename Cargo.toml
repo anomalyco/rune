@@ -98,9 +98,11 @@ exclude = ["tools/rune-dev-guard", "vendor/accesskit_macos", "vendor/accesskit_w
 # `render::damaged`), Windows system DLLs (`d3d12.dll`, `dxgi.dll`, `dcomp.dll`, `d3dcompiler_47.dll`,
 # `opengl32.dll`) loaded with `LOAD_LIBRARY_SEARCH_SYSTEM32`, a removed D3D12 device's work left
 # pending rather than read as finished (`Device::reached`; Rune sees the removal through
-# `rune_gpu::health::removed`), and GPU-written drain markers (`WriteBufferImmediate`) so releasing
-# a removed device or unconfiguring its surface waits until queued command lists finish executing
-# instead of freeing resources under the driver (`DrainTracker`). Re-made by
+# `rune_gpu::health::removed`), and GPU-written drain markers (`WriteBufferImmediate`) on software
+# adapters (`DXGI_ADAPTER_FLAG_SOFTWARE`, WARP) so releasing a removed WARP device or unconfiguring
+# its surface waits until queued command lists finish executing instead of freeing resources under
+# its worker threads (`DrainTracker`; hardware adapters pay zero marker cost, while skipping
+# `ExecuteCommandLists` and `allocator.Reset()` once removed on every adapter). Re-made by
 # `scripts/vendor-wgpu-hal.sh <version>` when wgpu is bumped. An app that builds Rune patches it too:
 # a dependency's `[patch]` doesn't apply to the workspace that depends on it.
 [patch.crates-io]

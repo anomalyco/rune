@@ -136,6 +136,7 @@ impl super::Device {
             None
         };
 
+        let drain = Arc::new(super::DrainTracker::new(&adapter, &raw));
         let shared = super::DeviceShared {
             adapter,
             zero_buffer,
@@ -179,7 +180,7 @@ impl super::Device {
             )?,
             sampler_heap: super::sampler::SamplerHeap::new(&raw, &private_caps)?,
             private_caps,
-            drain: Arc::new(super::DrainTracker::new(&raw)),
+            drain,
         };
 
         let mut rtv_pool =
@@ -875,6 +876,7 @@ impl crate::Device for super::Device {
             intermediate_copy_bufs: Vec::new(),
             null_rtv_handle: self.null_rtv_handle,
             list: None,
+            list2: None,
             free_lists: Vec::new(),
             pass: super::PassState::new(),
             temp: super::Temp::default(),
