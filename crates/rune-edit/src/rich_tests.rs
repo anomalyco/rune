@@ -572,7 +572,10 @@ fn the_caret_steps_over_a_pill_in_one_move() {
     assert_eq!(e.range(), (10, 10));
     e.set_caret(2);
     e.key(&KeyEvent { key: Key::Right, mods: Mods { alt: true, ..Mods::default() } }, None);
-    assert_eq!(e.range(), (10, 10), "a word move that stops inside the label steps over it");
+    // On macOS a word forward stops at the pill's end; elsewhere it lands past the trailing
+    // space at the next word's start, still stepping over the label in one move.
+    let after_pill = if cfg!(target_os = "macos") { 10 } else { 11 };
+    assert_eq!(e.range(), (after_pill, after_pill), "a word move that stops inside the label steps over it");
     e.set_caret(2);
     e.key(&KeyEvent { key: Key::Right, mods: Mods { shift: true, ..Mods::default() } }, None);
     assert_eq!((e.anchor, e.focus), (2, 10), "Shift+Right selects the whole pill");
@@ -834,7 +837,13 @@ fn pill_edge_cases_words_lines_bidi_and_direct_text_mutation() {
     e.key(&alt_right, None);
     assert_eq!(e.range(), (5, 5));
     e.key(&alt_right, None);
-    assert_eq!(e.range(), (10, 10));
+    // On macOS a word forward stops at the pill's end; elsewhere it skips trailing punctuation
+    // and spaces to the next pill's start.
+    let after_noah = if cfg!(target_os = "macos") { 10 } else { 12 };
+    assert_eq!(e.range(), (after_noah, after_noah));
+    e.key(&alt_right, None);
+    assert_eq!(e.range(), (21, 21), "steps over @Maya Lin as one word");
+    e.set_caret(10);
     e.key(&alt_bs, None);
     assert_eq!((e.text.as_str(), pills_of(&e)), ("@maya, @Maya Lin", vec![(0..5, "u:1".to_owned()), (7..16, "u:3".to_owned())]));
 
