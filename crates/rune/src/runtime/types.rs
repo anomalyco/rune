@@ -583,7 +583,7 @@ pub(crate) struct TreeState {
     pub(in crate::runtime) has_pixel_aspect: bool,
     pub(in crate::runtime) has_drawn_layout: bool,
     pub(in crate::runtime) has_key_up: bool,
-    pub(in crate::runtime) node_index: HashMap<NodeId, usize>,
+    pub(in crate::runtime) node_index: NodeIndex,
     /// The node ids the last build indexed its scratch by.
     pub(in crate::runtime) built_ids: Vec<NodeId>,
     /// The last commit's node buffer, emptied, for the next flatten to fill: an app of a few
@@ -620,7 +620,7 @@ impl TreeState {
             has_key_up: false,
             built: false,
             has_playground: false,
-            node_index: HashMap::default(),
+            node_index: NodeIndex::default(),
             path_ids: HashMap::default(),
             spare_nodes: Vec::new(),
             built_ids: Vec::new(),

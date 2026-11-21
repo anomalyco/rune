@@ -5,7 +5,7 @@ use super::*;
 // tight scan without an extra call frame.
 #[inline]
 pub(super) fn carry_live_bindings(
-    node_index: &HashMap<NodeId, usize>,
+    node_index: &NodeIndex,
     scene: &mut Scene,
     nodes: &mut [Node],
     old_nodes: &[Node],
@@ -49,7 +49,7 @@ pub(super) fn carry_live_bindings(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn retire_removed_nodes(
-    node_index: &mut HashMap<NodeId, usize>,
+    node_index: &mut NodeIndex,
     scene: &mut Scene,
     flying: &[(NodeId, MRect)],
     text: &mut TextSystem,

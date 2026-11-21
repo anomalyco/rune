@@ -114,7 +114,7 @@ pub(in crate::runtime) fn set_group_rest(
 }
 
 /// Drops the rest track of each dropped group opacity whose fade to full landed this frame.
-pub(in crate::runtime) fn land_group_fades(scene: &mut Scene, nodes: &mut [Node], node_index: &HashMap<NodeId, usize>) {
+pub(in crate::runtime) fn land_group_fades(scene: &mut Scene, nodes: &mut [Node], node_index: &NodeIndex) {
     let landed: Vec<usize> = scene.store().events().iter()
         .filter_map(|e| match *e {
             rune_motion::MotionEvent::Settled { node, prop, .. } if prop == P_GROUP_REST.id => node_index.get(&node).copied(),

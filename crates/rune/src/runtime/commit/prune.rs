@@ -77,7 +77,7 @@ impl RuntimeCore {
         let mut remap = std::mem::take(&mut self.commit.apply_scratch.remap);
         remap.clear();
         remap.resize(old.len(), None);
-        self.tree.node_index.clear();
+        self.tree.node_index.rebuild(old.len());
         for (old_idx, mut n) in old.drain(..).enumerate() {
             if !self.scene.contains(n.id) {
                 self.hover_pruned(&n);

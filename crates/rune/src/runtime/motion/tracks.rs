@@ -393,7 +393,7 @@ impl MotionState {
     pub(in crate::runtime) fn step_loops_into_scene(
         &self,
         nodes: &[Node],
-        node_index: &HashMap<NodeId, usize>,
+        node_index: &NodeIndex,
         scene: &mut Scene,
         reduced_motion: bool,
     ) {
@@ -429,7 +429,7 @@ impl MotionState {
 
     /// Keeps at most the newest `limit` reveal states for texts that have left `node_index`,
     /// dropping the oldest first.
-    pub(in crate::runtime) fn cap_reveals(&mut self, node_index: &HashMap<NodeId, usize>, limit: usize) {
+    pub(in crate::runtime) fn cap_reveals(&mut self, node_index: &NodeIndex, limit: usize) {
         if self.reveals.is_empty() {
             self.reveals_kept.clear();
             return;
@@ -457,7 +457,7 @@ impl MotionState {
     pub(in crate::runtime) fn prune_detached(
         &mut self,
         scene: &Scene,
-        node_index: &HashMap<NodeId, usize>,
+        node_index: &NodeIndex,
         reveals_limit: usize,
     ) {
         if !self.loops.is_empty() {

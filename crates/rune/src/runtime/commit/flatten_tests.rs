@@ -46,7 +46,7 @@ fn run_flatten<E: FlattenEl>(el: E, foreground: Option<Color>) -> (Vec<Node>, La
     let mut nodes = Vec::new();
     let mut path_buf = String::new();
     let mut old_nodes = Vec::new();
-    let old_index = HashMap::default();
+    let old_index = NodeIndex::default();
     let committed = HashMap::default();
     let mut path_ids = HashMap::default();
     let mut next_id = 1u64;

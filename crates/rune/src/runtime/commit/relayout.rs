@@ -279,7 +279,7 @@ fn build_relayout_spans(
     nodes: &[Node],
     virtuals: &HashMap<String, crate::el::virtual_list::VirtualList>,
     path_ids: &HashMap<String, NodeId>,
-    node_index: &HashMap<NodeId, usize>,
+    node_index: &NodeIndex,
     split: &mut Vec<bool>,
     out: &mut Vec<memo_reuse::ReusedSpan>,
 ) {

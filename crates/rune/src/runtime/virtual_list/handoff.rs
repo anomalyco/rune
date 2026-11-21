@@ -50,7 +50,7 @@ impl types::TreeState {
 }
 
 impl Handoff {
-    pub(in crate::runtime) fn place(&mut self, grows: &mut HashMap<NodeId, GrowTrack>, scene: &mut rune_motion::Scene, nodes: &[Node], index: &HashMap<NodeId, usize>, scrolls: &mut HashMap<NodeId, ScrollState>) -> bool {
+    pub(in crate::runtime) fn place(&mut self, grows: &mut HashMap<NodeId, GrowTrack>, scene: &mut rune_motion::Scene, nodes: &[Node], index: &NodeIndex, scrolls: &mut HashMap<NodeId, ScrollState>) -> bool {
         let Self::Growing { row, viewport, frames, rows } = self else { return false };
         let (left, rate) = grows.get(row).filter(|g| g.target > 0.0).map_or((0.0, 0.0), |g| ((1.0 - g.h / g.target).clamp(0.0, 1.0), g.v / g.target));
         for &(id, from, to) in rows.iter() {

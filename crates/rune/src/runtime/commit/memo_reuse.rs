@@ -125,7 +125,7 @@ impl CommitState {
 pub(in crate::runtime) struct MemoFlattenCtx<'a> {
     pub(in crate::runtime) old_nodes: &'a mut [Node],
     pub(in crate::runtime) old_present_len: usize,
-    pub(in crate::runtime) old_node_index: &'a HashMap<NodeId, usize>,
+    pub(in crate::runtime) old_node_index: &'a NodeIndex,
     pub(in crate::runtime) old_cursor: usize,
     pub(in crate::runtime) committing: bool,
     pub(in crate::runtime) committed: &'a HashMap<u64, FlattenedMemo>,

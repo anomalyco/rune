@@ -85,6 +85,8 @@ mod interaction;
 mod key_index;
 pub(crate) mod layout_read;
 mod motion;
+mod node_index;
+use node_index::NodeIndex;
 mod paint;
 mod paint_probe;
 mod playground;
