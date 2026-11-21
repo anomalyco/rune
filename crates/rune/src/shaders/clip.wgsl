@@ -45,6 +45,43 @@ fn ramp(d: f32, fade: f32) -> f32 {
     return x * x * (3.0 - 2.0 * x);
 }
 
+// Piecewise-linear soft edge through up to three interior `(t, alpha)` stops packed into
+// `packed_stops` (`1/200` quantization in two exact 24-bit `f32` integers), anchored at `(0, 0)`
+// and `(1, 1)` (`ScrollFade::stops`).
+fn ramp_stops(d: f32, fade: f32, packed_stops: vec2<f32>) -> f32 {
+    if (fade == 0.0) {
+        return clamp(d + 0.5, 0.0, 1.0);
+    }
+    let x = clamp(d / abs(fade), 0.0, 1.0);
+    let lo = u32(packed_stops.x + 0.5);
+    let hi = u32(packed_stops.y + 0.5);
+    let ts = vec4<f32>(
+        f32(lo & 0xFFu) / 200.0,
+        f32((lo >> 16u) & 0xFFu) / 200.0,
+        f32((hi >> 8u) & 0xFFu) / 200.0,
+        1.0,
+    );
+    let ys = vec4<f32>(
+        f32((lo >> 8u) & 0xFFu) / 200.0,
+        f32(hi & 0xFFu) / 200.0,
+        f32((hi >> 16u) & 0xFFu) / 200.0,
+        1.0,
+    );
+    var px = 0.0;
+    var py = 0.0;
+    for (var k = 0u; k < 4u; k++) {
+        let nx = ts[k];
+        let ny = ys[k];
+        if (x <= nx) {
+            let span = nx - px;
+            return select(ny, mix(py, ny, (x - px) / span), span > 1e-6);
+        }
+        px = nx;
+        py = ny;
+    }
+    return 1.0;
+}
+
 fn unpack_clip_radii(w: u32) -> vec4<f32> {
     if (w == 0u) { return vec4<f32>(0.0); }
     if ((w & 0x60000000u) != 0x60000000u) {
@@ -60,18 +97,24 @@ fn unpack_clip_radii(w: u32) -> vec4<f32> {
     ) * (step * sgn);
 }
 
-fn clip_alpha(p: vec2<f32>, c: vec4<f32>, packed: vec4<u32>) -> f32 {
+fn clip_alpha_stops(p: vec2<f32>, c: vec4<f32>, packed: vec4<u32>, stops: vec2<f32>) -> f32 {
     let f = vec4<f32>(unpack2x16float(packed.x), unpack2x16float(packed.y));
-    let offset = unpack4x8unorm(packed.z);
     let hard = vec4<f32>(p - c.xy, c.zw - p);
     var alpha = 1.0;
     for (var edge = 0u; edge < 4u; edge++) {
+        let raw_off = (packed.z >> (edge * 8u)) & 0xFFu;
+        let is_stops = (raw_off & 0x80u) != 0u;
+        let offset = f32(raw_off & 0x7Fu) / 127.0;
         // Keep the original sub-pixel ramp exactly when its origin is the hard edge.
-        var a = ramp(hard[edge], f[edge]);
-        if offset[edge] >= 1.0 {
+        var a: f32;
+        if (offset >= 1.0) {
             a = ramp(hard[edge], 0.0);
-        } else if offset[edge] > 0.0 {
-            a = min(ramp(hard[edge], 0.0), ramp(hard[edge] + offset[edge] * abs(f[edge]), f[edge]));
+        } else if (offset > 0.0) {
+            let shifted = hard[edge] + offset * abs(f[edge]);
+            let r = select(ramp(shifted, f[edge]), ramp_stops(shifted, f[edge], stops), is_stops);
+            a = min(ramp(hard[edge], 0.0), r);
+        } else {
+            a = select(ramp(hard[edge], f[edge]), ramp_stops(hard[edge], f[edge], stops), is_stops);
         }
         alpha *= a;
     }
@@ -80,4 +123,8 @@ fn clip_alpha(p: vec2<f32>, c: vec4<f32>, packed: vec4<u32>) -> f32 {
         alpha *= clamp(0.5 - sd_rounded(p - c.xy - half, half, unpack_clip_radii(packed.w)), 0.0, 1.0);
     }
     return alpha;
+}
+
+fn clip_alpha(p: vec2<f32>, c: vec4<f32>, packed: vec4<u32>) -> f32 {
+    return clip_alpha_stops(p, c, packed, vec2<f32>(0.0));
 }

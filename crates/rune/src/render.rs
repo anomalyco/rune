@@ -304,6 +304,7 @@ pub struct Renderer {
     spring_instances: usize,
     layers: layers::Layers,
     srgb_blend: bool,
+    fade_stops: [f32; 2],
     /// Effect slots of the uploaded instances, by index.
     effects: Vec<(u32, Instance)>,
     /// Pooled viewport-sized backdrop copies, allocated only when a slot sets `effect_backdrop`
@@ -346,6 +347,10 @@ impl Renderer {
         if let Some(s) = &mut self.surfaces {
             s.set_srgb_blend(enabled);
         }
+    }
+
+    pub fn set_fade_stops(&mut self, stops: [f32; 2]) {
+        self.fade_stops = stops;
     }
 
     /// Opt-in retained geometry. IDs map instances to shared translation/opacity nodes.

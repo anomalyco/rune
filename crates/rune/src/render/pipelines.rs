@@ -102,6 +102,7 @@ impl Renderer {
             spring_instances,
             layers: Default::default(),
             srgb_blend: false,
+            fade_stops: [0.0; 2],
             effects: Vec::new(),
             backdrops: Vec::new(),
             backdrop_used: false,
