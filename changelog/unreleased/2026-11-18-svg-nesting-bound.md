@@ -1,0 +1,1 @@
+- SVG and SVGZ images nested deeper than 512 container levels are refused with `ImageError` before XML parsing instead of overflowing a decoder thread's stack, and `rune-images` workers reserve an 8 MiB stack so drawings up to the 512-level bound decode with ample headroom.
