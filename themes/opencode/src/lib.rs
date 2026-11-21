@@ -240,6 +240,7 @@ fn build(dark: bool) -> Kit {
         blend_over: Some(blend),
         ring: None,
         invalid_text: true,
+        forced: None,
     }
 }
 

@@ -32,6 +32,10 @@ fn shell(k: &Kit, e: El, state: State, invalid: bool, focused: bool) -> El {
     if state == State::Disabled {
         return k.disabled_dim(k.elevate(e, k.elevation.input()), true);
     }
+    if let Some(highlight) = k.forced {
+        let e = if invalid { e.border(2.0, c.text_base).border_dash(4.0, 3.0) } else { e.border(1.0, c.text_base) };
+        return if focused || state == State::Focus { e.outline(2.0, 2.0, highlight) } else { e };
+    }
     if invalid {
         e.outline(1.0, -1.0, c.danger.fg)
     } else if focused || state == State::Focus {
@@ -381,6 +385,12 @@ impl TextInput {
             e = e.child(b);
         }
         if self.plain {
+            // A contrast theme shows the ring a plain field (a palette's search) otherwise leaves
+            // off: its look is a fill the theme doesn't keep apart (`search-list.css`).
+            let e = match k.forced {
+                Some(highlight) if self.edit.focused && !disabled => e.outline(2.0, 2.0, highlight),
+                _ => e,
+            };
             return k.disabled_dim(e, disabled);
         }
         shell(k, e, self.state, self.invalid && !disabled, self.edit.focused && !disabled)
