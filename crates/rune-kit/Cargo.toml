@@ -29,7 +29,7 @@ wasm-bindgen = { workspace = true, optional = true }
 web-sys = { workspace = true, optional = true, features = ["Blob", "BlobPropertyBag", "ErrorEvent", "MessageEvent", "Url", "Window", "Worker"] }
 
 [features]
-default = ["syntax"]
+default = ["syntax", "markdown", "math"]  # proof branch only
 # Built-in syntax highlighting via `rune-highlights` (80 languages). Disable with
 # `default-features = false` to drop the lexers when an app provides its own highlighter or
 # draws no code.
