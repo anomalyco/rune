@@ -227,7 +227,9 @@ pub(super) fn rasterize(dl: &DisplayList, body_pt: f32, ink: Color, scale: f32) 
     let mut pixmap = Pixmap::new(px_w, px_h)?;
     let em_px = em_pt * scale;
     let margin_px = RASTER_MARGIN_PT * scale;
-    let baseline_y = margin_px + dl.height * em_px;
+    // RaTeX's display list places every item from the box's top edge (	o_display_list starts at
+    // aseline_y = root.height), so only the margin offsets it.
+    let top = margin_px;
     let canvas_w = px_w as f32;
     let canvas_h = px_h as f32;
 
@@ -250,7 +252,7 @@ pub(super) fn rasterize(dl: &DisplayList, body_pt: f32, ink: Color, scale: f32) 
                     }
                 };
                 let gx = margin_px + x * em_px;
-                let gy = baseline_y + y * em_px;
+                let gy = top + y * em_px;
                 if gx < -em_px * 4.0 || gx > canvas_w + em_px * 4.0 || gy < -em_px * 4.0 || gy > canvas_h + em_px * 4.0 {
                     continue;
                 }
@@ -272,7 +274,7 @@ pub(super) fn rasterize(dl: &DisplayList, body_pt: f32, ink: Color, scale: f32) 
                 let lx = margin_px + x * em_px;
                 let lw = width * em_px;
                 let lh = (thickness * em_px).max(1.0);
-                let ly = baseline_y + y * em_px - lh * 0.5;
+                let ly = top + y * em_px - lh * 0.5;
                 // Clip strictly to canvas bounds before iterating dashes (prevents off-canvas
                 // and f32-ULP infinite loops on huge `\hdashline` / `\rule` widths).
                 let x0 = lx.max(0.0);
@@ -308,7 +310,7 @@ pub(super) fn rasterize(dl: &DisplayList, body_pt: f32, ink: Color, scale: f32) 
             }
             DisplayItem::Rect { x, y, width, height, color } => {
                 let rx = margin_px + x * em_px;
-                let ry = baseline_y + y * em_px;
+                let ry = top + y * em_px;
                 let rw = width * em_px;
                 let rh = height * em_px;
                 let x0 = rx.max(0.0);
@@ -325,7 +327,7 @@ pub(super) fn rasterize(dl: &DisplayList, body_pt: f32, ink: Color, scale: f32) 
             }
             DisplayItem::Path { x, y, fill, color, commands } => {
                 let ox = margin_px + x * em_px;
-                let oy = baseline_y + y * em_px;
+                let oy = top + y * em_px;
                 let mut pb = PathBuilder::new();
                 for &cmd in commands {
                     match cmd {
