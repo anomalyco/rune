@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 use std::sync::mpsc;
 
 pub(crate) mod animated;
@@ -179,39 +179,50 @@ const DECODERS: usize = 4;
 #[cfg(not(target_arch = "wasm32"))]
 const INLINE_RGBA_PIXELS: u64 = 64 * 64;
 
-/// The process's decoder threads, shared by every cache and started by the first image to
-/// decode: an app that makes a cache per feature, or shows no image, pays no thread for it.
-/// The caller starts one; that one starts the others, so the first image (often in a window's
-/// first frame) costs its thread one spawn, not four.
-/// Each worker reserves `WORKER_STACK`: `MAX_SVG_DEPTH` (512 nested SVG containers, ~2.3 MiB in
-/// `usvg` + `resvg` on an LTO build) leaves > 5.5 MiB of headroom. Address space only.
+/// The images waiting to decode, shared by every cache, and how many decoders are draining them.
+/// A decoder is a task on Rune's shared threads (`task::spawn`) that decodes until none is left:
+/// a session opening on several screenshots decodes them side by side, and with nothing to
+/// decode no thread stays for it (each kept decoder thread held its stack and its allocator
+/// pages for the process's life). Task threads reserve the stack `MAX_SVG_DEPTH` needs
+/// (`rune_core::task`'s `STACK`).
 #[cfg(not(target_arch = "wasm32"))]
-const WORKER_STACK: usize = 8 * 1024 * 1024;
+static DECODING: Mutex<(std::collections::VecDeque<Job>, usize)> = Mutex::new((std::collections::VecDeque::new(), 0));
 
+/// Queues `job`, and starts a decoder for it while fewer than one per core (at most
+/// [`DECODERS`]) run. False when no decoder runs and none could start.
 #[cfg(not(target_arch = "wasm32"))]
-fn decoders() -> &'static mpsc::Sender<Job> {
-    static JOBS: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
-    JOBS.get_or_init(|| {
-        let (jobs, receive) = mpsc::channel::<Job>();
-        // A session opening on several screenshots decodes them side by side, not one by one.
-        let receive = Arc::new(Mutex::new(receive));
-        let count = DECODERS.min(std::thread::available_parallelism().map_or(1, |n| n.get()));
-        let first = receive.clone();
-        std::thread::Builder::new().name("rune-images".into()).stack_size(WORKER_STACK).spawn(move || {
-            for _ in 1..count {
-                let receive = receive.clone();
-                std::thread::Builder::new().name("rune-images".into()).stack_size(WORKER_STACK).spawn(move || decode_jobs(&receive)).ok();
-            }
-            decode_jobs(&first);
-        }).expect("image worker");
-        jobs
-    })
+fn decode_later(job: Job) -> bool {
+    let mut d = DECODING.lock().unwrap_or_else(|e| e.into_inner());
+    d.0.push_back(job);
+    let most = DECODERS.min(std::thread::available_parallelism().map_or(1, |n| n.get()));
+    if d.1 >= most {
+        return true;
+    }
+    d.1 += 1;
+    drop(d);
+    if rune_core::task::spawn("rune-images", decode_jobs).is_ok() {
+        return true;
+    }
+    let mut d = DECODING.lock().unwrap_or_else(|e| e.into_inner());
+    d.1 -= 1;
+    if d.1 > 0 {
+        return true;
+    }
+    d.0.pop_back();
+    false
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn decode_jobs(receive: &Mutex<mpsc::Receiver<Job>>) {
+fn decode_jobs() {
     loop {
-        let Ok(job) = receive.lock().unwrap_or_else(|e| e.into_inner()).recv() else { return };
+        let job = {
+            let mut d = DECODING.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(job) = d.0.pop_front() else {
+                d.1 -= 1;
+                return;
+            };
+            job
+        };
         job.image.finish(job.input.decode_caught());
         (job.waker)();
     }
@@ -361,7 +372,7 @@ impl ImageCache {
             return image;
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if decoders().send(Job { image: image.clone(), input, waker: self.waker.clone() }).is_err() {
+        if !decode_later(Job { image: image.clone(), input, waker: self.waker.clone() }) {
             image.0.decoded.set(Err(ImageError("image worker stopped".into()))).ok();
         }
         #[cfg(target_arch = "wasm32")]

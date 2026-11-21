@@ -12,6 +12,10 @@ use std::time::Duration;
 const KEEP: usize = 2;
 /// How long any other thread waits for a task before it ends.
 const LINGER: Duration = Duration::from_secs(10);
+/// Each thread's stack reservation: image decoding runs here, and an SVG at `rune-image`'s
+/// 512-level nesting bound needs ~2.3 MiB in `usvg` + `resvg` on an LTO build. Address space
+/// only; pages are committed as a thread touches them.
+const STACK: usize = 8 * 1024 * 1024;
 
 type Job = (String, Box<dyn FnOnce() + Send>);
 
@@ -37,7 +41,7 @@ pub(super) fn run(name: String, work: Box<dyn FnOnce() + Send>) -> std::io::Resu
     if s.idle >= s.jobs.len() {
         return Ok(());
     }
-    match std::thread::Builder::new().name("rune-task".into()).spawn(worker) {
+    match std::thread::Builder::new().name("rune-task".into()).stack_size(STACK).spawn(worker) {
         Ok(_) => {
             s.threads += 1;
             Ok(())
