@@ -111,6 +111,7 @@ atoms! {
     Focusable = "focusable",
     Disabled = "disabled",
     HelpSide = "helpSide",
+    HelpOpen = "helpOpen",
     FadeOut = "fadeOut",
     Dir = "dir",
 }
@@ -557,6 +558,12 @@ impl Props {
                 };
                 if let Some(side) = side {
                     with(e, |e| e.help_side(side));
+                }
+            }
+            // A Copy button's "Copied" held up after the press (`El::help_open`).
+            Atom::HelpOpen => {
+                if flag(v)? {
+                    with(e, |e| e.help_open(true));
                 }
             }
             Atom::FadeOut => self.fade_out = flag(v)?,
