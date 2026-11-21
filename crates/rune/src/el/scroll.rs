@@ -234,7 +234,11 @@ impl FadeStyle {
     /// 24-bit `f32` integers for `Globals::flags[2..4]` (`1/200` quantization, exact for CSS
     /// quarter/percent stops like `(0.25, 0.16), (0.5, 0.5), (0.75, 0.84)`).
     pub(crate) fn packed_stops(self) -> Option<[f32; 2]> {
-        let [(t1, a1), (t2, a2), (t3, a3)] = self.stops.or_else(|| self.end.and_then(|e| e.stops))?;
+        let end_stops = self.end.and_then(|e| e.stops);
+        if let (Some(a), Some(b)) = (self.stops, end_stops) {
+            debug_assert_eq!(a, b, "ScrollFade::stops supports one explicit stop curve per window; start and end fades differ");
+        }
+        let [(t1, a1), (t2, a2), (t3, a3)] = self.stops.or(end_stops)?;
         let q = |v: f32| (v.clamp(0.0, 1.0) * 200.0).round() as u32;
         let lo = q(t1) | (q(a1) << 8) | (q(t2) << 16);
         let hi = q(a2) | (q(t3) << 8) | (q(a3) << 16);
@@ -248,13 +252,13 @@ impl ScrollFade {
     /// `1 - strength`. A viewport at its top (or bottom, or stuck to it) shows that edge hard.
     /// Desktop's search lists fade so (`search-list.tsx`).
     pub fn strength(width: f32) -> Self {
-        ScrollFade { width: width.max(0.0), style: FadeStyle::SMOOTH }
+        ScrollFade { width: width.clamp(0.0, 65504.0), style: FadeStyle::SMOOTH }
     }
     /// Each edge feathers by as much as is hidden under it, up to `max` points, on a linear ramp
     /// from nothing at the edge: CSS `mask-image: linear-gradient(transparent, black
     /// min(max, scrollTop))`, as Desktop's vertical tabs do. It appears and leaves without a jump.
     pub fn feather(max: f32) -> Self {
-        ScrollFade { width: max.max(0.0), style: FadeStyle { feather: true, linear: true, ..FadeStyle::SMOOTH } }
+        ScrollFade { width: max.clamp(0.0, 65504.0), style: FadeStyle { feather: true, linear: true, ..FadeStyle::SMOOTH } }
     }
     /// A [`Self::strength`] fade is full once `points` are hidden, rather than 15: a small value
     /// shows the whole fade as soon as anything is hidden, as a mask a scroll listener toggles
@@ -278,8 +282,13 @@ impl ScrollFade {
         self
     }
     /// Ramps alpha piecewise-linearly through up to three interior `(position, alpha)` stops in
-    /// `(0, 1)`, anchored at `(0, 0)` (edge) and `(1, 1)` (full width), matching multi-stop CSS
+    /// `[0, 1]`, anchored at `(0, 0)` (edge) and `(1, 1)` (full width), matching multi-stop CSS
     /// `mask-image: linear-gradient(...)` masks (such as `[(0.25, 0.16), (0.5, 0.5), (0.75, 0.84)]`).
+    ///
+    /// Stops are sorted by `position` and must have non-decreasing `alpha` (checked with
+    /// `debug_assert!` and clamped monotonically in release builds so partial-strength inversion
+    /// stays exact). All explicit-stop fades active in a window share one per-frame stop curve;
+    /// distinct stop curves in the same tree trigger a `debug_assert!`.
     pub fn stops(mut self, stops: &[(f32, f32)]) -> Self {
         let mut pts: Vec<(f32, f32)> = stops
             .iter()
@@ -287,7 +296,13 @@ impl ScrollFade {
             .map(|&(t, a)| (t.clamp(0.0, 1.0), a.clamp(0.0, 1.0)))
             .take(3)
             .collect();
-        pts.sort_by(|a, b| a.0.total_cmp(&b.0));
+        pts.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
+        let mut max_a = 0.0f32;
+        for pt in &mut pts {
+            debug_assert!(pt.1 >= max_a, "ScrollFade::stops requires non-decreasing alpha (got {} after {max_a})", pt.1);
+            max_a = max_a.max(pt.1);
+            pt.1 = max_a;
+        }
         let mut arr = [(1.0, 1.0); 3];
         for (slot, pt) in arr.iter_mut().zip(pts) {
             *slot = pt;

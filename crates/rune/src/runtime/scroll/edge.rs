@@ -33,7 +33,7 @@ impl requests::ScrollTables {
     /// Node `n`'s own soft-clip widths `f` (points) as a device-pixel fade and the rect its ramps
     /// start from, given its optional stuck-to-bottom offset.
     pub(super) fn edge_fade(&self, n: &Node, f: [f32; 4], r: [f32; 4], k: f32, stuck: Option<f64>) -> ([f32; 4], [f32; 4]) {
-        let mut own = f.map(|v| v * k);
+        let mut own = f.map(|v| (v * k).clamp(-65504.0, 65504.0));
         let width = n.scroll_edges.fade;
         let Some(st) = self.scrolls.get(&n.id).filter(|_| width > 0.0 && n.scroll.is_some()) else { return (own, r) };
         let offset = stuck.unwrap_or(st.offset) + f64::from(st.slack.height());
@@ -120,8 +120,9 @@ impl RuntimeCore {
 /// it, `width` device pixels wide at `k` device pixels a point; a negative width ramps linearly,
 /// and a width above [`crate::render::instance::STOP_FADE_BIAS`] uses explicit piecewise-linear stops.
 fn edge_ramp(style: crate::el::FadeStyle, width: f32, hidden: f64, k: f32) -> (f32, f32) {
+    let width = width.clamp(0.0, 65504.0);
     if style.feather {
-        let w = width.min(hidden.max(0.0) as f32 * k);
+        let w = width.min(hidden.max(0.0) as f32 * k).min(65504.0);
         if w <= 0.0 { return (0.0, 0.0); }
         if style.stops.is_some() { return (crate::render::STOP_FADE_BIAS + w, 0.0); }
         return (if style.linear { -w } else { w }, 0.0);
@@ -130,11 +131,14 @@ fn edge_ramp(style: crate::el::FadeStyle, width: f32, hidden: f64, k: f32) -> (f
     let strength = (hidden / full).clamp(0.0, 1.0) as f32;
     if let Some(stops) = style.stops {
         let (w, o) = partial_stops(width, strength, stops);
-        return (if w > 0.0 { crate::render::STOP_FADE_BIAS + w } else { 0.0 }, o);
+        return (if w > 0.0 { crate::render::STOP_FADE_BIAS + w.min(65504.0) } else { 0.0 }, o);
     }
-    if !style.linear { return partial(width, strength); }
+    if !style.linear {
+        let (w, o) = partial(width, strength);
+        return (w.min(65504.0), o);
+    }
     let (w, o) = partial_linear(width, strength);
-    (-w, o)
+    (-w.min(65504.0), o)
 }
 
 /// [`partial`] on a piecewise-linear ramp through `stops`: finds the exact normalized `offset`

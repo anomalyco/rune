@@ -182,6 +182,9 @@ pub struct FxRenderer {
     sims: Option<crate::sim::Sims>,
     /// Upload staging, made by the first `prepare`, and the globals it last wrote.
     staging: Option<(rune_staging::Staging, Globals)>,
+    /// Packed explicit scroll-fade stops (`rune::Runtime::fade_stops`) uploaded into `backdrop_encoding.zw`.
+    fade_stops: [f32; 2],
+    uploaded_fade_stops: [f32; 2],
 }
 
 const INST_SIZE: usize = std::mem::size_of::<InstRaw>();
@@ -251,7 +254,7 @@ impl FxRenderer {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("fx backdrop encoding"),
                 contents: bytemuck::cast_slice(&[encoded, present, 0.0, 0.0]),
-                usage: wgpu::BufferUsages::UNIFORM,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             })
         });
         let pipes = Pipes::new(device, layout, format);
@@ -349,6 +352,8 @@ impl FxRenderer {
             opts,
             sims: None,
             staging: None,
+            fade_stops: [0.0; 2],
+            uploaded_fade_stops: [0.0; 2],
         }
     }
 
@@ -381,6 +386,14 @@ impl FxRenderer {
     /// Takes effect at the next `prepare`.
     pub fn set_srgb_blend(&mut self, on: bool) {
         self.srgb = Some(on);
+    }
+
+    /// Match the frame's explicit scroll-fade stop curve (`rune::Frame::fade_stops` /
+    /// `rune::render::EffectSite::fade_stops`) so effect slots inside a stops-faded scroller
+    /// fade along the same piecewise-linear curve as surrounding content. Takes effect at the next
+    /// `prepare`.
+    pub fn set_fade_stops(&mut self, stops: [f32; 2]) {
+        self.fade_stops = stops;
     }
 
     fn set_format(&mut self, format: wgpu::TextureFormat) {
