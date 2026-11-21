@@ -152,7 +152,7 @@ use paint::helpers::*;
 use paint::shape::push_shape;
 use paint::soft_edges::{in_fade, inherit_fade};
 
-pub(crate) use scroll::offset::ScrollRequest;
+pub(crate) use scroll::offset::{ScrollAnchor, ScrollRequest};
 pub(crate) use scroll::reveal::ScrollReveal;
 #[doc(hidden)]
 pub use scroll::watch::scroll_watch_state;
