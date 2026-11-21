@@ -88,6 +88,26 @@ pub(crate) struct InstRaw {
     pub fade: [u32; 4],
 }
 
+const _: () = {
+    assert!(std::mem::size_of::<InstRaw>() == 256);
+    assert!(std::mem::offset_of!(InstRaw, rect) == 0);
+    assert!(std::mem::offset_of!(InstRaw, shape) == 16);
+    assert!(std::mem::offset_of!(InstRaw, bounds) == 32);
+    assert!(std::mem::offset_of!(InstRaw, c0) == 48);
+    assert!(std::mem::offset_of!(InstRaw, c1) == 64);
+    assert!(std::mem::offset_of!(InstRaw, c2) == 80);
+    assert!(std::mem::offset_of!(InstRaw, p0) == 96);
+    assert!(std::mem::offset_of!(InstRaw, p1) == 112);
+    assert!(std::mem::offset_of!(InstRaw, p2) == 128);
+    assert!(std::mem::offset_of!(InstRaw, p3) == 144);
+    assert!(std::mem::offset_of!(InstRaw, t) == 160);
+    assert!(std::mem::offset_of!(InstRaw, aux) == 176);
+    assert!(std::mem::offset_of!(InstRaw, aux2) == 192);
+    assert!(std::mem::offset_of!(InstRaw, xf) == 208);
+    assert!(std::mem::offset_of!(InstRaw, clip) == 224);
+    assert!(std::mem::offset_of!(InstRaw, fade) == 240);
+};
+
 const KIND_GLOW: usize = 0;
 const KIND_PULSE: usize = 1;
 const KIND_ELECTRIC: usize = 2;

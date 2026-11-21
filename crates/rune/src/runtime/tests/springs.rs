@@ -10,9 +10,9 @@ fn dissolve_prepass_only_runs_for_trees_with_dissolve_nodes() {
     let mut rt = Runtime::new(false, view, (64.0, 32.0), Env::new(true, 1.0));
     for enabled in [false, true, false] {
         rt.state = enabled; rt.invalidate(); rt.frame(0.0);
-        assert_eq!(rt.has_dissolve, enabled);
-        assert_eq!(rt.dissolve_scratch.is_empty(), !enabled);
-        if enabled { assert!(rt.dissolve_scratch[0]); }
+        assert_eq!(rt.tree.has_dissolve, enabled);
+        assert_eq!(rt.paint.dissolve_scratch().is_empty(), !enabled);
+        if enabled { assert!(rt.paint.dissolve_scratch()[0]); }
     }
 }
 
@@ -23,10 +23,10 @@ fn a_child_too_faint_to_paint_does_not_isolate_its_dissolve_parent() {
     }
     let mut rt = Runtime::new(0.0005, view, (64.0, 32.0), Env::new(true, 1.0));
     rt.frame(0.0);
-    assert!(!rt.dissolve_scratch[0]);
+    assert!(!rt.paint.dissolve_scratch()[0]);
     rt.state = 0.5; rt.invalidate();
     for _ in 0..60 { rt.frame(1.0 / 60.0); }
-    assert!(rt.dissolve_scratch[0]);
+    assert!(rt.paint.dissolve_scratch()[0]);
 }
 
 #[test]
@@ -198,12 +198,12 @@ fn a_duplicate_matched_id_matches_the_last_one_and_warns() {
             .child(el().key("b").matched("tile").size(10.0, 10.0))
     }
     let mut rt = Runtime::new((), view, (100.0, 100.0), Env::new(true, 1.0));
-    rt.key_warnings = Some(Vec::new());
+    rt.commit.enable_key_warnings();
     rt.frame(0.0);
-    let warnings = rt.key_warnings.as_ref().unwrap();
+    let warnings = rt.commit.key_warnings().unwrap();
     assert!(warnings.len() == 1 && warnings[0].contains("duplicate matched id \"tile\""), "{warnings:?}");
-    let b = rt.nodes.iter().find(|n| n.key.as_deref() == Some("b")).unwrap().id;
-    assert_eq!(rt.matched.iter().map(|m| m.1).collect::<Vec<_>>(), [b]);
+    let b = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("b")).unwrap().id;
+    assert_eq!(rt.motion.matched_ids(), [b]);
 }
 
 #[test]
@@ -227,7 +227,7 @@ fn presence_exits_stay_drawn_and_revive_mid_flight() {
 
     // Remove the badge: it stays in the tree while its blur-replace exit runs.
     rt.state = false;
-    rt.dirty = true;
+    rt.commit.dirty = true;
     assert!(rt.frame(1.0 / 60.0));
     let badge = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("badge")).unwrap();
     assert!(badge.opacity > 0.0 && badge.opacity < 1.0);
@@ -235,14 +235,14 @@ fn presence_exits_stay_drawn_and_revive_mid_flight() {
     // Revive mid-exit: continues without a jump.
     let before = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("badge")).unwrap().opacity;
     rt.state = true;
-    rt.dirty = true;
+    rt.commit.dirty = true;
     rt.frame(1.0 / 60.0);
     let after = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("badge")).unwrap().opacity;
     assert!((after - before).abs() < 0.15, "{before} -> {after}");
 
     // Remove again and run until settled: unmounts only after opacity reaches 0.
     rt.state = false;
-    rt.dirty = true;
+    rt.commit.dirty = true;
     for _ in 0..120 {
         rt.frame(1.0 / 60.0);
     }
@@ -276,7 +276,7 @@ const LAB_DT: f64 = 1.0 / 60.0;
 
 fn lab_set(rt: &mut Runtime<Lab>, f: impl FnOnce(&mut Lab)) {
     f(&mut rt.state);
-    rt.dirty = true;
+    rt.commit.dirty = true;
 }
 
 fn lab_steps(rt: &mut Runtime<Lab>, n: usize) {
@@ -376,7 +376,7 @@ fn an_exit_in_a_frozen_subtree_finishes_after_resuming() {
 #[test]
 fn a_node_unmounted_at_once_in_a_scaled_subtree_drops_its_clock() {
     let mut rt = Lab::at(1.0, 0.5).runtime();
-    let badge = rt.nodes.iter().find(|n| n.key.as_deref() == Some("badge")).unwrap().id;
+    let badge = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("badge")).unwrap().id;
     assert_eq!(rt.scene.store().node_time_scale(badge), 0.5);
     lab_set(&mut rt, |s| s.badge = false);
     rt.settle_all();
@@ -398,7 +398,7 @@ fn an_exiting_element_drops_its_own_time_scale() {
     let mut rt = Runtime::new(true, view, (200.0, 100.0), Env::new(true, 1.0));
     assert!(!rt.frame(0.0));
     rt.state = false;
-    rt.dirty = true;
+    rt.commit.dirty = true;
     for _ in 0..3 { rt.frame(LAB_DT); }
     let card = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("card")).expect("exiting");
     assert!(card.exiting && card.opacity < 1.0, "its exit runs: {}", card.opacity);

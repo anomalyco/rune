@@ -20,20 +20,20 @@ pub(crate) fn bin(len: usize, bins: usize, b: usize) -> Range<usize> {
     (b * len / bins)..((b + 1) * len / bins).max(b * len / bins + 1)
 }
 
-pub(crate) fn view<S: 'static>(clip: &Clip, frame: usize, sel: Range<usize>, w: f32, lens: fn(&mut S) -> &mut Scrub) -> El {
+pub(crate) fn drag(scrub: &mut Scrub, d: &mut crate::Drag, tx: &mut Tx) {
+    if d.phase == Phase::Up { return; }
+    let Some(len) = scrub.clip().map(|c| c.len()) else { return };
+    let k = ((d.x / d.w.max(1.0)).clamp(0.0, 1.0) * len as f32) as usize;
+    scrub.seek(k, tx.mods().shift);
+}
+
+pub(crate) fn view(clip: &Clip, frame: usize, sel: Range<usize>, w: f32, bind_drag: &dyn Fn(El) -> El) -> El {
     let len = clip.len().max(1);
     let bins = ((w / BAR_PITCH) as usize).clamp(1, len);
     let pitch = w / bins as f32;
     let x_of = |k: usize| k as f32 / len as f32 * w;
-    let mut track = el().key("rewind-track").w(w).h(TRACK_H).radius(4.0).fill(Color::WHITE.alpha(0.04))
-        .role("slider").label("Frame")
-        .on_drag(move |s: &mut S, d: &mut crate::Drag, tx: &mut Tx| {
-            if d.phase == Phase::Up { return; }
-            let scrub = lens(s);
-            let Some(len) = scrub.clip().map(|c| c.len()) else { return };
-            let k = ((d.x / d.w.max(1.0)).clamp(0.0, 1.0) * len as f32) as usize;
-            scrub.seek(k, tx.mods().shift);
-        });
+    let mut track = bind_drag(el().key("rewind-track").w(w).h(TRACK_H).radius(4.0).fill(Color::WHITE.alpha(0.04))
+        .role("slider").label("Frame"));
     if sel.len() > 1 {
         track = track.child(el().key("rewind-selection").absolute(x_of(sel.start), 0.0).size((x_of(sel.end) - x_of(sel.start)).max(1.0), TRACK_H)
             .fill(Color::WHITE.alpha(0.1)));

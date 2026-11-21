@@ -7,5 +7,5 @@ cargo test --locked -p rune-ref --test reference --test alloc
 cargo test --locked -p rune --test alloc
 if [ "${1:-}" = "--gpu" ]; then
     cargo test --locked -p rune-ref --features gpu --test differential -- --test-threads=1 --nocapture
-    cargo test --locked -p rune-fx --test blend -- --test-threads=1
+    cargo test --locked -p rune-ref --features gpu --test fx_blend -- --test-threads=1
 fi

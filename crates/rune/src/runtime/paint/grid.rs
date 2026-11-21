@@ -18,14 +18,26 @@ use std::rc::Rc;
 use super::*;
 use crate::el::grid::{DrawnRow, Grid, GridRow, LaidRow};
 
-impl<S: 'static> Runtime<S> {
-    /// Paints node `i`'s grid inside its snapped box `r` (exact `r_exact`, device px edges).
+impl state::PaintState {
+    /// Paints node `node`'s grid inside its snapped box `r` (exact `r_exact`, device px edges).
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn paint_grid(&mut self, i: usize, g: &Grid, r: [f32; 4], r_exact: [f32; 4], clip: [f32; 4], fade: [f32; 4], o: f32, glyph_count: &mut usize) {
-        let s = self.env.scale;
+    pub(in crate::runtime) fn paint_grid(
+        &mut self,
+        node: NodeId,
+        flow: crate::el::Flow,
+        s: f32,
+        g: &Grid,
+        r: [f32; 4],
+        r_exact: [f32; 4],
+        clip: [f32; 4],
+        fade: [f32; 4],
+        o: f32,
+        glyph_count: &mut usize,
+        text: &mut TextSystem,
+        images: &mut crate::pixels::ImageAtlas,
+        instances: &mut Vec<Instance>,
+    ) {
         let srgb = self.srgb_blend;
-        let flow = self.nodes[i].flow;
-        let node = self.nodes[i].id;
         // The device grid an element's edges land on, and how far the box's own snap moved it
         // past plain rounding (a translation that snaps as a whole).
         let round = |v: f32| (v + 0.5).floor();
@@ -33,7 +45,7 @@ impl<S: 'static> Runtime<S> {
         let origin_pt = [r_exact[0] / s, r_exact[1] / s];
         let px = |pt: f32| rune_motion::snap::grid(pt, s) * s;
         let [cw, ch] = g.cell;
-        let _ = self.text.begin_text(node.0, false);
+        let _ = text.begin_text(node.0, false);
         let cols = f32::from(g.cols);
         for (k, row) in g.rows.iter().enumerate() {
             let y0 = px(origin_pt[1] + k as f32 * ch);
@@ -52,15 +64,15 @@ impl<S: 'static> Runtime<S> {
                 (row_r.map(f32::to_bits), clip.map(f32::to_bits), fade.map(f32::to_bits), o.to_bits(), s.to_bits(), srgb, emit).hash(&mut h);
                 h.finish()
             };
-            if let Some(d) = row.drawn.borrow().as_ref().filter(|d| d.key == key(self.text.emit_key())) {
-                self.instances.extend_from_slice(&d.instances);
-                d.pages.iter().for_each(|&(page, texels)| self.text.touch_quad(page, texels));
+            if let Some(d) = row.drawn.borrow().as_ref().filter(|d| d.key == key(text.emit_key())) {
+                instances.extend_from_slice(&d.instances);
+                d.pages.iter().for_each(|&(page, texels)| text.touch_quad(page, texels));
                 *glyph_count += d.glyphs;
                 continue;
             }
-            let (start, glyphs) = (self.instances.len(), *glyph_count);
+            let (start, glyphs) = (instances.len(), *glyph_count);
             let mut pages = Some(Vec::new());
-            let laid = self.laid_row(row, cols * cw, flow);
+            let laid = Self::laid_row(text, s, row, cols * cw, flow);
 
             // Background and selection runs: a filled box each, under the text.
             for f in &row.fills {
@@ -69,7 +81,7 @@ impl<S: 'static> Runtime<S> {
                 let b = edge([fx0, y0, fx1, y1]);
                 let fill = premul(f.color, o, srgb);
                 if fill[3] > 0.0005 {
-                    self.instances.push(Instance {
+                    instances.push(Instance {
                         rect: [b[0], b[1], b[2] - b[0], b[3] - b[1]],
                         radii: [0.0; 4],
                         fill,
@@ -96,7 +108,7 @@ impl<S: 'static> Runtime<S> {
                 }
             }
             let text_clip = intersect(clip, bounds);
-            self.paint_grid_text(&row.line, line, origin, clip, Some(text_clip), fade, o, glyph_count, &mut pages);
+            self.paint_grid_text(s, text, images, instances, &row.line, line, origin, clip, Some(text_clip), fade, o, glyph_count, &mut pages);
 
             // Pinned cells: a `text` each, at its column's left edge and the row's top.
             for (cell, layout) in row.cells.iter().zip(laid.cells.iter()) {
@@ -105,27 +117,26 @@ impl<S: 'static> Runtime<S> {
                 let cell_flow = crate::el::Flow::of_layout(layout);
                 let w = layout.full_width().ceil();
                 let at = [text_x(&cell.spec, cx, cx + w, w, cell_flow), row_r[1]];
-                self.paint_grid_text(&cell.spec, layout, at, clip, None, fade, o, glyph_count, &mut pages);
+                self.paint_grid_text(s, text, images, instances, &cell.spec, layout, at, clip, None, fade, o, glyph_count, &mut pages);
             }
 
             // The vector layer over the text, from its box's origin rounded to the device grid.
             if let Some(shape) = &row.over {
                 let at = [round(x0) + shift[0], round(y0) + shift[1]];
-                push_shape(&mut self.instances, shape, at, [s, s], s, o, srgb, clip, fade);
+                push_shape(instances, shape, at, [s, s], s, o, srgb, clip, fade);
             }
             *row.drawn.borrow_mut() = pages.map(|pages| DrawnRow {
-                key: key(self.text.emit_key()),
-                instances: self.instances[start..].to_vec(),
+                key: key(text.emit_key()),
+                instances: instances[start..].to_vec(),
                 pages,
                 glyphs: *glyph_count - glyphs,
             });
         }
-        self.text.set_emit(crate::text::outline::Emit::Atlas);
+        text.set_emit(crate::text::outline::Emit::Atlas);
     }
 
     /// Row `row`'s shaped line and cells at this scale and width, shaped on its first paint.
-    fn laid_row(&mut self, row: &GridRow, width_pt: f32, flow: crate::el::Flow) -> LaidRowRef {
-        let s = self.env.scale;
+    fn laid_row(text: &mut TextSystem, s: f32, row: &GridRow, width_pt: f32, flow: crate::el::Flow) -> LaidRowRef {
         let fits = |l: &LaidRow| l.scale == s.to_bits() && l.width == width_pt.to_bits();
         if let Some(l) = row.laid.borrow().as_ref().filter(|l| fits(l)) {
             return LaidRowRef { line: l.line.clone(), cells: l.cells.clone() };
@@ -136,12 +147,12 @@ impl<S: 'static> Runtime<S> {
         let mut shape = |spec: &crate::el::TextSpec, wrap: Option<f32>| {
             let dir = crate::el::step_text_dir(spec.dir, crate::el::TextDirEvent::Flatten(Some(flow)));
             if spec.dir == dir && spec.shape.is_none() {
-                return self.text.layout_for_spec(spec, s, wrap, line_alignment(spec));
+                return text.layout_for_spec(&spec.as_text_input(s, false), s, wrap, line_alignment(spec));
             }
             let mut spec = spec.clone();
             spec.dir = dir;
             spec.shape = None;
-            self.text.layout_for_spec(&spec, s, wrap, line_alignment(&spec))
+            text.layout_for_spec(&spec.as_text_input(s, false), s, wrap, line_alignment(&spec))
         };
         let line = shape(&row.line, row.line.wrap.then_some(width_pt * s));
         let cells: Vec<_> = row.cells.iter().map(|c| shape(&c.spec, None)).collect();
@@ -153,21 +164,35 @@ impl<S: 'static> Runtime<S> {
     /// them; `text_clip` is the clip its glyphs take when it has one of its own. Adds the atlas
     /// pages its glyphs sample to `pages`, or empties it for a glyph a copy can't draw again.
     #[allow(clippy::too_many_arguments)]
-    fn paint_grid_text(&mut self, spec: &crate::el::TextSpec, layout: &Rc<parley::Layout<crate::text::Ink>>, origin: [f32; 2], clip: [f32; 4], text_clip: Option<[f32; 4]>, fade: [f32; 4], o: f32, glyph_count: &mut usize, pages: &mut Option<Vec<(u16, u32)>>) {
-        let s = self.env.scale;
+    fn paint_grid_text(
+        &mut self,
+        s: f32,
+        text: &mut TextSystem,
+        images: &mut crate::pixels::ImageAtlas,
+        instances: &mut Vec<Instance>,
+        spec: &crate::el::TextSpec,
+        layout: &Rc<parley::Layout<crate::text::Ink>>,
+        origin: [f32; 2],
+        clip: [f32; 4],
+        text_clip: Option<[f32; 4]>,
+        fade: [f32; 4],
+        o: f32,
+        glyph_count: &mut usize,
+        pages: &mut Option<Vec<(u16, u32)>>,
+    ) {
         let srgb = self.srgb_blend;
         self.deco_scratch.clear();
-        self.text.decorations_with_rings(layout, &spec.spans, &[], spec.cold.span_radius, s, origin, &mut self.deco_scratch);
+        text.decorations_with_rings(layout, &spec.spans, &[], spec.cold.span_radius, s, origin, &mut self.deco_scratch);
         for d in &self.deco_scratch {
-            self.instances.push(rect_inst(d.rect, premul(d.color, o, srgb), d.radius, clip, fade));
+            instances.push(rect_inst(d.rect, premul(d.color, o, srgb), d.radius, clip, fade));
         }
         self.glyph_scratch.clear();
-        self.text.set_glyph_inks(spec.color, &spec.spans);
-        self.text.set_glide([0.0; 2]);
+        text.set_glyph_inks(spec.color, &spec.spans);
+        text.set_glide([0.0; 2]);
         let em = spec.spans.iter().filter_map(|sp| sp.size).fold(spec.style.size.max(spec.style.line_px()), f32::max);
         let pad = 2.0 * em * s + 2.0;
         let band = (clip[1] - origin[1]) - pad..(clip[3] - origin[1]) + pad;
-        self.text.glyphs_in_band_cached(layout, origin, 1.0, false, band, &mut self.glyph_scratch);
+        text.glyphs_in_band_cached(layout, origin, 1.0, false, band, &mut self.glyph_scratch);
         let base = premul(spec.color, o, srgb);
         let glyph_clip = text_clip.unwrap_or(clip);
         for q in &self.glyph_scratch {
@@ -177,7 +202,7 @@ impl<S: 'static> Runtime<S> {
                 continue;
             }
             let f = if q.ink > 0 && let Some(c) = spec.spans.get(q.ink as usize - 1).and_then(|sp| sp.color) { premul(c, o, srgb) } else { base };
-            self.instances.extend(glyph_or_image(q, &self.text, &mut self.images, f, glyph_clip, fade));
+            instances.extend(glyph_or_image(q, text, images, f, glyph_clip, fade));
             *glyph_count += 1;
             if q.color != 0 || q.outline.is_some() {
                 *pages = None;

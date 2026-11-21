@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use rune::{AppSpec, Color, Cx, El, Env, Live, Runtime, Spring, Tx, col, el, row};
 use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
 
@@ -86,7 +88,7 @@ fn bench_mode(rebuild: bool) {
         rt.frame(0.0);
         let mut times = Vec::new();
         for _ in 0..480 {
-            let start = std::time::Instant::now();
+            let start = rune::time::now();
             rt.frame(1.0 / 120.0);
             times.push(start.elapsed().as_secs_f64() * 1e6);
         }
@@ -118,9 +120,9 @@ fn setup(s: &mut State, wake: rune::Waker) {
     let levels = s.live_levels.clone();
     let cursors = s.live_cursors.clone();
     std::thread::spawn(move || {
-        let start = std::time::Instant::now();
+        let start = rune::time::now();
         for tick in 1..=480 {
-            std::thread::sleep((start + std::time::Duration::from_secs_f64(tick as f64 / 120.0)).saturating_duration_since(std::time::Instant::now()));
+            std::thread::sleep((start + std::time::Duration::from_secs_f64(tick as f64 / 120.0)).saturating_duration_since(rune::time::now()));
             if tick % 2 == 0 {
                 for (i, level) in levels.iter().enumerate() { level.set(0.5 + 0.45 * (tick as f32 / 120.0 * 3.0 + i as f32).sin()); }
             }

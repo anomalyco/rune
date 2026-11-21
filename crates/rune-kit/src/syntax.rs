@@ -42,9 +42,11 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::rc::Rc;
+#[cfg(feature = "syntax")]
 use std::sync::OnceLock;
 
 use rune::{Color, Span, oklch};
+#[cfg(feature = "syntax")]
 use rune_highlights::{Lang, Stream, Token};
 
 use crate::Kit;
@@ -129,44 +131,64 @@ const MAX_TOKENS: usize = 32 * 1024;
 /// Whether the built-in highlighter colours `lang`, a fence's language name or alias
 /// (case-insensitive): `rust`/`rs`, `ts`/`typescript`, `c++`/`cpp`, `c#`/`cs`, `kotlin`/`kt`,
 /// `rb`, `php`, `lua`, `sh`/`bash`/`zsh`, `ps1`, `dockerfile`, `makefile`, `yml` and the rest
-/// of Highlights' 211 names ([`rune_highlights::Lang::aliases`]). Not `text` or `plain`.
+/// of Highlights' 211 names. Not `text` or `plain`. Returns `false` when the `syntax` feature is
+/// disabled.
 pub fn known(lang: &str) -> bool {
-    Lang::from_name(lang).is_some_and(|l| l != Lang::PLAIN)
+    #[cfg(feature = "syntax")]
+    {
+        Lang::from_name(lang).is_some_and(|l| l != Lang::PLAIN)
+    }
+    #[cfg(not(feature = "syntax"))]
+    {
+        let _ = lang;
+        false
+    }
 }
 
 /// The built-in highlighter's highlights of `code`, in order and not overlapping, uncached:
-/// empty for a language it doesn't know or none. For an app's [`Highlighter`] to fall back
-/// on; to highlight directly, use the cached [`highlight`].
+/// empty for a language it doesn't know, when none is given, or when the `syntax` feature is
+/// disabled. For an app's [`Highlighter`] to fall back on; to highlight directly, use the cached
+/// [`highlight`].
 pub fn builtin(lang: Option<&str>, code: &str) -> Vec<Highlight> {
-    let Some(lang) = lang.and_then(Lang::from_name) else { return Vec::new() };
-    let code = &code[..coloured_len(code)];
-    let tokens = LEXERS.with_borrow_mut(|l| l.tokens(lang, code));
-    let mut out: Vec<Highlight> = Vec::with_capacity(tokens.len());
-    for (r, token) in tokens {
-        let Some(k) = kind(token) else { continue };
-        if let Some((last, Paint::Kind(prev))) = out.last_mut()
-            && last.end == r.start
-            && *prev == k
-        {
-            last.end = r.end;
-            continue;
+    #[cfg(feature = "syntax")]
+    {
+        let Some(lang) = lang.and_then(Lang::from_name) else { return Vec::new() };
+        let code = &code[..coloured_len(code)];
+        let tokens = LEXERS.with_borrow_mut(|l| l.tokens(lang, code));
+        let mut out: Vec<Highlight> = Vec::with_capacity(tokens.len());
+        for (r, token) in tokens {
+            let Some(k) = kind(token) else { continue };
+            if let Some((last, Paint::Kind(prev))) = out.last_mut()
+                && last.end == r.start
+                && *prev == k
+            {
+                last.end = r.end;
+                continue;
+            }
+            if out.len() == MAX_TOKENS {
+                break;
+            }
+            out.push((r, Paint::Kind(k)));
         }
-        if out.len() == MAX_TOKENS {
-            break;
-        }
-        out.push((r, Paint::Kind(k)));
+        out
     }
-    out
+    #[cfg(not(feature = "syntax"))]
+    {
+        let _ = (lang, code);
+        Vec::new()
+    }
 }
 
 /// The kind Desktop's highlight theme (`highlight-theme.tsx`) colours a lexer token as: its
 /// capture name's, or failing that its nearest parent's (`keyword.control` is `keyword`).
 /// `None` for text drawn in the code's own colour (embedded code, emphasis, JSX text).
+#[cfg(feature = "syntax")]
 pub fn kind(token: Token) -> Option<Syntax> {
     static TABLE: OnceLock<Vec<Option<Syntax>>> = OnceLock::new();
     TABLE.get_or_init(|| Token::all().map(|t| resolve(t.name())).collect())[token.index()]
 }
 
+#[cfg(feature = "syntax")]
 fn resolve(mut name: &str) -> Option<Syntax> {
     loop {
         if let Some((_, k)) = KINDS.iter().find(|(n, _)| *n == name) {
@@ -177,6 +199,7 @@ fn resolve(mut name: &str) -> Option<Syntax> {
 }
 
 /// Desktop's theme, capture name to kind; names not here take their parent's.
+#[cfg(feature = "syntax")]
 const KINDS: &[(&str, Option<Syntax>)] = {
     use Syntax::*;
     &[
@@ -227,12 +250,14 @@ const KINDS: &[(&str, Option<Syntax>)] = {
     ]
 };
 
+#[cfg(feature = "syntax")]
 thread_local! {
     static LEXERS: RefCell<Lexers> = RefCell::new(Lexers::default());
 }
 
 /// The thread's lexers: one for whole sources, and a [`Stream`] for a source growing at its end
 /// (a code block streaming in), which then costs only its new lines.
+#[cfg(feature = "syntax")]
 #[derive(Default)]
 struct Lexers {
     whole: rune_highlights::Highlighter,
@@ -241,6 +266,7 @@ struct Lexers {
     last: Option<(Lang, String)>,
 }
 
+#[cfg(feature = "syntax")]
 impl Lexers {
     fn tokens(&mut self, lang: Lang, code: &str) -> Vec<(Range<usize>, Token)> {
         if let Some(s) = self.stream.as_mut().filter(|s| s.lang() == lang && s.continues(code)) {
@@ -532,6 +558,7 @@ mod tests {
         assert_eq!(got, [0..3, 6..9, 13..15]);
     }
 
+    #[cfg(feature = "syntax")]
     #[test]
     fn builtin_knows_its_languages_and_leaves_the_rest_plain() {
         for (name, code) in [("rust", "x = 1"), ("TS", "x = 1"), ("tsx", "x = 1"), ("py", "x = 1"), ("Go", "x = 1"),

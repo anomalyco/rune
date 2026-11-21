@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use rune::{AppSpec, Cx, El, ScrollSpec, TextEdit, Tx, col, el, row, text, text_input};
 use rune::tok::{self, type_};
 #[cfg(target_arch = "wasm32")]
@@ -47,7 +49,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         });
     let title = text("Messages").font(type_::TITLE).color(t.text).grow(1.0);
     #[cfg(target_arch = "wasm32")]
-    let title = title.on_press(|_: &mut State| { let _ = rune::web::open_url("https://www.rust-lang.org/"); });
+    let title = title.on_press(|_: &mut State| { rune::web::open_url("https://www.rust-lang.org/").ok(); });
     col().w_full().h_full().pt(16.0 + top).pr(16.0 + right).pb(16.0 + bottom).pl(16.0 + left).gap(8.0).fill(t.bg)
         .child(row().w_full().center_y().child(title).child(copy))
         .child(col().key("messages").w_full().grow(1.0).shrink()

@@ -1,5 +1,7 @@
 //! Metal layer presentation and drawable visibility.
 
+#![allow(unsafe_code)]
+
 use objc2::msg_send;
 use objc2_app_kit::NSWindow;
 use super::ns_window;
@@ -8,9 +10,9 @@ use super::ns_window;
 /// window frame change and the frame drawn for it reach the screen together. Costs a
 /// wait for the GPU to schedule each frame, so it is on only while a frame moves.
 pub(crate) fn present_with_transaction(surface: &wgpu::Surface, on: bool) {
-    use objc2_video::runtime::Bool;
+    use objc2::runtime::Bool;
     // SAFETY: a live CAMetalLayer, on the main thread, between frames.
-    crate::gpu::with_layer(surface, |layer| unsafe { let _: () = objc2_video::msg_send![layer, setPresentsWithTransaction: Bool::new(on)]; });
+    crate::gpu::with_layer(surface, |layer| unsafe { let _: () = msg_send![layer, setPresentsWithTransaction: Bool::new(on)]; });
 }
 
 #[link(name = "QuartzCore", kind = "framework")]
@@ -33,15 +35,14 @@ fn top_left_gravity(contents_flipped: bool) -> &'static objc2::runtime::AnyObjec
 /// them to the display (untagged, a wide-gamut display shows them oversaturated). Either
 /// surface format holds sRGB-encoded values; wgpu's reconfigures keep the tag.
 pub(crate) fn pin_contents_top_left(surface: &wgpu::Surface) {
-    use objc2::runtime::{AnyObject, Bool};
+    use objc2::runtime::Bool;
     use objc2_core_graphics::{CGColorSpace, kCGColorSpaceSRGB};
     // SAFETY: a live CAMetalLayer, on the main thread, under wgpu's lock.
-    crate::gpu::with_layer(surface, |video_layer| unsafe {
-        let layer = &*std::ptr::from_ref(video_layer).cast::<AnyObject>();
+    crate::gpu::with_layer(surface, |layer| unsafe {
         let flipped: Bool = msg_send![layer, contentsAreFlipped];
         let _: () = msg_send![layer, setContentsGravity: top_left_gravity(flipped.as_bool())];
         let Some(srgb) = CGColorSpace::with_name(Some(kCGColorSpaceSRGB)) else { return };
-        let _: () = objc2_video::msg_send![video_layer, setColorspace: &*srgb];
+        let _: () = msg_send![layer, setColorspace: &*srgb];
     });
 }
 
@@ -65,8 +66,8 @@ pub(crate) fn surface_occluded(surface: &wgpu::Surface<'_>) -> bool {
 ///
 /// # Safety
 /// `layer` is a CALayer.
-pub(crate) unsafe fn layer_occluded(layer: &objc2_video::runtime::AnyObject) -> bool {
-    use objc2_video::{msg_send, runtime::AnyObject};
+pub(crate) unsafe fn layer_occluded(layer: &objc2::runtime::AnyObject) -> bool {
+    use objc2::runtime::AnyObject;
     let mut current: *const AnyObject = layer;
     // SAFETY: CALayer and NSView property reads; each pointer is live while its layer is.
     unsafe {
@@ -86,9 +87,9 @@ pub(crate) unsafe fn layer_occluded(layer: &objc2_video::runtime::AnyObject) -> 
 
 const OCCLUSION_VISIBLE: usize = 1 << 1;
 
-objc2_video::define_class!(
+objc2::define_class!(
     /// The window `PresumeShown` puts in front of a layer: always on screen.
-    #[unsafe(super(objc2_video::runtime::NSObject))]
+    #[unsafe(super(objc2::runtime::NSObject))]
     #[name = "RuneShownWindow"]
     struct ShownWindow;
 
@@ -102,11 +103,12 @@ objc2_video::define_class!(
         #[unsafe(method(actionForLayer:forKey:))]
         fn action_for_layer(
             &self,
-            _: *const objc2_video::runtime::AnyObject,
-            _: *const objc2_video::runtime::AnyObject,
-        ) -> *const objc2_video::runtime::AnyObject {
-            let Some(null) = objc2_video::runtime::AnyClass::get(c"NSNull") else { return std::ptr::null() };
-            unsafe { objc2_video::msg_send![null, null] }
+            _: *const objc2::runtime::AnyObject,
+            _: *const objc2::runtime::AnyObject,
+        ) -> *const objc2::runtime::AnyObject {
+            let Some(null) = objc2::runtime::AnyClass::get(c"NSNull") else { return std::ptr::null() };
+            // SAFETY: `NSNull` is a Foundation class whose `+null` returns the process-lifetime singleton pointer.
+            unsafe { msg_send![null, null] }
         }
     }
 );
@@ -117,15 +119,15 @@ objc2_video::define_class!(
 /// the window server reports it visible. A new layer's drawables are all free, so `nextDrawable`
 /// can't stall the way it does for a covered window with frames still queued.
 pub(crate) struct PresumeShown {
-    layer: objc2_video::rc::Retained<objc2_video::runtime::AnyObject>,
-    previous: Option<objc2_video::rc::Retained<objc2_video::runtime::AnyObject>>,
-    _stand_in: objc2_video::rc::Retained<ShownWindow>,
+    layer: objc2::rc::Retained<objc2::runtime::AnyObject>,
+    previous: Option<objc2::rc::Retained<objc2::runtime::AnyObject>>,
+    _stand_in: objc2::rc::Retained<ShownWindow>,
 }
 
 impl PresumeShown {
     /// `None` off Metal.
     pub(crate) fn new(surface: &wgpu::Surface<'_>) -> Option<PresumeShown> {
-        use objc2_video::{ClassType, Message, msg_send, rc::Retained, runtime::AnyObject};
+        use objc2::{ClassType, Message, rc::Retained, runtime::AnyObject};
         // The layer is retained here and the lock released, so wgpu can take it to acquire. Only
         // messages every CALayer answers are sent to it.
         let layer: Retained<AnyObject> = crate::gpu::with_layer(surface, |layer| layer.retain())?;
@@ -142,7 +144,7 @@ impl PresumeShown {
 impl Drop for PresumeShown {
     fn drop(&mut self) {
         // SAFETY: as in `new`; restores the delegate the layer had.
-        unsafe { let _: () = objc2_video::msg_send![&*self.layer, setDelegate: self.previous.as_deref()]; }
+        unsafe { let _: () = msg_send![&*self.layer, setDelegate: self.previous.as_deref()]; }
     }
 }
 

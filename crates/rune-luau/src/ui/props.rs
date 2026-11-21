@@ -6,6 +6,8 @@
 //! `onPress`), text (`size`, `weight`, `color`) and list props (`count`, `renderRow`); colours are
 //! palette names or `ui.hex(...)`.
 
+#![allow(unsafe_code)]
+
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use std::rc::Rc;
@@ -684,6 +686,7 @@ fn role(s: &str) -> Option<&'static str> {
         "heading" => "heading",
         "img" => "img",
         "status" => "status",
+        "timer" => "timer",
         "alert" => "alert",
         _ => return None,
     })
@@ -710,5 +713,5 @@ pub(crate) fn format_num(n: f64) -> String {
 /// [`format_num`] onto the end of `out`.
 pub(crate) fn push_num(out: &mut String, n: f64) {
     use std::fmt::Write;
-    let _ = if n.fract() == 0.0 && n.abs() < 1e15 { write!(out, "{}", n as i64) } else { write!(out, "{n}") };
+    if n.fract() == 0.0 && n.abs() < 1e15 { write!(out, "{}", n as i64).ok(); } else { write!(out, "{n}").ok(); }
 }

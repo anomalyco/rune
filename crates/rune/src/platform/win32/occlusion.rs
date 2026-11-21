@@ -12,7 +12,10 @@
 //! desktop, which several apps share) is never covered, so it keeps drawing for whoever reads
 //! its pixels.
 
-use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT, TRUE};
+#![allow(unsafe_code)]
+
+use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT, TRUE};
+use windows_sys::core::BOOL;
 use windows_sys::Win32::Graphics::Dwm::{DWM_CLOAKED_SHELL, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
 use windows_sys::Win32::Graphics::Gdi::{
     COMPLEXREGION, CombineRgn, CreateRectRgn, DeleteObject, EnumDisplayMonitors, GetMonitorInfoW, GetWindowRgn, HDC, HMONITOR, HRGN,

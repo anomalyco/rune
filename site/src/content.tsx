@@ -66,7 +66,7 @@ export const principles: Entry[] = [
     spec: [{ label: "Target", values: ["app work per animated frame: 0"], mono: true }],
     code: [
       at("crates/rune-motion/src/scene.rs", "spring tracks"),
-      at("crates/rune/tests/live.rs", "no view, layout or shaping"),
+      at("crates/rune/tests/integration/live.rs", "no view, layout or shaping"),
     ],
   },
   {
@@ -87,9 +87,9 @@ export const principles: Entry[] = [
       { label: "Themed", values: ["controls, type, motion, materials"] },
     ],
     code: [
-      at("crates/rune/src/edit.rs", "text input and IME"),
+      at("crates/rune-edit/src/lib.rs", "text input and IME"),
       at("crates/rune/src/a11y/tree.rs", "the accessibility tree (AccessKit)"),
-      at("crates/rune/src/theme.rs", "themes as data"),
+      at("crates/rune-core/src/theme.rs", "themes as data"),
       at("themes/opencode", "OpenCode's theme"),
     ],
   },
@@ -269,7 +269,7 @@ export const layers: Entry[] = [
       { label: "Not", values: ["CoreText only, cosmic-text"] },
     ],
     code: [
-      at("crates/rune/src/text.rs", "Parley, swash, the atlas"),
+      at("crates/rune-text/src/lib.rs", "Parley, swash, the atlas"),
       at("research/23-text-quality.md", "against CoreText"),
     ],
   },
@@ -322,8 +322,8 @@ export const layers: Entry[] = [
     ],
     code: [
       at("crates/rune/src/render.rs"),
-      at("crates/rune/src/shader.wgsl", "one uber-quad pipeline"),
-      at("crates/rune/src/shape.rs", "strokes and fills"),
+      at("crates/rune/src/shaders/shader.wgsl", "one uber-quad pipeline"),
+      at("crates/rune-core/src/shape.rs", "strokes and fills"),
     ],
   },
   {

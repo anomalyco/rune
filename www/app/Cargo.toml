@@ -14,12 +14,12 @@ name = "rune-www"
 path = "src/main.rs"
 
 [dependencies]
-rune = { path = "../../crates/rune", default-features = false }
-rune-kit = { path = "../../crates/rune-kit" }
-rune-motion = { path = "../../crates/rune-motion" }
+rune = { workspace = true }
+rune-kit = { workspace = true, default-features = true }
+rune-motion = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2"
+wasm-bindgen = { workspace = true }
 
 [lints]
 workspace = true

@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mlua::{LightUserData, Value};
-use rune::time::Instant;
 use rune::{Cx, El, Tx};
 use rustc_hash::FxHashSet;
 
@@ -179,7 +178,7 @@ impl Script {
     /// Recompiles from `sources` and swaps the VM. `saveHotState()` from the old VM is passed to
     /// `loadHotState(state)` in the new one. A compile or start error keeps the old VM running.
     pub fn reload(&self, sources: Sources) -> Result<Reload, ScriptError> {
-        let start = Instant::now();
+        let start = rune::time::now();
         let compiled = sources.compile().inspect_err(|e| self.inner.log(LogLevel::Error, &e.message))?;
         let compile = start.elapsed();
         let mut report = self.inner.swap(compiled).inspect_err(|e| self.inner.log(LogLevel::Error, &e.message))?;
@@ -300,7 +299,7 @@ impl Inner {
     pub(crate) fn timed<R>(&self, vm: &Vm, f: impl FnOnce(&Vm) -> R) -> R {
         vm.collect();
         let _armed = watchdog::arm(self.options.time_limit);
-        let start = Instant::now();
+        let start = rune::time::now();
         let out = f(vm);
         let mut m = self.metrics.get();
         m.vm_calls += 1;
@@ -400,7 +399,7 @@ impl Inner {
 
     pub(crate) fn reload_from_card(&self, _tx: &mut Tx) {
         let sources = self.sources.borrow().clone();
-        let start = Instant::now();
+        let start = rune::time::now();
         let swapped = sources.compile().and_then(|c| {
             let compile = start.elapsed();
             self.swap(c).map(|r| Reload { compile, ..r })
@@ -429,7 +428,7 @@ impl Inner {
     /// Starts a VM from `compiled`, carrying hot state over from the running one, and swaps it
     /// in. On error the running VM stays.
     pub(crate) fn swap(&self, compiled: Compiled) -> Result<Reload, ScriptError> {
-        let start = Instant::now();
+        let start = rune::time::now();
         let old = self.vm();
         let saved = old.as_ref().and_then(|vm| {
             let save = vm.export("saveHotState")?;

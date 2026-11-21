@@ -1,0 +1,1 @@
+- Web, `webgl` feature: WebGL2 draws the same colours as WebGPU. Every colour was sRGB-encoded twice, so the whole page came out washed out.

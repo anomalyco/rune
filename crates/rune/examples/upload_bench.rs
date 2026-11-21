@@ -6,7 +6,6 @@
 //! encoder, `draw`, `submit`). Run with `--profile perf`; it leaves out presentation, and the GPU
 //! copy is counted only in `frame_us`.
 
-use std::time::Instant;
 
 use bytemuck::Zeroable;
 use rune::render::{Gpu, Instance, NO_CLIP, Offscreen, Renderer};
@@ -17,7 +16,7 @@ const FRAMES: usize = 600;
 const WARMUP: usize = 60;
 
 /// `UPLOAD_FRAMES` frames, default `FRAMES`: more to profile a run.
-fn frames() -> usize { std::env::var("UPLOAD_FRAMES").ok().and_then(|s| s.parse().ok()).unwrap_or(FRAMES) }
+fn frames() -> usize { rune::env::var("UPLOAD_FRAMES").and_then(|s| s.parse().ok()).unwrap_or(FRAMES) }
 
 fn scene(frame: usize, scroll: bool) -> Vec<Instance> {
     (0..COUNT)
@@ -34,6 +33,7 @@ fn scene(frame: usize, scroll: bool) -> Vec<Instance> {
 }
 
 /// Instructions the process has retired, in thousands (0 off macOS).
+#[allow(unsafe_code)]
 fn kinstr() -> f64 {
     #[cfg(target_os = "macos")]
     // SAFETY: proc_pid_rusage fills the rusage_info_v4 it is handed for RUSAGE_INFO_V4.
@@ -63,7 +63,7 @@ fn main() {
         for i in 0..frames() + WARMUP {
             let instances = scene(i, scroll);
             let buffers = device.get_internal_counters().hal.buffers.read();
-            let (start, start_kinstr) = (Instant::now(), kinstr());
+            let (start, start_kinstr) = (rune::time::now(), kinstr());
             renderer.prepare(device, queue, &mut text.atlas, &instances, SIZE);
             let k1 = kinstr();
             let mut encoder = device.create_command_encoder(&Default::default());

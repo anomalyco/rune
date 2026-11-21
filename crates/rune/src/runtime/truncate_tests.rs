@@ -33,7 +33,7 @@ fn cut_at(content: &'static str, elide: Elide, marked: Option<(usize, usize)>, w
 }
 
 fn node<'a>(rt: &'a Runtime<S>) -> &'a Node {
-    rt.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap()
+    rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap()
 }
 
 /// The string node "t" draws, and its cut.
@@ -217,14 +217,14 @@ fn elision_cache_reuses_cut_evicts_superseded_and_bypasses_secure() {
     }
     let mut rt = Runtime::new(PATH.to_owned(), view, (140.0, 40.0), Env::new(true, 2.0));
     rt.frame(0.0);
-    let cut0 = rt.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap().elided;
+    let cut0 = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap().elided;
     assert!(cut0.is_some());
     assert_eq!(rt.text.cached_elision_count(), 1);
     let shaped_before = rt.text.shaped;
     rt.invalidate();
     rt.frame(1.0 / 60.0);
     assert_eq!(rt.text.shaped, shaped_before, "repeat commit reuses cached truncated cut");
-    assert_eq!(rt.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap().elided, cut0);
+    assert_eq!(rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap().elided, cut0);
 
     // Editing the string supersedes the old shaping and drops its cached cut on end_commit.
     rt.update(|s, _| s.push_str("/extra_leaf_module.rs"));
@@ -237,6 +237,6 @@ fn elision_cache_reuses_cut_evicts_superseded_and_bypasses_secure() {
     }
     let mut sec = Runtime::new(PATH.to_owned(), secure_view, (140.0, 40.0), Env::new(true, 2.0));
     sec.frame(0.0);
-    assert!(sec.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap().elided.is_some());
+    assert!(sec.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap().elided.is_some());
     assert_eq!(sec.text.cached_elision_count(), 0, "redacted text bypasses elision cache");
 }

@@ -27,6 +27,7 @@ fn app(name: &'static str) -> App<State> {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn inspect(s: &State) -> serde_json::Value {
     use objc2::{class, msg_send, runtime::AnyObject};
     use winit::raw_window_handle::RawWindowHandle;
@@ -45,7 +46,7 @@ fn inspect(s: &State) -> serde_json::Value {
             let frontmost: *mut AnyObject = msg_send![workspace, frontmostApplication];
             let frontmost_pid: i32 = msg_send![frontmost, processIdentifier];
             let frame: objc2_foundation::NSRect = msg_send![window, frame];
-            let app = objc2_app_kit::NSApplication::sharedApplication(objc2_foundation::MainThreadMarker::new().unwrap());
+            let app = objc2_app_kit::NSApplication::sharedApplication(objc2::MainThreadMarker::new().unwrap());
             serde_json::json!({"key":key,"visible":visible,"alpha":alpha,"ignores_mouse":ignores_mouse,
                 "ready":s.native.as_ref().unwrap().is_ready(),"style":style,"active":app.isActive(),
                 "frontmost_pid":frontmost_pid,"number":s.native.as_ref().unwrap().window_number(),
@@ -67,7 +68,7 @@ fn main() {
         #[cfg(not(unix))]
         let _ = native_rx;
         #[cfg(unix)]
-        if let Ok(path) = std::env::var("WINDOW_PANEL_SOCKET") {
+        if let Some(path) = rune::env::var("WINDOW_PANEL_SOCKET") {
             let listener = std::os::unix::net::UnixListener::bind(path).unwrap();
             let (main, quick) = (main_handle.clone(), quick_handle.clone());
             std::thread::spawn(move || {
@@ -106,7 +107,7 @@ fn main() {
                 borderless: true, min_size: Some((0.0, 0.0)), ..Default::default()
             }.macos(MacWindowOptions::default().nonactivating_panel(true)) })
                 .on_created(move |h| {
-                    let _ = native_tx.send(h.clone());
+                    native_tx.send(h.clone()).ok();
                     quick_handle.update(move |s, _| s.native = Some(h));
                 })
                 .on_ready(|h| {

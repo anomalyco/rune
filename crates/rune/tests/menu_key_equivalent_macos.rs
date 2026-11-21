@@ -13,26 +13,24 @@ use rune::{PhysicalKeyCode, Shortcut};
 fn main() {}
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 mod target {
-    use objc2::{ClassType, DeclaredClass, declare_class, mutability};
+    use objc2::{MainThreadOnly, define_class};
     use objc2_app_kit::NSMenuItem;
     use objc2_foundation::NSObject;
     use std::cell::RefCell;
 
     thread_local! { pub static HITS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) }; }
-    declare_class!(
+    define_class!(
+        #[unsafe(super(NSObject))]
+        #[thread_kind = MainThreadOnly]
+        #[name = "RuneKeyEquivalentTestTarget"]
         pub struct Target;
-        unsafe impl ClassType for Target {
-            type Super = NSObject;
-            type Mutability = mutability::MainThreadOnly;
-            const NAME: &'static str = "RuneKeyEquivalentTestTarget";
-        }
-        impl DeclaredClass for Target { type Ivars = (); }
-        unsafe impl Target {
-            #[method(hit:)]
+
+        impl Target {
+            #[unsafe(method(hit:))]
             fn hit(&self, sender: &NSMenuItem) {
-                // SAFETY: AppKit sends the action on the main thread with a live item.
-                let title = unsafe { sender.title() }.to_string();
+                let title = sender.title().to_string();
                 HITS.with(|hits| hits.borrow_mut().push(title));
             }
         }
@@ -40,11 +38,13 @@ mod target {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 mod cg {
     use objc2::encode::{Encoding, RefEncode};
     use std::ffi::c_void;
     #[repr(C)]
     pub struct CGEvent { _private: [u8; 0] }
+    // SAFETY: `CGEvent` is CoreGraphics' opaque `struct __CGEvent`, passed by pointer as `CGEventRef`.
     unsafe impl RefEncode for CGEvent { const ENCODING_REF: Encoding = Encoding::Pointer(&Encoding::Struct("__CGEvent", &[])); }
     #[link(name = "CoreGraphics", kind = "framework")]
     unsafe extern "C" {
@@ -56,11 +56,12 @@ mod cg {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn main() {
     use key_equivalent::{COMMAND, CONTROL, KeyEquivalent, OPTION, SHIFT, set_key_equivalent};
-    use objc2::{ClassType, msg_send, msg_send_id, rc::Retained, runtime::AnyObject, sel};
+    use objc2::{ClassType, MainThreadMarker, msg_send, rc::Retained, runtime::AnyObject, sel};
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSEvent, NSMenu, NSMenuItem};
-    use objc2_foundation::{MainThreadMarker, NSString};
+    use objc2_foundation::NSString;
     let mtm = MainThreadMarker::new().unwrap();
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
@@ -72,16 +73,17 @@ fn main() {
             let cg = cg::CGEventCreateKeyboardEvent(std::ptr::null(), code, true);
             assert!(!cg.is_null());
             cg::CGEventSetFlags(cg, flags as u64);
-            let event: Option<Retained<NSEvent>> = msg_send_id![NSEvent::class(), eventWithCGEvent: cg];
+            let event: Option<Retained<NSEvent>> = msg_send![NSEvent::class(), eventWithCGEvent: cg];
             cg::CFRelease(cg.cast());
             event.unwrap()
         }
     };
     // The key code that types `c` under ⌘ on this machine's layout, if any.
-    let code_typing = |c: &str| (0..128u16).find(|&code| unsafe { event(code, COMMAND).charactersIgnoringModifiers() }
+    let code_typing = |c: &str| (0..128u16).find(|&code| event(code, COMMAND).charactersIgnoringModifiers()
         .is_some_and(|s| s.to_string() == c));
 
-    let target: Retained<target::Target> = unsafe { msg_send_id![super(mtm.alloc().set_ivars(())), init] };
+    // SAFETY: initializes a freshly allocated `Target` subclass of `NSObject` on the main thread.
+    let target: Retained<target::Target> = unsafe { msg_send![super(mtm.alloc().set_ivars(())), init] };
     let cases: [(&str, &str, usize); 8] = [
         ("cmd+b", "b", COMMAND), ("cmd+=", "=", COMMAND), ("ctrl+cmd+f", "f", CONTROL | COMMAND),
         ("cmd+shift+z", "z", SHIFT | COMMAND), ("alt+cmd+k", "k", OPTION | COMMAND),
@@ -115,8 +117,8 @@ fn main() {
         // What the menu draws, as accessibility reads it: ⌃⌘F is Control (4) with Command and
         // a plain F, not the Globe key (16).
         let ax = |item: &NSMenuItem, attribute: &str| -> Option<String> {
-            let value: Option<Retained<AnyObject>> = msg_send_id![item, accessibilityAttributeValue: &*NSString::from_str(attribute)];
-            value.map(|v| { let d: Retained<NSString> = msg_send_id![&v, description]; d.to_string() })
+            let value: Option<Retained<AnyObject>> = msg_send![item, accessibilityAttributeValue: &*NSString::from_str(attribute)];
+            value.map(|v| { let d: Retained<NSString> = msg_send![&v, description]; d.to_string() })
         };
         assert_eq!(ax(&items[0], "AXMenuItemCmdChar").as_deref(), Some("B"));
         assert_eq!(ax(&items[2], "AXMenuItemCmdChar").as_deref(), Some("F"));

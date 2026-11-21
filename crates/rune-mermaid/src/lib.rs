@@ -103,48 +103,23 @@
 //! [`render_with_hover`] do (they draw everything the frame it mounts), so a diagram settles in
 //! one glide once it has all arrived and doesn't move after.
 
-mod block;
-mod c4;
+#![forbid(unsafe_code)]
+
 mod canvas;
 mod chart;
-mod class;
-mod connector;
-mod date;
-mod drawing;
-mod er;
-mod flowchart;
-mod gantt;
-mod git;
-mod hover;
-mod ink;
-mod journey;
-mod layered;
-mod layered_draw;
-mod lenient;
-mod mindmap;
-mod parts;
-mod pie;
-mod quadrant;
-mod requirement;
-mod route;
-mod sankey;
-mod scenes;
+mod graph;
+mod layout;
 mod sequence;
-mod sequence_draw;
-mod shape;
-mod state;
-mod steady;
-mod timeline;
-mod xychart;
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use rune::{Color, El, TextStyle, oklch, oklcha, tok};
 
-use canvas::Scene;
-pub use drawing::{DrawingModel, prepare_drawing};
-pub use hover::Hover;
+use canvas::{Scene, scenes};
+pub use canvas::drawing::DrawingModel;
+pub use canvas::drawing::prepare_drawing;
+pub use canvas::hover::Hover;
 
 /// Colours and type a diagram draws with.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -270,7 +245,7 @@ enum Mode {
     Still,
     /// Laid out afresh; what's new comes in on its own.
     Settled,
-    /// Held to the build one line shorter ([`steady`]); what's new comes in on its own.
+    /// Held to the build one line shorter ([`layout::steady`]); what's new comes in on its own.
     Growing,
 }
 
@@ -286,23 +261,23 @@ pub fn supported(src: &str) -> bool {
 }
 
 pub(crate) enum Diagram {
-    Flowchart(flowchart::Flowchart),
+    Flowchart(graph::flowchart::Flowchart),
     Sequence(sequence::Sequence),
-    State(state::StateDiagram),
-    Class(class::ClassDiagram),
-    Er(er::ErDiagram),
-    Gantt(gantt::Gantt),
-    Pie(pie::Pie),
-    Mindmap(mindmap::Mindmap),
-    Timeline(timeline::Timeline),
-    Journey(journey::Journey),
-    Git(git::GitGraph),
-    Quadrant(quadrant::Quadrant),
-    XyChart(xychart::XyChart),
-    Sankey(sankey::Sankey),
-    Block(block::BlockDiagram),
-    Requirement(requirement::Requirements),
-    C4(c4::C4),
+    State(graph::state::StateDiagram),
+    Class(graph::class::ClassDiagram),
+    Er(graph::er::ErDiagram),
+    Gantt(chart::gantt::Gantt),
+    Pie(chart::pie::Pie),
+    Mindmap(chart::mindmap::Mindmap),
+    Timeline(chart::timeline::Timeline),
+    Journey(chart::journey::Journey),
+    Git(chart::git::GitGraph),
+    Quadrant(chart::quadrant::Quadrant),
+    XyChart(chart::xychart::XyChart),
+    Sankey(chart::sankey::Sankey),
+    Block(graph::block::BlockDiagram),
+    Requirement(graph::requirement::Requirements),
+    C4(graph::c4::C4),
 }
 
 pub(crate) struct Parsed {
@@ -376,23 +351,23 @@ pub(crate) fn parse(src: &str) -> Option<Parsed> {
     let (kind, rest) = header.split_once(|c: char| c.is_whitespace() || c == ';').unwrap_or((header, ""));
     let (indents, body): (Vec<usize>, Vec<&str>) = lines.unzip();
     let (body_title, diagram) = match kind {
-        "graph" | "flowchart" => flowchart::parse(rest, &body).map(|f| (f.title.clone(), Diagram::Flowchart(f)))?,
+        "graph" | "flowchart" => graph::flowchart::parse(rest, &body).map(|f| (f.title.clone(), Diagram::Flowchart(f)))?,
         "sequenceDiagram" => sequence::parse(rest, &body).map(|s| (s.title.clone(), Diagram::Sequence(s)))?,
-        "stateDiagram" | "stateDiagram-v2" => state::parse(rest, &body).map(|s| (s.title.clone(), Diagram::State(s)))?,
-        "classDiagram" => class::parse(rest, &body).map(|c| (c.title.clone(), Diagram::Class(c)))?,
-        "erDiagram" => er::parse(rest, &body).map(|e| (e.title.clone(), Diagram::Er(e)))?,
-        "gantt" => gantt::parse(rest, &body).map(|g| (g.title.clone(), Diagram::Gantt(g)))?,
-        "pie" => pie::parse(rest, &body).map(|p| (p.title.clone(), Diagram::Pie(p)))?,
-        "mindmap" => mindmap::parse(&body, &indents).map(|m| (None, Diagram::Mindmap(m)))?,
-        "timeline" => timeline::parse(rest, &body).map(|t| (t.title.clone(), Diagram::Timeline(t)))?,
-        "journey" => journey::parse(&body).map(|j| (j.title.clone(), Diagram::Journey(j)))?,
-        "gitGraph" | "gitGraph:" => git::parse(rest, &body).map(|g| (None, Diagram::Git(g)))?,
-        "quadrantChart" => quadrant::parse(&body).map(|q| (q.title.clone(), Diagram::Quadrant(q)))?,
-        "xychart-beta" | "xychart" => xychart::parse(rest, &body).map(|x| (x.title.clone(), Diagram::XyChart(x)))?,
-        "sankey-beta" | "sankey" => sankey::parse(&body).map(|s| (None, Diagram::Sankey(s)))?,
-        "block-beta" | "block" => block::parse(&body).map(|b| (None, Diagram::Block(b)))?,
-        "requirementDiagram" => requirement::parse(&body).map(|r| (None, Diagram::Requirement(r)))?,
-        "C4Context" | "C4Container" | "C4Component" | "C4Dynamic" | "C4Deployment" => c4::parse(kind, &body).map(|c| (c.title.clone(), Diagram::C4(c)))?,
+        "stateDiagram" | "stateDiagram-v2" => graph::state::parse(rest, &body).map(|s| (s.title.clone(), Diagram::State(s)))?,
+        "classDiagram" => graph::class::parse(rest, &body).map(|c| (c.title.clone(), Diagram::Class(c)))?,
+        "erDiagram" => graph::er::parse(rest, &body).map(|e| (e.title.clone(), Diagram::Er(e)))?,
+        "gantt" => chart::gantt::parse(rest, &body).map(|g| (g.title.clone(), Diagram::Gantt(g)))?,
+        "pie" => chart::pie::parse(rest, &body).map(|p| (p.title.clone(), Diagram::Pie(p)))?,
+        "mindmap" => chart::mindmap::parse(&body, &indents).map(|m| (None, Diagram::Mindmap(m)))?,
+        "timeline" => chart::timeline::parse(rest, &body).map(|t| (t.title.clone(), Diagram::Timeline(t)))?,
+        "journey" => chart::journey::parse(&body).map(|j| (j.title.clone(), Diagram::Journey(j)))?,
+        "gitGraph" | "gitGraph:" => chart::git::parse(rest, &body).map(|g| (None, Diagram::Git(g)))?,
+        "quadrantChart" => chart::quadrant::parse(&body).map(|q| (q.title.clone(), Diagram::Quadrant(q)))?,
+        "xychart-beta" | "xychart" => chart::xychart::parse(rest, &body).map(|x| (x.title.clone(), Diagram::XyChart(x)))?,
+        "sankey-beta" | "sankey" => chart::sankey::parse(&body).map(|s| (None, Diagram::Sankey(s)))?,
+        "block-beta" | "block" => graph::block::parse(&body).map(|b| (None, Diagram::Block(b)))?,
+        "requirementDiagram" => graph::requirement::parse(&body).map(|r| (None, Diagram::Requirement(r)))?,
+        "C4Context" | "C4Container" | "C4Component" | "C4Dynamic" | "C4Deployment" => graph::c4::parse(kind, &body).map(|c| (c.title.clone(), Diagram::C4(c)))?,
         _ => return None,
     };
     Some(Parsed { title: body_title.or(fm_title), diagram })
@@ -401,23 +376,23 @@ pub(crate) fn parse(src: &str) -> Option<Parsed> {
 pub(crate) fn scene(src: &str, paint: &DiagramStyle, hover: Option<(Hover, Color)>) -> Option<Scene> {
     let parsed = parse(src)?;
     let s = match &parsed.diagram {
-        Diagram::Flowchart(f) => flowchart::draw(f, paint, hover),
+        Diagram::Flowchart(f) => graph::flowchart::draw(f, paint, hover),
         Diagram::Sequence(s) => sequence::draw(s, paint),
-        Diagram::State(s) => state::draw(s, paint, hover),
-        Diagram::Class(c) => class::draw(c, paint, hover),
-        Diagram::Er(e) => er::draw(e, paint, hover),
-        Diagram::Gantt(g) => gantt::draw(g, paint),
-        Diagram::Pie(p) => pie::draw(p, paint),
-        Diagram::Mindmap(m) => mindmap::draw(m, paint),
-        Diagram::Timeline(t) => timeline::draw(t, paint),
-        Diagram::Journey(j) => journey::draw(j, paint),
-        Diagram::Git(g) => git::draw(g, paint),
-        Diagram::Quadrant(q) => quadrant::draw(q, paint),
-        Diagram::XyChart(x) => xychart::draw(x, paint),
-        Diagram::Sankey(s) => sankey::draw(s, paint),
-        Diagram::Block(b) => block::draw(b, paint),
-        Diagram::Requirement(r) => requirement::draw(r, paint, hover),
-        Diagram::C4(c) => c4::draw(c, paint, hover),
+        Diagram::State(s) => graph::state::draw(s, paint, hover),
+        Diagram::Class(c) => graph::class::draw(c, paint, hover),
+        Diagram::Er(e) => graph::er::draw(e, paint, hover),
+        Diagram::Gantt(g) => chart::gantt::draw(g, paint),
+        Diagram::Pie(p) => chart::pie::draw(p, paint),
+        Diagram::Mindmap(m) => chart::mindmap::draw(m, paint),
+        Diagram::Timeline(t) => chart::timeline::draw(t, paint),
+        Diagram::Journey(j) => chart::journey::draw(j, paint),
+        Diagram::Git(g) => chart::git::draw(g, paint),
+        Diagram::Quadrant(q) => chart::quadrant::draw(q, paint),
+        Diagram::XyChart(x) => chart::xychart::draw(x, paint),
+        Diagram::Sankey(s) => chart::sankey::draw(s, paint),
+        Diagram::Block(b) => graph::block::draw(b, paint),
+        Diagram::Requirement(r) => graph::requirement::draw(r, paint, hover),
+        Diagram::C4(c) => graph::c4::draw(c, paint, hover),
     }?;
     Some(s.with_title(parsed.title))
 }

@@ -47,9 +47,6 @@ impl KeyEquivalent {
 #[cfg(target_os = "macos")]
 pub(crate) fn set_key_equivalent(item: &objc2_app_kit::NSMenuItem, shortcut: Option<&Shortcut>) {
     let (key, mask) = shortcut.map(KeyEquivalent::new).map_or((String::new(), 0), |e| (e.key, e.mask));
-    // SAFETY: a main-thread item; both setters copy their values.
-    unsafe {
-        item.setKeyEquivalent(&objc2_foundation::NSString::from_str(&key));
-        item.setKeyEquivalentModifierMask(objc2_app_kit::NSEventModifierFlags(mask));
-    }
+    item.setKeyEquivalent(&objc2_foundation::NSString::from_str(&key));
+    item.setKeyEquivalentModifierMask(objc2_app_kit::NSEventModifierFlags(mask));
 }

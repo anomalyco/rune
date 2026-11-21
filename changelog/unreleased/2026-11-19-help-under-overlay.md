@@ -1,0 +1,1 @@
+- An interactive element drawn over a plain element that has `El::help` hides that tooltip. When the covering element came directly after the covered one, the covered element's tooltip still showed.

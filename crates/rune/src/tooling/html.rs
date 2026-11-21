@@ -7,43 +7,70 @@ use crate::runtime::web_export::{ExportNode, page};
 /// How long the scene may animate before it is taken as it stands, in frames at 60 Hz.
 const SETTLE_FRAMES: usize = 240;
 
-pub(crate) fn export<S: 'static>(app: crate::app::App<S>, args: &Args) -> Result<(), String> {
+struct ExportPlan {
+    out: PathBuf,
+    widths: Vec<f32>,
+    height: f32,
+    scale: f32,
+    dark: bool,
+    template: String,
+}
+
+fn prepare_export(spec_size: (f32, f32), args: &Args) -> Result<ExportPlan, String> {
     let out = args.html.clone().expect("--html");
-    let mut widths = if args.html_widths.is_empty() { vec![args.size.unwrap_or(app.spec.size).0] } else { args.html_widths.clone() };
+    let mut widths = if args.html_widths.is_empty() { vec![args.size.unwrap_or(spec_size).0] } else { args.html_widths.clone() };
     widths.sort_by(f32::total_cmp);
     widths.dedup();
-    let height = args.size.unwrap_or(app.spec.size).1;
+    let height = args.size.unwrap_or(spec_size).1;
     let scale = args.scale.unwrap_or(2.0);
-    let (fit_height, document) = (app.fit_content_height, app.web_document);
+    let dark = args.theme.as_deref() != Some("light");
     let template = match &args.html_template {
         Some(path) => std::fs::read_to_string(path).map_err(|e| format!("--html-template {}: {e}", path.display()))?,
         None => DEFAULT_TEMPLATE.to_owned(),
     };
-    let (spec, state, _shared) = app.into_parts(args.scene.as_deref());
-    let dark = args.theme.as_deref() != Some("light");
-    let mut rt = runtime_for(&spec, state, (widths[0], height), Env::new(dark, scale), std::sync::Arc::new(|| {}));
-    rt.fit_height = fit_height;
-    if document { rt.page_mode(); }
-    let mut taken: Vec<(f32, Vec<ExportNode>)> = Vec::with_capacity(widths.len());
-    for &w in &widths {
-        rt.set_viewport((w, height), scale);
-        settle(&mut rt);
-        taken.push((w, rt.export_nodes()));
+    Ok(ExportPlan { out, widths, height, scale, dark, template })
+}
+
+#[inline]
+pub(crate) fn export<S: 'static>(app: crate::app::App<S>, args: &Args) -> Result<(), String> {
+    let plan = prepare_export(app.spec.size, args)?;
+    let (fit_height, document) = (app.fit_content_height, app.web_document);
+    let (spec, state, _shared, runtime) = app.into_parts(args.scene.as_deref());
+    let mut rt = runtime_for(&spec, state, (plan.widths[0], plan.height), Env::new(plan.dark, plan.scale), std::sync::Arc::new(|| {}));
+    rt.configure(runtime);
+    let (core, mut driver) = rt.split_mut();
+    export_core(core, &mut driver, fit_height, document, plan)
+}
+
+fn export_core(
+    core: &mut crate::runtime::RuntimeCore,
+    app: &mut dyn crate::runtime::AppDriver,
+    fit_height: bool,
+    document: bool,
+    plan: ExportPlan,
+) -> Result<(), String> {
+    core.host.fit_height = fit_height;
+    if document { core.page_mode(); }
+    let mut taken: Vec<(f32, Vec<ExportNode>)> = Vec::with_capacity(plan.widths.len());
+    for &w in &plan.widths {
+        core.set_viewport((w, plan.height), plan.scale);
+        settle_core(core, app);
+        taken.push((w, core.export_nodes()));
     }
     let (body, css) = page(&taken);
-    std::fs::write(&out, fill(&template, &css, &body)).map_err(|e| format!("--html {}: {e}", out.display()))?;
-    eprintln!("rune: wrote {} ({} elements, widths {:?})", out.display(), taken[0].1.len(), widths);
+    std::fs::write(&plan.out, fill(&plan.template, &css, &body)).map_err(|e| format!("--html {}: {e}", plan.out.display()))?;
+    eprintln!("rune: wrote {} ({} elements, widths {:?})", plan.out.display(), taken[0].1.len(), plan.widths);
     Ok(())
 }
 
 /// Lands entrance motion and anything the first frames start, then steps until the scene is at
 /// rest or `SETTLE_FRAMES` pass (a looping animation is taken where it is).
-fn settle<S: 'static>(rt: &mut Runtime<S>) {
-    rt.settle_all();
-    rt.frame(0.0);
+fn settle_core(core: &mut crate::runtime::RuntimeCore, app: &mut dyn crate::runtime::AppDriver) {
+    core.settle_all();
+    core.frame(app, 0.0);
     for _ in 0..SETTLE_FRAMES {
-        if !rt.animating && !rt.stale() { break; }
-        rt.frame(1.0 / 60.0);
+        if !core.animating && !core.stale() { break; }
+        core.frame(app, 1.0 / 60.0);
     }
 }
 

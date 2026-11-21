@@ -152,10 +152,11 @@ pub(crate) fn watch() {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 mod mac {
     use super::{SystemScrollBars, parse_show_scroll_bars};
-    use objc2::{class, msg_send, msg_send_id, rc::Retained, runtime::{AnyObject, Bool}};
-    use objc2_foundation::{MainThreadMarker, NSString, NSUserDefaults};
+    use objc2::{MainThreadMarker, class, msg_send, rc::Retained, runtime::{AnyObject, Bool}};
+    use objc2_foundation::{NSString, NSUserDefaults};
     use std::{cell::Cell, sync::Mutex};
 
     const OVERLAY_STYLE: isize = 1;
@@ -221,9 +222,9 @@ mod mac {
         });
         // SAFETY: main thread; the observer lives for the process, so its token is leaked.
         unsafe {
-            let center: Retained<AnyObject> = msg_send_id![class!(NSNotificationCenter), defaultCenter];
+            let center: Retained<AnyObject> = msg_send![class!(NSNotificationCenter), defaultCenter];
             let name = NSString::from_str("NSPreferredScrollerStyleDidChangeNotification");
-            let token: Option<Retained<AnyObject>> = msg_send_id![
+            let token: Option<Retained<AnyObject>> = msg_send![
                 &*center,
                 addObserverForName: &*name,
                 object: std::ptr::null::<AnyObject>(),

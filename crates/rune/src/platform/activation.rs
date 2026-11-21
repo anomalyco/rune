@@ -47,6 +47,7 @@ pub(crate) struct Activator {
 
 impl Activator {
     /// None off Wayland or when the compositor lacks `xdg_activation_v1`.
+    #[allow(unsafe_code)]
     pub fn new(window: &Window) -> Option<Activator> {
         let (RawDisplayHandle::Wayland(display), RawWindowHandle::Wayland(handle)) = (
             window.display_handle().ok()?.as_raw(),
@@ -75,13 +76,13 @@ impl Activator {
     /// ignored, or only marks the window urgent.
     pub fn activate(&mut self, token: &str) {
         self.activation.activate(token.to_owned(), &self.surface);
-        let _ = self.queue.flush();
+        self.queue.flush().ok();
     }
 }
 
 impl Drop for Activator {
     fn drop(&mut self) {
         self.activation.destroy();
-        let _ = self.queue.flush();
+        self.queue.flush().ok();
     }
 }

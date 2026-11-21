@@ -1,6 +1,7 @@
 pub(crate) mod clock;
 pub(crate) mod encoded;
 pub(crate) mod host_clock;
+pub(crate) mod host_step;
 #[cfg(feature = "frame-profile")]
 pub(crate) mod live_log;
 pub(crate) mod present_time;

@@ -1,0 +1,1 @@
+- Elements whose exit animations finish now release their scale-settling entries, airborne launch state, resident cache tags, and sticky/pixel-aspect/drawn-layout/key-up flags immediately instead of holding them until a later commit, and instant parent unmounts cap orphaned streaming reveal state on the commit itself.

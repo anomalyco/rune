@@ -26,7 +26,7 @@ impl<H: 'static + ActionHandler + Send> ActionHandlerWrapper<H> {
 
 impl<H: ActionHandler + Send> ActionHandlerNoMut for ActionHandlerWrapper<H> {
     fn do_action(&self, request: ActionRequest) {
-        self.0.lock().unwrap().do_action(request)
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).do_action(request)
     }
 }
 
@@ -66,7 +66,7 @@ impl Context {
     }
 
     pub(crate) fn read_tree(&self) -> RwLockReadGuard<'_, Tree> {
-        self.tree.read().unwrap()
+        self.tree.read().unwrap_or_else(|e| e.into_inner())
     }
 
     pub(crate) fn client_top_left(&self) -> Point {
@@ -81,7 +81,7 @@ impl Context {
         self: &Arc<Self>,
         id: FullNodeId,
     ) -> ComObject<PlatformNode> {
-        let mut platform_nodes = self.platform_nodes.lock().unwrap();
+        let mut platform_nodes = self.platform_nodes.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(result) = platform_nodes.get(&id) {
             return result.clone();
         }
@@ -92,7 +92,7 @@ impl Context {
     }
 
     pub(crate) fn remove_platform_node(&self, id: FullNodeId) {
-        let mut platform_nodes = self.platform_nodes.lock().unwrap();
+        let mut platform_nodes = self.platform_nodes.lock().unwrap_or_else(|e| e.into_inner());
         platform_nodes.remove(&id);
     }
 }

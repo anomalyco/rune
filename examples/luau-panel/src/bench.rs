@@ -4,7 +4,7 @@
 use std::fmt;
 use std::time::Duration;
 
-use rune::time::Instant;
+use rune::time::now;
 use rune::{Env, Runtime};
 use rune_luau::{Data, Script, Sources};
 
@@ -131,7 +131,7 @@ fn rebuild20(n: usize) -> (Stat, Option<Stat>) {
     let per_us = cpu::cycles_per_us();
     let (mut wall, mut ran) = (Vec::with_capacity(n), Vec::with_capacity(n));
     for _ in 0..n {
-        let (start, cycles) = (Instant::now(), cpu::cycles());
+        let (start, cycles) = (now(), cpu::cycles());
         let el = script.render_uncached::<State>("panel20", true);
         wall.push(us(start.elapsed()));
         if let (Some(per_us), Some(a), Some(b)) = (per_us, cycles, cpu::cycles()) {
@@ -145,6 +145,7 @@ fn rebuild20(n: usize) -> (Stat, Option<Stat>) {
 /// The thread's cycle count (`QueryThreadCycleTime`), and its rate, measured against the clock.
 mod cpu {
     #[cfg(windows)]
+    #[allow(unsafe_code)]
     pub fn cycles() -> Option<u64> {
         unsafe extern "system" {
             fn GetCurrentThread() -> isize;
@@ -164,7 +165,7 @@ mod cpu {
     pub fn cycles_per_us() -> Option<f64> {
         (0..5)
             .filter_map(|_| {
-                let (start, c0) = (rune::time::Instant::now(), cycles()?);
+                let (start, c0) = (rune::time::now(), cycles()?);
                 while start.elapsed().as_millis() < 20 {
                     std::hint::spin_loop();
                 }
@@ -181,7 +182,7 @@ fn scroll() -> (Stat, Stat, u64) {
     // 40 points a frame at 120 fps (4,800 pt/s): one or two new rows enter most frames.
     for _ in 0..360 {
         let m = rt.state.script.metrics();
-        let start = Instant::now();
+        let start = now();
         rt.wheel(360.0, 400.0, -40.0);
         rt.frame(DT);
         frame.push(us(start.elapsed()));

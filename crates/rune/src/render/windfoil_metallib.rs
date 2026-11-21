@@ -6,9 +6,9 @@
 
 include!("uber/windfoil_hash.rs");
 
-const LIBRARY: &[u8] = include_bytes!("../uber_windfoil.metallib");
+const LIBRARY: &[u8] = include_bytes!("../shaders/uber_windfoil.metallib");
 #[cfg(feature = "metal-backend")]
-const NATIVE_LIBRARY: &[u8] = include_bytes!("../uber_windfoil_native.metallib");
+const NATIVE_LIBRARY: &[u8] = include_bytes!("../shaders/uber_windfoil_native.metallib");
 
 /// Whether the libraries were built from the WGSL this build joined (render/uber_wgsl.rs).
 const WGSL_MATCHES: bool = super::uber_wgsl::same(super::uber_wgsl::WINDFOIL_BLAKE3, WINDFOIL_WGSL_BLAKE3);
@@ -17,6 +17,7 @@ const ABI_MATCHES: bool = super::variant::windfoil_abi_hash() == WINDFOIL_ABI_FN
 
 /// The Windfoil shader from the library for `device`'s backend and its pipeline, when the
 /// library matches Windfoil's WGSL and layout and the device takes it.
+#[allow(unsafe_code)]
 pub(super) fn load<T>(device: &wgpu::Device, make_pipeline: impl FnOnce(&super::dxbc::Shaders) -> T) -> Option<(wgpu::ShaderModule, T)> {
     #[cfg(feature = "metal-backend")]
     let native = crate::gpu::metal::raw_device(device).is_some();

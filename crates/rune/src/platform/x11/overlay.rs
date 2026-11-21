@@ -1,6 +1,8 @@
 //! X11 input SHAPE regions. The visual surface stays intact; only pointer ownership changes.
+//! An override-redirect window gets no focus from the window manager, so an overlay that may take
+//! keys (`KeyPolicy::OnDemand`) sets the input focus itself.
 
-use x11rb::{connection::Connection, protocol::{shape::{ConnectionExt as _, SK, SO}, xproto::{ConnectionExt as _, ClipOrdering, ConfigureWindowAux, Rectangle, StackMode}}, rust_connection::RustConnection};
+use x11rb::{connection::Connection, protocol::{shape::{ConnectionExt as _, SK, SO}, xproto::{ConnectionExt as _, ClipOrdering, ConfigureWindowAux, InputFocus, Rectangle, StackMode}}, rust_connection::RustConnection};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 thread_local! {
@@ -13,6 +15,7 @@ pub(crate) struct InputWindow {
     visible: std::cell::Cell<bool>,
     follow: std::cell::Cell<bool>,
     input: std::cell::Cell<crate::OverlayInput>,
+    keys: crate::KeyPolicy,
     connection: RustConnection,
     root: u32,
     window: u32,
@@ -31,13 +34,13 @@ impl InputWindow {
         });
         for level in [crate::OverlayLevel::Status, crate::OverlayLevel::AboveStatus, crate::OverlayLevel::AboveOverlays] {
             for (id, at) in &windows {
-                if *at == level { let _ = self.connection.configure_window(*id, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE)); }
+                if *at == level { self.connection.configure_window(*id, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE)).ok(); }
             }
         }
-        let _ = self.connection.flush();
+        self.connection.flush().ok();
     }
     pub fn hide(&self) { self.visible.set(false); self.watch.borrow_mut().take(); SHOWN.with(|shown| shown.borrow_mut().retain(|(id, _)| *id != self.window)); }
-    pub fn new(window: &winit::window::Window, wake: Option<crate::Waker>, input: crate::OverlayInput, follow: bool) -> Option<Self> {
+    pub fn new(window: &winit::window::Window, wake: Option<crate::Waker>, input: crate::OverlayInput, follow: bool, keys: crate::KeyPolicy) -> Option<Self> {
         let id = match window.window_handle().ok()?.as_raw() {
             RawWindowHandle::Xlib(w) => u32::try_from(w.window).ok()?,
             RawWindowHandle::Xcb(w) => w.window.get(),
@@ -47,7 +50,14 @@ impl InputWindow {
         let version = connection.shape_query_version().ok()?.reply().ok()?;
         if (version.major_version, version.minor_version) < (1, 1) { return None; }
         let root = connection.setup().roots.get(screen)?.root;
-        Some(Self { connection, root, window: id, last: None, watch: std::cell::RefCell::default(), wake, visible: std::cell::Cell::new(false), follow: std::cell::Cell::new(follow), input: std::cell::Cell::new(input) })
+        Some(Self { connection, root, window: id, last: None, watch: std::cell::RefCell::default(), wake, visible: std::cell::Cell::new(false), follow: std::cell::Cell::new(follow), input: std::cell::Cell::new(input), keys })
+    }
+    /// Gives the shown window the keyboard focus, for `request_keys` or a click, as the macOS
+    /// panel takes it. Focus reverts to the root window when it hides, for the window manager to
+    /// hand on. False when its policy takes no keys or the server refused (not yet mapped).
+    pub fn request_keys(&self) -> bool {
+        if !self.visible.get() || !crate::overlay::keys::can_take_keys(self.keys) { return false; }
+        self.connection.set_input_focus(InputFocus::PARENT, self.window, x11rb::CURRENT_TIME).ok().and_then(|r| r.check().ok()).is_some()
     }
     pub fn global_pointer(&self) -> crate::OverlaySupport {
         if self.input.get() != crate::OverlayInput::Regions && !self.follow.get() { return crate::OverlaySupport::Supported; }

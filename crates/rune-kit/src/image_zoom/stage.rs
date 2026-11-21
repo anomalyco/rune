@@ -6,7 +6,6 @@
 //! once.
 
 use std::cell::Cell;
-use std::rc::Rc;
 
 use rune::machine::Effects;
 use rune::{Cursor, Drag, El, Icon, Phase, Tx, el, row};
@@ -167,14 +166,74 @@ impl StageZoom {
         let pan = [self.bound(self.pan[0], g.natural[0]), self.bound(self.pan[1], g.natural[1])];
         [g.size[0] / 2.0 + pan[0] - w / 2.0, g.size[1] / 2.0 + pan[1] - h / 2.0, w, h]
     }
+
+    fn drag(&mut self, d: &Drag, tx: &mut Tx) {
+        let [x, y, _, _] = self.rect();
+        let at = [x + d.x, y + d.y];
+        match d.phase {
+            Phase::Down => { self.run(StageEvent::PointerDown { zoomed: self.zoomed(), at }, tx); }
+            Phase::Move => { self.run(StageEvent::PointerMoved { at }, tx); }
+            Phase::Up if d.cancelled() => { self.run(StageEvent::PointerCancel, tx); }
+            Phase::Up => {
+                self.run(StageEvent::PointerUp, tx);
+                if self.run(StageEvent::Click, tx).is_some() {
+                    if self.zoom != 1.0 { self.reset(tx) } else { self.zoom_at(1.0 / self.geom.get().fit, at, tx) }
+                }
+            }
+        }
+    }
+
+    fn wheel(&mut self, e: rune::WheelEvent, tx: &mut Tx) -> bool {
+        let pinch = e.mods.ctrl || e.mods.cmd;
+        if !pinch && self.zoom <= 1.0 { return false; }
+        if pinch {
+            // A browser's delta runs the other way.
+            self.zoom_at(self.zoom * (e.dy / 100.0).exp(), [e.x, e.y], tx);
+        } else {
+            self.set_pan([self.pan[0] + e.dx, self.pan[1] + e.dy]);
+            tx.instant();
+        }
+        true
+    }
+
+    fn magnify(&mut self, e: rune::MagnifyEvent, tx: &mut Tx) -> bool {
+        self.zoom_at(self.zoom * (1.0 + e.delta).max(0.01), [e.x, e.y], tx);
+        true
+    }
 }
 
 type Lens<S> = fn(&mut S) -> &mut StageZoom;
 
-/// The stage: `image` (the app's element drawing the picture) fitted in a pane of `size`
-/// points, with the controls at its bottom right.
-pub struct Stage<S> {
-    lens: Lens<S>,
+trait StageBind {
+    fn image(&self, e: El) -> El;
+    fn stage(&self, e: El) -> El;
+    fn action(&self, b: IconButton, f: fn(&mut StageZoom, &mut Tx)) -> IconButton;
+}
+
+struct StageHandlers<S>(Lens<S>);
+
+impl<S: 'static> StageBind for StageHandlers<S> {
+    fn image(&self, e: El) -> El {
+        let lens = self.0;
+        e.on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| lens(s).drag(d, tx))
+    }
+
+    fn stage(&self, e: El) -> El {
+        let lens = self.0;
+        let mut e = e.on_wheel(move |s: &mut S, ev, tx| lens(s).wheel(ev, tx));
+        if cfg!(target_os = "macos") {
+            e = e.on_magnify(move |s: &mut S, ev, tx| lens(s).magnify(ev, tx));
+        }
+        e
+    }
+
+    fn action(&self, b: IconButton, f: fn(&mut StageZoom, &mut Tx)) -> IconButton {
+        let lens = self.0;
+        b.on_press_tx(move |s: &mut S, tx: &mut Tx| f(lens(s), tx))
+    }
+}
+
+struct StageCore {
     natural: [f32; 2],
     image: El,
     grows: bool,
@@ -182,10 +241,9 @@ pub struct Stage<S> {
     labels: [String; 4],
 }
 
-impl<S: 'static> Stage<S> {
-    pub fn new(lens: Lens<S>, natural: [f32; 2], image: El) -> Stage<S> {
-        Stage {
-            lens,
+impl StageCore {
+    fn new(natural: [f32; 2], image: El) -> StageCore {
+        StageCore {
             natural,
             image,
             grows: false,
@@ -194,112 +252,84 @@ impl<S: 'static> Stage<S> {
         }
     }
 
-    /// An SVG fits by growing too.
-    pub fn grows(mut self, on: bool) -> Self {
-        self.grows = on;
-        self
-    }
-
-    /// The zoom in, zoom out and fit glyphs.
-    pub fn icons(mut self, zoom_in: &'static Icon, zoom_out: &'static Icon, fit: &'static Icon) -> Self {
-        self.icons = Some([zoom_in, zoom_out, fit]);
-        self
-    }
-
-    /// The controls' tooltips and names, and the group's name.
-    pub fn labels(mut self, zoom_in: impl Into<String>, zoom_out: impl Into<String>, fit: impl Into<String>, group: impl Into<String>) -> Self {
-        self.labels = [zoom_in.into(), zoom_out.into(), fit.into(), group.into()];
-        self
-    }
-
-    pub fn build(self, zoom: &StageZoom, k: &Kit, size: [f32; 2]) -> El {
+    fn build(self, zoom: &StageZoom, k: &Kit, size: [f32; 2], bind: &dyn StageBind) -> El {
         let [nw, nh] = self.natural.map(|v| v.max(1.0));
         let fit = (if self.grows { f32::INFINITY } else { 1.0 })
             .min((size[0] - 48.0).max(1.0) / nw)
             .min((size[1] - 48.0).max(1.0) / nh);
         zoom.geom.set(Geom { fit, size, natural: [nw, nh] });
-        let lens = self.lens;
-        let controls = self.controls(zoom, k);
+        let controls = self.controls(zoom, k, bind);
         let [x, y, w, h] = zoom.rect();
         let cursor = match (zoom.zoomed(), zoom.gesture) {
             (true, StageGesture::Panning { .. }) => Cursor::Grabbing,
             (true, _) => Cursor::Grab,
             _ => Cursor::Default,
         };
-        let image = self.image
-            .absolute(x, y)
-            .size(w, h)
-            .cursor(cursor)
-            .on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| {
-                let z = lens(s);
-                let [x, y, _, _] = z.rect();
-                let at = [x + d.x, y + d.y];
-                match d.phase {
-                    Phase::Down => { z.run(StageEvent::PointerDown { zoomed: z.zoomed(), at }, tx); }
-                    Phase::Move => { z.run(StageEvent::PointerMoved { at }, tx); }
-                    Phase::Up if d.cancelled() => { z.run(StageEvent::PointerCancel, tx); }
-                    Phase::Up => {
-                        z.run(StageEvent::PointerUp, tx);
-                        if z.run(StageEvent::Click, tx).is_some() {
-                            if z.zoom != 1.0 { z.reset(tx) } else { z.zoom_at(1.0 / z.geom.get().fit, at, tx) }
-                        }
-                    }
-                }
-            });
-        let mut stage = el()
-            .key("artifact-stage")
-            .w_full()
-            .grow(1.0)
-            .min_h(0.0)
-            .fill(k.c.layer_01)
-            .clip_soft(0.0)
-            .on_wheel(move |s: &mut S, e: rune::WheelEvent, tx: &mut Tx| {
-                let z = lens(s);
-                let pinch = e.mods.ctrl || e.mods.cmd;
-                if !pinch && z.zoom <= 1.0 { return false; }
-                if pinch {
-                    // A browser's delta runs the other way.
-                    z.zoom_at(z.zoom * (e.dy / 100.0).exp(), [e.x, e.y], tx);
-                } else {
-                    z.set_pan([z.pan[0] + e.dx, z.pan[1] + e.dy]);
-                    tx.instant();
-                }
-                true
-            })
-            .child(image);
-        if cfg!(target_os = "macos") {
-            stage = stage.on_magnify(move |s: &mut S, e: rune::MagnifyEvent, tx: &mut Tx| {
-                let z = lens(s);
-                z.zoom_at(z.zoom * (1.0 + e.delta).max(0.01), [e.x, e.y], tx);
-                true
-            });
-        }
-        stage.child(controls)
+        let image = bind.image(self.image.absolute(x, y).size(w, h).cursor(cursor));
+        bind.stage(el().key("artifact-stage").w_full().grow(1.0).min_h(0.0).fill(k.c.layer_01).clip_soft(0.0))
+            .child(image)
+            .child(controls)
     }
 
     /// `PreviewControls`: zoom in, zoom out and fit, in a raised box at the bottom right.
-    fn controls(&self, zoom: &StageZoom, k: &Kit) -> El {
-        let lens = self.lens;
+    fn controls(&self, zoom: &StageZoom, k: &Kit, bind: &dyn StageBind) -> El {
         let [zin, zout, fit, group] = self.labels.clone();
         let glyphs = self.icons.unwrap_or([k.glyph.dash; 3]);
         let divider = || el().size(0.5, 20.0).mx(4.0).fill(k.c.border_base).a11y_hidden();
-        let button = |glyph: &'static Icon, label: String, disabled: bool, f: Rc<dyn Fn(&mut StageZoom, &mut Tx)>| {
-            IconButton::new(glyph)
-                .variant(IconButtonVariant::GhostMuted)
-                .control_size(crate::ControlSize::Large)
-                .help(label)
-                .disabled(disabled)
-                .on_press_tx(move |s: &mut S, tx: &mut Tx| f(lens(s), tx))
-                .build(k)
+        let button = |glyph: &'static Icon, label: String, disabled: bool, f: fn(&mut StageZoom, &mut Tx)| {
+            bind.action(
+                IconButton::new(glyph)
+                    .variant(IconButtonVariant::GhostMuted)
+                    .control_size(crate::ControlSize::Large)
+                    .help(label)
+                    .disabled(disabled),
+                f,
+            )
+            .build(k)
         };
         let mut bar = row().key("preview-controls").role("group").label(group).padding(4.0).center_y().radius(8.0)
             .fill(k.c.bg_base).border(0.5, k.c.border_base);
         bar = crate::shadows(k, bar, &k.elevation.raised);
         bar.pin(None, None, Some(12.0), Some(12.0))
-            .child(button(glyphs[0], zin, zoom.zoom >= zoom.max_zoom(), Rc::new(|z, tx| z.zoom_by(1.25, tx))))
+            .child(button(glyphs[0], zin, zoom.zoom >= zoom.max_zoom(), |z, tx| z.zoom_by(1.25, tx)))
             .child(divider())
-            .child(button(glyphs[1], zout, zoom.zoom <= zoom.min_zoom(), Rc::new(|z, tx| z.zoom_by(1.0 / 1.25, tx))))
+            .child(button(glyphs[1], zout, zoom.zoom <= zoom.min_zoom(), |z, tx| z.zoom_by(1.0 / 1.25, tx)))
             .child(divider())
-            .child(button(glyphs[2], fit, false, Rc::new(|z, tx| z.reset(tx))))
+            .child(button(glyphs[2], fit, false, StageZoom::reset))
+    }
+}
+
+/// The stage: `image` (the app's element drawing the picture) fitted in a pane of `size`
+/// points, with the controls at its bottom right.
+pub struct Stage<S> {
+    core: StageCore,
+    handlers: StageHandlers<S>,
+}
+
+impl<S: 'static> Stage<S> {
+    pub fn new(lens: Lens<S>, natural: [f32; 2], image: El) -> Stage<S> {
+        Stage { core: StageCore::new(natural, image), handlers: StageHandlers(lens) }
+    }
+
+    /// An SVG fits by growing too.
+    pub fn grows(mut self, on: bool) -> Self {
+        self.core.grows = on;
+        self
+    }
+
+    /// The zoom in, zoom out and fit glyphs.
+    pub fn icons(mut self, zoom_in: &'static Icon, zoom_out: &'static Icon, fit: &'static Icon) -> Self {
+        self.core.icons = Some([zoom_in, zoom_out, fit]);
+        self
+    }
+
+    /// The controls' tooltips and names, and the group's name.
+    pub fn labels(mut self, zoom_in: impl Into<String>, zoom_out: impl Into<String>, fit: impl Into<String>, group: impl Into<String>) -> Self {
+        self.core.labels = [zoom_in.into(), zoom_out.into(), fit.into(), group.into()];
+        self
+    }
+
+    pub fn build(self, zoom: &StageZoom, k: &Kit, size: [f32; 2]) -> El {
+        self.core.build(zoom, k, size, &self.handlers)
     }
 }

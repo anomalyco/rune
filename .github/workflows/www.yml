@@ -34,6 +34,7 @@ permissions:
 env:
   BINARYEN_VERSION: "133"
   MODE: ${{ github.ref_name == 'production' && 'production' || 'dev' }}
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   build:

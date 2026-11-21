@@ -10,9 +10,11 @@
 //! `METRIC scenario=.. rewind=off|on metric=.. median=..` over samples: `p50_ms` and `p99_ms`
 //! (wall time per frame, input included) and `allocations` per frame, then the bytes a recorder
 //! holds after 60 s of streaming at 60 Hz.
+
+#![allow(unsafe_code)]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
-use std::time::Instant;
 
 use rune::rewind::Rewind;
 use rune::{Color, Cx, El, Env, Runtime, ScrollSpec, TextStyle, col, el, row, text};
@@ -24,7 +26,7 @@ thread_local! { static ALLOCATIONS: Cell<u64> = const { Cell::new(0) }; }
 // SAFETY: forwards every call to `System` unchanged; only counts allocations on this thread.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let _ = ALLOCATIONS.try_with(|n| n.set(n.get() + 1));
+        ALLOCATIONS.try_with(|n| n.set(n.get() + 1)).ok();
         // SAFETY: the caller upholds `GlobalAlloc::alloc`'s contract.
         unsafe { System.alloc(layout) }
     }
@@ -83,7 +85,7 @@ fn run(scenario: usize, record: bool) -> Run {
     let mut times = Vec::with_capacity(FRAMES);
     let mut allocs = 0;
     for i in 0..FRAMES {
-        let (a0, t0) = (allocations(), Instant::now());
+        let (a0, t0) = (allocations(), rune::time::now());
         match scenario {
             0 => rt.update(|s, _| { s.tail += 1; if s.tail % 8 == 0 { s.rows += 1; } }),
             1 => rt.wheel(500.0, 400.0, if (i / 40) % 2 == 0 { -24.0 } else { 24.0 }),

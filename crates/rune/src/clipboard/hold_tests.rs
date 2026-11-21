@@ -34,7 +34,7 @@ fn either_surviving_handle_still_drives_expiry() {
 /// Runs `sequence` through the machines, checked against the reference, and hands back the rig
 /// to look at.
 fn run_on(counted: [bool; 2], sequence: &[Ev]) -> Rig<Core> {
-    let start = Instant::now();
+    let start = crate::time::now();
     check(sequence, counted, start).unwrap();
     let mut rig = Rig::<Core>::new(counted, start);
     for &ev in sequence { rig.apply(ev); }
@@ -225,7 +225,7 @@ fn a_hold_with_no_deadline_keeps_no_earlier_alarm() {
 fn a_timer_from_an_earlier_hold_changes_nothing() {
     let slot = Arc::new(Slot::default());
     let (mut seq, mut hold) = (Seq::default(), Hold::default());
-    let due = Some(Instant::now());
+    let due = Some(crate::time::now());
     let written = |slot: &Arc<Slot>| HoldEvent::Written { slot: slot.clone(), notify: None, due, revision: None, print: 0 };
     drop(step_hold(&mut seq, &mut hold, written(&slot)));
     let stale = seq.current();
@@ -243,7 +243,7 @@ fn a_timer_from_an_earlier_hold_changes_nothing() {
 fn no_clipboard_reports_a_failed_write_and_wakes() {
     let worker = native::Worker::spawn(|| None::<Board>);
     let (woke, wakes) = mpsc::channel();
-    let notify = Notify { changed: Arc::default(), wake: Arc::new(move || { let _ = woke.send(()); }) };
+    let notify = Notify { changed: Arc::default(), wake: Arc::new(move || { woke.send(()).ok(); }) };
     let (write, handle) = ClipboardWrite::secret("fixture".into(), LONG);
     worker.sender.send(Request::Write(write, Some(notify))).unwrap();
     wakes.recv_timeout(Duration::from_secs(1)).unwrap();
@@ -365,7 +365,7 @@ fn the_worker_s_exit_leaves_no_handle_holding() {
         let shared = lock_it.clone();
         let worker = native::Worker::spawn(move || Some(Stuck { text: String::new(), revision: 0, unreadable: shared.clone(), refuse }));
         let (woke, wakes) = mpsc::channel();
-        let notify = Notify { changed: Arc::default(), wake: Arc::new(move || { let _ = woke.send(()); }) };
+        let notify = Notify { changed: Arc::default(), wake: Arc::new(move || { woke.send(()).ok(); }) };
         let (write, handle) = ClipboardWrite::secret(SECRET.into(), LONG);
         write.bind(Route::System(worker.sender.clone()));
         worker.sender.send(Request::Write(write, Some(notify))).unwrap();

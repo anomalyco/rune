@@ -11,6 +11,8 @@
 //! reachable there, so each answer comes from what it published, and each finding waits for it
 //! in a cell, taken in order before the preedit it belongs to.
 
+#![allow(unsafe_code)]
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Range;
@@ -20,7 +22,7 @@ use windows_sys::Win32::UI::Input::Ime::{
     ATTR_TARGET_CONVERTED, ATTR_TARGET_NOTCONVERTED, GCS_COMPATTR, GCS_COMPCLAUSE, GCS_COMPSTR, IMR_CONFIRMRECONVERTSTRING,
     IMR_DOCUMENTFEED, IMR_RECONVERTSTRING, ImmGetCompositionStringW, ImmGetContext, ImmReleaseContext, RECONVERTSTRING,
 };
-use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{WM_IME_COMPOSITION, WM_IME_REQUEST, WM_NCDESTROY};
 
 use crate::edit::{Clause, ImeText};
@@ -105,7 +107,11 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, wparam: WPARAM, lp
             });
             return 1;
         }
-        WM_NCDESTROY => { WINDOWS.with_borrow_mut(|all| { all.remove(&(hwnd as usize)); }); }
+        WM_NCDESTROY => {
+            WINDOWS.with_borrow_mut(|all| { all.remove(&(hwnd as usize)); });
+            // SAFETY: removes this subclass from the window it was installed on.
+            unsafe { RemoveWindowSubclass(hwnd, Some(procedure), SUBCLASS); }
+        }
         _ => {}
     }
     // SAFETY: the next procedure in this window's chain.

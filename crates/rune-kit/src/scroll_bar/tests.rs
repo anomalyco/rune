@@ -105,6 +105,30 @@ fn dragging_the_thumb_and_pressing_the_track_scroll_the_viewport() {
     assert!(rt.live_only_warnings().is_empty(), "{:#?}", rt.live_only_warnings());
 }
 
+/// A wheel over the bar belongs to the viewport the bar follows, as Chromium's scrollbar belongs
+/// to its scroller: the track draws over the viewport's right edge as its sibling, so it is the
+/// topmost thing a wheel there hits and the viewport is not one of its ancestors.
+#[test]
+fn a_wheel_over_the_bar_scrolls_the_viewport_it_follows() {
+    let mut rt = rune::Runtime::new(20usize, view, (200.0, 100.0), rune::Env::new(true, 1.0));
+    rt.set_system_scroll_bars(ScrollBars::Always);
+    frames(&mut rt, 2);
+    let track = rect(&rt, "scroll-bar");
+    assert_eq!((track[0], track[2]), (186.0, 14.0), "the strip over the viewport's right edge: {track:?}");
+    rt.wheel(track[0] + track[2] / 2.0, 50.0, -40.0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(top(&rt), -40.0, "a wheel over the track scrolls the viewport it follows");
+
+    let thumb = rect(&rt, "thumb");
+    rt.wheel(thumb[0] + thumb[2] / 2.0, thumb[1] + thumb[3] / 2.0, -40.0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(top(&rt), -80.0, "and over the thumb in it");
+
+    rt.wheel(60.0, 50.0, -40.0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(top(&rt), -120.0, "the content left of the bar scrolls as it did");
+}
+
 #[test]
 fn a_track_press_pages_toward_itself_while_held_and_option_jumps() {
     let alt = |rt: &mut rune::Runtime<usize>, down: bool| {

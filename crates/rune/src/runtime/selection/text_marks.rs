@@ -30,6 +30,14 @@ impl TextMark {
     pub fn text(&self) -> &str { &self.text }
 }
 
+impl cx::CxCore {
+    pub(crate) fn mark_texts(&mut self, marks: impl IntoIterator<Item = TextMark>) {
+        let mut all = self.defaults.marks.to_vec();
+        all.extend(marks);
+        self.defaults.marks = all.into();
+    }
+}
+
 impl<S> Cx<S> {
     /// Paints `marks` as the selection paints, in each text's own selection colour
     /// ([`El::selection_color`](crate::El::selection_color)), while the view keeps declaring
@@ -38,22 +46,21 @@ impl<S> Cx<S> {
     /// a text's line boxes. A mark whose text has gone, isn't mounted, or no longer holds the
     /// marked bytes there paints nothing. Set them on every run of the view; a later call adds
     /// to the earlier ones.
+    #[inline(always)]
     pub fn mark_texts(&mut self, marks: impl IntoIterator<Item = TextMark>) {
-        let mut all = self.defaults.marks.to_vec();
-        all.extend(marks);
-        self.defaults.marks = all.into();
+        self.core.mark_texts(marks);
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// The marks the view declared, as (node, start, end) for each mounted text that still
     /// holds its marked bytes, in node order.
-    pub(super) fn mark_ranges(&self) -> Vec<(usize, usize, usize)> {
-        if self.defaults.marks.is_empty() { return Vec::new(); }
+    pub(in crate::runtime) fn mark_ranges(&self) -> Vec<(usize, usize, usize)> {
+        if self.commit.defaults.marks.is_empty() { return Vec::new(); }
         let mut by_path: HashMap<&str, Vec<&TextMark>> = HashMap::default();
-        for m in self.defaults.marks.iter() { by_path.entry(m.path.as_str()).or_default().push(m); }
+        for m in self.commit.defaults.marks.iter() { by_path.entry(m.path.as_str()).or_default().push(m); }
         let mut out = Vec::new();
-        for (i, n) in self.nodes.iter().enumerate() {
+        for (i, n) in self.tree.nodes.iter().enumerate() {
             let Some(marks) = by_path.get(n.path.as_str()) else { continue };
             if self.subtree_exiting(i) { continue; }
             let content = self.content_of(i);
@@ -72,13 +79,13 @@ impl<S: 'static> Runtime<S> {
 /// without the newline that may end it.
 /// `laid` maps content bytes to the layout's (an elided text's differ).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn push_mark(out: &mut Vec<Instance>, layout: &Layout<Ink>, content: &str, (a, b): (usize, usize), laid: impl Fn(usize, usize) -> (usize, usize),
+pub(in crate::runtime) fn push_mark(out: &mut Vec<Instance>, flow: TextFlow<'_>, content: &str, (a, b): (usize, usize), laid: impl Fn(usize, usize) -> (usize, usize),
     origin: [f32; 2], k: f32, fill: [f32; 4], clip: [f32; 4], fade: [f32; 4]) {
     let Some(marked) = content.get(a..b) else { return };
     let mut at = a;
     for line in marked.split_inclusive('\n') {
         let (from, to) = laid(at, at + line.trim_end_matches(['\n', '\r']).len());
-        for (bb, _) in crate::text::range_boxes(layout, from, to, true) {
+        for (bb, _) in flow.range_boxes(from, to, true) {
             out.push(rect_inst(pixel_rect(origin, bb, k), fill, 0.0, clip, fade));
         }
         at += line.len();
@@ -87,7 +94,7 @@ pub(super) fn push_mark(out: &mut Vec<Instance>, layout: &Layout<Ink>, content: 
 
 /// A highlight's box from text at `origin` drawn `k` times its size, its edges on the device grid,
 /// as Chromium snaps a selection's rect: hard-edged wherever the text's origin falls.
-pub(super) fn pixel_rect(origin: [f32; 2], bb: parley::BoundingBox, k: f32) -> [f32; 4] {
+pub(in crate::runtime) fn pixel_rect(origin: [f32; 2], bb: parley::BoundingBox, k: f32) -> [f32; 4] {
     let [x0, y0, x1, y1] = [origin[0] + bb.x0 as f32 * k, origin[1] + bb.y0 as f32 * k, origin[0] + bb.x1 as f32 * k, origin[1] + bb.y1 as f32 * k].map(f32::round);
     [x0, y0, x1 - x0, y1 - y0]
 }

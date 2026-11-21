@@ -17,8 +17,8 @@ enum Step {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct Hit {
-    pub(super) caret: usize,
+pub(in crate::runtime) struct Hit {
+    pub(in crate::runtime) caret: usize,
     /// The side of `caret` the press was on, where two runs of different direction meet.
     side: parley::Affinity,
     cluster: usize,
@@ -35,7 +35,7 @@ enum Capture {
 }
 
 #[derive(Default)]
-pub(super) struct InputClick {
+pub(in crate::runtime) struct InputClick {
     /// The run of non-Shift presses on inputs.
     presses: press_run::PressRun,
     /// What the press that started the current selection selects by, and the unit range it
@@ -49,7 +49,7 @@ pub(super) struct InputClick {
 }
 
 impl InputClick {
-    pub(super) fn dragging_path(&self) -> Option<&str> {
+    pub(in crate::runtime) fn dragging_path(&self) -> Option<&str> {
         match &self.capture {
             Capture::Held { dragging } => dragging.as_deref(),
             Capture::Free => None,
@@ -57,21 +57,21 @@ impl InputClick {
     }
 
     /// The runtime's held press is an input-selection press.
-    pub(super) fn captured(&self) -> bool { matches!(self.capture, Capture::Held { .. }) }
+    pub(in crate::runtime) fn captured(&self) -> bool { matches!(self.capture, Capture::Held { .. }) }
 
-    pub(super) fn clear(&mut self) {
+    pub(in crate::runtime) fn clear(&mut self) {
         self.presses.clear();
         self.capture = Capture::Free;
         self.cancel_drag_steps();
     }
 
-    pub(super) fn clear_last(&mut self) {
+    pub(in crate::runtime) fn clear_last(&mut self) {
         self.presses.clear();
     }
 
     /// The field stops following the press: queued drag steps do nothing, and the press keeps
     /// the pointer until it releases.
-    pub(super) fn drop_drag(&mut self) {
+    pub(in crate::runtime) fn drop_drag(&mut self) {
         if let Capture::Held { dragging } = &mut self.capture { *dragging = None; }
         self.cancel_drag_steps();
     }
@@ -86,11 +86,11 @@ impl InputClick {
     }
 
     /// The press released: whether it was an input-selection press.
-    pub(super) fn end_press(&mut self) -> bool {
+    pub(in crate::runtime) fn end_press(&mut self) -> bool {
         matches!(std::mem::take(&mut self.capture), Capture::Held { .. })
     }
 
-    pub(super) fn on_focus_change(&mut self, focused: Option<&str>) {
+    pub(in crate::runtime) fn on_focus_change(&mut self, focused: Option<&str>) {
         self.presses.keep_on(focused);
         if self.dragging_path().is_some_and(|p| Some(p) != focused) {
             self.drop_drag();
@@ -98,7 +98,7 @@ impl InputClick {
     }
 }
 
-pub(super) fn hit(e: &crate::edit::TextEdit, l: TextFlow<'_>, x: f32, y: f32, s: f32, single: bool) -> Hit {
+pub(in crate::runtime) fn hit(e: &crate::edit::TextEdit, l: TextFlow<'_>, x: f32, y: f32, s: f32, single: bool) -> Hit {
     let h = (l.height() - 1e-3).max(0.0);
     let ys = if single || x < 0.0 { (y * s).clamp(0.0, h) } else { (y * s).max(0.0) };
     let at = l.hit(x * s, ys);
@@ -139,27 +139,43 @@ fn unit_at(e: &crate::edit::TextEdit, h: Hit, unit: Unit) -> (usize, usize) {
     (a, b)
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
+    /// Window point `(x, y)` in text field `i`'s layout points, using the same `text_x` origin and
+    /// single-line horizontal scroll rule as paint (`links::origin`).
+    pub(in crate::runtime) fn input_text_point(&self, i: usize, x: f32, y: f32) -> Option<[f32; 2]> {
+        let n = &self.tree.nodes[i];
+        let (inp, spec, laid) = (n.input.as_deref()?, n.text.as_deref()?, n.text_layout.as_ref()?);
+        let flow = laid.view();
+        let s = self.env.scale;
+        let valid = self.tree.built && self.paint.drawn.len() == self.tree.nodes.len();
+        let (rect, ux, uy) = if valid { self.unturned_box_and_point(i, x, y) } else { (n.target, x, y) };
+        let z = if valid { self.paint.drawn_scale.get(i).copied().unwrap_or(1.0).max(1e-4) } else { 1.0 };
+        let [mut ox, oy] = links::origin(n, spec, flow, rect, s, z);
+        if inp.single_line {
+            ox -= self.edit.single_line_scroll(&n.path) * z;
+        }
+        Some([(ux - ox) / z, (uy - oy) / z])
+    }
+
     /// A press at (x, y) on text field `ji`, down at `down_at`; `second` when it's the second
     /// of a double press.
-    pub(super) fn input_down(&mut self, ji: usize, x: f32, y: f32, down_at: f64, second: bool) {
+    pub(in crate::runtime) fn input_down(&mut self, ji: usize, x: f32, y: f32, down_at: f64, second: bool) {
         let now = self.now_clock();
-        let shift = self.held_mods.shift;
+        let shift = self.kbd.held_mods.shift;
         // Its text drew scaled or rotated with its box: map the press back to the rest layout.
         let [lx, ly] = self.to_local(ji, x, y);
-        let jn = &self.nodes[ji];
+        let jn = &self.tree.nodes[ji];
         let path = jn.path.clone();
-        let (ix, iy) = (lx - jn.inset[0], ly - jn.inset[1]);
         let r = jn.target;
         let clicks = if shift {
-            self.input_click.presses.clear();
+            self.edit.input_click.presses.clear();
             1
         } else {
-            self.input_click.presses.press(&path, now, (x, y), self.double_click_interval).min(3) as u8
+            self.edit.input_click.presses.press(&path, now, (x, y), self.double_click_interval).min(3) as u8
         };
-        self.input_click.capture = Capture::Held { dragging: Some(path.clone()) };
-        self.input_click.steps.push_back((path.clone(), Step::Down { clicks, shift }));
-        self.queue.push(Action::Focus(path.clone(), ix, iy));
+        self.edit.input_click.capture = Capture::Held { dragging: Some(path.clone()) };
+        self.edit.input_click.steps.push_back((path.clone(), Step::Down { clicks, shift }));
+        self.frame.queue.push(Action::Focus(path.clone(), x, y));
         let d = Drag {
             phase: Phase::Down,
             x: lx,
@@ -176,80 +192,81 @@ impl<S: 'static> Runtime<S> {
             window: [x, y],
             screen: self.screen_at(x, y),
         };
-        self.press.hold(capture::Held::new(path, d, crate::PointerButton::Primary, (x, y), down_at, second, None));
+        self.pointer.hold_press(capture::Held::new(path, d, crate::PointerButton::Primary, (x, y), down_at, second, None));
     }
 
     /// Focuses text field `ji` with its caret at (x, y), as a single click does, but holds no
     /// press: nothing drags from it (Linux's middle-click paste, `primary_selection.rs`).
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    pub(super) fn place_caret(&mut self, ji: usize, x: f32, y: f32) {
-        let [lx, ly] = self.to_local(ji, x, y);
-        let jn = &self.nodes[ji];
-        let path = jn.path.clone();
-        let (ix, iy) = (lx - jn.inset[0], ly - jn.inset[1]);
-        self.input_click.presses.clear();
-        self.input_click.steps.push_back((path.clone(), Step::Down { clicks: 1, shift: false }));
-        self.queue.push(Action::Focus(path, ix, iy));
+    pub(in crate::runtime) fn place_caret(&mut self, ji: usize, x: f32, y: f32) {
+        let path = self.tree.nodes[ji].path.clone();
+        self.edit.input_click.presses.clear();
+        self.edit.input_click.steps.push_back((path.clone(), Step::Down { clicks: 1, shift: false }));
+        self.frame.queue.push(Action::Focus(path, x, y));
     }
 
-    pub(super) fn input_drag(&mut self, x: f32, y: f32, drag_move: bool) {
+    pub(in crate::runtime) fn input_drag(&mut self, x: f32, y: f32, drag_move: bool) {
         if !drag_move {
             return;
         }
-        let Some(path) = self.input_click.dragging_path().map(str::to_owned) else { return };
-        if self.press.held().is_some_and(|h| !press_run::within_slop(h.at, (x, y))) {
-            self.input_click.presses.clear();
+        let Some(path) = self.edit.input_click.dragging_path().map(str::to_owned) else { return };
+        if self.pointer.press_held().is_some_and(|h| !press_run::within_slop(h.at, (x, y))) {
+            self.edit.input_click.presses.clear();
         }
-        let Some(ji) = self.nodes.iter().enumerate().position(|(i, n)| n.path == path && !self.subtree_exiting(i) && n.input.is_some()) else {
-            self.input_click.drop_drag();
+        if !self.tree.nodes.iter().enumerate().any(|(i, n)| n.path == path && !self.subtree_exiting(i) && n.input.is_some()) {
+            self.edit.input_click.drop_drag();
             return;
-        };
-        let [lx, ly] = self.to_local(ji, x, y);
-        let jn = &self.nodes[ji];
-        let (ix, iy) = (lx - jn.inset[0], ly - jn.inset[1]);
-        self.input_click.steps.push_back((path.clone(), Step::Drag));
-        self.queue.push(Action::Focus(path, ix, iy));
+        }
+        self.edit.input_click.steps.push_back((path.clone(), Step::Drag));
+        self.frame.queue.push(Action::Focus(path, x, y));
     }
 
-    pub(super) fn focus_input(&mut self, path: String, x: f32, y: f32, one: &mut Tx) -> bool {
-        let step = if self.input_click.steps.front().is_some_and(|(p, _)| *p == path) {
-            self.input_click.steps.pop_front().unwrap().1
+    pub(in crate::runtime) fn focus_input(&mut self, app: &mut dyn AppDriver, path: String, x: f32, y: f32, one: &mut Tx) -> bool {
+        let step = if self.edit.input_click.steps.front().is_some_and(|(p, _)| *p == path) {
+            self.edit.input_click.steps.pop_front().unwrap().1
         } else {
             Step::Down { clicks: 1, shift: false }
         };
         if matches!(step, Step::Cancelled) {
             return false;
         }
-        let Some(access) = self.node(&path).and_then(|n| n.input.as_ref()?.access.clone()) else {
-            self.input_click.drop_drag();
+        let Some(i) = self.tree.nodes.iter().enumerate()
+            .find(|&(i, n)| n.path == path && !self.subtree_exiting(i) && !self.subtree_unmounted(i))
+            .map(|(i, _)| i)
+        else {
+            self.edit.input_click.drop_drag();
             return false;
         };
-        let single = self.node(&path).and_then(|n| n.input.as_ref()).is_some_and(|i| i.single_line);
-        let layout = self.node(&path).and_then(|n| n.text_layout.clone());
+        let Some(access) = self.tree.nodes[i].input.as_ref().and_then(|inp| inp.access.clone()) else {
+            self.edit.input_click.drop_drag();
+            return false;
+        };
+        let single = self.tree.nodes[i].input.as_ref().is_some_and(|inp| inp.single_line);
+        let layout = self.tree.nodes[i].text_layout.clone();
+        let point = self.input_text_point(i, x, y);
         let s = self.env.scale;
-        let scroll = self.input_scroll.get(&path).copied().unwrap_or(0.0);
         match step {
             Step::Down { clicks, shift } => {
-                self.set_focus(Some(path), false);
+                self.set_focus(app, Some(path), false);
                 // A press mid-composition writes it into the text first, as a browser's field
                 // does, then puts the caret where it landed: the layout it hits already shows
                 // the composition in place.
-                self.finish_field_composition(one);
-                let e = access(states!(self));
+                self.finish_field_composition(app, one);
+                let e = access(app.states());
                 e.set_single_line(single);
                 e.break_history_group();
                 e.clear_typing_style();
                 if e.preedit().is_some() {
-                    self.input_click.clear();
+                    self.edit.input_click.clear();
                     one.commit = one.commit.instant();
                     return true;
                 }
-                if let Some(l) = layout {
-                    let h = hit(e, l.view(), x + scroll, y, s, single);
+                if let (Some(l), Some([tx, ty])) = (layout, point) {
+                    let h = hit(e, l.view(), tx, ty, s, single);
                     if shift {
                         let anchor = e.anchor;
-                        self.input_click.unit = Unit::Char;
-                        self.input_click.origin = (anchor, anchor);
+                        self.edit.input_click.unit = Unit::Char;
+                        self.edit.input_click.origin = (anchor, anchor);
                         e.set_selection(anchor, h.caret);
                     } else {
                         let unit = match clicks {
@@ -258,8 +275,8 @@ impl<S: 'static> Runtime<S> {
                             _ => Unit::Paragraph,
                         };
                         let origin = unit_at(e, h, unit);
-                        self.input_click.unit = unit;
-                        self.input_click.origin = origin;
+                        self.edit.input_click.unit = unit;
+                        self.edit.input_click.origin = origin;
                         e.set_selection(origin.0, origin.1);
                         // A caret put down where two runs meet stays on the side pressed.
                         if origin == (h.caret, h.caret) { e.affinity = h.side; }
@@ -269,20 +286,20 @@ impl<S: 'static> Runtime<S> {
                 true
             }
             Step::Drag => {
-                if self.focus.path() != Some(path.as_str()) {
-                    self.input_click.drop_drag();
+                if self.kbd.focus.path() != Some(path.as_str()) {
+                    self.edit.input_click.drop_drag();
                     return false;
                 }
-                let e = access(states!(self));
+                let e = access(app.states());
                 e.set_single_line(single);
                 if e.preedit().is_some() {
-                    self.input_click.clear();
+                    self.edit.input_click.clear();
                     return false;
                 }
-                let Some(l) = layout else { return false };
-                let h = hit(e, l.view(), x + scroll, y, s, single);
-                let at = unit_at(e, h, self.input_click.unit);
-                let (anchor, focus) = extend(self.input_click.origin, at);
+                let (Some(l), Some([tx, ty])) = (layout, point) else { return false };
+                let h = hit(e, l.view(), tx, ty, s, single);
+                let at = unit_at(e, h, self.edit.input_click.unit);
+                let (anchor, focus) = extend(self.edit.input_click.origin, at);
                 let before = (e.anchor, e.focus);
                 e.set_selection(anchor, focus);
                 if (e.anchor, e.focus) == before {

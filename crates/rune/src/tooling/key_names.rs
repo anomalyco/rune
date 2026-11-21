@@ -1,31 +1,10 @@
 //! Key names, modifiers and unmodified characters in headless scripts and `--keys`.
 use crate::edit::Key;
+use crate::input::key_table;
 
 pub(crate) fn key_named(name: &str) -> Option<Key> {
-    Some(match name {
-        "Enter" => Key::Enter,
-        "Backspace" => Key::Backspace,
-        "Delete" => Key::Delete,
-        "Left" => Key::Left,
-        "Right" => Key::Right,
-        "Up" => Key::Up,
-        "Down" => Key::Down,
-        "Home" => Key::Home,
-        "End" => Key::End,
-        "PageUp" => Key::PageUp,
-        "PageDown" => Key::PageDown,
-        "Escape" => Key::Escape,
-        "Tab" => Key::Tab,
-        "ContextMenu" => Key::ContextMenu,
-        "Insert" => Key::Insert,
-        "PrintScreen" => Key::PrintScreen,
-        "ScrollLock" => Key::ScrollLock,
-        "Pause" => Key::Pause,
-        f if f.len() > 1 && f.starts_with('F') && f[1..].parse::<u8>().is_ok_and(|n| (1..=24).contains(&n)) => {
-            Key::Function(f[1..].parse().unwrap())
-        }
-        c if c.chars().count() == 1 => Key::Text(c.to_owned()),
-        _ => return None,
+    key_table::named_key_from_str(name).or_else(|| {
+        (name.chars().count() == 1).then(|| Key::Text(name.to_owned()))
     })
 }
 
@@ -34,9 +13,7 @@ pub(crate) fn key_named(name: &str) -> Option<Key> {
 /// platform.
 pub(crate) fn script_mods(e: &serde_json::Value) -> crate::Mods {
     let flag = |k: &str| e[k].as_bool().unwrap_or(false);
-    let cmd = flag("cmd");
-    let mac = cfg!(target_os = "macos");
-    crate::Mods { shift: flag("shift"), cmd, alt: flag("alt"), ctrl: flag("ctrl") || (cmd && !mac), logo: flag("logo") || (cmd && mac) }
+    key_table::mods_from_script(flag("shift"), flag("ctrl"), flag("alt"), flag("logo"), flag("cmd"))
 }
 
 /// A script key's `Tx::key_base`: its `"base"`, else a one-character name typed without Shift

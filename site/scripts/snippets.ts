@@ -84,7 +84,7 @@ const specs: Record<string, Spec> = {
     label: "Rust",
     pieces: [
       {
-        file: "crates/rune-motion/tests/spring.rs",
+        file: "crates/rune-motion/tests/integration/spring.rs",
         from: "fn animated_value_retargets_keeping_velocity",
         to: "    assert!((a.sample(5.0) + 50.0)",
       },
@@ -94,16 +94,16 @@ const specs: Record<string, Spec> = {
     lang: "rust",
     label: "Rust",
     pieces: [
-      { file: "crates/rune/tests/live.rs", from: "fn view(" },
-      { file: "crates/rune/tests/live.rs", from: "fn properties_change_without_view", to: "    assert_eq!(rt.stats.shaped, 0);" },
+      { file: "crates/rune/tests/integration/live.rs", from: "fn view(" },
+      { file: "crates/rune/tests/integration/live.rs", from: "fn properties_change_without_view", to: "    assert_eq!(rt.stats.shaped, 0);" },
     ],
   },
   "test-segmented": {
     lang: "rust",
     label: "Rust",
     pieces: [
-      { file: "crates/rune-kit/tests/segmented.rs", from: "fn fitted(" },
-      { file: "crates/rune-kit/tests/segmented.rs", from: "fn fitted_segments_share" },
+      { file: "crates/rune-kit/tests/integration/segmented.rs", from: "fn fitted(" },
+      { file: "crates/rune-kit/tests/integration/segmented.rs", from: "fn fitted_segments_share" },
     ],
   },
   "snap-commands": {
@@ -124,7 +124,7 @@ const specs: Record<string, Spec> = {
   "rune-deps": {
     lang: "toml",
     label: "TOML",
-    pieces: [{ file: "crates/rune/Cargo.toml", from: "rune-motion = ", to: "parley = " }],
+    pieces: [{ file: "crates/rune/Cargo.toml", from: "rune-core = ", to: "parley = " }],
   },
 }
 

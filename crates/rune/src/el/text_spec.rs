@@ -52,25 +52,13 @@ pub struct TextSpec {
     /// See [`El::exact_lines`](crate::El::exact_lines): the height is its lines' own, unrounded,
     /// unless [`El::rounded_lines`](crate::El::rounded_lines) rounds it to device pixels.
     pub(crate) exact_lines: bool,
+    /// See [`El::by_line`](crate::El::by_line): one shaped [`Layout`](crate::text::Layout) per line.
+    pub(crate) by_line: bool,
     /// The paragraph direction it lays out in (see [`TextDir`]).
     pub(crate) dir: TextDir,
 }
 
-/// How a text's paragraph direction (bidi base level) resolves.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum TextDir {
-    /// From the first strong character of the whole text: no `El::dir` above it.
-    #[default]
-    Auto,
-    /// The element's resolved `El::dir`, set when it's flattened.
-    Fixed(crate::el::Flow),
-    /// [`El::dir_by_paragraph`](crate::El::dir_by_paragraph) (CSS `unicode-bidi: plaintext`):
-    /// each paragraph in the direction of its own first strong character, whatever the
-    /// element's is. A paragraph with none takes the direction of the paragraph before it, and
-    /// the first ones the element's (here once it's flattened), as a word processor does: an
-    /// empty line under an Arabic one starts at the right, an empty field in an Arabic window too.
-    Plaintext(Option<crate::el::Flow>),
-}
+pub(crate) use rune_text::TextDir;
 
 /// What moves a text's [`TextDir`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -192,7 +180,26 @@ impl TextSpec {
             wrap_anywhere: false,
             greedy: false,
             exact_lines: true,
+            by_line: false,
             dir: TextDir::Auto,
+        }
+    }
+
+    /// Borrowed read-only layout inputs for `rune-text`.
+    pub(crate) fn as_text_input(&self, scale: f32, input: bool) -> crate::text::TextInput<'_> {
+        crate::text::TextInput {
+            content: &self.content,
+            spans: &self.spans,
+            blocks: &self.cold.blocks,
+            pills: &self.cold.pills,
+            style: self.style,
+            shape_key: self.shape_key(scale),
+            wrap_anywhere: self.wrap_anywhere,
+            pretty: self.pretty(),
+            redacted: self.redacted,
+            by_line: self.by_line,
+            by_paragraph: self.by_paragraph(input),
+            dir: self.dir,
         }
     }
 
@@ -246,15 +253,6 @@ impl TextSpec {
         Some(key)
     }
 
-    /// The flow a by-paragraph text's paragraphs with no strong character start from: the
-    /// element's, left to right when nothing sets one.
-    pub(crate) fn plaintext_flow(&self) -> crate::el::Flow {
-        match self.dir {
-            TextDir::Plaintext(flow) => flow.unwrap_or_default(),
-            _ => crate::el::Flow::Ltr,
-        }
-    }
-
     /// Whether its lines break as Chromium's `text-wrap-style: pretty` does ([`crate::text::set_pretty_wrap`]).
     pub(crate) fn pretty(&self) -> bool {
         crate::text::pretty_wrap() && !self.greedy && !self.redacted && !self.justify
@@ -285,20 +283,9 @@ impl TextSpec {
     /// one paragraph, or of any when each paragraph takes its own direction. Others stay one
     /// layout (a static text splits into one text per paragraph instead).
     pub(crate) fn by_paragraph(&self, input: bool) -> bool {
-        input && self.wrap && !self.redacted && !self.truncate && !self.truncate_fade
+        (input || self.by_line) && self.wrap && !self.redacted && !self.truncate && !self.truncate_fade
             && self.max_lines == 0 && self.cold.live.is_none() && self.cold.advance_in.is_none()
-            && (matches!(self.dir, TextDir::Plaintext(_)) || self.content.contains('\n'))
-    }
-
-    /// The direction every paragraph of a by-paragraph layout takes, or None when each takes
-    /// its own (`El::dir_by_paragraph`): the element's, else the whole text's first strong
-    /// character's, as one layout of it would read.
-    pub(crate) fn paragraphs_flow(&self) -> Option<crate::el::Flow> {
-        match self.dir {
-            TextDir::Fixed(flow) => Some(flow),
-            TextDir::Auto => Some(if crate::Direction::of(&self.content) == Some(crate::Direction::Rtl) { crate::el::Flow::Rtl } else { crate::el::Flow::Ltr }),
-            TextDir::Plaintext(_) => None,
-        }
+            && (self.by_line || matches!(self.dir, TextDir::Plaintext(_)) || self.content.contains('\n'))
     }
 
     /// Zeroizes the shown string and shows `content` instead.

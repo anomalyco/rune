@@ -60,7 +60,7 @@ fn static_shortcuts_wait_for_the_next_attach_whatever_the_state() {
 fn closing_releases_callers_waiting_for_the_owner() {
     let app = app("Waiting");
     let (wake, woke) = mpsc::channel();
-    let guard = Guard::attach(&app.shared, Arc::new(move || { let _ = wake.send(()); }), true, false);
+    let guard = Guard::attach(&app.shared, Arc::new(move || { wake.send(()).ok(); }), true, false);
     let handle = app.handle();
     let caller = std::thread::spawn(move || handle.register_shortcut("ctrl+alt+c".parse().unwrap(), |_, _| {}));
     woke.recv().unwrap();
@@ -74,7 +74,7 @@ fn closing_releases_callers_waiting_for_the_owner() {
 fn a_second_host_keeps_waiting_callers_and_either_close_ends_the_service() {
     let app = app("Second");
     let (first_wake, first_woke) = mpsc::channel();
-    let first = Guard::attach(&app.shared, Arc::new(move || { let _ = first_wake.send(()); }), true, false);
+    let first = Guard::attach(&app.shared, Arc::new(move || { first_wake.send(()).ok(); }), true, false);
     let handle = app.handle();
     let chord = chord("ctrl+alt+s");
     let caller = { let (handle, chord) = (handle.clone(), chord.clone()); std::thread::spawn(move || handle.register_shortcut(chord, |_, _| {})) };

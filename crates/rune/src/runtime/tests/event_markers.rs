@@ -18,12 +18,12 @@ fn presses(rt: &Runtime<usize>) -> usize {
 #[test]
 fn a_live_window_records_no_input_markers_unless_tracing() {
     let mut rt = Runtime::new(0, view, (100.0, 100.0), Env::new(true, 1.0));
-    rt.record_events = false;
+    rt.frame.set_record_events(false);
     rt.frame(0.0);
     tap(&mut rt);
     assert_eq!(rt.state, 1);
     assert!(rt.events.is_empty(), "nothing reads them: {:?}", rt.events);
-    rt.trace_channels = Some(Default::default());
+    rt.frame.enable_trace_channels(true);
     tap(&mut rt);
     assert_eq!(rt.state, 2);
     assert_eq!(presses(&rt), 1, "a trace reads them: {:?}", rt.events);

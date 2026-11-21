@@ -1,4 +1,7 @@
 //! Static exit samples on a real native overlay, for capsule/filter integration review.
+
+#![forbid(unsafe_code)]
+
 use rune::{App, AppSpec, Color, Cx, DisplayTarget, El, OverlayInput, OverlayLevel,
     OverlayOptions, OverlaySpec, RunOptions, WindowSpec, el, text};
 
@@ -33,7 +36,7 @@ fn main() {
         let handle = app.handle();
         // The probe owns stdin and closes it even on capture failure. No persistent GUI job.
         std::thread::spawn(move || {
-            let _ = std::io::stdin().read_line(&mut String::new());
+            std::io::stdin().read_line(&mut String::new()).ok();
             handle.quit();
         });
         vec![WindowSpec::from_app("filter-proof", app)]

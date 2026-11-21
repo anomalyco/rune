@@ -25,7 +25,6 @@
 //! `rows_settled` after the frames that follow.
 use std::borrow::Cow;
 use std::cell::Cell;
-use std::time::Instant;
 
 use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
 use rune::text::TextSystem;
@@ -245,13 +244,13 @@ fn sample(d: &mut Draw, from: Mode, case: &str, lazy_grid: bool, eager: bool, ce
     }
     rune::take_frame_phases();
     BUILT.set(0);
-    let (alloc0, cpu0, wall0) = (procwatch::alloc::thread_allocations(), rune::thread_cpu_ms(), Instant::now());
+    let (alloc0, cpu0, wall0) = (procwatch::alloc::thread_allocations(), rune::thread_cpu_ms(), rune::time::now());
     press(&mut rt, key(to));
     rt.frame(1.0 / 120.0);
     let (cpu, frame) = (rune::thread_cpu_ms() - cpu0, wall0.elapsed().as_secs_f64() * 1000.0);
     let allocations = (procwatch::alloc::thread_allocations() - alloc0) as f64;
     let phases = rune::take_frame_phases();
-    let encode0 = Instant::now();
+    let encode0 = rune::time::now();
     d.draw(&mut rt);
     let encode = encode0.elapsed().as_secs_f64() * 1000.0;
     d.wait();

@@ -4,6 +4,8 @@
 //! `accessibilityPerformPress`. Opens a native window, so it only runs with RUNE_GUI_TESTS=1
 //! in a logged-in macOS GUI session.
 
+#![allow(unsafe_code)]
+
 #[cfg(not(target_os = "macos"))]
 fn main() {}
 
@@ -98,7 +100,7 @@ mod mac {
         let spec = AppSpec::new("Accessible", (360.0, 240.0), State::default, view);
         let (ready_tx, ready_rx) = mpsc::channel();
         let window = &WINDOW;
-        let app = App::new(spec).args(Vec::new()).keep_running().on_ready(move |w| { let _ = window.set(w.clone()); let _ = ready_tx.send(()); });
+        let app = App::new(spec).args(Vec::new()).keep_running().on_ready(move |w| { window.set(w.clone()).ok(); ready_tx.send(()).ok(); });
         let handle = app.handle();
         let result = std::sync::Arc::new(Mutex::new(None));
         let out = result.clone();
@@ -116,7 +118,7 @@ mod mac {
                             let ok: Bool = unsafe { msg_send![presses[0], accessibilityPerformPress] };
                             assert!(ok.as_bool(), "accessibilityPerformPress");
                         }
-                        let _ = tx.send(tree);
+                        tx.send(tree).ok();
                     });
                     rx.recv_timeout(Duration::from_secs(5)).expect("tree")
                 };
@@ -137,7 +139,7 @@ mod mac {
                 let _ = read(true);
                 std::thread::sleep(Duration::from_millis(300));
                 let (tx, rx) = mpsc::channel();
-                handle.update(move |s, _| { let _ = tx.send(s.presses); });
+                handle.update(move |s, _| { tx.send(s.presses).ok(); });
                 assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), 1, "the press ran on_press");
                 let tree = read(false);
                 assert_eq!(find(&tree, "count").map(|c| c.value.as_str()), Some("Pressed 1 times"));

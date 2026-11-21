@@ -1,0 +1,1 @@
+- Partial redraws on Windows and isolated layers cover less: a banded border or shadow, a rotated icon and an effect slot are bounded by what they draw instead of a looser box, and a rotated layer's damage follows its rotation, so its whole turned footprint redraws.

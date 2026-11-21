@@ -455,14 +455,20 @@ impl crate::Instance for Instance {
 
     unsafe fn init(desc: &crate::InstanceDescriptor<'_>) -> Result<Self, crate::InstanceError> {
         profiling::scope!("Init OpenGL (WGL) Backend");
-        let opengl_module =
-            unsafe { LibraryLoader::LoadLibraryA(PCSTR(c"opengl32.dll".as_ptr().cast())) }
-                .map_err(|e| {
-                    crate::InstanceError::with_source(
-                        String::from("unable to load the OpenGL library"),
-                        e,
-                    )
-                })?;
+        // Rune: load opengl32.dll from System32 only, not the app directory or CWD.
+        let opengl_module = unsafe {
+            LibraryLoader::LoadLibraryExA(
+                PCSTR(c"opengl32.dll".as_ptr().cast()),
+                None,
+                LibraryLoader::LOAD_LIBRARY_SEARCH_SYSTEM32,
+            )
+        }
+        .map_err(|e| {
+            crate::InstanceError::with_source(
+                String::from("unable to load the OpenGL library"),
+                e,
+            )
+        })?;
 
         let device = create_instance_device()?;
         let dc = device.dc;

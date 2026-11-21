@@ -3,6 +3,8 @@
 //! the frame. Spawning threads per frame costs tens of microseconds each on Windows; waking a
 //! parked one costs a few.
 
+#![allow(unsafe_code)]
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -97,7 +99,7 @@ fn work(shared: &Shared, k: usize) {
         // SAFETY: `run` keeps the job alive until `running` reaches zero, which this decrement
         // can only do after the call returns.
         // A panic in a job is the caller's to see; the count must still go down.
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { (*job.0)() }));
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { (*job.0)() })).ok();
         if shared.running.fetch_sub(1, Ordering::AcqRel) == 1 {
             let _guard = shared.state.lock().unwrap_or_else(|e| e.into_inner());
             shared.done.notify_all();
@@ -109,6 +111,6 @@ impl Drop for Pool {
     fn drop(&mut self) {
         *self.shared.state.lock().unwrap_or_else(|e| e.into_inner()) = State::Leaving;
         self.shared.wake.notify_all();
-        for w in self.workers.drain(..) { let _ = w.join(); }
+        for w in self.workers.drain(..) { w.join().ok(); }
     }
 }

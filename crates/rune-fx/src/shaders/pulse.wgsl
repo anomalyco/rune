@@ -52,9 +52,8 @@ fn ping(c: Ctx, i: Inst, age: f32, dur: f32) -> vec2f {
     return vec2f(e, hot);
 }
 
-fn shade(in: VOut) -> vec4f {
-    let i = insts[in.id];
-    let c = ctx(i, in.px);
+fn shade(i: Inst, px: vec2f) -> vec4f {
+    let c = ctx(i, px);
     let n = i32(i.p0.x + 0.5);
     let period = max(i.p0.y, 0.05);
     let reach = i.p0.z;
@@ -154,5 +153,5 @@ fn shade(in: VOut) -> vec4f {
         }
     }
     let col = i.c0.rgb * e + i.c1.rgb * hotv;
-    return finish(vec4f(col * inten, (e + hotv) * occl * inten), in.px);
+    return finish(vec4f(col * inten, (e + hotv) * occl * inten), px);
 }

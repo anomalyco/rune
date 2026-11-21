@@ -55,7 +55,7 @@ pub(super) fn render(reel: &Reel, ctx: &mut Ctx, out: &Path, from: f32, to: f32)
     let poster_t = T_END + 1.8;
     let sheet_t = [T_TILT + 2.2, T_INPUTS + 1.0, T_CASCADES + 2.2, T_MERGE + 1.4, T_FLUENCE + 0.7, T_UNTILT + 0.9];
     let mut sheet: Vec<Vec<u8>> = Vec::new();
-    let t0 = std::time::Instant::now();
+    let t0 = rune::time::now();
     for f in n0..n1 {
         let t = f as f32 / FPS as f32;
         let (view, _) = reel.frame(ctx, t, false);
@@ -72,7 +72,7 @@ pub(super) fn render(reel: &Reel, ctx: &mut Ctx, out: &Path, from: f32, to: f32)
         }
         if f % 60 == 0 {
             let line = format!("frame {f}/{n1} ({:.1}s)\n", t0.elapsed().as_secs_f32());
-            let _ = std::fs::OpenOptions::new().create(true).append(true).open(out.join("progress.log")).and_then(|mut fh| fh.write_all(line.as_bytes()));
+            std::fs::OpenOptions::new().create(true).append(true).open(out.join("progress.log")).and_then(|mut fh| fh.write_all(line.as_bytes())).ok();
         }
     }
     drop(h264.stdin.take());
@@ -139,7 +139,7 @@ pub(super) fn bench(reel: &Reel, ctx: &mut Ctx, out: &Path, gpu: &str) {
         };
         one(ctx);
         ctx.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-        let t0 = std::time::Instant::now();
+        let t0 = rune::time::now();
         for _ in 0..120 {
             one(ctx);
         }

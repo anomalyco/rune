@@ -79,155 +79,6 @@ impl Mirror {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn utf16_replacement_preserves_callbacks_and_rejects_stale_context() {
-        fn view(state: &(crate::TextEdit, usize), _: &mut Cx<(crate::TextEdit, usize)>) -> El {
-            crate::text_input(&state.0, crate::tok::type_::BODY).key("input")
-                .on_edit(|s: &mut (crate::TextEdit, usize)| &mut s.0)
-                .on_input_change(|s: &mut (crate::TextEdit, usize), _| s.1 += 1)
-        }
-        let mut rt = Runtime::new((crate::TextEdit::new("a🦀c"), 0), view, (300.0, 100.0), Env::default());
-        rt.frame(0.0);
-        let key = rt.nodes.iter().find(|n| n.key.as_deref() == Some("input")).unwrap().path.clone();
-        rt.set_focus(Some(key.clone()), true);
-        let event = json!({"kind":"edit", "key":key, "base":0, "expected":"a🦀c",
-            "start":1, "end":3, "text":"é", "anchor":2, "focus":2});
-        rt.web_edit(&event);
-        rt.frame(0.0);
-        assert_eq!((&*rt.state.0.text, rt.state.1, rt.state.0.focus), ("aéc", 1, 3));
-        rt.web_edit(&event);
-        rt.frame(0.0);
-        assert_eq!((&*rt.state.0.text, rt.state.1), ("aéc", 1));
-        assert_eq!(byte_at("a🦀c", 2), None);
-    }
-
-    #[test]
-    fn context_is_bounded_at_unicode_boundaries_and_keeps_the_selection() {
-        let mut edit = crate::TextEdit::new("é🦀a".repeat(800));
-        let boundaries: Vec<_> = edit.text.char_indices().map(|(i, _)| i).chain([edit.text.len()]).collect();
-        for &a in boundaries.iter().step_by(157) {
-            for &f in boundaries.iter().step_by(271) {
-                edit.anchor = a; edit.focus = f;
-                let (base, text, anchor, focus) = context_window(&edit);
-                assert_eq!(base + byte_at(text, anchor as usize).unwrap(), a);
-                assert_eq!(base + byte_at(text, focus as usize).unwrap(), f);
-                let before = edit.text[base..a.min(f)].encode_utf16().count();
-                let after = edit.text[a.max(f)..base + text.len()].encode_utf16().count();
-                assert!(before <= 512 && after <= 512);
-                if base > 0 { assert!(before + edit.text[..base].chars().next_back().unwrap().len_utf16() > 512); }
-                if base + text.len() < edit.text.len() {
-                    assert!(after + edit.text[base + text.len()..].chars().next().unwrap().len_utf16() > 512);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn mirror_skips_unchanged_frames_and_never_caches_secure_text() {
-        let mut mirror = Mirror::default();
-        let mut edit = crate::TextEdit::new("🦀".repeat(10_000));
-        assert!(mirror.update("field", Some(&edit)));
-        assert_eq!(mirror.text.encode_utf16().count(), 512);
-        let allocation = mirror.text.as_ptr();
-        for _ in 0..120 { assert!(!mirror.update("field", Some(&edit))); }
-        assert_eq!(mirror.text.as_ptr(), allocation);
-        edit.anchor -= 4;
-        assert!(mirror.update("field", Some(&edit)), "selection-only changes sync");
-        edit.text.push('x');
-        assert!(mirror.update("field", Some(&edit)), "edits within the window sync");
-        assert!(mirror.update("other", Some(&edit)), "same contents in a different field sync");
-        edit.set_secure(true);
-        assert!(mirror.update("other", Some(&edit)));
-        assert!(mirror.secure && mirror.text.is_empty());
-        assert_eq!((mirror.base, mirror.anchor, mirror.focus), (0, 0, 0));
-        edit.insert("secret");
-        assert!(!mirror.update("other", Some(&edit)), "secret edits don't mirror to the DOM");
-        edit.set_revealed(true);
-        assert!(!mirror.update("other", Some(&edit)), "revealing changes only the GPU display, not DOM text services");
-        assert!(mirror.secure && mirror.text.is_empty());
-        assert_eq!((mirror.base, mirror.anchor, mirror.focus), (0, 0, 0));
-        assert!(mirror.update("", None));
-        assert!(!mirror.update("", None));
-    }
-
-    #[test]
-    fn recomposition_replaces_its_range_without_changing_committed_text() {
-        fn view(edit: &crate::TextEdit, _: &mut Cx<crate::TextEdit>) -> El {
-            crate::text_input(edit, crate::tok::type_::BODY).key("input").on_edit(|s: &mut crate::TextEdit| s)
-        }
-        let mut rt = Runtime::new(crate::TextEdit::new("🦀 hello "), view, (300.0, 100.0), Env::default());
-        rt.frame(0.0);
-        let key = rt.nodes.iter().find(|n| n.key.as_deref() == Some("input")).unwrap().path.clone();
-        rt.set_focus(Some(key.clone()), true);
-        let mut event = json!({"kind":"preedit", "key":key, "base":5, "expected":"hello ",
-            "start":0, "end":6, "text":"hello", "anchor":5, "focus":5});
-        rt.web_edit(&event);
-        assert_eq!(rt.state.text, "🦀 hello ");
-        assert_eq!(rt.state.display().0, "🦀 hello", "preedit replaces the word, not appends");
-        event["text"] = json!("help");
-        event["anchor"] = json!(4); event["focus"] = json!(4);
-        rt.web_edit(&event);
-        assert_eq!(rt.state.display().0, "🦀 help");
-        event["kind"] = json!("edit");
-        rt.web_edit(&event);
-        assert_eq!(rt.state.text, "🦀 help");
-        assert!(rt.state.preedit().is_none());
-        assert_eq!(rt.state.focus, rt.state.text.len());
-        rt.web_edit(&event);
-        assert_eq!(rt.state.text, "🦀 help", "stale context rejected");
-        event["base"] = json!(1);
-        rt.web_edit(&event);
-        assert_eq!(rt.state.text, "🦀 help", "base must be a UTF-8 boundary");
-    }
-
-    #[test]
-    fn replacement_offsets_are_local_utf16_and_cannot_escape_the_snapshot() {
-        fn view(edit: &crate::TextEdit, _: &mut Cx<crate::TextEdit>) -> El {
-            crate::text_input(edit, crate::tok::type_::BODY).key("input").on_edit(|s: &mut crate::TextEdit| s)
-        }
-        let mut rt = Runtime::new(crate::TextEdit::new("é🦀 tail"), view, (300.0, 100.0), Env::default());
-        rt.frame(0.0);
-        let key = rt.nodes.iter().find(|n| n.key.as_deref() == Some("input")).unwrap().path.clone();
-        rt.set_focus(Some(key.clone()), true);
-        let mut event = json!({"kind":"edit", "key":key, "base":2, "expected":"🦀 ",
-            "start":1, "end":2, "text":"x", "anchor":1, "focus":1});
-        rt.web_edit(&event);
-        assert_eq!(rt.state.text, "é🦀 tail", "mid-surrogate offsets rejected");
-        event["start"] = json!(0); event["end"] = json!(4);
-        rt.web_edit(&event);
-        assert_eq!(rt.state.text, "é🦀 tail", "replacement must stay inside expected context");
-        event["end"] = json!(2);
-        rt.web_edit(&event);
-        assert_eq!(rt.state.text, "éx tail");
-        assert_eq!(rt.state.focus, 3);
-    }
-
-    #[test]
-    fn web_key_forwards_dom_code_for_digits_letters_and_punctuation() {
-        type Seen = Vec<(crate::Key, Option<crate::PhysicalKeyCode>, bool)>;
-        fn view(_: &Seen, _: &mut Cx<Seen>) -> El { crate::el() }
-        let mut rt = Runtime::new(Seen::new(), view, (100.0, 100.0), Env::default());
-        rt.on_key = Some(|s, ev, tx| { s.push((ev.key.clone(), tx.physical_key(), tx.key_repeat())); true });
-        rt.frame(0.0);
-        for (key, code, repeat) in [("/", "Digit7", false), ("/", "Slash", true), (":", "Period", false), ("k", "KeyK", false)] {
-            rt.web_key(&json!({"kind":"key", "key":key, "code":code, "meta":true, "shift":true, "repeat":repeat}));
-            rt.frame(0.0);
-        }
-        use crate::PhysicalKeyCode::*;
-        assert_eq!(rt.state, [
-            (crate::Key::Command('/'), Some(Digit7), false),
-            (crate::Key::Command('/'), Some(Slash), true),
-            (crate::Key::Command(':'), Some(Period), false),
-            (crate::Key::Command('k'), Some(KeyK), false),
-        ]);
-    }
-}
-
 /// Reject offsets in the middle of a surrogate pair, rather than corrupting the Rust string.
 fn byte_at(text: &str, utf16: usize) -> Option<usize> {
     let mut units = 0;
@@ -238,7 +89,7 @@ fn byte_at(text: &str, utf16: usize) -> Option<usize> {
     (units == utf16).then_some(text.len())
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// An action whose handler may ask for what a browser allows only inside the input's event
     /// (the clipboard, a new tab, a menu, a dialog) or that routes keys and focus: it runs in a
     /// frame inside that event. The rest (a move's hover, enter and leave, what a frame reports
@@ -252,7 +103,7 @@ impl<S: 'static> Runtime<S> {
 
     /// Whether a release (or an edit) left a handler that has to run inside the input's event.
     pub(crate) fn web_release_needs_frame(&self) -> bool {
-        self.queue.iter().any(Self::web_needs_event)
+        self.frame.queue.iter().any(Self::web_needs_event)
     }
 
     /// A press whose only such action focuses a text field runs that action now, as a frame
@@ -260,64 +111,67 @@ impl<S: 'static> Runtime<S> {
     /// focus inside the press and the next key goes to it; the rest of the queue and the frame
     /// wait for the display's. False, with nothing run, when any other such action is queued or
     /// a focus is already asked for.
-    pub(crate) fn web_focus_field(&mut self) -> bool {
-        if self.relayout || self.focus_request.is_some() || self.pending.focus_to.is_some() { return false; }
-        let needs: Vec<usize> = self.queue.iter().enumerate().filter(|(_, a)| Self::web_needs_event(a)).map(|(i, _)| i).collect();
+    pub(crate) fn web_focus_field(&mut self, app: &mut dyn AppDriver) -> bool {
+        if self.commit.relayout || self.kbd.focus_request.is_some() || self.frame.pending.focus_to.is_some() { return false; }
+        let needs: Vec<usize> = self.frame.queue.iter().enumerate().filter(|(_, a)| Self::web_needs_event(a)).map(|(i, _)| i).collect();
         let [pos] = needs[..] else { return false };
-        if !matches!(self.queue.iter().nth(pos), Some(Action::Focus(..))) { return false; }        let mut tx = self.transaction();
-        let action = self.queue.remove(pos);
-        let changed = self.run_action(action, &mut tx);
-        self.dirty |= changed;
-        merge(&mut self.pending, tx);
+        if !matches!(self.frame.queue.iter().nth(pos), Some(Action::Focus(..))) { return false; }
+        let mut tx = self.transaction(app);
+        let action = self.frame.queue.remove(pos);
+        let changed = self.run_action(app, action, &mut tx);
+        self.commit.dirty |= changed;
+        merge(&mut self.frame.pending, tx);
         true
     }
 
     /// The focused field's context from the model, which an edit or a focus just changed, for
     /// the page's field before its next key; None when what's pending needs a whole frame now
     /// (a handler that asked for the clipboard, a link, focus or a selection).
-    pub(crate) fn web_edit_context(&mut self, mirror: &mut Mirror) -> Option<bool> {
-        let tx = &self.pending;
-        if self.web_release_needs_frame() || self.focus_request.is_some() || tx.blur || tx.focus_to.is_some() || tx.select.is_some() || !tx.keys.is_empty()
+    pub(crate) fn web_edit_context(&mut self, app: &mut dyn AppDriver, mirror: &mut Mirror) -> Option<bool> {
+        let tx = &self.frame.pending;
+        if self.web_release_needs_frame() || self.kbd.focus_request.is_some() || tx.blur || tx.focus_to.is_some() || tx.select.is_some() || !tx.keys.is_empty()
             || tx.copy.is_some() || tx.paste || !tx.clipboard_reads.is_empty() || !tx.pick_reads.is_empty()
             || !tx.open_urls.is_empty() || !tx.file_dialogs.is_empty() || !tx.popups.is_empty() || tx.clear_secret {
             return None;
         }
         let access = self.focused_input()?.access.clone()?;
-        let key = self.focus.path()?;
-        Some(mirror.update(key, Some(access(states!(self)))))
+        let key = self.kbd.focus.path()?;
+        Some(mirror.update(key, Some(access(app.states()))))
     }
     pub(crate) fn web_context(&self, mirror: &mut Mirror) -> bool {
         match self.focused_input().filter(|i| i.access.is_some()) {
-            Some(input) => mirror.update(self.focus.path().unwrap_or_default(), Some(&input.edit)),
+            Some(input) => mirror.update(self.kbd.focus.path().unwrap_or_default(), Some(&input.edit)),
             None => mirror.update("", None),
         }
     }
 
-    pub(crate) fn web_key(&mut self, event: &serde_json::Value) -> bool {
+    pub(crate) fn web_key(&mut self, app: &mut dyn AppDriver, event: &serde_json::Value) -> bool {
         let flag = |key: &str| event[key].as_bool().unwrap_or(false);
-        let (shift, ctrl, alt, logo) = (flag("shift"), flag("ctrl"), flag("alt"), flag("meta"));
-        let mods = crate::Mods { shift, alt, ctrl, logo, cmd: logo || ctrl };
-        let key = match event["key"].as_str().unwrap_or_default() {
-            "Enter" => crate::Key::Enter, "Tab" => crate::Key::Tab, "Escape" => crate::Key::Escape,
-            "ArrowLeft" => crate::Key::Left, "ArrowRight" => crate::Key::Right,
-            "ArrowUp" => crate::Key::Up, "ArrowDown" => crate::Key::Down,
-            "Home" => crate::Key::Home, "End" => crate::Key::End,
-            "PageUp" => crate::Key::PageUp, "PageDown" => crate::Key::PageDown,
-            "Backspace" => crate::Key::Backspace, "Delete" => crate::Key::Delete,
-            "ContextMenu" => crate::Key::ContextMenu,
-            "Insert" => crate::Key::Insert, "PrintScreen" => crate::Key::PrintScreen,
-            "ScrollLock" => crate::Key::ScrollLock, "Pause" => crate::Key::Pause,
-            name if name.chars().count() == 1 && mods.cmd => crate::Key::Command(name.chars().next().unwrap().to_ascii_lowercase()),
-            _ => return false,
+        let mods = crate::input::key_table::web_mods(flag("shift"), flag("ctrl"), flag("alt"), flag("meta"));
+        let name = event["key"].as_str().unwrap_or_default();
+        let code = event["code"].as_str().filter(|c| !c.is_empty() && !c.contains('+'))
+            .and_then(|c| c.parse::<crate::Shortcut>().ok())
+            .map(|s| s.physical_key());
+        let key = match crate::input::key_table::named_key_from_str(name) {
+            Some(key) => key,
+            None if name == " " => crate::Key::Text(" ".into()),
+            None if mods.cmd => {
+                let mut chars = name.chars();
+                match (chars.next(), chars.next()) {
+                    (Some(c), None) => {
+                        let c = if !c.is_ascii() { code.and_then(crate::shortcuts::us_char).unwrap_or(c) } else { c };
+                        crate::Key::Command(c.to_ascii_lowercase())
+                    }
+                    _ => return false,
+                }
+            }
+            None => return false,
         };
         let event_key = crate::KeyEvent { key, mods };
         let activate = event_key.key == crate::Key::Tab;
         let repeat = flag("repeat");
-        let code = event["code"].as_str().filter(|c| !c.is_empty() && !c.contains('+'))
-            .and_then(|c| c.parse::<crate::Shortcut>().ok())
-            .map(|s| s.physical_key());
         if let Some(key) = code {
-            self.physical_with_fallback(crate::PhysicalInput::Key { key, mods, pressed: true, repeat }, Some(event_key));
+            self.physical_with_fallback(app, crate::PhysicalInput::Key { key, mods, pressed: true, repeat }, Some(event_key));
         } else if repeat {
             self.repeat_key(event_key);
         } else {
@@ -328,20 +182,20 @@ impl<S: 'static> Runtime<S> {
 
     pub(crate) fn web_secure(&mut self, key: &str, text: String) {
         let event = crate::KeyEvent { key: crate::Key::Text(text), mods: crate::Mods::default() };
-        if self.focus.path() == Some(key) && self.has_secure_focus() {
+        if self.kbd.focus.path() == Some(key) && self.has_secure_focus() {
             self.key(event);
         }
     }
 
-    pub(crate) fn web_edit(&mut self, event: &serde_json::Value) {
+    pub(crate) fn web_edit(&mut self, app: &mut dyn AppDriver, event: &serde_json::Value) {
         let Some(key) = event["key"].as_str() else { return };
-        if self.focus.path() != Some(key) || self.has_secure_focus() { return; }
+        if self.kbd.focus.path() != Some(key) || self.has_secure_focus() { return; }
         let number = |key: &str| event[key].as_u64().and_then(|n| usize::try_from(n).ok());
         let Some(base) = number("base") else { return };
         let Some(expected) = event["expected"].as_str() else { return };
-        let mut tx = self.transaction();
-        let composing_before = self.composing();
-        let changed = self.with_focused(|edit| {
+        let mut tx = self.transaction(app);
+        let composing_before = self.composing(app);
+        let changed = self.with_focused(app, |edit| {
             // Browser edits belong to the snapshot from which its context was mirrored.
             if !edit.text.get(base..).is_some_and(|s| s.starts_with(expected)) { return EditOutcome::default(); }
             if event["kind"] == "edit" || event["kind"] == "preedit" {
@@ -368,8 +222,12 @@ impl<S: 'static> Runtime<S> {
             }
             EditOutcome::default()
         }, &mut tx);
-        if composing_before || event["kind"] == "preedit" { self.key_releases.ime_took_key(); }
-        if changed { self.dirty = true; }
-        merge(&mut self.pending, tx);
+        if composing_before || event["kind"] == "preedit" { self.kbd.ime_took_key(); }
+        if changed { self.commit.dirty = true; }
+        merge(&mut self.frame.pending, tx);
     }
 }
+
+#[cfg(test)]
+#[path = "runtime_tests.rs"]
+mod tests;

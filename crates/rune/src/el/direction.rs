@@ -16,35 +16,9 @@
 //! right-to-left direction: layout reads one small enum per element.
 use super::*;
 
-/// Which way an element and what it holds run, as HTML's `dir` attribute.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum Direction {
-    /// Left to right. Inside a right-to-left subtree it's an island that keeps its own order,
-    /// as `dir="ltr"` on a path, a command or code.
-    #[default]
-    Ltr,
-    /// Right to left: Arabic, Hebrew, Persian, Urdu.
-    Rtl,
-    /// From the first strong character of the element's text (or, on a container, of the text
-    /// inside it, skipping subtrees that set their own direction), as `dir="auto"` and `<bdi>`
-    /// resolve it: right to left when that's Arabic or Hebrew, else left to right, and its
-    /// parent's direction when there's none (a number, a path alone). An empty text field takes
-    /// its placeholder's. For user strings such as titles, names, messages and a prompt.
-    Auto,
-}
-
-impl Direction {
-    /// The direction of `text` as [`Direction::Auto`] resolves it: its first strong character's,
-    /// outside isolates (UAX #9 rules P2 and P3), or `None` when it has none.
-    pub fn of(text: &str) -> Option<Direction> {
-        first_strong_char(text, false)
-    }
-
-    /// Whether this is [`Direction::Rtl`].
-    pub fn is_rtl(self) -> bool {
-        self == Direction::Rtl
-    }
-}
+pub use rune_text::Direction;
+pub(crate) use rune_text::Flow;
+use rune_text::first_strong_char;
 
 impl El {
     /// Lays this element and its subtree out in `dir` (see [`Direction`]): `Rtl` mirrors rows,
@@ -76,30 +50,6 @@ impl El {
     pub fn mirror_in_rtl(mut self) -> Self {
         self.vis.cold_mut().mirror_rtl = true;
         self
-    }
-}
-
-/// The direction an element resolved to, which its subtree lays out in: what `El::dir` and its
-/// ancestors' give it, `Direction::Auto` settled by its text.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub(crate) enum Flow {
-    #[default]
-    Ltr,
-    Rtl,
-}
-
-impl Flow {
-    /// A laid-out paragraph's flow: its bidi base level.
-    pub(crate) fn of_layout<B: parley::Brush>(layout: &parley::Layout<B>) -> Flow {
-        if layout.is_rtl() { Flow::Rtl } else { Flow::Ltr }
-    }
-
-    /// The paragraph direction text in this flow lays out in.
-    pub(crate) fn base(self) -> parley::BaseDirection {
-        match self {
-            Flow::Ltr => parley::BaseDirection::Ltr,
-            Flow::Rtl => parley::BaseDirection::Rtl,
-        }
     }
 }
 
@@ -172,27 +122,6 @@ pub(crate) fn step(parent: Flow, event: DirEvent<'_>) -> (Flow, DirEffect) {
         Flow::Rtl => DirEffect::Mirror,
     };
     (flow, effect)
-}
-
-/// The direction of `text`'s first strong character outside isolates, or `None` when it has
-/// none: in its first paragraph, or `across` its paragraphs as HTML's `dir="auto"` reads an
-/// element's text.
-fn first_strong_char(text: &str, across: bool) -> Option<Direction> {
-    use icu_properties::{CodePointMapData, props::BidiClass};
-    let classes = CodePointMapData::<BidiClass>::new();
-    let mut isolates = 0u32;
-    for c in text.chars() {
-        match classes.get(c) {
-            BidiClass::LeftToRightIsolate | BidiClass::RightToLeftIsolate | BidiClass::FirstStrongIsolate => isolates += 1,
-            BidiClass::PopDirectionalIsolate => isolates = isolates.saturating_sub(1),
-            BidiClass::ParagraphSeparator if across => isolates = 0,
-            BidiClass::ParagraphSeparator if isolates == 0 => return None,
-            BidiClass::LeftToRight if isolates == 0 => return Some(Direction::Ltr),
-            BidiClass::RightToLeft | BidiClass::ArabicLetter if isolates == 0 => return Some(Direction::Rtl),
-            _ => {}
-        }
-    }
-    None
 }
 
 /// The first strong direction in `el`'s text, then its children's in order, skipping children

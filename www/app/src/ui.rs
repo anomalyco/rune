@@ -73,7 +73,7 @@ pub fn linked(key: &str, s: &str, style: TextStyle, color: Color) -> El {
         t = t.link(Link::new(r, url).hover(LinkPaint::default().underline(fg())));
     }
     t.on_link(|_: &mut crate::State, url: &str, tx: &mut Tx| {
-        let _ = tx.open_url(url);
+        tx.open_url(url).ok();
     })
 }
 

@@ -3,6 +3,7 @@ name = "rune-luau"
 version = "0.0.1"
 edition.workspace = true
 license.workspace = true
+description = "Sandboxed Luau scripting for Rune UIs, with direct element builders, async task scheduling, and hot reload."
 
 [features]
 default = ["wasi-allocator"]
@@ -21,10 +22,10 @@ wasi-allocator = []
 serde = ["mlua/serde", "dep:serde", "dep:serde_json"]
 
 [dependencies]
-rune = { path = "../rune", default-features = false }
-rustc-hash = "2"
-serde = { version = "1", optional = true }
-serde_json = { version = "1", optional = true }
+rune = { workspace = true }
+rustc-hash = { workspace = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
 # mlua is pinned to a rev on main: wasm32-unknown-unknown support landed after 0.12.2.
 mlua = { git = "https://github.com/mlua-rs/mlua", rev = "a0ad4535fc72ba89967a931c5be57b162b5f0f3f", features = ["luau"] }
@@ -33,10 +34,10 @@ mlua = { git = "https://github.com/mlua-rs/mlua", rev = "a0ad4535fc72ba89967a931
 notify = { version = "8.2", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
-js-sys = "0.3"
-web-sys = { version = "0.3", features = ["console"] }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+js-sys = { workspace = true }
+web-sys = { workspace = true, features = ["console"] }
 
 [lints]
 workspace = true

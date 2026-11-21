@@ -9,7 +9,7 @@ pub(crate) const CAP: usize = 512;
 /// works while another field is borrowed.
 macro_rules! log_event {
     ($rt:expr, $($fmt:tt)+) => {
-        if $rt.record_events || $rt.trace_channels.is_some() {
+        if $rt.frame.record_events() || $rt.frame.tracing_channels() {
             let event = format!($($fmt)+);
             $crate::runtime::event_log::push(&mut $rt.events, event);
         }

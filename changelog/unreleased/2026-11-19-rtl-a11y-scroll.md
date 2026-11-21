@@ -1,0 +1,1 @@
+- Right-to-left horizontal scrolling: an assistive technology's scroll-left and scroll-right actions move the content in that visual direction (scroll-left did nothing from rest), and on web the accessibility mirror keeps a scrolled region's items in place instead of moving them by twice the scroll.

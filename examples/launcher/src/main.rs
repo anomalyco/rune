@@ -8,6 +8,8 @@
 //!
 //! With `--desktop` the app adds a fake menu bar, so the recording reads as a desktop.
 
+#![forbid(unsafe_code)]
+
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use rune::tok::{self, type_};

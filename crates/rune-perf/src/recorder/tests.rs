@@ -6,7 +6,7 @@ use std::{alloc::{GlobalAlloc, Layout, System}, hint::black_box};
 #[test]
 fn report_path_has_zero_allocations_and_overflow_is_bounded() {
     let (out, rx) = sync_channel(QUEUE);
-    let r = Recorder { start: Instant::now(), out: Some(out), health: Arc::default(), worker: None };
+    let r = Recorder { start: crate::now(), out: Some(out), health: Arc::default(), worker: None };
     r.record(Frame::default());
     rx.recv().unwrap();
     // Unwrap: the test binary installs the counting allocator, so this is a real zero.
@@ -19,10 +19,11 @@ fn report_path_has_zero_allocations_and_overflow_is_bounded() {
 
 #[test]
 #[ignore = "manual paired optimized component benchmark"]
+#[allow(unsafe_code)]
 fn instrumentation_overhead() {
     const N: usize = 200_000;
     fn allocations(a: &impl GlobalAlloc) -> f64 {
-        let at = Instant::now();
+        let at = crate::now();
         for _ in 0..N {
             // SAFETY: valid layout, checked allocation, freed once with the same layout.
             unsafe {
@@ -37,7 +38,7 @@ fn instrumentation_overhead() {
         at.elapsed().as_nanos() as f64 / N as f64
     }
     let (out, rx) = sync_channel(QUEUE);
-    let r = Recorder { start: Instant::now(), out: Some(out), health: Arc::default(), worker: None };
+    let r = Recorder { start: crate::now(), out: Some(out), health: Arc::default(), worker: None };
     let mut values: [Vec<f64>; 4] = Default::default();
     let mut deltas = Vec::new();
     for round in 0..22 {
@@ -48,7 +49,7 @@ fn instrumentation_overhead() {
                 0 => allocations(&System),
                 1 => allocations(&Counting::system()),
                 _ => {
-                    let at = Instant::now();
+                    let at = crate::now();
                     for _ in 0..N {
                         let f = black_box(Frame::default());
                         if mode == 3 { black_box(r.record(f)); black_box(rx.recv().unwrap()); }

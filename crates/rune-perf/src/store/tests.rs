@@ -12,7 +12,7 @@ fn writer_publishes_snapshot_and_bounded_incidents_even_when_hook_is_full() {
     let (tx, rx) = sync_channel(1);
     let config = Config::new(dir.path(), "fixture").build("1.0").incidents(tx);
     let health = Health::default();
-    let mut w = Writer::new(&config, Instant::now(), &health);
+    let mut w = Writer::new(&config, crate::now(), &health);
     for n in 0..40 {
         let mut s = frame(n * 2000);
         s.frame.window = n;
@@ -55,7 +55,7 @@ fn logs_rotate_and_failed_writes_are_visible() {
     assert_eq!(std::fs::metadata(dir.path().join("perf.log.1")).unwrap().len(), 125);
     let config = Config::new(dir.path().join("absent"), "fixture");
     let health = Health::default();
-    let mut w = Writer::new(&config, Instant::now(), &health);
+    let mut w = Writer::new(&config, crate::now(), &health);
     w.snapshot();
     assert!(health.errors.load(Relaxed) >= 1);
     assert!(atomic_json(dir.path(), "big.json", &json!("oversize"), 1).is_err());
@@ -114,11 +114,11 @@ fn instrumentation_overhead_writer() {
     let dir = tempfile::tempdir().unwrap();
     let config = Config::new(dir.path(), "benchmark");
     let health = Health::default();
-    let mut w = Writer::new(&config, Instant::now(), &health);
+    let mut w = Writer::new(&config, crate::now(), &health);
     for n in 0..crate::RECENT { w.stats.accept(frame(n as u64)); }
     let mut times = Vec::new();
     for round in 0..22 {
-        let at = Instant::now();
+        let at = crate::now();
         for _ in 0..100 { w.snapshot(); }
         if round > 0 { times.push(at.elapsed().as_secs_f64() * 10.0); }
     }

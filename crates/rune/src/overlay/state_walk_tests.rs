@@ -185,7 +185,7 @@ fn occluded_wait(backoff: Backoff, now: Instant) -> Duration {
 
 #[test]
 fn turn_matches_dev_for_every_gate() {
-    let now = Instant::now();
+    let now = crate::time::now();
     let ms = Duration::from_millis(1);
     let retries = [None, Some(now - ms), Some(now), Some(now + ms)];
     let waits = [OCCLUDED_RETRY, Duration::from_millis(600), OCCLUDED_MAX];
@@ -196,7 +196,7 @@ fn turn_matches_dev_for_every_gate() {
             for start_wait in waits {
                 cases += 1;
                 let reads = std::cell::Cell::new(0);
-                let decided = turn(Gate { prewarm, occluded, dirty, idle, retry: start }, || { reads.set(reads.get() + 1); now });
+                let decided = turn(Gate { prewarm, occluded, dirty, idle, retry: start, missed_this_turn: false }, || { reads.set(reads.get() + 1); now });
                 let (mut dev_retry, mut dev_wait) = (start, start_wait);
                 let mut ours = backoff_start(start, start_wait);
                 let arms = ours_gate(decided, prewarm, &mut ours, now);
@@ -216,7 +216,7 @@ struct TurnOp { delta: Duration, occluded: bool }
 
 #[test]
 fn occluded_misses_back_off_like_dev() {
-    let base = Instant::now();
+    let base = crate::time::now();
     let alphabet = [
         TurnOp { delta: Duration::ZERO, occluded: true },
         TurnOp { delta: Duration::from_millis(100), occluded: true },
@@ -230,7 +230,7 @@ fn occluded_misses_back_off_like_dev() {
         let mut now = base;
         for (i, &op) in seq.iter().enumerate() {
             now = now + op.delta;
-            let decided = turn(Gate { prewarm: false, occluded: op.occluded, dirty: false, idle: true, retry: ours.deadline() }, || now);
+            let decided = turn(Gate { prewarm: false, occluded: op.occluded, dirty: false, idle: true, retry: ours.deadline(), missed_this_turn: false }, || now);
             let ours_arms = ours_gate(decided, false, &mut ours, now);
             let dev_arms = dev_gate(false, op.occluded, false, true, &mut dev.0, &mut dev.1, now);
             assert_eq!(ours_arms, dev_arms, "{seq:?} at {i}");
@@ -284,7 +284,7 @@ enum BackoffOp {
 /// Both sides take `seq` on a manual clock, checked after every event. `prewarm`: a prewarm
 /// frame, which leaves the wait alone. `scale`: how far each event is from the last.
 fn holds_up(seq: &[BackoffOp], prewarm: bool, scale: u32) {
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let mut dev = DevBackoff::new(OCCLUDED_RETRY);
     let mut ours = Backoff::default();
     for (k, &op) in seq.iter().enumerate() {

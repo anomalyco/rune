@@ -182,7 +182,7 @@ fn main() {
                 .take(2000).map(|(i, _)| (i..i + src[i..].bytes().take_while(u8::is_ascii_alphabetic).count(), Highlight::new())).collect();
             let row = timed(&mut rt, |rt| { rt.state.marks = ranges; rt.invalidate(); });
             report(kb, "marks", &[row]);
-            let t = std::time::Instant::now();
+            let t = rune::time::now();
             let elements = rt.elements();
             println!("MARKS requested={} reported={} nodes={} elements={} elements_ms={:.3}", rt.state.marks.len(), elements.iter().filter(|e| e.role == "mark").count(), rt.stats.layout_nodes, elements.len(), t.elapsed().as_secs_f64() * 1000.0);
         }

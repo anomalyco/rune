@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use rune::{AppSpec, Color, Cx, El, Icon, Live, Tx, WindowHandle, WindowOptions, WindowSpec, col, el, icon, text};
 
@@ -29,7 +31,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             .child(el().key("remote-cursor").size(12.0, 18.0).radius(3.0).fill(green)
                 .pin(Some(0.0), Some(0.0), None, None).live_offset(&s.cursor))
             .on_press(|s: &mut State| {
-                for window in s.overlays.lock().unwrap().iter() { let _ = window.set_click_through(true); }
+                for window in s.overlays.lock().unwrap().iter() { window.set_click_through(true).ok(); }
             });
     }
     col().w_full().h_full().padding(40.0).gap(20.0)
@@ -55,10 +57,10 @@ fn setup(s: &mut State, _: rune::Waker) {
     if !WINDOWED.load(Ordering::Relaxed) || s.overlay { return; }
     let cursor = s.cursor.clone();
     std::thread::spawn(move || {
-        let start = std::time::Instant::now();
+        let start = rune::time::now();
         for tick in 1..=480 {
             let t = tick as f64 / 120.0;
-            std::thread::sleep((start + std::time::Duration::from_secs_f64(t)).saturating_duration_since(std::time::Instant::now()));
+            std::thread::sleep((start + std::time::Duration::from_secs_f64(t)).saturating_duration_since(rune::time::now()));
             cursor.set(point(t));
         }
     });

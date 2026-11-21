@@ -14,7 +14,7 @@ fn overlay_hit_regions_follow_live_geometry_and_ancestor_clips_in_the_same_frame
     let offset = crate::Live::new([0.0, 0.0]);
     let opacity = crate::Live::new(1.0);
     let mut rt = Runtime::new(State { offset: offset.clone(), opacity: opacity.clone(), pressed: 0, hovered: 0, visible: true }, view, (100.0, 100.0), Env { system_dark: true, scale: 2.0 });
-    rt.native_overlay = true;
+    rt.host.native_overlay = true;
     rt.frame(0.0);
     assert_eq!(rt.hit_regions(), &[[30.0, 0.0, 60.0, 20.0]]);
     rt.pointer_move(15.0, 10.0);
@@ -120,8 +120,8 @@ fn deleting_a_focused_row_does_not_call_its_stale_edit_accessor() {
     edit.focused = true;
     let mut rt = Runtime::new(vec![edit], view, (100.0, 100.0), Env::new(true, 1.0));
     rt.frame(0.0);
-    let path = rt.nodes.iter().find(|n| n.key.as_deref() == Some("delete")).unwrap().path.clone();
-    rt.queue.push(Action::Press(path, crate::PointerButton::Primary));
+    let path = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("delete")).unwrap().path.clone();
+    rt.frame.queue.push(Action::Press(path, crate::PointerButton::Primary, false));
     rt.frame(0.0);
     assert!(rt.state.is_empty());
     assert!(!rt.has_focus());
@@ -149,11 +149,11 @@ fn secondary_only_children_preserve_primary_click_hover_and_background_blur() {
     rt.state.2 = true;
     rt.invalidate();
     rt.frame(0.0);
-    rt.focus.focus = crate::runtime::focus_machine::Focus::On { path: "previous-input".into(), hovered: false, from: None };
+    rt.kbd.focus.focus = crate::runtime::focus_machine::Focus::On { path: "previous-input".into(), hovered: false, from: None };
     rt.pointer_move(10.0, 10.0);
     rt.pointer_down(10.0, 10.0);
-    assert!(rt.hovered.is_none());
-    assert!(matches!(rt.queue.iter().last(), Some(Action::Blur)));
+    assert!(rt.pointer.hovered.is_none());
+    assert!(matches!(rt.frame.queue.iter().last(), Some(Action::Blur)));
     assert!(rt.secondary_target(10.0, 10.0).is_some());
 }
 
@@ -410,4 +410,26 @@ fn hover_change_spans_descendants_and_holds_through_a_press() {
     rt.pointer_leave();
     rt.frame(0.0);
     assert_eq!(rt.state.0, [true, false, true, false]);
+}
+
+#[test]
+fn interactive_overlay_immediately_after_non_interactive_help_suppresses_tooltip() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        col().size(200.0, 100.0)
+            .child(el().key("label").size(100.0, 40.0).help("Behind cover"))
+            .child(el().key("cover").absolute(0.0, 0.0).size(100.0, 40.0).on_press(|_: &mut ()| {}))
+            .child(el().key("own").absolute(100.0, 0.0).size(100.0, 40.0).help("Own tip").on_press(|_: &mut ()| {}))
+    }
+    let mut rt = Runtime::new((), view, (200.0, 100.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.pointer_move(50.0, 20.0);
+    rt.frame(0.0);
+    rt.frame(rt.help_delay + 0.1);
+    assert!(rt.help_tooltip().is_none(), "interactive cover at hit index == seq must suppress underlying tooltip");
+
+    // An interactive element with help of its own (at hit index == seq) still shows its tooltip.
+    rt.pointer_move(150.0, 20.0);
+    rt.frame(0.0);
+    rt.frame(rt.help_delay + 0.1);
+    assert!(rt.help_tooltip().is_some(), "uncovered interactive element still shows its own tooltip");
 }

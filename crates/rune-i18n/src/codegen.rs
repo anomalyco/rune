@@ -142,7 +142,7 @@ fn source_file(keys: &[&str], plurals: &[&str], locales: &[Locale]) -> String {
     out += &ln!("];\n\nstatic MESSAGES: [::rune_i18n::Messages; {}] = [", locales.len());
     // A web build keeps the source locale's messages in its module and loads the one a page shows
     // at run time (`Catalog::load_json`).
-    let web = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|arch| arch == "wasm32");
+    let web = std::env::var_os("CARGO_CFG_TARGET_ARCH").is_some_and(|arch| arch == "wasm32");
     for (i, locale) in locales.iter().enumerate() {
         if web && i > 0 {
             out += &ln!("    ::rune_i18n::Messages::later(),");

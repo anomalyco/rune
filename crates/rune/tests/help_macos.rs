@@ -4,6 +4,8 @@
 //! with RUNE_GUI_TESTS=1 in a logged-in GUI session. With RUNE_HELP_HOLD=<seconds> it keeps the
 //! tooltip up that long after printing `TOOLTIP`, for an outside screenshot.
 
+#![allow(unsafe_code)]
+
 #[cfg(not(target_os = "macos"))]
 fn main() {}
 
@@ -14,7 +16,7 @@ fn main() { mac::main() }
 mod mac {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::mpsc;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use objc2::{class, msg_send, runtime::AnyObject};
     use objc2_foundation::{NSPoint, NSRect};
@@ -43,7 +45,7 @@ mod mac {
     }
 
     fn wait(limit: Duration, f: impl Fn() -> bool) -> bool {
-        let start = Instant::now();
+        let start = rune::time::now();
         while !f() {
             if start.elapsed() > limit { return false; }
             std::thread::sleep(Duration::from_millis(10));
@@ -53,7 +55,7 @@ mod mac {
 
     fn on_main<T: Send + 'static>(handle: &AppHandle<()>, f: impl FnOnce() -> T + Send + 'static) -> T {
         let (tx, rx) = mpsc::channel();
-        handle.update(move |_, _| { let _ = tx.send(f()); });
+        handle.update(move |_, _| { tx.send(f()).ok(); });
         rx.recv_timeout(Duration::from_secs(5)).expect("an update runs on the main thread")
     }
 
@@ -97,7 +99,7 @@ mod mac {
                 let count: usize = msg_send![windows, count];
                 for i in 0..count {
                     let w: *mut AnyObject = msg_send![windows, objectAtIndex: i];
-                    let name = (*w).class().name().to_string();
+                    let name = (*w).class().name().to_string_lossy();
                     let visible: bool = msg_send![w, isVisible];
                     if visible && name.contains("ToolTip") {
                         let f: NSRect = msg_send![w, frame];
@@ -122,22 +124,24 @@ mod mac {
             return;
         }
         std::thread::spawn(|| { std::thread::sleep(Duration::from_secs(120)); eprintln!("timeout"); std::process::exit(2) });
-        let hold = std::env::var("RUNE_HELP_HOLD").ok().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+        let hold = rune::env::var("RUNE_HELP_HOLD").and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
         let (ready_tx, ready_rx) = mpsc::channel();
-        let app = App::new(AppSpec::new("help", (320.0, 160.0), || (), view)).args(Vec::new()).on_ready(move |_| { let _ = ready_tx.send(()); });
+        let app = App::new(AppSpec::new("help", (320.0, 160.0), || (), view)).args(Vec::new()).on_ready(move |_| { ready_tx.send(()).ok(); });
         let handle = app.handle();
         let worker = std::thread::spawn(move || {
             let run = std::panic::catch_unwind(|| {
                 ready_rx.recv_timeout(Duration::from_secs(60)).expect("window ready");
-                on_main(&handle, || unsafe {
-                    // SAFETY: main thread.
-                    let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-                    let _: () = msg_send![app, activateIgnoringOtherApps: true];
-                    // Lower left, clear of anything centred on screen.
-                    let windows: *mut AnyObject = msg_send![app, windows];
-                    let window: *mut AnyObject = msg_send![windows, firstObject];
-                    let _: () = msg_send![window, setFrameTopLeftPoint: NSPoint::new(40.0, 400.0)];
-                    let _: () = msg_send![window, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
+                on_main(&handle, || {
+                    // SAFETY: runs on the AppKit main thread (`on_main`) to activate and position the test window.
+                    unsafe {
+                        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+                        let _: () = msg_send![app, activateIgnoringOtherApps: true];
+                        // Lower left, clear of anything centred on screen.
+                        let windows: *mut AnyObject = msg_send![app, windows];
+                        let window: *mut AnyObject = msg_send![windows, firstObject];
+                        let _: () = msg_send![window, setFrameTopLeftPoint: NSPoint::new(40.0, 400.0)];
+                        let _: () = msg_send![window, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
+                    }
                 });
                 std::thread::sleep(Duration::from_millis(500));
                 assert!(tooltip(&handle).is_none(), "no tooltip before the pointer arrives");

@@ -3,6 +3,9 @@
 //! `SetPreferredAppMode` (135) and `FlushMenuThemes` (136). Both have kept their ordinals since
 //! Windows 10 1903 (build 18362); earlier builds export something else there, so they're left
 //! alone and menus stay light.
+
+#![allow(unsafe_code)]
+
 use std::sync::{OnceLock, atomic::{AtomicU8, Ordering}};
 
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};

@@ -30,7 +30,7 @@ pub(crate) fn run_starts() {
     #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
     {
         let age = process_age();
-        LAUNCH.lock().unwrap().run.get_or_insert((Instant::now(), age));
+        LAUNCH.lock().unwrap().run.get_or_insert((crate::time::now(), age));
     }
 }
 
@@ -38,7 +38,7 @@ pub(crate) fn run_starts() {
 #[inline(always)]
 pub(crate) fn init<T>(f: impl FnOnce() -> T) -> T {
     #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
-    let start = Instant::now();
+    let start = crate::time::now();
     let out = super::timed("init", f);
     #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
     {
@@ -60,7 +60,7 @@ impl FirstView {
     pub(crate) fn start(first: bool) -> Self {
         FirstView {
             #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
-            start: first.then(Instant::now),
+            start: first.then(crate::time::now),
         }
     }
 }
@@ -108,19 +108,20 @@ pub(crate) fn report(setup: f64, init: f64, view: f64, total: f64) -> Option<Str
 
 /// How long this process has run, from the system's record of its start.
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(unsafe_code)]
 pub(crate) fn process_age() -> Option<std::time::Duration> {
     #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     use std::time::Duration;
     #[cfg(target_os = "macos")]
     {
-        // SAFETY: `info` is a live, writable `proc_bsdinfo` of the size passed, and an all-zero
-        // `proc_bsdinfo` is a valid value of that plain C struct.
+        // SAFETY: `libc::proc_bsdinfo` is a plain C struct for which all zeroes is valid.
         let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
         let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        // SAFETY: `info` is a live, writable `proc_bsdinfo` of `size` bytes; `getpid` has no preconditions.
         let got = unsafe { libc::proc_pidinfo(libc::getpid(), libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
         if got != size { return None }
         let start = std::time::UNIX_EPOCH + Duration::new(info.pbi_start_tvsec, info.pbi_start_tvusec as u32 * 1000);
-        std::time::SystemTime::now().duration_since(start).ok()
+        crate::time::system_now().duration_since(start).ok()
     }
     #[cfg(target_os = "linux")]
     {
@@ -144,7 +145,7 @@ pub(crate) fn process_age() -> Option<std::time::Duration> {
         // FILETIME counts 100 ns ticks from 1601.
         let ticks = ((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime)).checked_sub(116_444_736_000_000_000)?;
         let start = std::time::UNIX_EPOCH + Duration::from_nanos(ticks * 100);
-        std::time::SystemTime::now().duration_since(start).ok()
+        crate::time::system_now().duration_since(start).ok()
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     { None }

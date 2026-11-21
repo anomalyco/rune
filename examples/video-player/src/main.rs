@@ -6,6 +6,8 @@
 //! Keys: space plays or pauses, m mutes, v turns the volume to 0 and back, l loops, left and right seek 5 s, 0 goes to the start,
 //! h hides the clip (it stops drawing, as when scrolled away) and shows it again.
 
+#![forbid(unsafe_code)]
+
 use rune::tok::{self, type_};
 use rune::{AppSpec, Cx, El, Key, KeyEvent, Player, PlayerState, SurfaceFit, Tx, Waker, col, el, row, text};
 use std::time::Duration;

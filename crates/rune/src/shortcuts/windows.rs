@@ -1,4 +1,7 @@
 //! A message-only window receives WM_HOTKEY inside winit's event-loop thread.
+
+#![allow(unsafe_code)]
+
 use super::{Backend, Shortcut, ShortcutError, ShortcutId, Sink, native_status, parse::*};
 use std::{cell::RefCell, collections::HashMap, ptr};
 use winit::platform::scancode::PhysicalKeyExtScancode;
@@ -20,7 +23,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             if let Some(context) = p.as_ref() {
                 let id = context.ids.borrow().get(&(w as i32)).copied();
                 if let Some(id) = id {
-                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (context.sink)(id, None)));
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (context.sink)(id, None))).ok();
                 }
             }
             return 0;
@@ -63,6 +66,7 @@ impl Backend for Native {
         let scan = shortcut.physical_key().to_scancode().ok_or_else(|| ShortcutError::InvalidAccelerator(shortcut.to_string()))?;
         // RegisterHotKey takes a virtual key. Resolve the physical scan code in the
         // current layout rather than assuming US letters. Re-register on layout changes.
+        // SAFETY: `MapVirtualKeyW` takes integer values only and reads the active keyboard layout.
         let key = unsafe { MapVirtualKeyW(scan, MAPVK_VSC_TO_VK_EX) };
         if key == 0 { return Err(ShortcutError::InvalidAccelerator(shortcut.to_string())); }
         // SAFETY: RegisterHotKey and its window run on the event-loop thread.

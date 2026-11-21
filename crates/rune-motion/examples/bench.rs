@@ -13,6 +13,10 @@ const X: Prop<f32> = Prop::custom(64, PropClass::Spatial);
 const FRAMES: usize = 120;
 const RUNS: usize = 9;
 
+// Standalone benchmark for rune-motion (which has no Rune dependencies).
+#[allow(clippy::disallowed_methods)]
+fn now() -> Instant { Instant::now() }
+
 fn best(v: Vec<f64>) -> f64 {
     v.into_iter().fold(f64::INFINITY, f64::min)
 }
@@ -26,7 +30,7 @@ fn bench_store(label: &str, tracks: usize, setup: impl Fn(&mut AnimationStore, N
             setup(&mut st, NodeId(i as u64), i);
         }
         st.tick_at(0.0);
-        let t0 = Instant::now();
+        let t0 = now();
         for f in 1..=FRAMES {
             st.tick_at(f as f64 / 120.0);
             black_box(st.events());
@@ -95,7 +99,7 @@ fn main() {
                 s.set_frame(NodeId(i as u64), Rect::new(10.0, i as f32 * 24.0, 300.0, 24.0), Spring::new(3.0, 0.0));
             }
             s.frame_at(1.0 / 120.0);
-            let t0 = Instant::now();
+            let t0 = now();
             for f in 2..FRAMES + 2 {
                 let out = s.frame_at(f as f64 / 120.0);
                 black_box(out.changed.len());
@@ -111,7 +115,7 @@ fn main() {
     let iters = 2_000_000;
     let runs = (0..RUNS)
         .map(|_| {
-            let t0 = Instant::now();
+            let t0 = now();
             let mut acc = 0.0;
             for i in 0..iters {
                 let (x, v) = s.sample(0.0, 0.0, 1.0, black_box((i % 1000) as f32 * 1e-3));
