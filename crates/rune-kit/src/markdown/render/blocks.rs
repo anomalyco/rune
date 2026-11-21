@@ -464,9 +464,16 @@ impl Renderer {
                 if !source.is_some_and(|s| s.open)
                     && crate::math::is_math_fence(source.and_then(|s| s.lang.as_deref()))
                 {
-                    let avail = self.s.text_width.map(|w| (w - self.flow.get().inset).max(0.0));
-                    if let Some(el) = crate::math::render_with_avail(code, &self.s, avail) {
-                        return el;
+                    let ink = self.flow.get().ink.unwrap_or(self.s.text);
+                    if let crate::math::MathStatus::Ready(rendered) =
+                        crate::math::poll_or_enqueue(code, self.s.body.size, ink, self.s.math_scale)
+                    {
+                        let avail = self.s.text_width.map(|w| (w - self.flow.get().inset).max(0.0));
+                        let digest = self.settled_math_card_digest(code, ink, avail, rendered.id);
+                        return rune::memo::cached(digest, || {
+                            memo::note_block_build();
+                            crate::math::view(code, &rendered, self.s.wide_fade, avail, self.scroll_wide)
+                        });
                     }
                 }
                 match &self.code_frame {

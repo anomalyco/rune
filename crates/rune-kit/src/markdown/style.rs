@@ -437,10 +437,6 @@ impl MarkdownStyle {
         self.math_scale = if scale.is_finite() { scale.clamp(1.0, 3.0) } else { 2.0 };
         self
     }
-    #[cfg(feature = "math")]
-    pub(crate) fn math_params(&self) -> (f32, Color, f32, Option<f32>) {
-        (self.body.size, self.text, self.math_scale, self.text_width)
-    }
     /// The space above and below a code block, a diff and a diagram (12 and 24 points by
     /// default). Like the other blocks' margins, it collapses with the space a neighbour wants,
     /// taking the larger.

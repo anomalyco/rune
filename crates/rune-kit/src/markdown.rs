@@ -445,7 +445,13 @@ impl Markdown {
 
     /// Builds with `style`, for apps without a [`Kit`] (see [`MarkdownStyle::neutral`]).
     pub fn render(self, style: &MarkdownStyle) -> El {
-        let can_cache = !self.streaming
+    let has_math = {
+        #[cfg(feature = "math")]
+        { crate::math::may_have_math_fence(&self.src) }
+        #[cfg(not(feature = "math"))]
+        { false }
+    };
+    let can_cache = !self.streaming
             && self.on_link.is_none()
             && self.on_link_secondary.is_none()
             && self.link_look.is_none()
@@ -460,7 +466,8 @@ impl Markdown {
             && self.link_favicon.is_none()
             && self.images.is_none()
             && self.on_image.is_none()
-            && !(cfg!(feature = "mermaid") && self.src.contains("mermaid"));
+            && !(cfg!(feature = "mermaid") && self.src.contains("mermaid"))
+            && !has_math;
         if can_cache {
             let h = rune::memo::digest(&(
                 &self.src,

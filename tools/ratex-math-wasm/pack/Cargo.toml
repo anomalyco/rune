@@ -1,0 +1,12 @@
+[workspace]
+
+[package]
+name = "ratex-math-pack"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+miniz_oxide = "0.9"
+ratex-katex-fonts = "=0.1.16"
