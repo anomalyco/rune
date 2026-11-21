@@ -123,14 +123,14 @@ fn edge_ramp(style: crate::el::FadeStyle, width: f32, hidden: f64, k: f32) -> (f
     if style.feather {
         let w = width.min(hidden.max(0.0) as f32 * k);
         if w <= 0.0 { return (0.0, 0.0); }
-        if style.stops.is_some() { return (crate::render::instance::STOP_FADE_BIAS + w, 0.0); }
+        if style.stops.is_some() { return (crate::render::STOP_FADE_BIAS + w, 0.0); }
         return (if style.linear { -w } else { w }, 0.0);
     }
     let full = if style.full_at > 0.0 { f64::from(style.full_at) } else { FADE_IN };
     let strength = (hidden / full).clamp(0.0, 1.0) as f32;
     if let Some(stops) = style.stops {
         let (w, o) = partial_stops(width, strength, stops);
-        return (if w > 0.0 { crate::render::instance::STOP_FADE_BIAS + w } else { 0.0 }, o);
+        return (if w > 0.0 { crate::render::STOP_FADE_BIAS + w } else { 0.0 }, o);
     }
     if !style.linear { return partial(width, strength); }
     let (w, o) = partial_linear(width, strength);

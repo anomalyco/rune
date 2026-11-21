@@ -106,6 +106,7 @@ pub use instance::KIND_SHADOW;
 pub use instance::KIND_TRIANGLE;
 pub use instance::Kind;
 pub use instance::NO_CLIP;
+pub(crate) use instance::STOP_FADE_BIAS;
 pub use instance::pack_clip_radii;
 pub use instance::pack_fade;
 pub use instance::unpack_clip_radii;

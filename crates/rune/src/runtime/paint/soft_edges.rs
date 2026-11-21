@@ -3,8 +3,8 @@
 /// Device-pixel extent of a tagged fade width (`< 0` = linear, `> STOP_FADE_BIAS` = explicit stops).
 #[inline]
 pub(in crate::runtime) fn fade_extent(w: f32) -> f32 {
-    if w > crate::render::instance::STOP_FADE_BIAS {
-        w - crate::render::instance::STOP_FADE_BIAS
+    if w > crate::render::STOP_FADE_BIAS {
+        w - crate::render::STOP_FADE_BIAS
     } else {
         w.abs()
     }

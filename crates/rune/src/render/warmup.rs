@@ -114,6 +114,7 @@ impl Renderer {
         } = warm;
         Renderer {
             surfaces: None,
+            fade_stops: [0.0; 2],
             surfaces_building,
             pipeline,
             format,
