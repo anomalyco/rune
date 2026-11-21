@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED,
-    GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, WAIT_OBJECT_0,
+    GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, FlushFileBuffers, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, ReadFile,
@@ -18,7 +18,7 @@ use windows_sys::Win32::System::Pipes::{
     PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT, WaitNamedPipeW,
 };
 use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
-use windows_sys::Win32::System::Threading::{CreateEventW, GetCurrentProcessId, WaitForSingleObject};
+use windows_sys::Win32::System::Threading::{CreateEventW, GetCurrentProcessId, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, EnumWindows, GW_OWNER, GWL_EXSTYLE, GetWindow, GetWindowLongW, GetWindowThreadProcessId, IsIconic,
     IsWindowVisible, SW_RESTORE, SetForegroundWindow, ShowWindow, WS_EX_TOOLWINDOW,
@@ -89,8 +89,11 @@ pub(super) fn claim(id: &str) -> bool {
                 Sent::Delivered => return false,
                 // It quits: the name is free once it has closed what it holds.
                 Sent::Quitting(server) => match wait_free(&name, server) {
-                    Some(pipe) => return claimed(name, pipe),
-                    None => continue,
+                    Free::Claimed(pipe) => return claimed(name, pipe),
+                    // Still not ended after the wait (a debugger holding an exiting thread, a
+                    // driver that doesn't let go): pass this name over, as a quit's own wait does.
+                    Free::Held => break,
+                    Free::Ask => continue,
                 },
                 // The first process went between the two calls: claim the name again.
                 Sent::Gone if crate::time::now() < deadline => continue,
@@ -109,24 +112,74 @@ fn claimed(name: Vec<u16>, pipe: HANDLE) -> bool {
     true
 }
 
-/// Claims `name` as soon as the quitting `server` lets go of it, for at most `HANDED_WAIT`;
-/// none when it doesn't (then the name is asked again, and passed over if nobody answers).
-fn wait_free(name: &[u16], server: u32) -> Option<HANDLE> {
+/// How waiting for a quitting process's name ended.
+enum Free {
+    /// The name is this process's.
+    Claimed(HANDLE),
+    /// The process still hasn't ended after `HANDED_WAIT`: the next name is tried.
+    Held,
+    /// The process has ended, or the name is someone else's now: the name is asked again.
+    Ask,
+}
+
+/// Claims `name` as soon as the quitting `server` lets go of it, for at most `HANDED_WAIT`.
+fn wait_free(name: &[u16], server: u32) -> Free {
     let until = crate::time::now() + HANDED_WAIT;
+    // One handle for the whole wait: once `server` is gone its pid can be another process's.
+    let process = Process::open(server);
     let mut gone_at = None;
     while crate::time::now() < until {
         match create(name) {
-            Ok(pipe) => return Some(pipe),
+            // The name can come free before the rest of what `server` holds (its files):
+            // keep the name, but answer only once the process object is signalled.
+            Ok(pipe) => {
+                process.wait_until(until);
+                return Free::Claimed(pipe);
+            }
             Err(ERROR_ACCESS_DENIED) => {}
-            Err(_) => return None,
+            Err(_) => return Free::Ask,
         }
         // Gone, yet its name is still held: not for long, or not by it.
-        if !crate::relaunch::alive(server) && gone_at.get_or_insert_with(crate::time::now).elapsed() > ANSWER_WITHIN {
-            return None;
+        if process.ended() && gone_at.get_or_insert_with(crate::time::now).elapsed() > ANSWER_WITHIN {
+            return Free::Ask;
         }
         std::thread::sleep(Duration::from_millis(1));
     }
-    None
+    if process.ended() { Free::Ask } else { Free::Held }
+}
+
+/// A process to wait for, held by handle (`SYNCHRONIZE`). None when it couldn't be opened:
+/// it has already ended.
+struct Process(Option<HANDLE>);
+
+impl Process {
+    fn open(pid: u32) -> Process {
+        // SAFETY: a plain handle request; a process that has ended answers null.
+        let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+        Process((!handle.is_null()).then_some(handle))
+    }
+
+    /// Its process object is signalled: it has closed everything it held.
+    fn ended(&self) -> bool {
+        // SAFETY: the handle is open until `drop`.
+        self.0.is_none_or(|h| unsafe { WaitForSingleObject(h, 0) } != WAIT_TIMEOUT)
+    }
+
+    fn wait_until(&self, until: Instant) {
+        let Some(h) = self.0 else { return };
+        let left = until.saturating_duration_since(crate::time::now()).as_millis().min(u128::from(u32::MAX - 1)) as u32;
+        // SAFETY: the handle is open until `drop`.
+        unsafe { WaitForSingleObject(h, left) };
+    }
+}
+
+impl Drop for Process {
+    fn drop(&mut self) {
+        if let Some(h) = self.0 {
+            // SAFETY: opened in `open`, closed once.
+            unsafe { CloseHandle(h) };
+        }
+    }
 }
 
 /// Per user and session, so another account's app, or this account's in another session,
@@ -321,8 +374,15 @@ fn send(name: &[u16]) -> Sent {
             AllowSetForegroundWindow(server);
         }
     }
-    // A killed process's pipe can outlast it (its kernel objects go after its exit): nobody
-    // reads it, so don't wait for an answer.
+    // A killed process's pipe outlasts its exit code until the kernel closes its handles:
+    // nobody reads it, and the name comes free once it's gone. Wait for that (as for a quit)
+    // rather than take the next name and start beside a process that still holds files.
+    if server != 0 && crate::relaunch::ending(server) {
+        // SAFETY: the client handle, closed once.
+        unsafe { CloseHandle(pipe) };
+        return Sent::Quitting(server);
+    }
+    // Held by a process that is gone (an inherited handle): nobody reads it.
     if server != 0 && !crate::relaunch::alive(server) {
         // SAFETY: the client handle, closed once.
         unsafe { CloseHandle(pipe) };
