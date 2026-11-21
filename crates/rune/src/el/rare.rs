@@ -32,6 +32,9 @@ pub(crate) struct ElCold {
     pub(crate) matched: Option<Rc<str>>,
     pub(crate) scroll: Option<ScrollSpec>,
     pub(crate) scroll_axes: ScrollAxes,
+    /// `El::wheel_scrolls`: the viewport a wheel over this element scrolls, in place of what it
+    /// starts on.
+    pub(crate) wheel_scrolls: Option<Box<str>>,
     pub(crate) sticky: Option<Box<Sticky>>,
     pub(crate) scroll_edges: ScrollEdges,
     pub(crate) growth: Option<Box<GrowthSpec>>,
@@ -50,6 +53,8 @@ pub(crate) struct ElCold {
     pub(crate) help_cut: bool,
     /// `El::help_side`: the side the tooltip shows on; None for under the element.
     pub(crate) help_side: Option<crate::Side>,
+    /// `El::help_open`: the tooltip shows whatever the pointer does.
+    pub(crate) help_open: bool,
     pub(crate) material: Option<crate::SystemMaterial>,
     /// `El::aspect_fit`'s width over height; 0 when unset.
     pub(crate) aspect_fit: f32,
@@ -82,6 +87,7 @@ impl Empty for ElCold {
         matched: None,
         scroll: None,
         scroll_axes: ScrollAxes::Y,
+        wheel_scrolls: None,
         sticky: None,
         scroll_edges: ScrollEdges { fade: 0.0, fade_style: crate::el::FadeStyle::SMOOTH, margin: 0.0, anchor: false },
         growth: None,
@@ -95,6 +101,7 @@ impl Empty for ElCold {
         help: None,
         help_cut: false,
         help_side: None,
+        help_open: false,
         material: None,
         aspect_fit: 0.0,
         list_disc: None,
@@ -184,59 +191,40 @@ impl ElFlags {
     }
 }
 
-/// An element's accessible role as an index into `ROLES`; `CUSTOM` reads `ElCold::role`.
+/// An element's accessible role as an index into [`crate::a11y::roles::ROLES`];
+/// `CUSTOM` reads `ElCold::role`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RoleTag(u8);
 
-macro_rules! roles {
-    ($($name:literal,)*) => {
-        const ROLES: &[&str] = &[$($name,)*];
-
-        impl RoleTag {
-            /// The tag for `role`, or `None` when it isn't in the table.
-            #[inline]
-            pub(crate) fn of(role: &str) -> Option<RoleTag> {
-                let mut i = 0u8;
-                $(
-                    if role == $name { return Some(RoleTag(i)); }
-                    i += 1;
-                )*
-                let _ = i;
-                None
-            }
-        }
-    };
-}
-
-roles! {
-    "group", "text", "button", "icon", "image", "textbox", "slider", "option", "list", "listbox",
-    "dialog", "listitem", "heading", "tab", "region", "alert", "mark", "switch", "link",
-    "menuitem", "radio", "menu", "status", "tree", "main", "row", "treeitem", "checkbox",
-    "toolbar", "radiogroup", "progressbar", "note", "combobox", "gridcell", "code", "columnheader",
-    "separator", "tablist", "segment", "window", "navigation", "grid", "none", "img", "tooltip",
-    "canvas", "document", "figure", "table", "search", "searchbox", "complementary", "blockquote",
-    "menuitemcheckbox", "menuitemradio", "scrollbar", "spinbutton", "tabpanel", "article",
-    "terminal", "banner", "form", "contentinfo", "alertdialog", "log",
-}
-
 impl RoleTag {
-    pub(crate) const GROUP: RoleTag = RoleTag(0);
-    pub(crate) const TEXT: RoleTag = RoleTag(1);
-    pub(crate) const BUTTON: RoleTag = RoleTag(2);
-    pub(crate) const ICON: RoleTag = RoleTag(3);
-    pub(crate) const IMAGE: RoleTag = RoleTag(4);
-    pub(crate) const TEXTBOX: RoleTag = RoleTag(5);
-    pub(crate) const SLIDER: RoleTag = RoleTag(6);
+    const fn known(role: &str) -> RoleTag {
+        match crate::a11y::roles::index(role) {
+            Some(i) => RoleTag(i),
+            None => panic!("unknown RoleTag constant"),
+        }
+    }
+
+    pub(crate) const GROUP: RoleTag = RoleTag::known("group");
+    pub(crate) const TEXT: RoleTag = RoleTag::known("text");
+    pub(crate) const BUTTON: RoleTag = RoleTag::known("button");
+    pub(crate) const ICON: RoleTag = RoleTag::known("icon");
+    pub(crate) const IMAGE: RoleTag = RoleTag::known("image");
+    pub(crate) const TEXTBOX: RoleTag = RoleTag::known("textbox");
+    pub(crate) const SLIDER: RoleTag = RoleTag::known("slider");
     pub(crate) const CUSTOM: RoleTag = RoleTag(u8::MAX);
+
+    /// The tag for `role`, or `None` when it isn't in the canonical role table.
+    #[inline]
+    pub(crate) fn of(role: &str) -> Option<RoleTag> {
+        crate::a11y::roles::ROLES.iter().position(|r| r.name == role).map(|i| RoleTag(i as u8))
+    }
 
     /// The role's name; `CUSTOM` has none of its own.
     #[inline(always)]
     pub(crate) fn name(self) -> Option<&'static str> {
-        ROLES.get(self.0 as usize).copied()
+        crate::a11y::roles::ROLES.get(self.0 as usize).map(|r| r.name)
     }
 }
-
-const _: () = assert!(ROLES.len() < u8::MAX as usize);
 
 impl crate::El {
     /// The accessible role, as [`role`](crate::El::role) set it.

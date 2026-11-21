@@ -12,7 +12,9 @@
 //! (`harness\perf\memory` in the workspace that measures OpenCode). Windows only; elsewhere the
 //! feature records nothing.
 
-use std::cell::Cell;
+#![allow(unsafe_code)]
+
+use std::cell::{Cell, UnsafeCell};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::{Acquire, Relaxed, Release}};
 
 /// One sample per this many bytes asked for.
@@ -46,9 +48,19 @@ struct Tables {
     used_sites: usize,
 }
 
+struct SyncTables(UnsafeCell<Tables>);
+
+// SAFETY: every access to the inner `Tables` is synchronized under `LOCK` (`GlobalAlloc` cannot
+// use `std::sync::Mutex`, which may allocate or re-enter the allocator).
+unsafe impl Sync for SyncTables {}
+
 static LOCK: AtomicBool = AtomicBool::new(false);
 static READY: AtomicUsize = AtomicUsize::new(0);
-static mut TABLES: Tables = Tables { sites: std::ptr::null_mut(), live: std::ptr::null_mut(), used_sites: 0 };
+static TABLES: SyncTables = SyncTables(UnsafeCell::new(Tables {
+    sites: std::ptr::null_mut(),
+    live: std::ptr::null_mut(),
+    used_sites: 0,
+}));
 /// A bit per address hash: set while some sampled block may hash there, so most frees skip the lock.
 static FILTER: [AtomicU64; FILTER_BITS / 64] = [const { AtomicU64::new(0) }; FILTER_BITS / 64];
 static DROPPED: AtomicU64 = AtomicU64::new(0);
@@ -129,7 +141,7 @@ pub(super) fn freed(ptr: *mut u8) {
 
 unsafe fn record(ptr: usize, weight: usize, frames: &[usize]) {
     // SAFETY: the caller holds LOCK; `TABLES` is only reached through this module.
-    let t = unsafe { &mut *std::ptr::addr_of_mut!(TABLES) };
+    let t = unsafe { &mut *TABLES.0.get() };
     if t.sites.is_null() {
         let (sites, live) = (os::zeroed(SITES * size_of::<Site>()), os::zeroed(LIVE * size_of::<Live>()));
         if sites.is_null() || live.is_null() {
@@ -182,7 +194,7 @@ unsafe fn record(ptr: usize, weight: usize, frames: &[usize]) {
 
 unsafe fn forget(ptr: usize) {
     // SAFETY: the caller holds LOCK.
-    let t = unsafe { &mut *std::ptr::addr_of_mut!(TABLES) };
+    let t = unsafe { &mut *TABLES.0.get() };
     if t.live.is_null() {
         return;
     }
@@ -210,18 +222,18 @@ unsafe fn forget(ptr: usize) {
 fn report() -> String {
     use std::fmt::Write;
     let mut out = String::new();
-    let _ = writeln!(out, "interval {INTERVAL}");
-    let _ = writeln!(out, "dropped {}", DROPPED.load(Relaxed));
-    let _ = writeln!(out, "heap {} {}", super::LIVE.load(Relaxed), super::PEAK.load(Relaxed));
+    writeln!(out, "interval {INTERVAL}").ok();
+    writeln!(out, "dropped {}", DROPPED.load(Relaxed)).ok();
+    writeln!(out, "heap {} {}", super::LIVE.load(Relaxed), super::PEAK.load(Relaxed)).ok();
     for (base, size, path) in os::modules() {
-        let _ = writeln!(out, "module {base:x} {size:x} {path}");
+        writeln!(out, "module {base:x} {size:x} {path}").ok();
     }
     if READY.load(Acquire) == 0 {
         return out;
     }
     lock();
     // SAFETY: under LOCK; READY says the tables exist.
-    let t = unsafe { &*std::ptr::addr_of!(TABLES) };
+    let t = unsafe { &*TABLES.0.get() };
     let mut lines = Vec::new();
     for i in 0..SITES {
         // SAFETY: `i < SITES`.
@@ -232,24 +244,24 @@ fn report() -> String {
     }
     unlock();
     for s in lines {
-        let _ = write!(out, "site {} {} {}", s.live_bytes, s.live_blocks, s.sampled_bytes);
+        write!(out, "site {} {} {}", s.live_bytes, s.live_blocks, s.sampled_bytes).ok();
         for f in &s.frames[..s.depth as usize] {
-            let _ = write!(out, " {f:x}");
+            write!(out, " {f:x}").ok();
         }
         out.push('\n');
     }
     out.push_str("section nt-heaps\n");
     for (heap, regions, busy, blocks, big) in os::nt_heaps() {
-        let _ = writeln!(out, "ntheap {heap:x} busy {busy} blocks {blocks}");
+        writeln!(out, "ntheap {heap:x} busy {busy} blocks {blocks}").ok();
         for (base, committed, uncommitted) in regions {
-            let _ = writeln!(out, "region {base:x} {committed} {uncommitted}");
+            writeln!(out, "region {base:x} {committed} {uncommitted}").ok();
         }
         for (at, size) in big {
-            let _ = writeln!(out, "big {at:x} {size}");
+            writeln!(out, "big {at:x} {size}").ok();
         }
     }
     for (name, section) in SECTIONS.lock().unwrap_or_else(|e| e.into_inner()).iter() {
-        let _ = writeln!(out, "section {name}");
+        writeln!(out, "section {name}").ok();
         out.push_str(&section());
     }
     out
@@ -257,9 +269,9 @@ fn report() -> String {
 
 /// Runs `f` on this thread without sampling what it allocates or frees (the dump's own work).
 fn unsampled<T>(f: impl FnOnce() -> T) -> T {
-    let _ = INSIDE.try_with(|i| i.set(true));
+    INSIDE.try_with(|i| i.set(true)).ok();
     let v = f();
-    let _ = INSIDE.try_with(|i| i.set(false));
+    INSIDE.try_with(|i| i.set(false)).ok();
     v
 }
 
@@ -379,11 +391,11 @@ mod os {
             if event.is_null() {
                 return;
             }
-            for n in 0.. {
+            for n in 0u64..=u64::MAX {
                 // SAFETY: a valid event handle, kept for the life of the process.
                 unsafe { WaitForSingleObject(event, u32::MAX) };
                 let path = std::path::Path::new(&dir).join(format!("alloc-sites-{pid}-{n}.txt"));
-                let _ = std::fs::write(path, super::report());
+                std::fs::write(path, super::report()).ok();
             }
         });
         0

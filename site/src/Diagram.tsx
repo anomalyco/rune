@@ -193,12 +193,28 @@ const crateRows: { label: string; crates: Crate[] }[] = [
   },
   {
     label: "Framework",
-    crates: [{ name: "rune", does: "El tree, runtime, layout, text, wgpu renderer, window, headless tooling" }],
+    crates: [
+      {
+        name: "rune",
+        does: "El tree, runtime, renderer, windows, overlays and headless tooling; re-exports the crates below",
+      },
+    ],
+  },
+  {
+    label: "Subsystems",
+    crates: [
+      { name: "rune-text", does: "Parley shaping and layout, font discovery, glyph atlas, icons" },
+      { name: "rune-media", does: "Video and audio playback, zero-copy native surfaces, recording" },
+      { name: "rune-image", does: "Content-addressed image decoding, linear-light mips, SVG/AVIF, app icons" },
+      { name: "rune-spell", does: "Platform spellchecking (Windows, macOS, web Hunspell)" },
+    ],
   },
   {
     label: "Foundations",
     crates: [
-      { name: "rune-motion", does: "Springs, tracks, presence; no dependencies" },
+      { name: "rune-core", does: "Colour, tokens, themes, shapes, state machines, tasks, live values" },
+      { name: "rune-gpu", does: "Adapter selection, backend dispatch, native Metal backend, GPU springs" },
+      { name: "rune-motion · rune-staging · rune-taffy", does: "Springs and presence, GPU staging, compact layout store" },
       { name: "wgpu · winit · Taffy · Parley", does: "GPU, windows, layout, text" },
     ],
   },
@@ -241,7 +257,8 @@ export function CrateMap() {
         </aside>
       </div>
       <figcaption id="crates-caption">
-        Each row depends only on rows below it. Apps never need the crates beside the core.
+        Apps depend on <code>rune</code>, which re-exports the subsystem and foundation crates below it. The crates
+        beside the core are optional.
       </figcaption>
     </figure>
   )

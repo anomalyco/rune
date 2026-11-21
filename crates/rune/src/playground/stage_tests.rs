@@ -59,8 +59,8 @@ fn a_scrolling_story_takes_its_width_inside_the_margin() {
 fn a_scrolling_story_keeps_the_root_handlers() {
     let mut rt = runtime();
     rt.open_playground("Cards/Tall", None);
-    let root = rt.playground.as_ref().unwrap().root;
-    assert_eq!(rt.nodes[root].key.as_deref(), Some("tall"), "the story's root, not the margin around it");
+    let root = rt.tree.app_root();
+    assert_eq!(rt.tree.nodes[root].key.as_deref(), Some("tall"), "the story's root, not the margin around it");
 }
 
 #[test]

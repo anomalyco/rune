@@ -114,7 +114,7 @@ each `push` still wakes the app.
   command buffer but keeps the acquired drawable private. There is no cheap, supported
   presented-handler hook to prototype without owning that shell. GPU-done is not present.
 
-Verification: `cargo test -p rune native_surface -- --test-threads=1`.
+Verification: `cargo test -p rune-media native_surface -- --test-threads=1` (and `cargo test -p rune --lib -- native_surface:: --test-threads=1` for renderer interleaving).
 The GPU test compares native IOSurface and byte-upload results with a scalar colour oracle,
 checks exact one-pixel patterns, fitting/clipping, notifications, and released backing ownership.
 The overlap test acquires the same exclusive device lock as presentation while GPU work

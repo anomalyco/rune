@@ -16,7 +16,7 @@ fn colours_out_of_sight_land_at_once() {
     rt.update(|n, _| *n = 1);
     rt.frame(1.0 / 120.0);
     let fading = |rt: &Runtime<u32>, key: &str| {
-        let id = rt.nodes.iter().find(|n| n.named(key)).unwrap().id;
+        let id = rt.tree.nodes.iter().find(|n| n.named(key)).unwrap().id;
         rt.scene.store().is_animating(id, P_FILL)
     };
     assert!(fading(&rt, "r0"), "a row in sight fades its fill");

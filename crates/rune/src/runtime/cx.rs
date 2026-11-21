@@ -32,8 +32,7 @@ pub(crate) struct ViewDefaults {
     pub(crate) marks: Rc<[super::TextMark]>,
 }
 
-/// Wakes the shell from another thread (new data arrived); a no-op headless.
-pub type Waker = Arc<dyn Fn() + Send + Sync>;
+pub use rune_core::Waker;
 
 thread_local! {
     pub(super) static COMMITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -46,8 +45,10 @@ pub fn commit_generation() -> u64 {
     COMMITS.get()
 }
 
-/// Passed to view functions: the environment, plus runtime settings a view may declare.
-pub struct Cx<S> {
+/// Type-erased view context owned inside [`Cx<S>`] and constructed by non-generic
+/// [`Measurement`](super::commit::Measurement).
+#[derive(Clone)]
+pub(crate) struct CxCore {
     pub(super) env: Env,
     pub(super) titlebar_inset: f32,
     pub(super) chrome: crate::ChromeInsets,
@@ -70,33 +71,10 @@ pub struct Cx<S> {
     pub(super) caret_read: std::cell::Cell<bool>,
     pub(super) layout: layout_read::LayoutRects,
     pub(super) layout_reads: std::cell::RefCell<layout_read::LayoutReads>,
-    pub(super) _s: PhantomData<fn(&S)>,
 }
 
-impl<S> Cx<S> {
-    /// A copy of this context for a sub-view over another state type, or a scratch run of
-    /// the same view: environment, settings and the reads made so far. Pass it back with
-    /// [`Self::absorb`] to keep what the sub-view did, or drop it to discard that, as a host
-    /// does for a sub-view (a plugin's panel) that panicked partway.
-    pub fn retype<T>(&self) -> Cx<T> {
-        Cx {
-            env: self.env, titlebar_inset: self.titlebar_inset, chrome: self.chrome, caption_color: self.caption_color,
-            defaults: self.defaults.clone(),
-            titlebar: self.titlebar,
-            system_accent: self.system_accent,
-            system_contrast: self.system_contrast,
-            system_increased_contrast: self.system_increased_contrast,
-            system_scroll_bars: self.system_scroll_bars,
-            system_reduced_motion: self.system_reduced_motion, reduced_motion: self.reduced_motion, time_scale: self.time_scale, zoom: self.zoom,
-            caret: self.caret.clone(), caret_read: self.caret_read.clone(),
-            layout: self.layout.clone(), layout_reads: self.layout_reads.clone(), _s: PhantomData,
-        }
-    }
-
-    /// Takes back a [`Self::retype`]d context a nested view ran with: its overrides, and the
-    /// caret and layout reads it added. The window's chrome stays the outer view's: a staged
-    /// story's `caption_color` or titlebar isn't the window's.
-    pub fn absorb<T>(&mut self, other: Cx<T>) {
+impl CxCore {
+    pub(super) fn absorb(&mut self, other: CxCore) {
         self.reduced_motion = other.reduced_motion;
         self.time_scale = other.time_scale;
         self.zoom = other.zoom;
@@ -112,14 +90,13 @@ impl<S> Cx<S> {
         self.env = env;
     }
 
-    /// A nested view on a stage, which no window controls cover.
     pub(crate) fn clear_chrome(&mut self) {
         self.titlebar_inset = 0.0;
         self.chrome = crate::ChromeInsets::default();
     }
 
     #[cfg(feature = "hot")]
-    pub(crate) fn settings_from<T>(&mut self, other: Cx<T>) {
+    pub(crate) fn settings_from(&mut self, other: CxCore) {
         self.reduced_motion = other.reduced_motion;
         self.time_scale = other.time_scale;
         self.zoom = other.zoom;
@@ -129,67 +106,150 @@ impl<S> Cx<S> {
         self.layout_reads = other.layout_reads;
     }
 
-    pub fn env(&self) -> Env {
-        self.env
+    pub(crate) fn env(&self) -> Env { self.env }
+    pub(crate) fn system_dark(&self) -> bool { self.env.system_dark }
+    pub(crate) fn titlebar_inset(&self) -> f32 { self.titlebar_inset }
+    pub(crate) fn chrome_insets(&self) -> crate::ChromeInsets { self.chrome }
+    pub(crate) fn caption_color(&mut self, color: Color) { self.caption_color = Some(color); }
+    pub(crate) fn foreground(&mut self, color: Color) { self.defaults.foreground = Some(color); }
+    pub(crate) fn focus_ring(&mut self, width: f32, offset: f32, color: Color) {
+        self.defaults.focus_ring = Some(crate::el::Outline { width, offset, color });
     }
-    pub fn system_dark(&self) -> bool {
-        self.env.system_dark
+    pub(crate) fn help_look(&mut self, look: crate::HelpLook) { self.defaults.help = Some(look); }
+    pub(crate) fn force_focus_rings(&mut self) { self.defaults.force_focus_rings = true; }
+    pub(crate) fn web_focus(&mut self) { self.defaults.web_focus = true; }
+    pub(crate) fn titlebar_height(&mut self, points: f32) { self.titlebar.height = Some(points.max(1.0)); }
+    pub(crate) fn set_titlebar(&mut self, titlebar: crate::Titlebar) { self.titlebar.titlebar = Some(titlebar); }
+    pub(crate) fn accent(&self) -> Color { self.system_accent.accent(self.env.system_dark) }
+    pub(crate) fn focus_color(&self) -> Color { self.system_accent.focus(self.env.system_dark) }
+    pub(crate) fn safe_area(&self) -> [f32; 4] {
+        #[cfg(target_arch = "wasm32")]
+        { crate::platform::web::safe_area() }
+        #[cfg(not(target_arch = "wasm32"))]
+        { [0.0; 4] }
     }
+    pub(crate) fn hover_none(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        { crate::platform::web::hover_none() }
+        #[cfg(not(target_arch = "wasm32"))]
+        { false }
+    }
+    pub(crate) fn touch_controls(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        { crate::platform::web::touch_controls() }
+        #[cfg(not(target_arch = "wasm32"))]
+        { false }
+    }
+    pub(crate) fn system_contrast(&self) -> Option<crate::SystemContrast> { self.system_contrast }
+    pub(crate) fn system_increased_contrast(&self) -> bool { self.system_increased_contrast }
+    pub(crate) fn system_reduced_motion(&self) -> bool { self.system_reduced_motion }
+    pub(crate) fn scroll_bars(&self) -> crate::ScrollBars { self.system_scroll_bars.bars }
+    pub(crate) fn overlay_scroll_bars(&self) -> bool { self.system_scroll_bars.is_overlay() }
+    pub(crate) fn is_reduced_motion(&self) -> bool { self.reduced_motion }
+    pub(crate) fn reduced_motion(&mut self, on: bool) { self.reduced_motion = on; }
+    pub(crate) fn time_scale(&mut self, scale: f32) { self.time_scale = scale.clamp(0.0, 8.0); }
+    pub(crate) fn zoom(&mut self, k: f32) { self.zoom = super::zoom::clamp(k); }
+    pub(crate) fn caret(&self, key: &str) -> Option<[f32; 4]> {
+        self.caret_read.set(true);
+        let rect = caret_of(&self.caret, key);
+        crate::memo::read_caret(key, rect);
+        rect
+    }
+}
+
+/// Passed to view functions: the environment, plus runtime settings a view may declare.
+pub struct Cx<S> {
+    pub(crate) core: CxCore,
+    pub(super) _s: PhantomData<fn(&S)>,
+}
+
+impl<S> Cx<S> {
+    /// A copy of this context for a sub-view over another state type, or a scratch run of
+    /// the same view: environment, settings and the reads made so far. Pass it back with
+    /// [`Self::absorb`] to keep what the sub-view did, or drop it to discard that, as a host
+    /// does for a sub-view (a plugin's panel) that panicked partway.
+    #[inline(always)]
+    pub fn retype<T>(&self) -> Cx<T> {
+        Cx { core: self.core.clone(), _s: PhantomData }
+    }
+
+    /// Takes back a [`Self::retype`]d context a nested view ran with: its overrides, and the
+    /// caret and layout reads it added. The window's chrome stays the outer view's: a staged
+    /// story's `caption_color` or titlebar isn't the window's.
+    #[inline(always)]
+    pub fn absorb<T>(&mut self, other: Cx<T>) {
+        self.core.absorb(other.core);
+    }
+
+    #[inline(always)]
+    pub(crate) fn set_env(&mut self, env: Env) {
+        self.core.set_env(env);
+    }
+
+    /// A nested view on a stage, which no window controls cover.
+    #[inline(always)]
+    pub(crate) fn clear_chrome(&mut self) {
+        self.core.clear_chrome();
+    }
+
+    #[cfg(feature = "hot")]
+    #[inline(always)]
+    pub(crate) fn settings_from<T>(&mut self, other: Cx<T>) {
+        self.core.settings_from(other.core);
+    }
+
+    #[inline(always)]
+    pub fn env(&self) -> Env { self.core.env() }
+    #[inline(always)]
+    pub fn system_dark(&self) -> bool { self.core.system_dark() }
     /// Points from the window's leading edge to the trailing edge of the macOS traffic lights
     /// drawn over the content, for a top bar's leading inset: 0 when nothing is drawn there (full
     /// screen, a titled window whose content starts below its titlebar, other platforms). The
     /// view re-runs when it changes, as entering and leaving full screen do. Headless runs report
     /// [`Chrome::titlebar_inset`](crate::Chrome::titlebar_inset). A `memo` closure that reads
     /// it needs it in its version.
-    pub fn titlebar_inset(&self) -> f32 {
-        self.titlebar_inset
-    }
+    #[inline(always)]
+    pub fn titlebar_inset(&self) -> f32 { self.core.titlebar_inset() }
     /// What the window's own controls take of a titlebar the app draws (`App::titlebar`):
     /// the macOS traffic lights at the leading edge, the Windows caption buttons at the
     /// trailing edge, and the band's height. Zero where the native frame stays. Keep the
     /// titlebar's own controls clear of both ends. Headless runs report what this platform's
     /// window would.
-    pub fn chrome_insets(&self) -> crate::ChromeInsets {
-        self.chrome
-    }
+    #[inline(always)]
+    pub fn chrome_insets(&self) -> crate::ChromeInsets { self.core.chrome_insets() }
     /// The colour of the Windows caption buttons' symbols (Electron's `titleBarOverlay`
     /// `symbolColor`), for a titlebar whose colours follow the app's theme rather than the
     /// system's light or dark setting: by default black in light mode, white in dark. Their
     /// hover and press washes are this colour at 10% and 20%; close turns red either way.
-    pub fn caption_color(&mut self, color: Color) {
-        self.caption_color = Some(color);
-    }
+    #[inline(always)]
+    pub fn caption_color(&mut self, color: Color) { self.core.caption_color(color); }
     /// The theme's text colour, as CSS `color` on the page: text, icons and text fields that
     /// aren't given a colour (`El::color`, `El::placeholder`, `El::caret`) draw in it, the
     /// placeholder at 40% and the selection at 20%, so a field left uncoloured stays readable in
     /// a light theme. Without it they draw white. Set it on every run of the view; a `memo`
     /// whose text takes it rebuilds when it changes.
-    pub fn foreground(&mut self, color: Color) {
-        self.defaults.foreground = Some(color);
-    }
+    #[inline(always)]
+    pub fn foreground(&mut self, color: Color) { self.core.foreground(color); }
     /// The keyboard focus ring a focusable element draws when it doesn't set its own
     /// ([`El::focus_ring`](crate::El::focus_ring)), in place of AppKit's: `width` points wide,
     /// `offset` points outside its border box, following its corner radii, e.g. `2.0, 2.5` for
     /// CSS `outline: 2px solid; outline-offset: 2.5px`. It shows only for keyboard focus, as
     /// `:focus-visible` does. Set it on every run of the view.
-    pub fn focus_ring(&mut self, width: f32, offset: f32, color: Color) {
-        self.defaults.focus_ring = Some(crate::el::Outline { width, offset, color });
-    }
+    #[inline(always)]
+    pub fn focus_ring(&mut self, width: f32, offset: f32, color: Color) { self.core.focus_ring(width, offset, color); }
     /// How [`El::help`](crate::El::help) tooltips look, where they sit and how long they wait,
     /// in place of the system's ([`HelpLook::system`](crate::HelpLook::system)): a design
     /// system's own tooltip, as a web page draws one. Rune then draws it on macOS too, instead
     /// of AppKit's. Set it on every run of the view.
-    pub fn help_look(&mut self, look: crate::HelpLook) {
-        self.defaults.help = Some(look);
-    }
+    #[inline(always)]
+    pub fn help_look(&mut self, look: crate::HelpLook) { self.core.help_look(look); }
     /// Every control that can take focus draws its keyboard focus ring (and its focus fill) as
     /// if the keyboard had focused it, whether or not it has focus: a developer tool for checking
     /// focus styles at a glance, as forcing `:focus` and `:focus-visible` on every focusable
     /// element of a web page does (Chrome DevTools' `CSS.forcePseudoState`). Focus itself doesn't
     /// move. Set it on every run of the view while the tool is on.
-    pub fn force_focus_rings(&mut self) {
-        self.defaults.force_focus_rings = true;
-    }
+    #[inline(always)]
+    pub fn force_focus_rings(&mut self) { self.core.force_focus_rings(); }
     /// Keyboard focus as a web page has it, for a view that ports one: every pressable control
     /// (an `on_press` element whose role is button, link, tab, checkbox, switch, radio or
     /// combobox) is a Tab stop in document order and takes focus when clicked, as an HTML
@@ -197,9 +257,8 @@ impl<S> Cx<S> {
     /// disabled. A modal that opens with no [`El::autofocus`](crate::El::autofocus) control and
     /// no text field focuses itself, as a web dialog does, so Tab enters it at its first control
     /// rather than landing on its close button. Set it on every run of the view.
-    pub fn web_focus(&mut self) {
-        self.defaults.web_focus = true;
-    }
+    #[inline(always)]
+    pub fn web_focus(&mut self) { self.core.web_focus(); }
     /// The height of the titlebar the app draws (`App::titlebar`), in window points, in place of
     /// `Titlebar::new`'s while the view keeps setting it: a band that scales with the app's UI
     /// zoom, as Electron's `setTitleBarOverlay({ height })` does. The Windows caption buttons
@@ -210,99 +269,75 @@ impl<S> Cx<S> {
     /// keeps the row 44 points tall zoomed out, as Electron apps size their `titleBarOverlay`.
     /// The height is in window points; [`Self::chrome_insets`] reports it in the view's, over
     /// [`Self::zoom`]. Over [`Self::set_titlebar`], it sets that titlebar's height.
-    pub fn titlebar_height(&mut self, points: f32) {
-        self.titlebar.height = Some(points.max(1.0));
-    }
+    #[inline(always)]
+    pub fn titlebar_height(&mut self, points: f32) { self.core.titlebar_height(points); }
     /// The titlebar the app draws (`App::titlebar`), in place of the app's while the view keeps
     /// setting it: its height and, on macOS, where the traffic lights sit
     /// (`Titlebar::traffic_lights`), for a switch between layouts whose titlebars differ. The
     /// window moves the traffic lights and resizes the Windows caption buttons to it, and
     /// [`Self::chrome_insets`] and [`Self::titlebar_inset`] report the new controls from the
     /// next frame on. A window without `App::titlebar` keeps its native frame.
-    pub fn set_titlebar(&mut self, titlebar: crate::Titlebar) {
-        self.titlebar.titlebar = Some(titlebar);
-    }
+    #[inline(always)]
+    pub fn set_titlebar(&mut self, titlebar: crate::Titlebar) { self.core.set_titlebar(titlebar); }
     /// The user's accent colour (System Settings › Appearance on macOS) for this window's
     /// appearance, [`SystemAccent::DEFAULT`](crate::SystemAccent::DEFAULT)'s blue elsewhere and
     /// headless. The view re-runs, memos included, when the user picks another accent.
-    pub fn accent(&self) -> Color {
-        self.system_accent.accent(self.env.system_dark)
-    }
+    #[inline(always)]
+    pub fn accent(&self) -> Color { self.core.accent() }
     /// The keyboard focus ring colour for this window's appearance: AppKit's
     /// `keyboardFocusIndicatorColor`, the accent at 50% elsewhere. Elements with no ring of
     /// their own draw their default focus ring in it.
-    pub fn focus_color(&self) -> Color {
-        self.system_accent.focus(self.env.system_dark)
-    }
+    #[inline(always)]
+    pub fn focus_color(&self) -> Color { self.core.focus_color() }
     /// Browser safe-area insets in points, in top/right/bottom/left order. Zero on native.
     /// Apply these inside a full-canvas root so backgrounds can extend to the screen edges.
-    pub fn safe_area(&self) -> [f32; 4] {
-        #[cfg(target_arch = "wasm32")]
-        { crate::platform::web::safe_area() }
-        #[cfg(not(target_arch = "wasm32"))]
-        { [0.0; 4] }
-    }
+    #[inline(always)]
+    pub fn safe_area(&self) -> [f32; 4] { self.core.safe_area() }
     /// The primary pointer can't hover: a browser's `(hover: none)`, a phone's or tablet's touch
     /// screen. What a mouse would reveal on hover (a code block's Copy, a row's actions) should
     /// show without it. False natively. A change re-runs the view.
-    pub fn hover_none(&self) -> bool {
-        #[cfg(target_arch = "wasm32")]
-        { crate::platform::web::hover_none() }
-        #[cfg(not(target_arch = "wasm32"))]
-        { false }
-    }
+    #[inline(always)]
+    pub fn hover_none(&self) -> bool { self.core.hover_none() }
     /// A page's primary pointer is coarse and can't hover. Use this for a phone or tablet's
     /// controls rather than the viewport width: a narrow window can still have a mouse.
-    pub fn touch_controls(&self) -> bool {
-        #[cfg(target_arch = "wasm32")]
-        { crate::platform::web::touch_controls() }
-        #[cfg(not(target_arch = "wasm32"))]
-        { false }
-    }
+    #[inline(always)]
+    pub fn touch_controls(&self) -> bool { self.core.touch_controls() }
     /// The system's contrast theme when one is on (Windows' Contrast themes, high contrast):
     /// the colours it asks every app to paint with, which a view uses in place of its own
     /// (CSS `forced-colors: active`). None otherwise. A change re-runs the view.
-    pub fn system_contrast(&self) -> Option<crate::SystemContrast> {
-        self.system_contrast
-    }
+    #[inline(always)]
+    pub fn system_contrast(&self) -> Option<crate::SystemContrast> { self.core.system_contrast() }
     /// Whether the system asks for more contrast: macOS's Increase Contrast, or a Windows contrast
     /// theme (when [`Self::system_contrast`] is also there). A view can draw its stronger edges for
     /// it while keeping its own colours. A change re-runs the view.
-    pub fn system_increased_contrast(&self) -> bool {
-        self.system_increased_contrast
-    }
+    #[inline(always)]
+    pub fn system_increased_contrast(&self) -> bool { self.core.system_increased_contrast() }
     /// The host's OS accessibility preference, independent of this commit's override.
-    pub fn system_reduced_motion(&self) -> bool {
-        self.system_reduced_motion
-    }
+    #[inline(always)]
+    pub fn system_reduced_motion(&self) -> bool { self.core.system_reduced_motion() }
     /// The user's "Show scroll bars" preference (System Settings › Appearance on macOS;
     /// [`ScrollBars::WhenScrolling`](crate::ScrollBars::WhenScrolling) elsewhere and headless).
     /// The view and its memos re-run when it changes.
-    pub fn scroll_bars(&self) -> crate::ScrollBars {
-        self.system_scroll_bars.bars
-    }
+    #[inline(always)]
+    pub fn scroll_bars(&self) -> crate::ScrollBars { self.core.scroll_bars() }
     /// Whether scroll bars currently overlay and fade out at rest (`true` for
     /// [`ScrollBars::WhenScrolling`](crate::ScrollBars::WhenScrolling), `false` for
     /// [`ScrollBars::Always`](crate::ScrollBars::Always), and `NSScroller.preferredScrollerStyle`
     /// under [`ScrollBars::Automatic`](crate::ScrollBars::Automatic); always `true` on iOS).
-    pub fn overlay_scroll_bars(&self) -> bool {
-        self.system_scroll_bars.is_overlay()
-    }
+    #[inline(always)]
+    pub fn overlay_scroll_bars(&self) -> bool { self.core.overlay_scroll_bars() }
     /// Whether this commit reduces motion: the host preference, or the view's override from
     /// [`Self::reduced_motion`]. Pass it to builders that pick a different motion under it.
-    pub fn is_reduced_motion(&self) -> bool {
-        self.reduced_motion
-    }
+    #[inline(always)]
+    pub fn is_reduced_motion(&self) -> bool { self.core.is_reduced_motion() }
     /// Override the host preference for this commit: travel jumps, opacity/colour briefly fade.
-    pub fn reduced_motion(&mut self, on: bool) {
-        self.reduced_motion = on;
-    }
+    #[inline(always)]
+    pub fn reduced_motion(&mut self, on: bool) { self.core.reduced_motion(on); }
     /// Scale the window's animation clock (slow motion below 1, paused at 0). To slow or freeze
     /// only part of the window, use [`El::time_scale`](crate::El::time_scale), which multiplies
     /// with this.
-    pub fn time_scale(&mut self, scale: f32) {
-        self.time_scale = scale.clamp(0.0, 8.0);
-    }
+    #[inline(always)]
+    pub fn time_scale(&mut self, scale: f32) { self.core.time_scale(scale); }
     /// The UI zoom, as a browser's page zoom (Electron's `setZoomFactor`): `k` times the size,
     /// 1 unzoomed. The view lays out in a window `1 / k` as many points across, drawn at `k`
     /// times the window's scale, so borders, icons, text and pixel snapping land on the device
@@ -310,19 +345,14 @@ impl<S> Cx<S> {
     /// on every run of the view; a run that doesn't is unzoomed. A change lands at once, in the
     /// commit that makes it. [`Self::env`]'s scale, layout reads and pointer positions are in
     /// the zoomed view's points; [`Self::chrome_insets`] and [`Self::titlebar_inset`] too.
-    pub fn zoom(&mut self, k: f32) {
-        self.zoom = super::zoom::clamp(k);
-    }
+    #[inline(always)]
+    pub fn zoom(&mut self, k: f32) { self.core.zoom(k); }
     /// The focused text field's caret line in window points `[x, y, w, h]`, as last drawn (after
     /// scrolling, at the cursor inside an IME composition), when that field is keyed `key` or sits
     /// inside an element keyed `key`. A view that reads it re-runs when the caret moves, so a
     /// popup placed from it lands the frame after each edit.
-    pub fn caret(&self, key: &str) -> Option<[f32; 4]> {
-        self.caret_read.set(true);
-        let rect = caret_of(&self.caret, key);
-        crate::memo::read_caret(key, rect);
-        rect
-    }
+    #[inline(always)]
+    pub fn caret(&self, key: &str) -> Option<[f32; 4]> { self.core.caret(key) }
 }
 
 /// [`Cx::caret`] for the caret `caret` (the focused field's path and rect).

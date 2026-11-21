@@ -108,6 +108,7 @@ impl Drop for Lease {
 }
 
 /// Every gauge used so far, biggest first.
+#[allow(unsafe_code)]
 pub fn gauges() -> Vec<(&'static str, i64)> {
     let mut out: Vec<(&'static str, i64)> = REGISTRY
         .iter()

@@ -3,6 +3,8 @@
 //! app's workspace. `scripts/mac-app` launches with `MAC_APP_QUIET` set when
 //! the app wasn't in front, and `launch` keeps the app from activating while it starts.
 
+#![allow(unsafe_code)]
+
 const VAR: &str = "MAC_APP_QUIET";
 
 /// Call first thing in `main`, before the event loop.
@@ -13,6 +15,8 @@ pub fn launch() {
     // SAFETY: called first in `main`, before the app starts any thread.
     unsafe { std::env::remove_var(VAR) };
     #[cfg(target_os = "macos")]
+    // SAFETY: called on the main thread at launch before the event loop; `sharedApplication` and
+    // `setActivationPolicy:` are standard AppKit selectors.
     unsafe {
         use objc2::{class, msg_send, runtime::AnyObject};
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
@@ -27,6 +31,8 @@ pub fn launch() {
 /// behind whatever is in front.
 #[cfg(target_os = "macos")]
 extern "C" fn check(tries: *mut std::ffi::c_void) {
+    // SAFETY: dispatched onto the main queue by `after`, so AppKit main-thread calls are valid;
+    // `tries` is an integer count round-tripped through the context pointer, never dereferenced.
     unsafe {
         use objc2::{class, msg_send, runtime::AnyObject};
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
@@ -42,6 +48,8 @@ extern "C" fn check(tries: *mut std::ffi::c_void) {
 
 #[cfg(target_os = "macos")]
 fn after(tries: usize) {
+    // SAFETY: `_dispatch_main_q` is libdispatch's static main queue; `check` matches the
+    // `dispatch_function_t` ABI and treats `tries` purely as an integer count.
     unsafe { dispatch_after_f(dispatch_time(0, 250_000_000), &raw const _dispatch_main_q, tries as *mut std::ffi::c_void, check) };
 }
 

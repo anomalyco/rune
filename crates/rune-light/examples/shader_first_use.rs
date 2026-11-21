@@ -7,7 +7,7 @@
 mod builtin;
 
 fn main() {
-    let start = std::time::Instant::now();
+    let start = rune::time::now();
     let gpu = rune::render::Gpu::headless();
     let mut out = vec![("device", start.elapsed().as_secs_f64() * 1e3)];
     out.extend(builtin::build_every_pipeline(&gpu));

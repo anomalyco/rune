@@ -310,66 +310,25 @@ impl TreeStyle {
 type RowFn<T> = Rc<dyn for<'a> Fn(&T, &TreeRow<'a>) -> TreeItem>;
 type IdFn<S> = Rc<dyn Fn(&mut S, &str, &mut Tx)>;
 
-/// A virtualised tree over a [`TreeModel`] in the app's state `S`.
-pub struct Tree<S, T> {
+trait TreeBind {
+    fn bind_virtual_rows(&self, rows: El, count: usize, style: TreeStyle, kit: Rc<Kit>) -> El;
+    fn bind_viewport_layout(&self, viewport: El, row_height: f32) -> El;
+    fn bind_root_key(&self, root: El, rtl: bool) -> El;
+}
+
+struct TreeHandlers<S, T> {
     get: fn(&S) -> &TreeModel<T>,
     get_mut: fn(&mut S) -> &mut TreeModel<T>,
     label: fn(&T) -> &str,
     row: Option<RowFn<T>>,
     on_select: Option<IdFn<S>>,
     on_open: Option<IdFn<S>>,
-    style: Option<TreeStyle>,
-    name: Option<String>,
-    rtl: bool,
 }
 
-impl<S: 'static, T: 'static> Tree<S, T> {
-    /// `get` and `get_mut` find the model in the state; `label` names a node (rows show it, and
-    /// typing jumps by it).
-    pub fn new(get: fn(&S) -> &TreeModel<T>, get_mut: fn(&mut S) -> &mut TreeModel<T>, label: fn(&T) -> &str) -> Self {
-        Tree { get, get_mut, label, row: None, on_select: None, on_open: None, style: None, name: None, rtl: false }
-    }
-    /// What each row shows; by default its label alone.
-    pub fn row(mut self, f: impl for<'a> Fn(&T, &TreeRow<'a>) -> TreeItem + 'static) -> Self {
-        self.row = Some(Rc::new(f));
-        self
-    }
-    /// The cursor moved to `id`, by click or key: a diff view can follow it.
-    pub fn on_select(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {
-        self.on_select = Some(Rc::new(f));
-        self
-    }
-    /// A row without children was double-clicked, or Return or Space pressed on it.
-    pub fn on_open(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {
-        self.on_open = Some(Rc::new(f));
-        self
-    }
-    pub fn style(mut self, s: TreeStyle) -> Self {
-        self.style = Some(s);
-        self
-    }
-    /// The tree's accessibility label ("Files").
-    pub fn name(mut self, n: impl Into<String>) -> Self {
-        self.name = Some(n.into());
-        self
-    }
-    /// It lies in a right-to-left window: Left opens a folder and Right closes it
-    /// ([`TreeModel::set_right_to_left`]).
-    pub fn right_to_left(mut self, on: bool) -> Self {
-        self.rtl = on;
-        self
-    }
-
-    /// The tree, filling the height its parent gives it (set one with `.h(..)` or `.grow(..)`).
-    pub fn build(self, s: &S, k: &Kit) -> El {
-        let Tree { get, get_mut, label, row, on_select, on_open, style, name, rtl } = self;
-        let style = style.unwrap_or_else(|| TreeStyle::from_kit(k));
-        let model = get(s);
-        let count = model.visible_len();
-        let tree_key = model.key.clone();
-        let kit = Rc::new(k.clone());
-        let row_fn = row;
-        let (sel, open) = (on_select.clone(), on_open.clone());
+impl<S: 'static, T: 'static> TreeBind for TreeHandlers<S, T> {
+    fn bind_virtual_rows(&self, rows: El, count: usize, style: TreeStyle, kit: Rc<Kit>) -> El {
+        let (get, get_mut, label) = (self.get, self.get_mut, self.label);
+        let (row_fn, sel, open) = (self.row.clone(), self.on_select.clone(), self.on_open.clone());
         let build_row = move |s: &S, i: usize| -> El {
             let m = get(s);
             let Some((data, r)) = m.row(i) else { return el() };
@@ -382,55 +341,81 @@ impl<S: 'static, T: 'static> Tree<S, T> {
             let mut e = item.build(&kit, &r, &style).key(r.id);
             // A click selects the row (Shift extends and Cmd toggles, in a multi-select tree);
             // on a folder it also opens or closes it, as a file tree's does.
-            let pick = id.clone();
-            let sel = sel.clone();
+            let (pick, sel) = (id.clone(), sel.clone());
             e = e.on_press_tx(move |s: &mut S, tx: &mut Tx| {
-                let m = get_mut(s);
-                let plain = m.click(&pick, tx.mods());
-                if openable && plain {
-                    m.toggle(&pick);
-                }
-                if let Some(f) = &sel {
-                    f(s, &pick, tx);
-                }
+                get_mut(s).meta.click_row(&pick, openable, tx.mods());
+                if let Some(f) = &sel { f(s, &pick, tx); }
             });
             if !openable && let Some(f) = open.clone() {
                 e = e.on_double_press_tx(move |s: &mut S, tx: &mut Tx| f(s, &id, tx));
             }
             e
         };
-        let cursor = model.cursor.map(|c| model.nodes[c].id.clone());
-        let rows = col()
-            .key("rows")
-            .w_full()
-            .growth(GrowthSpec::default())
-            .virtual_rows(
-                count,
+        rows.virtual_rows(
+            count,
+            style.row_height,
+            move |s: &S, i| Cow::Borrowed(get(s).visible_id(i).unwrap_or_default()),
+            build_row,
+        )
+    }
+
+    fn bind_viewport_layout(&self, viewport: El, row_height: f32) -> El {
+        let get_mut = self.get_mut;
+        // Inside a scrolling page this reports every frame of the scroll; only a new height
+        // changes what the view reads.
+        viewport.on_layout_tx(move |s: &mut S, r: [f32; 4], tx: &mut Tx| {
+            get_mut(s).meta.update_viewport(r[3], row_height, tx);
+        })
+    }
+
+    fn bind_root_key(&self, root: El, rtl: bool) -> El {
+        let (get_mut, label) = (self.get_mut, self.label);
+        let (on_select, on_open) = (self.on_select.clone(), self.on_open.clone());
+        root.on_key(move |s: &mut S, ev: &KeyEvent, tx: &mut Tx| {
+            let m = get_mut(s);
+            m.set_right_to_left(rtl);
+            let before = m.meta.cursor;
+            let out = m.handle_key(ev, label, tx);
+            let moved = (before != m.meta.cursor).then(|| m.cursor().map(str::to_owned)).flatten();
+            match out {
+                TreeKey::Ignored => false,
+                TreeKey::Handled => {
+                    if let (Some(f), Some(id)) = (&on_select, moved) { f(s, &id, tx); }
+                    true
+                }
+                TreeKey::Open(id) => {
+                    if let Some(f) = &on_open { f(s, &id, tx); }
+                    true
+                }
+            }
+        })
+    }
+}
+
+struct TreeCore {
+    style: Option<TreeStyle>,
+    name: Option<String>,
+    rtl: bool,
+}
+
+impl TreeCore {
+    fn build(self, tree_key: String, count: usize, cursor: Option<String>, k: &Kit, bind: &dyn TreeBind) -> El {
+        let style = self.style.unwrap_or_else(|| TreeStyle::from_kit(k));
+        let kit = Rc::new(k.clone());
+        let rows = bind.bind_virtual_rows(
+            col().key("rows").w_full().growth(GrowthSpec::default()),
+            count,
+            style,
+            kit,
+        );
+        let viewport = bind
+            .bind_viewport_layout(
+                col().key("viewport").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }),
                 style.row_height,
-                move |s: &S, i| Cow::Borrowed(get(s).visible_id(i).unwrap_or_default()),
-                build_row,
-            );
-        let viewport = col()
-            .key("viewport")
-            .w_full()
-            .grow(1.0)
-            .min_h(0.0)
-            .scroll(ScrollSpec { stick_bottom: false })
-            // Inside a scrolling page this reports every frame of the scroll; only a new height
-            // changes what the view reads.
-            .on_layout_tx(move |s: &mut S, r: [f32; 4], tx: &mut Tx| {
-                let m = get_mut(s);
-                if m.viewport == r[3] && m.row_height == style.row_height { tx.live_only(); }
-                m.viewport = r[3];
-                m.row_height = style.row_height;
-            })
+            )
             .child(rows);
-        let mut root = col()
-            .key(tree_key)
-            .role("tree")
-            .focusable(true)
-            .w_full();
-        if let Some(n) = name {
+        let mut root = col().key(tree_key).role("tree").focusable(true).w_full();
+        if let Some(n) = self.name {
             root = root.label(n);
         }
         if style.guides_hover.is_some() {
@@ -440,30 +425,51 @@ impl<S: 'static, T: 'static> Tree<S, T> {
         if let Some(id) = cursor {
             root = root.active_descendant(id);
         }
-        root
-            .on_key(move |s: &mut S, ev: &KeyEvent, tx: &mut Tx| {
-                let m = get_mut(s);
-                m.set_right_to_left(rtl);
-                let before = m.cursor;
-                let out = m.handle_key(ev, label, tx);
-                let after = m.cursor;
-                let id = after.map(|c| m.nodes[c].id.clone());
-                match out {
-                    TreeKey::Ignored => false,
-                    TreeKey::Handled => {
-                        if before != after && let (Some(f), Some(id)) = (&on_select, id) {
-                            f(s, &id, tx);
-                        }
-                        true
-                    }
-                    TreeKey::Open(id) => {
-                        if let Some(f) = &on_open {
-                            f(s, &id, tx);
-                        }
-                        true
-                    }
-                }
-            })
-            .child(viewport)
+        bind.bind_root_key(root, self.rtl).child(viewport)
+    }
+}
+
+/// A virtualised tree over a [`TreeModel`] in the app's state `S`.
+pub struct Tree<S, T> {
+    core: TreeCore,
+    handlers: TreeHandlers<S, T>,
+}
+
+impl<S: 'static, T: 'static> Tree<S, T> {
+    /// `get` and `get_mut` find the model in the state; `label` names a node (rows show it, and
+    /// typing jumps by it).
+    pub fn new(get: fn(&S) -> &TreeModel<T>, get_mut: fn(&mut S) -> &mut TreeModel<T>, label: fn(&T) -> &str) -> Self {
+        Tree {
+            core: TreeCore { style: None, name: None, rtl: false },
+            handlers: TreeHandlers { get, get_mut, label, row: None, on_select: None, on_open: None },
+        }
+    }
+    /// What each row shows; by default its label alone.
+    pub fn row(mut self, f: impl for<'a> Fn(&T, &TreeRow<'a>) -> TreeItem + 'static) -> Self {
+        self.handlers.row = Some(Rc::new(f));
+        self
+    }
+    /// The cursor moved to `id`, by click or key: a diff view can follow it.
+    pub fn on_select(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {
+        self.handlers.on_select = Some(Rc::new(f));
+        self
+    }
+    /// A row without children was double-clicked, or Return or Space pressed on it.
+    pub fn on_open(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {
+        self.handlers.on_open = Some(Rc::new(f));
+        self
+    }
+    pub fn style(mut self, s: TreeStyle) -> Self { self.core.style = Some(s); self }
+    /// The tree's accessibility label ("Files").
+    pub fn name(mut self, n: impl Into<String>) -> Self { self.core.name = Some(n.into()); self }
+    /// It lies in a right-to-left window: Left opens a folder and Right closes it
+    /// ([`TreeModel::set_right_to_left`]).
+    pub fn right_to_left(mut self, on: bool) -> Self { self.core.rtl = on; self }
+
+    /// The tree, filling the height its parent gives it (set one with `.h(..)` or `.grow(..)`).
+    pub fn build(self, s: &S, k: &Kit) -> El {
+        let model = (self.handlers.get)(s);
+        let (key, count, cursor) = (model.meta.key.clone(), model.visible_len(), model.cursor().map(str::to_owned));
+        self.core.build(key, count, cursor, k, &self.handlers)
     }
 }

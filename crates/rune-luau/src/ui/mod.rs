@@ -154,7 +154,7 @@ impl Templates {
 
     /// Keeps a node built from the frozen table at stack slot `idx` as `key`'s template: `under`
     /// with its pending `props`, and `el`, the two finished.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, unsafe_code)]
     pub(crate) unsafe fn put(&mut self, state: *mut ffi::lua_State, idx: c_int, key: (usize, u8), env: &Env, el: El, under: El, props: props::Props, colors: Vec<(Box<str>, Color)>) {
         if self.0.len() >= TEMPLATES {
             self.0.clear();
@@ -456,6 +456,7 @@ impl Env {
     }
 
     /// A registry reference to the function at stack slot `idx`.
+    #[allow(unsafe_code)]
     pub(crate) unsafe fn reference(&self, state: *mut ffi::lua_State, idx: c_int) -> Rc<Callback> {
         // SAFETY: the caller checked slot `idx` holds a function.
         let r = unsafe { ffi::lua_ref(state, idx) };
@@ -469,6 +470,7 @@ impl Env {
 
 /// Runs a C function body: its error becomes a Lua error once every Rust value it held is
 /// dropped, and a Rust panic becomes an error too, where the target can catch one.
+#[allow(unsafe_code)]
 pub(crate) unsafe fn guard(state: *mut ffi::lua_State, body: impl FnOnce() -> Result<c_int, String>) -> c_int {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
     let message = match result {

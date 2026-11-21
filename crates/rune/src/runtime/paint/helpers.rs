@@ -2,7 +2,7 @@
 use super::*;
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn emit_block_decorations(
+pub(in crate::runtime) fn emit_block_decorations(
     instances: &mut Vec<Instance>,
     text_sys: &mut TextSystem,
     images: &mut crate::pixels::ImageAtlas,
@@ -191,7 +191,7 @@ pub(super) fn emit_block_decorations(
 }
 
 /// Pixel caret and logical-point IME area use the same shaped cursor geometry.
-pub(super) fn input_caret(n: &Node, r: [f32; 4], scale: f32, s: f32, gliding: bool, scrolls: &mut HashMap<String, f32>) -> Option<([f32; 4], [f32; 4])> {
+pub(in crate::runtime) fn input_caret(n: &Node, r: [f32; 4], scale: f32, s: f32, gliding: bool, scrolls: &mut HashMap<String, f32>) -> Option<([f32; 4], [f32; 4])> {
     let (spec, laid, input) = (n.text.as_ref()?, n.text_layout.as_ref()?, n.input.as_ref()?);
     let layout = laid.view();
     let e = &input.edit;
@@ -227,13 +227,13 @@ pub(super) fn input_caret(n: &Node, r: [f32; 4], scale: f32, s: f32, gliding: bo
 }
 
 /// Whether `looping`'s sampled value multiplies the element's opacity.
-pub(super) fn fades(looping: Option<rune_motion::LoopSpec>) -> bool {
+pub(in crate::runtime) fn fades(looping: Option<rune_motion::LoopSpec>) -> bool {
     matches!(looping.map(|l| l.kind), Some(rune_motion::LoopKind::Opacity { .. } | rune_motion::LoopKind::OpacityCycle(_) | rune_motion::LoopKind::Sequence(_)))
 }
 
 /// How many separate things node `n` paints itself (fill, border, gradient, shape, image,
 /// shadows, words), which can lie one over another.
-pub(super) fn own_paints(n: &Node) -> usize {
+pub(in crate::runtime) fn own_paints(n: &Node) -> usize {
     let v = &n.vis;
     [
         v.fill.a > 0.0,
@@ -251,7 +251,7 @@ pub(super) fn own_paints(n: &Node) -> usize {
 /// corner `radii` `[tl, tr, br, bl]`, so that rounding the mask's corners can't touch it. The
 /// mask is convex, so it's enough that `rect`'s corners are inside; a continuous corner counts
 /// as its whole corner square.
-pub(super) fn inside_rounded(rect: [f32; 4], mask: [f32; 4], radii: [f32; 4]) -> bool {
+pub(in crate::runtime) fn inside_rounded(rect: [f32; 4], mask: [f32; 4], radii: [f32; 4]) -> bool {
     const AA: f32 = 1.0;
     if rect[2] <= rect[0] || rect[3] <= rect[1] { return true; }
     if rect[0] < mask[0] || rect[1] < mask[1] || rect[2] > mask[2] || rect[3] > mask[3] { return false; }
@@ -267,13 +267,13 @@ pub(super) fn inside_rounded(rect: [f32; 4], mask: [f32; 4], radii: [f32; 4]) ->
 }
 
 /// `rect` (x, y, w, h) magnified `k` times from `r_origin` to `origin`.
-pub(super) fn scale_about(rect: [f32; 4], origin: [f32; 2], r_origin: [f32; 2], k: f32) -> [f32; 4] {
+pub(in crate::runtime) fn scale_about(rect: [f32; 4], origin: [f32; 2], r_origin: [f32; 2], k: f32) -> [f32; 4] {
     [origin[0] + (rect[0] - r_origin[0]) * k, origin[1] + (rect[1] - r_origin[1]) * k, rect[2] * k, rect[3] * k]
 }
 
 /// A glyph instance drawn `k` times its rasterized size about `origin`. An alpha glyph keeps
 /// its atlas footprint in `uv.zw`, so the shader samples it filtered.
-pub(super) fn zoom_glyph(mut g: Instance, origin: [f32; 2], r_origin: [f32; 2], k: f32) -> Instance {
+pub(in crate::runtime) fn zoom_glyph(mut g: Instance, origin: [f32; 2], r_origin: [f32; 2], k: f32) -> Instance {
     if k == 1.0 && origin == r_origin { return g; }
     if g.params[1] == KIND_GLYPH && g.radii[3] > 0.0 {
         // An outline glyph (`text::Outline`) magnifies its pen and pixel instead of its mask.
@@ -293,7 +293,7 @@ pub(super) fn zoom_glyph(mut g: Instance, origin: [f32; 2], r_origin: [f32; 2], 
 
 /// A text glyph's instance: alpha-atlas coverage tinted by `fill`, or a colour glyph's image
 /// at `fill`'s alpha. None when the image atlas can't place it.
-pub(super) fn glyph_or_image(q: &GlyphQuad, text: &TextSystem, images: &mut crate::pixels::ImageAtlas, fill: [f32; 4], clip: [f32; 4], fade: [f32; 4]) -> Option<Instance> {
+pub(in crate::runtime) fn glyph_or_image(q: &GlyphQuad, text: &TextSystem, images: &mut crate::pixels::ImageAtlas, fill: [f32; 4], clip: [f32; 4], fade: [f32; 4]) -> Option<Instance> {
     if q.color == 0 {
         let mut g = glyph(q, fill, clip, fade);
         g.params[3] = text.coverage_exponent(fill);
@@ -312,7 +312,7 @@ pub(super) fn glyph_or_image(q: &GlyphQuad, text: &TextSystem, images: &mut crat
     })
 }
 
-pub(super) fn rect_inst(rect: [f32; 4], fill: [f32; 4], radius: f32, clip: [f32; 4], fade: [f32; 4]) -> Instance {
+pub(in crate::runtime) fn rect_inst(rect: [f32; 4], fill: [f32; 4], radius: f32, clip: [f32; 4], fade: [f32; 4]) -> Instance {
     Instance {
         rect,
         radii: [radius; 4],
@@ -323,4 +323,28 @@ pub(super) fn rect_inst(rect: [f32; 4], fill: [f32; 4], radius: f32, clip: [f32;
         clip,
         fade: crate::render::pack_fade(fade, clip, clip),
     }
+}
+
+/// A misspelled word's marker: Chromium's red, on macOS a row of dots and elsewhere a wavy line.
+/// (Linear light: #FF3B30 on macOS, #FF0000 elsewhere.)
+pub(in crate::runtime) const SPELLING: Color = if cfg!(target_os = "macos") { Color { r: 1.0, g: 0.0437, b: 0.0296, a: 1.0 } } else { Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 } };
+
+/// The spelling marker from device x `x0` to `x1`, its top at `y`, `k` device px a point: on
+/// macOS 3 pt dots every 4 pt, elsewhere Chromium's 1 pt line waving 2 pt down and back every 6 pt.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::runtime) fn push_spelling_marker(out: &mut Vec<Instance>, x0: f32, x1: f32, y: f32, k: f32, color: [f32; 4], clip: [f32; 4], fade: [f32; 4]) {
+    if cfg!(target_os = "macos") {
+        let (d, step) = (3.0 * k, 4.0 * k);
+        let count = ((x1 - x0 - d) / step).floor().max(0.0) as usize + 1;
+        let x = x0 + ((x1 - x0) - (count - 1) as f32 * step - d) / 2.0;
+        out.extend((0..count).map(|n| rect_inst([x + n as f32 * step, y, d, d], color, d / 2.0, clip, fade)));
+        return;
+    }
+    const WAVE: [f32; 6] = [0.0, 1.0, 2.0, 2.0, 1.0, 0.0];
+    let t = k.max(1.0).round();
+    let start = x0.round();
+    out.extend((0..(x1.round() - start).max(0.0) as usize).map(|n| {
+        let wave = WAVE[(n as f32 / k) as usize % WAVE.len()];
+        rect_inst([start + n as f32, (y + wave * k).round(), 1.0, t], color, 0.0, clip, fade)
+    }));
 }

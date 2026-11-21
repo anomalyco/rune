@@ -2,12 +2,12 @@
 
 use super::*;
 
-impl<T: 'static> Overlay<T> {
+impl OverlayCore {
     /// The compositor has no layer-shell (GNOME): an overlay that takes no input shows on
     /// XWayland when there is one, and so does one that takes the pointer when its host opted
     /// in (`OverlayOptions::xwayland_input`).
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-    pub(super) fn xwayland(&mut self) -> Option<Live> {
+    pub(super) fn xwayland(&mut self, app: &mut dyn OverlayApp) -> Option<Live> {
         let input = self.options.input.resolved(self.interactive);
         if !xwayland_allowed(input, self.options.keys, self.options.xwayland_input) { return None; }
         let wake = self.shared.wake.lock().unwrap().clone();
@@ -16,11 +16,11 @@ impl<T: 'static> Overlay<T> {
         self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities {
             capture_exclusion: OverlaySupport::Unsupported, global_pointer: OverlaySupport::Unsupported, nonactivating_keys: OverlaySupport::Unsupported,
         };
-        self.attach(Backing::Xwayland(surface), scale)
+        self.attach(app, Backing::Xwayland(surface), scale)
     }
 
     #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
-    pub(super) fn xwayland(&mut self) -> Option<Live> {
+    pub(super) fn xwayland(&mut self, _app: &mut dyn OverlayApp) -> Option<Live> {
         None
     }
 }

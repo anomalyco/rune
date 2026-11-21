@@ -1,0 +1,917 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index a50e538..c39ed71 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -5,8 +5,8 @@ use std::sync::Arc;
+ use std::time::Duration;
+ 
+ use tiny_skia::{
+-    Color, FillRule, Mask, Path, PathBuilder, Pixmap, PixmapMut, PixmapPaint, Point, Rect,
+-    Transform,
++    BlendMode, Color, FillRule, Mask, Paint, Path, PathBuilder, Pixmap, PixmapMut, PixmapPaint,
++    Point, Rect, Shader, Transform,
+ };
+ 
+ use smithay_client_toolkit::reexports::client::backend::ObjectId;
+@@ -27,6 +27,8 @@ use smithay_client_toolkit::subcompositor::SubsurfaceData;
+ mod buttons;
+ mod config;
+ mod parts;
++#[cfg(test)]
++mod tests;
+ mod pointer;
+ mod shadow;
+ pub mod theme;
+@@ -143,6 +145,14 @@ where
+         self.dirty = true;
+     }
+ 
++    /// The radius, in logical points, of the arc this frame leaves the window's content at its
++    /// bottom corners: the visible border is drawn within one point outside it. Zero when the
++    /// frame draws the window square, as a maximized, tiled or fullscreen one is (and as the
++    /// headerbar's top corners are).
++    pub fn content_corner_radius(&self) -> f32 {
++        content_radius(self.state)
++    }
++
+     fn precise_location(
+         &self,
+         location: Location,
+@@ -225,7 +235,6 @@ where
+         } else {
+             true
+         };
+-        let border_paint = colors.border_paint();
+ 
+         // Draw the borders.
+         for (idx, part) in decorations
+@@ -265,12 +274,22 @@ where
+             // do invisible borders to enlarge the input zone.
+             pixmap.fill(Color::TRANSPARENT);
+ 
+-            if !self.state.intersects(WindowState::TILED) {
++            // The bottom and side parts draw their shadow along with their border: the bottom one
++            // is the part that reaches over the window, so its corners are cut out of the shadow it
++            // draws there, and a side part's border stops where the bottom corner's arc takes over.
++            if !matches!(
++                idx,
++                DecorationParts::BOTTOM | DecorationParts::LEFT | DecorationParts::RIGHT
++            ) && !self.state.intersects(WindowState::TILED)
++            {
+                 self.shadow.draw(
+                     &mut pixmap,
+                     scale,
+                     self.state.contains(WindowState::ACTIVATED),
+                     idx,
++                    // The other parts have no rounded corners of their own to reach over the
++                    // window with.
++                    0.,
+                 );
+             }
+ 
+@@ -292,51 +311,23 @@ where
+                         self.mouse.location,
+                     );
+                 }
+-                border => {
+-                    // The visible border is one pt.
+-                    let visible_border_size = VISIBLE_BORDER_SIZE * scale;
+-
+-                    // XXX we do all the match using integral types and then convert to f32 in the
+-                    // end to ensure that result is finite.
+-                    let border_rect = match border {
+-                        DecorationParts::LEFT => {
+-                            let x = (rect.x.unsigned_abs() * scale) - visible_border_size;
+-                            let y = rect.y.unsigned_abs() * scale;
+-                            Rect::from_xywh(
+-                                x as f32,
+-                                y as f32,
+-                                visible_border_size as f32,
+-                                (rect.height - y) as f32,
+-                            )
+-                        }
+-                        DecorationParts::RIGHT => {
+-                            let y = rect.y.unsigned_abs() * scale;
+-                            Rect::from_xywh(
+-                                0.,
+-                                y as f32,
+-                                visible_border_size as f32,
+-                                (rect.height - y) as f32,
+-                            )
+-                        }
+-                        // We draw small visible border only bellow the window surface, no need to
+-                        // handle `TOP`.
+-                        DecorationParts::BOTTOM => {
+-                            let x = (rect.x.unsigned_abs() * scale) - visible_border_size;
+-                            Rect::from_xywh(
+-                                x as f32,
+-                                0.,
+-                                (rect.width - 2 * x) as f32,
+-                                visible_border_size as f32,
+-                            )
+-                        }
+-                        _ => None,
+-                    };
+-
+-                    // Fill the visible border, if present.
+-                    if let Some(border_rect) = border_rect {
+-                        pixmap.fill_rect(border_rect, &border_paint, Transform::identity(), None);
+-                    }
++                DecorationParts::BOTTOM => {
++                    draw_bottom(
++                        &mut pixmap,
++                        &mut self.shadow,
++                        colors,
++                        &self.state,
++                        scale,
++                        rect.width,
++                    );
++                }
++                DecorationParts::LEFT => {
++                    draw_side(&mut pixmap, &mut self.shadow, colors, &self.state, scale, false);
++                }
++                DecorationParts::RIGHT => {
++                    draw_side(&mut pixmap, &mut self.shadow, colors, &self.state, scale, true);
+                 }
++                _ => {}
+             };
+ 
+             if should_sync {
+@@ -770,6 +761,212 @@ fn rounded_headerbar_shape(x: f32, y: f32, width: f32, height: f32, radius: f32)
+     pb.finish()
+ }
+ 
++/// The radius, in logical points, of the arc a frame leaves the window's content at its bottom
++/// corners. The frame's one-point visible border is drawn just outside that arc, so the window's
++/// own corners are [`VISIBLE_BORDER_SIZE`] more, and the shadow's rounded cut-out is the same
++/// disc.
++pub const CONTENT_CORNER_RADIUS: u32 = CORNER_RADIUS - VISIBLE_BORDER_SIZE;
++
++/// The radius, in logical points, of the arc this frame leaves the window's content at its bottom
++/// corners in `state`: zero when the window is square, as a maximized, tiled or fullscreen one is.
++fn content_radius(state: WindowState) -> f32 {
++    if square(state) {
++        0.
++    } else {
++        CONTENT_CORNER_RADIUS as f32
++    }
++}
++
++/// The radius, in logical points, of the visible border's outer edge around the window's bottom
++/// corners in `state`: [`CORNER_RADIUS`], or zero when the window is square.
++fn border_radius(state: WindowState) -> f32 {
++    if square(state) {
++        0.
++    } else {
++        CORNER_RADIUS as f32
++    }
++}
++
++/// Whether `state` draws the window's corners square, as the headerbar's top ones are: maximized,
++/// tiled and fullscreen windows have no corners to round.
++fn square(state: WindowState) -> bool {
++    state.intersects(WindowState::MAXIMIZED | WindowState::TILED | WindowState::FULLSCREEN)
++}
++
++/// Draws the bottom part: its shadow, the arcs cut out of it where the content's own rounded
++/// corners show through, and the visible border around them.
++fn draw_bottom(
++    pixmap: &mut PixmapMut,
++    shadow: &mut Shadow,
++    colors: &ColorMap,
++    state: &WindowState,
++    scale: u32,
++    width: u32,
++) {
++    let border = (VISIBLE_BORDER_SIZE * scale) as f32;
++    // The part is placed one corner radius above the window's bottom edge, and spans it plus the
++    // shadow and border around the window: `left` and `right` are the window's outer edges.
++    let left = (BORDER_SIZE * scale) as f32 - border;
++    let right = width as f32 - left;
++    let bottom = (CORNER_RADIUS * scale) as f32;
++    let radius = border_radius(*state) * scale as f32;
++
++    if !state.intersects(WindowState::TILED) {
++        shadow.draw(pixmap, scale, state.contains(WindowState::ACTIVATED), DecorationParts::BOTTOM, radius);
++    }
++
++    if radius < border {
++        if let Some(rect) = Rect::from_xywh(left, bottom, (right - left).max(0.), border) {
++            pixmap.fill_rect(rect, &colors.border_paint(), Transform::identity(), None);
++        }
++        return;
++    }
++    // The band above the window's bottom edge carries the shadow's corner crescents, so the arcs
++    // are cleared out of it before the border is drawn along them: the shadow stays outside the
++    // arcs the content leaves, and nothing stays where the content shows through.
++    clear_bottom_corner_holes(pixmap, left, right, bottom, border, radius);
++    if let Some(shape) = bottom_border_shape(left, right, bottom, border, radius) {
++        pixmap.fill_path(&shape, &colors.border_paint(), FillRule::EvenOdd, Transform::identity(), None);
++    }
++}
++
++/// Draws a side part (`LEFT` or `RIGHT`): the shadow down that side of the window, and the visible
++/// border along it, from under the headerbar to where the bottom corner's arc takes over.
++fn draw_side(
++    pixmap: &mut PixmapMut,
++    shadow: &mut Shadow,
++    colors: &ColorMap,
++    state: &WindowState,
++    scale: u32,
++    right: bool,
++) {
++    let idx = if right { DecorationParts::RIGHT } else { DecorationParts::LEFT };
++    if !state.intersects(WindowState::TILED) {
++        shadow.draw(pixmap, scale, state.contains(WindowState::ACTIVATED), idx, 0.);
++    }
++    let border = (VISIBLE_BORDER_SIZE * scale) as f32;
++    let top = (HEADER_SIZE * scale) as f32;
++    let corner = (border_radius(*state) * scale as f32 - border).max(0.);
++    let height = (pixmap.height() as f32 - top - corner).max(0.);
++    let x = if right { 0. } else { (BORDER_SIZE * scale) as f32 - border };
++    if let Some(rect) = Rect::from_xywh(x, top, border, height) {
++        pixmap.fill_rect(rect, &colors.border_paint(), Transform::identity(), None);
++    }
++}
++
++/// Clears the two discs of radius `radius` the bottom part's shadow is cut out of, so the part
++/// leaves the content's rounded corners alone.
++fn clear_bottom_corner_holes(pixmap: &mut PixmapMut, left: f32, right: f32, bottom: f32, border: f32, radius: f32) {
++    // Each arc's centre is the content's: `border` up from the content's bottom edge, `radius` in
++    // from the window's edge.
++    let centre_y = bottom + border - radius;
++    let paint = Paint {
++        shader: Shader::SolidColor(Color::TRANSPARENT),
++        blend_mode: BlendMode::Clear,
++        anti_alias: true,
++        ..Paint::default()
++    };
++    for centre_x in [left + radius, right - radius] {
++        if let Some(circle) = circle_path(centre_x, centre_y, radius) {
++            pixmap.fill_path(&circle, &paint, FillRule::Winding, Transform::identity(), None);
++        }
++    }
++}
++
++/// A circle of `radius` around `(cx, cy)`, as four cubic arcs.
++fn circle_path(cx: f32, cy: f32, radius: f32) -> Option<Path> {
++    if radius <= 0. {
++        return None;
++    }
++    // https://stackoverflow.com/a/27863181, as `rounded_headerbar_shape`.
++    let k = 0.552_284_8 * radius;
++    let mut pb = PathBuilder::new();
++    pb.move_to(cx + radius, cy);
++    pb.cubic_to(cx + radius, cy + k, cx + k, cy + radius, cx, cy + radius);
++    pb.cubic_to(cx - k, cy + radius, cx - radius, cy + k, cx - radius, cy);
++    pb.cubic_to(cx - radius, cy - k, cx - k, cy - radius, cx, cy - radius);
++    pb.cubic_to(cx + k, cy - radius, cx + radius, cy - k, cx + radius, cy);
++    pb.close();
++    pb.finish()
++}
++
++/// The visible border under a window whose bottom corners are rounded with `radius`: a one-point
++/// band along `bottom`, the content's bottom edge, from `left` to `right`, the window's outer
++/// edges, curving around each corner outside the arc the content leaves (centred one radius inside
++/// the window's corner, so the band sits between that arc and the shadow). A window too narrow for
++/// both arcs rounds them as far as it can.
++fn bottom_border_shape(
++    left: f32,
++    right: f32,
++    bottom: f32,
++    border: f32,
++    radius: f32,
++) -> Option<Path> {
++    if !(left.is_finite() && right.is_finite() && bottom.is_finite() && border.is_finite() && radius.is_finite())
++        || border <= 0.
++        || right <= left
++    {
++        return None;
++    }
++    // https://stackoverflow.com/a/27863181, as `rounded_headerbar_shape`.
++    let k = 0.552_284_8;
++    let radius = radius.min((right - left) / 2.).max(border);
++    let outer = bottom + border;
++    let (outer_radius, inner_radius) = (radius, radius - border);
++    // One disc per corner: its centre is the content's arc centre, `outer` less the outer radius.
++    let centre_y = outer - outer_radius;
++    let (left_centre, right_centre) = (left + outer_radius, right - outer_radius);
++
++    let mut pb = PathBuilder::new();
++    // The window's outline: down the left edge, around the corner, along the bottom, around the
++    // other corner, and up the right edge.
++    pb.move_to(left, 0.);
++    pb.line_to(left, centre_y);
++    pb.cubic_to(
++        left,
++        centre_y + k * outer_radius,
++        left_centre - k * outer_radius,
++        outer,
++        left_centre,
++        outer,
++    );
++    pb.line_to(right_centre, outer);
++    pb.cubic_to(
++        right_centre + k * outer_radius,
++        outer,
++        right,
++        centre_y + k * outer_radius,
++        right,
++        centre_y,
++    );
++    pb.line_to(right, 0.);
++    pb.close();
++    // And the content's, one point inside it: filling both even-odd leaves the border between.
++    pb.move_to(left + border, 0.);
++    pb.line_to(left + border, centre_y);
++    pb.cubic_to(
++        left + border,
++        centre_y + k * inner_radius,
++        left_centre - k * inner_radius,
++        bottom,
++        left_centre,
++        bottom,
++    );
++    pb.line_to(right_centre, bottom);
++    pb.cubic_to(
++        right_centre + k * inner_radius,
++        bottom,
++        right - border,
++        centre_y + k * inner_radius,
++        right - border,
++        centre_y,
++    );
++    pb.line_to(right - border, 0.);
++    pb.close();
++
++    pb.finish()
++}
++
+ // returns horizontal margin, logical points
+ fn get_margin_h_lp(state: &WindowState) -> f32 {
+     if state.intersects(WindowState::MAXIMIZED | WindowState::TILED) {
+diff --git a/src/parts.rs b/src/parts.rs
+index 7ae54ed..4d92a72 100644
+--- a/src/parts.rs
++++ b/src/parts.rs
+@@ -9,9 +9,23 @@ use smithay_client_toolkit::{
+     subcompositor::{SubcompositorState, SubsurfaceData},
+ };
+ 
+-use crate::theme::{BORDER_SIZE, HEADER_SIZE, RESIZE_HANDLE_SIZE};
++use crate::theme::{BORDER_SIZE, CORNER_RADIUS, HEADER_SIZE, RESIZE_HANDLE_SIZE};
+ use crate::{pointer::Location, wl_typed::WlTyped};
+ 
++/// The bottom part's input zone, which is its resize handle: it starts at the window's bottom
++/// edge, not at the part's top, since the part reaches a corner radius above the edge and must not
++/// take input there from the content.
++pub(crate) fn bottom_input_rect(surface_width: u32) -> Rect {
++    Rect {
++        x: BORDER_SIZE as i32 - RESIZE_HANDLE_SIZE as i32,
++        y: CORNER_RADIUS as i32,
++        width: surface_width
++            .saturating_sub(BORDER_SIZE * 2)
++            .saturating_add(RESIZE_HANDLE_SIZE * 2),
++        height: RESIZE_HANDLE_SIZE,
++    }
++}
++
+ /// The decoration's 'parts'.
+ #[derive(Debug)]
+ pub struct DecorationParts {
+@@ -101,14 +115,11 @@ impl DecorationParts {
+                     x: -(BORDER_SIZE as i32),
+                     y: 0,     // Defined by `Self::resize`.
+                     width: 0, // Defined by `Self::resize`.
+-                    height: BORDER_SIZE,
++                    // Reaches above the window's bottom edge, so the visible border can follow the
++                    // rounded corners the content leaves it (`Self::resize`).
++                    height: BORDER_SIZE + CORNER_RADIUS,
+                 },
+-                Some(Rect {
+-                    x: BORDER_SIZE as i32 - RESIZE_HANDLE_SIZE as i32,
+-                    y: 0,
+-                    width: 0, // Defined by `Self::resize`,
+-                    height: RESIZE_HANDLE_SIZE,
+-                }),
++                Some(bottom_input_rect(0)),
+             ),
+             // Header.
+             Part::new(
+@@ -154,10 +165,11 @@ impl DecorationParts {
+         self.parts[Self::HEADER].surface_rect.width = width;
+ 
+         self.parts[Self::BOTTOM].surface_rect.width = width + 2 * BORDER_SIZE;
+-        self.parts[Self::BOTTOM].surface_rect.y = height as i32;
+-        self.parts[Self::BOTTOM].input_rect.as_mut().unwrap().width =
+-            self.parts[Self::BOTTOM].surface_rect.width - (BORDER_SIZE * 2)
+-                + (RESIZE_HANDLE_SIZE * 2);
++        // `CORNER_RADIUS` above the window's bottom edge, where its rounded corners are: the
++        // visible border is drawn in that part of it.
++        self.parts[Self::BOTTOM].surface_rect.y = height as i32 - CORNER_RADIUS as i32;
++        *self.parts[Self::BOTTOM].input_rect.as_mut().unwrap() =
++            bottom_input_rect(self.parts[Self::BOTTOM].surface_rect.width);
+ 
+         self.parts[Self::TOP].surface_rect.width = self.parts[Self::BOTTOM].surface_rect.width;
+         self.parts[Self::TOP].input_rect.as_mut().unwrap().width =
+diff --git a/src/shadow.rs b/src/shadow.rs
+index efa9133..669736b 100644
+--- a/src/shadow.rs
++++ b/src/shadow.rs
+@@ -8,7 +8,9 @@ pub const SHADOW_SIZE: u32 = 43;
+ const SHADOW_PARAMS_ACTIVE: (f32, f32, f32) = (0.206_505_5, 0.104_617_53, -0.000_542_446_2);
+ const SHADOW_PARAMS_INACTIVE: (f32, f32, f32) = (0.168_297_29, 0.204_299_8, 0.001_769_798_6);
+ 
+-fn shadow(pixel_dist: f32, scale: u32, active: bool) -> f32 {
++/// The shadow's alpha at `pixel_dist` from the window's outline: the frame's own model of it,
++/// which `tests` reads as its reference.
++pub(crate) fn shadow(pixel_dist: f32, scale: u32, active: bool) -> f32 {
+     let (a, b, c) = if active {
+         SHADOW_PARAMS_ACTIVE
+     } else {
+@@ -146,7 +148,7 @@ impl RenderedShadow {
+         }
+     }
+ 
+-    fn draw(&self, dst_pixmap: &mut PixmapMut, scale: u32, part_idx: usize) {
++    fn draw(&self, dst_pixmap: &mut PixmapMut, scale: u32, part_idx: usize, corners: f32) {
+         let shadow_size = (SHADOW_SIZE * scale) as usize;
+         let visible_border_size = (theme::VISIBLE_BORDER_SIZE * scale) as usize;
+         let corner_radius = (theme::CORNER_RADIUS * scale) as usize;
+@@ -211,13 +213,16 @@ impl RenderedShadow {
+ 
+                 self.side_draw(true, false, side_height, dst_pixmap, 0, top_edge_height);
+ 
++                // The bottom corner's piece reaches the border's own column: below the arc's
++                // tangent the side part draws no border there, and the shadow continues to the
++                // window's edge (`draw_side`).
+                 self.edges_draw(
+                     0,
+                     edges_half as isize,
+                     dst_pixmap,
+                     0,
+                     top_edge_height + side_height,
+-                    dst_width.saturating_sub(visible_border_size),
++                    dst_width,
+                     bottom_edge_height,
+                 );
+             }
+@@ -247,13 +252,17 @@ impl RenderedShadow {
+                     top_edge_height,
+                 );
+ 
++                // The bottom corner's piece reaches the border's own column, where the side part
++                // draws no border below the arc's tangent: its source keeps the disc's centre where
++                // the top piece puts it (a corner radius outside this part, so `+ corner_radius`,
++                // less the column the piece now starts at).
+                 self.edges_draw(
+-                    edges_half as isize + corner_radius as isize,
++                    edges_half as isize + (corner_radius - visible_border_size) as isize,
+                     edges_half as isize,
+                     dst_pixmap,
+-                    visible_border_size,
++                    0,
+                     top_edge_height + side_height,
+-                    dst_width.saturating_sub(visible_border_size),
++                    dst_width,
+                     bottom_edge_height,
+                 );
+             }
+@@ -264,12 +273,17 @@ impl RenderedShadow {
+                     .saturating_sub(left_edge_width)
+                     .saturating_sub(right_edge_width);
+ 
++                // Below the window's bottom edge the shadow is a square frame's, whatever the
++                // corners, and the discs sit `visible_border_size` up from that edge: the source
++                // row puts them on the same pixel here and in the square part.
++                let corner_src_y =
++                    edges_half as isize + (corner_radius - visible_border_size) as isize;
+                 self.edges_draw(
+                     0,
+-                    edges_half as isize + (corner_radius - visible_border_size) as isize,
++                    corner_src_y,
+                     dst_pixmap,
+                     0,
+-                    0,
++                    corner_radius,
+                     left_edge_width,
+                     dst_height,
+                 );
+@@ -280,18 +294,36 @@ impl RenderedShadow {
+                     side_width,
+                     dst_pixmap,
+                     left_edge_width,
+-                    visible_border_size,
++                    corner_radius + visible_border_size,
+                 );
+ 
+                 self.edges_draw(
+                     edges_half as isize,
+-                    edges_half as isize + (corner_radius - visible_border_size) as isize,
++                    corner_src_y,
+                     dst_pixmap,
+                     left_edge_width + side_width,
+-                    0,
++                    corner_radius,
+                     right_edge_width,
+                     dst_height,
+                 );
++
++                if corners > 0. {
++                    // The band above that edge carries the crescents the arcs cut out of the
++                    // shadow, and only inside the content's own corner squares: outside them the
++                    // side parts already draw the shadow down to the edge, and a second copy here
++                    // would composite over theirs (the parts stack) and double it.
++                    //
++                    // The band's source keeps the disc's centre where the corner piece above puts
++                    // it: `edges_half` in the image, `centre_x` in the part.
++                    let band_src_y = edges_half as isize - visible_border_size as isize;
++                    let margin = theme::BORDER_SIZE as usize * scale as usize;
++                    let centres = [edges_half, dst_width.saturating_sub(edges_half)];
++                    let bands = [margin, dst_width.saturating_sub(margin + corner_radius)];
++                    for (centre_x, band_left) in centres.into_iter().zip(bands) {
++                        let src_x = band_left as isize - centre_x as isize + edges_half as isize;
++                        self.edges_draw(src_x, band_src_y, dst_pixmap, band_left, 0, corner_radius, corner_radius);
++                    }
++                }
+             }
+             DecorationParts::HEADER => {
+                 self.edges_draw(
+@@ -324,6 +356,8 @@ struct CachedPart {
+     pixmap: Pixmap,
+     scale: u32,
+     active: bool,
++    /// Whether it was drawn for round bottom corners, whose shadow reaches over the window.
++    corners: bool,
+ }
+ 
+ impl CachedPart {
+@@ -333,23 +367,26 @@ impl CachedPart {
+         scale: u32,
+         active: bool,
+         part_idx: usize,
++        corners: f32,
+     ) -> CachedPart {
+         #[allow(clippy::unwrap_used)]
+         let mut pixmap = Pixmap::new(dst_pixmap.width(), dst_pixmap.height()).unwrap();
+-        rendered.draw(&mut pixmap.as_mut(), scale, part_idx);
++        rendered.draw(&mut pixmap.as_mut(), scale, part_idx, corners);
+ 
+         CachedPart {
+             pixmap,
+             scale,
+             active,
++            corners: corners > 0.,
+         }
+     }
+ 
+-    fn matches(&self, dst_pixmap: &PixmapRef, dst_scale: u32, dst_active: bool) -> bool {
++    fn matches(&self, dst_pixmap: &PixmapRef, dst_scale: u32, dst_active: bool, corners: bool) -> bool {
+         self.pixmap.width() == dst_pixmap.width()
+             && self.pixmap.height() == dst_pixmap.height()
+             && self.scale == dst_scale
+             && self.active == dst_active
++            && self.corners == corners
+     }
+ 
+     fn draw(&self, dst_pixmap: &mut PixmapMut) {
+@@ -366,11 +403,15 @@ pub struct Shadow {
+ }
+ 
+ impl Shadow {
+-    pub fn draw(&mut self, pixmap: &mut PixmapMut, scale: u32, active: bool, part_idx: usize) {
++    /// Draws part `part_idx`'s shadow. `corners` is the radius, in the part's pixels, of the round
++    /// bottom corners it is drawn for (zero for square ones): the bottom part reaches that far
++    /// above the window's bottom edge, so with round corners its shadow starts at the part's top.
++    pub fn draw(&mut self, pixmap: &mut PixmapMut, scale: u32, active: bool, part_idx: usize, corners: f32) {
+         let cache = &mut self.part_cache[part_idx];
++        let round = corners > 0.;
+ 
+         if let Some(cache_value) = cache {
+-            if !cache_value.matches(&pixmap.as_ref(), scale, active) {
++            if !cache_value.matches(&pixmap.as_ref(), scale, active, round) {
+                 *cache = None;
+             }
+         }
+@@ -387,6 +428,7 @@ impl Shadow {
+                 scale,
+                 active,
+                 part_idx,
++                corners,
+             ));
+         }
+ 
+diff --git a/src/tests.rs b/src/tests.rs
+new file mode 100644
+index 0000000..15b61f0
+--- /dev/null
++++ b/src/tests.rs
+@@ -0,0 +1,308 @@
++//! The frame's rounded bottom corners: the radius each state gets, the border along the arcs, the
++//! shadow the arcs cut out of the part that reaches over the window, and the bottom part's input
++//! zone. Everything here draws into a `Pixmap` the way `redraw_inner` does, so it needs no
++//! compositor.
++
++use crate::parts::{bottom_input_rect, DecorationParts};
++use crate::theme::{ColorTheme, BORDER_SIZE, CORNER_RADIUS, HEADER_SIZE, RESIZE_HANDLE_SIZE, VISIBLE_BORDER_SIZE};
++use crate::{
++    border_radius, bottom_border_shape, content_radius, draw_bottom, draw_side, CONTENT_CORNER_RADIUS,
++};
++use smithay_client_toolkit::reexports::csd_frame::WindowState;
++use tiny_skia::{FillRule, Pixmap, PixmapPaint, Transform};
++
++/// A pixel's alpha.
++fn alpha(pixmap: &Pixmap, x: u32, y: u32) -> u8 {
++    pixmap
++        .pixel(x, y)
++        .unwrap_or_else(|| panic!("({x}, {y}) is outside {}x{}", pixmap.width(), pixmap.height()))
++        .alpha()
++}
++
++/// Asserts the pixel is the light theme's border colour, within the antialiasing of the arcs, and
++/// covered at least `min_alpha` of the way (the band is a point wide, so a pixel on the diagonal
++/// is only part of it).
++fn assert_border(pixmap: &Pixmap, x: u32, y: u32, min_alpha: u8, what: &str) {
++    let pixel = pixmap.pixel(x, y).expect("inside the pixmap").demultiply();
++    let got = [pixel.red(), pixel.green(), pixel.blue()];
++    let want = [220, 220, 220];
++    assert!(
++        got.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 4),
++        "{what}: {got:?} at ({x}, {y}) is not the border colour {want:?}",
++    );
++    assert!(pixel.alpha() >= min_alpha, "{what}: the band covers {}, not {min_alpha}", pixel.alpha());
++}
++
++/// The bottom part's pixmap as a window `width` points wide draws it: the shadow, the arcs cleared
++/// out of it, and the border along them.
++fn bottom_part(width: u32, state: WindowState) -> Pixmap {
++    let surface = (width + 2 * BORDER_SIZE, BORDER_SIZE + CORNER_RADIUS);
++    let mut pixmap = Pixmap::new(surface.0, surface.1).expect("a pixmap");
++    draw_bottom(
++        &mut pixmap.as_mut(),
++        &mut Default::default(),
++        &ColorTheme::light().active,
++        &state,
++        1,
++        surface.0,
++    );
++    pixmap
++}
++
++/// The frame's radius follows the window's state: round while it floats, square when the window
++/// fills the screen or is tiled, and square in fullscreen, where the frame hides its borders.
++#[test]
++fn the_radius_follows_the_window_state() {
++    assert_eq!(content_radius(WindowState::empty()), CONTENT_CORNER_RADIUS as f32);
++    assert_eq!(border_radius(WindowState::empty()), CORNER_RADIUS as f32);
++    // An active window rounds the same as an inactive one.
++    assert_eq!(content_radius(WindowState::ACTIVATED), CONTENT_CORNER_RADIUS as f32);
++    for square in [
++        WindowState::MAXIMIZED,
++        WindowState::TILED,
++        WindowState::FULLSCREEN,
++        WindowState::MAXIMIZED | WindowState::ACTIVATED,
++        WindowState::TILED | WindowState::FULLSCREEN,
++    ] {
++        assert_eq!(content_radius(square), 0., "{square:?} squares the content");
++        assert_eq!(border_radius(square), 0., "{square:?} squares the border");
++    }
++}
++
++/// The border is a one-point band along the arc the content leaves: the content's side of it is
++/// clear, the band is the border colour, and the shadow's side of it is the shadow's.
++#[test]
++fn the_border_follows_the_bottom_arcs() {
++    let (left, right, bottom, border, radius) = (43., 243., 10., 1., 10.);
++    let shape = bottom_border_shape(left, right, bottom, border, radius).expect("a border shape");
++    let mut pixmap = Pixmap::new(288, 54).expect("a pixmap");
++    pixmap
++        .as_mut()
++        .fill_path(&shape, &ColorTheme::light().active.border_paint(), FillRule::EvenOdd, Transform::identity(), None);
++
++    // (46, 7) is 9.2 from the arc's centre (53, 1): inside the one-point band.
++    assert_border(&pixmap, 46, 7, 150, "the band on the arc");
++    // (50, 5) is 5 from the centre: the content's own corner, which the band leaves clear.
++    assert_eq!(alpha(&pixmap, 50, 5), 0, "inside the arc is the content's");
++    // The straight band runs the window's whole width, just under its bottom edge.
++    assert_border(&pixmap, 100, 10, 250, "the bottom band between the arcs");
++    // Nothing is drawn below the band: that is the shadow's and the window's outside.
++    assert_eq!(alpha(&pixmap, 100, 12), 0, "below the band the shadow draws");
++}
++
++/// The shadow below the window's edge is the square frame's, pixel for pixel: round corners only
++/// add the crescents above that edge, and nothing else about the shadow moves.
++#[test]
++fn a_round_frames_shadow_below_the_window_is_the_square_frames() {
++    let round = bottom_part(200, WindowState::empty());
++    let square = bottom_part(200, WindowState::MAXIMIZED);
++    // The window's bottom edge is a corner radius into the part; the one-point band is just below
++    // it, and the shadow below the window starts under that.
++    let below = (CORNER_RADIUS + VISIBLE_BORDER_SIZE) as u32;
++    for y in below..round.height() {
++        for x in 0..round.width() {
++            let (rounded, squared) = (alpha(&round, x, y), alpha(&square, x, y));
++            assert!(
++                rounded.abs_diff(squared) <= 1,
++                "({x}, {y}): round corners give {rounded}, the square frame {squared}",
++            );
++        }
++    }
++    // And the content's corner is left alone: inside the arc nothing is drawn.
++    assert_eq!(alpha(&round, 50, 5), 0, "inside the arc is the content's");
++}
++
++/// The last corner column and the first plain one below the window's edge carry the same shadow: the
++/// corner's crescent and the straight band meet without a step, at every depth.
++#[test]
++fn the_shadow_is_smooth_across_the_corner_and_plain_columns() {
++    let pixmap = bottom_part(200, WindowState::empty());
++    // The corner's columns end where the straight band's begin: `left` plus the corner radius.
++    let plain = (BORDER_SIZE - VISIBLE_BORDER_SIZE + CORNER_RADIUS) as u32;
++    let corner = plain - 1;
++    for y in [11, 15, 20, 30, 40] {
++        let (corner_alpha, plain_alpha) = (alpha(&pixmap, corner, y), alpha(&pixmap, plain, y));
++        if y <= 30 {
++            assert!(plain_alpha > 0, "({plain}, {y}) has the straight band's shadow");
++        }
++        assert!(
++            corner_alpha.abs_diff(plain_alpha) <= 2,
++            "row {y}: the corner column has {corner_alpha}, the plain one {plain_alpha}",
++        );
++    }
++    // The crescent above the edge, outside the arc, keeps its shadow too.
++    assert!(alpha(&pixmap, 45, 10) > 0, "the crescent outside the arc keeps its shadow");
++    // And the mirror corner reads the same.
++    let width = pixmap.width() as u32;
++    for y in [11, 20, 40] {
++        let (corner_alpha, plain_alpha) = (alpha(&pixmap, width - 1 - corner, y), alpha(&pixmap, width - 1 - plain, y));
++        assert!(corner_alpha.abs_diff(plain_alpha) <= 2, "row {y} on the right");
++    }
++}
++
++/// A square window (maximized, tiled or fullscreen) draws a straight band and no shadow over the
++/// window at all: nothing is cut out of the content's corners.
++#[test]
++fn a_square_window_keeps_its_corners() {
++    let pixmap = bottom_part(200, WindowState::MAXIMIZED);
++    assert_border(&pixmap, 46, 10, 250, "the band straight across the corner");
++    assert_eq!(alpha(&pixmap, 45, 9), 0, "no shadow over the window's corner");
++    assert_eq!(alpha(&pixmap, 50, 5), 0, "nothing is cut out of the content");
++
++    assert!(alpha(&pixmap, 45, 12) > 0, "the shadow below the window is still drawn");
++
++    let tiled = bottom_part(200, WindowState::TILED);
++    assert_border(&tiled, 46, 10, 250, "a tiled window's straight border");
++}
++
++/// The bottom part reaches a corner radius above the window's bottom edge, so its input zone — its
++/// resize handle — starts at that edge instead, and never takes input from the content.
++#[test]
++fn the_bottom_input_zone_starts_at_the_windows_edge() {
++    let surface = 200 + 2 * BORDER_SIZE;
++    let input = bottom_input_rect(surface);
++    assert_eq!(input.y, CORNER_RADIUS as i32, "the part's top is a corner radius above the edge");
++    assert_eq!(input.height, RESIZE_HANDLE_SIZE);
++    assert_eq!(input.width, surface - BORDER_SIZE * 2 + RESIZE_HANDLE_SIZE * 2);
++    assert!(input.x >= BORDER_SIZE as i32 - RESIZE_HANDLE_SIZE as i32);
++}
++
++/// A window narrower than two corner radii still gets a border: the arcs are rounded as far as
++/// they fit and nothing runs outside the part.
++#[test]
++fn a_narrow_window_still_gets_a_border() {
++    let (left, right, bottom, border, radius) = (43., 53., 10., 1., 10.);
++    let shape = bottom_border_shape(left, right, bottom, border, radius).expect("a border shape");
++    let mut pixmap = Pixmap::new((right + left) as u32, 54).expect("a pixmap");
++    pixmap
++        .as_mut()
++        .fill_path(&shape, &ColorTheme::light().active.border_paint(), FillRule::EvenOdd, Transform::identity(), None);
++    assert_border(&pixmap, (left as u32 + right as u32) / 2, 10, 250, "the narrow window's band");
++    // Degenerate shapes draw nothing rather than panicking.
++    assert!(bottom_border_shape(43., 43., 10., 1., 10.).is_none(), "no width, no shape");
++    assert!(bottom_border_shape(43., 53., 10., 0., 10.).is_none(), "no border, no shape");
++    assert!(bottom_border_shape(f32::NAN, 53., 10., 1., 10.).is_none(), "not a number, no shape");
++}
++
++/// The side and bottom parts composited as the compositor stacks them (left and right below the
++/// bottom one), over a window `width` points wide and `height` tall, with `state`. The canvas is in
++/// window coordinates: its top left is the window's `(-BORDER_SIZE, -HEADER_SIZE)`, and every part
++/// sits at its `surface_rect`.
++fn composite(width: u32, height: u32, state: WindowState) -> Pixmap {
++    let mut canvas = Pixmap::new(width + 2 * BORDER_SIZE, height + HEADER_SIZE + BORDER_SIZE).expect("a canvas");
++    let colors = ColorTheme::light().active;
++    let mut shadow = Default::default();
++    let parts: [(bool, (u32, u32), (i32, i32), usize); 3] = [
++        (false, (BORDER_SIZE, height + HEADER_SIZE), (-(BORDER_SIZE as i32), -(HEADER_SIZE as i32)), DecorationParts::LEFT),
++        (true, (BORDER_SIZE, height + HEADER_SIZE), (width as i32, -(HEADER_SIZE as i32)), DecorationParts::RIGHT),
++        (false, (width + 2 * BORDER_SIZE, BORDER_SIZE + CORNER_RADIUS), (-(BORDER_SIZE as i32), height as i32 - CORNER_RADIUS as i32), DecorationParts::BOTTOM),
++    ];
++    for (right, size, at, part) in parts {
++        let mut pixmap = Pixmap::new(size.0, size.1).expect("a part");
++        match part {
++            DecorationParts::BOTTOM => draw_bottom(&mut pixmap.as_mut(), &mut shadow, &colors, &state, 1, size.0),
++            _ => draw_side(&mut pixmap.as_mut(), &mut shadow, &colors, &state, 1, right),
++        }
++        let (x, y) = (at.0 - (-(BORDER_SIZE as i32)), at.1 - (-(HEADER_SIZE as i32)));
++        canvas
++            .as_mut()
++            .draw_pixmap(x, y, pixmap.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
++    }
++    canvas
++}
++
++/// A pixel's alpha in window coordinates, from a canvas `composite` drew.
++fn window_alpha(canvas: &Pixmap, (x, y): (i32, i32)) -> u8 {
++    let cx = (x + BORDER_SIZE as i32) as u32;
++    let cy = (y + HEADER_SIZE as i32) as u32;
++    alpha(canvas, cx, cy)
++}
++
++/// Whether `(x, y)` in window coordinates is inside one of the two corner squares the bottom
++/// corners round: `x` in `[-1, r]` or `[width - r, width + 1]`, `y` in `[height - r, height]`.
++fn in_corner_square(width: u32, height: u32, (x, y): (i32, i32)) -> bool {
++    let r = CONTENT_CORNER_RADIUS as i32;
++    let (width, height) = (width as i32, height as i32);
++    y >= height - r && y <= height && (x >= -1 && x <= r || x >= width - r && x <= width + 1)
++}
++
++/// Beside the bottom corners the composite is a square frame's: the side parts already draw the
++/// shadow down to the window's edge, and the bottom part adds nothing over it.
++#[test]
++fn the_side_and_bottom_parts_composite_like_a_square_frame() {
++    let (width, height) = (200, 120);
++    let round = composite(width, height, WindowState::empty());
++    let square = composite(width, height, WindowState::MAXIMIZED);
++    let mut compared = 0;
++    let mut worst = (0, (0, 0), 0, 0);
++    for cy in 0..round.height() {
++        for cx in 0..round.width() {
++            let at = (cx as i32 - BORDER_SIZE as i32, cy as i32 - HEADER_SIZE as i32);
++            let (x, y) = at;
++            // Outside the content rect, and not in a corner square, where the arcs' ring and the
++            // shadow's crescents are the intended difference.
++            let outside = x < 0 || x >= width as i32 || y < 0 || y >= height as i32;
++            if !outside || in_corner_square(width, height, at) {
++                continue;
++            }
++            let (rounded, squared) = (alpha(&round, cx, cy), alpha(&square, cx, cy));
++            let off = rounded.abs_diff(squared);
++            if off > worst.0 {
++                worst = (off, at, rounded, squared);
++            }
++            compared += 1;
++        }
++    }
++    let (off, at, rounded, squared) = worst;
++    assert!(
++        off <= 2,
++        "the worst pixel is {at:?}: round corners composite {rounded}, the square frame {squared}",
++    );
++    assert!(compared > 10_000, "the whole frame around the content was compared ({compared})");
++}
++
++/// The crescent the bottom part adds inside a corner square meets its neighbours without a step:
++/// the shadow on the other side of the window's edge (the side part's own, which a square frame
++/// draws) and the straight band just below the edge carry the same shadow at those distances. The
++/// bound is the shadow's own gradient over a pixel — a hole (0 against ~29) or a doubled copy
++/// (~58) is far past it.
++#[test]
++fn the_crescent_continues_the_shadow_around_it() {
++    let (width, height) = (200, 120);
++    let canvas = composite(width, height, WindowState::empty());
++    for corner in [(0, height as i32 - 1), (width as i32 - 1, height as i32 - 1)] {
++        let crescent = window_alpha(&canvas, corner);
++        assert!(crescent > 0, "{corner:?}: the crescent keeps its shadow");
++        // Outward, across the window's side edge, and down, across its bottom edge.
++        let outward = if corner.0 == 0 { (-1, corner.1) } else { (width as i32, corner.1) };
++        let below = (corner.0, height as i32);
++        for neighbour in [outward, below] {
++            let other = window_alpha(&canvas, neighbour);
++            assert!(
++                crescent.abs_diff(other) <= 8,
++                "{corner:?} has {crescent}, its neighbour {neighbour:?} {other}",
++            );
++        }
++    }
++}
++
++/// The straight bands' shadow is the frame's own shadow model, which no patch touched: the
++/// composite tests above compare their rounded frame against a square one drawn by the same code,
++/// and this pins that reference to the model itself.
++#[test]
++fn the_straight_bands_shadow_is_the_shadow_model() {
++    let (width, height) = (200, 120);
++    let square = composite(width, height, WindowState::MAXIMIZED);
++    for dy in [1, 3, 8, 20] {
++        let y = height as i32 + dy;
++        let want = (crate::shadow::shadow(dy as f32 - 0.5, 1, false) * 255.).round() as u8;
++        let got = window_alpha(&square, (100, y));
++        assert!(got.abs_diff(want) <= 2, "y {y}: the band draws {got}, the model says {want}");
++    }
++    // The rounded frame's own band, at the same depths, is the same.
++    let round = composite(width, height, WindowState::empty());
++    for dy in [1, 3, 8, 20] {
++        let y = height as i32 + dy;
++        assert_eq!(window_alpha(&round, (100, y)), window_alpha(&square, (100, y)), "y {y}");
++    }
++}

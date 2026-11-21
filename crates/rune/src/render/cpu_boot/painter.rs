@@ -6,7 +6,7 @@
 use crate::time::Instant;
 
 use super::bin::{Bins, TILE_H, TILE_W};
-use crate::render::{Instance, KIND_BACKDROP_BLUR, KIND_EFFECT, KIND_IMAGE, KIND_LAYER, KIND_LAYER_END};
+use crate::render::{INSTANCE_WORDS, Instance, Kind, word};
 use super::pool::Pool;
 use super::{NeedsGpu, Report, Scene, Target, damage, raster, scroll};
 
@@ -89,13 +89,13 @@ impl CpuPainter {
     /// `forget` was called since.
     pub fn paint(&mut self, scene: &Scene<'_>, target: &mut Target<'_>) -> Result<Painted, NeedsGpu> {
         super::check_target(scene, target)?;
-        let start = Instant::now();
+        let start = crate::time::now();
         // A recoloured frame draws what the last one did, so whatever it needed it still does.
         if self.flags == Some(scene.flags()) && let Some(p) = self.recoloured(scene, target, start) { return Ok(p); }
         if let Some(why) = scene.needs_gpu() { return Err(why); }
         self.flags = Some(scene.flags());
         let bins = Bins::of(scene);
-        let binned = Instant::now();
+        let binned = crate::time::now();
         damage::hashes(scene, &bins, &mut self.each, &mut self.next);
         // Pixels stay where they were only in rows as far apart as before.
         if self.stride != target.stride { self.hashes.clear(); }
@@ -126,7 +126,7 @@ impl CpuPainter {
         let by_hash = (0..self.next.len()).filter(|&t| changed(t)).count();
         // Only a frame that changed many tiles can be a scroll; and a move is kept only when it
         // leaves fewer tiles to paint than the hashes alone do.
-        let planning = Instant::now();
+        let planning = crate::time::now();
         let shift = if all || resized || by_hash < MIN_SCROLL_TILES { None } else { self.prev.as_ref().and_then(|p| scroll::plan(p, scene, &bins, &Threads { pool: &self.pool, extra: self.pool.threads() - 1 })) };
         let touched = |s: &scroll::Shift, t: usize| {
             let (tx, ty) = (t as u32 % bins.cols, t as u32 / bins.cols);
@@ -138,21 +138,21 @@ impl CpuPainter {
             _ => changed(t),
         };
         let shift = shift.filter(|s| (0..self.next.len()).filter(|&t| dirty(Some(s), t)).count() < by_hash);
-        let moving = Instant::now();
+        let moving = crate::time::now();
         if let Some(s) = &shift {
             let movers = (s.clean.iter().filter(|&&c| c).count() / TILES_PER_THREAD).min(self.pool.threads() - 1);
             move_tiles(&Threads { pool: &self.pool, extra: movers }, target, scene.size, bins.cols, &s.clean, s.dy);
         }
-        let moved = Instant::now();
+        let moved = crate::time::now();
         self.dirty.extend((0..self.next.len() as u32).filter(|&t| dirty(shift.as_ref(), t as usize)));
         std::mem::swap(&mut self.hashes, &mut self.next);
         self.size = scene.size;
         self.stride = target.stride;
         self.resets = scene.atlas_resets;
-        let hashed = Instant::now();
+        let hashed = crate::time::now();
         let extra = (self.dirty.len() / TILES_PER_THREAD).min(self.pool.threads() - 1);
         let mut report = raster::run(scene, &bins, target, &self.dirty, &Threads { pool: &self.pool, extra }, &Threads { pool: &self.pool, extra: self.pool.threads() - 1 });
-        let done = Instant::now();
+        let done = crate::time::now();
         report.bin_ns = super::ns(binned - start);
         report.raster_ns = super::ns(done - hashed);
         report.total_ns = super::ns(done - start);
@@ -188,7 +188,7 @@ impl CpuPainter {
         self.changed.clear();
         for (n, (new, old)) in scene.instances.iter().zip(&prev.instances).enumerate() {
             let same = bytemuck::bytes_of(new) == bytemuck::bytes_of(old)
-                && !(new.params[1] == KIND_IMAGE && image_written(scene, new) && damage::instance(scene, &prev.bins, n) != self.each[n]);
+                && !(new.kind() == Some(Kind::Image) && image_written(scene, new) && damage::instance(scene, &prev.bins, n) != self.each[n]);
             if same { continue; }
             if self.changed.len() == RECOLOURED_MAX || !recolour(new, old) { return None; }
             self.changed.push(n as u32);
@@ -220,10 +220,10 @@ impl CpuPainter {
         for &t in &self.dirty {
             self.hashes[t as usize] = damage::rehash(scene, bins, &self.each, t as usize);
         }
-        let hashed = Instant::now();
+        let hashed = crate::time::now();
         let extra = (self.dirty.len() / TILES_PER_THREAD).min(self.pool.threads() - 1);
         let mut report = if self.dirty.is_empty() { Report::default() } else { raster::run(scene, bins, target, &self.dirty, &Threads { pool: &self.pool, extra }, &Threads { pool: &self.pool, extra: self.pool.threads() - 1 }) };
-        let done = Instant::now();
+        let done = crate::time::now();
         report.raster_ns = super::ns(done - hashed);
         report.total_ns = super::ns(done - start);
         report.tiles = tiles;
@@ -236,13 +236,21 @@ impl CpuPainter {
 /// `params.w` (an opacity, a text gamma), which no bin, bound or layer plan reads outside layers,
 /// and opaque exactly where it was (the occluders and the tiles it covers whole stay). Layer scopes and blurs (whose opacity plans a layer) don't count.
 fn recolour(new: &Instance, old: &Instance) -> bool {
-    let (a, b): (&[u32; 32], &[u32; 32]) = (bytemuck::cast_ref(new), bytemuck::cast_ref(old));
-    let kind = new.params[1];
-    let structural = kind == KIND_LAYER || kind == KIND_LAYER_END || kind == KIND_BACKDROP_BLUR || kind == KIND_EFFECT;
+    let (a, b): (&[u32; INSTANCE_WORDS], &[u32; INSTANCE_WORDS]) = (bytemuck::cast_ref(new), bytemuck::cast_ref(old));
     // The border is a colour only for boxes and gradients (a glyph's names its outline).
-    let border = matches!(kind as u32, 0 | 4 | 10 | 11);
-    let shading_w = matches!(kind as u32, 0 | 2);
-    !structural && (0..32).all(|k| (8..12).contains(&k) || ((12..16).contains(&k) && border) || (k == 19 && shading_w) || a[k] == b[k]) && super::bin::opaque_box(new) == super::bin::opaque_box(old)
+    let (border, shading_w) = match new.kind() {
+        Some(Kind::Layer | Kind::LayerEnd | Kind::BackdropBlur | Kind::Effect) | None => return false,
+        Some(Kind::Rect) => (true, true),
+        Some(Kind::Glyph) => (false, true),
+        Some(Kind::Gradient | Kind::Dashed | Kind::Radial) => (true, false),
+        Some(Kind::Shadow | Kind::Inset | Kind::Segment | Kind::Triangle | Kind::Image) => (false, false),
+    };
+    (0..INSTANCE_WORDS).all(|k| {
+        word::FILL.contains(&k)
+            || (word::BORDER.contains(&k) && border)
+            || (k == word::PARAMS_W && shading_w)
+            || a[k] == b[k]
+    }) && super::bin::opaque_box(new) == super::bin::opaque_box(old)
 }
 
 /// Whether rows `new` samples were written into its image page since the renderer last took it.
@@ -252,37 +260,174 @@ fn image_written(scene: &Scene<'_>, i: &Instance) -> bool {
     page.dirty.is_some_and(|(a, b)| a < y1 && b > y0)
 }
 
-/// Moves the tiles the scroll left clean `dy` rows (down when positive): each takes what was
-/// `dy` rows back. Tiles of one column read only that column, so columns go to threads; within a
-/// column the tiles and their rows go in the order that reads each row before it's written
-/// (bottom up for a move down). The rest repaint, so they aren't moved.
-fn move_tiles(threads: &Threads<'_>, target: &mut Target<'_>, size: (u32, u32), cols: u32, clean: &[bool], dy: i32) {
-    use super::bin::{TILE_H, TILE_W};
-    use std::sync::atomic::{AtomicU32, Ordering};
-    let (base, len, stride) = (target.pixels.as_mut_ptr() as usize, target.pixels.len(), target.stride);
-    let rows = size.1.div_ceil(TILE_H);
-    let next = AtomicU32::new(0);
-    let job = || loop {
-        let tx = next.fetch_add(1, Ordering::Relaxed);
-        if tx >= cols { break; }
-        let (x0, x1) = (tx * TILE_W, ((tx + 1) * TILE_W).min(size.0));
-        let bytes = (x1 - x0) as usize * 4;
-        let copy = |y: u32| {
-            let (src, dst) = ((y as i64 - dy as i64) as usize * stride + x0 as usize * 4, y as usize * stride + x0 as usize * 4);
-            assert!(src + bytes <= len && dst + bytes <= len);
-            // SAFETY: both in bounds (checked); `dy != 0`, so the two rows don't overlap; only
-            // this thread touches column `tx`, and a row is read before any move writes it.
-            unsafe { std::ptr::copy_nonoverlapping((base + src) as *const u8, (base + dst) as *mut u8, bytes) };
-        };
-        let tile_rows = |ty: u32| (ty * TILE_H, ((ty + 1) * TILE_H).min(size.1));
-        let moved = |ty: u32| clean[(ty * cols + tx) as usize];
-        if dy > 0 {
-            for ty in (0..rows).rev().filter(|&ty| moved(ty)) { let (a, b) = tile_rows(ty); for y in (a..b).rev() { copy(y); } }
-        } else {
-            for ty in (0..rows).filter(|&ty| moved(ty)) { let (a, b) = tile_rows(ty); for y in a..b { copy(y); } }
+/// Minimum vertical shift (in rows) before `move_tiles` splits work into parallel row waves.
+/// Smaller shifts copy sequentially with merged row spans so rows stay hot in cache without
+/// paying per-wave thread-pool barriers.
+const MIN_WAVE_ROWS: u32 = TILE_H * 2;
+
+struct MoveGrid<'a> {
+    size: (u32, u32),
+    stride: usize,
+    cols: u32,
+    clean: &'a [bool],
+}
+
+impl MoveGrid<'_> {
+    fn row_clean(&self, ty: u32) -> &[bool] {
+        let a = (ty * self.cols) as usize;
+        &self.clean[a..a + self.cols as usize]
+    }
+
+    fn any_clean_in_rows(&self, y0: u32, y1: u32) -> bool {
+        let a = ((y0 / TILE_H) * self.cols) as usize;
+        let b = (y1.div_ceil(TILE_H) * self.cols) as usize;
+        self.clean[a..b].iter().any(|&c| c)
+    }
+
+    /// Copies every contiguous run of clean tiles in tile-row `ty` from `src_row` to `dst_row`.
+    fn copy_spans(&self, dst_row: &mut [u8], src_row: &[u8], ty: u32) {
+        let row_clean = self.row_clean(ty);
+        let mut tx = 0u32;
+        while tx < self.cols {
+            if !row_clean[tx as usize] {
+                tx += 1;
+                continue;
+            }
+            let start = tx;
+            while tx < self.cols && row_clean[tx as usize] {
+                tx += 1;
+            }
+            let x0 = (start * TILE_W) as usize * 4;
+            let x1 = (tx * TILE_W).min(self.size.0) as usize * 4;
+            dst_row[x0..x1].copy_from_slice(&src_row[x0..x1]);
         }
-    };
-    raster::Exec::run(threads, &job);
+    }
+
+    /// Copies one disjoint wave of destination rows starting at `dst_start` from `src_buf` (whose
+    /// first byte is row `src_origin`) across `exec`'s threads.
+    fn copy_wave(
+        &self,
+        exec: &dyn raster::Exec,
+        dst_buf: &mut [u8],
+        src_buf: &[u8],
+        dst_start: u32,
+        src_origin: u32,
+        dy: i32,
+    ) {
+        use std::sync::Mutex;
+        let stride = self.stride;
+        let row_bytes = self.size.0 as usize * 4;
+        let shift = dy.unsigned_abs();
+        let total = dst_buf.len().div_ceil(stride);
+        let workers = exec.threads().max(1);
+        let band = (total / (workers * 2)).max(8).min(total.max(1));
+        let work = Mutex::new((dst_start, dst_buf.chunks_mut(band * stride)));
+        exec.run(&|| loop {
+            let next = {
+                let mut guard = work.lock().unwrap_or_else(|e| e.into_inner());
+                guard.1.next().map(|chunk| {
+                    let y = guard.0;
+                    guard.0 += chunk.len().div_ceil(stride) as u32;
+                    (y, chunk)
+                })
+            };
+            let Some((y_start, chunk)) = next else { break };
+            for (i, dst_row) in chunk.chunks_mut(stride).enumerate() {
+                let y = y_start + i as u32;
+                let ty = y / TILE_H;
+                if !self.row_clean(ty).iter().any(|&c| c) { continue; }
+                let src_y = if dy > 0 { y - shift } else { y + shift };
+                let src_at = (src_y - src_origin) as usize * stride;
+                let src_row = &src_buf[src_at..src_at + row_bytes];
+                self.copy_spans(dst_row, src_row, ty);
+            }
+        });
+    }
+
+    /// Copies clean tile runs row by row in-place via `copy_within`, merging adjacent clean tiles
+    /// into contiguous horizontal spans.
+    fn move_sequential(&self, pixels: &mut [u8], dy: i32) {
+        let tile_rows = self.size.1.div_ceil(TILE_H);
+        let shift = dy.unsigned_abs();
+        let copy_row = |pixels: &mut [u8], ty: u32, y: u32, src_y: u32| {
+            let row_clean = self.row_clean(ty);
+            let dst_row = y as usize * self.stride;
+            let src_row = src_y as usize * self.stride;
+            let mut tx = 0u32;
+            while tx < self.cols {
+                if !row_clean[tx as usize] {
+                    tx += 1;
+                    continue;
+                }
+                let start = tx;
+                while tx < self.cols && row_clean[tx as usize] {
+                    tx += 1;
+                }
+                let x0 = (start * TILE_W) as usize * 4;
+                let x1 = (tx * TILE_W).min(self.size.0) as usize * 4;
+                pixels.copy_within(src_row + x0..src_row + x1, dst_row + x0);
+            }
+        };
+        if dy > 0 {
+            for ty in (0..tile_rows).rev() {
+                if !self.row_clean(ty).iter().any(|&c| c) { continue; }
+                let (a, b) = (ty * TILE_H, ((ty + 1) * TILE_H).min(self.size.1));
+                for y in (a..b).rev() {
+                    copy_row(pixels, ty, y, y - shift);
+                }
+            }
+        } else {
+            for ty in 0..tile_rows {
+                if !self.row_clean(ty).iter().any(|&c| c) { continue; }
+                let (a, b) = (ty * TILE_H, ((ty + 1) * TILE_H).min(self.size.1));
+                for y in a..b {
+                    copy_row(pixels, ty, y, y + shift);
+                }
+            }
+        }
+    }
+}
+
+/// Moves the tiles the scroll left clean `dy` rows (down when positive): each takes what was
+/// `dy` rows back. Adjacent clean tiles on a row copy together as one contiguous span. Larger
+/// shifts (`|dy| >= MIN_WAVE_ROWS`) split into disjoint `|dy|`-row waves whose source and
+/// destination slices don't overlap, running each wave across `threads`'s workers in row order
+/// that reads every row before it is written (bottom up for a move down); smaller shifts copy
+/// sequentially in place. The rest repaint, so they aren't moved.
+pub(super) fn move_tiles(threads: &dyn raster::Exec, target: &mut Target<'_>, size: (u32, u32), cols: u32, clean: &[bool], dy: i32) {
+    let shift = dy.unsigned_abs();
+    if shift == 0 || shift >= size.1 || size.0 == 0 { return; }
+    let grid = MoveGrid { size, stride: target.stride, cols, clean };
+    if threads.threads() <= 1 || shift < MIN_WAVE_ROWS {
+        grid.move_sequential(target.pixels, dy);
+        return;
+    }
+    if dy > 0 {
+        let mut dst_end = size.1;
+        while dst_end > shift {
+            let dst_start = dst_end.saturating_sub(shift).max(shift);
+            if grid.any_clean_in_rows(dst_start, dst_end) {
+                let split = dst_start as usize * grid.stride;
+                let (src_buf, dst_rest) = target.pixels.split_at_mut(split);
+                let wave_bytes = ((dst_end - dst_start) as usize * grid.stride).min(dst_rest.len());
+                grid.copy_wave(threads, &mut dst_rest[..wave_bytes], src_buf, dst_start, 0, dy);
+            }
+            dst_end = dst_start;
+        }
+    } else {
+        let limit = size.1 - shift;
+        let mut dst_start = 0u32;
+        while dst_start < limit {
+            let dst_end = (dst_start + shift).min(limit);
+            if grid.any_clean_in_rows(dst_start, dst_end) {
+                let split = dst_end as usize * grid.stride;
+                let (dst_all, src_buf) = target.pixels.split_at_mut(split);
+                let dst_buf = &mut dst_all[dst_start as usize * grid.stride..];
+                grid.copy_wave(threads, dst_buf, src_buf, dst_start, dst_end, dy);
+            }
+            dst_start = dst_end;
+        }
+    }
 }
 /// The pool, with as many of its workers as the frame's damage pays for.
 struct Threads<'p> {

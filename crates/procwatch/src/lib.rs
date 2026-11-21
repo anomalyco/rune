@@ -19,6 +19,8 @@
 //! macOS only for now; elsewhere [`snapshot`] returns `None`, [`usage`] has every field `None`,
 //! and [`watch`] does nothing.
 
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
+
 pub mod alloc;
 pub mod gauge;
 
@@ -28,7 +30,15 @@ pub use gauge::gauges;
 
 use std::fmt::Write as _;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+
+// procwatch has no Rune dependencies and runs natively.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+#[allow(clippy::disallowed_methods)]
+fn now() -> Instant { Instant::now() }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Thread {
@@ -72,7 +82,7 @@ impl Snapshot {
 
     pub fn to_json(&self) -> String {
         let mut s = String::new();
-        let _ = write!(
+        write!(
             s,
             "{{\"pid\":{},\"footprint\":{},\"footprint_peak\":{},\"resident\":{},\"cpu_s\":{:.3},\"exited_cpu_s\":{:.3},\"fds\":{},\"threads\":[",
             self.pid,
@@ -82,24 +92,24 @@ impl Snapshot {
             self.cpu_s,
             self.exited_cpu_s(),
             self.fds,
-        );
+        ).ok();
         for (i, t) in self.threads.iter().enumerate() {
-            let _ = write!(s, "{}{{\"name\":\"{}\",\"cpu_s\":{:.3}}}", if i > 0 { "," } else { "" }, clean(&t.name), t.cpu_s);
+            write!(s, "{}{{\"name\":\"{}\",\"cpu_s\":{:.3}}}", if i > 0 { "," } else { "" }, clean(&t.name), t.cpu_s).ok();
         }
         s.push(']');
         if let Some(h) = &self.heap {
-            let _ = write!(
+            write!(
                 s,
                 ",\"heap\":{{\"live\":{},\"peak\":{},\"allocations\":{},\"largest\":{},\"big_live\":{},\"big_blocks\":{},\"tags\":",
                 h.live, h.peak, h.allocations, h.largest, h.big_live, h.big_blocks
-            );
+            ).ok();
             json_map(&mut s, &h.tags);
             s.push('}');
         }
         s.push_str(",\"gauges\":");
         json_map(&mut s, &self.gauges);
         if let Some(bytes) = self.unaccounted() {
-            let _ = write!(s, ",\"unaccounted\":{bytes}");
+            write!(s, ",\"unaccounted\":{bytes}").ok();
         }
         s.push('}');
         s
@@ -113,22 +123,30 @@ fn clean(name: &str) -> String {
 fn json_map(s: &mut String, entries: &[(&'static str, i64)]) {
     s.push('{');
     for (i, (name, bytes)) in entries.iter().enumerate() {
-        let _ = write!(s, "{}\"{}\":{bytes}", if i > 0 { "," } else { "" }, clean(name));
+        write!(s, "{}\"{}\":{bytes}", if i > 0 { "," } else { "" }, clean(name)).ok();
     }
     s.push('}');
 }
 
 /// This process now.
 pub fn snapshot() -> Option<Snapshot> {
-    let mut s = snapshot_of(std::process::id() as i32)?;
-    s.heap = alloc::heap();
-    s.gauges = gauges();
-    Some(s)
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut s = snapshot_of(std::process::id() as i32)?;
+        s.heap = alloc::heap();
+        s.gauges = gauges();
+        Some(s)
+    }
 }
 
 /// Another process of this user (or this one), read through `proc_pid_rusage` and
 /// `proc_pidinfo`: no task port, so hardened apps can be read too.
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 pub fn snapshot_of(pid: i32) -> Option<Snapshot> {
     use std::mem::{MaybeUninit, size_of};
     let usage = rusage(pid)?;
@@ -202,6 +220,7 @@ pub fn usage() -> Usage {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn rusage(pid: i32) -> Option<libc::rusage_info_v4> {
     let mut usage = std::mem::MaybeUninit::<libc::rusage_info_v4>::zeroed();
     // SAFETY: a zeroed buffer of the size RUSAGE_INFO_V4 fills; read only on success.
@@ -217,6 +236,7 @@ fn rusage(pid: i32) -> Option<libc::rusage_info_v4> {
 /// returns a size with headroom; the second call returns what it filled. Either call
 /// returns 0 on failure, so 0 is `None`.
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn open_fds(pid: i32) -> Option<u32> {
     const PROC_PIDLISTFDS: i32 = 1;
     const FDINFO: usize = 8;
@@ -234,6 +254,7 @@ fn open_fds(pid: i32) -> Option<u32> {
 
 /// `rusage_info` times are mach ticks (nanoseconds on Intel, 125/3 ns on Apple silicon).
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn ticks_to_seconds() -> f64 {
     #[repr(C)]
     struct Timebase {
@@ -343,27 +364,35 @@ pub fn watch(config: Config) {
 /// [`watch`], and calls `on_warning` on the watcher thread for every warning (not the
 /// periodic report): to drop a cache, write a capture, or post the numbers somewhere.
 pub fn watch_with(config: Config, on_warning: impl Fn(&Event, &Snapshot) + Send + 'static) {
-    if snapshot().is_none() {
-        return;
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (config, on_warning);
     }
-    let _ = std::thread::Builder::new().name("procwatch".into()).spawn(move || {
-        let mut watcher = Watcher::new(config);
-        loop {
-            if let Some(s) = snapshot() {
-                for event in watcher.observe(Instant::now(), &s) {
-                    eprintln!("{event}");
-                    if event.is_warning() {
-                        on_warning(&event, &s);
-                    }
-                }
-                *LATEST.lock().unwrap_or_else(|e| e.into_inner()) = Some(s);
-            }
-            std::thread::sleep(watcher.config.every);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if snapshot().is_none() {
+            return;
         }
-    });
+        std::thread::Builder::new().name("procwatch".into()).spawn(move || {
+            let mut watcher = Watcher::new(config);
+            loop {
+                if let Some(s) = snapshot() {
+                    for event in watcher.observe(now(), &s) {
+                        eprintln!("{event}");
+                        if event.is_warning() {
+                            on_warning(&event, &s);
+                        }
+                    }
+                    *LATEST.lock().unwrap_or_else(|e| e.into_inner()) = Some(s);
+                }
+                std::thread::sleep(watcher.config.every);
+            }
+        }).ok();
+    }
 }
 
 /// The judging half of [`watch`], fed samples so tests can drive it.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Watcher {
     pub config: Config,
     history: Vec<(Instant, Snapshot)>,
@@ -375,11 +404,13 @@ pub struct Watcher {
 }
 
 /// One message of a kind per window: the first goes out at once, the next a window after it.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, Default)]
 struct Gate {
     last: Option<Instant>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Gate {
     /// Whether a message may go out at `now`, `window` after the last; if so, it counts as sent.
     fn pass(&mut self, now: Instant, window: Duration) -> bool {
@@ -391,6 +422,7 @@ impl Gate {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Watcher {
     pub fn new(config: Config) -> Watcher {
         Watcher { config, history: Vec::new(), warned_footprint: 0, growth: Gate::default(), cpu: Gate::default(), report: Gate::default() }
@@ -513,10 +545,10 @@ fn memory_note(s: &Snapshot) -> String {
     };
     let top: Vec<String> = s.gauges.iter().filter(|(_, b)| *b > 0).take(3).map(|(n, b)| format!("{n} {}", mb(*b as u64))).collect();
     if !top.is_empty() {
-        let _ = write!(note, "; {}", top.join(", "));
+        write!(note, "; {}", top.join(", ")).ok();
     }
     if let Some(bytes) = s.unaccounted() {
-        let _ = write!(note, "; unaccounted {}", mb(bytes.max(0) as u64));
+        write!(note, "; unaccounted {}", mb(bytes.max(0) as u64)).ok();
     }
     note
 }
@@ -542,239 +574,18 @@ pub fn serve(addr: std::net::SocketAddr) -> std::io::Result<std::net::SocketAddr
             if !stream.peer_addr().is_ok_and(|p| p.ip().is_loopback()) {
                 continue;
             }
-            let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
-            let _ = stream.read(&mut [0; 1024]);
+            stream.set_read_timeout(Some(Duration::from_secs(1))).ok();
+            let _bytes = stream.read(&mut [0; 1024]).unwrap_or(0);
             let body = snapshot().map_or_else(|| "null".to_owned(), |s| s.to_json());
-            let _ = write!(
+            write!(
                 stream,
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                 body.len()
-            );
+            ).ok();
         }
     })?;
     Ok(bound)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[global_allocator]
-    static ALLOC: alloc::Counting = alloc::Counting::system();
-
-    #[test]
-    fn counts_this_threads_allocations_and_live_heap() {
-        let live = alloc::heap().unwrap().live;
-        let before = alloc::thread_allocations();
-        let held = std::hint::black_box(vec![0u8; 1 << 20]);
-        assert_eq!(alloc::thread_allocations() - before, 1);
-        // Other tests allocate in parallel, so allow slack.
-        assert!(alloc::heap().unwrap().live - live >= (1 << 20) - (256 << 10));
-        drop(held);
-        let quiet = alloc::thread_allocations();
-        let _ = std::hint::black_box(1 + 1);
-        assert_eq!(alloc::thread_allocations(), quiet);
-    }
-
-    #[test]
-    fn thread_bytes_count_requests_not_frees_on_this_thread_only() {
-        use std::alloc::{GlobalAlloc, Layout};
-        let allocator = alloc::Counting::system();
-        let before = alloc::thread_allocated_bytes().unwrap();
-        // SAFETY: valid layouts, checked allocations, each freed once with its layout.
-        unsafe {
-            let layout = Layout::from_size_align(128, 8).unwrap();
-            let p = allocator.alloc_zeroed(layout);
-            assert!(!p.is_null());
-            let p = allocator.realloc(p, layout, 256);
-            assert!(!p.is_null());
-            allocator.dealloc(p, Layout::from_size_align(256, 8).unwrap());
-        }
-        assert_eq!(alloc::thread_allocated_bytes().unwrap() - before, 384);
-        let threads: Vec<_> = (0..8)
-            .map(|_| {
-                std::thread::spawn(|| {
-                    let start = alloc::thread_allocated_bytes().unwrap();
-                    for _ in 0..10_000 {
-                        drop(std::hint::black_box(vec![42u8; 128]));
-                    }
-                    alloc::thread_allocated_bytes().unwrap() - start
-                })
-            })
-            .collect();
-        for thread in threads {
-            assert_eq!(thread.join().unwrap(), 1_280_000);
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn usage_reads_memory_and_files_without_threads() {
-        let u = usage();
-        let footprint = u.footprint.unwrap();
-        assert!(footprint > 0 && u.footprint_peak.unwrap() >= footprint, "{u:?}");
-        assert!(u.resident.unwrap() > 0 && u.fds.unwrap() >= 3, "{u:?}");
-        let opened: Vec<_> = (0..8).map(|_| std::fs::File::open("Cargo.toml").unwrap()).collect();
-        assert!(usage().fds.unwrap() >= u.fds.unwrap() + 4);
-        drop(opened);
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn usage_is_unknown_off_macos() {
-        assert_eq!(usage(), Usage::default());
-    }
-
-    fn at(footprint: u64, cpu_s: f64) -> Snapshot {
-        Snapshot {
-            footprint,
-            footprint_peak: footprint,
-            cpu_s,
-            threads: vec![Thread { id: 1, name: "main".into(), cpu_s: 1.0 }],
-            ..Default::default()
-        }
-    }
-
-    fn lines(events: &[Event]) -> String {
-        events.iter().map(|e| e.line.as_str()).collect::<Vec<_>>().join("\n")
-    }
-
-    #[cfg(target_os = "macos")]
-    fn thread_cpu_s() -> f64 {
-        let mut t = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-        // SAFETY: fills `t`.
-        unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
-        t.tv_sec as f64 + t.tv_nsec as f64 / 1e9
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn reads_this_process() {
-        let s = snapshot().unwrap();
-        assert!(s.footprint > 0 && s.footprint_peak >= s.footprint, "{s:?}");
-        assert!(!s.threads.is_empty());
-        assert_eq!(s.pid, std::process::id() as i32);
-        // stdin, stdout and stderr at least.
-        assert!(s.fds >= 3, "{s:?}");
-        let opened: Vec<_> = (0..8).map(|_| std::fs::File::open("Cargo.toml").unwrap()).collect();
-        assert!(snapshot().unwrap().fds >= s.fds + 4, "{s:?}");
-        drop(opened);
-        // A thread that burns CPU and exits still counts.
-        let before = snapshot().unwrap();
-        std::thread::spawn(|| {
-            // Spin on the thread's own CPU clock: on a loaded machine 300 ms of wall time can
-            // be well under 200 ms of CPU.
-            let t = Instant::now();
-            let mut x = 0u64;
-            while thread_cpu_s() < 0.3 && t.elapsed() < Duration::from_secs(10) {
-                x = std::hint::black_box(x.wrapping_add(1));
-            }
-        })
-        .join()
-        .unwrap();
-        let after = snapshot().unwrap();
-        assert!(after.exited_cpu_s() - before.exited_cpu_s() > 0.2, "{before:?} {after:?}");
-    }
-
-    #[test]
-    fn json_parses_and_subtracts_heap_and_gauges() {
-        let s = Snapshot {
-            pid: 7,
-            footprint: 1000,
-            threads: vec![Thread { id: 1, name: "a\"b\\c\n".into(), cpu_s: 0.5 }],
-            heap: Some(alloc::Heap { live: 300, tags: vec![("untagged", 300)], ..Default::default() }),
-            gauges: vec![("video.frames", 200), ("gpu.textures", 100)],
-            ..Default::default()
-        };
-        assert_eq!(s.unaccounted(), Some(400));
-        let v: serde_json::Value = serde_json::from_str(&s.to_json()).unwrap();
-        assert_eq!(v["pid"], 7);
-        assert_eq!(v["threads"][0]["name"], "abc");
-        assert_eq!(v["heap"]["tags"]["untagged"], 300);
-        assert_eq!(v["gauges"]["video.frames"], 200);
-        assert_eq!(v["unaccounted"], 400);
-        // Without the counting allocator there's no honest unaccounted figure.
-        let bare = Snapshot { heap: None, ..s };
-        assert_eq!(bare.unaccounted(), None);
-        let v: serde_json::Value = serde_json::from_str(&bare.to_json()).unwrap();
-        assert!(v.get("unaccounted").is_none() && v.get("heap").is_none());
-    }
-
-    #[test]
-    fn warnings_name_where_the_memory_is() {
-        let mut w = Watcher::new(Config { report: None, ..Config::release("t") });
-        let s = Snapshot {
-            footprint: 2 << 30,
-            heap: Some(alloc::Heap { live: 100 << 20, ..Default::default() }),
-            gauges: vec![("video.frames", 300 << 20)],
-            ..at(2 << 30, 0.0)
-        };
-        let events = w.observe(Instant::now(), &s);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].kind, Kind::Footprint);
-        assert!(events[0].line.contains("heap 100 MB live") && events[0].line.ends_with("; video.frames 300 MB; unaccounted 1.6 GB"), "{}", events[0].line);
-    }
-
-    #[test]
-    fn warns_on_size_growth_and_cpu_once_per_window() {
-        let mut w = Watcher::new(Config { report: None, ..Config::release("t") });
-        let t0 = Instant::now();
-        let mut events = Vec::new();
-        for i in 0..=12u64 {
-            // 100 MB every 10 s, and a full core.
-            events.extend(w.observe(t0 + Duration::from_secs(i * 10), &at((50 + 100 * i) << 20, i as f64 * 10.0)));
-        }
-        let joined = lines(&events);
-        assert!(joined.contains("footprint grew"), "{joined}");
-        assert!(joined.contains("% CPU over 60s: exited threads 100%"), "{joined}");
-        assert!(joined.contains("warning: footprint 1.0 GB") || joined.contains("warning: footprint 1.1 GB"), "{joined}");
-        assert_eq!(events.iter().filter(|e| e.kind == Kind::Growth).count(), 2, "{joined}");
-        assert!(events.iter().all(Event::is_warning));
-        // Flat and idle: nothing.
-        let mut w = Watcher::new(Config { report: None, ..Config::release("t") });
-        for i in 0..=12u64 {
-            assert!(w.observe(t0 + Duration::from_secs(i * 10), &at(50 << 20, 1.0)).is_empty());
-        }
-    }
-
-    #[test]
-    fn a_gate_passes_once_per_window() {
-        let (mut g, t0, window) = (Gate::default(), Instant::now(), Duration::from_secs(60));
-        assert!(g.pass(t0, window), "the first goes out at once");
-        assert!(!g.pass(t0 + Duration::from_secs(59), window));
-        assert!(g.pass(t0 + Duration::from_secs(60), window));
-        assert!(!g.pass(t0 + Duration::from_secs(61), window), "a window from the last one that went out");
-    }
-
-    #[test]
-    fn reports_once_per_period() {
-        let mut w = Watcher::new(Config { report: Some(Duration::from_secs(30)), ..Config::release("t") });
-        let t0 = Instant::now();
-        let reported: Vec<u64> = (0..=9u64)
-            .filter(|i| w.observe(t0 + Duration::from_secs(i * 10), &at(50 << 20, 1.0)).iter().any(|e| e.kind == Kind::Report))
-            .collect();
-        assert_eq!(reported, [0, 3, 6, 9]);
-    }
-
-    #[test]
-    fn late_samples_still_fill_the_window() {
-        // Sleeps that run 10 ms long leave no sample exactly 60 s back.
-        let mut w = Watcher::new(Config { report: None, ..Config::release("t") });
-        let t0 = Instant::now();
-        let mut events = Vec::new();
-        for i in 0..=12u32 {
-            let t = Duration::from_millis(10_010) * i;
-            events.extend(w.observe(t0 + t, &at(50 << 20, t.as_secs_f64())));
-        }
-        assert_eq!(events.iter().filter(|e| e.kind == Kind::Cpu).count(), 2, "{}", lines(&events));
-    }
-
-    #[test]
-    fn an_exited_thread_counts_only_its_last_stretch() {
-        let thread = |id, name: &str, cpu_s| Thread { id, name: name.into(), cpu_s };
-        let old = Snapshot { cpu_s: 101.0, threads: vec![thread(1, "main", 1.0), thread(2, "worker", 100.0)], ..Default::default() };
-        // The worker ran 6 more seconds and exited; main ran 54.
-        let new = Snapshot { cpu_s: 161.0, threads: vec![thread(1, "main", 55.0)], ..Default::default() };
-        assert_eq!(busiest(&old, &new, 60.0), "main 90%, exited threads 10%");
-    }
-}
+mod tests;

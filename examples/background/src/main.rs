@@ -12,6 +12,8 @@
 //! cargo run -p background -- --snap /tmp/background.png
 //! ```
 
+#![forbid(unsafe_code)]
+
 use std::io::BufRead;
 use std::time::Duration;
 

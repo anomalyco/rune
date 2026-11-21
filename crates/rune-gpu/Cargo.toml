@@ -1,0 +1,73 @@
+[package]
+name = "rune-gpu"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+description = "GPU adapter selection, backend dispatch, native Apple Metal backend, and analytic GPU springs for Rune."
+
+[features]
+default = ["metal-backend"]
+# macOS and iOS: Rune's native Metal backend (research/34). Mac apps draw with it by default; an
+# app opts out with `App::gpu_backend(GpuBackend::Wgpu)`, or a launch with `RUNE_GPU_BACKEND=wgpu`,
+# and an app built with `default-features = false` draws with wgpu unless it adds this feature.
+# iOS apps keep wgpu unless they choose `GpuBackend::Metal`. It plugs in through wgpu's `custom`
+# backend, which rune-gpu turns on for Apple targets alone. No effect on other platforms: its crates
+# are Apple-only dependencies.
+metal-backend = [
+    "dep:blake3",
+    "dep:libc",
+    "dep:objc2-core-foundation",
+    "dep:objc2-foundation",
+    "dep:objc2-metal",
+    "dep:objc2-quartz-core",
+    "dep:parking_lot",
+    "dep:raw-window-metal",
+    "dep:wgpu-naga-bridge",
+]
+# Live GPU resource counters (`Device::get_internal_counters`) for the storage-swap buffer-count test.
+test-gpu-counters = ["wgpu/counters"]
+
+[dependencies]
+bytemuck = { workspace = true }
+rune-core = { workspace = true }
+rune-motion = { workspace = true }
+# `health::poll` lives there, below every crate that waits on the GPU.
+rune-staging = { workspace = true }
+wgpu = { workspace = true, features = ["std", "parking_lot", "wgsl"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, features = ["webgpu"] }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+blake3 = { workspace = true, optional = true }
+libc = { workspace = true, optional = true }
+objc2 = { workspace = true }
+objc2-core-foundation = { workspace = true, optional = true, features = ["std", "CFCGTypes", "objc2"] }
+objc2-foundation = { workspace = true, optional = true, features = ["std", "NSArray", "NSError", "NSObject", "NSRange", "NSString"] }
+objc2-metal = { workspace = true, optional = true, features = ["std", "MTLAllocation", "MTLArgument", "MTLBlitCommandEncoder", "MTLBuffer", "MTLCommandBuffer", "MTLCommandEncoder", "MTLCommandQueue", "MTLComputeCommandEncoder", "MTLComputePass", "MTLComputePipeline", "MTLCounters", "MTLDepthStencil", "MTLDevice", "MTLDrawable", "MTLEvent", "MTLLibrary", "MTLPixelFormat", "MTLRenderCommandEncoder", "MTLRenderPass", "MTLRenderPipeline", "MTLResource", "MTLSampler", "MTLTexture", "MTLTypes", "MTLVertexDescriptor"] }
+objc2-quartz-core = { version = "0.3.2", optional = true, default-features = false, features = ["std", "bitflags", "CALayer", "CAMetalLayer", "objc2-core-foundation", "objc2-core-graphics", "objc2-metal"] }
+parking_lot = { version = "0.12", optional = true }
+raw-window-metal = { version = "1.1", optional = true }
+wgpu-naga-bridge = { workspace = true, optional = true }
+# wgpu's Metal backend and `custom` backend (`metal-backend` plugs into it), on Apple targets alone:
+# off Apple, wgpu compiles neither `wgpu-hal/metal` nor `naga/msl-out`, and dispatches with no branch.
+wgpu = { workspace = true, features = ["metal", "custom"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { workspace = true, features = ["dx12"] }
+windows = { workspace = true, features = ["Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi"] }
+windows-sys = { workspace = true, features = ["Win32_Graphics_Gdi"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+
+# wgpu's Vulkan backend everywhere but Windows (D3D12 above) and Apple (Metal above).
+[target.'cfg(all(not(target_vendor = "apple"), not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
+wgpu = { workspace = true, features = ["vulkan"] }
+
+[lints]
+workspace = true

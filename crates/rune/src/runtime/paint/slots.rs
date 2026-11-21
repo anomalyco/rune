@@ -7,7 +7,7 @@ use crate::render::{Instance, KIND_BACKDROP_BLUR, KIND_EFFECT, LayerSpec, NO_CLI
 /// `clip` and the packed `fade`, at `k_px` device pixels per point and paint opacity `o`.
 /// A compositor paints whatever it likes at a slot, so a faded slot gets its own layer that
 /// applies the opacity, instead of a factor it could forget. Returns the index of that slot.
-pub(super) fn push_effect(instances: &mut Vec<Instance>, (effect, mark): (crate::el::effect::EffectSlot, u32),
+pub(in crate::runtime) fn push_effect(instances: &mut Vec<Instance>, (effect, mark): (crate::el::effect::EffectSlot, u32),
     (rect, radii, clip, fade): ([f32; 4], [f32; 4], [f32; 4], [u32; 4]), k_px: f32, o: f32) -> Option<usize> {
     let slot = Instance {
         rect,
@@ -35,7 +35,7 @@ pub(super) fn push_effect(instances: &mut Vec<Instance>, (effect, mark): (crate:
 /// `radii` (continuous when `continuous`), cut by `clip`, the soft edges `fade` from
 /// `fade_origin` and an ancestor's rounded clip `rounded`, at `k_px` device pixels per point and
 /// opacity `o`. Returns the signed corner radius an outer shadow leaves clear over the blur.
-pub(super) fn push_backdrop_blur(instances: &mut Vec<Instance>, sigma: f32, (rect, radii, continuous): ([f32; 4], [f32; 4], bool),
+pub(in crate::runtime) fn push_backdrop_blur(instances: &mut Vec<Instance>, sigma: f32, (rect, radii, continuous): ([f32; 4], [f32; 4], bool),
     (clip, fade, fade_origin): ([f32; 4], [f32; 4], [f32; 4]), rounded: Option<([f32; 4], [f32; 4])>, k_px: f32, o: f32) -> f32 {
     // One clip rectangle fits the packed ABI: a rounded clip cut by `clip` keeps only the cut.
     let (clip, round) = match rounded {

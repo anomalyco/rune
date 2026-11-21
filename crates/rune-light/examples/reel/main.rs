@@ -184,7 +184,7 @@ fn main() {
     }
     std::fs::create_dir_all(&out).unwrap();
     let mut ctx = Ctx::new();
-    let bench_out = PathBuf::from(std::env::var("REEL_BENCH").unwrap_or_else(|_| "demo/reel".into()));
+    let bench_out = PathBuf::from(rune::env::var("REEL_BENCH").unwrap_or_else(|| "demo/reel".into()));
     let reel = Reel {
         bench: load_bench(&bench_out),
         // Highlighted probes: in the gap under the progress bar, and between the chat and the right panel.
@@ -195,7 +195,7 @@ fn main() {
     };
     match cmd {
         "bench" => {
-            let gpu = std::env::var("REEL_GPU").unwrap_or_else(|_| ctx.gpu.clone());
+            let gpu = rune::env::var("REEL_GPU").unwrap_or_else(|| ctx.gpu.clone());
             bench(&reel, &mut ctx, &out, &gpu);
         }
         "stills" => {

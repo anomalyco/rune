@@ -272,7 +272,7 @@ impl Walk {
         self.rt.clock = 0.0;
     }
 
-    fn offset(&self) -> f64 { self.rt.scrolls.values().next().expect("one scroll").offset }
+    fn offset(&self) -> f64 { self.rt.scroll.scrolls.values().next().expect("one scroll").offset }
 
     fn to_end(&mut self) {
         self.rt.wheel(150.0, 60.0, -10_000.0);
@@ -296,10 +296,10 @@ impl Walk {
 
     fn reset(&mut self, seed: Seed) {
         self.rt.cancel_pointer();
-        self.rt.selectable = Default::default();
+        self.rt.edit.selectable = Default::default();
         self.rt.sync_selection_pins();
-        self.rt.queue.retain(|_| false);
-        self.rt.wake_deadlines.clear();
+        self.rt.frame.queue.retain(|_| false);
+        self.rt.frame.clear_wake_deadlines();
         if self.offset() != 0.0 {
             self.rt.wheel(150.0, 60.0, 10_000.0);
             self.settle();
@@ -369,14 +369,14 @@ impl Walk {
             return Err(format!("after {letter:?}: offset {}, dev {}", self.offset(), dev.offset));
         }
         let running = dev.edge != EdgeRef::Idle;
-        if self.rt.selectable.edge.running() != running {
-            return Err(format!("after {letter:?}: edge running {}, dev {:?}", self.rt.selectable.edge.running(), dev.edge));
+        if self.rt.edit.selectable.edge.running() != running {
+            return Err(format!("after {letter:?}: edge running {}, dev {:?}", self.rt.edit.selectable.edge.running(), dev.edge));
         }
         if framed && self.rt.wake_deadline().is_some() != running {
             return Err(format!("after {letter:?}: wake {:?}, dev {:?}", self.rt.wake_deadline(), dev.edge));
         }
-        match (&self.rt.selectable.phase, &dev.path) {
-            (Phase::Empty, None) if !dev.dragging && self.rt.selectable.mounted_between.is_empty() => {}
+        match (&self.rt.edit.selectable.phase, &dev.path) {
+            (Phase::Empty, None) if !dev.dragging && self.rt.edit.selectable.mounted_between.is_empty() => {}
             (phase @ (Phase::Placed(sel) | Phase::Dragging { selection: sel, .. }), Some(path)) => {
                 let unit = match phase {
                     Phase::Dragging { unit, .. } => Some(match unit { Unit::Char => U::Char, Unit::Word => U::Word, Unit::Paragraph => U::Paragraph }),
@@ -399,7 +399,7 @@ impl Walk {
                     if end(&far.end) != Some((r, k, i, rel, dev.focus)) { return Err(format!("after {letter:?}: focus end {:?}", far.end)); }
                 }
                 let (h, f) = (row_of(path), dev.far.as_ref().map_or(row_of(path), |(p, _)| row_of(p)));
-                if let Some(k) = self.rt.selectable.mounted_between.keys().find(|k| {
+                if let Some(k) = self.rt.edit.selectable.mounted_between.keys().find(|k| {
                     let r: usize = k[1..].parse().unwrap_or(usize::MAX);
                     r <= h.min(f) || r >= h.max(f)
                 }) {
@@ -477,7 +477,7 @@ fn the_edge_reference_knows_the_list() {
     walk.to_end();
     assert_eq!(walk.offset(), MAX);
     walk.reset(Seed::Offscreen);
-    assert!(!walk.rt.virtuals[LIST].range.contains(&0), "{:?}", walk.rt.virtuals[LIST].range);
+    assert!(!walk.rt.commit.virtuals[LIST].range.contains(&0), "{:?}", walk.rt.commit.virtuals[LIST].range);
     for (seed, at) in [(Seed::Char, (0, 0)), (Seed::AtEnd, (ROWS - 1, LEN))] {
         walk.reset(seed);
         assert_eq!(walk.rt.text_selection(), Some((path(at.0).as_str(), at.1..at.1)), "{seed:?}");

@@ -4,23 +4,53 @@ version = "0.0.1"
 edition.workspace = true
 license.workspace = true
 description = "Generic, themable components for Rune. Components read only semantic tokens (`Kit`); a theme crate supplies them."
+autotests = false
 
 [dependencies]
-rune = { path = "../rune", default-features = false }
+rune = { workspace = true }
 # The built-in syntax highlighter: Desktop's own lexers (syntax).
-rune-highlights = { path = "../rune-highlights" }
-rune-mermaid = { path = "../rune-mermaid", optional = true }
-rune-motion = { path = "../rune-motion" }
+rune-highlights = { workspace = true, optional = true }
+rune-mermaid = { workspace = true, optional = true }
+rune-motion = { workspace = true }
 # Search's accent folding (`search`): NFD, the data Parley already links.
 icu_normalizer = { version = "2", default-features = false, features = ["compiled_data"] }
-unicode-segmentation = "1.13"
+unicode-segmentation = { workspace = true }
 pulldown-cmark = { version = "0.13", default-features = false, optional = true }
+miniz_oxide = { workspace = true, optional = true }
+skrifa = { workspace = true, optional = true }
+tiny-skia = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wasmi = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true, optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+web-sys = { workspace = true, optional = true, features = ["Blob", "BlobPropertyBag", "ErrorEvent", "MessageEvent", "Url", "Window", "Worker"] }
 
 [features]
+default = ["syntax"]
+# Built-in syntax highlighting via `rune-highlights` (80 languages). Disable with
+# `default-features = false` to drop the lexers when an app provides its own highlighter or
+# draws no code.
+syntax = ["dep:rune-highlights"]
 # `Markdown` and `MarkdownStyle`.
-markdown = ["dep:pulldown-cmark"]
+markdown = ["syntax", "dep:pulldown-cmark"]
 # Native ```mermaid diagrams in `Markdown` (flowcharts, sequence and state diagrams), and `mermaid`.
 mermaid = ["markdown", "dep:rune-mermaid"]
+# Sandboxed LaTeX display math for closed ```latex and ```math fences in `Markdown`, and `math`:
+# runs `ratex-math.wasm` inside `wasmi` with hard fuel and 16 MiB linear-memory caps on a lazy
+# background worker (native), or browser WebAssembly in a terminable Web Worker (`wasm32`).
+math = [
+    "markdown",
+    "dep:miniz_oxide",
+    "dep:skrifa",
+    "dep:tiny-skia",
+    "dep:wasmi",
+    "dep:js-sys",
+    "dep:wasm-bindgen",
+    "dep:web-sys",
+]
 # Phase timings for the headless benches (`markdown_resize`).
 frame-profile = ["rune/frame-profile"]
 
@@ -41,28 +71,27 @@ name = "layout_text_cost"
 required-features = ["markdown", "frame-profile"]
 
 [dev-dependencies]
-# The examples' headless runs (`--snap`, `--trace`, ...) in release builds.
-rune = { path = "../rune", default-features = false, features = ["keys-overlay"] }
-procwatch = { path = "../procwatch" }
+rune = { workspace = true, default-features = true }
+procwatch = { workspace = true }
 # The accessibility tree tests read and write `Runtime::accessibility_json` (tests/a11y).
-serde_json = "1"
-# Reference rasteriser for the built-in glyphs (tests/glyphs.rs).
-resvg = { version = "0.45", default-features = false }
-# The scroll bar's fade test rasterises its frame with the reference renderer (tests/scroll_bar_fade.rs).
-rune-ref = { path = "../rune-ref", features = ["gpu"] }
-# The fixture goldens render with the OpenCode theme's tokens and fonts (tests/markdown_fixture.rs).
-rune-theme-opencode = { path = "../../themes/opencode" }
+serde_json = { workspace = true }
+# Reference rasteriser for the built-in glyphs (tests/integration/glyphs.rs).
+resvg = { workspace = true }
+# The fixture goldens render with the OpenCode theme's tokens and fonts (tests/mermaid/markdown_fixture.rs).
+rune-theme-opencode = { workspace = true }
 
 [[test]]
-name = "markdown_fixture"
-required-features = ["markdown", "mermaid"]
+name = "a11y"
 
 [[test]]
-name = "markdown_diagram_stream"
-required-features = ["markdown", "mermaid"]
+name = "integration"
 
 [[test]]
-name = "markdown_diagram_frame"
+name = "markdown"
+required-features = ["markdown"]
+
+[[test]]
+name = "mermaid"
 required-features = ["markdown", "mermaid"]
 
 [lints]

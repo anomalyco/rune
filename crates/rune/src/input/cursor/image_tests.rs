@@ -131,20 +131,21 @@ fn web_css_names_the_png_at_2x_with_the_hot_spot_in_points() {
 /// its bitmap, and its hot spot is in points.
 #[cfg(target_os = "macos")]
 #[test]
+#[allow(unsafe_code)]
 fn a_macos_image_cursor_is_sized_in_points() {
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
-    use objc2::{msg_send, msg_send_id};
+    use objc2::msg_send;
     use objc2_foundation::{NSPoint, NSSize};
     let d = decode(CursorImage::png(png(64, 40), [2.0, 30.0]), SOURCE_SCALE).unwrap();
     let cursor = crate::platform::macos::cursor::ns_cursor(&d).unwrap();
     // SAFETY: reading back AppKit objects made above.
     let (size, hot, pixels) = unsafe {
-        let image: Retained<AnyObject> = msg_send_id![&*cursor, image];
+        let image: Retained<AnyObject> = msg_send![&*cursor, image];
         let size: NSSize = msg_send![&*image, size];
         let hot: NSPoint = msg_send![&*cursor, hotSpot];
-        let reps: Retained<AnyObject> = msg_send_id![&*image, representations];
-        let rep: Retained<AnyObject> = msg_send_id![&*reps, firstObject];
+        let reps: Retained<AnyObject> = msg_send![&*image, representations];
+        let rep: Retained<AnyObject> = msg_send![&*reps, firstObject];
         let (w, h): (isize, isize) = (msg_send![&*rep, pixelsWide], msg_send![&*rep, pixelsHigh]);
         (size, hot, (w, h))
     };

@@ -7,7 +7,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use notify::{RecursiveMode, Watcher};
-use rune::time::Instant;
 
 use crate::script::{Inner, LogLevel, Reload};
 use crate::sources::{Compiled, Sources};
@@ -58,7 +57,7 @@ impl Script {
             }
             shared.mark();
             shared.wake();
-            let start = Instant::now();
+            let start = rune::time::now();
             let result = sources.and_then(|sources| {
                 let compiled = match &last {
                     Some((_, previous)) => sources.compile_from(previous),

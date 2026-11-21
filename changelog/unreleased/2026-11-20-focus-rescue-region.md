@@ -1,0 +1,1 @@
+- Focus: a control disabled while focused inside a region kept from an earlier commit (`region_with`) hands focus to its neighbour too, as one outside a region does since the last release.

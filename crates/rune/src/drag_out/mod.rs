@@ -340,34 +340,15 @@ pub(crate) fn snapshot(gpu: &crate::render::Gpu, renderer: &crate::render::Rende
         view_formats: &[],
     });
     let view = texture.create_view(&Default::default());
-    let padded_row = (w * 4).div_ceil(256) * 256;
-    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("drag image readback"),
-        size: u64::from(padded_row * h),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
+    let readback = rune_staging::Readback::new(&gpu.device, "drag image readback", w, h, 4);
     let mut enc = gpu.device.create_command_encoder(&Default::default());
     renderer.draw(&mut enc, &view, clear);
-    enc.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d { x, y, z: 0 }, aspect: wgpu::TextureAspect::All },
-        wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded_row), rows_per_image: Some(h) } },
-        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-    );
+    readback.copy_from_origin(&mut enc, &texture, wgpu::Origin3d { x, y, z: 0 });
     gpu.queue.submit([enc.finish()]);
-    let slice = buffer.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |_| {});
-    gpu.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
-    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-    {
-        let data = slice.get_mapped_range().ok()?;
-        for row in 0..h {
-            let start = (row * padded_row) as usize;
-            rgba.extend_from_slice(&data[start..start + (w * 4) as usize]);
-        }
-    }
-    buffer.unmap();
-    to_straight_rgba(&mut rgba, bgra);
+    readback.buffer().slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok()?;
+    let mut rgba = readback.try_take_mapped()?;
+    to_straight_rgba(&mut rgba, bgra, format.is_srgb());
     let mut image = DragImage::rgba(w, h, &rgba)?.size(w as f32 / scale, h as f32 / scale);
     // The crop rounds out to whole pixels, so the image sits exactly over what was drawn.
     image.placement = Placement::At(x as f32 / scale, y as f32 / scale);
@@ -383,13 +364,27 @@ fn crop(rect: [f32; 4], scale: f32, size: (u32, u32)) -> Option<[u32; 4]> {
     (x1 > x0 && y1 > y0).then_some([x0, y0, x1 - x0, y1 - y0])
 }
 
-/// Frame pixels are premultiplied, in the surface's channel order.
-fn to_straight_rgba(pixels: &mut [u8], bgra: bool) {
-    for p in pixels.chunks_exact_mut(4) {
-        if bgra { p.swap(0, 2); }
-        let a = p[3];
-        if a != 0 && a != 255 {
-            for c in &mut p[..3] { *c = ((*c as u32 * 255 + a as u32 / 2) / a as u32).min(255) as u8; }
+/// Frame pixels are premultiplied, in the surface's channel order. On `*Srgb` targets the bytes
+/// hold `srgb_encode(linear_rgb * a)` and must be un-premultiplied in linear light; on non-sRGB
+/// targets (`srgb_blend`) they hold `srgb_encode(linear_rgb) * a` and divide directly.
+fn to_straight_rgba(pixels: &mut [u8], bgra: bool, srgb_target: bool) {
+    if bgra {
+        for p in pixels.chunks_exact_mut(4) {
+            p.swap(0, 2);
+        }
+    }
+    if srgb_target {
+        crate::render::surface_alpha::straight_alpha(pixels);
+    } else {
+        for p in pixels.chunks_exact_mut(4) {
+            let a = p[3];
+            if a == 0 {
+                p[..3].fill(0);
+            } else if a != 255 {
+                for c in &mut p[..3] {
+                    *c = ((*c as u32 * 255 + a as u32 / 2) / a as u32).min(255) as u8;
+                }
+            }
         }
     }
 }
@@ -421,107 +416,4 @@ fn picture(item: &DragItem, snapshot: Option<DragImage>) -> Option<DragImage> {
 fn path_text(path: &Path) -> String { path.to_string_lossy().into_owned() }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn threshold_is_straight_line_travel_beyond_the_platform_distance() {
-        let t = DRAG_THRESHOLD;
-        assert!(!past_threshold((10.0, 10.0), (10.0, 10.0), t));
-        assert!(!past_threshold((10.0, 10.0), (10.0 + t, 10.0), t), "exactly the threshold doesn't start");
-        assert!(past_threshold((10.0, 10.0), (10.0 + t + 0.1, 10.0), t));
-        let d = t * 0.75;
-        assert!(past_threshold((0.0, 0.0), (d, d), t), "diagonal travel counts its length");
-    }
-
-    #[test]
-    fn a_drag_item_collects_files_image_and_text() {
-        let item = DragItem::new().file("/a.png").file("/b.txt").text("hello").png(vec![1, 2, 3]);
-        assert_eq!(item.paths(), [PathBuf::from("/a.png"), PathBuf::from("/b.txt")]);
-        assert_eq!(item.plain_text(), Some("hello"));
-        assert_eq!(item.png_data(), Some(&[1u8, 2, 3][..]));
-        assert!(!item.allows_move() && item.drag_image().is_none() && !item.is_empty());
-        assert!(DragItem::new().is_empty());
-        assert!(DragItem::new().allow_move().allows_move());
-    }
-
-    #[test]
-    fn a_drag_offers_copy_unless_told_otherwise() {
-        let item = DragItem::new();
-        assert!(item.offers(DragOperation::Copy) && !item.offers(DragOperation::Move) && !item.offers(DragOperation::Link));
-        let item = DragItem::new().allow_move();
-        assert!(item.offers(DragOperation::Copy) && item.offers(DragOperation::Move));
-        let item = DragItem::new().operation(DragOperation::Move);
-        assert!(!item.offers(DragOperation::Copy) && item.offers(DragOperation::Move) && item.allows_move());
-        let item = DragItem::new().operation(DragOperation::Link).allow(DragOperation::Copy);
-        assert!(item.offers(DragOperation::Copy) && item.offers(DragOperation::Link) && !item.offers(DragOperation::Move));
-    }
-
-    #[test]
-    fn drag_image_frames_start_over_the_element_or_under_the_pointer() {
-        let rect = [20.0, 40.0, 200.0, 32.0];
-        let press = (50.0, 60.0);
-        let image = DragImage::rgba(1, 1, &[0; 4]).unwrap();
-        assert_eq!(image.frame(rect, press, (64.0, 64.0)), [18.0, 28.0, 64.0, 64.0], "a supplied picture is centred under the press");
-        assert_eq!(image.clone().size(10.0, 20.0).frame(rect, press, (64.0, 64.0)), [45.0, 50.0, 10.0, 20.0]);
-        assert_eq!(image.clone().over_element().frame(rect, press, (64.0, 64.0)), rect, "over_element fills the element's bounds");
-        assert_eq!(image.clone().size(10.0, 12.0).over_element().frame(rect, press, (64.0, 64.0)), [20.0, 40.0, 10.0, 12.0], "an explicit size wins");
-        assert_eq!(image.over_element().frame([5.0, 5.0, 0.0, 0.0], press, (1.0, 1.0)), [5.0, 5.0, 1.0, 1.0], "never an empty frame");
-    }
-
-    #[test]
-    fn the_snapshot_frame_is_its_pixel_aligned_crop() {
-        let mut image = DragImage::rgba(41, 21, &[0; 41 * 21 * 4]).unwrap().size(20.5, 10.5);
-        image.placement = Placement::At(10.0, 5.0);
-        assert_eq!(image.frame([10.2, 5.3, 20.0, 10.0], (0.0, 0.0), (41.0, 21.0)), [10.0, 5.0, 20.5, 10.5]);
-    }
-
-    #[test]
-    fn an_opaque_backing_fills_transparent_pixels_and_keeps_opaque_ones() {
-        let image = DragImage::rgba(3, 1, &[255, 0, 0, 255, 0, 0, 0, 0, 255, 255, 255, 128]).unwrap().size(3.0, 1.0).over_element();
-        let flat = image.over(Color { r: 0.0, g: 0.0, b: 1.0, a: 1.0 }).unwrap();
-        assert_eq!((flat.points(), flat.placement), (Some((3.0, 1.0)), Placement::Element), "size and placement survive");
-        let rgba = image::load_from_memory(flat.png_data()).unwrap().to_rgba8();
-        assert_eq!(rgba.get_pixel(0, 0).0, [255, 0, 0, 255]);
-        assert_eq!(rgba.get_pixel(1, 0).0, [0, 0, 255, 255]);
-        let half = rgba.get_pixel(2, 0).0;
-        assert_eq!(half[3], 255);
-        assert!(half[0] == half[1] && half[0] > 150 && half[2] == 255, "half white over blue, mixed in linear light: {half:?}");
-    }
-
-    #[test]
-    fn the_picture_is_the_items_image_else_the_snapshot_over_the_backing() {
-        let snap = DragImage::rgba(1, 1, &[0, 0, 0, 0]).unwrap();
-        let own = DragImage::rgba(1, 1, &[1, 2, 3, 255]).unwrap();
-        assert_eq!(picture(&DragItem::new(), Some(snap.clone())), Some(snap.clone()));
-        assert_eq!(picture(&DragItem::new().image(own.clone()), Some(snap.clone())), Some(own));
-        assert_eq!(picture(&DragItem::new(), None), None);
-        let flat = picture(&DragItem::new().opaque(Color::WHITE), Some(snap)).unwrap();
-        assert_eq!(image::load_from_memory(flat.png_data()).unwrap().to_rgba8().get_pixel(0, 0).0, [255, 255, 255, 255]);
-    }
-
-    #[test]
-    fn rgba_encodes_png_and_rejects_a_wrong_length() {
-        let item = DragItem::new().rgba(1, 1, &[255, 0, 0, 255]);
-        let png = item.png_data().unwrap();
-        assert_eq!(&png[1..4], b"PNG");
-        assert!(DragItem::new().rgba(2, 2, &[0; 4]).png_data().is_none());
-        assert!(DragImage::rgba(0, 0, &[]).is_none());
-        assert_eq!(DragImage::rgba(1, 1, &[0; 4]).unwrap().size(8.0, 8.0).points(), Some((8.0, 8.0)));
-    }
-
-    #[test]
-    fn snapshot_crop_clamps_to_the_frame_in_device_pixels() {
-        assert_eq!(crop([10.0, 5.0, 20.0, 10.0], 2.0, (400, 300)), Some([20, 10, 40, 20]));
-        assert_eq!(crop([-5.0, -5.0, 10.0, 10.0], 2.0, (400, 300)), Some([0, 0, 10, 10]));
-        assert_eq!(crop([190.0, 0.0, 50.0, 10.0], 2.0, (400, 300)), Some([380, 0, 20, 20]));
-        assert_eq!(crop([500.0, 0.0, 10.0, 10.0], 2.0, (400, 300)), None);
-    }
-
-    #[test]
-    fn readback_unpremultiplies_and_swaps_bgra() {
-        let mut p = [0, 0, 128, 128, 10, 20, 30, 255];
-        to_straight_rgba(&mut p, true);
-        assert_eq!(p, [255, 0, 0, 128, 30, 20, 10, 255]);
-    }
-}
+mod tests;

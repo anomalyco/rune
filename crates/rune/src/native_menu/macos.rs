@@ -1,24 +1,26 @@
 //! Main-thread AppKit adapter. Adds one optional selector to winit's existing delegate;
 //! never replaces the delegate or any existing method. The hook returns nil after teardown.
+
+#![allow(unsafe_code)]
+
 use super::{Description, Location, MenuError};
 use std::{cell::{Cell, RefCell}, ffi::{c_char, c_void}, sync::Arc};
-use objc2::{ClassType, DeclaredClass, declare_class, msg_send, msg_send_id, mutability, sel, rc::Retained,
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel, rc::Retained,
     runtime::{AnyClass, AnyObject, Bool, Sel}};
 use objc2_app_kit::{NSApplication, NSMenu, NSMenuItem};
-use objc2_foundation::{MainThreadMarker, NSObject, NSString};
+use objc2_foundation::{NSObject, NSString};
 
 type Sink = Arc<dyn Fn(&str) + Send + Sync>;
 struct Action { id: String, enabled: bool, keys_first: bool, sink: Sink }
-declare_class!(
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "RuneNativeMenuTarget"]
+    #[ivars = Action]
     struct MenuTarget;
-    unsafe impl ClassType for MenuTarget {
-        type Super = NSObject;
-        type Mutability = mutability::MainThreadOnly;
-        const NAME: &'static str = "RuneNativeMenuTarget";
-    }
-    impl DeclaredClass for MenuTarget { type Ivars = Action; }
-    unsafe impl MenuTarget {
-        #[method(runeMenuAction:)]
+
+    impl MenuTarget {
+        #[unsafe(method(runeMenuAction:))]
         fn perform(&self, _sender: &NSMenuItem) {
             let Action { id, enabled, keys_first, sink } = self.ivars();
             if *enabled && std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -27,7 +29,7 @@ declare_class!(
                 if !*keys_first || !super::standard_macos::defer_key(run.clone()) { run(); }
             })).is_err() { eprintln!("rune: native menu callback panicked"); }
         }
-        #[method(validateMenuItem:)]
+        #[unsafe(method(validateMenuItem:))]
         fn validate(&self, _sender: &NSMenuItem) -> bool { self.ivars().enabled }
     }
 );
@@ -63,7 +65,7 @@ pub(crate) fn set_jump_menu(list: &crate::jump_list::JumpList) {
         let mut add = |title: &str, argument: Option<&str>| {
             let item = NSMenuItem::initWithTitle_action_keyEquivalent(mtm.alloc(), &NSString::from_str(title), argument.map(|_| sel!(runeMenuAction:)), &NSString::from_str(""));
             if let Some(argument) = argument {
-                let target: Retained<MenuTarget> = msg_send_id![super(mtm.alloc().set_ivars(Action { id: argument.to_owned(), enabled: true, keys_first: false, sink: sink.clone() })), init];
+                let target: Retained<MenuTarget> = msg_send![super(mtm.alloc().set_ivars(Action { id: argument.to_owned(), enabled: true, keys_first: false, sink: sink.clone() })), init];
                 item.setTarget(Some(&target));
                 targets.push(target);
             } else {
@@ -137,7 +139,7 @@ impl Native {
             if d.separator { return (d, NSMenuItem::separatorItem(self.mtm), None); }
             // SAFETY: NSObject initialization follows set_ivars; the main-thread target is
             // kept alive until its menu item is removed and its non-retaining target cleared.
-            let target: Retained<MenuTarget> = msg_send_id![super(self.mtm.alloc().set_ivars(Action {
+            let target: Retained<MenuTarget> = msg_send![super(self.mtm.alloc().set_ivars(Action {
                 id: d.id.clone(), enabled: d.enabled, keys_first: d.keys_first, sink: sink.clone(),
             })), init];
             let item = NSMenuItem::initWithTitle_action_keyEquivalent(self.mtm.alloc(),
@@ -214,14 +216,11 @@ impl Native {
 /// Where `MenuItem::after`'s `anchor` is in `menu`: the last item already placed after it, else
 /// this app's item with that id, else a native item with that AppKit action.
 fn anchor_index(menu: &NSMenu, anchor: &str, placed: &[(&str, Retained<NSMenuItem>)], chained: &[(&str, Retained<NSMenuItem>)]) -> Option<isize> {
-    // SAFETY: reading retained menus and items on the main thread, as `Native::set` does.
-    unsafe {
-        let index_of = |item: &NSMenuItem| Some(menu.indexOfItem(item)).filter(|&i| i >= 0);
-        let find = |list: &[(&str, Retained<NSMenuItem>)]| list.iter().filter(|(a, _)| *a == anchor).find_map(|(_, item)| index_of(item));
-        find(chained).or_else(|| find(placed)).or_else(|| {
-            (0..menu.numberOfItems()).find(|&i| menu.itemAtIndex(i).and_then(|item| item.action()).is_some_and(|a| a.name() == anchor))
-        })
-    }
+    let index_of = |item: &NSMenuItem| Some(menu.indexOfItem(item)).filter(|&i| i >= 0);
+    let find = |list: &[(&str, Retained<NSMenuItem>)]| list.iter().filter(|(a, _)| *a == anchor).find_map(|(_, item)| index_of(item));
+    find(chained).or_else(|| find(placed)).or_else(|| {
+        (0..menu.numberOfItems()).find(|&i| menu.itemAtIndex(i).and_then(|item| item.action()).is_some_and(|a| a.name().to_str() == Ok(anchor)))
+    })
 }
 impl Drop for Native {
     fn drop(&mut self) {

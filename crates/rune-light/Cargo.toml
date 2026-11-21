@@ -4,23 +4,47 @@ version = "0.0.1"
 edition.workspace = true
 license.workspace = true
 description = "Real-time lighting for Rune UIs: SDF soft shadows, bevel normals, god rays and radiance-cascade GI over the frame's analytic primitives."
+autotests = false
+
+[features]
+# Live GPU resource counters (`Device::get_internal_counters`) for the bind-group test and `frame_bench`.
+test-gpu-counters = ["wgpu/counters"]
 
 [dependencies]
-rune-staging = { path = "../rune-staging" }
-wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "metal", "wgsl"] }
-bytemuck = { version = "1.25", features = ["derive"] }
+rune-staging = { workspace = true }
+wgpu = { workspace = true, features = ["std", "parking_lot", "wgsl"] }
+bytemuck = { workspace = true }
 
-[target.'cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
-wgpu = { version = "30", default-features = false, features = ["vulkan", "dx12"] }
+[target.'cfg(target_vendor = "apple")'.dependencies]
+wgpu = { workspace = true, features = ["metal", "custom"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { workspace = true, features = ["dx12"] }
+
+[target.'cfg(all(not(target_vendor = "apple"), not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
+wgpu = { workspace = true, features = ["vulkan"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, features = ["webgpu"] }
 
 [dev-dependencies]
-# The examples' headless runs (`--snap`, `--trace`, ...) in release builds.
-rune = { path = "../rune", features = ["keys-overlay"] }
-rune-fx = { path = "../rune-fx" }
-pollster = "1"
-# Live object counts for the bind group tests.
-wgpu = { version = "30", default-features = false, features = ["counters"] }
-winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita-notitle"] }
+rune = { workspace = true, default-features = true }
+rune-fx = { workspace = true }
+pollster = { workspace = true }
+winit = { workspace = true, features = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita-notitle"] }
+
+[[example]]
+name = "frame_bench"
+required-features = ["test-gpu-counters"]
+
+[[test]]
+name = "builtin_shaders"
+
+[[test]]
+name = "continuous_corners"
+
+[[test]]
+name = "targets"
 
 [lints]
 workspace = true

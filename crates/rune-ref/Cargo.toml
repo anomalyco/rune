@@ -3,17 +3,21 @@ name = "rune-ref"
 version = "0.0.1"
 edition.workspace = true
 license.workspace = true
+description = "Scalar CPU reference renderer for Rune's device-pixel instance stream."
+autotests = false
 
 [features]
-gpu = ["dep:rune"]
+gpu = ["dep:rune", "dep:rune-fx", "dep:wgpu"]
 
 [dependencies]
 libm = { version = "=0.2.16", default-features = false, features = ["force-soft-floats"] }
-blake3 = "1"
-half = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-rune = { path = "../rune", optional = true }
+blake3 = { workspace = true }
+half = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+rune = { workspace = true, default-features = true, optional = true }
+rune-fx = { workspace = true, optional = true }
+wgpu = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = "1"
@@ -24,6 +28,21 @@ gungraun = "=0.20.0"
 [[bench]]
 name = "instructions"
 harness = false
+
+[[test]]
+name = "alloc"
+
+[[test]]
+name = "differential"
+
+[[test]]
+name = "fx_blend"
+
+[[test]]
+name = "parity"
+
+[[test]]
+name = "reference"
 
 [lints]
 workspace = true

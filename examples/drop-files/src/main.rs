@@ -5,6 +5,8 @@
 //! Headless, with the highlight held before each drop:
 //! `cargo run -p drop-files -- --script examples/drop-files/scripts/drop.json --frames 90 --every 6 --cols 5 --strip strip.png`
 
+#![forbid(unsafe_code)]
+
 use std::path::PathBuf;
 
 use rune::tok::{self, radius, space, type_};

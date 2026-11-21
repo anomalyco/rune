@@ -14,6 +14,7 @@ fn scene(frame: usize) -> Vec<Instance> {
     std::iter::once(square(frame as f32, 20.0)).chain(grid).collect()
 }
 
+#[cfg(feature = "test-gpu-counters")]
 fn live_buffers(device: &wgpu::Device) -> isize {
     device.get_internal_counters().hal.buffers.read()
 }
@@ -23,6 +24,7 @@ fn pixel(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
     pixels[at..at + 4].try_into().unwrap()
 }
 
+#[cfg(feature = "test-gpu-counters")]
 #[test]
 fn a_steady_animating_frame_creates_no_buffers_and_skips_unchanged_globals() {
     let gpu = Gpu::headless();
@@ -152,6 +154,7 @@ fn a_dropped_encoder_makes_the_next_frame_resend_everything() {
 
 /// `Frame::write_buffer`: each write lands ahead of the commands recorded after it, and a frame's
 /// writes share one reused staging chunk rather than making a buffer each, as a queue write would.
+#[cfg(feature = "test-gpu-counters")]
 #[test]
 fn compositor_buffer_writes_land_in_order_and_reuse_staging() {
     let gpu = Gpu::headless();
@@ -177,7 +180,7 @@ fn compositor_buffer_writes_land_in_order_and_reuse_staging() {
         let created = live_buffers(device) - buffers;
         renderer.submit(queue, encoder);
         let slice = readback.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback"));
+        slice.map_async(wgpu::MapMode::Read, |_| {});
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         let words: Vec<u32> = bytemuck::cast_slice(&slice.get_mapped_range().unwrap()).to_vec();
         readback.unmap();

@@ -9,7 +9,8 @@ pub const H: f32 = 540.0;
 
 /// An sRGB hex colour.
 pub fn c(hex: u32) -> Color {
-    rune::color::hex(&format!("#{hex:06x}")).unwrap()
+    let ch = |shift: u32| rune::color::srgb_decode(((hex >> shift) & 0xff) as f32 / 255.0);
+    Color { r: ch(16), g: ch(8), b: ch(0), a: 1.0 }
 }
 
 pub fn ca(hex: u32, a: f32) -> Color {

@@ -101,7 +101,7 @@ fn rows_sliding_under_a_still_pointer_dont_take_its_hover() {
         assert_eq!(rt.state.changes, [(5, true), (5, false), (0, true)], "growth {growth}");
         assert_eq!(row_at(&rt, 110.0), Some(0), "growth {growth}");
         assert_eq!(shown(&rt), ["a0"], "growth {growth}: once they settle, the row under the pointer has it");
-        assert!(!rt.hover_hold.held() && !rt.hover_hold.released());
+        assert!(!rt.pointer.hover_hold().held() && !rt.pointer.hover_hold().released());
     }
 }
 
@@ -110,7 +110,7 @@ fn moving_the_pointer_during_a_slide_retargets_at_once() {
     let mut rt = sliding(false);
     for _ in 0..6 { rt.frame(DT); }
     assert_eq!(shown(&rt), ["a5"]);
-    assert!(rt.hover_hold.held());
+    assert!(rt.pointer.hover_hold().held());
     let under = row_at(&rt, 111.0).unwrap();
     assert_ne!(under, 5, "a row slid under the pointer");
     rt.pointer_move(100.0, 111.0);
@@ -153,7 +153,7 @@ fn a_press_during_a_slide_still_shows_and_lets_go() {
     let mut rt = sliding(false);
     for _ in 0..4 { rt.frame(DT); }
     let under = row_at(&rt, 110.0).unwrap();
-    let id = rt.nodes.iter().find(|n| n.named(&format!("r{under}"))).unwrap().id;
+    let id = rt.tree.nodes.iter().find(|n| n.named(&format!("r{under}"))).unwrap().id;
     rt.pointer_down(100.0, 110.0);
     rt.frame(DT);
     assert_eq!(rt.scene.store().target(id, P_PRESS), Some(1.0), "the press shows mid-slide");
@@ -163,7 +163,7 @@ fn a_press_during_a_slide_still_shows_and_lets_go() {
     rt.frame(DT);
     assert_eq!(rt.scene.store().target(id, P_PRESS), Some(0.0), "the press lets go mid-slide");
     assert_eq!(rt.scene.store().target(id, P_PRESS_SCALE), Some(1.0));
-    assert!(!rt.hover_hold.held() && rt.hover_hold.released(), "the press let go of the hold until the slide settles");
+    assert!(!rt.pointer.hover_hold().held() && rt.pointer.hover_hold().released(), "the press let go of the hold until the slide settles");
 }
 
 /// Each row's enters minus its leaves, from `on_hover_change`.
@@ -179,33 +179,35 @@ fn a_press_mid_slide_follows_the_pointer_and_pairs_each_enter_with_a_leave() {
     let mut rt = sliding(false);
     for _ in 0..4 { rt.frame(DT); }
     rt.pointer_down(100.0, 110.0);
-    assert!(rt.hover_hold.released(), "a press lets go of the hold");
+    assert!(rt.pointer.hover_hold().released(), "a press lets go of the hold");
     for _ in 0..40 {
         rt.frame(DT);
         let inside = inside(&rt);
         assert!(inside.len() <= 2, "the pressed row and the one under the pointer: {inside:?}");
-        assert!(rt.hover_within.len() <= 2, "{:?}", rt.hover_within);
+        assert!(rt.pointer.hover_within.len() <= 2, "{:?}", rt.pointer.hover_within);
     }
     rt.pointer_up(100.0, 110.0);
     settle(&mut rt);
     assert_eq!(inside(&rt), [0]);
-    assert_eq!(rt.hover_within.len(), 1);
+    assert_eq!(rt.pointer.hover_within.len(), 1);
 }
 
 #[test]
 fn a_move_before_the_next_tick_sees_layout_just_set_moving() {
     // A spring a commit between frames started (a scroll's), not yet ticked.
     let mut rt = resting(Rows::default());
-    let id = rt.nodes.iter().find(|n| n.named("r3")).unwrap().id;
-    rt.scene.animate(id, prop::OFFSET, rune_motion::Vec2::new(0.0, 40.0), motion::SNAPPY);
+    let id = rt.tree.nodes.iter().find(|n| n.named("r3")).unwrap().id;
+    rt.scene.animate(id, prop::OFFSET, rune_motion::Vec2::new(0.0, 40.0), crate::tok::motion::SNAPPY);
     rt.pointer_move(100.0, 111.0);
-    assert!(rt.hover_hold.released(), "an untouched spring");
+    assert!(rt.pointer.hover_hold().released(), "an untouched spring");
     // A growing element's height.
     let mut rt = resting(Rows::default());
-    let id = rt.nodes.iter().find(|n| n.named("r3")).unwrap().id;
-    rt.grows.insert(id, crate::growth::GrowTrack { target: 100.0, ..Default::default() });
+    let id = rt.tree.nodes.iter().find(|n| n.named("r3")).unwrap().id;
+    let mut grow = crate::growth::GrowTrack::default();
+    grow.target = 100.0;
+    rt.motion.grows.insert(id, grow);
     rt.pointer_move(100.0, 111.0);
-    assert!(rt.hover_hold.released(), "a growth");
+    assert!(rt.pointer.hover_hold().released(), "a growth");
 }
 
 #[test]
@@ -213,11 +215,11 @@ fn a_hold_keeps_all_three_hover_states_together() {
     let pan = crate::live::Live::new([0.0, 0.0]);
     let mut rt = resting(Rows { plain: true, pan: Some(pan.clone()), ..Rows::default() });
     let target = |rt: &Runtime<Rows>, key: &str| {
-        let id = rt.nodes.iter().find(|n| n.named(key)).unwrap().id;
+        let id = rt.tree.nodes.iter().find(|n| n.named(key)).unwrap().id;
         rt.scene.store().target(id, P_HOVER)
     };
-    let spot = rt.nodes.iter().find(|n| n.named("spot")).unwrap().path.clone();
-    assert_eq!(rt.hovered.as_deref(), Some(spot.as_str()));
+    let spot = rt.tree.nodes.iter().find(|n| n.named("spot")).unwrap().path.clone();
+    assert_eq!(rt.pointer.hovered.as_deref(), Some(spot.as_str()));
     assert_eq!((&rt.state.spot[..], target(&rt, "r5")), (&[true][..], Some(1.0)));
     rt.update(|s, _| s.open = true);
     for _ in 0..6 { rt.frame(DT); }
@@ -229,10 +231,10 @@ fn a_hold_keeps_all_three_hover_states_together() {
     rt.frame(DT);
     assert_eq!(target(&rt, "r5"), Some(1.0));
     assert_eq!(rt.state.spot, [true], "the spot's leave waits with the rows' hover");
-    assert_eq!(rt.hovered.as_deref(), Some(spot.as_str()), "and so does the hovered element");
+    assert_eq!(rt.pointer.hovered.as_deref(), Some(spot.as_str()), "and so does the hovered element");
     settle(&mut rt);
     assert_eq!(rt.state.spot, [true, false]);
-    assert_eq!(rt.hovered, None);
+    assert_eq!(rt.pointer.hovered, None);
     assert_eq!((target(&rt, "r5"), target(&rt, "r0")), (Some(0.0), Some(1.0)));
 }
 

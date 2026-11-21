@@ -16,14 +16,15 @@ fn text_inside_a_scale_draws_at_that_size() {
         };
         col().size(300.0, 200.0).child(card)
     }
-    // Device px: the glyphs' bounding box, and whether all of them sample their atlas 1:1.
+    // Device px: the glyphs' bounding box, and whether all of them sample their atlas 1:1
+    // (neither filtered atlas masks nor moving outline glyphs).
     fn glyphs(rt: &Runtime<State>) -> ([f32; 4], bool) {
         let gs: Vec<_> = rt.instances.iter().filter(|q| q.params[1] == KIND_GLYPH).collect();
         assert!(gs.len() >= 10, "the label draws its glyphs");
         let b = gs.iter().fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |b, q| {
             [b[0].min(q.rect[0]), b[1].min(q.rect[1]), b[2].max(q.rect[0] + q.rect[2]), b[3].max(q.rect[1] + q.rect[3])]
         });
-        (b, gs.iter().all(|q| q.uv[2] == 0.0))
+        (b, gs.iter().all(|q| q.uv[2] == 0.0 && q.radii[3] == 0.0))
     }
     let run = |k: f32, how: How| {
         let mut rt = Runtime::new(State { k, how, pressed: 0 }, view, (300.0, 200.0), Env::new(true, 2.0));
@@ -39,7 +40,9 @@ fn text_inside_a_scale_draws_at_that_size() {
         let rt = run(0.5, how);
         let (half, crisp) = glyphs(&rt);
         let (hw, hh) = (half[2] - half[0], half[3] - half[1]);
-        assert!((hw / w - 0.5).abs() < 0.03 && (hh / h - 0.5).abs() < 0.06, "glyphs draw at half size: {hw}x{hh} vs {w}x{h}");
+        // Windfoil mask quads include a fixed 3–4 px vertical apron (1 px either side plus the
+        // y-glide row) that does not shrink with scale, so at 0.5x `hh` sits ~2 px above `h / 2`.
+        assert!((hw / w - 0.5).abs() < 0.03 && (hh - h * 0.5).abs() <= 2.5, "glyphs draw at half size: {hw}x{hh} vs {w}x{h}");
         for axis in 0..2 {
             let want = c[axis] + (rest[axis] - c[axis]) * 0.5;
             assert!((half[axis] - want).abs() < 1.5, "about the card's centre: {} vs {want}", half[axis]);
@@ -147,7 +150,7 @@ fn a_changing_static_scale_keeps_the_glyph_atlas_bounded() {
             .child(el().key("card").size(200.0, 80.0).scale(s.k).scale_motion(rune_motion::Curve::Instant)
                 .child(crate::el::text("Hamburgefonstiv")))
     }
-    let crisp = |rt: &Runtime<State>| rt.instances.iter().filter(|q| q.params[1] == KIND_GLYPH).all(|q| q.uv[2] == 0.0);
+    let crisp = |rt: &Runtime<State>| rt.instances.iter().filter(|q| q.params[1] == KIND_GLYPH).all(|q| q.uv[2] == 0.0 && q.radii[3] == 0.0);
     let mut rt = Runtime::new(State { k: 1.0 }, view, (300.0, 200.0), Env::new(true, 2.0));
     rt.frame(0.0);
     let rest = rt.text.atlas.glyph_entries();
@@ -183,7 +186,7 @@ fn a_held_press_scale_keeps_its_hover_and_a_scroll_cancels_it() {
     }
     let mut rt = Runtime::new(State { pressed: Vec::new() }, view, (200.0, 200.0), Env::new(true, 2.0));
     rt.frame(0.0);
-    let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("b0")).unwrap().id;
+    let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("b0")).unwrap().id;
     // Held at its right edge, which the shrunk row no longer covers: still hovered.
     rt.pointer_move(199.0, 20.0);
     rt.pointer_down(199.0, 20.0);
@@ -241,7 +244,7 @@ fn press_scale_shrinks_while_held_and_springs_back() {
     assert_eq!(held.target, rest.target, "layout keeps the resting size");
     assert!((held.rect[0] - 2.0).abs() < 0.05 && (held.rect[2] - 96.0).abs() < 0.05, "shrinks about its centre: {:?}", held.rect);
     assert!((info(&rt, "dot").scale - 0.96).abs() < 1e-4, "children shrink with it");
-    assert!(rt.press.inside(), "a press near the edge stays inside the resting rect");
+    assert!(rt.pointer.press_inside(), "a press near the edge stays inside the resting rect");
     rt.pointer_move(150.0, 50.0);
     settle(&mut rt);
     assert!((info(&rt, "tile").scale - 1.0).abs() < 1e-4, "leaving springs back");
@@ -315,9 +318,9 @@ fn a_picture_with_one_side_sizes_the_other_from_its_image() {
     px.set(2, 4, vec![255; 4 * 2 * 4]);
     rt.frame(1.0 / 120.0);
     assert_eq!(size(&rt, "w"), [120.0, 240.0], "a stream that changes shape relays out");
-    let commits = rt.commits;
+    let commits = rt.commit.commits;
     for _ in 0..4 { rt.frame(1.0 / 120.0); }
-    assert_eq!(rt.commits, commits, "an unchanged image costs no commits");
+    assert_eq!(rt.commit.commits, commits, "an unchanged image costs no commits");
 
     // The image lands on a frame that also re-runs the view (`Pixels::set`, then the
     // handle's `update`, or a hover that frame): it still appears at its size.

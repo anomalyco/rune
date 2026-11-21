@@ -20,10 +20,11 @@ mod standard;
 fn main() {}
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn main() {
-    use objc2::{sel, rc::Retained};
+    use objc2::{MainThreadMarker, sel, rc::Retained};
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSEventModifierFlags as Flags, NSMenu, NSMenuItem};
-    use objc2_foundation::{MainThreadMarker, NSProcessInfo, NSString};
+    use objc2_foundation::{NSProcessInfo, NSString};
     let mtm = MainThreadMarker::new().unwrap();
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
@@ -37,11 +38,11 @@ fn main() {
         let titles: Vec<_> = (0..menu.numberOfItems()).map(|i| menu.itemAtIndex(i).unwrap().title().to_string()).collect();
         assert_eq!(titles, [format!("About {name}"), "".into(), "Services".into(), format!("Hide {name}"),
             "Hide Others".into(), "Show All".into(), "".into(), format!("Quit {name}")]);
-        let command = Flags::NSEventModifierFlagCommand;
+        let command = Flags::Command;
         for (index, selector, key, modifiers) in [
             (0, sel!(orderFrontStandardAboutPanel:), "", command),
             (3, sel!(hide:), "h", command),
-            (4, sel!(hideOtherApplications:), "h", command | Flags::NSEventModifierFlagOption),
+            (4, sel!(hideOtherApplications:), "h", command | Flags::Option),
             (5, sel!(unhideAllApplications:), "", command),
             (7, sel!(terminate:), "q", command),
         ] {
@@ -88,11 +89,11 @@ fn main() {
         let plan = |menu: &NSMenu| (0..menu.numberOfItems()).map(|i| {
             let item = menu.itemAtIndex(i).unwrap();
             if item.isSeparatorItem() { return (s("-"), None, s(""), command, true); }
-            (item.title().to_string(), item.action().map(|a| a.name().to_owned()), item.keyEquivalent().to_string(),
+            (item.title().to_string(), item.action().map(|a| a.name().to_string_lossy().into_owned()), item.keyEquivalent().to_string(),
                 item.keyEquivalentModifierMask(), item.target().is_none())
         }).collect::<Vec<_>>();
         assert_eq!(&tops(&root)[1..], ["Edit", "Window"]);
-        let shift = command | Flags::NSEventModifierFlagShift;
+        let shift = command | Flags::Shift;
         assert_eq!(plan(&root.itemAtIndex(1).unwrap().submenu().unwrap()), [
             (s("Undo"), Some(s("undo:")), s("z"), command, true),
             (s("Redo"), Some(s("redo:")), s("z"), shift, true),
@@ -129,7 +130,7 @@ fn main() {
         assert_eq!(key_of(&root, "Window", "Minimize"), "m");
         let paste_plain = NSMenuItem::initWithTitle_action_keyEquivalent(mtm.alloc(), &NSString::from_str("Paste Plain"),
             Some(sel!(runeMenuAction:)), &NSString::from_str("V"));
-        paste_plain.setKeyEquivalentModifierMask(command | Flags::NSEventModifierFlagOption);
+        paste_plain.setKeyEquivalentModifierMask(command | Flags::Option);
         default_macos::adding(&app, || file.addItem(&paste_plain));
         assert_eq!(key_of(&root, "Edit", "Paste"), "v", "⌥⇧⌘V isn't ⌘V");
         file.removeItem(&close_tab);

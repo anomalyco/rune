@@ -7,7 +7,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use rune::*;
 
 static STARTS: AtomicUsize = AtomicUsize::new(0);
@@ -23,7 +23,7 @@ fn plate(_: &(), _: &mut Cx<()>) -> El {
 }
 
 fn wait(limit: Duration, f: impl Fn() -> bool) -> bool {
-    let start = Instant::now();
+    let start = rune::time::now();
     while !f() {
         if start.elapsed() > limit { return false; }
         std::thread::sleep(Duration::from_micros(200));
@@ -46,6 +46,7 @@ fn hide<T>(name: &str, overlay: &OverlayHandle<T>) {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 fn memory_mb() -> f64 {
     #[repr(C)]
     #[derive(Default)]
@@ -77,7 +78,7 @@ fn main() {
         println!("overlay_soak: skipped (set RUNE_GUI_TESTS=1 in a desktop session)");
         return;
     }
-    let cycles: usize = std::env::var("RUNE_SOAK_CYCLES").ok().and_then(|n| n.parse().ok()).unwrap_or(2000).max(WARM_UP + 1);
+    let cycles: usize = rune::env::var("RUNE_SOAK_CYCLES").and_then(|n| n.parse().ok()).unwrap_or(2000).max(WARM_UP + 1);
     std::thread::spawn(|| { std::thread::sleep(Duration::from_secs(3600)); eprintln!("timeout"); std::process::exit(2) });
     on_gpu(|event| if event == GpuEvent::Starting { STARTS.fetch_add(1, Ordering::SeqCst); });
     let mut app = App::new(AppSpec::new("overlay soak", (100.0, 100.0), || (), hud)).args(Vec::new()).windowless();
@@ -92,7 +93,7 @@ fn main() {
     let out = result.clone();
     std::thread::spawn(move || {
         let run = std::panic::catch_unwind(move || {
-            let started = Instant::now();
+            let started = rune::time::now();
             let mut baseline = 0.0;
             for cycle in 0..cycles {
                 show("hud", &hud);

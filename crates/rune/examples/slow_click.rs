@@ -7,7 +7,7 @@
 //! `RUNE_PERF=1 cargo run -p rune --example slow_click -- --script crates/rune/examples/slow_click.json
 //! --snap saved.png`
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rune::{AppSpec, Color, Cx, El, TextStyle, col, el, row, text};
 
@@ -20,7 +20,7 @@ struct Settings {
 /// Busy for 40 ms.
 #[inline(never)]
 fn sort_settings(seed: u64) -> u64 {
-    let start = Instant::now();
+    let start = rune::time::now();
     let mut x = seed | 1;
     while start.elapsed() < Duration::from_millis(40) {
         for _ in 0..1000 { x = std::hint::black_box(x.wrapping_mul(6364136223846793005).wrapping_add(1)); }

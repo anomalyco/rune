@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 use std::ops::Range;
 
-use super::{Block, BlockMap, Highlight, HighlightItem, Markdown, PAD, SpanMap, doc_cached};
+use super::{Block, BlockMap, Highlight, HighlightItem, Markdown, PAD, Source, SpanMap, doc_cached};
 
 /// Case sensitivity for [`find`] (and [`Markdown::find`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -53,10 +53,10 @@ pub fn find(src: &str, query: &str, case: Case) -> Vec<Vec<Range<usize>>> {
     if src.is_empty() || query.is_empty() {
         return Vec::new();
     }
-    let (blocks, _, _, _, maps) = doc_cached(src);
+    let (blocks, sources, _, _, maps) = doc_cached(src);
     let needle = Needle::new(query, case);
     let mut out = Vec::new();
-    find_in_blocks(src, &blocks, &maps, &needle, &mut out);
+    find_in_blocks(src, &blocks, &sources, &maps, &needle, &mut out);
     out
 }
 
@@ -104,14 +104,35 @@ fn push_folded(out: &mut String, c: char) {
 }
 
 /// Calls `f` with each searchable text of `blocks` and its map back to `src`, in document order.
-fn each_text<'a>(blocks: &'a [Block], maps: &'a [BlockMap], f: &mut impl FnMut(&'a str, &'a SpanMap)) {
+fn each_text<'a>(
+    blocks: &'a [Block],
+    sources: &'a [Source],
+    next_source: &mut usize,
+    maps: &'a [BlockMap],
+    f: &mut impl FnMut(&'a str, &'a SpanMap),
+) {
     let empty = &BlockMap::None;
     for (b, map) in blocks.iter().zip(maps.iter().chain(std::iter::repeat(empty))) {
         match (b, map) {
             (Block::Para(inl) | Block::Heading(_, inl), BlockMap::Inline(m)) => f(&inl.text, m),
+            (Block::Para(inl), BlockMap::DeepTail { map, .. }) => f(&inl.text, map),
             (Block::Image { alt, .. }, BlockMap::Inline(m)) => f(alt, m),
-            (Block::Code(code) | Block::Diff(code), BlockMap::Code(m)) => f(code, m),
+            (Block::Code(code), BlockMap::Code(m)) => {
+                let n = *next_source;
+                *next_source += 1;
+                #[cfg(feature = "math")]
+                if let Some(src) = sources.get(n).filter(|s| s.len == code.len() && !s.open)
+                    && crate::math::is_math_fence(src.lang.as_deref())
+                    && crate::math::is_rendered(code)
+                {
+                    continue;
+                }
+                let _ = (sources, n);
+                f(code, m);
+            }
+            (Block::Diff(code), BlockMap::Code(m)) => f(code, m),
             (Block::Mermaid(code), BlockMap::Code(m)) => {
+                *next_source += 1;
                 #[cfg(feature = "mermaid")]
                 if crate::mermaid::supported(code) { continue; }
                 f(code, m);
@@ -128,17 +149,21 @@ fn each_text<'a>(blocks: &'a [Block], maps: &'a [BlockMap], f: &mut impl FnMut(&
             }
             (Block::List { items, .. }, BlockMap::List(item_maps)) => {
                 for (item, imap) in items.iter().zip(item_maps) {
-                    each_text(item, imap, f);
+                    each_text(item, sources, next_source, imap, f);
                 }
             }
-            (Block::Quote(inner), BlockMap::Quote(inner_maps)) => each_text(inner, inner_maps, f),
+            (Block::Quote(inner), BlockMap::Quote(inner_maps)) => each_text(inner, sources, next_source, inner_maps, f),
+            (Block::Code(_) | Block::Mermaid(_), _) => {
+                *next_source += 1;
+            }
             _ => {}
         }
     }
 }
 
-fn find_in_blocks(src: &str, blocks: &[Block], maps: &[BlockMap], needle: &Needle<'_>, out: &mut Vec<Vec<Range<usize>>>) {
-    each_text(blocks, maps, &mut |text, map| find_in_text(src, text, map, needle, out));
+fn find_in_blocks(src: &str, blocks: &[Block], sources: &[Source], maps: &[BlockMap], needle: &Needle<'_>, out: &mut Vec<Vec<Range<usize>>>) {
+    let mut next_source = 0usize;
+    each_text(blocks, sources, &mut next_source, maps, &mut |text, map| find_in_text(src, text, map, needle, out));
 }
 
 #[derive(Clone, Debug)]
@@ -208,9 +233,10 @@ pub struct Rendered {
 impl Rendered {
     /// `src`'s rendered blocks, from the cached parse.
     pub fn new(src: &str) -> Self {
-        let (blocks, _, _, _, maps) = doc_cached(src);
+        let (blocks, sources, _, _, maps) = doc_cached(src);
         let mut out = Vec::new();
-        each_text(&blocks, &maps, &mut |text, map| {
+        let mut next_source = 0usize;
+        each_text(&blocks, &sources, &mut next_source, &maps, &mut |text, map| {
             if let Some((vis, segments)) = visible(src, text, map) {
                 out.push((vis.into_owned(), segments));
             }

@@ -33,7 +33,7 @@ fn y(rt: &Runtime<Rows>, key: &str) -> f32 {
 }
 
 fn offset_tracked(rt: &Runtime<Rows>, key: &str) -> bool {
-    rt.nodes.iter().find(|n| n.path.ends_with(&format!("/{key}"))).is_some_and(|n| rt.scene.store().has(n.id, prop::OFFSET))
+    rt.tree.nodes.iter().find(|n| n.path.ends_with(&format!("/{key}"))).is_some_and(|n| rt.scene.store().has(n.id, prop::OFFSET))
 }
 
 fn swap_last_two(rows: &mut Rows) {

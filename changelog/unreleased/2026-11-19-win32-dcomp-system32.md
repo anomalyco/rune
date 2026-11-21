@@ -1,0 +1,1 @@
+- Windows: `dcomp.dll` is loaded from the system directory only, like Rune's other system libraries, not through the default search order, which looks beside the app first.

@@ -1,4 +1,7 @@
 //! Carbon hotkeys do not require Accessibility or Input Monitoring permission.
+
+#![allow(unsafe_code)]
+
 use super::{Backend, Shortcut, ShortcutError, ShortcutId, Sink, native_status, parse::*};
 use objc2_core_foundation::{CFArray, CFBoolean, CFDictionary, CFNumber, CFPreferencesCopyAppValue, CFRetained, CFString, CFType};
 use std::{cell::RefCell, collections::HashMap, ffi::c_void, ptr};
@@ -41,14 +44,14 @@ unsafe extern "C" fn activated(_: Ref, event: Ref, data: Ref) -> i32 {
         let context = &*data.cast::<Context>();
         if !context.keys.borrow().contains_key(&ShortcutId(id.id)) { return NOT_HANDLED; }
         // Never unwind across Carbon. Application handlers themselves run later, in Rune.
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (context.sink)(ShortcutId(id.id), None)));
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (context.sink)(ShortcutId(id.id), None))).ok();
         0
     }
 }
 
 impl Native {
     pub(super) fn new(sink: Sink) -> Result<Self, ShortcutError> {
-        if objc2_foundation::MainThreadMarker::new().is_none() { return Err(ShortcutError::Backend("Carbon requires the main thread".into())); }
+        if objc2::MainThreadMarker::new().is_none() { return Err(ShortcutError::Backend("Carbon requires the main thread".into())); }
         let mut context = Box::new(Context { sink, keys: RefCell::default() });
         let mut handler = ptr::null_mut();
         // SAFETY: Context's address remains stable until after RemoveEventHandler in Drop.
@@ -127,7 +130,7 @@ const MODS: u32 = CMD | SHIFT_KEY | OPTION | CONTROL;
 /// An enabled macOS symbolic hotkey on this chord: its name when it is a known shortcut assigned
 /// there (by default or remapped), otherwise "macOS". None off the main thread (HIToolbox).
 pub(super) fn system_owner(shortcut: &Shortcut) -> Option<String> {
-    objc2_foundation::MainThreadMarker::new()?;
+    objc2::MainThreadMarker::new()?;
     let chord = (keycode(shortcut.key_name())?, carbon_mods(shortcut));
     if !enabled_symbolic().contains(&chord) { return None; }
     Some(named(chord, &remapped()).unwrap_or("macOS").into())

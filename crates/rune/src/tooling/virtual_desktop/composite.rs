@@ -31,7 +31,22 @@ pub(super) struct Uniform {
     pub(super) _unused: [f32; 2],
 }
 
-const SHADER: &str = r#"
+const _: () = {
+    use std::mem::{offset_of, size_of};
+    assert!(size_of::<Uniform>() == 64);
+    assert!(offset_of!(Uniform, origin) == 0);
+    assert!(offset_of!(Uniform, size) == 8);
+    assert!(offset_of!(Uniform, out_size) == 16);
+    assert!(offset_of!(Uniform, shadow_offset) == 24);
+    assert!(offset_of!(Uniform, mask_size) == 32);
+    assert!(offset_of!(Uniform, radius) == 40);
+    assert!(offset_of!(Uniform, pad) == 44);
+    assert!(offset_of!(Uniform, sigma) == 48);
+    assert!(offset_of!(Uniform, opacity) == 52);
+    assert!(offset_of!(Uniform, _unused) == 56);
+};
+
+pub(super) const SHADER: &str = r#"
 struct W {
     origin: vec2<f32>,
     size: vec2<f32>,
@@ -335,8 +350,15 @@ pub(super) fn fit_backdrop(path: &Path, (w, h): (u32, u32)) -> Result<Vec<u8>, S
     let mut out = Vec::with_capacity(len);
     for p in image.pixels() {
         let [r, g, b, a] = p.0;
-        let over = |c: u8| (u32::from(c) * u32::from(a) / 255) as u8;
-        out.extend([over(r), over(g), over(b), 255]);
+        if a == 255 {
+            out.extend([r, g, b, 255]);
+        } else if a == 0 {
+            out.extend([0, 0, 0, 255]);
+        } else {
+            let alpha = f32::from(a) / 255.0;
+            let over = |c: u8| (crate::color::srgb_encode(crate::color::srgb_decode(f32::from(c) / 255.0) * alpha) * 255.0).round() as u8;
+            out.extend([over(r), over(g), over(b), 255]);
+        }
     }
     Ok(out)
 }

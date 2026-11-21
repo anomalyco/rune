@@ -14,31 +14,31 @@ pub(crate) fn on_screen(rect: [f32; 4], view: (f32, f32)) -> bool {
     w * h >= need
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Queues `on_visible` for elements that came on screen or left it since the last frame.
     /// True when it queued any.
     pub(super) fn report_visible(&mut self) -> bool {
-        if !self.has_drawn_layout && self.visible_fired.is_empty() { return false; }
-        let last = std::mem::take(&mut self.visible_fired);
+        if !self.tree.has_drawn_layout() && self.commit.visible_fired_empty() { return false; }
+        let last = self.commit.take_visible_fired();
         let mut seen = HashMap::with_capacity_and_hasher(last.len(), Default::default());
         let mut queued = false;
         // A page draws a band that starts above the window and ends below it; what's on screen is
         // the window inside the band, not the band.
         let (top, view) = self.page_window();
-        for i in 0..self.nodes.len() {
-            let n = &self.nodes[i];
+        for i in 0..self.tree.nodes.len() {
+            let n = &self.tree.nodes[i];
             if n.handlers.get().is_none_or(|h| h.on_visible.is_none()) || self.subtree_exiting(i) { continue; }
-            let Some(&drawn) = self.drawn.get(i) else { continue };
+            let Some(&drawn) = self.paint.drawn.get(i) else { continue };
             let on = on_screen([drawn[0], drawn[1] - top, drawn[2], drawn[3]], (self.viewport.0, view));
             seen.insert(n.id, on);
             if last.get(&n.id).copied().unwrap_or(false) != on {
                 let path = n.path.clone();
-                self.queue.retain(|a| !matches!(a, Action::Visible(p, _) if *p == path));
-                self.queue.push(Action::Visible(path, on));
+                self.frame.queue.retain(|a| !matches!(a, Action::Visible(p, _) if *p == path));
+                self.frame.queue.push(Action::Visible(path, on));
                 queued = true;
             }
         }
-        self.visible_fired = seen;
+        self.commit.set_visible_fired(seen);
         queued
     }
 }

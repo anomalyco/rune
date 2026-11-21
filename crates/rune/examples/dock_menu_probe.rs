@@ -9,9 +9,9 @@ fn main() { mac::run(); }
 #[cfg(target_os = "macos")]
 mod mac {
     use std::io::{BufRead, Write};
-    use objc2::rc::Retained;
+    use objc2::{MainThreadMarker, rc::Retained};
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy as Policy, NSMenu};
-    use objc2_foundation::{MainThreadMarker, NSProcessInfo};
+    use objc2_foundation::NSProcessInfo;
     use rune::{App, AppSpec, MenuItem};
 
     #[derive(Default)]
@@ -20,36 +20,33 @@ mod mac {
     fn line(text: &str) { println!("{text}"); std::io::stdout().flush().unwrap(); }
     fn custom() -> MenuItem<State> { MenuItem::new("Custom Action", |_, _| line("CUSTOM")) }
     fn status(s: &mut State) {
-        // SAFETY: Called by AppHandle::update on the app thread, with retained menus.
-        unsafe {
-            let app = app();
-            let root = app.mainMenu().unwrap();
-            if let Some(previous) = &s.root { assert!(std::ptr::eq(&**previous, &*root), "root replaced"); }
-            s.root = Some(root.clone());
-            let menu = root.itemAtIndex(0).unwrap().submenu().unwrap();
-            let titles: Vec<_> = (0..menu.numberOfItems()).map(|i| menu.itemAtIndex(i).unwrap().title().to_string()).collect();
-            let name = NSProcessInfo::processInfo().processName().to_string();
-            for title in [format!("About {name}"), "Services".into(), format!("Hide {name}"),
-                "Hide Others".into(), "Show All".into(), format!("Quit {name}")] {
-                assert_eq!(titles.iter().filter(|t| **t == title).count(), 1, "{title}: {titles:?}");
-            }
-            assert_eq!(root.numberOfItems(), 1, "no Edit shortcuts");
-            println!("POLICY {:?}", app.activationPolicy());
-            println!("CUSTOM_PRESENT {}", titles.iter().any(|s| s == "Custom Action"));
-            // Cua sends physical US keys. Resolve the current layout's ⌘Q without
-            // switching the user's input source (Pro may be running Dvorak). Under ⌘,
-            // as the script presses it: some layouts change while ⌘ is held.
-            let quit_key = ('a'..='z').find(|key| {
-                format!("cmd+{key}").parse::<rune::Shortcut>().unwrap().keycaps().last().is_some_and(|label| label == "Q")
-            }).expect("current layout must have Q on a letter key for this probe");
-            println!("QUIT_KEY {quit_key}");
-            line("STATUS");
+        let app = app();
+        let root = app.mainMenu().unwrap();
+        if let Some(previous) = &s.root { assert!(std::ptr::eq(&**previous, &*root), "root replaced"); }
+        s.root = Some(root.clone());
+        let menu = root.itemAtIndex(0).unwrap().submenu().unwrap();
+        let titles: Vec<_> = (0..menu.numberOfItems()).map(|i| menu.itemAtIndex(i).unwrap().title().to_string()).collect();
+        let name = NSProcessInfo::processInfo().processName().to_string();
+        for title in [format!("About {name}"), "Services".into(), format!("Hide {name}"),
+            "Hide Others".into(), "Show All".into(), format!("Quit {name}")] {
+            assert_eq!(titles.iter().filter(|t| **t == title).count(), 1, "{title}: {titles:?}");
         }
+        assert_eq!(root.numberOfItems(), 1, "no Edit shortcuts");
+        println!("POLICY {:?}", app.activationPolicy());
+        println!("CUSTOM_PRESENT {}", titles.iter().any(|s| s == "Custom Action"));
+        // Cua sends physical US keys. Resolve the current layout's ⌘Q without
+        // switching the user's input source (Pro may be running Dvorak). Under ⌘,
+        // as the script presses it: some layouts change while ⌘ is held.
+        let quit_key = ('a'..='z').find(|key| {
+            format!("cmd+{key}").parse::<rune::Shortcut>().unwrap().keycaps().last().is_some_and(|label| label == "Q")
+        }).expect("current layout must have Q on a letter key for this probe");
+        println!("QUIT_KEY {quit_key}");
+        line("STATUS");
     }
     pub fn run() {
         // Work after `run` returns below: the process tears down in order rather than ending at once.
         rune::orderly_exit();
-        let before = std::env::var("RUNE_MENU_ORDER").unwrap() == "before";
+        let before = rune::env::var("RUNE_MENU_ORDER").unwrap() == "before";
         let mut app = App::new(AppSpec::new("Rune Dock menu probe", (320.0, 120.0), State::default,
             |_, _| rune::text("Accessory → Regular menu probe")))
             .accessory().windowless().on_ready(|_| line("WINDOW_READY"));
@@ -59,11 +56,8 @@ mod mac {
         handle.update(move |s, _| {
             assert!(errors.take_menu_errors().is_empty());
             let native = self::app();
-            // SAFETY: Main-thread app startup, no native windows have been opened.
-            unsafe {
-                assert_eq!(native.activationPolicy(), Policy::Accessory);
-                s.root = native.mainMenu();
-            }
+            assert_eq!(native.activationPolicy(), Policy::Accessory);
+            s.root = native.mainMenu();
             assert_eq!(s.root.is_some(), before);
             line(if before { "ACCESSORY_CUSTOM" } else { "ACCESSORY_MISSING" });
         });

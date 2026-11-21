@@ -29,7 +29,7 @@ enum Written {
 }
 
 /// `run` starts the event loop.
-pub(crate) fn run_starts() { RUN.get_or_init(Instant::now); }
+pub(crate) fn run_starts() { RUN.get_or_init(crate::time::now); }
 
 /// A window's `on_ready` returned. Only the process's first writes the file.
 pub(crate) fn ready() { ready_in(std::env::var_os(VAR).as_deref()) }
@@ -60,7 +60,7 @@ pub(crate) fn clear() {
     // At exit, another thread may hold the lock; leaving the file then is what a kill does.
     let Ok(mut written) = WRITTEN.try_lock() else { return };
     if let Written::At(path) = &*written {
-        let _ = std::fs::remove_file(path);
+        std::fs::remove_file(path).ok();
         *written = Written::NoFile;
     }
 }
@@ -90,7 +90,7 @@ impl Signal {
             let mut file = std::fs::File::create(&temp)?;
             file.write_all(format!("{}\n", self.json()).as_bytes())?;
             drop(file);
-            std::fs::rename(&temp, &path).inspect_err(|_| { let _ = std::fs::remove_file(&temp); })?;
+            std::fs::rename(&temp, &path).inspect_err(|_| { std::fs::remove_file(&temp).ok(); })?;
             Ok(path)
         })())
     }
@@ -105,9 +105,10 @@ fn bundle_id() -> String {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn main_bundle_id() -> Option<String> {
-    use objc2_foundation_video::NSString;
-    use objc2_video::{class, msg_send, rc::Retained, runtime::AnyObject};
+    use objc2_foundation::NSString;
+    use objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
     // SAFETY: NSBundle reads, which are thread-safe.
     unsafe {
         let bundle: Option<Retained<AnyObject>> = msg_send![class!(NSBundle), mainBundle];
@@ -117,6 +118,7 @@ fn main_bundle_id() -> Option<String> {
 }
 
 /// Removes the file when the process exits through `exit`, as AppKit's Quit does.
+#[allow(unsafe_code)]
 fn on_exit() {
     #[cfg(unix)]
     {

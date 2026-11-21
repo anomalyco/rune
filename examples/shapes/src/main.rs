@@ -2,6 +2,8 @@
 //! polygon. `cargo run -p shapes -- --snap shapes.png` renders it headless; time animates the
 //! waveform, so `--at 1.5` shows another moment.
 
+#![forbid(unsafe_code)]
+
 use rune::{AppSpec, Color, Cx, El, LineCap, Path, Shape, Tx, canvas, col, memo, row, text};
 
 struct State {

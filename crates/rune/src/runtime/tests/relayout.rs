@@ -38,7 +38,7 @@ fn paragraphs(n: &u32, _: &mut Cx<u32>) -> El {
 }
 
 fn node<'a, S>(rt: &'a Runtime<S>, key: &str) -> &'a Node {
-    rt.nodes.iter().find(|n| n.key.as_deref() == Some(key)).unwrap()
+    rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some(key)).unwrap()
 }
 
 fn content<S>(rt: &Runtime<S>, key: &str) -> String {
@@ -47,7 +47,7 @@ fn content<S>(rt: &Runtime<S>, key: &str) -> String {
 
 /// Every node's path, layout rect and text line count.
 fn layout<S>(rt: &Runtime<S>) -> Vec<(String, [f32; 4], usize)> {
-    rt.nodes.iter().map(|n| (n.path.clone(), n.target, n.text_layout.as_ref().and_then(crate::text::TextLayout::single).map_or(0, |l| l.len()))).collect()
+    rt.tree.nodes.iter().map(|n| (n.path.clone(), n.target, n.text_layout.as_ref().and_then(crate::text::TextLayout::single).map_or(0, |l| l.len()))).collect()
 }
 
 #[test]
@@ -74,11 +74,11 @@ fn a_resize_reuses_the_last_commits_node_buffer() {
     rt.invalidate();
     rt.frame(1.0 / 120.0);
     for w in [600.0, 420.0, 300.0] {
-        let (spare, last) = (rt.spare_nodes.as_ptr(), rt.nodes.as_ptr());
-        assert!(rt.spare_nodes.capacity() >= rt.nodes.len());
+        let (spare, last) = (rt.tree.spare_nodes.as_ptr(), rt.tree.nodes.as_ptr());
+        assert!(rt.tree.spare_nodes.capacity() >= rt.tree.nodes.len());
         assert_eq!(resize(&mut rt, w, 2.0), 0, "at {w}");
-        assert_eq!(rt.nodes.as_ptr(), spare, "at {w}");
-        assert_eq!(rt.spare_nodes.as_ptr(), last, "at {w}");
+        assert_eq!(rt.tree.nodes.as_ptr(), spare, "at {w}");
+        assert_eq!(rt.tree.spare_nodes.as_ptr(), last, "at {w}");
     }
 }
 
@@ -147,7 +147,7 @@ fn transcript(sticky: &bool, _: &mut Cx<bool>) -> El {
 
 /// Resizes by the full path: the view runs, as it did before resizes reused the tree.
 fn full_resize<S>(rt: &mut Runtime<S>, size: (f32, f32)) -> u32 {
-    rt.reuse.scale = f32::NAN;
+    rt.commit.set_reuse_scale(f32::NAN);
     views(|| {
         rt.set_viewport(size, 2.0);
         rt.frame(1.0 / 120.0);
@@ -182,7 +182,7 @@ fn a_resize_lays_a_virtual_lists_mounted_rows_out_again_without_the_view() {
         let mut rt = scrolled_transcript(sticky);
         let mut full = scrolled_transcript(sticky);
         assert_eq!(shown(&rt), shown(&full));
-        let range = rt.virtuals["#0/scroll/rows"].range.clone();
+        let range = rt.commit.virtuals["#0/scroll/rows"].range.clone();
         let mut fast = 0;
         for w in (1..=40).map(|k| 700.0 - 5.0 * k as f32) {
             fast += u32::from(resize(&mut rt, w, 2.0) == 0);
@@ -190,7 +190,7 @@ fn a_resize_lays_a_virtual_lists_mounted_rows_out_again_without_the_view() {
             assert_eq!(shown(&rt), shown(&full), "at {w}, sticky {sticky}");
         }
         assert!(fast >= 30, "{fast} of 40 steps skipped the view (sticky {sticky})");
-        assert!(rt.virtuals["#0/scroll/rows"].range.start >= range.start.saturating_sub(4));
+        assert!(rt.commit.virtuals["#0/scroll/rows"].range.start >= range.start.saturating_sub(4));
     }
 }
 
@@ -202,8 +202,8 @@ fn a_narrowing_window_lets_go_of_rows_the_overscan_no_longer_holds() {
     let mut ran = 0;
     for w in (1..=80).map(|k| 700.0 - 5.0 * k as f32) {
         ran += resize(&mut rt, w, 2.0);
-        let v = &rt.virtuals["#0/scroll/rows"];
-        let offset = rt.scrolls[&rt.path_ids["#0/scroll"]].offset as f32 - v.top;
+        let v = &rt.commit.virtuals["#0/scroll/rows"];
+        let offset = rt.scroll.scrolls[&rt.tree.path_ids["#0/scroll"]].offset as f32 - v.top;
         assert!(v.spare(offset, false) <= v.viewport, "at {w}");
     }
     assert!((1..20).contains(&ran), "the view ran {ran} times in 80 steps");
@@ -215,11 +215,11 @@ fn a_narrowing_window_lets_go_of_rows_the_overscan_no_longer_holds() {
 fn a_resize_that_moves_a_virtual_window_runs_the_view() {
     let mut rt = scrolled_transcript(false);
     let mut full = scrolled_transcript(false);
-    let before = rt.virtuals["#0/scroll/rows"].range.clone();
+    let before = rt.commit.virtuals["#0/scroll/rows"].range.clone();
     rt.set_viewport((700.0, 1800.0), 2.0);
     assert_eq!(views(|| { rt.frame(1.0 / 120.0); }), 1);
     assert_eq!(full_resize(&mut full, (700.0, 1800.0)), 1);
-    assert_ne!(rt.virtuals["#0/scroll/rows"].range, before, "the window moved");
+    assert_ne!(rt.commit.virtuals["#0/scroll/rows"].range, before, "the window moved");
     assert_eq!(shown(&rt), shown(&full));
 }
 
@@ -341,7 +341,7 @@ fn a_caret_read_the_resize_moves_runs_the_view() {
     assert!(resize(&mut rt, 500.0, 2.0) >= 1);
     let after = content(&rt, "label");
     assert_ne!(after, before);
-    let caret = rt.caret.as_ref().unwrap().1[0];
+    let caret = rt.edit.caret.as_ref().unwrap().1[0];
     assert_eq!(after, format!("{caret}"), "the view shows where the caret is now");
 }
 
@@ -405,11 +405,11 @@ fn a_resize_moves_nodes_keeps_inputs_and_restores_on_virtual_window_fallback() {
     for &(w, h) in &[(760.0, 600.0), (700.0, 600.0), (420.0, 1200.0), (780.0, 600.0)] {
         rt.set_viewport((w, h), 2.0);
         rt.frame(1.0 / 120.0);
-        full.reuse.scale = f32::NAN;
+        full.commit.set_reuse_scale(f32::NAN);
         full.set_viewport((w, h), 2.0);
         full.frame(1.0 / 120.0);
         assert_eq!(shown(&rt), shown(&full), "at {w}x{h}");
-        assert_eq!(rt.focus.path(), Some("#0/main/composer"));
+        assert_eq!(rt.kbd.focus.path(), Some("#0/main/composer"));
     }
 }
 
@@ -420,25 +420,25 @@ fn a_commit_picks_its_kind_once_from_what_changed() {
     use crate::runtime::relayout::CommitKind;
     let mut rt = scrolled_transcript(false);
     let (tx, settle) = (Tx::default(), Tx { commit: Commit::SettleAnimated, ..Tx::default() });
-    rt.state_unchanged = true;
+    rt.commit.set_state_unchanged(true);
     assert_eq!(rt.commit_kind(&tx), CommitKind::Remount);
-    rt.relayout = true;
+    rt.commit.relayout = true;
     assert_eq!(rt.commit_kind(&tx), CommitKind::Relayout, "a resize never remounts");
     for relayout in [true, false] {
-        rt.relayout = relayout;
+        rt.commit.relayout = relayout;
         assert_eq!(rt.commit_kind(&settle), CommitKind::Rebuild);
-        rt.reuse.read_moved = true;
+        rt.commit.set_read_moved(true);
         assert_eq!(rt.commit_kind(&tx), CommitKind::Rebuild, "a read moved");
-        rt.reuse.read_moved = false;
-        rt.reuse.scale = f32::NAN;
+        rt.commit.set_read_moved(false);
+        rt.commit.set_reuse_scale(f32::NAN);
         assert_eq!(rt.commit_kind(&tx), CommitKind::Rebuild, "a new scale");
-        rt.reuse.scale = rt.env.scale;
-        rt.state_unchanged = false;
+        rt.commit.set_reuse_scale(rt.env.scale);
+        rt.commit.set_state_unchanged(false);
         assert_eq!(rt.commit_kind(&tx), CommitKind::Rebuild, "the state changed");
-        rt.state_unchanged = true;
+        rt.commit.set_state_unchanged(true);
     }
     let mut plain = Runtime::new(0, paragraphs, (700.0, 600.0), Env::new(true, 2.0));
     plain.frame(0.0);
-    plain.state_unchanged = true;
+    plain.commit.set_state_unchanged(true);
     assert_eq!(plain.commit_kind(&tx), CommitKind::Rebuild, "no virtual rows to remount");
 }

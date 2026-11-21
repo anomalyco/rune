@@ -5,18 +5,18 @@ use std::hash::{Hash, Hasher};
 
 use accesskit::{Action as Ak, Affine, Live, Node as AkNode, Role, Toggled};
 
-use super::*;
-use super::a11y_tree::{Walk, hash_str, mix, rect};
-use crate::a11y::roles::{self, RoleCtx};
+use super::roles::{self, RoleCtx};
+use super::tree::{Walk, element_id, hash_str, mix, rect};
 use crate::el::Checked;
+use crate::runtime::RuntimeCore;
 
 /// Text named from an element's content stops here.
 const NAME_MAX: usize = 400;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Node `i`'s role in the tree, or `None` when it joins its parent.
     pub(crate) fn a11y_role(&self, i: usize) -> Option<Role> {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let handlers = n.handlers.get();
         let input = n.input.as_deref();
         let text = n.text.as_deref().filter(|_| input.is_none());
@@ -30,7 +30,7 @@ impl<S: 'static> Runtime<S> {
             input: input.is_some(),
             multiline: input.is_some_and(|i| !i.single_line),
             secure: n.is_secure(),
-            scrolls: n.scroll.is_some() && self.scrolls.contains_key(&n.id),
+            scrolls: n.scroll.is_some() && self.scroll.scrolls.contains_key(&n.id),
             modal: handlers.is_some_and(|h| h.modal.is_some()),
             default_button: n.focus.default,
             labelled: n.label.as_deref().is_some_and(|l| !l.trim().is_empty()),
@@ -45,7 +45,7 @@ impl<S: 'static> Runtime<S> {
     /// A hash of everything [`Self::a11y_node`] and its text's lines and links read of node
     /// `i`, besides its children and the text inside it ([`Self::a11y_content_prints`]).
     pub(super) fn a11y_print(&self, i: usize, role: Role, w: &Walk) -> u64 {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let mut h = rustc_hash::FxHasher::default();
         (role as u8).hash(&mut h);
         n.role.hash(&mut h);
@@ -61,40 +61,63 @@ impl<S: 'static> Runtime<S> {
             (&m.description, &m.value, &m.set, &m.shortcut, m.invalid, m.read_only, m.sorted, m.busy).hash(&mut h);
             [m.labelled_by.as_deref(), m.described_by.as_deref()].map(|k| k.and_then(|k| self.a11y_keyed(i, k)).map(|j| self.a11y_words(j))).hash(&mut h);
             if let Some(r) = m.range { [r.value, r.min, r.max, r.step.unwrap_or(f64::NAN)].map(f64::to_bits).hash(&mut h); }
-            self.a11y_active_descendant(i).map(|j| self.nodes[j].id.0).hash(&mut h);
+            self.a11y_active_descendant(i).map(|j| self.tree.nodes[j].id.0).hash(&mut h);
         }
         n.text_cut(self.env.scale).hash(&mut h);
         let secure = n.is_secure();
-        secure.hash(&mut h);
+        let long_field = self.a11y_uses_long_field(i);
+        (secure, long_field).hash(&mut h);
+        let long_key = long_field.then(|| {
+            n.text.as_deref().and_then(|t| t.shape.map(|(_, k)| k))
+                .or_else(|| n.text_layout.as_ref().and_then(crate::text::TextLayout::content_key))
+        }).flatten();
         if let Some(t) = n.text.as_deref() {
-            if !secure { t.content.hash(&mut h); }
+            if !secure {
+                match long_key {
+                    Some(k) => (k, t.content.len()).hash(&mut h),
+                    None => t.content.hash(&mut h),
+                }
+            }
             (t.redacted, t.selectable, t.cold.on_link.is_some(), t.cold.on_link_secondary.is_some(), t.cold.links.len()).hash(&mut h);
             for l in &t.cold.links { (l.start, l.end, &l.id, l.role, &l.label).hash(&mut h); }
         }
-        // A text's lines come from its layout and where it scrolled.
-        n.text_layout.as_ref().map(crate::text::TextLayout::address).hash(&mut h);
+        // A text's lines come from its layout and where it scrolled; a long field's drawn lines
+        // live under `lines_box_id`, whose own fingerprint tracks its layout and scroll band.
+        if !long_field {
+            n.text_layout.as_ref().map(crate::text::TextLayout::address).hash(&mut h);
+        }
         n.elided.map(|e| (e.head, e.tail)).hash(&mut h);
         if let Some(input) = n.input.as_deref() {
             let e = &input.edit;
-            if !secure { e.text.hash(&mut h); }
+            if !secure && (long_key.is_none() || e.preedit().is_some()) {
+                if long_field {
+                    // During IME composition on a long field, `t.content` is the display string and
+                    // `long_key` already hashed it; only hash `e.text.len()` + preedit metadata.
+                    e.text.len().hash(&mut h);
+                } else {
+                    e.text.hash(&mut h);
+                }
+            }
             (e.anchor, e.focus, e.preedit().map(|p| (p.0.len(), p.1)), e.focused, &input.placeholder, input.single_line, input.access.is_some()).hash(&mut h);
-            self.input_scroll.get(&n.path).map(|v| v.to_bits()).hash(&mut h);
+            if !long_field {
+                self.edit.input_scroll.get(&n.path).map(|v| v.to_bits()).hash(&mut h);
+            }
         }
         let handlers = n.handlers.get();
         (handlers.is_some_and(|h| h.on_press.is_some()), handlers.is_some_and(|h| h.on_secondary_press.is_some()),
             handlers.is_some_and(|h| h.modal.is_some()), handlers.is_some_and(|h| h.has_primary())).hash(&mut h);
-        (n.focus.selected, n.focus.step.is_some(), n.focus.default, self.in_focus_group(i)).hash(&mut h);
+        (n.focus.selected, n.focus.step.is_some(), n.focus.default, self.focus_group(i).is_some()).hash(&mut h);
         (self.allowed(i), self.can_focus(i), n.inert).hash(&mut h);
-        if let Some(st) = self.scrolls.get(&n.id).filter(|_| n.scroll.is_some()) {
+        if let Some(st) = self.scroll.scrolls.get(&n.id).filter(|_| n.scroll.is_some()) {
             [st.offset.to_bits(), st.max.to_bits(), st.x.offset.to_bits(), st.x.max.to_bits()].hash(&mut h);
             [st.drawn_x, st.drawn.y()].map(f32::to_bits).hash(&mut h);
         }
         // Its box in its viewport's content space, which scrolling leaves alone.
-        let r = rect(self.drawn[i], w.shift);
+        let r = rect(self.paint.drawn[i], w.shift);
         [r.x0, r.y0, r.x1, r.y1].map(f64::to_bits).hash(&mut h);
         w.scrolled.hash(&mut h);
         self.env.scale.to_bits().hash(&mut h);
-        self.drawn_scale.get(i).map(|v| v.to_bits()).hash(&mut h);
+        self.paint.drawn_scale.get(i).map(|v| v.to_bits()).hash(&mut h);
         (n.vis.pixels.is_some(), n.vis.surface.is_some()).hash(&mut h);
         // A grid's rows, each kept while unchanged.
         if let Some(g) = n.vis.grid.as_deref() {
@@ -108,9 +131,9 @@ impl<S: 'static> Runtime<S> {
     /// own text or label, and its descendants', folded bottom-up. Zero for nodes whose role
     /// doesn't read it.
     pub(super) fn a11y_content_prints(&self) -> Vec<u64> {
-        let mut sub = vec![0u64; self.nodes.len()];
-        for j in (0..self.nodes.len()).rev() {
-            let n = &self.nodes[j];
+        let mut sub = vec![0u64; self.tree.nodes.len()];
+        for j in (0..self.tree.nodes.len()).rev() {
+            let n = &self.tree.nodes[j];
             let own = if n.a11y.hidden || n.vis.opacity <= 0.01 || n.is_secure() { 0 }
                 else if let Some(l) = n.label.as_deref() { hash_str(l) }
                 else { n.text.as_deref().filter(|_| n.input.is_none()).map_or(0, |t| hash_str(&t.content)) };
@@ -122,12 +145,12 @@ impl<S: 'static> Runtime<S> {
 
     /// Node `i` as an AccessKit node of `role`, without its children.
     pub(super) fn a11y_node(&self, i: usize, role: Role, w: &Walk) -> AkNode {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let handlers = n.handlers.get();
         let input = n.input.as_deref();
         let secure = n.is_secure();
         let text = n.text.as_deref().filter(|_| input.is_none());
-        let scroll = self.scrolls.get(&n.id).filter(|_| n.scroll.is_some());
+        let scroll = self.scroll.scrolls.get(&n.id).filter(|_| n.scroll.is_some());
         let modal = handlers.is_some_and(|h| h.modal.is_some());
         let focusable = self.can_focus(i);
         let mut node = AkNode::new(role);
@@ -174,7 +197,7 @@ impl<S: 'static> Runtime<S> {
                 Some(false) => node.set_sort_direction(accesskit::SortDirection::Descending),
                 None => {}
             }
-            if let Some(j) = self.a11y_active_descendant(i) { node.set_active_descendant(super::a11y_tree::element_id(self.nodes[j].id)); }
+            if let Some(j) = self.a11y_active_descendant(i) { node.set_active_descendant(element_id(self.tree.nodes[j].id)); }
             if m.busy { node.set_busy(); }
         }
         if let Some(v) = more.and_then(|m| m.value.as_deref()) { node.set_value(v); }
@@ -194,8 +217,8 @@ impl<S: 'static> Runtime<S> {
         }
         // An item of a group reports whether it's the selected one; elsewhere only a selected
         // item says so (a tree whose container keeps focus).
-        if roles::selectable_item(role) && (n.focus.selected || self.in_focus_group(i)) { node.set_selected(n.focus.selected); }
-        let live = n.a11y.live.or(match n.role { "status" | "log" => Some(crate::LiveRegion::Polite), "alert" => Some(crate::LiveRegion::Assertive), _ => None });
+        if roles::selectable_item(role) && (n.focus.selected || self.focus_group(i).is_some()) { node.set_selected(n.focus.selected); }
+        let live = n.a11y.live.or_else(|| roles::default_live(n.role));
         match live {
             Some(crate::LiveRegion::Polite) => node.set_live(Live::Polite),
             Some(crate::LiveRegion::Assertive) => node.set_live(Live::Assertive),
@@ -219,7 +242,7 @@ impl<S: 'static> Runtime<S> {
                 node.set_scroll_x_max(st.x.max);
             }
         }
-        node.set_bounds(rect(self.drawn[i], shift));
+        node.set_bounds(rect(self.paint.drawn[i], shift));
         // What a pointer or keyboard user can do to it, routed to the same handlers.
         if actionable {
             if handlers.is_some_and(|h| h.on_press.is_some()) || input.is_some() { node.add_action(Ak::Click); }
@@ -255,11 +278,13 @@ impl<S: 'static> Runtime<S> {
 
     /// The element node `i`'s `El::active_descendant` names, if it is in the tree.
     pub(crate) fn a11y_active_descendant(&self, i: usize) -> Option<usize> {
-        let key = self.nodes[i].a11y.more.as_deref()?.active.as_deref()?;
+        let key = self.tree.nodes[i].a11y.more.as_deref()?.active.as_deref()?;
         // Its own rows first: a row id may also key something elsewhere.
-        let inside = |j: &usize| std::iter::successors(self.nodes[*j].parent, |&p| self.nodes[p].parent).any(|p| p == i);
-        let own = (i + 1..self.nodes.len()).take_while(inside).find(|&j| self.nodes[j].named(key));
-        own.or_else(|| self.nodes.iter().position(|n| n.named(key))).filter(|&j| !self.subtree_exiting(j))
+        let inside = |j: &usize| std::iter::successors(self.tree.nodes[*j].parent, |&p| self.tree.nodes[p].parent).any(|p| p == i);
+        let own = (i + 1..self.tree.nodes.len())
+            .take_while(inside)
+            .find(|&j| self.tree.nodes[j].named(key) && !self.subtree_exiting(j));
+        own.or_else(|| self.live_named(None, key))
     }
 
     /// Debug builds: warns once per site about a control a screen reader would say only by its
@@ -274,12 +299,10 @@ impl<S: 'static> Runtime<S> {
         static ON: OnceLock<bool> = OnceLock::new();
         static WARNED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
         if !*ON.get_or_init(|| std::env::var_os("RUNE_A11Y_WARN").is_none_or(|v| v != "0")) { return; }
-        const NAMED: &[&str] = &["button", "toggle", "swatch", "sidebar-toggle", "checkbox", "switch", "radio", "segment", "link", "tab",
-            "menuitem", "menuitemcheckbox", "menuitemradio", "option", "treeitem", "slider", "combobox", "spinbutton"];
-        for i in 0..self.nodes.len() {
-            let n = &self.nodes[i];
+        for i in 0..self.tree.nodes.len() {
+            let n = &self.tree.nodes[i];
             let field = n.input.is_some();
-            if n.path.is_empty() || n.a11y.hidden || n.inert || !(field || NAMED.contains(&n.role)) || !self.can_focus(i) { continue; }
+            if n.path.is_empty() || n.a11y.hidden || n.inert || !(field || roles::warn_nameless(n.role)) || !self.can_focus(i) { continue; }
             if n.label.as_deref().is_some_and(|l| !l.trim().is_empty()) { continue; }
             let more = n.a11y.more.as_deref();
             if more.and_then(|m| m.labelled_by.as_deref()).and_then(|k| self.a11y_keyed(i, k)).is_some_and(|j| !self.a11y_words(j).is_empty()) { continue; }
@@ -294,29 +317,27 @@ impl<S: 'static> Runtime<S> {
     /// parent, else inside its grandparent, and so on out, as a component's own `"title"` is
     /// the one a control inside it means. What `El::labelled_by` and `El::described_by` name.
     pub(crate) fn a11y_keyed(&self, i: usize, key: &str) -> Option<usize> {
-        let mut scope = self.nodes[i].parent;
+        let mut scope = self.tree.nodes[i].parent;
         while let Some(s) = scope {
-            let inside = |j: &usize| std::iter::successors(self.nodes[*j].parent, |&p| self.nodes[p].parent).any(|p| p == s);
-            if let Some(j) = (s + 1..self.nodes.len()).take_while(inside).find(|&j| j != i && self.nodes[j].named(key)) {
-                return (!self.subtree_exiting(j)).then_some(j);
+            let inside = |j: &usize| std::iter::successors(self.tree.nodes[*j].parent, |&p| self.tree.nodes[p].parent).any(|p| p == s);
+            if let Some(j) = (s + 1..self.tree.nodes.len())
+                .take_while(inside)
+                .find(|&j| j != i && self.tree.nodes[j].named(key) && !self.subtree_exiting(j))
+            {
+                return Some(j);
             }
-            scope = self.nodes[s].parent;
+            scope = self.tree.nodes[s].parent;
         }
         None
     }
 
     /// Node `j`'s words as a name: its label, else its text, else the text inside it.
     pub(crate) fn a11y_words(&self, j: usize) -> String {
-        let n = &self.nodes[j];
+        let n = &self.tree.nodes[j];
         if n.is_secure() { return String::new(); }
         n.label.as_deref().filter(|l| !l.trim().is_empty()).map(str::to_owned)
             .or_else(|| n.text.as_deref().filter(|_| n.input.is_none()).map(|t| t.source_text().trim().to_owned()))
             .unwrap_or_else(|| self.a11y_content_name(j))
-    }
-
-    /// Whether node `i` is an item of a focus group: a list, tabs, a radio group.
-    fn in_focus_group(&self, i: usize) -> bool {
-        std::iter::successors(self.nodes[i].parent, |&p| self.nodes[p].parent).any(|p| self.nodes[p].focus.group)
     }
 
     /// The text inside node `i`, labels first, for a role a reader names from its content.
@@ -326,12 +347,12 @@ impl<S: 'static> Runtime<S> {
         let mut skip: Option<usize> = None;
         // Its subtree is contiguous: a node after it is inside it while its parent is.
         let mut inside = vec![i];
-        while j < self.nodes.len() {
-            let Some(p) = self.nodes[j].parent else { break };
+        while j < self.tree.nodes.len() {
+            let Some(p) = self.tree.nodes[j].parent else { break };
             while inside.last().is_some_and(|&a| a != p) { inside.pop(); }
             if inside.is_empty() { break; }
             inside.push(j);
-            let n = &self.nodes[j];
+            let n = &self.tree.nodes[j];
             if skip.is_some_and(|s| inside.contains(&s)) { j += 1; continue; }
             skip = None;
             if n.a11y.hidden || n.vis.opacity <= 0.01 || n.is_secure() {

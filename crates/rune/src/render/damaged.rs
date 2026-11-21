@@ -37,10 +37,15 @@ pub(super) struct DamageState {
     /// The paint and target size `arm_cycle` last found its rectangles and runs for, and them.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     cycle: Option<((u64, (u32, u32)), Result<Cull, &'static str>)>,
+    /// The paint and target size `arm_loop` last found the units of, and them.
+    loop_units: Option<((u64, (u32, u32)), Result<std::sync::Arc<Units>, &'static str>)>,
     /// Whether a run of the armed rectangles holds a layer's scope.
     layers_reached: bool,
     clear: [f32; 4],
     drawn: Option<Drawn>,
+    /// The armed rectangles are a loop-only frame's (`arm_loop`), for `RUNE_LOOP_CHECK=2`.
+    pub(super) looped: bool,
+    pub(super) pixel: Option<super::pixel_check::Check>,
 }
 
 impl Renderer {
@@ -113,9 +118,47 @@ impl Renderer {
         Ok(())
     }
 
+    /// A window's loop-only frame (`Runtime::loop_step`): only the instances at `patched`
+    /// (ascending) changed since the frame the kept texture and the instance buffer hold, both
+    /// paint `paint`'s. Arms the pixels they drew on and draw on now, each with only the instances
+    /// that reach it (what the rest drew there stays as drawn). Returns those rectangles (x0, y0,
+    /// x1, y1) to present, or why this frame draws whole.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn arm_loop(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, paint: u64, instances: &[Instance], patched: &[u32], clear: [f32; 4], size: (u32, u32), format: wgpu::TextureFormat) -> Result<Vec<[i32; 4]>, &'static str> {
+        // The clearing quad blends: only an opaque clear stands for `LoadOp::Clear`.
+        if clear[3] != 1.0 { return Err("clear"); }
+        self.redraws_in_place()?;
+        let held = self.held_instances(paint, instances.len()).ok_or("buffer")?;
+        let at = |i: &u32| *i as usize;
+        // Only what differs from what the buffer holds, which is what the last frame drew (a
+        // frame that missed its drawable uploaded nothing): a stepped spinner's dots between their
+        // steps, while the shine drives frames, aren't redrawn; a dot a missed frame stepped is.
+        let patched: Vec<u32> = patched.iter().copied().filter(|&i| bytemuck::bytes_of(&held[i as usize]) != bytemuck::bytes_of(&instances[i as usize])).collect();
+        let patched = &patched[..];
+        let mut rects = gather(patched.iter().map(at).flat_map(|i| [&held[i], &instances[i]]), size);
+        // Nothing on screen changed: one pixel keeps the present, which DWM composes again as is.
+        if rects.is_empty() { rects.push([0, 0, 1, 1]); }
+        let key = (paint, size);
+        let cached = self.damage.lock().unwrap().loop_units.as_ref().filter(|c| c.0 == key).map(|c| c.1.clone());
+        let units = match cached {
+            Some(units) => units?,
+            None => {
+                let units = units(instances, size).map(std::sync::Arc::new);
+                self.damage.lock().unwrap().loop_units = Some((key, units.clone()));
+                units?
+            }
+        };
+        let (draw, runs, layers) = cull_runs(instances, &units, &rects, patched);
+        self.arm_damage(device, queue, &draw, clear, size, format);
+        if super::pixel_check::on() { self.pixel_check_arm(device, size, format); }
+        let mut d = self.damage.lock().unwrap();
+        d.runs = runs;
+        d.layers_reached = layers;
+        Ok(rects)
+    }
+
     /// The armed frame redraws its rectangles over a current kept frame, and no layer is among
     /// what it draws there: `prepare` leaves the layers as the last frame planned and drew them.
-    #[cfg(target_arch = "wasm32")]
     pub(super) fn cycle_leaves_layers(&self) -> bool {
         let d = self.damage.lock().unwrap();
         !d.armed.is_empty() && !d.runs.is_empty() && !d.layers_reached && d.retained.as_ref().is_some_and(|r| r.current)
@@ -126,6 +169,8 @@ impl Renderer {
     pub(crate) fn damage_drawn(&self) -> Drawn {
         let mut d = self.damage.lock().unwrap();
         d.armed.clear();
+        d.looped = false;
+        if let Some(c) = d.pixel.as_mut() { c.frame_ended(); }
         let drawn = d.drawn.take().unwrap_or(Err("not armed"));
         if drawn.is_err() && let Some(r) = d.retained.as_mut() { r.current = false; }
         drawn
@@ -151,7 +196,9 @@ impl Renderer {
     /// `draw`'s part, when armed: redraws the armed rectangles into the kept frame (all of it
     /// when it's behind) and copies it to `dst`. False when `draw` should draw whole.
     pub(crate) fn draw_armed(&self, encoder: &mut wgpu::CommandEncoder, dst: &wgpu::Texture) -> bool {
-        let mut d = self.damage.lock().unwrap();
+        let mut guard = self.damage.lock().unwrap();
+        let d = &mut *guard;
+        let looped = std::mem::take(&mut d.looped);
         if d.armed.is_empty() { return false; }
         if let Err(why) = self.redraws_in_place() {
             d.drawn = Some(Err(why));
@@ -166,9 +213,13 @@ impl Renderer {
             d.drawn = Some(Err("size"));
             return false;
         }
+        let partial = kept.current;
         if kept.current {
             // No layer reaches the rectangles: their targets aren't drawn from, nor made again.
-            if runs.is_empty() || layers_reached { self.encode_layers_timed(encoder, None, &mut |_, _| {}); }
+            // The uploads go into this encoder ahead of the pass either way (`encode_layers_timed`
+            // flushes them too), not in a submission of their own: a submit costs the CPU about as
+            // much as the rest of a loop-only frame.
+            if runs.is_empty() || layers_reached { self.encode_layers_timed(encoder, None, &mut |_, _| {}); } else { self.flush_uploads(encoder); }
             self.submit_uploads();
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("frame (damage)"),
@@ -184,7 +235,13 @@ impl Renderer {
                 multiview_mask: None,
             });
             let size = [dst.width(), dst.height()];
-            for (n, &rect) in rects.iter().enumerate() {
+            // frame-profile, `RUNE_LOOP_CHECK_SPOIL=1`: a loop-only frame skips its redraw, so the kept
+            // picture goes stale and `RUNE_LOOP_CHECK=2` must find it (its failing row).
+            #[cfg(feature = "frame-profile")]
+            let spoil = looped && super::pixel_check::spoiled();
+            #[cfg(not(feature = "frame-profile"))]
+            let spoil = false;
+            for (n, &rect) in rects.iter().enumerate().filter(|_| !spoil) {
                 let [x, y, w, h] = rect;
                 pass.set_scissor_rect(x, y, w, h);
                 pass.set_pipeline(self.draw_pipeline(self.format, None));
@@ -204,6 +261,8 @@ impl Renderer {
             self.draw_timed(encoder, &kept.view, clear, None);
             kept.current = true;
         }
+        // `RUNE_LOOP_CHECK=2`: this loop-only frame's picture, and the whole frame's beside it.
+        if looped && partial && let Some(c) = d.pixel.as_mut() { self.pixel_check_encode(encoder, c, &kept.texture, clear, &rects); }
         let whole = wgpu::Extent3d { width: dst.width(), height: dst.height(), depth_or_array_layers: 1 };
         encoder.copy_texture_to_texture(kept.texture.as_image_copy(), dst.as_image_copy(), whole);
         d.drawn = Some(Ok(()));
@@ -220,14 +279,23 @@ type Cull = (Vec<[u32; 4]>, Vec<Vec<std::ops::Range<u32>>>, bool);
 /// `draw_layer_range` draws as one.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn cycle_cull(instances: &[Instance], slots: &[u32], size: (u32, u32)) -> Result<Cull, &'static str> {
+    let quads = slots.iter().map(|&s| instances.get(s as usize).ok_or("slot")).collect::<Result<Vec<_>, _>>()?;
+    let rects = gather(quads.into_iter(), size);
+    if rects.is_empty() { return Err("nothing drawn"); }
+    let units = units(instances, size)?;
+    Ok(cull_runs(instances, &units, &rects, &[]))
+}
+
+/// The pixels `quads` draw on, each 2 px wider, merged with those it comes within 8 px of,
+/// `MAX_RECTS` at most (x0, y0, x1, y1).
+fn gather<'a>(quads: impl Iterator<Item = &'a Instance>, size: (u32, u32)) -> Vec<[i32; 4]> {
     let (w, h) = (size.0 as i32, size.1 as i32);
-    let bounds = |i: &Instance| super::cpu_boot::bin::pixel_bounds(i, w, h);
     let empty = |b: &[i32; 4]| b[2] <= b[0] || b[3] <= b[1];
     let near = |a: &[i32; 4], b: &[i32; 4]| a[0] <= b[2] + 8 && b[0] <= a[2] + 8 && a[1] <= b[3] + 8 && b[1] <= a[3] + 8;
     let union = |a: [i32; 4], b: [i32; 4]| if empty(&a) { b } else if empty(&b) { a } else { [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])] };
     let mut rects: Vec<[i32; 4]> = Vec::new();
-    for &s in slots {
-        let b = bounds(instances.get(s as usize).ok_or("slot")?);
+    for q in quads {
+        let b = q.pixel_bounds(w, h);
         if empty(&b) { continue; }
         let mut b = [(b[0] - 2).max(0), (b[1] - 2).max(0), (b[2] + 2).min(w), (b[3] + 2).min(h)];
         while let Some(k) = rects.iter().position(|r| near(r, &b)) { b = union(b, rects.swap_remove(k)); }
@@ -237,29 +305,52 @@ fn cycle_cull(instances: &[Instance], slots: &[u32], size: (u32, u32)) -> Result
         let (Some(a), Some(b)) = (rects.pop(), rects.pop()) else { break };
         rects.push(union(a, b));
     }
-    if rects.is_empty() { return Err("nothing drawn"); }
-    let mut units: Vec<(std::ops::Range<u32>, [i32; 4])> = Vec::new();
+    rects
+}
+
+/// What a frame draws, in units: an instance, or a layer's whole scope (its own bounds and all it
+/// holds), which `draw_layer_range` draws as one, each with its pixel bounds.
+type Units = Vec<(std::ops::Range<u32>, [i32; 4])>;
+
+fn units(instances: &[Instance], size: (u32, u32)) -> Result<Units, &'static str> {
+    let (w, h) = (size.0 as i32, size.1 as i32);
+    let bounds = |i: &Instance| i.pixel_bounds(w, h);
+    let empty = |b: &[i32; 4]| b[2] <= b[0] || b[3] <= b[1];
+    let union = |a: [i32; 4], b: [i32; 4]| if empty(&a) { b } else if empty(&b) { a } else { [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])] };
+    let mut units: Units = Vec::new();
     let mut n = 0;
     while n < instances.len() {
         let start = n;
         let mut b = bounds(&instances[n]);
-        if instances[n].params[1] == KIND_LAYER {
+        if instances[n].kind() == Some(Kind::Layer) {
             let mut depth = 1;
             while depth > 0 {
                 n += 1;
                 let i = instances.get(n).ok_or("open layer")?;
                 b = union(b, bounds(i));
-                if i.params[1] == KIND_LAYER { depth += 1; }
-                if i.params[1] == KIND_LAYER_END { depth -= 1; }
+                match i.kind() {
+                    Some(Kind::Layer) => depth += 1,
+                    Some(Kind::LayerEnd) => depth -= 1,
+                    _ => {}
+                }
             }
         }
         n += 1;
         units.push((start as u32..n as u32, b));
     }
+    Ok(units)
+}
+
+/// For each of `rects`, runs of the units that reach it, a pixel wider still, and of any unit
+/// holding one of `always` (ascending): instances whose bounds were found before they moved.
+fn cull_runs(instances: &[Instance], units: &Units, rects: &[[i32; 4]], always: &[u32]) -> Cull {
+    let empty = |b: &[i32; 4]| b[2] <= b[0] || b[3] <= b[1];
+    let holds = |u: &std::ops::Range<u32>| always.get(always.partition_point(|&a| a < u.start)).is_some_and(|&a| a < u.end);
     let runs: Vec<Vec<std::ops::Range<u32>>> = rects.iter().map(|r| {
         let mut runs: Vec<std::ops::Range<u32>> = Vec::new();
-        for (unit, b) in &units {
-            if empty(b) || !(b[0] - 1 < r[2] && r[0] < b[2] + 1 && b[1] - 1 < r[3] && r[1] < b[3] + 1) { continue; }
+        for (unit, b) in units {
+            let reaches = !empty(b) && b[0] - 1 < r[2] && r[0] < b[2] + 1 && b[1] - 1 < r[3] && r[1] < b[3] + 1;
+            if !reaches && !holds(unit) { continue; }
             // A short gap is drawn through: what's in it doesn't reach the rectangle, and one
             // draw costs less than two.
             match runs.last_mut() {
@@ -269,6 +360,6 @@ fn cycle_cull(instances: &[Instance], slots: &[u32], size: (u32, u32)) -> Result
         }
         runs
     }).collect();
-    let layers = units.iter().any(|(u, _)| instances[u.start as usize].params[1] == KIND_LAYER && runs.iter().flatten().any(|r| r.start <= u.start && u.end <= r.end));
-    Ok((rects.iter().map(|r| [r[0] as u32, r[1] as u32, (r[2] - r[0]) as u32, (r[3] - r[1]) as u32]).collect(), runs, layers))
+    let layers = units.iter().any(|(u, _)| instances[u.start as usize].kind() == Some(Kind::Layer) && runs.iter().flatten().any(|r| r.start <= u.start && u.end <= r.end));
+    (rects.iter().map(|r| [r[0] as u32, r[1] as u32, (r[2] - r[0]) as u32, (r[3] - r[1]) as u32]).collect(), runs, layers)
 }

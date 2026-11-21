@@ -6,6 +6,7 @@
 //! NSScreen all still report 120 Hz. Submitting on every tick then fills the drawable queue
 //! with a few fast frames before backpressure settles it at 60 Hz, so pace at the cap instead.
 #![allow(deprecated)] // CVDisplayLink supports the same macOS versions as winit.
+#![allow(unsafe_code)]
 
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -61,10 +62,10 @@ unsafe extern "C" { fn CGDisplayIsBuiltin(display: u32) -> u32; }
 fn low_power_caps(display: Option<u32>) -> bool {
     use objc2_foundation::{NSObjectProtocol, NSProcessInfo};
     let info = NSProcessInfo::processInfo();
-    // SAFETY: CGDisplayIsBuiltin accepts any display ID; the selector is checked first (macOS 12+).
+    // SAFETY: `CGDisplayIsBuiltin` accepts any `CGDirectDisplayID`.
     display.is_some_and(|display| unsafe { CGDisplayIsBuiltin(display) } != 0)
         && info.respondsToSelector(objc2::sel!(isLowPowerModeEnabled))
-        && unsafe { info.isLowPowerModeEnabled() }
+        && info.isLowPowerModeEnabled()
 }
 
 unsafe extern "C-unwind" fn tick(
@@ -108,11 +109,12 @@ impl DisplayLink {
         // Every display asleep fails this until one wakes, so say so once per sleep.
         if status != 0 {
             if !CREATE_FAILED.swap(true, Ordering::Relaxed) { eprintln!("display link creation failed: {status}"); }
-            *LAST_FAILURE.lock().unwrap() = Some((status, Instant::now()));
+            *LAST_FAILURE.lock().unwrap() = Some((status, crate::time::now()));
             return None;
         }
         if CREATE_FAILED.swap(false, Ordering::Relaxed) { eprintln!("display link created once a display woke"); }
         *LAST_FAILURE.lock().unwrap() = None;
+        // SAFETY: `create_with_active_cg_displays` succeeded (`status == 0`), so non-null `raw` is a +1 retained `CVDisplayLink` per the Create Rule.
         let link = unsafe { CFRetained::from_raw(NonNull::new(raw)?) };
         let mut callback = Box::new(Callback {
             target: AtomicU64::new(0),
@@ -120,6 +122,7 @@ impl DisplayLink {
             wake,
             host_frequency: CVGetHostClockFrequency(),
         });
+        // SAFETY: `tick` matches `CVDisplayLinkOutputCallback`, and `callback` stays at a stable heap address until `DisplayLink::drop` stops the link.
         let status = unsafe { link.set_output_callback(Some(tick), (&mut *callback as *mut Callback).cast()) };
         if status != 0 { eprintln!("display link callback failed: {status}"); return None; }
         let mut pacing = Self { link, callback, last_present: None, last_target: None, display: None, capped: false, running: false };
@@ -162,7 +165,7 @@ impl DisplayLink {
     pub(crate) fn next_frame(&mut self) -> Opportunity {
         if !self.start() { return Opportunity::Now; }
         let host_target = self.callback.target.swap(0, Ordering::Acquire);
-        let now = Instant::now();
+        let now = crate::time::now();
         let tick = (host_target != 0).then(|| target_time(now, CVGetCurrentHostTime(), host_target, self.callback.host_frequency));
         let next = opportunity(tick, self.last_present, self.last_target, now, self.frame_period());
         match next {
@@ -263,7 +266,7 @@ mod tests {
 
     #[test]
     fn a_frame_defers_starting_the_link_only_when_it_would_draw_at_once_anyway() {
-        let t = Instant::now();
+        let t = crate::time::now();
         let ms = |n| t + Duration::from_millis(n);
         let period = Duration::from_millis(8);
         // A timer 33 ms after the last frame: whenever it starts the link, it draws at once.
@@ -280,7 +283,7 @@ mod tests {
     }
     #[test]
     fn late_frames_and_idle_restarts_cannot_catch_up_in_a_burst() {
-        let t = Instant::now();
+        let t = crate::time::now();
         let ms = |n| t + Duration::from_millis(n);
         let period = Duration::from_millis(16);
         assert!(permits(None, None, ms(16), ms(1), period));
@@ -295,7 +298,7 @@ mod tests {
 
     #[test]
     fn a_capped_period_skips_ticks_between_frames() {
-        let t = Instant::now();
+        let t = crate::time::now();
         let ms = |n| t + Duration::from_millis(n);
         let capped = Duration::from_millis(16);
         assert!(!permits(Some(ms(0)), Some(ms(8)), ms(16), ms(9), capped));
@@ -305,7 +308,7 @@ mod tests {
 
     #[test]
     fn input_at_rest_draws_without_waiting_for_a_tick() {
-        let t = Instant::now();
+        let t = crate::time::now();
         let ms = |n| t + Duration::from_millis(n);
         let period = Duration::from_millis(8);
         // The link just started after idle: no tick yet, the last frame long gone.
@@ -319,7 +322,7 @@ mod tests {
 
     #[test]
     fn a_frame_still_on_its_way_to_the_display_waits_for_a_tick() {
-        let t = Instant::now();
+        let t = crate::time::now();
         let ms = |n| t + Duration::from_millis(n);
         let period = Duration::from_millis(8);
         // Submitted under a refresh and a half ago: it may still be queued.

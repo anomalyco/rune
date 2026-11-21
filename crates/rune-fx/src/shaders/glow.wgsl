@@ -25,9 +25,8 @@ fn mask_tent(uv: vec2f, lod: f32) -> f32 {
     return s * 0.25;
 }
 
-fn shade(in: VOut) -> vec4f {
-    let i = insts[in.id];
-    let c = ctx(i, in.px);
+fn shade(i: Inst, px: vec2f) -> vec4f {
+    let c = ctx(i, px);
     var radius = i.p0.x;
     var intensity = i.p0.y;
     let inner = i.p0.z;
@@ -66,7 +65,7 @@ fn shade(in: VOut) -> vec4f {
         let hotc = core * hot * smoothstep(0.55, 1.0, heat);
         light = tint * g + i.c1.rgb * hotc * intensity * 0.6;
         alpha = min(g * occl, 1.0);
-        return finish(vec4f(light, alpha), in.px);
+        return finish(vec4f(light, alpha), px);
     }
 
     if (c.variant == 0) {
@@ -104,5 +103,5 @@ fn shade(in: VOut) -> vec4f {
         light = col * lit + mix(col, vec3f(1.0), 0.6) * hair * intensity * hot;
         alpha = lit * occl;
     }
-    return finish(vec4f(light, alpha), in.px);
+    return finish(vec4f(light, alpha), px);
 }

@@ -1,8 +1,9 @@
 #![allow(dead_code)]
+#![allow(unsafe_code)]
 
 use std::process::Command;
-use std::time::{Duration, Instant};
-use objc2::{class, msg_send, msg_send_id, rc::Retained, runtime::{AnyObject, Bool}};
+use std::time::Duration;
+use objc2::{class, msg_send, rc::Retained, runtime::{AnyObject, Bool}};
 use objc2_foundation::{NSArray, NSPoint, NSString};
 use rune::AppHandle;
 
@@ -27,13 +28,13 @@ unsafe extern "C" {
 pub fn on_main<S: 'static, T: Send + 'static>(handle: &AppHandle<S>, f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = std::sync::mpsc::channel();
     handle.update(move |_, _| {
-        let _ = tx.send(f());
+        tx.send(f()).ok();
     });
     rx.recv_timeout(Duration::from_secs(10)).expect("event thread stalled")
 }
 
 pub fn wait(what: &str, f: impl Fn() -> bool) {
-    let start = Instant::now();
+    let start = rune::time::now();
     while !f() {
         assert!(start.elapsed() < Duration::from_secs(10), "timed out waiting for {what}");
         std::thread::sleep(Duration::from_millis(10));
@@ -41,18 +42,21 @@ pub fn wait(what: &str, f: impl Fn() -> bool) {
 }
 
 pub fn warp((x, y): (f64, f64)) {
+    // SAFETY: `CGWarpMouseCursorPosition` takes a plain `NSPoint` by value.
     unsafe {
         CGWarpMouseCursorPosition(NSPoint::new(x, y));
     }
 }
 
 pub fn can_post_events() -> bool {
+    // SAFETY: `CGPreflightPostEventAccess` takes no arguments and has no preconditions.
     unsafe { CGPreflightPostEventAccess() }
 }
 
 /// AppKit tracks a running session from the window server, which never saw the posted press; a
 /// real left-button release where the pointer is ends it.
 pub fn release_real_button() {
+    // SAFETY: creates temporary CoreGraphics events with null source, reads/posts them, and releases each once.
     unsafe {
         let here = CGEventCreate(std::ptr::null());
         let at = CGEventGetLocation(here);
@@ -65,17 +69,19 @@ pub fn release_real_button() {
 
 /// The drag pasteboard's first item: its file URL, and the path list Finder also reads.
 pub fn drag_pasteboard() -> (Option<String>, Option<String>) {
+    // SAFETY: invoked on the AppKit main thread (`on_main`); reads standard drag pasteboard types.
     unsafe {
         let name = NSString::from_str("Apple CFPasteboard drag");
         let board: *mut AnyObject = msg_send![class!(NSPasteboard), pasteboardWithName: &*name];
-        let url: Option<Retained<NSString>> = msg_send_id![board, stringForType: &*NSString::from_str("public.file-url")];
+        let url: Option<Retained<NSString>> = msg_send![board, stringForType: &*NSString::from_str("public.file-url")];
         let names: Option<Retained<NSArray<NSString>>> =
-            msg_send_id![board, propertyListForType: &*NSString::from_str("NSFilenamesPboardType")];
+            msg_send![board, propertyListForType: &*NSString::from_str("NSFilenamesPboardType")];
         (url.map(|u| u.to_string()), names.and_then(|n| n.iter().next().map(|s| s.to_string())))
     }
 }
 
 pub fn app_active() -> bool {
+    // SAFETY: invoked on the AppKit main thread (`on_main`); queries `NSApplication.isActive`.
     unsafe {
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
         let active: Bool = msg_send![app, isActive];
@@ -84,6 +90,7 @@ pub fn app_active() -> bool {
 }
 
 pub fn frontmost_pid() -> i32 {
+    // SAFETY: invoked on the AppKit main thread (`on_main`); `app` is checked non-null before querying `processIdentifier`.
     unsafe {
         let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
         let app: *mut AnyObject = msg_send![workspace, frontmostApplication];
@@ -98,21 +105,27 @@ pub fn frontmost_pid() -> i32 {
 /// nobody yields this falls back to CuaDriver's `bring_to_front`.
 pub fn activate_helper(handle: &AppHandle<()>, pid: i32) {
     wait("the helper to launch", || {
-        on_main(handle, move || unsafe {
-            let app: *mut AnyObject = msg_send![class!(NSRunningApplication), runningApplicationWithProcessIdentifier: pid];
-            !app.is_null() && {
-                let done: Bool = msg_send![app, isFinishedLaunching];
-                done.as_bool()
+        on_main(handle, move || {
+            // SAFETY: invoked on the AppKit main thread (`on_main`); `app` is checked non-null before querying `isFinishedLaunching`.
+            unsafe {
+                let app: *mut AnyObject = msg_send![class!(NSRunningApplication), runningApplicationWithProcessIdentifier: pid];
+                !app.is_null() && {
+                    let done: Bool = msg_send![app, isFinishedLaunching];
+                    done.as_bool()
+                }
             }
         })
     });
-    on_main(handle, move || unsafe {
-        let app: *mut AnyObject = msg_send![class!(NSRunningApplication), runningApplicationWithProcessIdentifier: pid];
-        // NSApplicationActivateIgnoringOtherApps
-        let _: Bool = msg_send![app, activateWithOptions: 1usize << 1];
+    on_main(handle, move || {
+        // SAFETY: invoked on the AppKit main thread (`on_main`); ObjC safely ignores messaging nil if the helper already exited.
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSRunningApplication), runningApplicationWithProcessIdentifier: pid];
+            // NSApplicationActivateIgnoringOtherApps
+            let _: Bool = msg_send![app, activateWithOptions: 1usize << 1];
+        }
     });
     let helper_front = || on_main(handle, move || frontmost_pid() == pid);
-    let start = Instant::now();
+    let start = rune::time::now();
     while !helper_front() && start.elapsed() < Duration::from_secs(1) {
         std::thread::sleep(Duration::from_millis(20));
     }

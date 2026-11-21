@@ -4,7 +4,8 @@ allow-expect-in-tests = true
 allow-panic-in-tests = true
 allow-dbg-in-tests = true
 disallowed-methods = [
-  { path = "std::env::var", reason = "read env in config.rs at startup" },
-  { path = "std::time::SystemTime::now", reason = "use config::now() or an injected clock" },
+  { path = "std::env::var", reason = "use rune_core::env::var (or rune::env::var)" },
+  { path = "std::time::SystemTime::now", reason = "use rune_core::time::system_now (or rune::time::system_now)" },
+  { path = "std::time::Instant::now", reason = "use rune_core::time::now (or rune::time::now) for wasm/headless clocks" },
 ]
 # shared-lints end

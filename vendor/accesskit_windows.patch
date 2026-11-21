@@ -1,8 +1,954 @@
+diff --git a/src/adapter.rs b/src/adapter.rs
+index 38044d3..5e28b6c 100644
+--- a/src/adapter.rs
++++ b/src/adapter.rs
+@@ -18,6 +18,7 @@ use windows::Win32::{
+ use crate::{
+     context::{ActionHandlerNoMut, ActionHandlerWrapper, Context},
+     filters::filter,
++    long_text::long_text,
+     node::{NodeWrapper, PlatformNode},
+     util::{QueuedEvent, StringBuffer},
+     window_handle::WindowHandle,
+@@ -52,7 +53,7 @@ impl<'a> AdapterChangeHandler<'a> {
+ 
+ impl AdapterChangeHandler<'_> {
+     fn insert_text_change_if_needed_parent(&mut self, node: NodeRef) {
+-        if !node.supports_text_ranges() {
++        if !node.supports_text_ranges() && long_text(&node).is_none() {
+             return;
+         }
+         let id = node.id();
+@@ -75,6 +76,10 @@ impl AdapterChangeHandler<'_> {
+     }
+ 
+     fn insert_text_change_if_needed(&mut self, node: &NodeRef) {
++        // Rune: a long field's text is its value.
++        if long_text(node).is_some() {
++            return self.insert_text_change_if_needed_parent(*node);
++        }
+         if node.role() != Role::TextRun {
+             return;
+         }
+@@ -469,7 +474,7 @@ impl Adapter {
+             State::Placeholder(context) => {
+                 let is_window_focused = context.read_tree().state().is_host_focused();
+                 let tree = Tree::new(update_factory(), is_window_focused);
+-                *context.tree.write().unwrap() = tree;
++                *context.tree.write().unwrap_or_else(|e| e.into_inner()) = tree;
+                 context.is_placeholder.store(false, Ordering::SeqCst);
+                 let result = context
+                     .read_tree()
+@@ -481,7 +486,7 @@ impl Adapter {
+             }
+             State::Active(context) => {
+                 let mut handler = AdapterChangeHandler::new(context);
+-                let mut tree = context.tree.write().unwrap();
++                let mut tree = context.tree.write().unwrap_or_else(|e| e.into_inner());
+                 tree.update_and_process_changes(update_factory(), &mut handler);
+                 handler.enqueue_selection_changes(&tree);
+                 Some(QueuedEvents(handler.queue))
+@@ -507,13 +512,13 @@ impl Adapter {
+             }
+             State::Placeholder(context) => {
+                 let mut handler = AdapterChangeHandler::new(context);
+-                let mut tree = context.tree.write().unwrap();
++                let mut tree = context.tree.write().unwrap_or_else(|e| e.into_inner());
+                 tree.update_host_focus_state_and_process_changes(is_focused, &mut handler);
+                 Some(QueuedEvents(handler.queue))
+             }
+             State::Active(context) => {
+                 let mut handler = AdapterChangeHandler::new(context);
+-                let mut tree = context.tree.write().unwrap();
++                let mut tree = context.tree.write().unwrap_or_else(|e| e.into_inner());
+                 tree.update_host_focus_state_and_process_changes(is_focused, &mut handler);
+                 Some(QueuedEvents(handler.queue))
+             }
+diff --git a/src/context.rs b/src/context.rs
+index 54cd3ed..799d59e 100644
+--- a/src/context.rs
++++ b/src/context.rs
+@@ -26,7 +26,7 @@ impl<H: 'static + ActionHandler + Send> ActionHandlerWrapper<H> {
+ 
+ impl<H: ActionHandler + Send> ActionHandlerNoMut for ActionHandlerWrapper<H> {
+     fn do_action(&self, request: ActionRequest) {
+-        self.0.lock().unwrap().do_action(request)
++        self.0.lock().unwrap_or_else(|e| e.into_inner()).do_action(request)
+     }
+ }
+ 
+@@ -66,7 +66,7 @@ impl Context {
+     }
+ 
+     pub(crate) fn read_tree(&self) -> RwLockReadGuard<'_, Tree> {
+-        self.tree.read().unwrap()
++        self.tree.read().unwrap_or_else(|e| e.into_inner())
+     }
+ 
+     pub(crate) fn client_top_left(&self) -> Point {
+@@ -81,7 +81,7 @@ impl Context {
+         self: &Arc<Self>,
+         id: FullNodeId,
+     ) -> ComObject<PlatformNode> {
+-        let mut platform_nodes = self.platform_nodes.lock().unwrap();
++        let mut platform_nodes = self.platform_nodes.lock().unwrap_or_else(|e| e.into_inner());
+         if let Some(result) = platform_nodes.get(&id) {
+             return result.clone();
+         }
+@@ -92,7 +92,7 @@ impl Context {
+     }
+ 
+     pub(crate) fn remove_platform_node(&self, id: FullNodeId) {
+-        let mut platform_nodes = self.platform_nodes.lock().unwrap();
++        let mut platform_nodes = self.platform_nodes.lock().unwrap_or_else(|e| e.into_inner());
+         platform_nodes.remove(&id);
+     }
+ }
+diff --git a/src/lib.rs b/src/lib.rs
+index 7aee09b..890b9b3 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -5,6 +5,7 @@
+ 
+ mod context;
+ mod filters;
++mod long_text;
+ mod node;
+ mod text;
+ mod util;
+diff --git a/src/long_text.rs b/src/long_text.rs
+new file mode 100644
+index 0000000..dcadab3
+--- /dev/null
++++ b/src/long_text.rs
+@@ -0,0 +1,796 @@
++// Rune (vendor/accesskit_windows.patch): a text field too long for its toolkit to publish text
++// runs (Rune stops at 64 KiB) keeps its text ranges. The toolkit marks such a field by putting its
++// selection on the field itself, as byte offsets into its value, and publishes a single
++// GenericContainer (`class_name = "\x1frune-lines"`) holding one GenericContainer child
++// (`class_name = "\x1frune-line"`, `author_id = "<start>:<end>"`) per drawn visual line. Ranges
++// are answered from the value when a reader asks, and screen rectangles, hit-testing and wrapped
++// visual lines are answered in the drawn band without shaping off-screen rows.
++// The same file is in accesskit_windows and accesskit_macos; each uses part of it.
++#![allow(dead_code)]
++
++use std::cell::RefCell;
++
++use accesskit::{Point, Rect, Role, TextDirection, TextSelection};
++use accesskit_consumer::NodeRef;
++
++const LINES_BOX_CLASS: &str = "\x1frune-lines";
++const LINE_CLASS: &str = "\x1frune-line";
++const CHECKPOINT_STRIDE: usize = 65_536;
++
++#[derive(Clone, Copy, PartialEq, Eq)]
++pub(crate) enum Unit {
++    Character,
++    Word,
++    Line,
++    Paragraph,
++    Document,
++}
++
++/// One visual line currently drawn on screen for a long field.
++#[derive(Clone, Copy)]
++pub(crate) struct DrawnLine<'a> {
++    pub(crate) start: usize,
++    pub(crate) end: usize,
++    pub(crate) node: NodeRef<'a>,
++}
++
++/// All drawn-line metadata published on `node` for the current tree snapshot.
++pub(crate) struct DrawnState<'a> {
++    pub(crate) lines: Vec<DrawnLine<'a>>,
++    pub(crate) content_key: u64,
++    pub(crate) upstream_caret: bool,
++    pub(crate) caret_byte: usize,
++}
++
++struct Band {
++    start: usize,
++    end: usize,
++    first: usize,
++    count: usize,
++}
++
++#[derive(Clone, Copy)]
++struct Mark {
++    byte: usize,
++    utf16: usize,
++    newlines: usize,
++}
++
++struct Checkpoints {
++    content_key: u64,
++    len: usize,
++    edge: [u8; 32],
++    marks: Vec<Mark>,
++}
++
++const CHECKPOINT_SLOTS: usize = 4;
++
++struct CheckpointRing {
++    slots: [Option<Checkpoints>; CHECKPOINT_SLOTS],
++    next: usize,
++}
++
++thread_local! {
++    static CHECKPOINTS: RefCell<CheckpointRing> = const {
++        RefCell::new(CheckpointRing {
++            slots: [None, None, None, None],
++            next: 0,
++        })
++    };
++}
++
++fn edge_sample(s: &str) -> [u8; 32] {
++    let mut out = [0u8; 32];
++    let b = s.as_bytes();
++    let head = b.len().min(16);
++    out[..head].copy_from_slice(&b[..head]);
++    let tail = b.len().min(16);
++    out[16..16 + tail].copy_from_slice(&b[b.len() - tail..]);
++    out
++}
++
++fn with_checkpoints<R>(s: &str, content_key: u64, f: impl FnOnce(&[Mark]) -> R) -> R {
++    if s.len() <= CHECKPOINT_STRIDE {
++        return f(&[Mark { byte: 0, utf16: 0, newlines: 0 }]);
++    }
++    let edge = edge_sample(s);
++    CHECKPOINTS.with(|cell| {
++        let mut ring = cell.borrow_mut();
++        if let Some(hit) = ring.slots.iter().flatten().find(|c| {
++            c.content_key == content_key && c.len == s.len() && c.edge == edge
++        }) {
++            return f(hit.marks.as_slice());
++        }
++        let mut marks = Vec::with_capacity(s.len() / CHECKPOINT_STRIDE + 2);
++        marks.push(Mark { byte: 0, utf16: 0, newlines: 0 });
++        let mut utf16 = 0usize;
++        let mut newlines = 0usize;
++        let mut next_at = CHECKPOINT_STRIDE;
++        for (k, ch) in s.char_indices() {
++            if k >= next_at {
++                marks.push(Mark { byte: k, utf16, newlines });
++                next_at = k + CHECKPOINT_STRIDE;
++            }
++            utf16 += ch.len_utf16();
++            if ch == '\n' {
++                newlines += 1;
++            }
++        }
++        let idx = ring.next % CHECKPOINT_SLOTS;
++        ring.next = ring.next.wrapping_add(1);
++        ring.slots[idx] = Some(Checkpoints { content_key, len: s.len(), edge, marks });
++        let marks = ring.slots[idx].as_ref().map_or(&[][..], |c| c.marks.as_slice());
++        f(marks)
++    })
++}
++
++/// The value and selection a long field's text ranges are answered from.
++pub(crate) fn long_text<'a>(node: &NodeRef<'a>) -> Option<(Text<'a>, &'a TextSelection)> {
++    if !node.is_text_input() || node.is_password_input() || node.supports_text_ranges() {
++        return None;
++    }
++    let data = node.data();
++    let selection = data.text_selection()?;
++    let (id, _) = node.locate();
++    if selection.anchor.node != id || selection.focus.node != id {
++        return None;
++    }
++    Some((Text(data.value().unwrap_or("")), selection))
++}
++
++/// Drawn visual lines Rune attached to `node` inside its `\x1frune-lines` container, sorted and
++/// strictly non-overlapping.
++pub(crate) fn drawn_state<'a>(node: &NodeRef<'a>, text: Text<'a>) -> DrawnState<'a> {
++    let caret_byte = node
++        .data()
++        .text_selection()
++        .map_or(0, |s| text.clamp(s.focus.character_index));
++    let Some(box_node) = node
++        .children()
++        .find(|c| c.role() == Role::GenericContainer && c.data().class_name() == Some(LINES_BOX_CLASS))
++    else {
++        return DrawnState {
++            lines: Vec::new(),
++            content_key: 0,
++            upstream_caret: false,
++            caret_byte,
++        };
++    };
++    let (content_key, upstream_caret) = box_node
++        .author_id()
++        .and_then(|s| s.split_once(':'))
++        .map_or((0, false), |(k, u)| (u64::from_str_radix(k, 16).unwrap_or(0), u == "1"));
++
++    let mut raw = Vec::new();
++    for child in box_node.children() {
++        if child.role() != Role::GenericContainer || child.data().class_name() != Some(LINE_CLASS) {
++            continue;
++        }
++        let Some((a, b)) = child.author_id().and_then(|id| id.split_once(':')) else {
++            continue;
++        };
++        let (Ok(a), Ok(b)) = (a.parse::<usize>(), b.parse::<usize>()) else {
++            continue;
++        };
++        let start = text.clamp(a);
++        let end = text.clamp(b).max(start);
++        raw.push(DrawnLine { start, end, node: child });
++    }
++    raw.sort_by_key(|d| (d.start, d.end));
++    let mut lines: Vec<DrawnLine<'a>> = Vec::new();
++    for d in raw {
++        if let Some(prev) = lines.last()
++            && (d.start < prev.end || (d.start == prev.start && d.end == prev.end))
++        {
++            continue;
++        }
++        lines.push(d);
++    }
++    DrawnState { lines, content_key, upstream_caret, caret_byte }
++}
++
++pub(crate) fn drawn_lines<'a>(node: &NodeRef<'a>, text: Text<'a>) -> Vec<DrawnLine<'a>> {
++    drawn_state(node, text).lines
++}
++
++fn bands(drawn: &[DrawnLine]) -> Vec<Band> {
++    let mut out: Vec<Band> = Vec::new();
++    for (idx, d) in drawn.iter().enumerate() {
++        if let Some(last) = out.last_mut()
++            && last.end == d.start
++        {
++            last.end = d.end;
++            last.count += 1;
++            continue;
++        }
++        out.push(Band { start: d.start, end: d.end, first: idx, count: 1 });
++    }
++    out
++}
++
++fn line_is_rtl(line: &NodeRef) -> bool {
++    line.data().text_direction() == Some(TextDirection::RightToLeft)
++}
++
++fn line_is_hard_end(text: Text, end: usize) -> bool {
++    end > 0 && text.0.as_bytes().get(end - 1) == Some(&b'\n')
++}
++
++fn caret_x_in_line(line: &NodeRef, rel_byte: usize, trailing_edge: bool) -> f64 {
++    let data = line.data();
++    let rtl = line_is_rtl(line);
++    let w = data.bounds().map_or(0.0, |r| r.width());
++    if trailing_edge {
++        return if rtl { 0.0 } else { w };
++    }
++    let lengths = data.character_lengths();
++    let positions = data.character_positions().unwrap_or(&[]);
++    let widths = data.character_widths().unwrap_or(&[]);
++    if lengths.is_empty() || positions.len() < lengths.len() || widths.len() < lengths.len() {
++        return if (rel_byte == 0) != rtl { 0.0 } else { w };
++    }
++    let mut seen = 0usize;
++    for (k, &len) in lengths.iter().enumerate() {
++        let next = seen + usize::from(len);
++        if rel_byte < next || (rel_byte == seen && len == 0) {
++            let x0 = f64::from(positions[k]);
++            let x1 = x0 + f64::from(widths[k]);
++            let cluster_rtl = if k + 1 < lengths.len() && widths[k] > 0.0 && widths[k + 1] > 0.0 {
++                positions[k + 1] < positions[k]
++            } else if k > 0 && widths[k] > 0.0 && widths[k - 1] > 0.0 {
++                positions[k] < positions[k - 1]
++            } else {
++                rtl
++            };
++            return if cluster_rtl { x1 } else { x0 };
++        }
++        seen = next;
++    }
++    if rtl { 0.0 } else { w }
++}
++
++fn span_x_in_line(line: &NodeRef, rel_start: usize, rel_end: usize) -> (f64, f64) {
++    let data = line.data();
++    let w = data.bounds().map_or(0.0, |r| r.width());
++    let lengths = data.character_lengths();
++    let positions = data.character_positions().unwrap_or(&[]);
++    let widths = data.character_widths().unwrap_or(&[]);
++    if lengths.is_empty() || positions.len() < lengths.len() || widths.len() < lengths.len() {
++        return (0.0, w);
++    }
++    let mut seen = 0usize;
++    let mut min_x = f64::INFINITY;
++    let mut max_x = f64::NEG_INFINITY;
++    for (k, &len) in lengths.iter().enumerate() {
++        let next = seen + usize::from(len);
++        if next > rel_start && seen < rel_end {
++            let x0 = f64::from(positions[k]);
++            let x1 = x0 + f64::from(widths[k]).max(0.0);
++            min_x = min_x.min(x0);
++            max_x = max_x.max(x1);
++        }
++        seen = next;
++    }
++    if min_x.is_finite() && max_x.is_finite() {
++        (min_x, max_x.max(min_x))
++    } else {
++        let x = caret_x_in_line(line, rel_start, false);
++        (x, x)
++    }
++}
++
++/// Transformed bounding boxes (in root/window coordinates, matching AccessKit's `Range::bounding_boxes`)
++/// for the drawn portion of `a..b`. Off-screen bytes have no box, matching Chromium.
++pub(crate) fn bounding_boxes(node: &NodeRef, text: Text, a: usize, b: usize) -> Vec<Rect> {
++    let (a, b) = (text.clamp(a.min(b)), text.clamp(a.max(b)));
++    let state = drawn_state(node, text);
++    let drawn = &state.lines;
++    if drawn.is_empty() {
++        return Vec::new();
++    }
++    if a == b {
++        if state.upstream_caret && a == state.caret_byte {
++            if let Some(d) = drawn
++                .iter()
++                .find(|d| a == d.end && d.start < d.end && !line_is_hard_end(text, d.end))
++                && let Some(mut rect) = d.node.data().bounds()
++            {
++                let x = caret_x_in_line(&d.node, a - d.start, true);
++                let left = rect.x0 + x;
++                rect.x0 = left;
++                rect.x1 = left;
++                return vec![d.node.transform().transform_rect_bbox(rect)];
++            }
++        }
++        let hit = drawn.iter().enumerate().find(|&(k, d)| {
++            (d.start <= a && a < d.end)
++                || (d.start == a && d.end == a)
++                || (a == d.end
++                    && !line_is_hard_end(text, d.end)
++                    && drawn.get(k + 1).is_none_or(|nx| nx.start != a))
++        });
++        let Some((_, d)) = hit else {
++            return Vec::new();
++        };
++        let Some(mut rect) = d.node.data().bounds() else {
++            return Vec::new();
++        };
++        let x = caret_x_in_line(&d.node, a.saturating_sub(d.start), false);
++        let left = rect.x0 + x;
++        rect.x0 = left;
++        rect.x1 = left;
++        return vec![d.node.transform().transform_rect_bbox(rect)];
++    }
++    let mut out = Vec::new();
++    for d in drawn {
++        let ov_start = a.max(d.start);
++        let ov_end = b.min(d.end);
++        if ov_start >= ov_end {
++            continue;
++        }
++        let Some(mut rect) = d.node.data().bounds() else {
++            continue;
++        };
++        if ov_start > d.start || ov_end < d.end {
++            let orig_left = rect.x0;
++            let (x0, x1) = span_x_in_line(&d.node, ov_start - d.start, ov_end - d.start);
++            rect.x0 = orig_left + x0;
++            rect.x1 = orig_left + x1;
++        }
++        out.push(d.node.transform().transform_rect_bbox(rect));
++    }
++    out
++}
++
++/// Byte offset in `text` at `point` (in `node`'s local coordinate space), using containment inside
++/// the nearest drawn visual line. When `for_char` is true (macOS `accessibilityRangeForPosition:`),
++/// a point past the trailing edge of a soft-wrapped line clamps to that line's last character.
++pub(crate) fn byte_at_point(node: &NodeRef, text: Text, point: Point, for_char: bool) -> Option<usize> {
++    let drawn = drawn_lines(node, text);
++    let d = drawn.iter().min_by(|a, b| {
++        let dist = |ln: &DrawnLine| match ln.node.data().bounds() {
++            Some(r) if point.y < r.y0 => r.y0 - point.y,
++            Some(r) if point.y > r.y1 => point.y - r.y1,
++            Some(_) => 0.0,
++            None => f64::INFINITY,
++        };
++        dist(a).total_cmp(&dist(b))
++    })?;
++    let bounds = d.node.data().bounds()?;
++    let rel_x = (point.x - bounds.x0) as f32;
++    let data = d.node.data();
++    let rtl = line_is_rtl(&d.node);
++    let lengths = data.character_lengths();
++    let positions = data.character_positions().unwrap_or(&[]);
++    let widths = data.character_widths().unwrap_or(&[]);
++    if lengths.is_empty() || positions.len() < lengths.len() || widths.len() < lengths.len() {
++        return Some(d.start);
++    }
++    let mut byte_off = 0usize;
++    let mut min_x = f32::INFINITY;
++    let mut max_x = f32::NEG_INFINITY;
++    for k in 0..lengths.len() {
++        let w = widths[k];
++        let x0 = positions[k];
++        let x1 = x0 + w;
++        if w > 0.0 {
++            min_x = min_x.min(x0);
++            max_x = max_x.max(x1);
++            if rel_x >= x0 && rel_x < x1 {
++                return Some(text.clamp(d.start + byte_off));
++            }
++        }
++        byte_off += usize::from(lengths[k]);
++    }
++    let trim = if d.end >= d.start + 2 && text.0.as_bytes().get(d.end - 2..d.end) == Some(b"\r\n") {
++        2
++    } else if d.end > d.start && text.0.as_bytes().get(d.end - 1) == Some(&b'\n') {
++        1
++    } else {
++        0
++    };
++    let line_end = text.clamp(d.end.saturating_sub(trim)).max(d.start);
++    let leading = if rtl { rel_x >= max_x } else { rel_x <= min_x };
++    if leading {
++        return Some(d.start);
++    }
++    if for_char && trim == 0 && line_end > d.start {
++        return Some(text.prev(line_end, Unit::Character).max(d.start));
++    }
++    Some(line_end)
++}
++
++fn utf16_len(s: &str) -> usize {
++    if s.is_ascii() { s.len() } else { s.chars().map(char::len_utf16).sum() }
++}
++
++fn count_newlines_slice(s: &str) -> usize {
++    s.as_bytes().iter().filter(|&&b| b == b'\n').count()
++}
++
++fn count_newlines_between(s: &str, a: usize, b: usize, marks: &[Mark]) -> usize {
++    if a >= b || b > s.len() {
++        return 0;
++    }
++    if b - a <= CHECKPOINT_STRIDE || marks.len() <= 1 {
++        return s.get(a..b).map_or(0, count_newlines_slice);
++    }
++    let ma = marks.partition_point(|m| m.byte <= a).saturating_sub(1);
++    let mb = marks.partition_point(|m| m.byte <= b).saturating_sub(1);
++    if mb <= ma {
++        return s.get(a..b).map_or(0, count_newlines_slice);
++    }
++    let head_sub = s.get(marks[ma].byte..a).map_or(0, count_newlines_slice);
++    let tail_add = s.get(marks[mb].byte..b).map_or(0, count_newlines_slice);
++    (marks[mb].newlines + tail_add).saturating_sub(marks[ma].newlines + head_sub)
++}
++
++fn nth_newline_after(s: &str, from: usize, limit: usize, nth: usize, marks: &[Mark]) -> Option<usize> {
++    let sub = s.get(from..limit)?;
++    if limit - from <= CHECKPOINT_STRIDE || marks.len() <= 1 {
++        return sub.match_indices('\n').nth(nth).map(|(p, _)| from + p);
++    }
++    let m_from = marks.partition_point(|m| m.byte <= from).saturating_sub(1);
++    let base_nl = marks[m_from].newlines + s.get(marks[m_from].byte..from).map_or(0, count_newlines_slice);
++    let target_nl = base_nl + nth + 1;
++    let m_hit = marks.partition_point(|m| m.newlines < target_nl).saturating_sub(1);
++    let scan_start = marks[m_hit].byte.max(from);
++    if scan_start >= limit {
++        return None;
++    }
++    let already = if scan_start == from {
++        0
++    } else {
++        (marks[m_hit].newlines).saturating_sub(base_nl)
++    };
++    let rem = nth.checked_sub(already)?;
++    s.get(scan_start..limit)?
++        .match_indices('\n')
++        .nth(rem)
++        .map(|(p, _)| scan_start + p)
++}
++
++/// Byte offsets into a field's value.
++#[derive(Clone, Copy)]
++pub(crate) struct Text<'a>(pub(crate) &'a str);
++
++impl<'a> Text<'a> {
++    pub(crate) fn len(self) -> usize {
++        self.0.len()
++    }
++
++    /// `i`, within the text and on a character's start.
++    pub(crate) fn clamp(self, i: usize) -> usize {
++        self.0.floor_char_boundary(i.min(self.0.len()))
++    }
++
++    pub(crate) fn slice(self, a: usize, b: usize) -> &'a str {
++        let (a, b) = (self.clamp(a.min(b)), self.clamp(a.max(b)));
++        self.0.get(a..b).unwrap_or("")
++    }
++
++    fn line_start(self, i: usize) -> usize {
++        let i = self.clamp(i);
++        self.0.get(..i).and_then(|s| s.rfind('\n')).map_or(0, |p| p + 1)
++    }
++
++    pub(crate) fn is_start(self, i: usize, unit: Unit) -> bool {
++        let i = self.clamp(i);
++        let s = self.0;
++        match unit {
++            Unit::Character => true,
++            Unit::Word => {
++                i == 0
++                    || (s.get(i..).and_then(|r| r.chars().next()).is_some_and(|c| !c.is_whitespace())
++                        && s.get(..i).and_then(|l| l.chars().next_back()).is_some_and(char::is_whitespace))
++            }
++            Unit::Line | Unit::Paragraph => i == 0 || s.as_bytes().get(i - 1) == Some(&b'\n'),
++            Unit::Document => i == 0,
++        }
++    }
++
++    pub(crate) fn is_start_in(self, i: usize, unit: Unit, state: &DrawnState) -> bool {
++        let i = self.clamp(i);
++        if unit == Unit::Line && !state.lines.is_empty() {
++            if state.upstream_caret
++                && i == state.caret_byte
++                && state
++                    .lines
++                    .iter()
++                    .any(|d| i == d.end && d.start < d.end && !line_is_hard_end(self, d.end))
++            {
++                return false;
++            }
++            if let Some(d) = state
++                .lines
++                .iter()
++                .find(|d| (d.start <= i && i < d.end) || (d.start == i && d.end == i))
++            {
++                return i == d.start;
++            }
++        }
++        self.is_start(i, unit)
++    }
++
++    /// The start of the unit holding `i`.
++    pub(crate) fn start_of(self, i: usize, unit: Unit) -> usize {
++        let i = self.clamp(i);
++        if self.is_start(i, unit) { i } else { self.prev(i, unit) }
++    }
++
++    pub(crate) fn start_of_in(self, i: usize, unit: Unit, state: &DrawnState) -> usize {
++        let i = self.clamp(i);
++        if self.is_start_in(i, unit, state) {
++            i
++        } else {
++            self.prev_in(i, unit, &state.lines)
++        }
++    }
++
++    /// The first unit start after `i`, or the text's end.
++    pub(crate) fn next(self, i: usize, unit: Unit) -> usize {
++        let i = self.clamp(i);
++        let s = self.0;
++        let tail = s.get(i..).unwrap_or("");
++        match unit {
++            Unit::Character => tail.chars().next().map_or(i, |c| i + c.len_utf8()),
++            Unit::Word => {
++                let mut space = false;
++                for (k, c) in tail.char_indices() {
++                    if c.is_whitespace() {
++                        space = true;
++                    } else if space {
++                        return i + k;
++                    }
++                }
++                s.len()
++            }
++            Unit::Line | Unit::Paragraph => tail.find('\n').map_or(s.len(), |p| i + p + 1),
++            Unit::Document => s.len(),
++        }
++    }
++
++    pub(crate) fn next_in(self, i: usize, unit: Unit, drawn: &[DrawnLine]) -> usize {
++        let i = self.clamp(i);
++        if unit != Unit::Line || drawn.is_empty() {
++            return self.next(i, unit);
++        }
++        if let Some(d) = drawn.iter().find(|d| d.start <= i && i < d.end) {
++            return d.end;
++        }
++        let nl = self.next(i, Unit::Line);
++        drawn
++            .iter()
++            .find(|d| d.start > i && d.start < nl)
++            .map_or(nl, |d| d.start)
++    }
++
++    /// The last unit start before `i`, or the text's start.
++    pub(crate) fn prev(self, i: usize, unit: Unit) -> usize {
++        let i = self.clamp(i);
++        let s = self.0;
++        let head = s.get(..i).unwrap_or("");
++        match unit {
++            Unit::Character => head.chars().next_back().map_or(0, |c| i - c.len_utf8()),
++            Unit::Word => {
++                let mut word = None;
++                for (k, c) in head.char_indices().rev() {
++                    if !c.is_whitespace() {
++                        word = Some(k);
++                    } else if let Some(k) = word {
++                        return k;
++                    }
++                }
++                0
++            }
++            Unit::Line | Unit::Paragraph => {
++                if i == 0 {
++                    return 0;
++                }
++                let at = self.line_start(i);
++                if at < i {
++                    at
++                } else {
++                    self.line_start(self.clamp(i - 1))
++                }
++            }
++            Unit::Document => 0,
++        }
++    }
++
++    pub(crate) fn prev_in(self, i: usize, unit: Unit, drawn: &[DrawnLine]) -> usize {
++        let i = self.clamp(i);
++        if unit != Unit::Line || drawn.is_empty() || i == 0 {
++            return self.prev(i, unit);
++        }
++        if let Some(d) = drawn.iter().rfind(|d| d.start < i && i <= d.end) {
++            return d.start;
++        }
++        if drawn.iter().any(|d| d.start == i) {
++            if let Some(prev_d) = drawn.iter().rfind(|d| d.end == i && d.start < i) {
++                return prev_d.start;
++            }
++            return self.prev(i, Unit::Line);
++        }
++        let p = self.prev(i, Unit::Line);
++        drawn
++            .iter()
++            .rfind(|d| d.start >= p && d.start < i)
++            .map_or(p, |d| d.start)
++    }
++
++    /// Moves `i` by `count` unit starts, stopping at either end of the text.
++    pub(crate) fn step_in(self, i: usize, unit: Unit, count: i32, drawn: &[DrawnLine]) -> (usize, i32) {
++        let mut i = self.clamp(i);
++        if count == 0 {
++            return (i, 0);
++        }
++        let mut moved = 0i32;
++        let steps = count.unsigned_abs();
++        for _ in 0..steps {
++            if (count > 0 && i == self.len()) || (count < 0 && i == 0) {
++                break;
++            }
++            let next_i = if count > 0 {
++                self.next_in(i, unit, drawn)
++            } else {
++                self.prev_in(i, unit, drawn)
++            };
++            if next_i == i {
++                break;
++            }
++            i = next_i;
++            moved = moved.saturating_add(1);
++        }
++        (i, if count < 0 { -moved } else { moved })
++    }
++
++    /// The zero-based line holding byte `i`, counting drawn wrapped lines visually.
++    pub(crate) fn line_of_in(self, i: usize, state: &DrawnState) -> usize {
++        let i = self.clamp(i);
++        let s = self.0;
++        let drawn = &state.lines;
++        let bs = bands(drawn);
++        with_checkpoints(s, state.content_key, |marks| {
++            if bs.is_empty() {
++                return count_newlines_between(s, 0, i, marks);
++            }
++            let mut lines = 0usize;
++            let mut cursor = 0usize;
++            for b in &bs {
++                if i < b.start {
++                    return lines + count_newlines_between(s, cursor, i, marks);
++                }
++                lines += count_newlines_between(s, cursor, b.start, marks);
++                let band_slice = &drawn[b.first..b.first + b.count];
++                let has_trailing_empty =
++                    band_slice.last().is_some_and(|d| d.start == b.end && d.end == b.end);
++                let in_band_at_end = i == b.end
++                    && b.end == s.len()
++                    && (has_trailing_empty || !line_is_hard_end(self, b.end));
++                if i < b.end
++                    || in_band_at_end
++                    || (state.upstream_caret
++                        && i == state.caret_byte
++                        && i == b.end
++                        && b.start < b.end
++                        && !line_is_hard_end(self, b.end))
++                {
++                    if state.upstream_caret && i == state.caret_byte {
++                        if let Some(sub) = band_slice
++                            .iter()
++                            .position(|d| i == d.end && d.start < d.end && !line_is_hard_end(self, d.end))
++                        {
++                            return lines + sub;
++                        }
++                    }
++                    let sub = band_slice.iter().rposition(|d| d.start <= i).unwrap_or(0);
++                    return lines + sub;
++                }
++                lines += b.count;
++                cursor = b.end;
++            }
++            lines + count_newlines_between(s, cursor, i, marks)
++        })
++    }
++
++    /// Line `n`'s bytes, counting drawn wrapped lines visually.
++    pub(crate) fn line_in(self, n: usize, state: &DrawnState) -> Option<(usize, usize)> {
++        let s = self.0;
++        let drawn = &state.lines;
++        let bs = bands(drawn);
++        with_checkpoints(s, state.content_key, |marks| {
++            if bs.is_empty() {
++                let start = if n == 0 {
++                    0
++                } else {
++                    nth_newline_after(s, 0, s.len(), n - 1, marks)? + 1
++                };
++                return Some((start, self.next(start, Unit::Line)));
++            }
++            let mut rem = n;
++            let mut cursor = 0usize;
++            for b in &bs {
++                let gap_lines = count_newlines_between(s, cursor, b.start, marks);
++                if rem < gap_lines {
++                    let start = if rem == 0 {
++                        cursor
++                    } else {
++                        nth_newline_after(s, cursor, b.start, rem - 1, marks)? + 1
++                    };
++                    return Some((start, self.next(start, Unit::Line).min(b.start)));
++                }
++                rem -= gap_lines;
++                if rem < b.count {
++                    let d = &drawn[b.first + rem];
++                    return Some((d.start, d.end));
++                }
++                rem -= b.count;
++                cursor = b.end;
++            }
++            let drawn_has_end_empty =
++                drawn.last().is_some_and(|d| d.start == s.len() && d.end == s.len());
++            if cursor >= s.len() {
++                if !drawn_has_end_empty && line_is_hard_end(self, s.len()) && rem == 0 {
++                    return Some((s.len(), s.len()));
++                }
++                return None;
++            }
++            let start = if rem == 0 {
++                cursor
++            } else {
++                nth_newline_after(s, cursor, s.len(), rem - 1, marks)? + 1
++            };
++            Some((start, self.next(start, Unit::Line)))
++        })
++    }
++
++    pub(crate) fn utf16_with(self, i: usize, key: u64) -> usize {
++        let i = self.clamp(i);
++        with_checkpoints(self.0, key, |marks| {
++            let idx = marks.partition_point(|m| m.byte <= i).saturating_sub(1);
++            let m = marks.get(idx).copied().unwrap_or(Mark { byte: 0, utf16: 0, newlines: 0 });
++            m.utf16 + self.0.get(m.byte..i).map_or(0, utf16_len)
++        })
++    }
++
++    pub(crate) fn utf16(self, i: usize) -> usize {
++        self.utf16_with(i, 0)
++    }
++
++    /// Bytes `a..b` as a UTF-16 start and length.
++    pub(crate) fn utf16_span_with(self, a: usize, b: usize, key: u64) -> (usize, usize) {
++        let (a, b) = (self.clamp(a.min(b)), self.clamp(a.max(b)));
++        let start = self.utf16_with(a, key);
++        let len = if b - a <= CHECKPOINT_STRIDE {
++            self.0.get(a..b).map_or(0, utf16_len)
++        } else {
++            self.utf16_with(b, key).saturating_sub(start)
++        };
++        (start, len)
++    }
++
++    pub(crate) fn utf16_span(self, a: usize, b: usize) -> (usize, usize) {
++        self.utf16_span_with(a, b, 0)
++    }
++
++    pub(crate) fn from_utf16_with(self, units: usize, key: u64) -> usize {
++        with_checkpoints(self.0, key, |marks| {
++            let idx = marks.partition_point(|m| m.utf16 <= units).saturating_sub(1);
++            let m = marks.get(idx).copied().unwrap_or(Mark { byte: 0, utf16: 0, newlines: 0 });
++            let mut seen = m.utf16;
++            let tail = self.0.get(m.byte..).unwrap_or("");
++            for (k, c) in tail.char_indices() {
++                if seen >= units {
++                    return m.byte + k;
++                }
++                seen += c.len_utf16();
++            }
++            self.0.len()
++        })
++    }
++
++    pub(crate) fn from_utf16(self, units: usize) -> usize {
++        self.from_utf16_with(units, 0)
++    }
++}
 diff --git a/src/node.rs b/src/node.rs
-index f4a97e30..a63a2772 100644
+index f4a97e3..26fa8be 100644
 --- a/src/node.rs
 +++ b/src/node.rs
-@@ -732,6 +732,41 @@ impl NodeWrapper<'_> {
+@@ -12,7 +12,7 @@
+ 
+ use accesskit::{
+     Action, ActionData, ActionRequest, AriaCurrent, HasPopup, Live, NodeId, Orientation, Point,
+-    Role, SortDirection, Toggled, TreeId,
++    Role, SortDirection, TextSelection, Toggled, TreeId,
+ };
+ use accesskit_consumer::{FilterResult, FullNodeId, NodeRef, Tree, TreeState};
+ use std::{
+@@ -31,6 +31,7 @@ use windows::{
+ use crate::{
+     context::Context,
+     filters::{filter, filter_with_root_exception},
++    long_text::{Text, byte_at_point, long_text},
+     text::PlatformRange as PlatformTextRange,
+     util::*,
+ };
+@@ -708,7 +709,7 @@ impl NodeWrapper<'_> {
+     }
+ 
+     fn is_text_pattern_supported(&self) -> bool {
+-        self.node.supports_text_ranges()
++        self.node.supports_text_ranges() || long_text(&self.node).is_some()
+     }
+ 
+     fn is_expand_collapse_pattern_supported(&self) -> bool {
+@@ -732,6 +733,41 @@ impl NodeWrapper<'_> {
          self.node.is_dialog()
      }
  
@@ -44,7 +990,105 @@ index f4a97e30..a63a2772 100644
      fn is_window_pattern_supported(&self) -> bool {
          self.node.is_dialog()
      }
-@@ -1326,7 +1361,10 @@ properties! {
+@@ -770,6 +806,10 @@ impl NodeWrapper<'_> {
+     }
+ }
+ 
++fn long_value_unchanged(new: &NodeRef, old: &NodeRef) -> bool {
++    long_text(new).is_some() && long_text(old).is_some() && new.raw_value() == old.raw_value()
++}
++
+ fn enqueue_property_change(
+     queue: &mut Vec<QueuedEvent>,
+     element: &IRawElementProviderSimple,
+@@ -799,6 +839,7 @@ fn enqueue_property_change(
+     ISelectionItemProvider,
+     ISelectionProvider,
+     ITextProvider,
++    ITextProvider2,
+     IExpandCollapseProvider,
+     IWindowProvider
+ )]
+@@ -839,9 +880,12 @@ impl PlatformNode {
+     where
+         F: FnOnce(&Tree, &Arc<Context>) -> Result<T>,
+     {
+-        let context = self.upgrade_context()?;
+-        let tree = context.read_tree();
+-        f(&tree, &context)
++        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++            let context = self.upgrade_context()?;
++            let tree = context.read_tree();
++            f(&tree, &context)
++        }))
++        .unwrap_or_else(|_| Err(element_not_available()))
+     }
+ 
+     fn node<'a>(&self, tree: &'a Tree) -> Result<NodeRef<'a>> {
+@@ -907,6 +951,18 @@ impl PlatformNode {
+         })
+     }
+ 
++    /// Rune: if this node is a long field ([`long_text`]), its range `f` picks, in its value's
++    /// bytes.
++    fn long_range(&self, f: impl FnOnce(Text, &TextSelection) -> (usize, usize)) -> Result<Option<ITextRangeProvider>> {
++        self.resolve(|node| {
++            Ok(long_text(&node).map(|(text, selection)| {
++                let (a, b) = f(text, selection);
++                let (a, b) = (text.clamp(a.min(b)), text.clamp(a.max(b)));
++                PlatformTextRange::new_long(&self.context, node.id(), a, b).into()
++            }))
++        })
++    }
++
+     fn resolve_for_text_pattern<F, T>(&self, f: F) -> Result<T>
+     where
+         for<'a> F: FnOnce(NodeRef<'a>) -> Result<T>,
+@@ -918,17 +974,20 @@ impl PlatformNode {
+     where
+         for<'a> F: FnOnce(NodeRef<'a>, NodeId, TreeId) -> Result<Option<ActionRequest>>,
+     {
+-        let context = self.upgrade_context()?;
+-        if context.is_placeholder.load(Ordering::SeqCst) {
+-            return Err(element_not_enabled());
+-        }
+-        let tree = context.read_tree();
+-        let (node, target_node, target_tree) = self.node_with_location(&tree)?;
+-        if let Some(request) = f(node, target_node, target_tree)? {
+-            drop(tree);
+-            context.do_action(request);
+-        }
+-        Ok(())
++        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++            let context = self.upgrade_context()?;
++            if context.is_placeholder.load(Ordering::SeqCst) {
++                return Err(element_not_enabled());
++            }
++            let tree = context.read_tree();
++            let (node, target_node, target_tree) = self.node_with_location(&tree)?;
++            if let Some(request) = f(node, target_node, target_tree)? {
++                drop(tree);
++                context.do_action(request);
++            }
++            Ok(())
++        }))
++        .unwrap_or_else(|_| Err(element_not_available()))
+     }
+ 
+     fn do_action<F>(&self, f: F) -> Result<()>
+@@ -1272,7 +1331,10 @@ macro_rules! patterns {
+                 old: &mut NodeWrapper,
+             ) {
+                 $(if self.$is_supported() && old.$is_supported() {
+-                    $({
++                    $(
++                    // Rune: a long field's unchanged value isn't copied twice to UTF-16 to find
++                    // it unchanged (14.5 MB each way at 200,000 lines, on every caret move).
++                    if !(stringify!($getter) == "value" && long_value_unchanged(&self.node, &old.node)) {
+                         let old_value = old.$getter();
+                         let new_value = self.$getter();
+                         if old_value != new_value {
+@@ -1326,7 +1388,10 @@ properties! {
      (UIA_PositionInSetPropertyId, position_in_set),
      (UIA_SizeOfSetPropertyId, size_of_set),
      (UIA_AriaPropertiesPropertyId, aria_properties),
@@ -56,3 +1100,686 @@ index f4a97e30..a63a2772 100644
  }
  
  patterns! {
+@@ -1431,6 +1496,9 @@ patterns! {
+     )),
+     (UIA_TextPatternId, ITextProvider, ITextProvider_Impl, is_text_pattern_supported, (), (
+         fn GetSelection(&self) -> Result<*mut SAFEARRAY> {
++            if let Some(range) = self.long_range(|_, s| (s.anchor.character_index, s.focus.character_index))? {
++                return Ok(safe_array_from_com_slice(&[range.cast::<IUnknown>()?]));
++            }
+             self.resolve_for_text_pattern(|node| {
+                 if let Some(range) = node.text_selection() {
+                     let platform_range: ITextRangeProvider = PlatformTextRange::new(&self.context, range).into();
+@@ -1455,6 +1523,21 @@ patterns! {
+         },
+ 
+         fn RangeFromPoint(&self, point: &UiaPoint) -> Result<ITextRangeProvider> {
++            let hit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++                self.resolve_with_context(|node, context| {
++                    Ok(long_text(&node).map(|(text, s)| {
++                        let client_top_left = context.client_top_left();
++                        let pt = Point::new(point.x - client_top_left.x, point.y - client_top_left.y);
++                        let pt = node.transform().inverse() * pt;
++                        let at = byte_at_point(&node, text, pt, false).unwrap_or_else(|| text.clamp(s.focus.character_index));
++                        PlatformTextRange::new_long(&self.context, node.id(), at, at).into()
++                    }))
++                })
++            }))
++            .unwrap_or_else(|_| Err(element_not_available()))?;
++            if let Some(range) = hit {
++                return Ok(range);
++            }
+             self.resolve_with_context_for_text_pattern(|node, context| {
+                 let client_top_left = context.client_top_left();
+                 let point = Point::new(point.x - client_top_left.x, point.y - client_top_left.y);
+@@ -1466,6 +1549,9 @@ patterns! {
+         },
+ 
+         fn DocumentRange(&self) -> Result<ITextRangeProvider> {
++            if let Some(range) = self.long_range(|text, _| (0, text.len()))? {
++                return Ok(range);
++            }
+             self.resolve_for_text_pattern(|node| {
+                 let range = node.document_range();
+                 Ok(PlatformTextRange::new(&self.context, range).into())
+@@ -1473,6 +1559,9 @@ patterns! {
+         },
+ 
+         fn SupportedTextSelection(&self) -> Result<SupportedTextSelection> {
++            if self.long_range(|_, _| (0, 0))?.is_some() {
++                return Ok(SupportedTextSelection_Single);
++            }
+             self.resolve_for_text_pattern(|node| {
+                 if node.has_text_selection() {
+                     Ok(SupportedTextSelection_Single)
+@@ -1482,6 +1571,36 @@ patterns! {
+             })
+         }
+     )),
++    (UIA_TextPattern2Id, ITextProvider2, ITextProvider2_Impl, is_text_pattern_supported, (), (
++        fn RangeFromAnnotation(&self, _annotation: Ref<IRawElementProviderSimple>) -> Result<ITextRangeProvider> {
++            Err(not_supported())
++        },
++
++        fn GetCaretRange(&self, is_active: *mut BOOL) -> Result<ITextRangeProvider> {
++            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++                let long_caret = self.resolve(|node| {
++                    Ok(long_text(&node).map(|(text, s)| {
++                        if !is_active.is_null() {
++                            unsafe { *is_active = node.is_focused().into() };
++                        }
++                        let at = text.clamp(s.focus.character_index);
++                        PlatformTextRange::new_long(&self.context, node.id(), at, at).into()
++                    }))
++                })?;
++                if let Some(range) = long_caret {
++                    return Ok(range);
++                }
++                self.resolve_for_text_pattern(|node| {
++                    if !is_active.is_null() {
++                        unsafe { *is_active = node.is_focused().into() };
++                    }
++                    let pos = node.text_selection_focus().unwrap_or_else(|| node.document_start());
++                    Ok(PlatformTextRange::new(&self.context, pos.to_degenerate_range()).into())
++                })
++            }))
++            .unwrap_or_else(|_| Err(element_not_available()))
++        }
++    )),
+     (UIA_ExpandCollapsePatternId, IExpandCollapseProvider, IExpandCollapseProvider_Impl, is_expand_collapse_pattern_supported, (
+         (UIA_ExpandCollapseExpandCollapseStatePropertyId, ExpandCollapseState, expand_collapse_state, ExpandCollapseState)
+     ), (
+diff --git a/src/text.rs b/src/text.rs
+index 6b18382..c7dfc79 100644
+--- a/src/text.rs
++++ b/src/text.rs
+@@ -5,9 +5,12 @@
+ 
+ #![allow(non_upper_case_globals)]
+ 
+-use accesskit::{Action, ActionData, ActionRequest, ScrollHint, VerticalOffset};
++use accesskit::{
++    Action, ActionData, ActionRequest, ScrollHint, TextPosition as WeakPosition, TextSelection,
++    VerticalOffset,
++};
+ use accesskit_consumer::{
+-    NodeRef, TextPosition as Position, TextRange as Range, Tree, TreeState,
++    FullNodeId, NodeRef, TextPosition as Position, TextRange as Range, Tree, TreeState,
+     WeakTextRange as WeakRange,
+ };
+ use std::sync::{Arc, RwLock, Weak};
+@@ -19,7 +22,51 @@ use windows::{
+     core::*,
+ };
+ 
+-use crate::{context::Context, util::*};
++use crate::{
++    context::Context,
++    long_text::{Text, Unit, bounding_boxes, drawn_lines, drawn_state, long_text},
++    util::*,
++};
++
++/// A range in published text runs, or (Rune) in a long field's value ([`long_text`]).
++#[derive(Clone, PartialEq)]
++enum State {
++    Runs(WeakRange),
++    Long {
++        node: FullNodeId,
++        start: usize,
++        end: usize,
++    },
++}
++
++fn runs(state: &State) -> Result<&WeakRange> {
++    match state {
++        State::Runs(range) => Ok(range),
++        State::Long { .. } => Err(invalid_arg()),
++    }
++}
++
++/// Moves one end of a long field's range, taking the other along if they'd cross.
++fn set_long_endpoint(start: &mut usize, end: &mut usize, endpoint: TextPatternRangeEndpoint, at: usize) {
++    if endpoint == TextPatternRangeEndpoint_Start {
++        *start = at;
++        *end = (*end).max(at);
++    } else {
++        *end = at;
++        *start = (*start).min(at);
++    }
++}
++
++fn long_unit(unit: TextUnit) -> Result<Unit> {
++    match unit {
++        TextUnit_Character => Ok(Unit::Character),
++        TextUnit_Word => Ok(Unit::Word),
++        TextUnit_Line => Ok(Unit::Line),
++        TextUnit_Paragraph => Ok(Unit::Paragraph),
++        TextUnit_Format | TextUnit_Page | TextUnit_Document => Ok(Unit::Document),
++        _ => Err(invalid_arg()),
++    }
++}
+ 
+ fn upgrade_range<'a>(weak: &WeakRange, tree_state: &'a TreeState) -> Result<Range<'a>> {
+     if let Some(range) = weak.upgrade(tree_state) {
+@@ -209,17 +256,86 @@ fn move_position(
+ #[implement(ITextRangeProvider)]
+ pub(crate) struct PlatformRange {
+     context: Weak<Context>,
+-    state: RwLock<WeakRange>,
++    state: RwLock<State>,
+ }
+ 
+ impl PlatformRange {
+     pub(crate) fn new(context: &Weak<Context>, range: Range) -> Self {
+         Self {
+             context: context.clone(),
+-            state: RwLock::new(range.downgrade()),
++            state: RwLock::new(State::Runs(range.downgrade())),
++        }
++    }
++
++    /// Bytes `start..end` of long field `node`'s value.
++    pub(crate) fn new_long(context: &Weak<Context>, node: FullNodeId, start: usize, end: usize) -> Self {
++        Self {
++            context: context.clone(),
++            state: RwLock::new(State::Long { node, start, end }),
++        }
++    }
++
++    fn read_state(&self) -> std::sync::RwLockReadGuard<'_, State> {
++        self.state.read().unwrap_or_else(|e| e.into_inner())
++    }
++
++    fn write_state(&self) -> std::sync::RwLockWriteGuard<'_, State> {
++        self.state.write().unwrap_or_else(|e| e.into_inner())
++    }
++
++    fn is_long(&self) -> bool {
++        matches!(*self.read_state(), State::Long { .. })
++    }
++
++    /// Runs `f` on this long field range's text, node and endpoints, which it may move.
++    /// Computes without holding `self.state`'s lock and catches any panic so neither a poisoned
++    /// lock nor an unwind can reach UIA's `extern "system"` ABI.
++    fn long<F, T>(&self, f: F) -> Result<T>
++    where
++        F: FnOnce(Text, NodeRef, &Arc<Context>, &mut usize, &mut usize) -> Result<T>,
++    {
++        uia_catch(|| {
++            let context = self.upgrade_context()?;
++            let tree = context.read_tree();
++            let (node_id, mut start, mut end) = match *self.read_state() {
++                State::Long { node, start, end } => (node, start, end),
++                State::Runs(_) => return Err(invalid_arg()),
++            };
++            let node = tree.state().node_by_id(node_id).ok_or_else(element_not_available)?;
++            let (text, _) = long_text(&node).ok_or_else(element_not_available)?;
++            // The value may have changed since the range was made.
++            start = text.clamp(start);
++            end = text.clamp(end).max(start);
++            let res = f(text, node, &context, &mut start, &mut end)?;
++            if let State::Long { start: s, end: e, .. } = &mut *self.write_state() {
++                *s = start;
++                *e = end;
++            }
++            Ok(res)
++        })
++    }
++
++    fn long_endpoints(&self) -> Option<(FullNodeId, usize, usize)> {
++        match *self.read_state() {
++            State::Long { node, start, end } => Some((node, start, end)),
++            State::Runs(_) => None,
+         }
+     }
+ 
++    fn long_action(&self, action: Action, data: impl FnOnce(NodeRef, usize, usize) -> Option<ActionData>) -> Result<()> {
++        uia_catch(|| {
++            let context = self.upgrade_context()?;
++            let tree = context.read_tree();
++            let (id, start, end) = self.long_endpoints().ok_or_else(invalid_arg)?;
++            let node = tree.state().node_by_id(id).ok_or_else(element_not_available)?;
++            let (target_node, target_tree) = node.locate();
++            let data = data(node, start, end);
++            drop(tree);
++            context.do_action(ActionRequest { action, target_tree, target_node, data });
++            Ok(())
++        })
++    }
++
+     fn upgrade_context(&self) -> Result<Arc<Context>> {
+         upgrade(&self.context)
+     }
+@@ -228,9 +344,11 @@ impl PlatformRange {
+     where
+         F: FnOnce(&TreeState, &Context) -> Result<T>,
+     {
+-        let context = self.upgrade_context()?;
+-        let tree = context.read_tree();
+-        f(tree.state(), &context)
++        uia_catch(|| {
++            let context = self.upgrade_context()?;
++            let tree = context.read_tree();
++            f(tree.state(), &context)
++        })
+     }
+ 
+     fn with_tree_state<F, T>(&self, f: F) -> Result<T>
+@@ -241,13 +359,13 @@ impl PlatformRange {
+     }
+ 
+     fn upgrade_node<'a>(&self, tree_state: &'a TreeState) -> Result<NodeRef<'a>> {
+-        let state = self.state.read().unwrap();
+-        upgrade_range_node(&state, tree_state)
++        let state = self.read_state();
++        upgrade_range_node(runs(&state)?, tree_state)
+     }
+ 
+     fn upgrade_for_read<'a>(&self, tree_state: &'a TreeState) -> Result<Range<'a>> {
+-        let state = self.state.read().unwrap();
+-        upgrade_range(&state, tree_state)
++        let state = self.read_state();
++        upgrade_range(runs(&state)?, tree_state)
+     }
+ 
+     fn read_with_context<F, T>(&self, f: F) -> Result<T>
+@@ -272,10 +390,10 @@ impl PlatformRange {
+         F: FnOnce(&mut Range) -> Result<T>,
+     {
+         self.with_tree_state(|tree_state| {
+-            let mut state = self.state.write().unwrap();
+-            let mut range = upgrade_range(&state, tree_state)?;
++            let mut state = self.write_state();
++            let mut range = upgrade_range(runs(&state)?, tree_state)?;
+             let result = f(&mut range);
+-            *state = range.downgrade();
++            *state = State::Runs(range.downgrade());
+             result
+         })
+     }
+@@ -284,13 +402,15 @@ impl PlatformRange {
+     where
+         for<'a> F: FnOnce(Range<'a>, &Tree) -> ActionRequest,
+     {
+-        let context = self.upgrade_context()?;
+-        let tree = context.read_tree();
+-        let range = self.upgrade_for_read(tree.state())?;
+-        let request = f(range, &tree);
+-        drop(tree);
+-        context.do_action(request);
+-        Ok(())
++        uia_catch(|| {
++            let context = self.upgrade_context()?;
++            let tree = context.read_tree();
++            let range = self.upgrade_for_read(tree.state())?;
++            let request = f(range, &tree);
++            drop(tree);
++            context.do_action(request);
++            Ok(())
++        })
+     }
+ 
+     fn require_same_context(&self, other: &PlatformRange) -> Result<()> {
+@@ -302,11 +422,16 @@ impl PlatformRange {
+     }
+ }
+ 
++fn uia_catch<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
++    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
++        .unwrap_or_else(|_| Err(element_not_available()))
++}
++
+ impl Clone for PlatformRange {
+     fn clone(&self) -> Self {
+         PlatformRange {
+             context: self.context.clone(),
+-            state: RwLock::new(self.state.read().unwrap().clone()),
++            state: RwLock::new(self.read_state().clone()),
+         }
+     }
+ }
+@@ -319,14 +444,16 @@ impl Clone for PlatformRange {
+ #[allow(non_snake_case)]
+ impl ITextRangeProvider_Impl for PlatformRange_Impl {
+     fn Clone(&self) -> Result<ITextRangeProvider> {
+-        Ok(self.this.clone().into())
++        uia_catch(|| Ok(self.this.clone().into()))
+     }
+ 
+     fn Compare(&self, other: Ref<ITextRangeProvider>) -> Result<BOOL> {
+-        let other = unsafe { required_param(&other)?.as_impl() };
+-        Ok((self.context.ptr_eq(&other.context)
+-            && *self.state.read().unwrap() == *other.state.read().unwrap())
+-        .into())
++        uia_catch(|| {
++            let other = unsafe { required_param(&other)?.as_impl() };
++            Ok((self.context.ptr_eq(&other.context)
++                && *self.read_state() == *other.read_state())
++            .into())
++        })
+     }
+ 
+     fn CompareEndpoints(
+@@ -335,42 +462,73 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
+         other: Ref<ITextRangeProvider>,
+         other_endpoint: TextPatternRangeEndpoint,
+     ) -> Result<i32> {
+-        let other = unsafe { required_param(&other)?.as_impl() };
+-        if std::ptr::eq(other as *const _, &self.this as *const _) {
+-            // Comparing endpoints within the same range can be done
+-            // safely without upgrading the range. This allows ATs
+-            // to determine whether an old range is degenerate even if
+-            // that range is no longer valid.
+-            let state = self.state.read().unwrap();
+-            let other_state = other.state.read().unwrap();
+-            let pos = weak_comparable_position_from_endpoint(&state, endpoint)?;
+-            let other_pos = weak_comparable_position_from_endpoint(&other_state, other_endpoint)?;
+-            let result = pos.cmp(other_pos);
+-            return Ok(result as i32);
+-        }
+-        self.require_same_context(other)?;
+-        self.with_tree_state(|tree_state| {
+-            let range = self.upgrade_for_read(tree_state)?;
+-            let other_range = other.upgrade_for_read(tree_state)?;
+-            if range.node().id() != other_range.node().id() {
+-                return Err(invalid_arg());
++        uia_catch(|| {
++            let other = unsafe { required_param(&other)?.as_impl() };
++            if self.is_long() || other.is_long() {
++                let (Some(mine), Some(theirs)) = (self.long_endpoints(), other.long_endpoints()) else {
++                    return Err(invalid_arg());
++                };
++                let at = |e: TextPatternRangeEndpoint, (node, start, end): (FullNodeId, usize, usize)| match e {
++                    _ if node != mine.0 => Err(invalid_arg()),
++                    TextPatternRangeEndpoint_Start => Ok(start),
++                    TextPatternRangeEndpoint_End => Ok(end),
++                    _ => Err(invalid_arg()),
++                };
++                return Ok(at(endpoint, mine)?.cmp(&at(other_endpoint, theirs)?) as i32);
++            }
++            if std::ptr::eq(other as *const _, &self.this as *const _) {
++                // Comparing endpoints within the same range can be done
++                // safely without upgrading the range. This allows ATs
++                // to determine whether an old range is degenerate even if
++                // that range is no longer valid.
++                let state = self.read_state();
++                let other_state = other.read_state();
++                let pos = weak_comparable_position_from_endpoint(runs(&state)?, endpoint)?;
++                let other_pos = weak_comparable_position_from_endpoint(runs(&other_state)?, other_endpoint)?;
++                let result = pos.cmp(other_pos);
++                return Ok(result as i32);
+             }
+-            let pos = position_from_endpoint(&range, endpoint)?;
+-            let other_pos = position_from_endpoint(&other_range, other_endpoint)?;
+-            let result = pos.partial_cmp(&other_pos).unwrap();
+-            Ok(result as i32)
++            self.require_same_context(other)?;
++            self.with_tree_state(|tree_state| {
++                let range = self.upgrade_for_read(tree_state)?;
++                let other_range = other.upgrade_for_read(tree_state)?;
++                if range.node().id() != other_range.node().id() {
++                    return Err(invalid_arg());
++                }
++                let pos = position_from_endpoint(&range, endpoint)?;
++                let other_pos = position_from_endpoint(&other_range, other_endpoint)?;
++                let result = pos.partial_cmp(&other_pos).ok_or_else(invalid_arg)?;
++                Ok(result as i32)
++            })
+         })
+     }
+ 
+     fn ExpandToEnclosingUnit(&self, unit: TextUnit) -> Result<()> {
++        if self.is_long() {
++            return self.long(|text, node, _, start, end| {
++                let unit = long_unit(unit)?;
++                if unit == Unit::Character && *start == text.len() {
++                    return Ok(());
++                }
++                if unit == Unit::Line {
++                    let state = drawn_state(&node, text);
++                    *start = text.start_of_in(*start, unit, &state);
++                    *end = if *start == text.len() { *start } else { text.next_in(*start, unit, &state.lines) };
++                } else {
++                    *start = text.start_of(*start, unit);
++                    *end = if *start == text.len() { *start } else { text.next(*start, unit) };
++                }
++                Ok(())
++            });
++        }
+         if unit == TextUnit_Document {
+             // Handle document as a special case so we can get to a document
+             // range even if the current endpoints are now invalid.
+             // Based on observed behavior, Narrator needs this ability.
+             return self.with_tree_state(|tree_state| {
+-                let mut state = self.state.write().unwrap();
+-                let node = upgrade_range_node(&state, tree_state)?;
+-                *state = node.document_range().downgrade();
++                let mut state = self.write_state();
++                let node = upgrade_range_node(runs(&state)?, tree_state)?;
++                *state = State::Runs(node.document_range().downgrade());
+                 Ok(())
+             });
+         }
+@@ -417,6 +575,33 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
+     }
+ 
+     fn GetAttributeValue(&self, id: UIA_TEXTATTRIBUTE_ID) -> Result<VARIANT> {
++        if self.is_long() {
++            return self.long(|text, node, _, start, end| {
++                Ok(match id {
++                    UIA_IsReadOnlyAttributeId => node.is_read_only().into(),
++                    UIA_CaretPositionAttributeId => {
++                        let at = *start;
++                        let state = drawn_state(&node, text);
++                        let at_hard_end = at == text.len()
++                            || text.0.as_bytes().get(at) == Some(&b'\n')
++                            || text.0.as_bytes().get(at..at + 2) == Some(b"\r\n");
++                        let value = if at != *end {
++                            CaretPosition_Unknown
++                        } else if text.is_start_in(at, Unit::Line, &state) {
++                            CaretPosition_BeginningOfLine
++                        } else if at_hard_end
++                            || state.lines.iter().any(|d| d.end == at && d.start < at)
++                        {
++                            CaretPosition_EndOfLine
++                        } else {
++                            CaretPosition_Unknown
++                        };
++                        value.0.into()
++                    }
++                    _ => unsafe { UiaGetReservedNotSupportedValue() }.unwrap().into(),
++                })
++            });
++        }
+         self.read(|range| match id {
+             UIA_IsReadOnlyAttributeId => {
+                 // TBD: do we ever want to support mixed read-only/editable text?
+@@ -492,6 +677,23 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
+     }
+ 
+     fn GetBoundingRectangles(&self) -> Result<*mut SAFEARRAY> {
++        if self.is_long() {
++            return self.long(|text, node, context, start, end| {
++                let rects = bounding_boxes(&node, text, *start, *end);
++                if rects.is_empty() {
++                    return Ok(std::ptr::null_mut());
++                }
++                let client_top_left = context.client_top_left();
++                let mut result = Vec::<f64>::with_capacity(rects.len() * 4);
++                for rect in rects {
++                    result.push(rect.x0 + client_top_left.x);
++                    result.push(rect.y0 + client_top_left.y);
++                    result.push(rect.width());
++                    result.push(rect.height());
++                }
++                Ok(safe_array_from_f64_slice(&result))
++            });
++        }
+         self.read_with_context(|range, context| {
+             let rects = range.bounding_boxes();
+             if rects.is_empty() {
+@@ -511,13 +713,30 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
+ 
+     fn GetEnclosingElement(&self) -> Result<IRawElementProviderSimple> {
+         // Revisit this if we eventually support embedded objects.
+-        let context = self.upgrade_context()?;
+-        let tree = context.read_tree();
+-        let id = self.upgrade_node(tree.state())?.id();
+-        Ok(context.get_or_create_platform_node(id).into_interface())
++        if self.is_long() {
++            return self.long(|_, node, context, _, _| {
++                Ok(context.get_or_create_platform_node(node.id()).into_interface())
++            });
++        }
++        uia_catch(|| {
++            let context = self.upgrade_context()?;
++            let tree = context.read_tree();
++            let id = self.upgrade_node(tree.state())?.id();
++            Ok(context.get_or_create_platform_node(id).into_interface())
++        })
+     }
+ 
+-    fn GetText(&self, _max_length: i32) -> Result<BSTR> {
++    fn GetText(&self, max_length: i32) -> Result<BSTR> {
++        if self.is_long() {
++            return self.long(|text, _, _, start, end| {
++                let s = text.slice(*start, *end);
++                let s = match usize::try_from(max_length) {
++                    Ok(n) => s.char_indices().nth(n).map_or(s, |(k, _)| &s[..k]),
++                    Err(_) => s,
++                };
++                Ok(BSTR::from(s))
++            });
++        }
+         // The Microsoft docs imply that the provider isn't _required_
+         // to truncate text at the max length, so we just ignore it.
+         self.read(|range| {
+@@ -529,6 +748,27 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
+     }
+ 
+     fn Move(&self, unit: TextUnit, count: i32) -> Result<i32> {
++        if self.is_long() {
++            return self.long(|text, node, _, start, end| {
++                let unit = long_unit(unit)?;
++                let state = (unit == Unit::Line).then(|| drawn_state(&node, text));
++                let drawn = state.as_ref().map_or(&[][..], |s| s.lines.as_slice());
++                let degenerate = start == end;
++                let from = if degenerate {
++                    *start
++                } else if let Some(st) = &state {
++                    text.start_of_in(*start, unit, st)
++                } else {
++                    text.start_of(*start, unit)
++                };
++                let (at, moved) = text.step_in(from, unit, count, drawn);
++                if moved != 0 {
++                    *start = at;
++                    *end = if degenerate || at == text.len() { at } else { text.next_in(at, unit, drawn) };
++                }
++                Ok(moved)
++            });
++        }
+         self.write(|range| {
+             let degenerate = range.is_degenerate();
+             let start = range.start();
+@@ -557,6 +797,20 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
+         unit: TextUnit,
+         count: i32,
+     ) -> Result<i32> {
++        if self.is_long() {
++            return self.long(|text, node, _, start, end| {
++                let unit = long_unit(unit)?;
++                let drawn = if unit == Unit::Line { drawn_lines(&node, text) } else { Vec::new() };
++                let at = match endpoint {
++                    TextPatternRangeEndpoint_Start => *start,
++                    TextPatternRangeEndpoint_End => *end,
++                    _ => return Err(invalid_arg()),
++                };
++                let (at, moved) = text.step_in(at, unit, count, &drawn);
++                set_long_endpoint(start, end, endpoint, at);
++                Ok(moved)
++            });
++        }
+         self.write(|range| {
+             let pos = position_from_endpoint(range, endpoint)?;
+             let (pos, moved) =
+@@ -572,26 +826,54 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
+         other: Ref<ITextRangeProvider>,
+         other_endpoint: TextPatternRangeEndpoint,
+     ) -> Result<()> {
+-        let other = unsafe { required_param(&other)?.as_impl() };
+-        self.require_same_context(other)?;
+-        // We have to obtain the tree state and ranges manually to avoid
+-        // lifetime issues, and work with the two locks in a specific order
+-        // to avoid deadlock.
+-        self.with_tree_state(|tree_state| {
+-            let other_range = other.upgrade_for_read(tree_state)?;
+-            let mut state = self.state.write().unwrap();
+-            let mut range = upgrade_range(&state, tree_state)?;
+-            if range.node().id() != other_range.node().id() {
+-                return Err(invalid_arg());
++        uia_catch(|| {
++            let other = unsafe { required_param(&other)?.as_impl() };
++            self.require_same_context(other)?;
++            if self.is_long() || other.is_long() {
++                // Read the other range first: it may be this one.
++                let (mine, theirs) = (self.long_endpoints(), other.long_endpoints());
++                let (Some(mine), Some((node, a, b))) = (mine, theirs) else {
++                    return Err(invalid_arg());
++                };
++                if node != mine.0 {
++                    return Err(invalid_arg());
++                }
++                let at = match other_endpoint {
++                    TextPatternRangeEndpoint_Start => a,
++                    TextPatternRangeEndpoint_End => b,
++                    _ => return Err(invalid_arg()),
++                };
++                return self.long(|text, _, _, start, end| {
++                    set_long_endpoint(start, end, endpoint, text.clamp(at));
++                    Ok(())
++                });
+             }
+-            let pos = position_from_endpoint(&other_range, other_endpoint)?;
+-            set_endpoint_position(&mut range, endpoint, pos)?;
+-            *state = range.downgrade();
+-            Ok(())
++            // We have to obtain the tree state and ranges manually to avoid
++            // lifetime issues, and work with the two locks in a specific order
++            // to avoid deadlock.
++            self.with_tree_state(|tree_state| {
++                let other_range = other.upgrade_for_read(tree_state)?;
++                let mut state = self.write_state();
++                let mut range = upgrade_range(runs(&state)?, tree_state)?;
++                if range.node().id() != other_range.node().id() {
++                    return Err(invalid_arg());
++                }
++                let pos = position_from_endpoint(&other_range, other_endpoint)?;
++                set_endpoint_position(&mut range, endpoint, pos)?;
++                *state = State::Runs(range.downgrade());
++                Ok(())
++            })
+         })
+     }
+ 
+     fn Select(&self) -> Result<()> {
++        if self.is_long() {
++            return self.long_action(Action::SetTextSelection, |node, start, end| {
++                let (id, _) = node.locate();
++                let at = |character_index| WeakPosition { node: id, character_index };
++                Some(ActionData::SetTextSelection(TextSelection { anchor: at(start), focus: at(end) }))
++            });
++        }
+         self.do_action(|range, tree| {
+             let (target_node, target_tree) = tree.state().locate_node(range.node().id()).unwrap();
+             ActionRequest {
+@@ -614,6 +896,9 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
+     }
+ 
+     fn ScrollIntoView(&self, align_to_top: BOOL) -> Result<()> {
++        if self.is_long() {
++            return self.long_action(Action::ScrollIntoView, |_, _, _| None);
++        }
+         self.do_action(|range, tree| {
+             let position = if align_to_top.into() {
+                 range.start()

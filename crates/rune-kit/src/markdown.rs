@@ -18,6 +18,22 @@
 //! animation, a transcript of any length) parses nothing. A growing stream parses only from the
 //! start of its last top-level block each time it grows.
 //!
+//! **Nesting & stack.** Container nesting (`<blockquote>`, `<ul>`/`<ol>`, `<li>`) is bounded at
+//! `511` open elements (`255` nested lists, `1` quote + `255` nested lists, or `510` nested block
+//! quotes on Windows, macOS, and Linux; on targets without `rune-taffy` stack continuation such as
+//! `wasm32`, `ios`, and `android`, flex-container nesting caps at `770` so pure `<blockquote>`
+//! nesting stops at `385` while all `255` list levels still nest). Past the bound, deeper list
+//! items flatten as siblings in the innermost list and deeper quotes merge into the innermost
+//! quote (with no visual marker at the flattening bound); past `64` flattened items or blocks in a
+//! single container, the remaining lines are kept intact in one selectable, searchable plain block
+//! preceded by a visible [`rune::Label::MoreNestedLines`] marker so no text is ever dropped.
+//! `Markdown`'s own parser, direction pre-pass, plain text formatter and element builder run
+//! iteratively (`O(1)` call stack), while Rune's commit flatten and layout recurse up to `~1,020`
+//! elements on desktop (`~2.7 MiB` without `rune-taffy` stack continuation, `< 1 MiB` with it) and
+//! `~770` elements on unguarded targets (`~1.05 MiB` of WebAssembly shadow stack). Web builds
+//! should link with at least `-C link-arg=-zstack-size=2097152` (`2 MiB`), and native targets
+//! without `stacker` should reserve at least `4 MiB` of UI-thread stack.
+//!
 //! **Keys.** Top-level blocks are keyed `b{index}` (or by [`Markdown::block_keys`]), list items
 //! `i{index}` and their blocks by `b{index}` inside the item. Appending to a stream only ever
 //! changes the last block or adds blocks after it, so earlier blocks keep their keys and never
@@ -58,6 +74,7 @@ mod image;
 mod interrupt;
 mod link_icon;
 mod links;
+mod memo;
 mod parser;
 mod plain;
 mod render;
@@ -75,14 +92,17 @@ use crate::syntax::{Highlighter, SyntaxTheme};
 pub use crate::syntax::Syntax;
 use links::{CodeLink, LinkHelp, LinkLook, LinkRing, LinkWire};
 pub use cache::parse_cached;
+#[doc(hidden)]
+pub use memo::{block_builds, reset_block_builds};
 pub use highlight::{Highlight, HighlightItem};
 pub use parser::parse;
 
 use autolink::autolink_inline;
-use cache::{doc_cached, stream_cached};
+#[allow(unused_imports)]
+use cache::{doc_cached, doc_cached_with_meta, stream_cached, stream_cached_with_meta};
 #[cfg(test)]
 use cache::{CACHE, PARSES};
-use parser::{BlockMap, CLOSE, Cut, PAD, ParsedDoc, Source, SpanMap, parse_doc, unpadded};
+use parser::{BlockMap, CLOSE, Cut, LINK_CLOSE, PAD, ParsedDoc, Source, SpanMap, parse_doc, unpadded};
 use render::{Renderer, hash_of, rendered_keys, source_copy};
 use stream::parse_streaming;
 
@@ -143,7 +163,13 @@ pub struct Table {
 type TaskWire = Rc<dyn Fn(El, Rc<str>, usize, bool) -> El>;
 #[cfg(feature = "mermaid")]
 type FrameWire = Rc<dyn Fn(El, &DiagramFrame<'_>) -> El>;
-type CodeWire = Rc<dyn Fn(El, &CodeFrame<'_>) -> El>;
+type CodeFrameFn = Rc<dyn Fn(El, &CodeFrame<'_>) -> El>;
+type CodeWrapFn = Rc<dyn Fn(usize, &str) -> bool>;
+pub(super) struct CodeWire {
+    pub(super) frame: Option<CodeFrameFn>,
+    pub(super) wrap: Option<CodeWrapFn>,
+    pub(super) wrap_default: bool,
+}
 type QuoteWire = Rc<dyn Fn(El, &QuoteFrame<'_>) -> El>;
 
 /// A block quote [`Markdown::quote_frame`] is wrapping.
@@ -166,6 +192,29 @@ pub struct CodeFrame<'a> {
     pub language: Option<&'a str>,
     /// The fence is still arriving.
     pub open: bool,
+    /// Whether this block currently wraps long lines instead of scrolling sideways.
+    pub wrapped: bool,
+    pub(super) digest: Option<(u64, u64)>,
+    pub(super) font: TextStyle,
+    pub(super) text_width: Option<f32>,
+    pub(super) inset: f32,
+    pub(super) pad_x: f32,
+}
+
+impl CodeFrame<'_> {
+    /// Whether at least one unwrapped line exceeds this block's inner width at `scale = 1.0`
+    /// (`MarkdownStyle::text_width` less surrounding list/quote indents, padding, and snapped
+    /// border). Computed lazily on demand and cached per `(content, font, width, font_epoch)`.
+    /// Always `false` when `text_width` is unset or `source` is empty.
+    pub fn overflows(&self) -> bool {
+        self.overflows_at(1.0)
+    }
+
+    /// Like [`Self::overflows`], using the exact `border_layout()` border thickness for device
+    /// `scale` (for example `2.0 pt` total at `1.0`, `1.333 pt` at `1.5`, `1.0 pt` at `2.0`).
+    pub fn overflows_at(&self, scale: f32) -> bool {
+        render::code_overflows_at(self.source, self.digest, self.font, self.text_width, self.inset, self.pad_x, scale)
+    }
 }
 
 /// A diagram [`Markdown::diagram_frame`] is wrapping.
@@ -202,11 +251,13 @@ pub struct Markdown {
     selectable: bool,
     copy_source: bool,
     scroll_wide: bool,
+    wrap_code: bool,
     tentative: Option<rune::Direction>,
     highlighter: Highlighter,
     #[cfg(feature = "mermaid")]
     diagram_frame: Option<FrameWire>,
-    code_frame: Option<CodeWire>,
+    code_frame: Option<CodeFrameFn>,
+    code_wrap: Option<CodeWrapFn>,
     quote_frame: Option<QuoteWire>,
     link_favicon: Option<link_icon::FaviconWire>,
     images: Option<image::ImageWire>,
@@ -221,9 +272,9 @@ thread_local! {
 impl Markdown {
     pub fn new(src: impl Into<String>) -> Markdown {
         Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: -1.0, streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_help: None, link_ring: None, code_link: None,
-            on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, tentative: None, highlighter: Highlighter::builtin(),
+            on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, wrap_code: false, tentative: None, highlighter: Highlighter::builtin(),
             #[cfg(feature = "mermaid")]
-            diagram_frame: None, code_frame: None, quote_frame: None, link_favicon: None, images: None, on_image: None }
+            diagram_frame: None, code_frame: None, code_wrap: None, quote_frame: None, link_favicon: None, images: None, on_image: None }
     }
     /// Highlight UTF-8 byte ranges of the Markdown source string (see [`find`]).
     ///
@@ -385,6 +436,24 @@ impl Markdown {
         self
     }
 
+    /// Wraps long lines in code blocks (`white-space: pre-wrap; overflow-wrap: anywhere`,
+    /// overriding [`Self::scroll_wide`] for code blocks) instead of scrolling them sideways
+    /// (`false` by default). Wrapped blocks keep per-line shaping (`El::by_line`), syntax
+    /// highlighting, Find highlights, screen-reader line runs, and a stable text `NodeId` path
+    /// across toggles so reveal does not replay and active selection stays intact.
+    pub fn wrap_code(mut self, wrap: bool) -> Self {
+        self.wrap_code = wrap;
+        self
+    }
+
+    /// Per-block override for code-block wrapping: called with `(block_index, source)` (where
+    /// `block_index` counts both code and Mermaid blocks, matching [`CodeFrame::index`]) and
+    /// returns whether that block wraps long lines (overriding [`Self::wrap_code`]).
+    pub fn code_wrap(mut self, f: impl Fn(usize, &str) -> bool + 'static) -> Self {
+        self.code_wrap = Some(Rc::new(f));
+        self
+    }
+
     /// Draws `f(quote, frame)` in place of each block quote, so an app can put its own controls
     /// on it (a button that copies the whole quote). Quotes inside a quote come here too.
     ///
@@ -425,6 +494,10 @@ impl Markdown {
 
     /// Builds with `style`, for apps without a [`Kit`] (see [`MarkdownStyle::neutral`]).
     pub fn render(self, style: &MarkdownStyle) -> El {
+        #[cfg(feature = "math")]
+        let has_math = crate::math::may_have_math_fence(&self.src);
+        #[cfg(not(feature = "math"))]
+        let has_math = false;
         let can_cache = !self.streaming
             && self.on_link.is_none()
             && self.on_link_secondary.is_none()
@@ -436,11 +509,13 @@ impl Markdown {
             && !(self.selectable && self.copy_source)
             && self.highlighter.is_builtin()
             && self.code_frame.is_none()
+            && self.code_wrap.is_none()
             && self.quote_frame.is_none()
             && self.link_favicon.is_none()
             && self.images.is_none()
             && self.on_image.is_none()
-            && !(cfg!(feature = "mermaid") && self.src.contains("mermaid"));
+            && !(cfg!(feature = "mermaid") && self.src.contains("mermaid"))
+            && !has_math;
         if can_cache {
             let h = rune::memo::digest(&(
                 &self.src,
@@ -452,6 +527,7 @@ impl Markdown {
                 self.tasks_read_only,
                 self.selectable,
                 self.scroll_wide,
+                self.wrap_code,
                 self.tentative,
             ));
             return rune::memo::cached(h, || self.render_uncached(style));
@@ -462,26 +538,33 @@ impl Markdown {
     fn render_uncached(self, style: &MarkdownStyle) -> El {
         #[cfg(test)]
         RENDERS.with(|n| n.set(n.get() + 1));
-        let (blocks, sources, tasks, starts, maps) = match (self.autolink, self.streaming) {
-            (true, false) => doc_cached(&self.src),
-            (true, true) => stream_cached(&self.src),
+        let ((blocks, sources, tasks, starts, maps), meta) = match (self.autolink, self.streaming) {
+            (true, false) => doc_cached_with_meta(&self.src),
+            (true, true) => stream_cached_with_meta(&self.src),
             (false, streaming) => {
                 let (b, s, t, _, st, m) = if streaming { parse_streaming(&self.src, false) } else { parse_doc(&self.src, false) };
-                (Rc::new(b), s.into(), t.into(), st.into(), m.into())
+                let meta: Rc<[Rc<memo::PreBlock>]> = b.iter().enumerate().map(|(i, blk)| memo::precompute_block(blk, m.get(i))).collect();
+                ((Rc::new(b), s.into(), t.into(), st.into(), m.into()), meta)
             }
         };
         let keys = if self.block_keys.is_empty() { Vec::new() } else {
             starts.iter().map(|at| self.block_keys.iter().find(|(offset, _)| offset == at)
                 .map_or_else(String::new, |(_, key)| key.clone())).collect::<Vec<_>>()
         };
+        let dirs = bidi::Dirs::new(&blocks);
+        let root_dir = dirs.of_slice(&blocks).or(self.tentative);
+        let code_frame = (self.code_frame.is_some() || self.code_wrap.is_some() || self.wrap_code)
+            .then(|| CodeWire { frame: self.code_frame, wrap: self.code_wrap, wrap_default: self.wrap_code });
         let r = Renderer { s: style.clone(), highlights: self.highlights, reveal: self.reveal, streaming: self.streaming, on_link: self.on_link, on_link_secondary: self.on_link_secondary, link_look: self.link_look, link_help: self.link_help, link_ring: self.link_ring, code_link: self.code_link,
             on_task: self.on_task, tasks_read_only: self.tasks_read_only, selectable: self.selectable, scroll_wide: self.scroll_wide, tentative: self.tentative,
             highlighter: self.highlighter, sources, next_source: Cell::new(0), tasks, next_task: Cell::new(0),
             current_block_key: RefCell::new("b0".into()),
             #[cfg(feature = "mermaid")]
-            diagram_frame: self.diagram_frame, code_frame: self.code_frame, quote_frame: self.quote_frame, link_favicon: self.link_favicon, images: self.images, on_image: self.on_image, flow: Cell::default() };
+            diagram_frame: self.diagram_frame, code_frame, quote_frame: self.quote_frame, link_favicon: self.link_favicon, images: self.images, on_image: self.on_image, flow: Cell::default() };
         // The document reads the way its first words do; until any arrive, the way it was asked.
-        let root = bidi::directed(r.blocks(&blocks, &maps, &keys, true), bidi::blocks_dir(&blocks).or(self.tentative)).selection_group(self.selectable);
+        let root = memo::with_renderer(&r, || {
+            bidi::directed(r.blocks_with_dirs(&blocks, Some(&meta), &maps, &keys, true, &dirs), root_dir).selection_group(self.selectable)
+        });
         if !(self.selectable && self.copy_source) { return root; }
         let names: Rc<[String]> = rendered_keys(blocks.len(), &keys).into();
         let src: Rc<str> = self.src.into();

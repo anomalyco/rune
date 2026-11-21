@@ -29,7 +29,9 @@ pub(crate) struct Watch {
 }
 
 #[cfg(debug_assertions)]
-use std::{collections::HashSet, sync::{Mutex, OnceLock}, time::Instant};
+use crate::time::Instant;
+#[cfg(debug_assertions)]
+use std::{collections::HashSet, sync::{Mutex, OnceLock}};
 
 /// Blocked wall time (ms; time waiting for a core doesn't count) a callback may take before it warns, and how many times its CPU time
 /// that wall time must also be. A callback that computes for 50 ms is slow but not blocked.
@@ -47,12 +49,29 @@ const OVERBUILD_RATIO: usize = 4;
 #[cfg(debug_assertions)]
 fn enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("RUNE_PERF_WARN").is_none_or(|v| v != "0"))
+    *ON.get_or_init(|| rune_core::env::var_os("RUNE_PERF_WARN").is_none_or(|v| v != "0"))
+}
+
+/// Initializes the cached `RUNE_PERF_WARN` flag up front so the first timed callback does not
+/// heap-allocate while reading the environment variable.
+#[inline(always)]
+pub(crate) fn warm() {
+    #[cfg(debug_assertions)]
+    {
+        let _ = enabled();
+    }
 }
 
 /// Prints `message` the first time `site` warns.
 #[cfg(debug_assertions)]
+#[inline]
 fn warn_once(site: String, message: impl FnOnce() -> String) {
+    let mut message = Some(message);
+    warn_once_dyn(site, &mut || message.take().expect("warn_once message runs once")());
+}
+
+#[cfg(debug_assertions)]
+fn warn_once_dyn(site: String, message: &mut dyn FnMut() -> String) {
     static WARNED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
     #[cfg(test)]
     let site = format!("{:?} {site}", std::thread::current().id());
@@ -102,11 +121,11 @@ pub(crate) struct Stall {
 }
 
 impl Stall {
-    #[inline(always)]
+    #[cfg_attr(not(debug_assertions), inline(always))]
     pub(crate) fn start() -> Self {
         Stall {
             #[cfg(debug_assertions)]
-            start: if enabled() { crate::frame::profile::cpu_ms().map(|cpu| (Instant::now(), cpu, runq::wait_ms())) } else { None },
+            start: if enabled() { crate::frame::profile::cpu_ms().map(|cpu| (crate::time::now(), cpu, runq::wait_ms())) } else { None },
         }
     }
 
@@ -118,20 +137,45 @@ impl Stall {
         #[cfg(debug_assertions)]
         if let Some((wall, cpu, wait)) = self.start {
             let wall = wall.elapsed().as_secs_f64() * 1000.0;
-            if wall <= STALL_MS { return }
-            let cpu = crate::frame::profile::cpu_ms().map_or(0.0, |now| now - cpu);
-            let waited = wait.and_then(|start| runq::wait_ms().map(|now| now - start));
-            let Some(blocked) = runq::blocked_ms(wall, cpu, waited, waited.is_none() && runq::overloaded()) else { return };
-            let (site, name) = what();
-            warn_once(format!("stall {site}"), || {
-                let queued = waited.filter(|w| *w >= 1.0).map_or_else(String::new, |w| format!(", waited {w:.0} ms for a core"));
-                format!(
-                    "{name} blocked {blocked:.0} ms (CPU {cpu:.0} ms{queued}) on the main thread: move IO off it \
-                     with `rune::Latest` or a thread"
-                )
-            });
+            if wall > STALL_MS {
+                let mut what = Some(what);
+                end_slow(wall, cpu, wait, &mut || what.take().expect("stall description runs once")());
+            }
         }
     }
+
+    /// Non-generic [`Self::end`] for a callback identified by a static `name`.
+    #[cfg_attr(not(debug_assertions), inline(always))]
+    pub(crate) fn end_named(self, name: &'static str) {
+        #[cfg(not(debug_assertions))]
+        let _ = name;
+        #[cfg(debug_assertions)]
+        if let Some((wall, cpu, wait)) = self.start {
+            let wall = wall.elapsed().as_secs_f64() * 1000.0;
+            if wall > STALL_MS {
+                end_slow(wall, cpu, wait, &mut || {
+                    (name.to_owned(), if name.contains(' ') { name.to_owned() } else { format!("`{name}`") })
+                });
+            }
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+#[cold]
+#[inline(never)]
+fn end_slow(wall: f64, cpu: f64, wait: Option<f64>, what: &mut dyn FnMut() -> (String, String)) {
+    let cpu = crate::frame::profile::cpu_ms().map_or(0.0, |now| now - cpu);
+    let waited = wait.and_then(|start| runq::wait_ms().map(|now| now - start));
+    let Some(blocked) = runq::blocked_ms(wall, cpu, waited, waited.is_none() && runq::overloaded()) else { return };
+    let (site, name) = what();
+    warn_once(format!("stall {site}"), || {
+        let queued = waited.filter(|w| *w >= 1.0).map_or_else(String::new, |w| format!(", waited {w:.0} ms for a core"));
+        format!(
+            "{name} blocked {blocked:.0} ms (CPU {cpu:.0} ms{queued}) on the main thread: move IO off it \
+             with `rune::Latest` or a thread"
+        )
+    });
 }
 
 /// Runs `f`, an app callback named `name` (a call site of its own), under a [`Stall`].
@@ -139,7 +183,7 @@ impl Stall {
 pub(crate) fn timed<T>(name: &'static str, f: impl FnOnce() -> T) -> T {
     let stall = Stall::start();
     let out = f();
-    stall.end(|| (name.to_owned(), if name.contains(' ') { name.to_owned() } else { format!("`{name}`") }));
+    stall.end_named(name);
     out
 }
 

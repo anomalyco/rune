@@ -27,9 +27,11 @@
 //! `GLASS_PANEL_POPOVER` asks for the popover material everywhere, and `GLASS_PANEL_MARK`
 //! draws a marker that tells the two windows apart in a recording.
 
+#![forbid(unsafe_code)]
+
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rune::{
     App, AppSpec, Color, Cx, DisplayTarget, El, KeyPolicy, LoopSpec, OverlayHandle, OverlayInput, OverlayOptions,
@@ -207,7 +209,7 @@ fn backdrop() -> El {
 }
 
 fn main() {
-    let at = std::env::var("GLASS_PANEL_AT").ok()
+    let at = rune::env::var("GLASS_PANEL_AT")
         .and_then(|v| v.split_once(',').and_then(|(x, y)| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?))))
         .unwrap_or((360.0, 0.0));
     rune::run_windows_with(RunOptions { accessory: true }, move |_| {
@@ -224,10 +226,10 @@ fn main() {
             .options(options(rect(at.0, at.1, FLIGHT_WINDOW))).macos_level(4).srgb_blend(true).poll(poll), panel(Role::Flight));
         let dock = app.overlay(OverlaySpec::new("Glass panel dock", dock_size, view)
             .options(options(rect(home.0, home.1, dock_size))).macos_level(3).srgb_blend(true), panel(Role::Dock));
-        let _ = HANDLES.set((flight.clone(), dock.clone()));
+        HANDLES.set((flight.clone(), dock.clone())).ok();
         backdrop.show();
         std::thread::spawn(move || {
-            let _ = DRIVER.set(std::thread::current());
+            DRIVER.set(std::thread::current()).ok();
             std::thread::sleep(Duration::from_millis(800));
             loop {
                 flight.update(|s, _| (s.started, s.landed, s.handed) = (None, None, false));
@@ -239,7 +241,7 @@ fn main() {
                 while !HANDED.load(Ordering::Acquire) { std::thread::park(); }
                 std::thread::sleep(Duration::from_millis(250));
                 // The docked window follows a target that moves side to side, 60 times a second.
-                let follow = Instant::now();
+                let follow = rune::time::now();
                 while follow.elapsed() < Duration::from_millis(2400) {
                     let dx = 60.0 * (std::f32::consts::TAU * follow.elapsed().as_secs_f32() / 2.4).sin();
                     dock.set_placement(rect(home.0 + dx, home.1, dock_size));
@@ -250,7 +252,7 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(600));
             }
         });
-        if let Ok(seconds) = std::env::var("GLASS_PANEL_SECONDS").unwrap_or_default().parse::<f64>() {
+        if let Ok(seconds) = rune::env::var("GLASS_PANEL_SECONDS").unwrap_or_default().parse::<f64>() {
             let handle = app.handle();
             std::thread::spawn(move || { std::thread::sleep(Duration::from_secs_f64(seconds)); handle.quit(); });
         }

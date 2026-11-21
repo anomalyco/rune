@@ -205,7 +205,7 @@ fn an_icon_gliding_off_the_pixel_grid_marks_its_apron_and_shows_no_region_flash(
     let mut aproned = false;
     for _ in 0..240 {
         r.step();
-        aproned |= !r.rt.icon_aprons.is_empty();
+        aproned |= !r.rt.paint.icon_aprons().is_empty();
     }
     assert!(aproned, "the icon glides off the pixel grid");
     let f = r.finish();

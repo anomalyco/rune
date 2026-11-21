@@ -11,7 +11,7 @@ use crate::time::Instant;
 /// The budget in ms, when `RUNE_COMMIT_BUDGET_MS` sets one.
 fn budget() -> Option<f64> {
     static BUDGET: OnceLock<Option<f64>> = OnceLock::new();
-    *BUDGET.get_or_init(|| std::env::var("RUNE_COMMIT_BUDGET_MS").ok()?.trim().parse::<f64>().ok().filter(|ms| *ms > 0.0))
+    *BUDGET.get_or_init(|| rune_core::env::var("RUNE_COMMIT_BUDGET_MS")?.trim().parse::<f64>().ok().filter(|ms| *ms > 0.0))
 }
 
 #[inline(always)]
@@ -43,7 +43,7 @@ impl Commit {
         if !on() { return Commit(None); }
         let outer = DEPTH.replace(DEPTH.get() + 1) == 0;
         if outer { TIMES.set([0.0; PHASES]); }
-        Commit(Some((Instant::now(), outer)))
+        Commit(Some((crate::time::now(), outer)))
     }
 
     /// The commit is done; `why` is what made the frame commit, as `CommitWhy` bits.
@@ -54,7 +54,7 @@ impl Commit {
         let Some(budget) = budget().filter(|_| outer) else { return };
         let total = start.elapsed().as_secs_f64() * 1000.0;
         if total <= budget { return; }
-        let now = Instant::now();
+        let now = crate::time::now();
         let left_out = match PRINTED.get() {
             Some((at, n)) if now.duration_since(at).as_secs_f64() < 1.0 => {
                 PRINTED.set(Some((at, n + 1)));

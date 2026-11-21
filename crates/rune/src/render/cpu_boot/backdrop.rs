@@ -5,54 +5,14 @@
 //! `Rgba16Float` holds it, then the composite (backdrop_composite.wgsl) inside the record's rounded
 //! rect and clip. Only the record's region is blurred, as on the GPU.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
 
 use super::raster::{Exec, f16};
 use super::shade::{Clip, sd_rounded};
 use crate::render::Instance;
-
-const MIPS: usize = 7;
-const STEP: u32 = 1 << (MIPS - 1);
-/// `backdrop_blur.rs`'s `SIGMAS`.
-const SIGMAS: [f32; MIPS] = [1.58, 4.53, 9.62, 19.51, 39.15, 78.36, 156.2];
-
-/// `backdrop_blur.rs`'s `levels`.
-fn levels(sigma: f32, top: usize) -> (usize, f32) {
-    let top = top.clamp(1, SIGMAS.len() - 1);
-    let sigma = sigma.clamp(SIGMAS[0], SIGMAS[top]);
-    let n = (1..=top).find(|&n| sigma <= SIGMAS[n]).unwrap_or(top);
-    let (a, b) = (SIGMAS[n - 1], SIGMAS[n]);
-    (n, ((sigma * sigma - a * a) / (b * b - a * a)).clamp(0.0, 1.0))
-}
-
-/// One record's blur: where it reads, and its pyramid's place in the window.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Record {
-    /// Up passes start at level `n`, mixing `share` of it with the finer level.
-    n: usize,
-    share: f32,
-    /// Window pixels blurred: the rect plus the blur's reach, inside the viewport.
-    pub region: [f32; 4],
-    origin: [f32; 2],
-    /// Level 0's size in texels (half resolution).
-    size: [u32; 2],
-}
-
-/// The record's blur plan (`prepare_backdrop_blur`), or None when its region is empty.
-pub(super) fn plan(i: &Instance, viewport: (u32, u32)) -> Option<Record> {
-    let sigma = i.params[0];
-    let (n, share) = levels(sigma, MIPS - 1);
-    let reach = sigma.min(SIGMAS[n]) * 3.0 + 2.0;
-    let v = [viewport.0 as f32, viewport.1 as f32];
-    let region = [(i.rect[0] - reach).max(0.0), (i.rect[1] - reach).max(0.0), (i.rect[0] + i.rect[2] + reach).min(v[0]), (i.rect[1] + i.rect[3] + reach).min(v[1])];
-    if region[2] <= region[0] || region[3] <= region[1] { return None; }
-    let align = (2u32 << n) as f32;
-    let origin = [(region[0] / align).floor() * align, (region[1] / align).floor() * align];
-    // Level 0 covers the region; any size that does places every texel the same, as the texture
-    // the GPU grows to fit its largest region only scales the uv both sides share.
-    let size = [0, 1].map(|k| ((((region[k + 2] - origin[k]) / 2.0).ceil() as u32).next_multiple_of(STEP)).max(STEP));
-    Some(Record { n, share, region, origin, size })
-}
+use crate::render::backdrop_blur::level_scissor;
+pub(super) use crate::render::backdrop_blur::{Plan as Record, plan_region as plan};
+use crate::render::instance::shader_consts;
 
 /// The composite's pixels: the rect inside its clip, by whole pixels (the GPU's scissor).
 pub(super) fn bounds(i: &Instance, viewport: (u32, u32)) -> [i32; 4] {
@@ -115,20 +75,35 @@ fn bilinear(uv: [f32; 2], w: u32, h: u32, texel: impl Fn(u32, u32) -> [f32; 4]) 
     mix(mix(texel(x0, y0), texel(x1, y0), fx), mix(texel(x0, y1), texel(x1, y1), fx), fy)
 }
 
-/// Runs `row(y, texels)` for rows `y0..y1` of `out`, a row at a time on `exec`'s threads.
+/// Runs `row(y, texels)` for rows `y0..y1` of `out`, in disjoint horizontal bands on `exec`'s
+/// threads.
 fn rows(exec: &dyn Exec, out: &mut Level, y0: u32, y1: u32, row: &(dyn Fn(u32, &mut [[f32; 4]]) + Sync)) {
-    struct Rows(*mut [f32; 4]);
-    // SAFETY: each row goes to one thread (the counter hands each out once), and rows don't
-    // overlap; `out` outlives the run, which joins before returning.
-    unsafe impl Sync for Rows {}
-    let (base, w) = (&Rows(out.px.as_mut_ptr()), out.w as usize);
-    let next = AtomicU32::new(y0);
+    if y1 <= y0 || out.w == 0 { return; }
+    let w = out.w as usize;
+    let slice = &mut out.px[y0 as usize * w..y1 as usize * w];
+    let total = (y1 - y0) as usize;
+    let threads = exec.threads().max(1);
+    if threads == 1 || total == 1 {
+        for (i, texels) in slice.chunks_exact_mut(w).enumerate() {
+            row(y0 + i as u32, texels);
+        }
+        return;
+    }
+    let band = (total / (threads * 4)).max(1);
+    let work = Mutex::new((y0, slice.chunks_mut(band * w)));
     exec.run(&|| loop {
-        let y = next.fetch_add(1, Ordering::Relaxed);
-        if y >= y1 { break; }
-        // SAFETY: row `y` is inside `out` (y < y1 <= h) and only this thread has it.
-        let texels = unsafe { std::slice::from_raw_parts_mut(base.0.add(y as usize * w), w) };
-        row(y, texels);
+        let next = {
+            let mut guard = work.lock().unwrap_or_else(|e| e.into_inner());
+            guard.1.next().map(|chunk| {
+                let y = guard.0;
+                guard.0 += (chunk.len() / w) as u32;
+                (y, chunk)
+            })
+        };
+        let Some((y_start, chunk)) = next else { break };
+        for (i, texels) in chunk.chunks_exact_mut(w).enumerate() {
+            row(y_start + i as u32, texels);
+        }
     });
 }
 
@@ -147,16 +122,7 @@ pub(super) fn blur(rec: &Record, viewport: (u32, u32), half: super::HalfRounding
     let inside = [(rec.region[0] - rec.origin[0]) / extent[0], (rec.region[1] - rec.origin[1]) / extent[1],
         (rec.region[2] - rec.origin[0]) / extent[0], (rec.region[3] - rec.origin[1]) / extent[1]];
     let dims = |m: usize| ((pw >> m).max(1), (ph >> m).max(1));
-    // Each level covers the region plus two texels, the reach of its taps into the next.
-    let scissor = |m: usize| {
-        let k = (2u32 << m) as f32;
-        let (w, h) = dims(m);
-        let x = (((rec.region[0] - rec.origin[0]) / k).floor() as u32).saturating_sub(2).min(w - 1);
-        let y = (((rec.region[1] - rec.origin[1]) / k).floor() as u32).saturating_sub(2).min(h - 1);
-        let r = (((rec.region[2] - rec.origin[0]) / k).ceil() as u32 + 2).min(w);
-        let b = (((rec.region[3] - rec.origin[1]) / k).ceil() as u32 + 2).min(h);
-        (x, y, r.max(x + 1), b.max(y + 1))
-    };
+    let scissor = |m: usize| level_scissor(rec.region, rec.origin, rec.size, m);
     let window_region = [rec.region[0] / v[0], rec.region[1] / v[1], rec.region[2] / v[0], rec.region[3] / v[1]];
     let window_map = [extent[0] / v[0], extent[1] / v[1], rec.origin[0] / v[0], rec.origin[1] / v[1]];
     // The region's pixels as floats, once: the first pass reads each a few dozen times. A
@@ -169,8 +135,8 @@ pub(super) fn blur(rec: &Record, viewport: (u32, u32), half: super::HalfRounding
     // Every tap's place along x depends on the texel's x alone, and along y on its y: each
     // pass takes them once a column and once a row (the same expressions as a tap would), then
     // filters with them.
-    let mut down: Vec<Level> = Vec::with_capacity(rec.n + 1);
-    for m in 0..=rec.n {
+    let mut down: Vec<Level> = Vec::with_capacity(rec.levels + 1);
+    for m in 0..=rec.levels {
         let (w, h) = dims(m);
         let mut out = Level::new(w, h);
         let (sx0, sy0, sx1, sy1) = scissor(m);
@@ -213,12 +179,12 @@ pub(super) fn blur(rec: &Record, viewport: (u32, u32), half: super::HalfRounding
         down.push(out);
     }
     let mut coarse: Option<Level> = None;
-    for m in (0..rec.n).rev() {
+    for m in (0..rec.levels).rev() {
         let (w, h) = dims(m);
         let mut out = Level::new(w, h);
-        let src = coarse.as_ref().unwrap_or(&down[rec.n]);
+        let src = coarse.as_ref().unwrap_or(&down[rec.levels]);
         let fine = &down[m];
-        let weight = if m + 1 == rec.n { rec.share } else { 1.0 };
+        let weight = if m + 1 == rec.levels { rec.share } else { 1.0 };
         let t = [1.0 / src.w as f32, 1.0 / src.h as f32];
         let (sx0, sy0, sx1, sy1) = scissor(m);
         // Per column: the coarse level's three taps (−t, 0, +t) and the fine level's one.
@@ -240,10 +206,10 @@ pub(super) fn blur(rec: &Record, viewport: (u32, u32), half: super::HalfRounding
                 let add = |a: [f32; 4], b: [f32; 4]| -> [f32; 4] { std::array::from_fn(|c| a[c] + b[c]) };
                 let scale = |a: [f32; 4], k: f32| a.map(|v| v * k);
                 // `fs_up`'s sums, in its order.
-                let mut c = scale(s(1, 1), 4.0);
-                c = add(c, scale(add(add(add(s(2, 1), s(0, 1)), s(1, 2)), s(1, 0)), 2.0));
+                let mut c = scale(s(1, 1), shader_consts::BACKDROP_UP_CENTER_WEIGHT);
+                c = add(c, scale(add(add(add(s(2, 1), s(0, 1)), s(1, 2)), s(1, 0)), shader_consts::BACKDROP_UP_AXIAL_WEIGHT));
                 c = add(c, add(add(add(s(2, 2), s(0, 0)), s(2, 0)), s(0, 2)));
-                let c = c.map(|v| v / 16.0);
+                let c = c.map(|v| v / shader_consts::BACKDROP_UP_DIVISOR);
                 let f = tap(&ax.1, &ay.1, &fine_texel);
                 row[tx as usize] = std::array::from_fn(|ch| f16(f[ch] * (1.0 - weight) + c[ch] * weight, half));
             }
@@ -260,8 +226,11 @@ fn down13(s: impl Fn([f32; 2]) -> [f32; 4]) -> [f32; 4] {
     let (i, j) = (s([-1.0, 1.0]), s([1.0, 1.0]));
     let (k, l, m) = (s([-2.0, 2.0]), s([0.0, 2.0]), s([2.0, 2.0]));
     std::array::from_fn(|ch| {
-        (d[ch] + e[ch] + i[ch] + j[ch]) * 0.125 + (a[ch] + b[ch] + g[ch] + f[ch]) * 0.03125 + (b[ch] + c[ch] + h[ch] + g[ch]) * 0.03125
-            + (f[ch] + g[ch] + l[ch] + k[ch]) * 0.03125 + (g[ch] + h[ch] + m[ch] + l[ch]) * 0.03125
+        (d[ch] + e[ch] + i[ch] + j[ch]) * shader_consts::BACKDROP_DOWN_INNER_WEIGHT
+            + (a[ch] + b[ch] + g[ch] + f[ch]) * shader_consts::BACKDROP_DOWN_OUTER_WEIGHT
+            + (b[ch] + c[ch] + h[ch] + g[ch]) * shader_consts::BACKDROP_DOWN_OUTER_WEIGHT
+            + (f[ch] + g[ch] + l[ch] + k[ch]) * shader_consts::BACKDROP_DOWN_OUTER_WEIGHT
+            + (g[ch] + h[ch] + m[ch] + l[ch]) * shader_consts::BACKDROP_DOWN_OUTER_WEIGHT
     })
 }
 

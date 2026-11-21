@@ -6,7 +6,7 @@
 use std::net::SocketAddr;
 use std::sync::OnceLock;
 use std::sync::mpsc::{Sender, SyncSender, channel};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
@@ -36,7 +36,7 @@ pub(crate) fn send(message: Message) -> bool {
 pub(crate) fn flush(limit: Duration) {
     let Some(Some(out)) = OUT.get() else { return };
     let (done, wait) = std::sync::mpsc::sync_channel(1);
-    if out.send(Message::Flush(done)).is_ok() { let _ = wait.recv_timeout(limit); }
+    if out.send(Message::Flush(done)).is_ok() { wait.recv_timeout(limit).ok(); }
 }
 
 /// The posting thread's queue, made by the first send.
@@ -62,7 +62,7 @@ fn sender() -> Option<&'static Sender<Message>> {
                     }
                 }
                 if !spans.is_empty() { post(to, &body(&resource, spans)); }
-                for done in flushed { let _ = done.send(()); }
+                for done in flushed { done.send(()).ok(); }
             }
         }).ok()?;
         Some(out)
@@ -70,7 +70,7 @@ fn sender() -> Option<&'static Sender<Message>> {
 }
 
 fn resource() -> Value {
-    let service = std::env::var("OTEL_SERVICE_NAME").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| {
+    let service = rune_core::env::var("OTEL_SERVICE_NAME").filter(|s| !s.trim().is_empty()).unwrap_or_else(|| {
         std::env::current_exe().ok().and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned())).unwrap_or_else(|| "rune-app".into())
     });
     json!({"attributes": [
@@ -208,7 +208,7 @@ fn id() -> u64 {
 
 fn unix_nanos(t: Instant) -> u128 {
     static ANCHOR: OnceLock<(Instant, u128)> = OnceLock::new();
-    let (at, unix) = *ANCHOR.get_or_init(|| (Instant::now(), SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos())));
+    let (at, unix) = *ANCHOR.get_or_init(|| (crate::time::now(), crate::time::system_now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos())));
     match t.checked_duration_since(at) {
         Some(d) => unix + d.as_nanos(),
         None => unix.saturating_sub(at.duration_since(t).as_nanos()),
@@ -219,10 +219,10 @@ fn unix_nanos(t: Instant) -> u128 {
 fn post(to: SocketAddr, body: &str) {
     use std::io::{Read as _, Write as _};
     let Ok(mut s) = std::net::TcpStream::connect_timeout(&to, Duration::from_millis(250)) else { return };
-    let _ = s.set_write_timeout(Some(Duration::from_secs(2)));
-    let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
+    s.set_write_timeout(Some(Duration::from_secs(2))).ok();
+    s.set_read_timeout(Some(Duration::from_secs(2))).ok();
     let head = format!("POST /v1/traces HTTP/1.1\r\nHost: {to}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
     if s.write_all(head.as_bytes()).and_then(|()| s.write_all(body.as_bytes())).is_ok() {
-        let _ = s.read(&mut [0; 256]);
+        let _bytes = s.read(&mut [0; 256]).unwrap_or(0);
     }
 }

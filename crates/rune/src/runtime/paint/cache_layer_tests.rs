@@ -91,17 +91,17 @@ fn every_paint_cache_walk_matches_dev() {
     let mut rt = Runtime::new((), |_, _| crate::el().key("cache").size(32.0, 32.0).cache().fill(Color::WHITE),
         (64.0, 64.0), Env::new(true, 1.0));
     rt.frame(0.0);
-    let i = rt.nodes.iter().position(|n| n.key.as_deref() == Some("cache")).unwrap();
-    let id = rt.nodes[i].id;
-    rt.node_caches.clear();
-    rt.static_scales.clear();
+    let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("cache")).unwrap();
+    let id = rt.tree.nodes[i].id;
+    rt.paint.node_caches.clear();
+    rt.paint.static_scales.clear();
     fn walk(rt: &mut Runtime<()>, i: usize, id: NodeId, old: Old, scale: f32, now: f64, generation: u64, depth: u32) {
         if depth == 5 { return; }
-        let saved = rt.node_caches.clone();
-        let tracked = rt.static_scales.clone();
+        let saved = rt.paint.node_caches.clone();
+        let tracked = rt.paint.static_scales.clone();
         for event in [Event::Paint, Event::Zoom, Event::CommitZoom, Event::Wait, Event::LoseRaster, Event::Settle, Event::Overflow, Event::Nan] {
-            rt.node_caches.clone_from(&saved);
-            rt.static_scales.clone_from(&tracked);
+            rt.paint.node_caches.clone_from(&saved);
+            rt.paint.static_scales.clone_from(&tracked);
             let mut old = old;
             // An overflowing commit reaches the cache at an infinite scale; the paints after
             // it return to a size the raster path can open at, so the reference's always-opens
@@ -121,20 +121,20 @@ fn every_paint_cache_walk_matches_dev() {
             let resident = !matches!(event, Event::LoseRaster);
             // A nonzero cached glyph count makes reuse distinguishable from repainting this rect.
             rt.text.atlas.resident_caches.clear();
-            if let Some(entry) = rt.node_caches.get_mut(&id) {
+            if let Some(entry) = rt.paint.node_caches.get_mut(&id) {
                 entry.glyphs = 17;
                 if resident { rt.text.atlas.resident_caches.insert(id.0, entry.signature); }
             }
             if let Some(entry) = &mut old.entry { entry.glyphs = 17; }
-            rt.nodes[i].static_scale = scale;
+            rt.tree.nodes[i].static_scale = scale;
             rt.t = now;
             rt.settled = settled;
-            rt.commit_gen = generation;
+            rt.commit.set_commit_gen(generation);
             rt.build();
             let expected_frame = old.paint(scale, now, generation, settled, resident);
-            assert_eq!(rt.scale_frame.is_some(), expected_frame, "{event:?} at {now}");
-            assert_eq!(rt.static_scales.get(&id).copied().map(fields).map(bits), old.static_scale.map(bits));
-            match (old.entry, rt.node_caches.get(&id)) {
+            assert_eq!(rt.paint.scale_frame.is_some(), expected_frame, "{event:?} at {now}");
+            assert_eq!(rt.paint.static_scales.get(&id).copied().map(fields).map(bits), old.static_scale.map(bits));
+            match (old.entry, rt.paint.node_caches.get(&id)) {
                 (Some(e), Some(a)) => assert_eq!(
                     (a.raster_scale.to_bits(), bits(fields(a.scale)), a.env_scale.to_bits(), matches!(a.phase, RasterPhase::Live), a.glyphs, a.commit_gen),
                     (e.raster_scale.to_bits(), bits((e.seen_scale, e.scale_changed_at)), e.env_scale.to_bits(), e.was_live, e.glyphs, e.commit_gen),
@@ -157,26 +157,28 @@ fn a_scale_that_overflows_at_two_x_stops_asking_for_frames() {
     // so an unchanged paint compares `∞ - ∞`, which is NaN.
     let mut rt = Runtime::new((), view, (64.0, 64.0), Env::new(true, 2.0));
     rt.frame(0.0);
-    let i = rt.nodes.iter().position(|n| n.key.as_deref() == Some("cache")).unwrap();
-    let id = rt.nodes[i].id;
-    assert!(rt.node_caches.contains_key(&id), "a cached raster to reuse");
-    rt.nodes[i].static_scale = f32::MAX;
-    let (mut now, mut generation, mut frames) = (1.0, rt.commit_gen, 0);
+    let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("cache")).unwrap();
+    let id = rt.tree.nodes[i].id;
+    assert!(rt.paint.node_caches.contains_key(&id), "a cached raster to reuse");
+    rt.tree.nodes[i].static_scale = f32::MAX;
+    let (mut now, mut generation, mut frames) = (1.0, rt.commit.commit_gen(), 0);
     // A drag commits every frame.
     while now < 1.5 {
         now += 1.0 / 60.0;
         generation += 1;
-        (rt.t, rt.commit_gen) = (now, generation);
+        rt.t = now;
+        rt.commit.set_commit_gen(generation);
         rt.build();
-        if rt.scale_frame.is_none() { break; }
+        if rt.paint.scale_frame.is_none() { break; }
         frames += 1;
     }
     assert!(frames < 12, "frames stop after the settle window, not every frame: {frames}");
     for _ in 0..5 {
         now += 1.0 / 60.0;
         generation += 1;
-        (rt.t, rt.commit_gen) = (now, generation);
+        rt.t = now;
+        rt.commit.set_commit_gen(generation);
         rt.build();
-        assert!(rt.scale_frame.is_none(), "and stay stopped");
+        assert!(rt.paint.scale_frame.is_none(), "and stay stopped");
     }
 }

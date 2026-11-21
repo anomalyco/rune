@@ -40,44 +40,82 @@ pub(crate) fn clamp(k: f32) -> f32 {
     if k.is_finite() { k.clamp(0.1, 10.0) } else { 1.0 }
 }
 
-impl<S: 'static> Runtime<S> {
+impl window_requests::HostState {
     /// The view's UI zoom ([`Cx::zoom`]), 1 unzoomed.
-    pub fn zoom(&self) -> f32 {
+    #[inline]
+    pub(crate) fn zoom(&self) -> f32 {
         self.zoom.k
     }
 
     /// The window's viewport in its own points, as the host last set it.
-    pub fn window_viewport(&self) -> (f32, f32) {
+    #[inline]
+    pub(crate) fn window_viewport(&self) -> (f32, f32) {
         self.zoom.window
     }
 
     /// The window's scale (device pixels per window point), as the host last set it.
-    pub fn window_scale(&self) -> f32 {
+    #[inline]
+    pub(crate) fn window_scale(&self) -> f32 {
         self.zoom.window_scale
+    }
+
+    /// A rect in view points as window points, for what the host places by the window: the IME
+    /// area, a menu, a drag image.
+    #[inline]
+    pub(crate) fn to_window(&self, r: [f32; 4]) -> [f32; 4] {
+        r.map(|v| v * self.zoom.k)
+    }
+
+    /// Updates the UI zoom to clamped `k`, returning the resulting `(viewport, scale)` when it changed.
+    #[inline]
+    pub(super) fn set_zoom(&mut self, k: f32) -> Option<((f32, f32), f32)> {
+        let k = clamp(k);
+        if k == self.zoom.k { return None; }
+        self.zoom.k = k;
+        Some(self.zoom.view())
+    }
+}
+
+impl RuntimeCore {
+    /// The view's UI zoom ([`Cx::zoom`]), 1 unzoomed.
+    #[inline]
+    pub fn zoom(&self) -> f32 {
+        self.host.zoom()
+    }
+
+    /// The window's viewport in its own points, as the host last set it.
+    #[inline]
+    pub fn window_viewport(&self) -> (f32, f32) {
+        self.host.window_viewport()
+    }
+
+    /// The window's scale (device pixels per window point), as the host last set it.
+    #[inline]
+    pub fn window_scale(&self) -> f32 {
+        self.host.window_scale()
     }
 
     /// Device pixels per view point: what a host divides a pointer's or touch's pixels by to
     /// hand them to the runtime. The window's scale times the zoom.
+    #[inline]
     pub fn input_scale(&self) -> f32 {
         self.env.scale
     }
 
     /// A rect in view points as window points, for what the host places by the window: the IME
     /// area, a menu, a drag image.
+    #[inline]
     pub fn to_window(&self, r: [f32; 4]) -> [f32; 4] {
-        r.map(|v| v * self.zoom.k)
+        self.host.to_window(r)
     }
 
     /// The zoom the last view asked for: the viewport and scale follow it. False when it was
     /// already the zoom.
     pub(super) fn apply_zoom(&mut self, k: f32) -> bool {
-        let k = clamp(k);
-        if k == self.zoom.k { return false; }
-        self.zoom.k = k;
-        let (viewport, scale) = self.zoom.view();
+        let Some((viewport, scale)) = self.host.set_zoom(k) else { return false };
         self.change_viewport(viewport, scale);
         // The window's controls and the caption buttons it draws are in window points.
-        self.dirty = true;
+        self.commit.dirty = true;
         true
     }
 }

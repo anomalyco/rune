@@ -1,9 +1,16 @@
 //! Bounded local diagnostics. Apps explicitly choose a directory and install their hooks.
 //! No network, global allocator installation, redraws, or per-frame formatting.
 
+// Unit benchmark `recorder::tests::instrumentation_overhead` calls `GlobalAlloc::alloc`/`dealloc` directly.
+#![cfg_attr(not(test), forbid(unsafe_code))]
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
+
+#[cfg(not(target_arch = "wasm32"))]
 mod incident;
 mod recorder;
+#[cfg(not(target_arch = "wasm32"))]
 mod stats;
+#[cfg(not(target_arch = "wasm32"))]
 mod store;
 
 pub use recorder::Recorder;
@@ -16,6 +23,25 @@ pub(crate) const WINDOW_MS: u64 = 60_000;
 pub(crate) const SLOW_MS: f64 = 1000.0 / 60.0;
 pub(crate) const LARGE_BYTES: u64 = 8 << 20;
 
+// rune-perf is native-only and has no rune-core dependency.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+#[allow(clippy::disallowed_methods)]
+pub(crate) fn now() -> std::time::Instant { std::time::Instant::now() }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+#[allow(clippy::disallowed_methods)]
+pub(crate) fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+}
+
+/// How long the recorder waits with nothing to write before [`Config::on_idle`] runs.
+pub const IDLE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Minimum gap between two [`Config::on_idle`] runs on the recorder thread.
+pub const IDLE_MIN_GAP: std::time::Duration = std::time::Duration::from_secs(180);
+
 /// One process/launch per directory. Use separate directories for dev and captures.
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -23,16 +49,25 @@ pub struct Config {
     app: String,
     build: String,
     incidents: Option<SyncSender<PathBuf>>,
+    idle: Option<fn()>,
 }
 
 impl Config {
     pub fn new(directory: impl Into<PathBuf>, app: impl Into<String>) -> Self {
-        Self { directory: directory.into(), app: app.into(), build: String::new(), incidents: None }
+        Self { directory: directory.into(), app: app.into(), build: String::new(), incidents: None, idle: None }
     }
 
     /// Build identity written into snapshots and incidents, such as a version or commit.
     pub fn build(mut self, build: impl Into<String>) -> Self {
         self.build = build.into();
+        self
+    }
+
+    /// Runs once per idle spell (at least [`IDLE_MIN_GAP`] after the previous tidy) on the
+    /// recorder's thread after [`IDLE`] with no new samples or pending writes, then the thread
+    /// waits with no timer.
+    pub fn on_idle(mut self, idle: fn()) -> Self {
+        self.idle = Some(idle);
         self
     }
 

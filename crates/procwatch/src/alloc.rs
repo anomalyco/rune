@@ -45,8 +45,8 @@ thread_local! {
 
 fn counted(size: usize) {
     ALLOCS.fetch_add(1, Relaxed);
-    let _ = THREAD_ALLOCS.try_with(|c| c.set(c.get() + 1));
-    let _ = THREAD_BYTES.try_with(|c| c.set(c.get().wrapping_add(size as u64)));
+    THREAD_ALLOCS.try_with(|c| c.set(c.get() + 1)).ok();
+    THREAD_BYTES.try_with(|c| c.set(c.get().wrapping_add(size as u64))).ok();
 }
 
 /// Allocations (and reallocations) made on this thread so far; 0 unless [`Counting`] is the
@@ -119,9 +119,11 @@ fn shrank(size: usize) {
 }
 
 // SAFETY: every call goes straight to `inner`; the counters never touch the heap.
+#[allow(unsafe_code)]
 unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         installed();
+        // SAFETY: forwards the caller's `GlobalAlloc::alloc` contract and valid `layout` to `inner`.
         let p = unsafe { self.inner.alloc(layout) };
         if !p.is_null() {
             counted(layout.size());
@@ -134,6 +136,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         installed();
+        // SAFETY: forwards the caller's `GlobalAlloc::alloc_zeroed` contract and valid `layout` to `inner`.
         let p = unsafe { self.inner.alloc_zeroed(layout) };
         if !p.is_null() {
             counted(layout.size());
@@ -147,6 +150,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         #[cfg(feature = "alloc-sites")]
         sites::freed(ptr);
+        // SAFETY: caller guarantees `ptr` was allocated by `inner` with `layout` and is no longer used.
         unsafe { self.inner.dealloc(ptr, layout) };
         shrank(layout.size());
     }
@@ -154,6 +158,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         #[cfg(feature = "alloc-sites")]
         sites::freed(ptr);
+        // SAFETY: caller guarantees `ptr` was allocated by `inner` with `layout` and `new_size` meets `GlobalAlloc::realloc`.
         let p = unsafe { self.inner.realloc(ptr, layout, new_size) };
         if !p.is_null() {
             counted(new_size);
@@ -167,6 +172,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
 }
 
 /// Counts this thread's heap under `name` from now on (net bytes: allocated minus freed here).
+#[allow(unsafe_code)]
 pub fn tag_thread(name: &'static str) {
     let index = (1..TAGS)
         .find(|&i| {
@@ -181,6 +187,7 @@ pub fn tag_thread(name: &'static str) {
                 Err(other) => {
                     // SAFETY: `fresh` was never shared.
                     drop(unsafe { Box::from_raw(fresh) });
+                    // SAFETY: `other` was loaded with Acquire from `TAG_NAMES[i]`, which only stores leaked `&'static str` boxes.
                     unsafe { *other == name }
                 }
             }
@@ -203,6 +210,7 @@ pub struct Heap {
 }
 
 /// The counters, or `None` when [`Counting`] isn't the global allocator.
+#[allow(unsafe_code)]
 pub fn heap() -> Option<Heap> {
     if INSTALLED.load(Relaxed) == 0 {
         return None;

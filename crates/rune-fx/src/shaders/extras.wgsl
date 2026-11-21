@@ -7,9 +7,8 @@
 // Inner feather: fully inside the shape, so overlays never leak past the node's edge.
 fn cover(c: Ctx, feather: f32) -> f32 { return smoothstep(c.aa * 0.5, -max(feather, c.aa), c.d); }
 
-fn shade(in: VOut) -> vec4f {
-    let i = insts[in.id];
-    let c = ctx(i, in.px);
+fn shade(i: Inst, px: vec2f) -> vec4f {
+    let c = ctx(i, px);
 
     if (c.variant == 0) {
         var m: f32;
@@ -34,7 +33,7 @@ fn shade(in: VOut) -> vec4f {
             sheen = gauss(x - xc, i.p0.y) + 0.35 * gauss(x - xc, i.p0.y * 2.6);
         }
         let base = i.c1.rgb * i.c1.a;
-        return finish(vec4f(base * m + i.c0.rgb * sheen * i.p0.w * m, i.c1.a * m + sheen * i.p0.w * m * 0.2), in.px);
+        return finish(vec4f(base * m + i.c0.rgb * sheen * i.p0.w * m, i.c1.a * m + sheen * i.p0.w * m * 0.2), px);
     }
     if (c.variant == 1) {
         let f0 = u32(i.xf.x);
@@ -63,7 +62,7 @@ fn shade(in: VOut) -> vec4f {
         }
         let tint = i.c0.rgb;
         let col = mix(tint, vec3f(1.0), 0.3) * body + vec3f(1.0) * hot * 0.8 + tint * halo * 0.12;
-        return finish(vec4f(col * i.p0.w, min(body * 0.9 + halo * 0.05, 1.0) * i.p0.w), in.px);
+        return finish(vec4f(col * i.p0.w, min(body * 0.9 + halo * 0.05, 1.0) * i.p0.w), px);
     }
     if (c.variant == 2) {
         let m = cover(c, max(i.p0.w, c.aa));
@@ -94,14 +93,14 @@ fn shade(in: VOut) -> vec4f {
             col += cols[k] * band * rays * hem;
         }
         let a = select(min(max(col.r, max(col.g, col.b)), 1.0), lum(col) * 0.4, effective_blend_mode(i) == 0u);
-        return finish(vec4f(col * i.p0.z * m, a * i.p0.z * m), in.px);
+        return finish(vec4f(col * i.p0.z * m, a * i.p0.z * m), px);
     }
     // Grain.
     let m = cover(c, max(i.p0.z, c.aa));
     if (m <= 0.0) { return vec4f(0.0); }
     var frame = 0u;
     if (i.p0.y > 0.0 && !c.reduced) { frame = u32(floor(c.t * i.p0.y)); }
-    let ip = vec2u(in.px);
+    let ip = vec2u(px);
     let n = u01(ip.x + pcg(ip.y + pcg(frame + c.seed))) + u01(ip.y * 7919u + pcg(ip.x + 17u + frame)) - 1.0;
     let a = i.p0.x * m;
     if (n >= 0.0) { return vec4f(vec3f(n * a), n * a); }

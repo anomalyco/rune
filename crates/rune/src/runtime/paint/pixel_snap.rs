@@ -45,7 +45,7 @@ use rune_motion::{NodeId, Presented, Rect};
 /// How far each edge of a moving node is from where it comes to rest (device px), and that
 /// resting rect (points), which keys its glide.
 #[derive(Clone, Copy)]
-pub(super) struct Motion {
+pub(in crate::runtime) struct Motion {
     by: [f32; 4],
     rest: [f32; 4],
     /// The scale `by` is drawn at: 1 for the unscaled rect, a layer's scale for the drawn one.
@@ -55,7 +55,7 @@ pub(super) struct Motion {
 /// `p`'s motion toward `rest`, the rect the scene gives while the node is moving. An anchored
 /// element is placed from its anchor, not its frame, so its frame's motion doesn't move it; a
 /// growth row draws its bottom edge at its top plus its current height.
-pub(super) fn motion(p: &Presented, rest: Option<Rect>, s: f32, anchored: bool, growth_row: bool) -> Option<Motion> {
+pub(in crate::runtime) fn motion(p: &Presented, rest: Option<Rect>, s: f32, anchored: bool, growth_row: bool) -> Option<Motion> {
     let rest = rest.filter(|_| !anchored)?;
     let (a, b) = (p.rect.edges(), rest.edges());
     let mut by: [f32; 4] = core::array::from_fn(|k| (a[k] - b[k]) * s);
@@ -69,7 +69,7 @@ pub(super) fn motion(p: &Presented, rest: Option<Rect>, s: f32, anchored: bool, 
 /// out from that pixel (moved by the fraction its resting box sits off the grid, as at rest) and
 /// move down by this ([`crate::text::TextSystem::set_glide`]), so they keep their place against
 /// the box instead of stepping a pixel at a time, and its last frame lays out as rest does.
-pub(super) fn text_glide(top: f32) -> f32 {
+pub(in crate::runtime) fn text_glide(top: f32) -> f32 {
     let g = top - top.round();
     if g.abs() < 1.0 / 64.0 { 0.0 } else { g }
 }
@@ -107,12 +107,18 @@ impl Glide {
 
 /// What a node hands its subtree for snapping.
 #[derive(Clone, Copy, Default)]
-pub(super) struct Inherit {
+pub(in crate::runtime) struct Inherit {
     /// `El::pixel_snap(false)` above, or a turn: this subtree draws at its exact edges.
     pub off: bool,
     /// The translation in points from scrolls, sticky shifts and growth rows above, which
     /// snaps as a whole.
     pub rigid: [f32; 2],
+    /// `rigid` less the scrolls' offsets, the sticky shifts and the growth offsets (`row_dy`: rows'
+    /// and stacks' windows'): the paint containments' origins alone (overlays start it again at
+    /// zero). A text lays out from its exact place against this, so while rows glide or a list
+    /// scrolls it moves in whole pixels with its box, as one piece with the lines and borders
+    /// beside it, and at rest it sits against its box the same way wherever the list is.
+    pub steady: [f32; 2],
     /// The origin in points of the paint containment above (`El::paint_contained`), which is
     /// part of `rigid`: what draws from its own exact box rounds against it too.
     pub contain: [f32; 2],
@@ -131,11 +137,34 @@ pub(super) struct Inherit {
 }
 
 impl Inherit {
+    /// A translation that moves the subtree as a scroll does, `by` points on `axis`: a scroll's
+    /// drawn offset, a sticky shift (which, while stuck, cancels the scroll's motion), or a page's
+    /// band. It moves the subtree's boxes, which round it with the rest of `rigid`, and not what
+    /// its text lays out against, so text moves in whole pixels with its box, as Chromium draws a
+    /// scroller's contents from its pixel-snapped offset.
+    pub(in crate::runtime) fn scroll(&mut self, axis: usize, by: f32) {
+        self.rigid[axis] += by;
+    }
+
+    /// A growth offset `dy`: a row's, which glides, or a stack's own, its virtual window's, which
+    /// moves as a scroll does. Either moves its boxes but not what its text lays out against.
+    pub(in crate::runtime) fn grow(&mut self, dy: f32) {
+        self.rigid[1] += dy;
+    }
+
+    /// `El::paint_contained` at `o` (points): its children snap against it, rounded on its own.
+    pub(in crate::runtime) fn contain_at(&mut self, o: [f32; 2]) {
+        let c = self.contain;
+        self.rigid = [self.rigid[0] - c[0] + o[0], self.rigid[1] - c[1] + o[1]];
+        self.steady = [self.steady[0] - c[0] + o[0], self.steady[1] - c[1] + o[1]];
+        self.contain = o;
+    }
+
     /// Its bits, for `paint_keep`'s comparison of what a subtree inherits.
-    pub(super) fn hash_bits(&self, h: &mut impl std::hash::Hasher) {
+    pub(in crate::runtime) fn hash_bits(&self, h: &mut impl std::hash::Hasher) {
         h.write_u8(self.off as u8);
         h.write_u8(self.shifted as u8);
-        for v in self.rigid.iter().chain(&self.contain) { h.write_u32(v.to_bits()); }
+        for v in self.rigid.iter().chain(&self.steady).chain(&self.contain) { h.write_u32(v.to_bits()); }
         h.write_u32(self.layer);
         match &self.parent {
             Some(p) => {
@@ -149,7 +178,7 @@ impl Inherit {
 
 /// A box's edges (device px, less its rigid translation): `exact`, and `at` where it draws them.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct Rest {
+pub(in crate::runtime) struct Rest {
     exact: [f32; 4],
     at: [f32; 4],
 }
@@ -158,7 +187,7 @@ pub(super) struct Rest {
 /// which a child that starts to glide measures the correction it drew with against, and how
 /// much of each edge's glide is left.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct Parent {
+pub(in crate::runtime) struct Parent {
     rest: Rest,
     now: Rest,
     left: [f32; 4],
@@ -167,14 +196,14 @@ pub(super) struct Parent {
 impl Parent {
     /// How far its exact resting top-left sits from where it rests snapped (device px), `rigid`
     /// as it was snapped with: where a text inside lays out from, at rest and through a glide alike.
-    pub(super) fn exact_off(&self, rigid: [f32; 2]) -> [f32; 2] {
+    pub(in crate::runtime) fn exact_off(&self, rigid: [f32; 2]) -> [f32; 2] {
         core::array::from_fn(|a| self.rest.exact[a] + rigid[a] - self.rest.at[a] - round(rigid[a]))
     }
 }
 
 /// The glides of the nodes moving now and the scaled layers, owned by the runtime.
 #[derive(Default)]
-pub(super) struct Glides {
+pub(in crate::runtime) struct Glides {
     glides: HashMap<NodeId, Glide>,
     layers: HashMap<NodeId, Layer>,
     /// This frame's layers, which `Inherit::layer` indexes from 1.
@@ -191,7 +220,7 @@ pub(super) struct Glides {
 const KEEP: u32 = 120;
 
 /// Seconds a still scaled layer's correction to the grid takes to ease in.
-pub(super) const SETTLE: f64 = 0.1;
+pub(in crate::runtime) const SETTLE: f64 = 0.1;
 
 /// A node with its own scale, which heads a scaled layer.
 #[derive(Clone, Copy)]
@@ -258,7 +287,7 @@ fn reach(map: [f32; 4], size: [f32; 2]) -> f32 {
 impl Glides {
     /// Called once before each paint pass, at animation time `t`, in a window `size` across
     /// (device px).
-    pub(super) fn begin_frame(&mut self, t: f64, size: [f32; 2]) {
+    pub(in crate::runtime) fn begin_frame(&mut self, t: f64, size: [f32; 2]) {
         self.frame = self.frame.wrapping_add(1);
         (self.t, self.size) = (t, size);
         self.now.clear();
@@ -274,7 +303,7 @@ impl Glides {
 
     /// Whether a scaled layer's correction is still easing in or out: the last paint asks for
     /// another frame.
-    pub(super) fn easing(&self) -> bool {
+    pub(in crate::runtime) fn easing(&self) -> bool {
         self.easing
     }
 
@@ -282,7 +311,7 @@ impl Glides {
     /// same rect before the scales on it and above it (device px edges), and `rigid` its rigid
     /// translation (device px). `cached` content snaps without easing, as its raster isn't
     /// redrawn while the correction eases. The returned index goes in `Inherit::layer`.
-    pub(super) fn layer(&mut self, id: NodeId, (r, unscaled): ([f32; 4], [f32; 4]), rigid: [f32; 2], cached: bool) -> u32 {
+    pub(in crate::runtime) fn layer(&mut self, id: NodeId, (r, unscaled): ([f32; 4], [f32; 4]), rigid: [f32; 2], cached: bool) -> u32 {
         let cur: [f32; 4] = core::array::from_fn(|k| r[k] - rigid[k % 2]);
         let (t, frame, size) = (self.t, self.frame, self.size);
         let l = self.layers.entry(id).or_insert(Layer { rect: cur, seen: frame, phase: LayerPhase::Rest { since: f64::NEG_INFINITY }, outs: [(cur, 0.0); 2] });
@@ -326,7 +355,7 @@ impl Glides {
     /// `rigid` from `Inherit::rigid` in device px and `parent` from `Inherit::parent`, and its
     /// resting edges for its children.
     #[inline]
-    pub(super) fn at_rest(&mut self, id: NodeId, r: [f32; 4], rigid: [f32; 2], parent: Option<Parent>) -> ([f32; 4], Option<Parent>) {
+    pub(in crate::runtime) fn at_rest(&mut self, id: NodeId, r: [f32; 4], rigid: [f32; 2], parent: Option<Parent>) -> ([f32; 4], Option<Parent>) {
         // Centred in a parent that still glides, it goes with the parent's glide.
         let gliding = |p: &Parent| p.left != [0.0; 4] && (0..2).any(|a| resting(p.rest, a, (r[a] - rigid[a], r[a + 2] - rigid[a])).is_some());
         if let Some(p) = parent.filter(gliding) {
@@ -344,7 +373,7 @@ impl Glides {
     /// the scales on it and above it, `motion` from [`motion`], and `rigid` and `parent` as in
     /// [`Self::at_rest`]. `layer` is `Inherit::layer` and `sc` the node's scale. Its resting
     /// edges come back only where it snaps on the plain grid.
-    pub(super) fn snapped(&mut self, id: NodeId, motion: Option<Motion>, (r, unscaled): ([f32; 4], [f32; 4]), rigid: [f32; 2], (layer, sc): (u32, f32), parent: Option<Parent>) -> ([f32; 4], Option<Parent>) {
+    pub(in crate::runtime) fn snapped(&mut self, id: NodeId, motion: Option<Motion>, (r, unscaled): ([f32; 4], [f32; 4]), rigid: [f32; 2], (layer, sc): (u32, f32), parent: Option<Parent>) -> ([f32; 4], Option<Parent>) {
         // Snapping to the unscaled grid fades in over the last pixel scaling moves the edges, so
         // a scale settling at 1 lands on the grid without a jump. In a layer that is how far
         // its scale moves the layer's edges, the same for every box in it.
@@ -456,7 +485,7 @@ fn round(v: f32) -> f32 {
 /// parent's resting rounding match. Each edge's correction toward its resting rounding passes
 /// through `ease(edge, correction)`.
 #[inline]
-pub(super) fn snap(r: [f32; 4], motion: [f32; 4], rigid: [f32; 2], parent: Option<Rest>, mut ease: impl FnMut(usize, f32) -> f32) -> ([f32; 4], Rest) {
+pub(in crate::runtime) fn snap(r: [f32; 4], motion: [f32; 4], rigid: [f32; 2], parent: Option<Rest>, mut ease: impl FnMut(usize, f32) -> f32) -> ([f32; 4], Rest) {
     let mut out = r;
     let mut rest = Rest { exact: [0.0; 4], at: [0.0; 4] };
     // A scaled layer's edges and its scaled rigid translation each land a little off the 1/64 px
@@ -491,7 +520,7 @@ pub(super) fn snap(r: [f32; 4], motion: [f32; 4], rigid: [f32; 2], parent: Optio
 /// snaps CSS border and outline widths: under a pixel it draws one whole pixel, above that it
 /// floors to whole pixels. So 0.5 pt is one crisp pixel at 1×, 1.25× and 1.5×, and 1 pt is one
 /// pixel at 1.25× and 1.5×. Zero stays zero; the sign stays.
-pub(super) fn line_width(w: f32) -> f32 {
+pub(in crate::runtime) fn line_width(w: f32) -> f32 {
     if w == 0.0 || !w.is_finite() {
         return w;
     }
@@ -501,7 +530,7 @@ pub(super) fn line_width(w: f32) -> f32 {
 
 /// Whether a box paints something its children's gaps show against. Elsewhere centring would
 /// cost a pixel of size for nothing.
-pub(super) fn frames(v: &crate::el::Visual) -> bool {
+pub(in crate::runtime) fn frames(v: &crate::el::Visual) -> bool {
     let border = v.border_width() > 0.0 && (v.border().a > 0.0 || v.border_bottom.is_some());
     v.fill.a > 0.0 || v.hover().a > 0.0 || v.press().a > 0.0 || v.gradient.is_some() || v.radial.is_some() || border
 }

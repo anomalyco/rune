@@ -1,0 +1,1 @@
+- `El::on_pill_secondary` handles secondary presses (right-click / macOS control-click) on a `Mark::Pill` inside a `text_input`, falling through to the standard field context menu when it returns `false`.

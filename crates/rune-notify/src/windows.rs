@@ -9,6 +9,8 @@
 //! that posted it still runs. That is the documented way for an app without a package to be
 //! started from its toasts without a COM activator. `click_from_url` reads the link back.
 
+#![allow(unsafe_code)]
+
 use std::sync::Mutex;
 
 use windows::Data::Xml::Dom::XmlDocument;
@@ -250,7 +252,7 @@ impl INotificationActivationCallback_Impl for Callback_Impl {
         let id = info.iter().find(|(k, _)| k == ID).map(|(_, v)| v.clone()).unwrap_or_default();
         let click = Click { id, info };
         match &self.once {
-            Some(once) => { let _ = once.send(click); }
+            Some(once) => { once.send(click).ok(); }
             None => super::deliver(click),
         }
         Ok(())
@@ -271,7 +273,7 @@ pub(super) fn serve(clsid: &str, once: Option<std::sync::mpsc::Sender<Click>>) -
                 CoRegisterClassObject(&clsid, &factory, CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE)
             })
         };
-        let _ = ready.send(registered.map(|_| ()).map_err(|e| e.to_string()));
+        ready.send(registered.map(|_| ()).map_err(|e| e.to_string())).ok();
         // The registration lasts while this thread's apartment does: park it.
         loop { std::thread::park(); }
     }).map_err(|e| e.to_string())?;

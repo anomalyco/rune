@@ -1,0 +1,1 @@
+- `Markdown` memoises settled blocks (including paragraphs and list items with `link_favicon`), list item bodies, closed code cards, and settled table rows across streaming commits using 128-bit parse-cached digests, and `Table` caches per-row column widths so adding or editing a row measures only the changed row.

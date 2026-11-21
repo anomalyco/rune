@@ -19,11 +19,11 @@ fn duplicate_sibling_keys_keep_the_first_and_lay_out_without_a_panic() {
 #[test]
 fn duplicate_sibling_keys_tooling_reports_and_lays_out() {
     let mut rt = Runtime::new((), duplicate_view, (100.0, 100.0), Env::new(true, 1.0));
-    rt.key_warnings = Some(Vec::new());
+    rt.commit.enable_key_warnings();
     rt.frame(0.0);
-    assert_eq!(rt.key_warnings.as_ref().unwrap().len(), 1);
-    assert_eq!(rt.nodes.len(), 3);
-    assert_eq!(rt.nodes[0].local.w, 100.0);
+    assert_eq!(rt.commit.key_warnings().unwrap().len(), 1);
+    assert_eq!(rt.tree.nodes.len(), 3);
+    assert_eq!(rt.tree.nodes[0].local.w, 100.0);
 }
 
 #[test]
@@ -41,8 +41,8 @@ fn side_panel_wraps_once_and_releases_height_after_stable_width() {
     fn run(fps: usize, reduced: bool) -> Vec<f32> {
         let mut rt = Runtime::new((0.0, reduced), view, (480.0, 700.0), Env::new(true, 2.0));
         rt.frame(0.0);
-        let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("message")).unwrap().id;
-        let original = rt.grows[&id].h;
+        let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("message")).unwrap().id;
+        let original = rt.motion.grows[&id].h;
         let mut trace = std::env::var_os("RUNE_WIDTH_TRACE").map(|dir| {
             let dir = std::path::PathBuf::from(dir).join(format!("width-{fps}-{}", if reduced { "reduced" } else { "normal" }));
             std::fs::create_dir_all(&dir).unwrap();
@@ -53,23 +53,23 @@ fn side_panel_wraps_once_and_releases_height_after_stable_width() {
         rt.invalidate();
         rt.frame(0.0);
         let commits = rt.stats.commits;
-        let measured = rt.nodes.iter().find(|n| n.id == id).unwrap().local.h;
+        let measured = rt.tree.nodes.iter().find(|n| n.id == id).unwrap().local.h;
         assert!(measured > original);
-        if reduced { assert_eq!(rt.grows[&id].h, measured); }
-        else { assert_eq!(rt.grows[&id].target, original); }
+        if reduced { assert_eq!(rt.motion.grows[&id].h, measured); }
+        else { assert_eq!(rt.motion.grows[&id].target, original); }
         let mut samples = vec![];
         for frame in 1..=fps * 2 {
             rt.frame(1.0 / fps as f64);
             assert_eq!(rt.stats.commits, commits, "presentation must not remeasure the wrapping");
             assert_eq!(rt.stats.shaped, 0);
             if frame as f64 / (fps as f64) < 0.12 && !reduced {
-                assert_eq!(rt.grows[&id].h, original);
+                assert_eq!(rt.motion.grows[&id].h, original);
                 assert!(rt.animating, "the hold must keep the shared clock awake");
             }
-            if frame % (fps / 30) == 0 { samples.push(rt.grows[&id].h); }
+            if frame % (fps / 30) == 0 { samples.push(rt.motion.grows[&id].h); }
             if let Some(trace) = &mut trace { trace.frame(&mut rt, frame as f64 * 1000.0 / fps as f64, 0.0); }
         }
-        assert!((rt.grows[&id].h - measured).abs() < 0.05);
+        assert!((rt.motion.grows[&id].h - measured).abs() < 0.05);
         // A second target during a hold restarts the stable-width interval.
         rt.state.0 = 80.0;
         rt.invalidate();
@@ -80,13 +80,13 @@ fn side_panel_wraps_once_and_releases_height_after_stable_width() {
         rt.frame(0.0);
         for _ in 0..fps / 10 { rt.frame(1.0 / fps as f64); }
         if !reduced {
-            assert_eq!(rt.grows[&id].h, measured, "a changing width must restart the hold");
-            assert!(!rt.stacks.values().next().unwrap().pending_heights.is_empty());
+            assert_eq!(rt.motion.grows[&id].h, measured, "a changing width must restart the hold");
+            assert!(!rt.motion.stacks.values().next().unwrap().pending_heights.is_empty());
         }
         // Settle/resume bypasses even an active hold completely.
         rt.settle_all();
         rt.frame(0.0);
-        assert!(rt.stacks.values().all(|s| s.pending_heights.is_empty()));
+        assert!(rt.motion.stacks.values().all(|s| s.pending_heights.is_empty()));
         assert!(!rt.animating);
         samples
     }
@@ -106,17 +106,17 @@ fn measurement_cannot_change_presented_geometry_or_motion_policy() {
     }
     let mut rt = Runtime::new(false, view, (300.0, 300.0), Env::new(true, 2.0));
     rt.frame(0.0);
-    let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("row")).unwrap().id;
+    let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("row")).unwrap().id;
     let before = rt.scene.presented(id).unwrap().rect;
     rt.state = true;
     let measured = rt.measure(&Tx::default());
     assert_eq!(rt.scene.presented(id).unwrap().rect, before);
     assert_eq!(rt.scene.store().active_len(), 0);
-    assert_eq!(rt.grows[&id].h, 40.0);
+    assert_eq!(rt.motion.grows[&id].h, 40.0);
     assert!(!rt.reduced_motion && !rt.scene.store().reduced_motion());
     rt.apply(measured, &Tx::default());
     assert!(rt.reduced_motion && rt.scene.store().reduced_motion());
-    assert_eq!(rt.grows[&id].h, 160.0);
+    assert_eq!(rt.motion.grows[&id].h, 160.0);
 }
 
 #[test]
@@ -146,25 +146,25 @@ fn send_flight_follows_the_measured_bubble_while_earlier_rows_land() {
     rt.frame(1.0 / 120.0);
     rt.key(KeyEvent { key: crate::edit::Key::Enter, mods: Default::default() });
     rt.frame(1.0 / 120.0);
-    assert_eq!(rt.flights.len(), 1);
-    assert!(!rt.flights[0].glyphs.is_empty(), "the visible composer glyphs survive clearing the model");
-    let mut previous_target = rt.flights[0].destination;
+    assert_eq!(rt.motion.flights().len(), 1);
+    assert!(!rt.motion.flights()[0].glyphs.is_empty(), "the visible composer glyphs survive clearing the model");
+    let mut previous_target = rt.motion.flights()[0].destination;
     let mut retargets = 0;
     for _ in 0..240 {
         rt.frame(1.0 / 120.0);
-        if let Some(f) = rt.flights.first() {
-            assert!(rt.instances.iter().any(|q| q.params[1] == KIND_GLYPH && q.uv[2] > 0.0 && q.fill[3] > 0.1
+        if let Some(f) = rt.motion.flights().first() {
+            assert!(rt.instances.iter().any(|q| q.params[1] == KIND_GLYPH && (q.uv[2] > 0.0 || q.radii[3] > 0.0) && q.fill[3] > 0.1
                 && q.rect[0].max(q.clip[0]) + 1.0 < (q.rect[0] + q.rect[2]).min(q.clip[2])
                 && q.rect[1].max(q.clip[1]) + 1.0 < (q.rect[1] + q.rect[3]).min(q.clip[3])),
                 "the source/destination handoff never loses every visible glyph");
-            let target = rt.nodes.iter().position(|n| n.key.as_deref() == Some("destination")).unwrap();
-            assert!((f.destination.y - rt.drawn[target][1]).abs() < 0.01, "destination is this frame's post-scroll geometry");
+            let target = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("destination")).unwrap();
+            assert!((f.destination.y - rt.paint.drawn[target][1]).abs() < 0.01, "destination is this frame's post-scroll geometry");
             if f.destination != previous_target { retargets += 1; }
             previous_target = f.destination;
         }
     }
     assert!(retargets > 3, "earlier row growth actually moved the destination");
-    assert!(rt.flights.is_empty(), "flight lands and releases the captured glyphs");
+    assert!(rt.motion.flights().is_empty(), "flight lands and releases the captured glyphs");
     assert!(!rt.animating);
 }
 
@@ -186,7 +186,7 @@ fn virtual_rows_match_full_layout_while_paging_and_keep_a_keyed_anchor() {
     let mut window = Runtime::new(State { virtualized: true, keys: (0..600).collect() }, view, (240.0, 300.0), env);
     full.frame(0.0);
     window.frame(0.0);
-    assert!(window.nodes.len() < 100, "offscreen rows aren't laid out or retained in the scene");
+    assert!(window.tree.nodes.len() < 100, "offscreen rows aren't laid out or retained in the scene");
     assert!(window.text.shaped < full.text.shaped / 5, "offscreen text isn't shaped");
     let visible = |r: &Runtime<State>| r.elements().into_iter()
         .filter(|e| e.key.as_ref().is_some_and(|k| k.starts_with('r') && k != "rows") && e.visible[3] > 0.0)
@@ -210,7 +210,7 @@ fn virtual_rows_match_full_layout_while_paging_and_keep_a_keyed_anchor() {
     window.invalidate();
     window.frame(1.0 / 120.0);
     assert_eq!(before, visible(&window), "prepending outside the window preserves its keyed anchor");
-    assert!(window.nodes.len() < 150 && window.grows.len() < 70, "paging releases old row state");
+    assert!(window.tree.nodes.len() < 150 && window.motion.grows.len() < 70, "paging releases old row state");
     let anchor = visible(&window)[0].clone();
     window.set_viewport((320.0, 300.0), 2.0);
     window.frame(0.0);
@@ -271,36 +271,36 @@ fn streaming_fill_and_width_rewrap_land_on_completion() {
     rt.state.0 = "one two three four five six seven eight nine ten eleven".into();
     rt.invalidate();
     rt.frame(1.0 / 120.0);
-    let row = rt.nodes.iter().find(|n| n.key.as_deref() == Some("row")).unwrap().id;
-    let n = &rt.nodes[rt.node_index[&row]];
+    let row = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("row")).unwrap().id;
+    let n = &rt.tree.nodes[rt.tree.node_index[&row]];
     let full = n.local.h;
-    assert!(rt.grows[&row].target < full, "new line is held back while filling");
+    assert!(rt.motion.grows[&row].target < full, "new line is held back while filling");
     for _ in 0..240 { rt.frame(1.0 / 120.0); }
     assert!(!rt.animating, "partial line at rest must stop ticking");
-    let old_h = rt.grows[&row].h;
+    let old_h = rt.motion.grows[&row].h;
     rt.set_viewport((600.0, 500.0), 2.0);
     rt.state.0.push_str(" twelve");
     rt.invalidate();
     rt.frame(1.0 / 120.0);
-    assert_eq!(rt.grows[&row].target, old_h, "rewrap waits for stable width");
+    assert_eq!(rt.motion.grows[&row].target, old_h, "rewrap waits for stable width");
     for _ in 0..15 { rt.frame(1.0 / 120.0); }
-    assert!(rt.grows[&row].target < old_h, "width change may shrink a streaming row");
-    assert!(rt.grows[&row].h > rt.grows[&row].target, "rewrapped height eases instead of snapping");
+    assert!(rt.motion.grows[&row].target < old_h, "width change may shrink a streaming row");
+    assert!(rt.motion.grows[&row].h > rt.motion.grows[&row].target, "rewrapped height eases instead of snapping");
     rt.state.0 = "one two".into();
     rt.invalidate();
     rt.frame(0.0);
-    assert!(rt.grows[&row].target < rt.grows[&row].h, "streaming may still shrink inside the 400 ms rewrap window");
+    assert!(rt.motion.grows[&row].target < rt.motion.grows[&row].h, "streaming may still shrink inside the 400 ms rewrap window");
     for _ in 0..120 { rt.frame(1.0 / 120.0); }
-    let landed = rt.grows[&row].h;
+    let landed = rt.motion.grows[&row].h;
     rt.state.0 = "o".into();
     rt.invalidate();
     rt.frame(0.0);
-    assert_eq!(rt.grows[&row].target, landed, "streaming cannot shrink after the rewrap window");
+    assert_eq!(rt.motion.grows[&row].target, landed, "streaming cannot shrink after the rewrap window");
     rt.state.1 = false;
     rt.invalidate();
     for _ in 0..240 { rt.frame(1.0 / 120.0); }
     assert!(!rt.animating);
-    assert_eq!(rt.grows[&row].h, rt.nodes[rt.node_index[&row]].local.h);
+    assert_eq!(rt.motion.grows[&row].h, rt.tree.nodes[rt.tree.node_index[&row]].local.h);
 }
 
 #[test]
