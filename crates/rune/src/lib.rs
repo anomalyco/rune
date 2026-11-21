@@ -118,6 +118,7 @@ pub use el::edit_access;
 pub use el::effect;
 pub use el::el;
 pub use el::grid;
+pub use el::hairline;
 pub use el::icon;
 pub use el::layout_watch::ScrollPos;
 pub use el::motion::MotionIntent;

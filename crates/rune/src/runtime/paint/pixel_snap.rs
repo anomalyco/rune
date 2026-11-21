@@ -516,6 +516,26 @@ pub(in crate::runtime) fn snap(r: [f32; 4], motion: [f32; 4], rigid: [f32; 2], p
     (out, rest)
 }
 
+/// Scales a hairline box (`El::hairline`) by half on its thin axis around its midpoint, matching
+/// Chromium's `height: 1px; transform: scaleY(0.5)` (or vertical `scaleX(0.5)`): the 1 pt box
+/// snaps its origin `r[axis]` and pre-scale extent `round(extent).max(1.0)` to device pixels,
+/// then scales `[0, h]` by 0.5 around `0.5 * extent`:
+/// - At 1.0x (`extent = 1.0`, `h = 1.0`): `[lo + 0.25, lo + 0.75]` (0.50 coverage in row `lo`).
+/// - At 1.5x (`extent = 1.5`, `h = 2.0`): `[lo + 0.375, lo + 1.375]` (0.625 in `lo`, 0.375 in `lo + 1`).
+/// - At 2.0x (`extent = 2.0`, `h = 2.0`): `[lo + 0.5, lo + 1.5]` (1.0 device px centred in 2 px).
+#[inline]
+pub(in crate::runtime) fn hairline(mut r: [f32; 4], exact: [f32; 4]) -> [f32; 4] {
+    let (ew, eh) = ((exact[2] - exact[0]).max(0.0), (exact[3] - exact[1]).max(0.0));
+    let axis = usize::from(eh <= ew);
+    let extent = if axis == 1 { eh } else { ew };
+    let h = round(extent).max(1.0);
+    let lo = r[axis];
+    let pad = 0.25 * extent;
+    r[axis] = lo + pad;
+    r[axis + 2] = lo + 0.5 * h + pad;
+    r
+}
+
 /// A border's or outline's width, or an outline's offset, `w` device px, snapped as Chromium
 /// snaps CSS border and outline widths: under a pixel it draws one whole pixel, above that it
 /// floors to whole pixels. So 0.5 pt is one crisp pixel at 1×, 1.25× and 1.5×, and 1 pt is one

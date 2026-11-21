@@ -285,6 +285,13 @@ pub fn spacer() -> El {
     base(FlexDirection::Row).grow(1.0)
 }
 
+/// A 1 pt horizontal divider scaled vertically by half at paint time (`height: 1px; transform:
+/// scaleY(0.5)`), matching Chromium's sub-pixel hairline coverage at 1x, 1.5x and 2x while taking
+/// 1 pt of layout height.
+pub fn hairline(c: Color) -> El {
+    el().h(1.0).fill(c).hairline()
+}
+
 /// A horizontal rule as a CSS `border-top: <width>px` on an empty box draws and lays out: its
 /// width snapped to device pixels as a border's is (one whole pixel under a pixel), and that
 /// many pixels of room in its column. So `rule(0.5, c)` between two rows takes 1 point at 1x,

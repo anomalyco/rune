@@ -41,4 +41,13 @@ impl El {
         self.vis.cold_mut().motion_snaps = true;
         self
     }
+
+    /// Scales this element's thin axis by half around its midpoint at paint time, matching
+    /// Chromium's `height: 1px; transform: scaleY(0.5)` (or vertical `width: 1px; transform: scaleX(0.5)`):
+    /// 0.50 coverage in one pixel at 1x, and 0.625 / 0.375 across two pixels at 1.5x, while layout
+    /// keeps its full 1 pt slot.
+    pub fn hairline(mut self) -> Self {
+        self.vis.cold_mut().hairline = true;
+        self
+    }
 }

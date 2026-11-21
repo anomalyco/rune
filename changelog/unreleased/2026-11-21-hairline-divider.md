@@ -1,0 +1,1 @@
+- Render: `rune::hairline` and `El::hairline` paint a 1 pt divider scaled by half on its thin axis around its midpoint, matching Chromium's `transform: scaleY(0.5)` coverage at 1x, 1.5x and 2x.
