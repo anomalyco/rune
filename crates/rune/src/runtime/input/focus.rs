@@ -397,6 +397,9 @@ impl RuntimeCore {
             .unwrap_or(crate::el::Outline { width: 3.0, offset: 0.0, color: self.host.system_accent.focus(self.env.system_dark) })
     }
     pub(crate) fn set_focus(&mut self, app: &mut dyn AppDriver, path: Option<String>, keyboard: bool) -> bool {
+        self.set_focus_entry(app, path, keyboard, false)
+    }
+    fn set_focus_entry(&mut self, app: &mut dyn AppDriver, path: Option<String>, keyboard: bool, keep_entry: bool) -> bool {
         self.edit.input_click.on_focus_change(path.as_deref());
         let moved = self.kbd.focus.path() != path.as_deref();
         // A field left mid-composition keeps what it showed, as a browser's does (Tab the input
@@ -425,7 +428,7 @@ impl RuntimeCore {
             changed |= sync_input_focus(input, app.states(), path.as_deref() == Some(p.as_str()));
         }
         let shown = (self.kbd.focus.keyboard(), self.kbd.focus.shown());
-        for effect in self.kbd.focus.step(focus_machine::FocusEvent::Set { path, keyboard }) {
+        for effect in self.kbd.focus.step(focus_machine::FocusEvent::Set { path, keyboard, keep_entry }) {
             match effect {
                 focus_machine::FocusEffect::Moved => {
                     self.ime_area = None;
@@ -525,15 +528,14 @@ impl RuntimeCore {
         // State may have deleted a row. Only the new view's accessors are valid now.
         // Use the same focus path as input events, then restore the old presentation
         // tree so apply can retain its exit visuals.
-        let keyboard = match &asked {
-            Some((p, ring, _)) if next.as_deref() == Some(p.as_str()) => *ring,
-            _ => self.kbd.focus.keyboard(),
-        };
-        self.kbd.set_focus_returned(matches!(&asked, Some((p, _, crate::el::FocusAsk::Return)) if next.as_deref() == Some(p.as_str())));
+        let explicit = asked.as_ref().filter(|(p, ..)| next.as_deref() == Some(p.as_str()));
+        let keep_entry = explicit.is_none() && next.as_deref() == self.kbd.focus.path();
+        let keyboard = explicit.map_or_else(|| self.kbd.focus.keyboard(), |(_, ring, _)| *ring);
+        self.kbd.set_focus_returned(matches!(explicit, Some((_, _, crate::el::FocusAsk::Return))));
         if asked.is_none() && let Some(owed) = waits { self.kbd.focus_owed = Some(owed); }
         std::mem::swap(&mut self.tree.nodes, nodes);
         self.nodes_replaced();
-        let changed = self.set_focus(app, next, keyboard);
+        let changed = self.set_focus_entry(app, next, keyboard, keep_entry);
         std::mem::swap(&mut self.tree.nodes, nodes);
         self.nodes_replaced();
         if self.edit.input_click.dragging_path().is_some_and(|p| !nodes.iter().any(|n| n.path == p && !n.inert && n.input.is_some())) {
