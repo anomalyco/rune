@@ -440,7 +440,10 @@ impl Renderer {
             el().w(indent).h(s.body.line_px()).child(el().outside_list_disc(s.body).fill(s.muted))
         } else {
             let words = start.map_or_else(|| "•".into(), |num| format!("{}.", num + k as u64));
-            let marker = text(words).font(s.body).color(s.muted).exact_lines().w(indent);
+            // CSS Lists Level 3 / Blink UA stylesheet sets `::marker { font-variant-numeric: tabular-nums; }`
+            // so `1.` aligns with `2.` and `3.`.
+            let font = if start.is_some() { TextStyle { features: table::with_tnum(s.body.features), ..s.body } } else { s.body };
+            let marker = text(words).font(font).color(s.muted).exact_lines().w(indent);
             if s.list_outside { marker.align(Align::End).pr(space) } else { marker.align(Align::Center) }
         }
     }

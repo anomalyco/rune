@@ -14,6 +14,9 @@ pub struct Highlight {
     pub(crate) bg: Option<Color>,
     pub(crate) fg: Option<Color>,
     pub(crate) ring: Option<(Color, f32)>,
+    pub(crate) pad: Option<f32>,
+    pub(crate) radius: Option<f32>,
+    pub(crate) vpad: Option<f32>,
     pub(crate) key: Option<String>,
 }
 
@@ -55,6 +58,21 @@ impl Highlight {
         self.ring = (width > 0.0 && width.is_finite()).then_some((color, width));
         self
     }
+    /// Overrides the horizontal padding around each highlighted line, in points.
+    pub fn pad(mut self, pad: f32) -> Self {
+        self.pad = Some(pad);
+        self
+    }
+    /// Overrides the corner radius of each highlighted line, in points (`0.0` for CSS `::highlight`).
+    pub fn radius(mut self, radius: f32) -> Self {
+        self.radius = Some(radius.max(0.0));
+        self
+    }
+    /// Overrides the vertical padding above ascent and below descent on each line, in points.
+    pub fn vpad(mut self, vpad: f32) -> Self {
+        self.vpad = Some(vpad.max(0.0));
+        self
+    }
     /// Sets a key for [`Tx::scroll_into_view`](rune::Tx::scroll_into_view),
     /// [`Cx::layout`](rune::Cx::layout) and [`Runtime::find`](rune::Runtime::find). When unset,
     /// the highlight is reachable under [`Markdown::highlight_key`]`(index)`.
@@ -66,8 +84,9 @@ impl Highlight {
 
 impl std::hash::Hash for Highlight {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let Highlight { current, bg, fg, ring, key } = self;
-        (current, bg, fg, ring.map(|(c, w)| (c, if w == 0.0 { 0 } else { w.to_bits() })), key).hash(state);
+        let Highlight { current, bg, fg, ring, pad, radius, vpad, key } = self;
+        let bits = |v: Option<f32>| v.map(|x| if x == 0.0 { 0 } else { x.to_bits() });
+        (current, bg, fg, ring.map(|(c, w)| (c, if w == 0.0 { 0 } else { w.to_bits() })), bits(*pad), bits(*radius), bits(*vpad), key).hash(state);
     }
 }
 

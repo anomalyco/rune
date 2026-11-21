@@ -371,10 +371,11 @@ impl Kit {
         rune::theme::for_blend(c, backdrop)
     }
 
-    /// `layers` as painted: rings recoloured by [`Kit::ring`] when the theme sets it.
+    /// `layers` as painted (back-to-front, reversing CSS `box-shadow` front-to-back order so the
+    /// first CSS shadow paints on top): rings recoloured by [`Kit::ring`] when the theme sets it.
     pub fn shadow_layers<'a>(&'a self, layers: &'a [Shadow]) -> impl Iterator<Item = Shadow> + 'a {
         let ring = self.ring.map(|f| f(&self.c));
-        layers.iter().map(move |s| match ring {
+        layers.iter().rev().map(move |s| match ring {
             Some(color) if s.blur == 0.0 => Shadow { color, ..*s },
             _ => *s,
         })

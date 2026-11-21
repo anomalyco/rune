@@ -381,6 +381,10 @@ pub struct TextHighlight {
     #[doc(hidden)]
     pub pad: f32,
     #[doc(hidden)]
+    pub radius: f32,
+    #[doc(hidden)]
+    pub vpad: f32,
+    #[doc(hidden)]
     pub key: Option<String>,
 }
 
@@ -394,6 +398,8 @@ impl TextHighlight {
             fg: None,
             ring: None,
             pad: 1.5,
+            radius: 4.0,
+            vpad: 1.0,
             key: None,
         }
     }
@@ -410,6 +416,16 @@ impl TextHighlight {
     /// Horizontal padding around each line's background, in points (`1.5` by default).
     pub fn pad(mut self, pad: f32) -> Self {
         self.pad = pad;
+        self
+    }
+    /// Corner radius of each line's background, in points (`4.0` by default; `0.0` for CSS `::highlight`).
+    pub fn radius(mut self, radius: f32) -> Self {
+        self.radius = radius.max(0.0);
+        self
+    }
+    /// Vertical padding above ascent and below descent on each line, in points (`1.0` by default).
+    pub fn vpad(mut self, vpad: f32) -> Self {
+        self.vpad = vpad.max(0.0);
         self
     }
     /// Optional key for [`Tx::scroll_into_view`](crate::Tx::scroll_into_view),
