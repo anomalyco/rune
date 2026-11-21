@@ -336,6 +336,8 @@ fn main() {
     while math::generation() < target_gen && start_wait.elapsed() < Duration::from_secs(5) {
         std::thread::sleep(Duration::from_millis(5));
     }
+    // Simulate a Rune host's `poll()` noticing `math::generation()` advanced and marking view dirty.
+    rt.update(|_, _| {});
     rt.frame(1.0 / 60.0);
     let img_count = rt.elements().into_iter().filter(|e| e.role == "img").count();
     let find_rendered = find(&doc, "\\frac{0}{n+1}", Case::Insensitive);
