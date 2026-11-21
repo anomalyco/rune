@@ -232,19 +232,20 @@ impl TextSystem {
         if highlights.is_empty() {
             return;
         }
-        let radius = 4.0 * scale;
         for h in highlights {
             let (a, b) = ((h.start as usize).min(len), (h.end as usize).min(len));
             if a >= b || (h.bg.a <= 0.0 && h.ring.is_none()) {
                 continue;
             }
             let pad = h.pad * scale;
+            let radius = h.radius * scale;
+            let vpad = h.vpad * scale;
             let ring = h.ring.map(|(c, rw)| (c, rw * scale));
             let byte = (b as u32).saturating_sub(1);
             match flow {
                 TextFlow::Single(l) => {
                     let boxes = range_boxes(l, a, b, false);
-                    push_highlight_boxes(l, boxes, a..b, origin, scale, pad, radius, h.bg, ring, byte, None, out);
+                    push_highlight_boxes(l, boxes, a..b, origin, pad, vpad, radius, h.bg, ring, byte, None, out);
                 }
                 TextFlow::Paragraphs(pl) => {
                     let from = pl.paragraphs.partition_point(|q| q.end < a);
@@ -279,7 +280,7 @@ impl TextSystem {
                             }
                         }
                         let (sa, sb) = clipped.unwrap_or((p.shaped(p.end), p.shaped(p.end)));
-                        push_highlight_boxes(p.layout, boxes, sa..sb, [origin[0], origin[1] + p.y], scale, pad, radius, h.bg, ring, byte, Some(pl.blank_box), out);
+                        push_highlight_boxes(p.layout, boxes, sa..sb, [origin[0], origin[1] + p.y], pad, vpad, radius, h.bg, ring, byte, Some(pl.blank_box), out);
                     }
                 }
             }
@@ -293,8 +294,8 @@ fn push_highlight_boxes(
     boxes: Vec<(parley::BoundingBox, usize)>,
     range: std::ops::Range<usize>,
     origin: [f32; 2],
-    scale: f32,
     pad: f32,
+    vpad: f32,
     radius: f32,
     color: Color,
     ring: Option<(Color, f32)>,
@@ -321,17 +322,17 @@ fn push_highlight_boxes(
                 }
             }
             if asc > 0.0 || desc > 0.0 {
-                top = (base - asc - 1.0 * scale).round();
-                bot = (base + desc + 1.0 * scale).round();
+                top = (base - asc - vpad).round();
+                bot = (base + desc + vpad).round();
             } else if let Some(b) = blank {
                 let bbase = origin[1] + b[0];
-                top = (bbase - b[1] - 1.0 * scale).round();
-                bot = (bbase + b[2] + 1.0 * scale).round();
+                top = (bbase - b[1] - vpad).round();
+                bot = (bbase + b[2] + vpad).round();
             }
         } else if let Some(b) = blank {
             let bbase = origin[1] + b[0];
-            top = (bbase - b[1] - 1.0 * scale).round();
-            bot = (bbase + b[2] + 1.0 * scale).round();
+            top = (bbase - b[1] - vpad).round();
+            bot = (bbase + b[2] + vpad).round();
         }
         let rect = [x0 - pad, top, w + 2.0 * pad, (bot - top).max(0.0)];
         let merge = last.filter(|&(li, _)| li == line_idx).is_some_and(|(_, idx)| {

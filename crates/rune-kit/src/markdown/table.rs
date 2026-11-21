@@ -57,7 +57,7 @@ fn font_key(f: TextStyle) -> (u32, u32, u32, u32, String) {
 
 /// `features` with tabular figures on, interned so the result is `'static` like a
 /// [`TextStyle`]'s features (a style has few distinct feature lists).
-fn with_tnum(features: &'static str) -> &'static str {
+pub(super) fn with_tnum(features: &'static str) -> &'static str {
     if features.is_empty() {
         return "'tnum' 1";
     }

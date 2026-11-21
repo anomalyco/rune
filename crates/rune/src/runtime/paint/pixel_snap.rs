@@ -520,20 +520,26 @@ pub(in crate::runtime) fn snap(r: [f32; 4], motion: [f32; 4], rigid: [f32; 2], p
 /// Chromium's `height: 1px; transform: scaleY(0.5)` (or vertical `scaleX(0.5)`): the 1 pt box
 /// snaps its origin `r[axis]` and pre-scale extent `round(extent).max(1.0)` to device pixels,
 /// then scales `[0, h]` by 0.5 around `0.5 * extent`:
-/// - At 1.0x (`extent = 1.0`, `h = 1.0`): `[lo + 0.25, lo + 0.75]` (0.50 coverage in row `lo`).
+/// - At 1.0x (`extent = 1.0`, `h = 1.0`): `[lo, lo + 1.0]` at 0.50 alpha (exact 0.50 coverage in
+///   row `lo`; `KIND_RECT` evaluates `0.5 - sd`, which gives 0.75 on a 0.5 px thin rect).
 /// - At 1.5x (`extent = 1.5`, `h = 2.0`): `[lo + 0.375, lo + 1.375]` (0.625 in `lo`, 0.375 in `lo + 1`).
 /// - At 2.0x (`extent = 2.0`, `h = 2.0`): `[lo + 0.5, lo + 1.5]` (1.0 device px centred in 2 px).
 #[inline]
-pub(in crate::runtime) fn hairline(mut r: [f32; 4], exact: [f32; 4]) -> [f32; 4] {
+pub(in crate::runtime) fn hairline(mut r: [f32; 4], exact: [f32; 4]) -> ([f32; 4], f32) {
     let (ew, eh) = ((exact[2] - exact[0]).max(0.0), (exact[3] - exact[1]).max(0.0));
     let axis = usize::from(eh <= ew);
     let extent = if axis == 1 { eh } else { ew };
     let h = round(extent).max(1.0);
     let lo = r[axis];
+    if 0.5 * h < 1.0 {
+        r[axis] = lo;
+        r[axis + 2] = lo + 1.0;
+        return (r, 0.5 * h);
+    }
     let pad = 0.25 * extent;
     r[axis] = lo + pad;
     r[axis + 2] = lo + 0.5 * h + pad;
-    r
+    (r, 1.0)
 }
 
 /// A border's or outline's width, or an outline's offset, `w` device px, snapped as Chromium

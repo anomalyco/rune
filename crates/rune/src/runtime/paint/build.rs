@@ -314,9 +314,13 @@ impl RuntimeCore {
                 let raw = if unscaled { r_exact } else { raw_edges.map(snap_px) };
                 self.paint.pixel_snap.snapped(n.id, motion, (r_exact, raw), rigid, (snap_layer, sc), pinh.snap.parent)
             };
-            if n.vis.cold.get().is_some_and(|c| c.hairline) {
-                r = pixel_snap::hairline(r, r_exact);
-            }
+            let hairline_alpha = if n.vis.cold.get().is_some_and(|c| c.hairline) {
+                let (hr, a) = pixel_snap::hairline(r, r_exact);
+                r = hr;
+                a
+            } else {
+                1.0
+            };
             let (w, h) = ((r[2] - r[0]).max(0.0), (r[3] - r[1]).max(0.0));
             // `El::rotate`: this subtree draws into a layer turned about its origin.
             // The layer takes the clips from above; the node's own clips apply inside, upright.
@@ -491,7 +495,7 @@ impl RuntimeCore {
                     w,
                     h,
                     sc,
-                    o,
+                    o * hairline_alpha,
                     effective_opacity,
                     base_opacity,
                     p.draw,
