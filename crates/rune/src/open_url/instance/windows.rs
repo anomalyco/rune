@@ -278,12 +278,25 @@ fn listen(pipe: HANDLE) {
                     let mut written = 0;
                     // SAFETY: one byte from `answer` to the connected client; the flush waits
                     // for the client to read it (or to close), so the disconnect below
-                    // doesn't discard it.
-                    unsafe { WriteFile(pipe, answer.as_ptr(), 1, &mut written, std::ptr::null_mut()) != 0 && written == 1 && FlushFileBuffers(pipe) != 0 }
+                    // doesn't discard it. The error is read right after the call that failed.
+                    let (wrote, flushed) = unsafe {
+                        let wrote = WriteFile(pipe, answer.as_ptr(), 1, &mut written, std::ptr::null_mut()) != 0 && written == 1;
+                        let wrote_error = GetLastError();
+                        let flushed = wrote && FlushFileBuffers(pipe) != 0;
+                        (if wrote { Ok(()) } else { Err(wrote_error) }, if flushed || !wrote { Ok(()) } else { Err(GetLastError()) })
+                    };
+                    if let Err(e) = wrote.and(flushed) {
+                        eprintln!("rune-instance: a launch gave up before it read its answer ({} failed, error {e}); not acted on", if wrote.is_err() { "write" } else { "flush" });
+                    }
+                    wrote.is_ok() && flushed.is_ok()
                 };
                 // A launch told the app quits claims the instance itself; one that couldn't
                 // be told (an older sender) is started again once this process exits.
                 if told && !(quitting && launch.answers) {
+                    // Counted by the harness (no arguments: they may hold what the person typed).
+                    if HOLD.get().is_some_and(|ms| *ms > 0) {
+                        eprintln!("rune-instance: acted on a launch");
+                    }
                     relaunched(launch.args);
                 }
             }
@@ -307,9 +320,10 @@ fn listen(pipe: HANDLE) {
 
 /// A harness's stand-in for a busy machine: `RUNE_INSTANCE_HOLD_MS` holds each launch that long
 /// before it's answered. Only under `RUNE_DIRS_ROOT`, a scratch run's.
+static HOLD: OnceLock<u64> = OnceLock::new();
+
 fn hold() {
-    static MS: OnceLock<u64> = OnceLock::new();
-    let ms = *MS.get_or_init(|| {
+    let ms = *HOLD.get_or_init(|| {
         rune_core::env::var("RUNE_DIRS_ROOT").and(rune_core::env::var("RUNE_INSTANCE_HOLD_MS")).and_then(|v| v.parse().ok()).unwrap_or(0)
     });
     if ms > 0 {
