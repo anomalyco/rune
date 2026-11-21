@@ -509,6 +509,10 @@ impl Renderer {
         }
         hash_flow(self.flow.get(), &mut h);
         for s in srcs { (&s.lang, s.len, s.coloured, s.open).hash(&mut h); }
+        #[cfg(feature = "math")]
+        if srcs.iter().any(|s| crate::math::is_math_fence(s.lang.as_deref())) {
+            crate::math::generation().hash(&mut h);
+        }
         tasks.hash(&mut h);
         if !self.highlights.is_empty() { hash_block_map(map, &mut h); }
         Some(h.finish128())
@@ -540,6 +544,10 @@ impl Renderer {
         }
         hash_flow(self.flow.get(), &mut h);
         for s in srcs { (&s.lang, s.len, s.coloured, s.open).hash(&mut h); }
+        #[cfg(feature = "math")]
+        if srcs.iter().any(|s| crate::math::is_math_fence(s.lang.as_deref())) {
+            crate::math::generation().hash(&mut h);
+        }
         tasks.hash(&mut h);
         if !self.highlights.is_empty() {
             imap.len().hash(&mut h);
@@ -558,6 +566,13 @@ impl Renderer {
         }
         if !self.highlights.is_empty() && let Some(m) = map { hash_span_map(m, &mut h); }
         Some(h.finish128())
+    }
+
+    #[cfg(feature = "math")]
+    pub(super) fn settled_math_card_digest(&self, code: &str, ink: Color, avail: Option<f32>, rendered_id: u64) -> (u64, u64) {
+        let mut h = PairHasher::new();
+        (5u8, self.base_hash(), ink, avail.map(f32::to_bits), rendered_id, code).hash(&mut h);
+        h.finish128()
     }
 
     #[allow(clippy::too_many_arguments)]

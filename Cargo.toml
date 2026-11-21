@@ -89,7 +89,7 @@ default-members = [
     "crates/rune-taffy",
     "themes/opencode",
 ]
-exclude = ["tools/rune-dev-guard", "vendor/accesskit_macos", "vendor/accesskit_windows", "vendor/parley_engine", "vendor/sctk-adwaita", "vendor/tiny-skia-path", "vendor/wgpu-hal", "vendor/winit"]
+exclude = ["tools/rune-dev-guard", "tools/ratex-math-wasm", "tools/ratex-math-wasm/pack", "vendor/accesskit_macos", "vendor/accesskit_windows", "vendor/parley_engine", "vendor/sctk-adwaita", "vendor/tiny-skia-path", "vendor/wgpu-hal", "vendor/winit"]
 
 # wgpu-hal as published plus `vendor/wgpu-hal.patch`: `dx12::Instance::expose_adapter` (a `wgpu::Adapter` for the
 # one adapter Rune picks through DXGI, with no device made on the others, `crates/rune-gpu/src/pick.rs`), FXC loaded on
@@ -186,6 +186,7 @@ half = "2"
 image = { version = "0.25", default-features = false }
 js-sys = "0.3"
 libc = "0.2"
+miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false }
 objc2-core-foundation = { version = "0.3", default-features = false }
@@ -201,11 +202,14 @@ resvg = { version = "0.45", default-features = false }
 rustc-hash = "2"
 serde = "1"
 serde_json = "1"
+skrifa = "0.44"
 swash = "0.2.10"
 taffy = { version = "0.15", default-features = false }
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
 unicode-segmentation = "1.13"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+wasmi = { version = "1.1", default-features = false }
 web-sys = "0.3"
 wgpu = { version = "~30.0.1", default-features = false }
 wgpu-naga-bridge = "~30.0.1"
@@ -226,6 +230,19 @@ debug = false
 [profile.release]
 codegen-units = 16
 incremental = true
+
+# Keep the optional `math` sandbox interpreter compact (saves ~558 KiB in FAT-LTO release builds
+# with zero effect on the UI thread since math typesets on a background worker and caches results).
+[profile.release.package.wasmi]
+opt-level = "z"
+[profile.release.package.wasmi_core]
+opt-level = "z"
+[profile.release.package.wasmi_ir]
+opt-level = "z"
+[profile.release.package.wasmi_collections]
+opt-level = "z"
+[profile.release.package.wasmparser]
+opt-level = "z"
 
 # Benchmarks and perf numbers. Same codegen as release, without incremental, which can move
 # frame timings. The runtime bench scripts refuse binaries built with any other profile.

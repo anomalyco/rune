@@ -465,6 +465,22 @@ impl Renderer {
                 let n = self.next_source.get();
                 self.next_source.set(n + 1);
                 let source = self.sources.get(n).filter(|src| src.len == code.len());
+                #[cfg(feature = "math")]
+                if !source.is_some_and(|s| s.open)
+                    && crate::math::is_math_fence(source.and_then(|s| s.lang.as_deref()))
+                {
+                    let ink = self.flow.get().ink.unwrap_or(self.s.text);
+                    if let crate::math::MathStatus::Ready(rendered) =
+                        crate::math::poll_or_enqueue(code, self.s.body.size, ink, self.s.math_scale)
+                    {
+                        let avail = self.s.text_width.map(|w| (w - self.flow.get().inset).max(0.0));
+                        let digest = self.settled_math_card_digest(code, ink, avail, rendered.id);
+                        return rune::memo::cached(digest, || {
+                            memo::note_block_build();
+                            crate::math::view(code, &rendered, self.s.wide_fade, avail, self.scroll_wide)
+                        });
+                    }
+                }
                 let wrapped = self.wraps_code(n, code);
                 match self.code_frame.as_ref().and_then(|w| w.frame.as_ref()) {
                     Some(f) => {

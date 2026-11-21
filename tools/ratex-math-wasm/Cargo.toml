@@ -1,0 +1,24 @@
+[workspace]
+
+[package]
+name = "ratex-math-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Sandboxed wasm32-unknown-unknown LaTeX math parser and layout guest for rune-kit"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ratex-layout = { version = "=0.1.16", default-features = false }
+ratex-parser = { version = "=0.1.16", default-features = false }
+ratex-types = { version = "=0.1.16", default-features = false }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
