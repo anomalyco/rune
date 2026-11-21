@@ -20,13 +20,11 @@ impl LightRenderer {
             return false;
         }
         let s = &scene.settings;
-        if scene.prims.len() > self.prim_cap {
-            self.prim_cap = scene.prims.len().next_power_of_two();
-            self.prims = Self::prim_buffer(device, self.prim_cap);
+        if self.prims.ensure(device, scene.prims.len()) {
             self.rebind_prims(device);
         }
         if !scene.prims.is_empty() {
-            self.staging.write_buffer(&self.prims, 0, bytemuck::cast_slice(scene.prims));
+            self.staging.write_buffer(self.prims.buffer(), 0, bytemuck::cast_slice(scene.prims));
         }
         let nl = scene.lights.len().min(MAX_LIGHTS);
         if nl > 0 {
@@ -141,7 +139,7 @@ impl LightRenderer {
                 pass.set_bind_group(0, &self.gi_bg0, &[]);
                 f(&mut pass);
             };
-            let scene_bg = self.scene_bg.get((self.prims.clone(), scene.emission.cloned()), || {
+            let scene_bg = self.scene_bg.get((self.prims.buffer().clone(), scene.emission.cloned()), || {
                 bind(
                     device,
                     &self.scene_bgl,
@@ -195,7 +193,7 @@ impl LightRenderer {
             (Some(_), Some(gt)) => &gt.fluence,
             _ => &self.black,
         };
-        let comp_bg = self.comp_bg.get((self.prims.clone(), [base.clone(), text.clone(), fluence.clone()]), || {
+        let comp_bg = self.comp_bg.get((self.prims.buffer().clone(), [base.clone(), text.clone(), fluence.clone()]), || {
             bind(
                 device,
                 &self.comp_bgl,

@@ -5,6 +5,8 @@
 //! RUNE_GUI_TESTS=1 in a desktop session (a locked one works: nothing here needs a frame on
 //! screen).
 
+#![allow(unsafe_code)]
+
 #[cfg(not(target_os = "windows"))]
 fn main() {}
 
@@ -15,7 +17,7 @@ fn main() { win::main() }
 mod win {
     use rune::*;
     use std::sync::{Mutex, OnceLock, mpsc};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     use ::windows::Win32::Foundation::HWND;
     use ::windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx};
     use ::windows::Win32::UI::Accessibility::*;
@@ -53,7 +55,7 @@ mod win {
     }
 
     fn wait<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
-        let start = Instant::now();
+        let start = rune::time::now();
         loop {
             if let Some(v) = f() { return v; }
             assert!(start.elapsed() < Duration::from_secs(10), "timed out waiting for {what}");
@@ -70,7 +72,7 @@ mod win {
         let spec = AppSpec::new("Accessible", (360.0, 240.0), State::default, view);
         let (ready_tx, ready_rx) = mpsc::channel();
         let window = &WINDOW;
-        let app = App::new(spec).args(Vec::new()).keep_running().on_ready(move |w| { let _ = window.set(w.clone()); let _ = ready_tx.send(()); });
+        let app = App::new(spec).args(Vec::new()).keep_running().on_ready(move |w| { window.set(w.clone()).ok(); ready_tx.send(()).ok(); });
         let handle = app.handle();
         let result = std::sync::Arc::new(Mutex::new(None));
         let out = result.clone();
@@ -80,15 +82,15 @@ mod win {
                 // The handle reads on the window's thread.
                 let (tx, rx) = mpsc::channel();
                 handle.update(move |_, _| {
-                    let _ = tx.send(window.get().unwrap().with_raw_handle(|raw| match raw.as_raw() {
+                    tx.send(window.get().unwrap().with_raw_handle(|raw| match raw.as_raw() {
                         rune::raw_window_handle::RawWindowHandle::Win32(h) => h.hwnd.get(),
                         _ => panic!("not Win32"),
-                    }).expect("window handle"));
+                    }).expect("window handle")).ok();
                 });
                 let hwnd = rx.recv_timeout(Duration::from_secs(5)).expect("hwnd");
                 // SAFETY: COM on this worker thread, multithreaded.
                 let uia: IUIAutomation = unsafe {
-                    let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+                    CoInitializeEx(None, COINIT_MULTITHREADED).ok().ok();
                     CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).expect("CUIAutomation")
                 };
                 // The first query activates the tree; it fills in within a turn.
@@ -108,7 +110,7 @@ mod win {
                 }
                 let state = wait("the app to see the press and the value", || {
                     let (tx, rx) = mpsc::channel();
-                    handle.update(move |s, _| { let _ = tx.send((s.presses, s.name.text.clone())); });
+                    handle.update(move |s, _| { tx.send((s.presses, s.name.text.clone())).ok(); });
                     rx.recv_timeout(Duration::from_secs(5)).ok().filter(|(p, n)| *p == 1 && n == "Ada")
                 });
                 println!("accessibility_windows: presses {} name {:?}", state.0, state.1);

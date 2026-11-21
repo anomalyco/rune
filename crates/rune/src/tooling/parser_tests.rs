@@ -73,7 +73,7 @@ fn a_script_paste_can_carry_html_rtf_and_an_image() {
         rt.paste_content(content);
     }
     rt.frame(0.0);
-    let _ = std::fs::remove_file(&png);
+    std::fs::remove_file(&png).ok();
     let texts: Vec<_> = rt.state.iter().map(|c| (c.text(), c.html(), c.rtf(), c.image().map(crate::ClipboardImage::size))).collect();
     assert_eq!(texts, [
         ("plain", None, None, None), ("short", None, None, None),
@@ -94,7 +94,10 @@ fn a_script_key_with_a_code_reaches_handlers_with_its_physical_key() {
         match event.kind {
             Kind::Key(k, _) => rt.key(k),
             Kind::Physical(input) => rt.physical_input(input),
-            kind => assert!(canvas_input(&mut rt, &kind, (0.0, 0.0)), "unexpected {kind:?}"),
+            kind => {
+                let (core, mut app) = rt.split_mut();
+                assert!(canvas_input(core, &mut app, &kind, (0.0, 0.0)), "unexpected {kind:?}");
+            }
         }
         rt.frame(0.0);
     }
@@ -119,7 +122,10 @@ fn a_script_key_with_a_code_reaches_handlers_with_its_unmodified_character() {
         match event.kind {
             Kind::Key(k, _) => rt.key(k),
             Kind::Physical(input) => rt.physical_input(input),
-            kind => assert!(canvas_input(&mut rt, &kind, (0.0, 0.0)), "unexpected {kind:?}"),
+            kind => {
+                let (core, mut app) = rt.split_mut();
+                assert!(canvas_input(core, &mut app, &kind, (0.0, 0.0)), "unexpected {kind:?}");
+            }
         }
         rt.frame(0.0);
     }
@@ -159,7 +165,7 @@ fn a_script_key_can_be_a_held_keys_repeat() {
 fn window_panel_headless_focus_steps_preserve_false_and_event_order() {
     let script = parse_script(serde_json::json!([{"focus":true}, {"t":0.1,"focus":false}, {"t":0.2,"focus":false}]));
     let mut rt = Runtime::new(Vec::new(), |_: &Vec<bool>, _: &mut crate::Cx<Vec<bool>>| crate::el(), (100.0, 100.0), Env::default());
-    rt.on_focus = Some(|s, focused, _| s.push(focused));
+    rt.hooks.on_focus = Some(|s, focused, _| s.push(focused));
     assert_eq!(script.len(), 3);
     for event in script {
         let Kind::Focus(focused) = event.kind else { panic!("focus parsed as pointer action") };

@@ -3,123 +3,18 @@
 
 use super::*;
 
-/// Maps source UTF-8 byte ranges to rendered text UTF-8 byte ranges.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(super) struct SpanMap(pub(super) Vec<(Range<usize>, Range<usize>)>);
+mod builder;
+mod map;
+mod table;
 
-impl SpanMap {
-    fn push(&mut self, src: Range<usize>, out: Range<usize>) {
-        if src.start >= src.end || out.start >= out.end {
-            return;
-        }
-        if let Some((last_src, last_out)) = self.0.last_mut()
-            && last_src.end == src.start
-            && last_out.end == out.start
-            && last_src.len() == last_out.len()
-            && src.len() == out.len()
-        {
-            last_src.end = src.end;
-            last_out.end = out.end;
-            return;
-        }
-        self.0.push((src, out));
-    }
+use builder::{
+    Builder, Container, Fence, InlineKind, ListSlot, MAX_ELEMENT_DEPTH, MAX_FLATTENED_TAIL_ITEMS, QuoteSlot, close, open,
+};
+use map::{code_span_content_range, map_code_span};
+use table::pending_table;
 
-    pub(super) fn truncate_out(&mut self, len: usize) {
-        self.0.retain_mut(|(src, out)| {
-            if out.start >= len {
-                return false;
-            }
-            if out.end > len {
-                let cut = out.end - len;
-                if src.len() == out.len() {
-                    src.end = src.end.saturating_sub(cut);
-                }
-                out.end = len;
-            }
-            src.start < src.end && out.start < out.end
-        });
-    }
-
-    pub(super) fn shift_src(&mut self, offset: usize) {
-        if offset == 0 {
-            return;
-        }
-        for (src, _) in &mut self.0 {
-            src.start += offset;
-            src.end += offset;
-        }
-    }
-}
-
-/// Source-to-rendered byte mappings parallel to [`Block`], kept beside `Block` so `Block` keeps
-/// its shape.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(super) enum BlockMap {
-    Inline(SpanMap),
-    Code(SpanMap),
-    List(Vec<Vec<BlockMap>>),
-    Quote(Vec<BlockMap>),
-    Table { head: Vec<SpanMap>, rows: Vec<Vec<SpanMap>> },
-    #[default]
-    None,
-}
-
-impl BlockMap {
-    pub(super) fn shift_src(mut self, offset: usize) -> Self {
-        if offset == 0 {
-            return self;
-        }
-        match &mut self {
-            BlockMap::Inline(m) | BlockMap::Code(m) => m.shift_src(offset),
-            BlockMap::List(items) => {
-                for item in items {
-                    for b in item {
-                        *b = std::mem::take(b).shift_src(offset);
-                    }
-                }
-            }
-            BlockMap::Quote(inner) => {
-                for b in inner {
-                    *b = std::mem::take(b).shift_src(offset);
-                }
-            }
-            BlockMap::Table { head, rows } => {
-                for m in head {
-                    m.shift_src(offset);
-                }
-                for row in rows {
-                    for m in row {
-                        m.shift_src(offset);
-                    }
-                }
-            }
-            BlockMap::None => {}
-        }
-        self
-    }
-}
-
-pub(super) struct Builder {
-    /// Open containers: (kind, blocks so far, maps so far).
-    stack: Vec<(Container, Vec<Block>, Vec<BlockMap>)>,
-    inline: Option<(InlineKind, Inline, Vec<Open>, SpanMap)>,
-    code: Option<(String, Fence, SpanMap)>,
-    /// The source range of the last paragraph started at the root.
-    last_root_para: Option<Range<usize>>,
-    sources: Vec<Source>,
-    /// One entry per [`Tag::Item`] in document order (`Some(checked)` for GFM task items).
-    tasks: Vec<Option<(bool, usize)>>,
-    block_starts: Vec<usize>,
-    root_start: usize,
-    cuts: Vec<Cut>,
-    autolink: bool,
-    image_starts: Vec<usize>,
-    image_ranges: Vec<(usize, usize)>,
-    /// Each open image's source and title, beside `image_starts`.
-    image_dests: Vec<(String, String)>,
-    tail: Tail,
-}
+pub(super) use builder::{build_deep_tail, line_indent_cols};
+pub(super) use map::{BlockMap, SpanMap};
 
 /// What the source ends inside, from the last block-level start the walk met.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -172,268 +67,19 @@ pub(super) struct Source {
     pub(super) open: bool,
 }
 
-#[derive(Clone, PartialEq)]
-enum Fence {
-    /// A code block; its language as written, if it names one, and whether its closing fence
-    /// has arrived.
-    Plain(Option<Rc<str>>, bool),
-    Diff,
-    /// A mermaid fence; whether its closing fence has arrived.
-    Mermaid(bool),
-}
-
-/// An emphasis, strong, strike or link run that has started and not yet ended.
-pub(super) struct Open {
-    start: usize,
-    style: Style,
-    url: Option<String>,
-}
-
-enum Container {
-    Root,
-    Quote,
-    List(Option<u64>, Vec<Vec<Block>>, Vec<Vec<BlockMap>>),
-    Item(usize),
-    Table(Table, Vec<Inline>, Vec<SpanMap>, Vec<Vec<SpanMap>>, Vec<SpanMap>),
-}
-
-#[derive(Clone, Copy)]
-enum InlineKind {
-    Para,
-    Heading(u8),
-    Cell,
-}
-
-impl Builder {
-    fn push(&mut self, b: Block, map: BlockMap) {
-        if self.stack.len() == 1 {
-            self.block_starts.push(self.root_start);
-        }
-        let top = self.stack.last_mut().unwrap();
-        top.1.push(b);
-        top.2.push(map);
-    }
-
-    /// Pushes a code block's text: without its final newline, or at the end of input without
-    /// any trailing newlines.
-    fn push_code(&mut self, mut text: String, fence: Fence, mut map: SpanMap, eof: bool) {
-        let line_ended = text.ends_with('\n');
-        if eof {
-            text.truncate(text.trim_end_matches(['\n', '\r']).len());
-        } else if line_ended {
-            text.pop();
-            if text.ends_with('\r') {
-                text.pop();
-            }
-        }
-        map.truncate_out(text.len());
-        let block = code_block(text, &fence);
-        if let Block::Code(code) | Block::Mermaid(code) = &block {
-            let (lang, closed) = match fence {
-                Fence::Plain(lang, closed) => (lang, closed),
-                Fence::Mermaid(closed) => (Some("mermaid".into()), closed),
-                Fence::Diff => (None, true),
-            };
-            let coloured = if closed || line_ended { code.len() } else { code.rfind('\n').unwrap_or(0) };
-            self.sources.push(Source { lang, len: code.len(), coloured, open: !closed });
-        }
-        self.push(block, BlockMap::Code(map));
-    }
-
-    fn inline(&mut self) -> &mut (InlineKind, Inline, Vec<Open>, SpanMap) {
-        // Tight list items have text without a paragraph.
-        self.inline.get_or_insert_with(|| (InlineKind::Para, Inline::default(), Vec::new(), SpanMap::default()))
-    }
-
-    fn flush_inline(&mut self) {
-        if let Some((kind, mut inl, open, mut map)) = self.inline.take() {
-            for o in open {
-                end_run(&mut inl, o);
-            }
-            let trimmed = trimmed_len(&inl);
-            inl.text.truncate(trimmed);
-            map.truncate_out(trimmed);
-            inl.spans.retain_mut(|s| {
-                s.1 = s.1.min(trimmed);
-                s.0 < s.1
-            });
-            inl.links.retain_mut(|s| {
-                s.1 = s.1.min(trimmed);
-                s.0 < s.1
-            });
-            if self.autolink {
-                autolink_inline(&mut inl, &self.image_ranges);
-            }
-            self.image_ranges.clear();
-            self.image_starts.clear();
-            if let InlineKind::Cell = kind {
-                // Empty cells still hold their column.
-                if let Some((Container::Table(_, cells, _, _, cell_maps), _, _)) = self.stack.last_mut() {
-                    cells.push(inl);
-                    cell_maps.push(map);
-                }
-                return;
-            }
-            if inl.text.is_empty() {
-                return;
-            }
-            self.push(
-                match kind {
-                    InlineKind::Para | InlineKind::Cell => Block::Para(inl),
-                    InlineKind::Heading(l) => Block::Heading(l, inl),
-                },
-                BlockMap::Inline(map),
-            );
-        }
-    }
-
-    /// Closes the innermost container into its parent.
-    fn pop_container(&mut self) {
-        self.flush_inline();
-        let Some((c, blocks, maps)) = self.stack.pop() else { return };
-        match c {
-            Container::Item(_) => {
-                if let Some((Container::List(_, items, item_maps), _, _)) = self.stack.last_mut() {
-                    items.push(blocks);
-                    item_maps.push(maps);
-                }
-            }
-            Container::List(start, items, item_maps) => self.push(Block::List { start, items }, BlockMap::List(item_maps)),
-            Container::Quote => self.push(Block::Quote(blocks), BlockMap::Quote(maps)),
-            Container::Table(mut t, cells, head, mut rows, cell_maps) => {
-                if !cells.is_empty() {
-                    t.rows.push(cells);
-                    rows.push(cell_maps);
-                }
-                self.push(Block::Table(t), BlockMap::Table { head, rows });
-            }
-            Container::Root => {}
-        }
-    }
-
-    /// Lifts the image whose alt text is `start..end` of the paragraph being read out into a
-    /// [`Block::Image`] of its own, the text before it ending a paragraph and the text after it
-    /// starting one. An image in a heading, a table cell, a link or emphasis stays in the line.
-    fn lift_image(&mut self, start: usize, end: usize, src: String, title: String) -> bool {
-        let Some((InlineKind::Para, inl, open, map)) = self.inline.as_mut() else { return false };
-        // An image still arriving (no source yet) stays its alt text until it is whole.
-        if !open.is_empty() || end > inl.text.len() || src.is_empty() {
-            return false;
-        }
-        let alt = inl.text[start..end].to_owned();
-        let mut alt_map = SpanMap::default();
-        for (src, out) in &map.0 {
-            let overlap = start.max(out.start)..end.min(out.end);
-            if !overlap.is_empty() {
-                let source = if src.len() == out.len() {
-                    src.start + (overlap.start - out.start)..src.start + (overlap.end - out.start)
-                } else { src.clone() };
-                alt_map.push(source, overlap.start - start..overlap.end - start);
-            }
-        }
-        inl.text.truncate(start);
-        inl.spans.retain_mut(|s| {
-            s.1 = s.1.min(start);
-            s.0 < s.1
-        });
-        inl.links.retain_mut(|s| {
-            s.1 = s.1.min(start);
-            s.0 < s.1
-        });
-        map.truncate_out(start);
-        self.flush_inline();
-        self.push(Block::Image { src, alt, title }, BlockMap::Inline(alt_map));
-        self.inline = Some((InlineKind::Para, Inline::default(), Vec::new(), SpanMap::default()));
-        true
-    }
-
-    fn table(&mut self) -> Option<(&mut Table, &mut Vec<Inline>, &mut Vec<SpanMap>, &mut Vec<Vec<SpanMap>>, &mut Vec<SpanMap>)> {
-        match self.stack.last_mut() {
-            Some((Container::Table(t, cells, head, rows, cell_maps), _, _)) => Some((t, cells, head, rows, cell_maps)),
-            _ => None,
-        }
-    }
-}
-
 pub(super) const PAD: &str = "\u{202f}\u{202f}";
 /// Inline code's padding before it, ending in a left-to-right isolate (LRI), and after it,
 /// starting with its end (PDI): `markdown.css` sets `:not(pre) > code { direction: ltr;
 /// unicode-bidi: isolate }`, so code reads left to right and moves as one inside Arabic text.
 pub(super) const OPEN: &str = "\u{202f}\u{202f}\u{2066}";
 pub(super) const CLOSE: &str = "\u{2069}\u{202f}\u{202f}";
+/// Inside a link, inline code keeps its directional isolate without pill padding (`a code { padding: 0 }`).
+pub(super) const LINK_OPEN: &str = "\u{2066}";
+pub(super) const LINK_CLOSE: &str = "\u{2069}";
 
 /// `text` without inline code's padding and isolates.
 pub(super) fn unpadded(text: &str) -> String {
-    text.replace(OPEN, "").replace(CLOSE, "")
-}
-
-/// `inl`'s text without its trailing whitespace and, when inline code ends it, the rest of that
-/// code's padding: the line's end closes the isolate, so text that ends in code is a prefix of
-/// the same text with more after the code, as a stream needs.
-fn trimmed_len(inl: &Inline) -> usize {
-    let text = inl.text.trim_end();
-    match text.strip_suffix('\u{2069}') {
-        Some(rest) if inl.spans.iter().any(|s| s.2 == Style::CodePad && s.0 == rest.len()) => rest.trim_end().len(),
-        _ => text.len(),
-    }
-}
-
-/// Source byte range of the inner code text inside a backtick code span `src[range]`.
-fn code_span_content_range(src: &str, range: Range<usize>, rendered: &str) -> Range<usize> {
-    let Some(raw) = src.get(range.clone()) else { return range };
-    let open = raw.bytes().take_while(|&b| b == b'`').count();
-    let close = raw[open..].bytes().rev().take_while(|&b| b == b'`').count();
-    let mut start = range.start + open;
-    let mut end = range.end.saturating_sub(close);
-    if !rendered.chars().all(|c| c == ' ')
-        && src.as_bytes().get(start).is_some_and(|b| matches!(b, b' ' | b'\r' | b'\n'))
-        && src.as_bytes().get(end.saturating_sub(1)).is_some_and(|b| matches!(b, b' ' | b'\r' | b'\n'))
-    {
-        start += 1;
-        end -= 1;
-    }
-    if start < end { start..end } else { range }
-}
-
-/// Code spans normalize newlines and omit continuation-line container prefixes. Map the
-/// actual surviving characters, not a ratio of the source and displayed byte lengths.
-fn map_code_span(src: &str, range: Range<usize>, rendered: &str, offset: usize, map: &mut SpanMap) {
-    if &src[range.clone()] == rendered {
-        map.push(range, offset..offset + rendered.len());
-        return;
-    }
-    let mut out = 0;
-    let mut at = range.start;
-    for line in src[range].split_inclusive(['\r', '\n']) {
-        let body = line.trim_end_matches(['\r', '\n']);
-        let remaining = &rendered[out..];
-        let matched = body.char_indices().find_map(|(skip, _)| {
-            let mut chars = body[skip..].char_indices().peekable();
-            let mut consumed = 0;
-            let mut pairs = Vec::new();
-            while let Some((i, mut c)) = chars.next() {
-                let mut end = i + c.len_utf8();
-                if c == '\\' && chars.peek().is_some_and(|(_, c)| *c == '|') && remaining[consumed..].starts_with('|') {
-                    let (j, next) = chars.next().unwrap();
-                    c = next;
-                    end = j + c.len_utf8();
-                }
-                if !remaining[consumed..].starts_with(c) { return None; }
-                pairs.push((at + skip + i..at + skip + end, offset + out + consumed..offset + out + consumed + c.len_utf8()));
-                consumed += c.len_utf8();
-            }
-            Some((consumed, pairs))
-        });
-        if let Some((consumed, pairs)) = matched {
-            for (src, dest) in pairs { map.push(src, dest); }
-            out += consumed;
-        }
-        if line.ends_with(['\r', '\n']) && rendered[out..].starts_with(' ') {
-            map.push(at + body.len()..at + line.len(), offset + out..offset + out + 1);
-            out += 1;
-        }
-        at += line.len();
-    }
+    text.replace(OPEN, "").replace(CLOSE, "").replace(LINK_OPEN, "").replace(LINK_CLOSE, "")
 }
 
 /// Parses `src` into blocks. Unclosed constructs are closed at the end of input.
@@ -445,27 +91,46 @@ pub(super) fn parse_doc(src: &str, autolink: bool) -> ParsedDoc {
     parse_doc_tail(src, autolink).0
 }
 
+enum SkipMode {
+    SiblingLists { start: usize, open: usize },
+    ExtraQuotes { start: usize, open: usize },
+}
+
 /// [`parse_doc`], and what the source ends inside.
 pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
-    let mut b = Builder {
-        stack: vec![(Container::Root, Vec::new(), Vec::new())],
-        inline: None,
-        code: None,
-        last_root_para: None,
-        sources: Vec::new(),
-        tasks: Vec::new(),
-        block_starts: Vec::new(),
-        root_start: 0,
-        cuts: Vec::new(),
-        autolink,
-        image_starts: Vec::new(),
-        image_ranges: Vec::new(),
-        image_dests: Vec::new(),
-        tail: Tail::None,
-    };
+    let mut b = Builder::new(autolink);
     let opts = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS;
     let mut events = super::interrupt::list_interrupts(src, Parser::new_ext(src, opts).into_offset_iter());
+    let mut skip: Option<SkipMode> = None;
     while let Some((ev, range)) = events.next() {
+        if let Some(mode) = &mut skip {
+            match (mode, &ev) {
+                (SkipMode::SiblingLists { open, .. }, Event::Start(Tag::List(_))) => *open += 1,
+                (SkipMode::SiblingLists { start, open }, Event::End(TagEnd::List(_))) => {
+                    *open -= 1;
+                    if *open == 0 {
+                        let (cs, ce) = (*start, range.end);
+                        skip = None;
+                        b.past_bound_items = 0;
+                        b.tail = Tail::None;
+                        b.emit_deep_tail(src, cs..ce);
+                    }
+                }
+                (SkipMode::ExtraQuotes { open, .. }, Event::Start(Tag::BlockQuote(_))) => *open += 1,
+                (SkipMode::ExtraQuotes { start, open }, Event::End(TagEnd::BlockQuote(_))) => {
+                    *open -= 1;
+                    if *open == 0 {
+                        let (cs, ce) = (*start, range.end);
+                        skip = None;
+                        b.past_bound_items = 0;
+                        b.tail = Tail::None;
+                        b.emit_deep_tail(src, cs..ce);
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
         let starts_block = matches!(
             ev,
             Event::Start(
@@ -473,11 +138,31 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
             ) | Event::Rule
         );
         if starts_block && b.stack.len() == 1 && b.code.is_none() {
+            b.past_bound_items = 0;
             b.flush_inline();
             let at = src[..range.start].rfind('\n').map_or(0, |i| i + 1);
             b.root_start = at;
             if !events.made() {
                 b.cuts.push(Cut { at, blocks: b.stack[0].1.len(), sources: b.sources.len(), tasks: b.tasks.len() });
+            }
+        }
+        if matches!(
+            &ev,
+            Event::Start(Tag::Paragraph | Tag::Heading { .. } | Tag::CodeBlock(_) | Tag::Table(_))
+        ) && b.code.is_none()
+            && let Some((q_idx, stack_len, list_slots_len)) = b.first_merged_quote()
+        {
+            let in_fresh_item = matches!(b.stack.last(), Some((Container::Item(_), blocks, _)) if blocks.is_empty())
+                && b.inline.is_none();
+            if !in_fresh_item {
+                b.past_bound_items += 1;
+                if b.past_bound_items > MAX_FLATTENED_TAIL_ITEMS {
+                    let open = b.unwind_merged_quote(q_idx, stack_len, list_slots_len);
+                    let cs = src[..range.start].rfind('\n').map_or(0, |i| i + 1);
+                    skip = Some(SkipMode::ExtraQuotes { start: cs, open });
+                    b.tail = Tail::None;
+                    continue;
+                }
             }
         }
         b.tail = match &ev {
@@ -526,14 +211,47 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                 }
                 Tag::BlockQuote(_) => {
                     b.flush_inline();
-                    b.stack.push((Container::Quote, Vec::new(), Vec::new()));
+                    if b.depth() + 2 <= MAX_ELEMENT_DEPTH && b.layout_fits(2) {
+                        b.quote_slots.push(QuoteSlot::Nested);
+                        b.stack.push((Container::Quote, Vec::new(), Vec::new()));
+                    } else {
+                        b.quote_slots.push(QuoteSlot::Merged { stack_len: b.stack.len(), list_slots_len: b.list_slots.len() });
+                    }
                 }
                 Tag::List(start) => {
                     b.flush_inline();
-                    b.stack.push((Container::List(start, Vec::new(), Vec::new()), Vec::new(), Vec::new()));
+                    if (b.depth() + 2 <= MAX_ELEMENT_DEPTH && b.layout_fits(3))
+                        || !matches!(b.stack.last(), Some((Container::List(..) | Container::Item(_), _, _)))
+                    {
+                        b.list_slots.push(ListSlot::Nested);
+                        b.stack.push((Container::List(start, Vec::new(), Vec::new()), Vec::new(), Vec::new()));
+                    } else {
+                        b.list_slots.push(ListSlot::SiblingItems);
+                    }
                 }
                 Tag::Item => {
                     b.flush_inline();
+                    if matches!(b.stack.last(), Some((Container::Item(_), _, _))) {
+                        b.pop_container();
+                    }
+                    let merged_quote = b.first_merged_quote();
+                    if merged_quote.is_some() || b.list_slots.contains(&ListSlot::SiblingItems) {
+                        b.past_bound_items += 1;
+                        if b.past_bound_items > MAX_FLATTENED_TAIL_ITEMS {
+                            let cs = src[..range.start].rfind('\n').map_or(0, |i| i + 1);
+                            skip = Some(if let Some((q_idx, stack_len, list_slots_len)) = merged_quote {
+                                let open = b.unwind_merged_quote(q_idx, stack_len, list_slots_len);
+                                SkipMode::ExtraQuotes { start: cs, open }
+                            } else {
+                                let first_sib = b.list_slots.iter().position(|s| *s == ListSlot::SiblingItems).unwrap();
+                                let open = b.list_slots.len() - first_sib;
+                                b.list_slots.truncate(first_sib);
+                                SkipMode::SiblingLists { start: cs, open }
+                            });
+                            b.tail = Tail::None;
+                            continue;
+                        }
+                    }
                     let idx = b.tasks.len();
                     b.tasks.push(None);
                     b.stack.push((Container::Item(idx), Vec::new(), Vec::new()));
@@ -597,7 +315,37 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                         rows.push(std::mem::take(cell_maps));
                     }
                 }
-                TagEnd::BlockQuote(_) | TagEnd::Item | TagEnd::List(_) | TagEnd::Table => b.pop_container(),
+                TagEnd::BlockQuote(_) => {
+                    if matches!(b.quote_slots.pop(), Some(QuoteSlot::Nested)) {
+                        b.pop_container();
+                    } else {
+                        b.flush_inline();
+                        if b.first_merged_quote().is_none() && !b.list_slots.contains(&ListSlot::SiblingItems) {
+                            b.past_bound_items = 0;
+                        }
+                    }
+                }
+                TagEnd::Item => {
+                    b.flush_inline();
+                    if matches!(b.stack.last(), Some((Container::Item(_), _, _))) {
+                        b.pop_container();
+                    }
+                }
+                TagEnd::List(_) => match b.list_slots.pop().unwrap_or(ListSlot::Nested) {
+                    ListSlot::Nested => {
+                        if matches!(b.stack.last(), Some((Container::Item(_), _, _))) {
+                            b.pop_container();
+                        }
+                        b.pop_container();
+                    }
+                    ListSlot::SiblingItems => {
+                        b.flush_inline();
+                        if !b.list_slots.contains(&ListSlot::SiblingItems) && b.first_merged_quote().is_none() {
+                            b.past_bound_items = 0;
+                        }
+                    }
+                },
+                TagEnd::Table => b.pop_container(),
                 TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough | TagEnd::Link => close(&mut b),
                 TagEnd::Image => {
                     if let Some(start) = b.image_starts.pop() {
@@ -624,13 +372,14 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
             }
             Event::Code(t) => {
                 let code_src = code_span_content_range(src, range, &t);
+                let (open, close) = if b.in_link() { (LINK_OPEN, LINK_CLOSE) } else { (OPEN, CLOSE) };
                 let inl = b.inline();
                 let a = inl.1.text.len();
-                inl.1.text.push_str(OPEN);
+                inl.1.text.push_str(open);
                 let start = inl.1.text.len();
                 inl.1.text.push_str(&t);
                 let end = inl.1.text.len();
-                inl.1.text.push_str(CLOSE);
+                inl.1.text.push_str(close);
                 inl.1.spans.push((a, start, Style::CodePad));
                 inl.1.spans.push((start, end, Style::Code));
                 inl.1.spans.push((end, inl.1.text.len(), Style::CodePad));
@@ -653,11 +402,8 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                 inl.3.push(range, start..inl.1.text.len());
             }
             Event::TaskListMarker(checked) => {
-                if let Some(idx) = b.stack.iter().rev().find_map(|(c, _, _)| match c {
-                    Container::Item(idx) => Some(*idx),
-                    _ => None,
-                }) {
-                    b.tasks[idx] = Some((checked, range.start));
+                if let Some((Container::Item(idx), _, _)) = b.stack.last() {
+                    b.tasks[*idx] = Some((checked, range.start));
                 }
             }
             Event::Rule => {
@@ -666,6 +412,9 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
             }
             _ => {}
         }
+    }
+    if let Some(SkipMode::SiblingLists { start, .. } | SkipMode::ExtraQuotes { start, .. }) = skip.take() {
+        b.emit_deep_tail(src, start..src.len());
     }
     b.flush_inline();
     if let Some((text, fence, map)) = b.code.take() {
@@ -686,14 +435,6 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
     ((blocks, b.sources, b.tasks, b.cuts, b.block_starts, maps), b.tail)
 }
 
-fn code_block(text: String, fence: &Fence) -> Block {
-    match fence {
-        Fence::Plain(..) => Block::Code(text),
-        Fence::Diff => Block::Diff(text),
-        Fence::Mermaid(_) => Block::Mermaid(text),
-    }
-}
-
 /// Whether a fenced code block's source (from its opening fence) has its closing fence.
 fn fence_closed(block: &str) -> bool {
     fn strip(l: &str) -> &str {
@@ -704,107 +445,4 @@ fn fence_closed(block: &str) -> bool {
     let Some(ch) = first.chars().next() else { return false };
     let n = first.chars().take_while(|&c| c == ch).count();
     lines.next_back().map(strip).is_some_and(|l| l.len() >= n && l.chars().all(|c| c == ch))
-}
-
-/// The header (and partial delimiter row) of a table still streaming in, from the source of the
-/// document's last paragraph: `| a | b |` alone, or followed by a delimiter row in progress.
-fn pending_table(src: &str, base_offset: usize, autolink: bool) -> Option<(Table, BlockMap)> {
-    let mut lines = src.trim_end().lines();
-    let raw_head = lines.next()?;
-    let lead_ws = raw_head.len() - raw_head.trim_start().len();
-    let head = raw_head.trim();
-    let delim = lines.next().map(str::trim);
-    if lines.next().is_some() || !head.starts_with('|') {
-        return None;
-    }
-    let cells = split_row(head, base_offset + lead_ws);
-    if cells.len() < 2 || delim.is_some_and(|d| !d.starts_with('|') || !d.chars().all(|c| "|:- ".contains(c))) {
-        return None;
-    }
-    let mut align = vec![Align::Start; cells.len()];
-    if let Some(d) = delim {
-        for (a, (_, spec)) in align.iter_mut().zip(split_row(d, 0)) {
-            *a = match (spec.starts_with(':'), spec.len() > 1 && spec.ends_with(':')) {
-                (true, true) => Align::Center,
-                (false, true) => Align::End,
-                _ => Align::Start,
-            };
-        }
-    }
-    let mut head_inlines = Vec::with_capacity(cells.len());
-    let mut head_maps = Vec::with_capacity(cells.len());
-    for (cell_off, c) in &cells {
-        let (inl, map) = inline_of(c, *cell_off, autolink);
-        head_inlines.push(inl);
-        head_maps.push(map);
-    }
-    Some((
-        Table { align, head: head_inlines, rows: Vec::new(), open: true },
-        BlockMap::Table { head: head_maps, rows: Vec::new() },
-    ))
-}
-
-/// The cells of a `| a | b |` line (a trailing pipe is optional; `\|` doesn't split, and stays
-/// escaped for [`inline_of`] to unescape), with each trimmed cell's starting byte offset.
-fn split_row(line: &str, base_offset: usize) -> Vec<(usize, String)> {
-    let pipe_off = usize::from(line.starts_with('|'));
-    let inner = &line[pipe_off..];
-    let mut cells: Vec<(usize, String)> = vec![(base_offset + pipe_off, String::new())];
-    let mut chars = inner.char_indices().peekable();
-    while let Some((idx, c)) = chars.next() {
-        match c {
-            '\\' if chars.peek().is_some_and(|&(_, next)| next == '|') => {
-                cells.last_mut().unwrap().1.extend(['\\', chars.next().unwrap().1]);
-            }
-            '|' => cells.push((base_offset + pipe_off + idx + 1, String::new())),
-            c => cells.last_mut().unwrap().1.push(c),
-        }
-    }
-    if cells.last().is_some_and(|(_, c)| c.trim().is_empty()) && inner.trim_end().ends_with('|') {
-        cells.pop();
-    }
-    cells
-        .into_iter()
-        .map(|(off, c)| {
-            let lead = c.len() - c.trim_start().len();
-            (off + lead, c.trim().to_owned())
-        })
-        .collect()
-}
-
-fn inline_of(src: &str, offset: usize, autolink: bool) -> (Inline, SpanMap) {
-    let (blocks, _, _, _, _, maps) = parse_doc(src, autolink);
-    match (blocks.into_iter().next(), maps.into_iter().next()) {
-        (Some(Block::Para(i)), Some(BlockMap::Inline(mut m))) => {
-            m.shift_src(offset);
-            (i, m)
-        }
-        _ => {
-            let mut m = SpanMap::default();
-            m.push(offset..offset + src.len(), 0..src.len());
-            (Inline { text: src.to_owned(), ..Inline::default() }, m)
-        }
-    }
-}
-
-pub(super) fn open(b: &mut Builder, style: Style, url: Option<String>) {
-    let inl = b.inline();
-    let start = inl.1.text.len();
-    inl.2.push(Open { start, style, url });
-}
-
-fn close(b: &mut Builder) {
-    let (_, inl, open, _) = b.inline();
-    if let Some(o) = open.pop() {
-        end_run(inl, o);
-    }
-}
-
-/// Ends run `o` at the current end of the text.
-fn end_run(inl: &mut Inline, o: Open) {
-    let end = inl.text.len();
-    if let Some(url) = o.url {
-        inl.links.push((o.start, end, url));
-    }
-    inl.spans.push((o.start, end, o.style));
 }

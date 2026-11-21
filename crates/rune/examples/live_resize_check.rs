@@ -9,6 +9,9 @@
 //!
 //! Prints a line per size, PASS/FAIL lines, and exits nonzero on a failure. It needs a screen
 //! and moves no real pointer. `RUNE_LIVE_RESIZE_SLOW_MS=10` makes each frame cost that much.
+
+#![allow(unsafe_code)]
+
 #[cfg(not(target_os = "macos"))]
 fn main() { eprintln!("macOS only"); }
 
@@ -18,9 +21,9 @@ fn main() { mac::run(); }
 #[cfg(target_os = "macos")]
 mod mac {
     use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-    use objc2_video::rc::{Retained, autoreleasepool};
-    use objc2_video::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
-    use objc2_video::{msg_send, sel};
+    use objc2::rc::{Retained, autoreleasepool};
+    use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
+    use objc2::{msg_send, sel};
     use rune::*;
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
@@ -45,7 +48,7 @@ mod mac {
     struct Slow(Duration);
     impl Compositor<State> for Slow {
         fn render(&mut self, f: &mut Frame<'_, State>) {
-            let start = Instant::now();
+            let start = rune::time::now();
             while start.elapsed() < self.0 { std::hint::spin_loop(); }
             f.draw_ui();
         }
@@ -75,9 +78,9 @@ mod mac {
         unsafe {
             let size: CGSize = msg_send![this, drawableSize];
             let sync: Bool = msg_send![this, presentsWithTransaction];
-            let start = Instant::now();
+            let start = rune::time::now();
             let drawable: *mut AnyObject = msg_send![super(this, *LAYER_BASE.get().unwrap()), nextDrawable];
-            log(Ev::Acquire { at: Instant::now(), px: (size.width, size.height), sync: sync.as_bool(), wait: start.elapsed() });
+            log(Ev::Acquire { at: rune::time::now(), px: (size.width, size.height), sync: sync.as_bool(), wait: start.elapsed() });
             drawable
         }
     }
@@ -105,21 +108,21 @@ mod mac {
     /// observers run in the order they were added, so Rune has handled the change by then.
     fn watch_resizes(window: &AnyObject, view: &AnyObject) {
         let (w, v) = (window as *const AnyObject as usize, view as *const AnyObject as usize);
-        let block = block2_metal::RcBlock::new(move |_: *mut AnyObject| {
+        let block = block2::RcBlock::new(move |_: *mut AnyObject| {
             // SAFETY: the window and its view outlive the run; reads on the main thread.
             unsafe {
                 let (window, view) = (&*(w as *const AnyObject), &*(v as *const AnyObject));
                 let frame: CGRect = msg_send![view, frame];
                 let scale: f64 = msg_send![window, backingScaleFactor];
                 let live: Bool = msg_send![window, inLiveResize];
-                log(Ev::Resized { at: Instant::now(), px: (frame.size.width * scale, frame.size.height * scale), live: live.as_bool() });
+                log(Ev::Resized { at: rune::time::now(), px: (frame.size.width * scale, frame.size.height * scale), live: live.as_bool() });
                 store_frame(window);
             }
         });
         // SAFETY: main thread; the center copies the block and the token lives for the run.
         unsafe {
             let center: Retained<AnyObject> = msg_send![AnyClass::get(c"NSNotificationCenter").unwrap(), defaultCenter];
-            let name = objc2_foundation_video::NSString::from_str("NSViewFrameDidChangeNotification");
+            let name = objc2_foundation::NSString::from_str("NSViewFrameDidChangeNotification");
             let token: Option<Retained<AnyObject>> = msg_send![&*center, addObserverForName: &*name,
                 object: view, queue: std::ptr::null::<AnyObject>(), usingBlock: &*block];
             std::mem::forget(token);
@@ -169,17 +172,19 @@ mod mac {
 
     /// Posts a left mouse event at `at`, in the window's coordinates, to the app's queue.
     fn post(kind: usize, at: CGPoint, window_number: isize) {
-        autoreleasepool(|_| unsafe {
+        autoreleasepool(|_| {
             // SAFETY: NSEvent and NSApplication class methods; postEvent:atStart: may be called
             // from any thread.
-            let info: Retained<AnyObject> = msg_send![AnyClass::get(c"NSProcessInfo").unwrap(), processInfo];
-            let now: f64 = msg_send![&*info, systemUptime];
-            let event: Option<Retained<AnyObject>> = msg_send![AnyClass::get(c"NSEvent").unwrap(),
-                mouseEventWithType: kind, location: at, modifierFlags: 0usize, timestamp: now,
-                windowNumber: window_number, context: std::ptr::null_mut::<AnyObject>(), eventNumber: 0isize,
-                clickCount: 1isize, pressure: if kind == UP { 0.0f32 } else { 1.0f32 }];
-            let app: Retained<AnyObject> = msg_send![AnyClass::get(c"NSApplication").unwrap(), sharedApplication];
-            let _: () = msg_send![&*app, postEvent: &*event.unwrap(), atStart: false];
+            unsafe {
+                let info: Retained<AnyObject> = msg_send![AnyClass::get(c"NSProcessInfo").unwrap(), processInfo];
+                let now: f64 = msg_send![&*info, systemUptime];
+                let event: Option<Retained<AnyObject>> = msg_send![AnyClass::get(c"NSEvent").unwrap(),
+                    mouseEventWithType: kind, location: at, modifierFlags: 0usize, timestamp: now,
+                    windowNumber: window_number, context: std::ptr::null_mut::<AnyObject>(), eventNumber: 0isize,
+                    clickCount: 1isize, pressure: if kind == UP { 0.0f32 } else { 1.0f32 }];
+                let app: Retained<AnyObject> = msg_send![AnyClass::get(c"NSApplication").unwrap(), sharedApplication];
+                let _: () = msg_send![&*app, postEvent: &*event.unwrap(), atStart: false];
+            }
         });
     }
 
@@ -203,7 +208,7 @@ mod mac {
 
     fn on_main(handle: &AppHandle<State>, f: impl FnOnce(&mut State, &mut Tx) + Send + 'static) {
         let (tx, rx) = std::sync::mpsc::channel();
-        handle.update(move |s, t| { f(s, t); let _ = tx.send(()); });
+        handle.update(move |s, t| { f(s, t); tx.send(()).ok(); });
         rx.recv_timeout(Duration::from_secs(5)).expect("the app answers");
     }
 
@@ -270,7 +275,7 @@ mod mac {
     }
 
     pub fn run() {
-        let slow = std::env::var("RUNE_LIVE_RESIZE_SLOW_MS").ok().and_then(|ms| ms.parse().ok()).map(Duration::from_millis);
+        let slow = rune::env::var("RUNE_LIVE_RESIZE_SLOW_MS").and_then(|ms| ms.parse().ok()).map(Duration::from_millis);
         let spec = AppSpec { min_size: Some((200.0, 200.0)), ..AppSpec::new("Live resize check", (480.0, 400.0), State::default, view) };
         let mut app = App::new(spec).args(vec![]);
         if let Some(slow) = slow { app = app.compositor(Slow(slow)); }
@@ -298,7 +303,7 @@ mod mac {
                     store_frame(&window);
                     hook_layer(&layer);
                     watch_resizes(&window, &view);
-                    let _ = tx.send(number);
+                    tx.send(number).ok();
                     // Held for the run: the observer reads the window and its view.
                     std::mem::forget((window, view, layer));
                 }
@@ -320,6 +325,7 @@ mod mac {
             log(Ev::Mark("after"));
             on_main(&handle, |s, _| {
                 let (_, _, layer) = window().expect("Rune's window and its Metal layer");
+                // SAFETY: `layer` is a live `CAMetalLayer` queried on the AppKit main thread.
                 let sync: Bool = unsafe { msg_send![&*layer, presentsWithTransaction] };
                 check("ending the drag clears presentsWithTransaction while idle", !sync.as_bool(), format!("presentsWithTransaction: {}", sync.as_bool()));
                 s.n += 1;

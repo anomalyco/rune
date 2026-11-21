@@ -27,7 +27,7 @@ static WAITING: AtomicBool = AtomicBool::new(false);
 /// once, before the app runs; later calls do nothing. Headless renders and `Gpu::headless`
 /// don't report.
 pub fn on_gpu(f: impl Fn(GpuEvent) + Send + Sync + 'static) {
-    let _ = HOOK.set(Box::new(f));
+    HOOK.set(Box::new(f)).ok();
 }
 
 pub(crate) fn starting() {

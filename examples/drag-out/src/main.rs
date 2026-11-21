@@ -3,6 +3,8 @@
 //! app bundle. A tile dims while it's dragged; each drag's end prints
 //! `drag-end <tile> <outcome>`.
 
+#![forbid(unsafe_code)]
+
 use std::path::PathBuf;
 
 use rune::tok::{self, radius, space, type_};
@@ -51,7 +53,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
 
 fn initial() -> State {
     let file = std::env::temp_dir().join("Dragged out of Rune.txt");
-    let _ = std::fs::write(&file, "This file was dragged out of a Rune window.\n");
+    std::fs::write(&file, "This file was dragged out of a Rune window.\n").ok();
     let app = std::env::var_os("DRAG_OUT_APP").map_or_else(|| PathBuf::from("/System/Applications/Calculator.app"), PathBuf::from);
     State { file, app, last: None, dragging: None }
 }

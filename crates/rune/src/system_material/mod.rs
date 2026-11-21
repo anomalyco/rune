@@ -152,6 +152,6 @@ impl Mode {
 
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn from_env() -> Mode {
-        Mode::parse(std::env::var("RUNE_SYSTEM_MATERIAL").ok().as_deref())
+        Mode::parse(rune_core::env::var("RUNE_SYSTEM_MATERIAL").as_deref())
     }
 }

@@ -815,12 +815,15 @@ fn live_scale_zoom_sweep_buckets_during_motion_and_settles_crisp() {
     // Stop at an off-bucket scale (1.13) and let it settle: must re-rasterize crisp at 1.13 and stop animating.
     zoom.set(1.13);
     rt.frame(1.0 / 120.0);
-    assert!(rt.instances.iter().filter(|q| q.params[1] == KIND_GLYPH).any(|q| q.uv[2] > 0.0), "filtered while moving");
+    assert!(
+        rt.instances.iter().filter(|q| q.params[1] == KIND_GLYPH).any(|q| q.uv[2] > 0.0 || q.radii[3] > 0.0),
+        "filtered atlas masks or live outlines while moving"
+    );
     for _ in 0..20 {
         rt.frame(1.0 / 120.0);
     }
     assert!(
-        rt.instances.iter().filter(|q| q.params[1] == KIND_GLYPH).all(|q| q.uv[2] == 0.0),
+        rt.instances.iter().filter(|q| q.params[1] == KIND_GLYPH).all(|q| q.uv[2] == 0.0 && q.radii[3] == 0.0),
         "crisp 1:1 glyphs once live_scale settles at 1.13"
     );
     assert!(!rt.frame(1.0 / 120.0), "nothing keeps animating after live_scale settles");
@@ -883,7 +886,7 @@ fn pill_styles_follow_captured_state_through_a_cached_subtree() {
     assert_eq!(step(&mut rt).1, 0, "steady frame hits the cached layer");
     rt.invalidate();
     assert_eq!(step(&mut rt).1, 0, "rebuilding with unchanged pill styles keeps the cached layer");
-    let icons = |rt: &Runtime<S>| rt.nodes.iter().find_map(|n| n.text.as_ref().filter(|t| !t.cold.pills.is_empty())).unwrap().cold.pills.iter().map(|p| p.icon.unwrap().name).collect::<Vec<_>>();
+    let icons = |rt: &Runtime<S>| rt.tree.nodes.iter().find_map(|n| n.text.as_ref().filter(|t| !t.cold.pills.is_empty())).unwrap().cold.pills.iter().map(|p| p.icon.unwrap().name).collect::<Vec<_>>();
     assert_eq!(icons(&rt), ["a", "b"]);
     calls.set(0);
     rt.state.1 = true;

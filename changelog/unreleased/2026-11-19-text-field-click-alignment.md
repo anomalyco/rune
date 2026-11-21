@@ -1,0 +1,1 @@
+- A click, drag or right-click in a centred, end-aligned or right-to-left text field lands on the character under the pointer. It measured from the field's left edge, so the caret went toward the wrong end, and a multi-line field also shifted the hit by a horizontal scroll it doesn't have.

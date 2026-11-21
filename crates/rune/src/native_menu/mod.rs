@@ -122,23 +122,101 @@ impl Presence {
     fn headless(&self) -> bool { matches!(self, Self::Running { headless: true }) }
 }
 
-struct State<S> {
-    items: Vec<MenuItem<S>>,
+struct CoreState {
+    descriptions: Vec<Description>,
+    /// Incremented whenever `descriptions` is cleared without holding the typed actions lock, so
+    /// the typed table discards stale actions before its next read or write.
+    clear_gen: u64,
     /// Each new set of items is a new attempt: a click on an item from an earlier set, or a
-    /// guard that drained one, is stale. It is the version of `items`, so it outlives a run.
+    /// guard that drained one, is stale. It is the version of `descriptions`, so it outlives a run.
     revision: Seq,
     presence: Presence,
     errors: Vec<MenuError>,
 }
-pub(crate) struct Hub<S>(Mutex<State<S>>);
-impl<S> Default for Hub<S> {
-    fn default() -> Self { Self(Mutex::new(State { items: Vec::new(), revision: Seq::default(), presence: Presence::Absent, errors: Vec::new() })) }
+
+impl CoreState {
+    fn clear(&mut self) {
+        self.descriptions.clear();
+        self.clear_gen += 1;
+    }
+
+    fn check_set(&self, descriptions: &[Description]) -> Result<(), MenuError> {
+        if !cfg!(target_os = "macos") && !self.presence.headless() { return Err(MenuError::Unsupported); }
+        if !self.presence.running() { return Err(MenuError::NotRunning); }
+        validate(descriptions)
+    }
 }
 
-fn validate<S>(items: &[MenuItem<S>]) -> Result<(), MenuError> {
+struct HubCore {
+    state: Mutex<CoreState>,
+}
+
+impl Default for HubCore {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(CoreState {
+                descriptions: Vec::new(),
+                clear_gen: 0,
+                revision: Seq::default(),
+                presence: Presence::Absent,
+                errors: Vec::new(),
+            }),
+        }
+    }
+}
+
+impl HubCore {
+    fn take_errors(&self) -> Vec<MenuError> {
+        std::mem::take(&mut self.state.lock().unwrap().errors)
+    }
+}
+
+pub(crate) struct Hub<S> {
+    core: Arc<HubCore>,
+    actions: Mutex<(u64, Vec<fn(&mut S, &mut Tx)>)>,
+}
+
+impl<S> Default for Hub<S> {
+    fn default() -> Self {
+        Self { core: Arc::default(), actions: Mutex::new((0, Vec::new())) }
+    }
+}
+
+impl<S> Hub<S> {
+    fn push(&self, item: MenuItem<S>) {
+        let mut state = self.core.state.lock().unwrap();
+        let mut actions = self.actions.lock().unwrap();
+        if actions.0 != state.clear_gen {
+            actions.1.clear();
+            actions.0 = state.clear_gen;
+        }
+        state.descriptions.push(item.description);
+        actions.1.push(item.action);
+        state.revision.next();
+    }
+
+    fn set(&self, descriptions: Vec<Description>, new_actions: Vec<fn(&mut S, &mut Tx)>) -> Result<(), MenuError> {
+        let mut state = self.core.state.lock().unwrap();
+        state.check_set(&descriptions)?;
+        let mut actions = self.actions.lock().unwrap();
+        state.descriptions = descriptions;
+        *actions = (state.clear_gen, new_actions);
+        state.revision.next();
+        Ok(())
+    }
+
+    fn resolve_action(&self, revision: Attempt, id: &str) -> Option<fn(&mut S, &mut Tx)> {
+        let state = self.core.state.lock().unwrap();
+        if !state.presence.running() || state.revision.current() != revision { return None; }
+        let index = lookup(&state, id).ok()?;
+        let actions = self.actions.lock().unwrap();
+        (actions.0 == state.clear_gen).then(|| actions.1.get(index).copied()).flatten()
+    }
+}
+
+fn validate(descriptions: &[Description]) -> Result<(), MenuError> {
     let mut ids = std::collections::HashSet::new();
-    for item in items {
-        let d = &item.description;
+    for d in descriptions {
         if matches!(&d.location, Location::Named(title) if title.trim().is_empty()) { return Err(MenuError::Invalid("empty menu title".into())); }
         if d.separator { continue; }
         if d.id.trim().is_empty() || d.title.trim().is_empty() { return Err(MenuError::Invalid("empty id or title".into())); }
@@ -151,9 +229,7 @@ impl<S: 'static> App<S> {
     /// Add a custom native item at startup. Deferred failures (including Unsupported on
     /// Windows/Linux) are available through AppHandle::take_menu_errors().
     pub fn menu_item(self, item: MenuItem<S>) -> Self {
-        let mut state = self.shared.menus.0.lock().unwrap();
-        state.items.push(item); state.revision.next();
-        drop(state);
+        self.shared.menus.push(item);
         self
     }
 }
@@ -165,32 +241,28 @@ impl<S: 'static> AppHandle<S> {
     /// the menus and standard items Rune made also take the app's current labels
     /// (`rune::set_labels`), so an app calls this again after its language changes.
     pub fn set_menu(&self, items: impl IntoIterator<Item = MenuItem<S>>) -> Result<(), MenuError> {
-        let items: Vec<_> = items.into_iter().collect();
-        let mut state = self.shared.menus.0.lock().unwrap();
-        if !cfg!(target_os = "macos") && !state.presence.headless() { return Err(MenuError::Unsupported); }
-        if !state.presence.running() { return Err(MenuError::NotRunning); }
-        validate(&items)?;
-        state.items = items; state.revision.next();
-        drop(state);
-        self.shared.wake();
+        let (descriptions, actions): (Vec<_>, Vec<_>) = items.into_iter().map(|i| (i.description, i.action)).unzip();
+        self.shared.menus.set(descriptions, actions)?;
+        self.shared.core.wake();
         Ok(())
     }
+    #[inline]
     pub fn take_menu_errors(&self) -> Vec<MenuError> {
-        std::mem::take(&mut self.shared.menus.0.lock().unwrap().errors)
+        self.shared.menus.core.take_errors()
     }
 }
 
-fn lookup<S>(state: &State<S>, selector: &str) -> Result<usize, MenuError> {
+fn lookup(state: &CoreState, selector: &str) -> Result<usize, MenuError> {
     if !state.presence.running() { return Err(MenuError::NotRunning); }
-    let items = state.items.iter().enumerate().filter(|(_, i)| !i.description.separator);
-    let index = if let Some((index, _)) = items.clone().find(|(_, i)| i.description.id == selector) { index }
+    let items = state.descriptions.iter().enumerate().filter(|(_, d)| !d.separator);
+    let index = if let Some((index, _)) = items.clone().find(|(_, d)| d.id == selector) { index }
     else {
-        let mut matches = items.filter(|(_, i)| i.description.title == selector);
+        let mut matches = items.filter(|(_, d)| d.title == selector);
         let index = matches.next().ok_or_else(|| MenuError::UnknownItem(selector.into()))?.0;
         if matches.next().is_some() { return Err(MenuError::AmbiguousTitle(selector.into())); }
         index
     };
-    if !state.items[index].description.enabled { return Err(MenuError::Disabled(selector.into())); }
+    if !state.descriptions[index].enabled { return Err(MenuError::Disabled(selector.into())); }
     Ok(index)
 }
 
@@ -209,30 +281,36 @@ pub(crate) fn take_unhandled(key: Option<&crate::KeyEvent>) -> Option<crate::run
     { let _ = key; None }
 }
 
-pub(crate) fn fire<S: 'static>(shared: &Arc<Shared<S>>, selector: &str) -> Result<(), MenuError> {
-    enqueue(shared, selector, None)
-}
-fn enqueue<S: 'static>(shared: &Arc<Shared<S>>, selector: &str, expected: Option<Attempt>) -> Result<(), MenuError> {
-    let state = shared.menus.0.lock().unwrap();
+type Dispatch = Arc<dyn Fn(Attempt, String) + Send + Sync>;
+
+fn enqueue_core(core: &HubCore, dispatch: &dyn Fn(Attempt, String), selector: &str, expected: Option<Attempt>) -> Result<(), MenuError> {
+    let state = core.state.lock().unwrap();
     let revision = state.revision.current();
     if expected.is_some_and(|r| r != revision) { return Ok(()); }
     let index = lookup(&state, selector)?;
-    let id = state.items[index].description.id.clone();
+    let id = state.descriptions[index].id.clone();
     drop(state);
-    let weak = Arc::downgrade(shared);
-    AppHandle { shared: shared.clone() }.update(move |s, tx| {
-        let Some(shared) = weak.upgrade() else { return };
-        let state = shared.menus.0.lock().unwrap();
-        if !state.presence.running() || state.revision.current() != revision { return; }
-        let action = lookup(&state, &id).ok().map(|i| state.items[i].action);
-        drop(state);
-        if let Some(action) = action { action(s, tx); }
-    });
+    dispatch(revision, id);
     Ok(())
 }
 
+fn dispatch_typed<S: 'static>(shared: &Arc<Shared<S>>, revision: Attempt, id: String) {
+    let weak = Arc::downgrade(shared);
+    AppHandle { shared: shared.clone() }.update(move |s, tx| {
+        let Some(shared) = weak.upgrade() else { return };
+        if let Some(action) = shared.menus.resolve_action(revision, &id) {
+            action(s, tx);
+        }
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn fire<S: 'static>(shared: &Arc<Shared<S>>, selector: &str) -> Result<(), MenuError> {
+    enqueue_core(&shared.menus.core, &|revision, id| dispatch_typed(shared, revision, id), selector, None)
+}
+
 /// Who holds the macOS menu bar's custom items: nobody, or the guard of the App whose window
-/// last took focus (`Guard::claim`), with the items it put there.
+/// last took focus (`MenuGuard::claim`), with the items it put there.
 #[cfg(target_os = "macos")]
 enum Bar {
     Free,
@@ -245,8 +323,9 @@ thread_local! {
     static NEXT_GUARD: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
 }
 
-pub(crate) struct Guard<S: 'static> {
-    shared: Weak<Shared<S>>,
+pub(crate) struct MenuGuard {
+    core: Weak<HubCore>,
+    dispatch: Dispatch,
     /// Whether the bar holds this guard's items.
     placed: Placed,
     /// This guard's name in `BAR`.
@@ -262,27 +341,50 @@ enum Placed {
     /// The bar holds the items of this revision.
     Synced(Attempt),
 }
-impl<S: 'static> Guard<S> {
-    pub(crate) fn attach(shared: &Arc<Shared<S>>, headless: bool) -> Self {
-        let mut state = shared.menus.0.lock().unwrap();
+
+impl MenuGuard {
+    pub(crate) fn attach<S: 'static>(shared: &Arc<Shared<S>>, headless: bool) -> Self {
+        let weak = Arc::downgrade(shared);
+        let dispatch: Dispatch = Arc::new(move |revision, id| {
+            if let Some(shared) = weak.upgrade() {
+                dispatch_typed(&shared, revision, id);
+            }
+        });
+        Self::attach_core(&shared.menus.core, dispatch, headless)
+    }
+
+    fn attach_core(core: &Arc<HubCore>, dispatch: Dispatch, headless: bool) -> Self {
+        let mut state = core.state.lock().unwrap();
         state.presence = Presence::Running { headless };
-        if let Err(error) = validate(&state.items) {
-            state.items.clear(); state.errors.push(error);
+        if let Err(error) = validate(&state.descriptions) {
+            state.clear();
+            state.errors.push(error);
         }
         drop(state);
-        let mut guard = Self { shared: Arc::downgrade(shared), placed: Placed::Fresh,
-            #[cfg(target_os = "macos")] id: NEXT_GUARD.with(|n| n.replace(n.get() + 1)) };
+        let mut guard = Self {
+            core: Arc::downgrade(core),
+            dispatch,
+            placed: Placed::Fresh,
+            #[cfg(target_os = "macos")]
+            id: NEXT_GUARD.with(|n| n.replace(n.get() + 1)),
+        };
         guard.drain();
         guard
     }
+
+    pub(crate) fn fire(&self, selector: &str) -> Result<(), MenuError> {
+        let Some(core) = self.core.upgrade() else { return Err(MenuError::NotRunning) };
+        enqueue_core(&core, &*self.dispatch, selector, None)
+    }
+
     /// This App's window took focus: its items take the menu bar, so they act in it. An App
     /// without items of its own leaves the bar to the one that has it.
     pub(crate) fn claim(&mut self) {
         #[cfg(target_os = "macos")]
         {
-            let Some(shared) = self.shared.upgrade() else { return };
-            let state = shared.menus.0.lock().unwrap();
-            if state.presence.headless() || state.items.is_empty() { return; }
+            let Some(core) = self.core.upgrade() else { return };
+            let state = core.state.lock().unwrap();
+            if state.presence.headless() || state.descriptions.is_empty() { return; }
             drop(state);
             let taken = BAR.with(|bar| match &*bar.borrow() {
                 Bar::Owned { guard, .. } => *guard != self.id,
@@ -296,29 +398,33 @@ impl<S: 'static> Guard<S> {
             }
         }
     }
+
     pub(crate) fn drain(&mut self) {
-        let Some(shared) = self.shared.upgrade() else { return };
-        let state = shared.menus.0.lock().unwrap();
+        let Some(core) = self.core.upgrade() else { return };
+        let state = core.state.lock().unwrap();
         if matches!(self.placed, Placed::Synced(at) if at == state.revision.current()) { return; }
-        let (items, revision, headless) = (state.items.clone(), state.revision.current(), state.presence.headless());
+        let (descriptions, revision, headless) = (state.descriptions.clone(), state.revision.current(), state.presence.headless());
         drop(state);
-        let result = validate(&items).and_then(|()| {
+        let result = validate(&descriptions).and_then(|()| {
             if headless { return Ok(()); }
             #[cfg(target_os = "macos")]
             {
-                let weak = Arc::downgrade(&shared);
+                let weak = self.core.clone();
+                let dispatch = self.dispatch.clone();
                 let sink = Arc::new(move |id: &str| {
-                    if let Some(shared) = weak.upgrade()
-                        && let Err(error) = enqueue(&shared, id, Some(revision)) { eprintln!("rune: {error}"); }
+                    if let Some(core) = weak.upgrade()
+                        && let Err(error) = enqueue_core(&core, &*dispatch, id, Some(revision))
+                    {
+                        eprintln!("rune: {error}");
+                    }
                 });
-                let descriptions: Vec<_> = items.iter().map(|i| i.description.clone()).collect();
                 BAR.with(|bar| {
                     let mut bar = bar.borrow_mut();
                     let (next, result) = match std::mem::replace(&mut *bar, Bar::Free) {
                         // Another window's App has the bar until this one's window takes focus.
                         Bar::Owned { guard, native } if guard != self.id => (Bar::Owned { guard, native }, Ok(())),
                         // Dropping the `Native` takes its items out.
-                        Bar::Owned { .. } | Bar::Free if items.is_empty() => (Bar::Free, Ok(())),
+                        Bar::Owned { .. } | Bar::Free if descriptions.is_empty() => (Bar::Free, Ok(())),
                         Bar::Owned { mut native, .. } => {
                             let result = native.set(&descriptions, sink);
                             (Bar::Owned { guard: self.id, native }, result)
@@ -336,32 +442,34 @@ impl<S: 'static> Guard<S> {
                 })
             }
             #[cfg(not(target_os = "macos"))]
-            { if items.is_empty() { Ok(()) } else { Err(MenuError::Unsupported) } }
+            { if descriptions.is_empty() { Ok(()) } else { Err(MenuError::Unsupported) } }
         });
         // The app's labels may have changed with its language since the menus were made.
         #[cfg(target_os = "macos")]
-        if !headless && let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
+        if !headless && let Some(mtm) = objc2::MainThreadMarker::new() {
             default_macos::relabel(&objc2_app_kit::NSApplication::sharedApplication(mtm));
         }
         self.placed = Placed::Synced(revision);
         if let Err(error) = result {
             eprintln!("rune: {error}");
-            shared.menus.0.lock().unwrap().errors.push(error);
+            core.state.lock().unwrap().errors.push(error);
         }
     }
 }
-impl<S: 'static> Drop for Guard<S> {
+
+impl Drop for MenuGuard {
     fn drop(&mut self) {
-        if let Some(shared) = self.shared.upgrade() {
-            let mut state = shared.menus.0.lock().unwrap();
-            state.presence = Presence::Absent; state.items.clear();
+        if let Some(core) = self.core.upgrade() {
+            let mut state = core.state.lock().unwrap();
+            state.presence = Presence::Absent;
+            state.clear();
         }
         // The bar waits for the next window to take focus (`claim`).
         #[cfg(target_os = "macos")]
-        let _ = BAR.try_with(|bar| {
+        BAR.try_with(|bar| {
             let mut bar = bar.borrow_mut();
             if matches!(&*bar, Bar::Owned { guard, .. } if *guard == self.id) { *bar = Bar::Free; }
-        });
+        }).ok();
     }
 }
 
@@ -378,7 +486,7 @@ mod tests {
     #[test]
     fn title_and_id_dispatch_on_the_state_thread_with_reentrant_menu_updates() {
         let app = app().menu_item(item("quick")).menu_item(MenuItem::new("Dock", |s: &mut Vec<u32>, tx| { s.push(2); tx.quit(); }).dock());
-        let _guard = Guard::attach(&app.shared, true);
+        let _guard = MenuGuard::attach(&app.shared, true);
         let handle = app.handle();
         let shared = app.shared.clone();
         std::thread::spawn(move || fire(&shared, "Open Quick Panel").unwrap()).join().unwrap();
@@ -392,20 +500,20 @@ mod tests {
         let h = handle.clone();
         handle.update(move |_, _| h.set_menu([item("replacement").checked(true)]).unwrap());
         drain(&app, &mut state);
-        assert_eq!(app.shared.menus.0.lock().unwrap().items[0].description.id, "replacement");
+        assert_eq!(app.shared.menus.core.state.lock().unwrap().descriptions[0].id, "replacement");
     }
 
     #[test]
     fn replacement_disable_and_shutdown_cancel_stale_actions() {
         let app = app().menu_item(item("quick"));
-        let guard = Guard::attach(&app.shared, true);
+        let guard = MenuGuard::attach(&app.shared, true);
         let handle = app.handle();
         fire(&app.shared, "quick").unwrap();
         handle.set_menu([item("quick").enabled(false).checked(true)]).unwrap();
         let mut state = Vec::new(); drain(&app, &mut state);
         assert!(state.is_empty());
         assert_eq!(fire(&app.shared, "quick"), Err(MenuError::Disabled("quick".into())));
-        assert!(app.shared.menus.0.lock().unwrap().items[0].description.checked);
+        assert!(app.shared.menus.core.state.lock().unwrap().descriptions[0].checked);
         handle.set_menu([item("quick")]).unwrap();
         fire(&app.shared, "quick").unwrap();
         drop(guard); drain(&app, &mut state);
@@ -416,14 +524,14 @@ mod tests {
     #[test]
     fn validation_is_atomic_and_ambiguous_titles_require_ids() {
         let app = app().menu_item(item("first")).menu_item(item("second").menu("Tools"));
-        let _guard = Guard::attach(&app.shared, true);
+        let _guard = MenuGuard::attach(&app.shared, true);
         assert_eq!(fire(&app.shared, "Open Quick Panel"), Err(MenuError::AmbiguousTitle("Open Quick Panel".into())));
         assert!(fire(&app.shared, "first").is_ok());
         assert!(matches!(app.handle().set_menu([item("duplicate"), item("duplicate")]), Err(MenuError::Invalid(_))));
-        assert_eq!(app.shared.menus.0.lock().unwrap().items.len(), 2);
+        assert_eq!(app.shared.menus.core.state.lock().unwrap().descriptions.len(), 2);
         assert!(matches!(fire(&app.shared, "missing"), Err(MenuError::UnknownItem(_))));
         let invalid = self::app().menu_item(item("same")).menu_item(item("same"));
-        let _guard = Guard::attach(&invalid.shared, true);
+        let _guard = MenuGuard::attach(&invalid.shared, true);
         assert!(matches!(invalid.handle().take_menu_errors().as_slice(), [MenuError::Invalid(_)]));
         assert!(matches!(fire(&invalid.shared, "same"), Err(MenuError::UnknownItem(_))));
     }
@@ -433,14 +541,14 @@ mod tests {
         let file = |title: &str| MenuItem::new(title, |s: &mut Vec<u32>, _| s.push(3)).menu("File");
         let app = app().menu_item(file("New")).menu_item(MenuItem::separator().menu("File"))
             .menu_item(file("Close")).menu_item(MenuItem::separator().menu("File")).menu_item(MenuItem::separator().dock());
-        let _guard = Guard::attach(&app.shared, true);
+        let _guard = MenuGuard::attach(&app.shared, true);
         assert!(app.handle().take_menu_errors().is_empty());
         assert_eq!(fire(&app.shared, ""), Err(MenuError::UnknownItem(String::new())));
         fire(&app.shared, "Close").unwrap();
         let mut state = Vec::new(); drain(&app, &mut state);
         assert_eq!(state, [3]);
         app.handle().set_menu([file("New"), MenuItem::separator().menu("File"), MenuItem::separator().menu("File")]).unwrap();
-        assert!(app.shared.menus.0.lock().unwrap().items[1].description.separator);
+        assert!(app.shared.menus.core.state.lock().unwrap().descriptions[1].separator);
         assert!(matches!(app.handle().set_menu([MenuItem::separator().menu(" ")]), Err(MenuError::Invalid(_))));
     }
 
@@ -458,9 +566,9 @@ mod tests {
     #[test]
     fn unsupported_native_platform_is_a_noop_but_headless_works() {
         let app = app().menu_item(item("quick"));
-        let _guard = Guard::attach(&app.shared, false);
+        let _guard = MenuGuard::attach(&app.shared, false);
         assert_eq!(app.handle().take_menu_errors(), [MenuError::Unsupported]);
         assert_eq!(app.handle().set_menu([item("other")]), Err(MenuError::Unsupported));
-        assert_eq!(app.shared.menus.0.lock().unwrap().items[0].description.id, "quick");
+        assert_eq!(app.shared.menus.core.state.lock().unwrap().descriptions[0].id, "quick");
     }
 }

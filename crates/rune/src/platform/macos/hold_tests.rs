@@ -10,7 +10,7 @@ fn effects(hold: &mut Hold, event: Event) -> Vec<Effect> { step(hold, event).int
 #[test]
 fn a_lost_release_while_dragging_gives_the_press_up_once_where_the_button_rose() {
     let mut hold = Hold::default();
-    let now = Instant::now();
+    let now = crate::time::now();
     step(&mut hold, DOWN);
     step(&mut hold, Event::Dispatched { down: true });
     assert!(step(&mut hold, sample(true, now, (40.0, 40.0))).is_empty(), "the drag is under way");
@@ -46,7 +46,7 @@ fn a_quick_press_queued_before_the_release_reaches_the_runtime_stays_held() {
 #[test]
 fn two_queued_presses_with_no_up_between_end_the_first_between_them() {
     let mut hold = Hold::default();
-    let now = Instant::now();
+    let now = crate::time::now();
     step(&mut hold, DOWN);
     step(&mut hold, sample(false, now, (50.0, 50.0)));
     assert!(step(&mut hold, DOWN).is_empty());
@@ -62,7 +62,7 @@ fn two_queued_presses_with_no_up_between_end_the_first_between_them() {
 #[test]
 fn a_press_that_beats_the_grace_ends_the_dispatched_press_where_the_button_rose() {
     let mut hold = Hold::default();
-    let now = Instant::now();
+    let now = crate::time::now();
     step(&mut hold, DOWN);
     step(&mut hold, Event::Dispatched { down: true });
     step(&mut hold, sample(false, now, (50.0, 50.0)));
@@ -75,7 +75,7 @@ fn a_press_that_beats_the_grace_ends_the_dispatched_press_where_the_button_rose(
 #[test]
 fn a_sample_that_beats_the_next_press_keeps_the_release_point() {
     let mut hold = Hold::default();
-    let now = Instant::now();
+    let now = crate::time::now();
     step(&mut hold, DOWN);
     step(&mut hold, Event::Dispatched { down: true });
     step(&mut hold, sample(false, now, (50.0, 50.0)));
@@ -88,7 +88,7 @@ fn a_sample_that_beats_the_next_press_keeps_the_release_point() {
 #[test]
 fn a_rebounding_button_gives_up_where_it_first_rose_after_a_fresh_grace() {
     let mut hold = Hold::default();
-    let now = Instant::now();
+    let now = crate::time::now();
     step(&mut hold, DOWN);
     step(&mut hold, Event::Dispatched { down: true });
     step(&mut hold, sample(false, now, (50.0, 50.0)));
@@ -102,7 +102,7 @@ fn a_rebounding_button_gives_up_where_it_first_rose_after_a_fresh_grace() {
 #[test]
 fn acknowledging_an_older_up_keeps_the_queued_presss_release() {
     let mut hold = Hold::default();
-    let now = Instant::now();
+    let now = crate::time::now();
     step(&mut hold, DOWN);
     step(&mut hold, Event::Dispatched { down: true });
     step(&mut hold, UP);
@@ -130,7 +130,7 @@ fn a_position_ends_the_press_before_the_front_click_without_taking_it() {
 #[test]
 fn with_no_rise_read_a_press_ends_where_it_was_last_read_down() {
     let mut hold = Hold::default();
-    let now = Instant::now();
+    let now = crate::time::now();
     step(&mut hold, sample(false, now, (5.0, 5.0))); // a hover older than the press
     step(&mut hold, DOWN);
     step(&mut hold, Event::Dispatched { down: true });
@@ -142,7 +142,7 @@ fn with_no_rise_read_a_press_ends_where_it_was_last_read_down() {
 #[test]
 fn a_press_after_a_lost_release_starts_a_new_hold() {
     let mut hold = Hold::default();
-    let now = Instant::now();
+    let now = crate::time::now();
     step(&mut hold, DOWN);
     step(&mut hold, sample(false, now, (50.0, 50.0)));
     assert_eq!(effects(&mut hold, sample(false, now + UNSEEN_UP_GRACE, (50.0, 50.0))), [Effect::ReleaseLost((50.0, 50.0))]);
@@ -154,7 +154,7 @@ fn a_press_after_a_lost_release_starts_a_new_hold() {
 #[test]
 fn a_queued_up_gets_the_longer_grace() {
     let mut hold = Hold::default();
-    let now = Instant::now();
+    let now = crate::time::now();
     step(&mut hold, DOWN);
     step(&mut hold, UP);
     step(&mut hold, sample(false, now, (20.0, 20.0)));
@@ -176,7 +176,7 @@ fn an_up_with_no_seen_press_stays_free_and_still_dispatches() {
 fn losing_the_view_gives_up_where_the_pointer_was_and_hiding_stays_silent() {
     let mut hold = Hold::default();
     step(&mut hold, DOWN);
-    step(&mut hold, sample(true, Instant::now(), (25.0, 15.0)));
+    step(&mut hold, sample(true, crate::time::now(), (25.0, 15.0)));
     assert_eq!(effects(&mut hold, Event::ViewLost { last: Some((5.0, 5.0)) }), [Effect::ReleaseLost((25.0, 15.0))], "not a reading older than the press");
     assert_eq!(effects(&mut hold, Event::ViewLost { last: Some((25.0, 15.0)) }), [Effect::ReleaseLost((25.0, 15.0))], "no press seen: the last reading");
     assert_eq!(hold, Hold::default());
@@ -188,7 +188,7 @@ fn losing_the_view_gives_up_where_the_pointer_was_and_hiding_stays_silent() {
 #[test]
 fn the_button_is_known_up_once_a_sample_or_the_monitor_says_so() {
     let mut hold = Hold::default();
-    let now = Instant::now();
+    let now = crate::time::now();
     assert!(!hold.button_up());
     step(&mut hold, DOWN);
     assert!(!hold.button_up(), "the press itself is still on its way");

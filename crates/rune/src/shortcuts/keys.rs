@@ -88,45 +88,28 @@ impl Shortcut {
     pub fn menu_keycaps(&self) -> Vec<String> {
         let mut labels = modifier_keycaps(self.modifiers());
         let name = self.key_name();
-        labels.push(named_label(name).unwrap_or_else(|| capital(us_label(name).into())));
+        labels.push(crate::input::key_table::shortcut_named_label(name)
+            .unwrap_or_else(|| crate::input::key_table::capital_keycap(us_label(name))));
         labels
     }
 
     fn key_label(&self) -> String {
         let name = self.key_name();
-        if let Some(label) = named_label(name) { return label; }
+        if let Some(label) = crate::input::key_table::shortcut_named_label(name) { return label; }
         #[cfg(target_os = "macos")]
         if let Some(label) = super::macos::keycode(name)
-            .and_then(|key| super::layout_macos::label(key, super::macos::carbon_mods(self))) { return capital(label); }
-        capital(us_label(name).into())
+            .and_then(|key| super::layout_macos::label(key, super::macos::carbon_mods(self))) {
+            return crate::input::key_table::capital_keycap(&label);
+        }
+        crate::input::key_table::capital_keycap(us_label(name))
     }
 }
 
 /// Keycaps for a chord being held, before a non-modifier key has been pressed.
 pub fn modifier_keycaps(mods: crate::Mods) -> Vec<String> {
-    let mac = cfg!(target_os = "macos");
-    let mut labels = Vec::new();
-    for (held, label) in [(mods.ctrl || (!mac && mods.cmd), if mac { "⌃" } else { "Ctrl" }),
-        (mods.alt, if mac { "⌥" } else { "Alt" }), (mods.shift, if mac { "⇧" } else { "Shift" }),
-        (mods.logo || (mac && mods.cmd), if mac { "⌘" } else { "Super" })] {
-        if held { labels.push(label.into()); }
-    }
-    labels
+    crate::input::key_table::modifier_keycaps(mods)
 }
 
-fn named_label(name: &str) -> Option<String> {
-    let mac = cfg!(target_os = "macos");
-    Some(match name {
-        "escape" => if mac { "⎋" } else { "Esc" }, "enter" => if mac { "↩" } else { "Return" },
-        "space" => "Space", "tab" => if mac { "⇥" } else { "Tab" }, "backspace" => if mac { "⌫" } else { "Backspace" },
-        "delete" => if mac { "⌦" } else { "Delete" }, "insert" => "Insert",
-        "home" => if mac { "↖" } else { "Home" }, "end" => if mac { "↘" } else { "End" },
-        "pageup" => if mac { "⇞" } else { "Page Up" }, "pagedown" => if mac { "⇟" } else { "Page Down" },
-        "left" => "←", "right" => "→", "up" => "↑", "down" => "↓",
-        n if n.starts_with('f') && n.len() > 1 => return Some(n.to_uppercase()),
-        _ => return None,
-    }.into())
-}
 /// The character `key` types unshifted on a US layout: 'a', '7', '['. None for keys that type
 /// no single printable character (F1, Space, arrows).
 pub(crate) fn us_char(key: PhysicalKeyCode) -> Option<char> {
@@ -134,19 +117,8 @@ pub(crate) fn us_char(key: PhysicalKeyCode) -> Option<char> {
     chars.next().filter(|_| chars.next().is_none())
 }
 
-/// "k" draws as "K", as on a keycap. A character whose capital isn't one character ("ß"), or
-/// doesn't lower-case back to it (Turkish "ı" → "I" → "i"), stays.
-pub(crate) fn capital(label: String) -> String {
-    let mut chars = label.chars();
-    let (Some(c), None) = (chars.next(), chars.next()) else { return label };
-    let mut upper = c.to_uppercase();
-    let (Some(u), None) = (upper.next(), upper.next()) else { return label };
-    let mut lower = u.to_lowercase();
-    if (lower.next(), lower.next()) == (Some(c), None) { u.to_string() } else { label }
-}
 fn us_label(name: &str) -> &str {
-    match name { "minus" => "-", "equal" => "=", "comma" => ",", "period" => ".", "slash" => "/", "semicolon" => ";", "quote" => "'",
-        "bracketleft" => "[", "bracketright" => "]", "backslash" => "\\", "backquote" => "`", name => name }
+    crate::input::key_table::punctuation_symbol(name).unwrap_or(name)
 }
 
 #[cfg(test)]
@@ -169,10 +141,10 @@ mod tests {
         assert_eq!(key("ctrl+f5"), "F5");
         assert_eq!(key("ctrl+left"), "←");
         assert_eq!(key("ctrl+enter"), if cfg!(target_os = "macos") { "↩" } else { "Return" });
-        assert_eq!(capital("k".into()), "K");
-        assert_eq!(capital("ß".into()), "ß");
-        assert_eq!(capital("ı".into()), "ı");
-        assert_eq!(capital("K".into()), "K");
-        assert_eq!(capital("/".into()), "/");
+        assert_eq!(crate::input::key_table::capital_keycap("k"), "K");
+        assert_eq!(crate::input::key_table::capital_keycap("ß"), "ß");
+        assert_eq!(crate::input::key_table::capital_keycap("ı"), "ı");
+        assert_eq!(crate::input::key_table::capital_keycap("K"), "K");
+        assert_eq!(crate::input::key_table::capital_keycap("/"), "/");
     }
 }

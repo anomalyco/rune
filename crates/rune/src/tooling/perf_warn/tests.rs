@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::*;
 use crate::el::{col, row};
@@ -55,7 +55,7 @@ fn a_callback_blocked_past_its_cpu_time_warns_once_per_site() {
 #[test]
 fn a_callback_that_computes_is_not_a_stall() {
     take_log();
-    let (wall, cpu) = (Instant::now(), crate::frame::profile::cpu_ms().unwrap());
+    let (wall, cpu) = (crate::time::now(), crate::frame::profile::cpu_ms().unwrap());
     let stall = Stall::start();
     let mut n = 0u64;
     while crate::frame::profile::cpu_ms().unwrap() - cpu < 30.0 { n = std::hint::black_box(n.wrapping_add(1)); }
@@ -84,6 +84,20 @@ fn a_blocking_poll_names_poll() {
 }
 
 #[test]
+fn a_blocking_update_names_update() {
+    if super::runq::wait_ms().is_none() && super::runq::overloaded() {
+        return eprintln!("skipped: the machine has no core to spare, so a sleep can't be told from a wait");
+    }
+    take_log();
+    fn view(_: &u32, _: &mut Cx<u32>) -> El { col() }
+    let mut rt = Runtime::new(0u32, view, (100.0, 100.0), Env::new(true, 1.0));
+    rt.update(|_, _| std::thread::sleep(Duration::from_millis(30)));
+    rt.update(|_, _| std::thread::sleep(Duration::from_millis(30)));
+    let log = take_log();
+    assert!(log.len() == 1 && log[0].starts_with("rune: an `update` closure blocked "), "{log:?}");
+}
+
+#[test]
 fn rows_of_one_list_share_a_handler_site() {
     assert_eq!(handler_site("on_press", "#0/list/r12"), handler_site("on_press", "#0/list/r7"));
     assert_ne!(handler_site("on_press", "#0/list/r12"), handler_site("on_hover", "#0/list/r12"));
@@ -91,7 +105,7 @@ fn rows_of_one_list_share_a_handler_site() {
 
 fn titled<S: 'static>(state: S, view: fn(&S, &mut Cx<S>) -> El, title: &str, poll: fn(&mut S, f64, &mut crate::Tx) -> bool) -> Runtime<S> {
     let mut rt = Runtime::new(state, view, (200.0, 200.0), Env::new(true, 1.0));
-    rt.window_title.start(title);
+    rt.host.window_title.start(title);
     rt.poll = Some(poll);
     rt
 }

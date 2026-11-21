@@ -398,12 +398,17 @@ fn clipped_single_draw_fades_do_not_allocate_targets() {
             renderer.prepare_surfaces(&gpu.device, &gpu.queue, &rt.surfaces, (64, 48));
             assert_eq!(renderer.layer_stats().targets, 0, "mode={mode} video={video}");
             let out = pixels(&gpu, &renderer, &target);
-            assert_eq!(out[(24 * 64 + 32) * 4 + 3], 128);
+            // 0.5 * 255 = 127.5 is a rounding tie: D3D12 allows either neighbour (NVIDIA gives 127).
+            assert!(out[(24 * 64 + 32) * 4 + 3].abs_diff(128) <= 1, "mode={mode} video={video}");
             assert_eq!(out[(24 * 64 + 4) * 4 + 3], 0);
             if mode == 1 { assert!(out[(24 * 64 + 8) * 4 + 3] < 32); }
             frames.push(out);
         }
-        assert_eq!(frames[0], frames[1], "primitive and video inherit identical clips/fades");
+        // On D3D12, `shader.wgsl`'s interpolated `i.p` across a viewport-clipped quad can differ
+        // from `video.wgsl`'s `@builtin(position)` by a fraction of a thousandth of a pixel along
+        // a hard clip edge, shifting those boundary pixels by at most 1 LSB.
+        let max_diff = frames[0].iter().zip(&frames[1]).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+        assert!(max_diff <= 1, "primitive and video inherit identical clips/fades (mode={mode}, max_diff={max_diff})");
     }
 }
 

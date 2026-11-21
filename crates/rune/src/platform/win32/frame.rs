@@ -24,6 +24,8 @@
 //! (`WM_GETDPISCALEDSIZE`, which Windows' `WM_DPICHANGED` rect then follows) and
 //! `request_inner_size` are corrected here to the frame's borders.
 
+#![allow(unsafe_code)]
+
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::OnceLock;
@@ -136,10 +138,9 @@ pub(crate) fn window_menu(window: &winit::window::Window, menu: WindowMenu, at: 
     let point = ((y as u16 as u32) << 16 | x as u16 as u32) as usize;
     // SAFETY: Win32 calls on a live window this thread owns; the subclass keeps no pointer.
     unsafe {
-        if SetWindowSubclass(hwnd, Some(menu_procedure), id, point) == 0 { return track_window_menu(hwnd, x, y); }
+        if SetWindowSubclass(hwnd, Some(menu_procedure), id, point) == 0 { return; }
         if PostMessageW(hwnd, menu_message(), id, 0) == 0 {
             RemoveWindowSubclass(hwnd, Some(menu_procedure), id);
-            track_window_menu(hwnd, x, y);
         }
     }
 }
@@ -169,7 +170,8 @@ unsafe extern "system" fn menu_procedure(hwnd: HWND, message: u32, w: WPARAM, l:
         // SAFETY: removes this subclass, on the window it was set on.
         unsafe { RemoveWindowSubclass(hwnd, Some(menu_procedure), id) };
         if message != WM_NCDESTROY {
-            track_window_menu(hwnd, (point & 0xffff) as u16 as i16 as i32, (point >> 16 & 0xffff) as u16 as i16 as i32);
+            let (x, y) = ((point & 0xffff) as u16 as i16 as i32, (point >> 16 & 0xffff) as u16 as i16 as i32);
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| track_window_menu(hwnd, x, y))).ok();
             return 0;
         }
     }
@@ -179,6 +181,9 @@ unsafe extern "system" fn menu_procedure(hwnd: HWND, message: u32, w: WPARAM, l:
 
 /// Shows the window menu at screen point (`x`, `y`) until it closes, and carries out the pick.
 fn track_window_menu(hwnd: HWND, x: i32, y: i32) {
+    let Some(_modal) = crate::popup_menu::enter_menu_loop() else { return };
+    // SAFETY: `IsWindow` safely validates whether `hwnd` still refers to a live window.
+    if unsafe { IsWindow(hwnd) == 0 } { return; }
     let _turns = crate::popup_menu::turns(hwnd);
     // SAFETY: Win32 calls on a live window this thread owns and its own system menu.
     unsafe {
@@ -195,7 +200,7 @@ fn track_window_menu(hwnd: HWND, x: i32, y: i32) {
         enable(SC_CLOSE, true);
         SetMenuDefaultItem(menu, SC_CLOSE, 0);
         let picked = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | crate::popup_menu::layout(), x, y, 0, hwnd, std::ptr::null());
-        if picked != 0 { PostMessageW(hwnd, WM_SYSCOMMAND, picked as WPARAM, 0); }
+        if picked != 0 && IsWindow(hwnd) != 0 { PostMessageW(hwnd, WM_SYSCOMMAND, picked as WPARAM, 0); }
     }
 }
 
@@ -210,17 +215,26 @@ pub(super) fn installed(hwnd: HWND) -> bool {
 }
 
 unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM, _: usize, data: usize) -> LRESULT {
-    // SAFETY: `data` is the live `State` until WM_NCDESTROY.
-    let state = unsafe { &*(data as *const State) };
+    let ptr = data as *const State;
     if message == WM_NCDESTROY {
         FRAMED.with(|f| f.borrow_mut().retain(|&h| h != hwnd as usize));
-        // SAFETY: removes this subclass, then releases the reference `install` gave it.
+        // SAFETY: removes this subclass; if it was still installed, reclaims the ref `install` gave it.
         unsafe {
-            RemoveWindowSubclass(hwnd, Some(subclass), SUBCLASS);
-            drop(Rc::from_raw(data as *const State));
+            if RemoveWindowSubclass(hwnd, Some(subclass), SUBCLASS) != 0 {
+                drop(Rc::from_raw(ptr));
+            }
             return DefSubclassProc(hwnd, message, wparam, lparam);
         }
     }
+    // Hold our own strong reference for the duration of this callback so a re-entrant
+    // `WM_NCDESTROY` during `DefSubclassProc` or a modal menu loop cannot free `State` while
+    // this stack frame still uses it.
+    // SAFETY: `ptr` is the live `Rc<State>` owned by the subclass until `WM_NCDESTROY`.
+    let state: Rc<State> = unsafe {
+        Rc::increment_strong_count(ptr);
+        Rc::from_raw(ptr)
+    };
+    let state: &State = &state;
     if !framed(hwnd) {
         // Full screen: no frame to adjust.
         // SAFETY: forwards to the next window procedure.

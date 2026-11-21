@@ -7,7 +7,7 @@ mod layout_macos;
 #[cfg(all(test, target_os = "macos"))]
 pub(crate) use layout_macos::force as force_layout;
 pub use keys::{PhysicalKeyCode, modifier_keycaps};
-pub(crate) use keys::{capital, us_char};
+pub(crate) use keys::us_char;
 mod service;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -21,7 +21,7 @@ mod x11_repeat;
 mod wayland;
 
 pub use parse::Shortcut;
-pub(crate) use service::{Hub, Guard};
+pub(crate) use service::{Guard, Hub, HubCore};
 use std::sync::Arc;
 
 /// An opaque registration, unique within this process. It is not an accelerator hash.

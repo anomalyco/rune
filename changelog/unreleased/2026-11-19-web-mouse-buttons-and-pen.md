@@ -1,0 +1,1 @@
+- On macOS browsers, Ctrl+left-click acts as a secondary click (opening Rune's or the browser's context menu instead of a primary press), primary mouse-down notifies newly focused `on_physical_input` elements of held modifiers as desktop windows do, and stylus/pen pointers hover mirrored links and open barrel-button context menus.

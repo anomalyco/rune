@@ -6,6 +6,8 @@
 //! the buttons' own superview each get a subclass, for that instance only, whose `-layout` runs
 //! AppKit's and then puts the buttons back.
 
+#![allow(unsafe_code)]
+
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
@@ -37,7 +39,7 @@ impl Spot {
 
 impl Drop for Spot {
     fn drop(&mut self) {
-        let _ = SPOTS.try_with(|s| s.borrow_mut().remove(&self.0));
+        SPOTS.try_with(|s| s.borrow_mut().remove(&self.0)).ok();
     }
 }
 
@@ -54,11 +56,12 @@ fn place_in(win: &NSWindow, (x, y): (f64, f64)) {
     if win.styleMask().contains(NSWindowStyleMask::FullScreen) {
         return;
     }
-    let buttons = [NSWindowButton::NSWindowCloseButton, NSWindowButton::NSWindowMiniaturizeButton, NSWindowButton::NSWindowZoomButton]
+    let buttons = [NSWindowButton::CloseButton, NSWindowButton::MiniaturizeButton, NSWindowButton::ZoomButton]
         .map(|b| win.standardWindowButton(b));
     let [Some(close), Some(mini), Some(zoom)] = buttons else { return };
     // SAFETY: AppKit's own view hierarchy, on the main thread.
     let Some(parent) = (unsafe { close.superview() }) else { return };
+    // SAFETY: `parent` is a live `NSView` in AppKit's window hierarchy on the main thread.
     let Some(container) = (unsafe { parent.superview() }) else { return };
     // SAFETY: live views on the main thread.
     unsafe {
@@ -79,13 +82,11 @@ fn place_in(win: &NSWindow, (x, y): (f64, f64)) {
     frame.size.height = close.frame().size.height + 2.0 * y;
     frame.origin.y = win.frame().size.height - frame.size.height;
     let width = parent.frame().size.width;
-    unsafe {
-        container.setFrame(frame);
-        for (i, b) in [close, mini, zoom].iter().enumerate() {
-            let at = x + i as f64 * pitch;
-            let at = if rtl { width - at - b.frame().size.width } else { at };
-            b.setFrameOrigin(NSPoint::new(at, y));
-        }
+    container.setFrame(frame);
+    for (i, b) in [close, mini, zoom].iter().enumerate() {
+        let at = x + i as f64 * pitch;
+        let at = if rtl { width - at - b.frame().size.width } else { at };
+        b.setFrameOrigin(NSPoint::new(at, y));
     }
     PLACING.with(|p| p.set(false));
 }
@@ -111,7 +112,7 @@ unsafe fn hold(view: &NSView) {
         return;
     }
     let base = view.class();
-    let name = format!("RuneTrafficLights_{}", base.name());
+    let Ok(name) = std::ffi::CString::new(format!("RuneTrafficLights_{}", base.name().to_string_lossy())) else { return };
     let class = match ClassBuilder::new(&name, base) {
         Some(mut builder) => {
             // SAFETY: the signature matches -[NSView layout].
@@ -127,5 +128,5 @@ unsafe fn hold(view: &NSView) {
 
 /// The subclass `hold` gave this view, wherever it sits in the view's class chain.
 fn held_class(view: &NSView) -> Option<&'static AnyClass> {
-    std::iter::successors(Some(view.class()), |c| c.superclass()).find(|c| c.name().starts_with("RuneTrafficLights_"))
+    std::iter::successors(Some(view.class()), |c| c.superclass()).find(|c| c.name().to_bytes().starts_with(b"RuneTrafficLights_"))
 }

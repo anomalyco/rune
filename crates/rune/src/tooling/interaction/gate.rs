@@ -36,10 +36,10 @@ pub(crate) fn headless() { decide(true); }
 
 #[cold]
 fn decide(headless: bool) -> bool {
-    let perf = std::env::var("RUNE_PERF").ok();
-    let otel = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
+    let perf = rune_core::env::var("RUNE_PERF");
+    let otel = rune_core::env::var("OTEL_EXPORTER_OTLP_ENDPOINT");
     let on = !cfg!(test) && !cfg!(target_arch = "wasm32") && wanted(perf.as_deref(), otel.as_deref(), headless);
-    if on { let _ = ENDPOINT.set(endpoint(otel.as_deref())); }
+    if on { ENDPOINT.set(endpoint(otel.as_deref())).ok(); }
     STATE.store(if on { ON } else { OFF }, Ordering::Relaxed);
     on
 }

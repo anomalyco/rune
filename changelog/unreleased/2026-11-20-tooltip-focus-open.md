@@ -1,0 +1,1 @@
+- Tooltips: `El::help_open` keeps an element's tooltip showing whatever the pointer does (a Copy button's "Copied"); `HelpLook::on_focus` shows a help element's tooltip at once when the keyboard focuses it. The OpenCode look opens after 600 ms (was 400) and on keyboard focus, as OpenCode Desktop's `Tooltip` does since opencode#63834.

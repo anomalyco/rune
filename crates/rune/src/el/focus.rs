@@ -28,6 +28,8 @@ pub(crate) struct FocusSpec {
     /// `focus_within_flat`: no outer or inset shadows and no hover fill while focus is on this
     /// element or inside it.
     pub flat_within: bool,
+    /// `focus_visible_within_ring`: the within ring shows only while the keyboard put focus there.
+    pub within_keyboard: bool,
     /// `default_button`: Return presses it.
     pub default: bool,
     pub highlight: Option<Color>,
@@ -62,6 +64,7 @@ impl crate::cold::Empty for FocusSpec {
         within: false,
         ring_off: false,
         flat_within: false,
+        within_keyboard: false,
         default: false,
         highlight: None,
         fill: None,
@@ -221,6 +224,7 @@ impl El {
     pub fn focus_ring(mut self, width: f32, offset: f32, color: Color) -> Self {
         self.cold_mut().focus.ring = Some(Outline { width, offset, color });
         self.cold_mut().focus.within = false;
+        self.cold_mut().focus.within_keyboard = false;
         self.cold_mut().focus.ring_off = false;
         self
     }
@@ -231,7 +235,17 @@ impl El {
     pub fn focus_within_ring(mut self, width: f32, offset: f32, color: Color) -> Self {
         self.cold_mut().focus.ring = Some(Outline { width, offset, color });
         self.cold_mut().focus.within = true;
+        self.cold_mut().focus.within_keyboard = false;
         self.cold_mut().focus.ring_off = false;
+        self
+    }
+    /// [`El::focus_within_ring`] that shows only while the keyboard put focus on this element or
+    /// inside it (a Tab, an arrow, `Tx::focus` with a ring), as a web field's own keyboard-focus
+    /// ring does: not for a click, a focus handed over without a ring, or the window coming back
+    /// to the front with focus where it was. A text field's frame (a prompt's) takes it.
+    pub fn focus_visible_within_ring(mut self, width: f32, offset: f32, color: Color) -> Self {
+        self = self.focus_within_ring(width, offset, color);
+        self.cold_mut().focus.within_keyboard = true;
         self
     }
     /// While focus is on this element or anywhere inside it, from the pointer or the keyboard,

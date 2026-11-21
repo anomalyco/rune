@@ -1,0 +1,1 @@
+- Web, `webgl` feature: losing the WebGL context no longer leaves a dead canvas. A full-window app paints on the CPU until the context comes back, and an inline canvas pauses and resumes. GPU errors on WebGL2 are logged to the console, and effects WebGL2 cannot render (half-float layers, plus-lighter, layer blur) fall back instead of breaking the frame.

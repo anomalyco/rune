@@ -24,8 +24,8 @@ fn maybe_memo(use_memo: bool, id: impl Into<String>, ver: impl std::hash::Hash, 
 }
 
 fn assert_same_state<S: 'static>(memo_rt: &Runtime<S>, fresh_rt: &Runtime<S>, step: &str) {
-    assert_eq!(memo_rt.nodes.len(), fresh_rt.nodes.len(), "{step}: node count");
-    for (idx, (a, b)) in memo_rt.nodes.iter().zip(&fresh_rt.nodes).enumerate() {
+    assert_eq!(memo_rt.tree.nodes.len(), fresh_rt.tree.nodes.len(), "{step}: node count");
+    for (idx, (a, b)) in memo_rt.tree.nodes.iter().zip(&fresh_rt.tree.nodes).enumerate() {
         assert_eq!(a.id, b.id, "{step}: node[{idx}] ({}) id", a.path);
         assert_eq!(a.path, b.path, "{step}: node[{idx}] path");
         assert_eq!(a.key, b.key, "{step}: node[{idx}] key");
@@ -51,7 +51,7 @@ fn assert_same_state<S: 'static>(memo_rt: &Runtime<S>, fresh_rt: &Runtime<S>, st
         );
     }
 
-    assert_eq!(memo_rt.hits, fresh_rt.hits, "{step}: hit rects");
+    assert_eq!(memo_rt.hit.hits, fresh_rt.hit.hits, "{step}: hit rects");
 
     let (ea, eb) = (memo_rt.elements(), fresh_rt.elements());
     assert_eq!(ea.len(), eb.len(), "{step}: ElementInfo count");
@@ -197,7 +197,7 @@ fn steady_commits_moving_ancestors_rebase_exits_and_modifiers_match_fresh_build(
     let mut rt_m = Runtime::new(init(true), cards_view, (560.0, 520.0), Env::new(true, 2.0));
     let mut rt_f = Runtime::new(init(false), cards_view, (560.0, 520.0), Env::new(true, 2.0));
     step_both(&mut rt_m, &mut rt_f, 0.0, "initial", |_| {});
-    let first_builds = rt_m.memo.builds;
+    let first_builds = rt_m.commit.memo_builds();
     assert!(first_builds >= 4);
 
     // Steady commits: nothing moves, Stage (b) + Stage (c) skip flatten and apply on all cards.
@@ -206,7 +206,7 @@ fn steady_commits_moving_ancestors_rebase_exits_and_modifiers_match_fresh_build(
             rt.update(|s, _| s.tick += 1);
         });
     }
-    assert_eq!(rt_m.memo.builds, first_builds, "no memo rebuilt during steady ticks");
+    assert_eq!(rt_m.commit.memo_builds(), first_builds, "no memo rebuilt during steady ticks");
 
     // Ancestor move: banner expands, shifting every card's window rect while keeping interior local rects.
     step_both(&mut rt_m, &mut rt_f, 1.0 / 120.0, "banner-grow", |rt| {
@@ -342,10 +342,10 @@ fn hover_press_focus_selection_env_blend_and_hot_clear_match_fresh_build() {
     });
     step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "reduced-motion", |rt| rt.set_system_reduced_motion(true));
 
-    let before_hot = rt_m.memo.builds;
-    rt_m.memo.clear();
+    let before_hot = rt_m.commit.memo_builds();
+    rt_m.commit.clear_memo();
     step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "hot-clear-rebuild", |rt| rt.update(|s, _| s.tick += 1));
-    assert!(rt_m.memo.builds > before_hot, "hot clear rebuilds memos cleanly");
+    assert!(rt_m.commit.memo_builds() > before_hot, "hot clear rebuilds memos cleanly");
 }
 
 struct WorkspaceState {
@@ -448,8 +448,8 @@ fn virtual_rows_inside_memos_layout_reads_live_values_and_duplicate_keys_match_f
     let mut rt_f = Runtime::new(make(false), workspace_view, (420.0, 380.0), Env::new(true, 2.0));
     rt_m.set_live_visible(true);
     rt_f.set_live_visible(true);
-    rt_m.key_warnings = Some(Vec::new());
-    rt_f.key_warnings = Some(Vec::new());
+    rt_m.commit.enable_key_warnings();
+    rt_f.commit.enable_key_warnings();
 
     step_both(&mut rt_m, &mut rt_f, 0.0, "init", |_| {});
     for f in 0..8 {
@@ -506,7 +506,7 @@ fn virtual_rows_inside_memos_layout_reads_live_values_and_duplicate_keys_match_f
     step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "dup-keys", |rt| {
         rt.update(|s, _| s.dup_keys = true);
     });
-    assert_eq!(rt_m.key_warnings, rt_f.key_warnings, "duplicate-key warnings match");
+    assert_eq!(rt_m.commit.key_warnings(), rt_f.commit.key_warnings(), "duplicate-key warnings match");
 }
 
 #[test]
@@ -717,15 +717,15 @@ fn move_path_preserves_allocations_and_matches_fresh_across_exits_focus_selectio
 
     // Proof that `same_path` memo reuse moves `Node`s rather than cloning their owned heap strings.
     let path_ptr = |rt: &Runtime<MoveHarness>, path: &str| {
-        rt.nodes.iter().find(|n| n.path == path).unwrap().path.as_ptr() as usize
+        rt.tree.nodes.iter().find(|n| n.path == path).unwrap().path.as_ptr() as usize
     };
     let p_styled = path_ptr(&rt_m, "#0/styled-0/p");
     let p_long = path_ptr(&rt_m, "#0/long-list-memo/items/li-95/t");
 
-    // Non-committing `content_height()` must leave `rt_m.nodes` intact AND recycle `spare_nodes`.
+    // Non-committing `content_height()` must leave `rt_m.tree.nodes` intact AND recycle `spare_nodes`.
     assert_eq!(rt_m.content_height(), rt_f.content_height(), "content_height matches");
-    assert!(rt_m.spare_nodes.capacity() >= rt_m.nodes.len(), "content_height recycled spare_nodes");
-    let (buf_a, buf_b) = (rt_m.nodes.as_ptr() as usize, rt_m.spare_nodes.as_ptr() as usize);
+    assert!(rt_m.tree.spare_nodes.capacity() >= rt_m.tree.nodes.len(), "content_height recycled spare_nodes");
+    let (buf_a, buf_b) = (rt_m.tree.nodes.as_ptr() as usize, rt_m.tree.spare_nodes.as_ptr() as usize);
 
     for k in 0..4 {
         step_both(&mut rt_m, &mut rt_f, 1.0 / 120.0, &format!("steady-move-{k}"), |rt| {
@@ -733,7 +733,7 @@ fn move_path_preserves_allocations_and_matches_fresh_across_exits_focus_selectio
         });
         assert_eq!(path_ptr(&rt_m, "#0/styled-0/p"), p_styled, "styled memo path moved without reallocation");
         assert_eq!(path_ptr(&rt_m, "#0/long-list-memo/items/li-95/t"), p_long, "long-list node moved without reallocation");
-        let pair = (rt_m.nodes.as_ptr() as usize, rt_m.spare_nodes.as_ptr() as usize);
+        let pair = (rt_m.tree.nodes.as_ptr() as usize, rt_m.tree.spare_nodes.as_ptr() as usize);
         assert!(pair == (buf_a, buf_b) || pair == (buf_b, buf_a), "nodes and spare_nodes ping-pong without reallocating");
     }
 

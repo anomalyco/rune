@@ -6,14 +6,13 @@ use rune::{
     text::TextSystem,
 };
 use rune_motion::{AnimationStore, NodeId, Prop, PropClass, Spring};
-use std::time::Instant;
 use wgpu::util::DeviceExt;
 
 fn buffer(device: &wgpu::Device, size: u64, usage: wgpu::BufferUsages) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor { label: None, size, usage, mapped_at_creation: false })
 }
 fn read(device: &wgpu::Device, b: &wgpu::Buffer) -> Vec<u8> {
-    b.slice(..).map_async(wgpu::MapMode::Read, |r| r.unwrap());
+    b.slice(..).map_async(wgpu::MapMode::Read, |_| {});
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     let bytes = b.slice(..).get_mapped_range().unwrap().to_vec();
     b.unmap();
@@ -271,7 +270,7 @@ fn bench(gpu: &Gpu, timing: bool) {
                 let mut gpu_times = Vec::new();
                 for frame in 0..120 {
                     let now = frame as f64 / 120.0;
-                    let start = Instant::now();
+                    let start = rune::time::now();
                     let renderer = if path == 0 {
                         store.tick_at(now);
                         for (i, inst) in instances.iter_mut().enumerate() {

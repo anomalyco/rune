@@ -12,8 +12,11 @@ pub use quiet::launch;
 /// Has AppKit save the app's window frame under `name` and put the next launch's window in the
 /// same place, so a rebuild's new window lands exactly over the old one. Call it every frame
 /// (from `poll`) until it returns true: the window doesn't exist during `setup`.
+#[allow(unsafe_code)]
 pub fn remember_frame(name: &str) -> bool {
     #[cfg(target_os = "macos")]
+    // SAFETY: AppKit calls on the main thread (`poll`); `name` is NUL-terminated UTF-8 and every
+    // `objectAtIndex:` index is `< count`.
     unsafe {
         use objc2::{class, msg_send, runtime::AnyObject};
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
@@ -36,8 +39,11 @@ pub fn remember_frame(name: &str) -> bool {
 
 /// The key window, else the main window; null with neither.
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 unsafe fn key_window() -> *mut objc2::runtime::AnyObject {
     use objc2::{class, msg_send, runtime::AnyObject};
+    // SAFETY: called on the AppKit main thread; `sharedApplication`, `keyWindow`, and `mainWindow`
+    // are standard AppKit selectors returning an `NSWindow *` or null.
     unsafe {
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
         let w: *mut AnyObject = msg_send![app, keyWindow];
@@ -47,8 +53,11 @@ unsafe fn key_window() -> *mut objc2::runtime::AnyObject {
 
 /// Takes the app's key window into macOS full screen, or back out (the green button's
 /// ⌃⌘F). Headless, with no window, it does nothing.
+#[allow(unsafe_code)]
 pub fn toggle_full_screen() {
     #[cfg(target_os = "macos")]
+    // SAFETY: AppKit main-thread call; `toggleFullScreen:` is only sent to a non-null `NSWindow *`
+    // from `key_window()`, with a null sender.
     unsafe {
         use objc2::{msg_send, runtime::AnyObject};
         let w = key_window();
@@ -59,8 +68,11 @@ pub fn toggle_full_screen() {
 }
 
 /// Whether the app's key window is in macOS full screen.
+#[allow(unsafe_code)]
 pub fn is_full_screen() -> bool {
     #[cfg(target_os = "macos")]
+    // SAFETY: AppKit main-thread call; `styleMask` is only sent to a non-null `NSWindow *` from
+    // `key_window()`.
     unsafe {
         use objc2::msg_send;
         let w = key_window();
@@ -75,8 +87,11 @@ pub fn is_full_screen() -> bool {
 
 /// The size `remember_frame(name)` saved, in points, to open the window at. Applying the saved
 /// frame after the first layout resizes it, and the layout animates to the new size at launch.
+#[allow(unsafe_code)]
 pub fn saved_size(name: &str) -> Option<(f32, f32)> {
     #[cfg(target_os = "macos")]
+    // SAFETY: `key` is NUL-terminated UTF-8; `NSUserDefaults` is thread-safe, `value` is checked
+    // non-null, and `UTF8String` returns a NUL-terminated C string alive for `value`.
     unsafe {
         use objc2::{class, msg_send, runtime::AnyObject};
         let key = std::ffi::CString::new(format!("NSWindow Frame {name}")).ok()?;
@@ -111,16 +126,18 @@ mod tests;
 /// progress, say). The marker is this process's pid in `~/Library/Caches/mac-app/busy/`, so only
 /// this process holds the swap and a crash can't hold it forever.
 pub fn busy(on: bool) {
-    if !cfg!(target_os = "macos") {
-        return;
-    }
-    let Some(home) = std::env::var_os("HOME") else { return };
-    let dir = std::path::PathBuf::from(home).join("Library/Caches/mac-app/busy");
-    let path = dir.join(std::process::id().to_string());
-    if on {
-        let _ = std::fs::create_dir_all(&dir);
-        let _ = std::fs::write(path, "");
-    } else {
-        let _ = std::fs::remove_file(path);
+    #[cfg(not(target_os = "macos"))]
+    let _ = on;
+    #[cfg(target_os = "macos")]
+    {
+        let Some(home) = std::env::var_os("HOME") else { return };
+        let dir = std::path::PathBuf::from(home).join("Library/Caches/mac-app/busy");
+        let path = dir.join(std::process::id().to_string());
+        if on {
+            std::fs::create_dir_all(&dir).ok();
+            std::fs::write(path, "").ok();
+        } else {
+            std::fs::remove_file(path).ok();
+        }
     }
 }

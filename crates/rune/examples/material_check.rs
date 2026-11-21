@@ -3,6 +3,9 @@
 //! inserted material leaves the existing view in place, a prewarmed overlay has its glass
 //! before it shows, and a fading-in overlay reads as visible. Prints PASS/FAIL lines and exits
 //! nonzero on a failure.
+
+#![allow(unsafe_code)]
+
 #[cfg(not(target_os = "macos"))]
 fn main() { eprintln!("macOS only"); }
 
@@ -12,13 +15,13 @@ fn main() { mac::run(); }
 #[cfg(target_os = "macos")]
 mod mac {
     use objc2::runtime::AnyObject;
-    use objc2::{msg_send, msg_send_id, rc::Retained};
+    use objc2::{MainThreadMarker, msg_send, rc::Retained};
     use objc2_app_kit::{NSApplication, NSView, NSWindow};
-    use objc2_foundation::{MainThreadMarker, NSArray, NSString};
+    use objc2_foundation::{NSArray, NSString};
     use rune::{App, AppHandle, AppSpec, Cx, DisplayTarget, El, KeyPolicy, OverlayInput, OverlayOptions, OverlayPlacement,
         OverlaySpec, RunOptions, SystemMaterial, WindowOptions, WindowSpec, el};
     use std::sync::Mutex;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     const PREWARMED: f64 = 300.0;
     const FADING: f64 = 260.0;
@@ -45,7 +48,7 @@ mod mac {
 
     fn class_name(o: &AnyObject) -> String {
         // SAFETY: -class and -description on a live object.
-        unsafe { let c: *const AnyObject = msg_send![o, class]; let n: Retained<NSString> = msg_send_id![c, description]; n.to_string() }
+        unsafe { let c: *const AnyObject = msg_send![o, class]; let n: Retained<NSString> = msg_send![c, description]; n.to_string() }
     }
 
     /// The overlay panel `width` wide, or else the main window.
@@ -56,7 +59,7 @@ mod mac {
             Some(width) => wide(w, width) && class_name(w) == "RuneOverlayPanel",
             None => !wide(w, PREWARMED) && !wide(w, FADING) && w.isVisible(),
         };
-        windows.iter().find(|w| pick(w)).map(objc2::ClassType::retain)
+        windows.iter().find(|w| pick(w))
     }
 
     /// The material views under `window`'s content view: (class, pointer, alpha).
@@ -64,10 +67,10 @@ mod mac {
         fn walk(v: &NSView, out: &mut Vec<(String, usize, f64)>) {
             let name = class_name(v);
             if name.contains("GlassEffect") || name.contains("VisualEffect") {
-                out.push((name, v as *const NSView as usize, unsafe { v.alphaValue() }));
+                out.push((name, v as *const NSView as usize, v.alphaValue()));
                 return;
             }
-            for s in unsafe { v.subviews() }.iter() { walk(&s, out); }
+            for s in v.subviews().iter() { walk(&s, out); }
         }
         let mut out = Vec::new();
         if let Some(v) = window.contentView() { walk(&v, &mut out); }
@@ -81,23 +84,27 @@ mod mac {
     /// The Metal layer's `presentsWithTransaction`.
     fn transactions(window: &NSWindow) -> Option<bool> {
         fn find(layer: &AnyObject) -> Option<bool> {
+            // SAFETY: `layer` is a live `CAMetalLayer` on the AppKit main thread; `presentsWithTransaction` returns `bool`.
             if class_name(layer).contains("MetalLayer") { return Some(unsafe { msg_send![layer, presentsWithTransaction] }); }
-            let subs: Option<Retained<NSArray<AnyObject>>> = unsafe { msg_send_id![layer, sublayers] };
+            // SAFETY: `layer` is a live `CALayer` on the AppKit main thread; `sublayers` returns an optional `NSArray<CALayer>`.
+            let subs: Option<Retained<NSArray<AnyObject>>> = unsafe { msg_send![layer, sublayers] };
             subs?.iter().find_map(|l| find(&l))
         }
-        let layer: Option<Retained<AnyObject>> = unsafe { msg_send_id![&*window.contentView()?, layer] };
+        // SAFETY: `window.contentView()` is a live `NSView` on the AppKit main thread; `layer` returns an optional `CALayer`.
+        let layer: Option<Retained<AnyObject>> = unsafe { msg_send![&*window.contentView()?, layer] };
         find(&*layer?)
     }
 
     fn occluded(window: &NSWindow) -> bool {
+        // SAFETY: `window` is a live `NSWindow` on the AppKit main thread; `occlusionState` returns `NSWindowOcclusionState` (`usize`).
         let state: usize = unsafe { msg_send![window, occlusionState] };
         state & 2 == 0
     }
 
     fn on_main(handle: &AppHandle<State>, f: impl FnOnce(&mut State, &mut rune::Tx) + Send + 'static) {
         let (tx, rx) = std::sync::mpsc::channel();
-        handle.update(move |s, t| { f(s, t); let _ = tx.send(()); });
-        let _ = rx.recv_timeout(Duration::from_secs(5));
+        handle.update(move |s, t| { f(s, t); tx.send(()).ok(); });
+        rx.recv_timeout(Duration::from_secs(5)).ok();
     }
 
     pub fn run() {
@@ -154,11 +161,11 @@ mod mac {
                 on_main(&handle, |_, _| { let t = transactions(&window(None).unwrap()); check("a landed resize leaves transactions on", t == Some(true), format!("{t:?}")); });
                 for (name, overlay, width) in [("fading-in overlay", &fading, FADING), ("fading-in prewarmed overlay", &prewarmed, PREWARMED)] {
                     overlay.fade_in(Duration::from_millis(300));
-                    let start = Instant::now();
+                    let start = rune::time::now();
                     let mut seen = Vec::new();
                     while start.elapsed() < Duration::from_millis(120) {
                         let (tx, rx) = std::sync::mpsc::channel();
-                        handle.update(move |_, _| { let _ = tx.send(window(Some(width)).map(|w| occluded(&w))); });
+                        handle.update(move |_, _| { tx.send(window(Some(width)).map(|w| occluded(&w))).ok(); });
                         if let Ok(Some(o)) = rx.recv_timeout(Duration::from_secs(1)) { seen.push((start.elapsed().as_millis(), o)); }
                         sleep(4);
                     }

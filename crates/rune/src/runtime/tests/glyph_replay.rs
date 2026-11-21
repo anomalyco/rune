@@ -42,7 +42,7 @@ fn scrolling_replays_glyphs_it_has_drawn() {
     fresh.frame(0.0);
     fresh.wheel(160.0, 120.0, -84.0);
     for _ in 0..30 { fresh.frame(1.0 / 120.0); }
-    assert_eq!(fresh.scrolls.values().next().map(|s| s.offset), rt.scrolls.values().next().map(|s| s.offset));
+    assert_eq!(fresh.scroll.scrolls.values().next().map(|s| s.offset), rt.scroll.scrolls.values().next().map(|s| s.offset));
     assert!(rt.instances.len() > 200);
     assert!(instance_bytes(&rt) == instance_bytes(&fresh), "replayed glyphs draw as freshly walked ones");
 }

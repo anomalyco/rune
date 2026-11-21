@@ -62,9 +62,9 @@ fn hover_rows_at_rest_are_not_a_view_change() {
         rt.pointer_move(200.0, row_y(i));
         for _ in 0..3 { rt.frame(1.0 / 60.0); }
     }
-    assert!(rt.live_checks >= 6, "the moves were checked: {}", rt.live_checks);
+    assert!(rt.frame.live_checks() >= 6, "the moves were checked: {}", rt.frame.live_checks());
     assert_eq!(rt.state.changes, 0);
-    assert!(rt.live_only_warnings.is_empty(), "{:#?}", rt.live_only_warnings);
+    assert!(rt.frame.live_only_warnings().is_empty(), "{:#?}", rt.frame.live_only_warnings());
 }
 
 #[test]
@@ -76,25 +76,25 @@ fn a_leave_and_an_enter_in_one_frame_blame_neither_when_the_enter_changes_state(
     // To an old-side row a quarter second on: the leave is live-only and checked, the enter
     // in the same frame changes the copy side, and the commit is the enter's.
     rt.frame(0.3);
-    let checks = rt.live_checks;
+    let checks = rt.frame.live_checks();
     rt.pointer_move(200.0, row_y(3));
     rt.frame(1.0 / 60.0);
-    assert_eq!((rt.state.copy, rt.state.changes, rt.live_checks - checks), (Side::Old, 1, 1));
-    assert!(rt.live_only_warnings.is_empty(), "{:#?}", rt.live_only_warnings);
-    let fill = |rt: &Runtime<Rows>, key: &str| rt.nodes.iter().find(|n| n.key.as_deref() == Some(key)).unwrap().vis.fill;
+    assert_eq!((rt.state.copy, rt.state.changes, rt.frame.live_checks() - checks), (Side::Old, 1, 1));
+    assert!(rt.frame.live_only_warnings().is_empty(), "{:#?}", rt.frame.live_only_warnings());
+    let fill = |rt: &Runtime<Rows>, key: &str| rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some(key)).unwrap().vis.fill;
     assert_eq!(fill(&rt, "r3"), Color::BLACK, "the commit built the new copy side");
 
     // The other order: the changing enter first, then a checked live-only leave.
     rt.frame(0.3);
-    let code = |rt: &Runtime<Rows>, row: &str| rt.nodes.iter()
-        .find(|n| n.key.as_deref() == Some("code") && n.parent.is_some_and(|p| rt.nodes[p].key.as_deref() == Some(row)))
+    let code = |rt: &Runtime<Rows>, row: &str| rt.tree.nodes.iter()
+        .find(|n| n.key.as_deref() == Some("code") && n.parent.is_some_and(|p| rt.tree.nodes[p].key.as_deref() == Some(row)))
         .unwrap().path.clone();
     let (enter, leave) = (code(&rt, "r4"), code(&rt, "r3"));
-    rt.queue.push(Action::HoverChange(enter, true));
-    rt.queue.push(Action::HoverChange(leave, false));
+    rt.frame.queue.push(Action::HoverChange(enter, true));
+    rt.frame.queue.push(Action::HoverChange(leave, false));
     rt.frame(1.0 / 60.0);
     assert_eq!((rt.state.copy, rt.state.changes), (Side::New, 2));
-    assert!(rt.live_only_warnings.is_empty(), "{:#?}", rt.live_only_warnings);
+    assert!(rt.frame.live_only_warnings().is_empty(), "{:#?}", rt.frame.live_only_warnings());
     assert_eq!(fill(&rt, "r4"), Color::BLACK);
 }
 
@@ -113,8 +113,8 @@ fn dragging_a_text_selection_across_hover_rows_blames_no_hover_handler() {
     }
     rt.pointer_up(200.0, row_y(5));
     rt.frame(1.0 / 60.0);
-    assert!(rt.state.selections > 1 && rt.live_checks >= 4, "{} selections, {} checks", rt.state.selections, rt.live_checks);
-    assert!(rt.live_only_warnings.is_empty(), "{:#?}", rt.live_only_warnings);
+    assert!(rt.state.selections > 1 && rt.frame.live_checks() >= 4, "{} selections, {} checks", rt.state.selections, rt.frame.live_checks());
+    assert!(rt.frame.live_only_warnings().is_empty(), "{:#?}", rt.frame.live_only_warnings());
 }
 
 /// A view that builds one thing differently once a live-only key handler (wrongly) flips
@@ -143,7 +143,7 @@ fn case_app(case: u8) -> Runtime<Case> {
 }
 
 fn list_path(rt: &Runtime<Case>) -> String {
-    rt.nodes.iter().find(|n| n.key.as_deref() == Some("list")).unwrap().path.clone()
+    rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("list")).unwrap().path.clone()
 }
 
 #[test]
@@ -161,8 +161,8 @@ fn the_warning_names_the_element_and_property_that_differed() {
         rt.frame(0.5);
         rt.key(KeyEvent { key: Key::Right, mods: Mods::default() });
         rt.frame(1.0 / 60.0);
-        assert_eq!(rt.live_only_warnings.len(), 1, "case {case}: {:?}", rt.live_only_warnings);
-        let w = &rt.live_only_warnings[0];
+        assert_eq!(rt.frame.live_only_warnings().len(), 1, "case {case}: {:?}", rt.frame.live_only_warnings());
+        let w = &rt.frame.live_only_warnings()[0];
         assert!(w.starts_with("rune: on_key called Tx::live_only, but the view built something else after it: "), "{w}");
         assert!(w.contains(&want), "case {case}: {w}\nwanted {want}");
     }
@@ -176,15 +176,15 @@ fn the_warning_repeats_only_for_another_element_or_property() {
         rt.key(KeyEvent { key: Key::Right, mods: Mods::default() });
         rt.frame(1.0 / 60.0);
     }
-    assert_eq!(rt.live_checks, 4);
-    assert_eq!(rt.live_only_warnings.len(), 1, "the same handler, element and property: {:#?}", rt.live_only_warnings);
+    assert_eq!(rt.frame.live_checks(), 4);
+    assert_eq!(rt.frame.live_only_warnings().len(), 1, "the same handler, element and property: {:#?}", rt.frame.live_only_warnings());
     rt.state.case = 0;
     rt.frame(0.5);
     rt.key(KeyEvent { key: Key::Right, mods: Mods::default() });
     rt.frame(1.0 / 60.0);
-    assert_eq!(rt.live_only_warnings.len(), 2, "{:#?}", rt.live_only_warnings);
+    assert_eq!(rt.frame.live_only_warnings().len(), 2, "{:#?}", rt.frame.live_only_warnings());
     let head = format!("layout rect of \"{}/box\"", list_path(&rt));
-    assert!(rt.live_only_warnings[1].contains(&head), "{}", rt.live_only_warnings[1]);
+    assert!(rt.frame.live_only_warnings()[1].contains(&head), "{}", rt.frame.live_only_warnings()[1]);
 }
 
 #[test]
@@ -205,13 +205,13 @@ fn a_selection_handler_after_a_checked_event_is_not_blamed_on_it() {
     for _ in 0..30 { rt.frame(1.0 / 60.0); }
     // Still dragging: a checked live-only key, and the drag grows the selection in one frame.
     rt.frame(0.5);
-    let (heard, checks) = (rt.state.heard, rt.live_checks);
+    let (heard, checks) = (rt.state.heard, rt.frame.live_checks());
     rt.key(KeyEvent { key: Key::Function(5), mods: Mods::default() });
     rt.pointer_move(x + 100.0, y);
     rt.frame(1.0 / 60.0);
-    assert_eq!(rt.live_checks - checks, 1);
+    assert_eq!(rt.frame.live_checks() - checks, 1);
     assert!(rt.state.heard > heard, "the selection handler ran");
-    assert!(rt.live_only_warnings.is_empty(), "{:#?}", rt.live_only_warnings);
+    assert!(rt.frame.live_only_warnings().is_empty(), "{:#?}", rt.frame.live_only_warnings());
 }
 
 /// 2,000 index-built rows whose cells call `Tx::live_only` on hover. Rows from `stale_from` on
@@ -243,15 +243,15 @@ fn a_grown_viewport_does_not_make_the_overscan_a_view_change() {
     let mut rt = long_app(usize::MAX);
     // Each hover lands on another row.
     for (row, h) in [310.0, 330.0, 360.0, 400.0].into_iter().enumerate() {
-        let checks = rt.live_checks;
+        let checks = rt.frame.live_checks();
         rt.set_viewport((400.0, h), 2.0);
         for _ in 0..10 { rt.frame(1.0 / 60.0); }
         rt.frame(0.3);
         rt.pointer_move(200.0, (row as f32 + 0.5) * ROW_H);
         for _ in 0..3 { rt.frame(1.0 / 60.0); }
-        assert!(rt.live_checks > checks, "viewport {h}: the hover was checked");
+        assert!(rt.frame.live_checks() > checks, "viewport {h}: the hover was checked");
     }
-    assert!(rt.live_only_warnings.is_empty(), "{:#?}", rt.live_only_warnings);
+    assert!(rt.frame.live_only_warnings().is_empty(), "{:#?}", rt.frame.live_only_warnings());
 }
 
 /// A row mounted below the viewport shows on screen when scrolled to without a commit, so a
@@ -264,7 +264,7 @@ fn a_stale_row_mounted_below_the_viewport_still_warns_after_the_viewport_grows()
     rt.frame(0.3);
     rt.pointer_move(200.0, 45.0);
     for _ in 0..3 { rt.frame(1.0 / 60.0); }
-    assert_eq!(rt.live_only_warnings.len(), 1, "{:#?}", rt.live_only_warnings);
-    let w = &rt.live_only_warnings[0];
+    assert_eq!(rt.frame.live_only_warnings().len(), 1, "{:#?}", rt.frame.live_only_warnings());
+    let w = &rt.frame.live_only_warnings()[0];
     assert!(w.contains("text of") && w.contains("/rows/r30/cell"), "{w}");
 }

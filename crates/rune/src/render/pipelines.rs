@@ -1,12 +1,21 @@
 //! Building the renderer and its uber pipelines: the pipeline for each target format and blend,
 //! the sampled textures the CPU fills, and the bind group the uber shader reads.
 
-use super::{ATLAS_START_ROWS, Blend, CLIP_WGSL, Renderer, dxbc, metallib, variant};
+use super::{ATLAS_START_ROWS, Blend, CLIP_WGSL, Globals, Instance, Renderer, dxbc, metallib, variant, warmup::WarmRenderer};
 
 impl Renderer {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn new_warm(device: &wgpu::Device, format: wgpu::TextureFormat) -> WarmRenderer {
+        Self::create_warm(device, format, None, cfg!(target_os = "macos"))
+    }
+
     pub(super) fn create(device: &wgpu::Device, format: wgpu::TextureFormat, properties: Option<(&[crate::gpu::springs::Node], &[u32])>, classic: bool) -> Renderer {
+        Self::from_warm(Self::create_warm(device, format, properties, classic))
+    }
+
+    fn create_warm(device: &wgpu::Device, format: wgpu::TextureFormat, properties: Option<(&[crate::gpu::springs::Node], &[u32])>, classic: bool) -> WarmRenderer {
         let spring_shader = if properties.is_some() {
-            let source = format!("{CLIP_WGSL}\n{}\n{}", include_str!("../shader.wgsl"), crate::gpu::springs::SHADER);
+            let source = format!("{CLIP_WGSL}\n{}\n{}", include_str!("../shaders/shader.wgsl"), crate::gpu::springs::SHADER);
             Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("uber"),
                 source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -16,7 +25,7 @@ impl Renderer {
         };
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: u64::from(device.limits().min_uniform_buffer_offset_alignment).max(32) + 16,
+            size: u64::from(device.limits().min_uniform_buffer_offset_alignment).max(std::mem::size_of::<Globals>() as u64) + 16,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -53,12 +62,17 @@ impl Renderer {
             }
         };
         let bind_group = Self::bind_group(device, &bgl, &globals, uber.outlines(), &atlas, &stand_in, None);
-        let capacity = 256;
-        let instances = Self::instance_buffer(device, capacity);
+        let instances = rune_staging::GrowBuffer::new(
+            device,
+            "instances",
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            std::mem::size_of::<Instance>(),
+            256,
+            0,
+        );
         let spring_instances = properties.map_or(0, |(_, ids)| ids.len());
         let springs = properties.map(|(nodes, ids)| crate::gpu::springs::Bindings::new(device, spring_layout.as_ref().unwrap(), nodes, ids));
-        Renderer {
-            surfaces: None,
+        WarmRenderer {
             surfaces_building: None,
             pipeline,
             format,
@@ -72,6 +86,10 @@ impl Renderer {
             atlas,
             uber,
             lcd: variant::Lcd::Unbuilt,
+            pinned: None,
+            pinned_extra: Vec::new(),
+            pinned_building: None,
+            kinds: Vec::new(),
             lcd_frame: false,
             frame_wake: None,
             stand_in,
@@ -79,7 +97,6 @@ impl Renderer {
             images: Vec::new(),
             image_batches: Vec::new(),
             instances,
-            capacity,
             count: 0,
             springs,
             spring_instances,
@@ -127,7 +144,7 @@ impl Renderer {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: Some(blend.state()),
+                    blend: Some(super::blend_state(blend)),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -172,7 +189,7 @@ impl Renderer {
             wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&image_view) },
             wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                 buffer: target.unwrap_or(globals),
-                offset: if target.is_some() { 0 } else { u64::from(device.limits().min_uniform_buffer_offset_alignment).max(32) },
+                offset: if target.is_some() { 0 } else { u64::from(device.limits().min_uniform_buffer_offset_alignment).max(std::mem::size_of::<Globals>() as u64) },
                 size: std::num::NonZeroU64::new(16),
             }) },
         ];
@@ -222,8 +239,14 @@ impl Renderer {
         };
         let old = std::mem::replace(&mut self.pipeline, next);
         self.extra.push((self.format, old));
+        // The pinned pipelines go with the frame pipeline: kept for the old format, made on their thread for a new one.
+        if let Some(pinned) = self.pinned.take() { self.pinned_extra.push((self.format, pinned)); }
         self.format = format;
         self.lcd = variant::Lcd::Unbuilt;
+        match self.pinned_extra.iter().position(|(f, _)| *f == format) {
+            Some(i) => self.pinned = Some(self.pinned_extra.swap_remove(i).1),
+            None => self.start_pinned(device),
+        }
         self.srgb_blend = !format.is_srgb();
         if self.layer_stats().targets > 0 { self.add_layer_format(device, format); }
         let [vw, vh] = self.target_frame(None).1;

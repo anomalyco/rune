@@ -3,6 +3,8 @@
 //! open` renders it headless with the panel open, and `-- --playground "Knobs"` opens the
 //! playground, whose side column hosts the same knobs as rows.
 
+#![forbid(unsafe_code)]
+
 use rune::tok::{self, type_};
 use rune::{App, AppSpec, Cx, El, KeyEvent, Playground, Story, Tx, col, text};
 use rune_knobs::{Group, Knob, Knobs, Preset, Style};

@@ -6,12 +6,12 @@ license.workspace = true
 publish = false
 
 [dependencies]
-rune = { path = "../../crates/rune", features = ["keys-overlay"] }
-rune-kit = { path = "../../crates/rune-kit", features = ["markdown", "mermaid"] }
-rune-theme-opencode = { path = "../../themes/opencode" }
+rune = { workspace = true, default-features = true, features = ["keys-overlay"] }
+rune-kit = { workspace = true, default-features = true, features = ["markdown", "mermaid"] }
+rune-theme-opencode = { workspace = true }
 
 [dev-dependencies]
-wgpu = { version = "30", default-features = false }
+wgpu = { workspace = true }
 
 [lints]
 workspace = true

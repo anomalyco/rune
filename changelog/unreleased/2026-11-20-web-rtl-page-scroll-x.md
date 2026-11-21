@@ -1,0 +1,1 @@
+- Web document mode: right-to-left horizontal scroll containers (`El::dir(Direction::Rtl)` with `El::scroll_x`) now normalize `Element.scrollLeft` across browsers' negative, reverse and legacy RTL scroll models and set the mirrored container's `dir` to match the element's flow, so scrolling in both directions stays aligned between the browser and Rune.

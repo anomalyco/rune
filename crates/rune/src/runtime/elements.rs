@@ -134,28 +134,10 @@ impl Pose {
     pub fn moving(&self) -> bool { self.moving }
 }
 
-impl<S: 'static> Runtime<S> {
+impl types::TreeState {
     /// Authored geometry goals, before scroll and spring sampling, in parent space.
     pub(crate) fn trace_goals(&self) -> impl Iterator<Item = (&str, [f32; 7])> {
         self.nodes.iter().map(|n| (n.path.as_str(), [n.local.x, n.local.y, n.local.w, n.local.h, n.vis.offset[0], n.vis.offset[1], n.static_scale]))
-    }
-
-    /// Tracks the last tick sampled, by element path and property name: what spent this
-    /// frame animating. Tracks of nodes no longer in the tree report their node id.
-    pub(crate) fn touched_tracks(&self) -> Vec<(String, &'static str, bool)> {
-        let store = self.scene.store();
-        let mut out: Vec<_> = store.touched_tracks().map(|(track, node, p)| {
-            let path = self.node_index.get(&node).map_or_else(|| format!("node:{}", node.0), |&i| self.nodes[i].path.clone());
-            (path, prop_name(p.0), store.is_active(track))
-        }).collect();
-        // A growth row's feathered edge (`GrowTrack::mask`) paints as it eases out, after its height
-        // has landed: it is a track of its own here.
-        out.extend(self.grows.iter().filter(|(_, g)| g.mask > 0.01).filter_map(|(id, _)| {
-            self.node_index.get(id).map(|&i| (self.nodes[i].path.clone(), "mask", true))
-        }));
-        out.sort();
-        out.dedup();
-        out
     }
 
     /// Elements that draw nothing and hold nothing: no paint of their own, no text, no field,
@@ -184,18 +166,38 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Whether an element path contains secure text, hidden or revealed. Accessibility
-    /// adapters should use this alongside [`Self::elements`] to report protected content.
+    /// adapters should use this alongside [`Runtime::elements`] to report protected content.
     /// Unknown paths (including synthetic flight/link paths) return false.
-    pub fn element_is_secure(&self, path: &str) -> bool {
+    pub(crate) fn element_is_secure(&self, path: &str) -> bool {
         self.nodes.iter().find(|n| n.path == path).is_some_and(Node::is_secure)
+    }
+}
+
+impl RuntimeCore {
+    /// Tracks the last tick sampled, by element path and property name: what spent this
+    /// frame animating. Tracks of nodes no longer in the tree report their node id.
+    pub(crate) fn touched_tracks(&self) -> Vec<(String, &'static str, bool)> {
+        let store = self.scene.store();
+        let mut out: Vec<_> = store.touched_tracks().map(|(track, node, p)| {
+            let path = self.tree.node_by_id(node).map_or_else(|| format!("node:{}", node.0), |n| n.path.clone());
+            (path, prop_name(p.0), store.is_active(track))
+        }).collect();
+        // A growth row's feathered edge (`GrowTrack::mask`) paints as it eases out, after its height
+        // has landed: it is a track of its own here.
+        out.extend(self.motion.grows.iter().filter(|(_, g)| g.mask > 0.01).filter_map(|(&id, _)| {
+            self.tree.node_by_id(id).map(|n| (n.path.clone(), "mask", true))
+        }));
+        out.sort();
+        out.dedup();
+        out
     }
 
     /// What a move of `v` points inside node `i` (a scroll viewport's offset) comes to in the
     /// window: scaled and turned as its children draw.
-    pub(super) fn content_to_window(&self, i: usize, v: [f32; 2]) -> [f32; 2] {
-        let Some(h) = self.inh_scratch.get(i) else { return v };
+    pub(crate) fn content_to_window(&self, i: usize, v: [f32; 2]) -> [f32; 2] {
+        let Some(h) = self.paint.inh_scratch.get(i) else { return v };
         let [x, y] = v.map(|c| c * h.scale);
-        match h.turn.checked_sub(1).and_then(|k| self.turn_scratch.get(k as usize)) {
+        match h.turn.checked_sub(1).and_then(|k| self.paint.turn_scratch.get(k as usize)) {
             Some(t) => [t.mat[0] * x + t.mat[1] * y, t.mat[2] * x + t.mat[3] * y],
             None => [x, y],
         }
@@ -214,17 +216,17 @@ impl<S: 'static> Runtime<S> {
         let animating = |id: NodeId| store.is_animating(id, prop::FRAME) || store.is_animating(id, prop::TRAVEL)
             || store.is_animating(id, prop::PRESENCE) || store.is_animating(id, prop::OFFSET) || store.is_animating(id, prop::SCALE) || store.is_animating(id, P_PRESS_SCALE)
             || store.is_animating(id, P_SCALE) || store.is_animating(id, prop::ROTATION) || paint_pose_springing(store, id)
-            || (!self.reduced_motion && self.loops.get(&id).is_some_and(|l| l.active(store.node_time(id))));
+            || (!self.reduced_motion && self.motion.loop_active(id, store.node_time(id)));
         let sel_ranges = self.selection_ranges();
-        let mut elements: Vec<_> = self.nodes
+        let mut elements: Vec<_> = self.tree.nodes
             .iter()
             .enumerate()
             .filter_map(|(i, n)| {
                 let p = self.scene.presented(n.id)?;
                 let exiting = self.subtree_exiting(i);
-                let flight = self.flights.iter().find(|f| f.lands(&n.path, n.key.as_deref()));
-                let mut moving = flight.is_some() || animating(n.id) || self.grows.get(&n.id).is_some_and(|g| g.moving());
-                let drawn = self.drawn.get(i).copied().unwrap_or([p.rect.x, p.rect.y, p.rect.w, p.rect.h]);
+                let flight = self.motion.flights().iter().find(|f| f.lands(&n.path, n.key.as_deref()));
+                let mut moving = flight.is_some() || animating(n.id) || self.motion.grows.get(&n.id).is_some_and(|g| g.moving());
+                let drawn = self.paint.drawn.get(i).copied().unwrap_or([p.rect.x, p.rect.y, p.rect.w, p.rect.h]);
                 // A flight carries the destination's laid-out text, which can be narrower than
                 // its box. Report the box carried along with it, so the element lands on its own
                 // frame instead of jumping out to it when the flight ends.
@@ -234,27 +236,27 @@ impl<S: 'static> Runtime<S> {
                     [c.x + (drawn[0] - d.x) * zx, c.y + (drawn[1] - d.y) * zy, drawn[2] * zx, drawn[3] * zy]
                 });
                 let s = self.env.scale;
-                let clip = if self.launches.flying(n.id) { NO_CLIP } else {
+                let clip = if self.motion.launches().flying(n.id) { NO_CLIP } else {
                     flight.map_or_else(|| self.screen_clip_of_parent(n.parent), |f| f.clip.map(|v| v * s))
                 };
                 let (x0, y0) = (rect[0].max(clip[0] / s), rect[1].max(clip[1] / s));
                 let (x1, y1) = ((rect[0] + rect[2]).min(clip[2] / s), (rect[1] + rect[3]).min(clip[3] / s));
                 let visible = [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)];
-                let revealing = flight.is_some() || self.reveals.get(&n.id).is_some_and(|r| r.fading());
+                let revealing = flight.is_some() || self.motion.reveal_fading(n.id);
                 let mut in_growing_row = false;
                 let mut scrolling = false;
                 let mut scrolled = [0.0; 2];
                 let mut live_intent = intent(n);
                 // Held at its landing width this frame: its re-layout is the design.
-                if self.landing_holds.holds(n.id) {
+                if self.motion.holds_landing(n.id) {
                     live_intent |= 1 | 2;
                 }
                 // A group_opacity swap under an instant hover group is a deliberate cut (Beta's
                 // status/close swap), for it and what it contains: opacity and transition intent.
-                let up = |from: Option<usize>| std::iter::successors(from, |&pi| self.nodes[pi].parent);
-                if let Some(gi) = up(Some(i)).find(|&j| self.nodes[j].vis.group_opacity.is_some()) {
-                    let group = up(self.nodes[gi].parent)
-                        .map(|pi| &self.nodes[pi])
+                let up = |from: Option<usize>| std::iter::successors(from, |&pi| self.tree.nodes[pi].parent);
+                if let Some(gi) = up(Some(i)).find(|&j| self.tree.nodes[j].vis.group_opacity.is_some()) {
+                    let group = up(self.tree.nodes[gi].parent)
+                        .map(|pi| &self.tree.nodes[pi])
                         .find(|g| g.vis.hover().a > 0.0 || g.vis_flags.hover_group());
                     if group.and_then(|g| g.hover_motion()).is_some_and(|(e, x)| [e, x].iter().any(|a| matches!(a.curve, rune_motion::Curve::Instant))) {
                         live_intent |= 4 | 16;
@@ -270,43 +272,43 @@ impl<S: 'static> Runtime<S> {
                         Some(k) => v.map(|c| c * k),
                         None => at.map_or(v, |at| self.content_to_window(at, v)),
                     };
-                    if j != i && let Some(st) = self.scrolls.get(&self.nodes[j].id) {
+                    if j != i && let Some(st) = self.scroll.scrolls.get(&self.tree.nodes[j].id) {
                         let [x, y] = to_window(Some(j), [st.drawn_x, st.drawn.y()]);
                         scrolled = [scrolled[0] + x, scrolled[1] + y];
                     }
                     // A launch, and what it carries, leaves under the offsets it launched against
                     // and takes on the scroll's only as it lands.
-                    let id = self.nodes[j].id;
-                    let parent = self.nodes[j].parent;
-                    let fix = self.launches.carried(&self.scene, id);
+                    let id = self.tree.nodes[j].id;
+                    let parent = self.tree.nodes[j].parent;
+                    let fix = self.motion.launches().carried(&self.scene, id);
                     if fix != [0.0; 2] {
-                        let k = parent.and_then(|p| self.inh_scratch.get(p)).map_or(1.0, |h| h.still.0);
+                        let k = parent.and_then(|p| self.paint.inh_scratch.get(p)).map_or(1.0, |h| h.still.0);
                         scrolled = [scrolled[0] - fix[0] * k, scrolled[1] - fix[1] * k];
                     }
-                    if lifted.is_none() && self.flying.iter().any(|f| f.0 == id) {
-                        lifted = Some(parent.and_then(|p| self.inh_scratch.get(p)).map_or(1.0, |h| h.still.0));
+                    if lifted.is_none() && self.motion.flying.iter().any(|f| f.0 == id) {
+                        lifted = Some(parent.and_then(|p| self.paint.inh_scratch.get(p)).map_or(1.0, |h| h.still.0));
                     }
-                    let Some(pi) = step_up(&self.nodes, j) else { break };
-                    let p = &self.nodes[pi];
+                    let Some(pi) = step_up(&self.tree.nodes, j) else { break };
+                    let p = &self.tree.nodes[pi];
                     moving |= animating(p.id)
-                        || self.stacks.get(&p.id).is_some_and(|s| s.moving)
-                        || self.scrolls.get(&p.id).is_some_and(|s| s.slack.moving() || s.glide().is_some());
+                        || self.motion.stacks.get(&p.id).is_some_and(|s| s.moving)
+                        || self.scroll.scrolls.get(&p.id).is_some_and(|s| s.slack.moving() || s.glide().is_some());
                     live_intent |= intent(p);
-                    scrolling |= self.scrolls.get(&p.id).is_some_and(ScrollState::moving);
-                    in_growing_row |= self.grows.get(&p.id).is_some_and(|g| g.moving());
+                    scrolling |= self.scroll.scrolls.get(&p.id).is_some_and(ScrollState::moving);
+                    in_growing_row |= self.motion.grows.get(&p.id).is_some_and(|g| g.moving());
                     j = pi;
                 }
                 let secure = n.is_secure();
                 Some(ElementInfo {
                     trace_name: n.trace_name,
                     trace_namespace: n.trace_namespace,
-                    loop_phase: self.loops.get(&n.id).map(|l| {
+                    loop_phase: self.motion.loop_track(n.id).map(|l| {
                         if self.reduced_motion && !matches!(n.looping.as_ref().map(|s| s.kind), Some(rune_motion::LoopKind::Sequence(_))) { 0.0 }
                         else { l.phase(self.scene.store().node_time(n.id)) }
                     }),
                     focusable: self.can_focus(i),
-                    focused: self.focus.path() == Some(&n.path),
-                    focus_visible: self.focus.keyboard() && self.focus.path() == Some(&n.path),
+                    focused: self.kbd.focus.path() == Some(&n.path),
+                    focus_visible: self.kbd.focus.keyboard() && self.kbd.focus.path() == Some(&n.path),
                     inert: !self.allowed(i) || exiting,
                     exiting,
                     path: n.path.clone(),
@@ -320,13 +322,13 @@ impl<S: 'static> Runtime<S> {
                     },
                     rect,
                     target: [n.target[0], n.target[1], n.target[2] - n.target[0], n.target[3] - n.target[1]],
-                    opacity: flight.map_or_else(|| self.inh_scratch.get(i).map_or(p.opacity, |h| h.opacity), |f| f.target_alpha),
-                    scale: if flight.is_some() { 1.0 } else { self.inh_scratch.get(i).map_or(p.transform.scale.x, |h| h.scale) },
-                    blur: if flight.is_some() { 0.0 } else { self.inh_scratch.get(i).map_or(p.blur, |h| h.blur) },
+                    opacity: flight.map_or_else(|| self.paint.inh_scratch.get(i).map_or(p.opacity, |h| h.opacity), |f| f.target_alpha),
+                    scale: if flight.is_some() { 1.0 } else { self.paint.inh_scratch.get(i).map_or(p.transform.scale.x, |h| h.scale) },
+                    blur: if flight.is_some() { 0.0 } else { self.paint.inh_scratch.get(i).map_or(p.blur, |h| h.blur) },
                     radius: p.radius.0[0],
                     fill: self.color(n.id, P_FILL, n.vis.fill),
                     text_color: paint_tracks::text_color(n)
-                        .map(|c| paint_tracks::group_tint(n, self.color(n.id, P_TEXT, c), self.inh_scratch.get(i).map_or(0.0, |h| h.group))),
+                        .map(|c| paint_tracks::group_tint(n, self.color(n.id, P_TEXT, c), self.paint.inh_scratch.get(i).map_or(0.0, |h| h.group))),
                     hover: if (n.focus.highlight.is_some() && self.highlight_visible(i)) || (n.focus.fill.is_some() && self.focus_ring_visible(i)) { 1.0 }
                         else { self.scene.get(n.id, P_HOVER).unwrap_or(0.0) },
                     press: self.scene.get(n.id, P_PRESS).unwrap_or(0.0),
@@ -338,7 +340,7 @@ impl<S: 'static> Runtime<S> {
                     scrolling,
                     scrolled,
                     live_intent,
-                    caret: self.caret_rect(&self.nodes, i),
+                    caret: self.caret_rect(&self.tree.nodes, i),
                     edit_range: n.input.as_ref().filter(|inp| inp.edit.focused && !inp.edit.is_secure()).map(|inp| [inp.edit.anchor, inp.edit.focus]),
                     drag_out: n.handlers.drag_out.is_some(),
                     help: n.help.as_deref().filter(|_| !n.help_cut || n.text_cut(s)).map(|h| crate::el::help_words(h).into_owned()),
@@ -349,13 +351,13 @@ impl<S: 'static> Runtime<S> {
                     level: n.a11y.level,
                     expanded: n.a11y.expanded,
                     item_selected: n.focus.selected,
-                    stuck: self.stuck.get(i).copied().unwrap_or(0.0),
-                    virtual_extent: self.virtuals.contains_key(&n.path) && n.vis.fill.a == 0.0
+                    stuck: self.scroll.stuck.get(i).copied().unwrap_or(0.0),
+                    virtual_extent: self.commit.virtuals.contains_key(&n.path) && n.vis.fill.a == 0.0
                         && n.vis.border_width() == 0.0 && n.vis.shadows.is_empty() && n.text.is_none() && n.vis.icon.is_none(),
                 })
             })
             .collect();
-        for f in &self.flights {
+        for f in self.motion.flights() {
             let r = if self.reduced_motion { f.source } else { f.presented };
             let c = if self.reduced_motion { f.source_clip } else { f.clip };
             let path = format!("flight-source/{}", f.target_key);
@@ -380,6 +382,21 @@ impl<S: 'static> Runtime<S> {
         elements
     }
 
+    /// Index of the first live (non-exiting, mounted) node matching `key` within optional ancestor
+    /// `scope`. Matches [`Node::named`] (key, full path, or keyed-ancestor suffix such as
+    /// `slider/knob`) and `/`-separated path suffixes.
+    pub(crate) fn live_named(&self, scope: Option<&str>, key: &str) -> Option<usize> {
+        if key.is_empty() { return None; }
+        let has_slash = key.contains('/');
+        (0..self.tree.nodes.len()).find(|&i| {
+            let n = &self.tree.nodes[i];
+            let matched = n.named(key)
+                || (has_slash && (n.path.strip_suffix(key).is_some_and(|head| head.ends_with('/')) || keyed_suffix(&n.path, key)));
+            matched && !self.subtree_exiting(i) && !self.subtree_unmounted(i)
+                && n.parent.is_none_or(|p| in_scope(&self.tree.nodes[p].path, scope))
+        })
+    }
+
     /// Centre of the first element whose key is `key`, or whose path ends with `key` when it
     /// contains a `/` (e.g. `slider/knob`), in points. Elements without keys between them don't
     /// count, so `slider/knob` finds a knob inside unkeyed rows inside the slider. Failing that,
@@ -387,25 +404,16 @@ impl<S: 'static> Runtime<S> {
     /// `key`. Exiting elements and their children are gone here; [`Runtime::presented`] still
     /// reads them.
     pub fn find(&self, key: &str) -> Option<(f32, f32)> {
-        let suffix = format!("/{key}");
-        let matches = |n: &Node| {
-            if key.contains('/') {
-                n.path == key || n.path.ends_with(&suffix) || keyed_suffix(&n.path, key)
-            } else {
-                n.key.as_deref() == Some(key)
-            }
-        };
-        let i = (0..self.nodes.len()).find(|&i| matches(&self.nodes[i]) && !self.subtree_exiting(i));
-        let Some(i) = i else { return self.find_link(key).or_else(|| self.find_highlight(key)) };
-        let r = self.drawn.get(i).copied()?;
+        let Some(i) = self.live_named(None, key) else { return self.find_link(key).or_else(|| self.find_highlight(key)) };
+        let r = self.paint.drawn.get(i).copied()?;
         Some((r[0] + r[2] * 0.5, r[1] + r[3] * 0.5))
     }
 
     /// Drawn rect `[x, y, w, h]` in points and effective opacity (ancestors included) of the
     /// element keyed `key`, exiting or not, as of the last frame.
     pub fn presented(&self, key: &str) -> Option<([f32; 4], f32)> {
-        let i = self.nodes.iter().position(|n| n.key.as_deref() == Some(key))?;
-        Some((*self.drawn.get(i)?, self.inh_scratch.get(i)?.opacity))
+        let i = self.tree.index_of_key(key)?;
+        Some((*self.paint.drawn.get(i)?, self.paint.inh_scratch.get(i)?.opacity))
     }
 
     /// The topmost element drawn at window point (`x`, `y`) in points, as of the last frame: the
@@ -430,16 +438,16 @@ impl<S: 'static> Runtime<S> {
         self.element_at_within(None, x, y, pick)
     }
 
-    pub(super) fn run_pick_reads(&mut self, tx: &mut Tx) {
+    pub(super) fn run_pick_reads(&mut self, app: &mut dyn AppDriver, tx: &mut Tx) {
         for read in std::mem::take(&mut tx.pick_reads) {
             let picked = self.element_at_within(read.within.as_deref(), read.x, read.y, read.pick);
             if let Some(f) = read.take() {
-                f(states!(self), picked, tx);
-                self.dirty = true;
+                f(app.states(), picked, tx);
+                self.commit.dirty = true;
             }
         }
         // A callback may ask again, but cannot keep this dispatch running indefinitely.
-        self.pending.pick_reads.append(&mut tx.pick_reads);
+        self.frame.pending.pick_reads.append(&mut tx.pick_reads);
     }
 
     /// [`Runtime::element_at`] restricted to an element and its descendants, ignoring other
@@ -455,18 +463,19 @@ impl<S: 'static> Runtime<S> {
 
     fn element_at_within(&self, within: Option<&str>, x: f32, y: f32, pick: Pick) -> Option<Picked> {
         let scope = match within {
-            Some(key) => Some(self.nodes.iter().position(|n| crate::flight::selects(key, &n.path, n.key.as_deref()))?),
+            Some(key) => Some(self.tree.selects_index(key)?),
             None => None,
         };
-        let n = self.nodes.len();
-        let at = |k: usize| if self.layer_paint_order.is_empty() { k } else { self.layer_paint_order[k] };
-        let count = if self.layer_paint_order.is_empty() { n } else { self.layer_paint_order.len() };
+        let n = self.tree.nodes.len();
+        let order = self.paint.layer_paint_order();
+        let at = |k: usize| if order.is_empty() { k } else { order[k] };
+        let count = if order.is_empty() { n } else { order.len() };
         (0..count).rev().map(at).find(|&i| {
-            scope.is_none_or(|scope| std::iter::successors(Some(i), |&p| self.nodes[p].parent).any(|p| p == scope))
+            scope.is_none_or(|scope| self.tree.is_descendant(i, scope))
                 && self.pickable(i, x, y, pick)
         }).map(|i| Picked {
-            path: self.nodes[i].path.clone(),
-            key: self.nodes[i].key.clone(),
+            path: self.tree.nodes[i].path.clone(),
+            key: self.tree.nodes[i].key.clone(),
         })
     }
 
@@ -480,12 +489,12 @@ impl<S: 'static> Runtime<S> {
 
     /// [`Runtime::contains`] with options, as [`Runtime::element_at_with`].
     pub fn contains_with(&self, key: &str, x: f32, y: f32, pick: Pick) -> bool {
-        self.nodes.iter().position(|n| crate::flight::selects(key, &n.path, n.key.as_deref())).is_some_and(|i| self.pickable(i, x, y, pick))
+        self.tree.selects_index(key).is_some_and(|i| self.pickable(i, x, y, pick))
     }
 
     fn pickable(&self, i: usize, x: f32, y: f32, pick: Pick) -> bool {
-        self.drawn.get(i).is_some()
-            && self.inh_scratch.get(i).is_some_and(|h| pick.transparent || h.opacity > 0.0)
+        self.paint.drawn.get(i).is_some()
+            && self.paint.inh_scratch.get(i).is_some_and(|h| pick.transparent || h.opacity > 0.0)
             && !self.subtree_exiting(i)
             && self.node_contains(i, x, y)
     }
@@ -495,8 +504,8 @@ impl<S: 'static> Runtime<S> {
     /// demand: nothing runs per frame for it. This is a driver/headless read: running view
     /// functions and handlers do not hold a `Runtime`.
     pub fn presented_pose(&self, key: &str) -> Option<Pose> {
-        let i = self.nodes.iter().position(|n| crate::flight::selects(key, &n.path, n.key.as_deref()))?;
-        let n = &self.nodes[i];
+        let i = self.tree.selects_index(key)?;
+        let n = &self.tree.nodes[i];
         let store = self.scene.store();
         let shadows = n.vis.shadows.iter().enumerate().map(|(k, sh)| {
             let sh = self.shadow_at(n.id, k, sh);
@@ -506,14 +515,14 @@ impl<S: 'static> Runtime<S> {
             }
         }).collect();
         let moving = self.rect_springing(i)
-            || std::iter::successors(Some(i), |&p| step_up(&self.nodes, p)).any(|p| {
-                let id = self.nodes[p].id;
+            || std::iter::successors(Some(i), |&p| step_up(&self.tree.nodes, p)).any(|p| {
+                let id = self.tree.nodes[p].id;
                 paint_pose_springing(store, id)
-                    || (!self.reduced_motion && self.loops.get(&id).is_some_and(|l| l.active(store.node_time(id))))
+                    || (!self.reduced_motion && self.motion.loop_active(id, store.node_time(id)))
             });
         Some(Pose {
             rotation: self.scene.get(n.id, prop::ROTATION).unwrap_or(n.vis.rotate),
-            scale: self.inh_scratch.get(i)?.scale,
+            scale: self.paint.inh_scratch.get(i)?.scale,
             shadows,
             moving,
         })
@@ -523,7 +532,7 @@ impl<S: 'static> Runtime<S> {
     /// follow it, so they flip when the app changes theme itself).
     pub(crate) fn backdrop_dark(&self) -> Option<bool> {
         if self.transparent { return None; }
-        let n = self.nodes.get(self.app_root())?;
+        let n = self.tree.nodes.get(self.tree.app_root())?;
         let c = self.color(n.id, P_FILL, n.vis.fill);
         (c.a > 0.5).then(|| 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b < 0.25)
     }

@@ -284,7 +284,7 @@ pub(super) fn gpu_time(gpu: &Gpu, mut draw: impl FnMut(&mut wgpu::CommandEncoder
     enc.resolve_query_set(&queries, 0..N * 2, &resolve, 0);
     enc.copy_buffer_to_buffer(&resolve, 0, &read, 0, u64::from(N) * 16);
     gpu.queue.submit([enc.finish()]);
-    read.slice(..).map_async(wgpu::MapMode::Read, |r| r.unwrap());
+    read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
     gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     let bytes = read.slice(..).get_mapped_range().unwrap();
     let mut ms: Vec<f64> = bytes.chunks_exact(16).skip(8).map(|b| {
@@ -435,7 +435,7 @@ fn interleaved_gpu_times(gpu: &Gpu, renderers: &[Renderer], target: &Offscreen) 
     enc.resolve_query_set(&queries, 0..count * 2, &resolve, 0);
     enc.copy_buffer_to_buffer(&resolve, 0, &read, 0, u64::from(count) * 16);
     gpu.queue.submit([enc.finish()]);
-    read.slice(..).map_async(wgpu::MapMode::Read, |r| r.unwrap());
+    read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
     gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     let bytes = read.slice(..).get_mapped_range().unwrap();
     let mut samples = vec![Vec::new(); renderers.len()];

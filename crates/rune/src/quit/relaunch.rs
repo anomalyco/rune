@@ -84,14 +84,18 @@ fn bundle_of(exe: &std::path::Path) -> Option<std::path::PathBuf> {
 /// A relaunched process waits here, once, for the process that started it to exit, for at most
 /// ten seconds. Any other launch goes straight on.
 pub(crate) fn wait_for_previous() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        let Some(pid) = std::env::var_os(AFTER).and_then(|v| v.to_str().and_then(|v| v.parse::<u32>().ok())) else { return };
-        if pid != std::process::id() { wait(pid); }
-    });
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let Some(pid) = std::env::var_os(AFTER).and_then(|v| v.to_str().and_then(|v| v.parse::<u32>().ok())) else { return };
+            if pid != std::process::id() { wait(pid); }
+        });
+    }
 }
 
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 fn wait(pid: u32) {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
@@ -110,6 +114,7 @@ fn wait(pid: u32) {
 /// kernel has closed its handles (its instance pipe, its file locks), which can take a while: a
 /// process in between is still here, and is [`ending`].
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 pub(crate) fn alive(pid: u32) -> bool {
     process(pid).is_some_and(|(signalled, _)| !signalled)
 }
@@ -142,15 +147,16 @@ fn process(pid: u32) -> Option<(bool, bool)> {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), not(target_arch = "wasm32")))]
 fn wait(pid: u32) {
-    let deadline = std::time::Instant::now() + WAIT;
-    while alive(pid) && std::time::Instant::now() < deadline {
+    let deadline = crate::time::now() + WAIT;
+    while alive(pid) && crate::time::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
 }
 
 #[cfg(all(unix, not(target_os = "linux")))]
+#[allow(unsafe_code)]
 fn alive(pid: u32) -> bool {
     // SAFETY: signal 0 only checks that the process exists.
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }

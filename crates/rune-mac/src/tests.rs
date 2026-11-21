@@ -7,6 +7,7 @@ fn parses_appkits_frame_string() {
 
 #[cfg(target_os = "macos")]
 #[test]
+#[allow(unsafe_code)]
 fn busy_holds_a_marker_named_for_this_process() {
     let home = std::env::temp_dir().join(format!("rune-mac-busy-{}", std::process::id()));
     // SAFETY: the only test that reads or writes the environment.
@@ -16,5 +17,5 @@ fn busy_holds_a_marker_named_for_this_process() {
     assert!(marker.exists());
     crate::busy(false);
     assert!(!marker.exists());
-    let _ = std::fs::remove_dir_all(home);
+    std::fs::remove_dir_all(home).ok();
 }

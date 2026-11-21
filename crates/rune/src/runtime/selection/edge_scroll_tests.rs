@@ -49,21 +49,21 @@ fn settle(rt: &mut Runtime<List>) {
     }
 }
 
-fn offset(rt: &Runtime<List>) -> f64 { rt.scrolls.values().next().expect("one scroll").offset }
+fn offset(rt: &Runtime<List>) -> f64 { rt.scroll.scrolls.values().next().expect("one scroll").offset }
 
-fn max(rt: &Runtime<List>) -> f64 { rt.scrolls.values().next().expect("one scroll").max }
+fn max(rt: &Runtime<List>) -> f64 { rt.scroll.scrolls.values().next().expect("one scroll").max }
 
 fn row_of(path: &str) -> usize { path.rsplit_once("/r").and_then(|(_, r)| r.parse().ok()).expect("a row path") }
 
 /// The rows holding the selection's anchor and focus.
 fn ends(rt: &Runtime<List>) -> (usize, usize) {
-    let sel = rt.selectable.phase.selection().expect("a selection");
+    let sel = rt.edit.selectable.phase.selection().expect("a selection");
     (row_of(&sel.path), sel.far.as_ref().map_or(row_of(&sel.path), |f| row_of(&f.path)))
 }
 
 /// The selection's anchor and focus, as (row, byte).
 fn range(rt: &Runtime<List>) -> ((usize, usize), (usize, usize)) {
-    let sel = rt.selectable.phase.selection().expect("a selection");
+    let sel = rt.edit.selectable.phase.selection().expect("a selection");
     let (a, f) = ends(rt);
     ((a, sel.anchor), (f, sel.focus))
 }
@@ -94,7 +94,7 @@ fn held_still_past_the_bottom_the_list_and_the_selection_keep_going() {
         (last_offset, last_focus) = (offset(&rt), focus);
     }
     assert!(advanced >= 10 && last_focus >= 15, "the selection followed the list: focus row {last_focus}, moved {advanced} times");
-    assert!(!rt.virtuals[LIST].range.contains(&0), "the anchor's row scrolled out: {:?}", rt.virtuals[LIST].range);
+    assert!(!rt.commit.virtuals[LIST].range.contains(&0), "the anchor's row scrolled out: {:?}", rt.commit.virtuals[LIST].range);
     rt.pointer_up(150.0, BOTTOM + 200.0);
     rt.frame(1.0 / 60.0);
     let (_, focus) = ends(&rt);
@@ -141,9 +141,9 @@ fn held_still_above_the_top_it_scrolls_back_up() {
 fn release_stops_it_and_leaves_no_wake() {
     let mut rt = hold_below(100.0);
     for _ in 0..3 { rt.frame(1.0 / 60.0); }
-    assert!(rt.selectable.edge.running());
+    assert!(rt.edit.selectable.edge.running());
     rt.pointer_up(150.0, BOTTOM + 100.0);
-    assert!(!rt.selectable.edge.running(), "the release stops it at once");
+    assert!(!rt.edit.selectable.edge.running(), "the release stops it at once");
     rt.frame(1.0 / 60.0);
     assert_eq!(rt.wake_deadline(), None, "nothing left to wake for");
     let at = offset(&rt);
@@ -164,10 +164,10 @@ fn escape_stops_it_and_keeps_the_selection() {
         for escape in escapes {
             let mut rt = hold_below_in(list, 100.0);
             for _ in 0..ticks { rt.frame(1.0 / 60.0); }
-            if ticks == 30 { assert!(!rt.virtuals[LIST].range.contains(&0), "the anchor's row is out"); }
-            assert!(rt.selectable.edge.running());
+            if ticks == 30 { assert!(!rt.commit.virtuals[LIST].range.contains(&0), "the anchor's row is out"); }
+            assert!(rt.edit.selectable.edge.running());
             escape(&mut rt);
-            assert!(!rt.selectable.edge.running(), "Escape stops it at once");
+            assert!(!rt.edit.selectable.edge.running(), "Escape stops it at once");
             let (at, selected) = (offset(&rt), range(&rt));
             rt.frame(1.0 / 120.0);
             assert_eq!(rt.wake_deadline(), None, "no step asked for");
@@ -175,7 +175,7 @@ fn escape_stops_it_and_keeps_the_selection() {
             rt.pointer_move(150.0, BOTTOM + 200.0);
             for _ in 0..10 { rt.frame(1.0 / 120.0); }
             assert_eq!((offset(&rt), range(&rt)), (at, selected), "the list and the selection stay put");
-            assert!(!rt.press.is_held() && !rt.selectable.phase.dragging());
+            assert!(!rt.pointer.pressing() && !rt.edit.selectable.phase.dragging());
         }
     }
 }
@@ -185,17 +185,17 @@ fn moving_back_inside_or_losing_focus_stops_it() {
     let mut rt = hold_below(100.0);
     rt.frame(1.0 / 60.0);
     rt.pointer_move(150.0, 60.0);
-    assert!(!rt.selectable.edge.running(), "back inside");
+    assert!(!rt.edit.selectable.edge.running(), "back inside");
     let at = offset(&rt);
     settle(&mut rt);
     assert_eq!(offset(&rt), at);
-    assert!(rt.selectable.phase.dragging(), "still selecting, only not scrolling");
+    assert!(rt.edit.selectable.phase.dragging(), "still selecting, only not scrolling");
 
     let mut rt = hold_below(100.0);
     rt.frame(1.0 / 60.0);
     rt.window_focus(true);
     rt.window_focus(false);
-    assert!(!rt.selectable.edge.running(), "focus lost");
+    assert!(!rt.edit.selectable.edge.running(), "focus lost");
     rt.frame(1.0 / 60.0);
     assert_eq!(rt.wake_deadline(), None);
 }
@@ -210,7 +210,7 @@ fn the_last_row_a_scroll_brings_in_is_selected() {
             for past in [371.0, 100.0, 3000.0] {
                 let mut rt = hold_below_in(list, past);
                 let mut ticks = 0;
-                while rt.selectable.edge.running() {
+                while rt.edit.selectable.edge.running() {
                     rt.frame(1.0 / hz);
                     ticks += 1;
                     assert!(ticks < 2000, "reached the end");
@@ -236,7 +236,7 @@ fn losing_focus_right_after_the_last_row_scrolls_in_keeps_it_selected() {
         }
         rt.window_focus(true);
         rt.window_focus(false);
-        assert!(!rt.selectable.edge.running() && !rt.selectable.phase.dragging());
+        assert!(!rt.edit.selectable.edge.running() && !rt.edit.selectable.phase.dragging());
         assert_eq!(range(&rt), ((0, 0), (ROWS - 1, LEN)), "virtual {}, {past} past", list.virtual_rows);
     }
     // And midway: each frame's selection reaches the last row that frame shows.
@@ -252,7 +252,7 @@ fn losing_focus_right_after_the_last_row_scrolls_in_keeps_it_selected() {
 fn at_the_end_of_the_list_it_stops_asking_for_frames() {
     let mut rt = hold_below(400.0);
     let mut ticks = 0;
-    while rt.selectable.edge.running() {
+    while rt.edit.selectable.edge.running() {
         rt.frame(1.0 / 60.0);
         ticks += 1;
         assert!(ticks < 200, "reached the end");
@@ -262,7 +262,7 @@ fn at_the_end_of_the_list_it_stops_asking_for_frames() {
     settle(&mut rt);
     assert_eq!(rt.wake_deadline(), None, "no wake while the pointer stays held at the end");
     assert!(!rt.frame(1.0 / 60.0), "an idle frame");
-    assert!(rt.press.is_held() && rt.selectable.phase.dragging(), "still held");
+    assert!(rt.pointer.pressing() && rt.edit.selectable.phase.dragging(), "still held");
 }
 
 /// A list stuck to its bottom lets go of it while the edge scroll runs, however small each step
@@ -275,7 +275,7 @@ fn a_list_stuck_to_its_bottom_scrolls_up_and_then_rests() {
         rt.wheel(150.0, 60.0, -10_000.0);
         settle(&mut rt);
         let end = max(&rt);
-        assert!(end > 0.0 && offset(&rt) == end && rt.scrolls.values().next().unwrap().pinned(), "pinned at its end");
+        assert!(end > 0.0 && offset(&rt) == end && rt.scroll.scrolls.values().next().unwrap().pinned(), "pinned at its end");
         rt.pointer_down(296.0, 100.0);
         rt.frame(1.0 / hz);
         // Inside the band at the top edge: 80 points a second.
@@ -288,7 +288,7 @@ fn a_list_stuck_to_its_bottom_scrolls_up_and_then_rests() {
             last = offset(&rt);
         }
         let mut ticks = 0;
-        while rt.selectable.edge.running() {
+        while rt.edit.selectable.edge.running() {
             rt.frame(1.0 / hz);
             ticks += 1;
             assert!(ticks < 2000, "{hz} Hz: reached the top");
@@ -313,7 +313,7 @@ fn an_idle_window_with_no_drag_draws_nothing() {
     for _ in 0..10 { assert!(!rt.frame(1.0 / 60.0)); }
     assert_eq!(rt.wake_deadline(), None);
     assert_eq!(rt.stats.commits, commits, "nothing rebuilt");
-    assert!(!rt.selectable.edge.running());
+    assert!(!rt.edit.selectable.edge.running());
     assert_eq!(offset(&rt), 0.0);
 }
 
@@ -383,7 +383,7 @@ fn a_step_that_moved_nothing_ends_it() {
 /// Frames until the edge scroll stops stepping.
 fn run_out(rt: &mut Runtime<List>) {
     let mut ticks = 0;
-    while rt.selectable.edge.running() {
+    while rt.edit.selectable.edge.running() {
         rt.frame(1.0 / 60.0);
         ticks += 1;
         assert!(ticks < 2000, "reached the end");
@@ -397,7 +397,7 @@ fn rest_at_end(list: List) -> Runtime<List> {
     settle(&mut rt);
     assert_eq!((offset(&rt), ends(&rt).1), (max(&rt), ROWS - 1), "at the end, the last row selected");
     assert_eq!(rt.wake_deadline(), None, "no wake while it rests");
-    assert!(matches!(rt.selectable.edge.state, State::AtEnd { .. }), "{:?}", rt.selectable.edge.state);
+    assert!(matches!(rt.edit.selectable.edge.state, State::AtEnd { .. }), "{:?}", rt.edit.selectable.edge.state);
     rt
 }
 
@@ -420,7 +420,7 @@ fn rows_arriving_at_the_end_a_held_drag_rests_at_set_it_going_again() {
         assert_eq!(range(&rt), (anchor, (ROWS + 19, LEN)), "virtual {}: the new rows selected", list.virtual_rows);
         assert_eq!(rt.wake_deadline(), None, "and rests again");
         assert!(!rt.frame(1.0 / 60.0), "an idle frame");
-        assert!(rt.press.is_held() && rt.selectable.phase.dragging(), "still held");
+        assert!(rt.pointer.pressing() && rt.edit.selectable.phase.dragging(), "still held");
     }
 }
 
@@ -438,7 +438,7 @@ fn rows_arriving_after_it_let_go_of_the_end_change_nothing() {
         for (name, stop) in stops {
             let mut rt = rest_at_end(list);
             stop(&mut rt);
-            assert_eq!(rt.selectable.edge.state, State::Idle, "{name}");
+            assert_eq!(rt.edit.selectable.edge.state, State::Idle, "{name}");
             settle(&mut rt);
             let (at, selected) = (offset(&rt), range(&rt));
             rt.update(|s, _| s.rows += 20);
@@ -455,7 +455,7 @@ fn rows_arriving_after_it_let_go_of_the_end_change_nothing() {
 #[test]
 fn a_list_stuck_to_its_bottom_brings_new_rows_into_a_held_selection() {
     let mut rt = rest_at_end(List { stick: true, ..VIRTUAL });
-    assert!(rt.scrolls.values().next().unwrap().pinned(), "stuck to its bottom");
+    assert!(rt.scroll.scrolls.values().next().unwrap().pinned(), "stuck to its bottom");
     let anchor = range(&rt).0;
     rt.update(|s, _| s.rows += 20);
     let mut frames = 0;
@@ -469,7 +469,7 @@ fn a_list_stuck_to_its_bottom_brings_new_rows_into_a_held_selection() {
     assert_eq!(range(&rt), (anchor, (ROWS + 19, LEN)), "the selection reaches the new last row");
     assert_eq!(rt.wake_deadline(), None, "and rests");
     assert!(!rt.frame(1.0 / 60.0), "an idle frame");
-    assert!(rt.press.is_held() && rt.selectable.phase.dragging(), "still held");
+    assert!(rt.pointer.pressing() && rt.edit.selectable.phase.dragging(), "still held");
 }
 
 /// A list that shrinks while a held drag waits at its end ends the wait: rows appended after it
@@ -487,7 +487,7 @@ fn a_list_that_shrinks_under_a_resting_drag_ends_the_wait() {
     settle(&mut rt);
     assert_eq!((offset(&rt), range(&rt)), (at, selected), "the rows that arrive after it move nothing");
     assert_eq!(rt.wake_deadline(), None);
-    assert!(rt.press.is_held() && rt.selectable.phase.dragging(), "still held");
+    assert!(rt.pointer.pressing() && rt.edit.selectable.phase.dragging(), "still held");
 }
 
 /// The edge scroll's letters, as the runtime feeds them: a pointer move, the frame for the step

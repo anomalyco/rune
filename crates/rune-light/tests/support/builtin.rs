@@ -1,10 +1,8 @@
 //! Builds every pipeline Rune, rune-fx and rune-light ship, once, timing each step in
 //! milliseconds.
 
-use std::time::Instant;
-
 fn ms<T>(f: impl FnOnce() -> T) -> (T, f64) {
-    let start = Instant::now();
+    let start = rune::time::now();
     let out = f();
     (out, start.elapsed().as_secs_f64() * 1e3)
 }

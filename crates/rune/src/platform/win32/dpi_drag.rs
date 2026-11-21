@@ -10,12 +10,14 @@
 //!
 //! The move or size loop is also when a resize draws its frame at once (`in_size_move`).
 
+#![allow(unsafe_code)]
+
 use std::cell::RefCell;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_NCDESTROY,
+    IsWindow, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_NCDESTROY,
 };
 
 const SUBCLASS: usize = 0x5255_4e44;
@@ -44,14 +46,19 @@ fn moving(hwnd: HWND) -> bool {
 
 unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM, _: usize, _: usize) -> LRESULT {
     match message {
-        WM_ENTERSIZEMOVE => MOVING.with(|m| m.borrow_mut().push(hwnd as usize)),
+        WM_ENTERSIZEMOVE => MOVING.with(|m| {
+            let mut m = m.borrow_mut();
+            if !m.contains(&(hwnd as usize)) { m.push(hwnd as usize); }
+        }),
         WM_EXITSIZEMOVE => MOVING.with(|m| m.borrow_mut().retain(|&h| h != hwnd as usize)),
         // SAFETY: WM_DPICHANGED's lparam points to the suggested RECT.
         WM_DPICHANGED if moving(hwnd) && !super::frame::installed(hwnd) => unsafe {
             let suggested = *(lparam as *const RECT);
             let result = DefSubclassProc(hwnd, message, wparam, lparam);
-            let RECT { left, top, right, bottom } = suggested;
-            SetWindowPos(hwnd, std::ptr::null_mut(), left, top, right - left, bottom - top, SWP_NOZORDER | SWP_NOACTIVATE);
+            if IsWindow(hwnd) != 0 {
+                let RECT { left, top, right, bottom } = suggested;
+                SetWindowPos(hwnd, std::ptr::null_mut(), left, top, right - left, bottom - top, SWP_NOZORDER | SWP_NOACTIVATE);
+            }
             return result;
         },
         WM_NCDESTROY => {

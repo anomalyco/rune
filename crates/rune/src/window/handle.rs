@@ -40,7 +40,7 @@ impl WindowHandle {
     pub(super) fn bind(&self, proxy: EventLoopProxy<WakeEvent>, slot: usize) {
         let mut route = self.native.route.lock().unwrap();
         if let Route::Unbound { queued } = &mut *route {
-            for request in std::mem::take(queued) { let _ = proxy.send_event(request(slot)); }
+            for request in std::mem::take(queued) { proxy.send_event(request(slot)).ok(); }
         }
         *route = Route::Bound { proxy, slot };
     }
@@ -62,7 +62,7 @@ impl WindowHandle {
 
     pub(super) fn send(&self, request: impl FnOnce(usize) -> WakeEvent + Send + 'static) {
         match &mut *self.native.route.lock().unwrap() {
-            Route::Bound { proxy, slot } => { let _ = proxy.send_event(request(*slot)); }
+            Route::Bound { proxy, slot } => { proxy.send_event(request(*slot)).ok(); }
             Route::Unbound { queued } => queued.push(Box::new(request)),
         }
     }
@@ -184,8 +184,7 @@ impl WindowHandle {
 
 #[cfg(target_os = "macos")]
 pub(super) fn native_window_number(window: &Window) -> Option<u32> {
-    // SAFETY: called on winit's event thread.
-    u32::try_from(unsafe { crate::platform::macos::ns_window(window)?.windowNumber() }).ok().filter(|n| *n != 0)
+    u32::try_from(crate::platform::macos::ns_window(window)?.windowNumber()).ok().filter(|n| *n != 0)
 }
 #[cfg(not(target_os = "macos"))]
 pub(super) fn native_window_number(_: &Window) -> Option<u32> { None }

@@ -1,6 +1,8 @@
 //! NSAccessibility for a window: AccessKit subclasses winit's content view at run time to
 //! answer for its children, focus and hit tests.
 
+#![allow(unsafe_code)]
+
 use objc2::runtime::{AnyClass, AnyObject};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -20,7 +22,7 @@ impl Adapter {
             (objc2::msg_send![object, class], object.class())
         };
         if !std::ptr::eq(reported, actual) {
-            eprintln!("rune: accessibility unavailable for a window: its view is already observed ({})", actual.name());
+            eprintln!("rune: accessibility unavailable for a window: its view is already observed ({})", actual.name().to_string_lossy());
             return None;
         }
         let options = DisplayOptions::watch(activation.0.clone());
@@ -48,16 +50,16 @@ struct DisplayOptions {
 
 impl DisplayOptions {
     fn watch(shared: std::sync::Arc<super::Shared>) -> Self {
-        use objc2::{class, msg_send, msg_send_id};
+        use objc2::{class, msg_send};
         let block = block2::RcBlock::new(move |_: *mut AnyObject| shared.push(|i| i.settings = true));
         // SAFETY: main thread (the adapter is made there); NSWorkspace's notification center
         // lives for the process; the token is removed in Drop.
         unsafe {
             let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
-            let center: Option<objc2::rc::Retained<AnyObject>> = msg_send_id![workspace, notificationCenter];
+            let center: Option<objc2::rc::Retained<AnyObject>> = msg_send![workspace, notificationCenter];
             let Some(center) = center else { return DisplayOptions { center: None, token: None } };
             let name = objc2_foundation::NSString::from_str("NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification");
-            let token: Option<objc2::rc::Retained<AnyObject>> = msg_send_id![&*center, addObserverForName: &*name,
+            let token: Option<objc2::rc::Retained<AnyObject>> = msg_send![&*center, addObserverForName: &*name,
                 object: std::ptr::null::<AnyObject>(), queue: std::ptr::null::<AnyObject>(), usingBlock: &*block];
             DisplayOptions { center: Some(center), token }
         }

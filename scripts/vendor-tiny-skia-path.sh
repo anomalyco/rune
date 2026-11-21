@@ -2,7 +2,7 @@
 # Re-makes vendor/tiny-skia-path: the tiny-skia-path crate exactly as published on crates.io at
 # <version>, plus vendor/tiny-skia-path.patch, which puts back how Skia itself strokes and splits
 # conics where tiny-skia's port has drifted (Rune's icons are covered as Chromium's Skia covers
-# them: crates/rune/src/text/area.rs):
+# them: crates/rune-text/src/icon/area.rs):
 #   - a conic becomes quads a quarter of a *device* pixel from it (the stroker passes its
 #     resolution scale), and one quad when that's close enough, not at least two;
 #   - the stroker keeps each tangent as a vector, measures its distance to the tangent line as

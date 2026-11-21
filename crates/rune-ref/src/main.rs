@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use rune_ref::{Frame, Scene, generate};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

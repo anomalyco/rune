@@ -97,16 +97,8 @@ impl FxRenderer {
             self.scratch.push(inst);
         }
         let mut regrow = self.bg0.is_none();
-        if self.scratch.len() > self.inst_cap {
-            self.inst_cap = self.scratch.len().next_power_of_two();
-            self.insts = Self::buffer(device, "fx insts", self.inst_cap * INST_SIZE);
-            regrow = true;
-        }
-        if self.scratch_xf.len() > self.xform_cap {
-            self.xform_cap = self.scratch_xf.len().next_power_of_two();
-            self.xforms = Self::buffer(device, "fx xforms", self.xform_cap * 16);
-            regrow = true;
-        }
+        regrow |= self.insts.ensure(device, self.scratch.len());
+        regrow |= self.xforms.ensure(device, self.scratch_xf.len());
         if regrow {
             self.bg0 = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("fx0"),
@@ -119,13 +111,17 @@ impl FxRenderer {
             }));
         }
         let staging = self.staging(device, queue);
-        staging.write_buffer(&self.insts, 0, bytemuck::cast_slice(&self.scratch));
-        staging.write_buffer(&self.xforms, 0, bytemuck::cast_slice(&self.scratch_xf));
-        let g = [vw, vh, if self.opts.dither { 1.0 } else { 0.0 }, if self.srgb.unwrap_or(false) { 1.0 } else { 0.0 }];
+        staging.write_buffer(self.insts.buffer(), 0, bytemuck::cast_slice(&self.scratch));
+        staging.write_buffer(self.xforms.buffer(), 0, bytemuck::cast_slice(&self.scratch_xf));
+        let g = Globals {
+            viewport: [vw, vh],
+            dither: if self.opts.dither { 1.0 } else { 0.0 },
+            srgb: if self.srgb.unwrap_or(false) { 1.0 } else { 0.0 },
+        };
         let written = &mut self.staging.as_mut().unwrap().1;
         if *written != g {
             *written = g;
-            staging.write_buffer(&self.globals, 0, bytemuck::cast_slice(&g));
+            staging.write_buffer(&self.globals, 0, bytemuck::bytes_of(&g));
         }
         // Submitted now, ahead of the frame that draws them, as queue writes would be.
         staging.submit();
@@ -135,6 +131,7 @@ impl FxRenderer {
 
     /// The upload staging; its globals start unknown (NaN), so the first `prepare` writes them.
     pub(super) fn staging(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> rune_staging::Staging {
-        self.staging.get_or_insert_with(|| (rune_staging::Staging::new(device, queue), [f32::NAN; 4])).0.clone()
+        let nan = Globals { viewport: [f32::NAN; 2], dither: f32::NAN, srgb: f32::NAN };
+        self.staging.get_or_insert_with(|| (rune_staging::Staging::new(device, queue), nan)).0.clone()
     }
 }

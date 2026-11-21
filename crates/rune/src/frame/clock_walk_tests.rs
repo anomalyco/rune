@@ -57,7 +57,7 @@ impl Reference {
 
 #[test]
 fn clock_walk_matches_previous_frames() {
-    let start = Instant::now();
+    let start = crate::time::now();
     let at = |ms| start + Duration::from_millis(ms);
     let mut store = AnimationStore::new();
     let x = Prop::<f32>::custom(64, PropClass::Spatial);

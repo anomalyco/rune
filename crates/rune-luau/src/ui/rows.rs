@@ -7,6 +7,8 @@
 //! when the list's or its own moves. With `scrollY = false` the list has no viewport of its own: it is a stack inside a scrolling
 //! column, under or among other content, and windows against that column's viewport.
 
+#![allow(unsafe_code)]
+
 use std::os::raw::c_int;
 use std::rc::{Rc, Weak};
 

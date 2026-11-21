@@ -18,7 +18,7 @@ fn the_menu_key_opens_nothing_for_a_focused_link_whose_subtree_is_inert() {
     for _ in 0..30 { rt.frame(1.0 / 60.0); }
     assert_eq!(rt.focused_key().as_deref(), Some("docs"));
     // Focus normally drops at the commit that makes it inert; the key must not depend on that.
-    for n in &mut rt.nodes { n.inert = true; }
+    for n in &mut rt.tree.nodes { n.inert = true; }
     for (key, shift) in [(Key::ContextMenu, false), (Key::Function(10), true)] {
         rt.key(KeyEvent { key, mods: Mods { shift, ..Mods::default() } });
         rt.frame(0.0);

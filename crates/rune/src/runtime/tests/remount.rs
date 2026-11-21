@@ -91,7 +91,7 @@ fn scrolling_virtual_rows_without_memo_skips_view_and_keeps_mounted_rows() {
         let built = take_built();
         if rt.stats.commits > c0 {
             scroll_commits += 1;
-            let mounted_len = rt.virtuals["#0/main/scroll/rows"].range.len();
+            let mounted_len = rt.commit.virtuals["#0/main/scroll/rows"].range.len();
             assert!(
                 built.len() < mounted_len,
                 "step {step}: built {} rows for a {mounted_len}-row window",
@@ -103,7 +103,7 @@ fn scrolling_virtual_rows_without_memo_skips_view_and_keeps_mounted_rows() {
 
         // Force full view on the reference runtime and check exact visible parity.
         let fc0 = full.stats.commits;
-        full.reuse.scale = f32::NAN;
+        full.commit.set_reuse_scale(f32::NAN);
         full.wheel(400.0, 200.0, -90.0);
         full.frame(1.0 / 120.0);
         if full.stats.commits > fc0 {
@@ -278,7 +278,7 @@ fn virtual_remount_keeps_view_and_mounted_row_memos_and_evicts_culled_ones() {
     }
     while rt.frame(1.0 / 120.0) {}
 
-    let mounted = rt.virtuals["#0/scroll/rows"].range.clone();
+    let mounted = rt.commit.virtuals["#0/scroll/rows"].range.clone();
     assert!(mounted.start > 50, "scrolled past early rows: {mounted:?}");
     ROW_MEMO_BUILDS.with_borrow_mut(Vec::clear);
 
@@ -294,10 +294,10 @@ fn virtual_remount_keeps_view_and_mounted_row_memos_and_evicts_culled_ones() {
     assert!(rebuilt.is_empty(), "mounted row memos survived partial commits, got {rebuilt:?}");
     // And culled early rows (`0..mounted.start`) were evicted rather than accumulating in MemoCache.
     assert!(
-        rt.memo.len() <= rt.virtuals["#0/scroll/rows"].range.len() + 2,
+        rt.commit.memo_len() <= rt.commit.virtuals["#0/scroll/rows"].range.len() + 2,
         "culled row memos evicted: memo len {}, mounted {:?}",
-        rt.memo.len(),
-        rt.virtuals["#0/scroll/rows"].range
+        rt.commit.memo_len(),
+        rt.commit.virtuals["#0/scroll/rows"].range
     );
 
     // Press an on-screen scrolled-in row and confirm hit testing + handler dispatch works.

@@ -1,6 +1,6 @@
 //! Small wgpu helpers shared by the light and glass renderers.
 
-const COMMON: &str = include_str!("shaders/common.wgsl");
+pub(crate) const COMMON: &str = include_str!("shaders/common.wgsl");
 
 pub(crate) fn module(device: &wgpu::Device, label: &str, src: &str) -> wgpu::ShaderModule {
     device.create_shader_module(wgpu::ShaderModuleDescriptor {

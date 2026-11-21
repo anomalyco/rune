@@ -7,7 +7,7 @@ use super::*;
 /// The filter field's row: the field and the gap under it.
 const FIELD: f32 = 32.0;
 
-impl<S: 'static> Live<S> {
+impl LiveCore {
     pub(super) fn sidebar(&self, t: Theme, dark: bool, accent: Color, inset: f32, sidebar_w: f32, height: f32) -> El {
         let back = row().key("playground-back").h(CONTROL).pl(4.0).pr(8.0).gap(2.0).center_y().radius(radius::SM)
             .hover(t.hover).press(t.press)

@@ -2,17 +2,26 @@
 //! resolution; the final reconstruction returns to the layer so composite bindings stay stable.
 use bytemuck::{Pod, Zeroable};
 
+use super::instance::shader_consts;
+
 pub(crate) const MAX_SIGMA: f32 = 64.0;
 pub(crate) fn sigma(value: f32) -> f32 { value.max(0.0).min(MAX_SIGMA) }
-const TAPS: usize = 128; // centre + ceil(3 * MAX_SIGMA / 2) pairs; padded for Pod arrays
+const TAPS: usize = shader_consts::LAYER_BLUR_TAPS; // centre + ceil(3 * MAX_SIGMA / 2) pairs; padded for Pod arrays
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct Uniforms {
-    meta: [f32; 4], // used width, height, axis (0 horizontal), tap count
-    mapping: [f32; 4], // output->input scale xy
-    taps: [[f32; 4]; TAPS], // offset, weight; vec4 stride matches WGSL uniform arrays
+pub(super) struct Uniforms {
+    pub(super) meta: [f32; 4], // used width, height, axis (0 horizontal), tap count
+    pub(super) mapping: [f32; 4], // output->input scale xy
+    pub(super) taps: [[f32; 4]; TAPS], // offset, weight; vec4 stride matches WGSL uniform arrays
 }
+
+const _: () = {
+    assert!(std::mem::size_of::<Uniforms>() == 2080);
+    assert!(std::mem::offset_of!(Uniforms, meta) == 0);
+    assert!(std::mem::offset_of!(Uniforms, mapping) == 16);
+    assert!(std::mem::offset_of!(Uniforms, taps) == 32);
+};
 
 pub(super) struct Pipeline {
     pipelines: [wgpu::RenderPipeline; 5],
@@ -59,10 +68,16 @@ impl Mode {
 }
 
 /// The pass's shader (`layer_blur.wgsl`).
-pub(crate) const WGSL: &str = include_str!("../layer_blur.wgsl");
+pub(crate) const WGSL: &str = include_str!("../shaders/layer_blur.wgsl");
 
 /// Each pipeline's `MODE` and `ADDITIVE` overrides, in `Pipeline::pipelines`' order.
-pub(crate) const MODES: [(f64, f64); 5] = [(0.0, 0.0), (0.0, 1.0), (2.0, 0.0), (2.0, 1.0), (3.0, 0.0)];
+pub(crate) const MODES: [(f64, f64); 5] = [
+    (shader_consts::LAYER_BLUR_MODE_BLUR as f64, 0.0),
+    (shader_consts::LAYER_BLUR_MODE_BLUR as f64, 1.0),
+    (shader_consts::LAYER_BLUR_MODE_PREFILTER as f64, 0.0),
+    (shader_consts::LAYER_BLUR_MODE_PREFILTER as f64, 1.0),
+    (shader_consts::LAYER_BLUR_MODE_RECONSTRUCT as f64, 0.0),
+];
 
 impl Pipeline {
     /// The pipelines for layers of `format` (`layers::FORMAT`).
@@ -85,7 +100,7 @@ impl Pipeline {
         // DX12 bytecode (`fragments[i]`), compiled in by regen_dxbc.
         let make = |vertex: &wgpu::ShaderModule, fragments: &[&wgpu::ShaderModule; 5], overrides: bool| std::array::from_fn(|i| {
             let (mode, additive) = MODES[i];
-            let constants = [("MODE", mode), ("ADDITIVE", additive)];
+            let constants = [(shader_consts::LAYER_BLUR_OVERRIDE_MODE, mode), (shader_consts::LAYER_BLUR_OVERRIDE_ADDITIVE, additive)];
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("layer gaussian"), layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState { module: vertex, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
@@ -220,14 +235,18 @@ impl Scratch {
         for pass in 0usize..passes {
             let axis = if passes == 4 { pass.saturating_sub(1).min(1) } else { pass };
             let input = if passes == 2 || pass == 0 { size } else { reduced };
-            let mode = if passes == 2 { axis } else { [2, 0, 1, 3][pass] };
+            let mode = if passes == 2 {
+                axis as u32
+            } else {
+                [shader_consts::LAYER_BLUR_MODE_PREFILTER, 0, 1, shader_consts::LAYER_BLUR_MODE_RECONSTRUCT][pass]
+            };
             // Subtract the box prefilter + linear reconstruction variance from the Gaussian.
             let variance = (scale[axis] * scale[axis] - 1.0) * 0.25;
             let mut u = kernel((sigma * sigma - variance).sqrt() / scale[axis]);
             u.meta = [input[0], input[1], mode as f32, u.meta[3]];
             u.mapping = match mode {
-                2 => [scale[0], scale[1], 0.0, 0.0],
-                3 => [1.0 / scale[0], 1.0 / scale[1], 0.0, 0.0],
+                shader_consts::LAYER_BLUR_MODE_PREFILTER => [scale[0], scale[1], 0.0, 0.0],
+                shader_consts::LAYER_BLUR_MODE_RECONSTRUCT => [1.0 / scale[0], 1.0 / scale[1], 0.0, 0.0],
                 _ => [1.0, 1.0, 0.0, 0.0],
             };
             staging.write_buffer(&self.uniforms[pass], 0, bytemuck::bytes_of(&u));

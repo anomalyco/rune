@@ -102,20 +102,20 @@ pub(crate) fn launched() {
 
 #[cfg(target_os = "macos")]
 fn decode(bytes: &[u8]) -> Option<objc2::rc::Retained<objc2_app_kit::NSImage>> {
-    use objc2::ClassType;
+    use objc2::AnyThread;
     use objc2_app_kit::NSImage;
     use objc2_foundation::NSData;
     // NSImage may be created and read on any thread; it's nil for data it can't read.
     let image = NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(bytes))?;
     // An image with no readable representation has no size.
-    // SAFETY: a plain getter on an image this thread owns.
-    let size = unsafe { image.size() };
+    let size = image.size();
     (size.width > 0.0 && size.height > 0.0).then_some(image)
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn apply() {
-    let Some(mtm) = objc2_foundation::MainThreadMarker::new() else { return };
+    let Some(mtm) = objc2::MainThreadMarker::new() else { return };
     let Some(bytes) = PENDING.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
     let Some(image) = decode(&bytes) else { return };
     let app = objc2_app_kit::NSApplication::sharedApplication(mtm);

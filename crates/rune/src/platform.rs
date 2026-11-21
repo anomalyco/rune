@@ -6,6 +6,8 @@ pub(crate) mod app_icon;
 pub(crate) mod display_link;
 #[cfg(target_vendor = "apple")]
 pub mod embed;
+#[cfg(any(test, target_vendor = "apple"))]
+pub(crate) mod embed_frame;
 pub(crate) mod ime;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 pub(crate) mod layer_shell;
@@ -14,7 +16,9 @@ pub(crate) mod layer_shell_machine;
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
 #[cfg(target_os = "macos")]
-pub(crate) mod main_queue;
+pub(crate) use rune_core::main_queue;
+#[cfg(any(test, all(target_os = "linux", feature = "dbus")))]
+pub(crate) mod portal;
 #[cfg(all(target_os = "linux", feature = "dbus"))]
 pub(crate) mod portal_appearance;
 pub(crate) mod preferences;

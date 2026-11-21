@@ -61,16 +61,14 @@ struct Control {
     generation: AtomicU64,
 }
 
-pub(crate) struct Hub<S> {
+pub(crate) struct HubCore {
     control: Arc<Control>,
-    pending: Mutex<Vec<Pending<S>>>,
-    handlers: Arc<Mutex<HashMap<ShortcutId, (Stamp, Handler<S>)>>>,
     errors: Mutex<Vec<ShortcutError>>,
     title: OnceLock<&'static str>,
     unmodified: AtomicBool,
 }
 
-impl<S> Default for Hub<S> {
+impl Default for HubCore {
     fn default() -> Self {
         Self {
             control: Arc::new(Control {
@@ -82,9 +80,28 @@ impl<S> Default for Hub<S> {
                 hosts: AtomicU64::new(0),
                 generation: AtomicU64::new(0),
             }),
-            pending: Mutex::default(), handlers: Arc::default(), errors: Mutex::default(), title: OnceLock::new(), unmodified: AtomicBool::new(false),
+            errors: Mutex::default(),
+            title: OnceLock::new(),
+            unmodified: AtomicBool::new(false),
         }
     }
+}
+
+pub(crate) struct Hub<S> {
+    pub(crate) core: Arc<HubCore>,
+    pending: Mutex<Vec<Pending<S>>>,
+    handlers: Arc<Mutex<HashMap<ShortcutId, (Stamp, Handler<S>)>>>,
+}
+
+impl<S> Default for Hub<S> {
+    fn default() -> Self {
+        Self { core: Arc::default(), pending: Mutex::default(), handlers: Arc::default() }
+    }
+}
+
+impl<S> std::ops::Deref for Hub<S> {
+    type Target = HubCore;
+    fn deref(&self) -> &HubCore { &self.core }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -168,7 +185,7 @@ impl Engine {
     }
 
     fn release(&mut self) {
-        let _ = self.apply(BindEvent::Release);
+        self.apply(BindEvent::Release).ok();
     }
 
     fn native(&mut self) -> &mut NativeBackend {
@@ -219,6 +236,15 @@ impl Control {
 
     /// Runs a call, stamping it with the latest host while routing can't change.
     fn call_stamped<T: Send + 'static>(&self, stamp: Option<Stamp>, f: impl FnOnce(&mut Engine) -> Result<T, ShortcutError> + Send + 'static) -> Result<T, ShortcutError> {
+        let slot = Arc::new(Mutex::new(None));
+        let out = slot.clone();
+        self.call_erased(stamp, Box::new(move |engine| {
+            *out.lock().unwrap() = Some(f(engine));
+        }))?;
+        slot.lock().unwrap().take().unwrap_or(Err(ShortcutError::NotRunning))
+    }
+
+    fn call_erased(&self, stamp: Option<Stamp>, run: Box<dyn FnOnce(&mut Engine) + Send>) -> Result<(), ShortcutError> {
         let mut route = self.attachment.lock().unwrap();
         let call = AttachEvent::Call { from: std::thread::current().id(), shared: cfg!(target_os = "linux") };
         let effect = step_attachment(&mut route, call).into_iter().next();
@@ -238,64 +264,65 @@ impl Control {
             // Acquire the engine before releasing routing, so shutdown cannot race a new call.
             let mut engine = shared.lock().unwrap();
             drop(route);
-            let result = f(&mut engine);
+            run(&mut engine);
             drop(engine);
             // A finished call must not keep a replaced engine, and its backend's grabs, alive.
             drop(shared);
             wake();
-            result
+            Ok(())
         }
         #[cfg(not(target_os = "linux"))]
         match effect {
             Some(AttachEffect::Run { wake }) => {
                 drop(route);
                 let engine = ENGINES.with(|engines| engines.borrow().get(&self.key).map(|(_, engine)| engine.clone())).ok_or(ShortcutError::NotRunning)?;
-                let result = f(&mut engine.borrow_mut());
+                run(&mut engine.borrow_mut());
                 wake();
-                result
+                Ok(())
             }
             Some(AttachEffect::Wait) => {
-                let (tx, rx) = mpsc::sync_channel(1);
-                let posted = step_attachment(&mut route, AttachEvent::Post(Box::new(move |engine| { let _ = tx.send(f(engine)); })));
+                let (done_tx, done_rx) = mpsc::sync_channel(1);
+                let posted = step_attachment(&mut route, AttachEvent::Post(Box::new(move |engine| {
+                    run(engine);
+                    done_tx.send(()).ok();
+                })));
                 drop(route);
                 for effect in posted { if let AttachEffect::Wake(wake) = effect { wake(); } }
-                rx.recv().unwrap_or(Err(ShortcutError::NotRunning))
+                done_rx.recv().map_err(|_| ShortcutError::NotRunning)
             }
             _ => Err(ShortcutError::NotRunning),
         }
     }
 }
 
-impl<S: 'static> Hub<S> {
-    pub(super) fn pending(&self, shortcut: Result<Shortcut, ShortcutError>, handler: Handler<S>) {
-        self.pending.lock().unwrap().push((shortcut, handler));
-    }
-
-    pub(super) fn register(&self, shortcut: Shortcut, handler: Handler<S>) -> Result<ShortcutId, ShortcutError> {
+impl HubCore {
+    fn prepare_register(&self, shortcut: &Shortcut) -> Result<(ShortcutId, Stamp), ShortcutError> {
         if !self.unmodified.load(Ordering::Relaxed) { shortcut.require_modifier()?; }
         let id = NEXT_ID.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map(ShortcutId).map_err(|_| ShortcutError::Backend("shortcut id space exhausted".into()))?;
-        let stamp = Stamp::default();
-        self.handlers.lock().unwrap().insert(id, (stamp.clone(), handler));
-        if let Err(e) = self.control.call_stamped(Some(stamp), move |engine| engine.register(id, shortcut)) {
-            self.handlers.lock().unwrap().remove(&id);
-            return Err(e);
-        }
-        Ok(id)
+        Ok((id, Stamp::default()))
     }
 
-    pub(super) fn unregister(&self, id: ShortcutId) -> Result<(), ShortcutError> {
-        let handlers = self.handlers.clone();
+    fn commit_register(&self, id: ShortcutId, shortcut: Shortcut, stamp: Stamp) -> Result<(), ShortcutError> {
+        self.control.call_stamped(Some(stamp), move |engine| engine.register(id, shortcut))
+    }
+
+    fn unregister_engine(&self, id: ShortcutId, remove: Box<dyn FnOnce() + Send>) -> Result<(), ShortcutError> {
         self.control.call(move |engine| {
             engine.unregister(id)?;
-            handlers.lock().unwrap().remove(&id);
+            remove();
             Ok(())
         })
     }
 
     pub(super) fn errors(&self) -> Vec<ShortcutError> { std::mem::take(&mut self.errors.lock().unwrap()) }
 
-    pub(crate) fn named(&self, title: &'static str) { let _ = self.title.set(title); }
+    fn record_error(&self, error: ShortcutError) {
+        eprintln!("rune: {error}");
+        self.errors.lock().unwrap().push(error);
+    }
+
+    pub(crate) fn named(&self, title: &'static str) { self.title.set(title).ok(); }
 
     pub(super) fn allow_unmodified(&self) { self.unmodified.store(true, Ordering::Relaxed); }
 
@@ -313,6 +340,35 @@ impl<S: 'static> Hub<S> {
         // Pressed as a backend would, holding nothing, so the press's wake runs under no lock.
         sink(id, None);
         Ok(())
+    }
+}
+
+impl<S: 'static> Hub<S> {
+    pub(super) fn pending(&self, shortcut: Result<Shortcut, ShortcutError>, handler: Handler<S>) {
+        self.pending.lock().unwrap().push((shortcut, handler));
+    }
+
+    pub(super) fn register(&self, shortcut: Shortcut, handler: Handler<S>) -> Result<ShortcutId, ShortcutError> {
+        let (id, stamp) = self.core.prepare_register(&shortcut)?;
+        self.handlers.lock().unwrap().insert(id, (stamp.clone(), handler));
+        if let Err(e) = self.core.commit_register(id, shortcut, stamp) {
+            self.handlers.lock().unwrap().remove(&id);
+            return Err(e);
+        }
+        Ok(id)
+    }
+
+    pub(super) fn unregister(&self, id: ShortcutId) -> Result<(), ShortcutError> {
+        let handlers = self.handlers.clone();
+        self.core.unregister_engine(id, Box::new(move || { handlers.lock().unwrap().remove(&id); }))
+    }
+
+    fn register_pending(&self) {
+        for (shortcut, handler) in std::mem::take(&mut *self.pending.lock().unwrap()) {
+            if let Err(error) = shortcut.and_then(|s| self.register(s, handler)) {
+                self.core.record_error(error);
+            }
+        }
     }
 }
 
@@ -421,15 +477,28 @@ impl Guard {
     /// The first half of an attach: a new engine, with the next generation, replaces the one this
     /// thread (or, on Linux, the App) had.
     fn install<S: 'static>(shared: &Arc<Shared<S>>, wake: Waker, headless: bool, wayland: bool, connect: Connect) -> Attaching {
-        let control = shared.shortcuts.control.clone();
-        let title = shared.shortcuts.title.get().copied().unwrap_or_default();
+        Self::install_core(&shared.shortcuts.core, wake, headless, wayland, connect, &mut |generation, wake, live| {
+            sink(Arc::new(Delivery { shared: Arc::downgrade(shared), generation, wake, live, pressed: Mutex::default() }))
+        })
+    }
+
+    fn install_core(
+        core: &HubCore,
+        wake: Waker,
+        headless: bool,
+        wayland: bool,
+        connect: Connect,
+        make_sink: &mut dyn FnMut(u64, Waker, Weak<()>) -> Sink,
+    ) -> Attaching {
+        let control = core.control.clone();
+        let title = core.title.get().copied().unwrap_or_default();
         let bindings = if headless { Bindings::Virtual(HashMap::new()) } else { Bindings::Disconnected };
         let live = Arc::new(());
         // Everything below wakes the host through this, so its close ends them all.
         let (wake, closes_wake) = HostWake::new(wake);
         let engine = |generation| {
-            let delivery = Delivery { shared: Arc::downgrade(shared), generation, wake: wake.clone(), live: Arc::downgrade(&live), pressed: Mutex::default() };
-            Engine { title, wayland, sink: sink(Arc::new(delivery)), connect, bindings }
+            let sink = make_sink(generation, wake.clone(), Arc::downgrade(&live));
+            Engine { title, wayland, sink, connect, bindings }
         };
         // Published when this host takes routing.
         #[cfg(not(target_os = "linux"))]
@@ -515,6 +584,15 @@ impl Guard {
 impl Attaching {
     /// The second half of an attach: this host takes routing, then registers what waited for it.
     fn route<S: 'static>(self, shared: &Arc<Shared<S>>) -> Guard {
+        let handlers = shared.shortcuts.handlers.clone();
+        // A host that attached after the close took routing keeps its handlers.
+        let cleanup = Box::new(move |ended: u64| handlers.lock().unwrap().retain(|_, (stamp, _)| stamp.load(Ordering::Relaxed) > ended));
+        let guard = self.route_core(cleanup);
+        shared.shortcuts.register_pending();
+        guard
+    }
+
+    fn route_core(self, cleanup: Box<dyn FnOnce(u64)>) -> Guard {
         let Self { control, generation, wake, closes_wake, live, .. } = self;
         let routed = {
             let mut route = control.attachment.lock().unwrap();
@@ -526,17 +604,7 @@ impl Attaching {
         };
         // Calls this host inherited wait for it, so it is woken for them, once routing is free.
         for effect in routed { if let AttachEffect::Wake(wake) = effect { wake(); } }
-        let handlers = shared.shortcuts.handlers.clone();
-        // A host that attached after the close took routing keeps its handlers.
-        let cleanup = move |ended: u64| handlers.lock().unwrap().retain(|_, (stamp, _)| stamp.load(Ordering::Relaxed) > ended);
-        let guard = Guard { control, generation, cleanup: Some(Box::new(cleanup)), _live: live, closes_wake, _thread: std::marker::PhantomData };
-        for (shortcut, handler) in std::mem::take(&mut *shared.shortcuts.pending.lock().unwrap()) {
-            if let Err(error) = shortcut.and_then(|s| shared.shortcuts.register(s, handler)) {
-                eprintln!("rune: {error}");
-                shared.shortcuts.errors.lock().unwrap().push(error);
-            }
-        }
-        guard
+        Guard { control, generation, cleanup: Some(cleanup), _live: live, closes_wake, _thread: std::marker::PhantomData }
     }
 }
 
@@ -566,177 +634,4 @@ mod closed_wake_tests;
 mod teardown_tests;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{App, AppSpec, el};
-    #[test]
-    fn mock_backend_errors_are_not_confused_with_conflicts() {
-        struct Mock(ShortcutError);
-        impl Backend for Mock {
-            fn register(&mut self, _: ShortcutId, _: &Shortcut) -> Result<(), ShortcutError> { Err(self.0.clone()) }
-            fn unregister(&mut self, _: ShortcutId) -> Result<(), ShortcutError> { Ok(()) }
-        }
-        for error in [ShortcutError::Conflict, ShortcutError::Unsupported, ShortcutError::PermissionDenied, ShortcutError::Backend("disconnected".into())] {
-            let bindings = Bindings::Connected { native: Box::new(Mock(error.clone())) as NativeBackend, registrations: HashMap::new() };
-            let mut engine = Engine { title: "mock", wayland: false, sink: Arc::new(|_, _| {}), connect: super::super::backend, bindings };
-            assert_eq!(engine.register(ShortcutId(1), "ctrl+a".parse().unwrap()), Err(error));
-            assert!(matches!(engine.bindings, Bindings::Disconnected));
-        }
-        assert_eq!(super::super::native_status(-9878, -9878), Err(ShortcutError::Conflict));
-        assert_eq!(super::super::native_status(1409, 1409), Err(ShortcutError::Conflict));
-        assert!(matches!(super::super::native_status(5, 1409), Err(ShortcutError::Backend(_))));
-    }
-
-    #[test]
-    fn conflicts_name_the_app_that_holds_the_chord() {
-        struct Accept;
-        impl Backend for Accept {
-            fn register(&mut self, _: ShortcutId, _: &Shortcut) -> Result<(), ShortcutError> { Ok(()) }
-            fn unregister(&mut self, _: ShortcutId) -> Result<(), ShortcutError> { Ok(()) }
-        }
-        let chord: Shortcut = "ctrl+alt+shift+f17".parse().unwrap();
-        let native = |title| Engine { title, wayland: false, sink: Arc::new(|_, _| {}), connect: super::super::backend, bindings: Bindings::Connected { native: Box::new(Accept) as NativeBackend, registrations: HashMap::new() } };
-        let (mut first, mut second) = (native("First"), native("Second"));
-        first.register(ShortcutId(u32::MAX - 1), chord.clone()).unwrap();
-        assert_eq!(second.register(ShortcutId(u32::MAX - 2), chord.clone()), Err(ShortcutError::Conflict),
-            "refused even when the backend accepts a same-process duplicate");
-        assert_eq!(first.owner(&chord).as_deref(), Some("First"));
-        assert_eq!(second.owner(&chord).as_deref(), Some("First"));
-        drop(first);
-        // Off the main thread the system lookup answers None, so the claim is gone entirely.
-        assert_eq!(second.owner(&chord), None, "a dropped App releases its claim");
-        second.register(ShortcutId(u32::MAX - 2), chord.clone()).unwrap();
-
-        let app = App::new(AppSpec::new("Owner", (10.0, 10.0), || (), |_, _| el()));
-        let handle = app.handle();
-        let chord: Shortcut = "ctrl+alt+o".parse().unwrap();
-        assert_eq!(handle.shortcut_owner(&chord), None, "not running");
-        let guard = Guard::attach(&app.shared, Arc::new(|| {}), true, false);
-        handle.register_shortcut(chord.clone(), |_, _| {}).unwrap();
-        assert_eq!(handle.register_shortcut(chord.clone(), |_, _| {}), Err(ShortcutError::Conflict));
-        assert_eq!(handle.shortcut_owner(&chord).as_deref(), Some("Owner"));
-        // Headless runs never ask the desktop, so stills are the same everywhere.
-        assert_eq!(handle.shortcut_owner(&"super+space".parse().unwrap()), None);
-        drop(guard);
-    }
-
-    #[test]
-    fn headless_handlers_share_state_and_unregister_cancels_queued_activation() {
-        let app = App::new(AppSpec::new("shortcuts", (100.0, 100.0), || 0, |_: &u32, _| el()))
-            .global_shortcut("cmd+shift+space", |s, tx| { *s += 1; tx.instant(); });
-        let handle = app.handle();
-        let guard = Guard::attach(&app.shared, Arc::new(|| {}), true, false);
-        let shortcut = "cmd+shift+space".parse().unwrap();
-        app.shared.shortcuts.fire(&shortcut).unwrap();
-        let mut state = 0;
-        let receiving = guard.receiving();
-        for f in app.shared.take().updates { f(&mut state, &mut Tx::default()); }
-        assert_eq!(state, 1);
-        assert_eq!(handle.register_shortcut(shortcut, |_, _| {}), Err(ShortcutError::Conflict));
-        let id = handle.register_shortcut("ctrl+a".parse().unwrap(), |s, _| *s += 10).unwrap();
-        app.shared.shortcuts.fire(&"ctrl+a".parse().unwrap()).unwrap();
-        handle.unregister_shortcut(id).unwrap();
-        for f in app.shared.take().updates { f(&mut state, &mut Tx::default()); }
-        assert_eq!(state, 1);
-        drop(receiving);
-        drop(guard);
-        assert_eq!(handle.unregister_shortcut(id), Err(ShortcutError::NotRunning));
-    }
-
-    #[test]
-    fn a_chord_without_a_modifier_is_refused_unless_it_is_a_function_key() {
-        let app = App::new(AppSpec::new("bare", (10.0, 10.0), || (), |_, _| el())).global_shortcut("space", |_, _| {});
-        let handle = app.handle();
-        let guard = Guard::attach(&app.shared, Arc::new(|| {}), true, false);
-        assert!(matches!(handle.take_shortcut_errors().as_slice(), [ShortcutError::InvalidAccelerator(_)]));
-        for bare in ["space", "enter", "a", "shift+a", "shift+tab"] {
-            assert!(matches!(handle.register_shortcut(bare.parse().unwrap(), |_, _| {}), Err(ShortcutError::InvalidAccelerator(_))), "{bare}");
-        }
-        for allowed in ["f5", "f24", "shift+f1", "ctrl+space", "alt+a", "super+enter"] {
-            assert!(handle.register_shortcut(allowed.parse().unwrap(), |_, _| {}).is_ok(), "{allowed}");
-        }
-        drop(guard);
-
-        let app = App::new(AppSpec::new("bare", (10.0, 10.0), || (), |_, _| el())).global_shortcut("space", |_, _| {})
-            .allow_unmodified_shortcuts();
-        let handle = app.handle();
-        let guard = Guard::attach(&app.shared, Arc::new(|| {}), true, false);
-        assert!(handle.take_shortcut_errors().is_empty());
-        assert!(handle.register_shortcut("shift+a".parse().unwrap(), |_, _| {}).is_ok());
-        drop(guard);
-    }
-
-    #[test]
-    fn background_registration_wakes_and_returns_the_backend_result() {
-        let app = App::new(AppSpec::new("shortcuts", (10.0, 10.0), || (), |_, _| el()));
-        let (wake, woke) = mpsc::channel();
-        let guard = Guard::attach(&app.shared, Arc::new(move || { wake.send(()).unwrap(); }), true, false);
-        let handle = app.handle();
-        let thread = std::thread::spawn(move || handle.register_shortcut("ctrl+space".parse().unwrap(), |_, _| {}));
-        woke.recv().unwrap();
-        guard.drain();
-        assert!(thread.join().unwrap().is_ok());
-    }
-
-    #[test]
-    fn activation_tokens_are_scoped_to_the_handler_and_shutdown_breaks_handle_cycles() {
-        let app = App::new(AppSpec::new("shortcuts", (10.0, 10.0), || false, |_, _| el()));
-        let weak = Arc::downgrade(&app.shared);
-        let guard = Guard::attach(&app.shared, Arc::new(|| {}), true, false);
-        let captured = app.handle();
-        let id = app.handle().register_shortcut("ctrl+space".parse().unwrap(), move |state, tx| {
-            assert_eq!(tx.activation_token(), Some("compositor-token"));
-            captured.activate(tx.activation_token().unwrap());
-            *state = true;
-        }).unwrap();
-        app.shared.shortcuts.control.call(move |engine| {
-            (engine.sink)(id, Some("compositor-token".into()));
-            Ok(())
-        }).unwrap();
-        let mut state = false;
-        let mut tx = Tx::default();
-        let receiving = guard.receiving();
-        for f in app.shared.take().updates { f(&mut state, &mut tx); }
-        drop(receiving);
-        assert!(state);
-        assert_eq!(tx.activation_token(), None);
-        assert_eq!(app.shared.take().window, Some(crate::app::WindowRequest::Open(Some("compositor-token".into()))));
-        drop(app);
-        drop(guard);
-        assert!(weak.upgrade().is_none(), "handler captures must be released at host shutdown");
-    }
-
-    /// Whether a backend saw its chord still claimed as it was dropped.
-    static RETIRED_WITH_CLAIM: Mutex<Vec<bool>> = Mutex::new(Vec::new());
-    const GRAB_CHORD: &str = "ctrl+alt+shift+f11";
-
-    struct Grab;
-
-    impl Backend for Grab {
-        fn register(&mut self, _: ShortcutId, _: &Shortcut) -> Result<(), ShortcutError> { Ok(()) }
-        fn unregister(&mut self, _: ShortcutId) -> Result<(), ShortcutError> { Ok(()) }
-    }
-
-    // A desktop grab stands until the backend is gone, so the claim that names it must stand too.
-    impl Drop for Grab {
-        fn drop(&mut self) {
-            let held = NATIVE.lock().unwrap().iter().any(|(.., s, _)| *s == GRAB_CHORD.parse::<Shortcut>().unwrap());
-            RETIRED_WITH_CLAIM.lock().unwrap().push(held);
-        }
-    }
-
-    fn grab(_: bool, _: Sink) -> Result<NativeBackend, ShortcutError> { Ok(Box::new(Grab)) }
-
-    #[test]
-    fn a_backend_retires_before_its_chord_stops_naming_an_owner() {
-        RETIRED_WITH_CLAIM.lock().unwrap().clear();
-        let shortcut = GRAB_CHORD.parse::<Shortcut>().unwrap();
-        let mut engine = Engine { title: "Grab", wayland: false, sink: Arc::new(|_, _| {}), connect: grab, bindings: Bindings::Disconnected };
-        let id = ShortcutId(0x7000_0001);
-        engine.register(id, shortcut.clone()).unwrap();
-        engine.unregister(id).unwrap();
-        assert!(engine.bindings.find(&shortcut).is_none(), "the registration went");
-        assert!(!NATIVE.lock().unwrap().iter().any(|(.., s, _)| *s == shortcut), "the claim went with the registration");
-        assert_eq!(*RETIRED_WITH_CLAIM.lock().unwrap(), vec![true], "the backend saw its chord still claimed while it was alive");
-    }
-}
+mod tests;

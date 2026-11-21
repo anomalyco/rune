@@ -3,8 +3,10 @@
 //! `ModifiersState` has no Fn flag. A local event monitor sees the flagsChanged AppKit sends
 //! the key window, and the host feeds it to the runtime as `PhysicalKeyCode::Fn`.
 
+#![allow(unsafe_code)]
+
 use objc2::rc::Retained;
-use objc2::{ClassType, msg_send, msg_send_id};
+use objc2::{ClassType, msg_send};
 use objc2_app_kit::{NSEvent, NSView, NSWindow};
 use objc2_foundation::NSObject;
 use std::{cell::RefCell, rc::Rc};
@@ -40,7 +42,7 @@ impl FnKey {
         });
         // SAFETY: the handler outlives the monitor, which `Drop` removes.
         let token: Option<Retained<NSObject>> = unsafe {
-            msg_send_id![NSEvent::class(), addLocalMonitorForEventsMatchingMask: FLAGS_CHANGED, handler: &*handler]
+            msg_send![NSEvent::class(), addLocalMonitorForEventsMatchingMask: FLAGS_CHANGED, handler: &*handler]
         };
         Some(Self { token: token?, changes })
     }

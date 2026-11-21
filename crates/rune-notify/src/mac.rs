@@ -5,11 +5,13 @@
 //! press comes back as the click, with the action and the words typed, without the app coming
 //! forward (the actions don't ask for the foreground).
 
+#![allow(unsafe_code)]
+
 use super::{Action, Click, Notification};
 use block2::{Block, RcBlock};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, AnyProtocol, Bool, ClassBuilder, Sel};
-use objc2::{class, msg_send, msg_send_id, sel};
+use objc2::{class, msg_send, sel};
 
 #[link(name = "UserNotifications", kind = "framework")]
 unsafe extern "C" {}
@@ -20,6 +22,8 @@ const AUTH_ALERT: usize = 1 << 2;
 const PRESENT_LIST_BANNER: usize = (1 << 3) | (1 << 4);
 
 pub(super) fn bundled() -> bool {
+    // SAFETY: `NSBundle.mainBundle`, `bundleIdentifier`, and `bundlePath` are thread-safe
+    // Foundation getters; `string` checks for null.
     unsafe {
         let bundle: *mut AnyObject = msg_send![class!(NSBundle), mainBundle];
         let id: *mut AnyObject = msg_send![bundle, bundleIdentifier];
@@ -29,11 +33,15 @@ pub(super) fn bundled() -> bool {
 }
 
 unsafe fn center() -> *mut AnyObject {
+    // SAFETY: callers gate on `bundled()`, so `currentNotificationCenter` returns the app's
+    // singleton `UNUserNotificationCenter` without throwing.
     unsafe { msg_send![class!(UNUserNotificationCenter), currentNotificationCenter] }
 }
 
 pub(super) unsafe fn ns(s: &str) -> *mut AnyObject {
     let c = std::ffi::CString::new(s.replace('\0', "")).unwrap_or_default();
+    // SAFETY: `c` is a NUL-terminated UTF-8 C string that outlives the call; caller holds an
+    // autorelease pool for the returned autoreleased `NSString`.
     unsafe { msg_send![class!(NSString), stringWithUTF8String: c.as_ptr()] }
 }
 
@@ -41,24 +49,31 @@ pub(super) unsafe fn string(s: *mut AnyObject) -> Option<String> {
     if s.is_null() {
         return None;
     }
+    // SAFETY: caller guarantees non-null `s` is a live `NSString`; `UTF8String` returns a
+    // NUL-terminated buffer valid for `s`'s lifetime (or null).
     let utf8: *const std::ffi::c_char = unsafe { msg_send![s, UTF8String] };
+    // SAFETY: `utf8` is checked non-null and points to a NUL-terminated C string owned by `s`.
     (!utf8.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(utf8) }.to_string_lossy().into_owned())
 }
 
 pub(super) fn post(n: Notification) {
     let done = RcBlock::new(move |granted: Bool, _error: *mut AnyObject| {
         if granted.as_bool() {
+            // SAFETY: `post` is gated on `bundled()`, and `add` runs inside its own autorelease pool.
             unsafe { add(&n) };
         }
     });
+    // SAFETY: `post` is gated on `bundled()`; `&*done` is a valid ObjC block copied by the center.
     unsafe {
         let _: () = msg_send![center(), requestAuthorizationWithOptions: AUTH_ALERT, completionHandler: &*done];
     }
 }
 
 unsafe fn add(n: &Notification) {
+    // SAFETY: invoked inside an autorelease pool for a bundled app; every Foundation and
+    // `UNUserNotificationCenter` message matches its selector and signature.
     objc2::rc::autoreleasepool(|_| unsafe {
-        let content: Retained<AnyObject> = msg_send_id![class!(UNMutableNotificationContent), new];
+        let content: Retained<AnyObject> = msg_send![class!(UNMutableNotificationContent), new];
         let content = Retained::as_ptr(&content).cast_mut();
         let _: () = msg_send![content, setTitle: ns(&n.title)];
         let _: () = msg_send![content, setBody: ns(&n.body)];
@@ -93,6 +108,9 @@ unsafe fn category(actions: &[Action]) -> Option<String> {
     if CATEGORIES.with_borrow(|c| c.iter().any(|(k, _)| *k == id)) {
         return Some(id);
     }
+    // SAFETY: called from `add` inside an autorelease pool for a bundled app; `made` and `all`
+    // stay live for `arrayWithObjects:count:` / `setWithObjects:count:`, and `CATEGORIES` retains
+    // every `UNNotificationCategory` object.
     unsafe {
         let made: Vec<*mut AnyObject> = actions.iter().take(10).map(|a| match a {
             // Options 0: no foreground, no authentication, not destructive.
@@ -101,7 +119,7 @@ unsafe fn category(actions: &[Action]) -> Option<String> {
         }).collect();
         let array: *mut AnyObject = msg_send![class!(NSArray), arrayWithObjects: made.as_ptr(), count: made.len()];
         let empty: *mut AnyObject = msg_send![class!(NSArray), array];
-        let category: Retained<AnyObject> = msg_send_id![class!(UNNotificationCategory), categoryWithIdentifier: ns(&id), actions: array, intentIdentifiers: empty, options: 0usize];
+        let category: Retained<AnyObject> = msg_send![class!(UNNotificationCategory), categoryWithIdentifier: ns(&id), actions: array, intentIdentifiers: empty, options: 0usize];
         CATEGORIES.with_borrow_mut(|c| c.push((id.clone(), category)));
         let all: Vec<*mut AnyObject> = CATEGORIES.with_borrow(|c| c.iter().map(|(_, k)| Retained::as_ptr(k).cast_mut()).collect());
         let set: *mut AnyObject = msg_send![class!(NSSet), setWithObjects: all.as_ptr(), count: all.len()];
@@ -111,6 +129,8 @@ unsafe fn category(actions: &[Action]) -> Option<String> {
 }
 
 pub(super) unsafe fn dictionary(info: &[(String, String)]) -> *mut AnyObject {
+    // SAFETY: caller holds an autorelease pool; `keys` and `values` both hold `info.len()` live
+    // `NSString` pointers for `dictionaryWithObjects:forKeys:count:`.
     unsafe {
         let keys: Vec<*mut AnyObject> = info.iter().map(|(k, _)| ns(k)).collect();
         let values: Vec<*mut AnyObject> = info.iter().map(|(_, v)| ns(v)).collect();
@@ -119,6 +139,8 @@ pub(super) unsafe fn dictionary(info: &[(String, String)]) -> *mut AnyObject {
 }
 
 pub(super) fn remove(ids: &[&str]) {
+    // SAFETY: gated on `bundled()` and wrapped in an autorelease pool; `items` holds `ids.len()`
+    // live `NSString` pointers for `arrayWithObjects:count:`.
     objc2::rc::autoreleasepool(|_| unsafe {
         let items: Vec<*mut AnyObject> = ids.iter().map(|id| ns(id)).collect();
         let array: *mut AnyObject = msg_send![class!(NSArray), arrayWithObjects: items.as_ptr(), count: items.len()];
@@ -130,6 +152,9 @@ pub(super) fn remove(ids: &[&str]) {
 
 /// The click's notification id and string user info, from a `UNNotificationResponse`.
 pub(super) unsafe fn click(response: *mut AnyObject) -> Click {
+    // SAFETY: caller passes a live `UNNotificationResponse` inside an autorelease pool; keys and
+    // values are checked with `isKindOfClass:` before `string`, and `userText` is read only when
+    // `response` is a `UNTextInputNotificationResponse`.
     unsafe {
         let notification: *mut AnyObject = msg_send![response, notification];
         let request: *mut AnyObject = msg_send![notification, request];
@@ -165,6 +190,8 @@ pub(super) unsafe fn click(response: *mut AnyObject) -> Click {
 }
 
 pub(super) extern "C" fn did_receive(_this: *mut AnyObject, _cmd: Sel, _center: *mut AnyObject, response: *mut AnyObject, done: &Block<dyn Fn()>) {
+    // SAFETY: `UNUserNotificationCenter` passes a live `UNNotificationResponse` for this callback,
+    // and `click` runs inside this autorelease pool.
     let click = objc2::rc::autoreleasepool(|_| unsafe { click(response) });
     super::deliver(click);
     done.call(());
@@ -175,14 +202,16 @@ extern "C" fn will_present(_this: *mut AnyObject, _cmd: Sel, _center: *mut AnyOb
 }
 
 pub(super) fn delegate_class() -> &'static AnyClass {
-    const NAME: &str = "RuneMacNotificationDelegate";
+    const NAME: &std::ffi::CStr = c"RuneMacNotificationDelegate";
     if let Some(c) = AnyClass::get(NAME) {
         return c;
     }
     let mut b = ClassBuilder::new(NAME, class!(NSObject)).expect("delegate class");
-    if let Some(p) = AnyProtocol::get("UNUserNotificationCenterDelegate") {
+    if let Some(p) = AnyProtocol::get(c"UNUserNotificationCenterDelegate") {
         b.add_protocol(p);
     }
+    // SAFETY: both `did_receive` and `will_present` match the Objective-C ABI and parameter types
+    // of `UNUserNotificationCenterDelegate`'s selectors.
     unsafe {
         b.add_method(
             sel!(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:),
@@ -198,6 +227,8 @@ pub(super) fn delegate_class() -> &'static AnyClass {
 
 pub(super) fn install_delegate() {
     static DELEGATE: std::sync::Once = std::sync::Once::new();
+    // SAFETY: `install_delegate` is gated on `bundled()`; `new` allocates a retained delegate
+    // kept alive for the process because the center holds its delegate weakly.
     DELEGATE.call_once(|| unsafe {
         // The center holds its delegate weakly: this one lives as long as the process.
         let delegate: *mut AnyObject = msg_send![delegate_class(), new];
@@ -206,6 +237,8 @@ pub(super) fn install_delegate() {
 }
 
 pub(super) fn app_focused() -> bool {
+    // SAFETY: standard AppKit `NSApplication` queries (`sharedApplication`, `isActive`, `keyWindow`)
+    // on the UI thread; `key` is only tested for null.
     unsafe {
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
         let active: bool = msg_send![app, isActive];
@@ -215,6 +248,8 @@ pub(super) fn app_focused() -> bool {
 }
 
 pub(super) fn bring_to_front() {
+    // SAFETY: called on the AppKit main thread (`poll`); `objectAtIndex: 0` is guarded by `n > 0`,
+    // and window messages are sent only when `w` is non-null.
     unsafe {
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
         let mut w: *mut AnyObject = msg_send![app, mainWindow];

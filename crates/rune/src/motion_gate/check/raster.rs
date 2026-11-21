@@ -7,11 +7,8 @@
 //! Effects, backdrop blurs and inset shadows draw nothing. What it keeps is what a person sees
 //! change: a surface's colour where it sits, through its layers' opacity.
 
-use crate::color::{Color, over};
-use crate::render::{
-    Instance, KIND_DASHED, KIND_GLYPH, KIND_GRADIENT, KIND_IMAGE, KIND_LAYER, KIND_LAYER_END, KIND_RADIAL, KIND_RECT, KIND_SEGMENT, KIND_SHADOW,
-    KIND_TRIANGLE,
-};
+use crate::color::{Color, over, srgb_decode};
+use crate::render::{Instance, Kind};
 
 /// Points per cell.
 pub const CELL: f32 = 12.0;
@@ -89,56 +86,66 @@ fn lerp(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
 }
 
 fn draws(q: &Instance, apron: bool) -> Vec<Draw> {
-    let kind = q.params[1];
     let outer = boxed(q.rect);
     let solid = |color: [f32; 4], density: f32| Draw { outer, hole: None, density, color, bottom: None };
     let ring = |color: [f32; 4], width: f32, density: f32| Draw { outer, hole: Some(grow(outer, -width)), density, color, bottom: None };
     let mut out = Vec::new();
-    if kind == KIND_RECT {
-        out.push(solid(q.fill, 1.0));
-        if q.params[0] > 0.0 { out.push(ring(q.border, q.params[0], 1.0)); }
-    } else if kind == KIND_GRADIENT {
-        if q.params[0] > 0.0 {
-            out.push(Draw { bottom: Some(q.uv), ..ring(q.border, q.params[0], 1.0) });
-        } else {
-            out.push(Draw { bottom: Some(q.uv), ..solid(q.fill, 1.0) });
+    match q.kind() {
+        Some(Kind::Rect) => {
+            out.push(solid(q.fill, 1.0));
+            if q.params[0] > 0.0 { out.push(ring(q.border, q.params[0], 1.0)); }
         }
-    } else if kind == KIND_GLYPH {
-        // Off the pixel grid an icon samples one transparent texel past each edge, which it
-        // drops on the grid (`icon_inst`): leave that apron out, so it covers the same cells.
-        let t = if apron && q.uv[2] > 2.0 && q.uv[3] > 2.0 { [q.rect[2] / q.uv[2], q.rect[3] / q.uv[3]] } else { [0.0; 2] };
-        let core = [outer[0] + t[0], outer[1] + t[1], outer[2] - t[0], outer[3] - t[1]];
-        out.push(Draw { outer: core, ..solid(q.fill, 0.35) });
-    } else if kind == KIND_RADIAL {
-        let t = (q.params[3] % 2.0 - q.params[0] % 2.0).abs().clamp(0.0, 1.0);
-        out.push(solid(lerp(q.fill, q.border, 0.5), t));
-    } else if kind == KIND_DASHED {
-        out.push(Draw { bottom: Some(q.border), ..ring(q.fill, q.params[0], 0.5) });
-    } else if kind == KIND_SEGMENT {
-        let [x0, y0, x1, y1] = q.radii;
-        let hw = q.params[0];
-        let b = [x0.min(x1) - hw, y0.min(y1) - hw, x0.max(x1) + hw, y0.max(y1) + hw];
-        let area = ((b[2] - b[0]) * (b[3] - b[1])).max(1e-3);
-        let len = ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt();
-        out.push(Draw { outer: b, ..solid(q.fill, ((len + 2.0 * hw) * 2.0 * hw / area).min(1.0)) });
-    } else if kind == KIND_TRIANGLE {
-        let [ax, ay, bx, by] = q.radii;
-        let (cx, cy) = (q.uv[0], q.uv[1]);
-        let b = [ax.min(bx).min(cx), ay.min(by).min(cy), ax.max(bx).max(cx), ay.max(by).max(cy)];
-        out.push(Draw { outer: b, ..solid(q.fill, 0.5) });
-    } else if kind == KIND_IMAGE {
-        let a = q.fill[3];
-        out.push(solid([0.5 * a, 0.5 * a, 0.5 * a, a], 1.0));
-    } else if kind == KIND_SHADOW {
-        let sigma = q.params[2].max(0.5);
-        let [u0, u1, u2, u3] = q.uv;
-        // A negative `uv.z` gives the band of the shadow this instance draws; any other `uv` a
-        // hole it leaves over the box casting it.
-        let window = if u2 < 0.0 { [q.rect[0] + u0, q.rect[1] + u1, q.rect[0] - u2, q.rect[1] + u3] } else { [f32::NEG_INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::INFINITY] };
-        let hole = (u2 > 0.0).then(|| [q.rect[0] + u0, q.rect[1] + u1, q.rect[0] + u0 + u2, q.rect[1] + u1 + u3]);
-        for d in [-sigma, 0.0, sigma] {
-            out.push(Draw { outer: meet(grow(outer, d), window), hole, density: 1.0 / 3.0, color: q.fill, bottom: None });
+        Some(Kind::Gradient) => {
+            if q.params[0] > 0.0 {
+                out.push(Draw { bottom: Some(q.uv), ..ring(q.border, q.params[0], 1.0) });
+            } else {
+                out.push(Draw { bottom: Some(q.uv), ..solid(q.fill, 1.0) });
+            }
         }
+        Some(Kind::Glyph) => {
+            // Off the pixel grid an icon samples one transparent texel past each edge, which it
+            // drops on the grid (`icon_inst`): leave that apron out, so it covers the same cells.
+            let t = if apron && q.uv[2] > 2.0 && q.uv[3] > 2.0 { [q.rect[2] / q.uv[2], q.rect[3] / q.uv[3]] } else { [0.0; 2] };
+            let core = [outer[0] + t[0], outer[1] + t[1], outer[2] - t[0], outer[3] - t[1]];
+            out.push(Draw { outer: core, ..solid(q.fill, 0.35) });
+        }
+        Some(Kind::Radial) => {
+            let t = (q.params[3] % 2.0 - q.params[0] % 2.0).abs().clamp(0.0, 1.0);
+            out.push(solid(lerp(q.fill, q.border, 0.5), t));
+        }
+        Some(Kind::Dashed) => {
+            out.push(Draw { bottom: Some(q.border), ..ring(q.fill, q.params[0], 0.5) });
+        }
+        Some(Kind::Segment) => {
+            let [x0, y0, x1, y1] = q.radii;
+            let hw = q.params[0];
+            let b = [x0.min(x1) - hw, y0.min(y1) - hw, x0.max(x1) + hw, y0.max(y1) + hw];
+            let area = ((b[2] - b[0]) * (b[3] - b[1])).max(1e-3);
+            let len = ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt();
+            out.push(Draw { outer: b, ..solid(q.fill, ((len + 2.0 * hw) * 2.0 * hw / area).min(1.0)) });
+        }
+        Some(Kind::Triangle) => {
+            let [ax, ay, bx, by] = q.radii;
+            let (cx, cy) = (q.uv[0], q.uv[1]);
+            let b = [ax.min(bx).min(cx), ay.min(by).min(cy), ax.max(bx).max(cx), ay.max(by).max(cy)];
+            out.push(Draw { outer: b, ..solid(q.fill, 0.5) });
+        }
+        Some(Kind::Image) => {
+            let a = q.fill[3];
+            out.push(solid([0.5 * a, 0.5 * a, 0.5 * a, a], 1.0));
+        }
+        Some(Kind::Shadow) => {
+            let sigma = q.params[2].max(0.5);
+            let [u0, u1, u2, u3] = q.uv;
+            // A negative `uv.z` gives the band of the shadow this instance draws; any other `uv` a
+            // hole it leaves over the box casting it.
+            let window = if u2 < 0.0 { [q.rect[0] + u0, q.rect[1] + u1, q.rect[0] - u2, q.rect[1] + u3] } else { [f32::NEG_INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::INFINITY] };
+            let hole = (u2 > 0.0).then(|| [q.rect[0] + u0, q.rect[1] + u1, q.rect[0] + u0 + u2, q.rect[1] + u1 + u3]);
+            for d in [-sigma, 0.0, sigma] {
+                out.push(Draw { outer: meet(grow(outer, d), window), hole, density: 1.0 / 3.0, color: q.fill, bottom: None });
+            }
+        }
+        Some(Kind::Inset | Kind::Layer | Kind::LayerEnd | Kind::Effect | Kind::BackdropBlur) | None => {}
     }
     out
 }
@@ -164,25 +171,27 @@ pub(crate) fn rasterize_with(instances: &[Instance], size: (f32, f32), scale: f3
     let mut stack = vec![Scope { cells: vec![[0.0; 4]; w * h], opacity: 1.0, clip: full }];
     let cell_area = px * px;
     for q in instances {
-        let kind = q.params[1];
-        if kind == KIND_LAYER {
-            let clip = meet(stack.last().unwrap().clip, q.clip);
-            stack.push(Scope { cells: vec![[0.0; 4]; w * h], opacity: q.fill[3].clamp(0.0, 1.0), clip });
-            continue;
-        }
-        if kind == KIND_LAYER_END {
-            if stack.len() > 1 {
-                let top = stack.pop().unwrap();
-                let parent = &mut stack.last_mut().unwrap().cells;
-                for (d, s) in parent.iter_mut().zip(&top.cells) {
-                    *d = over(s.map(|v| v * top.opacity), *d);
-                }
+        match q.kind() {
+            Some(Kind::Layer) => {
+                let clip = meet(stack.last().unwrap().clip, q.clip);
+                stack.push(Scope { cells: vec![[0.0; 4]; w * h], opacity: q.fill[3].clamp(0.0, 1.0), clip });
+                continue;
             }
-            continue;
+            Some(Kind::LayerEnd) => {
+                if stack.len() > 1 {
+                    let top = stack.pop().unwrap();
+                    let parent = &mut stack.last_mut().unwrap().cells;
+                    for (d, s) in parent.iter_mut().zip(&top.cells) {
+                        *d = over(s.map(|v| v * top.opacity), *d);
+                    }
+                }
+                continue;
+            }
+            _ => {}
         }
         let clip = meet(stack.last().unwrap().clip, q.clip);
         let cells = &mut stack.last_mut().unwrap().cells;
-        let key = (kind == KIND_GLYPH).then(|| crate::runtime::apron_key(q));
+        let key = (q.kind() == Some(Kind::Glyph)).then(|| crate::runtime::apron_key(q));
         let apron = key.is_some_and(|k| aprons.contains(&k));
         let mut q = *q;
         if let Some(dy) = key.and_then(|k| shifts.get(&k)) { q.rect[1] += dy; }
@@ -223,8 +232,7 @@ pub(crate) fn rasterize_with(instances: &[Instance], size: (f32, f32), scale: f3
 pub fn from_pixels(rgba: &[u8], pw: u32, ph: u32, size: (f32, f32)) -> Grid {
     let (w, h) = dims(size);
     let (sx, sy) = (pw as f32 / size.0.max(1.0), ph as f32 / size.1.max(1.0));
-    let decode = |v: u8| { let c = v as f32 / 255.0; if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) } };
-    let lut: Vec<f32> = (0..=255u8).map(decode).collect();
+    let lut: [f32; 256] = std::array::from_fn(|v| srgb_decode(v as f32 / 255.0));
     let mut cells = vec![[0.0f32; 4]; w * h];
     for cy in 0..h {
         for cx in 0..w {
@@ -249,6 +257,7 @@ pub fn from_pixels(rgba: &[u8], pw: u32, ph: u32, size: (f32, f32)) -> Grid {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::{KIND_GLYPH, KIND_LAYER, KIND_LAYER_END, KIND_RECT};
     use bytemuck::Zeroable;
 
     fn rect(r: [f32; 4], c: Color, op: f32) -> Instance {
@@ -298,5 +307,16 @@ mod tests {
         let g = from_pixels(&px, 24, 24, (24.0, 24.0));
         assert_eq!((g.w, g.h), (2, 2));
         assert!(g.lab(0)[0] > 0.99 && g.lab(3)[0] < 0.01);
+    }
+
+    #[test]
+    fn from_pixels_srgb_decode_matches_inline_formula_bit_for_bit() {
+        let inline = |v: u8| {
+            let c = v as f32 / 255.0;
+            if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        };
+        for v in 0..=255u8 {
+            assert_eq!(srgb_decode(v as f32 / 255.0).to_bits(), inline(v).to_bits(), "byte {v}");
+        }
     }
 }

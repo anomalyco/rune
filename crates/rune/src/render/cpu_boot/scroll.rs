@@ -12,9 +12,10 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use super::Scene;
-use super::bin::{Bins, Show, Solid, TILE_H, TILE_W, covers, interior};
+use super::bin::{Bins, Show, Solid, TILE_H, TILE_W, covers, cut, interior};
 use super::shade::{Clip, has_sides};
-use crate::render::{Instance, KIND_LAYER, KIND_LAYER_END};
+use crate::render::instance::shader_consts;
+use crate::render::{INSTANCE_WORDS, Instance, Kind, word};
 
 /// What the last frame drew, kept for the next frame's comparison.
 pub(super) struct Prev {
@@ -30,18 +31,13 @@ pub(super) struct Shift {
     pub clean: Vec<bool>,
 }
 
-/// Words of an instance (as 32 `u32`s) that move with it: its rect's y and its clip's y edges.
-const RECT_Y: usize = 1;
-const CLIP_Y0: usize = 25;
-const CLIP_Y1: usize = 27;
-
-fn words(i: &Instance) -> &[u32; 32] { bytemuck::cast_ref(i) }
+fn words(i: &Instance) -> &[u32; INSTANCE_WORDS] { bytemuck::cast_ref(i) }
 
 /// An instance's bytes with what moves with it left out.
 fn key(i: &Instance) -> u64 {
     let mut h = 0u64;
     for (k, &w) in words(i).iter().enumerate() {
-        if k == RECT_Y || k == CLIP_Y0 || k == CLIP_Y1 { continue; }
+        if k == word::RECT_Y || k == word::CLIP_Y0 || k == word::CLIP_Y1 { continue; }
         h = (h.rotate_left(5) ^ u64::from(w)).wrapping_mul(0x517c_c1b7_2722_0a95);
     }
     h
@@ -49,15 +45,21 @@ fn key(i: &Instance) -> u64 {
 
 /// Kinds whose every position is relative to their rect (segments and triangles hold absolute
 /// points, so they never count as moved).
-fn movable(kind: f32) -> bool {
-    matches!(kind as u32, 0 | 1 | 2 | 3 | 4 | 7 | 8 | 9 | 10 | 11)
+fn movable(kind: Option<Kind>) -> bool {
+    match kind {
+        Some(
+            Kind::Rect | Kind::Shadow | Kind::Glyph | Kind::Inset | Kind::Gradient
+            | Kind::Image | Kind::Layer | Kind::LayerEnd | Kind::Dashed | Kind::Radial,
+        ) => true,
+        Some(Kind::Segment | Kind::Triangle | Kind::Effect | Kind::BackdropBlur) | None => false,
+    }
 }
 
 /// The shift that explains this frame, if one does: the whole-pixel `dy` most of the moved
 /// instances agree on, inside the clip they share.
 pub(super) fn plan(prev: &Prev, scene: &Scene<'_>, bins: &Bins, exec: &dyn super::raster::Exec) -> Option<Shift> {
     let old = &prev.instances;
-    let voter = |i: &Instance| i.params[1] == crate::render::KIND_GLYPH || i.params[1] == crate::render::KIND_RECT;
+    let voter = |i: &Instance| matches!(i.kind(), Some(Kind::Glyph | Kind::Rect));
     // The old voters by key, sorted: those with one key are a run.
     let mut by_key: Vec<(u64, u32)> = old.iter().enumerate().filter(|(_, i)| voter(i)).map(|(m, i)| (key(i), m as u32)).collect();
     by_key.sort_unstable();
@@ -135,7 +137,14 @@ fn tile_moved(prev: &Prev, scene: &Scene<'_>, bins: &Bins, t: usize, r: [u32; 4]
         if reaches(m) { return Some(m); }
     });
     let both = [r[0] as f32, r[1].min(back[1] as u32) as f32, r[2] as f32, r[3].max(back[3] as u32) as f32];
-    bins.tile(t).iter().all(|&n| olds.next().is_some_and(|m| same(scene, bins, prev, n, m, dy, both))) && olds.next().is_none()
+    let tile = [r[0] as i32, r[1] as i32, r[2] as i32, r[3] as i32];
+    bins.tile(t).iter().all(|&n| {
+        olds.next().is_some_and(|m| {
+            let new_r = cut(bins.bounds[n as usize], tile);
+            let old_r = cut(prev.bins.bounds[m as usize], back);
+            new_r == [old_r[0], old_r[1] + dy, old_r[2], old_r[3] + dy] && same(scene, bins, prev, n, m, dy, both)
+        })
+    }) && olds.next().is_none()
 }
 
 /// Whether new instance `n` draws over the tile what old instance `m` drew `dy` rows back:
@@ -143,13 +152,14 @@ fn tile_moved(prev: &Prev, scene: &Scene<'_>, bins: &Bins, t: usize, r: [u32; 4]
 fn same(scene: &Scene<'_>, bins: &Bins, prev: &Prev, n: u32, m: u32, dy: i32, both: [f32; 4]) -> bool {
     let (a, b) = (&scene.instances[n as usize], &prev.instances[m as usize]);
     let (wa, wb) = (words(a), words(b));
-    if !movable(a.params[1]) { return false; }
-    let marker = a.params[1] == KIND_LAYER || a.params[1] == KIND_LAYER_END;
+    let kind = a.kind();
+    if !movable(kind) { return false; }
+    let marker = matches!(kind, Some(Kind::Layer | Kind::LayerEnd));
     if wa == wb {
         // In place: it must look the same everywhere it reaches over both.
         return if marker { layer_same(bins, prev, n, m, 0) && layer_covers(scene, bins, n, both) } else { flat_over(a, both) || rows_alike(a, both) };
     }
-    let rest = (0..32).all(|k| k == RECT_Y || k == CLIP_Y0 || k == CLIP_Y1 || wa[k] == wb[k]);
+    let rest = (0..INSTANCE_WORDS).all(|k| k == word::RECT_Y || k == word::CLIP_Y0 || k == word::CLIP_Y1 || wa[k] == wb[k]);
     if !rest || a.rect[1] != b.rect[1] + dy as f32 { return false; }
     // Its clip moved with it, or stayed put and cuts every row over both places alike.
     let clip_moved = a.clip[1] == b.clip[1] + dy as f32 && a.clip[3] == b.clip[3] + dy as f32;
@@ -184,16 +194,20 @@ fn rows_alike(i: &Instance, r: [f32; 4]) -> bool {
     let (top, bottom) = (r[1] + 0.5, r[3] - 0.5);
     let middle = |margin: f32| top >= i.rect[1] + margin && bottom <= i.rect[1] + i.rect[3] - margin;
     let reach = i.radii.iter().fold(0.0f32, |m, v| m.max(v.abs()));
-    let alike = match i.params[1] as u32 {
+    let alike = match i.kind() {
         // `sd_rounded` there is `|x| - half width`, or deep inside past the border's reach.
-        0 => !has_sides(i) && middle(reach + 4.0 * (i.params[0].max(0.0) + i.params[2].max(0.5)) + 4.0),
+        Some(Kind::Rect) => !has_sides(i) && middle(reach + 4.0 * (i.params[0].max(0.0) + i.params[2].max(shader_consts::SOFT_MIN)) + 4.0),
         // `shadow_row`'s samples and its interior test are the same on every row there.
-        1 => i.uv[2] <= 0.0 && {
+        Some(Kind::Shadow) => i.uv[2] <= 0.0 && {
             let half = [i.rect[2] * 0.5, i.rect[3] * 0.5];
             let corner = i.radii[0].abs().min(half[0].min(half[1]));
-            middle(corner + 6.0 * i.params[2].max(0.01) + 1.0)
+            middle(corner + shader_consts::SHADOW_INSIDE_SIGMA * i.params[2].max(shader_consts::SHADOW_MIN_SIGMA) + 1.0)
         },
-        _ => false,
+        Some(
+            Kind::Glyph | Kind::Inset | Kind::Gradient | Kind::Segment | Kind::Triangle
+            | Kind::Image | Kind::Layer | Kind::LayerEnd | Kind::Dashed | Kind::Radial
+            | Kind::Effect | Kind::BackdropBlur,
+        ) | None => false,
     };
     alike && clip_rows_alike(&Clip::of(i), r)
 }
@@ -212,5 +226,5 @@ fn clip_rows_alike(c: &Clip, r: [f32; 4]) -> bool {
 
 /// Whether a box in place paints one colour over all of `r`.
 fn flat_over(i: &Instance, r: [f32; 4]) -> bool {
-    i.params[1] == crate::render::KIND_RECT && interior(i).is_some_and(|s| covers(Some(&s), &Clip::of(i), r))
+    i.kind() == Some(Kind::Rect) && interior(i).is_some_and(|s| covers(Some(&s), &Clip::of(i), r))
 }

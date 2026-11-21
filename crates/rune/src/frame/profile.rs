@@ -21,7 +21,8 @@ pub(crate) fn cpu_ms() -> Option<f64> {
 #[cfg(feature = "frame-profile")]
 mod enabled {
     use super::{PHASES, Phase, cpu_ms};
-    use std::{cell::Cell, time::Instant};
+    use crate::time::Instant;
+    use std::cell::Cell;
 
     thread_local! {
         static TIMES: Cell<[f64; 2 * PHASES]> = const { Cell::new([0.0; 2 * PHASES]) };
@@ -29,7 +30,7 @@ mod enabled {
 
     pub(crate) struct Scope(Phase, Instant, Option<f64>);
     impl Scope {
-        pub(crate) fn new(phase: Phase) -> Self { Self(phase, Instant::now(), cpu_ms()) }
+        pub(crate) fn new(phase: Phase) -> Self { Self(phase, crate::time::now(), cpu_ms()) }
     }
     impl Drop for Scope {
         fn drop(&mut self) {
@@ -78,6 +79,7 @@ pub(crate) struct Log {
 #[cfg(feature = "frame-profile")]
 impl Log {
     pub(crate) fn new(frames: usize) -> Self {
+        install_text_hook();
         let out = std::env::var_os("RUNE_FRAME_LOG").map(|path| {
             let file = std::fs::File::create(&path).unwrap_or_else(|e| panic!("RUNE_FRAME_LOG {}: {e}", path.to_string_lossy()));
             std::io::BufWriter::new(file)
@@ -136,7 +138,10 @@ impl Log {
 /// Wall then CPU milliseconds per phase (view, commit, layout, text, paint, apply) on this thread
 /// since the last call, for benches that drive a `Runtime` themselves.
 #[cfg(feature = "frame-profile")]
-pub fn take_frame_phases() -> [f64; 2 * PHASES] { take() }
+pub fn take_frame_phases() -> [f64; 2 * PHASES] {
+    install_text_hook();
+    take()
+}
 
 /// This thread's CPU clock in milliseconds.
 #[cfg(feature = "frame-profile")]
@@ -151,7 +156,7 @@ pub(crate) struct Scope(Option<(Phase, crate::time::Instant)>);
 impl Scope {
     #[inline(always)]
     pub(crate) fn new(phase: Phase) -> Self {
-        Self((crate::tooling::perf_warn::budget::on() || crate::tooling::interaction::active()).then(|| (phase, crate::time::Instant::now())))
+        Self((crate::tooling::perf_warn::budget::on() || crate::tooling::interaction::active()).then(|| (phase, crate::time::now())))
     }
 }
 #[cfg(not(feature = "frame-profile"))]
@@ -162,5 +167,32 @@ impl Drop for Scope {
         let ms = start.elapsed().as_secs_f64() * 1000.0;
         if crate::tooling::perf_warn::budget::on() { crate::tooling::perf_warn::budget::add(phase, ms); }
         if crate::tooling::interaction::active() { crate::tooling::interaction::add(phase, ms); }
+    }
+}
+
+thread_local! {
+    static TEXT_SCOPES: std::cell::RefCell<Vec<Scope>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn enter_text_phase() -> crate::text::profile::Token {
+    #[cfg(not(feature = "frame-profile"))]
+    if !crate::tooling::perf_warn::budget::on() && !crate::tooling::interaction::active() {
+        return 0;
+    }
+    TEXT_SCOPES.with_borrow_mut(|scopes| scopes.push(Scope::new(Phase::Text)));
+    1
+}
+
+fn exit_text_phase(_token: crate::text::profile::Token) {
+    TEXT_SCOPES.with_borrow_mut(|scopes| {
+        scopes.pop();
+    });
+}
+
+/// Registers this crate's `Phase::Text` timing hooks with `rune-text`, once per process.
+pub(crate) fn install_text_hook() {
+    static INSTALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !INSTALLED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        crate::text::profile::set_text_phase_hooks(enter_text_phase, exit_text_phase);
     }
 }

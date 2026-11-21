@@ -43,7 +43,7 @@ impl<S: 'static> Playground<S> {
     }
 }
 
-impl<S: 'static> Live<S> {
+impl LiveCore {
     /// Folds the groups [`Playground::folds`]' `load` names, the first time it's called.
     pub(super) fn load_folds(&mut self) {
         let Some(load) = self.folds.load.take() else { return };
