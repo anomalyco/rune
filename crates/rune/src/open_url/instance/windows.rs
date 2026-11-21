@@ -99,6 +99,7 @@ pub(super) fn claim(id: &str) -> bool {
     for generation in 0..GENERATIONS {
         let name = wide(&pipe_name(id, generation));
         let deadline = crate::time::now() + REACH_FOR;
+        let mut busy_until = None;
         loop {
             match create(&name) {
                 Ok(pipe) => return claimed(name, pipe),
@@ -128,7 +129,10 @@ pub(super) fn claim(id: &str) -> bool {
                 // The first process went between the two calls: claim the name again.
                 Sent::Gone if crate::time::now() < deadline => continue,
                 Sent::Gone => return true,
-                Sent::Nobody => break,
+                Sent::Busy if crate::time::now() < *busy_until.get_or_insert_with(|| crate::time::now() + BUSY_WAIT) => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Sent::Busy | Sent::Nobody => break,
             }
         }
     }
@@ -374,10 +378,18 @@ enum Sent {
     Quitting(u32),
     /// No process has the name now.
     Gone,
-    /// A process has the name and doesn't answer (killed and still being torn down, or hung):
-    /// nobody is there to take the launch.
+    /// A process has the name and doesn't answer (killed and still being torn down, or gone
+    /// with an inherited handle left): nobody is there to take the launch.
     Nobody,
+    /// A running process has the name and didn't answer in time: busy (a loaded machine, its own
+    /// start), or hung. Asked again for [`BUSY_WAIT`] before it's passed over.
+    Busy,
 }
+
+/// How long a launch keeps asking a running process that doesn't answer before it takes it for
+/// hung and starts beside it on the next name: a busy one answers within this, and a second copy
+/// of the app (which a launch passed over would be) never runs while the first is only slow.
+const BUSY_WAIT: Duration = Duration::from_secs(1);
 
 /// Sends this launch's arguments to the process that has the pipe and waits, at most
 /// `ANSWER_WITHIN`, for its answer.
@@ -399,6 +411,8 @@ fn send(name: &[u16]) -> Sent {
             ERROR_PIPE_BUSY if left() > 0 => unsafe {
                 WaitNamedPipeW(name.as_ptr(), left());
             },
+            // Still talking to another launch: asked again (`Busy`).
+            ERROR_PIPE_BUSY => return Sent::Busy,
             _ => return Sent::Nobody,
         }
     };
@@ -445,6 +459,7 @@ fn send(name: &[u16]) -> Sent {
     match (answered, answer[0]) {
         (Some(1), ACCEPTED) => Sent::Delivered,
         (Some(1), QUITTING) => Sent::Quitting(server),
+        _ if server != 0 => Sent::Busy,
         _ => Sent::Nobody,
     }
 }
