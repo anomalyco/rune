@@ -544,6 +544,50 @@ impl<'a> TextFlow<'a> {
         out
     }
 
+    /// Inline font-metric boxes (`[x0, baseline - ascent, x1, baseline + descent]` in device px)
+    /// covering content bytes `a..b`, matching Blink's `Range::getBoundingClientRect()`. Falls
+    /// back to the line box when no glyph run overlaps the range.
+    pub fn inline_range_boxes(self, a: usize, b: usize) -> Vec<parley::BoundingBox> {
+        let piece_boxes = |l: &Layout<Ink>, sa: usize, sb: usize, y_off: f64, out: &mut Vec<parley::BoundingBox>| {
+            for (bb, line_idx) in range_boxes(l, sa, sb, false) {
+                let (mut y0, mut y1) = (bb.y0, bb.y1);
+                if let Some(line) = l.get(line_idx) {
+                    let base = line.metrics().baseline;
+                    let (mut asc, mut desc) = (0.0f32, 0.0f32);
+                    for run in line.runs() {
+                        let r = run.text_range();
+                        if r.start < sb && sa < r.end {
+                            let fm = run.font_metrics();
+                            (asc, desc) = (asc.max(fm.ascent), desc.max(fm.descent.abs()));
+                        }
+                    }
+                    if asc > 0.0 || desc > 0.0 {
+                        y0 = f64::from(base - asc);
+                        y1 = f64::from(base + desc);
+                    }
+                }
+                out.push(parley::BoundingBox::new(bb.x0, y0 + y_off, bb.x1, y1 + y_off));
+            }
+        };
+        let mut out = Vec::new();
+        if a >= b {
+            return out;
+        }
+        match self {
+            TextFlow::Single(l) => piece_boxes(l, a, b, 0.0, &mut out),
+            TextFlow::Paragraphs(pl) => {
+                let from = pl.paragraphs.partition_point(|q| q.end < a);
+                for (k, q) in pl.paragraphs.iter().enumerate().skip(from).take_while(|(_, q)| q.start <= b) {
+                    let p = Piece::of_paragraph(k, q, pl.disjoint_spans);
+                    if let Some((sa, sb)) = p.clip(a, b) {
+                        piece_boxes(p.layout, sa, sb, p.y as f64, &mut out);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// The span its lines cover across, from the leftmost line start to the rightmost end, or
     /// `None` with no lines.
     pub fn extent(self) -> Option<(f32, f32)> {

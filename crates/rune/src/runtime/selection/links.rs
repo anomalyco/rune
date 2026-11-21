@@ -189,6 +189,25 @@ impl RuntimeCore {
             .map_or(self.tree.nodes[i].target, |d| [d[0], d[1], d[0] + d[2], d[1] + d[3]])
     }
 
+    /// Inline font-metric boxes `(x0, y0, x1, y1)` in window points for each `(start, end)` byte
+    /// span in `spans` of node `n`, matching Blink's `Range::getBoundingClientRect()`.
+    fn span_inline_boxes(&self, n: &Node, rect: [f32; 4], z: f32, spans: impl IntoIterator<Item = (u32, u32)>) -> Vec<(usize, [f32; 4])> {
+        let (Some(spec), Some(laid)) = (&n.text, &n.text_layout) else { return Vec::new() };
+        let flow = laid.view();
+        let s = self.env.scale;
+        let [ox, oy] = origin(n, spec, flow, rect, s, z);
+        let px = s / z.max(1e-4);
+        let len = layout_len(n, spec);
+        let mut out = Vec::new();
+        for (k, (start, end)) in spans.into_iter().enumerate() {
+            let (a, b) = drawn(n, start, end);
+            for bb in flow.inline_range_boxes((a as usize).min(len), (b as usize).min(len)) {
+                out.push((k, [ox + bb.x0 as f32 / px, oy + bb.y0 as f32 / px, ox + bb.x1 as f32 / px, oy + bb.y1 as f32 / px]));
+            }
+        }
+        out
+    }
+
     /// Line boxes in window points `(x0, y0, x1, y1)` for each `(start, end)` byte span in `spans`
     /// of node `n`, inside border box `rect` drawn at scale `z`.
     fn span_boxes(&self, n: &Node, rect: [f32; 4], z: f32, spans: impl IntoIterator<Item = (u32, u32)>) -> Vec<(usize, [f32; 4])> {
@@ -425,6 +444,38 @@ impl RuntimeCore {
         let Some(spec) = n.text.as_deref() else { return Vec::new() };
         if spec.cold.highlights.is_empty() || n.is_secure() { return Vec::new(); }
         self.span_boxes(n, rect, z, spec.cold.highlights.iter().map(|h| (h.start, h.end)))
+    }
+
+    /// Unscrolled inline font-metric target rect `[x0, y0, x1, y1]` (in window points) and first
+    /// node index for the highlight keyed `key` (or scoped `path/key`), matching Blink's
+    /// `Range::getBoundingClientRect()`.
+    pub(in crate::runtime) fn highlight_inline_target_in(&self, nodes: &[Node], scope: Option<&str>, key: &str) -> Option<(usize, [f32; 4])> {
+        let index = self.key_index_for(nodes);
+        let mut first_node = None;
+        let mut union: Option<[f32; 4]> = None;
+        let mut visit = |i: usize| {
+            let n = &nodes[i];
+            let Some(spec) = n.text.as_ref().filter(|t| !t.cold.highlights.is_empty() && !n.is_secure()) else { return };
+            if !n.parent.is_none_or(|p| super::in_scope(&nodes[p].path, scope)) {
+                return;
+            }
+            let matches: Vec<_> = spec.cold.highlights.iter().map(|h| h.key.as_deref().is_some_and(|hkey| {
+                crate::flight::selects_under(key, &n.path, hkey)
+            })).collect();
+            if matches.iter().any(|m| *m) {
+                for (k, r) in self.span_inline_boxes(n, n.target, 1.0, spec.cold.highlights.iter().map(|h| (h.start, h.end))) {
+                    if matches[k] {
+                        first_node.get_or_insert(i);
+                        union = Some(union.map_or(r, |u| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]));
+                    }
+                }
+            }
+        };
+        match index {
+            Some(index) => index.marked(key).into_iter().for_each(&mut visit),
+            None => (0..nodes.len()).for_each(&mut visit),
+        }
+        Some((first_node?, union?))
     }
 
     /// Unscrolled target rect `[x0, y0, x1, y1]` (in window points) and first node index for
