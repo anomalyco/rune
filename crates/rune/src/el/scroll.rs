@@ -83,23 +83,32 @@ impl El {
     /// On a scroll viewport, called with whether it shows its bottom (within a point): once
     /// after its first layout, then only when that changes, never per frame. Pair with
     /// [`Tx::scroll_to_bottom`] for a "jump to latest" button.
-    pub fn on_at_bottom<S: 'static>(mut self, f: impl Fn(&mut S, bool) + 'static) -> Self {
+    pub fn on_at_bottom<S: 'static>(self, f: impl Fn(&mut S, bool) + 'static) -> Self {
+        self.on_at_bottom_if(move |s, at| { f(s, at); true })
+    }
+    /// Like [`Self::on_at_bottom`], but a report that returns false does not rebuild the view.
+    /// The first report after mounting can confirm state the app already drew.
+    pub fn on_at_bottom_if<S: 'static>(mut self, f: impl Fn(&mut S, bool) -> bool + 'static) -> Self {
         self.handlers.on_at_bottom = Some(Rc::new(move |s, at| f(downcast::<S>(s), at)));
         self
     }
     /// On a scroll viewport, called with whether it stands more than its own height, and at
     /// least `min` points, above its bottom: where a chat shows its "jump to latest" button and
     /// hides it again near the end. Once after its first layout, then only when that changes.
-    pub fn on_far_from_bottom<S: 'static>(mut self, min: f32, f: impl Fn(&mut S, bool) + 'static) -> Self {
-        self.handlers.on_far_from_bottom = Some((min, None, Rc::new(move |s, far| f(downcast::<S>(s), far))));
-        self
+    pub fn on_far_from_bottom<S: 'static>(self, min: f32, f: impl Fn(&mut S, bool) + 'static) -> Self {
+        self.on_far_from_bottom_if(min, None, move |s, far| { f(s, far); true })
     }
     /// [`El::on_far_from_bottom`] for a viewport that runs under a frame, the nearest ancestor
     /// keyed `frame` (a chat's pane, with a header and a dock over its scroll): far is more than
     /// the frame's height above the bottom, and at least `min`. The height is measured as it
     /// scrolls, so the view never reads it and a resize re-runs no view.
-    pub fn on_far_from_bottom_under<S: 'static>(mut self, min: f32, frame: &str, f: impl Fn(&mut S, bool) + 'static) -> Self {
-        self.handlers.on_far_from_bottom = Some((min, Some(Rc::from(frame)), Rc::new(move |s, far| f(downcast::<S>(s), far))));
+    pub fn on_far_from_bottom_under<S: 'static>(self, min: f32, frame: &str, f: impl Fn(&mut S, bool) + 'static) -> Self {
+        self.on_far_from_bottom_if(min, Some(frame), move |s, far| { f(s, far); true })
+    }
+    /// Like [`Self::on_far_from_bottom`] (under `frame` if given), but the callback returns
+    /// whether its report changed the view. A stationary viewport still receives its first report.
+    pub fn on_far_from_bottom_if<S: 'static>(mut self, min: f32, frame: Option<&str>, f: impl Fn(&mut S, bool) -> bool + 'static) -> Self {
+        self.handlers.on_far_from_bottom = Some((min, frame.map(Rc::from), Rc::new(move |s, far| f(downcast::<S>(s), far))));
         self
     }
     /// On a scroll viewport, fade its top and bottom edges over `width` points (16–32 reads well),
@@ -141,6 +150,34 @@ impl El {
     /// [`El::virtual_rows`] lists already keep their first visible row this way.
     pub fn scroll_anchor(mut self) -> Self {
         self.cold_mut().scroll_edges.anchor = true;
+        self
+    }
+    /// A wheel over this element turns the scroll viewport keyed `key` (or the nearest one
+    /// containing it) instead of starting on what is drawn here: an overlay scroll bar's track,
+    /// which draws over its viewport's edge but sits beside it in the tree, so a wheel there
+    /// would otherwise find no scroller above it. The viewport's wheel is then Chromium's, whose
+    /// scrollbar belongs to its scroller: it scrolls this viewport on the axis the wheel turned,
+    /// and chains on up from it when that one is at its end. A press or drag here still does
+    /// whatever this element's handlers do, and an [`El::on_wheel`] handler under the pointer still
+    /// hears the wheel first: this decides where a wheel the handlers leave scrolls, not who hears
+    /// it, and a handler on the named viewport itself doesn't, since the pointer is over this
+    /// element rather than the viewport.
+    ///
+    /// `key` names an element as [`Cx::layout`](crate::Cx::layout) does, here and in the other
+    /// scroll requests, and is resolved in this element's own place: looked up inside this element
+    /// itself, then inside its parent, then its parent's parent and so on, the first that holds
+    /// such an element wins. So two panes that key their viewports alike (a chat and a sidebar
+    /// both with `list`, or every wide markdown table, each keyed `scroll`) each take the wheel
+    /// over their own bar. Nothing keyed `key` leaves the wheel as it was.
+    #[cfg_attr(debug_assertions, track_caller)]
+    #[inline]
+    pub fn wheel_scrolls(mut self, key: impl Into<String>) -> Self {
+        self.set_wheel_scrolls(key);
+        self
+    }
+    /// [`El::wheel_scrolls`] in place.
+    pub fn set_wheel_scrolls(&mut self, key: impl Into<String>) -> &mut Self {
+        self.cold_mut().wheel_scrolls = Some(key.into().into_boxed_str());
         self
     }
 }
@@ -285,5 +322,5 @@ impl ScrollAxes {
     pub(crate) fn has(self, horizontal: bool) -> bool { if horizontal { self.x() } else { self.y() } }
 }
 
-pub(crate) type AtBottomFn = Rc<dyn Fn(crate::states::States<'_>, bool)>;
+pub(crate) type AtBottomFn = Rc<dyn Fn(crate::states::States<'_>, bool) -> bool>;
 pub(crate) type VisibleRowsFn = Rc<dyn Fn(crate::states::States<'_>, std::ops::Range<usize>) -> bool>;

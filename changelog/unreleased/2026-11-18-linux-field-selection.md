@@ -1,0 +1,1 @@
+- Linux: typing in a text field no longer panics in AccessKit's AT-SPI adapter while an accessibility bus is up. An empty field counts as a short one again (Parley shapes it as one space), and a field without text runs puts no selection on itself on Linux, where only `TextRun`s can hold one.

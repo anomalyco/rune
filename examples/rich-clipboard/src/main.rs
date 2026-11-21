@@ -6,6 +6,8 @@
 //! HTML. "Copy formatted" puts plain text, HTML and RTF on the clipboard: paste it into
 //! TextEdit or Mail and it keeps its bold and italic. "Read clipboard" looks without pasting.
 
+#![forbid(unsafe_code)]
+
 use rune::tok::{self, radius, space, type_};
 use rune::{AppSpec, ClipboardContent, Cx, El, TextEdit, Tx, col, row, text, text_input};
 

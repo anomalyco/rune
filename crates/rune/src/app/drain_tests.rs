@@ -42,7 +42,7 @@ fn drain_orders_focus_at_publication_not_at_wake_or_collection() {
             worker.join().unwrap();
             assert_eq!(batch.activation == Some(Activation::Focus), publish < 4);
             // differs from dev: only a later focus collected in this batch cancels the minimize.
-            assert_eq!(rt.minimize.field(), !(2..4).contains(&publish), "publish={publish} finish={finish}");
+            assert_eq!(rt.host.minimize.field(), !(2..4).contains(&publish), "publish={publish} finish={finish}");
             let next = shared.drain_window(&mut rt, |_| unreachable!());
             assert_eq!(next.activation == Some(Activation::Focus), publish == 4);
         }
@@ -61,7 +61,7 @@ fn drain_orders_restores_even_if_a_show_replaces_the_window_request() {
             h.show();
         });
         assert_eq!(batch.window, Some(WindowRequest::Show));
-        assert_eq!(rt.minimize.field(), !restore);
+        assert_eq!(rt.host.minimize.field(), !restore);
     }
 }
 
@@ -81,5 +81,5 @@ fn a_pick_callback_that_puts_back_its_tx_discards_the_minimize() {
         false
     }));
     shared.drain_window(&mut rt, |_| {});
-    assert!(!rt.minimize.field(), "the callback discarded the update's minimize, as on dev");
+    assert!(!rt.host.minimize.field(), "the callback discarded the update's minimize, as on dev");
 }

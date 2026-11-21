@@ -1,0 +1,1 @@
+- Greyscale atlas text in a byte-blended window uses the same covered source precision as the CPU painter when the GPU takes over.

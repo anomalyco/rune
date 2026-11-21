@@ -1,7 +1,7 @@
 use super::*;
 
 fn scratch(name: &str) -> PathBuf {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nanos = crate::time::system_now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     std::env::temp_dir().join(format!("rune-{name}-{}-{nanos}", std::process::id()))
 }
 
@@ -33,7 +33,7 @@ fn a_launcher_can_wait_for_the_ready_file() {
 
     clear();
     assert!(!path.exists(), "exiting removes it");
-    let _ = std::fs::remove_dir_all(&root);
+    std::fs::remove_dir_all(&root).ok();
 }
 
 #[test]

@@ -5,11 +5,11 @@ use super::*;
 #[cfg(debug_assertions)]
 const LIVE_ONLY_CHECK: f64 = 0.25;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Events whose handler called [`Tx::live_only`] and so didn't re-run the view, since the
     /// runtime started.
     pub fn live_only_events(&self) -> u64 {
-        self.live_only_skips
+        self.frame.live_only_skips
     }
 
     /// Whether debug builds check `Tx::live_only` handlers (on by default): a live-only event
@@ -18,7 +18,7 @@ impl<S: 'static> Runtime<S> {
     /// check.
     pub fn check_live_only(&mut self, on: bool) {
         #[cfg(debug_assertions)]
-        { self.live_only_check = on; }
+        { self.frame.live_only_check = on; }
         let _ = on;
     }
 
@@ -27,7 +27,7 @@ impl<S: 'static> Runtime<S> {
     /// Always empty in release builds.
     pub fn live_only_warnings(&self) -> &[String] {
         #[cfg(debug_assertions)]
-        { &self.live_only_warnings }
+        { self.frame.live_only_warnings() }
         #[cfg(not(debug_assertions))]
         { &[] }
     }
@@ -35,25 +35,25 @@ impl<S: 'static> Runtime<S> {
     /// An event whose handler called `Tx::live_only`: false, so it doesn't commit, while this
     /// frame still latches the live values it set. Debug builds check one such event a quarter
     /// second after the last commit by committing anyway (true) and comparing what it built.
-    pub(super) fn skip_view(&mut self, label: impl std::fmt::Display) -> bool {
+    pub(in crate::runtime) fn skip_view(&mut self, label: impl std::fmt::Display) -> bool {
         #[cfg(debug_assertions)]
-        if self.live_only_check && self.clock - self.last_commit_clock >= LIVE_ONLY_CHECK {
-            if self.live_check.is_none() { self.live_check = Some((label.to_string(), self.view_print())); }
-            self.live_checks += 1;
-            self.live.set();
+        if self.frame.live_only_check && self.clock - self.commit.last_commit_clock() >= LIVE_ONLY_CHECK {
+            if self.frame.live_check.is_none() { self.frame.live_check = Some((label.to_string(), self.view_print())); }
+            self.frame.live_checks += 1;
+            self.frame.live.set();
             return true;
         }
         let _ = label;
-        self.live_only_skips += 1;
-        self.live.set();
+        self.frame.live_only_skips += 1;
+        self.frame.live.set();
         false
     }
 
     /// Whether the commit about to run is a live-only check's, which builds what skipping it
     /// would have left on screen, so virtual lists keep their mounted rows.
-    pub(super) fn checking_live_only(&self) -> bool {
+    pub(in crate::runtime) fn checking_live_only(&self) -> bool {
         #[cfg(debug_assertions)]
-        { self.live_check.is_some() }
+        { self.frame.live_check.is_some() }
         #[cfg(not(debug_assertions))]
         { false }
     }
@@ -61,8 +61,8 @@ impl<S: 'static> Runtime<S> {
     /// What the last commit built: each element's path, layout, colours and text. Live values
     /// are left out, since a commit rebuilds them from the view and the next latch sets them.
     #[cfg(debug_assertions)]
-    pub(super) fn view_print(&self) -> ViewPrint {
-        ViewPrint(self.nodes.iter()
+    pub(in crate::runtime) fn view_print(&self) -> ViewPrint {
+        ViewPrint(self.tree.nodes.iter()
             // Retained exits can disappear between commits without a model change.
             .filter(|n| !self.is_exiting(n.id))
             .map(|n| {
@@ -86,11 +86,11 @@ impl<S: 'static> Runtime<S> {
     /// it does when the handler changed state the view reads. Names the first element that
     /// differs and what about it, once per handler, element and property.
     #[cfg(debug_assertions)]
-    pub(super) fn compare_live_check(&mut self, check: Option<(String, ViewPrint)>) {
+    pub(in crate::runtime) fn compare_live_check(&mut self, check: Option<(String, ViewPrint)>) {
         let Some((handler, before)) = check else { return };
         let Some(d) = before.first_difference(&self.view_print()) else { return };
         let head = format!("rune: {handler} called Tx::live_only, but the view built something else after it: {} of {:?}", d.what, d.path);
-        if self.live_only_warnings.iter().any(|w| w.starts_with(&head)) { return; }
+        if self.frame.live_only_warnings.iter().any(|w| w.starts_with(&head)) { return; }
         let values = d.values.map(|(was, now)| format!(" went from {was} to {now}")).unwrap_or_default();
         let warning = format!(
             "{head}{values}. The handler may have changed state the view reads, which stays stale until another event \
@@ -98,7 +98,7 @@ impl<S: 'static> Runtime<S> {
              with check_live_only(false)."
         );
         eprintln!("{warning}");
-        self.live_only_warnings.push(warning);
+        self.frame.live_only_warnings.push(warning);
     }
 }
 

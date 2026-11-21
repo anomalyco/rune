@@ -6,6 +6,7 @@
 fn main() {}
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn main() {
     // Work after `run` returns below: the process tears down in order rather than ending at once.
     rune::orderly_exit();
@@ -50,7 +51,7 @@ fn main() {
     let (created, ready) = std::sync::mpsc::channel();
     let overlay = app.overlay(OverlaySpec::new("Excluded panel", (32.0, 32.0), view)
         .options(OverlayOptions { prewarm: true, exclude_from_capture: true, input: OverlayInput::None, ..Default::default() })
-        .on_created(move |_| { let _ = created.send(()); }), ());
+        .on_created(move |_| { created.send(()).ok(); }), ());
     let passed = Arc::new(AtomicBool::new(true));
     let result = passed.clone();
     std::thread::spawn(move || {
@@ -58,7 +59,7 @@ fn main() {
         let check = |label: &'static str, hidden| {
             std::thread::sleep(Duration::from_millis(600));
             let (tx, rx) = std::sync::mpsc::channel();
-            handle.update(move |_, _| { let _ = tx.send(snapshot(label, hidden)); });
+            handle.update(move |_, _| { tx.send(snapshot(label, hidden)).ok(); });
             if !rx.recv_timeout(Duration::from_secs(10)).unwrap() { result.store(false, Ordering::SeqCst); }
         };
         check("prewarm", true);

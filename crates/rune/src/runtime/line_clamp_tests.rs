@@ -27,7 +27,7 @@ fn clamp(content: &'static str, lines: usize, marked: Option<(usize, usize)>, wi
 }
 
 fn node<'a>(rt: &'a Runtime<S>) -> &'a Node {
-    rt.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap()
+    rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap()
 }
 
 /// The string node "t" draws, its cut, its line count and its height in points.
@@ -175,7 +175,7 @@ fn a_wrapped_word_fills_the_last_line() {
     }
     let mut rt = Runtime::new((), anywhere, (200.0, 400.0), Env::new(true, 2.0));
     rt.frame(0.0);
-    let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
+    let n = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
     let e = n.elided.expect("the token wraps past two lines at 200 pt");
     let l = n.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap();
     assert_eq!(l.len(), 2, "wraps onto two lines before cutting");
@@ -193,7 +193,7 @@ fn a_text_field_ignores_the_clamp_and_truncation() {
     let mut rt = Runtime::new(crate::TextEdit::new(TITLE), view, (200.0, 400.0), Env::new(true, 2.0));
     rt.frame(0.0);
     for key in ["t", "u"] {
-        let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some(key)).unwrap();
+        let n = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some(key)).unwrap();
         let t = n.text.as_ref().unwrap();
         assert!(n.elided.is_none() && t.max_lines == 0 && !t.truncate, "{key}");
         let r = n.target;

@@ -97,19 +97,19 @@ impl Old {
         self.totals.redraws += 1;
         if !paced && !self.waited { self.totals.unpaced += 1; }
         self.waited = false;
-        self.tick(Instant::now());
+        self.tick(crate::time::now());
     }
 
     fn waited(&mut self) { self.waited = true; }
 
     fn presented(&mut self) {
         self.totals.presents += 1;
-        self.tick(Instant::now());
+        self.tick(crate::time::now());
     }
 
     fn skipped(&mut self) {
         self.totals.skipped += 1;
-        self.tick(Instant::now());
+        self.tick(crate::time::now());
     }
 
     fn failed(&mut self, missed: Missed) {
@@ -118,14 +118,14 @@ impl Old {
             Missed::Timeout => self.totals.timeouts += 1,
             Missed::Outdated | Missed::Unconfigured => self.totals.outdated += 1,
         }
-        self.tick(Instant::now());
+        self.tick(crate::time::now());
     }
 
     fn turn(&mut self, woke: bool, waited: bool) {
         self.totals.turns += 1;
         if woke { self.totals.wakes += 1; }
         self.waited |= waited;
-        self.tick(Instant::now());
+        self.tick(crate::time::now());
     }
 
     fn set_pacing(&mut self, pacing: Pacing) {
@@ -185,7 +185,7 @@ fn old_counts(c: &OldCounts) -> [u64; 9] {
 
 fn walk(events: &[Ev]) {
     // Rolls happen only at the walk's times: every count's own tick lands before `start`.
-    let start = Instant::now() + Duration::from_secs(3600);
+    let start = crate::time::now() + Duration::from_secs(3600);
     let mut new = SurfaceMeter::new("main", Arc::default());
     new.started = start;
     let mut old = Old::new("main", start);

@@ -113,7 +113,7 @@ impl Drop for Old {
     fn drop(&mut self) {
         if self.in_flight && !std::thread::panicking() { self.wait(); }
         self.jobs = None;
-        if let Some(thread) = self.thread.take() { let _ = thread.join(); }
+        if let Some(thread) = self.thread.take() { thread.join().ok(); }
     }
 }
 

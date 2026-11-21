@@ -7,6 +7,8 @@
 //! exact class. A subclass of it makes `-class` return nil. Objects Rune hasn't bridged, and
 //! calls off the main thread, fall through to AppKit.
 
+#![allow(unsafe_code)]
+
 use std::{cell::RefCell, collections::{HashMap, HashSet}, ffi::{c_char, c_void}, sync::{Mutex, OnceLock, atomic::{AtomicUsize, Ordering}}};
 use objc2::{msg_send, sel, runtime::{AnyClass, AnyObject, Bool, Sel}};
 use objc2_app_kit::{NSPanel, NSView, NSWindow};
@@ -49,11 +51,14 @@ fn panel(window: &AnyObject, ordinary_only: bool) -> Option<*mut AnyObject> {
 /// KVO subclass of it) would have reached without Rune.
 fn base(object: &AnyObject) -> &'static AnyClass {
     let installed = INSTALLED.lock().unwrap_or_else(|e| e.into_inner());
+    // SAFETY: `object` is a valid live ObjC instance reference passed from an IMP.
     let mut class = unsafe { object_getClass(object) };
     while !class.is_null() {
         if let Some((_, parent)) = installed.iter().find(|(c, _)| *c == class as usize) {
+            // SAFETY: `parent` came from `class_getSuperclass` during `install` and ObjC class objects live for the process.
             return unsafe { &*(*parent as *const AnyClass) };
         }
+        // SAFETY: `class` is non-null by the loop condition and points to a registered ObjC class.
         class = unsafe { class_getSuperclass(class) };
     }
     unreachable!("Rune's forwards only run on classes it installed them into")
@@ -62,6 +67,8 @@ fn base(object: &AnyObject) -> &'static AnyClass {
 macro_rules! forward {
     ($name:ident, $ordinary_only:expr, ($($arg:ident: $ty:ty),*) -> $ret:ty, $($message:tt)+) => {
         extern "C" fn $name(window: &AnyObject, _: Sel $(, $arg: $ty)*) -> $ret {
+            // SAFETY: runs as an ObjC IMP on `window`; `panel(...)` returns a live `NSPanel` owned by `Panel`
+            // while bridged, and `base(window)` is the original superclass matching this selector's signature.
             unsafe { match panel(window, $ordinary_only) {
                 Some(panel) => msg_send![panel, $($message)+],
                 None => msg_send![super(window, base(window)), $($message)+],
@@ -82,6 +89,8 @@ forward!(key, true, () -> Bool, isKeyWindow);
 forward!(live_resize, true, () -> Bool, inLiveResize);
 /// The title also stays on the source, where winit's `title()` reads it back.
 extern "C" fn set_title(window: &AnyObject, _: Sel, title: *mut AnyObject) {
+    // SAFETY: runs as the `setTitle:` IMP on `window`; `panel(...)` returns a live `NSPanel` while bridged,
+    // `title` is the `NSString` argument from AppKit, and `base(window)` is the original superclass.
     unsafe {
         if let Some(panel) = panel(window, true) { let _: () = msg_send![panel, setTitle: title]; }
         msg_send![super(window, base(window)), setTitle: title]
@@ -102,6 +111,8 @@ macro_rules! gated {
             core::arch::naked_asm!($x86, "jmp {}", sym $from);
         }
         extern "C" fn $from(window: &AnyObject, _: Sel $(, $arg: $ty)*, caller: usize) {
+            // SAFETY: invoked from the naked trampoline with the IMP's `window` and arguments; `panel(...)`
+            // returns a live `NSPanel` while bridged, and `base(window)` is the original superclass.
             unsafe { match panel(window, true).filter(|_| from_rune(caller)) {
                 Some(panel) => msg_send![panel, $($message)+],
                 None => msg_send![super(window, base(window)), $($message)+],
@@ -133,13 +144,16 @@ extern "C" fn content_view(_window: &AnyObject, _selector: Sel) -> *mut AnyObjec
 }
 extern "C" fn content_view_from(window: &AnyObject, _: Sel, caller: usize) -> *mut AnyObject {
     if let Some(source) = source(window) && from_rune(caller) { return source.view as *mut AnyObject; }
+    // SAFETY: `window` is the live ObjC receiver and `base(window)` is its original superclass implementing `contentView`.
     unsafe { msg_send![super(window, base(window)), contentView] }
 }
 /// The `__TEXT` range of the image holding `address`.
 fn text(address: usize) -> Option<(usize, usize)> {
     let mut info = DlInfo { fname: std::ptr::null(), fbase: std::ptr::null_mut(), sname: std::ptr::null(), saddr: std::ptr::null_mut() };
+    // SAFETY: `dladdr` accepts any pointer value and writes into the valid local `DlInfo`.
     if unsafe { dladdr(address as *const c_void, &mut info) } == 0 { return None; }
     let mut size = 0;
+    // SAFETY: `dladdr` succeeded so `info.fbase` is a valid Mach-O header, `"__TEXT"` is NUL-terminated, and `&mut size` is a valid out-pointer.
     let start = unsafe { getsegmentdata(info.fbase, c"__TEXT".as_ptr(), &mut size) };
     (!start.is_null()).then(|| (start as usize, start as usize + size as usize))
 }
@@ -164,6 +178,8 @@ fn from_rune(caller: usize) -> bool {
 
 extern "C" fn hit_test(view: &AnyObject, _: Sel, point: NSPoint) -> *mut AnyObject {
     let state = VIEWS.try_with(|views| views.borrow().get(&(view as *const _ as usize)).cloned()).ok().flatten();
+    // SAFETY: runs as the `hitTest:` IMP on a live `NSView` on the main thread; all selectors match
+    // `NSView`'s ObjC signatures and `base(view)` is the original superclass.
     unsafe {
         if let Some(state) = state {
             let parent: *mut AnyObject = msg_send![view, superview];
@@ -184,6 +200,8 @@ fn install(class: &AnyClass, appkit: &AnyClass, methods: &[(Sel, *const c_void)]
     let key = class as *const AnyClass as usize;
     if installed.iter().any(|(c, _)| *c == key) { return true; }
     if std::ptr::eq(class, appkit) { return false; }
+    // SAFETY: `class` is a registered ObjC class, `INSTALLED` serializes installation, and each added
+    // IMP's ABI matches the inherited method's type encoding copied from `class_getInstanceMethod`.
     unsafe {
         let parent = class_getSuperclass(class);
         if parent.is_null() { return false; }
@@ -207,6 +225,8 @@ pub(crate) fn reattach(panel: &NSPanel) -> bool {
     let found = WINDOWS.try_with(|w| w.borrow().iter().find(|(_, s)| s.panel == key).map(|(k, s)| (*k, *s))).ok().flatten();
     let Some((source, entry)) = found else { return false };
     let view = entry.view as *mut AnyObject;
+    // SAFETY: main-thread AppKit calls; `WINDOWS` only contains entries while `Panel` retains `source`,
+    // `panel`, and `view`, and `base(&*source)` is `source`'s original superclass.
     unsafe {
         let content: *mut AnyObject = msg_send![panel, contentView];
         let window: *mut AnyObject = msg_send![view, window];
@@ -224,7 +244,7 @@ pub(crate) fn reattach(panel: &NSPanel) -> bool {
         if key_window.as_bool() { let _: Bool = msg_send![panel, makeFirstResponder: view]; }
     }
     REATTACHED.fetch_add(1, Ordering::Relaxed);
-    let _ = LOST.try_with(|lost| lost.borrow_mut().insert(key));
+    LOST.try_with(|lost| lost.borrow_mut().insert(key)).ok();
     true
 }
 
@@ -269,9 +289,11 @@ impl Bridge {
     fn new_kind(source: &NSWindow, panel: &NSPanel, view: &NSView, filter: Option<Rc<crate::platform::macos::PointerState>>, ordinary: bool) -> Option<Self> {
         use objc2::ClassType;
         // `-class` is the class winit declared, below any KVO subclass.
+        // SAFETY: `source` is a live `NSWindow` on the main thread; `-class` returns a non-null static `AnyClass`.
         let class: &AnyClass = unsafe { msg_send![source, class] };
         if !install(class, NSWindow::class(), &window_forwards()) { return None; }
         if filter.is_some() {
+            // SAFETY: `view` is a live `NSView` on the main thread; `-class` returns a non-null static `AnyClass`.
             let view_class: &AnyClass = unsafe { msg_send![view, class] };
             if !install(view_class, NSView::class(), &[(sel!(hitTest:), hit_test as *const c_void)]) { return None; }
         }
@@ -295,7 +317,7 @@ impl Drop for Bridge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use objc2::{class, declare::ClassBuilder};
+    use objc2::{class, runtime::ClassBuilder};
 
     thread_local! { static RECEIVED: RefCell<Vec<String>> = RefCell::default(); }
     fn received(message: String) { RECEIVED.with(|r| r.borrow_mut().push(message)); }
@@ -314,9 +336,10 @@ mod tests {
     #[test]
     fn trampolines_pass_the_arguments_and_the_sender() {
         use objc2::ClassType;
-        let window_class = ClassBuilder::new("RuneBridgeTestWindow", NSWindow::class()).unwrap().register();
+        let window_class = ClassBuilder::new(c"RuneBridgeTestWindow", NSWindow::class()).unwrap().register();
         assert!(install(window_class, NSWindow::class(), &window_forwards()));
-        let mut panel_class = ClassBuilder::new("RuneBridgeTestPanel", class!(NSObject)).unwrap();
+        let mut panel_class = ClassBuilder::new(c"RuneBridgeTestPanel", class!(NSObject)).unwrap();
+        // SAFETY: each test handler's C ABI matches the corresponding `NSWindow` selector.
         unsafe {
             panel_class.add_method(sel!(setFrame:display:), got_frame as extern "C" fn(*mut AnyObject, Sel, NSRect, Bool));
             panel_class.add_method(sel!(setFrameOrigin:), got_origin as extern "C" fn(*mut AnyObject, Sel, NSPoint));
@@ -327,10 +350,13 @@ mod tests {
         }
         let panel_class = panel_class.register();
         // A real NSWindow needs the window server, so the source is only allocated. All leak.
+        // SAFETY: `window_class`, `panel_class`, and `NSObject` are registered ObjC classes whose `alloc`/`new` return valid instances.
         let (window, panel, view): (*mut AnyObject, *mut AnyObject, *mut AnyObject) = unsafe {
             (msg_send![window_class, alloc], msg_send![panel_class, new], msg_send![class!(NSObject), new])
         };
         WINDOWS.with(|w| w.borrow_mut().insert(window as usize, Source { view: view as usize, panel: panel as usize, ordinary: true }));
+        // SAFETY: `window`, `panel`, and `view` are live ObjC instances registered in `WINDOWS`, and
+        // every message and `NSInvocation` return buffer (`&mut foreign`) matches its selector's signature.
         unsafe {
             let content: *mut AnyObject = msg_send![window, contentView];
             assert_eq!(content, view, "Rune's call gets the moved view");

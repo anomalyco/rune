@@ -17,14 +17,24 @@ const SLOT: usize = 256;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct SimUniform {
-    dims: [f32; 4],
-    origin: [f32; 4],
-    shape: [f32; 4],
-    shape2: [f32; 4],
-    fire: [f32; 4],
-    fire2: [f32; 4],
+pub(crate) struct SimUniform {
+    pub(crate) dims: [f32; 4],
+    pub(crate) origin: [f32; 4],
+    pub(crate) shape: [f32; 4],
+    pub(crate) shape2: [f32; 4],
+    pub(crate) fire: [f32; 4],
+    pub(crate) fire2: [f32; 4],
 }
+
+const _: () = {
+    assert!(std::mem::size_of::<SimUniform>() == 96);
+    assert!(std::mem::offset_of!(SimUniform, dims) == 0);
+    assert!(std::mem::offset_of!(SimUniform, origin) == 16);
+    assert!(std::mem::offset_of!(SimUniform, shape) == 32);
+    assert!(std::mem::offset_of!(SimUniform, shape2) == 48);
+    assert!(std::mem::offset_of!(SimUniform, fire) == 64);
+    assert!(std::mem::offset_of!(SimUniform, fire2) == 80);
+};
 
 /// Which fire a grid serves: grids are matched by (seed, style, size) and serve one fire per frame.
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -2,6 +2,8 @@
 //! track, drawn by Rune on a canvas the page already has. Nothing moves until you touch it.
 //! `cargo run -p web-showcase -- --snap poster.png --size 560x320 --scale 2` draws the page's poster.
 
+#![forbid(unsafe_code)]
+
 use rune::tok;
 use rune::{AppSpec, Color, Cx, Drag, El, Phase, Spring, TextStyle, Tx, col, el, oklch, oklcha, row, text};
 

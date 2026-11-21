@@ -1,0 +1,1 @@
+- Windows (`Prefs`): `write_atomic` retries the final `prefs.json` rename up to six times (at most 31 ms of sleep) on transient `PermissionDenied` / `ERROR_SHARING_VIOLATION` conflicts when concurrent writers or readers meet on the file, removing the temporary file and returning the error if the conflict persists.

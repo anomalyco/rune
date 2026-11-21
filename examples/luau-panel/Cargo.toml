@@ -17,20 +17,20 @@ name = "luau-bench"
 path = "src/bin/bench.rs"
 
 [dependencies]
-rune = { path = "../../crates/rune", features = ["keys-overlay"] }
-serde = { version = "1", features = ["derive"] }
-rune-luau = { path = "../../crates/rune-luau", features = ["serde"] }
+rune = { workspace = true, default-features = true, features = ["keys-overlay"] }
+serde = { workspace = true, features = ["derive"] }
+rune-luau = { workspace = true, features = ["serde"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-rune-luau = { path = "../../crates/rune-luau", features = ["serde", "watch"] }
+rune-luau = { workspace = true, features = ["serde", "watch"] }
 
 # The bench compares Luau's interpreter with its native code, which this example turns on where
 # Luau has it.
 [target.'cfg(all(any(target_os = "windows", target_os = "linux"), any(target_arch = "x86_64", target_arch = "aarch64")))'.dependencies]
-rune-luau = { path = "../../crates/rune-luau", features = ["serde", "watch", "native-code"] }
+rune-luau = { workspace = true, features = ["serde", "watch", "native-code"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2"
+wasm-bindgen = { workspace = true }
 
 [lints]
 workspace = true

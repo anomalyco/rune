@@ -36,6 +36,33 @@ fn page_keys_reach_an_input_and_scroll_its_scroll_view_by_most_of_a_viewport() {
 }
 
 #[test]
+fn a_focused_scroll_view_scrolls_on_arrows_and_space() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let list = col().key("list").w_full().children((0..20).map(|i| el().key(format!("r{i}")).size(200.0, 40.0)));
+        col().size(200.0, 200.0).child(col().key("scroll").size(200.0, 200.0).scroll(ScrollSpec { stick_bottom: false }).focusable(true).child(list))
+    }
+    let mut rt = Runtime::new((), view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.pointer_down(100.0, 100.0); rt.pointer_up(100.0, 100.0); rt.frame(0.05);
+    assert_eq!(rt.elements().iter().find(|e| e.focused).and_then(|e| e.key.as_deref()), Some("scroll"));
+    let top = |rt: &Runtime<()>| rt.presented("r0").unwrap().0[1];
+    let press = |rt: &mut Runtime<()>, key: crate::Key, shift: bool, t: f64| {
+        rt.key(KeyEvent { key, mods: crate::Mods { shift, ..Default::default() } });
+        rt.frame(t);
+    };
+    press(&mut rt, crate::Key::Down, false, 0.1);
+    assert_eq!(top(&rt), -40.0, "Down scrolls a line");
+    press(&mut rt, crate::Key::Text(" ".into()), false, 0.2);
+    assert_eq!(top(&rt), -220.0, "Space scrolls a page");
+    press(&mut rt, crate::Key::Text(" ".into()), true, 0.3);
+    assert_eq!(top(&rt), -40.0, "Shift+Space scrolls back a page");
+    press(&mut rt, crate::Key::Up, false, 0.4);
+    assert_eq!(top(&rt), 0.0);
+    press(&mut rt, crate::Key::PageDown, false, 0.5);
+    assert_eq!(top(&rt), -180.0);
+}
+
+#[test]
 fn page_keys_keep_paging_the_list_of_a_focused_field_that_scrolled_out() {
     struct State { edit: crate::TextEdit }
     fn view(s: &State, _: &mut Cx<State>) -> El {
@@ -77,23 +104,23 @@ fn single_line_input_scrolls_to_the_caret_instead_of_wrapping() {
     edit.focused = true;
     let mut rt = Runtime::new(edit, view, (100.0, 24.0), Env::new(true, 2.0));
     rt.frame(0.0);
-    let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("search")).unwrap();
+    let n = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("search")).unwrap();
     let path = n.path.clone();
     assert_eq!(n.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap().lines().count(), 1);
-    let scroll = rt.input_scroll[&path];
+    let scroll = rt.edit.input_scroll[&path];
     assert!(scroll > 100.0, "the end of the text is in view: {scroll}");
     let caret_x = rt.ime_area.unwrap()[0];
     assert!((0.0..=100.0).contains(&caret_x), "caret {caret_x} stays inside the field");
 
     // A click lands on the scrolled text, not on the hidden start.
-    rt.queue.push(Action::Focus(path.clone(), 1.0, 12.0));
+    rt.frame.queue.push(Action::Focus(path.clone(), 1.0, 12.0));
     rt.frame(0.0);
     assert!(rt.state.focus > 10, "clicked index {}", rt.state.focus);
 
-    rt.queue.push(Action::Blur);
+    rt.frame.queue.push(Action::Blur);
     rt.frame(0.0);
     assert!(!rt.state.focused);
-    assert!(!rt.input_scroll.contains_key(&path), "unfocused fields rest at their start");
+    assert!(!rt.edit.input_scroll.contains_key(&path), "unfocused fields rest at their start");
 }
 
 #[test]
@@ -110,7 +137,7 @@ fn grapheme_arrow_caret_hit_tests_roundtrip_after_single_line_scroll() {
     rt.frame(0.0);
     rt.key(KeyEvent { key: crate::Key::Home, mods: Default::default() });
     rt.frame(0.0);
-    let path = rt.nodes.iter().find(|n| n.key.as_deref() == Some("search")).unwrap().path.clone();
+    let path = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("search")).unwrap().path.clone();
     let mut offset = 0;
     for grapheme in graphemes {
         offset += grapheme.len();
@@ -119,11 +146,11 @@ fn grapheme_arrow_caret_hit_tests_roundtrip_after_single_line_scroll() {
         assert_eq!(rt.state.focus, offset, "arrow must cross the whole {grapheme:?}");
         let [x, y, _, height] = rt.ime_area.unwrap();
         assert!((0.0..=100.0).contains(&x), "caret must remain in the scrolled field");
-        rt.queue.push(Action::Focus(path.clone(), x + 0.1, y + height * 0.5));
+        rt.frame.queue.push(Action::Focus(path.clone(), x + 0.1, y + height * 0.5));
         rt.frame(0.0);
         assert_eq!(rt.state.focus, offset, "clicking the reported caret after {grapheme:?} must hit that boundary");
     }
-    assert!(rt.input_scroll[&path] > 0.0, "the fixture must exercise scrolled caret geometry");
+    assert!(rt.edit.input_scroll[&path] > 0.0, "the fixture must exercise scrolled caret geometry");
 }
 
 #[test]
@@ -374,7 +401,7 @@ fn read_clipboard_answers_once_even_when_empty_and_pastes_nowhere() {
     let got = rt.state.reads.pop().unwrap();
     assert_eq!((got.text(), got.html(), got.rtf()), ("a", Some("<a>a</a>"), Some("{\\rtf1 a}")));
     assert!(rt.state.field.text.is_empty() && rt.state.reads.len() == 1);
-    assert!(rt.clipboard_reads.is_empty() && rt.read_requests.is_empty());
+    assert!(rt.edit.clipboard_reads.is_empty() && rt.edit.read_requests.is_empty());
 }
 
 #[test]
@@ -389,18 +416,18 @@ fn clipboard_requests_follow_handler_order_and_are_consumed_once() {
     edit.anchor = 0;
     let mut rt = Runtime::new(edit, view, (300.0, 200.0), Env::new(true, 2.0));
     rt.frame(0.0);
-    let button = rt.nodes.iter().find(|n| n.key.as_deref() == Some("copy")).unwrap().path.clone();
-    let input = rt.nodes.iter().find(|n| n.key.as_deref() == Some("input")).unwrap().path.clone();
+    let button = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("copy")).unwrap().path.clone();
+    let input = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("input")).unwrap().path.clone();
     rt.set_focus(Some(input), true);
     let copy_key = KeyEvent { key: Key::Command('c'), mods: Mods { cmd: true, ..Mods::default() } };
-    rt.queue.push(Action::Press(button.clone(), crate::PointerButton::Primary));
-    rt.queue.push(Action::Key { ev: copy_key.clone(), repeat: false, stage: false });
+    rt.frame.queue.push(Action::Press(button.clone(), crate::PointerButton::Primary, false));
+    rt.frame.queue.push(Action::Key { ev: copy_key.clone(), repeat: false, stage: false });
     rt.frame(1.0 / 120.0);
     assert_eq!(rt.copy_request.take().as_deref(), Some("héllo 👋"));
     rt.frame(1.0 / 120.0);
     assert!(rt.copy_request.is_none());
-    rt.queue.push(Action::Key { ev: copy_key, repeat: false, stage: false });
-    rt.queue.push(Action::Press(button, crate::PointerButton::Primary));
+    rt.frame.queue.push(Action::Key { ev: copy_key, repeat: false, stage: false });
+    rt.frame.queue.push(Action::Press(button, crate::PointerButton::Primary, false));
     rt.frame(1.0 / 120.0);
     assert_eq!(rt.copy_request.take().as_deref(), Some("response"));
 }

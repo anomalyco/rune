@@ -15,7 +15,7 @@ enum Block {
     Paragraph(usize),
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// The selection as HTML (`None` with nothing selected, or a selection reaching rows that
     /// aren't built). Each selected text sits in its block; its spans are `<strong>`, `<em>` and
     /// `<code>`, its links `<a href>` and its strikes `<s>`.
@@ -34,10 +34,10 @@ impl<S: 'static> Runtime<S> {
             }
         };
         for &(i, a, b) in &ranges {
-            let Some(spec) = self.nodes[i].text.as_ref() else { continue };
+            let Some(spec) = self.tree.nodes[i].text.as_ref() else { continue };
             let block = self.block_of(i);
             // A list's markers are the list's own: `<ol>` and `<ul>` draw them.
-            if self.nodes[i].a11y.hidden && matches!(block, Block::Item { .. }) { continue; }
+            if self.tree.nodes[i].a11y.hidden && matches!(block, Block::Item { .. }) { continue; }
             let inline = inline_html(spec, a, b);
             if inline.trim().is_empty() { continue; }
             match prev {
@@ -81,24 +81,24 @@ impl<S: 'static> Runtime<S> {
 
     /// Node `j` is inside node `a`'s subtree.
     fn within(&self, j: usize, a: usize) -> bool {
-        std::iter::successors(self.nodes[j].parent, |&p| self.nodes[p].parent).any(|p| p == a)
+        std::iter::successors(self.tree.nodes[j].parent, |&p| self.tree.nodes[p].parent).any(|p| p == a)
     }
 
     fn block_of(&self, i: usize) -> Block {
-        let mono = self.nodes[i].text.as_ref().is_some_and(|t| matches!(t.style.family, crate::tok::Family::Mono | crate::tok::Family::SystemMono));
-        let up = || std::iter::successors(Some(i), |&p| self.nodes[p].parent);
-        let role = |j: usize| self.nodes[j].role;
+        let mono = self.tree.nodes[i].text.as_ref().is_some_and(|t| matches!(t.style.family, crate::tok::Family::Mono | crate::tok::Family::SystemMono));
+        let up = || std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent);
+        let role = |j: usize| self.tree.nodes[j].role;
         for j in up() {
             match role(j) {
-                "heading" => return Block::Heading(j, self.nodes[j].a11y.level.unwrap_or(2).clamp(1, 6) as u8),
+                "heading" => return Block::Heading(j, self.tree.nodes[j].a11y.level.unwrap_or(2).clamp(1, 6) as u8),
                 "listitem" => {
-                    let list = std::iter::successors(self.nodes[j].parent, |&p| self.nodes[p].parent).find(|&p| role(p) == "list").unwrap_or(j);
+                    let list = std::iter::successors(self.tree.nodes[j].parent, |&p| self.tree.nodes[p].parent).find(|&p| role(p) == "list").unwrap_or(j);
                     // A list whose first item's marker is a number is ordered.
-                    let ordered = self.nodes.get(j + 1).and_then(|n| n.text.as_ref()).is_some_and(|t| t.content.trim_end_matches('.').chars().all(|c| c.is_ascii_digit()) && !t.content.is_empty());
+                    let ordered = self.tree.nodes.get(j + 1).and_then(|n| n.text.as_ref()).is_some_and(|t| t.content.trim_end_matches('.').chars().all(|c| c.is_ascii_digit()) && !t.content.is_empty());
                     return Block::Item { list, item: j, ordered };
                 }
                 "cell" | "columnheader" | "rowheader" => {
-                    let ancestors = || std::iter::successors(self.nodes[j].parent, |&p| self.nodes[p].parent);
+                    let ancestors = || std::iter::successors(self.tree.nodes[j].parent, |&p| self.tree.nodes[p].parent);
                     let row = ancestors().find(|&p| role(p) == "row").unwrap_or(j);
                     let table = ancestors().find(|&p| role(p) == "table").unwrap_or(row);
                     return Block::Cell { table, row, cell: j, head: role(j) != "cell" };
@@ -106,14 +106,14 @@ impl<S: 'static> Runtime<S> {
                 _ => {}
             }
         }
-        if mono { Block::Code(self.nodes[i].parent.unwrap_or(i)) } else { Block::Paragraph(i) }
+        if mono { Block::Code(self.tree.nodes[i].parent.unwrap_or(i)) } else { Block::Paragraph(i) }
     }
 }
 
 /// Opens `block`'s elements after `prev`'s closed: a list or table already open stays open.
 fn open(out: &mut String, prev: Option<Block>, block: Block) {
     match block {
-        Block::Heading(_, level) => { let _ = write!(out, "<h{level}>"); }
+        Block::Heading(_, level) => { write!(out, "<h{level}>").ok(); }
         // Lists open and close in `copy_html`, which nests them.
         Block::Item { .. } => {}
         Block::Cell { table, row, head, .. } => {
@@ -133,7 +133,7 @@ fn open(out: &mut String, prev: Option<Block>, block: Block) {
 /// Closes `block`'s elements before `next`'s open: a list or table `next` continues stays open.
 fn close(out: &mut String, block: Block, next: Option<Block>) {
     match block {
-        Block::Heading(_, level) => { let _ = write!(out, "</h{level}>"); }
+        Block::Heading(_, level) => { write!(out, "</h{level}>").ok(); }
         Block::Item { .. } => {}
         Block::Cell { table, row, head, .. } => {
             out.push_str(if head { "</th>" } else { "</td>" });
@@ -178,7 +178,7 @@ fn inline_html(spec: &crate::el::TextSpec, a: usize, b: usize) -> String {
         let link = links.iter().find(|l| inside(l.start, l.end)).map(|l| l.id.as_str()).filter(|id| id.contains("://") || id.starts_with("mailto:"));
         if href != link {
             if href.is_some() { out.push_str("</a>"); }
-            if let Some(h) = link { let _ = write!(out, "<a href=\"{}\">", escape(h)); }
+            if let Some(h) = link { write!(out, "<a href=\"{}\">", escape(h)).ok(); }
             href = link;
         }
         let mut piece = escape(&text).replace('\n', "<br>");

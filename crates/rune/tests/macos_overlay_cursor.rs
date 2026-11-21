@@ -17,11 +17,12 @@ mod macos_support;
 fn main() { mac::main() }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 mod mac {
     use std::process::Command;
     use std::sync::Mutex;
-    use std::time::{Duration, Instant};
-    use objc2::{class, msg_send, msg_send_id, rc::Retained, runtime::{AnyObject, Bool}};
+    use std::time::Duration;
+    use objc2::{class, msg_send, rc::Retained, runtime::{AnyObject, Bool}};
     use objc2_foundation::{NSArray, NSPoint, NSSize};
     use rune::*;
     use crate::macos_support::{activate_helper, app_active, frontmost_pid, on_main, wait, warp};
@@ -46,12 +47,13 @@ mod mac {
 
     /// The panel with CGWindowID `number`: (key, ignores mouse events).
     fn panel(number: u32) -> Option<(bool, bool)> {
+        // SAFETY: invoked on the AppKit main thread (`on_main`); queries live `NSWindow` properties.
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-            let windows: Retained<NSArray<AnyObject>> = msg_send_id![app, windows];
-            windows.iter().find(|w| { let n: isize = msg_send![*w, windowNumber]; n == number as isize }).map(|w| {
-                let key: Bool = msg_send![w, isKeyWindow];
-                let ignores: Bool = msg_send![w, ignoresMouseEvents];
+            let windows: Retained<NSArray<AnyObject>> = msg_send![app, windows];
+            windows.iter().find(|w| { let n: isize = msg_send![&**w, windowNumber]; n == number as isize }).map(|w| {
+                let key: Bool = msg_send![&*w, isKeyWindow];
+                let ignores: Bool = msg_send![&*w, ignoresMouseEvents];
                 (key.as_bool(), ignores.as_bool())
             })
         }
@@ -62,6 +64,7 @@ mod mac {
 
     fn shape(cursor: *mut AnyObject) -> Option<Shape> {
         if cursor.is_null() { return None }
+        // SAFETY: `cursor` is checked non-null and is a live `NSCursor` on the main thread; `image` is checked non-null before messaging.
         unsafe {
             let hot: NSPoint = msg_send![cursor, hotSpot];
             let image: *mut AnyObject = msg_send![cursor, image];
@@ -73,6 +76,7 @@ mod mac {
 
     /// (the window server's current cursor, the open hand, the arrow).
     fn shapes() -> (Option<Shape>, Shape, Shape) {
+        // SAFETY: standard `NSCursor` class getters called on the AppKit main thread (`on_main`).
         unsafe {
             let current: *mut AnyObject = msg_send![class!(NSCursor), currentSystemCursor];
             let hand: *mut AnyObject = msg_send![class!(NSCursor), openHandCursor];
@@ -83,7 +87,7 @@ mod mac {
 
     /// Waits for the window server's cursor to take `want`'s shape.
     fn expect_cursor(handle: &AppHandle<()>, what: &str, want: impl Fn(Shape, Shape) -> Shape + Send + Copy + 'static) {
-        let start = Instant::now();
+        let start = rune::time::now();
         loop {
             let (current, hand, arrow) = on_main(handle, shapes);
             let want = want(hand, arrow);
@@ -140,9 +144,10 @@ mod mac {
     /// Whether the panel with CGWindowID `number` is still ordered in (a fade-out orders it out
     /// when it ends).
     fn ordered_in(number: u32) -> bool {
+        // SAFETY: invoked on the AppKit main thread (`on_main`); queries live `NSWindow` properties.
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-            let windows: Retained<NSArray<AnyObject>> = msg_send_id![app, windows];
+            let windows: Retained<NSArray<AnyObject>> = msg_send![app, windows];
             windows.iter().any(|w| {
                 let n: isize = msg_send![&*w, windowNumber];
                 let visible: Bool = msg_send![&*w, isVisible];
@@ -188,8 +193,8 @@ mod mac {
             handle.quit();
         });
         app.run();
-        let _ = child.kill();
-        let _ = child.wait();
+        child.kill().ok();
+        child.wait().ok();
         assert_eq!(*result.lock().unwrap(), Some(true), "macos_overlay_cursor failed");
         println!("macos_overlay_cursor: ok");
     }

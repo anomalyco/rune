@@ -3,13 +3,16 @@
 //! run-loop block, after the handler returns: while it tracks, winit's observers (registered
 //! for the common modes, which include the tracking mode) keep delivering redraws, display
 //! ticks and wakes.
+
+#![allow(unsafe_code)]
+
 use std::{cell::{Cell, RefCell}, ffi::c_void, rc::Rc, sync::Arc};
 
 use block2::{Block, RcBlock};
-use objc2::{ClassType, DeclaredClass, declare_class, msg_send, msg_send_id, mutability, sel, rc::Retained,
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel, rc::Retained,
     runtime::{AnyClass, AnyObject}};
 use objc2_app_kit::{NSMenu, NSMenuItem};
-use objc2_foundation::{MainThreadMarker, NSObject, NSPoint, NSString};
+use objc2_foundation::{NSObject, NSPoint, NSString};
 use winit::window::Window;
 
 use super::{Entry, PopupMenu, Session, Show};
@@ -22,8 +25,7 @@ pub(super) type Tracking = Retained<NSMenu>;
 
 /// Stops the menu's tracking.
 pub(super) fn stop(menu: Tracking) {
-    // SAFETY: the host's (main) thread. The tracking loop ends once this handler returns.
-    unsafe { menu.cancelTrackingWithoutAnimation() };
+    menu.cancelTrackingWithoutAnimation();
 }
 
 /// An `NSMenu` takes its appearance from the view it pops up in.
@@ -35,19 +37,17 @@ pub(super) fn start(_turn: Waker) {}
 /// Every item's id, by tag, and the one picked.
 struct Picks { ids: Vec<String>, picked: RefCell<Option<String>> }
 
-declare_class!(
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "RunePopupMenuTarget"]
+    #[ivars = Picks]
     struct Target;
-    unsafe impl ClassType for Target {
-        type Super = NSObject;
-        type Mutability = mutability::MainThreadOnly;
-        const NAME: &'static str = "RunePopupMenuTarget";
-    }
-    impl DeclaredClass for Target { type Ivars = Picks; }
-    unsafe impl Target {
-        #[method(runePopupPick:)]
+
+    impl Target {
+        #[unsafe(method(runePopupPick:))]
         fn pick(&self, sender: &NSMenuItem) {
-            // SAFETY: a main-thread item this menu owns.
-            let tag = unsafe { sender.tag() };
+            let tag = sender.tag();
             if let Some(id) = usize::try_from(tag).ok().and_then(|i| self.ivars().ids.get(i)) {
                 *self.ivars().picked.borrow_mut() = Some(id.clone());
             }
@@ -65,19 +65,17 @@ pub(super) fn show(window: &Arc<Window>, show: Show, session: Rc<Session>, wake:
     let mut ids = Vec::new();
     collect_ids(&show.menu, &mut ids);
     // SAFETY: NSObject initialization follows set_ivars, on the main thread.
-    let target: Retained<Target> = unsafe { msg_send_id![super(mtm.alloc().set_ivars(Picks { ids, picked: RefCell::default() })), init] };
+    let target: Retained<Target> = unsafe { msg_send![super(mtm.alloc().set_ivars(Picks { ids, picked: RefCell::default() })), init] };
     let mut positioned = None;
     let menu = build(mtm, &show.menu, &target, &mut 0, show.positioned.as_deref(), &mut positioned);
-    // SAFETY: a main-thread menu this function owns.
-    unsafe { menu.setMinimumWidth(show.min_width.max(0.0) as f64) };
+    menu.setMinimumWidth(show.min_width.max(0.0) as f64);
     // AppKit puts the menu's (or its positioned item's) top left at the point. Right to left it
     // opens leftward from a point and lines up with its anchor's right edge, as a right-to-left
     // localization's menus do.
     let x = match (crate::labels::rtl(), show.element) {
         (false, _) => show.at.0 as f64,
-        // SAFETY: a main-thread menu this function owns, already built.
-        (true, Some([x, _, w, _])) => (x + w) as f64 - unsafe { menu.size() }.width,
-        (true, None) => show.at.0 as f64 - unsafe { menu.size() }.width,
+        (true, Some([x, _, w, _])) => (x + w) as f64 - menu.size().width,
+        (true, None) => show.at.0 as f64 - menu.size().width,
     };
     let at = NSPoint::new(x, show.at.1 as f64);
     run_later(move || {
@@ -85,10 +83,10 @@ pub(super) fn show(window: &Arc<Window>, show: Show, session: Rc<Session>, wake:
         // A close or hide in the same turn as the request, after the host handed it over.
         let picked = if view.window().is_some_and(|w| w.isVisible()) {
             session.tracking(Some(menu.clone()));
-            // SAFETY: main thread (a main run-loop block). winit's view is flipped, so `at` is
-            // in window points from the top-left, the coordinates Rune lays out in; AppKit maps
-            // them through the view to the screen at its backing scale.
-            let chose = unsafe { menu.popUpMenuPositioningItem_atLocation_inView(positioned.as_deref(), at, Some(&view)) };
+            // winit's view is flipped, so `at` is in window points from the top-left, the
+            // coordinates Rune lays out in; AppKit maps them through the view to the screen at
+            // its backing scale.
+            let chose = menu.popUpMenuPositioningItem_atLocation_inView(positioned.as_deref(), at, Some(&view));
             session.tracking(None);
             let picked = target.ivars().picked.borrow_mut().take();
             if chose && picked.is_none() { eprintln!("rune: pop-up menu reported a pick without its action"); }
@@ -155,13 +153,13 @@ fn build(mtm: MainThreadMarker, menu: &PopupMenu, target: &Target, tag: &mut isi
 
 /// An SF Symbol image, on macOS 11 and later.
 fn set_symbol(item: &NSMenuItem, name: &str) {
-    let Some(class) = AnyClass::get("NSImage") else { return };
+    let Some(class) = AnyClass::get(c"NSImage") else { return };
     let selector = sel!(imageWithSystemSymbolName:accessibilityDescription:);
     if class.class_method(selector).is_none() { return; }
     // SAFETY: the class responds to this selector, which takes (NSString*, NSString* nullable)
     // and returns an autoreleased NSImage* or nil; setImage: retains it.
     unsafe {
-        let image: Option<Retained<AnyObject>> = msg_send_id![class, imageWithSystemSymbolName: &*NSString::from_str(name),
+        let image: Option<Retained<AnyObject>> = msg_send![class, imageWithSystemSymbolName: &*NSString::from_str(name),
             accessibilityDescription: std::ptr::null::<NSString>()];
         if let Some(image) = image { let _: () = msg_send![item, setImage: &*image]; }
     }

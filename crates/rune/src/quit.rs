@@ -115,7 +115,7 @@ static ORDERLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 /// `last` or its quit hooks. Set it once, before the app runs; a later call does nothing. On the
 /// web the page's own lifetime applies instead.
 pub fn fast_exit(last: fn()) {
-    let _ = FAST_EXIT.set(last);
+    FAST_EXIT.set(last).ok();
 }
 
 /// Tears the process down in order when the app quits instead of ending it at once (the default,
@@ -154,10 +154,13 @@ pub(crate) fn end_fast(last: fn()) -> ! {
     end_process()
 }
 
-/// Ends this process now with exit code 0: no destructors, no `atexit`, no DLL detach.
+/// Ends this process now with exit code 0 (3 when `RUNE_LOOP_CHECK=2` found a differing picture,
+/// `render::pixel_check`): no destructors, no `atexit`, no DLL detach.
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(unsafe_code)]
 fn end_process() -> ! {
     crate::marks::mark("quit.end");
+    let code = if crate::render::loop_pixel_check_failed() { 3 } else { 0 };
     // A process ends once each of its threads has run to its end: an idle-priority one (D3D12's
     // shader threads) on a busy machine can hold it for seconds.
     #[cfg(target_os = "windows")]
@@ -166,13 +169,13 @@ fn end_process() -> ! {
     // SAFETY: the pseudo-handle names this process; TerminateProcess on it doesn't return.
     unsafe {
         use windows_sys::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
-        TerminateProcess(GetCurrentProcess(), 0);
+        TerminateProcess(GetCurrentProcess(), code as u32);
     }
     #[cfg(unix)]
     // SAFETY: `_exit` ends the process without running anything of this process's.
-    unsafe { libc::_exit(0) }
+    unsafe { libc::_exit(code) }
     #[allow(unreachable_code)]
-    std::process::exit(0)
+    std::process::exit(code)
 }
 
 /// Steps the app's quit, returning what the loop must do.
@@ -195,11 +198,11 @@ const QUIT_REPORT_EVERY: std::time::Duration = std::time::Duration::from_secs(3)
 
 #[cfg(not(target_arch = "wasm32"))]
 fn watch_quit() {
-    let started = std::time::Instant::now();
-    let _ = std::thread::Builder::new().name("rune-quit-watch".into()).spawn(move || loop {
+    let started = crate::time::now();
+    std::thread::Builder::new().name("rune-quit-watch".into()).spawn(move || loop {
         std::thread::sleep(QUIT_REPORT_EVERY);
         eprintln!("rune: still quitting {} ms after the quit started: {}", started.elapsed().as_millis(), where_the_quit_is());
-    });
+    }).ok();
 }
 
 /// Ends the process `after` from now if it's still alive then, saying on stderr what it was
@@ -208,12 +211,12 @@ fn watch_quit() {
 /// that a quit always ends.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn exit_deadline(after: std::time::Duration) {
-    let _ = std::thread::Builder::new().name("rune-exit-deadline".into()).spawn(move || {
+    std::thread::Builder::new().name("rune-exit-deadline".into()).spawn(move || {
         std::thread::sleep(after);
         eprintln!("rune: the quit didn't end within {} ms of the app's last step, so the process ends itself: {}", after.as_millis(), where_the_quit_is());
         crate::marks::mark("quit.deadline");
         end_process();
-    });
+    }).ok();
 }
 
 /// The quit's last step reached and how long ago, and the process's threads.

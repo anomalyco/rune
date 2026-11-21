@@ -16,7 +16,7 @@ impl<S: 'static> Playground<S> {
     }
 }
 
-impl<S: 'static> Live<S> {
+impl LiveCore {
     /// Story `i`'s groups, outermost first, each by its path prefix: `"Sidebar"`, then
     /// `"Sidebar/Filter buttons"`.
     pub(super) fn groups_of(&self, i: usize) -> Vec<&'static str> {

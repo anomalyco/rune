@@ -6,10 +6,10 @@ license.workspace = true
 description = "Small macOS helpers for Rune apps: a remembered window frame, full screen, quiet relaunches with scripts/mac-app, and system notifications (rune-notify)."
 
 [dependencies]
-rune-notify = { path = "../rune-notify" }
+rune-notify = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.5.2"
+objc2 = { workspace = true }
 
 [lints]
 workspace = true

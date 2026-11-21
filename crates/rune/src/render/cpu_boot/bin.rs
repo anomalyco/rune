@@ -6,7 +6,9 @@ use std::collections::HashMap;
 
 use super::Scene;
 use super::shade::{Clip, has_sides, sides_inner};
-use crate::render::{Instance, KIND_BACKDROP_BLUR, KIND_DASHED, KIND_EFFECT, KIND_GLYPH, KIND_GRADIENT, KIND_LAYER, KIND_LAYER_END, KIND_RADIAL, KIND_RECT, KIND_SHADOW, NO_CLIP, corner_extent};
+use crate::render::instance::shader_consts;
+use crate::render::layers::is_scissor_clip;
+use crate::render::{Instance, Kind, MAX_BACKDROP_BLURS, NO_CLIP, corner_extent};
 
 pub(super) const TILE_W: u32 = 64;
 /// `Bins::within` for an instance that draws straight into the window.
@@ -40,7 +42,7 @@ pub(super) struct Bins {
 
 /// How a layer scope draws, as `Renderer::prepare_layers` decides.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum Show {
+pub(in crate::render) enum Show {
     /// Fully transparent, empty, or inside one that is: none of it draws.
     Hidden,
     /// Opaque and unclipped: its contents draw straight into the parent.
@@ -50,7 +52,7 @@ pub(super) enum Show {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct Layer {
+pub(in crate::render) struct Layer {
     pub begin: u32,
     pub end: u32,
     pub show: Show,
@@ -64,28 +66,36 @@ pub(super) struct Layer {
 /// `Renderer::prepare_layers`' planning walk, for the layers this painter draws (no blur, no
 /// turn): each scope's bounds from what it holds, cut to its clip and its ancestors', and whether
 /// it draws at all, straight into its parent or into a target of its own.
-fn plan_layers(instances: &[Instance], viewport: (u32, u32)) -> (Vec<Layer>, HashMap<u32, u32>) {
+#[inline(never)]
+pub(in crate::render) fn plan_layers(instances: &[Instance], viewport: (u32, u32)) -> (Vec<Layer>, HashMap<u32, u32>) {
     struct Open { at: usize, edges: [f32; 4], clip: [f32; 4], limit: [f32; 4], cache: bool }
     let mut plans: Vec<Layer> = Vec::new();
     let mut scope = HashMap::new();
     let mut open: Vec<Open> = Vec::new();
-    let union = |e: &mut [f32; 4], r: [f32; 4]| *e = [e[0].min(r[0]), e[1].min(r[1]), e[2].max(r[2]), e[3].max(r[3])];
+    let union = |e: &mut [f32; 4], x0: f32, y0: f32, x1: f32, y1: f32| {
+        if x1 <= x0 || y1 <= y0 { return; }
+        e[0] = e[0].min(x0);
+        e[1] = e[1].min(y0);
+        e[2] = e[2].max(x1);
+        e[3] = e[3].max(y1);
+    };
     for (index, i) in instances.iter().enumerate() {
-        if i.params[1] == KIND_LAYER {
+        if i.kind() == Some(Kind::Layer) {
             let parent = open.last().map(|o| o.at);
             let limit = open.last().map_or(NO_CLIP, |p| [p.clip[0].max(p.limit[0]), p.clip[1].max(p.limit[1]), p.clip[2].min(p.limit[2]), p.clip[3].min(p.limit[3])]);
             let opacity = i.fill[3].clamp(0.0, 1.0);
             let hidden = opacity == 0.0 || parent.is_some_and(|p| plans[p].show == Show::Hidden);
             let cache = i.params[3] == 1.0;
-            let additive = i.params[0] == 1.0;
+            let additive = i.params[0] == shader_consts::LAYER_ADDITIVE_PARAM;
             let additive_parent = parent.is_some_and(|p| plans[p].additive);
             let hole = if cache { [0.0; 4] } else { i.radii };
-            let flat = !cache && opacity == 1.0 && !additive && !additive_parent && i.fade[3] == 0 && i.clip == NO_CLIP && hole[3] == 0.0;
+            let flat = !cache && opacity == 1.0 && !additive && !additive_parent && i.fade[3] == 0
+                && is_scissor_clip(i.clip, i.fade) && hole[3] == 0.0;
             let show = if hidden { Show::Hidden } else if flat { Show::Flat } else { Show::Render };
             scope.insert(index as u32, plans.len() as u32);
             open.push(Open { at: plans.len(), edges: [i.rect[0], i.rect[1], i.rect[0] + i.rect[2], i.rect[1] + i.rect[3]], clip: i.clip, limit, cache });
             plans.push(Layer { begin: index as u32, end: 0, show, bounds: [0; 4], additive, hole });
-        } else if i.params[1] == KIND_LAYER_END {
+        } else if i.kind() == Some(Kind::LayerEnd) {
             let Some(o) = open.pop() else { continue };
             scope.insert(index as u32, o.at as u32);
             let e = o.edges;
@@ -98,19 +108,11 @@ fn plan_layers(instances: &[Instance], viewport: (u32, u32)) -> (Vec<Layer>, Has
             let shown = [edges[0].max(0.0), edges[1].max(0.0), edges[2].min(viewport.0 as f32), edges[3].min(viewport.1 as f32)];
             l.bounds = [shown[0] as i32, shown[1] as i32, shown[2] as i32, shown[3] as i32];
             if edges[2] <= edges[0] || edges[3] <= edges[1] || (o.cache && (vis[2] <= vis[0] || vis[3] <= vis[1])) { l.show = Show::Hidden; }
-            if let Some(p) = open.last_mut().filter(|p| !p.cache) { union(&mut p.edges, edges); }
+            if let Some(p) = open.last_mut().filter(|p| !p.cache) { union(&mut p.edges, edges[0], edges[1], edges[2], edges[3]); }
         } else if let Some(o) = open.last_mut() {
             if o.cache { continue; }
-            let mut rect = i.rect;
-            if i.params[1] == KIND_GLYPH && i.params[0] != 0.0 {
-                let (sin, cos) = i.params[0].sin_cos();
-                let (w, h) = (cos.abs() * rect[2] + sin.abs() * rect[3], sin.abs() * rect[2] + cos.abs() * rect[3]);
-                rect = [rect[0] + (rect[2] - w) * 0.5, rect[1] + (rect[3] - h) * 0.5, w, h];
-            }
-            let k = i.params[1];
-            let grow = if k == KIND_GLYPH { 0.0 } else if k == KIND_SHADOW { i.params[2] * 3.0 + 1.0 } else if k == KIND_EFFECT { i.params[2] + 1.0 }
-                else if k == KIND_RECT || k == KIND_GRADIENT || k == KIND_DASHED || k == KIND_RADIAL { 1.0 + i.params[2] * 2.0 } else { 1.0 };
-            union(&mut o.edges, [(rect[0] - grow).max(i.clip[0]), (rect[1] - grow).max(i.clip[1]), (rect[0] + rect[2] + grow).min(i.clip[2]), (rect[1] + rect[3] + grow).min(i.clip[3])]);
+            let (x0, y0, x1, y1) = i.layer_bounds_non_scope();
+            union(&mut o.edges, x0, y0, x1, y1);
         }
     }
     // A layer that was never closed draws nothing.
@@ -124,7 +126,7 @@ pub(super) fn region_tiles(reg: [f32; 4], cols: u32, rows: u32) -> impl Iterator
     ((reg[1] as u32 / TILE_H)..(reg[3].ceil() as u32).div_ceil(TILE_H).min(rows)).flat_map(move |ty| (tx0..tx1).map(move |tx| (ty * cols + tx) as usize))
 }
 
-fn cut(a: [i32; 4], b: [i32; 4]) -> [i32; 4] {
+pub(super) fn cut(a: [i32; 4], b: [i32; 4]) -> [i32; 4] {
     let r = [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])];
     if r[2] > r[0] && r[3] > r[1] { r } else { [0; 4] }
 }
@@ -136,8 +138,8 @@ impl Bins {
         let tiles = (cols * rows) as usize;
         let mut bounds: Vec<[i32; 4]> = scene.instances.iter().map(|i| pixel_bounds(i, w as i32, h as i32)).collect();
         let (layers, scope) = plan_layers(scene.instances, (w, h));
-        // Within a layer drawn to its own target, nothing reaches past the layer's bounds, and
-        // nothing there can stand in for what's under the layer.
+        // Within a layer drawn to its own target or scissored flat, nothing reaches past its
+        // bounds; inside a target of its own, nothing stands in for what's under the layer.
         let mut within = vec![TOP; scene.instances.len()];
         let mut stack: Vec<([i32; 4], u32)> = Vec::new();
         let mut n = 0;
@@ -146,24 +148,39 @@ impl Bins {
             within[n] = stack.last().map_or(TOP, |s| s.1);
             if let Some(&p) = scope.get(&(n as u32)) {
                 let l = &layers[p as usize];
-                if scene.instances[n].params[1] == KIND_LAYER {
+                if scene.instances[n].kind() == Some(Kind::Layer) {
                     match l.show {
                         Show::Hidden => {
                             for b in &mut bounds[n..=l.end as usize] { *b = [0; 4]; }
                             n = l.end as usize + 1;
                             continue;
                         }
-                        Show::Flat => bounds[n] = [0; 4],
+                        Show::Flat => {
+                            bounds[n] = [0; 4];
+                            let i = &scene.instances[n];
+                            let scissor = if i.clip == NO_CLIP {
+                                inside.unwrap_or([0, 0, w as i32, h as i32])
+                            } else {
+                                let s = [
+                                    i.clip[0].floor().clamp(0.0, w as f32) as i32,
+                                    i.clip[1].floor().clamp(0.0, h as f32) as i32,
+                                    i.clip[2].ceil().clamp(0.0, w as f32) as i32,
+                                    i.clip[3].ceil().clamp(0.0, h as f32) as i32,
+                                ];
+                                let s = if s[2] > s[0] && s[3] > s[1] { s } else { [0; 4] };
+                                inside.map_or(s, |o| cut(s, o))
+                            };
+                            stack.push((scissor, within[n]));
+                        }
                         Show::Render => {
                             bounds[n] = inside.map_or(l.bounds, |o| cut(l.bounds, o));
                             stack.push((bounds[n], p));
                         }
                     }
-                } else if l.show == Show::Render {
-                    bounds[n] = stack.pop().map_or([0; 4], |s| s.0);
-                    within[n] = stack.last().map_or(TOP, |s| s.1);
                 } else {
-                    bounds[n] = [0; 4];
+                    let popped = stack.pop();
+                    bounds[n] = if l.show == Show::Render { popped.map_or([0; 4], |s| s.0) } else { [0; 4] };
+                    within[n] = stack.last().map_or(TOP, |s| s.1);
                 }
             } else if let Some(o) = inside {
                 bounds[n] = cut(bounds[n], o);
@@ -172,7 +189,7 @@ impl Bins {
         }
         let mut blurs = Vec::new();
         let mut quiet = vec![false; tiles];
-        for (n, i) in scene.instances.iter().enumerate().filter(|(_, i)| i.params[1] == KIND_BACKDROP_BLUR) {
+        for (n, i) in scene.instances.iter().enumerate().filter(|(_, i)| i.kind() == Some(Kind::BackdropBlur)).take(MAX_BACKDROP_BLURS) {
             bounds[n] = super::backdrop::bounds(i, (w, h));
             let Some(rec) = super::backdrop::plan(i, (w, h)) else { continue };
             for t in region_tiles(rec.region, cols, rows) { quiet[t] = true; }
@@ -237,38 +254,9 @@ impl Bins {
 
 /// The pixels whose centres lie in the quad the vertex shader draws for `i` (`base_vs`), within
 /// the reach of its clip and the target. Empty for what rasterises nothing.
-pub(super) fn pixel_bounds(i: &Instance, w: i32, h: i32) -> [i32; 4] {
-    let kind = i.params[1];
-    if kind > 11.5 || kind == crate::render::KIND_LAYER_END { return [0; 4]; }
-    let grow = match kind as u32 {
-        1 => i.params[2] * 3.0 + 1.0,
-        2 => 0.0,
-        3 | 5..=9 => 1.0,
-        _ => 1.0 + i.params[2] * 2.0,
-    };
-    let mut rect = i.rect;
-    // A turned icon's quad turns about its centre: its bounds are the turned quad's.
-    if kind == KIND_GLYPH && i.params[0] != 0.0 {
-        let (sin, cos) = i.params[0].sin_cos();
-        let (w, h) = (cos.abs() * rect[2] + sin.abs() * rect[3], sin.abs() * rect[2] + cos.abs() * rect[3]);
-        rect = [rect[0] + (rect[2] - w) * 0.5 - 1.0, rect[1] + (rect[3] - h) * 0.5 - 1.0, w + 2.0, h + 2.0];
-    }
-    let mut lo = [rect[0] - grow, rect[1] - grow];
-    let mut hi = [lo[0] + rect[2] + 2.0 * grow, lo[1] + rect[3] + 2.0 * grow];
-    // A band of a big shadow or border ring draws only its window (runtime/bands.rs).
-    if kind < 1.5 && i.uv[2] < 0.0 {
-        lo = [lo[0].max(i.rect[0] + i.uv[0]), lo[1].max(i.rect[1] + i.uv[1])];
-        hi = [hi[0].min(i.rect[0] - i.uv[2]).max(lo[0]), hi[1].min(i.rect[1] + i.uv[3]).max(lo[1])];
-    }
-    // Centres in [lo, hi): the rasteriser's top-left rule.
-    let first = |v: f32| (v - 0.5).ceil();
-    let c = i.clip;
-    let x0 = first(lo[0]).max((c[0] - 0.5).floor()).max(0.0);
-    let y0 = first(lo[1]).max((c[1] - 0.5).floor()).max(0.0);
-    let x1 = first(hi[0]).min((c[2] + 0.5).ceil()).min(w as f32);
-    let y1 = first(hi[1]).min((c[3] + 0.5).ceil()).min(h as f32);
-    if !(x1 > x0 && y1 > y0) { return [0; 4]; }
-    [x0 as i32, y0 as i32, x1 as i32, y1 as i32]
+#[inline]
+pub(in crate::render) fn pixel_bounds(i: &Instance, w: i32, h: i32) -> [i32; 4] {
+    i.pixel_bounds(w, h)
 }
 
 /// A rounded box and how far inside its edge a pixel centre must be to be whole: the region of
@@ -329,17 +317,17 @@ pub(super) fn clip_span(clip: &Clip, y: f32) -> (f32, f32) {
 /// The region a box kind paints in one colour, if it's opaque there: the interior of a
 /// `KIND_RECT` (inside its border, when it has one) whose colour there has alpha 1.
 pub(super) fn opaque_box(i: &Instance) -> Option<Solid> {
-    if i.params[1] != crate::render::KIND_RECT || i.fill[3] < 1.0 { return None; }
+    if i.kind() != Some(Kind::Rect) || i.fill[3] < 1.0 { return None; }
     interior(i)
 }
 
 /// Where a `KIND_RECT` or `KIND_GRADIENT` paints its fill whole, over nothing of its border.
 pub(super) fn interior(i: &Instance) -> Option<Solid> {
     let edges = [i.rect[0], i.rect[1], i.rect[0] + i.rect[2], i.rect[1] + i.rect[3]];
-    let soft = i.params[2].max(0.5);
+    let soft = i.params[2].max(shader_consts::SOFT_MIN);
     let bw = i.params[0];
     if bw <= 0.0 { return Some(Solid { edges, radii: i.radii, inset: soft }); }
-    if i.params[1] == crate::render::KIND_RECT && has_sides(i) {
+    if i.kind() == Some(Kind::Rect) && has_sides(i) {
         // The per-side inner box is inside the outer one, which is whole wherever it is.
         let half = [i.rect[2] * 0.5, i.rect[3] * 0.5];
         let (c, ih, radii) = sides_inner(i, [i.rect[0] + half[0], i.rect[1] + half[1]], half);

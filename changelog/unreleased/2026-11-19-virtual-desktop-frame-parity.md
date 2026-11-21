@@ -1,0 +1,1 @@
+- Multi-window `--desktop` runs follow `App::fit_content_height`, `Tx::resize_window`, and `App::on_frame_encoded`, matching single-window headless runs and native windows, and attach the text outline cache on a window's first frame instead of waiting for the second.

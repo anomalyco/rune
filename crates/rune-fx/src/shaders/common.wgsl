@@ -126,9 +126,10 @@ fn blend_soft_light(b: vec3f, s: vec3f) -> vec3f {
 @fragment
 fn fs(in: VOut) -> @location(0) vec4f {
     let i = insts[in.id];
-    let ca = clip_alpha(in.px, i.clip, i.fade);
+    let px = pixel(in);
+    let ca = clip_alpha(px, i.clip, i.fade);
     if (ca <= 0.0) { return vec4f(0.0); }
-    let c = shade(in) * i.shape.z;
+    let c = shade(i, px) * i.shape.z;
     let mode = effective_blend_mode(i);
     if (mode == 0u) {
         if (g.srgb > 0.5) {
@@ -149,7 +150,7 @@ fn fs(in: VOut) -> @location(0) vec4f {
     if (mode == 2u) {
         return vec4f(cs * as_, as_);
     }
-    let b_lin = bd(in.px, 1.0);
+    let b_lin = bd(px, 1.0);
     let ab = clamp(b_lin.a, 0.0, 1.0);
     let cb_lin = select(vec3f(0.0), clamp(b_lin.rgb / ab, vec3f(0.0), vec3f(1.0)), ab > 1e-6);
     let cb = select(cb_lin, to_srgb(cb_lin), g.srgb > 0.5);

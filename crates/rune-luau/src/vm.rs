@@ -1,6 +1,8 @@
 //! One Luau VM: a script's sandboxed globals (`task`, `Signal`, `require`), its `@rune/ui`
 //! module, the host's own bindings, and the module its `init.luau` returned.
 
+#![allow(unsafe_code)]
+
 use std::cell::RefCell;
 use std::os::raw::c_int;
 use std::rc::Rc;

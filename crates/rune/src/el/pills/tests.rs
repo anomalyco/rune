@@ -50,17 +50,17 @@ fn a_pill_label_stays_on_one_line_and_takes_room() {
     let mut ts = TextSystem::default();
     let plain = text(body).wrap();
     let pilled = text(body).wrap().pill(at..end, PillStyle::new());
-    let mut width = |e: &crate::El, w| ts.layout_for_spec(e.text.as_ref().unwrap(), 1.0, w, Alignment::Start).full_width();
+    let mut width = |e: &crate::El, w| ts.layout_for_spec(&e.text.as_ref().unwrap().as_text_input(1.0, false), 1.0, w, Alignment::Start).full_width();
     let (wide_plain, wide_pill) = (width(&plain, None), width(&pilled, None));
     assert!(wide_pill > wide_plain + 4.0, "the chip's padding takes room: {wide_plain} vs {wide_pill}");
     // Narrow enough that plain text breaks at the label's hyphens, wide enough for the pill.
-    let layout = ts.layout_for_spec(pilled.text.as_ref().unwrap(), 1.0, Some(210.0), Alignment::Start);
+    let layout = ts.layout_for_spec(&pilled.text.as_ref().unwrap().as_text_input(1.0, false), 1.0, Some(210.0), Alignment::Start);
     let split = layout.lines().any(|l| {
         let r = l.text_range();
         r.start > at && r.start < end
     });
     assert!(!split, "a label that fits a line never splits across lines");
-    let narrow = ts.layout_for_spec(pilled.text.as_ref().unwrap(), 1.0, Some(110.0), Alignment::Start);
+    let narrow = ts.layout_for_spec(&pilled.text.as_ref().unwrap().as_text_input(1.0, false), 1.0, Some(110.0), Alignment::Start);
     assert!(narrow.width() <= 110.5, "one wider than the line wraps inside it: {}", narrow.width());
 }
 
@@ -96,7 +96,7 @@ mod live {
 
     /// Each line's byte range in the text's layout.
     fn lines(rt: &Runtime<S>) -> Vec<Range<usize>> {
-        let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
+        let n = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
         n.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap().lines().map(|l| l.text_range()).collect()
     }
 
@@ -132,7 +132,7 @@ mod live {
         let rt = runtime(body, &pills, 260.0);
         let ls = lines(&rt);
         assert!(ls.len() >= 2, "narrow enough to wrap: {ls:?}");
-        let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
+        let n = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
         let t = n.text.as_ref().unwrap();
         for (authored, chip) in pills.iter().zip(&t.cold.pills) {
             // Layout ranges include each pill's bidi isolate marks.
@@ -146,7 +146,7 @@ mod live {
     fn pills_survive_streaming_appends_and_bad_ranges_are_ignored() {
         let mut rt = runtime("ask @reviewer", &[4..13], 400.0);
         let pilled = |rt: &Runtime<S>| {
-            let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
+            let n = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
             let t = n.text.as_ref().unwrap();
             t.cold.pills.iter().map(|p| (p.start..p.end, t.content[p.start as usize..p.end as usize].to_owned())).collect::<Vec<_>>()
         };

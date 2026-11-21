@@ -1,0 +1,1 @@
+- A window whose GPU surface refuses reconfiguration after `Tx::set_srgb_blend` now goes through the missed-frame path: it flushes pending clipboard writes, clears its cached resting frame, schedules its replacement retry, and reports a skipped frame to `App::on_frame_encoded` instead of silently returning without retrying.

@@ -4,7 +4,7 @@
 use super::*;
 use crate::text::FontSmoothing;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Enable or disable gamma-space (sRGB) blending for translucent fills, shadows, blurs,
     /// images and video, as `App::srgb_blend` does for a window. Every colour the next frame
     /// builds, hover and press tints included, is premultiplied in sRGB encoding
@@ -12,14 +12,13 @@ impl<S: 'static> Runtime<S> {
     /// headless snapshot) then draws with `Renderer::set_srgb_blend(true)` into a non-sRGB
     /// target (`format.remove_srgb_suffix()`), cleared to `clear_color()`.
     pub fn set_srgb_blend(&mut self, enabled: bool) {
-        if self.srgb_blend != enabled {
-            self.srgb_blend = enabled;
-            self.dirty = true;
+        if self.paint.set_srgb_blend(enabled) {
+            self.commit.dirty = true;
         }
     }
 
     pub fn srgb_blend(&self) -> bool {
-        self.srgb_blend
+        self.paint.srgb_blend()
     }
 
     /// Rasterise and place glyphs in `mode` from the next frame, as `App::font_smoothing` does
@@ -28,7 +27,7 @@ impl<S: 'static> Runtime<S> {
     pub fn set_font_smoothing(&mut self, mode: FontSmoothing) {
         if self.text.font_smoothing() != mode {
             self.text.set_font_smoothing(mode);
-            self.dirty = true;
+            self.commit.dirty = true;
         }
     }
 
@@ -38,9 +37,9 @@ impl<S: 'static> Runtime<S> {
 
     pub fn clear_color(&self) -> [f32; 4] {
         if self.transparent { return [0.0; 4]; }
-        self.nodes.get(self.app_root()).map_or([0.0, 0.0, 0.0, 1.0], |n| {
+        self.tree.nodes.get(self.app_root()).map_or([0.0, 0.0, 0.0, 1.0], |n| {
             let c = self.color(n.id, P_FILL, n.vis.fill);
-            if self.srgb_blend {
+            if self.paint.srgb_blend {
                 [srgb_encode(c.r), srgb_encode(c.g), srgb_encode(c.b), 1.0]
             } else {
                 [c.r, c.g, c.b, 1.0]
@@ -126,4 +125,18 @@ pub(crate) fn apron_key(i: &Instance) -> [u32; 3] {
 
 pub(crate) fn premul(c: Color, opacity: f32, srgb: bool) -> [f32; 4] {
     if srgb { c.premul_srgb(opacity) } else { c.premul(opacity) }
+}
+
+/// The transfer curve maps linear 1 to encoded 1 exactly. The f32 power formula at that
+/// endpoint yields 0.99999994: half white would round to RGB 127 but alpha 128, darkening
+/// even white over white. Preserve the authored endpoint before the two painters take their
+/// byte steps. This isn't a near-white threshold or a change to gradient interpolation.
+pub(in crate::runtime) fn flat_base(c: Color, srgb: bool, translucent: bool) -> [f32; 4] {
+    let mut rgba = premul(c, 1.0, srgb);
+    if srgb && translucent {
+        for (channel, linear) in rgba[..3].iter_mut().zip([c.r, c.g, c.b]) {
+            if linear == 1.0 { *channel = c.a; }
+        }
+    }
+    rgba
 }

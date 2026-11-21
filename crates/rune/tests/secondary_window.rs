@@ -4,7 +4,7 @@
 //! RUNE_GUI_TESTS=1 in a logged-in GUI session.
 
 use std::sync::{Mutex, atomic::{AtomicUsize, Ordering}};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use rune::*;
 
 struct Main;
@@ -21,7 +21,7 @@ fn settings_view(s: &Settings, _: &mut Cx<Settings>) -> El {
 }
 
 fn wait(what: &str, f: impl Fn() -> bool) {
-    let start = Instant::now();
+    let start = rune::time::now();
     while !f() {
         assert!(start.elapsed() < Duration::from_secs(5), "timed out waiting for {what}");
         std::thread::sleep(Duration::from_millis(5));
@@ -30,7 +30,7 @@ fn wait(what: &str, f: impl Fn() -> bool) {
 
 fn state<T: Send + 'static>(handle: &AppHandle<Settings>, f: impl FnOnce(&Settings) -> T + Send + 'static) -> T {
     let (tx, rx) = std::sync::mpsc::channel();
-    handle.update(move |s, _| { let _ = tx.send(f(s)); });
+    handle.update(move |s, _| { tx.send(f(s)).ok(); });
     rx.recv_timeout(Duration::from_secs(5)).expect("update ran")
 }
 

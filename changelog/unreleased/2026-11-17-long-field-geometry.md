@@ -1,0 +1,1 @@
+- Long text fields (past 64 KiB, or with unshaped off-screen rows) now publish geometry for their drawn visual lines, step wrapped paragraphs on screen by visual line, hit-test visible characters, and implement UI Automation `ITextProvider2` (`GetCaretRange`) so Windows Magnifier and screen-reader highlights follow the caret and selection at any draft size.

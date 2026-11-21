@@ -2,6 +2,8 @@
 //! their own and the progress bar springs to its new width; the view only says where things are.
 //! `cargo run -p todo -- --snap todo.png`.
 
+#![forbid(unsafe_code)]
+
 use rune::tok::{self, Theme, radius, type_};
 use rune::{AppSpec, Cx, El, ScrollSpec, Spring, col, el, row, text};
 

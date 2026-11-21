@@ -3,6 +3,8 @@
 //! first lays its props over it (`ui.icon("copy", STYLE, { color = ink })`). The standard layout
 //! props (`w`, `pad`, `key`, `label`, ...) apply after the app's build, except the ones it read.
 
+#![allow(unsafe_code)]
+
 use std::cell::Cell;
 use std::os::raw::c_int;
 use std::rc::Rc;
@@ -171,9 +173,11 @@ impl NodeArgs {
         }
     }
 
-    /// Runs the script function in prop `name` when `el` is pressed.
+    /// Runs the script function in prop `name` when `el` is pressed; with `menuTrigger = true`, a
+    /// mouse runs it as the button goes down (`El::press_on_down`), as on a `ui` node.
     pub fn on_press(&self, el: El, name: &str) -> El {
-        self.on_press_with(el, name, Vec::new())
+        let el = self.on_press_with(el, name, Vec::new());
+        if self.flag("menuTrigger") && self.handler(name).is_some() { el.press_on_down() } else { el }
     }
 
     /// Runs the script function in prop `name` when `el` is pressed, with `fields` added to its

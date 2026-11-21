@@ -107,9 +107,9 @@ impl XwaylandSurface {
         let input = if self.watch.is_none() { OverlayInput::None } else { input };
         if input == self.input { return; }
         self.input = input;
-        let _ = self.connection.change_window_attributes(self.window, &ChangeWindowAttributesAux::new().event_mask(events(input)));
+        self.connection.change_window_attributes(self.window, &ChangeWindowAttributesAux::new().event_mask(events(input))).ok();
         let _ = self.shape(input);
-        let _ = self.connection.flush();
+        self.connection.flush().ok();
     }
 
     /// Sets the input shape to the overlay's hit regions (points) while it takes input in
@@ -139,8 +139,8 @@ impl XwaylandSurface {
         let Some((x, y, w, h)) = self.rect(at, options) else { return };
         self.size = (w, h);
         let aux = ConfigureWindowAux::new().x(i32::from(x)).y(i32::from(y)).width(u32::from(w)).height(u32::from(h)).stack_mode(StackMode::ABOVE);
-        let _ = self.connection.configure_window(self.window, &aux);
-        let _ = self.connection.flush();
+        self.connection.configure_window(self.window, &aux).ok();
+        self.connection.flush().ok();
     }
 
     /// What the server sent since the last call, as overlay input in points. A window that
@@ -186,9 +186,9 @@ impl XwaylandSurface {
 
 impl Drop for XwaylandSurface {
     fn drop(&mut self) {
-        if self.window != 0 { let _ = self.connection.destroy_window(self.window); }
-        let _ = self.connection.free_colormap(self.colormap);
-        let _ = self.connection.flush();
+        if self.window != 0 { self.connection.destroy_window(self.window).ok(); }
+        self.connection.free_colormap(self.colormap).ok();
+        self.connection.flush().ok();
     }
 }
 

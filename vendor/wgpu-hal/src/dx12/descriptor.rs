@@ -37,6 +37,10 @@ pub(super) struct GeneralHeap {
     total_handles: u64,
     start: DualHandle,
     ranges: Mutex<RangeAllocator<DescriptorIndex>>,
+    // Zero-sized without wgpu's counters. Updated under the range lock, so a free racing
+    // an allocation cannot inflate the high-water mark.
+    live: wgt::InternalCounter,
+    peak: wgt::InternalCounter,
 }
 
 impl GeneralHeap {
@@ -70,6 +74,8 @@ impl GeneralHeap {
             total_handles,
             start,
             ranges: Mutex::new(RangeAllocator::new(0..total_handles)),
+            live: Default::default(),
+            peak: Default::default(),
         })
     }
 
@@ -95,10 +101,17 @@ impl GeneralHeap {
     }
 
     pub(super) fn allocate_slice(&self, count: u64) -> Result<DescriptorIndex, crate::DeviceError> {
-        let range = self.ranges.lock().allocate_range(count).map_err(|err| {
+        let mut ranges = self.ranges.lock();
+        let range = ranges.allocate_range(count).map_err(|err| {
             log::error!("Unable to allocate descriptors: {err:?}");
             crate::DeviceError::OutOfMemory
         })?;
+        self.live.add(count as isize);
+        let live = self.live.read();
+        if live > self.peak.read() {
+            self.peak.set(live);
+            std::eprintln!("dx12: peak live view descriptors {live}/{} ({} B each)", self.total_handles, self.handle_size);
+        }
         Ok(range.start)
     }
 
@@ -106,7 +119,9 @@ impl GeneralHeap {
     /// Do not use this with handles not given out by this `DescriptorHeapSlice`.
     pub(crate) fn free_slice(&self, handle: DualHandle) {
         let start = (handle.gpu.ptr - self.start.gpu.ptr) / self.handle_size;
-        self.ranges.lock().free_range(start..start + handle.count);
+        let mut ranges = self.ranges.lock();
+        ranges.free_range(start..start + handle.count);
+        self.live.sub(handle.count as isize);
     }
 }
 

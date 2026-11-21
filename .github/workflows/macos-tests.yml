@@ -54,6 +54,7 @@ jobs:
     env:
       # One job per core: serial builds ran past the timeout with no cache, so no cache was ever saved.
       CARGO_BUILD_JOBS: 3
+      CARGO_INCREMENTAL: 0
       CARGO_PROFILE_TEST_DEBUG: 0
       CARGO_PROFILE_TEST_STRIP: debuginfo
     steps:
@@ -64,5 +65,10 @@ jobs:
       # The virtual Metal adapter does not expose TIMESTAMP_QUERY. Keep the
       # shader freshness, pipeline, rendering, font and menu tests enabled.
       - run: >-
-          cargo test -p rune -p rune-kit --features rune-kit/markdown,rune-kit/mermaid --no-fail-fast --
-          --skip gpu::metal::compute_tests::passes_sample_timestamps_at_their_boundaries
+          cargo test -p rune -p rune-core -p rune-edit -p rune-gpu -p rune-image -p rune-media -p rune-spell -p rune-text -p rune-kit
+          --features rune/test-gpu-counters,rune-gpu/test-gpu-counters,rune-kit/markdown,rune-kit/mermaid --no-fail-fast --
+          --skip metal::compute_tests::passes_sample_timestamps_at_their_boundaries
+      # Kept outside the main invocation above so rune-ref (`libm/force-soft-floats`, `serde/derive`)
+      # and rune-i18n (`icu_provider/sync`) do not alter the core feature set.
+      - run: cargo test -p rune-ref
+      - run: cargo test -p rune-i18n

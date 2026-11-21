@@ -1,6 +1,6 @@
 //! `prewarm_gpu`'s thread and the slot a window takes its result from.
 
-use super::{Gpu, Renderer};
+use super::{Gpu, Renderer, warmup::WarmRenderer};
 use std::sync::Mutex;
 use std::thread::JoinHandle;
 
@@ -8,11 +8,7 @@ use std::thread::JoinHandle;
 /// app turns that off, so the window renders with the pipeline compiled here.
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
 
-struct Prewarmed(Gpu, Renderer);
-// SAFETY: wgpu's objects are `Send`. The one part of a `Renderer` that isn't, the native
-// surface renderer with its CoreVideo texture cache, is made on first use: a new renderer
-// has none (asserted where it's made).
-unsafe impl Send for Prewarmed {}
+struct Prewarmed(Gpu, WarmRenderer);
 
 #[derive(Default)]
 enum State {
@@ -38,8 +34,7 @@ impl Slot {
                 let gpu = Gpu::try_new(Gpu::instance(), None).ok()?;
                 #[cfg(test)]
                 let loads_before = super::metallib::thread_loads();
-                let renderer = Renderer::new(&gpu.device, FORMAT);
-                assert!(renderer.surfaces.is_none(), "a new renderer has no native surface renderer");
+                let renderer = Renderer::new_warm(&gpu.device, FORMAT);
                 #[cfg(test)]
                 if super::metallib::metallib_enabled() {
                     assert_eq!(super::metallib::thread_loads(), loads_before + 1, "prewarm_gpu loads the precompiled metallib");
@@ -56,7 +51,7 @@ impl Slot {
     pub(super) fn take(&self) -> Option<(Gpu, Renderer)> {
         let state = std::mem::replace(&mut *self.0.lock().unwrap_or_else(|e| e.into_inner()), State::Done);
         let State::Running(thread) = state else { return None };
-        thread.join().ok().flatten().map(|Prewarmed(gpu, renderer)| (gpu, renderer))
+        thread.join().ok().flatten().map(|Prewarmed(gpu, renderer)| (gpu, Renderer::from_warm(renderer)))
     }
 
     /// Starts a new thread if one is working; that one drops its result when it finishes.

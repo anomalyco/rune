@@ -65,7 +65,7 @@ mod flags {
             let holding = *lock(&self.0.state) == SecretState::Holding;
             // differs from dev: a failed replay leaves its earlier write held, and is cleared too.
             let holding = holding || (failed_write(&lock(&self.0.state)) && self.0.holders.load(Ordering::SeqCst) > 0);
-            if holding && let Some(route) = self.0.route.get() { let _ = route.send(self.0.clone()); }
+            if holding && let Some(route) = self.0.route.get() { route.send(self.0.clone()).ok(); }
         }
     }
 
@@ -286,7 +286,7 @@ impl Backend for Fake {
     fn write(&mut self, copy: &ClipboardWrite) -> Result<(), String> { self.land(&copy.content) }
     fn text(&mut self) -> Option<Zeroizing<String>> {
         if self.unreadable { return None; }
-        self.content.as_ref().filter(|c| c.has_plain()).map(|c| c.text.clone())
+        self.content.as_ref().filter(|c| c.has_plain()).map(|c| Zeroizing::new(c.text().to_owned()))
     }
     fn content(&mut self, all: bool) -> Option<ClipboardContent> {
         if self.unreadable { return None; }
@@ -361,7 +361,7 @@ impl Engine for flags::Core {
         flags::Write { content: ClipboardContent::new("a @x b").with_html(PILLS), clear_after: None, secret: None }
     }
     fn bind(write: &flags::Write, queue: &flags::Queue) {
-        if let Some(slot) = write.slot() { let _ = slot.route.set(queue.clone()); }
+        if let Some(slot) = write.slot() { slot.route.set(queue.clone()).ok(); }
     }
     fn clear_now(copy: &flags::Copy) { copy.clear_now(); }
     fn state(copy: &flags::Copy) -> SecretState { lock(&copy.0.state).clone() }
@@ -672,7 +672,7 @@ fn exhaust_all(alphabet: &[Ev]) {
 /// Every sequence of exactly `len` events, across threads. Returns how many ran.
 fn exhaust(alphabet: &[Ev], len: u32, counted: [bool; 2]) -> usize {
     let total = alphabet.len().pow(len);
-    let start = Instant::now();
+    let start = crate::time::now();
     let next = AtomicUsize::new(0);
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
     const CHUNK: usize = 4096;

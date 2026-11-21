@@ -34,20 +34,15 @@ fn carry_out(panel: &Retained<NSPanel>, presence: &Rc<Cell<Presence>>, effects: 
             Effect::SetSharing(exclude) => set_sharing(panel, exclude),
             Effect::RejoinSpaces => rejoin_spaces(panel),
             Effect::OrderIn { clear_alpha } => if !panel.isVisible() {
-                // SAFETY: AppKit calls on the main thread.
-                unsafe {
-                    if clear_alpha { panel.setAlphaValue(0.0); }
-                    panel.orderFrontRegardless();
-                }
+                if clear_alpha { panel.setAlphaValue(0.0); }
+                panel.orderFrontRegardless();
             },
             Effect::OrderOut => panel.orderOut(None),
-            // SAFETY: an AppKit call on the main thread.
-            Effect::SetAlpha(alpha) => unsafe { panel.setAlphaValue(alpha) },
+            Effect::SetAlpha(alpha) => panel.setAlphaValue(alpha),
             Effect::IgnoreMouse => panel.setIgnoresMouseEvents(true),
             Effect::DrawOccluded(on) => presence.set(presence.get().with_draws_occluded(on)),
             Effect::Fade { alpha, over } => fade(panel, presence, alpha, over),
-            // SAFETY: an AppKit call on the main thread.
-            Effect::ResignKey => unsafe { panel.resignKeyWindow() },
+            Effect::ResignKey => panel.resignKeyWindow(),
         }
     }
 }
@@ -60,26 +55,24 @@ fn carry_out(panel: &Retained<NSPanel>, presence: &Rc<Cell<Presence>>, effects: 
 /// orders it back in on this one.
 fn rejoin_spaces(panel: &NSPanel) {
     use objc2_app_kit::NSWindowCollectionBehavior as Behavior;
-    // SAFETY: AppKit calls on the main thread.
-    unsafe {
-        let behavior = panel.collectionBehavior();
-        if !behavior.contains(Behavior::CanJoinAllSpaces) { return; }
-        if panel.isVisible() {
-            if panel.isOnActiveSpace() { return; }
-            panel.orderOut(None);
-        }
-        panel.setCollectionBehavior(Behavior::Default);
-        panel.setCollectionBehavior(behavior);
+    let behavior = panel.collectionBehavior();
+    if !behavior.contains(Behavior::CanJoinAllSpaces) { return; }
+    if panel.isVisible() {
+        if panel.isOnActiveSpace() { return; }
+        panel.orderOut(None);
     }
+    panel.setCollectionBehavior(Behavior::Default);
+    panel.setCollectionBehavior(behavior);
 }
 
 /// Animates the panel's alpha to `alpha`, replacing any fade in flight. Over a length, its
 /// completion reports back under the fence; with none, it lands at once.
+#[allow(unsafe_code)]
 fn fade(panel: &Retained<NSPanel>, presence: &Rc<Cell<Presence>>, alpha: f64, over: Option<(Duration, Attempt)>) {
     use objc2::runtime::{AnyClass, AnyObject};
     // SAFETY: AppKit calls on the main thread; the completion handler runs there too.
     unsafe {
-        if let Some(context) = AnyClass::get("NSAnimationContext") {
+        if let Some(context) = AnyClass::get(c"NSAnimationContext") {
             let _: () = msg_send![context, beginGrouping];
             let current: *mut AnyObject = msg_send![context, currentContext];
             let _: () = msg_send![current, setDuration: over.map_or(0.0, |(length, _)| length.as_secs_f64())];

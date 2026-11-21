@@ -22,14 +22,12 @@
 //!
 //! Nothing here runs or allocates until it's called: no statics to initialise, no tables.
 
-use crate::time::Instant;
-
-use super::{Instance, KIND_BACKDROP_BLUR, KIND_EFFECT, KIND_GLYPH, KIND_LAYER, KIND_LAYER_END};
+use super::{Instance, Kind};
 use crate::pixels::ImageAtlas;
 use crate::text::{Atlas, FontSmoothing};
 
 mod backdrop;
-mod bin;
+pub(super) mod bin;
 mod blend;
 mod damage;
 mod drift;
@@ -42,6 +40,9 @@ mod scroll;
 pub mod record;
 mod shade;
 pub(crate) mod tool;
+
+#[cfg(test)]
+mod tests;
 
 pub use drift::{Drift, Pixels, drift, drift_wanted, last_drift};
 pub use fill::{FillReport, attach_text, fill_masks};
@@ -179,17 +180,21 @@ impl<'a> Scene<'a> {
         if self.smoothing == Some(FontSmoothing::Slug) { return Some(NeedsGpu::SlugText); }
         // How many layer scopes are open: a backdrop blur inside one reads that layer's target.
         let mut depth = 0u32;
-        self.instances.iter().find_map(|i| match i.params[1] {
-            k if k == KIND_LAYER && i.params[2] != 0.0 => Some(NeedsGpu::LayerBlur),
-            k if k == KIND_LAYER && i.border[1] != 0.0 => Some(NeedsGpu::TurnedLayer),
-            k if k == KIND_LAYER => { depth += 1; None }
-            k if k == KIND_LAYER_END => { depth = depth.saturating_sub(1); None }
-            k if k == KIND_BACKDROP_BLUR && depth > 0 => Some(NeedsGpu::BackdropBlur),
-            k if k == KIND_EFFECT && self.compositor => Some(NeedsGpu::Effect),
+        self.instances.iter().find_map(|i| match i.kind() {
+            Some(Kind::Layer) if i.params[2] != 0.0 => Some(NeedsGpu::LayerBlur),
+            Some(Kind::Layer) if i.border[1] != 0.0 => Some(NeedsGpu::TurnedLayer),
+            Some(Kind::Layer) => { depth += 1; None }
+            Some(Kind::LayerEnd) => { depth = depth.saturating_sub(1); None }
+            Some(Kind::BackdropBlur) if depth > 0 => Some(NeedsGpu::BackdropBlur),
+            Some(Kind::Effect) if self.compositor => Some(NeedsGpu::Effect),
             // Slug's rays (coverage 1) have no CPU form; Windfoil's box does (outline::coverage).
-            k if k == KIND_GLYPH && i.radii[3] > 0.0 && (self.outlines.is_none() || i.border[3] == 1.0) => Some(NeedsGpu::OutlineGlyph),
-            k if !(0.0..=13.0).contains(&k) || k.fract() != 0.0 => Some(NeedsGpu::UnknownKind),
-            _ => None,
+            Some(Kind::Glyph) if i.radii[3] > 0.0 && (self.outlines.is_none() || i.border[3] == super::instance::shader_consts::OUTLINE_MODE_SLUG as f32) => Some(NeedsGpu::OutlineGlyph),
+            Some(
+                Kind::Rect | Kind::Shadow | Kind::Glyph | Kind::Inset | Kind::Gradient
+                | Kind::Segment | Kind::Triangle | Kind::Image | Kind::Dashed | Kind::Radial
+                | Kind::Effect | Kind::BackdropBlur,
+            ) => None,
+            None => Some(NeedsGpu::UnknownKind),
         })
     }
 }
@@ -271,12 +276,12 @@ pub struct Report {
 pub fn paint(scene: &Scene<'_>, target: &mut Target<'_>, threads: usize) -> Result<Report, NeedsGpu> {
     if let Some(why) = scene.needs_gpu() { return Err(why); }
     check_target(scene, target)?;
-    let start = Instant::now();
+    let start = crate::time::now();
     let bins = bin::Bins::of(scene);
-    let binned = Instant::now();
+    let binned = crate::time::now();
     let tiles: Vec<u32> = (0..bins.tile_count() as u32).collect();
     let mut report = raster::run(scene, &bins, target, &tiles, &raster::Spawn(threads.max(1)), &raster::Spawn(threads.max(1)));
-    let done = Instant::now();
+    let done = crate::time::now();
     report.bin_ns = ns(binned - start);
     report.raster_ns = ns(done - binned);
     report.total_ns = ns(done - start);

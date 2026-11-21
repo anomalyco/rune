@@ -1,0 +1,1 @@
+- Luau UI: `helpOpen` keeps a node's tooltip up while true (`El::help_open`), as a Copy button's "Copied" after the press.

@@ -2,47 +2,479 @@
 //! and the occlusion and pacing that decide when the next comes.
 
 use super::*;
+use crate::frame::host_step::{
+    self, Acquire, FrameHost, Gate, PostStepCheck, ReacquireReason, RenderPrep, StepInfo,
+    draw_ui, prepare_gpu_resources,
+};
 
-impl<T: 'static> Overlay<T> {
+struct PreparedOverlayFrame {
+    frame: wgpu::SurfaceTexture,
+    view: wgpu::TextureView,
+    encoder: wgpu::CommandEncoder,
+    target_format: wgpu::TextureFormat,
+    size: (u32, u32),
+}
+
+struct OverlayFrame<'a> {
+    core: &'a mut OverlayCore,
+    app: &'a mut dyn OverlayApp,
+    prewarm: bool,
+    read_occlusion: bool,
+    paced: bool,
+    #[cfg(target_os = "macos")]
+    target: Option<Instant>,
+    #[cfg(target_os = "macos")]
+    materials_checked: bool,
+    now: Option<Instant>,
+    more: bool,
+}
+
+impl OverlayFrame<'_> {
+    fn reblend_surface(&mut self) -> bool {
+        let (Some(live), Some(renderer), Some(gpu)) = (
+            self.core.surface.live_mut(),
+            self.core.renderer.as_mut(),
+            self.core.gpu.as_ref(),
+        ) else {
+            return false;
+        };
+        #[cfg(target_os = "windows")]
+        live.slot.reset();
+        crate::window::reblend_core(&live.surface, gpu, &mut live.config, renderer, &mut live.alpha, self.app.rt_mut())
+    }
+}
+
+impl FrameHost for OverlayFrame<'_> {
+    type Drawable = wgpu::SurfaceTexture;
+    type Prepared = PreparedOverlayFrame;
+
+    fn gate(&mut self) -> Gate {
+        let timer = !self.core.quiet.step(frame::QuietEvent::FrameStarts).is_empty();
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if let Some(Live { backing: Backing::Layer(layer), .. }) = self.core.surface.live_mut() {
+            let changes = layer.dispatch();
+            if changes.closed {
+                self.core.hide(self.app);
+                return Gate::Skip;
+            }
+            for input in changes.input { self.core.surface_input(self.app, input); }
+            if let Some((w, h)) = changes.size {
+                let size = (if w == 0 { self.core.at.size.0 } else { w as f32 }, if h == 0 { self.core.at.size.1 } else { h as f32 });
+                if size != self.core.at.size {
+                    self.core.at.size = size;
+                    if let Some(live) = self.core.surface.live_mut() { live.scale = 0.0; }
+                }
+            }
+            if let Some(scale) = changes.scale {
+                if let Some(Live { backing: Backing::Layer(layer), .. }) = self.core.surface.live_mut() { layer.set_buffer_scale(scale); }
+                if let Some(gpu) = self.core.gpu.clone() {
+                    self.core.rescale(self.app, &gpu, scale as f32);
+                }
+            }
+            if self.core.surface.live().is_some_and(|l| l.scale == 0.0) && let Some(gpu) = self.core.gpu.clone() {
+                // Read before `app` is reborrowed for `rescale`.
+                let scale = self.app.rt().env.scale;
+                self.core.rescale(self.app, &gpu, scale);
+            }
+        }
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if let Some(Live { backing: Backing::Xwayland(surface), .. }) = self.core.surface.live_mut() {
+            let input = surface.dispatch();
+            for input in input { self.core.surface_input(self.app, input); }
+        }
+        self.core.apply_input(self.app.rt());
+        if self.core.surface.live().is_none() || self.core.renderer.is_none() || self.core.gpu.is_none() {
+            return Gate::Skip;
+        }
+        // `sync_occlusion` below reads, once a turn, the panel hosting the surface: the window
+        // the acquire would check again.
+        #[cfg(target_os = "macos")]
+        { self.read_occlusion = !self.prewarm && self.core.panel.is_some(); }
+        #[cfg(not(target_os = "macos"))]
+        { self.read_occlusion = false; }
+        // Even an idle overlay looks again on its retry while occluded: the occlusion
+        // notification that should uncover it may never come.
+        #[cfg(target_os = "macos")]
+        if !self.prewarm { self.core.sync_occlusion(self.app); }
+        let gate = frame::Gate {
+            prewarm: self.prewarm,
+            occluded: cfg!(target_os = "macos") && self.core.presence.occluded(),
+            dirty: self.core.dirty,
+            idle: self.core.idle,
+            retry: self.core.backoff.deadline(),
+            missed_this_turn: self.core.turn_frame.missed(),
+        };
+        match frame::turn(gate, crate::time::now) {
+            frame::Turn::Occluded { recheck } => {
+                if recheck {
+                    self.core.meter.skipped();
+                    self.core.missed(self.app, crate::window::Missed::Occluded, false, self.core.turn_frame.stepped());
+                }
+                return Gate::Skip;
+            }
+            // `wake_due` runs due timers while it backs off.
+            frame::Turn::Rest | frame::Turn::BackedOff => return Gate::Skip,
+            frame::Turn::Draw => if !self.prewarm { self.core.backoff_step(crate::window::BackoffEvent::Lapsed); },
+        }
+        // The swap chain still holds a frame the compositor hasn't shown: this one draws when it
+        // has room, built from what changed by then (`slot`).
+        #[cfg(target_os = "windows")]
+        if let Some(wake) = self.core.slot_wake.clone() && let Some(live) = self.core.surface.live_mut() {
+            if live.slot.take_surface(&live.surface, move || wake()) == Take::Later {
+                // The registered wait asks for this frame (`WakeEvent::FrameSlot`): not a miss,
+                // and no timer of its own to turn the loop with (`waits_for_slot`).
+                return Gate::Skip;
+            }
+        }
+        let (Some(live), Some(renderer)) = (self.core.surface.live_mut(), self.core.renderer.as_ref()) else {
+            return Gate::Skip;
+        };
+        // Only a timer woke the resting overlay: build the frame first, and take neither a
+        // drawable nor a display tick when it draws what's on screen. The link, stopped, would
+        // draw it at once anyway (`defers_start`).
+        let quiet = self.core.quiet.presented().is_some()
+            && timer && !self.prewarm && !self.app.has_compositor()
+            && !self.app.rt().has_pending_input()
+            && renderer.srgb_blend() == self.app.rt().srgb_blend();
+        #[cfg(target_os = "macos")]
+        let quiet = quiet && live.pacing.as_ref().is_none_or(|p| p.defers_start(crate::time::now()));
+        if quiet {
+            return Gate::QuietTimer;
+        }
+        // Claim display pacing before any step when not deferring a quiet timer frame, matching
+        // `window/host/draw.rs` so a Wait never discards a frame `quiet_step` already stepped.
+        #[cfg(target_os = "macos")]
+        {
+            let opportunity = if self.prewarm { None } else { live.pacing.as_mut().map(|p| p.next_frame()) };
+            let Some(target) = frame::claim(opportunity, || live.settle()) else { return Gate::Skip };
+            self.target = target;
+            self.paced = live.pacing.as_ref().is_some_and(|p| p.running());
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            live.settle();
+            self.paced = false;
+        }
+        // The present queue's vsync paces redraws where no display link does.
+        if !self.prewarm { self.core.meter.redraw(self.paced || !cfg!(target_os = "macos")); }
+        Gate::Draw
+    }
+
+    fn needs_reblend(&self) -> bool {
+        self.core.renderer.as_ref().is_some_and(|r| r.srgb_blend() != self.app.rt().srgb_blend())
+    }
+
+    fn reblend(&mut self) -> bool { self.reblend_surface() }
+
+    fn step_quiet(&mut self) -> StepInfo {
+        let now = crate::time::now();
+        self.now = Some(now);
+        #[cfg(target_os = "macos")]
+        if let Some(live) = self.core.surface.live() {
+            self.app.rt_mut().paint.set_native_materials(live.materials.native());
+        }
+        let (animating, dt) = self.app.clock_advance(&mut self.core.clock, now, false);
+        StepInfo { runtime_animating: animating, animating, dt, update_ms: 0.0, presents_at: None }
+    }
+
+    fn is_unchanged(&mut self, info: &StepInfo) -> bool {
+        let (Some(live), Some(presented)) = (self.core.surface.live(), self.core.quiet.presented()) else {
+            return false;
+        };
+        #[cfg(target_os = "macos")]
+        let next_tick = {
+            let now = self.now.unwrap_or_else(crate::time::now);
+            live.pacing.as_ref().map(|p| p.tick_after(now))
+        };
+        #[cfg(not(target_os = "macos"))]
+        let next_tick = None;
+        presented.unchanged_core(self.app.rt(), &live.config, info.animating, next_tick)
+    }
+
+    fn on_unchanged(&mut self, _info: &StepInfo) {
+        self.more = self.core.unchanged_frame(self.app);
+    }
+
+    fn on_quiet_will_draw(&mut self) {
+        if let Some(live) = self.core.surface.live_mut() {
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(pacing) = live.pacing.as_mut() { let _ = pacing.next_frame(); }
+                live.settle();
+                self.paced = live.pacing.as_ref().is_some_and(|p| p.running());
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                live.settle();
+                self.paced = false;
+            }
+        }
+        if !self.prewarm { self.core.meter.redraw(self.paced || !cfg!(target_os = "macos")); }
+    }
+
+    fn acquire(&mut self) -> Acquire<wgpu::SurfaceTexture> {
+        let (Some(live), Some(gpu)) = (self.core.surface.live(), self.core.gpu.as_ref()) else {
+            return Acquire::Missed(crate::window::Missed::Unconfigured);
+        };
+        match crate::window::acquire_checked(
+            &live.surface,
+            gpu,
+            &live.config,
+            true,
+            if self.prewarm { 2 } else { 1 },
+            &mut self.core.meter,
+            !self.read_occlusion,
+        ) {
+            Ok(frame) => Acquire::Ready(frame),
+            Err(missed) => Acquire::Missed(missed),
+        }
+    }
+
+    fn step_runtime(&mut self) -> StepInfo {
+        let now = crate::time::now();
+        self.now = Some(now);
+        #[cfg(not(target_os = "macos"))]
+        let frame_time = now;
+        #[cfg(target_os = "macos")]
+        let frame_time = self.target.unwrap_or(now);
+        #[cfg(target_os = "macos")]
+        if let Some(live) = self.core.surface.live() {
+            self.app.rt_mut().paint.set_native_materials(live.materials.native());
+        }
+        let (animating, dt) = if !self.prewarm && frame::rests(self.app, self.core.runtime_idle, self.core.dirty) {
+            frame::rest(self.app, &mut self.core.clock, frame_time)
+        } else {
+            step(self.app, &mut self.core.clock, frame_time, self.prewarm)
+        };
+        #[cfg(target_os = "macos")]
+        let presents_at = self.target;
+        #[cfg(not(target_os = "macos"))]
+        let presents_at = None;
+        StepInfo { runtime_animating: animating, animating, dt, update_ms: 0.0, presents_at }
+    }
+
+    fn post_step_check(&mut self, _info: &mut StepInfo) -> PostStepCheck {
+        #[cfg(target_os = "macos")]
+        if !self.materials_checked {
+            self.materials_checked = true;
+            if let Some(live) = self.core.surface.live_mut() {
+                let Backing::Window(window) = &live.backing;
+                if live.materials.update(self.app.rt().transparent, !self.app.rt().paint.materials().is_empty(), window, &live.surface) {
+                    return PostStepCheck::Reacquire(ReacquireReason::NativeMaterials);
+                }
+            }
+        }
+        if self.needs_reblend() {
+            return PostStepCheck::Reacquire(ReacquireReason::Reblend);
+        }
+        PostStepCheck::Keep
+    }
+
+    fn prepare_reacquire(&mut self, reason: ReacquireReason, info: &mut StepInfo) -> bool {
+        match reason {
+            #[cfg(any(test, target_os = "macos"))]
+            ReacquireReason::NativeMaterials => {
+                // This drawable presents without the views: build again natively into a new one,
+                // so prewarm and reveal show the material from this frame.
+                self.app.rt_mut().paint.set_native_materials(true);
+                let more = self.app.frame(0.0);
+                info.runtime_animating |= more;
+                info.animating |= more;
+                true
+            }
+            ReacquireReason::Reblend => {
+                let _ = info;
+                self.reblend_surface()
+            }
+        }
+    }
+
+    fn on_missed(&mut self, missed: crate::window::Missed, stepped: bool) {
+        self.core.acquire_missed(self.app, missed, self.paced, self.prewarm, stepped);
+        self.more = false;
+    }
+
+    fn sync_after_step(&mut self, info: &mut StepInfo) {
+        let now = self.now.unwrap_or_else(crate::time::now);
+        info.update_ms = if self.app.has_compositor() { now.elapsed().as_secs_f64() * 1000.0 } else { 0.0 };
+        super::input::drop_window_requests(self.app.rt_mut());
+        self.core.clipboard.flush_core(self.app.rt_mut());
+        self.core.sync_ime(self.app);
+        // Publish the geometry just rendered, never a layout cached from the preceding frame.
+        self.core.publish_regions(self.app.rt());
+    }
+
+    fn prepare_render(&mut self, drawable: wgpu::SurfaceTexture, _info: &mut StepInfo) -> RenderPrep<PreparedOverlayFrame> {
+        let (Some(live), Some(renderer), Some(gpu)) = (
+            self.core.surface.live(),
+            self.core.renderer.as_mut(),
+            self.core.gpu.as_ref(),
+        ) else {
+            unreachable!("overlay surface, renderer and gpu live across frame");
+        };
+        let target_format = if self.app.rt().srgb_blend() { live.config.format.remove_srgb_suffix() } else { live.config.format };
+        let view = drawable.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: (target_format != live.config.format).then_some(target_format),
+            ..Default::default()
+        });
+        let size = (live.config.width, live.config.height);
+        prepare_gpu_resources(renderer, gpu, self.app.rt_mut(), size, true);
+        let encoder = gpu.device.create_command_encoder(&Default::default());
+        RenderPrep::Ready(PreparedOverlayFrame { frame: drawable, view, encoder, target_format, size })
+    }
+
+    fn render(&mut self, prepared: &mut PreparedOverlayFrame, info: &StepInfo) -> bool {
+        let (Some(live), Some(renderer), Some(gpu)) = (
+            self.core.surface.live(),
+            self.core.renderer.as_mut(),
+            self.core.gpu.as_ref(),
+        ) else {
+            return false;
+        };
+        let target = live.alpha.as_ref().map_or(&prepared.view, |a| &a.view);
+        let comp_animating = if self.app.has_compositor() {
+            self.app.render_compositor(OverlayRenderArgs {
+                device: &gpu.device,
+                queue: &gpu.queue,
+                encoder: &mut prepared.encoder,
+                target,
+                format: prepared.target_format,
+                size: prepared.size,
+                dt: info.dt,
+                update_ms: info.update_ms,
+                ui: renderer,
+            })
+        } else {
+            draw_ui(renderer, gpu, &mut prepared.encoder, target, self.app.rt_mut(), prepared.size, [0.0; 4]);
+            false
+        };
+        if let Some(alpha) = &live.alpha {
+            alpha.draw(&mut prepared.encoder, &prepared.view);
+        }
+        comp_animating
+    }
+
+    fn submit_and_present(&mut self, prepared: PreparedOverlayFrame, _info: &StepInfo) -> Instant {
+        let (Some(live), Some(renderer), Some(gpu)) = (
+            self.core.surface.live_mut(),
+            self.core.renderer.as_ref(),
+            self.core.gpu.as_ref(),
+        ) else {
+            return crate::time::now();
+        };
+        frame::submit_and_present(live, renderer, gpu, self.app.rt(), prepared.encoder, prepared.frame, self.prewarm);
+        // The next frame waits for the room this one took (`slot`).
+        #[cfg(target_os = "windows")]
+        live.slot.presented_surface(&live.surface);
+        crate::render::gpu_events::presented();
+        crate::time::now()
+    }
+
+    fn present_targets(&mut self) -> (Option<&mut FrameClock>, &mut RuntimeCore) {
+        (Some(&mut self.core.clock), self.app.rt_mut())
+    }
+
+    fn settle(&mut self, submitted: Instant, info: &StepInfo) {
+        if !self.prewarm { self.core.meter.presented(); }
+        self.core.dirty = false;
+        let Some(live) = self.core.surface.live_mut() else {
+            self.more = false;
+            return;
+        };
+        #[cfg(target_os = "macos")]
+        let next_tick = live.pacing.as_ref().filter(|p| !self.prewarm && p.running()).map(|p| submitted + Duration::from_secs_f64(1.0 / p.refresh_hz()));
+        #[cfg(not(target_os = "macos"))]
+        let next_tick = None;
+        self.core.idle = idle_after(self.app.rt(), info.animating, next_tick);
+        self.core.runtime_idle = !self.prewarm && idle_after(self.app.rt(), info.runtime_animating, next_tick);
+        let rt = self.app.rt();
+        self.core.quiet.presented_frame(!self.prewarm && self.core.idle && !self.app.has_compositor(), |slot| {
+            crate::window::Presented::record_core(slot, rt, &live.config, false);
+        });
+        if !self.prewarm { self.core.backoff.step(crate::window::BackoffEvent::Presented); }
+        // The display link wakes this overlay, never ControlFlow::Poll. Without one (it can't
+        // be made while the displays sleep, or didn't start), a timer paces its motion.
+        #[cfg(target_os = "macos")]
+        {
+            let now = self.now.unwrap_or(submitted);
+            let idle = self.core.idle;
+            let paced = live.pacing.as_mut().is_some_and(|pacing| {
+                pacing.presented(submitted);
+                if self.prewarm || idle { pacing.stop(); }
+                pacing.running()
+            });
+            if !paced && !self.prewarm && !idle { self.core.backoff.step(crate::window::BackoffEvent::At(now + crate::window::TIMER_FRAME)); }
+            // A display link that couldn't be made while the displays slept: they're back.
+            if !self.prewarm && live.pacing.is_none() && let Some(wake) = &self.core.frame_wake {
+                let Backing::Window(window) = &live.backing;
+                live.pacing = crate::platform::display_link::DisplayLink::retry(window, wake.clone());
+            }
+            if !self.prewarm { self.core.meter.set_pacing(crate::platform::display_link::pacing(live.pacing.as_ref(), !idle)); }
+            self.more = false;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = submitted;
+            if !self.prewarm { self.core.meter.set_pacing(if self.core.idle { crate::Pacing::Idle } else { crate::Pacing::Vsync }); }
+            self.more = !self.core.idle;
+        }
+    }
+}
+
+impl OverlayCore {
     /// Draws a frame if one is due; true while it needs more (animating).
-    pub(super) fn draw(&mut self) -> bool {
-        self.presence_due(Instant::now());
+    pub(super) fn draw(&mut self, app: &mut dyn OverlayApp) -> bool {
+        self.presence_due(app, crate::time::now());
         if !self.presence.drawing() {
-            self.drain_hidden();
+            self.drain_hidden(app);
             return false;
         }
-        let more = self.draw_frame(false);
-        self.open_popup();
+        let more = self.draw_frame(app, false);
+        self.open_popup(app);
         more
     }
 
     /// A layer surface kept while hidden (prewarmed, not shown yet) still hears the compositor.
-    fn drain_hidden(&mut self) {
+    fn drain_hidden(&mut self, app: &mut dyn OverlayApp) {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut() && layer.drain() {
-            self.hide();
+            self.hide(app);
         }
+        #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+        let _ = app;
     }
 
     /// One input event a layer or XWayland surface read on its own connection.
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-    fn surface_input(&mut self, input: crate::platform::layer_shell::Input) {
+    fn surface_input(&mut self, app: &mut dyn OverlayApp, input: crate::platform::layer_shell::Input) {
         use crate::platform::layer_shell::Input;
         match input {
-            Input::Move(x, y) => { self.dirty |= self.rt.observe_pointer(x, y); return; }
-            Input::Leave => self.rt.pointer_leave(),
-            Input::Button(down) => if let Some((x, y)) = self.rt.pointer() {
-                if down { self.rt.pointer_down(x, y); } else { self.rt.pointer_up(x, y); }
+            Input::Move(x, y) => {
+                let zoom = app.rt().zoom();
+                self.dirty |= app.observe_pointer(x / zoom, y / zoom);
+                return;
+            }
+            Input::Leave => app.rt_mut().pointer_leave(),
+            Input::Button(down) => if let Some((x, y)) = app.rt().pointer() {
+                if down { app.pointer_down(x, y); } else { app.pointer_up(x, y); }
             },
-            Input::Secondary(down) => if let Some((x, y)) = self.rt.pointer() { if down { self.rt.secondary_down(x, y) } else { self.rt.secondary_up(x, y) } },
-            Input::Key(key) => self.rt.key(key),
+            Input::Secondary(down) => if let Some((x, y)) = app.rt().pointer() { if down { app.rt_mut().secondary_down(x, y) } else { app.secondary_up(x, y) } },
+            Input::Focus(focused) => {
+                app.window_focus(focused);
+                app.rt_mut().ignore_minimize("an overlay");
+                if matches!(app.rt_mut().shell_request.take(), Some(crate::el::Shell::Close)) {
+                    self.hide(app);
+                    return;
+                }
+            }
+            Input::Key(key) => app.rt_mut().key(key),
             Input::KeyUp(key) => {
-                self.dirty |= self.rt.key_up(key);
+                self.dirty |= app.key_up(key);
                 return;
             }
             Input::Physical(event, fallback) => {
-                let keep = matches!(event, crate::PhysicalInput::Key { pressed: true, .. }) || self.rt.wants_key_up();
-                self.dirty |= self.rt.physical_with_fallback(event, fallback.filter(|_| keep));
+                let keep = matches!(event, crate::PhysicalInput::Key { pressed: true, .. }) || app.rt().wants_key_up();
+                self.dirty |= app.physical_with_fallback(event, fallback.filter(|_| keep));
                 return;
             }
         }
@@ -52,263 +484,73 @@ impl<T: 'static> Overlay<T> {
     /// Opens the pop-up menu a handler asked for over the overlay's panel. A hidden or occluded
     /// overlay answers `None`, committed with its next frame. One anchored to an element waits
     /// for the frame that commits what changed since the last.
-    pub(super) fn open_popup(&mut self) {
+    pub(super) fn open_popup(&mut self, app: &mut dyn OverlayApp) {
         let window = match self.surface.live().map(|l| &l.backing) {
             Some(Backing::Window(w)) if self.presence.shown() && !self.presence.occluded() => Some(w.clone()),
             _ => None,
         };
-        if self.popup.open(&mut self.rt, window.as_ref(), true) { self.dirty = true; }
+        if app.popup_open(&mut self.popup, window.as_ref(), true) { self.dirty = true; }
     }
 
-    pub(super) fn draw_frame(&mut self, prewarm: bool) -> bool {
-        let timer = !self.quiet.step(frame::QuietEvent::FrameStarts).is_empty();
-        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut() {
-            let changes = layer.dispatch();
-            if changes.closed {
-                self.hide();
-                return false;
-            }
-            for input in changes.input { self.surface_input(input); }
-            if let Some((w, h)) = changes.size {
-                let size = (if w == 0 { self.at.size.0 } else { w as f32 }, if h == 0 { self.at.size.1 } else { h as f32 });
-                if size != self.at.size {
-                    self.at.size = size;
-                    if let Some(live) = self.surface.live_mut() { live.scale = 0.0; }
-                }
-            }
-            if let Some(scale) = changes.scale {
-                if let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut() { layer.set_buffer_scale(scale); }
-                if let Some(gpu) = self.gpu.clone() {
-                    self.rescale(&gpu, scale as f32);
-                }
-            }
-            if self.surface.live().is_some_and(|l| l.scale == 0.0) && let Some(gpu) = self.gpu.clone() {
-                self.rescale(&gpu, self.rt.env.scale);
-            }
-        }
-        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if let Some(Live { backing: Backing::Xwayland(surface), .. }) = self.surface.live_mut() {
-            let input = surface.dispatch();
-            for input in input { self.surface_input(input); }
-        }
-        self.apply_input();
-        if self.surface.live().is_none() || self.renderer.is_none() || self.gpu.is_none() {
-            return false;
-        }
-        // `sync_occlusion` below reads, once a turn, the panel hosting the surface: the window
-        // the acquire would check again.
-        #[cfg(target_os = "macos")]
-        let read_occlusion = !prewarm && self.panel.is_some();
-        #[cfg(not(target_os = "macos"))]
-        let read_occlusion = false;
-        // Even an idle overlay looks again on its retry while occluded: the occlusion
-        // notification that should uncover it may never come.
-        #[cfg(target_os = "macos")]
-        if !prewarm { self.sync_occlusion(); }
-        let gate = frame::Gate { prewarm, occluded: cfg!(target_os = "macos") && self.presence.occluded(), dirty: self.dirty, idle: self.idle, retry: self.backoff.deadline() };
-        match frame::turn(gate, Instant::now) {
-            frame::Turn::Occluded { recheck } => {
-                if recheck {
-                    self.meter.skipped();
-                    self.missed(crate::window::Missed::Occluded, false, false);
-                }
-                return false;
-            }
-            // `wake_due` runs due timers while it backs off.
-            frame::Turn::Rest | frame::Turn::BackedOff => return false,
-            frame::Turn::Draw => if !prewarm { self.backoff_step(crate::window::BackoffEvent::Lapsed); },
-        }
-        let (Some(live), Some(renderer), Some(gpu)) = (self.surface.live_mut(), self.renderer.as_mut(), self.gpu.as_ref()) else {
-            return false;
-        };
-        // Only a timer woke the resting overlay: build the frame first, and take neither a
-        // drawable nor a display tick when it draws what's on screen. The link, stopped, would
-        // draw it at once anyway (`defers_start`).
-        let quiet = self.quiet.presented().filter(|_| timer && !prewarm && self.compositor.is_none()
-            && !self.rt.has_pending_input() && renderer.srgb_blend() == self.rt.srgb_blend());
-        #[cfg(target_os = "macos")]
-        let quiet = quiet.filter(|_| live.pacing.as_ref().is_none_or(|p| p.defers_start(Instant::now())));
-        let built = match quiet {
-            Some(presented) => {
-                let now = Instant::now();
-                #[cfg(target_os = "macos")]
-                { self.rt.native_materials = live.materials.native(); }
-                #[cfg(target_os = "macos")]
-                let next_tick = live.pacing.as_ref().map(|p| p.tick_after(now));
-                #[cfg(not(target_os = "macos"))]
-                let next_tick = None;
-                match frame::quiet_step(&mut self.rt, &mut self.clock, presented, &live.config, now, next_tick) {
-                    Some((animating, dt)) => Some((animating, dt, now)),
-                    None => return self.unchanged_frame(),
-                }
-            }
-            None => None,
-        };
-        #[cfg(target_os = "macos")]
-        let target = {
-            let opportunity = if prewarm { None } else { live.pacing.as_mut().map(|p| p.next_frame()) };
-            let Some(target) = frame::claim(opportunity, || live.settle()) else { return false };
-            target
-        };
-        #[cfg(not(target_os = "macos"))]
-        live.settle();
-        #[cfg(target_os = "macos")]
-        let paced = live.pacing.as_ref().is_some_and(|p| p.running());
-        #[cfg(not(target_os = "macos"))]
-        let paced = false;
-        // The present queue's vsync paces redraws where no display link does.
-        if !prewarm { self.meter.redraw(paced || !cfg!(target_os = "macos")); }
-        if renderer.srgb_blend() != self.rt.srgb_blend() {
-            if !crate::window::reblend(&live.surface, gpu, &mut live.config, renderer, &mut live.alpha, &mut self.rt) { self.surface_refused("its GPU surface refused a new configuration".into()); return false }
-        }
-        let frame = match crate::window::acquire_checked(&live.surface, gpu, &live.config, true, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
-            Ok(frame) => frame,
-            Err(missed) => {
-                if missed == crate::window::Missed::Unconfigured { self.surface_refused("its GPU surface refused a new configuration".into()); return false; }
-                if !prewarm {
-                    #[cfg(target_os = "macos")]
-                    if missed == crate::window::Missed::Occluded { self.set_occluded(true); }
-                    self.missed(missed, paced, false);
-                }
-                return false;
-            }
-        };
-        let now = built.map_or_else(Instant::now, |(_, _, now)| now);
-        #[cfg(not(target_os = "macos"))]
-        let frame_time = now;
-        #[cfg(target_os = "macos")]
-        let frame_time = target.unwrap_or(now);
-        #[cfg(target_os = "macos")]
-        { self.rt.native_materials = live.materials.native(); }
-        let (mut animating, dt) = if let Some((animating, dt, _)) = built {
-            (animating, dt)
-        } else if !prewarm && frame::rests(&self.rt, self.runtime_idle, self.dirty) {
-            frame::rest(&mut self.rt, &mut self.clock, &self.compositor, frame_time)
-        } else {
-            step(&mut self.rt, &mut self.clock, &self.compositor, frame_time, prewarm)
-        };
-        #[cfg(target_os = "macos")]
-        let frame = {
-            let Backing::Window(window) = &live.backing;
-            if live.materials.update(self.rt.transparent, !self.rt.materials.is_empty(), window, &live.surface) {
-                // This drawable presents without the views: build again natively into a new one,
-                // so prewarm and reveal show the material from this frame.
-                drop(frame);
-                self.rt.native_materials = true;
-                animating |= self.rt.frame(0.0);
-                match crate::window::acquire_checked(&live.surface, gpu, &live.config, true, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
-                    Ok(frame) => frame,
-                    // Returning true turned the loop with ControlFlow::Poll; wait like any miss.
-                    Err(missed) => {
-                        if missed == crate::window::Missed::Unconfigured { self.surface_refused("its GPU surface refused a new configuration".into()); return false; }
-                        if !prewarm {
-                            if missed == crate::window::Missed::Occluded { self.set_occluded(true); }
-                            self.missed(missed, paced, true);
-                        }
-                        return false;
-                    }
-                }
-            } else { frame }
-        };
-        // A handler switched blending (`Tx::set_srgb_blend`): this drawable has the old format.
-        let frame = if renderer.srgb_blend() != self.rt.srgb_blend() {
-            drop(frame);
-            if !crate::window::reblend(&live.surface, gpu, &mut live.config, renderer, &mut live.alpha, &mut self.rt) { self.surface_refused("its GPU surface refused a new configuration".into()); return false }
-            match crate::window::acquire_checked(&live.surface, gpu, &live.config, true, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
-                Ok(frame) => frame,
-                Err(missed) => {
-                    if missed == crate::window::Missed::Unconfigured { self.surface_refused("its GPU surface refused a new configuration".into()); return false; }
-                    if !prewarm {
-                        #[cfg(target_os = "macos")]
-                        if missed == crate::window::Missed::Occluded { self.set_occluded(true); }
-                        self.missed(missed, paced, true);
-                    }
-                    return false;
-                }
-            }
-        } else { frame };
-        let update_ms = if self.compositor.is_some() { now.elapsed().as_secs_f64() * 1000.0 } else { 0.0 };
-        super::input::drop_window_requests(&mut self.rt);
-        self.clipboard.flush(&mut self.rt);
-        // Publish the geometry just rendered, never a layout cached from the preceding frame.
-        #[cfg(target_os = "macos")]
-        if let Some(panel) = &self.panel { panel.set_regions(self.rt.hit_regions()); }
-        #[cfg(target_os = "windows")]
-        if let Some(native) = &self.native { native.set_regions(self.rt.hit_regions(), live.scale); }
-        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if self.options.input == OverlayInput::Regions && let Some(x11) = &mut self.x11 { x11.regions(self.rt.hit_regions(), live.scale); }
-        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if let Backing::Layer(layer) = &live.backing { layer.input_regions(self.rt.hit_regions(), self.interactive); }
-        // An X11 input shape applies at once with no commit; `regions` skips an unchanged shape.
-        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if let Backing::Xwayland(surface) = &mut live.backing { surface.regions(self.rt.hit_regions()); }
-        let target_format = if self.rt.srgb_blend() { live.config.format.remove_srgb_suffix() } else { live.config.format };
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: (target_format != live.config.format).then_some(target_format),
-            ..Default::default()
-        });
-        let runtime_animating = animating;
-        let mut enc = gpu.device.create_command_encoder(&Default::default());
-        animating |= render_frame(&mut Frame {
-            device: &gpu.device, queue: &gpu.queue, encoder: &mut enc,
-            target: live.alpha.as_ref().map_or(&view, |a| &a.view), format: target_format,
-            size: (live.config.width, live.config.height), dt, update_ms,
-            rt: &mut self.rt, ui: renderer,
-        }, &mut self.compositor);
-        if let Some(alpha) = &live.alpha {
-            alpha.draw(&mut enc, &view);
-        }
-        frame::submit_and_present(live, renderer, gpu, &self.rt, enc, frame, prewarm);
-        crate::render::gpu_events::presented();
-        self.clock.presented(&mut self.rt, Instant::now());
-        if !prewarm { self.meter.presented(); }
-        self.dirty = false;
-        #[cfg(target_os = "macos")]
-        let next_tick = live.pacing.as_ref().filter(|p| !prewarm && p.running()).map(|p| Instant::now() + Duration::from_secs_f64(1.0 / p.refresh_hz()));
-        #[cfg(not(target_os = "macos"))]
-        let next_tick = None;
-        self.idle = idle_after(&self.rt, animating, next_tick);
-        self.runtime_idle = !prewarm && idle_after(&self.rt, runtime_animating, next_tick);
-        let rt = &self.rt;
-        self.quiet.presented_frame(!prewarm && self.idle && self.compositor.is_none(), |slot| crate::window::Presented::record(slot, rt, &live.config, false));
-        if !prewarm { self.backoff.step(crate::window::BackoffEvent::Presented); }
-        // The display link wakes this overlay, never ControlFlow::Poll. Without one (it can't
-        // be made while the displays sleep, or didn't start), a timer paces its motion.
-        #[cfg(target_os = "macos")]
+    /// Syncs OS IME allowance and cursor area for overlays that accept on-demand keyboard focus.
+    fn sync_ime(&mut self, app: &mut dyn OverlayApp) {
+        if self.options.keys == KeyPolicy::OnDemand
+            && let Some(window) = self.surface.live().and_then(|l| l.backing.window())
         {
-            let idle = self.idle;
-            let paced = live.pacing.as_mut().is_some_and(|pacing| {
-                pacing.presented(Instant::now());
-                if prewarm || idle { pacing.stop(); }
-                pacing.running()
-            });
-            if !paced && !prewarm && !idle { self.backoff.step(crate::window::BackoffEvent::At(now + crate::window::TIMER_FRAME)); }
-            // A display link that couldn't be made while the displays slept: they're back.
-            if !prewarm && live.pacing.is_none() && let Some(wake) = &self.frame_wake {
-                let Backing::Window(window) = &live.backing;
-                live.pacing = crate::platform::display_link::DisplayLink::retry(window, wake.clone());
-            }
-            if !prewarm { self.meter.set_pacing(crate::platform::display_link::pacing(live.pacing.as_ref(), !idle)); }
-            false
+            #[cfg(target_os = "macos")]
+            let focused = self.panel.as_ref().map_or_else(|| window.has_focus(), |p| p.is_key());
+            #[cfg(not(target_os = "macos"))]
+            let focused = window.has_focus();
+            crate::input::host_events::sync_ime(window, app.rt_mut(), &mut self.ime_allowed, focused);
         }
-        #[cfg(not(target_os = "macos"))]
-        {
-            if !prewarm { self.meter.set_pacing(if self.idle { crate::Pacing::Idle } else { crate::Pacing::Vsync }); }
-            !self.idle
+    }
+
+    pub(super) fn draw_frame(&mut self, app: &mut dyn OverlayApp, prewarm: bool) -> bool {
+        let mut frame = OverlayFrame {
+            core: self,
+            app,
+            prewarm,
+            read_occlusion: false,
+            paced: false,
+            #[cfg(target_os = "macos")]
+            target: None,
+            #[cfg(target_os = "macos")]
+            materials_checked: false,
+            now: None,
+            more: false,
+        };
+        host_step::run(&mut frame);
+        frame.more
+    }
+
+    /// Handles a failed drawable acquisition during `draw_frame`.
+    pub(super) fn acquire_missed(&mut self, app: &mut dyn OverlayApp, missed: crate::window::Missed, paced: bool, prewarm: bool, built: bool) {
+        if missed == crate::window::Missed::Unconfigured {
+            if built {
+                super::input::drop_window_requests(app.rt_mut());
+                self.clipboard.flush_core(app.rt_mut());
+            }
+            self.surface_refused(app, "its GPU surface refused a new configuration".into());
+            return;
+        }
+        if !prewarm {
+            #[cfg(target_os = "macos")]
+            if missed == crate::window::Missed::Occluded { self.set_occluded(app, true); }
+            self.missed(app, missed, paced, built);
         }
     }
 
     /// A timer frame that would draw what's on screen: what a drawn frame does besides drawing.
-    fn unchanged_frame(&mut self) -> bool {
-        super::input::drop_window_requests(&mut self.rt);
-        self.clipboard.flush(&mut self.rt);
+    fn unchanged_frame(&mut self, app: &mut dyn OverlayApp) -> bool {
+        super::input::drop_window_requests(app.rt_mut());
+        self.clipboard.flush_core(app.rt_mut());
+        self.sync_ime(app);
         // Hit regions paint nothing, so a frame can change only them (a full-screen drawing
         // surface turning on); no presentation follows to commit them.
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if self.publish_regions() && let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut() { layer.commit(); }
+        if self.publish_regions(app.rt()) && let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut() { layer.commit(); }
         #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
-        self.publish_regions();
+        self.publish_regions(app.rt());
         self.meter.redraw(true);
         self.dirty = false;
         self.idle = true;
@@ -321,18 +563,18 @@ impl<T: 'static> Overlay<T> {
     /// ambient loops and live values; uncovered, it redraws once and resumes them. A
     /// fading-out panel never becomes occluded (`Presence::set_occluded`).
     #[cfg(target_os = "macos")]
-    pub(super) fn occluded(&mut self, occluded: bool) {
+    pub(super) fn occluded(&mut self, app: &mut dyn OverlayApp, occluded: bool) {
         if !self.presence.set_occluded(occluded) { return; }
         self.idle = true;
         // What it last presented may not be what shows once uncovered.
         self.quiet.step(frame::QuietEvent::Forget);
         if occluded {
             if let Some(live) = self.surface.live_mut() && let Some(pacing) = &mut live.pacing { pacing.stop(); }
-            self.rt.set_live_visible(false);
+            app.set_live_visible(false);
         } else if self.presence.drawing() {
             self.dirty = true;
             self.backoff_step(crate::window::BackoffEvent::Revealed);
-            self.rt.set_live_visible(true);
+            app.set_live_visible(true);
             self.ensure_pacing();
         }
     }
@@ -341,16 +583,16 @@ impl<T: 'static> Overlay<T> {
     /// no event saying so. Once a loop turn: the tick's draw and `about_to_wait` share it, and
     /// `Occluded` events land in between.
     #[cfg(target_os = "macos")]
-    pub(super) fn sync_occlusion(&mut self) {
+    pub(super) fn sync_occlusion(&mut self, app: &mut dyn OverlayApp) {
         if std::mem::replace(&mut self.occlusion_read, true) { return; }
         let occluded = self.panel.as_ref().is_some_and(|p| p.occluded());
-        self.set_occluded(occluded);
+        self.set_occluded(app, occluded);
     }
 
     /// Applies an occlusion reading when it changes what the panel holds.
     #[cfg(target_os = "macos")]
-    pub(super) fn set_occluded(&mut self, occluded: bool) {
-        if occluded != self.presence.occluded() { self.occluded(occluded); }
+    pub(super) fn set_occluded(&mut self, app: &mut dyn OverlayApp, occluded: bool) {
+        if occluded != self.presence.occluded() { self.occluded(app, occluded); }
     }
 
     /// A display link made while the displays slept fails; try again once they may be back. One
@@ -366,42 +608,43 @@ impl<T: 'static> Overlay<T> {
     }
 
     /// Warm glyphs/pipelines and, on macOS, the retained alpha-zero host's actual surface.
-    pub(super) fn warm(&mut self) {
-        self.rt.frame(0.0);
-        self.rt.settle_all();
-        self.rt.frame(0.0);
-        self.clock.hold(Instant::now());
-        self.warm_frame();
+    pub(super) fn warm(&mut self, app: &mut dyn OverlayApp) {
+        app.frame(0.0);
+        app.rt_mut().settle_all();
+        app.frame(0.0);
+        self.clock.hold(crate::time::now());
+        self.warm_frame(app);
     }
 
-    pub(super) fn warm_frame(&mut self) {
-        self.publish_regions();
+    pub(super) fn warm_frame(&mut self, app: &mut dyn OverlayApp) {
+        self.publish_regions(app.rt());
         #[cfg(target_os = "macos")]
         if let Some(panel) = &self.panel {
             let _prewarm = panel.prewarm();
             self.dirty = true;
-            self.draw_frame(true);
-            if let Some(gpu) = &self.gpu { let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely()); }
+            self.draw_frame(app, true);
+            if let Some(gpu) = &self.gpu { rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok(); }
             return;
         }
         let Some(live) = self.surface.live() else { return };
-        self.warm_offscreen((live.config.width, live.config.height));
+        self.warm_offscreen(app, (live.config.width, live.config.height));
     }
 
-    pub(super) fn warm_offscreen(&mut self, size: (u32, u32)) {
+    pub(super) fn warm_offscreen(&mut self, app: &mut dyn OverlayApp, size: (u32, u32)) {
         let (Some(renderer), Some(gpu)) = (&mut self.renderer, &self.gpu) else { return };
         let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("overlay prewarm"), size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
             mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
             format: renderer.format(), usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[],
         });
+        let view = target.create_view(&Default::default());
         let mut enc = gpu.device.create_command_encoder(&Default::default());
-        render_frame(&mut Frame {
+        render_frame(app, OverlayRenderArgs {
             device: &gpu.device, queue: &gpu.queue, encoder: &mut enc,
-            target: &target.create_view(&Default::default()), format: renderer.format(), size,
-            dt: 0.0, update_ms: 0.0, rt: &mut self.rt, ui: renderer,
-        }, &mut self.compositor);
+            target: &view, format: renderer.format(), size,
+            dt: 0.0, update_ms: 0.0, ui: renderer,
+        });
         renderer.submit(&gpu.queue, enc);
-        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
     }
 }

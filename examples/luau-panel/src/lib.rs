@@ -9,7 +9,7 @@
 use std::cell::Cell;
 use std::time::Duration;
 
-use rune::time::Instant;
+use rune::time::now;
 use rune::{AppSpec, Cx, El, Tx, Waker, col};
 use rune_luau::{Script, Sources};
 
@@ -56,7 +56,7 @@ fn init() -> State {
 
 pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     let calls = s.script.metrics().vm_calls;
-    let start = Instant::now();
+    let start = now();
     let panel = s.script.view(cx);
     s.view_time.set(start.elapsed());
     s.view_calls.set(s.script.metrics().vm_calls - calls);

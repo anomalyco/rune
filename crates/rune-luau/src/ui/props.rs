@@ -6,6 +6,8 @@
 //! `onPress`), text (`size`, `weight`, `color`) and list props (`count`, `renderRow`); colours are
 //! palette names or `ui.hex(...)`.
 
+#![allow(unsafe_code)]
+
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use std::rc::Rc;
@@ -77,6 +79,7 @@ atoms! {
     ScrollX = "scrollX",
     StickBottom = "stickBottom",
     OnPress = "onPress",
+    MenuTrigger = "menuTrigger",
     Color = "color",
     Size = "size",
     Weight = "weight",
@@ -108,6 +111,7 @@ atoms! {
     Focusable = "focusable",
     Disabled = "disabled",
     HelpSide = "helpSide",
+    HelpOpen = "helpOpen",
     FadeOut = "fadeOut",
     Dir = "dir",
 }
@@ -208,6 +212,8 @@ pub(crate) struct Props {
     corners: Option<[f32; 4]>,
     selected: bool,
     pub(crate) disabled: bool,
+    /// `menuTrigger`: the `onPress` opens a menu, so a mouse runs it as its button goes down.
+    menu_trigger: bool,
     text: TextStyle,
     color: Option<Color>,
     truncate: bool,
@@ -238,6 +244,7 @@ impl Props {
             corners: None,
             selected: false,
             disabled: false,
+            menu_trigger: false,
             text: env.text,
             color: None,
             truncate: false,
@@ -261,6 +268,10 @@ impl Props {
         let key: Option<Rc<str>> = (press.is_some() || middle.is_some() || self.on_hover.is_some()).then(|| self.key.as_deref().map(Into::into)).flatten();
         if let Some(cb) = press {
             (attach.press)(e, cb, key.clone(), Rc::new([]));
+            // Kobalte's `Menu.Trigger` opens on a mouse's `pointerdown`; keys and taps on the click.
+            if self.menu_trigger {
+                with(e, El::press_on_down);
+            }
         }
         if let Some(cb) = middle {
             with(e, |e| (attach.middle)(e, cb, key.clone()));
@@ -537,6 +548,7 @@ impl Props {
                 }
             }
             Atom::Disabled => self.disabled = flag(v)?,
+            Atom::MenuTrigger => self.menu_trigger = flag(v)?,
             Atom::HelpSide => {
                 let side = match v {
                     Value::Str("top") => Some(rune::Side::Top),
@@ -546,6 +558,12 @@ impl Props {
                 };
                 if let Some(side) = side {
                     with(e, |e| e.help_side(side));
+                }
+            }
+            // A Copy button's "Copied" held up after the press (`El::help_open`).
+            Atom::HelpOpen => {
+                if flag(v)? {
+                    with(e, |e| e.help_open(true));
                 }
             }
             Atom::FadeOut => self.fade_out = flag(v)?,
@@ -675,6 +693,7 @@ fn role(s: &str) -> Option<&'static str> {
         "heading" => "heading",
         "img" => "img",
         "status" => "status",
+        "timer" => "timer",
         "alert" => "alert",
         _ => return None,
     })
@@ -701,5 +720,5 @@ pub(crate) fn format_num(n: f64) -> String {
 /// [`format_num`] onto the end of `out`.
 pub(crate) fn push_num(out: &mut String, n: f64) {
     use std::fmt::Write;
-    let _ = if n.fract() == 0.0 && n.abs() < 1e15 { write!(out, "{}", n as i64) } else { write!(out, "{n}") };
+    if n.fract() == 0.0 && n.abs() < 1e15 { write!(out, "{}", n as i64).ok(); } else { write!(out, "{n}").ok(); }
 }

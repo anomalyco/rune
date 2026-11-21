@@ -137,6 +137,7 @@ fn rotated_glyphs() {
                     fade,
                     fade_origin: None,
                     turn: None,
+                    clip_radii: None,
                 });
                 if let Err(e) = check(&mut gpu, &scene, 2) {
                     save(&format!("rotated-{n}-{}-clip-{c}", uv[2]), &scene);
@@ -292,6 +293,7 @@ fn cpu_gpu_radial() {
         fade: [0.0; 4],
         fade_origin: None,
         turn: None,
+        clip_radii: None,
     };
     let outer = Primitive {
         node: 2,
@@ -500,5 +502,290 @@ fn cpu_gpu_turned_layers() {
             save(&format!("turned-{n}"), &scene);
             panic!("{e}");
         }
+    }
+}
+
+#[test]
+fn cpu_gpu_plus_lighter_layers() {
+    use rune::render::{Blend, Instance, KIND_RECT, LayerSpec, NO_CLIP};
+    let mut gpu = GpuRenderer::default();
+    let mut scene = generate::scene(&[]);
+    scene.width = 48;
+    scene.height = 48;
+    // Coloured background, then a PlusLighter dissolve layer with opacity 0.7 containing two
+    // overlapping rects whose sum saturates past 1.0, plus a nested opaque SourceOver layer
+    // (which must isolate rather than flatten into the additive parent).
+    let bg = Instance {
+        rect: [0.0, 0.0, 48.0, 48.0],
+        radii: [0.0; 4],
+        fill: [0.1, 0.2, 0.5, 1.0],
+        border: [0.0; 4],
+        params: [0.0, KIND_RECT, 0.0, 1.0],
+        uv: [0.0; 4],
+        clip: NO_CLIP,
+        fade: [0; 4],
+    };
+    let layer_open = Instance::begin_layer(
+        [4.0, 4.0, 40.0, 40.0],
+        NO_CLIP,
+        LayerSpec { opacity: 0.7, blend: Blend::PlusLighter, ..Default::default() },
+    );
+    let child_a = Instance {
+        rect: [6.0, 6.0, 26.0, 26.0],
+        radii: [4.0; 4],
+        fill: [0.6, 0.15, 0.05, 0.65],
+        border: [0.0; 4],
+        params: [0.0, KIND_RECT, 0.0, 1.0],
+        uv: [0.0; 4],
+        clip: NO_CLIP,
+        fade: [0; 4],
+    };
+    let child_b = Instance {
+        rect: [16.0, 16.0, 26.0, 26.0],
+        radii: [4.0; 4],
+        fill: [0.55, 0.45, 0.1, 0.6],
+        border: [0.0; 4],
+        params: [0.0, KIND_RECT, 0.0, 1.0],
+        uv: [0.0; 4],
+        clip: NO_CLIP,
+        fade: [0; 4],
+    };
+    let inner_open = Instance::begin_layer([12.0, 24.0, 20.0, 16.0], NO_CLIP, LayerSpec::default());
+    let inner_a = Instance {
+        rect: [12.0, 24.0, 14.0, 14.0],
+        radii: [0.0; 4],
+        fill: [0.0, 0.4, 0.0, 0.5],
+        border: [0.0; 4],
+        params: [0.0, KIND_RECT, 0.0, 1.0],
+        uv: [0.0; 4],
+        clip: NO_CLIP,
+        fade: [0; 4],
+    };
+    let inner_b = Instance {
+        rect: [18.0, 26.0, 14.0, 14.0],
+        radii: [0.0; 4],
+        fill: [0.0, 0.4, 0.3, 0.5],
+        border: [0.0; 4],
+        params: [0.0, KIND_RECT, 0.0, 1.0],
+        uv: [0.0; 4],
+        clip: NO_CLIP,
+        fade: [0; 4],
+    };
+    let instances = [
+        bg,
+        layer_open,
+        child_a,
+        child_b,
+        inner_open,
+        inner_a,
+        inner_b,
+        Instance::end_layer(),
+        Instance::end_layer(),
+    ];
+    scene.primitives = instances
+        .iter()
+        .enumerate()
+        .map(|(i, inst)| Primitive::from_instance(inst, i as u32 + 1, format!("plus-lighter/{i}")))
+        .collect();
+    if let Err(e) = check(&mut gpu, &scene, 2) {
+        save("plus-lighter", &scene);
+        panic!("{e}");
+    }
+}
+
+#[test]
+fn cpu_gpu_continuous_corners() {
+    use rune::render::{Instance, KIND_GRADIENT, KIND_INSET, KIND_RECT, NO_CLIP};
+    let mut gpu = GpuRenderer::default();
+    let mut scene = generate::scene(&[]);
+    scene.width = 64;
+    scene.height = 64;
+    let rect = Instance {
+        rect: [4.0, 4.0, 26.0, 26.0],
+        radii: [-8.0; 4],
+        fill: [0.7, 0.2, 0.3, 0.9],
+        border: [0.9, 0.8, 0.2, 0.9],
+        params: [2.0, KIND_RECT, 0.0, 0.9],
+        uv: [0.0; 4],
+        clip: NO_CLIP,
+        fade: [0; 4],
+    };
+    let grad = Instance {
+        rect: [34.0, 4.0, 26.0, 26.0],
+        radii: [-10.0, 0.0, -6.0, 4.0],
+        fill: [0.2, 0.6, 0.9, 1.0],
+        border: [0.0; 4],
+        params: [0.0, KIND_GRADIENT, 0.0, 1.0],
+        uv: [0.1, 0.2, 0.6, 1.0],
+        clip: NO_CLIP,
+        fade: [0; 4],
+    };
+    let inset = Instance {
+        rect: [8.0, 34.0, 48.0, 24.0],
+        radii: [-7.0; 4],
+        fill: [0.0, 0.0, 0.0, 0.6],
+        border: [0.0; 4],
+        params: [2.0, KIND_INSET, 3.0, 1.0],
+        uv: [1.0, 2.0, 0.0, 0.0],
+        clip: NO_CLIP,
+        fade: [0; 4],
+    };
+    scene.primitives = [rect, grad, inset]
+        .iter()
+        .enumerate()
+        .map(|(i, inst)| Primitive::from_instance(inst, i as u32 + 1, format!("continuous/{i}")))
+        .collect();
+    scene.validate().expect("continuous-corner primitives must validate");
+    if let Err(e) = check(&mut gpu, &scene, 2) {
+        save("continuous-corners", &scene);
+        panic!("{e}");
+    }
+}
+
+#[test]
+fn cpu_gpu_linear_fade_offset() {
+    use rune::render::{Instance, KIND_RECT, pack_fade};
+    let mut gpu = GpuRenderer::default();
+    let mut scene = generate::scene(&[]);
+    scene.width = 64;
+    scene.height = 64;
+    let clip = [12.0, 10.0, 52.0, 54.0];
+    // Negative widths select linear ramps; origin lies outside clip on all four edges so the
+    // ramp starts partially progressed at the hard clip boundary.
+    let fade_widths = [-16.0, -12.0, -20.0, -10.0];
+    let origin = [4.0, 4.0, 62.0, 59.0];
+    let inst = Instance {
+        rect: [0.0, 0.0, 64.0, 64.0],
+        radii: [0.0; 4],
+        fill: [0.85, 0.45, 0.2, 1.0],
+        border: [0.0; 4],
+        params: [0.0, KIND_RECT, 0.0, 1.0],
+        uv: [0.0; 4],
+        clip,
+        fade: pack_fade(fade_widths, origin, clip),
+    };
+    let prim = Primitive::from_instance(&inst, 1, "linear-fade-offset".into());
+    // Round-trip must preserve the packed origin offsets, not flip them across the clip edge.
+    let roundtrip = Instance::from(&prim);
+    assert_eq!(roundtrip.fade[2], inst.fade[2], "linear fade origin offsets must survive round-trip");
+    scene.primitives = vec![prim];
+    if let Err(e) = check(&mut gpu, &scene, 2) {
+        save("linear-fade-offset", &scene);
+        panic!("{e}");
+    }
+}
+
+#[test]
+fn cpu_gpu_rounded_clip_on_primitive() {
+    use rune::render::{Instance, KIND_RECT, pack_clip_radii};
+    let mut gpu = GpuRenderer::default();
+    let mut scene = generate::scene(&[]);
+    scene.width = 64;
+    scene.height = 64;
+    let clip_a = [4.0, 4.0, 28.0, 28.0];
+    let mut rect_a = Instance {
+        rect: [0.0, 0.0, 32.0, 32.0],
+        radii: [0.0; 4],
+        fill: [0.9, 0.3, 0.2, 1.0],
+        border: [0.0; 4],
+        params: [0.0, KIND_RECT, 0.0, 1.0],
+        uv: [0.0; 4],
+        clip: clip_a,
+        fade: [0; 4],
+    };
+    rect_a.fade[3] = pack_clip_radii(clip_a, [10.0; 4]);
+
+    let clip_b = [32.0, 4.0, 60.0, 32.0];
+    let mut rect_b = Instance {
+        rect: [28.0, 0.0, 36.0, 36.0],
+        radii: [0.0; 4],
+        fill: [0.2, 0.75, 0.4, 1.0],
+        border: [0.0; 4],
+        params: [0.0, KIND_RECT, 0.0, 1.0],
+        uv: [0.0; 4],
+        clip: clip_b,
+        fade: [0; 4],
+    };
+    rect_b.fade[3] = pack_clip_radii(clip_b, [-10.0, -6.0, 0.0, -8.0]);
+
+    let prim_a = Primitive::from_instance(&rect_a, 1, "rounded-clip-uniform".into());
+    let prim_b = Primitive::from_instance(&rect_b, 2, "rounded-clip-mixed".into());
+    assert_eq!(Instance::from(&prim_a).fade[3], rect_a.fade[3], "uniform rounded clip must survive round-trip");
+    assert_eq!(Instance::from(&prim_b).fade[3], rect_b.fade[3], "mixed continuous rounded clip must survive round-trip");
+    scene.primitives = vec![prim_a, prim_b];
+    if let Err(e) = check(&mut gpu, &scene, 2) {
+        save("rounded-clip-primitive", &scene);
+        panic!("{e}");
+    }
+}
+
+#[test]
+fn cpu_gpu_turned_plus_lighter_saturates_before_interpolation() {
+    use rune::render::{Blend, Instance, KIND_RECT, LayerSpec, NO_CLIP};
+    let mut gpu = GpuRenderer::default();
+    let make = |children: &[Instance]| -> Scene {
+        let mut scene = generate::scene(&[]);
+        scene.width = 48;
+        scene.height = 48;
+        scene.clear = [0.02, 0.04, 0.08, 1.0];
+        let open = Instance::begin_layer(
+            [12.0, 12.0, 24.0, 24.0],
+            NO_CLIP,
+            LayerSpec { opacity: 0.8, blend: Blend::PlusLighter, ..Default::default() },
+        )
+        .turned(0.4, [24.0, 24.0]);
+        let mut all = vec![open];
+        all.extend_from_slice(children);
+        all.push(Instance::end_layer());
+        scene.primitives = all
+            .iter()
+            .enumerate()
+            .map(|(i, inst)| Primitive::from_instance(inst, i as u32 + 1, format!("turned-add/{i}")))
+            .collect();
+        scene
+    };
+    let box_inst = |fill: [f32; 4]| Instance {
+        rect: [12.0, 12.0, 24.0, 24.0],
+        radii: [0.0; 4],
+        fill,
+        border: [0.0; 4],
+        params: [0.0, KIND_RECT, 0.0, 1.0],
+        uv: [0.0; 4],
+        clip: NO_CLIP,
+        fade: [0; 4],
+    };
+    // Two overlapping [0.8, 0.2, 0.0, 0.8] rects sum to [1.6, 0.4, 0.0, 1.6], which saturates to
+    // [1.0, 0.4, 0.0, 1.0]. Saturation must happen before the turned layer's bilinear sampling.
+    let single = make(&[box_inst([1.0, 0.4, 0.0, 1.0])]);
+    let doubled = make(&[box_inst([0.8, 0.2, 0.0, 0.8]), box_inst([0.8, 0.2, 0.0, 0.8])]);
+
+    let mut cpu_single = Frame::new(48, 48, true);
+    cpu_single.render(&single);
+    let mut cpu_doubled = Frame::new(48, 48, true);
+    cpu_doubled.render(&doubled);
+    let cpu_diff = compare(&doubled, &cpu_single, &cpu_doubled.rgba, 1);
+    assert_eq!(cpu_diff.outlier_pixels, 0, "rune-ref turned PlusLighter clamped after interpolation: {cpu_diff:?}");
+
+    let gpu_single = gpu.render(&single);
+    let gpu_doubled = gpu.render(&doubled);
+    let mut gpu_max = 0u8;
+    let mut gpu_worst = None;
+    for y in 0..48u32 {
+        for x in 0..48u32 {
+            let i = ((y * 48 + x) * 4) as usize;
+            let a = [gpu_single[i], gpu_single[i + 1], gpu_single[i + 2], gpu_single[i + 3]];
+            let b = [gpu_doubled[i], gpu_doubled[i + 1], gpu_doubled[i + 2], gpu_doubled[i + 3]];
+            let d = (0..4).map(|k| a[k].abs_diff(b[k])).max().unwrap();
+            if d > gpu_max {
+                gpu_max = d;
+                gpu_worst = Some((x, y, a, b));
+            }
+        }
+    }
+    assert!(gpu_max <= 1, "GPU turned PlusLighter clamped after interpolation: max={gpu_max} worst={gpu_worst:?}");
+
+    if let Err(e) = check(&mut gpu, &doubled, 2) {
+        save("turned-plus-lighter", &doubled);
+        panic!("{e}");
     }
 }

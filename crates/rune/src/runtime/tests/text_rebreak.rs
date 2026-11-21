@@ -8,7 +8,7 @@ fn resize_view(s: &bool, _: &mut Cx<bool>) -> El {
 }
 
 fn layout_of<'a>(rt: &'a Runtime<bool>, key: &str) -> &'a Rc<Layout<Ink>> {
-    rt.nodes.iter().find(|n| n.key.as_deref() == Some(key)).and_then(|n| n.text_layout.as_ref()?.single()).unwrap()
+    rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some(key)).and_then(|n| n.text_layout.as_ref()?.single()).unwrap()
 }
 
 /// A commit lets go of the last commit's text layouts before measuring, so on a resize each
@@ -28,7 +28,7 @@ fn resizing_rebreaks_kept_texts_in_place_and_leaving_ones_keep_their_layout() {
     let leaving = layout_of(&rt, "t2").clone();
     rt.update(|s, _| *s = false);
     rt.frame(3.0 / 120.0);
-    assert!(rt.is_exiting(rt.nodes.iter().find(|n| n.key.as_deref() == Some("t2")).unwrap().id));
+    assert!(rt.is_exiting(rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t2")).unwrap().id));
     assert!(Rc::ptr_eq(layout_of(&rt, "t2"), &leaving), "the leaving text draws its exit from its own layout");
 }
 
@@ -38,7 +38,7 @@ fn measuring_content_height_keeps_the_drawn_layouts() {
     let mut rt = Runtime::new(true, resize_view, (700.0, 900.0), Env::new(true, 2.0));
     rt.frame(0.0);
     let l = layout_of(&rt, "t0").clone();
-    rt.fit_height = true;
+    rt.host.fit_height = true;
     rt.content_height();
     assert!(Rc::ptr_eq(layout_of(&rt, "t0"), &l));
 }

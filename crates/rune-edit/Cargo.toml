@@ -1,0 +1,23 @@
+[package]
+name = "rune-edit"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+description = "Single and rich text-field editing, undo history, IME composition, HTML import/export, and key events for Rune."
+
+[dependencies]
+parley = { workspace = true, features = ["std"] }
+rune-core = { workspace = true }
+rune-text = { workspace = true }
+serde_json = { workspace = true }
+unicode-segmentation = { workspace = true }
+zeroize = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true }
+
+[dev-dependencies]
+rune-text = { workspace = true, features = ["embedded-fonts"] }
+
+[lints]
+workspace = true

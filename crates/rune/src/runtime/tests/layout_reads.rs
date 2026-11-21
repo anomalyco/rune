@@ -55,7 +55,7 @@ fn a_virtual_row_reads_where_it_draws_with_rows_culled_above() {
     rt.frame(0.0);
     rt.update(|_, tx| tx.scroll_to_instant("list", 0.0, 1000.0));
     for _ in 0..4 { rt.frame(1.0 / 60.0); }
-    assert!(rt.virtuals.values().next().unwrap().before > 0.0, "rows above the window are culled");
+    assert!(rt.commit.virtuals.values().next().unwrap().before > 0.0, "rows above the window are culled");
     let drawn = |key: &str| rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).map(|e| e.rect);
     let [row, label] = *seen.borrow();
     assert_eq!(drawn("r27").map(|r| r[1]), Some(80.0), "row 27 draws 1080 points down, scrolled 1000");

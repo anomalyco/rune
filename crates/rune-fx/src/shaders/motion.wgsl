@@ -14,9 +14,8 @@ fn pose(base: u32, k: u32, p: vec2f) -> vec3f {
     return vec3f(m.x * p.x + m.z * p.y + tw.x, m.y * p.x + m.w * p.y + tw.y, tw.z);
 }
 
-fn shade(in: VOut) -> vec4f {
-    let i = insts[in.id];
-    let p = in.px / i.shape.y;
+fn shade(i: Inst, px: vec2f) -> vec4f {
+    let p = px / i.shape.y;
     let first = u32(i.xf.x);
     let n = u32(i.xf.y);
     var acc = vec4f(0.0);
@@ -40,5 +39,5 @@ fn shade(in: VOut) -> vec4f {
         }
         acc /= max(wsum, 1e-4);
     }
-    return finish(acc, in.px);
+    return finish(acc, px);
 }

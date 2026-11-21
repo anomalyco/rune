@@ -1,5 +1,5 @@
 diff --git a/src/auxil/dxgi/factory.rs b/src/auxil/dxgi/factory.rs
-index ac050bcd..6e3c74ef 100644
+index ac050bc..6e3c74e 100644
 --- a/src/auxil/dxgi/factory.rs
 +++ b/src/auxil/dxgi/factory.rs
 @@ -9,7 +9,7 @@ use super::result::HResult as _;
@@ -11,8 +11,355 @@ index ac050bcd..6e3c74ef 100644
      let desc = unsafe { adapter.GetDesc1() }.unwrap();
  
      // The Intel Haswell family of iGPUs had support for the D3D12 API but it was later
+diff --git a/src/dx12/adapter.rs b/src/dx12/adapter.rs
+index 621eea4..fd5a64e 100644
+--- a/src/dx12/adapter.rs
++++ b/src/dx12/adapter.rs
+@@ -1096,6 +1096,7 @@ impl crate::Adapter for super::Adapter {
+         .into_device_result("Queue idle fence creation")?;
+         let idle_event = super::Event::create(false, false)?;
+ 
++        let drain = Arc::clone(&device.shared.drain);
+         Ok(crate::OpenDevice {
+             device,
+             queue: super::Queue {
+@@ -1106,6 +1107,7 @@ impl crate::Adapter for super::Adapter {
+                 idle_fence_value: AtomicU64::new(0),
+                 pending_waits: Mutex::new(Vec::new()),
+                 pending_signals: Mutex::new(Vec::new()),
++                drain,
+             },
+         })
+     }
+diff --git a/src/dx12/command.rs b/src/dx12/command.rs
+index 9e90e26..762d922 100644
+--- a/src/dx12/command.rs
++++ b/src/dx12/command.rs
+@@ -389,22 +389,22 @@ impl crate::CommandEncoder for super::CommandEncoder {
+     type A = super::Api;
+ 
+     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
+-        let list = loop {
+-            if let Some(list) = self.free_lists.pop() {
++        let reused = loop {
++            if let Some((list, list2)) = self.free_lists.pop() {
+                 // TODO: Is an error expected here and should we print it?
+                 let reset_result = unsafe { list.Reset(&self.allocator, None) };
+                 if reset_result.is_ok() {
+-                    break Some(list);
++                    break Some((list, list2));
+                 }
+             } else {
+                 break None;
+             }
+         };
+ 
+-        let list = if let Some(list) = list {
+-            list
++        let (list, list2) = if let Some(pair) = reused {
++            pair
+         } else {
+-            unsafe {
++            let list: Direct3D12::ID3D12GraphicsCommandList = unsafe {
+                 self.device.CreateCommandList(
+                     0,
+                     Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT,
+@@ -412,7 +412,13 @@ impl crate::CommandEncoder for super::CommandEncoder {
+                     None,
+                 )
+             }
+-            .into_device_result("Create command list")?
++            .into_device_result("Create command list")?;
++            let list2 = if self.shared.drain.has_marker() {
++                list.cast::<Direct3D12::ID3D12GraphicsCommandList2>().ok()
++            } else {
++                None
++            };
++            (list, list2)
+         };
+ 
+         if let Some(label) = label {
+@@ -425,24 +431,34 @@ impl crate::CommandEncoder for super::CommandEncoder {
+         self.end_of_pass_timer_query = None;
+ 
+         self.list = Some(list);
++        self.list2 = list2;
+         Ok(())
+     }
+     unsafe fn discard_encoding(&mut self) {
++        let list2 = self.list2.take();
+         if let Some(list) = self.list.take() {
+             if unsafe { list.Close() }.is_ok() {
+-                self.free_lists.push(list);
++                self.free_lists.push((list, list2));
+             }
+         }
+     }
+     unsafe fn end_encoding(&mut self) -> Result<super::CommandBuffer, crate::DeviceError> {
+         let raw = self.list.take().unwrap();
++        let list2 = self.list2.take();
++        let marker = self.shared.drain.record(list2.as_ref());
+         unsafe { raw.Close() }.into_device_result("GraphicsCommandList::close")?;
+-        Ok(super::CommandBuffer { raw })
++        Ok(super::CommandBuffer { raw, list2, marker })
+     }
+     unsafe fn reset_all<I: Iterator<Item = super::CommandBuffer>>(&mut self, command_buffers: I) {
+         self.intermediate_copy_bufs.clear();
+         for cmd_buf in command_buffers {
+-            self.free_lists.push(cmd_buf.raw);
++            self.free_lists.push((cmd_buf.raw, cmd_buf.list2));
++        }
++        // Rune: never reset a command allocator on a removed device; no new commands will ever
++        // be recorded on it, and a timed-out drain on a removed device could still have the
++        // driver unwinding a list recorded in this allocator.
++        if self.shared.drain.is_removed() {
++            return;
+         }
+         if let Err(e) = unsafe { self.allocator.Reset() } {
+             log::error!("ID3D12CommandAllocator::Reset() failed with {e}");
+diff --git a/src/dx12/dcomp.rs b/src/dx12/dcomp.rs
+index 46ef3da..035f9bd 100644
+--- a/src/dx12/dcomp.rs
++++ b/src/dx12/dcomp.rs
+@@ -19,7 +19,7 @@ impl DCompLib {
+     pub(crate) fn new() -> Self {
+         Self {
+             lib: Lazy::new(|| unsafe {
+-                DynLib::new("dcomp.dll").map_err(|err| {
++                DynLib::new_system("dcomp.dll").map_err(|err| {
+                     log::error!("Error loading dcomp.dll: {err}");
+                     crate::SurfaceError::Other("Error loading dcomp.dll")
+                 })
+diff --git a/src/dx12/descriptor.rs b/src/dx12/descriptor.rs
+index f57ba46..475a9e3 100644
+--- a/src/dx12/descriptor.rs
++++ b/src/dx12/descriptor.rs
+@@ -37,6 +37,10 @@ pub(super) struct GeneralHeap {
+     total_handles: u64,
+     start: DualHandle,
+     ranges: Mutex<RangeAllocator<DescriptorIndex>>,
++    // Zero-sized without wgpu's counters. Updated under the range lock, so a free racing
++    // an allocation cannot inflate the high-water mark.
++    live: wgt::InternalCounter,
++    peak: wgt::InternalCounter,
+ }
+ 
+ impl GeneralHeap {
+@@ -70,6 +74,8 @@ impl GeneralHeap {
+             total_handles,
+             start,
+             ranges: Mutex::new(RangeAllocator::new(0..total_handles)),
++            live: Default::default(),
++            peak: Default::default(),
+         })
+     }
+ 
+@@ -95,10 +101,17 @@ impl GeneralHeap {
+     }
+ 
+     pub(super) fn allocate_slice(&self, count: u64) -> Result<DescriptorIndex, crate::DeviceError> {
+-        let range = self.ranges.lock().allocate_range(count).map_err(|err| {
++        let mut ranges = self.ranges.lock();
++        let range = ranges.allocate_range(count).map_err(|err| {
+             log::error!("Unable to allocate descriptors: {err:?}");
+             crate::DeviceError::OutOfMemory
+         })?;
++        self.live.add(count as isize);
++        let live = self.live.read();
++        if live > self.peak.read() {
++            self.peak.set(live);
++            std::eprintln!("dx12: peak live view descriptors {live}/{} ({} B each)", self.total_handles, self.handle_size);
++        }
+         Ok(range.start)
+     }
+ 
+@@ -106,7 +119,9 @@ impl GeneralHeap {
+     /// Do not use this with handles not given out by this `DescriptorHeapSlice`.
+     pub(crate) fn free_slice(&self, handle: DualHandle) {
+         let start = (handle.gpu.ptr - self.start.gpu.ptr) / self.handle_size;
+-        self.ranges.lock().free_range(start..start + handle.count);
++        let mut ranges = self.ranges.lock();
++        ranges.free_range(start..start + handle.count);
++        self.live.sub(handle.count as isize);
+     }
+ }
+ 
+diff --git a/src/dx12/device.rs b/src/dx12/device.rs
+index 63fb313..aa74ea5 100644
+--- a/src/dx12/device.rs
++++ b/src/dx12/device.rs
+@@ -136,6 +136,7 @@ impl super::Device {
+             None
+         };
+ 
++        let drain = Arc::new(super::DrainTracker::new(&adapter, &raw));
+         let shared = super::DeviceShared {
+             adapter,
+             zero_buffer,
+@@ -179,6 +180,7 @@ impl super::Device {
+             )?,
+             sampler_heap: super::sampler::SamplerHeap::new(&raw, &private_caps)?,
+             private_caps,
++            drain,
+         };
+ 
+         let mut rtv_pool =
+@@ -256,23 +258,71 @@ impl super::Device {
+         signature.ok_or(crate::DeviceError::Unexpected)
+     }
+ 
++    /// Rune: the highest value `fence` has reached, or None once the device is removed. A
++    /// removed device's fence reads `u64::MAX` (a GPU reset after a timeout, a driver update, a
++    /// GPU unplugged), which wgpu-core would take as every submission finished: each pending
++    /// work-done callback and buffer map would complete as if its work had run. Reporting the
++    /// value the fence last really reached leaves them pending, which they are: they will never
++    /// finish. An error here instead would make wgpu's `Device::poll` panic ("Parent device is
++    /// lost"). The removal itself is seen by the caller (Rune's `rune_gpu::health::removed`) and
++    /// by wgpu at the device's next submission, whose signal fails.
++    fn reached(&self, fence: &super::Fence) -> Option<crate::FenceValue> {
++        let value = unsafe { fence.raw.GetCompletedValue() };
++        if value == u64::MAX {
++            // Never stored: read a moment before D3D12 reports the removal, it would stay
++            // "everything finished" for good.
++            if unsafe { self.raw.GetDeviceRemovedReason() }.is_err() {
++                self.shared.drain.mark_removed();
++                return None;
++            }
++            return Some(fence.reached.load(core::sync::atomic::Ordering::Relaxed));
++        }
++        Some(fence.reached.fetch_max(value, core::sync::atomic::Ordering::Relaxed).max(value))
++    }
++
+     // Blocks until the dedicated present queue is finished with all of its work.
+     //
+     // Once this method completes, the surface is able to be resized or deleted.
+     pub(super) unsafe fn wait_for_present_queue_idle(&self) -> Result<(), crate::DeviceError> {
++        let on_removed = || {
++            self.shared.drain.mark_removed();
++            self.shared.drain.wait_after_removal();
++            Err(crate::DeviceError::Lost)
++        };
+         let cur_value = unsafe { self.idler.fence.GetCompletedValue() };
+         if cur_value == !0 {
+-            return Err(crate::DeviceError::Lost);
++            return on_removed();
+         }
+ 
+         let event = Event::create(false, false)?;
+ 
+         let value = cur_value + 1;
+-        unsafe { self.present_queue.Signal(&self.idler.fence, value) }
+-            .into_device_result("Signal")?;
+-        let hr = unsafe { self.idler.fence.SetEventOnCompletion(value, event.0) };
+-        hr.into_device_result("Set event")?;
+-        unsafe { Threading::WaitForSingleObject(event.0, Threading::INFINITE) };
++        if let Err(err) = unsafe { self.present_queue.Signal(&self.idler.fence, value) }
++            .into_device_result("Signal")
++        {
++            if matches!(err, crate::DeviceError::Lost) {
++                return on_removed();
++            }
++            return Err(err);
++        }
++        if let Err(err) = unsafe { self.idler.fence.SetEventOnCompletion(value, event.0) }
++            .into_device_result("Set event")
++        {
++            if matches!(err, crate::DeviceError::Lost) {
++                return on_removed();
++            }
++            return Err(err);
++        }
++        while unsafe { Threading::WaitForSingleObject(event.0, 100) } == Foundation::WAIT_TIMEOUT {
++            if unsafe { self.raw.GetDeviceRemovedReason() }.is_err() {
++                return on_removed();
++            }
++        }
++        if unsafe { self.idler.fence.GetCompletedValue() } == !0
++            && unsafe { self.raw.GetDeviceRemovedReason() }.is_err()
++        {
++            return on_removed();
++        }
+         Ok(())
+     }
+ 
+@@ -826,6 +876,7 @@ impl crate::Device for super::Device {
+             intermediate_copy_bufs: Vec::new(),
+             null_rtv_handle: self.null_rtv_handle,
+             list: None,
++            list2: None,
+             free_lists: Vec::new(),
+             pass: super::PassState::new(),
+             temp: super::Temp::default(),
+@@ -2346,7 +2397,7 @@ impl crate::Device for super::Device {
+ 
+         self.counters.fences.add(1);
+ 
+-        Ok(super::Fence { raw })
++        Ok(super::Fence { raw, reached: Default::default() })
+     }
+     unsafe fn destroy_fence(&self, _fence: super::Fence) {
+         self.counters.fences.sub(1);
+@@ -2356,7 +2407,7 @@ impl crate::Device for super::Device {
+         &self,
+         fence: &super::Fence,
+     ) -> Result<crate::FenceValue, crate::DeviceError> {
+-        Ok(unsafe { fence.raw.GetCompletedValue() })
++        Ok(self.reached(fence).unwrap_or_else(|| fence.reached.load(core::sync::atomic::Ordering::Relaxed)))
+     }
+     unsafe fn wait(
+         &self,
+@@ -2367,7 +2418,8 @@ impl crate::Device for super::Device {
+         let timeout = timeout.unwrap_or(Duration::MAX);
+ 
+         // We first check if the fence has already reached the value we're waiting for.
+-        let mut fence_value = unsafe { fence.raw.GetCompletedValue() };
++        // A removed device's fence never reaches `value`.
++        let Some(mut fence_value) = self.reached(fence) else { return Ok(false) };
+         if fence_value >= value {
+             return Ok(true);
+         }
+@@ -2408,17 +2460,23 @@ impl crate::Device for super::Device {
+ 
+             log::trace!("Waiting for fence value {value} for {remaining_wait_duration:?}");
+ 
++            // Rune: in slices of at most 100 ms, reading the fence again after each. A fence can
++            // read `u64::MAX` a moment before D3D12 reports the removal; `reached` then gives the
++            // last real value, and the auto-reset event, already fired by that `u64::MAX`, never
++            // fires again: one wait for the whole timeout (`INFINITE` for `wait_indefinitely`)
++            // would never return. A slice that ends without the event costs a re-read
++            // (`GetCompletedValue`, and `GetDeviceRemovedReason` once the fence reads `u64::MAX`);
++            // a wait the GPU answers returns on the event, as before.
++            let slice = remaining_wait_duration.min(Duration::from_millis(100));
+             match unsafe {
+-                Threading::WaitForSingleObject(
+-                    event.0,
+-                    remaining_wait_duration.as_millis().min(u32::MAX as u128) as u32,
+-                )
++                Threading::WaitForSingleObject(event.0, slice.as_millis().min(u32::MAX as u128) as u32)
+             } {
+                 Foundation::WAIT_OBJECT_0 => {}
+                 Foundation::WAIT_ABANDONED | Foundation::WAIT_FAILED => {
+                     log::error!("Wait failed!");
+                     break Err(crate::DeviceError::Lost);
+                 }
++                Foundation::WAIT_TIMEOUT if slice < remaining_wait_duration => {}
+                 Foundation::WAIT_TIMEOUT => {
+                     log::trace!("Wait timed out!");
+                     break Ok(false);
+@@ -2429,7 +2487,10 @@ impl crate::Device for super::Device {
+                 }
+             };
+ 
+-            fence_value = unsafe { fence.raw.GetCompletedValue() };
++            fence_value = match self.reached(fence) {
++                Some(value) => value,
++                None => break Ok(false),
++            };
+             log::trace!("Wait complete! Fence actual value: {fence_value}");
+ 
+             if fence_value >= value {
 diff --git a/src/dx12/instance.rs b/src/dx12/instance.rs
-index fdb63bcb..5f64a804 100644
+index fdb63bc..5f64a80 100644
 --- a/src/dx12/instance.rs
 +++ b/src/dx12/instance.rs
 @@ -187,3 +187,37 @@ impl crate::Instance for super::Instance {
@@ -54,10 +401,60 @@ index fdb63bcb..5f64a804 100644
 +    }
 +}
 diff --git a/src/dx12/mod.rs b/src/dx12/mod.rs
-index 285d635..36e8b82 100644
+index 285d635..2fb4210 100644
 --- a/src/dx12/mod.rs
 +++ b/src/dx12/mod.rs
-@@ -615,6 +615,8 @@ struct SwapChain {
+@@ -92,7 +92,7 @@ mod suballocation;
+ mod types;
+ mod view;
+ 
+-use alloc::{borrow::ToOwned as _, string::String, sync::Arc, vec::Vec};
++use alloc::{borrow::ToOwned as _, collections::VecDeque, string::String, sync::Arc, vec::Vec};
+ use core::{ffi, fmt, mem, ops::Deref, sync::atomic::AtomicU64};
+ 
+ use arrayvec::ArrayVec;
+@@ -134,6 +134,22 @@ impl DynLib {
+         unsafe { libloading::Library::new(filename) }.map(|inner| Self { inner })
+     }
+ 
++    // Rune: load Windows system DLLs from System32 only, not the app directory or CWD.
++    unsafe fn new_system<P>(filename: P) -> Result<Self, libloading::Error>
++    where
++        P: AsRef<std::ffi::OsStr>,
++    {
++        unsafe {
++            libloading::os::windows::Library::load_with_flags(
++                filename,
++                libloading::os::windows::LOAD_LIBRARY_SEARCH_SYSTEM32,
++            )
++        }
++        .map(|inner| Self {
++            inner: inner.into(),
++        })
++    }
++
+     unsafe fn get<T>(
+         &self,
+         symbol: &[u8],
+@@ -164,7 +180,7 @@ pub enum CreateDeviceError {
+ 
+ impl D3D12Lib {
+     fn new() -> Result<Self, libloading::Error> {
+-        unsafe { DynLib::new("d3d12.dll").map(|lib| Self { lib }) }
++        unsafe { DynLib::new_system("d3d12.dll").map(|lib| Self { lib }) }
+     }
+ 
+     fn create_device(
+@@ -328,7 +344,7 @@ pub(super) struct DxgiLib {
+ 
+ impl DxgiLib {
+     pub fn new() -> Result<Self, libloading::Error> {
+-        unsafe { DynLib::new("dxgi.dll").map(|lib| Self { lib }) }
++        unsafe { DynLib::new_system("dxgi.dll").map(|lib| Self { lib }) }
+     }
+ 
+     /// Will error with crate::DeviceError::Unexpected if DXGI 1.3 is not available.
+@@ -615,6 +631,8 @@ struct SwapChain {
      present_mode: wgt::PresentMode,
      format: wgt::TextureFormat,
      size: wgt::Extent3d,
@@ -66,7 +463,7 @@ index 285d635..36e8b82 100644
  }
  
  enum SurfaceTarget {
-@@ -651,6 +653,15 @@ impl Surface {
+@@ -651,6 +669,15 @@ impl Surface {
          Some(self.swap_chain.read().as_ref()?.raw.clone())
      }
  
@@ -82,7 +479,334 @@ index 285d635..36e8b82 100644
      /// Returns the waitable handle associated with this swap chain, if any.
      /// Handle is only valid while the swap chain is alive.
      pub unsafe fn waitable_handle(&self) -> Option<Foundation::HANDLE> {
-@@ -1535,7 +1546,9 @@ impl crate::Surface for Surface {
+@@ -741,6 +768,279 @@ struct Idler {
+     fence: Direct3D12::ID3D12Fence,
+ }
+ 
++/// Rune: GPU-written drain markers on software adapters (WARP) so releasing a removed device
++/// waits for any queued command lists its CPU worker threads are still executing. After
++/// `RemoveDevice`, D3D12 sets every fence to `u64::MAX` and rejects `Queue::Signal`, so fences
++/// can no longer tell when in-flight lists have finished; releasing allocators or resources
++/// before then crashes on WARP (0xC0000005).
++///
++/// Hardware adapters (`!DXGI_ADAPTER_FLAG_SOFTWARE`) and drivers without `WriteBufferImmediate`
++/// (`DIRECT`) run with `marker: None` (zero steady-state marker cost: no buffer, no recording, no
++/// submit reads/locks); on hardware a real TDR/unplug aborts the queue so markers would never
++/// land anyway. Skipping `ExecuteCommandLists`, skipping `allocator.Reset()`, and sliced fence
++/// waits still run on every adapter.
++const DRAIN_MARKER_SLOTS: usize = 16_384;
++const DRAIN_STALL_TIMEOUT: core::time::Duration = core::time::Duration::from_millis(250);
++const DRAIN_TOTAL_TIMEOUT: core::time::Duration = core::time::Duration::from_millis(1_000);
++
++struct DrainMarker {
++    resource: Direct3D12::ID3D12Resource,
++    mapped: core::ptr::NonNull<core::sync::atomic::AtomicU32>,
++    gpu_va: u64,
++    next_tag: core::sync::atomic::AtomicU32,
++}
++
++// SAFETY: `mapped` points to `DRAIN_MARKER_SLOTS` aligned `AtomicU32`s inside `resource`'s
++// persistently mapped readback buffer and is never dereferenced after `Drop` unmaps it.
++unsafe impl Send for DrainMarker {}
++// SAFETY: all concurrent access to `mapped` is through atomic loads and GPU DMA writes.
++unsafe impl Sync for DrainMarker {}
++
++impl Drop for DrainMarker {
++    fn drop(&mut self) {
++        let written = Direct3D12::D3D12_RANGE { Begin: 0, End: 0 };
++        // SAFETY: subresource 0 was mapped in `DrainMarker::new`, and the CPU never writes it.
++        unsafe { self.resource.Unmap(0, Some(&written)) };
++    }
++}
++
++impl DrainMarker {
++    fn new(device: &Direct3D12::ID3D12Device) -> Option<Self> {
++        let mut options3 = Direct3D12::D3D12_FEATURE_DATA_D3D12_OPTIONS3::default();
++        // SAFETY: `options3` matches `D3D12_FEATURE_D3D12_OPTIONS3` in type and byte size.
++        let supported = unsafe {
++            device.CheckFeatureSupport(
++                Direct3D12::D3D12_FEATURE_D3D12_OPTIONS3,
++                <*mut _>::cast(&mut options3),
++                size_of_val(&options3) as u32,
++            )
++        }
++        .is_ok()
++            && (options3.WriteBufferImmediateSupportFlags.0
++                & Direct3D12::D3D12_COMMAND_LIST_SUPPORT_FLAG_DIRECT.0)
++                != 0;
++        if !supported {
++            return None;
++        }
++        let heap = Direct3D12::D3D12_HEAP_PROPERTIES {
++            Type: Direct3D12::D3D12_HEAP_TYPE_READBACK,
++            ..Default::default()
++        };
++        let desc = Direct3D12::D3D12_RESOURCE_DESC {
++            Dimension: Direct3D12::D3D12_RESOURCE_DIMENSION_BUFFER,
++            Alignment: 0,
++            Width: (DRAIN_MARKER_SLOTS * size_of::<u32>()) as u64,
++            Height: 1,
++            DepthOrArraySize: 1,
++            MipLevels: 1,
++            Format: Dxgi::Common::DXGI_FORMAT_UNKNOWN,
++            SampleDesc: Dxgi::Common::DXGI_SAMPLE_DESC {
++                Count: 1,
++                Quality: 0,
++            },
++            Layout: Direct3D12::D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
++            Flags: Direct3D12::D3D12_RESOURCE_FLAG_NONE,
++        };
++        let mut resource = None::<Direct3D12::ID3D12Resource>;
++        // SAFETY: valid readback buffer descriptor permanently in `COPY_DEST`; without
++        // `D3D12_HEAP_FLAG_CREATE_NOT_ZEROED`, D3D12 zeroes the buffer on creation so 0 never
++        // matches a non-zero tag.
++        unsafe {
++            device.CreateCommittedResource(
++                &heap,
++                Direct3D12::D3D12_HEAP_FLAG_NONE,
++                &desc,
++                Direct3D12::D3D12_RESOURCE_STATE_COPY_DEST,
++                None,
++                &mut resource,
++            )
++        }
++        .ok()?;
++        let resource = resource?;
++        let mut raw_ptr = core::ptr::null_mut();
++        // SAFETY: readback buffer supports persistent CPU mapping on subresource 0.
++        unsafe { resource.Map(0, None, Some(&mut raw_ptr)) }.ok()?;
++        let mapped = core::ptr::NonNull::new(raw_ptr.cast::<core::sync::atomic::AtomicU32>())?;
++        // SAFETY: committed buffer has a valid GPU virtual address for its lifetime.
++        let gpu_va = unsafe { resource.GetGPUVirtualAddress() };
++        Some(Self {
++            resource,
++            mapped,
++            gpu_va,
++            next_tag: core::sync::atomic::AtomicU32::new(1),
++        })
++    }
++
++    fn read(&self, slot: u32) -> u32 {
++        debug_assert!((slot as usize) < DRAIN_MARKER_SLOTS);
++        // SAFETY: `slot` is masked to `< DRAIN_MARKER_SLOTS` inside the mapped buffer.
++        unsafe {
++            (&*self.mapped.as_ptr().add(slot as usize))
++                .load(core::sync::atomic::Ordering::Acquire)
++        }
++    }
++}
++
++struct DrainInFlight {
++    /// Submitted `(slot, tag)` markers in FIFO submission order.
++    pending: VecDeque<(u32, u32)>,
++    /// Most recently submitted `tag` per slot (allocated only when `DrainMarker` is active).
++    /// Recording order can differ from submission order (for example `wgpu-core` records
++    /// `(wgpu internal) Transit` at submit time and pushes it ahead of earlier-recorded passes),
++    /// so a lower tag can overwrite a higher tag on the same wrapped slot. Tracking the last
++    /// submitted tag per slot lets earlier superseded entries retire immediately without
++    /// assuming monotonic execution order on a slot.
++    latest_tag: Vec<u32>,
++}
++
++impl DrainInFlight {
++    fn is_done(&self, state: &DrainMarker, slot: u32, tag: u32) -> bool {
++        self.latest_tag[slot as usize] != tag || state.read(slot) == tag
++    }
++}
++
++pub(super) struct DrainTracker {
++    marker: Option<DrainMarker>,
++    in_flight: Mutex<DrainInFlight>,
++    drain_gate: Mutex<()>,
++    removed: core::sync::atomic::AtomicBool,
++}
++
++impl DrainTracker {
++    pub(super) fn new(adapter: &DxgiAdapter, device: &Direct3D12::ID3D12Device) -> Self {
++        // SAFETY: querying static adapter flags on a live DXGI adapter.
++        let software = unsafe { adapter.GetDesc1() }.is_ok_and(|desc| {
++            Dxgi::DXGI_ADAPTER_FLAG(desc.Flags as i32).contains(Dxgi::DXGI_ADAPTER_FLAG_SOFTWARE)
++        });
++        let marker = if software { DrainMarker::new(device) } else { None };
++        let latest_tag = if marker.is_some() {
++            alloc::vec![0u32; DRAIN_MARKER_SLOTS]
++        } else {
++            Vec::new()
++        };
++        Self {
++            marker,
++            in_flight: Mutex::new(DrainInFlight {
++                pending: VecDeque::new(),
++                latest_tag,
++            }),
++            drain_gate: Mutex::new(()),
++            removed: core::sync::atomic::AtomicBool::new(false),
++        }
++    }
++
++    pub(super) fn has_marker(&self) -> bool {
++        self.marker.is_some()
++    }
++
++    pub(super) fn mark_removed(&self) {
++        let _in_flight = self.in_flight.lock();
++        self.removed.store(true, core::sync::atomic::Ordering::Release);
++    }
++
++    pub(super) fn is_removed(&self) -> bool {
++        self.removed.load(core::sync::atomic::Ordering::Acquire)
++    }
++
++    pub(super) fn record(
++        &self,
++        list2: Option<&Direct3D12::ID3D12GraphicsCommandList2>,
++    ) -> Option<(u32, u32)> {
++        let state = self.marker.as_ref()?;
++        let list2 = list2?;
++        let tag = loop {
++            let v = state.next_tag.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
++            if v != 0 {
++                break v;
++            }
++        };
++        let slot = tag & (DRAIN_MARKER_SLOTS as u32 - 1);
++        let param = Direct3D12::D3D12_WRITEBUFFERIMMEDIATE_PARAMETER {
++            Dest: state.gpu_va + u64::from(slot) * 4,
++            Value: tag,
++        };
++        let mode = Direct3D12::D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT;
++        // SAFETY: `Dest` is 4-byte aligned in `state.resource` (`COPY_DEST`); `list2` is open.
++        unsafe { list2.WriteBufferImmediate(1, &param, Some(&mode)) };
++        Some((slot, tag))
++    }
++
++    pub(super) fn track_submitted(&self, command_buffers: &[&CommandBuffer]) -> bool {
++        let Some(state) = self.marker.as_ref() else {
++            return !self.is_removed();
++        };
++        let mut guard = self.in_flight.lock();
++        let in_flight = &mut *guard;
++        if self.removed.load(core::sync::atomic::Ordering::Acquire) {
++            return false;
++        }
++        while let Some(&(slot, tag)) = in_flight.pending.front() {
++            if in_flight.is_done(state, slot, tag) {
++                in_flight.pending.pop_front();
++            } else {
++                break;
++            }
++        }
++        if in_flight.pending.len() > 64 {
++            let latest_tag = &in_flight.latest_tag;
++            in_flight
++                .pending
++                .retain(|&(slot, tag)| latest_tag[slot as usize] == tag && state.read(slot) != tag);
++        }
++        for cmd_buf in command_buffers {
++            if let Some((slot, tag)) = cmd_buf.marker {
++                in_flight.latest_tag[slot as usize] = tag;
++                in_flight.pending.push_back((slot, tag));
++            }
++        }
++        true
++    }
++
++    pub(super) fn wait_after_removal(&self) {
++        let _gate = self.drain_gate.lock();
++        let Some(state) = self.marker.as_ref() else {
++            self.mark_removed();
++            return;
++        };
++        // Set `removed` under `in_flight`'s lock before draining so no concurrent
++        // `track_submitted` can push un-executed markers after `Surface::unconfigure` drains.
++        // Drop any earlier superseded entries on the same slot now; every remaining entry owns
++        // its slot uniquely and waits for its exact tag to land.
++        let mut pending = {
++            let mut guard = self.in_flight.lock();
++            let in_flight = &mut *guard;
++            self.removed.store(true, core::sync::atomic::Ordering::Release);
++            let latest_tag = &in_flight.latest_tag;
++            in_flight
++                .pending
++                .retain(|&(slot, tag)| latest_tag[slot as usize] == tag && state.read(slot) != tag);
++            if in_flight.pending.is_empty() {
++                return;
++            }
++            mem::take(&mut in_flight.pending)
++        };
++        let started = std::time::Instant::now();
++        let mut last_progress = started;
++        loop {
++            let before = pending.len();
++            pending.retain(|&(slot, tag)| state.read(slot) != tag);
++            if pending.is_empty() {
++                return;
++            }
++            let now = std::time::Instant::now();
++            if pending.len() < before {
++                last_progress = now;
++            }
++            if now.duration_since(last_progress) >= DRAIN_STALL_TIMEOUT
++                || now.duration_since(started) >= DRAIN_TOTAL_TIMEOUT
++            {
++                return;
++            }
++            std::thread::sleep(core::time::Duration::from_millis(1));
++        }
++    }
++}
++
+ #[derive(Debug, Clone)]
+ struct CommandSignatures {
+     draw: Direct3D12::ID3D12CommandSignature,
+@@ -756,6 +1056,7 @@ struct DeviceShared {
+     heap_views: descriptor::GeneralHeap,
+     sampler_heap: sampler::SamplerHeap,
+     private_caps: PrivateCapabilities,
++    drain: Arc<DrainTracker>,
+ }
+ 
+ unsafe impl Send for DeviceShared {}
+@@ -810,6 +1111,7 @@ pub struct Queue {
+     idle_fence_value: AtomicU64,
+     pending_waits: Mutex<Vec<(Direct3D12::ID3D12Fence, u64)>>,
+     pending_signals: Mutex<Vec<(Direct3D12::ID3D12Fence, u64)>>,
++    drain: Arc<DrainTracker>,
+ }
+ 
+ impl Queue {
+@@ -992,7 +1294,11 @@ pub struct CommandEncoder {
+ 
+     null_rtv_handle: descriptor::Handle,
+     list: Option<Direct3D12::ID3D12GraphicsCommandList>,
+-    free_lists: Vec<Direct3D12::ID3D12GraphicsCommandList>,
++    list2: Option<Direct3D12::ID3D12GraphicsCommandList2>,
++    free_lists: Vec<(
++        Direct3D12::ID3D12GraphicsCommandList,
++        Option<Direct3D12::ID3D12GraphicsCommandList2>,
++    )>,
+     pass: PassState,
+     temp: Temp,
+ 
+@@ -1018,6 +1324,8 @@ impl fmt::Debug for CommandEncoder {
+ #[derive(Debug)]
+ pub struct CommandBuffer {
+     raw: Direct3D12::ID3D12GraphicsCommandList,
++    list2: Option<Direct3D12::ID3D12GraphicsCommandList2>,
++    marker: Option<(u32, u32)>,
+ }
+ 
+ impl crate::DynCommandBuffer for CommandBuffer {}
+@@ -1209,6 +1517,8 @@ unsafe impl Sync for QuerySet {}
+ #[derive(Debug)]
+ pub struct Fence {
+     raw: Direct3D12::ID3D12Fence,
++    /// Rune: the highest value read from it (`Device::reached`).
++    reached: AtomicU64,
+ }
+ 
+ impl crate::DynFence for Fence {}
+@@ -1535,7 +1845,9 @@ impl crate::Surface for Surface {
                      BufferUsage: Dxgi::DXGI_USAGE_RENDER_TARGET_OUTPUT,
                      BufferCount: swap_chain_buffer,
                      Scaling: Dxgi::DXGI_SCALING_STRETCH,
@@ -93,7 +817,7 @@ index 285d635..36e8b82 100644
                      Flags: flags.0 as u32,
                  };
                  let swap_chain1 = match self.target {
-@@ -1702,6 +1715,7 @@ impl crate::Surface for Surface {
+@@ -1702,6 +2014,7 @@ impl crate::Surface for Surface {
              present_mode: config.present_mode,
              format: config.format,
              size: config.extent,
@@ -101,7 +825,95 @@ index 285d635..36e8b82 100644
          });
  
          Ok(())
-@@ -1838,9 +1852,22 @@ impl crate::Queue for Queue {
+@@ -1768,6 +2081,14 @@ impl crate::Surface for Surface {
+     }
+ }
+ 
++impl Queue {
++    fn device_removed(&self) -> bool {
++        let mut device: Option<Direct3D12::ID3D12Device> = None;
++        unsafe { self.raw.GetDevice(&mut device) }.is_ok()
++            && device.is_some_and(|device| unsafe { device.GetDeviceRemovedReason() }.is_err())
++    }
++}
++
+ impl crate::Queue for Queue {
+     type A = Api;
+ 
+@@ -1777,6 +2098,18 @@ impl crate::Queue for Queue {
+         _surface_textures: &[&Texture],
+         (signal_fence, signal_value): (&Fence, crate::FenceValue),
+     ) -> Result<(), crate::DeviceError> {
++        // Rune: skip `ExecuteCommandLists` once removed. On software adapters with drain markers,
++        // also check `idle_fence` so a removal before the first poll does not queue untracked
++        // lists; hardware adapters pay only the atomic load (zero COM calls or marker reads).
++        if self.drain.is_removed()
++            || (self.drain.has_marker()
++                && unsafe { self.idle_fence.GetCompletedValue() } == u64::MAX
++                && self.device_removed())
++        {
++            self.drain.mark_removed();
++            return Err(crate::DeviceError::Lost);
++        }
++
+         let mut temp_lists = self.temp_lists.lock();
+         temp_lists.clear();
+         for cmd_buf in command_buffers {
+@@ -1790,25 +2123,48 @@ impl crate::Queue for Queue {
+         {
+             let mut waits = self.pending_waits.lock();
+             for (fence, value) in waits.drain(..) {
+-                unsafe { self.raw.Wait(&fence, value) }.into_device_result("Wait pending fence")?;
++                if let Err(err) =
++                    unsafe { self.raw.Wait(&fence, value) }.into_device_result("Wait pending fence")
++                {
++                    if matches!(err, crate::DeviceError::Lost) {
++                        self.drain.mark_removed();
++                    }
++                    return Err(err);
++                }
+             }
+         }
+ 
++        if !command_buffers.is_empty() && !self.drain.track_submitted(command_buffers) {
++            return Err(crate::DeviceError::Lost);
++        }
++
+         {
+             profiling::scope!("ID3D12CommandQueue::ExecuteCommandLists");
+             unsafe { self.raw.ExecuteCommandLists(&temp_lists) }
+         }
+ 
+-        unsafe { self.raw.Signal(&signal_fence.raw, signal_value) }
+-            .into_device_result("Signal fence")?;
++        if let Err(err) =
++            unsafe { self.raw.Signal(&signal_fence.raw, signal_value) }.into_device_result("Signal fence")
++        {
++            if matches!(err, crate::DeviceError::Lost) {
++                self.drain.mark_removed();
++            }
++            return Err(err);
++        }
+ 
+         // Drain caller-staged signals after our own Signal so each
+         // additional fence value publishes once the submit completes.
+         {
+             let mut signals = self.pending_signals.lock();
+             for (fence, value) in signals.drain(..) {
+-                unsafe { self.raw.Signal(&fence, value) }
+-                    .into_device_result("Signal pending fence")?;
++                if let Err(err) = unsafe { self.raw.Signal(&fence, value) }
++                    .into_device_result("Signal pending fence")
++                {
++                    if matches!(err, crate::DeviceError::Lost) {
++                        self.drain.mark_removed();
++                    }
++                    return Err(err);
++                }
+             }
+         }
+ 
+@@ -1838,9 +2194,22 @@ impl crate::Queue for Queue {
          };
  
          profiling::scope!("IDXGISwapchain3::Present");
@@ -127,8 +939,65 @@ index 285d635..36e8b82 100644
  
          Ok(())
      }
+@@ -1851,18 +2220,51 @@ impl crate::Queue for Queue {
+     }
+ 
+     unsafe fn wait_for_idle(&self) -> Result<(), crate::DeviceError> {
++        let on_removed = || {
++            self.drain.mark_removed();
++            self.drain.wait_after_removal();
++            Err(crate::DeviceError::Lost)
++        };
++        if unsafe { self.idle_fence.GetCompletedValue() } == u64::MAX && self.device_removed() {
++            return on_removed();
++        }
+         let value = self
+             .idle_fence_value
+             .fetch_add(1, core::sync::atomic::Ordering::Relaxed)
+             + 1;
+-        unsafe { self.raw.Signal(&self.idle_fence, value) }
+-            .into_device_result("Signal idle fence")?;
+-        unsafe {
++        if let Err(err) = unsafe { self.raw.Signal(&self.idle_fence, value) }
++            .into_device_result("Signal idle fence")
++        {
++            if matches!(err, crate::DeviceError::Lost) {
++                return on_removed();
++            }
++            return Err(err);
++        }
++        if let Err(err) = unsafe {
+             self.idle_fence
+                 .SetEventOnCompletion(value, self.idle_event.0)
+         }
+-        .into_device_result("SetEventOnCompletion")?;
+-        unsafe { Threading::WaitForSingleObject(self.idle_event.0, Threading::INFINITE) };
++        .into_device_result("SetEventOnCompletion")
++        {
++            if matches!(err, crate::DeviceError::Lost) {
++                return on_removed();
++            }
++            return Err(err);
++        }
++        // Rune: a removed device's work never finishes through fences, so the wait asks after
++        // the device every 100 ms instead of waiting forever (wgpu-core waits here when it drops
++        // the queue), and drains queued command lists through GPU-written markers before
++        // returning so wgpu-core doesn't free resources while the driver is still executing them.
++        while unsafe { Threading::WaitForSingleObject(self.idle_event.0, 100) }
++            == Foundation::WAIT_TIMEOUT
++        {
++            if self.device_removed() {
++                return on_removed();
++            }
++        }
++        if unsafe { self.idle_fence.GetCompletedValue() } == u64::MAX && self.device_removed() {
++            return on_removed();
++        }
+         Ok(())
+     }
+ }
 diff --git a/src/dx12/shader_compilation.rs b/src/dx12/shader_compilation.rs
-index ff41e503..7961cbf9 100644
+index ff41e50..dcb167c 100644
 --- a/src/dx12/shader_compilation.rs
 +++ b/src/dx12/shader_compilation.rs
 @@ -17,7 +17,8 @@ pub(super) enum CompilerContainer {
@@ -161,3 +1030,45 @@ index ff41e503..7961cbf9 100644
              ),
              CompilerContainer::DynamicDxc(CompilerDynamicDxc { compiler, .. })
              | CompilerContainer::StaticDxc(CompilerStaticDxc { compiler, .. }) => compile_dxc(
+@@ -164,7 +167,7 @@ impl FxcLib {
+ 
+     fn new_dynamic() -> Result<Self, GetContainerError> {
+         unsafe {
+-            let lib = crate::dx12::DynLib::new(Self::PATH)
++            let lib = crate::dx12::DynLib::new_system(Self::PATH)
+                 .map_err(|e| GetContainerError::FailedToLoad(FxcLib::PATH, e))?;
+             let d3dcompile_fn: D3DCompileFn = *lib.get::<D3DCompileFn>(c"D3DCompile".to_bytes())?;
+ 
+diff --git a/src/gles/wgl.rs b/src/gles/wgl.rs
+index 09ee3e9..4edbf3b 100644
+--- a/src/gles/wgl.rs
++++ b/src/gles/wgl.rs
+@@ -455,14 +455,20 @@ impl crate::Instance for Instance {
+ 
+     unsafe fn init(desc: &crate::InstanceDescriptor<'_>) -> Result<Self, crate::InstanceError> {
+         profiling::scope!("Init OpenGL (WGL) Backend");
+-        let opengl_module =
+-            unsafe { LibraryLoader::LoadLibraryA(PCSTR(c"opengl32.dll".as_ptr().cast())) }
+-                .map_err(|e| {
+-                    crate::InstanceError::with_source(
+-                        String::from("unable to load the OpenGL library"),
+-                        e,
+-                    )
+-                })?;
++        // Rune: load opengl32.dll from System32 only, not the app directory or CWD.
++        let opengl_module = unsafe {
++            LibraryLoader::LoadLibraryExA(
++                PCSTR(c"opengl32.dll".as_ptr().cast()),
++                None,
++                LibraryLoader::LOAD_LIBRARY_SEARCH_SYSTEM32,
++            )
++        }
++        .map_err(|e| {
++            crate::InstanceError::with_source(
++                String::from("unable to load the OpenGL library"),
++                e,
++            )
++        })?;
+ 
+         let device = create_instance_device()?;
+         let dc = device.dc;

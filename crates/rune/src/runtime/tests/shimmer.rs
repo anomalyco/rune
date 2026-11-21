@@ -146,7 +146,7 @@ fn a_shimmer_that_stops_and_starts_again_keeps_its_bright_copy_on_the_label() {
 }
 
 fn loop_offsets(rt: &Runtime<Shimmer>) -> Option<(f32, f32)> {
-    let find = |key: &str| rt.nodes.iter().find(|n| n.path.ends_with(key)).map(|n| n.id);
+    let find = |key: &str| rt.tree.nodes.iter().find(|n| n.path.ends_with(key)).map(|n| n.id);
     let (s, l) = (find("/sheen")?, find("/lit")?);
     let off = |id| rt.scene.get(id, prop::OFFSET).map_or(0.0, |v| v.x);
     Some((off(s), off(l)))
@@ -263,7 +263,7 @@ fn window(rt: &mut Runtime<Shimmer>, secs: f64, events: &mut Vec<(f64, Ev)>, wor
         rt.invalidate();
         rt.frame_split(step.catch_up, step.dt);
         // A copy mounted mid-pass waits at its start for the next pass, while the window runs.
-        let waiting = |key: &str| rt.nodes.iter().find(|n| n.path.ends_with(key)).and_then(|n| rt.loops.get(&n.id))
+        let waiting = |key: &str| rt.tree.nodes.iter().find(|n| n.path.ends_with(key)).and_then(|n| rt.motion.loop_track(n.id))
             .is_some_and(|l| l.pending_start(rt.t).is_some());
         if waiting("/sheen") != waiting("/lit") { continue; }
         if let Some((a, b)) = loop_offsets(rt) && (a + b).abs() > worst.0.abs() { worst.0 = a + b; }

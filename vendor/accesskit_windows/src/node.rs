@@ -12,7 +12,7 @@
 
 use accesskit::{
     Action, ActionData, ActionRequest, AriaCurrent, HasPopup, Live, NodeId, Orientation, Point,
-    Role, SortDirection, Toggled, TreeId,
+    Role, SortDirection, TextSelection, Toggled, TreeId,
 };
 use accesskit_consumer::{FilterResult, FullNodeId, NodeRef, Tree, TreeState};
 use std::{
@@ -31,6 +31,7 @@ use windows::{
 use crate::{
     context::Context,
     filters::{filter, filter_with_root_exception},
+    long_text::{Text, byte_at_point, long_text},
     text::PlatformRange as PlatformTextRange,
     util::*,
 };
@@ -708,7 +709,7 @@ impl NodeWrapper<'_> {
     }
 
     fn is_text_pattern_supported(&self) -> bool {
-        self.node.supports_text_ranges()
+        self.node.supports_text_ranges() || long_text(&self.node).is_some()
     }
 
     fn is_expand_collapse_pattern_supported(&self) -> bool {
@@ -805,6 +806,10 @@ impl NodeWrapper<'_> {
     }
 }
 
+fn long_value_unchanged(new: &NodeRef, old: &NodeRef) -> bool {
+    long_text(new).is_some() && long_text(old).is_some() && new.raw_value() == old.raw_value()
+}
+
 fn enqueue_property_change(
     queue: &mut Vec<QueuedEvent>,
     element: &IRawElementProviderSimple,
@@ -834,6 +839,7 @@ fn enqueue_property_change(
     ISelectionItemProvider,
     ISelectionProvider,
     ITextProvider,
+    ITextProvider2,
     IExpandCollapseProvider,
     IWindowProvider
 )]
@@ -874,9 +880,12 @@ impl PlatformNode {
     where
         F: FnOnce(&Tree, &Arc<Context>) -> Result<T>,
     {
-        let context = self.upgrade_context()?;
-        let tree = context.read_tree();
-        f(&tree, &context)
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let context = self.upgrade_context()?;
+            let tree = context.read_tree();
+            f(&tree, &context)
+        }))
+        .unwrap_or_else(|_| Err(element_not_available()))
     }
 
     fn node<'a>(&self, tree: &'a Tree) -> Result<NodeRef<'a>> {
@@ -942,6 +951,18 @@ impl PlatformNode {
         })
     }
 
+    /// Rune: if this node is a long field ([`long_text`]), its range `f` picks, in its value's
+    /// bytes.
+    fn long_range(&self, f: impl FnOnce(Text, &TextSelection) -> (usize, usize)) -> Result<Option<ITextRangeProvider>> {
+        self.resolve(|node| {
+            Ok(long_text(&node).map(|(text, selection)| {
+                let (a, b) = f(text, selection);
+                let (a, b) = (text.clamp(a.min(b)), text.clamp(a.max(b)));
+                PlatformTextRange::new_long(&self.context, node.id(), a, b).into()
+            }))
+        })
+    }
+
     fn resolve_for_text_pattern<F, T>(&self, f: F) -> Result<T>
     where
         for<'a> F: FnOnce(NodeRef<'a>) -> Result<T>,
@@ -953,17 +974,20 @@ impl PlatformNode {
     where
         for<'a> F: FnOnce(NodeRef<'a>, NodeId, TreeId) -> Result<Option<ActionRequest>>,
     {
-        let context = self.upgrade_context()?;
-        if context.is_placeholder.load(Ordering::SeqCst) {
-            return Err(element_not_enabled());
-        }
-        let tree = context.read_tree();
-        let (node, target_node, target_tree) = self.node_with_location(&tree)?;
-        if let Some(request) = f(node, target_node, target_tree)? {
-            drop(tree);
-            context.do_action(request);
-        }
-        Ok(())
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let context = self.upgrade_context()?;
+            if context.is_placeholder.load(Ordering::SeqCst) {
+                return Err(element_not_enabled());
+            }
+            let tree = context.read_tree();
+            let (node, target_node, target_tree) = self.node_with_location(&tree)?;
+            if let Some(request) = f(node, target_node, target_tree)? {
+                drop(tree);
+                context.do_action(request);
+            }
+            Ok(())
+        }))
+        .unwrap_or_else(|_| Err(element_not_available()))
     }
 
     fn do_action<F>(&self, f: F) -> Result<()>
@@ -1307,7 +1331,10 @@ macro_rules! patterns {
                 old: &mut NodeWrapper,
             ) {
                 $(if self.$is_supported() && old.$is_supported() {
-                    $({
+                    $(
+                    // Rune: a long field's unchanged value isn't copied twice to UTF-16 to find
+                    // it unchanged (14.5 MB each way at 200,000 lines, on every caret move).
+                    if !(stringify!($getter) == "value" && long_value_unchanged(&self.node, &old.node)) {
                         let old_value = old.$getter();
                         let new_value = self.$getter();
                         if old_value != new_value {
@@ -1469,6 +1496,9 @@ patterns! {
     )),
     (UIA_TextPatternId, ITextProvider, ITextProvider_Impl, is_text_pattern_supported, (), (
         fn GetSelection(&self) -> Result<*mut SAFEARRAY> {
+            if let Some(range) = self.long_range(|_, s| (s.anchor.character_index, s.focus.character_index))? {
+                return Ok(safe_array_from_com_slice(&[range.cast::<IUnknown>()?]));
+            }
             self.resolve_for_text_pattern(|node| {
                 if let Some(range) = node.text_selection() {
                     let platform_range: ITextRangeProvider = PlatformTextRange::new(&self.context, range).into();
@@ -1493,6 +1523,21 @@ patterns! {
         },
 
         fn RangeFromPoint(&self, point: &UiaPoint) -> Result<ITextRangeProvider> {
+            let hit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.resolve_with_context(|node, context| {
+                    Ok(long_text(&node).map(|(text, s)| {
+                        let client_top_left = context.client_top_left();
+                        let pt = Point::new(point.x - client_top_left.x, point.y - client_top_left.y);
+                        let pt = node.transform().inverse() * pt;
+                        let at = byte_at_point(&node, text, pt, false).unwrap_or_else(|| text.clamp(s.focus.character_index));
+                        PlatformTextRange::new_long(&self.context, node.id(), at, at).into()
+                    }))
+                })
+            }))
+            .unwrap_or_else(|_| Err(element_not_available()))?;
+            if let Some(range) = hit {
+                return Ok(range);
+            }
             self.resolve_with_context_for_text_pattern(|node, context| {
                 let client_top_left = context.client_top_left();
                 let point = Point::new(point.x - client_top_left.x, point.y - client_top_left.y);
@@ -1504,6 +1549,9 @@ patterns! {
         },
 
         fn DocumentRange(&self) -> Result<ITextRangeProvider> {
+            if let Some(range) = self.long_range(|text, _| (0, text.len()))? {
+                return Ok(range);
+            }
             self.resolve_for_text_pattern(|node| {
                 let range = node.document_range();
                 Ok(PlatformTextRange::new(&self.context, range).into())
@@ -1511,6 +1559,9 @@ patterns! {
         },
 
         fn SupportedTextSelection(&self) -> Result<SupportedTextSelection> {
+            if self.long_range(|_, _| (0, 0))?.is_some() {
+                return Ok(SupportedTextSelection_Single);
+            }
             self.resolve_for_text_pattern(|node| {
                 if node.has_text_selection() {
                     Ok(SupportedTextSelection_Single)
@@ -1518,6 +1569,36 @@ patterns! {
                     Ok(SupportedTextSelection_None)
                 }
             })
+        }
+    )),
+    (UIA_TextPattern2Id, ITextProvider2, ITextProvider2_Impl, is_text_pattern_supported, (), (
+        fn RangeFromAnnotation(&self, _annotation: Ref<IRawElementProviderSimple>) -> Result<ITextRangeProvider> {
+            Err(not_supported())
+        },
+
+        fn GetCaretRange(&self, is_active: *mut BOOL) -> Result<ITextRangeProvider> {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let long_caret = self.resolve(|node| {
+                    Ok(long_text(&node).map(|(text, s)| {
+                        if !is_active.is_null() {
+                            unsafe { *is_active = node.is_focused().into() };
+                        }
+                        let at = text.clamp(s.focus.character_index);
+                        PlatformTextRange::new_long(&self.context, node.id(), at, at).into()
+                    }))
+                })?;
+                if let Some(range) = long_caret {
+                    return Ok(range);
+                }
+                self.resolve_for_text_pattern(|node| {
+                    if !is_active.is_null() {
+                        unsafe { *is_active = node.is_focused().into() };
+                    }
+                    let pos = node.text_selection_focus().unwrap_or_else(|| node.document_start());
+                    Ok(PlatformTextRange::new(&self.context, pos.to_degenerate_range()).into())
+                })
+            }))
+            .unwrap_or_else(|_| Err(element_not_available()))
         }
     )),
     (UIA_ExpandCollapsePatternId, IExpandCollapseProvider, IExpandCollapseProvider_Impl, is_expand_collapse_pattern_supported, (

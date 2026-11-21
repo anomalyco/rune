@@ -1,9 +1,12 @@
 //! Bounded painter scopes. The ordinary path retains its instance buffer, batches and pass;
 //! only scopes requiring isolation acquire a target. Scope records are also compositor fences.
 use super::*;
+#[cfg(test)]
+use bytemuck::Zeroable;
 use std::ops::Range;
 
 mod plan;
+pub(super) use plan::is_scissor_clip;
 use plan::{Describe, Disposition, Held, Kept, Layer, Move, Planned, Planner, Pools};
 
 // Linear premultiplied intermediates preserve HDR colours and avoid accumulating 8-bit
@@ -13,10 +16,6 @@ pub(super) const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const DEFAULT_CACHE_BUDGET: u64 = 64 * 1024 * 1024;
 /// What spare layer targets may hold (Layers::spare): a full-window layer at 2880x1800 or two menus' worth.
 const SPARE_BYTES: u64 = 32 * 1024 * 1024;
-/// What they keep once the window rests (`window::rest`): the most recently used, which the
-/// screen on show takes again for its menus and hovers. Making a target costs the frame that
-/// takes it a few ms on an integrated GPU.
-const RESTING_SPARE_BYTES: u64 = 8 * 1024 * 1024;
 /// Maximum width or height of a cached subtree's offscreen texture in device pixels.
 const MAX_CACHE_DIM: u32 = 4096;
 
@@ -80,7 +79,7 @@ impl Layers {
     /// parent's pass, or into a target composited back at its own place, neither turned nor
     /// blurred, so a changed instance changes only the pixels its bounds cover
     /// (`Renderer::redraws_in_place`).
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
     pub(super) fn in_place(&self) -> bool {
         self.plan.iter().enumerate().all(|(i, l)| match self.planner.dispositions.get(i) {
             Some(Disposition::Inline | Disposition::Skip) | None => true,
@@ -159,18 +158,6 @@ impl Default for Layers {
             binds: 0,
         }
     }
-}
-
-/// The upright bounds of edges `r` turned `angle` radians clockwise about `p`.
-fn turned_bounds(r: [f32; 4], angle: f32, p: [f32; 2]) -> [f32; 4] {
-    let (sn, c) = angle.sin_cos();
-    let mut out = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
-    for (x, y) in [(r[0], r[1]), (r[2], r[1]), (r[0], r[3]), (r[2], r[3])] {
-        let (dx, dy) = (x - p[0], y - p[1]);
-        let (qx, qy) = (p[0] + c * dx - sn * dy, p[1] + sn * dx + c * dy);
-        out = [out[0].min(qx), out[1].min(qy), out[2].max(qx), out[3].max(qy)];
-    }
-    out
 }
 
 pub(super) struct Target {
@@ -288,10 +275,11 @@ impl Renderer {
         ONCE.call_once(|| procwatch::alloc::sites::contribute("rune-gpu", || POOLS.lock().unwrap_or_else(|e| e.into_inner()).clone()));
     }
 
-    /// What a window at rest gives back (`window::rest`): spare targets past the most recently
-    /// used `RESTING_SPARE_BYTES`, and cache textures no layer drew last frame. With `all`, every
-    /// spare target, and the scratch targets of this screen's layers and its backdrop copies and
-    /// blur pyramid, which its next frame makes again (a few ms on an integrated GPU). It keeps the
+    /// What a window at rest gives back (`window::rest`): every spare target (the first menu,
+    /// hover or session after it makes its own again, within a frame's run-to-run spread on an
+    /// Iris Xe), cache textures no layer drew last frame, and the backdrop copies and blur pyramid
+    /// when the last frame read none. With `all`, also the scratch targets of this screen's
+    /// layers and its backdrop copies, which its next frame makes again (a few ms on an integrated GPU). It keeps the
     /// textures of caches on screen, which the last frame's instances name instead of their
     /// contents, and takes the ones it drops out of `resident`, so their next frame paints them.
     /// What no submission still uses is freed here; the rest when the device next polls.
@@ -299,11 +287,16 @@ impl Renderer {
         for t in self.layers.retained.drain(..) {
             if let Some((node, _)) = t.cache { resident.remove(&node); }
         }
-        self.layers.trim_spare(if all { 0 } else { RESTING_SPARE_BYTES });
+        self.layers.trim_spare(0);
         if all {
             for slot in &mut self.layers.targets {
                 if slot.as_ref().is_some_and(|t| t.cache.is_none()) { *slot = None; }
             }
+        }
+        // The backdrop copies (one full-window texture per target format) and the blur pyramid:
+        // out of sight, or when the last frame read none (a session's jump button had blurred
+        // what was under it, and Home doesn't).
+        if all || !self.backdrop_used {
             self.backdrops.clear();
             if let Some(blur) = &mut self.backdrop_blur { blur.give_back(); }
         }
@@ -359,123 +352,106 @@ impl Renderer {
         self.layers.plan.clear();
         self.layers.stack.clear();
         for (index, i) in instances.iter().enumerate() {
-            if i.params[1] == KIND_LAYER {
-                let parent = self.layers.stack.last().copied();
-                let parent_cached_hit = parent.is_some_and(|p| {
-                    self.layers.plan[p].cache.is_some_and(|key| {
-                        self.layers.retained.iter().any(|t| t.cache == Some(key))
-                    })
-                });
-                let opacity = i.fill[3].clamp(0.0, 1.0);
-                let planned = match parent.map(|p| self.layers.plan[p].planned) {
-                    _ if opacity == 0.0 => Planned::Hidden,
-                    Some(Planned::Hidden) => Planned::Hidden,
-                    Some(Planned::Covered) => Planned::Covered,
-                    _ if parent_cached_hit => Planned::Covered,
-                    _ => Planned::Inline,
-                };
-                // Bound storage by the ancestor's required input, including filter support.
-                // Keep the actual clip separate so rounded corners never move.
-                let limit = parent.map_or(NO_CLIP, |p| {
-                    let p = &self.layers.plan[p];
-                    let grow = (3.0 * p.blur).ceil();
-                    [p.clip[0].max(p.limit[0]) - grow, p.clip[1].max(p.limit[1]) - grow,
-                        p.clip[2].min(p.limit[2]) + grow, p.clip[3].min(p.limit[3]) + grow]
-                });
-                let blur = layer_blur::sigma(i.params[2]);
-                let cache = (i.params[3] == 1.0).then(|| (unpack_u64_f32(i.radii), unpack_u64_f32(i.uv)));
-                let turn = (i.border[1] != 0.0).then_some((i.border[1], [i.border[2], i.border[3]]));
-                let parent_free = parent.is_some_and(|p| self.layers.plan[p].free);
-                let free = turn.is_some() || parent_free;
-                let frame = if free {
-                    let outer = match parent {
-                        Some(p) if parent_free => self.layers.plan[p].frame,
-                        _ => {
-                            let support = parent.map_or(0.0, |p| self.layers.plan[p].support);
-                            [-support, -support, viewport.0 as f32 + support, viewport.1 as f32 + support]
-                        }
+            if i.kind() == Some(Kind::Layer) {
+                    let parent = self.layers.stack.last().copied();
+                    let parent_cached_hit = parent.is_some_and(|p| {
+                        self.layers.plan[p].cache.is_some_and(|key| {
+                            self.layers.retained.iter().any(|t| t.cache == Some(key))
+                        })
+                    });
+                    let opacity = i.fill[3].clamp(0.0, 1.0);
+                    let planned = match parent.map(|p| self.layers.plan[p].planned) {
+                        _ if opacity == 0.0 => Planned::Hidden,
+                        Some(Planned::Hidden) => Planned::Hidden,
+                        Some(Planned::Covered) => Planned::Covered,
+                        _ if parent_cached_hit => Planned::Covered,
+                        _ => Planned::Inline,
                     };
-                    let shown = [outer[0].max(i.clip[0]), outer[1].max(i.clip[1]), outer[2].min(i.clip[2]), outer[3].min(i.clip[3])];
-                    match turn {
-                        Some((angle, pivot)) if shown[2] > shown[0] && shown[3] > shown[1] => turned_bounds(shown, -angle, pivot),
-                        _ => shown,
+                    // Bound storage by the ancestor's required input, including filter support.
+                    // Keep the actual clip separate so rounded corners never move.
+                    let limit = parent.map_or(NO_CLIP, |p| {
+                        let p = &self.layers.plan[p];
+                        let grow = (3.0 * p.blur).ceil();
+                        [p.clip[0].max(p.limit[0]) - grow, p.clip[1].max(p.limit[1]) - grow,
+                            p.clip[2].min(p.limit[2]) + grow, p.clip[3].min(p.limit[3]) + grow]
+                    });
+                    let blur = layer_blur::sigma(i.params[2]);
+                    let cache = (i.params[3] == 1.0).then(|| (unpack_u64_f32(i.radii), unpack_u64_f32(i.uv)));
+                    let turn = (i.border[1] != 0.0).then_some((i.border[1], [i.border[2], i.border[3]]));
+                    let parent_free = parent.is_some_and(|p| self.layers.plan[p].free);
+                    let free = turn.is_some() || parent_free;
+                    let frame = if free {
+                        let outer = match parent {
+                            Some(p) if parent_free => self.layers.plan[p].frame,
+                            _ => {
+                                let support = parent.map_or(0.0, |p| self.layers.plan[p].support);
+                                [-support, -support, viewport.0 as f32 + support, viewport.1 as f32 + support]
+                            }
+                        };
+                        let shown = [outer[0].max(i.clip[0]), outer[1].max(i.clip[1]), outer[2].min(i.clip[2]), outer[3].min(i.clip[3])];
+                        match turn {
+                            Some((angle, pivot)) if shown[2] > shown[0] && shown[3] > shown[1] => turned_bounds(shown, -angle, pivot),
+                            _ => shown,
+                        }
+                    } else { [0.0; 4] };
+                    let limit = if parent_free { NO_CLIP } else { limit };
+                    self.layers.stack.push(self.layers.plan.len());
+                    self.layers.plan.push(Layer {
+                        begin: index as u32, end: 0, parent,
+                        edges: [i.rect[0], i.rect[1], i.rect[0] + i.rect[2], i.rect[1] + i.rect[3]],
+                        vis: [0.0; 4],
+                        clip: i.clip,
+                        limit,
+                        fade: i.fade,
+                        opacity,
+                        blend: if i.params[0] == 1.0 { Blend::PlusLighter } else { Blend::SourceOver },
+                        blur,
+                        support: parent.map_or(0.0, |p| self.layers.plan[p].support) + (3.0 * blur).ceil(),
+                        cache,
+                        planned,
+                        turn,
+                        free,
+                        frame,
+                        // A cached scope's `radii` name its node instead.
+                        hole: if cache.is_some() { [0.0; 4] } else { i.radii },
+                    });
+            } else if i.kind() == Some(Kind::LayerEnd) {
+                    let at = self.layers.stack.pop().expect("unbalanced layer end");
+                    let l = &mut self.layers.plan[at];
+                    l.end = index as u32;
+                    let grow = (3.0 * l.blur).ceil();
+                    // Retain off-viewport sources that can contribute through this or an ancestor's
+                    // filter. Clipping to the destination viewport before filtering loses those taps.
+                    let e = l.edges;
+                    let vis = if l.free {
+                        [(e[0] - grow).max(l.frame[0] - grow).floor(), (e[1] - grow).max(l.frame[1] - grow).floor(),
+                            (e[2] + grow).min(l.frame[2] + grow).ceil(), (e[3] + grow).min(l.frame[3] + grow).ceil()]
+                    } else {
+                        [(e[0] - grow).max(l.clip[0].max(l.limit[0]) - grow).max(-l.support).floor(),
+                            (e[1] - grow).max(l.clip[1].max(l.limit[1]) - grow).max(-l.support).floor(),
+                            (e[2] + grow).min(l.clip[2].min(l.limit[2]) + grow).min(viewport.0 as f32 + l.support).ceil(),
+                            (e[3] + grow).min(l.clip[3].min(l.limit[3]) + grow).min(viewport.1 as f32 + l.support).ceil()]
+                    };
+                    l.vis = vis;
+                    if l.cache.is_some() {
+                        if vis[2] <= vis[0] || vis[3] <= vis[1] {
+                            l.planned = Planned::Hidden;
+                        }
+                        l.edges = [e[0].floor(), e[1].floor(), e[2].ceil(), e[3].ceil()];
+                    } else {
+                        l.edges = vis;
                     }
-                } else { [0.0; 4] };
-                let limit = if parent_free { NO_CLIP } else { limit };
-                self.layers.stack.push(self.layers.plan.len());
-                self.layers.plan.push(Layer {
-                    begin: index as u32, end: 0, parent,
-                    edges: [i.rect[0], i.rect[1], i.rect[0] + i.rect[2], i.rect[1] + i.rect[3]],
-                    vis: [0.0; 4],
-                    clip: i.clip,
-                    limit,
-                    fade: i.fade,
-                    opacity,
-                    blend: if i.params[0] == 1.0 { Blend::PlusLighter } else { Blend::SourceOver },
-                    blur,
-                    support: parent.map_or(0.0, |p| self.layers.plan[p].support) + (3.0 * blur).ceil(),
-                    cache,
-                    planned,
-                    turn,
-                    free,
-                    frame,
-                    // A cached scope's `radii` name its node instead.
-                    hole: if cache.is_some() { [0.0; 4] } else { i.radii },
-                });
-            } else if i.params[1] == KIND_LAYER_END {
-                let at = self.layers.stack.pop().expect("unbalanced layer end");
-                let l = &mut self.layers.plan[at];
-                l.end = index as u32;
-                let grow = (3.0 * l.blur).ceil();
-                // Retain off-viewport sources that can contribute through this or an ancestor's
-                // filter. Clipping to the destination viewport before filtering loses those taps.
-                let e = l.edges;
-                let vis = if l.free {
-                    [(e[0] - grow).max(l.frame[0] - grow).floor(), (e[1] - grow).max(l.frame[1] - grow).floor(),
-                        (e[2] + grow).min(l.frame[2] + grow).ceil(), (e[3] + grow).min(l.frame[3] + grow).ceil()]
-                } else {
-                    [(e[0] - grow).max(l.clip[0].max(l.limit[0]) - grow).max(-l.support).floor(),
-                        (e[1] - grow).max(l.clip[1].max(l.limit[1]) - grow).max(-l.support).floor(),
-                        (e[2] + grow).min(l.clip[2].min(l.limit[2]) + grow).min(viewport.0 as f32 + l.support).ceil(),
-                        (e[3] + grow).min(l.clip[3].min(l.limit[3]) + grow).min(viewport.1 as f32 + l.support).ceil()]
-                };
-                l.vis = vis;
-                if l.cache.is_some() {
-                    if vis[2] <= vis[0] || vis[3] <= vis[1] {
-                        l.planned = Planned::Hidden;
+                    let edges = match l.turn {
+                        Some((angle, pivot)) if l.edges[2] > l.edges[0] && l.edges[3] > l.edges[1] => turned_bounds(l.edges, angle, pivot),
+                        _ => l.edges,
+                    };
+                    if let Some(parent) = l.parent.filter(|&p| self.layers.plan[p].cache.is_none()) {
+                        union(&mut self.layers.plan[parent].edges, edges);
                     }
-                    l.edges = [e[0].floor(), e[1].floor(), e[2].ceil(), e[3].ceil()];
-                } else {
-                    l.edges = vis;
-                }
-                let edges = match l.turn {
-                    Some((angle, pivot)) if l.edges[2] > l.edges[0] && l.edges[3] > l.edges[1] => turned_bounds(l.edges, angle, pivot),
-                    _ => l.edges,
-                };
-                if let Some(parent) = l.parent.filter(|&p| self.layers.plan[p].cache.is_none()) {
-                    union(&mut self.layers.plan[parent].edges, edges);
-                }
             } else if let Some(&at) = self.layers.stack.last() {
                 if self.layers.plan[at].cache.is_some() { continue; }
-                let mut rect = i.rect;
-                if i.params[1] == KIND_GLYPH && i.params[0] != 0.0 {
-                    let (sin, cos) = i.params[0].sin_cos();
-                    let width = cos.abs() * rect[2] + sin.abs() * rect[3];
-                    let height = sin.abs() * rect[2] + cos.abs() * rect[3];
-                    rect = [rect[0] + (rect[2] - width) * 0.5, rect[1] + (rect[3] - height) * 0.5, width, height];
-                }
-                let grow = match i.params[1] {
-                    KIND_GLYPH => 0.0,
-                    KIND_SHADOW => i.params[2] * 3.0 + 1.0,
-                    KIND_EFFECT => i.params[2] + 1.0,
-                    KIND_RECT | KIND_GRADIENT | KIND_DASHED | KIND_RADIAL => 1.0 + i.params[2] * 2.0,
-                    _ => 1.0,
-                };
-                union(&mut self.layers.plan[at].edges, [
-                    (rect[0] - grow).max(i.clip[0]), (rect[1] - grow).max(i.clip[1]),
-                    (rect[0] + rect[2] + grow).min(i.clip[2]),
-                    (rect[1] + rect[3] + grow).min(i.clip[3]),
-                ]);
+                let (x0, y0, x1, y1) = i.layer_bounds_non_scope();
+                union(&mut self.layers.plan[at].edges, [x0, y0, x1, y1]);
             }
         }
         assert!(self.layers.stack.is_empty(), "unclosed layer scope");

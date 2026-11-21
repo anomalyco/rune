@@ -1,7 +1,22 @@
 //! Convert Rune's premultiplied composition to the straight alpha required by
 //! wgpu's straight-alpha surfaces and PNG exports. Metal's CAMetalLayer stays premultiplied.
 /// The pass's shader (`surface_alpha.wgsl`).
-pub(crate) const WGSL: &str = include_str!("../surface_alpha.wgsl");
+pub(crate) const WGSL: &str = include_str!("../shaders/surface_alpha.wgsl");
+
+/// Render targets of `*Srgb` formats hold sRGB-encoded premultiplied linear colour. PNG uses
+/// straight sRGB colour, so un-premultiply in linear light, not in the encoded byte domain.
+pub(crate) fn straight_alpha(pixels: &mut [u8]) {
+    for pixel in pixels.chunks_exact_mut(4) {
+        let alpha = f32::from(pixel[3]) / 255.0;
+        if alpha == 0.0 {
+            pixel[..3].fill(0);
+        } else if alpha < 1.0 {
+            for c in &mut pixel[..3] {
+                *c = (crate::color::srgb_encode((crate::color::srgb_decode(f32::from(*c) / 255.0) / alpha).clamp(0.0, 1.0)) * 255.0).round() as u8;
+            }
+        }
+    }
+}
 
 pub(crate) struct AlphaSurface {
     pub view: wgpu::TextureView,

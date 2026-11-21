@@ -50,6 +50,7 @@ pub fn scene(records: &[[u8; 32]]) -> Scene {
             fade: [0.0; 4],
             fade_origin: None,
             turn: None,
+            clip_radii: None,
         };
         if b[16] & 1 != 0 {
             p.clip = [
@@ -63,11 +64,14 @@ pub fn scene(records: &[[u8; 32]]) -> Scene {
         match kind as u32 {
             1 => p.radii = [p.radii[0]; 4],
             2 => {
+                // Atlas glyphs carry neither corner radii nor outline/LCD flags and read page 0.
+                p.radii = [0.0; 4];
                 // params[0] turns a glyph. At arbitrary angles a rotated edge can pass within
                 // the rasterizer's sub-pixel precision of a pixel centre, where it and the
                 // oracle's inside test may disagree by a whole pixel. Quarter turns have their
                 // own test.
                 p.params[0] = 0.0;
+                p.params[2] = 0.0;
                 // Guard texels keep all textureLoad taps defined on every backend.
                 p.uv = [1.0, 1.0, 0.0, 0.0];
                 p.rect[2] = 1.0 + (b[3] % 24) as f32;
@@ -120,8 +124,25 @@ pub fn dashed(seed: u64, count: usize) -> Scene {
     let mut scene = seeded(seed, count);
     for p in &mut scene.primitives {
         let b = |n: usize| (p.radii[n % 4] * 8.0 + p.rect[n % 4] * 4.0) as u32;
-        p.params = [0.5 + (b(0) % 8) as f32 * 0.25, 10.0, if b(1) % 4 == 0 { p.params[2] } else { 0.0 }, 1.0];
-        p.uv = [1.0 + (b(2) % 24) as f32 * 0.5, 1.0 + (b(3) % 16) as f32 * 0.5, (b(1) % 32) as f32 * 0.75 - 6.0, 0.0];
+        let bw = 0.5 + (b(0) % 8) as f32 * 0.25;
+        p.params = [bw, 10.0, if b(1) % 4 == 0 { p.params[2] } else { 0.0 }, 1.0];
+        let dash = 1.0 + (b(2) % 24) as f32 * 0.5;
+        let mut gap = 1.0 + (b(3) % 16) as f32 * 0.5;
+        // Avoid exact half-integer `total / nominal`, where a 1-ULP GPU reciprocal division
+        // can flip `floor(total / nominal + 0.5)` by a whole dash period.
+        let h = bw * 0.5;
+        let m = (p.rect[2] * 0.5).min(p.rect[3] * 0.5);
+        let rc = p.radii.map(|r| (r.abs().min(m) - h).max(0.0));
+        let total = (p.rect[2] - bw - rc[0] - rc[1]).max(0.0)
+            + (p.rect[3] - bw - rc[1] - rc[2]).max(0.0)
+            + (p.rect[2] - bw - rc[2] - rc[3]).max(0.0)
+            + (p.rect[3] - bw - rc[3] - rc[0]).max(0.0)
+            + rc.iter().map(|r| r * 1.5707964).sum::<f32>();
+        let periods = total / (dash + gap);
+        if (periods - libm::floorf(periods) - 0.5).abs() < 1e-3 {
+            gap += 0.25;
+        }
+        p.uv = [dash, gap, (b(1) % 32) as f32 * 0.75 - 6.0, 0.0];
         if b(0) % 3 == 0 { p.border = p.fill; }
     }
     scene
@@ -182,6 +203,39 @@ pub fn translate(scene: &mut Scene, x: f32, y: f32) {
             p.clip[2] += x;
             p.clip[1] += y;
             p.clip[3] += y;
+        }
+        if let Some(origin) = &mut p.fade_origin
+            && *origin != NO_CLIP
+        {
+            origin[0] += x;
+            origin[2] += x;
+            origin[1] += y;
+            origin[3] += y;
+        }
+        if let Some(turn) = &mut p.turn {
+            turn[1] += x;
+            turn[2] += y;
+        }
+        match p.params[1] as u32 {
+            5 => {
+                p.radii[0] += x;
+                p.radii[1] += y;
+                p.radii[2] += x;
+                p.radii[3] += y;
+            }
+            6 => {
+                p.radii[0] += x;
+                p.radii[1] += y;
+                p.radii[2] += x;
+                p.radii[3] += y;
+                p.uv[0] += x;
+                p.uv[1] += y;
+            }
+            8 if p.params[3] == 0.0 && p.radii[3] > 0.0 => {
+                p.radii[0] += x;
+                p.radii[1] += y;
+            }
+            _ => {}
         }
     }
 }

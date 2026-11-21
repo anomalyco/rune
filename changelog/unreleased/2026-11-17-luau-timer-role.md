@@ -1,0 +1,1 @@
+- `rune-luau`: a node may have `role = "timer"` (a countdown or clock, which a screen reader reads as a timer and doesn't announce on every tick). It was missing from the roles a script may name, so a plugin that used it stopped drawing with "unknown role timer"; Rune's accessibility tree already mapped it.

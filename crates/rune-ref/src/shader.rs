@@ -1,7 +1,7 @@
 //! Deliberately scalar transcription of shader.wgsl. No shared shader generator:
 //! keeping the implementations independent catches changes to either lane.
 use crate::{Atlas, Primitive};
-use libm::{atan2f, cosf, expf, floorf, powf, sinf, sqrtf};
+use libm::{atan2f, cosf, expf, floorf, powf, roundf, sinf, sqrtf};
 
 fn clamp(x: f32) -> f32 {
     x.clamp(0.0, 1.0)
@@ -38,6 +38,14 @@ fn sd_continuous(p: [f32; 2], h: [f32; 2], r: f32) -> f32 {
     let u2 = u * u;
     let g = 1.146_022_9 + u2 * (-0.375_731_6 + u2 * (0.307_966_1 - 0.077_243_54 * u2));
     sqrtf(v[0] * v[0] + v[1] * v[1]) - e * g
+}
+/// Matches WGSL `sign(r) * max(abs(r) - cut, 0.0)`: zero stays zero even when `cut < 0.0`.
+fn inset_radius(r: f32, cut: f32) -> f32 {
+    if r == 0.0 {
+        0.0
+    } else {
+        (r.abs() - cut).max(0.0).copysign(r)
+    }
 }
 fn ramp(d: f32, fade: f32) -> f32 {
     if fade == 0.0 {
@@ -79,6 +87,93 @@ fn shadow(p: [f32; 2], h: [f32; 2], sigma: f32, corner: f32) -> f32 {
         y += step;
     }
     v
+}
+
+/// Coverage of a stroke segment from `a` to `b`, `hw` half width, round or butt caps
+/// (`shader.wgsl` `segment`).
+fn segment(p: [f32; 2], a: [f32; 2], b: [f32; 2], hw: f32, round: bool) -> f32 {
+    let w = hw.max(0.5);
+    let weight = (hw * 2.0).min(1.0);
+    let ab = [b[0] - a[0], b[1] - a[1]];
+    let len = sqrtf(ab[0] * ab[0] + ab[1] * ab[1]);
+    let ap = [p[0] - a[0], p[1] - a[1]];
+    let d = if len < 1e-4 {
+        if !round {
+            return 0.0;
+        }
+        sqrtf(ap[0] * ap[0] + ap[1] * ap[1]) - w
+    } else {
+        let dir = [ab[0] / len, ab[1] / len];
+        let along = ap[0] * dir[0] + ap[1] * dir[1];
+        if round {
+            let t = along.clamp(0.0, len);
+            let dx = ap[0] - dir[0] * t;
+            let dy = ap[1] - dir[1] * t;
+            sqrtf(dx * dx + dy * dy) - w
+        } else {
+            let across = (dir[0] * ap[1] - dir[1] * ap[0]).abs();
+            let q = [(along - len * 0.5).abs() - len * 0.5, across - w];
+            let mx = q[0].max(0.0);
+            let my = q[1].max(0.0);
+            q[0].max(q[1]).min(0.0) + sqrtf(mx * mx + my * my)
+        }
+    };
+    clamp(0.5 - d) * weight
+}
+
+/// Signed distance from `p` to edge `a -> b`, positive on `c`'s side (`shader.wgsl` `edge`).
+fn edge(p: [f32; 2], a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> f32 {
+    let e = [b[0] - a[0], b[1] - a[1]];
+    let l = sqrtf(e[0] * e[0] + e[1] * e[1]).max(1e-6);
+    let n = [-e[1] / l, e[0] / l];
+    let s = if (c[0] - a[0]) * n[0] + (c[1] - a[1]) * n[1] >= 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    ((p[0] - a[0]) * n[0] + (p[1] - a[1]) * n[1]) * s
+}
+
+/// Tie-breaking shared-edge ownership (`shader.wgsl` `owns`).
+fn owns(p: [f32; 2], a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> bool {
+    let swap = a[0] > b[0] || (a[0] == b[0] && a[1] > b[1]);
+    let (lo, hi) = if swap { (b, a) } else { (a, b) };
+    let e = [hi[0] - lo[0], hi[1] - lo[1]];
+    let side = e[0] * (c[1] - lo[1]) - e[1] * (c[0] - lo[0]);
+    let v = e[0] * (p[1] - lo[1]) - e[1] * (p[0] - lo[0]);
+    if side > 0.0 { v >= 0.0 } else { v < 0.0 }
+}
+
+/// Antialiased coverage across a boundary edge `a -> b` (`shader.wgsl` `soft`).
+fn soft(p: [f32; 2], a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> f32 {
+    let d = edge(p, a, b, c);
+    let e = [b[0] - a[0], b[1] - a[1]];
+    let t = ((p[0] - a[0]) * e[0] + (p[1] - a[1]) * e[1]) / (e[0] * e[0] + e[1] * e[1]).max(1e-6);
+    if !(0.0..=1.0).contains(&t) {
+        return if d >= 0.0 { 1.0 } else { 0.0 };
+    }
+    clamp(d + 0.5)
+}
+
+/// Filled triangle coverage with per-edge antialiasing bitmask (`shader.wgsl` `triangle`).
+fn triangle(p: [f32; 2], a: [f32; 2], b: [f32; 2], c: [f32; 2], aa: u32) -> f32 {
+    let mut cov = 1.0;
+    if (aa & 1) == 1 {
+        cov *= soft(p, a, b, c);
+    } else if !owns(p, a, b, c) {
+        return 0.0;
+    }
+    if (aa & 2) == 2 {
+        cov *= soft(p, b, c, a);
+    } else if !owns(p, b, c, a) {
+        return 0.0;
+    }
+    if (aa & 4) == 4 {
+        cov *= soft(p, c, a, b);
+    } else if !owns(p, c, a, b) {
+        return 0.0;
+    }
+    cov
 }
 
 fn ring_arc(p: [f32; 2], size: [f32; 2], radii: [f32; 4], bw: f32) -> (f32, f32) {
@@ -177,16 +272,19 @@ pub(crate) fn fragment(i: &Primitive, atlas: &Atlas, screen: [f32; 2]) -> [f32; 
     let grow = match kind {
         1 => i.params[2] * 3.0 + 1.0,
         2 => 0.0,
-        3 => 1.0,
+        3 | 5 | 6 => 1.0,
         _ => 1.0 + i.params[2] * 2.0,
     };
-    // Rasterization bounds matter for glyphs and very soft shadows. Pixel centers,
+    let mut lo = [i.rect[0] - grow, i.rect[1] - grow];
+    let mut hi = [lo[0] + (i.rect[2] + 2.0 * grow), lo[1] + (i.rect[3] + 2.0 * grow)];
+    // One band of a big shadow or border ring rasterizes only its window (`shader.wgsl` `base_vs`).
+    if kind <= 1 && i.uv[2] < 0.0 {
+        lo = [lo[0].max(i.rect[0] + i.uv[0]), lo[1].max(i.rect[1] + i.uv[1])];
+        hi = [hi[0].min(i.rect[0] - i.uv[2]).max(lo[0]), hi[1].min(i.rect[1] + i.uv[3]).max(lo[1])];
+    }
+    // Rasterization bounds matter for glyphs, bands and very soft shadows. Pixel centers,
     // half-open right/bottom edges, matching the two axis-aligned GPU triangles.
-    if p[0] < i.rect[0] - grow
-        || p[1] < i.rect[1] - grow
-        || p[0] >= i.rect[0] + i.rect[2] + grow
-        || p[1] >= i.rect[1] + i.rect[3] + grow
-    {
+    if p[0] < lo[0] || p[1] < lo[1] || p[0] >= hi[0] || p[1] >= hi[1] {
         return [0.0; 4];
     }
     let h = [i.rect[2] * 0.5, i.rect[3] * 0.5];
@@ -205,7 +303,7 @@ pub(crate) fn fragment(i: &Primitive, atlas: &Atlas, screen: [f32; 2]) -> [f32; 
                     let ih = [(h[0] - (w[1] + w[3]) * 0.5).max(0.0), (h[1] - (w[0] + w[2]) * 0.5).max(0.0)];
                     let at = [q[0] - (w[3] - w[1]) * 0.5, q[1] - (w[0] - w[2]) * 0.5];
                     let cut = [w[0].max(w[3]), w[0].max(w[1]), w[2].max(w[1]), w[2].max(w[3])];
-                    sd(at, ih, std::array::from_fn(|n| (i.radii[n].abs() - cut[n]).max(0.0).copysign(i.radii[n])))
+                    sd(at, ih, std::array::from_fn(|n| inset_radius(i.radii[n], cut[n])))
                 } else {
                     d + bw
                 };
@@ -251,7 +349,7 @@ pub(crate) fn fragment(i: &Primitive, atlas: &Atlas, screen: [f32; 2]) -> [f32; 
             let ih = h.map(|v| (v - spread).max(0.0));
             let q = [q[0] - i.uv[0], q[1] - i.uv[1]];
             let lit = if i.params[2] < 0.3 {
-                box_cov(q, ih, i.radii.map(|r| (r.abs() - spread).max(0.0).copysign(r)))
+                box_cov(q, ih, i.radii.map(|r| inset_radius(r, spread)))
             } else {
                 shadow(
                     q,
@@ -274,6 +372,26 @@ pub(crate) fn fragment(i: &Primitive, atlas: &Atlas, screen: [f32; 2]) -> [f32; 
                 let cov = clamp(0.5 - d / (soft * 2.0));
                 std::array::from_fn(|c| mix(i.fill[c], i.uv[c], t) * cov)
             };
+        }
+        5 => {
+            let cov = segment(
+                screen,
+                [i.radii[0], i.radii[1]],
+                [i.radii[2], i.radii[3]],
+                i.params[0],
+                i.params[2] > 0.5,
+            );
+            col = i.fill.map(|c| c * cov);
+        }
+        6 => {
+            let cov = triangle(
+                screen,
+                [i.radii[0], i.radii[1]],
+                [i.radii[2], i.radii[3]],
+                [i.uv[0], i.uv[1]],
+                (i.params[0] + 0.5) as u32,
+            );
+            col = i.fill.map(|c| c * cov);
         }
         10 => {
             let d = sd(q, h, i.radii);
@@ -318,11 +436,7 @@ pub(crate) fn fragment(i: &Primitive, atlas: &Atlas, screen: [f32; 2]) -> [f32; 
 }
 
 pub(crate) fn layer_clip_coverage(i: &Primitive, screen: [f32; 2]) -> f32 {
-    let clip = clip_coverage(i, screen) * if i.params[3] == 0.0 { hole_alpha(screen, i.radii) } else { 1.0 };
-    if i.border == [0.0; 4] { return clip; }
-    let half = [(i.clip[2] - i.clip[0]) * 0.5, (i.clip[3] - i.clip[1]) * 0.5];
-    let p = [screen[0] - i.clip[0] - half[0], screen[1] - i.clip[1] - half[1]];
-    clip * clamp(0.5 - sd(p, half, i.border))
+    clip_coverage(i, screen) * if i.params[3] == 0.0 { hole_alpha(screen, i.radii) } else { 1.0 }
 }
 
 /// A layer's round hole (`El::cutout_circle`): centre `h[0..2]`, clear within `h[2]`, whole from
@@ -333,11 +447,51 @@ fn hole_alpha(p: [f32; 2], h: [f32; 4]) -> f32 {
     clamp((sqrtf(dx * dx + dy * dy) - (h[2] + h[3]) * 0.5) / (h[3] - h[2]).max(1.0) + 0.5)
 }
 
+/// Matches `instance.rs::pack_clip_radii` so CPU clipping sees the same packed quantization
+/// (`0.5` px / `2.0` px mixed steps, clamped to half the shorter clip side) as `clip.wgsl`.
+pub(crate) fn pack_clip_radii(clip: [f32; 4], radii: [f32; 4]) -> u32 {
+    let half = ((clip[2] - clip[0]).min(clip[3] - clip[1]) * 0.5).max(0.0);
+    let clamped = radii.map(|radius| {
+        let r = radius.abs().min(half).min(f32::from_bits(0x5fff_ffff));
+        if radius < 0.0 && r > 0.0 { -r } else { r }
+    });
+    if clamped[0] == clamped[1] && clamped[1] == clamped[2] && clamped[2] == clamped[3] {
+        return if clamped[0] == 0.0 { 0 } else { clamped[0].to_bits() };
+    }
+    let continuous = clamped.iter().any(|&r| r < 0.0);
+    let max_r = clamped.iter().fold(0.0f32, |m, r| m.max(r.abs()));
+    let coarse = max_r > 63.5;
+    let inv_step = if coarse { 0.5 } else { 2.0 };
+    let mut bits = 0x6000_0000u32
+        | if continuous { 0x8000_0000 } else { 0 }
+        | if coarse { 0x1000_0000 } else { 0 };
+    for (idx, r) in clamped.into_iter().enumerate() {
+        let q = roundf(r.abs() * inv_step).clamp(0.0, 127.0) as u32;
+        bits |= q << (idx * 7);
+    }
+    bits
+}
+
+fn unpack_clip_radii(w: u32) -> [f32; 4] {
+    if w == 0 {
+        return [0.0; 4];
+    }
+    if (w & 0x6000_0000) != 0x6000_0000 {
+        return [f32::from_bits(w); 4];
+    }
+    let step = if (w & 0x1000_0000) != 0 { 2.0 } else { 0.5 };
+    let sign = if (w & 0x8000_0000) != 0 { -1.0 } else { 1.0 };
+    std::array::from_fn(|idx| {
+        let q = (w >> (idx * 7)) & 0x7f;
+        if q == 0 { 0.0 } else { q as f32 * step * sign }
+    })
+}
+
 fn clip_coverage(i: &Primitive, screen: [f32; 2]) -> f32 {
     let origin = i.fade_origin.unwrap_or(i.clip);
     let p = screen;
     let hard = [p[0] - i.clip[0], p[1] - i.clip[1], i.clip[2] - p[0], i.clip[3] - p[1]];
-    (0..4).map(|edge| {
+    let mut alpha: f32 = (0..4).map(|edge| {
         let width = half::f16::from_f32(i.fade[edge].clamp(-65504.0, 65504.0)).to_f32();
         let distance = if edge < 2 { i.clip[edge] - origin[edge] } else { origin[edge] - i.clip[edge] };
         let w = i.fade[edge].abs();
@@ -346,7 +500,15 @@ fn clip_coverage(i: &Primitive, screen: [f32; 2]) -> f32 {
         if offset >= 1.0 { ramp(hard[edge], 0.0) }
         else if offset > 0.0 { ramp(hard[edge], 0.0).min(ramp(hard[edge] + offset * width.abs(), width)) }
         else { ramp(hard[edge], width) }
-    }).product()
+    }).product();
+    let radii = if i.params[1] == 8.0 { i.clip_radii.unwrap_or(i.border) } else { i.clip_radii.unwrap_or([0.0; 4]) };
+    let packed = pack_clip_radii(i.clip, radii);
+    if packed != 0 {
+        let half = [(i.clip[2] - i.clip[0]) * 0.5, (i.clip[3] - i.clip[1]) * 0.5];
+        let q = [p[0] - i.clip[0] - half[0], p[1] - i.clip[1] - half[1]];
+        alpha *= clamp(0.5 - sd(q, half, unpack_clip_radii(packed)));
+    }
+    alpha
 }
 
 #[cfg(test)]
@@ -426,5 +588,31 @@ mod tests {
             let s = n as f32 * 1.3;
             assert!((dash_cov(s, 100.0, [4.0, 3.0, 7.0]) - dash_cov(s, 100.0, [4.0, 3.0, 0.0])).abs() < 1e-3);
         }
+    }
+
+    #[test]
+    fn pack_clip_radii_matches_uniform_fine_coarse_and_continuous_encoding() {
+        let clip = [0.0, 0.0, 600.0, 600.0];
+        assert_eq!(pack_clip_radii(clip, [0.0; 4]), 0);
+        // Uniform corners round-trip as exact f32 bits.
+        let uniform = pack_clip_radii(clip, [-12.25; 4]);
+        assert_eq!(unpack_clip_radii(uniform), [-12.25; 4]);
+        // Mixed corners <= 63.5 px quantize to 0.5 px steps.
+        let fine = pack_clip_radii(clip, [10.2, 4.8, 0.0, 63.4]);
+        assert_eq!(unpack_clip_radii(fine), [10.0, 5.0, 0.0, 63.5]);
+        // Mixed corners > 63.5 px quantize to 2.0 px steps and saturate at 254 px.
+        let coarse = pack_clip_radii(clip, [-71.3, -280.0, 0.0, -13.1]);
+        assert_eq!(unpack_clip_radii(coarse), [-72.0, -254.0, 0.0, -14.0]);
+        // Radii clamp to half the shorter clip side.
+        let small_clip = [0.0, 0.0, 20.0, 40.0];
+        assert_eq!(unpack_clip_radii(pack_clip_radii(small_clip, [50.0, 12.0, 15.0, 10.0])), [10.0; 4]);
+    }
+
+    #[test]
+    fn inset_radius_keeps_zero_corners_square_under_negative_spread() {
+        assert_eq!(inset_radius(0.0, -4.0), 0.0);
+        assert_eq!(inset_radius(6.0, -4.0), 10.0);
+        assert_eq!(inset_radius(-6.0, -4.0), -10.0);
+        assert_eq!(inset_radius(-6.0, 8.0), -0.0);
     }
 }

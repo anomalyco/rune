@@ -10,6 +10,8 @@
 //! The bar blurs at σ 8 pt under a light tint. `--scene strong` blurs at σ 20 pt under a
 //! heavier tint; `--scene plain` draws the bar with its tint alone, for comparison.
 
+#![forbid(unsafe_code)]
+
 use rune::tok::{self, type_};
 use rune::{AppSpec, Cx, El, ScrollSpec, TextStyle, col, el, oklch, oklcha, row, text};
 

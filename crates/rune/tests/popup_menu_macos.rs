@@ -4,6 +4,8 @@
 //! menu through AppKit instead. Opens a window, so it only runs with RUNE_GUI_TESTS=1 in a
 //! logged-in GUI session.
 
+#![allow(unsafe_code)]
+
 #[cfg(not(target_os = "macos"))]
 fn main() {}
 
@@ -15,9 +17,9 @@ mod mac {
     use std::cell::RefCell;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Mutex, mpsc};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
-    use objc2::{class, msg_send, msg_send_id, rc::Retained, runtime::AnyObject};
+    use objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
     use objc2_foundation::{NSPoint, NSString};
     use rune::*;
 
@@ -62,7 +64,7 @@ mod mac {
     }
 
     fn wait(what: &str, limit: Duration, f: impl Fn() -> bool) -> bool {
-        let start = Instant::now();
+        let start = rune::time::now();
         while !f() {
             if start.elapsed() > limit { println!("popup_menu_macos: no {what} within {limit:?}"); return false; }
             std::thread::sleep(Duration::from_millis(5));
@@ -73,13 +75,13 @@ mod mac {
     /// Runs `f` on the main thread through an update and waits for it.
     fn on_main<T: Send + 'static>(handle: &AppHandle<State>, f: impl FnOnce(&mut State, &mut Tx) -> T + Send + 'static) -> T {
         let (tx, rx) = mpsc::channel();
-        handle.update(move |s, t| { let _ = tx.send(f(s, t)); });
+        handle.update(move |s, t| { tx.send(f(s, t)).ok(); });
         rx.recv_timeout(Duration::from_secs(5)).expect("an update runs on the main thread")
     }
 
     /// The app's window, its number, and a view point (top-left origin) in window coordinates.
     unsafe fn window_point(x: f64, y: f64) -> (*mut AnyObject, isize, NSPoint) {
-        // SAFETY (caller): main thread. Queries on the app's only window.
+        // SAFETY: caller invokes on the AppKit main thread; queries the app's only live window.
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             let windows: *mut AnyObject = msg_send![app, windows];
@@ -92,7 +94,7 @@ mod mac {
     }
 
     unsafe fn now() -> f64 {
-        // SAFETY (caller): a plain query.
+        // SAFETY: caller invokes on the AppKit main thread; `NSProcessInfo.processInfo.systemUptime` is a plain getter.
         unsafe {
             let info: *mut AnyObject = msg_send![class!(NSProcessInfo), processInfo];
             msg_send![info, systemUptime]
@@ -153,7 +155,7 @@ mod mac {
                     MENU.with(|slot| *slot.borrow_mut() = if begin { Retained::retain(menu) } else { None });
                     TRACKING.store(begin, Ordering::SeqCst);
                 });
-                let token: Option<Retained<AnyObject>> = msg_send_id![center, addObserverForName: &*NSString::from_str(name),
+                let token: Option<Retained<AnyObject>> = msg_send![center, addObserverForName: &*NSString::from_str(name),
                     object: std::ptr::null::<AnyObject>(), queue: std::ptr::null::<AnyObject>(), usingBlock: &*block];
                 OBSERVERS.with(|o| o.borrow_mut().extend(token));
             }
@@ -184,11 +186,11 @@ mod mac {
         assert!(popup_menu_supported());
         let spec = AppSpec { poll: Some(poll), ..AppSpec::new("popup menu", (320.0, 160.0), || State { theme: "system".into() }, view) };
         let (ready_tx, ready_rx) = mpsc::channel();
-        let app = App::new(spec).args(Vec::new()).on_ready(move |_| { let _ = ready_tx.send(()); });
+        let app = App::new(spec).args(Vec::new()).on_ready(move |_| { ready_tx.send(()).ok(); });
         let handle = app.handle();
         let worker = std::thread::spawn(move || {
             let run = std::panic::catch_unwind(|| {
-                let started = Instant::now();
+                let started = rune::time::now();
                 ready_rx.recv_timeout(Duration::from_secs(60)).expect("window ready");
                 println!("popup_menu_macos: ready after {:?}", started.elapsed());
                 std::thread::sleep(Duration::from_millis(300));

@@ -21,6 +21,12 @@ pub(super) struct Widths {
 }
 
 impl Widths {
+    pub(super) fn attach_prefs(&mut self, windowed: bool, title: &'static str) {
+        if windowed && !cfg!(test) && self.load.is_none() && self.save.is_none() {
+            *self = Self::prefs(crate::tooling::app_id().unwrap_or(title));
+        }
+    }
+
     pub(super) fn prefs(app_id: &str) -> Self {
         let load_id = app_id.to_owned();
         let save_id = app_id.to_owned();
@@ -32,14 +38,14 @@ impl Widths {
             save: Some(Rc::new(move |sidebar, side| {
                 let mut p = Prefs::open(&save_id);
                 if (sidebar - SIDEBAR).abs() < 0.5 {
-                    let _ = p.remove(PREF_SIDEBAR);
+                    p.remove(PREF_SIDEBAR).ok();
                 } else {
-                    let _ = p.set(PREF_SIDEBAR, &sidebar);
+                    p.set(PREF_SIDEBAR, &sidebar).ok();
                 }
                 if (side - SIDE).abs() < 0.5 {
-                    let _ = p.remove(PREF_SIDE);
+                    p.remove(PREF_SIDE).ok();
                 } else {
-                    let _ = p.set(PREF_SIDE, &side);
+                    p.set(PREF_SIDE, &side).ok();
                 }
             })),
         }
@@ -78,7 +84,7 @@ impl Controls {
     }
 }
 
-impl<S: 'static> Live<S> {
+impl LiveCore {
     pub(super) fn load_widths(&mut self) {
         if let Some(load) = self.widths.load.take() {
             let (sidebar, side) = load();

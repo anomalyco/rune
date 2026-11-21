@@ -22,36 +22,36 @@ pub(crate) struct PrimarySelection {
     pub(crate) paste: Option<String>,
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// The primary button came up.
-    pub(super) fn primary_released(&mut self) {
-        self.primary.pending = true;
+    pub(in crate::runtime) fn primary_released(&mut self) {
+        self.edit.primary.pending = true;
     }
 
     /// After a frame's handlers, once the release's caret and selection landed: puts what's
     /// selected on the primary selection, if it changed.
-    pub(super) fn note_primary_selection(&mut self) {
-        if !std::mem::take(&mut self.primary.pending) { return; }
+    pub(in crate::runtime) fn note_primary_selection(&mut self, app: &dyn ViewDriver) {
+        if !std::mem::take(&mut self.edit.primary.pending) { return; }
         let text = match self.focused_input() {
             Some(input) if input.edit.is_secure() => None,
             Some(input) => Some(input.edit.selected().to_owned()).filter(|t| !t.is_empty()),
-            None => self.selected_text(),
+            None => self.selected_text(app),
         };
         let Some(text) = text else { return };
         let hash = std::hash::BuildHasherDefault::<std::hash::DefaultHasher>::default().hash_one(&text);
-        if self.primary.written == Some(hash) { return; }
-        self.primary.written = Some(hash);
-        self.primary.write = Some(text);
+        if self.edit.primary.written == Some(hash) { return; }
+        self.edit.primary.written = Some(hash);
+        self.edit.primary.write = Some(text);
     }
 
     /// A middle press at (x, y): on a text field that takes text, it focuses the field with its
     /// caret there and asks for the primary selection to paste. True when it did.
-    pub(super) fn primary_paste_down(&mut self, x: f32, y: f32) -> bool {
+    pub(in crate::runtime) fn primary_paste_down(&mut self, x: f32, y: f32) -> bool {
         let Some(i) = self.primary_target(x, y).filter(|&i| self.allowed(i) && !self.subtree_exiting(i)) else { return false };
-        let takes = self.nodes[i].input.as_ref().is_some_and(|input| input.access.is_some() && !input.edit.is_secure());
+        let takes = self.tree.nodes[i].input.as_ref().is_some_and(|input| input.access.is_some() && !input.edit.is_secure());
         if !takes { return false; }
         self.place_caret(i, x, y);
-        self.primary.paste = Some(self.nodes[i].path.clone());
+        self.edit.primary.paste = Some(self.tree.nodes[i].path.clone());
         true
     }
 }

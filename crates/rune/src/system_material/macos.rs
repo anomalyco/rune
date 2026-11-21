@@ -8,12 +8,14 @@
 //! frame, corner radius and alpha inside it, so the WindowServer composites the material, the
 //! shadow around it and the content on top from the same commit.
 
+#![allow(unsafe_code)]
+
 use super::{assign, MaterialDraw, Mode, PresentFlag, SystemMaterial, MAX_NATIVE_MATERIALS};
 use rune_motion::NodeId;
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-use objc2_video::rc::Retained;
-use objc2_video::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
-use objc2_video::{msg_send, sel};
+use objc2::rc::Retained;
+use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
+use objc2::{msg_send, sel};
 use std::{cell::Cell, rc::Rc};
 
 /// The host view: flipped, so frames come straight from Rune's top-left points, and never hit,
@@ -102,8 +104,7 @@ impl Materials {
         if on && self.live_end.is_none()
             && let (Some(win), Some(metal)) = (crate::platform::macos::ns_window(window), metal_layer(surface))
         {
-            let win = unsafe { &*objc2::rc::Retained::as_ptr(&win).cast::<AnyObject>() };
-            self.live_end = watch_live_end(win, &metal, self.flag.clone());
+            self.live_end = watch_live_end(&win, &metal, self.flag.clone());
         }
         if let Some(on) = self.update_flag(|f| f.live(on)) { crate::platform::macos::present_with_transaction(surface, on); }
     }
@@ -122,7 +123,7 @@ impl Materials {
         if self.active || !found || !transparent || self.mode == Mode::Off { return false; }
         let Some(view) = crate::platform::macos::content_view(window) else { return false };
         // SAFETY: winit's content view outlives this retain, which only adds a reference.
-        let Some(view) = (unsafe { Retained::retain(objc2::rc::Retained::as_ptr(&view).cast::<AnyObject>().cast_mut()) }) else { return false };
+        let Some(view) = (unsafe { Retained::retain(Retained::as_ptr(&view).cast::<AnyObject>().cast_mut()) }) else { return false };
         let Some(metal) = metal_layer(surface) else { return false };
         if self.mode != Mode::Unsynced && let Some(on) = self.update_flag(|f| f.materials(true)) {
             crate::platform::macos::present_with_transaction(surface, on);
@@ -280,8 +281,8 @@ impl Drop for Materials {
 /// no event for `windowDidEndLiveResize:`, so an idle window draws no frame after mouse-up.
 pub(super) fn watch_live_end(window: &AnyObject, layer: &Retained<AnyObject>, flag: Rc<Cell<PresentFlag>>) -> Option<Retained<AnyObject>> {
     let center = AnyClass::get(c"NSNotificationCenter")?;
-    let weak = objc2_video::rc::Weak::from_retained(layer);
-    let block = block2_metal::RcBlock::new(move |_: *mut AnyObject| {
+    let weak = objc2::rc::Weak::from_retained(layer);
+    let block = block2::RcBlock::new(move |_: *mut AnyObject| {
         let mut f = flag.get();
         let change = f.live(false);
         flag.set(f);
@@ -290,7 +291,7 @@ pub(super) fn watch_live_end(window: &AnyObject, layer: &Retained<AnyObject>, fl
             unsafe { let _: () = msg_send![&*layer, setPresentsWithTransaction: Bool::new(on)]; }
         }
     });
-    let name = objc2_foundation_video::NSString::from_str("NSWindowDidEndLiveResizeNotification");
+    let name = objc2_foundation::NSString::from_str("NSWindowDidEndLiveResizeNotification");
     // SAFETY: main thread; `Materials::drop` removes the returned observer token.
     unsafe {
         let center: Retained<AnyObject> = msg_send![center, defaultCenter];
@@ -351,5 +352,5 @@ fn make_view(material: SystemMaterial, host: &AnyObject) -> Option<Slot> {
 
 /// The surface's CAMetalLayer, when it is one on Metal.
 fn metal_layer(surface: &wgpu::Surface<'_>) -> Option<Retained<AnyObject>> {
-    crate::gpu::with_layer(surface, |layer| objc2_video::Message::retain(layer))
+    crate::gpu::with_layer(surface, |layer| objc2::Message::retain(layer))
 }

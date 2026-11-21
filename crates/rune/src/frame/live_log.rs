@@ -20,6 +20,9 @@ thread_local! {
     /// Tx::wake_after and wake_at callers since the last logged frame, with the shortest wait.
     static WAKERS: RefCell<Vec<(&'static std::panic::Location<'static>, std::time::Duration)>> = const { RefCell::new(Vec::new()) };
     static ASKED: RefCell<Vec<&'static std::panic::Location<'static>>> = const { RefCell::new(Vec::new()) };
+    /// Frames missed since the last drawn one (occluded, timeout, outdated, unconfigured), and
+    /// surfaces `acquire` reconfigured and got a drawable from.
+    static MISSED: Cell<([u32; 4], u32)> = const { Cell::new(([0; 4], 0)) };
 }
 
 /// Whether frames are logged in this process.
@@ -48,6 +51,19 @@ pub(crate) fn wake(start: u64) {
 /// A frame asked for at t.
 pub(crate) fn asked(at: &'static std::panic::Location<'static>) {
     ASKED.with_borrow_mut(|a| if !a.contains(&at) { a.push(at) });
+}
+
+/// A frame that got no drawable: `kind` 0 occluded, 1 timeout, 2 outdated, 3 unconfigured.
+pub(crate) fn missed(kind: usize) {
+    let (mut m, r) = MISSED.get();
+    m[kind.min(3)] += 1;
+    MISSED.set((m, r));
+}
+
+/// `acquire` found its surface outdated, reconfigured it, and went on.
+pub(crate) fn reconfigured() {
+    let (m, r) = MISSED.get();
+    MISSED.set((m, r + 1));
 }
 
 /// A timer asked for at t, due after wait.
@@ -101,6 +117,13 @@ pub(crate) struct Frame {
     pub(crate) whole: Option<&'static str>,
     /// The bounds of what changed (`[x0, y0, x1, y1]`), however much it drew.
     pub(crate) change: Option<[u32; 4]>,
+    /// Only its loops stepped (`Runtime::loop_step`): the instances it wrote, else None.
+    pub(crate) looped: Option<usize>,
+    /// Why it wasn't loop-only, when only its loops might have asked for it.
+    pub(crate) loop_why: Option<&'static str>,
+    /// `RUNE_LOOP_CHECK=1`: the instances that differ from what the loop-only step would have
+    /// drawn, and the largest difference.
+    pub(crate) loop_check: Option<(usize, f32)>,
 }
 
 pub(crate) fn frame(f: Frame) {
@@ -124,10 +147,17 @@ pub(crate) fn frame(f: Frame) {
         "why": crate::runtime::CommitWhy::names(f.why),
         "next": next, "poll_due": f.poll_due, "loop_due": f.loop_due, "loops": f.loops, "damage": f.damage, "whole": f.whole, "change": f.change,
     });
+    // Apart from the rest: one more key there passes `json!`'s recursion limit.
+    let mut line = line;
+    line["looped"] = serde_json::json!(f.looped);
+    line["loop_why"] = serde_json::json!(f.loop_why);
+    let (missed, reconfigured) = MISSED.replace(([0; 4], 0));
+    if missed != [0; 4] || reconfigured > 0 { line["missed"] = serde_json::json!({ "occluded": missed[0], "timeout": missed[1], "outdated": missed[2], "unconfigured": missed[3], "reconfigured": reconfigured }); }
+    line["loop_check"] = serde_json::json!(f.loop_check.map(|(n, d)| [n as f64, if d.is_finite() { f64::from(d) } else { -1.0 }]));
     OUT.with_borrow_mut(|out| {
         if let Some(Some(w)) = out.as_mut() {
-            let _ = writeln!(w, "{line}");
-            let _ = w.flush();
+            writeln!(w, "{line}").ok();
+            w.flush().ok();
         }
     });
 }

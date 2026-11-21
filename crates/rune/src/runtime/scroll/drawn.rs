@@ -9,7 +9,7 @@ use super::*;
 
 /// Where a scroll viewport drew its content's vertical offset last frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(super) enum PixelHold {
+pub(crate) enum PixelHold {
     /// Nothing drawn yet.
     #[default]
     Unseen,
@@ -21,7 +21,7 @@ pub(super) enum PixelHold {
 
 impl PixelHold {
     /// The vertical offset the last frame drew at, in points.
-    pub(super) fn y(self) -> f32 {
+    pub(crate) fn y(self) -> f32 {
         match self {
             PixelHold::Unseen => 0.0,
             PixelHold::Stepping { drawn, .. } | PixelHold::Holding { drawn, .. } => drawn,
@@ -30,7 +30,7 @@ impl PixelHold {
 
     /// The offset to draw this frame's `exact` content offset at, and the hold after it.
     /// `offset` is the viewport's layout offset, which a held step never draws away from.
-    pub(super) fn draw(self, exact: f32, offset: f32, pinned: bool, s: f32) -> (f32, PixelHold) {
+    pub(in crate::runtime) fn draw(self, exact: f32, offset: f32, pinned: bool, s: f32) -> (f32, PixelHold) {
         // `grid` rounds to 1/64 of a device pixel, so a hold spanning under one quantum only
         // absorbs rounding noise. Real travel always lands at the layout offset.
         let rounded = grid(exact, s);

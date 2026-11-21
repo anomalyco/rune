@@ -1,0 +1,1 @@
+- Web apps scale pointer moves, mirrored-link hover, wheel scroll deltas and the IME caret box by `Cx::zoom`: under a zoom other than 1, clicks land on the element under the cursor, wheel scrolling travels the same screen distance as on desktop, and IME candidates open beside the zoomed caret.

@@ -1,6 +1,7 @@
 use super::*;
 use std::num::NonZeroU64;
-use std::sync::atomic::AtomicU64;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Compare a Tx call on the UI thread with a handle request published under the queue lock.
 /// The counter carries no request data; only its modification order is shared.
@@ -29,9 +30,12 @@ pub(crate) enum Activation {
     Minimize,
 }
 
-pub(crate) struct Requests<S> {
+/// The non-generic part of [`Requests<S>`], drained by the window host.
+#[derive(Default)]
+pub(crate) struct WindowRequests {
     last_cancel: Option<NonZeroU64>,
     pub window: Option<WindowRequest>,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub dock: Option<bool>,
     /// `AppHandle::focus` or `AppHandle::minimize`; last-wins (`cancel_minimize`).
     pub activation: Option<Activation>,
@@ -41,10 +45,9 @@ pub(crate) struct Requests<S> {
     pub quit: Option<crate::quit::After>,
     /// `AppHandle::wake` asked for `poll`.
     pub woken: bool,
-    pub updates: Vec<Update<S>>,
 }
 
-impl<S> Requests<S> {
+impl WindowRequests {
     /// Asks something of the window itself: show, hide or close it, focus or minimize it, or
     /// move it. A request added here reaches both `only_updates` and `Shared::window_pending`.
     fn asks_window(&self) -> bool {
@@ -53,7 +56,7 @@ impl<S> Requests<S> {
 
     /// A later open, hide, close or focus takes a minimize back out; a show leaves it, so a
     /// minimize can follow one.
-    pub(super) fn cancel_minimize(&mut self) {
+    fn cancel_minimize(&mut self) {
         self.last_cancel = Some(window_request_order());
         if self.activation == Some(Activation::Minimize) { self.activation = None; }
     }
@@ -64,27 +67,33 @@ impl<S> Requests<S> {
     }
 }
 
+#[cfg(test)]
+pub(crate) struct Requests<S> {
+    pub(crate) window_requests: WindowRequests,
+    pub updates: Vec<Update<S>>,
+}
+
+#[cfg(test)]
 impl<S> Default for Requests<S> {
     fn default() -> Self {
         Requests {
-            last_cancel: None,
-            window: None,
-            dock: None,
-            activation: None,
-            position: None,
-            place: None,
-            quit: None,
-            woken: false,
+            window_requests: WindowRequests::default(),
             updates: Vec::new(),
         }
     }
 }
 
-pub(crate) struct Shared<S> {
-    pub(crate) menus: crate::native_menu::Hub<S>,
-    pub(crate) shortcuts: crate::shortcuts::Hub<S>,
-    pub(super) requests: Mutex<Requests<S>>,
-    wake: Mutex<Option<crate::runtime::Waker>>,
+#[cfg(test)]
+impl<S> std::ops::Deref for Requests<S> {
+    type Target = WindowRequests;
+    fn deref(&self) -> &WindowRequests { &self.window_requests }
+}
+
+/// Non-generic shared state backing [`AppHandle<S>`] and the window host.
+#[derive(Default)]
+pub(crate) struct SharedCore {
+    requests: Mutex<WindowRequests>,
+    pub(super) wake: Mutex<Option<crate::runtime::Waker>>,
     /// Published by the window host for `AppHandle::is_visible` / `window_error`.
     pub(crate) visible: AtomicBool,
     /// `AppHandle::quit` was called, or the web app is ending.
@@ -92,21 +101,7 @@ pub(crate) struct Shared<S> {
     pub(crate) window_error: Mutex<Option<String>>,
 }
 
-impl<S> Default for Shared<S> {
-    fn default() -> Self {
-        Shared {
-            menus: crate::native_menu::Hub::default(),
-            shortcuts: crate::shortcuts::Hub::default(),
-            requests: Mutex::default(),
-            wake: Mutex::new(None),
-            visible: AtomicBool::new(false),
-            quitting: AtomicBool::new(false),
-            window_error: Mutex::new(None),
-        }
-    }
-}
-
-impl<S> Shared<S> {
+impl SharedCore {
     /// Installs the event loop's wake-up and wakes it once for requests made before it existed.
     pub fn connect(&self, wake: crate::runtime::Waker) {
         *self.wake.lock().unwrap() = Some(wake);
@@ -120,53 +115,175 @@ impl<S> Shared<S> {
         }
     }
 
-    pub fn take(&self) -> Requests<S> {
+    fn request(&self, f: impl FnOnce(&mut WindowRequests)) {
+        f(&mut self.requests.lock().unwrap());
+        self.wake();
+    }
+
+    pub(crate) fn wake_app(&self) {
+        self.request(|q| q.woken = true);
+    }
+
+    pub(crate) fn open(&self) {
+        self.request(|q| { q.window = Some(WindowRequest::Open(None)); q.cancel_minimize(); });
+    }
+
+    pub(crate) fn show(&self) {
+        self.request(|q| q.window = Some(WindowRequest::Show));
+    }
+
+    pub(crate) fn hide(&self) {
+        self.request(|q| { q.window = Some(WindowRequest::Hide); q.cancel_minimize(); });
+    }
+
+    pub(crate) fn focus(&self) {
+        self.request(|q| { q.cancel_minimize(); q.activation = Some(Activation::Focus); });
+    }
+
+    pub(crate) fn set_position(&self, position: (i32, i32)) {
+        self.request(|q| { q.position = Some(position); q.place = None; });
+    }
+
+    pub(crate) fn place(&self, display: crate::DisplayTarget, placement: crate::OverlayPlacement) {
+        let place = crate::windows::PlaceRequest::new(display, placement);
+        self.request(|q| { q.place = Some(place); q.position = None; });
+    }
+
+    pub(crate) fn activate(&self, token: String) {
+        self.request(|q| { q.window = Some(WindowRequest::Open(Some(token).filter(|t| !t.is_empty()))); q.cancel_minimize(); });
+    }
+
+    pub(crate) fn close(&self) {
+        self.request(|q| { q.window = Some(WindowRequest::Close); q.cancel_minimize(); });
+    }
+
+    pub(crate) fn minimize(&self) {
+        self.request(|q| { q.activation = Some(Activation::Minimize); });
+    }
+
+    pub(crate) fn quit(&self) {
+        self.quitting.store(true, Ordering::Release);
+        self.request(|q| q.quit = q.quit.max(Some(crate::quit::After::Exit)));
+    }
+
+    pub(crate) fn relaunch(&self) {
+        self.quitting.store(true, Ordering::Release);
+        self.request(|q| q.quit = Some(crate::quit::After::Relaunch));
+    }
+
+    pub(crate) fn set_dock_icon(&self, visible: bool) {
+        self.request(|q| q.dock = Some(visible));
+    }
+
+    pub(crate) fn is_visible(&self) -> bool {
+        self.visible.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn set_visible(&self, visible: bool) {
+        self.visible.store(visible, Ordering::Release);
+    }
+
+    pub(crate) fn window_error(&self) -> Option<String> {
+        self.window_error.lock().unwrap().clone()
+    }
+
+    pub(crate) fn set_window_error(&self, error: Option<String>) {
+        *self.window_error.lock().unwrap() = error;
+    }
+
+    pub(crate) fn take_window(&self) -> WindowRequests {
         std::mem::take(&mut self.requests.lock().unwrap())
+    }
+
+    pub(crate) fn finish_drain_window(&self, rt: &mut crate::runtime::RuntimeCore, minimize: Option<NonZeroU64>) -> WindowRequests {
+        let batch = self.take_window();
+        if minimize > batch.last_cancel {
+            rt.minimize_step(crate::window::MinimizeEvent::Asked);
+        }
+        batch
+    }
+
+    pub(crate) fn asks_window(&self) -> bool {
+        self.requests.lock().unwrap().asks_window()
+    }
+
+    pub(crate) fn take_place(&self) -> Option<crate::windows::PlaceRequest> {
+        self.requests.lock().unwrap().place.take()
+    }
+}
+
+pub(crate) struct Shared<S> {
+    pub(crate) core: Arc<SharedCore>,
+    pub(crate) menus: crate::native_menu::Hub<S>,
+    pub(crate) shortcuts: crate::shortcuts::Hub<S>,
+    updates: Mutex<Vec<Update<S>>>,
+}
+
+impl<S> Default for Shared<S> {
+    fn default() -> Self {
+        Shared {
+            core: Arc::default(),
+            menus: crate::native_menu::Hub::default(),
+            shortcuts: crate::shortcuts::Hub::default(),
+            updates: Mutex::default(),
+        }
+    }
+}
+
+impl<S> std::ops::Deref for Shared<S> {
+    type Target = SharedCore;
+    fn deref(&self) -> &SharedCore { &self.core }
+}
+
+impl<S> Shared<S> {
+    #[cfg(test)]
+    pub fn take(&self) -> Requests<S> {
+        let updates = self.take_updates();
+        let window_requests = self.core.take_window();
+        Requests { window_requests, updates }
     }
 
     /// The queued updates alone; the other requests stay.
     pub(crate) fn take_updates(&self) -> Vec<Update<S>> {
-        std::mem::take(&mut self.requests.lock().unwrap().updates)
+        std::mem::take(&mut self.updates.lock().unwrap())
     }
 
     /// Runs the queued updates with `run`, then takes the other requests, so a window an update
     /// opens (or shows, focuses, places, quits) applies in this turn. Updates the updates queue
     /// wait for the next turn, which their wake brings.
-    pub(crate) fn drain(&self, mut run: impl FnMut(Update<S>)) -> Requests<S> {
+    pub(crate) fn drain(&self, mut run: impl FnMut(Update<S>)) -> WindowRequests {
         for f in self.take_updates() { run(f); }
-        let mut requests = self.requests.lock().unwrap();
-        let later = std::mem::take(&mut requests.updates);
-        std::mem::replace(&mut *requests, Requests { updates: later, ..Requests::default() })
+        self.core.take_window()
     }
 
     /// Drain a native window's updates, running `after` (menu callbacks) after each update.
-    pub(crate) fn drain_window(&self, rt: &mut crate::runtime::Runtime<S>, mut after: impl FnMut(bool)) -> Requests<S>
+    pub(crate) fn drain_window(&self, rt: &mut crate::runtime::Runtime<S>, mut after: impl FnMut(bool)) -> WindowRequests
     where S: 'static {
         // Only these updates’ minimizes, and only those that survive their pick callbacks, are
         // ordered here; a minimize a handler or nested callback latched is already in the machine.
         let mut minimize = None;
-        let batch = self.drain(|f| {
+        for f in self.take_updates() {
             let (changed, ordered) = rt.update_if_ordered(f);
             minimize = minimize.max(ordered);
             after(changed);
-        });
-        if minimize > batch.last_cancel { rt.minimize_step(crate::window::MinimizeEvent::Asked); }
-        batch
+        }
+        self.core.finish_drain_window(rt.core_mut(), minimize)
     }
 
     /// Queues `f` for the next `take`, as `AppHandle::update_if` does, without waking the loop.
     pub(crate) fn queue_update(&self, f: Update<S>) {
-        self.requests.lock().unwrap().updates.push(f);
+        self.updates.lock().unwrap().push(f);
     }
 
-    /// A request a `--desktop` run applies to the window (dock and quit aside) waits for `take`.
-    pub(crate) fn window_pending(&self) -> bool {
-        let r = self.requests.lock().unwrap();
-        r.asks_window() || !r.updates.is_empty()
+    /// Queues `f` and wakes the event loop.
+    pub(crate) fn push_update(&self, f: Update<S>) {
+        self.queue_update(f);
+        self.core.wake();
     }
 
-    pub fn take_place(&self) -> Option<crate::windows::PlaceRequest> {
-        self.requests.lock().unwrap().place.take()
+    /// Whether any typed updates wait for `take_updates`.
+    pub(crate) fn has_updates(&self) -> bool {
+        !self.updates.lock().unwrap().is_empty()
     }
 }
 

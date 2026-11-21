@@ -3,7 +3,7 @@
 //! builds one, so the default path is unchanged; `rune::run_with` or `App::compositor` attaches
 //! one.
 
-use crate::render::{Instance, KIND_GLYPH, Renderer};
+use crate::render::{Instance, Kind, Renderer};
 use crate::runtime::Runtime;
 
 /// Draws a frame in place of Rune's default.
@@ -127,11 +127,11 @@ impl<S: 'static> Frame<'_, S> {
     /// The default frame: every instance into the target, cleared to the window colour.
     pub fn draw_ui(&mut self) {
         let clear = self.rt.clear_color();
-        self.ui.prepare(self.device, self.queue, &mut self.rt.text.atlas, &self.rt.instances, self.size);
+        self.ui.prepare_ui(self.device, self.queue, &mut self.rt.text.atlas, &self.rt.instances, self.size);
         self.ui.draw(self.encoder, self.target, clear);
     }
 }
 
 pub fn is_glyph(i: &Instance) -> bool {
-    i.params[1] == KIND_GLYPH
+    i.kind() == Some(Kind::Glyph)
 }

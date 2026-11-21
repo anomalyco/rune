@@ -6,6 +6,8 @@
 //! macOS's do (`platform::macos::drop`): with the pointer's place in window points, drained each
 //! turn by `Host::flush_files`.
 
+#![allow(unsafe_code)]
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -17,19 +19,13 @@ use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 use windows::core::{Ref, implement};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-/// One step of a drag over a window, in window points.
-pub(crate) enum Step {
-    Enter(Vec<PathBuf>, (f32, f32)),
-    Move((f32, f32)),
-    Drop(Vec<PathBuf>, (f32, f32)),
-    Leave,
-}
+use crate::window::FileStep;
 
 /// What each window's target has seen since its host last looked, and whether it's registered.
 #[derive(Default)]
 struct Dest {
     installed: bool,
-    steps: Vec<Step>,
+    steps: Vec<FileStep>,
     /// The drag over it carries files, so it may drop them.
     files: bool,
 }
@@ -73,17 +69,17 @@ pub(crate) fn install(window: &winit::window::Window) {
             return;
         }
         let target: IDropTarget = Target { hwnd: hwnd.0 as isize }.into();
-        let _ = RegisterDragDrop(hwnd, &target);
+        RegisterDragDrop(hwnd, &target).ok();
     }
 }
 
 /// What the window's target saw since the last call.
-pub(crate) fn take(window: &winit::window::Window) -> Vec<Step> {
+pub(crate) fn take(window: &winit::window::Window) -> Vec<FileStep> {
     let Some(hwnd) = hwnd(window) else { return Vec::new() };
     DESTS.with(|d| d.borrow_mut().get_mut(&(hwnd.0 as isize)).map(|d| std::mem::take(&mut d.steps)).unwrap_or_default())
 }
 
-fn push(hwnd: isize, step: Step) {
+fn push(hwnd: isize, step: FileStep) {
     DESTS.with(|d| d.borrow_mut().entry(hwnd).or_default().steps.push(step));
     // Turns the loop, whose `about_to_wait` drains the step (`Host::flush_files`).
     // SAFETY: a message with no meaning to a window we own.
@@ -154,7 +150,7 @@ impl IDropTarget_Impl for Target_Impl {
         self.set_files(!files.is_empty());
         effect(out, !files.is_empty());
         if !files.is_empty() {
-            push(self.hwnd, Step::Enter(files, self.at(pt)));
+            push(self.hwnd, FileStep::Enter(files, Some(self.at(pt))));
         }
         Ok(())
     }
@@ -163,7 +159,7 @@ impl IDropTarget_Impl for Target_Impl {
         let files = self.files();
         effect(out, files);
         if files {
-            push(self.hwnd, Step::Move(self.at(pt)));
+            push(self.hwnd, FileStep::Move(self.at(pt)));
         }
         Ok(())
     }
@@ -171,7 +167,7 @@ impl IDropTarget_Impl for Target_Impl {
     fn DragLeave(&self) -> windows::core::Result<()> {
         if self.files() {
             self.set_files(false);
-            push(self.hwnd, Step::Leave);
+            push(self.hwnd, FileStep::Leave);
         }
         Ok(())
     }
@@ -181,7 +177,7 @@ impl IDropTarget_Impl for Target_Impl {
         self.set_files(false);
         effect(out, !files.is_empty());
         if !files.is_empty() {
-            push(self.hwnd, Step::Drop(files, self.at(pt)));
+            push(self.hwnd, FileStep::Drop(files, Some(self.at(pt))));
         }
         Ok(())
     }

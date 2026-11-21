@@ -11,7 +11,7 @@ use crate::machine::Effects;
 
 /// How a text arrived at one commit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Arrival {
+pub(in crate::runtime) enum Arrival {
     /// It was here at the last commit.
     Kept,
     /// It is new and shows whole: the commit lands its changes (`Tx::instant`), no input caused
@@ -25,7 +25,7 @@ pub(super) enum Arrival {
 }
 
 /// What a commit, a frame tick or a clock change says about one streaming text.
-pub(super) enum RevealEvent<'a> {
+pub(in crate::runtime) enum RevealEvent<'a> {
     /// A commit: its content now ends at `content.len()` bytes.
     Commit {
         content: &'a str,
@@ -46,14 +46,14 @@ pub(super) enum RevealEvent<'a> {
 
 /// What a transition asks the caller to carry out.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum RevealEffect {
+pub(in crate::runtime) enum RevealEffect {
     /// A word starts fading at this time; the window's chain queues the next text behind it.
     Started(f64),
 }
 
 /// A streaming text's word reveal.
 #[derive(Clone, Debug)]
-pub(super) enum RevealPhase {
+pub(in crate::runtime) enum RevealPhase {
     /// Caught up: `shown` bytes of its content are visible and no word fades.
     Idle { shown: usize },
     /// The words in `words` (`(start byte, start time)`, oldest first) fade in over `fade`
@@ -68,7 +68,7 @@ impl Default for RevealPhase {
 
 impl RevealPhase {
     /// The state after `event`, and the effects the caller carries out.
-    pub(super) fn step(&mut self, event: RevealEvent<'_>) -> Effects<RevealEffect> {
+    pub(in crate::runtime) fn step(&mut self, event: RevealEvent<'_>) -> Effects<RevealEffect> {
         match event {
             RevealEvent::Tick { now } => {
                 // Only once every word has shown does the phase go back to `Idle`: the front of
@@ -149,10 +149,10 @@ impl RevealPhase {
     }
 
     /// Every word caught up: nothing fades.
-    pub(super) fn fading(&self) -> bool { matches!(self, RevealPhase::Fading { .. }) }
+    pub(in crate::runtime) fn fading(&self) -> bool { matches!(self, RevealPhase::Fading { .. }) }
 
     /// The byte its words have been shown up to.
-    pub(super) fn shown(&self) -> usize {
+    pub(in crate::runtime) fn shown(&self) -> usize {
         match *self {
             RevealPhase::Idle { shown } | RevealPhase::Fading { shown, .. } => shown,
         }
@@ -160,11 +160,11 @@ impl RevealPhase {
 
     /// Nothing fading, and `end` bytes of content are all shown: a memo or a cache holding this
     /// text holds what the text draws.
-    pub(super) fn caught_up(&self, end: usize) -> bool { !self.fading() && self.shown() == end }
+    pub(in crate::runtime) fn caught_up(&self, end: usize) -> bool { !self.fading() && self.shown() == end }
 
     /// The words still fading, oldest first; empty when the text has caught up.
     #[cfg(test)]
-    pub(super) fn words(&self) -> &[(u32, f64)] {
+    pub(in crate::runtime) fn words(&self) -> &[(u32, f64)] {
         match self {
             RevealPhase::Idle { .. } => &[],
             RevealPhase::Fading { words, .. } => words,
@@ -173,7 +173,7 @@ impl RevealPhase {
 
     /// The fade it is in, for paint to carry over a piece's glyphs: taken once per piece, so no
     /// glyph looks at the phase again.
-    pub(super) fn fade(&self) -> Option<Fade<'_>> {
+    pub(in crate::runtime) fn fade(&self) -> Option<Fade<'_>> {
         match self {
             RevealPhase::Fading { words, fade, .. } => Some(Fade { words, fade: *fade }),
             RevealPhase::Idle { .. } => None,
@@ -183,14 +183,14 @@ impl RevealPhase {
 
 /// The words still fading and how long each takes.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct Fade<'a> {
+pub(in crate::runtime) struct Fade<'a> {
     words: &'a [(u32, f64)],
     fade: f32,
 }
 
 impl Fade<'_> {
     /// The alpha of `byte`'s word, `now` on the text's clock: 1 anywhere no word fades.
-    pub(super) fn alpha(self, byte: u32, now: f64) -> f32 {
+    pub(in crate::runtime) fn alpha(self, byte: u32, now: f64) -> f32 {
         let i = self.words.partition_point(|w| w.0 <= byte);
         if i == 0 { return 1.0; }
         let t0 = self.words[i - 1].1;
@@ -208,23 +208,23 @@ impl Fade<'_> {
 /// longer than a fade, and the texts behind it fade together rather than wait it out. A run
 /// that ended is replaced by the next word's start, so the chain never drifts into the past.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(super) struct RevealChain {
+pub(in crate::runtime) struct RevealChain {
     until: f64,
 }
 
 impl RevealChain {
     /// Where `now`'s first new word starts: behind the newest one while it still fades, else
     /// now.
-    pub(super) fn start(self, now: f64, fade: f32) -> f64 {
+    pub(in crate::runtime) fn start(self, now: f64, fade: f32) -> f64 {
         if self.until - now > f64::from(fade) { now } else { self.until.max(now) }
     }
 
     /// `at` is a word's start: the chain reaches no further back than it.
-    pub(super) fn started(&mut self, at: f64) { self.until = self.until.max(at); }
+    pub(in crate::runtime) fn started(&mut self, at: f64) { self.until = self.until.max(at); }
 
     /// The newest streaming word's start.
     #[cfg(test)]
-    pub(super) fn until(self) -> f64 { self.until }
+    pub(in crate::runtime) fn until(self) -> f64 { self.until }
 }
 
 /// Where each word of `s` after `from` starts, as byte offsets.

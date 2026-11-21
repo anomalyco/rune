@@ -97,7 +97,7 @@ fn frame_phase_walk() {
     // A fixed threshold: the walk never reads `RUNE_PERF_SLOW_MS` from the environment. It sits
     // between the walk's 30 ms steps so both a slow and a quick untimed frame come up.
     const SLOW_MS: f64 = 75.0;
-    let base = Instant::now();
+    let base = crate::time::now();
     let (mut slow, mut quick) = (0, 0);
     for mut path in 0..8usize.pow(5) {
         let mut tracker = Tracker::default();

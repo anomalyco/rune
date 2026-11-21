@@ -1,0 +1,1 @@
+- A wheel no longer traps on a scroll region inside another: a run of wheel deltas starts on the innermost viewport with room in its direction and stays with it until the wheel rests (0.5 s) or the pointer moves away, as Chromium latches it; the next run moves the viewport around it.

@@ -21,7 +21,20 @@
 //! app's.
 
 mod cause;
+#[cfg(not(target_arch = "wasm32"))]
 mod export;
+#[cfg(target_arch = "wasm32")]
+mod export {
+    use super::*;
+    #[allow(dead_code)]
+    pub(crate) enum Message {
+        Slow(Box<Slow>),
+        Frame(Box<SlowFrame>),
+        Rollup { rolls: Vec<rollup::Roll>, from: Instant, to: Instant },
+    }
+    pub(crate) fn send(_: Message) -> bool { false }
+    pub(crate) fn flush(_: Duration) {}
+}
 mod frame;
 pub(crate) mod gate;
 mod names;
@@ -90,7 +103,7 @@ fn slow_ms() -> f64 {
     #[cfg(test)]
     if let Some(ms) = SLOW_MS_OVERRIDE.get() { return ms; }
     static MS: OnceLock<f64> = OnceLock::new();
-    *MS.get_or_init(|| std::env::var("RUNE_PERF_SLOW_MS").ok().and_then(|v| v.trim().parse().ok()).filter(|ms: &f64| *ms > 0.0).unwrap_or(SLOW_MS))
+    *MS.get_or_init(|| rune_core::env::var("RUNE_PERF_SLOW_MS").and_then(|v| v.trim().parse().ok()).filter(|ms: &f64| *ms > 0.0).unwrap_or(SLOW_MS))
 }
 
 /// What one input action was, before the frame it lands in is built.
@@ -181,7 +194,7 @@ impl Tracker {
     /// A frame starts; `queued` when input waits for it. A built frame no host presented
     /// (a bare `Runtime`, a window that skipped drawing) ends at its build.
     pub(crate) fn frame_begins(&mut self, queued: bool) -> Option<Finished> {
-        self.begin_with(queued, slow_ms(), Instant::now, crate::frame::profile::cpu_ms)
+        self.begin_with(queued, slow_ms(), crate::time::now, crate::frame::profile::cpu_ms)
     }
 
     fn begin_with(&mut self, queued: bool, slow_ms: f64, now: impl FnOnce() -> Instant, cpu: impl FnOnce() -> Option<f64>) -> Option<Finished> {
@@ -218,7 +231,7 @@ impl Tracker {
     /// The frame, of `nodes` nodes, is built; `shaped` text runs it shaped. A slow frame no
     /// input caused comes back to send.
     pub(crate) fn built(&mut self, shaped: u32, nodes: usize) -> Option<SlowFrame> {
-        self.build_with(shaped, nodes, watchdog::disarm(), slow_ms(), Instant::now, crate::frame::profile::cpu_ms)
+        self.build_with(shaped, nodes, watchdog::disarm(), slow_ms(), crate::time::now, crate::frame::profile::cpu_ms)
     }
 
     fn build_with(&mut self, shaped: u32, nodes: usize, stacks: Option<Stacks>, slow_ms: f64, now: impl FnOnce() -> Instant, cpu: impl FnOnce() -> Option<f64>) -> Option<SlowFrame> {
@@ -274,7 +287,7 @@ impl Tracker {
     /// Sends the histograms when a minute has passed since the last, or `now` regardless.
     pub(crate) fn roll(&mut self, force: bool) {
         let Some(from) = self.rolled_since else { return };
-        let to = Instant::now();
+        let to = crate::time::now();
         if self.rollup.is_empty() || (!force && to.saturating_duration_since(from) < ROLLUP_EVERY) { return; }
         export::send(export::Message::Rollup { rolls: self.rollup.take(), from, to });
         self.rolled_since = None;

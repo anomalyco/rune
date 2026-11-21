@@ -146,7 +146,7 @@ fn actions_run_the_same_handlers_as_pointer_and_keys() {
 #[test]
 fn focus_moves_through_the_tree() {
     let mut rt = form_rt();
-    assert_eq!(rt.accessibility_tree().focus, super::a11y_tree::ROOT);
+    assert_eq!(rt.accessibility_tree().focus, super::tree::ROOT);
     let focus = request(&rt, "save", Ak::Focus, None);
     assert!(rt.a11y_action(&focus));
     rt.frame(0.0);
@@ -300,6 +300,53 @@ fn secure_fields_never_expose_their_text() {
     assert_eq!((pw["role"].as_str(), pw["name"].as_str()), (Some("password-input"), Some("Password")));
 }
 
+/// Every selection end in `tree` that AccessKit's AT-SPI adapter would read names a `TextRun`
+/// in it: the adapter unwraps that and takes the app down otherwise.
+#[cfg(target_os = "linux")]
+fn assert_selections_on_runs(tree: &accesskit::TreeUpdate) {
+    let role = |id| tree.nodes.iter().find(|(n, _)| *n == id).map(|(_, n)| n.role());
+    for (_, n) in &tree.nodes {
+        if let Some(sel) = n.text_selection() {
+            assert_eq!((role(sel.anchor.node), role(sel.focus.node)), (Some(Role::TextRun), Some(Role::TextRun)), "{sel:?}");
+        }
+    }
+}
+
+#[test]
+fn an_empty_field_answers_as_a_short_one() {
+    let mut edit = TextEdit::new("");
+    edit.focused = true;
+    let mut rt = Runtime::new(Field { edit }, field, (400.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let tree = rt.accessibility_tree();
+    // Parley shapes an empty text as one space; the field still has no visual lines box.
+    assert!(!tree.nodes.iter().any(|(_, n)| n.class_name() == Some(super::tree::LINES_BOX_CLASS)));
+    #[cfg(target_os = "linux")]
+    assert_selections_on_runs(&tree);
+    // The first character typed moves the caret from the empty field into its run.
+    rt.update(|s, _| {
+        s.edit = TextEdit::new("h");
+        s.edit.focused = true;
+    });
+    rt.frame(0.0);
+    let tree = rt.accessibility_tree();
+    let (_, note) = tree.nodes.iter().find(|(_, n)| n.author_id() == Some("note")).unwrap();
+    let sel = note.text_selection().expect("a caret");
+    assert_eq!(sel.focus.character_index, 1);
+    #[cfg(target_os = "linux")]
+    assert_selections_on_runs(&tree);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_long_field_marks_no_selection_on_itself_on_linux() {
+    let mut edit = TextEdit::new(&"word ".repeat(14_000));
+    edit.focused = true;
+    let mut rt = Runtime::new(Field { edit }, field, (400.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    assert_selections_on_runs(&rt.accessibility_tree());
+}
+
 #[derive(Default)]
 struct Linked {
     opened: Vec<String>,
@@ -361,12 +408,12 @@ fn big(s: &Big, _: &mut Cx<Big>) -> El {
 #[test]
 #[ignore]
 fn a11y_cost() {
-    super::a11y_tree::CHECK_SENT.set(false);
+    super::tree::CHECK_SENT.set(false);
     let median = |mut v: Vec<f64>| { v.sort_by(f64::total_cmp); v[v.len() / 2] };
     let mut rt = Runtime::new(Big { on: vec![false; 2000] }, big, (800.0, 600.0), Env::new(true, 2.0));
     rt.frame(0.0);
     let toggle = |rt: &mut Runtime<Big>, i: usize| { rt.update(|s, _| s.on[i] = !s.on[i]); rt.frame(0.0); };
-    let time = |f: &mut dyn FnMut()| { let t = std::time::Instant::now(); f(); t.elapsed().as_secs_f64() * 1e6 };
+    let time = |f: &mut dyn FnMut()| { let t = crate::time::now(); f(); t.elapsed().as_secs_f64() * 1e6 };
     let off: Vec<f64> = (0..30).map(|i| time(&mut || toggle(&mut rt, i))).collect();
     rt.a11y_activate("Big");
     let full: Vec<f64> = (0..10).map(|_| { rt.a11y_activate("Big"); time(&mut || { rt.a11y_update(); }) }).collect();
@@ -377,16 +424,16 @@ fn a11y_cost() {
     let scroll: Vec<f64> = (1..=30).map(|k| {
         rt.wheel_event(crate::WheelEvent::new(0.0, -24.0).precise(true).at(100.0, 100.0));
         rt.frame(10.0 + k as f64 / 60.0);
-        let commits = rt.commits;
+        let commits = rt.commit.commits;
         let mut sent = None;
         let t = time(&mut || { sent = rt.a11y_update().map(|u| u.nodes.len()); });
-        assert_eq!(rt.commits, commits);
+        assert_eq!(rt.commit.commits, commits);
         assert!(sent.is_some_and(|n| n > 0), "a scroll sends its viewports");
         t
     }).collect();
     let nodes = rt.accessibility_tree().nodes.len();
     println!("a11y_cost elements={} nodes={nodes} commit_us={:.0} commit_active_us={:.0} full_us={:.0} incremental_us={:.0} scroll_us={:.1} idle_turn_us={:.2}",
-        rt.nodes.len(), median(off), median(on), median(full), median(incremental), median(scroll), median(idle));
+        rt.tree.nodes.len(), median(off), median(on), median(full), median(incremental), median(scroll), median(idle));
 }
 
 #[test]
@@ -439,4 +486,150 @@ fn updates_report_structure_and_motion_beyond_accesskit_events() {
     rt.frame(1.0 / 60.0);
     assert!(rt.a11y_update().is_some(), "a scroll sends its viewport");
     assert!(rt.a11y_changes().moved, "a scroll moves boxes");
+}
+
+#[test]
+fn scaled_text_and_long_field_lines_use_drawn_scale_and_invalidate() {
+    // 1. Selectable text inside El::scale(2.0) scales inset, line bounds and glyph widths.
+    fn scaled_text_view(scale: &f32, _: &mut Cx<f32>) -> El {
+        col().size(500.0, 200.0).child(
+            col().size(200.0, 60.0).scale(*scale).origin(0.0, 0.0)
+                .child(text("Hello world").key("t").selectable(true).padding(10.0).align(crate::Align::Center)),
+        )
+    }
+    let make_text = |scale: f32| {
+        let mut rt = Runtime::new(scale, scaled_text_view, (500.0, 200.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("t")).unwrap();
+        rt.core().a11y_lines(i).unwrap().1
+    };
+    let l1 = make_text(1.0);
+    let l2 = make_text(2.0);
+    assert!((l2[0].rect[0] - l1[0].rect[0] * 2.0).abs() < 0.5, "scaled x origin: {:?} vs {:?}", l1[0].rect, l2[0].rect);
+    assert!((l2[0].rect[1] - l1[0].rect[1] * 2.0).abs() < 0.5, "scaled y inset: {:?} vs {:?}", l1[0].rect, l2[0].rect);
+    assert!((l2[0].rect[2] - l1[0].rect[2] * 2.0).abs() < 0.5, "scaled width: {:?} vs {:?}", l1[0].rect, l2[0].rect);
+    assert!((l2[0].rect[3] - l1[0].rect[3] * 2.0).abs() < 0.5, "scaled height: {:?} vs {:?}", l1[0].rect, l2[0].rect);
+    assert!((l2[0].widths[0] - l1[0].widths[0] * 2.0).abs() < 0.25, "scaled char width: {} vs {}", l1[0].widths[0], l2[0].widths[0]);
+
+    // 2. Long field (> 64KB) inside El::scale invalidates lines_box_print and scales drawn lines.
+    struct LongScaled { edit: TextEdit, scale: f32 }
+    fn long_view(s: &LongScaled, _: &mut Cx<LongScaled>) -> El {
+        col().size(600.0, 400.0).child(
+            col().size(240.0, 150.0).scale(s.scale).origin(0.0, 0.0).child(
+                text_input(&s.edit, crate::tok::type_::BODY).key("big").size(240.0, 150.0).padding(10.0)
+                    .on_edit(|s: &mut LongScaled| &mut s.edit),
+            ),
+        )
+    }
+    let big_text = "long line for a11y scaling test\n".repeat(2500);
+    let mut rt = Runtime::new(LongScaled { edit: TextEdit::new(big_text), scale: 1.0 }, long_view, (600.0, 400.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("big")).unwrap();
+    assert!(rt.core().a11y_uses_long_field(i), "fixture must use the long-field path");
+    rt.a11y_activate("Long");
+    let first = rt.a11y_update().expect("initial tree");
+    let first_line_h = first.nodes.iter()
+        .find(|(_, n)| n.class_name() == Some("\x1frune-line"))
+        .and_then(|(_, n)| n.bounds())
+        .map(|b| (b.y1 - b.y0) as f32)
+        .expect("drawn long-field line at 1x");
+    let mut walk = super::tree::Walk::default();
+    walk.clip_y = [0.0, 400.0];
+    let print1 = rt.core().a11y_lines_box_print(i, &walk);
+
+    rt.update(|s, tx| { s.scale = 2.0; tx.instant(); });
+    rt.frame(1.0 / 60.0);
+    let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("big")).unwrap();
+    let print2 = rt.core().a11y_lines_box_print(i, &walk);
+    assert_ne!(print1, print2, "a11y_lines_box_print must change when drawn_scale changes");
+    let update = rt.a11y_update().expect("scale change emits updated long-field lines");
+    let scaled_line_h = update.nodes.iter()
+        .find(|(_, n)| n.class_name() == Some("\x1frune-line"))
+        .and_then(|(_, n)| n.bounds())
+        .map(|b| (b.y1 - b.y0) as f32)
+        .expect("drawn long-field line at 2x");
+    assert!((scaled_line_h - first_line_h * 2.0).abs() < 1.0, "long-field line height scales 2x: {first_line_h} -> {scaled_line_h}");
+}
+
+#[test]
+fn rtl_a11y_scroll_left_and_right_step_in_visual_direction() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        col().size(200.0, 60.0).child(
+            row().key("rtl_x").dir(crate::Direction::Rtl).size(200.0, 60.0).scroll_x()
+                .child(crate::el().w(600.0).h(60.0)),
+        )
+    }
+    let mut rt = Runtime::new((), view, (200.0, 60.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("rtl_x")).unwrap().id;
+    assert_eq!(rt.scroll.scrolls[&id].x.offset, 0.0);
+
+    // In RTL, content overflows to the left: ScrollLeft reveals it (offset increases).
+    assert!(rt.accessibility_action("rtl_x", accesskit::Action::ScrollLeft, Some(accesskit::ActionData::ScrollUnit(accesskit::ScrollUnit::Item))));
+    rt.frame(0.0);
+    let after_left = rt.scroll.scrolls[&id].x.offset;
+    assert!(after_left > 20.0, "RTL ScrollLeft must increase offset toward left content, got {after_left}");
+
+    // ScrollRight returns toward the right start edge (offset decreases).
+    assert!(rt.accessibility_action("rtl_x", accesskit::Action::ScrollRight, Some(accesskit::ActionData::ScrollUnit(accesskit::ScrollUnit::Item))));
+    rt.frame(0.0);
+    assert!(rt.scroll.scrolls[&id].x.offset < after_left - 20.0, "RTL ScrollRight must decrease offset: {after_left} -> {}", rt.scroll.scrolls[&id].x.offset);
+}
+
+#[test]
+fn a11y_active_descendant_and_labelled_by_skip_exiting_shadow() {
+    // 1. active_descendant: exiting child inside the container must not shadow the live replacement elsewhere.
+    fn ad_view(inside: &bool, _: &mut Cx<bool>) -> El {
+        let mut root = col().size(200.0, 120.0);
+        if !*inside {
+            root = root.child(row().key("item").role("option").size(80.0, 20.0).child(text("Live item")));
+        }
+        let mut list = col().key("list").role("listbox").focusable(true).active_descendant("item").size(100.0, 40.0);
+        if *inside {
+            list = list.child(row().key("item").role("option").size(80.0, 20.0)
+                .transition(crate::Transition::opacity()).child(text("Old item")));
+        }
+        root.child(list)
+    }
+    let mut rt = Runtime::new(true, ad_view, (200.0, 120.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|s, _| *s = false);
+    rt.frame(1.0 / 60.0);
+    let list_idx = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("list")).unwrap();
+    let live_item = rt.tree.nodes.iter().enumerate().position(|(i, n)| n.key.as_deref() == Some("item") && !rt.core().subtree_exiting(i)).unwrap();
+    assert_eq!(rt.core().a11y_active_descendant(list_idx), Some(live_item), "exiting child must not shadow live active_descendant");
+
+    // 2. a11y_keyed (labelled_by): exiting local key must not shadow live outer key.
+    fn lbl_view(local: &bool, _: &mut Cx<bool>) -> El {
+        let mut inner = col().key("inner").size(100.0, 60.0)
+            .child(row().key("btn").role("button").focusable(true).labelled_by("title").size(80.0, 20.0));
+        if *local {
+            inner = inner.child(text("Inner title").key("title").transition(crate::Transition::opacity()));
+        }
+        col().key("outer").size(200.0, 120.0)
+            .child(text("Outer title").key("title"))
+            .child(inner)
+    }
+    let mut rt = Runtime::new(true, lbl_view, (200.0, 120.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|s, _| *s = false);
+    rt.frame(1.0 / 60.0);
+    let btn_idx = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("btn")).unwrap();
+    let outer_title = rt.tree.nodes.iter().enumerate().position(|(i, n)| n.key.as_deref() == Some("title") && !rt.core().subtree_exiting(i)).unwrap();
+    assert_eq!(rt.core().a11y_keyed(btn_idx, "title"), Some(outer_title), "exiting inner key must not shadow live outer key");
+}
+
+#[test]
+fn nested_selectable_control_inside_focusable_group_item_is_not_in_outer_group() {
+    let mut rt = Runtime::new((), |_: &(), _: &mut Cx<()>| {
+        col().key("tabs").role("tablist").focus_group().size(200.0, 60.0)
+            .child(
+                row().key("tab1").role("tab").focusable(true).focus_selected(true).size(160.0, 40.0)
+                    .child(crate::el().key("inner-opt").role("option").focusable(true).size(20.0, 20.0)),
+            )
+    }, (200.0, 60.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let tree = rt.accessibility_tree();
+    let (_, inner) = tree.nodes.iter().find(|(_, n)| n.author_id() == Some("inner-opt")).unwrap();
+    assert_eq!(inner.is_selected(), None, "control nested inside a focusable item is not a member of the outer focus group");
 }

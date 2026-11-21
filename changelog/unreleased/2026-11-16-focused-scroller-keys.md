@@ -1,0 +1,1 @@
+- A scroll view that has focus itself scrolls on Up and Down (a 40-point line) and on Space and Shift+Space (a page) when nothing in it takes the key, as a browser scrolls a focused `tabindex` scroller. Space no longer goes nowhere on a focused scroll view that presses nothing.

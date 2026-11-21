@@ -2,6 +2,8 @@
 //! (appearance also on each redraw, which a change asks for).
 //! Headless runtimes use their explicit Env instead.
 
+#![allow(unsafe_code)]
+
 #[cfg(target_os = "macos")]
 pub(crate) fn reduced_motion() -> bool {
     use objc2::{class, msg_send};
@@ -27,7 +29,7 @@ pub(crate) fn reduced_motion() -> bool {
     // KDE exposes animation duration in kdeglobals; zero disables animation.
     let config = std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")));
-    if std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().split(':').any(|d| d.eq_ignore_ascii_case("KDE"))
+    if rune_core::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().split(':').any(|d| d.eq_ignore_ascii_case("KDE"))
         && let Some(config) = config
         && let Ok(contents) = std::fs::read_to_string(config.join("kdeglobals"))
         && let Some(factor) = contents.lines().filter_map(|line| line.trim().split_once('='))
@@ -35,6 +37,8 @@ pub(crate) fn reduced_motion() -> bool {
     { return factor == 0.0; }
     // Optional GNOME GSettings, with schema lookup before constructing settings (missing
     // schemas otherwise abort GLib). No subprocess or required GNOME dependency.
+    // SAFETY: `gnome_animations` dynamically resolves GIO symbols, checks every pointer for null,
+    // and releases each GLib object before returning.
     unsafe { gnome_animations().is_some_and(|enabled| !enabled) }
 }
 
@@ -72,6 +76,34 @@ unsafe fn gnome_animations() -> Option<bool> {
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub(crate) fn reduced_motion() -> bool { false }
 
+/// `RUNE_INCREASE_CONTRAST=1`: [`increased_contrast`] on, for captures and checks.
+pub(crate) fn increased_contrast_preset() -> bool {
+    std::env::var_os("RUNE_INCREASE_CONTRAST").is_some_and(|v| v == "1")
+}
+
+/// Whether the system asks apps for more contrast: macOS's Increase Contrast (Accessibility >
+/// Display), or a Windows contrast theme. `RUNE_INCREASE_CONTRAST=1` reports it on, for captures
+/// and checks, without turning it on for the whole machine. Read as [`reduced_motion`] is, and on
+/// macOS again when the display options change (`a11y/macos.rs`).
+pub(crate) fn increased_contrast() -> bool {
+    if increased_contrast_preset() { return true; }
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::{class, msg_send};
+        // SAFETY: NSWorkspace's shared instance lives for the process; the selector returns an
+        // Objective-C BOOL. Native hosts call on the UI thread.
+        unsafe {
+            let workspace: *mut objc2::runtime::AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let more: objc2::runtime::Bool = msg_send![workspace, accessibilityDisplayShouldIncreaseContrast];
+            more.as_bool()
+        }
+    }
+    #[cfg(target_os = "windows")]
+    { contrast().is_some() }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    { false }
+}
+
 /// The colours a system contrast theme asks every app to paint with (Windows' Contrast themes,
 /// CSS `forced-colors`' system colours), in linear sRGB as Rune's colours are.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -105,8 +137,8 @@ pub(crate) fn contrast() -> Option<SystemContrast> {
     // SAFETY: SPI_GETHIGHCONTRAST fills a HIGHCONTRASTW whose size it is told.
     let read = unsafe { SystemParametersInfoW(SPI_GETHIGHCONTRAST, hc.cbSize, (&mut hc as *mut HIGHCONTRASTW).cast(), 0) } != 0;
     if !read || hc.dwFlags & HCF_HIGHCONTRASTON == 0 { return None; }
-    // SAFETY: GetSysColor reads a colour index; the indices are Win32's constants.
     let sys = |index: i32| {
+        // SAFETY: `GetSysColor` is a read-only Win32 query; callers pass standard `COLOR_*` indices.
         let c = unsafe { GetSysColor(index) };
         let d = |v: u32| crate::color::srgb_decode((v & 0xff) as f32 / 255.0);
         crate::Color { r: d(c), g: d(c >> 8), b: d(c >> 16), a: 1.0 }
@@ -122,8 +154,8 @@ pub(crate) fn contrast() -> Option<SystemContrast> { contrast_preset() }
 /// `RUNE_CONTRAST=aquatic|desert|dusk|night-sky`: Windows 11's contrast theme of that name, as
 /// its system colours are, without turning it on for the whole machine: for captures and checks
 /// of an app in each.
-fn contrast_preset() -> Option<SystemContrast> {
-    let name = std::env::var("RUNE_CONTRAST").ok()?;
+pub(crate) fn contrast_preset() -> Option<SystemContrast> {
+    let name = rune_core::env::var("RUNE_CONTRAST")?;
     let [window, text, highlight, highlight_text, disabled, link] = match name.to_ascii_lowercase().as_str() {
         "aquatic" => ["#202020", "#ffffff", "#8ee3f0", "#263b50", "#a6a6a6", "#75e9fc"],
         "desert" => ["#fffaef", "#3d3d3d", "#903909", "#fff5e3", "#6d6d6d", "#1c5e75"],

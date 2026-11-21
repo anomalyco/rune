@@ -8,6 +8,8 @@
 //! - Single-pass post-order dirty propagation during `flatten`, with an `O(1)` warm unmount check
 //!   when the mounted key count is unchanged.
 
+#![forbid(unsafe_code)]
+
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
@@ -343,17 +345,14 @@ impl LayoutStore {
 
         if let Some(&s) = self.by_key.get(&key) {
             let idx = s as usize;
-            debug_assert!(idx < self.slots.len());
-            // SAFETY: every slot value stored in `by_key` is a valid index into `node_idx` and `slots`.
-            let prev_idx = unsafe { self.node_idx.get_unchecked_mut(idx) };
+            let prev_idx = &mut self.node_idx[idx];
             let first_visit = *prev_idx == UNMOUNTED;
             if first_visit {
                 self.visited_existing += 1;
             }
             *prev_idx = node_idx;
 
-            // SAFETY: `idx < self.slots.len()` holds for all entries in `by_key`.
-            let slot = unsafe { self.slots.get_unchecked_mut(idx) };
+            let slot = &mut self.slots[idx];
             let old_start = slot.child_start as usize;
             let old_end = old_start + slot.child_len() as usize;
             let kids_changed = if first_visit {
@@ -516,16 +515,12 @@ impl LayoutStore {
 
     #[inline(always)]
     pub fn style(&self, id: SlotId) -> &CompactStyle {
-        debug_assert!((id.0 as usize) < self.slots.len());
-        // SAFETY: `id` is a live `SlotId` index into `slots`.
-        unsafe { &self.slots.get_unchecked(id.0 as usize).style }
+        &self.slots[id.0 as usize].style
     }
 
     #[inline(always)]
     pub fn box_layout(&self, id: SlotId) -> BoxLayout {
-        debug_assert!((id.0 as usize) < self.slots.len());
-        // SAFETY: `id` is a live `SlotId` index into `slots`.
-        unsafe { self.slots.get_unchecked(id.0 as usize).box_layout }
+        self.slots[id.0 as usize].box_layout
     }
 
     /// Returns the index in the current commit's `nodes` slice for `key`, if mounted this commit.
@@ -590,6 +585,7 @@ impl LayoutStore {
         let mut view = LayoutStoreView {
             store: self,
             measure_leaf,
+            in_whole_rows_col: false,
         };
         compute_root_layout(&mut view, root.to_taffy(), available_space);
     }

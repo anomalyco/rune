@@ -16,10 +16,11 @@ mod macos_support;
 fn main() { mac::main() }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 mod mac {
     use std::sync::{Mutex, atomic::{AtomicUsize, Ordering}};
     use std::time::Duration;
-    use objc2::{class, msg_send, msg_send_id, rc::Retained, runtime::{AnyObject, Bool}};
+    use objc2::{class, msg_send, rc::Retained, runtime::{AnyObject, Bool}};
     use objc2_foundation::{NSArray, NSPoint, NSRect};
     use rune::*;
     use crate::macos_support::{can_post_events, drag_pasteboard, on_main, release_real_button, wait};
@@ -38,12 +39,14 @@ mod mac {
     /// Posts mouse events to the app's visible window: (NSEventType, x, y) in points from the
     /// window's top-left.
     fn post(events: &[(usize, f64, f64)]) {
+        // SAFETY: invoked on the AppKit main thread (`on_main`); queries the app's live windows
+        // and posts synthetic `NSEvent`s to `NSApplication`.
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-            let windows: Retained<NSArray<AnyObject>> = msg_send_id![app, windows];
-            let window = windows.iter().find(|w| { let v: Bool = msg_send![*w, isVisible]; v.as_bool() }).expect("a visible window");
-            let number: isize = msg_send![window, windowNumber];
-            let content: NSRect = msg_send![window, contentLayoutRect];
+            let windows: Retained<NSArray<AnyObject>> = msg_send![app, windows];
+            let window = windows.iter().find(|w| { let v: Bool = msg_send![&**w, isVisible]; v.as_bool() }).expect("a visible window");
+            let number: isize = msg_send![&*window, windowNumber];
+            let content: NSRect = msg_send![&*window, contentLayoutRect];
             let info: *mut AnyObject = msg_send![class!(NSProcessInfo), processInfo];
             let now: f64 = msg_send![info, systemUptime];
             for &(kind, x, y) in events {
@@ -101,7 +104,7 @@ mod mac {
         *FILE.lock().unwrap() = Some(file.clone());
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let app = App::new(AppSpec::new("drag out", (240.0, 120.0), || (), view)).args(Vec::new())
-            .on_ready(move |_| { let _ = ready_tx.send(()); });
+            .on_ready(move |_| { ready_tx.send(()).ok(); });
         let handle = app.handle();
         let result = std::sync::Arc::new(Mutex::new(None));
         let out = result.clone();
@@ -111,7 +114,7 @@ mod mac {
                 ready_rx.recv_timeout(Duration::from_secs(30)).expect("window ready");
                 if !drive(handle.clone(), f.clone()) {
                     // The live session's tracking loop holds the event loop, so quit can't land.
-                    let _ = std::fs::remove_file(&f);
+                    std::fs::remove_file(&f).ok();
                     println!("macos_drag_out: ok (session start and pasteboard only)");
                     std::process::exit(0);
                 }
@@ -120,7 +123,7 @@ mod mac {
             handle.quit();
         });
         app.run();
-        let _ = std::fs::remove_file(&file);
+        std::fs::remove_file(&file).ok();
         assert_eq!(*result.lock().unwrap(), Some(true), "macos_drag_out failed");
         println!("macos_drag_out: ok");
     }

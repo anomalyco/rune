@@ -1,0 +1,1 @@
+- macOS: headings reach VoiceOver as headings. AccessKit's macOS adapter reported Rune's headings with the role `Heading`, which VoiceOver doesn't know, so its rotor and VO-Command-H found none; Rune now vendors accesskit_macos with AppKit's `AXHeading` and the heading's level as its value, as WebKit and Chromium give it (`scripts/vendor-accesskit-macos.sh`).
