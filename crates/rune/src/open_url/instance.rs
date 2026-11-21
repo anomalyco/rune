@@ -66,6 +66,19 @@ pub fn release_instance() {
     linux::release();
 }
 
+/// Starts the app again with `args` once this process lets go of its single-instance name
+/// (`release_instance`, or its end): a launch the app took but couldn't finish before it quit
+/// (a link that came just before the quit). The new process waits for the name as a launch that
+/// came during the quit does: it then reaches the app's next process (the one a relaunch
+/// starts) or becomes it, so the launch is carried out once. Windows and Linux; elsewhere it does
+/// nothing.
+pub fn hand_on(args: Vec<String>) {
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    crate::relaunch::spawn_with(args);
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    let _ = args;
+}
+
 /// Whether a launch argument is a link: `scheme://…`, with a scheme of at least two letters,
 /// digits, `+`, `-` or `.`, starting with a letter. A Windows path (`C:\…`) and a flag aren't.
 #[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
