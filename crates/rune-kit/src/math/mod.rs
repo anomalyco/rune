@@ -29,10 +29,18 @@ use sandbox::MAX_INPUT_BYTES;
 #[cfg(target_arch = "wasm32")]
 use web_worker::MAX_INPUT_BYTES;
 
-/// Maximum cached entries (ready + failed + pending) before LRU eviction.
-const MAX_CACHE_ENTRIES: usize = 128;
-/// Maximum total RGBA bytes kept across all cached math bitmaps (8 MiB; single bitmap cap is 4 MiB).
-const MAX_CACHE_BYTES: usize = 8 * 1024 * 1024;
+/// Cached entries (ready + failed) kept for rows that aren't showing them; what the last two commits
+/// drew and what is still rendering are never evicted, so a screen of math may go over it.
+const MAX_CACHE_ENTRIES: usize = 256;
+/// RGBA bytes kept the same way: about two screens of a 2560×1440 window full of math (one bitmap is
+/// at most 4 MiB).
+const MAX_CACHE_BYTES: usize = 32 * 1024 * 1024;
+/// Sources a full worker queue refused, sent as it drains (each at most 16 KiB of TeX).
+const MAX_WAITING: usize = 1024;
+/// Commits a bitmap stays after a view drew it or it finished, whatever the caps.
+const KEEP_COMMITS: u64 = 16;
+/// Rows whose waiting sources are remembered (`collect`); past it the list starts again.
+const MAX_ROWS: usize = 4096;
 /// Tight vertical padding around display math (on top of Markdown's block margins).
 const DISPLAY_PAD_Y: f32 = 2.0;
 
@@ -85,12 +93,33 @@ enum CacheEntry {
     Ready(RenderedMath),
 }
 
+struct Cached {
+    entry: CacheEntry,
+    /// The UI thread's [`rune::commit_generation`] when a view last drew it.
+    used: u64,
+}
+
+/// A render the worker queue had no room for, sent when it has.
+struct Waiting {
+    key: MathKey,
+    em_pt: f32,
+    ink: Color,
+    scale: f32,
+}
+
 #[derive(Default)]
 struct MathCache {
-    entries: HashMap<MathKey, CacheEntry>,
+    entries: HashMap<MathKey, Cached>,
     order: VecDeque<MathKey>,
     rendered_srcs: HashMap<Arc<str>, usize>,
     total_bytes: usize,
+    /// The latest commit a view drew math in.
+    commit: u64,
+    /// Renders finished (ready or failed) so far, and the count each source last finished at: a row
+    /// that drew a source still rendering builds again once it moves, and only then.
+    finishes: u64,
+    finished: HashMap<Arc<str>, u64>,
+    waiting: VecDeque<Waiting>,
 }
 
 impl MathCache {
@@ -102,7 +131,7 @@ impl MathCache {
     }
 
     fn remove_entry(&mut self, key: &MathKey) {
-        if let Some(CacheEntry::Ready(r)) = self.entries.remove(key) {
+        if let Some(Cached { entry: CacheEntry::Ready(r), .. }) = self.entries.remove(key) {
             self.total_bytes = self.total_bytes.saturating_sub(r.byte_len);
             if let Some(count) = self.rendered_srcs.get_mut(&key.src) {
                 *count = count.saturating_sub(1);
@@ -113,23 +142,26 @@ impl MathCache {
         }
     }
 
+    /// Whether `key` may go to make room: not still rendering, and neither drawn nor finished within
+    /// the last `KEEP_COMMITS` commits (on screen, or about to be: every window commits once per
+    /// finish). Eviction never wakes a window or moves a row's version: a row showing the bitmap
+    /// keeps its pixels, and only a row that builds again asks for it anew.
+    fn evictable(&self, key: &MathKey) -> bool {
+        self.entries.get(key).is_some_and(|c| !matches!(c.entry, CacheEntry::Pending) && c.used.saturating_add(KEEP_COMMITS) < self.commit)
+    }
+
     fn insert(&mut self, key: MathKey, entry: CacheEntry) {
+        let used = self.commit;
         self.remove_entry(&key);
         if let CacheEntry::Ready(ref r) = entry {
             self.total_bytes = self.total_bytes.saturating_add(r.byte_len);
             *self.rendered_srcs.entry(key.src.clone()).or_insert(0) += 1;
         }
-        self.entries.insert(key.clone(), entry);
+        self.entries.insert(key.clone(), Cached { entry, used });
         self.touch(&key);
-        // Never evict the entry we just inserted (`r.byte_len <= 4 MiB <= MAX_CACHE_BYTES`).
-        while (self.entries.len() > MAX_CACHE_ENTRIES || self.total_bytes > MAX_CACHE_BYTES)
-            && self.order.len() > 1
-        {
-            if let Some(oldest) = self.order.pop_front() {
-                if oldest == key {
-                    self.order.push_back(oldest);
-                    break;
-                }
+        while self.entries.len() > MAX_CACHE_ENTRIES || self.total_bytes > MAX_CACHE_BYTES {
+            let Some(pos) = self.order.iter().position(|k| *k != key && self.evictable(k)) else { break };
+            if let Some(oldest) = self.order.remove(pos) {
                 self.remove_entry(&oldest);
             }
         }
@@ -139,7 +171,7 @@ impl MathCache {
         let ready_keys: Vec<MathKey> = self
             .entries
             .iter()
-            .filter_map(|(k, v)| matches!(v, CacheEntry::Ready(_)).then(|| k.clone()))
+            .filter_map(|(k, v)| matches!(v.entry, CacheEntry::Ready(_)).then(|| k.clone()))
             .collect();
         for k in &ready_keys {
             self.remove_entry(k);
@@ -149,7 +181,7 @@ impl MathCache {
 }
 
 static CACHE: OnceLock<Mutex<MathCache>> = OnceLock::new();
-static WAKER: OnceLock<Mutex<Option<Waker>>> = OnceLock::new();
+static CLIENTS: Mutex<Vec<std::sync::Weak<ClientState>>> = Mutex::new(Vec::new());
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -157,27 +189,129 @@ fn cache() -> &'static Mutex<MathCache> {
     CACHE.get_or_init(|| Mutex::new(MathCache::default()))
 }
 
-/// Registers the app's [`rune::Waker`] so completed background math renders wake the UI immediately.
-pub fn set_waker(waker: Waker) {
-    let slot = WAKER.get_or_init(|| Mutex::new(None));
-    if let Ok(mut guard) = slot.lock() {
-        *guard = Some(waker);
+#[derive(Default)]
+struct ClientState {
+    waker: Mutex<Option<Waker>>,
+    seen: AtomicU64,
+    resting: std::sync::atomic::AtomicBool,
+}
+
+/// One window's (or view's) part in display math: its own wake when a render finishes, its own
+/// record of which finishes it has seen, and its say in when cached bitmaps may go. Keep one per
+/// window; dropping it leaves.
+pub struct Client(Arc<ClientState>);
+
+impl Default for Client {
+    fn default() -> Self {
+        let state = Arc::new(ClientState::default());
+        state.seen.store(GENERATION.load(Ordering::Acquire), Ordering::Relaxed);
+        if let Ok(mut list) = CLIENTS.lock() {
+            list.retain(|c| c.strong_count() > 0);
+            list.push(Arc::downgrade(&state));
+        }
+        Self(state)
     }
 }
 
-/// Monotonic generation bumped whenever a background math render finishes (ready or failed).
-/// Hosts with outer row memos can include this only on rows containing math fences.
-pub fn generation() -> u64 {
-    GENERATION.load(Ordering::Acquire)
+impl Client {
+    /// This window's waker, called when a background render finishes.
+    pub fn set_waker(&self, waker: Waker) {
+        if let Ok(mut w) = self.0.waker.lock() {
+            *w = Some(waker);
+        }
+    }
+
+    /// True once after renders finished since this window last asked: its view should commit, so
+    /// rows that drew those sources (and only those, [`version`]) build again. Also sends renders a
+    /// full worker queue held back.
+    pub fn changed(&self) -> bool {
+        pump_waiting();
+        let now = GENERATION.load(Ordering::Acquire);
+        self.0.seen.swap(now, Ordering::AcqRel) != now
+    }
+
+    /// This window shows math again (after [`Client::rest`]).
+    pub fn hold(&self) {
+        self.0.resting.store(false, Ordering::Relaxed);
+    }
+
+    /// This window shows no math now. Cached bitmaps go only once every window rests: another
+    /// window's rows still draw them.
+    pub fn rest(&self) {
+        self.0.resting.store(true, Ordering::Relaxed);
+        let all_rest = CLIENTS.lock().is_ok_and(|list| list.iter().filter_map(std::sync::Weak::upgrade).all(|c| c.resting.load(Ordering::Relaxed)));
+        if all_rest
+            && let Some(c) = CACHE.get()
+            && let Ok(mut guard) = c.lock()
+        {
+            guard.clear_bitmaps();
+            let kept: std::collections::HashSet<Arc<str>> = guard.entries.keys().map(|k| k.src.clone()).collect();
+            guard.finished.retain(|src, _| kept.contains(src));
+        }
+    }
 }
 
-/// Releases cached math bitmaps (for example when a window rests), keeping negative failure records.
-pub fn rest() {
-    if let Some(c) = CACHE.get()
-        && let Ok(mut guard) = c.lock()
-    {
-        guard.clear_bitmaps();
-    }
+thread_local! {
+    /// Sources still rendering that the builds now running drew, each with its finish count as it was
+    /// drawn, innermost build last (`collect`).
+    static COLLECTING: std::cell::RefCell<Vec<Vec<(Arc<str>, u64)>>> = const { std::cell::RefCell::new(Vec::new()) };
+    static ROWS: std::cell::RefCell<HashMap<String, Row>> = std::cell::RefCell::new(HashMap::new());
+}
+
+/// A row's sources that were still rendering when it last built, each with the finish count it had
+/// then, and how many times one of them has finished since rows began.
+#[derive(Default)]
+struct Row {
+    waiting: Vec<(Arc<str>, u64)>,
+    version: u64,
+}
+
+/// Builds `f` (a row of a host's own memo, under its `key`), noting which display math it drew
+/// that is still rendering, for [`version`].
+pub fn collect<R>(key: &str, f: impl FnOnce() -> R) -> R {
+    COLLECTING.with_borrow_mut(|stack| stack.push(Vec::new()));
+    let out = f();
+    let mut waiting = COLLECTING.with_borrow_mut(|stack| stack.pop()).unwrap_or_default();
+    waiting.sort();
+    waiting.dedup_by(|a, b| a.0 == b.0);
+    COLLECTING.with_borrow_mut(|stack| {
+        if let Some(outer) = stack.last_mut() {
+            outer.extend(waiting.iter().cloned());
+        }
+    });
+    ROWS.with_borrow_mut(|rows| {
+        if rows.len() >= MAX_ROWS && !rows.contains_key(key) {
+            rows.clear();
+        }
+        rows.entry(key.to_owned()).or_default().waiting = waiting;
+    });
+    out
+}
+
+/// The display-math version of the row [`collect`] built under `key`, for the host memo's key: it
+/// moves only when a source that row drew while it was still rendering finishes. A bitmap leaving
+/// the cache never moves it.
+pub fn version(key: &str) -> u64 {
+    ROWS.with_borrow_mut(|rows| {
+        let Some(row) = rows.get_mut(key) else { return 0 };
+        if row.waiting.is_empty() {
+            return row.version;
+        }
+        let Some(c) = CACHE.get() else { return row.version };
+        let Ok(guard) = c.lock() else { return row.version };
+        let mut moved = false;
+        for (src, at) in &mut row.waiting {
+            let now = guard.finished.get(src).copied().unwrap_or(0);
+            if now != *at {
+                *at = now;
+                moved = true;
+            }
+        }
+        if moved {
+            row.version = row.version.wrapping_add(1);
+        }
+        row.version
+    })
 }
 
 fn finish_job(key: MathKey, rendered: Option<raster::Rasterized>) {
@@ -192,15 +326,41 @@ fn finish_job(key: MathKey, rendered: Option<raster::Rasterized>) {
         None => CacheEntry::Failed,
     };
     if let Ok(mut guard) = cache().lock() {
+        let src = key.src.clone();
         guard.insert(key, entry);
+        guard.finishes += 1;
+        let n = guard.finishes;
+        guard.finished.insert(src, n);
     }
     GENERATION.fetch_add(1, Ordering::Release);
-    if let Some(slot) = WAKER.get()
-        && let Ok(guard) = slot.lock()
-        && let Some(w) = guard.as_ref()
-    {
+    let wakers: Vec<Waker> = CLIENTS
+        .lock()
+        .map(|list| list.iter().filter_map(std::sync::Weak::upgrade).filter_map(|c| c.waker.lock().ok().and_then(|w| w.clone())).collect())
+        .unwrap_or_default();
+    for w in wakers {
         w();
     }
+}
+
+/// Sends what a full queue held back while it has room (on the UI thread: the web worker's queue
+/// lives there).
+fn pump_waiting() {
+    loop {
+        let Some(job) = CACHE.get().and_then(|c| c.lock().ok()?.waiting.pop_front()) else { return };
+        if !send(job.key.clone(), job.em_pt, job.ink, job.scale) {
+            if let Ok(mut guard) = cache().lock() {
+                guard.waiting.push_front(job);
+            }
+            return;
+        }
+    }
+}
+
+fn send(key: MathKey, em_pt: f32, ink: Color, scale: f32) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    return sandbox::enqueue(key, em_pt, ink, scale);
+    #[cfg(target_arch = "wasm32")]
+    return web_worker::enqueue(key, em_pt, ink, scale);
 }
 
 /// Whether a fenced code block's info-string language names display math (`latex` or `math`),
@@ -236,41 +396,65 @@ pub(crate) fn is_rendered(source: &str) -> bool {
 }
 
 /// Looks up `(source, body_pt, ink, scale)` without blocking the UI thread, enqueueing a
-/// background render on the first miss.
+/// background render on the first miss. A source still rendering is noted for the row being
+/// built ([`collect`]).
 pub(crate) fn poll_or_enqueue(source: &str, body_pt: f32, ink: Color, scale: f32) -> MathStatus {
     let trimmed = source.trim();
     if trimmed.is_empty() || trimmed.len() > MAX_INPUT_BYTES {
         return MathStatus::Failed;
     }
+    pump_waiting();
     let key = MathKey::new(trimmed, body_pt, ink, scale);
-    {
+    let commit = rune::commit_generation();
+    let (status, seen) = {
         let Ok(mut guard) = cache().lock() else {
             return MathStatus::Failed;
         };
-        match guard.entries.get(&key) {
-            Some(CacheEntry::Ready(r)) => {
-                let r = r.clone();
-                guard.touch(&key);
-                return MathStatus::Ready(r);
+        guard.commit = guard.commit.max(commit);
+        // Read with the status, so a render finishing before the row's build ends still moves it.
+        let seen = guard.finished.get(&key.src).copied().unwrap_or(0);
+        match guard.entries.get_mut(&key) {
+            Some(c) => {
+                c.used = commit;
+                let status = match &c.entry {
+                    CacheEntry::Ready(r) => MathStatus::Ready(r.clone()),
+                    CacheEntry::Pending => MathStatus::Pending,
+                    CacheEntry::Failed => MathStatus::Failed,
+                };
+                if matches!(status, MathStatus::Ready(_)) {
+                    guard.touch(&key);
+                }
+                (Some(status), seen)
             }
-            Some(CacheEntry::Pending) => return MathStatus::Pending,
-            Some(CacheEntry::Failed) => return MathStatus::Failed,
             None => {
                 guard.insert(key.clone(), CacheEntry::Pending);
+                (None, seen)
             }
         }
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    let queued = sandbox::enqueue(key.clone(), body_pt, ink, scale);
-    #[cfg(target_arch = "wasm32")]
-    let queued = web_worker::enqueue(key.clone(), body_pt, ink, scale);
-    if !queued {
-        if let Ok(mut guard) = cache().lock() {
-            guard.remove_entry(&key);
+    };
+    let status = status.unwrap_or_else(|| {
+        if send(key.clone(), body_pt, ink, scale) {
+            return MathStatus::Pending;
         }
-        return MathStatus::Failed;
+        // The queue is full: the render waits its turn (still Pending), or, past that, this build
+        // shows the code and the next build of the row asks again.
+        let Ok(mut guard) = cache().lock() else { return MathStatus::Failed };
+        if guard.waiting.len() < MAX_WAITING {
+            guard.waiting.push_back(Waiting { key: key.clone(), em_pt: body_pt, ink, scale });
+            return MathStatus::Pending;
+        }
+        guard.remove_entry(&key);
+        guard.order.retain(|k| *k != key);
+        MathStatus::Failed
+    });
+    if matches!(status, MathStatus::Pending) {
+        COLLECTING.with_borrow_mut(|stack| {
+            if let Some(top) = stack.last_mut() {
+                top.push((key.src.clone(), seen));
+            }
+        });
     }
-    MathStatus::Pending
+    status
 }
 
 /// Builds the display-math element for a ready `RenderedMath` inside `style`, honouring
