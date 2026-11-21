@@ -1,0 +1,1 @@
+- `El::focus_ring_for(key, ...)`: a keyboard-only ring drawn on one element while another (by key) has focus, for a scroll region's ring on an overlay above what covers its edges.
