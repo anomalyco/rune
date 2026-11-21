@@ -50,8 +50,10 @@ impl Default for Focus {
 }
 
 pub(crate) enum FocusEvent {
-    /// Focus moves to `path`, or nowhere, and shows as `keyboard` says.
-    Set { path: Option<String>, keyboard: bool },
+    /// Focus moves to `path`, or nowhere, and shows as `keyboard` says. When `keep_entry` is
+    /// set (a commit keeping focus on the same element without an explicit `Tx::focus`), [`Entry`]
+    /// stays as it arrived so an in-field arrow key or window return doesn't light a field's ring.
+    Set { path: Option<String>, keyboard: bool, keep_entry: bool },
     /// The pointer lit (`true`) or left (`false`) the focused `focus_highlight` row.
     Hover(bool),
     /// A key that navigates (Tab, an arrow): focus shows from now on.
@@ -150,9 +152,11 @@ impl FocusState {
 
     pub(crate) fn step(&mut self, event: FocusEvent) -> Effects<FocusEffect> {
         match event {
-            FocusEvent::Set { path, keyboard } => {
+            FocusEvent::Set { path, keyboard, keep_entry } => {
                 self.modality = if keyboard { Modality::Keyboard } else { Modality::Pointer };
-                self.entry = if keyboard && path.is_some() { Entry::Keys } else { Entry::Other };
+                if !keep_entry {
+                    self.entry = if keyboard && path.is_some() { Entry::Keys } else { Entry::Other };
+                }
                 let moved = self.path() != path.as_deref();
                 self.focus = match (std::mem::take(&mut self.focus), path) {
                     (Focus::On { path: old, hovered, .. }, Some(path)) if old == path => Focus::On { path, hovered, from: None },
