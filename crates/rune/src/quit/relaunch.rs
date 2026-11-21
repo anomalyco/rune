@@ -114,7 +114,6 @@ fn wait(pid: u32) {
 /// kernel has closed its handles (its instance pipe, its file locks), which can take a while: a
 /// process in between is still here, and is [`ending`].
 #[cfg(target_os = "windows")]
-#[allow(unsafe_code)]
 pub(crate) fn alive(pid: u32) -> bool {
     process(pid).is_some_and(|(signalled, _)| !signalled)
 }
@@ -129,6 +128,7 @@ pub(crate) fn ending(pid: u32) -> bool {
 /// `pid`'s process object: whether it is signalled, and whether its exit code is still
 /// `STILL_ACTIVE`. None when it is gone (or can't be opened).
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 fn process(pid: u32) -> Option<(bool, bool)> {
     use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE, WAIT_TIMEOUT};
     use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, WaitForSingleObject};
