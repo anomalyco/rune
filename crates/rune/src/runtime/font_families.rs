@@ -32,6 +32,9 @@ impl RuntimeCore {
         if !(self.text.follow_full_faces() || chosen) {
             return false;
         }
+        for n in &mut self.tree.nodes {
+            n.text_layout = None;
+        }
         self.commit.clear_memo();
         self.commit.layout.mark_all_dirty();
         self.commit.dirty = true;

@@ -393,7 +393,7 @@ impl Renderer {
     }
 
     fn can_memo_flags(&self, flags: u8) -> bool {
-        if flags & HAS_CODE != 0 && (!self.highlighter.is_builtin() || self.code_frame.is_some()) { return false; }
+        if flags & HAS_CODE != 0 && (!self.highlighter.is_builtin() || self.code_frame.as_ref().is_some_and(|w| w.frame.is_some() || w.wrap.is_some())) { return false; }
         if flags & HAS_MERMAID != 0 {
             #[cfg(feature = "mermaid")]
             if self.diagram_frame.is_some() { return false; }
@@ -451,7 +451,7 @@ impl Renderer {
                     (Block::Para(inl), Some(BlockMap::DeepTail { lines, .. })) => (11u8, *lines, &inl.text).hash(h),
                     (Block::Para(inl), _) => { 1u8.hash(h); if !self.hash_inline_direct(inl, h) { return false; } }
                     (Block::Heading(level, inl), _) => { (2u8, *level).hash(h); if !self.hash_inline_direct(inl, h) { return false; } }
-                    (Block::Code(code), _) => { if !self.can_memo_flags(HAS_CODE) { return false; } (3u8, code).hash(h); }
+                    (Block::Code(code), _) => { if !self.can_memo_flags(HAS_CODE) { return false; } (3u8, self.wrap_code_default(), code).hash(h); }
                     (Block::Diff(src), _) => (4u8, src).hash(h),
                     (Block::Mermaid(src), _) => { if !self.can_memo_flags(HAS_MERMAID) { return false; } (5u8, src).hash(h); }
                     (Block::Rule, _) => 6u8.hash(h),
@@ -502,6 +502,7 @@ impl Renderer {
             Some(p) => {
                 if !self.can_memo_flags(p.flags) || !self.can_memo_links(!p.links.is_empty()) { return None; }
                 p.digest.hash(&mut h);
+                if p.flags & HAS_CODE != 0 { self.wrap_code_default().hash(&mut h); }
                 for url in &p.links { self.hash_link_url(url, &mut h); }
             }
             None => if !self.hash_block_direct(b, Some(map), &mut h) { return None; },
@@ -527,6 +528,7 @@ impl Renderer {
             Some(p) => {
                 if !self.can_memo_flags(p.flags) || !self.can_memo_links(!p.links.is_empty()) { return None; }
                 p.digest.hash(&mut h);
+                if p.flags & HAS_CODE != 0 { self.wrap_code_default().hash(&mut h); }
                 for url in &p.links { self.hash_link_url(url, &mut h); }
             }
             None => {
@@ -546,10 +548,10 @@ impl Renderer {
         Some(h.finish128())
     }
 
-    pub(super) fn settled_code_card_digest(&self, code: &str, source: Option<&Source>, map: Option<&SpanMap>) -> Option<(u64, u64)> {
+    pub(super) fn settled_code_card_digest(&self, code: &str, source: Option<&Source>, map: Option<&SpanMap>, wrapped: bool) -> Option<(u64, u64)> {
         if !self.highlighter.is_builtin() || source.is_some_and(|s| s.open) { return None; }
         let mut h = PairHasher::new();
-        (3u8, self.base_hash(), code).hash(&mut h);
+        (3u8, self.base_hash(), wrapped, code).hash(&mut h);
         match source {
             Some(s) => (1u8, &s.lang, s.len, s.coloured, s.open).hash(&mut h),
             None => 0u8.hash(&mut h),
