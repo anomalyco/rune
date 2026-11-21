@@ -1,6 +1,8 @@
 //! [`Data`]: plain values that cross a VM boundary: from a worker thread into a script, from a
 //! host into a [signal](crate::Script::fire), and from the old VM to the new one on a hot reload.
 
+#![allow(unsafe_code)]
+
 use std::collections::BTreeMap;
 
 use mlua::{FromLua, IntoLua, Lua, Value};

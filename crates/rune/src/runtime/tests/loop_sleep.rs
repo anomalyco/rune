@@ -20,10 +20,10 @@ fn delayed_loops_sleep_on_the_shared_deadline_and_resume_after_native_idle() {
     assert_eq!(rt.wake_deadline(), None);
     let mut rt = make(1.0, 1.0);
     rt.frame(0.0);
-    rt.wall_start = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+    rt.wall_start = Some(crate::time::now() - std::time::Duration::from_secs(1));
     assert!(!rt.frame(1.0 / 120.0));
     assert!((rt.wake_deadline().unwrap() - 2.0).abs() < 0.001, "an input during idle must not postpone the loop");
-    rt.wall_start = Some(std::time::Instant::now() - std::time::Duration::from_secs(2));
+    rt.wall_start = Some(crate::time::now() - std::time::Duration::from_secs(2));
     assert!(rt.frame(1.0 / 120.0));
     assert!((rt.t - 2.0).abs() < 0.001, "idle dt must not postpone the start again");
     let mut rt = make(1.0, 0.5);
@@ -51,7 +51,7 @@ fn cycles_share_deadlines_and_sleep_when_hidden_by_hover_groups() {
     let mut rt = Runtime::new(false, view, (100.0, 100.0), Env::new(true, 1.0));
     assert!(!rt.frame(0.0), "cycles must sleep rather than request continuous frames");
     assert!((rt.wake_deadline().unwrap() - 1.0 / 30.0).abs() < 1e-7);
-    assert_eq!(rt.loops.len(), 1);
+    assert_eq!(rt.motion.loops_len(), 1);
     let commits = rt.stats.commits;
     rt.frame(0.5);
     assert_eq!(rt.stats.commits, commits);

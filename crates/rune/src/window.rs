@@ -3,128 +3,89 @@
 
 use std::sync::{Arc, Mutex, Weak, atomic::{AtomicBool, AtomicU32, Ordering}};
 use std::{cell::RefCell, rc::Rc};
+#[cfg(test)]
 use std::time::Duration;
 use crate::time::Instant;
 
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition};
-use winit::event::{ElementState, Ime as WIme, MouseButton, StartCause, TouchPhase, WindowEvent};
+use winit::event::{MouseButton, StartCause, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
-use winit::keyboard::ModifiersState;
-use winit::window::{Theme, Window, WindowId, WindowLevel};
+use winit::window::{Window, WindowId};
 use winit::raw_window_handle::HasWindowHandle;
 
-use crate::app::{Activation, Shared, WindowRequest};
-use crate::compose::{Compositor, Frame};
-use crate::frame::clock::FrameClock;
-use crate::edit::Ime;
-use crate::el::{Shell, Tx};
-use crate::render::{Gpu, Renderer};
-use crate::runtime::{Env, Runtime, TitlebarAction, Waker};
-use crate::frame::surface_stats::{Pacing, SurfaceMeter, SurfaceStats};
-use crate::tooling::{AppSpec, Args, Chrome, runtime_for};
-use crate::windows::{AnyWindowSpec, Display, WindowOptions, WindowSpec};
+use crate::app::WindowRequest;
+use crate::frame::surface_stats::SurfaceStats;
+#[cfg(all(test, target_os = "linux"))]
+use crate::frame::surface_stats::SurfaceMeter;
+use crate::render::Gpu;
+use crate::runtime::{AppDriver, Runtime, RuntimeCore};
+use crate::tooling::Args;
+use crate::windows::{AnyWindowSpec, Display, WindowSpec};
+#[cfg(test)]
+use crate::el::Tx;
+#[cfg(test)]
+use crate::tooling::Chrome;
 
-#[cfg(target_os = "macos")]
-mod launch_drawables;
-#[cfg(target_os = "macos")]
-use launch_drawables::LaunchDrawables;
-mod chrome;
-use chrome::{frame_chrome, place_chrome, sync_chrome, titlebar_double_click};
-mod configure;
-pub(crate) use configure::configure;
-mod create;
-#[cfg(target_os = "windows")]
-mod cpu_frame;
-#[cfg(target_os = "windows")]
-mod post_frame;
-#[cfg(target_os = "windows")]
-mod video_layer;
-mod native;
-use native::Native;
-mod wake;
-use wake::{WakeFacts, WakeWork};
-mod win;
-use win::{SurfaceRetries, SurfaceStep, SURFACE_TRIES, Win};
-mod first_frame;
-use first_frame::FirstFrame;
-mod draw;
-mod redraw;
-#[cfg(target_os = "windows")]
-mod covered_draw;
-#[cfg(target_os = "windows")]
-use covered_draw::{CoveredDraw, CoveredDrawEvent};
-#[cfg(target_os = "windows")]
-mod look;
-#[cfg(target_os = "windows")]
-pub(crate) mod slot;
-#[cfg(target_os = "windows")]
-mod damage;
-use redraw::{Redraw, RedrawEffect, RedrawEvent};
-mod presented;
-pub(crate) use presented::Presented;
-use presented::{composed, composing};
-mod platform_sync;
-use platform_sync::sync_platform;
-mod shell_requests;
-mod keys;
-pub(crate) use keys::{key_base, map_key_event, map_mods};
-mod any_host;
 mod app_events;
+mod chrome;
 mod event_loop;
-mod events;
 mod file_drop;
-pub(crate) mod frame;
 mod handle;
-pub use handle::WindowHandle;
-use handle::native_window_number;
-mod life;
-pub(crate) use life::Life;
-mod sight;
-pub(crate) use sight::{Cover, Sight};
-mod lifecycle;
-mod minimize;
-pub(crate) use minimize::{Minimize, MinimizeEvent};
-mod rest;
-use rest::{Rest, RestEvent};
-mod reveal;
-use reveal::{Found, Reveal, RevealEffect};
-#[cfg(target_os = "macos")]
-mod mac;
-mod pacing;
-pub(crate) use pacing::{
-    HiddenPace, Missed, TimerFrame, OCCLUDED_MAX, OCCLUDED_RETRY, TIMEOUT_RETRY, TIMER_FRAME,
-    acquire, acquire_checked, timer_deadline, timer_wants_frame,
-};
-#[cfg(test)]
-pub(crate) use pacing::{HIDDEN_REFRESH, TIMER_FRAME_STALL};
-#[cfg(test)]
-use pacing::wall_wake_deadline;
-mod backoff;
-pub(crate) use backoff::{Backoff, BackoffEvent, BackoffEffect};
-mod stepping;
+mod host;
+mod keys;
 pub mod spec;
+mod state;
+mod surface;
 pub(crate) mod titlebar;
-#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-mod float_on_open;
+#[cfg(target_os = "windows")]
+mod win32;
+
+pub use handle::WindowHandle;
 #[cfg(not(target_arch = "wasm32"))]
 pub use event_loop::run;
 pub(crate) use event_loop::run_windows;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(crate) use file_drop::FileStep;
+pub(crate) use keys::{key_base, map_key_event, map_mods};
+pub(crate) use state::frame;
+pub(crate) use state::{Life, Minimize, MinimizeEvent, Sight};
+pub(crate) use surface::{
+    Backoff, BackoffEffect, BackoffEvent, HiddenPace, Missed, Presented, TIMER_FRAME,
+    acquire_checked, configure, reblend_core, rebuild_renderer_core,
+    surface_config, timer_deadline_core, timer_wants_frame_core,
+};
 #[cfg(test)]
-#[path = "window/covered_tests.rs"]
-mod covered;
+pub(crate) use surface::{
+    HIDDEN_REFRESH, OCCLUDED_MAX, OCCLUDED_RETRY, TIMEOUT_RETRY, TIMER_FRAME_STALL, TimerFrame,
+    timer_deadline, timer_wants_frame, wall_wake_deadline,
+};
+#[cfg(all(test, target_os = "linux"))]
+use surface::acquire;
+#[cfg(target_os = "windows")]
+pub(crate) use win32::slot;
+
+use host::Host;
+#[cfg(test)]
+use chrome::uses_drag_regions;
+#[cfg(test)]
+use host::setup_waker;
+#[cfg(test)]
+use state::{WakeFacts, WakeWork};
 #[cfg(all(test, target_os = "macos"))]
-#[path = "window/occluded_surface_tests.rs"]
-mod occluded_surface;
+use surface::LaunchDrawables;
+#[cfg(test)]
+use surface::{SurfaceRetries, composing};
+
+/// Records a presented frame and wakes Windows' deferred ICU word segmenter on the first one.
+pub(super) fn frame_presented() {
+    if crate::marks::presented() {
+        #[cfg(all(target_os = "windows", not(feature = "segmenter-dictionaries")))]
+        crate::platform::win32::segmenter::first_frame_presented();
+    }
+}
+
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod wake_tests;
-#[cfg(test)]
-mod backoff_tests;
-#[cfg(test)]
-#[path = "window/frame_move_tests.rs"]
-mod frame_move_tests;
 
 pub(crate) enum WakeEvent {
     DisplayTick(usize),
@@ -244,9 +205,9 @@ impl Windows {
             let (slot, proxy) = (self.hosts.len(), self.proxy.clone());
             let frame_proxy = proxy.clone();
             let slot_proxy = proxy.clone();
-            overlay.connect(Arc::new(move || { let _ = proxy.send_event(WakeEvent::App(slot)); }),
-                Arc::new(move || { let _ = frame_proxy.send_event(WakeEvent::DisplayTick(slot)); }),
-                Arc::new(move || { let _ = slot_proxy.send_event(WakeEvent::FrameSlot(slot)); }), self.gpu.clone());
+            overlay.connect(Arc::new(move || { proxy.send_event(WakeEvent::App(slot)).ok(); }),
+                Arc::new(move || { frame_proxy.send_event(WakeEvent::DisplayTick(slot)).ok(); }),
+                Arc::new(move || { slot_proxy.send_event(WakeEvent::FrameSlot(slot)).ok(); }), self.gpu.clone());
             overlay.resumed(event_loop);
             self.hosts.push(Some(overlay));
         }
@@ -294,33 +255,29 @@ pub(crate) struct Start<'a> {
     overlays: &'a mut Vec<Box<dyn crate::overlay::PendingOverlay>>,
 }
 
-/// Starts one window's host, or renders it headless when its own arguments ask for that.
-pub(crate) fn start<S: 'static>(mut spec: WindowSpec<S>, handle: Option<WindowHandle>, keeps_loop: bool, mut inherited: Args, cx: Start<'_>) -> Option<Box<dyn AnyHost>> {
-    if inherited.native && !cx.traced {
-        inherited.trace = None;
-        inherited.frames = None;
+impl Start<'_> {
+    fn inherit_args(&self, mut inherited: Args) -> Args {
+        if inherited.native && !self.traced {
+            inherited.trace = None;
+            inherited.frames = None;
+        }
+        inherited
     }
-    let args = spec.app.resolve_args(inherited);
+}
+
+/// Starts one window's host, or renders it headless when its own arguments ask for that.
+pub(crate) fn start<S: 'static>(mut spec: WindowSpec<S>, handle: Option<WindowHandle>, keeps_loop: bool, inherited: Args, cx: Start<'_>) -> Option<Box<dyn AnyHost>> {
+    let args = spec.app.resolve_args(cx.inherit_args(inherited));
     #[cfg(not(any(feature = "tooling", debug_assertions)))]
     if args.headless() { crate::tooling::die(crate::tooling::WITHOUT_TOOLING); }
     #[cfg(any(feature = "tooling", debug_assertions))]
     if args.headless() {
-        if let Some((w, h)) = spec.options.physical_size {
-            let scale = args.scale.unwrap_or(2.0);
-            spec.app.spec.size = (w as f32 / scale, h as f32 / scale);
-        }
-        let transparent = spec.options.transparent;
-        spec.app.window_options = spec.options;
-        crate::tooling::headless_configured(spec.app, args, transparent);
+        let scale = args.scale.unwrap_or(2.0);
+        crate::tooling::headless_window_spec(spec.app, spec.options, args, scale);
         return None;
     }
-    crate::video::enable_playback();
-    cx.overlays.append(&mut spec.app.overlays);
-    let handle = handle.unwrap_or_else(|| WindowHandle::new(&spec.key));
     let open_urls = crate::open_url::incoming::listen(&spec.app);
-    let mut host = Host::new(spec, handle, args, cx.proxy, cx.slot, cx.gpu, cx.wayland);
-    (host.keeps_loop, host._open_urls) = (keeps_loop, open_urls);
-    Some(Box::new(host))
+    Some(Box::new(Host::new(spec, handle, args, cx, keeps_loop, open_urls)))
 }
 
 impl ApplicationHandler<WakeEvent> for Windows {
@@ -427,7 +384,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
         }
         // The frames windows want next (`redraw`), and on Windows the paints the system keeps
         // putting off behind another window's.
-        let now = Instant::now();
+        let now = crate::time::now();
         for host in self.hosts.iter_mut().flatten() { host.turn_ends(event_loop, now); }
         // Layer surfaces have no redraw events: keep turning while one animates (its vsync
         // paces the loop). Hosts whose only motion is an ambient loop sleep until its next step.
@@ -461,254 +418,6 @@ impl ApplicationHandler<WakeEvent> for Windows {
     }
 }
 
-use file_drop::{DROP_SAMPLE, FileDrop, FileStep};
-
-struct Host<S: 'static> {
-    /// `App::chrome`, as the app set it (`chrome::frame_chrome` lays a titlebar over it).
-    chrome: Chrome,
-    /// `App::titlebar`, unless the window is borderless.
-    titlebar: Option<crate::Titlebar>,
-    options: WindowOptions,
-    placement: Option<crate::windows::PlaceRequest>,
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    macos_window: crate::MacWindowOptions,
-    native_handle: WindowHandle,
-    on_created: Option<Box<dyn FnOnce(WindowHandle)>>,
-    on_window: Option<crate::app::OnWindow>,
-    on_ready: Option<crate::app::OnWindow>,
-    frame_reports: crate::frame::encoded::FrameReports<S>,
-    /// Shown, hidden or closed for good; `win` holds the window while it has one.
-    life: Life,
-    /// False for windows `App::window` added: they live as long as the loop, never keep it.
-    keeps_loop: bool,
-    spec: AppSpec<S>,
-    args: Args,
-    keep_running: bool,
-    /// What the window still owes after its first frame (`post_frame`).
-    #[cfg(target_os = "windows")]
-    chores: post_frame::Chores,
-    /// Its close ends the app (`Windows::window_event`): the last window of a fast-exiting app.
-    ends_app: bool,
-    on_close: Option<fn(&mut S, &mut Tx)>,
-    /// `App::on_rest`.
-    on_rest: Option<fn(&mut S, &mut Tx) -> bool>,
-    on_quit: Option<fn(&mut S, &mut Tx)>,
-    /// `App::turn_scope`, and whether a turn is in it now.
-    turn_scope: Option<crate::app::TurnScope<S>>,
-    turn: any_host::Turn,
-    on_reopen: Option<fn(&mut S, bool, &mut Tx) -> bool>,
-    /// Its place among the windows receiving links (`App::on_open_url`).
-    _open_urls: Option<crate::open_url::incoming::Listening>,
-    release_gpu: bool,
-    open_at_start: bool,
-    /// `App::float_on_open`: each window maps at a fixed size, then takes its own limits.
-    #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
-    float_on_open: bool,
-    /// `App::open_inactive`: the first open leaves focus where it is.
-    open_inactive: bool,
-    /// `App::maximized`, `App::full_screen`.
-    open_as: crate::windows::OpenAs,
-    shared: Arc<Shared<S>>,
-    shortcuts: crate::shortcuts::Guard,
-    menus: crate::native_menu::Guard<S>,
-    popup: crate::popup_menu::Presenter,
-    file_dialog: crate::file_dialog::Presenter,
-    rt: Runtime<S>,
-    /// Before `win` and `gpu`: fields drop in order, and the trace waits for the window's last
-    /// present times.
-    trace: Option<crate::tooling::Trace>,
-    trace_start: Option<Instant>,
-    trace_frames: usize,
-    meter: SurfaceMeter,
-    win: Option<Win>,
-    gpu: Option<(Arc<Gpu>, Renderer)>,
-    gpu_pool: Rc<RefCell<Weak<Gpu>>>,
-    /// A window has shown before: the next one opens settled.
-    shown: bool,
-    started: bool,
-    clock: FrameClock,
-    idle: bool,
-    /// Whether the renderer holds what it gives back at rest (`rest`).
-    rest: Rest,
-    mods: ModifiersState,
-    control_click: bool,
-    files: FileDrop,
-    clipboard: crate::clipboard::Client,
-    secure_input: crate::input::secure_input::SecureInput,
-    ime_allowed: bool,
-    comp: Option<Box<dyn Compositor<S>>>,
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
-    wayland: bool,
-    /// The frame moving or jumping to where a handler asked (`stepping::FrameMove`).
-    frame_move: Option<stepping::FrameMove>,
-    /// Present times of every window this host opens while tracing.
-    #[cfg(target_os = "macos")]
-    present_log: Option<Arc<crate::frame::present_time::metal::Log>>,
-    #[cfg(target_os = "macos")]
-    frame_wake: Waker,
-}
-
-impl<S: 'static> Host<S> {
-    fn new(window_spec: WindowSpec<S>, native_handle: WindowHandle, args: Args, proxy: EventLoopProxy<WakeEvent>, slot: usize, gpu_pool: Rc<RefCell<Weak<Gpu>>>, wayland: bool) -> Self {
-        let WindowSpec { mut app, options, key: _, on_created } = window_spec;
-        let mut args = app.resolve_args(args);
-        let on_window = app.on_window.take();
-        let on_ready = app.on_ready.take();
-        let frame_reports = crate::frame::encoded::FrameReports::new(app.on_frame_encoded.take(), Some(native_handle.key())).inspecting(app.on_frame_drawn.take());
-        let macos_window = std::mem::take(&mut app.macos_window);
-        // Before the menu guard, so custom items in Edit or Window join these menus.
-        #[cfg(target_os = "macos")]
-        crate::native_menu::install_standard_menus(app.standard_menus);
-        native_handle.bind(proxy.clone(), slot);
-        let live_proxy = proxy.clone();
-        #[cfg(target_os = "macos")]
-        let frame_proxy = proxy.clone();
-        let waker: Waker = Arc::new(move || {
-            let _ = proxy.send_event(WakeEvent::App(slot));
-        });
-        let (open, keep_running, on_close, release_gpu) = (app.open, app.keep_running, app.on_close, app.release_gpu);
-        let on_rest = app.on_rest;
-        let (on_reopen, on_quit, turn_scope) = (app.on_reopen, app.on_quit, app.turn_scope);
-        #[cfg(target_os = "macos")]
-        let present_log = args.trace.as_ref().map(|_| Arc::default());
-        let mut app = app;
-        let comp = app.compositor.take();
-        let (on_focus, on_ime, on_visibility) = (app.on_focus, app.on_ime, app.on_visibility);
-        let titlebar = app.titlebar.filter(|_| !options.borderless);
-        let chrome = app.chrome;
-        let (srgb_blend, font_smoothing) = (app.srgb_blend, app.font_smoothing);
-        let modifier_keys = app.modifier_keys;
-        let tab_visits_controls = app.tab_visits_controls;
-        let fit_height = app.fit_content_height;
-        let float_on_open = app.float_on_open;
-        // `RUNE_OPEN_INACTIVE`: a tool's launch (an accessibility probe, a capture) leaves the user's
-        // focus and keyboard where they are, as `App::open_inactive` does.
-        let (open_inactive, open_as) = (app.open_inactive || std::env::var_os("RUNE_OPEN_INACTIVE").is_some(), app.open_as);
-        let app_stats = app.dev_stats;
-        let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
-        let (mut spec, state, shared) = app.into_parts(args.scene.as_deref());
-        let mut size = args.size.unwrap_or(spec.size);
-        // The window reports the system appearance and scale when it opens.
-        let env = Env::new(args.theme.as_deref() != Some("light"), 1.0);
-        let mut rt = runtime_for(&spec, state, size, env, setup_waker(&shared));
-        if let Some(attach) = attach_playground { attach(&mut rt, playground, &spec, args.playground.clone(), args.variant.clone(), true); }
-        if fit_height {
-            spec.min_size = options.fit_min_size(spec.min_size);
-            // Opens at the content's height; the first frame corrects any difference its
-            // real scale makes.
-            rt.fit_height = true;
-            let (min, max) = options.size_limits(spec.min_size);
-            size = crate::window::frame::clamp_size((size.0, rt.content_height()), min, max);
-            rt.set_viewport(size, env.scale);
-            spec.size = size;
-            args.size = None;
-        }
-        rt.on_focus = on_focus;
-        rt.on_visibility = on_visibility;
-        rt.app_ime.hook = on_ime;
-        rt.set_modifier_keys(modifier_keys);
-        rt.set_srgb_blend(srgb_blend); rt.set_font_smoothing(font_smoothing);
-        rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
-        rt.set_system_contrast(crate::platform::preferences::contrast());
-        rt.set_system_increased_contrast(crate::platform::preferences::increased_contrast());
-        rt.set_full_keyboard_access(crate::platform::preferences::full_keyboard_access());
-        rt.set_tab_visits_controls(tab_visits_controls);
-        crate::platform::accent::watch();
-        rt.set_system_accent(crate::system_accent());
-        crate::platform::scroll_bars::watch();
-        rt.set_system_scroll_bars_state(crate::platform::scroll_bars::current().with_override(args.scroll_bars));
-        rt.trace_channels = args.trace.as_ref().map(|_| Default::default());
-        rt.set_live_waker(Arc::new(move || { let _ = live_proxy.send_event(WakeEvent::Live(slot)); }));
-        rt.set_live_visible(false);
-        rt.set_os_drag(crate::drag_out::SUPPORTED);
-        rt.transparent = options.transparent;
-        rt.track_marks = comp.is_some();
-        rt.wall_start = Some(Instant::now());
-        rt.open_urls_natively = args.script.is_none() && args.trace.is_none() && args.frames.is_none();
-        rt.record_events = false;
-        let meter = SurfaceMeter::new(native_handle.key(), native_handle.native.stats.clone());
-        rt.surface_stats = Some(meter.shared());
-        rt.app_stats = app_stats;
-        let mut clipboard = crate::clipboard::Client::default();
-        clipboard.connect(waker.clone());
-        shared.connect(waker.clone());
-        let popup = crate::popup_menu::Presenter::new(waker.clone());
-        let file_dialog = crate::file_dialog::Presenter::new(waker.clone());
-        let shortcuts = crate::shortcuts::Guard::attach(&shared, waker, false, wayland);
-        let menus = crate::native_menu::Guard::attach(&shared, false);
-        Host {
-            chrome,
-            titlebar,
-            options,
-            placement: None,
-            macos_window,
-            native_handle,
-            on_created,
-            on_window,
-            on_ready,
-            frame_reports,
-            life: Life::Unopened,
-            keeps_loop: true,
-            spec,
-            args,
-            keep_running,
-            #[cfg(target_os = "windows")]
-            chores: Default::default(),
-            ends_app: false,
-            on_close,
-            on_rest,
-            on_quit,
-            turn_scope,
-            turn: any_host::Turn::Between,
-            on_reopen,
-            _open_urls: None,
-            release_gpu,
-            open_at_start: open,
-            float_on_open,
-            open_inactive,
-            open_as,
-            shared,
-            shortcuts,
-            menus,
-            popup,
-            file_dialog,
-            rt,
-            win: None,
-            gpu: None,
-            gpu_pool,
-            shown: false,
-            started: false,
-            clock: FrameClock::new(Instant::now()),
-            idle: true,
-            rest: Rest::default(),
-            mods: ModifiersState::empty(),
-            control_click: false,
-            files: FileDrop::default(),
-            clipboard,
-            secure_input: Default::default(),
-            ime_allowed: false,
-            comp,
-            wayland,
-            frame_move: None,
-            trace: None,
-            trace_start: None,
-            trace_frames: 0,
-            meter,
-            #[cfg(target_os = "macos")]
-            present_log,
-            #[cfg(target_os = "macos")]
-            frame_wake: Arc::new(move || { let _ = frame_proxy.send_event(WakeEvent::DisplayTick(slot)); }),
-        }
-    }
-}
-
-/// `setup`'s waker: `AppHandle::wake`, so a drain that also holds updates that changed nothing
-/// still polls and redraws for it.
-fn setup_waker<S: 'static>(shared: &Arc<crate::app::Shared<S>>) -> Waker {
-    let handle = crate::AppHandle { shared: shared.clone() };
-    Arc::new(move || handle.wake())
-}
-
 /// What a shown window that can't draw runs for an update, a wake, a due timer or a redraw:
 /// covered (an occlusion event, or a drawable refused as occluded), minimised, or waiting out
 /// a missed frame. `poll`, due timers and queued input run now, as for a hidden window
@@ -716,75 +425,9 @@ fn setup_waker<S: 'static>(shared: &Arc<crate::app::Shared<S>>) -> Waker {
 /// unless an assistive client reads the window (`Runtime::covered_wake`).
 /// Uncovering settles first, so that frame builds once and paints motion where it would have
 /// ended, as Core Animation's time-based motion has by the time a covered window shows again.
+#[cfg_attr(not(test), allow(dead_code))]
+#[inline(always)]
 pub(crate) fn covered_step<S: 'static>(rt: &mut Runtime<S>) { rt.covered_wake(); }
-
-/// Frames a window's swap chain may hold that the compositor hasn't shown. Windows: one, so a
-/// frame shows at the first composition after it's done, and the window waits for room itself
-/// (`slot`) rather than in `acquire`. Elsewhere two.
-pub(crate) const FRAME_LATENCY: u32 = if cfg!(target_os = "windows") { 1 } else { 2 };
-
-/// A vsynced sRGB (or non-sRGB when `srgb_blend` is set) configuration for the surface, and the
-/// first alpha mode it supports that composites translucent pixels.
-pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (width, height): (u32, u32), srgb_blend: bool)
-    -> Option<(wgpu::SurfaceConfiguration, Option<wgpu::CompositeAlphaMode>)> {
-    let mut config = surface.get_default_config(adapter, width.max(1), height.max(1))?;
-    let caps = surface.get_capabilities(adapter);
-    let srgb = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(config.format);
-    config.format = if srgb_blend {
-        let non_srgb = srgb.remove_srgb_suffix();
-        if caps.formats.contains(&non_srgb) {
-            non_srgb
-        } else {
-            config.view_formats = vec![non_srgb];
-            srgb
-        }
-    } else {
-        srgb
-    };
-    // Backdrop copies read the drawable mid-frame (`ActivePass::split`: backdrop blur, effect
-    // backdrops, rune-fx blend modes). On Metal it costs `framebufferOnly`, but without it they
-    // quietly fall back.
-    config.usage |= caps.usages & wgpu::TextureUsages::COPY_SRC;
-    // A frame that redrew part of itself is copied in whole from the one the renderer keeps
-    // (`render::damaged`).
-    config.usage |= caps.usages & wgpu::TextureUsages::COPY_DST;
-    config.present_mode = wgpu::PresentMode::AutoVsync;
-    config.desired_maximum_frame_latency = FRAME_LATENCY;
-    Some((config, crate::render::translucency::mode(surface, adapter)))
-}
-
-/// Follows a blend switch (`Tx::set_srgb_blend`) on a configured surface: reconfigures it for
-/// `rt`'s mode at its size and alpha mode, rebuilds `renderer` when its target format changes,
-/// and rebuilds the `alpha` pass (when there is one) for the new format. Returns false when the
-/// surface can't be configured.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-pub(crate) fn reblend<S: 'static>(surface: &wgpu::Surface, gpu: &Gpu, config: &mut wgpu::SurfaceConfiguration,
-    renderer: &mut Renderer, alpha: &mut Option<crate::render::surface_alpha::AlphaSurface>, rt: &mut Runtime<S>) -> bool {
-    let srgb = rt.srgb_blend();
-    let Some((next, _)) = surface_config(surface, &gpu.adapter, (config.width, config.height), srgb) else { return false };
-    if (config.format, &config.view_formats) != (next.format, &next.view_formats) {
-        (config.format, config.view_formats) = (next.format, next.view_formats);
-        if let Err(error) = configure(surface, gpu, config) {
-            eprintln!("rune: could not reconfigure a surface for a blend switch: {error}");
-            return false;
-        }
-    }
-    let target = if srgb { config.format.remove_srgb_suffix() } else { config.format };
-    rebuild_renderer(&gpu.device, renderer, target, rt);
-    if alpha.is_some() {
-        *alpha = Some(crate::render::surface_alpha::AlphaSurface::new(&gpu.device, target, (config.width, config.height)));
-    }
-    true
-}
-
-/// Switches `renderer` to `target` when its format changed, keeping its atlases, layer targets
-/// and extra pipelines, and sets its blend mode to `rt`'s.
-pub(crate) fn rebuild_renderer<S: 'static>(device: &wgpu::Device, renderer: &mut Renderer, target: wgpu::TextureFormat, rt: &mut Runtime<S>) {
-    renderer.set_format(device, target);
-    renderer.set_srgb_blend(rt.srgb_blend());
-    // Before the first frame, so its glyph masks go to the GPU fill when the renderer has one.
-    renderer.attach_text(&mut rt.text.atlas);
-}
 
 pub(crate) fn is_wayland(event_loop: &ActiveEventLoop) -> bool {
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -816,7 +459,7 @@ pub(crate) fn screen_origin(window: &Window) -> Option<(f32, f32)> {
 /// Tells `rt` where `window`'s content is on screen: in points for `El::on_screen_layout`
 /// ([`screen_origin`]), and in desktop pixels for `Drag::screen_point`. True when that moved
 /// an `El::on_screen_layout` element.
-pub(crate) fn sync_screen_origin<S: 'static>(rt: &mut Runtime<S>, window: &Window) -> bool {
+pub(crate) fn sync_screen_origin_core(rt: &mut RuntimeCore, window: &Window) -> bool {
     rt.set_window_pixels(window.inner_position().ok().map(|p| (p.x, p.y)));
     screen_origin(window).is_some_and(|o| rt.set_window_origin(o))
 }
@@ -827,13 +470,6 @@ pub(crate) fn backing_scale(window: &Window) -> f32 {
     #[cfg(target_os = "macos")]
     if let Some(scale) = crate::platform::macos::backing_scale(window) { return scale; }
     window.scale_factor() as f32
-}
-
-/// Native titlebar behaviour the framework owns: traffic-light placement, drag regions and the
-/// double-click action. Elsewhere only the portable parts apply.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn uses_drag_regions(chrome: Chrome, borderless: bool, panel: bool) -> bool {
-    chrome.drag_regions && (borderless || chrome.full_size_content) && !panel
 }
 
 pub(crate) fn pointer_button(button: MouseButton) -> crate::PointerButton {
@@ -858,7 +494,7 @@ fn gesture_phase(phase: TouchPhase) -> crate::GesturePhase {
 
 /// Hands a winit touch (a finger, or a pen where the system reports it as one) to the runtime
 /// in the view's points, timed on a clock that starts with the first touch.
-pub(crate) fn touch<S: 'static>(rt: &mut crate::Runtime<S>, touch: &winit::event::Touch) {
+pub(crate) fn touch_core(rt: &mut RuntimeCore, app: &mut dyn AppDriver, touch: &winit::event::Touch) {
     let scale = rt.input_scale();
     static START: std::sync::OnceLock<crate::time::Instant> = std::sync::OnceLock::new();
     let phase = match touch.phase {
@@ -867,23 +503,6 @@ pub(crate) fn touch<S: 'static>(rt: &mut crate::Runtime<S>, touch: &winit::event
         TouchPhase::Ended => crate::TouchPhase::Ended,
         TouchPhase::Cancelled => crate::TouchPhase::Cancelled,
     };
-    let time = START.get_or_init(crate::time::Instant::now).elapsed().as_secs_f64();
-    rt.touch(touch.id, phase, touch.location.x as f32 / scale, touch.location.y as f32 / scale, time);
-}
-
-impl<S: 'static> Host<S> {
-    /// Tells the runtime where the window's content is on screen, drawing a frame when that
-    /// moves an `El::on_screen_layout` element.
-    fn sync_origin(&mut self) {
-        let Some(w) = &self.win else { return };
-        if sync_screen_origin(&mut self.rt, &w.window) {
-            w.request_redraw();
-        }
-    }
-
-    /// Publishes what `AppHandle::is_visible` reports.
-    fn publish(&self) {
-        let visible = self.life.shown() && self.win.is_some();
-        self.shared.visible.store(visible, Ordering::Release);
-    }
+    let time = START.get_or_init(crate::time::now).elapsed().as_secs_f64();
+    rt.touch(app, touch.id, phase, touch.location.x as f32 / scale, touch.location.y as f32 / scale, time);
 }

@@ -12,6 +12,8 @@
 //! module in a call to them (its "command" mode), running them again on each call into the wasm;
 //! referencing them here makes it link them once, and [`init`] runs them before the first VM.
 
+#![allow(unsafe_code)]
+
 unsafe extern "C" {
     fn __wasm_call_ctors();
 }
@@ -19,8 +21,10 @@ unsafe extern "C" {
 /// Runs the C and C++ static constructors, once.
 pub(crate) fn init() {
     static ONCE: std::sync::Once = std::sync::Once::new();
-    // SAFETY: the linker's constructor list, run once before any Luau code.
-    ONCE.call_once(|| unsafe { __wasm_call_ctors() });
+    ONCE.call_once(|| {
+        // SAFETY: the linker's constructor list, run once before any Luau code.
+        unsafe { __wasm_call_ctors() }
+    });
 }
 
 mod wasi {
@@ -48,6 +52,7 @@ mod wasi {
     /// SAFETY (for every function here): libc passes addresses in this module's own linear
     /// memory, sized as the WASI ABI says.
     unsafe fn put<T>(at: i32, value: T) {
+        // SAFETY: caller guarantees `at` is a valid writable wasm32 linear-memory address for `T`.
         unsafe { std::ptr::write_unaligned(at as usize as *mut T, value) }
     }
 
@@ -81,6 +86,7 @@ mod wasi {
                 }
             });
         }
+        // SAFETY: WASI `fd_write` ABI guarantees `written` points to a writable `u32` in linear memory.
         unsafe { put(written, total) };
         SUCCESS
     }
@@ -101,6 +107,7 @@ mod wasi {
             return BADF;
         }
         // `fdstat`: a character device (2), no flags, every right.
+        // SAFETY: WASI `fd_fdstat_get` ABI guarantees `stat` points to a 24-byte writable `fdstat` struct in linear memory.
         unsafe {
             put::<[u8; 8]>(stat, [2, 0, 0, 0, 0, 0, 0, 0]);
             put::<u64>(stat + 8, u64::MAX);
@@ -111,6 +118,7 @@ mod wasi {
 
     #[unsafe(no_mangle)]
     unsafe extern "C" fn __imported_wasi_snapshot_preview1_environ_sizes_get(count: i32, size: i32) -> i32 {
+        // SAFETY: WASI `environ_sizes_get` ABI guarantees `count` and `size` point to writable `u32`s in linear memory.
         unsafe {
             put::<u32>(count, 0);
             put::<u32>(size, 0);
@@ -132,6 +140,7 @@ mod wasi {
             1..=3 => (performance_now() * 1e6) as u64,
             _ => return INVAL,
         };
+        // SAFETY: WASI `clock_time_get` ABI guarantees `time` points to a writable `u64` in linear memory.
         unsafe { put(time, ns) };
         SUCCESS
     }
@@ -164,9 +173,11 @@ mod allocator {
     unsafe impl GlobalAlloc for LibcAlloc {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
             if layout.align() <= MALLOC_ALIGN {
+                // SAFETY: `layout.size()` is non-zero per `GlobalAlloc::alloc` and WASI `malloc` guarantees `MALLOC_ALIGN` alignment.
                 return unsafe { malloc(layout.size()) }.cast();
             }
             let mut ptr = std::ptr::null_mut();
+            // SAFETY: `layout.align()` is a power of two > `MALLOC_ALIGN` (multiple of `size_of::<*mut c_void>()`) and `&mut ptr` is valid.
             if unsafe { posix_memalign(&mut ptr, layout.align(), layout.size()) } != 0 {
                 return std::ptr::null_mut();
             }
@@ -174,11 +185,13 @@ mod allocator {
         }
 
         unsafe fn dealloc(&self, ptr: *mut u8, _: Layout) {
+            // SAFETY: `GlobalAlloc::dealloc` guarantees `ptr` came from `malloc` or `posix_memalign` and is no longer used.
             unsafe { free(ptr.cast()) }
         }
 
         unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
             if layout.align() <= MALLOC_ALIGN {
+                // SAFETY: `ptr` came from `malloc` with alignment `<= MALLOC_ALIGN` and `new_size` is valid per `GlobalAlloc::realloc`.
                 return unsafe { realloc(ptr.cast(), new_size) }.cast();
             }
             // SAFETY: as `GlobalAlloc::realloc`'s default: allocate, copy, free.

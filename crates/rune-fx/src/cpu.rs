@@ -3,7 +3,7 @@
 //! aurora curtains). Same integer hashes as common.wgsl, so CPU and GPU noise agree.
 
 use crate::*;
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::{PI, SQRT_2, TAU};
 
 #[inline]
 fn pcg(v: u32) -> u32 {
@@ -53,7 +53,7 @@ pub(crate) fn gnoise(x: f32, y: f32, per: i32, seed: u32) -> f32 {
     let (ux, uy) = (fade(fx), fade(fy));
     let ab = a + (b - a) * ux;
     let cd = c + (d - c) * ux;
-    (ab + (cd - ab) * uy) * 1.41421
+    (ab + (cd - ab) * uy) * SQRT_2
 }
 /// Multi-octave lateral displacement for bolts, ~[-1.6, 1.6].
 fn disp(x0: f32, t0: f32, per0: i32, seed: u32, oct: u32) -> f32 {

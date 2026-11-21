@@ -136,3 +136,46 @@ impl std::fmt::Debug for CursorImage {
         f.debug_struct("CursorImage").field("png_bytes", &self.bytes.len()).field("hot", &self.hot).finish()
     }
 }
+
+/// Which AppKit cursor backs each [`Cursor`] variant, kept cross-platform so adding a new
+/// [`Cursor`] variant fails to compile until its macOS mapping is explicit.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MacCursor {
+    Arrow,
+    PointingHand,
+    IBeam,
+    OpenHand,
+    ClosedHand,
+    NotAllowed,
+    ResizeLeftRight,
+    ResizeUpDown,
+    Crosshair,
+    ZoomIn,
+    ZoomOut,
+    Transparent,
+    MoveImage,
+    CellImage,
+    Custom(CursorImage),
+}
+
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(crate) fn mac_cursor(cursor: Cursor) -> MacCursor {
+    match cursor {
+        Cursor::Default => MacCursor::Arrow,
+        Cursor::Pointer => MacCursor::PointingHand,
+        Cursor::Text => MacCursor::IBeam,
+        Cursor::Grab => MacCursor::OpenHand,
+        Cursor::Grabbing => MacCursor::ClosedHand,
+        Cursor::NotAllowed => MacCursor::NotAllowed,
+        Cursor::ResizeColumn => MacCursor::ResizeLeftRight,
+        Cursor::ResizeRow => MacCursor::ResizeUpDown,
+        Cursor::Crosshair => MacCursor::Crosshair,
+        Cursor::ZoomIn => MacCursor::ZoomIn,
+        Cursor::ZoomOut => MacCursor::ZoomOut,
+        Cursor::Hidden => MacCursor::Transparent,
+        Cursor::Move => MacCursor::MoveImage,
+        Cursor::Cell => MacCursor::CellImage,
+        Cursor::Image(image) => MacCursor::Custom(image),
+    }
+}

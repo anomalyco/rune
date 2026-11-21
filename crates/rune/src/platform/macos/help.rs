@@ -44,6 +44,7 @@ fn diff(have: &[([f32; 4], &str)], want: &[([f32; 4], &str)]) -> (Vec<bool>, Vec
 impl NativeHelp {
     /// Registers `regions` (window points, x0 y0 x1 y1) with `window`'s content view, adding and
     /// removing only the ones that changed since the last sync. Main thread.
+    #[allow(unsafe_code)]
     pub(crate) fn sync(&mut self, window: &winit::window::Window, regions: &[([f32; 4], String)]) {
         let scale = window.scale_factor() as f32;
         let want: Vec<([f32; 4], &str)> = regions.iter()
@@ -72,6 +73,7 @@ impl NativeHelp {
         self.view = Some(view);
     }
 
+    #[allow(unsafe_code)]
     fn clear(&mut self) {
         if let Some(view) = self.view.take() {
             // SAFETY: an AppKit call on the main thread, before the owners it names drop.

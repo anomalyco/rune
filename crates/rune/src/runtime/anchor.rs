@@ -74,7 +74,7 @@ fn fit_bound(a: &Anchor, t: [f32; 4], len: f32, vp: (f32, f32)) -> Option<f32> {
     Some((own.max(other) - 0.5).floor().max(0.0))
 }
 
-impl<S: 'static> Measurement<'_, S> {
+impl Measurement<'_> {
     /// Places every node from `taffy`'s layout: ids, local and window rects, insets, and
     /// anchored overlays beside their anchors.
     pub(super) fn place(&mut self, taffy: &LayoutEngine, nodes: &mut [Node]) {
@@ -232,18 +232,18 @@ fn attach_point(a: &Anchor, t: [f32; 4], d: [f32; 4]) -> [f32; 2] {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Sets up anchored overlay `i`'s inherited paint state beside anchor `j`: at the anchor's
     /// zoom (see [`inherited_zoom`]), placed and flipped by its zoomed size where the anchor was
     /// drawn, and zooming about the point it attaches at. Its own `prop::OFFSET` and transition
     /// still apply on top; its ancestors' positions and scales don't.
     pub(super) fn anchored_inh(&self, i: usize, j: usize, a: &Anchor, p: &rune_motion::Presented, pinh: &mut Inh) {
         let tracked = |m: &Node| if m.scale_track { self.scene.get(m.id, P_SCALE).unwrap_or(m.static_scale) } else { m.static_scale };
-        let k = inherited_zoom(&self.nodes, i, &tracked).max(MIN_ZOOM);
-        let d = self.drawn[j];
+        let k = inherited_zoom(&self.tree.nodes, i, &tracked).max(MIN_ZOOM);
+        let d = self.paint.drawn[j];
         let target = if d != [0.0; 4] { [d[0], d[1], d[0] + d[2], d[1] + d[3]] } else {
-            let t = sticky::anchored_target(&self.nodes, &self.scrolls, j, self.viewport);
-            if k == 1.0 { t } else { zoomed_rect(&self.nodes, &self.scrolls, j, t, self.viewport) }
+            let t = sticky::anchored_target(&self.tree.nodes, &self.scroll.scrolls, j, self.viewport);
+            if k == 1.0 { t } else { zoomed_rect(&self.tree.nodes, &self.scroll.scrolls, j, t, self.viewport) }
         };
         let zoomed;
         let a = if k == 1.0 { a } else { zoomed = zoomed_gap(a, k); &zoomed };
@@ -255,7 +255,7 @@ impl<S: 'static> Runtime<S> {
         // own `prop::OFFSET` and transition offset: with the frame position spring left in, an
         // End-aligned box growing in width would start from its old x and its end edge would
         // swing out and back. Zoomed about `pivot`, the box's top-left lands on (ax, ay).
-        let world = self.scene.world(self.nodes[i].id).unwrap_or(p.rect);
+        let world = self.scene.world(self.tree.nodes[i].id).unwrap_or(p.rect);
         (pinh.snap.rigid, pinh.snap.steady, pinh.snap.layer) = ([0.0; 2], [0.0; 2], 0);
         if k == 1.0 {
             (pinh.dx, pinh.dy) = (ax - world.x, ay - world.y);
@@ -267,7 +267,7 @@ impl<S: 'static> Runtime<S> {
         pinh.dy = pivot[1] + (ay - pivot[1]) / k - world.y;
         (pinh.scale, pinh.anchor, pinh.anchor_to) = (k, pivot, pivot);
         // Text rasterizes as the anchor's does: crisp at the zoom once it rests.
-        let motion = self.nodes[j].parent.and_then(|jp| self.inh_scratch.get(jp)).map_or(ScaleMotion::Still, |h| h.scale_motion);
+        let motion = self.tree.nodes[j].parent.and_then(|jp| self.paint.inh_scratch.get(jp)).map_or(ScaleMotion::Still, |h| h.scale_motion);
         pinh.scale_motion = pinh.scale_motion.max(motion);
         pinh.still = if pinh.scale_motion == ScaleMotion::Still { (k, pivot, pivot) } else { (1.0, [0.0; 2], [0.0; 2]) };
     }

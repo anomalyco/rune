@@ -32,25 +32,28 @@ use std::rc::{Rc, Weak};
 use crate::{
     context::Context,
     filters::filter,
-    long_text::{Text, Unit, long_text},
+    long_text::{Text, Unit, bounding_boxes, byte_at_point, drawn_state, long_text},
     util::*,
 };
 
 /// Rune: bytes `a..b` of a long field's value ([`long_text`]) as AppKit's range.
-fn long_ns_range(text: Text, a: usize, b: usize) -> NSRange {
-    let (start, len) = text.utf16_span(a, b);
+fn long_ns_range(text: Text, a: usize, b: usize, key: u64) -> NSRange {
+    let (start, len) = text.utf16_span_with(a, b, key);
     NSRange::new(start, len)
 }
 
 /// Rune: AppKit's range in a long field's value as bytes.
-fn long_bytes(text: Text, range: NSRange) -> (usize, usize) {
-    (text.from_utf16(range.location), text.from_utf16(range.location.saturating_add(range.length)))
+fn long_bytes(text: Text, range: NSRange, key: u64) -> (usize, usize) {
+    (
+        text.from_utf16_with(range.location, key),
+        text.from_utf16_with(range.location.saturating_add(range.length), key),
+    )
 }
 
 /// Rune: the character at `index` (UTF-16) in a long field's value.
-fn long_char(text: Text, index: usize) -> NSRange {
-    let at = text.from_utf16(index);
-    long_ns_range(text, at, text.next(at, Unit::Character))
+fn long_char(text: Text, index: usize, key: u64) -> NSRange {
+    let at = text.from_utf16_with(index, key);
+    long_ns_range(text, at, text.next(at, Unit::Character), key)
 }
 
 const SCROLL_TO_VISIBLE_ACTION: &str = "AXScrollToVisible";
@@ -787,7 +790,8 @@ declare_class!(
         fn number_of_characters(&self) -> NSInteger {
             self.resolve(|node| {
                 if let Some((text, _)) = long_text(node) {
-                    return text.utf16(text.len()) as _;
+                    let state = drawn_state(node, text);
+                    return text.utf16_with(text.len(), state.content_key) as _;
                 }
                 if node.supports_text_ranges() {
                     node.document_range().end().to_global_utf16_index() as _
@@ -819,7 +823,8 @@ declare_class!(
         fn selected_text_range(&self) -> NSRange {
             self.resolve(|node| {
                 if let Some((text, s)) = long_text(node) {
-                    return long_ns_range(text, s.anchor.character_index, s.focus.character_index);
+                    let state = drawn_state(node, text);
+                    return long_ns_range(text, s.anchor.character_index, s.focus.character_index, state.content_key);
                 }
                 if node.supports_text_ranges() {
                     if let Some(range) = node.text_selection() {
@@ -835,7 +840,8 @@ declare_class!(
         fn insertion_point_line_number(&self) -> NSInteger {
             self.resolve(|node| {
                 if let Some((text, s)) = long_text(node) {
-                    return text.line_of(text.clamp(s.focus.character_index)) as _;
+                    let state = drawn_state(node, text);
+                    return text.line_of_in(text.clamp(s.focus.character_index), &state) as _;
                 }
                 if node.supports_text_ranges() {
                     if let Some(pos) = node.text_selection_focus() {
@@ -851,8 +857,9 @@ declare_class!(
         fn range_for_line(&self, line_index: NSInteger) -> NSRange {
             self.resolve(|node| {
                 if let Some((text, _)) = long_text(node) {
-                    let line = usize::try_from(line_index).ok().and_then(|n| text.line(n));
-                    return line.map_or_else(|| NSRange::new(0, 0), |(a, b)| long_ns_range(text, a, b));
+                    let state = drawn_state(node, text);
+                    let line = usize::try_from(line_index).ok().and_then(|n| text.line_in(n, &state));
+                    return line.map_or_else(|| NSRange::new(0, 0), |(a, b)| long_ns_range(text, a, b, state.content_key));
                 }
                 if node.supports_text_ranges() && line_index >= 0 {
                     if let Some(range) = node.line_range_from_index(line_index as _) {
@@ -874,10 +881,11 @@ declare_class!(
                     }
                 };
 
-                // A long field's characters have no known places: its caret stands in.
                 if let Some((text, s)) = long_text(node) {
-                    let at = text.clamp(s.focus.character_index);
-                    return long_ns_range(text, at, text.next(at, Unit::Character));
+                    let state = drawn_state(node, text);
+                    let pt = from_ns_point(&view, node, point);
+                    let at = byte_at_point(node, text, pt, true).unwrap_or_else(|| text.clamp(s.focus.character_index));
+                    return long_ns_range(text, at, text.next(at, Unit::Character), state.content_key);
                 }
                 if node.supports_text_ranges() {
                     let point = from_ns_point(&view, node, point);
@@ -893,7 +901,8 @@ declare_class!(
         fn string_for_range(&self, range: NSRange) -> Option<Id<NSString>> {
             self.resolve(|node| {
                 if let Some((text, _)) = long_text(node) {
-                    let (a, b) = long_bytes(text, range);
+                    let state = drawn_state(node, text);
+                    let (a, b) = long_bytes(text, range, state.content_key);
                     return Some(NSString::from_str(text.slice(a, b)));
                 }
                 if node.supports_text_ranges() {
@@ -911,7 +920,8 @@ declare_class!(
         fn attributed_string_for_range(&self, range: NSRange) -> Option<Id<NSAttributedString>> {
             self.resolve(|node| {
                 if let Some((text, _)) = long_text(node) {
-                    let (a, b) = long_bytes(text, range);
+                    let state = drawn_state(node, text);
+                    let (a, b) = long_bytes(text, range, state.content_key);
                     let plain = NSAttributedString::from_nsstring(&NSString::from_str(text.slice(a, b)));
                     return Some(plain);
                 }
@@ -1028,7 +1038,15 @@ declare_class!(
                     }
                 };
 
-                // Where a long field's lines are isn't known without laying them out.
+                if let Some((text, _)) = long_text(node) {
+                    let state = drawn_state(node, text);
+                    let (a, b) = long_bytes(text, range, state.content_key);
+                    let rects = bounding_boxes(node, text, a, b);
+                    if let Some(rect) = rects.into_iter().reduce(|r1, r2| r1.union(r2)) {
+                        return to_ns_rect(&view, rect);
+                    }
+                    return NSRect::ZERO;
+                }
                 if node.supports_text_ranges() {
                     if let Some(range) = from_ns_range(node, range) {
                         let rects = range.bounding_boxes();
@@ -1048,7 +1066,8 @@ declare_class!(
         fn line_for_index(&self, index: NSInteger) -> NSInteger {
             self.resolve(|node| {
                 if let Some((text, _)) = long_text(node) {
-                    return text.line_of(text.from_utf16(index.max(0) as _)) as _;
+                    let state = drawn_state(node, text);
+                    return text.line_of_in(text.from_utf16_with(index.max(0) as _, state.content_key), &state) as _;
                 }
                 if node.supports_text_ranges() && index >= 0 {
                     if let Some(pos) = node.text_position_from_global_utf16_index(index as _) {
@@ -1064,7 +1083,8 @@ declare_class!(
         fn range_for_index(&self, index: NSInteger) -> NSRange {
             self.resolve(|node| {
                 if let Some((text, _)) = long_text(node) {
-                    return long_char(text, index.max(0) as _);
+                    let state = drawn_state(node, text);
+                    return long_char(text, index.max(0) as _, state.content_key);
                 }
                 if node.supports_text_ranges() && index >= 0 {
                     if let Some(pos) = node.text_position_from_global_utf16_index(index as _) {
@@ -1081,7 +1101,8 @@ declare_class!(
             self.resolve(|node| {
                 // A long field's text is one style.
                 if let Some((text, _)) = long_text(node) {
-                    return long_ns_range(text, 0, text.len());
+                    let state = drawn_state(node, text);
+                    return long_ns_range(text, 0, text.len(), state.content_key);
                 }
                 if node.supports_text_ranges() && index >= 0 {
                     if let Some(pos) = node.text_position_from_global_utf16_index(index as _) {
@@ -1104,7 +1125,8 @@ declare_class!(
         fn set_selected_text_range(&self, range: NSRange) {
             self.resolve_with_context(|node, tree, context| {
                 if let Some((text, _)) = long_text(node) {
-                    let (a, b) = long_bytes(text, range);
+                    let state = drawn_state(node, text);
+                    let (a, b) = long_bytes(text, range, state.content_key);
                     let (target_node, target_tree) = node.locate();
                     let at = |character_index| accesskit::TextPosition { node: target_node, character_index };
                     context.do_action(ActionRequest {
@@ -1425,11 +1447,15 @@ impl PlatformNode {
     where
         F: FnOnce(&NodeRef, &Tree, &Rc<Context>) -> T,
     {
-        let context = self.ivars().context.upgrade()?;
-        let tree = context.tree.borrow();
-        let state = tree.state();
-        let node = state.node_by_id(self.ivars().node_id)?;
-        Some(f(&node, &tree, &context))
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let context = self.ivars().context.upgrade()?;
+            let tree = context.tree.borrow();
+            let state = tree.state();
+            let node = state.node_by_id(self.ivars().node_id)?;
+            Some(f(&node, &tree, &context))
+        }))
+        .ok()
+        .flatten()
     }
 
     fn resolve<F, T>(&self, f: F) -> Option<T>

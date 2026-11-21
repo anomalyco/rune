@@ -590,7 +590,7 @@ impl Ctx {
         self.queue.submit([enc.finish()]);
         let read = |b: &wgpu::Buffer| {
             let s = b.slice(..);
-            s.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
+            s.map_async(wgpu::MapMode::Read, |_| {});
             self.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
             let v = s.get_mapped_range().expect("range").to_vec();
             b.unmap();

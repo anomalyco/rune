@@ -13,6 +13,23 @@ use super::*;
 /// (`LAYOUT_PER_BYTE`): about one transcript screen.
 pub(crate) const PREPARE_BYTES: usize = 1 << 20;
 
+struct PrepareView<'a, S: 'static> {
+    state: &'a S,
+    view: fn(&S, &mut Cx<S>) -> El,
+}
+
+impl<S: 'static> ViewDriver for PrepareView<'_, S> {
+    fn states_ref(&self) -> crate::states::StatesRef<'_> {
+        crate::states::StatesRef::one(handler_state_ref(self.state))
+    }
+
+    fn view(&self, cx: cx::CxCore, _viewport: (f32, f32)) -> (El, cx::CxCore) {
+        let mut cx = Cx { core: cx, _s: PhantomData };
+        let root = crate::playground::call(self.view, self.state, &mut cx);
+        (root, cx.core)
+    }
+}
+
 impl<S: 'static> Runtime<S> {
     /// Whether an idle turn has a view to prepare for this window.
     pub(crate) fn text_idle_owed(&self) -> bool {
@@ -30,42 +47,47 @@ impl<S: 'static> Runtime<S> {
     /// Measures `view` at `size` (points) with this window's text system and scratch everything
     /// else, then drops it. Returns the layouts it added.
     pub(crate) fn prepare_text(&mut self, view: fn(&S, &mut Cx<S>) -> El, size: (f32, f32)) -> usize {
+        let (core, app) = self.split_mut();
+        let prepare = PrepareView { state: &*app.state, view };
+        core.prepare_text_with(&prepare, size)
+    }
+}
+
+impl RuntimeCore {
+    pub(super) fn prepare_text_with(&mut self, app: &dyn ViewDriver, size: (f32, f32)) -> usize {
         let before = self.text.layout_keys();
         let (mut nodes, mut spare_nodes, mut layout) = (Vec::new(), Vec::new(), LayoutEngine::new());
         let (mut node_index, mut path_ids, mut memo) = (HashMap::default(), HashMap::default(), crate::memo::MemoCache::default());
         let (mut next_id, mut scrolls, mut virtuals) = (0u64, HashMap::default(), HashMap::default());
         let (mut virtual_culled, mut virtual_inputs, mut stats, mut key_warnings) = (HashSet::default(), HashMap::default(), FrameStats::default(), None);
         let m = Measurement {
-            state: &self.state,
-            view,
-            playground: None,
+            app,
             env: self.env,
             viewport: size,
             fit_height: false,
-            system_reduced_motion: self.system_reduced_motion,
-            titlebar_inset: self.titlebar_inset / self.zoom.k,
-            chrome: self.titlebar.insets.zoomed(self.zoom.k),
-            caption: self.titlebar.caption,
-            system_accent: self.system_accent,
-            system_contrast: self.system_contrast,
-            system_increased_contrast: self.system_increased_contrast,
-            system_scroll_bars: self.scroll_bars.state,
+            system_reduced_motion: self.host.system_reduced_motion,
+            titlebar_inset: self.host.titlebar_inset / self.host.zoom.k,
+            chrome: self.host.titlebar.insets.zoomed(self.host.zoom.k),
+            caption: self.host.titlebar.caption,
+            system_accent: self.host.system_accent,
+            system_contrast: self.host.system_contrast,
+            system_increased_contrast: self.host.system_increased_contrast,
+            system_scroll_bars: self.host.scroll_bars.state,
             reduced_motion: self.reduced_motion,
             time_scale: self.time_scale,
-            zoom: self.zoom.k,
-            defaults: self.defaults.clone(),
+            zoom: self.host.zoom.k,
+            defaults: self.commit.defaults.clone(),
             titlebar: self.titlebar_set(),
             caret: None,
             caret_read: false,
             // The rects the window last laid out, as its next frame reads them, so a view that
             // measures against them (a header fitting its title) measures here too.
-            layout_seen: self.layout_seen.rects.clone(),
+            layout_seen: self.commit.layout_seen.rects.clone(),
             layout_reads: Vec::new(),
-            commits: self.commits,
+            commits: self.commit.commits,
             nodes: &mut nodes,
             committing: false,
             spare_nodes: &mut spare_nodes,
-            text: &mut self.text,
             layout: &mut layout,
             node_index: &mut node_index,
             path_ids: &mut path_ids,
@@ -84,7 +106,7 @@ impl<S: 'static> Runtime<S> {
             windowed: HashMap::default(),
             kept_lists: Vec::new(),
         };
-        drop(m.finish(&Tx::default()));
+        drop(m.finish(&mut self.text, &Tx::default()));
         self.text.keep_prepared(&before, PREPARE_BYTES)
     }
 }

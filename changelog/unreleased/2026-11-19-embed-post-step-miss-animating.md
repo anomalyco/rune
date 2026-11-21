@@ -1,0 +1,1 @@
+- `embed::LayerHost` now reports `EmbedFrame::animating` consistently when a post-step `Tx::set_srgb_blend` reconfiguration or replacement drawable fails, keeping display-link ticks alive whenever the runtime is still stale, has queued input, or has pending live updates.

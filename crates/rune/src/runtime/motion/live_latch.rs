@@ -165,49 +165,18 @@ impl LiveLane {
     }
 }
 
-impl<S: 'static> Runtime<S> {
-    /// The window's live wake: another thread tells it to get the window's next frame drawn.
-    pub(crate) fn live_wake(&self) -> &Arc<crate::live::Wake> { self.live.waker() }
-
-    /// Install before the first frame. Live updates use this separate coalesced wake lane.
-    pub fn set_live_waker(&mut self, waker: Waker) {
-        for sub in &self.live_subscriptions { sub.active.store(false, Ordering::Release); }
-        self.live_subscriptions.clear();
-        self.live.replace_waker(waker);
-        self.subscribe_live();
-    }
-
-    pub fn set_live_visible(&mut self, visible: bool) {
-        let changed = visible != self.live.visible();
-        self.live.set_visible(visible);
-        if !visible { self.loop_wake = None; }
-        // The window's own setup shows and hides it before the first frame; the app hears the
-        // changes after that (`App::on_visibility`).
-        if changed && self.commits > 0 && let Some(f) = self.on_visibility {
-            self.update(|s, tx| f(s, visible, tx));
-        }
-    }
-    /// What asks for this runtime's next frame as a live value does, from any thread.
-    pub(crate) fn live_notifier(&self) -> impl FnOnce() + Send + 'static {
-        let wake = self.live.waker().clone();
-        move || wake.notify()
-    }
-    pub(crate) fn live_visible(&self) -> bool { self.live.visible() }
-    pub fn live_pending(&self) -> bool {
-        self.live.pending()
-    }
-
-    pub(super) fn subscribe_live(&mut self) {
-        for node in &mut self.nodes {
+impl timer_wake::FrameState {
+    pub(in crate::runtime) fn subscribe_live(&mut self, nodes: &mut [Node], scene: &Scene, clock: f64) {
+        for node in nodes.iter_mut() {
             if let Some(cold) = node.cold.get_mut_if_some() {
-                for bound in &mut cold.live { bound.attach(&self.live_clock, self.clock); }
+                for bound in &mut cold.live { bound.attach(&self.live_clock, clock); }
             }
         }
         for sub in &self.live_subscriptions { sub.active.store(false, Ordering::Release); }
         // Pixels only wake: each frame's build uploads their current image, so unlike bound
         // values they leave nothing to sample on a later visible frame.
         let mut sampled = false;
-        for node in &self.nodes {
+        for node in nodes.iter() {
             let text = node.text.as_ref().and_then(|t| t.cold.live.as_ref()).map(|t| &t.source);
             let pixels = node.vis.cold.get().and_then(|v| v.pixels.as_ref()).map(|p| &p.source);
             let has_live = node.cold.get().is_some_and(|c| !c.live.is_empty());
@@ -217,7 +186,7 @@ impl<S: 'static> Runtime<S> {
             // An element removed outright leaves the scene now but `nodes` only at the next
             // prune. Exiting elements and their children are still drawn, so their text and
             // pixels keep waking until the exit ends (commit already dropped their bindings).
-            if !self.scene.contains(node.id) { continue; }
+            if !scene.contains(node.id) { continue; }
             sampled |= text.is_some() || has_live;
             for source in node.live.iter().map(|b| &b.source).chain(text).chain(pixels) {
                 if let Some(sub) = self.live_subscriptions.iter().find(|s| s.source_id == source.id()) {
@@ -231,28 +200,31 @@ impl<S: 'static> Runtime<S> {
         self.live.subscribed(sampled);
     }
 
-    /// Clear before this frame reads anything a source publishes (a picture's size for layout,
-    /// a bound value): a concurrent publication either lands in this frame or keeps a wake for
-    /// the next. Never clear after reading (lost wake race). Hidden hosts keep the wake for show.
-    pub(super) fn take_live_wake(&mut self) -> bool { self.live.take() }
-
-    pub(super) fn latch_live(&mut self, pending: bool) -> bool {
+    pub(in crate::runtime) fn latch_live(
+        &mut self,
+        nodes: &mut [Node],
+        scene: &mut Scene,
+        text: &mut TextSystem,
+        scale: f32,
+        clock: f64,
+        pending: bool,
+    ) -> bool {
         if !self.live.latch_begin(pending, !self.live_subscriptions.is_empty()) { return false; }
         let mut active = false;
-        for node in &mut self.nodes {
+        for node in nodes {
             if let Some(spec) = &mut node.text
                 && let Some(live) = &spec.cold.live
             {
                 let seen = &mut node.cold.live_text_seen;
-                if let Some(text) = live.read(seen) && spec.source_text() != &*text {
-                    spec.replace_content(text.to_string());
+                if let Some(live_text) = live.read(seen) && spec.source_text() != &*live_text {
+                    spec.replace_content(live_text.to_string());
                     spec.apply_case();
-                    node.text_layout = Some(TextLayout::Single(self.text.layout_live(&spec.content, spec.style, self.env.scale)));
+                    node.text_layout = Some(TextLayout::Single(text.layout_live(&spec.content, spec.style, scale)));
                 }
             }
             let Some(cold) = node.cold.get_mut_if_some() else { continue };
             for bound in &mut cold.live {
-                let (op, active_now) = bound.read(&self.live_clock, self.clock);
+                let (op, active_now) = bound.read(&self.live_clock, clock);
                 active |= active_now;
                 let Some(op) = op else { continue };
                 let (enter, leave) = (bound.spring, bound.rest_spring);
@@ -292,27 +264,27 @@ impl<S: 'static> Runtime<S> {
                 }
                 match bound.property {
                     Property::Opacity => apply(
-                        &mut self.scene, node.id, prop::OPACITY, enter, leave,
+                        scene, node.id, prop::OPACITY, enter, leave,
                         |b| f32::decode(b).clamp(0.0, 1.0), op,
                         |cur, to| cur.is_some_and(|c| to < c),
                     ),
                     Property::Blur => apply(
-                        &mut self.scene, node.id, prop::BLUR, enter, leave,
+                        scene, node.id, prop::BLUR, enter, leave,
                         |b| f32::decode(b).max(0.0), op,
                         |cur, to| cur.is_some_and(|c| to < c),
                     ),
                     Property::Scale => apply(
-                        &mut self.scene, node.id, prop::SCALE, enter, leave,
+                        scene, node.id, prop::SCALE, enter, leave,
                         |b| f32::decode(b).max(0.0), op,
                         |cur, to| cur.is_some_and(|c| to < c),
                     ),
                     Property::Offset => apply(
-                        &mut self.scene, node.id, prop::OFFSET, enter, leave,
+                        scene, node.id, prop::OFFSET, enter, leave,
                         |b| { let [x, y] = <[f32; 2]>::decode(b); rune_motion::Vec2::new(x, y) }, op,
                         |_, _| false,
                     ),
                     Property::Trim => apply(
-                        &mut self.scene, node.id, P_TRIM, enter, leave,
+                        scene, node.id, P_TRIM, enter, leave,
                         |b| { let [s, e] = <[f32; 2]>::decode(b); rune_motion::Vec2::new(s, e) }, op,
                         |_, _| false,
                     ),
@@ -341,7 +313,7 @@ impl<S: 'static> Runtime<S> {
                                 P_GRADIENT[k]
                             }
                         };
-                        apply(&mut self.scene, node.id, p, enter, leave, Color::decode, op, |_, _| false);
+                        apply(scene, node.id, p, enter, leave, Color::decode, op, |_, _| false);
                     }
                     Property::Rect => {
                         let frame_of = |b| {
@@ -350,10 +322,10 @@ impl<S: 'static> Runtime<S> {
                         };
                         match (op, enter) {
                             (LatchOp::Snap(b) | LatchOp::Pulse { rest: b, .. }, _) | (LatchOp::Set(b), None) => {
-                                self.scene.land_frame(node.id, frame_of(b));
+                                scene.land_frame(node.id, frame_of(b));
                             }
                             (LatchOp::Set(b), Some(spring)) => {
-                                self.scene.set_frame(node.id, frame_of(b), LayoutAnim::new(spring));
+                                scene.set_frame(node.id, frame_of(b), LayoutAnim::new(spring));
                             }
                         }
                     }
@@ -361,6 +333,61 @@ impl<S: 'static> Runtime<S> {
             }
         }
         self.live.latch_end(active)
+    }
+}
+
+impl RuntimeCore {
+    /// The window's live wake: another thread tells it to get the window's next frame drawn.
+    #[inline]
+    pub(crate) fn live_wake(&self) -> &Arc<crate::live::Wake> { self.frame.live.waker() }
+
+    /// Install before the first frame. Live updates use this separate coalesced wake lane.
+    pub(crate) fn set_live_waker(&mut self, waker: Waker) {
+        for sub in &self.frame.live_subscriptions { sub.active.store(false, Ordering::Release); }
+        self.frame.live_subscriptions.clear();
+        self.frame.live.replace_waker(waker);
+        self.subscribe_live();
+    }
+
+    pub(crate) fn set_live_visible(&mut self, app: &mut dyn AppDriver, visible: bool) {
+        let changed = visible != self.frame.live.visible();
+        self.frame.live.set_visible(visible);
+        if !visible { self.motion.clear_loop_wake(); }
+        // The window's own setup shows and hides it before the first frame; the app hears the
+        // changes after that (`App::on_visibility`).
+        if changed && self.commit.commits > 0 && app.has_on_visibility() {
+            let (mut one, stall) = self.begin_update(app);
+            app.on_visibility(visible, &mut one);
+            self.finish_update(app, stall, one, true, false);
+        }
+    }
+    /// What asks for this runtime's next frame as a live value does, from any thread.
+    #[inline]
+    pub(crate) fn live_notifier(&self) -> impl FnOnce() + Send + 'static {
+        let wake = self.frame.live.waker().clone();
+        move || wake.notify()
+    }
+    #[inline]
+    pub(crate) fn live_visible(&self) -> bool { self.frame.live.visible() }
+    #[inline]
+    pub fn live_pending(&self) -> bool {
+        self.frame.live.pending()
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn subscribe_live(&mut self) {
+        self.frame.subscribe_live(&mut self.tree.nodes, &self.scene, self.clock);
+    }
+
+    /// Clear before this frame reads anything a source publishes (a picture's size for layout,
+    /// a bound value): a concurrent publication either lands in this frame or keeps a wake for
+    /// the next. Never clear after reading (lost wake race). Hidden hosts keep the wake for show.
+    #[inline]
+    pub(in crate::runtime) fn take_live_wake(&mut self) -> bool { self.frame.live.take() }
+
+    #[inline]
+    pub(in crate::runtime) fn latch_live(&mut self, pending: bool) -> bool {
+        self.frame.latch_live(&mut self.tree.nodes, &mut self.scene, &mut self.text, self.env.scale, self.clock, pending)
     }
 }
 

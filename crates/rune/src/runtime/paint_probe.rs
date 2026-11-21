@@ -3,12 +3,12 @@
 use super::*;
 use crate::motion_gate::check::paint::{C_BORDER, C_FILL, C_GRADIENT, C_OUTLINE, C_SHADOW, C_TEXT, Paint, S_BACKDROP, S_BLUR, S_BORDER, S_RADIUS, S_SHADOW};
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Every presented node's paint, keyed by its path and whether it's leaving. Paint ranks come
     /// from the last frame built once [`Runtime::paint_rank`] is on.
     pub(crate) fn paints(&self) -> HashMap<(String, bool), Paint> {
         let mut out = HashMap::default();
-        for (i, n) in self.nodes.iter().enumerate() {
+        for (i, n) in self.tree.nodes.iter().enumerate() {
             let Some(p) = self.scene.presented(n.id) else { continue };
             let v = &n.vis;
             let mut overlay = Color::TRANSPARENT;
@@ -29,19 +29,19 @@ impl<S: 'static> Runtime<S> {
             // Static fades, as they show: its own `dim` and the layer opacity of it and every
             // element it sits in.
             let k = v.paint_alpha
-                * std::iter::successors(Some(i), |&j| self.nodes[j].parent).map(|j| self.nodes[j].vis.layer_opacity).product::<f32>();
+                * std::iter::successors(Some(i), |&j| self.tree.nodes[j].parent).map(|j| self.tree.nodes[j].vis.layer_opacity).product::<f32>();
             let mut colors = [Color::TRANSPARENT; 6];
             colors[C_FILL] = fill.alpha(fill.a * k);
             if v.border_width() > 0.0 { colors[C_BORDER] = self.color(n.id, P_BORDER, v.border()).alpha_times(k); }
             // As it paints: a hovered group's `El::group_color` mixes in.
-            let group = self.inh_scratch.get(i).map_or(0.0, |h| h.group);
+            let group = self.paint.inh_scratch.get(i).map_or(0.0, |h| h.group);
             if let Some(c) = paint_tracks::text_color(n) { colors[C_TEXT] = paint_tracks::group_tint(n, self.color(n.id, P_TEXT, c), group).alpha_times(k); }
             // A group's hover lands its colour as the pointer moves, as a hover fill does.
             if v.group_color.is_some() { pointer[0] = pointer[0].max(group); }
             let mut sizes = [0.0; 5];
             sizes[S_RADIUS] = p.radius.0[0];
             sizes[S_BORDER] = v.border_width();
-            sizes[S_BLUR] = self.inh_scratch.get(i).map_or(p.blur, |h| h.blur);
+            sizes[S_BLUR] = self.paint.inh_scratch.get(i).map_or(p.blur, |h| h.blur);
             sizes[S_BACKDROP] = v.backdrop_blur;
             if let Some(sh) = v.shadows.iter().find(|s| !s.inset) {
                 let at = self.shadow_at(n.id, 0, sh);
@@ -58,14 +58,14 @@ impl<S: 'static> Runtime<S> {
                 gradient_end = if g.stops.len() - 1 < P_RADIAL.len() { self.color(n.id, P_RADIAL[end], last.1) } else { last.1 }.alpha_times(k);
             }
             if let Some(o) = v.outline.filter(|o| o.width > 0.0) { colors[C_OUTLINE] = self.color(n.id, P_OUTLINE, o.color); }
-            let intent = std::iter::successors(Some(i), |&j| self.nodes[j].parent).fold(0u16, |bits, j| bits | self.nodes[j].vis.motion_intent.bits());
+            let intent = std::iter::successors(Some(i), |&j| self.tree.nodes[j].parent).fold(0u16, |bits, j| bits | self.tree.nodes[j].vis.motion_intent.bits());
             let paint = Paint {
                 colors,
                 sizes,
                 gradient_end,
                 effect: v.effect.as_ref().map(|e| e.data),
                 image: v.pixels.as_ref().map(crate::pixels::Pixels::signature),
-                rank: self.paint_rank.as_ref().and_then(|r| r.get(i)).copied().unwrap_or(i as u32),
+                rank: self.paint.paint_rank(i),
                 intent,
                 instant: n.instant_changes,
                 at_once: crate::motion_gate::check::paint::at_once(v.instant_motion, v.blur_motion.as_deref().map(|a| a.curve == rune_motion::Curve::Instant)),

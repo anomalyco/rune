@@ -1,6 +1,5 @@
 //! Running an app's cells and reporting their findings against its allowlist.
 
-use std::time::Instant;
 
 use super::check::{Finding, RULES, Recording, check, dump, sheet};
 
@@ -76,21 +75,33 @@ pub fn run(cells: Vec<(String, Job)>, filter: &str) -> Vec<Cell> {
     let jobs: Vec<(usize, (String, Job))> = cells.into_iter().filter(|c| c.0.contains(filter)).enumerate().collect();
     let jobs = std::sync::Mutex::new(jobs);
     let out = std::sync::Mutex::new(Vec::new());
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(12);
-    std::thread::scope(|scope| {
-        for _ in 0..threads {
-            std::thread::Builder::new()
-                .stack_size(64 << 20)
-                .spawn_scoped(scope, || loop {
-                    let Some((i, (name, job))) = jobs.lock().unwrap().pop() else { break };
-                    let rec = job();
-                    evidence(&name, &rec, std::env::var("MOTION_GATE_OUT").ok());
-                    let cell = Cell { skipped: rec.frames < 10, frames: rec.frames, findings: check(&rec), name };
-                    out.lock().unwrap().push((i, cell));
-                })
-                .unwrap();
+    #[cfg(target_arch = "wasm32")]
+    {
+        for (i, (name, job)) in jobs.into_inner().unwrap() {
+            let rec = job();
+            evidence(&name, &rec, rune_core::env::var("MOTION_GATE_OUT"));
+            let cell = Cell { skipped: rec.frames < 10, frames: rec.frames, findings: check(&rec), name };
+            out.lock().unwrap().push((i, cell));
         }
-    });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(12);
+        std::thread::scope(|scope| {
+            for _ in 0..threads {
+                std::thread::Builder::new()
+                    .stack_size(64 << 20)
+                    .spawn_scoped(scope, || loop {
+                        let Some((i, (name, job))) = jobs.lock().unwrap().pop() else { break };
+                        let rec = job();
+                        evidence(&name, &rec, rune_core::env::var("MOTION_GATE_OUT"));
+                        let cell = Cell { skipped: rec.frames < 10, frames: rec.frames, findings: check(&rec), name };
+                        out.lock().unwrap().push((i, cell));
+                    })
+                    .unwrap();
+            }
+        });
+    }
     let mut cells = out.into_inner().unwrap();
     cells.sort_by_key(|c| c.0);
     cells.into_iter().map(|c| c.1).collect()
@@ -99,7 +110,7 @@ pub fn run(cells: Vec<(String, Job)>, filter: &str) -> Vec<Cell> {
 /// Writes the evidence `MOTION_GATE_DUMP` and `MOTION_GATE_SHEET` ask for when their cell part
 /// is `cell` or empty, beside `out`.
 pub(crate) fn evidence(cell: &str, rec: &Recording, out: Option<String>) {
-    if let Ok(spec) = std::env::var("MOTION_GATE_DUMP") {
+    if let Some(spec) = rune_core::env::var("MOTION_GATE_DUMP") {
         let mut p = spec.split('|');
         if let (Some(c), Some(path)) = (p.next(), p.next())
             && (c.is_empty() || c == cell)
@@ -113,7 +124,8 @@ pub(crate) fn evidence(cell: &str, rec: &Recording, out: Option<String>) {
             }
         }
     }
-    if let Ok(spec) = std::env::var("MOTION_GATE_SHEET") {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(spec) = rune_core::env::var("MOTION_GATE_SHEET") {
         let mut p = spec.split('|');
         if let (Some(c), Some(Ok(at))) = (p.next(), p.next().map(str::parse))
             && (c.is_empty() || c == cell)
@@ -205,11 +217,11 @@ pub fn gate(cells: Vec<(String, Job)>, allow: &[Allow]) {
 
 /// [`gate`] with [`AllowRow`]s (cell scopes and match caps).
 pub fn gate_rows(cells: Vec<(String, Job)>, allow: &[AllowRow]) {
-    let filter = std::env::var("MOTION_GATE").unwrap_or_default();
-    let started = Instant::now();
+    let filter = rune_core::env::var("MOTION_GATE").unwrap_or_default();
+    let started = crate::time::now();
     let cells = run(cells, &filter);
     let r = report_with(&cells, allow, std::env::var_os("MOTION_GATE_ALLOWED").is_some(), filter.is_empty(), started.elapsed().as_secs_f32());
-    if let Ok(path) = std::env::var("MOTION_GATE_OUT") {
+    if let Some(path) = rune_core::env::var("MOTION_GATE_OUT") {
         std::fs::write(path, &r.text).unwrap();
     }
     assert!(r.failing == 0, "{}", r.text);

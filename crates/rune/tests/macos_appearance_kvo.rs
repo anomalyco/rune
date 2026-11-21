@@ -2,6 +2,8 @@
 //! calls `setStyleMask:` on app windows. Opens windows, so it only runs with RUNE_GUI_TESTS=1
 //! in a logged-in GUI session. Each case runs in a child process because the bug aborts.
 
+#![allow(unsafe_code)]
+
 #[cfg(not(target_os = "macos"))]
 fn main() {}
 
@@ -10,7 +12,7 @@ fn main() { mac::main() }
 
 #[cfg(target_os = "macos")]
 mod mac {
-    use std::{os::unix::process::ExitStatusExt, process::Command, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
+    use std::{os::unix::process::ExitStatusExt, process::Command, sync::atomic::{AtomicBool, Ordering}, time::Duration};
     use objc2::{class, msg_send, runtime::AnyObject};
     use objc2_foundation::{NSString, ns_string};
     use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{ActiveEventLoop, ControlFlow, EventLoop}, window::{Theme, Window, WindowId}};
@@ -29,10 +31,10 @@ mod mac {
         if std::env::var_os(CASE).is_some() {
             std::thread::spawn(|| { std::thread::sleep(Duration::from_secs(60)); eprintln!("timeout"); std::process::exit(2) });
         }
-        match std::env::var(CASE).as_deref() {
-            Ok("unguarded") => winit_case(false),
-            Ok("guarded") => winit_case(true),
-            Ok("rune") => rune_case(),
+        match rune::env::var(CASE).as_deref() {
+            Some("unguarded") => winit_case(false),
+            Some("guarded") => winit_case(true),
+            Some("rune") => rune_case(),
             _ => parent(),
         }
     }
@@ -61,13 +63,18 @@ mod mac {
 
     fn appearance(name: &str) -> *mut AnyObject {
         let name = NSString::from_str(name);
+        // SAFETY: `NSAppearance +appearanceNamed:` is called on the main thread with a live `NSString`.
         unsafe { msg_send![class!(NSAppearance), appearanceNamed: &*name] }
     }
 
-    fn null() -> *mut AnyObject { unsafe { msg_send![class!(NSNull), null] } }
+    fn null() -> *mut AnyObject {
+        // SAFETY: `+[NSNull null]` returns the process-lifetime singleton pointer.
+        unsafe { msg_send![class!(NSNull), null] }
+    }
 
     /// Exactly what AppKit's KVO delivers to winit: `old`/`new` may be `NSNull`.
     fn notify(window: *mut AnyObject, old: *mut AnyObject, new: *mut AnyObject) {
+        // SAFETY: called on the AppKit main thread with a live `NSWindow` and non-null `NSAppearance`/`NSNull` pointers.
         unsafe {
             let delegate: *mut AnyObject = msg_send![window, delegate];
             let change: *mut AnyObject = msg_send![class!(NSMutableDictionary), dictionary];
@@ -80,6 +87,7 @@ mod mac {
 
     fn toggle_style_mask(window: *mut AnyObject, times: usize) {
         const RESIZABLE: usize = 1 << 3;
+        // SAFETY: called on the AppKit main thread with a live `NSWindow`.
         unsafe {
             let mask: usize = msg_send![window, styleMask];
             for i in 0..times {
@@ -91,6 +99,7 @@ mod mac {
 
     fn ns_window(window: &Window) -> *mut AnyObject {
         let RawWindowHandle::AppKit(handle) = window.window_handle().unwrap().as_raw() else { unreachable!() };
+        // SAFETY: `handle.ns_view` is a live `NSView` owned by `window` on the AppKit main thread.
         unsafe { msg_send![handle.ns_view.as_ptr().cast::<AnyObject>(), window] }
     }
 
@@ -101,7 +110,7 @@ mod mac {
             if self.window.is_some() { return; }
             self.window = Some(event_loop.create_window(Window::default_attributes().with_visible(false)).unwrap());
             if self.guarded { rune::macos_appearance::install(); }
-            event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(20)));
+            event_loop.set_control_flow(ControlFlow::WaitUntil(rune::time::now() + Duration::from_millis(20)));
         }
         fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
             if let WindowEvent::ThemeChanged(theme) = event { self.themes.push(theme); }
@@ -132,7 +141,7 @@ mod mac {
                 }
                 _ => {}
             }
-            event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(20)));
+            event_loop.set_control_flow(ControlFlow::WaitUntil(rune::time::now() + Duration::from_millis(20)));
         }
     }
 
@@ -148,6 +157,8 @@ mod mac {
     fn stress() {
         let (aqua, dark) = (appearance("NSAppearanceNameAqua"), appearance("NSAppearanceNameDarkAqua"));
         let mut observed = Vec::new();
+        // SAFETY: invoked on the AppKit main thread (`handle.update`); every `i` is `< count`
+        // and `delegate` is checked non-null before dereferencing.
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             let windows: *mut AnyObject = msg_send![app, windows];
@@ -156,8 +167,8 @@ mod mac {
                 let window: *mut AnyObject = msg_send![windows, objectAtIndex: i];
                 let delegate: *mut AnyObject = msg_send![window, delegate];
                 // The real isa, which KVO subclasses at runtime.
-                let class = (*window).class().name().to_string();
-                let winit = !delegate.is_null() && (*delegate).class().name() == "WinitWindowDelegate";
+                let class = (*window).class().name().to_string_lossy().into_owned();
+                let winit = !delegate.is_null() && (*delegate).class().name() == c"WinitWindowDelegate";
                 for _ in 0..50 {
                     toggle_style_mask(window, 2);
                     if winit {
@@ -184,9 +195,9 @@ mod mac {
         let handle = app.handle();
         // Launch can take seconds on a busy machine: stress once the overlay's panel exists.
         std::thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(45);
+            let deadline = rune::time::now() + Duration::from_secs(45);
             while !OVERLAY_CREATED.load(Ordering::Acquire) {
-                if Instant::now() > deadline { eprintln!("overlay was not created within 45 s"); std::process::exit(3) }
+                if rune::time::now() > deadline { eprintln!("overlay was not created within 45 s"); std::process::exit(3) }
                 std::thread::sleep(Duration::from_millis(20));
             }
             handle.update(|_, _| stress());

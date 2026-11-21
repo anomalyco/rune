@@ -116,13 +116,7 @@ impl Default for GrowthSpec {
 /// The selection highlight until [`El::selection_color`] or [`El::caret`] sets one.
 pub(crate) const DEFAULT_SELECTION: Color = Color { r: 1.0, g: 1.0, b: 1.0, a: 0.2 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
-pub enum Align {
-    #[default]
-    Start,
-    Center,
-    End,
-}
+pub use rune_image::Align;
 
 /// [`El::on_link`]'s handler.
 #[derive(Clone)]
@@ -155,6 +149,7 @@ pub(crate) struct PasteFn {
 pub(crate) type PillIconFn = Rc<dyn Fn(&str) -> Option<&'static crate::Icon>>;
 /// A pill's look by its id; see [`El::pill_style`].
 pub(crate) type PillStyleFn = Rc<dyn Fn(&str) -> PillStyle>;
+pub(crate) type PillSecondaryFn = Rc<dyn Fn(crate::states::States<'_>, &str, PointerPress, &mut Tx) -> bool>;
 
 /// How one [`Mark::Pill`](crate::Mark::Pill) chip looks: any part left unset falls back to
 /// [`El::pill_colors`] and [`El::pill_icon`], then the field's defaults. Build one with

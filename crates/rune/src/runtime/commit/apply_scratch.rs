@@ -4,27 +4,28 @@ use super::*;
 
 #[derive(Default)]
 pub(crate) struct ApplyScratch {
-    pub(super) culled: Vec<bool>,
-    pub(super) concealed: Vec<bool>,
-    pub(super) rows: Vec<usize>,
-    pub(super) new_ids: Vec<NodeId>,
-    pub(super) new_set: HashSet<NodeId>,
-    pub(super) order: Vec<NodeId>,
-    pub(super) time_scales: Vec<f32>,
-    pub(super) arrivals: Vec<(Rc<str>, usize, bool)>,
-    pub(super) mounted: Vec<bool>,
-    pub(super) slid: Vec<bool>,
-    pub(super) top_moved: Vec<f32>,
+    pub(in crate::runtime) culled: Vec<bool>,
+    pub(in crate::runtime) concealed: Vec<bool>,
+    pub(in crate::runtime) rows: Vec<usize>,
+    pub(in crate::runtime) new_ids: Vec<NodeId>,
+    pub(in crate::runtime) new_set: HashSet<NodeId>,
+    pub(in crate::runtime) order: Vec<NodeId>,
+    pub(in crate::runtime) time_scales: Vec<f32>,
+    pub(in crate::runtime) arrivals: Vec<(Rc<str>, usize, bool)>,
+    pub(in crate::runtime) mounted: Vec<bool>,
+    pub(in crate::runtime) slid: Vec<bool>,
+    pub(in crate::runtime) top_moved: Vec<f32>,
     /// Per node: held at its landing width this commit (`El::hold_landing_width`).
-    pub(super) held: Vec<bool>,
-    pub(super) old_ids: Vec<NodeId>,
-    pub(super) moved_spans: Vec<(usize, usize)>,
-    pub(super) remap: Vec<Option<usize>>,
+    pub(in crate::runtime) held: Vec<bool>,
+    pub(in crate::runtime) old_ids: Vec<NodeId>,
+    pub(in crate::runtime) moved_spans: Vec<(usize, usize)>,
+    pub(in crate::runtime) remap: Vec<Option<usize>>,
 }
 
 /// Drops the un-moved `Node`s in `old_nodes` and returns the empty `Vec<Node>` allocation for the
 /// next commit's `flatten`, skipping `moved` memo spans whose placeholders own nothing.
-pub(super) fn clear_old_nodes(
+#[allow(unsafe_code)]
+pub(in crate::runtime) fn clear_old_nodes(
     mut old_nodes: Vec<Node>,
     reused: &[memo_reuse::ReusedSpan],
     spans_scratch: &mut Vec<(usize, usize)>,

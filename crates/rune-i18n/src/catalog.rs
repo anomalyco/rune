@@ -161,7 +161,7 @@ impl Catalog {
         let rtl = self.locales.get(locale).is_some_and(LocaleInfo::rtl) && !self.locales.first().is_some_and(LocaleInfo::rtl);
         let isolate: Option<&dyn Fn(&str) -> Option<&'static str>> = if rtl { Some(&source) } else { None };
         let (text, spans) = blob(self.keys, |key| map.get(key).and_then(serde_json::Value::as_str), isolate);
-        let _ = messages.loaded.set((Box::leak(text.into_boxed_str()), Box::leak(spans.into_boxed_slice())));
+        messages.loaded.set((Box::leak(text.into_boxed_str()), Box::leak(spans.into_boxed_slice()))).ok();
         Ok(())
     }
 

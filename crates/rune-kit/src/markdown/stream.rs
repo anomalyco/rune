@@ -321,9 +321,11 @@ fn drop_closing_pad(doc: &mut ParsedDoc) {
     let (Some(b), Some(m)) = (doc.0.last_mut(), doc.5.last_mut()) else { return };
     let Some((inl, map)) = last_inline(b, m) else { return };
     let len = inl.text.len();
-    let Some(k) = inl.spans.iter().position(|s| s.2 == Style::CodePad && s.1 == len && s.0 + CLOSE.len() == len) else { return };
+    let Some(k) = inl.spans.iter().position(|s| {
+        s.2 == Style::CodePad && s.1 == len && (s.0 + CLOSE.len() == len || s.0 + LINK_CLOSE.len() == len)
+    }) else { return };
+    let cut = inl.spans[k].0;
     inl.spans.remove(k);
-    let cut = len - CLOSE.len();
     inl.text.truncate(cut);
     inl.spans.retain_mut(|s| {
         s.1 = s.1.min(cut);
@@ -354,7 +356,7 @@ fn last_inline<'a>(b: &'a mut Block, m: &'a mut BlockMap) -> Option<(&'a mut Inl
 fn shows(map: &BlockMap, r: &Range<usize>) -> bool {
     let hit = |m: &SpanMap| m.0.iter().any(|(s, _)| s.start < r.end && r.start < s.end);
     match map {
-        BlockMap::Inline(m) | BlockMap::Code(m) => hit(m),
+        BlockMap::Inline(m) | BlockMap::Code(m) | BlockMap::DeepTail { map: m, .. } => hit(m),
         BlockMap::List(items) => items.iter().flatten().any(|b| shows(b, r)),
         BlockMap::Quote(inner) => inner.iter().any(|b| shows(b, r)),
         BlockMap::Table { head, rows } => head.iter().chain(rows.iter().flatten()).any(hit),

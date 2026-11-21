@@ -269,7 +269,7 @@ impl State {
         let a = d.accent;
         let mut s = State {
             which: Which::Flashlight,
-            start: Instant::now(),
+            start: rune::time::now(),
             fake: None,
             cursor: [640.0, 400.0],
             x: Track::at(640.0),
@@ -692,7 +692,7 @@ fn snap(path: &str, which: Which, at: Option<[f32; 2]>, rays: bool, click: Optio
     );
     gfx.queue.submit([enc.finish()]);
     let slice = buf.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
+    slice.map_async(wgpu::MapMode::Read, |_| {});
     gfx.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
     let px = slice.get_mapped_range().expect("range").to_vec();
     rune::render::write_png(std::path::Path::new(path), w, h, &px).unwrap();

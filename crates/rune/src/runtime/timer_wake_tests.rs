@@ -31,7 +31,7 @@ fn poll(s: &mut App, _: f64, tx: &mut Tx) -> bool {
 fn runtime(app: App) -> Runtime<App> {
     let mut rt = Runtime::new(app, view, (200.0, 50.0), Env::default());
     rt.poll = Some(poll);
-    rt.wall_start = Some(crate::time::Instant::now());
+    rt.wall_start = Some(crate::time::now());
     rt.frame(0.0);
     rt.frame(crate::frame::clock::RESUME_STEP);
     assert!(!rt.animating);
@@ -46,7 +46,7 @@ fn advance(rt: &mut Runtime<App>, secs: f64) {
 /// Moves the wall clock to just past every armed timer: the setup frames each armed one a
 /// moment apart in real time, and the later ones would otherwise outlast the poll.
 fn reach_timer(rt: &mut Runtime<App>) {
-    let due = rt.wake_deadlines.last().copied().expect("a timer is armed");
+    let due = rt.frame.wake_deadlines().last().copied().expect("a timer is armed");
     let now = rt.wall_start.unwrap().elapsed().as_secs_f64();
     advance(rt, (due - now).max(0.0) + 1e-4);
 }
@@ -129,7 +129,7 @@ fn a_wake_before_the_timer_s_frame_gets_a_poll() {
     let armed = rt.wake_deadline().expect("the timer poll's own timer counts from it");
     rt.frame(crate::frame::clock::RESUME_STEP);
     assert_eq!(rt.state.polls, polls + 2, "the frame polls for the wake");
-    assert_eq!(rt.wake_deadlines.first(), Some(&armed));
+    assert_eq!(rt.frame.wake_deadlines().first(), Some(&armed));
 }
 
 #[test]
@@ -143,7 +143,7 @@ fn a_timer_due_between_the_poll_and_its_frame_gets_the_frame_s_poll() {
     advance(&mut rt, 0.005);
     rt.frame(crate::frame::clock::RESUME_STEP);
     assert_eq!(rt.state.polls, polls + 2, "the later timer polls");
-    assert!(rt.wake_deadlines.iter().all(|t| *t > rt.clock), "nothing due is left behind: {:?}", rt.wake_deadlines);
+    assert!(rt.frame.wake_deadlines().iter().all(|t| *t > rt.clock), "nothing due is left behind: {:?}", rt.frame.wake_deadlines());
     assert!(rt.resting_wake().is_some(), "and the window rests again");
 }
 

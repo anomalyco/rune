@@ -1,0 +1,70 @@
+[package]
+name = "rune-media"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+description = "Video and audio playback, zero-copy native surfaces (IOSurface, D3D shared textures, Linux dmabufs), and audio recording for Rune."
+
+[features]
+default = ["metal-backend", "ogg-audio", "rune-gpu/default"]
+# macOS and iOS: interoperate with Rune's native Metal backend (zero-copy CVPixelBuffer import).
+metal-backend = ["rune-gpu/metal-backend"]
+# macOS: play Ogg (Vorbis, Opus) and WebM/Matroska audio, which AVFoundation can't read, by
+# decoding it in Rust (symphonia, opuscule) and handing AVPlayer the PCM. Off, those clips
+# fail at once with a clear message.
+ogg-audio = ["dep:symphonia", "dep:opuscule"]
+
+[dependencies]
+bytemuck = { workspace = true }
+rune-core = { workspace = true }
+rune-gpu = { workspace = true }
+rune-image = { workspace = true }
+rune-staging = { workspace = true }
+wgpu = { workspace = true, features = ["std", "parking_lot", "wgsl"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+pollster = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, features = ["webgpu"] }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+# wgpu's Metal backend on Apple targets alone: off Apple, wgpu compiles neither `wgpu-hal/metal`
+# nor `naga/msl-out`.
+wgpu = { workspace = true, features = ["metal"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = { workspace = true }
+objc2 = { workspace = true }
+# Video playback (`Player`) and recording (`Recorder`): AVFoundation, CoreVideo, CoreMedia and CoreGraphics.
+objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVAsset", "AVAssetImageGenerator", "AVAssetTrack", "AVMediaFormat", "AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "objc2-core-foundation", "objc2-core-graphics", "objc2-core-media", "objc2-core-video"] }
+objc2-core-foundation = { workspace = true, features = ["std", "CFCGTypes", "CFDictionary", "CFNumber", "CFString", "objc2"] }
+objc2-core-graphics = { workspace = true, features = ["std", "CGBitmapContext", "CGColorSpace", "CGContext", "CGImage"] }
+objc2-core-media = { version = "0.3", default-features = false, features = ["std", "CMTime"] }
+objc2-core-video = { workspace = true, features = ["std", "CVBase", "CVBuffer", "CVHostTime", "CVImageBuffer", "CVMetalTexture", "CVMetalTextureCache", "CVPixelBuffer", "CVPixelBufferIOSurface", "CVReturn", "objc2", "objc2-io-surface", "objc2-metal"] }
+objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSObject", "NSString", "NSURL", "NSURLConnection", "NSURLRequest", "NSURLResponse", "NSValue"] }
+# Unused by name: `objc2-core-foundation` gives IOSurfaceRef the CF `Type` impl objc2-core-video needs.
+objc2-io-surface = { version = "0.3", default-features = false, features = ["std", "IOSurfaceRef", "objc2-core-foundation"] }
+objc2-metal = { workspace = true, features = ["std", "MTLAllocation", "MTLDevice", "MTLPixelFormat", "MTLResource", "MTLTexture"] }
+# Ogg and WebM audio (`ogg-audio`): pure-Rust demuxers and decoders.
+symphonia = { version = "0.5.5", optional = true, default-features = false, features = ["ogg", "vorbis", "mkv"] }
+opuscule = { version = "0.2.2", optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { workspace = true, features = ["dx12"] }
+# D3D12 shared textures (`native_surface::windows`), Media Foundation, D3D11 and WASAPI (`video::windows`):
+# COM interfaces only; their DLLs load on the first clip through `GetProcAddress`, so the import table gains nothing.
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Media_Audio", "Win32_Media_MediaFoundation", "Win32_Security", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_System_Variant", "Win32_UI_Shell_PropertiesSystem"] }
+windows-sys = { workspace = true, features = ["Win32_Graphics_Dwm", "Win32_System_Performance"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The window GPU's render node, for dmabuf producers (`native_surface::linux`): wgpu-hal's version.
+ash = "0.38"
+libc = { workspace = true }
+
+# wgpu's Vulkan backend everywhere but Windows (D3D12 above) and Apple (Metal above).
+[target.'cfg(all(not(target_vendor = "apple"), not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
+wgpu = { workspace = true, features = ["vulkan"] }
+
+[lints]
+workspace = true

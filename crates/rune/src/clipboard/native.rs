@@ -4,21 +4,23 @@ use super::*;
 
 impl Client {
     pub(super) fn read_for(&self, purpose: Purpose) {
-        let _ = worker().send(Request::Read { purpose, reply: self.sender.clone(), wake: self.wake.clone() });
+        worker().send(Request::Read { purpose, reply: self.sender.clone(), wake: self.wake.clone() }).ok();
     }
-    pub fn flush<S: 'static>(&self, rt: &mut Runtime<S>) {
-        if rt.clipboard.is_some() { return flush_memory(rt); }
+    pub(crate) fn flush_core(&self, rt: &mut crate::runtime::RuntimeCore) {
+        if rt.edit.has_clipboard() { return flush_memory(rt); }
+        #[cfg(test)]
+        if let Some(m) = &self.memory { return flush_to_memory(rt, m); }
         #[cfg(target_os = "linux")]
         self.flush_primary(rt);
         // Nothing to clear before the first write.
-        if std::mem::take(&mut rt.clear_secret_request) && let Some(w) = WORKER.get() { let _ = w.sender.send(Request::Clear(None)); }
+        if std::mem::take(&mut rt.edit.clear_secret_request) && let Some(w) = WORKER.get() { w.sender.send(Request::Clear(None)).ok(); }
         if let Some(copy) = rt.copy_request.take() {
             let worker = worker();
             copy.bind(Route::System(worker.clone()));
-            let _ = worker.send(Request::Write(copy, Some(Notify { changed: self.changed.clone(), wake: self.wake.clone() })));
+            worker.send(Request::Write(copy, Some(Notify { changed: self.changed.clone(), wake: self.wake.clone() }))).ok();
         }
-        if let Some(target) = rt.paste_request.take() { self.read_for(Purpose::paste(rt, target)); }
-        for id in std::mem::take(&mut rt.read_requests) { self.read_for(Purpose::Read(id)); }
+        if let Some(target) = rt.edit.paste_request.take() { self.read_for(Purpose::paste(rt, target)); }
+        for id in std::mem::take(&mut rt.edit.read_requests) { self.read_for(Purpose::Read(id)); }
     }
 }
 
@@ -34,19 +36,22 @@ impl Worker {
         let handle = std::thread::Builder::new().name("rune-clipboard".into()).spawn(move || {
             run_worker(recv, open);
             // Backend dropped (including Linux handoff) before acknowledging completion.
-            let _ = done.send(());
+            done.send(()).ok();
         }).expect("clipboard worker");
         Self { sender, join: Mutex::new(Some((handle, completed))) }
     }
     pub(super) fn stop(&self) {
         let Some((handle, completed)) = self.join.lock().unwrap().take() else { return };
-        let _ = self.sender.send(Request::Shutdown);
+        self.sender.send(Request::Shutdown).ok();
         // A hung clipboard owner must not hang application exit. Join only after completion.
-        if completed.recv_timeout(Duration::from_millis(250)).is_ok() { let _ = handle.join(); }
+        if completed.recv_timeout(Duration::from_millis(250)).is_ok() { handle.join().ok(); }
     }
 }
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 fn worker() -> &'static mpsc::Sender<Request> {
+    if cfg!(test) {
+        panic!("unit test reached the OS clipboard; install a test clipboard (`rt.use_clipboard` or `Client::use_memory`)");
+    }
     &WORKER.get_or_init(|| Worker::spawn(|| arboard::Clipboard::new().ok())).sender
 }
 
@@ -59,7 +64,7 @@ fn worker() -> &'static mpsc::Sender<Request> {
 /// `clipboard::clear_secret_now`: the worker clears the last secret if it still holds the clipboard.
 #[cfg(target_os = "windows")]
 pub(super) fn clear_secret_now() {
-    if let Some(w) = WORKER.get() { let _ = w.sender.send(Request::Clear(None)); }
+    if let Some(w) = WORKER.get() { w.sender.send(Request::Clear(None)).ok(); }
 }
 
 pub(super) fn shutdown() {
@@ -72,7 +77,7 @@ impl Backend for arboard::Clipboard {
     fn text(&mut self) -> Option<Zeroizing<String>> { self.get_text().ok().map(Zeroizing::new) }
     #[cfg(target_os = "macos")]
     fn content(&mut self, all: bool) -> Option<ClipboardContent> {
-        macos::read(&*unsafe { objc2_app_kit::NSPasteboard::generalPasteboard() }, all)
+        macos::read(&objc2_app_kit::NSPasteboard::generalPasteboard(), all)
     }
     /// Text, HTML, and with `all` an image and files; RTF isn't read here. Windows and Linux
     /// images come through arboard as pixels (Windows `PNG` or `CF_DIBV5`, Linux `image/png`),
@@ -105,7 +110,7 @@ fn run_worker<B: Backend>(recv: mpsc::Receiver<Request>, mut open: impl FnMut() 
     let mut core = Core::default();
     loop {
         let request = match core.next_check() {
-            Some(at) => recv.recv_timeout(at.saturating_duration_since(Instant::now())),
+            Some(at) => recv.recv_timeout(at.saturating_duration_since(crate::time::now())),
             None => recv.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
         };
         if let Some(cb) = &mut clipboard { core.tick(cb); }
@@ -134,7 +139,7 @@ fn write(cb: &mut arboard::Clipboard, copy: &ClipboardWrite) -> Result<(), Strin
     let content = &copy.content;
     if copy.clear_after.is_none() && content.is_rich() {
         #[cfg(target_os = "macos")]
-        { return macos::write(&*unsafe { objc2_app_kit::NSPasteboard::generalPasteboard() }, content); }
+        { return macos::write(&objc2_app_kit::NSPasteboard::generalPasteboard(), content); }
         #[cfg(not(target_os = "macos"))]
         return write_one_form(cb, content);
     }
@@ -173,10 +178,12 @@ fn write_text(cb: &mut arboard::Clipboard, copy: &ClipboardWrite) -> Result<(), 
 }
 
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[allow(unsafe_code)]
 fn revision() -> Option<u64> {
     #[cfg(target_os = "macos")]
-    { return Some(unsafe { objc2_app_kit::NSPasteboard::generalPasteboard().changeCount() } as u64); }
+    { return Some(objc2_app_kit::NSPasteboard::generalPasteboard().changeCount() as u64); }
     #[cfg(target_os = "windows")]
+    // SAFETY: `GetClipboardSequenceNumber` takes no pointers and is safe to call from any thread.
     { return Some(unsafe { windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber() } as u64); }
     // Linux's portable clipboard API has no generation counter; compare the current text.
     #[allow(unreachable_code)]
@@ -186,12 +193,15 @@ fn revision() -> Option<u64> {
 /// Reads Windows `CF_HTML` (`HTML Format`) directly so `-1` offsets and `<!--StartFragment-->`
 /// markers from other apps work instead of failing `clipboard-win`'s unsigned offset parser.
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 fn windows_read_html() -> Option<String> {
     use windows_sys::Win32::System::DataExchange::{
         CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW,
     };
     use windows_sys::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
     const NAME: &[u16] = &[b'H' as u16, b'T' as u16, b'M' as u16, b'L' as u16, b' ' as u16, b'F' as u16, b'o' as u16, b'r' as u16, b'm' as u16, b'a' as u16, b't' as u16, 0];
+    // SAFETY: `NAME` is NUL-terminated; the clipboard is held open around `GetClipboardData` and
+    // closed before returning, and `ptr` is non-null and locked via `GlobalLock` for `size` bytes.
     unsafe {
         let format = RegisterClipboardFormatW(NAME.as_ptr());
         if format == 0 || IsClipboardFormatAvailable(format) == 0 { return None; }

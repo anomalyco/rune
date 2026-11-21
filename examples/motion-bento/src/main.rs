@@ -2,6 +2,8 @@
 //! seeded chaos schedule. The same schedule drives the GPUI build of the same window, so the two
 //! can be watched and measured side by side. See README.md.
 
+#![forbid(unsafe_code)]
+
 mod dock;
 mod stress;
 mod style;
@@ -292,7 +294,7 @@ fn main() {
         std::fs::write(path, script_json(&cfg)).unwrap_or_else(|e| panic!("writing {}: {e}", path.display()));
         return;
     }
-    let _ = CONFIG.set(cfg);
+    CONFIG.set(cfg).ok();
     METER.with(|m| {
         let mut meter = Meter::new("rune", 120.0);
         meter.note("work", "update_ms + encode_ms: events, poll, view, layout, paint, upload and encode, to submit");

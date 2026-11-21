@@ -362,3 +362,256 @@ diff --git a/src/platform_impl/windows/mod.rs b/src/platform_impl/windows/mod.rs
  pub(crate) use self::monitor::{MonitorHandle, VideoModeHandle};
  pub(crate) use self::window::Window;
  
+diff --git a/src/platform_impl/windows/event_loop.rs b/src/platform_impl/windows/event_loop.rs
+index 6d60c1c5..8b63fa59 100644
+--- a/src/platform_impl/windows/event_loop.rs
++++ b/src/platform_impl/windows/event_loop.rs
+@@ -18,8 +18,9 @@ use crate::utils::Lazy;
+ 
+ use windows_sys::Win32::Devices::HumanInterfaceDevice::MOUSE_MOVE_RELATIVE;
+ use windows_sys::Win32::Foundation::{
+-    GetLastError, FALSE, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_FAILED, WPARAM,
++    GetLastError, BOOL, FALSE, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_FAILED, WPARAM,
+ };
++use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
+ use windows_sys::Win32::Graphics::Gdi::{
+     GetMonitorInfoW, MonitorFromRect, MonitorFromWindow, RedrawWindow, ScreenToClient,
+     ValidateRect, MONITORINFO, MONITOR_DEFAULTTONULL, RDW_INTERNALPAINT, SC_SCREENSAVE,
+@@ -950,6 +951,17 @@ fn create_event_target_window() -> HWND {
+             util::get_instance_handle(),
+             ptr::null(),
+         );
++        // Rune: cloaked before it's made visible, so what walks the desktop's windows never meets
++        // it: UI Automation (screen readers) listed it as an unnamed 22x22 pane at 0,0, and window
++        // pickers that skip cloaked windows skip it. A cloaked window still gets WM_PAINT; a
++        // message-only or hidden one doesn't.
++        let cloak: BOOL = 1;
++        DwmSetWindowAttribute(
++            window,
++            DWMWA_CLOAK as u32,
++            &cloak as *const BOOL as *const c_void,
++            mem::size_of::<BOOL>() as u32,
++        );
+ 
+         super::set_window_long(
+             window,
+diff --git a/src/platform/wayland.rs b/src/platform/wayland.rs
+index 9c1a8e4..63c0a92 100644
+--- a/src/platform/wayland.rs
++++ b/src/platform/wayland.rs
+@@ -81,6 +81,23 @@ impl<T> EventLoopBuilderExtWayland for EventLoopBuilder<T> {
+ pub trait WindowExtWayland {
+     /// Returns `xdg_toplevel` of the window or [`None`] if the window is X11 window.
+     fn xdg_toplevel(&self) -> Option<NonNull<c_void>>;
++
++    /// Rune: the radius, in logical points, of the arc the window's content takes at its bottom
++    /// corners. A client-side frame (`sctk-adwaita`) draws a one-point border around the window
++    /// and rounds its corners while it floats, so the content's own square corners would show
++    /// past it.
++    ///
++    /// Zero when the frame draws the window square (maximized or tiled), when no client-side
++    /// frame is drawn (server side decorations, or decorations off), and on X11.
++    fn content_corner_radius(&self) -> f32;
++
++    /// Rune: whether a client-side frame draws the window's decorations, true whatever state the
++    /// frame is in: a maximized, tiled or fullscreen window keeps its frame, which hides parts of
++    /// itself rather than going away.
++    ///
++    /// False when the compositor draws the decorations, when decorations are off, when no frame
++    /// could be made, and on X11.
++    fn has_client_side_frame(&self) -> bool;
+ }
+ 
+ impl WindowExtWayland for Window {
+@@ -94,6 +111,28 @@ impl WindowExtWayland for Window {
+             crate::platform_impl::Window::Wayland(window) => window.xdg_toplevel(),
+         }
+     }
++
++    #[inline]
++    fn content_corner_radius(&self) -> f32 {
++        #[allow(clippy::single_match)]
++        match &self.window {
++            #[cfg(x11_platform)]
++            crate::platform_impl::Window::X(_) => 0.,
++            #[cfg(wayland_platform)]
++            crate::platform_impl::Window::Wayland(window) => window.content_corner_radius(),
++        }
++    }
++
++    #[inline]
++    fn has_client_side_frame(&self) -> bool {
++        #[allow(clippy::single_match)]
++        match &self.window {
++            #[cfg(x11_platform)]
++            crate::platform_impl::Window::X(_) => false,
++            #[cfg(wayland_platform)]
++            crate::platform_impl::Window::Wayland(window) => window.has_client_side_frame(),
++        }
++    }
+ }
+ 
+ /// Additional methods on [`WindowAttributes`] that are specific to Wayland.
+diff --git a/src/platform_impl/linux/wayland/window/mod.rs b/src/platform_impl/linux/wayland/window/mod.rs
+index 6d29a5a..2418b6f 100644
+--- a/src/platform_impl/linux/wayland/window/mod.rs
++++ b/src/platform_impl/linux/wayland/window/mod.rs
+@@ -426,6 +426,18 @@ impl Window {
+         self.window_state.lock().unwrap().is_decorated()
+     }
+ 
++    /// Rune: see `WindowExtWayland::content_corner_radius`.
++    #[inline]
++    pub fn content_corner_radius(&self) -> f32 {
++        self.window_state.lock().unwrap().content_corner_radius()
++    }
++
++    /// Rune: see `WindowExtWayland::has_client_side_frame`.
++    #[inline]
++    pub fn has_client_side_frame(&self) -> bool {
++        self.window_state.lock().unwrap().has_client_side_frame()
++    }
++
+     #[inline]
+     pub fn set_window_level(&self, _level: WindowLevel) {}
+ 
+diff --git a/src/platform_impl/linux/wayland/window/state.rs b/src/platform_impl/linux/wayland/window/state.rs
+index 1ef7a06..9cd83c4 100644
+--- a/src/platform_impl/linux/wayland/window/state.rs
++++ b/src/platform_impl/linux/wayland/window/state.rs
+@@ -398,6 +398,10 @@ impl WindowState {
+             self.resize(new_size);
+             true
+         } else {
++            // Rune: the frame may have appeared or gone, or turned square, and no resize follows to
++            // tell the compositor: the opaque region follows it now that it knows this configure's
++            // state.
++            self.reload_transparency_hint();
+             false
+         }
+     }
+@@ -599,6 +603,38 @@ impl WindowState {
+         }
+     }
+ 
++    /// Rune: whether a client-side frame draws the window's decorations, whatever state it is in:
++    /// a maximized, tiled or fullscreen window keeps its frame (it draws square corners there),
++    /// which only hides parts of itself. False when the compositor draws the decorations, when
++    /// decorations are off, and when the frame could not be made (no subcompositor, or a frame that
++    /// failed to build).
++    #[inline]
++    pub fn has_client_side_frame(&self) -> bool {
++        self.decorate
++            && self
++                .last_configure
++                .as_ref()
++                .is_some_and(|configure| configure.decoration_mode == DecorationMode::Client)
++            && self.frame.is_some()
++    }
++
++    /// Rune: the radius, in logical points, of the arc the window's content takes at its bottom
++    /// corners, which the client-side frame leaves it (the frame's visible border lies just
++    /// outside it). Zero when no client-side frame is drawn, and when the frame draws the window
++    /// square: maximized, tiled or fullscreen.
++    #[inline]
++    pub fn content_corner_radius(&self) -> f32 {
++        #[cfg(feature = "sctk-adwaita")]
++        if let Some(frame) = self
++            .frame
++            .as_ref()
++            .filter(|frame| self.decorate && !frame.is_hidden())
++        {
++            return frame.content_corner_radius();
++        }
++        0.
++    }
++
+     /// Get the outer size of the window.
+     #[inline]
+     pub fn outer_size(&self) -> LogicalSize<u32> {
+@@ -655,17 +691,31 @@ impl WindowState {
+     }
+ 
+     /// Reissue the transparency hint to the compositor.
++    ///
++    /// Rune: a client-side frame that rounds the content's bottom corners leaves the two corner
++    /// squares to the compositor, so an opaque window keeps the rest of itself opaque instead of
++    /// blending all of it.
+     pub fn reload_transparency_hint(&self) {
+         let surface = self.window.wl_surface();
+ 
+         if self.transparent {
+             surface.set_opaque_region(None);
+-        } else if let Ok(region) = Region::new(&*self.compositor) {
++            return;
++        }
++        let Ok(region) = Region::new(&*self.compositor) else {
++            warn!("Failed to mark window opaque.");
++            return;
++        };
++        let radius = self.content_corner_radius() as i32;
++        let (width, height) = (self.size.width as i32, self.size.height as i32);
++        if radius <= 0 || width <= 2 * radius || height <= radius {
+             region.add(0, 0, i32::MAX, i32::MAX);
+-            surface.set_opaque_region(Some(region.wl_region()));
+         } else {
+-            warn!("Failed to mark window opaque.");
++            // Everything but the two squares the frame's arcs cross at the window's foot.
++            region.add(0, 0, width, height - radius);
++            region.add(radius, height - radius, width - 2 * radius, radius);
+         }
++        surface.set_opaque_region(Some(region.wl_region()));
+     }
+ 
+     /// Try to resize the window when the user can do so.
+diff --git a/src/platform_impl/windows/dark_mode.rs b/src/platform_impl/windows/dark_mode.rs
+index 366e44c6..67c4fc53 100644
+--- a/src/platform_impl/windows/dark_mode.rs
++++ b/src/platform_impl/windows/dark_mode.rs
+@@ -5,7 +5,9 @@ use std::{ffi::c_void, ptr};
+ use crate::utils::Lazy;
+ use windows_sys::core::PCSTR;
+ use windows_sys::Win32::Foundation::{BOOL, HWND, NTSTATUS, S_OK};
+-use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
++use windows_sys::Win32::System::LibraryLoader::{
++    GetProcAddress, LoadLibraryExA, LOAD_LIBRARY_SEARCH_SYSTEM32,
++};
+ use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
+ use windows_sys::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTA};
+ use windows_sys::Win32::UI::Controls::SetWindowTheme;
+@@ -138,7 +140,9 @@ fn should_apps_use_dark_mode() -> bool {
+             return None;
+         }
+ 
+-        let module = LoadLibraryA("uxtheme.dll\0".as_ptr().cast());
++        // Rune: load uxtheme.dll from System32 only, not the app directory or CWD.
++        let module =
++            LoadLibraryExA("uxtheme.dll\0".as_ptr().cast(), 0, LOAD_LIBRARY_SEARCH_SYSTEM32);
+ 
+         if module == 0 {
+             return None;
+diff --git a/src/platform_impl/windows/util.rs b/src/platform_impl/windows/util.rs
+index a3a7705d..c3980673 100644
+--- a/src/platform_impl/windows/util.rs
++++ b/src/platform_impl/windows/util.rs
+@@ -9,7 +9,9 @@ use crate::utils::Lazy;
+ use windows_sys::core::{HRESULT, PCWSTR};
+ use windows_sys::Win32::Foundation::{BOOL, HANDLE, HMODULE, HWND, POINT, RECT};
+ use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, HMONITOR};
+-use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
++use windows_sys::Win32::System::LibraryLoader::{
++    GetProcAddress, LoadLibraryExA, LOAD_LIBRARY_SEARCH_SYSTEM32,
++};
+ use windows_sys::Win32::System::SystemServices::IMAGE_DOS_HEADER;
+ use windows_sys::Win32::UI::HiDpi::{
+     DPI_AWARENESS_CONTEXT, MONITOR_DPI_TYPE, PROCESS_DPI_AWARENESS,
+@@ -195,7 +197,8 @@ pub(super) fn get_function_impl(library: &str, function: &str) -> Option<*const
+     assert_eq!(function.chars().last(), Some('\0'));
+ 
+     // Library names we will use are ASCII so we can use the A version to avoid string conversion.
+-    let module = unsafe { LoadLibraryA(library.as_ptr()) };
++    // Rune: load Windows system DLLs from System32 only, not the app directory or CWD.
++    let module = unsafe { LoadLibraryExA(library.as_ptr(), 0, LOAD_LIBRARY_SEARCH_SYSTEM32) };
+     if module == 0 {
+         return None;
+     }

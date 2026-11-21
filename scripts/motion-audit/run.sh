@@ -8,7 +8,7 @@ O=${1:-target/motion-audit}
 mkdir -p "$O"
 MOTION_GATE_OUT="$O/live-tail.gate.txt" sh scripts/motion-audit/scenarios/live-tail.sh
 cargo build --release -p todo -p settings -p kit-gallery -p odometer
-cargo build --release -p rune-kit --example shell --example tab_strip
+cargo build --release -p rune-kit --features rune/tooling --example shell --example tab_strip
 cargo build --release -p rune --features tooling --example growth_reorder --example keep_stuck --example sticky --example scroll_keys --example scroll_anchor --example text_glide --example one_snap
 B=${CARGO_TARGET_DIR:-target}/release
 SH=$B/examples/shell

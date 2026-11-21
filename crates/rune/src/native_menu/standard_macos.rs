@@ -3,12 +3,15 @@
 //! swallowing the keys. AppKit consumes a
 //! key equivalent whose item is disabled (no responder implements its action), so without
 //! these methods ⌘C would never reach Rune's own text editing. Main thread only.
+
+#![allow(unsafe_code)]
+
 use super::{default_macos, standard::{self, KeyDown, Standard, ITEMS}};
 use crate::runtime::Unhandled;
 use std::{cell::Cell, ffi::{c_char, c_void}, sync::Arc};
-use objc2::{ClassType, msg_send, rc::Retained, runtime::{AnyClass, AnyObject, Bool, Sel}};
+use objc2::{ClassType, MainThreadMarker, msg_send, rc::Retained, runtime::{AnyClass, AnyObject, Bool, Sel}};
 use objc2_app_kit::{NSApplication, NSEvent, NSEventModifierFlags, NSEventType, NSPanel, NSView, NSWindow, NSWindowButton};
-use objc2_foundation::{MainThreadMarker, NSObjectProtocol, NSPoint, NSProcessInfo, NSString};
+use objc2_foundation::{NSObjectProtocol, NSPoint, NSProcessInfo, NSString};
 
 thread_local! {
     static INSTALLED: Cell<bool> = const { Cell::new(false) };
@@ -49,14 +52,14 @@ pub(crate) fn take_unhandled(key: &crate::KeyEvent) -> Option<Unhandled> {
 /// happens only if none takes it. False when a click picked the item, or the keyboard is
 /// elsewhere (another view, an overlay panel): the caller runs it.
 pub(super) fn defer_key(run: Arc<dyn Fn() + Send + Sync>) -> bool {
-    let (Some(mtm), Some(class)) = (MainThreadMarker::new(), AnyClass::get("WinitView")) else { return false };
+    let (Some(mtm), Some(class)) = (MainThreadMarker::new(), AnyClass::get(c"WinitView")) else { return false };
     // SAFETY: main thread (a menu action); the event, window and view are retained.
     unsafe {
         let app = NSApplication::sharedApplication(mtm);
         let Some(event) = app.currentEvent().filter(|e| e.r#type() == NSEventType::KeyDown) else { return false };
         let Some(window) = app.keyWindow().filter(|w| !w.isKindOfClass(NSPanel::class())) else { return false };
         let Some(responder) = window.firstResponder().filter(|r| r.isKindOfClass(class)) else { return false };
-        let view: Retained<NSView> = Retained::cast(responder);
+        let view: Retained<NSView> = Retained::cast_unchecked(responder);
         UNHANDLED.with(|u| u.set(Some((None, Unhandled::Menu(run.clone())))));
         commit_composition(&view);
         view.keyDown(&event);
@@ -72,20 +75,22 @@ pub(crate) fn adopt() { hook_view_class(); }
 fn hook_view_class() {
     if !INSTALLED.with(Cell::get) || HOOKED.with(Cell::get) { return; }
     // Every Rune window's content view is a WinitView (or a per-instance subclass of it).
-    let Some(class) = AnyClass::get("WinitView") else { return };
+    let Some(class) = AnyClass::get(c"WinitView") else { return };
     for item in &ITEMS {
+        let sel = Sel::register(&std::ffi::CString::new(item.action).expect("selector"));
         // SAFETY: runtime mutation on the main thread. The implementation has the exact
         // `-(void)action:(id)sender` ABI. Adding never replaces a method the class defines.
-        let added = unsafe { class_addMethod(class, Sel::register(item.action), action as *const c_void, c"v@:@".as_ptr()) };
+        let added = unsafe { class_addMethod(class, sel, action as *const c_void, c"v@:@".as_ptr()) };
         if !added.as_bool() { eprintln!("rune: standard menus: the window view already answers {}", item.action); }
     }
     HOOKED.with(|h| h.set(true));
 }
 
 extern "C" fn action(this: *mut AnyObject, selector: Sel, _sender: *mut AnyObject) {
-    let Some(item) = standard::by_action(selector.name()) else { return };
+    let Some(item) = selector.name().to_str().ok().and_then(standard::by_action) else { return };
     // SAFETY: AppKit sends menu actions on the main thread to a live WinitView.
     let view = unsafe { &*(this as *const NSView) };
+    // SAFETY: `view` is a live `WinitView` on the main thread, as `perform` requires.
     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { perform(view, item) })).is_err() {
         eprintln!("rune: standard menu action panicked");
     }
@@ -97,8 +102,8 @@ unsafe fn perform(view: &NSView, item: &Standard) {
         let mtm = MainThreadMarker::from(view);
         let window = view.window();
         let (kind, then) = match item.role {
-            standard::Role::Close => (Some(NSWindowButton::NSWindowCloseButton), Some(Unhandled::Close)),
-            standard::Role::Minimize => (Some(NSWindowButton::NSWindowMiniaturizeButton), Some(Unhandled::Minimize)),
+            standard::Role::Close => (Some(NSWindowButton::CloseButton), Some(Unhandled::Close)),
+            standard::Role::Minimize => (Some(NSWindowButton::MiniaturizeButton), Some(Unhandled::Minimize)),
             _ => (None, None),
         };
         // A titled panel can show an enabled miniaturize button, but Rune never minimizes one.
@@ -136,33 +141,27 @@ unsafe fn commit_composition(view: &NSView) {
 }
 
 fn key_down(event: &NSEvent) -> KeyDown {
-    // SAFETY: reading a retained key event on the main thread.
-    unsafe {
-        let flags = event.modifierFlags();
-        KeyDown {
-            chars: event.charactersIgnoringModifiers().map(|s| s.to_string()).unwrap_or_default(),
-            cmd: flags.contains(NSEventModifierFlags::NSEventModifierFlagCommand),
-            shift: flags.contains(NSEventModifierFlags::NSEventModifierFlagShift),
-            alt: flags.contains(NSEventModifierFlags::NSEventModifierFlagOption),
-            ctrl: flags.contains(NSEventModifierFlags::NSEventModifierFlagControl),
-        }
+    let flags = event.modifierFlags();
+    KeyDown {
+        chars: event.charactersIgnoringModifiers().map(|s| s.to_string()).unwrap_or_default(),
+        cmd: flags.contains(NSEventModifierFlags::Command),
+        shift: flags.contains(NSEventModifierFlags::Shift),
+        alt: flags.contains(NSEventModifierFlags::Option),
+        ctrl: flags.contains(NSEventModifierFlags::Control),
     }
 }
 
 /// A click picked the item (or its equivalent was remapped): press and release its ⌘-key in
 /// the view, releasing with the modifiers actually held so Rune doesn't see ⌘ stuck down.
 unsafe fn press(view: &NSView, item: &Standard, window: Option<&NSWindow>) {
-    // SAFETY: main-thread AppKit calls; the made-up events are retained for the calls.
-    unsafe {
-        let number = window.map_or(0, |w| w.windowNumber());
-        let key = if item.shift { item.key.to_ascii_uppercase() } else { item.key };
-        let chars = NSString::from_str(&key.to_string());
-        let time = NSProcessInfo::processInfo().systemUptime();
-        let event = |kind, flags| NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
-            kind, NSPoint::new(0.0, 0.0), flags, time, number, None, &chars, &chars, false, item.key_code);
-        let mut flags = NSEventModifierFlags::NSEventModifierFlagCommand;
-        if item.shift { flags |= NSEventModifierFlags::NSEventModifierFlagShift; }
-        if let Some(down) = event(NSEventType::KeyDown, flags) { view.keyDown(&down); }
-        if let Some(up) = event(NSEventType::KeyUp, NSEvent::modifierFlags_class()) { view.keyUp(&up); }
-    }
+    let number = window.map_or(0, |w| w.windowNumber());
+    let key = if item.shift { item.key.to_ascii_uppercase() } else { item.key };
+    let chars = NSString::from_str(&key.to_string());
+    let time = NSProcessInfo::processInfo().systemUptime();
+    let event = |kind, flags| NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+        kind, NSPoint::new(0.0, 0.0), flags, time, number, None, &chars, &chars, false, item.key_code);
+    let mut flags = NSEventModifierFlags::Command;
+    if item.shift { flags |= NSEventModifierFlags::Shift; }
+    if let Some(down) = event(NSEventType::KeyDown, flags) { view.keyDown(&down); }
+    if let Some(up) = event(NSEventType::KeyUp, NSEvent::modifierFlags_class()) { view.keyUp(&up); }
 }

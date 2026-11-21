@@ -5,51 +5,10 @@
 //! different ones (⌘B and ⌃B) on macOS. `Keybind` adds alternatives and per-platform chords.
 use std::{fmt, hash::{Hash, Hasher}, str::FromStr};
 
-use super::chord_label::{char_named, key_named_word, modifier_named, named};
-use crate::{Key, KeyEvent, Mods, PhysicalKeyCode};
-
-pub(super) const PRIMARY: u8 = 1;
-const CTRL: u8 = 2;
-const ALT: u8 = 4;
-pub(super) const SHIFT: u8 = 8;
-const SUPER: u8 = 16;
-
-/// The platform whose keyboard conventions a chord resolves and draws with.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum KeyPlatform {
-    /// ⌘ is the primary modifier; Control is a separate key. Glyph labels: "⇧⌘T".
-    Mac,
-    /// Ctrl is the primary modifier. Word labels: "Ctrl+Shift+T", the logo key is "Win".
-    Windows,
-    /// Ctrl is the primary modifier. Word labels, the logo key is "Super". The web uses this
-    /// in a browser that isn't on an Apple device.
-    Linux,
-}
-
-impl KeyPlatform {
-    /// The platform this build runs on.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub const fn current() -> Self {
-        if cfg!(any(target_os = "macos", target_os = "ios")) { return Self::Mac; }
-        if cfg!(target_os = "windows") { return Self::Windows; }
-        Self::Linux
-    }
-
-    /// The platform the browser runs on: `Mac` when `navigator.platform` names an Apple
-    /// device (as the browser's own shortcuts do), else `Linux`.
-    #[cfg(target_arch = "wasm32")]
-    pub fn current() -> Self {
-        static PLATFORM: std::sync::OnceLock<KeyPlatform> = std::sync::OnceLock::new();
-        *PLATFORM.get_or_init(|| {
-            let platform = js_sys::Reflect::get(&js_sys::global(), &"navigator".into())
-                .and_then(|navigator| js_sys::Reflect::get(&navigator, &"platform".into()))
-                .ok().and_then(|p| p.as_string()).unwrap_or_default();
-            if ["Mac", "iPod", "iPhone", "iPad"].iter().any(|apple| platform.contains(apple)) { Self::Mac } else { Self::Linux }
-        })
-    }
-
-    pub(super) fn mac(self) -> bool { matches!(self, Self::Mac) }
-}
+use super::key_table::{char_named, chord_key_from_key, chord_key_named, modifier_named, parse_function_key};
+pub use crate::edit::KeyPlatform;
+use crate::edit::{ALT, CTRL, PRIMARY, SHIFT, SUPER, fold, held};
+use crate::{Key, KeyEvent, PhysicalKeyCode};
 
 /// One modifier as a chord names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -191,7 +150,7 @@ impl Chord {
     /// `Super` folds into `Primary`; Ctrl, Alt, Shift, Super elsewhere, where `Ctrl` does.
     pub fn mods_on(&self, platform: KeyPlatform) -> Vec<ChordMod> {
         let bits = fold(self.mods, platform);
-        let order = if platform.mac() {
+        let order = if platform == KeyPlatform::Mac {
             [ChordMod::Ctrl, ChordMod::Alt, ChordMod::Shift, ChordMod::Primary]
         } else {
             [ChordMod::Primary, ChordMod::Alt, ChordMod::Shift, ChordMod::Super]
@@ -201,7 +160,7 @@ impl Chord {
 
     fn matches_with(&self, ev: &KeyEvent, base: Option<char>, physical: Option<PhysicalKeyCode>, platform: KeyPlatform) -> bool {
         let (want, held) = (fold(self.mods, platform), held(ev.mods, platform));
-        let ChordKey::Char(c) = self.key() else { return want == held && named(&ev.key) == Some(self.key) };
+        let ChordKey::Char(c) = self.key() else { return want == held && chord_key_from_key(&ev.key) == Some(self.key) };
         let Some(typed) = typed(&ev.key) else { return false };
         let base = base.map(lower);
         // Past the typed character, the key's own: its unmodified character when the layout
@@ -358,43 +317,10 @@ fn parse_list(spec: &str) -> Result<Vec<Chord>, ChordError> {
     spec.split(',').map(str::parse).collect()
 }
 
-/// Whether `m` holds the primary modifier and no other but Shift, or none at all (a script's
-/// `Key::Command`): ⌘ alone on macOS, Ctrl alone elsewhere. For the edit commands a text
-/// field takes (copy, paste, undo), which another modifier turns into an app's chord.
-pub(crate) fn primary_alone(m: Mods) -> bool {
-    matches!(held(m, KeyPlatform::current()) & !SHIFT, 0 | PRIMARY)
-}
-
-/// `bits` with the modifiers that are one key on `platform` merged: Ctrl into the primary
-/// off macOS, the logo key into it on macOS.
-fn fold(bits: u8, platform: KeyPlatform) -> u8 {
-    let same = if platform.mac() { SUPER } else { CTRL };
-    if bits & same != 0 { bits & !same | PRIMARY } else { bits }
-}
-
-/// The keys `m` says are held, as chord bits for `platform`. `cmd` repeats the key this build
-/// reports as primary: ⌘ (`logo`) on macOS, Ctrl elsewhere (iOS too), Ctrl or ⌘ on the web. A `Mods`
-/// with `cmd` and neither key (a script, a test) holds `platform`'s primary.
-fn held(m: Mods, platform: KeyPlatform) -> u8 {
-    let bare = m.cmd && !m.ctrl && !m.logo;
-    let (ctrl, logo) = if bare || cfg!(target_arch = "wasm32") {
-        (m.ctrl, m.logo)
-    } else if cfg!(target_os = "macos") {
-        (m.ctrl, m.logo || m.cmd)
-    } else {
-        (m.ctrl || m.cmd, m.logo)
-    };
-    let (ctrl_bit, logo_bit) = if platform.mac() { (CTRL, PRIMARY) } else { (PRIMARY, SUPER) };
-    [(bare, PRIMARY), (ctrl, ctrl_bit), (logo, logo_bit), (m.alt, ALT), (m.shift, SHIFT)]
-        .into_iter().filter(|(on, _)| *on).fold(0, |bits, (_, bit)| bits | bit)
-}
-
 fn key_named(name: &str) -> Option<ChordKey> {
-    if let Some(key) = key_named_word(name) { return Some(key); }
+    if let Some(key) = chord_key_named(name) { return Some(key); }
     if let Some(c) = char_named(name) { return Some(ChordKey::Char(c)); }
-    if let Some(n) = name.strip_prefix('f').filter(|n| !n.starts_with(['0', '+'])).and_then(|n| n.parse::<u8>().ok()) {
-        return (1..=24).contains(&n).then_some(ChordKey::Function(n));
-    }
+    if let Some(n) = parse_function_key(name, 'f') { return Some(ChordKey::Function(n)); }
     let mut chars = name.chars();
     match (chars.next(), chars.next()) { (Some(c), None) => Some(ChordKey::Char(lower(c))), _ => None }
 }

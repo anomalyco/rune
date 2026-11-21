@@ -6,6 +6,9 @@
 //!
 //! Stack capture needs frame pointers and Mach thread calls: macOS on Apple silicon only.
 //! Elsewhere the probes count allocations and record nothing.
+
+#![allow(unsafe_code)]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::{Cell, UnsafeCell};
 use std::collections::HashMap;
@@ -78,6 +81,7 @@ fn with_book<R>(f: impl FnOnce(&mut Book) -> R) -> R {
 
 pub struct Probe;
 
+// SAFETY: forwards every allocation call to `System`, recording main-thread allocation statistics.
 unsafe impl GlobalAlloc for Probe {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // SAFETY: forwarded unchanged.
@@ -200,11 +204,11 @@ impl Sampler {
                 let mut buf = [0u64; DEPTH];
                 let mut taken: Vec<(u32, Vec<u64>)> = Vec::with_capacity(1 << 16);
                 let period = std::time::Duration::from_micros(micros);
-                let mut due = std::time::Instant::now();
+                let mut due = rune::time::now();
                 while !stop.load(Relaxed) {
                     // Spin rather than sleep: macOS stretches short sleeps to a millisecond or more.
                     due += period;
-                    while std::time::Instant::now() < due { std::thread::yield_now(); }
+                    while rune::time::now() < due { std::thread::yield_now(); }
                     let tag = TAG.load(Relaxed);
                     if tag == 0 { continue; }
                     // Nothing may allocate between suspend and resume: the main thread could
@@ -359,6 +363,7 @@ mod mac {
         }
         // SAFETY: dladdr returned C strings owned by the loader.
         let image = unsafe { CStr::from_ptr(info.fname) }.to_string_lossy().into_owned();
+        // SAFETY: `info.sname` is checked non-null and points to a loader-owned NUL-terminated C string.
         let sym = if info.sname.is_null() { "?".into() } else { unsafe { CStr::from_ptr(info.sname) }.to_string_lossy().into_owned() };
         (image, info.fbase as u64, sym.replace(' ', "_"))
     }

@@ -49,7 +49,20 @@ fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
     return vec4<f32>(uv * 2.0 - 1.0, 0.0, 1.0);
 }
 
+// Apple's continuous corner (crates/rune/src/shaders/clip.wgsl `sd_continuous` / `sd_rounded`).
+const CONTINUOUS_K: f32 = 1.52866483;
+fn sd_continuous(p: vec2<f32>, half: vec2<f32>, r: f32) -> f32 {
+    let e = CONTINUOUS_K * r;
+    let q = half - abs(p);
+    let v = vec2<f32>(e) - q;
+    if (v.x <= 0.0 || v.y <= 0.0) { return max(-q.x, -q.y); }
+    let u = atan2(v.y, v.x) * (4.0 / PI) - 1.0;
+    let u2 = u * u;
+    return length(v) - e * (1.14602295 + u2 * (-0.37573161 + u2 * (0.30796609 - 0.07724354 * u2)));
+}
+
 fn sd_rrect(p: vec2<f32>, half: vec2<f32>, r0: f32) -> f32 {
+    if (r0 < 0.0) { return sd_continuous(p, half, min(-r0, min(half.x, half.y))); }
     let r = min(r0, min(half.x, half.y));
     let q = abs(p) - half + vec2<f32>(r);
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r;

@@ -1,7 +1,9 @@
 //! Cursed Settings: a believable settings window where every control does exactly what its
 //! label says. The Firewall switch builds a wall of fire, the electric fence electrifies the
 //! perimeter, Dark mode turns the lights off. Effects come from rune-fx and rune-light, drawn
-//! inside Rune's frame through the compositor hook (`gfx.rs`); `gags.rs` decides what burns.
+//! inside Rune's frame through the compositor hook (`gfx.rs`); `gags/` decides what burns.
+
+#![forbid(unsafe_code)]
 
 mod gags;
 mod gfx;

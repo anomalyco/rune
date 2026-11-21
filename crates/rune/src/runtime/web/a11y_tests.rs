@@ -253,8 +253,8 @@ fn a_row_of_token_texts_mirrors_as_one_line() {
 #[test]
 fn href_presses_open_absolute_urls() {    let mut rt = Runtime::new((), page, (480.0, 300.0), Env::default());
     rt.frame(0.0);
-    let gh = rt.nodes.iter().find(|n| n.key.as_deref() == Some("gh")).unwrap().path.clone();
-    assert_eq!(rt.nodes.iter().find(|n| n.key.as_deref() == Some("gh")).unwrap().role, "link");
+    let gh = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("gh")).unwrap().path.clone();
+    assert_eq!(rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("gh")).unwrap().role, "link");
     assert!(rt.web_a11y_action(&json!({"kind": "a11y_press", "path": gh})));
     rt.frame(0.0);
     assert_eq!(rt.take_url_requests(), ["https://github.com/example/rune"]);
@@ -280,6 +280,61 @@ fn mac_meta_copy_and_select_all_work_on_selectable_text() {
     assert_eq!(rt.copy_text().as_deref(), Some("First paragraph\nSecond paragraph"));
     rt.web_key(&json!({"kind":"key", "key":"c", "code":"KeyC", "meta":true, "ctrl":false, "shift":false, "alt":false}));
     rt.frame(0.0);
-    crate::clipboard::flush_memory(&mut rt);
+    crate::clipboard::flush_memory(rt.core_mut());
     assert_eq!(board.text().as_deref().map(String::as_str), Some("First paragraph\nSecond paragraph"));
+}
+
+#[test]
+fn exiting_children_do_not_swallow_or_misparent_live_siblings() {
+    fn view(show: &bool, _: &mut Cx<bool>) -> El {
+        let mut btn = crate::row().key("btn").role("button").label("Action").on_press(|_: &mut bool| {})
+            .size(100.0, 24.0);
+        if *show {
+            btn = btn.child(crate::el().key("badge").size(10.0, 10.0).transition(crate::Transition::opacity()));
+        }
+        let mut box_a = crate::col().key("box-a").role("region").label("Box A").size(200.0, 40.0);
+        if *show {
+            box_a = box_a.child(crate::el().key("old").size(10.0, 10.0).transition(crate::Transition::opacity()));
+        }
+        crate::col().w_full().role("main")
+            .child(btn)
+            .child(crate::text("Live sibling after button").key("after-btn").font(crate::tok::type_::BODY))
+            .child(box_a)
+            .child(crate::col().key("box-b").role("region").label("Box B").size(200.0, 40.0)
+                .child(crate::text("Box B text").font(crate::tok::type_::BODY)))
+    }
+    let mut rt = Runtime::new(true, view, (480.0, 300.0), Env::default());
+    rt.frame(0.0);
+    rt.update(|s, _| *s = false);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.tree.nodes.iter().enumerate().any(|(i, _)| rt.core().subtree_exiting(i)), "exiting tail must be active");
+
+    let items = rt.web_a11y_items();
+    let after = items.iter().find(|it| it.text == "Live sibling after button")
+        .expect("live sibling after button with exiting child must remain mirrored");
+    assert_eq!(after.parent, Some(0), "sibling stays directly under main");
+    let box_b = items.iter().find(|it| it.text == "Box B")
+        .expect("live sibling region after exiting-child region must remain mirrored");
+    assert_eq!(box_b.parent, Some(0), "Box B must remain a child of main, not mis-parented under Box A");
+}
+
+#[test]
+fn rtl_horizontal_scroller_mirror_undoes_rtl_shift() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        crate::col().w_full().child(
+            crate::row().key("strip").dir(crate::Direction::Rtl).size(200.0, 60.0).scroll_x()
+                .child(crate::row().w(600.0).h(60.0)
+                    .child(crate::text("مرحبا").key("word").font(crate::tok::type_::BODY))),
+        )
+    }
+    let mut rt = Runtime::new((), view, (400.0, 200.0), Env::default());
+    rt.page_mode();
+    rt.frame(0.0);
+    let x0 = rt.web_a11y_items().into_iter().find(|it| it.text == "مرحبا").unwrap().rect[0];
+    rt.wheel_xy(100.0, 30.0, 80.0, 0.0);
+    rt.frame(0.0);
+    let strip = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("strip")).unwrap().id;
+    assert!((rt.scroll.scrolls[&strip].x.offset - 80.0).abs() < 0.5, "RTL horizontal scroll moved offset");
+    let x1 = rt.web_a11y_items().into_iter().find(|it| it.text == "مرحبا").unwrap().rect[0];
+    assert!((x1 - x0).abs() < 0.2, "mirror rect must stay in scroller content coordinates across RTL scroll: {x0} -> {x1}");
 }

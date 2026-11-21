@@ -61,6 +61,7 @@ pub(crate) fn take_select(_window: &winit::window::Window) -> Option<std::ops::R
 
 /// Drops the window's open composition, if any.
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 pub(crate) fn cancel(window: &winit::window::Window) {
     use windows_sys::Win32::UI::Input::Ime::{CPS_CANCEL, ImmGetContext, ImmNotifyIME, ImmReleaseContext, NI_COMPOSITIONSTR};
     let Some(hwnd) = super::win32::hwnd(window) else { return };
@@ -75,6 +76,7 @@ pub(crate) fn cancel(window: &winit::window::Window) {
 
 /// Drops the window's open composition, if any.
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 pub(crate) fn cancel(window: &winit::window::Window) {
     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
     let Ok(handle) = window.window_handle() else { return };

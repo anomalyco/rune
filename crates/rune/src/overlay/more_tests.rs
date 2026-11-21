@@ -50,7 +50,7 @@ fn overlay_input_switch_waits_for_owned_drag_release() {
     overlay.rt.pointer_down(10.0, 10.0);
     handle.set_input(OverlayInput::Regions);
     handle.set_input(OverlayInput::None);
-    overlay.pending_input = overlay.shared.requests.lock().unwrap().input.take();
+    overlay.core.pending_input = overlay.shared.core.requests.lock().unwrap().input.take();
     overlay.apply_input();
     assert_eq!(overlay.options.input, OverlayInput::All, "an owned gesture retains its old native mode");
     overlay.rt.pointer_move(150.0, 150.0);
@@ -110,7 +110,7 @@ fn overlay_cursor_move_for_the_next_press_cancels_the_old_drag_first() {
     let pointer = crate::platform::macos::PointerState::new(OverlayInput::All, false);
     pointer.record_click(true, 10.0, 10.0);
     overlay.native_left(&pointer, true);
-    pointer.read(0, Instant::now(), (12.0, 10.0), true, false);
+    pointer.read(0, crate::time::now(), (12.0, 10.0), true, false);
     pointer.record_click(true, 50.0, 10.0);
     overlay.native_moved(&pointer, 50.0, 10.0); // winit reports the click's position just before the click
     overlay.native_left(&pointer, true);
@@ -214,7 +214,7 @@ fn overlay_drag_past_the_threshold_with_the_button_down_starts_an_os_drag() {
 
 #[test]
 fn handle_requests_collapse_and_updates_keep_their_order() {
-    let shared = Arc::new(Shared::<u32> { native: Mutex::default(), requests: Mutex::default(), availability: AtomicU8::new(0), failure: Mutex::default(), surface: Mutex::default(), wake: Mutex::new(None), stats: Arc::default() });
+    let shared = Arc::new(Shared::<u32>::default());
     let handle = OverlayHandle { shared: shared.clone() };
     assert_eq!(handle.availability(), Availability::Unknown);
     handle.show();
@@ -224,16 +224,17 @@ fn handle_requests_collapse_and_updates_keep_their_order() {
     handle.resize((300.0, 80.0));
     handle.update(|n, _| *n *= 3);
     handle.hide();
-    let q = std::mem::take(&mut *shared.requests.lock().unwrap());
+    let q = std::mem::take(&mut *shared.core.requests.lock().unwrap());
+    let updates = std::mem::take(&mut *shared.updates.lock().unwrap());
     assert_eq!(q.visible(), Some(false), "the latest show/hide wins");
     assert_eq!((q.edge, q.margin), (Some(ScreenEdge::Bottom), Some(24.0)));
     assert_eq!((q.align, q.size), (Some((Align::End, 12.0)), Some((300.0, 80.0))));
     let mut n = 0;
-    for f in q.updates {
+    for f in updates {
         f(&mut n, &mut Tx::default());
     }
     assert_eq!(n, 3);
-    shared.availability.store(2, Ordering::Release);
+    shared.core.availability.store(2, Ordering::Release);
     assert_eq!(handle.availability(), Availability::Unavailable);
 }
 
@@ -250,21 +251,21 @@ fn hidden_overlay_update_wakes_once_without_a_surface() {
     // The runtime's virtual clock makes scheduling exact; the host maps it to wall time.
     overlay.rt.wall_start = None;
     handle.update(|_, tx| tx.wake_after(Duration::from_millis(250)));
-    let updates = std::mem::take(&mut overlay.shared.requests.lock().unwrap().updates);
+    let updates = std::mem::take(&mut *overlay.shared.updates.lock().unwrap());
     overlay.apply_wake(false, updates);
     assert_eq!(overlay.rt.state, [0.0]);
     assert_eq!(overlay.rt.wake_deadline(), Some(0.25));
-    let start = Instant::now();
+    let start = crate::time::now();
     overlay.rt.wall_start = Some(start);
     assert_eq!(overlay.wake_deadline(), Some(start + Duration::from_millis(250)));
     overlay.wake_due(start + Duration::from_millis(249));
     assert_eq!(overlay.rt.state.len(), 1, "not before the deadline");
-    overlay.rt.wall_start = Some(Instant::now() - Duration::from_millis(250));
-    overlay.wake_due(Instant::now());
+    overlay.rt.wall_start = Some(crate::time::now() - Duration::from_millis(250));
+    overlay.wake_due(crate::time::now());
     assert_eq!(overlay.rt.state.len(), 2);
     assert!(overlay.rt.state[1] >= 0.25);
     assert_eq!(overlay.wake_deadline(), None);
-    overlay.wake_due(Instant::now());
+    overlay.wake_due(crate::time::now());
     assert!(!overlay.draw(), "hidden overlays do not acquire or animate a surface");
     assert_eq!(overlay.rt.state.len(), 2, "no polling after the one wake");
     assert!(overlay.surface.live().is_none() && overlay.gpu.is_none());
@@ -288,18 +289,19 @@ fn counter_text(overlay: &Overlay<u32>) -> Option<String> {
 fn a_hidden_overlay_builds_nothing_until_it_shows() {
     let app = AppSpec::new("hidden counter", (200.0, 50.0), || 0, counter_view);
     let (mut overlay, handle) = Overlay::new(OverlaySpec::new("hidden counter", app.size, counter_view).options(Default::default()), 0, &app);
-    let start = Instant::now();
+    let start = crate::time::now();
     overlay.rt.wall_start = Some(start);
     present(&mut overlay, start);
     assert_eq!(counter_text(&overlay).as_deref(), Some("0"));
     let (builds, commits) = (BUILDS.get(), overlay.rt.stats.commits);
     for k in 1..=10 {
         handle.update(|n, tx| { *n += 1; tx.wake_after(Duration::from_millis(50)); });
-        let requests = std::mem::take(&mut *overlay.shared.requests.lock().unwrap());
-        overlay.apply_wake(requests.woken, requests.updates);
+        let requests = std::mem::take(&mut *overlay.shared.core.requests.lock().unwrap());
+        let updates = std::mem::take(&mut *overlay.shared.updates.lock().unwrap());
+        overlay.apply_wake(requests.woken, updates);
         // Its timer comes due before the next update.
-        overlay.rt.wall_start = Some(Instant::now() - k * Duration::from_millis(100));
-        overlay.wake_due(Instant::now());
+        overlay.rt.wall_start = Some(crate::time::now() - k * Duration::from_millis(100));
+        overlay.wake_due(crate::time::now());
     }
     assert_eq!(overlay.rt.state, 10);
     assert_eq!(BUILDS.get() - builds, 0, "no view builds while hidden");
@@ -311,7 +313,7 @@ fn a_hidden_overlay_builds_nothing_until_it_shows() {
     overlay.rt.set_live_visible(true);
     overlay.settle_before_reveal();
     overlay.dirty = true;
-    present(&mut overlay, Instant::now());
+    present(&mut overlay, crate::time::now());
     assert_eq!(BUILDS.get() - builds, 1, "the frame that shows it builds once");
     assert_eq!(counter_text(&overlay).as_deref(), Some("10"), "with the latest state");
 }
@@ -326,8 +328,9 @@ fn updates_that_change_nothing_leave_an_overlay_alone() {
     overlay.rt.frame(0.0);
     let (builds, commits) = (BUILDS.get(), overlay.rt.stats.commits);
     let apply = |overlay: &mut Overlay<u32>| {
-        let requests = std::mem::take(&mut *overlay.shared.requests.lock().unwrap());
-        overlay.apply_wake(requests.woken, requests.updates);
+        let requests = std::mem::take(&mut *overlay.shared.core.requests.lock().unwrap());
+        let updates = std::mem::take(&mut *overlay.shared.updates.lock().unwrap());
+        overlay.apply_wake(requests.woken, updates);
     };
     for visible in [false, true] {
         overlay.presence = if visible { Presence::Shown { occluded: false } } else { Presence::default() };
@@ -417,11 +420,11 @@ fn overlay_poll_inherits_overrides_and_wakes_visible_state_once() {
     assert_eq!(overlay.rt.state.polls, 1);
     assert_eq!(overlay.rt.wake_deadline(), Some(0.25), "false still registers wake_after");
     overlay.dirty = false;
-    let start = Instant::now() - Duration::from_millis(251);
+    let start = crate::time::now() - Duration::from_millis(251);
     overlay.rt.wall_start = Some(start);
     overlay.wake_due(start + Duration::from_millis(249));
     assert!(!overlay.dirty);
-    overlay.wake_due(Instant::now());
+    overlay.wake_due(crate::time::now());
     assert!(overlay.dirty, "visible wake schedules the frame");
     assert_eq!(overlay.rt.state.polls, 1, "do not poll twice: the drawable frame owns the poll");
     assert!(!overlay.rt.frame(0.0), "true means changed state, not continuous animation");
@@ -429,7 +432,7 @@ fn overlay_poll_inherits_overrides_and_wakes_visible_state_once() {
     assert_eq!(overlay.rt.presented("value").unwrap().0[2], 17.0);
     assert_eq!(overlay.wake_deadline(), None);
     overlay.dirty = false;
-    overlay.wake_due(Instant::now());
+    overlay.wake_due(crate::time::now());
     assert!(!overlay.dirty, "no timer or animation means no more scheduled frames");
 
     let configured = OverlaySpec::new("override", app.size, view).options(Default::default())
@@ -471,20 +474,20 @@ fn overlay_occluded_runs_due_timers_without_frames() {
     assert_eq!(overlay.rt.state.polls, 1);
     assert_eq!(overlay.rt.wake_deadline(), Some(0.25));
     overlay.backoff = Default::default();
-    let start = Instant::now() - Duration::from_millis(251);
+    let start = crate::time::now() - Duration::from_millis(251);
     overlay.rt.wall_start = Some(start);
-    assert!(overlay.wake_deadline().is_some_and(|at| at <= Instant::now()), "the timer stays armed while occluded");
+    assert!(overlay.wake_deadline().is_some_and(|at| at <= crate::time::now()), "the timer stays armed while occluded");
     overlay.dirty = false;
-    overlay.wake_due(Instant::now());
+    overlay.wake_due(crate::time::now());
     assert_eq!(overlay.rt.state.polls, 2, "the due timer runs without waiting for a drawable");
-    assert_eq!(handle.shared.requests.lock().unwrap().visible(), Some(false), "and its hide() goes through");
+    assert_eq!(handle.shared.core.requests.lock().unwrap().visible(), Some(false), "and its hide() goes through");
     assert_eq!(overlay.wake_deadline(), None);
 
     // Each missed frame waits, longer while it stays occluded; a timeout waits for the
     // display link that is still running.
     let mut waits = Vec::new();
     for _ in 0..6 {
-        let before = Instant::now();
+        let before = crate::time::now();
         overlay.missed(Missed::Occluded, false, false);
         let retry = overlay.backoff.deadline().expect("an occluded miss re-checks later");
         assert_eq!(overlay.wake_deadline(), Some(retry));
@@ -496,7 +499,7 @@ fn overlay_occluded_runs_due_timers_without_frames() {
     assert_eq!(overlay.backoff.deadline(), None);
     overlay.occluded(false);
     assert!(overlay.dirty, "uncovered, it redraws once");
-    let now = Instant::now();
+    let now = crate::time::now();
     let mut probe = overlay.backoff;
     probe.step(crate::window::BackoffEvent::Missed { missed: Missed::Occluded, paced: false, now });
     assert_eq!(probe.deadline(), Some(now + OCCLUDED_RETRY), "uncovered, the wait starts over");
@@ -505,7 +508,7 @@ fn overlay_occluded_runs_due_timers_without_frames() {
     overlay.occluded(true);
     overlay.apply_wake(false, vec![Box::new(|_: &mut State, tx: &mut Tx| { tx.wake_after(Duration::from_secs(5)); true })]);
     let deadline = overlay.wake_deadline().expect("the update's timer is armed while occluded");
-    assert!(deadline > Instant::now() + Duration::from_secs(4), "{:?}", deadline - Instant::now());
+    assert!(deadline > crate::time::now() + Duration::from_secs(4), "{:?}", deadline - crate::time::now());
 }
 
 /// Uncovering an overlay keeps the retry a missed frame already asked for: the wait was set for
@@ -536,7 +539,7 @@ fn uncovering_an_overlay_keeps_its_outstanding_retry() {
     assert_eq!(overlay.backoff.deadline(), Some(retry), "uncovering keeps the outstanding retry");
     assert_eq!(overlay.wake_deadline(), Some(retry), "and the re-check it asks for is still due");
     // ...and the wait after it starts over at the shortest occluded retry.
-    let now = Instant::now();
+    let now = crate::time::now();
     overlay.missed(Missed::Occluded, false, false);
     let next = overlay.backoff.deadline().expect("a covered miss waits again");
     assert!(next >= now + OCCLUDED_RETRY && next < now + OCCLUDED_RETRY * 2, "{:?}", next - now);
@@ -560,31 +563,31 @@ fn overlay_misses_back_off_until_their_retry() {
     overlay.presence = Presence::Shown { occluded: false };
     overlay.rt.wall_start = None;
 
-    let now = Instant::now();
+    let now = crate::time::now();
     overlay.missed(Missed::Timeout, false, false);
     assert_eq!(overlay.rt.state.polls, 1, "the missed frame still polls");
     assert!(overlay.backoff.deadline().is_some_and(|at| at >= now + TIMEOUT_RETRY));
-    assert!(overlay.backing_off(Instant::now()), "an unpaced timeout waits for its retry");
+    assert!(overlay.backing_off(crate::time::now()), "an unpaced timeout waits for its retry");
     overlay.missed(Missed::Outdated, true, true);
     assert_eq!(overlay.rt.state.polls, 1, "a frame that already stepped doesn't step again");
-    assert!(overlay.backoff.deadline().is_some_and(|at| at >= now + OCCLUDED_RETRY) && overlay.backing_off(Instant::now()),
+    assert!(overlay.backoff.deadline().is_some_and(|at| at >= now + OCCLUDED_RETRY) && overlay.backing_off(crate::time::now()),
         "an outdated surface waits even while a display link runs");
 
     // A timer comes due while it backs off: it runs now, and the next deadline is a frame on.
-    overlay.rt.wall_start = Some(Instant::now() - Duration::from_millis(251));
+    overlay.rt.wall_start = Some(crate::time::now() - Duration::from_millis(251));
     overlay.dirty = false;
-    let due = Instant::now();
+    let due = crate::time::now();
     overlay.wake_due(due);
     assert_eq!(overlay.rt.state.polls, 2, "the due timer runs without a frame");
     assert!(overlay.wake_deadline().is_some_and(|at| at > due), "and doesn't leave the loop spinning on it");
 
     // Fading out, an occluded miss can't mark it occluded, yet it still waits.
-    overlay.presence = Presence::FadingOut { until: Instant::now() + Duration::from_secs(1), length: Duration::from_secs(1), occluded: false };
+    overlay.presence = Presence::FadingOut { until: crate::time::now() + Duration::from_secs(1), length: Duration::from_secs(1), occluded: false };
     overlay.backoff = Default::default();
     overlay.missed(Missed::Occluded, false, false);
-    assert!(overlay.presence.drawing() && overlay.backing_off(Instant::now()));
-    overlay.backoff_step(crate::window::BackoffEvent::At(Instant::now()));
-    assert!(!overlay.backing_off(Instant::now() + Duration::from_millis(1)), "a due retry draws");
+    assert!(overlay.presence.drawing() && overlay.backing_off(crate::time::now()));
+    overlay.backoff_step(crate::window::BackoffEvent::At(crate::time::now()));
+    assert!(!overlay.backing_off(crate::time::now() + Duration::from_millis(1)), "a due retry draws");
 }
 
 #[cfg(feature = "hot")]
@@ -599,11 +602,14 @@ fn a_live_edit_patch_wakes_a_hidden_overlay_and_its_next_frame_rebuilds_the_view
     let (mut overlay, _) = Overlay::new(OverlaySpec::new("hot", app.size, view).options(Default::default()), 0u8, &app);
     overlay.rt.wall_start = None;
     let (tx, rx) = std::sync::mpsc::channel();
-    overlay.connect(Arc::new(move || { let _ = tx.send(()); }), Arc::new(|| {}), Arc::new(|| {}), Rc::default());
+    overlay.connect(Arc::new(move || { tx.send(()).ok(); }), Arc::new(|| {}), Arc::new(|| {}), Rc::default());
     let hub: &'static crate::hot::Hub = Box::leak(Box::default());
-    overlay.rt.hot.as_mut().expect("connect attaches the overlay to live edits").move_to(hub);
+    overlay.rt.frame.hot_mut().expect("connect attaches the overlay to live edits").move_to(hub);
     while rx.try_recv().is_ok() {}
-    let take = |overlay: &mut Overlay<u8>| std::mem::take(&mut *overlay.shared.requests.lock().unwrap());
+    let take = |overlay: &mut Overlay<u8>| (
+        std::mem::take(&mut *overlay.shared.core.requests.lock().unwrap()),
+        std::mem::take(&mut *overlay.shared.updates.lock().unwrap()),
+    );
     let _ = take(&mut overlay);
     overlay.rt.frame(0.0);
     let built = BUILDS.get();
@@ -612,9 +618,9 @@ fn a_live_edit_patch_wakes_a_hidden_overlay_and_its_next_frame_rebuilds_the_view
     assert_eq!(BUILDS.get(), built, "an unchanged memo is reused");
     hub.patched();
     rx.recv_timeout(Duration::from_secs(5)).expect("the patch wakes the event loop");
-    let requests = take(&mut overlay);
+    let (requests, updates) = take(&mut overlay);
     assert!(requests.woken);
-    overlay.apply_wake(requests.woken, requests.updates);
+    overlay.apply_wake(requests.woken, updates);
     assert!(overlay.dirty && overlay.rt.needs_commit(), "hidden, the patch waits for the frame that shows it");
     overlay.presence = Presence::Shown { occluded: false };
     overlay.advance();
@@ -641,12 +647,15 @@ fn overlay_setup_runs_once_with_a_waker_that_redraws_the_overlay() {
     let loop_wakes = Arc::new(AtomicUsize::new(0));
     let (tx, rx) = std::sync::mpsc::channel();
     let counter = loop_wakes.clone();
-    let wake: Waker = Arc::new(move || { counter.fetch_add(1, Ordering::SeqCst); let _ = tx.send(()); });
+    let wake: Waker = Arc::new(move || { counter.fetch_add(1, Ordering::SeqCst); tx.send(()).ok(); });
     overlay.connect(wake.clone(), Arc::new(|| {}), Arc::new(|| {}), Rc::default());
     overlay.connect(wake, Arc::new(|| {}), Arc::new(|| {}), Rc::default());
     assert_eq!(overlay.rt.state.setups, 1, "setup runs once");
     while rx.try_recv().is_ok() {}
-    let take = |overlay: &mut Overlay<State>| std::mem::take(&mut *overlay.shared.requests.lock().unwrap());
+    let take = |overlay: &mut Overlay<State>| (
+        std::mem::take(&mut *overlay.shared.core.requests.lock().unwrap()),
+        std::mem::take(&mut *overlay.shared.updates.lock().unwrap()),
+    );
     let _ = take(&mut overlay);
 
     // Hidden: a background decode wakes the loop, and the overlay polls; the view waits
@@ -656,9 +665,9 @@ fn overlay_setup_runs_once_with_a_waker_that_redraws_the_overlay() {
     let state = &mut overlay.rt.state;
     state.icon = Some(state.cache.as_ref().unwrap().rgba(1, 1, vec![20, 40, 60, 255]));
     rx.recv_timeout(Duration::from_secs(5)).expect("the decode wakes the event loop");
-    let requests = take(&mut overlay);
+    let (requests, updates) = take(&mut overlay);
     assert!(requests.woken);
-    overlay.apply_wake(requests.woken, requests.updates);
+    overlay.apply_wake(requests.woken, updates);
     assert!(!overlay.rt.state.saw_icon.get(), "a hidden overlay's view doesn't run");
     assert!(overlay.dirty && overlay.rt.needs_commit());
     let polls = overlay.rt.state.polls;
@@ -677,8 +686,8 @@ fn overlay_setup_runs_once_with_a_waker_that_redraws_the_overlay() {
     let state = &mut overlay.rt.state;
     state.icon = Some(state.cache.as_ref().unwrap().rgba(1, 1, vec![60, 40, 20, 255]));
     rx.recv_timeout(Duration::from_secs(5)).expect("the decode wakes the event loop");
-    let requests = take(&mut overlay);
-    overlay.apply_wake(requests.woken, requests.updates);
+    let (requests, updates) = take(&mut overlay);
+    overlay.apply_wake(requests.woken, updates);
     assert!(overlay.dirty, "a shown overlay draws a frame");
     assert_eq!(overlay.rt.state.polls, polls_shown, "the drawn frame owns the poll");
     overlay.advance(); // the drawn frame
@@ -695,7 +704,7 @@ fn overlay_setup_runs_once_with_a_waker_that_redraws_the_overlay() {
     rx.recv_timeout(Duration::from_secs(5)).expect("the decodes wake the event loop");
     std::thread::sleep(Duration::from_millis(100));
     assert_eq!(loop_wakes.load(Ordering::SeqCst), before + 1, "one loop wake until the overlay takes it");
-    assert!(take(&mut overlay).woken);
+    assert!(take(&mut overlay).0.woken);
     assert!(loop_wakes.load(Ordering::SeqCst) >= 2);
 }
 
@@ -732,16 +741,11 @@ fn overlay_compositor_observes_prewarm_and_each_rendered_frame() {
     for (width, more) in [(12.0, true), (20.0, false)] {
         overlay.rt.update(|s, tx| { *s = width; tx.instant(); });
         overlay.rt.frame(1.0 / 60.0);
-        let renderer = &mut overlay.renderer.as_mut().unwrap();
         let mut enc = gpu.device.create_command_encoder(&Default::default());
-        let animating = render_frame(&mut Frame {
-            device: &gpu.device, queue: &gpu.queue, encoder: &mut enc, target: &target.view,
-            format: OFFSCREEN_FORMAT, size: (32, 16), dt: 1.0 / 60.0, update_ms: 0.0,
-            rt: &mut overlay.rt, ui: renderer,
-        }, &mut overlay.compositor);
+        let animating = overlay.render_offscreen(&gpu, &mut enc, &target.view, OFFSCREEN_FORMAT, (32, 16), 1.0 / 60.0);
         assert_eq!(animating, more, "honour compositor-driven animation and stop when it settles");
         target.copy(&mut enc);
-        renderer.submit(&gpu.queue, enc);
+        overlay.renderer.as_mut().unwrap().submit(&gpu.queue, enc);
         let pixels = target.read(&gpu.device);
         assert_eq!(&pixels[4..8], &[255; 4], "draw_ui renders the overlay content");
         assert_eq!(&pixels[(15*32+31)*4..(15*32+32)*4], &[0; 4], "draw_ui preserves the transparent clear");
@@ -762,7 +766,7 @@ fn drag_overlay(name: &'static str) -> Overlay<Drags> {
     let app = AppSpec::new(name, (200.0, 50.0), Drags::default, view);
     let (mut overlay, _) = Overlay::new(OverlaySpec::new(name, app.size, view).options(Default::default()), Drags::default(), &app);
     overlay.rt.wall_start = None;
-    present(&mut overlay, Instant::now());
+    present(&mut overlay, crate::time::now());
     overlay
 }
 
@@ -773,7 +777,7 @@ fn a_release_past_the_threshold_does_not_start_a_drag_out() {
     overlay.left_button(true, None);
     overlay.left_button(false, Some((60.0, 10.0)));
     assert!(overlay.rt.take_drag_out().is_none());
-    present(&mut overlay, Instant::now());
+    present(&mut overlay, crate::time::now());
     assert_eq!(overlay.rt.state.starts, 0);
 }
 
@@ -800,7 +804,7 @@ fn an_animated_reveal_lets_the_first_card_enter() {
         if animate { spec = spec.animate_reveal(); }
         let (mut overlay, _) = Overlay::new(spec, false, &app);
         overlay.rt.wall_start = None;
-        let start = Instant::now();
+        let start = crate::time::now();
         present(&mut overlay, start);
         overlay.rt.update(|card, _| *card = true);
         overlay.presence = Presence::Shown { occluded: false };
@@ -825,7 +829,7 @@ fn a_turn_whose_frame_is_not_due_never_waits_on_the_present_thread() {
     let mut waits = 0;
     assert_eq!(frame::claim(Some(Opportunity::Wait), || waits += 1), None);
     assert_eq!(waits, 0);
-    let at = Instant::now();
+    let at = crate::time::now();
     assert_eq!(frame::claim(Some(Opportunity::Tick(at)), || waits += 1), Some(Some(at)));
     assert_eq!(frame::claim(Some(Opportunity::Now), || waits += 1), Some(None));
     assert_eq!(frame::claim(None, || waits += 1), Some(None));
@@ -841,27 +845,27 @@ fn a_runtime_at_rest_builds_nothing_while_its_compositor_animates() {
     }
     let mut overlay = width_overlay("resting runtime");
     overlay.compositor = Some(Box::new(Spin));
-    let start = Instant::now();
-    let (animating, _) = step(&mut overlay.rt, &mut overlay.clock, &overlay.compositor, start, false);
-    let idle = idle_after(&overlay.rt, animating, Some(start + FRAME));
-    assert!(idle && frame::rests(&overlay.rt, idle, false));
+    let start = crate::time::now();
+    let (animating, _) = overlay.step_frame(start, false);
+    let idle = idle_after(overlay.rt.core(), animating, Some(start + FRAME));
+    assert!(idle && overlay.rests_now(idle, false));
     let (commits, instances, t) = (overlay.rt.stats.commits, overlay.rt.instances.len(), overlay.rt.t);
-    let (animating, dt) = frame::rest(&mut overlay.rt, &mut overlay.clock, &overlay.compositor, start + FRAME);
+    let (animating, dt) = overlay.rest_frame(start + FRAME);
     assert!(!animating);
     assert!((dt - FRAME.as_secs_f64()).abs() < 1e-6, "the compositor still steps the frame's time: {dt}");
     assert_eq!((overlay.rt.stats.commits, overlay.rt.instances.len()), (commits, instances));
     assert!((overlay.rt.t - t - FRAME.as_secs_f64()).abs() < 1e-6, "a compositor reading `t` sees it move");
-    assert!(!frame::rests(&overlay.rt, false, false), "the runtime asked for the frame");
-    assert!(!frame::rests(&overlay.rt, idle, true), "something marked the overlay dirty");
+    assert!(!overlay.rests_now(false, false), "the runtime asked for the frame");
+    assert!(!overlay.rests_now(idle, true), "something marked the overlay dirty");
     overlay.rt.update(|width, _| *width = 20.0);
-    assert!(!frame::rests(&overlay.rt, idle, false), "state changed");
+    assert!(!overlay.rests_now(idle, false), "state changed");
     overlay.rt.frame(0.0);
     overlay.rt.poll = Some(|_, _, _| false);
-    assert!(!frame::rests(&overlay.rt, idle, false), "a poll runs on every frame drawn");
+    assert!(!overlay.rests_now(idle, false), "a poll runs on every frame drawn");
     overlay.rt.poll = None;
     overlay.rt.update(|_, tx| tx.wake_after(std::time::Duration::from_secs(1)));
     overlay.rt.frame(0.0);
-    assert!(!frame::rests(&overlay.rt, idle, false), "a timer is pending");
+    assert!(!overlay.rests_now(idle, false), "a timer is pending");
 }
 
 #[cfg(target_os = "macos")]
@@ -889,7 +893,7 @@ fn release_gpu_after_counts_from_the_hide() {
     let spec = OverlaySpec::new("release after", app.size, view).options(Default::default()).release_gpu_after(Duration::from_secs(5));
     let (mut overlay, _) = Overlay::new(spec, (), &app);
     overlay.presence = Presence::Shown { occluded: false };
-    let before = Instant::now();
+    let before = crate::time::now();
     overlay.hide();
     if cfg!(target_os = "macos") {
         assert_eq!(overlay.presence.release_at(), None);
@@ -928,11 +932,11 @@ fn a_fade_out_releases_the_gpu_after_the_fade() {
     let spec = OverlaySpec::new("fade release", app.size, view).options(Default::default()).release_gpu_after(Duration::from_secs(5));
     let (mut overlay, _) = Overlay::new(spec, (), &app);
     if cfg!(target_os = "macos") { return; } // A prewarmed macOS panel keeps its pixels instead.
-    overlay.presence = Presence::FadingOut { until: Instant::now() + Duration::from_millis(200), length: Duration::from_millis(200), occluded: false };
-    overlay.presence_due(Instant::now());
+    overlay.presence = Presence::FadingOut { until: crate::time::now() + Duration::from_millis(200), length: Duration::from_millis(200), occluded: false };
+    overlay.presence_due(crate::time::now());
     assert_eq!(overlay.presence.release_at(), None, "a fading overlay keeps its surface");
     overlay.presence = Presence::Shown { occluded: false };
-    let before = Instant::now();
+    let before = crate::time::now();
     overlay.hide_fading(Duration::from_millis(200));
     if !cfg!(target_os = "windows") {
         assert!(!overlay.presence.fading() && overlay.presence.release_at().is_some(), "no fade here: released at the hide");
@@ -952,7 +956,7 @@ fn a_fade_out_releases_the_gpu_after_the_fade() {
 #[test]
 fn a_windows_fade_steps_alpha_down_to_zero() {
     use std::time::Duration;
-    let now = Instant::now();
+    let now = crate::time::now();
     let length = Duration::from_millis(200);
     let end = now + length;
     assert_eq!(fade_alpha(end, length, now), 255);

@@ -263,7 +263,7 @@ Shift and Cmd. `filter(|n| ..)` keeps the folders that lead to a match open. `re
 opens, selects and scrolls to a row, so a tree can follow an editor or a diff. Rows report
 `treeitem` with their level, open state and selection. 50,000 files scroll at 0.4 ms a frame
 (p50) and 4 ms when rows mount (p95); building the model takes about 35 ms
-(`cargo test --profile perf -p rune-kit --test tree -- --ignored --nocapture`).
+(`cargo test --profile perf -p rune-kit --test integration tree:: -- --ignored --nocapture`).
 [Light](../../demo/kit/tree-light.png) and [dark](../../demo/kit/tree-dark.png) stills:
 `cargo run -p rune-kit --example tree`.
 
@@ -276,7 +276,7 @@ shows the direction. Cells come from `cell(|s, i, column| Cell::text(..))`; text
 shows its whole text as a tooltip. `zebra(true)` stripes rows. The keys are the arrows, Page
 Up and Down, Home, End, Return (`on_open`), and in a multi-select table Shift and Cmd-A. Roles
 are `grid`, `row`, `columnheader` and `gridcell`. 100,000 rows scroll at 0.4 ms a frame (p50)
-and 3.4 ms when rows mount (p95) (`--test table`).
+and 3.4 ms when rows mount (p95) (`--test integration table::`).
 [Light](../../demo/kit/table-light.png) and [dark](../../demo/kit/table-dark.png) stills:
 `cargo run -p rune-kit --example table`. `MarkdownStyle::table_like(&TableStyle::from_kit(k))`
 draws Markdown tables with the same font, padding and rules.
@@ -394,7 +394,7 @@ DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
 - **Long diffs** are a virtual list built by index, so a commit costs the rows in view, not
   the length: two 50,000-line texts diff in about 40 ms, the first frame takes about 20 ms,
   and a commit takes as long as a 300-line diff's. `cargo test -p rune-kit --profile perf
-  --test diff diff_50k_time -- --ignored --nocapture` measures it.
+  --test integration diff::diff_50k_time -- --ignored --nocapture` measures it.
 
 `cargo run -p rune-kit --example diff` shows a five-file review with a comment and a folded
 range; stills: [unified](../../demo/kit/diff-unified-light.png) and

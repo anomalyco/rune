@@ -4,7 +4,6 @@
 //! `Tx::select_all_text` over a virtual list, `Tx::select_text` on an unbuilt row, and bounded
 //! off-screen collection.
 use std::cell::Cell;
-use std::time::Instant;
 
 use crate::runtime::ElementInfo;
 use crate::{Cx, El, Env, GrowthSpec, Key, KeyEvent, Mods, PhysicalInput, Runtime, ScrollSpec, TextStyle, col, row, text};
@@ -139,7 +138,7 @@ fn cmd_a_and_select_all_text_over_55_virtual_rows_copy_every_row() {
     let clipboard = crate::clipboard::memory();
     rt.use_clipboard(&clipboard);
 
-    let mounted = rt.virtuals["#0/scroll/timeline"].range.clone();
+    let mounted = rt.commit.virtuals["#0/scroll/timeline"].range.clone();
     assert_eq!(mounted, 0..23, "55 rows in 1280x420 mounts 23 rows");
 
     let expected: String = (0..ROWS).map(row_expected).collect::<Vec<_>>().join("\n");
@@ -152,7 +151,7 @@ fn cmd_a_and_select_all_text_over_55_virtual_rows_copy_every_row() {
         "Cmd+A builds only the mounted window plus offscreen end row(s), built {}",
         BUILT_ROWS.get()
     );
-    assert_eq!(rt.virtuals["#0/scroll/timeline"].range, 0..23, "mounted window unchanged");
+    assert_eq!(rt.commit.virtuals["#0/scroll/timeline"].range, 0..23, "mounted window unchanged");
     assert_eq!(find_path(&rt, "r0/head").selected.as_deref(), Some("Row 00 header"));
     assert_eq!(find_path(&rt, "r22/head").selected.as_deref(), Some("Row 22 header"));
 
@@ -163,7 +162,7 @@ fn cmd_a_and_select_all_text_over_55_virtual_rows_copy_every_row() {
     // Clearing the selection releases the pinned rows.
     rt.update(|_, tx| tx.clear_text_selection());
     tick(&mut rt);
-    assert!(rt.virtuals["#0/scroll/timeline"].selection.pins.rows().is_empty());
+    assert!(rt.commit.virtuals["#0/scroll/timeline"].selection.pins.rows().is_empty());
 
     // 2. Scrolled to the middle (neither r0 nor r54 mounted), Tx::select_all_text("timeline")
     // pins both ends and copies all 55 rows.
@@ -172,7 +171,7 @@ fn cmd_a_and_select_all_text_over_55_virtual_rows_copy_every_row() {
         tick(&mut rt);
     }
     settle(&mut rt);
-    let mid_range = rt.virtuals["#0/scroll/timeline"].range.clone();
+    let mid_range = rt.commit.virtuals["#0/scroll/timeline"].range.clone();
     assert!(mid_range.start > 0 && mid_range.end < ROWS, "middle window: {mid_range:?}");
 
     rt.update(|_, tx| tx.select_all_text("timeline"));
@@ -217,7 +216,7 @@ fn selection_from_row_3_to_row_40_copies_all_rows_in_between_in_order() {
         tick(&mut rt);
     }
     settle(&mut rt);
-    let range = rt.virtuals["#0/scroll/timeline"].range.clone();
+    let range = rt.commit.virtuals["#0/scroll/timeline"].range.clone();
     assert!(!range.contains(&3) && range.contains(&40), "r3 unmounted, r40 mounted: {range:?}");
 
     // Shift-click in row 40 body right after "40" (glyph 25).
@@ -294,7 +293,7 @@ fn dragging_selection_while_scrolling_across_virtual_rows_keeps_working() {
         tick(&mut rt);
     }
     settle(&mut rt);
-    assert!(!rt.virtuals["#0/scroll/timeline"].range.contains(&3), "anchor row 3 scrolled out");
+    assert!(!rt.commit.virtuals["#0/scroll/timeline"].range.contains(&3), "anchor row 3 scrolled out");
 
     let g40 = glyphs_at(&rt, "r40/head");
     let p1 = (g40.last().unwrap().0 + 4.0, g40.last().unwrap().1);
@@ -312,14 +311,14 @@ fn dragging_selection_while_scrolling_across_virtual_rows_keeps_working() {
 #[test]
 fn tx_select_text_on_unbuilt_row_pins_and_applies_without_scrolling() {
     let mut rt = timeline(ROWS);
-    assert_eq!(rt.virtuals["#0/scroll/timeline"].range, 0..23);
+    assert_eq!(rt.commit.virtuals["#0/scroll/timeline"].range, 0..23);
     assert!(!rt.elements().iter().any(|e| e.path.ends_with("r45/body")), "r45 starts unbuilt");
 
     rt.update(|_, tx| tx.select_text("r45/body", 0..12));
     tick(&mut rt);
 
     // Must not scroll or mount row 45 into the layout window.
-    assert_eq!(rt.virtuals["#0/scroll/timeline"].range, 0..23, "did not scroll");
+    assert_eq!(rt.commit.virtuals["#0/scroll/timeline"].range, 0..23, "did not scroll");
     assert_eq!(rt.selected_text().as_deref(), Some("Message body"));
     assert_eq!(
         rt.text_selection(),
@@ -339,7 +338,7 @@ fn tx_select_text_on_unbuilt_row_pins_and_applies_without_scrolling() {
 fn offscreen_collection_is_bounded_in_rows_and_bytes() {
     // 1. Row count cap: 50,000 rows builds at most MAX_VIRTUAL_COPY_ROWS unbuilt rows on copy.
     let mut rt = timeline(50_000);
-    let mounted_len = rt.virtuals["#0/scroll/timeline"].range.len();
+    let mounted_len = rt.commit.virtuals["#0/scroll/timeline"].range.len();
     BUILT_ROWS.set(0);
     rt.update(|_, tx| tx.select_all_text("timeline"));
     tick(&mut rt);
@@ -350,7 +349,7 @@ fn offscreen_collection_is_bounded_in_rows_and_bytes() {
     );
 
     BUILT_ROWS.set(0);
-    let start = Instant::now();
+    let start = crate::time::now();
     let copied = rt.selected_text().expect("bounded copy returns prefix");
     let elapsed = start.elapsed();
     let built_on_copy = BUILT_ROWS.get();
@@ -422,7 +421,7 @@ fn header_before_virtual_list_keeps_pinned_selection_and_copies_across_unbuilt_r
     while rt.frame(1.0 / 120.0) {}
     let clipboard = crate::clipboard::memory();
     rt.use_clipboard(&clipboard);
-    assert_eq!(rt.virtuals["#0/scroll/timeline"].top, 84.0);
+    assert_eq!(rt.commit.virtuals["#0/scroll/timeline"].top, 84.0);
 
     // Click in row 3 body before "virtual" (y = 84 + 3 * 56 = 252..308, inside the 420px viewport).
     let r3 = glyphs_at(&rt, "r3/body");
@@ -438,7 +437,7 @@ fn header_before_virtual_list_keeps_pinned_selection_and_copies_across_unbuilt_r
         tick(&mut rt);
     }
     settle(&mut rt);
-    let range = rt.virtuals["#0/scroll/timeline"].range.clone();
+    let range = rt.commit.virtuals["#0/scroll/timeline"].range.clone();
     assert!(!range.contains(&3) && range.contains(&40), "r3 unmounted, r40 mounted: {range:?}");
 
     let r40 = glyphs_at(&rt, "r40/body");

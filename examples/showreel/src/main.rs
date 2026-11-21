@@ -3,6 +3,8 @@
 //!
 //!     showreel --scene deploy --video deploy.mp4 --size 960x540 --scale 2 --duration 4
 
+#![forbid(unsafe_code)]
+
 mod gfx;
 mod kit;
 mod scenes;

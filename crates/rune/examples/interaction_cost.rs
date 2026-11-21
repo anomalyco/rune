@@ -9,9 +9,11 @@
 //! The gate is read once per process, so compare runs with it off and on, alternated. Prints
 //! `METRIC scenario=.. metric=.. median=.. p95=..` over samples: `p50_ms` and `mean_ms`
 //! (wall time per frame, input included) and `allocations` per frame.
+
+#![allow(unsafe_code)]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
-use std::time::Instant;
 
 use rune::{Color, Cx, El, Env, Runtime, ScrollSpec, TextStyle, col, el, row, text};
 
@@ -22,7 +24,7 @@ thread_local! { static ALLOCATIONS: Cell<u64> = const { Cell::new(0) }; }
 // SAFETY: forwards every call to `System` unchanged; only counts allocations on this thread.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let _ = ALLOCATIONS.try_with(|n| n.set(n.get() + 1));
+        ALLOCATIONS.try_with(|n| n.set(n.get() + 1)).ok();
         // SAFETY: the caller upholds `GlobalAlloc::alloc`'s contract.
         unsafe { System.alloc(layout) }
     }
@@ -68,7 +70,7 @@ fn sample(scenario: usize) -> Vec<f64> {
     let mut times = Vec::with_capacity(FRAMES);
     let mut allocs = 0;
     for i in 0..FRAMES {
-        let (a0, t0) = (allocations(), Instant::now());
+        let (a0, t0) = (allocations(), rune::time::now());
         match scenario {
             0 => {
                 rt.pointer_down(x, y);
@@ -100,7 +102,7 @@ fn main() {
             if s > 0 { rows[scenario].push(row); }
         }
     }
-    let perf = std::env::var("RUNE_PERF").unwrap_or_default();
+    let perf = rune::env::var("RUNE_PERF").unwrap_or_default();
     for (scenario, rows) in rows.iter().enumerate() {
         for (m, name) in METRICS.iter().enumerate() {
             let mut v: Vec<f64> = rows.iter().map(|r| r[m]).collect();

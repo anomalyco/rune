@@ -65,7 +65,7 @@ impl Clip {
         for k in range {
             for c in self.changes(k) { state[c.id as usize] = c.after; }
             let mut line = String::new();
-            let _ = write!(line, r#"{{"t":{:.3},"n":1"#, (self.time(k) - start_t) * 1000.0);
+            write!(line, r#"{{"t":{:.3},"n":1"#, (self.time(k) - start_t) * 1000.0).ok();
             let (mut metas, mut elems, mut gone) = (Vec::new(), Vec::new(), Vec::new());
             for (i, now) in state.iter().enumerate() {
                 if *now == last[i] { continue; }
@@ -82,9 +82,9 @@ impl Clip {
                 }
                 last[i] = *now;
             }
-            if !metas.is_empty() { let _ = write!(line, r#","m":[{}]"#, metas.join(",")); }
-            if !elems.is_empty() { let _ = write!(line, r#","e":[{}]"#, elems.join(",")); }
-            if !gone.is_empty() { let _ = write!(line, r#","g":[{}]"#, gone.join(",")); }
+            if !metas.is_empty() { write!(line, r#","m":[{}]"#, metas.join(",")).ok(); }
+            if !elems.is_empty() { write!(line, r#","e":[{}]"#, elems.join(",")).ok(); }
+            if !gone.is_empty() { write!(line, r#","g":[{}]"#, gone.join(",")).ok(); }
             line.push('}');
             writeln!(out, "{line}")?;
         }
@@ -134,16 +134,16 @@ impl Clip {
 
     fn summary_text(&self, range: Range<usize>, note: &str, changes: &[Vec<Change>], tiles: &[usize]) -> String {
         let mut s = String::from("# Rewind clip\n\n");
-        if !note.trim().is_empty() { let _ = writeln!(s, "> {}\n", note.trim().replace('\n', "\n> ")); }
+        if !note.trim().is_empty() { writeln!(s, "> {}\n", note.trim().replace('\n', "\n> ")).ok(); }
         let hz = (1.0 / self.frame_interval()).round();
-        let _ = writeln!(s, "Frames {}–{} of {} ({:.2} s to {:.2} s before the freeze, {} frames at {hz} Hz), window {}×{} pt.\n",
+        writeln!(s, "Frames {}–{} of {} ({:.2} s to {:.2} s before the freeze, {} frames at {hz} Hz), window {}×{} pt.\n",
             range.start, range.end.saturating_sub(1), self.len(), self.time(range.start), self.time(range.end.saturating_sub(1)),
-            range.len(), self.viewport.0, self.viewport.1);
+            range.len(), self.viewport.0, self.viewport.1).ok();
         let jumps: Vec<String> = range.clone().zip(changes).flat_map(|(k, cs)| {
             cs.iter().filter(|c| c.jump).map(move |c| format!("- frame {k} ({:.2} s): {}", self.time(k), c.label()))
         }).collect();
         if !jumps.is_empty() {
-            let _ = writeln!(s, "## Jumps\n\nMoved much further in one frame than in the frames either side.\n\n{}\n", jumps.join("\n"));
+            writeln!(s, "## Jumps\n\nMoved much further in one frame than in the frames either side.\n\n{}\n", jumps.join("\n")).ok();
         }
         // Per element: how many frames it changed in, and its largest single-frame move.
         let mut most: Vec<(u32, usize, f32, usize, String)> = Vec::new();
@@ -158,14 +158,14 @@ impl Clip {
         }
         most.sort_by(|a, b| b.2.total_cmp(&a.2));
         if !most.is_empty() {
-            let _ = writeln!(s, "## Moved most\n");
+            writeln!(s, "## Moved most\n").ok();
             for (_, n, _, k, label) in most.iter().take(12) {
-                let _ = writeln!(s, "- {label} at frame {k} (changed in {n} frames)");
+                writeln!(s, "- {label} at frame {k} (changed in {n} frames)").ok();
             }
-            let _ = writeln!(s);
+            writeln!(s).ok();
         }
-        let _ = writeln!(s, "## Files\n\n- `trace.jsonl`: every element's rect and opacity per frame, motion-lint's format (`motion-lint analyze trace.jsonl`).\n- `contact.png`: frames {} drawn from the recorded rects, left to right. Grey: on screen. Yellow: changed in that frame, its old place dimmer. Red: jumped.",
-            tiles.iter().map(usize::to_string).collect::<Vec<_>>().join(", "));
+        writeln!(s, "## Files\n\n- `trace.jsonl`: every element's rect and opacity per frame, motion-lint's format (`motion-lint analyze trace.jsonl`).\n- `contact.png`: frames {} drawn from the recorded rects, left to right. Grey: on screen. Yellow: changed in that frame, its old place dimmer. Red: jumped.",
+            tiles.iter().map(usize::to_string).collect::<Vec<_>>().join(", ")).ok();
         s
     }
 }
@@ -211,7 +211,7 @@ fn json_str(s: &str) -> String {
         match c {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
-            c if (c as u32) < 0x20 => { let _ = write!(out, "\\u{:04x}", c as u32); }
+            c if (c as u32) < 0x20 => { write!(out, "\\u{:04x}", c as u32).ok(); }
             c => out.push(c),
         }
     }

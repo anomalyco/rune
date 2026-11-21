@@ -21,6 +21,7 @@ pub(crate) fn wait_ms() -> Option<f64> {
 
 /// Whether the machine has no core to spare: the 1-minute load average is at or above the core
 /// count. Read at most every few seconds. Always false where there's no load average.
+#[allow(unsafe_code)]
 pub(crate) fn overloaded() -> bool {
     #[cfg(unix)]
     {
@@ -33,7 +34,7 @@ pub(crate) fn overloaded() -> bool {
         let got = unsafe { libc::getloadavg(load.as_mut_ptr(), 1) };
         let cores = std::thread::available_parallelism().map_or(1, usize::from) as f64;
         let busy = got == 1 && load[0] >= cores;
-        *cache = Some((Instant::now(), busy));
+        *cache = Some((crate::time::now(), busy));
         busy
     }
     #[cfg(not(unix))]

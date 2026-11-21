@@ -1,0 +1,1 @@
+- Windows: after a resize, a switch of sRGB blending or a replaced swap chain, the next frame draws at once. The frame-latency wait kept waiting on the old swap chain, which could stall frames for up to 100 ms.

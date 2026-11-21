@@ -241,10 +241,10 @@ fn a_drag_out_that_offers_nothing_stays_a_press() {
 #[test]
 fn a_drag_out_that_offers_nothing_tracks_leaving_the_element() {
     let mut rt = drag_out_rt(false);
-    assert!(rt.press.inside());
+    assert!(rt.pointer.press_inside());
     rt.pointer_move(150.0, 10.0);
     assert!(rt.pointer_captured(), "the press holds on");
-    assert!(!rt.press.inside(), "the move that declined the drag left the element, so it no longer shows pressed");
+    assert!(!rt.pointer.press_inside(), "the move that declined the drag left the element, so it no longer shows pressed");
 }
 
 #[test]
@@ -470,7 +470,7 @@ fn cursor_follows_a_sibling_that_replaces_an_exiting_element_under_a_still_point
     assert_eq!(rt.cursor(), Cursor::Crosshair);
     rt.update(|first: &mut bool, _| *first = false);
     rt.frame(1.0 / 120.0);
-    assert!(rt.nodes.iter().any(|n| n.key.as_deref() == Some("a")), "a is still exiting");
+    assert!(rt.tree.nodes.iter().any(|n| n.key.as_deref() == Some("a")), "a is still exiting");
     assert_eq!(rt.cursor(), Cursor::Hidden, "the sibling under the still pointer takes over");
 }
 
@@ -482,7 +482,7 @@ fn hover_lands_at_once_and_fades_out() {
     }
     let mut rt = Runtime::new((), view, (200.0, 80.0), Env::new(true, 1.0));
     rt.frame(0.0);
-    let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("row")).unwrap().id;
+    let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("row")).unwrap().id;
     let hover = |rt: &Runtime<()>| rt.scene.get(id, P_HOVER).unwrap_or(0.0);
     rt.pointer_move(50.0, 20.0);
     rt.frame(1.0 / 120.0);
@@ -510,8 +510,8 @@ fn rows_mounting_above_keep_a_still_pointers_hover() {
     rt.pointer_move(150.0, 60.0);
     rt.frame(1.0 / 120.0);
     let group = |rt: &Runtime<usize>| {
-        let i = rt.nodes.iter().position(|n| n.key.as_deref() == Some("reveal")).unwrap();
-        rt.inh_scratch[i].group
+        let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("reveal")).unwrap();
+        rt.paint.inh_scratch[i].group
     };
     assert_eq!(group(&rt), 1.0);
     for _ in 0..3 {

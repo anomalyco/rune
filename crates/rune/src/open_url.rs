@@ -7,8 +7,7 @@
 //! itself happens once the handler's frame is done.
 //!
 //! macOS asks `NSWorkspace`, Windows `ShellExecuteW`, Linux runs `xdg-open`. Headless runs and
-//! tests never open anything: they keep the requests for [`Runtime::take_url_requests`].
-use crate::Runtime;
+//! tests never open anything: they keep the requests for [`crate::Runtime::take_url_requests`].
 
 pub(crate) mod incoming;
 pub(crate) mod instance;
@@ -139,11 +138,7 @@ fn valid_authority(authority: &str) -> bool {
     port.is_none_or(|p| !p.is_empty() && p.parse::<u16>().is_ok())
 }
 
-impl<S: 'static> Runtime<S> {
-    /// Takes the links handlers asked to open that this runtime didn't open: all of them in a
-    /// headless run or test, none in a window. Each was already checked.
-    pub fn take_url_requests(&mut self) -> Vec<String> { std::mem::take(&mut self.url_requests) }
-
+impl crate::runtime::HostState {
     pub(crate) fn open_urls(&mut self, links: Vec<Link>) {
         for link in links {
             if self.open_urls_natively {
@@ -153,9 +148,16 @@ impl<S: 'static> Runtime<S> {
                 let opened = open(&link.url);
                 if let Err(e) = opened { eprintln!("rune: open_url({}): {e}", link.url); }
             } else {
-                self.url_requests.push(link.url);
+                self.push_url_request(link.url);
             }
         }
+    }
+}
+
+impl crate::runtime::RuntimeCore {
+    #[inline]
+    pub(crate) fn open_urls(&mut self, links: Vec<Link>) {
+        self.host.open_urls(links);
     }
 }
 
@@ -163,6 +165,7 @@ impl<S: 'static> Runtime<S> {
 fn open(url: &str) -> Result<(), OpenUrlError> { crate::platform::web::open_url(url).map_err(OpenUrlError::Failed) }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn open(url: &str) -> Result<(), OpenUrlError> {
     use objc2::{class, msg_send, rc::{Retained, autoreleasepool}};
     use objc2_foundation::{NSString, NSURL};
@@ -189,13 +192,14 @@ fn percent_encode_non_ascii(url: &str) -> std::borrow::Cow<'_, str> {
             out.push(b as char);
         } else {
             use std::fmt::Write;
-            let _ = write!(out, "%{b:02X}");
+            write!(out, "%{b:02X}").ok();
         }
     }
     std::borrow::Cow::Owned(out)
 }
 
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 fn open(url: &str) -> Result<(), OpenUrlError> {
     use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
     let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
@@ -214,7 +218,7 @@ fn open(url: &str) -> Result<(), OpenUrlError> {
         .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
         .spawn().map_err(|e| OpenUrlError::Failed(e.to_string()))?;
     // Reap it so it doesn't linger as a zombie.
-    std::thread::spawn(move || { let _ = child.wait(); });
+    std::thread::spawn(move || { child.wait().ok(); });
     Ok(())
 }
 

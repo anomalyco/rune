@@ -1,0 +1,1 @@
+- Tray menu labels show as written: `&` and tabs on Windows and `_` on Linux no longer turn into mnemonics or shortcut columns, and a Windows tray tooltip cut to fit no longer ends in half a character.

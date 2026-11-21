@@ -13,7 +13,7 @@ fn overlay_handlerless_hit_releases_native_ownership_in_every_input_mode() {
     }
     for mode in [OverlayInput::Regions, OverlayInput::None] {
         let mut rt = crate::Runtime::new((), view, (100.0, 100.0), crate::Env::default());
-        rt.native_overlay = true;
+        rt.host.native_overlay = true;
         rt.frame(0.0);
         let pointer = PointerState { input: Cell::new(OverlayInput::Regions), ..Default::default() };
         pointer.regions.borrow_mut().extend_from_slice(rt.hit_regions());
@@ -52,7 +52,7 @@ fn overlay_lost_up_recovers_once_after_grace_using_release_position() {
     let pointer = PointerState { input: Cell::new(OverlayInput::Regions), ..Default::default() };
     pointer.regions.borrow_mut().push([10.0, 10.0, 30.0, 30.0]);
     pointer.record_click(true, 20.0, 20.0);
-    let now = Instant::now();
+    let now = crate::time::now();
     pointer.observe_release(1, now, (40.0, 40.0));
     pointer.observe_release(0, now, (50.0, 50.0));
     pointer.observe_release(0, now + Duration::from_millis(99), (60.0, 60.0));
@@ -70,8 +70,8 @@ fn overlay_queued_up_and_next_down_keep_their_ownership_until_dispatched() {
     pointer.regions.borrow_mut().push([10.0, 10.0, 30.0, 30.0]);
     pointer.record_click(true, 20.0, 20.0);
     pointer.record_click(false, 100.0, 100.0);
-    pointer.observe_release(0, Instant::now(), (100.0, 100.0));
-    pointer.observe_release(0, Instant::now() + Duration::from_secs(1), (100.0, 100.0));
+    pointer.observe_release(0, crate::time::now(), (100.0, 100.0));
+    pointer.observe_release(0, crate::time::now() + Duration::from_secs(1), (100.0, 100.0));
     assert!(pointer.captured());
     assert_eq!(pointer.recovered_release.get(), None);
     pointer.record_click(true, 20.0, 20.0); // next native Down queued behind the Up
@@ -91,7 +91,7 @@ fn overlay_undelivered_click_releases_capture_after_stall() {
     pointer.regions.borrow_mut().push([10.0, 10.0, 30.0, 30.0]);
     pointer.record_click(true, 20.0, 20.0);
     pointer.record_click(false, 20.0, 20.0);
-    let now = Instant::now();
+    let now = crate::time::now();
     pointer.observe_release(0, now, (20.0, 20.0));
     pointer.observe_release(0, now + Duration::from_millis(1999), (20.0, 20.0));
     assert!(pointer.captured(), "a briefly queued Up still belongs to winit");
@@ -105,7 +105,7 @@ fn overlay_lost_view_releases_capture_where_the_pointer_was() {
     let pointer = PointerState { input: Cell::new(OverlayInput::Regions), ..Default::default() };
     pointer.regions.borrow_mut().push([10.0, 10.0, 30.0, 30.0]);
     pointer.record_click(true, 20.0, 20.0);
-    pointer.read(1, Instant::now(), (25.0, 15.0), true, false);
+    pointer.read(1, crate::time::now(), (25.0, 15.0), true, false);
     pointer.view_lost();
     assert!(!pointer.captured());
     assert!(queued(&pointer).is_empty());
@@ -127,7 +127,7 @@ fn overlay_rejected_down_cannot_poison_later_click_and_owned_up_survives_exit() 
 #[test]
 fn a_covered_overlay_rests_its_poll_but_keeps_a_lost_releases_deadline() {
     let pointer = PointerState { input: Cell::new(OverlayInput::All), ..Default::default() };
-    let now = Instant::now();
+    let now = crate::time::now();
     let poll = Some(now + Duration::from_millis(8));
     assert_eq!(pointer.deadline(poll, false), poll);
     assert_eq!(pointer.deadline(poll, true), None, "covered, the poll rests");
@@ -145,7 +145,7 @@ fn a_covered_overlay_rests_its_poll_but_keeps_a_lost_releases_deadline() {
 fn a_queued_press_hands_over_the_release_lost_before_it() {
     let pointer = PointerState { input: Cell::new(OverlayInput::All), ..Default::default() };
     pointer.record_click(true, 20.0, 20.0);
-    pointer.observe_release(0, Instant::now(), (50.0, 50.0));
+    pointer.observe_release(0, crate::time::now(), (50.0, 50.0));
     pointer.record_click(true, 30.0, 30.0);
     assert_eq!(pointer.take_edge(true), (None, Some((20.0, 20.0))));
     assert_eq!(pointer.take_edge(true), (Some((50.0, 50.0)), Some((30.0, 30.0))), "landing before the second press");
@@ -160,7 +160,7 @@ fn a_sample_beating_the_next_press_cancels_the_old_drag_where_the_button_rose() 
     let mut rt = crate::Runtime::new(Vec::new(), view, (100.0, 100.0), crate::Env::default());
     rt.frame(0.0);
     let pointer = PointerState { input: Cell::new(OverlayInput::All), ..Default::default() };
-    let now = Instant::now();
+    let now = crate::time::now();
     pointer.record_click(true, 10.0, 10.0);
     pointer.take_edge(true);
     rt.pointer_down(10.0, 10.0);
@@ -183,7 +183,7 @@ fn a_press_lost_before_any_sample_cancels_at_its_own_down_and_keeps_the_run() {
     let mut rt = crate::Runtime::new(Vec::new(), view, (100.0, 100.0), crate::Env::default());
     rt.frame(0.0);
     let pointer = PointerState { input: Cell::new(OverlayInput::All), ..Default::default() };
-    pointer.read(0, Instant::now(), (5.0, 5.0), true, false); // a hover older than the press
+    pointer.read(0, crate::time::now(), (5.0, 5.0), true, false); // a hover older than the press
     pointer.record_click(true, 50.0, 10.0);
     let (_, down) = pointer.take_edge(true);
     let (x, y) = down.unwrap();

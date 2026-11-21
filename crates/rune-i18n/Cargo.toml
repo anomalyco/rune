@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 description = "Message catalogs for Rune apps: keys checked at compile time, catalogs generated from JSON at build time, CLDR plurals, numbers and lists, and the system's preferred languages."
 publish = false
+autotests = false
 
 [features]
 default = []
@@ -21,17 +22,20 @@ icu_plurals = "2"
 icu_provider = { version = "2", features = ["sync"] }
 writeable = "0.6"
 # Catalogs read from JSON: at build time (`codegen`), and at run time on the web.
-serde_json = "1"
+serde_json = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Globalization"] }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Globalization"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSLocale", "NSString"] }
+objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSEnumerator", "NSLocale", "NSString"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Navigator", "Window"] }
+js-sys = { workspace = true }
+web-sys = { workspace = true, features = ["Navigator", "Window"] }
+
+[[test]]
+name = "locale"
 
 [lints]
 workspace = true

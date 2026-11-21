@@ -5,6 +5,8 @@
 //! tracking ends the pointer between the move and the press, and the system cursor is
 //! elsewhere, or unreadable on a desktop no one sees. The message's own point is the truth.
 
+#![allow(unsafe_code)]
+
 use std::cell::Cell;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};

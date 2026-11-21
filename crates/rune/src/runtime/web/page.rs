@@ -27,19 +27,19 @@ pub(crate) struct Page {
     pub view: f32,
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Lay the root out at its natural height and draw the band of it the host scrolls to
     /// with [`Self::set_page_scroll`]. The viewport stays the band's size.
     pub(crate) fn page_mode(&mut self) {
-        self.page.get_or_insert_default().view = self.viewport.1;
-        self.fit_height = true;
-        self.relayout = true;
+        self.host.page.get_or_insert_default().view = self.viewport.1;
+        self.host.fit_height = true;
+        self.commit.relayout = true;
     }
 
     /// The document's height in points: the root's laid-out height.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn page_height(&self) -> f32 {
-        self.nodes.first().map_or(self.viewport.1, |root| root.local.h.max(0.0))
+        self.tree.nodes.first().map_or(self.viewport.1, |root| root.local.h.max(0.0))
     }
 
     /// The band's size in points: the canvas covers `band` points of the document, of which
@@ -47,7 +47,7 @@ impl<S: 'static> Runtime<S> {
     /// the band moved (the next frame draws it).
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn set_band(&mut self, band: f32, view: f32) -> bool {
-        let Some(mut page) = self.page else { return false };
+        let Some(mut page) = self.host.page else { return false };
         let (band, view) = (band.max(0.0), view.max(0.0));
         if page.band == band && page.view == view { return false; }
         page.band = band;
@@ -55,7 +55,7 @@ impl<S: 'static> Runtime<S> {
         let top = self.band_top_for(&page, page.scroll).unwrap_or(page.top);
         let moved = top != page.top;
         page.top = top;
-        self.page = Some(page);
+        self.host.page = Some(page);
         moved
     }
 
@@ -66,11 +66,11 @@ impl<S: 'static> Runtime<S> {
     /// browser's compositor scrolls the canvas it already has and nothing is drawn.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn set_page_scroll(&mut self, y: f32) -> bool {
-        let Some(page) = self.page else { return false };
+        let Some(page) = self.host.page else { return false };
         let y = if y.is_finite() { self.snap_band(y) } else { 0.0 };
         if y == page.scroll { return false; }
         let top = self.band_top_for(&page, y).unwrap_or(page.top);
-        self.page = Some(Page { scroll: y, top, ..page });
+        self.host.page = Some(Page { scroll: y, top, ..page });
         top != page.top
     }
 
@@ -94,13 +94,13 @@ impl<S: 'static> Runtime<S> {
     /// The browser's scroll position, in points.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn page_scroll_y(&self) -> f32 {
-        self.page.map_or(0.0, |p| p.scroll)
+        self.host.page.map_or(0.0, |p| p.scroll)
     }
 
     /// The part of the band that is on screen: where it starts in the band's points, and how tall
     /// it is. `(0, viewport)` outside a page.
     pub(crate) fn page_window(&self) -> (f32, f32) {
-        let Some(page) = self.page else { return (0.0, self.viewport.1) };
+        let Some(page) = self.host.page else { return (0.0, self.viewport.1) };
         let view = if page.view > 0.0 { page.view } else { self.viewport.1 };
         (page.scroll - page.top, view)
     }
@@ -110,30 +110,29 @@ impl<S: 'static> Runtime<S> {
     /// tells Rune where it went. Returns whether the content moved (the next frame draws it).
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn set_page_scroll_x(&mut self, path: &str, x: f32) -> bool {
-        if self.page.is_none() || !x.is_finite() { return false; }
+        if self.host.page.is_none() || !x.is_finite() { return false; }
         let Some(i) = self.live(path) else { return false };
-        let Some(st) = self.scrolls.get_mut(&self.nodes[i].id) else { return false };
+        let Some(st) = self.scroll.scrolls.get_mut(&self.tree.nodes[i].id) else { return false };
         let offset = f64::from(x.max(0.0)).min(st.x.max.max(0.0));
         if (st.x.offset - offset).abs() < 0.01 { return false; }
         st.x.offset = offset;
-        st.x.v = 0.0;
-        st.x.glide = None;
+        st.x.motion = XMotion::Rest;
         true
     }
 
     /// What the root hands its subtree in the paint pass: the band's offset as a rigid scroll.
-    pub(super) fn root_inh(&self) -> Inh {
+    pub(in crate::runtime) fn root_inh(&self) -> Inh {
         let mut inh = Inh::default();
         let dy = -self.page_offset();
         inh.dy = dy;
-        inh.snap.shift(1, dy);
+        inh.snap.scroll(1, dy);
         inh
     }
 
     /// The band's top down the document, in points (0 outside page mode). A mirror's document
     /// position is what a frame drew plus this.
     pub(crate) fn page_offset(&self) -> f32 {
-        self.page.map_or(0.0, |p| p.top)
+        self.host.page.map_or(0.0, |p| p.top)
     }
 }
 

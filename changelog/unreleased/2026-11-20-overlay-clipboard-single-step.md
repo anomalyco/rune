@@ -1,0 +1,1 @@
+- A shown overlay that receives a clipboard reply (a paste, `Tx::read_clipboard` answer, or secret-copy change) now marks itself dirty and steps once on its next drawn frame, instead of advancing the runtime outside draw and stepping again when the frame draws. Hidden and occluded overlays still advance immediately.

@@ -7,6 +7,8 @@
 //! `cargo run -p odometer`; the motion audit records it with
 //! `scripts/motion-audit/scenarios/odometer.json`.
 
+#![forbid(unsafe_code)]
+
 use rune::{AppSpec, Cx, El, Spring, TextStyle, col, el, row, spacer, text};
 use rune_kit::{Button, Kit, RollingText};
 

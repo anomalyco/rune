@@ -21,6 +21,8 @@
 //! // in on_key: if rune_knobs::key(&mut s.knobs, ev) { return true }
 //! ```
 
+#![forbid(unsafe_code)]
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use rune::KeyEvent;
@@ -120,7 +122,7 @@ static NOTES: std::sync::OnceLock<&'static [Note]> = std::sync::OnceLock::new();
 
 /// Sets the app's notes on its knobs, once; later calls are ignored.
 pub fn describe(notes: &'static [Note]) {
-    let _ = NOTES.set(notes);
+    NOTES.set(notes).ok();
 }
 
 fn note(name: &str) -> Option<&'static Note> {
@@ -566,7 +568,7 @@ impl Knobs {
     pub fn random(&mut self, g: &Group) {
         self.checkpoint();
         if self.seed == 0 {
-            self.seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64) | 1;
+            self.seed = rune::time::system_now().duration_since(rune::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64) | 1;
         }
         for k in g.knobs {
             // xorshift64

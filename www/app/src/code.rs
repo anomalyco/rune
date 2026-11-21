@@ -11,7 +11,7 @@ use crate::tokens::*;
 use crate::ui::hairline;
 
 const HELLO: &str = include_str!("../../../examples/hello/src/main.rs");
-const SPRING_TESTS: &str = include_str!("../../../crates/rune-motion/tests/spring.rs");
+const SPRING_TESTS: &str = include_str!("../../../crates/rune-motion/tests/integration/spring.rs");
 
 /// Where a snippet ends.
 #[derive(Clone, Copy)]
@@ -34,7 +34,7 @@ pub struct Snippet {
 pub const HELLO_VIEW: Snippet = Snippet { file: "examples/hello/src/main.rs", source: HELLO, from: "fn view(", end: End::Until("fn main()") };
 pub const HELLO_TEST: Snippet = Snippet { file: "examples/hello/src/main.rs", source: HELLO, from: "    fn a_tap_flips_the_switch", end: End::Brace };
 pub const RETARGET: Snippet = Snippet {
-    file: "crates/rune-motion/tests/spring.rs",
+    file: "crates/rune-motion/tests/integration/spring.rs",
     source: SPRING_TESTS,
     from: "fn animated_value_retargets_keeping_velocity",
     end: End::To("    assert!((a.velocity(0.1) - v1).abs()"),

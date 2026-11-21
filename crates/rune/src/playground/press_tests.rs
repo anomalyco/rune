@@ -57,7 +57,7 @@ fn stage(rt: &Runtime<List>) -> &List {
 #[test]
 fn a_step_presses_a_key_the_stage_hears_as_input() {
     let mut r = Run::new(runtime("Keys/Pressed"), 120.0);
-    let story = r.rt.playground.as_ref().unwrap().selected;
+    let story = r.rt.hooks.playground.as_ref().unwrap().selected;
     // The list's filter has the keyboard, so a person's ↓ would go to the list.
     r.rt.key(Key::Text("/".into()).into());
     r.step();
@@ -71,7 +71,7 @@ fn a_step_presses_a_key_the_stage_hears_as_input() {
     let frame = r.rec.frames - 1;
     assert_eq!(r.rec.inputs.last().map(|i| i.0), Some(frame), "the frame it lands on is input");
     assert_eq!(focused(&r.rt).as_deref(), Some(FILTER), "the filter keeps the keyboard");
-    let p = r.rt.playground.as_ref().unwrap();
+    let p = r.rt.hooks.playground.as_ref().unwrap();
     assert_eq!((p.selected, p.controls.filter.text.as_str()), (story, ""), "neither the list nor its filter took it");
     r.rt.playground_trigger('s');
     assert_eq!(stage(&r.rt).keys[1], (Key::Down, Mods { shift: true, ..Mods::default() }), "with its modifiers, on the step's own frame");

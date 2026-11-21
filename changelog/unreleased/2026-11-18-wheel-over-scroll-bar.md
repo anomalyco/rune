@@ -1,0 +1,1 @@
+- A wheel over a `rune-kit` scroll bar scrolls the viewport the bar follows, on either axis, as Chromium's scrollbar belongs to its scroller: `El::wheel_scrolls` names that viewport for an element drawn beside one, resolved in the element's own place so panes and tables keyed alike each take their own wheel. A press or drag on the bar is unchanged.

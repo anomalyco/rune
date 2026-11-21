@@ -3,6 +3,8 @@
 //! first lays its props over it (`ui.icon("copy", STYLE, { color = ink })`). The standard layout
 //! props (`w`, `pad`, `key`, `label`, ...) apply after the app's build, except the ones it read.
 
+#![allow(unsafe_code)]
+
 use std::cell::Cell;
 use std::os::raw::c_int;
 use std::rc::Rc;

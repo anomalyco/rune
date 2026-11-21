@@ -1,0 +1,46 @@
+[package]
+name = "rune-image"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+description = "Content-addressed image decoding, linear-light mip generation, shelf pixel atlas, SVG/AVIF codecs, and OS app icon rasterization for Rune."
+
+[features]
+default = ["svg"]
+# SVG and SVGZ images (`ImageCache::svg`, `file`, `load_mime`, and `load` on sniffed SVG bytes),
+# and scalable Linux app icons, rasterized by resvg. Off, those images resolve to `Image::error`.
+svg = ["dep:resvg"]
+# AVIF images (`ImageCache::load` on AVIF bytes), decoded natively by rav1d, a Rust port of
+# dav1d; an animated AVIF shows its first frame. Building it for x86 needs NASM on the PATH for
+# rav1d's assembly. Off, AVIF bytes resolve to `Image::error`. No effect on web, where the
+# browser decodes AVIF.
+avif = ["dep:avif-decode"]
+
+[dependencies]
+blake3 = { workspace = true }
+image = { workspace = true, features = ["png"] }
+resvg = { workspace = true, optional = true }
+rune-core = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+avif-decode = { version = "3", optional = true }
+# JPEG, GIF, WebP, BMP and ICO decoding; a web build hands them to the browser's codecs instead.
+image = { workspace = true, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true, features = ["std", "NSGeometry", "NSObject", "NSString", "objc2-core-foundation"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+png = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+
+[lints]
+workspace = true
