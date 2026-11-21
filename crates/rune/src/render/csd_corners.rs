@@ -39,25 +39,25 @@ impl CsdCorners {
             label: Some("rounded corners"),
             source: wgpu::ShaderSource::Wgsl(
                 r#"
-// `square` is the vertex's place in its corner's own square, measured from the arc's centre: the
-// centre is (0, 0), where the arc meets the window's edge (-1, 0), and the window's corner
-// (-1, 1). `radius` is the arc's radius in device pixels, so the fade is one pixel wide whatever
-// the scale.
+// `centre` is the corner arc's centre in device pixels, flat across the corner's square, and
+// `radius` is the arc's radius in device pixels, so the fade is one pixel wide whatever the scale.
+// Measuring from `@builtin(position).xy` uses the rasterizer's exact pixel centre instead of an
+// interpolated quad coordinate that can drift by subpixel ULPs on D3D12.
 struct Vertex {
     @builtin(position) at: vec4<f32>,
-    @location(0) square: vec2<f32>,
+    @location(0) @interpolate(flat) centre: vec2<f32>,
     @location(1) @interpolate(flat) radius: f32,
 };
 
-@vertex fn vs(@location(0) at: vec2<f32>, @location(1) square: vec2<f32>, @location(2) radius: f32) -> Vertex {
-    return Vertex(vec4(at, 0.0, 1.0), square, radius);
+@vertex fn vs(@location(0) at: vec2<f32>, @location(1) centre: vec2<f32>, @location(2) radius: f32) -> Vertex {
+    return Vertex(vec4(at, 0.0, 1.0), centre, radius);
 }
 
 @fragment fn fs(frag: Vertex) -> @location(0) vec4<f32> {
     // How much of this pixel the arc leaves: one inside the content's corner, none outside it, and
     // a pixel's width of fade across the arc itself. `a` is what is cleared, so the target is
     // multiplied by `1 - a`.
-    let distance = length(frag.square) * frag.radius;
+    let distance = length(frag.at.xy - frag.centre);
     let outside = smoothstep(frag.radius - 0.5, frag.radius + 0.5, distance);
     if outside <= 0.0 {
         discard;
@@ -68,8 +68,8 @@ struct Vertex {
                 .into(),
             ),
         });
-        // A vertex is its clip-space position, its place in the corner's square, and the arc's
-        // radius.
+        // A vertex is its clip-space position, its corner arc's centre in device pixels, and the
+        // arc's radius.
         let vertex = std::mem::size_of::<f32>() as wgpu::BufferAddress;
         let stride = 5 * vertex;
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -149,8 +149,8 @@ struct Vertex {
                 vertices.extend_from_slice(&[
                     x / width * 2.0 - 1.0,
                     1.0 - y / height * 2.0,
-                    u,
-                    v,
+                    centre.0,
+                    centre.1,
                     radius,
                 ]);
             }

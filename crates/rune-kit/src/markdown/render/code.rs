@@ -1,8 +1,229 @@
 //! Monospace and fenced blocks: code blocks, syntax spans, diff fences, Mermaid diagrams, and
 //! deeply nested plain tails.
 
+use std::collections::{HashMap, VecDeque};
+use std::hash::Hash;
+
 use super::super::*;
-use super::Renderer;
+use super::{Renderer, hash_of};
+
+type AsciiMetrics = Option<([f32; 95], f32, bool)>;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct OverflowKey {
+    digest: (u64, u64),
+    len: usize,
+    font: u64,
+    avail: u32,
+    epoch: u64,
+}
+
+#[derive(Default)]
+struct OverflowCache {
+    map: HashMap<OverflowKey, bool>,
+    order: VecDeque<OverflowKey>,
+}
+
+impl OverflowCache {
+    const CAP: usize = 256;
+    fn get(&self, key: &OverflowKey) -> Option<bool> {
+        self.map.get(key).copied()
+    }
+    fn insert(&mut self, key: OverflowKey, value: bool) {
+        if self.map.insert(key, value).is_none() {
+            self.order.push_back(key);
+            while self.order.len() > Self::CAP {
+                if let Some(old) = self.order.pop_front() {
+                    self.map.remove(&old);
+                }
+            }
+        }
+    }
+}
+
+thread_local! {
+    static ASCII_METRICS: RefCell<HashMap<u64, AsciiMetrics>> = RefCell::new(HashMap::new());
+    static OVERFLOW_CACHE: RefCell<OverflowCache> = RefCell::new(OverflowCache::default());
+}
+
+/// Cached printable-ASCII advances, widest advance, and `fixed_pitch` for `(font, font_epoch)`,
+/// sourced from `TextSystem::ascii_line` (no global mutex on hit).
+fn ascii_metrics_cached(font: TextStyle, epoch: u64) -> AsciiMetrics {
+    let key = hash_of((font, epoch));
+    if let Some(m) = ASCII_METRICS.with_borrow(|c| c.get(&key).copied()) {
+        return m;
+    }
+    let m = rune::text::ascii_metrics(font);
+    ASCII_METRICS.with_borrow_mut(|c| {
+        if c.len() >= 64 {
+            c.clear();
+        }
+        c.insert(key, m);
+    });
+    m
+}
+
+/// Whether every byte of `s` is printable ASCII (`0x20..0x7f`), eight bytes at a time.
+fn is_printable_ascii(s: &[u8]) -> bool {
+    let (chunks, rem) = s.as_chunks::<8>();
+    for &c in chunks {
+        let w = u64::from_le_bytes(c);
+        let low = w.wrapping_sub(0x2020_2020_2020_2020) & !w;
+        let high = w.wrapping_add(0x0101_0101_0101_0101) | w;
+        if (low | high) & 0x8080_8080_8080_8080 != 0 {
+            return false;
+        }
+    }
+    rem.iter().all(|b| (0x20..0x7f).contains(b))
+}
+
+fn is_printable_ascii_or_tab(s: &[u8]) -> bool {
+    s.iter().all(|&b| (0x20..0x7f).contains(&b) || b == b'\t')
+}
+
+/// Measures one logical code line in points, matching `Renderer::code` (`mono_tab_stops` for
+/// monospace families, `tabbed()`'s 4-column padding for non-monospace).
+fn measure_code_line(line: &str, font: TextStyle, mono_family: bool) -> f32 {
+    if mono_family || !line.contains('\t') {
+        return rune::text::measure(line, &[], font, None).0;
+    }
+    let mut shown = String::with_capacity(line.len() + 16);
+    let mut col = 0usize;
+    for ch in line.chars() {
+        if ch == '\t' {
+            let pad = 3 - (col % 4);
+            shown.push('\t');
+            shown.extend(std::iter::repeat_n(' ', pad));
+            col += pad + 1;
+        } else {
+            shown.push(ch);
+            col += 1;
+        }
+    }
+    rune::text::measure(&shown, &[], font, None).0
+}
+
+fn line_overflows(
+    line: &str,
+    font: TextStyle,
+    avail: f32,
+    ascii: Option<&([f32; 95], f32, bool)>,
+    mono_family: bool,
+    non_ascii_ub: f32,
+) -> bool {
+    let bytes = line.as_bytes();
+    let has_tab = bytes.contains(&b'\t');
+    if let Some(&(ref advance, widest, fixed_pitch)) = ascii {
+        if !has_tab && is_printable_ascii(bytes) {
+            if fixed_pitch {
+                let col_w = advance[0];
+                if col_w > 0.0 {
+                    let est = bytes.len() as f32 * col_w;
+                    if est > avail + col_w {
+                        return true;
+                    }
+                    if est + col_w < avail {
+                        return false;
+                    }
+                }
+                return measure_code_line(line, font, mono_family) > avail;
+            }
+            if bytes.len() as f32 * widest * 1.05 + 2.0 <= avail {
+                return false;
+            }
+            let sum: f32 = bytes.iter().map(|&b| advance[(b - 0x20) as usize]).sum();
+            if sum * 1.05 + 2.0 <= avail {
+                return false;
+            }
+            return measure_code_line(line, font, mono_family) > avail;
+        }
+        if fixed_pitch && mono_family && font.tracking == 0.0 && is_printable_ascii_or_tab(bytes) {
+            let col_w = advance[0];
+            if col_w > 0.0 {
+                let mut cols = 0usize;
+                for &b in bytes {
+                    if b == b'\t' {
+                        cols += 4 - (cols % 4);
+                    } else {
+                        cols += 1;
+                    }
+                }
+                let est = cols as f32 * col_w;
+                if est > avail + col_w {
+                    return true;
+                }
+                if est + col_w < avail {
+                    return false;
+                }
+            }
+            return measure_code_line(line, font, mono_family) > avail;
+        }
+        if !has_tab {
+            let mut ub = 0.0f32;
+            for ch in line.chars() {
+                let u = ch as u32;
+                if (0x20..0x7f).contains(&u) {
+                    ub += advance[(u - 0x20) as usize];
+                } else {
+                    ub += non_ascii_ub;
+                }
+            }
+            if ub * 1.05 + 2.0 <= avail {
+                return false;
+            }
+        }
+    }
+    measure_code_line(line, font, mono_family) > avail
+}
+
+/// Lazily checks whether any unwrapped line of `code` exceeds the code card's inner width at
+/// device `scale`, matching `border_layout()`'s pixel-snapped 0.5 pt border (`device::border`).
+pub(in crate::markdown) fn code_overflows_at(
+    code: &str,
+    digest: Option<(u64, u64)>,
+    font: TextStyle,
+    text_width: Option<f32>,
+    inset: f32,
+    pad_x: f32,
+    scale: f32,
+) -> bool {
+    let Some(text_w) = text_width else { return false };
+    if code.is_empty() {
+        return false;
+    }
+    let s = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+    // Match `rune::runtime::commit::device::border` + `pixel_snap::line_width` for `.border(0.5, ..)`.
+    let border_side = (0.5 * s + 1.0 / 64.0).floor().max(1.0) / s;
+    let avail = text_w - inset - 2.0 * pad_x - 2.0 * border_side;
+    if avail <= 0.0 {
+        return code.bytes().any(|b| b != b'\n' && b != b'\r');
+    }
+    let epoch = rune::text::font_epoch();
+    let digest = digest.unwrap_or_else(|| {
+        let mut h = memo::PairHasher::new();
+        code.hash(&mut h);
+        h.finish128()
+    });
+    let key = OverflowKey { digest, len: code.len(), font: hash_of(font), avail: avail.to_bits(), epoch };
+    if let Some(hit) = OVERFLOW_CACHE.with_borrow(|c| c.get(&key)) {
+        return hit;
+    }
+    let ascii = ascii_metrics_cached(font, epoch);
+    let mono_family = matches!(font.family, Family::Mono | Family::SystemMono);
+    let non_ascii_ub = ascii.map_or(font.size, |(_, widest, _)| widest.max(font.size)) * 2.5;
+    let mut overflows = false;
+    'lines: for raw in code.split('\n') {
+        let trimmed = raw.strip_suffix('\r').unwrap_or(raw);
+        for line in trimmed.split('\r') {
+            if !line.is_empty() && line_overflows(line, font, avail, ascii.as_ref(), mono_family, non_ascii_ub) {
+                overflows = true;
+                break 'lines;
+            }
+        }
+    }
+    OVERFLOW_CACHE.with_borrow_mut(|c| c.insert(key, overflows));
+    overflows
+}
 
 /// Shell languages, which [`MarkdownStyle::shell_code`] styles apart (`markdown.tsx`'s list).
 const SHELLS: [&str; 7] = ["bash", "sh", "shell", "zsh", "fish", "console", "terminal"];
@@ -49,7 +270,18 @@ fn tabbed(code: &str, mut spans: Vec<Span>, mut highlights: Vec<TextHighlight>, 
 }
 
 impl Renderer {
-    pub(in crate::markdown) fn code(&self, code: &str, source: Option<&Source>, map: Option<&SpanMap>) -> El {
+    pub(in crate::markdown) fn wrap_code_default(&self) -> bool {
+        self.code_frame.as_ref().is_some_and(|w| w.wrap_default)
+    }
+
+    pub(in crate::markdown) fn wraps_code(&self, index: usize, code: &str) -> bool {
+        match self.code_frame.as_ref().and_then(|w| w.wrap.as_ref()) {
+            Some(f) => f(index, code),
+            None => self.wrap_code_default(),
+        }
+    }
+
+    pub(in crate::markdown) fn code(&self, code: &str, source: Option<&Source>, map: Option<&SpanMap>, wrapped: bool) -> El {
         let s = &self.s;
         let highlights = self.text_highlights_for(code, map);
         let shell = s.shell.filter(|_| source.and_then(|src| src.lang.as_deref()).is_some_and(|l| SHELLS.iter().any(|sh| l.eq_ignore_ascii_case(sh))));
@@ -60,16 +292,33 @@ impl Renderer {
             None => (s.code_block_fill, s.code_block_border, s.code_text.unwrap_or(s.text)),
         };
         let spans = if shell.is_some() { Vec::new() } else { self.syntax_spans(code, source) };
-        let body = self.with_reveal(tabbed(code, spans, highlights, s.code_block).font(s.code_block).color(ink).by_line()).copy_breaks(2, 2);
+        let body = tabbed(code, spans, highlights, s.code_block).font(s.code_block).color(ink).by_line();
+        // Under `scroll_wide`, unwrapped code sits inside `scroll_x()` with unconstrained width
+        // (`max_width = None`), so `wrap_anywhere().wrap_greedy()` has zero effect while unwrapped
+        // and keeps `shape_key`/`style_key` identical across wrap toggles so already-shaped lines
+        // rebreak in place without reshaping.
+        let body = if wrapped || self.scroll_wide { body.wrap_anywhere().wrap_greedy() } else { body };
+        let body = self.with_reveal(body).copy_breaks(2, 2);
         // `.highlights`' `border: 0.5px` takes its device pixel each side, inside which the padding sits.
         // Code reads left to right in any document, as `markdown.css` isolates it.
         let frame = col().role("code").dir(rune::Direction::Ltr).w_full().radius(6.0).fill(fill).border(0.5, border).border_layout();
         if self.scroll_wide {
-            // The text sizes to its longest line inside the viewport, which scrolls under the
-            // padding so lines run to the frame's edge.
-            let viewport = col().key("scroll").w_full().scroll_x();
-            let viewport = if s.wide_fade > 0.0 { viewport.scroll_edge_fade(s.wide_fade) } else { viewport };
-            return frame.child(viewport.child(col().px(s.code_block_pad[0]).py(s.code_block_pad[1]).child(self.select(body))));
+            // Keep `frame -> scroll -> pad -> body` in both states so toggling wrap keeps `body`'s
+            // `NodeId` (preventing word-reveal replay and selection loss), while leaving the
+            // unwrapped tree identical to `scroll_wide(true)` without wrapping.
+            let viewport = if wrapped {
+                col().key("scroll").w_full()
+            } else {
+                let v = col().key("scroll").w_full().scroll_x();
+                if s.wide_fade > 0.0 { v.scroll_edge_fade(s.wide_fade) } else { v }
+            };
+            let inner = col().px(s.code_block_pad[0]).py(s.code_block_pad[1]);
+            let inner = if wrapped {
+                inner.w_full().child(self.select(body.w_full()))
+            } else {
+                inner.child(self.select(body))
+            };
+            return frame.child(viewport.child(inner));
         }
         frame.px(s.code_block_pad[0]).py(s.code_block_pad[1]).child(self.select(body.w_full()))
     }
@@ -154,10 +403,12 @@ impl Renderer {
             if open && self.streaming && crate::mermaid::may_draw(lines) {
                 return holder();
             }
-            col().w_full().child(self.code(src, source, map).key("source"))
+            // Mermaid source fallback stays unwrapped; wrapping applies to regular code blocks.
+            col().w_full().child(self.code(src, source, map, false).key("source"))
         }
         #[cfg(not(feature = "mermaid"))]
-        self.code(src, source, map)
+        // Mermaid source fallback stays unwrapped; wrapping applies to regular code blocks.
+        self.code(src, source, map, false)
     }
 
     pub(super) fn deep_tail(&self, inl: &Inline, lines: usize, map: &SpanMap) -> El {

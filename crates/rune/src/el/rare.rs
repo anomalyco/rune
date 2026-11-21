@@ -53,6 +53,8 @@ pub(crate) struct ElCold {
     pub(crate) help_cut: bool,
     /// `El::help_side`: the side the tooltip shows on; None for under the element.
     pub(crate) help_side: Option<crate::Side>,
+    /// `El::help_open`: the tooltip shows whatever the pointer does.
+    pub(crate) help_open: bool,
     pub(crate) material: Option<crate::SystemMaterial>,
     /// `El::aspect_fit`'s width over height; 0 when unset.
     pub(crate) aspect_fit: f32,
@@ -99,6 +101,7 @@ impl Empty for ElCold {
         help: None,
         help_cut: false,
         help_side: None,
+        help_open: false,
         material: None,
         aspect_fit: 0.0,
         list_disc: None,

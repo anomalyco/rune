@@ -7,13 +7,14 @@
 
 use super::super::{Kind, MediaSource};
 use crate::native_surface::{ByteFrame, ColorInfo, Format, Matrix, Orient, Transfer};
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::OnceLock;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
 use windows::Win32::System::Variant::VT_I8;
-use windows::core::{GUID, HRESULT, HSTRING, Interface, PCSTR};
+use windows::core::{GUID, HRESULT, HSTRING, Interface, PCSTR, PCWSTR};
 
 /// `MF_VERSION`: `MF_SDK_VERSION << 16 | MF_API_VERSION`.
 const MF_VERSION: u32 = 0x0002_0070;
@@ -24,6 +25,7 @@ type Startup = unsafe extern "system" fn(u32, u32) -> HRESULT;
 type CreateAttributes = unsafe extern "system" fn(*mut *mut core::ffi::c_void, u32) -> HRESULT;
 type CreateMediaType = unsafe extern "system" fn(*mut *mut core::ffi::c_void) -> HRESULT;
 type CreateDeviceManager = unsafe extern "system" fn(*mut u32, *mut *mut core::ffi::c_void) -> HRESULT;
+type CreateFile = unsafe extern "system" fn(MF_FILE_ACCESSMODE, MF_FILE_OPENMODE, MF_FILE_FLAGS, PCWSTR, *mut *mut core::ffi::c_void) -> HRESULT;
 type CreateResolver = unsafe extern "system" fn(*mut *mut core::ffi::c_void) -> HRESULT;
 type CreateReaderFromSource = unsafe extern "system" fn(*mut core::ffi::c_void, *mut core::ffi::c_void, *mut *mut core::ffi::c_void) -> HRESULT;
 
@@ -32,6 +34,7 @@ pub(super) struct Library {
     create_attributes: CreateAttributes,
     create_media_type: CreateMediaType,
     create_device_manager: CreateDeviceManager,
+    create_file: CreateFile,
     create_resolver: CreateResolver,
     create_reader: CreateReaderFromSource,
 }
@@ -54,6 +57,7 @@ fn load() -> Result<Library, String> {
             create_attributes: symbol(plat, c"MFCreateAttributes").ok_or_else(missing)?,
             create_media_type: symbol(plat, c"MFCreateMediaType").ok_or_else(missing)?,
             create_device_manager: symbol(plat, c"MFCreateDXGIDeviceManager").ok_or_else(missing)?,
+            create_file: symbol(plat, c"MFCreateFile").ok_or_else(missing)?,
             create_resolver: symbol(plat, c"MFCreateSourceResolver").ok_or_else(missing)?,
             create_reader: symbol(rw, c"MFCreateSourceReaderFromMediaSource").ok_or_else(missing)?,
         };
@@ -100,18 +104,34 @@ impl Library {
         unsafe { (self.create_device_manager)(&mut token, &mut raw).ok().map_err(|e| e.message())?; Ok((IMFDXGIDeviceManager::from_raw(raw), token)) }
     }
 
-    /// Opens `source` as a media source: the file, or the first bytes of the URL, which say what
-    /// it holds. It needs no GPU, so it runs while the decoders' device comes up.
-    pub(super) fn resolve(&self, source: &MediaSource) -> Result<IMFMediaSource, String> {
-        let url = url(source)?;
+    /// Opens `target` as a media source: a strict local byte stream (bypassing scheme handlers
+    /// and wildcard handler sniffing), or a remote URL whose first bytes say what it holds.
+    /// It needs no GPU, so it runs while the decoders' device comes up.
+    pub(super) fn resolve(&self, target: &Target) -> Result<IMFMediaSource, String> {
         let mut raw = std::ptr::null_mut();
-        // SAFETY: as `attributes`; then a blocking resolve of the URL into an owned object.
+        // SAFETY: as `attributes`; then a blocking resolve into an owned `IMFMediaSource`.
         unsafe {
             (self.create_resolver)(&mut raw).ok().map_err(|e| e.message())?;
             let resolver = IMFSourceResolver::from_raw(raw);
-            let flags = (MF_RESOLUTION_MEDIASOURCE | MF_RESOLUTION_CONTENT_DOES_NOT_HAVE_TO_MATCH_EXTENSION_OR_MIME_TYPE).0 as u32;
             let (mut kind, mut object) = (MF_OBJECT_INVALID, None);
-            resolver.CreateObjectFromURL(&url, flags, None, &mut kind, &mut object).map_err(open_error)?;
+            match target {
+                Target::Local { path, ext } => {
+                    let mut stream_raw = std::ptr::null_mut();
+                    (self.create_file)(MF_ACCESSMODE_READ, MF_OPENMODE_FAIL_IF_NOT_EXIST, MF_FILEFLAGS_NONE, PCWSTR(path.as_ptr()), &mut stream_raw)
+                        .ok()
+                        .map_err(open_error)?;
+                    let stream = IMFByteStream::from_raw(stream_raw);
+                    // Extension-matched byte-stream handler only: no wildcard handler enumeration
+                    // and no process-local plugins; `CreateObjectFromByteStream` skips scheme handlers.
+                    let flags = (MF_RESOLUTION_MEDIASOURCE | MF_RESOLUTION_READ | MF_RESOLUTION_DISABLE_LOCAL_PLUGINS).0 as u32;
+                    let hint = HSTRING::from(format!("local.{ext}"));
+                    resolver.CreateObjectFromByteStream(&stream, &hint, flags, None, &mut kind, &mut object).map_err(open_error)?;
+                }
+                Target::Remote(url) => {
+                    let flags = (MF_RESOLUTION_MEDIASOURCE | MF_RESOLUTION_CONTENT_DOES_NOT_HAVE_TO_MATCH_EXTENSION_OR_MIME_TYPE).0 as u32;
+                    resolver.CreateObjectFromURL(url, flags, None, &mut kind, &mut object).map_err(open_error)?;
+                }
+            }
             object.ok_or("no media source")?.cast::<IMFMediaSource>().map_err(|e| e.message())
         }
     }
@@ -352,18 +372,176 @@ pub(super) fn seek(reader: &IMFSourceReader, seconds: f64) -> Result<(), String>
     }
 }
 
-fn url(source: &MediaSource) -> Result<HSTRING, String> {
-    match source {
-        MediaSource::File(path) => {
-            if !path.exists() {
-                return Err(format!("no such file: {}", path.display()));
+/// Validated media target before Media Foundation loads or touches the network/filesystem.
+pub(super) enum Target {
+    Local { path: HSTRING, ext: String },
+    Remote(HSTRING),
+}
+
+impl Target {
+    pub(super) fn from_source(source: &MediaSource) -> Result<Self, String> {
+        match source {
+            MediaSource::File(path) => {
+                let (path, ext) = validate_local_file(path)?;
+                Ok(Self::Local { path, ext })
             }
-            let path = std::path::absolute(path).unwrap_or_else(|_| path.clone());
-            Ok(HSTRING::from(path.as_os_str()))
+            MediaSource::Url(url) if url.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("file:")) => {
+                let path = parse_file_url(url)?;
+                let (path, ext) = validate_local_file(&path)?;
+                Ok(Self::Local { path, ext })
+            }
+            MediaSource::Url(url) if url.starts_with("http://") || url.starts_with("https://") => Ok(Self::Remote(HSTRING::from(url.as_str()))),
+            MediaSource::Url(url) => Err(format!("unsupported URL: {url}")),
         }
-        MediaSource::Url(url) if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("file:") => Ok(HSTRING::from(url.as_str())),
-        MediaSource::Url(url) => Err(format!("unsupported URL: {url}")),
     }
+}
+
+/// Validates that `path` is a plain local disk file with a direct media container extension
+/// before touching disk or Media Foundation. Refuses UNC shares, Win32/NT device namespaces,
+/// embedded URL schemes, NTFS alternate data streams, reserved DOS device names, trailing
+/// dots/spaces, and shortcut/playlist redirectors (`.url`, `.lnk`, `.asx`, `.m3u8`, etc.).
+fn validate_local_file(path: &Path) -> Result<(HSTRING, String), String> {
+    let raw = path.to_str().ok_or_else(|| format!("unsupported local path: {}", path.display()))?;
+    if raw.is_empty() || raw.chars().any(char::is_control) || raw.contains(['?', '*']) {
+        return Err(format!("unsupported local path: {}", path.display()));
+    }
+    if has_unc_or_device_prefix(raw) || has_unc_or_device_prefix(raw.trim_start()) {
+        return Err(format!("local media must be a plain local file path: {}", path.display()));
+    }
+    if !has_valid_local_colons(raw) {
+        return Err(format!("local media must be a plain local file path: {}", path.display()));
+    }
+    for component in Path::new(raw).components() {
+        match component {
+            Component::Prefix(prefix) if matches!(prefix.kind(), Prefix::Disk(_)) => {}
+            Component::Prefix(_) => return Err(format!("local media must be a plain local file path: {}", path.display())),
+            Component::Normal(seg) => {
+                let Some(seg) = seg.to_str() else {
+                    return Err(format!("unsupported local path: {}", path.display()));
+                };
+                if seg.ends_with(['.', ' ']) || is_dos_device_name(seg) {
+                    return Err(format!("unsupported local path: {}", path.display()));
+                }
+            }
+            Component::RootDir | Component::CurDir | Component::ParentDir => {}
+        }
+    }
+    let ext = local_media_extension(Path::new(raw))
+        .ok_or_else(|| format!("unsupported local media file type: {}", path.display()))?;
+    let abs = std::path::absolute(path).map_err(|e| format!("invalid local path: {e}"))?;
+    let abs_str = abs.to_str().ok_or_else(|| format!("unsupported local path: {}", path.display()))?;
+    let mut abs_components = abs.components();
+    let is_plain_disk = matches!(abs_components.next(), Some(Component::Prefix(p)) if matches!(p.kind(), Prefix::Disk(_)))
+        && matches!(abs_components.next(), Some(Component::RootDir));
+    if !is_plain_disk || has_unc_or_device_prefix(abs_str) || !has_valid_local_colons(abs_str) {
+        return Err(format!("local media must be a plain local file path: {}", path.display()));
+    }
+    let meta = std::fs::metadata(&abs).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => format!("no such file: {}", path.display()),
+        _ => format!("can't open {}: {e}", path.display()),
+    })?;
+    if !meta.is_file() {
+        return Err(format!("not a file: {}", path.display()));
+    }
+    Ok((HSTRING::from(abs.as_os_str()), ext))
+}
+
+fn has_unc_or_device_prefix(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let two_seps = bytes.len() >= 2 && matches!(bytes[0], b'\\' | b'/') && matches!(bytes[1], b'\\' | b'/');
+    let nt_prefix = bytes.len() >= 3
+        && matches!(bytes[0], b'\\' | b'/')
+        && bytes[1] == b'?'
+        && bytes[2] == b'?'
+        && (bytes.len() == 3 || matches!(bytes[3], b'\\' | b'/'));
+    two_seps || nt_prefix
+}
+
+/// Only a single leading drive letter (`X:\` or `X:/`) may contain `:`; any other `:` indicates
+/// a URL scheme (`http:`, `file:`, `mms:`, `rtsp:`), a drive-relative path, or an NTFS ADS.
+fn has_valid_local_colons(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut colons = bytes.iter().enumerate().filter_map(|(i, &b)| (b == b':').then_some(i));
+    let Some(first) = colons.next() else { return true };
+    if colons.next().is_some() {
+        return false;
+    }
+    first == 1 && bytes[0].is_ascii_alphabetic() && matches!(bytes.get(2), Some(b'\\' | b'/'))
+}
+
+fn is_dos_device_name(segment: &str) -> bool {
+    let stem = segment.split('.').next().unwrap_or(segment).trim_end_matches(' ');
+    matches!(
+        stem.to_ascii_uppercase().as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" | "CLOCK$"
+            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
+            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+    ) || matches!(
+        stem,
+        "COM¹" | "COM²" | "COM³" | "LPT¹" | "LPT²" | "LPT³"
+            | "com¹" | "com²" | "com³" | "lpt¹" | "lpt²" | "lpt³"
+    )
+}
+
+/// Direct self-contained media container extensions accepted for local files on Windows.
+/// Redirectors, shortcuts, and playlists (`.url`, `.lnk`, `.asx`, `.wax`, `.wvx`, `.wmx`, `.wpl`,
+/// `.m3u`, `.m3u8`, `.pls`, `.qtl`, `.ram`, `.smil`, `.smi`, `.sami`, `.nsc`, `.xspf`, `.mpd`,
+/// `.ism`, `.isml`, `.f4m`, `.sdp`) are refused before touching Media Foundation.
+fn local_media_extension(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    let ext = name.rsplit_once('.')?.1.to_ascii_lowercase();
+    matches!(
+        ext.as_str(),
+        "mp4" | "m4v" | "mp4v" | "mov" | "webm" | "mkv" | "mk3d" | "avi" | "wmv"
+            | "mpg" | "mpeg" | "mp2v" | "m2t" | "m2ts" | "mts" | "ts" | "tts" | "vob" | "mod" | "tod"
+            | "3gp" | "3g2" | "3gp2" | "3gpp" | "uvu" | "ogv"
+            | "mp3" | "mpa" | "m4a" | "aac" | "adt" | "adts" | "ac3" | "ec3" | "amr"
+            | "wav" | "aif" | "aiff" | "flac" | "ogg" | "oga" | "opus" | "mka" | "weba" | "wma"
+    )
+    .then_some(ext)
+}
+
+/// Converts a local `file:///X:/...` or `file://localhost/X:/...` URL to a local Windows path,
+/// refusing remote hosts, UNC escapes, queries, fragments, and malformed percent escapes.
+fn parse_file_url(url: &str) -> Result<PathBuf, String> {
+    let rest = url
+        .get(..7)
+        .filter(|p| p.eq_ignore_ascii_case("file://"))
+        .map(|_| &url[7..])
+        .ok_or_else(|| format!("unsupported file URL: {url}"))?;
+    let after_host = if let Some(s) = rest.strip_prefix('/') {
+        s
+    } else if rest.get(..10).is_some_and(|p| p.eq_ignore_ascii_case("localhost/")) {
+        &rest[10..]
+    } else {
+        return Err(format!("remote file URL isn't supported: {url}"));
+    };
+    if after_host.starts_with(['/', '\\']) || after_host.contains(['?', '#']) {
+        return Err(format!("unsupported file URL: {url}"));
+    }
+    let decoded = percent_decode(after_host).ok_or_else(|| format!("invalid file URL encoding: {url}"))?;
+    if decoded.starts_with(['/', '\\']) {
+        return Err(format!("remote file URL isn't supported: {url}"));
+    }
+    Ok(PathBuf::from(decoded.replace('/', "\\")))
+}
+
+fn percent_decode(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hi = (*bytes.get(i + 1)? as char).to_digit(16)? as u8;
+            let lo = (*bytes.get(i + 2)? as char).to_digit(16)? as u8;
+            out.push((hi << 4) | lo);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 /// One read: the stream it came from, its flags, its time in seconds and the sample, if any.

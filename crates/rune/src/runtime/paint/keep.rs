@@ -555,7 +555,7 @@ impl RuntimeCore {
 }
 
 #[path = "cycle.rs"]
-mod cycle;
+pub(super) mod cycle;
 #[path = "slide.rs"]
 mod slide;
 
@@ -582,7 +582,7 @@ fn static_ok(n: &Node) -> bool {
         && n.vis.backdrop_blur <= 0.0 && n.vis.effect.is_none() && n.vis.pixels.is_none()
         && n.sticky.is_none() && n.above.is_none() && n.matched.is_none()
         && n.static_scale == 1.0 && !n.scale_track && n.vis.mark == 0
-        && n.text.as_ref().is_none_or(|t| t.cold.links.is_empty() && t.cold.live.is_none() && t.cold.advance_in.is_none() && t.reveal < 0.0)
+        && n.text.as_ref().is_none_or(|t| t.cold.links.is_empty() && t.cold.live.is_none() && t.cold.advance_in.is_none())
 }
 
 /// What the runtime holds for a node besides it: selection, marks, reveals, loops, scales
@@ -590,7 +590,7 @@ fn static_ok(n: &Node) -> bool {
 fn dynamic_ok(rt: &RuntimeCore, i: usize, sel: &[(usize, usize, usize)], marks: &[(usize, usize, usize)]) -> bool {
     let id = rt.tree.nodes[i].id;
     !sel.iter().any(|r| r.0 == i) && !marks.iter().any(|r| r.0 == i)
-        && !rt.motion.has_reveal(id)
+        && !rt.motion.reveal_fading(id)
         && !rt.motion.has_loop(id)
         && (rt.paint.static_scales.is_empty() || !rt.paint.static_scales.contains_key(&id))
         && rt.paint.row_mask[i] < 0.0

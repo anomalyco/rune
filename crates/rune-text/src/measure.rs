@@ -21,6 +21,14 @@ pub fn primary_extents(style: TextStyle) -> Option<(f32, f32)> {
     with_text(|t| t.primary_extents(style.family, style.weight, style.italic))
 }
 
+/// Printable-ASCII (`0x20..0x7f`) glyph advances in points at `scale = 1.0`, the widest advance,
+/// and whether the resolved font face is fixed-pitch; `None` if printable ASCII spans more than
+/// one font face. Reuses the lent window `TextSystem`'s cached `AsciiLine`.
+#[doc(hidden)]
+pub fn ascii_metrics(style: TextStyle) -> Option<([f32; 95], f32, bool)> {
+    with_text(|t| t.ascii_line(style, 1.0, false).map(|a| (a.advance, a.widest, a.fixed_pitch)))
+}
+
 struct Fonts {
     /// Bumped by any change, of fonts or families.
     generation: u64,
@@ -33,6 +41,9 @@ struct Fonts {
 }
 
 static FONTS: Mutex<Option<Fonts>> = Mutex::new(None);
+/// Lock-free mirror of the global (non-overridden) font epoch so [`font_epoch`] never acquires
+/// `FONTS` on the render hot path.
+static GLOBAL_EPOCH: AtomicU64 = AtomicU64::new(0);
 static SCOPES: AtomicU64 = AtomicU64::new(1);
 
 /// Layouts kept between evictions (each eviction keeps those used since the one before).
@@ -90,7 +101,14 @@ fn with_state<R>(f: impl FnOnce(&mut Option<Fonts>) -> R) -> R {
             r
         }
         None => match FONTS.lock() {
-            Ok(mut slot) => f(&mut slot),
+            Ok(mut slot) => {
+                let before = slot.as_ref().map(epoch_of);
+                let r = f(&mut slot);
+                if let Some(after) = slot.as_ref().map(epoch_of) && Some(after) != before {
+                    GLOBAL_EPOCH.store(after, Ordering::Release);
+                }
+                r
+            }
             Err(_) => f(&mut None),
         },
     }
@@ -142,7 +160,10 @@ pub(crate) fn note_families(sans: &str, mono: &str) {
 /// Under a [`with_families`] guard it is a different number from the one outside, so a cache
 /// keyed on it never mixes the scoped families with the others.
 pub fn font_epoch() -> u64 {
-    with_state(|f| f.as_ref().map(epoch_of)).unwrap_or(0)
+    OVERRIDE.with_borrow(|o| match o {
+        Some(f) => epoch_of(f),
+        None => GLOBAL_EPOCH.load(Ordering::Acquire),
+    })
 }
 
 fn epoch_of(f: &Fonts) -> u64 {

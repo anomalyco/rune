@@ -52,6 +52,8 @@ pub(crate) struct NodeCold {
     pub(crate) help_cut: bool,
     /// `El::help_side`.
     pub(super) help_side: Option<crate::Side>,
+    /// `El::help_open`.
+    pub(super) help_open: bool,
     #[cfg(debug_assertions)]
     pub(super) scroll_source: Option<&'static std::panic::Location<'static>>,
 }
@@ -84,6 +86,7 @@ impl crate::cold::Empty for NodeCold {
         help: None,
         help_cut: false,
         help_side: None,
+        help_open: false,
         #[cfg(debug_assertions)]
         scroll_source: None,
     };
@@ -268,8 +271,9 @@ impl AnimSource {
     pub const LIVE: u16 = 256;
     pub const VIRTUAL_FILL: u16 = 512;
     pub const TEXT_FILL: u16 = 1024;
-    pub const NAMES: [&'static str; 11] =
-        ["tracks", "growth", "scroll", "reveal", "loop", "scale-settle", "video", "text-flight", "live", "virtual-fill", "text-fill"];
+    pub const ICON_ANIM: u16 = 2048;
+    pub const NAMES: [&'static str; 12] =
+        ["tracks", "growth", "scroll", "reveal", "loop", "scale-settle", "video", "text-flight", "live", "virtual-fill", "text-fill", "icon-anim"];
 
     pub fn names(bits: u16) -> Vec<&'static str> {
         Self::NAMES.iter().enumerate().filter(|(i, _)| bits & (1 << i) != 0).map(|(_, n)| *n).collect()

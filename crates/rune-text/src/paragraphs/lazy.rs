@@ -31,7 +31,7 @@ pub(crate) struct Lazy {
 pub struct AsciiLine {
     pub advance: [f32; 95],
     /// The widest character's advance: a line this many times its length that fits needs no sum.
-    pub(super) widest: f32,
+    pub(crate) widest: f32,
     pub height: f32,
     /// True when every printable ASCII character has the same advance (a fixed-pitch face).
     pub fixed_pitch: bool,
@@ -148,7 +148,7 @@ impl TextSystem {
 
     /// Printable ASCII in `style` at `scale`, measured once: None when its characters don't all
     /// come from one font, whose one line is then not every ASCII line's.
-    pub(super) fn ascii_line(&mut self, style: TextStyle, scale: f32, wrap_anywhere: bool) -> Option<Rc<AsciiLine>> {
+    pub(crate) fn ascii_line(&mut self, style: TextStyle, scale: f32, wrap_anywhere: bool) -> Option<Rc<AsciiLine>> {
         let key = {
             let mut h = hash::KeyHasher::default();
             (hash::text_hash("", &[], style, scale, None), wrap_anywhere).hash(&mut h);

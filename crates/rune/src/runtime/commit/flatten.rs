@@ -356,7 +356,7 @@ fn needs_node_cold(c: &crate::el::ElCold, meta: &ColdMeta) -> bool {
         || c.above.is_some() || c.growth.is_some() || c.sticky.is_some()
         || c.trace_name.is_some() || c.looping.is_some() || c.opacity_motion.is_some()
         || c.lead.is_some() || c.glide.is_some() || c.material.is_some()
-        || c.help_cut || c.help_side.is_some()
+        || c.help_cut || c.help_side.is_some() || c.help_open
         || c.scroll_axes != crate::el::ScrollAxes::Y
         || c.scroll_edges != crate::el::ScrollEdges::default()
         || c.a11y != crate::el::A11y::default();
@@ -373,7 +373,7 @@ fn node_cold_meta_only(meta: ColdMeta) -> NodeCold {
         transition: None, matched: None, above: None, scroll: None, scroll_axes: crate::el::ScrollAxes::Y,
         scroll_edges: crate::el::ScrollEdges::default(), wheel_scrolls: None, sticky: None, growth: None, glide: None,
         a11y: crate::el::A11y::EMPTY, pixel_aspect: meta.pixel_aspect, aspect_fit: meta.aspect_fit,
-        material: None, help: None, help_cut: false, help_side: None,
+        material: None, help: None, help_cut: false, help_side: None, help_open: false,
         #[cfg(debug_assertions)]
         scroll_source: None,
     }
@@ -445,7 +445,7 @@ macro_rules! node_cold_from {
             sticky: take_field!($mode, $c.sticky), growth: take_field!($mode, $c.growth),
             glide: $c.glide, a11y: take_field!($mode, $c.a11y),
             pixel_aspect: $m.pixel_aspect, aspect_fit: $m.aspect_fit, material: $c.material,
-            help: take_field!($mode, $c.help), help_cut: $c.help_cut, help_side: $c.help_side,
+            help: take_field!($mode, $c.help), help_cut: $c.help_cut, help_side: $c.help_side, help_open: $c.help_open,
             #[cfg(debug_assertions)]
             scroll_source: $c.scroll_source,
         }

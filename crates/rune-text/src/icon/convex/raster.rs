@@ -48,11 +48,20 @@ pub(super) fn gradient(pts: &[[f32; 2]], tri: [usize; 3], a: impl Fn(usize) -> f
 pub(super) fn rasterize(pts: &[[f32; 2]], indices: &[usize], origin: [f32; 2], px: u32, out: &mut [u8], shade: impl Fn([usize; 3], [f64; 3]) -> f32) {
     let n = px as usize;
     let mut acc = vec![0f32; n * n];
-    // Fixed point, 8 bits of subpixel.
-    let snap = |i: usize| [((pts[i][0] - origin[0]) * 256.0).round() as i64, ((pts[i][1] - origin[1]) * 256.0).round() as i64];
+    // Fixed point, 8 bits of subpixel; guard extreme coordinates before integer conversion so
+    // hostile geometry can never overflow fixed-point edge math.
+    const MAX_DEV_COORD: f32 = 32_768.0;
+    let snap = |i: usize| -> Option<[i64; 2]> {
+        let x = pts[i][0] - origin[0];
+        let y = pts[i][1] - origin[1];
+        if !(x.is_finite() && y.is_finite()) || x.abs() > MAX_DEV_COORD || y.abs() > MAX_DEV_COORD {
+            return None;
+        }
+        Some([(x * 256.0).round() as i64, (y * 256.0).round() as i64])
+    };
     for t in indices.as_chunks::<3>().0 {
         let mut tri = [t[0], t[1], t[2]];
-        let (mut a, mut b, c) = (snap(tri[0]), snap(tri[1]), snap(tri[2]));
+        let (Some(mut a), Some(mut b), Some(c)) = (snap(tri[0]), snap(tri[1]), snap(tri[2])) else { continue };
         let mut area = edge(a, b, c);
         if area == 0 {
             continue;
@@ -86,13 +95,15 @@ pub(super) fn rasterize(pts: &[[f32; 2]], indices: &[usize], origin: [f32; 2], p
 }
 
 /// Twice the signed area of `a b p`: positive with `p` right of `a → b` on a y-down screen.
-fn edge(a: [i64; 2], b: [i64; 2], p: [i64; 2]) -> i64 {
-    (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+fn edge(a: [i64; 2], b: [i64; 2], p: [i64; 2]) -> i128 {
+    let (dx1, dy1) = ((b[0] - a[0]) as i128, (b[1] - a[1]) as i128);
+    let (dx2, dy2) = ((p[0] - a[0]) as i128, (p[1] - a[1]) as i128);
+    dx1 * dy2 - dy1 * dx2
 }
 
 /// Inside the edge `a → b`, or on it where it's a top edge (flat, running right) or a left one
 /// (running up).
-fn inside(w: i64, a: [i64; 2], b: [i64; 2]) -> bool {
+fn inside(w: i128, a: [i64; 2], b: [i64; 2]) -> bool {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     w > 0 || (w == 0 && ((dy == 0 && dx > 0) || dy < 0))
 }

@@ -25,6 +25,8 @@ pub struct HelpLook {
     /// `None`: the runtime's `help_delay`.
     pub(crate) delay: Option<f64>,
     pub(crate) skip: f64,
+    /// The keyboard focusing a help element shows its tooltip at once (`HelpLook::on_focus`).
+    pub(crate) on_focus: bool,
     /// Seconds the tooltip fades in and out (`HelpLook::fade`); 0 shows or hides at once.
     pub(crate) fade: [f64; 2],
     /// The scale it fades in from and out to.
@@ -75,6 +77,7 @@ impl HelpLook {
             margin: 4.0,
             delay: None,
             skip: 0.0,
+            on_focus: false,
             fade: [0.0; 2],
             fade_scale: 1.0,
             shadows: [None; SHADOWS],
@@ -161,6 +164,13 @@ impl HelpLook {
     /// a web tooltip's `skipDelayDuration` does when the pointer moves along a toolbar.
     pub fn skip_delay(mut self, secs: f64) -> Self {
         self.skip = secs.max(0.0);
+        self
+    }
+    /// The keyboard moving focus onto a help element (a Tab, an arrow) shows its tooltip at once,
+    /// with no delay, as a web tooltip opens on `focus`; a press that focuses it doesn't. The
+    /// pointer resting on another help element shows that one instead. Off by default.
+    pub fn on_focus(mut self, on: bool) -> Self {
+        self.on_focus = on;
         self
     }
     /// The tooltip fades in over `enter` seconds (ease-out) and out over `exit` (ease-in),

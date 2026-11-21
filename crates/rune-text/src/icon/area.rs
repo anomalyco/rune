@@ -285,9 +285,15 @@ fn inside_quad(quad: &[Point; 4], q: Point) -> f32 {
 /// curves approximated for the device scale, then mapped to device pixels).
 pub(super) fn render_aaa(shape: &Shape<'_>, pen: Option<&Pen>, fill: Fill, ctm: Transform, origin: Point, px: u32, out: &mut [u8]) {
     out.iter_mut().for_each(|b| *b = 0);
+    if !super::ctm_is_safe(ctm) {
+        return;
+    }
     let shape_in = shape;
     let ts = tiny_skia_path::Transform::from_row(ctm.xx, ctm.xy, ctm.yx, ctm.yy, ctm.x, ctm.y);
     let res = tiny_skia_path::PathStroker::compute_resolution_scale(&ts);
+    if !res.is_finite() || res <= 0.0 || res > 256.0 {
+        return;
+    }
     let Some(user) = skia_path(shape, 0.25 / res) else { return };
     let shape = match pen {
         Some(p) => {
@@ -341,8 +347,24 @@ pub(super) fn render_aaa(shape: &Shape<'_>, pen: Option<&Pen>, fill: Fill, ctm: 
     });
     let (l, t) = corners.iter().fold((f32::MAX, f32::MAX), |(l, t), p| (l.min(p.x), t.min(p.y)));
     let (r, btm) = corners.iter().fold((f32::MIN, f32::MIN), |(r, b), p| (r.max(p.x), b.max(p.y)));
+    if !(l.is_finite() && t.is_finite() && r.is_finite() && btm.is_finite()) {
+        return;
+    }
+    let (cx0, cy0) = (ctm.x.floor(), ctm.y.floor());
+    let limit = px as f32 + 2.0;
+    if cx0 + r < -2.0 || cx0 + l > limit || cy0 + btm < -2.0 || cy0 + t > limit {
+        return;
+    }
     let (dx, dy) = (l.floor(), t.floor());
-    let (w, h) = ((r.ceil() - dx) as usize + 2, (btm.ceil() - dy) as usize + 2);
+    let (span_w, span_h) = (r.ceil() - dx, btm.ceil() - dy);
+    let max_dim = (px as usize).saturating_mul(4).clamp(256, 2048);
+    if !(span_w.is_finite() && span_h.is_finite()) || span_w < 0.0 || span_h < 0.0 {
+        return;
+    }
+    let (w, h) = (span_w as usize + 2, span_h as usize + 2);
+    if w > max_dim || h > max_dim || w.saturating_mul(h) > 1024 * 1024 {
+        return;
+    }
     let pad = 1.0;
     let Some(device) = outline.transform(frac.post_translate(pad - dx, pad - dy)) else { return };
     let mut mask = vec![0u8; w * h];

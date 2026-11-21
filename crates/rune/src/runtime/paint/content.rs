@@ -187,7 +187,39 @@ impl RuntimeCore {
             // the sub-pixel path below.
             let resting = cover.is_none() && scale_motion == ScaleMotion::Still && !gliding && turn == 0.0 && (sc - 1.0).abs() < 1e-5;
             let exact = w_exact.min(h_exact);
-            if resting && exact > 1e-4 && !self.text.is_color_icon(ic) {
+            let kind = self.text.icon_kind(ic);
+            if kind == crate::text::IconKind::AnimatedMono && !self.reduced_motion && drawn > 1e-4 {
+                let (canvas, scale_side, at, draw_side) = if resting && exact > 1e-4 {
+                    let canvas = (exact - 1.0 / 64.0).ceil().max(1.0) as u32;
+                    let at = [on_grid(r_exact[0] + (w_exact - exact) * 0.5, contain[0]), on_grid(r_exact[1] + (h_exact - exact) * 0.5, contain[1])];
+                    (canvas, exact, at, canvas as f32)
+                } else {
+                    (px, px as f32, pos, drawn)
+                };
+                if !paint_animated_icon(
+                    &mut self.text,
+                    &mut self.paint,
+                    &mut self.instances,
+                    self.frame.live.visible(),
+                    self.t,
+                    self.time_scale,
+                    n.id,
+                    ic,
+                    (canvas, scale_side),
+                    at,
+                    draw_side,
+                    turn,
+                    facing,
+                    color,
+                    o,
+                    srgb,
+                    clip,
+                    fade,
+                ) && let Some(q) = self.text.icon_quad_sized(ic, (canvas, scale_side), at, facing)
+                {
+                    self.push_icon(icon_inst(&q, at, draw_side, turn, premul(color, o, srgb), clip, fade));
+                }
+            } else if resting && exact > 1e-4 && kind != crate::text::IconKind::Color {
                 let canvas = (exact - 1.0 / 64.0).ceil().max(1.0) as u32;
                 let at = [on_grid(r_exact[0] + (w_exact - exact) * 0.5, contain[0]), on_grid(r_exact[1] + (h_exact - exact) * 0.5, contain[1])];
                 if let Some(q) = self.text.icon_quad_sized(ic, (canvas, exact), at, facing) {
@@ -196,7 +228,7 @@ impl RuntimeCore {
             // An icon that paints its own colours draws as its image (or its silhouette in
             // `color`, `El::icon_one_color`), upright, faded only by the
             // element's opacity and its colour's alpha.
-            } else if drawn > 1e-4 && let Some(pixels) = self.text.color_icon(ic, px, color, n.vis.icon_one_color) {
+            } else if kind == crate::text::IconKind::Color && drawn > 1e-4 && let Some(pixels) = self.text.color_icon(ic, px, color, n.vis.icon_one_color) {
                 if let Some(image) = self.images.place(pixels, [drawn, drawn]) {
                     self.instances.push(Instance {
                         rect: [pos[0], pos[1], drawn, drawn],
@@ -501,11 +533,25 @@ impl RuntimeCore {
                 ];
                 let drawn = px as f32 * tk;
                 let px_r = (px as f32 * raster).round().max(1.0) as u32;
-                if let Some(q) = self.text.icon_quad(icon, px_r, at) {
-                    let inst = icon_inst(&q, at, drawn, 0.0, premul(pill_fg, o, srgb), clip, fade);
-                    if self.paint.paint_rank.is_some() && inst.uv[2] > 0.0 { self.paint.icon_aprons.push(apron_key(&inst)); }
-                    self.instances.push(inst);
-                }
+                paint_inline_icon(
+                    &mut self.text,
+                    &mut self.paint,
+                    &mut self.instances,
+                    self.reduced_motion,
+                    self.frame.live.visible(),
+                    self.t,
+                    self.time_scale,
+                    n.id,
+                    icon,
+                    px_r,
+                    drawn,
+                    at,
+                    pill_fg,
+                    o,
+                    srgb,
+                    clip,
+                    fade,
+                );
             }
             for (pill, at, px) in bare_all {
                 let Some(b) = pill.bare.as_deref() else { continue };
@@ -539,11 +585,25 @@ impl RuntimeCore {
                 }
                 let Some(icon) = pill.icon else { continue };
                 let px_r = (px * raster).round().max(1.0) as u32;
-                if let Some(q) = self.text.icon_quad(icon, px_r, at) {
-                    let inst = icon_inst(&q, at, drawn, 0.0, premul(pill.fg.unwrap_or(color), o, srgb), clip, fade);
-                    if self.paint.paint_rank.is_some() && inst.uv[2] > 0.0 { self.paint.icon_aprons.push(apron_key(&inst)); }
-                    self.instances.push(inst);
-                }
+                paint_inline_icon(
+                    &mut self.text,
+                    &mut self.paint,
+                    &mut self.instances,
+                    self.reduced_motion,
+                    self.frame.live.visible(),
+                    self.t,
+                    self.time_scale,
+                    n.id,
+                    icon,
+                    px_r,
+                    drawn,
+                    at,
+                    pill.fg.unwrap_or(color),
+                    o,
+                    srgb,
+                    clip,
+                    fade,
+                );
             }
             if spec.selectable && n.input.is_none() {
                 // A mark keeps the active selection's highlight, whatever the window's focus, and
@@ -794,4 +854,120 @@ impl RuntimeCore {
             }
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_inline_icon(
+    text: &mut TextSystem,
+    paint: &mut state::PaintState,
+    instances: &mut Vec<Instance>,
+    reduced_motion: bool,
+    live_visible: bool,
+    t: f64,
+    time_scale: f32,
+    node_id: NodeId,
+    icon: &'static crate::text::Icon,
+    px: u32,
+    drawn: f32,
+    at: [f32; 2],
+    fg: Color,
+    o: f32,
+    srgb: bool,
+    clip: [f32; 4],
+    fade: [f32; 4],
+) {
+    if !reduced_motion
+        && text.icon_kind(icon) == crate::text::IconKind::AnimatedMono
+        && paint_animated_icon(text, paint, instances, live_visible, t, time_scale, node_id, icon, (px, px as f32), at, drawn, 0.0, crate::text::Facing::Upright, fg, o, srgb, clip, fade)
+    {
+        return;
+    }
+    if let Some(q) = text.icon_quad(icon, px, at) {
+        let inst = icon_inst(&q, at, drawn, 0.0, premul(fg, o, srgb), clip, fade);
+        if paint.paint_rank.is_some() && inst.uv[2] > 0.0 { paint.icon_aprons.push(apron_key(&inst)); }
+        instances.push(inst);
+    }
+}
+
+/// Paints a monochrome animated icon via its double-buffered glyph-atlas tile pair, gating wakes
+/// on visibility (`live_visible`), non-zero alpha (`> 1/255`), and active state. Returns `false`
+/// when the caller should fall back to the static `t = 0` quad.
+#[allow(clippy::too_many_arguments)]
+fn paint_animated_icon(
+    text: &mut TextSystem,
+    paint: &mut state::PaintState,
+    instances: &mut Vec<Instance>,
+    live_visible: bool,
+    t: f64,
+    time_scale: f32,
+    node_id: NodeId,
+    ic: &'static crate::text::Icon,
+    sized: (u32, f32),
+    at: [f32; 2],
+    draw_side: f32,
+    turn: f32,
+    facing: crate::text::Facing,
+    color: Color,
+    o: f32,
+    srgb: bool,
+    clip: [f32; 4],
+    fade: [f32; 4],
+) -> bool {
+    const ALPHA_MIN: f32 = 1.0 / 255.0;
+    if o <= ALPHA_MIN || color.a <= ALPHA_MIN {
+        return false;
+    }
+    let mount_t = if text.icon_anim_is_finite(ic) {
+        paint.get_or_insert_icon_mount(node_id, ic as *const crate::text::Icon as usize, t)
+    } else {
+        0.0
+    };
+    // Occluded, minimised, or hidden windows must not rasterize or keep the frame loop awake
+    // (`loop_sleep.rs:153`), but still report `animated_icons_shown` so Windows occlusion polling
+    // (`look.rs:88`) wakes when uncovered.
+    if !live_visible {
+        if text.icon_anim_live(ic, t, mount_t) {
+            paint.animated_icons_shown = true;
+            paint.node_animated_icon = true;
+        }
+        return false;
+    }
+    let Some(anim) = text.animated_icon_quad(ic, sized, at, facing, t, mount_t, node_id.0) else {
+        return false;
+    };
+    match anim.state {
+        crate::text::AnimState::Moving => {
+            paint.animated_icons_shown = true;
+            paint.node_animated_icon = true;
+            if time_scale > 0.0 {
+                paint.animated_icons = true;
+            }
+        }
+        crate::text::AnimState::WaitingUntil(wake_at) => {
+            paint.animated_icons_shown = true;
+            paint.node_animated_icon = true;
+            if time_scale > 0.0 {
+                paint.note_icon_anim_wake(wake_at);
+            }
+        }
+        crate::text::AnimState::Finished => {}
+    }
+    let inst = icon_inst(&anim.quad, at, draw_side, turn, premul(color, o, srgb), clip, fade);
+    let slot_index = instances.len();
+    if paint.paint_rank.is_some() && inst.uv[2] > 0.0 { paint.icon_aprons.push(apron_key(&inst)); }
+    if !matches!(anim.state, crate::text::AnimState::Finished) {
+        paint.keep.cycles.record_icon(super::keep::cycle::IconSlot {
+            at: slot_index,
+            node_id,
+            ic,
+            sized,
+            origin: at,
+            draw_side,
+            turn,
+            facing,
+            rect: inst.rect,
+        });
+    }
+    instances.push(inst);
+    true
 }

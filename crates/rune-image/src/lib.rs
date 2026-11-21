@@ -183,6 +183,11 @@ const INLINE_RGBA_PIXELS: u64 = 64 * 64;
 /// decode: an app that makes a cache per feature, or shows no image, pays no thread for it.
 /// The caller starts one; that one starts the others, so the first image (often in a window's
 /// first frame) costs its thread one spawn, not four.
+/// Each worker reserves `WORKER_STACK`: `MAX_SVG_DEPTH` (512 nested SVG containers, ~2.3 MiB in
+/// `usvg` + `resvg` on an LTO build) leaves > 5.5 MiB of headroom. Address space only.
+#[cfg(not(target_arch = "wasm32"))]
+const WORKER_STACK: usize = 8 * 1024 * 1024;
+
 #[cfg(not(target_arch = "wasm32"))]
 fn decoders() -> &'static mpsc::Sender<Job> {
     static JOBS: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
@@ -192,10 +197,10 @@ fn decoders() -> &'static mpsc::Sender<Job> {
         let receive = Arc::new(Mutex::new(receive));
         let count = DECODERS.min(std::thread::available_parallelism().map_or(1, |n| n.get()));
         let first = receive.clone();
-        std::thread::Builder::new().name("rune-images".into()).spawn(move || {
+        std::thread::Builder::new().name("rune-images".into()).stack_size(WORKER_STACK).spawn(move || {
             for _ in 1..count {
                 let receive = receive.clone();
-                std::thread::Builder::new().name("rune-images".into()).spawn(move || decode_jobs(&receive)).ok();
+                std::thread::Builder::new().name("rune-images".into()).stack_size(WORKER_STACK).spawn(move || decode_jobs(&receive)).ok();
             }
             decode_jobs(&first);
         }).expect("image worker");
@@ -457,10 +462,111 @@ fn svg_options() -> resvg::usvg::Options<'static> {
     }
 }
 
+/// Maximum nested XML container elements inside an SVG's root element (513 open elements in all,
+/// matching Blink's 512-element HTML/SVG tree bound; Chromium's standalone XML limit of 5,000
+/// exceeds both `usvg`'s 1,024 node cap and a worker stack at ~4.5 KiB per `<g>`).
+#[cfg(feature = "svg")]
+const MAX_SVG_DEPTH: usize = 512;
+
 #[cfg(feature = "svg")]
 fn svg_tree(bytes: &[u8]) -> Result<resvg::usvg::Tree, ImageError> {
-    if bytes.len() > 32 << 20 { return Err(ImageError("SVG is too large".into())); }
-    resvg::usvg::Tree::from_data(bytes, &svg_options()).map_err(|e| ImageError(format!("SVG: {e}")))
+    use resvg::usvg;
+    const MAX_BYTES: usize = 32 << 20;
+    if bytes.len() > MAX_BYTES { return Err(ImageError("SVG is too large".into())); }
+    let unzipped;
+    let raw = if bytes.starts_with(&[0x1f, 0x8b]) {
+        unzipped = usvg::decompress_svgz(bytes).map_err(|e| ImageError(format!("SVG: {e}")))?;
+        if unzipped.len() > MAX_BYTES { return Err(ImageError("SVG is too large".into())); }
+        unzipped.as_slice()
+    } else {
+        bytes
+    };
+    let text = std::str::from_utf8(raw).map_err(|_| ImageError("SVG is not UTF-8".into()))?;
+    if svg_exceeds_depth(text, MAX_SVG_DEPTH) {
+        return Err(ImageError(format!("SVG exceeds maximum nesting depth of {MAX_SVG_DEPTH}")));
+    }
+    usvg::Tree::from_str(text, &svg_options()).map_err(|e| ImageError(format!("SVG: {e}")))
+}
+
+/// Iterative byte scan for open XML element depth, run before `roxmltree` so deeply nested input
+/// cannot overflow the decoder stack inside the XML parser or `usvg`/`resvg`.
+#[cfg(feature = "svg")]
+fn svg_exceeds_depth(text: &str, max_nested: usize) -> bool {
+    let b = text.as_bytes();
+    let limit = max_nested + 1;
+    let (mut i, mut depth) = (0usize, 0usize);
+    while i < b.len() {
+        let Some(rel) = b[i..].iter().position(|&c| c == b'<') else { return false };
+        i += rel;
+        if b[i..].starts_with(b"<!--") {
+            i += 4;
+            let Some(end) = b[i..].windows(3).position(|w| w == b"-->") else { return false };
+            i += end + 3;
+        } else if b[i..].starts_with(b"<![CDATA[") {
+            i += 9;
+            let Some(end) = b[i..].windows(3).position(|w| w == b"]]>") else { return false };
+            i += end + 3;
+        } else if b[i..].starts_with(b"<?") {
+            i += 2;
+            let Some(end) = b[i..].windows(2).position(|w| w == b"?>") else { return false };
+            i += end + 2;
+        } else if b[i..].starts_with(b"<!") {
+            i += 2;
+            let (mut decl, mut quote) = (1usize, 0u8);
+            while i < b.len() && decl > 0 {
+                let c = b[i];
+                if quote != 0 {
+                    if c == quote { quote = 0; }
+                } else if c == b'"' || c == b'\'' {
+                    quote = c;
+                } else if c == b'<' {
+                    decl += 1;
+                } else if c == b'>' {
+                    decl -= 1;
+                }
+                i += 1;
+            }
+        } else if b[i..].starts_with(b"</") {
+            i += 2;
+            depth = depth.saturating_sub(1);
+            let mut quote = 0u8;
+            while i < b.len() {
+                let c = b[i];
+                i += 1;
+                if quote != 0 {
+                    if c == quote { quote = 0; }
+                } else if c == b'"' || c == b'\'' {
+                    quote = c;
+                } else if c == b'>' {
+                    break;
+                }
+            }
+        } else {
+            i += 1;
+            let (mut quote, mut last_non_ws, mut closed) = (0u8, 0u8, false);
+            while i < b.len() {
+                let c = b[i];
+                i += 1;
+                if quote != 0 {
+                    if c == quote { quote = 0; }
+                } else if c == b'"' || c == b'\'' {
+                    quote = c;
+                    last_non_ws = c;
+                } else if c == b'>' {
+                    closed = true;
+                    break;
+                } else if !c.is_ascii_whitespace() {
+                    last_non_ws = c;
+                }
+            }
+            if !closed { return false; }
+            if last_non_ws != b'/' {
+                depth += 1;
+                if depth > limit { return true; }
+            }
+        }
+    }
+    false
 }
 
 #[cfg(feature = "svg")]

@@ -19,6 +19,17 @@ pub(crate) enum Modality {
     Keyboard,
 }
 
+/// How focus came to the element that has it: by the keys (a Tab, an arrow in a group, `Tx::focus`
+/// with a ring), or otherwise (a press, a hand-over without a ring, nothing focused). A field's
+/// keyboard-entry ring follows it, not [`Modality`]: an arrow typed in a field a click focused
+/// doesn't make it the keys' (`El::focus_visible_within_ring`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Entry {
+    #[default]
+    Other,
+    Keys,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Focus {
     /// Nothing has focus. Tab starts from `from` (the element last focused, or pressed without
@@ -45,6 +56,9 @@ pub(crate) enum FocusEvent {
     Hover(bool),
     /// A key that navigates (Tab, an arrow): focus shows from now on.
     Navigated,
+    /// The window came to the front again with focus where it was: that isn't the keys moving
+    /// focus there.
+    WindowReturned,
     /// A pointer press, or a key on a highlight the user couldn't see: focus stops showing.
     Pointed,
     /// A press on content that takes no focus: Tab goes on from there.
@@ -68,6 +82,7 @@ pub(crate) enum FocusEffect {
 pub(crate) struct FocusState {
     pub(crate) focus: Focus,
     pub(crate) modality: Modality,
+    pub(crate) entry: Entry,
     /// Per landmark (by path), the element focused last inside it, most recent first: where F6
     /// lands when it comes back to that pane.
     scopes: Vec<(String, String)>,
@@ -89,6 +104,9 @@ impl FocusState {
     pub(crate) fn is(&self, path: &str) -> bool { self.path() == Some(path) }
 
     pub(crate) fn keyboard(&self) -> bool { self.modality == Modality::Keyboard }
+
+    /// The keys put focus where it is.
+    pub(crate) fn entered_by_keys(&self) -> bool { self.entry == Entry::Keys }
 
     /// The pointer lit the focused row.
     pub(crate) fn hovered(&self) -> bool { matches!(self.focus, Focus::On { hovered: true, .. }) }
@@ -134,6 +152,7 @@ impl FocusState {
         match event {
             FocusEvent::Set { path, keyboard } => {
                 self.modality = if keyboard { Modality::Keyboard } else { Modality::Pointer };
+                self.entry = if keyboard && path.is_some() { Entry::Keys } else { Entry::Other };
                 let moved = self.path() != path.as_deref();
                 self.focus = match (std::mem::take(&mut self.focus), path) {
                     (Focus::On { path: old, hovered, .. }, Some(path)) if old == path => Focus::On { path, hovered, from: None },
@@ -149,6 +168,10 @@ impl FocusState {
             }
             FocusEvent::Navigated => {
                 self.modality = Modality::Keyboard;
+                Effects::none()
+            }
+            FocusEvent::WindowReturned => {
+                self.entry = Entry::Other;
                 Effects::none()
             }
             FocusEvent::Pointed => {
