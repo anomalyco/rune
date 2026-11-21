@@ -109,6 +109,9 @@ pub struct VisualCold {
     pub(crate) paint_contain: Option<[f32; 2]>,
     /// `El::motion_snaps`: while it moves, it and its subtree snap every frame.
     pub(crate) motion_snaps: bool,
+    /// `El::hairline`: scales its thin axis by half around its midpoint at paint time, matching
+    /// CSS `height: 1px; transform: scaleY(0.5)` across DPI scales.
+    pub(crate) hairline: bool,
     /// `El::offset`: a visual shift in points.
     pub(crate) offset: [f32; 2],
     /// Static alpha of this element's own paint; never inherited or isolated.
@@ -176,6 +179,7 @@ impl Empty for VisualCold {
         press_color: None,
         paint_contain: None,
         motion_snaps: false,
+        hairline: false,
         offset: [0.0; 2],
         paint_alpha: 1.0,
         layer_opacity: 1.0,
