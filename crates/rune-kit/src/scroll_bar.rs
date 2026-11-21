@@ -373,6 +373,9 @@ struct Bar {
     near: Cell<bool>,
     /// The pointer is over the track.
     over: Cell<bool>,
+    /// The pointer is over the bar's own area (kept while content fits, so an area-revealed bar
+    /// shows as soon as the content overflows, as CSS `:hover::-webkit-scrollbar-thumb` does).
+    inside: Cell<bool>,
     /// The pointer is over the element marked [`ScrollBar::scroll_bar_hover`].
     target: Cell<bool>,
     /// The style the last view built the bar with; `None` until the first.
@@ -407,6 +410,7 @@ fn kept(area: &str) -> Rc<Bar> {
                     press: Cell::new(Grip::Idle),
                     near: Cell::new(false),
                     over: Cell::new(false),
+                    inside: Cell::new(false),
                     target: Cell::new(false),
                     style: Cell::new(None),
                     last_now: Cell::new(0.0),
@@ -651,9 +655,11 @@ impl Bar {
         self.reveal(|| self.near.set(near));
     }
 
-    /// Shown while the pointer is near its edge or over its hover target.
+    /// Shown while the pointer is near its edge, over its hover target, or over an area-revealed
+    /// bar's own area.
     fn revealed(&self) -> bool {
-        self.near.get() || self.target.get()
+        let t = self.style().track;
+        self.near.get() || self.target.get() || (self.inside.get() && t.area_reveals && !t.targeted && !t.scroll_only)
     }
 
     /// Runs `change`, then holds the bar up or lets it go if that showed or hid it.
@@ -665,6 +671,19 @@ impl Bar {
             (true, false) => self.let_go(),
             _ => {}
         }
+    }
+
+    /// The pointer entered or left the bar's own area.
+    fn area_hover(&self, inside: bool) {
+        if !inside && self.over.replace(false) {
+            self.widen();
+        }
+        self.reveal(|| {
+            self.inside.set(inside);
+            if !inside {
+                self.near.set(false);
+            }
+        });
     }
 
     /// The pointer entered or left the element marked [`ScrollBar::scroll_bar_hover`].
@@ -806,9 +825,7 @@ fn attach(style: ScrollBarStyle, area: &str, key: &str, outer: El, viewport: El)
         })
         .on_hover_change_any(move |inside, tx| {
             tx.live_only();
-            if !inside {
-                left.point(None);
-            }
+            left.area_hover(inside);
         })
         .child(viewport.chain_scroll_offset(move |at| watch.follow(at, overlay)))
         .child(track)
