@@ -246,6 +246,12 @@ pub struct Kit {
     /// Invalid inputs also paint their text, placeholder and caret in `c.danger.fg`
     /// (`@opencode/ui`'s look). Otherwise only the outline turns `danger`.
     pub invalid_text: bool,
+    /// The system contrast theme's highlight while one paints the window (CSS
+    /// `forced-colors: active`). Fields then draw their edge as a border in `c.text_base` (2
+    /// points and dashed when invalid) and focus as a 2 point ring in this colour, 2 out, so
+    /// rest, focus and invalid stay apart in the theme's few colours (`text-input.css`,
+    /// opencode#65100).
+    pub forced: Option<Color>,
 }
 
 impl Kit {

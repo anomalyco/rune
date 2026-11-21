@@ -1,0 +1,1 @@
+- Kit: `Kit::forced` (a contrast theme's highlight): text fields then draw a border in the text colour (2 pt dashed when invalid) and focus as a 2 pt highlight ring, 2 out, so rest, focus and invalid stay apart.
