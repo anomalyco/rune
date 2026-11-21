@@ -147,6 +147,12 @@ pub fn take_frame_phases() -> [f64; 2 * PHASES] {
 #[cfg(feature = "frame-profile")]
 pub fn thread_cpu_ms() -> f64 { cpu_ms().unwrap_or(0.0) }
 
+/// This thread's own CPU time in nanoseconds: its cycles on Windows (`QueryThreadCycleTime`),
+/// `CLOCK_THREAD_CPUTIME_ID` elsewhere. It stands still while the thread waits or the system
+/// runs something else, so a budget kept on it charges only work the thread did. `None` where
+/// there is no such clock (the browser).
+pub fn thread_cpu_ns() -> Option<f64> { cpu_ms().map(|ms| ms * 1e6) }
+
 /// Without `frame-profile`, a phase is timed only for `RUNE_COMMIT_BUDGET_MS`
 /// (`perf_warn::budget`) and in a frame interaction timing follows (`tooling::interaction`),
 /// and otherwise costs a cached flag and a thread-local one.

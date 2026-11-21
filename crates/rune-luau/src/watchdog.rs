@@ -1,7 +1,14 @@
-//! The watchdog: every entry into a VM gets a deadline (250 ms by default), and Luau's interrupt
-//! safepoints (loop back edges, calls) raise an error once it passes, so `while true do end`
-//! stops that script without touching the rest of the app. The check reads the clock every 256
-//! safepoints, which keeps it off the profile of ordinary code.
+//! The watchdog: every entry into a VM gets a budget (250 ms by default) of the thread's own CPU
+//! time, and Luau's interrupt safepoints (loop back edges, calls) raise an error once it is spent,
+//! so `while true do end` stops that script without touching the rest of the app. The check reads
+//! the clocks every 256 safepoints, which keeps it off the profile of ordinary code.
+//!
+//! CPU time, not the wall clock: on a loaded machine the thread may wait for a CPU, and a host call
+//! may wait on the disk or another thread, for longer than the budget, and neither is the script's
+//! doing. A wall-clock deadline charged that time to the script and stopped plugins that ran fine
+//! (a plugin's start-up dying while a build ran, 22 Nov). A wall-clock backstop of
+//! [`WALL_BACKSTOP`] budgets still bounds an entry that a starved CPU stretches out. Where the
+//! thread has no CPU clock (the browser) the budget is wall time, as before.
 
 #![allow(unsafe_code)]
 
@@ -14,8 +21,18 @@ use rune::time::Instant;
 
 use crate::error::WATCHDOG;
 
+/// The wall-clock bound on one entry, in budgets.
+const WALL_BACKSTOP: u32 = 20;
+
+#[derive(Clone, Copy)]
+struct Deadline {
+    /// The thread's CPU time (ns) at which the budget is spent; `None` without a CPU clock.
+    cpu: Option<f64>,
+    wall: Instant,
+}
+
 thread_local! {
-    static DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) };
+    static DEADLINE: Cell<Option<Deadline>> = const { Cell::new(None) };
     static TICKS: Cell<u32> = const { Cell::new(0) };
 }
 
@@ -26,12 +43,14 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     // interrupt slot is a plain function pointer mlua leaves unset.
     unsafe { lua.exec_raw::<()>((), |state| (*ffi::lua_callbacks(state)).interrupt = Some(interrupt)) }
 }
-/// Arms the deadline for one entry into a VM, unless an outer entry already did; dropping the
+/// Arms the budget for one entry into a VM, unless an outer entry already did; dropping the
 /// guard disarms what it armed.
 pub(crate) fn arm(limit: Duration) -> Armed {
     let outer = DEADLINE.get().is_some();
     if !outer {
-        DEADLINE.set(Some(rune::time::now() + limit));
+        let cpu = rune::thread_cpu_ns().map(|now| now + limit.as_nanos() as f64);
+        let wall = rune::time::now() + if cpu.is_some() { limit * WALL_BACKSTOP } else { limit };
+        DEADLINE.set(Some(Deadline { cpu, wall }));
     }
     Armed(!outer)
 }
@@ -46,6 +65,11 @@ impl Drop for Armed {
     }
 }
 
+/// Whether deadline `d` has passed: its CPU budget spent, or its wall-clock bound.
+fn spent(d: Deadline) -> bool {
+    d.cpu.is_some_and(|cpu| rune::thread_cpu_ns().is_some_and(|now| now >= cpu)) || rune::time::now() >= d.wall
+}
+
 unsafe extern "C-unwind" fn interrupt(state: *mut ffi::lua_State, gc: c_int) {
     if gc >= 0 {
         return;
@@ -57,7 +81,7 @@ unsafe extern "C-unwind" fn interrupt(state: *mut ffi::lua_State, gc: c_int) {
     }
     // The deadline stays set past the first error, so a script that catches it with `pcall`
     // gets it again at the next check, until control is back in the host.
-    if DEADLINE.get().is_some_and(|d| rune::time::now() >= d) {
+    if DEADLINE.get().is_some_and(spent) {
         // SAFETY: raised at a safepoint inside a protected call that this crate made; no Rust
         // frame with destructors lies between here and that call.
         unsafe { ffi::luaL_error(state, c"%s".as_ptr(), WATCHDOG_C.as_ptr()) }
