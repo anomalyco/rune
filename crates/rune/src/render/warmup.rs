@@ -169,6 +169,7 @@ impl Renderer {
         }
         let Renderer {
             surfaces: _,
+            fade_stops: _,
             surfaces_building,
             pipeline,
             format,
