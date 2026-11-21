@@ -7,7 +7,21 @@ publish = false
 description = "Per-frame GPU uploads through reused staging memory, shared by Rune's renderers."
 
 [dependencies]
-wgpu = { version = "30", default-features = false, features = ["std"] }
+wgpu = { workspace = true, features = ["std", "parking_lot", "wgsl"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, features = ["webgpu"] }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+wgpu = { workspace = true, features = ["metal", "custom"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { workspace = true, features = ["dx12"] }
+# `health::removed` asks D3D12 (`GetDeviceRemovedReason`).
+windows = { workspace = true, features = ["Win32_Graphics_Direct3D12"] }
+
+[target.'cfg(all(not(target_vendor = "apple"), not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
+wgpu = { workspace = true, features = ["vulkan"] }
 
 [lints]
 workspace = true

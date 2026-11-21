@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use rune::time::Instant;
+use rune::time::now;
 use rune_luau::mlua::Value;
 use rune_luau::{Data, ErrorKind, Script, ScriptOptions, Sources};
 
@@ -27,7 +27,7 @@ fn check(name: &'static str, ok: bool, detail: impl Into<String>) -> Check {
 /// `while true do end` stops at the 250 ms limit with a timeout, and the script keeps working.
 fn watchdog() -> Check {
     let script = Script::new("spin", Sources::single("return { spin = function() while true do end end, ok = function() return 1 end }"));
-    let start = Instant::now();
+    let start = now();
     let err = script.query("spin", []).err();
     let took = start.elapsed();
     let still = script.query("ok", []).ok().and_then(|d| d.as_i64());

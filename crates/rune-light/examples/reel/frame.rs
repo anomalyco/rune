@@ -286,7 +286,7 @@ impl Reel {
         if bench && ts_glass > 0.0 {
             if let Some((_, _, read)) = &ctx.query {
                 let s = read.slice(..);
-                s.map_async(wgpu::MapMode::Read, |r| r.unwrap());
+                s.map_async(wgpu::MapMode::Read, |_| {});
                 ctx.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
                 let ticks: Vec<u64> = bytemuck::cast_slice(&s.get_mapped_range().unwrap()).to_vec();
                 read.unmap();

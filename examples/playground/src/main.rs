@@ -9,6 +9,8 @@
 //! the playground at that story, and `-- --snap out.png --playground` renders it headless;
 //! `--variant "Long names"` beside `--playground "Many devices"` picks a variant.
 
+#![forbid(unsafe_code)]
+
 use std::time::Duration;
 
 use rune::tok::{self, Theme, motion, radius, type_};

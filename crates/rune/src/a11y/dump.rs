@@ -39,7 +39,7 @@ fn super_root(update: &TreeUpdate) -> NodeId {
 impl Tree<'_> {
     fn node(&self, id: NodeId, origin: [f64; 2], root: bool) -> Option<Value> {
         let n = *self.nodes.get(&id.0)?;
-        if n.role() == Role::TextRun && !self.runs { return None; }
+        if (n.role() == Role::TextRun || matches!(n.class_name(), Some("\x1frune-lines" | "\x1frune-line"))) && !self.runs { return None; }
         // The root's transform scales points to pixels; below it, offsets are points.
         let origin = match n.transform().filter(|_| !root) {
             Some(t) => { let c = t.as_coeffs(); [origin[0] + c[4], origin[1] + c[5]] }

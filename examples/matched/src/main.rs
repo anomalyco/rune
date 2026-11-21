@@ -7,6 +7,8 @@
 //! cargo run -p matched -- --script examples/matched/scripts/zoom.json --frames 240 --out frames
 //! ```
 
+#![forbid(unsafe_code)]
+
 use rune::tok::{self, type_};
 use rune::{AppSpec, Color, Cx, El, Key, KeyEvent, Pixels, SurfaceFit, TextStyle, Transition, Tx, col, el, row, text};
 

@@ -17,10 +17,10 @@ fn items(enabled: bool, checked: bool) -> Vec<MenuItem<State>> {
         MenuItem::new("Dock Quick Panel", fired).id("dock").dock()]
 }
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn native_status() {
-    use objc2::{msg_send, sel};
+    use objc2::{MainThreadMarker, msg_send, sel};
     use objc2_app_kit::{NSApplication, NSMenu};
-    use objc2_foundation::MainThreadMarker;
     // SAFETY: Invoked through AppHandle::update on the app thread; menus are retained.
     unsafe {
         let app = NSApplication::sharedApplication(MainThreadMarker::new().unwrap());
@@ -41,7 +41,7 @@ fn native_status() {
         let delegate: *mut objc2::runtime::AnyObject = msg_send![&*app, delegate];
         let responds: bool = msg_send![delegate, respondsToSelector: sel!(applicationDockMenu:)];
         assert!(responds);
-        let dock: Option<objc2::rc::Retained<NSMenu>> = objc2::msg_send_id![delegate, applicationDockMenu: &*app];
+        let dock: Option<objc2::rc::Retained<NSMenu>> = msg_send![delegate, applicationDockMenu: &*app];
         println!("DOCK items={}", dock.map_or(0, |m| m.numberOfItems()));
         println!("DEFAULTS preserved");
     }

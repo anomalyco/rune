@@ -38,8 +38,7 @@ impl DropPointer {
         {
             let view = crate::platform::macos::content_view(window)?;
             let ns = view.window()?;
-            // SAFETY: hosts run on AppKit's main thread.
-            let p = view.convertPoint_fromView(unsafe { ns.mouseLocationOutsideOfEventStream() }, None);
+            let p = view.convertPoint_fromView(ns.mouseLocationOutsideOfEventStream(), None);
             let y = if view.isFlipped() { p.y } else { view.bounds().size.height - p.y };
             return Some((p.x as f32, y as f32));
         }

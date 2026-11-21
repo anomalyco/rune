@@ -6,17 +6,17 @@ fn window_frame_requests_take_the_change_spring() {
     let mut rt = Runtime::new((), |_: &(), _: &mut Cx<()>| el(), (100.0, 100.0), Env::new(true, 1.0));
     let spring = |rt: &mut Runtime<()>, f: fn(&mut Tx)| {
         rt.update(move |_, tx| f(tx));
-        rt.window_frame.take().unwrap().spring
+        rt.host.window_frame.take().unwrap().spring
     };
-    assert_eq!(spring(&mut rt, |tx| tx.resize_window((1.0, 2.0))), Some(motion::DEFAULT));
-    assert_eq!(spring(&mut rt, |tx| { tx.motion(motion::SNAP); tx.resize_window((1.0, 2.0)) }), Some(motion::SNAP));
+    assert_eq!(spring(&mut rt, |tx| tx.resize_window((1.0, 2.0))), Some(crate::tok::motion::DEFAULT));
+    assert_eq!(spring(&mut rt, |tx| { tx.motion(crate::tok::motion::SNAP); tx.resize_window((1.0, 2.0)) }), Some(crate::tok::motion::SNAP));
     assert_eq!(spring(&mut rt, |tx| { tx.instant(); tx.resize_window((1.0, 2.0)) }), None);
     assert_eq!(spring(&mut rt, |tx| tx.resize_window_instant((1.0, 2.0))), None);
     rt.set_system_reduced_motion(true);
     rt.frame(0.0);
     assert_eq!(spring(&mut rt, |tx| tx.resize_window((1.0, 2.0))), None);
     rt.update(|_, tx| { tx.resize_window((1.0, 2.0)); tx.center_window(); });
-    let request = rt.window_frame.take().unwrap();
+    let request = rt.host.window_frame.take().unwrap();
     assert_eq!((request.size, request.center), (Some((1.0, 2.0)), true));
 }
 
@@ -37,7 +37,7 @@ fn a_window_resize_step_keeps_springs_and_flights_going() {
         rt.frame(0.0);
         rt.update(|grown, tx| { *grown = true; tx.resize_window((300.0, 600.0)) });
         rt.frame(1.0 / 60.0);
-        rt.window_frame.take();
+        rt.host.window_frame.take();
         if user { rt.set_viewport((300.0, 450.0), 1.0) } else { rt.step_viewport((300.0, 450.0), 1.0) }
         rt.frame(1.0 / 60.0);
         rt
@@ -57,19 +57,19 @@ fn a_window_resize_step_keeps_springs_and_flights_going() {
 fn a_window_that_fits_its_content_refits_after_a_user_resize() {
     fn view(_: &(), _: &mut Cx<()>) -> El { col().key("root").w_full().child(el().size(100.0, 90.0)) }
     let mut rt = Runtime::new((), view, (300.0, 400.0), Env::new(true, 1.0));
-    rt.fit_height = true;
+    rt.host.fit_height = true;
     let height = rt.content_height();
     rt.set_viewport((300.0, height), 1.0);
     rt.frame(0.0);
-    rt.window_frame.take();
+    rt.host.window_frame.take();
     // Mid-move, the window's own frame changes aren't a user's resize.
     rt.set_viewport((300.0, height + 40.0), 1.0);
     rt.frame(1.0 / 60.0);
-    assert!(rt.window_frame.take().is_none());
-    rt.window_resting = true;
+    assert!(rt.host.window_frame.take().is_none());
+    rt.host.window_resting = true;
     rt.set_viewport((300.0, height + 100.0), 1.0);
     rt.frame(1.0 / 60.0);
-    assert_eq!(rt.window_frame.take().and_then(|r| r.size), Some((300.0, height)));
+    assert_eq!(rt.host.window_frame.take().and_then(|r| r.size), Some((300.0, height)));
 }
 
 /// A window that fits its content, and grew while hidden, learns its new height before it
@@ -80,11 +80,11 @@ fn a_hidden_window_that_fits_its_content_learns_its_height_before_it_shows() {
         col().key("root").w_full().children((0..s.0).map(|_| el().size(100.0, 40.0)))
     }
     let mut rt = Runtime::new((1, false), view, (300.0, 400.0), Env::new(true, 1.0));
-    rt.fit_height = true;
+    rt.host.fit_height = true;
     let height = rt.content_height();
     rt.set_viewport((300.0, height), 1.0);
     rt.frame(0.0);
-    rt.window_frame.take();
+    rt.host.window_frame.take();
     assert!(!rt.build_for_show(), "unchanged, the last frame still shows it");
     rt.poll = Some(|s: &mut (usize, bool), _, _: &mut Tx| {
         if !std::mem::take(&mut s.1) { return false; }
@@ -94,15 +94,15 @@ fn a_hidden_window_that_fits_its_content_learns_its_height_before_it_shows() {
     rt.state.1 = true;
     let commits = rt.stats.commits;
     assert!(rt.poll_hidden());
-    assert!(rt.window_frame.is_none() && rt.stats.commits == commits, "hidden, nothing builds yet");
+    assert!(rt.host.window_frame.is_none() && rt.stats.commits == commits, "hidden, nothing builds yet");
     assert!(rt.build_for_show());
-    let request = rt.window_frame.take().expect("the new height, before the window shows");
+    let request = rt.host.window_frame.take().expect("the new height, before the window shows");
     assert_eq!(request.size, Some((300.0, 80.0)));
     assert!(!request.animate, "it opens at that height");
     rt.set_viewport((300.0, 80.0), 1.0);
     rt.frame(0.0);
     assert_eq!(rt.stats.commits, commits + 1, "the first frame shown has nothing left to build");
-    assert!(rt.window_frame.is_none());
+    assert!(rt.host.window_frame.is_none());
 }
 
 #[test]
@@ -124,10 +124,10 @@ fn timed_wakes_are_exact_coalesced_and_do_not_commit_or_animate() {
     let mut rt = Runtime::new(Vec::new(), view, (100.0, 100.0), Env::new(true, 1.0));
     rt.poll = Some(poll);
     assert!(!rt.frame(0.0));
-    assert_eq!(rt.wake_deadlines, [0.25, 0.375]);
+    assert_eq!(rt.frame.wake_deadlines(), [0.25, 0.375]);
     assert!(!rt.frame(0.5));
     assert_eq!(rt.state, [0.0, 0.25, 0.375, 0.5]);
-    assert_eq!(rt.commits, 1);
+    assert_eq!(rt.commit.commits, 1);
     assert_eq!(rt.wake_deadline(), None);
     assert!((rt.t - 0.05).abs() < 1e-8);
 }
@@ -152,7 +152,7 @@ fn wakes_a_poll_keeps_asking_for_collapse_to_one_poll_a_frame() {
             rt.frame(1.0 / 60.0);
             assert_eq!(rt.state.0, 1, "delay {delay}: frame {frame} polled {} times", rt.state.0);
         }
-        assert!(rt.wake_deadlines.len() <= 32, "delay {delay}: {} deadlines pending", rt.wake_deadlines.len());
+        assert!(rt.frame.wake_deadlines().len() <= 32, "delay {delay}: {} deadlines pending", rt.frame.wake_deadlines().len());
     }
 }
 

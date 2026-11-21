@@ -222,6 +222,24 @@ impl ConfiguredWindowOptions {
     }
 }
 
+/// Forward per-window `App<S>` builder methods onto `WindowSpec<S>` so new builders don't drift.
+macro_rules! forward_app_builders {
+    ($(
+        $(#[$meta:meta])*
+        $name:ident $(=> $target:ident)? ($($arg:ident : $ty:ty),* $(,)?)
+    );* $(;)?) => {
+        $(
+            $(#[$meta])*
+            pub fn $name(mut self, $($arg: $ty),*) -> Self {
+                self.app = forward_app_builders!(@call self.app, $name $(, $target)?, ($($arg),*));
+                self
+            }
+        )*
+    };
+    (@call $app:expr, $name:ident, ($($arg:ident),*)) => { $app.$name($($arg),*) };
+    (@call $app:expr, $_name:ident, $target:ident, ($($arg:ident),*)) => { $app.$target($($arg),*) };
+}
+
 /// One independent retained tree and app state. Share Live handles or application services
 /// between states; events, focus, animation clocks and redraws remain window-local.
 pub struct WindowSpec<S: 'static> {
@@ -232,7 +250,7 @@ pub struct WindowSpec<S: 'static> {
     pub on_created: Option<Box<dyn FnOnce(crate::window::WindowHandle)>>,
 }
 
-impl<S> WindowSpec<S> {
+impl<S: 'static> WindowSpec<S> {
     pub fn new(key: impl Into<String>, app: AppSpec<S>) -> Self {
         Self::from_app(key, App::new(app))
     }
@@ -246,43 +264,74 @@ impl<S> WindowSpec<S> {
     pub fn from_app(key: impl Into<String>, app: App<S>) -> Self {
         Self { key: key.into(), options: app.window_options.clone(), app, on_created: None }
     }
-    /// Configure this window's frame, including headless traffic-light placement.
-    pub fn chrome(mut self, chrome: crate::Chrome) -> Self { self.app = self.app.chrome(chrome); self }
-    /// This window draws its own titlebar, like `App::titlebar`.
-    pub fn titlebar(mut self, titlebar: crate::Titlebar) -> Self { self.app = self.app.titlebar(titlebar); self }
-    /// Composite this window's translucent fills, blurs, shadows, images and video in sRGB
-    /// (gamma) space instead of linear light, matching CSS and Core Animation. With a
-    /// `Compositor`, `Frame::srgb_blend` says which encoding its passes must match.
-    pub fn srgb_blend(mut self, enabled: bool) -> Self { self.app = self.app.srgb_blend(enabled); self }
-    /// This window's font smoothing (`App::font_smoothing`).
-    pub fn font_smoothing(mut self, mode: crate::FontSmoothing) -> Self { self.app = self.app.font_smoothing(mode); self }
-    pub fn on_focus(mut self, f: fn(&mut S, bool, &mut crate::Tx)) -> Self { self.app = self.app.on_focus(f); self }
-    pub fn on_modifiers(mut self, f: fn(&mut S, crate::Mods, &mut crate::Tx)) -> Self { self.app = self.app.on_modifiers(f); self }
-    /// This window going off screen and back, like `App::on_visibility`.
-    pub fn on_visibility(mut self, f: fn(&mut S, bool, &mut crate::Tx)) -> Self { self.app = self.app.on_visibility(f); self }
-    /// This window's editor's input method events, like `App::on_ime`.
-    pub fn on_ime(mut self, f: fn(&mut S, &crate::Ime, &mut crate::Tx) -> bool) -> Self { self.app = self.app.on_ime(f); self }
-    /// This window's playground, like `App::playground`.
-    pub fn playground(mut self, playground: crate::Playground<S>) -> Self { self.app = self.app.playground(playground); self }
-    /// Runs in this window when the app starts to quit, like `App::on_quit`.
-    pub fn on_quit(mut self, f: fn(&mut S, &mut crate::Tx)) -> Self { self.app = self.app.on_quit(f); self }
-    /// Runs when the app is reopened, like `App::on_reopen`.
-    pub fn on_reopen(mut self, f: fn(&mut S, bool, &mut crate::Tx) -> bool) -> Self { self.app = self.app.on_reopen(f); self }
-    /// Receives links opened with the app, like `App::on_open_url`.
-    pub fn on_open_url(mut self, f: fn(&mut S, &str, &mut crate::Tx)) -> Self { self.app = self.app.on_open_url(f); self }
-    /// Send `Key::Modifier` presses and releases to this window, like `App::modifier_keys`.
-    pub fn modifier_keys(mut self) -> Self { self.app = self.app.modifier_keys(); self }
-    /// Tab visits every focusable control in this window, like `App::tab_visits_controls`.
-    pub fn tab_visits_controls(mut self, on: bool) -> Self { self.app = self.app.tab_visits_controls(on); self }
-    /// Called on the event thread after the first frame is ready, once per native creation.
-    pub fn on_ready(mut self, f: impl FnMut(&crate::WindowHandle) + 'static) -> Self {
-        self.app = self.app.on_ready(f); self
+    forward_app_builders! {
+        /// Configure this window's frame, including headless traffic-light placement.
+        chrome(chrome: crate::Chrome);
+        /// This window draws its own titlebar, like `App::titlebar`.
+        titlebar(titlebar: crate::Titlebar);
+        /// Composite this window's translucent fills, blurs, shadows, images and video in sRGB
+        /// (gamma) space instead of linear light, matching CSS and Core Animation. With a
+        /// `Compositor`, `Frame::srgb_blend` says which encoding its passes must match.
+        srgb_blend(enabled: bool);
+        /// This window's font smoothing (`App::font_smoothing`).
+        font_smoothing(mode: crate::FontSmoothing);
+        /// Size this window's height to its content, like `App::fit_content_height`.
+        fit_content_height();
+        /// Ask a tiling window manager to float this window when it opens, like `App::float_on_open`.
+        float_on_open();
+        /// Open this window without taking focus from the window that has it, such as a window a
+        /// tab is dragged into while the press stays with its strip. A later `open` or `focus`
+        /// activates it.
+        inactive => open_inactive();
+        /// Open this window maximized, like `App::maximized`.
+        maximized(maximized: bool);
+        /// Open this window full screen, like `App::full_screen`.
+        full_screen(full_screen: bool);
+        /// Send `Key::Modifier` presses and releases to this window, like `App::modifier_keys`.
+        modifier_keys();
+        /// Tab visits every focusable control in this window, like `App::tab_visits_controls`.
+        tab_visits_controls(on: bool);
+        /// Release this window's GPU device and renderer when it closes, like `App::release_gpu_when_closed`.
+        release_gpu_when_closed();
+        on_focus(f: fn(&mut S, bool, &mut crate::Tx));
+        on_modifiers(f: fn(&mut S, crate::Mods, &mut crate::Tx));
+        /// This window going off screen and back, like `App::on_visibility`.
+        on_visibility(f: fn(&mut S, bool, &mut crate::Tx));
+        /// Runs when this window rests, like `App::on_rest`.
+        on_rest(f: fn(&mut S, &mut crate::Tx) -> bool);
+        /// This window's editor's input method events, like `App::on_ime`.
+        on_ime(f: fn(&mut S, &crate::Ime, &mut crate::Tx) -> bool);
+        /// Runs whenever this window closes, like `App::on_close`.
+        on_close(f: fn(&mut S, &mut crate::Tx));
+        /// Runs in this window when the app starts to quit, like `App::on_quit`.
+        on_quit(f: fn(&mut S, &mut crate::Tx));
+        /// Runs `enter` before and `leave` after each event-handling turn of this window, like `App::turn_scope`.
+        turn_scope(enter: fn(&mut S), leave: fn(&mut S));
+        /// Runs when the app is reopened, like `App::on_reopen`.
+        on_reopen(f: fn(&mut S, bool, &mut crate::Tx) -> bool);
+        /// Receives links opened with the app, like `App::on_open_url`.
+        on_open_url(f: fn(&mut S, &str, &mut crate::Tx));
+        /// Runs on the UI thread each time the native window is created, like `App::on_window`.
+        on_window(f: impl FnMut(&crate::WindowHandle) + 'static);
+        /// Called on the event thread after the first frame is ready, once per native creation.
+        on_ready(f: impl FnMut(&crate::WindowHandle) + 'static);
+        /// Reports each of this window's frames, like `App::on_frame_encoded`. A spec made with
+        /// `WindowSpec::from_app` keeps its app's hook unless this replaces it; windows `App::window`
+        /// adds have their own.
+        on_frame_encoded(f: impl FnMut(&crate::FrameEncoded) + 'static);
+        /// Runs on the UI thread after each drawn frame of this window with its runtime, like `App::on_frame_drawn`.
+        on_frame_drawn(f: impl FnMut(&crate::Runtime<S>) + 'static);
+        /// Draw every frame of this window through `compositor`, like `App::compositor`.
+        compositor(compositor: impl crate::compose::Compositor<S>);
+        /// This window's own counters for native trace summaries, like `App::dev_stats`.
+        dev_stats(stats: fn() -> String);
+        /// This window's playground, like `App::playground`.
+        playground(playground: crate::Playground<S>);
     }
-    /// Reports each of this window's frames, like `App::on_frame_encoded`. A spec made with
-    /// `WindowSpec::from_app` keeps its app's hook unless this replaces it; windows `App::window`
-    /// adds have their own.
-    pub fn on_frame_encoded(mut self, f: impl FnMut(&crate::FrameEncoded) + 'static) -> Self {
-        self.app = self.app.on_frame_encoded(f); self
+    /// Configure the underlying `App` directly for any per-window builder not forwarded here.
+    pub fn map_app(mut self, f: impl FnOnce(App<S>) -> App<S>) -> Self {
+        self.app = f(self.app);
+        self
     }
     pub fn options(mut self, options: WindowOptions) -> Self {
         self.options = options;
@@ -300,19 +349,8 @@ impl<S> WindowSpec<S> {
         self.on_created = Some(Box::new(callback));
         self
     }
-}
-
-impl<S: 'static> WindowSpec<S> {
     /// Erase the state type, so one factory can return windows of different state types.
     pub fn boxed(self) -> AnyWindowSpec { self.into() }
-    /// Open this window without taking focus from the window that has it, such as a window a
-    /// tab is dragged into while the press stays with its strip. A later `open` or `focus`
-    /// activates it.
-    pub fn inactive(mut self) -> Self { self.app = self.app.open_inactive(); self }
-    /// Open this window maximized, like `App::maximized`.
-    pub fn maximized(mut self, maximized: bool) -> Self { self.app = self.app.maximized(maximized); self }
-    /// Open this window full screen, like `App::full_screen`.
-    pub fn full_screen(mut self, full_screen: bool) -> Self { self.app = self.app.full_screen(full_screen); self }
 }
 
 thread_local! {
@@ -463,25 +501,26 @@ impl<S: 'static> ErasedWindow for Erased<S> {
     fn desktop(self: Box<Self>, _: &crate::tooling::Args, _: bool, _: f32) -> Box<dyn crate::desktop::Member> { unreachable!("{}", crate::tooling::WITHOUT_TOOLING) }
     #[cfg(any(feature = "tooling", debug_assertions))]
     fn headless(self: Box<Self>, args: crate::tooling::Args, scale: f32) {
-        let WindowSpec { mut app, options, .. } = self.spec;
-        if let Some((w, h)) = options.physical_size { app.spec.size = (w as f32 / scale, h as f32 / scale); }
-        let transparent = options.transparent;
-        app.window_options = options;
-        crate::tooling::headless_configured(app, args, transparent);
+        crate::tooling::headless_window_spec(self.spec.app, self.spec.options, args, scale);
     }
     #[cfg(any(feature = "tooling", debug_assertions))]
     fn desktop(self: Box<Self>, args: &crate::tooling::Args, selected: bool, scale: f32) -> Box<dyn crate::desktop::Member> {
         let Erased { spec, handle, secondary } = *self;
         Box::new(crate::desktop::Window::new(spec, handle, args, selected, !secondary, scale))
     }
-    fn start(self: Box<Self>, mut inherited: crate::tooling::Args, cx: crate::window::Start<'_>) -> Option<Box<dyn crate::window::AnyHost>> {
-        // A secondary window is not what --scene or --size describe unless --window selects it.
-        if self.secondary && inherited.window.as_deref() != Some(self.spec.key.as_str()) {
-            inherited.scene = None;
-            inherited.size = None;
-        }
+    fn start(self: Box<Self>, inherited: crate::tooling::Args, cx: crate::window::Start<'_>) -> Option<Box<dyn crate::window::AnyHost>> {
+        let inherited = secondary_args(self.secondary, &self.spec.key, inherited);
         crate::window::start(self.spec, self.handle, !self.secondary, inherited, cx)
     }
+}
+
+fn secondary_args(secondary: bool, key: &str, mut inherited: crate::tooling::Args) -> crate::tooling::Args {
+    // A secondary window is not what --scene or --size describe unless --window selects it.
+    if secondary && inherited.window.as_deref() != Some(key) {
+        inherited.scene = None;
+        inherited.size = None;
+    }
+    inherited
 }
 
 /// Each window followed by those its app added with `App::window`, depth first.
@@ -504,131 +543,5 @@ pub(crate) fn validate(windows: &[AnyWindowSpec]) -> Result<(), String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use winit::dpi::{LogicalSize, Size};
-
-    #[test]
-    fn launcher_preset_is_hidden_and_preserves_ordinary_defaults() {
-        let preset = WindowOptions::launcher_panel();
-        assert!(preset.native.nonactivating_panel && preset.native.launcher);
-        assert!(!preset.options.visible && preset.options.borderless && preset.options.transparent);
-        assert!(!MacWindowOptions::default().nonactivating_panel(true).launcher);
-        assert!(!preset.native.nonactivating_panel(false).launcher);
-        assert!(WindowOptions::default().visible);
-        let spec = AppSpec::new("launcher", (300.0, 100.0), || (), |_, _| crate::el());
-        let app = App::new(spec).configured_options(WindowOptions::launcher_panel());
-        assert!(app.macos_window.launcher);
-        assert!(!app.window_options.visible);
-        let window = WindowSpec::from_app("launcher", app);
-        assert!(!window.options.visible && window.options.transparent);
-    }
-
-    #[test]
-    fn amending_a_preset_keeps_its_launcher_behaviour() {
-        let preset = WindowOptions::launcher_panel().macos(|native| native.corner_radius(16.0).shadow(true));
-        assert!(preset.native.launcher && preset.native.nonactivating_panel);
-        assert_eq!((preset.native.corner_radius, preset.native.shadow), (Some(16.0), Some(true)));
-        assert!(!preset.options.visible && preset.options.transparent);
-        let spec = AppSpec::new("launcher", (300.0, 100.0), || (), |_, _| crate::el());
-        let app = App::new(spec).configured_options(preset);
-        assert!(app.macos_window.launcher);
-        assert_eq!(app.macos_window.corner_radius, Some(16.0));
-    }
-
-    #[test]
-    fn app_windows_follow_their_app_and_share_its_key_space() {
-        let mut main = App::new(AppSpec::new("main", (100.0, 100.0), || 0u32, |_, _| crate::el()));
-        let settings = || WindowSpec::new("settings", AppSpec::new("settings", (100.0, 100.0), String::new, |_, _| crate::el()));
-        let (_, handle) = main.window(settings());
-        assert_eq!(handle.key(), "settings");
-        let other = WindowSpec::new("other", AppSpec::new("other", (100.0, 100.0), || (), |_, _| crate::el()));
-        let flat = flatten([WindowSpec::from_app("main", main).boxed(), other.into()]);
-        assert_eq!(flat.iter().map(AnyWindowSpec::key).collect::<Vec<_>>(), ["main", "settings", "other"]);
-        assert!(validate(&flat).is_ok());
-        let mut clash = App::new(AppSpec::new("main", (100.0, 100.0), || 0u32, |_, _| crate::el()));
-        clash.window(settings());
-        assert!(validate(&flatten([WindowSpec::from_app("settings", clash).boxed()])).is_err());
-    }
-
-    #[test]
-    fn default_window_options_remain_inferable_at_existing_call_sites() {
-        // This fails to compile if options becomes generic over Into<...>.
-        let _configure: fn(WindowSpec<()>) -> WindowSpec<()> = |spec| spec.options(Default::default());
-    }
-
-    #[test]
-    fn explicit_empty_args_never_read_the_host_cli() {
-        let options = RunOptions { accessory: true };
-        let copied = options;
-        assert!(options.accessory && copied.accessory);
-        let args = crate::tooling::window_args(Some(vec![]), || panic!("must not inspect host --trace/--snap flags"));
-        assert!(!args.headless());
-        assert!(args.scene.is_none() && args.size.is_none());
-        let inherited = crate::tooling::window_args(None, || crate::tooling::Args::parse_from(
-            vec!["--trace".into(), "out.jsonl".into()]));
-        assert!(inherited.headless());
-    }
-
-    #[test]
-    fn window_app_args_override_inherited_scene_and_size() {
-        fn spec() -> AppSpec<()> { AppSpec::new("test", (100.0, 100.0), || (), |_, _| crate::el()) }
-        let inherited = crate::tooling::Args::parse_from(vec!["--scene".into(), "host-scene".into()]);
-        let mut window = WindowSpec::from_app("pill", App::new(spec()).args(vec!["--size".into(), "320x80".into()]));
-        let resolved = window.app.resolve_args(inherited.clone());
-        assert_eq!(resolved.size, Some((320.0, 80.0)));
-        assert!(resolved.scene.is_none());
-        let mut plain = WindowSpec::new("plain", spec());
-        assert_eq!(plain.app.resolve_args(inherited).scene.as_deref(), Some("host-scene"));
-        let trace = crate::tooling::Args::parse_from(vec!["--trace".into(), "host.jsonl".into()]);
-        let mut isolated = WindowSpec::from_app("isolated", App::new(spec()).args(vec![]));
-        assert!(!isolated.app.resolve_args(trace).headless());
-        let mut traced = WindowSpec::from_app("traced", App::new(spec()).args(vec!["--trace".into(), "window.jsonl".into()]));
-        assert!(traced.app.resolve_args(crate::tooling::Args::default()).headless());
-    }
-
-    #[test]
-    fn compact_window_overrides_the_legacy_minimum_without_changing_defaults() {
-        let defaults = WindowOptions::default().attributes("app", (560.0, 440.0), None, true);
-        assert_eq!(defaults.min_inner_size, Some(Size::Logical(LogicalSize::new(420.0, 400.0))));
-        assert!(defaults.resizable && defaults.decorations && defaults.visible);
-        assert_eq!(defaults.max_inner_size, None);
-
-        let compact = WindowOptions {
-            min_size: Some((280.0, 80.0)), max_size: Some((320.0, 120.0)),
-            resizable: false, borderless: true, ..Default::default()
-        }.attributes("compact", (300.0, 100.0), Some((860.0, 560.0)), false);
-        assert_eq!(compact.inner_size, Some(Size::Logical(LogicalSize::new(300.0, 100.0))));
-        assert_eq!(compact.min_inner_size, Some(Size::Logical(LogicalSize::new(280.0, 80.0))));
-        assert_eq!(compact.max_inner_size, Some(Size::Logical(LogicalSize::new(320.0, 120.0))));
-        assert!(!compact.resizable && !compact.decorations && !compact.visible);
-    }
-
-    #[test]
-    fn maximum_alone_caps_the_inherited_minimum_per_axis() {
-        let options = WindowOptions { max_size: Some((320.0, 120.0)), ..Default::default() };
-        for (app_min, expected) in [
-            (None, (320.0, 120.0)),
-            (Some((860.0, 80.0)), (320.0, 80.0)),
-        ] {
-            let attrs = options.attributes("compact", (300.0, 100.0), app_min, true);
-            assert_eq!(attrs.min_inner_size, Some(Size::Logical(LogicalSize::new(expected.0, expected.1))));
-            assert_eq!(attrs.max_inner_size, Some(Size::Logical(LogicalSize::new(320.0, 120.0))));
-        }
-    }
-
-    #[test]
-    fn default_options_inherit_the_app_minimum() {
-        let attrs = WindowOptions::default().attributes("app", (900.0, 600.0), Some((860.0, 560.0)), true);
-        assert_eq!(attrs.min_inner_size, Some(Size::Logical(LogicalSize::new(860.0, 560.0))));
-    }
-
-    #[test]
-    fn a_window_that_fits_its_content_has_no_default_minimum_height() {
-        let fit = WindowOptions::default().fit_min_size(None);
-        assert_eq!(WindowOptions::default().size_limits(fit), ((420.0, 0.0), None));
-        assert_eq!(WindowOptions::default().fit_min_size(Some((300.0, 200.0))), Some((300.0, 200.0)));
-        let options = WindowOptions { min_size: Some((300.0, 500.0)), ..Default::default() };
-        assert_eq!(options.size_limits(options.fit_min_size(None)), ((300.0, 500.0), None));
-    }
-}
+#[path = "spec_tests.rs"]
+mod tests;

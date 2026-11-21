@@ -25,9 +25,6 @@ pub(crate) struct FileDrag {
     /// `on_drop_rejected_hover(true)`), and that callback, which still hears `false` after the
     /// element unmounts or starts to exit.
     hovered: Option<(Aim, Option<DropHoverFn>)>,
-    /// This frame's drop targets: (node, visible rect in points, `hits.len()` before it). Kept
-    /// apart from `hits`, so a drop zone doesn't cover the context menus and help under it.
-    pub(crate) hits: Vec<(NodeId, [f32; 4], usize)>,
     /// File steps waiting for this frame's build (`hold_files`), and whether those leading the
     /// queue already waited one.
     held: Vec<Queued>,
@@ -57,86 +54,30 @@ struct Target {
     rejected: Vec<PathBuf>,
 }
 
-impl<S: 'static> Runtime<S> {
-    /// A file drag from another app entered the window or moved over it, carrying `paths`; `at`
-    /// is its position in points, or `None` when the platform doesn't say. The innermost
-    /// [`El::on_drop_files`] under it that accepts the files hears `on_drop_hover(true)` next
-    /// frame.
-    pub fn drag_files(&mut self, paths: Vec<PathBuf>, at: Option<(f32, f32)>) {
-        // A move a lost frame never ran mustn't keep this drag's moves from queueing.
-        let aimed = self.drop_aim(&paths, at);
-        self.file_drag.over = Some(Over { paths: paths.clone(), at, aimed, move_queued: false });
-        self.queue.push(Action::Files(FileEvent::Hover(paths, at)));
-    }
+impl capture::PointerState {
+    /// A file drag is over the window.
+    #[inline]
+    pub(in crate::runtime) fn dragging_files(&self) -> bool { self.file_drag.over.is_some() }
 
-    /// The file drag is at `at`, with the files it entered with. Queues a hover, and returns
-    /// true, only when that changes the drop target or moves the drag over a target that
-    /// follows it (`El::on_drop_move`, once a frame), so a host can sample the pointer often and
-    /// redraw only when something listens. Sampling while still also notices a target that
-    /// unmounted.
-    pub fn drag_files_to(&mut self, at: Option<(f32, f32)>) -> bool {
-        let Some(over) = &self.file_drag.over else { return false };
-        let moved = over.at != at;
-        let target = self.drop_aim(&over.paths, at);
-        let same = target == over.aimed;
-        let follows = same && target.as_ref().is_some_and(|aim| self.drop_move_fn(aim).is_some());
-        let Some(over) = &mut self.file_drag.over else { return false };
-        over.at = at;
-        if same {
-            if !moved || !follows || std::mem::replace(&mut over.move_queued, true) { return false; }
-            self.queue.push(Action::Files(FileEvent::Move));
-            return true;
-        }
-        over.aimed = target;
-        let paths = over.paths.clone();
-        self.queue.push(Action::Files(FileEvent::Hover(paths, at)));
-        true
-    }
-
-    /// The file drag left the window, was cancelled, or the window hid.
-    pub fn drag_files_leave(&mut self) {
-        if self.file_drag.over.take().is_none() { return; }
-        self.queue.push(Action::Files(FileEvent::Leave));
-    }
-
-    /// `paths` dropped at `at` (points, or `None` when the platform doesn't say). Next frame the
-    /// innermost [`El::on_drop_files`] under it that accepts any of them gets those it accepts,
-    /// in one call, and the drop hover ends. Its [`El::on_drop_rejected`] gets the rest, and a
-    /// target with one that takes none of them gets them all there. A drop nothing takes is
-    /// ignored.
-    pub fn drop_files(&mut self, paths: Vec<PathBuf>, at: Option<(f32, f32)>) {
-        self.file_drag.over = None;
-        self.queue.push(Action::Files(FileEvent::Drop(paths, at)));
-    }
-
-    /// A file drag is over the window. Hosts whose platform reports no drag positions sample
-    /// the pointer while this holds.
-    pub fn dragging_files(&self) -> bool { self.file_drag.over.is_some() }
-
-    /// The key (else path) of the element showing the drop hover, for tests and tools.
-    pub fn drop_hovered(&self) -> Option<String> { self.hover_key(true) }
-
-    /// The key (else path) of the element showing the rejected drop hover
-    /// ([`El::on_drop_rejected_hover`]), for tests and tools.
-    pub fn drop_rejected_hovered(&self) -> Option<String> { self.hover_key(false) }
+    /// File steps wait for the next frame (`hold_files`).
+    #[inline]
+    pub(in crate::runtime) fn files_held(&self) -> bool { self.file_drag.waited }
 
     /// Drops the drag's target and the hover callback it would hear `false` on, unheard: their
     /// elements went with the state they were built for.
-    pub(super) fn forget_drop_targets(&mut self) {
+    #[inline]
+    pub(in crate::runtime) fn forget_drop_targets(&mut self) {
         if let Some(over) = &mut self.file_drag.over { over.aimed = None; }
         self.file_drag.hovered = None;
     }
 
-    fn hover_key(&self, accepted: bool) -> Option<String> {
+    pub(super) fn drop_hover_key<'a>(&self, node: impl Fn(&str) -> Option<&'a Node>, accepted: bool) -> Option<String> {
         let ((path, _), _) = self.file_drag.hovered.as_ref().filter(|((_, a), _)| *a == accepted)?;
-        Some(self.node(path).and_then(|n| n.key.clone()).unwrap_or_else(|| path.clone()))
+        Some(node(path).and_then(|n| n.key.clone()).unwrap_or_else(|| path.clone()))
     }
 
-    /// A file step that hit-tests (a hover or drop) reaching a tree changed since its last build
-    /// (`stale`: state changed this frame, or while the window was covered and built nothing)
-    /// waits for this frame's build, once, so it lands on what is mounted and laid out now. The
-    /// file steps after it wait too, to keep their order.
-    pub(super) fn hold_files(&mut self, queue: ActionQueue, stale: bool) -> ActionQueue {
+    /// Holds file steps for this frame's build when the tree changed since its last build.
+    pub(in crate::runtime) fn hold_files(&mut self, queue: ActionQueue, stale: bool) -> ActionQueue {
         let waited = std::mem::take(&mut self.file_drag.waited);
         let aims = |a: &Action| matches!(a, Action::Files(FileEvent::Hover(..) | FileEvent::Move | FileEvent::Drop(..)));
         if waited || !stale || !queue.iter().any(aims) { return queue; }
@@ -145,24 +86,100 @@ impl<S: 'static> Runtime<S> {
         rest.into_iter().collect()
     }
 
-    /// The held file steps go first next frame.
-    pub(super) fn release_files(&mut self) {
-        if self.file_drag.held.is_empty() { return; }
+    #[inline]
+    pub(super) fn take_held_files(&mut self) -> Option<Vec<Queued>> {
+        if self.file_drag.held.is_empty() { return None; }
         self.file_drag.waited = true;
-        self.queue.prepend(std::mem::take(&mut self.file_drag.held));
+        Some(std::mem::take(&mut self.file_drag.held))
+    }
+}
+
+impl RuntimeCore {
+    /// A file drag from another app entered the window or moved over it, carrying `paths`; `at`
+    /// is its position in points, or `None` when the platform doesn't say. The innermost
+    /// [`El::on_drop_files`] under it that accepts the files hears `on_drop_hover(true)` next
+    /// frame.
+    pub fn drag_files(&mut self, paths: Vec<PathBuf>, at: Option<(f32, f32)>) {
+        // A move a lost frame never ran mustn't keep this drag's moves from queueing.
+        let aimed = self.drop_aim(&paths, at);
+        self.pointer.file_drag.over = Some(Over { paths: paths.clone(), at, aimed, move_queued: false });
+        self.frame.queue.push(Action::Files(FileEvent::Hover(paths, at)));
+    }
+
+    /// The file drag is at `at`, with the files it entered with. Queues a hover, and returns
+    /// true, only when that changes the drop target or moves the drag over a target that
+    /// follows it (`El::on_drop_move`, once a frame), so a host can sample the pointer often and
+    /// redraw only when something listens. Sampling while still also notices a target that
+    /// unmounted.
+    pub fn drag_files_to(&mut self, at: Option<(f32, f32)>) -> bool {
+        let Some(over) = &self.pointer.file_drag.over else { return false };
+        let moved = over.at != at;
+        let target = self.drop_aim(&over.paths, at);
+        let same = target == over.aimed;
+        let follows = same && target.as_ref().is_some_and(|aim| self.drop_move_fn(aim).is_some());
+        let Some(over) = &mut self.pointer.file_drag.over else { return false };
+        over.at = at;
+        if same {
+            if !moved || !follows || std::mem::replace(&mut over.move_queued, true) { return false; }
+            self.frame.queue.push(Action::Files(FileEvent::Move));
+            return true;
+        }
+        over.aimed = target;
+        let paths = over.paths.clone();
+        self.frame.queue.push(Action::Files(FileEvent::Hover(paths, at)));
+        true
+    }
+
+    /// The file drag left the window, was cancelled, or the window hid.
+    pub fn drag_files_leave(&mut self) {
+        if self.pointer.file_drag.over.take().is_none() { return; }
+        self.frame.queue.push(Action::Files(FileEvent::Leave));
+    }
+
+    /// `paths` dropped at `at` (points, or `None` when the platform doesn't say). Next frame the
+    /// innermost [`El::on_drop_files`] under it that accepts any of them gets those it accepts,
+    /// in one call, and the drop hover ends. Its [`El::on_drop_rejected`] gets the rest, and a
+    /// target with one that takes none of them gets them all there. A drop nothing takes is
+    /// ignored.
+    pub fn drop_files(&mut self, paths: Vec<PathBuf>, at: Option<(f32, f32)>) {
+        self.pointer.file_drag.over = None;
+        self.frame.queue.push(Action::Files(FileEvent::Drop(paths, at)));
+    }
+
+    /// A file drag is over the window. Hosts whose platform reports no drag positions sample
+    /// the pointer while this holds.
+    #[inline]
+    pub fn dragging_files(&self) -> bool { self.pointer.dragging_files() }
+
+    /// The key (else path) of the element showing the drop hover, for tests and tools.
+    pub fn drop_hovered(&self) -> Option<String> { self.pointer.drop_hover_key(|p| self.node(p), true) }
+
+    /// The key (else path) of the element showing the rejected drop hover
+    /// ([`El::on_drop_rejected_hover`]), for tests and tools.
+    pub fn drop_rejected_hovered(&self) -> Option<String> { self.pointer.drop_hover_key(|p| self.node(p), false) }
+
+    /// A file step that hit-tests (a hover or drop) reaching a tree changed since its last build
+    /// (`stale`: state changed this frame, or while the window was covered and built nothing)
+    /// waits for this frame's build, once, so it lands on what is mounted and laid out now. The
+    /// file steps after it wait too, to keep their order.
+    #[inline]
+    pub(in crate::runtime) fn hold_files(&mut self, queue: ActionQueue, stale: bool) -> ActionQueue {
+        self.pointer.hold_files(queue, stale)
+    }
+
+    /// The held file steps go first next frame.
+    pub(in crate::runtime) fn release_files(&mut self) {
+        if let Some(held) = self.pointer.take_held_files() {
+            self.frame.queue.prepend(held);
+        }
     }
 
     /// File steps wait for the next frame (`hold_files`).
-    pub(super) fn files_held(&self) -> bool { self.file_drag.waited }
+    #[inline]
+    pub(in crate::runtime) fn files_held(&self) -> bool { self.pointer.files_held() }
 
-    pub(super) fn clear_drop_hits(&mut self) { self.file_drag.hits.clear(); }
-
-    /// During `build`: drop target `i` draws visible over `rect`, after the first `seq` hits.
-    pub(super) fn push_drop_hit(&mut self, i: usize, rect: [f32; 4], seq: usize) {
-        if rect[2] > rect[0] && rect[3] > rect[1] {
-            self.file_drag.hits.push((self.nodes[i].id, rect, seq));
-        }
-    }
+    #[inline]
+    pub(in crate::runtime) fn clear_drop_hits(&mut self) { self.hit.clear_drop_hits(); }
 
     /// The target for `paths` at `at` and the files it takes: walking out from the topmost
     /// element under the point, the first drop target that accepts any of them or rejects
@@ -171,38 +188,30 @@ impl<S: 'static> Runtime<S> {
     /// reaches nothing, as a drop on the dimmed window behind a sheet does. A point outside the
     /// window reaches nothing; a drop without a position goes to the root.
     fn drop_target(&self, paths: &[PathBuf], at: Option<(f32, f32)>) -> Option<Target> {
-        let ok = |id: &NodeId| self.node_index.get(id).copied()
-            .filter(|&i| i < self.nodes.len() && !self.subtree_exiting(i) && self.allowed(i));
+        let ok = |id: NodeId| self.tree.node_index.get(&id).copied()
+            .filter(|&i| i < self.tree.nodes.len() && !self.subtree_exiting(i) && self.allowed(i));
         let start = match at {
             None => None,
             Some((x, y)) if !self.in_viewport(x, y) => return None,
             Some((x, y)) => {
-                let hit = self.hits.iter().enumerate().rev()
-                    .find_map(|(k, &(id, r))| self.hit_contains(id, r, x, y).then(|| ok(&id)).flatten().map(|i| (k, i)));
-                let zone = self.file_drag.hits.iter().rev()
-                    .find_map(|&(id, r, seq)| self.hit_contains(id, r, x, y).then(|| ok(&id)).flatten().map(|i| (seq, i)));
-                // Whichever was drawn last is on top: a hit drawn after a zone started covers it.
-                let top = match (hit, zone) {
-                    (Some((k, h)), Some((seq, z))) => Some(if k >= seq { h } else { z }),
-                    (h, z) => h.or(z).map(|(_, i)| i),
-                };
+                let top = self.hit.top_drop_or_hit(|id, r| self.hit_contains(id, r, x, y), ok);
                 if top.is_none() && self.active_modal().is_some() { return None; }
                 top
             }
         };
         let root = self.active_modal().unwrap_or_else(|| self.app_root());
-        std::iter::successors(start, |&i| self.nodes[i].parent)
-            .chain(std::iter::once(root).filter(|&r| r < self.nodes.len()))
+        std::iter::successors(start, |&i| self.tree.nodes[i].parent)
+            .chain(std::iter::once(root).filter(|&r| r < self.tree.nodes.len()))
             .filter(|&i| self.allowed(i) && !self.subtree_exiting(i))
             .find_map(|i| {
-                let drop = self.nodes[i].handlers.drop.as_ref()?;
+                let drop = self.tree.nodes[i].handlers.drop.as_ref()?;
                 let (files, rejected) = drop.split(paths);
                 (!files.is_empty() || (!rejected.is_empty() && drop.claims_rejects())).then_some(Target { i, files, rejected })
             })
     }
 
     fn drop_aim(&self, paths: &[PathBuf], at: Option<(f32, f32)>) -> Option<Aim> {
-        self.drop_target(paths, at).map(|t| (self.nodes[t.i].path.clone(), !t.files.is_empty()))
+        self.drop_target(paths, at).map(|t| (self.tree.nodes[t.i].path.clone(), !t.files.is_empty()))
     }
 
     fn drop_hover_fn(&self, (path, accepted): &Aim) -> Option<DropHoverFn> {
@@ -224,14 +233,14 @@ impl<S: 'static> Runtime<S> {
 
     /// A hover at `at`: moves the drop hover to the target there, then tells a target that
     /// follows the drag where it is.
-    fn hover_files(&mut self, paths: &[PathBuf], at: Option<(f32, f32)>, tx: &mut Tx) -> bool {
+    fn hover_files(&mut self, app: &mut dyn AppDriver, paths: &[PathBuf], at: Option<(f32, f32)>, tx: &mut Tx) -> bool {
         let target = self.drop_aim(paths, at);
-        if let Some(over) = &mut self.file_drag.over { over.aimed.clone_from(&target); }
-        let mut ran = self.set_drop_hover(target.clone(), at, tx);
+        if let Some(over) = &mut self.pointer.file_drag.over { over.aimed.clone_from(&target); }
+        let mut ran = self.set_drop_hover(app, target.clone(), at, tx);
         if let Some(aim) = target && let Some(f) = self.drop_move_fn(&aim) && let Some(p) = self.drop_point(&aim.0, at) {
             self.trace_event(format_args!("drop-move:{}", aim.0));
             tx.drop_point = Some(p);
-            f(states!(self), p, tx);
+            f(app.states(), p, tx);
             tx.drop_point = None;
             ran = true;
         }
@@ -239,14 +248,14 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Moves the drop hover to `target`, notifying the old and new elements.
-    fn set_drop_hover(&mut self, target: Option<Aim>, at: Option<(f32, f32)>, tx: &mut Tx) -> bool {
-        if self.file_drag.hovered.as_ref().map(|(aim, _)| aim) == target.as_ref() { return false; }
-        let old = self.file_drag.hovered.take();
+    fn set_drop_hover(&mut self, app: &mut dyn AppDriver, target: Option<Aim>, at: Option<(f32, f32)>, tx: &mut Tx) -> bool {
+        if self.pointer.file_drag.hovered.as_ref().map(|(aim, _)| aim) == target.as_ref() { return false; }
+        let old = self.pointer.file_drag.hovered.take();
         let new = target.map(|aim| {
             let f = self.drop_hover_fn(&aim);
             (aim, f)
         });
-        self.file_drag.hovered.clone_from(&new);
+        self.pointer.file_drag.hovered.clone_from(&new);
         let mut ran = false;
         for (hover, over) in [(old, false), (new, true)] {
             let Some((aim, kept)) = hover else { continue };
@@ -256,38 +265,38 @@ impl<S: 'static> Runtime<S> {
             let kind = if *accepted { "drop-hover" } else { "drop-rejected-hover" };
             self.trace_event(format_args!("{kind}:{over}:{path}"));
             tx.drop_point = if over { self.drop_point(path, at) } else { None };
-            f(states!(self), over, tx);
+            f(app.states(), over, tx);
             tx.drop_point = None;
             ran = true;
         }
         ran
     }
 
-    pub(super) fn run_files(&mut self, event: FileEvent, tx: &mut Tx) -> bool {
+    pub(in crate::runtime) fn run_files(&mut self, app: &mut dyn AppDriver, event: FileEvent, tx: &mut Tx) -> bool {
         match event {
-            FileEvent::Hover(paths, at) => self.hover_files(&paths, at, tx),
+            FileEvent::Hover(paths, at) => self.hover_files(app, &paths, at, tx),
             FileEvent::Move => {
-                let Some(over) = &mut self.file_drag.over else { return false };
+                let Some(over) = &mut self.pointer.file_drag.over else { return false };
                 over.move_queued = false;
                 let (paths, at) = (over.paths.clone(), over.at);
-                self.hover_files(&paths, at, tx)
+                self.hover_files(app, &paths, at, tx)
             }
-            FileEvent::Leave => self.set_drop_hover(None, None, tx),
+            FileEvent::Leave => self.set_drop_hover(app, None, None, tx),
             FileEvent::Drop(paths, at) => {
                 let target = self.drop_target(&paths, at);
-                let mut ran = self.set_drop_hover(None, None, tx);
+                let mut ran = self.set_drop_hover(app, None, None, tx);
                 let Some(Target { i, files, rejected }) = target else { return ran };
-                let Some(drop) = self.nodes[i].handlers.drop.as_deref().cloned() else { return ran };
-                let path = self.nodes[i].path.clone();
+                let Some(drop) = self.tree.nodes[i].handlers.drop.as_deref().cloned() else { return ran };
+                let path = self.tree.nodes[i].path.clone();
                 tx.drop_point = self.drop_point(&path, at);
                 if !files.is_empty() && let Some(f) = drop.on_drop {
                     self.trace_event(format_args!("drop-files:{}:{path}", files.len()));
-                    f(states!(self), &files, tx);
+                    f(app.states(), &files, tx);
                     ran = true;
                 }
                 if !rejected.is_empty() && let Some(f) = drop.on_reject {
                     self.trace_event(format_args!("drop-rejected:{}:{path}", rejected.len()));
-                    f(states!(self), &rejected, tx);
+                    f(app.states(), &rejected, tx);
                     ran = true;
                 }
                 tx.drop_point = None;

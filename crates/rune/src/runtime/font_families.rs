@@ -2,7 +2,7 @@
 
 use super::*;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Put `sans` and `mono` behind the `Family::Sans` and `Family::Mono` slots, as
     /// `Tx::set_font_families` does from a handler. Every runtime on this thread follows on its
     /// next frame (all of an app's windows and overlays), and windows opened later start in
@@ -32,10 +32,13 @@ impl<S: 'static> Runtime<S> {
         if !(self.text.follow_full_faces() || chosen) {
             return false;
         }
-        self.memo.clear();
-        self.layout.mark_all_dirty();
-        self.dirty = true;
-        self.relayout = true;
+        for n in &mut self.tree.nodes {
+            n.text_layout = None;
+        }
+        self.commit.clear_memo();
+        self.commit.layout.mark_all_dirty();
+        self.commit.dirty = true;
+        self.commit.relayout = true;
         true
     }
 }

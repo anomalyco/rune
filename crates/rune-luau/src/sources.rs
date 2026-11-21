@@ -57,6 +57,7 @@ impl Sources {
     /// # Safety
     /// `code` must be trusted output of this build's Luau compiler. Never pass downloaded bytes
     /// or files from a plugin directory: the VM expects compiler output, not untrusted bytecode.
+    #[allow(unsafe_code)]
     pub unsafe fn with_embedded(mut self, path: &str, code: &'static [u8], native: bool) -> Self {
         self.files.insert(normalize(path), Input::Embedded { code, native });
         self
@@ -235,7 +236,7 @@ static PRECOMPILED: std::sync::OnceLock<std::collections::HashMap<&'static str, 
 pub fn precompiled(modules: impl IntoIterator<Item = (&'static str, &'static [u8])>) {
     let version = compiler().compile("return nil").ok().and_then(|code| code.first().copied());
     let table = modules.into_iter().filter(|(_, code)| code.first().copied() == version).collect();
-    let _ = PRECOMPILED.set(table);
+    PRECOMPILED.set(table).ok();
 }
 
 pub(crate) fn compiler() -> mlua::chunk::Compiler {

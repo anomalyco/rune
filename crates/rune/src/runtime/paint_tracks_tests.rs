@@ -24,12 +24,12 @@ fn settled(dark: bool) -> Runtime<State> {
 }
 
 fn row(rt: &Runtime<State>) -> &Node {
-    rt.nodes.iter().find(|n| n.key.as_deref() == Some("row-3")).unwrap()
+    rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("row-3")).unwrap()
 }
 
 fn label(rt: &Runtime<State>) -> &Node {
-    let row = rt.nodes.iter().position(|n| n.key.as_deref() == Some("row-3")).unwrap();
-    rt.nodes.iter().find(|n| n.parent == Some(row) && n.text.is_some()).unwrap()
+    let row = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("row-3")).unwrap();
+    rt.tree.nodes.iter().find(|n| n.parent == Some(row) && n.text.is_some()).unwrap()
 }
 
 #[test]
@@ -101,20 +101,20 @@ fn rebuilding_reuses_node_paths_and_restores_on_layout_retry() {
     }
     let mut rt = Runtime::new(RetryState { open: true, tick: 0 }, retry_view, (200.0, 200.0), Env::new(true, 1.0));
     rt.frame(0.0);
-    let ptr0 = rt.nodes.iter().find(|n| n.key.as_deref() == Some("anchor")).unwrap().path.as_ptr();
+    let ptr0 = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("anchor")).unwrap().path.as_ptr();
     rt.invalidate();
     rt.frame(1.0 / 120.0);
-    let ptr1 = rt.nodes.iter().find(|n| n.key.as_deref() == Some("anchor")).unwrap().path.as_ptr();
+    let ptr1 = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("anchor")).unwrap().path.as_ptr();
     assert_eq!(ptr0, ptr1, "steady-state rebuild moves the previous commit's path String in place");
 
     // Trigger both a layout-read settle retry (`tick = 1` changes `box` width) and `return_focus_to`
     // under `sheet` (whose own path was moved on the previous commit).
-    let btn_path = rt.nodes.iter().find(|n| n.key.as_deref() == Some("btn")).unwrap().path.clone();
-    rt.focus.focus = crate::runtime::focus_machine::Focus::On { path: btn_path, hovered: false, from: None };
+    let btn_path = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("btn")).unwrap().path.clone();
+    rt.kbd.focus.focus = crate::runtime::focus_machine::Focus::On { path: btn_path, hovered: false, from: None };
     rt.update(|s, _| { s.open = false; s.tick = 1; });
     rt.frame(1.0 / 120.0);
-    let anchor_path = rt.nodes.iter().find(|n| n.key.as_deref() == Some("anchor")).unwrap().path.clone();
-    assert_eq!(rt.focus.path(), Some(anchor_path.as_str()));
+    let anchor_path = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("anchor")).unwrap().path.clone();
+    assert_eq!(rt.kbd.focus.path(), Some(anchor_path.as_str()));
 }
 
 #[test]
@@ -136,8 +136,8 @@ fn changing_one_sibling_skips_resting_siblings_without_drift() {
 
     rt.update(|s, _| s.active = 5);
     rt.frame(1.0 / 120.0);
-    let r5 = rt.nodes.iter().find(|n| n.key.as_deref() == Some("r-5")).unwrap().id;
-    let r2 = rt.nodes.iter().find(|n| n.key.as_deref() == Some("r-2")).unwrap().id;
+    let r5 = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("r-5")).unwrap().id;
+    let r2 = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("r-2")).unwrap().id;
     assert!(rt.scene.store().is_node_animating(r5), "changed sibling animates its colour");
     assert!(!rt.scene.store().is_node_animating(r2), "unchanged sibling stays at rest with no track");
     while rt.frame(1.0 / 120.0) {}
@@ -147,8 +147,8 @@ fn changing_one_sibling_skips_resting_siblings_without_drift() {
     while fresh.frame(1.0 / 120.0) {}
     for k in 0..8 {
         let key = format!("r-{k}");
-        let na = rt.nodes.iter().find(|n| n.key.as_deref() == Some(key.as_str())).unwrap();
-        let nb = fresh.nodes.iter().find(|n| n.key.as_deref() == Some(key.as_str())).unwrap();
+        let na = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some(key.as_str())).unwrap();
+        let nb = fresh.tree.nodes.iter().find(|n| n.key.as_deref() == Some(key.as_str())).unwrap();
         assert_eq!(rt.color(na.id, P_FILL, na.vis.fill), fresh.color(nb.id, P_FILL, nb.vis.fill));
     }
 }

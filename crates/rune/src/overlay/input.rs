@@ -4,28 +4,28 @@
 use super::*;
 
 /// An overlay has no window to ask: whatever a step requested of one is dropped.
-pub(super) fn drop_window_requests<T: 'static>(rt: &mut Runtime<T>) {
+pub(super) fn drop_window_requests(rt: &mut RuntimeCore) {
     rt.shell_request = None;
     rt.ignore_minimize("an overlay");
     // Overlays size through `OverlayHandle::resize`, not `Tx::resize_window`.
-    rt.window_frame = None;
+    rt.host.window_frame = None;
 }
 
-impl<T: 'static> Overlay<T> {
+impl OverlayCore {
     /// The runtime's cursor while the pointer is over a hit area of a shown overlay that takes
     /// input; the arrow once when it leaves, so `Cursor::Hidden` never outlives the overlay or
     /// the hover, and a click-through area leaves the cursor to the window under it. A Wayland
     /// layer overlay sets it through cursor-shape-v1; without that, the pointer keeps the cursor
     /// it arrived with.
-    pub(super) fn apply_cursor(&mut self) {
+    pub(super) fn apply_cursor(&mut self, rt: &RuntimeCore) {
         let input = self.options.input.resolved(self.interactive);
-        let over = self.rt.pointer().is_some_and(|(x, y)| {
+        let over = rt.pointer().is_some_and(|(x, y)| {
             x >= 0.0 && y >= 0.0 && x < self.at.size.0 && y < self.at.size.1
-                && (input != OverlayInput::Regions || self.rt.pointer_captured()
-                    || self.rt.hit_regions().iter().any(|r| crate::overlay::options::contains(*r, x, y)))
+                && (input != OverlayInput::Regions || rt.pointer_captured()
+                    || rt.hit_regions().iter().any(|r| crate::overlay::options::contains(*r, x, y)))
         });
         let active = self.presence.shown() && input != OverlayInput::None && over;
-        let want = self.rt.cursor();
+        let want = rt.cursor();
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut() {
             layer.set_cursor(if active { want } else { crate::el::Cursor::Default });
@@ -38,21 +38,21 @@ impl<T: 'static> Overlay<T> {
     }
 
     #[cfg_attr(any(target_os = "ios", target_os = "android"), allow(dead_code))]
-    pub(super) fn observe_pointer(&mut self, x: f32, y: f32) {
-        if self.rt.pointer_captured() || (x >= 0.0 && y >= 0.0 && x < self.at.size.0 && y < self.at.size.1) {
-            self.dirty |= self.rt.observe_pointer(x, y);
-            self.begin_drag_out();
-        } else if self.rt.pointer().is_some() {
-            self.rt.pointer_leave();
+    pub(super) fn observe_pointer(&mut self, app: &mut dyn OverlayApp, x: f32, y: f32) {
+        if app.rt().pointer_captured() || (x >= 0.0 && y >= 0.0 && x < self.at.size.0 && y < self.at.size.1) {
+            self.dirty |= app.observe_pointer(x, y);
+            self.begin_drag_out(app.rt_mut());
+        } else if app.rt().pointer().is_some() {
+            app.rt_mut().pointer_leave();
             self.dirty = true;
         }
     }
 
     /// Starts the OS drag a pointer move asked for, before the move event returns.
-    pub(super) fn begin_drag_out(&mut self) {
-        let Some(start) = self.rt.take_drag_out() else { return };
+    pub(super) fn begin_drag_out(&mut self, rt: &mut RuntimeCore) {
+        let Some(start) = rt.take_drag_out() else { return };
         self.dirty = true;
-        let (sink, path) = (self.rt.drag_end_sink(), start.path.clone());
+        let (sink, path) = (rt.drag_end_sink(), start.path.clone());
         #[allow(irrefutable_let_patterns)]
         let Some(Live { backing: Backing::Window(window), config, scale, .. }) = self.surface.live() else {
             sink.borrow_mut().push((path, crate::DragOutcome::Cancelled));
@@ -60,7 +60,7 @@ impl<T: 'static> Overlay<T> {
         };
         let image = match (&self.gpu, &self.renderer) {
             (Some(gpu), Some(renderer)) if start.item.drag_image().is_none() =>
-                crate::drag_out::snapshot(gpu, renderer, (config.width, config.height), *scale, self.rt.clear_color(), start.rect),
+                crate::drag_out::snapshot(gpu, renderer, (config.width, config.height), *scale, rt.clear_color(), start.rect),
             _ => None,
         };
         let wake = self.shared.wake.lock().unwrap().clone();
@@ -73,29 +73,30 @@ impl<T: 'static> Overlay<T> {
         // its regions (so drops land on the windows below) and deferred input changes apply.
         #[cfg(target_os = "macos")]
         if let Some(panel) = &self.panel { panel.pointer_released(); }
-        self.apply_input();
-        self.apply_cursor();
+        self.apply_input(rt);
+        self.apply_cursor(rt);
     }
+
     /// A left press or release, at the panel's click point when it has one.
-    pub(super) fn left_button(&mut self, pressed: bool, point: Option<(f32, f32)>) {
+    pub(super) fn left_button(&mut self, app: &mut dyn OverlayApp, pressed: bool, point: Option<(f32, f32)>) {
         if pressed {
-            if let Some((x, y)) = point { self.rt.pointer_move(x, y); }
-            if let Some((x, y)) = self.rt.pointer() {
-                self.rt.pointer_down(x, y);
-                self.rt.physical_input(crate::PhysicalInput::Modifiers(crate::window::map_mods(self.mods)));
+            if let Some((x, y)) = point { app.pointer_move(x, y); }
+            if let Some((x, y)) = app.rt().pointer() {
+                app.pointer_down(x, y);
+                app.rt_mut().physical_input(crate::PhysicalInput::Modifiers(crate::window::map_mods(self.mods)));
             }
-        } else if let Some((x, y)) = point.or(self.rt.pointer()) {
+        } else if let Some((x, y)) = point.or(app.rt().pointer()) {
             // `pointer_up` moves to the release point itself, after disarming a drag-out: a
             // release never starts an OS drag.
-            self.rt.pointer_up(x, y);
+            app.pointer_up(x, y);
         }
         self.dirty = true;
     }
 
     /// winit reported the pointer at (x, y).
-    pub(super) fn cursor_moved(&mut self, x: f32, y: f32) {
-        self.dirty |= self.rt.observe_pointer(x, y);
-        self.begin_drag_out();
+    pub(super) fn cursor_moved(&mut self, app: &mut dyn OverlayApp, x: f32, y: f32) {
+        self.dirty |= app.observe_pointer(x, y);
+        self.begin_drag_out(app.rt_mut());
     }
 
     #[cfg(target_os = "macos")]
@@ -106,40 +107,40 @@ impl<T: 'static> Overlay<T> {
     /// A release lost before the click a position belongs to ends first, so the press that lost
     /// it never hears that position.
     #[cfg(target_os = "macos")]
-    pub(super) fn before_position(&mut self, pointer: &crate::platform::macos::PointerState) {
+    pub(super) fn before_position(&mut self, app: &mut dyn OverlayApp, pointer: &crate::platform::macos::PointerState) {
         let lost = pointer.take_lost_before_position();
-        self.release_lost(lost);
+        self.release_lost(app, lost);
     }
 
     /// winit reported a position on the panel. With the button known up, the held press can't
     /// start an OS drag: the session needs the button held, and this is the Up's own position or
     /// one from before it.
     #[cfg(target_os = "macos")]
-    pub(super) fn native_moved(&mut self, pointer: &crate::platform::macos::PointerState, x: f32, y: f32) {
-        self.before_position(pointer);
-        if pointer.button_up() { self.rt.disarm_drag_out(); }
-        self.cursor_moved(x, y);
+    pub(super) fn native_moved(&mut self, app: &mut dyn OverlayApp, pointer: &crate::platform::macos::PointerState, x: f32, y: f32) {
+        self.before_position(app, pointer);
+        if pointer.button_up() { app.rt_mut().disarm_drag_out(); }
+        self.cursor_moved(app, x, y);
     }
 
     /// winit dispatched a left press or release on the panel.
     #[cfg(target_os = "macos")]
-    pub(super) fn native_left(&mut self, pointer: &crate::platform::macos::PointerState, pressed: bool) {
+    pub(super) fn native_left(&mut self, app: &mut dyn OverlayApp, pointer: &crate::platform::macos::PointerState, pressed: bool) {
         let (lost, point) = pointer.take_edge(pressed);
-        self.left_edge(lost, pressed, point);
+        self.left_edge(app, lost, pressed, point);
     }
 
     /// A turn's pointer work once the panel has sampled: the position to report, if any.
     #[cfg(target_os = "macos")]
-    pub(super) fn turn_position(&mut self, pointer: &crate::platform::macos::PointerState) -> Option<(f32, f32)> {
-        self.before_position(pointer);
+    pub(super) fn turn_position(&mut self, app: &mut dyn OverlayApp, pointer: &crate::platform::macos::PointerState) -> Option<(f32, f32)> {
+        self.before_position(app, pointer);
         pointer.take_position()
     }
 
     /// Ends the runtime's press if the panel lost its release: the runtime hears no drop.
     #[cfg(target_os = "macos")]
-    pub(super) fn release_lost(&mut self, lost: Option<(f32, f32)>) {
-        if let Some((x, y)) = lost && self.rt.pointer_captured() {
-            self.rt.pointer_release_lost(x, y);
+    pub(super) fn release_lost(&mut self, app: &mut dyn OverlayApp, lost: Option<(f32, f32)>) {
+        if let Some((x, y)) = lost && app.rt().pointer_captured() {
+            app.pointer_release_lost(x, y);
             self.dirty = true;
         }
     }
@@ -147,42 +148,50 @@ impl<T: 'static> Overlay<T> {
     /// A left press or release from the panel. A release it already gave up on lands first, so
     /// it can't end this press, and a late Up can't turn it into a drop.
     #[cfg(target_os = "macos")]
-    pub(super) fn left_edge(&mut self, lost: Option<(f32, f32)>, pressed: bool, point: Option<(f32, f32)>) {
-        self.release_lost(lost);
-        if self.options.input.resolved(self.interactive) != OverlayInput::None { self.left_button(pressed, point); }
+    pub(super) fn left_edge(&mut self, app: &mut dyn OverlayApp, lost: Option<(f32, f32)>, pressed: bool, point: Option<(f32, f32)>) {
+        self.release_lost(app, lost);
+        if self.options.input.resolved(self.interactive) != OverlayInput::None { self.left_button(app, pressed, point); }
+    }
+
+    /// Delivers clipboard replies or secret-copy changes from the worker. A shown overlay steps
+    /// them on its next drawn frame; a hidden or occluded one advances now.
+    pub(super) fn clipboard_due(&mut self, app: &mut dyn OverlayApp) {
+        if !self.clipboard.receive_core(app.rt_mut()) { return; }
+        self.dirty = true;
+        if self.frameless() { self.advance(app); }
     }
 
     /// Delivers drag ends a host reported. An `on_drag_start` may have hidden the overlay;
     /// its `on_drag_end` still runs.
-    pub(super) fn drag_ends_due(&mut self) {
-        if !self.rt.drag_ends_pending() { return; }
+    pub(super) fn drag_ends_due(&mut self, app: &mut dyn OverlayApp) {
+        if !app.rt().drag_ends_pending() { return; }
         self.dirty = true;
-        if self.frameless() { self.advance(); }
+        if self.frameless() { self.advance(app); }
     }
 
     /// True when a layer surface's input region changed and waits for a commit.
-    pub(super) fn publish_regions(&mut self) -> bool {
+    pub(super) fn publish_regions(&mut self, rt: &RuntimeCore) -> bool {
         // An X11 window's input shape applies at once, with no commit to wait for.
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if let Some(Live { backing: Backing::Xwayland(surface), .. }) = self.surface.live_mut() {
-            surface.regions(self.rt.hit_regions());
+            surface.regions(rt.hit_regions());
             return false;
         }
         let Some(live) = self.surface.live() else { return false };
         #[cfg(target_os = "macos")]
-        if let Some(panel) = &self.panel { panel.set_regions(self.rt.hit_regions()); }
+        if let Some(panel) = &self.panel { panel.set_regions(rt.hit_regions()); }
         #[cfg(target_os = "windows")]
-        if let Some(native) = &self.native { native.set_regions(self.rt.hit_regions(), live.scale); }
+        if let Some(native) = &self.native { native.set_regions(rt.hit_regions(), live.scale); }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if self.options.input.resolved(self.interactive) == OverlayInput::Regions && let Some(x11) = &mut self.x11 { x11.regions(self.rt.hit_regions(), live.scale); }
+        if self.options.input.resolved(self.interactive) == OverlayInput::Regions && let Some(x11) = &mut self.x11 { x11.regions(rt.hit_regions(), live.scale); }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if let Backing::Layer(layer) = &live.backing { return layer.input_regions(self.rt.hit_regions(), self.interactive); }
-        let _ = live;
+        if let Backing::Layer(layer) = &live.backing { return layer.input_regions(rt.hit_regions(), self.interactive); }
+        let _ = (live, rt);
         false
     }
 
-    pub(super) fn apply_input(&mut self) {
-        if self.rt.pointer_captured() { return; }
+    pub(super) fn apply_input(&mut self, rt: &RuntimeCore) {
+        if rt.pointer_captured() { return; }
         #[cfg(target_os = "macos")]
         if self.panel.as_ref().is_some_and(|panel| panel.pointer_captured()) { return; }
         let Some(input) = self.pending_input.take() else { return };
@@ -203,27 +212,27 @@ impl<T: 'static> Overlay<T> {
                 _ => {}
             }
         }
-        self.publish_regions();
+        self.publish_regions(rt);
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut() { layer.commit(); }
     }
 
-    pub(super) fn advance(&mut self) { self.advance_at(Instant::now()); }
+    pub(super) fn advance(&mut self, app: &mut dyn OverlayApp) { self.advance_at(app, crate::time::now()); }
 
     /// An overlay that draws nothing delivers queued input without drawing, such as the
     /// releases of the modifier keys held when it hid, rather than when it next shows.
-    pub(super) fn hidden_input(&mut self) {
-        if !self.presence.drawing() && self.rt.keys_queued() { self.advance(); }
+    pub(super) fn hidden_input(&mut self, app: &mut dyn OverlayApp) {
+        if !self.presence.drawing() && app.rt().keys_queued() { self.advance(app); }
     }
 
     /// Fn changes the monitor saw since the loop last turned. A hidden overlay drops them: its
     /// hide released Fn, and it takes no keys.
     #[cfg(target_os = "macos")]
-    pub(super) fn fn_key(&mut self) {
+    pub(super) fn fn_key(&mut self, app: &mut dyn OverlayApp) {
         let Some(changes) = self.surface.live().and_then(|l| l.fn_key.as_ref()).map(|f| f.take()) else { return };
         if !self.presence.shown() || self.options.keys != KeyPolicy::OnDemand { return; }
         for pressed in changes {
-            self.dirty |= self.rt.physical_with_fallback(crate::PhysicalInput::Key {
+            self.dirty |= app.physical_with_fallback(crate::PhysicalInput::Key {
                 key: winit::keyboard::KeyCode::Fn, mods: crate::window::map_mods(self.mods), pressed, repeat: false,
             }, None);
         }
@@ -233,28 +242,30 @@ impl<T: 'static> Overlay<T> {
     /// overlay draws a frame, which polls; a hidden one polls now, as for a due timer, and
     /// re-runs the view when it shows (`advance_at`).
     /// Updates that changed nothing (`update_if`) only deliver their requests.
-    pub(super) fn apply_wake(&mut self, woken: bool, updates: Vec<Update<T>>) {
-        let queued = !updates.is_empty();
-        let mut updated = false;
-        for f in updates { updated |= self.rt.update_if(f); }
-        if woken { self.rt.invalidate(); }
-        if queued || woken { self.clipboard.flush(&mut self.rt); }
+    pub(super) fn apply_wake(&mut self, app: &mut dyn OverlayApp, woken: bool) {
+        let (queued, updated) = app.drain_updates();
+        self.apply_wake_drained(app, woken, queued, updated);
+    }
+
+    pub(super) fn apply_wake_drained(&mut self, app: &mut dyn OverlayApp, woken: bool, queued: bool, updated: bool) {
+        if woken { app.rt_mut().invalidate(); }
+        if queued || woken { self.clipboard.flush_core(app.rt_mut()); }
         if !woken && !updated {
             if !queued { return; }
             // A pop-up they asked for may be answered at once, running its callback: a change.
-            let stale = self.rt.needs_commit();
-            self.open_popup();
-            if (stale || !self.rt.needs_commit()) && !self.rt.has_pending_input() {
-                self.rt.schedule_pending_wakes();
+            let stale = app.rt().needs_commit();
+            self.open_popup(app);
+            if (stale || !app.rt().needs_commit()) && !app.rt().has_pending_input() {
+                app.rt_mut().schedule_pending_wakes();
                 return;
             }
-            self.clipboard.flush(&mut self.rt);
+            self.clipboard.flush_core(app.rt_mut());
         }
         self.dirty = true; // Queued updates already invalidate the cache before polling.
         if self.frameless() {
             // Register timer requests even before the first show; hidden or occluded overlays
             // don't draw.
-            self.advance();
+            self.advance(app);
         }
     }
 
@@ -263,54 +274,55 @@ impl<T: 'static> Overlay<T> {
         !self.presence.drawing() || self.presence.occluded()
     }
 
-    pub(super) fn advance_at(&mut self, now: Instant) {
+    pub(super) fn advance_at(&mut self, app: &mut dyn OverlayApp, now: Instant) {
         // Covered or asleep, a shown overlay only polls. What it would commit waits for the
         // first uncovered frame, which resumes running motion and starts new motion fresh
         // (`step`). Hidden, an overlay only polls too, and its view waits for the frame that
         // shows it; a retained one commits at most every `HIDDEN_REFRESH` to keep its cached
         // frame near. Input and drag ends still run their handlers now.
-        let handlers = self.rt.has_pending_input() || self.rt.drag_ends_pending();
+        let handlers = app.rt().has_pending_input() || app.rt().drag_ends_pending();
         let polls_only = !handlers && if self.presence.drawing() { self.presence.shown() && self.presence.occluded() } else { !self.retained() || !self.hidden_pace.ready(now) };
-        if !polls_only { return self.commit_at(now); }
-        self.rt.poll_hidden();
-        if self.rt.has_pending_input() { return self.commit_at(now); }
-        drop_window_requests(&mut self.rt);
-        self.clipboard.flush(&mut self.rt);
-        self.open_popup();
+        if !polls_only { return self.commit_at(app, now); }
+        app.poll_hidden();
+        if app.rt().has_pending_input() { return self.commit_at(app, now); }
+        drop_window_requests(app.rt_mut());
+        self.clipboard.flush_core(app.rt_mut());
+        self.open_popup(app);
         if self.presence.drawing() {
             self.dirty = true;
-        } else if self.rt.needs_commit() {
+        } else if app.rt().needs_commit() {
             self.dirty = true;
             if self.retained() { self.hidden_pace.changed(now); }
         }
     }
 
     /// Runs a frame without drawing: handlers, poll, the view and layout.
-    pub(super) fn commit_at(&mut self, now: Instant) {
-        let commits = self.rt.stats.commits;
+    pub(super) fn commit_at(&mut self, app: &mut dyn OverlayApp, now: Instant) {
+        let commits = app.rt().stats.commits;
         if self.retained() {
-            self.rt.frame_split(now.saturating_duration_since(self.clock.last()).as_secs_f64(), 0.0);
+            app.frame_split(now.saturating_duration_since(self.clock.last()).as_secs_f64(), 0.0);
             self.clock.hold(now);
         } else {
-            self.rt.frame(0.0);
+            app.frame(0.0);
         }
-        drop_window_requests(&mut self.rt);
-        self.clipboard.flush(&mut self.rt);
-        self.open_popup();
-        if !self.presence.drawing() && self.rt.stats.commits != commits { self.hidden_pace.rendered(now); }
+        drop_window_requests(app.rt_mut());
+        self.clipboard.flush_core(app.rt_mut());
+        self.open_popup(app);
+        let rt = app.rt();
+        if !self.presence.drawing() && rt.stats.commits != commits { self.hidden_pace.rendered(now); }
         // Even a transition that finished in this step needs its current pixels submitted.
         // A scheduling-only poll with no motion still preserves the prepared frame.
-        if self.rt.stats.commits != commits || self.rt.animating || !self.idle {
+        if rt.stats.commits != commits || rt.animating || !self.idle {
             self.dirty = true;
             self.idle = false;
         }
     }
 
-    pub(super) fn wake_due(&mut self, now: Instant) {
-        self.presence_due(now);
+    pub(super) fn wake_due(&mut self, app: &mut dyn OverlayApp, now: Instant) {
+        self.presence_due(app, now);
         // Paced to a frame interval: a hidden or covered overlay's poll that keeps asking for
         // the next frame runs once a frame, however often other events turn the loop.
-        let deadline = crate::window::timer_deadline(&self.rt);
+        let deadline = crate::window::timer_deadline_core(app.rt());
         if deadline.is_some_and(|deadline| deadline <= now) {
             // Backing off, the frame waits for the retry and would leave the timer due.
             if !self.frameless() && !self.backing_off(now) {
@@ -322,11 +334,12 @@ impl<T: 'static> Overlay<T> {
             } else {
                 // No frame will come to run it in time: a hidden, occluded or backing-off
                 // overlay steps without drawing, so its timers fire (and may hide it) on time.
-                self.advance();
+                self.advance(app);
+                self.turn_frame.step(frame::TurnEvent::WakeStepped);
             }
         }
         // A hidden retained overlay's paced commit of what changed since its last.
-        if !self.presence.drawing() && self.hidden_pace.take_due(now) { self.advance_at(now); }
+        if !self.presence.drawing() && self.hidden_pace.take_due(now) { self.advance_at(app, now); }
         if self.backoff.deadline().is_some_and(|at| at <= now) {
             self.backoff_step(crate::window::BackoffEvent::Lapsed);
             self.dirty = true;
@@ -336,13 +349,15 @@ impl<T: 'static> Overlay<T> {
     /// A frame with no drawable still runs what it would have (updates, poll, due timers)
     /// without drawing, as a hidden overlay does, unless it already `stepped`. The next try
     /// waits, with the display link stopped so no tick tries sooner.
-    pub(super) fn missed(&mut self, missed: crate::window::Missed, paced: bool, stepped: bool) {
-        let now = Instant::now();
+    pub(super) fn missed(&mut self, app: &mut dyn OverlayApp, missed: crate::window::Missed, paced: bool, stepped: bool) {
+        let now = crate::time::now();
+        self.quiet.step(frame::QuietEvent::Forget);
+        self.turn_frame.step(frame::TurnEvent::FrameMissed);
         if stepped {
-            drop_window_requests(&mut self.rt);
-            self.clipboard.flush(&mut self.rt);
+            drop_window_requests(app.rt_mut());
+            self.clipboard.flush_core(app.rt_mut());
         } else {
-            self.advance_at(now);
+            self.advance_at(app, now);
         }
         self.backoff_step(crate::window::BackoffEvent::Missed { missed, paced, now });
         let pacing = self.pacing_state(missed != crate::window::Missed::Occluded);
@@ -374,17 +389,17 @@ impl<T: 'static> Overlay<T> {
     }
 
     /// Applies requests from other threads: updates, edge, show and hide.
-    pub(super) fn sync(&mut self, event_loop: &ActiveEventLoop) {
-        if self.clipboard.receive(&mut self.rt) { self.dirty = true; self.advance(); }
-        if self.popup.answer(&mut self.rt) {
+    pub(super) fn sync(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop) {
+        self.clipboard_due(app);
+        if app.popup_answer(&mut self.popup) {
             self.dirty = true;
-            if self.frameless() { self.advance(); }
+            if self.frameless() { self.advance(app); }
         }
-        if self.rt.live_pending() { self.dirty = true; }
-        self.drag_ends_due();
+        if app.rt().live_pending() { self.dirty = true; }
+        self.drag_ends_due(app);
         let requests = std::mem::take(&mut *self.shared.requests.lock().unwrap());
         if let Some(input) = requests.input { self.pending_input = Some(input); }
-        self.apply_input();
+        self.apply_input(app.rt());
         if let Some(exclude) = requests.exclude_from_capture { self.set_capture_exclusion(exclude); }
         if let Some(allow) = requests.xwayland_input { self.options.xwayland_input = allow; }
         if let Some(follow) = requests.follow_pointer {
@@ -402,10 +417,10 @@ impl<T: 'static> Overlay<T> {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         let layer_was_visible = self.presence.shown();
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if recreate_layer { self.hide(); }
+        if recreate_layer { self.hide(app); }
         if let Some(placement) = requests.placement { self.options.placement = placement; }
         if let Some(display) = requests.display { self.options.display = display; }
-        self.apply_wake(requests.woken, requests.updates);
+        self.apply_wake(app, requests.woken);
         let mut at = self.at;
         at.edge = requests.edge.unwrap_or(at.edge);
         at.margin = requests.margin.unwrap_or(at.margin);
@@ -419,13 +434,13 @@ impl<T: 'static> Overlay<T> {
             self.at = at;
             self.resolve_size(event_loop);
             if self.at.size != old_size {
-                self.resized(event_loop);
+                self.resized(app, event_loop);
             } else {
                 match self.surface.live_mut().map(|l| &mut l.backing) {
                     Some(Backing::Window(w)) => {
                         let w = w.clone();
-                        self.place_window(event_loop, &w);
-                        if let Some(gpu) = self.gpu.clone() { self.rescale(&gpu, crate::window::backing_scale(&w)); }
+                        self.place_window(app.rt_mut(), event_loop, &w);
+                        if let Some(gpu) = self.gpu.clone() { self.rescale(app, &gpu, crate::window::backing_scale(&w)); }
                     }
                     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
                     Some(Backing::Layer(layer)) => {
@@ -438,26 +453,26 @@ impl<T: 'static> Overlay<T> {
                 }
             }
         }
-        if self.options.prewarm && self.shared.availability.load(Ordering::Acquire) == 0 { self.prepare(event_loop, false); }
+        if self.options.prewarm && self.shared.availability.load(Ordering::Acquire) == 0 { self.prepare(app, event_loop, false); }
         if let Some(level) = requests.macos_level {
             self.macos_level = Some(level);
             #[cfg(target_os = "macos")]
             if let Some(panel) = &self.panel { panel.set_level(level); }
         }
         match requests.visibility {
-            Some(Visibility::Show(fade)) => self.show_fading(event_loop, fade),
-            Some(Visibility::Hide(fade)) => self.hide_fading(fade),
+            Some(Visibility::Show(fade)) => self.show_fading(app, event_loop, fade),
+            Some(Visibility::Hide(fade)) => self.hide_fading(app, fade),
             None => {}
         }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if recreate_layer && self.surface.live().is_none() {
-            if layer_was_visible && !matches!(requests.visibility, Some(Visibility::Hide(_))) { self.show_fading(event_loop, Duration::ZERO); }
-            else if self.options.prewarm { self.prepare(event_loop, false); }
+            if layer_was_visible && !matches!(requests.visibility, Some(Visibility::Hide(_))) { self.show_fading(app, event_loop, Duration::ZERO); }
+            else if self.options.prewarm { self.prepare(app, event_loop, false); }
         }
         if requests.refollow && self.presence.shown() && let Some(point) = Self::sample_pointer(event_loop) {
-            self.refollow(event_loop, point);
+            self.refollow(app, event_loop, point);
         }
-        self.apply_input();
+        self.apply_input(app.rt());
         if self.presence.shown() {
             #[cfg(target_os = "macos")]
             if let Some(panel) = &self.panel { self.shared.native.lock().unwrap().1.global_pointer = panel.global_pointer(); }
@@ -472,5 +487,11 @@ impl<T: 'static> Overlay<T> {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if requests.request_keys && self.presence.shown() && self.options.keys == KeyPolicy::OnDemand
             && let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live() { layer.request_keys(); }
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if requests.request_keys && self.presence.shown() && self.options.keys == KeyPolicy::OnDemand
+            && let Some(x11) = &self.x11 { x11.request_keys(); }
+        #[cfg(target_os = "windows")]
+        if requests.request_keys && self.presence.shown() && self.options.keys == KeyPolicy::OnDemand
+            && let Some(native) = &self.native { native.request_keys(); }
     }
 }

@@ -1,3 +1,5 @@
+use rune::col;
+
 use super::*;
 
 #[derive(Default)]

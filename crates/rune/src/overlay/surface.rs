@@ -146,9 +146,10 @@ impl Surface {
     }
 }
 
-impl<T: 'static> Overlay<T> {
+impl OverlayCore {
     /// Creates the wgpu surface (and the GPU device, if this is the first surface).
-    pub(super) fn attach(&mut self, backing: Backing, scale: f32) -> Option<Live> {
+    #[allow(unsafe_code)]
+    pub(super) fn attach(&mut self, app: &mut dyn OverlayApp, backing: Backing, scale: f32) -> Option<Live> {
         // First, before the surface binds the view (macOS may observe it).
         let a11y = self.shared.wake.lock().unwrap().clone().and_then(|wake| match &backing {
             Backing::Window(window) => crate::a11y::Adapter::new(window, wake),
@@ -202,7 +203,7 @@ impl<T: 'static> Overlay<T> {
                 }
             }
         };
-        let features = self.compositor.as_ref().map_or(wgpu::Features::empty(), |c| c.features());
+        let features = app.compositor_features();
         // A device that died while the overlay was hidden (a driver reset, a resume from
         // Modern Standby) can configure nothing: the next surface gets a new one.
         if self.gpu.as_ref().is_some_and(|gpu| gpu.is_lost()) {
@@ -239,7 +240,8 @@ impl<T: 'static> Overlay<T> {
         };
         let gpu = self.gpu.clone()?;
         let (w, h) = ((self.at.size.0 * scale).round() as u32, (self.at.size.1 * scale).round() as u32);
-        let (mut config, translucent) = crate::window::surface_config(&surface, &gpu.adapter, (w, h), self.rt.srgb_blend())?;
+        let rt = app.rt_mut();
+        let (mut config, translucent) = crate::window::surface_config(&surface, &gpu.adapter, (w, h), rt.srgb_blend())?;
         match translucent {
             Some(mode) => config.alpha_mode = mode,
             // Windows composites an overlay's pixels only through DirectComposition; drawn
@@ -261,22 +263,22 @@ impl<T: 'static> Overlay<T> {
         }
         #[cfg(target_os = "macos")]
         crate::platform::macos::pin_contents_top_left(&surface);
-        let target_format = if self.rt.srgb_blend() { config.format.remove_srgb_suffix() } else { config.format };
+        let target_format = if rt.srgb_blend() { config.format.remove_srgb_suffix() } else { config.format };
         if let Some(renderer) = &mut self.renderer {
-            crate::window::rebuild_renderer(&gpu.device, renderer, target_format, &mut self.rt);
+            crate::window::rebuild_renderer_core(&gpu.device, renderer, target_format, rt);
         } else {
             let mut renderer = prewarmed.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));
-            crate::window::rebuild_renderer(&gpu.device, &mut renderer, target_format, &mut self.rt);
+            crate::window::rebuild_renderer_core(&gpu.device, &mut renderer, target_format, rt);
             self.renderer = Some(renderer);
-            self.rt.text.atlas.invalidate();
-            self.rt.images.invalidate();
+            rt.text.atlas.invalidate();
+            rt.images.invalidate();
         }
         // Core Animation composites premultiplied pixels even in wgpu's PostMultiplied mode;
         // other straight-alpha surfaces get the conversion pass.
         let alpha = (config.alpha_mode == wgpu::CompositeAlphaMode::PostMultiplied && gpu.adapter.get_info().backend != wgpu::Backend::Metal)
             .then(|| crate::render::surface_alpha::AlphaSurface::new(&gpu.device, target_format, (config.width, config.height)));
-        self.rt.transparent = true;
-        self.rt.set_viewport(self.at.size, scale);
+        rt.transparent = true;
+        rt.set_viewport(self.at.size, scale);
         #[cfg(target_os = "macos")]
         let pacing = self.frame_wake.clone().and_then(|wake| {
             let Backing::Window(window) = &backing;
@@ -284,7 +286,7 @@ impl<T: 'static> Overlay<T> {
         });
         #[cfg(target_os = "macos")]
         let fn_key = match &backing {
-            Backing::Window(window) if self.rt.modifier_keys() => crate::input::fn_key::FnKey::new(window),
+            Backing::Window(window) if rt.modifier_keys() => crate::input::fn_key::FnKey::new(window),
             _ => None,
         };
         Some(Live {
@@ -303,7 +305,7 @@ impl<T: 'static> Overlay<T> {
         })
     }
 
-    pub(super) fn rescale(&mut self, gpu: &Gpu, scale: f32) {
+    pub(super) fn rescale(&mut self, app: &mut dyn OverlayApp, gpu: &Gpu, scale: f32) {
         let Some(live) = self.surface.live_mut() else { return };
         if (live.scale - scale).abs() < f32::EPSILON {
             return;
@@ -312,23 +314,23 @@ impl<T: 'static> Overlay<T> {
         live.config.width = (self.at.size.0 * scale).round().max(1.0) as u32;
         live.config.height = (self.at.size.1 * scale).round().max(1.0) as u32;
         live.settle();
-        if let Err(error) = crate::window::configure(&live.surface, &gpu, &live.config) {
-            self.surface_refused(format!("could not resize its GPU surface: {error}"));
-            return;
-        }
-        // `configure` waits for the present queue to drain, so none of our frames are queued on
-        // the swap chain it reconfigures.
+        // `configure` waits for the present queue to drain, so unregister any outstanding wait
+        // before reconfiguring the swap chain (and keep it cleared if `configure` fails).
         #[cfg(target_os = "windows")]
         live.slot.reset();
+        if let Err(error) = crate::window::configure(&live.surface, gpu, &live.config) {
+            self.surface_refused(app, format!("could not resize its GPU surface: {error}"));
+            return;
+        }
         if let Some(alpha) = &mut live.alpha {
             alpha.resize(&gpu.device, (live.config.width, live.config.height));
         }
-        self.rt.set_viewport(self.at.size, scale);
+        app.rt_mut().set_viewport(self.at.size, scale);
         self.dirty = true;
     }
 }
 
-impl<T: 'static> Drop for Overlay<T> {
+impl Drop for OverlayCore {
     fn drop(&mut self) {
         *self.shared.native.lock().unwrap() = Default::default();
         self.set_availability(Availability::Unavailable);
@@ -336,11 +338,11 @@ impl<T: 'static> Drop for Overlay<T> {
     }
 }
 
-impl<T: 'static> Overlay<T> {
+impl OverlayCore {
     /// Its surface refused a new configuration: the overlay hides and drops it, so wgpu never
     /// panics on its next drawable. The next show tries a new one.
-    pub(super) fn surface_refused(&mut self, reason: String) {
-        self.hide();
+    pub(super) fn surface_refused(&mut self, app: &mut dyn OverlayApp, reason: String) {
+        self.hide(app);
         self.release();
         self.fail(reason);
     }

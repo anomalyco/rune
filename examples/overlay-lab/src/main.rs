@@ -91,6 +91,7 @@ fn spec() -> AppSpec<State> {
 
 /// Optional local control socket for bounded native lifecycle/presentation probes.
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn native_probe(pill: OverlayHandle<State>, app: rune::AppHandle<State>) {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
@@ -103,6 +104,7 @@ fn native_probe(pill: OverlayHandle<State>, app: rune::AppHandle<State>) {
             let Ok(mut stream) = stream else { break };
             let mut command = String::new();
             if BufReader::new(&stream).read_line(&mut command).is_err() { continue; }
+            // SAFETY: `CACurrentMediaTime` takes no arguments and is safe to call from any thread.
             let at = unsafe { CACurrentMediaTime() };
             match command.trim() {
                 "show" => pill.show(),
@@ -114,11 +116,11 @@ fn native_probe(pill: OverlayHandle<State>, app: rune::AppHandle<State>) {
                 "chips" => pill.update(|s, _| s.hit_only = false),
                 "status" => {},
                 "quit" => app.quit(),
-                _ => { let _ = writeln!(stream, "unknown command"); continue; }
+                _ => { writeln!(stream, "unknown command").ok(); continue; }
             }
             let line = format!("probe command={} time={at:.9} window={:?}", command.trim(), pill.window_number());
             eprintln!("{line}");
-            let _ = writeln!(stream, "{line}");
+            writeln!(stream, "{line}").ok();
         }
     });
 }
@@ -127,7 +129,7 @@ fn main() {
         rune::run_windows(|displays| {
             let mut state = init(); state.underlay = true;
             let app = App::new(spec()).init(move || state);
-            if let Ok(seconds) = std::env::var("OVERLAY_LAB_SECONDS").unwrap_or_default().parse::<u64>() {
+            if let Ok(seconds) = rune::env::var("OVERLAY_LAB_SECONDS").unwrap_or_default().parse::<u64>() {
                 let handle = app.handle();
                 std::thread::spawn(move || { std::thread::sleep(std::time::Duration::from_secs(seconds)); handle.quit(); });
             }
@@ -170,7 +172,7 @@ fn main() {
         if std::env::var_os("OVERLAY_LAB_PICKER").is_some() {
             let mut state = init(); state.handles = handles; show_picker(&mut state);
         }
-        if let Ok(seconds) = std::env::var("OVERLAY_LAB_SECONDS").unwrap_or_default().parse::<u64>() {
+        if let Ok(seconds) = rune::env::var("OVERLAY_LAB_SECONDS").unwrap_or_default().parse::<u64>() {
             let app_handle = app.handle();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(750));

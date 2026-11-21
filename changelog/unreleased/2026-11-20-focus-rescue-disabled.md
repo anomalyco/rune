@@ -1,0 +1,1 @@
+- Focus: a focused control that becomes disabled (or otherwise stops taking focus) while it stays in the tree hands focus to its neighbour, as a removed one does, instead of dropping focus to the window.

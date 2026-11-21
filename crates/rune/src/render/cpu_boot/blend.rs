@@ -4,6 +4,8 @@
 //! SSE2 at once; elsewhere the same operations run a channel at a time, in the same order, so
 //! both produce the same bits.
 
+#![allow(unsafe_code)]
+
 /// Adding 1.5 × 2²³ to a float in [0, 255] rounds it to an integer, ties to even, in the default
 /// rounding mode, and leaves that integer in the low mantissa bits.
 const MAGIC: f32 = 12_582_912.0;
@@ -131,8 +133,8 @@ pub(super) fn composite_row_by(row: &mut [u8], src: &[[f32; 4]], opacity: f32) {
 #[cfg(target_arch = "x86_64")]
 unsafe fn over4(row: &mut [u8], src: &[[f32; 4]], opacity: f32) {
     use std::arch::x86_64::*;
-    // SAFETY (whole body): SSE2 is baseline on x86-64; every load and store is inside `row`
-    // (16 bytes a step) and `src` (four texels a step).
+    // SAFETY: SSE2 is baseline on x86-64; every load and store is inside `row` (16 bytes a step)
+    // and `src` (four texels a step).
     unsafe {
         let (lo, hi, magic, one) = (_mm_setzero_ps(), _mm_set1_ps(255.0), _mm_set1_ps(MAGIC), _mm_set1_ps(1.0));
         let k = _mm_set1_ps(opacity);

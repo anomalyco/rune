@@ -23,7 +23,7 @@ pub(super) fn share_later(fonts: &'static [&'static [u8]]) {
     }
     wasm_bindgen_futures::spawn_local(async move {
         for &font in fonts {
-            let _ = wasm_bindgen_futures::JsFuture::from(super::platform::next_idle(1000)).await;
+            wasm_bindgen_futures::JsFuture::from(super::platform::next_idle(1000)).await.ok();
             share([font]);
         }
     });

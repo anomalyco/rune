@@ -2,13 +2,16 @@
 //! frame log and `RUNE_COMMIT_BUDGET_MS`, and what the commit warnings hear once a frame.
 use super::*;
 
-impl<S: 'static> Runtime<S> {
-    /// A frame's commit for `why` (`CommitWhy` bits).
-    pub(super) fn commit_for(&mut self, tx: &Tx, why: u16) {
+impl CommitState {
+    #[inline]
+    pub(super) fn begin_watch(&mut self, why: u16) {
         self.commit_why |= why;
         if crate::tooling::interaction::on() { self.watch.interaction.committed(why); }
         self.watch.cause = why;
-        self.commit(tx);
+    }
+
+    #[inline]
+    pub(super) fn end_watch(&mut self) {
         self.watch.cause = 0;
     }
 
@@ -16,8 +19,7 @@ impl<S: 'static> Runtime<S> {
     /// `commits0`th commit, while a viewport scrolled; `instant` is the viewport an instant scroll
     /// it asked for moves.
     #[cfg(debug_assertions)]
-    pub(super) fn watch_frame(&mut self, commits0: u64, instant: Option<&str>) {
-        let scrolling = self.scrolling();
+    pub(in crate::runtime) fn watch_frame(&mut self, commits0: u64, scrolling: bool, instant: Option<&str>) {
         self.watch.meter.frame_ends(scrolling, self.commits != commits0, instant);
     }
 }

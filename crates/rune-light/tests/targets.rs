@@ -1,7 +1,7 @@
 //! What `LightRenderer::render` and `GlassRenderer::render` allocate and record, on a real device. Skips when no
 //! adapter is found.
 
-use rune_light::{Gi, Glass, GlassRenderer, GlassSettings, Light, LightRenderer, Prim, Scene, Settings};
+use rune_light::{Gi, Light, LightRenderer, Prim, Scene, Settings};
 
 const W: u32 = 256;
 const H: u32 = 160;
@@ -58,6 +58,7 @@ impl Rig {
         self.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
     }
 
+    #[cfg(feature = "test-gpu-counters")]
     fn live_bind_groups(&self) -> isize {
         self.device.get_internal_counters().hal.bind_groups.read()
     }
@@ -97,8 +98,10 @@ fn without_gi_nothing_gi_is_allocated_or_recorded() {
 
 /// A bind group made for one frame lives only as long as that frame's commands, so recording a steady frame
 /// raises the live count until it's submitted. A cached one is already live.
+#[cfg(feature = "test-gpu-counters")]
 #[test]
 fn a_steady_frame_makes_no_bind_groups() {
+    use rune_light::{Glass, GlassRenderer, GlassSettings};
     let Some(mut r) = rig() else { return eprintln!("no adapter; skipped") };
     let mut glass = GlassRenderer::new(&r.device, W, H, wgpu::TextureFormat::Rgba8Unorm);
     let panes = [Glass::rounded(40.0, 30.0, 80.0, 60.0, 16.0)];

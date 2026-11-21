@@ -70,11 +70,20 @@ pub enum OverlayLevel {
     AboveOverlays,
 }
 
+/// Whether an overlay may take keyboard focus. `OverlayCapabilities::nonactivating_keys` says
+/// whether the backend it got can.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum KeyPolicy {
+    /// Never takes keys; a click neither focuses nor activates it.
     #[default]
     None,
-    /// Permit `OverlayHandle::request_keys`; showing alone never requests focus.
+    /// Permit `OverlayHandle::request_keys`, and a click on the overlay takes the keys too;
+    /// showing alone never requests focus. macOS: the panel becomes key without activating the
+    /// app. Wayland: layer-shell v4's on-demand keyboard interactivity; XWayland can't. X11: the
+    /// override-redirect window sets the input focus itself; when it hides, focus reverts to the
+    /// root window for the window manager to hand on. Windows: the window is made without
+    /// `WS_EX_NOACTIVATE`, and `request_keys` takes the foreground only when Windows lets this
+    /// process (it just had the user's input, or was given the right); a click always does.
     OnDemand,
 }
 
@@ -141,12 +150,10 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub on_key: Option<fn(&mut T, &crate::KeyEvent, &mut crate::Tx) -> bool>,
     pub on_created: Option<Box<dyn FnMut(OverlayCreated)>>,
     pub(crate) poll: Option<fn(&mut T, f64, &mut crate::Tx) -> bool>,
-    pub(crate) on_focus: Option<fn(&mut T, bool, &mut crate::Tx)>,
     pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<T>>>,
     pub(crate) setup: Option<fn(&mut T, crate::Waker)>,
-    pub(crate) srgb_blend: bool,
+    pub(crate) runtime: crate::app::RuntimeConfig<T>,
     pub(crate) macos_level: Option<isize>,
-    pub(crate) modifier_keys: bool,
     pub(crate) animate_reveal: bool,
     pub(crate) release_after: Option<std::time::Duration>,
 }
@@ -159,12 +166,12 @@ pub struct OverlayCreated {
 }
 
 impl<T: 'static> ConfiguredOverlay<T> {
-    pub fn on_focus(mut self, f: fn(&mut T, bool, &mut crate::Tx)) -> Self { self.on_focus = Some(f); self }
+    pub fn on_focus(mut self, f: fn(&mut T, bool, &mut crate::Tx)) -> Self { self.runtime.on_focus = Some(f); self }
     /// Composite this overlay's translucent fills, blurs, shadows, images, video and text in
     /// sRGB (gamma) space instead of linear light, matching CSS and Core Animation (on by
     /// default). With a `Compositor`, `Frame::srgb_blend` says which encoding its passes must
     /// match.
-    pub fn srgb_blend(mut self, enabled: bool) -> Self { self.srgb_blend = enabled; self }
+    pub fn srgb_blend(mut self, enabled: bool) -> Self { self.runtime.srgb_blend = enabled; self }
     /// Called before each frame; true means state changed, not that another frame is due.
     /// Defaults to the app's poll when its state type matches this overlay's. Other state
     /// types have no inherited poll. Use `Tx::wake_after` for the next timed update;
@@ -180,7 +187,7 @@ impl<T: 'static> ConfiguredOverlay<T> {
     pub fn on_key(mut self, f: fn(&mut T, &crate::KeyEvent, &mut crate::Tx) -> bool) -> Self { self.on_key = Some(f); self }
     /// Like `App::modifier_keys`: send modifier keys pressed and released on their own
     /// (`Key::Modifier`) to `on_key` and the focused input. Off by default.
-    pub fn modifier_keys(mut self) -> Self { self.modifier_keys = true; self }
+    pub fn modifier_keys(mut self) -> Self { self.runtime.modifier_keys = true; self }
     /// Like `AppSpec::setup`: called once with a waker other threads use when new data arrives
     /// (an `ImageCache` decode, a channel). It runs on the event thread when the event loop
     /// starts, before the overlay's first frame and before updates queued through its handle.
@@ -228,7 +235,11 @@ impl<T: 'static> OverlaySpec<T> {
     }
 
     pub fn options(self, options: OverlayOptions) -> ConfiguredOverlay<T> {
-        ConfiguredOverlay { spec: self, options, on_key: None, on_created: None, poll: None, on_focus: None, compositor: None, setup: None, srgb_blend: true, macos_level: None, modifier_keys: false, animate_reveal: false, release_after: None }
+        ConfiguredOverlay {
+            spec: self, options, on_key: None, on_created: None, poll: None, compositor: None,
+            setup: None, runtime: crate::app::RuntimeConfig::default(), macos_level: None,
+            animate_reveal: false, release_after: None,
+        }
     }
 }
 

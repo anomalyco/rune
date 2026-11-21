@@ -4,6 +4,8 @@
 //! for cold CSS properties (Grid tracks/placement, non-zero margin/border/inset, `aspect_ratio`,
 //! or exotic sizing keywords).
 
+#![forbid(unsafe_code)]
+
 use taffy::geometry::{Line, Point, Rect, Size};
 use taffy::style::{
     AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyword, AlignSelf, AlignmentSafety, BlockContainerStyle,
@@ -32,32 +34,14 @@ const MODE_POS_MASK: u8 = 0b0001_1000;
 const MODE_GAP_W_PCT: u8 = 1 << 5;
 const MODE_GAP_H_PCT: u8 = 1 << 6;
 const MODE_BASIS_ZERO: u8 = 1 << 7;
+const JUSTIFY_WHOLE_ROWS: u8 = 1 << 7;
 
 const BASE_LEN_TAGS: u16 = 0b0000_1010_1010_1010;
 const ONE_BF16: u16 = 0x3F80;
 
 #[inline(always)]
 fn pack_raw_len(len: CompactLength) -> (u32, u8) {
-    #[cfg(target_pointer_width = "64")]
-    {
-        // SAFETY: on 64-bit targets `CompactLength` is a single pointer-sized word (`usize`).
-        let raw: usize = unsafe { core::mem::transmute(len) };
-        ((raw >> 32) as u32, (raw & 0xFF) as u8)
-    }
-    #[cfg(not(target_pointer_width = "64"))]
-    {
-        let tag = len.tag() as u8;
-        let bits = if (tag as usize & CompactLength::KEYWORD_BIT) == 0
-            || matches!(
-                tag as usize,
-                CompactLength::FR_TAG | CompactLength::FIT_CONTENT_PX_TAG | CompactLength::FIT_CONTENT_PERCENT_TAG
-            ) {
-            len.value().to_bits()
-        } else {
-            0
-        };
-        (bits, tag)
-    }
+    (len.value().to_bits(), len.tag() as u8)
 }
 
 #[inline(always)]
@@ -72,58 +56,32 @@ fn encode_dim_tag(raw_tag: u8) -> Option<u16> {
 }
 
 #[inline(always)]
-fn decode_dim_tag(code: u16) -> u8 {
-    match code & 0b11 {
-        0 => CompactLength::LENGTH_TAG as u8,
-        1 => CompactLength::PERCENT_TAG as u8,
-        2 => CompactLength::AUTO_TAG as u8,
-        _ => CompactLength::MAX_CONTENT_TAG as u8,
-    }
-}
-
-#[inline(always)]
-fn unpack_len(bits: u32, tag: u8) -> CompactLength {
-    #[cfg(target_pointer_width = "64")]
-    {
-        let raw: usize = ((bits as usize) << 32) | (tag as usize);
-        // SAFETY: `tag` is one of `LENGTH_TAG`, `PERCENT_TAG`, `AUTO_TAG`, or `MAX_CONTENT_TAG`,
-        // matching `CompactLength`'s 64-bit tagged representation.
-        unsafe { core::mem::transmute(raw) }
-    }
-    #[cfg(not(target_pointer_width = "64"))]
-    {
-        let val = f32::from_bits(bits);
-        match tag as usize {
-            CompactLength::LENGTH_TAG => CompactLength::length(val),
-            CompactLength::PERCENT_TAG => CompactLength::percent(val),
-            CompactLength::AUTO_TAG => CompactLength::auto(),
-            CompactLength::MAX_CONTENT_TAG => CompactLength::max_content(),
-            _ => CompactLength::auto(),
-        }
-    }
-}
-
-#[inline(always)]
 fn unpack_dim(bits: u32, code: u16) -> Dimension {
-    // SAFETY: `decode_dim_tag` produces only valid `Dimension` tags (`LENGTH`, `PERCENT`, `AUTO`, `MAX_CONTENT`).
-    unsafe { Dimension::from_raw(unpack_len(bits, decode_dim_tag(code))) }
+    match code & 0b11 {
+        0 => Dimension::length(f32::from_bits(bits)),
+        1 => Dimension::percent(f32::from_bits(bits)),
+        2 => Dimension::auto(),
+        _ => Dimension::max_content(),
+    }
 }
 
 #[inline(always)]
 fn unpack_lpa(bits: u32, code: u16) -> LengthPercentageAuto {
-    // SAFETY: `decode_dim_tag` produces only valid `LengthPercentageAuto` tags.
-    unsafe { LengthPercentageAuto::from_raw(unpack_len(bits, decode_dim_tag(code))) }
+    match code & 0b11 {
+        0 => LengthPercentageAuto::length(f32::from_bits(bits)),
+        1 => LengthPercentageAuto::percent(f32::from_bits(bits)),
+        _ => LengthPercentageAuto::auto(),
+    }
 }
 
 #[inline(always)]
 fn unpack_lp(bits: u32, is_pct: bool) -> LengthPercentage {
-    let tag = if is_pct {
-        CompactLength::PERCENT_TAG as u8
+    let val = f32::from_bits(bits);
+    if is_pct {
+        LengthPercentage::percent(val)
     } else {
-        CompactLength::LENGTH_TAG as u8
-    };
-    // SAFETY: `tag` is either `LENGTH_TAG` or `PERCENT_TAG`, both valid for `LengthPercentage`.
-    unsafe { LengthPercentage::from_raw(unpack_len(bits, tag)) }
+        LengthPercentage::length(val)
+    }
 }
 
 #[inline(always)]
@@ -145,18 +103,7 @@ fn rect_is_zero_lpa(r: &Rect<LengthPercentageAuto>) -> bool {
         top: LengthPercentageAuto::ZERO,
         bottom: LengthPercentageAuto::ZERO,
     };
-    #[cfg(target_pointer_width = "64")]
-    {
-        // SAFETY: on 64-bit targets `Rect<LengthPercentageAuto>` is four 8-byte-aligned 64-bit words.
-        let a: &[u64; 4] = unsafe { &*(r as *const Rect<LengthPercentageAuto> as *const [u64; 4]) };
-        // SAFETY: `ZERO` has the same `Rect<LengthPercentageAuto>` layout.
-        let b: &[u64; 4] = unsafe { &*(&ZERO as *const Rect<LengthPercentageAuto> as *const [u64; 4]) };
-        a == b || *r == ZERO
-    }
-    #[cfg(not(target_pointer_width = "64"))]
-    {
-        *r == ZERO
-    }
+    *r == ZERO
 }
 
 #[inline(always)]
@@ -167,18 +114,7 @@ fn rect_is_zero_lp(r: &Rect<LengthPercentage>) -> bool {
         top: LengthPercentage::ZERO,
         bottom: LengthPercentage::ZERO,
     };
-    #[cfg(target_pointer_width = "64")]
-    {
-        // SAFETY: on 64-bit targets `Rect<LengthPercentage>` is four 8-byte-aligned 64-bit words.
-        let a: &[u64; 4] = unsafe { &*(r as *const Rect<LengthPercentage> as *const [u64; 4]) };
-        // SAFETY: `ZERO` has the same `Rect<LengthPercentage>` layout.
-        let b: &[u64; 4] = unsafe { &*(&ZERO as *const Rect<LengthPercentage> as *const [u64; 4]) };
-        a == b || *r == ZERO
-    }
-    #[cfg(not(target_pointer_width = "64"))]
-    {
-        *r == ZERO
-    }
+    *r == ZERO
 }
 
 #[inline(always)]
@@ -189,18 +125,7 @@ fn rect_is_auto_lpa(r: &Rect<LengthPercentageAuto>) -> bool {
         top: LengthPercentageAuto::AUTO,
         bottom: LengthPercentageAuto::AUTO,
     };
-    #[cfg(target_pointer_width = "64")]
-    {
-        // SAFETY: on 64-bit targets `Rect<LengthPercentageAuto>` is four 8-byte-aligned 64-bit words.
-        let a: &[u64; 4] = unsafe { &*(r as *const Rect<LengthPercentageAuto> as *const [u64; 4]) };
-        // SAFETY: `AUTO` has the same `Rect<LengthPercentageAuto>` layout.
-        let b: &[u64; 4] = unsafe { &*(&AUTO as *const Rect<LengthPercentageAuto> as *const [u64; 4]) };
-        a == b || *r == AUTO
-    }
-    #[cfg(not(target_pointer_width = "64"))]
-    {
-        *r == AUTO
-    }
+    *r == AUTO
 }
 
 #[inline(always)]
@@ -529,12 +454,16 @@ impl CompactStyle {
     #[cold]
     #[inline(never)]
     pub fn modify_cold(&mut self, f: impl FnOnce(&mut Style)) {
+        let whole = self.whole_rows();
         let mut s = match self.extra.take() {
             Some(b) => *b,
             None => self.to_style(),
         };
         f(&mut s);
         *self = Self::from_style(s);
+        if whole {
+            self.justify_content_u8 |= JUSTIFY_WHOLE_ROWS;
+        }
     }
 
     #[inline(always)]
@@ -612,7 +541,18 @@ impl CompactStyle {
         unpack_align_self(self.align_self_u8)
     }
 
+    #[inline(always)]
+    pub const fn whole_rows(&self) -> bool {
+        (self.justify_content_u8 & JUSTIFY_WHOLE_ROWS) != 0
+    }
 
+    #[inline(always)]
+    pub const fn whole_rows_column(&self) -> bool {
+        self.whole_rows()
+            && matches!(decode_display(self.mode_flags), Display::Flex)
+            && matches!(decode_dir(self.box_flags), FlexDirection::Column)
+            && matches!(decode_wrap(self.box_flags >> 2), FlexWrap::NoWrap)
+    }
 }
 
 mod convert;

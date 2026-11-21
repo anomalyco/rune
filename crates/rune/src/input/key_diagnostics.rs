@@ -235,7 +235,7 @@ mod tests {
         let mut tree = col().key("root").children([col().key("rows").children((0..3700).map(row)), el().key("footer")]);
         assert!(repair(&mut tree).is_empty());
         let before = crate::tooling::test_alloc::allocs();
-        let t = std::time::Instant::now();
+        let t = crate::time::now();
         assert!(repair(&mut tree).is_empty());
         let elapsed = t.elapsed();
         assert_eq!(crate::tooling::test_alloc::allocs() - before, 0);

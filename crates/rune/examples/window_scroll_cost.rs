@@ -60,8 +60,8 @@ struct Start { main: f64, process: f64, wall: Instant, frames: u64, counts: ([u6
 fn main() {
     if std::env::var_os("SCROLL_PRESUME_VISIBLE").is_some() { probe::presume_visible(); }
     probe::count_metal();
-    let seconds: f64 = std::env::var("SCROLL_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(12.0);
-    let began = Instant::now();
+    let seconds: f64 = rune::env::var("SCROLL_SECONDS").and_then(|s| s.parse().ok()).unwrap_or(12.0);
+    let began = rune::time::now();
     let frames = Rc::new(RefCell::new((0u64, None::<Start>)));
     let app = App::new(AppSpec { poll: Some(poll), ..AppSpec::new("Window scroll cost", (800.0, 600.0), || (), view) })
         .on_frame_drawn(move |_| {
@@ -69,7 +69,7 @@ fn main() {
             *count += 1;
             let elapsed = began.elapsed().as_secs_f64();
             if from.is_none() && elapsed >= WARMUP {
-                *from = Some(Start { main: thread_cpu_ms(), process: process_cpu_ms(), wall: Instant::now(), frames: *count, counts: counts() });
+                *from = Some(Start { main: thread_cpu_ms(), process: process_cpu_ms(), wall: rune::time::now(), frames: *count, counts: counts() });
             }
             let Some(s) = from.as_ref().filter(|_| elapsed >= WARMUP + seconds) else { return };
             let n = (*count - s.frames) as f64;

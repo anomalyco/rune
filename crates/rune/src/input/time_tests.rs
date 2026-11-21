@@ -7,7 +7,7 @@ use crate::{Cx, El, Env, Key, KeyEvent, Mods, PhysicalInput, PhysicalKeyCode, Ru
 
 #[test]
 fn an_event_timestamp_is_the_instant_that_long_before_the_uptime_read() {
-    let now = Instant::now() + Duration::from_secs(10);
+    let now = crate::time::now() + Duration::from_secs(10);
     assert_eq!(since_boot(now, 1000.25, 1000.0), now - Duration::from_millis(250));
     assert_eq!(since_boot(now, 5.5, 2.0), now - Duration::from_millis(3500));
     assert_eq!(since_boot(now, 1000.0, 1000.0), now, "stamped as the uptime was read");
@@ -41,7 +41,7 @@ fn physical(code: PhysicalKeyCode, key: Key) -> (PhysicalInput, Option<KeyEvent>
 #[test]
 fn input_that_piles_up_between_frames_keeps_each_event_s_time() {
     let mut rt = app();
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let [t1, t2, t3] = [1, 2, 3].map(|ms| t0 + Duration::from_millis(ms));
     {
         let _input = scope(Some(t1));
@@ -70,7 +70,7 @@ fn handlers_no_input_caused_see_no_input_time() {
     rt.poll = Some(|s, _, tx| { s.polls.push(tx.input_time()); false });
     {
         // A frame run while a host dispatches input still polls without its time.
-        let _input = scope(Some(Instant::now()));
+        let _input = scope(Some(crate::time::now()));
         rt.frame(0.0);
     }
     assert_eq!(rt.state.polls, vec![None]);

@@ -5,6 +5,7 @@
 mod layout_macos;
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 mod tis {
     use std::ffi::{CString, c_void};
     #[link(name = "Carbon", kind = "framework")]
@@ -30,6 +31,8 @@ mod tis {
     /// Runs `f` with the installed layout `id`'s Unicode data, or returns None if it isn't installed.
     pub fn with_layout<T>(id: &str, f: impl FnOnce(*const c_void) -> T) -> Option<T> {
         let id = CString::new(id).unwrap();
+        // SAFETY: called on the main thread; every CoreFoundation object created here is released once,
+        // `list` and `data` are checked non-null, and `data` stays alive for the duration of `f`.
         unsafe {
             let value = CFStringCreateWithCString(std::ptr::null(), id.as_ptr(), 0x0800_0100);
             let key = kTISPropertyInputSourceID;
@@ -51,6 +54,7 @@ mod tis {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn main() {
     const CMD: u32 = 1 << 8;
     const SHIFT: u32 = 1 << 9;
@@ -64,7 +68,10 @@ fn main() {
     let current = layout_macos::label(Q, CMD).expect("current keyboard layout has Unicode data");
     assert_eq!(shortcut.keycaps().last(), Some(&current.to_uppercase()));
 
-    let label = |layout, key, mods| unsafe { layout_macos::chord_label(layout, key, mods) };
+    let label = |layout, key, mods| {
+        // SAFETY: `layout` is a live `UCKeyboardLayout` pointer borrowed from `tis::with_layout`.
+        unsafe { layout_macos::chord_label(layout, key, mods) }
+    };
     let mut checked = Vec::new();
     let mut check = |id: &str, f: &dyn Fn(*const std::ffi::c_void)| match tis::with_layout(id, f) {
         Some(()) => checked.push(id.to_owned()),

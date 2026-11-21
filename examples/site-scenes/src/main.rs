@@ -6,6 +6,8 @@
 //! Each scene writes `<name>.png`, 1920 × 1080: one subject, centred and small, on the page's
 //! black, in Rune blue and neutrals.
 
+#![forbid(unsafe_code)]
+
 use std::path::PathBuf;
 
 use rune::color::{Color, oklch, oklcha};

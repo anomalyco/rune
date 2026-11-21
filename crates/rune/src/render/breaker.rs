@@ -178,8 +178,10 @@ impl Renderer {
     }
 
     fn build_feature(&mut self, device: &wgpu::Device, feature: Feature) {
+        // `Rgba8Snorm` never allows `RENDER_ATTACHMENT`, so every pipeline fails validation
+        // regardless of blend state or passthrough bytecode.
         #[cfg(test)]
-        let format = if self.breakers.refuse == Some(feature) { wgpu::TextureFormat::Rgba32Uint } else { FORMAT };
+        let format = if self.breakers.refuse == Some(feature) { wgpu::TextureFormat::Rgba8Snorm } else { FORMAT };
         #[cfg(not(test))]
         let format = FORMAT;
         match feature {
@@ -225,18 +227,40 @@ fn checked(device: &wgpu::Device, build: impl FnOnce()) -> Verdict {
 }
 
 /// Runs `build` inside the browser's error scopes, which answer later. wgpu's own scopes would
-/// panic on an internal error (`platform::web::health`).
+/// panic on an internal error (`platform::web::health`). On WebGL2 (`wgpu-core`, no JS
+/// `GPUDevice`), wgpu's thread-local scopes resolve synchronously so refused optional pipelines
+/// (such as `Rgba16Float` layers where half-float render targets are absent) still fall back.
 #[cfg(target_arch = "wasm32")]
 fn checked(device: &wgpu::Device, build: impl FnOnce()) -> Verdict {
     let Some(scopes) = crate::platform::web::health::Scopes::push(device) else {
-        build();
-        return Verdict::Now(None);
+        return checked_wgpu_core(device, build);
     };
     build();
     let answer = Answer::default();
     let to = answer.clone();
     scopes.pop(move |error| *to.lock().unwrap_or_else(|e| e.into_inner()) = Some(error));
     Verdict::Later(answer)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn checked_wgpu_core(device: &wgpu::Device, build: impl FnOnce()) -> Verdict {
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+    fn poll_now<F: Future<Output = Option<wgpu::Error>>>(fut: F) -> Option<wgpu::Error> {
+        let mut cx = Context::from_waker(Waker::noop());
+        match std::pin::pin!(fut).poll(&mut cx) {
+            Poll::Ready(err) => err,
+            Poll::Pending => None,
+        }
+    }
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+    build();
+    let error = poll_now(internal.pop())
+        .or_else(|| poll_now(memory.pop()))
+        .or_else(|| poll_now(validation.pop()));
+    Verdict::Now(error.map(|e| e.to_string()))
 }
 
 fn report(device: &wgpu::Device, feature: Feature, why: &str) {

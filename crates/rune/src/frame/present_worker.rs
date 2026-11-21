@@ -102,12 +102,13 @@ impl Drop for PresentWorker {
     fn drop(&mut self) {
         if matches!(self.state, State::Busy(_)) && !std::thread::panicking() { self.wait(); }
         step(&mut self.state, Event::Close);
-        if let Some(thread) = self.thread.take() { let _ = thread.join(); }
+        if let Some(thread) = self.thread.take() { thread.join().ok(); }
     }
 }
 
 /// Presents keep pace with the display only at the main thread's priority.
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn interactive() {
     const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
     unsafe extern "C" {

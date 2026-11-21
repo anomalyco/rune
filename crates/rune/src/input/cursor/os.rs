@@ -251,4 +251,31 @@ mod tests {
         next(&mut applied, Cursor::Crosshair, true);
         assert!(!holds_image(applied), "nor for a system shape, which the window's cursor rects keep");
     }
+
+    #[test]
+    fn every_cursor_variant_maps_explicitly_for_macos() {
+        use crate::cursor::{MacCursor, mac_cursor};
+        static PNG: [u8; 4] = [1, 2, 3, 4];
+        let image = crate::cursor::CursorImage::png(&PNG, [0.0, 0.0]);
+        let pairs = [
+            (Cursor::Default, MacCursor::Arrow),
+            (Cursor::Pointer, MacCursor::PointingHand),
+            (Cursor::Text, MacCursor::IBeam),
+            (Cursor::Grab, MacCursor::OpenHand),
+            (Cursor::Grabbing, MacCursor::ClosedHand),
+            (Cursor::NotAllowed, MacCursor::NotAllowed),
+            (Cursor::ResizeColumn, MacCursor::ResizeLeftRight),
+            (Cursor::ResizeRow, MacCursor::ResizeUpDown),
+            (Cursor::Crosshair, MacCursor::Crosshair),
+            (Cursor::ZoomIn, MacCursor::ZoomIn),
+            (Cursor::ZoomOut, MacCursor::ZoomOut),
+            (Cursor::Hidden, MacCursor::Transparent),
+            (Cursor::Move, MacCursor::MoveImage),
+            (Cursor::Cell, MacCursor::CellImage),
+            (Cursor::Image(image), MacCursor::Custom(image)),
+        ];
+        for (cursor, expected) in pairs {
+            assert_eq!(mac_cursor(cursor), expected);
+        }
+    }
 }

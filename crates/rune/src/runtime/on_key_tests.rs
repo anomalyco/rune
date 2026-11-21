@@ -147,7 +147,7 @@ fn icon_rotation_springs_and_jumps_under_reduced_motion() {
                 .key("chevron")
                 .color(Color::WHITE)
                 .icon_rotation(if s.open { 0.0 } else { -std::f32::consts::FRAC_PI_2 })
-                .motion(motion::DEFAULT),
+                .motion(crate::tok::motion::DEFAULT),
         )
     }
     fn turn(rt: &Runtime<S>) -> f32 {
@@ -279,8 +279,8 @@ fn a_faded_text_that_runs_past_its_box_reads_as_cut() {
     let mut rt = Runtime::new(S { w: 60.0 }, view, (400.0, 100.0), Env::new(true, 2.0));
     rt.set_native_help(true);
     rt.frame(0.0);
-    let i = rt.nodes.iter().position(|n| n.key.as_deref() == Some("cell")).unwrap();
-    assert!(rt.nodes[i].text_cut(2.0) && rt.nodes[i].elided.is_none(), "a fade cuts nothing out of the layout");
+    let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("cell")).unwrap();
+    assert!(rt.tree.nodes[i].text_cut(2.0) && rt.tree.nodes[i].elided.is_none(), "a fade cuts nothing out of the layout");
     assert_eq!(rt.help_regions().len(), 1, "faded out, the cell offers its whole text");
     assert_eq!(rt.elements().into_iter().find(|e| e.key.as_deref() == Some("cell")).unwrap().help.as_deref(), Some("A rather long file name.rs"));
     rt.update(|s, _| s.w = 380.0);
@@ -308,8 +308,8 @@ fn scroll_into_view_in_reveals_only_inside_its_scope() {
     let mut rt = Runtime::new((), twins, (200.0, 200.0), Env::new(true, 1.0));
     rt.frame(0.0);
     let offset = |rt: &Runtime<()>, scope: &str| {
-        let id = rt.path_ids[&format!("#0/{scope}/viewport")];
-        rt.scrolls[&id].offset
+        let id = rt.tree.path_ids[&format!("#0/{scope}/viewport")];
+        rt.scroll.scrolls[&id].offset
     };
     rt.update(|_, tx| tx.scroll_into_view_in("b", "r500"));
     rt.frame(0.0);

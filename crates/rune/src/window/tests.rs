@@ -23,7 +23,7 @@ fn updates_that_change_nothing_ask_no_window_for_a_frame() {
     handle.wake();
     assert!(!shared.take().only_updates(), "`wake` still runs a shown window's poll");
     handle.update_if(|_, _| false);
-    setup_waker(&shared)();
+    setup_waker(&shared.core)();
     assert!(!shared.take().only_updates(), "so does `setup`'s waker");
     assert_eq!(WakeWork::of(WakeFacts { window: true, visible: true, was_shown: true, ..WakeFacts::default() }, || false), WakeWork::Paint);
     assert_eq!(WakeWork::of(WakeFacts { window: true, launcher: true, changed: true, ..WakeFacts::default() }, || false), WakeWork::HiddenFrame);
@@ -35,7 +35,7 @@ fn updates_that_change_nothing_ask_no_window_for_a_frame() {
 #[test]
 fn updates_that_change_nothing_do_not_delay_due_timers() {
     let mut rt = Runtime::new(0u32, |_, _| crate::el(), (10.0, 10.0), crate::Env::default());
-    rt.wall_start = Some(Instant::now());
+    rt.wall_start = Some(crate::time::now());
     rt.frame(0.0);
     // A second idle since that frame.
     rt.wall_start = rt.wall_start.map(|t| t - Duration::from_secs(1));
@@ -43,7 +43,7 @@ fn updates_that_change_nothing_do_not_delay_due_timers() {
     rt.update_if(|_, tx| { tx.wake_after(Duration::ZERO); false });
     rt.schedule_pending_wakes();
     let due = timer_deadline(&rt).expect("armed");
-    assert!(due <= Instant::now(), "due now, not a frame interval from now");
+    assert!(due <= crate::time::now(), "due now, not a frame interval from now");
     for _ in 0..20 {
         std::thread::sleep(Duration::from_millis(2));
         rt.update_if(|_, _| false);
@@ -60,7 +60,7 @@ fn a_timer_asking_for_the_next_frame_waits_a_frame_without_a_display_link() {
     fn poll(polls: &mut u32, _: f64, tx: &mut Tx) -> bool { *polls += 1; tx.wake_after(Duration::ZERO); false }
     let mut rt = Runtime::new(0u32, |_, _| crate::el(), (10.0, 10.0), crate::Env::default());
     rt.poll = Some(poll);
-    let start = Instant::now() - Duration::from_secs(1);
+    let start = crate::time::now() - Duration::from_secs(1);
     rt.wall_start = Some(start);
     rt.frame(0.0);
     assert_eq!(rt.state, 1);
@@ -129,7 +129,7 @@ fn a_timer_frame_that_draws_the_same_still_draws_while_a_poll_steps() {
     }
     let mut rt = Runtime::new(false, |_, _| crate::el().size(20.0, 20.0), (20.0, 20.0), crate::Env::default());
     rt.poll = Some(poll);
-    rt.wall_start = Some(Instant::now());
+    rt.wall_start = Some(crate::time::now());
     rt.frame(0.0);
     let config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -145,7 +145,7 @@ fn a_timer_frame_that_draws_the_same_still_draws_while_a_poll_steps() {
     let mut presented = None;
     Presented::record(&mut presented, &rt, &config, false);
     let p = presented.as_ref().unwrap();
-    let next_tick = Some(Instant::now() + Duration::from_millis(8));
+    let next_tick = Some(crate::time::now() + Duration::from_millis(8));
     assert!(p.unchanged(&rt, &config, false, next_tick), "a slow timer leaves the drawable");
     rt.state = true;
     rt.frame(0.0);
@@ -168,7 +168,7 @@ fn launch_frames_hold_two_drawables_until_the_window_rests() {
         view_formats: vec![],
         color_space: Default::default(),
     };
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let mut launch = LaunchDrawables::cap(&mut config);
     assert_eq!(config.desired_maximum_frame_latency, 1, "Metal makes latency + 1 drawables");
     assert_eq!(launch.settle(false, t0), None);
@@ -218,7 +218,7 @@ struct CompHost {
     comp_animates: std::rc::Rc<std::cell::Cell<bool>>,
     frames: u32,
     /// Called where `draw` calls it.
-    reports: crate::frame::encoded::FrameReports<u32>,
+    reports: crate::frame::encoded::FrameReports,
 }
 
 impl CompHost {
@@ -226,7 +226,7 @@ impl CompHost {
     fn new(comp: Option<bool>, poll: fn(&mut u32, f64, &mut Tx) -> bool) -> Self {
         fn view(_: &u32, _: &mut crate::Cx<u32>) -> crate::El { crate::el().key("box").size(20.0, 20.0).fill(crate::Color::WHITE) }
         let mut rt = Runtime::new(0u32, view, (20.0, 20.0), crate::Env::default());
-        rt.test_clock = Some(crate::Clock::manual(1.0 / crate::frame::clock::RESUME_STEP));
+        rt.frame.set_test_clock(crate::Clock::manual(1.0 / crate::frame::clock::RESUME_STEP));
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: wgpu::TextureFormat::Bgra8UnormSrgb,
@@ -250,8 +250,8 @@ impl CompHost {
     /// As `draw`: a quiet frame (only a timer asked for it) that draws what's on screen presents
     /// nothing, unless a compositor draws it. Returns whether it presented.
     fn frame(&mut self, quiet: bool) -> bool {
-        let started = Instant::now();
-        self.rt.test_clock.as_mut().unwrap().step();
+        let started = crate::time::now();
+        self.rt.frame.test_clock_mut().unwrap().step();
         let animating = self.rt.frame(crate::frame::clock::RESUME_STEP);
         let update_ms = started.elapsed().as_secs_f64() * 1000.0;
         if quiet && self.comp.is_none() && self.presented.as_ref().is_some_and(|p| p.unchanged(&self.rt, &self.config, animating, None)) {
@@ -271,7 +271,7 @@ impl CompHost {
     fn timer_wake(&mut self) -> bool {
         let due = self.rt.wake_deadline().expect("a timer is armed");
         // Advance host time, not rt.clock: rests() still examines the last poll's time.
-        let clock = self.rt.test_clock.as_mut().unwrap();
+        let clock = self.rt.frame.test_clock_mut().unwrap();
         clock.seek(clock.now().max(due));
         let rests = self.idle && !composing(self.comp.as_deref()) && self.presented.is_some();
         let frame = match rests.then(|| self.rt.resting_wake()).flatten() {
@@ -396,7 +396,7 @@ fn reporting_frames_changes_no_frame_skip_or_redraw() {
 
 #[test]
 fn hidden_pace_renders_a_change_at_once_then_at_most_every_refresh() {
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let mut pace = HiddenPace::default();
     assert!(pace.changed(t0), "the first change renders at once");
     pace.rendered(t0);
@@ -418,7 +418,7 @@ fn hidden_pace_renders_a_change_at_once_then_at_most_every_refresh() {
 #[test]
 fn missed_frames_never_poll() {
     use wgpu::CurrentSurfaceTexture as S;
-    let now = Instant::now();
+    let now = crate::time::now();
     for status in [S::Occluded, S::Timeout, S::Outdated, S::Lost, S::Validation] {
         let missed = Missed::of(status).err().expect("a miss");
         for paced in [false, true] {
@@ -469,15 +469,15 @@ fn a_timer_frame_that_never_comes_runs_its_timer_covered_instead_of_spinning() {
     }
     let mut rt = Runtime::new(Due::default(), |_, _| crate::el().size(20.0, 20.0), (20.0, 20.0), crate::Env::default());
     rt.poll = Some(poll);
-    rt.wall_start = Some(Instant::now());
+    rt.wall_start = Some(crate::time::now());
     rt.frame(0.0);
     // A change since that frame, as a `wake` whose poll it hasn't drawn leaves it.
     rt.invalidate();
     assert!(rt.stale() && !rt.rests(), "the window doesn't rest: its frame is still to come");
     // As `new_events` at the timer, which is due by the time the loop runs for it.
     let due = timer_deadline(&rt).expect("a timer is armed");
-    rt.wall_start = rt.wall_start.map(|t| t - due.saturating_duration_since(Instant::now()) - Duration::from_millis(1));
-    let now = Instant::now();
+    rt.wall_start = rt.wall_start.map(|t| t - due.saturating_duration_since(crate::time::now()) - Duration::from_millis(1));
+    let now = crate::time::now();
     assert!(timer_deadline(&rt).expect("armed") <= now, "the timer is due: this is what turned the loop");
 
     let mut frame = TimerFrame::default();
@@ -491,11 +491,11 @@ fn a_timer_frame_that_never_comes_runs_its_timer_covered_instead_of_spinning() {
     covered_step(&mut rt);
     assert_eq!(rt.state.polls, polls + 1, "the due timer polled");
     let next = timer_deadline(&rt).expect("its next timer is armed");
-    assert!(next > Instant::now(), "the next timer is ahead: {next:?}");
+    assert!(next > crate::time::now(), "the next timer is ahead: {next:?}");
     // The covered step takes the frame's place, and a timer still ahead keeps its own time.
     frame.drawn();
-    frame.asked_quiet(Instant::now());
-    assert_eq!(frame.wait(timer_deadline(&rt), Instant::now()), Some(next), "the loop sleeps until its next timer");
+    frame.asked_quiet(crate::time::now());
+    assert_eq!(frame.wait(timer_deadline(&rt), crate::time::now()), Some(next), "the loop sleeps until its next timer");
     frame.drawn();
     assert!(!frame.stalled(now + TIMER_FRAME_STALL), "a frame that comes clears it");
 }
@@ -513,7 +513,7 @@ fn a_window_s_first_updates_can_register_on_a_later_window() {
     // As Host::new and Host::resumed: attach the guards, then drain the first updates.
     let hosts = start_all(apps.into(), |_, app| {
         let shortcuts = crate::shortcuts::Guard::attach(&app.shared, Arc::new(|| {}), true, false);
-        let menus = crate::native_menu::Guard::attach(&app.shared, true);
+        let menus = crate::native_menu::MenuGuard::attach(&app.shared, true);
         Some((app, shortcuts, menus, S::new()))
     }, |(app, _, _, state)| for f in app.shared.take().updates { f(state, &mut Tx::default()); });
     assert_eq!(hosts[0].as_ref().unwrap().3, ["Ok(())", "Ok(())"]);
@@ -536,7 +536,7 @@ fn a_shortcut_pressed_before_launch_runs_before_the_updates_queued_after_it() {
     std::thread::spawn(move || handle.update(|s: &mut S, _| { let seen = s.len(); s.push(format!("saw {seen}")); })).join().unwrap();
     // As Host::resume.
     let mut state = S::new();
-    events::startup_updates(&app.shared, &shortcuts, |f| { f(&mut state, &mut Tx::default()); });
+    host::events::startup_updates(&app.shared, &shortcuts, |f| { f(&mut state, &mut Tx::default()); });
     assert_eq!(state, ["pressed", "saw 1"], "the press ran first, in the startup batch");
     assert!(app.shared.take().updates.is_empty(), "nothing waits for a later drain");
 }
@@ -555,7 +555,7 @@ fn drag_region_policy_preserves_titled_windows_and_panels() {
 }
 
 /// A GPU-free wgpu instance.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "test-gpu-noop"))]
 fn noop_instance() -> wgpu::Instance {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.backends = wgpu::Backends::NOOP;
@@ -564,12 +564,13 @@ fn noop_instance() -> wgpu::Instance {
 }
 
 /// A GPU on wgpu's noop backend: its device takes anything and refuses every surface.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "test-gpu-noop"))]
+#[allow(unsafe_code)]
 fn noop_gpu(instance: &wgpu::Instance) -> (Gpu, wgpu::Surface<'static>) {
     use std::num::NonZeroU32;
     use std::ptr::NonNull;
     use winit::raw_window_handle::{RawDisplayHandle, RawWindowHandle, XcbDisplayHandle, XcbWindowHandle};
-    // The noop backend takes any handle and reports no capabilities, so configuring fails.
+    // SAFETY: `instance` uses only wgpu's NOOP backend, which never dereferences the raw handles.
     let surface = unsafe {
         instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
             raw_display_handle: Some(RawDisplayHandle::Xcb(XcbDisplayHandle::new(Some(NonNull::dangling()), 0))),
@@ -583,7 +584,7 @@ fn noop_gpu(instance: &wgpu::Instance) -> (Gpu, wgpu::Surface<'static>) {
 }
 
 /// What the noop backend takes for a surface: the format the test configures it in.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "test-gpu-noop"))]
 fn noop_config() -> wgpu::SurfaceConfiguration {
     wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -600,7 +601,7 @@ fn noop_config() -> wgpu::SurfaceConfiguration {
 
 /// A surface that refuses its configuration reports it as an error its owner can drop, not a
 /// panic in wgpu's default handler that takes the app's every window with it (hex#979).
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "test-gpu-noop"))]
 #[test]
 fn a_refused_surface_configuration_is_an_error_not_a_panic() {
     let instance = noop_instance();
@@ -615,7 +616,7 @@ fn a_refused_surface_configuration_is_an_error_not_a_panic() {
 /// ("Surface is not configured for presentation") on the drawable Rune would ask it for. The
 /// acquire reports the miss instead, and the window makes a surface and device before its next
 /// frame (hex's Modern Standby panic).
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "test-gpu-noop"))]
 #[test]
 fn a_surface_with_no_presentation_is_never_asked_for_a_drawable() {
     let instance = noop_instance();
@@ -631,7 +632,7 @@ fn a_surface_with_no_presentation_is_never_asked_for_a_drawable() {
 /// maintains itself, which `configure` does with a poll. Without that poll the surface gets no
 /// presentation while `is_lost` still reads false, `configure` says Ok, and the drawable the next
 /// frame asks for panics ("Surface is not configured for presentation").
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "test-gpu-noop"))]
 #[test]
 fn a_destroyed_device_that_has_not_reported_its_loss_is_not_configured() {
     let instance = noop_instance();
@@ -651,8 +652,8 @@ fn a_destroyed_device_that_has_not_reported_its_loss_is_not_configured() {
 /// frame must not ask again forever.
 #[test]
 fn surface_replacements_give_up_after_a_bounded_number_of_tries() {
-    use super::win::{SurfaceStep, SURFACE_TRIES};
-    let now = Instant::now();
+    use super::surface::win::{SurfaceStep, SURFACE_TRIES};
+    let now = crate::time::now();
     let mut retries = SurfaceRetries::default();
     let mut waits = Vec::new();
     loop {
@@ -680,7 +681,7 @@ fn surface_replacements_give_up_after_a_bounded_number_of_tries() {
 /// calls `worked`.
 #[test]
 fn a_surface_lost_after_every_replacement_gives_up_after_the_tries() {
-    use super::win::{SurfaceStep, SURFACE_TRIES};
+    use super::surface::win::{SurfaceStep, SURFACE_TRIES};
     let mut retries = SurfaceRetries::default();
     let mut replaced = 0;
     while retries.attempt() == SurfaceStep::Replace {
@@ -698,7 +699,7 @@ fn a_surface_lost_after_every_replacement_gives_up_after_the_tries() {
 /// A device that went away (a driver reset, a GPU removed, Windows' Modern Standby) configures
 /// nothing, and wgpu drops the `DeviceLost` that would say so: `configure` reports the lost
 /// device itself, and no drawable is ever asked of it.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "test-gpu-noop"))]
 #[test]
 fn a_lost_device_is_reported_and_never_drawn_with() {
     let instance = noop_instance();
@@ -719,7 +720,7 @@ fn a_lost_device_is_reported_and_never_drawn_with() {
 /// Each Rune GPU has its own wgpu instance, and wgpu compares devices by an id each instance
 /// numbers from the start, so a new GPU's device equals the old one's. A renderer's device key
 /// tells them apart, so a compositor keeping resources by it remakes them (hex#982).
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "test-gpu-noop"))]
 #[test]
 fn a_new_gpus_device_equals_the_old_one_but_its_key_differs() {
     let device = || {
@@ -731,4 +732,71 @@ fn a_new_gpus_device_equals_the_old_one_but_its_key_differs() {
     let format = wgpu::TextureFormat::Bgra8Unorm;
     let (old, new) = (crate::render::Renderer::new(&old, format), crate::render::Renderer::new(&new, format));
     assert_ne!(old.device_key(), new.device_key());
+}
+
+/// The surface alpha mode is the one a window had before the frame existed, unless only a frame's
+/// corner pixels need it: then it takes premultiplied alpha alone, or stays opaque.
+#[test]
+fn the_surface_alpha_mode_follows_what_the_window_asked_for() {
+    use crate::window::host::create::alpha_mode;
+    use wgpu::CompositeAlphaMode::{Inherit, Opaque, PostMultiplied, PreMultiplied};
+
+    // An app that asked for a translucent window keeps every mode it always had, straight alpha
+    // included — Metal offers only `PostMultiplied` — and a surface with none draws it opaque.
+    for (supports, want) in [
+        (Some(PreMultiplied), PreMultiplied),
+        (Some(PostMultiplied), PostMultiplied),
+        (Some(Inherit), Inherit),
+        (None, Opaque),
+    ] {
+        assert_eq!(alpha_mode(true, false, supports), want, "transparent, {supports:?}");
+        assert_eq!(alpha_mode(true, true, supports), want, "transparent with a frame, {supports:?}");
+    }
+
+    // A window that only needs its frame's corner pixels transparent takes premultiplied alpha,
+    // and is square rather than straight-alpha when the surface has nothing else.
+    assert_eq!(alpha_mode(false, true, Some(PreMultiplied)), PreMultiplied);
+    for supports in [Some(PostMultiplied), Some(Inherit), Some(Opaque), None] {
+        assert_eq!(alpha_mode(false, true, supports), Opaque, "corners only, {supports:?}");
+    }
+
+    // No frame and no transparency: nothing to keep alpha for.
+    for supports in [Some(PreMultiplied), Some(PostMultiplied), None] {
+        assert_eq!(alpha_mode(false, false, supports), Opaque, "opaque window, {supports:?}");
+    }
+}
+
+/// A square window (maximized, tiled or fullscreen) never asks the corner pass to draw, whatever
+/// state the pass is in.
+#[test]
+fn a_square_window_never_fades_its_corners() {
+    use crate::render::{Gpu, Offscreen, OFFSCREEN_FORMAT};
+    let gpu = Gpu::new(Gpu::instance(), None);
+    let size = (8, 8);
+    let target = Offscreen::new(&gpu.device, size.0, size.1);
+    let mut enc = gpu.device.create_command_encoder(&Default::default());
+    {
+        let _clear = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &target.view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::RED), store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+    }
+    let mut pass = crate::render::csd_corners::CsdCorners::new(&gpu.device, OFFSCREEN_FORMAT);
+    pass.prepare(&gpu.queue, size, 0.);
+    surface::corners::draw(Some(&pass), &mut enc, &target.view, 0.);
+    target.copy(&mut enc);
+    gpu.queue.submit([enc.finish()]);
+    let pixels = target.read(&gpu.device);
+    for (i, pixel) in pixels.chunks_exact(4).enumerate() {
+        assert_eq!(pixel[3], 255, "pixel {i} faded with no radius");
+    }
 }

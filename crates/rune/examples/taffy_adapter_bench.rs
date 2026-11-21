@@ -6,7 +6,6 @@
 
 use std::borrow::Cow;
 use std::hint::black_box;
-use std::time::Instant;
 
 use rune::text::TextSystem;
 use rune::{
@@ -189,18 +188,18 @@ fn run_isolated_paired_bench(samples: usize) {
             if !run_compact {
                 let h0 = live_heap_bytes();
                 let a0 = procwatch::alloc::thread_allocations();
-                let t0 = Instant::now();
+                let t0 = rune::time::now();
                 let (mut tree, root, handles) = build_baseline_list(500);
                 tree.compute_layout(root, room).unwrap();
                 let cold = t0.elapsed().as_secs_f64() * 1000.0;
                 let allocs = (procwatch::alloc::thread_allocations() - a0) as f64;
                 let mem_500 = (live_heap_bytes() - h0).max(0) as f64;
 
-                let tw = Instant::now();
+                let tw = rune::time::now();
                 tree.compute_layout(root, room).unwrap();
                 let warm = tw.elapsed().as_secs_f64() * 1000.0;
 
-                let td = Instant::now();
+                let td = rune::time::now();
                 tree.mark_dirty(handles[250][3]).unwrap();
                 tree.compute_layout(root, room).unwrap();
                 let dirty = td.elapsed().as_secs_f64() * 1000.0;
@@ -236,7 +235,7 @@ fn run_isolated_paired_bench(samples: usize) {
             } else {
                 let h0 = live_heap_bytes();
                 let a0 = procwatch::alloc::thread_allocations();
-                let t0 = Instant::now();
+                let t0 = rune::time::now();
                 let mut store = LayoutStore::new();
                 let root = sync_store_list(&mut store, 500, 100, None);
                 solve_store(&mut store, root, room);
@@ -244,11 +243,11 @@ fn run_isolated_paired_bench(samples: usize) {
                 let allocs = (procwatch::alloc::thread_allocations() - a0) as f64;
                 let mem_500 = (live_heap_bytes() - h0).max(0) as f64;
 
-                let tw = Instant::now();
+                let tw = rune::time::now();
                 solve_store(&mut store, root, room);
                 let warm = tw.elapsed().as_secs_f64() * 1000.0;
 
-                let td = Instant::now();
+                let td = rune::time::now();
                 let root = sync_store_list(&mut store, 500, 100, Some(250));
                 solve_store(&mut store, root, room);
                 let dirty = td.elapsed().as_secs_f64() * 1000.0;

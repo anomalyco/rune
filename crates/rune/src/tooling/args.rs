@@ -102,7 +102,7 @@ impl Args {
     /// Parses `argv` (without the program name); unrecognised arguments become `extra_args`.
     pub fn parse_from(argv: Vec<String>) -> Args {
         let (args, extra) = Args::parse_split(argv);
-        let _ = EXTRA.set(extra);
+        EXTRA.set(extra).ok();
         args
     }
 

@@ -1,0 +1,1 @@
+- `Markdown` renders inline code inside links (`[`code`](url)`) as part of the link label—inheriting link colour, underline and hover without a code-pill background or horizontal padding—while keeping its monospace font and bidi isolation.

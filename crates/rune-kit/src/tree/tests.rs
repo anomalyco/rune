@@ -16,7 +16,7 @@ fn label<'a>(t: &'a &'static str) -> &'a str {
 
 /// Types `text` at `now`, as a key handler would, and jumps to the row it selects.
 fn typed(m: &mut TreeModel<&'static str>, text: &str, now: f64) -> Option<usize> {
-    let prefix = m.type_ahead.step(text, now);
+    let prefix = m.meta.type_ahead.step(text, now);
     m.type_select(&prefix, label)
 }
 

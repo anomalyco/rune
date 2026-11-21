@@ -27,6 +27,8 @@
 //! assert!(o > 0.5 && o < 1.0);
 //! ```
 
+#![forbid(unsafe_code)]
+
 mod animated;
 mod carry;
 mod choreo;

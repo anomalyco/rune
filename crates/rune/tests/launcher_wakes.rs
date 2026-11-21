@@ -33,7 +33,7 @@ mod mac {
     fn poll(s: &mut State, _: f64, _: &mut Tx) -> bool {
         if BLOCK.swap(false, Ordering::SeqCst) {
             std::thread::sleep(Duration::from_millis(100));
-            *UNBLOCKED.lock().unwrap() = Some(Instant::now());
+            *UNBLOCKED.lock().unwrap() = Some(rune::time::now());
             return false;
         }
         POLLS.fetch_add(1, Ordering::SeqCst);
@@ -43,7 +43,7 @@ mod mac {
     }
 
     fn wait(what: &str, f: impl Fn() -> bool) {
-        let start = Instant::now();
+        let start = rune::time::now();
         while !f() {
             assert!(start.elapsed() < Duration::from_secs(5), "timed out waiting for {what}");
             std::thread::sleep(Duration::from_millis(2));
@@ -72,9 +72,9 @@ mod mac {
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let app = App::new(spec).args(Vec::new()).keep_running()
             .configured_options(WindowOptions::launcher_panel())
-            .on_ready(move |_| { let _ = ready_tx.send(()); });
+            .on_ready(move |_| { ready_tx.send(()).ok(); });
         let handle = app.handle();
-        let _ = HANDLE.set(handle.clone());
+        HANDLE.set(handle.clone()).ok();
         let result = std::sync::Arc::new(Mutex::new(None));
         let out = result.clone();
         std::thread::spawn(move || {
@@ -120,9 +120,9 @@ mod mac {
         handle.wake();
         std::thread::sleep(Duration::from_millis(30));
         requests();
-        let start = Instant::now();
+        let start = rune::time::now();
         while !handle.is_visible() { assert!(start.elapsed() < Duration::from_secs(5), "timed out waiting for reveal"); }
-        let shown = Instant::now();
+        let shown = rune::time::now();
         shown - UNBLOCKED.lock().unwrap().take().expect("blocking update ran")
     }
 
@@ -133,7 +133,7 @@ mod mac {
     }
 
     fn reveal_after_update(handle: &AppHandle<State>) {
-        let latency = std::env::var("RUNE_LATENCY").as_deref() == Ok("1");
+        let latency = rune::env::var("RUNE_LATENCY").as_deref() == Some("1");
         let (mut cached, mut fresh) = (Vec::new(), Vec::new());
         for i in 0..if latency { 12 } else { 1 } {
             cached.push(reveal_in_one_drain(handle, || handle.open()));

@@ -90,8 +90,14 @@ impl Inbox {
 
     /// Sends links to `app`'s hook while the returned guard lives, after the links kept so far,
     /// if the app has the hook. Installs the handler if `prepare` didn't.
+    #[inline]
     pub(crate) fn listen<S: 'static>(&'static self, app: &App<S>, glue: &dyn Glue) -> Option<Listening> {
         let hook = app.on_open_url?;
+        let handle: AppHandle<S> = app.handle();
+        self.listen_sink(glue, Arc::new(move |url: String| handle.update(move |s, tx| hook(s, &url, tx))))
+    }
+
+    fn listen_sink(&'static self, glue: &dyn Glue, sink: Sink) -> Option<Listening> {
         let mut state = self.state.lock().unwrap();
         let (mut listeners, kept) = match std::mem::replace(&mut state.funnel, Funnel::Closed) {
             // `Listening` and `Launch` already have the handler; `Unprepared` and `Closed`
@@ -113,8 +119,6 @@ impl Inbox {
                 (Vec::new(), Vec::new())
             }
         };
-        let handle: AppHandle<S> = app.handle();
-        let sink: Sink = Arc::new(move |url: String| handle.update(move |s, tx| hook(s, &url, tx)));
         let id = state.next;
         state.next += 1;
         listeners.push((id, sink.clone()));
@@ -218,13 +222,14 @@ mod platform {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 mod mac {
     use std::ffi::c_void;
     use std::sync::OnceLock;
     use objc2::rc::autoreleasepool;
     use objc2::runtime::{AnyClass, AnyObject, ClassBuilder, NSObject, Sel};
-    use objc2::{ClassType, class, msg_send, sel};
-    use objc2_foundation::{MainThreadMarker, NSString};
+    use objc2::{ClassType, MainThreadMarker, class, msg_send, sel};
+    use objc2_foundation::NSString;
 
     /// `'GURL'`: `kInternetEventClass` and `kAEGetURL`.
     const GET_URL: u32 = u32::from_be_bytes(*b"GURL");
@@ -265,7 +270,7 @@ mod mac {
     fn handler() -> Option<*mut AnyObject> {
         static HANDLER: OnceLock<usize> = OnceLock::new();
         let made = *HANDLER.get_or_init(|| {
-            const NAME: &str = "RuneOpenUrlHandler";
+            const NAME: &std::ffi::CStr = c"RuneOpenUrlHandler";
             let class = AnyClass::get(NAME).or_else(|| {
                 let mut builder = ClassBuilder::new(NAME, NSObject::class())?;
                 // SAFETY: the function matches `handleGetURLEvent:withReplyEvent:` (two objects, void).

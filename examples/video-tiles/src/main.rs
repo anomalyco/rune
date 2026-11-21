@@ -1,4 +1,7 @@
 //! Copy this producer/view boundary into a VideoToolbox application.
+
+#![forbid(unsafe_code)]
+
 use rune::native_surface::{ByteFrame, synthetic};
 use rune::{AppSpec, Cx, El, NativeSurface, SurfaceFit, Waker, col, el, row};
 use std::time::Duration;

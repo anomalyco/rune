@@ -1,0 +1,1 @@
+- `rune::image::svg_rgba_cover` rasterizes an SVG centre-cropped to a square (`object-fit: cover`) through Rune's sandboxed `usvg` options, so app icon decoders need not call `usvg` directly.

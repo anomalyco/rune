@@ -4,15 +4,22 @@
 //! result rounded back to 8 bits after every instance. A layer drawn to its own target draws into
 //! a scratch tile holding what an `Rgba16Float` texel holds, composited at its end.
 
+mod glyph;
+mod segments;
+
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::bin::{Bins, EMPTY, Show, Solid, TILE_H, TILE_W, clip_span, interior, intersect};
+use glyph::Pow;
+use segments::{Occluder, Segment, centres};
+
+use super::bin::{Bins, Show, Solid, TILE_H, TILE_W, interior, intersect};
 use super::backdrop;
 use super::blend::{self, Src, q};
 use super::shade::{self, Clip};
 use super::{HalfRounding, Report, Scene, Target};
-use crate::render::{Instance, KIND_LAYER, KIND_LAYER_END};
+use crate::render::instance::shader_consts;
+use crate::render::{Instance, Kind};
 
 const TILE_PX: usize = (TILE_W * TILE_H) as usize;
 
@@ -49,7 +56,7 @@ pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles
                 if at >= tiles.len() { break; }
                 for &t in &tiles[at..(at + chunk).min(tiles.len())] {
                 let t = t as usize;
-                let began = crate::time::Instant::now();
+                let began = crate::time::now();
                 painter.tile = painter.tile_rect(t as u32 % bins.cols, t as u32 / bins.cols);
                 if phase == 0 && !bins.covered[t] {
                     painter.surface.fill(painter.tile, clear);
@@ -91,7 +98,7 @@ pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles
                 let (tx, ty) = (t % bins.cols, t / bins.cols);
                 ((tx * TILE_W) as i32) < b[2] && (((tx + 1) * TILE_W) as i32) > b[0] && ((ty * TILE_H) as i32) < b[3] && (((ty + 1) * TILE_H) as i32) > b[1]
             });
-            let began = crate::time::Instant::now();
+            let began = crate::time::now();
             blurred.push(shown.then(|| backdrop::blur(rec, scene.size, scene.half, wide, |x, y| {
                 let at = y as usize * stride + x as usize * 4;
                 [px[at + 2] as f32 / 255.0, px[at + 1] as f32 / 255.0, px[at] as f32 / 255.0, px[at + 3] as f32 / 255.0]
@@ -144,6 +151,7 @@ pub(super) fn f16(v: f32, r: HalfRounding) -> f32 {
 
 /// `f16` on four values at once: F16C's conversion where the CPU has it.
 #[inline]
+#[allow(unsafe_code)]
 pub(super) fn f16x4(v: [f32; 4], r: HalfRounding) -> [f32; 4] {
     #[cfg(target_arch = "x86_64")]
     if std::arch::is_x86_feature_detected!("f16c") {
@@ -155,6 +163,7 @@ pub(super) fn f16x4(v: [f32; 4], r: HalfRounding) -> [f32; 4] {
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "f16c")]
+#[allow(unsafe_code)]
 unsafe fn f16x4_f16c(v: [f32; 4], r: HalfRounding) -> [f32; 4] {
     use std::arch::x86_64::*;
     let mut out = [0.0f32; 4];
@@ -169,31 +178,6 @@ unsafe fn f16x4_f16c(v: [f32; 4], r: HalfRounding) -> [f32; 4] {
     }
     out
 }
-/// `pow(cov / 255, e)` for each coverage byte, per exponent: Skia's text gamma keys a handful of
-/// exponents by the text's luminance, and a frame's text alternates between them (syntax colours),
-/// so the last `POW_TABLES` stay.
-#[derive(Default)]
-struct Pow {
-    tables: Vec<(u32, [f32; 256])>,
-}
-
-const POW_TABLES: usize = 16;
-
-impl Pow {
-    fn index(&mut self, e: f32) -> usize {
-        let bits = e.to_bits();
-        let at = match self.tables.iter().position(|(k, _)| *k == bits) {
-            Some(at) => at,
-            None => {
-                if self.tables.len() == POW_TABLES { self.tables.remove(0); }
-                self.tables.push((bits, std::array::from_fn(|c| if e == 1.0 { c as f32 / 255.0 } else { (c as f32 / 255.0).powf(e) })));
-                self.tables.len() - 1
-            }
-        };
-        at
-    }
-}
-
 /// The target's pixels, shared by the threads: each writes only the tile it holds, and tiles
 /// don't overlap.
 #[derive(Clone, Copy)]
@@ -205,7 +189,11 @@ struct Surface {
 
 // SAFETY: `run` hands each tile to one thread; a thread writes only pixels of its tile, and the
 // target outlives the scope its threads run in.
+#[allow(unsafe_code)]
 unsafe impl Send for Surface {}
+// SAFETY: as above; `run` partitions the target into disjoint tiles across threads and joins
+// before the target borrow ends.
+#[allow(unsafe_code)]
 unsafe impl Sync for Surface {}
 
 impl Surface {
@@ -214,6 +202,7 @@ impl Surface {
 
     /// `n` pixels of row `y` from `x`, all inside the target and the caller's tile.
     #[inline]
+    #[allow(unsafe_code)]
     fn row(&mut self, x: u32, y: u32, n: u32) -> &mut [u8] {
         let at = self.at(x, y);
         let len = n as usize * 4;
@@ -274,84 +263,6 @@ struct Painter<'p, 's> {
     blurred: &'p [Option<backdrop::Blurred>],
 }
 
-#[derive(Clone, Copy)]
-struct Occluder {
-    n: u32,
-    /// The layer it draws into (`Bins::within`): it stands in only for what's under it there.
-    within: u32,
-    solid: Solid,
-    clip: Clip,
-    r: [u32; 4],
-}
-
-/// The parts of a row left to draw: at most `RANGES` runs of pixels `[a, b)`.
-#[derive(Clone, Copy)]
-struct Ranges {
-    runs: [(u32, u32); RANGES],
-    len: usize,
-}
-
-const RANGES: usize = 8;
-
-impl Ranges {
-    fn iter(&self) -> impl Iterator<Item = (u32, u32)> + '_ { self.runs[..self.len].iter().copied() }
-
-    /// Takes pixels `[a, b)` out. Past `RANGES` runs it leaves them in: drawing under the box
-    /// too is only wasted work.
-    fn cut(&mut self, a: u32, b: u32) {
-        let mut next = Ranges { runs: [(0, 0); RANGES], len: 0 };
-        for (x0, x1) in self.iter() {
-            for piece in [(x0, x1.min(a)), (x0.max(b), x1)] {
-                if piece.1 <= piece.0 { continue; }
-                if next.len == RANGES { return; }
-                next.runs[next.len] = piece;
-                next.len += 1;
-            }
-        }
-        *self = next;
-    }
-}
-
-/// A run of rows ending before `y1` of one instance in one tile, and what holds on each of them: the
-/// pixels its interior paints in one colour (`[a, b)`), where its clip is whole, and the runs no
-/// later opaque box covers.
-#[derive(Clone, Copy)]
-struct Segment {
-    y1: u32,
-    solid: (u32, u32),
-    whole: (f32, f32),
-    vis: Ranges,
-}
-
-/// The first row (by index) whose centre is at least `v`, and the first past those at most `v`.
-fn row_from(v: f32) -> u32 { (v - 0.5).ceil().max(0.0) as u32 }
-fn row_past(v: f32) -> u32 { ((v - 0.5).floor() + 1.0).max(0.0) as u32 }
-
-/// Where a `Solid`'s span changes: its top and bottom `inset`, and its corner bands.
-fn solid_breaks(s: &Solid, out: &mut Vec<u32>) {
-    let [_, y0, _, y1] = s.edges;
-    let (top, bottom) = s.bands();
-    out.extend([row_from(y0 + s.inset), row_from(y0 + top), row_past(y1 - bottom), row_past(y1 - s.inset)]);
-}
-
-/// Where a clip's whole span changes.
-fn clip_breaks(c: &Clip, out: &mut Vec<u32>) {
-    let inset = c.inset();
-    out.extend([row_from(c.rect[1] + inset[1]), row_past(c.rect[3] - inset[3])]);
-    if let Some(radii) = c.radii {
-        let (top, bottom) = Solid { edges: c.rect, radii, inset: 0.5 }.bands();
-        out.extend([row_from(c.rect[1] + top), row_past(c.rect[3] - bottom)]);
-    }
-}
-
-/// Pixel indices `[ia, ib)` whose centres lie in `[a, b]`, within `x0..x1`.
-fn centres(span: (f32, f32), x0: u32, x1: u32) -> (u32, u32) {
-    if span.0 > span.1 { return (x1, x1); }
-    let a = (span.0 - 0.5).ceil().clamp(x0 as f32, x1 as f32) as u32;
-    let b = ((span.1 - 0.5).floor() + 1.0).clamp(a as f32, x1 as f32) as u32;
-    (a, b)
-}
-
 impl Painter<'_, '_> {
     /// Tile `tx`'s pixels `[x0, y0, x1, y1)` in the target.
     fn tile_rect(&self, tx: u32, ty: u32) -> [u32; 4] {
@@ -359,63 +270,6 @@ impl Painter<'_, '_> {
         [tx * TILE_W, ty * TILE_H, ((tx + 1) * TILE_W).min(w), ((ty + 1) * TILE_H).min(h)]
     }
 
-    /// The occluders among `list` (a tile's instances in one phase), in painter order. A box
-    /// past a backdrop blur's record never stands in for what that blur reads: phases end at
-    /// each record, and occluders come from this phase only.
-    fn occluders(&mut self, list: &[u32]) {
-        self.occ.clear();
-        for &n in list {
-            let i = &self.scene.instances[n as usize];
-            let Some(solid) = super::bin::opaque_box(i) else { continue };
-            let (b, tile) = (self.bins.bounds[n as usize], self.tile);
-            let r = [(b[0] as u32).max(tile[0]), (b[1] as u32).max(tile[1]), (b[2] as u32).min(tile[2]), (b[3] as u32).min(tile[3])];
-            if r[2] > r[0] && r[3] > r[1] { self.occ.push(Occluder { n, within: self.bins.within[n as usize], solid, clip: Clip::of(i), r }); }
-        }
-    }
-
-    /// Splits rows `r[1]..r[3]` of `r` where anything this instance's drawing depends on changes
-    /// (its interior's corner bands, its clip's, a later opaque box's), and for each run of rows
-    /// takes what holds on its first and last row: those regions are convex, so it holds on every
-    /// row between. A pixel outside these (smaller than exact) regions is shaded one by one,
-    /// which gives it the same bytes.
-    fn segments(&mut self, r: [u32; 4], solid: Option<Solid>, clip: &Clip) -> Vec<Segment> {
-        let mut breaks = std::mem::take(&mut self.breaks);
-        breaks.clear();
-        breaks.extend([r[1], r[3]]);
-        if let Some(s) = &solid { solid_breaks(s, &mut breaks); }
-        clip_breaks(clip, &mut breaks);
-        // Occluders are in painter order: only those after this instance count.
-        let later = self.occ.partition_point(|o| o.n <= self.n);
-        let within = self.bins.within[self.n as usize];
-        let occ: Vec<&Occluder> = self.occ[later..].iter().filter(|o| o.within == within && o.r[1] < r[3] && o.r[3] > r[1] && o.r[0] < r[2] && o.r[2] > r[0]).collect();
-        for o in &occ {
-            breaks.extend([o.r[1], o.r[3]]);
-            solid_breaks(&o.solid, &mut breaks);
-            clip_breaks(&o.clip, &mut breaks);
-        }
-        breaks.retain(|&b| b >= r[1] && b <= r[3]);
-        breaks.sort_unstable();
-        breaks.dedup();
-        let mut out = std::mem::take(&mut self.segs);
-        out.clear();
-        for w in breaks.windows(2) {
-            let (ya, yb) = (w[0], w[1]);
-            let (pa, pb) = (ya as f32 + 0.5, (yb - 1) as f32 + 0.5);
-            let whole = intersect(clip_span(clip, pa), clip_span(clip, pb));
-            let inside = solid.map_or(EMPTY, |s| intersect(intersect(s.span(pa), s.span(pb)), whole));
-            let mut vis = Ranges { runs: [(0, 0); RANGES], len: 1 };
-            vis.runs[0] = (r[0], r[2]);
-            for o in occ.iter().filter(|o| o.r[1] <= ya && o.r[3] >= yb) {
-                let covered = intersect(intersect(o.solid.span(pa), o.solid.span(pb)), intersect(clip_span(&o.clip, pa), clip_span(&o.clip, pb)));
-                let (ca, cb) = centres(covered, o.r[0], o.r[2]);
-                if cb > ca { vis.cut(ca, cb); }
-                if vis.len == 0 { break; }
-            }
-            out.push(Segment { y1: yb, solid: centres(inside, r[0], r[2]), whole, vis });
-        }
-        self.breaks = breaks;
-        out
-    }
     #[inline]
     fn slot(&self, x: u32, y: u32) -> usize { ((y - self.tile[1]) * TILE_W + (x - self.tile[0])) as usize }
 
@@ -456,18 +310,28 @@ impl Painter<'_, '_> {
     fn draw(&mut self, n: u32, r: [u32; 4]) {
         let i = &self.scene.instances[n as usize];
         self.n = n;
-        if i.params[1] == KIND_LAYER { return self.open(n); }
-        if i.params[1] == KIND_LAYER_END { return self.close(i, r); }
-        let clip = Clip::of(i);
-        match i.params[1] as u32 {
-            2 => self.glyph(i, r, &clip),
-            7 => self.image(i, r, &clip),
-            kind @ (0 | 4) => self.shaded(i, kind, r, &clip, interior(i)),
-            1 => self.shadow(i, r, &clip),
-            11 => self.shaded(i, 11, r, &clip, Some(Solid { edges: [i.rect[0], i.rect[1], i.rect[0] + i.rect[2], i.rect[1] + i.rect[3]], radii: i.radii, inset: i.params[2].max(0.5) })),
-            kind @ (3 | 5 | 6 | 10) => self.shaded(i, kind, r, &clip, None),
-            13 => self.backdrop(i, r, &clip),
-            _ => {}
+        match i.kind() {
+            Some(Kind::Layer) => self.open(n),
+            Some(Kind::LayerEnd) => self.close(i, r),
+            Some(Kind::Glyph) => { let clip = Clip::of(i); self.glyph(i, r, &clip); }
+            Some(Kind::Image) => { let clip = Clip::of(i); self.image(i, r, &clip); }
+            Some(kind @ (Kind::Rect | Kind::Gradient)) => { let clip = Clip::of(i); self.shaded(i, kind, r, &clip, interior(i)); }
+            Some(Kind::Shadow) => { let clip = Clip::of(i); self.shadow(i, r, &clip); }
+            Some(Kind::Radial) => {
+                let clip = Clip::of(i);
+                let solid = Solid {
+                    edges: [i.rect[0], i.rect[1], i.rect[0] + i.rect[2], i.rect[1] + i.rect[3]],
+                    radii: i.radii,
+                    inset: i.params[2].max(shader_consts::SOFT_MIN),
+                };
+                self.shaded(i, Kind::Radial, r, &clip, Some(solid));
+            }
+            Some(kind @ (Kind::Inset | Kind::Segment | Kind::Triangle | Kind::Dashed)) => {
+                let clip = Clip::of(i);
+                self.shaded(i, kind, r, &clip, None);
+            }
+            Some(Kind::BackdropBlur) => { let clip = Clip::of(i); self.backdrop(i, r, &clip); }
+            Some(Kind::Effect) | None => {}
         }
     }
 
@@ -548,8 +412,8 @@ impl Painter<'_, '_> {
 
     /// A box kind pixel by pixel through `shade::boxes`, with `solid`'s interior in one colour per
     /// row where the clip is whole.
-    fn shaded(&mut self, i: &Instance, kind: u32, r: [u32; 4], clip: &Clip, solid: Option<Solid>) {
-        let gradient_row = kind == 4 && i.params[0] <= 0.0;
+    fn shaded(&mut self, i: &Instance, kind: Kind, r: [u32; 4], clip: &Clip, solid: Option<Solid>) {
+        let gradient_row = kind == Kind::Gradient && i.params[0] <= 0.0;
         let segs = self.segments(r, solid, clip);
         let mut k = 0;
         for y in r[1]..r[3] {
@@ -560,10 +424,10 @@ impl Painter<'_, '_> {
                 let t = ((py - i.rect[1]) / i.rect[3].max(1.0)).clamp(0.0, 1.0);
                 std::array::from_fn(|ch| i.fill[ch] * (1.0 - t) + i.uv[ch] * t)
             } else { i.fill };
-            if kind == 11 && shade::linear_row_outside(i, py, r[0] as f32 + 0.5, r[2] as f32 - 0.5) { continue; }
+            if kind == Kind::Radial && shade::linear_row_outside(i, py, r[0] as f32 + 0.5, r[2] as f32 - 0.5) { continue; }
             for (va, vb) in segs[k].vis.iter() {
                 for x in va..ia.clamp(va, vb) { self.pixel(i, kind, clip, whole, x, y); }
-                if kind == 11 {
+                if kind == Kind::Radial {
                     // A gradient's colour moves along the span; only its coverage is whole there.
                     for x in ia.max(va)..ib.min(vb) {
                         let c = shade::radial(i, [x as f32 + 0.5, py], true);
@@ -626,147 +490,13 @@ impl Painter<'_, '_> {
     }
 
     #[inline]
-    fn pixel(&mut self, i: &Instance, kind: u32, clip: &Clip, whole: (f32, f32), x: u32, y: u32) {
+    fn pixel(&mut self, i: &Instance, kind: Kind, clip: &Clip, whole: (f32, f32), x: u32, y: u32) {
         let p = [x as f32 + 0.5, y as f32 + 0.5];
         let c = shade::boxes(i, kind, p);
         if c == [0.0; 4] { return; }
         let a = if p[0] >= whole.0 && p[0] <= whole.1 { 1.0 } else { clip.alpha(p) };
         self.stats.shaded_px += 1;
         if a > 0.0 { self.put(x, y, c.map(|v| v * a)); }
-    }
-
-    /// A `KIND_GLYPH` from its atlas mask: whole texels at rest, bilinear when its quad is
-    /// scaled (`uv.z > 0`) or turned (`params.x`), a subpixel mask's three texels a pixel
-    /// (`radii.x`).
-    fn glyph(&mut self, i: &Instance, r: [u32; 4], clip: &Clip) {
-        if i.radii[3] > 0.0 { return self.outline(i, r, clip); }
-        let Some(&mask) = self.scene.glyph_pages.get(i.params[2] as usize) else { return };
-        let side = crate::text::ATLAS_SIZE as i32;
-        let load = |x: i32, y: i32| -> u8 { if x < 0 || y < 0 || x >= side || y >= side { 0 } else { mask[(y * side + x) as usize] } };
-        let e = i.params[3];
-        let turn = i.params[0];
-        let rotated = turn != 0.0;
-        let filtered = i.uv[2] > 0.0 || rotated;
-        let lcd = i.radii[0] > 0.5 && !filtered;
-        // Subpixel text blends by channel over the window; inside layers it draws grayscale.
-        let by_channel = lcd && self.scene.lcd && self.depth == 0;
-        let (sin, cos) = turn.sin_cos();
-        let centre = [i.rect[0] + i.rect[2] * 0.5, i.rect[1] + i.rect[3] * 0.5];
-        let span = if i.uv[2] > 0.0 { [i.uv[2], i.uv[3]] } else { [i.rect[2], i.rect[3]] };
-        let table = self.pow.index(e);
-        let mut count = 0;
-        let segs = self.segments(r, None, clip);
-        let mut k = 0;
-        for y in r[1]..r[3] {
-            let py = y as f32 + 0.5;
-            while segs[k].y1 <= y { k += 1; }
-            let (whole, vis) = (segs[k].whole, segs[k].vis);
-            let ty = i.uv[1] as i32 + (py - i.rect[1]).floor() as i32;
-            if !lcd && !filtered {
-                // A mask at rest: one texel a pixel, a row of them per row.
-                if ty < 0 || ty >= side { continue; }
-                let row = &mask[(ty * side) as usize..((ty + 1) * side) as usize];
-                let t0 = i.uv[0] as i32 + (r[0] as f32 + 0.5 - i.rect[0]).floor() as i32 - r[0] as i32;
-                for x in vis.iter().flat_map(|(a, b)| a..b) {
-                    let Some(&v) = row.get((t0 + x as i32).max(0) as usize).filter(|_| t0 + x as i32 >= 0) else { continue };
-                    if v == 0 { continue; }
-                    count += 1;
-                    let px = x as f32 + 0.5;
-                    let a = if px >= whole.0 && px <= whole.1 { 1.0 } else { clip.alpha([px, py]) };
-                    let cov = self.pow.tables[table].1[v as usize];
-                    self.put(x, y, i.fill.map(|f| f * cov * a));
-                }
-                continue;
-            }
-            for x in vis.iter().flat_map(|(a, b)| a..b) {
-                let px = x as f32 + 0.5;
-                let alpha = || if px >= whole.0 && px <= whole.1 { 1.0 } else { clip.alpha([px, py]) };
-                if lcd {
-                    let tx = i.uv[0] as i32 + (px - i.rect[0]).floor() as i32 * 3;
-                    let c3 = [load(tx, ty), load(tx + 1, ty), load(tx + 2, ty)];
-                    if c3 == [0; 3] { continue; }
-                    count += 1;
-                    let a = alpha();
-                    let mean = ((c3[0] as f32 + c3[1] as f32 + c3[2] as f32) / 3.0 / 255.0).powf(e);
-                    if by_channel {
-                        if mean < 1.0e-5 { continue; }
-                        let kc = c3.map(|v| self.pow.tables[table].1[v as usize]);
-                        let f = i.fill.map(|v| v * a);
-                        self.surface.blend_lcd(x, y, [f[0] * kc[0], f[1] * kc[1], f[2] * kc[2], f[3] * mean], kc.map(|v| f[3] * v));
-                    } else {
-                        self.put(x, y, i.fill.map(|v| v * mean * a));
-                    }
-                    continue;
-                }
-                let cov = if filtered {
-                    // A turned icon samples at its unturned point; outside its quad is outside.
-                    let p = if rotated {
-                        let d = [px - centre[0], py - centre[1]];
-                        [centre[0] + cos * d[0] + sin * d[1], centre[1] - sin * d[0] + cos * d[1]]
-                    } else { [px, py] };
-                    if rotated && (p[0] < i.rect[0] || p[1] < i.rect[1] || p[0] >= i.rect[0] + i.rect[2] || p[1] >= i.rect[1] + i.rect[3]) { continue; }
-                    let local = [(p[0] - i.rect[0]) * span[0] / i.rect[2] - 0.5, (p[1] - i.rect[1]) * span[1] / i.rect[3] - 0.5];
-                    let base = [local[0].floor(), local[1].floor()];
-                    let f = [local[0] - base[0], local[1] - base[1]];
-                    let t = [(i.uv[0] + base[0]) as i32, (i.uv[1] + base[1]) as i32];
-                    let s = |dx: i32, dy: i32| load(t[0] + dx, t[1] + dy) as f32 / 255.0;
-                    let mix = |a: f32, b: f32, t: f32| a * (1.0 - t) + b * t;
-                    let c = mix(mix(s(0, 0), s(1, 0), f[0]), mix(s(0, 1), s(1, 1), f[0]), f[1]);
-                    if c <= 0.0 { continue; }
-                    if e == 1.0 { c } else { c.powf(e) }
-                } else {
-                    let v = load(i.uv[0] as i32 + (px - i.rect[0]).floor() as i32, ty);
-                    if v == 0 { continue; }
-                    self.pow.tables[table].1[v as usize]
-                };
-                count += 1;
-                let a = alpha();
-                self.put(x, y, i.fill.map(|v| v * cov * a));
-            }
-        }
-        self.stats.glyph_px += count;
-        self.segs = segs;
-    }
-
-    /// A glyph drawn from its outline (text whose scale moves): outline.wgsl's `outline_glyph`,
-    /// Windfoil's box (coverage 0), or one box about each subpixel (2), blended by channel
-    /// over the window where the frame's text is subpixel.
-    fn outline(&mut self, i: &Instance, r: [u32; 4], clip: &Clip) {
-        let Some(store) = self.scene.outlines else { return };
-        let z = i.radii[3];
-        let (rec, hint, radius, mode) = (i.border[0] as u32, i.border[1] as u32, i.border[2], (i.border[3] + 0.5) as u32);
-        let hw = 0.5 / z;
-        let across = if mode == 3 { 3.0 } else { 1.0 };
-        let e = i.params[3];
-        let rgb = mode == 2 && self.scene.lcd && self.depth == 0;
-        let cover = |local: [f32; 2]| crate::text::outline::coverage(store, rec, hint, local, i.radii[2], radius, hw);
-        let segs = self.segments(r, None, clip);
-        let mut k = 0;
-        for y in r[1]..r[3] {
-            let py = y as f32 + 0.5;
-            while segs[k].y1 <= y { k += 1; }
-            let (whole, vis) = (segs[k].whole, segs[k].vis);
-            for x in vis.iter().flat_map(|(a, b)| a..b) {
-                let px = x as f32 + 0.5;
-                let local = [(px - i.radii[0]) / across / z, (i.radii[1] - py) / z];
-                let a = if px >= whole.0 && px <= whole.1 { 1.0 } else { clip.alpha([px, py]) };
-                if rgb {
-                    let third = 2.0 * hw / 3.0;
-                    let c3 = [cover([local[0] - third, local[1]]), cover(local), cover([local[0] + third, local[1]])];
-                    let mean = ((c3[0] + c3[1] + c3[2]) / 3.0).powf(e);
-                    if mean < 1.0e-5 { continue; }
-                    let kc = c3.map(|v| v.powf(e));
-                    let f = i.fill.map(|v| v * a);
-                    self.surface.blend_lcd(x, y, [f[0] * kc[0], f[1] * kc[1], f[2] * kc[2], f[3] * mean], kc.map(|v| f[3] * v));
-                    continue;
-                }
-                let cov = cover(local);
-                if cov <= 0.0 { continue; }
-                self.stats.glyph_px += 1;
-                self.put(x, y, i.fill.map(|v| v * cov.powf(e) * a));
-            }
-        }
-        self.segs = segs;
     }
 
     /// A `KIND_BACKDROP_BLUR`'s composite, from the blur painted before it.

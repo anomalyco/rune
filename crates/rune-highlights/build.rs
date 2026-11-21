@@ -5,6 +5,7 @@
 mod translate;
 
 fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=vendor/highlights.wasm");
     println!("cargo:rerun-if-changed=codegen/translate.rs");
     let wasm = std::fs::read("vendor/highlights.wasm").unwrap_or_else(|e| panic!("vendor/highlights.wasm: {e}"));

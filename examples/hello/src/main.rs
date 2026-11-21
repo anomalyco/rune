@@ -1,6 +1,8 @@
 //! The smallest Rune app: one piece of state, a view of it, and a switch that flips it on a spring.
 //! `cargo run -p hello` opens the window; `-- --snap hello.png --scene on` renders it headless.
 
+#![forbid(unsafe_code)]
+
 use rune::tok::{self, motion, type_};
 use rune::{AppSpec, Cx, El, col, el, text};
 

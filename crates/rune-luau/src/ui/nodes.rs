@@ -1,5 +1,7 @@
 //! The `ui.*` constructors, and host nodes an app adds to them.
 
+#![allow(unsafe_code)]
+
 use std::os::raw::c_int;
 use std::rc::Rc;
 
@@ -191,8 +193,6 @@ unsafe fn build(state: *mut ffi::lua_State, base: Base, layers: Layers, children
             .then(|| (unsafe { ffi::lua_topointer(state, layers.style) } as usize, kind));
         let reused = template.and_then(|key| env.templates.borrow().get(key, env, layers.props > 0));
         // The node's props still to apply once its children are in: none for a whole template.
-        // SAFETY (each `decode_props`): its table is 0 or a table on this stack; the frame borrow
-        // covers no call back into Luau.
         let (slot, pending) = match reused {
             Some(Reuse::Whole(mut el)) => {
                 if let Base::Text(s) = base {
@@ -205,6 +205,7 @@ unsafe fn build(state: *mut ffi::lua_State, base: Base, layers: Layers, children
                     el.set_content(s);
                 }
                 let slot = arena.alloc(el)?;
+                // SAFETY: `layers.props` is a table on `state`'s stack and decoding does not re-enter Luau.
                 let press = unsafe { decode_props(state, layers.props, env, is_text, &mut p, arena.get_mut(slot)) }?;
                 (slot, Some((p, press)))
             }
@@ -219,6 +220,7 @@ unsafe fn build(state: *mut ffi::lua_State, base: Base, layers: Layers, children
                 if template.is_some() {
                     *env.recording.borrow_mut() = Some(Vec::new());
                 }
+                // SAFETY: `layers.style` is 0 or a table on `state`'s stack and decoding does not re-enter Luau.
                 let decoded = unsafe { decode_props(state, layers.style, env, is_text, &mut p, arena.get_mut(slot)) };
                 let colors = env.recording.take();
                 let mut press = decoded?;
@@ -233,6 +235,7 @@ unsafe fn build(state: *mut ffi::lua_State, base: Base, layers: Layers, children
                     // SAFETY: `layers.style` is the frozen table's slot.
                     unsafe { env.templates.borrow_mut().put(state, layers.style, key, env, el, under, p.clone(), colors) };
                 }
+                // SAFETY: `layers.props` is 0 or a table on `state`'s stack and decoding does not re-enter Luau.
                 if let Some(own) = unsafe { decode_props(state, layers.props, env, is_text, &mut p, arena.get_mut(slot)) }? {
                     press = Some(own);
                 }

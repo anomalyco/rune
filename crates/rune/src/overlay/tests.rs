@@ -22,9 +22,9 @@ fn present<T: 'static>(overlay: &mut Overlay<T>, at: Instant) {
 fn present_paced<T: 'static>(overlay: &mut Overlay<T>, at: Instant, paced: bool) {
     // These synthetic frames exercise animation, independent of the host's Reduce Motion setting.
     overlay.rt.set_system_reduced_motion(false);
-    let (animating, _) = step(&mut overlay.rt, &mut overlay.clock, &overlay.compositor, at, false);
+    let (animating, _) = overlay.step_frame(at, false);
     overlay.dirty = false;
-    overlay.idle = idle_after(&overlay.rt, animating, paced.then_some(at + FRAME));
+    overlay.idle = idle_after(overlay.rt.core(), animating, paced.then_some(at + FRAME));
 }
 
 /// An overlay whose poll asks for the next frame every time it runs, counting its polls.
@@ -44,18 +44,18 @@ fn frame_hungry(name: &'static str) -> Overlay<u32> {
 /// that time. The wall clock is moved back to simulate the wait, so a deadline at or before
 /// the current time (a spin) makes no progress and runs out the turn budget instead.
 fn polls_in_a_second(overlay: &mut Overlay<u32>) -> u32 {
-    let start = Instant::now();
+    let start = crate::time::now();
     overlay.rt.wall_start = Some(start);
     // An update asks for the next frame, as a poll would.
     overlay.apply_wake(false, vec![Box::new(|_: &mut u32, tx: &mut Tx| { tx.wake_after(Duration::ZERO); true })]);
     let before = overlay.rt.state;
     for _ in 0..10_000 {
-        if overlay.dirty && !overlay.frameless() { present_paced(overlay, Instant::now(), false); }
+        if overlay.dirty && !overlay.frameless() { present_paced(overlay, crate::time::now(), false); }
         let Some(wake) = overlay.wake_deadline() else { break };
         let t0 = overlay.rt.wall_start.unwrap();
         let at = wake.saturating_duration_since(t0).max(t0.elapsed());
         if at > Duration::from_secs(1) { break; }
-        let now = Instant::now();
+        let now = crate::time::now();
         overlay.rt.wall_start = Some(now - at);
         overlay.wake_due(now + Duration::from_micros(1));
     }
@@ -88,7 +88,7 @@ fn a_retained_overlay_moved_while_hidden_reports_its_screen_rect_on_show() {
     assert!(overlay.dirty, "the moved rect waits for the next step");
     assert!(overlay.idle, "a hidden overlay doesn't turn the loop for it");
     assert_eq!(overlay.rt.state, Some([10.0, 5.0, 20.0, 8.0]));
-    overlay.refresh_for_reveal_at(Instant::now());
+    overlay.refresh_for_reveal_at(crate::time::now());
     assert_eq!(overlay.rt.state, Some([310.0, 205.0, 20.0, 8.0]), "the reveal delivers it");
 }
 
@@ -128,7 +128,7 @@ fn width<T: 'static>(overlay: &Overlay<T>, key: &str) -> f32 {
 /// the frame at `at`. Returns the width after each frame.
 fn widths(times: &[Duration], at: Duration, before: fn(&mut Overlay<f32>)) -> Vec<(Duration, f32)> {
     let mut overlay = width_overlay("late frame");
-    let start = Instant::now();
+    let start = crate::time::now();
     times.iter().map(|&t| {
         if t == FRAME { overlay.rt.update(|width, _| *width = 212.0); }
         if t == at { before(&mut overlay); }
@@ -163,7 +163,7 @@ fn a_fading_out_overlay_draws_its_exit_until_the_fade_ends() {
     let mut overlay = width_overlay("fade out");
     overlay.presence = Presence::Shown { occluded: false };
     overlay.rt.set_live_visible(true);
-    let start = Instant::now();
+    let start = crate::time::now();
     present(&mut overlay, start);
     // The handler that fades the overlay out starts its exit in the same turn.
     overlay.rt.update(|width, _| *width = 212.0);
@@ -215,7 +215,7 @@ fn a_poll_asking_for_the_next_frame_keeps_a_shown_overlay_stepping() {
     let app = AppSpec { poll: Some(poll), ..AppSpec::new("frame poll", (100.0, 50.0), || 0, view) };
     let (mut overlay, _) = Overlay::new(OverlaySpec::new("frame poll", app.size, view).options(Default::default()), 0, &app);
     overlay.presence = Presence::Shown { occluded: false };
-    let start = Instant::now();
+    let start = crate::time::now();
     let idle: Vec<_> = (1..=5).map(|k| {
         present(&mut overlay, start + k * FRAME);
         overlay.idle
@@ -227,7 +227,7 @@ fn a_poll_asking_for_the_next_frame_keeps_a_shown_overlay_stepping() {
 #[test]
 fn a_hidden_overlay_takes_a_new_accent_and_redraws_before_reveal() {
     let mut overlay = width_overlay("accent");
-    present(&mut overlay, Instant::now());
+    present(&mut overlay, crate::time::now());
     assert!(!overlay.presence.shown() && !overlay.dirty);
     overlay.accent_changed(overlay.rt.system_accent());
     assert!(!overlay.dirty, "the same accent redraws nothing");
@@ -241,7 +241,7 @@ fn a_hidden_overlay_takes_a_new_accent_and_redraws_before_reveal() {
 #[test]
 fn a_hidden_overlay_takes_a_scroll_bar_change_and_redraws_before_reveal() {
     let mut overlay = width_overlay("scroll-bars");
-    present(&mut overlay, Instant::now());
+    present(&mut overlay, crate::time::now());
     assert!(!overlay.presence.shown() && !overlay.dirty);
     overlay.scroll_bars_changed(overlay.rt.system_scroll_bars_state());
     assert!(!overlay.dirty, "the same scroll-bar preference redraws nothing");
@@ -258,7 +258,7 @@ fn a_hidden_overlay_takes_a_scroll_bar_change_and_redraws_before_reveal() {
 #[test]
 fn a_hidden_overlay_takes_a_theme_change_and_redraws_before_reveal() {
     let mut overlay = width_overlay("theme");
-    present(&mut overlay, Instant::now());
+    present(&mut overlay, crate::time::now());
     assert!(!overlay.presence.shown() && !overlay.dirty);
     let dark = !overlay.rt.env.system_dark;
     overlay.theme_changed(dark);
@@ -285,7 +285,7 @@ fn overlay_idle_flag_left_set_mid_motion_cannot_shrink_the_step() {
 fn overlay_motion_starting_after_idle_takes_one_frame_step() {
     let first_pose = |idle: Duration| {
         let mut overlay = width_overlay("after idle");
-        let start = Instant::now();
+        let start = crate::time::now();
         present(&mut overlay, start);
         present(&mut overlay, start + FRAME);
         assert!(overlay.idle);
@@ -312,7 +312,7 @@ fn overlay_resume_keeps_running_motion_and_starts_new_motion_fresh() {
     let run_with = |options: OverlayOptions, pause: fn(&mut Overlay<Pair>), resume: fn(&mut Overlay<Pair>), gap: Duration| {
         let (mut overlay, _) = Overlay::new(OverlaySpec::new("resume", app.size, view).options(options), Pair { a: 12.0, b: 12.0 }, &app);
         overlay.rt.wall_start = None;
-        let start = Instant::now();
+        let start = crate::time::now();
         present(&mut overlay, start);
         overlay.rt.update(|s, _| s.a = 212.0);
         for k in 1..=3 { present(&mut overlay, start + k * FRAME); }
@@ -325,7 +325,7 @@ fn overlay_resume_keeps_running_motion_and_starts_new_motion_fresh() {
     let run = |pause: fn(&mut Overlay<Pair>), resume: fn(&mut Overlay<Pair>), gap: Duration| run_with(Default::default(), pause, resume, gap);
     let fresh = {
         let mut overlay = width_overlay("fresh");
-        let start = Instant::now();
+        let start = crate::time::now();
         present(&mut overlay, start);
         overlay.rt.update(|width, _| *width = 212.0);
         present(&mut overlay, start + FRAME);
@@ -387,7 +387,7 @@ fn overlay_hidden_commit_keeps_elapsed_motion_on_later_reveal() {
         let commit = overlay.clock.last() + Duration::from_secs(10);
         overlay.rt.state.enter = true;
         overlay.advance_at(commit); // Hidden turn 1 commits B; no show request yet.
-        assert_eq!(handle.shared.requests.lock().unwrap().visible(), None);
+        assert_eq!(handle.shared.core.requests.lock().unwrap().visible(), None);
         assert_eq!(overlay.rt.presented("box").unwrap().0[2], 12.0, "idle before B must not age B");
         assert!(!overlay.draw(), "hidden motion must not drive frames");
         assert_eq!(overlay.wake_deadline(), None);
@@ -437,7 +437,7 @@ fn overlay_hidden_retarget_samples_old_motion_before_committing_new_target() {
 
         // A visible reference ages B first and only then commits C. Compare the next
         // moving frame too: retargeting must preserve velocity, not just position.
-        let mut reference = Runtime::new(12.0, view, app.size, Env::default());
+        let mut reference = crate::runtime::Runtime::new(12.0, view, app.size, crate::runtime::Env::default());
         reference.time_scale = scale;
         reference.frame(0.0);
         reference.update(|width, _| *width = 20.0);
@@ -494,15 +494,15 @@ fn overlay_hidden_poll_can_show_and_animate_from_the_cached_pose() {
             // An app's original kick: a no-op update invalidates the prepared frame
             // before the hidden poll commits B and requests show.
             handle.update(|_, _| {});
-            let updates = std::mem::take(&mut handle.shared.requests.lock().unwrap().updates);
+            let updates = std::mem::take(&mut *handle.shared.updates.lock().unwrap());
             overlay.apply_wake(false, updates);
             assert!(overlay.dirty);
         } else {
             overlay.advance();
         }
-        assert_eq!(handle.shared.requests.lock().unwrap().visible(), Some(true));
+        assert_eq!(handle.shared.core.requests.lock().unwrap().visible(), Some(true));
         overlay.settle_before_reveal();
-        overlay.refresh_for_reveal_at(Instant::now());
+        overlay.refresh_for_reveal_at(crate::time::now());
         if queued {
             assert!(overlay.rt.animating && overlay.rt.presented("box").unwrap().0[2] < 20.0,
                 "a queued update kick must not settle the entry during reveal");
@@ -656,7 +656,7 @@ fn a_timer_frame_that_changes_nothing_on_screen_draws_nothing() {
         view_formats: vec![],
         color_space: Default::default(),
     };
-    let start = Instant::now();
+    let start = crate::time::now();
     present(&mut overlay, start);
     assert!(overlay.idle, "only the timer asks for another frame");
     let mut quiet = frame::Quiet::default();
@@ -668,13 +668,284 @@ fn a_timer_frame_that_changes_nothing_on_screen_draws_nothing() {
 
     let at = start + Duration::from_millis(33);
     let polls = overlay.rt.state.polls;
-    assert_eq!(frame::quiet_step(&mut overlay.rt, &mut overlay.clock, presented, &config, at, Some(at + FRAME)), None);
+    assert_eq!(overlay.quiet_step_frame(presented, &config, at, Some(at + FRAME)), None);
     assert_eq!(overlay.rt.state.polls, polls + 1, "the timer's poll ran");
 
     overlay.rt.state.grow = true;
     let at = at + Duration::from_millis(33);
-    assert!(frame::quiet_step(&mut overlay.rt, &mut overlay.clock, presented, &config, at, Some(at + FRAME)).is_some(),
+    assert!(overlay.quiet_step_frame(presented, &config, at, Some(at + FRAME)).is_some(),
         "a poll that changes what's on screen draws");
+}
+
+#[test]
+fn quiet_timer_frame_that_misses_its_drawable_steps_only_once() {
+    #[derive(Default)]
+    struct S { polls: u32, width: f32 }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        crate::el().child(crate::el().key("box").size(10.0 + s.width, 8.0).fill(crate::Color::WHITE))
+    }
+    fn poll(s: &mut S, _: f64, tx: &mut Tx) -> bool {
+        s.polls += 1;
+        s.width += 1.0;
+        tx.wake_after(Duration::from_millis(33));
+        true
+    }
+    let app = AppSpec { poll: Some(poll), ..AppSpec::new("quiet miss", (100.0, 40.0), S::default, view) };
+    let (mut overlay, _) = Overlay::new(OverlaySpec::new("quiet miss", app.size, view).options(Default::default()), S::default(), &app);
+    overlay.presence = Presence::Shown { occluded: false };
+    overlay.rt.wall_start = None;
+    let config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: wgpu::TextureFormat::Bgra8UnormSrgb,
+        width: 200,
+        height: 80,
+        present_mode: wgpu::PresentMode::AutoVsync,
+        desired_maximum_frame_latency: 2,
+        alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied,
+        view_formats: vec![],
+        color_space: Default::default(),
+    };
+    let start = crate::time::now();
+    present(&mut overlay, start);
+    overlay.core.quiet.presented_frame(true, |slot| crate::window::Presented::record(slot, &overlay.rt, &config, false));
+    let mut presented = None;
+    crate::window::Presented::record(&mut presented, &overlay.rt, &config, false);
+    let presented = presented.unwrap();
+
+    let polls_before = overlay.rt.state.polls;
+    let at = start + Duration::from_millis(33);
+    let built = overlay.quiet_step_frame(&presented, &config, at, Some(at + FRAME));
+    assert!(built.is_some(), "quiet_step stepped the runtime once");
+    assert_eq!(overlay.rt.state.polls, polls_before + 1);
+
+    // Drawable acquisition now fails after quiet_step already stepped the runtime.
+    overlay.acquire_missed(crate::window::Missed::Timeout, false, false, built.is_some());
+    assert_eq!(
+        overlay.rt.state.polls,
+        polls_before + 1,
+        "a missed drawable after quiet_step must not advance the runtime a second time"
+    );
+    assert!(overlay.quiet.presented().is_none(), "a missed frame forgets what it rested on");
+}
+
+#[test]
+fn missed_frame_in_turn_prevents_second_step_in_same_turn() {
+    use frame::{Gate, Turn, TurnEvent};
+    #[derive(Default)]
+    struct S { polls: u32 }
+    fn view(_: &S, _: &mut Cx<S>) -> El { crate::el() }
+    fn poll(s: &mut S, _: f64, tx: &mut Tx) -> bool {
+        s.polls += 1;
+        tx.wake_after(Duration::from_millis(250));
+        false
+    }
+    let app = AppSpec { poll: Some(poll), ..AppSpec::new("turn guard", (40.0, 20.0), S::default, view) };
+    let (mut overlay, _) = Overlay::new(OverlaySpec::new("turn guard", app.size, view).options(Default::default()), S::default(), &app);
+    overlay.presence = Presence::Shown { occluded: true };
+    overlay.rt.wall_start = None;
+    overlay.advance();
+    assert_eq!(overlay.rt.state.polls, 1);
+
+    // Same turn: both a timer and the backoff retry are due while occluded.
+    let now = crate::time::now();
+    overlay.rt.wall_start = Some(now - Duration::from_millis(300));
+    overlay.backoff_step(crate::window::BackoffEvent::At(now));
+    overlay.core.turn_frame.step(TurnEvent::NewEvents);
+    overlay.wake_due(now);
+    assert_eq!(overlay.rt.state.polls, 2, "wake_due steps the due timer once");
+    assert!(overlay.core.turn_frame.stepped(), "turn records that wake_due stepped");
+
+    // Occluded recheck in the same turn sees `stepped() == true` and does not step again.
+    let stepped = overlay.core.turn_frame.stepped();
+    overlay.missed(crate::window::Missed::Occluded, false, stepped);
+    assert_eq!(overlay.rt.state.polls, 2, "occluded recheck must not step a second time in the same turn");
+    assert!(overlay.core.turn_frame.missed());
+
+    // A paced timeout miss in `DisplayTick` clears backoff, so `about_to_wait` in the same turn
+    // must back off via `missed_this_turn` rather than retrying immediately.
+    let decided = frame::turn(Gate {
+        prewarm: false,
+        occluded: false,
+        dirty: true,
+        idle: false,
+        retry: None,
+        missed_this_turn: overlay.core.turn_frame.missed(),
+    }, || now);
+    assert_eq!(decided, Turn::BackedOff);
+
+    // Next turn resets the per-turn guard and allows drawing again.
+    overlay.core.turn_frame.step(TurnEvent::NewEvents);
+    let next = frame::turn(Gate {
+        prewarm: false,
+        occluded: false,
+        dirty: true,
+        idle: false,
+        retry: None,
+        missed_this_turn: overlay.core.turn_frame.missed(),
+    }, || now);
+    assert_eq!(next, Turn::Draw);
+}
+
+#[test]
+fn overlay_idle_after_stays_awake_when_stale_or_live_pending() {
+    let value = crate::LiveText::new("a");
+    let v = value.clone();
+    fn view(value: &crate::LiveText, _: &mut Cx<crate::LiveText>) -> El {
+        crate::text("a").live_text(value)
+    }
+    let app = AppSpec::new("idle-stale", (80.0, 40.0), || crate::LiveText::new("a"), view);
+    let (mut overlay, _) = Overlay::new(OverlaySpec::new("idle-stale", app.size, view).options(Default::default()), v, &app);
+    overlay.rt.set_live_visible(true);
+    overlay.rt.frame(0.0);
+    assert!(idle_after(overlay.rt.core(), false, None), "resting overlay with no work goes idle");
+
+    // A compositor invalidating state during render leaves rt.stale() true.
+    overlay.rt.invalidate();
+    assert!(!idle_after(overlay.rt.core(), false, None), "stale overlay must stay awake to draw the invalidation");
+    overlay.rt.frame(0.0);
+    assert!(idle_after(overlay.rt.core(), false, None));
+
+    // A live value changing during render leaves rt.live_pending() true.
+    value.set("b");
+    assert!(overlay.rt.live_pending());
+    assert!(!idle_after(overlay.rt.core(), false, None), "live-pending overlay must stay awake to draw the new value");
+}
+
+#[test]
+fn overlay_render_registers_frame_wake_on_renderer() {
+    let Ok(gpu) = crate::render::Gpu::try_new(crate::render::Gpu::instance(), None) else { return };
+    let mut overlay = width_overlay("frame-wake");
+    overlay.rt.frame(0.0);
+    let renderer = crate::render::Renderer::new(&gpu.device, crate::render::OFFSCREEN_FORMAT);
+    overlay.core.gpu = Some(Arc::new(gpu));
+    overlay.core.renderer = Some(renderer);
+    overlay.warm_offscreen((40, 20));
+    assert!(
+        overlay.core.renderer.as_ref().unwrap().has_frame_wake(),
+        "overlay render must register rt.live_wake() on the renderer so off-thread pipelines wake resting overlays"
+    );
+}
+
+#[test]
+fn overlay_post_step_unconfigured_miss_flushes_clipboard_and_drops_requests() {
+    let mut overlay = width_overlay("reblend-miss");
+    let clipboard = crate::clipboard::memory();
+    overlay.core.clipboard.use_memory(&clipboard);
+    overlay.presence = Presence::Shown { occluded: false };
+    overlay.rt.update(|_, tx| {
+        tx.copy("overlay-copy");
+        tx.close_window();
+        tx.minimize();
+    });
+    overlay.rt.frame(0.0);
+    // Simulate a post-step reblend or re-acquire Unconfigured failure routed through acquire_missed.
+    overlay.acquire_missed(crate::window::Missed::Unconfigured, false, false, true);
+    assert!(overlay.rt.copy_request.is_none(), "post-step Unconfigured miss must flush clipboard writes");
+    assert_eq!(
+        clipboard.text().as_deref().map(String::as_str),
+        Some("overlay-copy"),
+        "post-step Unconfigured miss must deliver clipboard writes to the clipboard"
+    );
+    assert!(overlay.rt.shell_request.is_none(), "post-step Unconfigured miss must drop unsupported shell requests");
+    assert!(!overlay.rt.host.minimize.field(), "post-step Unconfigured miss must clear minimize requests");
+    assert!(!overlay.presence.shown(), "surface_refused hides the overlay");
+}
+
+#[test]
+fn clipboard_receive_marks_shown_overlay_dirty_without_advancing_and_advances_frameless() {
+    #[derive(Default)]
+    struct State {
+        polls: u32,
+        pasted: Vec<String>,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        crate::el()
+            .on_paste(|s: &mut State, text, _| s.pasted.push(text.to_owned()))
+            .child(crate::text(s.pasted.len().to_string()).key("count"))
+    }
+    fn poll(s: &mut State, _: f64, _: &mut Tx) -> bool {
+        s.polls += 1;
+        false
+    }
+    let app_spec = AppSpec { poll: Some(poll), ..AppSpec::new("clipboard-sync", (100.0, 40.0), State::default, view) };
+    let (overlay, _) = Overlay::new(
+        OverlaySpec::new("clipboard-sync", app_spec.size, view).options(Default::default()),
+        State::default(),
+        &app_spec,
+    );
+    let Overlay { mut core, rt, compositor, setup, shared } = overlay;
+    let mut app = app::TypedOverlayApp { rt, compositor, setup, shared };
+    let clipboard = crate::clipboard::memory();
+    app.rt.use_clipboard(&clipboard);
+    app.rt.wall_start = None;
+    app.rt.frame(0.0);
+
+    // No pending clipboard reply leaves a clean shown overlay untouched.
+    core.presence = Presence::Shown { occluded: false };
+    core.dirty = false;
+    core.idle = true;
+    let (polls_before, commits_before) = (app.rt.state.polls, app.rt.stats.commits);
+    core.clipboard_due(&mut app);
+    assert!(!core.dirty);
+    assert_eq!((app.rt.state.polls, app.rt.stats.commits), (polls_before, commits_before));
+
+    // Shown (non-frameless): receiving a clipboard reply marks dirty and leaves stepping to draw.
+    clipboard.set_text("shown");
+    core.clipboard.read_core(app.rt.core());
+    core.clipboard_due(&mut app);
+    assert!(core.dirty, "shown overlay must be marked dirty for the next frame draw");
+    assert!(app.rt.has_pending_input(), "clipboard reply must wait for the drawn frame");
+    assert_eq!(app.rt.state.polls, polls_before, "shown overlay must not step poll outside draw");
+    assert_eq!(app.rt.stats.commits, commits_before, "shown overlay must not commit outside draw");
+    assert!(app.rt.state.pasted.is_empty(), "paste handler must run in the drawn frame, not sync");
+    app.rt.frame(0.0);
+    assert!(!app.rt.has_pending_input());
+    assert_eq!(app.rt.state.polls, polls_before + 1, "drawn frame steps poll once");
+    assert_eq!(app.rt.state.pasted, ["shown"]);
+
+    // Fading out (still drawing, non-frameless): also leaves stepping to draw.
+    core.presence = Presence::FadingOut {
+        until: crate::time::now() + Duration::from_secs(1),
+        length: Duration::from_secs(1),
+        occluded: false,
+    };
+    assert!(!core.frameless());
+    core.dirty = false;
+    let (polls_before, commits_before) = (app.rt.state.polls, app.rt.stats.commits);
+    clipboard.set_text("fading");
+    core.clipboard.read_core(app.rt.core());
+    core.clipboard_due(&mut app);
+    assert!(core.dirty);
+    assert!(app.rt.has_pending_input(), "fading overlay still draws frames and must not advance in sync");
+    assert_eq!((app.rt.state.polls, app.rt.stats.commits), (polls_before, commits_before));
+    app.rt.frame(0.0);
+    assert_eq!(app.rt.state.pasted, ["shown", "fading"]);
+
+    // Hidden (frameless): advances immediately so the clipboard reply is delivered without a frame.
+    core.presence = Presence::default();
+    assert!(core.frameless());
+    core.dirty = false;
+    let polls_before = app.rt.state.polls;
+    clipboard.set_text("hidden");
+    core.clipboard.read_core(app.rt.core());
+    core.clipboard_due(&mut app);
+    assert!(core.dirty);
+    assert!(!app.rt.has_pending_input(), "hidden overlay must drain the clipboard reply immediately");
+    assert_eq!(app.rt.state.polls, polls_before + 1, "hidden overlay advances once");
+    assert_eq!(app.rt.state.pasted, ["shown", "fading", "hidden"]);
+
+    // Shown but occluded (frameless): advances immediately since no frame will draw while covered.
+    core.presence = Presence::Shown { occluded: true };
+    assert!(core.frameless());
+    core.dirty = false;
+    let polls_before = app.rt.state.polls;
+    clipboard.set_text("occluded");
+    core.clipboard.read_core(app.rt.core());
+    core.clipboard_due(&mut app);
+    assert!(core.dirty);
+    assert!(!app.rt.has_pending_input(), "occluded overlay must drain the clipboard reply immediately");
+    assert_eq!(app.rt.state.polls, polls_before + 1, "occluded overlay advances once");
+    assert_eq!(app.rt.state.pasted, ["shown", "fading", "hidden", "occluded"]);
 }
 
 

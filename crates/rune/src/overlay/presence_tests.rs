@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use super::{Effect, Event, Presence, Release};
-use crate::time::Instant;
 
 const FADE: Duration = Duration::from_millis(200);
 const AFTER: Duration = Duration::from_secs(5);
@@ -14,7 +13,7 @@ fn shown() -> Presence { Presence::Shown { occluded: false } }
 
 #[test]
 fn a_fade_out_keeps_drawing_without_input_until_it_ends() {
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let mut p = shown();
     assert_eq!(effects(&mut p, Event::Hide { fade: FADE, now: t0 }, Release::Now), [Effect::HideWindow { fade: FADE }],
         "nothing stops and nothing is released while the exit plays");
@@ -28,7 +27,7 @@ fn a_fade_out_keeps_drawing_without_input_until_it_ends() {
 
 #[test]
 fn hiding_at_once_stops_drawing_then_releases_by_policy() {
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let hide = Event::Hide { fade: Duration::ZERO, now: t0 };
     let mut keep = shown();
     assert_eq!(effects(&mut keep, hide, Release::Keep), [Effect::StopDrawing, Effect::HideWindow { fade: Duration::ZERO }]);
@@ -43,7 +42,7 @@ fn hiding_at_once_stops_drawing_then_releases_by_policy() {
 
 #[test]
 fn showing_cancels_a_fade_and_its_end_is_stale() {
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let mut p = shown();
     p.step(Event::Hide { fade: FADE, now: t0 }, Release::Now);
     assert!(p.step(Event::Show, Release::Now).is_empty());
@@ -54,7 +53,7 @@ fn showing_cancels_a_fade_and_its_end_is_stale() {
 
 #[test]
 fn showing_cancels_a_pending_release_and_its_time_is_stale() {
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let release = Release::After(AFTER);
     let mut p = shown();
     p.step(Event::Hide { fade: Duration::ZERO, now: t0 }, release);
@@ -68,7 +67,7 @@ fn showing_cancels_a_pending_release_and_its_time_is_stale() {
 
 #[test]
 fn fading_again_restarts_the_fade() {
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let mut p = shown();
     p.step(Event::Hide { fade: FADE, now: t0 }, Release::Keep);
     let t1 = t0 + FADE / 2;
@@ -79,7 +78,7 @@ fn fading_again_restarts_the_fade() {
 
 #[test]
 fn hiding_mid_fade_without_one_ends_it_now() {
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let mut p = shown();
     p.step(Event::Hide { fade: FADE, now: t0 }, Release::After(AFTER));
     let t1 = t0 + FADE / 2;
@@ -90,7 +89,7 @@ fn hiding_mid_fade_without_one_ends_it_now() {
 
 #[test]
 fn hiding_a_hidden_overlay_leaves_its_release_alone() {
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let mut p = Presence::Hidden { release_at: Some(t0 + AFTER) };
     assert_eq!(effects(&mut p, Event::Hide { fade: FADE, now: t0 + AFTER / 2 }, Release::After(AFTER)),
         [Effect::StopDrawing, Effect::HideWindow { fade: FADE }], "nothing to fade, and no new release");
@@ -102,7 +101,7 @@ fn hiding_a_hidden_overlay_leaves_its_release_alone() {
 
 #[test]
 fn a_fading_panel_never_becomes_covered_but_one_that_was_stays_so() {
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let mut p = shown();
     p.step(Event::Hide { fade: FADE, now: t0 }, Release::Keep);
     assert!(!p.set_occluded(true) && !p.occluded(), "a panel fading toward alpha zero isn't occluded");
@@ -118,7 +117,7 @@ fn a_hidden_overlay_keeps_no_occlusion_and_a_show_reads_it_again() {
     assert!(p.set_occluded(true), "the reading still applies its side effects");
     assert!(!p.occluded());
     let mut covered = Presence::Shown { occluded: true };
-    covered.step(Event::Hide { fade: Duration::ZERO, now: Instant::now() }, Release::Keep);
+    covered.step(Event::Hide { fade: Duration::ZERO, now: crate::time::now() }, Release::Keep);
     covered.step(Event::Show, Release::Keep);
     assert_eq!(covered, shown());
 }

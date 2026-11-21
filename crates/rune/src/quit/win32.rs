@@ -14,8 +14,10 @@
 //! from here would re-enter it, so the window runs no loop: it ends a tracking menu (the usual
 //! modal loop) and answers, and the hooks run as the handler returns, before `WM_ENDSESSION`.
 
+#![allow(unsafe_code)]
+
 use std::cell::RefCell;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, TRUE, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -112,9 +114,9 @@ fn answered(ending: bool) -> bool {
 /// Runs the loop's messages until `Windows` answered the message, for at most `WAIT`.
 fn run_loop(ending: bool) {
     let ran = std::panic::catch_unwind(|| {
-        let deadline = Instant::now() + WAIT;
+        let deadline = crate::time::now() + WAIT;
         while !answered(ending) {
-            let left = deadline.saturating_duration_since(Instant::now());
+            let left = deadline.saturating_duration_since(crate::time::now());
             if left.is_zero() {
                 eprintln!("rune: the session ends before the windows' App::on_quit ran");
                 break;

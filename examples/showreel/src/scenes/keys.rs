@@ -77,7 +77,7 @@ pub fn view(s: &State, _: &mut Cx<State>) -> El {
     for i in 0..4 {
         let kx = kx0 + 280.0 + i as f32 * 70.0;
         let ky = by + 46.0;
-        let ang = (t_ as f32 * 0.9 + i as f32 * 1.3).sin() * 2.2 - 1.5708;
+        let ang = (t_ as f32 * 0.9 + i as f32 * 1.3).sin() * 2.2 - std::f32::consts::FRAC_PI_2;
         let (dx, dy) = (ang.cos() * 16.0, ang.sin() * 16.0);
         root = root.child(fx(PLASTIC, [10.0, 0.35, 0.7, 10.0]).absolute(kx, ky).size(54.0, 54.0).radius(27.0))
             .child(dot(0xf1ece1, 6.0).absolute(kx + 27.0 + dx - 3.0, ky + 27.0 + dy - 3.0));

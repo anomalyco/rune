@@ -6,8 +6,7 @@
 
 struct VOut {
     @builtin(position) pos: vec4<f32>,
-    @location(0) p: vec2<f32>,
-    @location(1) @interpolate(flat) idx: u32,
+    @location(0) @interpolate(flat) idx: u32,
 };
 
 @vertex
@@ -17,7 +16,6 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut 
     let p = pr.rect.xy - vec2<f32>(1.0) + corner * (pr.rect.zw + vec2<f32>(2.0));
     var o: VOut;
     o.pos = vec4<f32>(p.x / F.sf.x * 2.0 - 1.0, 1.0 - p.y / F.sf.y * 2.0, 0.0, 1.0);
-    o.p = p;
     o.idx = ii;
     return o;
 }
@@ -31,7 +29,9 @@ struct GOut {
 fn fs(i: VOut) -> GOut {
     let pr = prims[i.idx];
     let half = pr.rect.zw * 0.5;
-    let q = i.p - (pr.rect.xy + half);
+    // Fragment position is the rasterizer's exact pixel centre; interpolated `p` drifts by
+    // subpixel ULPs on D3D12, discarding outer-edge pixels that sit on the exact `d == 0.5` cut.
+    let q = i.pos.xy - (pr.rect.xy + half);
     let d = sd_rrect(q, half, pr.radii);
     if (d > 0.5 || (flags_of(pr) & F_HINT) != 0u) {
         discard;

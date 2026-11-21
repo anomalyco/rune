@@ -1,0 +1,29 @@
+[package]
+name = "rune-spell"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+description = "Platform spell checking for Rune: Windows ISpellChecker, macOS NSSpellChecker, and web Hunspell via spellbook."
+
+[dependencies]
+rune-core = { workspace = true }
+rustc-hash = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { workspace = true, features = ["std", "NSSpellChecker"] }
+objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSEnumerator", "NSObject", "NSRange", "NSString"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Com"] }
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true }
+spellbook = "0.4"
+unicode-segmentation = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+web-sys = { workspace = true, features = ["console"] }
+
+[lints]
+workspace = true

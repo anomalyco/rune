@@ -230,7 +230,7 @@ fn a_bundle_holds_a_trace_a_contact_sheet_and_a_summary() {
     frames(&mut rt, 10);
     let clip = rt.state.rewind.freeze();
     let dir = std::env::temp_dir().join(format!("rune-rewind-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ok();
     let bundle = clip.write_bundle(&dir, 0..clip.len(), "the title hops").unwrap();
     let trace = std::fs::read_to_string(dir.join("trace.jsonl")).unwrap();
     let mut lines = trace.lines();
@@ -245,7 +245,7 @@ fn a_bundle_holds_a_trace_a_contact_sheet_and_a_summary() {
     assert_eq!(summary, bundle.summary());
     assert!(summary.contains("> the title hops"));
     assert!(summary.contains("## Jumps") && summary.contains("title ↓7.5 pt"), "{summary}");
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// Opening the scrubber over another recorder resumes the one it froze before; showing a saved

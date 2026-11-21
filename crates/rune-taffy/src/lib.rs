@@ -5,9 +5,13 @@
 //! inline `Cache`, dual 92-byte `Layout`s, and per-node child `Vec`s with 216-byte dense
 //! `RetainedSlot`s, 64-byte `CompactStyle`, 96-byte `CompactCache`, and flat child arenas.
 
+// Every module except Windows' `SetThreadStackGuarantee` FFI in `stack` forbids `unsafe`.
+#![cfg_attr(not(windows), forbid(unsafe_code))]
+
 mod baseline_store;
 mod cache;
 pub mod prelude;
+mod stack;
 mod store;
 mod style;
 #[cfg(test)]
@@ -17,6 +21,7 @@ mod view;
 pub use baseline_store::BaselineLayoutStore;
 pub use baseline_store::baseline_storage_stats;
 pub use cache::CompactCache;
+pub use stack::stack_grow_count;
 pub use store::BoxLayout;
 pub use store::LayoutStore;
 pub use store::SlotChildIter;

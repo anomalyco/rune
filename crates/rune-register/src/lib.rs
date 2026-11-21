@@ -40,6 +40,8 @@
 //! A part is only collected if its crate is linked in, so a crate that only registers and is
 //! never referenced must be used by name, for example `use my_crate as _;`.
 
+#![forbid(unsafe_code)]
+
 #[doc(hidden)]
 pub use linkme;
 

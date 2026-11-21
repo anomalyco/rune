@@ -1,0 +1,1 @@
+- `paint_keep` copies text nodes whose word `reveal` has caught up (`!RevealPhase::fading`), rather than refusing every text node that ever set `El::reveal` (`t.reveal >= 0.0`, or an idle `RevealPhase` left in `Runtime::reveals`).

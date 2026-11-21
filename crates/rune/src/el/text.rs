@@ -202,6 +202,17 @@ impl El {
         }
         self
     }
+
+    /// Secondary press (right-click or macOS control-click) on a [`Mark::Pill`](crate::Mark::Pill)
+    /// inside this [`text_input`](crate::text_input). Called with the pill's id and the press point
+    /// in window points; return `true` to handle it (opening a pill-specific menu) or `false` to
+    /// fall through to the field's standard context menu.
+    pub fn on_pill_secondary<S: 'static>(mut self, f: impl Fn(&mut S, &str, PointerPress, &mut Tx) -> bool + 'static) -> Self {
+        if let Some(inp) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
+            inp.on_pill_secondary = Some(Rc::new(move |s, id, press, tx| f(downcast::<S>(s), id, press, tx)));
+        }
+        self
+    }
     pub(super) fn sync_input_pills(&mut self) {
         let (Some(inp), Some(t)) = (&self.cold.input, &mut self.text) else { return };
         if inp.edit.is_plain() {
@@ -254,7 +265,7 @@ impl El {
         t.spans = flat;
         t.cold.strikes = strikes;
         t.cold.blocks = blocks;
-        t.cold.soft_breaks = inp.edit.soft_breaks.clone();
+        t.cold.soft_breaks = inp.edit.soft_breaks().to_vec();
         // Replace links generated from `Mark::Link` while keeping any explicit `.link(...)` calls.
         t.cold.links = rich_links;
     }
@@ -697,5 +708,14 @@ impl El {
             t.cold.advance_in = Some((run.clone(), at));
         }
         self
+    }
+    /// A filled disc in a list's outside marker column. The column's inline end is where the
+    /// item's text begins; its top is the top of the first line. Its width, and thus wrapping,
+    /// is up to the caller. The disc's diameter and inset resolve from the primary font's
+    /// metrics in whole device pixels during layout, also after a zoom or display change.
+    pub fn outside_list_disc(mut self, font: TextStyle) -> Self {
+        let (a, d) = crate::text::primary_extents(font).unwrap_or((0.8, 0.2));
+        self.cold_mut().list_disc = Some([a * font.size, d.abs() * font.size, font.line_px()]);
+        self.radius(999.0).a11y_hidden()
     }
 }

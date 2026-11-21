@@ -17,7 +17,9 @@
 //! the primary display's top left (default `80,80`). `GLASS_CARD_TRACE=card.jsonl` writes the
 //! card window's frame trace, with each drawable's on-screen present time.
 
-use std::time::{Duration, Instant};
+#![forbid(unsafe_code)]
+
+use std::time::Duration;
 
 use rune::{
     App, AppSpec, Color, Cx, El, Key, KeyEvent, LoopSpec, MacWindowOptions, Spring, SystemMaterial, TextStyle, Tx,
@@ -37,14 +39,14 @@ struct Card {
 fn init() -> Card {
     Card {
         docked: false,
-        busy_ms: std::env::var("GLASS_CARD_BUSY_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+        busy_ms: rune::env::var("GLASS_CARD_BUSY_MS").and_then(|v| v.parse().ok()).unwrap_or(0),
         measure: measuring(),
         material: if std::env::var_os("GLASS_CARD_POPOVER").is_some() { SystemMaterial::Popover } else { SystemMaterial::Glass },
     }
 }
 
 fn measuring() -> bool {
-    std::env::var("GLASS_CARD_PATTERN").is_ok_and(|v| v == "black")
+    rune::env::var("GLASS_CARD_PATTERN").is_some_and(|v| v == "black")
 }
 
 /// The card's frame and corner radius: a wide card, or a capsule docked bottom right.
@@ -79,8 +81,8 @@ fn card_view(s: &Card, _: &mut Cx<Card>) -> El {
 
 fn busy(s: &mut Card, _: f64, _: &mut Tx) -> bool {
     if s.busy_ms > 0 {
-        let until = Instant::now() + Duration::from_millis(s.busy_ms);
-        while Instant::now() < until { std::hint::spin_loop(); }
+        let until = rune::time::now() + Duration::from_millis(s.busy_ms);
+        while rune::time::now() < until { std::hint::spin_loop(); }
     }
     false
 }
@@ -118,11 +120,11 @@ fn pattern_view(_: &(), _: &mut Cx<()>) -> El {
 fn main() {
     rune::run_windows(|displays| {
         let display = displays.iter().find(|d| d.primary).or_else(|| displays.first());
-        let place = std::env::var("GLASS_CARD_AT").ok().and_then(|v| v.split_once(',').and_then(|(x, y)| Some((x.parse::<f64>().ok()?, y.parse::<f64>().ok()?))));
+        let place = rune::env::var("GLASS_CARD_AT").and_then(|v| v.split_once(',').and_then(|(x, y)| Some((x.parse::<f64>().ok()?, y.parse::<f64>().ok()?))));
         let (x, y) = place.unwrap_or((80.0, 80.0));
         let origin = display.map_or((0, 0), |d| (d.position.0 + (x * d.scale) as i32, d.position.1 + (y * d.scale) as i32));
         let pattern = App::new(AppSpec { min_size: Some(SIZE), ..AppSpec::new("Glass card pattern", SIZE, || (), pattern_view) }).args(vec![]);
-        let trace = std::env::var("GLASS_CARD_TRACE").map_or(vec![], |path| vec!["--native".into(), "--trace".into(), path]);
+        let trace = rune::env::var("GLASS_CARD_TRACE").map_or(vec![], |path| vec!["--native".into(), "--trace".into(), path]);
         let card = App::new(AppSpec { min_size: Some(SIZE), poll: Some(busy), on_key: Some(key), ..AppSpec::new("Glass card", SIZE, init, card_view) }).args(trace);
         let handle = card.handle();
         if std::env::var_os("GLASS_CARD_MANUAL").is_none() {
@@ -132,7 +134,7 @@ fn main() {
                 handle.update(|s, _| s.docked = !s.docked);
             });
         }
-        if let Ok(seconds) = std::env::var("GLASS_CARD_SECONDS").unwrap_or_default().parse::<f64>() {
+        if let Ok(seconds) = rune::env::var("GLASS_CARD_SECONDS").unwrap_or_default().parse::<f64>() {
             std::thread::spawn(move || { std::thread::sleep(Duration::from_secs_f64(seconds)); handle.quit(); });
         }
         let at = WindowOptions { borderless: true, position: Some(origin), resizable: false, always_on_top: true, ..Default::default() };

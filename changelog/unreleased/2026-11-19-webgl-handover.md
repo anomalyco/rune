@@ -1,0 +1,1 @@
+- Web, `webgl` feature: a page that starts on the CPU painter hands over to WebGL2. It stayed on the CPU painter for good, because WebGL2 reports finished work only when it is polled.

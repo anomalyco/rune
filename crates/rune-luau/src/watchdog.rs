@@ -3,6 +3,8 @@
 //! stops that script without touching the rest of the app. The check reads the clock every 256
 //! safepoints, which keeps it off the profile of ordinary code.
 
+#![allow(unsafe_code)]
+
 use std::cell::Cell;
 use std::os::raw::c_int;
 use std::time::Duration;
@@ -29,7 +31,7 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
 pub(crate) fn arm(limit: Duration) -> Armed {
     let outer = DEADLINE.get().is_some();
     if !outer {
-        DEADLINE.set(Some(Instant::now() + limit));
+        DEADLINE.set(Some(rune::time::now() + limit));
     }
     Armed(!outer)
 }
@@ -55,7 +57,7 @@ unsafe extern "C-unwind" fn interrupt(state: *mut ffi::lua_State, gc: c_int) {
     }
     // The deadline stays set past the first error, so a script that catches it with `pcall`
     // gets it again at the next check, until control is back in the host.
-    if DEADLINE.get().is_some_and(|d| Instant::now() >= d) {
+    if DEADLINE.get().is_some_and(|d| rune::time::now() >= d) {
         // SAFETY: raised at a safepoint inside a protected call that this crate made; no Rust
         // frame with destructors lies between here and that call.
         unsafe { ffi::luaL_error(state, c"%s".as_ptr(), WATCHDOG_C.as_ptr()) }
