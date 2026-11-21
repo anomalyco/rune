@@ -509,9 +509,12 @@ impl Renderer {
         }
         hash_flow(self.flow.get(), &mut h);
         for s in srcs { (&s.lang, s.len, s.coloured, s.open).hash(&mut h); }
+        // A block with display math builds every time its document does: each build asks the math
+        // cache, so a host's row notes what is still rendering (`math::collect`). The equation's
+        // own element stays memoised (`settled_math_card_digest`).
         #[cfg(feature = "math")]
         if srcs.iter().any(|s| crate::math::is_math_fence(s.lang.as_deref())) {
-            crate::math::generation().hash(&mut h);
+            return None;
         }
         tasks.hash(&mut h);
         if !self.highlights.is_empty() { hash_block_map(map, &mut h); }
@@ -544,9 +547,12 @@ impl Renderer {
         }
         hash_flow(self.flow.get(), &mut h);
         for s in srcs { (&s.lang, s.len, s.coloured, s.open).hash(&mut h); }
+        // A block with display math builds every time its document does: each build asks the math
+        // cache, so a host's row notes what is still rendering (`math::collect`). The equation's
+        // own element stays memoised (`settled_math_card_digest`).
         #[cfg(feature = "math")]
         if srcs.iter().any(|s| crate::math::is_math_fence(s.lang.as_deref())) {
-            crate::math::generation().hash(&mut h);
+            return None;
         }
         tasks.hash(&mut h);
         if !self.highlights.is_empty() {
