@@ -152,6 +152,11 @@ pub(crate) fn relabel(app: &NSApplication) {
                     entry.setTitle(&NSString::from_str(&crate::labels::label(standard.label())));
                 }
             }
+            for entry in (0..menu.numberOfItems()).filter_map(|i| menu.itemAtIndex(i)).filter(|i| i.tag() == SYSTEM && !i.isSeparatorItem()) {
+                if let Some(label) = entry.action().and_then(|a| system_label(a.name().to_str().ok()?)) {
+                    entry.setTitle(&NSString::from_str(&crate::labels::label(label)));
+                }
+            }
         }
     }
 }
@@ -184,6 +189,8 @@ pub(crate) fn is_winit_default(app: &NSApplication) -> bool {
 const STANDARD: isize = 0x5255_4e45;
 /// Tags the app menu items `add_app_items` makes.
 const APP_ITEM: isize = 0x5255_4e46;
+/// Tags the Edit menu's system items `system_edit_items` makes.
+const SYSTEM: isize = 0x5255_4e47;
 
 /// The standard items, into menus of their titles (made if absent) in the menu bar, or in a
 /// new one whose empty app menu waits for `promote`. An action a menu already has is skipped.
@@ -205,6 +212,7 @@ pub(crate) fn add_standard(app: &NSApplication) {
             entry.setTag(STANDARD);
             menu.addItem(&entry);
         }
+        system_edit_items(mtm, &top(mtm, &root, "Edit"));
         // AppKit's windows menu: it lists the app's windows and takes the items macOS adds there
         // (Fill, Center, Move & Resize, Full-Screen Tile), as Electron's `windowMenu` role does.
         if let Some(window) = (0..root.numberOfItems()).filter_map(|i| root.itemAtIndex(i)).find(|i| name(i) == "Window").and_then(|i| i.submenu()) {
@@ -214,6 +222,40 @@ pub(crate) fn add_standard(app: &NSApplication) {
     sync_standard(app);
 }
 
+/// The items AppKit puts at the end of an Edit menu the app has when it finishes launching,
+/// which Rune's, made at the first window, misses: Start Dictation and Emoji & Symbols (⌃⌘Space),
+/// after a separator, as in every Mac app's Edit menu. AppKit implements both actions. Skipped
+/// when the menu already has one.
+unsafe fn system_edit_items(mtm: MainThreadMarker, edit: &NSMenu) {
+    let has = |action: Sel| (0..edit.numberOfItems()).filter_map(|i| edit.itemAtIndex(i)).any(|i| i.action() == Some(action));
+    if has(sel!(startDictation:)) || has(sel!(orderFrontCharacterPalette:)) { return; }
+    let dictation = item(mtm, &crate::labels::label(Label::StartDictation), Some(sel!(startDictation:)), "");
+    let emoji = item(mtm, &crate::labels::label(Label::EmojiAndSymbols), Some(sel!(orderFrontCharacterPalette:)), " ");
+    emoji.setKeyEquivalentModifierMask(NSEventModifierFlags::Command | NSEventModifierFlags::Control);
+    for entry in [NSMenuItem::separatorItem(mtm), dictation, emoji] {
+        entry.setTag(SYSTEM);
+        edit.addItem(&entry);
+    }
+}
+
+/// Moves the `system_edit_items` back to the end of the Edit menu after the app added its own.
+unsafe fn system_edit_last(edit: &NSMenu) {
+    let items: Vec<_> = (0..edit.numberOfItems()).filter_map(|i| edit.itemAtIndex(i)).collect();
+    let first = items.iter().position(|i| i.tag() == SYSTEM);
+    if first.is_none_or(|first| items[first..].iter().all(|i| i.tag() == SYSTEM)) { return; }
+    for entry in items.iter().filter(|i| i.tag() == SYSTEM) {
+        edit.removeItem(entry);
+        edit.addItem(entry);
+    }
+}
+
+fn system_label(action: &str) -> Option<Label<'static>> {
+    match action {
+        "startDictation:" => Some(Label::StartDictation),
+        "orderFrontCharacterPalette:" => Some(Label::EmojiAndSymbols),
+        _ => None,
+    }
+}
 /// Adds an app's own items in `add`: AppKit drops the key equivalent of an item added while
 /// the menu bar already has it, so the standard items let go of theirs first and take back
 /// only those no other item claims (`sync_standard`).
@@ -228,6 +270,10 @@ pub(crate) fn adding<R>(app: &NSApplication, add: impl FnOnce() -> R) -> R {
 /// another item in the menu bar has the same one, so an app's own item (Close Tab ⌘W) wins
 /// whichever was added first.
 pub(crate) fn sync_standard(app: &NSApplication) {
+    if let Some(edit) = app.mainMenu().and_then(|root| (0..root.numberOfItems()).filter_map(|i| root.itemAtIndex(i)).find(|i| name(i) == "Edit")).and_then(|i| i.submenu()) {
+        // SAFETY: main thread; moving retained items within their menu.
+        unsafe { system_edit_last(&edit) };
+    }
     let mut claimed = HashSet::new();
     // SAFETY: main thread; reading retained menus.
     if let Some(root) = app.mainMenu() { unsafe { claims(&root, &mut claimed) }; }
