@@ -459,13 +459,21 @@ impl RuntimeCore {
                 let e = self.drawn_box(i);
                 let anchor = link.and_then(|k| self.link_boxes(i, e).into_iter().filter(|(j, _)| *j == k).map(|(_, r)| r)
                     .reduce(|u, r| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]));
-                let side = link.is_none().then(|| self.tree.nodes[i].cold.get().and_then(|c| c.help_side)).flatten();
-                let t = if motion && look.fade[0] > 0.0 { ((self.clock - since) / look.fade[0]) as f32 } else { 1.0 };
-                let e_in = rune_motion::Easing::EASE_OUT.eval(t.clamp(0.0, 1.0));
-                let d = Drawn { text, anchor: anchor.unwrap_or(e), side, alpha: e_in, scale: look.fade_scale + (1.0 - look.fade_scale) * e_in };
-                let [x, y, w, h] = self.draw_tooltip(&d);
-                self.pointer.help.tip = Some((crate::el::help_words(&d.text).into_owned(), [x, y, w, h]));
-                self.pointer.help.drawn = Some(d);
+                let box_rect = anchor.unwrap_or(e);
+                if box_rect[2] <= box_rect[0] && box_rect[3] <= box_rect[1] {
+                    let path = self.tree.nodes[i].path.clone();
+                    if self.paint.unresolved_anchor_warnings.insert((path.clone(), "<tooltip>".to_owned())) {
+                        eprintln!("rune: tooltip on {path:?} skipped because its anchor rect is empty (never drawn at origin)");
+                    }
+                } else {
+                    let side = link.is_none().then(|| self.tree.nodes[i].cold.get().and_then(|c| c.help_side)).flatten();
+                    let t = if motion && look.fade[0] > 0.0 { ((self.clock - since) / look.fade[0]) as f32 } else { 1.0 };
+                    let e_in = rune_motion::Easing::EASE_OUT.eval(t.clamp(0.0, 1.0));
+                    let d = Drawn { text, anchor: box_rect, side, alpha: e_in, scale: look.fade_scale + (1.0 - look.fade_scale) * e_in };
+                    let [x, y, w, h] = self.draw_tooltip(&d);
+                    self.pointer.help.tip = Some((crate::el::help_words(&d.text).into_owned(), [x, y, w, h]));
+                    self.pointer.help.drawn = Some(d);
+                }
             }
         }
         if self.pointer.tooltip_fading(self.clock, look.fade) { self.schedule_wakes([std::time::Duration::ZERO]); }
@@ -478,6 +486,7 @@ impl RuntimeCore {
     /// of the edge that faces its box.
     fn draw_tooltip(&mut self, d: &Drawn) -> [f32; 4] {
         let e = d.anchor;
+        debug_assert!(e[2] > e[0] || e[3] > e[1], "draw_tooltip called with empty anchor rect {e:?}");
         let s = self.env.scale;
         let look = self.help_look();
         let key = look.key;

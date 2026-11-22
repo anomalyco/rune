@@ -117,6 +117,12 @@ impl<S: 'static> Frame<'_, S> {
         self.ui.srgb_blend()
     }
 
+    /// Packed explicit scroll-fade stops for this frame (`FxRenderer::set_fade_stops` in rune-fx
+    /// or `clip_alpha_stops` in `CLIP_WGSL`).
+    pub fn fade_stops(&self) -> [f32; 2] {
+        self.rt.fade_stops()
+    }
+
     /// `queue.write_buffer` without its per-call staging buffer: `data` goes through Rune's
     /// reused staging memory and lands in `buffer` at `offset` ahead of the commands recorded
     /// into `encoder` after this call. `offset` and `data.len()` are multiples of 4.
@@ -127,6 +133,7 @@ impl<S: 'static> Frame<'_, S> {
     /// The default frame: every instance into the target, cleared to the window colour.
     pub fn draw_ui(&mut self) {
         let clear = self.rt.clear_color();
+        self.ui.set_fade_stops(self.rt.fade_stops());
         self.ui.prepare_ui(self.device, self.queue, &mut self.rt.text.atlas, &self.rt.instances, self.size);
         self.ui.draw(self.encoder, self.target, clear);
     }

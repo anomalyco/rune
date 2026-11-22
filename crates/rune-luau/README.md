@@ -34,7 +34,7 @@ return {
 | Call | What it does |
 | --- | --- |
 | `Script::new(name, sources)`, `Script::with_options(..)` | Compiles and starts a script. One that fails to start still renders, as an error card. |
-| `ScriptOptions::new().palette(..).setup(..).node(..).time_limit(..).memory_limit(..).on_log(..)` | Colour names, host bindings for each new VM, host-built `ui.*` nodes, the watchdog limit (250 ms), the heap limit (64 MB), and a log sink. |
+| `ScriptOptions::new().palette(..).setup(..).node(..).time_limit(..).memory_limit(..).on_log(..)` | Colour names, host bindings for each new VM, host-built `ui.*` nodes, the watchdog's CPU-time budget (250 ms), the heap limit (64 MB), and a log sink. |
 | `ScriptOptions::start(..).around(..).around_read(..).shadows(..).text(..)` | A hook that runs with each new VM and the table its entry returned (call a setup function it hands over); hooks around entries from the UI with the app's state and transaction; elevation shadows; the base text style and the weights `regular`..`bold` name. |
 | `Sources::entry(path)` | Starts from another module than `init.luau` (`app.luau` beside it). |
 | `script.render_fn(id, version, dark, f, args)`, `script.spawn_fn(f, args, tx)`, `script.eval_fn(f, args)` | Functions a script handed the host: render one as a memoized surface, run one as a task, or call one at once without letting it wait. `script.version()` moves whenever script code runs. |
@@ -89,8 +89,9 @@ return {
 ## Errors
 
 Nothing a script does panics the app. A render error shows an error card with a Reload button;
-a task error is logged; the watchdog stops any entry that runs longer than 250 ms, at a Luau
-safepoint, and that script carries on with its next call.
+a task error is logged; the watchdog stops any entry that uses more than 250 ms of its thread's
+CPU time (time spent waiting for a CPU or on a host call isn't charged; 20 times that in wall time
+bounds it), at a Luau safepoint, and that script carries on with its next call.
 
 ## Platforms
 

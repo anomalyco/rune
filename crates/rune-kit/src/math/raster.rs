@@ -193,6 +193,9 @@ pub(super) struct Rasterized {
     pub(super) pixels: Pixels,
     pub(super) width_pt: f32,
     pub(super) height_pt: f32,
+    /// The baseline below the bitmap's top edge, and the clear margin around the ink, in points.
+    pub(super) baseline_pt: f32,
+    pub(super) margin_pt: f32,
     pub(super) byte_len: usize,
 }
 
@@ -395,6 +398,8 @@ pub(super) fn rasterize(dl: &DisplayList, body_pt: f32, ink: Color, scale: f32) 
         pixels,
         width_pt: px_w as f32 / scale,
         height_pt: px_h as f32 / scale,
+        baseline_pt: RASTER_MARGIN_PT + dl.height * em_pt,
+        margin_pt: RASTER_MARGIN_PT,
         byte_len,
     })
 }

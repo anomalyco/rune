@@ -439,12 +439,12 @@ impl Renderer {
                 a => a,
             };
             let content = self
-                .with_reveal(
-                    rich(inl.text.clone(), self.spans(inl, font))
-                        .font(font)
-                        .color(color)
-                        .align(align),
-                )
+                .with_reveal(self.with_math(
+                    rich(inl.text.clone(), self.spans(inl, font)).font(font).color(color).align(align),
+                    inl,
+                    font,
+                    color,
+                ))
                 .w_full();
             let content = super::bidi::directed(super::bidi::isolated(content, inl), dir);
             // Full width: each column's share of the row is its share of the natural width, so

@@ -79,9 +79,9 @@ pub(crate) unsafe extern "C-unwind" fn ui_virtual_list(state: *mut ffi::lua_Stat
                         (Ok(atom @ (Atom::Count | Atom::EstimatedRowHeight | Atom::RenderRow | Atom::RowKey | Atom::RowVersions | Atom::OnVisibleRows | Atom::Gap)), other) => {
                             return Err(format!("ui.virtualList {atom:?} can't be a {}", props::name(other)));
                         }
-                        (Ok(Atom::OnPress), _) => frame.env.warn_once("ui.virtualList takes no onPress".into()),
+                        (Ok(Atom::OnPress), _) => super::unknown_prop(&frame.env, Some("virtualList"), "onPress")?,
                         (Ok(atom), _) => p.decode_at(&mut list, state, atom, -1, &frame.env, false)?,
-                        (Err(name), _) => frame.env.warn_once(format!("unknown prop {name}")),
+                        (Err(name), _) => super::unknown_prop(&frame.env, Some("virtualList"), name)?,
                     }
                     ffi::lua_settop(state, -3);
                 }

@@ -123,6 +123,13 @@ impl FxRenderer {
             *written = g;
             staging.write_buffer(&self.globals, 0, bytemuck::bytes_of(&g));
         }
+        if self.uploaded_fade_stops != self.fade_stops {
+            let stops = self.fade_stops;
+            for (buf, (encoded, present)) in self.backdrop_encoding.iter().zip([(0.0f32, 0.0f32), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)]) {
+                staging.write_buffer(buf, 0, bytemuck::cast_slice(&[encoded, present, stops[0], stops[1]]));
+            }
+            self.uploaded_fade_stops = stops;
+        }
         // Submitted now, ahead of the frame that draws them, as queue writes would be.
         staging.submit();
         self.pipes.warm(self.format, self.prepared.iter().flatten().map(|p| (p.kind, blend_index(p.blend))));

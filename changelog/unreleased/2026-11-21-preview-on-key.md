@@ -1,0 +1,1 @@
+- Kit: `Preview::on_key` hears the image preview's keys before its own zoom keys and Escape, and consumes those it returns true for, so an app can add keys (arrows through a gallery) without copying the zoom keys.

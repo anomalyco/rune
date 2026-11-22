@@ -313,12 +313,12 @@ impl Painter<'_, '_> {
         match i.kind() {
             Some(Kind::Layer) => self.open(n),
             Some(Kind::LayerEnd) => self.close(i, r),
-            Some(Kind::Glyph) => { let clip = Clip::of(i); self.glyph(i, r, &clip); }
-            Some(Kind::Image) => { let clip = Clip::of(i); self.image(i, r, &clip); }
-            Some(kind @ (Kind::Rect | Kind::Gradient)) => { let clip = Clip::of(i); self.shaded(i, kind, r, &clip, interior(i)); }
-            Some(Kind::Shadow) => { let clip = Clip::of(i); self.shadow(i, r, &clip); }
+            Some(Kind::Glyph) => { let clip = Clip::of_stops(i, self.scene.fade_stops); self.glyph(i, r, &clip); }
+            Some(Kind::Image) => { let clip = Clip::of_stops(i, self.scene.fade_stops); self.image(i, r, &clip); }
+            Some(kind @ (Kind::Rect | Kind::Gradient)) => { let clip = Clip::of_stops(i, self.scene.fade_stops); self.shaded(i, kind, r, &clip, interior(i)); }
+            Some(Kind::Shadow) => { let clip = Clip::of_stops(i, self.scene.fade_stops); self.shadow(i, r, &clip); }
             Some(Kind::Radial) => {
-                let clip = Clip::of(i);
+                let clip = Clip::of_stops(i, self.scene.fade_stops);
                 let solid = Solid {
                     edges: [i.rect[0], i.rect[1], i.rect[0] + i.rect[2], i.rect[1] + i.rect[3]],
                     radii: i.radii,
@@ -327,10 +327,10 @@ impl Painter<'_, '_> {
                 self.shaded(i, Kind::Radial, r, &clip, Some(solid));
             }
             Some(kind @ (Kind::Inset | Kind::Segment | Kind::Triangle | Kind::Dashed)) => {
-                let clip = Clip::of(i);
+                let clip = Clip::of_stops(i, self.scene.fade_stops);
                 self.shaded(i, kind, r, &clip, None);
             }
-            Some(Kind::BackdropBlur) => { let clip = Clip::of(i); self.backdrop(i, r, &clip); }
+            Some(Kind::BackdropBlur) => { let clip = Clip::of_stops(i, self.scene.fade_stops); self.backdrop(i, r, &clip); }
             Some(Kind::Effect) | None => {}
         }
     }
@@ -357,7 +357,7 @@ impl Painter<'_, '_> {
         let plan = self.layers[self.depth].plan;
         let l = self.bins.layers[plan];
         let begin = &self.scene.instances[l.begin as usize];
-        let clip = Clip::of(begin);
+        let clip = Clip::of_stops(begin, self.scene.fade_stops);
         let opacity = begin.fill[3];
         let segs = self.segments(r, None, &clip);
         let mut k = 0;

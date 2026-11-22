@@ -64,6 +64,56 @@ fn a_pill_label_stays_on_one_line_and_takes_room() {
     assert!(narrow.width() <= 110.5, "one wider than the line wraps inside it: {}", narrow.width());
 }
 
+fn image(w: u32, h: u32) -> crate::Pixels {
+    let p = crate::Pixels::new();
+    p.set(w, h, vec![255; (w * h * 4) as usize]);
+    p
+}
+
+#[test]
+fn an_inline_image_replaces_its_bytes_on_the_baseline_and_grows_the_line() {
+    let body = "so $e^x$ grows";
+    let style = TextStyle::new(14.0, 400.0).lh(20.0);
+    let mut ts = TextSystem::default();
+    let mut lay = |e: &crate::El, w| ts.layout_for_spec(&e.text.as_ref().unwrap().as_text_input(2.0, false), 2.0, w, Alignment::Start);
+    let plain = lay(&text(body).font(style), None);
+    let flat = text(body).font(style).inline_image(3..8, crate::InlineImage::new(image(40, 20), 20.0, 8.0, 2.0));
+    let with = lay(&flat, None);
+    let without_label = lay(&text("so  grows").font(style), None);
+    // The bytes take no room: only the image's 20 points (40 px at 2x) replace them.
+    let grew = with.full_width() - without_label.full_width();
+    assert!((grew - 40.0).abs() < 1.5, "{grew}");
+    assert!(with.full_width() < plain.full_width() + 40.0);
+    // Short enough to sit inside the line: its height stays 20 points.
+    assert_eq!(with.height(), plain.height());
+    let mut boxes = Vec::new();
+    let t = flat.text.as_ref().unwrap();
+    crate::text::bare_icons(&with, &t.cold.pills, 2.0, [0.0, 0.0], &mut boxes);
+    let baseline = with.lines().next().unwrap().metrics().baseline;
+    let [(0, at, size)] = boxes[..] else { panic!("{boxes:?}") };
+    assert_eq!(size, [40.0, 20.0]);
+    // Its top is its ascent above the baseline.
+    assert!((at[1] + 16.0 - baseline).abs() <= 1.0, "{at:?} vs baseline {baseline}");
+    // A tall, deep one grows the line both ways.
+    let tall = lay(&text(body).font(style).inline_image(3..8, crate::InlineImage::new(image(40, 60), 20.0, 18.0, 12.0)), None);
+    assert!(tall.height() >= 60.0, "{}", tall.height());
+}
+
+#[test]
+fn an_inline_image_too_wide_for_the_rest_of_a_line_moves_whole_to_the_next() {
+    let body = "some words then $\\frac{a}{b} + c$ after";
+    let at = body.find('$').unwrap();
+    let end = body.rfind('$').unwrap() + 1;
+    let style = TextStyle::new(14.0, 400.0).lh(20.0);
+    let mut ts = TextSystem::default();
+    let e = text(body).font(style).wrap().inline_image(at..end, crate::InlineImage::new(image(120, 40), 60.0, 14.0, 6.0));
+    let w = ts.layout_for_spec(&e.text.as_ref().unwrap().as_text_input(1.0, false), 1.0, None, Alignment::Start).full_width();
+    let narrow = ts.layout_for_spec(&e.text.as_ref().unwrap().as_text_input(1.0, false), 1.0, Some(w - 50.0), Alignment::Start);
+    let starts: Vec<usize> = narrow.lines().map(|l| l.text_range().start).collect();
+    assert!(starts.contains(&at), "the image starts a line: {starts:?}");
+    assert!(!starts.iter().any(|&s| s > at && s < end), "never split: {starts:?}");
+}
+
 // In a running app: selection, copy, wrapping and streaming over pilled text.
 
 mod live {
