@@ -3,6 +3,8 @@
 //! alone and sharing its core with a busy thread; a script that waits 2 s in a host call is not stopped.
 //!   proof_watchdog [p-core index 0] [e-core index 19] [rounds 5]
 
+#![allow(unsafe_code)]
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
