@@ -19,9 +19,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::TextServices::HKL;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    PeekMessageW, MSG, PM_NOREMOVE, UNICODE_NOCHAR, WM_CHAR, WM_DEADCHAR, WM_KEYDOWN, WM_KEYFIRST,
-    WM_KEYLAST, WM_KEYUP, WM_KILLFOCUS, WM_SETFOCUS, WM_SYSCHAR, WM_SYSDEADCHAR, WM_SYSKEYDOWN,
-    WM_SYSKEYUP, WM_UNICHAR,
+    PeekMessageW, MSG, PM_NOREMOVE, WM_CHAR, WM_DEADCHAR, WM_KEYDOWN, WM_KEYFIRST, WM_KEYLAST,
+    WM_KEYUP, WM_KILLFOCUS, WM_SETFOCUS, WM_SYSCHAR, WM_SYSDEADCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 use smol_str::SmolStr;
@@ -83,12 +82,14 @@ impl KeyEventBuilder {
     /// Call this function for every window message.
     /// Returns Some() if this window message completes a KeyEvent.
     /// Returns None otherwise.
+    /// `ime_composing`: an input method's composition is open in the window (Rune).
     pub(crate) fn process_message(
         &self,
         hwnd: HWND,
         msg_kind: u32,
         wparam: WPARAM,
         lparam: LPARAM,
+        ime_composing: bool,
         result: &mut ProcResult,
     ) -> Vec<MessageAsKeyEvent> {
         enum MatchResult {
@@ -182,31 +183,26 @@ impl KeyEventBuilder {
                 WM_CHAR | WM_SYSCHAR => {
                     let mut event_info = self.event_info.lock().unwrap();
                     if event_info.is_none() {
-                        // Rune: a standalone WM_CHAR with no preceding WM_KEYDOWN (text expanders,
-                        // password managers, assistive tools, remote input, or IMEs outside
-                        // WM_IME_COMPOSITION) still carries valid character input; WM_SYSCHAR stays
-                        // untouched so Alt+key mnemonics never type text.
+                        // Rune: a WM_CHAR with no preceding WM_KEYDOWN (text expanders, password
+                        // managers, assistive tools, remote input) still carries text, as Chromium
+                        // takes it. WM_SYSCHAR stays ignored so Alt+key mnemonics never type text.
                         drop(event_info);
                         if msg_kind == WM_SYSCHAR {
-                            trace!(
-                                "Received a SYSCHAR message with no `event_info`; ignoring."
-                            );
+                            trace!("Received a SYSCHAR message with no `event_info`; ignoring.");
                             return MatchResult::Nothing;
                         }
                         let pending_token = self.pending.add_pending();
                         *result = ProcResult::Value(0);
-                        let mut utf16parts = Vec::with_capacity(2);
-                        append_wparam_utf16(wparam, &mut utf16parts);
-                        if !resolve_surrogates(&self.pending_high_surrogate, &mut utf16parts) {
+                        let mut pending_high = self.pending_high_surrogate.lock().unwrap();
+                        let Some(text) = bare_char_text(&mut pending_high, wparam, ime_composing)
+                        else {
                             return MatchResult::TokenToRemove(pending_token);
-                        }
-                        if let Some(ev) = standalone_char_event(&utf16parts, (lparam & 0xffff) > 1) {
-                            return MatchResult::MessagesToDispatch(self.pending.complete_pending(
-                                pending_token,
-                                MessageAsKeyEvent { event: ev, is_synthetic: false },
-                            ));
-                        }
-                        return MatchResult::TokenToRemove(pending_token);
+                        };
+                        let ev = standalone_char_event(text, (lparam & 0xffff) > 1);
+                        return MatchResult::MessagesToDispatch(self.pending.complete_pending(
+                            pending_token,
+                            MessageAsKeyEvent { event: ev, is_synthetic: false },
+                        ));
                     }
                     let pending_token = self.pending.add_pending();
                     *result = ProcResult::Value(0);
@@ -233,9 +229,11 @@ impl KeyEventBuilder {
                                 return MatchResult::TokenToRemove(pending_token);
                             },
                         };
-                        if !resolve_surrogates(&self.pending_high_surrogate, &mut event_info.utf16parts)
-                            && event_info.vkey == VK_PACKET
-                        {
+                        let paired = resolve_surrogates(
+                            &mut self.pending_high_surrogate.lock().unwrap(),
+                            &mut event_info.utf16parts,
+                        );
+                        if !paired && event_info.vkey == VK_PACKET {
                             // Rune: high half of a VK_PACKET surrogate pair; wait for the low half.
                             return MatchResult::TokenToRemove(pending_token);
                         }
@@ -273,25 +271,6 @@ impl KeyEventBuilder {
                             MessageAsKeyEvent { event: ev, is_synthetic: false },
                         ))
                     }
-                },
-                WM_UNICHAR => {
-                    // Rune: answer UNICODE_NOCHAR with TRUE and deliver UTF-32 code points.
-                    if wparam == UNICODE_NOCHAR as WPARAM {
-                        *result = ProcResult::Value(1);
-                        return MatchResult::Nothing;
-                    }
-                    let pending_token = self.pending.add_pending();
-                    *result = ProcResult::Value(0);
-                    *self.pending_high_surrogate.lock().unwrap() = None;
-                    let mut utf16parts = Vec::with_capacity(2);
-                    append_wparam_utf16(wparam, &mut utf16parts);
-                    if let Some(ev) = standalone_char_event(&utf16parts, (lparam & 0xffff) > 1) {
-                        return MatchResult::MessagesToDispatch(self.pending.complete_pending(
-                            pending_token,
-                            MessageAsKeyEvent { event: ev, is_synthetic: false },
-                        ));
-                    }
-                    MatchResult::TokenToRemove(pending_token)
                 },
                 WM_KEYUP | WM_SYSKEYUP => {
                     let pending_token = self.pending.add_pending();
@@ -675,8 +654,8 @@ impl PartialKeyEventInfo {
     }
 }
 
-/// Rune: appends a `WM_CHAR` / `WM_UNICHAR` `wparam` (UTF-16 surrogate unit or Unicode scalar)
-/// onto `utf16parts`.
+/// Rune: appends a `WM_CHAR` `wparam` (UTF-16 surrogate unit or Unicode scalar) onto
+/// `utf16parts`.
 fn append_wparam_utf16(wparam: WPARAM, utf16parts: &mut Vec<u16>) {
     let is_high_surrogate = (0xd800..=0xdbff).contains(&wparam);
     let is_low_surrogate = (0xdc00..=0xdfff).contains(&wparam);
@@ -691,18 +670,16 @@ fn append_wparam_utf16(wparam: WPARAM, utf16parts: &mut Vec<u16>) {
 /// Rune: pairs a pending high surrogate with an incoming leading low surrogate, and stashes a
 /// trailing lone high surrogate for the next `WM_CHAR`. Returns `false` when `units` held only
 /// that lone high surrogate so the caller waits for the low half instead of dropping it.
-fn resolve_surrogates(pending: &Mutex<Option<u16>>, units: &mut Vec<u16>) -> bool {
-    let mut guard = pending.lock().unwrap();
+fn resolve_surrogates(pending: &mut Option<u16>, units: &mut Vec<u16>) -> bool {
     if units.first().copied().is_some_and(|u| (0xdc00..=0xdfff).contains(&u)) {
-        if let Some(hi) = guard.take() {
+        if let Some(hi) = pending.take() {
             units.insert(0, hi);
         }
     } else {
-        *guard = None;
+        *pending = None;
     }
     if units.last().copied().is_some_and(|u| (0xd800..=0xdbff).contains(&u)) {
-        let hi = units.pop().unwrap();
-        *guard = Some(hi);
+        *pending = units.pop();
         if units.is_empty() {
             return false;
         }
@@ -710,21 +687,29 @@ fn resolve_surrogates(pending: &Mutex<Option<u16>>, units: &mut Vec<u16>) -> boo
     true
 }
 
-/// Rune: turns UTF-16 code units from a bare `WM_CHAR` or `WM_UNICHAR` into a `KeyEvent`.
-/// Non-whitespace ASCII control codes (`< 0x20` other than `\t`, `\n`, `\r`, or `0x7F`) are
-/// skipped so stray control characters never leak as text.
-fn standalone_char_event(utf16parts: &[u16], is_repeat: bool) -> Option<KeyEvent> {
-    if utf16parts.is_empty() {
+/// Rune: the text a `WM_CHAR` with no preceding `WM_KEYDOWN` types, if any. A high surrogate
+/// waits in `pending` for its low half; a lone half is dropped, never inserted. Control
+/// characters (Backspace, Enter, Escape, DEL, …) are not text: they act only as keys. While an
+/// input method's composition is open its result arrives as `Ime::Commit`, so a stray `WM_CHAR`
+/// then would type the text twice: it is dropped.
+fn bare_char_text(pending: &mut Option<u16>, wparam: WPARAM, ime_composing: bool) -> Option<String> {
+    if ime_composing {
+        *pending = None;
         return None;
     }
-    let string = OsString::from_wide(utf16parts).into_string().ok()?;
-    if string.is_empty()
-        || !string.chars().any(|c| !c.is_control() || matches!(c, '\t' | '\n' | '\r'))
-    {
+    let mut units = Vec::with_capacity(2);
+    append_wparam_utf16(wparam, &mut units);
+    if !resolve_surrogates(pending, &mut units) {
         return None;
     }
-    let text = SmolStr::new(string);
-    Some(KeyEvent {
+    let text = String::from_utf16(&units).ok()?;
+    (!text.is_empty() && !text.chars().any(char::is_control)).then_some(text)
+}
+
+/// Rune: a pressed `KeyEvent` that types `text` and names no physical key.
+fn standalone_char_event(text: String, is_repeat: bool) -> KeyEvent {
+    let text = SmolStr::new(text);
+    KeyEvent {
         physical_key: PhysicalKey::Unidentified(NativeKeyCode::Unidentified),
         logical_key: Key::Character(text.clone()),
         text: Some(text.clone()),
@@ -735,7 +720,66 @@ fn standalone_char_event(utf16parts: &[u16], is_repeat: bool) -> Option<KeyEvent
             text_with_all_modifiers: Some(text),
             key_without_modifiers: Key::Unidentified(NativeKey::Unidentified),
         },
-    })
+    }
+}
+
+#[cfg(test)]
+mod rune_bare_char_tests {
+    use super::bare_char_text;
+
+    const NONE: Option<String> = None;
+
+    fn s(text: &str) -> Option<String> {
+        Some(text.to_owned())
+    }
+
+    /// Feeds `units` as consecutive bare `WM_CHAR`s and returns the text each one typed.
+    fn feed(units: &[usize], ime_composing: bool) -> Vec<Option<String>> {
+        let mut pending = None;
+        units.iter().map(|&u| bare_char_text(&mut pending, u, ime_composing)).collect()
+    }
+
+    #[test]
+    fn bmp_characters_type_themselves() {
+        assert_eq!(feed(&[0x61, 0xe9, 0x65e5], false), [s("a"), s("é"), s("日")]);
+    }
+
+    #[test]
+    fn a_surrogate_pair_split_over_two_messages_types_one_character() {
+        assert_eq!(feed(&[0xd83d, 0xde00], false), [NONE, s("😀")]);
+    }
+
+    #[test]
+    fn a_lone_surrogate_half_is_dropped() {
+        // High half then a BMP character: the high half is dropped, the character types.
+        assert_eq!(feed(&[0xd83d, 0x61], false), [NONE, s("a")]);
+        // Low half with no high half before it.
+        assert_eq!(feed(&[0xde00], false), [NONE]);
+        // Two high halves: the first is dropped, the second pairs with the low half.
+        assert_eq!(feed(&[0xd83d, 0xd83d, 0xde00], false), [NONE, NONE, s("😀")]);
+    }
+
+    #[test]
+    fn a_combining_mark_types_after_its_base() {
+        assert_eq!(feed(&[0x65, 0x301], false), [s("e"), s("\u{301}")]);
+    }
+
+    #[test]
+    fn control_characters_are_not_text() {
+        for c in [0x08, 0x09, 0x0a, 0x0d, 0x1b, 0x7f, 0x00, 0x85] {
+            assert_eq!(feed(&[c], false), [NONE], "U+{c:04X}");
+        }
+    }
+
+    #[test]
+    fn nothing_types_while_an_ime_composition_is_open() {
+        assert_eq!(feed(&[0x61, 0xd83d, 0xde00], true), [NONE, NONE, NONE]);
+        // A high half that arrived before the composition opened does not pair after it.
+        let mut pending = None;
+        assert_eq!(bare_char_text(&mut pending, 0xd83d, false), None);
+        assert_eq!(bare_char_text(&mut pending, 0xde00, true), None);
+        assert_eq!(bare_char_text(&mut pending, 0xde00, false), None);
+    }
 }
 
 #[derive(Debug, Copy, Clone)]

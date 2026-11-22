@@ -31,17 +31,16 @@ pub(crate) fn map_key(key: &WKey, m: ModifiersState) -> Option<KeyEvent> {
 /// follow the key's Latin virtual key and macOS's switch to a Latin layout under ⌘: Ctrl+V
 /// pastes on every layout.
 pub(crate) fn map_key_event(event: &winit::event::KeyEvent, m: ModifiersState) -> Option<KeyEvent> {
-    // On Windows, Unicode text injected without a physical key (bare `WM_CHAR` / `WM_UNICHAR` or
-    // `VK_PACKET` via `SendInput(KEYEVENTF_UNICODE)` — Win+. emoji panel, Win+H voice typing,
-    // touch/OSK, text expanders, password-manager auto-type) must land as literal text even if a
-    // hotkey modifier is still being released.
-    #[cfg(target_os = "windows")]
-    if matches!(event.physical_key, winit::keyboard::PhysicalKey::Unidentified(_))
+    // On Windows, text that arrives without a physical key (a bare `WM_CHAR`, or `VK_PACKET` from
+    // `SendInput(KEYEVENTF_UNICODE)`: the emoji panel, voice typing, the on-screen keyboard, text
+    // expanders, password managers) types as itself, even while a hotkey's modifier is still held.
+    // A control character sent that way types nothing.
+    if cfg!(target_os = "windows")
+        && matches!(event.physical_key, winit::keyboard::PhysicalKey::Unidentified(_))
         && matches!(event.logical_key, WKey::Character(_) | WKey::Unidentified(_))
-        && let Some(text) = event.text.as_deref().filter(|t| !t.is_empty())
-        && text.chars().any(|c| !c.is_control() || matches!(c, '\t' | '\n' | '\r'))
     {
-        return Some(KeyEvent { key: Key::Text(text.to_string()), mods: Mods::default() });
+        let text = injected_text(event.text.as_deref())?;
+        return Some(KeyEvent { key: Key::Text(text.to_owned()), mods: Mods::default() });
     }
     let mut ev = map_key(&event.logical_key, m).or_else(|| unidentified(event, m))?;
     if !cfg!(target_os = "macos")
@@ -63,13 +62,16 @@ fn unidentified(event: &winit::event::KeyEvent, m: ModifiersState) -> Option<Key
     if event.physical_key == winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::Pause) {
         return Some(KeyEvent { key: Key::Pause, mods });
     }
-    if !(mods.cmd || mods.ctrl) {
-        let text = event.text.as_deref().filter(|t| !t.is_empty() && t.chars().any(|c| !c.is_control() || matches!(c, '\t' | '\n' | '\r')))?;
-        return Some(KeyEvent { key: Key::Text(text.to_string()), mods });
-    }
+    if !(mods.cmd || mods.ctrl) { return None; }
     let c = key_base(event).filter(|c| !c.is_control() && *c != ' ')?;
     let key = if mods.cmd { Key::Command(c.to_ascii_lowercase()) } else { Key::Text(c.to_string()) };
     Some(KeyEvent { key, mods })
+}
+
+/// The text a key with no physical key types: none when empty or when it holds a control
+/// character (Backspace, Enter, Escape, DEL, …), which acts only as a key, never as text.
+fn injected_text(text: Option<&str>) -> Option<&str> {
+    text.filter(|t| !t.is_empty() && !t.chars().any(char::is_control))
 }
 
 /// The character `event`'s key types under the current layout with no modifiers, for
@@ -106,5 +108,16 @@ mod tests {
         ] {
             assert_eq!(map_key(&WKey::Named(named), ModifiersState::empty()).map(|ev| ev.key.clone()), Some(key));
         }
+    }
+
+    #[test]
+    fn injected_text_types_characters_but_never_control_characters() {
+        for text in ["a", "é", "日本", "😀", "e\u{301}"] {
+            assert_eq!(injected_text(Some(text)), Some(text));
+        }
+        for text in ["", "\u{8}", "\t", "\n", "\r", "\u{1b}", "\u{7f}", "a\r", "\u{85}"] {
+            assert_eq!(injected_text(Some(text)), None, "{text:?}");
+        }
+        assert_eq!(injected_text(None), None);
     }
 }
