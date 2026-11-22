@@ -100,7 +100,7 @@ unsafe fn add_app_items(app: &NSApplication, menu: &NSMenu) {
 
 /// The app menu items `add_app_items` made, titled with the app's labels (`rune::set_labels`).
 unsafe fn relabel_app_items(menu: &NSMenu) {
-    let name = NSProcessInfo::processInfo().processName().to_string();
+    let name = app_name();
     for entry in (0..menu.numberOfItems()).filter_map(|i| menu.itemAtIndex(i)).filter(|i| i.tag() == APP_ITEM) {
         let label = match entry.action().and_then(|a| a.name().to_str().ok()) {
             Some("orderFrontStandardAboutPanel:") => Label::About(&name),
@@ -113,6 +113,24 @@ unsafe fn relabel_app_items(menu: &NSMenu) {
         };
         entry.setTitle(&NSString::from_str(&crate::labels::label(label)));
     }
+}
+
+/// The app's name in its menu items (About, Hide, Quit), as macOS shows it elsewhere (Dock, Force
+/// Quit, the menu bar): the bundle's `CFBundleDisplayName`, else its `CFBundleName`, else the
+/// process name, which for a bundled app is its executable's file name (`opencode-desktop`).
+fn app_name() -> String {
+    use objc2::{class, runtime::AnyObject};
+    // SAFETY: NSBundle reads, on the main thread; an Info.plist name key holds a string.
+    unsafe {
+        let bundle: Option<Retained<AnyObject>> = msg_send![class!(NSBundle), mainBundle];
+        if let Some(bundle) = bundle {
+            for key in ["CFBundleDisplayName", "CFBundleName"] {
+                let value: Option<Retained<NSString>> = msg_send![&*bundle, objectForInfoDictionaryKey: &*NSString::from_str(key)];
+                if let Some(value) = value.map(|v| v.to_string()).filter(|v| !v.trim().is_empty()) { return value; }
+            }
+        }
+    }
+    NSProcessInfo::processInfo().processName().to_string()
 }
 
 /// Retitles the menus and items Rune made with the app's current labels (`rune::set_labels`),
@@ -186,6 +204,11 @@ pub(crate) fn add_standard(app: &NSApplication) {
             entry.setKeyEquivalentModifierMask(flags);
             entry.setTag(STANDARD);
             menu.addItem(&entry);
+        }
+        // AppKit's windows menu: it lists the app's windows and takes the items macOS adds there
+        // (Fill, Center, Move & Resize, Full-Screen Tile), as Electron's `windowMenu` role does.
+        if let Some(window) = (0..root.numberOfItems()).filter_map(|i| root.itemAtIndex(i)).find(|i| name(i) == "Window").and_then(|i| i.submenu()) {
+            app.setWindowsMenu(Some(&window));
         }
     }
     sync_standard(app);
