@@ -21,6 +21,10 @@ impl RuntimeCore {
         self.paint.srgb_blend()
     }
 
+    pub fn fade_stops(&self) -> [f32; 2] {
+        self.tree.fade_stops
+    }
+
     /// Rasterise and place glyphs in `mode` from the next frame, as `App::font_smoothing` does
     /// for a window. Glyphs already rasterised in another mode stay cached for a switch back.
     /// Blending is separate: both modes match CoreText with [`Self::set_srgb_blend`] on.

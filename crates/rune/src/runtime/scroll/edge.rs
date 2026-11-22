@@ -33,7 +33,7 @@ impl requests::ScrollTables {
     /// Node `n`'s own soft-clip widths `f` (points) as a device-pixel fade and the rect its ramps
     /// start from, given its optional stuck-to-bottom offset.
     pub(super) fn edge_fade(&self, n: &Node, f: [f32; 4], r: [f32; 4], k: f32, stuck: Option<f64>) -> ([f32; 4], [f32; 4]) {
-        let mut own = f.map(|v| v * k);
+        let mut own = f.map(|v| (v * k).clamp(-65504.0, 65504.0));
         let width = n.scroll_edges.fade;
         let Some(st) = self.scrolls.get(&n.id).filter(|_| width > 0.0 && n.scroll.is_some()) else { return (own, r) };
         let offset = stuck.unwrap_or(st.offset) + f64::from(st.slack.height());
@@ -49,7 +49,7 @@ impl requests::ScrollTables {
             let (style, width) = style.edge(width, out > 0.0);
             let (w, o) = edge_ramp(style, width * k, hidden, k);
             own[edge] = w;
-            origin[edge] = r[edge] + out * o * w.abs();
+            origin[edge] = r[edge] + out * o * paint::soft_edges::fade_extent(w);
         }
         (own, origin)
     }
@@ -112,22 +112,56 @@ impl RuntimeCore {
         self.scroll.sticky_bands.push((section, inh.paint_clip[1]));
         inh.paint_clip[1] = inh.paint_clip[1].max(bottom);
         inh.paint_fade[1] = w;
-        inh.paint_fade_origin[1] = bottom - o * w.abs();
+        inh.paint_fade_origin[1] = bottom - o * paint::soft_edges::fade_extent(w);
     }
 }
 
 /// The packed ramp `(width, offset)` (see [`partial`]) for an edge with `hidden` points under
-/// it, `width` device pixels wide at `k` device pixels a point; a negative width ramps linearly.
+/// it, `width` device pixels wide at `k` device pixels a point; a negative width ramps linearly,
+/// and a width above [`crate::render::instance::STOP_FADE_BIAS`] uses explicit piecewise-linear stops.
 fn edge_ramp(style: crate::el::FadeStyle, width: f32, hidden: f64, k: f32) -> (f32, f32) {
+    let width = width.clamp(0.0, 65504.0);
     if style.feather {
-        let w = width.min(hidden.max(0.0) as f32 * k);
+        let w = width.min(hidden.max(0.0) as f32 * k).min(65504.0);
+        if w <= 0.0 { return (0.0, 0.0); }
+        if style.stops.is_some() { return (crate::render::STOP_FADE_BIAS + w, 0.0); }
         return (if style.linear { -w } else { w }, 0.0);
     }
     let full = if style.full_at > 0.0 { f64::from(style.full_at) } else { FADE_IN };
     let strength = (hidden / full).clamp(0.0, 1.0) as f32;
-    if !style.linear { return partial(width, strength); }
+    if let Some(stops) = style.stops {
+        let (w, o) = partial_stops(width, strength, stops);
+        return (if w > 0.0 { crate::render::STOP_FADE_BIAS + w.min(65504.0) } else { 0.0 }, o);
+    }
+    if !style.linear {
+        let (w, o) = partial(width, strength);
+        return (w.min(65504.0), o);
+    }
     let (w, o) = partial_linear(width, strength);
-    (-w, o)
+    (-w.min(65504.0), o)
+}
+
+/// [`partial`] on a piecewise-linear ramp through `stops`: finds the exact normalized `offset`
+/// whose curve value equals `1 - strength` so the edge shows `1 - strength` and reaches full
+/// alpha `width` pixels in.
+fn partial_stops(width: f32, strength: f32, stops: [(f32, f32); 3]) -> (f32, f32) {
+    if strength <= 0.0 || width <= 0.0 { return (0.0, 0.0); }
+    if strength >= 1.0 { return (width, 0.0); }
+    let target = 1.0 - strength;
+    let pts = [stops[0], stops[1], stops[2], (1.0, 1.0)];
+    let (mut px, mut py) = (0.0f32, 0.0f32);
+    let mut offset = target;
+    for (nx, ny) in pts {
+        if target <= ny {
+            let dy = ny - py;
+            offset = if dy > 1e-6 { px + (nx - px) * ((target - py) / dy) } else { nx };
+            break;
+        }
+        px = nx;
+        py = ny;
+    }
+    let offset = offset.clamp(0.0, 0.995);
+    (width / (1.0 - offset), offset)
 }
 
 /// [`partial`] on a linear ramp: it starts `1 - strength` of the way in, so the edge shows

@@ -381,7 +381,7 @@ impl RuntimeCore {
 
             if !p.mask.is_none() {
                 let ins = p.mask.inset.0.map(|v| v * sc * s);
-                let fea = p.mask.feather.0.map(|v| v * sc * s);
+                let fea = p.mask.feather.0.map(|v| (v * sc * s).clamp(-65504.0, 65504.0));
                 clip = [
                     (r[0] + ins[0]).max(clip[0]),
                     (r[1] + ins[1]).max(clip[1]),

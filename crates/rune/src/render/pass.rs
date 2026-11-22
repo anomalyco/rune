@@ -136,6 +136,7 @@ impl<'a, 'p> ActivePass<'a, 'p> {
                 in_layer,
                 srgb_blend: renderer.srgb_blend,
                 backdrop: Some(&bd.view),
+                fade_stops: renderer.fade_stops,
             };
             hook(EffectPhase::Backdrop(encoder), &site);
         })?;
