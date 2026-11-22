@@ -1,0 +1,1 @@
+- `ScrollBarStyle::scroll_view` (and `menu_scroll`) fade the thumb in and out on CSS `ease` over 200 ms, as `scroll-view.css` and `menu-scroll.css` do, instead of a 0.2 s spring, and the fade lands on exactly 0. `Live::smooth_with` and `Binding::rest_with` take any rune-motion `Anim` (a tween, a delay, a blend); `smooth` and `rest` with a spring behave as before.
