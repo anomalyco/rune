@@ -2,9 +2,10 @@
 use crate::*;
 
 /// Each inline icon (a bare pill) in `layout` (device px, at `origin`): its pill's index, its
-/// square's top-left corner and its side in px, centred on the letters of the word after it.
+/// box's top-left corner and its size in px. An icon is a square centred on the letters of the
+/// word after it; an image replacing its label fills its box on the baseline.
 #[doc(hidden)]
-pub fn bare_icons(layout: &Layout<Ink>, pills: &[PillChip], scale: f32, origin: [f32; 2], out: &mut Vec<(usize, [f32; 2], f32)>) {
+pub fn bare_icons(layout: &Layout<Ink>, pills: &[PillChip], scale: f32, origin: [f32; 2], out: &mut Vec<(usize, [f32; 2], [f32; 2])>) {
     if pills.iter().all(|p| p.bare.is_none()) {
         return;
     }
@@ -17,6 +18,10 @@ pub fn bare_icons(layout: &Layout<Ink>, pills: &[PillChip], scale: f32, origin: 
             }
             let i = ((b.id & !PILL_BOX) >> 1) as usize;
             let Some((pill, bare)) = pills.get(i).and_then(|p| Some((p, p.bare.as_deref()?))) else { continue };
+            if bare.replace.is_some() {
+                out.push((i, [(origin[0] + b.x).round(), (origin[1] + b.y).round()], [b.width, b.height]));
+                continue;
+            }
             let (mut asc, mut desc, mut gr_x1) = (0.0f32, 0.0f32, f32::NEG_INFINITY);
             for it in line.items() {
                 if let PositionedLayoutItem::GlyphRun(gr) = it {
@@ -36,7 +41,7 @@ pub fn bare_icons(layout: &Layout<Ink>, pills: &[PillChip], scale: f32, origin: 
             // In right-to-left text the icon's room comes after its word on screen, to its right:
             // the icon takes that room's far side, so the gap stays between it and the word.
             let x = if (b.x - gr_x1).abs() < 1.0 { b.x + b.width - px } else { b.x };
-            out.push((i, [(origin[0] + x).round(), y.round()], px));
+            out.push((i, [(origin[0] + x).round(), y.round()], [px; 2]));
         }
     }
 }

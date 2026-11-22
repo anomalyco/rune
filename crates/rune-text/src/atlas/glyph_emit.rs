@@ -112,6 +112,11 @@ impl TextSystem {
             let mut gi = 0usize;
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(glyph_run) = item else { continue };
+                // A label an inline image replaces draws nothing.
+                if glyph_run.run().font_size() <= crate::HIDDEN_SIZE * 2.0 {
+                    gi += if need_bytes { glyph_run.glyphs().count() } else { 0 };
+                    continue;
+                }
                 let face = Face::of(&glyph_run, &mut coords);
                 let baseline = (origin[1] + face.baseline * k).round();
                 let mut rel = glyph_run.offset();

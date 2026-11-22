@@ -66,7 +66,7 @@ pub use handlers::{Drag, Phase, PointerEvent, PointerPress};
 pub(crate) use handlers::{DragEndFn, DragFn, DragOutFn, InputKeyFn, PointerFn, PressFn, StepFn, StepLimitFn, WindowDrag};
 pub(crate) use help::{HELP_KEY, HELP_ROW, help_words};
 pub use input::{InputSpec, auto_grow, edit_access, text_input};
-pub use pills::InlineIcon;
+pub use pills::{InlineIcon, InlineImage};
 pub(crate) use rare::{ElCold, ElFlags, RoleTag};
 pub use rune_motion::Cycle;
 pub(crate) use scroll::FadeStyle;
