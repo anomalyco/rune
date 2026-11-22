@@ -615,3 +615,283 @@ index a3a7705d..c3980673 100644
      if module == 0 {
          return None;
      }
+diff --git a/src/platform_impl/windows/keyboard.rs b/src/platform_impl/windows/keyboard.rs
+index 9c109490..2ee73873 100644
+--- a/src/platform_impl/windows/keyboard.rs
++++ b/src/platform_impl/windows/keyboard.rs
+@@ -14,13 +14,14 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+     VK_CONTROL, VK_DECIMAL, VK_DELETE, VK_DIVIDE, VK_DOWN, VK_END, VK_F4, VK_HOME, VK_INSERT,
+     VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_MULTIPLY, VK_NEXT, VK_NUMLOCK,
+     VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4, VK_NUMPAD5, VK_NUMPAD6, VK_NUMPAD7,
+-    VK_NUMPAD8, VK_NUMPAD9, VK_PRIOR, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT,
+-    VK_RWIN, VK_SCROLL, VK_SHIFT, VK_SUBTRACT, VK_UP,
++    VK_NUMPAD8, VK_NUMPAD9, VK_PACKET, VK_PRIOR, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU,
++    VK_RSHIFT, VK_RWIN, VK_SCROLL, VK_SHIFT, VK_SUBTRACT, VK_UP,
+ };
+ use windows_sys::Win32::UI::TextServices::HKL;
+ use windows_sys::Win32::UI::WindowsAndMessaging::{
+-    PeekMessageW, MSG, PM_NOREMOVE, WM_CHAR, WM_DEADCHAR, WM_KEYDOWN, WM_KEYFIRST, WM_KEYLAST,
+-    WM_KEYUP, WM_KILLFOCUS, WM_SETFOCUS, WM_SYSCHAR, WM_SYSDEADCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
++    PeekMessageW, MSG, PM_NOREMOVE, UNICODE_NOCHAR, WM_CHAR, WM_DEADCHAR, WM_KEYDOWN, WM_KEYFIRST,
++    WM_KEYLAST, WM_KEYUP, WM_KILLFOCUS, WM_SETFOCUS, WM_SYSCHAR, WM_SYSDEADCHAR, WM_SYSKEYDOWN,
++    WM_SYSKEYUP, WM_UNICHAR,
+ };
+ 
+ use smol_str::SmolStr;
+@@ -64,11 +65,18 @@ pub struct MessageAsKeyEvent {
+ /// text input. The "sequence" only consists of one WM_KEYUP / WM_SYSKEYUP event.
+ pub struct KeyEventBuilder {
+     event_info: Mutex<Option<PartialKeyEventInfo>>,
++    // Rune: high surrogate waiting for its matching low surrogate across consecutive VK_PACKET or
++    // bare WM_CHAR messages (Win+. emoji panel, Win+H voice typing, SendInput KEYEVENTF_UNICODE).
++    pending_high_surrogate: Mutex<Option<u16>>,
+     pending: PendingEventQueue<MessageAsKeyEvent>,
+ }
+ impl Default for KeyEventBuilder {
+     fn default() -> Self {
+-        KeyEventBuilder { event_info: Mutex::new(None), pending: Default::default() }
++        KeyEventBuilder {
++            event_info: Mutex::new(None),
++            pending_high_surrogate: Mutex::new(None),
++            pending: Default::default(),
++        }
+     }
+ }
+ impl KeyEventBuilder {
+@@ -98,6 +106,7 @@ impl KeyEventBuilder {
+                     MatchResult::MessagesToDispatch(self.pending.complete_multi(key_events))
+                 },
+                 WM_KILLFOCUS => {
++                    *self.pending_high_surrogate.lock().unwrap() = None;
+                     // synthesize keyup events
+                     let kbd_state = get_kbd_state();
+                     let key_events = Self::synthesize_kbd_state(ElementState::Released, &kbd_state);
+@@ -109,6 +118,11 @@ impl KeyEventBuilder {
+                         // This is handled in `event_loop.rs`
+                         return MatchResult::Nothing;
+                     }
++                    // Rune: preserve an unpaired high surrogate across the two VK_PACKET presses
++                    // that deliver a supplementary-plane Unicode character; drop it on any real key.
++                    if wparam as VIRTUAL_KEY != VK_PACKET {
++                        *self.pending_high_surrogate.lock().unwrap() = None;
++                    }
+                     let pending_token = self.pending.add_pending();
+                     *result = ProcResult::Value(0);
+ 
+@@ -168,41 +182,36 @@ impl KeyEventBuilder {
+                 WM_CHAR | WM_SYSCHAR => {
+                     let mut event_info = self.event_info.lock().unwrap();
+                     if event_info.is_none() {
+-                        trace!(
+-                            "Received a CHAR message but no `event_info` was available. The \
+-                             message is probably IME, returning."
+-                        );
+-                        return MatchResult::Nothing;
++                        // Rune: a standalone WM_CHAR with no preceding WM_KEYDOWN (text expanders,
++                        // password managers, assistive tools, remote input, or IMEs outside
++                        // WM_IME_COMPOSITION) still carries valid character input; WM_SYSCHAR stays
++                        // untouched so Alt+key mnemonics never type text.
++                        drop(event_info);
++                        if msg_kind == WM_SYSCHAR {
++                            trace!(
++                                "Received a SYSCHAR message with no `event_info`; ignoring."
++                            );
++                            return MatchResult::Nothing;
++                        }
++                        let pending_token = self.pending.add_pending();
++                        *result = ProcResult::Value(0);
++                        let mut utf16parts = Vec::with_capacity(2);
++                        append_wparam_utf16(wparam, &mut utf16parts);
++                        if !resolve_surrogates(&self.pending_high_surrogate, &mut utf16parts) {
++                            return MatchResult::TokenToRemove(pending_token);
++                        }
++                        if let Some(ev) = standalone_char_event(&utf16parts, (lparam & 0xffff) > 1) {
++                            return MatchResult::MessagesToDispatch(self.pending.complete_pending(
++                                pending_token,
++                                MessageAsKeyEvent { event: ev, is_synthetic: false },
++                            ));
++                        }
++                        return MatchResult::TokenToRemove(pending_token);
+                     }
+                     let pending_token = self.pending.add_pending();
+                     *result = ProcResult::Value(0);
+-                    let is_high_surrogate = (0xd800..=0xdbff).contains(&wparam);
+-                    let is_low_surrogate = (0xdc00..=0xdfff).contains(&wparam);
+-
+-                    let is_utf16 = is_high_surrogate || is_low_surrogate;
+-
+-                    if is_utf16 {
+-                        if let Some(ev_info) = event_info.as_mut() {
+-                            ev_info.utf16parts.push(wparam as u16);
+-                        }
+-                    } else {
+-                        // In this case, wparam holds a UTF-32 character.
+-                        // Let's encode it as UTF-16 and append it to the end of `utf16parts`
+-                        let utf16parts = match event_info.as_mut() {
+-                            Some(ev_info) => &mut ev_info.utf16parts,
+-                            None => {
+-                                warn!("The event_info was None when it was expected to be some");
+-                                return MatchResult::TokenToRemove(pending_token);
+-                            },
+-                        };
+-                        let start_offset = utf16parts.len();
+-                        let new_size = utf16parts.len() + 2;
+-                        utf16parts.resize(new_size, 0);
+-                        if let Some(ch) = char::from_u32(wparam as u32) {
+-                            let encode_len = ch.encode_utf16(&mut utf16parts[start_offset..]).len();
+-                            let new_size = start_offset + encode_len;
+-                            utf16parts.resize(new_size, 0);
+-                        }
++                    if let Some(ev_info) = event_info.as_mut() {
++                        append_wparam_utf16(wparam, &mut ev_info.utf16parts);
+                     }
+                     // It's important that we unlock the mutex, and create the pending event token
+                     // before calling `next_msg`
+@@ -224,6 +233,12 @@ impl KeyEventBuilder {
+                                 return MatchResult::TokenToRemove(pending_token);
+                             },
+                         };
++                        if !resolve_surrogates(&self.pending_high_surrogate, &mut event_info.utf16parts)
++                            && event_info.vkey == VK_PACKET
++                        {
++                            // Rune: high half of a VK_PACKET surrogate pair; wait for the low half.
++                            return MatchResult::TokenToRemove(pending_token);
++                        }
+                         let mut layouts = LAYOUT_CACHE.lock().unwrap();
+                         // It's okay to call `ToUnicode` here, because at this point the dead key
+                         // is already consumed by the character.
+@@ -238,10 +253,11 @@ impl KeyEventBuilder {
+                             mod_state.contains(WindowsModifiers::CONTROL)
+                         };
+ 
+-                        // If Ctrl is not pressed, just use the text with all
+-                        // modifiers because that already consumed the dead key. Otherwise,
+-                        // we would interpret the character incorrectly, missing the dead key.
+-                        if !ctrl_on {
++                        // If Ctrl is not pressed (or this is VK_PACKET Unicode injection), just
++                        // use the text with all modifiers because that already consumed the dead
++                        // key. Otherwise, we would interpret the character incorrectly, missing
++                        // the dead key.
++                        if !ctrl_on || event_info.vkey == VK_PACKET {
+                             event_info.text = PartialText::System(event_info.utf16parts.clone());
+                         } else {
+                             let mod_no_ctrl = mod_state.remove_only_ctrl();
+@@ -258,6 +274,25 @@ impl KeyEventBuilder {
+                         ))
+                     }
+                 },
++                WM_UNICHAR => {
++                    // Rune: answer UNICODE_NOCHAR with TRUE and deliver UTF-32 code points.
++                    if wparam == UNICODE_NOCHAR as WPARAM {
++                        *result = ProcResult::Value(1);
++                        return MatchResult::Nothing;
++                    }
++                    let pending_token = self.pending.add_pending();
++                    *result = ProcResult::Value(0);
++                    *self.pending_high_surrogate.lock().unwrap() = None;
++                    let mut utf16parts = Vec::with_capacity(2);
++                    append_wparam_utf16(wparam, &mut utf16parts);
++                    if let Some(ev) = standalone_char_event(&utf16parts, (lparam & 0xffff) > 1) {
++                        return MatchResult::MessagesToDispatch(self.pending.complete_pending(
++                            pending_token,
++                            MessageAsKeyEvent { event: ev, is_synthetic: false },
++                        ));
++                    }
++                    MatchResult::TokenToRemove(pending_token)
++                },
+                 WM_KEYUP | WM_SYSKEYUP => {
+                     let pending_token = self.pending.add_pending();
+                     *result = ProcResult::Value(0);
+@@ -541,9 +576,11 @@ impl PartialKeyEventInfo {
+ 
+         let logical_key = if let Some(key) = code_as_key.clone() {
+             PartialLogicalKey::This(key)
+-        } else if is_pressed && key_is_char && !mods.contains(WindowsModifiers::CONTROL) {
++        } else if is_pressed
++            && (vkey == VK_PACKET || (key_is_char && !mods.contains(WindowsModifiers::CONTROL)))
++        {
+             // In some cases we want to use the UNICHAR text for logical_key in order to allow
+-            // dead keys to have an effect on the character reported by `logical_key`.
++            // dead keys (and Rune's VK_PACKET Unicode injection) to supply `logical_key`.
+             PartialLogicalKey::TextOr(preliminary_logical_key)
+         } else {
+             PartialLogicalKey::This(preliminary_logical_key)
+@@ -612,7 +649,7 @@ impl PartialKeyEventInfo {
+         let logical_key = match self.logical_key {
+             PartialLogicalKey::TextOr(fallback) => match text.as_ref() {
+                 Some(s) => {
+-                    if s.grapheme_indices(true).count() > 1 {
++                    if self.vkey != VK_PACKET && s.grapheme_indices(true).count() > 1 {
+                         fallback
+                     } else {
+                         Key::Character(s.clone())
+@@ -638,6 +675,69 @@ impl PartialKeyEventInfo {
+     }
+ }
+ 
++/// Rune: appends a `WM_CHAR` / `WM_UNICHAR` `wparam` (UTF-16 surrogate unit or Unicode scalar)
++/// onto `utf16parts`.
++fn append_wparam_utf16(wparam: WPARAM, utf16parts: &mut Vec<u16>) {
++    let is_high_surrogate = (0xd800..=0xdbff).contains(&wparam);
++    let is_low_surrogate = (0xdc00..=0xdfff).contains(&wparam);
++    if is_high_surrogate || is_low_surrogate {
++        utf16parts.push(wparam as u16);
++    } else if let Some(ch) = char::from_u32(wparam as u32) {
++        let mut buf = [0u16; 2];
++        utf16parts.extend_from_slice(ch.encode_utf16(&mut buf));
++    }
++}
++
++/// Rune: pairs a pending high surrogate with an incoming leading low surrogate, and stashes a
++/// trailing lone high surrogate for the next `WM_CHAR`. Returns `false` when `units` held only
++/// that lone high surrogate so the caller waits for the low half instead of dropping it.
++fn resolve_surrogates(pending: &Mutex<Option<u16>>, units: &mut Vec<u16>) -> bool {
++    let mut guard = pending.lock().unwrap();
++    if units.first().copied().is_some_and(|u| (0xdc00..=0xdfff).contains(&u)) {
++        if let Some(hi) = guard.take() {
++            units.insert(0, hi);
++        }
++    } else {
++        *guard = None;
++    }
++    if units.last().copied().is_some_and(|u| (0xd800..=0xdbff).contains(&u)) {
++        let hi = units.pop().unwrap();
++        *guard = Some(hi);
++        if units.is_empty() {
++            return false;
++        }
++    }
++    true
++}
++
++/// Rune: turns UTF-16 code units from a bare `WM_CHAR` or `WM_UNICHAR` into a `KeyEvent`.
++/// Non-whitespace ASCII control codes (`< 0x20` other than `\t`, `\n`, `\r`, or `0x7F`) are
++/// skipped so stray control characters never leak as text.
++fn standalone_char_event(utf16parts: &[u16], is_repeat: bool) -> Option<KeyEvent> {
++    if utf16parts.is_empty() {
++        return None;
++    }
++    let string = OsString::from_wide(utf16parts).into_string().ok()?;
++    if string.is_empty()
++        || !string.chars().any(|c| !c.is_control() || matches!(c, '\t' | '\n' | '\r'))
++    {
++        return None;
++    }
++    let text = SmolStr::new(string);
++    Some(KeyEvent {
++        physical_key: PhysicalKey::Unidentified(NativeKeyCode::Unidentified),
++        logical_key: Key::Character(text.clone()),
++        text: Some(text.clone()),
++        location: KeyLocation::Standard,
++        state: ElementState::Pressed,
++        repeat: is_repeat,
++        platform_specific: KeyEventExtra {
++            text_with_all_modifiers: Some(text),
++            key_without_modifiers: Key::Unidentified(NativeKey::Unidentified),
++        },
++    })
++}
++
+ #[derive(Debug, Copy, Clone)]
+ struct KeyLParam {
+     pub scancode: u8,

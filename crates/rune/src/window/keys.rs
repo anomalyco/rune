@@ -31,6 +31,18 @@ pub(crate) fn map_key(key: &WKey, m: ModifiersState) -> Option<KeyEvent> {
 /// follow the key's Latin virtual key and macOS's switch to a Latin layout under ⌘: Ctrl+V
 /// pastes on every layout.
 pub(crate) fn map_key_event(event: &winit::event::KeyEvent, m: ModifiersState) -> Option<KeyEvent> {
+    // On Windows, Unicode text injected without a physical key (bare `WM_CHAR` / `WM_UNICHAR` or
+    // `VK_PACKET` via `SendInput(KEYEVENTF_UNICODE)` — Win+. emoji panel, Win+H voice typing,
+    // touch/OSK, text expanders, password-manager auto-type) must land as literal text even if a
+    // hotkey modifier is still being released.
+    #[cfg(target_os = "windows")]
+    if matches!(event.physical_key, winit::keyboard::PhysicalKey::Unidentified(_))
+        && matches!(event.logical_key, WKey::Character(_) | WKey::Unidentified(_))
+        && let Some(text) = event.text.as_deref().filter(|t| !t.is_empty())
+        && text.chars().any(|c| !c.is_control() || matches!(c, '\t' | '\n' | '\r'))
+    {
+        return Some(KeyEvent { key: Key::Text(text.to_string()), mods: Mods::default() });
+    }
     let mut ev = map_key(&event.logical_key, m).or_else(|| unidentified(event, m))?;
     if !cfg!(target_os = "macos")
         && let Key::Command(c) = ev.key
@@ -51,7 +63,10 @@ fn unidentified(event: &winit::event::KeyEvent, m: ModifiersState) -> Option<Key
     if event.physical_key == winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::Pause) {
         return Some(KeyEvent { key: Key::Pause, mods });
     }
-    if !(mods.cmd || mods.ctrl) { return None; }
+    if !(mods.cmd || mods.ctrl) {
+        let text = event.text.as_deref().filter(|t| !t.is_empty() && t.chars().any(|c| !c.is_control() || matches!(c, '\t' | '\n' | '\r')))?;
+        return Some(KeyEvent { key: Key::Text(text.to_string()), mods });
+    }
     let c = key_base(event).filter(|c| !c.is_control() && *c != ' ')?;
     let key = if mods.cmd { Key::Command(c.to_ascii_lowercase()) } else { Key::Text(c.to_string()) };
     Some(KeyEvent { key, mods })
