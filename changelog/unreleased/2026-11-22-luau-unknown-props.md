@@ -1,0 +1,1 @@
+- Luau UI: a prop a node doesn't have is an error in debug builds and a warning once per script in release, for Rune's own nodes and for an app's host nodes that list their props (`HostNode::props`); before, a host node dropped it without a word (`autofocus` on a button, rune-desktop #664).

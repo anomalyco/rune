@@ -26,11 +26,23 @@ type BuildNode = dyn Fn(&mut NodeArgs) -> Result<El, String>;
 pub struct HostNode {
     pub(crate) name: String,
     pub(crate) build: Rc<BuildNode>,
+    /// The props the node has ([`HostNode::props`]): a key that is neither one of them nor a
+    /// standard prop is unknown ([`super::unknown_prop`]).
+    known: Option<Rc<dyn Fn(&str) -> bool>>,
 }
 
 impl HostNode {
     pub fn new(name: impl Into<String>, build: impl Fn(&mut NodeArgs) -> Result<El, String> + 'static) -> Self {
-        HostNode { name: name.into(), build: Rc::new(build) }
+        HostNode { name: name.into(), build: Rc::new(build), known: None }
+    }
+
+    /// The props the node has, as its contract lists them. With it, a script's prop that is
+    /// neither one of these nor a standard prop is an error in debug builds and a warning (once
+    /// per script) in release, instead of being dropped without a word. Without it the node's
+    /// unknown props go unreported, as a prop its build reads only sometimes can't be told apart.
+    pub fn props(mut self, known: impl Fn(&str) -> bool + 'static) -> Self {
+        self.known = Some(Rc::new(known));
+        self
     }
 }
 
@@ -247,12 +259,12 @@ pub(crate) unsafe extern "C-unwind" fn ui_host(state: *mut ffi::lua_State) -> c_
             let node = top(|frame| frame.env.nodes.get(index).cloned()).flatten().ok_or("unknown host node")?;
             let el = (node.build)(&mut args).map_err(|e| format!("ui.{}: {e}", node.name))?;
             // Standard layout props still apply, after the host's own.
-            build_from(state, el, [props_at, over_at], &args)
+            build_from(state, el, [props_at, over_at], &args, &node)
         })
     }
 }
 
-unsafe fn build_from(state: *mut ffi::lua_State, el: El, tables: [c_int; 2], args: &NodeArgs) -> Result<c_int, String> {
+unsafe fn build_from(state: *mut ffi::lua_State, el: El, tables: [c_int; 2], args: &NodeArgs, node: &HostNode) -> Result<c_int, String> {
     top(|frame| {
         let Frame { arena, attach, env } = frame;
         let slot = arena.alloc(el)?;
@@ -270,6 +282,7 @@ unsafe fn build_from(state: *mut ffi::lua_State, el: El, tables: [c_int; 2], arg
                     match props::key_atom(state, -2) {
                         Ok(Atom::OnPress | Atom::OnHover | Atom::OnMiddlePress) => {}
                         Ok(atom) if !own => p.decode_at(el, state, atom, -1, env, false)?,
+                        Err(name) if !own && node.known.as_ref().is_some_and(|known| !known(name)) => super::unknown_prop(env, Some(&node.name), name)?,
                         _ => {}
                     }
                     ffi::lua_settop(state, -3);
