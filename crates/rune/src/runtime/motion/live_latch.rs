@@ -354,7 +354,9 @@ impl RuntimeCore {
         self.frame.live.set_visible(visible);
         if !visible { self.motion.clear_loop_wake(); }
         // The window's own setup shows and hides it before the first frame; the app hears the
-        // changes after that (`App::on_visibility`).
+        // changes after that (`App::on_visibility`), and its poll runs once to read
+        // `Tx::window_visible`, which a window that stops drawing wouldn't otherwise run.
+        if changed && self.commit.commits > 0 && app.has_poll() { self.schedule_wakes([std::time::Duration::ZERO]); }
         if changed && self.commit.commits > 0 && app.has_on_visibility() {
             let (mut one, stall) = self.begin_update(app);
             app.on_visibility(visible, &mut one);

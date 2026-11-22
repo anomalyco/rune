@@ -106,6 +106,8 @@ pub struct Tx {
     pub(crate) focus_visible: bool,
     /// `Tx::assistive_technology`.
     pub(crate) assistive: bool,
+    /// Not `Tx::window_visible`, so a `Tx` no runtime made reads as visible.
+    pub(crate) window_hidden: bool,
     /// `Tx::by_keys`.
     pub(crate) by_keys: bool,
     /// The text selection as the event arrived (`Tx::text_selection`).
@@ -538,6 +540,16 @@ impl Tx {
     /// its mirror and live regions are always there.
     pub fn assistive_technology(&self) -> bool {
         self.assistive
+    }
+
+    /// Whether the window is on screen as this handler or poll runs: false while it's hidden,
+    /// minimised, covered whole by other windows where the system says so, or (in a browser) its
+    /// tab is hidden. A window that isn't visible draws no frames; each change wakes `poll` once,
+    /// so a poll can pause and resume work no one sees (as [`App::on_visibility`] hears it).
+    ///
+    /// [`App::on_visibility`]: crate::App::on_visibility
+    pub fn window_visible(&self) -> bool {
+        !self.window_hidden
     }
 
     /// Whether keyboard focus was showing its ring (`:focus-visible`) as this event arrived:
