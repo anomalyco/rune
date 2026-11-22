@@ -88,10 +88,15 @@ pub(crate) fn cpu_ns(raw: u64) -> Option<f64> {
 #[cfg(all(windows, target_arch = "x86_64"))]
 const RATE_SPAN_NS: u64 = 20_000_000;
 
+/// A (QPC, TSC) pair is kept only when the two QPC readings around the TSC's are this close: a
+/// thread preempted between them would skew the rate for the rest of the process.
+#[cfg(all(windows, target_arch = "x86_64"))]
+const PAIR_SLACK_NS: u64 = 100_000;
+
 /// Thread cycles per nanosecond, without waiting or spinning: Windows counts a thread's cycles at
 /// the TSC's constant rate on every core (P-cores and E-cores alike), so the rate is the TSC's
 /// against QPC between this process's first call and one at least [`RATE_SPAN_NS`] later. `None`
-/// until then (callers fall back to the wall clock), when the two readings make no sense, and on
+/// until then (callers fall back to the wall clock), when the readings make no sense, and on
 /// Windows on ARM, where the cycles aren't a fixed-rate counter's.
 #[cfg(windows)]
 pub(crate) fn cycles_per_ns() -> Option<f64> {
@@ -102,9 +107,7 @@ pub(crate) fn cycles_per_ns() -> Option<f64> {
     #[cfg(target_arch = "x86_64")]
     {
         static FIRST: std::sync::OnceLock<(u64, u64)> = std::sync::OnceLock::new();
-        // SAFETY: RDTSC has no preconditions on x86-64.
-        #[allow(unused_unsafe)]
-        let now = (now_ns(), unsafe { core::arch::x86_64::_rdtsc() });
+        let now = pair()?;
         let first = *FIRST.get_or_init(|| now);
         let span = now.0.checked_sub(first.0).filter(|&ns| ns >= RATE_SPAN_NS)?;
         let rate = now.1.checked_sub(first.1)? as f64 / span as f64;
@@ -115,4 +118,33 @@ pub(crate) fn cycles_per_ns() -> Option<f64> {
     {
         None
     }
+}
+
+/// QPC (ns, the middle of two readings) and the TSC between them; `None` when the thread was held
+/// between them for more than [`PAIR_SLACK_NS`].
+#[cfg(all(windows, target_arch = "x86_64"))]
+fn pair() -> Option<(u64, u64)> {
+    let before = now_ns();
+    // SAFETY: RDTSC has no preconditions on x86-64.
+    #[allow(unused_unsafe)]
+    let tsc = unsafe { core::arch::x86_64::_rdtsc() };
+    let after = now_ns();
+    after.checked_sub(before).filter(|&d| d <= PAIR_SLACK_NS).map(|d| (before + d / 2, tsc))
+}
+
+/// [`cycles_per_ns`] for benches and profiles, which want a reading on their first call: waits
+/// (sleeping) until the rate is known, at most 50 ms. Never on a path a window waits for.
+#[cfg(windows)]
+#[cfg_attr(not(feature = "frame-profile"), allow(dead_code))]
+pub(crate) fn cycles_per_ns_waiting() -> Option<f64> {
+    for _ in 0..50 {
+        if let Some(rate) = cycles_per_ns() {
+            return Some(rate);
+        }
+        if cfg!(not(target_arch = "x86_64")) {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    None
 }

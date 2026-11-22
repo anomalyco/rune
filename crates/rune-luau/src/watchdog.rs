@@ -29,14 +29,18 @@ const WALL_BACKSTOP: u32 = 20;
 
 #[derive(Clone, Copy)]
 struct Deadline {
-    /// The thread's CPU time (ns) at which the budget is spent; `None` without a CPU clock.
-    cpu: Option<f64>,
-    /// The budget in wall time: the deadline without a CPU clock, or when it can't be read.
+    /// The thread's CPU clock when the entry was armed; `None` without one. Converted at each
+    /// check, so an entry armed before Windows knows the cycles' rate is charged from its start
+    /// once it does (the first plugin's start-up included).
+    mark: Option<rune::ThreadCpuMark>,
+    /// The budget in nanoseconds of CPU time.
+    limit_ns: f64,
+    /// The budget in wall time: the deadline while there's no CPU reading.
     budget: Option<Instant>,
     /// The wall-clock bound with a CPU clock: [`WALL_BACKSTOP`] budgets.
     backstop: Option<Instant>,
-    /// When the entry was armed, and the thread's CPU time then: what a backstop stop reports.
-    armed: (Instant, f64),
+    /// When the entry was armed: what a backstop stop reports.
+    armed: Instant,
     /// The backstop's stop was logged (a script that catches it is stopped again at each check).
     told: bool,
 }
@@ -68,11 +72,11 @@ pub(crate) fn arm(limit: Duration) -> Armed {
     let outer = DEADLINE.get().is_some();
     if !outer {
         let at = rune::time::now();
-        let cpu = rune::thread_cpu_ns().map(|now| now + limit.as_nanos() as f64);
+        let mark = rune::thread_cpu_mark();
         // A limit too large to add is no wall-clock limit (`None`), never a panic.
         let budget = at.checked_add(limit);
-        let backstop = cpu.and_then(|_| at.checked_add(limit.saturating_mul(WALL_BACKSTOP)));
-        DEADLINE.set(Some(Deadline { cpu, budget, backstop, armed: (at, cpu.map_or(0.0, |c| c - limit.as_nanos() as f64)), told: false }));
+        let backstop = mark.and_then(|_| at.checked_add(limit.saturating_mul(WALL_BACKSTOP)));
+        DEADLINE.set(Some(Deadline { mark, limit_ns: limit.as_nanos() as f64, budget, backstop, armed: at, told: false }));
     }
     Armed(!outer)
 }
@@ -92,10 +96,10 @@ impl Drop for Armed {
 fn stop(d: Deadline) -> Option<Stop> {
     let now = rune::time::now();
     let past = |at: Option<Instant>| at.is_some_and(|at| now >= at);
-    match (d.cpu, d.cpu.and_then(|_| rune::thread_cpu_ns())) {
-        (Some(cpu), Some(used)) if used >= cpu => Some(Stop::Budget),
-        (Some(_), Some(_)) => past(d.backstop).then_some(Stop::Backstop),
-        _ => past(d.budget).then_some(Stop::Budget),
+    match d.mark.and_then(rune::thread_cpu_since) {
+        Some(used) if used >= d.limit_ns => Some(Stop::Budget),
+        Some(_) => past(d.backstop).then_some(Stop::Backstop),
+        None => past(d.budget).then_some(Stop::Budget),
     }
 }
 
@@ -112,8 +116,8 @@ fn tell_backstop(state: *mut ffi::lua_State, d: Deadline) {
             "?".to_owned()
         }
     };
-    let wall = rune::time::now().saturating_duration_since(d.armed.0).as_secs_f64() * 1e3;
-    let cpu = rune::thread_cpu_ns().map_or(0.0, |now| (now - d.armed.1) / 1e6);
+    let wall = rune::time::now().saturating_duration_since(d.armed).as_secs_f64() * 1e3;
+    let cpu = d.mark.and_then(rune::thread_cpu_since).map_or(0.0, |ns| ns / 1e6);
     eprintln!("luau: watchdog backstop stopped {at} after {wall:.3} ms wall with {cpu:.3} ms CPU charged (starved, not looping)");
 }
 

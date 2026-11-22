@@ -143,9 +143,14 @@ pub fn take_frame_phases() -> [f64; 2 * PHASES] {
     take()
 }
 
-/// This thread's CPU clock in milliseconds.
+/// This thread's CPU clock in milliseconds. On Windows its first call waits (at most 50 ms) for the
+/// cycles' rate, so a bench's first reading is a real one, not 0.
 #[cfg(feature = "frame-profile")]
-pub fn thread_cpu_ms() -> f64 { cpu_ms().unwrap_or(0.0) }
+pub fn thread_cpu_ms() -> f64 {
+    #[cfg(windows)]
+    super::host_clock::cycles_per_ns_waiting();
+    cpu_ms().unwrap_or(0.0)
+}
 
 /// This thread's own CPU time in nanoseconds: its cycles on Windows (`QueryThreadCycleTime`),
 /// `CLOCK_THREAD_CPUTIME_ID` elsewhere. It stands still while the thread waits or the system
@@ -157,6 +162,34 @@ pub fn thread_cpu_ns() -> Option<f64> {
     return super::host_clock::thread_cpu().and_then(super::host_clock::cpu_ns);
     #[cfg(not(any(unix, windows)))]
     None
+}
+/// A reading of this thread's CPU clock in its raw units ([`thread_cpu_mark`]), taken now and
+/// converted later ([`thread_cpu_since`]): a mark taken before Windows knows the cycles' rate still
+/// measures from that moment once it does.
+#[derive(Clone, Copy, Debug)]
+pub struct ThreadCpuMark(u64);
+
+/// This thread's CPU clock now, raw; `None` where there is none or it can't be read. On Windows it
+/// also starts measuring the cycles' rate (no wait).
+pub fn thread_cpu_mark() -> Option<ThreadCpuMark> {
+    #[cfg(windows)]
+    super::host_clock::cycles_per_ns();
+    #[cfg(any(unix, windows))]
+    return super::host_clock::thread_cpu().map(ThreadCpuMark);
+    #[cfg(not(any(unix, windows)))]
+    None
+}
+
+/// Nanoseconds of this thread's CPU time since `mark` (taken on this thread); `None` until the
+/// rate is known (Windows, the first 20 ms) or when the clock can't be read.
+pub fn thread_cpu_since(mark: ThreadCpuMark) -> Option<f64> {
+    #[cfg(any(unix, windows))]
+    return super::host_clock::thread_cpu().and_then(|now| super::host_clock::cpu_ns(now.saturating_sub(mark.0)));
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = mark;
+        None
+    }
 }
 
 /// Without `frame-profile`, a phase is timed only for `RUNE_COMMIT_BUDGET_MS`
