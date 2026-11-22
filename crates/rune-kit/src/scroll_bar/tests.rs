@@ -924,3 +924,158 @@ fn scroll_only_thumb_hover_holds_after_idle_clock_gap() {
     frames(&mut rt, 90);
     assert_eq!(opacity(&rt, "scroll-bar"), 0.0, "then fades out after pointer leaves thumb");
 }
+
+/// CSS `cubic-bezier(0.25, 0.1, 0.25, 1)` (`ease`) at progress `x`, solved here rather than read
+/// from `rune_motion::Easing`, so the curve is checked against the CSS definition.
+fn css_ease(x: f64) -> f64 {
+    let bez = |a: f64, b: f64, t: f64| 3.0 * a * t * (1.0 - t) * (1.0 - t) + 3.0 * b * t * t * (1.0 - t) + t * t * t;
+    let (mut lo, mut hi) = (0.0, 1.0);
+    for _ in 0..60 {
+        let mid = (lo + hi) / 2.0;
+        if bez(0.25, 0.25, mid) < x { lo = mid } else { hi = mid }
+    }
+    bez(0.1, 1.0, (lo + hi) / 2.0)
+}
+
+fn scroll_view_pane(_: &usize, _: &mut rune::Cx<usize>) -> El {
+    let k = Kit::neutral(true);
+    col().size(200.0, 100.0).child(
+        col()
+            .key("scroll")
+            .w_full()
+            .h(100.0)
+            .scroll(rune::ScrollSpec { stick_bottom: false })
+            .child(col().children((0..20).map(|i| el().key(format!("row{i}")).w_full().h(20.0))))
+            .scroll_bar_styled(ScrollBarStyle::scroll_view(&k)),
+    )
+}
+
+/// `scroll-view.css`'s `transition: opacity 200ms ease`, both ways: the pointer over the area
+/// fades the bar in on CSS `ease` over 200 ms; a wheel and a leave 1 ms later fade it out on the
+/// same curve 800 ms after the scroll. Sampled every millisecond, so a frame's own timing error
+/// stays under 0.01.
+#[test]
+fn scroll_view_bar_fades_in_and_out_on_the_css_ease_curve() {
+    let dt = 0.001;
+    let mut rt = rune::Runtime::new(0usize, scroll_view_pane, (200.0, 100.0), rune::Env::new(true, 1.0));
+    rt.set_live_waker(std::sync::Arc::new(|| {}));
+    frames(&mut rt, 2);
+    assert_eq!(opacity(&rt, "scroll-bar"), 0.0);
+    let mut t = 0.0;
+    // The frame before the pointer comes: a fade that starts on the next frame starts after it.
+    let mut samples = vec![(t, opacity(&rt, "scroll-bar"))];
+    let mut run = |rt: &mut rune::Runtime<usize>, secs: f64, samples: &mut Vec<(f64, f32)>| {
+        for _ in 0..(secs / dt).round() as usize {
+            rt.frame(dt);
+            t += dt;
+            samples.push((t, opacity(rt, "scroll-bar")));
+        }
+    };
+    rt.pointer_move(100.0, 50.0);
+    run(&mut rt, 0.5, &mut samples);
+    rt.wheel(100.0, 50.0, -40.0);
+    run(&mut rt, 0.001, &mut samples);
+    let scrolled = samples.last().unwrap().0;
+    rt.pointer_leave();
+    run(&mut rt, 1.3, &mut samples);
+
+    let check = |name: &str, start: f64, fading_out: bool| {
+        for ms in [25.0, 50.0, 100.0, 150.0, 175.0] {
+            let want = if fading_out { 1.0 - css_ease(ms / 200.0) } else { css_ease(ms / 200.0) };
+            let (at, got) = samples.iter().copied().find(|(t, _)| *t >= start + ms / 1000.0 - 1e-9).unwrap();
+            assert!((got as f64 - want).abs() < 0.012, "{name} at +{ms} ms ({at:.3} s): {got} vs CSS ease {want:.4}");
+        }
+    };
+    // Each fade starts after the last frame still at its starting value, within one 1 ms frame.
+    let shown = samples.iter().rev().find(|(t, o)| *t < scrolled && *o == 0.0).unwrap().0;
+    check("fade in", shown, false);
+    let held = samples.iter().rev().find(|(t, o)| *t > scrolled && *o == 1.0).unwrap().0;
+    assert!((held - (scrolled + 0.8)).abs() <= 0.002, "held 800 ms after the scroll: until {held:.3} s, scrolled at {scrolled:.3} s");
+    check("fade out", held, true);
+}
+
+/// The fade lands on exactly 0 for a host that draws only the frames the runtime asks for (120
+/// Hz here): the last frame drawn is the one left on screen.
+#[test]
+fn scroll_view_bar_fade_rests_at_exactly_zero() {
+    let dt = 1.0 / 120.0;
+    let mut rt = rune::Runtime::new(0usize, scroll_view_pane, (200.0, 100.0), rune::Env::new(true, 1.0));
+    rt.set_live_waker(std::sync::Arc::new(|| {}));
+    frames(&mut rt, 2);
+    rt.pointer_move(100.0, 50.0);
+    frames(&mut rt, 30);
+    rt.wheel(100.0, 50.0, -40.0);
+    rt.frame(dt);
+    rt.pointer_leave();
+    let mut fading = false;
+    let mut last = None;
+    for _ in 0..240 {
+        let wants = rt.frame(dt) || rt.live_pending();
+        let o = opacity(&rt, "scroll-bar");
+        fading |= o > 0.0 && o < 1.0 && last.is_some_and(|l: f32| o < l);
+        last = Some(o);
+        if fading && !wants { break; }
+    }
+    assert!(fading, "the bar faded out");
+    assert_eq!(last, Some(0.0), "the last frame drawn shows the bar at exactly 0");
+}
+
+/// Opacity of the default bar and the native bar, frame by frame through a scroll,
+/// an edge reveal and a hover, as FNV-1a over the f32 bits and each frame's request for another.
+/// `GOLDEN` was taken on Rune `dev` `14b59a3434`, before ScrollView's fade became a CSS tween: the
+/// bars that keep their springs (and the native bar's instant change) draw the same bits.
+#[test]
+fn bars_that_keep_their_springs_draw_the_same_frames() {
+    fn styled(which: &u8, _: &mut rune::Cx<u8>) -> El {
+        let k = Kit::neutral(true);
+        let style = match which {
+            0 => ScrollBarStyle::from_kit(&k),
+            _ => ScrollBarStyle::native(k.c.border_base, k.c.border_strong),
+        };
+        col().size(200.0, 100.0).child(
+            col()
+                .key("scroll")
+                .w_full()
+                .h(100.0)
+                .scroll(rune::ScrollSpec { stick_bottom: false })
+                .child(col().children((0..24).map(|i| el().key(format!("row{i}")).w_full().h(20.0))))
+                .scroll_bar_styled(style),
+        )
+    }
+    let record = |which: u8| {
+        let mut rt = rune::Runtime::new(which, styled, (200.0, 100.0), rune::Env::new(true, 1.0));
+        rt.set_live_waker(std::sync::Arc::new(|| {}));
+        fn eat(h: &mut u64, v: u32) {
+            for b in v.to_le_bytes() {
+                *h ^= u64::from(b);
+                *h = h.wrapping_mul(0x0100_0000_01b3);
+            }
+        }
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let play = |rt: &mut rune::Runtime<u8>, secs: f64, h: &mut u64| {
+            for _ in 0..(secs * 120.0).round() as usize {
+                let wants = rt.frame(1.0 / 120.0) || rt.live_pending();
+                eat(h, u32::from(wants));
+                eat(h, opacity(rt, "scroll-bar").to_bits());
+                eat(h, opacity(rt, "thumb").to_bits());
+            }
+        };
+        play(&mut rt, 0.3, &mut h);
+        for _ in 0..6 {
+            rt.wheel(100.0, 50.0, -12.0);
+            play(&mut rt, 1.0 / 120.0, &mut h);
+        }
+        play(&mut rt, 1.6, &mut h);
+        rt.pointer_move(184.0, 50.0);
+        play(&mut rt, 0.5, &mut h);
+        rt.pointer_move(100.0, 50.0);
+        play(&mut rt, 0.5, &mut h);
+        rt.pointer_leave();
+        play(&mut rt, 1.6, &mut h);
+        h
+    };
+    let got = [record(0), record(1)];
+    eprintln!("GOLDEN = [{:#018x}, {:#018x}]", got[0], got[1]);
+    const GOLDEN: [u64; 2] = [0x64ef_8842_6b44_fac8, 0x629b_5e0d_a6dd_5f85];
+    assert_eq!(got, GOLDEN, "kit bar, native bar");
+}

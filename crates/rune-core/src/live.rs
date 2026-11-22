@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Weak, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU64, Ordering};
 use portable_atomic::AtomicU128;
-use rune_motion::Spring;
+use rune_motion::{Anim, Spring};
 use crate::{Color, Waker};
 
 /// A linear, render-time track. Keep it in app state and bind it like a `Live` value.
@@ -24,7 +24,7 @@ impl<T: LiveValue> Tween<T> {
     }
 }
 impl<T: LiveValue> From<&Tween<T>> for Binding<T> {
-    fn from(tween: &Tween<T>) -> Self { Self { live: tween.live.clone(), spring: None, rest_spring: None } }
+    fn from(tween: &Tween<T>) -> Self { Self { live: tween.live.clone(), enter: None, leave: None } }
 }
 
 struct Linear {
@@ -193,24 +193,33 @@ impl<T: LiveValue> Live<T> {
     pub fn get(&self) -> T { T::decode(self.source.value.load(Ordering::Acquire)) }
     /// Smooth this binding with an interruptible rune-motion spring; the source stays 1:1.
     pub fn smooth(&self, spring: Spring) -> Binding<T> {
-        Binding { live: self.clone(), spring: Some(spring), rest_spring: None }
+        self.smooth_with(spring)
+    }
+    /// [`Self::smooth`] with any rune-motion animation, such as a CSS transition's
+    /// `Curve::tween(0.2, Easing::EASE)`.
+    pub fn smooth_with(&self, anim: impl Into<Anim>) -> Binding<T> {
+        Binding { live: self.clone(), enter: Some(anim.into()), leave: None }
     }
 }
 
 pub struct Binding<T: LiveValue> {
     live: Live<T>,
-    spring: Option<Spring>,
-    rest_spring: Option<Spring>,
+    enter: Option<Anim>,
+    leave: Option<Anim>,
 }
 impl<T: LiveValue> Binding<T> {
     /// Use `leave` when returning to a [`Live::pulse`]'s resting value or moving downward.
-    pub fn rest(mut self, leave: Spring) -> Self {
-        self.rest_spring = Some(leave);
+    pub fn rest(self, leave: Spring) -> Self {
+        self.rest_with(leave)
+    }
+    /// [`Self::rest`] with any rune-motion animation.
+    pub fn rest_with(mut self, leave: impl Into<Anim>) -> Self {
+        self.leave = Some(leave.into());
         self
     }
 }
 impl<T: LiveValue> From<&Live<T>> for Binding<T> {
-    fn from(live: &Live<T>) -> Self { Self { live: live.clone(), spring: None, rest_spring: None } }
+    fn from(live: &Live<T>) -> Self { Self { live: live.clone(), enter: None, leave: None } }
 }
 
 const KIND_MASK: u64 = 0b11;
@@ -240,14 +249,16 @@ impl Property {
 pub struct Bound {
     pub source: Arc<Source>,
     pub property: Property,
-    pub spring: Option<Spring>,
-    pub rest_spring: Option<Spring>,
+    /// How the bound value moves to a new value; `None` lands it at once.
+    pub enter: Option<Anim>,
+    /// How it returns to a pulse's resting value or moves downward, when not as `enter`.
+    pub leave: Option<Anim>,
     pub seen: Option<(u128, u64)>,
 }
 impl Bound {
     pub fn new<T: LiveValue>(binding: impl Into<Binding<T>>, property: Property) -> Self {
         let b = binding.into();
-        Self { source: b.live.source, property, spring: b.spring, rest_spring: b.rest_spring, seen: None }
+        Self { source: b.live.source, property, enter: b.enter, leave: b.leave, seen: None }
     }
     pub fn attach(&self, clock: &Arc<()>, now: f64) {
         if let Some(linear) = &self.source.linear { linear.start(clock, now); }

@@ -227,14 +227,14 @@ impl timer_wake::FrameState {
                 let (op, active_now) = bound.read(&self.live_clock, clock);
                 active |= active_now;
                 let Some(op) = op else { continue };
-                let (enter, leave) = (bound.spring, bound.rest_spring);
+                let (enter, leave) = (bound.enter, bound.leave);
                 use crate::live::{LatchOp, LiveValue, Property};
                 fn apply<T: rune_motion::Animatable + Copy>(
                     scene: &mut Scene,
                     id: NodeId,
                     prop: Prop<T>,
-                    enter: Option<Spring>,
-                    leave: Option<Spring>,
+                    enter: Option<rune_motion::Anim>,
+                    leave: Option<rune_motion::Anim>,
                     decode: impl Fn(u128) -> T,
                     op: LatchOp,
                     choose_leave: impl Fn(Option<T>, T) -> bool,
@@ -243,9 +243,9 @@ impl timer_wake::FrameState {
                         LatchOp::Snap(bits) => scene.set(id, prop, decode(bits)),
                         LatchOp::Set(bits) => {
                             let v = decode(bits);
-                            let spring = if choose_leave(scene.get(id, prop), v) { leave.or(enter) } else { enter };
-                            match spring {
-                                Some(s) => scene.animate(id, prop, v, s),
+                            let anim = if choose_leave(scene.get(id, prop), v) { leave.or(enter) } else { enter };
+                            match anim {
+                                Some(a) => scene.animate(id, prop, v, a),
                                 None => scene.set(id, prop, v),
                             }
                         }
@@ -258,7 +258,7 @@ impl timer_wake::FrameState {
                             let active_v = decode(active);
                             let leave_s = leave.unwrap_or(enter_s);
                             scene.animate(id, prop, active_v, enter_s);
-                            scene.animate(id, prop, rest_v, rune_motion::Anim { delay: (hold as f32).max(1e-4), ..leave_s.into() });
+                            scene.animate(id, prop, rest_v, rune_motion::Anim { delay: (hold as f32).max(1e-4), ..leave_s });
                         }
                     }
                 }
