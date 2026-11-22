@@ -685,8 +685,13 @@ fn append_wparam_utf16(wparam: WPARAM, utf16parts: &mut Vec<u16>) {
 
 /// Rune: pairs a pending high surrogate with an incoming leading low surrogate, and stashes a
 /// trailing lone high surrogate for the next `WM_CHAR`. Returns `false` when `units` held only
-/// that lone high surrogate so the caller waits for the low half instead of dropping it.
+/// that lone high surrogate so the caller waits for the low half instead of dropping it, and when
+/// `units` is empty (a VK_PACKET key-down whose only `WM_CHAR` was the NUL): nothing to type, and
+/// a waiting high half keeps waiting.
 fn resolve_surrogates(pending: &mut Option<u16>, units: &mut Vec<u16>) -> bool {
+    if units.is_empty() {
+        return false;
+    }
     if units.first().copied().is_some_and(|u| (0xdc00..=0xdfff).contains(&u)) {
         if let Some(hi) = pending.take() {
             units.insert(0, hi);
@@ -745,7 +750,7 @@ fn standalone_char_event(text: String, is_repeat: bool) -> KeyEvent {
 
 #[cfg(test)]
 mod rune_bare_char_tests {
-    use super::bare_char_text;
+    use super::{bare_char_text, resolve_surrogates};
 
     const NONE: Option<String> = None;
 
@@ -777,6 +782,23 @@ mod rune_bare_char_tests {
         assert_eq!(feed(&[0xde00], false), [NONE]);
         // Two high halves: the first is dropped, the second pairs with the low half.
         assert_eq!(feed(&[0xd83d, 0xd83d, 0xde00], false), [NONE, NONE, s("😀")]);
+    }
+
+    #[test]
+    fn an_empty_packet_key_down_keeps_the_waiting_high_half() {
+        let mut pending = None;
+        // The high half's VK_PACKET key-down: it waits.
+        let mut high = vec![0xd83d];
+        assert!(!resolve_surrogates(&mut pending, &mut high));
+        assert_eq!(pending, Some(0xd83d));
+        // The low half's VK_PACKET key-down completes with empty text (its only WM_CHAR was the
+        // NUL): nothing to type, and the high half keeps waiting.
+        let mut empty = Vec::new();
+        assert!(!resolve_surrogates(&mut pending, &mut empty));
+        assert_eq!(pending, Some(0xd83d));
+        // The low half's character then arrives: one emoji.
+        assert_eq!(bare_char_text(&mut pending, 0xde00, false), s("😀"));
+        assert_eq!(pending, None);
     }
 
     #[test]
