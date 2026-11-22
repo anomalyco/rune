@@ -38,6 +38,11 @@ pub(super) enum Phase {
     Pulsing { until: f64 },
     /// Held up by the pointer or a press, until both let it go.
     Held,
+    /// Held up by the pointer or a press while a recent scroll's hold lasts until `hold_until`
+    /// (matching Official `scroll-view-machine.ts:142-162`, where scroll hold is orthogonal to
+    /// hover): leaving before `hold_until` pulses out over the remaining hold instead of dropping
+    /// the thumb at once.
+    HeldScrolled { hold_until: f64 },
 }
 
 /// The thumb's glide to a new length, when it has one running.
@@ -118,7 +123,7 @@ impl BarState {
     pub(super) fn pulse_until(self) -> f64 {
         match self {
             Self::Overlay { phase: Phase::Pulsing { until }, .. } => until,
-            Self::Overlay { phase: Phase::Held, .. } => f64::INFINITY,
+            Self::Overlay { phase: Phase::Held | Phase::HeldScrolled { .. }, .. } => f64::INFINITY,
             _ => -1.0,
         }
     }
@@ -136,7 +141,7 @@ impl Phase {
         match self {
             Self::Hidden => false,
             Self::Pulsing { until } => now < until,
-            Self::Held => true,
+            Self::Held | Self::HeldScrolled { .. } => true,
         }
     }
 }
@@ -147,12 +152,18 @@ pub(super) fn step(state: &mut BarState, event: Event) -> Effects<Effect> {
         Event::Follow(f) => follow(state, f),
         Event::Hold => hold(state),
         Event::LetGo { pressed, revealed, area_reveals, now, hold } => {
-            let BarState::Overlay { glide, .. } = *state else { return Effects::none() };
+            let BarState::Overlay { phase: prev_phase, glide } = *state else { return Effects::none() };
             if pressed || revealed {
                 return Effects::none();
             }
             let (phase, opacity) = if area_reveals {
-                (Phase::Hidden, Opacity::Set(0.0))
+                match prev_phase {
+                    Phase::HeldScrolled { hold_until } if now < hold_until => {
+                        let remaining = Duration::from_secs_f64((hold_until - now).max(0.0));
+                        (Phase::Pulsing { until: hold_until + FADE_TAIL }, Opacity::Pulse { hold: remaining })
+                    }
+                    _ => (Phase::Hidden, Opacity::Set(0.0)),
+                }
             } else {
                 (Phase::Pulsing { until: now + (hold.as_secs_f64() + FADE_TAIL) }, Opacity::Pulse { hold })
             };
@@ -165,8 +176,13 @@ pub(super) fn step(state: &mut BarState, event: Event) -> Effects<Effect> {
 /// The pointer at its edge, over its target or holding it: an overlay stays up.
 fn hold(state: &mut BarState) -> Effects<Effect> {
     match *state {
-        BarState::Overlay { glide, .. } => {
-            *state = BarState::Overlay { phase: Phase::Held, glide };
+        BarState::Overlay { phase, glide } => {
+            let next = match phase {
+                Phase::Pulsing { until } => Phase::HeldScrolled { hold_until: until - FADE_TAIL },
+                Phase::HeldScrolled { hold_until } => Phase::HeldScrolled { hold_until },
+                Phase::Hidden | Phase::Held => Phase::Held,
+            };
+            *state = BarState::Overlay { phase: next, glide };
             Effects::one(Effect::Opacity(Opacity::Set(1.0)))
         }
         _ => Effects::none(),
@@ -208,7 +224,20 @@ fn follow(state: &mut BarState, f: Follow) -> Effects<Effect> {
     }
 
     if f.pressed || f.revealed {
-        *state = BarState::Overlay { phase: Phase::Held, glide };
+        let phase = if f.scrolled && !f.instant {
+            Phase::HeldScrolled { hold_until: f.now + f.hold.as_secs_f64() }
+        } else {
+            match prev {
+                BarState::Overlay { phase: Phase::HeldScrolled { hold_until }, .. } if f.now < hold_until => {
+                    Phase::HeldScrolled { hold_until }
+                }
+                BarState::Overlay { phase: Phase::Pulsing { until }, .. } if f.now < until - FADE_TAIL => {
+                    Phase::HeldScrolled { hold_until: until - FADE_TAIL }
+                }
+                _ => Phase::Held,
+            }
+        };
+        *state = BarState::Overlay { phase, glide };
         effects.push(Effect::Opacity(Opacity::Set(1.0)));
         return effects;
     }
