@@ -102,6 +102,13 @@ impl Press {
         (self.attach.press)(&mut el, self.cb.clone(), self.key.clone(), fields.into());
         el
     }
+
+    /// Runs the function now, as a `press` of the node with `fields` added to its event: for
+    /// input the host node takes itself, such as a key its element handles (`El::on_key`), where
+    /// there is no press to attach to.
+    pub fn run<S: 'static>(&self, s: &mut S, tx: &mut rune::Tx, fields: Vec<(&'static str, Data)>) {
+        super::run_press(s, tx, &self.cb, self.key.as_deref(), &fields.into());
+    }
 }
 
 impl NodeArgs {

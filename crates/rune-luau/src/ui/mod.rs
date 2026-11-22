@@ -202,13 +202,17 @@ pub(crate) fn attach<S: 'static>() -> &'static Attach {
 }
 
 fn press<S: 'static>(el: &mut El, cb: Rc<Callback>, key: Option<Rc<str>>, fields: Fields) {
-    el.set_on_press_tx(move |s: &mut S, tx| {
-        if let Some(script) = cb.script.upgrade() {
-            let mods = tx.mods();
-            let event = Event { fields: fields.clone(), ..Event::press(key.as_deref(), mods.shift, mods.alt, mods.cmd) };
-            script.around_write(s, Some(tx), |tx| script.handle(&cb, event, tx));
-        }
-    });
+    el.set_on_press_tx(move |s: &mut S, tx| run_press(s, tx, &cb, key.as_deref(), &fields));
+}
+
+/// Runs `cb` as a `press` of the node keyed `key`, with the modifier keys held now and `fields`
+/// added to its event.
+pub(crate) fn run_press<S: 'static>(s: &mut S, tx: &mut rune::Tx, cb: &Rc<Callback>, key: Option<&str>, fields: &Fields) {
+    if let Some(script) = cb.script.upgrade() {
+        let mods = tx.mods();
+        let event = Event { fields: fields.clone(), ..Event::press(key, mods.shift, mods.alt, mods.cmd) };
+        script.around_write(s, Some(tx), |tx| script.handle(cb, event, tx));
+    }
 }
 
 /// `onMiddlePress`: a middle click on the node (`El::on_middle_press`), as a `middle-press` event
