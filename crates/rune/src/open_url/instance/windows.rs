@@ -30,6 +30,14 @@ use super::handoff::{ACCEPTED, ANSWER_WITHIN, HANDED_WAIT, MAGIC, MAX_MESSAGE, Q
 const MAGIC_V1: &[u8] = b"rune-instance 1\0";
 /// Names tried before a launch runs unclaimed (each held by a process that doesn't answer).
 const GENERATIONS: u32 = 8;
+/// How long a launch waits for a running copy's answer after its first, quick ask
+/// (`ANSWER_WITHIN`) went unanswered: a copy that's alive is only slow (a loaded machine).
+const ANSWER_LIVE: Duration = Duration::from_secs(1);
+/// How long a launch keeps handing itself to a running copy that's alive but doesn't answer
+/// before it takes it for hung and starts beside it on the next name, as before. While it
+/// waits, the person sees the pointer Windows shows for an app that's starting; then the
+/// running copy's window comes forward with what they clicked.
+const LIVE_WAIT: Duration = Duration::from_secs(5);
 
 /// The claimed name, and the listener's thread, for `release`.
 static CLAIMED: OnceLock<Vec<u16>> = OnceLock::new();
@@ -71,6 +79,8 @@ pub(super) fn claim(id: &str) -> bool {
     for generation in 0..GENERATIONS {
         let name = wide(&pipe_name(id, generation));
         let deadline = crate::time::now() + REACH_FOR;
+        // Set once a running copy that's alive doesn't answer in time.
+        let mut slow: Option<Instant> = None;
         loop {
             match create(&name) {
                 Ok(pipe) => return claimed(name, pipe),
@@ -85,7 +95,7 @@ pub(super) fn claim(id: &str) -> bool {
                 std::thread::sleep(Duration::from_millis(1));
                 continue;
             }
-            match send(&name) {
+            match send(&name, if slow.is_some() { ANSWER_LIVE } else { ANSWER_WITHIN }) {
                 Sent::Delivered => return false,
                 // It quits: the name is free once it has closed what it holds.
                 Sent::Quitting(server) => match wait_free(&name, server) {
@@ -98,7 +108,10 @@ pub(super) fn claim(id: &str) -> bool {
                 // The first process went between the two calls: claim the name again.
                 Sent::Gone if crate::time::now() < deadline => continue,
                 Sent::Gone => return true,
-                Sent::Nobody => break,
+                // Alive, and slow: asked again, never started beside, until `LIVE_WAIT` says
+                // it's hung. Each ask it didn't answer it also didn't act on (`listen`).
+                Sent::Busy if crate::time::now() < *slow.get_or_insert_with(|| crate::time::now() + LIVE_WAIT) => {}
+                Sent::Busy | Sent::Nobody => break,
             }
         }
     }
@@ -255,22 +268,36 @@ fn listen(pipe: HANDLE) {
             // call answers ERROR_PIPE_CONNECTED.
             let connected = unsafe { ConnectNamedPipe(pipe, std::ptr::null_mut()) } != 0 || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
             if connected && let Some(launch) = read(pipe) {
+                hold();
                 let quitting = crate::quit::quitting();
-                if launch.answers {
+                // A launch that waits for its answer is acted on only once it has read it: one
+                // that gave up first (the flush fails once it closes its end) asks again, and
+                // that ask is the one acted on, so a click opens once.
+                let told = !launch.answers || {
                     let answer = [if quitting { QUITTING } else { ACCEPTED }];
                     let mut written = 0;
                     // SAFETY: one byte from `answer` to the connected client; the flush waits
                     // for the client to read it (or to close), so the disconnect below
-                    // doesn't discard it.
-                    unsafe {
-                        WriteFile(pipe, answer.as_ptr(), 1, &mut written, std::ptr::null_mut());
-                        FlushFileBuffers(pipe);
+                    // doesn't discard it. The error is read right after the call that failed.
+                    let (wrote, flushed) = unsafe {
+                        let wrote = WriteFile(pipe, answer.as_ptr(), 1, &mut written, std::ptr::null_mut()) != 0 && written == 1;
+                        let wrote_error = GetLastError();
+                        let flushed = wrote && FlushFileBuffers(pipe) != 0;
+                        (if wrote { Ok(()) } else { Err(wrote_error) }, if flushed || !wrote { Ok(()) } else { Err(GetLastError()) })
+                    };
+                    if let Err(e) = wrote.and(flushed) {
+                        eprintln!("rune-instance: a launch gave up before it read its answer ({} failed, error {e}); not acted on", if wrote.is_err() { "write" } else { "flush" });
                     }
-                }
+                    wrote.is_ok() && flushed.is_ok()
+                };
                 // A launch told the app quits claims the instance itself; one that couldn't
                 // be told (an older sender) is started again once this process exits.
-                if !(quitting && launch.answers) {
-                    relaunched(launch.args);
+                if told && !(quitting && launch.answers) {
+                    let acted = relaunched(launch.args);
+                    // Counted by the harness (no arguments: they may hold what the person typed).
+                    if HOLD.get().is_some_and(|ms| *ms > 0) {
+                        eprintln!("rune-instance: {}", if acted { "acted on a launch" } else { "a launch asked again after it was acted on; skipped" });
+                    }
                 }
             }
             // SAFETY: ends this client's connection, so the next can connect.
@@ -288,6 +315,19 @@ fn listen(pipe: HANDLE) {
         Err(_) => unsafe {
             CloseHandle(pipe as HANDLE);
         },
+    }
+}
+
+/// A harness's stand-in for a busy machine: `RUNE_INSTANCE_HOLD_MS` holds each launch that long
+/// before it's answered. Only under `RUNE_DIRS_ROOT`, a scratch run's.
+static HOLD: OnceLock<u64> = OnceLock::new();
+
+fn hold() {
+    let ms = *HOLD.get_or_init(|| {
+        rune_core::env::var("RUNE_DIRS_ROOT").and(rune_core::env::var("RUNE_INSTANCE_HOLD_MS")).and_then(|v| v.parse().ok()).unwrap_or(0)
+    });
+    if ms > 0 {
+        std::thread::sleep(Duration::from_millis(ms));
     }
 }
 
@@ -338,15 +378,18 @@ enum Sent {
     Quitting(u32),
     /// No process has the name now.
     Gone,
-    /// A process has the name and doesn't answer (killed and still being torn down, or hung):
-    /// nobody is there to take the launch.
+    /// A process has the name and doesn't answer (killed and still being torn down, or gone
+    /// with an inherited handle left): nobody is there to take the launch.
     Nobody,
+    /// A running process has the name and didn't answer in time (or talks to another launch):
+    /// slow, or hung.
+    Busy,
 }
 
 /// Sends this launch's arguments to the process that has the pipe and waits, at most
-/// `ANSWER_WITHIN`, for its answer.
-fn send(name: &[u16]) -> Sent {
-    let deadline = crate::time::now() + ANSWER_WITHIN;
+/// `within`, for its answer.
+fn send(name: &[u16], within: Duration) -> Sent {
+    let deadline = crate::time::now() + within;
     let left = || u32::try_from(deadline.saturating_duration_since(crate::time::now()).as_millis()).unwrap_or(u32::MAX);
     let pipe = loop {
         // SAFETY: `name` is NUL-terminated; opens the pipe's client end, overlapped so the
@@ -363,6 +406,8 @@ fn send(name: &[u16]) -> Sent {
             ERROR_PIPE_BUSY if left() > 0 => unsafe {
                 WaitNamedPipeW(name.as_ptr(), left());
             },
+            // Still talking to another launch.
+            ERROR_PIPE_BUSY => return Sent::Busy,
             _ => return Sent::Nobody,
         }
     };
@@ -409,12 +454,15 @@ fn send(name: &[u16]) -> Sent {
     match (answered, answer[0]) {
         (Some(1), ACCEPTED) => Sent::Delivered,
         (Some(1), QUITTING) => Sent::Quitting(server),
+        // It's alive (checked above) and didn't answer in time.
+        _ if server != 0 => Sent::Busy,
         _ => Sent::Nobody,
     }
 }
 
 /// One overlapped read or write on `pipe`, waited for until `deadline`: the bytes it moved, or
-/// none when it failed or didn't finish in time (then it's cancelled).
+/// none when it failed. One that didn't finish in time is cancelled, but if it completed as the
+/// wait ran out, what it moved counts: an answer read is an answer the other end saw taken.
 fn io(pipe: HANDLE, deadline: Instant, start: impl FnOnce(*mut OVERLAPPED) -> i32) -> Option<u32> {
     // SAFETY: a manual-reset event, unnamed; closed once below.
     let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
@@ -436,7 +484,7 @@ fn io(pipe: HANDLE, deadline: Instant, start: impl FnOnce(*mut OVERLAPPED) -> i3
         let mut n = 0;
         let ok = started && GetOverlappedResult(pipe, &o, &mut n, 1) != 0;
         CloseHandle(event);
-        (finished && ok).then_some(n)
+        ok.then_some(n)
     }
 }
 
