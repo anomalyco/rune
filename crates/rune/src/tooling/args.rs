@@ -222,6 +222,8 @@ impl Args {
         if a.whole_window && (a.playground.is_none() || a.snap.is_none()) { die("--whole-window needs --playground and --snap"); }
         if a.cpu_boot.is_some() && a.snap.is_none() { die("--cpu-boot needs --snap"); }
         if a.window_script.is_some() && a.headless() { die("--window-script replays in a real window: it does not combine with a headless run (--script, --snap, --tree, ...)"); }
+        // Parsed here, before any window opens: an unreadable or malformed file ends the run now.
+        if a.window_script.is_some() { super::read_window_script(&a); }
         (a, extra)
     }
 
@@ -240,6 +242,20 @@ impl Args {
             || self.list_windows
             || self.desktop.is_some()
     }
+}
+
+/// `args` without `--window-script FILE` (or `--window-script=FILE`): an app started again
+/// (`Tx::relaunch`, an updater's restart) must take the real pointer, not replay the script from
+/// its start. Everything else stays, in order.
+pub(crate) fn without_window_script(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut it = args.into_iter();
+    while let Some(a) = it.next() {
+        if a == "--window-script" { it.next(); continue; }
+        if a.to_str().is_some_and(|a| a.starts_with("--window-script=")) { continue; }
+        out.push(a);
+    }
+    out
 }
 
 /// Whether this process runs headless: its arguments ask for an offscreen render, a scripted
@@ -304,8 +320,15 @@ const HELP: &str = "usage: <app> [window]
                         and run on_ready after the first frame, as a window does
   --window-script FILE.json   a real window replays the script's input on the wall clock from its
                         first drawn frame (the same events --script takes) and ignores the
-                        system's pointer while it does; prints \"rune-mark NAME T\", then
-                        \"rune-script-done T\", or \"rune-script-error T WHY\" and stops replaying
+                        system's pointer while it does: the --window KEY window, else the first;
+                        prints \"rune-script-window KEY\", \"rune-mark NAME T ELAPSED\", then
+                        \"rune-script-done T ELAPSED\", or \"rune-script-error T ELAPSED WHY\" and
+                        stops replaying (also when no frame is drawn within 10 s); a relaunch
+                        drops it. It cannot show: the system's pointer messages (WM_MOUSEMOVE,
+                        WM_MOUSEWHEEL) and their DPI and delta scaling, the system cursor and the
+                        system's own hover tracking, the custom caption buttons, overlay windows,
+                        the low-level mouse hook and press_point, or an engine's native windows
+                        (its dialogs, DevTools)
   --first-pixels        report when the first GPU-complete offscreen pixels are readable
   --window KEY         select a window for headless tools (run_windows, App::window)
   --list-windows       list window keys using a deterministic virtual display

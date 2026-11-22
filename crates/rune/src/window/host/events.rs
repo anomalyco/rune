@@ -215,7 +215,7 @@ impl Host {
             return;
         }
         // A window replaying `--window-script` takes its pointer from the script alone.
-        if self.window_script.is_some() && super::window_script::is_system_pointer(&event) {
+        if super::window_script::drops(self.window_script.is_some(), &event) {
             return;
         }
         self.a11y_window_event(&event);

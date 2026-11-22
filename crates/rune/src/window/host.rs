@@ -336,10 +336,13 @@ impl Host {
         let present_log = args.trace.as_ref().map(|_| Arc::default());
         let has_comp = app.has_compositor();
         let meter = SurfaceMeter::new(native_handle.key(), native_handle.native.stats.clone());
-        // One window replays: the one `--window` names, else `main`.
-        let window_script = (native_handle.key() == args.window.as_deref().unwrap_or("main"))
-            .then(|| crate::tooling::read_window_script(&args).map(window_script::WindowScript::new))
-            .flatten();
+        // One window replays: the one `--window` names, else the first window the app opens.
+        let replays = args.window_script.is_some() && match args.window.as_deref() {
+            Some(key) => native_handle.key() == key,
+            None => window_script::claim_first(),
+        };
+        let window_script = replays.then(|| crate::tooling::read_window_script(&args).map(|events| window_script::WindowScript::new(events, crate::time::now()))).flatten();
+        if replays { println!("rune-script-window {}", native_handle.key()); }
         {
             let rt = app.rt_mut();
             rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());

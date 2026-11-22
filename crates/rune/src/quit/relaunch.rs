@@ -20,7 +20,7 @@ const WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 /// is quitting either way.
 pub(crate) fn spawn() {
     #[cfg(not(target_arch = "wasm32"))]
-    if let Err(e) = start(std::env::args_os().skip(1).collect(), AFTER) {
+    if let Err(e) = start(crate::tooling::without_window_script(std::env::args_os().skip(1).collect()), AFTER) {
         eprintln!("rune: couldn't start the app again: {e}");
     }
 }
