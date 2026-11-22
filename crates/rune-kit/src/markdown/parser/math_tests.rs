@@ -171,3 +171,117 @@ fn inline_math_maps_to_its_source() {
     let at = p.text.find('$').unwrap();
     assert!(m.0.iter().any(|(s, o)| s.contains(&src.find('$').unwrap()) && o.contains(&at)), "{m:?}");
 }
+
+/// `scan` and `paren_at` as they were before the one-pass change (#1350), kept to check that
+/// the change finds exactly the same math.
+fn scan_before(src: &str, run: Range<usize>, opaque: &[Range<usize>], out: &mut Vec<Range<usize>>) {
+    fn paren_at_before(s: &[u8], i: usize, end: usize) -> Option<usize> {
+        let mut j = i + 2;
+        while j < end {
+            match s[j] {
+                b'\n' => return None,
+                b'\\' if s.get(j + 1) == Some(&b')') => return s[i + 2..j].iter().any(|c| !c.is_ascii_whitespace()).then_some(j + 2),
+                b'\\' => j += 2,
+                _ => j += 1,
+            }
+        }
+        None
+    }
+    let s = src.as_bytes();
+    let end = run.end.min(s.len());
+    let mut i = run.start;
+    while i < end {
+        if let Some(o) = opaque.iter().find(|o| o.start <= i && i < o.end) {
+            i = o.end;
+            continue;
+        }
+        if i == run.start && escaped(s, i) {
+            i += 1;
+            continue;
+        }
+        let found = match s[i] {
+            b'\\' if s.get(i + 1) == Some(&b'(') => paren_at_before(s, i, end),
+            b'\\' => {
+                i += if s.get(i + 1).is_some_and(u8::is_ascii_punctuation) { 2 } else { 1 };
+                continue;
+            }
+            b'$' if s.get(i + 1) == Some(&b'$') => display_at(s, i, end),
+            b'$' => inline_at(s, i, end),
+            _ => None,
+        };
+        match found {
+            Some(e) if !opaque.iter().any(|o| o.start < e && i < o.end) => {
+                out.push(i..e);
+                i = e;
+            }
+            _ if s[i] == b'$' => i += s[i..end].iter().take_while(|&&c| c == b'$').count(),
+            _ => i += 1,
+        }
+    }
+}
+
+#[test]
+fn the_one_pass_scan_finds_what_the_old_scan_found() {
+    let alphabet = b"\\\\\\(()$$ a1\n`x";
+    let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut next = move |n: usize| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed % n as u64) as usize
+    };
+    for _ in 0..3000 {
+        let len = next(160) + 1;
+        let src: String = (0..len).map(|_| alphabet[next(alphabet.len())] as char).collect();
+        // Code spans, raw HTML and autolinks: in source order, never overlapping.
+        let mut opaque = Vec::new();
+        let mut at = 0;
+        loop {
+            let start = at + next(14);
+            let stop = start + next(7) + 1;
+            if stop > len {
+                break;
+            }
+            opaque.push(start..stop);
+            at = stop;
+        }
+        let run = next(len)..len;
+        let (mut now, mut before) = (Vec::new(), Vec::new());
+        scan(&src, run.clone(), &opaque, &mut now);
+        scan_before(&src, run, &opaque, &mut before);
+        assert_eq!(now, before, "{src:?} {opaque:?}");
+    }
+}
+
+#[test]
+fn many_code_spans_and_long_lines_keep_their_math() {
+    // Prices stay text among code spans; a `$…$` inside a code span is code; real math is math.
+    assert_eq!(maths("It costs $5 today, `x` and $7 tomorrow, `$y$` is code, $12 later; $x^2$ is math."), ["$x^2$"]);
+    // A thousand code spans with one `$PATH`, and math between them.
+    let mut many = String::from("Add it to your $PATH first.\n\n");
+    for k in 0..1000 {
+        many.push_str(&format!("- call `f_{k}($a$)` then \\(a_{k}\\) done.\n"));
+    }
+    let expected: Vec<String> = (0..1000).map(|k| format!("\\(a_{k}\\)")).collect();
+    assert_eq!(maths(&many), expected);
+    // A line of `\(` that never closes, a line where only a later one closes, then a closed one.
+    // (A paragraph's text starts after an escape's backslash, so its first `\(` opens nothing.)
+    let src = format!("{}\n\n\\( \\( b \\) and \\( \\)\n\nthen \\(x\\) here", "\\( ".repeat(1000));
+    assert_eq!(maths(&src), ["\\( b \\)", "\\(x\\)"]);
+}
+
+#[test]
+fn a_mebibyte_of_code_spans_or_open_parens_scans_in_one_pass() {
+    // Before #1350's follow-up these took seconds (release) to minutes (debug).
+    let mut spans = String::from("Set $HOME first.\n\n");
+    let mut k = 0;
+    while spans.len() < 1 << 20 {
+        spans.push_str(&format!("- item {k}: call `fn_{k}(arg)` and keep going with prose here.\n"));
+        k += 1;
+    }
+    let parens = "\\( ".repeat((1 << 20) / 3);
+    let t = std::time::Instant::now();
+    assert!(maths(&spans).is_empty());
+    assert!(maths(&parens).is_empty());
+    assert!(t.elapsed() < std::time::Duration::from_secs(30), "{:?}", t.elapsed());
+}
