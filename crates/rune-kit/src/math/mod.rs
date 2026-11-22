@@ -26,6 +26,9 @@ mod wasm_hash;
 mod web_worker;
 mod wire;
 
+#[cfg(test)]
+mod inline_tests;
+
 #[cfg(not(target_arch = "wasm32"))]
 use sandbox::MAX_INPUT_BYTES;
 #[cfg(target_arch = "wasm32")]
