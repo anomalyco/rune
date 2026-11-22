@@ -293,11 +293,11 @@ fn listen(pipe: HANDLE) {
                 // A launch told the app quits claims the instance itself; one that couldn't
                 // be told (an older sender) is started again once this process exits.
                 if told && !(quitting && launch.answers) {
+                    let acted = relaunched(launch.args);
                     // Counted by the harness (no arguments: they may hold what the person typed).
                     if HOLD.get().is_some_and(|ms| *ms > 0) {
-                        eprintln!("rune-instance: acted on a launch");
+                        eprintln!("rune-instance: {}", if acted { "acted on a launch" } else { "a launch asked again after it was acted on; skipped" });
                     }
-                    relaunched(launch.args);
                 }
             }
             // SAFETY: ends this client's connection, so the next can connect.
