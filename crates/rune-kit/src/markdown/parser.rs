@@ -5,6 +5,8 @@ use super::*;
 
 mod builder;
 mod map;
+#[cfg(feature = "math")]
+mod math;
 mod table;
 
 use builder::{
@@ -102,6 +104,8 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
     let opts = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS;
     let mut events = super::interrupt::list_interrupts(src, Parser::new_ext(src, opts).into_offset_iter());
     let mut skip: Option<SkipMode> = None;
+    #[cfg(feature = "math")]
+    let mut math = math::Math::find(src, opts);
     while let Some((ev, range)) = events.next() {
         if let Some(mode) = &mut skip {
             match (mode, &ev) {
@@ -174,6 +178,10 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
             Event::Start(Tag::Table(_)) | Event::Rule => Tail::None,
             _ => b.tail,
         };
+        #[cfg(feature = "math")]
+        if b.code.is_none() && math.claim(&mut b, src, &ev, &range) {
+            continue;
+        }
         match ev {
             Event::Start(tag) => match tag {
                 Tag::Paragraph => {
