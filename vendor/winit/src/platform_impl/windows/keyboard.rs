@@ -207,7 +207,11 @@ impl KeyEventBuilder {
                     let pending_token = self.pending.add_pending();
                     *result = ProcResult::Value(0);
                     if let Some(ev_info) = event_info.as_mut() {
-                        append_wparam_utf16(wparam, &mut ev_info.utf16parts);
+                        // Rune: `TranslateMessage` adds `WM_CHAR(0)` after a VK_PACKET key-down
+                        // that carries no packet (one a program posted): it is not the packet's text.
+                        if !(wparam == 0 && ev_info.vkey == VK_PACKET) {
+                            append_wparam_utf16(wparam, &mut ev_info.utf16parts);
+                        }
                     }
                     // It's important that we unlock the mutex, and create the pending event token
                     // before calling `next_msg`
@@ -703,8 +707,12 @@ fn resolve_surrogates(pending: &mut Option<u16>, units: &mut Vec<u16>) -> bool {
 /// waits in `pending` for its low half; a lone half is dropped, never inserted. Control
 /// characters (Backspace, Enter, Escape, DEL, …) are not text: they act only as keys. While an
 /// input method's composition is open its result arrives as `Ime::Commit`, so a stray `WM_CHAR`
-/// then would type the text twice: it is dropped.
+/// then would type the text twice: it is dropped. A NUL (the `WM_CHAR(0)` that `TranslateMessage`
+/// adds after a posted VK_PACKET key-down) changes nothing, not even a waiting high surrogate.
 fn bare_char_text(pending: &mut Option<u16>, wparam: WPARAM, ime_composing: bool) -> Option<String> {
+    if wparam == 0 {
+        return None;
+    }
     if ime_composing {
         *pending = None;
         return None;
@@ -769,6 +777,13 @@ mod rune_bare_char_tests {
         assert_eq!(feed(&[0xde00], false), [NONE]);
         // Two high halves: the first is dropped, the second pairs with the low half.
         assert_eq!(feed(&[0xd83d, 0xd83d, 0xde00], false), [NONE, NONE, s("😀")]);
+    }
+
+    #[test]
+    fn a_nul_between_the_halves_neither_types_nor_breaks_the_pair() {
+        // `TranslateMessage` adds `WM_CHAR(0)` after a posted VK_PACKET key-down.
+        assert_eq!(feed(&[0xd83d, 0x00, 0xde00], false), [NONE, NONE, s("😀")]);
+        assert_eq!(feed(&[0x00, 0x61, 0x00], false), [NONE, s("a"), NONE]);
     }
 
     #[test]

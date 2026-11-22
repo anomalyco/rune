@@ -645,7 +645,7 @@ index a3a7705d..c3980673 100644
          return None;
      }
 diff --git a/src/platform_impl/windows/keyboard.rs b/src/platform_impl/windows/keyboard.rs
-index 9c109490..64ec42a5 100644
+index 9c109490..cd8c32f0 100644
 --- a/src/platform_impl/windows/keyboard.rs
 +++ b/src/platform_impl/windows/keyboard.rs
 @@ -14,8 +14,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -713,7 +713,7 @@ index 9c109490..64ec42a5 100644
                      let pending_token = self.pending.add_pending();
                      *result = ProcResult::Value(0);
  
-@@ -168,41 +183,31 @@ impl KeyEventBuilder {
+@@ -168,40 +183,34 @@ impl KeyEventBuilder {
                  WM_CHAR | WM_SYSCHAR => {
                      let mut event_info = self.event_info.lock().unwrap();
                      if event_info.is_none() {
@@ -771,13 +771,15 @@ index 9c109490..64ec42a5 100644
 -                            let encode_len = ch.encode_utf16(&mut utf16parts[start_offset..]).len();
 -                            let new_size = start_offset + encode_len;
 -                            utf16parts.resize(new_size, 0);
--                        }
 +                    if let Some(ev_info) = event_info.as_mut() {
-+                        append_wparam_utf16(wparam, &mut ev_info.utf16parts);
++                        // Rune: `TranslateMessage` adds `WM_CHAR(0)` after a VK_PACKET key-down
++                        // that carries no packet (one a program posted): it is not the packet's text.
++                        if !(wparam == 0 && ev_info.vkey == VK_PACKET) {
++                            append_wparam_utf16(wparam, &mut ev_info.utf16parts);
+                         }
                      }
                      // It's important that we unlock the mutex, and create the pending event token
-                     // before calling `next_msg`
-@@ -224,6 +229,14 @@ impl KeyEventBuilder {
+@@ -224,6 +233,14 @@ impl KeyEventBuilder {
                                  return MatchResult::TokenToRemove(pending_token);
                              },
                          };
@@ -792,7 +794,7 @@ index 9c109490..64ec42a5 100644
                          let mut layouts = LAYOUT_CACHE.lock().unwrap();
                          // It's okay to call `ToUnicode` here, because at this point the dead key
                          // is already consumed by the character.
-@@ -238,10 +251,11 @@ impl KeyEventBuilder {
+@@ -238,10 +255,11 @@ impl KeyEventBuilder {
                              mod_state.contains(WindowsModifiers::CONTROL)
                          };
  
@@ -808,7 +810,7 @@ index 9c109490..64ec42a5 100644
                              event_info.text = PartialText::System(event_info.utf16parts.clone());
                          } else {
                              let mod_no_ctrl = mod_state.remove_only_ctrl();
-@@ -510,7 +524,14 @@ impl PartialKeyEventInfo {
+@@ -510,7 +528,14 @@ impl PartialKeyEventInfo {
          } else {
              new_ex_scancode(lparam_struct.scancode, lparam_struct.extended)
          };
@@ -824,7 +826,7 @@ index 9c109490..64ec42a5 100644
          let location = get_location(scancode, layout.hkl as HKL);
  
          let kbd_state = get_kbd_state();
-@@ -541,9 +562,11 @@ impl PartialKeyEventInfo {
+@@ -541,9 +566,11 @@ impl PartialKeyEventInfo {
  
          let logical_key = if let Some(key) = code_as_key.clone() {
              PartialLogicalKey::This(key)
@@ -838,7 +840,7 @@ index 9c109490..64ec42a5 100644
              PartialLogicalKey::TextOr(preliminary_logical_key)
          } else {
              PartialLogicalKey::This(preliminary_logical_key)
-@@ -612,7 +635,12 @@ impl PartialKeyEventInfo {
+@@ -612,7 +639,12 @@ impl PartialKeyEventInfo {
          let logical_key = match self.logical_key {
              PartialLogicalKey::TextOr(fallback) => match text.as_ref() {
                  Some(s) => {
@@ -852,7 +854,7 @@ index 9c109490..64ec42a5 100644
                          fallback
                      } else {
                          Key::Character(s.clone())
-@@ -638,6 +666,134 @@ impl PartialKeyEventInfo {
+@@ -638,6 +670,145 @@ impl PartialKeyEventInfo {
      }
  }
  
@@ -893,8 +895,12 @@ index 9c109490..64ec42a5 100644
 +/// waits in `pending` for its low half; a lone half is dropped, never inserted. Control
 +/// characters (Backspace, Enter, Escape, DEL, …) are not text: they act only as keys. While an
 +/// input method's composition is open its result arrives as `Ime::Commit`, so a stray `WM_CHAR`
-+/// then would type the text twice: it is dropped.
++/// then would type the text twice: it is dropped. A NUL (the `WM_CHAR(0)` that `TranslateMessage`
++/// adds after a posted VK_PACKET key-down) changes nothing, not even a waiting high surrogate.
 +fn bare_char_text(pending: &mut Option<u16>, wparam: WPARAM, ime_composing: bool) -> Option<String> {
++    if wparam == 0 {
++        return None;
++    }
 +    if ime_composing {
 +        *pending = None;
 +        return None;
@@ -959,6 +965,13 @@ index 9c109490..64ec42a5 100644
 +        assert_eq!(feed(&[0xde00], false), [NONE]);
 +        // Two high halves: the first is dropped, the second pairs with the low half.
 +        assert_eq!(feed(&[0xd83d, 0xd83d, 0xde00], false), [NONE, NONE, s("😀")]);
++    }
++
++    #[test]
++    fn a_nul_between_the_halves_neither_types_nor_breaks_the_pair() {
++        // `TranslateMessage` adds `WM_CHAR(0)` after a posted VK_PACKET key-down.
++        assert_eq!(feed(&[0xd83d, 0x00, 0xde00], false), [NONE, NONE, s("😀")]);
++        assert_eq!(feed(&[0x00, 0x61, 0x00], false), [NONE, s("a"), NONE]);
 +    }
 +
 +    #[test]
