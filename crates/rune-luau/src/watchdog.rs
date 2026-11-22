@@ -34,6 +34,38 @@ struct Deadline {
 thread_local! {
     static DEADLINE: Cell<Option<Deadline>> = const { Cell::new(None) };
     static TICKS: Cell<u32> = const { Cell::new(0) };
+    /// Proof only: the entry's start and the last safepoint (wall, thread CPU ns).
+    static ENTRY: Cell<Option<(Instant, f64)>> = const { Cell::new(None) };
+    static LAST: Cell<Option<(Instant, f64)>> = const { Cell::new(None) };
+}
+
+/// Proof only: `RUNE_LUAU_WALL_BUDGET=1` gives the old wall-clock budget (before this branch).
+fn wall_only() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("RUNE_LUAU_WALL_BUDGET").is_ok_and(|v| v == "1"))
+}
+
+/// Proof only: `RUNE_LUAU_GAP_MS=N` logs every stretch over N ms between two safepoints of one
+/// entry (a host call that blocked, a page fault, a wait for a CPU) with its wall and CPU time
+/// and the Luau stack where it ended.
+fn gap_ms() -> Option<f64> {
+    static MS: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
+    *MS.get_or_init(|| std::env::var("RUNE_LUAU_GAP_MS").ok().and_then(|v| v.parse().ok()))
+}
+
+fn clocks() -> (Instant, f64) {
+    (rune::time::now(), rune::thread_cpu_ns().unwrap_or(0.0))
+}
+
+fn stack(state: *mut ffi::lua_State) -> String {
+    // SAFETY: called at a safepoint on the VM's own thread; the trace is copied out at once.
+    let trace = unsafe { ffi::lua_debugtrace(state) };
+    if trace.is_null() {
+        return String::new();
+    }
+    // SAFETY: `lua_debugtrace` returns a NUL-terminated string in a static buffer.
+    let s = unsafe { std::ffi::CStr::from_ptr(trace) }.to_string_lossy();
+    s.lines().take(4).map(str::trim).collect::<Vec<_>>().join(" <- ")
 }
 
 /// Installs the interrupt on `lua`. It never yields and never calls back into Rust code that
@@ -48,8 +80,11 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
 pub(crate) fn arm(limit: Duration) -> Armed {
     let outer = DEADLINE.get().is_some();
     if !outer {
-        let cpu = rune::thread_cpu_ns().map(|now| now + limit.as_nanos() as f64);
-        let wall = rune::time::now() + if cpu.is_some() { limit * WALL_BACKSTOP } else { limit };
+        let at = clocks();
+        ENTRY.set(Some(at));
+        LAST.set(Some(at));
+        let cpu = if wall_only() { None } else { rune::thread_cpu_ns().map(|now| now + limit.as_nanos() as f64) };
+        let wall = at.0 + if cpu.is_some() { limit * WALL_BACKSTOP } else { limit };
         DEADLINE.set(Some(Deadline { cpu, wall }));
     }
     Armed(!outer)
@@ -61,6 +96,8 @@ impl Drop for Armed {
     fn drop(&mut self) {
         if self.0 {
             DEADLINE.set(None);
+            ENTRY.set(None);
+            LAST.set(None);
         }
     }
 }
@@ -74,6 +111,16 @@ unsafe extern "C-unwind" fn interrupt(state: *mut ffi::lua_State, gc: c_int) {
     if gc >= 0 {
         return;
     }
+    if let Some(limit) = gap_ms()
+        && let Some(last) = LAST.get()
+    {
+        let now = clocks();
+        let wall = now.0.saturating_duration_since(last.0).as_secs_f64() * 1e3;
+        if wall > limit {
+            eprintln!("luau-gap: {wall:.3} ms wall, {:.3} ms CPU between two safepoints, ending at {}", (now.1 - last.1) / 1e6, stack(state));
+        }
+        LAST.set(Some(now));
+    }
     let ticks = TICKS.get().wrapping_add(1);
     TICKS.set(ticks);
     if ticks & 255 != 0 {
@@ -82,6 +129,16 @@ unsafe extern "C-unwind" fn interrupt(state: *mut ffi::lua_State, gc: c_int) {
     // The deadline stays set past the first error, so a script that catches it with `pcall`
     // gets it again at the next check, until control is back in the host.
     if DEADLINE.get().is_some_and(spent) {
+        if let Some(entry) = ENTRY.get() {
+            let now = clocks();
+            eprintln!(
+                "luau-watchdog: {} after {:.3} ms wall, {:.3} ms CPU, at {}",
+                if wall_only() { "wall budget" } else { "cpu budget" },
+                now.0.saturating_duration_since(entry.0).as_secs_f64() * 1e3,
+                (now.1 - entry.1) / 1e6,
+                stack(state)
+            );
+        }
         // SAFETY: raised at a safepoint inside a protected call that this crate made; no Rust
         // frame with destructors lies between here and that call.
         unsafe { ffi::luaL_error(state, c"%s".as_ptr(), WATCHDOG_C.as_ptr()) }
