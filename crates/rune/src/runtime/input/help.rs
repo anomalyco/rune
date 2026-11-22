@@ -517,6 +517,15 @@ impl RuntimeCore {
         let w = rows.iter().map(|r| r.tw + r.keys_w).fold(0.0, f32::max) + 2.0 * pad_x;
         let h = rows.iter().map(|r| r.ch).sum::<f32>() + gaps + 2.0 * pad_y;
         let [below, over] = look.gap;
+        // On a line (`HelpLook::sit_on_line`), how far under its place the tooltip sits: the
+        // line's baseline less its first row's, where the row centres its words beside keycaps.
+        let drop = look.line.and_then(|strut| {
+            let first = rows.first().filter(|r| r.words)?;
+            let line = self.text.layout_rich(" ", &[], strut, s, None).lines().next()?.metrics().baseline;
+            let words = first.layout.lines().next()?.metrics().baseline;
+            let base = pad_y * s + ((first.ch - first.th) * 0.5 * s).round() + words;
+            Some(((line - base) / s).max(0.0))
+        }).unwrap_or(0.0);
         let (x, y) = match d.side {
             // Beside it, centred down it: right of it unless only the left has room, and the
             // other way round (`placement="right"` / `"left"`).
@@ -528,7 +537,7 @@ impl RuntimeCore {
                 (x, (e[1] + e[3] - h) * 0.5)
             }
             side => {
-                let mut y = e[3] + below;
+                let mut y = e[3] + below + drop;
                 if side == Some(crate::Side::Top) && e[1] - over - h >= margin {
                     y = e[1] - over - h;
                 } else if y + h > vh - margin && e[1] - below - h >= margin {

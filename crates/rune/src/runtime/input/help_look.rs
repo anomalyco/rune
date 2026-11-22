@@ -36,6 +36,8 @@ pub struct HelpLook {
     pub(crate) key: KeyCap,
     /// Points between two rows ([`El::help_row`](crate::El::help_row)).
     pub(crate) row_gap: f32,
+    /// The line of text the tooltip sits on (`HelpLook::sit_on_line`).
+    pub(crate) line: Option<TextStyle>,
 }
 
 /// How a tooltip draws its keycaps.
@@ -93,7 +95,17 @@ impl HelpLook {
                 upper: false,
             },
             row_gap: 4.0,
+            line: None,
         }
+    }
+    /// The tooltip sits on a line of `strut` text, as a web tooltip that is `display:
+    /// inline-flex` inside its positioner's block does: under its element it drops until its
+    /// first row's baseline meets the line's, never rising; over its element its bottom stays
+    /// where it was. `@opencode/ui`'s tooltip (`tooltip.css`) on a 13/24 line drops 2 pt with
+    /// text alone and 1 pt beside 14 pt keycaps.
+    pub fn sit_on_line(mut self, strut: TextStyle) -> Self {
+        self.line = Some(strut);
+        self
     }
     /// Points between two rows of a tooltip with [`El::help_row`](crate::El::help_row)s.
     pub fn row_gap(mut self, gap: f32) -> Self {

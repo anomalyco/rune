@@ -313,6 +313,8 @@ pub struct TooltipStyle {
     motion: Spring,
     /// A keybind's keys (`keybind-v2` neutral): their fill and label colour.
     keys: (Color, Color),
+    /// The positioner's line it sits on, for the `inline-flex` appearances (`tooltip.css`).
+    line: Option<TextStyle>,
 }
 
 impl TooltipStyle {
@@ -330,6 +332,8 @@ impl TooltipStyle {
             shadows: k.shadow_layers(&k.elevation.floating).collect(),
             motion: k.motion.overlay,
             keys: (c.layer_03, c.text_muted),
+            // The page's 13/24 line (`base.css` `html`, measured on the positioner).
+            line: Some(TextStyle { family: k.ty.small_medium.family, ..TextStyle::new(13.0, 400.0).lh(24.0) }),
         };
         match appearance {
             TooltipAppearance::Compact => base,
@@ -345,6 +349,8 @@ impl TooltipStyle {
                 font: k.ty.text_small_medium,
                 ink: c.text_invert_strong,
                 shadows: k.shadow_layers(&k.elevation.md).collect(),
+                // `display: block`: it doesn't sit on the positioner's line.
+                line: None,
                 ..base
             },
         }
@@ -411,11 +417,13 @@ impl TooltipStyle {
     /// 120 ms ease-out and out over 80 ms ease-in (`tooltip.css`). Its keycaps are `keybind-v2`'s
     /// neutral keys: 14 pt, 4 pt in, 2 pt corners and 2 pt apart, 6 pt after the text, their
     /// labels in uppercase 11/530. Rows ([`El::help_row`](rune::El::help_row)) stack 6 pt apart,
-    /// as a tooltip listing two commands does (`line-comment.tsx`, `flex-col gap-1.5`).
+    /// as a tooltip listing two commands does (`line-comment.tsx`, `flex-col gap-1.5`). Compact
+    /// and large sit on their positioner's 13/24 line (`display: inline-flex` in a block,
+    /// `tooltip.css`), so under its element one shows 1 or 2 pt lower than the 4 pt gap puts it.
     pub fn help_look(&self) -> rune::HelpLook {
         let (ring_w, ring) = self.border.unwrap_or((0.0, Color::TRANSPARENT));
         let key = TextStyle::new(11.0, 530.0).lh(11.0).tracking(0.05).features("'tnum' 1, 'lnum' 1");
-        rune::HelpLook::system(false)
+        let look = rune::HelpLook::system(false)
             .fill(self.fill)
             .ink(self.ink)
             .ring(ring_w, ring)
@@ -432,7 +440,11 @@ impl TooltipStyle {
             .fade(0.12, 0.08, 0.96)
             .keycaps(self.keys.0, self.keys.1, TextStyle { family: self.font.family, ..key }, true)
             .keycap_shape(14.0, 4.0, 2.0, 2.0, 6.0)
-            .row_gap(6.0)
+            .row_gap(6.0);
+        match self.line {
+            Some(line) => look.sit_on_line(line),
+            None => look,
+        }
     }
 }
 
