@@ -213,6 +213,7 @@ pub(crate) fn add_standard(app: &NSApplication) {
             menu.addItem(&entry);
         }
         system_edit_items(mtm, &top(mtm, &root, "Edit"));
+        system_window_items(mtm, &top(mtm, &root, "Window"));
         // AppKit's windows menu: it lists the app's windows and takes the items macOS adds there
         // (Fill, Center, Move & Resize, Full-Screen Tile), as Electron's `windowMenu` role does.
         if let Some(window) = (0..root.numberOfItems()).filter_map(|i| root.itemAtIndex(i)).find(|i| name(i) == "Window").and_then(|i| i.submenu()) {
@@ -238,6 +239,26 @@ unsafe fn system_edit_items(mtm: MainThreadMarker, edit: &NSMenu) {
     }
 }
 
+/// The Window menu's Zoom, after Minimize, and Bring All to Front at its end, as Electron's
+/// `windowMenu` role and AppKit's template give a Mac app; AppKit puts its tiling items after
+/// Zoom and its window list after the end. AppKit implements both actions. Each is skipped when
+/// the menu already has it.
+unsafe fn system_window_items(mtm: MainThreadMarker, window: &NSMenu) {
+    let items = || (0..window.numberOfItems()).filter_map(|i| window.itemAtIndex(i));
+    if !items().any(|i| i.action() == Some(sel!(performZoom:))) {
+        let zoom = item(mtm, &crate::labels::label(Label::Zoom), Some(sel!(performZoom:)), "");
+        zoom.setTag(SYSTEM);
+        let after = items().position(|i| i.action() == Some(sel!(performMiniaturize:))).map_or(0, |i| i + 1);
+        window.insertItem_atIndex(&zoom, after as isize);
+    }
+    if !items().any(|i| i.action() == Some(sel!(arrangeInFront:))) {
+        let front = item(mtm, &crate::labels::label(Label::BringAllToFront), Some(sel!(arrangeInFront:)), "");
+        for entry in [NSMenuItem::separatorItem(mtm), front] {
+            entry.setTag(SYSTEM);
+            window.addItem(&entry);
+        }
+    }
+}
 /// Moves the `system_edit_items` back to the end of the Edit menu after the app added its own.
 unsafe fn system_edit_last(edit: &NSMenu) {
     let items: Vec<_> = (0..edit.numberOfItems()).filter_map(|i| edit.itemAtIndex(i)).collect();
@@ -253,9 +274,12 @@ fn system_label(action: &str) -> Option<Label<'static>> {
     match action {
         "startDictation:" => Some(Label::StartDictation),
         "orderFrontCharacterPalette:" => Some(Label::EmojiAndSymbols),
+        "performZoom:" => Some(Label::Zoom),
+        "arrangeInFront:" => Some(Label::BringAllToFront),
         _ => None,
     }
 }
+
 /// Adds an app's own items in `add`: AppKit drops the key equivalent of an item added while
 /// the menu bar already has it, so the standard items let go of theirs first and take back
 /// only those no other item claims (`sync_standard`).
