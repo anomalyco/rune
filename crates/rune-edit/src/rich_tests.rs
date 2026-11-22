@@ -837,10 +837,13 @@ fn pill_edge_cases_words_lines_bidi_and_direct_text_mutation() {
     e.key(&alt_right, None);
     assert_eq!(e.range(), (5, 5));
     e.key(&alt_right, None);
-    // On macOS a word forward stops at the pill's end; elsewhere it skips trailing punctuation
-    // and spaces to the next pill's start.
-    let after_noah = if cfg!(target_os = "macos") { 10 } else { 12 };
-    assert_eq!(e.range(), (after_noah, after_noah));
+    // The comma after a pill is a stop of its own, as Chromium's punctuation is.
+    assert_eq!(e.range(), (10, 10));
+    e.key(&alt_right, None);
+    // On macOS a word forward ends at the comma's end; elsewhere it goes on past the space to
+    // the next pill's start.
+    let after_comma = if cfg!(target_os = "macos") { 11 } else { 12 };
+    assert_eq!(e.range(), (after_comma, after_comma));
     e.key(&alt_right, None);
     assert_eq!(e.range(), (21, 21), "steps over @Maya Lin as one word");
     e.set_caret(10);

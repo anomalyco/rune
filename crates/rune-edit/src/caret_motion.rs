@@ -28,10 +28,14 @@ impl Column {
     }
 }
 
-/// A word back and forward in the text's order, by Unicode's word boundaries (UAX #29), as
-/// browsers and Word step: `src/util/format.ts` stops at `src`, `util` and `format.ts`, a Persian
-/// word joined by a zero-width non-joiner (`می‌شود`) is one word, and punctuation and spaces
-/// between words are stepped over. A pill is one word.
+/// A word back and forward in the text's order, as Chromium steps on each platform: words by
+/// Unicode's word boundaries with the platform's dictionaries (`日本語` is one word) and
+/// Chromium's tailoring (`rune_text::segmenter::word_ends`: `foo.bar` is `foo`, `.`, `bar`), a run
+/// of punctuation is a stop of its own (`src/util/format.ts` stops at `src`, `/`, `util`, `/`,
+/// `format`, `.` and `ts`), and spaces are stepped over. A word back goes to the start of the
+/// word or punctuation before the caret. A word forward goes to its end on macOS; elsewhere past
+/// the spaces after it too, to the next word's start on the same line, as Ctrl+Right does. A pill
+/// is one word.
 impl TextEdit {
     pub(super) fn prev_word(&self, i: usize) -> usize {
         if self.is_masked() {
@@ -42,19 +46,24 @@ impl TextEdit {
             if let Some(start) = self.pill_before(j) {
                 return start;
             }
-            let Some((start, word)) = self.segment_before(j) else { return 0 };
-            if !word {
-                // A pill is one word: stepping back over the punctuation before it stops at
-                // its end, and the step after that takes the pill whole.
-                if self.pill_before(start).is_some() {
-                    return start;
+            let Some((start, run)) = self.run_before(j) else { return 0 };
+            match run {
+                // Spaces back to the line's start stop there, as Chromium's caret does.
+                Run::Space if self.line_start(start) == start && start > 0 => return start,
+                Run::Space | Run::Break => {
+                    // A pill is one word: stepping back over the spaces before it stops at its
+                    // end, and the step after that takes the pill whole.
+                    if self.pill_before(start).is_some() {
+                        return start;
+                    }
+                    j = start;
                 }
-                j = start;
-                continue;
+                Run::Word | Run::Punct => {
+                    // A word runs back to a pill's end at most.
+                    let pill_end = self.marks.iter().filter(|m| m.mark.is_pill() && start < m.end && m.end < j).map(|m| m.end).max();
+                    return pill_end.unwrap_or(start);
+                }
             }
-            // A word runs back to a pill's end at most.
-            let pill_end = self.marks.iter().filter(|m| m.mark.is_pill() && start < m.end && m.end < j).map(|m| m.end).max();
-            return pill_end.unwrap_or(start);
         }
     }
 
@@ -64,23 +73,21 @@ impl TextEdit {
         }
         let len = self.text.len();
         let mut j = i.min(len);
-        // Off macOS a word forward ends at the next word's start, past the spaces and
-        // punctuation after it, as Chromium's (and Windows') Ctrl+Right does; on macOS at the
-        // word's end.
         if !cfg!(target_os = "macos") {
             match self.pill_after(j) {
                 Some(end) => j = end,
-                None => {
-                    if let Some((end, true)) = self.segment_after(j) {
-                        j = self.clip_to_pill_start(j, end);
-                    }
-                }
+                None => match self.run_after(j) {
+                    Some((end, Run::Word | Run::Punct)) => j = self.clip_to_pill_start(j, end),
+                    // From spaces (or a line's end), the next word's start (or the next line's).
+                    Some((end, Run::Space | Run::Break)) => return end,
+                    None => return len,
+                },
             }
-            while j < len && self.pill_after(j).is_none() {
-                match self.segment_after(j) {
-                    Some((end, false)) => j = end,
-                    _ => break,
-                }
+            // Past the spaces after it when a word or pill follows on the line.
+            if let Some((end, Run::Space)) = self.run_after(j)
+                && (self.pill_after(end).is_some() || matches!(self.run_after(end), Some((_, Run::Word | Run::Punct))))
+            {
+                j = end;
             }
             return j;
         }
@@ -88,50 +95,86 @@ impl TextEdit {
             if let Some(end) = self.pill_after(j) {
                 return end;
             }
-            let Some((end, word)) = self.segment_after(j) else { return len };
-            if !word {
-                j = end;
-                continue;
+            let Some((end, run)) = self.run_after(j) else { return len };
+            match run {
+                Run::Space | Run::Break => j = end,
+                Run::Word | Run::Punct => return self.clip_to_pill_start(j, end),
             }
-            return self.clip_to_pill_start(j, end);
         }
     }
 
-    /// The word-boundary segment ending at byte `j` (UAX #29, within its line; a line break is a
-    /// segment of its own): its start, and whether it's a word (holds a letter or digit).
-    fn segment_before(&self, j: usize) -> Option<(usize, bool)> {
-        use unicode_segmentation::UnicodeSegmentation;
+    /// The run ending at byte `j` (a line break is a run of its own): its start, and what it is.
+    fn run_before(&self, j: usize) -> Option<(usize, Run)> {
         if j == 0 {
             return None;
         }
         let s = &self.text;
-        let line = s[..j].rfind('\n').map_or(0, |k| k + 1);
+        let line = self.line_start(j);
         if line == j {
-            return Some((prev_char(s, j), false));
+            return Some((prev_char(s, j), Run::Break));
         }
-        let (at, seg) = s[line..j].split_word_bound_indices().next_back()?;
-        Some((line + at, seg.chars().any(char::is_alphanumeric)))
+        let end = s[j..].find('\n').map_or(s.len(), |k| j + k);
+        let rel = j - line;
+        runs(&s[line..end]).into_iter().find(|r| r.0 < rel && rel <= r.1).map(|r| (line + r.0, r.2))
     }
 
-    /// The word-boundary segment starting at byte `j`: its end, and whether it's a word.
-    fn segment_after(&self, j: usize) -> Option<(usize, bool)> {
-        use unicode_segmentation::UnicodeSegmentation;
+    /// The run starting at or holding byte `j`: its end, and what it is.
+    fn run_after(&self, j: usize) -> Option<(usize, Run)> {
         let s = &self.text;
         if j >= s.len() {
             return None;
         }
-        let line = s[j..].find('\n').map_or(s.len(), |k| j + k);
-        if line == j {
-            return Some((next_char(s, j), false));
+        let end = s[j..].find('\n').map_or(s.len(), |k| j + k);
+        if end == j {
+            return Some((next_char(s, j), Run::Break));
         }
-        let seg = s[j..line].split_word_bounds().next()?;
-        Some((j + seg.len(), seg.chars().any(char::is_alphanumeric)))
+        let line = self.line_start(j);
+        let rel = j - line;
+        runs(&s[line..end]).into_iter().find(|r| r.0 <= rel && rel < r.1).map(|r| (line + r.1, r.2))
+    }
+
+    fn line_start(&self, j: usize) -> usize {
+        self.text[..j].rfind('\n').map_or(0, |k| k + 1)
     }
 
     /// `end`, or the start of a pill between `j` and it: a word runs up to a pill at most.
     fn clip_to_pill_start(&self, j: usize, end: usize) -> usize {
         self.marks.iter().filter(|m| m.mark.is_pill() && j < m.start && m.start < end).map(|m| m.start).min().unwrap_or(end)
     }
+}
+
+/// What a stretch of a line is to a word move.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Run {
+    /// Holds a letter, a digit or an underscore.
+    Word,
+    /// Punctuation or symbols, all of a run together (`()`, `--`, `🙂🙂`).
+    Punct,
+    Space,
+    /// A line break.
+    Break,
+}
+
+/// The runs of `line` (no line break in it), in order: (start, end, what).
+fn runs(line: &str) -> Vec<(usize, usize, Run)> {
+    let mut out: Vec<(usize, usize, Run)> = Vec::new();
+    let mut start = 0;
+    for end in rune_text::segmenter::word_ends(line) {
+        let seg = &line[start..end];
+        let run = if seg.chars().all(char::is_whitespace) {
+            Run::Space
+        } else if seg.chars().any(|c| c.is_alphanumeric() || c == '_') {
+            Run::Word
+        } else {
+            Run::Punct
+        };
+        match out.last_mut() {
+            Some(last) if last.2 == run && run != Run::Word => last.1 = end,
+            _ => out.push((start, end, run)),
+        }
+        start = end;
+    }
+    out
 }
 /// How the arrows move through a field's text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
