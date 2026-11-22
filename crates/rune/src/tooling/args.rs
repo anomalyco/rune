@@ -73,6 +73,11 @@ pub struct Args {
     /// harness's actions keep pace with its script. It stands in for a window, so `App::on_ready`
     /// runs after its first frame.
     pub(crate) realtime: bool,
+    /// `--window-script FILE`: a real window replays the script's input on the wall clock from
+    /// its first drawn frame, through the same `script_input` a headless run uses, and drops the
+    /// system's pointer events while it does (`window::host::window_script`). Tooling, like
+    /// `--script`: only a command-line argument turns it on.
+    pub(crate) window_script: Option<PathBuf>,
     /// `--cpu-boot DIR`: also paint the `--snap` frame on the CPU (`render::cpu_boot`), on
     /// `--cpu-boot-threads N` threads (6 by default).
     pub(crate) cpu_boot: Option<PathBuf>,
@@ -184,6 +189,7 @@ impl Args {
                 "--trace" => a.trace = Some(val(&mut i).into()),
                 "--native" => a.native = true,
                 "--realtime" => a.realtime = true,
+                "--window-script" => a.window_script = Some(val(&mut i).into()),
                 "--trace-all" => a.trace_all = true,
                 "--strip" => a.strip = Some(val(&mut i).into()),
                 "--crop" => {
@@ -215,6 +221,7 @@ impl Args {
         if a.crop_key.is_some() && a.snap.is_none() { die("--crop KEY needs --snap"); }
         if a.whole_window && (a.playground.is_none() || a.snap.is_none()) { die("--whole-window needs --playground and --snap"); }
         if a.cpu_boot.is_some() && a.snap.is_none() { die("--cpu-boot needs --snap"); }
+        if a.window_script.is_some() && a.headless() { die("--window-script replays in a real window: it does not combine with a headless run (--script, --snap, --tree, ...)"); }
         (a, extra)
     }
 
@@ -295,6 +302,10 @@ const HELP: &str = "usage: <app> [window]
   --realtime            headless: hold each frame until the wall clock reaches its time, and
                         print \"rune-mark NAME T\" as the script passes each mark,
                         and run on_ready after the first frame, as a window does
+  --window-script FILE.json   a real window replays the script's input on the wall clock from its
+                        first drawn frame (the same events --script takes) and ignores the
+                        system's pointer while it does; prints \"rune-mark NAME T\", then
+                        \"rune-script-done T\", or \"rune-script-error T WHY\" and stops replaying
   --first-pixels        report when the first GPU-complete offscreen pixels are readable
   --window KEY         select a window for headless tools (run_windows, App::window)
   --list-windows       list window keys using a deterministic virtual display

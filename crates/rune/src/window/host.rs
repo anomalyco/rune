@@ -29,6 +29,7 @@ pub(in crate::window) mod lifecycle;
 mod render;
 pub(in crate::window) mod shell_requests;
 pub(in crate::window) mod stepping;
+pub(in crate::window) mod window_script;
 
 #[cfg(test)]
 #[path = "host/frame_move_tests.rs"]
@@ -99,6 +100,8 @@ pub(in crate::window) struct Host {
     pub(in crate::window) trace: Option<crate::tooling::Trace>,
     pub(in crate::window) trace_start: Option<Instant>,
     pub(in crate::window) trace_frames: usize,
+    /// `--window-script`: the script this window replays (`window_script`).
+    pub(in crate::window) window_script: Option<window_script::WindowScript>,
     pub(in crate::window) meter: SurfaceMeter,
     pub(in crate::window) win: Option<Win>,
     pub(in crate::window) gpu: Option<(Arc<Gpu>, Renderer)>,
@@ -333,6 +336,10 @@ impl Host {
         let present_log = args.trace.as_ref().map(|_| Arc::default());
         let has_comp = app.has_compositor();
         let meter = SurfaceMeter::new(native_handle.key(), native_handle.native.stats.clone());
+        // One window replays: the one `--window` names, else `main`.
+        let window_script = (native_handle.key() == args.window.as_deref().unwrap_or("main"))
+            .then(|| crate::tooling::read_window_script(&args).map(window_script::WindowScript::new))
+            .flatten();
         {
             let rt = app.rt_mut();
             rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
@@ -349,7 +356,7 @@ impl Host {
             rt.transparent = options.transparent;
             rt.track_marks = has_comp;
             rt.wall_start = Some(crate::time::now());
-            rt.host.open_urls_natively = args.script.is_none() && args.trace.is_none() && args.frames.is_none();
+            rt.host.open_urls_natively = args.script.is_none() && args.window_script.is_none() && args.trace.is_none() && args.frames.is_none();
             rt.frame.set_record_events(false);
             rt.host.surface_stats = Some(meter.shared());
         }
@@ -410,6 +417,7 @@ impl Host {
             trace: None,
             trace_start: None,
             trace_frames: 0,
+            window_script,
             meter,
             #[cfg(target_os = "macos")]
             present_log,

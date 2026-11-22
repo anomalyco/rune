@@ -459,6 +459,8 @@ impl FrameHost for WindowFrame<'_> {
             }
             let now = *self.state.now.get_or_insert_with(crate::time::now);
             open_trace_if_needed(self.host, now);
+            // `--window-script` times its events from this, the window's first drawn frame.
+            if let Some(script) = &mut self.host.window_script { script.start(now); }
         }
         #[cfg(target_os = "macos")]
         if let Some(l) = self.host.win.as_ref() {

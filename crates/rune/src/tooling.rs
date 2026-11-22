@@ -441,6 +441,29 @@ pub(crate) fn script_input(
     true
 }
 
+/// Where a script event lands, in view points: a point over the view's zoom, an element's centre
+/// found when the event runs, the pointer for a wheel-like event without a point of its own, or
+/// an offset from the last press. The headless host and `--window-script` both land events here.
+pub(crate) fn script_point(rt: &RuntimeCore, e: &Ev, last_down: (f32, f32)) -> Result<(f32, f32), String> {
+    Ok(match &e.pos {
+        // A script's points are the window's; the view's are over its zoom.
+        Pos::Xy(x, y) => (*x / rt.zoom(), *y / rt.zoom()),
+        Pos::Key(key) => rt.find(key).ok_or_else(|| format!("no element with key {key:?}"))?,
+        Pos::Rel(_, _) if e.kind.at_pointer() => rt.pointer().unwrap_or((0.0, 0.0)),
+        Pos::Rel(dx, dy) => (last_down.0 + dx, last_down.1 + dy),
+    })
+}
+
+/// The `--window-script` file's events, parsed as `--script` parses its own. An unreadable or
+/// unparsable file ends the process before any window opens.
+pub(crate) fn read_window_script(args: &Args) -> Option<Vec<Ev>> {
+    args.window_script.as_ref().map(|path| {
+        let text = std::fs::read_to_string(path).unwrap_or_else(|e| die(&format!("{}: {e}", path.display())));
+        let value: Value = serde_json::from_str(&text).unwrap_or_else(|e| die(&format!("{}: {e}", path.display())));
+        load_script(&value)
+    })
+}
+
 /// The canvas input of a script (`canvas_input.rs`) at window point (x, y); false for any
 /// other kind.
 #[cfg(test)]

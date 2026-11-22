@@ -214,6 +214,10 @@ impl Host {
         if self.win.as_ref().is_none_or(|w| w.window.id() != id) {
             return;
         }
+        // A window replaying `--window-script` takes its pointer from the script alone.
+        if self.window_script.is_some() && super::window_script::is_system_pointer(&event) {
+            return;
+        }
         self.a11y_window_event(&event);
         // What says whether other windows cover it (`look`): the pointer reaching it shows some
         // of it; its own move, size or focus makes the next frame look.
