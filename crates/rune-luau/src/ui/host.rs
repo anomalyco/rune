@@ -278,11 +278,24 @@ unsafe fn build_from(state: *mut ffi::lua_State, el: El, tables: [c_int; 2], arg
                     iter = ffi::lua_rawiter(state, props_at, iter);
                     iter >= 0
                 } {
-                    let own = matches!(props::read(state, -2), Value::Str(k) if args.read().any(|u| u == k));
+                    let key = match props::read(state, -2) {
+                        Value::Str(k) => Some(k),
+                        _ => None,
+                    };
+                    let own = key.is_some_and(|k| args.read().any(|u| u == k));
+                    // Neither read by the build nor in the node's listed props.
+                    let unknown = |name: &str| !own && node.known.as_ref().is_some_and(|known| !known(name));
                     match props::key_atom(state, -2) {
-                        Ok(Atom::OnPress | Atom::OnHover | Atom::OnMiddlePress) => {}
+                        // The build attaches the handlers it takes; one it didn't read is unknown.
+                        Ok(Atom::OnPress | Atom::OnHover | Atom::OnMiddlePress) => {
+                            if let Some(k) = key
+                                && unknown(k)
+                            {
+                                super::unknown_prop(env, Some(&node.name), k)?;
+                            }
+                        }
                         Ok(atom) if !own => p.decode_at(el, state, atom, -1, env, false)?,
-                        Err(name) if !own && node.known.as_ref().is_some_and(|known| !known(name)) => super::unknown_prop(env, Some(&node.name), name)?,
+                        Err(name) if unknown(name) => super::unknown_prop(env, Some(&node.name), name)?,
                         _ => {}
                     }
                     ffi::lua_settop(state, -3);

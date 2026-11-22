@@ -610,7 +610,7 @@ impl Props {
             }
             // Read by the node that takes them; elsewhere they mean nothing.
             Atom::OnPress | Atom::OnHover | Atom::OnMiddlePress | Atom::Count | Atom::EstimatedRowHeight | Atom::Version | Atom::RenderRow | Atom::RowKey | Atom::RowVersions | Atom::OnVisibleRows => {
-                env.warn_once(format!("{name} has no effect on this node"));
+                super::unknown_prop(env, None, name)?;
             }
         }
         Ok(())

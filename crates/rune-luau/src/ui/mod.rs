@@ -72,7 +72,6 @@ pub(crate) struct Callback {
     pub(crate) script: Weak<Inner>,
 }
 
-/// What a render needs from its script.
 /// A prop a node doesn't have (a typo, or one wished for: `autofocus` on a button did nothing,
 /// rune-desktop #664): an error in debug builds, so it can't pass unseen, and a warning once per
 /// script in release, where the node still draws without it.
@@ -88,6 +87,7 @@ pub(crate) fn unknown_prop(env: &Env, node: Option<&str>, name: &str) -> Result<
     Ok(())
 }
 
+/// What a render needs from its script.
 pub(crate) struct Env {
     pub(crate) script: Weak<Inner>,
     pub(crate) vm: u64,
