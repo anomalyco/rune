@@ -171,6 +171,9 @@ pub(crate) struct Tracker {
     /// The last commit's memo-reused node ranges (start, len), while a frame is timed.
     pub reused: Vec<(usize, usize)>,
     sent: (Option<Instant>, u32),
+    /// The thread's CPU clock, raw, when the timed frame began: Windows reads it before it knows
+    /// the cycles' rate (the first 20 ms after the process first asks) and converts it once it does.
+    cpu_mark: Option<crate::frame::profile::ThreadCpuMark>,
 }
 
 
@@ -194,7 +197,17 @@ impl Tracker {
     /// A frame starts; `queued` when input waits for it. A built frame no host presented
     /// (a bare `Runtime`, a window that skipped drawing) ends at its build.
     pub(crate) fn frame_begins(&mut self, queued: bool) -> Option<Finished> {
-        self.begin_with(queued, slow_ms(), crate::time::now, crate::frame::profile::cpu_ms)
+        // The frame's CPU counts from 0 at a raw mark, converted when it is built: a reading in
+        // milliseconds would be `None` until Windows knows the cycles' rate, and so would the frame's.
+        // A second begin while a frame is open keeps that frame's mark, as it keeps its start.
+        let keep = matches!(self.frame, Frame::Open { .. });
+        let mark = std::cell::Cell::new(None);
+        let finished = self.begin_with(queued, slow_ms(), crate::time::now, || {
+            mark.set(crate::frame::profile::thread_cpu_mark());
+            mark.get().map(|_| 0.0)
+        });
+        if !keep { self.cpu_mark = mark.get(); }
+        finished
     }
 
     fn begin_with(&mut self, queued: bool, slow_ms: f64, now: impl FnOnce() -> Instant, cpu: impl FnOnce() -> Option<f64>) -> Option<Finished> {
@@ -231,7 +244,10 @@ impl Tracker {
     /// The frame, of `nodes` nodes, is built; `shaped` text runs it shaped. A slow frame no
     /// input caused comes back to send.
     pub(crate) fn built(&mut self, shaped: u32, nodes: usize) -> Option<SlowFrame> {
-        self.build_with(shaped, nodes, watchdog::disarm(), slow_ms(), crate::time::now, crate::frame::profile::cpu_ms)
+        let mark = self.cpu_mark;
+        self.build_with(shaped, nodes, watchdog::disarm(), slow_ms(), crate::time::now, || {
+            mark.and_then(crate::frame::profile::thread_cpu_since).map(|ns| ns / 1e6)
+        })
     }
 
     fn build_with(&mut self, shaped: u32, nodes: usize, stacks: Option<Stacks>, slow_ms: f64, now: impl FnOnce() -> Instant, cpu: impl FnOnce() -> Option<f64>) -> Option<SlowFrame> {

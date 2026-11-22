@@ -1,0 +1,1 @@
+- Interaction timing on Windows: a slow input frame in the first 20 ms after the process first reads the thread's CPU clock is no longer blamed on the app's CPU when its handler only waited: the frame's CPU now counts from a raw mark, converted once the cycles' rate is known.
