@@ -340,3 +340,7 @@ unsafe fn host_props(state: *mut ffi::lua_State, idx: c_int, frame: &Frame) -> R
     }
     Ok(out)
 }
+
+#[cfg(test)]
+#[path = "host_tests.rs"]
+mod tests;
