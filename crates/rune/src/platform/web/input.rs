@@ -314,6 +314,7 @@ impl Running {
             Some("visibility") => {
                 let visible = event["visible"].as_bool().unwrap_or(false);
                 self.shared.set_visible(visible);
+                self.app.set_live_visible(visible);
                 if !visible {
                     crate::input::host_events::hide_reset(
                         self.app.rt_mut(),

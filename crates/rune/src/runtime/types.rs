@@ -329,6 +329,8 @@ pub(super) struct Inh {
     pub(super) in_cache: bool,
     /// Inside an elided or off-screen `El::cache` scope: skip primitive emission.
     pub(super) skip_paint: bool,
+    /// Inside an `El::anchored` overlay whose anchor could not be resolved: suppress paint and hits.
+    pub(super) anchor_hidden: bool,
     /// Ancestors' `El::rotate` layers, composed, as an index into `turn_scratch` plus one
     /// (0: none): where this subtree's device pixels land. An index keeps `Inh` small.
     pub(super) turn: u32,
@@ -369,7 +371,7 @@ impl Default for Inh {
             paint_clip: NO_CLIP, paint_fade: [0.0; 4], paint_fade_origin: NO_CLIP, rounded: None,
             scale: 1.0, anchor: [0.0; 2], anchor_to: [0.0; 2], blur: 0.0, dy: 0.0, dx: 0.0, cover: [0.0; 2], outer: None, mark: 0, group: 0.0, pressed: 0.0, press_to: None,
             hit_opacity: 1.0, group_rect: [f32::NEG_INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::INFINITY],
-            scale_motion: ScaleMotion::Still, still: (1.0, [0.0; 2], [0.0; 2]), in_cache: false, skip_paint: false, turn: 0,
+            scale_motion: ScaleMotion::Still, still: (1.0, [0.0; 2], [0.0; 2]), in_cache: false, skip_paint: false, anchor_hidden: false, turn: 0,
             snap: Default::default() }
     }
 }
@@ -601,6 +603,8 @@ pub(crate) struct TreeState {
     pub(crate) has_playground: bool,
     pub(in crate::runtime) exit_mask: exit_mask::Mask,
     key_index: key_index::KeyIndex,
+    /// Packed explicit piecewise-linear scroll-fade stops (`ScrollFade::stops`) for `Globals::flags[2..4]`.
+    pub(in crate::runtime) fade_stops: [f32; 2],
 }
 
 impl TreeState {
@@ -629,6 +633,7 @@ impl TreeState {
             app_root: 0,
             exit_mask: Default::default(),
             key_index: Default::default(),
+            fade_stops: [0.0; 2],
         }
     }
 

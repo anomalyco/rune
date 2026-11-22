@@ -555,20 +555,25 @@ impl RuntimeCore {
             }
             for (pill, at, px) in bare_all {
                 let Some(b) = pill.bare.as_deref() else { continue };
-                let at = [
+                let mut at = [
                     base_rest[0] + (at[0] - base_d_origin[0]) * tk + glide[0],
                     base_rest[1] + (at[1] - base_d_origin[1]) * tk + glide[1],
                 ];
-                let drawn = px * tk;
-                // An image fits the square, keeping its shape; a glyph takes the text's colour.
+                let mut drawn = [px[0] * tk, px[1] * tk];
+                // A replacing image's clear margins draw past its box.
+                if let Some(bleed) = b.replace.map(|r| r.bleed * s * tk).filter(|&v| v > 0.0) {
+                    at = [at[0] - bleed, at[1] - bleed];
+                    drawn = [drawn[0] + 2.0 * bleed, drawn[1] + 2.0 * bleed];
+                }
+                // An image fits its box, keeping its shape; a glyph takes the text's colour.
                 if let Some(pixels) = &b.image
                     && let (w, h) = pixels.size()
                     && w > 0
                     && h > 0
                 {
                     let (w, h) = (w as f32, h as f32);
-                    let k = drawn / w.max(h);
-                    let rect = [at[0] + (drawn - w * k) * 0.5, at[1] + (drawn - h * k) * 0.5, w * k, h * k];
+                    let k = (drawn[0] / w).min(drawn[1] / h);
+                    let rect = [at[0] + (drawn[0] - w * k) * 0.5, at[1] + (drawn[1] - h * k) * 0.5, w * k, h * k];
                     if let Some(image) = self.images.place(pixels, [rect[2], rect[3]]) {
                         self.instances.push(Instance {
                             rect,
@@ -584,7 +589,7 @@ impl RuntimeCore {
                     continue;
                 }
                 let Some(icon) = pill.icon else { continue };
-                let px_r = (px * raster).round().max(1.0) as u32;
+                let px_r = (px[0] * raster).round().max(1.0) as u32;
                 paint_inline_icon(
                     &mut self.text,
                     &mut self.paint,
@@ -596,7 +601,7 @@ impl RuntimeCore {
                     n.id,
                     icon,
                     px_r,
-                    drawn,
+                    drawn[0],
                     at,
                     pill.fg.unwrap_or(color),
                     o,
@@ -836,7 +841,7 @@ impl RuntimeCore {
             let mut widths = fade;
             let mut origins = fade_origin;
             if spec.truncate_fade && overflows {
-                let width = (spec.style.size * spec.fade_em * sc * s).min((bounds[2] - bounds[0]).max(0.0));
+                let width = (spec.style.size * spec.fade_em * sc * s).min((bounds[2] - bounds[0]).max(0.0)).clamp(0.0, 65504.0);
                 // The fade is where the text is cut: the end of its own paragraph, which runs out
                 // past the box on that side. An Arabic title in a left-to-right row fades on the
                 // left and keeps its first words whole; a Latin one in a right-to-left row on the

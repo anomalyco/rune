@@ -1,0 +1,1 @@
+- `Tx::window_visible()` says whether the window is on screen (not hidden, minimised, covered whole where the system says so, or in a hidden browser tab), and each change wakes `poll` once, so a poll can pause work no one sees without guessing from frames that stop coming. `App::on_visibility` now also runs in browsers.

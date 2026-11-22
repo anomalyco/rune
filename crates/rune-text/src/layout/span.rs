@@ -130,6 +130,29 @@ pub struct BareIcon {
     pub gap: f32,
     pub radius: f32,
     pub image: Option<rune_image::pixels::Pixels>,
+    /// Set, the image takes the place of its pill's label instead of sitting before it.
+    pub replace: Option<Replace>,
+}
+
+/// An image set on the baseline in place of a pill's label (see `InlineImage`): `width`
+/// points wide, `ascent` points above the baseline and `descent` below it. The label still
+/// holds its bytes, for selection and copy, but takes no room and draws nothing. The image
+/// draws `bleed` points past each edge of that box.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Replace {
+    pub width: f32,
+    pub ascent: f32,
+    pub descent: f32,
+    pub bleed: f32,
+}
+
+/// The font size a replaced label shapes at in device px: small enough to take no room.
+pub(crate) const HIDDEN_SIZE: f32 = 1e-3;
+
+/// Whether a glyph run shaped at `font_size` device px is a replaced label, which draws nothing.
+pub(crate) fn is_hidden_size(font_size: f32) -> bool {
+    font_size <= HIDDEN_SIZE * 2.0
 }
 
 /// A pill chip's horizontal geometry in points for text of `size` points: the room before its

@@ -11,7 +11,7 @@ pub(super) fn autolink_inline(inl: &mut Inline, image_ranges: &[(usize, usize)])
     let mut excluded: Vec<(usize, usize)> = inl
         .spans
         .iter()
-        .filter(|(_, _, st)| matches!(st, Style::Code | Style::CodePad | Style::Link))
+        .filter(|(_, _, st)| matches!(st, Style::Code | Style::CodePad | Style::Link | Style::Math))
         .map(|&(a, b, _)| (a, b))
         .chain(image_ranges.iter().copied())
         .collect();

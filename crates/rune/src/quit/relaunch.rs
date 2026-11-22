@@ -92,6 +92,12 @@ pub(crate) fn wait_for_previous() {
     wait_once(false);
 }
 
+/// The process this one was relaunched after (`Tx::relaunch`), if it isn't this one.
+#[cfg(target_os = "windows")]
+pub(crate) fn relaunched_after() -> Option<u32> {
+    std::env::var_os(AFTER).and_then(|v| v.to_str().and_then(|v| v.parse::<u32>().ok())).filter(|pid| *pid != std::process::id())
+}
+
 /// [`wait_for_previous`] from the single-instance claim (Windows): the previous process lets go
 /// of the claim (`release_instance`) once it holds nothing this one needs (its files closed), so
 /// that, or its exit, is what's waited for, and for at most [`CLAIM_WAIT`]. Its teardown after

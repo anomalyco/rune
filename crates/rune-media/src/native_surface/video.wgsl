@@ -108,18 +108,30 @@ fn ramp(d: f32, width: f32) -> f32 {
     }
     let half = u.node.zw*0.5;
     let distance = sd_rounded(p-u.node.xy-half, half, u.radii);
-    let hard = vec4<f32>(p-u.clip.xy, u.clip.zw-p);
+    let hard = vec4<f32>(p - u.clip.xy, u.clip.zw - p);
     let fade = vec4<f32>(unpack2x16float(u.fade.x), unpack2x16float(u.fade.y));
-    let offset = unpack4x8unorm(u.fade.z);
     var clip = 1.0;
-    for (var edge = 0u; edge < 4u; edge++) {
-        var a = ramp(hard[edge], fade[edge]);
-        if offset[edge] >= 1.0 {
-            a = ramp(hard[edge], 0.0);
-        } else if offset[edge] > 0.0 {
-            a = min(ramp(hard[edge], 0.0), ramp(hard[edge] + offset[edge] * abs(fade[edge]), fade[edge]));
+    if u.fade.z == 0u {
+        clip = ramp(hard.x, fade.x) * ramp(hard.y, fade.y) * ramp(hard.z, fade.z) * ramp(hard.w, fade.w);
+    } else {
+        for (var edge = 0u; edge < 4u; edge++) {
+            let raw_off = (u.fade.z >> (edge * 8u)) & 0xFFu;
+            let is_stops = (raw_off & 0x80u) != 0u;
+            let off_u = raw_off & 0x7Fu;
+            // Native surfaces carry no frame-globals stop table; degrade stop-tagged edges to a
+            // linear ramp while preserving exact 7-bit offset and hard-edge (`off_u >= 127`) semantics.
+            let fw = select(fade[edge], -abs(fade[edge]), is_stops);
+            var a: f32;
+            if off_u >= 127u {
+                a = ramp(hard[edge], 0.0);
+            } else if off_u > 0u {
+                let offset = f32(off_u) * (1.0 / 127.0);
+                a = min(ramp(hard[edge], 0.0), ramp(hard[edge] + offset * abs(fw), fw));
+            } else {
+                a = ramp(hard[edge], fw);
+            }
+            clip *= a;
         }
-        clip *= a;
     }
     var mask = 1.0;
     if u.fade.w != 0u {

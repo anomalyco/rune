@@ -138,7 +138,7 @@ pub(crate) fn transformed(mut q: Instance, from: Rect, to: Rect, scale: f32, alp
     ];
     q.fill = q.fill.map(|v| v * alpha);
     q.clip = clip.map(|v| v * scale);
-    q.fade = crate::render::pack_fade(fade.map(|v| v * scale), q.clip, q.clip);
+    q.fade = crate::render::pack_fade(fade.map(|v| (v * scale).clamp(-65504.0, 65504.0)), q.clip, q.clip);
     q
 }
 

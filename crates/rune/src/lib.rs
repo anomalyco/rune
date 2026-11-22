@@ -95,7 +95,7 @@ pub use el::Drag;
 pub use el::El;
 pub use el::GridRow;
 pub use el::GrowthSpec;
-pub use el::InlineIcon;
+pub use el::{InlineIcon, InlineImage};
 pub use el::LiveRegion;
 pub use el::Outline;
 pub use el::Phase;
@@ -145,6 +145,7 @@ pub use frame::profile::take_frame_phases;
 #[cfg(feature = "frame-profile")]
 #[doc(hidden)]
 pub use frame::profile::thread_cpu_ms;
+pub use frame::profile::{ThreadCpuMark, thread_cpu_mark, thread_cpu_ns, thread_cpu_since};
 pub use frame::surface_stats::Pacing;
 pub use frame::surface_stats::SurfaceCounts;
 pub use frame::surface_stats::SurfaceStats;
@@ -191,7 +192,6 @@ pub use native_menu::MenuItem;
 pub use native_surface::NativeSurface;
 pub use native_surface::SurfaceFit;
 pub use open_url::OpenUrlError;
-pub use open_url::instance::hand_on;
 pub use open_url::instance::release_instance;
 pub use open_url::instance::single_instance;
 pub use overlay::Availability;

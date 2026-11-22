@@ -9,7 +9,7 @@ pub enum ErrorKind {
     Syntax,
     /// The script raised an error, or called something with the wrong arguments.
     Runtime,
-    /// One entry into the VM ran past the watchdog limit (250 ms by default).
+    /// One entry into the VM used up the watchdog's budget (250 ms of the thread's CPU time by default).
     Timeout,
     /// The VM reached its memory limit.
     Memory,

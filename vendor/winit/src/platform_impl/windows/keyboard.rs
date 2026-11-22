@@ -4,7 +4,9 @@ use std::mem::MaybeUninit;
 use std::os::windows::ffi::OsStringExt;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
+use std::collections::VecDeque;
 use std::sync::{Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows_sys::Win32::System::SystemServices::LANG_KOREAN;
@@ -14,8 +16,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_CONTROL, VK_DECIMAL, VK_DELETE, VK_DIVIDE, VK_DOWN, VK_END, VK_F4, VK_HOME, VK_INSERT,
     VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_MULTIPLY, VK_NEXT, VK_NUMLOCK,
     VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4, VK_NUMPAD5, VK_NUMPAD6, VK_NUMPAD7,
-    VK_NUMPAD8, VK_NUMPAD9, VK_PRIOR, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT,
-    VK_RWIN, VK_SCROLL, VK_SHIFT, VK_SUBTRACT, VK_UP,
+    VK_NUMPAD8, VK_NUMPAD9, VK_PACKET, VK_PRIOR, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU,
+    VK_RSHIFT, VK_RWIN, VK_SCROLL, VK_SHIFT, VK_SUBTRACT, VK_UP,
 };
 use windows_sys::Win32::UI::TextServices::HKL;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -64,23 +66,39 @@ pub struct MessageAsKeyEvent {
 /// text input. The "sequence" only consists of one WM_KEYUP / WM_SYSKEYUP event.
 pub struct KeyEventBuilder {
     event_info: Mutex<Option<PartialKeyEventInfo>>,
+    // Rune: high surrogate waiting for its matching low surrogate across consecutive VK_PACKET or
+    // bare WM_CHAR messages (Win+. emoji panel, Win+H voice typing, SendInput KEYEVENTF_UNICODE).
+    pending_high_surrogate: Mutex<Option<u16>>,
+    // Rune: recent key-downs whose `TranslateMessage` character may still arrive after their
+    // key-up (a program that posts keys), to tell that copy from other text.
+    translated: Mutex<VecDeque<Translated>>,
+    // Rune: the `lParam` of the key-down whose event takes the `WM_CHAR`s that follow it.
+    building: Mutex<Option<LPARAM>>,
     pending: PendingEventQueue<MessageAsKeyEvent>,
 }
 impl Default for KeyEventBuilder {
     fn default() -> Self {
-        KeyEventBuilder { event_info: Mutex::new(None), pending: Default::default() }
+        KeyEventBuilder {
+            event_info: Mutex::new(None),
+            pending_high_surrogate: Mutex::new(None),
+            translated: Mutex::new(VecDeque::new()),
+            building: Mutex::new(None),
+            pending: Default::default(),
+        }
     }
 }
 impl KeyEventBuilder {
     /// Call this function for every window message.
     /// Returns Some() if this window message completes a KeyEvent.
     /// Returns None otherwise.
+    /// `ime_composing`: an input method's composition is open in the window (Rune).
     pub(crate) fn process_message(
         &self,
         hwnd: HWND,
         msg_kind: u32,
         wparam: WPARAM,
         lparam: LPARAM,
+        ime_composing: bool,
         result: &mut ProcResult,
     ) -> Vec<MessageAsKeyEvent> {
         enum MatchResult {
@@ -98,6 +116,8 @@ impl KeyEventBuilder {
                     MatchResult::MessagesToDispatch(self.pending.complete_multi(key_events))
                 },
                 WM_KILLFOCUS => {
+                    *self.pending_high_surrogate.lock().unwrap() = None;
+                    self.translated.lock().unwrap().clear();
                     // synthesize keyup events
                     let kbd_state = get_kbd_state();
                     let key_events = Self::synthesize_kbd_state(ElementState::Released, &kbd_state);
@@ -109,6 +129,18 @@ impl KeyEventBuilder {
                         // This is handled in `event_loop.rs`
                         return MatchResult::Nothing;
                     }
+                    // Rune: preserve an unpaired high surrogate across the two VK_PACKET presses
+                    // that deliver a supplementary-plane Unicode character; drop it on any real key.
+                    if wparam as VIRTUAL_KEY != VK_PACKET {
+                        *self.pending_high_surrogate.lock().unwrap() = None;
+                    }
+                    // Rune: `TranslateMessage` has already posted this key's character, with this
+                    // `lParam`; a program that posted the key-up too gets it after the key-up.
+                    let noted = msg_kind == WM_KEYDOWN && wparam as VIRTUAL_KEY != VK_PACKET;
+                    if noted {
+                        note_key_down(&mut self.translated.lock().unwrap(), lparam, Instant::now());
+                    }
+                    *self.building.lock().unwrap() = noted.then_some(lparam);
                     let pending_token = self.pending.add_pending();
                     *result = ProcResult::Value(0);
 
@@ -168,40 +200,40 @@ impl KeyEventBuilder {
                 WM_CHAR | WM_SYSCHAR => {
                     let mut event_info = self.event_info.lock().unwrap();
                     if event_info.is_none() {
-                        trace!(
-                            "Received a CHAR message but no `event_info` was available. The \
-                             message is probably IME, returning."
-                        );
-                        return MatchResult::Nothing;
+                        // Rune: a WM_CHAR with no preceding WM_KEYDOWN (text expanders, password
+                        // managers, assistive tools, remote input) still carries text, as Chromium
+                        // takes it. WM_SYSCHAR stays ignored so Alt+key mnemonics never type text.
+                        drop(event_info);
+                        if msg_kind == WM_SYSCHAR {
+                            trace!("Received a SYSCHAR message with no `event_info`; ignoring.");
+                            return MatchResult::Nothing;
+                        }
+                        let pending_token = self.pending.add_pending();
+                        *result = ProcResult::Value(0);
+                        // Rune: a posted key's own character, after a key-up that came first,
+                        // when that key already typed it: not text a second time.
+                        if bare_char_is_copy(&mut self.translated.lock().unwrap(), wparam, lparam, Instant::now()) {
+                            return MatchResult::TokenToRemove(pending_token);
+                        }
+                        let mut pending_high = self.pending_high_surrogate.lock().unwrap();
+                        let Some(text) = bare_char_text(&mut pending_high, wparam, ime_composing)
+                        else {
+                            return MatchResult::TokenToRemove(pending_token);
+                        };
+                        let ev = standalone_char_event(text, (lparam & 0xffff) > 1);
+                        return MatchResult::MessagesToDispatch(self.pending.complete_pending(
+                            pending_token,
+                            MessageAsKeyEvent { event: ev, is_synthetic: false },
+                        ));
                     }
                     let pending_token = self.pending.add_pending();
                     *result = ProcResult::Value(0);
-                    let is_high_surrogate = (0xd800..=0xdbff).contains(&wparam);
-                    let is_low_surrogate = (0xdc00..=0xdfff).contains(&wparam);
-
-                    let is_utf16 = is_high_surrogate || is_low_surrogate;
-
-                    if is_utf16 {
-                        if let Some(ev_info) = event_info.as_mut() {
-                            ev_info.utf16parts.push(wparam as u16);
-                        }
-                    } else {
-                        // In this case, wparam holds a UTF-32 character.
-                        // Let's encode it as UTF-16 and append it to the end of `utf16parts`
-                        let utf16parts = match event_info.as_mut() {
-                            Some(ev_info) => &mut ev_info.utf16parts,
-                            None => {
-                                warn!("The event_info was None when it was expected to be some");
-                                return MatchResult::TokenToRemove(pending_token);
-                            },
-                        };
-                        let start_offset = utf16parts.len();
-                        let new_size = utf16parts.len() + 2;
-                        utf16parts.resize(new_size, 0);
-                        if let Some(ch) = char::from_u32(wparam as u32) {
-                            let encode_len = ch.encode_utf16(&mut utf16parts[start_offset..]).len();
-                            let new_size = start_offset + encode_len;
-                            utf16parts.resize(new_size, 0);
+                    if let Some(ev_info) = event_info.as_mut() {
+                        if keyed_char_is_text(wparam, ev_info.vkey) {
+                            append_wparam_utf16(wparam, &mut ev_info.utf16parts);
+                            if let Some(down) = *self.building.lock().unwrap() {
+                                note_keyed_text(&mut self.translated.lock().unwrap(), down, wparam);
+                            }
                         }
                     }
                     // It's important that we unlock the mutex, and create the pending event token
@@ -224,6 +256,14 @@ impl KeyEventBuilder {
                                 return MatchResult::TokenToRemove(pending_token);
                             },
                         };
+                        let paired = resolve_surrogates(
+                            &mut self.pending_high_surrogate.lock().unwrap(),
+                            &mut event_info.utf16parts,
+                        );
+                        if !paired && event_info.vkey == VK_PACKET {
+                            // Rune: high half of a VK_PACKET surrogate pair; wait for the low half.
+                            return MatchResult::TokenToRemove(pending_token);
+                        }
                         let mut layouts = LAYOUT_CACHE.lock().unwrap();
                         // It's okay to call `ToUnicode` here, because at this point the dead key
                         // is already consumed by the character.
@@ -238,10 +278,11 @@ impl KeyEventBuilder {
                             mod_state.contains(WindowsModifiers::CONTROL)
                         };
 
-                        // If Ctrl is not pressed, just use the text with all
-                        // modifiers because that already consumed the dead key. Otherwise,
-                        // we would interpret the character incorrectly, missing the dead key.
-                        if !ctrl_on {
+                        // If Ctrl is not pressed (or this is VK_PACKET Unicode injection), just
+                        // use the text with all modifiers because that already consumed the dead
+                        // key. Otherwise, we would interpret the character incorrectly, missing
+                        // the dead key.
+                        if !ctrl_on || event_info.vkey == VK_PACKET {
                             event_info.text = PartialText::System(event_info.utf16parts.clone());
                         } else {
                             let mod_no_ctrl = mod_state.remove_only_ctrl();
@@ -510,7 +551,14 @@ impl PartialKeyEventInfo {
         } else {
             new_ex_scancode(lparam_struct.scancode, lparam_struct.extended)
         };
-        let physical_key = scancode_to_physicalkey(scancode as u32);
+        // Rune: a VK_PACKET carries text, not a key: it is named as a bare WM_CHAR is
+        // (`standalone_char_event`), `Unidentified(NativeKeyCode::Unidentified)`, which Windows
+        // never reports for a real key (an unknown scan code is `NativeKeyCode::Windows(_)`).
+        let physical_key = if vkey == VK_PACKET {
+            PhysicalKey::Unidentified(NativeKeyCode::Unidentified)
+        } else {
+            scancode_to_physicalkey(scancode as u32)
+        };
         let location = get_location(scancode, layout.hkl as HKL);
 
         let kbd_state = get_kbd_state();
@@ -541,9 +589,11 @@ impl PartialKeyEventInfo {
 
         let logical_key = if let Some(key) = code_as_key.clone() {
             PartialLogicalKey::This(key)
-        } else if is_pressed && key_is_char && !mods.contains(WindowsModifiers::CONTROL) {
+        } else if is_pressed
+            && (vkey == VK_PACKET || (key_is_char && !mods.contains(WindowsModifiers::CONTROL)))
+        {
             // In some cases we want to use the UNICHAR text for logical_key in order to allow
-            // dead keys to have an effect on the character reported by `logical_key`.
+            // dead keys (and Rune's VK_PACKET Unicode injection) to supply `logical_key`.
             PartialLogicalKey::TextOr(preliminary_logical_key)
         } else {
             PartialLogicalKey::This(preliminary_logical_key)
@@ -612,7 +662,12 @@ impl PartialKeyEventInfo {
         let logical_key = match self.logical_key {
             PartialLogicalKey::TextOr(fallback) => match text.as_ref() {
                 Some(s) => {
-                    if s.grapheme_indices(true).count() > 1 {
+                    // Rune: a VK_PACKET names its text as the key, unless the text is a control
+                    // character: that keeps the `Unidentified` key it had before.
+                    let packet = self.vkey == VK_PACKET;
+                    if (packet && s.chars().any(char::is_control))
+                        || (!packet && s.grapheme_indices(true).count() > 1)
+                    {
                         fallback
                     } else {
                         Key::Character(s.clone())
@@ -635,6 +690,513 @@ impl PartialKeyEventInfo {
                 key_without_modifiers: self.key_without_modifiers,
             },
         }
+    }
+}
+
+/// Rune: whether a `WM_CHAR` that follows a key-down is part of that key's text. `TranslateMessage`
+/// adds `WM_CHAR(0)` after a VK_PACKET key-down that carries no packet (one a program posted): it
+/// is not the packet's text. A real key's NUL (Ctrl+2, Ctrl+@) is that key's text, as before.
+fn keyed_char_is_text(wparam: WPARAM, vkey: VIRTUAL_KEY) -> bool {
+    !(wparam == 0 && vkey == VK_PACKET)
+}
+
+/// Rune: a recent `WM_KEYDOWN` whose character `TranslateMessage` posted with the same `lParam`.
+/// A program that posts a key-down and its key-up together gets that character AFTER the key-up,
+/// with no key in progress. `typed` is the character the key's own event already took (from a
+/// `WM_CHAR` that program posted between the two), if any.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Translated {
+    lparam: LPARAM,
+    typed: Option<WPARAM>,
+    at: Instant,
+}
+
+/// How many key-downs are remembered, and for how long: a copy comes within a few messages. The
+/// count is far above any burst inside the second, so no typed key's entry is lost to it.
+const TRANSLATED_KEEP: usize = 256;
+const TRANSLATED_FOR: Duration = Duration::from_secs(1);
+
+/// Rune: a `WM_KEYDOWN` with `lparam` happened at `now`.
+fn note_key_down(list: &mut VecDeque<Translated>, lparam: LPARAM, now: Instant) {
+    list.retain(|t| now.saturating_duration_since(t.at) < TRANSLATED_FOR);
+    list.push_back(Translated { lparam, typed: None, at: now });
+    while list.len() > TRANSLATED_KEEP {
+        list.pop_front();
+    }
+}
+
+/// Rune: the event of the key-down with `down` took `wparam` as its text. A hardware key's own
+/// copy is that `WM_CHAR` (posted messages come before input), so nothing more follows it.
+fn note_keyed_text(list: &mut VecDeque<Translated>, down: LPARAM, wparam: WPARAM) {
+    if let Some(t) = list.iter_mut().rev().find(|t| t.lparam == down && t.typed.is_none()) {
+        t.typed = Some(wparam);
+    }
+}
+
+/// Rune: whether a bare `WM_CHAR` is a remembered key-down's own copy of the character that key
+/// already typed (dropped), rather than text. A key-down that typed nothing yet claims a copy
+/// with its `lParam` first (oldest first): that copy is its character, and types once. Only then
+/// does a key-down that typed this same character claim it, and the copy is dropped. Any other
+/// `lParam` (programs that post text alone post 0 or 1), or an entry older than a second, matches
+/// nothing. Each entry is claimed once.
+fn bare_char_is_copy(list: &mut VecDeque<Translated>, wparam: WPARAM, lparam: LPARAM, now: Instant) -> bool {
+    list.retain(|t| now.saturating_duration_since(t.at) < TRANSLATED_FOR);
+    if let Some(i) = list.iter().position(|t| t.lparam == lparam && t.typed.is_none()) {
+        list.remove(i);
+        return false;
+    }
+    if let Some(i) = list.iter().position(|t| t.lparam == lparam && t.typed == Some(wparam)) {
+        list.remove(i);
+        return true;
+    }
+    false
+}
+
+/// Rune: appends a `WM_CHAR` `wparam` (UTF-16 surrogate unit or Unicode scalar) onto
+/// `utf16parts`.
+fn append_wparam_utf16(wparam: WPARAM, utf16parts: &mut Vec<u16>) {
+    let is_high_surrogate = (0xd800..=0xdbff).contains(&wparam);
+    let is_low_surrogate = (0xdc00..=0xdfff).contains(&wparam);
+    if is_high_surrogate || is_low_surrogate {
+        utf16parts.push(wparam as u16);
+    } else if let Some(ch) = char::from_u32(wparam as u32) {
+        let mut buf = [0u16; 2];
+        utf16parts.extend_from_slice(ch.encode_utf16(&mut buf));
+    }
+}
+
+/// Rune: pairs a pending high surrogate with an incoming leading low surrogate, and stashes a
+/// trailing lone high surrogate for the next `WM_CHAR`. Returns `false` when `units` held only
+/// that lone high surrogate so the caller waits for the low half instead of dropping it, and when
+/// `units` is empty (a VK_PACKET key-down whose only `WM_CHAR` was the NUL): nothing to type, and
+/// a waiting high half keeps waiting.
+fn resolve_surrogates(pending: &mut Option<u16>, units: &mut Vec<u16>) -> bool {
+    if units.is_empty() {
+        return false;
+    }
+    if units.first().copied().is_some_and(|u| (0xdc00..=0xdfff).contains(&u)) {
+        if let Some(hi) = pending.take() {
+            units.insert(0, hi);
+        }
+    } else {
+        *pending = None;
+    }
+    if units.last().copied().is_some_and(|u| (0xd800..=0xdbff).contains(&u)) {
+        *pending = units.pop();
+        if units.is_empty() {
+            return false;
+        }
+    }
+    true
+}
+
+/// Rune: the text a `WM_CHAR` with no preceding `WM_KEYDOWN` types, if any. A high surrogate
+/// waits in `pending` for its low half; a lone half is dropped, never inserted. Control
+/// characters (Backspace, Enter, Escape, DEL, …) are not text: they act only as keys. While an
+/// input method's composition is open its result arrives as `Ime::Commit`, so a stray `WM_CHAR`
+/// then would type the text twice: it is dropped. A NUL (the `WM_CHAR(0)` that `TranslateMessage`
+/// adds after a posted VK_PACKET key-down) changes nothing, not even a waiting high surrogate.
+fn bare_char_text(pending: &mut Option<u16>, wparam: WPARAM, ime_composing: bool) -> Option<String> {
+    if wparam == 0 {
+        return None;
+    }
+    if ime_composing {
+        *pending = None;
+        return None;
+    }
+    let mut units = Vec::with_capacity(2);
+    append_wparam_utf16(wparam, &mut units);
+    if !resolve_surrogates(pending, &mut units) {
+        return None;
+    }
+    let text = String::from_utf16(&units).ok()?;
+    (!text.is_empty() && !text.chars().any(char::is_control)).then_some(text)
+}
+
+/// Rune: a pressed `KeyEvent` that types `text` and names no physical key.
+fn standalone_char_event(text: String, is_repeat: bool) -> KeyEvent {
+    let text = SmolStr::new(text);
+    KeyEvent {
+        physical_key: PhysicalKey::Unidentified(NativeKeyCode::Unidentified),
+        logical_key: Key::Character(text.clone()),
+        text: Some(text.clone()),
+        location: KeyLocation::Standard,
+        state: ElementState::Pressed,
+        repeat: is_repeat,
+        platform_specific: KeyEventExtra {
+            text_with_all_modifiers: Some(text),
+            key_without_modifiers: Key::Unidentified(NativeKey::Unidentified),
+        },
+    }
+}
+
+#[cfg(test)]
+mod rune_bare_char_tests {
+    use super::{bare_char_text, keyed_char_is_text, resolve_surrogates};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_2, VK_A, VK_PACKET};
+
+    const NONE: Option<String> = None;
+
+    fn s(text: &str) -> Option<String> {
+        Some(text.to_owned())
+    }
+
+    /// Feeds `units` as consecutive bare `WM_CHAR`s and returns the text each one typed.
+    fn feed(units: &[usize], ime_composing: bool) -> Vec<Option<String>> {
+        let mut pending = None;
+        units.iter().map(|&u| bare_char_text(&mut pending, u, ime_composing)).collect()
+    }
+
+    #[test]
+    fn bmp_characters_type_themselves() {
+        assert_eq!(feed(&[0x61, 0xe9, 0x65e5], false), [s("a"), s("é"), s("日")]);
+    }
+
+    #[test]
+    fn a_surrogate_pair_split_over_two_messages_types_one_character() {
+        assert_eq!(feed(&[0xd83d, 0xde00], false), [NONE, s("😀")]);
+    }
+
+    #[test]
+    fn a_lone_surrogate_half_is_dropped() {
+        // High half then a BMP character: the high half is dropped, the character types.
+        assert_eq!(feed(&[0xd83d, 0x61], false), [NONE, s("a")]);
+        // Low half with no high half before it.
+        assert_eq!(feed(&[0xde00], false), [NONE]);
+        // Two high halves: the first is dropped, the second pairs with the low half.
+        assert_eq!(feed(&[0xd83d, 0xd83d, 0xde00], false), [NONE, NONE, s("😀")]);
+    }
+
+    #[test]
+    fn an_empty_packet_key_down_keeps_the_waiting_high_half() {
+        let mut pending = None;
+        // The high half's VK_PACKET key-down: it waits.
+        let mut high = vec![0xd83d];
+        assert!(!resolve_surrogates(&mut pending, &mut high));
+        assert_eq!(pending, Some(0xd83d));
+        // The low half's VK_PACKET key-down completes with empty text (its only WM_CHAR was the
+        // NUL): nothing to type, and the high half keeps waiting.
+        let mut empty = Vec::new();
+        assert!(!resolve_surrogates(&mut pending, &mut empty));
+        assert_eq!(pending, Some(0xd83d));
+        // The low half's character then arrives: one emoji.
+        assert_eq!(bare_char_text(&mut pending, 0xde00, false), s("😀"));
+        assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn only_a_packet_key_downs_nul_is_left_out_of_its_text() {
+        // The NUL `TranslateMessage` adds after a posted VK_PACKET key-down is not text.
+        assert!(!keyed_char_is_text(0, VK_PACKET));
+        // The packet's real characters are.
+        assert!(keyed_char_is_text('a' as usize, VK_PACKET));
+        assert!(keyed_char_is_text(0xd83d, VK_PACKET));
+        // A real key's NUL (Ctrl+2) stays that key's text, as before.
+        assert!(keyed_char_is_text(0, VK_2));
+        assert!(keyed_char_is_text(0, VK_A));
+    }
+
+    #[test]
+    fn a_nul_between_the_halves_neither_types_nor_breaks_the_pair() {
+        // `TranslateMessage` adds `WM_CHAR(0)` after a posted VK_PACKET key-down.
+        assert_eq!(feed(&[0xd83d, 0x00, 0xde00], false), [NONE, NONE, s("😀")]);
+        assert_eq!(feed(&[0x00, 0x61, 0x00], false), [NONE, s("a"), NONE]);
+    }
+
+    #[test]
+    fn a_combining_mark_types_after_its_base() {
+        assert_eq!(feed(&[0x65, 0x301], false), [s("e"), s("\u{301}")]);
+    }
+
+    #[test]
+    fn control_characters_are_not_text() {
+        for c in [0x08, 0x09, 0x0a, 0x0d, 0x1b, 0x7f, 0x00, 0x85] {
+            assert_eq!(feed(&[c], false), [NONE], "U+{c:04X}");
+        }
+    }
+
+    #[test]
+    fn nothing_types_while_an_ime_composition_is_open() {
+        assert_eq!(feed(&[0x61, 0xd83d, 0xde00], true), [NONE, NONE, NONE]);
+        // A high half that arrived before the composition opened does not pair after it.
+        let mut pending = None;
+        assert_eq!(bare_char_text(&mut pending, 0xd83d, false), None);
+        assert_eq!(bare_char_text(&mut pending, 0xde00, true), None);
+        assert_eq!(bare_char_text(&mut pending, 0xde00, false), None);
+    }
+}
+
+#[cfg(test)]
+mod rune_posted_key_tests {
+    //! What a posted key's `TranslateMessage` copy does, for each order of key messages. Each test
+    //! replays the order through the same calls the key-down, keyed `WM_CHAR` and bare `WM_CHAR`
+    //! handlers make, and counts the characters that type.
+    use std::collections::VecDeque;
+    use std::time::{Duration, Instant};
+
+    use super::{bare_char_is_copy, note_key_down, note_keyed_text, Translated};
+
+    const H: usize = 'h' as usize;
+    const E: usize = 'e' as usize;
+    const L: usize = 'l' as usize;
+    // lParam: repeat count 1, scan code in bits 16-23 (as `TranslateMessage` copies it).
+    fn lp(scan: isize) -> isize { 1 | (scan << 16) }
+
+    /// The text a sequence types: keyed chars type with their key; a bare char types unless it is
+    /// a copy of text its key already typed.
+    struct Replay { list: VecDeque<Translated>, now: Instant, typed: String }
+    impl Replay {
+        fn new() -> Self { Self { list: VecDeque::new(), now: Instant::now(), typed: String::new() } }
+        fn down(&mut self, lparam: isize) { note_key_down(&mut self.list, lparam, self.now); }
+        fn keyed(&mut self, down: isize, ch: usize) { note_keyed_text(&mut self.list, down, ch); self.typed.push(char::from_u32(ch as u32).unwrap()); }
+        fn bare(&mut self, ch: usize, lparam: isize) {
+            if !bare_char_is_copy(&mut self.list, ch, lparam, self.now) { self.typed.push(char::from_u32(ch as u32).unwrap()); }
+        }
+        fn wait(&mut self, d: Duration) { self.now += d; }
+    }
+
+    #[test]
+    fn hardware_order_types_each_char_once() {
+        // down, its own char (posted before the key-up, which is input), up.
+        let mut r = Replay::new();
+        for (ch, scan) in [(H, 0x23), (E, 0x12), (L, 0x26), (L, 0x26)] { r.down(lp(scan)); r.keyed(lp(scan), ch); }
+        assert_eq!(r.typed, "hell");
+    }
+
+    #[test]
+    fn down_and_up_back_to_back_type_the_late_copy_once() {
+        // The key's event takes no text (its key-up came first); its copy arrives bare.
+        let mut r = Replay::new();
+        r.down(lp(0x23));
+        r.bare(H, lp(0x23));
+        assert_eq!(r.typed, "h");
+    }
+
+    #[test]
+    fn all_downs_then_all_ups_type_every_copy_once_in_order() {
+        let mut r = Replay::new();
+        for scan in [0x23, 0x12, 0x26, 0x26] { r.down(lp(scan)); }
+        for (ch, scan) in [(H, 0x23), (E, 0x12), (L, 0x26), (L, 0x26)] { r.bare(ch, lp(scan)); }
+        assert_eq!(r.typed, "hell");
+    }
+
+    #[test]
+    fn down_char_up_does_not_type_the_copy_again() {
+        // A program posts key-down, WM_CHAR and key-up together: the explicit char types with the
+        // key; TranslateMessage's copy lands after the key-up (driver log, 02:58 run: `hhelloo`).
+        let mut r = Replay::new();
+        for (ch, scan) in [(H, 0x23), (E, 0x12), (L, 0x26), (L, 0x26)] { r.down(lp(scan)); r.keyed(lp(scan), ch); }
+        for (ch, scan) in [(H, 0x23), (E, 0x12), (L, 0x26), (L, 0x26)] { r.bare(ch, lp(scan)); }
+        assert_eq!(r.typed, "hell");
+    }
+
+    #[test]
+    fn bare_text_from_a_program_types_as_before() {
+        // Programs that post text alone post lParam 0 or 1: never a remembered key-down's.
+        let mut r = Replay::new();
+        r.down(lp(0x23));
+        r.keyed(lp(0x23), H);
+        for ch in [E, L, L] { r.bare(ch, 1); }
+        r.bare(H, 0);
+        assert_eq!(r.typed, "hellh");
+    }
+
+    #[test]
+    fn with_nothing_remembered_every_bare_char_types() {
+        // VK_PACKET and bare paths: no key-down was remembered (VK_PACKET is never noted).
+        let mut r = Replay::new();
+        r.bare(0xe9, 1);
+        r.bare(H, lp(0x23));
+        assert_eq!(r.typed, "éh");
+    }
+
+    #[test]
+    fn a_held_key_s_repeats_type_one_char_each_and_nothing_is_dropped() {
+        // Auto-repeat: the same scan code, bit 30 (previous state) set, each repeat with its own char.
+        let rep = lp(0x26) | (1 << 30);
+        let mut r = Replay::new();
+        r.down(lp(0x26));
+        r.keyed(lp(0x26), L);
+        for _ in 0..5 { r.wait(Duration::from_millis(33)); r.down(rep); r.keyed(rep, L); }
+        assert_eq!(r.typed, "llllll");
+        // A program's bare text afterwards still types.
+        r.bare(L, 1);
+        assert_eq!(r.typed, "lllllll");
+    }
+
+    #[test]
+    fn the_same_key_posted_twice_types_twice() {
+        // down, up, down, up, then the two copies: each copy belongs to one press.
+        let mut r = Replay::new();
+        r.down(lp(0x26));
+        r.down(lp(0x26));
+        r.bare(L, lp(0x26));
+        r.bare(L, lp(0x26));
+        assert_eq!(r.typed, "ll");
+        // And with explicit chars (down + char + up, twice): two l, no copies.
+        let mut r = Replay::new();
+        r.down(lp(0x26)); r.keyed(lp(0x26), L);
+        r.down(lp(0x26)); r.keyed(lp(0x26), L);
+        r.bare(L, lp(0x26));
+        r.bare(L, lp(0x26));
+        assert_eq!(r.typed, "ll");
+    }
+
+    #[test]
+    fn a_stale_key_down_never_eats_later_text() {
+        // An entry older than a second matches nothing: later bare text with the same lParam types.
+        let mut r = Replay::new();
+        r.down(lp(0x23));
+        r.keyed(lp(0x23), H);
+        r.wait(Duration::from_millis(1001));
+        r.bare(H, lp(0x23));
+        assert_eq!(r.typed, "hh");
+        // A different character with that lParam is not the copy either.
+        let mut r = Replay::new();
+        r.down(lp(0x23));
+        r.keyed(lp(0x23), H);
+        r.bare(E, lp(0x23));
+        assert_eq!(r.typed, "he");
+    }
+
+    #[test]
+    fn a_real_key_s_entry_never_takes_a_later_posted_key_s_copy() {
+        // A real H (its char keyed), then a program's H down + up with the same lParam inside the
+        // second: the late copy belongs to the program's key, which typed nothing: it types.
+        let mut r = Replay::new();
+        r.down(lp(0x23));
+        r.keyed(lp(0x23), H);
+        r.wait(Duration::from_millis(200));
+        r.down(lp(0x23));
+        r.bare(H, lp(0x23));
+        assert_eq!(r.typed, "hh");
+    }
+
+    #[test]
+    fn a_burst_of_forty_posted_letters_types_each_once() {
+        // down + char + up for forty letters, every copy after them: no typed entry is evicted.
+        let letters: Vec<(usize, isize)> = (0..40).map(|i| ('a' as usize + i % 26, 0x10 + (i % 26) as isize)).collect();
+        let mut r = Replay::new();
+        for &(ch, scan) in &letters { r.down(lp(scan)); r.keyed(lp(scan), ch); }
+        for &(ch, scan) in &letters { r.bare(ch, lp(scan)); }
+        let want: String = letters.iter().map(|&(ch, _)| char::from_u32(ch as u32).unwrap()).collect();
+        assert_eq!(r.typed, want);
+    }
+
+    #[test]
+    fn at_most_two_hundred_fifty_six_key_downs_are_remembered() {
+        let mut list = VecDeque::new();
+        let now = Instant::now();
+        for scan in 0..300 { note_key_down(&mut list, lp(scan), now); }
+        assert_eq!(list.len(), 256);
+        assert_eq!(list.front().map(|t| t.lparam), Some(lp(44)), "the oldest go first");
+    }
+}
+
+#[cfg(test)]
+mod rune_posted_key_handler_tests {
+    //! The same orders as real messages through `KeyEventBuilder::process_message`: posted to this
+    //! test thread's own queue, taken off it in order and handed to the handler with no window
+    //! (`hwnd` 0, so `next_kbd_msg` peeks this thread's queue as it peeks the window's). The test
+    //! posts `TranslateMessage`'s copy itself, where the driver log shows it: after the key-up,
+    //! with the key-down's `lParam`.
+    use std::mem::MaybeUninit;
+
+    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_PACKET;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        PeekMessageW, PostThreadMessageW, MSG, PM_NOREMOVE, PM_REMOVE, WM_CHAR, WM_KEYDOWN,
+        WM_KEYUP, WM_KILLFOCUS,
+    };
+
+    use super::KeyEventBuilder;
+    use crate::event::ElementState;
+    use crate::platform_impl::platform::event_loop::ProcResult;
+
+    const VK_H: usize = 0x48;
+    const VK_E: usize = 0x45;
+    const H: usize = 'h' as usize;
+    const E: usize = 'e' as usize;
+    fn lp(scan: isize) -> isize { 1 | (scan << 16) }
+    fn up(scan: isize) -> isize { lp(scan) | (3 << 30) }
+
+    /// Posts `messages` to this thread, then hands each to the handler in queue order; the text
+    /// of every pressed key event, in order.
+    fn feed(builder: &KeyEventBuilder, messages: &[(u32, usize, isize)]) -> String {
+        let mut msg = MaybeUninit::<MSG>::zeroed();
+        // SAFETY: plain Win32 calls on this thread's own queue; `msg` is written before it is read.
+        unsafe {
+            PeekMessageW(msg.as_mut_ptr(), 0, 0, 0, PM_NOREMOVE);
+            let thread = GetCurrentThreadId();
+            for &(kind, wparam, lparam) in messages {
+                assert_ne!(PostThreadMessageW(thread, kind, wparam, lparam), 0, "post {kind:#x}");
+            }
+            let mut typed = String::new();
+            while PeekMessageW(msg.as_mut_ptr(), 0, 0, 0, PM_REMOVE) != 0 {
+                let m = msg.assume_init_ref();
+                let mut result = ProcResult::DefWindowProc(m.wParam);
+                for ev in builder.process_message(0, m.message, m.wParam, m.lParam, false, &mut result) {
+                    if ev.event.state == ElementState::Pressed {
+                        typed.push_str(ev.event.text.as_deref().unwrap_or(""));
+                    }
+                }
+            }
+            typed
+        }
+    }
+
+    #[test]
+    fn down_char_up_then_the_copy_types_once() {
+        let b = KeyEventBuilder::default();
+        let typed = feed(&b, &[
+            (WM_KEYDOWN, VK_H, lp(0x23)), (WM_CHAR, H, lp(0x23)), (WM_KEYUP, VK_H, up(0x23)),
+            (WM_KEYDOWN, VK_E, lp(0x12)), (WM_CHAR, E, lp(0x12)), (WM_KEYUP, VK_E, up(0x12)),
+            (WM_CHAR, H, lp(0x23)), (WM_CHAR, E, lp(0x12)),
+        ]);
+        assert_eq!(typed, "he", "the bare path consulted the list and dropped both copies");
+    }
+
+    #[test]
+    fn down_up_then_the_copy_types_once() {
+        let b = KeyEventBuilder::default();
+        let typed = feed(&b, &[(WM_KEYDOWN, VK_H, lp(0x23)), (WM_KEYUP, VK_H, up(0x23)), (WM_CHAR, H, lp(0x23))]);
+        assert_eq!(typed, "h");
+    }
+
+    #[test]
+    fn a_real_key_then_a_posted_key_s_copy_types_twice() {
+        // Hardware order (the char comes before the key-up), then a program's down + up + copy.
+        let b = KeyEventBuilder::default();
+        let typed = feed(&b, &[
+            (WM_KEYDOWN, VK_H, lp(0x23)), (WM_CHAR, H, lp(0x23)), (WM_KEYUP, VK_H, up(0x23)),
+            (WM_KEYDOWN, VK_H, lp(0x23)), (WM_KEYUP, VK_H, up(0x23)), (WM_CHAR, H, lp(0x23)),
+        ]);
+        assert_eq!(typed, "hh");
+    }
+
+    #[test]
+    fn bare_text_from_a_program_types() {
+        let b = KeyEventBuilder::default();
+        assert_eq!(feed(&b, &[(WM_CHAR, H, 1), (WM_CHAR, E, 0)]), "he");
+    }
+
+    #[test]
+    fn a_vk_packet_key_down_is_not_remembered() {
+        let b = KeyEventBuilder::default();
+        let typed = feed(&b, &[(WM_KEYDOWN, VK_PACKET as usize, 1), (WM_CHAR, 0xe9, 1), (WM_KEYUP, VK_PACKET as usize, up(0))]);
+        assert_eq!(typed, "é");
+        assert!(b.translated.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn focus_loss_forgets_every_key_down() {
+        let b = KeyEventBuilder::default();
+        feed(&b, &[(WM_KEYDOWN, VK_H, lp(0x23)), (WM_CHAR, H, lp(0x23)), (WM_KEYUP, VK_H, up(0x23))]);
+        assert_eq!(b.translated.lock().unwrap().len(), 1);
+        feed(&b, &[(WM_KILLFOCUS, 0, 0)]);
+        assert!(b.translated.lock().unwrap().is_empty());
+        // So a copy arriving after focus came back types as text.
+        assert_eq!(feed(&b, &[(WM_CHAR, H, lp(0x23))]), "h");
     }
 }
 

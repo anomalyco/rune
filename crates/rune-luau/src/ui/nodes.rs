@@ -291,7 +291,7 @@ unsafe fn decode_props(state: *mut ffi::lua_State, props: c_int, env: &Env, is_t
                         other => return Err(format!("onMiddlePress must be a function, got {}", props::name(other))),
                     },
                     Ok(atom) => p.decode_at(el, state, atom, -1, env, is_text)?,
-                    Err(name) => env.warn_once(format!("unknown prop {name}")),
+                    Err(name) => super::unknown_prop(env, None, name)?,
                 }
                 ffi::lua_settop(state, -3);
             }

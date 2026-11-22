@@ -84,6 +84,7 @@ impl CpuCanvas {
         let filled = crate::time::Instant::now();
         let scene = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, (w, h), rt.clear_color())
             .srgb_blend(rt.srgb_blend())
+            .fade_stops(rt.fade_stops())
             .native_surfaces(!rt.surfaces.is_empty())
             .half_rounding(self.half)
             .font_smoothing(rt.font_smoothing());

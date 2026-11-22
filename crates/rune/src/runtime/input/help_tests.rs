@@ -95,6 +95,35 @@ fn a_link_shows_its_own_help_under_its_glyphs() {
     }
 }
 
+/// "Under" sits clear below the window's foot; "foot" is too near it, so its tooltip opens over it.
+fn lined(line: &bool, cx: &mut Cx<bool>) -> El {
+    let look = crate::HelpLook::system(true).padding(6.0, 5.0).font(crate::TextStyle::new(11.0, 530.0).lh(12.0)).gap(4.0);
+    cx.help_look(if *line { look.sit_on_line(crate::TextStyle::new(13.0, 400.0).lh(24.0)) } else { look });
+    el().w_full().h_full()
+        .child(el().key("under").size(40.0, 28.0).pin(Some(20.0), Some(20.0), None, None).help("Under"))
+        .child(el().key("foot").size(40.0, 28.0).pin(Some(20.0), Some(262.0), None, None).help("Foot"))
+}
+
+#[test]
+fn a_tooltip_on_a_line_drops_under_its_element_and_keeps_its_bottom_over_it() {
+    let tip = |line: bool, x: f32, y: f32| {
+        let mut rt = Runtime::new(line, lined, (300.0, 300.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        rt.pointer_move(x, y);
+        rt.frame(1.0 / 60.0);
+        rt.frame(rt.help_delay + 0.1);
+        rt.help_tooltip().map(|(_, r)| r).expect("tooltip shown")
+    };
+    let (off, on) = (tip(false, 40.0, 34.0), tip(true, 40.0, 34.0));
+    assert_eq!(off[1], 52.0, "4 pt under the element's 48 pt foot");
+    let drop = on[1] - off[1];
+    assert!(drop > 0.0 && drop <= 3.0, "a 13/24 line drops an 11/12 tooltip a little: {off:?} -> {on:?}");
+    assert_eq!([on[0], on[2], on[3]], [off[0], off[2], off[3]], "only its top moves");
+    let (off, on) = (tip(false, 40.0, 276.0), tip(true, 40.0, 276.0));
+    assert!(off[1] + off[3] <= 262.0, "foot's tooltip opens over it: {off:?}");
+    assert_eq!(on, off, "over its element a tooltip on a line keeps its bottom");
+}
+
 #[test]
 fn native_regions_carry_a_links_help() {
     let mut rt = Runtime::new(1.0, linked, (400.0, 300.0), Env::new(true, 2.0));

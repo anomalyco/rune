@@ -1,5 +1,5 @@
 //! winit keys and modifiers as Rune's.
-use winit::keyboard::{Key as WKey, ModifiersState};
+use winit::keyboard::{Key as WKey, ModifiersState, NativeKeyCode, PhysicalKey};
 
 use crate::edit::{Key, KeyEvent, Mods};
 
@@ -31,7 +31,8 @@ pub(crate) fn map_key(key: &WKey, m: ModifiersState) -> Option<KeyEvent> {
 /// follow the key's Latin virtual key and macOS's switch to a Latin layout under ⌘: Ctrl+V
 /// pastes on every layout.
 pub(crate) fn map_key_event(event: &winit::event::KeyEvent, m: ModifiersState) -> Option<KeyEvent> {
-    let mut ev = map_key(&event.logical_key, m).or_else(|| unidentified(event, m))?;
+    let mut ev = map_parts(cfg!(target_os = "windows"), event.physical_key, &event.logical_key, event.text.as_deref(), m)
+        .or_else(|| unidentified(event, m))?;
     if !cfg!(target_os = "macos")
         && let Key::Command(c) = ev.key
         && !c.is_ascii()
@@ -55,6 +56,26 @@ fn unidentified(event: &winit::event::KeyEvent, m: ModifiersState) -> Option<Key
     let c = key_base(event).filter(|c| !c.is_control() && *c != ' ')?;
     let key = if mods.cmd { Key::Command(c.to_ascii_lowercase()) } else { Key::Text(c.to_string()) };
     Some(KeyEvent { key, mods })
+}
+
+/// The physical key Rune's winit patch gives text that arrived with no key behind it on Windows:
+/// a bare `WM_CHAR`, or a `VK_PACKET` from `SendInput(KEYEVENTF_UNICODE)` (the emoji panel, voice
+/// typing, the on-screen keyboard, text expanders, password managers). Windows never names a real
+/// key this way: one with an unknown scan code is `NativeKeyCode::Windows(_)`.
+const NO_KEY: PhysicalKey = PhysicalKey::Unidentified(NativeKeyCode::Unidentified);
+
+/// `map_key`, except that on Windows text with no key behind it (`NO_KEY`) types as itself with
+/// no modifiers, even while a hotkey's modifier is still held. Anything else, including such
+/// text that is a control character, is `map_key`'s, as before.
+fn map_parts(windows: bool, physical: PhysicalKey, logical: &WKey, text: Option<&str>, m: ModifiersState) -> Option<KeyEvent> {
+    if windows
+        && physical == NO_KEY
+        && matches!(logical, WKey::Character(_) | WKey::Unidentified(_))
+        && let Some(text) = text.filter(|t| !t.is_empty() && !t.chars().any(char::is_control))
+    {
+        return Some(KeyEvent { key: Key::Text(text.to_owned()), mods: Mods::default() });
+    }
+    map_key(logical, m)
 }
 
 /// The character `event`'s key types under the current layout with no modifiers, for
@@ -91,5 +112,61 @@ mod tests {
         ] {
             assert_eq!(map_key(&WKey::Named(named), ModifiersState::empty()).map(|ev| ev.key.clone()), Some(key));
         }
+    }
+
+    /// A real key Windows sent with scan code 0 that winit could not name (an automation script's
+    /// `keybd_event(vk, 0, …)`, some remote-control and accessibility tools).
+    const SCAN_ZERO: PhysicalKey = PhysicalKey::Unidentified(NativeKeyCode::Windows(0));
+
+    fn ch(s: &str) -> WKey {
+        WKey::Character(s.into())
+    }
+
+    #[test]
+    fn text_with_no_key_types_itself_without_modifiers() {
+        for text in ["a", "é", "日本", "😀", "e\u{301}"] {
+            for m in [ModifiersState::empty(), ModifiersState::CONTROL, ModifiersState::ALT, ModifiersState::CONTROL | ModifiersState::SHIFT] {
+                let ev = map_parts(true, NO_KEY, &ch(text), Some(text), m);
+                assert_eq!(ev, Some(KeyEvent { key: Key::Text(text.into()), mods: Mods::default() }), "{text:?} {m:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_control_character_with_no_key_falls_through_to_the_old_path() {
+        // winit names such a VK_PACKET's key `Unidentified`, as before this change; a bare WM_CHAR
+        // control character makes no event at all.
+        for text in ["\u{8}", "\t", "\n", "\r", "\u{1b}", "\u{7f}", "\u{85}", "a\r"] {
+            for logical in [WKey::Unidentified(winit::keyboard::NativeKey::Windows(0xe7)), ch(text)] {
+                for m in [ModifiersState::empty(), ModifiersState::CONTROL] {
+                    assert_eq!(map_parts(true, NO_KEY, &logical, Some(text), m), map_key(&logical, m), "{text:?} {logical:?} {m:?}");
+                }
+            }
+        }
+        assert_eq!(map_parts(true, NO_KEY, &ch("a"), None, ModifiersState::empty()), map_key(&ch("a"), ModifiersState::empty()));
+    }
+
+    #[test]
+    fn real_keys_with_scan_code_zero_keep_the_old_path() {
+        // Ctrl+C: the logical key is the character, the text is ETX.
+        let copy = map_parts(true, SCAN_ZERO, &ch("c"), Some("\u{3}"), ModifiersState::CONTROL);
+        assert_eq!(copy, map_key(&ch("c"), ModifiersState::CONTROL));
+        // Alt+F: WM_SYSKEYDOWN + WM_SYSCHAR, the text is "f".
+        let alt_f = map_parts(true, SCAN_ZERO, &ch("f"), Some("f"), ModifiersState::ALT);
+        assert_eq!(alt_f, map_key(&ch("f"), ModifiersState::ALT));
+        // A plain "a".
+        let a = map_parts(true, SCAN_ZERO, &ch("a"), Some("a"), ModifiersState::empty());
+        assert_eq!(a, map_key(&ch("a"), ModifiersState::empty()));
+        if cfg!(target_os = "windows") {
+            assert_eq!(copy, Some(KeyEvent { key: Key::Command('c'), mods: map_mods(ModifiersState::CONTROL) }));
+            assert_eq!(alt_f, Some(KeyEvent { key: Key::Text("f".into()), mods: map_mods(ModifiersState::ALT) }));
+            assert_eq!(a, Some(KeyEvent { key: Key::Text("a".into()), mods: Mods::default() }));
+        }
+    }
+
+    #[test]
+    fn text_with_no_key_is_only_special_on_windows() {
+        let m = ModifiersState::CONTROL;
+        assert_eq!(map_parts(false, NO_KEY, &ch("a"), Some("a"), m), map_key(&ch("a"), m));
     }
 }

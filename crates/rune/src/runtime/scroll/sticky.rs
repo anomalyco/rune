@@ -188,7 +188,7 @@ impl RuntimeCore {
         let r = self.paint.drawn[i].map(|v| v * self.env.scale);
         let r = [r[0], r[1], r[0] + r[2], r[1] + r[3]];
         if let Some(clip) = n.vis.clip {
-            inherit_fade(&mut widths, &mut origins, r, clip.map(|v| v * self.paint.inh_scratch[i].scale * self.env.scale));
+            inherit_fade(&mut widths, &mut origins, r, clip.map(|v| (v * self.paint.inh_scratch[i].scale * self.env.scale).clamp(-65504.0, 65504.0)));
         }
         if self.paint.row_mask[i] >= 0.0 {
             inherit_fade(&mut widths, &mut origins, r, [0.0, 0.0, 0.0, self.growth_feather(i)]);

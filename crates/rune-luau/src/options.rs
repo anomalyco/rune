@@ -133,7 +133,8 @@ impl ScriptOptions {
         self
     }
 
-    /// The longest one entry into the VM may run before the watchdog stops it (250 ms).
+    /// The most of its thread's CPU time one entry into the VM may use before the watchdog stops it
+    /// (250 ms); waiting for a CPU or on a host call isn't charged, and 20 budgets of wall time bound it.
     pub fn time_limit(mut self, limit: Duration) -> Self {
         self.time_limit = limit;
         self
