@@ -175,6 +175,12 @@ impl KeyEventBuilder {
                             }
                         }
                     }
+                    // DIAGNOSTIC, DO NOT MERGE: what a key-down became.
+                    eprintln!(
+                        "rune-key-diag winit KEYDOWN msg={msg_kind:#x} vk={wparam:#x} lp={lparam:#x} next={:#x} -> {}",
+                        next_msg.map_or(0, |m| m.message),
+                        if event_info.is_some() { "waits for its WM_CHAR" } else if finished_event_info.is_some() { "event now, no text" } else { "dropped (fake)" },
+                    );
                     if let Some(event_info) = finished_event_info {
                         let ev = event_info.finalize();
                         return MatchResult::MessagesToDispatch(self.pending.complete_pending(
@@ -212,8 +218,10 @@ impl KeyEventBuilder {
                         // Rune: a posted key's own character, after a key-up that came first,
                         // when that key already typed it: not text a second time.
                         if bare_char_is_copy(&mut self.translated.lock().unwrap(), wparam, lparam, Instant::now()) {
+                            eprintln!("rune-key-diag winit BARE WM_CHAR ch={wparam:#x} lp={lparam:#x} -> copy of typed text, dropped");
                             return MatchResult::TokenToRemove(pending_token);
                         }
+                        eprintln!("rune-key-diag winit BARE WM_CHAR ch={wparam:#x} lp={lparam:#x} -> bare text path");
                         let mut pending_high = self.pending_high_surrogate.lock().unwrap();
                         let Some(text) = bare_char_text(&mut pending_high, wparam, ime_composing)
                         else {
@@ -233,6 +241,7 @@ impl KeyEventBuilder {
                             if let Some(down) = *self.building.lock().unwrap() {
                                 note_keyed_text(&mut self.translated.lock().unwrap(), down, wparam);
                             }
+                            eprintln!("rune-key-diag winit KEYED WM_CHAR ch={wparam:#x} lp={lparam:#x} -> appended to its key");
                         }
                     }
                     // It's important that we unlock the mutex, and create the pending event token
