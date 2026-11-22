@@ -95,7 +95,7 @@ impl Painter<'_, '_> {
             let Some(solid) = opaque_box(i) else { continue };
             let (b, tile) = (self.bins.bounds[n as usize], self.tile);
             let r = [(b[0] as u32).max(tile[0]), (b[1] as u32).max(tile[1]), (b[2] as u32).min(tile[2]), (b[3] as u32).min(tile[3])];
-            if r[2] > r[0] && r[3] > r[1] { self.occ.push(Occluder { n, within, solid, clip: Clip::of(i), r }); }
+            if r[2] > r[0] && r[3] > r[1] { self.occ.push(Occluder { n, within, solid, clip: Clip::of_stops(i, self.scene.fade_stops), r }); }
         }
     }
 

@@ -152,7 +152,7 @@ use paint::helpers::*;
 use paint::shape::push_shape;
 use paint::soft_edges::{in_fade, inherit_fade};
 
-pub(crate) use scroll::offset::ScrollRequest;
+pub(crate) use scroll::offset::{ScrollAnchor, ScrollRequest};
 pub(crate) use scroll::reveal::ScrollReveal;
 #[doc(hidden)]
 pub use scroll::watch::scroll_watch_state;
@@ -180,7 +180,7 @@ pub(crate) use web::{a11y as web_a11y, export as web_export, page as web_page};
 pub(crate) use web::runtime as web_runtime;
 
 pub(crate) use anchor::anchor_position;
-use anchor::{anchor_index, step_up};
+use anchor::{anchor_index, anchor_index_live, step_up};
 pub use cx::{Cx, Env, Waker, commit_generation};
 pub(crate) use cx::caret_of;
 use cx::COMMITS;

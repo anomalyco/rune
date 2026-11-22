@@ -413,7 +413,7 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
         } else {
             color = layer_load(vec2<i32>(floor(p)), additive);
         }
-        return color * i.fill.a * clip_alpha(screen, i.clip, i.fade) * hole_alpha(screen, i.radii);
+        return color * i.fill.a * clip_alpha_stops(screen, i.clip, i.fade, g.flags.zw) * hole_alpha(screen, i.radii);
     }
     let kind = fragment_kind(i);
     if (kind > 11.5) { discard; }
@@ -561,7 +561,7 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
             col = i.fill * pow(cov, i.params.w);
         }
     }
-    let source = col * clip_alpha(screen, i.clip, i.fade);
+    let source = col * clip_alpha_stops(screen, i.clip, i.fade, g.flags.zw);
     // On a direct byte surface cpu_boot::blend converts the source *after* mask gamma,
     // colour, shape coverage and clipping. The mask texel itself isn't the blend source.
     let flat_fill = kind == 0.0 && i.params.x == 0.0 && i.fill.a > 0.0 && i.fill.a < 1.0;

@@ -127,7 +127,7 @@ fn blend_soft_light(b: vec3f, s: vec3f) -> vec3f {
 fn fs(in: VOut) -> @location(0) vec4f {
     let i = insts[in.id];
     let px = pixel(in);
-    let ca = clip_alpha(px, i.clip, i.fade);
+    let ca = clip_alpha_stops(px, i.clip, i.fade, backdrop_encoding.zw);
     if (ca <= 0.0) { return vec4f(0.0); }
     let c = shade(i, px) * i.shape.z;
     let mode = effective_blend_mode(i);

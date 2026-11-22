@@ -4,7 +4,7 @@ use super::*;
 
 impl RuntimeCore {
     pub(in crate::runtime) fn growth_feather(&self, i: usize) -> f32 {
-        let width = self.paint.row_mask[i] * self.env.scale;
+        let width = (self.paint.row_mask[i] * self.env.scale).clamp(0.0, 65504.0);
         if self.motion.grows.get(&self.tree.nodes[i].id).is_some_and(|g| g.linear_edge) { -width } else { width }
     }
 

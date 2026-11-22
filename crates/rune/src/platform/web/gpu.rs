@@ -306,6 +306,7 @@ pub(super) fn encode_gpu_frame(
         // Rune's default frame (a compositor that drew its own would have kept this a whole one):
         // nothing draws into the canvas but the copy of the kept frame.
         let rt = app.rt_mut();
+        side.renderer.set_fade_stops(rt.fade_stops());
         side.renderer.prepare_ui(&side.gpu.device, &side.gpu.queue, &mut rt.text.atlas, &rt.instances, prepared.size);
         side.renderer.draw_armed(&mut prepared.encoder, &prepared.frame.texture);
         false

@@ -56,7 +56,7 @@ pub use anchor::{Anchor, Side, anchor_rect};
 pub(crate) use crate::clipboard::tx::{ClipboardRead, ReadFn};
 pub use crate::cursor::{Cursor, CursorImage};
 pub use direction::Direction;
-pub(crate) use direction::{DirEffect, DirEvent, Flow, Pin, mirror_anchor, mirror_visual, step as step_direction};
+pub(crate) use direction::{DirEffect, DirEvent, Flow, Pin, mirror_anchor, mirror_side, mirror_visual, step as step_direction};
 pub(crate) use drop::{DropHoverFn, DropSpec};
 pub(crate) use focus::FocusSpec;
 pub(crate) use focus::ModalSpec;

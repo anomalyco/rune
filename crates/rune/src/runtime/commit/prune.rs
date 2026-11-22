@@ -27,6 +27,7 @@ impl RuntimeCore {
         let (mut dissolve, mut cache, mut pix, mut drawn_ly, mut key_up, mut sticky, mut raise, mut any_loop) =
             (false, false, false, false, false, false, false, false);
         let mut ordered = false;
+        let mut fade_stops: Option<[f32; 2]> = None;
         for n in &self.tree.nodes {
             dissolve |= n.vis_flags.blend() == crate::render::Blend::PlusLighter;
             cache |= n.vis_flags.cache();
@@ -39,6 +40,13 @@ impl RuntimeCore {
             key_up |= n.focus.get().is_some_and(|f| f.key_up.is_some());
             raise |= n.vis_flags.raise();
             ordered |= n.vis.paint_order != 0;
+            if let Some(packed) = n.scroll_edges.fade_style.packed_stops() {
+                debug_assert!(
+                    fade_stops.is_none_or(|prev| prev == packed),
+                    "ScrollFade::stops supports one explicit stop curve per window; got conflicting curves {fade_stops:?} vs {packed:?}"
+                );
+                fade_stops = Some(packed);
+            }
         }
         self.tree.has_dissolve = dissolve;
         self.tree.has_cache = cache;
@@ -48,6 +56,7 @@ impl RuntimeCore {
         self.tree.has_sticky = self.holding() || sticky;
         self.tree.has_raise = raise;
         self.tree.has_paint_order = ordered;
+        self.tree.fade_stops = fade_stops.unwrap_or([0.0; 2]);
         any_loop
     }
 
