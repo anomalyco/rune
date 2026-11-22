@@ -42,39 +42,82 @@ fn ramp(d: f32, fade: f32) -> f32 {
     if fade < 0.0 { x } else { x * x * (3.0 - 2.0 * x) }
 }
 
-/// An instance's clip, decoded once: `clip_alpha`'s inputs.
+/// `ramp_stops`: matches `clip.wgsl`'s `ramp_stops`.
+fn ramp_stops(d: f32, fade: f32, ts: [f32; 4], ys: [f32; 4]) -> f32 {
+    if fade == 0.0 { return clamp01(d + 0.5); }
+    let w = fade.abs();
+    if d >= w { return 1.0; }
+    if d <= 0.0 { return 0.0; }
+    let x = d / w;
+    let (mut px, mut py) = (0.0f32, 0.0f32);
+    for k in 0..4 {
+        let (nx, ny) = (ts[k], ys[k]);
+        if x <= nx {
+            let span = nx - px;
+            return if span > 1e-6 { py + (ny - py) * ((x - px) / span) } else { ny };
+        }
+        px = nx;
+        py = ny;
+    }
+    1.0
+}
+
+/// An instance's clip, decoded once: `clip_alpha_stops`'s inputs.
 #[derive(Clone, Copy)]
 pub(super) struct Clip {
     pub rect: [f32; 4],
     fade: [f32; 4],
     offset: [f32; 4],
+    is_stops: [bool; 4],
+    ts: [f32; 4],
+    ys: [f32; 4],
     pub radii: Option<[f32; 4]>,
 }
 
 impl Clip {
     pub(super) fn of(i: &Instance) -> Clip {
+        Self::of_stops(i, [0.0; 2])
+    }
+
+    pub(super) fn of_stops(i: &Instance, stops: [f32; 2]) -> Clip {
         let f = i.fade;
         let half = |w: u32, hi: bool| half::f16::from_bits((if hi { w >> 16 } else { w }) as u16).to_f32();
+        let (ts, ys) = if (f[2] & 0x8080_8080) != 0 {
+            let lo = (stops[0] + 0.5) as u32;
+            let hi = (stops[1] + 0.5) as u32;
+            (
+                [(lo & 0xFF) as f32 * (1.0 / 200.0), ((lo >> 16) & 0xFF) as f32 * (1.0 / 200.0), ((hi >> 8) & 0xFF) as f32 * (1.0 / 200.0), 1.0],
+                [((lo >> 8) & 0xFF) as f32 * (1.0 / 200.0), (hi & 0xFF) as f32 * (1.0 / 200.0), ((hi >> 16) & 0xFF) as f32 * (1.0 / 200.0), 1.0],
+            )
+        } else {
+            ([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0])
+        };
         Clip {
             rect: i.clip,
             fade: [half(f[0], false), half(f[0], true), half(f[1], false), half(f[1], true)],
-            // `unpack4x8unorm`.
-            offset: std::array::from_fn(|e| ((f[2] >> (e * 8)) & 255) as f32 / 255.0),
+            offset: std::array::from_fn(|e| ((f[2] >> (e * 8)) & 0x7f) as f32 / 127.0),
+            is_stops: std::array::from_fn(|e| ((f[2] >> (e * 8)) & 0x80) != 0),
+            ts,
+            ys,
             radii: (f[3] != 0).then(|| unpack_clip_radii(f[3])),
         }
     }
 
-    /// `clip_alpha`.
+    /// `clip_alpha_stops`.
     pub(super) fn alpha(&self, p: [f32; 2]) -> f32 {
         let c = self.rect;
         let hard = [p[0] - c[0], p[1] - c[1], c[2] - p[0], c[3] - p[1]];
         let mut alpha = 1.0;
         for edge in 0..4 {
-            let (f, o) = (self.fade[edge], self.offset[edge]);
+            let (f, o, is_stops) = (self.fade[edge], self.offset[edge], self.is_stops[edge]);
             let a = if o >= 1.0 {
                 ramp(hard[edge], 0.0)
             } else if o > 0.0 {
-                ramp(hard[edge], 0.0).min(ramp(hard[edge] + o * f.abs(), f))
+                let shifted = hard[edge] + o * f.abs();
+                let r = if is_stops { ramp_stops(shifted, f, self.ts, self.ys) } else { ramp(shifted, f) };
+                ramp(hard[edge], 0.0).min(r)
+            } else if is_stops {
+                ramp_stops(hard[edge], f, self.ts, self.ys)
             } else {
                 ramp(hard[edge], f)
             };

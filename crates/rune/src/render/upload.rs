@@ -29,8 +29,8 @@ pub(super) struct Uploads {
     has_layers: bool,
     /// The viewport last written to globals (`width << 32 | height`, `u64::MAX` before any).
     viewport: AtomicU64,
-    /// Gamma-space blend and byte-source flags last written to globals.
-    srgb: Option<(bool, bool)>,
+    /// Gamma-space blend, byte-source, and packed scroll-fade stops last written to globals.
+    srgb: Option<(bool, bool, [u32; 2])>,
     /// `Staging::lost` as last seen by `prepare` and by `upload_images`.
     lost: (u64, u64),
     /// The paint the next `prepare`'s instances come from, and which of them alone changed
@@ -284,9 +284,9 @@ impl Renderer {
             staging.write_buffer(&self.globals, std::mem::offset_of!(Globals, viewport) as u64, bytemuck::cast_slice(&[viewport.0 as f32, viewport.1 as f32]));
             #[cfg(test)] { self.uploads.globals_writes += 1; }
         }
-        let mode = (self.srgb_blend, byte_source);
+        let mode = (self.srgb_blend, byte_source, [self.fade_stops[0].to_bits(), self.fade_stops[1].to_bits()]);
         if self.uploads.srgb.replace(mode) != Some(mode) {
-            let flags: [f32; 4] = [self.srgb_blend as u8 as f32, byte_source as u8 as f32, 0.0, 0.0];
+            let flags: [f32; 4] = [self.srgb_blend as u8 as f32, byte_source as u8 as f32, self.fade_stops[0], self.fade_stops[1]];
             staging.write_buffer(&self.globals, std::mem::offset_of!(Globals, flags) as u64, bytemuck::cast_slice(&flags));
             #[cfg(test)] { self.uploads.globals_writes += 1; }
         }

@@ -145,6 +145,7 @@ pub use frame::profile::take_frame_phases;
 #[cfg(feature = "frame-profile")]
 #[doc(hidden)]
 pub use frame::profile::thread_cpu_ms;
+pub use frame::profile::{ThreadCpuMark, thread_cpu_mark, thread_cpu_ns, thread_cpu_since};
 pub use frame::surface_stats::Pacing;
 pub use frame::surface_stats::SurfaceCounts;
 pub use frame::surface_stats::SurfaceStats;
