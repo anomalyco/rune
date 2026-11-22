@@ -18,7 +18,7 @@ use std::panic::Location;
 use std::rc::Rc;
 use std::time::Duration;
 
-use rune::{Color, El, Live, PointerEvent, ScrollPos, Spring, col, el};
+use rune::{Anim, Blend, Color, Curve, Easing, El, Live, PointerEvent, ScrollPos, Spring, Velocity, col, el};
 
 use crate::Kit;
 use crate::grip::Grip;
@@ -46,8 +46,11 @@ const MIN_THUMB: f32 = 24.0;
 /// How long an overlay scroll bar stays up after the last scroll, thumb release or the pointer
 /// leaving its edge.
 const HOLD: Duration = Duration::from_millis(750);
-const ENTER: Spring = Spring::new(0.14, 0.0);
-const LEAVE: Spring = Spring::new(0.28, 0.0);
+const ENTER: Anim = Anim::new(Curve::Spring(Spring::new(0.14, 0.0)));
+const LEAVE: Anim = Anim::new(Curve::Spring(Spring::new(0.28, 0.0)));
+/// CSS `transition: opacity 200ms ease`: a new fade starts from where the last one stopped, at
+/// rest, as a CSS transition does, and lands exactly on its end value.
+const CSS_FADE: Anim = Anim { blend: Blend::Merge, velocity: Velocity::Zero, ..Anim::new(Curve::tween(0.2, Easing::EASE)) };
 /// The thumb widening and changing colour under the pointer, and gliding to a new length when the content's changes.
 const WIDEN: Spring = Spring::new(0.12, 0.0);
 /// How long a held track press waits before paging again, then how often it pages.
@@ -106,8 +109,9 @@ struct Track {
     top: f32,
     end: f32,
     hold: Duration,
-    enter: Spring,
-    leave: Spring,
+    /// How the overlay fades in, and out at a pulse's end or when let go.
+    enter: Anim,
+    leave: Anim,
     tint: Spring,
     /// Device pixels per point the thumb is sized and placed in whole pixels of, or 0 for none.
     pixels: f32,
@@ -154,8 +158,8 @@ const SCROLL_VIEW_TRACK: Track = Track {
     top: 0.0,
     end: 0.0,
     hold: Duration::from_millis(800),
-    enter: Spring::new(0.2, 0.0),
-    leave: Spring::new(0.2, 0.0),
+    enter: CSS_FADE,
+    leave: CSS_FADE,
     tint: Spring::new(0.15, 0.0),
     pixels: 0.0,
 };
@@ -181,8 +185,8 @@ const NATIVE_TRACK: Track = Track {
     top: 0.0,
     end: 0.0,
     hold: Duration::ZERO,
-    enter: Spring::NONE,
-    leave: Spring::NONE,
+    enter: Anim::INSTANT,
+    leave: Anim::INSTANT,
     tint: Spring::NONE,
     pixels: 0.0,
 };
@@ -826,7 +830,7 @@ fn attach(style: ScrollBarStyle, area: &str, key: &str, outer: El, viewport: El)
     // either axis: a sideways wheel over a table's bar scrolls the table, and a vertical wheel
     // over it chains on up from the table to the pane that holds it.
     let track = el().key("scroll-bar").absolute(0.0, 0.0).live_rect(&bar.track)
-        .live_opacity(bar.opacity.smooth(style.track.enter).rest(style.track.leave)).a11y_hidden()
+        .live_opacity(bar.opacity.smooth_with(style.track.enter).rest_with(style.track.leave)).a11y_hidden()
         .wheel_scrolls(follows);
     // The transparent area beyond a ScrollView/MenuScroll thumb belongs to the viewport. A
     // press there must not capture a drag, swallow a row's click, page or start a repeat timer.
