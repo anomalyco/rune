@@ -70,6 +70,7 @@ impl AnyHost for Host {
             .chain(self.files.pointer.as_ref().filter(|_| shown.is_some()).map(|_| now + DROP_SAMPLE))
             .chain(shown.and_then(|w| w.cursor.reassert_at(now)))
             .chain(self.rest.deadline())
+            .chain(self.window_script.as_ref().and_then(|s| s.next_at()))
             .min()
     }
 
@@ -183,6 +184,7 @@ impl Host {
         if let Some(shadow) = self.win.as_ref().and_then(|w| w.native.shadow.as_ref()) { shadow.turn(); }
         self.meter.turn(matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll), crate::frame::surface_stats::slept(cause));
         if matches!(cause, StartCause::ResumeTimeReached { .. }) && let Some(w) = &self.win { w.cursor.reassert(); }
+        if self.window_script.is_some() { self.replay_window_script(crate::time::now()); }
         #[cfg(target_os = "windows")]
         if let Some(w) = &self.win { w.native.cloak.lift_if_due(&w.window, crate::time::now()); }
         #[cfg(target_os = "windows")]

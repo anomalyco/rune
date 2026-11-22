@@ -73,6 +73,11 @@ pub struct Args {
     /// harness's actions keep pace with its script. It stands in for a window, so `App::on_ready`
     /// runs after its first frame.
     pub(crate) realtime: bool,
+    /// `--window-script FILE`: a real window replays the script's input on the wall clock from
+    /// its first drawn frame, through the same `script_input` a headless run uses, and drops the
+    /// system's pointer events while it does (`window::host::window_script`). Tooling, like
+    /// `--script`: only a command-line argument turns it on.
+    pub(crate) window_script: Option<PathBuf>,
     /// `--cpu-boot DIR`: also paint the `--snap` frame on the CPU (`render::cpu_boot`), on
     /// `--cpu-boot-threads N` threads (6 by default).
     pub(crate) cpu_boot: Option<PathBuf>,
@@ -184,6 +189,7 @@ impl Args {
                 "--trace" => a.trace = Some(val(&mut i).into()),
                 "--native" => a.native = true,
                 "--realtime" => a.realtime = true,
+                "--window-script" => a.window_script = Some(val(&mut i).into()),
                 "--trace-all" => a.trace_all = true,
                 "--strip" => a.strip = Some(val(&mut i).into()),
                 "--crop" => {
@@ -215,6 +221,9 @@ impl Args {
         if a.crop_key.is_some() && a.snap.is_none() { die("--crop KEY needs --snap"); }
         if a.whole_window && (a.playground.is_none() || a.snap.is_none()) { die("--whole-window needs --playground and --snap"); }
         if a.cpu_boot.is_some() && a.snap.is_none() { die("--cpu-boot needs --snap"); }
+        if a.window_script.is_some() && a.headless() { die("--window-script replays in a real window: it does not combine with a headless run (--script, --snap, --tree, ...)"); }
+        // Parsed here, before any window opens: an unreadable or malformed file ends the run now.
+        if a.window_script.is_some() { super::read_window_script(&a); }
         (a, extra)
     }
 
@@ -233,6 +242,27 @@ impl Args {
             || self.list_windows
             || self.desktop.is_some()
     }
+}
+
+/// The flags an app started again never carries over, each with its value (the next argument, or
+/// after `=`): they drive input or act for the person, so a relaunch (`Tx::relaunch`, an updater's
+/// restart) takes the real pointer and keys instead of repeating them. Flags that isolate a run
+/// (`--harness-writes`, `--dirs-root`) or trace it stay. A program that restarts the app itself
+/// strips them with [`without_relaunch_drops`] rather than keeping its own list.
+pub const RELAUNCH_DROPS: &[&str] = &["--window-script"];
+
+/// `args` without each [`RELAUNCH_DROPS`] flag and its value, given as `--flag VALUE` or
+/// `--flag=VALUE`, wherever it stands (a bare `--` ends nothing, as Rune's parser reads it). Every
+/// other argument stays, byte for byte and in order.
+pub fn without_relaunch_drops(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut it = args.into_iter();
+    while let Some(a) = it.next() {
+        if RELAUNCH_DROPS.iter().any(|f| a == *f) { it.next(); continue; }
+        if a.to_str().is_some_and(|a| RELAUNCH_DROPS.iter().any(|f| a.strip_prefix(f).is_some_and(|rest| rest.starts_with('=')))) { continue; }
+        out.push(a);
+    }
+    out
 }
 
 /// Whether this process runs headless: its arguments ask for an offscreen render, a scripted
@@ -295,6 +325,17 @@ const HELP: &str = "usage: <app> [window]
   --realtime            headless: hold each frame until the wall clock reaches its time, and
                         print \"rune-mark NAME T\" as the script passes each mark,
                         and run on_ready after the first frame, as a window does
+  --window-script FILE.json   a real window replays the script's input on the wall clock from its
+                        first drawn frame (the same events --script takes) and ignores the
+                        system's pointer while it does: the --window KEY window, else the first;
+                        prints \"rune-script-window KEY\", \"rune-mark NAME T ELAPSED\", then
+                        \"rune-script-done T ELAPSED\", or \"rune-script-error T ELAPSED WHY\" and
+                        stops replaying (also when no frame is drawn within 10 s); a relaunch
+                        drops it. It cannot show: the system's pointer messages (WM_MOUSEMOVE,
+                        WM_MOUSEWHEEL) and their DPI and delta scaling, the system cursor and the
+                        system's own hover tracking, the custom caption buttons, overlay windows,
+                        the low-level mouse hook and press_point, or an engine's native windows
+                        (its dialogs, DevTools)
   --first-pixels        report when the first GPU-complete offscreen pixels are readable
   --window KEY         select a window for headless tools (run_windows, App::window)
   --list-windows       list window keys using a deterministic virtual display
