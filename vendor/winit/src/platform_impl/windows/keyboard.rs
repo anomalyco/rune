@@ -4,7 +4,9 @@ use std::mem::MaybeUninit;
 use std::os::windows::ffi::OsStringExt;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
+use std::collections::VecDeque;
 use std::sync::{Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows_sys::Win32::System::SystemServices::LANG_KOREAN;
@@ -67,6 +69,11 @@ pub struct KeyEventBuilder {
     // Rune: high surrogate waiting for its matching low surrogate across consecutive VK_PACKET or
     // bare WM_CHAR messages (Win+. emoji panel, Win+H voice typing, SendInput KEYEVENTF_UNICODE).
     pending_high_surrogate: Mutex<Option<u16>>,
+    // Rune: recent key-downs whose `TranslateMessage` character may still arrive after their
+    // key-up (a program that posts keys), to tell that copy from other text.
+    translated: Mutex<VecDeque<Translated>>,
+    // Rune: the `lParam` of the key-down whose event takes the `WM_CHAR`s that follow it.
+    building: Mutex<Option<LPARAM>>,
     pending: PendingEventQueue<MessageAsKeyEvent>,
 }
 impl Default for KeyEventBuilder {
@@ -74,6 +81,8 @@ impl Default for KeyEventBuilder {
         KeyEventBuilder {
             event_info: Mutex::new(None),
             pending_high_surrogate: Mutex::new(None),
+            translated: Mutex::new(VecDeque::new()),
+            building: Mutex::new(None),
             pending: Default::default(),
         }
     }
@@ -108,6 +117,7 @@ impl KeyEventBuilder {
                 },
                 WM_KILLFOCUS => {
                     *self.pending_high_surrogate.lock().unwrap() = None;
+                    self.translated.lock().unwrap().clear();
                     // synthesize keyup events
                     let kbd_state = get_kbd_state();
                     let key_events = Self::synthesize_kbd_state(ElementState::Released, &kbd_state);
@@ -124,6 +134,12 @@ impl KeyEventBuilder {
                     if wparam as VIRTUAL_KEY != VK_PACKET {
                         *self.pending_high_surrogate.lock().unwrap() = None;
                     }
+                    // Rune: `TranslateMessage` has already posted this key's character, with this
+                    // `lParam`; a program that posted the key-up too gets it after the key-up.
+                    if msg_kind == WM_KEYDOWN && wparam as VIRTUAL_KEY != VK_PACKET {
+                        note_key_down(&mut self.translated.lock().unwrap(), lparam, Instant::now());
+                    }
+                    *self.building.lock().unwrap() = Some(lparam);
                     let pending_token = self.pending.add_pending();
                     *result = ProcResult::Value(0);
 
@@ -193,6 +209,11 @@ impl KeyEventBuilder {
                         }
                         let pending_token = self.pending.add_pending();
                         *result = ProcResult::Value(0);
+                        // Rune: a posted key's own character, after a key-up that came first,
+                        // when that key already typed it: not text a second time.
+                        if bare_char_is_copy(&mut self.translated.lock().unwrap(), wparam, lparam, Instant::now()) {
+                            return MatchResult::TokenToRemove(pending_token);
+                        }
                         let mut pending_high = self.pending_high_surrogate.lock().unwrap();
                         let Some(text) = bare_char_text(&mut pending_high, wparam, ime_composing)
                         else {
@@ -209,6 +230,9 @@ impl KeyEventBuilder {
                     if let Some(ev_info) = event_info.as_mut() {
                         if keyed_char_is_text(wparam, ev_info.vkey) {
                             append_wparam_utf16(wparam, &mut ev_info.utf16parts);
+                            if let Some(down) = *self.building.lock().unwrap() {
+                                note_keyed_text(&mut self.translated.lock().unwrap(), down, wparam);
+                            }
                         }
                     }
                     // It's important that we unlock the mutex, and create the pending event token
@@ -675,6 +699,48 @@ fn keyed_char_is_text(wparam: WPARAM, vkey: VIRTUAL_KEY) -> bool {
     !(wparam == 0 && vkey == VK_PACKET)
 }
 
+/// Rune: a recent `WM_KEYDOWN` whose character `TranslateMessage` posted with the same `lParam`.
+/// A program that posts a key-down and its key-up together gets that character AFTER the key-up,
+/// with no key in progress. `typed` is the character the key's own event already took (from a
+/// `WM_CHAR` that program posted between the two), if any.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Translated {
+    lparam: LPARAM,
+    typed: Option<WPARAM>,
+    at: Instant,
+}
+
+/// How many key-downs are remembered, and for how long: a copy comes within a few messages.
+const TRANSLATED_KEEP: usize = 16;
+const TRANSLATED_FOR: Duration = Duration::from_secs(1);
+
+/// Rune: a `WM_KEYDOWN` with `lparam` happened at `now`.
+fn note_key_down(list: &mut VecDeque<Translated>, lparam: LPARAM, now: Instant) {
+    list.retain(|t| now.saturating_duration_since(t.at) < TRANSLATED_FOR);
+    list.push_back(Translated { lparam, typed: None, at: now });
+    while list.len() > TRANSLATED_KEEP {
+        list.pop_front();
+    }
+}
+
+/// Rune: the event of the key-down with `down` took `wparam` as its text. A hardware key's own
+/// copy is that `WM_CHAR` (posted messages come before input), so nothing more follows it.
+fn note_keyed_text(list: &mut VecDeque<Translated>, down: LPARAM, wparam: WPARAM) {
+    if let Some(t) = list.iter_mut().rev().find(|t| t.lparam == down && t.typed.is_none()) {
+        t.typed = Some(wparam);
+    }
+}
+
+/// Rune: whether a bare `WM_CHAR` is a remembered key-down's own copy of the character that key
+/// already typed (dropped), rather than text. Each key-down's copy is matched once, oldest first;
+/// a copy whose key typed nothing yet types once; any other `lParam` (programs that post text
+/// alone post 0 or 1), or an entry older than a second, matches nothing.
+fn bare_char_is_copy(list: &mut VecDeque<Translated>, wparam: WPARAM, lparam: LPARAM, now: Instant) -> bool {
+    list.retain(|t| now.saturating_duration_since(t.at) < TRANSLATED_FOR);
+    let Some(i) = list.iter().position(|t| t.lparam == lparam) else { return false };
+    list.remove(i).is_some_and(|t| t.typed == Some(wparam))
+}
+
 /// Rune: appends a `WM_CHAR` `wparam` (UTF-16 surrogate unit or Unicode scalar) onto
 /// `utf16parts`.
 fn append_wparam_utf16(wparam: WPARAM, utf16parts: &mut Vec<u16>) {
@@ -846,6 +912,149 @@ mod rune_bare_char_tests {
         assert_eq!(bare_char_text(&mut pending, 0xd83d, false), None);
         assert_eq!(bare_char_text(&mut pending, 0xde00, true), None);
         assert_eq!(bare_char_text(&mut pending, 0xde00, false), None);
+    }
+}
+
+#[cfg(test)]
+mod rune_posted_key_tests {
+    //! What a posted key's `TranslateMessage` copy does, for each order of key messages. Each test
+    //! replays the order through the same calls the key-down, keyed `WM_CHAR` and bare `WM_CHAR`
+    //! handlers make, and counts the characters that type.
+    use std::collections::VecDeque;
+    use std::time::{Duration, Instant};
+
+    use super::{bare_char_is_copy, note_key_down, note_keyed_text, Translated};
+
+    const H: usize = 'h' as usize;
+    const E: usize = 'e' as usize;
+    const L: usize = 'l' as usize;
+    // lParam: repeat count 1, scan code in bits 16-23 (as `TranslateMessage` copies it).
+    fn lp(scan: isize) -> isize { 1 | (scan << 16) }
+
+    /// The text a sequence types: keyed chars type with their key; a bare char types unless it is
+    /// a copy of text its key already typed.
+    struct Replay { list: VecDeque<Translated>, now: Instant, typed: String }
+    impl Replay {
+        fn new() -> Self { Self { list: VecDeque::new(), now: Instant::now(), typed: String::new() } }
+        fn down(&mut self, lparam: isize) { note_key_down(&mut self.list, lparam, self.now); }
+        fn keyed(&mut self, down: isize, ch: usize) { note_keyed_text(&mut self.list, down, ch); self.typed.push(char::from_u32(ch as u32).unwrap()); }
+        fn bare(&mut self, ch: usize, lparam: isize) {
+            if !bare_char_is_copy(&mut self.list, ch, lparam, self.now) { self.typed.push(char::from_u32(ch as u32).unwrap()); }
+        }
+        fn wait(&mut self, d: Duration) { self.now += d; }
+    }
+
+    #[test]
+    fn hardware_order_types_each_char_once() {
+        // down, its own char (posted before the key-up, which is input), up.
+        let mut r = Replay::new();
+        for (ch, scan) in [(H, 0x23), (E, 0x12), (L, 0x26), (L, 0x26)] { r.down(lp(scan)); r.keyed(lp(scan), ch); }
+        assert_eq!(r.typed, "hell");
+    }
+
+    #[test]
+    fn down_and_up_back_to_back_type_the_late_copy_once() {
+        // The key's event takes no text (its key-up came first); its copy arrives bare.
+        let mut r = Replay::new();
+        r.down(lp(0x23));
+        r.bare(H, lp(0x23));
+        assert_eq!(r.typed, "h");
+    }
+
+    #[test]
+    fn all_downs_then_all_ups_type_every_copy_once_in_order() {
+        let mut r = Replay::new();
+        for scan in [0x23, 0x12, 0x26, 0x26] { r.down(lp(scan)); }
+        for (ch, scan) in [(H, 0x23), (E, 0x12), (L, 0x26), (L, 0x26)] { r.bare(ch, lp(scan)); }
+        assert_eq!(r.typed, "hell");
+    }
+
+    #[test]
+    fn down_char_up_does_not_type_the_copy_again() {
+        // A program posts key-down, WM_CHAR and key-up together: the explicit char types with the
+        // key; TranslateMessage's copy lands after the key-up (driver log, 02:58 run: `hhelloo`).
+        let mut r = Replay::new();
+        for (ch, scan) in [(H, 0x23), (E, 0x12), (L, 0x26), (L, 0x26)] { r.down(lp(scan)); r.keyed(lp(scan), ch); }
+        for (ch, scan) in [(H, 0x23), (E, 0x12), (L, 0x26), (L, 0x26)] { r.bare(ch, lp(scan)); }
+        assert_eq!(r.typed, "hell");
+    }
+
+    #[test]
+    fn bare_text_from_a_program_types_as_before() {
+        // Programs that post text alone post lParam 0 or 1: never a remembered key-down's.
+        let mut r = Replay::new();
+        r.down(lp(0x23));
+        r.keyed(lp(0x23), H);
+        for ch in [E, L, L] { r.bare(ch, 1); }
+        r.bare(H, 0);
+        assert_eq!(r.typed, "hellh");
+    }
+
+    #[test]
+    fn with_nothing_remembered_every_bare_char_types() {
+        // VK_PACKET and bare paths: no key-down was remembered (VK_PACKET is never noted).
+        let mut r = Replay::new();
+        r.bare(0xe9, 1);
+        r.bare(H, lp(0x23));
+        assert_eq!(r.typed, "éh");
+    }
+
+    #[test]
+    fn a_held_key_s_repeats_type_one_char_each_and_nothing_is_dropped() {
+        // Auto-repeat: the same scan code, bit 30 (previous state) set, each repeat with its own char.
+        let rep = lp(0x26) | (1 << 30);
+        let mut r = Replay::new();
+        r.down(lp(0x26));
+        r.keyed(lp(0x26), L);
+        for _ in 0..5 { r.wait(Duration::from_millis(33)); r.down(rep); r.keyed(rep, L); }
+        assert_eq!(r.typed, "llllll");
+        // A program's bare text afterwards still types.
+        r.bare(L, 1);
+        assert_eq!(r.typed, "lllllll");
+    }
+
+    #[test]
+    fn the_same_key_posted_twice_types_twice() {
+        // down, up, down, up, then the two copies: each copy belongs to one press.
+        let mut r = Replay::new();
+        r.down(lp(0x26));
+        r.down(lp(0x26));
+        r.bare(L, lp(0x26));
+        r.bare(L, lp(0x26));
+        assert_eq!(r.typed, "ll");
+        // And with explicit chars (down + char + up, twice): two l, no copies.
+        let mut r = Replay::new();
+        r.down(lp(0x26)); r.keyed(lp(0x26), L);
+        r.down(lp(0x26)); r.keyed(lp(0x26), L);
+        r.bare(L, lp(0x26));
+        r.bare(L, lp(0x26));
+        assert_eq!(r.typed, "ll");
+    }
+
+    #[test]
+    fn a_stale_key_down_never_eats_later_text() {
+        // An entry older than a second matches nothing: later bare text with the same lParam types.
+        let mut r = Replay::new();
+        r.down(lp(0x23));
+        r.keyed(lp(0x23), H);
+        r.wait(Duration::from_millis(1001));
+        r.bare(H, lp(0x23));
+        assert_eq!(r.typed, "hh");
+        // A different character with that lParam is not the copy either.
+        let mut r = Replay::new();
+        r.down(lp(0x23));
+        r.keyed(lp(0x23), H);
+        r.bare(E, lp(0x23));
+        assert_eq!(r.typed, "he");
+    }
+
+    #[test]
+    fn at_most_sixteen_key_downs_are_remembered() {
+        let mut list = VecDeque::new();
+        let now = Instant::now();
+        for scan in 0..20 { note_key_down(&mut list, lp(scan), now); }
+        assert_eq!(list.len(), 16);
+        assert_eq!(list.front().map(|t| t.lparam), Some(lp(4)), "the oldest go first");
     }
 }
 
