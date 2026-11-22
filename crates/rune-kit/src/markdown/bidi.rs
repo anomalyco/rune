@@ -142,7 +142,7 @@ pub(super) fn isolated(e: El, inl: &Inline) -> El {
 /// link whose text is its address.
 fn units(inl: &Inline) -> Vec<Range<usize>> {
     let mut out: Vec<Range<usize>> = Vec::new();
-    let mut code: Vec<Range<usize>> = inl.spans.iter().filter(|s| matches!(s.2, Style::Code | Style::CodePad)).map(|s| s.0..s.1).collect();
+    let mut code: Vec<Range<usize>> = inl.spans.iter().filter(|s| matches!(s.2, Style::Code | Style::CodePad | Style::Math)).map(|s| s.0..s.1).collect();
     code.sort_by_key(|r| r.start);
     for r in code {
         match out.last_mut() {

@@ -65,7 +65,7 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
     let screen = i.pos.xy + projection.xy;
     let half = i.rect.zw * 0.5;
     let d = sd_rounded(screen - (i.rect.xy + half), half, i.radii);
-    let cov = clamp(0.5 - d, 0.0, 1.0) * clip_alpha(screen, i.clip, i.fade) * i.alpha;
+    let cov = clamp(0.5 - d, 0.0, 1.0) * clip_alpha_stops(screen, i.clip, i.fade, g.flags.zw) * i.alpha;
     let col = textureSampleLevel(blurred, smp, (screen - u.place.xy) / u.place.zw, 0.0);
     return col * cov;
 }

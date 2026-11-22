@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use crate::Color;
 use crate::el::{El, PillStyle};
-use crate::text::{BareIcon, PillChip, Span};
+use crate::text::{BareIcon, PillChip, Replace, Span};
 
 impl El {
     /// Draws bytes `range` of a [`text`](crate::text) or [`rich`](crate::rich) element as a
@@ -69,8 +69,69 @@ impl El {
         }
         let at = t.cold.pills.partition_point(|p| p.start < start);
         let InlineIcon { icon, image, size, gap, radius, color } = icon;
-        let bare = Some(Box::new(BareIcon { size, gap, radius, image }));
+        let bare = Some(Box::new(BareIcon { size, gap, radius, image, replace: None }));
         t.cold.pills.insert(at, PillChip { start, end, icon, bg: None, fg: color, bare });
+        self
+    }
+
+    /// Draws `image` in place of bytes `range` of a [`text`](crate::text) or
+    /// [`rich`](crate::rich) element, standing on the baseline as a glyph does (rendered math
+    /// in a sentence). The bytes take no room and draw nothing, but selection, copy and search
+    /// still see them. A line grows to fit a taller or deeper image, and one too wide for the
+    /// rest of a line moves whole to the next. Ranges are UTF-8 bytes on char boundaries with
+    /// no newline; empty, out-of-range or overlapping ones are skipped. On a field this does
+    /// nothing.
+    ///
+    /// ```ignore
+    /// text("so $e^x$ grows").inline_image(3..8, InlineImage::new(pixels, 14.0, 9.0, 0.5))
+    /// ```
+    pub fn inline_image(mut self, range: Range<usize>, image: InlineImage) -> Self {
+        if self.cold.input.is_some() {
+            return self;
+        }
+        let Some(t) = &mut self.text else { return self };
+        let c = &t.content;
+        let ok = range.start < range.end
+            && range.end <= c.len()
+            && c.is_char_boundary(range.start)
+            && c.is_char_boundary(range.end)
+            && !c.as_bytes()[range.clone()].contains(&b'\n');
+        let (start, end) = (range.start as u32, range.end as u32);
+        if !ok || t.cold.pills.iter().any(|p| p.start < end && start < p.end) {
+            return self;
+        }
+        let at = t.cold.pills.partition_point(|p| p.start < start);
+        let InlineImage { pixels, width, ascent, descent, bleed } = image;
+        let replace = Some(Replace { width, ascent, descent, bleed });
+        let bare = Some(Box::new(BareIcon { size: 0.0, gap: 0.0, radius: 0.0, image: Some(pixels), replace }));
+        t.cold.pills.insert(at, PillChip { start, end, icon: None, bg: None, fg: None, bare });
+        self
+    }
+}
+
+/// An image set in text by [`El::inline_image`]: `width` points wide, `ascent` points above
+/// the baseline and `descent` below it, the image scaled to fit that box.
+#[derive(Clone, Debug)]
+pub struct InlineImage {
+    pixels: crate::Pixels,
+    width: f32,
+    ascent: f32,
+    descent: f32,
+    bleed: f32,
+}
+
+fn points(v: f32) -> f32 {
+    if v.is_finite() { v.max(0.0) } else { 0.0 }
+}
+
+impl InlineImage {
+    pub fn new(pixels: crate::Pixels, width: f32, ascent: f32, descent: f32) -> Self {
+        Self { pixels, width: points(width), ascent: points(ascent), descent: points(descent), bleed: 0.0 }
+    }
+    /// Draws the image `points` past each edge of its box, for an image with clear margins
+    /// (rendered math's padding) that the line shouldn't make room for.
+    pub fn bleed(mut self, points: f32) -> Self {
+        self.bleed = self::points(points);
         self
     }
 }

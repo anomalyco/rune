@@ -393,6 +393,7 @@ fn headless_core(
             }
             renderer.upload_images(&gpu.device, &gpu.queue, &mut core.images);
             renderer.prepare_surfaces(&gpu.device, &gpu.queue, &core.surfaces, (w, h));
+            renderer.set_fade_stops(core.fade_stops());
             renderer.prepare_ui(&gpu.device, &gpu.queue, &mut core.text.atlas, &core.instances, (w, h));
             let mut enc = gpu.device.create_command_encoder(&Default::default());
             renderer.draw(&mut enc, &target.view, core.clear_color());

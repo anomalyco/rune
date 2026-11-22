@@ -13,7 +13,7 @@ pub const PHASES: usize = 6;
 /// true; `GetThreadTimes` moves in 15.6 ms ticks.
 pub(crate) fn cpu_ms() -> Option<f64> {
     #[cfg(any(unix, windows))]
-    { Some(super::host_clock::cpu_ns(super::host_clock::thread_cpu()) / 1e6) }
+    { super::host_clock::thread_cpu().and_then(super::host_clock::cpu_ns).map(|ns| ns / 1e6) }
     #[cfg(not(any(unix, windows)))]
     { None }
 }
@@ -39,7 +39,7 @@ mod enabled {
             TIMES.with(|times| {
                 let mut row = times.get();
                 row[self.0 as usize] += self.1.elapsed().as_secs_f64() * 1000.0;
-                if let Some(start) = self.2 { row[self.0 as usize + PHASES] += cpu_ms().unwrap() - start; }
+                if let (Some(start), Some(end)) = (self.2, cpu_ms()) { row[self.0 as usize + PHASES] += end - start; }
                 times.set(row);
             });
         }
@@ -143,9 +143,54 @@ pub fn take_frame_phases() -> [f64; 2 * PHASES] {
     take()
 }
 
-/// This thread's CPU clock in milliseconds.
+/// This thread's CPU clock in milliseconds. On Windows its first call waits (at most 50 ms) for the
+/// cycles' rate, so a bench's first reading is a real one, not 0.
 #[cfg(feature = "frame-profile")]
-pub fn thread_cpu_ms() -> f64 { cpu_ms().unwrap_or(0.0) }
+pub fn thread_cpu_ms() -> f64 {
+    #[cfg(windows)]
+    super::host_clock::cycles_per_ns_waiting();
+    cpu_ms().unwrap_or(0.0)
+}
+
+/// This thread's own CPU time in nanoseconds: its cycles on Windows (`QueryThreadCycleTime`),
+/// `CLOCK_THREAD_CPUTIME_ID` elsewhere. It stands still while the thread waits or the system
+/// runs something else, so a budget kept on it charges only work the thread did. `None` where
+/// there is no such clock (the browser, Windows on ARM), when the OS can't read it, and on Windows
+/// for the first 20 ms after the process first asks, while the cycles' rate is measured.
+pub fn thread_cpu_ns() -> Option<f64> {
+    #[cfg(any(unix, windows))]
+    return super::host_clock::thread_cpu().and_then(super::host_clock::cpu_ns);
+    #[cfg(not(any(unix, windows)))]
+    None
+}
+/// A reading of this thread's CPU clock in its raw units ([`thread_cpu_mark`]), taken now and
+/// converted later ([`thread_cpu_since`]): a mark taken before Windows knows the cycles' rate still
+/// measures from that moment once it does.
+#[derive(Clone, Copy, Debug)]
+pub struct ThreadCpuMark(u64);
+
+/// This thread's CPU clock now, raw; `None` where there is none or it can't be read. On Windows it
+/// also starts measuring the cycles' rate (no wait).
+pub fn thread_cpu_mark() -> Option<ThreadCpuMark> {
+    #[cfg(windows)]
+    super::host_clock::cycles_per_ns();
+    #[cfg(any(unix, windows))]
+    return super::host_clock::thread_cpu().map(ThreadCpuMark);
+    #[cfg(not(any(unix, windows)))]
+    None
+}
+
+/// Nanoseconds of this thread's CPU time since `mark` (taken on this thread); `None` until the
+/// rate is known (Windows, the first 20 ms) or when the clock can't be read.
+pub fn thread_cpu_since(mark: ThreadCpuMark) -> Option<f64> {
+    #[cfg(any(unix, windows))]
+    return super::host_clock::thread_cpu().and_then(|now| super::host_clock::cpu_ns(now.saturating_sub(mark.0)));
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = mark;
+        None
+    }
+}
 
 /// Without `frame-profile`, a phase is timed only for `RUNE_COMMIT_BUDGET_MS`
 /// (`perf_warn::budget`) and in a frame interaction timing follows (`tooling::interaction`),

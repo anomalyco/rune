@@ -60,7 +60,8 @@ pub fn shape_key(text: &str, spans: &[Span], style: TextStyle, scale: f32, wrap_
     let mut h = KeyHasher::default();
     (key, wrap_anywhere).hash(&mut h);
     for p in pills {
-        (p.start, p.end, p.icon.is_some(), p.bare.as_ref().map(|b| (b.size.to_bits(), b.gap.to_bits()))).hash(&mut h);
+        let replace = |r: &crate::Replace| [r.width, r.ascent, r.descent].map(f32::to_bits);
+        (p.start, p.end, p.icon.is_some(), p.bare.as_ref().map(|b| (b.size.to_bits(), b.gap.to_bits(), b.replace.as_ref().map(replace)))).hash(&mut h);
     }
     h.finish()
 }

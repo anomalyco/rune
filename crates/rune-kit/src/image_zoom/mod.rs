@@ -252,6 +252,7 @@ impl ImageZoom {
 
 type Lens<S> = fn(&mut S) -> &mut ImageZoom;
 type OnClose<S> = Rc<dyn Fn(&mut S, &mut Tx)>;
+type OnKey<S> = Rc<dyn Fn(&mut S, &KeyEvent, &mut Tx) -> bool>;
 
 trait PreviewBind {
     fn body(&self, e: El) -> El;
@@ -265,6 +266,7 @@ trait PreviewBind {
 struct PreviewHandlers<S> {
     lens: Lens<S>,
     close: Option<OnClose<S>>,
+    key: Option<OnKey<S>>,
 }
 
 impl<S: 'static> PreviewBind for PreviewHandlers<S> {
@@ -284,6 +286,7 @@ impl<S: 'static> PreviewBind for PreviewHandlers<S> {
     fn root(&self, e: El) -> El {
         let lens = self.lens;
         let (dismiss, close, key_close) = (self.close.clone(), self.close.clone(), self.close.clone());
+        let first = self.key.clone();
         e.modal_tx(false, move |s: &mut S, tx: &mut Tx| {
             if lens(s).owns_escape() { lens(s).fit(tx) } else if let Some(c) = &dismiss { c(s, tx) }
         })
@@ -291,10 +294,13 @@ impl<S: 'static> PreviewBind for PreviewHandlers<S> {
             if lens(s).press(d, false, tx) && let Some(c) = &close { c(s, tx); }
         })
         .on_wheel(|_: &mut S, _, _: &mut Tx| true)
-        .on_key(move |s: &mut S, ev: &KeyEvent, tx: &mut Tx| match lens(s).key(ev, tx) {
-            Some(true) => { if let Some(c) = &key_close { c(s, tx); } true }
-            Some(false) => true,
-            None => false,
+        .on_key(move |s: &mut S, ev: &KeyEvent, tx: &mut Tx| {
+            if first.as_ref().is_some_and(|f| f(s, ev, tx)) { return true; }
+            match lens(s).key(ev, tx) {
+                Some(true) => { if let Some(c) = &key_close { c(s, tx); } true }
+                Some(false) => true,
+                None => false,
+            }
         })
     }
 
@@ -404,7 +410,7 @@ impl<S: 'static> Preview<S> {
     /// `image` (the app's element drawing the picture, with its key and shared-element id) is
     /// placed and sized here; `natural` is its size in pixels.
     pub fn new(lens: Lens<S>, natural: [f32; 2], image: El) -> Preview<S> {
-        Preview { core: PreviewCore::new(natural, image), handlers: PreviewHandlers { lens, close: None } }
+        Preview { core: PreviewCore::new(natural, image), handlers: PreviewHandlers { lens, close: None, key: None } }
     }
 
     /// How the zoom bar comes and goes (as the image flies, or with the scrim).
@@ -415,6 +421,14 @@ impl<S: 'static> Preview<S> {
 
     pub fn on_close(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
         self.handlers.close = Some(Rc::new(f));
+        self
+    }
+
+    /// Handle a key before the preview's own (the zoom keys and Escape). Return true to consume
+    /// it. The preview is a modal, so a handler around it never hears its keys: this is how an
+    /// app adds its own, such as arrows that step through a gallery.
+    pub fn on_key(mut self, f: impl Fn(&mut S, &KeyEvent, &mut Tx) -> bool + 'static) -> Self {
+        self.handlers.key = Some(Rc::new(f));
         self
     }
 

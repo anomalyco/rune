@@ -11,7 +11,7 @@ use crate::fonts::fallback::{self, Route};
 use crate::fonts::{language, system_weight};
 use crate::raster::synthetic_bold;
 use crate::{
-    Entry, Ink, Keep, PILL_BOX, PillChip, PillMetrics, Span, TextSystem, Trak, family_list, font_trak, mono_tab_stops,
+    Entry, HIDDEN_SIZE, Ink, Keep, PILL_BOX, PillChip, PillMetrics, Span, TextSystem, Trak, family_list, font_trak, mono_tab_stops,
     named_list, shape_key,
 };
 use rune_core::tok::{Family, OpticalSize, TextStyle};
@@ -84,16 +84,20 @@ impl TextSystem {
         // Each pill's label range, and the room before and after it in device px; boxes keep
         // the pill's index in their id, so ranges that fail the checks keep no chip.
         let pm = PillMetrics::new(style.size);
-        let pills: Vec<(usize, std::ops::Range<usize>, u32, u32)> = pills
+        // A replaced label's box also stands on the baseline: its height and baseline in px.
+        let pills: Vec<(usize, std::ops::Range<usize>, u32, u32, Option<(f32, f32)>)> = pills
             .iter()
             .enumerate()
             .map(|(i, p)| {
                 let r = (p.start as usize).min(text.len())..(p.end as usize).min(text.len());
-                let (lead, trail) = match &p.bare {
-                    Some(b) => (b.size + b.gap, 0.0),
-                    None => (pm.lead(p.icon.is_some()), pm.trail()),
+                let replace = p.bare.as_ref().and_then(|b| b.replace);
+                let (lead, trail) = match (&p.bare, replace) {
+                    (_, Some(r)) => (r.width, 0.0),
+                    (Some(b), None) => (b.size + b.gap, 0.0),
+                    (None, None) => (pm.lead(p.icon.is_some()), pm.trail()),
                 };
-                (i, r, (lead * scale).round() as u32, (trail * scale).round() as u32)
+                let stands = replace.map(|r| (((r.ascent + r.descent) * scale).round(), (r.ascent * scale).round()));
+                (i, r, (lead * scale).round() as u32, (trail * scale).round() as u32, stands)
             })
             .filter(|(_, r, ..)| {
                 !r.is_empty() && text.is_char_boundary(r.start) && text.is_char_boundary(r.end) && !text.as_bytes()[r.clone()].contains(&b'\n')
@@ -350,15 +354,24 @@ impl TextSystem {
             // Boxes before and after a pill's label make room for its chip. The label may break
             // like any text; `break_lines_with_blocks` moves a split pill whole to the next line
             // and lets it wrap only when it is wider than a line, as a browser wraps a span.
-            for (i, r, lead, trail) in &pills {
+            // A replaced label shapes so small it takes no room and draws nothing (`glyph_emit`
+            // skips it), and its box before it stands as tall as its image.
+            for (i, r, lead, trail, stands) in &pills {
+                if stands.is_some() {
+                    b.push(StyleProperty::FontSize(HIDDEN_SIZE / scale), r.clone());
+                    b.push(LineHeight::Absolute(0.0), r.clone());
+                    b.push(StyleProperty::LetterSpacing(0.0), r.clone());
+                    b.push(StyleProperty::WordSpacing(0.0), r.clone());
+                }
                 for (side, index, width) in [(0, r.start, *lead), (1, r.end, *trail)] {
+                    let (height, baseline) = stands.filter(|_| side == 0).map_or((0.0, None), |(h, a)| (h, Some(a)));
                     b.push_inline_box(parley::InlineBox {
                         id: PILL_BOX | (*i as u64) << 1 | side,
                         kind: parley::InlineBoxKind::InFlow,
                         index,
                         width: width as f32,
-                        height: 0.0,
-                        baseline: None,
+                        height,
+                        baseline,
                         vertical_align: parley::VerticalAlign::BASELINE,
                     });
                 }

@@ -434,6 +434,7 @@ macro_rules! node_cold_from {
         let mut above = take_field!($mode, $c.above);
         if $m.mirror && let Some(a) = &mut above { crate::el::mirror_anchor(a); }
         let matched = take_field!($mode, $c.matched).map(|id| (id, $c.motion));
+        let help_side = if $m.mirror { $c.help_side.map(crate::el::mirror_side) } else { $c.help_side };
         NodeCold {
             trace_name: $c.trace_name, trace_namespace: $m.trace_namespace,
             label: take_field!($mode, $c.label), live: take_field!($mode, $c.live),
@@ -445,7 +446,7 @@ macro_rules! node_cold_from {
             sticky: take_field!($mode, $c.sticky), growth: take_field!($mode, $c.growth),
             glide: $c.glide, a11y: take_field!($mode, $c.a11y),
             pixel_aspect: $m.pixel_aspect, aspect_fit: $m.aspect_fit, material: $c.material,
-            help: take_field!($mode, $c.help), help_cut: $c.help_cut, help_side: $c.help_side, help_open: $c.help_open,
+            help: take_field!($mode, $c.help), help_cut: $c.help_cut, help_side, help_open: $c.help_open,
             #[cfg(debug_assertions)]
             scroll_source: $c.scroll_source,
         }

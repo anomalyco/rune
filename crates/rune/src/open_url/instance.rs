@@ -115,10 +115,33 @@ mod handoff {
     /// How long a launch handed on by a quitting process waits for it to let go of the name.
     pub(super) const HANDED_WAIT: Duration = Duration::from_secs(10);
 
-    /// This launch's message: `MAGIC`, the body's length (u32, little-endian), and the body (the
-    /// arguments, NUL-separated).
+    /// The argument that carries a launch's id: each launch sends one, the same on every ask, and
+    /// the running process acts on an id once (`relaunched`). A launch it acted on whose answer
+    /// never reached it asks again, and that ask is a no-op, so one click opens once whatever the
+    /// pipe's flush reports. A process from before it takes it for an argument it doesn't know.
+    pub(super) const ID_ARG: &str = "--rune-launch-id=";
+    /// How many acted-on launch ids the running process remembers.
+    const IDS_KEPT: usize = 64;
+
+    /// This launch's id: random, once per process.
+    fn launch_id() -> &'static str {
+        static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        ID.get_or_init(|| {
+            use std::hash::{BuildHasher, Hash, Hasher};
+            let half = |salt: u8| {
+                let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+                (salt, std::process::id(), crate::time::now()).hash(&mut h);
+                h.finish()
+            };
+            format!("{:016x}{:016x}", half(0), half(1))
+        })
+    }
+
+    /// This launch's message: `MAGIC`, the body's length (u32, little-endian), and the body (its
+    /// id, then the arguments, NUL-separated).
     pub(super) fn message() -> Vec<u8> {
-        let body = std::env::args().skip(1).collect::<Vec<_>>().join("\0").into_bytes();
+        let id = format!("{ID_ARG}{}", launch_id());
+        let body = std::iter::once(id).chain(std::env::args().skip(1).filter(|a| !a.starts_with(ID_ARG))).collect::<Vec<_>>().join("\0").into_bytes();
         let mut message = MAGIC.to_vec();
         message.extend((body.len() as u32).to_le_bytes());
         message.extend(body);
@@ -144,6 +167,8 @@ mod handoff {
     }
 
     static WAITING: Mutex<Waiting> = Mutex::new(Waiting { launches: Vec::new(), exited: false });
+    /// The ids of the last launches acted on (`ID_ARG`), oldest first.
+    static ACTED: Mutex<std::collections::VecDeque<String>> = Mutex::new(std::collections::VecDeque::new());
     /// Whether `WAITING` holds a launch: the loop's per-turn check costs a load.
     static PENDING: AtomicBool = AtomicBool::new(false);
     /// A launch older than this when the loop ends was served by a window that went later (an app
@@ -184,17 +209,31 @@ mod handoff {
     /// A later launch's arguments: its links to `App::on_open_url`, or, without links, a reopen.
     /// One that comes while the app quits, or that the loop hadn't taken when it ended, starts the
     /// app again with them once this process has exited, as `Tx::relaunch` does: the windows it
-    /// would reach are closing, and the launch would be lost.
-    pub(super) fn relaunched(args: Vec<String>) {
+    /// would reach are closing, and the launch would be lost. A launch whose id was acted on
+    /// already (it asked again because its answer didn't reach it) is skipped: false.
+    pub(super) fn relaunched(args: Vec<String>) -> bool {
+        let (ids, args): (Vec<String>, Vec<String>) = args.into_iter().partition(|a| a.starts_with(ID_ARG));
+        if let Some(id) = ids.into_iter().next() {
+            let mut acted = ACTED.lock().unwrap_or_else(|e| e.into_inner());
+            if acted.contains(&id) {
+                return false;
+            }
+            acted.push_back(id);
+            if acted.len() > IDS_KEPT {
+                acted.pop_front();
+            }
+        }
         if crate::quit::quitting() {
-            return crate::relaunch::spawn_with(args);
+            crate::relaunch::spawn_with(args);
+            return true;
         }
         let links: Vec<String> = args.iter().filter(|a| super::is_link(a)).cloned().collect();
         {
             let mut waiting = WAITING.lock().unwrap_or_else(|e| e.into_inner());
             if waiting.exited {
                 drop(waiting);
-                return crate::relaunch::spawn_with(args);
+                crate::relaunch::spawn_with(args);
+                return true;
             }
             waiting.launches.push((crate::time::now(), args));
             PENDING.store(true, Ordering::Release);
@@ -204,11 +243,12 @@ mod handoff {
             if !sent {
                 exited();
             }
-            return;
+            return true;
         }
         for link in links {
             super::super::incoming::receive(link);
         }
+        true
     }
 }
 
