@@ -524,7 +524,14 @@ impl PartialKeyEventInfo {
         } else {
             new_ex_scancode(lparam_struct.scancode, lparam_struct.extended)
         };
-        let physical_key = scancode_to_physicalkey(scancode as u32);
+        // Rune: a VK_PACKET carries text, not a key: it is named as a bare WM_CHAR is
+        // (`standalone_char_event`), `Unidentified(NativeKeyCode::Unidentified)`, which Windows
+        // never reports for a real key (an unknown scan code is `NativeKeyCode::Windows(_)`).
+        let physical_key = if vkey == VK_PACKET {
+            PhysicalKey::Unidentified(NativeKeyCode::Unidentified)
+        } else {
+            scancode_to_physicalkey(scancode as u32)
+        };
         let location = get_location(scancode, layout.hkl as HKL);
 
         let kbd_state = get_kbd_state();
@@ -628,7 +635,12 @@ impl PartialKeyEventInfo {
         let logical_key = match self.logical_key {
             PartialLogicalKey::TextOr(fallback) => match text.as_ref() {
                 Some(s) => {
-                    if self.vkey != VK_PACKET && s.grapheme_indices(true).count() > 1 {
+                    // Rune: a VK_PACKET names its text as the key, unless the text is a control
+                    // character: that keeps the `Unidentified` key it had before.
+                    let packet = self.vkey == VK_PACKET;
+                    if (packet && s.chars().any(char::is_control))
+                        || (!packet && s.grapheme_indices(true).count() > 1)
+                    {
                         fallback
                     } else {
                         Key::Character(s.clone())
