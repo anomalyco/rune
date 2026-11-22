@@ -488,9 +488,20 @@ impl RuntimeCore {
             }
             Action::Files(event) => self.run_files(app, event, &mut one),
             Action::Key { ev, repeat, stage } => {
-                if self.kbd.held_gate(None, Some(&ev.key), repeat) { return false; }
+                // DIAGNOSTIC, DO NOT MERGE.
+                let diag = super::keys::key_diag_on();
+                if diag {
+                    eprintln!("rune-key-diag rune KEY {:?} repeat={repeat} stage={stage}", ev.key);
+                    super::keys::key_diag_take();
+                }
+                if self.kbd.held_gate(None, Some(&ev.key), repeat) {
+                    if diag { eprintln!("rune-key-diag rune KEY -> dropped by held_gate"); }
+                    return false;
+                }
                 if ! matches!(ev.key, crate::Key::Modifier { .. }) { self.note_key_down(app, repeat); }
-                if stage { self.route_stage_key(app, &ev, &mut one) } else { self.route_key(app, &ev, repeat, &mut one) }
+                let ran = if stage { self.route_stage_key(app, &ev, &mut one) } else { self.route_key(app, &ev, repeat, &mut one) };
+                if diag { eprintln!("rune-key-diag rune KEY -> ran={ran} by={:?} {}", super::keys::key_diag_take(), self.key_diag_focus(app)); }
+                ran
             }
             Action::KeyUp(ev) => self.route_key_up(app, &ev, &mut one),
             Action::Wheel { gesture, chain, ev, phased } => self.run_wheel(app, gesture, chain, ev, phased, &mut one),

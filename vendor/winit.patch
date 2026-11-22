@@ -645,7 +645,7 @@ index a3a7705d..c3980673 100644
          return None;
      }
 diff --git a/src/platform_impl/windows/keyboard.rs b/src/platform_impl/windows/keyboard.rs
-index 9c109490..7dee1e19 100644
+index 9c109490..545fc47b 100644
 --- a/src/platform_impl/windows/keyboard.rs
 +++ b/src/platform_impl/windows/keyboard.rs
 @@ -4,7 +4,9 @@ use std::mem::MaybeUninit;
@@ -710,7 +710,25 @@ index 9c109490..7dee1e19 100644
          result: &mut ProcResult,
      ) -> Vec<MessageAsKeyEvent> {
          enum MatchResult {
-@@ -98,6 +116,8 @@ impl KeyEventBuilder {
+@@ -89,6 +107,17 @@ impl KeyEventBuilder {
+             MessagesToDispatch(Vec<MessageAsKeyEvent>),
+         }
+ 
++        // DIAGNOSTIC, DO NOT MERGE: each key message as Windows gave it; `origin` 0 (unavailable)
++        // is a posted message, 1 hardware, 2 injected (SendInput), 4 system.
++        if key_diag() && matches!(msg_kind, WM_KEYDOWN | WM_KEYUP | WM_CHAR | WM_DEADCHAR | WM_SYSKEYDOWN | WM_SYSKEYUP | WM_SYSCHAR | WM_KILLFOCUS | WM_SETFOCUS) {
++            let mut source = windows_sys::Win32::UI::Input::INPUT_MESSAGE_SOURCE { deviceType: 0, originId: 0 };
++            // SAFETY: writes the struct passed in; on failure it stays zero.
++            unsafe { windows_sys::Win32::UI::Input::GetCurrentInputMessageSource(&mut source) };
++            eprintln!(
++                "rune-key-diag win32 MSG {msg_kind:#06x} wp={wparam:#x} lp={lparam:#010x} origin={} device={}",
++                source.originId, source.deviceType
++            );
++        }
+         let mut matcher = || -> MatchResult {
+             match msg_kind {
+                 WM_SETFOCUS => {
+@@ -98,6 +127,8 @@ impl KeyEventBuilder {
                      MatchResult::MessagesToDispatch(self.pending.complete_multi(key_events))
                  },
                  WM_KILLFOCUS => {
@@ -719,7 +737,7 @@ index 9c109490..7dee1e19 100644
                      // synthesize keyup events
                      let kbd_state = get_kbd_state();
                      let key_events = Self::synthesize_kbd_state(ElementState::Released, &kbd_state);
-@@ -109,6 +129,18 @@ impl KeyEventBuilder {
+@@ -109,6 +140,18 @@ impl KeyEventBuilder {
                          // This is handled in `event_loop.rs`
                          return MatchResult::Nothing;
                      }
@@ -738,7 +756,7 @@ index 9c109490..7dee1e19 100644
                      let pending_token = self.pending.add_pending();
                      *result = ProcResult::Value(0);
  
-@@ -144,6 +176,12 @@ impl KeyEventBuilder {
+@@ -144,6 +187,12 @@ impl KeyEventBuilder {
                              }
                          }
                      }
@@ -751,7 +769,7 @@ index 9c109490..7dee1e19 100644
                      if let Some(event_info) = finished_event_info {
                          let ev = event_info.finalize();
                          return MatchResult::MessagesToDispatch(self.pending.complete_pending(
-@@ -168,40 +206,43 @@ impl KeyEventBuilder {
+@@ -168,40 +217,43 @@ impl KeyEventBuilder {
                  WM_CHAR | WM_SYSCHAR => {
                      let mut event_info = self.event_info.lock().unwrap();
                      if event_info.is_none() {
@@ -826,7 +844,7 @@ index 9c109490..7dee1e19 100644
                          }
                      }
                      // It's important that we unlock the mutex, and create the pending event token
-@@ -224,6 +265,14 @@ impl KeyEventBuilder {
+@@ -224,6 +276,14 @@ impl KeyEventBuilder {
                                  return MatchResult::TokenToRemove(pending_token);
                              },
                          };
@@ -841,7 +859,7 @@ index 9c109490..7dee1e19 100644
                          let mut layouts = LAYOUT_CACHE.lock().unwrap();
                          // It's okay to call `ToUnicode` here, because at this point the dead key
                          // is already consumed by the character.
-@@ -238,10 +287,11 @@ impl KeyEventBuilder {
+@@ -238,10 +298,11 @@ impl KeyEventBuilder {
                              mod_state.contains(WindowsModifiers::CONTROL)
                          };
  
@@ -857,7 +875,7 @@ index 9c109490..7dee1e19 100644
                              event_info.text = PartialText::System(event_info.utf16parts.clone());
                          } else {
                              let mod_no_ctrl = mod_state.remove_only_ctrl();
-@@ -510,7 +560,14 @@ impl PartialKeyEventInfo {
+@@ -510,7 +571,14 @@ impl PartialKeyEventInfo {
          } else {
              new_ex_scancode(lparam_struct.scancode, lparam_struct.extended)
          };
@@ -873,7 +891,7 @@ index 9c109490..7dee1e19 100644
          let location = get_location(scancode, layout.hkl as HKL);
  
          let kbd_state = get_kbd_state();
-@@ -541,9 +598,11 @@ impl PartialKeyEventInfo {
+@@ -541,9 +609,11 @@ impl PartialKeyEventInfo {
  
          let logical_key = if let Some(key) = code_as_key.clone() {
              PartialLogicalKey::This(key)
@@ -887,7 +905,7 @@ index 9c109490..7dee1e19 100644
              PartialLogicalKey::TextOr(preliminary_logical_key)
          } else {
              PartialLogicalKey::This(preliminary_logical_key)
-@@ -612,7 +671,12 @@ impl PartialKeyEventInfo {
+@@ -612,7 +682,12 @@ impl PartialKeyEventInfo {
          let logical_key = match self.logical_key {
              PartialLogicalKey::TextOr(fallback) => match text.as_ref() {
                  Some(s) => {
@@ -901,7 +919,7 @@ index 9c109490..7dee1e19 100644
                          fallback
                      } else {
                          Key::Character(s.clone())
-@@ -638,6 +702,520 @@ impl PartialKeyEventInfo {
+@@ -638,6 +713,520 @@ impl PartialKeyEventInfo {
      }
  }
  

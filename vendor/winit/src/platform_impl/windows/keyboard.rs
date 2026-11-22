@@ -107,6 +107,17 @@ impl KeyEventBuilder {
             MessagesToDispatch(Vec<MessageAsKeyEvent>),
         }
 
+        // DIAGNOSTIC, DO NOT MERGE: each key message as Windows gave it; `origin` 0 (unavailable)
+        // is a posted message, 1 hardware, 2 injected (SendInput), 4 system.
+        if key_diag() && matches!(msg_kind, WM_KEYDOWN | WM_KEYUP | WM_CHAR | WM_DEADCHAR | WM_SYSKEYDOWN | WM_SYSKEYUP | WM_SYSCHAR | WM_KILLFOCUS | WM_SETFOCUS) {
+            let mut source = windows_sys::Win32::UI::Input::INPUT_MESSAGE_SOURCE { deviceType: 0, originId: 0 };
+            // SAFETY: writes the struct passed in; on failure it stays zero.
+            unsafe { windows_sys::Win32::UI::Input::GetCurrentInputMessageSource(&mut source) };
+            eprintln!(
+                "rune-key-diag win32 MSG {msg_kind:#06x} wp={wparam:#x} lp={lparam:#010x} origin={} device={}",
+                source.originId, source.deviceType
+            );
+        }
         let mut matcher = || -> MatchResult {
             match msg_kind {
                 WM_SETFOCUS => {

@@ -135,13 +135,22 @@ impl RuntimeCore {
     }
     pub(in crate::runtime) fn dispatch_physical(&mut self, app: &mut dyn AppDriver, event: PhysicalInput, fallback: Option<Fallback>, tx: &mut Tx) -> bool {
         tx.by_keys = true;
+        // DIAGNOSTIC, DO NOT MERGE.
+        let diag = super::keys::key_diag_on();
+        if diag {
+            eprintln!("rune-key-diag rune PHYSICAL {event:?} fallback={:?}", fallback.as_ref().map(|f| &f.key.key));
+            super::keys::key_diag_take();
+        }
         use crate::PhysicalKeyCode as Code;
         let is_mod = |c: Code| matches!(c, Code::ShiftLeft | Code::ShiftRight | Code::ControlLeft
             | Code::ControlRight | Code::AltLeft | Code::AltRight | Code::SuperLeft | Code::SuperRight
             | Code::CapsLock | Code::Fn);
         match event {
             PhysicalInput::Key { key, pressed: true, repeat, .. } => {
-                if self.kbd.held_gate(Some(key), fallback.as_ref().map(|f| &f.key.key), repeat) { return false; }
+                if self.kbd.held_gate(Some(key), fallback.as_ref().map(|f| &f.key.key), repeat) {
+                    if diag { eprintln!("rune-key-diag rune PHYSICAL -> dropped by held_gate"); }
+                    return false;
+                }
                 if !is_mod(key) { self.note_key_down(app, repeat); }
             }
             PhysicalInput::Key { key, pressed: false, .. } => {
@@ -202,6 +211,10 @@ impl RuntimeCore {
         };
         let ran = self.dispatch_mods(app, tx, &mut live) || ran;
         tx.live_only = ran && live == Some(true);
+        if diag {
+            let by = if consumed { "offer_physical (a physical handler)" } else { super::keys::key_diag_take() };
+            eprintln!("rune-key-diag rune PHYSICAL -> ran={ran} by={by:?} {}", self.key_diag_focus(app));
+        }
         ran
     }
     /// `App::on_modifiers`, when the held modifiers changed since it last heard them.

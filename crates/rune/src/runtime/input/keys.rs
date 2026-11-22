@@ -19,19 +19,20 @@ impl RuntimeCore {
         let app_first = self.kbd.focus.path().is_none();
         // Return and Escape that reach a field mid-composition belong to the input method: they
         // confirm or cancel it, and submit, blur and press nothing.
-        if matches!(ev.key, crate::Key::Enter | crate::Key::Escape) && self.composing(app) { return true; }
-        if self.element_key(app, ev, one) { return true; }
+        if matches!(ev.key, crate::Key::Enter | crate::Key::Escape) && self.composing(app) { key_diag_took("composing input method"); return true; }
+        if self.element_key(app, ev, one) { key_diag_took("element_key"); return true; }
         one.physical_key = None;
-        if self.default_button_key(app, ev, one) { return true; }
+        if self.default_button_key(app, ev, one) { key_diag_took("default_button_key"); return true; }
         one.physical_key = physical_key;
-        if self.playground_nav(app, ev, one) { return true; }
-        if app_first && !app.playground_typing() && app.has_on_key() && Tx::took(app.on_key(ev, one), one) { return true; }
+        if self.playground_nav(app, ev, one) { key_diag_took("playground_nav"); return true; }
+        if app_first && !app.playground_typing() && app.has_on_key() && Tx::took(app.on_key(ev, one), one) { key_diag_took("app on_key (nothing focused)"); return true; }
         if self.focused_input().is_some() {
             self.edit.input_click.clear_last();
         }
         if let Some(f) = self.focused_input().and_then(|input| input.key.clone())
             && Tx::took(f(app.states(), ev, one), one)
         {
+            key_diag_took("focused input's key handler");
             return true;
         }
         one.physical_key = None;
@@ -48,10 +49,11 @@ impl RuntimeCore {
         {
             let layout = self.focused_layout();
             if self.with_focused(app, |e| e.key_in(ev, layout.as_ref().map(TextLayout::view)), one) {
+                key_diag_took("focused field (Tab edit)");
                 return true;
             }
         }
-        if self.focus_key(app, ev, shown, one) { return true; }
+        if self.focus_key(app, ev, shown, one) { key_diag_took("focus_key"); return true; }
         let input_handles = match &ev.key {
             crate::edit::Key::Function(_) | crate::edit::Key::ContextMenu | crate::edit::Key::Tab | crate::edit::Key::PageUp | crate::edit::Key::PageDown
             | crate::edit::Key::Insert | crate::edit::Key::PrintScreen | crate::edit::Key::ScrollLock | crate::edit::Key::Pause => false,
@@ -81,19 +83,22 @@ impl RuntimeCore {
             {
                 one.copy_rich(crate::ClipboardContent::new(text).with_html(html));
             }
-            if handled { return true; }
+            if handled { key_diag_took("focused field (key_in)"); return true; }
         }
         one.physical_key = physical_key;
         if !app_first && !app.playground_typing() && app.has_on_key() && Tx::took(app.on_key(ev, one), one) {
             log_event!(self, "key {:?}", ev.key);
+            key_diag_took("app on_key");
             return true;
         }
         one.physical_key = None;
         // Selected text takes the Cmd+A and Cmd+C nothing else took, as AppKit's responder chain
         // gives a key equivalent to the menu bar before the text view: an app's shortcut wins.
-        if !repeat && self.selection_key(app, ev, one) { return true; }
-        if !repeat && self.context_menu_key(app, ev, one) { return true; }
-        self.page_scroll(app, ev) || self.playground_key(app, ev, one)
+        if !repeat && self.selection_key(app, ev, one) { key_diag_took("selection_key"); return true; }
+        if !repeat && self.context_menu_key(app, ev, one) { key_diag_took("context_menu_key"); return true; }
+        let ran = self.page_scroll(app, ev) || self.playground_key(app, ev, one);
+        if ran { key_diag_took("page_scroll / playground_key"); }
+        ran
     }
 
     /// Page Up and Page Down scroll by most of a viewport, and Home and End to the top and
@@ -392,5 +397,35 @@ impl RuntimeCore {
     #[inline]
     pub fn has_focus(&self) -> bool {
         self.kbd.has_focus()
+    }
+}
+
+/// DIAGNOSTIC, DO NOT MERGE: the key log, only when RUNE_KEY_DIAG is exactly the diagnostic value
+/// (read once; nobody has it set).
+pub(in crate::runtime) fn key_diag_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("RUNE_KEY_DIAG").as_deref() == Ok("4845c40a-diagnostic-do-not-ship"))
+}
+
+thread_local! {
+    /// DIAGNOSTIC, DO NOT MERGE: the `route_key` step that took the last key.
+    static KEY_DIAG_STAGE: std::cell::Cell<&'static str> = const { std::cell::Cell::new("") };
+}
+
+/// DIAGNOSTIC, DO NOT MERGE.
+pub(in crate::runtime) fn key_diag_took(stage: &'static str) { KEY_DIAG_STAGE.with(|s| s.set(stage)); }
+
+/// DIAGNOSTIC, DO NOT MERGE: the step that took the key since the last call ("" for none).
+pub(in crate::runtime) fn key_diag_take() -> &'static str { KEY_DIAG_STAGE.with(|s| s.replace("")) }
+
+impl RuntimeCore {
+    /// DIAGNOSTIC, DO NOT MERGE: the focused element and its field's text in app state now
+    /// (never a secure field's).
+    pub(in crate::runtime) fn key_diag_focus(&self, app: &mut dyn AppDriver) -> String {
+        let Some(input) = self.focused_input() else { return format!("focus={:?} (no field)", self.kbd.focus.path()) };
+        if input.edit.is_secure() { return format!("focus={:?} text=<secure>", self.kbd.focus.path()); }
+        let Some(access) = input.access.clone() else { return format!("focus={:?} (no access)", self.kbd.focus.path()) };
+        let path = self.kbd.focus.path().map(str::to_owned);
+        format!("focus={path:?} text={:?}", access(app.states()).text)
     }
 }
