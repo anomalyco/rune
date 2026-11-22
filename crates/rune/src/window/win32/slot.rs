@@ -83,6 +83,7 @@ impl Slot {
                 // SAFETY: the swap chain's live object; a zero timeout only polls it (and takes its
                 // count when it's signalled).
                 if unsafe { WaitForSingleObject(object, 0) } == WAIT_OBJECT_0 {
+                    super::present_log::room("poll");
                     *self = Slot::Free;
                     return Take::Draw;
                 }
@@ -156,9 +157,10 @@ impl Drop for Wait {
     }
 }
 
-unsafe extern "system" fn came(context: *mut c_void, _timed_out: bool) {
+unsafe extern "system" fn came(context: *mut c_void, timed_out: bool) {
     // SAFETY: the `Box` `register` made, alive until the wait is unregistered.
     let wake = unsafe { &*(context as *const Box<dyn Fn() + Send>) };
+    super::present_log::room(if timed_out { "gave-up" } else { "wait" });
     wake();
 }
 

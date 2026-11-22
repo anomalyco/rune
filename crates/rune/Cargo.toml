@@ -171,7 +171,7 @@ xkbcommon = "0.9"
 # DirectComposition handover (`platform::win32::dcomp_handover`), OLE drag and drop
 # (`drag_out::windows`, `platform::win32::drop_target`), jump lists and the taskbar button's
 # progress and badge (`platform::win32::{jump_list,taskbar}`).
-windows = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_DirectComposition", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Ole", "Win32_System_SystemServices", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging"] }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_DirectComposition", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Ole", "Win32_System_SystemServices", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging"] }
 # `#[windows::core::implement]` (the OLE drop target, `platform::win32::drop_target`) names this crate.
 windows-core = { workspace = true }
 # D3D12 alone: a machine without a hardware D3D12 adapter draws on WARP, D3D12's own software

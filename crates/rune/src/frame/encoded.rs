@@ -23,6 +23,7 @@ pub struct FrameEncoded {
     refresh_hz: Option<f64>,
     update_ms: Option<f64>,
     encode_ms: Option<f64>,
+    paced: bool,
 }
 
 /// What a frame came to.
@@ -77,6 +78,13 @@ impl FrameEncoded {
     /// submitted (`at`): uploads, the renderer's prepare and draw, or a compositor's `render`.
     /// CPU wall time; not GPU time, and not the wait to present. `None` otherwise.
     pub fn encode_ms(&self) -> Option<f64> { self.encode_ms }
+
+    /// For `Drawn` on Windows: the frame was due before the swap chain had room for it, and
+    /// started when the frame before it left room. Between two such frames' `started`, the gap is
+    /// the swap chain's present interval: how often the window can present, which the display, the
+    /// compositor and the GPU decide. A frame that came later than that (a 30 fps video's) is not
+    /// paced. False elsewhere.
+    pub fn paced(&self) -> bool { self.paced }
 }
 
 /// A window's hook and the count it numbers reports with. Without a hook every call is one
@@ -89,11 +97,13 @@ struct Reporter {
     window: Option<Rc<str>>,
     seq: u64,
     refresh_hz: Option<f64>,
+    /// The frame now due waited for room in the swap chain (`FrameEncoded::paced`).
+    paced: bool,
 }
 
 impl FrameReports {
     pub(crate) fn new(hook: Option<OnFrameEncoded>, window: Option<&str>) -> Self {
-        Self(hook.map(|hook| Reporter { hook, window: window.map(Rc::from), seq: 0, refresh_hz: None }))
+        Self(hook.map(|hook| Reporter { hook, window: window.map(Rc::from), seq: 0, refresh_hz: None, paced: false }))
     }
 
     /// The time to report a `Drawn` frame at, taken only when there's a hook.
@@ -115,6 +125,12 @@ impl FrameReports {
         self.report(FrameOutcome::Drawn, at, presents_at, Some((started, update_ms, encode_ms)));
     }
 
+    /// The frame now due waits for room in the swap chain; it reports `paced` when it draws.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn waited_for_room(&mut self) {
+        if let Some(r) = &mut self.0 { r.paced = true; }
+    }
+
     pub(crate) fn unchanged(&mut self, presents_at: Option<Instant>) {
         if self.0.is_some() { self.report(FrameOutcome::Unchanged, crate::time::now(), presents_at, None); }
     }
@@ -126,7 +142,8 @@ impl FrameReports {
     fn report(&mut self, outcome: FrameOutcome, at: Instant, presents_at: Option<Instant>, work: Option<(Instant, f64, f64)>) {
         let Some(r) = &mut self.0 else { return };
         let (started, update_ms, encode_ms) = (work.map(|w| w.0), work.map(|w| w.1), work.map(|w| w.2));
-        let frame = FrameEncoded { at, outcome, window: r.window.clone(), seq: r.seq, presents_at, started, refresh_hz: r.refresh_hz, update_ms, encode_ms };
+        let paced = std::mem::take(&mut r.paced) && outcome == FrameOutcome::Drawn;
+        let frame = FrameEncoded { at, outcome, window: r.window.clone(), seq: r.seq, presents_at, started, refresh_hz: r.refresh_hz, update_ms, encode_ms, paced };
         r.seq += 1;
         (r.hook)(&frame);
     }

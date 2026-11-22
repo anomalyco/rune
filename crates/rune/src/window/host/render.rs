@@ -378,6 +378,8 @@ pub(super) fn submit_and_present_window(
     #[cfg(target_os = "windows")]
     if let Some(surface) = l.surface.as_ref() {
         l.native.slot.presented_surface(surface);
+        crate::window::win32::present_log::presented(surface);
+        crate::window::win32::present_log::dwm_tick();
     }
     // A swap chain made again on a handed-over window's visual takes over now (`cpu_frame`).
     #[cfg(target_os = "windows")]
