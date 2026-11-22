@@ -158,7 +158,7 @@ mod tests {
         let a = map_parts(true, SCAN_ZERO, &ch("a"), Some("a"), ModifiersState::empty());
         assert_eq!(a, map_key(&ch("a"), ModifiersState::empty()));
         if cfg!(target_os = "windows") {
-            assert_eq!(copy.map(|ev| ev.key), Some(Key::Command('c')));
+            assert_eq!(copy, Some(KeyEvent { key: Key::Command('c'), mods: map_mods(ModifiersState::CONTROL) }));
             assert_eq!(alt_f, Some(KeyEvent { key: Key::Text("f".into()), mods: map_mods(ModifiersState::ALT) }));
             assert_eq!(a, Some(KeyEvent { key: Key::Text("a".into()), mods: Mods::default() }));
         }
