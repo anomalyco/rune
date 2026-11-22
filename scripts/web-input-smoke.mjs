@@ -108,18 +108,25 @@ export async function inputSmoke(page, url) {
         return window.__inputProof.polls - before;
     });
     assert.equal(polls, 0, 'continuous pointer events must not run synchronous frames');
+    // Each change reaches `poll`, which reads it with `Tx::window_visible`.
+    const hiddenPolls = (await snapshot()).polls;
     await page.evaluate(() => {
         Object.defineProperty(document, 'hidden', { configurable: true, value: true });
         document.dispatchEvent(new Event('visibilitychange'));
     });
     await settle();
-    assert.equal((await snapshot()).visible, false);
+    let seen = await snapshot();
+    assert.equal(seen.visible, false);
+    assert.equal(seen.windowVisible, false);
+    assert.ok(seen.polls > hiddenPolls, 'hiding runs poll');
     await page.evaluate(() => {
         delete document.hidden;
         document.dispatchEvent(new Event('visibilitychange'));
     });
     await settle();
-    assert.equal((await snapshot()).visible, true);
+    seen = await snapshot();
+    assert.equal(seen.visible, true);
+    assert.equal(seen.windowVisible, true);
     console.log(JSON.stringify({ inputRegressions: 'passed', checks: ['stable editor focus', 'recomposition range',
         'beforeinput Enter', 'multiline vs single-line', 'password sink and deletion', 'Tab to canvas',
         'Escape shortcuts', 'outside dismiss', 'coalesced pointer frames', 'visibility', 'app title', 'nonfatal window requests'] }));

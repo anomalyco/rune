@@ -110,6 +110,10 @@ impl dyn WebApp + '_ {
         self.driver(|rt, app| { rt.covered_wake(app); });
     }
 
+    pub(super) fn set_live_visible(&mut self, visible: bool) {
+        self.driver(|rt, app| rt.set_live_visible(app, visible));
+    }
+
     pub(super) fn clock_advance(&mut self, clock: &mut FrameClock, at: Instant, compositing: bool) -> (bool, f64) {
         self.driver(|rt, app| clock.advance_core(rt, app, at, compositing))
     }
