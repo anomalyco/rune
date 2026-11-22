@@ -15,6 +15,8 @@ pub(crate) fn configure(surface: &wgpu::Surface, gpu: &Gpu, config: &wgpu::Surfa
     if gpu.is_lost() { return Err(lost_device(config)); }
     let validation = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
     let internal = gpu.device.push_error_scope(wgpu::ErrorFilter::Internal);
+    #[cfg(target_os = "windows")]
+    third_buffer(surface, config);
     surface.configure(&gpu.device, config);
     // `Device::destroy` only marks the device invalid: its lost callback runs when the device
     // next maintains itself, at the soonest a poll. Without this, a device destroyed before it
@@ -30,6 +32,24 @@ pub(crate) fn configure(surface: &wgpu::Surface, gpu: &Gpu, config: &wgpu::Surfa
             let cause = text.lines().map(str::trim).filter(|line| !line.is_empty() && *line != "Caused by:").collect::<Vec<_>>().join(": ");
             Err(format!("{cause} ({}x{}, {:?}, {:?}, {:?})", config.width, config.height, config.format, config.alpha_mode, config.present_mode))
         }
+    }
+}
+
+/// Windows: a swap chain at frame latency 1 gets a third buffer. With two, the frame after
+/// next can't start until the compositor gives back the buffer it showed, which it does only once
+/// it has composed the frame after it: at 240 Hz that round trip doesn't fit in a refresh on an
+/// Intel Iris Xe, so every frame landed on the second refresh (120 Hz). The frame latency stays 1
+/// (`slot`), so no frame waits to be shown behind another and input is no later. The cost is one
+/// window-sized buffer (14.7 MB at 2560x1440). `RUNE_SWAP_BUFFERS=2` keeps two, for measuring.
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+fn third_buffer(surface: &wgpu::Surface, config: &wgpu::SurfaceConfiguration) {
+    static TWO: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let two = *TWO.get_or_init(|| std::env::var("RUNE_SWAP_BUFFERS").is_ok_and(|v| v == "2"));
+    let extra = u32::from(!two && config.desired_maximum_frame_latency == 1);
+    // SAFETY: only sets how many buffers the coming configure makes.
+    if let Some(hal) = unsafe { surface.as_hal::<wgpu::hal::api::Dx12>() } {
+        hal.set_extra_buffers(extra);
     }
 }
 

@@ -359,10 +359,18 @@ index 63fb313..aa74ea5 100644
  
              if fence_value >= value {
 diff --git a/src/dx12/instance.rs b/src/dx12/instance.rs
-index fdb63bc..5f64a80 100644
+index fdb63bc..d12f698 100644
 --- a/src/dx12/instance.rs
 +++ b/src/dx12/instance.rs
-@@ -187,3 +187,37 @@ impl crate::Instance for super::Instance {
+@@ -155,6 +155,7 @@ impl crate::Instance for super::Instance {
+                     swap_chain: RwLock::new(None),
+                     options: self.options.clone(),
+                     hdr_source: Some(auxil::dxgi::hdr::DxgiHdrSource::new(handle)),
++                    extra_buffers: Default::default(),
+                 })
+             }
+             _ => Err(crate::InstanceError::new(format!(
+@@ -187,3 +188,37 @@ impl crate::Instance for super::Instance {
              .collect()
      }
  }
@@ -401,7 +409,7 @@ index fdb63bc..5f64a80 100644
 +    }
 +}
 diff --git a/src/dx12/mod.rs b/src/dx12/mod.rs
-index 285d635..2fb4210 100644
+index 285d635..d088006 100644
 --- a/src/dx12/mod.rs
 +++ b/src/dx12/mod.rs
 @@ -92,7 +92,7 @@ mod suballocation;
@@ -454,7 +462,31 @@ index 285d635..2fb4210 100644
      }
  
      /// Will error with crate::DeviceError::Unexpected if DXGI 1.3 is not available.
-@@ -615,6 +631,8 @@ struct SwapChain {
+@@ -559,6 +575,7 @@ impl Instance {
+             swap_chain: RwLock::new(None),
+             options: self.options.clone(),
+             hdr_source: None,
++            extra_buffers: Default::default(),
+         }
+     }
+ 
+@@ -578,6 +595,7 @@ impl Instance {
+             swap_chain: RwLock::new(None),
+             options: self.options.clone(),
+             hdr_source: None,
++            extra_buffers: Default::default(),
+         }
+     }
+ 
+@@ -596,6 +614,7 @@ impl Instance {
+             swap_chain: RwLock::new(None),
+             options: self.options.clone(),
+             hdr_source: None,
++            extra_buffers: Default::default(),
+         }
+     }
+ }
+@@ -615,6 +634,8 @@ struct SwapChain {
      present_mode: wgt::PresentMode,
      format: wgt::TextureFormat,
      size: wgt::Extent3d,
@@ -463,10 +495,31 @@ index 285d635..2fb4210 100644
  }
  
  enum SurfaceTarget {
-@@ -651,6 +669,15 @@ impl Surface {
+@@ -641,6 +662,9 @@ pub struct Surface {
+     /// HDR-info source for HWND-backed targets; `None` for composition /
+     /// SwapChainPanel / surface-handle targets, which have no monitor identity.
+     hdr_source: Option<auxil::dxgi::hdr::DxgiHdrSource>,
++    /// Rune: buffers beyond `maximum_frame_latency + 1` the next configure makes
++    /// (`Surface::set_extra_buffers`), so the GPU needn't wait for the compositor to give one back.
++    extra_buffers: core::sync::atomic::AtomicU32,
+ }
+ 
+ unsafe impl Send for Surface {}
+@@ -651,6 +675,26 @@ impl Surface {
          Some(self.swap_chain.read().as_ref()?.raw.clone())
      }
  
++    /// Rune: buffers the next configure makes beyond `maximum_frame_latency + 1`. The frame latency
++    /// (and so how many frames may wait to be shown) is unchanged.
++    pub fn set_extra_buffers(&self, extra: u32) {
++        self.extra_buffers.store(extra, core::sync::atomic::Ordering::Relaxed);
++    }
++
++    /// Rune: how many buffers the swap chain has now, if there is one.
++    pub fn buffer_count(&self) -> Option<usize> {
++        self.swap_chain.read().as_ref().map(|sc| sc.resources.len())
++    }
++
 +    /// Rune: the only rectangles the next present changed, in the swap chain's pixels; the rest of
 +    /// the buffer holds what the frame before showed. Cleared by the present.
 +    pub fn set_present_rects(&self, rects: &[Foundation::RECT]) {
@@ -479,7 +532,7 @@ index 285d635..2fb4210 100644
      /// Returns the waitable handle associated with this swap chain, if any.
      /// Handle is only valid while the swap chain is alive.
      pub unsafe fn waitable_handle(&self) -> Option<Foundation::HANDLE> {
-@@ -741,6 +768,279 @@ struct Idler {
+@@ -741,6 +785,279 @@ struct Idler {
      fence: Direct3D12::ID3D12Fence,
  }
  
@@ -759,7 +812,7 @@ index 285d635..2fb4210 100644
  #[derive(Debug, Clone)]
  struct CommandSignatures {
      draw: Direct3D12::ID3D12CommandSignature,
-@@ -756,6 +1056,7 @@ struct DeviceShared {
+@@ -756,6 +1073,7 @@ struct DeviceShared {
      heap_views: descriptor::GeneralHeap,
      sampler_heap: sampler::SamplerHeap,
      private_caps: PrivateCapabilities,
@@ -767,7 +820,7 @@ index 285d635..2fb4210 100644
  }
  
  unsafe impl Send for DeviceShared {}
-@@ -810,6 +1111,7 @@ pub struct Queue {
+@@ -810,6 +1128,7 @@ pub struct Queue {
      idle_fence_value: AtomicU64,
      pending_waits: Mutex<Vec<(Direct3D12::ID3D12Fence, u64)>>,
      pending_signals: Mutex<Vec<(Direct3D12::ID3D12Fence, u64)>>,
@@ -775,7 +828,7 @@ index 285d635..2fb4210 100644
  }
  
  impl Queue {
-@@ -992,7 +1294,11 @@ pub struct CommandEncoder {
+@@ -992,7 +1311,11 @@ pub struct CommandEncoder {
  
      null_rtv_handle: descriptor::Handle,
      list: Option<Direct3D12::ID3D12GraphicsCommandList>,
@@ -788,7 +841,7 @@ index 285d635..2fb4210 100644
      pass: PassState,
      temp: Temp,
  
-@@ -1018,6 +1324,8 @@ impl fmt::Debug for CommandEncoder {
+@@ -1018,6 +1341,8 @@ impl fmt::Debug for CommandEncoder {
  #[derive(Debug)]
  pub struct CommandBuffer {
      raw: Direct3D12::ID3D12GraphicsCommandList,
@@ -797,7 +850,7 @@ index 285d635..2fb4210 100644
  }
  
  impl crate::DynCommandBuffer for CommandBuffer {}
-@@ -1209,6 +1517,8 @@ unsafe impl Sync for QuerySet {}
+@@ -1209,6 +1534,8 @@ unsafe impl Sync for QuerySet {}
  #[derive(Debug)]
  pub struct Fence {
      raw: Direct3D12::ID3D12Fence,
@@ -806,7 +859,16 @@ index 285d635..2fb4210 100644
  }
  
  impl crate::DynFence for Fence {}
-@@ -1535,7 +1845,9 @@ impl crate::Surface for Surface {
+@@ -1498,7 +1825,7 @@ impl crate::Surface for Surface {
+         // Nvidia recommends to use 1-2 more buffers than the maximum latency
+         // https://developer.nvidia.com/blog/advanced-api-performance-swap-chains/
+         // For high latency extra buffers seems excessive, so go with a minimum of 3 and beyond that add 1.
+-        let swap_chain_buffer = (config.maximum_frame_latency + 1).min(16);
++        let swap_chain_buffer = (config.maximum_frame_latency + 1 + self.extra_buffers.load(core::sync::atomic::Ordering::Relaxed)).min(16);
+ 
+         let swap_chain = match self.swap_chain.write().take() {
+             //Note: this path doesn't properly re-initialize all of the things
+@@ -1535,7 +1862,9 @@ impl crate::Surface for Surface {
                      BufferUsage: Dxgi::DXGI_USAGE_RENDER_TARGET_OUTPUT,
                      BufferCount: swap_chain_buffer,
                      Scaling: Dxgi::DXGI_SCALING_STRETCH,
@@ -817,7 +879,7 @@ index 285d635..2fb4210 100644
                      Flags: flags.0 as u32,
                  };
                  let swap_chain1 = match self.target {
-@@ -1702,6 +2014,7 @@ impl crate::Surface for Surface {
+@@ -1702,6 +2031,7 @@ impl crate::Surface for Surface {
              present_mode: config.present_mode,
              format: config.format,
              size: config.extent,
@@ -825,7 +887,7 @@ index 285d635..2fb4210 100644
          });
  
          Ok(())
-@@ -1768,6 +2081,14 @@ impl crate::Surface for Surface {
+@@ -1768,6 +2098,14 @@ impl crate::Surface for Surface {
      }
  }
  
@@ -840,7 +902,7 @@ index 285d635..2fb4210 100644
  impl crate::Queue for Queue {
      type A = Api;
  
-@@ -1777,6 +2098,18 @@ impl crate::Queue for Queue {
+@@ -1777,6 +2115,18 @@ impl crate::Queue for Queue {
          _surface_textures: &[&Texture],
          (signal_fence, signal_value): (&Fence, crate::FenceValue),
      ) -> Result<(), crate::DeviceError> {
@@ -859,7 +921,7 @@ index 285d635..2fb4210 100644
          let mut temp_lists = self.temp_lists.lock();
          temp_lists.clear();
          for cmd_buf in command_buffers {
-@@ -1790,25 +2123,48 @@ impl crate::Queue for Queue {
+@@ -1790,25 +2140,48 @@ impl crate::Queue for Queue {
          {
              let mut waits = self.pending_waits.lock();
              for (fence, value) in waits.drain(..) {
@@ -913,7 +975,7 @@ index 285d635..2fb4210 100644
              }
          }
  
-@@ -1838,9 +2194,22 @@ impl crate::Queue for Queue {
+@@ -1838,9 +2211,22 @@ impl crate::Queue for Queue {
          };
  
          profiling::scope!("IDXGISwapchain3::Present");
@@ -939,7 +1001,7 @@ index 285d635..2fb4210 100644
  
          Ok(())
      }
-@@ -1851,18 +2220,51 @@ impl crate::Queue for Queue {
+@@ -1851,18 +2237,51 @@ impl crate::Queue for Queue {
      }
  
      unsafe fn wait_for_idle(&self) -> Result<(), crate::DeviceError> {

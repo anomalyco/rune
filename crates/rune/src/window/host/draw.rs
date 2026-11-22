@@ -246,7 +246,10 @@ impl FrameHost for WindowFrame<'_> {
         #[cfg(target_os = "windows")]
         if !hidden && let Some(l) = self.host.win.as_mut() && let Some(surface) = l.surface.as_ref() {
             let handle = self.host.native_handle.clone();
-            if l.native.slot.take_surface(surface, move || handle.send(WakeEvent::FrameSlot)) == slot::Take::Later { return Gate::Skip; }
+            if l.native.slot.take_surface(surface, move || handle.send(WakeEvent::FrameSlot)) == slot::Take::Later {
+                self.host.frame_reports.waited_for_room();
+                return Gate::Skip;
+            }
         }
         let Some(l) = self.host.win.as_mut() else { return Gate::Skip };
         #[cfg(target_os = "windows")]
