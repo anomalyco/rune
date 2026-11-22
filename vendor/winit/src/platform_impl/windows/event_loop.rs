@@ -52,7 +52,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     PT_TOUCH, QS_ALLINPUT, RI_MOUSE_HWHEEL, RI_MOUSE_WHEEL, SC_MINIMIZE, SC_RESTORE,
     SIZE_MAXIMIZED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WHEEL_DELTA, WINDOWPOS,
     WMSZ_BOTTOM, WMSZ_BOTTOMLEFT, WMSZ_BOTTOMRIGHT, WMSZ_LEFT, WMSZ_RIGHT, WMSZ_TOP, WMSZ_TOPLEFT,
-    WMSZ_TOPRIGHT, WM_CAPTURECHANGED, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED,
+    WMSZ_TOPRIGHT, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED,
     WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION,
     WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_INPUT, WM_INPUT_DEVICE_CHANGE, WM_KEYDOWN,
     WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
@@ -1149,8 +1149,17 @@ unsafe fn public_window_callback_inner(
 
     let keyboard_callback = || {
         use crate::event::WindowEvent::KeyboardInput;
-        let events =
-            userdata.key_event_builder.process_message(window, msg, wparam, lparam, &mut result);
+        // Rune: a bare WM_CHAR is dropped while an input method's composition is open.
+        let ime_composing =
+            msg == WM_CHAR && userdata.window_state_lock().ime_state != ImeState::Disabled;
+        let events = userdata.key_event_builder.process_message(
+            window,
+            msg,
+            wparam,
+            lparam,
+            ime_composing,
+            &mut result,
+        );
         for event in events {
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
