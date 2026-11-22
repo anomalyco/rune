@@ -55,10 +55,12 @@ fn dwm() -> String {
     if hr != 0 {
         return format!("{{\"hr\":{hr}}}");
     }
+    // The struct is packed: its fields are copied out, never borrowed.
+    let (refresh, compose) = (info.rateRefresh, info.rateCompose);
+    let (period, vblank, count, dropped, missed) = (info.qpcRefreshPeriod, info.qpcVBlank, info.cRefresh, info.cFramesDropped, info.cFramesMissed);
+    let (rn, rd, cn, cd) = (refresh.uiNumerator, refresh.uiDenominator, compose.uiNumerator, compose.uiDenominator);
     format!(
-        "{{\"refresh\":[{},{}],\"compose\":[{},{}],\"qpc_refresh_period\":{},\"qpc_vblank\":{},\"refresh_count\":{},\"frames_dropped\":{},\"frames_missed\":{}}}",
-        info.rateRefresh.uiNumerator, info.rateRefresh.uiDenominator, info.rateCompose.uiNumerator, info.rateCompose.uiDenominator,
-        info.qpcRefreshPeriod, info.qpcVBlank, info.cRefresh, info.cFramesDropped, info.cFramesMissed
+        "{{\"refresh\":[{rn},{rd}],\"compose\":[{cn},{cd}],\"qpc_refresh_period\":{period},\"qpc_vblank\":{vblank},\"refresh_count\":{count},\"frames_dropped\":{dropped},\"frames_missed\":{missed}}}"
     )
 }
 
