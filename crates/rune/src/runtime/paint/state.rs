@@ -58,6 +58,15 @@ pub(crate) struct PaintState {
     /// Only nonempty when retained exit nodes or matched flights make storage order differ
     /// from paint order.
     pub(super) layer_paint_order: Vec<usize>,
+    /// Sorted indices of anchored overlays lifted in `update_layer_paint_order` so they paint
+    /// after (and above) a `.raise()` or flying subtree containing their anchor.
+    pub(super) lifted_anchors: Vec<usize>,
+    /// Last resolved `(target_rect, zoom)` per anchored overlay node id, so an exiting overlay
+    /// holds its position if its anchor unmounts mid-exit instead of snapping to `(0, 0)`.
+    pub(in crate::runtime) last_anchor_targets: HashMap<NodeId, ([f32; 4], f32)>,
+    /// Deduplicated `(overlay_path, anchor_key)` pairs logged when an anchored overlay could not
+    /// resolve its anchor and was suppressed.
+    pub(in crate::runtime) unresolved_anchor_warnings: HashSet<(String, String)>,
     pub(super) dissolve_scratch: Vec<bool>,
     pub(in crate::runtime) glyph_scratch: Vec<GlyphQuad>,
     pub(super) deco_scratch: Vec<PaintedDeco>,
@@ -116,6 +125,9 @@ impl PaintState {
             unturned_drawn: Vec::new(),
             row_lifts: Vec::new(),
             layer_paint_order: Vec::new(),
+            lifted_anchors: Vec::new(),
+            last_anchor_targets: HashMap::default(),
+            unresolved_anchor_warnings: HashSet::default(),
             dissolve_scratch: Vec::new(),
             glyph_scratch: Vec::new(),
             deco_scratch: Vec::new(),
@@ -288,6 +300,12 @@ impl PaintState {
     #[inline]
     pub(in crate::runtime) fn clear_layer_paint_order(&mut self) {
         self.layer_paint_order.clear();
+        self.lifted_anchors.clear();
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn is_lifted_anchor(&self, i: usize) -> bool {
+        self.lifted_anchors.binary_search(&i).is_ok()
     }
 
     /// Subtree (preorder) paint order, then each flying or raised element's subtree on top.
@@ -329,6 +347,40 @@ impl PaintState {
         if tree.has_raise { lifted.extend((0..n).filter(|&i| tree.nodes[i].vis_flags.raise())); }
         lifted.sort_unstable();
         lifted.dedup();
+        self.lifted_anchors.clear();
+        if !lifted.is_empty() {
+            // An anchored overlay whose anchor lives inside a lifted (`.raise()` or flying) subtree
+            // must paint after that subtree so `drawn[anchor]` is populated and the overlay draws
+            // above its anchor (e.g. a hover card or menu over a peeked sidebar or raised modal).
+            let mut lifted_mask = vec![false; n];
+            for &r in &lifted { lifted_mask[r] = true; }
+            let lifted_root = |mut k: usize, mask: &[bool]| -> Option<usize> {
+                loop {
+                    if mask[k] { return Some(k); }
+                    k = tree.nodes[k].parent?;
+                }
+            };
+            let mut changed = true;
+            while changed {
+                changed = false;
+                for i in 0..n {
+                    if lifted_mask[i] { continue; }
+                    let Some(a) = &tree.nodes[i].above else { continue };
+                    let Some(j) = super::anchor_index(&tree.nodes, i, a) else { continue };
+                    let Some(ar) = lifted_root(j, &lifted_mask) else { continue };
+                    if lifted_root(i, &lifted_mask) != Some(ar) {
+                        lifted_mask[i] = true;
+                        lifted.push(i);
+                        self.lifted_anchors.push(i);
+                        changed = true;
+                    }
+                }
+            }
+            if !self.lifted_anchors.is_empty() {
+                lifted.sort_unstable();
+                self.lifted_anchors.sort_unstable();
+            }
+        }
         self.layer_paint_order.clear();
         for top in std::iter::once(None).chain(lifted.iter().map(|&r| Some(r))) {
             let mut i = top.unwrap_or(first[0]);
@@ -345,7 +397,10 @@ impl PaintState {
                 }
             }
         }
-        if self.layer_paint_order.iter().copied().eq(0..n) { self.layer_paint_order.clear(); }
+        if self.layer_paint_order.iter().copied().eq(0..n) {
+            self.layer_paint_order.clear();
+            self.lifted_anchors.clear();
+        }
     }
 
     #[cfg(test)]

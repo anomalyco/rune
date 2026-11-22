@@ -8,6 +8,18 @@ pub(super) fn anchor_index(nodes: &[Node], before: usize, a: &Anchor) -> Option<
     nodes[..before].iter().position(|n| n.key.as_ref() == Some(&a.key))
 }
 
+/// Like [`anchor_index`], preferring a live (non-exiting) anchor when both a live and an exiting
+/// node share the key.
+pub(super) fn anchor_index_live(nodes: &[Node], before: usize, a: &Anchor, exiting: impl Fn(usize) -> bool) -> Option<usize> {
+    let mut fallback = None;
+    for (idx, n) in nodes[..before].iter().enumerate() {
+        if n.key.as_ref() != Some(&a.key) { continue; }
+        if !exiting(idx) { return Some(idx); }
+        fallback.get_or_insert(idx);
+    }
+    fallback
+}
+
 /// Where a walk from node `i` goes next: the node it is anchored above, else its parent.
 pub(super) fn step_up(nodes: &[Node], i: usize) -> Option<usize> {
     nodes[i].above.as_ref().and_then(|a| anchor_index(nodes, i, a)).or(nodes[i].parent)
@@ -19,6 +31,7 @@ const MARGIN: f32 = 8.0;
 /// Where an anchored overlay of `size` goes next to `t` (x0, y0, x1, y1), flipped to the
 /// opposite side when it doesn't fit, then kept 8 points inside the viewport.
 pub(crate) fn anchor_position(a: &Anchor, t: [f32; 4], size: (f32, f32), vp: (f32, f32)) -> (f32, f32) {
+    debug_assert!(t.iter().all(|v| v.is_finite()), "anchor_position called with non-finite target {t:?}");
     let (w, h) = size;
     let margin = MARGIN;
     let along = |lo: f32, hi: f32, len: f32| match a.align {
@@ -100,16 +113,22 @@ impl Measurement<'_> {
             let (px, py) = nodes[i].parent.map_or((0.0, 0.0), |p| (nodes[p].target[0], nodes[p].target[1]));
             let mut x = px + l.x;
             let mut y = py + l.y;
-            if let Some(a) = &nodes[i].above
-                && let Some(j) = anchor_index(&nodes, i, a)
-            {
-                // Anchors inside scroll viewports sit where they are scrolled (and stuck) to.
-                let target = sticky::anchored_target(nodes, self.scrolls, j, self.viewport);
-                (x, y) = anchor_position(a, target, (l.w, l.h), self.viewport);
-                nodes[i].local.x = x - px;
-                nodes[i].local.y = y - py;
+            let mut resolved = true;
+            if let Some(a) = &nodes[i].above {
+                if let Some(j) = anchor_index(&nodes, i, a) {
+                    // Anchors inside scroll viewports sit where they are scrolled (and stuck) to.
+                    let target = sticky::anchored_target(nodes, self.scrolls, j, self.viewport);
+                    (x, y) = anchor_position(a, target, (l.w, l.h), self.viewport);
+                    nodes[i].local.x = x - px;
+                    nodes[i].local.y = y - py;
+                } else {
+                    // Never leave an unresolved anchored overlay at (0, 0) of the window.
+                    nodes[i].local.x = 0.0;
+                    nodes[i].local.y = 0.0;
+                    resolved = false;
+                }
             }
-            nodes[i].target = [x, y, x + l.w, y + l.h];
+            nodes[i].target = if resolved { [x, y, x + l.w, y + l.h] } else { [0.0; 4] };
             nodes[i].inset = l.inset;
         }
     }
@@ -235,8 +254,9 @@ impl RuntimeCore {
     /// Sets up anchored overlay `i`'s inherited paint state beside anchor `j`: at the anchor's
     /// zoom (see [`inherited_zoom`]), placed and flipped by its zoomed size where the anchor was
     /// drawn, and zooming about the point it attaches at. Its own `prop::OFFSET` and transition
-    /// still apply on top; its ancestors' positions and scales don't.
-    pub(super) fn anchored_inh(&self, i: usize, j: usize, a: &Anchor, p: &rune_motion::Presented, pinh: &mut Inh) {
+    /// still apply on top; its ancestors' positions and scales don't. Returns `(target, zoom)`
+    /// so an exiting overlay can hold its last valid position if its anchor unmounts.
+    pub(super) fn anchored_inh(&self, i: usize, j: usize, a: &Anchor, p: &rune_motion::Presented, pinh: &mut Inh) -> ([f32; 4], f32) {
         let tracked = |m: &Node| if m.scale_track { self.scene.get(m.id, P_SCALE).unwrap_or(m.static_scale) } else { m.static_scale };
         let k = inherited_zoom(&self.tree.nodes, i, &tracked).max(MIN_ZOOM);
         let d = self.paint.drawn[j];
@@ -244,6 +264,13 @@ impl RuntimeCore {
             let t = sticky::anchored_target(&self.tree.nodes, &self.scroll.scrolls, j, self.viewport);
             if k == 1.0 { t } else { zoomed_rect(&self.tree.nodes, &self.scroll.scrolls, j, t, self.viewport) }
         };
+        let motion = self.tree.nodes[j].parent.and_then(|jp| self.paint.inh_scratch.get(jp)).map_or(ScaleMotion::Still, |h| h.scale_motion);
+        self.anchored_inh_at(i, a, target, k, motion, p, pinh);
+        (target, k)
+    }
+
+    /// Places anchored overlay `i` against a resolved `(target, k)` rect and zoom.
+    pub(super) fn anchored_inh_at(&self, i: usize, a: &Anchor, target: [f32; 4], k: f32, motion: ScaleMotion, p: &rune_motion::Presented, pinh: &mut Inh) {
         let zoomed;
         let a = if k == 1.0 { a } else { zoomed = zoomed_gap(a, k); &zoomed };
         let (w, h) = (p.rect.w * k, p.rect.h * k);
@@ -266,7 +293,6 @@ impl RuntimeCore {
         pinh.dy = pivot[1] + (ay - pivot[1]) / k - world.y;
         (pinh.scale, pinh.anchor, pinh.anchor_to) = (k, pivot, pivot);
         // Text rasterizes as the anchor's does: crisp at the zoom once it rests.
-        let motion = self.tree.nodes[j].parent.and_then(|jp| self.paint.inh_scratch.get(jp)).map_or(ScaleMotion::Still, |h| h.scale_motion);
         pinh.scale_motion = pinh.scale_motion.max(motion);
         pinh.still = if pinh.scale_motion == ScaleMotion::Still { (k, pivot, pivot) } else { (1.0, [0.0; 2], [0.0; 2]) };
     }

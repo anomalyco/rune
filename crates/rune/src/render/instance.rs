@@ -280,15 +280,25 @@ pub(crate) mod word {
     pub(crate) const CLIP_Y1: usize = CLIP + 3;
 }
 
+/// Bias added to a fade width in `Inh::fade` / `pack_fade` to tag an edge as using the frame's
+/// piecewise-linear explicit stops (`ScrollFade::stops`) rather than smoothstep or pure linear.
+/// Strictly above `f16::MAX` (`65504.0`) so any normal smoothstep width passes through untouched.
+pub(crate) const STOP_FADE_BIAS: f32 = 131_072.0;
+
 pub fn pack_fade(width: [f32; 4], origin: [f32; 4], clip: [f32; 4]) -> [u32; 4] {
-    // A negative width is a linear ramp of that width (`El::clip_fade_linear`).
-    let halves = width.map(|w| half::f16::from_f32(w.clamp(-65504.0, 65504.0)).to_bits() as u32);
-    let mut offsets = 0;
+    // A negative width is a linear ramp (`El::clip_fade_linear`); `width > STOP_FADE_BIAS` tags
+    // an edge using explicit piecewise-linear stops (`ScrollFade::stops`, bit 7 of its offset byte).
+    let mut halves = [0u32; 4];
+    let mut offsets = 0u32;
     for edge in 0..4 {
+        let is_stops = width[edge] > STOP_FADE_BIAS;
+        let raw_w = if is_stops { width[edge] - STOP_FADE_BIAS } else { width[edge] };
+        halves[edge] = half::f16::from_f32(raw_w.clamp(-65504.0, 65504.0)).to_bits() as u32;
         let distance = if edge < 2 { clip[edge] - origin[edge] } else { origin[edge] - clip[edge] };
-        let w = width[edge].abs();
+        let w = raw_w.abs();
         let offset = if w > 0.0 { (distance / w).clamp(0.0, 1.0) } else { 0.0 };
-        offsets |= ((offset * 255.0 + 0.5) as u32) << (edge * 8);
+        let byte = ((offset * 127.0 + 0.5) as u32).min(127) | if is_stops { 0x80 } else { 0 };
+        offsets |= byte << (edge * 8);
     }
     [halves[0] | (halves[1] << 16), halves[2] | (halves[3] << 16), offsets, 0]
 }
@@ -297,7 +307,7 @@ pub fn pack_fade(width: [f32; 4], origin: [f32; 4], clip: [f32; 4]) -> [u32; 4] 
 /// negative width is a linear ramp.
 pub fn unpack_fade(fade: [u32; 4]) -> ([f32; 4], [f32; 4]) {
     (std::array::from_fn(|e| half::f16::from_bits((fade[e / 2] >> ((e % 2) * 16)) as u16).to_f32()),
-     std::array::from_fn(|e| ((fade[2] >> (e * 8)) & 255) as f32 / 255.0))
+     std::array::from_fn(|e| ((fade[2] >> (e * 8)) & 0x7f) as f32 / 127.0))
 }
 
 pub const NO_CLIP: [f32; 4] = [-1e6, -1e6, 1e6, 1e6];

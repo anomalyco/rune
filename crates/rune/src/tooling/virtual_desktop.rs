@@ -520,6 +520,7 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
             let app_dark = key.and_then(|i| desk.members[i].backdrop_dark()).unwrap_or(dark);
             let ort = ov.frame(real_t, step, app_dark);
             if !ort.instances.is_empty() {
+                ui.set_fade_stops(ort.fade_stops());
                 ui.prepare_ui(&gpu.device, &gpu.queue, &mut ort.text.atlas, &ort.instances, (wp, hp));
                 ui.draw_over(&mut enc, &target.view);
             }

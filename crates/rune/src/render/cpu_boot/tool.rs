@@ -44,6 +44,7 @@ impl Tool {
         let fills = self.painter.fill_masks(&mut rt.text.atlas);
         let scene = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, size, rt.clear_color())
             .srgb_blend(rt.srgb_blend())
+            .fade_stops(rt.fade_stops())
             .native_surfaces(!rt.surfaces.is_empty())
             .font_smoothing(rt.font_smoothing())
             .half_rounding(super::HalfRounding::of_vendor(self.vendor));
