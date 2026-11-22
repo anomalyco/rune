@@ -426,11 +426,15 @@ impl Host {
                 // A menu item handing Rune its key: it acts after, if no handler takes it. So does
                 // the window menu's Alt+Space, posted rather than run inside the key's message.
                 let logical = pressed.then(|| map_key_event(&event, self.mods)).flatten();
-                // DIAGNOSTIC, DO NOT MERGE: what reached Rune and what it made of it.
-                eprintln!(
-                    "rune-key-diag rune EVENT state={:?} physical={:?} logical={:?} text={:?} repeat={} -> {:?}",
-                    event.state, event.physical_key, event.logical_key, event.text, event.repeat, logical
-                );
+                // DIAGNOSTIC, DO NOT MERGE: what reached Rune and what it made of it, only when
+                // RUNE_KEY_DIAG is exactly the diagnostic value (read once; nobody has it set).
+                static KEY_DIAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+                if *KEY_DIAG.get_or_init(|| std::env::var("RUNE_KEY_DIAG").as_deref() == Ok("4845c40a-diagnostic-do-not-ship")) {
+                    eprintln!(
+                        "rune-key-diag rune EVENT state={:?} physical={:?} logical={:?} text={:?} repeat={} -> {:?}",
+                        event.state, event.physical_key, event.logical_key, event.text, event.repeat, logical
+                    );
+                }
                 let unhandled = crate::native_menu::take_unhandled(logical.as_ref()).or_else(|| {
                     logical.as_ref().filter(|ev| ev.is_window_menu_chord() && chrome::has_window_menu(&l.window))
                         .map(|_| crate::runtime::Unhandled::WindowMenu)

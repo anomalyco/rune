@@ -645,7 +645,7 @@ index a3a7705d..c3980673 100644
          return None;
      }
 diff --git a/src/platform_impl/windows/keyboard.rs b/src/platform_impl/windows/keyboard.rs
-index 9c109490..75251f42 100644
+index 9c109490..4aaf5747 100644
 --- a/src/platform_impl/windows/keyboard.rs
 +++ b/src/platform_impl/windows/keyboard.rs
 @@ -4,7 +4,9 @@ use std::mem::MaybeUninit;
@@ -742,11 +742,11 @@ index 9c109490..75251f42 100644
                          }
                      }
 +                    // DIAGNOSTIC, DO NOT MERGE: what a key-down became.
-+                    eprintln!(
++                    if key_diag() { eprintln!(
 +                        "rune-key-diag winit KEYDOWN msg={msg_kind:#x} vk={wparam:#x} lp={lparam:#x} next={:#x} -> {}",
 +                        next_msg.map_or(0, |m| m.message),
 +                        if event_info.is_some() { "waits for its WM_CHAR" } else if finished_event_info.is_some() { "event now, no text" } else { "dropped (fake)" },
-+                    );
++                    ); }
                      if let Some(event_info) = finished_event_info {
                          let ev = event_info.finalize();
                          return MatchResult::MessagesToDispatch(self.pending.complete_pending(
@@ -772,10 +772,10 @@ index 9c109490..75251f42 100644
 +                        // Rune: a posted key's own character, after a key-up that came first,
 +                        // when that key already typed it: not text a second time.
 +                        if bare_char_is_copy(&mut self.translated.lock().unwrap(), wparam, lparam, Instant::now()) {
-+                            eprintln!("rune-key-diag winit BARE WM_CHAR ch={wparam:#x} lp={lparam:#x} -> copy of typed text, dropped");
++                            if key_diag() { eprintln!("rune-key-diag winit BARE WM_CHAR ch={wparam:#x} lp={lparam:#x} -> copy of typed text, dropped"); }
 +                            return MatchResult::TokenToRemove(pending_token);
 +                        }
-+                        eprintln!("rune-key-diag winit BARE WM_CHAR ch={wparam:#x} lp={lparam:#x} -> bare text path");
++                        if key_diag() { eprintln!("rune-key-diag winit BARE WM_CHAR ch={wparam:#x} lp={lparam:#x} -> bare text path"); }
 +                        let mut pending_high = self.pending_high_surrogate.lock().unwrap();
 +                        let Some(text) = bare_char_text(&mut pending_high, wparam, ime_composing)
 +                        else {
@@ -821,7 +821,7 @@ index 9c109490..75251f42 100644
 +                            if let Some(down) = *self.building.lock().unwrap() {
 +                                note_keyed_text(&mut self.translated.lock().unwrap(), down, wparam);
 +                            }
-+                            eprintln!("rune-key-diag winit KEYED WM_CHAR ch={wparam:#x} lp={lparam:#x} -> appended to its key");
++                            if key_diag() { eprintln!("rune-key-diag winit KEYED WM_CHAR ch={wparam:#x} lp={lparam:#x} -> appended to its key"); }
                          }
                      }
                      // It's important that we unlock the mutex, and create the pending event token
@@ -900,7 +900,7 @@ index 9c109490..75251f42 100644
                          fallback
                      } else {
                          Key::Character(s.clone())
-@@ -638,6 +701,372 @@ impl PartialKeyEventInfo {
+@@ -638,6 +701,379 @@ impl PartialKeyEventInfo {
      }
  }
  
@@ -909,6 +909,13 @@ index 9c109490..75251f42 100644
 +/// is not the packet's text. A real key's NUL (Ctrl+2, Ctrl+@) is that key's text, as before.
 +fn keyed_char_is_text(wparam: WPARAM, vkey: VIRTUAL_KEY) -> bool {
 +    !(wparam == 0 && vkey == VK_PACKET)
++}
++
++/// DIAGNOSTIC, DO NOT MERGE: the key log prints only when RUNE_KEY_DIAG is exactly this value,
++/// read once; nobody has it set.
++fn key_diag() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| std::env::var("RUNE_KEY_DIAG").as_deref() == Ok("4845c40a-diagnostic-do-not-ship"))
 +}
 +
 +/// Rune: a recent `WM_KEYDOWN` whose character `TranslateMessage` posted with the same `lParam`.
