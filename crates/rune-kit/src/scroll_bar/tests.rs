@@ -831,3 +831,96 @@ fn the_bar_follows_the_viewport_while_its_height_animates() {
     assert_eq!(rect(&rt, "scroll-bar")[3], 105.0 - 2.0 * INSET);
     assert_eq!(PANE_RUNS.get(), runs, "following it never runs the view");
 }
+
+#[test]
+fn area_reveals_post_scroll_hold_survives_idle_clock_gap() {
+    fn styled_view(scale: &f32, cx: &mut rune::Cx<f32>) -> El {
+        cx.time_scale(*scale);
+        let k = Kit::neutral(true);
+        col().size(200.0, 100.0).child(
+            col()
+                .key("scroll")
+                .w_full()
+                .h(100.0)
+                .scroll(rune::ScrollSpec { stick_bottom: false })
+                .child(col().children((0..20).map(|i| el().key(format!("row{i}")).w_full().h(20.0))))
+                .scroll_bar_styled(ScrollBarStyle::scroll_view(&k)),
+        )
+    }
+    let mut rt = rune::Runtime::new(0.0f32, styled_view, (200.0, 100.0), rune::Env::new(true, 1.0));
+    rt.set_live_waker(std::sync::Arc::new(|| {}));
+    rt.frame(0.0);
+    // Advance unscaled clock 5 s ahead of scene animation time `t` (as after idle wake on a real window).
+    rt.frame(5.0);
+    rt.update(|s, _| *s = 1.0);
+    frames(&mut rt, 2);
+    assert_eq!(opacity(&rt, "scroll-bar"), 0.0);
+
+    // 1. Hover area, wheel-scroll, leave 17 ms later: keeps remaining ~800 ms post-scroll hold.
+    rt.pointer_move(100.0, 50.0);
+    frames(&mut rt, 20);
+    assert!(opacity(&rt, "scroll-bar") > 0.99);
+    rt.wheel(100.0, 50.0, -40.0);
+    rt.frame(1.0 / 60.0);
+    rt.pointer_leave();
+    frames(&mut rt, 12); // ~200 ms after leave
+    assert!(opacity(&rt, "scroll-bar") > 0.99, "area_reveals keeps post-scroll hold after 5 s clock/t skew: {}", opacity(&rt, "scroll-bar"));
+    frames(&mut rt, 90); // past 800 ms hold + fade
+    assert_eq!(opacity(&rt, "scroll-bar"), 0.0, "then fades out cleanly");
+
+    // 2. Pure hover-leave (no scroll): hides immediately without a false 800 ms hold.
+    rt.pointer_move(100.0, 50.0);
+    frames(&mut rt, 20);
+    assert!(opacity(&rt, "scroll-bar") > 0.99);
+    rt.pointer_leave();
+    frames(&mut rt, 30); // 500 ms: past 200 ms leave spring, well under 800 ms hold
+    assert_eq!(opacity(&rt, "scroll-bar"), 0.0, "pure hover-leave hides without post-scroll hold");
+
+    // 3. Scroll then stay hovered > 800 ms, then leave: expired hold hides immediately.
+    rt.pointer_move(100.0, 50.0);
+    frames(&mut rt, 20);
+    rt.wheel(100.0, 50.0, -40.0);
+    frames(&mut rt, 60); // 1.0 s hovered (past 800 ms hold)
+    assert!(opacity(&rt, "scroll-bar") > 0.99);
+    rt.pointer_leave();
+    frames(&mut rt, 30);
+    assert_eq!(opacity(&rt, "scroll-bar"), 0.0, "expired post-scroll hold does not re-hold on leave");
+}
+
+#[test]
+fn scroll_only_thumb_hover_holds_after_idle_clock_gap() {
+    fn menu_view(scale: &f32, cx: &mut rune::Cx<f32>) -> El {
+        cx.time_scale(*scale);
+        let k = Kit::neutral(true);
+        col().size(200.0, 100.0).child(
+            col()
+                .key("scroll")
+                .w_full()
+                .h(100.0)
+                .scroll(rune::ScrollSpec { stick_bottom: false })
+                .child(col().children((0..20).map(|i| el().key(format!("row{i}")).w_full().h(20.0))))
+                .scroll_bar_styled(ScrollBarStyle::menu_scroll(k.c.border_muted, k.c.border_strong)),
+        )
+    }
+    let mut rt = rune::Runtime::new(0.0f32, menu_view, (200.0, 100.0), rune::Env::new(true, 1.0));
+    rt.set_live_waker(std::sync::Arc::new(|| {}));
+    rt.frame(0.0);
+    // Advance unscaled clock 5 s ahead of scene animation time `t`.
+    rt.frame(5.0);
+    rt.update(|s, _| *s = 1.0);
+    frames(&mut rt, 2);
+    assert_eq!(opacity(&rt, "scroll-bar"), 0.0);
+
+    // Wheel-scroll while pointer is away, then move onto the thumb 50 ms later.
+    rt.wheel(100.0, 50.0, -40.0);
+    frames(&mut rt, 3);
+    let tr = rect(&rt, "thumb");
+    rt.pointer_move(tr[0] + tr[2] / 2.0, tr[1] + tr[3] / 2.0);
+    // Stay on the thumb for 1.5 s (past the 1.15 s pulse deadline): must stay held visible.
+    frames(&mut rt, 90);
+    assert!(opacity(&rt, "scroll-bar") > 0.99, "scroll_only thumb hover stays visible after 5 s clock/t skew: {}", opacity(&rt, "scroll-bar"));
+    // Leave thumb: hides cleanly.
+    rt.pointer_move(100.0, 50.0);
+    frames(&mut rt, 90);
+    assert_eq!(opacity(&rt, "scroll-bar"), 0.0, "then fades out after pointer leaves thumb");
+}

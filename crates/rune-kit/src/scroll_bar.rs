@@ -673,6 +673,15 @@ impl Bar {
         }
     }
 
+    /// Keeps `last_now` current on pointer, hover and drag events (not only scroll commits), so
+    /// `let_go` checks remaining post-scroll hold against the actual leave time rather than a
+    /// stale scroll timestamp.
+    fn note_now(&self, now: f64) {
+        if now > self.last_now.get() {
+            self.last_now.set(now);
+        }
+    }
+
     /// The pointer entered or left the bar's own area.
     fn area_hover(&self, inside: bool) {
         if !inside && self.over.replace(false) {
@@ -778,6 +787,7 @@ impl ScrollBar for El {
         let bar = kept(&format!("{viewport_key}-scroll-area"));
         self.chain_hover_change_any(move |inside, tx| {
             tx.live_only();
+            bar.note_now(tx.clock());
             bar.hover_target(inside);
         })
     }
@@ -804,7 +814,10 @@ fn attach(style: ScrollBarStyle, area: &str, key: &str, outer: El, viewport: El)
     bar.restyle(style);
     let target = format!("{area}/{key}");
     let (watch, moved, left, drag, follows) = (bar.clone(), bar.clone(), bar.clone(), bar.clone(), target.clone());
-    let on_drag = move |d: &mut rune::Drag, tx: &mut rune::Tx| drag.drag(&target, jumps, d, tx);
+    let on_drag = move |d: &mut rune::Drag, tx: &mut rune::Tx| {
+        drag.note_now(tx.clock());
+        drag.drag(&target, jumps, d, tx);
+    };
     let slot = el().key("thumb-slot").absolute(0.0, 0.0).live_rect(bar.slot.smooth(style.track.tint)).child(
         el().key("thumb").absolute(0.0, 0.0).live_rect(bar.thumb.smooth(style.track.tint))
             .radius(style.widest() / 2.0).live_fill(bar.fill.smooth(style.track.tint)),
@@ -821,10 +834,12 @@ fn attach(style: ScrollBarStyle, area: &str, key: &str, outer: El, viewport: El)
     outer
         .on_pointer_move_any(move |p, tx| {
             tx.live_only();
+            moved.note_now(tx.clock());
             moved.pointer(p);
         })
         .on_hover_change_any(move |inside, tx| {
             tx.live_only();
+            left.note_now(tx.clock());
             left.area_hover(inside);
         })
         .child(viewport.chain_scroll_offset(move |at| watch.follow(at, overlay)))
