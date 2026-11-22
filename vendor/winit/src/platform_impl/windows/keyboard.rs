@@ -207,9 +207,7 @@ impl KeyEventBuilder {
                     let pending_token = self.pending.add_pending();
                     *result = ProcResult::Value(0);
                     if let Some(ev_info) = event_info.as_mut() {
-                        // Rune: `TranslateMessage` adds `WM_CHAR(0)` after a VK_PACKET key-down
-                        // that carries no packet (one a program posted): it is not the packet's text.
-                        if !(wparam == 0 && ev_info.vkey == VK_PACKET) {
+                        if keyed_char_is_text(wparam, ev_info.vkey) {
                             append_wparam_utf16(wparam, &mut ev_info.utf16parts);
                         }
                     }
@@ -670,6 +668,13 @@ impl PartialKeyEventInfo {
     }
 }
 
+/// Rune: whether a `WM_CHAR` that follows a key-down is part of that key's text. `TranslateMessage`
+/// adds `WM_CHAR(0)` after a VK_PACKET key-down that carries no packet (one a program posted): it
+/// is not the packet's text. A real key's NUL (Ctrl+2, Ctrl+@) is that key's text, as before.
+fn keyed_char_is_text(wparam: WPARAM, vkey: VIRTUAL_KEY) -> bool {
+    !(wparam == 0 && vkey == VK_PACKET)
+}
+
 /// Rune: appends a `WM_CHAR` `wparam` (UTF-16 surrogate unit or Unicode scalar) onto
 /// `utf16parts`.
 fn append_wparam_utf16(wparam: WPARAM, utf16parts: &mut Vec<u16>) {
@@ -750,7 +755,8 @@ fn standalone_char_event(text: String, is_repeat: bool) -> KeyEvent {
 
 #[cfg(test)]
 mod rune_bare_char_tests {
-    use super::{bare_char_text, resolve_surrogates};
+    use super::{bare_char_text, keyed_char_is_text, resolve_surrogates};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_2, VK_A, VK_PACKET};
 
     const NONE: Option<String> = None;
 
@@ -799,6 +805,18 @@ mod rune_bare_char_tests {
         // The low half's character then arrives: one emoji.
         assert_eq!(bare_char_text(&mut pending, 0xde00, false), s("😀"));
         assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn only_a_packet_key_downs_nul_is_left_out_of_its_text() {
+        // The NUL `TranslateMessage` adds after a posted VK_PACKET key-down is not text.
+        assert!(!keyed_char_is_text(0, VK_PACKET));
+        // The packet's real characters are.
+        assert!(keyed_char_is_text('a' as usize, VK_PACKET));
+        assert!(keyed_char_is_text(0xd83d, VK_PACKET));
+        // A real key's NUL (Ctrl+2) stays that key's text, as before.
+        assert!(keyed_char_is_text(0, VK_2));
+        assert!(keyed_char_is_text(0, VK_A));
     }
 
     #[test]
