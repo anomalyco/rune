@@ -16,6 +16,7 @@
 #![allow(unsafe_code)]
 
 use std::cell::Cell;
+use std::io::Write;
 use std::os::raw::c_int;
 use std::time::Duration;
 
@@ -118,7 +119,8 @@ fn tell_backstop(state: *mut ffi::lua_State, d: Deadline) {
     };
     let wall = rune::time::now().saturating_duration_since(d.armed).as_secs_f64() * 1e3;
     let cpu = d.mark.and_then(rune::thread_cpu_since).map_or(0.0, |ns| ns / 1e6);
-    eprintln!("luau: watchdog backstop stopped {at} after {wall:.3} ms wall with {cpu:.3} ms CPU charged (starved, not looping)");
+    // Not `eprintln!`: it panics when stderr is a closed pipe, and this runs inside Luau's interrupt.
+    let _ = writeln!(std::io::stderr().lock(), "luau: watchdog backstop stopped {at} after {wall:.3} ms wall with {cpu:.3} ms CPU charged (starved, not looping)");
 }
 
 unsafe extern "C-unwind" fn interrupt(state: *mut ffi::lua_State, gc: c_int) {
