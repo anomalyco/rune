@@ -14,7 +14,8 @@ thread_local! {
 /// moved this viewport's scroll offset (`scrolled`: the wheel, keys, a drag, their momentum or
 /// an app's instant jump, but not following its bottom as content grows, a glide such as
 /// `Tx::scroll_to_bottom`, or an anchor holding what's on screen), whether this frame ran an instant or settled
-/// commit (`instant`), and the scene's animation clock (`now`).
+/// commit (`instant`), and the runtime's unscaled clock (`now`, the same clock [`Tx::clock`](crate::Tx::clock)
+/// publishes).
 #[doc(hidden)]
 pub fn scroll_watch_state() -> (bool, bool, f64) {
     SCROLL_WATCH_STATE.get()
@@ -24,7 +25,7 @@ impl RuntimeCore {
     /// Calls each viewport's `on_scroll_offset` whose offset or extent moved, that is new, or
     /// whose handler is; true when it called any.
     pub(in crate::runtime) fn tell_scroll_offsets(&mut self, instant: bool) -> bool {
-        let now = self.t;
+        let now = self.clock;
         let mut calls = Vec::new();
         for n in &self.tree.nodes {
             let Some(h) = n.handlers.get() else { continue };

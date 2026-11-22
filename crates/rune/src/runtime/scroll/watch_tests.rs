@@ -262,3 +262,27 @@ fn for_each_walk(acts: &[Act], len: usize, prefix: &mut Vec<Act>) {
         prefix.pop();
     }
 }
+
+#[test]
+fn scroll_watch_state_uses_runtime_clock_after_idle_gap() {
+    fn view(seen: &Rc<std::cell::Cell<f64>>, _: &mut Cx<Rc<std::cell::Cell<f64>>>) -> El {
+        let seen = seen.clone();
+        col()
+            .key("scroll")
+            .size(300.0, 200.0)
+            .scroll(ScrollSpec { stick_bottom: false })
+            .on_scroll_offset(move |_: ScrollPos| {
+                seen.set(scroll_watch_state().2);
+            })
+            .child(el().w_full().h(1000.0))
+    }
+    let seen = Rc::new(std::cell::Cell::new(0.0f64));
+    let mut rt = Runtime::new(seen.clone(), view, (300.0, 200.0), Env::default());
+    rt.frame(0.0);
+    rt.frame(1.0 / 60.0);
+    // Simulate a 5 s idle wake: `clock` advances by 5 s while animation time `t` caps at RESUME_STEP.
+    crate::frame::clock::advance_by(&mut rt, 5.0);
+    rt.wheel(100.0, 100.0, -40.0);
+    crate::frame::clock::advance_by(&mut rt, 1.0 / 60.0);
+    assert!(seen.get() >= 5.0, "scroll_watch_state clock {} must track unscaled runtime clock after 5 s idle", seen.get());
+}

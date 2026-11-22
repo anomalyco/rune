@@ -178,10 +178,7 @@ fn hold(state: &mut BarState) -> Effects<Effect> {
     match *state {
         BarState::Overlay { phase, glide } => {
             let next = match phase {
-                Phase::Pulsing { until } => {
-                    let hold_until = until - FADE_TAIL;
-                    if hold_until > 0.0 { Phase::HeldScrolled { hold_until } } else { Phase::Held }
-                }
+                Phase::Pulsing { until } => Phase::HeldScrolled { hold_until: until - FADE_TAIL },
                 Phase::HeldScrolled { hold_until } => Phase::HeldScrolled { hold_until },
                 Phase::Hidden | Phase::Held => Phase::Held,
             };
