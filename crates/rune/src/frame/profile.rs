@@ -13,7 +13,7 @@ pub const PHASES: usize = 6;
 /// true; `GetThreadTimes` moves in 15.6 ms ticks.
 pub(crate) fn cpu_ms() -> Option<f64> {
     #[cfg(any(unix, windows))]
-    { Some(super::host_clock::cpu_ns(super::host_clock::thread_cpu()) / 1e6) }
+    { super::host_clock::thread_cpu().and_then(super::host_clock::cpu_ns).map(|ns| ns / 1e6) }
     #[cfg(not(any(unix, windows)))]
     { None }
 }
@@ -39,7 +39,7 @@ mod enabled {
             TIMES.with(|times| {
                 let mut row = times.get();
                 row[self.0 as usize] += self.1.elapsed().as_secs_f64() * 1000.0;
-                if let Some(start) = self.2 { row[self.0 as usize + PHASES] += cpu_ms().unwrap() - start; }
+                if let (Some(start), Some(end)) = (self.2, cpu_ms()) { row[self.0 as usize + PHASES] += end - start; }
                 times.set(row);
             });
         }
@@ -150,8 +150,14 @@ pub fn thread_cpu_ms() -> f64 { cpu_ms().unwrap_or(0.0) }
 /// This thread's own CPU time in nanoseconds: its cycles on Windows (`QueryThreadCycleTime`),
 /// `CLOCK_THREAD_CPUTIME_ID` elsewhere. It stands still while the thread waits or the system
 /// runs something else, so a budget kept on it charges only work the thread did. `None` where
-/// there is no such clock (the browser).
-pub fn thread_cpu_ns() -> Option<f64> { cpu_ms().map(|ms| ms * 1e6) }
+/// there is no such clock (the browser, Windows on ARM), when the OS can't read it, and on Windows
+/// for the first 20 ms after the process first asks, while the cycles' rate is measured.
+pub fn thread_cpu_ns() -> Option<f64> {
+    #[cfg(any(unix, windows))]
+    return super::host_clock::thread_cpu().and_then(super::host_clock::cpu_ns);
+    #[cfg(not(any(unix, windows)))]
+    None
+}
 
 /// Without `frame-profile`, a phase is timed only for `RUNE_COMMIT_BUDGET_MS`
 /// (`perf_warn::budget`) and in a frame interaction timing follows (`tooling::interaction`),

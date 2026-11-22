@@ -8,7 +8,9 @@
 //! doing. A wall-clock deadline charged that time to the script and stopped plugins that ran fine
 //! (a plugin's start-up dying while a build ran, 22 Nov). A wall-clock backstop of
 //! [`WALL_BACKSTOP`] budgets still bounds an entry that a starved CPU stretches out. Where the
-//! thread has no CPU clock (the browser) the budget is wall time, as before.
+//! thread has no CPU clock (the browser, Windows on ARM, the first 20 ms of a Windows process while
+//! the clock's rate is measured), or the clock can't be read mid-entry, the budget is wall time, as
+//! before.
 
 #![allow(unsafe_code)]
 
@@ -28,7 +30,10 @@ const WALL_BACKSTOP: u32 = 20;
 struct Deadline {
     /// The thread's CPU time (ns) at which the budget is spent; `None` without a CPU clock.
     cpu: Option<f64>,
-    wall: Instant,
+    /// The budget in wall time: the deadline without a CPU clock, or when it can't be read.
+    budget: Option<Instant>,
+    /// The wall-clock bound with a CPU clock: [`WALL_BACKSTOP`] budgets.
+    backstop: Option<Instant>,
 }
 
 thread_local! {
@@ -48,9 +53,12 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
 pub(crate) fn arm(limit: Duration) -> Armed {
     let outer = DEADLINE.get().is_some();
     if !outer {
+        let at = rune::time::now();
         let cpu = rune::thread_cpu_ns().map(|now| now + limit.as_nanos() as f64);
-        let wall = rune::time::now() + if cpu.is_some() { limit * WALL_BACKSTOP } else { limit };
-        DEADLINE.set(Some(Deadline { cpu, wall }));
+        // A limit too large to add is no wall-clock limit (`None`), never a panic.
+        let budget = at.checked_add(limit);
+        let backstop = cpu.and_then(|_| at.checked_add(limit.saturating_mul(WALL_BACKSTOP)));
+        DEADLINE.set(Some(Deadline { cpu, budget, backstop }));
     }
     Armed(!outer)
 }
@@ -65,9 +73,15 @@ impl Drop for Armed {
     }
 }
 
-/// Whether deadline `d` has passed: its CPU budget spent, or its wall-clock bound.
+/// Whether deadline `d` has passed: its CPU budget spent or its backstop, or without a CPU reading
+/// its budget in wall time. Never panics: it runs inside Luau's interrupt.
 fn spent(d: Deadline) -> bool {
-    d.cpu.is_some_and(|cpu| rune::thread_cpu_ns().is_some_and(|now| now >= cpu)) || rune::time::now() >= d.wall
+    let now = rune::time::now();
+    let past = |at: Option<Instant>| at.is_some_and(|at| now >= at);
+    match (d.cpu, d.cpu.and_then(|_| rune::thread_cpu_ns())) {
+        (Some(cpu), Some(used)) => used >= cpu || past(d.backstop),
+        _ => past(d.budget),
+    }
 }
 
 unsafe extern "C-unwind" fn interrupt(state: *mut ffi::lua_State, gc: c_int) {
