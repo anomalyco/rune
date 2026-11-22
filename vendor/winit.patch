@@ -645,7 +645,7 @@ index a3a7705d..c3980673 100644
          return None;
      }
 diff --git a/src/platform_impl/windows/keyboard.rs b/src/platform_impl/windows/keyboard.rs
-index 9c109490..7adb90cc 100644
+index 9c109490..5da3faf5 100644
 --- a/src/platform_impl/windows/keyboard.rs
 +++ b/src/platform_impl/windows/keyboard.rs
 @@ -14,8 +14,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -856,8 +856,6 @@ index 9c109490..7adb90cc 100644
      }
  }
  
-+/// Rune: appends a `WM_CHAR` `wparam` (UTF-16 surrogate unit or Unicode scalar) onto
-+/// `utf16parts`.
 +/// Rune: whether a `WM_CHAR` that follows a key-down is part of that key's text. `TranslateMessage`
 +/// adds `WM_CHAR(0)` after a VK_PACKET key-down that carries no packet (one a program posted): it
 +/// is not the packet's text. A real key's NUL (Ctrl+2, Ctrl+@) is that key's text, as before.
@@ -865,6 +863,8 @@ index 9c109490..7adb90cc 100644
 +    !(wparam == 0 && vkey == VK_PACKET)
 +}
 +
++/// Rune: appends a `WM_CHAR` `wparam` (UTF-16 surrogate unit or Unicode scalar) onto
++/// `utf16parts`.
 +fn append_wparam_utf16(wparam: WPARAM, utf16parts: &mut Vec<u16>) {
 +    let is_high_surrogate = (0xd800..=0xdbff).contains(&wparam);
 +    let is_low_surrogate = (0xdc00..=0xdfff).contains(&wparam);

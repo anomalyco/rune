@@ -668,8 +668,6 @@ impl PartialKeyEventInfo {
     }
 }
 
-/// Rune: appends a `WM_CHAR` `wparam` (UTF-16 surrogate unit or Unicode scalar) onto
-/// `utf16parts`.
 /// Rune: whether a `WM_CHAR` that follows a key-down is part of that key's text. `TranslateMessage`
 /// adds `WM_CHAR(0)` after a VK_PACKET key-down that carries no packet (one a program posted): it
 /// is not the packet's text. A real key's NUL (Ctrl+2, Ctrl+@) is that key's text, as before.
@@ -677,6 +675,8 @@ fn keyed_char_is_text(wparam: WPARAM, vkey: VIRTUAL_KEY) -> bool {
     !(wparam == 0 && vkey == VK_PACKET)
 }
 
+/// Rune: appends a `WM_CHAR` `wparam` (UTF-16 surrogate unit or Unicode scalar) onto
+/// `utf16parts`.
 fn append_wparam_utf16(wparam: WPARAM, utf16parts: &mut Vec<u16>) {
     let is_high_surrogate = (0xd800..=0xdbff).contains(&wparam);
     let is_low_surrogate = (0xdc00..=0xdfff).contains(&wparam);
