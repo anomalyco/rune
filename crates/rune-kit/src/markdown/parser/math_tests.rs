@@ -21,11 +21,19 @@ fn walk(bs: &[Block], out: &mut Vec<String>) {
     }
 }
 
-/// The inline math in `src`, as written.
-fn maths(src: &str) -> Vec<String> {
+/// The inline math in `blocks`, as written.
+fn maths_in(blocks: &[Block]) -> Vec<String> {
     let mut out = Vec::new();
-    walk(&parse(src), &mut out);
+    walk(blocks, &mut out);
     out
+}
+
+fn maths(src: &str) -> Vec<String> {
+    maths_in(&parse(src))
+}
+
+fn streamed(src: &str) -> Vec<String> {
+    maths_in(&crate::markdown::stream::parse_streaming(src, true).0)
 }
 
 fn para(src: &str) -> Inline {
@@ -79,14 +87,8 @@ fn math_still_arriving_stays_text() {
     assert!(maths("so $$x^2").is_empty());
     assert_eq!(para("Using $e^x").text, "Using $e^x");
     // A stream's tail closes an emphasis still arriving, never math.
-    let (blocks, ..) = crate::markdown::stream::parse_streaming("so *a $e^x", true);
-    let mut out = Vec::new();
-    walk(&blocks, &mut out);
-    assert!(out.is_empty(), "{out:?}");
-    let (blocks, ..) = crate::markdown::stream::parse_streaming("so $e^x$ and *b", true);
-    let mut out = Vec::new();
-    walk(&blocks, &mut out);
-    assert_eq!(out, ["$e^x$"]);
+    assert!(streamed("so *a $e^x").is_empty());
+    assert_eq!(streamed("so $e^x$ and *b"), ["$e^x$"]);
 }
 
 #[test]

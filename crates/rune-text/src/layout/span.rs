@@ -150,6 +150,11 @@ pub struct Replace {
 /// The font size a replaced label shapes at in device px: small enough to take no room.
 pub(crate) const HIDDEN_SIZE: f32 = 1e-3;
 
+/// Whether a glyph run shaped at `font_size` device px is a replaced label, which draws nothing.
+pub(crate) fn is_hidden_size(font_size: f32) -> bool {
+    font_size <= HIDDEN_SIZE * 2.0
+}
+
 /// A pill chip's horizontal geometry in points for text of `size` points: the room before its
 /// label (outer margin, padding, then any icon and its gap) and after it (padding, margin).
 #[doc(hidden)]

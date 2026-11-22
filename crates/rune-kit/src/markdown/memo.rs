@@ -596,7 +596,7 @@ impl Renderer {
         (4u8, self.base_hash(), cell_role, key, extra, font, color, pad.map(f32::to_bits), table_dir).hash(&mut h);
         match pre.filter(|p| self.code_link.is_none() || p.flags & HAS_INLINE_CODE == 0) {
             Some(p) => {
-                if p.flags & HAS_MATH != 0 || !self.can_memo_links(!p.links.is_empty()) { return None; }
+                if !self.can_memo_flags(p.flags) || !self.can_memo_links(!p.links.is_empty()) { return None; }
                 p.digest.hash(&mut h);
                 for url in &p.links { self.hash_link_url(url, &mut h); }
             }

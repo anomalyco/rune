@@ -120,11 +120,13 @@ impl Math {
         let first = self.spans.partition_point(|(m, _)| m.end <= r.start);
         let hit: Vec<usize> = (first..self.spans.len()).take_while(|&i| self.spans[i].0.start < r.end).collect();
         let inside = hit.iter().copied().find(|&i| self.spans[i].0.start <= r.start && r.end <= self.spans[i].0.end);
+        if let Some(i) = inside
+            && matches!(ev, Event::Start(_) | Event::End(_) | Event::Text(_))
+        {
+            self.set_down(b, src, i);
+            return true;
+        }
         match ev {
-            Event::Start(_) | Event::End(_) | Event::Text(_) if inside.is_some() => {
-                self.set_down(b, src, inside.unwrap_or_default());
-                true
-            }
             Event::Text(t) if !hit.is_empty() => {
                 // The text is the source as written, or that after an escape's backslash.
                 let shown = &src[r.clone()];
@@ -159,12 +161,8 @@ impl Math {
         if std::mem::replace(done, true) {
             return;
         }
-        let inl = b.inline();
-        let start = inl.1.text.len();
-        inl.1.text.push_str(&src[m.clone()]);
-        let end = inl.1.text.len();
-        inl.1.spans.push((start, end, Style::Math));
-        inl.3.push(m.clone(), start..end);
+        let at = push_text(b, src, m.clone());
+        b.inline().1.spans.push((at.start, at.end, Style::Math));
     }
 }
 
@@ -187,12 +185,14 @@ impl Found {
     }
 }
 
-fn push_text(b: &mut Builder, src: &str, r: Range<usize>) {
+/// Source `r` as text, mapped back to it: where it landed in the inline's text.
+fn push_text(b: &mut Builder, src: &str, r: Range<usize>) -> Range<usize> {
     let inl = b.inline();
     let start = inl.1.text.len();
     inl.1.text.push_str(&src[r.clone()]);
     let end = inl.1.text.len();
     inl.3.push(r, start..end);
+    start..end
 }
 
 /// A display equation's TeX, one line per source line, as a closed ```` ```math ```` fence.
