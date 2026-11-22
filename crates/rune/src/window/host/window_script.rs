@@ -278,12 +278,19 @@ mod tests {
     #[test]
     fn a_relaunch_takes_the_real_pointer_again() {
         let os = |a: &[&str]| a.iter().map(std::ffi::OsString::from).collect::<Vec<_>>();
-        let strip = |a: &[&str]| crate::tooling::without_window_script(os(a));
+        let strip = |a: &[&str]| crate::tooling::without_relaunch_drops(os(a));
         let kept = os(&["--server", "http://127.0.0.1:1", "--size", "1280x800"]);
         assert_eq!(strip(&["--server", "http://127.0.0.1:1", "--window-script", "s.json", "--size", "1280x800"]), kept);
         assert_eq!(strip(&["--window-script=s.json", "--server", "http://127.0.0.1:1", "--size", "1280x800"]), kept);
         assert_eq!(strip(&["--server", "http://127.0.0.1:1", "--size", "1280x800", "--window-script"]), kept, "a flag with no value");
         assert_eq!(strip(&["--window", "main", "--window-scripts", "x"]), os(&["--window", "main", "--window-scripts", "x"]), "other flags stay");
+        assert_eq!(strip(&["--harness-writes", "--dirs-root", "r", "--trace", "t.json"]), os(&["--harness-writes", "--dirs-root", "r", "--trace", "t.json"]), "isolating and trace flags stay");
+        assert!(crate::tooling::RELAUNCH_DROPS.contains(&"--window-script"));
+        for flag in crate::tooling::RELAUNCH_DROPS {
+            assert_eq!(strip(&["--size", "1280x800", *flag, "v"]), os(&["--size", "1280x800"]), "{flag} VALUE");
+            assert_eq!(strip(&[format!("{flag}=v").as_str(), "--size", "1280x800"]), os(&["--size", "1280x800"]), "{flag}=VALUE");
+            assert_eq!(strip(&["--", *flag, "v"]), os(&["--"]), "{flag} after a bare --");
+        }
     }
 
     #[test]

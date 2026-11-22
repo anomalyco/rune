@@ -244,15 +244,22 @@ impl Args {
     }
 }
 
-/// `args` without `--window-script FILE` (or `--window-script=FILE`): an app started again
-/// (`Tx::relaunch`, an updater's restart) must take the real pointer, not replay the script from
-/// its start. Everything else stays, in order.
-pub(crate) fn without_window_script(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+/// The flags an app started again never carries over, each with its value (the next argument, or
+/// after `=`): they drive input or act for the person, so a relaunch (`Tx::relaunch`, an updater's
+/// restart) takes the real pointer and keys instead of repeating them. Flags that isolate a run
+/// (`--harness-writes`, `--dirs-root`) or trace it stay. A program that restarts the app itself
+/// strips them with [`without_relaunch_drops`] rather than keeping its own list.
+pub const RELAUNCH_DROPS: &[&str] = &["--window-script"];
+
+/// `args` without each [`RELAUNCH_DROPS`] flag and its value, given as `--flag VALUE` or
+/// `--flag=VALUE`, wherever it stands (a bare `--` ends nothing, as Rune's parser reads it). Every
+/// other argument stays, byte for byte and in order.
+pub fn without_relaunch_drops(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
     let mut out = Vec::with_capacity(args.len());
     let mut it = args.into_iter();
     while let Some(a) = it.next() {
-        if a == "--window-script" { it.next(); continue; }
-        if a.to_str().is_some_and(|a| a.starts_with("--window-script=")) { continue; }
+        if RELAUNCH_DROPS.iter().any(|f| a == *f) { it.next(); continue; }
+        if a.to_str().is_some_and(|a| RELAUNCH_DROPS.iter().any(|f| a.strip_prefix(f).is_some_and(|rest| rest.starts_with('=')))) { continue; }
         out.push(a);
     }
     out

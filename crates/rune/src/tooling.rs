@@ -181,7 +181,7 @@ mod strip;
 mod trace;
 
 pub use args::{Args, is_headless};
-pub(crate) use args::without_window_script;
+pub use args::{RELAUNCH_DROPS, without_relaunch_drops};
 pub(crate) use args::*;
 pub use headless::headless;
 pub(crate) use headless::*;
