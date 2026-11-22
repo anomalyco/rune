@@ -251,12 +251,23 @@ fn block_lines(src: &str, events: &[(bool, Range<usize>)]) -> Option<Vec<Range<u
 
 /// Inline math in source `run`, skipping `opaque` ranges (code spans, raw HTML, autolinks) and
 /// never reaching into one.
+///
+/// One pass: `opaque` is in source order and its ranges never overlap (each is one event: a
+/// code span, an inline HTML tag, an autolink), so `next`, the first range that ends after `i`,
+/// only moves forward. A `\(` whose line holds no `\)` is looked for once per line, not once per
+/// `\(` (see [`paren_at`]).
 fn scan(src: &str, run: Range<usize>, opaque: &[Range<usize>], out: &mut Vec<Range<usize>>) {
     let s = src.as_bytes();
     let end = run.end.min(s.len());
     let mut i = run.start;
+    let mut next = opaque.partition_point(|o| o.end <= i);
+    // Every `\(` at `i` with `i + 2 <= no_close` has no `\)` before its line ends.
+    let mut no_close = 0;
     while i < end {
-        if let Some(o) = opaque.iter().find(|o| o.start <= i && i < o.end) {
+        while opaque.get(next).is_some_and(|o| o.end <= i) {
+            next += 1;
+        }
+        if let Some(o) = opaque.get(next).filter(|o| o.start <= i) {
             i = o.end;
             continue;
         }
@@ -266,7 +277,11 @@ fn scan(src: &str, run: Range<usize>, opaque: &[Range<usize>], out: &mut Vec<Ran
             continue;
         }
         let found = match s[i] {
-            b'\\' if s.get(i + 1) == Some(&b'(') => paren_at(s, i, end),
+            b'\\' if s.get(i + 1) == Some(&b'(') && i + 2 <= no_close => None,
+            b'\\' if s.get(i + 1) == Some(&b'(') => paren_at(s, i, end).unwrap_or_else(|stop| {
+                no_close = stop;
+                None
+            }),
             b'\\' => {
                 // An escape: the next character is text.
                 i += if s.get(i + 1).is_some_and(u8::is_ascii_punctuation) { 2 } else { 1 };
@@ -277,7 +292,8 @@ fn scan(src: &str, run: Range<usize>, opaque: &[Range<usize>], out: &mut Vec<Ran
             _ => None,
         };
         match found {
-            Some(e) if !opaque.iter().any(|o| o.start < e && i < o.end) => {
+            // Ranges before `next` end at or before `i`; from `next` on, the first starts first.
+            Some(e) if !opaque.get(next).is_some_and(|o| o.start < e) => {
                 out.push(i..e);
                 i = e;
             }
@@ -293,18 +309,21 @@ fn escaped(s: &[u8], i: usize) -> bool {
     s[..i].iter().rev().take_while(|&&c| c == b'\\').count() % 2 == 1
 }
 
-/// `\(…\)` at `i`, on one line and not empty: its end.
-fn paren_at(s: &[u8], i: usize, end: usize) -> Option<usize> {
+/// `\(…\)` at `i`, on one line and not empty: its end. `Err(stop)` when no `\)` follows before
+/// the line or `end` does, `stop` being where the search ended. A later `\(` at `k` with
+/// `k + 2 <= stop` has none either: this search passes through `k + 2` (it steps onto the `\` or
+/// over it as an escaped character, then onto the `(`), so a search from there sees the same bytes.
+fn paren_at(s: &[u8], i: usize, end: usize) -> Result<Option<usize>, usize> {
     let mut j = i + 2;
     while j < end {
         match s[j] {
-            b'\n' => return None,
-            b'\\' if s.get(j + 1) == Some(&b')') => return s[i + 2..j].iter().any(|c| !c.is_ascii_whitespace()).then_some(j + 2),
+            b'\n' => return Err(j),
+            b'\\' if s.get(j + 1) == Some(&b')') => return Ok(s[i + 2..j].iter().any(|c| !c.is_ascii_whitespace()).then_some(j + 2)),
             b'\\' => j += 2,
             _ => j += 1,
         }
     }
-    None
+    Err(j)
 }
 
 /// `$$…$$` at `i`, on one line, its TeX not empty: its end.
