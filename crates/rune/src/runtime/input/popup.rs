@@ -159,7 +159,7 @@ impl RuntimeCore {
     /// Drawn rect of the element a menu anchors to, matched as [`Runtime::find`] matches.
     fn anchor_rect(&self, key: &str) -> Option<[f32; 4]> {
         let i = self.live_named(None, key)?;
-        self.paint.drawn.get(i).copied()
+        self.paint.drawn.get(i).copied().filter(|r| r[2] > 0.0 || r[3] > 0.0)
     }
 
     pub(crate) fn popup_json(&self) -> Option<serde_json::Value> {

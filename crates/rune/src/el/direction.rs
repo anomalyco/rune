@@ -193,14 +193,19 @@ pub(crate) fn mirror_visual(vis: &mut Visual) {
         cold.clip_corners = Some([tr, tl, bl, br]);
     }
 }
+/// Mirrors `Side::Left` and `Side::Right` in right-to-left layout.
+pub(crate) fn mirror_side(s: Side) -> Side {
+    match s {
+        Side::Left => Side::Right,
+        Side::Right => Side::Left,
+        other => other,
+    }
+}
+
 /// An anchored overlay's placement as a right-to-left element means it: `Left` and `Right`
 /// swap, and along a `Top` or `Bottom` side so do `Start` and `End`.
 pub(crate) fn mirror_anchor(a: &mut Anchor) {
-    a.side = match a.side {
-        Side::Left => Side::Right,
-        Side::Right => Side::Left,
-        s => s,
-    };
+    a.side = mirror_side(a.side);
     if matches!(a.side, Side::Top | Side::Bottom) {
         a.align = match a.align {
             Align::Start => Align::End,
