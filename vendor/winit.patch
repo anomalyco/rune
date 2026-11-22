@@ -645,7 +645,7 @@ index a3a7705d..c3980673 100644
          return None;
      }
 diff --git a/src/platform_impl/windows/keyboard.rs b/src/platform_impl/windows/keyboard.rs
-index 9c109490..b3337513 100644
+index 9c109490..7adb90cc 100644
 --- a/src/platform_impl/windows/keyboard.rs
 +++ b/src/platform_impl/windows/keyboard.rs
 @@ -14,8 +14,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -713,7 +713,7 @@ index 9c109490..b3337513 100644
                      let pending_token = self.pending.add_pending();
                      *result = ProcResult::Value(0);
  
-@@ -168,40 +183,34 @@ impl KeyEventBuilder {
+@@ -168,40 +183,32 @@ impl KeyEventBuilder {
                  WM_CHAR | WM_SYSCHAR => {
                      let mut event_info = self.event_info.lock().unwrap();
                      if event_info.is_none() {
@@ -772,14 +772,12 @@ index 9c109490..b3337513 100644
 -                            let new_size = start_offset + encode_len;
 -                            utf16parts.resize(new_size, 0);
 +                    if let Some(ev_info) = event_info.as_mut() {
-+                        // Rune: `TranslateMessage` adds `WM_CHAR(0)` after a VK_PACKET key-down
-+                        // that carries no packet (one a program posted): it is not the packet's text.
-+                        if !(wparam == 0 && ev_info.vkey == VK_PACKET) {
++                        if keyed_char_is_text(wparam, ev_info.vkey) {
 +                            append_wparam_utf16(wparam, &mut ev_info.utf16parts);
                          }
                      }
                      // It's important that we unlock the mutex, and create the pending event token
-@@ -224,6 +233,14 @@ impl KeyEventBuilder {
+@@ -224,6 +231,14 @@ impl KeyEventBuilder {
                                  return MatchResult::TokenToRemove(pending_token);
                              },
                          };
@@ -794,7 +792,7 @@ index 9c109490..b3337513 100644
                          let mut layouts = LAYOUT_CACHE.lock().unwrap();
                          // It's okay to call `ToUnicode` here, because at this point the dead key
                          // is already consumed by the character.
-@@ -238,10 +255,11 @@ impl KeyEventBuilder {
+@@ -238,10 +253,11 @@ impl KeyEventBuilder {
                              mod_state.contains(WindowsModifiers::CONTROL)
                          };
  
@@ -810,7 +808,7 @@ index 9c109490..b3337513 100644
                              event_info.text = PartialText::System(event_info.utf16parts.clone());
                          } else {
                              let mod_no_ctrl = mod_state.remove_only_ctrl();
-@@ -510,7 +528,14 @@ impl PartialKeyEventInfo {
+@@ -510,7 +526,14 @@ impl PartialKeyEventInfo {
          } else {
              new_ex_scancode(lparam_struct.scancode, lparam_struct.extended)
          };
@@ -826,7 +824,7 @@ index 9c109490..b3337513 100644
          let location = get_location(scancode, layout.hkl as HKL);
  
          let kbd_state = get_kbd_state();
-@@ -541,9 +566,11 @@ impl PartialKeyEventInfo {
+@@ -541,9 +564,11 @@ impl PartialKeyEventInfo {
  
          let logical_key = if let Some(key) = code_as_key.clone() {
              PartialLogicalKey::This(key)
@@ -840,7 +838,7 @@ index 9c109490..b3337513 100644
              PartialLogicalKey::TextOr(preliminary_logical_key)
          } else {
              PartialLogicalKey::This(preliminary_logical_key)
-@@ -612,7 +639,12 @@ impl PartialKeyEventInfo {
+@@ -612,7 +637,12 @@ impl PartialKeyEventInfo {
          let logical_key = match self.logical_key {
              PartialLogicalKey::TextOr(fallback) => match text.as_ref() {
                  Some(s) => {
@@ -854,12 +852,19 @@ index 9c109490..b3337513 100644
                          fallback
                      } else {
                          Key::Character(s.clone())
-@@ -638,6 +670,167 @@ impl PartialKeyEventInfo {
+@@ -638,6 +668,187 @@ impl PartialKeyEventInfo {
      }
  }
  
 +/// Rune: appends a `WM_CHAR` `wparam` (UTF-16 surrogate unit or Unicode scalar) onto
 +/// `utf16parts`.
++/// Rune: whether a `WM_CHAR` that follows a key-down is part of that key's text. `TranslateMessage`
++/// adds `WM_CHAR(0)` after a VK_PACKET key-down that carries no packet (one a program posted): it
++/// is not the packet's text. A real key's NUL (Ctrl+2, Ctrl+@) is that key's text, as before.
++fn keyed_char_is_text(wparam: WPARAM, vkey: VIRTUAL_KEY) -> bool {
++    !(wparam == 0 && vkey == VK_PACKET)
++}
++
 +fn append_wparam_utf16(wparam: WPARAM, utf16parts: &mut Vec<u16>) {
 +    let is_high_surrogate = (0xd800..=0xdbff).contains(&wparam);
 +    let is_low_surrogate = (0xdc00..=0xdfff).contains(&wparam);
@@ -938,7 +943,8 @@ index 9c109490..b3337513 100644
 +
 +#[cfg(test)]
 +mod rune_bare_char_tests {
-+    use super::{bare_char_text, resolve_surrogates};
++    use super::{bare_char_text, keyed_char_is_text, resolve_surrogates};
++    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_2, VK_A, VK_PACKET};
 +
 +    const NONE: Option<String> = None;
 +
@@ -987,6 +993,18 @@ index 9c109490..b3337513 100644
 +        // The low half's character then arrives: one emoji.
 +        assert_eq!(bare_char_text(&mut pending, 0xde00, false), s("😀"));
 +        assert_eq!(pending, None);
++    }
++
++    #[test]
++    fn only_a_packet_key_downs_nul_is_left_out_of_its_text() {
++        // The NUL `TranslateMessage` adds after a posted VK_PACKET key-down is not text.
++        assert!(!keyed_char_is_text(0, VK_PACKET));
++        // The packet's real characters are.
++        assert!(keyed_char_is_text('a' as usize, VK_PACKET));
++        assert!(keyed_char_is_text(0xd83d, VK_PACKET));
++        // A real key's NUL (Ctrl+2) stays that key's text, as before.
++        assert!(keyed_char_is_text(0, VK_2));
++        assert!(keyed_char_is_text(0, VK_A));
 +    }
 +
 +    #[test]
