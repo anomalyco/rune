@@ -18,7 +18,7 @@ use windows_sys::Win32::System::Pipes::{
     PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT, WaitNamedPipeW,
 };
 use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
-use windows_sys::Win32::System::Threading::{CreateEventW, GetCurrentProcessId, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
+use windows_sys::Win32::System::Threading::{CreateEventW, GetCurrentProcessId, OpenEventW, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, EnumWindows, GW_OWNER, GWL_EXSTYLE, GetWindow, GetWindowLongW, GetWindowThreadProcessId, IsIconic,
     IsWindowVisible, SW_RESTORE, SetForegroundWindow, ShowWindow, WS_EX_TOOLWINDOW,
@@ -61,12 +61,42 @@ pub(super) fn release() {
             CloseHandle(wake);
             true
         } else {
-            GetLastError() == ERROR_PIPE_BUSY
+            // Busy: a launch is connected. Not found: the listener already closed the name (it saw
+            // `RELEASED` after a launch): either way it ends now, and is joined.
+            matches!(GetLastError(), ERROR_PIPE_BUSY | ERROR_FILE_NOT_FOUND)
         }
     };
     // A listener that can't be woken keeps the name until the process ends.
     if let Some(listener) = LISTENER.lock().unwrap_or_else(|e| e.into_inner()).take().filter(|_| woken) {
         listener.join().ok();
+        // The name is free, and the app holds nothing a next process needs: say so, so that one
+        // claims now rather than once this process has ended (`released`). A manual-reset event,
+        // set; its handle stays open, so it lasts as long as this process.
+        // SAFETY: the name is NUL-terminated and outlives the call.
+        unsafe { CreateEventW(std::ptr::null(), 1, 1, released_name(GetCurrentProcessId()).as_ptr()) };
+    }
+}
+
+/// The event a process sets once it has let go of the name itself ([`release`]), per session.
+fn released_name(pid: u32) -> Vec<u16> {
+    wide(&format!(r"Local\rune-instance-released-{pid}"))
+}
+
+/// Whether process `pid` let go of the name itself ([`release`], `release_instance`): it holds
+/// nothing a next process of the app needs, though it may not have ended yet.
+pub(crate) fn released(pid: u32) -> bool {
+    /// `SYNCHRONIZE`: enough to wait on the event.
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+    let name = released_name(pid);
+    // SAFETY: a plain handle request by a NUL-terminated name; closed once.
+    unsafe {
+        let event = OpenEventW(SYNCHRONIZE, 0, name.as_ptr());
+        if event.is_null() {
+            return false;
+        }
+        let set = WaitForSingleObject(event, 0) == WAIT_OBJECT_0;
+        CloseHandle(event);
+        set
     }
 }
 
@@ -88,9 +118,11 @@ pub(super) fn claim(id: &str) -> bool {
                 // Not a pipe name this process may use: run unclaimed rather than not at all.
                 Err(_) => return true,
             }
+            // Once it has let go itself, whoever holds the name now is asked.
             if let Some((pid, until)) = handed
                 && crate::time::now() < until
                 && crate::relaunch::alive(pid)
+                && !released(pid)
             {
                 std::thread::sleep(Duration::from_millis(1));
                 continue;
@@ -110,7 +142,9 @@ pub(super) fn claim(id: &str) -> bool {
                 Sent::Gone => return true,
                 // Alive, and slow: asked again, never started beside, until `LIVE_WAIT` says
                 // it's hung. Each ask it didn't answer it also didn't act on (`listen`).
-                Sent::Busy if crate::time::now() < *slow.get_or_insert_with(|| crate::time::now() + LIVE_WAIT) => {}
+                // A relaunch has already waited `CLAIM_WAIT` for the copy it restarts (`single_instance`):
+                // a copy that still holds the name and doesn't answer is hung, and is passed over now.
+                Sent::Busy if crate::relaunch::relaunched_after().is_none() && crate::time::now() < *slow.get_or_insert_with(|| crate::time::now() + LIVE_WAIT) => {}
                 Sent::Busy | Sent::Nobody => break,
             }
         }
@@ -143,12 +177,18 @@ fn wait_free(name: &[u16], server: u32) -> Free {
     let mut gone_at = None;
     while crate::time::now() < until {
         match create(name) {
-            // The name can come free before the rest of what `server` holds (its files):
-            // keep the name, but answer only once the process object is signalled.
+            // Let go by `release`: it holds nothing this process needs. Freed by its teardown
+            // instead, the name can come free before the rest of what `server` holds (its
+            // files): keep the name, but answer only once the process object is signalled.
             Ok(pipe) => {
-                process.wait_until(until);
+                if !released(server) {
+                    process.wait_until(until);
+                }
                 return Free::Claimed(pipe);
             }
+            // It let go and another launch (the relaunch it started) took the name first: that
+            // one is asked, rather than this launch passing the name over and starting beside it.
+            Err(ERROR_ACCESS_DENIED) if released(server) => return Free::Ask,
             Err(ERROR_ACCESS_DENIED) => {}
             Err(_) => return Free::Ask,
         }

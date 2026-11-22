@@ -36,11 +36,13 @@
 /// macOS and other platforms: always true. macOS already reaches the running app.
 pub fn single_instance(id: &str) -> bool {
     // A relaunch (`Tx::relaunch`) claims once the process it restarts has let go.
-    crate::relaunch::wait_for_previous();
     #[cfg(target_os = "windows")]
     {
+        crate::relaunch::wait_for_previous_release();
         windows::claim(id)
     }
+    #[cfg(not(target_os = "windows"))]
+    crate::relaunch::wait_for_previous();
     #[cfg(target_os = "linux")]
     {
         linux::claim(id)
@@ -86,7 +88,7 @@ pub(crate) fn launch_links() -> Vec<String> {
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub(crate) use handoff::{exited, launches_waiting, on_relaunch, served};
 #[cfg(target_os = "windows")]
-pub(crate) use windows::raise_front;
+pub(crate) use windows::{raise_front, released};
 
 /// What Windows' pipe and Linux's socket share: the message, its answers and their waits, and
 /// what the first process does with a launch it took.
