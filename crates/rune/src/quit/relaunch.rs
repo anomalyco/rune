@@ -15,12 +15,17 @@ const AFTER: &str = "RUNE_RELAUNCH_AFTER";
 const HANDED: &str = "RUNE_INSTANCE_HANDED";
 /// The longest a relaunched process waits for the previous one.
 const WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+/// The same from the single-instance claim (Windows, [`wait_for_previous_release`]): one that
+/// hasn't let go by then is hung, and the claim passes it over; one still quitting answers the
+/// claim, which waits for it.
+#[cfg(target_os = "windows")]
+const CLAIM_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Starts this app again, to go on once this process has exited. Errors are logged: the app
 /// is quitting either way.
 pub(crate) fn spawn() {
     #[cfg(not(target_arch = "wasm32"))]
-    if let Err(e) = start(std::env::args_os().skip(1).collect(), AFTER) {
+    if let Err(e) = start(crate::tooling::without_relaunch_drops(std::env::args_os().skip(1).collect()), AFTER) {
         eprintln!("rune: couldn't start the app again: {e}");
     }
 }
@@ -84,27 +89,63 @@ fn bundle_of(exe: &std::path::Path) -> Option<std::path::PathBuf> {
 /// A relaunched process waits here, once, for the process that started it to exit, for at most
 /// ten seconds. Any other launch goes straight on.
 pub(crate) fn wait_for_previous() {
+    wait_once(false);
+}
+
+/// The process this one was relaunched after (`Tx::relaunch`), if it isn't this one.
+#[cfg(target_os = "windows")]
+pub(crate) fn relaunched_after() -> Option<u32> {
+    std::env::var_os(AFTER).and_then(|v| v.to_str().and_then(|v| v.parse::<u32>().ok())).filter(|pid| *pid != std::process::id())
+}
+
+/// [`wait_for_previous`] from the single-instance claim (Windows): the previous process lets go
+/// of the claim (`release_instance`) once it holds nothing this one needs (its files closed), so
+/// that, or its exit, is what's waited for, and for at most [`CLAIM_WAIT`]. Its teardown after
+/// that (threads, the GPU, a diagnostics queue) costs this launch nothing.
+#[cfg(target_os = "windows")]
+pub(crate) fn wait_for_previous_release() {
+    wait_once(true);
+}
+
+fn wait_once(_claim: bool) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
             let Some(pid) = std::env::var_os(AFTER).and_then(|v| v.to_str().and_then(|v| v.parse::<u32>().ok())) else { return };
-            if pid != std::process::id() { wait(pid); }
+            if pid == std::process::id() {
+                return;
+            }
+            #[cfg(target_os = "windows")]
+            wait(pid, _claim);
+            #[cfg(not(target_os = "windows"))]
+            wait(pid);
         });
     }
 }
 
 #[cfg(target_os = "windows")]
 #[allow(unsafe_code)]
-fn wait(pid: u32) {
-    use windows_sys::Win32::Foundation::CloseHandle;
+fn wait(pid: u32, claim: bool) {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
     use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
+    let until = crate::time::now() + if claim { CLAIM_WAIT } else { WAIT };
     // SAFETY: a plain handle request; a process that already exited answers null. The handle is
     // closed once.
     unsafe {
         let handle = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
         if handle.is_null() { return; }
-        WaitForSingleObject(handle, WAIT.as_millis() as u32);
+        loop {
+            let left = until.saturating_duration_since(crate::time::now());
+            // From the claim, looks for the release every 2 ms; else one wait for the exit.
+            let slice = if claim { left.min(std::time::Duration::from_millis(2)) } else { left };
+            if WaitForSingleObject(handle, slice.as_millis() as u32) != WAIT_TIMEOUT
+                || (claim && crate::open_url::instance::released(pid))
+                || crate::time::now() >= until
+            {
+                break;
+            }
+        }
         CloseHandle(handle);
     }
 }

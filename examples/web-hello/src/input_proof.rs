@@ -14,8 +14,8 @@ export function queryZoom() {
     const z = parseFloat(new URLSearchParams(location.search).get('zoom') ?? '1');
     return Number.isFinite(z) && z > 0 ? z : 1;
 }
-export function report(plain, display, single, secretLength, submits, shortcuts, visible) {
-    window.__inputProof = { plain, display, single, secretLength, submits, shortcuts, visible,
+export function report(plain, display, single, secretLength, submits, shortcuts, visible, windowVisible) {
+    window.__inputProof = { plain, display, single, secretLength, submits, shortcuts, visible, windowVisible,
         polls: (window.__inputProof?.polls ?? 0) + 1 };
 }
 export function reportAudit(json) {
@@ -34,7 +34,7 @@ extern "C" {
     fn audit_enabled() -> bool;
     #[wasm_bindgen(js_name = queryZoom)]
     fn query_zoom() -> f32;
-    fn report(plain: &str, display: &str, single: &str, secret_length: usize, submits: u32, shortcuts: u32, visible: bool);
+    fn report(plain: &str, display: &str, single: &str, secret_length: usize, submits: u32, shortcuts: u32, visible: bool, window_visible: bool);
     #[wasm_bindgen(js_name = reportAudit)]
     fn report_audit(json: &str);
     #[wasm_bindgen(js_name = reportScroll)]
@@ -250,9 +250,9 @@ pub fn run() {
         return;
     }
     let mut spec = AppSpec::new("Input proof", (390.0, 760.0), State::default, view);
-    spec.poll = Some(|s, _, _| {
+    spec.poll = Some(|s, _, tx| {
         report(&s.plain.text, &s.plain.display().0, &s.single.text, s.secret.text.chars().count(),
-            s.submits, s.shortcuts, s.handle.as_ref().is_some_and(AppHandle::is_visible));
+            s.submits, s.shortcuts, s.handle.as_ref().is_some_and(AppHandle::is_visible), tx.window_visible());
         false
     });
     spec.on_key = Some(|s, event, _| {

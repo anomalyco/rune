@@ -346,13 +346,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
             let e = &script[next_ev];
             next_ev += 1;
             if let Some(g) = state.gate.as_mut() && !matches!(e.kind, Kind::Mark(_)) { g.input("script"); }
-            let (x, y) = match &e.pos {
-                // A script's points are the window's; the view's are over its zoom.
-                Pos::Xy(x, y) => (*x / app.rt().zoom(), *y / app.rt().zoom()),
-                Pos::Key(key) => app.rt().find(key).unwrap_or_else(|| die(&format!("script: no element with key {key:?}"))),
-                Pos::Rel(_, _) if e.kind.at_pointer() => app.rt().pointer().unwrap_or((0.0, 0.0)),
-                Pos::Rel(dx, dy) => (last_down.0 + dx, last_down.1 + dy),
-            };
+            let (x, y) = crate::tooling::script_point(app.rt(), e, last_down).unwrap_or_else(|msg| die(&format!("script: {msg}")));
             match &e.kind {
                 Kind::Mark(name) if args.realtime => {
                     use std::io::Write as _;
