@@ -107,6 +107,10 @@ impl Entry {
         let mut gi = 0usize;
         for item in line.items() {
             let PositionedLayoutItem::GlyphRun(glyph_run) = item else { continue };
+            if crate::is_hidden_size(glyph_run.run().font_size()) {
+                gi += glyph_run.glyphs().count();
+                continue;
+            }
             let face = Face::of(&glyph_run, coords);
             let at = self.coords.len() as u32;
             self.coords.extend_from_slice(coords);

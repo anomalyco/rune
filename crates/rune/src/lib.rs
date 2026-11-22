@@ -95,7 +95,7 @@ pub use el::Drag;
 pub use el::El;
 pub use el::GridRow;
 pub use el::GrowthSpec;
-pub use el::InlineIcon;
+pub use el::{InlineIcon, InlineImage};
 pub use el::LiveRegion;
 pub use el::Outline;
 pub use el::Phase;

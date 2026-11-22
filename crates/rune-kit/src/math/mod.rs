@@ -1,9 +1,11 @@
-//! Sandboxed, off-UI-thread LaTeX display math rendering for closed ```` ```latex ```` and
-//! ```` ```math ```` Markdown fences (`anomalyco/opencode#64380`).
+//! Sandboxed, off-UI-thread LaTeX math rendering for closed ```` ```latex ```` and
+//! ```` ```math ```` Markdown fences (`anomalyco/opencode#64380`), `$$` paragraphs, and inline
+//! `$…$`, `\(…\)` and `$$…$$` in text, which stand on the line's baseline (in text style but for
+//! `$$`) and show their source until rendered or when they fail.
 //!
 //! - **Zero startup and zero hot-path cost:** the `wasmi` interpreter (native) / Web Worker
 //!   (`wasm32`), the deflated `ratex-math.wasm` module, and the deflated KaTeX font pack are never
-//!   touched until the first closed math fence settles.
+//!   touched until the first math in a document is drawn.
 //! - **Host-enforced isolation:** every limit (16 KiB input, 40M fuel, 16 MiB linear memory,
 //!   250 ms wall-clock deadline, 4096×4096 max texture dim, 4 MiB max single bitmap, 2048 dash cap,
 //!   and full `RM01` wire validation) is enforced outside the guest. Any failure falls back to
@@ -23,6 +25,9 @@ mod wasm_hash;
 #[cfg(target_arch = "wasm32")]
 mod web_worker;
 mod wire;
+
+#[cfg(test)]
+mod inline_tests;
 
 #[cfg(not(target_arch = "wasm32"))]
 use sandbox::MAX_INPUT_BYTES;
@@ -77,6 +82,9 @@ pub(crate) struct RenderedMath {
     pub(crate) pixels: Pixels,
     pub(crate) width_pt: f32,
     pub(crate) height_pt: f32,
+    /// The baseline below the bitmap's top edge, and the clear margin around the ink, in points.
+    pub(crate) baseline_pt: f32,
+    pub(crate) margin_pt: f32,
     byte_len: usize,
 }
 
@@ -321,6 +329,8 @@ fn finish_job(key: MathKey, rendered: Option<raster::Rasterized>) {
             pixels: r.pixels,
             width_pt: r.width_pt,
             height_pt: r.height_pt,
+            baseline_pt: r.baseline_pt,
+            margin_pt: r.margin_pt,
             byte_len: r.byte_len,
         }),
         None => CacheEntry::Failed,
@@ -378,6 +388,39 @@ pub fn may_have_math_fence(src: &str) -> bool {
     let b = src.as_bytes();
     b.windows(5).any(|w| w.eq_ignore_ascii_case(b"latex"))
         || b.windows(4).any(|w| w.eq_ignore_ascii_case(b"math"))
+}
+
+/// Fast check for whether `src` might hold any math: a `latex` or `math` fence, or the `$`,
+/// `\(` or `\[` that inline math and display paragraphs open with. Hosts that memoise rows of
+/// Markdown use it to tell which rows ask the math cache (see [`collect`] and [`version`]).
+pub fn may_have_math(src: &str) -> bool {
+    may_have_inline_math(src) || may_have_math_fence(src)
+}
+
+pub(crate) fn may_have_inline_math(src: &str) -> bool {
+    src.contains('$') || src.contains("\\(") || src.contains("\\[")
+}
+
+/// The TeX of inline math as written (`$…$`, `\(…\)`, `$$…$$`): `$$` keeps display style, the
+/// others set text style, as KaTeX's inline mode does.
+fn inline_tex(raw: &str) -> Option<String> {
+    let (tex, display) = if let Some(t) = raw.strip_prefix("$$").and_then(|t| t.strip_suffix("$$")) {
+        (t, true)
+    } else if let Some(t) = raw.strip_prefix("\\(").and_then(|t| t.strip_suffix("\\)")) {
+        (t, false)
+    } else {
+        (raw.strip_prefix('$').and_then(|t| t.strip_suffix('$'))?, false)
+    };
+    let tex = tex.trim();
+    (!tex.is_empty()).then(|| if display { tex.to_owned() } else { format!("\\textstyle {tex}") })
+}
+
+/// [`poll_or_enqueue`] for inline math as written (`raw`, delimiters and all) at `body_pt`.
+pub(crate) fn poll_inline(raw: &str, body_pt: f32, ink: Color, scale: f32) -> MathStatus {
+    match inline_tex(raw) {
+        Some(tex) => poll_or_enqueue(&tex, body_pt, ink, scale),
+        None => MathStatus::Failed,
+    }
 }
 
 /// Whether `source` currently has a ready rendered math bitmap in the cache (used by

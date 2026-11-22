@@ -116,6 +116,9 @@ pub enum Style {
     Em,
     Strike,
     Link,
+    /// Inline math (`$…$`, `\(…\)`, `$$…$$`, `math` feature), its source as written: it draws
+    /// rendered once ready, and as that source until then or when it fails.
+    Math,
 }
 
 /// Text with styled and linked byte ranges.
@@ -495,7 +498,7 @@ impl Markdown {
     /// Builds with `style`, for apps without a [`Kit`] (see [`MarkdownStyle::neutral`]).
     pub fn render(self, style: &MarkdownStyle) -> El {
         #[cfg(feature = "math")]
-        let has_math = crate::math::may_have_math_fence(&self.src);
+        let has_math = crate::math::may_have_math(&self.src);
         #[cfg(not(feature = "math"))]
         let has_math = false;
         let can_cache = !self.streaming

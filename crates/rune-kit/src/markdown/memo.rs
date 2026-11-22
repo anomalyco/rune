@@ -55,6 +55,8 @@ pub(super) const HAS_IMAGE: u8 = 1 << 2;
 pub(super) const HAS_QUOTE: u8 = 1 << 3;
 pub(super) const HAS_OPEN_TABLE: u8 = 1 << 4;
 pub(super) const HAS_INLINE_CODE: u8 = 1 << 5;
+/// Inline math: like display math, its block builds every time, asking the math cache.
+pub(super) const HAS_MATH: u8 = 1 << 6;
 
 #[derive(Clone)]
 pub(super) struct PreRow {
@@ -153,6 +155,7 @@ pub(super) fn task_count(root: &Block) -> usize {
 fn scan_inline(inl: &Inline, h: &mut PairHasher, flags: &mut u8, links: &mut Vec<Rc<str>>) {
     (0u8, inl).hash(h);
     if inl.spans.iter().any(|s| matches!(s.2, Style::Code)) { *flags |= HAS_INLINE_CODE; }
+    if inl.spans.iter().any(|s| matches!(s.2, Style::Math)) { *flags |= HAS_MATH; }
     for (_, _, url) in &inl.links { links.push(Rc::from(url.as_str())); }
 }
 
@@ -393,6 +396,7 @@ impl Renderer {
     }
 
     fn can_memo_flags(&self, flags: u8) -> bool {
+        if flags & HAS_MATH != 0 { return false; }
         if flags & HAS_CODE != 0 && (!self.highlighter.is_builtin() || self.code_frame.as_ref().is_some_and(|w| w.frame.is_some() || w.wrap.is_some())) { return false; }
         if flags & HAS_MERMAID != 0 {
             #[cfg(feature = "mermaid")]
@@ -431,6 +435,7 @@ impl Renderer {
     }
 
     pub(super) fn hash_inline_direct(&self, inl: &Inline, h: &mut PairHasher) -> bool {
+        if inl.spans.iter().any(|s| matches!(s.2, Style::Math)) { return false; }
         let resolved = self.with_code_links(inl);
         if !self.can_memo_links(!resolved.links.is_empty()) { return false; }
         (1u8, &*resolved).hash(h);
@@ -591,7 +596,7 @@ impl Renderer {
         (4u8, self.base_hash(), cell_role, key, extra, font, color, pad.map(f32::to_bits), table_dir).hash(&mut h);
         match pre.filter(|p| self.code_link.is_none() || p.flags & HAS_INLINE_CODE == 0) {
             Some(p) => {
-                if !self.can_memo_links(!p.links.is_empty()) { return None; }
+                if !self.can_memo_flags(p.flags) || !self.can_memo_links(!p.links.is_empty()) { return None; }
                 p.digest.hash(&mut h);
                 for url in &p.links { self.hash_link_url(url, &mut h); }
             }

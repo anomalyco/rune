@@ -59,6 +59,10 @@ name = "scroll_x"
 required-features = ["markdown"]
 
 [[example]]
+name = "markdown_math"
+required-features = ["markdown", "math"]
+
+[[example]]
 name = "markdown_resize"
 required-features = ["markdown", "frame-profile"]
 
