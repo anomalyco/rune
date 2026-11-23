@@ -1,0 +1,1 @@
+- Virtual lists: when rows above the viewport are inserted or measured while a scroll glide (`Tx::scroll_to`, `Tx::scroll_to_with`, `Tx::scroll_center`) is running, the glide's target offset shifts by the same anchor delta as the viewport offset so the glide lands on the intended content without overshooting.

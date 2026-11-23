@@ -186,7 +186,7 @@ impl Measurement<'_> {
             let delta = v.anchor_delta();
             offset = (offset + delta).max(0.0);
             if let Some(st) = self.scrolls.get_mut(&scroll_id) && !held {
-                st.offset = (st.offset + f64::from(delta)).max(0.0);
+                st.shift_anchor(delta);
             }
             let shown = std::mem::take(&mut v.shown);
             v.select(offset, pinned, Some(&shown));
