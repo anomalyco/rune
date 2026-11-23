@@ -561,33 +561,36 @@ fn overlay_misses_back_off_until_their_retry() {
     let app = AppSpec { poll: Some(poll), ..AppSpec::new("backoff", (30.0, 20.0), State::default, view) };
     let (mut overlay, _handle) = Overlay::new(OverlaySpec::new("backoff", app.size, view), State::default(), &app);
     overlay.presence = Presence::Shown { occluded: false };
-    overlay.rt.wall_start = None;
+    let t0 = crate::time::now();
+    overlay.rt.wall_start = Some(t0);
+    overlay.rt.frame.set_test_clock(crate::Clock::manual(60.0));
 
-    let now = crate::time::now();
-    overlay.missed(Missed::Timeout, false, false);
+    overlay.missed_at(Missed::Timeout, false, false, t0);
     assert_eq!(overlay.rt.state.polls, 1, "the missed frame still polls");
-    assert!(overlay.backoff.deadline().is_some_and(|at| at >= now + TIMEOUT_RETRY));
-    assert!(overlay.backing_off(crate::time::now()), "an unpaced timeout waits for its retry");
-    overlay.missed(Missed::Outdated, true, true);
+    assert_eq!(overlay.backoff.deadline(), Some(t0 + TIMEOUT_RETRY));
+    assert!(overlay.backing_off(t0), "an unpaced timeout waits for its retry");
+
+    let t1 = t0 + Duration::from_millis(100);
+    overlay.missed_at(Missed::Outdated, true, true, t1);
     assert_eq!(overlay.rt.state.polls, 1, "a frame that already stepped doesn't step again");
-    assert!(overlay.backoff.deadline().is_some_and(|at| at >= now + OCCLUDED_RETRY) && overlay.backing_off(crate::time::now()),
-        "an outdated surface waits even while a display link runs");
+    assert_eq!(overlay.backoff.deadline(), Some(t1 + OCCLUDED_RETRY));
+    assert!(overlay.backing_off(t1), "an outdated surface waits even while a display link runs");
 
     // A timer comes due while it backs off: it runs now, and the next deadline is a frame on.
-    overlay.rt.wall_start = Some(crate::time::now() - Duration::from_millis(251));
+    let due = t0 + Duration::from_millis(251);
+    overlay.rt.frame.test_clock_mut().unwrap().seek(0.251);
     overlay.dirty = false;
-    let due = crate::time::now();
     overlay.wake_due(due);
     assert_eq!(overlay.rt.state.polls, 2, "the due timer runs without a frame");
     assert!(overlay.wake_deadline().is_some_and(|at| at > due), "and doesn't leave the loop spinning on it");
 
     // Fading out, an occluded miss can't mark it occluded, yet it still waits.
-    overlay.presence = Presence::FadingOut { until: crate::time::now() + Duration::from_secs(1), length: Duration::from_secs(1), occluded: false };
+    overlay.presence = Presence::FadingOut { until: due + Duration::from_secs(1), length: Duration::from_secs(1), occluded: false };
     overlay.backoff = Default::default();
-    overlay.missed(Missed::Occluded, false, false);
-    assert!(overlay.presence.drawing() && overlay.backing_off(crate::time::now()));
-    overlay.backoff_step(crate::window::BackoffEvent::At(crate::time::now()));
-    assert!(!overlay.backing_off(crate::time::now() + Duration::from_millis(1)), "a due retry draws");
+    overlay.missed_at(Missed::Occluded, false, false, due);
+    assert!(overlay.presence.drawing() && overlay.backing_off(due));
+    overlay.backoff_step(crate::window::BackoffEvent::At(due));
+    assert!(!overlay.backing_off(due + Duration::from_millis(1)), "a due retry draws");
 }
 
 #[cfg(feature = "hot")]
