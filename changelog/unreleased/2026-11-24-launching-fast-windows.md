@@ -1,0 +1,1 @@
+- Docs: `crates/rune/README.md` "Launching fast" says what stands between a Windows process and its first frame (no GPU before it; the import table; the setup's compatibility layer, which loads ntdll's shim engine into the app and everything it starts) and how to time it with `examples/launch-floor` and `perf/launch.bench.ts`.
