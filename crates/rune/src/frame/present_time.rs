@@ -454,14 +454,28 @@ pub(crate) mod metal {
 
         fn hook(layer: Retained<AnyObject>, log: Arc<Log>) -> Option<Self> {
             let metal = AnyClass::get(c"CAMetalLayer")?;
-            let base = layer.class();
             // SAFETY: isKindOfClass: takes any class.
             let is_metal: bool = unsafe { msg_send![&*layer, isKindOfClass: metal] };
             if !is_metal { return None; }
-            let class = hooked_class(base)?;
+            Self::hook_instance(layer, log)
+        }
+
+        pub(super) fn hook_instance(layer: Retained<AnyObject>, log: Arc<Log>) -> Option<Self> {
+            // SAFETY: `layer` is a live ObjC object; never place a subclass above KVO's.
+            if unsafe { crate::platform::macos::kvo_observed(&layer) } { return None; }
+            let (base, class) = if crate::platform::macos::has_subclass(&layer, HOOKED_PREFIX.as_bytes()) {
+                let top = layer.class();
+                (original_class(top), top)
+            } else {
+                let base = layer.class();
+                let class = hooked_class(base)?;
+                (base, class)
+            };
             LAYERS.lock().unwrap().push(Hooked { addr: Retained::as_ptr(&layer) as usize, base, log });
-            // SAFETY: the subclass adds no ivars, so the instance layout is unchanged.
-            unsafe { AnyObject::set_class(&layer, class) };
+            if !std::ptr::eq(layer.class(), class) {
+                // SAFETY: the subclass adds no ivars, so the instance layout is unchanged.
+                unsafe { AnyObject::set_class(&layer, class) };
+            }
             Some(LayerHook { layer, base, class })
         }
     }

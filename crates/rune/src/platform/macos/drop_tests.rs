@@ -221,3 +221,36 @@ fn dropping_guard_prunes_view_and_rejects_stale_promises_on_recycled_address() {
     drop(second);
     assert!(DESTS.with(|d| !d.borrow().contains_key(&key)));
 }
+
+#[test]
+fn kvo_observed_drop_subclass_in_both_orders() {
+    use objc2_foundation::NSObject;
+    let key = NSString::from_str("probe");
+    let observer = NSObject::new();
+
+    // Order 1: Rune subclasses first, then KVO observes and removes the observer.
+    let below = NSObject::new();
+    // SAFETY: `below` and `observer` are live `NSObject` instances; KVO selectors match Foundation.
+    unsafe {
+        assert!(subclass_view(&below));
+        assert!(has_subclass(&below, b"RuneDrops_"));
+        let _: () = msg_send![&*below, addObserver: &*observer, forKeyPath: &*key, options: 0usize, context: std::ptr::null_mut::<std::ffi::c_void>()];
+        let kvo_class = below.class();
+        assert!(kvo_class.name().to_bytes().starts_with(b"NSKVONotifying_"));
+        assert!(subclass_view(&below), "already-subclassed view stays valid beneath KVO");
+        assert!(std::ptr::eq(below.class(), kvo_class), "KVO's class must stay on top");
+        let _: () = msg_send![&*below, removeObserver: &*observer, forKeyPath: &*key];
+    }
+
+    // Order 2: KVO observes first, then Rune runs, then KVO removes the observer.
+    let above = NSObject::new();
+    // SAFETY: `above` and `observer` are live `NSObject` instances; KVO selectors match Foundation.
+    unsafe {
+        let _: () = msg_send![&*above, addObserver: &*observer, forKeyPath: &*key, options: 0usize, context: std::ptr::null_mut::<std::ffi::c_void>()];
+        let kvo_class = above.class();
+        assert!(kvo_class.name().to_bytes().starts_with(b"NSKVONotifying_"));
+        assert!(!subclass_view(&above), "skip already KVO-observed view");
+        assert!(std::ptr::eq(above.class(), kvo_class), "KVO's class must stay on top");
+        let _: () = msg_send![&*above, removeObserver: &*observer, forKeyPath: &*key];
+    }
+}

@@ -2,17 +2,21 @@
 //!
 //! Since macOS 26, AppKit puts the buttons back at (9, 9) and the titlebar container back to
 //! its own height whenever it lays the titlebar out again, which it does on its own (a title
-//! or appearance change, a zoom), not only on the resizes the shell sees. So the container and
-//! the buttons' own superview each get a subclass, for that instance only, whose `-layout` runs
-//! AppKit's and then puts the buttons back.
+//! or appearance change, a zoom), not only on the resizes the shell sees. AppKit also observes
+//! the titlebar container with KVO from launch, so Rune hooks `-layout` on each view's own
+//! AppKit class (below any `NSKVONotifying_` class) rather than changing the instance's isa:
+//! KVO's class stays on top and the hook runs AppKit's `-layout`, then puts the buttons back.
 
 #![allow(unsafe_code)]
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ffi::{c_char, c_void};
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use objc2::rc::Retained;
-use objc2::runtime::{AnyClass, AnyObject, ClassBuilder, Sel};
+use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};
 use objc2::{msg_send, sel};
 use objc2_app_kit::{NSView, NSWindow, NSWindowButton, NSWindowStyleMask};
 use objc2_foundation::NSPoint;
@@ -20,12 +24,25 @@ use winit::window::Window;
 
 use crate::platform::macos::ns_window;
 
+unsafe extern "C" {
+    fn class_getInstanceMethod(class: *const AnyClass, selector: Sel) -> *const c_void;
+    fn method_getImplementation(method: *const c_void) -> *const c_void;
+    fn method_getTypeEncoding(method: *const c_void) -> *const c_char;
+    fn method_setImplementation(method: *const c_void, imp: *const c_void) -> *const c_void;
+    fn class_addMethod(class: *const AnyClass, selector: Sel, imp: *const c_void, types: *const c_char) -> Bool;
+    fn imp_implementationWithBlock(block: *const c_void) -> *const c_void;
+    fn imp_removeBlock(imp: *const c_void) -> Bool;
+}
+
 thread_local! {
     /// Each window's spot, by its `NSWindow` pointer, for the layout hook.
     static SPOTS: RefCell<HashMap<usize, (f64, f64)>> = RefCell::new(HashMap::new());
     /// Set while the hook places, so the frames it sets don't place again.
     static PLACING: Cell<bool> = const { Cell::new(false) };
 }
+
+/// Classes whose `-layout` Rune has already hooked, by class pointer.
+static HOOKED: Mutex<Option<HashSet<usize>>> = Mutex::new(None);
 
 /// Drops its window's spot when the window goes, so a later window at the same address
 /// doesn't inherit it.
@@ -91,42 +108,94 @@ fn place_in(win: &NSWindow, (x, y): (f64, f64)) {
     PLACING.with(|p| p.set(false));
 }
 
-/// Runs AppKit's `-layout` for the view's real class, then puts the buttons back.
-unsafe extern "C" fn layout(view: &NSView, _: Sel) {
-    // Not `view.class()`'s superclass: entering full screen, AppKit observes the container and
-    // KVO puts its own subclass above Rune's, whose superclass is Rune's again.
-    let base = held_class(view).and_then(AnyClass::superclass).expect("Rune traffic-light view has a superclass");
-    // SAFETY: `base` is the class this instance had before `hold`, which implements -layout.
-    let _: () = unsafe { msg_send![super(view, base), layout] };
-    if PLACING.with(Cell::get) {
+/// Puts the buttons back after AppKit's `-layout` ran, when `this` belongs to a window with a spot.
+unsafe fn after_layout(this: *mut AnyObject) {
+    if this.is_null() || PLACING.try_with(Cell::get).unwrap_or(true) {
         return;
     }
+    if SPOTS.try_with(|s| s.borrow().is_empty()).unwrap_or(true) {
+        return;
+    }
+    // SAFETY: `SPOTS` is only populated on the main thread for live titlebar `NSView`s.
+    let view = unsafe { &*(this.cast::<NSView>()) };
     let Some(win) = view.window() else { return };
-    let Some(spot) = SPOTS.with(|s| s.borrow().get(&(Retained::as_ptr(&win) as usize)).copied()) else { return };
+    let Some(spot) = SPOTS.try_with(|s| s.borrow().get(&(Retained::as_ptr(&win) as usize)).copied()).ok().flatten() else { return };
     place_in(&win, spot);
 }
 
-/// Gives this one view a subclass of its own class whose `-layout` places the buttons again.
-unsafe fn hold(view: &NSView) {
-    if held_class(view).is_some() {
-        return;
-    }
-    let base = view.class();
-    let Ok(name) = std::ffi::CString::new(format!("RuneTrafficLights_{}", base.name().to_string_lossy())) else { return };
-    let class = match ClassBuilder::new(&name, base) {
-        Some(mut builder) => {
-            // SAFETY: the signature matches -[NSView layout].
-            unsafe { builder.add_method(sel!(layout), layout as unsafe extern "C" fn(_, _)) };
-            builder.register()
-        }
-        None => AnyClass::get(&name).expect("register Rune traffic-light view"),
-    };
-    // SAFETY: a live view on the main thread. Only its isa changes, to a subclass without
-    // ivars; the original class is never modified.
-    unsafe { AnyObject::set_class(view, class) };
+/// The view's own class, below any KVO subclass (`NSKVONotifying_`).
+fn own_class(object: &AnyObject) -> Option<&'static AnyClass> {
+    std::iter::successors(Some(object.class()), |c| c.superclass())
+        .find(|c| !c.name().to_bytes().starts_with(b"NSKVONotifying_"))
 }
 
-/// The subclass `hold` gave this view, wherever it sits in the view's class chain.
-fn held_class(view: &NSView) -> Option<&'static AnyClass> {
-    std::iter::successors(Some(view.class()), |c| c.superclass()).find(|c| c.name().to_bytes().starts_with(b"RuneTrafficLights_"))
+/// Hooks `-layout` on `view`'s own class once, leaving its isa (and any KVO subclass) intact.
+unsafe fn hold(view: &NSView) {
+    // SAFETY: `view` is a live `NSView` on the main thread.
+    unsafe { hold_object(view) };
 }
+
+/// Hooks `-layout` on `object`'s own class (below any KVO subclass) once per class.
+unsafe fn hold_object(object: &AnyObject) {
+    let Some(class) = own_class(object) else { return };
+    let key = class as *const AnyClass as usize;
+    let mut guard = HOOKED.lock().unwrap_or_else(|e| e.into_inner());
+    let hooked = guard.get_or_insert_with(HashSet::new);
+    if hooked.contains(&key) {
+        return;
+    }
+    let selector = sel!(layout);
+    // SAFETY: `class` is a registered ObjC class, `HOOKED` serializes installation, and each
+    // block trampoline matches `-(void)layout`'s ABI (`void (^)(id)`).
+    unsafe {
+        let method = class_getInstanceMethod(class, selector);
+        if method.is_null() {
+            return;
+        }
+        let parent = class.superclass();
+        let parent_method = parent.map_or(std::ptr::null(), |p| class_getInstanceMethod(p, selector));
+        if method != parent_method {
+            let original = Arc::new(AtomicUsize::new(method_getImplementation(method) as usize));
+            let call = original.clone();
+            let block = block2::RcBlock::new(move |this: *mut AnyObject| {
+                // SAFETY: `call` holds the original `-(void)layout` IMP replaced on `class`.
+                unsafe {
+                    let imp: unsafe extern "C" fn(*mut AnyObject, Sel) = std::mem::transmute(call.load(Ordering::Acquire));
+                    imp(this, sel!(layout));
+                    after_layout(this);
+                }
+            });
+            let imp = imp_implementationWithBlock(block2::RcBlock::as_ptr(&block).cast());
+            if imp.is_null() {
+                return;
+            }
+            let prev = method_setImplementation(method, imp);
+            original.store(prev as usize, Ordering::Release);
+            hooked.insert(key);
+        } else if let Some(parent) = parent {
+            let types = method_getTypeEncoding(method);
+            let block = block2::RcBlock::new(move |this: *mut AnyObject| {
+                // SAFETY: `this` is a live instance of `class` and `parent` implements `-layout`.
+                unsafe {
+                    if !this.is_null() {
+                        let _: () = msg_send![super(&*this, parent), layout];
+                        after_layout(this);
+                    }
+                }
+            });
+            let imp = imp_implementationWithBlock(block2::RcBlock::as_ptr(&block).cast());
+            if imp.is_null() {
+                return;
+            }
+            if class_addMethod(class, selector, imp, types).as_bool() {
+                hooked.insert(key);
+            } else {
+                imp_removeBlock(imp);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "traffic_lights_tests.rs"]
+mod tests;

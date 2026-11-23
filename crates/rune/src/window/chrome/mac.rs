@@ -8,7 +8,7 @@ use objc2::{msg_send, sel, ClassType};
 use objc2_app_kit::{NSEvent, NSPanel, NSWindowButton, NSWindowStyleMask};
 use objc2_foundation::{NSString, NSUserDefaults};
 use winit::window::Window;
-use crate::platform::macos::{content_view, ns_window};
+use crate::platform::macos::{content_view, has_subclass, kvo_observed, ns_window};
 
 #[cfg(test)]
 #[path = "mac_tests.rs"]
@@ -36,9 +36,12 @@ pub fn own_window_dragging(window: &Window) {
 
 /// Main-thread native views only. The subclass adds no ivars, preserving winit's layout,
 /// methods and deallocation. Registered classes live for the process lifetime.
+/// Skips views already observed with KVO so Rune never places a subclass above KVO's.
 unsafe fn scope_drag_regions(view: &AnyObject) {
+    if has_subclass(view, b"RuneDragRegions_") { return; }
+    // SAFETY: caller guarantees `view` is a live ObjC object on the main thread.
+    if unsafe { kvo_observed(view) } { return; }
     let base = view.class();
-    if base.name().to_bytes().starts_with(b"RuneDragRegions_") { return; }
     let Ok(name) = std::ffi::CString::new(format!("RuneDragRegions_{}", base.name().to_string_lossy())) else { return };
     let class = match ClassBuilder::new(&name, base) {
         Some(mut builder) => {
@@ -143,7 +146,7 @@ pub fn native_titlebar_band(window: &Window) -> f32 {
     if !mask.contains(NSWindowStyleMask::Titled | NSWindowStyleMask::FullSizeContentView) || mask.contains(NSWindowStyleMask::FullScreen) {
         return 0.0;
     }
-    if content_view(window).is_some_and(|v| v.class().name().to_bytes().starts_with(b"RuneDragRegions_")) { return 0.0; }
+    if content_view(window).is_some_and(|v| has_subclass(&v, b"RuneDragRegions_")) { return 0.0; }
     let content = win.contentLayoutRect();
     (win.frame().size.height - content.size.height).max(0.0) as f32
 }

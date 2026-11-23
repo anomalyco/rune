@@ -1,0 +1,1 @@
+- macOS: traffic-light placement now hooks `-layout` on the titlebar views' own AppKit classes instead of swapping instance classes, and drag-region, file-drop, and Metal present-time hooks skip instances already subclassed by KVO while walking the superclass chain for Rune's own subclasses, preventing SIGSEGV on KVO observer removal and launch aborts on macOS 26.

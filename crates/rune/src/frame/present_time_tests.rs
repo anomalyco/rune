@@ -168,3 +168,54 @@ fn spread_uses_nearest_rank() {
     assert_eq!(Spread::of(vec![4.0]), Some(Spread { p50: 4.0, p95: 4.0, max: 4.0 }));
     assert_eq!(Spread::of(Vec::new()), None);
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+#[allow(unsafe_code)]
+fn kvo_observed_layer_hook_in_both_orders() {
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    use objc2_foundation::{NSObject, NSString};
+
+    let key = NSString::from_str("probe");
+    let observer = NSObject::new();
+
+    // Order 1: LayerHook first, then KVO observes, hook drops, observer comes off, re-hook reuses class.
+    // SAFETY: live `NSObject` instances; KVO selectors match Foundation.
+    unsafe {
+        let below: Retained<AnyObject> = msg_send![class!(NSObject), new];
+        let log = Arc::new(metal::Log::untraced());
+        let hook = metal::LayerHook::hook_instance(below.clone(), log.clone()).expect("hook plain object");
+        let hooked_class = below.class();
+        assert!(hooked_class.name().to_bytes().starts_with(b"RunePresentTimed_"));
+
+        let _: () = msg_send![&*below, addObserver: &*observer, forKeyPath: &*key, options: 0usize, context: std::ptr::null_mut::<std::ffi::c_void>()];
+        let kvo_class = below.class();
+        assert!(kvo_class.name().to_bytes().starts_with(b"NSKVONotifying_"));
+
+        drop(hook);
+        assert!(std::ptr::eq(below.class(), kvo_class), "dropping hook while KVO is on top leaves KVO intact");
+        let _: () = msg_send![&*below, removeObserver: &*observer, forKeyPath: &*key];
+
+        // After KVO restores our leftover class, re-hooking reuses it rather than stacking a second one.
+        let again = metal::LayerHook::hook_instance(below.clone(), log).expect("re-hook leftover class");
+        assert!(std::ptr::eq(below.class(), hooked_class));
+        drop(again);
+        assert!(!below.class().name().to_bytes().starts_with(b"RunePresentTimed_"));
+    }
+
+    // Order 2: KVO observes first, then LayerHook skips it, then observer comes off.
+    // SAFETY: live `NSObject` instances; KVO selectors match Foundation.
+    unsafe {
+        let above: Retained<AnyObject> = msg_send![class!(NSObject), new];
+        let _: () = msg_send![&*above, addObserver: &*observer, forKeyPath: &*key, options: 0usize, context: std::ptr::null_mut::<std::ffi::c_void>()];
+        let kvo_class = above.class();
+        assert!(kvo_class.name().to_bytes().starts_with(b"NSKVONotifying_"));
+
+        let log = Arc::new(metal::Log::untraced());
+        assert!(metal::LayerHook::hook_instance(above.clone(), log).is_none(), "skip already KVO-observed object");
+        assert!(std::ptr::eq(above.class(), kvo_class), "KVO's class must stay on top");
+        let _: () = msg_send![&*above, removeObserver: &*observer, forKeyPath: &*key];
+    }
+}
