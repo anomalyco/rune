@@ -1,0 +1,1 @@
+- Overlays now inherit `App::font_smoothing` by default (whether set before or after `App::overlay`, including through `WindowSpec::font_smoothing`), and `ConfiguredOverlay::font_smoothing` overrides the mode for an individual overlay.

@@ -218,17 +218,21 @@ impl<T: 'static> OverlayApp for TypedOverlayApp<T> {
 pub(crate) struct OverlayHost {
     pub(super) core: OverlayCore,
     pub(super) app: Box<dyn OverlayApp>,
+    inherits_font_smoothing: bool,
 }
 
 fn build_parts<S, T: 'static>(
     configured: ConfiguredOverlay<T>,
     state: T,
     app: &AppSpec<S>,
-) -> (OverlayCore, TypedOverlayApp<T>, OverlayHandle<T>) {
+    app_font_smoothing: crate::FontSmoothing,
+) -> (OverlayCore, TypedOverlayApp<T>, OverlayHandle<T>, bool) {
     let ConfiguredOverlay {
-        spec, options, on_key, on_created, poll, compositor, setup, runtime, macos_level,
-        animate_reveal, release_after,
+        spec, options, on_key, on_created, poll, compositor, setup, mut runtime, font_smoothing,
+        macos_level, animate_reveal, release_after,
     } = configured;
+    let inherits_font_smoothing = font_smoothing.is_none();
+    runtime.font_smoothing = font_smoothing.unwrap_or(app_font_smoothing);
     let shared_core = Arc::new(SharedCore::default());
     let shared = Arc::new(Shared { core: shared_core.clone(), updates: Default::default() });
     let text = TextSystem::for_window(app.fonts, app.families);
@@ -256,13 +260,24 @@ fn build_parts<S, T: 'static>(
         release_after,
     );
     let typed = TypedOverlayApp { rt, compositor, setup, shared: shared.clone() };
-    (core, typed, OverlayHandle { shared })
+    (core, typed, OverlayHandle { shared }, inherits_font_smoothing)
 }
 
 impl OverlayHost {
-    pub(crate) fn new<S, T: 'static>(configured: impl Into<ConfiguredOverlay<T>>, state: T, app: &AppSpec<S>) -> (Self, OverlayHandle<T>) {
-        let (core, typed, handle) = build_parts(configured.into(), state, app);
-        (OverlayHost { core, app: Box::new(typed) }, handle)
+    pub(crate) fn new<S, T: 'static>(
+        configured: impl Into<ConfiguredOverlay<T>>,
+        state: T,
+        app: &AppSpec<S>,
+        app_font_smoothing: crate::FontSmoothing,
+    ) -> (Self, OverlayHandle<T>) {
+        let (core, typed, handle, inherits_font_smoothing) = build_parts(configured.into(), state, app, app_font_smoothing);
+        (OverlayHost { core, app: Box::new(typed), inherits_font_smoothing }, handle)
+    }
+
+    pub(super) fn inherit_font_smoothing(&mut self, mode: crate::FontSmoothing) {
+        if self.inherits_font_smoothing {
+            self.app.rt_mut().set_font_smoothing(mode);
+        }
     }
 }
 
@@ -359,7 +374,7 @@ macro_rules! with_app {
 #[cfg(test)]
 impl<T: 'static> Overlay<T> {
     pub(super) fn new<S>(configured: impl Into<ConfiguredOverlay<T>>, state: T, app: &AppSpec<S>) -> (Self, OverlayHandle<T>) {
-        let (core, typed, handle) = build_parts(configured.into(), state, app);
+        let (core, typed, handle, _) = build_parts(configured.into(), state, app, crate::FontSmoothing::default());
         let TypedOverlayApp { rt, compositor, setup, shared } = typed;
         (Overlay { core, rt, compositor, setup, shared }, handle)
     }
