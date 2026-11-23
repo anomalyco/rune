@@ -55,7 +55,7 @@ impl Default for Uploads {
 
 impl Uploads {
     /// Forgets what the instance buffer holds, so the next frame writes and batches it all.
-    fn forget_instances(&mut self) {
+    pub(super) fn forget_instances(&mut self) {
         self.instances.clear();
         self.batched = false;
         self.held_paint = None;
@@ -161,6 +161,26 @@ impl Renderer {
         }
         if changed { self.images_changed(); }
         self.refresh_layer_bindings(device);
+    }
+
+    /// Drops every uploaded image page's GPU texture and any layer bind groups referencing them.
+    /// Returns whether any texture was held. The next `upload_images` recreates textures for pages
+    /// still present in `ImageAtlas`.
+    #[cfg_attr(not(any(test, not(any(target_os = "macos", target_arch = "wasm32")))), allow(dead_code))]
+    pub(crate) fn clear_images(&mut self) -> bool {
+        let had = self.images.iter().any(Option::is_some);
+        if self.images.is_empty() && !had { return false; }
+        self.images.clear();
+        self.layers.clear_images();
+        self.images_changed();
+        #[cfg(all(feature = "alloc-sites", not(target_arch = "wasm32")))]
+        self.report_pools();
+        had
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_images(&self) -> bool {
+        self.images.iter().any(Option::is_some)
     }
 
     /// Uploads several instance lists back to back (one buffer, one glyph upload) and returns
