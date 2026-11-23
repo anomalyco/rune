@@ -362,6 +362,12 @@ impl RuntimeCore {
                         (crate::el::Flow::Rtl, Some(_)) => start,
                         (crate::el::Flow::Rtl, None) => start - pl_indent - text_width(pl.full_width() * tk),
                     };
+                    let pl_w = pl.full_width() * tk;
+                    let pl_clip = if inp.single_line && (pl_x + off[0] < x0 || pl_x + off[0] + pl_w > x1) {
+                        [clip[0].max(x0), clip[1], clip[2].min(x1), clip[3]]
+                    } else {
+                        clip
+                    };
                     let pl_origin = [pl_x, rest_origin[1]];
                     let pl_r_origin = if scale_motion == ScaleMotion::Still { pl_origin } else { [0.0, 0.0] };
                     self.paint.glyph_scratch.clear();
@@ -370,9 +376,18 @@ impl RuntimeCore {
                     self.text.glyphs_for_layout_scaled(&pl, pl_r_origin, raster, false, &mut self.paint.glyph_scratch);
                     self.text.set_glide([0.0; 2]);
                     let pc = premul(inp.placeholder_color, o, srgb);
+                    let zoom = tk / raster;
                     for q in &self.paint.glyph_scratch {
-                        self.instances.extend(glyph_or_image(q, &self.text, &mut self.images, pc, clip, fade)
-                            .map(|g| zoom_glyph(g, pl_origin, pl_r_origin, tk / raster)));
+                        let [gx0, gy0] = if zoom == 1.0 && pl_origin == pl_r_origin { [q.rect[0], q.rect[1]] } else {
+                            std::array::from_fn(|k| pl_origin[k] + (q.rect[k] - pl_r_origin[k]) * zoom)
+                        };
+                        if gy0 > pl_clip[3] || gy0 + q.rect[3] * zoom < pl_clip[1]
+                            || gx0 > pl_clip[2] || gx0 + q.rect[2] * zoom < pl_clip[0]
+                        {
+                            continue;
+                        }
+                        self.instances.extend(glyph_or_image(q, &self.text, &mut self.images, pc, pl_clip, fade)
+                            .map(|g| zoom_glyph(g, pl_origin, pl_r_origin, zoom)));
                     }
                 }
                 if e.focused && !departing {

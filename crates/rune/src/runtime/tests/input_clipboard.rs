@@ -124,6 +124,78 @@ fn single_line_input_scrolls_to_the_caret_instead_of_wrapping() {
 }
 
 #[test]
+fn single_line_placeholder_clips_to_the_field_box_like_typed_text() {
+    const LONG_LTR: &str = "Search every note, highlight and card in the library";
+    const LONG_RTL: &str = "ابحث في جميع الملاحظات والبطاقات والملفات في المكتبة";
+    struct State {
+        typed: crate::TextEdit,
+        empty: crate::TextEdit,
+        padded: crate::TextEdit,
+        rtl: crate::TextEdit,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let style = crate::TextStyle::new(14.0, 400.0);
+        let boxed = |edit: &crate::TextEdit, key: &str, placeholder: &str| {
+            crate::el::row().w(120.0).h(28.0).px(8.0).items_center().child(
+                crate::text_input(edit, style)
+                    .single_line()
+                    .key(key)
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .color(crate::Color::WHITE)
+                    .placeholder(placeholder, crate::Color::WHITE),
+            )
+        };
+        let padded = crate::text_input(&s.padded, style)
+            .single_line()
+            .key("padded")
+            .size(120.0, 28.0)
+            .px(8.0)
+            .color(crate::Color::WHITE)
+            .placeholder(LONG_LTR, crate::Color::WHITE);
+        let rtl = crate::el::row().w(120.0).h(28.0).px(8.0).items_center().child(
+            crate::text_input(&s.rtl, style)
+                .single_line()
+                .dir(crate::Direction::Rtl)
+                .key("rtl")
+                .grow(1.0)
+                .min_w(0.0)
+                .color(crate::Color::WHITE)
+                .placeholder(LONG_RTL, crate::Color::WHITE),
+        );
+        col().padding(20.0).gap(20.0)
+            .child(boxed(&s.typed, "typed", LONG_LTR))
+            .child(boxed(&s.empty, "empty", LONG_LTR))
+            .child(padded)
+            .child(rtl)
+    }
+    for scale in [1.0, 2.0] {
+        let s = State {
+            typed: crate::TextEdit::new(LONG_LTR),
+            empty: crate::TextEdit::default(),
+            padded: crate::TextEdit::default(),
+            rtl: crate::TextEdit::default(),
+        };
+        let mut rt = Runtime::new(s, view, (400.0, 260.0), Env::new(true, scale));
+        rt.frame(0.0);
+        for (key, inset) in [("typed", 0.0), ("empty", 0.0), ("padded", 8.0), ("rtl", 0.0)] {
+            let [x, y, w, h] = rt.presented(key).unwrap().0;
+            let (x0, x1) = ((x + inset) * scale, (x + w - inset) * scale);
+            let (y0, y1) = (y * scale, (y + h) * scale);
+            let glyphs: Vec<_> = rt.instances.iter()
+                .filter(|i| i.params[1] == crate::render::KIND_GLYPH && i.fill[3] > 0.0)
+                .filter(|i| (y0..y1).contains(&(i.rect[1] + i.rect[3] * 0.5)))
+                .collect();
+            assert!(!glyphs.is_empty(), "scale={scale} {key}: expected placeholder/text glyphs");
+            let ink_left = glyphs.iter().map(|i| i.rect[0].max(i.clip[0])).fold(f32::INFINITY, f32::min);
+            let ink_right = glyphs.iter().map(|i| (i.rect[0] + i.rect[2]).min(i.clip[2])).fold(0.0, f32::max);
+            assert!(ink_left >= x0 - 0.5, "scale={scale} {key}: ink starts at {ink_left}, before field left {x0}");
+            assert!(ink_right <= x1 + 0.5, "scale={scale} {key}: ink ends at {ink_right}, past field right {x1}");
+        }
+    }
+}
+
+#[test]
 fn grapheme_arrow_caret_hit_tests_roundtrip_after_single_line_scroll() {
     fn view(s: &crate::TextEdit, _: &mut Cx<crate::TextEdit>) -> El {
         crate::text_input(s, crate::TextStyle::new(16.0, 400.0)).single_line()

@@ -1,0 +1,1 @@
+- Paint: a one-line `text_input` whose placeholder runs wider than its content box now clips the placeholder's glyphs horizontally to the field box, matching typed text.
