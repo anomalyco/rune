@@ -4,7 +4,7 @@
 
 use rune::runtime::ElementInfo;
 use rune::{Color, Cursor, Cx, El, Env, Key, KeyEvent, Link, LinkPaint, Mark, MarkRange, Mods, Runtime, Span, TextEdit, TextStyle, col, rich, text_input};
-use crate::support::{centre, click, find};
+use crate::support::{centre, click, drag, find, tick, wait};
 
 const TEXT: &str = "Hi @kit see docs and notes.md ok";
 const WRAPS: &str = "go to a very long link that wraps";
@@ -258,4 +258,149 @@ fn text_input_with_link_mark_takes_presses_anywhere_in_field() {
     click(&mut rt, centre(&link_el));
     assert!(rt.state.edit.focused);
     assert!((8..=12).contains(&rt.state.edit.focus), "caret moves into the link: {}", rt.state.edit.focus);
+}
+
+#[test]
+fn text_input_link_click_opens_and_shows_pointer_cursor() {
+    struct Form { edit: TextEdit, opened: Vec<String>, handle_links: bool }
+    fn form_view(s: &Form, _: &mut Cx<Form>) -> El {
+        let style = TextStyle::new(14.0, 400.0).lh(20.0);
+        let mut field = text_input(&s.edit, style).key("field").label("Field").w_full().on_edit(|s: &mut Form| &mut s.edit);
+        if s.handle_links {
+            field = field.on_link(|s: &mut Form, id, _| s.opened.push(id.to_owned()));
+        }
+        col().w_full().h_full().padding(10.0).child(field)
+    }
+
+    let link = MarkRange::new(8..12, Mark::Link("https://example.com".into()));
+    let mut edit = TextEdit::from_parts("See the docs for more detail", vec![link], vec![]);
+    edit.set_caret(0);
+    let mut rt = Runtime::new(
+        Form { edit, opened: Vec::new(), handle_links: true },
+        form_view,
+        (500.0, 120.0),
+        Env::new(true, 2.0),
+    );
+    rt.frame(0.0);
+
+    let field = find(&rt, "field");
+    let link_el = find(&rt, "https://example.com");
+    let link_mid = centre(&link_el);
+    let plain_pt = (field.rect[0] + 4.0, link_mid.1);
+
+    // Hand cursor only over the link glyphs; I-beam over plain text in the field.
+    rt.pointer_move(plain_pt.0, plain_pt.1);
+    tick(&mut rt);
+    assert_eq!(rt.cursor(), Cursor::Text);
+    rt.pointer_move(link_mid.0, link_mid.1);
+    tick(&mut rt);
+    assert_eq!(rt.cursor(), Cursor::Pointer);
+
+    // Clicking the link while unfocused focuses the field, places the caret, and fires on_link.
+    click(&mut rt, link_mid);
+    assert!(rt.state.edit.focused);
+    assert!((8..=12).contains(&rt.state.edit.focus), "caret lands in link: {}", rt.state.edit.focus);
+    assert_eq!(rt.state.opened, ["https://example.com"]);
+
+    // Double-clicking the link selects the word without firing on_link a second time.
+    click(&mut rt, link_mid);
+    assert_eq!(rt.state.edit.selected(), "docs");
+    assert_eq!(rt.state.opened, ["https://example.com"]);
+
+    // Clicking the link while focused (even with an active selection) opens it again.
+    wait(&mut rt);
+    rt.state.edit.set_selection(0, 3);
+    rt.invalidate();
+    tick(&mut rt);
+    click(&mut rt, link_mid);
+    assert_eq!(rt.state.edit.anchor, rt.state.edit.focus);
+    assert_eq!(rt.state.opened, ["https://example.com", "https://example.com"]);
+
+    // Shift-clicking the link extends selection without opening it.
+    wait(&mut rt);
+    click(&mut rt, plain_pt);
+    rt.physical_input(rune::PhysicalInput::Modifiers(Mods { shift: true, ..Mods::default() }));
+    click(&mut rt, link_mid);
+    rt.physical_input(rune::PhysicalInput::Modifiers(Mods::default()));
+    assert_ne!(rt.state.edit.anchor, rt.state.edit.focus, "shift-click selects");
+    assert_eq!(rt.state.opened.len(), 2, "shift-click must not open the link");
+
+    // Without on_link, hovering the link stays Cursor::Text.
+    rt.state.handle_links = false;
+    rt.invalidate();
+    tick(&mut rt);
+    rt.pointer_move(link_mid.0, link_mid.1);
+    tick(&mut rt);
+    assert_eq!(rt.cursor(), Cursor::Text);
+}
+
+#[test]
+fn text_input_link_drag_selects_without_opening() {
+    struct Form { edit: TextEdit, opened: Vec<String> }
+    fn form_view(s: &Form, _: &mut Cx<Form>) -> El {
+        let style = TextStyle::new(14.0, 400.0).lh(20.0);
+        col().w_full().h_full().padding(10.0).child(
+            text_input(&s.edit, style)
+                .key("field")
+                .label("Field")
+                .w_full()
+                .on_edit(|s: &mut Form| &mut s.edit)
+                .on_link(|s: &mut Form, id, _| s.opened.push(id.to_owned())),
+        )
+    }
+
+    let link = MarkRange::new(8..25, Mark::Link("https://example.com".into()));
+    let edit = TextEdit::from_parts("See the documentation link here", vec![link], vec![]);
+    let mut rt = Runtime::new(
+        Form { edit, opened: Vec::new() },
+        form_view,
+        (500.0, 120.0),
+        Env::new(true, 2.0),
+    );
+    rt.frame(0.0);
+
+    let field = find(&rt, "field");
+    let link_el = find(&rt, "https://example.com");
+    let y = centre(&link_el).1;
+    let link_left = (link_el.rect[0] + 3.0, y);
+    let link_right = (link_el.rect[0] + link_el.rect[2] - 3.0, y);
+    let outside_right = (link_el.rect[0] + link_el.rect[2] + 30.0, y);
+    let outside_left = (field.rect[0] + 2.0, y);
+
+    // Dragging within the same link selects text and does not open it.
+    drag(&mut rt, link_left, link_right);
+    assert_ne!(rt.state.edit.anchor, rt.state.edit.focus, "drag across link selects text");
+    assert!(rt.state.opened.is_empty(), "drag within link must not open it");
+
+    // Dragging from inside the link to outside does not open it.
+    wait(&mut rt);
+    drag(&mut rt, link_left, outside_right);
+    assert_ne!(rt.state.edit.anchor, rt.state.edit.focus);
+    assert!(rt.state.opened.is_empty());
+
+    // Dragging from plain text into the link keeps I-beam cursor and does not open it.
+    wait(&mut rt);
+    rt.pointer_move(outside_left.0, outside_left.1);
+    rt.pointer_down(outside_left.0, outside_left.1);
+    tick(&mut rt);
+    rt.pointer_move(centre(&link_el).0, y);
+    tick(&mut rt);
+    assert_eq!(rt.cursor(), Cursor::Text, "dragging selection over a link keeps I-beam");
+    rt.pointer_up(centre(&link_el).0, y);
+    tick(&mut rt);
+    assert_ne!(rt.state.edit.anchor, rt.state.edit.focus);
+    assert!(rt.state.opened.is_empty());
+
+    // Pressing on the link, dragging past slop, and returning to the press point does not open it.
+    wait(&mut rt);
+    let mid = centre(&link_el);
+    rt.pointer_move(mid.0, mid.1);
+    rt.pointer_down(mid.0, mid.1);
+    tick(&mut rt);
+    rt.pointer_move(outside_right.0, outside_right.1);
+    tick(&mut rt);
+    rt.pointer_move(mid.0, mid.1);
+    rt.pointer_up(mid.0, mid.1);
+    tick(&mut rt);
+    assert!(rt.state.opened.is_empty(), "drag away and back must not open the link");
 }
