@@ -83,3 +83,25 @@ fn a_failed_clip_stays_failed() {
     assert_eq!(effects(&mut phase, Event::Open { play: true }), vec![]);
     assert_eq!(phase, Phase::Failed);
 }
+
+#[test]
+fn a_playing_seek_the_decoder_ends_with_no_picture_ends_where_it_was_asked_to_stand() {
+    let mut phase = Phase::Buffering { at: 9.99, play: true };
+    assert_eq!(effects(&mut phase, Event::Ended { at: 9.99 }), vec![]);
+    assert_eq!(phase, Phase::Ended { at: 9.99 });
+}
+
+#[test]
+fn a_paused_seek_the_decoder_ends_with_no_picture_holds_there() {
+    let mut phase = Phase::Buffering { at: 9.99, play: false };
+    assert_eq!(effects(&mut phase, Event::Ended { at: 9.99 }), vec![]);
+    assert_eq!(phase, Phase::Paused { at: 9.99 });
+}
+
+#[test]
+fn a_seek_while_parked_forgets_the_picture_and_opens_at_the_target() {
+    let mut phase = Phase::Idle { at: 3.0 };
+    assert_eq!(effects(&mut phase, Event::Seek { to: 7.5 }), vec![Effect::Seek { to: 7.5 }]);
+    assert_eq!(phase, Phase::Idle { at: 7.5 });
+    assert_eq!(effects(&mut phase, Event::Open { play: false }), vec![Effect::Open { at: 7.5 }]);
+}

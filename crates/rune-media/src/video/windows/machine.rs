@@ -82,7 +82,7 @@ pub(super) enum Event {
 pub(super) enum Effect {
     /// Start a decoder at `at`.
     Open { at: f64 },
-    /// Move the decoder to `to`.
+    /// Move the decoder to `to`, and forget the picture on screen: the seek's replaces it.
     Seek { to: f64 },
     /// The clock changed: sound follows it (`None`: silent).
     Clock(Option<Anchor>),
@@ -145,9 +145,11 @@ pub(super) fn step(phase: &mut Phase, event: Event) -> Effects<Effect> {
             *phase = P::Paused { at };
             Effects::one(Effect::Clock(None))
         }
+        // No decoder to move: the effect forgets the picture on screen, so the clip opens at
+        // `to` and shows the seek's picture when it's drawn, playing or not.
         (P::Idle { .. }, Event::Seek { to }) => {
             *phase = P::Idle { at: to };
-            Effects::none()
+            Effects::one(Effect::Seek { to })
         }
         (P::Opening { play, .. }, Event::Seek { to }) => {
             *phase = P::Opening { at: to, play };
@@ -177,6 +179,12 @@ pub(super) fn step(phase: &mut Phase, event: Event) -> Effects<Effect> {
         (P::Playing { .. }, Event::Ended { at }) => {
             *phase = P::Ended { at };
             Effects::one(Effect::Clock(None))
+        }
+        // The decoder ended with no picture at or past the seek: a playing clip ends where it
+        // was asked to stand, a paused one holds there.
+        (P::Buffering { play, .. }, Event::Ended { at }) => {
+            *phase = if play { P::Ended { at } } else { P::Paused { at } };
+            Effects::none()
         }
         (P::Playing { clock }, Event::Resumed { target, at, lead }) => {
             let clock = anchor(target, at, lead, clock.rate);

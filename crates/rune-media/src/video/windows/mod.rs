@@ -330,7 +330,8 @@ impl Native {
                 }
                 News::Parked => {
                     self.pipe = None;
-                    let at = self.shown.unwrap_or(0.0);
+                    // Let go while it waited for a seek's picture: it opens again at the seek.
+                    let at = self.shown.unwrap_or_else(|| self.at());
                     self.event(shared, c, Event::Released { at });
                 }
             }
@@ -435,9 +436,10 @@ impl Native {
         }
     }
 
-    /// Playing with nothing due: the end, or a decoder that fell behind.
+    /// Playing with nothing due: the end, or a decoder that fell behind. Waiting for a seek's
+    /// picture when the decoder ended with none: the clip ends, or holds, where it was asked to
+    /// stand.
     fn check_end(&mut self, shared: &Arc<Shared>, c: &mut Control, pipe: &Pipe, generation: u32, target: Instant) {
-        let Phase::Playing { clock } = self.phase else { return };
         let (empty, ended) = {
             let inbox = pipe.lock();
             (inbox.frames.is_empty(), inbox.ended == Some(generation))
@@ -445,9 +447,19 @@ impl Native {
         if !empty {
             return;
         }
+        let duration = c.duration.unwrap_or(0.0);
+        let clock = match self.phase {
+            Phase::Playing { clock } => clock,
+            Phase::Buffering { at, play: true } if ended => return self.end(shared, c, at, duration),
+            Phase::Buffering { at, play: false } if ended => return self.event(shared, c, Event::Ended { at }),
+            _ => return,
+        };
+        // Played from a hold with no picture: nothing is left to show.
+        if ended && self.shown.is_none() {
+            return self.end(shared, c, clock.pos, duration);
+        }
         let pos = clock.position(target);
         let frame = self.facts.map_or(1.0 / 30.0, |f| f.meta.frame);
-        let duration = c.duration.unwrap_or(0.0);
         let shown = self.shown.unwrap_or(clock.pos);
         if ended {
             let end = if duration > 0.0 { (shown / duration).floor() * duration + duration } else { shown + frame };
@@ -516,3 +528,6 @@ impl Native {
         (true, Some(clock.when(pos).max(now)))
     }
 }
+
+#[cfg(test)]
+mod tests;
