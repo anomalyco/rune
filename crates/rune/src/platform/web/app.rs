@@ -35,7 +35,7 @@ pub(super) struct StartedWebApp {
     pub(super) fonts: &'static [&'static [u8]],
 }
 
-type StartFn = Box<dyn FnOnce(Vec<Vec<u8>>, (f32, f32), Env, Waker) -> StartedWebApp>;
+type StartFn = Box<dyn FnOnce(Vec<Vec<u8>>, (f32, f32), Env, Waker, Waker) -> StartedWebApp>;
 
 /// Everything `Browser` holds of an `App<S>` before `start_app` constructs its `Runtime<S>`.
 pub(super) struct PendingApp {
@@ -65,8 +65,8 @@ impl PendingApp {
         Ok(())
     }
 
-    pub(super) fn start(self, fonts: Vec<Vec<u8>>, viewport: (f32, f32), env: Env, wake: Waker) -> StartedWebApp {
-        (self.start)(fonts, viewport, env, wake)
+    pub(super) fn start(self, fonts: Vec<Vec<u8>>, viewport: (f32, f32), env: Env, wake: Waker, live_wake: Waker) -> StartedWebApp {
+        (self.start)(fonts, viewport, env, wake, live_wake)
     }
 }
 
@@ -206,10 +206,10 @@ impl<S: 'static> TypedWebApp<S> {
         let same_tab_router = app.same_tab_router.take();
         let compositor_features = app.compositor.as_ref().map_or(wgpu::Features::empty(), |c| c.features());
         let shared = app.shared.core.clone();
-        let start: StartFn = Box::new(move |fonts, viewport, env, wake| {
+        let start: StartFn = Box::new(move |fonts, viewport, env, wake, live_wake| {
             app.spec.fonts = with_fonts(app.spec.fonts, fonts);
             let (rt, shared, compositor, spec_fonts) =
-                super::super::web_math::start_web_runtime(app, viewport, env, wake.clone());
+                super::super::web_math::start_web_runtime(app, viewport, env, wake.clone(), live_wake);
             let menus = crate::native_menu::MenuGuard::attach(&shared, false);
             let shortcuts = crate::shortcuts::Guard::attach(&shared, wake, false, false);
             StartedWebApp {

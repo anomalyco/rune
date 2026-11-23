@@ -313,6 +313,7 @@ impl Running {
             }
             Some("visibility") => {
                 let visible = event["visible"].as_bool().unwrap_or(false);
+                self.last_presented = None;
                 self.shared.set_visible(visible);
                 self.app.set_live_visible(visible);
                 if !visible {
