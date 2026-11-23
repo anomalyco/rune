@@ -735,3 +735,207 @@ fn link_fx_decos_matches_reference_for_split_rings_inline_code_and_overlaps() {
         assert_eq!(deco_snapshot(&got), deco_snapshot(&expected), "case {idx} must match reference");
     }
 }
+fn reference_link_at(core: &RuntimeCore, i: usize, x: f32, y: f32) -> Option<usize> {
+    if core.tree.nodes[i].text.as_ref().is_none_or(|t| t.cold.links.is_empty()) { return None; }
+    let (rect, ux, uy) = core.unturned_box_and_point(i, x, y);
+    core.link_boxes(i, rect).into_iter()
+        .find(|(_, r)| contains(*r, ux, uy)).map(|(k, _)| k)
+}
+
+#[test]
+fn link_at_lays_out_only_candidate_link_and_matches_full_scan() {
+    let mut rt = Runtime::new(make_link_doc(40, false), link_doc_view, (180.0, 500.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    settle_link_doc(&mut rt);
+
+    let i = link_text_node_index(&rt);
+    let drawn_boxes = rt.core().link_boxes(i, rt.core().drawn_box(i));
+    let link_boxes_of = |k: usize| -> Vec<[f32; 4]> {
+        drawn_boxes.iter().filter(|(j, _)| *j == k).map(|&(_, r)| r).collect()
+    };
+    let mid = |r: [f32; 4]| ((r[0] + r[2]) * 0.5, (r[1] + r[3]) * 0.5);
+
+    // First, middle, last, and both lines of the wrapped link (index 15).
+    let wrapped_rects = link_boxes_of(15);
+    assert!(wrapped_rects.len() >= 2, "expected wrapped link on 2+ lines, got {}", wrapped_rects.len());
+    let hits = [
+        ("first", 0usize, mid(link_boxes_of(0)[0])),
+        ("middle", 10usize, mid(link_boxes_of(10)[0])),
+        ("wrapped line 1", 15usize, mid(wrapped_rects[0])),
+        ("wrapped line 2", 15usize, mid(wrapped_rects[1])),
+        ("last", 39usize, mid(link_boxes_of(39)[0])),
+    ];
+    for (label, want, (x, y)) in hits {
+        let (got, queries) = count_span_box_queries(|| rt.core().link_at(i, x, y));
+        assert_eq!(got, Some(want), "{label}: link_at mismatch");
+        assert!(queries <= 1, "{label}: expected <= 1 span-box query, got {queries}");
+    }
+
+    // Points over no link: space between link 0 and link 1, right of line, and below text.
+    let (r0, r1) = (link_boxes_of(0)[0], link_boxes_of(1)[0]);
+    assert!((r0[1] - r1[1]).abs() < 0.01 && r1[0] > r0[2] + 1.0, "link 0 and 1 should sit on one line with a space");
+    let misses = [
+        ("space between links", ((r0[2] + r1[0]) * 0.5, (r0[1] + r0[3]) * 0.5)),
+        ("right margin", (175.0, (r0[1] + r0[3]) * 0.5)),
+        ("above text", (r0[0] + 2.0, r0[1] - 5.0)),
+        ("below text", (20.0, 490.0)),
+        ("nan", (f32::NAN, r0[1])),
+    ];
+    for (label, (x, y)) in misses {
+        let (got, queries) = count_span_box_queries(|| rt.core().link_at(i, x, y));
+        assert_eq!(got, None, "{label}: expected miss");
+        assert_eq!(queries, 0, "{label}: miss should query 0 spans, got {queries}");
+    }
+
+    // Exhaustive equivalence against full link_boxes scan across every link's interior and edges.
+    for &(k, r) in &drawn_boxes {
+        let cy = (r[1] + r[3]) * 0.5;
+        let cx = (r[0] + r[2]) * 0.5;
+        for (px, py) in [
+            (cx, cy),
+            (r[0], r[1]),
+            (r[0] - 0.1, cy),
+            (r[2] - 0.01, r[3] - 0.01),
+            (r[2], cy),
+            (cx, r[3]),
+        ] {
+            let want = reference_link_at(rt.core(), i, px, py);
+            let got = rt.core().link_at(i, px, py);
+            assert_eq!(got, want, "link {k} point ({px}, {py}) diverged from full scan");
+        }
+    }
+
+    // Pointer moves run observe_pointer -> hovered_link() -> link_at() twice per move;
+    // moving across links and plain text must stay bounded, not 2 * 40 queries per move.
+    let (p0, p39) = (mid(link_boxes_of(0)[0]), mid(link_boxes_of(39)[0]));
+    let gap = ((r0[2] + r1[0]) * 0.5, (r0[1] + r0[3]) * 0.5);
+    let (_, q_enter) = count_span_box_queries(|| rt.observe_pointer(p0.0, p0.1));
+    let (_, q_stay) = count_span_box_queries(|| rt.observe_pointer(p0.0 + 1.0, p0.1));
+    let (_, q_gap) = count_span_box_queries(|| rt.observe_pointer(gap.0, gap.1));
+    let (_, q_last) = count_span_box_queries(|| rt.observe_pointer(p39.0, p39.1));
+    assert!(q_enter <= 2 && q_stay <= 2 && q_gap <= 2 && q_last <= 2,
+        "pointer moves should stay O(1) queries, got enter={q_enter} stay={q_stay} gap={q_gap} last={q_last}");
+}
+
+#[test]
+fn link_at_matches_reference_for_clip_edges_overlaps_elided_and_paragraphs() {
+    // 1. Clipped text: link straddling a clip edge (selectable so the node's hit rect is clipped,
+    //    plus non-selectable link hits clipped by push_link_hits).
+    struct ClipDoc { body: String, links: Vec<(usize, usize, String)> }
+    let mut body = String::new();
+    let mut links = Vec::new();
+    for k in 0..12 {
+        if k > 0 { body.push(' '); }
+        let a = body.len();
+        body.push_str(&format!("clippedlink{k:02}"));
+        links.push((a, body.len(), format!("c{k}")));
+    }
+    fn clip_view(s: &ClipDoc, _: &mut Cx<ClipDoc>) -> El {
+        let mut t = text(s.body.clone())
+            .key("clipped")
+            .font(TextStyle::new(14.0, 400.0).lh(20.0))
+            .selectable(true)
+            .w(260.0);
+        for (a, b, id) in &s.links {
+            t = t.link(Link::new(*a..*b, id.as_str()));
+        }
+        col().w(260.0).h(120.0).child(
+            crate::el().w(45.0).h(26.0).clip_soft(0.0)
+                .child(crate::el().absolute(0.0, 0.0).w(260.0).h(26.0).child(t))
+        )
+    }
+    let mut rt = Runtime::new(ClipDoc { body, links }, clip_view, (260.0, 120.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let ci = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("clipped")).unwrap();
+    let cboxes = rt.core().link_boxes(ci, rt.core().drawn_box(ci));
+    let (_, straddle) = cboxes.iter().copied().find(|(_, r)| r[0] < 45.0 && r[2] > 45.0)
+        .expect("a link should straddle the x=45 clip edge");
+    let cy = (straddle[1] + straddle[3]) * 0.5;
+    // Inside clip edge: hovered_link finds the straddling link with <= 1 query.
+    rt.observe_pointer(44.0, cy);
+    let (inside_hit, inside_q) = count_span_box_queries(|| rt.core().hovered_link());
+    assert_eq!(inside_hit.map(|(_, k)| k), reference_link_at(rt.core(), ci, 44.0, cy));
+    assert!(inside_hit.is_some() && inside_q <= 1, "inside clip edge: {inside_hit:?}, q={inside_q}");
+    // Outside clip edge: clipped out of hover, while direct link_at still matches full scan.
+    rt.observe_pointer(46.0, cy);
+    assert_eq!(rt.core().hovered_link(), None, "outside clip edge should not hover");
+    let (outside_direct, outside_q) = count_span_box_queries(|| rt.core().link_at(ci, 46.0, cy));
+    assert_eq!(outside_direct, reference_link_at(rt.core(), ci, 46.0, cy));
+    assert!(outside_direct.is_some() && outside_q <= 1, "direct link_at past clip: q={outside_q}");
+
+    // 2. Overlapping and out-of-order links: lowest link index wins, matching link_boxes order.
+    fn overlap_view(_: &(), _: &mut Cx<()>) -> El {
+        let s = "alpha beta gamma delta";
+        let t = text(s)
+            .font(TextStyle::new(14.0, 400.0).lh(20.0))
+            .link(Link::new(17..22, "delta"))   // k = 0 (out of byte order)
+            .link(Link::new(6..16, "outer"))    // k = 1 (overlaps inner)
+            .link(Link::new(6..10, "inner"))    // k = 2 (covered by k = 1)
+            .link(Link::new(0..5, "alpha"));    // k = 3
+        col().w(240.0).h(60.0).child(t)
+    }
+    let mut ort = Runtime::new((), overlap_view, (240.0, 60.0), Env::new(true, 1.0));
+    ort.frame(0.0);
+    let oi = ort.tree.nodes.iter().position(|n| n.text.is_some()).unwrap();
+    let oboxes = ort.core().link_boxes(oi, ort.core().drawn_box(oi));
+    for (_, r) in &oboxes {
+        let (mx, my) = ((r[0] + r[2]) * 0.5, (r[1] + r[3]) * 0.5);
+        let (got, q) = count_span_box_queries(|| ort.core().link_at(oi, mx, my));
+        assert_eq!(got, reference_link_at(ort.core(), oi, mx, my));
+        assert!(q <= 1, "overlap/unsorted link_at queried {q} spans");
+    }
+    // Specifically on "beta" (6..10), both k=1 and k=2 cover it; k=1 must win.
+    let inner_r = oboxes.iter().find(|(k, _)| *k == 2).unwrap().1;
+    assert_eq!(ort.core().link_at(oi, (inner_r[0] + inner_r[2]) * 0.5, (inner_r[1] + inner_r[3]) * 0.5), Some(1));
+
+    // 3. Multi-paragraph (dir_by_paragraph) with a link spanning a newline and blank paragraph,
+    //    plus an elided text node (max_lines(1)).
+    fn para_elided_view(_: &(), _: &mut Cx<()>) -> El {
+        let p_body = "first para
+
+second link here
+third para";
+        let span_nl_a = p_body.find("para").unwrap();
+        let span_nl_b = p_body.find("here").unwrap();
+        let para = text(p_body)
+            .key("para")
+            .font(TextStyle::new(14.0, 400.0).lh(20.0))
+            .dir_by_paragraph()
+            .wrap()
+            .w(200.0)
+            .link(Link::new(0..5, "p0"))
+            .link(Link::new(span_nl_a..span_nl_b, "cross_nl"))
+            .link(Link::new(p_body.len() - 4..p_body.len(), "p2"));
+        let e_body = "visible_one middle_cut_word_that_gets_elided_away tail_link";
+        let elided = text(e_body)
+            .key("elided")
+            .font(TextStyle::new(14.0, 400.0).lh(20.0))
+            .max_lines(1)
+            .w(110.0)
+            .link(Link::new(0..11, "e0"))
+            .link(Link::new(12..49, "e1"))
+            .link(Link::new(50..e_body.len(), "e2"));
+        col().w(240.0).h(200.0).child(para).child(elided)
+    }
+    let mut prt = Runtime::new((), para_elided_view, (240.0, 200.0), Env::new(true, 1.0));
+    prt.frame(0.0);
+    for key in ["para", "elided"] {
+        let ni = prt.tree.nodes.iter().position(|n| n.key.as_deref() == Some(key)).unwrap();
+        let boxes = prt.core().link_boxes(ni, prt.core().drawn_box(ni));
+        assert!(!boxes.is_empty(), "{key} should have link boxes");
+        for (_, r) in &boxes {
+            for (px, py) in [
+                ((r[0] + r[2]) * 0.5, (r[1] + r[3]) * 0.5),
+                (r[0], r[1]),
+                (r[2] - 0.01, (r[1] + r[3]) * 0.5),
+                (r[2] + 2.0, (r[1] + r[3]) * 0.5),
+            ] {
+                let want = reference_link_at(prt.core(), ni, px, py);
+                let (got, q) = count_span_box_queries(|| prt.core().link_at(ni, px, py));
+                assert_eq!(got, want, "{key}: ({px}, {py}) diverged from full scan");
+                assert!(q <= 1, "{key}: ({px}, {py}) queried {q} spans");
+            }
+        }
+    }
+}
+

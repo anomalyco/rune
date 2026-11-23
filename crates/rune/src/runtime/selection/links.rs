@@ -30,6 +30,120 @@ fn layout_len(n: &Node, spec: &TextSpec) -> usize {
     n.elided.map_or(spec.content.len(), |e| e.drawn_len(spec.content.len()))
 }
 
+/// What a pointer position `(x, y)` hits on a laid-out text flow: enough to decide which
+/// drawn link byte ranges `a..b` could produce a line box containing `(x, y)` without calling
+/// `range_boxes` on every link.
+enum LinkHitCandidate<'a> {
+    /// A shaped byte on `piece` (a visual cluster's start byte or an explicit newline byte).
+    ShapedByte(crate::text::Piece<'a>, usize),
+    /// A plain line's shaped range `start..end` on `piece` when `(x, y)` is inside the line's
+    /// whole-line box (`range_boxes`'s `plain && a <= lr.start && lr.end <= b` fast path).
+    WholeLine(crate::text::Piece<'a>, usize, usize),
+    /// A paragraph-break newline byte `piece.end` between paragraphs in `TextFlow::Paragraphs`.
+    ParaNewline(usize),
+}
+
+impl LinkHitCandidate<'_> {
+    #[inline]
+    fn matches(&self, a: usize, b: usize) -> bool {
+        match *self {
+            Self::ShapedByte(piece, at) => piece.clip(a, b).is_some_and(|(sa, sb)| sa <= at && at < sb),
+            Self::WholeLine(piece, ls, le) => piece.clip(a, b).is_some_and(|(sa, sb)| sa <= ls && le <= sb),
+            Self::ParaNewline(nl) => a <= nl && nl < b,
+        }
+    }
+}
+
+/// Collects the shaped-byte, whole-line and paragraph-break candidates on `flow` whose
+/// `range_boxes(..., false)` output can contain window point `(x, y)`.
+fn link_hit_candidates<'a>(
+    flow: TextFlow<'a>,
+    spec: &TextSpec,
+    origin: [f32; 2],
+    px: f32,
+    s: f32,
+    x: f32,
+    y: f32,
+) -> Vec<LinkHitCandidate<'a>> {
+    let [ox, oy] = origin;
+    let eps = (ox.abs().max(x.abs()) * 1e-5).max(1e-3);
+    // `range_boxes` merges cluster intervals separated by <= 0.5 device px, so a point inside a
+    // merged box is always within 0.5 device px of at least one constituent interval.
+    let near_x = |x0: f64, x1: f64| -> bool {
+        x >= ox + (x0 - 0.5) as f32 / px - eps && x <= ox + (x1 + 0.5) as f32 / px + eps
+    };
+    let para_count = match flow {
+        TextFlow::Single(_) => 1,
+        TextFlow::Paragraphs(pl) => pl.paragraphs.len(),
+    };
+    let py = (y - oy) * px;
+    let margin = (spec.style.line_px() * s * 4.0).max(128.0);
+    let mut out = Vec::new();
+    for piece in flow.pieces_in(py - margin, py + margin) {
+        let y_off = piece.y as f64;
+        let plain = piece.layout.inline_boxes().next().is_none();
+        let justified = piece.layout.alignment() == Some(parley::Alignment::Justify);
+        let line_count = piece.layout.len();
+        let has_para_newline = !piece.is_whole() && piece.index + 1 < para_count;
+        for (line_ix, line) in piece.layout.lines().enumerate() {
+            let m = line.metrics();
+            let line_min = m.block_min_coord.min(m.content_block_min_coord) as f64;
+            let line_max = m.block_max_coord.max(m.content_block_max_coord) as f64;
+            let y0 = oy + (line_min + y_off) as f32 / px;
+            let y1 = oy + (line_max + y_off) as f32 / px;
+            if !(y >= y0 && y < y1) {
+                continue;
+            }
+            let lr = line.text_range();
+            let start = (m.inline_min_coord + m.offset) as f64;
+            let end = if justified && plain {
+                start + line.runs().map(|r| r.advance() as f64).sum::<f64>()
+            } else {
+                start + m.advance as f64
+            };
+            if plain && lr.start < lr.end && near_x(start, end) {
+                out.push(LinkHitCandidate::WholeLine(piece, lr.start, lr.end));
+            }
+            for run in line.runs() {
+                let mut cx = (m.inline_min_coord
+                    + run.visual_clusters().next().and_then(|c| c.visual_offset()).unwrap_or(m.offset)) as f64;
+                for cl in run.visual_clusters() {
+                    let adv = cl.advance() as f64;
+                    if adv > 0.0 && near_x(cx, cx + adv) {
+                        out.push(LinkHitCandidate::ShapedByte(piece, cl.text_range().start));
+                    }
+                    cx += adv;
+                }
+            }
+            if line.break_reason() == parley::BreakReason::Explicit && lr.end > lr.start {
+                let nl_byte = lr.end - 1;
+                if let Some((nl_ws, nl_rtl)) = parley::Cluster::from_byte_index(piece.layout, nl_byte).map(|c| {
+                    let run = c.run();
+                    let fm = run.font_metrics();
+                    ((fm.ascent as f64 + fm.descent as f64) * 0.25, c.is_rtl())
+                }) && nl_ws > 0.0
+                {
+                    let (nx0, nx1) = if nl_rtl { (start - nl_ws, start) } else { (end, end + nl_ws) };
+                    if near_x(nx0, nx1) {
+                        out.push(LinkHitCandidate::ShapedByte(piece, nl_byte));
+                    }
+                }
+            }
+            if has_para_newline && !piece.is_blank() && line_ix + 1 == line_count {
+                out.push(LinkHitCandidate::ParaNewline(piece.end));
+            }
+        }
+        if has_para_newline && (piece.is_blank() || line_count == 0) {
+            let y0 = oy + y_off as f32 / px;
+            let y1 = oy + (piece.height as f64 + y_off) as f32 / px;
+            if y >= y0 && y < y1 {
+                out.push(LinkHitCandidate::ParaNewline(piece.end));
+            }
+        }
+    }
+    out
+}
+
 pub(in crate::runtime) use super::link_decos::LinkFx;
 #[cfg(test)]
 use super::link_decos::{boxes, take_link_deco_visits, take_link_line_end_visits};
@@ -175,10 +289,35 @@ impl RuntimeCore {
 
     /// The link of node `i` under window point (x, y).
     pub(in crate::runtime) fn link_at(&self, i: usize, x: f32, y: f32) -> Option<usize> {
-        if self.tree.nodes[i].text.as_ref().is_none_or(|t| t.cold.links.is_empty()) { return None; }
+        let n = &self.tree.nodes[i];
+        let (Some(spec), Some(laid)) = (n.text.as_deref(), n.text_layout.as_ref()) else { return None };
+        if spec.cold.links.is_empty() { return None; }
         let (rect, x, y) = self.unturned_box_and_point(i, x, y);
-        self.link_boxes(i, rect).into_iter()
-            .find(|(_, r)| contains(*r, x, y)).map(|(k, _)| k)
+        if !x.is_finite() || !y.is_finite() { return None; }
+        let flow = laid.view();
+        let s = self.env.scale;
+        let z = self.paint.drawn_scale.get(i).copied().unwrap_or(1.0);
+        let orig = origin(n, spec, flow, rect, s, z);
+        let px = s / z.max(1e-4);
+        if !(px > 0.0 && px.is_finite() && orig[0].is_finite() && orig[1].is_finite()) {
+            return (0..spec.cold.links.len()).find(|&k| {
+                self.link_boxes_for(i, k, rect).into_iter().any(|(_, r)| contains(r, x, y))
+            });
+        }
+        let candidates = link_hit_candidates(flow, spec, orig, px, s, x, y);
+        if candidates.is_empty() { return None; }
+        let len = layout_len(n, spec);
+        for (k, l) in spec.cold.links.iter().enumerate() {
+            let (a, b) = drawn(n, l.start, l.end);
+            let (a, b) = ((a as usize).min(len), (b as usize).min(len));
+            if a >= b || !candidates.iter().any(|c| c.matches(a, b)) {
+                continue;
+            }
+            if self.link_boxes_for(i, k, rect).into_iter().any(|(_, r)| contains(r, x, y)) {
+                return Some(k);
+            }
+        }
+        None
     }
 
     /// The id of the `Mark::Pill` in text field `i` under window point `(x, y)`, if any.

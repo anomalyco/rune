@@ -1,0 +1,1 @@
+- Runtime: pointer link hit-testing (`RuntimeCore::link_at`) now locates the shaped byte or line under the pointer and lays out range boxes only for matching candidate links (stopping on the first hit) instead of laying out every link on the text node.
