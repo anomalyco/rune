@@ -1,0 +1,1 @@
+- Runtime: a `Tx::live_only()` handler in a window with no live subscriptions no longer leaves `live_pending()` set across frames, so the window goes idle after the frame instead of redrawing until the next commit.

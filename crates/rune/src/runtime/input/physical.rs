@@ -127,7 +127,7 @@ impl RuntimeCore {
         merge(&mut self.frame.pending, tx);
         if consumed && live_only {
             self.frame.live_only_skips += 1;
-            self.frame.live.set();
+            if self.frame.has_live_subscriptions() { self.frame.live.set(); }
         } else {
             self.commit.dirty |= consumed;
         }

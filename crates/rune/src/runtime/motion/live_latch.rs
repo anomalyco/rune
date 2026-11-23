@@ -39,6 +39,8 @@ pub(crate) enum LiveEvent {
     LatchBegin,
     /// The latch read the sources; `active` says one is still moving.
     LatchEnd { active: bool },
+    /// A visible frame had no bound sources to read, so any pending wake is cleared.
+    Clear,
 }
 
 impl LiveWake {
@@ -82,6 +84,9 @@ impl LiveWake {
             // A value still moving after the read keeps the next frame due.
             (Hidden { dirty }, LiveEvent::LatchEnd { active }) => (Hidden { dirty: dirty || active }, active),
             (_, LiveEvent::LatchEnd { active }) => (if active { Pending } else { Idle }, active),
+            // A visible frame with no bound sources has nothing to read, so any pending wake is spent.
+            (Hidden { .. }, LiveEvent::Clear) => (self, false),
+            (_, LiveEvent::Clear) => (Idle, false),
         }
     }
 }
@@ -144,10 +149,16 @@ impl LiveLane {
         self.wake.take_visible()
     }
 
-    /// Whether the frame should read its sources now. The hidden, source-less and clean cases
-    /// return before any transition, as an unpending frame always did.
+    /// Whether the frame should read its sources now. A hidden or clean frame returns before
+    /// any transition. A visible frame with no bound sources has nothing to read, so any
+    /// pending wake is cleared rather than keeping the window redrawing until the next commit.
     pub(crate) fn latch_begin(&mut self, can: bool, has_subs: bool) -> bool {
-        if !self.visible() || !has_subs || (!can && !self.state.dirty()) { return false; }
+        if !self.visible() { return false; }
+        if !has_subs {
+            if self.state.dirty() { self.apply(LiveEvent::Clear); }
+            return false;
+        }
+        if !can && !self.state.dirty() { return false; }
         self.apply1(LiveEvent::LatchBegin)
     }
 

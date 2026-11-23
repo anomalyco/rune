@@ -295,9 +295,32 @@ fn an_empty_frame_leaves_the_state_untouched() {
     assert!(!lane.take());
     assert_eq!(lane.state, LiveWake::Pending);
 
-    // No bound sources is dev's early return, before any transition.
+    // A visible frame with no bound sources leaves an idle lane untouched.
+    lane.state = LiveWake::Idle;
     assert!(!lane.latch_begin(true, false));
-    assert_eq!(lane.state, LiveWake::Pending);
+    assert_eq!(lane.state, LiveWake::Idle);
+}
+
+/// A visible frame with no bound sources clears any pending wake so the window stops redrawing;
+/// a hidden window still keeps its dirty bit until it shows.
+#[test]
+fn latch_begin_without_sources_clears_pending_wake() {
+    let mut lane = LiveLane::new(Arc::new(|| {}));
+    lane.set();
+    assert!(lane.pending());
+    assert!(!lane.latch_begin(true, false), "no sources, no read");
+    assert_eq!(lane.state, LiveWake::Idle);
+    assert!(!lane.pending());
+
+    lane.set_visible(false);
+    lane.set();
+    assert!(!lane.latch_begin(true, false), "hidden frame does not clear");
+    assert_eq!(lane.state, LiveWake::Hidden { dirty: true });
+    lane.set_visible(true);
+    assert!(lane.pending());
+    assert!(!lane.latch_begin(true, false));
+    assert_eq!(lane.state, LiveWake::Idle);
+    assert!(!lane.pending());
 }
 
 /// A live-only event without a commit keeps the frame due, and a commit that samples a value
