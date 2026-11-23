@@ -1,0 +1,1 @@
+- macOS: `fallback_family_files` now skips CoreText's `.LastResort` fallback when no installed font covers a character, so unassigned code points and noncharacters no longer add `LastResort.otf` to `symbol_families` and box later fallback symbols.
