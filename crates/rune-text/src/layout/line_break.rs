@@ -109,8 +109,7 @@ fn break_lines_capped(
     let (mut para_idx, mut line_in_para) = (0usize, 0usize);
     while !breaker.is_done() {
         let blk = blocks.get(para_idx).copied().unwrap_or(crate::Block::Paragraph);
-        let indent = (blk.indent_pt(font_size) * scale).round();
-        let right_pad = if blk == crate::Block::Code { indent } else { 0.0 };
+        let [indent, right_pad] = blk.pad_px(font_size, scale);
         let line_max = max_width
             .map_or(f32::MAX, |w| (w - indent - right_pad).max(1.0))
             .min(layout_max);

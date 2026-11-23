@@ -1,0 +1,1 @@
+- Rich text fields now place the caret, vertical column goal, and empty-line selection and highlight boxes after an empty list, quote, or code block's indent instead of at the left edge before its marker.

@@ -20,6 +20,8 @@ use crate::{Direction, Flow, TextInput};
 
 mod keying;
 mod lazy;
+#[cfg(test)]
+mod tests;
 use keying::{Found, Runs, count_newlines, flow_of, key_paragraphs, next_line_start, reuse_keys, with_isolates};
 pub(crate) use keying::LineScan;
 pub use keying::{common_end, common_start};
@@ -136,6 +138,8 @@ pub struct Paragraph {
     pub height: f32,
     /// Its layout's width and full width, so a later edit that keeps it reads neither from it.
     widths: [f32; 2],
+    /// Left indent and right padding in device px for this paragraph's [`Block`].
+    pad: [f32; 2],
     pub flow: Flow,
     /// What its layout depends on but the width: its words, their shaping spans, its pills,
     /// block and direction, in the field's style.
@@ -167,6 +171,7 @@ pub struct Piece<'a> {
     /// Its paragraph's index in the field, for its [`Block`].
     pub index: usize,
     pub shaped: bool,
+    pad: [f32; 2],
     isolates: &'a [(u32, u32)],
     disjoint_spans: bool,
     whole: bool,
@@ -174,11 +179,11 @@ pub struct Piece<'a> {
 
 impl<'a> Piece<'a> {
     pub(crate) fn of_paragraph(k: usize, p: &'a Paragraph, disjoint_spans: bool) -> Piece<'a> {
-        Piece { layout: &p.layout, shared: Some(&p.layout), start: p.start, end: p.end, y: p.y, height: p.height, flow: p.flow, index: k, shaped: p.shaped, isolates: &p.isolates, disjoint_spans, whole: false }
+        Piece { layout: &p.layout, shared: Some(&p.layout), start: p.start, end: p.end, y: p.y, height: p.height, flow: p.flow, index: k, shaped: p.shaped, pad: p.pad, isolates: &p.isolates, disjoint_spans, whole: false }
     }
 
     fn whole(layout: &'a Layout<Ink>) -> Piece<'a> {
-        Piece { layout, shared: None, start: 0, end: usize::MAX, y: 0.0, height: layout.height(), flow: Flow::of_layout(layout), index: 0, shaped: true, isolates: &[], disjoint_spans: false, whole: true }
+        Piece { layout, shared: None, start: 0, end: usize::MAX, y: 0.0, height: layout.height(), flow: Flow::of_layout(layout), index: 0, shaped: true, pad: [0.0, 0.0], isolates: &[], disjoint_spans: false, whole: true }
     }
 
     /// Whether it's a text's one layout rather than a paragraph of a field's.
@@ -412,12 +417,13 @@ impl<'a> TextFlow<'a> {
         }
     }
 
-    /// Where an empty paragraph's caret, `size` px wide, starts: its right edge (the width it
-    /// wraps at) when it reads right to left, else 0.
-    fn blank_start(self, p: &Piece<'_>, size: f32) -> f32 {
+    /// Where an empty paragraph's caret or newline box, `size` px wide, starts: after its left
+    /// indent when reading left to right, or inside its right padding from the wrap width when
+    /// reading right to left.
+    pub(crate) fn blank_start(self, p: &Piece<'_>, size: f32) -> f32 {
         match (p.flow, self) {
-            (Flow::Rtl, TextFlow::Paragraphs(pl)) => (pl.max_width.unwrap_or(pl.width) - size).max(0.0),
-            _ => 0.0,
+            (Flow::Rtl, TextFlow::Paragraphs(pl)) => (pl.max_width.unwrap_or(pl.width) - p.pad[1] - size).max(p.pad[0]),
+            _ => p.pad[0],
         }
     }
 
@@ -756,6 +762,7 @@ impl TextSystem {
         let (mut width, mut full_width, mut fresh) = (0.0f32, 0.0f32, 0);
         for (k, ((a, b, flow, key, isolates, run), kept)) in items.into_iter().enumerate() {
             let block = spec.blocks.get(k).copied().unwrap_or(Block::Paragraph);
+            let pad = block.pad_px(style.size, scale);
             let blocks: &[Block] = if block == Block::Paragraph { &[] } else { std::slice::from_ref(&block) };
             // A waiting record kept at the same width stays as it was; a run found here waits.
             let wait = match (kept, run) {
@@ -768,7 +775,7 @@ impl TextSystem {
             if let Some((line_h, height, w, lines, layout, run)) = wait {
                 waiting += 1;
                 (width, full_width) = (width.max(w), full_width.max(w));
-                paragraphs.push(Paragraph { start: a, end: b, y: y.round() as f32, y_frac: 0.0, height, widths: [w, w], flow, key, isolates, layout, shaped: false, lines, run });
+                paragraphs.push(Paragraph { start: a, end: b, y: y.round() as f32, y_frac: 0.0, height, widths: [w, w], pad, flow, key, isolates, layout, shaped: false, lines, run });
                 for _ in 0..lines { y += f64::from(line_h); }
                 continue;
             }
@@ -812,7 +819,7 @@ impl TextSystem {
             }
             let py = if want_frac != 0.0 { y.floor() as f32 } else { y.round() as f32 };
             (width, full_width) = (width.max(widths[0]), full_width.max(widths[1]));
-            paragraphs.push(Paragraph { start: a, end: b, y: py, y_frac: want_frac, height, widths, flow, key, isolates, layout, shaped: true, lines: 1, run: false });
+            paragraphs.push(Paragraph { start: a, end: b, y: py, y_frac: want_frac, height, widths, pad, flow, key, isolates, layout, shaped: true, lines: 1, run: false });
             y += f64::from(height);
         }
         let (asc, desc) = self.primary_extents(style.family, style.weight, style.italic).unwrap_or((0.8, 0.2));
