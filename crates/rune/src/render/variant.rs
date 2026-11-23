@@ -502,6 +502,14 @@ impl Renderer {
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
         }
     }
+    /// Waits for the pinned pipelines a thread is making (`start_pinned`): a process that only
+    /// warms the driver's cache has no later frame to take them in.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn wait_pinned(&mut self) {
+        let Some((format, done)) = self.pinned_building.take() else { return };
+        let pinned = done.recv().unwrap_or_default();
+        if format == self.format { self.pinned = Some(pinned); }
+    }
     /// Takes `built` as the renderer's shader: every pipeline again from it. Bind groups follow
     /// once the outline texture exists (`rebind_all`).
     fn adopt(&mut self, device: &wgpu::Device, built: Built) {
