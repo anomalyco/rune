@@ -371,6 +371,11 @@ impl Inner {
         let reloaded = false;
         let arrived = self.shared.take_dirty();
         if !arrived && now < self.deadline.get() {
+            if let Some(vm) = self.vm()
+                && let Some(mut s) = vm.lua.app_data_mut::<Sched>()
+            {
+                s.set_clock(now);
+            }
             return reloaded;
         }
         let Some(vm) = self.vm() else { return reloaded };
@@ -577,3 +582,7 @@ pub(crate) fn take_root(out: Value) -> mlua::Result<El> {
         other => Err(mlua::Error::runtime(format!("a render function must return a ui node, not a {}", other.type_name()))),
     }
 }
+
+#[cfg(test)]
+#[path = "script_tests.rs"]
+mod tests;
