@@ -302,3 +302,133 @@ fn a_real_clips_sound_reads_a_second_ahead_of_its_pictures_stream_by_stream() {
     let next = mf::read(&opened.reader, audio).unwrap();
     assert!((1.0..1.1).contains(&next.time), "{}", next.time);
 }
+
+#[test]
+fn a_muted_clip_keeps_its_audio_stream_selected_and_with_no_sound_output() {
+    // SAFETY: COM on this test's thread for the reader; left initialised, as the thread may open more.
+    unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok().ok();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/rune.mp4");
+    let job = Job {
+        source: MediaSource::File(path),
+        kind: Kind::Video,
+        start: 0.0,
+        generation: 0,
+        looping: false,
+        sound: None,
+        notify: Box::new(|| {}),
+        clock: Arc::new(audio::Clock::default()),
+        started: rune_core::time::now(),
+    };
+    let d = Decoder::open(&job).unwrap();
+    // Muted: no WASAPI output opened (matching Chrome's suspended real sink).
+    assert!(d.output.is_none());
+    // Audio stream stays selected so unmuting mid-clip does not restart from 0.
+    let audio = d.audio.expect("demo/rune.mp4 has an audio track");
+    assert!(d.audio_open, "muted clip deselected its audio stream");
+    // SAFETY: plain selection query on this thread's reader.
+    let selected = unsafe { d.reader.GetStreamSelection(audio) }.unwrap();
+    assert!(selected.as_bool(), "Media Foundation audio stream was deselected while muted");
+}
+
+#[test]
+fn muted_audio_target_stays_behind_both_clock_and_video_position() {
+    // 60 fps off-layer: front is one frame ahead of screen, capped by both clock and screen.
+    let t = muted_audio_target(Some(60.008), Some(60.017), SIXTIETH, false, true).unwrap();
+    assert!((t - (60.017 - SIXTIETH - MUTE_MARGIN)).abs() < 1e-6, "{t}");
+
+    // 1 fps off-layer: front is 1 s ahead, so clock caps it and future sound isn't dropped.
+    let t = muted_audio_target(Some(60.2), Some(61.0), 1.0, false, true).unwrap();
+    assert!((t - (60.0 - MUTE_MARGIN)).abs() < 1e-6, "{t}");
+
+    // Undrawn muted clip: clock ran ahead while picture queue froze at 1.017; stops at screen.
+    let t = muted_audio_target(Some(3.0), Some(1.017), SIXTIETH, false, true).unwrap();
+    assert!((t - (1.017 - SIXTIETH - MUTE_MARGIN)).abs() < 1e-6, "{t}");
+
+    // On the layer: front is the presented picture itself.
+    let t = muted_audio_target(Some(60.002), Some(60.0), SIXTIETH, true, true).unwrap();
+    assert!((t - (60.0 - MUTE_MARGIN)).abs() < 1e-6, "{t}");
+
+    // Paused after seek to 60.0 (no clock): advances up to 60.0 - frame - margin, then stops.
+    let t = muted_audio_target(None, Some(60.0), SIXTIETH, false, true).unwrap();
+    assert!((t - (60.0 - SIXTIETH - MUTE_MARGIN)).abs() < 1e-6, "{t}");
+    assert!(!muted_audio_want(Some(t), 0.0, Some(t)));
+
+    // Paused at 0.0: target is below 0, so no audio is read at all.
+    let t = muted_audio_target(None, Some(0.0), SIXTIETH, false, true);
+    assert!(!muted_audio_want(None, 0.0, t));
+
+    // Loop transition (epoch = 10.0) while last frames of loop 1 still show (9.95):
+    // does not read or discard loop 2's first packet.
+    let t = muted_audio_target(Some(9.95), Some(9.967), SIXTIETH, false, true);
+    assert!(!muted_audio_want(None, 10.0, t));
+
+    // Audio-only clip muted follows the clock while playing and stops when paused.
+    assert_eq!(muted_audio_target(Some(5.0), None, FRAME, false, false), Some(5.0 - MUTE_MARGIN));
+    assert_eq!(muted_audio_target(None, None, FRAME, false, false), None);
+}
+
+#[test]
+fn clip_done_ends_muted_video_with_pictures_and_waits_for_sound_when_unmuted_or_audio_only() {
+    // Muted video ends/loops as soon as video hits EOS even if audio is still open.
+    assert!(clip_done(false, true, true, false));
+    assert!(!clip_done(true, false, true, false));
+    // Unmuted video waits for both streams.
+    assert!(!clip_done(false, true, true, true));
+    assert!(clip_done(false, false, true, true));
+    // Audio-only clip (muted or unmuted) waits for its audio stream.
+    assert!(!clip_done(false, true, false, false));
+    assert!(clip_done(false, false, false, false));
+    assert!(!clip_done(false, true, false, true));
+    assert!(clip_done(false, false, false, true));
+}
+
+#[test]
+fn a_real_clip_unmuted_mid_clip_reads_audio_at_playback_position_without_seeking_video() {
+    // SAFETY: COM on this test's thread for the reader; left initialised, as the thread may open more.
+    unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok().ok();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/rune.mp4");
+    let lib = mf::library().unwrap();
+    let source = lib.resolve(&mf::Target::from_source(&MediaSource::File(path)).unwrap()).unwrap();
+    let opened = mf::open(lib, &source, Kind::Video, Decode::Cpu, true).unwrap();
+    let (video, audio, frame) = (opened.video.unwrap(), opened.audio.unwrap(), opened.picture.unwrap().frame);
+
+    // Play muted up to 3.0 s: audio stream stays selected and advances via muted_audio_target,
+    // without queuing samples or opening WASAPI.
+    let mut video_pts = 0.0;
+    let mut audio_pts: Option<f64> = None;
+    let mut audio_reads = 0u32;
+    while video_pts < 3.0 {
+        let pic = mf::read(&opened.reader, video).unwrap();
+        assert_eq!(pic.stream, video);
+        assert!(pic.sample.is_some());
+        video_pts = pic.time;
+        let target = muted_audio_target(Some(video_pts), Some(video_pts), frame, false, true);
+        while muted_audio_want(audio_pts, 0.0, target) {
+            let snd = mf::read(&opened.reader, audio).unwrap();
+            assert_eq!(snd.stream, audio);
+            assert!(snd.sample.is_some());
+            audio_pts = Some(snd.time);
+            audio_reads += 1;
+        }
+    }
+    assert!(audio_reads > 0);
+
+    // Unmute at 3.0 s: the very next audio sample is right behind 3.0 s (not 0.0 s), and the
+    // video stream continues past 3.0 s without any seek or gap.
+    let next_audio = mf::read(&opened.reader, audio).unwrap();
+    assert_eq!(next_audio.stream, audio);
+    assert!(
+        (2.8..3.05).contains(&next_audio.time),
+        "expected audio near 3.0 s on mid-clip unmute, got {} s",
+        next_audio.time
+    );
+    let next_video = mf::read(&opened.reader, video).unwrap();
+    assert_eq!(next_video.stream, video);
+    assert!(
+        next_video.time >= video_pts && next_video.time < video_pts + frame * 2.0,
+        "video jumped on unmute: was {video_pts} s, next {} s",
+        next_video.time
+    );
+}
+
+

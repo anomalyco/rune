@@ -342,3 +342,20 @@ fn an_opened_clip_follows_the_handles_mute() {
     rig.reconcile();
     assert_eq!(rig.asked().1, None);
 }
+
+#[test]
+fn unmuting_mid_clip_turns_sound_on_without_seeking_or_interrupting_playback() {
+    let rig = rig();
+    let sound = mf::Sound { channels: 2, rate: 48_000 };
+    rig.native().facts.as_mut().unwrap().sound = Some(sound);
+    let start = rune_core::time::now();
+    rig.plays_from_two(start);
+    // Playing muted at 2 s: no sound ask yet.
+    rig.reconcile();
+    assert_eq!(rig.asked(), (None, None, false));
+    // Unmute mid-clip: sound turns on, playback stays Playing with no seek or buffering gap.
+    rig.player.shared.ctl.lock().unwrap().muted = false;
+    rig.reconcile();
+    assert!(matches!(rig.phase(), Phase::Playing { .. }), "{:?}", rig.phase());
+    assert_eq!(rig.asked(), (None, Some(1.0), false));
+}
