@@ -1,0 +1,1 @@
+- Windows 10: `App::titlebar` custom frames now leave a 0 px top non-client inset on restored windows instead of 1 px, so DWM no longer paints a native caption bar above the app's titlebar.

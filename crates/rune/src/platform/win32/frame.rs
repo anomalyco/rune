@@ -5,9 +5,10 @@
 //! flyout, the window menu and its animations; only the title bar goes. `WM_NCCALCSIZE`
 //! hands the caption's band to the client area and keeps the side and bottom borders, which
 //! Windows 10 and 11 draw invisibly outside the window, as resize edges. The top resize edge
-//! is then a band inside the client area that `WM_NCHITTEST` reports as `HTTOP`. Windows 11
-//! draws the window's 1 px border over the client area; Windows 10 draws it only around
-//! non-client pixels, so there a restored window keeps a 1 px non-client row at the top.
+//! is then a band inside the client area that `WM_NCHITTEST` reports as `HTTOP`. The top
+//! inset stays zero on restored windows: Windows 11 draws its 1 px border over the client
+//! area, and on Windows 10 any positive top non-client inset makes DWM paint a full native
+//! title bar over the window.
 //!
 //! Rune draws the caption buttons as elements (`titlebar::caption`), and this procedure answers
 //! hit tests over them as `HTMINBUTTON`, `HTMAXBUTTON` and `HTCLOSE`. Windows 11 shows its snap
@@ -32,7 +33,6 @@ use std::sync::OnceLock;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, GetMonitorInfoW, InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect, ScreenToClient};
-use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow, GetSystemMetricsForDpi};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, TrackMouseEvent};
 use windows_sys::Win32::UI::Shell::{ABE_BOTTOM, ABE_LEFT, ABE_RIGHT, ABE_TOP, ABM_GETAUTOHIDEBAREX, APPBARDATA, DefSubclassProc, RemoveWindowSubclass, SHAppBarMessage, SetWindowSubclass};
@@ -108,8 +108,8 @@ pub(crate) fn request_inner_size(window: &winit::window::Window, size: (f32, f32
     // SAFETY: Win32 calls on a live window this thread owns.
     unsafe {
         if IsZoomed(hwnd) != 0 { ShowWindow(hwnd, SW_RESTORE); }
-        let b = borders(hwnd, GetDpiForWindow(hwnd));
-        SetWindowPos(hwnd, std::ptr::null_mut(), 0, 0, w + b.left + b.right, h + top_border(hwnd) + b.bottom, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+        let (cx, cy) = outer_size(w, h, borders(hwnd, GetDpiForWindow(hwnd)));
+        SetWindowPos(hwnd, std::ptr::null_mut(), 0, 0, cx, cy, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
     }
     true
 }
@@ -248,7 +248,7 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
                 let params = &mut *(lparam as *mut NCCALCSIZE_PARAMS);
                 let outer = params.rgrc[0];
                 DefSubclassProc(hwnd, message, wparam, lparam);
-                params.rgrc[0].top = outer.top + top_border(hwnd);
+                params.rgrc[0] = nccalcsize_restored(outer, params.rgrc[0]);
                 if IsZoomed(hwnd) != 0 { fit_maximized(hwnd, &outer, &mut params.rgrc[0]); }
                 return 0;
             }
@@ -323,19 +323,16 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
                 let (min, max) = (info.ptMinTrackSize.y, info.ptMaxTrackSize.y);
                 let result = DefSubclassProc(hwnd, message, wparam, lparam);
                 // winit sized them for a title bar: take it back off what it set.
-                let top = borders(hwnd, GetDpiForWindow(hwnd)).top - top_border(hwnd);
-                if info.ptMinTrackSize.y != min { info.ptMinTrackSize.y = (info.ptMinTrackSize.y - top).max(1); }
-                if info.ptMaxTrackSize.y != max { info.ptMaxTrackSize.y = (info.ptMaxTrackSize.y - top).max(1); }
+                let standard = borders(hwnd, GetDpiForWindow(hwnd));
+                info.ptMinTrackSize.y = adjust_track_height(min, info.ptMinTrackSize.y, standard);
+                info.ptMaxTrackSize.y = adjust_track_height(max, info.ptMaxTrackSize.y, standard);
                 return result;
             }
             WM_GETDPISCALEDSIZE if IsZoomed(hwnd) == 0 => {
                 let dpi = wparam as u32;
                 let (w, h) = client_size(hwnd);
-                let ratio = f64::from(dpi) / f64::from(GetDpiForWindow(hwnd).max(1));
-                let b = borders(hwnd, dpi);
                 let out = &mut *(lparam as *mut SIZE);
-                out.cx = (f64::from(w) * ratio).round() as i32 + b.left + b.right;
-                out.cy = (f64::from(h) * ratio).round() as i32 + top_border(hwnd) + b.bottom;
+                *out = dpi_scaled_outer_size(w, h, GetDpiForWindow(hwnd), dpi, borders(hwnd, dpi));
                 return 1;
             }
             // winit sizes the window for a title bar; Windows' rect (from WM_GETDPISCALEDSIZE)
@@ -495,39 +492,49 @@ fn frame_thickness(dpi: u32) -> i32 {
     unsafe { GetSystemMetricsForDpi(SM_CYFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi) }
 }
 
-/// The non-client pixels left at the top: Windows 10 draws a restored window's top border only
-/// over non-client pixels.
-fn top_border(hwnd: HWND) -> i32 {
-    // SAFETY: reads a live window's state.
-    i32::from(windows_10() && unsafe { IsZoomed(hwnd) } == 0)
+/// What a restored custom frame adds around its client area given the standard frame's
+/// `borders`: keeps the invisible side and bottom resize borders and leaves a 0 top inset,
+/// which Windows 10 requires so DWM does not paint a full native title bar.
+fn custom_borders(standard: RECT) -> RECT {
+    RECT { top: 0, ..standard }
 }
 
-/// Windows before 11 (build 22000). `RtlGetVersion` reports the real build, whatever the
-/// executable's manifest says.
-fn windows_10() -> bool {
-    static BEFORE_11: OnceLock<bool> = OnceLock::new();
-    *BEFORE_11.get_or_init(|| {
-        #[repr(C)]
-        struct Version { size: u32, major: u32, minor: u32, build: u32, platform: u32, service_pack: [u16; 128] }
-        let mut v = Version { size: size_of::<Version>() as u32, major: 0, minor: 0, build: 0, platform: 0, service_pack: [0; 128] };
-        let ntdll: Vec<u16> = "ntdll.dll\0".encode_utf16().collect();
-        // SAFETY: ntdll is loaded in every process; RtlGetVersion fills the OSVERSIONINFOW
-        // `Version` mirrors, whose size field says which struct it is.
-        unsafe {
-            let Some(get) = GetProcAddress(GetModuleHandleW(ntdll.as_ptr()), c"RtlGetVersion".as_ptr().cast()) else { return false };
-            let get: unsafe extern "system" fn(*mut Version) -> i32 = std::mem::transmute(get);
-            get(&mut v) == 0 && v.major == 10 && v.build < 22000
-        }
-    })
+/// Restored client rect for `WM_NCCALCSIZE`: keeps the side and bottom borders computed by the
+/// default procedure (`def_client`) and restores the top edge to `outer.top` (0 top inset).
+fn nccalcsize_restored(outer: RECT, def_client: RECT) -> RECT {
+    RECT { top: outer.top, ..def_client }
+}
+
+/// Outer window size `(width, height)` in pixels for a restored custom-framed window whose
+/// client area is `(w, h)` and whose standard frame adds `standard`.
+fn outer_size(w: i32, h: i32, standard: RECT) -> (i32, i32) {
+    let b = custom_borders(standard);
+    (w + b.left + b.right, h + b.top + b.bottom)
+}
+
+/// Outer window size for `WM_GETDPISCALEDSIZE` when scaling a restored client size `(w, h)`
+/// from `old_dpi` to `new_dpi`, with standard frame borders `new_standard` at `new_dpi`.
+fn dpi_scaled_outer_size(w: i32, h: i32, old_dpi: u32, new_dpi: u32, new_standard: RECT) -> SIZE {
+    let ratio = f64::from(new_dpi) / f64::from(old_dpi.max(1));
+    let (cx, cy) = outer_size((f64::from(w) * ratio).round() as i32, (f64::from(h) * ratio).round() as i32, new_standard);
+    SIZE { cx, cy }
+}
+
+/// Corrects a `WM_GETMINMAXINFO` track height that winit sized for a standard title bar
+/// (`after != before`) by subtracting the removed top frame height (`standard.top`).
+fn adjust_track_height(before: i32, after: i32, standard: RECT) -> i32 {
+    if after == before { return after; }
+    let removed = standard.top - custom_borders(standard).top;
+    (after - removed).max(1)
 }
 
 /// What the window's frame adds around its client area while it is restored, at `dpi`, each
-/// edge as a positive width: a custom frame keeps the standard frame's sides and bottom, and at
-/// the top only Windows 10's non-client row.
+/// edge as a positive width: a custom frame keeps the standard frame's sides and bottom and
+/// leaves a 0 top inset so Windows 10 DWM does not paint a native title bar.
 pub(super) fn restored_borders(hwnd: HWND, dpi: u32) -> RECT {
     let b = borders(hwnd, dpi);
     if !installed(hwnd) || !framed(hwnd) { return b; }
-    RECT { top: i32::from(windows_10()), ..b }
+    custom_borders(b)
 }
 
 /// What a standard frame adds around the client area at `dpi`, each edge as a positive width.
