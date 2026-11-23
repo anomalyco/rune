@@ -1049,10 +1049,29 @@ struct CommandSignatures {
     dispatch: Direct3D12::ID3D12CommandSignature,
 }
 
+/// Rune: the device's own indirect command signatures, made at the first indirect draw or
+/// dispatch instead of with the device. A driver that has not seen one takes tens of
+/// milliseconds for each `CreateCommandSignature` (Intel Iris Xe: 28, 15 and 13 ms of a
+/// window's first device), and an app that never draws indirectly needs none.
+struct LazyCommandSignatures {
+    /// Whether the device draws mesh shaders (`EXPERIMENTAL_MESH_SHADER`), so has a `draw_mesh`.
+    mesh: bool,
+    made: std::sync::OnceLock<CommandSignatures>,
+}
+
+impl LazyCommandSignatures {
+    fn get(&self, device: &Direct3D12::ID3D12Device) -> &CommandSignatures {
+        self.made.get_or_init(|| {
+            Device::create_command_signatures(device, self.mesh)
+                .expect("creating the device's indirect command signatures")
+        })
+    }
+}
+
 struct DeviceShared {
     adapter: DxgiAdapter,
     zero_buffer: Direct3D12::ID3D12Resource,
-    cmd_signatures: CommandSignatures,
+    cmd_signatures: LazyCommandSignatures,
     heap_views: descriptor::GeneralHeap,
     sampler_heap: sampler::SamplerHeap,
     private_caps: PrivateCapabilities,

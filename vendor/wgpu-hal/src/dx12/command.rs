@@ -1415,7 +1415,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             .special_constants
             .as_ref()
             .and_then(|sc| sc.indirect_cmd_signatures.as_ref())
-            .unwrap_or_else(|| &self.shared.cmd_signatures)
+            .unwrap_or_else(|| self.shared.cmd_signatures.get(&self.device))
             .draw;
         unsafe {
             self.list.as_ref().unwrap().ExecuteIndirect(
@@ -1454,7 +1454,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             .special_constants
             .as_ref()
             .and_then(|sc| sc.indirect_cmd_signatures.as_ref())
-            .unwrap_or_else(|| &self.shared.cmd_signatures)
+            .unwrap_or_else(|| self.shared.cmd_signatures.get(&self.device))
             .draw_indexed;
         unsafe {
             self.list.as_ref().unwrap().ExecuteIndirect(
@@ -1476,7 +1476,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.prepare_dispatch([0; 3]);
         let cmd_list6: Direct3D12::ID3D12GraphicsCommandList6 =
             self.list.as_ref().unwrap().cast().unwrap();
-        let Some(cmd_signature) = &self.shared.cmd_signatures.draw_mesh else {
+        let Some(cmd_signature) = &self.shared.cmd_signatures.get(&self.device).draw_mesh else {
             panic!("Feature `MESH_SHADING` not enabled");
         };
         unsafe {
@@ -1494,7 +1494,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         unsafe { self.prepare_draw(0, 0) };
         unsafe {
             self.list.as_ref().unwrap().ExecuteIndirect(
-                &self.shared.cmd_signatures.draw,
+                &self.shared.cmd_signatures.get(&self.device).draw,
                 max_count,
                 &buffer.resource,
                 offset,
@@ -1514,7 +1514,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         unsafe { self.prepare_draw(0, 0) };
         unsafe {
             self.list.as_ref().unwrap().ExecuteIndirect(
-                &self.shared.cmd_signatures.draw_indexed,
+                &self.shared.cmd_signatures.get(&self.device).draw_indexed,
                 max_count,
                 &buffer.resource,
                 offset,
@@ -1534,7 +1534,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.prepare_dispatch([0; 3]);
         let cmd_list6: Direct3D12::ID3D12GraphicsCommandList6 =
             self.list.as_ref().unwrap().cast().unwrap();
-        let Some(ref command_signature) = self.shared.cmd_signatures.draw_mesh else {
+        let Some(ref command_signature) = self.shared.cmd_signatures.get(&self.device).draw_mesh else {
             panic!("Feature `MESH_SHADING` not enabled");
         };
         unsafe {
@@ -1614,7 +1614,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             .special_constants
             .as_ref()
             .and_then(|sc| sc.indirect_cmd_signatures.as_ref())
-            .unwrap_or_else(|| &self.shared.cmd_signatures)
+            .unwrap_or_else(|| self.shared.cmd_signatures.get(&self.device))
             .dispatch;
         unsafe {
             self.list.as_ref().unwrap().ExecuteIndirect(

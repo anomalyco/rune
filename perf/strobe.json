@@ -32,6 +32,10 @@
       "unset": ["RUNE_*", "WGPU_*", "LAUNCH_FLOOR*", "__COMPAT_LAYER"]
     },
     // What a desktop app's first screen is made of: title bar, sidebar rows, paragraphs, cards.
-    "floor-shell": { "extends": "floor", "env": { "RUNE_DIRS_ROOT": "{home}", "LAUNCH_FLOOR": "shell" } }
+    "floor-shell": { "extends": "floor", "env": { "RUNE_DIRS_ROOT": "{home}", "LAUNCH_FLOOR": "shell" } },
+    // The same, reporting 2.5 s after the first frame, when the GPU has taken the window over; and
+    // with the GPU's pipelines made one after the other, as before `RUNE_GPU_PIPELINES` existed.
+    "floor-handover": { "extends": "floor", "env": { "RUNE_DIRS_ROOT": "{home}", "LAUNCH_FLOOR": "shell", "LAUNCH_FLOOR_SETTLE_MS": "2500" } },
+    "floor-handover-serial": { "extends": "floor", "env": { "RUNE_DIRS_ROOT": "{home}", "LAUNCH_FLOOR": "shell", "LAUNCH_FLOOR_SETTLE_MS": "2500", "RUNE_GPU_PIPELINES": "serial" } }
   }
 }

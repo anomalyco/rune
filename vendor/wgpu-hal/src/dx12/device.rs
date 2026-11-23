@@ -118,60 +118,15 @@ impl super::Device {
         // maximum number of CBV/SRV/UAV descriptors in heap for Tier 1
         let capacity_views = limits.max_non_sampler_bindings as u64;
 
-        let draw_mesh = if features
-            .features_wgpu
-            .contains(wgt::FeaturesWGPU::EXPERIMENTAL_MESH_SHADER)
-        {
-            Some(Self::create_command_signature(
-                &raw,
-                None,
-                size_of::<wgt::DispatchIndirectArgs>(),
-                &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
-                    Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH,
-                    ..Default::default()
-                }],
-                0,
-            )?)
-        } else {
-            None
-        };
-
         let drain = Arc::new(super::DrainTracker::new(&adapter, &raw));
         let shared = super::DeviceShared {
             adapter,
             zero_buffer,
-            cmd_signatures: super::CommandSignatures {
-                draw: Self::create_command_signature(
-                    &raw,
-                    None,
-                    size_of::<wgt::DrawIndirectArgs>(),
-                    &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
-                        Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DRAW,
-                        ..Default::default()
-                    }],
-                    0,
-                )?,
-                draw_indexed: Self::create_command_signature(
-                    &raw,
-                    None,
-                    size_of::<wgt::DrawIndexedIndirectArgs>(),
-                    &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
-                        Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED,
-                        ..Default::default()
-                    }],
-                    0,
-                )?,
-                draw_mesh,
-                dispatch: Self::create_command_signature(
-                    &raw,
-                    None,
-                    size_of::<wgt::DispatchIndirectArgs>(),
-                    &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
-                        Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH,
-                        ..Default::default()
-                    }],
-                    0,
-                )?,
+            cmd_signatures: super::LazyCommandSignatures {
+                mesh: features
+                    .features_wgpu
+                    .contains(wgt::FeaturesWGPU::EXPERIMENTAL_MESH_SHADER),
+                made: std::sync::OnceLock::new(),
             },
             heap_views: descriptor::GeneralHeap::new(
                 &raw,
@@ -231,6 +186,61 @@ impl super::Device {
             shader_cache: Default::default(),
             counters: Default::default(),
             limits: limits.clone(),
+        })
+    }
+
+    /// Rune: the device's own indirect command signatures (`LazyCommandSignatures`), which
+    /// `Device::new` made with the device.
+    pub(super) fn create_command_signatures(
+        raw: &Direct3D12::ID3D12Device,
+        mesh: bool,
+    ) -> Result<super::CommandSignatures, crate::DeviceError> {
+        let draw_mesh = if mesh {
+            Some(Self::create_command_signature(
+                raw,
+                None,
+                size_of::<wgt::DispatchIndirectArgs>(),
+                &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
+                    Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH,
+                    ..Default::default()
+                }],
+                0,
+            )?)
+        } else {
+            None
+        };
+        Ok(super::CommandSignatures {
+            draw: Self::create_command_signature(
+                raw,
+                None,
+                size_of::<wgt::DrawIndirectArgs>(),
+                &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
+                    Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DRAW,
+                    ..Default::default()
+                }],
+                0,
+            )?,
+            draw_indexed: Self::create_command_signature(
+                raw,
+                None,
+                size_of::<wgt::DrawIndexedIndirectArgs>(),
+                &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
+                    Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED,
+                    ..Default::default()
+                }],
+                0,
+            )?,
+            draw_mesh,
+            dispatch: Self::create_command_signature(
+                raw,
+                None,
+                size_of::<wgt::DispatchIndirectArgs>(),
+                &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
+                    Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH,
+                    ..Default::default()
+                }],
+                0,
+            )?,
         })
     }
 
