@@ -1,0 +1,1 @@
+- Headless `--chrome`: borderless windows now clear `full_size_content` and `traffic_lights` in the resolved headless `Chrome`, so `--chrome` paints no traffic lights and checks no traffic-light overlaps over a borderless window, matching native macOS borderless windows and zeroed `Cx::titlebar_inset` / `Cx::chrome_insets`.

@@ -127,3 +127,46 @@ mod macos {
         assert_eq!(rt.state.seen_inset.get(), 0.0, "RTL standard titled titlebar_inset");
     }
 }
+
+#[test]
+fn headless_chrome_clears_traffic_lights_for_borderless_windows() {
+    use std::cell::Cell;
+
+    use crate::el::el;
+    use crate::runtime::Runtime;
+    use crate::{Chrome, ChromeInsets, Cx, El, Env, Titlebar};
+
+    #[derive(Default)]
+    struct State {
+        insets: Cell<ChromeInsets>,
+        inset: Cell<f32>,
+    }
+
+    fn view(state: &State, cx: &mut Cx<State>) -> El {
+        state.insets.set(cx.chrome_insets());
+        state.inset.set(cx.titlebar_inset());
+        el().key("root").w_full().h_full()
+    }
+
+    let cases = [
+        (Chrome::DEFAULT, None),
+        (Chrome::DEFAULT, Some(Titlebar::new(36.0))),
+        (Chrome { full_size_content: true, traffic_lights: Some((16.0, 17.0)), drag_regions: true }, Some(Titlebar::new(36.0))),
+        (Chrome { full_size_content: false, traffic_lights: Some((16.0, 17.0)), drag_regions: false }, None),
+    ];
+    for (chrome, titlebar) in cases {
+        for rtl in [false, true] {
+            let mut rt = Runtime::new(State::default(), view, (400.0, 200.0), Env::new(true, 2.0));
+            let resolved = rt.core_mut().headless_chrome_with(chrome, titlebar, true, rtl);
+            rt.frame(0.0);
+            assert_eq!(resolved, Chrome { full_size_content: false, traffic_lights: None, drag_regions: chrome.drag_regions });
+            assert!(resolved.traffic_light_rects().is_none(), "borderless window must have no traffic lights");
+            assert!(resolved.traffic_light_rects_in(400.0, rtl).is_none(), "borderless window must have no traffic lights (rtl={rtl})");
+            assert_eq!(resolved.titlebar_inset(), 0.0);
+            assert_eq!(rt.chrome_insets(), ChromeInsets::default());
+            assert_eq!(rt.state.inset.get(), 0.0);
+            assert_eq!(rt.state.insets.get(), ChromeInsets::default());
+            assert!(rt.tree.nodes.iter().all(|n| n.key.as_deref() != Some(crate::titlebar::BUTTONS_KEY)));
+        }
+    }
+}
