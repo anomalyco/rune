@@ -1,6 +1,7 @@
 //! Per-frame redraw loop, document band sizing, canvas surface resize, and frame requests.
 
-use std::{sync::Arc, time::Duration};
+use std::{cell::Cell, rc::Rc, sync::Arc, time::Duration};
+use wasm_bindgen::JsCast;
 use winit::{event_loop::{ActiveEventLoop, EventLoopProxy}, platform::web::WindowExtWebSys, window::Window};
 use crate::frame::clock::FrameClock;
 use crate::frame::host_step::{self, Acquire, FrameHost, Gate, PostStepCheck, ReacquireReason, RenderPrep, StepInfo};
@@ -15,6 +16,40 @@ const SKIRT: f32 = 256.0;
 
 /// The largest texture side a canvas may have before a GPU says: WebGPU's default limit.
 pub(super) const CPU_MAX_DIM: u32 = 8192;
+
+/// The frame a resize owes, drawn in a microtask (`web_math::step_resize_redraw`).
+pub(super) struct ResizeRedraw {
+    proxy: EventLoopProxy<Wake>,
+    state: Rc<Cell<web_math::ResizeRedraw>>,
+}
+
+impl ResizeRedraw {
+    pub(super) fn new(proxy: EventLoopProxy<Wake>) -> Self {
+        Self { proxy, state: Rc::default() }
+    }
+
+    fn step(&self, event: web_math::ResizeRedrawEvent) -> Option<web_math::ResizeRedrawEffect> {
+        let mut state = self.state.get();
+        let effect = web_math::step_resize_redraw(&mut state, event).into_iter().next();
+        self.state.set(state);
+        effect
+    }
+
+    pub(super) fn resized(&self) {
+        if self.step(web_math::ResizeRedrawEvent::Resized) != Some(web_math::ResizeRedrawEffect::QueueMicrotask) { return; }
+        let proxy = self.proxy.clone();
+        let callback = wasm_bindgen::closure::Closure::once_into_js(move || { proxy.send_event(Wake::ResizeRedraw).ok(); });
+        match web_sys::window() {
+            Some(window) => window.queue_microtask(callback.unchecked_ref()),
+            None => { self.step(web_math::ResizeRedrawEvent::Drawing); }
+        }
+    }
+
+    /// The microtask ran: whether the frame is still owed.
+    pub(super) fn fired(&self) -> bool {
+        self.step(web_math::ResizeRedrawEvent::Fired) == Some(web_math::ResizeRedrawEffect::Draw)
+    }
+}
 
 impl Running {
     fn max_dim(&self) -> u32 {
@@ -412,6 +447,7 @@ impl Browser {
     /// Draws a frame through the shared [`host_step::run`] frame sequencer: the runtime steps,
     /// then the CPU paints it, the GPU draws it, or both while handing over.
     pub(super) fn redraw(&mut self, event_loop: &ActiveEventLoop) {
+        self.resize_redraw.step(web_math::ResizeRedrawEvent::Drawing);
         if self.lost_device(event_loop) { return; }
         self.maybe_restore_webgl();
         self.hand_over_if_done();

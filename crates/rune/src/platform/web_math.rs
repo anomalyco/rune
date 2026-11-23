@@ -350,6 +350,43 @@ pub(crate) fn start_web_runtime<S: 'static>(
     (rt, shared, compositor, spec_fonts)
 }
 
+/// Whether a resize's frame waits in a queued microtask.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ResizeRedraw {
+    #[default]
+    Idle,
+    Queued,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ResizeRedrawEvent {
+    /// winit's ResizeObserver or scale callback resized the canvas, which clears it.
+    Resized,
+    /// The queued microtask ran.
+    Fired,
+    /// A frame is drawing.
+    Drawing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ResizeRedrawEffect {
+    QueueMicrotask,
+    Draw,
+}
+
+/// A resize's frame is drawn in a microtask after winit's callback returns (it holds the canvas
+/// borrowed while it runs), which is still before the browser paints the cleared canvas. A scale
+/// change and the resize after it share one microtask, and a frame drawn first makes it a no-op.
+pub(crate) fn step_resize_redraw(state: &mut ResizeRedraw, event: ResizeRedrawEvent) -> crate::machine::Effects<ResizeRedrawEffect> {
+    use crate::machine::Effects;
+    match (*state, event) {
+        (ResizeRedraw::Idle, ResizeRedrawEvent::Resized) => { *state = ResizeRedraw::Queued; Effects::one(ResizeRedrawEffect::QueueMicrotask) }
+        (ResizeRedraw::Queued, ResizeRedrawEvent::Fired) => { *state = ResizeRedraw::Idle; Effects::one(ResizeRedrawEffect::Draw) }
+        (_, ResizeRedrawEvent::Drawing) => { *state = ResizeRedraw::Idle; Effects::none() }
+        (ResizeRedraw::Queued, ResizeRedrawEvent::Resized) | (ResizeRedraw::Idle, ResizeRedrawEvent::Fired) => Effects::none(),
+    }
+}
+
 #[cfg(test)]
 #[path = "web_math_tests.rs"]
 mod tests;
