@@ -108,7 +108,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         document.body.append(a11y);
     }
     const h = { canvas, textarea, password, a11y, a11yNodes: new Map(), field: textarea, key: '', base: 0, value: '',
-        copyText: '', composing: false, composition: '', shift: false, modBits: 0, listeners: [], syncing: false, disposed: false,
+        selection: null, copyText: '', composing: false, composition: '', shift: false, modBits: 0, listeners: [], syncing: false, disposed: false,
         embedded, fitHeight, page, focused: false, presented: false, swapped: false, touchDown: false,
         lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band };
     const send = event => {
@@ -359,33 +359,53 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         listen(window, name, event => { if (name !== 'pointerdown' || !isSecondaryPress(event)) disarmMenu(h); }, { capture: true, passive: true });
     }
     queueMicrotask(() => {
-        if (!h.disposed && !embedded && !page && document.activeElement === document.body) canvas.focus({ preventScroll: true });
+        if (!h.disposed && !embedded && !page && document.activeElement === document.body) {
+            (h.key ? h.field : canvas).focus({ preventScroll: true });
+            if (h.key) reselect(h);
+        }
     });
     return h;
+}
+
+// Reapplies the synced non-secure selection after focus moves to the hidden textarea (browsers
+// collapse an unfocused textarea's selection to 0), without disturbing an active composition.
+function reselect(h) {
+    if (!h.selection || h.field !== h.textarea || h.composing) return;
+    const [start, end, direction] = h.selection;
+    if (h.textarea.selectionStart !== start || h.textarea.selectionEnd !== end || h.textarea.selectionDirection !== direction) {
+        const syncing = h.syncing;
+        h.syncing = true;
+        try { h.textarea.setSelectionRange(start, end, direction); }
+        finally { h.syncing = syncing; }
+    }
 }
 
 export function sync(h, key, text, base, anchor, focus, secure) {
     if (h.composing && key === h.key) return;
     h.composing = false;
     h.syncing = true;
-    const editing = document.activeElement === h.textarea || document.activeElement === h.password;
+    const active = document.activeElement;
+    const editing = active === h.textarea || active === h.password;
     h.key = key; h.base = base; h.value = text;
     h.password.value = '';
     h.field = secure ? h.password : h.textarea;
     if (!key) {
+        h.selection = null;
         h.textarea.value = '';
         if (editing) h.canvas.focus({ preventScroll: true });
         h.textarea.inputMode = h.password.inputMode = coarse() ? 'none' : 'text';
     } else {
         if (h.textarea.value !== text) h.textarea.value = text;
-        if (!secure) {
+        if (secure) {
+            h.selection = null;
+        } else {
             const start = Math.min(anchor, focus), end = Math.max(anchor, focus);
             const direction = anchor > focus ? 'backward' : 'forward';
-            if (h.textarea.selectionStart !== start || h.textarea.selectionEnd !== end || h.textarea.selectionDirection !== direction) {
-                h.textarea.setSelectionRange(start, end, direction);
-            }
+            h.selection = [start, end, direction];
         }
-        if (editing && document.activeElement !== h.field) activate(h);
+        if (editing && active !== h.field) activate(h);
+        else if (active === h.canvas) h.field.focus({ preventScroll: true });
+        reselect(h);
     }
     h.syncing = false;
 }
@@ -1085,6 +1105,7 @@ export function activate(h) {
     const field = h.key ? h.field : h.canvas;
     if (h.key) field.inputMode = 'text';
     if (document.activeElement !== field) field.focus({ preventScroll: true });
+    if (h.key) reselect(h);
 }
 
 export async function pastedImage(h, max) {
@@ -1100,7 +1121,7 @@ export function destroy(h) {
     clearTimeout(h.staticTimer);
     clearTimeout(h.a11yTimer);
     for (const remove of h.listeners) remove();
-    h.password.value = ''; h.textarea.value = ''; h.copyText = '';
+    h.password.value = ''; h.textarea.value = ''; h.copyText = ''; h.selection = null;
     h.a11yNodes.clear();
     h.scrollEls.clear();
     h.a11y.remove();
