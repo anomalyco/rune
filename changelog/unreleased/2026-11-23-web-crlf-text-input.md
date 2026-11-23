@@ -1,0 +1,1 @@
+- Web: `bridge.js` now tracks the hidden `<textarea>`'s LF-normalized mirror and translates edit and selection UTF-16 offsets between DOM indices and Rune's text, so editing text that contains CRLF or lone CR line breaks emits only the actual edit instead of rewriting untouched line breaks or skewing the selection.

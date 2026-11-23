@@ -28,6 +28,41 @@ function replacement(old, next, composition, caret) {
     return { start, end, text: next.slice(start, nextEnd) };
 }
 
+// HTML <textarea> normalizes CRLF and lone CR to LF in its API value. Track the normalized mirror
+// and the raw UTF-16 offsets of each CRLF so diffs leave untouched line breaks intact and offsets
+// translate cleanly between DOM coordinates and Rune's text.
+function normalizeTextarea(raw) {
+    if (!raw.includes('\r')) return { dom: raw, crlfs: null };
+    const crlfs = [];
+    const dom = raw.replace(/\r\n?/g, (match, offset) => {
+        if (match.length === 2) crlfs.push(offset);
+        return '\n';
+    });
+    return { dom, crlfs: crlfs.length ? crlfs : null };
+}
+
+function rawToDom(offset, crlfs) {
+    if (!crlfs) return offset;
+    let lo = 0, hi = crlfs.length;
+    while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (crlfs[mid] < offset) lo = mid + 1;
+        else hi = mid;
+    }
+    return offset - lo;
+}
+
+function domToRaw(offset, crlfs) {
+    if (!crlfs) return offset;
+    let lo = 0, hi = crlfs.length;
+    while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (crlfs[mid] - mid < offset) lo = mid + 1;
+        else hi = mid;
+    }
+    return offset + lo;
+}
+
 function browserShortcut(event) {
     const chord = (event.metaKey || event.ctrlKey) && !event.getModifierState?.('AltGraph');
     if (event.key === 'F5' || event.key === 'F12') return true;
@@ -108,7 +143,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         a11y.style.cssText = 'position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:1;color:transparent;forced-color-adjust:none;';
         document.body.append(a11y);
     }
-    const h = { canvas, textarea, password, a11y, a11yNodes: new Map(), field: textarea, key: '', base: 0, value: '',
+    const h = { canvas, textarea, password, a11y, a11yNodes: new Map(), field: textarea, key: '', base: 0, value: '', domValue: '', crlfs: null,
         selection: null, copyText: '', composing: false, composition: '', shift: false, modBits: 0, listeners: [], syncing: false, disposed: false,
         embedded, fitHeight, page, focused: false, presented: false, swapped: false, touchDown: false,
         lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band };
@@ -148,10 +183,21 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     listen(document, 'visibilitychange', () => { if (document.hidden) h.modBits = 0; });
     function changed(preedit = false) {
         const backward = textarea.selectionDirection === 'backward';
+        const edit = replacement(h.domValue, textarea.value, preedit ? h.composition : '', textarea.selectionEnd);
+        const start = domToRaw(edit.start, h.crlfs);
+        const end = domToRaw(edit.end, h.crlfs);
+        const mapNext = pos => {
+            const insertedEnd = edit.start + edit.text.length;
+            if (pos <= edit.start) return domToRaw(pos, h.crlfs);
+            if (pos <= insertedEnd) return start + (pos - edit.start);
+            return start + edit.text.length + (domToRaw(edit.end + (pos - insertedEnd), h.crlfs) - end);
+        };
+        const selStart = mapNext(textarea.selectionStart);
+        const selEnd = mapNext(textarea.selectionEnd);
         send({ kind: preedit ? 'preedit' : 'edit', key: h.key, base: h.base, expected: h.value,
-            ...replacement(h.value, textarea.value, preedit ? h.composition : '', textarea.selectionEnd),
-            anchor: backward ? textarea.selectionEnd : textarea.selectionStart,
-            focus: backward ? textarea.selectionStart : textarea.selectionEnd });
+            start, end, text: edit.text,
+            anchor: backward ? selEnd : selStart,
+            focus: backward ? selStart : selEnd });
     }
     const key = (name, event = {}) => send({ kind: 'key', key: name, code: event.code ?? '', shift: !!event.shiftKey,
         ctrl: !!event.ctrlKey, alt: !!event.altKey, meta: !!event.metaKey, repeat: !!event.repeat });
@@ -226,9 +272,11 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     listen(textarea, 'select', () => {
         if (h.syncing || h.composing || document.activeElement !== textarea) return;
         const backward = textarea.selectionDirection === 'backward';
+        const selStart = domToRaw(textarea.selectionStart, h.crlfs);
+        const selEnd = domToRaw(textarea.selectionEnd, h.crlfs);
         send({ kind: 'selection', key: h.key, base: h.base, expected: h.value,
-            anchor: backward ? textarea.selectionEnd : textarea.selectionStart,
-            focus: backward ? textarea.selectionStart : textarea.selectionEnd });
+            anchor: backward ? selEnd : selStart,
+            focus: backward ? selStart : selEnd });
     });
     // Synchronous copy support for read-only `El::selectable` selections (`Edit › Copy` / ⌘C).
     listen(document, 'copy', event => {
@@ -395,7 +443,8 @@ export function sync(h, key, text, base, anchor, focus, secure) {
     h.syncing = true;
     const active = document.activeElement;
     const editing = active === h.textarea || active === h.password;
-    h.key = key; h.base = base; h.value = text;
+    const { dom, crlfs } = key && !secure ? normalizeTextarea(text) : { dom: '', crlfs: null };
+    h.key = key; h.base = base; h.value = text; h.domValue = dom; h.crlfs = crlfs;
     h.password.value = '';
     h.field = secure ? h.password : h.textarea;
     if (!key) {
@@ -407,12 +456,13 @@ export function sync(h, key, text, base, anchor, focus, secure) {
         h.textarea.inputMode = h.password.inputMode = coarse() ? 'none' : 'text';
     } else {
         h.field.inert = false;
-        if (h.textarea.value !== text) h.textarea.value = text;
+        if (h.textarea.value !== dom) h.textarea.value = dom;
         if (secure) {
             h.selection = null;
         } else {
-            const start = Math.min(anchor, focus), end = Math.max(anchor, focus);
-            const direction = anchor > focus ? 'backward' : 'forward';
+            const domAnchor = rawToDom(anchor, crlfs), domFocus = rawToDom(focus, crlfs);
+            const start = Math.min(domAnchor, domFocus), end = Math.max(domAnchor, domFocus);
+            const direction = domAnchor > domFocus ? 'backward' : 'forward';
             h.selection = [start, end, direction];
         }
         if (editing && active !== h.field) activate(h);
@@ -1134,7 +1184,7 @@ export function destroy(h) {
     clearTimeout(h.staticTimer);
     clearTimeout(h.a11yTimer);
     for (const remove of h.listeners) remove();
-    h.password.value = ''; h.textarea.value = ''; h.copyText = ''; h.selection = null;
+    h.password.value = ''; h.textarea.value = ''; h.value = ''; h.domValue = ''; h.crlfs = null; h.copyText = ''; h.selection = null;
     h.a11yNodes.clear();
     h.scrollEls.clear();
     h.a11y.remove();
