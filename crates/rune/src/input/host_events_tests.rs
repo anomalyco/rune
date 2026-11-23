@@ -584,3 +584,119 @@ fn ime_sync_state_reset_preserves_mirror_diff_when_empty_field_blurs() {
     assert!(changed || reset, "mirror must sync back to empty key so DOM focus returns to canvas");
     assert!(mirror.key.is_empty());
 }
+
+#[test]
+fn ime_sync_skips_unchanged_cursor_area_and_resends_on_change_reset_or_reentry() {
+    #[derive(Default)]
+    struct S { edit: crate::TextEdit }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        crate::col().size(240.0, 120.0)
+            .child(el().key("btn").size(100.0, 40.0).focusable(true))
+            .child(crate::text_input(&s.edit, crate::TextStyle::new(14.0, 400.0))
+                .key("field").label("Field").size(200.0, 40.0).on_edit(|s: &mut S| &mut s.edit))
+    }
+    let mut rt = Runtime::new(S::default(), view, (240.0, 120.0), Env::default());
+    rt.frame(0.0);
+
+    let mut ime = ImeSync::default();
+    let step = ime_sync_step(rt.core_mut(), &mut ime, true);
+    assert_eq!(step, ImeStep { cancel: false, set_allowed: None, cursor_area: None });
+
+    // Focusing a text field enables IME and sends the cursor area once.
+    let (fx, fy) = rt.find("field").unwrap();
+    rt.pointer_down(fx, fy);
+    rt.pointer_up(fx, fy);
+    rt.frame(0.0);
+    let step = ime_sync_step(rt.core_mut(), &mut ime, true);
+    let area = step.cursor_area.expect("first sync after focus sends cursor area");
+    assert_eq!(step.set_allowed, Some(true));
+
+    // An unchanged frame (including after Wayland's empty Preedit reply) must not resend.
+    ime_core(rt.core_mut(), None, Ime::Preedit(String::new(), None, Vec::new()));
+    rt.frame(0.0);
+    let step = ime_sync_step(rt.core_mut(), &mut ime, true);
+    assert_eq!(step, ImeStep { cancel: false, set_allowed: None, cursor_area: None });
+
+    // Moving the caret sends the updated rectangle once, then rests again.
+    ime_core(rt.core_mut(), None, Ime::Commit("abc".into()));
+    rt.frame(0.0);
+    let step = ime_sync_step(rt.core_mut(), &mut ime, true);
+    let moved = step.cursor_area.expect("caret advance sends new cursor area");
+    assert_ne!(moved, area);
+    assert_eq!(step.set_allowed, None);
+    rt.frame(0.0);
+    assert_eq!(ime_sync_step(rt.core_mut(), &mut ime, true).cursor_area, None);
+
+    // An IME reset toggles allowance and resends the same rectangle.
+    rt.core_mut().edit.ime_reset = true;
+    let step = ime_sync_step(rt.core_mut(), &mut ime, true);
+    assert_eq!(step, ImeStep { cancel: true, set_allowed: Some(true), cursor_area: Some(moved) });
+    assert_eq!(ime_sync_step(rt.core_mut(), &mut ime, true).cursor_area, None);
+
+    // A platform Ime::Enabled/Disabled invalidates the sent area so a late text_input enter gets it.
+    ime.invalidate_area();
+    let step = ime_sync_step(rt.core_mut(), &mut ime, true);
+    assert_eq!(step, ImeStep { cancel: false, set_allowed: None, cursor_area: Some(moved) });
+
+    // Scale factor changes resend even when logical coordinates stay identical (Windows/X11 physical coords).
+    rt.core_mut().set_viewport((240.0, 120.0), 2.0);
+    rt.frame(0.0);
+    let step = ime_sync_step(rt.core_mut(), &mut ime, true);
+    assert_eq!(step.set_allowed, None);
+    let scaled_area = step.cursor_area.expect("scale factor change resends cursor area");
+    assert_eq!(ime_sync_step(rt.core_mut(), &mut ime, true).cursor_area, None);
+
+    // Unfocused window disables IME and does not send a cursor area; regaining focus resends.
+    let step = ime_sync_step(rt.core_mut(), &mut ime, false);
+    assert_eq!(step, ImeStep { cancel: false, set_allowed: Some(false), cursor_area: None });
+    assert_eq!(ime_sync_step(rt.core_mut(), &mut ime, false), ImeStep { cancel: false, set_allowed: None, cursor_area: None });
+    let step = ime_sync_step(rt.core_mut(), &mut ime, true);
+    assert_eq!(step, ImeStep { cancel: false, set_allowed: Some(true), cursor_area: Some(scaled_area) });
+
+    // Direct clear (focus loss / hide) forgets both allowance and area.
+    ime.clear();
+    let step = ime_sync_step(rt.core_mut(), &mut ime, true);
+    assert_eq!(step, ImeStep { cancel: false, set_allowed: Some(true), cursor_area: Some(scaled_area) });
+
+    // Blurring the field disables IME without sending an area; refocusing sends it again.
+    let (bx, by) = rt.find("btn").unwrap();
+    rt.pointer_down(bx, by);
+    rt.pointer_up(bx, by);
+    rt.frame(0.0);
+    let step = ime_sync_step(rt.core_mut(), &mut ime, true);
+    assert_eq!(step.set_allowed, Some(false));
+    assert_eq!(step.cursor_area, None);
+    rt.pointer_down(fx, fy);
+    rt.pointer_up(fx, fy);
+    rt.frame(0.0);
+    let step = ime_sync_step(rt.core_mut(), &mut ime, true);
+    assert_eq!(step.set_allowed, Some(true));
+    assert!(step.cursor_area.is_some());
+}
+
+#[test]
+fn ime_sync_skips_unchanged_area_for_app_ime_cursor() {
+    struct S { caret_x: f32 }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        el().size(200.0, 100.0)
+            .child(el().key("caret").absolute(s.caret_x, 20.0).size(2.0, 18.0).ime_cursor())
+    }
+    let mut rt = Runtime::new(S { caret_x: 16.0 }, view, (200.0, 100.0), Env::default());
+    rt.frame(0.0);
+
+    let mut ime = ImeSync::default();
+    let first = ime_sync_step(rt.core_mut(), &mut ime, true);
+    assert_eq!(first.set_allowed, Some(true));
+    assert_eq!(first.cursor_area, Some([16.0, 20.0, 2.0, 18.0]));
+
+    // Repeated frames with the same El::ime_cursor rect send nothing.
+    rt.frame(0.0);
+    assert_eq!(ime_sync_step(rt.core_mut(), &mut ime, true), ImeStep { cancel: false, set_allowed: None, cursor_area: None });
+
+    // Moving the app-drawn caret sends the new rect once.
+    rt.update(|s, tx| { s.caret_x = 40.0; tx.instant(); });
+    rt.frame(0.0);
+    assert_eq!(ime_sync_step(rt.core_mut(), &mut ime, true), ImeStep { cancel: false, set_allowed: None, cursor_area: Some([40.0, 20.0, 2.0, 18.0]) });
+    rt.frame(0.0);
+    assert_eq!(ime_sync_step(rt.core_mut(), &mut ime, true).cursor_area, None);
+}

@@ -3,7 +3,6 @@
 
 use std::sync::atomic::Ordering;
 
-use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Theme, Window, WindowId};
@@ -439,24 +438,13 @@ impl Host {
                     // `window_focus` wrote the composition into its field: the input method drops its copy.
                     crate::platform::ime::cancel(&l.window);
                     l.window.set_ime_allowed(false);
-                    self.ime_allowed = false;
+                    self.ime.clear();
                     // A minimized or occluded window skips redraw.
                     l.apply_cursor_core(rt, false);
                 } else if rt.stale() {
                     rt.edit.ime_reset = true;
                 } else {
-                    let ime_allowed = rt.ime_area.is_some() && !rt.has_secure_focus();
-                    if std::mem::take(&mut rt.edit.ime_reset) || ime_allowed != self.ime_allowed {
-                        l.window.set_ime_allowed(false);
-                        l.window.set_ime_allowed(ime_allowed);
-                        self.ime_allowed = ime_allowed;
-                    }
-                    if let Some(a) = rt.ime_area.map(|a| rt.to_window(a)) {
-                        l.window.set_ime_cursor_area(
-                            LogicalPosition::new(a[0] as f64, a[1] as f64),
-                            LogicalSize::new(a[2] as f64, a[3] as f64),
-                        );
-                    }
+                    host_events::sync_ime(&l.window, rt, &mut self.ime, true);
                     l.apply_cursor_core(rt, true);
                 }
                 if rt.stale() { l.request_redraw(); }
@@ -476,7 +464,7 @@ impl Host {
                 }
             }
             WindowEvent::Ime(ime) => {
-                host_events::ime(app.rt_mut(), &l.window, ime);
+                host_events::ime(app.rt_mut(), &l.window, &mut self.ime, ime);
                 l.request_redraw();
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {

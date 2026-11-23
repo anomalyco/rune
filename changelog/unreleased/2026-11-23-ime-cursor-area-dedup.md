@@ -1,0 +1,1 @@
+- Skip resending unchanged IME cursor areas on desktop windows and overlays (`ImeSync`), stopping the Wayland `zwp_text_input_v3` `set_cursor_rectangle` / `done` redraw loop while a `text_input`, `TextArea`, or `El::ime_cursor` rests in focus.
