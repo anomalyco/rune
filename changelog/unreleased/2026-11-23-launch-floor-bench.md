@@ -1,0 +1,1 @@
+- Launch: `rune::process_age()` says how long the process has run, from the system's record of its start, so an app can place `rune::marks` from the process's start, the time before `main` included. `examples/launch-floor` and `perf/launch.bench.ts` time Rune's own share of a launch (a bare window, and one shaped like a desktop app's first screen) with strobe, stage by stage.
