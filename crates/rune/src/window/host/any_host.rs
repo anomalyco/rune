@@ -21,6 +21,8 @@ impl AnyHost for Host {
         self.win.as_ref().is_some_and(|w| w.window.id() == id)
     }
     fn finished(&self) -> bool { self.life.finished() }
+    fn has_shown(&self) -> bool { self.shown }
+    fn take_startup_error(&mut self) -> Option<String> { self.startup_error.take() }
     fn keeps_loop(&self) -> bool { self.keeps_loop }
     fn closing_ends_app(&mut self) { self.ends_app = true; }
     fn key(&self) -> Option<&str> { Some(self.native_handle.key()) }

@@ -37,3 +37,18 @@ fn a_hidden_window_closes_alike_whether_or_not_it_kept_its_window() {
     assert!(!Life::Unopened.closes(false, false), "nothing to close");
     assert!(Life::Unopened.closes(false, true) && !Life::Unopened.closes(true, true));
 }
+
+#[test]
+fn first_window_creation_failure_finishes_a_normal_host_only() {
+    let mut normal = Life::Unopened;
+    assert!(normal.fail_create(false, false), "an ordinary app ends when its first window fails");
+    assert!(normal.finished());
+
+    let mut keep_running = Life::Unopened;
+    assert!(!keep_running.fail_create(true, false), "keep_running and windowless stay alive to retry");
+    assert_eq!(keep_running, Life::Unopened);
+
+    let mut reopened = Life::Hidden { at: 1 };
+    assert!(!reopened.fail_create(false, true), "a window that already showed stays alive when reopening fails");
+    assert_eq!(reopened, Life::Hidden { at: 1 });
+}

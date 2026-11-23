@@ -32,12 +32,12 @@ impl Host {
         self.app.drain_startup(&self.shortcuts, &mut self.menus);
         if self.launcher() {
             self.create(event_loop, None, false);
-            if self.open_at_start && self.options.visible { self.reveal_launcher(event_loop); }
+            if !self.life.finished() && self.open_at_start && self.options.visible { self.reveal_launcher(event_loop); }
         } else if self.open_at_start {
             self.open(event_loop, None);
         }
         self.started = true;
-        self.drain(event_loop, false);
+        if !self.life.finished() { self.drain(event_loop, false); }
     }
 
     /// A hidden window delivers queued input without drawing, such as the releases of the

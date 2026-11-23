@@ -495,14 +495,23 @@ impl Host {
         rt.images.invalidate();
     }
 
-    /// Creates the window, or records why it can't be and leaves the app windowless; a later
-    /// open tries again.
+    /// Creates the window. When the first window can't be created and the app didn't ask to stay
+    /// alive without one (`keep_running` / `windowless`), finishes this host with the error so
+    /// `run` / `try_run` ends with it; otherwise logs it and leaves the app windowless so a later
+    /// open can retry.
     pub(in crate::window) fn create(&mut self, event_loop: &ActiveEventLoop, token: Option<String>, focus: bool) {
-        let result = self.try_create(event_loop, token, focus);
-        if let Err(error) = &result {
-            eprintln!("rune: could not create the window {}: {error}", self.native_handle.key());
+        match self.try_create(event_loop, token, focus) {
+            Ok(()) => self.shared.set_window_error(None),
+            Err(error) => {
+                let key = self.native_handle.key();
+                self.shared.set_window_error(Some(error.clone()));
+                if self.life.fail_create(self.keep_running, self.shown) {
+                    self.startup_error = Some(format!("could not create the window {key}: {error}"));
+                } else {
+                    eprintln!("rune: could not create the window {key}: {error}");
+                }
+            }
         }
-        self.shared.set_window_error(result.err());
     }
 
     /// `cover` starts or stops covering the window. Covered, it stops pacing and rests, and is

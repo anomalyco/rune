@@ -885,6 +885,69 @@ fn a_drawable_never_takes_a_size_exceeding_the_texture_limit() {
 }
 
 #[test]
+fn a_failed_first_window_ends_the_loop_with_its_error_unless_another_window_stays_alive() {
+    struct MockHost {
+        keeps_loop: bool,
+        shown: bool,
+        finished: bool,
+        startup_error: Option<String>,
+    }
+    impl AnyHost for MockHost {
+        fn resumed(&mut self, _: &ActiveEventLoop) {}
+        fn user_event(&mut self, _: &ActiveEventLoop, _: WakeEvent) {}
+        fn owns(&self, _: WindowId) -> bool { false }
+        fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+        fn finished(&self) -> bool { self.finished }
+        fn has_shown(&self) -> bool { self.shown }
+        fn take_startup_error(&mut self) -> Option<String> { self.startup_error.take() }
+        fn keeps_loop(&self) -> bool { self.keeps_loop }
+    }
+    let host = |keeps_loop, shown, finished, err: Option<&str>| -> Option<Box<dyn AnyHost>> {
+        Some(Box::new(MockHost { keeps_loop, shown, finished, startup_error: err.map(str::to_owned) }))
+    };
+
+    // Single ordinary window fails at launch, even with an overlay beside it: ends with its error.
+    let (mut any_shown, mut startup_error) = (false, None);
+    let mut hosts = vec![
+        host(true, false, true, Some("could not create the window main: no GPU adapter")),
+        host(false, false, false, None),
+    ];
+    assert!(!collect_startup_errors(&mut hosts, &mut any_shown, &mut startup_error));
+    assert!(!any_shown);
+    assert_eq!(startup_error.as_deref(), Some("could not create the window main: no GPU adapter"));
+
+    // Multi-window: when both fail, the first window's error is returned.
+    let (mut any_shown, mut startup_error) = (false, None);
+    let mut hosts = vec![
+        host(true, false, true, Some("could not create the window a: no GPU adapter")),
+        host(true, false, true, Some("could not create the window b: no GPU adapter")),
+    ];
+    assert!(!collect_startup_errors(&mut hosts, &mut any_shown, &mut startup_error));
+    assert_eq!(startup_error.as_deref(), Some("could not create the window a: no GPU adapter"));
+
+    // Multi-window: when one window succeeds and another fails, the app stays running and later
+    // closing the open window exits cleanly without returning the earlier failure.
+    let (mut any_shown, mut startup_error) = (false, None);
+    let mut hosts = vec![
+        host(true, true, false, None),
+        host(true, false, true, Some("could not create the window b: no GPU adapter")),
+    ];
+    assert!(collect_startup_errors(&mut hosts, &mut any_shown, &mut startup_error));
+    assert!(any_shown);
+    assert_eq!(startup_error, None);
+    hosts[1] = None;
+    hosts[0] = host(true, true, true, None);
+    assert!(!collect_startup_errors(&mut hosts, &mut any_shown, &mut startup_error));
+    assert_eq!(startup_error, None);
+
+    // keep_running / windowless: a host that stays alive after creation fails keeps the loop running.
+    let (mut any_shown, mut startup_error) = (false, None);
+    let mut hosts = vec![host(true, false, false, None)];
+    assert!(collect_startup_errors(&mut hosts, &mut any_shown, &mut startup_error));
+    assert_eq!(startup_error, None);
+}
+
+#[test]
 fn no_direct_surface_configure_outside_helper() {
     fn walk(dir: &std::path::Path, bad: &mut Vec<String>) {
         for entry in std::fs::read_dir(dir).unwrap() {

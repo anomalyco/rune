@@ -228,7 +228,8 @@ pub fn run_windows_with<I: IntoIterator<Item: Into<crate::AnyWindowSpec>>>(optio
 }
 
 /// `run_windows_with`, returning an error instead of exiting when the event loop can't start
-/// (no display over ssh or in CI, no Wayland or X11 server) or fails.
+/// (no display over ssh or in CI, no Wayland or X11 server), fails, or no initial window can
+/// be created.
 pub fn try_run_windows_with<I: IntoIterator<Item: Into<crate::AnyWindowSpec>>>(options: crate::RunOptions, factory: impl FnOnce(&[crate::Display]) -> I + 'static) -> Result<(), String> {
     run_window_factory(options, window_args(None, Args::parse), erase(factory))
 }
@@ -240,7 +241,7 @@ pub fn run_windows_with_args<I: IntoIterator<Item: Into<crate::AnyWindowSpec>>>(
 }
 
 /// `run_windows_with_args`, returning an error instead of exiting when the event loop can't
-/// start or fails.
+/// start, fails, or no initial window can be created.
 pub fn try_run_windows_with_args<I: IntoIterator<Item: Into<crate::AnyWindowSpec>>>(options: crate::RunOptions, args: impl IntoIterator<Item = String>, factory: impl FnOnce(&[crate::Display]) -> I + 'static) -> Result<(), String> {
     run_window_factory(options, window_args(Some(args.into_iter().collect()), Args::parse), erase(factory))
 }

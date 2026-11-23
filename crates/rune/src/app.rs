@@ -376,8 +376,8 @@ impl<S: 'static> App<S> {
         self
     }
 
-    /// Closing the window keeps the app, its state and its event loop running until
-    /// `AppHandle::quit` or `Tx::quit`.
+    /// Closing the window, or a failed window creation, keeps the app and event loop running
+    /// until `AppHandle::quit` or `Tx::quit` (for tray apps and apps that retry on `window_error`).
     pub fn keep_running(mut self) -> Self {
         self.keep_running = true;
         self
@@ -611,14 +611,14 @@ impl<S: 'static> App<S> {
 
     /// Runs until the app quits. Agent-tooling arguments (`--snap`, `--tree`, ...) render
     /// headless instead: the window requests are ignored there, and updates apply each frame.
-    /// Prints the error to stderr and exits 1 when the app can't start, such as without a
-    /// display (wasm32 has no process exit, so there it panics); `try_run` returns that error.
+    /// Prints the error to stderr and exits 1 when the app can't start (no display, or the first
+    /// window can't be created; panics on wasm32); `try_run` returns it. See `keep_running`.
     pub fn run(self) {
         crate::tooling::started(self.try_run());
     }
 
-    /// `run`, returning an error instead of exiting when the event loop can't start (no
-    /// display over ssh or in CI, no Wayland or X11 server) or fails.
+    /// `run`, returning an error instead of exiting when the event loop can't start or fails, or
+    /// the first window can't be created (unless `keep_running` or `windowless` is set).
     #[cfg(target_arch = "wasm32")]
     pub fn try_run(mut self) -> Result<(), String> {
         if let Some(argv) = self.argv.take() {
@@ -769,8 +769,8 @@ impl<S: 'static> AppHandle<S> {
     #[inline]
     pub fn is_visible(&self) -> bool { self.shared.core.is_visible() }
 
-    /// Why the window couldn't be created the last time it was asked for (no display, no GPU
-    /// adapter or device), until a later creation succeeds. The app keeps running windowless.
+    /// Why the window couldn't be created last time (no display, no GPU adapter or device),
+    /// until a later creation succeeds. Needs `keep_running` or `windowless` to stay alive.
     #[inline]
     pub fn window_error(&self) -> Option<String> { self.shared.core.window_error() }
 
