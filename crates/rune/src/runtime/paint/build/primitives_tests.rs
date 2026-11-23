@@ -2,7 +2,7 @@ use crate::color::hex;
 use crate::el::Shadow;
 use crate::render::cpu_boot::{self, Scene, Target};
 use crate::render::{Gpu, Offscreen, Renderer};
-use crate::{Cx, El, Env, Runtime, col, el, row, rule};
+use crate::{Cx, El, Env, Pixels, Runtime, SurfaceFit, col, el, row, rule};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -113,4 +113,31 @@ fn zero_area_guard_keeps_children_rules_outlines_and_spread_shadows() {
     // Background + child fill + rule + spread shadow + outline = 5 instances (no red parent fill).
     assert_eq!(rt.instances.len(), 5, "unexpected instances: {:?}", rt.instances);
     assert!(rt.instances.iter().all(|i| i.rect[2] > 0.0 && i.rect[3] > 0.0));
+}
+
+#[test]
+fn zero_area_images_emit_nothing_and_paint_nothing() {
+    fn view(px: &Pixels, _: &mut Cx<Pixels>) -> El {
+        let bg = hex("#101118").unwrap();
+        col()
+            .w_full()
+            .h_full()
+            .fill(bg)
+            .child(el().absolute(0.0, 10.5).w(100.0).h(0.0).pixels(px))
+            .child(el().absolute(50.5, 0.0).w(0.0).h(100.0).pixels(px))
+            .child(el().absolute(20.5, 20.5).size(0.0, 0.0).pixels(px))
+            .child(el().absolute(0.0, 30.5).w(100.0).h(0.0).pixels_fit(px, SurfaceFit::Fit))
+            .child(el().absolute(0.0, 40.5).w(100.0).h(0.0).pixels_fit(px, SurfaceFit::Fill))
+    }
+
+    let px = Pixels::new();
+    px.set(4, 4, [74u8, 222, 150, 255].repeat(16));
+    let mut rt = Runtime::new(px, view, (120.0, 120.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    assert_eq!(rt.instances.len(), 1, "only the background should be emitted: {:?}", rt.instances);
+    assert!(rt.instances.iter().all(|i| i.rect[2] > 0.0 && i.rect[3] > 0.0));
+    let cpu_px = render_cpu(&rt, 120, 120);
+    assert_eq!(all_same_pixel(&cpu_px), None, "cpu_boot drew a non-background pixel");
+    let gpu_px = render_gpu(&mut rt, 120, 120);
+    assert_eq!(all_same_pixel(&gpu_px), None, "GPU drew a non-background pixel");
 }

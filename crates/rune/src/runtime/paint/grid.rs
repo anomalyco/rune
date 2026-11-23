@@ -78,11 +78,15 @@ impl state::PaintState {
             for f in &row.fills {
                 let fx0 = px(origin_pt[0] + f32::from(f.start) * cw);
                 let fx1 = px(origin_pt[0] + f32::from(f.end) * cw);
+                if !(fx1 > fx0 && y1 > y0) {
+                    continue;
+                }
                 let b = edge([fx0, y0, fx1, y1]);
+                let (bw, bh) = (b[2] - b[0], b[3] - b[1]);
                 let fill = premul(f.color, o, srgb);
-                if fill[3] > 0.0005 {
+                if bw > 0.0 && bh > 0.0 && fill[3] > 0.0005 {
                     instances.push(Instance {
-                        rect: [b[0], b[1], b[2] - b[0], b[3] - b[1]],
+                        rect: [b[0], b[1], bw, bh],
                         radii: [0.0; 4],
                         fill,
                         border: [0.0; 4],
