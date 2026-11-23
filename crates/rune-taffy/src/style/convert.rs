@@ -97,7 +97,14 @@ impl CompactStyle {
             needs_extra = true;
         }
 
-        let box_flags = pack_box_flags(s.flex_direction, s.flex_wrap, s.overflow.x, s.overflow.y);
+        let wrap_code = match encode_wrap(s.flex_wrap) {
+            Some(c) => c,
+            None => {
+                needs_extra = true;
+                0b11
+            }
+        };
+        let box_flags = pack_box_flags(s.flex_direction, wrap_code, s.overflow.x, s.overflow.y);
         let align_items_u8 = pack_align_items(s.align_items);
         let align_self_u8 = pack_align_self(s.align_self);
         let justify_content_u8 = pack_align_content(s.justify_content);
@@ -167,9 +174,12 @@ impl CompactStyle {
         if let Some(extra) = &self.extra {
             return &**extra == other;
         }
+        let Some(wrap_code) = encode_wrap(other.flex_wrap) else {
+            return false;
+        };
         self.display() == other.display
             && self.position() == other.position
-            && self.box_flags == pack_box_flags(other.flex_direction, other.flex_wrap, other.overflow.x, other.overflow.y)
+            && self.box_flags == pack_box_flags(other.flex_direction, wrap_code, other.overflow.x, other.overflow.y)
             && self.align_items_u8 == pack_align_items(other.align_items)
             && self.align_self_u8 == pack_align_self(other.align_self)
             && (self.justify_content_u8 & !JUSTIFY_WHOLE_ROWS) == pack_align_content(other.justify_content)

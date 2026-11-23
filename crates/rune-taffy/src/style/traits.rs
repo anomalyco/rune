@@ -167,7 +167,7 @@ impl FlexboxContainerStyle for CompactStyle {
 
     #[inline(always)]
     fn flex_wrap(&self) -> FlexWrap {
-        decode_wrap(self.box_flags >> 2)
+        decode_wrap(self.box_flags, self.extra.as_deref())
     }
 
     #[inline(always)]

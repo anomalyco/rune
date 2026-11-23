@@ -293,20 +293,25 @@ const fn decode_overflow(b: u8) -> Overflow {
 }
 
 #[inline(always)]
-const fn encode_wrap(w: FlexWrap) -> u8 {
+const fn encode_wrap(w: FlexWrap) -> Option<u8> {
     match w {
-        FlexWrap::NoWrap => 0,
-        FlexWrap::Wrap => 1,
-        FlexWrap::WrapReverse => 2,
+        FlexWrap::NoWrap => Some(0),
+        FlexWrap::Wrap => Some(1),
+        FlexWrap::WrapReverse => Some(2),
+        // Another crate in the graph may unify `taffy/flexbox_balance`, adding
+        // balanced wrap variants; spill them to `extra` via sentinel `0b11`.
+        #[allow(unreachable_patterns)]
+        _ => None,
     }
 }
 
 #[inline(always)]
-const fn decode_wrap(b: u8) -> FlexWrap {
-    match b & 0b11 {
+fn decode_wrap(box_flags: u8, extra: Option<&Style>) -> FlexWrap {
+    match (box_flags >> 2) & 0b11 {
         0 => FlexWrap::NoWrap,
         1 => FlexWrap::Wrap,
-        _ => FlexWrap::WrapReverse,
+        2 => FlexWrap::WrapReverse,
+        _ => extra.map_or(FlexWrap::Wrap, |s| s.flex_wrap),
     }
 }
 
@@ -331,8 +336,8 @@ const fn decode_dir(b: u8) -> FlexDirection {
 }
 
 #[inline(always)]
-const fn pack_box_flags(dir: FlexDirection, wrap: FlexWrap, ox: Overflow, oy: Overflow) -> u8 {
-    encode_dir(dir) | (encode_wrap(wrap) << 2) | (encode_overflow(ox) << 4) | (encode_overflow(oy) << 6)
+const fn pack_box_flags(dir: FlexDirection, wrap_code: u8, ox: Overflow, oy: Overflow) -> u8 {
+    encode_dir(dir) | ((wrap_code & 0b11) << 2) | (encode_overflow(ox) << 4) | (encode_overflow(oy) << 6)
 }
 
 /// Compact representation of `taffy::Style` (64 bytes inline — one cache line).
@@ -483,7 +488,7 @@ impl CompactStyle {
 
     #[inline(always)]
     pub fn flex_wrap(&self) -> FlexWrap {
-        decode_wrap(self.box_flags >> 2)
+        decode_wrap(self.box_flags, self.extra.as_deref())
     }
 
     #[inline(always)]
@@ -551,7 +556,7 @@ impl CompactStyle {
         self.whole_rows()
             && matches!(decode_display(self.mode_flags), Display::Flex)
             && matches!(decode_dir(self.box_flags), FlexDirection::Column)
-            && matches!(decode_wrap(self.box_flags >> 2), FlexWrap::NoWrap)
+            && ((self.box_flags >> 2) & 0b11) == 0
     }
 }
 

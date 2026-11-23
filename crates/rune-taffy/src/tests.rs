@@ -915,3 +915,31 @@ fn memo_reuse_and_retry_mutation_guard_match_baseline() {
     assert_eq!(comp.mounted_node_index(10), None);
     assert_eq!(base.mounted_node_index(10), None);
 }
+
+#[test]
+fn compact_style_flex_wrap_round_trips_and_gates_whole_rows_column() {
+    for wrap in [FlexWrap::NoWrap, FlexWrap::Wrap, FlexWrap::WrapReverse] {
+        let s = Style {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            flex_wrap: wrap,
+            ..Style::DEFAULT
+        };
+        let mut cs = CompactStyle::from_style(s.clone());
+        assert_eq!(cs.heap_bytes(), 0);
+        assert_eq!(cs.flex_wrap(), wrap);
+        assert_eq!(FlexboxContainerStyle::flex_wrap(&cs), wrap);
+        assert_eq!(cs.to_style(), s);
+        assert!(cs == s);
+
+        cs.set_whole_rows();
+        assert_eq!(cs.whole_rows_column(), wrap == FlexWrap::NoWrap);
+    }
+
+    let mut cs = CompactStyle::rune_base(FlexDirection::Row);
+    for wrap in [FlexWrap::Wrap, FlexWrap::WrapReverse, FlexWrap::NoWrap] {
+        cs.set_flex_wrap(wrap);
+        assert_eq!(cs.flex_wrap(), wrap);
+        assert_eq!(cs.heap_bytes(), 0);
+    }
+}
