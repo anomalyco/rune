@@ -63,6 +63,16 @@ impl TextSystem {
             return false;
         }
         measure::note_families(sans, mono);
+        self.apply_families(sans, mono);
+        true
+    }
+
+    /// Updates this text system's slots without touching measurement state, for
+    /// [`measure::with_text`]'s thread-local measurer.
+    pub(crate) fn apply_families(&mut self, sans: &str, mono: &str) {
+        if self.families.0 == sans && self.families.1 == mono {
+            return;
+        }
         self.load_installed(sans);
         self.load_installed(mono);
         self.families = (sans.to_owned(), mono.to_owned());
@@ -70,7 +80,6 @@ impl TextSystem {
         self.slot_system_mono = names_system_mono(sans) || names_system_mono(mono);
         self.load_slot_fallbacks();
         self.drop_shaped();
-        true
     }
 
     /// Drops every layout, run and measurement shaped so far, for new families or a new

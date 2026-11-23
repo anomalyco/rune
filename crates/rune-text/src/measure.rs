@@ -45,6 +45,13 @@ static FONTS: Mutex<Option<Fonts>> = Mutex::new(None);
 /// `FONTS` on the render hot path.
 static GLOBAL_EPOCH: AtomicU64 = AtomicU64::new(0);
 static SCOPES: AtomicU64 = AtomicU64::new(1);
+/// Process-wide counter for `Fonts::fonts_generation` so a [`with_families`] scope that loads
+/// different fonts never collides with the global state's or another scope's font generation.
+static FONTS_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+fn next_fonts_generation() -> u64 {
+    FONTS_GENERATION.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Layouts kept between evictions (each eviction keeps those used since the one before).
 const EVICT_EVERY: u32 = 512;
@@ -114,13 +121,26 @@ fn with_state<R>(f: impl FnOnce(&mut Option<Fonts>) -> R) -> R {
     }
 }
 
+fn ensure_fonts(slot: &mut Option<Fonts>) -> &mut Fonts {
+    slot.get_or_insert_with(|| Fonts {
+        generation: 1,
+        fonts_generation: next_fonts_generation(),
+        fonts: Vec::new(),
+        families: ("Inter".to_owned(), "Inter".to_owned()),
+        scope: 0,
+    })
+}
+
 fn apply_fonts(slot: &mut Option<Fonts>, fonts: &[&'static [u8]], families: (&str, &str)) {
     let same_fonts = slot.as_ref().is_some_and(|f| f.fonts == fonts);
     if same_fonts && slot.as_ref().is_some_and(|f| f.families.0 == families.0 && f.families.1 == families.1) {
         return;
     }
     let generation = slot.as_ref().map_or(1, |f| f.generation + 1);
-    let fonts_generation = match slot.as_ref() { Some(f) if same_fonts => f.fonts_generation, _ => generation };
+    let fonts_generation = match slot.as_ref() {
+        Some(f) if same_fonts => f.fonts_generation,
+        _ => next_fonts_generation(),
+    };
     let scope = slot.as_ref().map_or(0, |f| f.scope);
     let families = (families.0.to_owned(), families.1.to_owned());
     *slot = Some(Fonts { generation, fonts_generation, fonts: fonts.to_vec(), families, scope });
@@ -138,7 +158,7 @@ pub(crate) fn note_faces_arrived() {
     with_state(|slot| {
         if let Some(f) = slot.as_mut() {
             f.generation += 1;
-            f.fonts_generation = f.generation;
+            f.fonts_generation = next_fonts_generation();
         }
     });
 }
@@ -209,21 +229,18 @@ impl Drop for FamiliesGuard {
 /// Prefer a guard over a closure so a test can hold it for its whole body, and it restores on
 /// a panic.
 pub fn with_families(sans: &str, mono: &str) -> FamiliesGuard {
-    // Make sure there is state to copy: a thread that never measured has none yet.
-    if with_state(|f| f.is_none()) {
-        with_text(|_| {});
-    }
     let scope = SCOPES.fetch_add(1, Ordering::Relaxed);
-    let seeded = with_state(|f| {
-        f.as_ref().map(|f| Fonts {
+    let seeded = with_state(|slot| {
+        let f = ensure_fonts(slot);
+        Fonts {
             generation: f.generation + 1,
             fonts_generation: f.fonts_generation,
             fonts: f.fonts.clone(),
             families: (sans.to_owned(), mono.to_owned()),
             scope,
-        })
+        }
     });
-    let previous = OVERRIDE.with_borrow_mut(|o| std::mem::replace(o, seeded));
+    let previous = OVERRIDE.with_borrow_mut(|o| o.replace(seeded));
     FamiliesGuard { previous, _not_send: PhantomData }
 }
 
@@ -307,21 +324,19 @@ pub(super) fn with_text<R>(f: impl FnOnce(&mut TextSystem) -> R) -> R {
     MEASURER.with_borrow_mut(|m| {
         let current = font_epoch();
         if m.as_ref().is_none_or(|m| m.generation != current) {
-            let wanted = with_state(|f| f.as_ref().map(|f| (f.fonts_generation, f.fonts.clone(), f.families.clone())));
-            match (m.as_mut(), &wanted) {
+            let (epoch, fonts_generation, fonts, (sans, mono)) = with_state(|slot| {
+                let f = ensure_fonts(slot);
+                (epoch_of(f), f.fonts_generation, f.fonts.clone(), f.families.clone())
+            });
+            match m.as_mut() {
                 // Only the families changed: the loaded fonts stay.
-                (Some(m), Some((fonts_generation, _, (sans, mono)))) if m.fonts_generation == *fonts_generation => {
-                    m.text.set_families(sans, mono);
-                    m.generation = font_epoch();
+                Some(m) if m.fonts_generation == fonts_generation => {
+                    m.text.apply_families(&sans, &mono);
+                    m.generation = epoch;
                 }
                 _ => {
-                    let text = match &wanted {
-                        Some((_, fonts, (sans, mono))) => TextSystem::new(fonts, (sans, mono)),
-                        None => TextSystem::default(),
-                    };
-                    // Building a text system notes its fonts, so read the generation it settled on.
-                    let fonts_generation = with_state(|f| f.as_ref().map(|f| f.fonts_generation)).unwrap_or(0);
-                    *m = Some(Measurer { generation: font_epoch(), fonts_generation, text, calls: 0 });
+                    let text = TextSystem::new_local(&fonts, (&sans, &mono));
+                    *m = Some(Measurer { generation: epoch, fonts_generation, text, calls: 0 });
                 }
             }
         }
@@ -437,5 +452,95 @@ mod tests {
         assert!(saw_nested);
         assert_eq!(text.shaped, 0, "neither re-entrant nor overridden measure should shape on lent text");
         assert!(LENT.with_borrow(Option::is_none));
+    }
+
+    #[test]
+    fn with_text_does_not_tag_measurer_with_newer_fonts_generation() {
+        const PLEX: &[u8] = include_bytes!("../../rune/assets/IBMPlexMono-Regular.ttf");
+        let base = crate::fonts::default_fonts::DEFAULT_FONTS;
+        let with_plex = [base[0], base[1], base[2], PLEX];
+        let mono_style = TextStyle::new(14.0, 400.0).mono();
+        let expected_plex = TextSystem::new(&with_plex, ("Inter", "IBM Plex Mono"))
+            .layout_rich("iiiiiiiiii", &[], mono_style, 1.0, None)
+            .full_width();
+
+        // Race a thread building its measurer from default fonts against another thread registering
+        // a new font set. The measurer must never be tagged with the newer fonts_generation while
+        // still holding the older fonts.
+        for round in 0..24 {
+            note_fonts(&[], ("Inter", "Inter"));
+            let start = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let done = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let writer_start = start.clone();
+            let writer_done = done.clone();
+            let writer = std::thread::spawn(move || {
+                writer_start.wait();
+                // Spin-wait (Windows sleep has coarse ~1-15ms granularity) so the update lands
+                // right inside TextSystem construction across rounds.
+                let delay = std::time::Duration::from_micros((round % 16) * 40);
+                let t0 = std::time::Instant::now();
+                while t0.elapsed() < delay {
+                    std::hint::spin_loop();
+                }
+                note_fonts(&with_plex, ("Inter", "IBM Plex Mono"));
+                let fg = with_state(|f| f.as_ref().map(|f| f.fonts_generation)).unwrap_or(0);
+                let ep = font_epoch();
+                writer_done.wait();
+                (fg, ep)
+            });
+
+            let reader = std::thread::spawn(move || {
+                start.wait();
+                with_text(|_| {});
+                done.wait();
+                let snapshot = MEASURER.with_borrow_mut(|m| {
+                    let m = m.as_mut().expect("measurer set");
+                    (m.generation, m.fonts_generation, m.text.font_cx.collection.family_id("IBM Plex Mono").is_some())
+                });
+                let _guard = with_families("Inter", "IBM Plex Mono");
+                let override_has_plex = with_state(|f| f.as_ref().is_some_and(|f| f.fonts == with_plex));
+                let adv = advance("iiiiiiiiii", mono_style);
+                let after_has_plex = with_text(|t| t.font_cx.collection.family_id("IBM Plex Mono").is_some());
+                (snapshot, override_has_plex, adv, after_has_plex)
+            });
+
+            let (plex_fg, plex_epoch) = writer.join().unwrap();
+            let ((m_gen, m_fg, before_has_plex), override_has_plex, adv, after_has_plex) = reader.join().unwrap();
+            if !before_has_plex {
+                assert_ne!(
+                    m_fg, plex_fg,
+                    "round {round}: measurer loaded older fonts but was tagged with newer fonts_generation {plex_fg}",
+                );
+                assert_ne!(
+                    m_gen, plex_epoch,
+                    "round {round}: measurer loaded older fonts but was tagged with newer epoch {plex_epoch}",
+                );
+            }
+            if override_has_plex {
+                assert!(after_has_plex, "round {round}: measurer kept stale fonts after with_families");
+                assert_eq!(adv, expected_plex, "round {round}: advance measured stale fonts");
+            }
+        }
+        note_fonts(&[], ("Inter", "Inter"));
+    }
+
+    #[test]
+    fn scoped_fonts_generations_do_not_collide_across_guards() {
+        const PLEX: &[u8] = include_bytes!("../../rune/assets/IBMPlexMono-Regular.ttf");
+        let base = crate::fonts::default_fonts::DEFAULT_FONTS;
+        let with_plex = [base[0], base[1], base[2], PLEX];
+
+        {
+            let _g1 = with_families("Inter", "Inter");
+            note_fonts(&with_plex, ("Inter", "IBM Plex Mono"));
+            let has_plex = with_text(|t| t.font_cx.collection.family_id("IBM Plex Mono").is_some());
+            assert!(has_plex);
+        }
+        {
+            let _g2 = with_families("Inter", "Inter");
+            note_fonts(&[base[0]], ("Inter", "Inter"));
+            let has_plex = with_text(|t| t.font_cx.collection.family_id("IBM Plex Mono").is_some());
+            assert!(!has_plex, "second guard loaded different fonts and must not reuse the first guard's measurer");
+        }
     }
 }
