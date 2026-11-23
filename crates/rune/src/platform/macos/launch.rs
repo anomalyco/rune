@@ -128,6 +128,38 @@ pub(crate) fn begin(takes_activation: bool) -> Result<Beside, String> {
     Ok(Beside { session: Some(session) })
 }
 
+/// As the event loop starts, before `NSApplication.shared`. AppKit keeps each window's state
+/// for the next launch (Resume) and, when it finds any, holds every window of that launch off
+/// the screen until its restorer has run, after `applicationDidFinishLaunching:`: a first
+/// frame handed to the window server in `applicationWillFinishLaunching:` then reaches the
+/// screen 50,000 to 65,000 µs later. AppKit can't restore a Rune window (it has no restoration
+/// class), so the launch ignores that state, as `-ApplePersistenceIgnoreState YES` does. A
+/// registered default: the user's own setting and that argument still win.
+/// `RUNE_APPKIT_RESTORES` keeps AppKit's order.
+pub(crate) fn ignore_saved_windows() {
+    use objc2::msg_send;
+    use objc2::rc::{Retained, autoreleasepool};
+    use objc2::runtime::{AnyClass, AnyObject, Bool};
+    use objc2_foundation::{NSString, NSUserDefaults};
+    if std::env::var_os("RUNE_APPKIT_RESTORES").is_some() { return; }
+    autoreleasepool(|_| {
+        let (Some(number), Some(dictionary)) = (AnyClass::get(c"NSNumber"), AnyClass::get(c"NSDictionary")) else { return };
+        let key = NSString::from_str(IGNORE_SAVED_WINDOWS);
+        // SAFETY: Foundation class methods with an object and a key; `registerDefaults:` takes
+        // the dictionary they make.
+        unsafe {
+            let yes: Option<Retained<AnyObject>> = msg_send![number, numberWithBool: Bool::YES];
+            let Some(yes) = yes else { return };
+            let values: Option<Retained<AnyObject>> = msg_send![dictionary, dictionaryWithObject: &*yes, forKey: &*key];
+            let Some(values) = values else { return };
+            let _: () = msg_send![&*NSUserDefaults::standardUserDefaults(), registerDefaults: &*values];
+        }
+    });
+}
+
+/// The default AppKit reads before it looks for saved window state.
+pub(super) const IGNORE_SAVED_WINDOWS: &str = "ApplePersistenceIgnoreState";
+
 /// Each turn of the event loop. Once AppKit has launched the app, a role `begin` raised is
 /// looked at again a second later, when AppKit knows whether the app is the active one.
 pub(crate) fn settle() {
