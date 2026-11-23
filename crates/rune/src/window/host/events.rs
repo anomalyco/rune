@@ -452,6 +452,11 @@ impl Host {
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
                 let pressed = event.state == ElementState::Pressed;
                 if pressed { crate::marks::input_arrived(true); }
+                if pressed && let Some(text) = crate::platform::ime::take_direct_commit(&l.window) {
+                    host_events::ime(app.rt_mut(), &l.window, &mut self.ime, winit::event::Ime::Commit(text));
+                    l.request_redraw();
+                    return;
+                }
                 // A menu item handing Rune its key: it acts after, if no handler takes it. So does
                 // the window menu's Alt+Space, posted rather than run inside the key's message.
                 let logical = pressed.then(|| map_key_event(&event, self.mods)).flatten();

@@ -1,0 +1,1 @@
+- macOS IME: text an input method inserts directly without marked text (such as full-width CJK punctuation `，` `。` `？` from Pinyin) now arrives as `Ime::Commit` instead of falling through as the raw ASCII key, while plain typing, marked-text commits, and `Cmd`/`Ctrl`/`Option` shortcuts stay unchanged.
