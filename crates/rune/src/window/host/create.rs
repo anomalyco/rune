@@ -262,7 +262,9 @@ impl Host {
         let prime = if visible && panel.is_none() { native::Prime::launching() } else { native::Prime::Steady };
         #[cfg(target_os = "macos")]
         let native = Native {
-            pacing: crate::platform::display_link::DisplayLink::new(&window, self.frame_wake.clone()),
+            // A window whose first frame is drawn here, at once (`prime`), gets its display link
+            // after that frame. `RUNE_PACING_BEFORE_FRAME` keeps the old order.
+            pacing: if prime.presumes() && std::env::var_os("RUNE_PACING_BEFORE_FRAME").is_none() { None } else { crate::platform::display_link::DisplayLink::new(&window, self.frame_wake.clone()) },
             present,
             present_log: hook_log,
             shadow,
@@ -339,6 +341,7 @@ impl Host {
         {
             let presents = self.meter.totals().presents;
             self.ime_waits = true;
+            self.pacing_waits = self.win.as_ref().is_some_and(|w| w.native.pacing.is_none());
             let opened_with = self.app.rt().titlebar_set();
             self.redraw();
             // The view's first run may set the titlebar (`Cx::set_titlebar`, `Cx::titlebar_height`):
@@ -359,6 +362,7 @@ impl Host {
                 }
             }
             self.ime_waits = false;
+            self.pacing_waits = false;
             drew = self.meter.totals().presents > presents;
             if drew { crate::platform::macos::flush_while_launching(); }
             // The text input the first frame left out, now that the frame is on its way.
@@ -375,6 +379,10 @@ impl Host {
         {
             if crate::native_menu::bar_ready() && visible && let Some(w) = &self.win { crate::native_menu::list_window(&w.window); }
             self.menus.drain();
+            // The display link that waited for the first frame, or for a window not drawn here.
+            if let Some(w) = self.win.as_mut() && w.native.pacing.is_none() {
+                w.native.pacing = crate::platform::display_link::DisplayLink::new(&w.window, self.frame_wake.clone());
+            }
         }
         if !drew && (visible || launcher) && let Some(w) = &self.win {
             w.request_redraw();
