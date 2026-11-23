@@ -243,7 +243,7 @@ impl RuntimeCore {
             }
             merge(&mut tx, one);
         }
-        if app.playground().is_some_and(|p| p.polls()) {
+        if !polled && app.playground().is_some_and(|p| p.polls()) {
             let mut one = self.transaction(app);
             let clock = self.clock;
             if self.poll_playground(app, clock, &mut one) {
