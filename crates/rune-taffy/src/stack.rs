@@ -52,7 +52,7 @@ fn reserve_fiber_stack_guarantee() {
 /// directly rather than hitting `stacker`'s fallback path, which cannot query stack bounds and
 /// would allocate a segment on every uncached container layout.
 #[inline(always)]
-pub(crate) fn maybe_grow<R>(f: impl FnOnce() -> R) -> R {
+pub fn maybe_grow<R>(f: impl FnOnce() -> R) -> R {
     #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     {
         if stacker::remaining_stack().is_none_or(|rem| rem >= STACK_RED_ZONE) {

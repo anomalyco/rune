@@ -575,7 +575,9 @@ fn flatten_owned(
     taffy: &mut LayoutEngine, nodes: &mut Vec<Node>, scale: f32,
     memo_ctx: &mut memo_reuse::MemoFlattenCtx<'_>,
 ) -> (SlotId, bool) {
-    flatten_node(el, parent, path_buf, index, motion, in_row, parent_row, parent_sx, taffy, nodes, scale, memo_ctx)
+    rune_taffy::maybe_grow(|| {
+        flatten_node(el, parent, path_buf, index, motion, in_row, parent_row, parent_sx, taffy, nodes, scale, memo_ctx)
+    })
 }
 
 #[inline(never)]
@@ -586,7 +588,9 @@ fn flatten_ref(
     taffy: &mut LayoutEngine, nodes: &mut Vec<Node>, scale: f32,
     memo_ctx: &mut memo_reuse::MemoFlattenCtx<'_>,
 ) -> (SlotId, bool) {
-    flatten_node(el, parent, path_buf, index, motion, in_row, parent_row, parent_sx, taffy, nodes, scale, memo_ctx)
+    rune_taffy::maybe_grow(|| {
+        flatten_node(el, parent, path_buf, index, motion, in_row, parent_row, parent_sx, taffy, nodes, scale, memo_ctx)
+    })
 }
 
 #[inline(always)]

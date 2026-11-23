@@ -177,7 +177,7 @@ pub(super) fn file_path(url: &str) -> Result<std::path::PathBuf, ImageError> {
 #[doc(hidden)]
 pub fn font_file(url: &str) -> Result<Vec<u8>, ImageError> {
     let path = file_path(url)?;
-    std::fs::read(&path).map_err(|e| ImageError(format!("{}: {e}", path.display())))
+    super::read_regular_file(&path)
 }
 
 fn percent_decode(s: &str) -> Option<String> {
