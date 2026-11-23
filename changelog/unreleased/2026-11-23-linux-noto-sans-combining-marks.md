@@ -1,0 +1,1 @@
+- Linux: `SYMBOL_FAMILIES` now includes `"Noto Sans"` after `"DejaVu Sans"` (and `SYMBOL_FONT_FILES` matches its upright regular/variable files), so Latin combining marks missing from Inter (such as U+0322, U+0335 and U+0336) render instead of drawing as missing-glyph boxes when DejaVu Sans is not installed.
