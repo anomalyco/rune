@@ -59,7 +59,7 @@ impl RuntimeCore {
             st.spring = None;
             st.moved();
             if self.virtual_window_changed() {
-                self.commit(app, &Tx { commit: Commit::Instant, ..Tx::default() });
+                self.commit_virtual_scroll(app, &Tx { commit: Commit::Instant, ..Tx::default() });
             }
         }
         self.reveal_row_x(scope, key);
@@ -157,7 +157,7 @@ impl RuntimeCore {
         }
         let window = self.virtual_window_changed();
         if window {
-            self.commit(app, &Tx { commit: if instant { Commit::Instant } else { Commit::Animate }, ..Tx::default() });
+            self.commit_virtual_scroll(app, &Tx { commit: if instant { Commit::Instant } else { Commit::Animate }, ..Tx::default() });
             // The commit measured rows that were estimates: the next placement clamps to the end
             // they make.
             if let Some(i) = self.tree.nodes.iter().position(|n| n.id == id) {

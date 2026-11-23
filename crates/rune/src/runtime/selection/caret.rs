@@ -230,7 +230,7 @@ impl RuntimeCore {
             st.moved();
         }
         if scrolled && self.virtual_window_changed() {
-            self.commit(app, &Tx::default());
+            self.commit_virtual_scroll(app, &Tx::default());
             self.step_scroll(0.0);
         }
     }

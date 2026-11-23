@@ -84,10 +84,17 @@ impl RuntimeCore {
         }
         self.scroll.apply_jumps(&self.tree.nodes, self.clock, &jumps);
         // Landing mounts the virtual rows there, which measure and can move the end it clamped to.
-        for _ in 0..3 {
-            if !self.virtual_window_changed() { break; }
+        // Pass 0 shifts the window if needed; follow-up passes run only when the measured jump left
+        // part of the viewport uncovered, letting remaining overscan fill over subsequent frames.
+        for pass in 0..3 {
+            let need = if pass == 0 {
+                self.virtual_window_changed()
+            } else {
+                self.virtual_viewport_uncovered()
+            };
+            if !need { break; }
             // A jump is at once, and so are the rows it mounts: none fades in where it lands.
-            self.commit(app, &Tx { commit: Commit::Instant, ..Tx::default() });
+            self.commit_virtual_scroll(app, &Tx { commit: Commit::Instant, ..Tx::default() });
             self.step_scroll(0.0);
             for (j, key, at, mode) in &anchors {
                 if let Some((_, to)) = self.anchor_offset(key, *at, *mode) { jumps[*j].2 = to; }

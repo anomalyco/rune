@@ -25,6 +25,7 @@ impl Reuse {
     pub(in crate::runtime) fn built(&mut self, scale: f32, srgb: bool) {
         self.scale = scale;
         self.srgb = Some(srgb);
+        self.read_moved = false;
     }
 }
 

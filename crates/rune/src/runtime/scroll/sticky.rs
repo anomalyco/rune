@@ -348,7 +348,7 @@ impl RuntimeCore {
                 moved = true;
             }
             if !moved || !self.virtual_window_changed() { break; }
-            self.commit(app, &Tx::default());
+            self.commit_virtual_scroll(app, &Tx::default());
         }
         self.scroll.requests.restore_keeps(keeps);
     }
