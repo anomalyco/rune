@@ -98,6 +98,8 @@ pub struct SurfaceRenderer {
     /// Timestamp resolves a completion callback couldn't submit yet (`completion::Parked`).
     #[cfg(not(target_arch = "wasm32"))]
     resolves: Arc<completion::Parked<completion::Resolve>>,
+    #[cfg(target_os = "linux")]
+    dmabuf: Option<linux::Importer>,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     device: wgpu::Device,
     timing_pool: Option<Arc<TimingPool>>,
@@ -124,8 +126,6 @@ pub struct SurfaceRenderer {
     importer: Option<macos::Importer>,
     #[cfg(target_os = "windows")]
     shared: Option<windows::Importer>,
-    #[cfg(target_os = "linux")]
-    dmabuf: Option<linux::Importer>,
 }
 impl Drop for SurfaceRenderer {
     fn drop(&mut self) {
@@ -135,6 +135,10 @@ impl Drop for SurfaceRenderer {
             // another timestamp resolve to a renderer that is going away.
             self.timing_queue.take();
             self.completion.stop();
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(dmabuf) = &mut self.dmabuf {
+            dmabuf.stop();
         }
     }
 }
@@ -224,6 +228,8 @@ impl SurfaceRenderer {
             timing_queue: std::sync::OnceLock::new(),
             completion,
             resolves,
+            #[cfg(target_os = "linux")]
+            dmabuf: None,
             device: device.clone(),
             timing_pool,
             queries: None,
@@ -245,8 +251,6 @@ impl SurfaceRenderer {
             importer: None,
             #[cfg(target_os = "windows")]
             shared: None,
-            #[cfg(target_os = "linux")]
-            dmabuf: None,
         }
     }
 

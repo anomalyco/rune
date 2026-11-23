@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+use std::ops::ControlFlow;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -245,6 +247,178 @@ fn run_loop(
                 }
                 Err(_) => return,
             }
+        }
+    }
+}
+
+/// Callback invoked once a queued GPU wait finishes (or fails).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) type OnRead = Box<dyn FnOnce(Result<(), String>) + Send>;
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+enum QueueState<T> {
+    /// Worker is running and accepts queued items.
+    Running(VecDeque<T>),
+    /// Shutdown requested; no more items are accepted and the worker is finishing up.
+    Stopping,
+    /// Worker has released its closure, device, and queued items and is exiting.
+    Stopped,
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+struct ReadShared<T> {
+    state: Mutex<QueueState<T>>,
+    condvar: Condvar,
+}
+
+/// Marks a [`ReadWorker`] `Stopped` on every thread exit path (normal stop, lost device, or
+/// panic unwind) after its closure, device, and any queued items have been dropped.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+struct ReadExitGuard<T>(Arc<ReadShared<T>>);
+
+impl<T> Drop for ReadExitGuard<T> {
+    fn drop(&mut self) {
+        let pending = {
+            let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+            match std::mem::replace(&mut *state, QueueState::Stopping) {
+                QueueState::Running(queue) => queue,
+                QueueState::Stopping | QueueState::Stopped => VecDeque::new(),
+            }
+        };
+        // Drop any unpolled items outside the lock; catch panics so unwinding from a worker
+        // panic cannot double-panic and abort the process.
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(pending))).ok();
+        let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+        *state = QueueState::Stopped;
+        self.0.condvar.notify_all();
+    }
+}
+
+/// Background thread that processes queued GPU waits in FIFO order and stops and joins cleanly
+/// before its `wgpu::Device` is torn down.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) struct ReadWorker<T: Send + 'static> {
+    shared: Arc<ReadShared<T>>,
+    thread: Option<JoinHandle<()>>,
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+impl<T: Send + 'static> ReadWorker<T> {
+    pub(crate) fn spawn(
+        name: &str,
+        run: impl FnMut(T) -> ControlFlow<()> + Send + 'static,
+    ) -> std::io::Result<Self> {
+        let shared = Arc::new(ReadShared {
+            state: Mutex::new(QueueState::Running(VecDeque::new())),
+            condvar: Condvar::new(),
+        });
+        let worker_shared = shared.clone();
+        let thread = std::thread::Builder::new()
+            .name(name.into())
+            .spawn(move || {
+                // Declared first so `run` (and any `wgpu::Device` it owns) drops before
+                // `ReadExitGuard::drop` transitions to `Stopped` and notifies waiters, on both
+                // normal exit and panic unwind.
+                let _exit = ReadExitGuard(worker_shared.clone());
+                let mut run = run;
+                run_queue(&worker_shared, &mut run);
+                drop(run);
+            })?;
+        Ok(Self { shared, thread: Some(thread) })
+    }
+
+    pub(crate) fn send(&self, item: T) -> Result<(), T> {
+        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        match &mut *state {
+            QueueState::Running(queue) => {
+                queue.push_back(item);
+                self.shared.condvar.notify_one();
+                Ok(())
+            }
+            QueueState::Stopping | QueueState::Stopped => Err(item),
+        }
+    }
+
+    /// Waits until the worker has transitioned to `Stopped` (after releasing its closure and
+    /// device).
+    #[cfg(test)]
+    pub(crate) fn wait_stopped(&self) {
+        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        while !matches!(*state, QueueState::Stopped) {
+            state = self.shared.condvar.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
+    /// Signals the worker to stop, discards unpolled items, and joins the thread so no wait can
+    /// race device teardown. Idempotent, unwind-safe, and safe if dropped from a callback running
+    /// on the worker thread itself (in which case it signals stop without self-joining).
+    pub(crate) fn stop(&mut self) {
+        let pending = {
+            let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = match *state {
+                QueueState::Stopped => QueueState::Stopped,
+                QueueState::Running(_) | QueueState::Stopping => std::mem::replace(&mut *state, QueueState::Stopping),
+            };
+            self.shared.condvar.notify_all();
+            prev
+        };
+        if let Some(handle) = self.thread.take()
+            && handle.thread().id() != std::thread::current().id()
+        {
+            handle.join().ok();
+        }
+        // Drop any unpolled items outside the lock and after joining; catch panics so caller
+        // unwinding cannot double-panic.
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(pending))).ok();
+    }
+}
+
+impl<T: Send + 'static> Drop for ReadWorker<T> {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+impl ReadWorker<(wgpu::SubmissionIndex, OnRead)> {
+    /// Spawns a worker named `name` that waits on `device` for each queued submission (up to
+    /// `timeout`) and calls its `OnRead` callback, exiting if the device is lost.
+    pub(crate) fn spawn_device(
+        name: &str,
+        device: wgpu::Device,
+        timeout: Duration,
+    ) -> std::io::Result<Self> {
+        Self::spawn(name, move |(submission, f): (wgpu::SubmissionIndex, OnRead)| {
+            let done = rune_gpu::health::poll(
+                &device,
+                wgpu::PollType::Wait { submission_index: Some(submission), timeout: Some(timeout) },
+            );
+            let lost = matches!(done, Err(rune_gpu::health::PollFailed::Lost));
+            f(done.map(|_| ()).map_err(|e| format!("wait for the dmabuf copy: {e}")));
+            if lost { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }
+        })
+    }
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn run_queue<T>(shared: &ReadShared<T>, run: &mut impl FnMut(T) -> ControlFlow<()>) {
+    loop {
+        let item = {
+            let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+            loop {
+                match &mut *state {
+                    QueueState::Stopping | QueueState::Stopped => return,
+                    QueueState::Running(queue) => {
+                        if let Some(item) = queue.pop_front() {
+                            break item;
+                        }
+                        state = shared.condvar.wait(state).unwrap_or_else(|e| e.into_inner());
+                    }
+                }
+            }
+        };
+        if run(item).is_break() {
+            return;
         }
     }
 }
