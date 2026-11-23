@@ -301,8 +301,9 @@ impl Host {
         match event {
             WindowEvent::Moved(_) => {
                 // winit queues `ScaleFactorChanged` in `kCFRunLoopDefaultMode`, which waits
-                // until a window drag ends; resize the surface now when a drag crosses displays
-                // so top-left gravity never shows the old scale's drawable at half or double size.
+                // until a window drag ends; resize the surface and draw synchronously inside the
+                // current Core Animation transaction when a drag crosses displays so the new
+                // `contentsScale` and new-scale drawable land together with no flash.
                 if (scale - app.rt().window_scale()).abs() > f32::EPSILON {
                     let size = l.window.inner_size();
                     if size.width > 0 && size.height > 0 {
@@ -312,6 +313,16 @@ impl Host {
                         let rt = app.rt_mut();
                         rt.set_viewport((size.width as f32 / scale, size.height as f32 / scale), scale);
                         sync_chrome_core(rt, l, chrome, titlebar);
+                        #[cfg(target_os = "macos")]
+                        {
+                            self.draw(true);
+                            if let Some(l) = self.win.as_mut() && !crate::platform::macos::in_live_resize(&l.window) {
+                                l.set_live_resize(false);
+                            }
+                            self.shell(event_loop);
+                            return;
+                        }
+                        #[cfg(not(target_os = "macos"))]
                         l.request_redraw();
                     }
                 }
@@ -386,6 +397,16 @@ impl Host {
                     if resized || viewport != rt.window_viewport() || scale != rt.window_scale() {
                         rt.set_viewport(viewport, scale);
                         sync_chrome_core(rt, l, chrome, titlebar);
+                        #[cfg(target_os = "macos")]
+                        {
+                            self.draw(true);
+                            if let Some(l) = self.win.as_mut() && !crate::platform::macos::in_live_resize(&l.window) {
+                                l.set_live_resize(false);
+                            }
+                            self.shell(event_loop);
+                            return;
+                        }
+                        #[cfg(not(target_os = "macos"))]
                         l.request_redraw();
                     }
                 }
