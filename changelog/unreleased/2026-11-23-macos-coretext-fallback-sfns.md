@@ -1,0 +1,1 @@
+- macOS: `fallback_family_files` now skips the system UI font (`.AppleSystemUIFont`) and duplicate CoreText fallback family names before scanning font descriptors via `public_family`, and caches hidden-family descriptor lookups in a bounded cache, avoiding ~55 ms `SFNS.ttf` descriptor scans per system-font character.
