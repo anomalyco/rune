@@ -1,0 +1,1 @@
+- Cursed Settings and Showreel examples (`examples/cursed-settings`, `examples/showreel`): their compositors now track `Frame::device_key()` alongside target format (and size for `cursed-settings`), dropping and rebuilding their GPU resources and re-registering `Rgba16Float` when Rune replaces the GPU device.
