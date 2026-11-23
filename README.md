@@ -42,7 +42,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
 
 ## Use it with your agent
 
-Give your coding agent this repo. Have it start from [`examples/hello`](examples/hello) and [`crates/rune/README.md`](crates/rune/README.md), then check its own work headlessly by rendering PNGs and inspecting the element tree.
+Give your coding agent this repo. Have it start from [`examples/hello`](examples/hello), the [examples index](examples/README.md), and [`crates/rune/README.md`](crates/rune/README.md), then check its own work headlessly by rendering PNGs and inspecting the element tree.
 
 > Build me a <thing> with Rune (github.com/anomalyco/rune). Start from examples/hello and check your work headlessly.
 

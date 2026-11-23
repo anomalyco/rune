@@ -30,6 +30,19 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   Debug builds warn once per call site when a scroll viewport inside a `.grow()` container
   resolves to 0 pt while its content is taller; `.virtualize` without `.growth` panics with the
   element's path.
+- **Layout and CSS** (`crates/rune-taffy/src/style/mod.rs`, `crates/rune/src/el/layout.rs`, `crates/rune/src/runtime/commit/flatten.rs`):
+  - **Base defaults vs CSS `div`**: `CompactStyle::rune_base` starts every element as `display: flex`, `position: relative`, `flex-shrink: 0`, and `box-sizing: border-box` (`row()`, `el()`, and `text()` use `flex-direction: row`; `col()` uses `flex-direction: column`). A CSS `div` defaults to `display: block`, `position: static`, `flex-shrink: 1`, and `box-sizing: content-box`. Because `position: relative` is the default, every element is the containing block for its `.absolute(..)` and `.pin(..)` children. Borders (`.border`, `.border_sides`, `.border_gradient`) paint inside the box over the fill and take zero layout space by default unless `.border_layout()` is added.
+  - **Builders and commit-time style rewrites**:
+    - `.grow(g)` sets `flex: g 1 0` (`flex-grow: g`, `flex-shrink: 1`, `flex-basis: 0`).
+    - `.shrink()` and the single-line truncation builders (`.truncate()`, `.truncate_middle()`, `.truncate_head()`, `.truncate_fade()`, `.truncate_fade_width(..)`) set `flex-shrink: 1` and `min-width: 0`, **not** `min-height: 0` (nested vertical flex columns still need explicit `.min_h(0.0)`).
+    - `.scroll(..)`, `.scroll_x()`, and `.scroll_xy()` set Taffy `overflow` (`hidden`/`scroll`, `scroll`/`hidden`, `scroll`/`scroll`). At commit time (`runtime/commit/flatten.rs`, `runtime/commit.rs::unwrapped_width`), a `scroll_x` viewport—and a single-child `scroll_xy` viewport—forces `flex-direction: row`. Each direct child of `scroll_x`/`scroll_xy` gets `flex-shrink: 0`; if its width is `auto` or `100%` (`.w_full()`), width is rewritten to `max-content` with `min-width: 100%` when `min-width` is `auto` (on both `auto` and `w_full` for single-child viewports, and on `w_full` for multi-child viewports). Under `scroll_xy`, children with no explicit `align_self` also receive `align-self: flex-start`.
+    - `.border_layout()` copies the border widths into Taffy's `border` rect at commit time (`runtime/commit/device.rs::border`), snapped to whole device pixels so layout matches rendered hairlines across scales.
+    - `.equal_columns(n)` switches the container to CSS Grid (`display: grid; grid-template-columns: repeat(n, 1fr)`) and `.grid_cell(col)` places a child in 1-based column `col + 1` of row 1 (`span 1`).
+    - `.absolute(left, top)`, `.pin(l, t, r, b)`, and `.anchored*`/`.above` set `position: absolute` against the parent's padding box; anchored overlays are then positioned by the runtime relative to their target anchor and clamped to the window.
+    - `.sticky_top`, `.sticky_top_showing`, `.sticky_bottom`, and `.sticky_left` run outside Taffy in the paint and hit-test pass (`runtime/scroll/sticky.rs`); laid-out rects stay at their unscrolled positions.
+    - `.aspect_ratio(r)` passes CSS `aspect-ratio` directly to Taffy; `.aspect_fit(r)` runs a two-pass commit rewrite (`fit_room` → `fitted` in `commit/flatten.rs`) to measure the available room first and then lay out the largest box at ratio `r` inside it.
+  - **Static `--html` export differences** (`crates/rune/src/runtime/web/export/page.rs`, `css.rs`, `export.rs`): `BASE_CSS` sets `min-width: 0` globally (instead of `auto`) and leaves `flex-shrink` at CSS's default `1` (so `css::layout` emits `flex-shrink: 0` per element and omits `min-width: auto`). The export omits `calc()` and `fr` values (including `equal_columns` grid template tracks and `grid_cell` placement, even when `display: grid` is emitted), text inputs and secure/redacted nodes, and disallowed, exiting, or invisible (`opacity <= 0.01`) subtrees.
+  - **Taffy features with no `El` builder**: `calc()` lengths, arbitrary CSS Grid tracks/rows/areas/auto-flow/placement beyond `equal_columns` and first-row `grid_cell`, `display: block` / `display: none` / `display: flow-root` (omit elements from the view tree instead of `display: none`), arbitrary `flex-basis` (only `auto` or `0` via `.grow(..)`), `order`, `box-sizing: content-box`, and reverse flex directions or wrap (`row-reverse`, `column-reverse`, `wrap-reverse`).
 - **Animation** (`rune-motion`, `runtime.rs`): analytic springs (`Spring::new(duration, bounce)`),
   tweens, decay and transitions driven through `rune_motion::Scene` and `AnimationStore`. Retargets
   keep exact position and velocity.
@@ -3033,11 +3046,8 @@ one-second target.
 
 ## Differences from PLAN.md
 
-- wgpu (Metal backend) on macOS instead of the own thin HAL over raw Metal.
-- winit for the window instead of an own shell (edge overlays move winit's view into a
-  non-activating panel; no glass underlays).
-- Animation is evaluated on the main thread at frame time, not on a render thread. View functions still
-  never run for animation: views produce targets, and tracks animate between them.
-- One pipeline with three fragment paths instead of separate quad and text pipelines (draw order is free).
-- No AccessKit or inspector socket (the CLI flags stand in). Scrolling is
-  vertical only.
+- On macOS, Rune's native Metal backend (`metal-backend`, enabled by default and plugged into wgpu's `custom` backend) is the default; wgpu (Metal/D3D12/Vulkan/WebGPU) runs on other platforms or when opted out (`App::gpu_backend(GpuBackend::Wgpu)` or `RUNE_GPU_BACKEND=wgpu`).
+- winit hosts native windows instead of a custom shell everywhere (edge overlays move winit's view into non-activating panels on macOS, layer-shell on Wayland, or tool windows on Windows). macOS system material underlays (`SystemMaterial::Glass` / `Popover`) are implemented via `NSGlassEffectView` / `NSVisualEffectView`, synchronized with Core Animation transactions.
+- Animation is evaluated on the UI/main thread at frame time, not on a separate render thread (see [`ARCHITECTURE.md`](../../ARCHITECTURE.md)). View functions still never run for animation: views produce targets, and tracks animate between them.
+- One instanced uber-quad pipeline (with `Classic`, `Windfoil`, and `Lcd` shader variants, plus companion passes for layer blur, backdrop blur, and native video surfaces) replaces separate quad and text pipelines.
+- AccessKit accessibility (UI Automation on Windows, NSAccessibility on macOS, AT-SPI on Linux, plus a DOM mirror on web) and vertical, horizontal, and two-axis scrolling (`scroll`, `scroll_x`, `scroll_xy`) are implemented. There is still no live inspector socket; the headless CLI flags (`--tree`, `--snap`, `--trace`, `--script`) stand in.

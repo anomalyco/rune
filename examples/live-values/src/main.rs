@@ -1,3 +1,6 @@
+//! Live-bound opacity and cursor offset updated at 60–120 Hz from background threads without
+//! rebuilding the view (`--bench` compares live bindings against `--rebuild`).
+
 #![forbid(unsafe_code)]
 
 use rune::{AppSpec, Color, Cx, El, Env, Live, Runtime, Spring, Tx, col, el, row};

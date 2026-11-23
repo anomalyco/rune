@@ -13,7 +13,7 @@ A Rust GPU UI framework (wgpu, winit) for apps that feel like SwiftUI on iOS at 
 - `vendor/sctk-adwaita`: sctk-adwaita as published plus `vendor/sctk-adwaita.patch` (the client-side frame's one-point border follows the window's rounded bottom corners, and `content_corner_radius` says what radius the content leaves them), through `[patch.crates-io]`. When it is bumped, run `scripts/vendor-sctk-adwaita.sh <new version>` (Git Bash on Windows) and update the `[patch.crates-io]` rev in apps that build Rune.
 - `vendor/tiny-skia-path`: tiny-skia-path as published plus `vendor/tiny-skia-path.patch` (Skia's own conic splitting and stroker steps, so icons stroke as Chromium's Skia strokes them), a plain path dependency of `crates/rune-text`, not a patch (resvg keeps the published one). When it is bumped, run `scripts/vendor-tiny-skia-path.sh <new version>` (Git Bash on Windows).
 - `vendor/wgpu-hal`: wgpu-hal as published plus `vendor/wgpu-hal.patch` (`dx12::Instance::expose_adapter`, FXC loaded on first compile, Windows system DLLs loaded with `LOAD_LIBRARY_SEARCH_SYSTEM32`, and a Metal device lost when a command buffer fails, with the fence of gfx-rs/wgpu#10570 and #10875), through `[patch.crates-io]`. When wgpu is bumped, run `scripts/vendor-wgpu-hal.sh <new wgpu-hal version>` (Git Bash on Windows) and update the `[patch.crates-io]` rev in apps that build Rune.
-- `PLAN.md`: direction and milestones. `research/`: notes behind decisions. `demo/`: images the docs show.
+- `ARCHITECTURE.md`: how Rune works today (crate layering, single-thread frame flow, state ownership, hosts, renderer). `PLAN.md`: direction and milestones. `research/`: notes behind decisions. `demo/`: images the docs show.
 
 ## Commands
 
