@@ -458,7 +458,8 @@ impl RuntimeCore {
                 true
             }
             Action::Drag(path, mut d, button) | Action::DragRepeat(path, mut d, button) => {
-                let Some(f) = self.node(&path).and_then(|n| n.handlers.on_drag.clone()) else { return false };
+                let gone = (d.phase == Phase::Up && d.cancelled).then(|| self.pointer.take_drag_gone(&path)).flatten();
+                let Some(f) = gone.or_else(|| self.node(&path).and_then(|n| n.handlers.on_drag.clone())) else { return false };
                 if d.phase == Phase::Move {
                     one.commit = one.commit.instant();
                 }

@@ -140,7 +140,7 @@ impl RuntimeCore {
         for effect in effects {
             match effect {
                 ModalEffect::CancelGestures => {
-                    self.drop_press();
+                    if !self.cancel_drag() { self.drop_press(); }
                     self.pointer.clear_secondary();
                     self.pointer.hovered = None;
                 }

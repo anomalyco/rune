@@ -84,6 +84,13 @@ impl PressRepeat {
     fn waiting(&self, now: f64) -> bool {
         matches!(self.state, Repeat::Armed { due, .. } if now + 1e-6 < due)
     }
+
+    /// Follows a held press whose path shifted across a sibling change.
+    pub(super) fn rebind(&mut self, old: &str, new: &str) {
+        if let Repeat::Armed { path, .. } = &mut self.state && path == old {
+            *path = new.to_owned();
+        }
+    }
 }
 
 impl capture::PointerState {

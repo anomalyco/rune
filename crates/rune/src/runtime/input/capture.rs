@@ -32,7 +32,7 @@ pub(crate) struct FirstClick {
 }
 
 /// A press the pointer holds on element `path`.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct Held {
     pub(crate) path: String,
     /// The `Phase::Down` its drags carry on from.
@@ -56,12 +56,36 @@ pub(crate) struct Held {
     /// runs nothing.
     pub(crate) pressed_on_down: bool,
     pub(crate) touch: bool,
+    /// The `on_drag` handler that began this drag, kept so a cancel still reaches it if the
+    /// element leaves the tree or stops dragging.
+    pub(crate) drag_handler: Option<crate::el::DragFn>,
+}
+
+impl std::fmt::Debug for Held {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Held")
+            .field("path", &self.path)
+            .field("drag", &self.drag)
+            .field("button", &self.button)
+            .field("at", &self.at)
+            .field("down_at", &self.down_at)
+            .field("hit", &self.hit)
+            .field("moved", &self.moved)
+            .field("second", &self.second)
+            .field("drag_out", &self.drag_out)
+            .field("left", &self.left)
+            .field("link", &self.link)
+            .field("pressed_on_down", &self.pressed_on_down)
+            .field("touch", &self.touch)
+            .field("drag_handler", &self.drag_handler.is_some())
+            .finish()
+    }
 }
 
 impl Held {
     /// A press that just went down at `at`, inside its element and still.
     pub(crate) fn new(path: String, drag: Drag, button: PointerButton, at: (f32, f32), down_at: f64, second: bool, drag_out: Option<f32>) -> Self {
-        Self { path, drag, button, at, down_at, hit: Hit::Inside, moved: false, second, drag_out, left: false, link: None, pressed_on_down: false, touch: false }
+        Self { path, drag, button, at, down_at, hit: Hit::Inside, moved: false, second, drag_out, left: false, link: None, pressed_on_down: false, touch: false, drag_handler: None }
     }
 
     pub(crate) fn inside(&self) -> bool { self.hit == Hit::Inside }
@@ -71,6 +95,9 @@ impl Held {
 
     /// Ran its element's `on_press` as it went down.
     pub(crate) fn pressed_on_down(self, pressed_on_down: bool) -> Self { Self { pressed_on_down, ..self } }
+
+    /// Started an `on_drag` gesture on `drag_handler`.
+    pub(crate) fn drag_handler(self, drag_handler: Option<crate::el::DragFn>) -> Self { Self { drag_handler, ..self } }
 }
 
 #[derive(Clone, Debug)]
@@ -207,6 +234,8 @@ pub(in crate::runtime) struct PointerState {
     pub(in crate::runtime) hover_delays: crate::runtime::hover_delay::HoverDelays,
     /// `on_hover_change` handlers of elements that left the tree, owed their queued leave.
     hover_gone: Vec<(String, crate::el::WindowFocusFn)>,
+    /// `on_drag` handlers of cancelled drags, kept so the queued cancelled `Up` still reaches them.
+    drag_gone: Vec<(String, crate::el::DragFn)>,
     /// The presses counted into `Drag::clicks`.
     press_clicks: crate::runtime::press_run::PressRun,
     /// The held press's drag repeat (`Tx::drag_repeat_after`).
@@ -245,6 +274,7 @@ impl PointerState {
             hovered: None,
             hover_within: Vec::new(),
             hover_gone: Vec::new(),
+            drag_gone: Vec::new(),
             hover_delays: Default::default(),
             hover_paused: false,
             hover_hold: Default::default(),
@@ -350,6 +380,29 @@ impl PointerState {
     }
 
     #[inline]
+    pub(super) fn push_drag_gone(&mut self, path: String, f: crate::el::DragFn) {
+        self.drag_gone.push((path, f));
+    }
+
+    #[inline]
+    pub(super) fn take_drag_gone(&mut self, path: &str) -> Option<crate::el::DragFn> {
+        self.drag_gone.iter().position(|g| g.0 == path).map(|i| self.drag_gone.remove(i).1)
+    }
+
+    #[cfg(all(test, target_os = "macos"))]
+    #[inline]
+    pub(super) fn clear_drag_gone(&mut self) {
+        self.drag_gone.clear();
+    }
+
+    /// Follows a held press whose path shifted across an unkeyed ancestor's sibling change.
+    pub(in crate::runtime) fn rebind_press_path(&mut self, next: &str) {
+        let Some(held) = self.press.held_mut() else { return };
+        let old = std::mem::replace(&mut held.path, next.to_owned());
+        self.press_repeat.rebind(&old, next);
+    }
+
+    #[inline]
     pub(super) fn secondary_held(&self) -> bool { self.secondary.is_held() }
 
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -372,6 +425,7 @@ impl PointerState {
         self.secondary = Secondary::Up;
         self.hovered = None;
         self.hover_gone.clear();
+        self.drag_gone.clear();
         self.hover_within.clear();
         self.hover_delays.clear();
         self.forget_drop_targets();
