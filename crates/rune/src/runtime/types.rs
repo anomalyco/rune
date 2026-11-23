@@ -329,8 +329,15 @@ pub(super) struct Inh {
     /// How `scale` is changing, which decides how text rasterizes under it.
     pub(super) scale_motion: ScaleMotion,
     /// `(scale, anchor, anchor_to)` of the ancestors whose scales hold still from the root down,
-    /// as an app-wide zoom does, stopping at the first that moves. A flight keeps this part.
+    /// as an app-wide zoom does, stopping at the first that moves. Launches and text rasterizing
+    /// keep this part.
     pub(super) still: (f32, [f32; 2], [f32; 2]),
+    /// `(scale, anchor, anchor_to)` of the ancestors whose scales the app holds or drives (still
+    /// or live), stopping at the first whose scale animates on its own (an entrance, press,
+    /// static scale spring or cover). Matched flights land at this scale.
+    pub(super) held: (f32, [f32; 2], [f32; 2]),
+    /// True once an ancestor above had its own animating scale so descendants stop updating `held`.
+    pub(super) held_moving: bool,
     /// Inside an active `El::cache` scope: do not cull children against the window viewport.
     pub(super) in_cache: bool,
     /// Inside an elided or off-screen `El::cache` scope: skip primitive emission.
@@ -377,7 +384,7 @@ impl Default for Inh {
             paint_clip: NO_CLIP, paint_fade: [0.0; 4], paint_fade_origin: NO_CLIP, rounded: None,
             scale: 1.0, anchor: [0.0; 2], anchor_to: [0.0; 2], blur: 0.0, dy: 0.0, dx: 0.0, cover: [0.0; 2], outer: None, mark: 0, group: 0.0, pressed: 0.0, press_to: None,
             hit_opacity: 1.0, group_rect: [f32::NEG_INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::INFINITY],
-            scale_motion: ScaleMotion::Still, still: (1.0, [0.0; 2], [0.0; 2]), in_cache: false, skip_paint: false, anchor_hidden: false, turn: 0,
+            scale_motion: ScaleMotion::Still, still: (1.0, [0.0; 2], [0.0; 2]), held: (1.0, [0.0; 2], [0.0; 2]), held_moving: false, in_cache: false, skip_paint: false, anchor_hidden: false, turn: 0,
             snap: Default::default() }
     }
 }

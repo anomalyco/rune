@@ -1,0 +1,1 @@
+- Motion: matched flights (`El::matched`) onto or off an ancestor scaled by `live_scale` or `scale` and shifted by `live_offset` or `offset` now start from the source's drawn rect and blend straight to the destination's held zoom and offsets instead of jumping on take-off or landing.

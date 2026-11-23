@@ -40,12 +40,129 @@ pub(super) fn update_sticky_frame(sticky_frame: &mut [[f32; 8]], i: usize, n: &N
     sticky_frame[i] = [v[0], v[1], v[2], v[3], x[0], x[1], x[2], x[3]];
 }
 
+/// Destination transform a lifted matched flight blends into as `prop::TRAVEL` runs from 0 to 1.
+#[derive(Clone, Copy)]
+pub(super) struct FlightDest {
+    held: (f32, [f32; 2], [f32; 2]),
+    dxy: [f32; 2],
+    anc_off: [f32; 2],
+    travel: [f32; 2],
+}
+
+/// Sum of `prop::OFFSET` (`live_offset` and `El::offset`) across a node's ancestors in `scene`.
+#[inline]
+pub(in crate::runtime) fn ancestor_scene_offset(nodes: &[Node], scene: &Scene, parent: Option<usize>) -> [f32; 2] {
+    let mut off = [0.0f32; 2];
+    let mut cur = parent;
+    while let Some(pi) = cur {
+        if let Some(o) = scene.get(nodes[pi].id, prop::OFFSET) {
+            off[0] += o.x;
+            off[1] += o.y;
+        }
+        cur = nodes[pi].parent;
+    }
+    off
+}
+
+/// Edge delta `rest - end` between where a matched flight lands on screen (under `held` zoom,
+/// ancestor scene offsets `anc_off` and scroll/growth `dxy`) and where its scene path ends.
+#[inline]
+pub(in crate::runtime) fn flight_rest_delta(
+    scene: &Scene,
+    n: &Node,
+    p_rect: rune_motion::Rect,
+    own_sc: f32,
+    row_h: f32,
+    held: (f32, [f32; 2], [f32; 2]),
+    dxy: [f32; 2],
+    anc_off: [f32; 2],
+) -> [f32; 4] {
+    let (k_d, a_d, a_to) = held;
+    if (k_d - 1.0).abs() <= 1e-5
+        && a_d == a_to
+        && dxy == [0.0; 2]
+        && anc_off == [0.0; 2]
+        && (own_sc - 1.0).abs() <= 1e-5
+    {
+        return [0.0; 4];
+    }
+    let own_off = scene.get(n.id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
+    let (end_rect, anc_off) = match scene.path_end(n.id) {
+        Some(r) => (r.translated(own_off), anc_off),
+        // Path ended while exiting: `p_rect` already rides `parent_origin` (includes `anc_off`).
+        None => (p_rect, [0.0; 2]),
+    };
+    let mut end = end_rect.edges();
+    if row_h >= 0.0 {
+        end[3] = end[1] + row_h;
+    }
+    let rest_raw = [
+        end[0] + anc_off[0] + dxy[0],
+        end[1] + anc_off[1] + dxy[1],
+        end[2] + anc_off[0] + dxy[0],
+        end[3] + anc_off[1] + dxy[1],
+    ];
+    let rest = if (own_sc - 1.0).abs() > 1e-5 {
+        let pivot = match n.vis.origin {
+            Some([ox, oy]) => [end_rect.x + anc_off[0] + ox * end_rect.w, end_rect.y + anc_off[1] + oy * end_rect.h],
+            None => [end_rect.x + anc_off[0] + 0.5 * end_rect.w, end_rect.y + anc_off[1] + 0.5 * end_rect.h],
+        };
+        let centre = [pivot[0] + dxy[0], pivot[1] + dxy[1]];
+        let centre_to = [a_to[0] + (centre[0] - a_d[0]) * k_d, a_to[1] + (centre[1] - a_d[1]) * k_d];
+        let full = k_d * own_sc;
+        [
+            centre_to[0] + (rest_raw[0] - centre[0]) * full,
+            centre_to[1] + (rest_raw[1] - centre[1]) * full,
+            centre_to[0] + (rest_raw[2] - centre[0]) * full,
+            centre_to[1] + (rest_raw[3] - centre[1]) * full,
+        ]
+    } else if (k_d - 1.0).abs() > 1e-5 || a_d != a_to {
+        [
+            a_to[0] + (rest_raw[0] - a_d[0]) * k_d,
+            a_to[1] + (rest_raw[1] - a_d[1]) * k_d,
+            a_to[0] + (rest_raw[2] - a_d[0]) * k_d,
+            a_to[1] + (rest_raw[3] - a_d[1]) * k_d,
+        ]
+    } else {
+        rest_raw
+    };
+    [rest[0] - end[0], rest[1] - end[1], rest[2] - end[2], rest[3] - end[3]]
+}
+
+/// Screen-space edges of a lifted matched flight, blending straight from its take-off rect at
+/// `travel = 0` to its resting rect under `dest` at `travel = 1`.
+#[inline(always)]
+pub(super) fn flight_frame(
+    scene: &Scene,
+    n: &Node,
+    p: &rune_motion::Presented,
+    own_sc: f32,
+    row_h: f32,
+    dest: FlightDest,
+) -> [f32; 4] {
+    let mut cur = p.rect.edges();
+    if row_h >= 0.0 {
+        cur[3] = cur[1] + row_h;
+    }
+    let delta = flight_rest_delta(scene, n, p.rect, own_sc, row_h, dest.held, dest.dxy, dest.anc_off);
+    if delta == [0.0; 4] {
+        return cur;
+    }
+    [
+        cur[0] + delta[0] * dest.travel[0],
+        cur[1] + delta[1] * dest.travel[1],
+        cur[2] + delta[2] * dest.travel[0],
+        cur[3] + delta[3] * dest.travel[1],
+    ]
+}
+
 #[inline(always)]
 pub(super) fn flight_cover(
     launches: &flights::Launches,
     node_id: NodeId,
     n: &Node,
     rect_pt: [f32; 4],
+    sc: f32,
 ) -> Option<(f32, [f32; 2])> {
     if launches.launched(node_id) {
         return None;
@@ -53,7 +170,8 @@ pub(super) fn flight_cover(
     let (pw, ph) = (rect_pt[2] - rect_pt[0], rect_pt[3] - rect_pt[1]);
     if n.vis.cold.get().is_some_and(|c| c.flight_crop) {
         // `El::matched_crop`: at its own size, from the leading edge.
-        Some((1.0, [0.0, (ph - n.local.h) * 0.5]))
+        let k = sc.max(1e-3);
+        Some((k, [0.0, (ph - n.local.h * k) * 0.5]))
     } else {
         let k = (pw / n.local.w).max(ph / n.local.h).max(1e-3);
         Some((k, [(pw - n.local.w * k) * 0.5, (ph - n.local.h * k) * 0.5]))
@@ -114,18 +232,18 @@ impl crate::runtime::tracks::MotionState {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn lift_flight_inh(
         &mut self,
+        nodes: &[Node],
         paint: &paint_state::PaintState,
         scene: &Scene,
         commit_gen: u64,
         node_id: NodeId,
         node_parent: Option<usize>,
         pinh: &mut Inh,
-    ) {
+    ) -> Option<FlightDest> {
         // Keep the destination's clips (consumed ones included) and offsets. Drop its
         // ancestors' opacity, scale and blur: an entering parent's fade or scale would
-        // otherwise hide the flight or jump it off the rect it was seen at. The scales
-        // holding still above that parent (an app-wide zoom) stay, so it flies at the size
-        // it lands at. Inside another flight, also drop that flight's cover offset and clip.
+        // otherwise hide the flight or jump it off the rect it was seen at. Inside another
+        // flight, also drop that flight's cover offset and clip.
         let [clip, fade, fade_origin] = if self.launches().flying(node_id) {
             // A launch leaves where its clips don't reach.
             [crate::render::NO_CLIP, [0.0; 4], pinh.fade_origin]
@@ -135,13 +253,30 @@ impl crate::runtime::tracks::MotionState {
                 [clip, pinh.fade, pinh.fade_origin]
             })
         };
-        let (scale, anchor, anchor_to) = pinh.still;
+        let dxy = [pinh.dx - pinh.cover[0], pinh.dy - pinh.cover[1]];
+        if self.launches().launched(node_id) {
+            // Launches map their start through the still zoom at take-off and keep it throughout.
+            let (scale, anchor, anchor_to) = pinh.still;
+            *pinh = Inh { opacity: 1.0, paint_opacity: 1.0, hit_opacity: 1.0, clip, fade, fade_origin, paint_clip: clip, paint_fade: fade,
+                paint_fade_origin: fade_origin, rounded: None, scale, anchor, anchor_to, blur: 0.0,
+                dx: dxy[0], dy: dxy[1], cover: [0.0; 2], outer: None,
+                scale_motion: ScaleMotion::Still, in_cache: false, skip_paint: false, turn: 0, snap: pixel_snap::Inherit { layer: 0, parent: None, ..pinh.snap }, ..*pinh };
+            let fix = self.launches_mut().offset_fix(scene, node_id, [pinh.dx, pinh.dy], commit_gen);
+            (pinh.dx, pinh.dy) = (pinh.dx + fix[0], pinh.dy + fix[1]);
+            return None;
+        }
+        // Matched flights leave from the source's drawn screen rect (scale 1, no destination
+        // offsets) and blend straight into the destination's held zoom and live/scroll offsets.
+        let held = pinh.held;
+        let travel = scene.get(node_id, prop::TRAVEL).map_or([1.0, 1.0], |v| [v.x, v.y]);
+        let k_t = (0.5 * (travel[0] + travel[1])).clamp(0.0, 1.0);
+        let scale = 1.0 + (held.0 - 1.0) * k_t;
+        let anc_off = ancestor_scene_offset(nodes, scene, node_parent);
         *pinh = Inh { opacity: 1.0, paint_opacity: 1.0, hit_opacity: 1.0, clip, fade, fade_origin, paint_clip: clip, paint_fade: fade,
-            paint_fade_origin: fade_origin, rounded: None, scale, anchor, anchor_to, blur: 0.0,
-            dx: pinh.dx - pinh.cover[0], dy: pinh.dy - pinh.cover[1], cover: [0.0; 2], outer: None,
+            paint_fade_origin: fade_origin, rounded: None, scale, anchor: [0.0; 2], anchor_to: [0.0; 2], blur: 0.0,
+            dx: dxy[0], dy: dxy[1], cover: [0.0; 2], outer: None,
             scale_motion: ScaleMotion::Still, in_cache: false, skip_paint: false, turn: 0, snap: pixel_snap::Inherit { layer: 0, parent: None, ..pinh.snap }, ..*pinh };
-        let fix = self.launches_mut().offset_fix(scene, node_id, [pinh.dx, pinh.dy], commit_gen);
-        (pinh.dx, pinh.dy) = (pinh.dx + fix[0], pinh.dy + fix[1]);
+        Some(FlightDest { held, dxy, anc_off, travel })
     }
 
     #[inline(always)]
