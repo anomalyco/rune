@@ -10,7 +10,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use winit::raw_window_handle::{RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle};
-use wayland_backend::client::Backend;
+use wayland_backend::client::{Backend, ReadEventsGuard, WaylandError};
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_region::WlRegion;
@@ -23,7 +23,7 @@ use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1:
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1};
 
-use super::layer_shell_machine::{keyboard, readiness, touch};
+use super::layer_shell_machine::{configure_wait, keyboard, readiness, touch};
 use crate::el::Align;
 use crate::overlay::{Placement, ScreenEdge};
 use crate::runtime::Waker;
@@ -390,8 +390,66 @@ pub(crate) struct LayerSurface {
     watch: Option<Watch>,
 }
 
+struct ConfigureDriver<'a> {
+    queue: &'a mut EventQueue<State>,
+    state: &'a mut State,
+}
+
+impl configure_wait::Driver for ConfigureDriver<'_> {
+    type Guard = ReadEventsGuard;
+
+    fn done(&self) -> bool { self.state.readiness.configured() }
+
+    fn now(&mut self) -> crate::time::Instant { crate::time::now() }
+
+    fn dispatch_pending(&mut self) -> bool { self.queue.dispatch_pending(self.state).is_ok() }
+
+    fn flush(&mut self) -> configure_wait::Flush {
+        match self.queue.flush() {
+            Ok(()) => configure_wait::Flush::Ok,
+            Err(WaylandError::Io(err)) if err.kind() == std::io::ErrorKind::WouldBlock => configure_wait::Flush::WouldBlock,
+            Err(_) => configure_wait::Flush::Error,
+        }
+    }
+
+    fn prepare_read(&mut self) -> Option<ReadEventsGuard> { self.queue.prepare_read() }
+
+    #[allow(unsafe_code)]
+    fn poll(&mut self, guard: &ReadEventsGuard, timeout_ms: i32, want_write: bool) -> configure_wait::Poll {
+        let events = if want_write { libc::POLLIN | libc::POLLOUT } else { libc::POLLIN };
+        let mut pfd = libc::pollfd { fd: guard.connection_fd().as_raw_fd(), events, revents: 0 };
+        // SAFETY: one pollfd for the live Wayland display socket borrowed by `guard`.
+        let ret = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+        if ret < 0 {
+            return if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                configure_wait::Poll::Interrupted
+            } else {
+                configure_wait::Poll::Error
+            };
+        }
+        if ret == 0 { return configure_wait::Poll::TimedOut; }
+        if pfd.revents & libc::POLLNVAL != 0 { return configure_wait::Poll::Error; }
+        if pfd.revents & (libc::POLLIN | libc::POLLERR | libc::POLLHUP) != 0 { return configure_wait::Poll::Readable; }
+        if want_write && pfd.revents & libc::POLLOUT != 0 { return configure_wait::Poll::WritableOnly; }
+        configure_wait::Poll::Error
+    }
+
+    fn read(&mut self, guard: ReadEventsGuard) -> configure_wait::Read {
+        match guard.read() {
+            Ok(_) => configure_wait::Read::Ok,
+            Err(WaylandError::Io(err)) if err.kind() == std::io::ErrorKind::WouldBlock => configure_wait::Read::WouldBlock,
+            Err(_) => configure_wait::Read::Error,
+        }
+    }
+}
+
+fn wait_for_configure(queue: &mut EventQueue<State>, state: &mut State, timeout: Duration) -> configure_wait::Outcome {
+    configure_wait::wait(&mut ConfigureDriver { queue, state }, timeout)
+}
+
 impl LayerSurface {
-    /// None when the display isn't Wayland or the compositor lacks layer-shell.
+    /// None when the display isn't Wayland, the compositor lacks layer-shell, or it never
+    /// configures the surface within `configure_wait::TIMEOUT`.
     #[allow(unsafe_code)]
     pub fn new(display: RawDisplayHandle, namespace: &str, at: Placement, interactive: bool, options: &OverlayOptions, output_id: Option<u32>, wake: Option<Waker>) -> Option<LayerSurface> {
         let RawDisplayHandle::Wayland(display) = display else { return None };
@@ -424,14 +482,20 @@ impl LayerSurface {
         layer.set_exclusive_zone(0);
         let shapes = globals.bind::<WpCursorShapeManagerV1, _, _>(&qh, 1..=1, ()).ok();
         let state = State { surface: Some(surface.clone()), want_pointer, want_keys, shapes, ..State::default() };
-        let watch = wake.map(|wake| Watch::spawn(conn.backend().poll_fd().as_raw_fd(), wake));
-        let mut this = LayerSurface { registry, seat_global, regions: std::cell::RefCell::new(Some(Vec::new())), compositor, output, seat, options: options.clone(), queue, state, layer, surface, display: display.display, watch };
+        let mut this = LayerSurface { registry, seat_global, regions: std::cell::RefCell::new(Some(Vec::new())), compositor, output, seat, options: options.clone(), queue, state, layer, surface, display: display.display, watch: None };
         this.place(at);
         this.surface.commit();
-        while !this.state.readiness.configured() {
-            this.queue.blocking_dispatch(&mut this.state).ok()?;
+        match wait_for_configure(&mut this.queue, &mut this.state, configure_wait::TIMEOUT) {
+            configure_wait::Outcome::Done => {}
+            configure_wait::Outcome::TimedOut => {
+                eprintln!("rune: Wayland layer surface '{namespace}' timed out waiting for initial configure");
+                return None;
+            }
+            configure_wait::Outcome::Error => return None,
         }
-        (!this.state.readiness.closed()).then_some(this)
+        if this.state.readiness.closed() { return None; }
+        this.watch = wake.map(|wake| Watch::spawn(conn.backend().poll_fd().as_raw_fd(), wake));
+        Some(this)
     }
 
     pub fn set_placement(&mut self, placement: Option<OverlayPlacement>) {

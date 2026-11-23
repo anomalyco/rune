@@ -268,6 +268,148 @@ pub(crate) mod keyboard {
     }
 }
 
+/// Bounded wait for a Wayland layer surface's initial `configure` (or `closed`) event.
+/// Kept here so the deadline, flush-retry, interrupt-retry and timeout logic runs tests on
+/// every host without needing a live Wayland compositor.
+pub(crate) mod configure_wait {
+    use std::time::Duration;
+    use crate::time::Instant;
+
+    /// How long `LayerSurface::new` waits for the compositor's initial `configure` (or `closed`)
+    /// event before giving up so a silent or broken compositor cannot freeze the app.
+    pub(crate) const TIMEOUT: Duration = Duration::from_secs(2);
+
+    /// Result of flushing outgoing Wayland requests.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Flush {
+        Ok,
+        /// The socket send buffer is full; poll for writability and retry before reading.
+        WouldBlock,
+        Error,
+    }
+
+    /// Result of polling the Wayland socket up to the remaining deadline.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Poll {
+        /// The socket is readable or reported hangup/error; read events now.
+        Readable,
+        /// Only writability fired while retrying a blocked flush; cancel the read and flush again.
+        WritableOnly,
+        /// The poll timed out without socket activity.
+        TimedOut,
+        /// Interrupted by a signal (`EINTR`); retry with the remaining time.
+        Interrupted,
+        Error,
+    }
+
+    /// Result of reading events from the Wayland socket into the queue.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Read {
+        Ok,
+        /// Another reader drained the socket or the read would block; retry until the deadline.
+        WouldBlock,
+        Error,
+    }
+
+    /// Outcome of [`wait`].
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Outcome {
+        /// The surface reached `configure` or `closed` before the deadline.
+        Done,
+        /// The deadline elapsed before `configure` or `closed` arrived.
+        TimedOut,
+        /// Dispatching, flushing, polling or reading failed fatally.
+        Error,
+    }
+
+    /// Platform operations needed by [`wait`]: dispatching pending events, flushing outgoing
+    /// requests, and preparing, polling and reading the Wayland socket.
+    pub(crate) trait Driver {
+        /// Guard representing a prepared Wayland socket read. Dropping it without calling
+        /// [`Self::read`] cancels the prepared read.
+        type Guard;
+        /// Whether `configure` or `closed` has already been dispatched.
+        fn done(&self) -> bool;
+        /// Current monotonic time.
+        fn now(&mut self) -> Instant;
+        /// Dispatches already-queued events; `false` on a fatal dispatch error.
+        fn dispatch_pending(&mut self) -> bool;
+        /// Flushes outgoing requests to the compositor.
+        fn flush(&mut self) -> Flush;
+        /// Prepares a synchronized read, or returns `None` when events are already pending in
+        /// the queue and must be dispatched first.
+        fn prepare_read(&mut self) -> Option<Self::Guard>;
+        /// Polls the socket up to `timeout_ms` milliseconds (also watching for writability when
+        /// `want_write` is true).
+        fn poll(&mut self, guard: &Self::Guard, timeout_ms: i32, want_write: bool) -> Poll;
+        /// Reads socket events into the queue, consuming the prepared-read guard.
+        fn read(&mut self, guard: Self::Guard) -> Read;
+    }
+
+    /// Converts a non-zero remaining duration into a positive millisecond timeout for `poll(2)`,
+    /// rounding sub-millisecond remainders up to 1 ms and clamping to `i32::MAX`.
+    pub(crate) fn timeout_ms(remaining: Duration) -> i32 {
+        let millis = remaining.as_millis();
+        let rounded = if remaining.subsec_nanos() % 1_000_000 != 0 {
+            millis.saturating_add(1)
+        } else {
+            millis
+        };
+        rounded.clamp(1, i32::MAX as u128) as i32
+    }
+
+    /// Waits for [`Driver::done`] up to `timeout`, keeping a single overall deadline across
+    /// unrelated Wayland events, `EINTR` interruptions, and `WouldBlock` retries.
+    pub(crate) fn wait<D: Driver>(driver: &mut D, timeout: Duration) -> Outcome {
+        let deadline = driver.now() + timeout;
+        loop {
+            if !driver.dispatch_pending() {
+                return Outcome::Error;
+            }
+            if driver.done() {
+                return Outcome::Done;
+            }
+            let remaining = deadline.saturating_duration_since(driver.now());
+            if remaining.is_zero() {
+                return Outcome::TimedOut;
+            }
+            let want_write = match driver.flush() {
+                Flush::Ok => false,
+                Flush::WouldBlock => true,
+                Flush::Error => return Outcome::Error,
+            };
+            let Some(guard) = driver.prepare_read() else {
+                continue;
+            };
+            match driver.poll(&guard, timeout_ms(remaining), want_write) {
+                Poll::Readable => match driver.read(guard) {
+                    Read::Ok | Read::WouldBlock => {}
+                    Read::Error => return Outcome::Error,
+                },
+                Poll::WritableOnly | Poll::Interrupted => {
+                    drop(guard);
+                }
+                Poll::TimedOut => {
+                    drop(guard);
+                    if !driver.dispatch_pending() {
+                        return Outcome::Error;
+                    }
+                    if driver.done() {
+                        return Outcome::Done;
+                    }
+                    if driver.now() >= deadline {
+                        return Outcome::TimedOut;
+                    }
+                }
+                Poll::Error => {
+                    drop(guard);
+                    return Outcome::Error;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "layer_shell_machine_tests.rs"]
 mod tests;
