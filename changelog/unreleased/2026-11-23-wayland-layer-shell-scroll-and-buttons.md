@@ -1,0 +1,1 @@
+- Wayland: layer-shell overlays now handle mouse wheel, high-resolution scroll, touchpad scroll (`axis`, `axis_source`, `axis_value120`, `axis_discrete`, `axis_stop` grouped by `frame`), and middle and side mouse buttons (`BTN_MIDDLE`, `BTN_SIDE`/`BTN_BACK`, `BTN_EXTRA`/`BTN_FORWARD`), matching normal Wayland windows' scroll units, signs, and gesture phases.

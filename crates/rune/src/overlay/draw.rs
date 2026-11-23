@@ -470,6 +470,14 @@ impl OverlayCore {
                 if down { app.pointer_down(x, y); } else { app.pointer_up(x, y); }
             },
             Input::Secondary(down) => if let Some((x, y)) = app.rt().pointer() { if down { app.rt_mut().secondary_down(x, y) } else { app.secondary_up(x, y) } },
+            Input::ExtraButton(button, down) => if let Some((x, y)) = app.rt().pointer() {
+                if down { app.button_down(x, y, button); } else { app.button_up(x, y, button); }
+            },
+            Input::Wheel(wheel) => {
+                if crate::input::host_events::wheel_core(app.rt_mut(), wheel) == crate::input::host_events::WheelOutcome::Ignored {
+                    return;
+                }
+            }
             Input::Focus(focused) => {
                 app.window_focus(focused);
                 app.rt_mut().ignore_minimize("an overlay");
