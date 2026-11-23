@@ -76,7 +76,7 @@ impl RuntimeCore {
                 (!self.subtree_exiting(i)).then_some((i, y0, (y1 - y0).max(0.0), false))
             });
         let geometry = target_node.and_then(|(i, target_top, target_h, is_whole_node)| {
-            let s = self.viewport_of(i)?;
+            let s = self.viewport_of(i).filter(|&s| in_scope(&self.tree.nodes[s].path, scope))?;
             let parent = &self.tree.nodes[s];
             let (laid_top, laid_h) = (target_top - parent.target[1], target_h);
             let (top, height) = std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent)
@@ -106,7 +106,7 @@ impl RuntimeCore {
             Some((parent.path.clone(), f64::from(top), f64::from(height), f64::from(parent.local.h), f64::from(laid_top), f64::from(laid_h), f64::from(laid_end)))
         }).or_else(|| {
             self.tree.nodes.iter().filter(|n| in_scope(&n.path, scope)).filter_map(|n| {
-                let v = self.commit.virtuals.get(&n.path)?;
+                let v = self.commit.virtuals.get(&n.path).filter(|v| in_scope(&v.scroll_path, scope))?;
                 let index = v.index_of(key).or_else(|| {
                     key.rmatch_indices('/').find_map(|(at, _)| {
                         let (scope, row_key) = (&key[..at], &key[at + 1..]);
