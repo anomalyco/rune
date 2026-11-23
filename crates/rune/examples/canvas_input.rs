@@ -66,6 +66,9 @@ fn view(s: &Canvas, _: &mut Cx<Canvas>) -> El {
             .on_press(move |s: &mut Canvas| s.selected = i);
         w.child(if i == s.selected { node.on_drawn_layout(|s: &mut Canvas, r| s.toolbar = Some(r)) } else { node })
     });
+    // Scaling does not clip to the parent, and a clip on `world` itself would scale with its
+    // drawn rect. Clip the unscaled viewport so the zoomed world cannot paint over `side` or
+    // take its presses.
     let canvas = el().key("canvas").size(CANVAS, CANVAS).clip_soft(0.0).child(nodes)
         // The camera is all these handlers change, and the view reads none of it: they say
         // `live_only`, and a pan or pinch draws without re-running the view.

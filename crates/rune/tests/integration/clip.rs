@@ -223,3 +223,61 @@ fn a_linear_fade_falls_in_proportion_to_distance_from_the_edge() {
     assert!(alpha(&eased, 100, 50, 89) < alpha(&lin, 100, 50, 89) - 20, "smoothstep stays lower near the edge");
     assert_eq!(alpha(&lin, 100, 50, 50), 255, "whole above the ramp");
 }
+
+#[test]
+fn scaled_world_hits_sibling_overlap_unless_unscaled_parent_viewport_clips() {
+    #[derive(Clone, Copy)]
+    enum ClipAt { None, ScaledWorld, ParentViewport }
+    #[derive(Clone, Copy)]
+    enum ScaleVia { Live, Static }
+    struct State {
+        clip: ClipAt,
+        via: ScaleVia,
+        zoom: rune::Live<f32>,
+        hit: Option<&'static str>,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let panel = el().key("panel").size(100.0, 200.0)
+            .on_press(|s: &mut State| s.hit = Some("panel"));
+        let item = el().key("item").size(200.0, 200.0)
+            .on_press(|s: &mut State| s.hit = Some("world"));
+        let mut world = el().key("world").size(200.0, 200.0).child(item);
+        world = match s.via {
+            ScaleVia::Live => world.live_scale(&s.zoom),
+            ScaleVia::Static => world.scale(2.0),
+        };
+        if matches!(s.clip, ClipAt::ScaledWorld) {
+            world = world.clip_soft(0.0);
+        }
+        let mut viewport = el().key("viewport").size(200.0, 200.0).child(world);
+        if matches!(s.clip, ClipAt::ParentViewport) {
+            viewport = viewport.clip_soft(0.0);
+        }
+        rune::row().size(400.0, 200.0).child(panel).child(viewport)
+    }
+    let click = |clip, via, x, y| {
+        let mut rt = Runtime::new(
+            State { clip, via, zoom: rune::Live::new(2.0), hit: None },
+            view,
+            (400.0, 200.0),
+            Env::new(true, 1.0),
+        );
+        rt.frame(0.0);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(1.0 / 120.0);
+        rt.state.hit
+    };
+    for via in [ScaleVia::Live, ScaleVia::Static] {
+        // At 2x scale about its centre (200, 100), the 200x200 world spans x = [0, 400],
+        // covering the earlier left sibling panel at x = [0, 100].
+        assert_eq!(click(ClipAt::None, via, 50.0, 100.0), Some("world"),
+            "unclipped scaled world intercepts presses over an earlier sibling");
+        assert_eq!(click(ClipAt::ScaledWorld, via, 50.0, 100.0), Some("world"),
+            "a clip on the scaled world itself scales with its drawn rect and still covers the sibling");
+        assert_eq!(click(ClipAt::ParentViewport, via, 50.0, 100.0), Some("panel"),
+            "an unscaled .clip_soft(0.0) parent viewport keeps presses on the earlier sibling");
+        assert_eq!(click(ClipAt::ParentViewport, via, 150.0, 100.0), Some("world"),
+            "presses inside the clipped parent viewport still reach the scaled world");
+    }
+}

@@ -203,7 +203,12 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   instant transaction and under Reduce Motion). `.rotate(radians)` turns the element and its
   subtree clockwise about the same origin on the layout spring or `.rotate_motion(anim)`, drawing
   into a layer whose composite turns; hit testing follows the turned box while reported rects use
-  its upright bounds. Layout keeps the unscaled upright size, so siblings don't move. `scale`
+  its upright bounds. Layout keeps the unscaled upright size, so siblings don't move. Scaling
+  does not clip to the parent, and hit testing follows the drawn rects in paint order, so a zoomed
+  canvas must put a clip (`.clip_soft(0.0)` or `.clip_rounded(r)`) on the unscaled parent
+  viewport wrapping the `live_scale` or `El::scale` element—not on the scaled element itself,
+  whose own clip scales with its drawn rect—or the scaled subtree will paint over siblings and
+  take their presses. `scale`
   multiplies with `press_scale`, `live_scale` and scale transitions (`origin` applies to all of
   them; `offset` ignores it), and nested scales and turns compose. Under all of them, text, icons
   and images transform with their box (link hit boxes and a text field's caret follow). Text under
@@ -428,9 +433,13 @@ policy changes are applied in the same mutation phase.
   nothing focused the root's, so a handler on a window's root hears every release. A focused
   `on_physical_input` that takes a release keeps it from `on_key_up`. Hosts map releases to
   logical keys only while some element has `on_key_up`. Under a camera (`live_offset` and
-  `live_scale` on the world), hit tests follow the drawn rects, `Drag` points and the pointer
-  in these events are in the element's own (unzoomed) points, and `.on_drawn_layout(|s, r|)`
-  reports where an element shows in the window, on each frame a pan or zoom moves it. A
+  `live_scale` on the world), hit tests follow the drawn rects in paint order, `Drag` points and
+  the pointer in these events are in the element's own (unzoomed) points, and
+  `.on_drawn_layout(|s, r|)` reports where an element shows in the window, on each frame a pan or
+  zoom moves it. Scaling does not clip to the parent: put a clip (`.clip_soft(0.0)` or
+  `.clip_rounded(r)`) on the unscaled parent viewport wrapping the `live_scale` or `El::scale`
+  world—not on the scaled world itself, whose own clip scales with its drawn rect—or the zoomed
+  subtree will paint over siblings and take their presses. A
   handler that moves only the camera says `tx.live_only()`, and its event doesn't re-run the
   view (see [below](#canvas-handlers-live-only-events-and-coordinate-spaces)).
   `cargo run -p rune --example canvas_input` drives a canvas through all of it headlessly:
