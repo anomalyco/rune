@@ -99,3 +99,99 @@ fn strike_decorations_per_box_metrics_when_pill_splits_a_line() {
     let last = out.last().unwrap();
     assert_eq!((last.rect[1], last.rect[3]), (small_y, small_h));
 }
+
+#[test]
+fn underlined_long_line_scans_items_once_and_matches_underline_edges() {
+    let mut ts = TextSystem::default();
+    let scale = 2.0;
+    let origin = [12.5, 24.0];
+    let src = "A🦀".repeat(400);
+    let spans = [Span::new(0, src.len()).underline(Color::BLACK)];
+    let layout = ts.layout_rich(&src, &spans, TextStyle::new(14.0, 400.0), scale, None);
+    let line = layout.get(0).expect("single unwrapped line");
+    let run_count = line
+        .items()
+        .filter(|item| matches!(item, PositionedLayoutItem::GlyphRun(_)))
+        .count();
+    assert!(run_count >= 400, "alternating Latin and emoji should split into many runs (got {run_count})");
+
+    let _ = super::super::underline::take_line_end_item_visits();
+    let mut out = Vec::new();
+    ts.decorations(&layout, &spans, scale, origin, &mut out);
+    let visits = super::super::underline::take_line_end_item_visits();
+
+    assert_eq!(out.len(), run_count, "each underlined run emits one underline rect");
+    assert!(
+        visits <= run_count,
+        "decorations should scan line items once for line end, not per run (got {visits} visits for {run_count} runs)"
+    );
+
+    // Every underline rect must match the per-run `underline_edges` calculation exactly.
+    let y = (origin[1] + line.metrics().baseline + 2.0 * scale).round();
+    let h = scale.max(1.0);
+    let mut expected = Vec::new();
+    for item in line.items() {
+        let PositionedLayoutItem::GlyphRun(gr) = item else { continue };
+        let (l, r) = underline_edges(&line, origin[0], gr.offset(), gr.offset() + gr.advance());
+        expected.push(([l, y, r - l, h], Color::BLACK, 0.0f32));
+    }
+    let actual: Vec<_> = out.iter().map(|d| (d.rect, d.color, d.radius)).collect();
+    assert_eq!(actual, expected, "underline rects must match underline_edges identically");
+
+    // A background-only span on the same long line does not scan line items for underline_end at all.
+    let bg_spans = [Span::new(0, src.len()).bg(Color::BLACK, 2.0)];
+    let bg_layout = ts.layout_rich(&src, &bg_spans, TextStyle::new(14.0, 400.0), scale, None);
+    let _ = super::super::underline::take_line_end_item_visits();
+    out.clear();
+    ts.decorations(&bg_layout, &bg_spans, scale, origin, &mut out);
+    assert_eq!(super::super::underline::take_line_end_item_visits(), 0);
+}
+
+#[test]
+fn underline_and_strikethrough_preserve_positions_and_thickness() {
+    let mut ts = TextSystem::default();
+    let scale = 2.0;
+    let origin = [7.25, 19.5];
+    let text = "Big 🦀 middle small";
+    let spans = [
+        Span::new(0, 3).size(36.0).underline(Color::BLACK),
+        Span::new(4, text.len()).underline(Color::WHITE),
+    ];
+    let layout = ts.layout_rich(text, &spans, TextStyle::new(14.0, 400.0), scale, None);
+    let line = layout.get(0).expect("single line");
+    let y_ul = (origin[1] + line.metrics().baseline + 2.0 * scale).round();
+
+    let mut decos = Vec::new();
+    ts.decorations(&layout, &spans, scale, origin, &mut decos);
+    let mut expected_ul = Vec::new();
+    for item in line.items() {
+        let PositionedLayoutItem::GlyphRun(gr) = item else { continue };
+        let ink = gr.style().brush.0 & !crate::raster::synthetic_bold::SYNTHETIC_BOLD;
+        if ink == 0 {
+            continue;
+        }
+        let s = &spans[ink as usize - 1];
+        if let Some(uc) = s.underline {
+            let (l, r) = underline_edges(&line, origin[0], gr.offset(), gr.offset() + gr.advance());
+            expected_ul.push(([l, y_ul, r - l, scale.max(1.0)], uc));
+        }
+    }
+    let actual_ul: Vec<_> = decos.iter().map(|d| (d.rect, d.color)).collect();
+    assert_eq!(actual_ul, expected_ul);
+
+    let mut strikes = Vec::new();
+    ts.strike_decorations(&layout, &spans, &[(0, 3, None), (4, text.len() as u32, None)], Color::BLACK, scale, origin, &mut strikes);
+    assert_eq!(strikes.len(), 2);
+    let (big_y, big_h) = expected_strike(&line, 0, origin[1], scale);
+    assert_eq!((strikes[0].rect[1], strikes[0].rect[3]), (big_y, big_h));
+    let tail_idx = line
+        .items()
+        .filter_map(|item| match item {
+            PositionedLayoutItem::GlyphRun(gr) => Some(gr),
+            PositionedLayoutItem::InlineBox(_) => None,
+        })
+        .position(|gr| gr.run().text_range().end == text.len())
+        .expect("trailing 14 pt run");
+    let (tail_y, tail_h) = expected_strike(&line, tail_idx, origin[1], scale);
+    assert_eq!((strikes[1].rect[1], strikes[1].rect[3]), (tail_y, tail_h));
+}

@@ -275,20 +275,18 @@ impl TextSystem {
     ) -> Vec<(std::ops::Range<usize>, f32)> {
         let mono_style = matches!(style.family, Family::Mono | Family::SystemMono);
         let default_family = if mono_style { style.family } else { Family::Mono };
+        let sizes = super::span_map::SpanMap::new(spans.iter().filter_map(|s| s.size.map(|v| (s.start as usize..s.end as usize, v))));
+        let weights = super::span_map::SpanMap::new(spans.iter().filter_map(|s| s.weight.map(|v| (s.start as usize..s.end as usize, v))));
+        let italics = super::span_map::SpanMap::new(spans.iter().filter_map(|s| s.italic.then_some((s.start as usize..s.end as usize, ()))));
         let mut last_probe: Option<((u32, u32, bool), f32)> = None;
         let mut widen: Vec<(std::ops::Range<usize>, f32)> = Vec::new();
         for &(at, columns) in tabs {
             if columns <= 1 {
                 continue;
             }
-            let (mut sz, mut wt, mut it) = (style.size, style.weight, style.italic);
-            for s in spans {
-                if (s.start as usize) <= at && at < s.end as usize {
-                    if let Some(v) = s.size { sz = v; }
-                    if let Some(v) = s.weight { wt = v; }
-                    if s.italic { it = true; }
-                }
-            }
+            let sz = sizes.get(at).unwrap_or(style.size);
+            let wt = weights.get(at).unwrap_or(style.weight);
+            let it = style.italic || italics.get(at).is_some();
             let probe_key = (sz.to_bits(), wt.to_bits(), it);
             let col_pt = match last_probe {
                 Some((k, v)) if k == probe_key => v,
