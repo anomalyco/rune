@@ -307,6 +307,8 @@ impl Host {
                     let size = l.window.inner_size();
                     if size.width > 0 && size.height > 0 {
                         l.resize_surface(gpu, size);
+                        #[cfg(target_os = "macos")]
+                        if let Some(surface) = &l.surface { crate::platform::macos::sync_contents_scale(surface, scale); }
                         let rt = app.rt_mut();
                         rt.set_viewport((size.width as f32 / scale, size.height as f32 / scale), scale);
                         sync_chrome_core(rt, l, chrome, titlebar);
@@ -333,6 +335,10 @@ impl Host {
                 let origin_moved = sync_screen_origin_core(app.rt_mut(), &l.window);
                 // A frame Rune moved itself has its drawable and viewport already.
                 let resized = l.resize_surface(gpu, size);
+                #[cfg(target_os = "macos")]
+                if let Some(surface) = &l.surface && (scale - app.rt().window_scale()).abs() > f32::EPSILON {
+                    crate::platform::macos::sync_contents_scale(surface, scale);
+                }
                 let viewport = (size.width as f32 / scale, size.height as f32 / scale);
                 if !resized && viewport == app.rt().window_viewport() && scale == app.rt().window_scale() {
                     if restored || origin_moved { l.request_redraw(); }
@@ -373,6 +379,8 @@ impl Host {
                 };
                 if size.width > 0 && size.height > 0 {
                     let resized = l.resize_surface(gpu, size);
+                    #[cfg(target_os = "macos")]
+                    if let Some(surface) = &l.surface { crate::platform::macos::sync_contents_scale(surface, scale); }
                     let viewport = (size.width as f32 / scale, size.height as f32 / scale);
                     let rt = app.rt_mut();
                     if resized || viewport != rt.window_viewport() || scale != rt.window_scale() {

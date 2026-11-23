@@ -322,6 +322,8 @@ impl OverlayCore {
             self.surface_refused(app, format!("could not resize its GPU surface: {error}"));
             return;
         }
+        #[cfg(target_os = "macos")]
+        crate::platform::macos::sync_contents_scale(&live.surface, scale);
         if let Some(alpha) = &mut live.alpha {
             alpha.resize(&gpu.device, (live.config.width, live.config.height));
         }
