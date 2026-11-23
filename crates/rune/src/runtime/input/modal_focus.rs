@@ -115,7 +115,7 @@ impl RuntimeCore {
         // Exiting visuals are already inert, so a closing modal counts as gone.
         while let Some(top) = self.kbd.modal_top().map(str::to_owned).filter(|p| self.node(p).is_none()) {
             let inside = |f: &str| f.strip_prefix(top.as_str()).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
-            let kept = self.kbd.focus.path().is_some_and(|f| !inside(f) && self.node(f).is_some());
+            let kept = self.kbd.focus.path().is_some_and(|f| !inside(f) && self.node_index(f).is_some_and(|i| self.can_focus(i)));
             self.modal_step(app, ModalEvent::TopRemoved { kept });
         }
         let Some(i) = self.active_modal() else { return };
@@ -150,7 +150,7 @@ impl RuntimeCore {
                     }
                 }
                 ModalEffect::Return { restore, ring } => {
-                    let restore = restore.filter(|p| self.node(p).is_some());
+                    let restore = restore.filter(|p| self.node_index(p).is_some_and(|i| self.can_focus(i)));
                     self.set_focus(app, restore, ring && self.kbd.focus.keyboard());
                 }
             }
@@ -172,3 +172,7 @@ impl RuntimeCore {
         Some(autofocus.or(first).map_or_else(|| self.tree.nodes[i].path.clone(), |j| self.tree.nodes[j].path.clone()))
     }
 }
+
+#[cfg(test)]
+#[path = "modal_focus_tests.rs"]
+mod tests;

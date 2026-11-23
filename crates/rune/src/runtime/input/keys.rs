@@ -264,8 +264,12 @@ impl RuntimeCore {
         }
     }
 
+    pub(crate) fn node_index(&self, path: &str) -> Option<usize> {
+        self.tree.nodes.iter().enumerate().position(|(i, n)| n.path == path && !self.subtree_exiting(i) && !self.subtree_unmounted(i))
+    }
+
     pub(crate) fn node(&self, path: &str) -> Option<&Node> {
-        self.tree.nodes.iter().enumerate().find(|(i, n)| n.path == path && !self.subtree_exiting(*i) && !self.subtree_unmounted(*i)).map(|(_, n)| n)
+        self.node_index(path).map(|i| &self.tree.nodes[i])
     }
 
     /// `El::on_key` handlers on the focused element and its ancestors, innermost first. A

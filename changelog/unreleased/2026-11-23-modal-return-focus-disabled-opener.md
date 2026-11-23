@@ -1,0 +1,1 @@
+- Focus: closing a modal no longer returns focus to an opener that became disabled, inert, or otherwise unfocusable; it now treats it as gone and falls back as for a removed opener.
