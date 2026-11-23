@@ -1,19 +1,14 @@
 //! CPU-first GPU acquisition, hand-over from the CPU canvas to WebGPU/WebGL2, and device/context
 //! loss and restore recovery.
 
-use std::time::Duration;
+use std::{sync::atomic::Ordering, time::Duration};
 use winit::{event_loop::ActiveEventLoop, platform::web::WindowExtWebSys};
 use crate::time::Instant;
 use super::{
     Browser, Start, Wake, after, cpu_canvas, error,
     gpu::{self, Draw, FINISH_LIMIT, Loss},
-    health, pipelines, web_math,
+    health, pipelines, web_math, yield_turn,
 };
-
-/// How long a page that starts on the CPU draws nothing before it asks for the GPU, and the
-/// longest after its first frame that it waits for that.
-pub(super) const QUIET: Duration = Duration::from_millis(250);
-const QUIET_LIMIT: Duration = Duration::from_secs(3);
 
 impl Browser {
     /// Installs `webglcontextlost` / `webglcontextrestored` listeners on the page's canvas once
@@ -129,14 +124,10 @@ impl Browser {
         #[cfg(feature = "webgl")]
         {
             self.webgl_restoring = true;
-            let (pending, proxy) = (self.pending.clone(), self.proxy.clone());
+            let (pending, proxy, shared) = (self.pending.clone(), self.proxy.clone(), self.shared.clone());
             wasm_bindgen_futures::spawn_local(async move {
-                let result = gpu::try_webgl2(&canvas, features).await;
-                if proxy.send_event(Wake::Ready).is_err() {
-                    if let Ok((gpu, _)) = result { gpu.device.destroy(); }
-                    return;
-                }
-                *pending.borrow_mut() = Some(result);
+                let result = gpu::try_webgl2(&canvas, features, &shared.quitting).await;
+                deliver_gpu(result, None, pending, None, proxy, shared, false).await;
             });
         }
         #[cfg(not(feature = "webgl"))]
@@ -157,6 +148,10 @@ impl Browser {
             if !can_take { return; }
             let Some(made) = self.pending.borrow_mut().take() else { return };
             let restoring = std::mem::take(&mut self.webgl_restoring);
+            if !restoring && self.start == Start::CpuFirst {
+                let (seq, startup) = &mut self.gpu_startup;
+                let _ = startup.step(seq, web_math::GpuStartupEvent::WebGpuSucceeded);
+            }
             let side = made.and_then(|(gpu, surface)| {
                 gpu::gpu_side(gpu, surface, r.size, r.app.rt_mut(), self.lost.clone(), self.proxy.clone())
             });
@@ -232,51 +227,189 @@ impl Browser {
         if let Some(window) = &self.window { window.request_redraw(); }
     }
 
-    /// Asks the browser for the GPU, once.
-    pub(super) fn ask_gpu(&mut self) {
-        if self.gpu_asked || self.start == Start::CpuOnly { return; }
-        let Some(canvas) = self.window.as_ref().and_then(|w| w.canvas()) else { return };
-        self.gpu_asked = true;
-        crate::marks::mark("web.gpu.asked");
-        // A page that started on the CPU asks after its first frame, when the running app holds the compositor.
-        let features = match &self.app {
+    fn requested_features(&self) -> wgpu::Features {
+        match &self.app {
             Some(app) => app.compositor_features,
             None => self.running.borrow().as_ref().map_or(wgpu::Features::empty(), |r| r.app.compositor_features()),
-        };
-        // The renderer's pipelines are compiled ahead for the running app's canvas and blend, so
-        // making its renderer at the hand-over finds them built (`pipelines::warm`).
+        }
+    }
+
+    /// Asks the browser for the GPU immediately (`Start::GpuFirst`), once.
+    pub(super) fn ask_gpu(&mut self) {
+        if self.gpu_startup.1 != web_math::GpuStartup::Idle || self.start != Start::GpuFirst { return; }
+        let Some(canvas) = self.window.as_ref().and_then(|w| w.canvas()) else { return };
+        self.gpu_startup.1 = web_math::GpuStartup::Done;
+        crate::marks::mark("web.gpu.asked");
+        let features = self.requested_features();
         let canvas_now = self.running.borrow().as_ref().map(|r| (r.size, r.app.rt().srgb_blend()));
-        let (pending, warmed, proxy) = (self.pending.clone(), self.warmed.clone(), self.proxy.clone());
+        let (pending, warmed, proxy, shared) = (self.pending.clone(), self.warmed.clone(), self.proxy.clone(), self.shared.clone());
         wasm_bindgen_futures::spawn_local(async move {
-            let result = gpu::gpu(canvas, features).await;
-            crate::marks::mark("web.gpu.answered");
-            let format = result.as_ref().ok().zip(canvas_now).and_then(|((gpu, surface), (size, srgb))| gpu::canvas_config(gpu, surface, size, srgb)).map(|(_, format)| format);
-            if let (Ok((gpu, _)), Some(format)) = (&result, format) && let Some(w) = pipelines::warm(&gpu.device, format).await {
-                crate::marks::mark("web.gpu.warmed");
-                *warmed.borrow_mut() = Some(w);
-            }
-            // A loop that has closed was quit while the GPU started.
-            if proxy.send_event(Wake::Ready).is_err() {
-                warmed.borrow_mut().take();
-                if let Ok((gpu, _)) = result { gpu.device.destroy(); }
-                return;
-            }
-            *pending.borrow_mut() = Some(result);
+            let result = gpu::gpu(canvas, features, &shared.quitting).await;
+            deliver_gpu(result, canvas_now, pending, Some(warmed), proxy, shared, true).await;
         });
     }
 
-    /// After the first frame of a page that starts on the CPU: the GPU is asked for once the page
-    /// has drawn nothing but ambient loops for `QUIET` (its first reads in and shown; a spinner on
-    /// screen would otherwise hold the page on the CPU, painting each of its steps there), or `QUIET_LIMIT` after that
-    /// frame at the latest; until then this looks again every `QUIET`. A browser that compiles
-    /// pipelines asynchronously is asked at the first look: its pipelines build off the thread
-    /// that presents the CPU's frames (`pipelines::warm`), so nothing waits for quiet.
-    pub(super) fn maybe_start_gpu(&mut self) {
-        if self.gpu_asked || self.start != Start::CpuFirst { return; }
-        let Some(first) = self.first_at else { return };
-        let quiet = self.drawn_at.is_none_or(|at| at.elapsed() >= QUIET);
-        if quiet || first.elapsed() >= QUIET_LIMIT || pipelines::browser_compiles_async() { return self.ask_gpu(); }
-        let proxy = self.proxy.clone();
-        after(QUIET, move || { proxy.send_event(Wake::StartGpu).ok(); });
+    /// First CPU frame presented on a `CpuFirst` page: arms the GPU startup state machine.
+    pub(super) fn on_first_cpu_frame(&mut self, at: Instant) {
+        let effects = {
+            let (seq, startup) = &mut self.gpu_startup;
+            startup.step(seq, web_math::GpuStartupEvent::FirstPresented {
+                at,
+                has_navigator_gpu: health::has_navigator_gpu(),
+                compiles_async: pipelines::browser_compiles_async(),
+                webgl_enabled: cfg!(feature = "webgl"),
+            })
+        };
+        self.run_gpu_startup_effects(effects);
     }
+
+    /// A non-ambient CPU frame drew: resets the quiet window if synchronous GPU setup is waiting.
+    pub(super) fn on_cpu_frame_drawn(&mut self, at: Instant) {
+        let (seq, startup) = &mut self.gpu_startup;
+        let _ = startup.step(seq, web_math::GpuStartupEvent::FrameDrawn { at });
+    }
+
+    /// A scheduled CPU-first GPU startup timer fired.
+    pub(super) fn gpu_startup_due(&mut self, attempt: crate::machine::Attempt) {
+        if self.start != Start::CpuFirst { return; }
+        let effects = {
+            let (seq, startup) = &mut self.gpu_startup;
+            startup.step(seq, web_math::GpuStartupEvent::CheckDue { attempt, now: Instant::now() })
+        };
+        self.run_gpu_startup_effects(effects);
+    }
+
+    /// The CPU-first WebGPU probe failed; defer WebGL2 fallback until quiet, or stay on CPU.
+    pub(super) fn webgpu_probe_failed(&mut self) {
+        if self.start != Start::CpuFirst { return; }
+        let effects = {
+            let (seq, startup) = &mut self.gpu_startup;
+            startup.step(seq, web_math::GpuStartupEvent::WebGpuFailed { now: Instant::now() })
+        };
+        self.run_gpu_startup_effects(effects);
+    }
+
+    fn run_gpu_startup_effects(&mut self, effects: crate::machine::Effects<web_math::GpuStartupEffect>) {
+        for effect in effects {
+            match effect {
+                web_math::GpuStartupEffect::ScheduleCheck { attempt, delay } => {
+                    let proxy = self.proxy.clone();
+                    after(delay, move || { proxy.send_event(Wake::StartGpu(attempt)).ok(); });
+                }
+                web_math::GpuStartupEffect::AskWebGpu => self.ask_webgpu(),
+                web_math::GpuStartupEffect::AskWebGl2 => {
+                    #[cfg(feature = "webgl")]
+                    self.ask_webgl2();
+                    #[cfg(not(feature = "webgl"))]
+                    self.fail_no_backend();
+                }
+                web_math::GpuStartupEffect::FailNoBackend => self.fail_no_backend(),
+            }
+        }
+    }
+
+    /// Probes WebGPU only on a CPU-first page. On failure, signals `Wake::WebGpuFailed` so any
+    /// synchronous WebGL2 fallback still waits for a quiet window instead of running immediately.
+    fn ask_webgpu(&mut self) {
+        let Some(canvas) = self.window.as_ref().and_then(|w| w.canvas()) else { return };
+        crate::marks::mark("web.gpu.asked");
+        let features = self.requested_features();
+        let canvas_now = self.running.borrow().as_ref().map(|r| (r.size, r.app.rt().srgb_blend()));
+        let (pending, warmed, webgpu_err, proxy, shared) = (
+            self.pending.clone(),
+            self.warmed.clone(),
+            self.webgpu_err.clone(),
+            self.proxy.clone(),
+            self.shared.clone(),
+        );
+        wasm_bindgen_futures::spawn_local(async move {
+            match gpu::try_webgpu(&canvas, features).await {
+                Ok(pair) => deliver_gpu(Ok(pair), canvas_now, pending, Some(warmed), proxy, shared, true).await,
+                Err(err) => {
+                    if shared.quitting.load(Ordering::Acquire) { return; }
+                    *webgpu_err.borrow_mut() = Some(err);
+                    proxy.send_event(Wake::WebGpuFailed).ok();
+                }
+            }
+        });
+    }
+
+    /// Starts WebGL2 setup on a CPU-first page after the quiet window, yielding between setup
+    /// stages (`try_webgl2`) and before `Wake::Ready` so `gpu_side` (`Renderer::new`) runs in its
+    /// own browser task.
+    #[cfg(feature = "webgl")]
+    fn ask_webgl2(&mut self) {
+        let Some(canvas) = self.window.as_ref().and_then(|w| w.canvas()) else { return };
+        if self.webgpu_err.borrow().is_none() {
+            crate::marks::mark("web.gpu.asked");
+        }
+        let features = self.requested_features();
+        let (pending, webgpu_err, proxy, shared) = (
+            self.pending.clone(),
+            self.webgpu_err.clone(),
+            self.proxy.clone(),
+            self.shared.clone(),
+        );
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = match gpu::try_webgl2(&canvas, features, &shared.quitting).await {
+                Ok(pair) => Ok(pair),
+                Err(gl_err) => {
+                    let prev = webgpu_err.borrow_mut().take();
+                    let webgpu = prev.as_deref().unwrap_or("navigator.gpu unavailable");
+                    Err(format!("WebGPU ({webgpu}) and WebGL2 ({gl_err}) unavailable"))
+                }
+            };
+            deliver_gpu(result, None, pending, None, proxy, shared, true).await;
+        });
+    }
+
+    /// Reports that no GPU backend is available on a CPU-first page so it stays on the CPU.
+    fn fail_no_backend(&mut self) {
+        let prev = self.webgpu_err.borrow_mut().take();
+        if prev.is_none() {
+            crate::marks::mark("web.gpu.asked");
+        }
+        crate::marks::mark("web.gpu.answered");
+        let why = prev.unwrap_or_else(|| "navigator.gpu unavailable".into());
+        *self.pending.borrow_mut() = Some(Err(format!(
+            "WebGPU adapter unavailable (HTTPS and WebGPU are required): {why}"
+        )));
+        self.gpu_came();
+    }
+}
+
+/// Finishes an async GPU acquisition: warms async WebGPU pipelines when available, yields a
+/// browser macrotask on WebGL2 so `gpu_side` (`Renderer::new`) runs in its own task, and delivers
+/// the result to `pending` via `Wake::Ready` unless the app quit in the meantime.
+async fn deliver_gpu(
+    result: Result<(crate::render::Gpu, wgpu::Surface<'static>), String>,
+    canvas_now: Option<((u32, u32), bool)>,
+    pending: std::rc::Rc<std::cell::RefCell<Option<Result<(crate::render::Gpu, wgpu::Surface<'static>), String>>>>,
+    warmed: Option<std::rc::Rc<std::cell::RefCell<Option<pipelines::Warmed>>>>,
+    proxy: winit::event_loop::EventLoopProxy<Wake>,
+    shared: std::sync::Arc<crate::app::SharedCore>,
+    mark_answered: bool,
+) {
+    if shared.quitting.load(Ordering::Acquire) {
+        if let Ok((gpu, _)) = result { gpu.device.destroy(); }
+        return;
+    }
+    if mark_answered { crate::marks::mark("web.gpu.answered"); }
+    if let (Ok((gpu, surface)), Some((size, srgb)), Some(warmed_slot)) = (&result, canvas_now, &warmed)
+        && let Some((_, format)) = gpu::canvas_config(gpu, surface, size, srgb)
+        && let Some(w) = pipelines::warm(&gpu.device, format).await
+    {
+        crate::marks::mark("web.gpu.warmed");
+        *warmed_slot.borrow_mut() = Some(w);
+    }
+    if result.as_ref().is_ok_and(|(gpu, _)| web_math::needs_ready_yield(gpu.adapter.get_info().backend)) {
+        yield_turn().await;
+    }
+    // A loop that has closed was quit while the GPU started.
+    if shared.quitting.load(Ordering::Acquire) || proxy.send_event(Wake::Ready).is_err() {
+        if let Some(warmed_slot) = warmed { warmed_slot.borrow_mut().take(); }
+        if let Ok((gpu, _)) = result { gpu.device.destroy(); }
+        return;
+    }
+    *pending.borrow_mut() = Some(result);
 }

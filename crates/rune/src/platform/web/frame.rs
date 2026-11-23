@@ -8,7 +8,7 @@ use crate::frame::host_step::{self, Acquire, FrameHost, Gate, PostStepCheck, Rea
 use crate::runtime::RuntimeCore;
 use crate::time::Instant;
 use crate::window::Missed;
-use super::{Browser, Running, Wake, after, error, full_faces, gpu::{self, Draw, FINISH_LIMIT}, handover::QUIET, large_viewport, page_fonts, pipelines, web_math};
+use super::{Browser, Running, Start, Wake, after, error, full_faces, gpu::{self, Draw, FINISH_LIMIT}, large_viewport, page_fonts, web_math};
 
 /// The overscan a page's canvas carries above and below the window, in CSS points: the distance
 /// the browser's compositor can scroll before Rune has to draw a new band.
@@ -168,8 +168,8 @@ struct WebFrameHost<'a> {
     r: &'a mut Running,
     window: &'a Arc<Window>,
     proxy: &'a EventLoopProxy<Wake>,
-    first_at: &'a mut Option<Instant>,
-    drawn_at: &'a mut Option<Instant>,
+    first_presented_at: Option<Instant>,
+    non_ambient_drawn_at: Option<Instant>,
     now: Option<Instant>,
     commits: u64,
     had_input: bool,
@@ -447,15 +447,10 @@ impl FrameHost for WebFrameHost<'_> {
             let rt = self.r.app.rt();
             !self.had_input && !info.runtime_animating && rt.stats.commits == self.commits && rt.ambient.is_some()
         };
-        if self.drawn && !ambient { *self.drawn_at = Some(now); }
+        if self.drawn && !ambient { self.non_ambient_drawn_at = Some(now); }
         if self.drawn && !self.r.presented {
             self.r.presented = true;
-            *self.first_at = Some(now);
-            let proxy = self.proxy.clone();
-            // A browser that compiles pipelines asynchronously is asked in the task after this
-            // frame: nothing waits for quiet there (`maybe_start_gpu`).
-            let first_look = if pipelines::browser_compiles_async() { Duration::ZERO } else { QUIET };
-            after(first_look, move || { proxy.send_event(Wake::StartGpu).ok(); });
+            self.first_presented_at = Some(now);
             crate::marks::mark("web.first.presented");
             self.r.input.presented();
             // In a task of its own: a click or key that came with the first frame is handled
@@ -509,15 +504,15 @@ impl Browser {
         if self.lost_device(event_loop) { return; }
         self.maybe_restore_webgl();
         self.hand_over_if_done();
-        let (fatal_error, should_end, try_gpu_came, embedded, document) = {
+        let (fatal_error, should_end, try_gpu_came, first_presented_at, non_ambient_drawn_at, embedded, document) = {
             let mut running = self.running.borrow_mut();
             let (Some(window), Some(r)) = (&self.window, &mut *running) else { return };
             let mut host = WebFrameHost {
                 r,
                 window,
                 proxy: &self.proxy,
-                first_at: &mut self.first_at,
-                drawn_at: &mut self.drawn_at,
+                first_presented_at: None,
+                non_ambient_drawn_at: None,
                 now: None,
                 commits: 0,
                 had_input: false,
@@ -529,7 +524,15 @@ impl Browser {
                 try_gpu_came: false,
             };
             host_step::run(&mut host);
-            (host.fatal_error, host.should_end, host.try_gpu_came, host.r.embedded, host.r.document)
+            (
+                host.fatal_error,
+                host.should_end,
+                host.try_gpu_came,
+                host.first_presented_at,
+                host.non_ambient_drawn_at,
+                host.r.embedded,
+                host.r.document,
+            )
         };
         if let Some(msg) = fatal_error {
             error(&msg, self.window.as_ref().and_then(|w| w.canvas()).as_ref(), embedded, document);
@@ -539,6 +542,13 @@ impl Browser {
         if should_end {
             self.end(event_loop);
             return;
+        }
+        if self.start == Start::CpuFirst {
+            if let Some(at) = first_presented_at {
+                self.on_first_cpu_frame(at);
+            } else if let Some(at) = non_ambient_drawn_at {
+                self.on_cpu_frame_drawn(at);
+            }
         }
         // A GPU that came before the first frame is taken up after it.
         if try_gpu_came { self.gpu_came(); }

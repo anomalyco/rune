@@ -95,7 +95,7 @@ impl Draw {
 /// `requestAdapter` or `requestDevice` then fails, blocking any WebGL2 fallback on the same
 /// canvas. wgpu's WebGPU backend does not need a surface to request an adapter or device, so
 /// the canvas surface is created only after both succeed.
-async fn try_webgpu(canvas: &web_sys::HtmlCanvasElement, features: wgpu::Features)
+pub(super) async fn try_webgpu(canvas: &web_sys::HtmlCanvasElement, features: wgpu::Features)
     -> Result<(Gpu, wgpu::Surface<'static>), String> {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
@@ -122,17 +122,27 @@ async fn try_webgpu(canvas: &web_sys::HtmlCanvasElement, features: wgpu::Feature
 
 /// Creates a WebGL2 surface and device on `canvas`. Unlike WebGPU, `wgpu-hal`'s WebGL2 backend
 /// discovers its adapter from the surface's `WebGL2RenderingContext`, so the surface comes first.
+/// Yields a browser macrotask between synchronous stages (`create_surface`, `request_adapter`,
+/// `request_device`) so the browser can paint and handle input between them.
 #[cfg(feature = "webgl")]
-pub(super) async fn try_webgl2(canvas: &web_sys::HtmlCanvasElement, features: wgpu::Features)
-    -> Result<(Gpu, wgpu::Surface<'static>), String> {
+pub(super) async fn try_webgl2(
+    canvas: &web_sys::HtmlCanvasElement,
+    features: wgpu::Features,
+    quitting: &std::sync::atomic::AtomicBool,
+) -> Result<(Gpu, wgpu::Surface<'static>), String> {
+    use std::sync::atomic::Ordering;
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.backends = wgpu::Backends::GL;
     let instance = wgpu::Instance::new(descriptor);
     let surface = instance.create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone())).map_err(|e| e.to_string())?;
+    super::yield_turn().await;
+    if quitting.load(Ordering::Acquire) { return Err("app quit".into()); }
     let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::LowPower, compatible_surface: Some(&surface),
         force_fallback_adapter: false, apply_limit_buckets: false,
     }).await.map_err(|e| e.to_string())?;
+    super::yield_turn().await;
+    if quitting.load(Ordering::Acquire) { return Err("app quit".into()); }
     let adapter_limits = adapter.limits();
     let required_limits = wgpu::Limits::downlevel_webgl2_defaults()
         .using_resolution(adapter_limits.clone())
@@ -142,10 +152,20 @@ pub(super) async fn try_webgl2(canvas: &web_sys::HtmlCanvasElement, features: wg
         required_limits, experimental_features: Default::default(),
         memory_hints: Default::default(), trace: Default::default(),
     }).await.map_err(|e| format!("GPU device: {e}"))?;
+    if quitting.load(Ordering::Acquire) {
+        device.destroy();
+        return Err("app quit".into());
+    }
     Ok((Gpu::from_device(instance, adapter, device, queue), surface))
 }
 
-pub(super) async fn gpu(canvas: web_sys::HtmlCanvasElement, features: wgpu::Features) -> Result<(Gpu, wgpu::Surface<'static>), String> {
+pub(super) async fn gpu(
+    canvas: web_sys::HtmlCanvasElement,
+    features: wgpu::Features,
+    quitting: &std::sync::atomic::AtomicBool,
+) -> Result<(Gpu, wgpu::Surface<'static>), String> {
+    #[cfg(not(feature = "webgl"))]
+    let _ = quitting;
     let mut webgpu_err = None;
     for &backend in super::web_math::backend_order(health::has_navigator_gpu(), cfg!(feature = "webgl")) {
         match backend {
@@ -155,11 +175,19 @@ pub(super) async fn gpu(canvas: web_sys::HtmlCanvasElement, features: wgpu::Feat
             },
             super::web_math::WebBackend::WebGl2 => {
                 #[cfg(feature = "webgl")]
-                match try_webgl2(&canvas, features).await {
-                    Ok(pair) => return Ok(pair),
-                    Err(gl_err) => {
-                        let webgpu = webgpu_err.as_deref().unwrap_or("navigator.gpu unavailable");
-                        return Err(format!("WebGPU ({webgpu}) and WebGL2 ({gl_err}) unavailable"));
+                {
+                    if webgpu_err.is_some() {
+                        super::yield_turn().await;
+                        if quitting.load(std::sync::atomic::Ordering::Acquire) {
+                            return Err("app quit".into());
+                        }
+                    }
+                    match try_webgl2(&canvas, features, quitting).await {
+                        Ok(pair) => return Ok(pair),
+                        Err(gl_err) => {
+                            let webgpu = webgpu_err.as_deref().unwrap_or("navigator.gpu unavailable");
+                            return Err(format!("WebGPU ({webgpu}) and WebGL2 ({gl_err}) unavailable"));
+                        }
                     }
                 }
             }
