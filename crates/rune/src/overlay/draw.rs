@@ -74,7 +74,7 @@ impl FrameHost for OverlayFrame<'_> {
             }
             if self.core.surface.live().is_some_and(|l| l.scale == 0.0) && let Some(gpu) = self.core.gpu.clone() {
                 // Read before `app` is reborrowed for `rescale`.
-                let scale = self.app.rt().env.scale;
+                let scale = layer_resize_scale(self.app.rt());
                 self.core.rescale(self.app, &gpu, scale);
             }
         }
@@ -668,3 +668,19 @@ impl OverlayCore {
         rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
     }
 }
+
+/// Backing scale (device pixels per window point) to pass to `OverlayCore::rescale` when a
+/// layer-shell surface resizes without a scale change. `rescale` sizes the surface buffer and
+/// updates the runtime via `RuntimeCore::set_viewport`, both of which take `window_scale()`
+/// rather than `env.scale` (`window_scale * zoom`).
+#[cfg_attr(
+    not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))),
+    allow(dead_code)
+)]
+fn layer_resize_scale(rt: &RuntimeCore) -> f32 {
+    rt.window_scale()
+}
+
+#[cfg(test)]
+#[path = "draw_tests.rs"]
+mod tests;

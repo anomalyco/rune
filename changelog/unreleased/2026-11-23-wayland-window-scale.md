@@ -1,0 +1,1 @@
+- Wayland: client-side-decoration bottom corner radii and layer-shell overlay resizes now use the window's backing scale (`window_scale()`) instead of `env.scale` (`window_scale * zoom`), so rounded window corners match the frame and layer-shell surfaces keep their display scale when `Cx::zoom` is not 1.

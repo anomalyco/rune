@@ -51,10 +51,20 @@ impl Host {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if self.rounds_corners() && window.config.alpha_mode != wgpu::CompositeAlphaMode::Opaque {
             let radius = winit::platform::wayland::WindowExtWayland::content_corner_radius(&*window.window);
-            return radius * self.app.rt().env.scale;
+            return radius_in_device_pixels(radius, self.app.rt());
         }
         0.
     }
+}
+
+/// Converts a Wayland client-side frame's bottom corner radius (in logical window points) to
+/// device pixels. The frame draws at the window's backing scale, unaffected by `Cx::zoom`.
+#[cfg_attr(
+    not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))),
+    allow(dead_code)
+)]
+pub(in crate::window) fn radius_in_device_pixels(radius_points: f32, rt: &crate::runtime::RuntimeCore) -> f32 {
+    radius_points * rt.window_scale()
 }
 
 /// Prepares `pass` to clear `size` at `radius` device pixels, making it (or another for a surface
@@ -90,3 +100,7 @@ pub(in crate::window) fn draw(
         pass.draw(encoder, target);
     }
 }
+
+#[cfg(test)]
+#[path = "corners_tests.rs"]
+mod tests;
