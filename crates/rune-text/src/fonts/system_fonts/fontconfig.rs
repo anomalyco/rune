@@ -50,6 +50,16 @@ pub(super) fn monospace() -> Option<(String, Vec<PathBuf>)> {
     })
 }
 
+/// The first colour emoji family fontconfig resolves `emoji` to, and its files.
+pub(super) fn emoji() -> Option<(String, Vec<PathBuf>)> {
+    with_system(|system| {
+        let (id, name) = super::first_color_emoji_family(system)?;
+        let mut files = Vec::new();
+        files_of(system, id, &mut files);
+        Some((name, files))
+    })
+}
+
 /// The files of the fonts fontconfig matches for the scripts of `chars` in `locale`, each
 /// family whole (its bold and light faces too). A character in no script of its own (symbols,
 /// punctuation) or that no installed font covers adds nothing.

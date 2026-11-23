@@ -371,6 +371,31 @@ impl TextSystem {
         self.fallbacks.symbols = true;
         self.symbol_families = load_families(&mut self.font_cx.collection, SYMBOL_FONT_FILES, SYMBOL_FAMILIES);
         self.emoji = self.symbol_families.iter().copied().find(|f| f.contains("Emoji"));
+        #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
+        if self.emoji.is_none()
+            && let Some((family, files)) = fontconfig::emoji()
+        {
+            self.add_fallback_emoji(&family, files);
+        }
+    }
+
+    /// Loads `files` and registers `family` (from fontconfig's generic `emoji`) at the end of
+    /// `symbol_families` as the colour emoji family when none is set yet.
+    #[cfg_attr(not(all(unix, not(target_vendor = "apple"), not(target_os = "android"))), allow(dead_code))]
+    pub(crate) fn add_fallback_emoji(&mut self, family: &str, files: Vec<std::path::PathBuf>) {
+        if self.emoji.is_some() {
+            return;
+        }
+        let added = load_files(&mut self.font_cx.collection, &mut self.font_files, files);
+        let emoji_id = self
+            .font_cx
+            .collection
+            .family_id(family)
+            .or_else(|| added.iter().copied().find(|&id| family_has_color_table(&mut self.font_cx.collection, id)))
+            .or_else(|| added.into_iter().next());
+        if let Some(name) = emoji_id.and_then(|id| self.font_cx.collection.family_name(id)).map(intern) {
+            self.push_symbol_family(name, true);
+        }
     }
 
     /// When the sans or mono slot names no family the collection has, loads the system font
@@ -393,21 +418,37 @@ impl TextSystem {
         }
     }
 
+    /// Adds `name` to `symbol_families`, keeping colour emoji families at the end so a symbol
+    /// with a text form keeps it.
+    fn push_symbol_family(&mut self, name: &'static str, is_emoji: bool) {
+        if is_emoji {
+            self.emoji.get_or_insert(name);
+        }
+        if self.symbol_families.contains(&name) {
+            return;
+        }
+        if is_emoji {
+            self.symbol_families.push(name);
+        } else {
+            let at = self
+                .symbol_families
+                .iter()
+                .position(|f| self.emoji == Some(*f) || f.contains("Emoji"))
+                .unwrap_or(self.symbol_families.len());
+            self.symbol_families.insert(at, name);
+        }
+    }
+
     /// The families in `files` at the end of every family stack, colour emoji last, so a symbol
     /// with a text form keeps it.
-    fn add_symbol_files(&mut self, files: Vec<std::path::PathBuf>) {
+    pub(crate) fn add_symbol_files(&mut self, files: Vec<std::path::PathBuf>) {
         for id in load_files(&mut self.font_cx.collection, &mut self.font_files, files) {
             let Some(name) = self.font_cx.collection.family_name(id).map(intern) else { continue };
-            if self.symbol_families.contains(&name) {
-                continue;
-            }
-            if name.contains("Emoji") {
-                self.symbol_families.push(name);
-                self.emoji.get_or_insert(name);
-            } else {
-                let at = self.symbol_families.iter().position(|f| f.contains("Emoji")).unwrap_or(self.symbol_families.len());
-                self.symbol_families.insert(at, name);
-            }
+            // A family's tables are read only until the colour emoji family is known.
+            let is_emoji = self.emoji == Some(name)
+                || name.contains("Emoji")
+                || (self.emoji.is_none() && family_has_color_table(&mut self.font_cx.collection, id));
+            self.push_symbol_family(name, is_emoji);
         }
     }
 
@@ -575,6 +616,93 @@ fn walk_font_dirs() -> Vec<(String, std::path::PathBuf)> {
         }
     }
     found
+}
+
+const COLOR_TABLES: [[u8; 4]; 3] = [*b"COLR", *b"CBDT", *b"sbix"];
+
+/// Whether the SFNT table directory at the current position of `r` has a colour glyph table
+/// (`COLR`, `CBDT` or `sbix`, the formats `glyph_emit` draws in colour).
+fn sfnt_has_color_table(r: &mut impl std::io::Read) -> bool {
+    let mut header = [0u8; 12];
+    if r.read_exact(&mut header).is_err() {
+        return false;
+    }
+    if !matches!(&header[..4], [0, 1, 0, 0] | b"OTTO" | b"true" | b"typ1") {
+        return false;
+    }
+    let num_tables = u16::from_be_bytes([header[4], header[5]]) as usize;
+    if num_tables == 0 || num_tables > 1024 {
+        return false;
+    }
+    let mut records = vec![0u8; num_tables * 16];
+    if r.read_exact(&mut records).is_err() {
+        return false;
+    }
+    records.chunks_exact(16).any(|rec| COLOR_TABLES.iter().any(|tag| &rec[..4] == tag))
+}
+
+/// Whether face `index` (or any face when `None`) of an SFNT or TrueType collection stream has a
+/// colour glyph table (`COLR`, `CBDT` or `sbix`). Reads only the table directory header(s).
+pub(crate) fn reader_has_color_table(r: &mut (impl std::io::Read + std::io::Seek), index: Option<u32>) -> bool {
+    use std::io::SeekFrom;
+    let mut magic = [0u8; 4];
+    if r.read_exact(&mut magic).is_err() {
+        return false;
+    }
+    if &magic == b"ttcf" {
+        let mut ttc = [0u8; 8];
+        if r.read_exact(&mut ttc).is_err() {
+            return false;
+        }
+        let num_fonts = u32::from_be_bytes([ttc[4], ttc[5], ttc[6], ttc[7]]);
+        let range = match index {
+            Some(i) if i < num_fonts => i..i + 1,
+            Some(_) => return false,
+            None => 0..num_fonts.min(64),
+        };
+        for i in range {
+            let mut off = [0u8; 4];
+            if r.seek(SeekFrom::Start(12 + u64::from(i) * 4)).is_err() || r.read_exact(&mut off).is_err() {
+                return false;
+            }
+            if r.seek(SeekFrom::Start(u64::from(u32::from_be_bytes(off)))).is_ok() && sfnt_has_color_table(r) {
+                return true;
+            }
+        }
+        return false;
+    }
+    index.unwrap_or(0) == 0 && r.seek(SeekFrom::Start(0)).is_ok() && sfnt_has_color_table(r)
+}
+
+/// Whether family `id`'s first face has a colour glyph table (`COLR`, `CBDT` or `sbix`).
+fn family_has_color_table(collection: &mut Collection, id: FamilyId) -> bool {
+    let Some(family) = collection.family(id) else { return false };
+    family.fonts().first().is_some_and(|font| match &font.source().kind {
+        parley::fontique::SourceKind::Memory(blob) => {
+            reader_has_color_table(&mut std::io::Cursor::new(blob.as_ref()), Some(font.index()))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        parley::fontique::SourceKind::Path(path) => {
+            std::fs::File::open(path).ok().is_some_and(|mut f| reader_has_color_table(&mut f, Some(font.index())))
+        }
+        #[cfg(target_arch = "wasm32")]
+        parley::fontique::SourceKind::Path(_) => false,
+    })
+}
+
+/// First family in `collection`'s `GenericFamily::Emoji` list whose font data has a colour glyph
+/// table (`COLR`, `CBDT` or `sbix`).
+#[cfg_attr(not(all(unix, not(target_vendor = "apple"), not(target_os = "android"))), allow(dead_code))]
+pub(crate) fn first_color_emoji_family(collection: &mut Collection) -> Option<(FamilyId, String)> {
+    let ids: Vec<FamilyId> = collection.generic_families(parley::GenericFamily::Emoji).collect();
+    for id in ids {
+        if family_has_color_table(collection, id)
+            && let Some(name) = collection.family_name(id)
+        {
+            return Some((id, name.to_owned()));
+        }
+    }
+    None
 }
 
 /// `path`'s file name, lowercase without spaces and dots, when it's a font file Rune loads.
