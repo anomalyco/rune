@@ -1,0 +1,1 @@
+- macOS drop tests: each pasteboard test now uses a process- and sequence-unique named pasteboard (`pasteboardWithName:`) instead of `pasteboardWithUniqueName`, so tests running in parallel no longer collide on the same `CFPasteboardUnique-*` name within one clock tick.
