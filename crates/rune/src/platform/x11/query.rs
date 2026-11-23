@@ -1,5 +1,6 @@
-//! Shared connection slot for X11 queries (`pointer_position` and `output_crtc`). Kept free of
-//! `x11rb` except for error classification so its reuse and reconnect tests run on every host.
+//! Shared connection slot for X11 queries and one-shot client messages (`pointer_position`,
+//! `output_crtc` and `activation::activate`). Kept free of `x11rb` except for the shared
+//! connection wrapper and error classification so its reuse and reconnect tests run on every host.
 
 use std::sync::Mutex;
 
@@ -75,6 +76,54 @@ pub(crate) fn classify_reply<T>(result: Result<Option<T>, x11rb::errors::ReplyEr
         | Err(ReplyError::ConnectionError(ConnectionError::UnsupportedExtension)) => QueryOutcome::NoAnswer,
         Err(ReplyError::ConnectionError(_)) => QueryOutcome::Disconnected,
     }
+}
+
+/// Maps an `x11rb` result that may also allocate an XID into `QueryOutcome`: X11 protocol
+/// errors and missing extensions leave the connection healthy, while transport errors or an
+/// exhausted XID range mean the connection must be dropped.
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+pub(crate) fn classify_reply_or_id<T>(result: Result<Option<T>, x11rb::errors::ReplyOrIdError>) -> QueryOutcome<T> {
+    use x11rb::errors::{ConnectionError, ReplyOrIdError};
+    match result {
+        Ok(Some(value)) => QueryOutcome::Answer(value),
+        Ok(None)
+        | Err(ReplyOrIdError::X11Error(_))
+        | Err(ReplyOrIdError::ConnectionError(ConnectionError::UnsupportedExtension)) => QueryOutcome::NoAnswer,
+        Err(ReplyOrIdError::ConnectionError(_) | ReplyOrIdError::IdsExhausted) => QueryOutcome::Disconnected,
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+pub(super) struct X11Connection {
+    pub(super) connection: x11rb::rust_connection::RustConnection,
+    pub(super) screen: usize,
+    pub(super) root: u32,
+}
+
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+impl X11Connection {
+    fn connect() -> Option<Self> {
+        use x11rb::connection::Connection as _;
+        let (connection, screen) = x11rb::connect(None).ok()?;
+        let root = connection.setup().roots.get(screen)?.root;
+        Some(Self { connection, screen, root })
+    }
+
+    pub(super) fn screen_info(&self, screen: Option<usize>) -> Option<&x11rb::protocol::xproto::Screen> {
+        use x11rb::connection::Connection as _;
+        let roots = &self.connection.setup().roots;
+        screen.and_then(|s| roots.get(s)).or_else(|| roots.get(self.screen))
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+static SHARED: QueryCache<X11Connection> = QueryCache::new();
+
+/// Runs one X11 request on the process's shared lazily-opened X11 connection, dropping and
+/// reconnecting once on a transport error.
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+pub(super) fn with_connection<T>(run: impl FnMut(&X11Connection) -> QueryOutcome<T>) -> Option<T> {
+    SHARED.query(X11Connection::connect, run)
 }
 
 #[cfg(test)]

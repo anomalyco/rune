@@ -143,3 +143,34 @@ fn classify_reply_distinguishes_protocol_errors_from_disconnects() {
         QueryOutcome::Disconnected,
     );
 }
+
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+#[test]
+fn classify_reply_or_id_distinguishes_protocol_errors_from_disconnects() {
+    use x11rb::errors::{ConnectionError, ReplyOrIdError};
+    use x11rb::protocol::ErrorKind;
+    use x11rb::x11_utils::X11Error;
+
+    assert_eq!(classify_reply_or_id::<u32>(Ok(Some(7))), QueryOutcome::Answer(7));
+    assert_eq!(classify_reply_or_id::<u32>(Ok(None)), QueryOutcome::NoAnswer);
+    let x11_error = X11Error {
+        error_kind: ErrorKind::Unknown(0),
+        error_code: 0,
+        sequence: 1,
+        bad_value: 0,
+        minor_opcode: 0,
+        major_opcode: 0,
+        extension_name: None,
+        request_name: None,
+    };
+    assert_eq!(classify_reply_or_id::<u32>(Err(ReplyOrIdError::X11Error(x11_error))), QueryOutcome::NoAnswer);
+    assert_eq!(
+        classify_reply_or_id::<u32>(Err(ReplyOrIdError::ConnectionError(ConnectionError::UnsupportedExtension))),
+        QueryOutcome::NoAnswer,
+    );
+    assert_eq!(classify_reply_or_id::<u32>(Err(ReplyOrIdError::IdsExhausted)), QueryOutcome::Disconnected);
+    assert_eq!(
+        classify_reply_or_id::<u32>(Err(ReplyOrIdError::ConnectionError(ConnectionError::UnknownError))),
+        QueryOutcome::Disconnected,
+    );
+}
