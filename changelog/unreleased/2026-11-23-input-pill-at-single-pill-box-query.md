@@ -1,0 +1,1 @@
+- Runtime: text-input pill hit-testing (`RuntimeCore::input_pill_at`) now shares the shaped-byte candidate lookup with `link_at` and lays out range boxes only for candidate pills under the pointer instead of every pill in the field.
