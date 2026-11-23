@@ -117,6 +117,7 @@ pub use offscreen::Offscreen;
 pub use offscreen::write_png;
 pub use rune_core::Blend;
 pub use warmup::warm_gpu;
+pub use warmup::warm_gpu_cache;
 pub use warmup::warm_gpu_with;
 
 /// Rows the first glyph atlas page's texture starts with: a window that shows a few labels holds

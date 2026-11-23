@@ -524,6 +524,24 @@ fn count_drift(gpu: Arc<Gpu>, readback: Readback, mut dib: Dib) {
     if let Err(error) = spawned { eprintln!("rune: could not count the hand-over's drift: {error}"); }
 }
 
+/// `crate::warm_gpu_cache` on Windows: a window that is never shown, the GPU thread's own
+/// `prepare` on it with no frame to draw, and the pinned pipelines waited for.
+#[allow(unsafe_code)]
+pub(crate) fn warm_gpu_cache() -> Result<(), String> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WS_POPUP};
+    let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+    // SAFETY: a window of the system's own class with no parent, menu or data; never shown.
+    let hwnd = unsafe { CreateWindowExW(0, class.as_ptr(), std::ptr::null(), WS_POPUP, 0, 0, 1280, 800, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null()) };
+    if hwnd.is_null() { return Err("no window could be made to warm the GPU on".into()); }
+    // What a window's hand-over makes: the device, the frame and fill pipelines for its swap
+    // chain's format, then (started by the warm frame's prepare) the pinned ones.
+    let made = prepare(hwnd as isize, (1280, 800), true, wgpu::Features::empty(), &Mutex::new(Vec::new()));
+    let result = made.map(|mut prepared| prepared.renderer.wait_pinned());
+    // SAFETY: the window made above, on this thread; the surface on it is gone with `prepared`.
+    unsafe { DestroyWindow(hwnd) };
+    result
+}
+
 #[allow(unsafe_code)]
 fn lower_priority() {
     use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL};

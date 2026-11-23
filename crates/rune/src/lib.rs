@@ -265,6 +265,7 @@ pub use render::gpu_events::on_gpu;
 pub use render::prewarm_gpu;
 pub use render::prewarm_gpu_on;
 pub use render::warm_gpu;
+pub use render::warm_gpu_cache;
 pub use render::warm_gpu_with;
 pub use rune_core::color;
 pub use rune_core::dirs;

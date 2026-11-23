@@ -320,3 +320,19 @@ pub fn warm_gpu_with(features: wgpu::Features, prepare: impl FnOnce(&wgpu::Devic
     #[cfg(any(target_os = "macos", target_arch = "wasm32"))]
     let _ = (features, prepare);
 }
+
+/// Makes what a window's GPU frames start from (the device, the renderer's pipelines for a
+/// window's swap chain, the pipelines pinned to one kind each) in a process that shows nothing,
+/// and returns once the driver has compiled them. Direct3D keeps what the driver compiled, and
+/// its own shader-cache databases, per user and per exe path: the next process of the same exe
+/// finds them. So a setup can run the installed program once in a mode that calls this and
+/// exits, and the person's first launch takes its window over to the GPU as a later launch
+/// does, about 0.1 s after its first frame, where a launch that has to make the databases and
+/// compile the pipelines takes 1 to 2 s. It draws nothing and opens no window anyone sees.
+/// Windows only: elsewhere it does nothing and returns `Ok`.
+pub fn warm_gpu_cache() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    return crate::window::warm_gpu_cache();
+    #[cfg(not(target_os = "windows"))]
+    Ok(())
+}

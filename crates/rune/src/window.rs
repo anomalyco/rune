@@ -39,6 +39,9 @@ mod surface;
 pub(crate) mod titlebar;
 #[cfg(target_os = "windows")]
 mod win32;
+/// `crate::warm_gpu_cache` on Windows (`win32::handover`).
+#[cfg(target_os = "windows")]
+pub(crate) fn warm_gpu_cache() -> Result<(), String> { win32::handover::warm_gpu_cache() }
 
 pub use handle::WindowHandle;
 #[cfg(not(target_arch = "wasm32"))]

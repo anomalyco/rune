@@ -8,6 +8,9 @@
 //! `LAUNCH_FLOOR_SEED=<file>` it keeps what it read in the file and gives it to the next launch
 //! (`App::layout_seed`), whose first frame then builds the view once. `LAUNCH_FLOOR_QUIT_MS=<n>`
 //! quits the app that long after its report, as a person would, so the file is written.
+//! `LAUNCH_FLOOR=warm` opens nothing: it makes the GPU device and Rune's pipelines
+//! (`rune::warm_gpu_cache`) and exits, as a setup would run an installed app once, so a first
+//! launch finds the driver's compiled pipelines.
 //!
 //! A moment after the first frame it prints every `rune::marks` step as
 //! `launch-mark <name> <µs since the process started> at=<epoch ms>`, then one JSON line
@@ -199,7 +202,20 @@ fn main() {
     let age = rune::process_age().unwrap_or_default();
     BOOT.get_or_init(|| (rune::time::now(), age, rune::time::system_now()));
     rune::marks::mark("main.entered");
-    let spec = AppSpec::new("Launch floor", (1280.0, 800.0), init, view);
+    // LAUNCH_FLOOR=warm: what a setup would run once after an install. No window: the GPU device
+    // and Rune's pipelines are made, so Direct3D keeps them for this exe's later launches.
+    if rune::env::var("LAUNCH_FLOOR").is_some_and(|v| v == "warm") {
+        let began = rune::time::now();
+        let made = rune::warm_gpu_cache();
+        let line = format!("{{\"scene\":\"warm\",\"ok\":{},\"us\":{},\"why\":\"{}\"}}\n", made.is_ok(), began.elapsed().as_micros(), made.err().unwrap_or_default().replace('"', "'"));
+        print!("launch-floor {line}");
+        if let Some(path) = rune::env::var_os("LAUNCH_FLOOR_TRACE")
+            && let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path)
+        {
+            file.write_all(line.as_bytes()).ok();
+        }
+        return;
+    }    let spec = AppSpec::new("Launch floor", (1280.0, 800.0), init, view);
     let shell = shell_scene();
     let app = rune::App::new(spec);
     let handle = app.handle();
