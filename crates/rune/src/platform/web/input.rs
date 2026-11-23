@@ -415,7 +415,7 @@ impl Running {
                 );
                 let dx_pages = event["dx"].as_f64().unwrap_or(0.0) as f32;
                 let dy_pages = event["dy"].as_f64().unwrap_or(0.0) as f32;
-                let shift = !self.input.is_mac && mods.shift;
+                let shift = !self.input.is_mac && mods.shift && !mods.ctrl;
                 let (dx, dy) = crate::input::host_events::wheel_page_delta(self.app.rt(), dx_pages, dy_pages, shift);
                 let (redraw, wheel_used) = crate::input::host_events::web_wheel(
                     self.app.rt_mut(),
@@ -523,7 +523,7 @@ impl Running {
                 // leaving Shift+trackpad vertical. Elsewhere, browsers that keep deltaX == 0
                 // rely on wheel_delta to swap vertical into horizontal (it never double-swaps
                 // when dx != 0).
-                let shift = !self.input.is_mac && self.input.mods.shift_key();
+                let shift = !self.input.is_mac && self.input.mods.shift_key() && !self.input.mods.control_key();
                 let (dx, dy) = crate::runtime::wheel_delta(*delta, scale, shift, crate::runtime::LINE_POINTS);
                 let precise = matches!(delta, winit::event::MouseScrollDelta::PixelDelta(_));
                 // Browsers give WheelEvent no gesture phase (always Moved), matching unphased

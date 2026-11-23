@@ -77,8 +77,9 @@ fn a_wheel_handler_hears_deltas_before_the_scroll_view_around_it() {
     assert_eq!((e.x, e.y, e.mods, e.precise), (30.0, 40.0, cmd, true), "the pointer in the canvas's own points");
     assert_eq!(y_of(&rt, "canvas"), 50.0, "the page didn't scroll");
 
-    // The gesture stays the canvas's when the pointer leaves it, as a scroll keeps its axis.
-    rt.wheel_xy(150.0, 280.0, 0.0, -30.0);
+    // The gesture stays the canvas's when the pointer leaves it, as a scroll keeps its axis
+    // (keeping the same modifiers; changing modifiers starts a new unphased gesture).
+    rt.wheel_event(WheelEvent::new(0.0, -30.0).at(150.0, 280.0).mods(cmd));
     rt.frame(1.0 / 60.0);
     assert_eq!((rt.state.pan.1, y_of(&rt, "canvas")), (-50.0, 50.0));
 

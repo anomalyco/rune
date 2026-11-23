@@ -412,11 +412,12 @@ policy changes are applied in the same mutation phase.
   `Runtime::wheel_event` with modifiers and phases; `Runtime::wheel` stays the vertical path.
 - **Canvas input** (`input/canvas_input.rs`): what an infinite canvas, map or image viewer needs.
   `.on_wheel(|s, e: WheelEvent, tx| -> bool)` hears wheel and trackpad deltas over the element
-  before any scroll view does, innermost first up to the nearest scroll view, with `dx`, `dy`,
-  the pointer in the element's own layout points (under any `live_scale`), `mods`, `phase`, `momentum` and `precise`.
-  Returning true takes the delta, and the element then hears the rest of that gesture, its
-  momentum included, wherever the pointer goes; false lets it scroll, and a gesture that
-  scrolled stays a scroll. `.on_magnify(|s, e: MagnifyEvent, tx| -> bool)` hears trackpad
+  before any scroll view does, innermost first through every ancestor past scroll views (as a DOM
+  `wheel` event bubbles), with `dx`, `dy`, the pointer in the element's own layout points (under
+  any `live_scale`), `mods`, `phase`, `momentum` and `precise`. Returning true takes the delta,
+  and the element then hears the rest of that gesture, its momentum included, wherever the
+  pointer goes, until it declines (passing the delta to outer handlers and then scrolling) or a
+  modifier change starts a new unphased gesture. `.on_magnify(|s, e: MagnifyEvent, tx| -> bool)` hears trackpad
   pinches (scale by `1 + delta`) at the pointer: macOS reports them, and on Windows, Linux and
   the web a pinch arrives as Ctrl + wheel, which goes to `on_magnify` (`-dy / 200` per point)
   when one is under the pointer. `.on_rotate` and `.on_smart_magnify` (a two-finger double tap)

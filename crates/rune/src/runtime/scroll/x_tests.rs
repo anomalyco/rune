@@ -59,19 +59,20 @@ fn the_wheel_over_a_viewport_with_nothing_to_scroll_scrolls_the_one_around_it() 
 #[test]
 fn the_phase_carries_when_the_gesture_last_moved_and_when_it_ended() {
     let mut lock = WheelLock::default();
-    lock.delta(1.0, 0.0, -10.0, None);
+    let plain = crate::Mods::default();
+    lock.delta(1.0, 0.0, -10.0, plain, None);
     assert_eq!(lock.phase, WheelPhase::Unphased { at: Some(1.0) }, "a delta starts it, timed");
-    lock.delta(1.05, 0.0, -10.0, None);
+    lock.delta(1.05, 0.0, -10.0, plain, None);
     assert_eq!(lock.phase, WheelPhase::Unphased { at: Some(1.05) }, "a pause under the idle keeps the gesture");
     let gesture = lock.gesture;
-    lock.delta(1.05 + WHEEL_IDLE + 0.01, 0.0, -10.0, None);
+    lock.delta(1.05 + WHEEL_IDLE + 0.01, 0.0, -10.0, plain, None);
     assert_ne!(lock.gesture, gesture, "a longer pause starts another");
     assert_eq!(lock.phase, WheelPhase::Unphased { at: Some(1.05 + WHEEL_IDLE + 0.01) }, "timed from the new delta");
     lock.set_owner(lock.gesture, WheelOwner::Vertical);
     lock.ended_at(2.0);
     assert_eq!(lock.phase, WheelPhase::Ended { at: 2.0, from: GestureKind::Unphased }, "an unphased end keeps its phase");
     let ended = lock.gesture;
-    lock.delta(2.001, 0.0, -10.0, None);
+    lock.delta(2.001, 0.0, -10.0, plain, None);
     assert_ne!(lock.gesture, ended, "a delta after the end starts another gesture at once");
     lock.lost(None);
     assert_eq!(lock.phase, WheelPhase::Unphased { at: None }, "the loss forgets when it last moved");
@@ -79,8 +80,9 @@ fn the_phase_carries_when_the_gesture_last_moved_and_when_it_ended() {
 
 #[test]
 fn an_ended_gestures_momentum_has_the_gap_its_end_time_measures() {
+    let plain = crate::Mods::default();
     let mut lock = WheelLock::default();
-    lock.delta(0.0, 0.0, -10.0, None);
+    lock.delta(0.0, 0.0, -10.0, plain, None);
     lock.set_owner(lock.gesture, WheelOwner::Vertical);
     lock.ended_at(1.0);
     let gesture = lock.gesture;
@@ -96,7 +98,7 @@ fn an_ended_gestures_momentum_has_the_gap_its_end_time_measures() {
     assert!(!lock.momentum());
 
     let mut lock = WheelLock::default();
-    lock.delta(0.0, 0.0, -10.0, None);
+    lock.delta(0.0, 0.0, -10.0, plain, None);
     lock.set_owner(lock.gesture, WheelOwner::Vertical);
     lock.ended_at(1.0);
     let gesture = lock.gesture;
@@ -276,7 +278,7 @@ fn wheel_walk(acts: &[WAct]) {
             WAct::Delta { dx, dy, gap, queued } => {
                 now += gap;
                 let pending = (*queued).then_some(running(&lock));
-                lock.delta(now, *dx, *dy, pending);
+                lock.delta(now, *dx, *dy, crate::Mods::default(), pending);
                 dev.delta(now, *dx, *dy, *queued);
             }
             WAct::Began { gap, queued } => {

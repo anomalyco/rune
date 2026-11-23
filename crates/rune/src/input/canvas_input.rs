@@ -155,11 +155,12 @@ impl El {
     }
 
     /// Wheel and trackpad scrolls over this element, before any scroll view around or under
-    /// the pointer moves: return true to take the delta, false to let it scroll as usual. The
-    /// innermost handler under the pointer hears it first, up to and including the nearest
-    /// scroll view. Once a handler takes a gesture's first delta it gets the rest of that
-    /// gesture, its momentum included, wherever the pointer goes, as a scroll view keeps the
-    /// axis it locked to.
+    /// the pointer moves: return true to take the delta, false to pass it on to outer
+    /// handlers and let it scroll as usual. The innermost handler under the pointer hears it
+    /// first, bubbling through every ancestor past scroll views as a DOM `wheel` event does.
+    /// Once a handler takes a gesture's delta it gets the rest of that gesture, its momentum
+    /// included, wherever the pointer goes, until it declines or the gesture ends (or modifiers
+    /// change on an unphased wheel).
     ///
     /// A canvas pans with plain deltas and zooms with ⌘ (`mods.cmd`) or pinch
     /// ([`El::on_magnify`]). Off macOS a trackpad pinch arrives as a Ctrl + wheel, which goes

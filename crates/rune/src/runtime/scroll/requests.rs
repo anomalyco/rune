@@ -104,8 +104,8 @@ impl ScrollTables {
     }
 
     #[inline]
-    pub(in crate::runtime) fn wheel_vertical_run(&mut self, now: f64, x: f32, y: f32, dy: f32) -> Option<NodeId> {
-        self.wheel_lock.vertical_run(now, x, y, dy)
+    pub(in crate::runtime) fn wheel_vertical_run(&mut self, now: f64, x: f32, y: f32, dy: f32, mods: crate::Mods, phased: bool) -> Option<NodeId> {
+        self.wheel_lock.vertical_run(now, x, y, dy, mods, phased)
     }
 
     #[inline]
@@ -114,8 +114,8 @@ impl ScrollTables {
     }
 
     #[inline]
-    pub(in crate::runtime) fn ran_wheel_vertical(&mut self, id: NodeId, now: f64, x: f32, y: f32, dy: f32, moved: bool, held: bool) {
-        self.wheel_lock.ran_vertical(id, now, x, y, dy, moved, held);
+    pub(in crate::runtime) fn ran_wheel_vertical(&mut self, id: NodeId, now: f64, x: f32, y: f32, dy: f32, mods: crate::Mods, phased: bool, moved: bool, held: bool) {
+        self.wheel_lock.ran_vertical(id, now, x, y, dy, mods, phased, moved, held);
     }
 
     /// A user or explicit scroll ends the holds and reveals that would pull the view back.

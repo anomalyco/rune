@@ -675,6 +675,31 @@ fn ime_sync_skips_unchanged_cursor_area_and_resends_on_change_reset_or_reentry()
 }
 
 #[test]
+fn wheel_ctrl_shift_keeps_vertical_delta_for_pinch_and_on_wheel() {
+    #[derive(Default)]
+    struct S { wheels: Vec<WheelEvent> }
+    fn view(_: &S, _: &mut Cx<S>) -> El {
+        el().size(200.0, 200.0).hit()
+            .on_wheel(|s: &mut S, ev, _| { s.wheels.push(ev); true })
+    }
+    let mut rt = Runtime::new(S::default(), view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.pointer_move(50.0, 50.0);
+
+    wheel(
+        rt.core_mut(),
+        MouseScrollDelta::LineDelta(0.0, -1.0),
+        GesturePhase::Moved,
+        1.0,
+        ModifiersState::CONTROL | ModifiersState::SHIFT,
+    );
+    rt.frame(0.0);
+    assert_eq!(rt.state.wheels.len(), 1);
+    assert_eq!(rt.state.wheels[0].dx, 0.0, "Ctrl+Shift+wheel does not turn horizontal");
+    assert!(rt.state.wheels[0].dy < 0.0, "Ctrl+Shift+wheel preserves vertical dy");
+}
+
+#[test]
 fn ime_sync_skips_unchanged_area_for_app_ime_cursor() {
     struct S { caret_x: f32 }
     fn view(s: &S, _: &mut Cx<S>) -> El {

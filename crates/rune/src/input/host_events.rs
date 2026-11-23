@@ -379,7 +379,7 @@ pub(crate) fn wheel(
     scale: f32,
     mods: ModifiersState,
 ) {
-    let shift = crate::runtime::SHIFT_TURNS_WHEEL && mods.shift_key();
+    let shift = crate::runtime::SHIFT_TURNS_WHEEL && mods.shift_key() && !mods.control_key();
     // In window points: a wheel turns as far on screen at any zoom, as Chromium's does,
     // and a pinch is the same gesture whatever the zoom.
     #[cfg(target_os = "windows")]
