@@ -1,0 +1,1 @@
+- Input: `Runtime::cursor` now resolves from the topmost hit target that sets a cursor (including `on_hover_change`, `on_pointer_move`, secondary/gesture and `.hit()` targets) instead of only the primary press target, so a hoverable child with its own cursor inside a draggable or pressable parent shows the child's cursor.

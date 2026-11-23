@@ -484,12 +484,13 @@ impl RuntimeCore {
         let Some((x, y)) = self.pointer.pos.filter(|&(x, y)| self.in_viewport(x, y)) else { return crate::el::Cursor::Default };
         if let Some(pan) = self.autoscroll_cursor() { return pan; }
         // An element on its way out has no cursor: `Cursor::Hidden` ends when it's removed.
-        // Selectable text shows its I-beam even where its presses go to a row around it.
+        // Selectable text and hoverable hit targets keep their own cursor inside a pressable or
+        // draggable ancestor.
         let target = match self.pointer.press.path() {
             Some(_) if self.edit.selectable.phase.dragging() => self.selection_holder(),
             Some(p) => self.live_index(p).filter(|&i| self.allowed(i)),
             // Moving layout holds hover: the cursor stays with what the pointer was over.
-            None => self.held_hover().flatten().or_else(|| self.selectable_at(x, y).or_else(|| self.primary_target(x, y))),
+            None => self.held_hover().flatten().or_else(|| self.cursor_target(x, y)),
         };
         let Some(mut i) = target else {
             return crate::el::Cursor::Default;
