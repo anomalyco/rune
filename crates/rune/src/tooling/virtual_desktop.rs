@@ -374,6 +374,7 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
     }
     let target = Offscreen::new(&gpu.device, wp, hp);
     let mut readback = crate::tooling::record::Readback::new(&gpu.device, &target, crate::tooling::record::DEPTH);
+    let mut in_flight = crate::tooling::record::InFlight::new(crate::tooling::record::DEPTH);
     let mut slots: Vec<Option<Slot>> = (0..n).map(|_| None).collect();
     let mut overlay = (args.keys.is_some() || args.pointer)
         .then(|| (crate::input::keycaps::Overlay::new(size, scale, args.keys, args.keys_theme, args.pointer), Renderer::new(&gpu.device, OFFSCREEN_FORMAT)));
@@ -538,13 +539,14 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
             for (shot, px) in readback.make_room(&gpu.device) { deliver(shot, px); }
             readback.copy(&mut enc, &target, shot);
         }
-        gpu.queue.submit([enc.finish()]);
+        in_flight.push(gpu.queue.submit([enc.finish()]));
         if want_pixels { readback.submitted(); }
         let ms = frame_start.elapsed().as_secs_f64() * 1000.0;
         cpu_ms.push(ms);
         if let Some(tr) = trace.as_mut() { desk.members[selected].trace(tr, real_t * 1000.0, ms); }
         if first_pixels {
             let done = readback.finish(&gpu.device);
+            in_flight.clear();
             let marker = json!({
                 "headless_ms": launched.elapsed().as_secs_f64() * 1000.0, "gpu_init_ms": init_ms, "frame_cpu_ms": ms,
                 "pixel_bytes": done.last().map_or(0, |(_, px)| px.len()),
@@ -554,6 +556,7 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
         } else if want_pixels {
             for (shot, px) in readback.ready(&gpu.device) { deliver(shot, px); }
         }
+        in_flight.pace(&gpu.device);
         if k == snap_frame && let Some(p) = &args.tree {
             let mut tree = desk.members[selected].tree(real_t);
             tree["windows"] = (0..n).map(|i| {
