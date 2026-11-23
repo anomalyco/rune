@@ -363,8 +363,8 @@ pub(super) fn submit_and_present_window(
     l.window.pre_present_notify();
     #[cfg(target_os = "macos")]
     {
-        let rt = host.app.rt();
-        l.native.materials.present(rt.paint.materials(), rt.env.scale, || gpu.queue.present(prepared.frame));
+        let (draws, scale) = crate::system_material::present_draws(host.app.rt());
+        l.native.materials.present(draws, scale, || gpu.queue.present(prepared.frame));
     }
     #[cfg(target_os = "windows")]
     if let (Some(rects), Some(surface)) = (&prepared.present_rect, l.surface.as_ref())

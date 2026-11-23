@@ -284,7 +284,8 @@ pub(super) fn submit_and_present(live: &mut Live, renderer: &Renderer, gpu: &Gpu
             }
         }
         renderer.submit(&gpu.queue, encoder);
-        live.materials.present(rt.paint.materials(), rt.env.scale, || gpu.queue.present(frame));
+        let (draws, scale) = crate::system_material::present_draws(rt);
+        live.materials.present(draws, scale, || gpu.queue.present(frame));
     }
     #[cfg(not(target_os = "macos"))]
     {

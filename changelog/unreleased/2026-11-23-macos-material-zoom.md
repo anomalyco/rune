@@ -1,0 +1,1 @@
+- macOS: native `SystemMaterial` views in windows and overlays now size and round their frames using the window's backing scale instead of `env.scale` (`window_scale * zoom`), so elements under `Cx::zoom` cover the full zoomed rect rather than `1/zoom` of it.

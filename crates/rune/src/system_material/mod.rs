@@ -50,6 +50,14 @@ impl MaterialDraw {
     }
 }
 
+/// The native material draws and window backing scale to hand to the platform material host.
+/// `MaterialDraw` rects and radii are in physical device pixels, while native material views
+/// sit in window points, so this uses `window_scale()` rather than `env.scale` (`window_scale * zoom`).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn present_draws(rt: &crate::runtime::RuntimeCore) -> (&[MaterialDraw], f32) {
+    (rt.paint.materials(), rt.window_scale())
+}
+
 /// Which existing view each draw takes: the view that showed the same element, else a free view
 /// of the same material, else none (the caller makes one). `views` holds each view's material
 /// and the element it showed last; `draws` each draw's material and element.

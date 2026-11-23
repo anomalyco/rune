@@ -76,6 +76,32 @@ fn material_elements_report_physical_rects_and_clamped_radii() {
 }
 
 #[test]
+fn zoomed_material_views_use_window_scale_points() {
+    fn zoomed(_: &u8, cx: &mut Cx<u8>) -> El {
+        cx.zoom(1.25);
+        el().w_full().h_full().radius(12.0).system_material(SystemMaterial::Glass)
+            .child(el().absolute(32.0, 16.0).size(120.0, 60.0).radius(8.0).system_material(SystemMaterial::Popover))
+    }
+    let mut rt = Runtime::new(0u8, zoomed, (760.0, 560.0), Env { scale: 2.0, system_dark: true });
+    rt.paint.set_native_materials(true);
+    rt.frame(0.0);
+    assert_eq!(rt.window_scale(), 2.0);
+    assert_eq!(rt.env.scale, 2.5);
+
+    let (draws, scale) = present_draws(rt.core());
+    assert_eq!(draws.len(), 2);
+    assert_eq!(draws[0].points(scale), ([0.0, 0.0, 760.0, 560.0], 15.0));
+    assert_eq!(draws[1].points(scale), ([40.0, 20.0, 150.0, 75.0], 10.0));
+
+    // Window resize and backing scale change while zoom stays active.
+    rt.set_viewport((800.0, 600.0), 1.0);
+    rt.frame(0.0);
+    let (draws, scale) = present_draws(rt.core());
+    assert_eq!(draws[0].points(scale), ([0.0, 0.0, 800.0, 600.0], 15.0));
+    assert_eq!(draws[1].points(scale), ([40.0, 20.0, 150.0, 75.0], 10.0));
+}
+
+#[test]
 fn without_native_views_the_element_draws_its_fallback_and_a_full_shadow() {
     let rt = runtime(one_card, false);
     let fills = kind(&rt, KIND_RECT);
