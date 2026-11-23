@@ -270,7 +270,7 @@ fn keyframes_hit_values_and_keep_velocity_through_cubics() {
         .cubic(20.0, 0.2)
         .cubic(40.0, 0.2)
         .spring(0.0, motion::SETTLE);
-    s.play_keyframes(N, X, &kf);
+    assert!(s.play_keyframes(N, X, &kf).is_some());
     let at = |s: &mut AnimationStore, t: f64| {
         s.tick_at(t);
         (s.get(N, X).unwrap(), s.velocity(N, X).unwrap())
@@ -285,6 +285,45 @@ fn keyframes_hit_values_and_keep_velocity_through_cubics() {
     assert!((at(&mut s, 0.7).0 - 40.0).abs() < 1e-3);
     at(&mut s, 3.0);
     assert_eq!(at(&mut s, 3.1).0, 0.0);
+}
+
+#[test]
+fn empty_keyframes_are_a_no_op() {
+    let empty = Keyframes::<f32>::new();
+    assert!(empty.is_empty());
+    assert!(Keyframes::<f32>::default().is_empty());
+
+    // First call on a fresh property: returns None, does not panic or create a track.
+    let mut s = AnimationStore::new();
+    assert_eq!(s.play_keyframes(N, X, &empty), None);
+    assert!(!s.has(N, X));
+    assert_eq!(s.track_len(), 0);
+    assert_eq!(s.active_len(), 0);
+
+    // Non-empty keyframes create/play a track and return its TrackId.
+    s.set(N, X, 0.0);
+    let kf = Keyframes::new().linear(10.0, 0.2).linear(20.0, 0.2);
+    assert!(!kf.is_empty());
+    let id = s.play_keyframes(N, X, &kf).expect("non-empty keyframes return a track");
+    assert_eq!(s.track_id(N, X), Some(id));
+    s.tick_at(0.1);
+    let epoch_before = s.epoch(id);
+    assert!((s.get(N, X).unwrap() - 5.0).abs() < 1e-3);
+
+    // Later call on an existing animating property: returns None and leaves the track untouched.
+    assert_eq!(s.play_keyframes(N, X, &empty), None);
+    assert_eq!(s.track_id(N, X), Some(id));
+    assert_eq!(s.epoch(id), epoch_before);
+    assert!(s.is_animating(N, X));
+    s.tick_at(0.4);
+    assert!((s.get(N, X).unwrap() - 20.0).abs() < 1e-3);
+
+    // Reduced motion behaves the same: empty returns None, non-empty returns Some.
+    let mut r = AnimationStore::new();
+    r.set_reduced_motion(true);
+    assert_eq!(r.play_keyframes(N, X, &empty), None);
+    assert!(!r.has(N, X));
+    assert!(r.play_keyframes(N, X, &kf).is_some());
 }
 
 #[test]
