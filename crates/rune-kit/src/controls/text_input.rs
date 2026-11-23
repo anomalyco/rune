@@ -700,7 +700,7 @@ impl TextField {
         if let Some(e) = &self.error {
             // Announced as it appears, and read again as the field's description.
             root = root.child(text(e.clone()).key("error").font(k.ty.text_xsmall_medium).color(c.danger.fg)
-                .live_region(rune::LiveRegion::Assertive));
+                .wrap().w_full().live_region(rune::LiveRegion::Assertive));
         }
         k.disabled_dim(root, self.state == State::Disabled)
     }
