@@ -1,0 +1,1 @@
+- macOS overlays: `OverlayInput::Regions` no longer runs the 120 Hz pointer poll when an overlay has no hit regions (and no held press or active cursor), so an idle overlay sleeps until an event or timer arrives and resumes polling as soon as a hit region is added.

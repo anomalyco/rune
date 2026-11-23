@@ -6,7 +6,7 @@ use objc2::rc::Retained;
 use objc2_app_kit::{NSEvent, NSPanel, NSWindow, NSResponder, NSScreen, NSView};
 use objc2_foundation::{NSObject, NSPoint, NSRect, NSSize};
 use crate::{KeyPolicy, OverlayInput, OverlayLevel, OverlayOptions, OverlaySupport};
-use std::{cell::{Cell, RefCell}, rc::Rc, time::Instant};
+use std::{cell::{Cell, RefCell}, rc::Rc};
 
 #[doc(hidden)]
 pub mod appearance;
@@ -161,7 +161,6 @@ pub(crate) struct Panel {
     pointer: Rc<PointerState>,
     options: OverlayOptions,
     follow_pointer: Cell<bool>,
-    pointer_poll: Cell<Option<Instant>>,
     /// Prewarmed, shown or fading, under one fence, and the requested capture exclusion,
     /// applied only while shown. While a fade runs the panel reads as visible, so a fading-out
     /// overlay can still draw its exit.
@@ -257,7 +256,7 @@ impl Panel {
             return None;
         }
         panel.setDelegate(ns_window.delegate().as_deref());
-        Some(Panel { bridge, monitors: RefCell::new(None), pointer, options: options.clone(), follow_pointer: Cell::new(options.follow_pointer), pointer_poll: Cell::new(None), presence, wake, panel, window: ns_window, view })
+        Some(Panel { bridge, monitors: RefCell::new(None), pointer, options: options.clone(), follow_pointer: Cell::new(options.follow_pointer), presence, wake, panel, window: ns_window, view })
     }
 
     /// On the primary screen (the one with the menu bar), in AppKit's bottom-left coordinates.

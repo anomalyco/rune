@@ -197,3 +197,89 @@ fn a_press_lost_before_any_sample_cancels_at_its_own_down_and_keeps_the_run() {
     rt.frame(0.0);
     assert_eq!(rt.state, [(crate::Phase::Down, false, 50.0, 1), (crate::Phase::Up, true, 50.0, 1), (crate::Phase::Down, false, 51.0, 2)]);
 }
+
+#[test]
+fn regions_without_hit_areas_rest_the_poll_and_resume_when_one_arrives() {
+    let pointer = PointerState::new(OverlayInput::Regions, false);
+    let now = crate::time::now();
+    pointer.sync_poll(true, now);
+    assert_eq!(pointer.poll_deadline(false), None, "an idle Regions overlay with no hit areas does not poll");
+    pointer.follow.set(true);
+    pointer.sync_poll(true, now);
+    assert_eq!(pointer.poll_deadline(false), None, "following the pointer uses monitors without a 120 Hz poll");
+    pointer.follow.set(false);
+
+    // Gaining a hit region while hidden keeps the poll disarmed until shown.
+    assert!(pointer.set_regions(&[[10.0, 10.0, 30.0, 30.0]], false, now));
+    assert_eq!(pointer.poll_deadline(false), None, "hidden overlays never arm the poll");
+    pointer.sync_poll(true, now);
+    assert_eq!(pointer.poll_deadline(false), Some(now), "showing with hit regions arms the poll");
+    assert!(pointer.poll_due(now));
+    pointer.rearm_poll(now);
+    let next = now + Duration::from_secs_f64(1.0 / 120.0);
+    assert_eq!(pointer.poll_deadline(false), Some(next));
+    assert_eq!(pointer.poll_deadline(true), None, "occluded rests the poll");
+
+    // Removing all hit regions disarms the poll so the overlay sleeps.
+    let later = next + Duration::from_millis(10);
+    assert!(pointer.set_regions(&[], true, later));
+    assert_eq!(pointer.poll_deadline(false), None);
+    assert!(!pointer.poll_due(later));
+
+    // Gaining a hit region later starts polling again.
+    let resume = later + Duration::from_millis(50);
+    assert!(pointer.set_regions(&[[5.0, 5.0, 25.0, 25.0]], true, resume));
+    assert_eq!(pointer.poll_deadline(false), Some(resume));
+    assert!(pointer.poll_due(resume));
+    pointer.rearm_poll(resume);
+    assert_eq!(pointer.poll_deadline(false), Some(resume + Duration::from_secs_f64(1.0 / 120.0)));
+
+    // Non-Regions modes always disarm the poll even while regions remain.
+    for mode in [OverlayInput::All, OverlayInput::None] {
+        pointer.input.set(mode);
+        pointer.sync_poll(true, resume);
+        assert_eq!(pointer.poll_deadline(false), None);
+    }
+}
+
+#[test]
+fn regions_poll_holds_through_capture_and_cursor_then_disarms_once_cleared() {
+    let pointer = PointerState::new(OverlayInput::Regions, false);
+    let now = crate::time::now();
+    assert!(pointer.set_regions(&[[10.0, 10.0, 30.0, 30.0]], true, now));
+    pointer.record_click(true, 20.0, 20.0);
+    assert!(pointer.captured());
+
+    // Losing all hit regions mid-press keeps polling until the press ends.
+    assert!(pointer.set_regions(&[], true, now));
+    assert_eq!(pointer.poll_deadline(false), Some(now));
+    pointer.rearm_poll(now);
+    let tick = now + Duration::from_secs_f64(1.0 / 120.0);
+    assert_eq!(pointer.poll_deadline(false), Some(tick));
+    pointer.record_click(false, 20.0, 20.0);
+    dispatch(&pointer, true);
+    dispatch(&pointer, false);
+    pointer.released();
+    assert!(!pointer.captured());
+    pointer.sync_poll(true, tick);
+    assert_eq!(pointer.poll_deadline(false), None, "once released with no regions, the poll disarms");
+
+    // A lost release that ends inside a poll disarms the poll on rearm.
+    assert!(pointer.set_regions(&[[10.0, 10.0, 30.0, 30.0]], true, tick));
+    pointer.record_click(true, 20.0, 20.0);
+    assert!(pointer.set_regions(&[], true, tick));
+    pointer.observe_release(0, tick, (20.0, 20.0));
+    let recovered = tick + Duration::from_millis(100);
+    pointer.observe_release(0, recovered, (20.0, 20.0));
+    assert!(!pointer.captured());
+    pointer.rearm_poll(recovered);
+    assert_eq!(pointer.poll_deadline(false), None, "rearm disarms once the lost release clears capture");
+
+    // An active overlay cursor keeps polling until cleared.
+    pointer.cursor.set(Some(crate::el::Cursor::Grab));
+    pointer.sync_poll(true, recovered);
+    assert_eq!(pointer.poll_deadline(false), Some(recovered));
+    pointer.cursor.set(None);
+    pointer.sync_poll(true, recovered);
+    assert_eq!(pointer.poll_deadline(false), None);
+}

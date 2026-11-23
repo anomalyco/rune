@@ -25,6 +25,7 @@ pub(crate) struct PointerState {
     recovered_release: Cell<Option<(f32, f32)>>,
     /// The cursor the overlay shows while the pointer is over its hit area.
     cursor: Cell<Option<crate::el::Cursor>>,
+    poll: Cell<Option<Instant>>,
 }
 
 impl PointerState {
@@ -125,6 +126,35 @@ impl PointerState {
     fn wanted(&self) -> bool {
         self.input.get() != OverlayInput::None || self.follow.get() || self.captured() || self.cursor.get().is_some()
     }
+    /// Whether a visible overlay needs the 120 Hz pointer poll. Only `OverlayInput::Regions`
+    /// polls to flip `ignoresMouseEvents` as the pointer crosses hit regions; without any hit
+    /// region, held press or active cursor, the `NSEvent` monitors alone handle hover and
+    /// pointer following, so an idle overlay can sleep.
+    pub(crate) fn needs_poll(&self) -> bool {
+        self.input.get() == OverlayInput::Regions
+            && (!self.regions.borrow().is_empty() || self.captured() || self.cursor.get().is_some())
+    }
+    /// Arms the poll when visible and needed; disarms it otherwise.
+    pub(crate) fn sync_poll(&self, visible: bool, now: Instant) {
+        if visible && self.needs_poll() {
+            if self.poll.get().is_none() { self.poll.set(Some(now)); }
+        } else {
+            self.poll.set(None);
+        }
+    }
+    /// Replaces the hit regions and updates the poll state; true if the regions changed.
+    pub(crate) fn set_regions(&self, regions: &[[f32; 4]], visible: bool, now: Instant) -> bool {
+        if self.regions.borrow().as_slice() == regions { return false; }
+        *self.regions.borrow_mut() = regions.to_vec();
+        self.sync_poll(visible, now);
+        true
+    }
+    pub(crate) fn poll_due(&self, now: Instant) -> bool { self.poll.get().is_some_and(|at| at <= now) }
+    /// Schedules the next poll tick if still needed, or disarms it.
+    pub(crate) fn rearm_poll(&self, now: Instant) {
+        self.poll.set(self.needs_poll().then(|| now + Duration::from_secs_f64(1.0 / 120.0)));
+    }
+    pub(crate) fn poll_deadline(&self, occluded: bool) -> Option<Instant> { self.deadline(self.poll.get(), occluded) }
     #[allow(unsafe_code)]
     pub(super) fn observe(&self, panel: &NSPanel, wake: Option<&crate::Waker>) {
         let pointer = NSEvent::mouseLocation();
@@ -172,13 +202,13 @@ impl Panel {
         self.refresh_monitors();
         if self.presence.get().visible() { self.pointer.observe(&self.panel, self.wake.as_ref()); }
     }
-    pub fn pointer_deadline(&self, occluded: bool) -> Option<Instant> { self.pointer.deadline(self.pointer_poll.get(), occluded) }
+    pub fn pointer_deadline(&self, occluded: bool) -> Option<Instant> { self.pointer.poll_deadline(occluded) }
     /// Samples the pointer if its poll is due; true if it did.
     fn poll_pointer(&self, now: Instant) -> bool {
-        if self.pointer_poll.get().is_some_and(|at| at <= now) {
-            self.pointer_poll.set(Some(now + Duration::from_secs_f64(1.0 / 120.0)));
+        if self.pointer.poll_due(now) {
             self.pointer.trace(&self.panel, "poll", None);
             self.pointer.observe(&self.panel, None);
+            self.pointer.rearm_poll(now);
             return true;
         }
         false
@@ -187,7 +217,9 @@ impl Panel {
     /// samples the pointer, through the timed poll when it is due and `poll` allows it.
     pub fn observe_pointer(&self, now: Instant, poll: bool) {
         self.keep_view();
-        if self.presence.get().visible() && self.pointer.wanted() && !(poll && self.poll_pointer(now)) { self.pointer.observe(&self.panel, None); }
+        let visible = self.presence.get().visible();
+        if visible && self.pointer.wanted() && !(poll && self.poll_pointer(now)) { self.pointer.observe(&self.panel, None); }
+        self.pointer.sync_poll(visible, now);
     }
     pub fn set_input(&self, input: OverlayInput) {
         self.pointer.input.set(input);
@@ -209,17 +241,15 @@ impl Panel {
     pub fn set_follow_pointer(&self, follow: bool) { self.follow_pointer.set(follow); self.pointer.follow.set(follow); self.refresh_monitors(); }
     pub(super) fn refresh_monitors(&self) {
         if !self.presence.get().visible() { return; }
-        if self.pointer.input.get() == OverlayInput::Regions {
-            if self.pointer_poll.get().is_none() { self.pointer_poll.set(Some(crate::time::now())); }
-        } else { self.pointer_poll.set(None); }
+        self.pointer.sync_poll(true, crate::time::now());
         if self.needs_monitors() { self.start_monitors(); }
         else { self.monitors.borrow_mut().take(); }
     }
     pub fn set_regions(&self, regions: &[[f32; 4]]) {
-        if self.pointer.regions.borrow().as_slice() == regions { return; }
-        *self.pointer.regions.borrow_mut() = regions.to_vec();
+        let visible = self.presence.get().visible();
+        if !self.pointer.set_regions(regions, visible, crate::time::now()) { return; }
         self.pointer.trace(&self.panel, "regions", None);
-        if self.presence.get().visible() { self.pointer.observe(&self.panel, None); }
+        if visible { self.pointer.observe(&self.panel, None); }
     }
 
     fn needs_monitors(&self) -> bool {
@@ -274,7 +304,7 @@ impl Panel {
     }
 
     pub(super) fn stop_pointer(&self) {
-        self.pointer_poll.set(None);
+        self.pointer.poll.set(None);
         self.monitors.borrow_mut().take();
         self.pointer.step(Event::Stopped);
         self.pointer.pending.set(None);
