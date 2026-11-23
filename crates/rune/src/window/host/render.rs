@@ -356,6 +356,14 @@ pub(super) fn submit_and_present_window(
     encoded: &mut Option<Instant>,
     info: &StepInfo,
 ) -> Instant {
+    // macOS: the first frame of a window already on screen is taken as finished when it is
+    // presented. The GPU takes 9,000 to 18,000 µs over it (an M4's, by the command buffer's own
+    // GPU times), and the UI thread has AppKit's launch work, the next frame and input to get
+    // to meanwhile. A frame a hidden window prepares still waits for the GPU: a reveal shows it.
+    #[cfg(target_os = "macos")]
+    let waits = host.launcher() || !host.life.shown() || std::env::var_os("RUNE_FIRST_FRAME_WAITS").is_some();
+    #[cfg(not(target_os = "macos"))]
+    let waits = true;
     let (Some(l), Some((gpu, renderer))) = (host.win.as_mut(), host.gpu.as_mut()) else {
         return crate::time::now();
     };
@@ -401,7 +409,10 @@ pub(super) fn submit_and_present_window(
     // The frame landed with this present; later ones needn't wait for a transaction.
     #[cfg(target_os = "macos")]
     if !FrameMove::moving(&host.frame_move) { l.present_with_transaction(false); }
-    if !l.first_frame.ready()
+    if !l.first_frame.ready() && !waits && l.first_frame.deadline().is_none() {
+        l.first_frame.gpu_done();
+        gpu.queue.on_submitted_work_done(|| crate::marks::mark("frame.first.gpu_done"));
+    } else if !l.first_frame.ready()
         && rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).is_ok() {
         l.first_frame.gpu_done();
         crate::marks::mark("frame.first.gpu_done");
