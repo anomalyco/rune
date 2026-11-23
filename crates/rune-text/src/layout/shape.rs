@@ -16,6 +16,7 @@ use crate::{
 };
 use rune_core::tok::{Family, OpticalSize, TextStyle};
 
+use super::span_map::SpanMap;
 use super::{hash, inline_fit, line_break};
 
 /// How strictly Japanese and Chinese lines break, one switch. `Strict` (JIS X 4051, UAX #14's
@@ -228,6 +229,11 @@ impl TextSystem {
         let mono = with_symbols(self.mono.as_str(), mono_scripts);
         // Routed clusters try their fallback first, then the run's own stack (mono spans included).
         // Each of the four {math, emoji} × {sans, mono} stacks is built at most once.
+        let mono_spans = if routes.is_empty() {
+            SpanMap::empty()
+        } else {
+            SpanMap::new(spans.iter().filter(|s| s.mono).map(|s| (s.start as usize..s.end as usize, ())))
+        };
         let mut stacks: [Option<Vec<FontFamilyName<'_>>>; 4] = Default::default();
         let mut routed = Vec::new();
         for (range, route) in routes {
@@ -235,7 +241,7 @@ impl TextSystem {
             if fonts.is_empty() {
                 continue;
             }
-            let mono_span = spans.iter().any(|s| s.mono && (s.start as usize) < range.end && range.start < s.end as usize);
+            let mono_span = mono_spans.overlaps(range.clone());
             let stack = 2 * (route == Route::Emoji) as usize + mono_span as usize;
             stacks[stack].get_or_insert_with(|| {
                 let base = if mono_span { &mono } else { &sans };
@@ -244,6 +250,7 @@ impl TextSystem {
             routed.push((range, stack));
         }
         let span_range = |s: &Span| (s.start as usize).min(text.len())..(s.end as usize).min(text.len());
+        let given_map = SpanMap::new(spans.iter().zip(&span_spacing).filter_map(|(s, &v)| v.map(|v| (span_range(s), v))));
         // `exact` overrides the predicted spacing with each run's own, by byte range.
         // Code never takes ligatures (`->` stays two characters); later features override earlier.
         let off = [b"liga", b"clig", b"calt", b"dlig"].map(|tag| parley::FontFeature::new(parley::setting::Tag::new(tag), 0));
@@ -344,11 +351,14 @@ impl TextSystem {
                 b.push(StyleProperty::WordSpacing(*v), range.clone());
             }
             // Blink widens each glyph in synthetic bold by a pixel (`SyntheticBoldOffset`).
+            let exact_map = if bold.is_empty() || exact.is_empty() {
+                SpanMap::empty()
+            } else {
+                SpanMap::new(exact.iter().map(|(r, v)| (r.clone(), *v)))
+            };
             for (range, _) in bold {
                 let at = range.start;
-                let v = exact.iter().find(|(r, _)| r.contains(&at)).map(|e| e.1)
-                    .or_else(|| spans.iter().zip(&span_spacing).rev().find_map(|(s, v)| v.filter(|_| span_range(s).contains(&at))))
-                    .unwrap_or(base_spacing);
+                let v = exact_map.get(at).or_else(|| given_map.get(at)).unwrap_or(base_spacing);
                 b.push(StyleProperty::LetterSpacing(v + synthetic_bold::ADVANCE), range.clone());
             }
             // Boxes before and after a pill's label make room for its chip. The label may break
@@ -383,7 +393,12 @@ impl TextSystem {
         let mut layout = build(&mut self.layout_cx, &mut self.font_cx, &[], &widen, &[], &[], &[]);
         // On Windows, system faces as DirectWrite picks them for each run's weight, as Chromium.
         let system = cfg!(target_os = "windows") && !self.font_files.is_empty();
-        let wanted = |at: usize| spans.iter().rev().find_map(|s| s.weight.filter(|_| span_range(s).contains(&at))).unwrap_or(style.weight);
+        let weight_map = if system {
+            SpanMap::new(spans.iter().filter_map(|s| s.weight.map(|w| (span_range(s), w))))
+        } else {
+            SpanMap::empty()
+        };
+        let wanted = |at: usize| weight_map.get(at).unwrap_or(style.weight);
         let weights = if system {
             system_weight::corrections(&mut self.system_faces, &mut self.font_cx, &self.font_files, &layout, wanted)
         } else {
@@ -405,9 +420,7 @@ impl TextSystem {
             layout = build(&mut self.layout_cx, &mut self.font_cx, &[], &widen, &weights, &fits, &bold);
         }
         // The spacing each run got, against the spacing its own font needs.
-        let given = |at: usize| {
-            spans.iter().zip(&span_spacing).rev().find_map(|(s, v)| v.filter(|_| span_range(s).contains(&at))).unwrap_or(base_spacing)
-        };
+        let given = |at: usize| given_map.get(at).unwrap_or(base_spacing);
         let mut exact: Vec<(std::ops::Range<usize>, f32)> = Vec::new();
         let mut mismatch = false;
         for line in layout.lines() {

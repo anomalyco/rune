@@ -24,28 +24,34 @@ pub(super) fn mono_fits(layout: &Layout<Ink>, text: &str, spans: &[Span], style:
     }
     // The smaller spaces that stand for the code's padding: they make room and show nothing.
     let room = |s: &Span| !s.mono && s.size.is_some_and(|z| z < style.size) && text.get(s.start as usize..s.end as usize).is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace));
-    let span_at = |at: usize| spans.iter().rev().find(|s| room(s) && (s.start as usize) <= at && at < s.end as usize);
-    let runs = || layout.lines().flat_map(|line| line.runs().collect::<Vec<_>>());
+    let rooms = super::span_map::SpanMap::new(spans.iter().filter(|s| room(s)).map(|s| (s.start as usize..s.end as usize, ())));
+    if rooms.is_empty() {
+        return Vec::new();
+    }
     // The strut: the text's own font at its size (`strut` is its ascent and descent per em).
     let (ascent, descent) = (strut.0 * style.size * scale, strut.1 * style.size * scale);
     let line = style.line_px() * scale;
     let (over, under) = quantized(ascent, descent, line);
     let mut out: Vec<(Range<usize>, f32)> = Vec::new();
-    for run in runs() {
-        let range = run.text_range();
-        let Some(span) = (!range.is_empty()).then(|| span_at(range.start)).flatten() else { continue };
-        let size = run.font_size();
-        if size > style.size * scale + 1e-3 {
-            continue;
-        }
-        // The span's line height as `layout_rich` gave it: the text's, scaled with a span size.
-        let own = if span.size.is_some() { line / (style.size * scale) * size } else { line };
-        let m = run.font_metrics();
-        let Some(fit) = fit(m.ascent.round(), m.descent.round(), own, over, under) else { continue };
-        let lh = fit / scale;
-        match out.last_mut() {
-            Some((last, v)) if last.end == range.start && *v == lh => last.end = range.end,
-            _ => out.push((range, lh)),
+    for line_item in layout.lines() {
+        for run in line_item.runs() {
+            let range = run.text_range();
+            if range.is_empty() || rooms.get(range.start).is_none() {
+                continue;
+            }
+            let size = run.font_size();
+            if size > style.size * scale + 1e-3 {
+                continue;
+            }
+            // The span's line height as `layout_rich` gave it: the text's, scaled with a span size.
+            let own = line / (style.size * scale) * size;
+            let m = run.font_metrics();
+            let Some(fit) = fit(m.ascent.round(), m.descent.round(), own, over, under) else { continue };
+            let lh = fit / scale;
+            match out.last_mut() {
+                Some((last, v)) if last.end == range.start && *v == lh => last.end = range.end,
+                _ => out.push((range, lh)),
+            }
         }
     }
     out

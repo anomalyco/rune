@@ -83,6 +83,7 @@ impl TextSystem {
         let mut last_bg = None;
         for line in layout.lines() {
             let m = line.metrics();
+            let mut line_end = None;
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(gr) = item else { continue };
                 let ink = gr.style().brush.0 & !crate::raster::synthetic_bold::SYNTHETIC_BOLD;
@@ -139,7 +140,8 @@ impl TextSystem {
                 }
                 if let Some(uc) = s.underline.filter(|c| c.a > 0.0) {
                     let y = (origin[1] + m.baseline + 2.0 * scale).round();
-                    let (l, r) = underline_edges(&line, origin[0], gr.offset(), gr.offset() + w);
+                    let end = *line_end.get_or_insert_with(|| super::underline::line_end(&line));
+                    let (l, r) = super::underline::underline_edges_with_end(end, origin[0], gr.offset(), gr.offset() + w);
                     out.push(D::new(Deco { rect: [l, y, r - l, scale.max(1.0)], color: uc, radius: 0.0 }, None, 0));
                 }
             }
