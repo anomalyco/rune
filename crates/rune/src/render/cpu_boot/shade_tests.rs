@@ -247,3 +247,215 @@ fn mixed_and_rtl_mirrored_shadows_match_gpu_and_mirror_pixels() {
     assert!(max_gpu_mirror <= 1, "GPU RTL shadow is not the horizontal mirror of LTR: max diff {max_gpu_mirror}");
     assert!(max_cpu_mirror <= 1, "CPU RTL shadow is not the horizontal mirror of LTR: max diff {max_cpu_mirror}");
 }
+
+#[test]
+fn sub_texel_and_degenerate_image_never_panics() {
+    use crate::render::{KIND_IMAGE, KIND_SEGMENT};
+
+    let (w, h) = (32u32, 32u32);
+    let clear = [0.0, 0.0, 0.0, 1.0];
+    let atlas = Atlas::new();
+
+    // Build an image atlas page with a distinct neighbour colour (red) around a blue 4x4 slot at
+    // (4, 4) so any sub-texel clamp that reads `lo - 1` would visibly bleed red instead of blue.
+    let mut images = ImageAtlas::default();
+    let probe = crate::pixels::Pixels::new();
+    probe.set(16, 16, vec![255, 0, 0, 255].repeat(16 * 16));
+    let placed = images.place(&probe, [16.0, 16.0]).expect("places image");
+    let page = &mut images.pages[placed.page];
+    for y in 4..8 {
+        for x in 4..8 {
+            let at = ((placed.rect[1] + y) * page.width + (placed.rect[0] + x)) as usize * 4;
+            page.data[at..at + 4].copy_from_slice(&[0, 64, 240, 255]);
+        }
+    }
+    let ox = (placed.rect[0] + 4) as f32;
+    let oy = (placed.rect[1] + 4) as f32;
+
+    let image_inst = |rect: [f32; 4], uv: [f32; 4]| Instance {
+        rect,
+        radii: [0.0; 4],
+        fill: [0.0, 0.0, 0.0, 1.0],
+        border: [0.0; 4],
+        params: [placed.page as f32, KIND_IMAGE, 0.0, 1.0],
+        uv,
+        clip: NO_CLIP,
+        fade: [0; 4],
+    };
+
+    // Sub-texel crops (0 < uv < 1) must not panic and must sample texel `lo` (blue), never
+    // bleeding the red neighbour at `lo - 1`.
+    for uv in [
+        [ox, oy, 0.5, 4.0],
+        [ox, oy, 4.0, 0.5],
+        [ox, oy, 0.5, 0.5],
+        [ox, oy, 1e-4, 4.0],
+        [ox, oy, 4.0, 1e-4],
+        [ox, oy, 1e-6, 1e-6],
+    ] {
+        let inst = image_inst([4.0, 4.0, 8.0, 8.0], uv);
+        let scene = Scene::new(std::slice::from_ref(&inst), &atlas, &images, (w, h), clear).srgb_blend(true);
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        paint(&scene, &mut Target::new(&mut buf, w, h), 1).expect("CPU paints sub-texel image");
+        // Centre pixel (8, 8) in BGRA must be the slot's blue [240, 64, 0, 255], not red [0, 0, 255, 255].
+        let at = ((8 * w + 8) * 4) as usize;
+        assert_eq!(&buf[at..at + 4], &[240, 64, 0, 255], "sub-texel uv={uv:?} sampled wrong texel");
+    }
+
+    // Zero, negative, NaN and infinite UV spans, origins, or box sizes must not panic and must
+    // draw nothing (leaving every pixel at the clear colour [0, 0, 0, 255]).
+    let mut clear_buf = vec![0u8; (w * h * 4) as usize];
+    for px in clear_buf.chunks_exact_mut(4) { px.copy_from_slice(&[0, 0, 0, 255]); }
+
+    for (rect, uv) in [
+        ([4.0, 4.0, 8.0, 8.0], [ox, oy, 0.0, 4.0]),
+        ([4.0, 4.0, 8.0, 8.0], [ox, oy, 4.0, 0.0]),
+        ([4.0, 4.0, 8.0, 8.0], [ox, oy, 0.0, 0.0]),
+        ([4.0, 4.0, 8.0, 8.0], [ox, oy, -2.0, 4.0]),
+        ([4.0, 4.0, 8.0, 8.0], [ox, oy, 4.0, -2.0]),
+        ([4.0, 4.0, 8.0, 8.0], [ox, oy, -0.5, -0.5]),
+        ([4.0, 4.0, 8.0, 8.0], [ox, oy, f32::NAN, 4.0]),
+        ([4.0, 4.0, 8.0, 8.0], [ox, oy, 4.0, f32::NAN]),
+        ([4.0, 4.0, 8.0, 8.0], [f32::NAN, oy, 4.0, 4.0]),
+        ([4.0, 4.0, 8.0, 8.0], [ox, f32::INFINITY, 4.0, 4.0]),
+        ([4.0, 4.0, 8.0, 8.0], [ox, oy, f32::INFINITY, 4.0]),
+        ([4.0, 4.0, 8.0, 8.0], [ox, oy, f32::NEG_INFINITY, 4.0]),
+        ([4.0, 4.0, 8.0, 8.0], [-4.0, -4.0, 2.0, 2.0]),
+        ([4.0, 4.0, 8.0, 8.0], [1e20, 1e20, 4.0, 4.0]),
+        ([4.0, 4.0, 0.0, 8.0], [ox, oy, 4.0, 4.0]),
+        ([4.0, 4.0, 8.0, 0.0], [ox, oy, 4.0, 4.0]),
+        ([4.0, 4.0, -4.0, 8.0], [ox, oy, 4.0, 4.0]),
+        ([4.0, 4.0, f32::NAN, 8.0], [ox, oy, 4.0, 4.0]),
+    ] {
+        let inst = image_inst(rect, uv);
+        let scene = Scene::new(std::slice::from_ref(&inst), &atlas, &images, (w, h), clear).srgb_blend(true);
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        paint(&scene, &mut Target::new(&mut buf, w, h), 1).expect("CPU paints degenerate image");
+        assert_eq!(buf, clear_buf, "degenerate image rect={rect:?} uv={uv:?} should draw nothing");
+        // Also exercise `shade::image` directly for inputs `pixel_bounds` skips (like zero rect).
+        let img = super::super::Image { width: images.pages[placed.page].width, data: &images.pages[placed.page].data, dirty: None };
+        assert_eq!(image(&inst, &img, [8.5, 8.5]), [0.0; 4], "shade::image rect={rect:?} uv={uv:?}");
+    }
+
+    // End-to-end: SurfaceFit::Fill (or unscaled in a sub-pixel box) emits a sub-texel KIND_IMAGE
+    // crop and paints through cpu_boot without panicking.
+    for (bw, bh, unscaled) in [(0.4f32, 24.0f32, false), (24.0, 0.4, false), (0.4, 0.4, true)] {
+        let img = crate::pixels::Pixels::new();
+        img.set(8, 8, vec![20, 120, 220, 255].repeat(8 * 8));
+        let mut rt = Runtime::new(
+            (img, bw, bh, unscaled),
+            |(img, bw, bh, unscaled), _| {
+                el().size(32.0, 32.0).child(
+                    el().absolute(4.0, 4.0)
+                        .size(*bw, *bh)
+                        .pixels_fit(img, crate::SurfaceFit::Fill)
+                        .surface_unscaled(*unscaled),
+                )
+            },
+            (32.0, 32.0),
+            Env { scale: 1.0, system_dark: false },
+        );
+        rt.set_srgb_blend(true);
+        rt.frame(0.0);
+        assert!(
+            rt.instances.iter().any(|i| i.kind() == Some(Kind::Image) && (i.uv[2] < 1.0 || i.uv[3] < 1.0)),
+            "expected a sub-texel KIND_IMAGE crop for ({bw}, {bh})",
+        );
+        let scene = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, (w, h), clear).srgb_blend(true);
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        paint(&scene, &mut Target::new(&mut buf, w, h), 1).expect("CPU paints sub-pixel SurfaceFit::Fill");
+    }
+
+    // Degenerate shadow, inset shadow and round-cap segment clamps must never panic either.
+    let degenerate_boxes = [
+        // Negative-height shadow still has non-empty pixel_bounds once blur expands the quad.
+        outer_shadow([10.0, 10.0, 12.0, -2.0], [0.0; 4], 4.0),
+        outer_shadow([10.0, 10.0, 12.0, f32::NAN], [0.0; 4], 4.0),
+        // Inset shadow with NaN offset passes pixel_bounds and feeds NaN into shadow().
+        inset_shadow([6.0, 6.0, 20.0, 20.0], [4.0; 4], 0.0, 4.0, [0.0, f32::NAN]),
+        // Round-cap segment with NaN endpoint passes pixel_bounds and feeds NaN length into clamp.
+        Instance {
+            rect: [6.0, 6.0, 20.0, 20.0],
+            radii: [8.0, 8.0, f32::NAN, 16.0],
+            fill: [1.0, 1.0, 1.0, 1.0],
+            border: [0.0; 4],
+            params: [2.0, KIND_SEGMENT, 1.0, 1.0],
+            uv: [0.0; 4],
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+    ];
+    for inst in &degenerate_boxes {
+        let scene = Scene::new(std::slice::from_ref(inst), &atlas, &images, (w, h), clear).srgb_blend(true);
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        paint(&scene, &mut Target::new(&mut buf, w, h), 1).expect("CPU paints degenerate box");
+    }
+}
+
+#[test]
+fn valid_image_matches_gpu_byte_for_byte() {
+    use crate::render::KIND_IMAGE;
+
+    let (w, h) = (96u32, 64u32);
+    let clear = [0.06, 0.08, 0.12, 1.0];
+    let gpu = Gpu::headless();
+    let half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
+
+    let mut images = ImageAtlas::default();
+    let px = crate::pixels::Pixels::new();
+    let mut raw = Vec::with_capacity(16 * 16 * 4);
+    for y in 0..16u8 {
+        for x in 0..16u8 {
+            raw.extend_from_slice(&[x * 16, y * 16, 200u8.saturating_sub(x * 8), if x == 0 { 128 } else { 255 }]);
+        }
+    }
+    px.set(16, 16, raw);
+    let placed = images.place(&px, [16.0, 16.0]).expect("places image");
+
+    let [ux, uy, uw, uh] = placed.rect.map(|v| v as f32);
+    let instances = [
+        // Whole image, scaled up with rounded corners.
+        Instance {
+            rect: [8.0, 8.0, 32.0, 32.0],
+            radii: [6.0; 4],
+            fill: [0.0, 0.0, 0.0, 0.9],
+            border: [0.0; 4],
+            params: [placed.page as f32, KIND_IMAGE, 0.0, 1.0],
+            uv: [ux, uy, uw, uh],
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        // Cropped fractional span (>= 1 texel).
+        Instance {
+            rect: [48.0, 12.0, 36.0, 40.0],
+            radii: [0.0; 4],
+            fill: [0.0, 0.0, 0.0, 1.0],
+            border: [0.0; 4],
+            params: [placed.page as f32, KIND_IMAGE, 0.0, 1.0],
+            uv: [ux + 3.0, uy + 2.0, 7.5, 9.25],
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+    ];
+
+    let mut atlas = Atlas::new();
+    let scene = Scene::new(&instances, &atlas, &images, (w, h), clear).srgb_blend(true).half_rounding(half);
+    let mut cpu_px = vec![0u8; (w * h * 4) as usize];
+    paint(&scene, &mut Target::new(&mut cpu_px, w, h), 1).expect("CPU paints valid images");
+
+    let format = wgpu::TextureFormat::Bgra8Unorm;
+    let mut renderer = Renderer::new(&gpu.device, format);
+    renderer.set_srgb_blend(true);
+    renderer.upload_images(&gpu.device, &gpu.queue, &mut images);
+    renderer.prepare_ui(&gpu.device, &gpu.queue, &mut atlas, &instances, (w, h));
+    let target = Offscreen::with_format(&gpu.device, w, h, format);
+    let mut enc = gpu.device.create_command_encoder(&Default::default());
+    renderer.draw(&mut enc, &target.view, clear);
+    target.copy(&mut enc);
+    renderer.submit(&gpu.queue, enc);
+    let gpu_px = target.read(&gpu.device);
+
+    let d = drift(Pixels::bgra(&cpu_px, w, h, w as usize * 4), Pixels::bgra(&gpu_px, w, h, w as usize * 4));
+    assert_eq!(d.over_two, 0, "valid image CPU/GPU drift: {d:?}");
+    assert!(d.max <= 1, "valid image CPU/GPU max diff > 1: {d:?}");
+}

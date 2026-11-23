@@ -180,6 +180,7 @@ fn shadow(p: [f32; 2], half: [f32; 2], sigma: f32, radii: [f32; 4]) -> f32 {
         return SHADOW_INSIDE;
     }
     let (lo, hi) = (p[1] - half[1], p[1] + half[1]);
+    if !(lo <= hi) || !lo.is_finite() || !hi.is_finite() { return 0.0; }
     let start = (-shader_consts::SHADOW_WINDOW_SIGMA * sigma).clamp(lo, hi);
     let end = (shader_consts::SHADOW_WINDOW_SIGMA * sigma).clamp(lo, hi);
     let step = (end - start) / shader_consts::SHADOW_SAMPLES as f32;
@@ -240,6 +241,7 @@ impl ShadowRow {
 
     /// The erf sum at `x` (from the shadow's centre), outside the interior.
     pub(super) fn sum(&self, x: f32) -> f32 {
+        if self.step == 0.0 { return 0.0; }
         if x.abs() <= self.mid.0 { return self.mid.1; }
         let mut v = 0.0;
         for &(left, right, g) in &self.samples {
@@ -257,6 +259,9 @@ pub(super) fn shadow_row(i: &Instance, py: f32) -> ShadowRow {
     let radii = shadow_radii(i, half);
     let corner = radii[0].max(radii[1]).max(radii[2]).max(radii[3]);
     let (lo, hi) = (y - half[1], y + half[1]);
+    if !(lo <= hi) || !lo.is_finite() || !hi.is_finite() {
+        return ShadowRow { y, py, samples: [(0.0, 0.0, 0.0); shader_consts::SHADOW_SAMPLES], step: 0.0, half: [0.0, 0.0], sigma, corner: 0.0, k: 0.0, mid: (-1.0, 0.0) };
+    }
     let start = (-shader_consts::SHADOW_WINDOW_SIGMA * sigma).clamp(lo, hi);
     let end = (shader_consts::SHADOW_WINDOW_SIGMA * sigma).clamp(lo, hi);
     let step = (end - start) / shader_consts::SHADOW_SAMPLES as f32;
@@ -299,6 +304,7 @@ fn segment(p: [f32; 2], a: [f32; 2], b: [f32; 2], hw: f32, round: bool) -> f32 {
     let weight = (hw * 2.0).min(1.0);
     let ab = [b[0] - a[0], b[1] - a[1]];
     let len = (ab[0] * ab[0] + ab[1] * ab[1]).sqrt();
+    if !len.is_finite() { return 0.0; }
     let ap = [p[0] - a[0], p[1] - a[1]];
     let d = if len < shader_consts::SEGMENT_MIN_LEN {
         if !round { return 0.0; }
@@ -554,7 +560,12 @@ pub(super) fn linear_row_outside(i: &Instance, py: f32, x0: f32, x1: f32) -> boo
 /// `image_texel` in an sRGB-blending frame: one texel of an `Rgba8UnormSrgb` image page,
 /// premultiplied in sRGB encoding. The page holds straight alpha unless `premultiplied`.
 pub(super) fn image_texel(page: &super::Image<'_>, t: [i32; 2], premultiplied: bool) -> [f32; 4] {
-    let at = (t[1] as usize * page.width as usize + t[0] as usize) * 4;
+    if t[0] < 0 || t[1] < 0 || t[0] as u32 >= page.width { return [0.0; 4]; }
+    let Some(at) = (t[1] as usize)
+        .checked_mul(page.width as usize)
+        .and_then(|row| row.checked_add(t[0] as usize))
+        .and_then(|px| px.checked_mul(4))
+    else { return [0.0; 4] };
     let Some(c) = page.data.get(at..at + 4) else { return [0.0; 4] };
     let a = c[3] as f32 / 255.0;
     if a <= 0.0 { return [0.0; 4]; }
@@ -582,15 +593,30 @@ fn srgb_tables() -> &'static ([f32; 256], [f32; 256]) {
 
 /// `KIND_IMAGE` at pixel centre `p`: bilinear, clamped to the image's own texels.
 pub(super) fn image(i: &Instance, page: &super::Image<'_>, p: [f32; 2]) -> [f32; 4] {
+    if !(i.rect[2] > 0.0 && i.rect[3] > 0.0 && i.uv[2] > 0.0 && i.uv[3] > 0.0)
+        || !i.rect[2].is_finite() || !i.rect[3].is_finite()
+        || !i.uv[0].is_finite() || !i.uv[1].is_finite()
+        || !i.uv[2].is_finite() || !i.uv[3].is_finite()
+    {
+        return [0.0; 4];
+    }
     let half = [i.rect[2] * 0.5, i.rect[3] * 0.5];
     let d = sd_rounded([p[0] - i.rect[0] - half[0], p[1] - i.rect[1] - half[1]], half, i.radii);
     let local = [(p[0] - i.rect[0]) * i.uv[2] / i.rect[2] - 0.5, (p[1] - i.rect[1]) * i.uv[3] / i.rect[3] - 0.5];
+    if !local[0].is_finite() || !local[1].is_finite() { return [0.0; 4]; }
     let lo = [i.uv[0] as i32, i.uv[1] as i32];
-    let hi = [lo[0] + i.uv[2] as i32 - 1, lo[1] + i.uv[3] as i32 - 1];
+    // A sub-texel crop (0 < uv < 1) spans less than one texel and samples `lo` without bleeding
+    // into neighbouring atlas slots.
+    let hi = [
+        lo[0].saturating_add((i.uv[2] as i32).saturating_sub(1).max(0)),
+        lo[1].saturating_add((i.uv[3] as i32).saturating_sub(1).max(0)),
+    ];
     let base = [local[0].floor(), local[1].floor()];
     let f = [local[0] - base[0], local[1] - base[1]];
-    let t0 = [(lo[0] + base[0] as i32).clamp(lo[0], hi[0]), (lo[1] + base[1] as i32).clamp(lo[1], hi[1])];
-    let t1 = [(lo[0] + base[0] as i32 + 1).clamp(lo[0], hi[0]), (lo[1] + base[1] as i32 + 1).clamp(lo[1], hi[1])];
+    let bx = lo[0].saturating_add(base[0] as i32);
+    let by = lo[1].saturating_add(base[1] as i32);
+    let t0 = [bx.clamp(lo[0], hi[0]), by.clamp(lo[1], hi[1])];
+    let t1 = [bx.saturating_add(1).clamp(lo[0], hi[0]), by.saturating_add(1).clamp(lo[1], hi[1])];
     let pm = i.params[2] > shader_consts::FLAG_ON_THRESHOLD;
     let top = mix4(image_texel(page, t0, pm), image_texel(page, [t1[0], t0[1]], pm), f[0]);
     let bottom = mix4(image_texel(page, [t0[0], t1[1]], pm), image_texel(page, t1, pm), f[0]);
