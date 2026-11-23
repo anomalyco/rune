@@ -286,3 +286,35 @@ fn typing_crossfades_the_rows_in_view() {
     let (top, opacity, _) = row(&rt, "item-99").expect("a match mounted out of view");
     assert!(top.abs() < 0.5 && opacity < 0.05, "it fades in rather than appearing whole: {top} at {opacity}");
 }
+
+#[test]
+fn combobox_width_sizes_its_popover_surface_beyond_default_bounds() {
+    struct Sized { combo: ComboboxState, width: f32 }
+    fn sized_view(s: &Sized, _: &mut Cx<Sized>) -> El {
+        let options: Vec<_> = (0..5).map(|i| ComboboxOption::new(format!("item-{i}"), format!("Model {i}"))).collect();
+        let mut layer = Vec::new();
+        let body = Combobox::new("models", &s.combo, &options, |s: &mut Sized| &mut s.combo)
+            .label("Model")
+            .width(s.width)
+            .build(&Kit::neutral(true), &mut layer);
+        rune_kit::root(rune::col().child(body), layer)
+    }
+    for width in [360.0, 160.0] {
+        let mut combo = ComboboxState::default();
+        combo.step(rune_kit::ComboboxEvent::Toggle { current: None });
+        let mut rt = Runtime::new(Sized { combo, width }, sized_view, (600.0, 400.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        rt.settle_all();
+        rt.frame(0.0);
+        let rect = |key: &str| rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap().rect;
+        let surface = rect("models-content");
+        let header = rect("header");
+        let divider = rect("divider");
+        let row = rect("models-option-item-0");
+        assert!(surface[3] > 0.0, "surface has height: {surface:?}");
+        assert!((surface[2] - width).abs() < 0.5, "surface takes requested width {width}: {surface:?}");
+        assert!((divider[2] - surface[2]).abs() < 0.5, "divider matches surface width: {divider:?} vs {surface:?}");
+        assert!(header[0] >= surface[0] && header[0] + header[2] <= surface[0] + surface[2] + 0.5, "header {header:?} inside {surface:?}");
+        assert!(row[0] >= surface[0] && row[0] + row[2] <= surface[0] + surface[2] + 0.5, "row {row:?} inside {surface:?}");
+    }
+}

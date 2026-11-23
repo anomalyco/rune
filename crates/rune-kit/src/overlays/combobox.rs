@@ -300,6 +300,7 @@ impl ComboboxCore {
         }
         let popover = bind.bind_popover(
             Popover::new(&self.key).trigger(trigger).label(name.clone()).placement(self.placement).padding(0.0)
+                .width(self.width)
                 .open(self.state.is_open() && !self.disabled),
         );
         if !self.state.is_open() || self.disabled { return popover.build(k, layer); }
@@ -331,7 +332,7 @@ impl ComboboxCore {
         list.empty = self.empty;
         let list = bind.build_list(list, self.options, choices, k);
         let results = col().key("results").w_full().padding(4.0).shrink().min_h(0.0).child(list);
-        let body = col().w(self.width).shrink().min_h(0.0)
+        let body = col().w_full().shrink().min_h(0.0)
             .child(row().key("header").w_full().px(4.0).child(field))
             .child(el().key("divider").w_full().h(1.0).fill(k.c.border_weak).a11y_hidden())
             .child(results);

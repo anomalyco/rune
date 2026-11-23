@@ -1,0 +1,1 @@
+- `rune-kit`: `Combobox::width` now sizes its popover surface directly instead of clamping to `Popover`'s 200..320 pt default bounds, keeping the search header, divider, and rows inside the surface at any width.
