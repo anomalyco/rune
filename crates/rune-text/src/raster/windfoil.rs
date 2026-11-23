@@ -106,7 +106,7 @@ impl TextSystem {
         let scale_cx = &mut self.scale_cx;
         match self.atlas.outlines.glyph(key, || {
             let _built = rune_core::marks::Timed::start("text.outline_ns", true);
-            outline::extract(scale_cx, font_ref, face_key.1, coords, glyph as u16, skew, hint)
+            outline::extract(scale_cx, font_ref, face_key.0, face_key.1, coords, glyph as u16, skew, hint)
         }) {
             outline::Found::Outline(g) => Found::Draws(g, matches!(hint, outline::Hinting::TrueType(_))),
             outline::Found::Empty => Found::Blank,
