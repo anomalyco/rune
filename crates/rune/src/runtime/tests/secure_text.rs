@@ -802,3 +802,56 @@ fn hidden_multiline_pristine_composes_with_runtime_and_app_on_change() {
     rt.frame(0.0);
     assert_eq!(rt.state.secret.text, "n");
 }
+
+#[test]
+fn secure_field_tree_dump_trace_events_and_debug_omit_value_and_length() {
+    use crate::{text_input, Key, KeyEvent, Mods, TextEdit, TextStyle};
+    struct S {
+        single: TextEdit,
+        multi: TextEdit,
+        handled_keys: usize,
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        col().size(300.0, 200.0)
+            .child(text_input(&s.single, TextStyle::new(16.0, 400.0)).single_line().key("pw-one").label("Password").w(200.0)
+                .on_edit(|s: &mut S| &mut s.single))
+            .child(text_input(&s.multi, TextStyle::new(16.0, 400.0)).key("pw-multi").label("Recovery key").w(200.0)
+                .on_edit(|s: &mut S| &mut s.multi))
+    }
+    const SECRET_ONE: &str = "hunter2secret"; // 13 bytes
+    const SECRET_TWO: &str = "recovery-key-nineteen"; // 21 bytes
+    let mut single = TextEdit::new(SECRET_ONE).secure();
+    single.focused = true;
+    let multi = TextEdit::new(SECRET_TWO).secure().revealed(true);
+    let mut rt = Runtime::new(S { single, multi, handled_keys: 0 }, view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.on_key = Some(|s, _, _| { s.handled_keys += 1; true });
+    rt.frame(0.0);
+
+    // --tree JSON omits password text, mask dots, caret geometry, and selection/length.
+    let tree = crate::tooling::tree_json(&rt, 0.0);
+    let serialized = tree.to_string();
+    assert!(!serialized.contains(SECRET_ONE) && !serialized.contains(SECRET_TWO), "--tree leaked secret: {serialized}");
+    assert!(!serialized.contains('•'), "--tree leaked mask: {serialized}");
+    for key in ["pw-one", "pw-multi"] {
+        let el = tree["elements"].as_array().unwrap().iter().find(|e| e["key"] == key).unwrap();
+        assert_eq!(el["secure"], true);
+        assert!(el.get("text").is_none(), "{key} leaked text in --tree");
+        assert!(el.get("selection").is_none(), "{key} leaked selection in --tree");
+        assert!(el.get("caret").is_none(), "{key} leaked caret in --tree");
+    }
+    assert!(!tree["accessibility"].to_string().contains("\"selection\""), "--tree accessibility leaked selection");
+
+    // Debug output of TextEdit and node specs redacts both value and byte-length offsets.
+    let dbg_single = format!("{:?}", rt.state.single);
+    let dbg_multi = format!("{:?}", rt.state.multi);
+    assert!(!dbg_single.contains(SECRET_ONE) && !dbg_single.contains("13"), "TextEdit Debug leaked secret or length: {dbg_single}");
+    assert!(!dbg_multi.contains(SECRET_TWO) && !dbg_multi.contains("21"), "TextEdit Debug leaked secret or length: {dbg_multi}");
+
+    // Event log / trace redacts keys handled by app.on_key while a secure field has focus.
+    rt.events.clear();
+    rt.key(KeyEvent { key: Key::Command('k'), mods: Mods { cmd: true, ..Mods::default() } });
+    rt.frame(0.0);
+    assert_eq!(rt.state.handled_keys, 1);
+    assert!(rt.events.iter().any(|e| e == "key [redacted]"), "events: {:?}", rt.events);
+    assert!(rt.events.iter().all(|e| !e.contains("Command('k')")), "events leaked key: {:?}", rt.events);
+}

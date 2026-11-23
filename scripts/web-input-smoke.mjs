@@ -75,18 +75,41 @@ export async function inputSmoke(page, url) {
     await page.keyboard.press('Tab'); // Secure editor must activate a password sink.
     assert.equal(await page.evaluate(() => document.activeElement.type), 'password');
     const password = page.locator('input[type=password]');
-    assert.equal(await password.getAttribute('autocomplete'), 'off');
+    assert.equal(await password.getAttribute('autocomplete'), 'current-password');
     assert.equal(await password.getAttribute('autocorrect'), 'off');
     assert.equal(await password.evaluate(p => p.spellcheck), false);
-    await page.keyboard.insertText('sëcret');
+    for (const ch of 'sëcret') await page.keyboard.insertText(ch);
     assert.equal(await password.inputValue(), '', 'the secret must not remain in the DOM');
     await settle();
     assert.equal((await snapshot()).secretLength, 6, 'secure input reaches the model');
+    // Browser/password-manager autofill replaces the typed value instead of appending to it.
+    await password.evaluate(field => {
+        field.value = 'autofilled-13';
+        field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    assert.equal(await password.inputValue(), '', 'filled password must not remain in the DOM');
+    await settle();
+    assert.equal((await snapshot()).secretLength, 13, 'autofill replaces typed secret');
+    // Multi-grapheme insertReplacementText also replaces the whole password.
+    await password.evaluate(field => {
+        field.value = 'replaced';
+        field.dispatchEvent(new InputEvent('input', { inputType: 'insertReplacementText', data: 'replaced', bubbles: true }));
+    });
+    await settle();
+    assert.equal((await snapshot()).secretLength, 8, 'insertReplacementText replaces secret');
+    // Paste still goes through the paste listener and inserts at the caret.
+    await password.evaluate(field => {
+        const dt = new DataTransfer();
+        dt.setData('text/plain', '!!');
+        field.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, cancelable: true, bubbles: true }));
+    });
+    await settle();
+    assert.equal((await snapshot()).secretLength, 10, 'paste inserts into secret');
     await password.evaluate(field => field.dispatchEvent(new InputEvent('beforeinput', {
         inputType: 'deleteContentBackward', cancelable: true, bubbles: true,
     })));
     await settle();
-    assert.equal((await snapshot()).secretLength, 5);
+    assert.equal((await snapshot()).secretLength, 9);
     await page.keyboard.press('Enter');
     await settle();
     assert.equal((await snapshot()).submits, 3);

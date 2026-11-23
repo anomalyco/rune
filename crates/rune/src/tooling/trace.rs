@@ -376,7 +376,8 @@ pub(crate) fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> V
             if e.item_selected {
                 v["itemSelected"] = true.into();
             }
-            if rt.tree.element_is_secure(&e.path) {
+            let secure = rt.tree.element_is_secure(&e.path);
+            if secure {
                 v["secure"] = true.into();
             }
             if e.rect.iter().zip(e.target.iter()).any(|(a, b)| (a - b).abs() > 0.01) {
@@ -397,7 +398,7 @@ pub(crate) fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> V
             if e.drag_out {
                 v["dragOut"] = true.into();
             }
-            if let Some(c) = e.caret {
+            if let Some(c) = e.caret && !secure {
                 v["caret"] = c.map(r2).to_vec().into();
             }
             if let Some(r) = e.edit_range {

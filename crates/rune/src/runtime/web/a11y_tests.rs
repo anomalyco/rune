@@ -601,3 +601,43 @@ fn tablist_and_closable_tabs_mirror_with_sibling_close_buttons() {
     rt.frame(0.0);
     assert_eq!(rt.state.closed, 1);
 }
+
+#[test]
+fn web_a11y_mirror_omits_secure_fields_labels_and_containers() {
+    struct S {
+        pw: crate::TextEdit,
+        revealed: bool,
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        crate::col().w_full().role("main")
+            .child(crate::text_input(&s.pw, crate::tok::type_::BODY).key("pw").single_line().label("Password").w(200.0)
+                .on_edit(|s: &mut S| &mut s.pw))
+            .child(crate::text("mirror-label-secret").key("lbl").secure().revealed(s.revealed))
+            .child(crate::col().key("box").secure().child(crate::text("mirror-boxed-secret")))
+            .child(crate::row().key("btn").role("button").on_press(|_: &mut S| {})
+                .child(crate::text("Reveal"))
+                .child(crate::col().secure().child(crate::text("mirror-btn-secret"))))
+    }
+    let mut pw = crate::TextEdit::new("hunter2secret").secure();
+    pw.focused = true;
+    let mut rt = Runtime::new(S { pw, revealed: false }, view, (400.0, 300.0), Env::default());
+    let mut mirror = A11yMirror::default();
+    for revealed in [false, true] {
+        rt.update(|s, _| {
+            s.revealed = revealed;
+            s.pw.set_revealed(revealed);
+        });
+        rt.frame(0.0);
+        let a11y_json = rt.a11y_json();
+        let focus_json = rt.core().web_a11y_focus(&mut mirror).map(str::to_owned).unwrap_or_default();
+        for out in [&a11y_json, &focus_json] {
+            assert!(!out.contains('•'), "web mirror leaked mask: {out}");
+            for secret in ["hunter2secret", "mirror-label-secret", "mirror-boxed-secret", "mirror-btn-secret"] {
+                assert!(!out.contains(secret), "web mirror leaked {secret}: {out}");
+            }
+        }
+        let items = rt.web_a11y_items();
+        let btn = items.iter().find(|it| it.kind == "button").expect("button present");
+        assert_eq!(btn.text, "Reveal", "button label must omit secure descendant text");
+    }
+}

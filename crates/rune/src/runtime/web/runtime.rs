@@ -193,6 +193,22 @@ impl RuntimeCore {
         }
     }
 
+    /// Replaces the focused secure field's whole text as one edit (browser autofill or password
+    /// manager fill). Keeps the incoming value in a `Zeroizing` buffer and writes nothing to
+    /// event logs, traces or DOM mirrors.
+    pub(crate) fn web_secure_replace(&mut self, app: &mut dyn AppDriver, key: &str, text: String) {
+        let text = zeroize::Zeroizing::new(text);
+        if self.kbd.focus.path() != Some(key) || !self.has_secure_focus() { return; }
+        let mut tx = self.transaction(app);
+        let changed = self.with_focused(app, |edit| {
+            let len = edit.text.len();
+            edit.set_selection(0, len);
+            edit.paste(&text)
+        }, &mut tx);
+        if changed { self.commit.dirty = true; }
+        merge(&mut self.frame.pending, tx);
+    }
+
     pub(crate) fn web_edit(&mut self, app: &mut dyn AppDriver, event: &serde_json::Value, mirror: &mut Mirror) {
         // The browser just mutated its hidden textarea, so the cached mirror no longer matches
         // the DOM even if the edit is rejected or `on_input_change` reverts or clears the text.

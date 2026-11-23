@@ -210,3 +210,35 @@ fn html_export_blocks_unsafe_hrefs_and_sanitizes_named_fonts() {
     assert!(!css.contains('\n'), "CSS must not contain raw newlines: {css}");
     assert!(!css.contains("body{color:red}"), "CSS must not allow rule breakout: {css}");
 }
+
+#[test]
+fn html_export_omits_secure_fields_labels_and_containers() {
+    struct S {
+        pw: crate::TextEdit,
+        revealed: bool,
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        crate::col().key("root").w_full().role("main")
+            .child(crate::text("Visible heading").key("hdr"))
+            .child(crate::text_input(&s.pw, crate::tok::type_::BODY).key("pw").single_line().label("Password").w(200.0))
+            .child(crate::text("export-label-secret").key("lbl").secure().revealed(s.revealed))
+            .child(crate::col().key("box").secure().child(crate::text("export-boxed-secret")))
+    }
+    let pw = crate::TextEdit::new("export-field-secret").secure();
+    let mut rt = Runtime::new(S { pw, revealed: false }, view, (400.0, 300.0), Env::default());
+    rt.page_mode();
+    for revealed in [false, true] {
+        rt.update(|s, _| {
+            s.revealed = revealed;
+            s.pw.set_revealed(revealed);
+        });
+        rt.frame(0.0);
+        let nodes = rt.export_nodes();
+        let (body, css) = page(&[(400.0, nodes)]);
+        assert!(body.contains("Visible heading"), "{body}");
+        assert!(!body.contains('•'), "html export leaked mask: {body}");
+        for secret in ["export-field-secret", "export-label-secret", "export-boxed-secret"] {
+            assert!(!body.contains(secret) && !css.contains(secret), "html export leaked {secret}: {body}");
+        }
+    }
+}

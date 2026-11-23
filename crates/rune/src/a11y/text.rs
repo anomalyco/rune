@@ -30,12 +30,13 @@ impl RuntimeCore {
     /// links of any text, pushed after it as its children.
     pub(super) fn a11y_text_nodes(&self, i: usize, w: &Walk, out: &mut Vec<(AkId, AkNode)>) {
         let n = &self.tree.nodes[i];
+        if n.is_secure() { return; }
         if let Some(g) = n.vis.grid.as_deref() {
             return self.a11y_grid_rows(i, g, w, out);
         }
         let Some(spec) = n.text.as_deref() else { return };
         let me = out.len() - 1;
-        let runs = n.input.is_some() || (spec.selectable && !n.is_secure());
+        let runs = (n.input.is_some() || spec.selectable) && !n.is_secure();
         let long_field = self.a11y_uses_long_field(i);
         let found = (!long_field && runs).then(|| self.a11y_lines(i)).flatten();
         if let Some((content, lines)) = found {
@@ -160,12 +161,13 @@ impl RuntimeCore {
         }
     }
 
-    /// What node `i` draws as text: a field's display text (its mask when secure), else its
-    /// content.
+    /// What node `i` draws as text: none for a secure node, else a field's display text or the
+    /// element's content.
     fn a11y_drawn_text(&self, i: usize) -> Option<Cow<'_, str>> {
         let n = &self.tree.nodes[i];
+        if n.is_secure() { return None; }
         match n.input.as_deref() {
-            Some(input) if !input.edit.is_secure() && input.edit.preedit().is_none() => Some(Cow::Borrowed(input.edit.text.as_str())),
+            Some(input) if input.edit.preedit().is_none() => Some(Cow::Borrowed(input.edit.text.as_str())),
             Some(input) => Some(Cow::Owned(input.edit.display().0)),
             None => n.text.as_deref().map(|t| Cow::Borrowed(t.content.as_str())),
         }
@@ -173,15 +175,15 @@ impl RuntimeCore {
 
     fn a11y_drawn_len(&self, i: usize) -> Option<usize> {
         let n = &self.tree.nodes[i];
+        if n.is_secure() { return None; }
         match n.input.as_deref() {
-            Some(input) if !input.edit.is_secure() => match input.edit.preedit() {
+            Some(input) => match input.edit.preedit() {
                 None => Some(input.edit.text.len()),
                 Some((pre, _)) => {
                     let (a, b) = input.edit.range();
                     Some(input.edit.text.len().saturating_sub(b.saturating_sub(a)) + pre.len())
                 }
             },
-            Some(input) => Some(input.edit.display().0.len()),
             None => n.text.as_deref().map(|t| t.content.len()),
         }
     }
@@ -232,6 +234,7 @@ impl RuntimeCore {
     /// A field's caret or selection, in its lines.
     fn a11y_selection(&self, i: usize, content: &str, lines: &[Line]) -> Option<TextSelection> {
         let n = &self.tree.nodes[i];
+        if n.is_secure() { return None; }
         let input = n.input.as_deref()?;
         let edit = &input.edit;
         let (anchor, focus) = if edit.preedit().is_some() {
@@ -245,9 +248,9 @@ impl RuntimeCore {
     }
 
     /// The value and state a text field adds to its node.
-    pub(super) fn a11y_input(&self, _i: usize, input: &crate::el::InputSpec, node: &mut AkNode) {
+    pub(super) fn a11y_input(&self, i: usize, input: &crate::el::InputSpec, node: &mut AkNode) {
         if !input.placeholder.is_empty() { node.set_placeholder(input.placeholder.as_str()); }
-        if !input.edit.is_secure() { node.set_value(input.edit.text.as_str()); }
+        if !self.tree.nodes[i].is_secure() { node.set_value(input.edit.text.as_str()); }
         if input.access.is_none() { node.set_read_only(); }
     }
 }

@@ -85,7 +85,7 @@ impl RuntimeCore {
         }
         one.physical_key = physical_key;
         if !app_first && !app.playground_typing() && app.has_on_key() && Tx::took(app.on_key(ev, one), one) {
-            log_event!(self, "key {:?}", ev.key);
+            if self.has_secure_focus() { log_event!(self, "key [redacted]"); } else { log_event!(self, "key {:?}", ev.key); }
             return true;
         }
         one.physical_key = None;

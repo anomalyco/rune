@@ -87,6 +87,50 @@ function appWindow() {
 // Keys that scroll a page when nothing in Rune has focus.
 const SCROLL_KEYS = [' ', 'PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown'];
 
+const graphemeSegmenter = typeof Intl?.Segmenter === 'function'
+    ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+    : null;
+
+function isAutofilled(input) {
+    if (typeof input?.matches !== 'function') return false;
+    for (const selector of [':autofill', ':-webkit-autofill']) {
+        try { if (input.matches(selector)) return true; } catch {}
+    }
+    return false;
+}
+
+function moreThanOneGrapheme(text, segmenter) {
+    if (!segmenter || !text) return false;
+    let count = 0;
+    for (const _ of segmenter.segment(text)) {
+        if (++count > 1) return true;
+    }
+    return false;
+}
+
+// Classifies a password `input` event as whole-value replacement ('secure_replace') for browser or
+// password-manager fills, or incremental typing ('secure') for single-grapheme keystrokes.
+export function secureKind(event, input, segmenter = graphemeSegmenter) {
+    if (isAutofilled(input)) return 'secure_replace';
+    const type = event?.inputType;
+    if (!type || type === 'insertReplacementText') return 'secure_replace';
+    if (type === 'insertText') {
+        const added = event.data ?? input?.value ?? '';
+        if (moreThanOneGrapheme(added, segmenter)) return 'secure_replace';
+    }
+    return 'secure';
+}
+
+// Handles one `input` event on the hidden password input: always empties the DOM value, ignores
+// events while no Rune field has focus, and sends fills even when empty so a clear reaches Rust.
+export function passwordInput(event, input, key, send) {
+    const kind = secureKind(event, input);
+    const text = input.value;
+    input.value = '';
+    if (!key) return;
+    if (kind === 'secure_replace' || text) send({ kind, key, text });
+}
+
 // What a page's mirror needs: focus rings on its links and buttons, and a selection highlight
 // over its transparent text. The page can restyle both.
 const PAGE_CSS = `[data-rune-a11y] :focus-visible{outline:2px solid var(--rune-focus,Highlight);outline-offset:2px;border-radius:4px}
@@ -104,7 +148,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     const password = document.createElement('input');
     password.type = 'password';
     password.setAttribute('aria-label', 'Password input');
-    password.autocomplete = 'off';
+    password.autocomplete = 'current-password';
     password.setAttribute('autocorrect', 'off');
     password.setAttribute('autocapitalize', 'off');
     password.spellcheck = false;
@@ -216,11 +260,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         h.composing = false; h.composition = '';
         send({ kind: 'sync' });
     });
-    listen(password, 'input', () => {
-        const text = password.value;
-        password.value = '';
-        if (text) send({ kind: 'secure', key: h.key, text });
-    });
+    listen(password, 'input', event => passwordInput(event, password, h.key, send));
     for (const field of [textarea, password]) {
         listen(field, 'paste', event => {
             // Only a paste into a Rune field is Rune's; the browser keeps the rest.

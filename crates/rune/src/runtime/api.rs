@@ -489,9 +489,15 @@ impl<S: 'static> Runtime<S> {
         let (core, mut app) = self.split_mut();
         core.web_key(&mut app, event)
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(test, target_arch = "wasm32"))]
     #[inline(always)]
     pub(crate) fn web_secure(&mut self, key: &str, text: String) { self.core_mut().web_secure(key, text); }
+    #[cfg(any(test, target_arch = "wasm32"))]
+    #[inline(always)]
+    pub(crate) fn web_secure_replace(&mut self, key: &str, text: String) {
+        let (core, mut app) = self.split_mut();
+        core.web_secure_replace(&mut app, key, text);
+    }
     #[cfg(any(test, target_arch = "wasm32"))]
     #[inline(always)]
     pub(crate) fn web_edit(&mut self, event: &serde_json::Value, mirror: &mut web_runtime::Mirror) {

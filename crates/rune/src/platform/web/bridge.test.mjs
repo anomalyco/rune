@@ -705,6 +705,82 @@ test('beforeinput forwards forward delete at end of value when soft keyboard byp
     bridge.destroy(h);
 });
 
+test('password input uses current-password autocomplete and classifies keystrokes vs autofill', () => {
+    const { events, h } = setup();
+    assert.equal(h.password.autocomplete, 'current-password');
+
+    bridge.sync(h, 'secret', '', 0, 0, 0, true);
+    bridge.activate(h);
+
+    // Single-grapheme keystrokes (ASCII, accented, combining mark, ZWJ emoji) go as 'secure'.
+    for (const ch of ['a', 'é', 'e\u0301', '👨‍👩‍👧‍👦']) {
+        events.length = 0;
+        h.password.value = ch;
+        h.password.dispatchEvent({ type: 'input', inputType: 'insertText', data: ch });
+        assert.equal(h.password.value, '', 'password input must be emptied after every event');
+        assert.deepEqual(events, [{ kind: 'secure', key: 'secret', text: ch }]);
+    }
+
+    // Empty typing sends nothing.
+    events.length = 0;
+    h.password.value = '';
+    h.password.dispatchEvent({ type: 'input', inputType: 'insertText', data: '' });
+    assert.equal(events.length, 0);
+
+    // Missing inputType (plain Event) is a fill, including an empty clear.
+    events.length = 0;
+    h.password.value = 'filled-pw-123';
+    h.password.dispatchEvent({ type: 'input' });
+    assert.equal(h.password.value, '');
+    assert.deepEqual(events, [{ kind: 'secure_replace', key: 'secret', text: 'filled-pw-123' }]);
+
+    events.length = 0;
+    h.password.value = '';
+    h.password.dispatchEvent({ type: 'input' });
+    assert.deepEqual(events, [{ kind: 'secure_replace', key: 'secret', text: '' }]);
+
+    // insertReplacementText is always a fill.
+    events.length = 0;
+    h.password.value = 'replacement-pw';
+    h.password.dispatchEvent({ type: 'input', inputType: 'insertReplacementText', data: 'replacement-pw' });
+    assert.equal(h.password.value, '');
+    assert.deepEqual(events, [{ kind: 'secure_replace', key: 'secret', text: 'replacement-pw' }]);
+
+    // Multi-grapheme insertText (via data or via value when data is null) is a fill.
+    events.length = 0;
+    h.password.value = 'multi-char';
+    h.password.dispatchEvent({ type: 'input', inputType: 'insertText', data: 'multi-char' });
+    assert.equal(h.password.value, '');
+    assert.deepEqual(events, [{ kind: 'secure_replace', key: 'secret', text: 'multi-char' }]);
+
+    events.length = 0;
+    h.password.value = 'from-value';
+    h.password.dispatchEvent({ type: 'input', inputType: 'insertText', data: null });
+    assert.equal(h.password.value, '');
+    assert.deepEqual(events, [{ kind: 'secure_replace', key: 'secret', text: 'from-value' }]);
+
+    // An element matching :autofill or :-webkit-autofill is a fill even for 1 char.
+    for (const sel of [':autofill', ':-webkit-autofill']) {
+        events.length = 0;
+        h.password.matches = s => s === sel;
+        h.password.value = 'x';
+        h.password.dispatchEvent({ type: 'input', inputType: 'insertText', data: 'x' });
+        assert.equal(h.password.value, '');
+        assert.deepEqual(events, [{ kind: 'secure_replace', key: 'secret', text: 'x' }]);
+    }
+    delete h.password.matches;
+
+    // Nothing is sent while no Rune field has focus, and the DOM input is still emptied.
+    events.length = 0;
+    bridge.sync(h, '', '', 0, 0, 0, false);
+    h.password.value = 'leaked';
+    h.password.dispatchEvent({ type: 'input' });
+    assert.equal(h.password.value, '');
+    assert.equal(events.length, 0);
+
+    bridge.destroy(h);
+});
+
 test('typing at the end of CRLF text emits a pure insertion without rewriting existing CRLFs', () => {
     const { events, h } = setup();
     const before = 'a\r\nb\r\nc';
@@ -1031,4 +1107,16 @@ test('focusA11y writes aria-pressed on focused toggle buttons and keeps aria-che
     assert.equal(proxy.getAttribute('aria-pressed'), null);
 
     bridge.destroy(h);
+});
+
+test('secureKind falls back to typing when Intl.Segmenter is unavailable', () => {
+    const fakeInput = { value: '👨‍👩‍👧‍👦', matches: () => false };
+    assert.equal(bridge.secureKind({ inputType: 'insertText', data: '👨‍👩‍👧‍👦' }, fakeInput, null), 'secure');
+    assert.equal(bridge.secureKind({ inputType: 'insertText', data: 'ab' }, fakeInput, null), 'secure');
+    assert.equal(bridge.secureKind({ inputType: 'insertReplacementText', data: 'ab' }, fakeInput, null), 'secure_replace');
+    assert.equal(bridge.secureKind({}, fakeInput, null), 'secure_replace');
+    assert.equal(
+        bridge.secureKind({ inputType: 'insertText', data: 'x' }, { value: 'x', matches: s => s === ':autofill' }, null),
+        'secure_replace',
+    );
 });

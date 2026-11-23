@@ -331,6 +331,10 @@ impl RuntimeCore {
         let mut j = root;
         while j < end {
             let n = &self.tree.nodes[j];
+            if n.is_secure() {
+                j = self.subtree_end(j).min(end);
+                continue;
+            }
             if !self.allowed(j) || self.subtree_exiting(j) || n.vis.opacity <= 0.01
                 || (j > root && (n.a11y.hidden || n.handlers.on_press.is_some() || n.role == "button"))
             {
@@ -404,7 +408,7 @@ impl RuntimeCore {
                 last_flow_parent = None;
                 continue;
             }
-            if n.input.is_some() {
+            if n.input.is_some() || n.is_secure() {
                 i = end;
                 last_flow_parent = None;
                 continue;
