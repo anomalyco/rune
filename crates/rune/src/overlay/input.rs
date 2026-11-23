@@ -3,6 +3,14 @@
 
 use super::*;
 
+/// Whether a live Wayland layer-shell surface must be destroyed and recreated for `requests`.
+/// `zwlr_layer_surface_v1` fixes its `wl_output` at creation, so only changing the target
+/// display requires a new surface; placement changes (size, anchors, margins) update in place.
+#[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
+pub(super) fn should_recreate_layer(current_display: &DisplayTarget, requests: &Requests, is_layer: bool) -> bool {
+    is_layer && requests.display.as_ref().is_some_and(|display| display != current_display)
+}
+
 /// An overlay has no window to ask: whatever a step requested of one is dropped.
 pub(super) fn drop_window_requests(rt: &mut RuntimeCore) {
     rt.shell_request = None;
@@ -413,12 +421,22 @@ impl OverlayCore {
         }
         let options_changed = requests.placement.is_some() || requests.display.is_some();
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        let recreate_layer = options_changed && matches!(self.surface.live().map(|l| &l.backing), Some(Backing::Layer(_)));
+        let recreate_layer = should_recreate_layer(
+            &self.options.display,
+            &requests,
+            matches!(self.surface.live().map(|l| &l.backing), Some(Backing::Layer(_))),
+        );
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         let layer_was_visible = self.presence.shown();
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if recreate_layer { self.hide(app); }
-        if let Some(placement) = requests.placement { self.options.placement = placement; }
+        if let Some(placement) = requests.placement {
+            self.options.placement = placement;
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            if let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut() {
+                layer.set_placement(placement);
+            }
+        }
         if let Some(display) = requests.display { self.options.display = display; }
         self.apply_wake(app, requests.woken);
         let mut at = self.at;
@@ -444,11 +462,11 @@ impl OverlayCore {
                     }
                     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
                     Some(Backing::Layer(layer)) => {
-                        layer.place(at);
+                        layer.place(self.at);
                         layer.commit();
                     }
                     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-                    Some(Backing::Xwayland(surface)) => surface.place(at, &self.options),
+                    Some(Backing::Xwayland(surface)) => surface.place(self.at, &self.options),
                     None => {}
                 }
             }
@@ -495,3 +513,7 @@ impl OverlayCore {
             && let Some(native) = &self.native { native.request_keys(); }
     }
 }
+
+#[cfg(test)]
+#[path = "input_tests.rs"]
+mod tests;
