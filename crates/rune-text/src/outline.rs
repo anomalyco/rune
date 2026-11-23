@@ -106,8 +106,10 @@ impl Outline {
 }
 
 /// `glyph`'s outline in font units leaning by `skew` degrees, built into a store record: the
-/// design outline, or the one its TrueType hints fit to the pixel grid at `hinted` ppem.
-pub(crate) fn extract(cx: &mut ScaleContext, font: FontRef<'_>, index: u32, coords: &[i16], glyph: u16, skew: u8, hinting: Hinting) -> Option<build::Built> {
+/// design outline, or the one its TrueType hints fit to the pixel grid at `hinted` ppem. `id` is
+/// the font blob's, which names the font for as long as the process runs.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn extract(cx: &mut ScaleContext, font: FontRef<'_>, id: u64, index: u32, coords: &[i16], glyph: u16, skew: u8, hinting: Hinting) -> Option<build::Built> {
     let upem = font.metrics(coords).units_per_em;
     let lean = if skew == 0 { 0.0 } else { (skew as f64).to_radians().tan() };
     let size = match hinting {
@@ -115,7 +117,7 @@ pub(crate) fn extract(cx: &mut ScaleContext, font: FontRef<'_>, index: u32, coor
         Hinting::TrueType(ppem) | Hinting::Auto(ppem) | Hinting::Vertical(ppem) => ppem,
     };
     let mut built = if let Hinting::Auto(ppem) | Hinting::Vertical(ppem) = hinting {
-        let path = skrifa_hinted(font.data, index, coords, glyph, ppem, matches!(hinting, Hinting::Vertical(_)))?;
+        let path = skrifa_hinted(font.data, id, index, coords, glyph, ppem, matches!(hinting, Hinting::Vertical(_)))?;
         build::build(path.iter().copied(), upem as f64 / size as f64, lean)?
     } else {
         let mut scaler = cx.builder(font).size(size).hint(hinting != Hinting::None).normalized_coords(coords.iter().copied()).build();
@@ -126,27 +128,67 @@ pub(crate) fn extract(cx: &mut ScaleContext, font: FontRef<'_>, index: u32, coor
     Some(built)
 }
 
+/// How many hinting instances a thread keeps: a screen's text is a few faces at a few sizes.
+const HINTERS_KEPT: usize = 8;
+
+/// What a hinting instance was made for.
+#[derive(Clone, PartialEq)]
+struct HinterKey {
+    font: u64,
+    index: u32,
+    ppem: u32,
+    vertical: bool,
+    coords: Vec<i16>,
+}
+
+thread_local! {
+    /// The hinting instances this thread made last, the latest used at the end. Making one runs
+    /// the font's own set-up programs (`fpgm`, then `prep` at the size), which for the built-in
+    /// Inter took as long as a dozen glyphs' outlines; a glyph only reads it, so every glyph of a
+    /// face at one size draws with the same one.
+    static HINTERS: std::cell::RefCell<Vec<(HinterKey, skrifa::outline::HintingInstance)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// How many hinting instances this thread has made.
+    #[cfg(test)]
+    static HINTERS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `glyph`'s outline at `ppem` px, y up, after FreeType's light autohint (skrifa's), as Chromium
 /// draws text on Linux with `hintslight`; or, `vertical`, after the font's own TrueType hints run
 /// by the v40 interpreter, which applies them vertically only, as DirectWrite does on Windows.
-fn skrifa_hinted(data: &[u8], index: u32, coords: &[i16], glyph: u16, ppem: f32, vertical: bool) -> Option<Vec<swash::zeno::Command>> {
+/// `id` names the font (its blob's id): the hinting instance is kept under it.
+fn skrifa_hinted(data: &[u8], id: u64, index: u32, coords: &[i16], glyph: u16, ppem: f32, vertical: bool) -> Option<Vec<swash::zeno::Command>> {
     use skrifa::MetadataProvider;
     use skrifa::outline::{DrawSettings, Engine, HintingInstance, HintingOptions, SmoothMode, Target};
     let font = skrifa::FontRef::from_index(data, index).ok()?;
     let outlines = font.outline_glyphs();
-    let coords: Vec<skrifa::instance::NormalizedCoord> = coords.iter().map(|&c| skrifa::instance::NormalizedCoord::from_bits(c)).collect();
-    let options = if vertical {
-        HintingOptions { engine: Engine::Interpreter, target: Target::Smooth { mode: SmoothMode::Normal, symmetric_rendering: true, preserve_linear_metrics: true } }
-    } else {
-        HintingOptions { engine: Engine::Auto(None), target: Target::Smooth { mode: SmoothMode::Light, symmetric_rendering: true, preserve_linear_metrics: true } }
-    };
-    let instance = HintingInstance::new(&outlines, skrifa::instance::Size::new(ppem), skrifa::instance::LocationRef::new(&coords), options).ok()?;
     let g = outlines.get(skrifa::GlyphId::new(glyph as u32))?;
-    let mut pen = Pen(Vec::new());
-    g.draw(DrawSettings::hinted(&instance, false), &mut pen).ok()?;
-    Some(pen.0)
+    let key = HinterKey { font: id, index, ppem: ppem.to_bits(), vertical, coords: coords.to_vec() };
+    HINTERS.with_borrow_mut(|kept| {
+        let at = match kept.iter().position(|(made_for, _)| *made_for == key) {
+            Some(at) => at,
+            None => {
+                let location: Vec<skrifa::instance::NormalizedCoord> = coords.iter().map(|&c| skrifa::instance::NormalizedCoord::from_bits(c)).collect();
+                let options = if vertical {
+                    HintingOptions { engine: Engine::Interpreter, target: Target::Smooth { mode: SmoothMode::Normal, symmetric_rendering: true, preserve_linear_metrics: true } }
+                } else {
+                    HintingOptions { engine: Engine::Auto(None), target: Target::Smooth { mode: SmoothMode::Light, symmetric_rendering: true, preserve_linear_metrics: true } }
+                };
+                let instance = HintingInstance::new(&outlines, skrifa::instance::Size::new(ppem), skrifa::instance::LocationRef::new(&location), options).ok()?;
+                #[cfg(test)]
+                HINTERS_MADE.set(HINTERS_MADE.get() + 1);
+                if kept.len() == HINTERS_KEPT { kept.remove(0); }
+                kept.push((key, instance));
+                kept.len() - 1
+            }
+        };
+        // The one in use goes last, so the one dropped for a new face or size is the stalest.
+        let last = kept.len() - 1;
+        kept[at..].rotate_left(1);
+        let mut pen = Pen(Vec::new());
+        g.draw(DrawSettings::hinted(&kept[last].1, false), &mut pen).ok()?;
+        Some(pen.0)
+    })
 }
-
 /// Collects skrifa's outline as zeno's commands.
 struct Pen(Vec<swash::zeno::Command>);
 
@@ -159,3 +201,6 @@ impl skrifa::outline::OutlinePen for Pen {
     }
     fn close(&mut self) { self.0.push(swash::zeno::Command::Close); }
 }
+
+#[cfg(test)]
+mod hinter_tests;
