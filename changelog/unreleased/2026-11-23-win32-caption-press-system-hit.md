@@ -1,0 +1,1 @@
+- Windows: with `App::titlebar`, a press on a minimize, maximize or close button that the system reports outside the caption buttons Rune draws goes to the system's default handling, instead of being taken as a press on Rune's button and dropped on release.
