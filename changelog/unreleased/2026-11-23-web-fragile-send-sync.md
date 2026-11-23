@@ -1,0 +1,1 @@
+- Web: `rune` builds for `wasm32-unknown-unknown` when `wgpu`'s `fragile-send-sync-non-atomic-wasm` feature is enabled (such as when hosting Rune inside Bevy). `Readback::count` now wraps its `Rc<wgpu::Buffer>` and `Rc<Cell<bool>>` handles in `PageOnly` before moving them into the `map_async` callback, matching `when_done`.
