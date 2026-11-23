@@ -19,7 +19,7 @@ pub(crate) mod macos;
 pub(crate) use rune_core::main_queue;
 #[cfg(any(test, all(target_os = "linux", feature = "dbus")))]
 pub(crate) mod portal;
-#[cfg(all(target_os = "linux", feature = "dbus"))]
+#[cfg(any(test, all(target_os = "linux", feature = "dbus")))]
 pub(crate) mod portal_appearance;
 pub(crate) mod preferences;
 #[cfg(not(target_arch = "wasm32"))]
