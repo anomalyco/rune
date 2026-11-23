@@ -51,6 +51,43 @@ pub fn words(text: &str) -> Vec<usize> {
     }
 }
 
+/// Where each of `text`'s words ends, as a browser's selection and word motion take them: the
+/// words of [`words`], with Chromium's tailoring of Unicode's rules. A full stop or a colon between
+/// letters ends a word (`foo.bar` is `foo`, `.`, `bar`; `a:b` is `a`, `:`, `b`), while a full stop
+/// between digits doesn't (`1.5`, `1,000.50`) and an apostrophe still joins (`can't`).
+#[doc(hidden)]
+pub fn word_ends(text: &str) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    for end in words(text) {
+        for (i, c) in text[start..end].char_indices().filter(|&(i, c)| i > 0 && splits(c)) {
+            let at = start + i;
+            let next = at + c.len_utf8();
+            let digits = text[..at].chars().next_back().is_some_and(|b| b.is_numeric())
+                && text[next..].chars().next().is_some_and(|a| a.is_numeric());
+            if full_stop(c) && digits {
+                continue;
+            }
+            out.push(at);
+            out.push(next);
+        }
+        out.push(end);
+        start = end;
+    }
+    out.dedup();
+    out
+}
+
+/// A full stop or colon Unicode joins letters across (`MidNumLet`, `MidLetter`) and Chromium
+/// doesn't; apostrophes, the middle dot (Catalan `l·l`) and the other joiners are left alone.
+fn splits(c: char) -> bool {
+    full_stop(c) || matches!(c, ':' | '\u{FE13}' | '\u{FE55}' | '\u{FF1A}')
+}
+
+fn full_stop(c: char) -> bool {
+    matches!(c, '.' | '\u{2024}' | '\u{FE52}' | '\u{FF0E}')
+}
+
 /// Non-complex-script word starts strictly inside `words` below `256` bytes, for waiting ASCII
 /// accessibility text runs (`a11y::text`).
 #[doc(hidden)]

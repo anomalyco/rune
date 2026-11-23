@@ -105,9 +105,9 @@ pub(crate) fn unit_at(text: &str, i: usize, unit: Unit) -> (usize, usize) {
 
 /// Where each of `text`'s words ends, in order, the last at `text.len()`: ICU4X's dictionaries
 /// natively, the browser's (`Intl.Segmenter`) in a page and Windows' own (`icu.dll`) on Windows,
-/// which link none.
+/// which link none, with Chromium's tailoring (`foo.bar` is three words).
 fn word_ends(text: &str) -> impl Iterator<Item = usize> {
-    rune_text::segmenter::words(text).into_iter()
+    rune_text::segmenter::word_ends(text).into_iter()
 }
 
 /// The selection a drag from unit range `origin` to unit range `at` makes: (anchor, focus).
@@ -768,6 +768,19 @@ mod tests {
         assert_eq!(unit_at(s, 5, Unit::Paragraph), (0, 21), "a paragraph takes its line break");
         assert_eq!(unit_at(s, 23, Unit::Paragraph), (21, s.len()));
         assert_eq!(unit_at("", 0, Unit::Word), (0, 0));
+    }
+
+    #[test]
+    fn words_break_as_chromium_breaks_them() {
+        // A full stop or colon between letters ends a word; between digits, and an apostrophe, don't.
+        let s = "foo.bar_baz qux";
+        assert_eq!(unit_at(s, 1, Unit::Word), (0, 3));
+        assert_eq!(unit_at(s, 3, Unit::Word), (3, 4));
+        assert_eq!(unit_at(s, 6, Unit::Word), (4, 11));
+        assert_eq!(unit_at("a:b c", 0, Unit::Word), (0, 1));
+        assert_eq!(unit_at("1,000.50 x", 2, Unit::Word), (0, 8));
+        assert_eq!(unit_at("can't stop", 1, Unit::Word), (0, 5));
+        assert_eq!(unit_at("user@example.com", 7, Unit::Word), (5, 12));
     }
 
     #[test]
