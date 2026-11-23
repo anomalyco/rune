@@ -124,7 +124,11 @@ fn a_headless_run_follows_a_live_switch() {
     let at = (20 * 40 + 20) * 4;
     let px = &buf[at..at + 4];
     // Half white over red reads 128 blended in sRGB, 188 in linear light.
-    assert!(px[1].abs_diff(128) <= 1 && px[0] == 255, "gamma-blended after the switch, got {px:?}");
+    // Premultiplied half-white can quantize to RGB 127 and alpha 128 on UNORM8 blenders, giving R = 254.
+    assert!(
+        px[1].abs_diff(128) <= 1 && px[0].abs_diff(255) <= 1,
+        "gamma-blended after the switch, got {px:?}"
+    );
     let seen = SEEN.lock().unwrap();
     assert_eq!(seen.first(), Some(&(false, OFFSCREEN_FORMAT)), "starts linear");
     assert_eq!(seen.last(), Some(&(true, OFFSCREEN_FORMAT.remove_srgb_suffix())), "ends gamma-space");
