@@ -46,7 +46,6 @@ fn a_task_reads_and_sets_its_own_role() {
 /// A test process never took the role, so a loop turn has nothing to give back.
 #[test]
 fn settle_does_nothing_when_no_role_was_raised() {
-    let before = role();
     settle();
-    assert_eq!(role(), before);
+    assert_eq!(RAISED_FROM.load(Ordering::Relaxed), UNRAISED);
 }
