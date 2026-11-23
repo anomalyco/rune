@@ -1,0 +1,1 @@
+- Rich text: span-background rings, strikethroughs and highlights find their rings, glyph runs and colour spans by a sorted walk per line instead of rescanning every ring for each glyph run and every run for each struck or highlighted box, so these per-frame decorations stay linear on long rich lines; painted rects and their order are unchanged.
