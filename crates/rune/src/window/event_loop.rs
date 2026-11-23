@@ -54,6 +54,10 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     // `RUNE_OPEN_INACTIVE` (a tool's launch): the app doesn't take activation at launch either.
     #[cfg(target_os = "macos")]
     let inactive = accessory || std::env::var_os("RUNE_OPEN_INACTIVE").is_some();
+    // AppKit's saved window state would hold the first window off the screen until the app has
+    // launched.
+    #[cfg(target_os = "macos")]
+    crate::platform::macos::launch::ignore_saved_windows();
     // Beside AppKit's start: whether there is a window server session to launch in (read below,
     // before the loop runs), and what AppKit would otherwise wait for on this thread.
     #[cfg(target_os = "macos")]

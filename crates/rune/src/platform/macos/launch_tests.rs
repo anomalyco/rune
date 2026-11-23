@@ -49,3 +49,12 @@ fn settle_does_nothing_when_no_role_was_raised() {
     settle();
     assert_eq!(RAISED_FROM.load(Ordering::Relaxed), UNRAISED);
 }
+
+/// AppKit reads the default before it looks for saved window state: once the launch has
+/// registered it, the app's defaults answer yes, and a window server session isn't needed to ask.
+#[test]
+fn the_launch_ignores_appkits_saved_windows() {
+    use objc2_foundation::{NSString, NSUserDefaults};
+    ignore_saved_windows();
+    assert!(NSUserDefaults::standardUserDefaults().boolForKey(&NSString::from_str(IGNORE_SAVED_WINDOWS)));
+}
