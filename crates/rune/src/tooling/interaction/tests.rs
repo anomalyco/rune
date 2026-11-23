@@ -43,15 +43,25 @@ fn names_are_interned() {
 #[test]
 fn the_gate_wants_perf_or_a_loopback_collector() {
     use gate::{loopback, wanted};
-    assert!(wanted(Some("1"), None, true), "RUNE_PERF=1 turns it on, headless too");
-    assert!(!wanted(Some("0"), Some("http://127.0.0.1:27686"), false), "RUNE_PERF=0 wins");
-    assert!(wanted(None, Some("http://127.0.0.1:27686"), false));
-    assert!(wanted(None, Some("http://localhost:4318/"), false));
-    assert!(!wanted(None, Some("http://127.0.0.1:27686"), true), "a headless run needs RUNE_PERF=1");
-    assert!(!wanted(None, Some("https://otel.example.com:4318"), false), "a remote collector isn't a dev Mac");
-    assert!(!wanted(None, None, false), "a user's Mac has neither");
+    assert!(wanted(Some("1"), None, true, true), "RUNE_PERF=1 turns it on, headless too");
+    assert!(wanted(Some("1"), None, false, false), "RUNE_PERF=1 turns it on in release builds too");
+    assert!(wanted(Some("1"), Some("http://127.0.0.1:4318"), true, false), "RUNE_PERF=1 turns it on headless in release");
+    assert!(!wanted(Some("0"), Some("http://127.0.0.1:27686"), false, true), "RUNE_PERF=0 wins");
+    assert!(wanted(None, Some("http://127.0.0.1:27686"), false, true));
+    assert!(wanted(None, Some("http://localhost:4318/"), false, true));
+    assert!(!wanted(None, Some("http://127.0.0.1:27686"), true, true), "a headless run needs RUNE_PERF=1");
+    assert!(!wanted(None, Some("https://otel.example.com:4318"), false, true), "a remote collector isn't a dev Mac");
+    assert!(!wanted(None, None, false, true), "a user's Mac has neither");
     assert_eq!(loopback("[::1]:4318").map(|a| a.port()), Some(4318));
     assert_eq!(gate::endpoint(None).map(|a| a.to_string()).as_deref(), Some(gate::DEFAULT_ENDPOINT));
+}
+
+#[test]
+fn release_without_tooling_ignores_ambient_otel_endpoint() {
+    use gate::wanted;
+    assert!(!wanted(None, Some("http://127.0.0.1:27686"), false, false));
+    assert!(!wanted(None, Some("http://localhost:4318/"), false, false));
+    assert!(!wanted(None, Some("[::1]:4318"), false, false));
 }
 
 #[test]

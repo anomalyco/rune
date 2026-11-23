@@ -96,12 +96,38 @@ pub(crate) fn mark_time(v: &str) -> Option<String> {
     v.strip_prefix("mark:").map(str::to_owned)
 }
 
+/// Whether this build reads Rune's developer flags from the process command line and starts
+/// interaction timing from an ambient `OTEL_EXPORTER_OTLP_ENDPOINT`. Always on in debug builds,
+/// and in release builds compiled with Rune's `tooling` (or `hot`) feature.
+#[inline]
+pub(crate) const fn dev_tooling_enabled() -> bool {
+    cfg!(any(feature = "tooling", feature = "hot", debug_assertions))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn process_argv() -> Vec<String> {
+    decode_argv(std::env::args_os().skip(1))
+}
+
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) fn decode_argv(args: impl IntoIterator<Item = std::ffi::OsString>) -> Vec<String> {
+    args.into_iter().map(|a| a.to_string_lossy().into_owned()).collect()
+}
+
 impl Args {
+    /// Default tooling arguments, with no flags active.
+    pub(crate) fn defaults() -> Args {
+        Args { fps: 60.0, every: 1, cols: 10, cpu_boot_threads: 6, ..Default::default() }
+    }
+
     pub fn parse() -> Args {
         #[cfg(target_arch = "wasm32")]
-        return Args::parse_from(Vec::new());
+        let argv = Vec::new();
         #[cfg(not(target_arch = "wasm32"))]
-        Args::parse_from(std::env::args().skip(1).collect())
+        let argv = process_argv();
+        let (args, extra) = Args::parse_process_argv(argv, dev_tooling_enabled());
+        EXTRA.set(extra).ok();
+        args
     }
 
     /// Parses `argv` (without the program name); unrecognised arguments become `extra_args`.
@@ -115,15 +141,27 @@ impl Args {
     /// set it.
     fn parse_process() -> Args {
         #[cfg(target_arch = "wasm32")]
-        return Args::parse_split(Vec::new()).0;
+        let argv = Vec::new();
         #[cfg(not(target_arch = "wasm32"))]
-        Args::parse_split(std::env::args().skip(1).collect()).0
+        let argv = process_argv();
+        Args::parse_process_argv(argv, dev_tooling_enabled()).0
+    }
+
+    /// Splits a process command line into Rune's flags and app arguments. When `dev_tooling` is
+    /// false (a release build without Rune's `tooling` or `hot` feature), Rune parses no process
+    /// flags and leaves every argument untouched for the app (`extra_args`).
+    pub(crate) fn parse_process_argv(argv: Vec<String>, dev_tooling: bool) -> (Args, Vec<String>) {
+        if dev_tooling {
+            Args::parse_split(argv)
+        } else {
+            (Args::defaults(), argv)
+        }
     }
 
     fn parse_split(argv: Vec<String>) -> (Args, Vec<String>) {
         #[cfg(feature = "hot")]
         crate::hot::enable_from_env();
-        let mut a = Args { fps: 60.0, every: 1, cols: 10, cpu_boot_threads: 6, ..Default::default() };
+        let mut a = Args::defaults();
         let mut extra = Vec::new();
         let mut i = 0;
         let val = |i: &mut usize| -> String {
@@ -269,7 +307,9 @@ pub fn without_relaunch_drops(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::Os
 /// run, a trace or a listing rather than a window, as `Args::headless` decides. Parsed from the
 /// process's arguments once, so it answers before `run` (to skip a tray, global shortcuts or
 /// network work in a scripted run, say), with `--help` and a malformed flag handled as `run`
-/// handles them. An app that passes `App::args` asks `Args::parse_from(..).headless()` instead.
+/// handles them. In a release build without Rune's `tooling` feature, process arguments are not
+/// parsed and this returns `false`. An app that passes `App::args` asks
+/// `Args::parse_from(..).headless()` instead.
 pub fn is_headless() -> bool {
     static HEADLESS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *HEADLESS.get_or_init(|| Args::parse_process().headless())

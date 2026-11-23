@@ -5,7 +5,7 @@ positive Metal `presentedTime`, using the overlay team's steady-state endpoint.
 Three batches per mode, two-second warmup, then three three-second intervals;
 the summary is the median of nine interval medians.
 
-Build with `cargo build --profile perf -j 2 -p rune --example pacing_overlay --example pacing`
+Build with `cargo build --profile perf -j 2 -p rune --features tooling --example pacing_overlay --example pacing`
 on the Mac that runs the probe, and run jobs one at a time. Pass the
 `target/perf/examples/` executable path; the runners refuse binaries from any
 other profile.

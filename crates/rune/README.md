@@ -2524,8 +2524,9 @@ it, and the app then runs under Xvfb. Headless `--snap` runs don't need a displa
 
 Debug builds always take these arguments. A release build takes them with Rune's `tooling`
 feature (`rune = { ..., features = ["tooling"] }`; Rune's examples have it); without it the app
-links only its window, and a headless argument makes `run` fail saying so. `--native --trace` is
-the window's own and works either way.
+links only its window, parses none of Rune's command-line flags (every process argument goes to
+`extra_args`, `--help` and `--native --trace` included), and ignores an ambient
+`OTEL_EXPORTER_OTLP_ENDPOINT` unless `RUNE_PERF=1` is set.
 
 ```sh
 S=target/release/settings
@@ -2674,7 +2675,7 @@ $L --desktop examples/launcher/backdrop.png --script examples/launcher/scripts/d
   `--native --trace` records wall-clock CPU submission timestamps (not GPU completion or scanout).
   In a window factory, `--window KEY` selects the traced window; otherwise the first is traced.
   macOS windows and overlays acquire drawables on coalesced display-link ticks, stopping the
-  link while idle or hidden. `cargo run --profile perf -p rune --example pacing -- --native --trace
+  link while idle or hidden. `cargo run --profile perf -p rune --features tooling --example pacing -- --native --trace
   pacing.jsonl --frames 240` exercises spring retargets and hide/show; check it with
   `python3 scripts/check-native-pacing.py pacing.jsonl` on a machine with a display.
   Trees expose inherited `opacity`, `scale` and `blur` (logical points); traces keep opacity in
@@ -2692,7 +2693,7 @@ $L --desktop examples/launcher/backdrop.png --script examples/launcher/scripts/d
   bunched onto the screen together) and over 1.5 refresh periods (missed refreshes), and the
   lag from target to present. Overlays, other platforms and headless traces write no present
   fields. Without `--trace` nothing changes. Capture on a display, not headless:
-  `cargo run --profile perf -p rune --example pacing -- --native --trace pacing.jsonl --frames 240`.
+  `cargo run --profile perf -p rune --features tooling --example pacing -- --native --trace pacing.jsonl --frames 240`.
 
 ## Playground
 
