@@ -1,0 +1,1 @@
+- `rune_kit::Dialog`: panels are now bounded by the window less the 16 point margin on both axes (for both `fit()` and standard height) and their body shrinks (`min_h(0.0)`), so a tall `fit()` dialog no longer overflows the window and a `.shrink().min_h(0.0)` scroll view in its body takes the remaining height and scrolls.

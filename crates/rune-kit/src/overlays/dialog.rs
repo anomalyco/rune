@@ -28,8 +28,9 @@ impl Dialog {
     pub fn child(mut self, body: El) -> Self { self.body.push(body); self }
     pub fn width(mut self, width: f32) -> Self { self.width = width; self }
     /// Sizes the panel to its header and body instead of the standard 368 point height, for
-    /// short dialogs such as a confirmation. Content taller than the window isn't scrolled, so
-    /// put a scroll view in the body if it can grow.
+    /// short dialogs such as a confirmation. The panel is capped at the window's height less its
+    /// 16 point margin and its body shrinks; give a growing child a scroll view with
+    /// `.shrink().min_h(0.0)` so it takes what is left and scrolls.
     pub fn fit(mut self) -> Self { self.fit = true; self }
     pub fn click_outside(mut self, close: bool) -> Self { self.outside = close; self }
     pub fn on_close<S: 'static>(mut self, f: impl Fn(&mut S) + Clone + 'static) -> Self {
@@ -52,17 +53,17 @@ impl Dialog {
         if let Some(description) = self.description.clone() {
             title = title.child(text(description).font(k.ty.ui.lh(20.0)).color(k.c.text_muted).wrap().w_full());
         }
-        let body = col().key("body").w_full().children(self.body);
+        let body = col().key("body").w_full().shrink().min_h(0.0).children(self.body);
         let (panel, body) = if self.fit { (col(), body) } else { (col().h(368.0), body.grow(1.0)) };
         let panel = panel.description(self.description.unwrap_or_default());
         let panel = k.elevate(panel.key(format!("{}-dialog", self.key)).role("dialog").label(self.title.clone())
-            .w_full().max_w(self.width).radius(6.0).fill(k.c.layer_01)
+            .w_full().max_w(self.width).shrink().min_h(0.0).radius(6.0).fill(k.c.layer_01)
             .child(row().key("header").w_full().padding(16.0).items_start().child(title).child(dismiss))
             .child(body)
             .token_motion(k.motion.overlay), &k.elevation.overlay);
         let panel = close(panel).modal_click_outside(self.outside);
         layer.push(el().key(scrim_key(&self.key)).absolute(0.0, 0.0).w_full().h_full()
             .fill(k.c.scrim).token_motion(k.motion.overlay).a11y_hidden());
-        layer.push(el().key(format!("{}-layer", self.key)).absolute(0.0, 0.0).w_full().h_full().padding(16.0).center().child(panel));
+        layer.push(col().key(format!("{}-layer", self.key)).absolute(0.0, 0.0).w_full().h_full().padding(16.0).center().child(panel));
     }
 }

@@ -1,4 +1,4 @@
-use rune::{Cx, El, Env, Runtime, row};
+use rune::{Cx, El, Env, Runtime, ScrollSpec, col, el, row, text};
 use rune_kit::{Dialog, Kit, Placement, Select, SelectAppearance, root};
 
 struct State { dialog: bool, select: bool, value: String }
@@ -93,4 +93,124 @@ fn dialog_description_wraps_inside_the_card() {
         assert!(desc.rect[3] >= 40.0, "description wraps onto multiple lines at width {vw}: {:?}", desc.rect);
         assert!(panel.rect[3] > 76.0, "fitted card grows for wrapped description at width {vw}: {:?}", panel.rect);
     }
+}
+
+#[test]
+fn a_tall_fit_dialog_stays_inside_the_window_and_scrolls_its_body() {
+    fn view(rows: &usize, _: &mut Cx<usize>) -> El {
+        let k = Kit::neutral(true);
+        let mut layer = Vec::new();
+        let list = col()
+            .key("list")
+            .w_full()
+            .shrink()
+            .min_h(0.0)
+            .scroll(ScrollSpec { stick_bottom: false })
+            .children((0..*rows).map(|i| el().key(format!("row-{i}")).w_full().h(20.0).child(text(format!("Row {i}")))));
+        let footer = row().key("footer").w_full().padding(16.0).justify_end().child(el().size(80.0, 28.0));
+        Dialog::new("d", "Pick an item")
+            .description("Scroll to see more.")
+            .fit()
+            .open(true)
+            .on_close(|_: &mut usize| {})
+            .child(list)
+            .child(footer)
+            .build(&k, &mut layer);
+        root(el().w_full().h_full(), layer)
+    }
+
+    // When content fits, the dialog still sizes to its content (header 76 + 2 rows 40 + footer 60).
+    let mut short = Runtime::new(2, view, (800.0, 600.0), Env::new(true, 1.0));
+    for _ in 0..60 { short.frame(1.0 / 60.0); }
+    let short_els = short.elements();
+    let short_panel = short_els.iter().find(|e| e.key.as_deref() == Some("d-dialog")).unwrap().rect;
+    assert_eq!(short_panel[3], 76.0 + 40.0 + 60.0, "short scrolling dialog fits its content: {short_panel:?}");
+
+    // When content is taller than the window, both small and large windows cap the panel at the
+    // viewport less the 16 pt margin, keep header and footer visible, and let the body scroll.
+    for (vw, vh) in [(320.0, 260.0), (800.0, 600.0)] {
+        let mut rt = Runtime::new(80, view, (vw, vh), Env::new(true, 1.0));
+        for _ in 0..60 { rt.frame(1.0 / 60.0); }
+        let els = rt.elements();
+        let rect = |key: &str| els.iter().find(|e| e.key.as_deref() == Some(key)).unwrap().rect;
+        let (panel, header, list, footer) = (rect("d-dialog"), rect("header"), rect("list"), rect("footer"));
+
+        assert!((panel[2] - 480.0_f32.min(vw - 32.0)).abs() < 0.5, "width at ({vw}, {vh}): {panel:?}");
+        assert!((panel[3] - (vh - 32.0)).abs() < 0.5, "height at ({vw}, {vh}): {panel:?}");
+        assert!(panel[0] >= 16.0 - 0.5 && panel[0] + panel[2] <= vw - 16.0 + 0.5, "panel x in window ({vw}, {vh}): {panel:?}");
+        assert!(panel[1] >= 16.0 - 0.5 && panel[1] + panel[3] <= vh - 16.0 + 0.5, "panel y in window ({vw}, {vh}): {panel:?}");
+        assert!((header[1] - panel[1]).abs() < 0.5 && header[1] + header[3] <= panel[1] + panel[3] + 0.5,
+            "header visible at ({vw}, {vh}): {header:?} in {panel:?}");
+        assert!((footer[1] + footer[3] - (panel[1] + panel[3])).abs() < 0.5 && footer[1] >= header[1] + header[3] - 0.5,
+            "footer visible at ({vw}, {vh}): {footer:?} in {panel:?}");
+        let expected_list_h = panel[3] - header[3] - footer[3];
+        assert!(expected_list_h > 0.0 && (list[3] - expected_list_h).abs() < 0.5,
+            "list takes remaining height at ({vw}, {vh}): {list:?} vs expected {expected_list_h}");
+
+        let before_y = rect("row-0")[1];
+        rt.wheel(list[0] + list[2] / 2.0, list[1] + list[3] / 2.0, -120.0);
+        for _ in 0..30 { rt.frame(1.0 / 60.0); }
+        let after_y = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("row-0")).unwrap().rect[1];
+        assert!(after_y < before_y - 10.0, "body scrolls at ({vw}, {vh}): row-0 y {before_y} -> {after_y}");
+    }
+}
+
+#[test]
+fn a_tall_fit_dialog_without_a_scroll_view_still_bounds_its_panel_on_both_axes() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let k = Kit::neutral(true);
+        let mut layer = Vec::new();
+        let tall = col()
+            .key("tall")
+            .w_full()
+            .children((0..80).map(|i| el().w(600.0).h(20.0).child(text(format!("Row {i}")))));
+        Dialog::new("d", "Tall dialog")
+            .fit()
+            .open(true)
+            .on_close(|_: &mut ()| {})
+            .child(tall)
+            .build(&k, &mut layer);
+        root(el().w_full().h_full(), layer)
+    }
+
+    for (vw, vh) in [(320.0, 260.0), (800.0, 600.0)] {
+        let mut rt = Runtime::new((), view, (vw, vh), Env::new(true, 1.0));
+        for _ in 0..60 { rt.frame(1.0 / 60.0); }
+        let els = rt.elements();
+        let rect = |key: &str| els.iter().find(|e| e.key.as_deref() == Some(key)).unwrap().rect;
+        let (panel, header, body) = (rect("d-dialog"), rect("header"), rect("body"));
+
+        assert!((panel[2] - 480.0_f32.min(vw - 32.0)).abs() < 0.5, "width at ({vw}, {vh}): {panel:?}");
+        assert!((panel[3] - (vh - 32.0)).abs() < 0.5, "height at ({vw}, {vh}): {panel:?}");
+        assert!(panel[0] >= 16.0 - 0.5 && panel[0] + panel[2] <= vw - 16.0 + 0.5, "panel x in window ({vw}, {vh}): {panel:?}");
+        assert!(panel[1] >= 16.0 - 0.5 && panel[1] + panel[3] <= vh - 16.0 + 0.5, "panel y in window ({vw}, {vh}): {panel:?}");
+        assert!((header[1] - panel[1]).abs() < 0.5 && header[1] + header[3] <= panel[1] + panel[3] + 0.5,
+            "header visible at ({vw}, {vh}): {header:?} in {panel:?}");
+        assert!(body[1] + body[3] <= panel[1] + panel[3] + 0.5,
+            "body bounded by panel at ({vw}, {vh}): {body:?} in {panel:?}");
+    }
+}
+
+#[test]
+fn a_standard_dialog_shrinks_inside_a_short_window() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let k = Kit::neutral(true);
+        let mut layer = Vec::new();
+        Dialog::new("d", "Standard")
+            .open(true)
+            .on_close(|_: &mut ()| {})
+            .child(el().w_full().h(20.0))
+            .build(&k, &mut layer);
+        root(el().w_full().h_full(), layer)
+    }
+
+    let mut rt = Runtime::new((), view, (800.0, 260.0), Env::new(true, 1.0));
+    for _ in 0..60 { rt.frame(1.0 / 60.0); }
+    let els = rt.elements();
+    let rect = |key: &str| els.iter().find(|e| e.key.as_deref() == Some(key)).unwrap().rect;
+    let (panel, header, body) = (rect("d-dialog"), rect("header"), rect("body"));
+    assert!((panel[3] - (260.0 - 32.0)).abs() < 0.5, "standard panel shrinks in short window: {panel:?}");
+    assert!(panel[1] >= 16.0 - 0.5 && panel[1] + panel[3] <= 260.0 - 16.0 + 0.5, "panel in window: {panel:?}");
+    assert!((header[1] - panel[1]).abs() < 0.5, "header at top: {header:?}");
+    assert!((body[1] + body[3] - (panel[1] + panel[3])).abs() < 0.5, "body fills remainder: {body:?}");
 }
