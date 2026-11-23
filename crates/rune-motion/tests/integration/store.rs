@@ -407,3 +407,26 @@ fn node_time_scale_holds_slows_and_resumes_in_place() {
     assert_eq!(s.node_time_scale(N), 0.0);
     assert_eq!(s.node_time_scale(M), 1.0);
 }
+
+#[test]
+fn is_lane_animating_tracks_individual_lanes_and_delays() {
+    let mut s = AnimationStore::new();
+    // Rect lanes are [left, top, right, bottom].
+    s.set(N, prop::FRAME, Rect::new(10.0, 20.0, 100.0, 50.0));
+    s.animate(N, prop::FRAME, Rect::new(10.0, 20.0, 200.0, 50.0), motion::SETTLE);
+    assert!(s.is_animating(N, prop::FRAME));
+    assert!(!s.is_lane_animating(N, prop::FRAME, 0), "unchanged left lane");
+    assert!(!s.is_lane_animating(N, prop::FRAME, 1), "unchanged top lane");
+    assert!(s.is_lane_animating(N, prop::FRAME, 2), "moving right lane");
+    assert!(!s.is_lane_animating(N, prop::FRAME, 3), "unchanged bottom lane");
+    assert!(!s.is_lane_animating(N, prop::FRAME, 4), "out-of-range lane");
+
+    // Delayed lane reports animating while waiting, then clears once settled.
+    s.animate(N, prop::FRAME, Rect::new(10.0, 20.0, 200.0, 120.0), motion::SETTLE.delay(0.2));
+    assert!(s.is_lane_animating(N, prop::FRAME, 3), "delayed bottom lane");
+    s.tick_at(5.0);
+    assert!(!s.is_animating(N, prop::FRAME));
+    for lane in 0..4 {
+        assert!(!s.is_lane_animating(N, prop::FRAME, lane), "lane {lane} settled");
+    }
+}

@@ -1,0 +1,1 @@
+- Input: hover is no longer held on stationary descendants while an ancestor only resizes its width or height; ancestors now hold hover only when the edge a child rides moves (origin, trailing edge under `El::ride_trailing`, or a scaled/rotated ancestor), while an element's own resizing frame still holds hover.

@@ -233,22 +233,45 @@ impl RuntimeCore {
         self.pointer.release_hover_hold(|| moving);
     }
 
-    /// Element `i` is carried by moving layout: a frame, offset or flight spring on it or an
-    /// ancestor, a growth stack moving its rows, or a viewport gliding where the app sent it,
-    /// stepped by the app frame by frame, or letting rows down. A hand's scroll and live
-    /// transforms aren't layout motion. Asked only of elements whose hover would change, so a
-    /// frame at rest walks nothing.
+    /// Whether `k`'s `prop::FRAME` spring moves `child` (or `k` itself, when `child` is `None`).
+    /// `Rect` animates as four edge lanes `[left, top, right, bottom]`. An ancestor that only
+    /// resizes while its origin stays fixed moves no normal child; a child with `ride_trailing`
+    /// rides the ancestor's trailing (right) edge instead of its leading (left) one, and a
+    /// scaled or rotated ancestor's pivot moves with its size.
+    fn frame_carries(&self, k: usize, child: Option<usize>) -> bool {
+        let store = self.scene.store();
+        let n = &self.tree.nodes[k];
+        let id = n.id;
+        if !store.is_animating(id, prop::FRAME) { return false; }
+        let Some(c) = child else { return true };
+        let scaled_or_turned = (n.static_scale - 1.0).abs() > 1e-5
+            || (n.scale_track && self.scene.get(id, P_SCALE).is_some_and(|s| (s - 1.0).abs() > 1e-5))
+            || (n.handlers.get().is_some_and(|h| h.press_scale.is_some()) && self.scene.get(id, P_PRESS_SCALE).is_some_and(|s| (s - 1.0).abs() > 1e-5))
+            || self.scene.presented(id).is_some_and(|p| (p.transform.scale.x - 1.0).abs() > 1e-5 || (p.transform.scale.y - 1.0).abs() > 1e-5 || p.transform.rotate != 0.0);
+        if scaled_or_turned { return true; }
+        let x_lane = if self.tree.nodes[c].vis_flags.ride_trailing() { 2 } else { 0 };
+        store.is_lane_animating(id, prop::FRAME, x_lane) || store.is_lane_animating(id, prop::FRAME, 1)
+    }
+
+    /// Element `i` is carried by moving layout: its own frame spring, an ancestor's frame spring
+    /// moving the edge this subtree rides (origin, or trailing edge under `El::ride_trailing`),
+    /// an offset or flight spring on it or an ancestor, a growth stack moving its rows, or a
+    /// viewport gliding where the app sent it, stepped by the app frame by frame, or letting rows
+    /// down. A hand's scroll and live transforms aren't layout motion. Asked only of elements
+    /// whose hover would change, so a frame at rest walks nothing.
     fn layout_carries(&self, i: usize) -> bool {
         let store = self.scene.store();
         let mut at = Some(i);
+        let mut child = None;
         while let Some(k) = at {
             let id = self.tree.nodes[k].id;
-            if store.is_animating(id, prop::FRAME) || store.is_animating(id, prop::OFFSET) || store.is_animating(id, prop::TRAVEL)
+            if self.frame_carries(k, child) || store.is_animating(id, prop::OFFSET) || store.is_animating(id, prop::TRAVEL)
                 || self.motion.stacks.get(&id).is_some_and(|s| s.moving) || self.motion.grows.get(&id).is_some_and(|g| g.moving())
                 || self.scroll.scrolls.get(&id).is_some_and(|s| scroll_carries(s, self.clock))
             {
                 return true;
             }
+            child = Some(k);
             at = self.tree.nodes[k].parent;
         }
         false
