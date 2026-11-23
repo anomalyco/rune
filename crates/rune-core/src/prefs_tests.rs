@@ -99,5 +99,19 @@ fn the_config_directory_follows_the_platform_and_the_override() {
         assert_eq!(config_dir(env(&[("HOME", "/h")])), Some(PathBuf::from("/h/.config")));
         assert_eq!(config_dir(env(&[("HOME", "/h"), ("XDG_CONFIG_HOME", "/xdg")])), Some(PathBuf::from("/xdg")));
         assert_eq!(config_dir(env(&[("HOME", "/h"), ("XDG_CONFIG_HOME", "rel")])), Some(PathBuf::from("/h/.config")));
+        assert_eq!(config_dir(env(&[("XDG_CONFIG_HOME", "/xdg")])), Some(PathBuf::from("/xdg")));
+        assert_eq!(config_dir(env(&[("XDG_CONFIG_HOME", "rel")])), None);
+        assert_eq!(config_dir(env(&[("XDG_CONFIG_HOME", "")])), None);
+        assert_eq!(config_dir(env(&[("RUNE_DIRS_ROOT", "/root"), ("XDG_CONFIG_HOME", "/xdg")])), Some(PathBuf::from("/root/config")));
     }
+}
+
+#[test]
+fn xdg_config_home_fallback_requires_a_non_empty_absolute_path() {
+    let env = |pairs: &'static [(&str, &str)]| move |k: &str| pairs.iter().find(|p| p.0 == k).map(|p| p.1.into());
+    const ABS: &str = if cfg!(windows) { "C:\\xdg" } else { "/xdg" };
+    assert_eq!(crate::dirs::xdg_config_home(&env(&[("XDG_CONFIG_HOME", ABS)])), Some(PathBuf::from(ABS)));
+    assert_eq!(crate::dirs::xdg_config_home(&env(&[("XDG_CONFIG_HOME", "rel")])), None);
+    assert_eq!(crate::dirs::xdg_config_home(&env(&[("XDG_CONFIG_HOME", "")])), None);
+    assert_eq!(crate::dirs::xdg_config_home(&env(&[])), None);
 }
