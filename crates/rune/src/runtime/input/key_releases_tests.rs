@@ -65,3 +65,13 @@ fn losing_the_window_forgets_everything() {
     assert!(!k.eat(false));
     assert_eq!(k.route(), None);
 }
+
+#[test]
+fn clearing_ime_eat_releases_suppression_without_dropping_held_focus() {
+    let mut k = KeyReleases::default();
+    k.down(false, false, focus("a"));
+    k.ime_took_key();
+    k.clear_ime_eat();
+    assert!(!k.eat(false));
+    assert_eq!(k.route(), Some("a".into()));
+}

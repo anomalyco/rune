@@ -50,6 +50,11 @@ impl KeyReleases {
         if self.eat == Eat::None { self.eat = Eat::One; }
     }
 
+    /// The input method turned off mid-composition: no key release belongs to it anymore.
+    pub(in crate::runtime) fn clear_ime_eat(&mut self) {
+        self.eat = Eat::None;
+    }
+
     /// A key came up while a composition is open, with no release to route after it. The
     /// release of the key that ends the composition is still the input method's.
     pub(in crate::runtime) fn composing_release(&mut self) {

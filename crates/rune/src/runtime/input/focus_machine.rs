@@ -359,6 +359,11 @@ impl KeyboardState {
     }
 
     #[inline]
+    pub(in crate::runtime) fn clear_ime_key_up(&mut self) {
+        self.key_releases.clear_ime_eat();
+    }
+
+    #[inline]
     pub(super) fn note_key_down(&mut self, composing: bool, repeat: bool) {
         let focus = &self.focus;
         self.key_releases.down(composing, repeat, || focus.owned());

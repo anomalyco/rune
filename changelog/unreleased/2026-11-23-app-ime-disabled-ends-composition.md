@@ -1,0 +1,1 @@
+- `App::on_ime`: `Ime::Disabled` arriving mid-composition now ends the app's open composition (delivering an empty `Ime::Preedit` before `Ime::Disabled`) and stops suppressing subsequent `Enter`, `Escape`, and key release events.
