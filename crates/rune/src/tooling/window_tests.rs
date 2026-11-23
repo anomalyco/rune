@@ -26,3 +26,68 @@ fn headless_snap_after_uncaptured_frames_paces_and_writes_pixels() {
     assert_eq!(img.dimensions(), (32, 20));
     assert!(img.pixels().all(|p| p[3] == 255 && p[2] > p[0]), "snap rendered the filled canvas");
 }
+
+#[test]
+fn chrome_overlay_mirrors_traffic_lights_and_overlap_zone_in_rtl() {
+    let width = 400.0;
+    let chrome = crate::Titlebar::new(36.0).mac_chrome(crate::Chrome::DEFAULT);
+    let inset = chrome.titlebar_inset();
+
+    let ltr = chrome.traffic_light_rects_in(width, false).expect("LTR traffic lights");
+    assert_eq!(ltr, chrome.traffic_light_rects().unwrap());
+    assert_eq!(ltr[0][0], 16.0);
+    assert_eq!(ltr[2][0] + ltr[2][2], inset);
+
+    let rtl = chrome.traffic_light_rects_in(width, true).expect("RTL traffic lights");
+    // Close sits outermost on the right, Zoom innermost on the left, matching macOS RTL insets.
+    assert_eq!(rtl[0], [width - 16.0 - crate::Chrome::TRAFFIC_LIGHT, 11.0, crate::Chrome::TRAFFIC_LIGHT, crate::Chrome::TRAFFIC_LIGHT]);
+    assert_eq!(rtl[1], [width - 39.0 - crate::Chrome::TRAFFIC_LIGHT, 11.0, crate::Chrome::TRAFFIC_LIGHT, crate::Chrome::TRAFFIC_LIGHT]);
+    assert_eq!(rtl[2], [width - inset, 11.0, crate::Chrome::TRAFFIC_LIGHT, crate::Chrome::TRAFFIC_LIGHT]);
+    assert_eq!(width - rtl[2][0], inset, "RTL traffic lights must match trailing chrome inset");
+
+    let standard = crate::Chrome { full_size_content: false, traffic_lights: None, drag_regions: false };
+    assert!(standard.traffic_light_rects_in(width, true).is_none());
+
+    // Paint into a blank 400x40 frame at 1x and verify discs and all four clearance-box edges.
+    let (w, h) = (400u32, 40u32);
+    let mut px = vec![0u8; (w * h * 4) as usize];
+    for p in px.chunks_exact_mut(4) { p[3] = 255; }
+    super::paint_traffic_lights(&mut px, w, h, 1.0, &rtl);
+    let at = |px: &[u8], x: u32, y: u32| -> [u8; 3] {
+        let i = ((y * w + x) * 4) as usize;
+        [px[i], px[i + 1], px[i + 2]]
+    };
+    // Close (red) on the right, Minimize (yellow) middle, Zoom (green) on the left.
+    let close = at(&px, (rtl[0][0] + 7.0) as u32, 18);
+    let mini = at(&px, (rtl[1][0] + 7.0) as u32, 18);
+    let zoom = at(&px, (rtl[2][0] + 7.0) as u32, 18);
+    assert!(close[0] > 200 && close[1] < 120 && close[2] < 120, "expected red close disc on the right: {close:?}");
+    assert!(mini[0] > 200 && mini[1] > 150 && mini[2] < 80, "expected yellow minimize disc in the middle: {mini:?}");
+    assert!(zoom[0] < 80 && zoom[1] > 170 && zoom[2] < 100, "expected green zoom disc on the left: {zoom:?}");
+    // Cyan 4 pt clearance box on top, bottom, left and right edges around the RTL lights.
+    let is_cyan = |c: [u8; 3]| c[0] == 0 && c[1] > 140 && c[2] > 180;
+    assert!(is_cyan(at(&px, (rtl[1][0] + 7.0) as u32, 7)), "top cyan clearance edge missing");
+    assert!(is_cyan(at(&px, (rtl[1][0] + 7.0) as u32, 29)), "bottom cyan clearance edge missing");
+    assert!(is_cyan(at(&px, (rtl[2][0] - 4.0) as u32, 18)), "left cyan clearance edge missing");
+    assert!(is_cyan(at(&px, (rtl[0][0] + rtl[0][2] + 4.0) as u32, 18)), "right cyan clearance edge missing");
+    // Left edge (where LTR lights would be) remains untouched.
+    assert_eq!(at(&px, 23, 18), [0, 0, 0], "LTR close position must stay unpainted in RTL");
+
+    // Overlap check flags elements on the right (inside the RTL clearance zone), not on the left.
+    let view = |&(w, ins): &(f32, f32), _: &mut crate::Cx<(f32, f32)>| {
+        crate::el().w_full().h_full()
+            .child(crate::el().key("left-btn").role("button").absolute(16.0, 10.0).size(40.0, 20.0))
+            .child(crate::el().key("clear-btn").role("button").absolute(w - ins - 44.0, 10.0).size(40.0, 20.0))
+            .child(crate::el().key("right-btn").role("button").absolute(w - ins + 4.0, 10.0).size(40.0, 20.0))
+    };
+    let mut rt = crate::Runtime::new((width, inset), view, (width, 40.0), crate::Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    let rtl_hits = super::traffic_light_overlaps(rt.core(), &rtl);
+    assert_eq!(rtl_hits.len(), 1, "RTL overlap check should flag only right-btn: {rtl_hits:?}");
+    assert!(rtl_hits[0].0.contains("right-btn"), "expected right-btn overlap, got {rtl_hits:?}");
+
+    let ltr_hits = super::traffic_light_overlaps(rt.core(), &ltr);
+    assert_eq!(ltr_hits.len(), 1, "LTR overlap check should flag only left-btn: {ltr_hits:?}");
+    assert!(ltr_hits[0].0.contains("left-btn"), "expected left-btn overlap, got {ltr_hits:?}");
+}

@@ -351,7 +351,7 @@ impl<F: FnMut(Shot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
         s.in_flight.pace(&s.gpu.device);
         if self.k == s.snap_frame
             && s.args.chrome_overlay
-            && let Some(lights) = s.chrome.traffic_light_rects()
+            && let Some(lights) = s.chrome.traffic_light_rects_in(s.size.0, crate::labels::rtl())
         {
             report_traffic_light_overlaps(self.app.rt(), &lights);
         }

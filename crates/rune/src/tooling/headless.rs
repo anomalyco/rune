@@ -255,7 +255,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
     let mut deliver = |shot: Shot, mut px: Vec<u8>| {
         if shot.snap && let Some(tool) = cpu_boot.borrow_mut().as_mut() { tool.gpu(&px, (wp, hp)); }
         if args.chrome_overlay
-            && let Some(lights) = chrome.traffic_light_rects()
+            && let Some(lights) = chrome.traffic_light_rects_in(size.0, crate::labels::rtl())
         {
             paint_traffic_lights(&mut px, wp, hp, scale, &lights);
         }
@@ -538,9 +538,20 @@ pub(crate) struct Shot {
     pub snap: bool,
 }
 
+/// The 4 pt clearance box `[left, top, right, bottom]` around all three traffic lights,
+/// whether Close sits on the left (LTR) or the right (RTL).
+fn traffic_light_zone(lights: &[[f32; 4]; 3]) -> [f32; 4] {
+    let m = 4.0;
+    let left = lights.iter().map(|r| r[0]).fold(f32::INFINITY, f32::min);
+    let top = lights.iter().map(|r| r[1]).fold(f32::INFINITY, f32::min);
+    let right = lights.iter().map(|r| r[0] + r[2]).fold(f32::NEG_INFINITY, f32::max);
+    let bottom = lights.iter().map(|r| r[1] + r[3]).fold(f32::NEG_INFINITY, f32::max);
+    [left - m, top - m, right + m, bottom + m]
+}
+
 /// Antialiased discs where macOS draws close, minimise and zoom, plus a hairline box 4 pt
 /// around them (the clearance an app should keep).
-fn paint_traffic_lights(px: &mut [u8], w: u32, h: u32, scale: f32, lights: &[[f32; 4]; 3]) {
+pub(super) fn paint_traffic_lights(px: &mut [u8], w: u32, h: u32, scale: f32, lights: &[[f32; 4]; 3]) {
     const COLORS: [[f32; 3]; 3] = [[255.0, 95.0, 87.0], [254.0, 188.0, 46.0], [40.0, 200.0, 64.0]];
     let mut blend = |x: i64, y: i64, c: [f32; 3], a: f32| {
         if x < 0 || y < 0 || x >= i64::from(w) || y >= i64::from(h) || a <= 0.0 {
@@ -560,9 +571,9 @@ fn paint_traffic_lights(px: &mut [u8], w: u32, h: u32, scale: f32, lights: &[[f3
             }
         }
     }
-    let m = 4.0;
-    let (x0, y0) = ((lights[0][0] - m) * scale, (lights[0][1] - m) * scale);
-    let (x1, y1) = ((lights[2][0] + lights[2][2] + m) * scale, (lights[2][1] + lights[2][3] + m) * scale);
+    let zone = traffic_light_zone(lights);
+    let (x0, y0) = (zone[0] * scale, zone[1] * scale);
+    let (x1, y1) = (zone[2] * scale, zone[3] * scale);
     let cyan = [0.0, 200.0, 255.0];
     for x in x0 as i64..=x1 as i64 {
         blend(x, y0 as i64, cyan, 0.8);
@@ -574,19 +585,24 @@ fn paint_traffic_lights(px: &mut [u8], w: u32, h: u32, scale: f32, lights: &[[f3
     }
 }
 
-/// Lists visible text, icons and controls whose drawn rect comes within 4 pt of a traffic light.
-fn report_traffic_light_overlaps(rt: &RuntimeCore, lights: &[[f32; 4]; 3]) {
-    let m = 4.0;
-    let zone = [lights[0][0] - m, lights[0][1] - m, lights[2][0] + lights[2][2] + m, lights[2][1] + lights[2][3] + m];
-    let mut n = 0;
-    for e in rt.elements() {
+/// Visible text, icons and controls whose drawn rect comes within 4 pt of a traffic light.
+pub(super) fn traffic_light_overlaps(rt: &RuntimeCore, lights: &[[f32; 4]; 3]) -> Vec<(String, [f32; 4])> {
+    let zone = traffic_light_zone(lights);
+    rt.elements().into_iter().filter_map(|e| {
         let drawn = e.text.is_some() || matches!(e.role, "icon" | "button" | "textbox");
         let v = e.visible;
         let (x1, y1) = (v[0] + v[2], v[1] + v[3]);
-        if drawn && e.opacity > 0.01 && v[2] > 0.0 && v[3] > 0.0 && v[0] < zone[2] && x1 > zone[0] && v[1] < zone[3] && y1 > zone[1] {
-            eprintln!("rune: chrome: {} overlaps the traffic lights at {:?}", e.path, e.visible.map(r2));
-            n += 1;
-        }
+        (drawn && e.opacity > 0.01 && v[2] > 0.0 && v[3] > 0.0
+            && v[0] < zone[2] && x1 > zone[0] && v[1] < zone[3] && y1 > zone[1])
+            .then_some((e.path, e.visible))
+    }).collect()
+}
+
+/// Lists visible text, icons and controls whose drawn rect comes within 4 pt of a traffic light.
+fn report_traffic_light_overlaps(rt: &RuntimeCore, lights: &[[f32; 4]; 3]) {
+    let overlaps = traffic_light_overlaps(rt, lights);
+    for (path, visible) in &overlaps {
+        eprintln!("rune: chrome: {path} overlaps the traffic lights at {:?}", visible.map(r2));
     }
-    eprintln!("rune: chrome: traffic lights at {:?}, {n} overlapping elements", lights[0].map(r2));
+    eprintln!("rune: chrome: traffic lights at {:?}, {} overlapping elements", lights[0].map(r2), overlaps.len());
 }
