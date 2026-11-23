@@ -64,7 +64,7 @@ fn check_link(url: &str, relative: bool) -> Result<String, OpenUrlError> {
     {
         return Err(OpenUrlError::Invalid);
     }
-    if relative && url.find([':', '/', '?', '#']).is_none_or(|i| url.as_bytes()[i] != b':') {
+    if relative && !url.starts_with("//") && url.find([':', '/', '?', '#']).is_none_or(|i| url.as_bytes()[i] != b':') {
         return Ok(url.to_owned());
     }
     let (scheme, rest) = url.split_once(':').ok_or(OpenUrlError::Invalid)?;
@@ -256,14 +256,37 @@ mod tests {
 
     #[test]
     fn same_tab_links_may_be_relative_only_on_web() {
-        for relative in ["/notes/42", "notes/42?x=1", "?q=a", "#top", "../c", "a/b:c"] {
+        for relative in ["/", "/notes/42", "/notes//42", "notes/42?x=1", "?q=a", "?//x", "#top", "#//x", "./a", "../c", "a/b:c"] {
             assert_eq!(check_link(relative, true).as_deref(), Ok(relative), "{relative:?}");
             assert_eq!(check_link(relative, false), Err(OpenUrlError::Invalid), "{relative:?}");
         }
+        assert_eq!(check_link("  /notes/42 ", true).as_deref(), Ok("/notes/42"));
+        assert_eq!(check_link("  /notes/42 ", false), Err(OpenUrlError::Invalid));
         assert_eq!(check_link("javascript:alert(1)", true), Err(OpenUrlError::UnsupportedScheme("javascript".into())));
         assert_eq!(check_link("/a b", true), Err(OpenUrlError::Invalid));
         assert_eq!(check_link("HTTPS://example.com/x", true).as_deref(), Ok("https://example.com/x"));
         assert_eq!(check_same_tab("/notes/42"), Err(OpenUrlError::Invalid), "native has no page to resolve against");
+    }
+
+    #[test]
+    fn scheme_relative_and_authority_like_links_are_refused() {
+        for bad in [
+            "//evil.example/x", "//evil.example", "//evil.example:8080/x",
+            "//user@evil.example/x", "//evil.example?q=1#top", "//https://evil.example/x",
+            "//", "///evil.example/x", "////evil.example/x",
+            "  //evil.example/x  ", "\t//evil.example/x", "\n//evil.example/x",
+            "\r//evil.example/x", "\u{00a0}//evil.example/x",
+            "\x00//evil.example/x", "\x01//evil.example/x", "\x1f//evil.example/x",
+            "\x7f//evil.example/x", " \x01//evil.example/x",
+            "/\t/evil.example/x", "/\n/evil.example/x", "/\r/evil.example/x",
+            "/ /evil.example/x", "/\x00/evil.example/x",
+            "\\\\evil.example/x", "/\\evil.example/x", "\\/evil.example/x",
+            "\\evil.example/x", "  /\\evil.example/x", "  \\\\evil.example/x",
+            "///\\evil.example/x",
+        ] {
+            assert_eq!(check_link(bad, true), Err(OpenUrlError::Invalid), "web: {bad:?}");
+            assert_eq!(check_link(bad, false), Err(OpenUrlError::Invalid), "native: {bad:?}");
+        }
     }
 
     #[test]
