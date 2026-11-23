@@ -1,0 +1,1 @@
+- Tests (`window`): `a_frame_that_draws_the_same_pixels_is_the_same` now selects `FontSmoothing::WindfoilChromium` before testing GPU-filled glyph masks, so it exercises the outline-fill path on macOS (where `FontSmoothing::default()` is `FontSmoothing::On`) as well as Windows and Linux.

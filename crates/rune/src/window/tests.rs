@@ -114,6 +114,8 @@ fn a_frame_that_draws_the_same_pixels_is_the_same() {
     rt.text.atlas.dirty = None;
 
     // A GPU-filled glyph advances `rasterized` and queues a fill without marking CPU rows dirty.
+    // Select an outline-drawn mode explicitly: macOS defaults to `FontSmoothing::On` (CPU masks).
+    rt.text.set_font_smoothing(crate::FontSmoothing::WindfoilChromium);
     rt.text.atlas.outlines.set_support(crate::text::outline::Support::Drawn);
     let mut quads = Vec::new();
     let rasterized_before = rt.text.atlas.rasterized();
