@@ -100,11 +100,13 @@ impl El {
     }
 
     /// On a virtual list ([`El::virtualize`] or [`El::virtual_rows`]), called with the index
-    /// range `start..end` of rows currently visible in its scroll viewport: once after its
-    /// first layout, then whenever that range or the rows change. Return `true` when `f`
-    /// changed state the view reads (so the view runs again), or `false` when it only updated
-    /// bookkeeping (so scrolling through rows that don't change the view's output doesn't
-    /// re-run the view).
+    /// range `start..end` of rows currently visible in its scroll viewport: on its first layout,
+    /// and whenever that range or the rows change. Changes from commits, rekeys, wheel scrolls
+    /// and scroll requests are delivered in the same frame (bounded against feedback loops);
+    /// range changes during scroll momentum or glides arrive on the next animation frame. Return
+    /// `true` when `f` changed state the view reads (so the view runs again in that frame), or
+    /// `false` when it only updated bookkeeping (so scrolling or rekeying when the view's output
+    /// does not depend on the range skips an extra view run and frame).
     #[track_caller]
     pub fn on_visible_rows<S: 'static>(
         mut self,

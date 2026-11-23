@@ -56,9 +56,12 @@ impl RuntimeCore {
         v.viewport_uncovered(offset, pinned)
     }
 
-    pub(in crate::runtime) fn report_visible_rows(&mut self) -> bool {
-        if self.commit.virtuals.is_empty() { return false; }
-        let mut queued = false;
+    /// Scans live, non-exiting virtual lists with `on_visible_rows` whose visible range changed
+    /// since last reported, updating `reported_visible` and dropping stale queued reports. When
+    /// `quiet`, updates `reported_visible` without returning actions to run or queue.
+    fn take_visible_row_reports(&mut self, quiet: bool) -> Vec<(String, std::ops::Range<usize>)> {
+        if self.commit.virtuals.is_empty() { return Vec::new(); }
+        let mut reports = Vec::new();
         for i in 0..self.tree.nodes.len() {
             if self.tree.nodes[i].handlers.get().is_none_or(|h| h.on_visible_rows.is_none()) || self.subtree_exiting(i) { continue; }
             let path = &self.tree.nodes[i].path;
@@ -69,11 +72,74 @@ impl RuntimeCore {
                 v.reported_visible = Some(range.clone());
                 let p = path.clone();
                 self.frame.queue.retain(|a| !matches!(a, Action::VisibleRows(q, _) if *q == p));
-                self.frame.queue.push(Action::VisibleRows(p, range));
-                queued = true;
+                if !quiet {
+                    reports.push((p, range));
+                }
             }
         }
+        reports
+    }
+
+    pub(in crate::runtime) fn report_visible_rows(&mut self) -> bool {
+        let quiet = !self.layout_feedback_open() && !self.scrolling();
+        let reports = self.take_visible_row_reports(quiet);
+        let queued = !reports.is_empty();
+        for (path, range) in reports {
+            self.frame.queue.push(Action::VisibleRows(path, range));
+        }
         queued
+    }
+
+    /// Queues scroll reveals for virtual lists whose `reveal_selected` row changed on a commit.
+    pub(in crate::runtime) fn queue_reveal_selected(&mut self, tx: &mut Tx, pointer_hover: bool) {
+        for (path, v) in &mut self.commit.virtuals {
+            if let Some(key) = v.reveal_selected.take() && !pointer_hover {
+                // Use the keyed ancestor path so identical row keys in other lists do not
+                // intercept the reveal, including when this row is still virtual.
+                let scope = element_path::keyed_scope(path);
+                let key = if scope.is_empty() { key } else { format!("{scope}/{key}") };
+                tx.scroll_to.push(ScrollReveal::into_view(None, key));
+            }
+        }
+    }
+
+    /// Delivers changed `on_visible_rows` ranges in the same frame after commits and scroll
+    /// requests settle, bounded to at most `layout_read::PASSES` follow-up commits.
+    pub(in crate::runtime) fn deliver_visible_rows(
+        &mut self,
+        app: &mut dyn AppDriver,
+        tx: &Tx,
+        commits0: u64,
+        pointer_hover: bool,
+    ) {
+        if self.commit.virtuals.is_empty() { return; }
+        if self.scrolling() { self.commit.step_feedback(layout_read::FeedbackEvent::Reopened); }
+        let mut scratch_tx = Tx::default();
+        for _ in 0..layout_read::PASSES {
+            let reports = self.take_visible_row_reports(false);
+            if reports.is_empty() { break; }
+            let mut changed = false;
+            for (path, range) in reports {
+                changed |= self.run_action(app, Action::VisibleRows(path, range), &mut scratch_tx);
+            }
+            if !changed || !self.layout_feedback_open() { break; }
+            self.count_layout_echo(true, false);
+            let commit = if self.settled {
+                Commit::Settle
+            } else if commits0 == 0 || tx.commit.snaps() || tx.unprompted {
+                Commit::Instant
+            } else {
+                tx.commit
+            };
+            let mut follow_tx = Tx { commit, unprompted: tx.unprompted, ..Tx::default() };
+            self.commit.set_state_unchanged(false);
+            self.commit_for(app, &follow_tx, CommitWhy::LAYOUT);
+            self.apply_keeps(app);
+            self.queue_reveal_selected(&mut follow_tx, pointer_hover);
+            let follow = std::mem::take(&mut self.edit.caret_follow);
+            self.finish_scroll_requests(app, &mut follow_tx, follow);
+            if !self.layout_feedback_open() { break; }
+        }
     }
 
     /// Notes each list's rows drawn inside its viewport on the last frame, so the next window
