@@ -1,0 +1,1 @@
+- Render (`cpu_boot`): the CPU first-frame painter no longer panics in `clamp` on sub-texel, zero, negative, or non-finite image crops (sampling the origin texel for sub-texel crops and drawing nothing for empty or non-finite inputs), or on degenerate shadow and round-cap segment bounds.

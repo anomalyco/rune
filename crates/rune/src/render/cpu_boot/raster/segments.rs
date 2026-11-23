@@ -74,7 +74,7 @@ fn clip_breaks(c: &Clip, out: &mut Vec<u32>) {
 
 /// Pixel indices `[ia, ib)` whose centres lie in `[a, b]`, within `x0..x1`.
 pub(super) fn centres(span: (f32, f32), x0: u32, x1: u32) -> (u32, u32) {
-    if span.0 > span.1 { return (x1, x1); }
+    if !(span.0 <= span.1) { return (x1, x1); }
     let a = (span.0 - 0.5).ceil().clamp(x0 as f32, x1 as f32) as u32;
     let b = ((span.1 - 0.5).floor() + 1.0).clamp(a as f32, x1 as f32) as u32;
     (a, b)
