@@ -55,6 +55,13 @@ impl SurfaceRetries {
         (self.replacements < SURFACE_TRIES).then(|| now + SURFACE_BACKOFF * u32::from(self.replacements))
     }
 
+    /// When to retry after a frame whose device was lost during submission or presentation, or
+    /// None once all `SURFACE_TRIES` replacements have been spent without a healthy frame. A
+    /// first loss on a steady-state surface (`replacements == 0`) waits one `SURFACE_BACKOFF`.
+    pub(in crate::window) fn loss_retry(&self, now: Instant) -> Option<Instant> {
+        (self.replacements < SURFACE_TRIES).then(|| now + SURFACE_BACKOFF * u32::from(self.replacements.max(1)))
+    }
+
     /// A frame presented: the next loss starts its replacements over.
     pub(in crate::window) fn worked(&mut self) { self.replacements = 0; }
 

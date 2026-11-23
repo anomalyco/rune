@@ -391,29 +391,25 @@ pub(super) fn submit_and_present_window(
     // A swap chain made again on a handed-over window's visual takes over now (`cpu_frame`).
     #[cfg(target_os = "windows")]
     if matches!(l.native.mode, handover::SurfaceMode::Rebinding { .. }) {
-        rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
-        if let handover::SurfaceMode::Rebinding { handover } = std::mem::take(&mut l.native.mode) {
+        let polled = rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely());
+        if should_commit_rebind(&polled, gpu.is_lost())
+            && let handover::SurfaceMode::Rebinding { handover } = std::mem::take(&mut l.native.mode)
+        {
             if let Err(error) = handover.commit() { eprintln!("rune: the window's new swap chain couldn't take over: {error}"); }
             l.native.mode = handover::SurfaceMode::Handed { handover };
         }
     }
-    #[cfg(target_os = "windows")]
-    l.native.video_layers.drawn(|key| renderer.surface_drew_isolated(key));
-    crate::window::frame_presented();
-    crate::render::gpu_events::presented();
-    // The frame reached the screen: a surface replaced by `replace_lost_surface` works, and
-    // the next loss starts its retries over.
-    l.surface_retries.worked();
-    #[cfg(target_os = "macos")]
-    if let Some(shadow) = &l.native.shadow { shadow.presented(); }
     // The frame landed with this present; later ones needn't wait for a transaction.
     #[cfg(target_os = "macos")]
     if !FrameMove::moving(&host.frame_move) { l.present_with_transaction(false); }
     if !l.first_frame.ready() && !waits && l.first_frame.deadline().is_none() {
-        l.first_frame.gpu_done();
-        gpu.queue.on_submitted_work_done(|| crate::marks::mark("frame.first.gpu_done"));
+        if !gpu.is_lost() {
+            l.first_frame.gpu_done();
+            gpu.queue.on_submitted_work_done(|| crate::marks::mark("frame.first.gpu_done"));
+        }
     } else if !l.first_frame.ready()
-        && rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).is_ok() {
+        && rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).is_ok()
+        && !gpu.is_lost() {
         l.first_frame.gpu_done();
         crate::marks::mark("frame.first.gpu_done");
         #[cfg(target_os = "windows")]
@@ -421,10 +417,22 @@ pub(super) fn submit_and_present_window(
     }
     // The window shows once the GPU has finished the frame it presents.
     #[cfg(target_os = "windows")]
-    if l.native.cloak.held() {
-        rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
+    if l.native.cloak.held()
+        && rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).is_ok()
+        && !gpu.is_lost()
+    {
         l.native.cloak.lift(&l.window);
         crate::marks::mark("window.shown");
+    }
+    // The frame reached the screen only if the device stayed alive through submit, present, and
+    // any synchronous wait above; a lost frame must keep `surface_retries` moving toward GiveUp.
+    if finalize_present_retries(gpu.is_lost(), &mut l.surface_retries) {
+        #[cfg(target_os = "windows")]
+        l.native.video_layers.drawn(|key| renderer.surface_drew_isolated(key));
+        crate::window::frame_presented();
+        crate::render::gpu_events::presented();
+        #[cfg(target_os = "macos")]
+        if let Some(shadow) = &l.native.shadow { shadow.presented(); }
     }
     #[cfg(feature = "frame-profile")]
     profile.build_frame(
@@ -437,6 +445,29 @@ pub(super) fn submit_and_present_window(
     #[cfg(not(feature = "frame-profile"))]
     let _ = (looped, info);
     crate::time::now()
+}
+
+/// Whether a rebinding DirectComposition swap chain's first frame finished on a live device and
+/// may be committed over the window's previous content.
+#[cfg(any(test, target_os = "windows"))]
+pub(super) fn should_commit_rebind(
+    polled: &Result<wgpu::PollStatus, rune_gpu::health::PollFailed>,
+    lost: bool,
+) -> bool {
+    polled.is_ok() && !lost
+}
+
+/// Finalizes surface-retry accounting after submission, presentation, and any synchronous GPU
+/// wait. Returns `true` when the device stayed alive (resetting `surface_retries`); returns
+/// `false` when the device was lost so consecutive failed replacements still reach
+/// `SURFACE_TRIES` instead of resetting to zero on every frame.
+pub(super) fn finalize_present_retries(
+    lost: bool,
+    surface_retries: &mut crate::window::surface::SurfaceRetries,
+) -> bool {
+    if lost { return false; }
+    surface_retries.worked();
+    true
 }
 
 pub(super) fn open_trace_if_needed(host: &mut Host, now: Instant) {
