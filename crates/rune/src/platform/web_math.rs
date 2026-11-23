@@ -87,21 +87,18 @@ pub(crate) fn select_surface_formats(
 
 /// Surface texture usages for a web canvas.
 ///
-/// WebGPU canvases accept `COPY_DST` (for retained loop-only frames) and `COPY_SRC` (for drift
-/// readback) even though wgpu's capabilities report only `RENDER_ATTACHMENT`. WebGL2 runs through
-/// `wgpu-core`, which rejects any usage absent from `caps_usages`.
+/// WebGPU canvases accept `COPY_DST` (for retained loop-only frames) and `COPY_SRC` (for backdrop
+/// copies in `ActivePass::split` and drift readback) even though wgpu's capabilities report only
+/// `RENDER_ATTACHMENT`. WebGL2 runs through `wgpu-core`, which rejects any usage absent from
+/// `caps_usages`.
 pub(crate) fn surface_usage(
     caps_usages: wgpu::TextureUsages,
     backend: wgpu::Backend,
-    drift: bool,
 ) -> wgpu::TextureUsages {
     let mut usage = wgpu::TextureUsages::RENDER_ATTACHMENT
         | (caps_usages & wgpu::TextureUsages::COPY_SRC);
     if backend == wgpu::Backend::BrowserWebGpu {
-        usage |= wgpu::TextureUsages::COPY_DST;
-        if drift {
-            usage |= wgpu::TextureUsages::COPY_SRC;
-        }
+        usage |= wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC;
     }
     usage
 }

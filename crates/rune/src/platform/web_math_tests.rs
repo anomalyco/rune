@@ -114,19 +114,20 @@ fn webgl_without_srgb_twin_keeps_supported_format_without_view_formats() {
 fn webgl_surface_usage_never_adds_unsupported_copy_flags() {
     use wgpu::{Backend, TextureUsages};
     let render_only = TextureUsages::RENDER_ATTACHMENT;
-    assert_eq!(surface_usage(render_only, Backend::Gl, false), TextureUsages::RENDER_ATTACHMENT);
-    assert_eq!(surface_usage(render_only, Backend::Gl, true), TextureUsages::RENDER_ATTACHMENT);
+    assert_eq!(surface_usage(render_only, Backend::Gl), TextureUsages::RENDER_ATTACHMENT);
     assert_eq!(
-        surface_usage(render_only, Backend::BrowserWebGpu, false),
-        TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_DST,
-    );
-    assert_eq!(
-        surface_usage(render_only, Backend::BrowserWebGpu, true),
-        TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_DST | TextureUsages::COPY_SRC,
-    );
-    assert_eq!(
-        surface_usage(render_only | TextureUsages::COPY_SRC, Backend::Gl, false),
+        surface_usage(render_only | TextureUsages::COPY_SRC, Backend::Gl),
         TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
+    );
+}
+
+#[test]
+fn webgpu_surface_usage_always_includes_copy_src_for_backdrop_blur() {
+    use wgpu::{Backend, TextureUsages};
+    let render_only = TextureUsages::RENDER_ATTACHMENT;
+    assert_eq!(
+        surface_usage(render_only, Backend::BrowserWebGpu),
+        TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_DST | TextureUsages::COPY_SRC,
     );
 }
 

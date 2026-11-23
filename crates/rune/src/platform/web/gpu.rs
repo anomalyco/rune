@@ -198,7 +198,7 @@ pub(super) fn canvas_config(gpu: &Gpu, surface: &wgpu::Surface<'static>, size: (
     config.present_mode = wgpu::PresentMode::Fifo;
     let caps = surface.get_capabilities(&gpu.adapter);
     let backend = gpu.adapter.get_info().backend;
-    config.usage = super::web_math::surface_usage(caps.usages, backend, drift_wanted());
+    config.usage = super::web_math::surface_usage(caps.usages, backend);
     let chosen = super::web_math::select_surface_formats(config.format, &caps.formats, backend, srgb_blend);
     config.format = chosen.surface;
     if let Some(view) = chosen.view_format {
