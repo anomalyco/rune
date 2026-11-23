@@ -57,9 +57,9 @@ impl Tx {
     pub fn scroll_into_view(&mut self, key: impl Into<String>) {
         self.scroll_to.push(crate::runtime::ScrollReveal::into_view(None, key.into()));
     }
-    /// [`Tx::scroll_into_view`] for row `key` inside the element keyed `scope` only, so lists
-    /// that key their rows alike (a file tree and a diff, both by path) don't reveal each
-    /// other's rows.
+    /// [`Tx::scroll_into_view`] for row `key` inside the element keyed `scope` only, scrolling
+    /// only viewports at or inside `scope` so lists that key their rows alike (a file tree and a
+    /// diff, both by path) don't reveal each other's rows and outer viewports stay put.
     pub fn scroll_into_view_in(&mut self, scope: impl Into<String>, key: impl Into<String>) {
         self.scroll_to.push(crate::runtime::ScrollReveal::into_view(Some(scope.into()), key.into()));
     }
@@ -70,7 +70,8 @@ impl Tx {
     pub fn scroll_center(&mut self, key: impl Into<String>) {
         self.scroll_to.push(crate::runtime::ScrollReveal::center(None, key.into(), true));
     }
-    /// [`Tx::scroll_center`] inside the element keyed `scope` only.
+    /// [`Tx::scroll_center`] inside the element keyed `scope` only, scrolling only viewports at
+    /// or inside `scope`.
     pub fn scroll_center_in(&mut self, scope: impl Into<String>, key: impl Into<String>) {
         self.scroll_to.push(crate::runtime::ScrollReveal::center(Some(scope.into()), key.into(), true));
     }

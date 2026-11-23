@@ -630,7 +630,7 @@ impl RuntimeCore {
     }
 
     /// `Tx::scroll_into_view` on x: scrolls the nearest horizontal viewport around row `key`
-    /// just far enough to show it, leaving its `El::scroll_margin`.
+    /// (within `scope`, when given) just far enough to show it, leaving its `El::scroll_margin`.
     pub(in crate::runtime) fn reveal_row_x(&mut self, scope: Option<&str>, key: &str) {
         let target = self.live_named(scope, key)
             .map(|i| (i, self.tree.nodes[i].target[0], self.tree.nodes[i].local.w))
@@ -640,6 +640,7 @@ impl RuntimeCore {
             });
         let Some((i, target_x, target_w)) = target else { return };
         let Some(v) = std::iter::successors(self.tree.nodes[i].parent, |&p| self.tree.nodes[p].parent)
+            .take_while(|&p| in_scope(&self.tree.nodes[p].path, scope))
             .find(|&p| self.tree.nodes[p].scroll.is_some() && self.tree.nodes[p].scroll_axes.x()) else { return };
         let view = &self.tree.nodes[v];
         // From the viewport's start edge: its right, right to left.

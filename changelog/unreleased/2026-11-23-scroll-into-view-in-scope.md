@@ -1,0 +1,1 @@
+- Scoped reveals (`Tx::scroll_into_view_in`, `Tx::scroll_center_in`, `Tx::scroll_center_in_instant`) now scroll only viewports at or inside `scope`, so revealing a row inside a scoped list no longer jumps an enclosing horizontal or vertical scroll viewport outside that scope.

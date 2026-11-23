@@ -321,6 +321,76 @@ fn scroll_into_view_in_reveals_only_inside_its_scope() {
 }
 
 #[test]
+fn scroll_into_view_in_does_not_scroll_viewports_outside_its_scope() {
+    // Vertical columns inside a horizontal strip: revealing inside column 3 must not jump the strip.
+    fn columns(_: &(), _: &mut Cx<()>) -> El {
+        col().w_full().h_full().child(
+            row().key("strip").size(900.0, 400.0).scroll_x().children((0..4).map(|c| {
+                col().key(format!("c{c}")).size(300.0, 400.0).scroll(crate::ScrollSpec { stick_bottom: false }).child(
+                    col().key(format!("list{c}")).w_full().growth(crate::GrowthSpec::default())
+                        .virtual_rows(100, 20.0, move |_: &(), i| std::borrow::Cow::Owned(format!("row-{c}-{i}")), |_: &(), _| el().w_full().h(20.0)),
+                )
+            })),
+        )
+    }
+    let mut rt = Runtime::new((), columns, (900.0, 400.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    for _ in 0..5 { rt.frame(0.016); }
+    let x_of = |rt: &Runtime<()>, key: &str| rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).map(|e| e.rect[0]);
+    let scroll_x = |rt: &Runtime<()>, path: &str| rt.scroll.scrolls[&rt.tree.path_ids[path]].x.offset;
+    let scroll_y = |rt: &Runtime<()>, path: &str| rt.scroll.scrolls[&rt.tree.path_ids[path]].offset;
+
+    assert_eq!(x_of(&rt, "c3"), Some(900.0));
+    rt.update_if(|_, tx| { tx.scroll_into_view_in("c3", "row-3-2"); false });
+    rt.frame(0.016);
+    assert_eq!(scroll_x(&rt, "#0/strip"), 0.0, "strip outside scope c3 must stay put");
+    assert_eq!(x_of(&rt, "c3"), Some(900.0), "column 3 stays where it was horizontally");
+
+    // Revealing an unmounted row in c3 while gliding the strip in the same frame scrolls c3 vertically
+    // and lets the strip glide instead of jumping it to 300.
+    rt.update_if(|_, tx| {
+        tx.scroll_into_view_in("c3", "row-3-80");
+        tx.scroll_to("strip", 300.0, 0.0);
+        false
+    });
+    rt.frame(0.016);
+    assert!(scroll_y(&rt, "#0/strip/c3") > 1000.0, "c3 still revealed row-3-80 vertically: {}", scroll_y(&rt, "#0/strip/c3"));
+    let mid_x = scroll_x(&rt, "#0/strip");
+    assert!(mid_x > 0.0 && mid_x < 250.0, "strip glides instead of jumping at once: {mid_x}");
+
+    // Scoping to the strip itself still reveals horizontally through it.
+    let mut rt2 = Runtime::new((), columns, (900.0, 400.0), Env::new(true, 1.0));
+    rt2.frame(0.0);
+    rt2.update_if(|_, tx| { tx.scroll_into_view_in("strip", "row-3-2"); false });
+    rt2.frame(0.016);
+    assert_eq!(scroll_x(&rt2, "#0/strip"), 300.0, "scoping to strip reveals c3 horizontally");
+
+    // Symmetric vertical case: a horizontal strip and a virtual list inside an outer vertical
+    // scroll viewport must not scroll that outer viewport when scoped inside it.
+    fn nested_y(_: &(), _: &mut Cx<()>) -> El {
+        let tabs = row().key("tabs").size(300.0, 40.0).scroll_x().children((0..10).map(|i| {
+            el().key(format!("t{i}")).size(100.0, 40.0)
+        }));
+        let inner_list = col().key("inner_list").w_full().growth(crate::GrowthSpec::default())
+            .virtual_rows(100, 20.0, |_: &(), i| std::borrow::Cow::Owned(format!("v{i}")), |_: &(), _| el().w_full().h(20.0));
+        col().key("page").size(300.0, 200.0).scroll(crate::ScrollSpec { stick_bottom: false })
+            .child(el().w_full().h(300.0))
+            .child(tabs)
+            .child(inner_list)
+    }
+    let mut rt3 = Runtime::new((), nested_y, (300.0, 200.0), Env::new(true, 1.0));
+    rt3.frame(0.0);
+    rt3.update_if(|_, tx| { tx.scroll_into_view_in("tabs", "t8"); false });
+    rt3.frame(0.016);
+    assert!(scroll_x(&rt3, "page/tabs") > 500.0, "tabs still scrolls horizontally inside its scope: {}", scroll_x(&rt3, "page/tabs"));
+    assert_eq!(scroll_y(&rt3, "page"), 0.0, "outer vertical viewport outside scope tabs must stay put");
+
+    rt3.update_if(|_, tx| { tx.scroll_into_view_in("inner_list", "v50"); false });
+    rt3.frame(0.016);
+    assert_eq!(scroll_y(&rt3, "page"), 0.0, "outer vertical viewport outside virtual list scope must stay put");
+}
+
+#[test]
 fn key_handler_removals_fade_by_default_and_unmount_at_once_with_tx_instant() {
     struct S {
         shown: bool,

@@ -60,7 +60,8 @@ impl RuntimeCore {
             .is_some_and(|v| self.scroll.requests.reveals().any(|r| r.viewport == v.scroll_path));
         let revealed_now = self.commit.virtuals.get(&nodes[c].path).is_some_and(|v| {
             tx.scroll_to.iter().any(|r| {
-                nodes.iter().enumerate().find(|(_, n)| n.named(&r.key)
+                in_scope(&v.scroll_path, r.scope.as_deref())
+                    && nodes.iter().enumerate().find(|(_, n)| n.named(&r.key)
                     && n.parent.is_none_or(|p| in_scope(&nodes[p].path, r.scope.as_deref())))
                     .is_some_and(|(i, _)| {
                         std::iter::successors(nodes[i].parent, |&p| nodes[p].parent)
