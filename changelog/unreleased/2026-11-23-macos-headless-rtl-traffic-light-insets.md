@@ -1,0 +1,1 @@
+- macOS headless: `Cx::chrome_insets` now reports right-to-left traffic-light room in `trailing` instead of `leading`, matching native macOS windows.

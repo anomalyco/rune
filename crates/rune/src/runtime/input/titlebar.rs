@@ -248,9 +248,12 @@ impl RuntimeCore {
             caption
         });
         let height = titlebar.filter(|_| cfg!(any(target_os = "macos", target_os = "windows"))).map_or(0.0, |t| t.height());
-        let leading = if cfg!(target_os = "macos") { inset } else { 0.0 };
+        let lights = if cfg!(target_os = "macos") { inset } else { 0.0 };
         let buttons = caption.map_or(0.0, |c| c.width(self.env.scale));
-        let (leading, trailing) = if caption.is_some_and(|c| c.mirrored) { (leading + buttons, 0.0) } else { (leading, buttons) };
+        // The traffic lights' room is on the right in a right-to-left app on macOS, as the
+        // caption buttons' is on the left on Windows.
+        let (leading, trailing) = if rtl { (0.0, lights) } else { (lights, 0.0) };
+        let (leading, trailing) = if caption.is_some_and(|c| c.mirrored) { (leading + buttons, trailing) } else { (leading, trailing + buttons) };
         self.set_chrome_insets(crate::ChromeInsets::new(leading, trailing, height));
         self.set_caption(caption);
         chrome
