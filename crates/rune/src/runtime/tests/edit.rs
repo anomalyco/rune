@@ -349,3 +349,79 @@ fn a_pill_copied_from_one_rich_field_pastes_whole_into_another() {
     paste_into(&mut rt, |s| &mut s.hooked);
     assert_eq!(pills_of(&rt.state.hooked), [(2..10, "agent:x".to_owned())]);
 }
+
+#[test]
+fn strike_on_text_input_survives_spans_and_follows_preedit() {
+    use crate::render::KIND_RECT;
+
+    const STRIKE_COLOR: Color = Color { r: 0.9, g: 0.2, b: 0.3, a: 1.0 };
+    struct App {
+        edit: TextEdit,
+        rich: TextEdit,
+    }
+    fn view(s: &App, _: &mut Cx<App>) -> El {
+        let st = TextStyle::new(14.0, 400.0);
+        col().size(320.0, 140.0)
+            .child(
+                text_input(&s.edit, st)
+                    .key("plain")
+                    .size(300.0, 40.0)
+                    .strike(2, 8, Some(STRIKE_COLOR))
+                    .spans(vec![Span::new(9, 13).weight(600.0)])
+                    .color(Color::WHITE)
+                    .on_edit(|s: &mut App| &mut s.edit),
+            )
+            .child(
+                text_input(&s.rich, st)
+                    .key("rich")
+                    .size(300.0, 40.0)
+                    .strikes([(7, 11, Some(STRIKE_COLOR))])
+                    .pill_style(|_| crate::PillStyle::default())
+                    .on_edit(|s: &mut App| &mut s.rich),
+            )
+    }
+    let mut edit = TextEdit::new("~~struck~~ bold");
+    edit.focused = true;
+    edit.set_caret(0);
+    let rich = TextEdit::from_html("<del>old</del> and more");
+    let mut rt = Runtime::new(App { edit, rich }, view, (320.0, 140.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    let strikes_of = |rt: &Runtime<App>, key: &str| {
+        rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some(key)).unwrap().text.as_ref().unwrap().cold.strikes.clone()
+    };
+    let strike_rects = |rt: &Runtime<App>| -> Vec<[f32; 4]> {
+        rt.instances.iter()
+            .filter(|q| q.params[1] == KIND_RECT
+                && (q.fill[0] - STRIKE_COLOR.r).abs() < 0.02
+                && (q.fill[1] - STRIKE_COLOR.g).abs() < 0.02
+                && (q.fill[2] - STRIKE_COLOR.b).abs() < 0.02
+                && q.rect[2] > 0.0)
+            .map(|q| q.rect)
+            .collect()
+    };
+
+    // App strike survives .spans(...) and .color(...), and paints a strike rect.
+    assert_eq!(strikes_of(&rt, "plain"), vec![(2, 8, Some(STRIKE_COLOR))]);
+    let base_rects = strike_rects(&rt);
+    assert!(base_rects.len() >= 2, "expected strike rects for both fields, got {base_rects:?}");
+    let plain_x0 = base_rects[0][0];
+
+    // Rich field keeps both its Mark::Strike and the app's .strikes(...) after .pill_style(...).
+    assert_eq!(strikes_of(&rt, "rich"), vec![(0, 3, None), (7, 11, Some(STRIKE_COLOR))]);
+
+    // An IME preedit before the strike shifts both its byte range and its painted rect.
+    rt.ime(Ime::Preedit("あ".into(), Some((0, 3)), Vec::new()));
+    rt.frame(0.0);
+    assert_eq!(strikes_of(&rt, "plain"), vec![(5, 11, Some(STRIKE_COLOR))]);
+    let shifted_rects = strike_rects(&rt);
+    assert!(shifted_rects[0][0] > plain_x0, "strike rect should shift right with preedit: {plain_x0} -> {}", shifted_rects[0][0]);
+
+    // An IME preedit inside the strike splits the range around the preedit.
+    rt.ime(Ime::Preedit(String::new(), None, Vec::new()));
+    rt.update(|s, _| s.edit.set_caret(5));
+    rt.frame(0.0);
+    rt.ime(Ime::Preedit("あ".into(), Some((0, 3)), Vec::new()));
+    rt.frame(0.0);
+    assert_eq!(strikes_of(&rt, "plain"), vec![(2, 5, Some(STRIKE_COLOR)), (8, 11, Some(STRIKE_COLOR))]);
+}

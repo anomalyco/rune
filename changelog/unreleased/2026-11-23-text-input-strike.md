@@ -1,0 +1,1 @@
+- `El::strike` and `El::strikes` on a `text_input` now persist across display rebuilds (`El::spans`, `El::pill_style`, `El::pill_icon`, `El::pill_colors`, `El::rich_style`, `El::font`, `El::color`) and map their byte ranges across active IME preedits, matching `El::spans`.
