@@ -1,0 +1,1 @@
+- `rune-kit` `Popover`: a long title now truncates with an ellipsis inside the header instead of pushing the close button past the surface's right edge, and the popover expands up to its 320 pt maximum width before truncating.

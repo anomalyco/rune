@@ -263,7 +263,7 @@ impl Popover {
                     .gap(8.0)
                     .center_y()
                     .justify_between()
-                    .child(text(t.clone()).key("title").font(k.ty.body_medium).color(c.text_strong).grow(1.0))
+                    .child(text(t.clone()).key("title").font(k.ty.body_medium).color(c.text_strong).truncate())
                     .child(close),
             );
         }
