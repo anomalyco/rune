@@ -141,7 +141,7 @@ pub(crate) fn ignore_saved_windows() {
     use objc2::rc::{Retained, autoreleasepool};
     use objc2::runtime::{AnyClass, AnyObject, Bool};
     use objc2_foundation::{NSString, NSUserDefaults};
-    if std::env::var_os("RUNE_APPKIT_RESTORES").is_some() { return; }
+    if !ignores_saved_windows() { return; }
     autoreleasepool(|_| {
         let (Some(number), Some(dictionary)) = (AnyClass::get(c"NSNumber"), AnyClass::get(c"NSDictionary")) else { return };
         let key = NSString::from_str(IGNORE_SAVED_WINDOWS);
@@ -155,6 +155,12 @@ pub(crate) fn ignore_saved_windows() {
             let _: () = msg_send![&*NSUserDefaults::standardUserDefaults(), registerDefaults: &*values];
         }
     });
+}
+
+/// Whether Rune keeps AppKit's window restoration out of the app (not under `RUNE_APPKIT_RESTORES`).
+pub(crate) fn ignores_saved_windows() -> bool {
+    static IGNORES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *IGNORES.get_or_init(|| std::env::var_os("RUNE_APPKIT_RESTORES").is_none())
 }
 
 /// The default AppKit reads before it looks for saved window state.

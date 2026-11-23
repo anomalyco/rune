@@ -148,7 +148,7 @@ fn configure_native(window: &NSWindow, options: &crate::MacWindowOptions) {
     // SAFETY: every caller runs on the AppKit main thread.
     unsafe {
         // AppKit saves nothing of a window it could not restore (`launch::ignore_saved_windows`).
-        let _: () = msg_send![window, setRestorable: false];
+        if launch::ignores_saved_windows() { let _: () = msg_send![window, setRestorable: false]; }
         if let Some(bits) = options.collection_behavior {
             let _: () = msg_send![window, setCollectionBehavior: bits];
         }
