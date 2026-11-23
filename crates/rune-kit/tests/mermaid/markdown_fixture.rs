@@ -122,10 +122,20 @@ fn render(src: &'static str, dark: bool, streaming: bool, width: f32) -> String 
     let els = rt.elements();
     for (i, e) in els.iter().enumerate() {
         let r = e.rect;
-        write!(out, "{{\"path\":{:?},\"role\":{:?},\"rect\":[{:.2},{:.2},{:.2},{:.2}],\"fill\":{:?}", e.path, e.role, r[0], r[1], r[2], r[3], e.fill.hex()).ok();
-        if let Some(k) = &e.key { write!(out, ",\"key\":{k:?}").ok(); }
-        if let Some(t) = &e.text { write!(out, ",\"text\":{t:?}").ok(); }
-        if let Some(c) = e.text_color { write!(out, ",\"color\":{:?}", c.hex()).ok(); }
+        write!(
+            out,
+            "{{\"path\":{},\"role\":{},\"rect\":[{:.2},{:.2},{:.2},{:.2}],\"fill\":{}",
+            json_str(&e.path),
+            json_str(e.role),
+            r[0],
+            r[1],
+            r[2],
+            r[3],
+            json_str(&e.fill.hex()),
+        ).ok();
+        if let Some(k) = &e.key { write!(out, ",\"key\":{}", json_str(k)).ok(); }
+        if let Some(t) = &e.text { write!(out, ",\"text\":{}", json_str(t)).ok(); }
+        if let Some(c) = e.text_color { write!(out, ",\"color\":{}", json_str(&c.hex())).ok(); }
         if e.opacity != 1.0 { write!(out, ",\"opacity\":{:.3}", e.opacity).ok(); }
         out.push('}');
         out.push_str(if i + 1 < els.len() { ",\n" } else { "\n" });
@@ -134,7 +144,37 @@ fn render(src: &'static str, dark: bool, streaming: bool, width: f32) -> String 
     out
 }
 
+/// Encodes `s` as a JSON string (RFC 8259), escaping non-printable Unicode (such as bidi
+/// isolates and narrow no-break spaces) with `\uXXXX` so goldens stay valid JSON and readable in
+/// diffs.
+fn json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\x08' => out.push_str("\\b"),
+            '\x0c' => out.push_str("\\f"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() || (!c.is_ascii() && c.escape_debug().next() == Some('\\')) => {
+                let mut buf = [0u16; 2];
+                for u in c.encode_utf16(&mut buf) {
+                    write!(out, "\\u{u:04x}").ok();
+                }
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 fn check(name: &str, actual: String) {
+    serde_json::from_str::<serde_json::Value>(&actual)
+        .unwrap_or_else(|e| panic!("golden {name} is not valid JSON: {e}"));
     check_ext(name, "json", actual);
 }
 
@@ -158,6 +198,18 @@ fn check_ext(name: &str, ext: &str, actual: String) {
             fresh.display(),
         );
     }
+}
+
+#[test]
+fn json_str_escapes_valid_json() {
+    let sample = "a\"b\\c'd\0\x08\x0c\n\r\t\x1f\x7f•\u{202f}\u{2066}hi\u{2069}\u{e0001}";
+    let encoded = json_str(sample);
+    assert_eq!(
+        encoded,
+        r#""a\"b\\c'd\u0000\b\f\n\r\t\u001f\u007f•\u202f\u2066hi\u2069\udb40\udc01""#,
+    );
+    let decoded: String = serde_json::from_str(&encoded).expect("valid JSON string");
+    assert_eq!(decoded, sample);
 }
 
 #[test]
