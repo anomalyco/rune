@@ -88,6 +88,8 @@ struct Grab {
     at: [f32; 2],
     scrolled: f32,
     pitch: f32,
+    /// Crossed the runtime's click slop on either axis, so no `on_press` follows the release.
+    past_slop: bool,
 }
 
 /// A torn-out tab: its layout rect in window points once reported, and whether it shows in a
@@ -294,8 +296,20 @@ impl TabDragState {
 
     /// The press landed at `grab` in the tab, with the strip scrolled `scrolled` along itself.
     pub(super) fn press(&mut self, lane: &Lane, grab: [f32; 2], scrolled: f32) {
-        let grab = Grab { at: grab, scrolled, pitch: lane.pitch };
+        let grab = Grab { at: grab, scrolled, pitch: lane.pitch, past_slop: false };
         self.gesture = Gesture::Pressed { index: lane.index, pinned: lane.pinned, tab_pitch: lane.pitch, grab };
+    }
+
+    /// Records pointer travel `offset` since the press, to know whether the runtime will suppress
+    /// the release's `on_press`.
+    pub(super) fn note_travel(&mut self, offset: [f32; 2]) {
+        if offset[0].abs() <= SLOP && offset[1].abs() <= SLOP {
+            return;
+        }
+        match &mut self.gesture {
+            Gesture::Pressed { grab, .. } | Gesture::Dragging { grab, .. } => grab.past_slop = true,
+            _ => {}
+        }
     }
 
     /// How much further the strip has scrolled since the press, at `scrolled` now.
@@ -346,12 +360,12 @@ impl TabDragState {
     /// (the press already selected the tab).
     pub(super) fn release(&mut self, cancelled: bool, on_tab: bool, swallow: bool) -> Release {
         let (gesture, release) = match std::mem::take(&mut self.gesture) {
-            Gesture::Pressed { .. } => (Gesture::Idle { swallow_click: swallow }, Release::Click),
-            Gesture::Dragging { mode: TabDragMode::Reorder { from, to, .. }, .. } if !cancelled && from != to =>
-                (Gesture::Dropping { from, to, swallow_click: on_tab }, Release::Reorder { from, to }),
-            Gesture::Dragging { mode: TabDragMode::TearOut { from, offset }, .. } if !cancelled =>
-                (Gesture::Idle { swallow_click: on_tab }, Release::TearOut { from, offset }),
-            Gesture::Dragging { .. } => (Gesture::Idle { swallow_click: on_tab }, Release::None),
+            Gesture::Pressed { grab, .. } => (Gesture::Idle { swallow_click: !cancelled && !grab.past_slop && swallow }, Release::Click),
+            Gesture::Dragging { mode: TabDragMode::Reorder { from, to, .. }, grab, .. } if !cancelled && from != to =>
+                (Gesture::Dropping { from, to, swallow_click: on_tab && !grab.past_slop }, Release::Reorder { from, to }),
+            Gesture::Dragging { mode: TabDragMode::TearOut { from, offset }, grab, .. } if !cancelled =>
+                (Gesture::Idle { swallow_click: on_tab && !grab.past_slop }, Release::TearOut { from, offset }),
+            Gesture::Dragging { grab, .. } => (Gesture::Idle { swallow_click: !cancelled && on_tab && !grab.past_slop }, Release::None),
             other => (other, Release::None),
         };
         self.gesture = gesture;

@@ -1,0 +1,1 @@
+- Input: an element with both `on_drag` and `on_press` no longer fires `on_press` after a drag that moved past the click slop, even when released back inside the element; clicks within slop and elements without `on_drag` still press as before.

@@ -42,7 +42,7 @@ pub(crate) struct Held {
     pub(crate) at: (f32, f32),
     pub(crate) down_at: f64,
     pub(crate) hit: Hit,
-    /// It travelled past the click slop: it isn't a click of a double press.
+    /// It travelled past the click slop: it isn't a click of a double press, nor a press on an element that drags.
     pub(crate) moved: bool,
     /// It's the second press of a double press.
     pub(crate) second: bool,
