@@ -435,13 +435,16 @@ fn key_event(
 /// The named key an XKB keysym is, or None for one that types (or nothing Rune names).
 fn named_keysym(symbol: u32) -> Option<crate::Key> {
     Some(match symbol {
-        0xff1b => crate::Key::Escape, 0xff0d => crate::Key::Enter, 0xff08 => crate::Key::Backspace,
-        0xffff => crate::Key::Delete, 0xff09 | 0xfe20 => crate::Key::Tab,
-        0xff50 => crate::Key::Home, 0xff57 => crate::Key::End, 0xff55 => crate::Key::PageUp, 0xff56 => crate::Key::PageDown,
-        0xff51 => crate::Key::Left, 0xff52 => crate::Key::Up, 0xff53 => crate::Key::Right, 0xff54 => crate::Key::Down,
+        0xff1b => crate::Key::Escape, 0xff0d | 0xff8d => crate::Key::Enter, 0xff08 => crate::Key::Backspace,
+        0xffff | 0xff9f => crate::Key::Delete, 0xff09 | 0xfe20 | 0xff89 => crate::Key::Tab,
+        0xff50 | 0xff95 => crate::Key::Home, 0xff57 | 0xff9c => crate::Key::End,
+        0xff55 | 0xff9a => crate::Key::PageUp, 0xff56 | 0xff9b => crate::Key::PageDown,
+        0xff51 | 0xff96 => crate::Key::Left, 0xff52 | 0xff97 => crate::Key::Up,
+        0xff53 | 0xff98 => crate::Key::Right, 0xff54 | 0xff99 => crate::Key::Down,
         0xffbe..=0xffd5 => crate::Key::Function((symbol - 0xffbe + 1) as u8),
+        0xff91..=0xff94 => crate::Key::Function((symbol - 0xff91 + 1) as u8),
         0xff67 => crate::Key::ContextMenu,
-        0xff63 => crate::Key::Insert, 0xff61 | 0xff15 => crate::Key::PrintScreen,
+        0xff63 | 0xff9e => crate::Key::Insert, 0xff61 | 0xff15 => crate::Key::PrintScreen,
         0xff14 => crate::Key::ScrollLock, 0xff13 | 0xff6b => crate::Key::Pause,
         _ => return None,
     })

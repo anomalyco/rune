@@ -1,0 +1,1 @@
+- Wayland: layer-shell overlays now map keypad Enter, Tab, F1-F4, arrows, Home, End, Page Up/Down, Insert, and Delete keysyms to their named keys, matching regular windows.

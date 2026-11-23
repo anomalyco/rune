@@ -15,6 +15,53 @@ fn special_keysyms_are_named_keys() {
 }
 
 #[test]
+fn keypad_keysyms_map_to_named_keys_and_produce_key_events() {
+    use xkbcommon::xkb::keysyms;
+    use crate::platform::layer_shell_machine::keyboard::key_event_from;
+    use crate::{KeyEvent, Mods, PhysicalKeyCode};
+
+    let none = Mods::default();
+    let ctrl = Mods { ctrl: true, cmd: true, ..Default::default() };
+
+    for (symbol, expected, utf32, text, physical) in [
+        (keysyms::KEY_KP_Tab, Key::Tab, '\t' as u32, "\t", None),
+        (keysyms::KEY_KP_Enter, Key::Enter, '\r' as u32, "\r", Some(PhysicalKeyCode::NumpadEnter)),
+        (keysyms::KEY_KP_F1, Key::Function(1), 0, "", None),
+        (keysyms::KEY_KP_F2, Key::Function(2), 0, "", None),
+        (keysyms::KEY_KP_F3, Key::Function(3), 0, "", None),
+        (keysyms::KEY_KP_F4, Key::Function(4), 0, "", None),
+        (keysyms::KEY_KP_Home, Key::Home, 0, "", Some(PhysicalKeyCode::Numpad7)),
+        (keysyms::KEY_KP_Left, Key::Left, 0, "", Some(PhysicalKeyCode::Numpad4)),
+        (keysyms::KEY_KP_Up, Key::Up, 0, "", Some(PhysicalKeyCode::Numpad8)),
+        (keysyms::KEY_KP_Right, Key::Right, 0, "", Some(PhysicalKeyCode::Numpad6)),
+        (keysyms::KEY_KP_Down, Key::Down, 0, "", Some(PhysicalKeyCode::Numpad2)),
+        (keysyms::KEY_KP_Page_Up, Key::PageUp, 0, "", Some(PhysicalKeyCode::Numpad9)),
+        (keysyms::KEY_KP_Page_Down, Key::PageDown, 0, "", Some(PhysicalKeyCode::Numpad3)),
+        (keysyms::KEY_KP_End, Key::End, 0, "", Some(PhysicalKeyCode::Numpad1)),
+        (keysyms::KEY_KP_Insert, Key::Insert, 0, "", Some(PhysicalKeyCode::Numpad0)),
+        (keysyms::KEY_KP_Delete, Key::Delete, 0x7f, "\x7f", Some(PhysicalKeyCode::NumpadDecimal)),
+    ] {
+        let named = named_keysym(symbol);
+        assert_eq!(named.as_ref(), Some(&expected), "keysym {symbol:#x}");
+        assert_eq!(
+            key_event_from(named.clone(), utf32, text.to_owned(), none, physical),
+            Some(KeyEvent { key: expected.clone(), mods: none }),
+            "plain key event for {symbol:#x}",
+        );
+        assert_eq!(
+            key_event_from(named, utf32, text.to_owned(), ctrl, physical),
+            Some(KeyEvent { key: expected, mods: ctrl }),
+            "ctrl key event for {symbol:#x}",
+        );
+    }
+
+    // Typing or unmapped keypad keysyms stay None in named_keysym.
+    for symbol in [keysyms::KEY_KP_Space, keysyms::KEY_KP_Begin, keysyms::KEY_KP_0, keysyms::KEY_KP_9] {
+        assert_eq!(named_keysym(symbol), None, "keysym {symbol:#x}");
+    }
+}
+
+#[test]
 fn read_keymap_fd_ignores_and_preserves_shared_file_offset() -> std::io::Result<()> {
     use std::fs::{File, OpenOptions};
     use std::io::{Read, Seek, SeekFrom, Write};
