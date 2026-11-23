@@ -906,6 +906,7 @@ function runs(h, el, item) {
         if (!href) { el.append(document.createTextNode(run.t)); continue; }
         const a = document.createElement('a');
         a.textContent = run.t;
+        if (run.d) a.setAttribute('aria-description', run.d);
         a.style.cssText = `color:transparent;text-decoration:none;pointer-events:${h.page ? 'auto' : 'none'};`;
         if (webLink(href)) {
             a.href = href;

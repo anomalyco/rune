@@ -47,6 +47,75 @@ fn mirrors_headings_inline_links_and_buttons_and_skips_idle_frames() {
     assert_eq!(rt.state.1, 1);
 }
 
+#[test]
+fn inline_link_help_mirrors_as_description_on_runs_and_focus_proxy() {
+    use crate::{Key, KeyEvent, Mods};
+
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let key_help = format!("Open{}Enter", crate::el::HELP_KEY);
+        let body = crate::rich("Open Local app Dup Blank Docs Shortcuts", vec![])
+            .key("links")
+            .font(crate::tok::type_::BODY)
+            .link(crate::Link::new(5..14, "http://localhost:8123/").help("This address opens on your device."))
+            .link(crate::Link::new(15..18, "https://example.com/dup").help("Dup"))
+            .link(crate::Link::new(19..24, "https://example.com/blank").help("   "))
+            .link(crate::Link::new(25..29, "https://example.com/docs"))
+            .link(crate::Link::new(30..39, "/keys").help(key_help))
+            .on_link(|_: &mut (), _, _| {});
+        crate::col().w_full().child(body)
+    }
+
+    let mut rt = Runtime::new((), view, (480.0, 200.0), Env::default());
+    rt.frame(0.0);
+
+    let items = rt.web_a11y_items();
+    let item_links: Vec<_> = items[0].runs.iter().filter(|r| r.href.is_some()).collect();
+    assert_eq!(item_links.len(), 5);
+    assert_eq!(item_links[0].description.as_deref(), Some("This address opens on your device."));
+    assert_eq!(item_links[1].description, None);
+    assert_eq!(item_links[2].description, None);
+    assert_eq!(item_links[3].description, None);
+    assert_eq!(item_links[4].description.as_deref(), Some("Open Enter"));
+
+    let json_items: Vec<serde_json::Value> = serde_json::from_str(&rt.a11y_json()).unwrap();
+    let runs = json_items[0]["u"].as_array().expect("inline link runs");
+    let link_runs: Vec<_> = runs.iter().filter(|r| r.get("h").is_some()).collect();
+    assert_eq!(link_runs.len(), 5);
+    assert_eq!(link_runs[0]["t"], "Local app");
+    assert_eq!(link_runs[0]["h"], "http://localhost:8123/");
+    assert_eq!(link_runs[0]["d"], "This address opens on your device.");
+    assert_eq!(link_runs[1]["t"], "Dup");
+    assert_eq!(link_runs[1].get("d"), None, "exact duplicate of link label must be omitted");
+    assert_eq!(link_runs[2]["t"], "Blank");
+    assert_eq!(link_runs[2].get("d"), None, "whitespace-only help must be omitted");
+    assert_eq!(link_runs[3]["t"], "Docs");
+    assert_eq!(link_runs[3].get("d"), None, "link without help has no description");
+    assert_eq!(link_runs[4]["t"], "Shortcuts");
+    assert_eq!(link_runs[4]["h"], "/keys");
+    assert_eq!(link_runs[4]["d"], "Open Enter");
+
+    // Web focus proxy exposes the focused inline link's role, label, and help description,
+    // and updates as Tab moves between links in the same text node.
+    let mut mirror = A11yMirror::default();
+    rt.key(KeyEvent { key: Key::Tab, mods: Mods::default() });
+    rt.frame(0.0);
+    let f0: serde_json::Value = serde_json::from_str(
+        rt.core().web_a11y_focus(&mut mirror).expect("focus proxy update for link 0"),
+    ).unwrap();
+    assert_eq!(f0["o"], "link");
+    assert_eq!(f0["t"], "Local app");
+    assert_eq!(f0["d"], "This address opens on your device.");
+
+    rt.key(KeyEvent { key: Key::Tab, mods: Mods::default() });
+    rt.frame(0.0);
+    let f1: serde_json::Value = serde_json::from_str(
+        rt.core().web_a11y_focus(&mut mirror).expect("focus proxy update for link 1"),
+    ).unwrap();
+    assert_eq!(f1["o"], "link");
+    assert_eq!(f1["t"], "Dup");
+    assert_eq!(f1.get("d"), None);
+}
+
 fn page(_: &(), _: &mut Cx<()>) -> El {
     crate::col().w_full().role("main")
         .child(crate::col().key("intro").role("region").label("Intro").w_full().h(400.0)

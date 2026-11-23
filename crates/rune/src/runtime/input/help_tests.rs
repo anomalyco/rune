@@ -351,3 +351,78 @@ fn link_help_hits_lay_out_only_links_with_help() {
         assert_eq!(rt.help_tooltip().map(|(t, _)| t), Some("Help for wrapped"));
     }
 }
+
+#[test]
+fn focused_link_shows_its_help_under_its_glyphs_when_on_focus_is_enabled() {
+    use crate::{Key, KeyEvent, Mods};
+
+    fn view(on_focus: &bool, cx: &mut Cx<bool>) -> El {
+        cx.help_look(crate::HelpLook::system(true).on_focus(*on_focus));
+        let first = crate::text("AAAA Local app CCCC")
+            .key("links")
+            .font(crate::TextStyle::new(16.0, 400.0))
+            .link(crate::Link::new(0..4, "https://example.com/a"))
+            .link(crate::Link::new(5..14, "http://localhost:8123/").help("This address opens on your device."))
+            .link(crate::Link::new(15..19, "https://example.com/c").help("Opens docs"))
+            .on_link(|_: &mut bool, _, _| {});
+        let fallback = crate::text("Fallback")
+            .key("fallback")
+            .font(crate::TextStyle::new(16.0, 400.0))
+            .help("Paragraph help")
+            .link(crate::Link::new(0..8, "https://example.com/f"))
+            .on_link(|_: &mut bool, _, _| {});
+        el().w_full().h_full()
+            .child(el().pin(Some(10.0), Some(10.0), None, None).child(first))
+            .child(el().pin(Some(10.0), Some(80.0), None, None).child(fallback))
+    }
+
+    let press = |rt: &mut Runtime<bool>, key: Key, shift: bool| {
+        rt.key(KeyEvent { key, mods: Mods { shift, ..Default::default() } });
+        rt.frame(1.0 / 60.0);
+    };
+
+    let mut rt = Runtime::new(true, view, (400.0, 300.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("links")).unwrap();
+    let boxes = rt.link_boxes(i, rt.drawn_box(i));
+    let b1 = boxes.iter().find(|(j, _)| *j == 1).unwrap().1;
+    let b2 = boxes.iter().find(|(j, _)| *j == 2).unwrap().1;
+
+    // Tab to link 0 (no help): no tooltip.
+    press(&mut rt, Key::Tab, false);
+    assert!(rt.help_tooltip().is_none(), "focused link without help shows no tooltip");
+
+    // Tab to link 1 (has help): tooltip opens immediately under link 1's glyphs, laying out only link 1.
+    press(&mut rt, Key::Tab, false);
+    let (tip, r1) = rt.help_tooltip().expect("focused link with help opens tooltip immediately");
+    assert_eq!(tip, "This address opens on your device.");
+    assert!(r1[1] >= b1[3] && r1[0] < b1[2] && r1[0] + r1[2] > b1[0], "tip {r1:?} sits under link 1 {b1:?}");
+    let ((), queries) = crate::runtime::count_span_box_queries(|| rt.core_mut().update_help());
+    assert_eq!(queries, 1, "focused link tooltip should lay out only the focused link");
+
+    // Tab to link 2: tooltip switches immediately to link 2's help under link 2's glyphs.
+    press(&mut rt, Key::Tab, false);
+    let (tip, r2) = rt.help_tooltip().expect("switching focus to next link updates tooltip");
+    assert_eq!(tip, "Opens docs");
+    assert!(r2[1] >= b2[3] && r2[0] < b2[2] && r2[0] + r2[2] > b2[0], "tip {r2:?} sits under link 2 {b2:?}");
+
+    // Escape dismisses the tooltip while link 2 keeps focus.
+    press(&mut rt, Key::Escape, false);
+    assert!(rt.help_tooltip().is_none(), "Escape suppresses the focused link tooltip");
+
+    // Shift+Tab back to link 1 reopens link 1's tooltip.
+    press(&mut rt, Key::Tab, true);
+    assert_eq!(rt.help_tooltip().map(|(t, _)| t), Some("This address opens on your device."));
+
+    // Tab past link 2 onto the fallback node's link (no link help): falls back to node help.
+    press(&mut rt, Key::Tab, false);
+    press(&mut rt, Key::Tab, false);
+    assert_eq!(rt.help_tooltip().map(|(t, _)| t), Some("Paragraph help"));
+
+    // With HelpLook::on_focus(false), keyboard focus onto a link does not open a tooltip.
+    let mut off = Runtime::new(false, view, (400.0, 300.0), Env::new(true, 2.0));
+    off.frame(0.0);
+    press(&mut off, Key::Tab, false);
+    press(&mut off, Key::Tab, false);
+    assert!(off.help_tooltip().is_none(), "on_focus(false) keeps link focus tooltips off");
+}
