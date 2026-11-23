@@ -98,7 +98,9 @@ bounds it), at a Luau safepoint, and that script carries on with its next call.
 Scripts run in Luau's interpreter. The `native-code` feature adds Luau's native code generation
 for modules that open with `--!native`, on Windows and Linux (x86-64, arm64) only: enable it for
 those targets alone. It costs every VM a 4 MiB committed code block as the VM starts, whether a
-native module ever loads or not. On `wasm32-unknown-unknown`, Luau's C++ builds with
+native module ever loads or not. Native builds compile Luau's C++ sources via `mlua`
+(`luau0-src`/`cc`) and require a host C++ compiler (`c++`/`g++`/`clang++`, or Visual Studio C++
+build tools on Windows). On `wasm32-unknown-unknown`, Luau's C++ builds with
 [WASI SDK](https://github.com/WebAssembly/wasi-sdk) 33 or newer and WebAssembly exception
 handling: set `WASI_SDK_PATH` and `scripts/web-build.sh` sets the compilers up; this crate links
 the SDK's C runtime and defines the few WASI calls it makes, so the page needs nothing extra.
