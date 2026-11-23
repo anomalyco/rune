@@ -892,3 +892,75 @@ line-two-secret").secure();
         assert_secure_tree_clean(&update, &["fresh-secret"]);
     }
 }
+
+#[test]
+fn a11y_show_context_menu_on_link_lays_out_only_that_link() {
+    struct Doc {
+        body: String,
+        links: Vec<(usize, usize, String)>,
+        menus: Vec<(String, f32, f32)>,
+    }
+    let mut body = String::new();
+    let mut links = Vec::with_capacity(40);
+    for idx in 0..40 {
+        if idx > 0 { body.push(' '); }
+        let start = body.len();
+        let (label, id) = if idx == 15 {
+            ("long_wrapped_link_phrase across_two_lines".to_owned(), "wrapped".to_owned())
+        } else {
+            (format!("link{idx:02}"), format!("l{idx}"))
+        };
+        body.push_str(&label);
+        links.push((start, body.len(), id));
+    }
+    fn view(s: &Doc, _: &mut Cx<Doc>) -> El {
+        let mut t = text(s.body.clone())
+            .key("doc")
+            .font(crate::TextStyle::new(14.0, 400.0).lh(20.0))
+            .wrap()
+            .w_full();
+        for (start, end, id) in &s.links {
+            t = t.link(crate::Link::new(*start..*end, id.as_str()));
+        }
+        t = t.on_link_secondary(|s: &mut Doc, id, ev, _| {
+            s.menus.push((id.to_owned(), ev.x, ev.y));
+        });
+        col().w(180.0).h(500.0).child(t)
+    }
+    let mut rt = Runtime::new(Doc { body, links, menus: Vec::new() }, view, (180.0, 500.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    let i = rt.tree.nodes.iter().position(|n| n.text.is_some()).expect("text node");
+    let node_id = rt.tree.nodes[i].id;
+    let drawn_boxes = rt.core().link_boxes(i, rt.core().drawn_box(i));
+    let link_index = |rt: &Runtime<Doc>, id: &str| {
+        rt.core().tree.nodes[i].text.as_ref().unwrap().cold.links.iter().position(|l| l.id == id).unwrap()
+    };
+    let wrapped_k = link_index(&rt, "wrapped");
+    let wrapped_boxes = drawn_boxes.iter().filter(|(j, _)| *j == wrapped_k).count();
+    assert!(wrapped_boxes >= 2, "expected wrapped link to span at least 2 line boxes, got {wrapped_boxes}");
+
+    for id in ["l10", "wrapped"] {
+        let k = link_index(&rt, id);
+        let (_, r) = drawn_boxes.iter().find(|(j, _)| *j == k).unwrap();
+        let (ex, ey) = (r[0], r[3]);
+        let menu = request(&rt, id, Ak::ShowContextMenu, None);
+        let (queued, queries) = crate::runtime::count_span_box_queries(|| rt.a11y_action(&menu));
+        assert!(queued, "ShowContextMenu should queue for {id}");
+        assert_eq!(queries, 1, "ShowContextMenu should lay out only link {id}");
+        rt.frame(0.0);
+        let (got_id, gx, gy) = rt.state.menus.pop().expect("on_link_secondary fired");
+        assert_eq!(got_id, id);
+        assert!((gx - ex).abs() < 0.01 && (gy - ey).abs() < 0.01, "{id}: got ({gx}, {gy}), want ({ex}, {ey})");
+    }
+
+    let missing = ActionRequest {
+        action: Ak::ShowContextMenu,
+        target_tree: TreeId::ROOT,
+        target_node: super::tree::link_id(node_id, 99),
+        data: None,
+    };
+    let (queued, queries) = crate::runtime::count_span_box_queries(|| rt.a11y_action(&missing));
+    assert!(!queued, "out-of-range link should not queue");
+    assert_eq!(queries, 0, "out-of-range link should query 0 spans");
+}

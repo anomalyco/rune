@@ -1,0 +1,1 @@
+- Runtime: accessibility `ShowContextMenu` actions on inline links and open link tooltips now compute range boxes only for the requested link index instead of laying out every link on the text node.

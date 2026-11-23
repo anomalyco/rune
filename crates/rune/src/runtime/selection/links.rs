@@ -254,7 +254,7 @@ impl RuntimeCore {
     }
 
     /// Like [`Self::link_boxes`], laying out only link `k` of node `i`.
-    fn link_boxes_for(&self, i: usize, k: usize, rect: [f32; 4]) -> Vec<(usize, [f32; 4])> {
+    pub(crate) fn link_boxes_for(&self, i: usize, k: usize, rect: [f32; 4]) -> Vec<(usize, [f32; 4])> {
         let n = &self.tree.nodes[i];
         let Some(l) = n.text.as_deref().and_then(|spec| spec.cold.links.get(k)) else { return Vec::new() };
         let z = self.paint.drawn_scale.get(i).copied().unwrap_or(1.0);
@@ -636,7 +636,7 @@ thread_local! {
 }
 
 #[cfg(test)]
-fn count_span_box_queries<R>(f: impl FnOnce() -> R) -> (R, usize) {
+pub(crate) fn count_span_box_queries<R>(f: impl FnOnce() -> R) -> (R, usize) {
     SPAN_BOX_QUERIES.with(|c| c.set(0));
     let out = f();
     let count = SPAN_BOX_QUERIES.with(|c| c.get());

@@ -168,6 +168,8 @@ use scroll::{
 use scroll::drawn::PixelHold;
 use scroll::mode::ScrollMode;
 
+#[cfg(test)]
+pub(crate) use selection::links::count_span_box_queries;
 pub(crate) use selection::links::origin as text_origin;
 pub(crate) use selection::selectable;
 pub use selection::selectable::{SelectedText, SelectionChange, TextSelection};
