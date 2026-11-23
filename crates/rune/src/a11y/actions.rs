@@ -69,10 +69,10 @@ impl RuntimeCore {
             }
             (Ak::Increment, None) if steps => self.queue_a11y(path, A11yAct::Step(1)),
             (Ak::Decrement, None) if steps => self.queue_a11y(path, A11yAct::Step(-1)),
-            (Ak::SetValue, None) if editable => match &request.data {
-                Some(ActionData::Value(v)) => self.queue_a11y(path, A11yAct::SetValue(v.to_string())),
-                _ => return false,
-            },
+            (Ak::SetValue, None) if editable && matches!(request.data, Some(ActionData::Value(_))) => {
+                let Some(ActionData::Value(v)) = &request.data else { return false };
+                self.queue_a11y(path, A11yAct::SetValue(v.to_string()));
+            }
             // A slider with a stated step takes a number as that many steps from its value.
             (Ak::SetValue, None) if steps => {
                 let Some(ActionData::NumericValue(target)) = request.data else { return false };

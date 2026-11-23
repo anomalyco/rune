@@ -968,3 +968,23 @@ fn fallback_in_new_skips_collapsed_zero_size_controls() {
     let picked = rt.core().fallback_in_new(&gone, &rt.tree.nodes);
     assert_eq!(picked.as_deref(), Some(visible.as_str()), "fallback_in_new must skip collapsed zero-size controls");
 }
+
+#[test]
+fn on_step_on_a_text_field_leaves_left_and_right_to_the_caret() {
+    fn view(s: &Keys, _: &mut Cx<Keys>) -> El {
+        col().size(200.0, 100.0).child(crate::text_input(&s.field, crate::TextStyle::new(14.0, 400.0)).key("size").size(120.0, 24.0)
+            .single_line().role("spinbutton").label("Size").on_edit(|s: &mut Keys| &mut s.field)
+            .on_step(|s: &mut Keys, d, _| s.steps.push(d)))
+    }
+    let mut field = crate::TextEdit::new("42");
+    field.focused = true;
+    let mut rt = Runtime::new(Keys { field, ..Keys::default() }, view, (200.0, 100.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    assert_eq!(rt.state.field.focus, 2);
+    press(&mut rt, Key::Left);
+    assert_eq!((rt.state.field.focus, rt.state.steps.as_slice()), (1, &[][..]), "Left moves the caret");
+    press(&mut rt, Key::Right);
+    assert_eq!((rt.state.field.focus, rt.state.steps.as_slice()), (2, &[][..]), "Right moves the caret");
+    for key in [Key::Up, Key::Down, Key::PageUp, Key::PageDown] { press(&mut rt, key); }
+    assert_eq!(rt.state.steps, [1, -1, 10, -10], "Up, Down and Page keys still step");
+}
