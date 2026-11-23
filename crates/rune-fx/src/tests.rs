@@ -259,7 +259,7 @@ fn wgsl_uniform_and_storage_layouts_match_rust() {
 
     let check = |label: &str, source: &str, structs: &[(&str, usize, &[(&str, usize)])]| {
         let module = wgsl::parse_str(source).unwrap_or_else(|e| panic!("{label}: {}", e.emit_to_string(source)));
-        Validator::new(ValidationFlags::all(), Capabilities::default() | Capabilities::SHADER_FLOAT16_IN_FLOAT32)
+        Validator::new(ValidationFlags::all(), Capabilities::default())
             .validate(&module)
             .unwrap_or_else(|e| panic!("{label}: {e}"));
         let mut layouter = Layouter::default();

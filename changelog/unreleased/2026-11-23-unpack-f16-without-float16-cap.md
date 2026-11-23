@@ -1,0 +1,1 @@
+- Shaders: `clip.wgsl` and `rune-media`'s `video.wgsl` unpack packed half-float fade widths with core `u32`/`f32` bit operations instead of `unpack2x16float`, so Rune apps validate and render on adapters without `SHADER_FLOAT16_IN_FLOAT32` (including lavapipe and older Intel integrated GPUs).

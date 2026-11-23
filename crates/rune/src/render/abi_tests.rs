@@ -66,7 +66,7 @@ fn wgsl_uniform_and_storage_layouts_match_rust() {
 
     let parse = |label: &str, source: &str| -> (Module, Layouter) {
         let module = wgsl::parse_str(source).unwrap_or_else(|e| panic!("{label}: {}", e.emit_to_string(source)));
-        Validator::new(ValidationFlags::all(), Capabilities::default() | Capabilities::SHADER_FLOAT16_IN_FLOAT32)
+        Validator::new(ValidationFlags::all(), Capabilities::default())
             .validate(&module)
             .unwrap_or_else(|e| panic!("{label}: {e}"));
         let mut layouter = Layouter::default();
@@ -955,4 +955,31 @@ fn wgsl_generated_constants_match_naga_ir() {
         ("rect", sc::ATTR_RECT_LOC), ("radii", sc::ATTR_RADII_LOC), ("fill", sc::ATTR_FILL_LOC),
         ("clip", sc::ATTR_CLIP_LOC), ("fade", sc::ATTR_FADE_LOC),
     ]);
+}
+
+/// Bit-exact Rust mirror of `unpack_f16x2` in `clip.wgsl` and `video.wgsl`, checked against
+/// `half::f16::to_f32` across all 65,536 binary16 bit patterns (zeros, subnormals, normals,
+/// infinities, and quiet/signaling NaNs).
+#[test]
+fn unpack_f16x2_matches_half_for_all_65536_inputs() {
+    fn unpack_f16x2(packed: u32) -> [f32; 2] {
+        [packed & 0xFFFF, packed >> 16].map(|h| {
+            let sign = (h & 0x8000) << 16;
+            let exp = (h >> 10) & 0x1F;
+            let mant = h & 0x03FF;
+            let sub = sign | ((mant as f32) * (1.0 / 16777216.0)).to_bits();
+            let norm = sign | ((exp + 112) << 23) | (mant << 13);
+            let inf_nan = sign | 0x7F80_0000 | (mant << 13) | if mant != 0 { 0x0040_0000 } else { 0 };
+            let bits = if exp == 0 { sub } else if exp == 31 { inf_nan } else { norm };
+            f32::from_bits(bits)
+        })
+    }
+    for lo in 0..=u16::MAX {
+        let hi = lo.wrapping_mul(257).wrapping_add(0x5A3Cu16);
+        let [got_lo, got_hi] = unpack_f16x2(u32::from(lo) | (u32::from(hi) << 16));
+        for (bits, got) in [(lo, got_lo), (hi, got_hi)] {
+            let want = half::f16::from_bits(bits).to_f32();
+            assert_eq!(got.to_bits(), want.to_bits(), "mismatch for f16 0x{bits:04x}");
+        }
+    }
 }

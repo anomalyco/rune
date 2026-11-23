@@ -354,7 +354,7 @@ fn uber_msl_with(wgsl_src: &str, bind_entries: &[wgpu::BindGroupLayoutEntry], at
     let module = wgsl::parse_str(wgsl_src).expect("parse uber WGSL");
     let info = Validator::new(
         ValidationFlags::all(),
-        Capabilities::default() | Capabilities::SHADER_FLOAT16_IN_FLOAT32,
+        Capabilities::default(),
     )
     .subgroup_stages(naga::valid::ShaderStages::all())
     .subgroup_operations(SubgroupOperationSet::all())
