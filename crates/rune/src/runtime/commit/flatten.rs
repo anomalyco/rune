@@ -744,6 +744,7 @@ fn flatten_node<E: FlattenEl>(
     let static_scale = el_r.scale;
     let time_scale = el_r.cold.time_scale;
     let option_as_alt = el_r.cold.option_as_alt;
+    let virtual_list = el_r.cold.virtual_estimate.is_some();
     let focus = el_r.cold.focus.clone();
     let (key, handlers, text, vis, cold, style, children) = el.finish(s);
     let cold = if E::cold_is_empty(&cold) && trace_namespace.is_none() && pixel_aspect.is_none() && aspect_fit.is_none() {
@@ -762,6 +763,7 @@ fn flatten_node<E: FlattenEl>(
         whole: flags.has(ElFlags::WHOLE),
         inert, flow, directed, pin, scale_track: false, group_fade: false,
         virtual_mount: flags.has(ElFlags::VIRTUAL_MOUNT),
+        virtual_list,
         selection_group: flags.has(ElFlags::SELECTION_GROUP),
         window_drag: flags.window_drag(),
         ime_cursor: flags.has(ElFlags::IME_CURSOR),

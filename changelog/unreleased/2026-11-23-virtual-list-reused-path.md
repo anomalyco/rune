@@ -1,0 +1,1 @@
+- Virtual lists: replacing an unkeyed `virtual_rows` or `virtualize` element with a non-virtual element at the same path no longer panics in `measure_virtuals` or leaves stale virtual metadata behind; `apply` and pruning drop the replaced entry while still keeping metadata for exiting virtual lists until their exit finishes.
