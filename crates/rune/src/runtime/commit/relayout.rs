@@ -114,7 +114,9 @@ impl RuntimeCore {
                 }
             };
         }
-        self.refresh_layout_seen();
+        // A first commit has no layout to refresh from: its view is given the last launch's
+        // rects when the app kept them (`layout_seed`).
+        if !self.seed_layout_reads() { self.refresh_layout_seen(); }
         self.measure(app, tx)
     }
 }

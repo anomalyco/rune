@@ -76,6 +76,11 @@ pub struct App<S: 'static> {
     pub(crate) on_ready: Option<OnWindow>,
     pub(crate) on_frame_encoded: Option<crate::frame::encoded::OnFrameEncoded>,
     pub(crate) on_frame_drawn: Option<crate::frame::encoded::OnFrameDrawn<S>>,
+    /// `App::layout_seed`'s seed and keeper; only desktop windows use them.
+    #[cfg_attr(any(target_arch = "wasm32", target_os = "ios", target_os = "android"), allow(dead_code))]
+    pub(crate) layout_seed: Option<crate::LayoutSeed>,
+    #[cfg_attr(any(target_arch = "wasm32", target_os = "ios", target_os = "android"), allow(dead_code))]
+    pub(crate) keep_layout: Option<Box<dyn FnMut(crate::LayoutSeed)>>,
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) same_tab_router: Option<Box<dyn Fn(&str) -> bool>>,
     pub(crate) macos_window: crate::MacWindowOptions,
@@ -131,6 +136,8 @@ impl<S: 'static> App<S> {
             on_ready: None,
             on_frame_encoded: None,
             on_frame_drawn: None,
+            layout_seed: None,
+            keep_layout: None,
             same_tab_router: None,
             macos_window: crate::MacWindowOptions::default(),
             compositor: None,
@@ -544,6 +551,21 @@ impl<S: 'static> App<S> {
     /// or what the window draws, and only desktop windows call it.
     pub fn on_frame_drawn(mut self, f: impl FnMut(&crate::Runtime<S>) + 'static) -> Self {
         self.on_frame_drawn = Some(Box::new(f));
+        self
+    }
+
+    /// Keep the view's layout reads across launches, so the window's first frame builds the
+    /// view once. A view that reads a rect ([`Cx::layout`](crate::Cx::layout), `layout_with`,
+    /// `layout_size`) gets nothing in a window's first commit and runs again once layout knows
+    /// it. `keep` is given what the view read when the window rests, closes or quits, each time
+    /// it changed: save it with the window's own state, and pass it back here as `seed` at the
+    /// next launch. The first view is then given those rects, and runs once when layout agrees
+    /// with them. A seed for another window size or scale isn't used, and one from another
+    /// state costs what no seed costs: every read is still checked against the layout. Desktop
+    /// windows only.
+    pub fn layout_seed(mut self, seed: Option<crate::LayoutSeed>, keep: impl FnMut(crate::LayoutSeed) + 'static) -> Self {
+        self.layout_seed = seed;
+        self.keep_layout = Some(Box::new(keep));
         self
     }
 

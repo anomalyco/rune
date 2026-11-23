@@ -328,6 +328,8 @@ impl<S: 'static> WindowSpec<S> {
         on_frame_encoded(f: impl FnMut(&crate::FrameEncoded) + 'static);
         /// Runs on the UI thread after each drawn frame of this window with its runtime, like `App::on_frame_drawn`.
         on_frame_drawn(f: impl FnMut(&crate::Runtime<S>) + 'static);
+        /// Keep this window's layout reads across launches, like `App::layout_seed`.
+        layout_seed(seed: Option<crate::LayoutSeed>, keep: impl FnMut(crate::LayoutSeed) + 'static);
         /// Draw every frame of this window through `compositor`, like `App::compositor`.
         compositor(compositor: impl crate::compose::Compositor<S>);
         /// This window's own counters for native trace summaries, like `App::dev_stats`.

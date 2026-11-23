@@ -88,6 +88,8 @@ impl MockWindowFrame {
             on_quit: None,
             on_reopen: None,
             turn_scope: None,
+            keep_layout: None,
+            kept_layout: None,
         };
         let reports = FrameReports::new(
             Some(Box::new(move |f| outcomes.borrow_mut().push(f.outcome()))),
@@ -297,6 +299,8 @@ fn cursor_moved_skips_redraw_within_same_hovered_row_and_keeps_quiet_timer_and_l
         on_quit: None,
         on_reopen: None,
         turn_scope: None,
+        keep_layout: None,
+        kept_layout: None,
     };
     let mut timer = TimerFrame::default();
     let mut loops = LoopFrame::default();
