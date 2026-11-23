@@ -45,6 +45,9 @@ pub(crate) struct Shared {
     pub(super) builtin: OnceLock<Option<Obj<dyn MTLLibrary>>>,
     /// Whether the GPU stopped running this queue's work, and who hears it.
     pub(super) lost: Mutex<Lost>,
+    /// Held while one thread runs the callbacks retired work owes, so they run in order: a
+    /// loss's before the work-done callbacks of what failed (`submit::Shared::retire`).
+    pub(super) dispatch: Mutex<()>,
 }
 send_sync!(Shared);
 
@@ -63,8 +66,9 @@ impl std::fmt::Debug for Lost {
 }
 
 impl Shared {
-    /// The GPU won't run the queue's work any more: the device is lost, and its callback hears
-    /// it once.
+    /// The device is lost, and its callback hears it once (a command buffer's failure does it
+    /// under the state lock: `submit::Shared::pop_completed`).
+    #[cfg(test)]
     pub(super) fn lose(&self, message: String) {
         let callback = {
             let mut lost = self.lost.lock();
@@ -103,6 +107,7 @@ pub(super) fn new(device: Obj<dyn MTLDevice>, desc: &wgpu::DeviceDescriptor<'_>)
         zeros: OnceLock::new(),
         builtin: OnceLock::new(),
         lost: Mutex::new(Lost::default()),
+        dispatch: Mutex::new(()),
         device,
     });
     let device = MetalDevice { shared: shared.clone(), features: desc.required_features, limits: desc.required_limits.clone() };

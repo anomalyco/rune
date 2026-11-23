@@ -572,3 +572,30 @@ fn events_need_this_backends_encoder() {
     assert!(!wait_for_event(&mut encoder, ProtocolObject::<dyn MTLEvent>::from_ref(&*e), 1));
     assert!(!signal_event_on_finish(&mut encoder, ProtocolObject::<dyn MTLEvent>::from_ref(&*e), 1));
 }
+
+/// A command buffer that fails loses the device before anything sees its work retired: a thread
+/// that retires it and another that runs the callbacks hear the loss before the work-done callback.
+#[test]
+fn a_failed_command_buffer_is_heard_lost_before_its_work_is_done() {
+    use objc2_metal::{MTLCommandBuffer, MTLDevice, MTLEvent};
+    let (device, queue) = gpu();
+    let sh = shared(&device);
+    let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let into = heard.clone();
+    device.set_device_lost_callback(move |_, _| into.lock().unwrap().push("lost"));
+    // A wait for an event nothing signals: Metal times it out after about 5 s, an error.
+    let never = sh.device.newSharedEvent().unwrap();
+    let cb = sh.command_buffer();
+    cb.encodeWaitForEvent_value(ProtocolObject::<dyn MTLEvent>::from_ref(&*never), 1);
+    sh.commit(cb);
+    let into = heard.clone();
+    queue.on_submitted_work_done(move || into.lock().unwrap().push("done"));
+    let (_, failing) = sh.pending_cbs().pop().expect("tracked");
+    failing.waitUntilCompleted();
+    assert_eq!(failing.status(), objc2_metal::MTLCommandBufferStatus::Error);
+    // One thread takes it off (its loss set in that lock), then another runs the callbacks first.
+    assert!(sh.retire_one());
+    assert!(sh.lost.lock().message.is_some(), "lost as it retires");
+    sh.retire();
+    assert_eq!(*heard.lock().unwrap(), ["lost", "done"]);
+}
