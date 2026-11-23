@@ -1,0 +1,1 @@
+- Wayland: layer-shell overlays cache each locale's compiled XKB compose table (bounded LRU, up to 8 locales) and compile it off the UI thread when keyboard input is requested, so repeated overlay shows share one table and create only a lightweight `xkb::compose::State` instead of re-reading and recompiling the system Compose file on every show.

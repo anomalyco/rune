@@ -190,6 +190,54 @@ fn xkb_compose_feeds_dead_keys_and_resets_after_composed_or_cancelled() {
 }
 
 #[test]
+fn xkb_compose_table_is_cached_per_locale_and_states_reset_independently() {
+    use xkbcommon::xkb;
+    use crate::platform::layer_shell_machine::compose_cache::{MAX_LOCALES, TableCache};
+    use crate::platform::layer_shell_machine::keyboard::ComposeOutcome;
+
+    // Real locale path: two overlay shows for the same locale compile at most one XKB table.
+    super::compose::clear_cache_for_test();
+    let before = super::compose::table_compilations();
+    let _first = super::compose::state_for_locale("C");
+    let after_first = super::compose::table_compilations();
+    assert_eq!(after_first, before + 1, "first show compiles the locale table once");
+    let _second = super::compose::state_for_locale("C");
+    assert_eq!(super::compose::table_compilations(), after_first, "second show reuses the cached table");
+    super::compose::warm_for_test("C");
+    assert_eq!(super::compose::table_compilations(), after_first, "warm on cached locale does not recompile");
+
+    // Two surfaces sharing one cached table keep independent dead-key composition state.
+    let table_src = "<dead_acute> <a> : \"á\" aacute\n";
+    let mut cache: TableCache<xkb::compose::Table> = TableCache::new(MAX_LOCALES);
+    let mut compiles = 0usize;
+    let mut build = |locale: &str| {
+        compiles += 1;
+        let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        xkb::compose::Table::new_from_buffer(
+            &context,
+            table_src.as_bytes(),
+            locale,
+            xkb::compose::FORMAT_TEXT_V1,
+            xkb::compose::COMPILE_NO_FLAGS,
+        )
+        .ok()
+    };
+    let table_a = cache.resolve("en_US.UTF-8", &mut build).expect("first cached table");
+    let table_b = cache.resolve("en_US.UTF-8", &mut build).expect("reused cached table");
+    assert_eq!(compiles, 1, "same locale must share one compiled xkb::compose::Table");
+
+    let mut surface_a = xkb::compose::State::new(&table_a, xkb::compose::STATE_NO_FLAGS);
+    let mut surface_b = xkb::compose::State::new(&table_b, xkb::compose::STATE_NO_FLAGS);
+    let dead_acute = xkb::Keysym::new(xkb::keysyms::KEY_dead_acute);
+    let key_a = xkb::Keysym::new('a' as u32);
+
+    assert_eq!(feed_compose(&mut surface_a, dead_acute), ComposeOutcome::Composing);
+    assert_eq!(feed_compose(&mut surface_b, key_a), ComposeOutcome::Nothing);
+    surface_b.reset();
+    assert_eq!(feed_compose(&mut surface_a, key_a), ComposeOutcome::Composed(Some("á".into())));
+}
+
+#[test]
 #[allow(unsafe_code)]
 fn wayland_watch_wakes_for_prequeued_and_concurrent_reads_and_stops_cleanly() -> std::io::Result<()> {
     use std::io::Write;
