@@ -47,8 +47,7 @@ use objc2::{
 use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLAccelerationStructure, MTLAccelerationStructureCommandEncoder, MTLArgumentBuffersTier,
-    MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandBufferError,
-    MTLCommandBufferStatus, MTLCommandQueue,
+    MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandQueue,
     MTLComputeCommandEncoder, MTLComputePipelineState, MTLCounterSampleBuffer, MTLCullMode,
     MTLDepthClipMode, MTLDepthStencilState, MTLDevice, MTLDrawable, MTLIndexType,
     MTLLanguageVersion, MTLLibrary, MTLPrimitiveType, MTLReadWriteTextureTier,
@@ -722,6 +721,7 @@ impl crate::Queue for Queue {
                         .commandBufferWithUnretainedReferences()
                         .ok_or(crate::DeviceError::Lost)?;
                     wait_cb.setLabel(Some(ns_string!("(wgpu internal) Wait")));
+                    signal_fence.lose_on_error(&wait_cb);
                     for (event, value) in waits.drain(..) {
                         wait_cb.encodeWaitForEvent_value(event.as_ref(), value);
                     }
@@ -740,7 +740,7 @@ impl crate::Queue for Queue {
                 let fence_lost = Arc::clone(&signal_fence.lost);
                 let block = block2::RcBlock::new(move |cmd_buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
                     // SAFETY: Metal passes the command buffer that completed.
-                    if queue_killed(unsafe { cmd_buf.as_ref() }) {
+                    if command_buffer_failed(unsafe { cmd_buf.as_ref() }) {
                         fence_lost.store(true, atomic::Ordering::Release);
                     }
                     *fence_sync.0.lock() = signal_value;
@@ -787,6 +787,10 @@ impl crate::Queue for Queue {
                 }
             };
 
+            // The last one's handler above advances the fence; any may fail.
+            for cmd_buffer in command_buffers.iter().rev().skip(1) {
+                signal_fence.lose_on_error(&cmd_buffer.raw);
+            }
             for cmd_buffer in command_buffers {
                 cmd_buffer.raw.commit();
                 // One command buffer per `end_encoding` call moves from the
@@ -1259,26 +1263,29 @@ unsafe impl Sync for QuerySet {}
 #[derive(Debug)]
 pub struct Fence {
     sync: Arc<(Mutex<crate::FenceValue>, Condvar)>,
-    /// The GPU stopped running the queue's work (`queue_killed`): the device is lost.
+    /// A command buffer failed (`command_buffer_failed`): the device is lost.
     lost: Arc<atomic::AtomicBool>,
     /// The pending fence values have to be ascending.
     pending_command_buffers: RwLock<Vec<PendingCommandBuffer>>,
     shared_event: Option<Retained<ProtocolObject<dyn MTLSharedEvent>>>,
 }
 
-/// Whether `cmd_buf` failed in a way that means the GPU won't run its queue's work any more: it
-/// timed out on it (and then ignores what the queue commits), revoked the queue's access, or the
-/// device went away. A buffer discarded while the GPU recovered from another's fault isn't one.
-fn queue_killed(cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>) -> bool {
-    cmd_buf.status() == MTLCommandBufferStatus::Error
-        && cmd_buf.error().is_some_and(|e| {
-            matches!(
-                MTLCommandBufferError(e.code() as usize),
-                MTLCommandBufferError::Timeout
-                    | MTLCommandBufferError::AccessRevoked
-                    | MTLCommandBufferError::DeviceRemoved
-            )
-        })
+/// Logs the failure of `cmd_buf` if it ended with an error, and returns whether it did: any error
+/// loses the device, as in Dawn and gfx-rs/wgpu#10875 (a Rune patch until a wgpu release has it).
+fn command_buffer_failed(cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>) -> bool {
+    if cmd_buf.status() != MTLCommandBufferStatus::Error {
+        return false;
+    }
+    let label = cmd_buf.label();
+    let error = cmd_buf.error();
+    log::error!(
+        "Metal command buffer {:?} failed: {}",
+        label.as_deref().map(|l| l.to_string()),
+        error
+            .as_deref()
+            .map_or_else(String::new, |e| e.localizedDescription().to_string()),
+    );
+    true
 }
 
 type PendingCommandBuffer = (
@@ -1296,11 +1303,9 @@ impl Fence {
         let mut max_value = *self.sync.0.lock();
         let pending_command_buffers = self.pending_command_buffers.read();
         for &(value, ref cmd_buf) in pending_command_buffers.iter() {
-            match cmd_buf.status() {
-                MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error => {
-                    max_value = value;
-                }
-                _ => {}
+            // A failed one finishes in its completion handler, once the loss is set.
+            if cmd_buf.status() == MTLCommandBufferStatus::Completed {
+                max_value = value;
             }
         }
         max_value
@@ -1315,6 +1320,18 @@ impl Fence {
 
     pub fn raw_shared_event(&self) -> Option<&ProtocolObject<dyn MTLSharedEvent>> {
         self.shared_event.as_deref()
+    }
+
+    /// `cmd_buf` loses the device if it fails (`command_buffer_failed`).
+    fn lose_on_error(&self, cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>) {
+        let lost = Arc::clone(&self.lost);
+        let block = block2::RcBlock::new(move |cmd_buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+            // SAFETY: Metal passes the command buffer that completed.
+            if command_buffer_failed(unsafe { cmd_buf.as_ref() }) {
+                lost.store(true, atomic::Ordering::Release);
+            }
+        });
+        unsafe { cmd_buf.addCompletedHandler(block2::RcBlock::as_ptr(&block)) };
     }
 }
 

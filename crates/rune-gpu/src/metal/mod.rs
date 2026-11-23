@@ -77,6 +77,21 @@ pub fn raw_device(device: &wgpu::Device) -> Option<&ProtocolObject<dyn MTLDevice
     device.as_custom::<MetalDevice>().map(|d| &*d.shared.device)
 }
 
+/// Before the passes `encoder` records next, the GPU waits until `event` reaches `value`
+/// (`encodeWaitForEvent`): for work another queue, device or API signals. A wait Metal gives up on
+/// fails the command buffer, which loses the device, so wait only for a signal that will come.
+/// False if `encoder` isn't this backend's.
+pub fn wait_for_event(encoder: &mut wgpu::CommandEncoder, event: &ProtocolObject<dyn objc2_metal::MTLEvent>, value: u64) -> bool {
+    encoder.as_custom::<encode::MetalEncoder>().map(|e| e.wait_for_event(event, value)).is_some()
+}
+
+/// Once all of `encoder`'s work has finished, the GPU sets `event` to `value`
+/// (`encodeSignalEvent`, encoded at `finish`): for another queue, device or API to wait on. False
+/// if `encoder` isn't this backend's.
+pub fn signal_event_on_finish(encoder: &mut wgpu::CommandEncoder, event: &ProtocolObject<dyn objc2_metal::MTLEvent>, value: u64) -> bool {
+    encoder.as_custom::<encode::MetalEncoder>().map(|e| e.signal_on_finish(event, value)).is_some()
+}
+
 /// A texture over `raw`, made on `raw_device`'s device and matching `desc`, which `owner` keeps valid.
 pub fn texture_from_raw(raw: Obj<dyn objc2_metal::MTLTexture>, desc: &wgpu::TextureDescriptor<'_>, owner: Owner) -> wgpu::Texture {
     wgpu::Texture::from_custom(resource::MetalTexture::from_raw(raw, desc, owner), desc)

@@ -489,15 +489,30 @@ fn adapters_are_the_ones_wgpu_picks() {
     assert_eq!(count(&ours), count(&theirs));
 }
 
+/// Any command buffer of a submission that fails loses a stock wgpu Metal device (the vendored
+/// wgpu-hal), not only the last: here the internal one that waits for an event nothing signals,
+/// which Metal times out after about 5 s, while the submission's own work completes.
 #[test]
-fn errors_that_end_the_queue_lose_the_device() {
-    use objc2_metal::MTLCommandBufferError as E;
-    for code in [E::Timeout, E::AccessRevoked, E::DeviceRemoved] {
-        assert!(submit::kills_queue(code), "{code:?}");
+#[allow(unsafe_code)]
+fn a_failed_command_buffer_loses_a_stock_wgpu_metal_device() {
+    use objc2_metal::MTLDevice;
+    let (device, queue) = wgpu_metal();
+    let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let into = heard.clone();
+    device.set_device_lost_callback(move |_, message| into.lock().unwrap().push(message));
+    // SAFETY: the hal device and queue are only read, to make an event and stage a wait on it.
+    let event = unsafe { device.as_hal::<wgpu::hal::api::Metal>() }.and_then(|d| d.raw_device().newSharedEvent()).expect("a Metal shared event");
+    // Kept alive here: the wait's command buffer doesn't retain it.
+    unsafe { queue.as_hal::<wgpu::hal::api::Metal>() }.expect("a Metal queue").add_wait_event(event.clone(), 1);
+    queue.submit([device.create_command_encoder(&Default::default()).finish()]);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while heard.lock().unwrap().is_empty() && std::time::Instant::now() < deadline {
+        // wgpu 30 panics in `Device::poll` once the hal reports the device lost (gfx-rs/wgpu#10031).
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| device.poll(wgpu::PollType::Poll)));
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    for code in [E::Internal, E::PageFault, E::NotPermitted, E::OutOfMemory, E::InvalidResource, E::Memoryless, E::StackOverflow] {
-        assert!(!submit::kills_queue(code), "{code:?}");
-    }
+    assert_eq!(heard.lock().unwrap().len(), 1, "the failed wait loses the device");
+    drop(event);
 }
 
 #[test]
@@ -509,4 +524,51 @@ fn a_lost_device_tells_its_callback_once_even_one_set_after() {
     device.set_device_lost_callback(move |reason, message| into.lock().unwrap().push((reason, message)));
     shared(&device).lose("again".into());
     assert_eq!(*heard.lock().unwrap(), [(wgpu::DeviceLostReason::Unknown, "the GPU timed out".to_owned())]);
+}
+
+/// Another queue's signal releases what a Rune encoder records after `wait_for_event`, and its
+/// `signal_event_on_finish` comes once that work finished: a copy the other queue then reads.
+#[test]
+#[allow(unsafe_code)]
+fn an_encoder_waits_for_and_signals_events_across_queues() {
+    use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLCommandQueue, MTLDevice, MTLEvent, MTLSharedEvent};
+    let (device, queue) = gpu();
+    let sh = shared(&device);
+    let other = sh.device.newCommandQueue().expect("a second Metal queue");
+    let (ready, read, seen) = (sh.device.newSharedEvent().unwrap(), sh.device.newSharedEvent().unwrap(), sh.device.newSharedEvent().unwrap());
+    fn event(e: &Obj<dyn MTLSharedEvent>) -> &ProtocolObject<dyn MTLEvent> { ProtocolObject::from_ref(&**e) }
+    let usage = wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ;
+    let src = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16, usage, mapped_at_creation: false });
+    let dst = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16, usage, mapped_at_creation: false });
+    queue.write_buffer(&src, 0, &[7; 16]);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    assert!(wait_for_event(&mut encoder, event(&ready), 1));
+    encoder.copy_buffer_to_buffer(&src, 0, &dst, 0, 16);
+    assert!(signal_event_on_finish(&mut encoder, event(&read), 1));
+    queue.submit([encoder.finish()]);
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert_eq!(read.signaledValue(), 0, "held until the other queue signals");
+    // The other queue releases it, then waits for its signal before its own work.
+    let cb = other.commandBuffer().unwrap();
+    cb.encodeSignalEvent_value(event(&ready), 1);
+    cb.encodeWaitForEvent_value(event(&read), 1);
+    cb.encodeSignalEvent_value(event(&seen), 1);
+    cb.commit();
+    assert!(seen.waitUntilSignaledValue_timeoutMS(1, 2000), "the encoder's signal came");
+    let raw = dst.as_custom::<MetalBuffer>().unwrap().store.current();
+    // SAFETY: shared storage of 16 bytes, which the GPU finished writing (`read` reached 1).
+    let bytes = unsafe { std::slice::from_raw_parts(raw.raw.contents().as_ptr() as *const u8, 16) };
+    assert_eq!(bytes, [7; 16], "the signal came after the copy");
+}
+
+/// A stock wgpu encoder isn't this backend's: nothing is encoded.
+#[test]
+fn events_need_this_backends_encoder() {
+    use objc2_metal::{MTLDevice, MTLEvent};
+    let (device, _queue) = wgpu_metal();
+    let (ours, _q) = gpu();
+    let e = shared(&ours).device.newSharedEvent().unwrap();
+    let mut encoder = device.create_command_encoder(&Default::default());
+    assert!(!wait_for_event(&mut encoder, ProtocolObject::<dyn MTLEvent>::from_ref(&*e), 1));
+    assert!(!signal_event_on_finish(&mut encoder, ProtocolObject::<dyn MTLEvent>::from_ref(&*e), 1));
 }
