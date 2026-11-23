@@ -6,6 +6,10 @@ use rune_staging::Staging;
 
 use super::*;
 
+#[cfg(test)]
+#[path = "texture_limit_tests.rs"]
+mod texture_limit_tests;
+
 /// Rows the texture starts with (256 KB).
 pub(super) const MIN_ROWS: u32 = 16;
 
@@ -18,8 +22,12 @@ impl Renderer {
     pub(super) fn upload_outlines(&mut self, device: &wgpu::Device, staging: &Staging, atlas: &mut Atlas) {
         let store = &mut atlas.outlines;
         let variant::Uber::Windfoil { outlines, .. } = &mut self.uber else { return };
+        let max_rows = device.limits().max_texture_dimension_2d;
+        store.limit_rows(max_rows);
+        // Rows past the device's limit start again next frame (`limit_rows`); none go up.
+        if store.rows() > max_rows { store.take_dirty(); return; }
         if store.rows() > outlines.height() {
-            *outlines = Self::outline_texture(device, store.rows().next_power_of_two());
+            *outlines = Self::outline_texture(device, store.rows().next_power_of_two().min(max_rows));
             store.invalidate();
             self.rebind_all(device);
         }
