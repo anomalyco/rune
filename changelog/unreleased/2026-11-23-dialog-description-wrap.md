@@ -1,0 +1,1 @@
+- `rune-kit`: `Dialog` wraps its description inside the card instead of laying it out on a single overflowing line, and its header title column shrinks beside the close button so fitted cards grow to hold wrapped lines.

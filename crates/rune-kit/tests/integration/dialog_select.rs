@@ -62,3 +62,35 @@ fn a_fit_dialog_is_as_tall_as_its_content() {
     assert_eq!((panel[0], panel[1]), ((1000.0 - 400.0) / 2.0, (800.0 - panel[3]) / 2.0), "centred in the layer");
     assert_eq!(buttons[1] + buttons[3], panel[1] + panel[3], "the buttons sit at the bottom edge");
 }
+
+#[test]
+fn dialog_description_wraps_inside_the_card() {
+    const DESC: &str = "This permanently removes the table, its indexes and every row it holds. This cannot be undone.";
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let k = Kit::neutral(true);
+        let mut layer = Vec::new();
+        Dialog::new("d", "Delete table").open(true).fit()
+            .description(DESC)
+            .on_close(|_: &mut ()| {})
+            .build(&k, &mut layer);
+        root(rune::el().w_full().h_full(), layer)
+    }
+    for (vw, expected_w) in [(600.0, 480.0), (320.0, 288.0)] {
+        let mut rt = Runtime::new((), view, (vw, 300.0), Env::new(true, 1.0));
+        for _ in 0..60 { rt.frame(1.0 / 60.0); }
+        let elements = rt.elements();
+        let panel = elements.iter().find(|e| e.key.as_deref() == Some("d-dialog")).unwrap();
+        let close = elements.iter().find(|e| e.key.as_deref() == Some("close")).unwrap();
+        let desc = elements.iter().find(|e| e.text.as_deref() == Some(DESC)).unwrap();
+        assert_eq!(panel.rect[2], expected_w, "panel fits viewport {vw}");
+        assert!(desc.rect[0] >= panel.rect[0] + 16.0 - 0.5, "description starts inside left padding: {desc:?} vs {panel:?}");
+        assert!(desc.rect[0] + desc.rect[2] <= close.rect[0] + 0.5,
+            "description stops before the close button: {:?} vs {:?}", desc.rect, close.rect);
+        assert!(desc.rect[0] + desc.rect[2] <= panel.rect[0] + panel.rect[2] - 16.0 + 0.5,
+            "description stays inside the card's right padding: {:?} vs {:?}", desc.rect, panel.rect);
+        assert!(close.rect[0] + close.rect[2] <= panel.rect[0] + panel.rect[2],
+            "close button stays inside the card: {:?} vs {:?}", close.rect, panel.rect);
+        assert!(desc.rect[3] >= 40.0, "description wraps onto multiple lines at width {vw}: {:?}", desc.rect);
+        assert!(panel.rect[3] > 76.0, "fitted card grows for wrapped description at width {vw}: {:?}", panel.rect);
+    }
+}
