@@ -349,3 +349,84 @@ fn live_only_without_live_subscriptions_rests_after_one_frame() {
     assert!(!rt.live_pending(), "wheel live_only must not stick live_pending without subscriptions");
     assert_eq!(rt.core().waiting_work(), None);
 }
+
+#[test]
+fn live_value_published_in_poll_draws_one_frame_without_extra_live_wake() {
+    struct SpriteState {
+        offset: Live<[f32; 2]>,
+        pixels: crate::Pixels,
+        step_live: bool,
+        step_pixels: bool,
+        tick: u32,
+    }
+    fn view(s: &SpriteState, _: &mut Cx<SpriteState>) -> El {
+        el().size(200.0, 200.0)
+            .child(el().key("sprite").absolute(0.0, 0.0).size(16.0, 16.0).live_offset(&s.offset).pixels(&s.pixels))
+    }
+    let state = SpriteState {
+        offset: Live::new([0.0, 0.0]),
+        pixels: crate::Pixels::new(),
+        step_live: false,
+        step_pixels: false,
+        tick: 0,
+    };
+    let mut rt = Runtime::new(state, view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.poll = Some(|s, _, tx| {
+        if s.step_live {
+            s.step_live = false;
+            s.tick += 1;
+            s.offset.set([s.tick as f32 * 4.0, 0.0]);
+            tx.wake_after(std::time::Duration::from_millis(40));
+        }
+        if s.step_pixels {
+            s.step_pixels = false;
+            s.tick += 1;
+            let v = (s.tick % 255) as u8;
+            s.pixels.set(2, 2, vec![v; 2 * 2 * 4]);
+        }
+        false
+    });
+    rt.frame(0.0);
+    let commits = rt.stats.commits;
+    assert!(!rt.live_pending());
+
+    // Simulate a host loop that draws one frame on each timer tick and keeps drawing
+    // while animating or live_pending. Each Live publication in poll must draw once.
+    let mut frames_drawn = 0u32;
+    for step in 1..=5u32 {
+        rt.state.step_live = true;
+        loop {
+            let animating = rt.frame(0.04);
+            frames_drawn += 1;
+            if !(animating || rt.live_pending()) { break; }
+            assert!(frames_drawn <= 20, "live_pending looped without settling");
+        }
+        let sprite = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("sprite")).unwrap();
+        assert_eq!(sprite.rect[0], step as f32 * 4.0, "step {step} drawn on its own frame");
+        assert!(!rt.live_pending(), "step {step} must not leave live_pending set after drawing");
+    }
+    assert_eq!(frames_drawn, 5, "five poll live updates must draw 5 frames, not 10");
+    assert_eq!(rt.stats.commits, commits, "poll live updates must not rebuild the view");
+
+    // Fixed-size Pixels (no has_pixel_aspect) published in poll also draws once.
+    let mut pixel_frames = 0u32;
+    for _ in 0..3 {
+        rt.state.step_pixels = true;
+        loop {
+            let animating = rt.frame(0.04);
+            pixel_frames += 1;
+            if !(animating || rt.live_pending()) { break; }
+            assert!(pixel_frames <= 20, "pixel live_pending looped without settling");
+        }
+        assert!(!rt.live_pending());
+    }
+    assert_eq!(pixel_frames, 3, "three fixed-size pixel updates must draw 3 frames");
+
+    // A hidden runtime still retains a publication for when it shows again.
+    rt.set_live_visible(false);
+    rt.state.offset.set([99.0, 0.0]);
+    rt.frame(0.04);
+    assert!(!rt.live_pending(), "hidden runtime reports not live_pending while hidden");
+    rt.set_live_visible(true);
+    assert!(rt.live_pending(), "retained wake resurfaces on show");
+}

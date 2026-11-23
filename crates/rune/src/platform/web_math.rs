@@ -177,8 +177,14 @@ pub(crate) enum WebDrawKind {
     Moving,
 }
 
-/// Decides whether a web frame proceeds into [`crate::frame::host_step::run`] or skips.
-pub(crate) fn web_frame_gate(suspended: bool, draw: WebDrawKind) -> crate::frame::host_step::Gate {
+/// Decides whether a web frame skips, steps before acquiring (`Gate::QuietTimer` when a
+/// previous GPU presentation is valid so an unchanged frame avoids acquiring a canvas texture),
+/// or draws unconditionally (`Gate::Draw`).
+pub(crate) fn web_frame_gate(
+    suspended: bool,
+    draw: WebDrawKind,
+    quiet_candidate: bool,
+) -> crate::frame::host_step::Gate {
     if suspended
         || matches!(
             draw,
@@ -188,9 +194,22 @@ pub(crate) fn web_frame_gate(suspended: bool, draw: WebDrawKind) -> crate::frame
         )
     {
         crate::frame::host_step::Gate::Skip
+    } else if draw == WebDrawKind::Gpu && quiet_candidate {
+        crate::frame::host_step::Gate::QuietTimer
     } else {
         crate::frame::host_step::Gate::Draw
     }
+}
+
+/// Whether a presented GPU frame can be recorded in [`crate::window::Presented`] so a later
+/// redraw that builds the same pixels skips acquiring and presenting a canvas texture.
+pub(crate) fn should_record_presented(
+    drawn: bool,
+    moving: bool,
+    stale: bool,
+    has_window_frame: bool,
+) -> bool {
+    drawn && !moving && !stale && !has_window_frame
 }
 
 /// Outcome of one `wgpu::Surface::get_current_texture` call without the texture payload, so
@@ -331,6 +350,7 @@ pub(crate) fn start_web_runtime<S: 'static>(
     viewport: (f32, f32),
     env: crate::Env,
     wake: crate::Waker,
+    live_wake: crate::Waker,
 ) -> (
     crate::Runtime<S>,
     std::sync::Arc<crate::app::Shared<S>>,
@@ -342,6 +362,9 @@ pub(crate) fn start_web_runtime<S: 'static>(
     let spec_fonts = app.spec.fonts;
     let (spec, state, shared, runtime) = app.into_parts(None);
     let mut rt = crate::tooling::runtime_for(&spec, state, viewport, env, wake);
+    // Live values wake on their own lane so a value already drawn in the frame that published
+    // it does not trigger Wake::App's invalidate and redundant redraw.
+    rt.set_live_waker(live_wake);
     if let Some(attach) = attach_playground {
         attach(&mut rt, playground, &spec, None, None, true);
     }

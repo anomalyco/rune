@@ -163,14 +163,15 @@ fn webgl_context_loss_recovers_instead_of_terminating_the_app() {
 #[test]
 fn web_gate_skips_suspended_waiting_context_lost_and_moving() {
     use crate::frame::host_step::Gate;
-    assert!(matches!(web_frame_gate(true, WebDrawKind::Gpu), Gate::Skip));
-    assert!(matches!(web_frame_gate(true, WebDrawKind::Cpu), Gate::Skip));
-    assert!(matches!(web_frame_gate(false, WebDrawKind::ContextLost), Gate::Skip));
-    assert!(matches!(web_frame_gate(false, WebDrawKind::Moving), Gate::Skip));
-    assert!(matches!(web_frame_gate(false, WebDrawKind::HandingOver { waiting_for_gpu: true }), Gate::Skip));
-    assert!(matches!(web_frame_gate(false, WebDrawKind::HandingOver { waiting_for_gpu: false }), Gate::Draw));
-    assert!(matches!(web_frame_gate(false, WebDrawKind::Cpu), Gate::Draw));
-    assert!(matches!(web_frame_gate(false, WebDrawKind::Gpu), Gate::Draw));
+    assert!(matches!(web_frame_gate(true, WebDrawKind::Gpu, true), Gate::Skip));
+    assert!(matches!(web_frame_gate(true, WebDrawKind::Cpu, false), Gate::Skip));
+    assert!(matches!(web_frame_gate(false, WebDrawKind::ContextLost, true), Gate::Skip));
+    assert!(matches!(web_frame_gate(false, WebDrawKind::Moving, true), Gate::Skip));
+    assert!(matches!(web_frame_gate(false, WebDrawKind::HandingOver { waiting_for_gpu: true }, true), Gate::Skip));
+    assert!(matches!(web_frame_gate(false, WebDrawKind::HandingOver { waiting_for_gpu: false }, true), Gate::Draw));
+    assert!(matches!(web_frame_gate(false, WebDrawKind::Cpu, true), Gate::Draw));
+    assert!(matches!(web_frame_gate(false, WebDrawKind::Gpu, false), Gate::Draw));
+    assert!(matches!(web_frame_gate(false, WebDrawKind::Gpu, true), Gate::QuietTimer));
 }
 
 #[test]
@@ -275,6 +276,7 @@ fn web_runtime_tracks_marks_only_when_compositor_is_attached() {
         (120.0, 80.0),
         Env::default(),
         Arc::new(|| {}),
+        Arc::new(|| {}),
     );
     assert!(comp_with.is_some());
     assert!(rt_with.track_marks, "web runtime with a compositor must enable track_marks");
@@ -295,11 +297,48 @@ fn web_runtime_tracks_marks_only_when_compositor_is_attached() {
         (120.0, 80.0),
         Env::default(),
         Arc::new(|| {}),
+        Arc::new(|| {}),
     );
     assert!(comp_without.is_none());
     assert!(!rt_without.track_marks, "web runtime without a compositor keeps track_marks off");
     rt_without.frame(0.0);
     assert!(rt_without.marks.is_empty());
+}
+
+#[test]
+fn web_runtime_routes_live_wakes_separately_from_app_wakes() {
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    use crate::{App, AppSpec, Cx, El, Env, Live, el};
+
+    let app_wakes = Arc::new(AtomicUsize::new(0));
+    let live_wakes = Arc::new(AtomicUsize::new(0));
+    let app_c = app_wakes.clone();
+    let live_c = live_wakes.clone();
+    let spec = AppSpec::new(
+        "web-live-lane",
+        (120.0, 80.0),
+        || Live::new([0.0f32, 0.0]),
+        |offset: &Live<[f32; 2]>, _: &mut Cx<Live<[f32; 2]>>| -> El {
+            el().size(120.0, 80.0).child(el().size(10.0, 10.0).live_offset(offset))
+        },
+    );
+    let (mut rt, _, _, _) = start_web_runtime(
+        App::new(spec),
+        (120.0, 80.0),
+        Env::default(),
+        Arc::new(move || { app_c.fetch_add(1, Ordering::Relaxed); }),
+        Arc::new(move || { live_c.fetch_add(1, Ordering::Relaxed); }),
+    );
+    rt.frame(0.0);
+    let commits = rt.stats.commits;
+
+    rt.state.set([12.0, 0.0]);
+    assert_eq!(live_wakes.load(Ordering::Relaxed), 1, "Live publication uses the Wake::Live lane");
+    assert_eq!(app_wakes.load(Ordering::Relaxed), 0, "Live publication must not wake Wake::App");
+    assert!(rt.live_pending());
+    rt.frame(1.0 / 60.0);
+    assert!(!rt.live_pending());
+    assert_eq!(rt.stats.commits, commits, "Live update does not rebuild the view");
 }
 
 mod web_frame_host_tests {
@@ -316,21 +355,38 @@ mod web_frame_host_tests {
     use crate::window::Missed;
     use crate::{Cx, El, Env, Runtime, Tx, el};
 
-    #[derive(Default)]
     struct MockState {
         width: f32,
         polls: u32,
         switch_blend_to: Option<bool>,
+        offset: crate::Live<[f32; 2]>,
+        next_live_x: Option<f32>,
+    }
+
+    impl Default for MockState {
+        fn default() -> Self {
+            Self {
+                width: 0.0,
+                polls: 0,
+                switch_blend_to: None,
+                offset: crate::Live::new([0.0, 0.0]),
+                next_live_x: None,
+            }
+        }
     }
 
     fn view(s: &MockState, _: &mut Cx<MockState>) -> El {
-        el().child(el().key("bar").size(s.width + 12.0, 8.0))
+        el().child(el().key("bar").size(s.width + 12.0, 8.0).fill(crate::Color::WHITE).live_offset(&s.offset))
     }
 
     fn poll(s: &mut MockState, _: f64, tx: &mut Tx) -> bool {
         s.polls += 1;
         if let Some(next) = s.switch_blend_to.take() {
             tx.set_srgb_blend(next);
+        }
+        if let Some(x) = s.next_live_x.take() {
+            s.offset.set([x, 0.0]);
+            tx.wake_after(Duration::from_millis(40));
         }
         false
     }
@@ -371,6 +427,10 @@ mod web_frame_host_tests {
         redraw_requested: u32,
         reconfigures: u32,
         handover_gpu_acquired: u32,
+        frames_drawn: u32,
+        compositor_draws_own: bool,
+        last_presented: Option<crate::window::Presented>,
+        config: wgpu::SurfaceConfiguration,
         log: Vec<&'static str>,
     }
 
@@ -381,6 +441,17 @@ mod web_frame_host_tests {
             rt.set_system_reduced_motion(false);
             rt.wall_start = Some(start);
             rt.set_srgb_blend(true);
+            let config = wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                width: 300,
+                height: 40,
+                present_mode: wgpu::PresentMode::Fifo,
+                desired_maximum_frame_latency: 2,
+                alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+                view_formats: Vec::new(),
+                color_space: Default::default(),
+            };
             Self {
                 rt,
                 clock: FrameClock::new(start),
@@ -402,6 +473,10 @@ mod web_frame_host_tests {
                 redraw_requested: 0,
                 reconfigures: 0,
                 handover_gpu_acquired: 0,
+                frames_drawn: 0,
+                compositor_draws_own: false,
+                last_presented: None,
+                config,
                 log: Vec::new(),
             }
         }
@@ -435,8 +510,16 @@ mod web_frame_host_tests {
             self.reblend_tried = None;
             self.tick = false;
             self.fatal_error = None;
-            let gate = web_frame_gate(self.suspended, self.draw);
-            self.log.push(if matches!(gate, Gate::Skip) { "gate:skip" } else { "gate:draw" });
+            let quiet_candidate = self.draw == WebDrawKind::Gpu
+                && self.last_presented.is_some()
+                && !self.compositor_draws_own
+                && self.renderer_srgb == self.rt.srgb_blend();
+            let gate = web_frame_gate(self.suspended, self.draw, quiet_candidate);
+            self.log.push(match gate {
+                Gate::Skip => "gate:skip",
+                Gate::QuietTimer => "gate:quiet",
+                _ => "gate:draw",
+            });
             gate
         }
 
@@ -449,7 +532,26 @@ mod web_frame_host_tests {
             self.reblend_tried = Some(target);
             self.log.push("reblend");
             self.renderer_srgb = if target || self.reblend_supports_linear { target } else { true };
+            self.last_presented = None;
             true
+        }
+
+        fn step_quiet(&mut self) -> StepInfo {
+            self.step_runtime()
+        }
+
+        fn is_unchanged(&mut self, info: &StepInfo) -> bool {
+            self.draw == WebDrawKind::Gpu
+                && !self.tick
+                && !self.compositor_draws_own
+                && self.renderer_srgb == self.rt.srgb_blend()
+                && self.last_presented.as_ref().is_some_and(|p| {
+                    p.unchanged_core(self.rt.core(), &self.config, info.animating, None)
+                })
+        }
+
+        fn on_unchanged(&mut self, _info: &StepInfo) {
+            self.log.push("unchanged");
         }
 
         fn acquire(&mut self) -> Acquire<MockDrawable> {
@@ -508,6 +610,7 @@ mod web_frame_host_tests {
         }
 
         fn on_missed(&mut self, missed: Missed, stepped: bool) {
+            self.last_presented = None;
             match web_miss_action(missed) {
                 WebMissAction::Fatal => {
                     self.log.push("missed:fatal");
@@ -567,6 +670,7 @@ mod web_frame_host_tests {
 
         fn submit_and_present(&mut self, _prepared: MockPrepared, _info: &StepInfo) -> Instant {
             self.log.push("present");
+            self.frames_drawn += 1;
             self.submit_at
         }
 
@@ -574,8 +678,26 @@ mod web_frame_host_tests {
             (Some(&mut self.clock), self.rt.core_mut())
         }
 
-        fn settle(&mut self, _submitted: Instant, _info: &StepInfo) {
+        fn settle(&mut self, _submitted: Instant, info: &StepInfo) {
             self.log.push("settle");
+            if self.draw == WebDrawKind::Gpu {
+                let rt = self.rt.core();
+                if should_record_presented(true, info.animating, rt.stale(), rt.host.window_frame.is_some()) {
+                    crate::window::Presented::record_core(
+                        &mut self.last_presented,
+                        rt,
+                        &self.config,
+                        self.compositor_draws_own,
+                    );
+                } else {
+                    self.last_presented = None;
+                }
+            } else {
+                self.last_presented = None;
+            }
+            if info.animating || self.rt.has_pending_input() || self.rt.live_pending() {
+                self.redraw_requested += 1;
+            }
         }
     }
 
@@ -645,6 +767,7 @@ mod web_frame_host_tests {
         assert!(host.fatal_error.is_none());
 
         // Persistent Lost after reconfigure retry -> fatal error.
+        host.last_presented = None;
         host.acquires = VecDeque::from([WebAcquireStatus::OutdatedOrLost, WebAcquireStatus::OutdatedOrLost]);
         assert_eq!(host_step::run(&mut host), Outcome::Missed);
         assert_eq!(host.reconfigures, 2);
@@ -720,6 +843,56 @@ mod web_frame_host_tests {
         assert_eq!(host_step::run(&mut cpu), Outcome::Aborted);
         assert_eq!(cpu.fatal_error, Some("native video surfaces are unsupported on web"));
         assert_eq!(cpu.log, ["gate:draw", "acquire:cpu", "step", "sync", "prepare:abort"]);
+    }
+
+    #[test]
+    fn live_poll_updates_draw_one_frame_each_and_unchanged_frames_skip_present() {
+        let start = crate::time::now();
+        let mut host = MockWebHost::new(start, WebDrawKind::Gpu);
+        assert_eq!(host_step::run(&mut host), Outcome::Presented);
+        assert_eq!(host.frames_drawn, 1);
+        assert_eq!(host.redraw_requested, 0);
+        let commits = host.rt.stats.commits;
+
+        // Five timed sprite steps in poll must each draw exactly one GPU frame (not two)
+        // and leave live_pending false so Wake::Live does not request a second frame.
+        for step in 1..=5u32 {
+            let at = start + Duration::from_millis(u64::from(step) * 40);
+            host.step_at = at;
+            host.submit_at = at;
+            host.rt.state.next_live_x = Some(step as f32 * 8.0);
+            assert_eq!(host_step::run(&mut host), Outcome::Presented);
+            assert!(!host.rt.live_pending(), "step {step} must not leave live_pending set");
+            assert_eq!(host.redraw_requested, 0, "step {step} must not ask for an extra frame");
+        }
+        assert_eq!(host.frames_drawn, 6, "1 initial + 5 live updates = 6 drawn frames, not 11");
+        assert_eq!(host.rt.stats.commits, commits, "live updates must not trigger commits");
+
+        // Redraws that change nothing skip acquiring and presenting a canvas texture.
+        host.log.clear();
+        for extra in 1..=3u32 {
+            let at = start + Duration::from_millis(240 + u64::from(extra) * 40);
+            host.step_at = at;
+            host.submit_at = at;
+            assert_eq!(host_step::run(&mut host), Outcome::Unchanged);
+        }
+        assert_eq!(host.frames_drawn, 6, "unchanged frames must not present");
+        assert_eq!(host.log, ["gate:quiet", "step", "unchanged", "gate:quiet", "step", "unchanged", "gate:quiet", "step", "unchanged"]);
+
+        // A compositor that draws its own content still draws even when UI instances match.
+        host.compositor_draws_own = true;
+        host.step_at = start + Duration::from_millis(400);
+        host.submit_at = host.step_at;
+        assert_eq!(host_step::run(&mut host), Outcome::Presented);
+        assert_eq!(host.frames_drawn, 7);
+
+        // Clearing last_presented (as a surface reconfigure on resize does) forces a draw.
+        host.compositor_draws_own = false;
+        host.last_presented = None;
+        host.step_at = start + Duration::from_millis(440);
+        host.submit_at = host.step_at;
+        assert_eq!(host_step::run(&mut host), Outcome::Presented);
+        assert_eq!(host.frames_drawn, 8);
     }
 }
 

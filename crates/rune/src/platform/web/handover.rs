@@ -69,7 +69,7 @@ impl Browser {
                 let mut running = self.running.borrow_mut();
                 let Some(r) = &mut *running else { return false };
                 let side = match std::mem::replace(&mut r.draw, Draw::Moving) {
-                    Draw::Gpu(side) => { r.draw = Draw::ContextLost; side }
+                    Draw::Gpu(side) => { r.draw = Draw::ContextLost; r.last_presented = None; side }
                     other => { r.draw = other; return false; }
                 };
                 self.webgl_restoring = false;
@@ -85,7 +85,7 @@ impl Browser {
         let Some(r) = &mut *running else { return false };
         let side = match std::mem::replace(&mut r.draw, Draw::Moving) {
             Draw::Gpu(side) => match canvas.as_ref().and_then(cpu_canvas::CpuCanvas::under) {
-                Some(cpu) => { r.draw = Draw::Cpu { cpu, failed: true }; side }
+                Some(cpu) => { r.draw = Draw::Cpu { cpu, failed: true }; r.last_presented = None; side }
                 None => {
                     r.draw = Draw::Gpu(side);
                     drop(running);
@@ -172,6 +172,7 @@ impl Browser {
                 }
             };
             let is_gl = side.backend == wgpu::Backend::Gl;
+            r.last_presented = None;
             if matches!(r.draw, Draw::ContextLost) {
                 r.draw = Draw::Gpu(side);
                 r.app.rt_mut().invalidate();
@@ -226,6 +227,7 @@ impl Browser {
             });
         }
         r.draw = Draw::Gpu(side);
+        r.last_presented = None;
         crate::marks::mark("web.handover.done");
         if let Some(window) = &self.window { window.request_redraw(); }
     }

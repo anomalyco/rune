@@ -78,6 +78,8 @@ enum Wake {
     /// Time to see whether the page is quiet enough to start the GPU (`Browser::maybe_start_gpu`).
     StartGpu,
     App,
+    /// A live value published: asks for a frame only while one is still pending.
+    Live,
     /// A resize reconfigured the canvas, which clears it: draw now, before the browser paints.
     ResizeRedraw,
 }
@@ -203,6 +205,9 @@ struct Running {
     document: bool,
     /// The first frame is on screen.
     presented: bool,
+    /// What the GPU canvas currently shows, while nothing has invalidated it. A requested frame
+    /// that would draw these same pixels skips acquiring a canvas texture and presenting.
+    last_presented: Option<crate::window::Presented>,
     /// `App::on_ready`, which runs once that first frame is presented, as a window's does.
     on_ready: Option<crate::app::OnWindow>,
     /// `App::font_url_later`'s fonts, fetched once that first frame is presented.
@@ -309,11 +314,14 @@ impl Browser {
         let dark = web_sys::window().and_then(|w| w.match_media("(prefers-color-scheme: dark)").ok().flatten()).is_some_and(|q| q.matches());
         let proxy = self.proxy.clone();
         let wake: crate::Waker = Arc::new(move || { proxy.send_event(Wake::App).ok(); });
+        let live_proxy = self.proxy.clone();
+        let live_wake: crate::Waker = Arc::new(move || { live_proxy.send_event(Wake::Live).ok(); });
         let app::StartedWebApp { mut app, menus, shortcuts, fonts: spec_fonts } = pending.start(
             fonts,
             (size.width as f32 / scale, size.height as f32 / scale),
             Env::new(dark, scale),
             wake.clone(),
+            live_wake,
         );
         // A page brings its own fonts for its mirror; an app's are the page's (`page_fonts`).
         let page_fonts = if document { &[][..] } else { spec_fonts };
@@ -377,7 +385,7 @@ impl Browser {
             input::Mode { embedded: self.embedded, fit_height, document });
         *self.running.borrow_mut() = Some(Running { draw, app, shared: self.shared.clone(), input, clipboard,
             clock: crate::frame::clock::FrameClock::new(now), suspended: false, full_redraw: true, embedded: self.embedded,
-            document, presented: false, band: None, size: physical, on_ready, late_fonts, fonts: page_fonts,
+            document, presented: false, last_presented: None, band: None, size: physical, on_ready, late_fonts, fonts: page_fonts,
             cursor, _menus: menus, shortcuts });
         crate::marks::mark("web.started");
         window.request_redraw();
@@ -504,6 +512,13 @@ impl ApplicationHandler<Wake> for Browser {
             }
             Wake::StartGpu => self.maybe_start_gpu(),
             Wake::App => self.hand_over_if_done(),
+            Wake::Live => {
+                if let Some(r) = &mut *self.running.borrow_mut() && r.app.rt().live_pending() {
+                    r.full_redraw = true;
+                    if let Some(window) = self.window.as_ref() { window.request_redraw(); }
+                }
+                return;
+            }
             Wake::ResizeRedraw => {
                 if self.resize_redraw.fired() { self.redraw(event_loop); }
                 return;

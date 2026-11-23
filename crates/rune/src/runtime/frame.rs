@@ -460,8 +460,13 @@ impl RuntimeCore {
         self.update_interaction(None);
         #[cfg(test)]
         if let Some(publish) = tests::MID_FRAME.with(|hook| hook.borrow_mut().take()) { publish(); }
-        // Poll and input can publish after the initial wake read without committing. Sample
-        // those values now, but retain the wake: a picture may still need next frame's layout.
+        // Poll and input can publish after the initial wake read without committing. When no
+        // picture sizes itself from its image (`has_pixel_aspect`), take the wake before latching
+        // so this frame draws the published value without asking for a second, identical frame;
+        // any publication after the take still wakes the next frame. With `has_pixel_aspect`,
+        // retain the wake so a picture whose size changed after `pixel_aspect_changed` still gets
+        // next frame's layout.
+        if !self.tree.has_pixel_aspect { live_woke |= self.take_live_wake(); }
         let live_pending = live_woke || self.live_pending();
         let live_animating = self.latch_live(live_pending);
         if let Some(trace) = tx.trace.take() {

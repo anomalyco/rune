@@ -66,7 +66,7 @@ impl Running {
         }
         let size = window.canvas().map_or(size, |c| canvas_physical(&c, size, scale));
         self.suspended = size.width == 0 || size.height == 0;
-        if self.suspended { return; }
+        if self.suspended { self.last_presented = None; return; }
         let next = (size.width.min(max_dim), size.height.min(max_dim));
         let document = self.document;
         if let Some(side) = self.draw.gpu_mut() {
@@ -75,9 +75,11 @@ impl Running {
                 side.config.width = kept.0;
                 side.config.height = kept.1;
                 side.surface.configure(&side.gpu.device, &side.config);
+                self.last_presented = None;
             }
             self.size = (side.config.width, side.config.height);
         } else {
+            if self.size != next { self.last_presented = None; }
             self.size = next;
         }
         self.app.rt_mut().set_viewport((next.0 as f32 / scale, next.1 as f32 / scale), scale);
@@ -183,7 +185,16 @@ impl FrameHost for WebFrameHost<'_> {
     type Prepared = PreparedWeb;
 
     fn gate(&mut self) -> Gate {
-        web_math::web_frame_gate(self.r.suspended, self.r.draw.kind())
+        let quiet_candidate = match &self.r.draw {
+            Draw::Gpu(side) => {
+                self.r.last_presented.is_some()
+                    && !side.renderer.checking_gpu()
+                    && !self.r.app.compositor_draws_own()
+                    && side.renderer.srgb_blend() == self.r.app.rt().srgb_blend()
+            }
+            _ => false,
+        };
+        web_math::web_frame_gate(self.r.suspended, self.r.draw.kind(), quiet_candidate)
     }
 
     fn needs_reblend(&self) -> bool {
@@ -195,8 +206,36 @@ impl FrameHost for WebFrameHost<'_> {
         self.reblend_tried = Some(target);
         if let Draw::Gpu(side) = &mut self.r.draw {
             gpu::reblend(side, self.r.app.rt_mut());
+            self.r.last_presented = None;
         }
         true
+    }
+
+    fn step_quiet(&mut self) -> StepInfo {
+        self.step_runtime()
+    }
+
+    fn is_unchanged(&mut self, info: &StepInfo) -> bool {
+        let Draw::Gpu(side) = &self.r.draw else { return false };
+        !self.tick
+            && !side.renderer.checking_gpu()
+            && !self.r.app.compositor_draws_own()
+            && !self.r.app.compositor_animating()
+            && side.renderer.srgb_blend() == self.r.app.rt().srgb_blend()
+            && self.r.last_presented.as_ref().is_some_and(|p| {
+                p.unchanged_core(self.r.app.rt(), &side.config, info.animating, None)
+            })
+    }
+
+    fn on_unchanged(&mut self, info: &StepInfo) {
+        let mut info = *info;
+        self.sync_after_step(&mut info);
+        self.r.sync_band(self.window);
+        if self.r.app.rt_mut().shell_request.take().is_some() {
+            self.should_end = true;
+            return;
+        }
+        self.try_gpu_came = self.r.presented;
     }
 
     fn acquire(&mut self) -> Acquire<WebDrawable> {
@@ -257,6 +296,7 @@ impl FrameHost for WebFrameHost<'_> {
     }
 
     fn on_missed(&mut self, missed: Missed, stepped: bool) {
+        self.r.last_presented = None;
         match web_math::web_miss_action(missed) {
             web_math::WebMissAction::Fatal => {
                 self.fatal_error = Some("WebGPU canvas acquisition failed".into());
@@ -432,9 +472,26 @@ impl FrameHost for WebFrameHost<'_> {
         // answers, and so is a hand-over waiting on that check.
         let checking = self.r.draw.gpu().is_some_and(|side| side.renderer.checking_gpu());
         let handing = matches!(self.r.draw, Draw::HandingOver { done: None, .. });
+        let comp_animating = self.r.app.compositor_animating();
+        if let Draw::Gpu(side) = &self.r.draw {
+            let rt = self.r.app.rt();
+            let moving = info.animating || comp_animating || checking;
+            if web_math::should_record_presented(self.drawn, moving, rt.stale(), rt.host.window_frame.is_some()) {
+                crate::window::Presented::record_core(
+                    &mut self.r.last_presented,
+                    rt,
+                    &side.config,
+                    self.r.app.compositor_draws_own(),
+                );
+            } else {
+                self.r.last_presented = None;
+            }
+        } else {
+            self.r.last_presented = None;
+        }
         let wants_frame = {
             let rt = self.r.app.rt();
-            info.animating || rt.has_pending_input() || rt.live_pending() || self.r.app.compositor_animating() || checking
+            info.animating || rt.has_pending_input() || rt.live_pending() || comp_animating || checking
         };
         if wants_frame {
             self.window.request_redraw();
