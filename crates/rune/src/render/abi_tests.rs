@@ -957,7 +957,7 @@ fn wgsl_generated_constants_match_naga_ir() {
     ]);
 }
 
-/// Bit-exact Rust mirror of `unpack_f16x2` in `clip.wgsl` and `video.wgsl`, checked against
+/// Bit-exact Rust mirror of `unpack_f16` / `unpack_f16x2` in `clip.wgsl` and `video.wgsl`, checked against
 /// `half::f16::to_f32` across all 65,536 binary16 bit patterns (zeros, subnormals, normals,
 /// infinities, and quiet/signaling NaNs).
 #[test]

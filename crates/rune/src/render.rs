@@ -62,6 +62,8 @@ mod prewarm_tests;
 #[cfg(test)]
 #[path = "render/warm_tests.rs"]
 mod warm_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod webgl_shader_tests;
 
 use pass::{ActivePass, Backdrop};
 

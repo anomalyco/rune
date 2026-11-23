@@ -94,16 +94,19 @@ fn unpack_clip_radii(w: u32) -> vec4<f32> {
 
 // Unpacks two IEEE-754 binary16 half floats (low in bits 0..16, high in 16..32) using only
 // core u32/f32 ops, so shaders validate without Naga's `SHADER_FLOAT16_IN_FLOAT32` capability.
+// Each half is decoded with scalar selects: a vector select of integers becomes GLSL's
+// `mix(uvec2, uvec2, bvec2)`, which GLSL ES 3.00 (WebGL2) doesn't have.
+fn unpack_f16(h: u32) -> f32 {
+    let sign = (h & 0x8000u) << 16u;
+    let exp = (h >> 10u) & 0x1Fu;
+    let mant = h & 0x03FFu;
+    let sub = sign | bitcast<u32>(f32(mant) * (1.0 / 16777216.0));
+    let norm = sign | ((exp + 112u) << 23u) | (mant << 13u);
+    let inf_nan = sign | 0x7F800000u | (mant << 13u) | select(0u, 0x00400000u, mant != 0u);
+    return bitcast<f32>(select(select(norm, inf_nan, exp == 31u), sub, exp == 0u));
+}
 fn unpack_f16x2(packed: u32) -> vec2<f32> {
-    let h = vec2<u32>(packed & 0xFFFFu, packed >> 16u);
-    let sign = (h & vec2<u32>(0x8000u)) << vec2<u32>(16u);
-    let exp = (h >> vec2<u32>(10u)) & vec2<u32>(0x1Fu);
-    let mant = h & vec2<u32>(0x03FFu);
-    let sub = sign | bitcast<vec2<u32>>(vec2<f32>(mant) * (1.0 / 16777216.0));
-    let norm = sign | ((exp + vec2<u32>(112u)) << vec2<u32>(23u)) | (mant << vec2<u32>(13u));
-    let inf_nan = sign | vec2<u32>(0x7F800000u) | (mant << vec2<u32>(13u)) | select(vec2<u32>(0u), vec2<u32>(0x00400000u), mant != vec2<u32>(0u));
-    let bits = select(select(norm, inf_nan, exp == vec2<u32>(31u)), sub, exp == vec2<u32>(0u));
-    return bitcast<vec2<f32>>(bits);
+    return vec2<f32>(unpack_f16(packed & 0xFFFFu), unpack_f16(packed >> 16u));
 }
 
 fn clip_alpha_stops(p: vec2<f32>, c: vec4<f32>, packed: vec4<u32>, stops: vec2<f32>) -> f32 {
