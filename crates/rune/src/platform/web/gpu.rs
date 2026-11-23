@@ -392,10 +392,10 @@ impl Readback {
     pub(super) fn count(self, cpu: Vec<u8>) {
         let Readback { buffer, row, size: (w, h), rgba, poll_device } = self;
         let buffer = Rc::new(buffer);
-        let mapped = buffer.clone();
         let done = Rc::new(Cell::new(false));
-        let mark_done = done.clone();
+        let state = PageOnly((buffer.clone(), done.clone()));
         buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+            let PageOnly((mapped, mark_done)) = &state;
             mark_done.set(true);
             if result.is_err() { return; }
             let (mut differing, mut max) = (0u32, 0u8);
