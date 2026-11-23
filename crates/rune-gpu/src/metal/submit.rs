@@ -173,10 +173,15 @@ impl Shared {
         uploads.keep.extend(keep);
     }
 
+    /// `callback` once the work submitted so far finished; at once (in order) on a lost device.
     fn after(&self, callback: Callback) {
-        let mut st = self.lock();
-        let at = st.last;
-        st.callbacks.push_back((at, callback));
+        let lost = {
+            let mut st = self.lock();
+            let at = st.last;
+            st.callbacks.push_back((at, callback));
+            self.lost.lock().message.is_some()
+        };
+        if lost { self.dispatch(); }
     }
 
     /// Releases what completed command buffers used and runs the callbacks waiting on them.
@@ -235,17 +240,20 @@ impl Shared {
 
     /// Runs the callbacks retired work owes, in order, outside the state lock (they may call back
     /// into the device), on one thread at a time: one that finds another (or itself, from a
-    /// callback) running them leaves them to it, which runs what retires meanwhile too.
+    /// callback) running them leaves them to it, which runs what retires meanwhile too. On a lost
+    /// device every one runs, as WebGPU's "lose the device" completes what waits on it: work-done
+    /// callbacks as done, mappings failing (their data can't be right).
     fn dispatch(&self) {
         let Some(_turn) = self.dispatch.try_lock() else { return };
         loop {
-            let next = {
+            let (next, lost) = {
                 let mut st = self.lock();
-                let retired = st.retired;
-                if st.callbacks.front().is_some_and(|(at, _)| *at <= retired) { st.callbacks.pop_front() } else { None }
+                let (retired, lost) = (st.retired, self.lost.lock().message.is_some());
+                let next = if st.callbacks.front().is_some_and(|(at, _)| lost || *at <= retired) { st.callbacks.pop_front() } else { None };
+                (next, lost)
             };
             match next {
-                Some((_, Callback::Map(f))) => f(Ok(())),
+                Some((_, Callback::Map(f))) => f(if lost { Err(wgpu::BufferAsyncError) } else { Ok(()) }),
                 Some((_, Callback::Done(f))) => f(),
                 Some((_, Callback::Lost(f, message))) => f(wgpu::DeviceLostReason::Unknown, message),
                 None => break,
