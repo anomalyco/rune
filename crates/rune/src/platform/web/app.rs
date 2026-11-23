@@ -138,6 +138,10 @@ impl dyn WebApp + '_ {
         self.driver(|rt, app| rt.pointer_move(app, x, y));
     }
 
+    pub(super) fn observe_pointer(&mut self, x: f32, y: f32) -> bool {
+        self.driver(|rt, app| rt.observe_pointer(app, x, y))
+    }
+
     pub(super) fn mouse_button(
         &mut self,
         input: crate::input::host_events::MouseButtonInput,

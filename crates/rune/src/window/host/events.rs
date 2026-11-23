@@ -226,7 +226,7 @@ impl Host {
             WindowEvent::Focused(true) | WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => self.look_stale(),
             _ => {}
         }
-        if !matches!(event, WindowEvent::RedrawRequested) && let Some(w) = &mut self.win {
+        if !matches!(event, WindowEvent::RedrawRequested | WindowEvent::CursorMoved { .. }) && let Some(w) = &mut self.win {
             w.timer_frame.no_longer_quiet();
             w.loop_frame.touched();
         }
@@ -493,9 +493,15 @@ impl Host {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let input_scale = app.rt().input_scale();
-                app.pointer_move(position.x as f32 / input_scale, position.y as f32 / input_scale);
+                let (redraw, drag_out) = cursor_moved_core(
+                    app,
+                    &mut l.timer_frame,
+                    &mut l.loop_frame,
+                    position.x as f32 / input_scale,
+                    position.y as f32 / input_scale,
+                );
                 // AppKit needs the drag session started inside this mouse-dragged event.
-                if let Some(start) = app.rt_mut().take_drag_out() {
+                if let Some(start) = drag_out {
                     let rt = app.rt();
                     let image = self.gpu.as_ref().filter(|_| start.item.drag_image().is_none()).and_then(|(gpu, renderer)|
                         crate::drag_out::snapshot(gpu, renderer, (l.config.width, l.config.height), scale, rt.clear_color(), start.rect));
@@ -507,7 +513,11 @@ impl Host {
                     }));
                     l.apply_cursor_core(rt, false);
                 }
-                l.request_redraw();
+                if redraw {
+                    l.request_redraw();
+                } else {
+                    l.apply_cursor_core(app.rt(), l.window.has_focus());
+                }
             }
             WindowEvent::CursorLeft { .. } => {
                 app.rt_mut().pointer_leave();
@@ -573,6 +583,26 @@ impl Host {
             _ => {}
         }
     }
+}
+
+/// Applies a pointer move in view points, returning whether the host must request a redraw and
+/// any OS drag-out session the move armed. Leaves `timer_frame` quiet and `loop_frame` untouched
+/// when the move changed nothing the next frame would run or paint.
+pub(super) fn cursor_moved_core(
+    app: &mut dyn WindowApp,
+    timer_frame: &mut crate::window::surface::TimerFrame,
+    loop_frame: &mut crate::window::surface::LoopFrame,
+    x: f32,
+    y: f32,
+) -> (bool, Option<crate::drag_out::DragOutStart>) {
+    let changed = app.observe_pointer(x, y);
+    let drag_out = app.rt_mut().take_drag_out();
+    let redraw = changed || drag_out.is_some();
+    if redraw {
+        timer_frame.no_longer_quiet();
+        loop_frame.touched();
+    }
+    (redraw, drag_out)
 }
 
 /// Runs the updates queued before launch with `run`, as the host `shortcuts` guards, as every
