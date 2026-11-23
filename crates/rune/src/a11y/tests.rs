@@ -749,3 +749,146 @@ fn sibling_keys_with_slashes_or_indices_produce_distinct_node_and_a11y_ids() {
     let pct = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("ancestor:a%2F#0")).unwrap();
     assert_eq!(pct.path, "#0/ancestor:a%2F#0");
 }
+
+fn assert_secure_tree_clean(update: &accesskit::TreeUpdate, secrets: &[&str]) {
+    for (_, node) in &update.nodes {
+        assert_ne!(node.role(), Role::TextRun, "secure scene must emit no TextRun");
+        assert!(
+            !matches!(node.class_name(), Some(super::tree::LINES_BOX_CLASS | super::tree::LINE_CLASS)),
+            "secure scene must emit no long-field line nodes",
+        );
+        assert!(node.character_lengths().is_empty(), "no character_lengths on {:?}", node.role());
+        assert!(node.character_positions().is_none_or(|p| p.is_empty()), "no character_positions");
+        assert!(node.character_widths().is_none_or(|w| w.is_empty()), "no character_widths");
+        assert!(node.word_starts().is_empty(), "no word_starts");
+        assert!(node.text_selection().is_none(), "no text_selection on {:?}", node.role());
+        if node.role() == Role::PasswordInput {
+            assert!(node.value().is_none(), "password node must leave value unset");
+            assert!(!node.supports_action(Ak::SetTextSelection), "password node must not advertise SetTextSelection");
+            for a in [Ak::Click, Ak::Focus, Ak::SetValue, Ak::ReplaceSelectedText] {
+                assert!(node.supports_action(a), "password node must keep {a:?}");
+            }
+        }
+        for field in [node.value(), node.label(), node.description(), node.placeholder()] {
+            let Some(text) = field else { continue };
+            assert!(!text.contains('•'), "mask dots leaked in accessibility field: {text:?}");
+            for secret in secrets {
+                assert!(!text.contains(secret), "secret {secret:?} leaked in accessibility field: {text:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn secure_fields_emit_no_text_runs_selection_or_length_masked_or_revealed() {
+    struct Form {
+        single: TextEdit,
+        multi: TextEdit,
+        revealed: bool,
+    }
+    fn view(s: &Form, _: &mut Cx<Form>) -> El {
+        col().size(400.0, 300.0)
+            .child(text_input(&s.single, crate::tok::type_::BODY).key("pw-one").single_line()
+                .label("Password").placeholder("Enter password", crate::Color::WHITE)
+                .w(200.0).on_edit(|s: &mut Form| &mut s.single))
+            .child(text_input(&s.multi, crate::tok::type_::BODY).key("pw-multi")
+                .label("Secret note").placeholder("Paste key", crate::Color::WHITE)
+                .w(200.0).on_edit(|s: &mut Form| &mut s.multi))
+            .child(text("label-secret-value").key("pw-label").secure().revealed(s.revealed).selectable(true))
+            .child(col().key("pw-box").secure().child(text("boxed-secret-value")))
+    }
+    const SINGLE: &str = "hunter2secret"; // 13 chars
+    const MULTI: &str = "line-one-secret
+line-two-secret"; // 31 chars
+    let secrets = [SINGLE, "line-one-secret", "line-two-secret", "label-secret-value", "boxed-secret-value"];
+    let mut single = TextEdit::new(SINGLE).secure();
+    single.focused = true;
+    single.set_selection(2, 9);
+    let mut multi = TextEdit::new(MULTI).secure();
+    multi.set_selection(0, MULTI.len());
+    let mut rt = Runtime::new(Form { single, multi, revealed: false }, view, (400.0, 300.0), Env::new(true, 1.0));
+
+    for revealed in [false, true] {
+        rt.update(|s, _| {
+            s.revealed = revealed;
+            s.single.set_revealed(revealed);
+            s.multi.set_revealed(revealed);
+        });
+        rt.frame(0.0);
+        let tree = rt.accessibility_tree();
+        assert_secure_tree_clean(&tree, &secrets);
+        for key in ["pw-one", "pw-multi"] {
+            let (id, node) = tree.nodes.iter().find(|(_, n)| n.author_id() == Some(key)).unwrap();
+            assert_eq!(node.role(), Role::PasswordInput);
+            assert!(node.children().is_empty(), "{key} must have no children");
+            let sel_req = ActionRequest {
+                action: Ak::SetTextSelection,
+                target_tree: TreeId::ROOT,
+                target_node: *id,
+                data: Some(ActionData::SetTextSelection(accesskit::TextSelection {
+                    anchor: accesskit::TextPosition { node: *id, character_index: 0 },
+                    focus: accesskit::TextPosition { node: *id, character_index: 3 },
+                })),
+            };
+            assert!(!rt.a11y_action(&sel_req), "{key} must refuse SetTextSelection");
+        }
+        for include_runs in [false, true] {
+            let dumped = super::dump::json(&tree, include_runs).to_string();
+            assert!(!dumped.contains('•'), "dump(runs={include_runs}) leaked mask: {dumped}");
+            assert!(!dumped.contains("\"selection\""), "dump(runs={include_runs}) leaked selection: {dumped}");
+            assert!(!dumped.contains("\"chars\""), "dump(runs={include_runs}) leaked char count: {dumped}");
+            for secret in secrets {
+                assert!(!dumped.contains(secret), "dump(runs={include_runs}) leaked {secret}: {dumped}");
+            }
+        }
+    }
+}
+
+#[test]
+fn secure_fields_reveal_and_conceal_updates_leak_nothing() {
+    struct Form {
+        single: TextEdit,
+        multi: TextEdit,
+    }
+    fn view(s: &Form, _: &mut Cx<Form>) -> El {
+        col().size(400.0, 200.0)
+            .child(text_input(&s.single, crate::tok::type_::BODY).key("pw-one").single_line()
+                .label("Password").w(200.0).on_edit(|s: &mut Form| &mut s.single))
+            .child(text_input(&s.multi, crate::tok::type_::BODY).key("pw-multi")
+                .label("Secret note").w(200.0).on_edit(|s: &mut Form| &mut s.multi))
+    }
+    let secrets = ["hunter2secret", "line-one-secret", "line-two-secret"];
+    let mut single = TextEdit::new("hunter2secret").secure();
+    single.focused = true;
+    let multi = TextEdit::new("line-one-secret
+line-two-secret").secure();
+    let mut rt = Runtime::new(Form { single, multi }, view, (400.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let mut link = super::AccessibilityLink::new();
+    link.activate();
+    let initial = link.service(&mut rt, "Login").expect("initial tree");
+    assert_secure_tree_clean(&initial, &secrets);
+
+    for revealed in [true, false] {
+        rt.update(|s, _| {
+            s.single.set_revealed(revealed);
+            s.multi.set_revealed(revealed);
+        });
+        rt.frame(0.0);
+        if let Some(update) = link.service(&mut rt, "Login") {
+            assert_secure_tree_clean(&update, &secrets);
+        }
+        assert_secure_tree_clean(&rt.accessibility_tree(), &secrets);
+    }
+
+    // SetValue and ReplaceSelectedText remain usable on secure fields without leaking via Debug.
+    assert!(rt.accessibility_action("pw-one", Ak::SetValue, Some(ActionData::Value("fresh-secret".into()))));
+    rt.frame(0.0);
+    assert_eq!(rt.state.single.text, "fresh-secret");
+    assert!(rt.accessibility_action("pw-one", Ak::ReplaceSelectedText, Some(ActionData::Value("!".into()))));
+    rt.frame(0.0);
+    assert_eq!(rt.state.single.text, "fresh-secret!");
+    if let Some(update) = link.service(&mut rt, "Login") {
+        assert_secure_tree_clean(&update, &["fresh-secret"]);
+    }
+}

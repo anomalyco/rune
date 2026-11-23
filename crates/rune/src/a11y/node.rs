@@ -83,25 +83,30 @@ impl RuntimeCore {
         }
         // A text's lines come from its layout and where it scrolled; a long field's drawn lines
         // live under `lines_box_id`, whose own fingerprint tracks its layout and scroll band.
-        if !long_field {
+        if !long_field && !secure {
             n.text_layout.as_ref().map(crate::text::TextLayout::address).hash(&mut h);
         }
-        n.elided.map(|e| (e.head, e.tail)).hash(&mut h);
+        if !secure {
+            n.elided.map(|e| (e.head, e.tail)).hash(&mut h);
+        }
         if let Some(input) = n.input.as_deref() {
             let e = &input.edit;
-            if !secure && (long_key.is_none() || e.preedit().is_some()) {
-                if long_field {
-                    // During IME composition on a long field, `t.content` is the display string and
-                    // `long_key` already hashed it; only hash `e.text.len()` + preedit metadata.
-                    e.text.len().hash(&mut h);
-                } else {
-                    e.text.hash(&mut h);
+            if !secure {
+                if long_key.is_none() || e.preedit().is_some() {
+                    if long_field {
+                        // During IME composition on a long field, `t.content` is the display string and
+                        // `long_key` already hashed it; only hash `e.text.len()` + preedit metadata.
+                        e.text.len().hash(&mut h);
+                    } else {
+                        e.text.hash(&mut h);
+                    }
+                }
+                (e.anchor, e.focus, e.preedit().map(|p| (p.0.len(), p.1))).hash(&mut h);
+                if !long_field {
+                    self.edit.input_scroll.get(&n.path).map(|v| v.to_bits()).hash(&mut h);
                 }
             }
-            (e.anchor, e.focus, e.preedit().map(|p| (p.0.len(), p.1)), e.focused, &input.placeholder, input.single_line, input.access.is_some()).hash(&mut h);
-            if !long_field {
-                self.edit.input_scroll.get(&n.path).map(|v| v.to_bits()).hash(&mut h);
-            }
+            (e.focused, &input.placeholder, input.single_line, input.access.is_some()).hash(&mut h);
         }
         let handlers = n.handlers.get();
         (handlers.is_some_and(|h| h.on_press.is_some()), handlers.is_some_and(|h| h.on_secondary_press.is_some()),
@@ -260,7 +265,7 @@ impl RuntimeCore {
             if input.is_some_and(|i| i.access.is_some()) {
                 node.add_action(Ak::SetValue);
                 node.add_action(Ak::ReplaceSelectedText);
-                node.add_action(Ak::SetTextSelection);
+                if !secure { node.add_action(Ak::SetTextSelection); }
             }
             if scroll.is_some() {
                 node.add_action(Ak::ScrollUp);

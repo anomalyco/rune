@@ -39,3 +39,12 @@ fn conceal_keeps_exactly_the_mask_the_hidden_field_drew() {
     plain.conceal();
     assert_eq!((plain.text.as_str(), plain.is_revealed()), ("kept", true), "a plain field has nothing to conceal");
 }
+
+#[test]
+fn debug_redacts_secure_text_and_selection_offsets() {
+    let edit = TextEdit::new("thirteen-char").secure();
+    let dbg = format!("{edit:?}");
+    assert!(!dbg.contains("thirteen-char"), "Debug leaked secret: {dbg}");
+    assert!(!dbg.contains("13"), "Debug leaked secret length via anchor/focus: {dbg}");
+    assert!(dbg.contains("[redacted]"), "{dbg}");
+}

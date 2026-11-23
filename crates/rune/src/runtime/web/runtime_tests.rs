@@ -246,3 +246,99 @@ fn clearing_text_in_on_input_change_resyncs_mirror_after_each_dom_edit() {
     assert!(rt.web_context(&mut mirror), "blur after clearing must resync to empty key");
     assert_eq!((mirror.key.as_str(), mirror.text.as_str()), ("", ""));
 }
+
+#[test]
+fn web_secure_replace_replaces_typed_text_clears_and_leaks_nothing() {
+    struct Form {
+        pw: crate::TextEdit,
+        plain: crate::TextEdit,
+        changes: usize,
+    }
+    fn view(s: &Form, _: &mut Cx<Form>) -> El {
+        crate::col().size(300.0, 120.0)
+            .child(crate::text_input(&s.pw, crate::tok::type_::BODY).single_line().key("pw").label("Password").w(200.0)
+                .on_edit(|s: &mut Form| &mut s.pw)
+                .on_input_change(|s: &mut Form, _| s.changes += 1))
+            .child(crate::text_input(&s.plain, crate::tok::type_::BODY).single_line().key("plain").label("User").w(200.0)
+                .on_edit(|s: &mut Form| &mut s.plain))
+    }
+    let mut rt = Runtime::new(
+        Form { pw: crate::TextEdit::new("").secure(), plain: crate::TextEdit::new("ada"), changes: 0 },
+        view, (300.0, 120.0), Env::default(),
+    );
+    rt.frame(0.0);
+    let pw_path = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("pw")).unwrap().path.clone();
+    let plain_path = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("plain")).unwrap().path.clone();
+    rt.set_focus(Some(pw_path.clone()), true);
+    rt.frame(0.0);
+
+    // Type 8 characters incrementally.
+    for ch in "oldpass1".chars() {
+        rt.web_secure(&pw_path, ch.to_string());
+        rt.frame(0.0);
+    }
+    assert_eq!(rt.state.pw.text, "oldpass1");
+    let changes_before = rt.state.changes;
+
+    // Browser autofill of 13 characters replaces the 8 typed characters rather than appending.
+    rt.events.clear();
+    rt.web_secure_replace(&pw_path, "autofill-13ch".into());
+    rt.frame(0.0);
+    assert_eq!(rt.state.pw.text, "autofill-13ch");
+    assert_eq!(rt.state.pw.focus, 13);
+    assert_eq!(rt.state.changes, changes_before + 1);
+    assert!(!rt.state.pw.is_pristine());
+
+    // Neither log, mirror, accessibility tree, --tree nor Debug carries the filled value or its length.
+    let mut mirror = Mirror::default();
+    rt.web_context(&mut mirror);
+    assert!(mirror.secure && mirror.text.is_empty());
+    assert_eq!((mirror.base, mirror.anchor, mirror.focus), (0, 0, 0));
+    assert!(rt.events.is_empty(), "web_secure_replace must log nothing: {:?}", rt.events);
+    let a11y_json = rt.accessibility_json().to_string();
+    let tree_json = crate::tooling::tree_json(&rt, 0.0).to_string();
+    let dbg = format!("{:?}", rt.state.pw);
+    for out in [&a11y_json, &tree_json, &dbg] {
+        assert!(!out.contains("autofill-13ch"), "leaked secret: {out}");
+        assert!(!out.contains('•'), "leaked mask: {out}");
+    }
+    assert!(!dbg.contains("13"), "Debug leaked length: {dbg}");
+
+    // A second fill replaces the first fill cleanly.
+    rt.web_secure_replace(&pw_path, "second-fill!".into());
+    rt.frame(0.0);
+    assert_eq!(rt.state.pw.text, "second-fill!");
+
+    // Pasting over a selection replaces only the selection, not the whole field.
+    rt.update(|s, _| s.pw.set_selection(0, 6));
+    rt.frame(0.0);
+    rt.paste("pasted");
+    rt.frame(0.0);
+    assert_eq!(rt.state.pw.text, "pasted-fill!");
+
+    // An empty fill clears the field.
+    rt.web_secure_replace(&pw_path, String::new());
+    rt.frame(0.0);
+    assert_eq!(rt.state.pw.text, "");
+
+    // Refused when the key mismatches, when focus moved to a plain field, or after blur.
+    rt.web_secure_replace(&pw_path, "kept-secret".into());
+    rt.frame(0.0);
+    rt.web_secure_replace("wrong-key", "ignored".into());
+    rt.frame(0.0);
+    assert_eq!(rt.state.pw.text, "kept-secret");
+
+    rt.set_focus(Some(plain_path.clone()), true);
+    rt.frame(0.0);
+    rt.web_secure_replace(&plain_path, "ignored".into());
+    rt.web_secure_replace(&pw_path, "ignored".into());
+    rt.frame(0.0);
+    assert_eq!(rt.state.plain.text, "ada");
+    assert_eq!(rt.state.pw.text, "kept-secret");
+
+    rt.set_focus(None, false);
+    rt.frame(0.0);
+    rt.web_secure_replace(&pw_path, "ignored".into());
+    rt.frame(0.0);
+    assert_eq!(rt.state.pw.text, "kept-secret");
+}

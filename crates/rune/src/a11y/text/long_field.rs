@@ -102,7 +102,7 @@ impl RuntimeCore {
         let (Some(spec), Some(tl), Some(input)) = (n.text.as_deref(), n.text_layout.as_ref(), n.input.as_deref()) else {
             return false;
         };
-        if input.edit.is_secure() { return false; }
+        if n.is_secure() { return false; }
         if n.elided.is_some() { return true; }
         let waiting = matches!(tl, crate::text::TextLayout::Paragraphs(p) if p.waiting());
         if waiting || input.edit.text.len() > RUN_MAX_BYTES || spec.content.len() > RUN_MAX_BYTES {

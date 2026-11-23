@@ -362,6 +362,11 @@ impl Running {
                     self.app.rt_mut().web_secure(event["key"].as_str().unwrap_or_default(), text);
                 }
             }
+            Some("secure_replace") => {
+                if let serde_json::Value::String(text) = event["text"].take() {
+                    self.app.web_secure_replace(event["key"].as_str().unwrap_or_default(), text);
+                }
+            }
             Some("key") => activate = self.app.web_key(event),
             Some("a11y_press" | "a11y_link") => { let _ = self.app.rt_mut().web_a11y_action(event); }
             // The page's menu (`showMenu`) was picked from or dismissed.

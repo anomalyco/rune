@@ -120,8 +120,17 @@ pub struct TextEdit {
 
 impl std::fmt::Debug for TextEdit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TextEdit").field("text", &if self.secure { "[redacted]" } else { &self.text })
-            .field("anchor", &self.anchor).field("focus", &self.focus).field("focused", &self.focused)
+        let mut s = f.debug_struct("TextEdit");
+        if self.secure {
+            s.field("text", &"[redacted]")
+                .field("anchor", &"[redacted]")
+                .field("focus", &"[redacted]");
+        } else {
+            s.field("text", &self.text)
+                .field("anchor", &self.anchor)
+                .field("focus", &self.focus);
+        }
+        s.field("focused", &self.focused)
             .field("marks", &self.marks).field("blocks", &self.blocks)
             .field("secure", &self.secure).field("revealed", &self.revealed).finish_non_exhaustive()
     }

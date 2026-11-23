@@ -106,6 +106,9 @@ pub(super) struct Walk {
     /// Vertical window-space clip band from clipping/scrolling ancestors, for a long field's
     /// drawn-line geometry.
     pub(super) clip_y: [f32; 2],
+    /// Inside a secure ancestor: descendants are omitted so a secure container never leaks its
+    /// children's text into the tree.
+    secure: bool,
 }
 
 /// A node the walk found: the element it is (`None` for the root), where it is, and its
@@ -406,6 +409,7 @@ impl RuntimeCore {
         let mut text_fills = 0u64;
         let mut text_settled = 0u64;
         for n in &self.tree.nodes {
+            if n.is_secure() { continue; }
             if let Some(tl) = &n.text_layout {
                 if n.input.is_some() {
                     text_fills = mix(text_fills, tl.address() as u64);
@@ -437,7 +441,7 @@ impl RuntimeCore {
     fn a11y_repeats_control(&self, i: usize, slot: &Slot, spoken: &mut rustc_hash::FxHashMap<usize, Option<String>>) -> bool {
         let Some(c) = slot.element.filter(|_| crate::a11y::roles::leaf_control(slot.role)) else { return false };
         let n = &self.tree.nodes[i];
-        if n.input.is_some() || self.can_focus(i) || n.handlers.get().is_some_and(|h| h.has_primary()) { return false; }
+        if n.is_secure() || n.input.is_some() || self.can_focus(i) || n.handlers.get().is_some_and(|h| h.has_primary()) { return false; }
         let Some(name) = spoken.entry(c).or_insert_with(|| self.a11y_control_words(c, slot.role)).as_deref() else { return false };
         match n.text.as_deref() {
             Some(t) => {
@@ -490,7 +494,7 @@ impl RuntimeCore {
         for i in 0..n_nodes {
             let n = &self.tree.nodes[i];
             let up = n.parent.map_or(root_walk, |p| walk[p]);
-            let mut w = Walk { slot: up.slot, gone: up.gone, shift: up.shift, scrolled: up.scrolled, clip_y: up.clip_y };
+            let mut w = Walk { slot: up.slot, gone: up.gone || up.secure, shift: up.shift, scrolled: up.scrolled, clip_y: up.clip_y, secure: up.secure || n.is_secure() };
             if let Some(p) = n.parent {
                 let pn = &self.tree.nodes[p];
                 if pn.vis.clip.is_some() || pn.scroll.is_some() {

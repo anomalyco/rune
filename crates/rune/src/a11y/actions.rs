@@ -11,19 +11,33 @@ use crate::runtime::event_log::log_event;
 use crate::runtime::{AppDriver, RuntimeCore};
 
 /// An action request resolved against the tree it named, run at the next frame.
-#[derive(Debug)]
 pub(crate) enum A11yAct {
     /// Focus the element, or one of its text's links.
     Focus(Option<usize>),
     Step(i32),
-    SetValue(String),
-    Replace(String),
+    SetValue(zeroize::Zeroizing<String>),
+    Replace(zeroize::Zeroizing<String>),
     /// Anchor and focus, in the field's display bytes.
     Select(usize, usize),
     ScrollIntoView,
     /// Pages (or, with `false`, lines) down and right.
     Scroll { x: i32, y: i32, pages: bool },
     ScrollTo(f32, f32),
+}
+
+impl std::fmt::Debug for A11yAct {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Focus(link) => f.debug_tuple("Focus").field(link).finish(),
+            Self::Step(delta) => f.debug_tuple("Step").field(delta).finish(),
+            Self::SetValue(_) => f.debug_tuple("SetValue").field(&"[redacted]").finish(),
+            Self::Replace(_) => f.debug_tuple("Replace").field(&"[redacted]").finish(),
+            Self::Select(a, b) => f.debug_tuple("Select").field(a).field(b).finish(),
+            Self::ScrollIntoView => f.write_str("ScrollIntoView"),
+            Self::Scroll { x, y, pages } => f.debug_struct("Scroll").field("x", x).field("y", y).field("pages", pages).finish(),
+            Self::ScrollTo(x, y) => f.debug_tuple("ScrollTo").field(x).field(y).finish(),
+        }
+    }
 }
 
 /// One scroll "item" in points: about a line of body text.
@@ -71,7 +85,7 @@ impl RuntimeCore {
             (Ak::Decrement, None) if steps => self.queue_a11y(path, A11yAct::Step(-1)),
             (Ak::SetValue, None) if editable && matches!(request.data, Some(ActionData::Value(_))) => {
                 let Some(ActionData::Value(v)) = &request.data else { return false };
-                self.queue_a11y(path, A11yAct::SetValue(v.to_string()));
+                self.queue_a11y(path, A11yAct::SetValue(zeroize::Zeroizing::new(v.to_string())));
             }
             // A slider with a stated step takes a number as that many steps from its value.
             (Ak::SetValue, None) if steps => {
@@ -85,10 +99,10 @@ impl RuntimeCore {
                 self.queue_a11y(path, A11yAct::Step(delta));
             }
             (Ak::ReplaceSelectedText, None) if editable => match &request.data {
-                Some(ActionData::Value(v)) => self.queue_a11y(path, A11yAct::Replace(v.to_string())),
+                Some(ActionData::Value(v)) => self.queue_a11y(path, A11yAct::Replace(zeroize::Zeroizing::new(v.to_string()))),
                 _ => return false,
             },
-            (Ak::SetTextSelection, None) if editable => {
+            (Ak::SetTextSelection, None) if editable && !n.is_secure() => {
                 let Some(ActionData::SetTextSelection(sel)) = &request.data else { return false };
                 // A field past its runs: bytes of its value, on the field itself (`a11y_text_nodes`).
                 if let Some(input) = n.input.as_deref() && split_id(sel.anchor.node) == (id, 0) && split_id(sel.focus.node) == (id, 0) {

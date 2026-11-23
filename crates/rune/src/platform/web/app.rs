@@ -182,6 +182,10 @@ impl dyn WebApp + '_ {
     pub(super) fn web_edit(&mut self, event: &serde_json::Value, mirror: &mut crate::runtime::web_runtime::Mirror) {
         self.driver(|rt, app| rt.web_edit(app, event, mirror));
     }
+
+    pub(super) fn web_secure_replace(&mut self, key: &str, text: String) {
+        self.driver(|rt, app| rt.web_secure_replace(app, key, text));
+    }
 }
 
 fn pasted_image_fn(handle: &JsValue) -> impl FnOnce() -> js_sys::Promise + '_ {

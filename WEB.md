@@ -233,9 +233,13 @@ Mobile `beforeinput` line breaks use Rune's Enter rules: submit, or Shift/Alt+En
 in a multiline field. A completed touch tap focuses the editor synchronously;
 a pan scrolls instead, with momentum and a damped edge return.
 
-Secure fields use an `<input type="password">` with autocomplete, autocorrect and spellcheck
-disabled. It receives only new keystrokes and is emptied after every input; the model's
-secret is never mirrored into the DOM. Leaving a field returns focus to the canvas so
+Secure fields use an `<input type="password">` with `autocomplete="current-password"` and
+autocorrect, autocapitalize and spellcheck disabled. It is emptied after every input; the
+model's secret is never mirrored into the DOM. Single-grapheme `insertText` events append at
+the caret, while events with no `inputType`, `insertReplacementText`, multi-grapheme
+`insertText`, or any input while the element matches `:autofill`/`:-webkit-autofill`
+replace the field's whole value (including clearing it when empty). Leaving a field returns
+focus to the canvas so
 shortcuts and Tab keep working. Continuous pointer movement and wheel events wait for rAF.
 
 `Tx::copy` and `Tx::request_paste` use the browser clipboard. Call them from a user input
