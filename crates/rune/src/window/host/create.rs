@@ -338,9 +338,17 @@ impl Host {
             && self.win.as_ref().is_some_and(|w| w.native.panel.is_none() && w.window.is_minimized() != Some(true))
         {
             let presents = self.meter.totals().presents;
+            self.ime_waits = true;
             self.redraw();
+            self.ime_waits = false;
             drew = self.meter.totals().presents > presents;
             if drew { crate::platform::macos::flush_while_launching(); }
+            // The text input the first frame left out, now that the frame is on its way.
+            if let Some(l) = self.win.as_ref() {
+                crate::input::host_events::sync_ime(&l.window, self.app.rt_mut(), &mut self.ime, l.window.has_focus());
+                static FIRST_IME: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                crate::marks::mark_once(&FIRST_IME, "frame.first.ime");
+            }
             self.shell(event_loop);
         }
         if !drew && (visible || launcher) && let Some(w) = &self.win {

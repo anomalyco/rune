@@ -420,7 +420,7 @@ impl FrameHost for WindowFrame<'_> {
 
     fn on_unchanged(&mut self, _info: &StepInfo) {
         let Some(l) = self.host.win.as_mut() else { return };
-        sync_platform_core(l, self.host.app.rt_mut(), &mut self.host.secure_input, &mut self.host.ime, &self.host.clipboard);
+        sync_platform_core(l, self.host.app.rt_mut(), &mut self.host.secure_input, &mut self.host.ime, self.host.ime_waits, &self.host.clipboard);
         l.stop_pacing();
         self.host.meter.set_pacing(l.pacing_state(false));
         self.host.frame_reports.unchanged(self.state.target);
@@ -574,7 +574,7 @@ impl FrameHost for WindowFrame<'_> {
         if self.state.hidden { l.hidden_pace.rendered(now); }
         info.update_ms = now.elapsed().as_secs_f64() * 1000.0;
         self.state.profile.mark_built();
-        sync_platform_core(l, self.host.app.rt_mut(), &mut self.host.secure_input, &mut self.host.ime, &self.host.clipboard);
+        sync_platform_core(l, self.host.app.rt_mut(), &mut self.host.secure_input, &mut self.host.ime, self.host.ime_waits, &self.host.clipboard);
     }
 
     fn prepare_render(&mut self, drawable: wgpu::SurfaceTexture, info: &mut StepInfo) -> RenderPrep<PreparedWindowFrame> {

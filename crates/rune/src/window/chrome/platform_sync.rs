@@ -3,9 +3,9 @@ use crate::runtime::RuntimeCore;
 use crate::window::surface::Win;
 
 /// What a built frame hands the window besides its pixels: secure input, the IME, the cursor,
-/// help tags and the clipboard.
+/// help tags and the clipboard. With `ime_waits` the IME is left as it is (`Host::ime_waits`).
 pub(in crate::window) fn sync_platform_core(l: &mut Win, rt: &mut RuntimeCore, secure_input: &mut crate::input::secure_input::SecureInput,
-    ime: &mut host_events::ImeSync, clipboard: &crate::clipboard::Client) {
+    ime: &mut host_events::ImeSync, ime_waits: bool, clipboard: &crate::clipboard::Client) {
     let focused = l.window.has_focus();
     secure_input.set(rt.has_secure_focus() && focused);
     l.apply_cursor_core(rt, focused);
@@ -21,7 +21,7 @@ pub(in crate::window) fn sync_platform_core(l: &mut Win, rt: &mut RuntimeCore, s
     #[cfg(target_os = "windows")]
     if focused { crate::platform::win32::dark_mode::menus(rt.backdrop_dark().unwrap_or(rt.env.system_dark)); }
     clipboard.flush_core(rt);
-    host_events::sync_ime(&l.window, rt, ime, focused);
+    if !ime_waits { host_events::sync_ime(&l.window, rt, ime, focused); }
 }
 
 impl Win {

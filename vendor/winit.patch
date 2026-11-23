@@ -118,12 +118,9 @@ index 1b427a8..fff68ab 100644
  mod monitor;
  mod observer;
 diff --git a/src/platform_impl/macos/view.rs b/src/platform_impl/macos/view.rs
-index c7ca5bc..c83d635 100644
 --- a/src/platform_impl/macos/view.rs
 +++ b/src/platform_impl/macos/view.rs
-@@ -262,6 +262,16 @@ declare_class!(
-         #[method(selectedRange)]
-         fn selected_range(&self) -> NSRange {
+@@ -264,2 +264,12 @@ declare_class!(
              trace_scope!("selectedRange");
 +            // Rune: the app's selection in the text it published, so the input method can
 +            // reconvert it.
@@ -136,11 +133,7 @@ index c7ca5bc..c83d635 100644
 +                }
 +            }
              // Documented to return `{NSNotFound, 0}` if there is no selection.
-             NSRange::new(NSNotFound as NSUInteger, 0)
-         }
-@@ -271,16 +281,27 @@ declare_class!(
-             &self,
-             string: &NSObject,
+@@ -273,7 +283,15 @@ declare_class!(
              selected_range: NSRange,
 -            _replacement_range: NSRange,
 +            replacement_range: NSRange,
@@ -158,27 +151,19 @@ index c7ca5bc..c83d635 100644
 +            }
 +
              // SAFETY: This method is guaranteed to get either a `NSString` or a `NSAttributedString`.
-             let (marked_text, string) = if string.is_kind_of::<NSAttributedString>() {
-                 let string: *const NSObject = string;
-                 let string: *const NSAttributedString = string.cast();
+@@ -283,2 +301,5 @@ declare_class!(
                  let string = unsafe { &*string };
 +                // Rune: the clauses, by the input method's clause segments and underlines.
 +                let clauses = marked_clauses(string);
 +                super::ime_text::CLAUSES.with_borrow_mut(|c| *c = Some((string.string().to_string(), clauses)));
                  (
-                     NSMutableAttributedString::from_attributed_nsstring(string),
-                     string.string(),
-@@ -354,17 +375,30 @@ declare_class!(
-         #[method_id(validAttributesForMarkedText)]
-         fn valid_attributes_for_marked_text(&self) -> Retained<NSArray<NSAttributedStringKey>> {
+@@ -356,3 +377,4 @@ declare_class!(
              trace_scope!("validAttributesForMarkedText");
 -            NSArray::new()
 +            // Rune: the underline and clause segments, which carry a composition's clauses.
 +            NSArray::from_vec(vec![NSString::from_str("NSUnderline"), NSString::from_str("NSMarkedClauseSegment")])
          }
- 
-         #[method_id(attributedSubstringForProposedRange:actualRange:)]
-         fn attributed_substring_for_proposed_range(
+@@ -362,7 +384,19 @@ declare_class!(
              &self,
 -            _range: NSRange,
 -            _actual_range: *mut NSRange,
@@ -201,11 +186,15 @@ index c7ca5bc..c83d635 100644
 +                Some(NSAttributedString::from_nsstring(&NSString::from_str(&text[a..b])))
 +            })
          }
+@@ -823,3 +857,6 @@ impl WinitView {
  
-         #[method(characterIndexForPoint:)]
-@@ -1140,3 +1174,32 @@ fn replace_event(event: &NSEvent, option_as_alt: OptionAsAlt) -> Retained<NSEven
-         event.copy()
-     }
+-        *this.ivars().input_source.borrow_mut() = this.current_input_source();
++        // The input source is not read here: making the view's input context and asking the
++        // keyboard's input source took about 8,500 µs of a first window's creation. It is
++        // compared only while the IME is enabled (`keyDown:`), and `setMarkedText:` reads it
++        // as the IME becomes enabled.
+ 
+@@ -1142 +1179,30 @@ fn replace_event(event: &NSEvent, option_as_alt: OptionAsAlt) -> Retained<NSEven
  }
 +
 +/// Rune: a marked text's clauses, byte ranges with whether each is the one being converted: one
