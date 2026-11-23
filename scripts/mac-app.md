@@ -22,6 +22,43 @@ exchange and reopens it. If the failed app refuses Cocoa quit, the installed
 bundle is still restored, but no overlapping copy is opened. Desktop apps are
 never force-quit.
 
+## Bundle built by `--bin`
+
+`--bin` builds a development bundle and installs it to `~/Applications/<name>.app`:
+
+- Copies the `--bin` executable to `Contents/MacOS/<exe>`, and copies `--icon`
+  (when given) to `Contents/Resources/icon.icns`.
+- Writes `Contents/Info.plist` with:
+  - `CFBundleName` and `CFBundleDisplayName`: `<name>`
+  - `CFBundleIdentifier`: `<id>`
+  - `CFBundleExecutable`: `<exe>`
+  - `CFBundleIconFile`: `icon`
+  - `CFBundlePackageType`: `APPL`
+  - `CFBundleShortVersionString`: `0.0.1` (hardcoded; no `CFBundleVersion`)
+  - `LSMinimumSystemVersion`: `13.0`
+  - `NSHighResolutionCapable`: `true`
+  - `CFBundleURLTypes` (when `--scheme` is given, with `CFBundleURLName` set to
+    `<id>` and `CFBundleURLSchemes` set to `[<scheme>]`)
+  - `NSMicrophoneUsageDescription` (when `--mic` is given)
+- Signs the bundle with `codesign --force --sign <identity>`, where `<identity>`
+  is `MAC_APP_SIGN` if set or ad hoc (`-`) otherwise. It does not pass
+  `--options runtime`, `--timestamp`, or `--entitlements`. If signing with
+  `MAC_APP_SIGN` fails, the script prints a warning to stderr and falls back to
+  ad-hoc signing (`-`).
+
+This is a development install and cannot be notarized. A distributable,
+notarizable release bundle needs real version keys (`CFBundleShortVersionString`
+and `CFBundleVersion`), any required entitlements (such as
+`com.apple.security.device.audio-input` for microphone access under Hardened
+Runtime), signing with a `Developer ID Application` identity using
+`--options runtime --timestamp` (including any nested binaries, with no ad-hoc
+fallback), submission with `xcrun notarytool`, and stapling with
+`xcrun stapler`.
+
+Once you have built and signed a release bundle, `scripts/mac-app --bundle
+path/to/Demo.app` installs it into `~/Applications/<name>.app` unchanged,
+preserving symlinks without modifying `Info.plist` or re-signing it.
+
 ## Shared install protocol
 
 Rune and HiveMind land use the same protocol:
