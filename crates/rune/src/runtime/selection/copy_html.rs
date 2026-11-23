@@ -149,33 +149,136 @@ fn close(out: &mut String, block: Block, next: Option<Block>) {
     }
 }
 
+use std::cmp::Reverse;
+use std::collections::{BTreeSet, BinaryHeap};
 use std::fmt::Write;
 
-/// Bytes `a..b` of `spec` as inline HTML: split where a span, a link or a strike starts or ends.
+const MARK_BOLD: u8 = 1 << 0;
+const MARK_ITALIC: u8 = 1 << 1;
+const MARK_CODE: u8 = 1 << 2;
+const MARK_STRIKE: u8 = 1 << 3;
+
+fn add_marks(counts: &mut [usize; 4], bits: u8) {
+    for (i, count) in counts.iter_mut().enumerate() {
+        if bits & (1 << i) != 0 { *count += 1; }
+    }
+}
+
+fn sub_marks(counts: &mut [usize; 4], bits: u8) {
+    for (i, count) in counts.iter_mut().enumerate() {
+        if bits & (1 << i) != 0 { *count -= 1; }
+    }
+}
+
+/// Bytes `a..b` of `spec` as inline HTML: split where a markup-emitting span, a link or a strike
+/// starts or ends, sweeping active intervals in O(N log N) instead of rescanning every span at
+/// every boundary.
 fn inline_html(spec: &crate::el::TextSpec, a: usize, b: usize) -> String {
     let len = spec.content.len();
     let (a, b) = (a.min(len), b.min(len));
+    if spec.redacted || a >= b { return String::new(); }
     let links = &spec.cold.links;
     let strikes = &spec.cold.strikes;
+    // A heading's own weight and an italic base style aren't inline markup.
+    let emit_bold = spec.style.weight < 600.0;
+    let emit_italic = !spec.style.italic;
+
     let mut cuts: Vec<usize> = vec![a, b];
-    cuts.extend(spec.spans.iter().flat_map(|s| [s.start as usize, s.end as usize]));
-    cuts.extend(links.iter().flat_map(|l| [l.start as usize, l.end as usize]));
-    cuts.extend(strikes.iter().flat_map(|s| [s.0 as usize, s.1 as usize]));
+    let mut marks: Vec<(usize, usize, u8)> = Vec::new();
+    for sp in &spec.spans {
+        #[cfg(test)]
+        note_span_visit();
+        let mut bits = 0u8;
+        if emit_bold && sp.weight.is_some_and(|w| w >= 600.0) { bits |= MARK_BOLD; }
+        if emit_italic && sp.italic { bits |= MARK_ITALIC; }
+        if sp.mono { bits |= MARK_CODE; }
+        if bits == 0 { continue; }
+        let (start, end) = (sp.start as usize, sp.end as usize);
+        if start >= end || end <= a || start >= b { continue; }
+        marks.push((start, end, bits));
+        cuts.push(start);
+        cuts.push(end);
+    }
+    for &(start, end, _) in strikes {
+        let (start, end) = (start as usize, end as usize);
+        if start >= end || end <= a || start >= b { continue; }
+        marks.push((start, end, MARK_STRIKE));
+        cuts.push(start);
+        cuts.push(end);
+    }
+    let mut link_ranges: Vec<(usize, usize, usize)> = Vec::new();
+    for (idx, l) in links.iter().enumerate() {
+        let (start, end) = (l.start as usize, l.end as usize);
+        if start >= end || end <= a || start >= b { continue; }
+        link_ranges.push((start, end, idx));
+        cuts.push(start);
+        cuts.push(end);
+    }
+
     cuts.retain(|&c| c >= a && c <= b && spec.content.is_char_boundary(c));
     cuts.sort_unstable();
     cuts.dedup();
+    marks.sort_unstable_by_key(|&(start, _, _)| start);
+    link_ranges.sort_unstable_by_key(|&(start, _, _)| start);
+
+    let mut active_marks: BinaryHeap<Reverse<(usize, u8)>> = BinaryHeap::new();
+    let mut mark_counts = [0usize; 4];
+    let mut mark_idx = 0usize;
+
+    let mut active_link_ends: BinaryHeap<Reverse<(usize, usize)>> = BinaryHeap::new();
+    let mut active_link_ids: BTreeSet<usize> = BTreeSet::new();
+    let mut link_idx = 0usize;
+
     let mut out = String::new();
     let mut href: Option<&str> = None;
     for w in cuts.windows(2) {
         let (s, e) = (w[0], w[1]);
+        while mark_idx < marks.len() && marks[mark_idx].0 <= s {
+            #[cfg(test)]
+            note_span_visit();
+            let (_, end, bits) = marks[mark_idx];
+            mark_idx += 1;
+            if end >= e {
+                add_marks(&mut mark_counts, bits);
+                active_marks.push(Reverse((end, bits)));
+            }
+        }
+        while let Some(&Reverse((end, bits))) = active_marks.peek() {
+            if end < e {
+                #[cfg(test)]
+                note_span_visit();
+                active_marks.pop();
+                sub_marks(&mut mark_counts, bits);
+            } else {
+                break;
+            }
+        }
+        while link_idx < link_ranges.len() && link_ranges[link_idx].0 <= s {
+            let (_, end, idx) = link_ranges[link_idx];
+            link_idx += 1;
+            if end >= e {
+                active_link_ends.push(Reverse((end, idx)));
+                active_link_ids.insert(idx);
+            }
+        }
+        while let Some(&Reverse((end, idx))) = active_link_ends.peek() {
+            if end < e {
+                active_link_ends.pop();
+                active_link_ids.remove(&idx);
+            } else {
+                break;
+            }
+        }
         let Some(text) = spec.copy_slice(s as u32, e as u32) else { continue };
         if text.is_empty() { continue; }
-        let inside = |x: u32, y: u32| (x as usize) <= s && e <= y as usize;
-        let bold = spec.spans.iter().any(|sp| inside(sp.start, sp.end) && sp.weight.is_some_and(|w| w >= 600.0)) || spec.style.weight >= 600.0;
-        let italic = spec.spans.iter().any(|sp| inside(sp.start, sp.end) && sp.italic) && !spec.style.italic;
-        let code = spec.spans.iter().any(|sp| inside(sp.start, sp.end) && sp.mono);
-        let struck = strikes.iter().any(|st| inside(st.0, st.1));
-        let link = links.iter().find(|l| inside(l.start, l.end)).map(|l| l.id.as_str()).filter(|id| id.contains("://") || id.starts_with("mailto:"));
+        let bold = mark_counts[0] > 0;
+        let italic = mark_counts[1] > 0;
+        let code = mark_counts[2] > 0;
+        let struck = mark_counts[3] > 0;
+        let link = active_link_ids
+            .first()
+            .map(|&idx| links[idx].id.as_str())
+            .filter(|id| id.contains("://") || id.starts_with("mailto:"));
         if href != link {
             if href.is_some() { out.push_str("</a>"); }
             if let Some(h) = link { write!(out, "<a href=\"{}\">", escape(h)).ok(); }
@@ -185,8 +288,7 @@ fn inline_html(spec: &crate::el::TextSpec, a: usize, b: usize) -> String {
         if code { piece = format!("<code>{piece}</code>"); }
         if struck { piece = format!("<s>{piece}</s>"); }
         if italic { piece = format!("<em>{piece}</em>"); }
-        // A heading's own weight isn't markup.
-        if bold && spec.style.weight < 600.0 { piece = format!("<strong>{piece}</strong>"); }
+        if bold { piece = format!("<strong>{piece}</strong>"); }
         out.push_str(&piece);
     }
     if href.is_some() { out.push_str("</a>"); }
@@ -196,3 +298,25 @@ fn inline_html(spec: &crate::el::TextSpec, a: usize, b: usize) -> String {
 fn escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
+
+#[cfg(test)]
+thread_local! {
+    static SPAN_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn note_span_visit() {
+    SPAN_VISITS.with(|c| c.set(c.get() + 1));
+}
+
+#[cfg(test)]
+fn count_span_visits<R>(f: impl FnOnce() -> R) -> (R, usize) {
+    SPAN_VISITS.with(|c| c.set(0));
+    let out = f();
+    let count = SPAN_VISITS.with(|c| c.get());
+    (out, count)
+}
+
+#[cfg(test)]
+#[path = "copy_html_tests.rs"]
+mod tests;
