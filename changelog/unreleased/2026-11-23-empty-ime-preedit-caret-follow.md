@@ -1,0 +1,1 @@
+- Ignore empty `Ime::Preedit` events for a focused text field when no composition is open, so Wayland's `zwp_text_input_v3` `done` replies to cursor-area updates no longer set `caret_follow` and snap wheel scrolling back to the caret.
