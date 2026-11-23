@@ -1,0 +1,1 @@
+- Runtime: keyed highlight layout reads, inline target lookups and `find_highlight` now compute range boxes only for the highlights matching the requested key instead of laying out every highlight on the text node.
