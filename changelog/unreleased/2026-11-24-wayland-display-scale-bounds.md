@@ -1,0 +1,1 @@
+- Wayland: `Display` now reads `wl_output` mode/transform and `zxdg_output_v1` logical position/size in `resumed` (falling back to winit when `zxdg_output_manager_v1` is unavailable), so `Display::size`, `Display::scale`, `Display::position`, and `Display::native_bounds()` are accurate on fractional-scale and 90°/270°-rotated outputs.

@@ -60,9 +60,18 @@ impl Display {
     pub fn native_bounds(&self) -> [f64; 4] {
         #[cfg(target_os = "macos")]
         if let Some(crate::NativeDisplayId::MacOS(id)) = self.native_id() { return crate::platform::macos::display_bounds(id); }
-        let divisor = if matches!(self.native_id(), Some(crate::NativeDisplayId::Wayland(_))) { self.scale } else { 1.0 };
-        [f64::from(self.position.0), f64::from(self.position.1), f64::from(self.size.0) / divisor, f64::from(self.size.1) / divisor]
+        native_bounds_for(self.native_id(), self.position, self.size, self.scale)
     }
+}
+
+pub(crate) fn native_bounds_for(
+    native_id: Option<crate::NativeDisplayId>,
+    position: (i32, i32),
+    size: (u32, u32),
+    scale: f64,
+) -> [f64; 4] {
+    let divisor = if matches!(native_id, Some(crate::NativeDisplayId::Wayland(_))) { scale } else { 1.0 };
+    [f64::from(position.0), f64::from(position.1), f64::from(size.0) / divisor, f64::from(size.1) / divisor]
 }
 
 /// A window's minimum content size when neither `WindowOptions` nor `AppSpec` sets one.

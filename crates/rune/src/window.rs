@@ -299,17 +299,42 @@ impl ApplicationHandler<WakeEvent> for Windows {
         let _handling = crate::quit::handling();
         let Some(factory) = self.factory.take() else { return };
         crate::marks::mark("loop.resumed");
+        let wayland = is_wayland(event_loop);
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        let wayland_outputs = wayland
+            .then(|| winit::raw_window_handle::HasDisplayHandle::display_handle(event_loop).ok())
+            .flatten()
+            .map(|display| crate::platform::wayland_output::query(display.as_raw()))
+            .unwrap_or_default();
         let primary = event_loop.primary_monitor();
-        let displays: Vec<_> = event_loop.available_monitors().map(|m| Display {
-            id: Some(crate::DisplayId::from_monitor(m.clone(), is_wayland(event_loop))),
-            name: m.name(), position: (m.position().x, m.position().y),
-            size: (m.size().width, m.size().height), scale: m.scale_factor(), primary: primary.as_ref() == Some(&m),
+        let displays: Vec<_> = event_loop.available_monitors().map(|m| {
+            let id = crate::DisplayId::from_monitor(m.clone(), wayland);
+            let fallback = ((m.position().x, m.position().y), (m.size().width, m.size().height), m.scale_factor());
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            let (position, size, scale) = match id.native_id() {
+                Some(crate::NativeDisplayId::Wayland(output_id)) => {
+                    let resolved = crate::platform::wayland_output::resolve(
+                        wayland_outputs.get(&output_id),
+                        crate::platform::wayland_output::ResolvedOutput {
+                            position: fallback.0,
+                            size: fallback.1,
+                            scale: fallback.2,
+                        },
+                    );
+                    (resolved.position, resolved.size, resolved.scale)
+                }
+                _ => fallback,
+            };
+            #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+            let (position, size, scale) = fallback;
+            Display {
+                id: Some(id), name: m.name(), position, size, scale, primary: primary.as_ref() == Some(&m),
+            }
         }).collect();
         let specs = crate::windows::flatten(factory(&displays));
         crate::windows::validate(&specs).expect("window keys");
         let trace_window = self.args.window.clone().or_else(|| specs.first().map(|s| s.key().to_owned()));
         let mut overlays = Vec::new();
-        let wayland = is_wayland(event_loop);
         self.hosts = start_all(specs, |slot, spec| {
             let traced = trace_window.as_deref() == Some(spec.key());
             spec.start(self.args.clone(), Start { proxy: self.proxy.clone(), slot, gpu: self.gpu.clone(), wayland, traced, overlays: &mut overlays })
