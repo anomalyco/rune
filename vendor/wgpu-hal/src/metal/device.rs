@@ -22,7 +22,7 @@ use objc2_metal::{
     MTLTexture, MTLTextureDescriptor, MTLTextureType, MTLTriangleFillMode, MTLVertexDescriptor,
     MTLVertexStepFunction,
 };
-use parking_lot::{Condvar, Mutex, RwLock};
+use parking_lot::{Condvar, Mutex};
 
 use super::{adapter::MAX_BUFFERS, conv, PassthroughShader, ShaderModuleSource};
 use crate::{auxil::map_naga_stage, DropCallback, DropGuard, TlasInstance};
@@ -2001,9 +2001,7 @@ impl crate::Device for super::Device {
             None
         };
         Ok(super::Fence {
-            sync: Arc::new((Mutex::new(0), Condvar::new())),
-            lost: Arc::new(core::sync::atomic::AtomicBool::new(false)),
-            pending_command_buffers: RwLock::new(Vec::new()),
+            sync: Arc::new((Mutex::new(super::FenceState::default()), Condvar::new())),
             shared_event,
         })
     }
@@ -2013,10 +2011,7 @@ impl crate::Device for super::Device {
     }
 
     unsafe fn get_fence_value(&self, fence: &super::Fence) -> DeviceResult<crate::FenceValue> {
-        if fence.lost.load(core::sync::atomic::Ordering::Acquire) {
-            return Err(crate::DeviceError::Lost);
-        }
-        Ok(fence.get_latest())
+        fence.get_latest()
     }
     unsafe fn wait(
         &self,
@@ -2024,37 +2019,27 @@ impl crate::Device for super::Device {
         wait_value: crate::FenceValue,
         timeout: Option<core::time::Duration>,
     ) -> DeviceResult<bool> {
-        if fence.lost.load(core::sync::atomic::Ordering::Acquire) {
-            return Err(crate::DeviceError::Lost);
-        }
         let (ref mutex, ref condvar) = *fence.sync;
         let mut lock = mutex.lock();
 
-        if wait_value <= *lock {
+        if lock.lost {
+            return Err(crate::DeviceError::Lost);
+        }
+        if wait_value <= lock.completed {
             return Ok(true);
         }
 
-        {
-            let pending_command_buffers = fence.pending_command_buffers.read();
-            if !pending_command_buffers
-                .iter()
-                .any(|&(value, _)| value >= wait_value)
-            {
-                log::error!("No active command buffers for fence value {wait_value}");
-                return Err(crate::DeviceError::Lost);
-            }
-        }
-
+        let pending = |state: &mut super::FenceState| state.completed < wait_value && !state.lost;
         if let Some(timeout) = timeout {
-            let result = condvar.wait_while_for(&mut lock, |value| *value < wait_value, timeout);
-            if result.timed_out() {
-                return Ok(*lock >= wait_value);
+            let result = condvar.wait_while_for(&mut lock, pending, timeout);
+            if result.timed_out() && !lock.lost {
+                return Ok(lock.completed >= wait_value);
             }
         } else {
-            condvar.wait_while(&mut lock, |value| *value < wait_value);
+            condvar.wait_while(&mut lock, pending);
         }
 
-        if fence.lost.load(core::sync::atomic::Ordering::Acquire) {
+        if lock.lost {
             return Err(crate::DeviceError::Lost);
         }
         Ok(true)
