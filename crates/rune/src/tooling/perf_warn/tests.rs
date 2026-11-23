@@ -87,6 +87,28 @@ fn a_blocking_update_names_update() {
     assert!(log.len() == 1 && log[0].starts_with("rune: an `update` closure blocked "), "{log:?}");
 }
 
+#[cfg(all(windows, target_arch = "x86_64"))]
+#[test]
+fn a_first_blocking_callback_before_cpu_rate_is_known_still_warns() {
+    take_log();
+    let stall = Stall::start();
+    std::thread::sleep(Duration::from_millis(30));
+    stall.end(|| ("first-blocked-real".into(), "`init`".into()));
+    let log = take_log();
+    assert_eq!(log.len(), 1, "{log:?}");
+    assert!(log[0].starts_with("rune: `init` blocked "), "{}", log[0]);
+}
+
+#[test]
+fn a_slow_callback_without_a_cpu_reading_does_not_invent_a_stall() {
+    let _clock = FakeStallClock::new();
+    take_log();
+    let stall = Stall::start();
+    FakeStallClock::advance_without_cpu(15.0);
+    stall.end(|| ("test-no-cpu".into(), "`poll`".into()));
+    assert_eq!(take_log(), Vec::<String>::new());
+}
+
 #[test]
 fn rows_of_one_list_share_a_handler_site() {
     assert_eq!(handler_site("on_press", "#0/list/r12"), handler_site("on_press", "#0/list/r7"));

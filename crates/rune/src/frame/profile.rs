@@ -7,10 +7,10 @@ pub(crate) enum Phase { View, Commit, Layout, Text, Paint, Apply }
 #[cfg_attr(not(feature = "frame-profile"), allow(dead_code))]
 pub const PHASES: usize = 6;
 
-/// CPU consumed by this thread, excluding time the scheduler runs other work. Debug builds
-/// time app callbacks with it for `perf_warn`, and interaction timing its input frames.
+/// CPU consumed by this thread, excluding time the scheduler runs other work.
 /// On Windows it counts the thread's cycles (`QueryThreadCycleTime`), so short phases read
 /// true; `GetThreadTimes` moves in 15.6 ms ticks.
+#[cfg(feature = "frame-profile")]
 pub(crate) fn cpu_ms() -> Option<f64> {
     #[cfg(any(unix, windows))]
     { super::host_clock::thread_cpu().and_then(super::host_clock::cpu_ns).map(|ns| ns / 1e6) }

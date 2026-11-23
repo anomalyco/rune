@@ -29,6 +29,7 @@ static LAUNCH: Mutex<Launch> = Mutex::new(Launch { run: None, init: None, view: 
 pub(crate) fn run_starts() {
     #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
     {
+        super::warm();
         let age = process_age();
         LAUNCH.lock().unwrap().run.get_or_insert((crate::time::now(), age));
     }
