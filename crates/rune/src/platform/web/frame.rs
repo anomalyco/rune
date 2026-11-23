@@ -70,11 +70,12 @@ impl Running {
         let next = (size.width.min(max_dim), size.height.min(max_dim));
         let document = self.document;
         if let Some(side) = self.draw.gpu_mut() {
+            let wake_blocked = gpu::on_resized(side);
             let (kept, reconfigure) = web_math::should_reconfigure_surface((side.config.width, side.config.height), next, document);
-            if reconfigure {
+            if reconfigure || wake_blocked {
                 side.config.width = kept.0;
                 side.config.height = kept.1;
-                side.surface.configure(&side.gpu.device, &side.config);
+                gpu::configure_surface(side);
                 self.last_presented = None;
             }
             self.size = (side.config.width, side.config.height);

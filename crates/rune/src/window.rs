@@ -54,6 +54,8 @@ pub(crate) use surface::{
     acquire_checked, configure, reblend_core, rebuild_renderer_core,
     surface_config, timer_deadline_core, timer_wants_frame_core,
 };
+#[cfg(target_arch = "wasm32")]
+pub(crate) use surface::configure_then;
 #[cfg(test)]
 pub(crate) use surface::{
     HIDDEN_REFRESH, OCCLUDED_MAX, OCCLUDED_RETRY, TIMEOUT_RETRY, TIMER_FRAME_STALL, TimerFrame,

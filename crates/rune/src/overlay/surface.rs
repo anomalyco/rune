@@ -311,8 +311,8 @@ impl OverlayCore {
             return;
         }
         live.scale = scale;
-        live.config.width = (self.at.size.0 * scale).round().max(1.0) as u32;
-        live.config.height = (self.at.size.1 * scale).round().max(1.0) as u32;
+        let max_dim = gpu.device.limits().max_texture_dimension_2d;
+        (live.config.width, live.config.height) = overlay_rescale_size(self.at.size, scale, max_dim);
         live.settle();
         // DX12 `configure` calls `ResizeBuffers` on the same swap chain, preserving its waitable
         // semaphore and count; on failure `surface_refused` -> `release` resets the slot.
@@ -328,6 +328,13 @@ impl OverlayCore {
         app.rt_mut().set_viewport(self.at.size, scale);
         self.dirty = true;
     }
+}
+
+/// Physical drawable size for an overlay rescale, clamped to `1..=max_dim`.
+pub(crate) fn overlay_rescale_size(size: (f32, f32), scale: f32, max_dim: u32) -> (u32, u32) {
+    let max_dim = max_dim.max(1);
+    let clamp = |v: f32| ((v * scale).round().max(1.0) as u32).clamp(1, max_dim);
+    (clamp(size.0), clamp(size.1))
 }
 
 impl Drop for OverlayCore {

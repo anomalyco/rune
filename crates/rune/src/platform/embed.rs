@@ -9,7 +9,7 @@ use std::sync::{Arc, OnceLock};
 use crate::compose::{Compositor, Frame};
 use crate::frame::clock::FrameClock;
 use crate::frame::host_step::{self, Acquire};
-use crate::platform::embed_frame::{self, EmbedSurface, FrameSummary};
+use crate::platform::embed_frame::{self, EmbedSurface, EmbedSurfaceEvent, EmbedSurfaceHealth, FrameSummary};
 use crate::render::{Gpu, Renderer};
 use crate::runtime::{AppDriver, Env, Runtime, RuntimeCore, Waker};
 use crate::time::Instant;
@@ -76,6 +76,7 @@ struct LayerHostCore {
     renderer: Renderer,
     clock: FrameClock,
     suspended: bool,
+    surface_health: EmbedSurfaceHealth,
 }
 
 impl LayerHostCore {
@@ -110,6 +111,7 @@ impl LayerHostCore {
             renderer,
             clock: FrameClock::new(now),
             suspended: viewport.0 <= 0.0 || viewport.1 <= 0.0,
+            surface_health: EmbedSurfaceHealth::default(),
         };
         Ok((core, size, scale, now))
     }
@@ -129,6 +131,7 @@ impl LayerHostCore {
             return;
         }
         self.suspended = false;
+        self.surface_health.step(EmbedSurfaceEvent::Resized);
         let scale = scale.max(1.0);
         let max_dim = self.gpu.device.limits().max_texture_dimension_2d.max(1);
         let px_w = ((viewport.0 * scale).round() as u32).clamp(1, max_dim);
@@ -259,6 +262,7 @@ impl<S: 'static> EmbedSurface for LayerHost<S> {
     type Prepared = PreparedEmbedFrame;
 
     fn suspended(&self) -> bool { self.core.suspended }
+    fn surface_health_mut(&mut self) -> &mut EmbedSurfaceHealth { &mut self.core.surface_health }
     fn renderer_srgb_blend(&self) -> bool { self.core.renderer.srgb_blend() }
     fn rt_srgb_blend(&self) -> bool { self.rt.core().srgb_blend() }
     fn reblend(&mut self) -> bool { self.core.reblend(self.rt.core_mut()) }

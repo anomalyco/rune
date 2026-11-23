@@ -10,6 +10,58 @@ use crate::runtime::{AppDriver, RuntimeCore};
 use crate::time::Instant;
 use crate::window::Missed;
 
+/// Consecutive lost/outdated drawable frames an embedded layer retries before stopping its
+/// display-link `animating` signal until a resize or a drawn frame clears the run.
+pub(crate) const EMBED_MAX_LOST_RETRIES: u8 = 5;
+
+/// Health of an embedded layer's drawable acquisition across frames.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum EmbedSurfaceHealth {
+    #[default]
+    Ready,
+    Retrying { failures: u8 },
+    GaveUp,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EmbedSurfaceEvent {
+    Presented,
+    Missed(Missed),
+    Resized,
+}
+
+impl EmbedSurfaceHealth {
+    /// Steps the embedded surface state and returns whether the missed frame should ask the
+    /// display link to keep ticking immediately.
+    pub(crate) fn step(&mut self, event: EmbedSurfaceEvent) -> bool {
+        match (*self, event) {
+            (_, EmbedSurfaceEvent::Presented | EmbedSurfaceEvent::Resized) => {
+                *self = Self::Ready;
+                false
+            }
+            (Self::Ready, EmbedSurfaceEvent::Missed(Missed::Outdated)) => {
+                *self = Self::Retrying { failures: 1 };
+                true
+            }
+            (Self::Retrying { failures }, EmbedSurfaceEvent::Missed(Missed::Outdated)) => {
+                let next = failures.saturating_add(1);
+                if next >= EMBED_MAX_LOST_RETRIES {
+                    *self = Self::GaveUp;
+                    false
+                } else {
+                    *self = Self::Retrying { failures: next };
+                    true
+                }
+            }
+            (_, EmbedSurfaceEvent::Missed(Missed::Unconfigured)) => {
+                *self = Self::GaveUp;
+                false
+            }
+            (_, EmbedSurfaceEvent::Missed(_)) => false,
+        }
+    }
+}
+
 /// Summary produced after presenting (or missing) one embedded layer frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct FrameSummary {
@@ -26,6 +78,7 @@ pub(crate) trait EmbedSurface {
     type Prepared;
 
     fn suspended(&self) -> bool;
+    fn surface_health_mut(&mut self) -> &mut EmbedSurfaceHealth;
     fn renderer_srgb_blend(&self) -> bool;
     fn rt_srgb_blend(&self) -> bool;
     fn reblend(&mut self) -> bool;
@@ -111,7 +164,7 @@ impl<E: EmbedSurface> FrameHost for EmbedFrameHost<'_, E> {
     #[inline]
     fn on_missed(&mut self, missed: Missed, stepped: bool) {
         let t0 = self.t0.unwrap_or_else(crate::time::now);
-        let retry_now = missed == Missed::Outdated;
+        let retry_now = self.surface.surface_health_mut().step(EmbedSurfaceEvent::Missed(missed));
         let comp_animating = self.surface.compositor_animating();
         self.summary = if stepped {
             let (_, rt) = self.surface.clock_and_rt_mut();
@@ -145,6 +198,7 @@ impl<E: EmbedSurface> FrameHost for EmbedFrameHost<'_, E> {
     #[inline]
     fn settle(&mut self, submitted: Instant, info: &StepInfo) {
         let t0 = self.t0.unwrap_or(submitted);
+        self.surface.surface_health_mut().step(EmbedSurfaceEvent::Presented);
         let (_, rt) = self.surface.clock_and_rt_mut();
         self.summary = frame_summary_presented(rt, submitted, t0, info.animating);
     }

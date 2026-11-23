@@ -410,6 +410,120 @@ pub(crate) fn step_resize_redraw(state: &mut ResizeRedraw, event: ResizeRedrawEv
     }
 }
 
+/// Initial retry delay after a refused web surface configuration; doubles per consecutive failure.
+pub(crate) const CONFIGURE_RETRY_BASE: std::time::Duration = std::time::Duration::from_millis(50);
+/// Consecutive surface configuration failures before waiting for a resize instead of retrying.
+pub(crate) const CONFIGURE_MAX_FAILURES: u8 = 5;
+
+/// Health and retry state of a web canvas surface's configuration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SurfaceHealth {
+    /// Ready to draw (or awaiting the answer to the latest `active` configure).
+    Ready { failures: u8, active: Option<crate::machine::Attempt> },
+    /// A configure was refused; a retry timer is armed for `attempt`.
+    WaitingRetry { failures: u8, attempt: crate::machine::Attempt },
+    /// Exhausted retries; no further configures or draws run until a resize arrives.
+    GaveUp,
+}
+
+impl Default for SurfaceHealth {
+    fn default() -> Self {
+        Self::Ready { failures: 0, active: None }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SurfaceHealthEvent {
+    /// A configure call was issued with `attempt`.
+    Begin(crate::machine::Attempt),
+    /// A configure call resolved (synchronously on WebGL2, or via JS error scopes on WebGPU).
+    Outcome { attempt: crate::machine::Attempt, error: Option<String> },
+    /// The scheduled retry timer fired for `attempt`.
+    RetryDue(crate::machine::Attempt),
+    /// A frame presented cleanly, ending any run of failures.
+    Presented,
+    /// The canvas resized to a non-zero extent, allowing a fresh configure.
+    Resized,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SurfaceHealthEffect {
+    /// Issue a new surface configure now.
+    Configure,
+    /// Schedule a `RetryDue(attempt)` wake after `delay`.
+    ScheduleRetry { attempt: crate::machine::Attempt, delay: std::time::Duration },
+    /// Log the first failure in a run.
+    ReportFirst(String),
+    /// Log that retries ran out and the canvas waits for a resize.
+    ReportGaveUp(String),
+}
+
+impl SurfaceHealth {
+    /// Whether the surface can currently acquire and draw frames.
+    pub(crate) fn can_draw(&self) -> bool {
+        matches!(self, Self::Ready { .. })
+    }
+
+    pub(crate) fn step(
+        &mut self,
+        seq: &mut crate::machine::Seq,
+        event: SurfaceHealthEvent,
+    ) -> crate::machine::Effects<SurfaceHealthEffect> {
+        use crate::machine::Effects;
+        match (*self, event) {
+            (Self::Ready { failures, .. } | Self::WaitingRetry { failures, .. }, SurfaceHealthEvent::Begin(attempt)) => {
+                *self = Self::Ready { failures, active: Some(attempt) };
+                Effects::none()
+            }
+            (Self::GaveUp, SurfaceHealthEvent::Begin(attempt)) => {
+                *self = Self::Ready { failures: 0, active: Some(attempt) };
+                Effects::none()
+            }
+            (Self::Ready { failures, active: Some(expected) }, SurfaceHealthEvent::Outcome { attempt, error })
+                if attempt == expected =>
+            {
+                match error {
+                    None => {
+                        *self = Self::Ready { failures, active: None };
+                        Effects::none()
+                    }
+                    Some(why) => {
+                        let next = failures.saturating_add(1);
+                        if next >= CONFIGURE_MAX_FAILURES {
+                            *self = Self::GaveUp;
+                            return Effects::one(SurfaceHealthEffect::ReportGaveUp(why));
+                        }
+                        let retry = seq.next();
+                        let delay = CONFIGURE_RETRY_BASE * (1u32 << (next - 1));
+                        *self = Self::WaitingRetry { failures: next, attempt: retry };
+                        let schedule = SurfaceHealthEffect::ScheduleRetry { attempt: retry, delay };
+                        if next == 1 {
+                            Effects::two(SurfaceHealthEffect::ReportFirst(why), schedule)
+                        } else {
+                            Effects::one(schedule)
+                        }
+                    }
+                }
+            }
+            (Self::WaitingRetry { failures, attempt: expected }, SurfaceHealthEvent::RetryDue(attempt))
+                if attempt == expected =>
+            {
+                *self = Self::Ready { failures, active: None };
+                Effects::one(SurfaceHealthEffect::Configure)
+            }
+            (Self::Ready { active, .. }, SurfaceHealthEvent::Presented) => {
+                *self = Self::Ready { failures: 0, active };
+                Effects::none()
+            }
+            (Self::GaveUp | Self::WaitingRetry { .. }, SurfaceHealthEvent::Resized) => {
+                *self = Self::Ready { failures: 0, active: None };
+                Effects::none()
+            }
+            _ => Effects::none(),
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "web_math_tests.rs"]
 mod tests;
