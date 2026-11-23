@@ -67,7 +67,7 @@ fn erf(x: f32) -> f32 {
     let r = r * r;
     s - s / (r * r)
 }
-fn shadow(p: [f32; 2], h: [f32; 2], sigma: f32, corner: f32) -> f32 {
+fn shadow(p: [f32; 2], h: [f32; 2], sigma: f32, radii: [f32; 4]) -> f32 {
     let lo = p[1] - h[1];
     let hi = p[1] + h[1];
     let start = (-3.0 * sigma).clamp(lo, hi);
@@ -76,11 +76,15 @@ fn shadow(p: [f32; 2], h: [f32; 2], sigma: f32, corner: f32) -> f32 {
     let mut y = start + step * 0.5;
     let mut v = 0.0;
     for _ in 0..4 {
-        let delta = (h[1] - corner - (p[1] - y).abs()).min(0.0);
-        let curved = h[0] - corner + sqrtf((corner * corner - delta * delta).max(0.0));
+        let ry = p[1] - y;
+        let [cl, cr] = if ry > 0.0 { [radii[3], radii[2]] } else { [radii[0], radii[1]] };
+        let dl = (h[1] - cl - ry.abs()).min(0.0);
+        let dr = (h[1] - cr - ry.abs()).min(0.0);
+        let left_reach = h[0] - cl + sqrtf((cl * cl - dl * dl).max(0.0));
+        let right_reach = h[0] - cr + sqrtf((cr * cr - dr * dr).max(0.0));
         let scale = sqrtf(0.5) / sigma;
-        let left = 0.5 + 0.5 * erf((p[0] - curved) * scale);
-        let right = 0.5 + 0.5 * erf((p[0] + curved) * scale);
+        let left = 0.5 + 0.5 * erf((p[0] - right_reach) * scale);
+        let right = 0.5 + 0.5 * erf((p[0] + left_reach) * scale);
         let gaussian =
             expf(-(y * y) / (2.0 * sigma * sigma)) / (sqrtf(2.0 * std::f32::consts::PI) * sigma);
         v += (right - left) * gaussian * step;
@@ -313,7 +317,9 @@ pub(crate) fn fragment(i: &Primitive, atlas: &Atlas, screen: [f32; 2]) -> [f32; 
             }
         }
         1 => {
-            let mut cov = shadow(q, h, i.params[2].max(0.01), i.radii[0].abs().min(h[0].min(h[1])));
+            let m = h[0].min(h[1]);
+            let raw = if i.uv[2] > 0.0 { [i.radii[0]; 4] } else { i.radii };
+            let mut cov = shadow(q, h, i.params[2].max(0.01), raw.map(|r| r.abs().min(m)));
             if i.uv[2] > 0.0 {
                 let hole = [i.uv[2] * 0.5, i.uv[3] * 0.5];
                 let at = [p[0] - (i.rect[0] + i.uv[0] + hole[0]), p[1] - (i.rect[1] + i.uv[1] + hole[1])];
@@ -351,11 +357,12 @@ pub(crate) fn fragment(i: &Primitive, atlas: &Atlas, screen: [f32; 2]) -> [f32; 
             let lit = if i.params[2] < 0.3 {
                 box_cov(q, ih, i.radii.map(|r| inset_radius(r, spread)))
             } else {
+                let m = ih[0].min(ih[1]);
                 shadow(
                     q,
                     ih,
                     i.params[2],
-                    (i.radii[0].abs() - spread).min(ih[0].min(ih[1])).max(0.0),
+                    i.radii.map(|r| (r.abs() - spread).min(m).max(0.0)),
                 )
             };
             col = i.fill.map(|c| c * cov * (1.0 - clamp(lit)));

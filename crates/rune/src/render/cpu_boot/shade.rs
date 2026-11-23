@@ -152,18 +152,28 @@ fn erf(x: f32) -> f32 {
     s - s / (r * r)
 }
 
-fn shadow_x(x: f32, y: f32, sigma: f32, corner: f32, half: [f32; 2]) -> f32 {
-    let delta = (half[1] - corner - y.abs()).min(0.0);
-    let curved = half[0] - corner + (corner * corner - delta * delta).max(0.0).sqrt();
+fn shadow_radii(i: &Instance, half: [f32; 2]) -> [f32; 4] {
+    let m = half[0].min(half[1]);
+    let raw = if i.uv[2] > 0.0 { [i.radii[0]; 4] } else { i.radii };
+    raw.map(|r| r.abs().min(m))
+}
+
+fn shadow_x(x: f32, y: f32, sigma: f32, radii: [f32; 4], half: [f32; 2]) -> f32 {
+    let [cl, cr] = if y > 0.0 { [radii[3], radii[2]] } else { [radii[0], radii[1]] };
+    let dl = (half[1] - cl - y.abs()).min(0.0);
+    let dr = (half[1] - cr - y.abs()).min(0.0);
+    let left = half[0] - cl + (cl * cl - dl * dl).max(0.0).sqrt();
+    let right = half[0] - cr + (cr * cr - dr * dr).max(0.0).sqrt();
     let k = 0.5f32.sqrt() / sigma;
-    (0.5 + 0.5 * erf((x + curved) * k)) - (0.5 + 0.5 * erf((x - curved) * k))
+    (0.5 + 0.5 * erf((x + left) * k)) - (0.5 + 0.5 * erf((x - right) * k))
 }
 
 /// shader.wgsl's `SHADOW_INSIDE`.
 pub(super) use shader_consts::SHADOW_INSIDE;
 
 /// `shadow`.
-fn shadow(p: [f32; 2], half: [f32; 2], sigma: f32, corner: f32) -> f32 {
+fn shadow(p: [f32; 2], half: [f32; 2], sigma: f32, radii: [f32; 4]) -> f32 {
+    let corner = radii[0].max(radii[1]).max(radii[2]).max(radii[3]);
     if p[0].abs() <= half[0] - shader_consts::SHADOW_INSIDE_SIGMA * sigma
         && p[1].abs() <= half[1] - corner - shader_consts::SHADOW_INSIDE_SIGMA * sigma
     {
@@ -176,20 +186,20 @@ fn shadow(p: [f32; 2], half: [f32; 2], sigma: f32, corner: f32) -> f32 {
     let mut y = start + step * 0.5;
     let mut v = 0.0;
     for _ in 0..shader_consts::SHADOW_SAMPLES {
-        v += shadow_x(p[0], p[1] - y, sigma, corner, half) * gaussian(y, sigma) * step;
+        v += shadow_x(p[0], p[1] - y, sigma, radii, half) * gaussian(y, sigma) * step;
         y += step;
     }
     v
 }
 
 /// `shadow` for one row of a `KIND_SHADOW`: what its four y samples take from the row alone
-/// (each sample's curved half width and Gaussian weight), so a pixel costs only its erf pairs.
-/// The arithmetic and its order are `shadow`'s.
+/// (each sample's left and right curved extents and Gaussian weight), so a pixel costs only its
+/// erf pairs. The arithmetic and its order are `shadow`'s.
 pub(super) struct ShadowRow {
     /// The row's centre relative to the shadow's centre.
     y: f32,
     py: f32,
-    samples: [(f32, f32); shader_consts::SHADOW_SAMPLES],
+    samples: [(f32, f32, f32); shader_consts::SHADOW_SAMPLES],
     step: f32,
     half: [f32; 2],
     sigma: f32,
@@ -202,9 +212,13 @@ pub(super) struct ShadowRow {
 
 impl ShadowRow {
     /// What a pixel's sum depends on besides its `x`: rows that share it share every column's.
-    pub(super) fn key(&self) -> [u32; shader_consts::SHADOW_SAMPLES * 2 + 1] {
-        let mut k = [self.step.to_bits(); shader_consts::SHADOW_SAMPLES * 2 + 1];
-        for (n, (c, g)) in self.samples.iter().enumerate() { k[n * 2] = c.to_bits(); k[n * 2 + 1] = g.to_bits(); }
+    pub(super) fn key(&self) -> [u32; shader_consts::SHADOW_SAMPLES * 3 + 1] {
+        let mut k = [self.step.to_bits(); shader_consts::SHADOW_SAMPLES * 3 + 1];
+        for (n, &(l, r, g)) in self.samples.iter().enumerate() {
+            k[n * 3] = l.to_bits();
+            k[n * 3 + 1] = r.to_bits();
+            k[n * 3 + 2] = g.to_bits();
+        }
         k
     }
 
@@ -228,8 +242,8 @@ impl ShadowRow {
     pub(super) fn sum(&self, x: f32) -> f32 {
         if x.abs() <= self.mid.0 { return self.mid.1; }
         let mut v = 0.0;
-        for &(curved, g) in &self.samples {
-            let sx = (0.5 + 0.5 * erf((x + curved) * self.k)) - (0.5 + 0.5 * erf((x - curved) * self.k));
+        for &(left, right, g) in &self.samples {
+            let sx = (0.5 + 0.5 * erf((x + left) * self.k)) - (0.5 + 0.5 * erf((x - right) * self.k));
             v += sx * g * self.step;
         }
         v
@@ -240,7 +254,8 @@ pub(super) fn shadow_row(i: &Instance, py: f32) -> ShadowRow {
     let half = [i.rect[2] * 0.5, i.rect[3] * 0.5];
     let y = py - (i.rect[1] + half[1]);
     let sigma = i.params[2].max(shader_consts::SHADOW_MIN_SIGMA);
-    let corner = i.radii[0].abs().min(half[0].min(half[1]));
+    let radii = shadow_radii(i, half);
+    let corner = radii[0].max(radii[1]).max(radii[2]).max(radii[3]);
     let (lo, hi) = (y - half[1], y + half[1]);
     let start = (-shader_consts::SHADOW_WINDOW_SIGMA * sigma).clamp(lo, hi);
     let end = (shader_consts::SHADOW_WINDOW_SIGMA * sigma).clamp(lo, hi);
@@ -249,15 +264,20 @@ pub(super) fn shadow_row(i: &Instance, py: f32) -> ShadowRow {
     let samples = std::array::from_fn(|_| {
         let at = s;
         s += step;
-        let delta = (half[1] - corner - (y - at).abs()).min(0.0);
-        (half[0] - corner + (corner * corner - delta * delta).max(0.0).sqrt(), gaussian(at, sigma))
+        let ry = y - at;
+        let [cl, cr] = if ry > 0.0 { [radii[3], radii[2]] } else { [radii[0], radii[1]] };
+        let dl = (half[1] - cl - ry.abs()).min(0.0);
+        let dr = (half[1] - cr - ry.abs()).min(0.0);
+        let left = half[0] - cl + (cl * cl - dl * dl).max(0.0).sqrt();
+        let right = half[0] - cr + (cr * cr - dr * dr).max(0.0).sqrt();
+        (left, right, gaussian(at, sigma))
     });
     let k = 0.5f32.sqrt() / sigma;
-    // `erf` is exactly ±1 from 5.5 out; `(x ± curved) * k` must reach it for every sample.
-    let reach = samples.iter().map(|s| s.0).fold(f32::INFINITY, f32::min) - 5.5 / k;
+    // `erf` is exactly ±1 from 5.5 out; `(x + left) * k` and `(x - right) * k` must reach it for every sample.
+    let reach = samples.iter().map(|s| s.0.min(s.1)).fold(f32::INFINITY, f32::min) - 5.5 / k;
     let mut v = 0.0;
-    for &(_, g) in &samples { v += 1.0 * g * step; }
-    // Shrunk by a part in a million, so rounding in `x ± curved` can't land a pixel short of 5.5.
+    for &(_, _, g) in &samples { v += 1.0 * g * step; }
+    // Shrunk by a part in a million, so rounding in `x ± reach` can't land a pixel short of 5.5.
     let mid = (reach - reach.abs() * 1e-6 - 1e-3, v);
     ShadowRow { y, py, samples, step, half, sigma, corner, k, mid }
 }
@@ -448,8 +468,7 @@ pub(super) fn boxes(i: &Instance, kind: Kind, p: [f32; 2]) -> [f32; 4] {
         }
         Kind::Shadow => {
             let sigma = i.params[2].max(shader_consts::SHADOW_MIN_SIGMA);
-            let corner = i.radii[0].abs().min(half[0].min(half[1]));
-            let mut cov = shadow(q, half, sigma, corner);
+            let mut cov = shadow(q, half, sigma, shadow_radii(i, half));
             if i.uv[2] > 0.0 {
                 let hole = [i.uv[2] * 0.5, i.uv[3] * 0.5];
                 let at = [p[0] - (i.rect[0] + i.uv[0] + hole[0]), p[1] - (i.rect[1] + i.uv[1] + hole[1])];
@@ -464,7 +483,8 @@ pub(super) fn boxes(i: &Instance, kind: Kind, p: [f32; 2]) -> [f32; 4] {
             let lit = if i.params[2] < shader_consts::INSET_SHARP_SIGMA {
                 box_cov(qs, ih, i.radii.map(|r| (r.abs() - spread).max(0.0).copysign(r)))
             } else {
-                shadow(qs, ih, i.params[2], (i.radii[0].abs() - spread).min(ih[0].min(ih[1])).max(0.0))
+                let m = ih[0].min(ih[1]);
+                shadow(qs, ih, i.params[2], i.radii.map(|r| (r.abs() - spread).min(m).max(0.0)))
             };
             scale4(i.fill, box_cov(q, half, i.radii) * (1.0 - clamp01(lit)))
         }
@@ -576,3 +596,7 @@ pub(super) fn image(i: &Instance, page: &super::Image<'_>, p: [f32; 2]) -> [f32;
     let bottom = mix4(image_texel(page, [t0[0], t1[1]], pm), image_texel(page, t1, pm), f[0]);
     scale4(mix4(top, bottom, f[1]), i.fill[3] * clamp01(0.5 - d))
 }
+
+#[cfg(test)]
+#[path = "shade_tests.rs"]
+mod tests;
