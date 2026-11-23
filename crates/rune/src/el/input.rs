@@ -16,10 +16,12 @@ pub struct InputSpec {
     pub selection: Color,
     /// One unwrapped line that scrolls sideways to keep the caret visible, like `<input>`.
     pub single_line: bool,
-    /// `placeholder_color`, and `caret` with `selection`, came from [`El::placeholder`] and
-    /// [`El::caret`]; the others follow the window's foreground ([`Cx::foreground`](crate::Cx::foreground)).
+    /// `placeholder_color`, `caret` and `selection` came from [`El::placeholder`], [`El::caret`]
+    /// and [`El::selection_color`]; otherwise they follow the field's text colour ([`El::color`],
+    /// else [`Cx::foreground`](crate::Cx::foreground), else white).
     pub(crate) placeholder_inked: bool,
     pub(crate) caret_inked: bool,
+    pub(crate) selection_inked: bool,
     pub(crate) revealed_override: Option<bool>,
     pub(crate) decorations: Vec<Span>,
     /// [`El::strike`] ranges over `edit.text`, mapped onto the drawn text with the spans.
@@ -84,6 +86,7 @@ pub fn text_input(edit: &TextEdit, style: TextStyle) -> El {
         single_line: false,
         placeholder_inked: false,
         caret_inked: false,
+        selection_inked: false,
         revealed_override: None,
         decorations: Vec::new(),
         decoration_strikes: Vec::new(),

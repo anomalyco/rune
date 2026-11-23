@@ -241,6 +241,7 @@ fn prepare_text(
 
 /// Text, an icon, and a text field's placeholder, caret and selection that weren't given a
 /// colour take the window's foreground ([`Cx::foreground`]), as CSS text takes `color`.
+/// A text field with its own [`El::color`] already derives its uninked defaults from that colour.
 fn take_foreground(
     text: &mut Option<crate::cold::SharedBox<TextSpec>>,
     input: Option<&mut InputSpec>,
@@ -248,18 +249,19 @@ fn take_foreground(
     foreground: Option<Color>,
 ) {
     let Some(fg) = foreground else { return };
+    let text_inked = text.as_ref().is_some_and(|t| t.inked);
     if let Some(t) = text && !t.inked && t.color != fg {
         t.color = fg;
     }
-    if let Some(i) = input {
+    if let Some(i) = input && !text_inked {
         if !i.placeholder_inked {
             i.placeholder_color = fg.alpha(0.4);
         }
         if !i.caret_inked {
             i.caret = fg;
-            if i.selection == crate::el::DEFAULT_SELECTION {
-                i.selection = fg.alpha(0.2);
-            }
+        }
+        if !i.selection_inked {
+            i.selection = fg.alpha(0.2);
         }
     }
     if !vis.icon_inked && vis.icon.is_some_and(|(_, c)| c != fg) && let Some((_, c)) = &mut vis.cold_mut().icon {
