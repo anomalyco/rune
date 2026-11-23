@@ -1,0 +1,1 @@
+- Keyboard input: keys that winit names from their keycode (such as `Space` under Shift+Space on Persian layouts producing ZWNJ `U+200C`, or Option+Space on macOS producing NBSP `U+00A0`) now use the layout's typed text from `text_with_all_modifiers()` instead of always inserting an ASCII space.

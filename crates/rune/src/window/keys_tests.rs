@@ -57,3 +57,88 @@ fn dvorak_paste_uses_the_logical_character_not_the_physical_period() {
     rt.frame(0.0);
     assert_eq!(rt.state.edit.text, "Dictated reply");
 }
+
+#[test]
+fn space_that_types_zwnj_arrives_as_zwnj_and_inserts_into_a_field() {
+    use winit::keyboard::{KeyCode, NamedKey};
+
+    let space = PhysicalKey::Code(KeyCode::Space);
+    for windows in [false, true] {
+        let ev = map_parts(windows, space, &WKey::Named(NamedKey::Space), Some("\u{200c}"), ModifiersState::SHIFT).unwrap();
+        assert_eq!(ev.key, Key::Text("\u{200c}".into()));
+        assert!(ev.mods.shift);
+    }
+
+    let mut rt = Runtime::new(Field::default(), field, (200.0, 40.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let (x, y) = rt.find("reply").unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(0.0);
+    let zwnj = map_parts(cfg!(target_os = "windows"), space, &WKey::Named(NamedKey::Space), Some("\u{200c}"), ModifiersState::SHIFT).unwrap();
+    rt.key(KeyEvent { key: Key::Text("می".into()), mods: Mods::default() });
+    rt.key(zwnj);
+    rt.key(KeyEvent { key: Key::Text("شود".into()), mods: Mods::default() });
+    rt.frame(0.0);
+    assert_eq!(rt.state.edit.text, "می\u{200c}شود");
+}
+
+#[test]
+fn plain_space_named_keys_and_command_chords_keep_their_keys() {
+    use winit::keyboard::{KeyCode, NamedKey};
+
+    let space = PhysicalKey::Code(KeyCode::Space);
+    for text in [Some(" "), None, Some(""), Some("\0")] {
+        let ev = map_parts(false, space, &WKey::Named(NamedKey::Space), text, ModifiersState::empty()).unwrap();
+        assert_eq!(ev.key, Key::Text(" ".into()), "text={text:?}");
+    }
+    for (named, text, expected) in [
+        (NamedKey::Enter, Some("\r"), Key::Enter),
+        (NamedKey::Enter, Some("x"), Key::Enter),
+        (NamedKey::Tab, Some("\t"), Key::Tab),
+        (NamedKey::Backspace, Some("\u{8}"), Key::Backspace),
+    ] {
+        let ev = map_parts(false, PhysicalKey::Code(KeyCode::Enter), &WKey::Named(named), text, ModifiersState::empty()).unwrap();
+        assert_eq!(ev.key, expected);
+    }
+
+    // Super and Ctrl chords on Space stay Space so Cmd+Space / Ctrl+Space match `is_command(' ')`.
+    for mods in [
+        ModifiersState::SUPER,
+        ModifiersState::SUPER | ModifiersState::SHIFT,
+        ModifiersState::CONTROL,
+        ModifiersState::CONTROL | ModifiersState::SHIFT,
+    ] {
+        let ev = map_parts(false, space, &WKey::Named(NamedKey::Space), Some("\u{200c}"), mods).unwrap();
+        assert_eq!(ev.key, Key::Text(" ".into()), "mods={mods:?}");
+    }
+
+    // Option+Space types NBSP on macOS; off macOS Alt+Space stays Space for window menu / chords.
+    let alt_space = map_parts(false, space, &WKey::Named(NamedKey::Space), Some("\u{00a0}"), ModifiersState::ALT).unwrap();
+    let expected_alt_space = if cfg!(target_os = "macos") { "\u{00a0}" } else { " " };
+    assert_eq!(alt_space.key, Key::Text(expected_alt_space.into()));
+
+    // AltGr+Space (Ctrl+Alt) types off macOS; Ctrl+Option+Space is a chord on macOS.
+    let ctrl_alt_space = map_parts(
+        false,
+        space,
+        &WKey::Named(NamedKey::Space),
+        Some("\u{00a0}"),
+        ModifiersState::CONTROL | ModifiersState::ALT,
+    ).unwrap();
+    let expected_ctrl_alt = if cfg!(target_os = "macos") { " " } else { "\u{00a0}" };
+    assert_eq!(ctrl_alt_space.key, Key::Text(expected_ctrl_alt.into()));
+
+    // Alt+letter off macOS stays a chord on its logical key, matching #1471.
+    let alt_d = map_parts(false, PhysicalKey::Code(KeyCode::KeyD), &WKey::Character("d".into()), Some("∂"), ModifiersState::ALT).unwrap();
+    let expected_alt_d = if cfg!(target_os = "macos") { "∂" } else { "d" };
+    assert_eq!(alt_d.key, Key::Text(expected_alt_d.into()));
+
+    // text_with_all_modifiers wins for printable/format text (ZWNJ), while control bytes fall back.
+    assert_eq!(pick_typed_text(Some("\u{200c}"), Some(" ")), Some("\u{200c}"));
+    assert_eq!(pick_typed_text(Some("\x01"), Some("a")), Some("a"));
+    assert_eq!(pick_typed_text(Some("\0"), Some(" ")), Some(" "));
+    assert_eq!(pick_typed_text(Some(""), Some(" ")), Some(" "));
+    assert_eq!(pick_typed_text(None, Some(" ")), Some(" "));
+    assert_eq!(pick_typed_text(None, None), None);
+}
