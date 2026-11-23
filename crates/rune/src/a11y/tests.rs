@@ -633,3 +633,40 @@ fn nested_selectable_control_inside_focusable_group_item_is_not_in_outer_group()
     let (_, inner) = tree.nodes.iter().find(|(_, n)| n.author_id() == Some("inner-opt")).unwrap();
     assert_eq!(inner.is_selected(), None, "control nested inside a focusable item is not a member of the outer focus group");
 }
+
+#[test]
+fn text_input_preserves_combobox_and_spinbutton_roles_with_text_and_range() {
+    struct State { size: TextEdit, place: TextEdit, value: i32 }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        col().size(300.0, 200.0)
+            .child(text_input(&s.size, crate::tok::type_::BODY).key("size").single_line().w(120.0)
+                .on_edit(|s: &mut State| &mut s.size).role("spinbutton").label("Size")
+                .range_value(f64::from(s.value), 1.0, 16.0).range_step(1.0)
+                .on_step(|s: &mut State, d, _| { s.value = (s.value + d).clamp(1, 16); s.size = TextEdit::new(&s.value.to_string()); }))
+            .child(text_input(&s.place, crate::tok::type_::BODY).key("place").single_line().w(200.0)
+                .on_edit(|s: &mut State| &mut s.place).role("combobox").label("Location").expanded(true))
+    }
+    let mut rt = Runtime::new(State { size: TextEdit::new("4"), place: TextEdit::new("/home"), value: 4 }, view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let tree = rt.accessibility_tree();
+    let (_, size) = tree.nodes.iter().find(|(_, n)| n.author_id() == Some("size")).unwrap();
+    let (_, place) = tree.nodes.iter().find(|(_, n)| n.author_id() == Some("place")).unwrap();
+    assert_eq!(size.role(), Role::SpinButton);
+    assert_eq!(place.role(), Role::EditableComboBox);
+    let json = rt.accessibility_json();
+    let size_j = find(&json, "size").unwrap();
+    assert_eq!((size_j["role"].as_str(), size_j["value"].as_str()), (Some("spin-button"), Some("4")));
+    assert_eq!(size_j["range"], serde_json::json!([4.0, 1.0, 16.0, 1.0]));
+    assert!(actions(size_j).contains(&"increment") && actions(size_j).contains(&"set-value"));
+    let place_j = find(&json, "place").unwrap();
+    assert_eq!((place_j["role"].as_str(), place_j["value"].as_str()), (Some("editable-combo-box"), Some("/home")));
+    assert!(states(place_j).contains(&"expanded"));
+    let numeric = request(&rt, "size", Ak::SetValue, Some(ActionData::NumericValue(9.0)));
+    assert!(rt.a11y_action(&numeric), "spinbutton takes numeric SetValue");
+    rt.frame(0.0);
+    assert_eq!((rt.state.value, rt.state.size.text.as_str()), (9, "9"));
+    let text_val = request(&rt, "size", Ak::SetValue, Some(ActionData::Value("12".into())));
+    assert!(rt.a11y_action(&text_val), "spinbutton also takes text SetValue");
+    rt.frame(0.0);
+    assert_eq!(rt.state.size.text, "12");
+}

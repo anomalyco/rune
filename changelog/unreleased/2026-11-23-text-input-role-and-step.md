@@ -1,0 +1,1 @@
+- Accessibility & input: a non-secure `text_input` with `role("combobox")` or `role("spinbutton")` now maps to AccessKit's `EditableComboBox` or `SpinButton` (keeping its text value, range and expanded state, and accepting both text and numeric `SetValue` actions), and `El::on_step` on a text field leaves Left and Right to the caret while Up, Down, Page Up and Page Down step.

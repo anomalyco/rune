@@ -788,12 +788,15 @@ impl RuntimeCore {
         // Past Tab, a Shift-modified key navigates and presses nothing: it goes on to the app.
         // Typed text still type-selects (Shift-A is "A").
         if ev.mods.shift && !matches!(&ev.key, Key::Text(t) if !t.trim().is_empty()) { return false; }
-        // A slider's keys come before its group's arrows.
+        // A slider's keys come before its group's arrows. On a text field (a spin button),
+        // Left and Right stay with the caret.
         if let Some(step) = self.tree.nodes[i].focus.step.clone() {
             // A right-to-left slider runs from its right: Left raises it.
             let rtl = self.tree.nodes[i].flow == crate::el::Flow::Rtl;
+            let field = self.tree.nodes[i].input.is_some();
             let delta = match ev.key {
-                Key::Left => Some(if rtl { 1 } else { -1 }), Key::Right => Some(if rtl { -1 } else { 1 }),
+                Key::Left if !field => Some(if rtl { 1 } else { -1 }),
+                Key::Right if !field => Some(if rtl { -1 } else { 1 }),
                 Key::Down => Some(-1), Key::Up => Some(1),
                 Key::PageDown => Some(-10), Key::PageUp => Some(10),
                 _ => None,

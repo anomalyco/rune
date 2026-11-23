@@ -184,11 +184,12 @@ impl El {
         self.cold_mut().focus.default = true;
         self
     }
-    /// A slider's keyboard, as NSSlider's: while this element is focused, Left and Down call
-    /// `f` with -1, Right and Up with +1, Page Down with -10 and Page Up with +10, repeating
-    /// while held. `f` moves the value by that many of its steps and clamps it. The element
-    /// becomes focusable, and its role `slider` unless it has another. Home and End go to the
-    /// ends with [`El::on_step_limit`].
+    /// A slider's or spin button's keyboard, as NSSlider's: while this element is focused, Left
+    /// and Down call `f` with -1, Right and Up with +1, Page Down with -10 and Page Up with +10,
+    /// repeating while held. On a text field, Left and Right stay with the caret while Up, Down,
+    /// Page Up and Page Down step. `f` moves the value by that many of its steps and clamps it.
+    /// The element becomes focusable, and its role `slider` unless it has another. Home and End
+    /// go to the ends with [`El::on_step_limit`].
     pub fn on_step<S: 'static>(mut self, f: impl Fn(&mut S, i32, &mut Tx) + 'static) -> Self {
         self.cold_mut().focus.step = Some(Rc::new(move |s, delta, tx| f(downcast::<S>(s), delta, tx)));
         self.cold_mut().focus.enabled = true;

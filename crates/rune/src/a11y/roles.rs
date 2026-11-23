@@ -244,6 +244,8 @@ pub(crate) fn map(role: &str, cx: &RoleCtx) -> Option<Role> {
     if cx.input {
         return Some(if cx.secure { Role::PasswordInput }
             else if role == "searchbox" { Role::SearchInput }
+            else if role == "combobox" { Role::EditableComboBox }
+            else if role == "spinbutton" { Role::SpinButton }
             else if cx.multiline { Role::MultilineTextInput } else { Role::TextInput });
     }
     match spec(role).map_or(AkRole::Fallback, |s| s.ak) {
@@ -356,6 +358,7 @@ const fn ak_meta(role: Role) -> AkRoleMeta {
         Role::Heading => D.focus("heading").content_name(),
         Role::TextInput | Role::MultilineTextInput | Role::SearchInput | Role::PasswordInput | Role::Terminal => D.focus("textbox"),
         Role::Slider => D.focus("slider"),
+        Role::SpinButton => D.focus("spinbutton"),
         Role::ComboBox | Role::EditableComboBox => D.focus("combobox"),
         Role::Dialog => D.focus("dialog"),
         Role::AlertDialog => D.focus("alertdialog"),
@@ -438,8 +441,15 @@ mod tests {
         let field = RoleCtx { input: true, ..cx() };
         assert_eq!(map("textbox", &field), Some(Role::TextInput));
         assert_eq!(map("searchbox", &field), Some(Role::SearchInput));
+        assert_eq!(map("combobox", &field), Some(Role::EditableComboBox));
+        assert_eq!(map("spinbutton", &field), Some(Role::SpinButton));
+        assert_eq!(map("combobox", &cx()), Some(Role::ComboBox));
         assert_eq!(map("textbox", &RoleCtx { multiline: true, ..field }), Some(Role::MultilineTextInput));
         assert_eq!(map("textbox", &RoleCtx { secure: true, ..field }), Some(Role::PasswordInput));
+        assert_eq!(map("combobox", &RoleCtx { secure: true, ..field }), Some(Role::PasswordInput));
+        assert_eq!(map("spinbutton", &RoleCtx { secure: true, ..field }), Some(Role::PasswordInput));
+        assert_eq!(focus_role(Role::EditableComboBox), "combobox");
+        assert_eq!(focus_role(Role::SpinButton), "spinbutton");
     }
 
     #[test]
