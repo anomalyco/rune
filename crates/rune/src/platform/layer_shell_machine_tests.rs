@@ -505,3 +505,26 @@ fn configure_wait_bounds_silent_and_chatty_compositors_and_handles_retries() {
     dispatch_err.dispatch_fail = true;
     assert_eq!(wait(&mut dispatch_err, Duration::from_millis(200)), Outcome::Error);
 }
+
+#[test]
+fn fullscreen_placement_uses_exclusive_zone_minus_one_and_others_stay_zero() {
+    use super::exclusive_zone;
+    use crate::overlay::ScreenEdge;
+    use crate::{Align, OverlayPlacement};
+
+    assert_eq!(exclusive_zone(Some(OverlayPlacement::FullScreen)), -1);
+    assert_eq!(exclusive_zone(None), 0);
+    assert_eq!(
+        exclusive_zone(Some(OverlayPlacement::Edge {
+            edge: ScreenEdge::Top,
+            margin: 8.0,
+            align: Align::Center,
+            inset: 0.0,
+        })),
+        0
+    );
+    assert_eq!(
+        exclusive_zone(Some(OverlayPlacement::Rect { x: 10.0, y: 20.0, width: 200.0, height: 100.0 })),
+        0
+    );
+}

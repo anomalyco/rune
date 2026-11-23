@@ -410,6 +410,16 @@ pub(crate) mod configure_wait {
     }
 }
 
+/// The `zwlr_layer_surface_v1.set_exclusive_zone` value for `placement`: `-1` lets a full-screen
+/// overlay cover bars and other surfaces that reserve space; other placements keep `0` so they
+/// neither reserve space nor ignore other surfaces' exclusive zones.
+pub(crate) fn exclusive_zone(placement: Option<crate::OverlayPlacement>) -> i32 {
+    match placement {
+        Some(crate::OverlayPlacement::FullScreen) => -1,
+        Some(crate::OverlayPlacement::Edge { .. } | crate::OverlayPlacement::Rect { .. }) | None => 0,
+    }
+}
+
 #[cfg(test)]
 #[path = "layer_shell_machine_tests.rs"]
 mod tests;

@@ -1,0 +1,1 @@
+- Wayland: `OverlayPlacement::FullScreen` now sets `zwlr_layer_surface_v1` exclusive zone `-1` so full-screen overlays cover bars that reserve space and align with output coordinates; other placements keep exclusive zone `0`.
