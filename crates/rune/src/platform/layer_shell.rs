@@ -23,7 +23,7 @@ use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1:
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1};
 
-use super::layer_shell_machine::{configure_wait, keyboard, readiness, touch};
+use super::layer_shell_machine::{configure_wait, exclusive_zone, keyboard, readiness, touch};
 use crate::el::Align;
 use crate::overlay::{Placement, ScreenEdge};
 use crate::runtime::Waker;
@@ -479,7 +479,6 @@ impl LayerSurface {
         // relative ordering of peers is compositor policy, unlike AppKit's numeric levels.
         let layer = shell.get_layer_surface(&surface, output.as_ref(), Layer::Overlay, namespace.to_owned(), &qh, ());
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-        layer.set_exclusive_zone(0);
         let shapes = globals.bind::<WpCursorShapeManagerV1, _, _>(&qh, 1..=1, ()).ok();
         let state = State { surface: Some(surface.clone()), want_pointer, want_keys, shapes, ..State::default() };
         let mut this = LayerSurface { registry, seat_global, regions: std::cell::RefCell::new(Some(Vec::new())), compositor, output, seat, options: options.clone(), queue, state, layer, surface, display: display.display, watch: None };
@@ -503,6 +502,7 @@ impl LayerSurface {
     }
 
     pub fn place(&mut self, at: Placement) {
+        self.layer.set_exclusive_zone(exclusive_zone(self.options.placement));
         match self.options.placement {
             Some(OverlayPlacement::FullScreen) => {
                 self.layer.set_size(0, 0);
