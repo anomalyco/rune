@@ -260,7 +260,7 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
             // The default procedure would paint the classic frame's background first.
             WM_ERASEBKGND => return 1,
             WM_NCMOUSEMOVE => {
-                let button = caption_button(wparam);
+                let button = own_caption_button(state, hwnd, wparam, lparam);
                 // A press keeps the mouse; a move here means it lost it (WM_CAPTURECHANGED).
                 if !matches!(state.caption.get(), CaptionState::Pressed { .. }) {
                     state.set(hwnd, button.map_or(CaptionState::Idle, CaptionState::Hovered));
@@ -285,7 +285,9 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
                 return 0;
             }
             WM_MOUSEMOVE if matches!(state.caption.get(), CaptionState::Hovered(_)) => state.set(hwnd, CaptionState::Idle),
-            WM_NCLBUTTONDOWN | WM_NCLBUTTONDBLCLK if let Some(button) = caption_button(wparam) => {
+            // Only a press on a button Rune drew: a caption button the system reports anywhere
+            // else is the system's own, and its default procedure handles it.
+            WM_NCLBUTTONDOWN | WM_NCLBUTTONDBLCLK if let Some(button) = own_caption_button(state, hwnd, wparam, lparam) => {
                 state.set(hwnd, CaptionState::Pressed { button, over: true });
                 SetCapture(hwnd);
                 return 0;
@@ -296,10 +298,10 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
             }
             WM_NCLBUTTONUP => {
                 if let CaptionState::Pressed { button, .. } = state.caption.get() {
-                    state.release(hwnd, button, caption_button(wparam) == Some(button));
+                    state.release(hwnd, button, own_caption_button(state, hwnd, wparam, lparam) == Some(button));
                     return 0;
                 }
-                if caption_button(wparam).is_some() { return 0; }
+                if own_caption_button(state, hwnd, wparam, lparam).is_some() { return 0; }
             }
             // Another window took the mouse, or a menu or drag loop cancelled the press.
             WM_CAPTURECHANGED | WM_CANCELMODE if matches!(state.caption.get(), CaptionState::Pressed { .. }) => {
@@ -313,7 +315,7 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
                 if let Some((x, y)) = client_top_right(hwnd) { track_window_menu(hwnd, x, y); }
                 return 0;
             }
-            WM_NCRBUTTONDOWN | WM_NCRBUTTONUP | WM_NCRBUTTONDBLCLK if caption_button(wparam).is_some() => return 0,
+            WM_NCRBUTTONDOWN | WM_NCRBUTTONUP | WM_NCRBUTTONDBLCLK if own_caption_button(state, hwnd, wparam, lparam).is_some() => return 0,
             // The default would repaint a title bar this window doesn't have.
             WM_NCACTIVATE => return DefSubclassProc(hwnd, message, wparam, -1),
             WM_GETMINMAXINFO => {
@@ -420,21 +422,40 @@ fn client_point(lparam: LPARAM) -> POINT {
     POINT { x: lparam as i16 as i32, y: (lparam >> 16) as i16 as i32 }
 }
 
-/// What a point (screen pixels) in the client area hits: the top resize edge, an enabled
-/// caption button, or the client.
-fn hit_test(state: &State, hwnd: HWND, mut point: POINT) -> u32 {
+/// The window's place for a hit test: the point (screen pixels) in client pixels, and what
+/// the test reads of the window.
+struct HitWindow {
+    caption: Caption,
+    width: i32,
+    dpi: u32,
+    edge: i32,
+    zoomed: bool,
+    resizable: bool,
+    point: POINT,
+}
+
+fn hit_window(state: &State, hwnd: HWND, mut point: POINT) -> HitWindow {
     // SAFETY: Win32 calls on a live window this thread owns.
     let (dpi, zoomed, resizable) = unsafe {
         ScreenToClient(hwnd, &mut point);
         let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
         (GetDpiForWindow(hwnd), IsZoomed(hwnd) != 0, style & WS_THICKFRAME != 0)
     };
-    let edge = frame_thickness(dpi);
-    let client_width = client_size(hwnd).0;
-    if !zoomed && resizable && point.y >= 0 && point.y < edge {
-        return if point.x < edge { HTTOPLEFT } else if point.x >= client_width - edge { HTTOPRIGHT } else { HTTOP };
+    HitWindow { caption: state.caption(hwnd), width: client_size(hwnd).0, dpi, edge: frame_thickness(dpi), zoomed, resizable, point }
+}
+
+/// What a point (screen pixels) in the client area hits: the top resize edge, an enabled
+/// caption button, or the client.
+fn hit_test(state: &State, hwnd: HWND, point: POINT) -> u32 {
+    client_hit(&hit_window(state, hwnd, point))
+}
+
+fn client_hit(w: &HitWindow) -> u32 {
+    let p = w.point;
+    if !w.zoomed && w.resizable && p.y >= 0 && p.y < w.edge {
+        return if p.x < w.edge { HTTOPLEFT } else if p.x >= w.width - w.edge { HTTOPRIGHT } else { HTTOP };
     }
-    match caption_hit(state, hwnd, point) {
+    match button_at(&w.caption, w.width, w.dpi, p) {
         Some(CaptionButton::Minimize) => HTMINBUTTON,
         Some(CaptionButton::Maximize) => HTMAXBUTTON,
         Some(CaptionButton::Close) => HTCLOSE,
@@ -442,12 +463,29 @@ fn hit_test(state: &State, hwnd: HWND, mut point: POINT) -> u32 {
     }
 }
 
+/// The drawn button a non-client mouse message (`hit`, at `lparam`'s screen point) is for: only
+/// when `hit_test` would answer that hit there. A caption button the system reports anywhere
+/// else, as over a native caption it draws, is not Rune's.
+fn own_caption_button(state: &State, hwnd: HWND, hit: WPARAM, lparam: LPARAM) -> Option<CaptionButton> {
+    caption_button(hit)?;
+    owned_button(&hit_window(state, hwnd, client_point(lparam)), hit)
+}
+
+fn owned_button(w: &HitWindow, hit: WPARAM) -> Option<CaptionButton> {
+    caption_button(hit).filter(|_| client_hit(w) == hit as u32)
+}
+
+fn button_at(caption: &Caption, width: i32, dpi: u32, point: POINT) -> Option<CaptionButton> {
+    if dpi == 0 { return None; }
+    let scale = dpi as f32 / 96.0;
+    caption.hit(width as f32 / scale, scale, (point.x as f32 / scale, point.y as f32 / scale))
+}
+
 /// The enabled caption button under a point in client pixels.
 fn caption_hit(state: &State, hwnd: HWND, point: POINT) -> Option<CaptionButton> {
     // SAFETY: reads a live window's scale.
-    let scale = unsafe { GetDpiForWindow(hwnd) } as f32 / 96.0;
-    let width = client_size(hwnd).0 as f32 / scale;
-    state.caption(hwnd).hit(width, scale, (point.x as f32 / scale, point.y as f32 / scale))
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    button_at(&state.caption(hwnd), client_size(hwnd).0, dpi, point)
 }
 
 /// The sizing border's thickness: the top resize edge, and how far a maximized window's top
@@ -539,3 +577,7 @@ fn client_size(hwnd: HWND) -> (i32, i32) {
     unsafe { GetClientRect(hwnd, &mut r); }
     (r.right - r.left, r.bottom - r.top)
 }
+
+#[cfg(test)]
+#[path = "frame_tests.rs"]
+mod tests;
