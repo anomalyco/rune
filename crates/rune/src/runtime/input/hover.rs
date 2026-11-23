@@ -145,10 +145,16 @@ impl RuntimeCore {
         }
         let mut inside: Vec<String> = Vec::new();
         let mut entering: Vec<usize> = Vec::new();
-        if let Some((x, y)) = self.pointer.pos {
+        if let Some((x, y)) = self.pointer.pos
+            && let Some(top) = self.top_hit(x, y)
+        {
             for &(id, r) in self.hit.hits() {
                 if let Some((i, n)) = self.tree.node_index.get(&id).map(|&i| (i, &self.tree.nodes[i]))
-                    && n.handlers.get().is_some_and(|h| h.on_hover_change.is_some()) && self.hit_contains(id, r, x, y) && !inside.contains(&n.path)
+                    && self.allowed(i)
+                    && n.handlers.get().is_some_and(|h| h.on_hover_change.is_some())
+                    && self.hit_contains(id, r, x, y)
+                    && self.node_holds(i, top)
+                    && !inside.contains(&n.path)
                 {
                     if !self.pointer.hover_within.contains(&n.path) { entering.push(i); }
                     inside.push(n.path.clone());

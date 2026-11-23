@@ -16,13 +16,17 @@ impl RuntimeCore {
         self.pointer.pos = Some((x, y));
         self.autoscroll_moved(x, y);
         if self.in_viewport(x, y) { self.pointer.set_left(false); }
-        for &(id, rect) in self.hit.hits() {
-            if self.hit_contains(id, rect, x, y)
-                && let Some(&i) = self.tree.node_index.get(&id)
-                && self.tree.nodes[i].handlers.get().is_some_and(|h| h.on_pointer_move.is_some())
-            {
-                let point = self.pointer_event(i, x, y);
-                self.frame.queue.push(Action::PointerMove(self.tree.nodes[i].path.clone(), point));
+        if let Some(top) = self.top_hit(x, y) {
+            for &(id, rect) in self.hit.hits() {
+                if self.hit_contains(id, rect, x, y)
+                    && let Some(&i) = self.tree.node_index.get(&id)
+                    && self.allowed(i)
+                    && self.tree.nodes[i].handlers.get().is_some_and(|h| h.on_pointer_move.is_some())
+                    && self.node_holds(i, top)
+                {
+                    let point = self.pointer_event(i, x, y);
+                    self.frame.queue.push(Action::PointerMove(self.tree.nodes[i].path.clone(), point));
+                }
             }
         }
         self.refresh_hover(x, y);

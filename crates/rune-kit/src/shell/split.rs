@@ -11,9 +11,15 @@ use super::toolbar::{TOOLBAR_HEIGHT, Toolbar};
 use crate::{ControlSize, IconButton, IconButtonVariant, Kit};
 
 type Apply = Box<dyn FnOnce(El) -> El>;
-/// Delayed hover on an element: `(e, enter, leave, peek)` peeks the sidebar once the pointer
-/// rests inside when `peek`, and ends the peek once it stays out otherwise.
-type Hover = Rc<dyn Fn(El, Duration, Duration, bool) -> El>;
+/// Delayed hover on an element: opens a peek on rest, or holds a peek open across its surfaces
+/// (the raised pane, the raised toggle, and the margin strip beside them).
+type Hover = Rc<dyn Fn(El, Duration, Duration, PeekHover) -> El>;
+
+#[derive(Clone, Copy)]
+enum PeekHover {
+    Open(u8),
+    Hold(u8),
+}
 
 /// The resize grip's width, straddling nothing: it sits inside the pane's edge.
 const GRIP: f32 = 6.0;
@@ -287,22 +293,29 @@ impl SplitView {
                 if let (Some(pk), Some(h)) = (peek, &hover)
                     && !open
                 {
-                    b = h(b, pk.toggle_delay, Duration::ZERO, true);
+                    b = if shown {
+                        h(b, Duration::ZERO, pk.grace, PeekHover::Hold(PaneState::PEEK_TOGGLE))
+                    } else {
+                        h(b, pk.toggle_delay, Duration::ZERO, PeekHover::Open(PaneState::PEEK_TOGGLE))
+                    };
                 }
                 if floating {
                     b = b.raise();
                 }
                 overlay = Some(b);
             }
+            let mut pane_hold = None;
             if let (Some(pk), Some(h)) = (peek, &hover) {
                 let instant = Transition::none();
                 if shown {
                     let hold = el().key("sidebar-peek-hold").pin(Some(0.0), Some(0.0), None, Some(0.0)).w(s.width() + pk.margin);
-                    zones.push(h(hold.transition(instant), Duration::ZERO, pk.grace, false));
+                    zones.push(h(hold.transition(instant), Duration::ZERO, pk.grace, PeekHover::Hold(PaneState::PEEK_HOLD)));
+                    let h = h.clone();
+                    pane_hold = Some(Box::new(move |e: El| h(e, Duration::ZERO, pk.grace, PeekHover::Hold(PaneState::PEEK_PANE))) as Apply);
                 } else if !open && !s.is_resizing() {
                     let below = pk.below.unwrap_or(top + TOOLBAR_HEIGHT);
                     let edge = el().key("sidebar-peek-edge").pin(Some(0.0), Some(below), None, Some(0.0)).w(self.frame + pk.edge);
-                    zones.push(h(edge.transition(instant), pk.edge_delay, Duration::ZERO, true));
+                    zones.push(h(edge.transition(instant), pk.edge_delay, Duration::ZERO, PeekHover::Open(0)));
                 }
             }
             // The title bar row clears the traffic lights, and the toggle wherever it floats
@@ -325,7 +338,7 @@ impl SplitView {
             if toggle && t.in_header {
                 band = band.child(el().key("sidebar-spacer").grow(1.0).a11y_hidden()).child(el().key("sidebar-toggle-slot").w(side).ml(8.0).a11y_hidden());
             }
-            let content = Contents { pad: self.padding, slide: peek.is_some(), peek, band: Some(band) };
+            let content = Contents { pad: self.padding, slide: peek.is_some(), peek, band: Some(band), hold: pane_hold };
             dock(&d, "sidebar-pane", p, true, content)
         });
         let toolbar = self
@@ -356,7 +369,7 @@ impl SplitView {
             if let Some(c) = p.clear.take() {
                 clears.push(c);
             }
-            let content = Contents { pad: [0.0; 2], slide: false, peek: None, band: None };
+            let content = Contents { pad: [0.0; 2], slide: false, peek: None, band: None, hold: None };
             below = below.child(dock(&d, "inspector-pane", p, false, content));
         }
         let strip = self.in_panel.then(|| el().key("titlebar-strip").w_full().h(self.frame).window_drag());
@@ -499,11 +512,14 @@ fn pane<S: 'static>(state: PaneState, access: fn(&mut S) -> &mut PaneState, cont
         }) as Apply
     });
     let hover = (sign > 0.0).then(|| {
-        Rc::new(move |e: El, enter: Duration, leave: Duration, peek: bool| {
-            e.hover_delays(enter, leave).on_hover_change(move |s: &mut S, inside, _| match (peek, inside) {
-                (true, true) => access(s).peek(),
-                (false, false) => access(s).end_peek(),
-                _ => {}
+        Rc::new(move |e: El, enter: Duration, leave: Duration, mode: PeekHover| {
+            e.hover_delays(enter, leave).on_hover_change(move |s: &mut S, inside, tx: &mut Tx| match mode {
+                PeekHover::Open(zone) => {
+                    if inside { access(s).peek_from(zone); } else { tx.live_only(); }
+                }
+                PeekHover::Hold(zone) => {
+                    if !access(s).peek_hover(zone, inside) { tx.live_only(); }
+                }
             })
         }) as Hover
     });
@@ -528,6 +544,7 @@ struct Contents {
     slide: bool,
     peek: Option<SidebarPeek>,
     band: Option<El>,
+    hold: Option<Apply>,
 }
 
 /// The pane's slot: its width springs between 0 and the pane's width while the content keeps
@@ -593,6 +610,9 @@ fn dock(d: &Dock, key: &str, p: Pane, leading: bool, content: Contents) -> El {
     }
     if floating {
         body = body.raise();
+    }
+    if let Some(hold) = content.hold {
+        body = hold(body);
     }
     let body = body
         .children(content.band)

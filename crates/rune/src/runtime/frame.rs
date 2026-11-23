@@ -100,7 +100,16 @@ impl RuntimeCore {
         // is the earliest part of the step.
         let target = self.clock + elapsed;
         if self.wall_start.is_none() && self.timer_step(target).is_some() {
-            let input = std::mem::take(&mut self.frame.queue);
+            // Immediate hover changes were already emitted by the pointer move that scheduled
+            // any hover-delay timer, so deliver them before a later leave deadline fires.
+            let mut input = Vec::new();
+            for q in std::mem::take(&mut self.frame.queue) {
+                if matches!(q.action, Action::HoverChange(..)) {
+                    self.frame.queue.push_queued(q);
+                } else {
+                    input.push(q);
+                }
+            }
             let mut catch_up = catch_up;
             while let Some(at) = self.timer_step(target) {
                 let step = at - self.clock;
