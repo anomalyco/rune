@@ -101,7 +101,10 @@ pub(crate) fn remove_all() {
 
 impl Tray {
     pub fn new(spec: TraySpec, on_event: impl Fn(TrayEvent) + Send + Sync + 'static) -> Result<Self, TrayError> {
-        if spec.icon.rgba.len() != spec.icon.width as usize * spec.icon.height as usize * 4 {
+        let expected = usize::try_from(spec.icon.width).ok()
+            .and_then(|w| usize::try_from(spec.icon.height).ok()?.checked_mul(w))
+            .and_then(|pixels| pixels.checked_mul(4));
+        if expected != Some(spec.icon.rgba.len()) {
             return Err(TrayError::Backend("tray icon size doesn't match its pixels".into()));
         }
         #[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "windows"))]
@@ -306,6 +309,14 @@ mod tests {
     fn a_short_icon_is_refused() {
         let spec = TraySpec::new("t", "T", TrayIcon::rgba(2, 2, vec![0; 3]));
         assert!(matches!(Tray::new(spec, |_| {}), Err(TrayError::Backend(_))));
+    }
+
+    #[test]
+    fn overflowing_icon_dimensions_are_refused() {
+        for (width, height) in [(1u32 << 31, 1u32 << 31), (u32::MAX, u32::MAX), (u32::MAX, 2)] {
+            let spec = TraySpec::new("t", "T", TrayIcon::rgba(width, height, Vec::new()));
+            assert!(matches!(Tray::new(spec, |_| {}), Err(TrayError::Backend(_))));
+        }
     }
 
     #[test]
