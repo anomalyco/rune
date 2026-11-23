@@ -44,9 +44,19 @@ pub(crate) const SYMBOL_FONT_FILES: &[&str] = &["sfnsttf", "sfnsitalic", "apples
 #[cfg(windows)]
 pub(crate) const SYMBOL_FAMILIES: &[&str] = &["Segoe UI Emoji"];
 // DejaVu Sans lacks ⎋ (U+238B), which DejaVu Sans Mono has; `dejavusans` loads both files.
+// Current Noto releases name Symbols 2 with a space ("Noto Sans Symbols 2"), while older packages
+// used "Noto Sans Symbols2"; list both so either matches fontique's family lookup.
+#[cfg_attr(any(target_vendor = "apple", windows), allow(dead_code))]
+pub(crate) const LINUX_SYMBOL_FAMILIES: &[&str] = &[
+    "DejaVu Sans",
+    "Noto Sans Symbols 2",
+    "Noto Sans Symbols2",
+    "Noto Sans Symbols",
+    "DejaVu Sans Mono",
+    "Noto Color Emoji",
+];
 #[cfg(not(any(target_vendor = "apple", windows)))]
-pub(crate) const SYMBOL_FAMILIES: &[&str] =
-    &["DejaVu Sans", "Noto Sans Symbols2", "Noto Sans Symbols", "DejaVu Sans Mono", "Noto Color Emoji"];
+pub(crate) const SYMBOL_FAMILIES: &[&str] = LINUX_SYMBOL_FAMILIES;
 #[cfg(not(any(target_vendor = "apple", windows)))]
 pub(crate) const SYMBOL_FONT_FILES: &[&str] = &["dejavusans", "notosanssymbols", "notocoloremoji"];
 
@@ -112,6 +122,11 @@ pub(crate) fn family_list<'a>(list: &'a str, system_mono: &'a [String], sans: &'
 /// The installed families among `names`, loading the system font files matching `files`.
 pub(crate) fn load_families(collection: &mut Collection, files: &[&str], names: &[&'static str]) -> Vec<&'static str> {
     collection.load_fonts_from_paths(installed_files(names, files));
+    present_families(collection, names)
+}
+
+/// The families from `names` present in `collection`, in order.
+pub(crate) fn present_families(collection: &mut Collection, names: &[&'static str]) -> Vec<&'static str> {
     names.iter().copied().filter(|name| collection.family_id(name).is_some()).collect()
 }
 
