@@ -26,6 +26,10 @@ pub(super) struct Inbox {
     pub frames: VecDeque<Decoded>,
     /// The generation whose last picture is in the queue: the clip ended there.
     pub ended: Option<u32>,
+    /// Pictures dropped before they reached the surface (an earlier seek's, late ones, ones the
+    /// layer showed): Rune never draws them, so no draw releases their textures. The decoder
+    /// frees those itself (`Decoder::reclaim`).
+    pub unread: Vec<Decoded>,
     /// The window shows the clip on its own layer at this size (device pixels): while the clock
     /// runs, the decoder presents each picture there itself (`layer`). None: the UI draws them.
     pub layer: Option<(u32, u32)>,
@@ -70,16 +74,17 @@ pub(super) enum Pick {
 
 impl Inbox {
     /// Drops the pictures of seeks before `generation`, then takes the one `pick` asks for.
+    /// What it drops goes to `unread`.
     pub(super) fn take(&mut self, generation: u32, pick: Pick) -> Option<Decoded> {
         while self.frames.front().is_some_and(|f| f.generation != generation) {
-            self.frames.pop_front();
+            self.unread.extend(self.frames.pop_front());
         }
         match pick {
             Pick::First => self.frames.pop_front(),
             Pick::Due(pos) => {
                 let mut newest = None;
                 while self.frames.front().is_some_and(|f| f.pts <= pos) {
-                    newest = self.frames.pop_front();
+                    self.unread.extend(newest.replace(self.frames.pop_front()?));
                 }
                 newest
             }
@@ -92,9 +97,10 @@ impl Inbox {
         self.frames.back().filter(|f| f.generation == generation).map(|f| f.pts)
     }
 
-    /// A seek lands: its pictures replace the queue's, and the end is ahead again.
+    /// A seek lands: its pictures replace the queue's, which go to `unread`, and the end is
+    /// ahead again.
     pub(super) fn flush(&mut self) {
-        self.frames.clear();
+        self.unread.extend(self.frames.drain(..));
         self.ended = None;
     }
 
@@ -105,11 +111,11 @@ impl Inbox {
         was_empty
     }
 
-    /// Keeps only the newest picture and returns the others: the layer showed them, so the
+    /// Keeps only the newest picture; the others go to `unread`: the layer showed them, so the
     /// window never takes them.
-    pub(super) fn keep_newest(&mut self) -> Vec<Decoded> {
+    pub(super) fn keep_newest(&mut self) {
         let older = self.frames.len().saturating_sub(1);
-        self.frames.drain(..older).collect()
+        self.unread.extend(self.frames.drain(..older));
     }
 }
 

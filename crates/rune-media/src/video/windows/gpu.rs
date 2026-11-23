@@ -134,6 +134,16 @@ impl Device {
     }
 }
 
+/// A slot's `value` once its picture is known never to reach Rune (`Ring::unread`), or before
+/// it has held one.
+pub(super) const UNREAD: u64 = 0;
+
+/// Whether a slot can take a new picture: only the ring holds its last one (`holders`), and
+/// Rune's draw of that one or of a later one is done (`released`), or none will ever come.
+pub(super) fn writable(holders: usize, value: u64, released: u64) -> bool {
+    holders == 1 && (value == UNREAD || released >= value)
+}
+
 /// One texture of the ring.
 struct Slot {
     texture: ID3D11Texture2D,
@@ -198,7 +208,7 @@ impl Ring {
     fn reusable(&self) -> Option<usize> {
         // SAFETY: a plain read of the fence's value.
         let released = unsafe { self.fences.release.GetCompletedValue() };
-        self.slots.iter().position(|s| Arc::strong_count(&s.planes) == 1 && (s.value == 0 || released >= s.value))
+        self.slots.iter().position(|s| writable(Arc::strong_count(&s.planes), s.value, released))
     }
 
     /// A free slot, made when every made one is busy and the ring isn't full: a clip that shows
@@ -215,11 +225,12 @@ impl Ring {
         Ok(Some(self.slots.len() - 1))
     }
 
-    /// A picture that never reached Rune (its layer showed it instead): its slot is free once the
-    /// last reference goes, with no read of Rune's to wait for.
-    pub(super) fn unread(&mut self, planes: &Arc<DecodedPlanes>) {
-        if let Some(slot) = self.slots.iter_mut().find(|s| Arc::ptr_eq(&s.planes, planes)) {
-            slot.value = 0;
+    /// The picture written as `value` never reached Rune (dropped as an earlier seek's or as
+    /// late, or its layer showed it instead): its slot is free once the last reference goes, with
+    /// no read of Rune's to wait for.
+    pub(super) fn unread(&mut self, planes: &Arc<DecodedPlanes>, value: u64) {
+        if let Some(slot) = self.slots.iter_mut().find(|s| Arc::ptr_eq(&s.planes, planes) && s.value == value) {
+            slot.value = UNREAD;
         }
     }
 
@@ -286,6 +297,9 @@ fn slot(device: &Device, fences: &Arc<VideoFences>, w: u32, h: u32) -> Result<Sl
             fences: fences.clone(),
             device: device.d3d12.as_raw() as usize,
         });
-        Ok(Slot { texture, planes, value: 0 })
+        Ok(Slot { texture, planes, value: UNREAD })
     }
 }
+
+#[cfg(test)]
+mod tests;

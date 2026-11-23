@@ -304,6 +304,7 @@ impl Decoder {
                         o.set_gain(gain);
                     }
                     self.follow_layer(&mut s);
+                    self.reclaim(&mut s);
                     // Rune's GPU came after the clip opened on the CPU: it opens again on the GPU,
                     // at its picture, as for a replaced device.
                     if self.awaiting_gpu && crate::native_surface::windows::presenting_device().is_some() {
@@ -360,24 +361,15 @@ impl Decoder {
                         let layered = blitted.is_some_and(|clock| self.present_when_due(pipe, job, clock, pts, generation));
                         let mut s = pipe.lock();
                         let was_empty = s.push(Decoded { generation, pts, picture });
-                        let mut unread = Vec::new();
                         if layered {
                             // The window takes no pictures while its layer shows them: only the
                             // newest stays, for when it draws the clip itself again, and the
-                            // others' textures are free at once (Rune never read them). Presenting
-                            // counts as being drawn, so the decoder doesn't park.
-                            unread = s.keep_newest();
+                            // others' textures are freed before the next picture (`reclaim`).
+                            // Presenting counts as being drawn, so the decoder doesn't park.
+                            s.keep_newest();
                             s.touched = Some(rune_core::time::now());
                         }
                         drop(s);
-                        if let Some(ring) = &mut self.ring {
-                            for old in &unread {
-                                if let Pic::Gpu(planes, _) = &old.picture {
-                                    ring.unread(planes);
-                                }
-                            }
-                        }
-                        drop(unread);
                         if first {
                             rune_core::marks::mark("video.first_frame");
                             rune_core::marks::note("video.decoder", if self.facts.hardware { "hardware" } else { "software" });
@@ -416,6 +408,18 @@ impl Decoder {
                     }
                     (job.notify)();
                 }
+            }
+        }
+    }
+
+    /// Frees the textures of pictures dropped before they reached the surface. Rune never draws
+    /// them, so no draw signals their release: left alone, they'd hold their textures until a
+    /// later picture is drawn, and when none can be (a burst of seeks drops every picture as an
+    /// earlier seek's), the ring runs out and the last seek's picture is never decoded.
+    fn reclaim(&mut self, s: &mut Inbox) {
+        for dropped in s.unread.drain(..) {
+            if let (Some(ring), Pic::Gpu(planes, value)) = (&mut self.ring, &dropped.picture) {
+                ring.unread(planes, *value);
             }
         }
     }

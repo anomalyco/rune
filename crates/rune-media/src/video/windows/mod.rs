@@ -415,12 +415,19 @@ impl Native {
             Phase::Playing { clock } => Pick::Due(clock.position(target)),
             _ => Pick::Hold,
         };
-        let picked = pipe.lock().take(generation, pick);
+        let (picked, dropped) = {
+            let mut inbox = pipe.lock();
+            let picked = inbox.take(generation, pick);
+            (picked, !inbox.unread.is_empty())
+        };
+        // Room in the queue, or textures to free: the decoder goes on.
+        if picked.is_some() || dropped {
+            pipe.poke();
+        }
         let Some(frame) = picked else {
             self.check_end(shared, c, &pipe, generation, target);
             return;
         };
-        pipe.poke();
         let pts = frame.pts;
         self.put(c, surface, frame);
         if let Phase::Buffering { .. } = self.phase {
