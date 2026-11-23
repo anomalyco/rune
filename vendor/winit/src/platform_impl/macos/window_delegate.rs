@@ -778,6 +778,15 @@ impl WindowDelegate {
         // obscure the real focused events on the startup.
         delegate.queue_event(WindowEvent::Focused(false));
 
+        // A window that opens maximized is zoomed before it is ordered front: `zoom:` animates
+        // a window on screen and returns only when the animation is over (about 260,000 µs),
+        // with the window on screen at its restored size meanwhile. A full screen window keeps
+        // its zoom for `window_did_exit_fullscreen`, as before.
+        let maximize_first = attrs.maximized && attrs.fullscreen.is_none();
+        if maximize_first {
+            delegate.set_maximized(true);
+        }
+
         // Set fullscreen mode after we setup everything
         delegate.set_fullscreen(attrs.fullscreen.map(Into::into));
 
@@ -793,7 +802,7 @@ impl WindowDelegate {
             }
         }
 
-        if attrs.maximized {
+        if attrs.maximized && !maximize_first {
             delegate.set_maximized(attrs.maximized);
         }
 
