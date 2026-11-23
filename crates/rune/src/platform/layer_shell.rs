@@ -23,11 +23,15 @@ use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1:
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1};
 
-use super::layer_shell_machine::{configure_wait, exclusive_zone, keyboard, readiness, repeat, touch, watch_loop};
+use super::layer_shell_machine::{configure_wait, connection, exclusive_zone, keyboard, readiness, repeat, touch, watch_loop};
 use crate::el::Align;
 use crate::overlay::{Placement, ScreenEdge};
 use crate::runtime::Waker;
 use crate::{OverlayInput, OverlayOptions, OverlayPlacement};
+
+mod dead;
+pub(crate) use dead::display_error;
+use dead::{classify_turn_error, format_wayland_error};
 
 pub(crate) enum Input {
     Move(f32, f32), Leave, Button(bool), Secondary(bool), Focus(bool), Key(crate::KeyEvent), KeyRepeat(crate::KeyEvent), KeyUp(crate::KeyEvent),
@@ -458,16 +462,45 @@ impl Watch {
         let turns = Arc::new((Mutex::new(0u64), Condvar::new()));
         let (stopped, seen) = (stop.clone(), turns.clone());
         std::thread::Builder::new().name("rune-layer-watch".into()).spawn(move || {
-            while !stopped.load(Ordering::Relaxed) {
+            while !stopped.load(Ordering::Acquire) {
                 let mut poll = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
                 // SAFETY: one pollfd for a display socket. winit's outlives the event loop; an
                 // XWayland surface drops its watch before closing its connection, so at worst a
                 // reused descriptor wakes the loop once more before this thread stops.
-                if unsafe { libc::poll(&mut poll, 1, 250) } <= 0 { continue; }
-                let (count, turned) = &*seen;
-                let before = *count.lock().unwrap();
-                wake();
-                turned.wait_timeout_while(count.lock().unwrap(), Duration::from_millis(100), |n| *n == before).ok();
+                let ret = unsafe { libc::poll(&mut poll, 1, 250) };
+                let result = if ret < 0 {
+                    if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                        connection::WatchPoll::Interrupted
+                    } else {
+                        connection::WatchPoll::Error
+                    }
+                } else if ret == 0 {
+                    connection::WatchPoll::TimedOut
+                } else {
+                    connection::WatchPoll::Ready {
+                        readable: poll.revents & libc::POLLIN != 0,
+                        hangup_or_error: poll.revents & (libc::POLLHUP | libc::POLLERR) != 0,
+                        invalid: poll.revents & libc::POLLNVAL != 0,
+                    }
+                };
+                match connection::watch_action(result) {
+                    connection::WatchAction::Continue => {}
+                    connection::WatchAction::Stop => break,
+                    connection::WatchAction::WakeAndStop => {
+                        if !stopped.load(Ordering::Acquire) { wake(); }
+                        break;
+                    }
+                    connection::WatchAction::Wake => {
+                        let (count, turned) = &*seen;
+                        let before = *count.lock().unwrap_or_else(|e| e.into_inner());
+                        wake();
+                        turned.wait_timeout_while(
+                            count.lock().unwrap_or_else(|e| e.into_inner()),
+                            Duration::from_millis(100),
+                            |n| *n == before && !stopped.load(Ordering::Acquire),
+                        ).ok();
+                    }
+                }
             }
         }).ok();
         Watch { stop, turns }
@@ -475,14 +508,20 @@ impl Watch {
 
     pub(crate) fn turned(&self) {
         let (count, turned) = &*self.turns;
-        *count.lock().unwrap() += 1;
+        *count.lock().unwrap_or_else(|e| e.into_inner()) += 1;
         turned.notify_all();
     }
 }
 
 impl Drop for Watch {
-    /// The thread notices within one poll timeout; joining would stall hiding.
-    fn drop(&mut self) { self.stop.store(true, Ordering::Relaxed); }
+    /// The thread notices immediately when parked, or within one poll timeout; joining would
+    /// stall hiding.
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        let (count, turned) = &*self.turns;
+        let _guard = count.lock().unwrap_or_else(|e| e.into_inner());
+        turned.notify_all();
+    }
 }
 
 /// Non-blocking fd that wakes `WaylandWatch`'s `poll(2)` on drop: one `eventfd` on Linux, or a
@@ -673,6 +712,8 @@ pub(crate) struct Changes {
 }
 
 pub(crate) struct LayerSurface {
+    namespace: String,
+    conn: Connection,
     registry: WlRegistry,
     seat_global: Option<(u32, u32)>,
     regions: std::cell::RefCell<Option<Vec<[i32; 4]>>>,
@@ -689,6 +730,7 @@ pub(crate) struct LayerSurface {
 }
 
 struct ConfigureDriver<'a> {
+    conn: &'a Connection,
     queue: &'a mut EventQueue<State>,
     state: &'a mut State,
 }
@@ -700,7 +742,10 @@ impl configure_wait::Driver for ConfigureDriver<'_> {
 
     fn now(&mut self) -> crate::time::Instant { crate::time::now() }
 
-    fn dispatch_pending(&mut self) -> bool { self.queue.dispatch_pending(self.state).is_ok() }
+    fn dispatch_pending(&mut self) -> bool {
+        self.queue.dispatch_pending(self.state).is_ok()
+            && self.conn.backend().last_error().is_none()
+    }
 
     fn flush(&mut self) -> configure_wait::Flush {
         match self.queue.flush() {
@@ -741,8 +786,8 @@ impl configure_wait::Driver for ConfigureDriver<'_> {
     }
 }
 
-fn wait_for_configure(queue: &mut EventQueue<State>, state: &mut State, timeout: Duration) -> configure_wait::Outcome {
-    configure_wait::wait(&mut ConfigureDriver { queue, state }, timeout)
+fn wait_for_configure(conn: &Connection, queue: &mut EventQueue<State>, state: &mut State, timeout: Duration) -> configure_wait::Outcome {
+    configure_wait::wait(&mut ConfigureDriver { conn, queue, state }, timeout)
 }
 
 impl LayerSurface {
@@ -755,7 +800,15 @@ impl LayerSurface {
         // every overlay; a foreign backend never closes it.
         let backend = unsafe { Backend::from_foreign_display(display.display.as_ptr().cast()) };
         let conn = Connection::from_backend(backend);
-        let (globals, queue) = registry_queue_init::<State>(&conn).ok()?;
+        let (globals, queue) = match registry_queue_init::<State>(&conn) {
+            Ok(pair) => pair,
+            Err(_) => {
+                if let Some(reason) = conn.backend().last_error().and_then(|e| format_wayland_error(&e)) {
+                    eprintln!("rune: Wayland layer surface '{namespace}' failed: the display connection failed: {reason}");
+                }
+                return None;
+            }
+        };
         let qh = queue.handle();
         let compositor: WlCompositor = globals.bind(&qh, 1..=6, ()).ok()?;
         let shell: ZwlrLayerShellV1 = globals.bind(&qh, 1..=4, ()).ok()?;
@@ -779,19 +832,24 @@ impl LayerSurface {
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         let shapes = globals.bind::<WpCursorShapeManagerV1, _, _>(&qh, 1..=1, ()).ok();
         let state = State { surface: Some(surface.clone()), want_pointer, want_keys, shapes, ..State::default() };
-        let mut this = LayerSurface { registry, seat_global, regions: std::cell::RefCell::new(Some(Vec::new())), compositor, output, seat, options: options.clone(), queue, state, layer, surface, display: display.display, watch: None };
+        let mut this = LayerSurface { namespace: namespace.to_owned(), conn, registry, seat_global, regions: std::cell::RefCell::new(Some(Vec::new())), compositor, output, seat, options: options.clone(), queue, state, layer, surface, display: display.display, watch: None };
         this.place(at);
         this.surface.commit();
-        match wait_for_configure(&mut this.queue, &mut this.state, configure_wait::TIMEOUT) {
+        match wait_for_configure(&this.conn, &mut this.queue, &mut this.state, configure_wait::TIMEOUT) {
             configure_wait::Outcome::Done => {}
             configure_wait::Outcome::TimedOut => {
                 eprintln!("rune: Wayland layer surface '{namespace}' timed out waiting for initial configure");
                 return None;
             }
-            configure_wait::Outcome::Error => return None,
+            configure_wait::Outcome::Error => {
+                if let Some(reason) = this.conn.backend().last_error().and_then(|e| format_wayland_error(&e)) {
+                    eprintln!("rune: Wayland layer surface '{namespace}' failed: the display connection failed: {reason}");
+                }
+                return None;
+            }
         }
         if this.state.readiness.closed() { return None; }
-        this.watch = wake.and_then(|wake| WaylandWatch::spawn(conn, wake));
+        this.watch = wake.and_then(|wake| WaylandWatch::spawn(this.conn.clone(), wake));
         Some(this)
     }
 
@@ -896,13 +954,13 @@ impl LayerSurface {
             (_, None) => return,
         }
         self.state.over = Over::Inside { serial, cursor: Some(want) };
-        self.queue.flush().ok();
+        self.flush_checked();
     }
 
     /// Commit role state (placement) without a new buffer; wgpu's present commits buffers.
     pub fn commit(&mut self) {
         self.surface.commit();
-        self.queue.flush().ok();
+        self.flush_checked();
     }
 
     pub fn set_buffer_scale(&mut self, scale: i32) {
@@ -921,7 +979,7 @@ impl LayerSurface {
     pub fn dispatch(&mut self) -> Changes {
         let armed = self.state.repeat.attempt();
         self.turn();
-        if let Some(attempt) = armed {
+        if !self.state.readiness.closed() && let Some(attempt) = armed {
             self.state.fire_repeat(attempt, crate::time::now());
         }
         Changes {
@@ -945,9 +1003,43 @@ impl LayerSurface {
     }
 
     fn turn(&mut self) {
-        self.queue.dispatch_pending(&mut self.state).ok();
-        self.queue.flush().ok();
-        if let Some(watch) = &self.watch { watch.turned(); }
+        let was_closed = self.state.readiness.closed();
+        if was_closed {
+            self.watch = None;
+            return;
+        }
+        let dispatch_err = self.queue.dispatch_pending(&mut self.state).err();
+        let flush_err = self.queue.flush().err();
+        let last_err = self.conn.backend().last_error();
+        let (kind, reason) = classify_turn_error(dispatch_err, flush_err, last_err);
+        match connection::turn_action(was_closed, kind, self.state.readiness.closed()) {
+            connection::TurnAction::Continue => if let Some(watch) = &self.watch { watch.turned(); },
+            connection::TurnAction::StopClosed | connection::TurnAction::AlreadyClosed => self.watch = None,
+            connection::TurnAction::FailAndClose => self.fail_connection(reason),
+        }
+    }
+
+    fn flush_checked(&mut self) {
+        if self.state.readiness.closed() { return; }
+        let flush_err = self.queue.flush().err();
+        let (kind, reason) = classify_turn_error(None, flush_err, self.conn.backend().last_error());
+        if kind.is_some_and(connection::is_fatal) {
+            self.fail_connection(reason);
+        }
+    }
+
+    fn fail_connection(&mut self, reason: Option<String>) {
+        let was_closed = self.state.readiness.closed();
+        readiness::step(&mut self.state.readiness, readiness::Event::Closed);
+        self.state.step_repeat(repeat::Event::Stop);
+        self.state.input.clear();
+        self.watch = None;
+        if !was_closed {
+            match reason {
+                Some(reason) => eprintln!("rune: Wayland layer surface '{}' closed: the display connection failed: {reason}", self.namespace),
+                None => eprintln!("rune: Wayland layer surface '{}' closed: the display connection failed", self.namespace),
+            }
+        }
     }
 
     pub fn raw_handles(&self) -> (RawDisplayHandle, RawWindowHandle) {

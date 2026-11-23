@@ -172,6 +172,9 @@ struct Windows {
     hosts: Vec<Option<Box<dyn AnyHost>>>,
     // Weak pool preserves release_gpu_when_closed when the last GPU owner closes.
     gpu: Rc<RefCell<Weak<Gpu>>>,
+    /// Fatal Wayland display error captured while `ActiveEventLoop` is still alive.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    display_error: Option<String>,
 }
 impl Windows {
     /// Starts the windows `crate::open_window` asked for this turn, in fresh slots, each like
@@ -395,6 +398,12 @@ impl ApplicationHandler<WakeEvent> for Windows {
     fn exiting(&mut self, event_loop: &ActiveEventLoop) {
         let _handling = crate::quit::handling();
         crate::marks::mark("loop.exiting");
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if self.display_error.is_none()
+            && let Ok(display) = winit::raw_window_handle::HasDisplayHandle::display_handle(event_loop)
+        {
+            self.display_error = crate::platform::layer_shell::display_error(display.as_raw());
+        }
         // Every quit ends here, so the windows still open run `App::on_quit` first, unless the
         // quit's hooks already ran (a Windows logoff, the last window closing).
         self.quit(event_loop, false, true);

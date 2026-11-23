@@ -1,0 +1,1 @@
+- Wayland: layer-shell overlays now stop cleanly without spinning when the display connection dies, log the connection failure once, and `try_run*` / `run*` report the Wayland protocol or socket error instead of winit's opaque `Exit Failure`.
