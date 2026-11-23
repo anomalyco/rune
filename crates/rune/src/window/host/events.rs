@@ -382,10 +382,18 @@ impl Host {
                 if let Some(shadow) = &l.native.shadow { shadow.redraw(); }
                 let scale = scale_factor as f32;
                 let size = l.window.inner_size();
-                // Still the old scale's size: Windows resizes the window after this event.
+                // Still the old scale's size for a normal window: Windows resizes it after this
+                // event. A maximised or full-screen window is not resized by winit and already
+                // carries the new monitor's size from the preceding `Resized`.
                 #[cfg(target_os = "windows")]
                 let size = {
-                    let (width, height) = crate::window::frame::rescaled((size.width, size.height), f64::from(app.rt().window_scale()), scale_factor);
+                    let (width, height) = crate::window::frame::scale_change_size(
+                        (size.width, size.height),
+                        f64::from(app.rt().window_scale()),
+                        scale_factor,
+                        l.window.is_maximized(),
+                        l.window.fullscreen().is_some(),
+                    );
                     winit::dpi::PhysicalSize::new(width, height)
                 };
                 if size.width > 0 && size.height > 0 {
