@@ -585,7 +585,8 @@ fn static_ok(n: &Node) -> bool {
         && n.vis.backdrop_blur <= 0.0 && n.vis.effect.is_none() && n.vis.pixels.is_none()
         && n.sticky.is_none() && n.above.is_none() && n.matched.is_none()
         && n.static_scale == 1.0 && !n.scale_track && n.vis.mark == 0
-        && n.text.as_ref().is_none_or(|t| t.cold.links.is_empty() && t.cold.live.is_none() && t.cold.advance_in.is_none())
+        && n.text.as_ref().is_none_or(|t| t.cold.links.is_empty() && t.cold.live.is_none() && t.cold.advance_in.is_none()
+            && !t.cold.pills.iter().any(|p| p.bare.as_ref().is_some_and(|b| b.image.is_some())))
 }
 
 /// What the runtime holds for a node besides it: selection, marks, reveals, loops, scales
