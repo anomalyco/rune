@@ -12,6 +12,8 @@ pub mod linux;
 mod place_tests;
 #[cfg(target_os = "macos")]
 pub mod macos;
+#[cfg(target_os = "windows")]
+mod dxbc;
 mod pipeline;
 #[cfg(target_os = "windows")]
 pub mod windows;

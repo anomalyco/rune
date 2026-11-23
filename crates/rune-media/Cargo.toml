@@ -52,6 +52,9 @@ opuscule = { version = "0.2.2", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 wgpu = { workspace = true, features = ["dx12"] }
+# The video pass's precompiled DX12 bytecode (`native_surface::dxbc`): the WGSL's hash, and the driver's answer.
+blake3 = { workspace = true }
+pollster = { workspace = true }
 # D3D12 shared textures (`native_surface::windows`), Media Foundation, D3D11 and WASAPI (`video::windows`):
 # COM interfaces only; their DLLs load on the first clip through `GetProcAddress`, so the import table gains nothing.
 windows = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Media_Audio", "Win32_Media_MediaFoundation", "Win32_Security", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_System_Variant", "Win32_UI_Shell_PropertiesSystem"] }
