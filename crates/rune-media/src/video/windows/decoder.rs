@@ -498,7 +498,7 @@ impl Decoder {
     fn follow_layer(&mut self, s: &mut Inbox) {
         let Some(size) = s.layer.filter(|_| !s.layer_refused) else {
             if s.layer.is_none() && self.layer.take().is_some() {
-                s.layer_handle = None;
+                s.layer_surface = None;
                 s.layer_shown = None;
             }
             return;
@@ -506,7 +506,7 @@ impl Decoder {
         let made = match &mut self.layer {
             Some(layer) => layer.resize(size),
             None => self.make_layer(size).map(|layer| {
-                s.layer_handle = Some(layer.handle());
+                s.layer_surface = Some(layer.surface());
                 self.layer = Some(layer);
             }),
         };
@@ -515,7 +515,7 @@ impl Decoder {
                 log!("no layer for the clip: {e}; the window draws its pictures");
             }
             s.layer_refused = true;
-            s.layer_handle = None;
+            s.layer_surface = None;
             s.layer_shown = None;
             self.layer = None;
         }

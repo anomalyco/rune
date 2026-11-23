@@ -3,6 +3,7 @@
 //! decoded, the end). The picture queue's steps are methods here, apart from Media Foundation
 //! and D3D, so they can be driven with plain data.
 
+use super::LayerSurface;
 use super::decoder::Facts;
 use crate::native_surface::ByteFrame;
 use crate::native_surface::windows::DecodedPlanes;
@@ -33,8 +34,8 @@ pub(super) struct Inbox {
     /// The window shows the clip on its own layer at this size (device pixels): while the clock
     /// runs, the decoder presents each picture there itself (`layer`). None: the UI draws them.
     pub layer: Option<(u32, u32)>,
-    /// The layer's DirectComposition surface handle, once made, for the window's visual.
-    pub layer_handle: Option<usize>,
+    /// The layer's id and DirectComposition surface handle, once made, for the window's visual.
+    pub layer_surface: Option<LayerSurface>,
     /// The size of the last picture presented on the layer, and the generation it belongs to.
     pub layer_shown: Option<((u32, u32), u32)>,
     /// The clip can't have a layer (a rotated clip, software pictures, no video processor): the
