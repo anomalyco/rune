@@ -659,6 +659,81 @@ pub(crate) mod repeat {
     }
 }
 
+/// Wayland layer-shell watch loop, kept cross-platform so its queue-draining, read-guard
+/// cancellation, wake gating and hangup/stop paths run tests on every host without a compositor.
+pub(crate) mod watch_loop {
+    /// Result of polling the Wayland display socket alongside the watch's stop signal.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Poll {
+        /// The watch was asked to stop.
+        Stop,
+        /// The display socket is readable or reported hangup/error; read events now.
+        Readable,
+        /// Interrupted by a signal (`EINTR`); cancel the prepared read and retry.
+        Interrupted,
+        /// Fatal poll error (`POLLNVAL` or unexpected `poll` failure).
+        Error,
+    }
+
+    /// Result of reading the Wayland socket or draining the backend's inner queue.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Dispatch {
+        /// Moved `usize` events into this surface's `EventQueue` (`0` means nothing for us).
+        Events(usize),
+        /// The socket read would block (`EAGAIN`/`EWOULDBLOCK`); retry from `prepare_read`.
+        WouldBlock,
+        /// The Wayland connection failed or hung up; exit the watch loop.
+        Error,
+    }
+
+    /// Platform operations needed by [`run`].
+    pub(crate) trait Driver {
+        /// Guard representing a prepared libwayland read. Dropping it without calling
+        /// [`Self::read`] cancels the read intent (`wl_display_cancel_read`).
+        type Guard;
+        /// Whether the watch has been stopped.
+        fn stopped(&self) -> bool;
+        /// Prepares a synchronized read on the layer's queue, or returns `None` when another
+        /// reader (winit or the GPU) already left events in that queue.
+        fn prepare_read(&mut self) -> Option<Self::Guard>;
+        /// Moves events waiting in libwayland's queue for this backend into the `EventQueue` and
+        /// returns how many arrived.
+        fn dispatch_inner_queue(&mut self) -> Dispatch;
+        /// Polls the display socket and stop signal without a timeout until one is ready.
+        fn poll(&mut self, guard: &Self::Guard) -> Poll;
+        /// Consumes the prepared-read guard to read the socket and dispatch this backend's queue.
+        fn read(&mut self, guard: Self::Guard) -> Dispatch;
+        /// Wakes the event loop and waits (holding no read guard) until the overlay turns, the
+        /// watch is stopped, or a short safety timeout passes.
+        fn wake_and_wait(&mut self);
+    }
+
+    /// Runs the Wayland reader watch until stopped or the connection fails.
+    pub(crate) fn run<D: Driver>(driver: &mut D) {
+        while !driver.stopped() {
+            let outcome = match driver.prepare_read() {
+                None => driver.dispatch_inner_queue(),
+                Some(guard) => match driver.poll(&guard) {
+                    Poll::Stop | Poll::Error => {
+                        drop(guard);
+                        break;
+                    }
+                    Poll::Interrupted => {
+                        drop(guard);
+                        continue;
+                    }
+                    Poll::Readable => driver.read(guard),
+                },
+            };
+            match outcome {
+                Dispatch::Events(0) | Dispatch::WouldBlock => {}
+                Dispatch::Events(_) => driver.wake_and_wait(),
+                Dispatch::Error => break,
+            }
+        }
+    }
+}
+
 /// The `zwlr_layer_surface_v1.set_exclusive_zone` value for `placement`: `-1` lets a full-screen
 /// overlay cover bars and other surfaces that reserve space; other placements keep `0` so they
 /// neither reserve space nor ignore other surfaces' exclusive zones.
