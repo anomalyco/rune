@@ -77,7 +77,7 @@ use surface::LaunchDrawables;
 use surface::{SurfaceRetries, composing};
 
 /// Records a presented frame and wakes Windows' deferred ICU word segmenter on the first one.
-pub(super) fn frame_presented() {
+pub(crate) fn frame_presented() {
     if crate::marks::presented() {
         #[cfg(all(target_os = "windows", not(feature = "segmenter-dictionaries")))]
         crate::platform::win32::segmenter::first_frame_presented();

@@ -366,6 +366,7 @@ impl FrameHost for OverlayFrame<'_> {
         // The next frame waits for the room this one took (`slot`).
         #[cfg(target_os = "windows")]
         live.slot.presented_surface(&live.surface);
+        frame::record_presented(self.prewarm);
         crate::render::gpu_events::presented();
         crate::time::now()
     }
