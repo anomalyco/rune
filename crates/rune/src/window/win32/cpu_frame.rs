@@ -28,7 +28,7 @@ use crate::window::host::stepping::FrameMove;
 use crate::window::state::FirstFrame;
 use crate::window::surface::{
     Backoff, BackoffEvent, FRAME_LATENCY, HiddenPace, LoopFrame, Native, Presented, Redraw,
-    SurfaceRetries, TIMER_FRAME, TimerFrame, Win, native, win,
+    SurfaceRetries, TIMER_FRAME, TimerFrame, Win, drawable_size, max_surface_dim, native, win,
 };
 use crate::window::{WakeEvent, sync_screen_origin_core};
 
@@ -158,7 +158,7 @@ impl Host {
             chrome::open_as(&window, open_as);
         }
         let phys = window.inner_size();
-        let size = (phys.width.max(1), phys.height.max(1));
+        let size = drawable_size(None, (phys.width, phys.height), max_surface_dim(None));
         let display = window.current_monitor().map_or((0, 0), |m| (m.size().width, m.size().height));
         let Some((prefault, capacity, painter)) = self.cpu_side(size, display) else { return Err("no memory for the window's frame buffer".into()) };
         let half = HalfRounding::of_vendor(crate::gpu::pick::display_vendor().unwrap_or(0));
@@ -222,7 +222,7 @@ impl Host {
             let rt = self.app.rt_mut();
             if size.width > 0 && size.height > 0 {
                 w.resize_surface(None, size);
-                rt.set_viewport((size.width as f32 / scale, size.height as f32 / scale), scale);
+                rt.set_viewport((w.config.width as f32 / scale, w.config.height as f32 / scale), scale);
             }
             sync_chrome_core(rt, w, self.chrome, self.titlebar);
             sync_screen_origin_core(rt, &w.window);

@@ -800,3 +800,39 @@ fn a_square_window_never_fades_its_corners() {
         assert_eq!(pixel[3], 255, "pixel {i} faded with no radius");
     }
 }
+
+/// Windows can transiently report a negative client height wrapped to `u16` (e.g. `65527` for `-9`
+/// in `WM_SIZE`) or `u32` (from `GetClientRect`). A resize exceeding `max_texture_dimension_2d` or
+/// with a zero edge keeps the previous drawable size until a valid size arrives, and initial
+/// surface creation clamps each edge to `1..=max_dim`.
+#[test]
+fn a_drawable_never_takes_a_size_exceeding_the_texture_limit() {
+    use super::surface::{CPU_MAX_SURFACE_DIM, drawable_size, max_surface_dim};
+
+    let limit = 16_384;
+    let prev = Some((1156, 777));
+
+    // Normal resizes up to the device limit pass through unchanged.
+    assert_eq!(drawable_size(prev, (1172, 777), limit), (1172, 777));
+    assert_eq!(drawable_size(prev, (limit, limit), limit), (limit, limit));
+
+    // Wrapped negative extents and zero dimensions keep the previous valid drawable.
+    assert_eq!(drawable_size(prev, (1156, 65527), limit), (1156, 777));
+    assert_eq!(drawable_size(prev, (1156, u32::MAX - 8), limit), (1156, 777));
+    assert_eq!(drawable_size(prev, (65527, 777), limit), (1156, 777));
+    assert_eq!(drawable_size(prev, (limit + 1, 777), limit), (1156, 777));
+    assert_eq!(drawable_size(prev, (1156, 0), limit), (1156, 777));
+    assert_eq!(drawable_size(prev, (0, 0), limit), (1156, 777));
+
+    // Reattaching on a device with a smaller limit clamps the fallback previous size too.
+    assert_eq!(drawable_size(Some((10_000, 600)), (1156, 65527), 8192), (8192, 600));
+
+    // Initial surface creation has no previous size: clamp into 1..=max_dim.
+    assert_eq!(drawable_size(None, (1156, 65527), limit), (1156, limit));
+    assert_eq!(drawable_size(None, (0, 0), limit), (1, 1));
+    assert_eq!(drawable_size(None, (829, 550), limit), (829, 550));
+
+    // Without a GPU attached yet (Windows CPU boot), the fallback cap still rejects wrapped u16.
+    assert_eq!(max_surface_dim(None), CPU_MAX_SURFACE_DIM);
+    assert_eq!(drawable_size(prev, (1156, 65527), max_surface_dim(None)), (1156, 777));
+}

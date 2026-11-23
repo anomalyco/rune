@@ -130,11 +130,12 @@ impl Win {
         if effect == RedrawEffect::Request { self.window.request_redraw(); }
     }
 
-    /// Matches the drawable to the window's size; false when it already did. A surface that
-    /// refuses the new size is marked so its next frame replaces it (`Host::reattach`) rather
-    /// than drawing into a surface wgpu has no presentation for.
+    /// Matches the drawable to the window's size; false when it already did or when the reported
+    /// size is zero or exceeds the texture limit (keeping the previous drawable until a valid size
+    /// arrives). A surface that refuses the new size is marked so its next frame replaces it
+    /// (`Host::reattach`) rather than drawing into a surface wgpu has no presentation for.
     pub(in crate::window) fn resize_surface(&mut self, gpu: Option<&Gpu>, size: winit::dpi::PhysicalSize<u32>) -> bool {
-        let (width, height) = (size.width.max(1), size.height.max(1));
+        let (width, height) = super::drawable_size(Some((self.config.width, self.config.height)), (size.width, size.height), super::max_surface_dim(gpu));
         if (self.config.width, self.config.height) == (width, height) { return false; }
         self.config.width = width;
         self.config.height = height;

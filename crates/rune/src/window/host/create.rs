@@ -25,7 +25,8 @@ use crate::window::surface::native;
 use crate::window::surface::win;
 use crate::window::surface::{
     Backoff, BackoffEvent, HiddenPace, LoopFrame, Native, Redraw, SurfaceRetries, SurfaceStep,
-    SURFACE_TRIES, TimerFrame, Win, configure, rebuild_renderer_core, surface_config,
+    SURFACE_TRIES, TimerFrame, Win, configure, drawable_size, max_surface_dim,
+    rebuild_renderer_core, surface_config,
 };
 #[cfg(target_os = "windows")]
 use crate::window::win32::{covered_draw::CoveredDraw, cpu_frame, handover};
@@ -175,10 +176,11 @@ impl Host {
                 (Some(gpu), surface)
             }
         };
-        let adapter = &gpu.as_ref().or(self.gpu.as_ref().map(|g| &g.0)).unwrap().adapter;
+        let active_gpu = gpu.as_ref().or(self.gpu.as_ref().map(|g| &g.0)).unwrap();
         let phys = window.inner_size();
+        let initial = drawable_size(None, (phys.width, phys.height), max_surface_dim(Some(active_gpu)));
         let srgb_blend = self.app.rt().srgb_blend();
-        let (mut config, translucent) = surface_config(&surface, adapter, (phys.width, phys.height), srgb_blend)
+        let (mut config, translucent) = surface_config(&surface, &active_gpu.adapter, initial, srgb_blend)
             .ok_or("the GPU adapter can't present to this window")?;
         #[cfg(target_os = "macos")]
         let launch_drawables = LaunchDrawables::cap(&mut config);
@@ -227,7 +229,7 @@ impl Host {
         {
             let rt = self.app.rt_mut();
             rt.set_system_dark(crate::platform::preferences::window_dark(&window, self.args.theme.as_deref()));
-            rt.set_viewport((phys.width as f32 / scale, phys.height as f32 / scale), scale);
+            rt.set_viewport((config.width as f32 / scale, config.height as f32 / scale), scale);
             if (self.shown || launcher) && !built {
                 // Reopening paints the settled state in the first frame (guarantee 8).
                 rt.settle_all();
@@ -316,7 +318,7 @@ impl Host {
             let scale = w.window.scale_factor() as f32;
             if size.width > 0 && size.height > 0 {
                 w.resize_surface(Some(&**gpu), size);
-                self.app.rt_mut().set_viewport((size.width as f32 / scale, size.height as f32 / scale), scale);
+                self.app.rt_mut().set_viewport((w.config.width as f32 / scale, w.config.height as f32 / scale), scale);
             }
             sync_chrome_core(self.app.rt_mut(), w, self.chrome, self.titlebar);
             sync_screen_origin_core(self.app.rt_mut(), &w.window);
@@ -416,8 +418,10 @@ impl Host {
         })?;
         let gpu = Arc::new(gpu);
         let size = window.inner_size();
+        let prev = self.win.as_ref().map(|w| (w.config.width, w.config.height));
+        let size = drawable_size(prev, (size.width, size.height), max_surface_dim(Some(&gpu)));
         let srgb_blend = self.app.rt().srgb_blend();
-        let (mut config, translucent) = surface_config(&surface, &gpu.adapter, (size.width, size.height), srgb_blend)
+        let (mut config, translucent) = surface_config(&surface, &gpu.adapter, size, srgb_blend)
             .ok_or("the GPU adapter can't present to this window")?;
         let client_frame = self.client_frame(&window);
         if transparent || client_frame {
