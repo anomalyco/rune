@@ -29,3 +29,40 @@ fn drag_subclass_changes_only_the_selected_instance() {
         assert_eq!(ffi::object_getClass(selected_ptr), scoped);
     }
 }
+
+#[test]
+#[allow(unsafe_code)]
+fn kvo_observed_drag_regions_in_both_orders() {
+    use objc2::class;
+    use objc2::rc::Retained;
+    use objc2_foundation::NSObject;
+    // Dedicated base class so parallel test threads do not race on registering RuneDragRegions_NSObject.
+    let test_class = ClassBuilder::new(c"RuneDragRegionsKvoTest", class!(NSObject)).unwrap().register();
+    let key = NSString::from_str("probe");
+    let observer = NSObject::new();
+
+    // Order 1: Rune subclasses first, then KVO observes and removes the observer.
+    // SAFETY: `test_class` is a registered `NSObject` subclass; KVO selectors match Foundation.
+    unsafe {
+        let below: Retained<AnyObject> = msg_send![test_class, new];
+        scope_drag_regions(&below);
+        let _: () = msg_send![&*below, addObserver: &*observer, forKeyPath: &*key, options: 0usize, context: std::ptr::null_mut::<std::ffi::c_void>()];
+        assert!(below.class().name().to_bytes().starts_with(b"NSKVONotifying_"));
+        assert!(has_subclass(&below, b"RuneDragRegions_"), "native_titlebar_band still finds RuneDragRegions_ beneath KVO");
+        scope_drag_regions(&below);
+        assert!(below.class().name().to_bytes().starts_with(b"NSKVONotifying_"));
+        let _: () = msg_send![&*below, removeObserver: &*observer, forKeyPath: &*key];
+    }
+
+    // Order 2: KVO observes first, then Rune runs, then KVO removes the observer.
+    // SAFETY: `test_class` is a registered `NSObject` subclass; KVO selectors match Foundation.
+    unsafe {
+        let above: Retained<AnyObject> = msg_send![test_class, new];
+        let _: () = msg_send![&*above, addObserver: &*observer, forKeyPath: &*key, options: 0usize, context: std::ptr::null_mut::<std::ffi::c_void>()];
+        let kvo_class = above.class();
+        assert!(kvo_class.name().to_bytes().starts_with(b"NSKVONotifying_"));
+        scope_drag_regions(&above);
+        assert!(std::ptr::eq(above.class(), kvo_class));
+        let _: () = msg_send![&*above, removeObserver: &*observer, forKeyPath: &*key];
+    }
+}

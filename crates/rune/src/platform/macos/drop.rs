@@ -18,6 +18,7 @@ use objc2::{class, msg_send, sel};
 use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSView};
 use objc2_foundation::{NSArray, NSDictionary, NSError, NSPoint, NSString, NSURL};
 
+use crate::platform::macos::{has_subclass, kvo_observed};
 use crate::window::FileStep;
 
 struct Dest {
@@ -100,6 +101,37 @@ impl Item {
     }
 }
 
+/// Installs the `RuneDrops_` subclass on `view` unless already present. Returns `false` when
+/// `view` is already observed with KVO so Rune never places a subclass above KVO's.
+unsafe fn subclass_view(view: &AnyObject) -> bool {
+    if has_subclass(view, b"RuneDrops_") {
+        return true;
+    }
+    // SAFETY: caller guarantees `view` is a live ObjC object on the main thread.
+    if unsafe { kvo_observed(view) } {
+        return false;
+    }
+    let base = view.class();
+    let Ok(name) = std::ffi::CString::new(format!("RuneDrops_{}", base.name().to_string_lossy())) else { return false };
+    let class = match ClassBuilder::new(&name, base) {
+        Some(mut b) => {
+            // SAFETY: each signature matches NSDraggingDestination's methods on NSView.
+            unsafe {
+                b.add_method(sel!(draggingEntered:), entered as unsafe extern "C" fn(_, _, _) -> _);
+                b.add_method(sel!(draggingUpdated:), updated as unsafe extern "C" fn(_, _, _) -> _);
+                b.add_method(sel!(draggingExited:), exited as unsafe extern "C" fn(_, _, _));
+                b.add_method(sel!(prepareForDragOperation:), prepare as unsafe extern "C" fn(_, _, _) -> _);
+                b.add_method(sel!(performDragOperation:), perform as unsafe extern "C" fn(_, _, _) -> _);
+            }
+            b.register()
+        }
+        None => match AnyClass::get(&name) { Some(c) => c, None => return false },
+    };
+    // SAFETY: only this instance's class changes, to a subclass without ivars.
+    unsafe { AnyObject::set_class(view, class) };
+    true
+}
+
 /// The content view of `window` takes drags of files, file promises and image data. The
 /// returned guard removes the view's entry from `DESTS` when the window goes.
 pub(crate) fn install(window: &winit::window::Window) -> Option<DropTarget> {
@@ -107,22 +139,8 @@ pub(crate) fn install(window: &winit::window::Window) -> Option<DropTarget> {
     let key = Retained::as_ptr(&view) as usize;
     // SAFETY: main thread (windows are created there), on winit's live content view.
     unsafe {
-        let base = view.class();
-        if !base.name().to_string_lossy().contains("RuneDrops_") {
-            let Ok(name) = std::ffi::CString::new(format!("RuneDrops_{}", base.name().to_string_lossy())) else { return None };
-            let class = match ClassBuilder::new(&name, base) {
-                Some(mut b) => {
-                    b.add_method(sel!(draggingEntered:), entered as unsafe extern "C" fn(_, _, _) -> _);
-                    b.add_method(sel!(draggingUpdated:), updated as unsafe extern "C" fn(_, _, _) -> _);
-                    b.add_method(sel!(draggingExited:), exited as unsafe extern "C" fn(_, _, _));
-                    b.add_method(sel!(prepareForDragOperation:), prepare as unsafe extern "C" fn(_, _, _) -> _);
-                    b.add_method(sel!(performDragOperation:), perform as unsafe extern "C" fn(_, _, _) -> _);
-                    b.register()
-                }
-                None => match AnyClass::get(&name) { Some(c) => c, None => return None },
-            };
-            // Only this instance's class changes, to a subclass without ivars.
-            AnyObject::set_class(&view, class);
+        if !subclass_view(&view) {
+            return None;
         }
         view.registerForDraggedTypes(&NSArray::from_retained_slice(&registered_types()));
     }
