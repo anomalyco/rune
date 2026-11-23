@@ -1,0 +1,1 @@
+- Web accessibility: `El::a11y_value` (including `rune_kit::Select`'s chosen option) is now exported in the web accessibility mirror and focus proxy (`aria-valuetext` on range roles, element text content alongside `aria-label` on `combobox`), so screen readers hear both the control's name and selected value.

@@ -155,7 +155,7 @@ pub(crate) const ROLES: &[RoleSpec] = &[
     RoleSpec::role("radiogroup", Role::RadioGroup).aria_container(),
     RoleSpec::role("progressbar", Role::ProgressIndicator),
     RoleSpec::role("note", Role::Note),
-    RoleSpec::role("combobox", Role::ComboBox).warn_nameless().pointer(),
+    RoleSpec::role("combobox", Role::ComboBox).warn_nameless().web_control().pointer(),
     RoleSpec::role("gridcell", Role::GridCell),
     RoleSpec::role("code", Role::Code),
     RoleSpec::role("columnheader", Role::ColumnHeader).aria_container(),
@@ -536,6 +536,7 @@ mod tests {
         assert_eq!(container_aria("table"), Some("table"));
         assert_eq!(container_aria("main"), None);
         assert_eq!(web_control_role("option"), Some("option"));
+        assert_eq!(web_control_role("combobox"), Some("combobox"));
         assert_eq!(web_control_role("button"), None);
         assert_eq!(default_live("status"), Some(LiveRegion::Polite));
         assert_eq!(default_live("log"), Some(LiveRegion::Polite));

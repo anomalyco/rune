@@ -826,3 +826,83 @@ fn named_progressbar_mirrors_role_range_and_value_text() {
     assert_eq!((&usage2["k"], &usage2["o"], &usage2["t"], usage2.get("rg"), usage2.get("vt")),
         (&json!("progressbar"), &json!("progressbar"), &json!("5 hours plan usage"), None, None));
 }
+
+#[test]
+fn combobox_and_a11y_value_project_to_web_mirror_and_focus_proxy() {
+    struct State {
+        value: Option<String>,
+        open: bool,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let mut preset = crate::row().key("preset").role("combobox").label("Message content preset")
+            .expanded(s.open).focusable(true).size(140.0, 28.0)
+            .child(crate::text(s.value.as_deref().unwrap_or("Choose")).a11y_hidden());
+        if let Some(v) = &s.value {
+            preset = preset.a11y_value(v.clone());
+        }
+        crate::col().w_full().gap(4.0)
+            .child(preset)
+            .child(crate::row().key("empty-combo").role("combobox").label("Empty preset")
+                .expanded(false).focusable(true).size(140.0, 28.0))
+            .child(crate::row().key("slider").role("slider").label("Volume")
+                .range_value(0.5, 0.0, 1.0).a11y_value("50%").focusable(true).size(120.0, 20.0))
+            .child(crate::row().key("secret-ctrl").role("combobox").label("Secret")
+                .a11y_value("top-secret").secure().focusable(true).size(120.0, 24.0))
+            .child(crate::col().key("secret-box").secure()
+                .child(crate::row().key("boxed-ctrl").role("combobox").label("Boxed")
+                    .a11y_value("boxed-secret").focusable(true).size(120.0, 24.0)))
+    }
+
+    let mut rt = Runtime::new(State { value: Some("Balanced".into()), open: false }, view, (400.0, 300.0), Env::default());
+    rt.frame(0.0);
+    let mut mirror = A11yMirror::default();
+
+    let parse_items = |json: &str| -> Vec<serde_json::Value> { serde_json::from_str(json).unwrap() };
+    let items = parse_items(rt.web_a11y(&mut mirror).expect("initial mirror"));
+    let preset = items.iter().find(|it| it["t"] == "Message content preset").expect("combobox mirrored");
+    assert_eq!(preset.get("o"), Some(&json!("combobox")));
+    assert_eq!(preset.get("x"), Some(&json!(false)));
+    assert_eq!(preset.get("v"), Some(&json!("Balanced")));
+    let empty_combo = items.iter().find(|it| it["t"] == "Empty preset").expect("empty combobox mirrored");
+    assert_eq!(empty_combo.get("o"), Some(&json!("combobox")));
+    assert_eq!(empty_combo.get("v"), None);
+
+    let focus = |rt: &mut Runtime<State>, mirror: &mut A11yMirror, key: &str| -> serde_json::Value {
+        let key = key.to_owned();
+        rt.update(move |_, tx| tx.focus(key, true));
+        rt.frame(0.0);
+        serde_json::from_str(rt.core().web_a11y_focus(mirror).expect("focus proxy update")).unwrap()
+    };
+
+    let f_preset = focus(&mut rt, &mut mirror, "preset");
+    assert_eq!(f_preset.get("o"), Some(&json!("combobox")));
+    assert_eq!(f_preset.get("t"), Some(&json!("Message content preset")));
+    assert_eq!(f_preset.get("x"), Some(&json!(false)));
+    assert_eq!(f_preset.get("v"), Some(&json!("Balanced")));
+
+    // Updating the selected value while focus remains on the combobox refreshes both focus proxy and mirror.
+    rt.update(|s, _| s.value = Some("Everything".into()));
+    rt.frame(0.0);
+    let f_updated: serde_json::Value = serde_json::from_str(
+        rt.core().web_a11y_focus(&mut mirror).expect("focus proxy updates when value changes"),
+    ).unwrap();
+    assert_eq!(f_updated.get("v"), Some(&json!("Everything")));
+    let after = parse_items(rt.web_a11y(&mut mirror).expect("mirror updates when value changes"));
+    assert_eq!(after.iter().find(|it| it["t"] == "Message content preset").unwrap().get("v"), Some(&json!("Everything")));
+
+    // Range controls also forward a11y_value to the focus proxy.
+    let f_slider = focus(&mut rt, &mut mirror, "slider");
+    assert_eq!((f_slider.get("o"), f_slider.get("v")), (Some(&json!("slider")), Some(&json!("50%"))));
+
+    // Empty value is omitted.
+    let f_empty = focus(&mut rt, &mut mirror, "empty-combo");
+    assert_eq!((f_empty.get("o"), f_empty.get("v")), (Some(&json!("combobox")), None));
+
+    // Secure controls and descendants of secure containers never leak a11y_value.
+    for key in ["secret-ctrl", "boxed-ctrl"] {
+        let f_sec = focus(&mut rt, &mut mirror, key);
+        assert_eq!(f_sec.get("v"), None, "secure {key} must omit value");
+        let raw = f_sec.to_string();
+        assert!(!raw.contains("top-secret") && !raw.contains("boxed-secret"), "leaked secret: {raw}");
+    }
+}

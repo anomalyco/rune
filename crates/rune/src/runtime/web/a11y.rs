@@ -59,6 +59,8 @@ pub(crate) struct A11yItem {
     /// What describes it beyond its name (`El::description`, `El::described_by`'s words):
     /// `aria-description`.
     pub description: String,
+    /// A control's explicit value (`El::a11y_value`): a combobox's selected option or range text.
+    pub value: String,
     /// A control's states: `aria-pressed` on a toggle button, `aria-selected`, `aria-checked`,
     /// and its place in its set (`El::position_in_set`) on a control role (`role`).
     pub pressed: Option<&'static str>,
@@ -96,7 +98,7 @@ pub(crate) struct A11yRun {
 impl A11yItem {
     fn new(kind: &'static str, path: &str, rect: [f32; 4]) -> Self {
         A11yItem { kind, path: path.to_owned(), rect, font_size: 0.0, level: None, expanded: None, text: String::new(),
-            runs: Vec::new(), tag: None, role: None, parent: None, id: None, href: None, font: None, selectable: false, description: String::new(), pressed: None, selected: None, checked: None, set: None,
+            runs: Vec::new(), tag: None, role: None, parent: None, id: None, href: None, font: None, selectable: false, description: String::new(), value: String::new(), pressed: None, selected: None, checked: None, set: None,
             live: None, range: None, value_text: String::new() }
     }
 
@@ -110,6 +112,7 @@ impl A11yItem {
         if let Some(x) = self.expanded { obj.insert("x".into(), json!(x)); }
         if !self.text.is_empty() { obj.insert("t".into(), json!(self.text)); }
         if !self.description.is_empty() { obj.insert("d".into(), json!(self.description)); }
+        if !self.value.is_empty() { obj.insert("v".into(), json!(self.value)); }
         if let Some(pr) = self.pressed { obj.insert("pr".into(), json!(pr)); }
         if let Some(s) = self.selected { obj.insert("se".into(), json!(s)); }
         if let Some(c) = self.checked { obj.insert("c".into(), json!(c)); }
@@ -525,7 +528,7 @@ impl RuntimeCore {
                 continue;
             }
             let button_like = raw_href.is_none()
-                && (n.role == "button" || n.handlers.on_press.is_some())
+                && (n.role == "button" || n.role == "combobox" || n.handlers.on_press.is_some())
                 && n.window_drag != crate::el::WindowDrag::Drag;
             // Only collapse a pressable container into one button when it doesn't wrap an entire
             // multi-block section with independent buttons inside, unless it has an explicit
@@ -534,11 +537,13 @@ impl RuntimeCore {
             let control_role = roles::web_control_role(n.role);
             if button_like && (!nested_press || control_role.is_some()) && rect[2] > 0.0 && rect[3] > 0.0 {
                 let label = self.mirror_name(i).unwrap_or_else(|| self.descendant_label(i, end));
-                if !label.is_empty() {
+                let value = self.mirror_value(i).unwrap_or_default().to_owned();
+                if !label.is_empty() || !value.is_empty() {
                     let mut item = A11yItem::new("button", &n.path, rect);
                     item.expanded = n.a11y.expanded;
                     item.text = label;
                     item.description = self.mirror_description(i);
+                    item.value = value;
                     if let Some(role) = control_role {
                         item.role = Some(role);
                         if self.a11y_role(i).is_some_and(roles::selectable_item) { item.selected = Some(n.focus.selected); }
@@ -681,6 +686,15 @@ impl RuntimeCore {
             .unwrap_or_default()
     }
 
+    /// Node `i`'s explicit value (`El::a11y_value`) for the web mirror and focus proxy, omitted
+    /// for secure nodes (or descendants of secure containers) and empty values.
+    fn mirror_value(&self, i: usize) -> Option<&str> {
+        if std::iter::successors(Some(i), |&j| self.tree.nodes[j].parent).any(|j| self.tree.nodes[j].is_secure()) {
+            return None;
+        }
+        self.tree.nodes[i].a11y.more.as_ref().and_then(|m| m.value.as_deref()).filter(|s| !s.is_empty())
+    }
+
     /// The page's horizontal scroll viewports: their paths and how far each is scrolled right.
     /// The browser's mirror holds the containers, so the DOM keeps an offset Rune scrolls too.
     pub(crate) fn page_scroll_x(&self) -> Vec<(String, f32)> {
@@ -770,6 +784,7 @@ impl RuntimeCore {
         if let Some(open) = n.a11y.expanded { o.insert("x".into(), json!(open)); }
         if let Some((pos, size)) = n.a11y.more.as_ref().and_then(|m| m.set) { o.insert("n".into(), json!([pos, size])); }
         if let Some(level) = n.a11y.level { o.insert("l".into(), json!(level)); }
+        if let Some(value) = self.mirror_value(i) { o.insert("v".into(), json!(value)); }
         Value::Object(o)
     }
 
