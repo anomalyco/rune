@@ -113,7 +113,7 @@ impl RuntimeCore {
         self.pointer.autoscroll_cancel();
         self.cancel_drag();
         self.drop_drag_out_request();
-        self.edit.input_click.clear();
+        self.edit.clear_input_click();
         self.drop_press();
         self.pointer.clear_secondary();
         self.pointer.clear_tint();
@@ -279,7 +279,7 @@ impl RuntimeCore {
         self.pointer.hover_paused = true;
         let target = self.primary_target(x, y);
         if target.and_then(|t| self.textbox_input(t)).is_none() {
-            self.edit.input_click.clear();
+            self.edit.clear_input_click();
         }
         if let Some(i) = self.active_modal()
             && target.is_none_or(|t| !self.allowed(t))

@@ -400,7 +400,7 @@ impl RuntimeCore {
         self.set_focus_entry(app, path, keyboard, false, false)
     }
     fn set_focus_entry(&mut self, app: &mut dyn AppDriver, path: Option<String>, keyboard: bool, keep_entry: bool, sync_all: bool) -> bool {
-        self.edit.input_click.on_focus_change(path.as_deref());
+        self.edit.on_input_focus_change(path.as_deref());
         let moved = self.kbd.focus.path() != path.as_deref();
         // A field left mid-composition keeps what it showed, as a browser's does (Tab the input
         // method let through, a click on another control, `Tx::focus`).
@@ -599,7 +599,7 @@ impl RuntimeCore {
             self.kbd.focus.step(focus_machine::FocusEvent::Settled);
         }
         if self.edit.input_click.dragging_path().is_some_and(|p| !nodes.iter().any(|n| n.path == p && !n.inert && n.input.is_some())) {
-            self.edit.input_click.drop_drag();
+            self.edit.drop_input_drag();
         }
         if !self.pointer.press.is_held() {
             self.kbd.focus.step(focus_machine::FocusEvent::Settled);

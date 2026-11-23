@@ -203,19 +203,71 @@ impl EdgeScroll {
 /// Points a second for a pointer `past` points beyond the edge.
 fn speed(past: f32) -> f32 { (RATE * past.max(MIN_PAST)).min(MAX_SPEED) }
 
+/// What [`RuntimeCore::laid_edge_scroll`] changed after a layout: whether selectable text needs
+/// this frame painted again, and whether a text field queued a drag step for the next frame.
+#[derive(Clone, Copy, Default)]
+pub(in crate::runtime) struct EdgeLaid {
+    pub(in crate::runtime) repaint: bool,
+    pub(in crate::runtime) queued: bool,
+}
+
+impl EdgeLaid {
+    fn or(self, other: Self) -> Self {
+        Self { repaint: self.repaint || other.repaint, queued: self.queued || other.queued }
+    }
+}
+
 impl caret::TextInputState {
     /// The drag ended.
     #[inline]
     pub(in crate::runtime) fn stop_edge_scroll(&mut self) {
         let _ = self.selectable.edge.step(Event::Stop);
     }
+
+    /// Clears input-click state and stops any edge scroll a field drag was driving.
+    #[inline]
+    pub(in crate::runtime) fn clear_input_click(&mut self) {
+        if self.input_click.dragging_path().is_some() { self.stop_edge_scroll(); }
+        self.input_click.clear();
+    }
+
+    /// Stops following a dragged text field and stops any edge scroll it was driving.
+    #[inline]
+    pub(in crate::runtime) fn drop_input_drag(&mut self) {
+        if self.input_click.dragging_path().is_some() { self.stop_edge_scroll(); }
+        self.input_click.drop_drag();
+    }
+
+    /// Updates input-click state for a focus change and stops any edge scroll if the dragged
+    /// field lost focus.
+    #[inline]
+    pub(in crate::runtime) fn on_input_focus_change(&mut self, focused: Option<&str>) {
+        let was = self.input_click.dragging_path().is_some();
+        self.input_click.on_focus_change(focused);
+        if was && self.input_click.dragging_path().is_none() { self.stop_edge_scroll(); }
+    }
 }
 
 impl RuntimeCore {
+    /// Whether a held press is actively extending a selection, in `El::selectable` text or a
+    /// `text_input`.
+    fn dragging_selection(&self) -> bool {
+        self.edit.selectable.phase.dragging() || self.edit.input_click.dragging_path().is_some()
+    }
+
+    /// The node holding the active selection drag: a selectable text or a multiline `text_input`.
+    fn drag_holder(&self) -> Option<usize> {
+        if self.edit.selectable.phase.dragging() {
+            return self.selection_holder();
+        }
+        let path = self.edit.input_click.dragging_path()?;
+        self.live(path).filter(|&i| self.tree.nodes[i].input.as_ref().is_some_and(|inp| !inp.single_line))
+    }
+
     /// The held pointer moved to height `y`: step while it's at or past an edge the selection's
     /// viewport can still scroll past, and stop when it isn't.
     pub(in crate::runtime) fn edge_scroll_moved(&mut self, y: f32) {
-        if !self.edit.selectable.phase.dragging() && self.edit.selectable.edge.state == State::Idle { return; }
+        if !self.dragging_selection() && self.edit.selectable.edge.state == State::Idle { return; }
         let edge = self.edge_at(y);
         let now = self.now_clock();
         let effects = self.edit.selectable.edge.step(Event::Moved { now, edge });
@@ -231,49 +283,60 @@ impl RuntimeCore {
     }
 
     /// The frame that took a step has laid it out: the selection follows the pointer over that
-    /// layout, and what changed is heard. True when the selection changed, so the frame paints
-    /// again. Resting at the end of a list instead, it hears whether this layout changed the
-    /// list's extent.
-    pub(in crate::runtime) fn laid_edge_scroll(&mut self, app: &dyn ViewDriver) -> bool {
+    /// layout, and what changed is heard. Resting at the end of a list instead, it hears whether
+    /// this layout changed the list's extent.
+    pub(in crate::runtime) fn laid_edge_scroll(&mut self, app: &dyn ViewDriver) -> EdgeLaid {
         if !matches!(self.edit.selectable.edge.state, State::Laying { .. }) { return self.edge_scroll_extent(app); }
-        let changed = self.edge_step_heard(app, Event::Laid);
+        let laid = self.edge_step_heard(app, Event::Laid);
         // A step that reached the end, when this layout changed the extent it saw.
-        self.edge_scroll_extent(app) | changed
+        self.edge_scroll_extent(app).or(laid)
     }
 
     /// A press resting at the end of a list hears that this frame's layout changed the list's
     /// extent (rows arrived at its end, or left): it goes on scrolling if it now can, or the
-    /// selection follows the pointer over what came in. True when the selection changed.
-    fn edge_scroll_extent(&mut self, app: &dyn ViewDriver) -> bool {
-        let State::AtEnd { scroll, max } = self.edit.selectable.edge.state else { return false };
-        if self.scroll.scrolls.get(&scroll).is_some_and(|st| st.max == max) { return false; }
+    /// selection follows the pointer over what came in.
+    fn edge_scroll_extent(&mut self, app: &dyn ViewDriver) -> EdgeLaid {
+        let State::AtEnd { scroll, max } = self.edit.selectable.edge.state else { return EdgeLaid::default() };
+        if self.scroll.scrolls.get(&scroll).is_some_and(|st| st.max == max) { return EdgeLaid::default(); }
         let edge = self.pointer.pos.and_then(|(_, y)| self.edge_at(y));
         self.edge_step_heard(app, Event::Extent { now: self.clock, edge })
     }
 
     /// Steps the edge scroll after a layout and carries out what it asks for; what that changed
-    /// in the selection is heard. True when it changed, so the frame paints again.
-    fn edge_step_heard(&mut self, app: &dyn ViewDriver, event: Event) -> bool {
+    /// in the selection is heard.
+    fn edge_step_heard(&mut self, app: &dyn ViewDriver, event: Event) -> EdgeLaid {
         let ends = |rt: &Self| rt.edit.selectable.phase.selection().map(|s| (s.anchor, s.focus, s.far.as_ref().map(|f| f.path.clone())));
         let before = ends(self);
         let effects = self.edit.selectable.edge.step(event);
-        self.carry_edge_scroll(effects);
-        let changed = ends(self) != before;
-        if changed {
+        let queued = self.carry_edge_scroll(effects);
+        let repaint = ends(self) != before;
+        if repaint {
             let heard = self.selection_changes(app);
             self.frame.queue.extend(heard);
         }
-        changed
+        EdgeLaid { repaint, queued }
     }
 
-    fn carry_edge_scroll(&mut self, effects: Effects<Effect>) {
+    /// Carries out `effects`. True when extending a text field's selection queued an input drag
+    /// for the next frame.
+    fn carry_edge_scroll(&mut self, effects: Effects<Effect>) -> bool {
+        let mut queued = false;
         for effect in effects {
             match effect {
                 Effect::Scroll { scroll, by } => self.edge_scroll_by(scroll, by),
-                Effect::Extend => if let Some((x, y)) = self.pointer.pos { self.selection_drag(x, y) },
+                Effect::Extend => if let Some((x, y)) = self.pointer.pos {
+                    if self.edit.selectable.phase.dragging() {
+                        self.selection_drag(x, y);
+                    } else if self.edit.input_click.dragging_path().is_some() {
+                        let before = self.frame.queue.len();
+                        self.input_drag(x, y, true);
+                        queued |= self.frame.queue.len() > before;
+                    }
+                },
                 Effect::WakeAt(due) => self.wake_at(due),
             }
         }
+        queued
     }
 
     /// Scrolls viewport `id` by `by` points, as the wheel does, except that a list stuck to its
@@ -291,8 +354,8 @@ impl RuntimeCore {
     /// held press is extending: at or past its top or bottom (as drawn, inside its clips and the
     /// window), how fast that scrolls, and how far it still can.
     fn edge_at(&self, y: f32) -> Option<Edge> {
-        if !self.edit.selectable.phase.dragging() || !self.pointer.pressing() { return None; }
-        let holder = self.selection_holder()?;
+        if !self.dragging_selection() || !self.pointer.pressing() { return None; }
+        let holder = self.drag_holder()?;
         let i = std::iter::successors(Some(holder), |&p| self.tree.nodes[p].parent)
             .find(|&p| self.tree.nodes[p].scroll.is_some() && self.tree.nodes[p].scroll_axes.has(false))?;
         let id = self.tree.nodes[i].id;
