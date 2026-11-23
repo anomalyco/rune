@@ -40,6 +40,70 @@ fn a_stream_with_no_pictures_has_none_to_go_back_for() {
     assert_eq!(Landing::at(10.0).ended(), None);
 }
 
+const SIXTIETH: f64 = 1.0 / 60.0;
+
+#[test]
+fn the_layer_skips_a_picture_whose_successor_is_already_due() {
+    let just_presented = Some(Duration::from_millis(10));
+    // On time, and late by less than a picture: shown.
+    assert!(!superseded(4.99, 5.0, SIXTIETH, just_presented));
+    assert!(!superseded(5.01, 5.0, SIXTIETH, just_presented));
+    // A whole picture late: the next one is due, so this one is skipped.
+    assert!(superseded(5.0 + SIXTIETH, 5.0, SIXTIETH, just_presented));
+    assert!(superseded(6.2, 5.0, SIXTIETH, just_presented));
+}
+
+#[test]
+fn the_layer_shows_a_late_picture_when_it_has_shown_none_for_a_while() {
+    // The layer's first picture, however late.
+    assert!(!superseded(6.2, 5.0, SIXTIETH, None));
+    assert!(superseded(6.2, 5.0, SIXTIETH, Some(Duration::from_millis(249))));
+    assert!(!superseded(6.2, 5.0, SIXTIETH, Some(LAYER_STARVED)));
+}
+
+/// A 60 fps clip on its layer, as `decode` plays it: the clock runs from 0, the decoder first
+/// reads at `start` seconds and takes `cost` seconds a picture. Returns the time each picture
+/// was presented at, with its own time.
+fn layer_presents(start: f64, cost: f64, seconds: f64) -> Vec<(f64, f64)> {
+    let (mut now, mut last, mut presents) = (start, None, Vec::new());
+    for index in 0..(seconds / SIXTIETH) as u32 {
+        let pts = f64::from(index) * SIXTIETH;
+        now += cost;
+        if superseded(now, pts, SIXTIETH, last.map(|last: f64| Duration::from_secs_f64(now - last))) {
+            continue;
+        }
+        // `wait_until_due`, then the present.
+        now = now.max(pts);
+        presents.push((now, pts));
+        last = Some(now);
+    }
+    presents
+}
+
+#[test]
+fn a_decoder_that_fell_behind_on_the_layer_jumps_to_the_clock_instead_of_playing_its_backlog_fast() {
+    // Held back for 1.2 s, then 2 ms a picture.
+    let presents = layer_presents(1.2, 0.002, 4.0);
+    // No backlog played fast. Pictures closer together than a picture's time: at most the one
+    // that was less than a picture late as the decoder caught up, and its successor on time.
+    let rushed = presents.windows(2).filter(|pair| pair[1].0 - pair[0].0 < SIXTIETH - 1e-9).count();
+    assert!(rushed <= 1, "{rushed} pictures rushed: {:?}", &presents[..presents.len().min(12)]);
+    // And back on the clock within half a second: each picture at its own time.
+    let caught_up: Vec<_> = presents.iter().filter(|(at, _)| *at > 1.7).collect();
+    assert!(caught_up.len() > 100, "{} pictures after catching up", caught_up.len());
+    assert!(caught_up.iter().all(|(at, pts)| (at - pts).abs() < 1e-9));
+}
+
+#[test]
+fn a_decoder_slower_than_the_clip_still_shows_a_picture_every_quarter_second() {
+    // 20 ms a picture for a clip that has one every 16.7 ms: every picture is late.
+    let presents = layer_presents(0.5, 0.02, 4.0);
+    assert!(presents.len() > 10, "{presents:?}");
+    for pair in presents.windows(2) {
+        assert!(pair[1].0 - pair[0].0 <= LAYER_STARVED.as_secs_f64() + 0.02 + 1e-9, "presented {:?} then {:?}", pair[0], pair[1]);
+    }
+}
+
 /// Reads the fixture clip as `Decoder::decode` reads a clip for a seek to its duration, with
 /// Media Foundation's software decoder, and returns the times of the pictures kept, how often it
 /// went back, the duration and the seconds a picture lasts.

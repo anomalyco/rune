@@ -35,6 +35,10 @@ const RING_POLL: Duration = Duration::from_millis(2);
 /// shows it at the first refresh after.
 const LAYER_LEAD: Duration = Duration::from_millis(2);
 
+/// A layer that presented nothing for this long shows its decoder's next picture however late
+/// (`superseded`), so a decoder that can't keep up with the clip still moves.
+const LAYER_STARVED: Duration = Duration::from_millis(250);
+
 /// How long a clip that opens before Rune has a GPU waits for it (`rune_device`).
 const GPU_WAIT: Duration = Duration::from_secs(3);
 
@@ -96,6 +100,17 @@ impl Landing {
         *self = Self { skip_before: last, passed: None, kept: false, went_back: true };
         Some(last)
     }
+}
+
+/// Whether the layer skips the picture at `pts`: on the clock, now at `pos`, its successor is
+/// due too (`frame` is the seconds a picture lasts). The window's own path shows only the
+/// newest picture whose time has come; the layer presents each picture it's given, one per
+/// refresh, so without this a decoder that fell behind plays its backlog fast, and a clip with
+/// more pictures a second than the display has refreshes never catches up with its clock.
+/// `since` is how long ago the layer last presented (None: not yet): after `LAYER_STARVED` it
+/// shows the picture anyway.
+pub(super) fn superseded(pos: f64, pts: f64, frame: f64, since: Option<Duration>) -> bool {
+    pos >= pts + frame && since.is_some_and(|since| since < LAYER_STARVED)
 }
 
 /// What a decoder starts with.
@@ -241,6 +256,8 @@ struct Decoder {
     opened_us: u128,
     steps: String,
     layer: Option<Layer>,
+    /// When the layer last presented a picture (`superseded`).
+    presented_at: Option<Instant>,
     /// Decoding on the CPU only because Rune had no GPU yet when the clip opened: once it has one,
     /// the clip opens again there (`decode`).
     awaiting_gpu: bool,
@@ -285,7 +302,7 @@ impl Decoder {
         let facts = Facts { meta, picture, sound: opened.sound, hardware, gpu: ring.is_some() };
         let opened_us = us(t0);
         let steps = format!("Media Foundation at {t_mf}, D3D11 at {t_device}, source at {t_source}, reader at {t_reader}, ring at {opened_us}");
-        let mut d = Self { reader: opened.reader, facts, ring, output: None, video: opened.video, audio: opened.audio, video_open: picture.is_some(), audio_open: false, opened_us, steps, layer: None, awaiting_gpu };
+        let mut d = Self { reader: opened.reader, facts, ring, output: None, video: opened.video, audio: opened.audio, video_open: picture.is_some(), audio_open: false, opened_us, steps, layer: None, presented_at: None, awaiting_gpu };
         d.select_sound(job.sound.is_some() || job.kind == Kind::Audio, &job.clock);
         Ok(d)
     }
@@ -401,9 +418,11 @@ impl Decoder {
             }
             if let Some(sample) = read.sample.take() {
                 if video {
-                    if landing.keeps(read.time, self.facts.meta.frame) {
+                    let pts = epoch + read.time;
+                    // A picture the layer would only show late is decoded and no more: not
+                    // copied, not queued, not presented.
+                    if landing.keeps(read.time, self.facts.meta.frame) && !self.late_on_layer(pipe, job, pts) {
                         let (picture, texture) = self.picture(&sample)?;
-                        let pts = epoch + read.time;
                         let blitted = self.blit_on_layer(pipe, job, texture);
                         // The decoder's surface goes back before the wait for the picture's time:
                         // held through it, Media Foundation's decoder ran out of surfaces and spun
@@ -515,6 +534,7 @@ impl Decoder {
             None => self.make_layer(size).map(|layer| {
                 s.layer_surface = Some(layer.surface());
                 self.layer = Some(layer);
+                self.presented_at = None;
             }),
         };
         if let Err(e) = made {
@@ -533,6 +553,20 @@ impl Decoder {
         // The layer scales the decoder's own textures; software pictures have none.
         let device = self.ring.as_ref().filter(|_| self.facts.hardware).map(Ring::device).ok_or("software pictures draw in the UI")?;
         Layer::new(device, picture, size)
+    }
+
+    /// Whether the layer shows the pictures now (as `blit_on_layer` would find) and the one at
+    /// `pts` is too late for it (`superseded`).
+    fn late_on_layer(&self, pipe: &Pipe, job: &Job, pts: f64) -> bool {
+        let (Some(_), Some(clock)) = (&self.layer, job.clock.get()) else { return false };
+        {
+            let s = pipe.lock();
+            if s.layer.is_none() || s.layer_refused {
+                return false;
+            }
+        }
+        let now = rune_core::time::now();
+        superseded(clock.position(now), pts, self.facts.meta.frame, self.presented_at.map(|at| now.saturating_duration_since(at)))
     }
 
     /// Scales a picture into the clip's layer when the window has the layer up and the clock
@@ -584,6 +618,7 @@ impl Decoder {
             return false;
         }
         pipe.lock().layer_shown = Some((layer.size, generation));
+        self.presented_at = Some(rune_core::time::now());
         true
     }
     fn picture(&mut self, sample: &IMFSample) -> Result<(Pic, Option<(ID3D11Texture2D, u32)>), String> {
