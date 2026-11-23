@@ -34,8 +34,13 @@ struct State {
     shell: bool,
 }
 
+/// Whether `LAUNCH_FLOOR` asks for the desktop app's first screen.
+fn shell_scene() -> bool {
+    rune::env::var("LAUNCH_FLOOR").is_some_and(|v| v == "shell")
+}
+
 fn init() -> State {
-    State { shell: std::env::var("LAUNCH_FLOOR").is_ok_and(|v| v == "shell") }
+    State { shell: shell_scene() }
 }
 
 fn view(s: &State, _: &mut Cx<State>) -> El {
@@ -111,7 +116,7 @@ fn report() {
     let list = |items: Vec<String>| items.join(",");
     let json = format!(
         "{{\"scene\":\"{}\",\"marks\":{{{}}},\"metrics\":{{{}}},\"notes\":{{{}}}}}",
-        std::env::var("LAUNCH_FLOOR").unwrap_or_else(|_| "bare".into()),
+        if shell_scene() { "shell" } else { "bare" },
         list(marks.iter().map(|(name, at)| format!("\"{name}\":{}", micros(*at))).collect()),
         list(rune::marks::metrics().iter().map(|(name, total)| format!("\"{name}\":{total}")).collect()),
         list(rune::marks::notes().iter().map(|(key, value)| format!("\"{key}\":\"{value}\"")).collect()),
@@ -120,7 +125,7 @@ fn report() {
     let mut stdout = std::io::stdout().lock();
     stdout.write_all(out.as_bytes()).ok();
     stdout.flush().ok();
-    if let Some(path) = std::env::var_os("LAUNCH_FLOOR_TRACE")
+    if let Some(path) = rune::env::var_os("LAUNCH_FLOOR_TRACE")
         && let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path)
     {
         file.write_all(format!("{json}\n").as_bytes()).ok();
@@ -129,10 +134,10 @@ fn report() {
 
 fn main() {
     let age = rune::process_age().unwrap_or_default();
-    BOOT.get_or_init(|| (Instant::now(), age, std::time::SystemTime::now()));
+    BOOT.get_or_init(|| (rune::time::now(), age, rune::time::system_now()));
     rune::marks::mark("main.entered");
     let spec = AppSpec::new("Launch floor", (1280.0, 800.0), init, view);
-    let shell = std::env::var("LAUNCH_FLOOR").is_ok_and(|v| v == "shell");
+    let shell = shell_scene();
     let app = rune::App::new(spec).on_ready(|_| {
         // Off the UI thread, once the loop has gone to wait for input.
         std::thread::spawn(|| {
