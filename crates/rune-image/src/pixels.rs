@@ -3,12 +3,26 @@
 //! like the glyph atlas, allocated only once an element shows pixels.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::place::{SurfaceFit, SurfacePlace};
 
 pub const IMAGE_ATLAS_SIZE: u32 = 1024;
+
+/// The largest texture side of any GPU that draws images in this process (`limit_side`).
+static LIMIT: AtomicU32 = AtomicU32::new(crate::MAX_SIDE);
+
+/// Says a GPU draws images here whose textures are at most `side` texels a side. The atlas then
+/// places nothing larger: a decoded image draws from its largest mip that fits.
+pub fn limit_side(side: u32) {
+    LIMIT.fetch_min(side.max(1), Ordering::Relaxed);
+}
+
+/// The largest side the atlas places.
+pub fn max_side() -> u32 {
+    LIMIT.load(Ordering::Relaxed)
+}
 /// Rows a shelf page starts with (`ImagePage::new`).
 const IMAGE_PAGE_START_ROWS: u32 = 128;
 
@@ -295,10 +309,14 @@ impl ImageAtlas {
                     || (next.height as f32) < drawn[1].clamp(1.0, frame.height as f32) { break; }
                 level += 1;
             }
+            // A level past the GPU's largest texture can't go up: draw from the largest that fits.
+            let limit = max_side();
+            while mips[level].width.max(mips[level].height) > limit && level + 1 < mips.len() { level += 1; }
             let mip = &mips[level];
             (w, h) = (mip.width, mip.height);
             &mip.pixels
         } else { &frame.rgba };
+        if w > max_side() || h > max_side() { return None; }
         let key = (pixels.id, level);
         if self.slots.get(&key).is_some_and(|s| s.w != w || s.h != h) {
             self.slots.remove(&key);

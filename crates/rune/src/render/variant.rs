@@ -215,6 +215,7 @@ impl Renderer {
     /// filled on the CPU. `prepare` tells it again every frame.
     pub fn attach_text(&self, atlas: &mut Atlas) {
         atlas.outlines.set_support(self.uber.support());
+        atlas.outlines.limit_rows(self.max_texture_dim);
     }
 
     /// Steps the shader machine `state` on `event`, carrying out each effect (building Windfoil

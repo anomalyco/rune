@@ -1,0 +1,1 @@
+- Images and text on GPUs with a small largest texture (WebGL2, downlevel and older mobile adapters report 2048 or 4096): an image larger than the device's largest texture draws from its largest decoded mip that fits instead of failing GPU validation, and the glyph outline store never asks for a texture taller than the device allows.

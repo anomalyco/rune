@@ -148,7 +148,11 @@ impl Renderer {
         let mut changed = self.images.len() != images.pages.len();
         self.images.resize_with(images.pages.len(), || None);
         for (index, page) in images.pages.iter_mut().enumerate() {
-            if page.data.is_empty() { changed |= self.images[index].is_some(); self.images[index] = None; continue; }
+            // A page past the device's largest texture (placed before this renderer said its limit)
+            // draws nothing rather than failing validation.
+            if page.data.is_empty() || page.width.max(page.height) > self.max_texture_dim {
+                changed |= self.images[index].is_some(); self.images[index] = None; continue;
+            }
             if self.images[index].as_ref().is_none_or(|(t, _)| t.width() != page.width || t.height() != page.height) {
                 let texture = Self::image_texture(device, page.width, page.height);
                 let bind = Self::bind_group(device, &self.bind_layout, &self.globals, self.uber.outlines(), &self.atlas, &texture, None);

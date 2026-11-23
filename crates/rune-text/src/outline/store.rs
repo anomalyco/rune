@@ -69,18 +69,20 @@ pub struct OutlineStore {
     /// A record didn't fit: start again at the next frame.
     full: bool,
     support: Support,
+    /// Rows the device's texture can hold: `MAX_ROWS` or its largest texture side, if smaller.
+    max_rows: u32,
 }
 
 impl Default for OutlineStore {
     fn default() -> Self {
-        OutlineStore { texels: vec![[0; 4]; WIDTH as usize], used: 1, glyphs: Default::default(), hints: Default::default(), dirty: None, full: false, support: Support::Untried }
+        OutlineStore { texels: vec![[0; 4]; WIDTH as usize], used: 1, glyphs: Default::default(), hints: Default::default(), dirty: None, full: false, support: Support::Untried, max_rows: MAX_ROWS }
     }
 }
 
 impl OutlineStore {
     /// An unallocated placeholder store, for [`crate::TextSystem::empty`].
     pub(crate) fn empty() -> Self {
-        OutlineStore { texels: Vec::new(), used: 0, glyphs: Default::default(), hints: Default::default(), dirty: None, full: false, support: Support::Untried }
+        OutlineStore { texels: Vec::new(), used: 0, glyphs: Default::default(), hints: Default::default(), dirty: None, full: false, support: Support::Untried, max_rows: MAX_ROWS }
     }
 
     /// The record of `key`, built by `build` the first time it's asked for.
@@ -114,7 +116,7 @@ impl OutlineStore {
     fn push(&mut self, texels: &[[u32; 4]], relative: bool) -> Option<u32> {
         let at = self.used;
         let end = at + texels.len();
-        if end > (MAX_ROWS * WIDTH) as usize {
+        if end > (self.max_rows * WIDTH) as usize {
             self.full = true;
             return None;
         }
@@ -143,6 +145,7 @@ impl OutlineStore {
         }
         self.full = false;
         self.used = 1;
+        self.texels.truncate((self.max_rows * WIDTH) as usize);
         self.glyphs.clear();
         self.hints.clear();
         true
@@ -175,6 +178,14 @@ impl OutlineStore {
     pub fn set_support(&mut self, support: Support) {
         self.support = support;
         crate::raster::support::note_outlines(support);
+    }
+
+    /// Holds the store to `rows` rows (a device's largest texture side). Records past it already
+    /// made start again at the next frame.
+    #[doc(hidden)]
+    pub fn limit_rows(&mut self, rows: u32) {
+        self.max_rows = rows.clamp(1, MAX_ROWS);
+        if self.used > (self.max_rows * WIDTH) as usize { self.full = true; }
     }
 
     /// Rows the texture needs.
