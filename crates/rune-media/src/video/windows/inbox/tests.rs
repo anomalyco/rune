@@ -41,10 +41,16 @@ fn a_due_pick_takes_the_newest_picture_whose_time_has_come() {
 }
 
 #[test]
-fn the_newest_picture_is_the_current_seeks_last() {
-    let inbox = inbox(&[(2, 9.0), (2, 9.1)]);
-    assert_eq!(inbox.newest(2), Some(9.1));
-    assert_eq!(inbox.newest(3), None);
+fn a_presented_picture_is_the_only_one_queued_and_the_one_the_layer_shows() {
+    let mut inbox = inbox(&[(2, 9.0), (2, 9.1)]);
+    let now = rune_core::time::now();
+    inbox.push_presented(picture(2, 9.2), now);
+    assert_eq!(times(&inbox), vec![9.2]);
+    assert_eq!(inbox.unread.iter().map(|f| f.pts).collect::<Vec<_>>(), vec![9.0, 9.1]);
+    assert_eq!(inbox.touched, Some(now));
+    assert_eq!(inbox.presented(2), Some(9.2));
+    // A seek since: nothing of the new one was presented yet.
+    assert_eq!(inbox.presented(3), None);
 }
 
 #[test]

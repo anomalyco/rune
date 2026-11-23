@@ -38,6 +38,9 @@ pub(super) struct Inbox {
     pub layer_surface: Option<LayerSurface>,
     /// The size of the last picture presented on the layer, and the generation it belongs to.
     pub layer_shown: Option<((u32, u32), u32)>,
+    /// The newest picture the decoder presented on the layer: its time and its generation. It
+    /// outlives the layer, so the window can still ask what the layer showed last once it's gone.
+    pub layer_presented: Option<(f64, u32)>,
     /// The clip can't have a layer (a rotated clip, software pictures, no video processor): the
     /// UI keeps drawing it.
     pub layer_refused: bool,
@@ -93,11 +96,6 @@ impl Inbox {
         }
     }
 
-    /// The newest picture of `generation` in the queue: its time.
-    pub(super) fn newest(&self, generation: u32) -> Option<f64> {
-        self.frames.back().filter(|f| f.generation == generation).map(|f| f.pts)
-    }
-
     /// A seek lands: its pictures replace the queue's, which go to `unread`, and the end is
     /// ahead again.
     pub(super) fn flush(&mut self) {
@@ -117,6 +115,21 @@ impl Inbox {
     pub(super) fn keep_newest(&mut self) {
         let older = self.frames.len().saturating_sub(1);
         self.unread.extend(self.frames.drain(..older));
+    }
+
+    /// Queues the picture the decoder is about to present on the layer, as the only one in the
+    /// queue (for when the window draws the clip itself again), and notes it as the one the
+    /// layer shows. Presenting counts as being drawn, so the decoder doesn't park.
+    pub(super) fn push_presented(&mut self, decoded: Decoded, now: Instant) {
+        self.layer_presented = Some((decoded.pts, decoded.generation));
+        self.push(decoded);
+        self.keep_newest();
+        self.touched = Some(now);
+    }
+
+    /// The newest picture of `generation` the layer showed: its time.
+    pub(super) fn presented(&self, generation: u32) -> Option<f64> {
+        self.layer_presented.filter(|(_, g)| *g == generation).map(|(pts, _)| pts)
     }
 }
 
