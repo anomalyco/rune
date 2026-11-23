@@ -78,6 +78,15 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
         use winit::platform::macos::EventLoopBuilderExtMacOS;
         builder.with_init_before_finish_launching(true);
     }
+    // A regular app's menu bar is made once its first window's first frame is on its way, in
+    // the same turn of the launch (`native_menu::bar_ready`): winit's default menu, which it
+    // installs before the first window, with it. `RUNE_MENU_BEFORE_WINDOW` keeps the old order.
+    #[cfg(target_os = "macos")]
+    if !accessory && std::env::var_os("RUNE_MENU_BEFORE_WINDOW").is_none() {
+        use winit::platform::macos::EventLoopBuilderExtMacOS;
+        builder.with_default_menu(false);
+        crate::native_menu::bar_waits();
+    }
     let event_loop = builder.build().inspect_err(|_| crate::render::discard_prewarm()).map_err(event_loop_error)?;
     #[cfg(target_os = "macos")]
     if !beside.session() {
