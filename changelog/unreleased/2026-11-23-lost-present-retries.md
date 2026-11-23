@@ -1,0 +1,1 @@
+- Window: a GPU device lost during submit, present, or Windows swap-chain rebinding no longer resets `SurfaceRetries`, commits a dead DirectComposition visual, or schedules immediate unpaced redraws, so repeated losses back off and give up after `SURFACE_TRIES` instead of spinning.

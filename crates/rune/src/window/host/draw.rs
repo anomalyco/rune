@@ -19,7 +19,8 @@ use crate::window::chrome::sync_platform_core;
 use crate::window::handle::native_window_number;
 use crate::window::state::{Cover, RestEvent, rest};
 use crate::window::surface::{
-    Backoff, BackoffEffect, BackoffEvent, Missed, Presented, Win, acquire, reblend_core,
+    Backoff, BackoffEffect, BackoffEvent, Missed, Presented, SurfaceRetries, Win, acquire,
+    reblend_core,
 };
 #[cfg(target_os = "macos")]
 use crate::window::surface::{TIMER_FRAME, configure};
@@ -65,6 +66,38 @@ fn apply_missed_core(
     state.clipboard.flush_core(state.app.rt_mut());
     state.reports.skipped();
     effects
+}
+
+/// Outcome of settling a frame whose GPU device was lost during submission or presentation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LostPresent {
+    Retry,
+    GiveUp,
+}
+
+/// Window-neutral accounting when `gpu.is_lost()` is already true after `submit_and_present`:
+/// invalidates the surface and cached presentation, marks the host idle, reports a skipped frame,
+/// and either arms a bounded backoff retry or reports `GiveUp` once `SurfaceRetries` is exhausted.
+fn apply_lost_present_core(
+    surface_retries: &SurfaceRetries,
+    surface_ok: &mut bool,
+    presented: &mut Option<Presented>,
+    backoff: &mut Backoff,
+    reports: &mut crate::frame::encoded::FrameReports,
+    idle: &mut bool,
+    now: Instant,
+) -> LostPresent {
+    *surface_ok = false;
+    *presented = None;
+    *idle = true;
+    reports.skipped();
+    match surface_retries.loss_retry(now) {
+        Some(at) => {
+            let _ = backoff.step(BackoffEvent::At(at));
+            LostPresent::Retry
+        }
+        None => LostPresent::GiveUp,
+    }
 }
 
 impl Host {
@@ -595,6 +628,31 @@ impl FrameHost for WindowFrame<'_> {
 
     fn settle(&mut self, submitted: Instant, info: &StepInfo) {
         let now = self.state.now.unwrap_or(submitted);
+        if self.host.gpu.as_ref().is_none_or(|(gpu, _)| gpu.is_lost()) {
+            let outcome = if let Some(l) = self.host.win.as_mut() {
+                #[cfg(target_os = "windows")]
+                l.native.slot.reset();
+                l.stop_pacing();
+                self.host.meter.set_pacing(l.pacing_state(false));
+                apply_lost_present_core(
+                    &l.surface_retries,
+                    &mut l.surface_ok,
+                    &mut l.presented,
+                    &mut l.backoff,
+                    &mut self.host.frame_reports,
+                    &mut self.host.idle,
+                    now,
+                )
+            } else {
+                self.host.idle = true;
+                self.host.frame_reports.skipped();
+                LostPresent::Retry
+            };
+            if outcome == LostPresent::GiveUp {
+                let _ = self.host.replace_lost_surface();
+            }
+            return;
+        }
         self.host.meter.presented();
         #[cfg(target_os = "macos")]
         if let Some(l) = self.host.win.as_mut() {
