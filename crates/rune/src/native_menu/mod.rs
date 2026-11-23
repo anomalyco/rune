@@ -368,12 +368,30 @@ pub(crate) fn bar_waits() {
 /// The menu bar a launch left waiting, now: winit's default menu, then the standard items its
 /// window starts asked for. A window's own items follow as its guard drains. Called once the
 /// first window's first frame is on its way, at the end of a launch that drew none, and by
-/// whatever needs the menu bar before that (`ensure_default_menu`).
+/// whatever needs the menu bar before that (`ensure_default_menu`). True when this call made it.
 #[cfg(target_os = "macos")]
-pub(crate) fn bar_ready() {
-    let Some(owed) = bar_state(bar_wait::BarWait::end) else { return };
+pub(crate) fn bar_ready() -> bool {
+    let Some(owed) = bar_state(bar_wait::BarWait::end) else { return false };
     winit::platform::macos::install_default_menu();
     if let Some(opt_in) = owed.standard { standard_macos::install(opt_in); }
+    true
+}
+
+/// Lists `window` in the Window menu now, as AppKit does when a window is ordered in. The
+/// launch's first window was ordered in before its menu bar was made (`bar_ready`): AppKit
+/// would list it once the app is active, after the launch's later windows, where it was the
+/// first of the list.
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+pub(crate) fn list_window(window: &winit::window::Window) {
+    let (Some(mtm), Some(window)) = (objc2::MainThreadMarker::new(), crate::platform::macos::ns_window(window)) else { return };
+    let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+    // SAFETY: main thread; the window and its title are retained across AppKit's own call for
+    // a window's item (it adds the item when the window has none).
+    unsafe {
+        if window.isExcludedFromWindowsMenu() { return; }
+        let _: () = objc2::msg_send![&*app, changeWindowsItem: &*window, title: &*window.title(), filename: false];
+    }
 }
 
 pub(crate) struct MenuGuard {

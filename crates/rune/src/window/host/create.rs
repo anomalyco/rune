@@ -368,7 +368,7 @@ impl Host {
         // standard items, then this window's own.
         #[cfg(target_os = "macos")]
         {
-            crate::native_menu::bar_ready();
+            if crate::native_menu::bar_ready() && visible && let Some(w) = &self.win { crate::native_menu::list_window(&w.window); }
             self.menus.drain();
         }
         if !drew && (visible || launcher) && let Some(w) = &self.win {
