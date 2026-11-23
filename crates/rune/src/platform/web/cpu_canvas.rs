@@ -12,6 +12,7 @@ use crate::render::cpu_boot::{CpuPainter, HalfRounding, NeedsGpu, Scene, Target}
 use crate::runtime::RuntimeCore;
 
 pub(super) struct CpuCanvas {
+    over: web_sys::HtmlCanvasElement,
     canvas: web_sys::HtmlCanvasElement,
     ctx: web_sys::CanvasRenderingContext2d,
     painter: CpuPainter,
@@ -59,11 +60,29 @@ impl CpuCanvas {
         // The GPU's canvas starts see-through: this one shows.
         canvas.style().set_css_text(&format!("{css};pointer-events:none;opacity:1"));
         canvas.set_attribute("aria-hidden", "true").ok();
+        canvas.set_attribute("data-rune-cpu", "").ok();
         over.parent_node()?.insert_before(&canvas, Some(over)).ok()?;
         let options = js_sys::Object::new();
         js_sys::Reflect::set(&options, &"alpha".into(), &JsValue::FALSE).ok();
         let ctx = canvas.get_context_with_context_options("2d", &options).ok()??.dyn_into().ok()?;
-        Some(CpuCanvas { canvas, ctx, painter: CpuPainter::new(1), buffer: Vec::new(), size: (0, 0), rows: Vec::new(), staged: js_sys::Uint8ClampedArray::new_with_length(0), half: HalfRounding::default() })
+        Some(CpuCanvas { over: over.clone(), canvas, ctx, painter: CpuPainter::new(1), buffer: Vec::new(), size: (0, 0), rows: Vec::new(), staged: js_sys::Uint8ClampedArray::new_with_length(0), half: HalfRounding::default() })
+    }
+
+    /// Keeps the CPU canvas's CSS bounds aligned with `over` if its inline box changed outside
+    /// `platform.js::viewport`.
+    fn sync_bounds(&self) {
+        let src = self.over.style();
+        let dst = self.canvas.style();
+        for prop in ["width", "height", "left", "top"] {
+            let value = src.get_property_value(prop).unwrap_or_default();
+            if dst.get_property_value(prop).unwrap_or_default() != value {
+                if value.is_empty() {
+                    dst.remove_property(prop).ok();
+                } else {
+                    dst.set_property(prop, &value).ok();
+                }
+            }
+        }
     }
 
     /// Paints the runtime's last frame at `size` physical pixels and puts what changed on the
@@ -71,6 +90,7 @@ impl CpuCanvas {
     pub(super) fn paint(&mut self, rt: &mut RuntimeCore, size: (u32, u32)) -> Result<Cost, NeedsGpu> {
         let (w, h) = (size.0.max(1), size.1.max(1));
         if self.size != (w, h) {
+            self.sync_bounds();
             // A new size clears the canvas, and the buffer starts again: every tile paints.
             self.canvas.set_width(w);
             self.canvas.set_height(h);
