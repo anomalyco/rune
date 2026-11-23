@@ -1,0 +1,1 @@
+- Wayland: dropping a layer-shell overlay now drains its private `EventQueue` and destroys its `zwlr_layer_shell_v1`, pending `wl_surface.frame` callback, `wl_compositor`, `wl_registry` (via `wl_fixes` when available), and lower-version seat/output proxies, stopping the per-show `EventQueue` memory leak.

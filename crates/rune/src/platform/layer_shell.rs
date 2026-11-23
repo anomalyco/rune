@@ -11,14 +11,14 @@ use std::time::Duration;
 
 use winit::raw_window_handle::{RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle};
 use wayland_backend::client::{Backend, ReadEventsGuard, WaylandError};
-use wayland_client::globals::{GlobalListContents, registry_queue_init};
+use wayland_client::globals::{GlobalList, GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_callback::{self, WlCallback};
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_surface::{self, WlSurface};
 use wayland_client::protocol::{wl_output::{self, WlOutput}, wl_seat::{self, WlSeat}, wl_pointer::{self, WlPointer}, wl_keyboard::{self, WlKeyboard}, wl_touch::{self, WlTouch}};
-use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
+use wayland_client::{Connection, Dispatch, DispatchError, EventQueue, Proxy, QueueHandle};
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::{Shape, WpCursorShapeDeviceV1};
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1::WpCursorShapeManagerV1;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1};
@@ -62,6 +62,9 @@ struct State {
     /// Tracks whether the compositor has answered the last presented frame's `wl_surface.frame`
     /// callback so the overlay never blocks in Mesa's FIFO wait when the surface isn't painted.
     frame: frame_callback::State,
+    /// Pending `wl_surface.frame` callback proxy, kept so it can be destroyed on replacement,
+    /// close, or drop instead of retaining a `QueueHandle` reference to the event queue.
+    frame_callback: Option<(u64, WlCallback)>,
     input: Vec<Input>,
     surface: Option<WlSurface>,
     over: Over,
@@ -175,16 +178,16 @@ impl State {
         if keyboard && self.keyboard.is_none() { self.keyboard = Some(seat.get_keyboard(qh, ())); }
         if !pointer && let Some(p) = self.pointer.take() {
             if let Some(shape) = self.shape.take() { shape.destroy(); }
-            if p.version() >= 3 { p.release(); }
+            if p.version() >= 3 { p.release(); } else { destroy_proxy(&p); }
             self.over = Over::Outside;
             self.step_pointer(pointer::Event::Reset);
         }
         if !touch && let Some(t) = self.touch.take() {
-            if t.version() >= 3 { t.release(); }
+            if t.version() >= 3 { t.release(); } else { destroy_proxy(&t); }
             touch::step(&mut self.finger, touch::Event::Gone);
         }
         if !keyboard && let Some(k) = self.keyboard.take() {
-            if k.version() >= 3 { k.release(); }
+            if k.version() >= 3 { k.release(); } else { destroy_proxy(&k); }
             self.xkb = None;
             self.compose = None;
             self.mod_state = None;
@@ -491,6 +494,9 @@ fn shape(c: crate::el::Cursor) -> Shape {
 impl Dispatch<WlCallback, u64> for State {
     fn event(state: &mut Self, _: &WlCallback, event: wl_callback::Event, id: &u64, _: &Connection, _: &QueueHandle<Self>) {
         if matches!(event, wl_callback::Event::Done { .. }) {
+            if state.frame_callback.as_ref().is_some_and(|(pending, _)| pending == id) {
+                state.frame_callback = None;
+            }
             frame_callback::step(&mut state.frame, frame_callback::Event::Done(*id));
         }
     }
@@ -503,7 +509,7 @@ impl Dispatch<WlSurface, ()> for State {
     }
 }
 impl Dispatch<ZwlrLayerSurfaceV1, ()> for State {
-    fn event(state: &mut Self, layer: &ZwlrLayerSurfaceV1, event: zwlr_layer_surface_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(state: &mut Self, layer: &ZwlrLayerSurfaceV1, event: zwlr_layer_surface_v1::Event, _: &(), conn: &Connection, _: &QueueHandle<Self>) {
         match event {
             zwlr_layer_surface_v1::Event::Configure { serial, width, height } => {
                 layer.ack_configure(serial);
@@ -512,6 +518,9 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for State {
             zwlr_layer_surface_v1::Event::Closed => {
                 readiness::step(&mut state.readiness, readiness::Event::Closed);
                 frame_callback::step(&mut state.frame, frame_callback::Event::Reset);
+                if let Some((_, cb)) = state.frame_callback.take() {
+                    conn.backend().destroy_object(&cb.id()).ok();
+                }
             }
             _ => {}
         }
@@ -787,10 +796,11 @@ pub(crate) struct Changes {
 pub(crate) struct LayerSurface {
     namespace: String,
     conn: Connection,
-    registry: WlRegistry,
+    globals: Option<GlobalList>,
     seat_global: Option<(u32, u32)>,
     regions: std::cell::RefCell<Option<Vec<[i32; 4]>>>,
     compositor: WlCompositor,
+    shell: ZwlrLayerShellV1,
     output: Option<WlOutput>,
     seat: Option<WlSeat>,
     options: OverlayOptions,
@@ -863,6 +873,28 @@ fn wait_for_configure(conn: &Connection, queue: &mut EventQueue<State>, state: &
     configure_wait::wait(&mut ConfigureDriver { conn, queue, state }, timeout)
 }
 
+fn destroy_proxy<P: Proxy>(proxy: &P) {
+    if let Some(backend) = proxy.backend().upgrade() {
+        backend.destroy_object(&proxy.id()).ok();
+    }
+}
+
+fn destroy_globals(conn: &Connection, globals: GlobalList) {
+    let registry_id = globals.registry().id();
+    globals.destroy();
+    conn.backend().destroy_object(&registry_id).ok();
+}
+
+fn drain_event_queue(queue: &mut EventQueue<State>, state: &mut State) {
+    loop {
+        match queue.dispatch_pending(state) {
+            Ok(0) => break,
+            Ok(_) | Err(DispatchError::BadMessage { .. }) => {}
+            Err(_) => break,
+        }
+    }
+}
+
 impl LayerSurface {
     /// None when the display isn't Wayland, the compositor lacks layer-shell, or it never
     /// configures the surface within `configure_wait::TIMEOUT`.
@@ -873,7 +905,7 @@ impl LayerSurface {
         // every overlay; a foreign backend never closes it.
         let backend = unsafe { Backend::from_foreign_display(display.display.as_ptr().cast()) };
         let conn = Connection::from_backend(backend);
-        let (globals, queue) = match registry_queue_init::<State>(&conn) {
+        let (globals, mut queue) = match registry_queue_init::<State>(&conn) {
             Ok(pair) => pair,
             Err(_) => {
                 if let Some(reason) = conn.backend().last_error().and_then(|e| format_wayland_error(&e)) {
@@ -883,8 +915,19 @@ impl LayerSurface {
             }
         };
         let qh = queue.handle();
-        let compositor: WlCompositor = globals.bind(&qh, 1..=6, ()).ok()?;
-        let shell: ZwlrLayerShellV1 = globals.bind(&qh, 1..=4, ()).ok()?;
+        let Ok(compositor) = globals.bind::<WlCompositor, _, _>(&qh, 1..=6, ()) else {
+            destroy_globals(&conn, globals);
+            drain_event_queue(&mut queue, &mut State::default());
+            queue.flush().ok();
+            return None;
+        };
+        let Ok(shell) = globals.bind::<ZwlrLayerShellV1, _, _>(&qh, 1..=4, ()) else {
+            conn.backend().destroy_object(&compositor.id()).ok();
+            destroy_globals(&conn, globals);
+            drain_event_queue(&mut queue, &mut State::default());
+            queue.flush().ok();
+            return None;
+        };
         let output = output_id.and_then(|id| {
             globals.contents().with_list(|list| list.iter().find(|g| g.name == id && g.interface == "wl_output").map(|g| {
                 globals.registry().bind::<WlOutput, _, _>(g.name, g.version.min(4), &qh, ())
@@ -892,9 +935,8 @@ impl LayerSurface {
         });
         let want_pointer = options.input.resolved(interactive) != OverlayInput::None;
         let want_keys = options.keys == crate::KeyPolicy::OnDemand;
-        let registry = globals.registry().clone();
         let seat_global = globals.contents().with_list(|list| list.iter().find(|g| g.interface == "wl_seat").map(|g| (g.name, g.version.min(8))));
-        let seat = if want_pointer || want_keys { seat_global.map(|(name, version)| registry.bind::<WlSeat, _, _>(name, version, &qh, ())) } else { None };
+        let seat = if want_pointer || want_keys { seat_global.map(|(name, version)| globals.registry().bind::<WlSeat, _, _>(name, version, &qh, ())) } else { None };
         let surface = compositor.create_surface(&qh, ());
         let region = compositor.create_region(&qh, ());
         surface.set_input_region(Some(&region));
@@ -905,7 +947,7 @@ impl LayerSurface {
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         let shapes = globals.bind::<WpCursorShapeManagerV1, _, _>(&qh, 1..=1, ()).ok();
         let state = State { surface: Some(surface.clone()), want_pointer, want_keys, shapes, ..State::default() };
-        let mut this = LayerSurface { namespace: namespace.to_owned(), conn, registry, seat_global, regions: std::cell::RefCell::new(Some(Vec::new())), compositor, output, seat, options: options.clone(), queue, state, layer, surface, display: display.display, watch: None };
+        let mut this = LayerSurface { namespace: namespace.to_owned(), conn, globals: Some(globals), seat_global, regions: std::cell::RefCell::new(Some(Vec::new())), compositor, shell, output, seat, options: options.clone(), queue, state, layer, surface, display: display.display, watch: None };
         this.place(at);
         this.surface.commit();
         match wait_for_configure(&this.conn, &mut this.queue, &mut this.state, configure_wait::TIMEOUT) {
@@ -997,8 +1039,8 @@ impl LayerSurface {
     pub fn set_input(&mut self, input: OverlayInput) {
         self.options.input = input;
         self.state.want_pointer = input != OverlayInput::None;
-        if self.seat.is_none() && self.state.want_pointer {
-            self.seat = self.seat_global.map(|(name, version)| self.registry.bind(name, version, &self.queue.handle(), ()));
+        if self.seat.is_none() && self.state.want_pointer && let Some(globals) = &self.globals {
+            self.seat = self.seat_global.map(|(name, version)| globals.registry().bind(name, version, &self.queue.handle(), ()));
         }
         if let Some(seat) = &self.seat { self.state.update_seat(seat, &self.queue.handle()); }
     }
@@ -1036,7 +1078,11 @@ impl LayerSurface {
         if self.state.readiness.closed() { return; }
         for effect in frame_callback::step(&mut self.state.frame, frame_callback::Event::Request) {
             let frame_callback::Effect::Request(id) = effect;
-            self.surface.frame(&self.queue.handle(), id);
+            if let Some((_, prev)) = self.state.frame_callback.take() {
+                self.conn.backend().destroy_object(&prev.id()).ok();
+            }
+            let cb = self.surface.frame(&self.queue.handle(), id);
+            self.state.frame_callback = Some((id, cb));
         }
     }
 
@@ -1122,6 +1168,9 @@ impl LayerSurface {
         let was_closed = self.state.readiness.closed();
         readiness::step(&mut self.state.readiness, readiness::Event::Closed);
         frame_callback::step(&mut self.state.frame, frame_callback::Event::Reset);
+        if let Some((_, cb)) = self.state.frame_callback.take() {
+            self.conn.backend().destroy_object(&cb.id()).ok();
+        }
         self.state.step_repeat(repeat::Event::Stop);
         self.state.input.clear();
         self.watch = None;
@@ -1144,17 +1193,43 @@ impl LayerSurface {
 
 impl Drop for LayerSurface {
     fn drop(&mut self) {
-        // Stop and join the reader thread before destroying proxies or dropping winit's display.
+        // Stop and join the reader thread before draining or destroying proxies.
         self.watch = None;
+        self.state.want_pointer = false;
+        self.state.want_keys = false;
+        self.state.surface = None;
+        // Drain pending events before destroying proxies so any queued `wl_keyboard.keymap` fd is
+        // received and closed via `OwnedFd` rather than dropped open by libwayland.
+        drain_event_queue(&mut self.queue, &mut self.state);
+        let backend = self.conn.backend();
+        if let Some((_, cb)) = self.state.frame_callback.take() { backend.destroy_object(&cb.id()).ok(); }
         if let Some(shape) = self.state.shape.take() { shape.destroy(); }
         if let Some(shapes) = self.state.shapes.take() { shapes.destroy(); }
-        if let Some(pointer) = self.state.pointer.take() && pointer.version() >= 3 { pointer.release(); }
-        if let Some(touch) = self.state.touch.take() && touch.version() >= 3 { touch.release(); }
-        if let Some(keyboard) = self.state.keyboard.take() && keyboard.version() >= 3 { keyboard.release(); }
-        if let Some(seat) = self.seat.take() && seat.version() >= 5 { seat.release(); }
-        if let Some(output) = self.output.take() && output.version() >= 3 { output.release(); }
+        if let Some(pointer) = self.state.pointer.take() {
+            if pointer.version() >= 3 { pointer.release(); } else { backend.destroy_object(&pointer.id()).ok(); }
+        }
+        if let Some(touch) = self.state.touch.take() {
+            if touch.version() >= 3 { touch.release(); } else { backend.destroy_object(&touch.id()).ok(); }
+        }
+        if let Some(keyboard) = self.state.keyboard.take() {
+            if keyboard.version() >= 3 { keyboard.release(); } else { backend.destroy_object(&keyboard.id()).ok(); }
+        }
+        if let Some(seat) = self.seat.take() {
+            if seat.version() >= 5 { seat.release(); } else { backend.destroy_object(&seat.id()).ok(); }
+        }
+        if let Some(output) = self.output.take() {
+            if output.version() >= 3 { output.release(); } else { backend.destroy_object(&output.id()).ok(); }
+        }
         self.layer.destroy();
         self.surface.destroy();
+        if self.shell.version() >= 3 { self.shell.destroy(); } else { backend.destroy_object(&self.shell.id()).ok(); }
+        backend.destroy_object(&self.compositor.id()).ok();
+        if let Some(globals) = self.globals.take() {
+            destroy_globals(&self.conn, globals);
+        }
+        // Drain again after destroying every proxy so `EventQueueInner` holds no queued events
+        // (each retains `QueueHandle` in a cycle) and no proxy can enqueue more.
+        drain_event_queue(&mut self.queue, &mut self.state);
         self.queue.flush().ok();
     }
 }
