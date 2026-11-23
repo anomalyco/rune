@@ -1,0 +1,1 @@
+- `Image::wait`, `Image::is_ready` and `Image::size`: an image's decoded pixels are stored before its handle reports ready, and subscribed windows wake after both are published. Previously `Image::finish` published the decoded handle before storing the mips on `Pixels`, so a caller waking from `Image::wait` (or polling `is_ready`) under load could draw an empty image.

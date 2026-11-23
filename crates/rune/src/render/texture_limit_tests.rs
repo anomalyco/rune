@@ -39,6 +39,7 @@ fn an_image_larger_than_the_device_s_largest_texture_draws_from_a_mip_that_fits(
     // Drawn at its full size, the atlas would otherwise place mip 0.
     let mut rt = Runtime::new(image.pixels().clone(), view, (4096.0, 4096.0), Env::new(true, 1.0));
     rt.frame(0.0);
+    assert!(!rt.images.pages.is_empty(), "the image was placed in the atlas");
     assert!(rt.images.pages.iter().all(|p| p.width.max(p.height) <= LIMIT), "no page past the device's limit");
     let target = Offscreen::new(&gpu.device, 64, 64);
     let (_, error) = scoped(&gpu, || {

@@ -119,16 +119,16 @@ impl Pixels {
         self.source.notify();
     }
 
-    pub(crate) fn set_mips(&self, mips: Arc<crate::Decoded>) {
-        {
-            let mut frame = self.frame.lock().unwrap();
-            frame.width = mips.mips[0].width;
-            frame.height = mips.mips[0].height;
-            frame.rgba.clear();
-            frame.mips = Some(mips);
-            frame.generation += 1;
-        }
-        self.source.notify();
+    /// Stores `mips` without notifying subscribers, so [`crate::Image::finish`] can publish
+    /// `decoded` before waking windows (`Image::wait` and `is_ready` see the pixels, and woken
+    /// windows see `is_ready` and `size`).
+    pub(crate) fn store_mips(&self, mips: Arc<crate::Decoded>) {
+        let mut frame = self.frame.lock().unwrap();
+        frame.width = mips.mips[0].width;
+        frame.height = mips.mips[0].height;
+        frame.rgba.clear();
+        frame.mips = Some(mips);
+        frame.generation += 1;
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -146,6 +146,12 @@ impl Pixels {
     #[doc(hidden)]
     pub fn rgba(&self) -> Vec<u8> {
         self.frame.lock().unwrap().rgba.clone()
+    }
+
+    /// Holds the frame lock until dropped, so tests can pause a concurrent pixel update.
+    #[cfg(test)]
+    pub(crate) fn hold_frame(&self) -> impl Drop + '_ {
+        self.frame.lock().unwrap()
     }
 }
 
