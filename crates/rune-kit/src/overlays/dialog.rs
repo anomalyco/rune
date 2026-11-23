@@ -46,11 +46,11 @@ impl Dialog {
             .control_size(ControlSize::Regular).label("Close").build(k).key("close");
         if let Some(button) = self.button { dismiss = button(dismiss); }
         dismiss = dismiss.size(20.0, 20.0).mt(-2.0).mr(-2.0);
-        let mut title = col().grow(1.0).gap(4.0).child(text(self.title.clone())
+        let mut title = col().grow(1.0).shrink().gap(4.0).child(text(self.title.clone())
             .font(if self.description.is_some() { TextStyle { size: 15.0, tracking: -0.13, ..k.ty.ui_medium }.lh(20.0) }
                 else { k.ty.ui_medium.lh(16.0) }).color(k.c.text_base));
         if let Some(description) = self.description.clone() {
-            title = title.child(text(description).font(k.ty.ui.lh(20.0)).color(k.c.text_muted));
+            title = title.child(text(description).font(k.ty.ui.lh(20.0)).color(k.c.text_muted).wrap().w_full());
         }
         let body = col().key("body").w_full().children(self.body);
         let (panel, body) = if self.fit { (col(), body) } else { (col().h(368.0), body.grow(1.0)) };
