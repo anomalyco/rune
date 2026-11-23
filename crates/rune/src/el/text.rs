@@ -495,11 +495,15 @@ impl El {
         }
         self
     }
+    /// The field's insertion caret and selection highlight colours. Without it, the caret follows
+    /// the field's text colour ([`El::color`], else [`Cx::foreground`](crate::Cx::foreground), else
+    /// white), matching CSS `caret-color: auto`, and the selection uses that colour at 20%.
     pub fn caret(mut self, caret: Color, selection: Color) -> Self {
         if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
             i.caret = caret;
             i.selection = selection;
             i.caret_inked = true;
+            i.selection_inked = true;
         }
         self
     }
@@ -631,7 +635,10 @@ impl El {
     }
     /// The selection highlight of [`El::selectable`] text or a text field, drawn alike for both.
     pub fn selection_color(mut self, color: Color) -> Self {
-        if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) { i.selection = color; }
+        if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
+            i.selection = color;
+            i.selection_inked = true;
+        }
         if let Some(t) = &mut self.text { t.cold.selection = color; }
         self
     }
@@ -686,7 +693,15 @@ impl El {
             *ic = c;
             cold.icon_inked = true;
         }
-        if self.cold.input.is_some() {
+        let has_input = if let Some(i) = self.cold.get_mut_if_some().and_then(|cold| cold.input.as_deref_mut()) {
+            if !i.placeholder_inked { i.placeholder_color = c.alpha(0.4); }
+            if !i.caret_inked { i.caret = c; }
+            if !i.selection_inked { i.selection = c.alpha(0.2); }
+            true
+        } else {
+            false
+        };
+        if has_input {
             self.sync_input_rich();
         }
         self

@@ -106,3 +106,46 @@ fn caret_rect_tracks_grapheme_steps() {
     assert_eq!(rt.state.draft.text, ["a", "🇯🇵", "👋🏽", "❤️", "b"].concat());
     assert!((c[0] - xs[1]).abs() < 0.01, "back after \"a\": {} vs {}", c[0], xs[1]);
 }
+
+#[test]
+fn focused_field_paints_caret_in_its_text_color_by_default() {
+    use rune::Color;
+    const DARK_INK: Color = Color { r: 0.1, g: 0.12, b: 0.16, a: 1.0 };
+    const ACCENT: Color = Color { r: 0.85, g: 0.15, b: 0.4, a: 1.0 };
+    struct Form { draft: TextEdit, fg: Option<Color>, explicit_caret: Option<Color> }
+    fn form_view(s: &Form, cx: &mut Cx<Form>) -> El {
+        if let Some(fg) = s.fg { cx.foreground(fg); }
+        let mut field = text_input(&s.draft, TextStyle::new(14.0, 400.0))
+            .key("input").label("Note").w(200.0).color(DARK_INK)
+            .on_edit(|s: &mut Form| &mut s.draft);
+        if let Some(c) = s.explicit_caret {
+            field = field.caret(c, c.alpha(0.25));
+        }
+        col().w_full().h_full().fill(Color::WHITE).child(field)
+    }
+    let dark_ink = DARK_INK;
+    let accent = ACCENT;
+    let view = form_view;
+    let mut draft = TextEdit::new("hello");
+    draft.focused = true;
+    let mut rt = Runtime::new(Form { draft, fg: None, explicit_caret: None }, view, (300.0, 120.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    let has_fill = |rt: &Runtime<Form>, color: Color| {
+        let want = color.premul(1.0);
+        rt.instances.iter().any(|i| i.params[1] == 0.0 && i.rect[2] > 0.0 && i.rect[2] <= 4.0
+            && i.fill.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-3))
+    };
+
+    assert!(has_fill(&rt, dark_ink), "caret paints in the field's .color() without .caret()");
+
+    // Setting a white window foreground must not override the field's own .color().
+    rt.update(|s, _| s.fg = Some(Color::WHITE));
+    rt.frame(1.0 / 60.0);
+    assert!(has_fill(&rt, dark_ink), "field .color() still drives caret even when Cx::foreground is white");
+
+    // An explicit .caret() overrides the text colour.
+    rt.update(|s, _| s.explicit_caret = Some(accent));
+    rt.frame(1.0 / 60.0);
+    assert!(has_fill(&rt, accent), "explicit .caret() overrides the field's .color()");
+}

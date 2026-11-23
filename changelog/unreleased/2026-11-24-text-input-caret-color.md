@@ -1,0 +1,1 @@
+- `text_input`: a field with `El::color(c)` and no `El::caret(..)` now draws its caret in `c` (matching CSS `caret-color: auto`), its uninked placeholder in `c.alpha(0.4)`, and its uninked selection highlight in `c.alpha(0.2)`, rather than defaulting to white or the window's `Cx::foreground`. Fields without `El::color` still follow `Cx::foreground`, else white.

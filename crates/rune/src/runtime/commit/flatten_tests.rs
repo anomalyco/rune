@@ -248,3 +248,63 @@ fn path_segment_encoding_is_injective_and_preserves_unambiguous_paths() {
     assert!(crate::flight::selects("row/0/field", &row_field, Some("field")));
     assert!(!keyed_suffix_matches(&row_field, "viewport/field"));
 }
+
+#[test]
+fn text_input_color_drives_uninked_caret_placeholder_and_selection() {
+    let edit = TextEdit::new("");
+    let st = TextStyle::new(14.0, 400.0);
+    let ink = Color { r: 0.1, g: 0.15, b: 0.2, a: 1.0 };
+    let ink2 = Color { r: 0.2, g: 0.4, b: 0.1, a: 1.0 };
+    let fg = Color { r: 0.9, g: 0.9, b: 0.95, a: 1.0 };
+    let custom_caret = Color { r: 0.9, g: 0.1, b: 0.3, a: 1.0 };
+    let custom_sel = Color { r: 0.1, g: 0.5, b: 0.9, a: 0.3 };
+    let custom_ph = Color { r: 0.4, g: 0.4, b: 0.4, a: 1.0 };
+
+    let input_colors = |el: El, foreground: Option<Color>| {
+        let (nodes, _) = run_flatten(el, foreground);
+        let i = nodes[0].input.as_ref().unwrap();
+        (nodes[0].text.as_ref().unwrap().color, i.caret, i.placeholder_color, i.selection)
+    };
+
+    // Field with .color(ink) and no Cx::foreground derives caret, placeholder and selection from ink.
+    assert_eq!(
+        input_colors(text_input(&edit, st).color(ink), None),
+        (ink, ink, ink.alpha(0.4), ink.alpha(0.2)),
+    );
+
+    // Field's own .color(ink) beats Cx::foreground(fg), matching CSS caret-color: auto.
+    assert_eq!(
+        input_colors(text_input(&edit, st).color(ink), Some(fg)),
+        (ink, ink, ink.alpha(0.4), ink.alpha(0.2)),
+    );
+
+    // Uncoloured field still follows Cx::foreground(fg).
+    assert_eq!(
+        input_colors(text_input(&edit, st), Some(fg)),
+        (fg, fg, fg.alpha(0.4), fg.alpha(0.2)),
+    );
+
+    // Chaining .color updates uninked defaults to the latest colour.
+    assert_eq!(
+        input_colors(text_input(&edit, st).color(ink).color(ink2), None),
+        (ink2, ink2, ink2.alpha(0.4), ink2.alpha(0.2)),
+    );
+
+    // Explicit .caret, .placeholder and .selection_color survive .color regardless of call order.
+    assert_eq!(
+        input_colors(text_input(&edit, st).caret(custom_caret, custom_sel).color(ink), Some(fg)),
+        (ink, custom_caret, ink.alpha(0.4), custom_sel),
+    );
+    assert_eq!(
+        input_colors(text_input(&edit, st).color(ink).caret(custom_caret, custom_sel), Some(fg)),
+        (ink, custom_caret, ink.alpha(0.4), custom_sel),
+    );
+    assert_eq!(
+        input_colors(text_input(&edit, st).placeholder("Hint", custom_ph).color(ink), Some(fg)),
+        (ink, ink, custom_ph, ink.alpha(0.2)),
+    );
+    assert_eq!(
+        input_colors(text_input(&edit, st).selection_color(custom_sel).color(ink), Some(fg)),
+        (ink, ink, ink.alpha(0.4), custom_sel),
+    );
+}
