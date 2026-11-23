@@ -311,3 +311,12 @@ fn webgl2_yields_a_macrotask_before_ready_while_webgpu_does_not() {
     assert!(needs_ready_yield(wgpu::Backend::Gl));
     assert!(!needs_ready_yield(wgpu::Backend::BrowserWebGpu));
 }
+
+#[test]
+fn web_adapter_options_leave_power_preference_unset() {
+    let opts = adapter_options(None);
+    assert_eq!(opts.power_preference, wgpu::PowerPreference::None);
+    assert!(!opts.force_fallback_adapter);
+    assert!(!opts.apply_limit_buckets);
+    assert!(opts.compatible_surface.is_none());
+}

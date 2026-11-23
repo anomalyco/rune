@@ -100,10 +100,8 @@ pub(super) async fn try_webgpu(canvas: &web_sys::HtmlCanvasElement, features: wg
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
     let instance = wgpu::Instance::new(descriptor);
-    let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower, compatible_surface: None,
-        force_fallback_adapter: false, apply_limit_buckets: false,
-    }).await.map_err(|e| e.to_string())?;
+    let adapter = instance.request_adapter(&super::web_math::adapter_options(None))
+        .await.map_err(|e| e.to_string())?;
     let required_limits = wgpu::Limits::default().using_resolution(adapter.limits());
     let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("rune web"), required_features: adapter.features() & features,
@@ -137,10 +135,8 @@ pub(super) async fn try_webgl2(
     let surface = instance.create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone())).map_err(|e| e.to_string())?;
     super::yield_turn().await;
     if quitting.load(Ordering::Acquire) { return Err("app quit".into()); }
-    let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower, compatible_surface: Some(&surface),
-        force_fallback_adapter: false, apply_limit_buckets: false,
-    }).await.map_err(|e| e.to_string())?;
+    let adapter = instance.request_adapter(&super::web_math::adapter_options(Some(&surface)))
+        .await.map_err(|e| e.to_string())?;
     super::yield_turn().await;
     if quitting.load(Ordering::Acquire) { return Err("app quit".into()); }
     let adapter_limits = adapter.limits();

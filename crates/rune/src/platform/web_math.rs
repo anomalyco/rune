@@ -117,6 +117,25 @@ pub(crate) enum WebBackend {
     WebGl2,
 }
 
+/// Adapter options for a web GPU backend (`WebGPU` with `compatible_surface: None`, or `WebGL2`
+/// with `compatible_surface: Some(&surface)`).
+///
+/// Leaves `power_preference` at [`wgpu::PowerPreference::None`] so `navigator.gpu.requestAdapter`
+/// omits `powerPreference` and lets the browser choose the GPU (e.g. Chromium picks `LowPower` on
+/// battery and `HighPerformance` on AC power, avoids forcing an integrated GPU that cannot import
+/// textures across to a discrete display GPU on Linux, and avoids Chrome's Windows console warning
+/// for explicit `powerPreference`).
+pub(crate) fn adapter_options<'a, 'b>(
+    compatible_surface: Option<&'a wgpu::Surface<'b>>,
+) -> wgpu::RequestAdapterOptions<'a, 'b> {
+    wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::None,
+        compatible_surface,
+        force_fallback_adapter: false,
+        apply_limit_buckets: false,
+    }
+}
+
 /// Backends to attempt in order, given whether `navigator.gpu` is exposed and whether the
 /// `webgl` cargo feature is enabled.
 ///
