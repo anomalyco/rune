@@ -5,7 +5,7 @@ class FakeNode {
     constructor(tagName) {
         this.tagName = tagName.toUpperCase();
         this.style = { cssText: '', setProperty() {} };
-        this.attributes = new Map();
+        this._attrs = new Map();
         this.listeners = new Map();
         this.children = [];
         this.parentElement = null;
@@ -41,9 +41,32 @@ class FakeNode {
         this.selectionDirection = 'forward';
     }
 
-    setAttribute(name, value) { this.attributes.set(name, String(value)); }
-    removeAttribute(name) { this.attributes.delete(name); }
-    getAttribute(name) { return this.attributes.get(name) ?? null; }
+    get attributes() { return [...this._attrs].map(([name, value]) => ({ name, value })); }
+    setAttribute(name, value) { this._attrs.set(name, String(value)); }
+    removeAttribute(name) { this._attrs.delete(name); }
+    getAttribute(name) { return this._attrs.get(name) ?? null; }
+
+    get firstElementChild() { return this.children[0] ?? null; }
+    get nextElementSibling() {
+        if (!this.parentElement) return null;
+        const i = this.parentElement.children.indexOf(this);
+        return i >= 0 ? (this.parentElement.children[i + 1] ?? null) : null;
+    }
+
+    insertBefore(node, ref) {
+        if (node.parentElement) node.remove();
+        node.parentElement = this;
+        const i = ref ? this.children.indexOf(ref) : -1;
+        if (i >= 0) this.children.splice(i, 0, node);
+        else this.children.push(node);
+        return node;
+    }
+
+    replaceChildren(...nodes) {
+        for (const child of this.children) child.parentElement = null;
+        this.children = [];
+        this.append(...nodes);
+    }
 
     addEventListener(name, handler) {
         let list = this.listeners.get(name);
@@ -788,6 +811,84 @@ test('lone CR, consecutive CRLFs, surrogate pairs, and IME preedit preserve unto
         focus: 8,
     });
     assert.deepEqual(events.shift(), { kind: 'sync' });
+
+    bridge.destroy(h);
+});
+
+test('syncA11y writes aria-pressed, aria-checked, and aria-selected cleanly across updates', () => {
+    const { h } = setup();
+
+    bridge.syncA11y(h, JSON.stringify([
+        { k: 'button', p: 'wrap', r: [0, 0, 80, 24], t: 'Wrap', pr: 'false' },
+        { k: 'button', p: 'mixed', r: [0, 28, 80, 24], t: 'Bold', pr: 'mixed' },
+        { k: 'button', p: 'check', r: [0, 56, 80, 24], t: 'All', o: 'checkbox', c: 'mixed' },
+        { k: 'button', p: 'sw', r: [0, 84, 80, 24], t: 'Switch', o: 'switch', c: 'true' },
+        { k: 'button', p: 'tab', r: [0, 112, 80, 24], t: 'Files', o: 'tab', se: true },
+    ]));
+
+    const wrap = h.a11yNodes.get('button:wrap');
+    assert.equal(wrap.getAttribute('role'), null);
+    assert.equal(wrap.getAttribute('aria-pressed'), 'false');
+    assert.equal(wrap.getAttribute('aria-checked'), null);
+    assert.equal(wrap.getAttribute('aria-selected'), null);
+
+    const mixed = h.a11yNodes.get('button:mixed');
+    assert.equal(mixed.getAttribute('aria-pressed'), 'mixed');
+    assert.equal(mixed.getAttribute('aria-checked'), null);
+
+    const check = h.a11yNodes.get('button:check');
+    assert.equal(check.getAttribute('role'), 'checkbox');
+    assert.equal(check.getAttribute('aria-checked'), 'mixed');
+    assert.equal(check.getAttribute('aria-pressed'), null);
+
+    const sw = h.a11yNodes.get('button:sw');
+    assert.equal(sw.getAttribute('role'), 'switch');
+    assert.equal(sw.getAttribute('aria-checked'), 'true');
+    assert.equal(sw.getAttribute('aria-pressed'), null);
+
+    const tab = h.a11yNodes.get('button:tab');
+    assert.equal(tab.getAttribute('role'), 'tab');
+    assert.equal(tab.getAttribute('aria-selected'), 'true');
+    assert.equal(tab.getAttribute('aria-checked'), null);
+    assert.equal(tab.getAttribute('aria-pressed'), null);
+
+    // Flip toggle button to pressed=true, then clear pressed, and switch checkbox to toggle button.
+    bridge.syncA11y(h, JSON.stringify([
+        { k: 'button', p: 'wrap', r: [0, 0, 80, 24], t: 'Wrap', pr: 'true' },
+        { k: 'button', p: 'mixed', r: [0, 28, 80, 24], t: 'Bold' },
+        { k: 'button', p: 'check', r: [0, 56, 80, 24], t: 'All', pr: 'false' },
+    ]));
+    assert.equal(wrap.getAttribute('aria-pressed'), 'true');
+    assert.equal(mixed.getAttribute('aria-pressed'), null);
+    assert.equal(check.getAttribute('role'), null);
+    assert.equal(check.getAttribute('aria-checked'), null);
+    assert.equal(check.getAttribute('aria-pressed'), 'false');
+
+    bridge.destroy(h);
+});
+
+test('focusA11y writes aria-pressed on focused toggle buttons and keeps aria-checked/aria-selected separate', () => {
+    const { h } = setup();
+
+    bridge.focusA11y(h, JSON.stringify({ o: 'button', t: 'Wrap', pr: 'true' }));
+    let proxy = h.focusProxies[h.focusTurn];
+    assert.equal(proxy.getAttribute('role'), 'button');
+    assert.equal(proxy.getAttribute('aria-pressed'), 'true');
+    assert.equal(proxy.getAttribute('aria-checked'), null);
+    assert.equal(proxy.getAttribute('aria-selected'), null);
+
+    bridge.focusA11y(h, JSON.stringify({ o: 'checkbox', t: 'All', c: 'mixed' }));
+    proxy = h.focusProxies[h.focusTurn];
+    assert.equal(proxy.getAttribute('role'), 'checkbox');
+    assert.equal(proxy.getAttribute('aria-checked'), 'mixed');
+    assert.equal(proxy.getAttribute('aria-pressed'), null);
+
+    bridge.focusA11y(h, JSON.stringify({ o: 'tab', t: 'Files', s: true }));
+    proxy = h.focusProxies[h.focusTurn];
+    assert.equal(proxy.getAttribute('role'), 'tab');
+    assert.equal(proxy.getAttribute('aria-selected'), 'true');
+    assert.equal(proxy.getAttribute('aria-checked'), null);
+    assert.equal(proxy.getAttribute('aria-pressed'), null);
 
     bridge.destroy(h);
 });

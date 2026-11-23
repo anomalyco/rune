@@ -59,8 +59,9 @@ pub(crate) struct A11yItem {
     /// What describes it beyond its name (`El::description`, `El::described_by`'s words):
     /// `aria-description`.
     pub description: String,
-    /// A control's states, for a button carrying a control's role (`role`): `aria-selected`,
-    /// `aria-checked`, and its place in its set (`El::position_in_set`).
+    /// A control's states: `aria-pressed` on a toggle button, `aria-selected`, `aria-checked`,
+    /// and its place in its set (`El::position_in_set`) on a control role (`role`).
+    pub pressed: Option<&'static str>,
     pub selected: Option<bool>,
     pub checked: Option<&'static str>,
     pub set: Option<(usize, usize)>,
@@ -89,7 +90,7 @@ pub(crate) struct A11yRun {
 impl A11yItem {
     fn new(kind: &'static str, path: &str, rect: [f32; 4]) -> Self {
         A11yItem { kind, path: path.to_owned(), rect, font_size: 0.0, level: None, expanded: None, text: String::new(),
-            runs: Vec::new(), tag: None, role: None, parent: None, id: None, href: None, font: None, selectable: false, description: String::new(), selected: None, checked: None, set: None }
+            runs: Vec::new(), tag: None, role: None, parent: None, id: None, href: None, font: None, selectable: false, description: String::new(), pressed: None, selected: None, checked: None, set: None }
     }
 
     fn to_json(&self) -> Value {
@@ -102,6 +103,7 @@ impl A11yItem {
         if let Some(x) = self.expanded { obj.insert("x".into(), json!(x)); }
         if !self.text.is_empty() { obj.insert("t".into(), json!(self.text)); }
         if !self.description.is_empty() { obj.insert("d".into(), json!(self.description)); }
+        if let Some(pr) = self.pressed { obj.insert("pr".into(), json!(pr)); }
         if let Some(s) = self.selected { obj.insert("se".into(), json!(s)); }
         if let Some(c) = self.checked { obj.insert("c".into(), json!(c)); }
         if let Some((pos, size)) = self.set { obj.insert("n".into(), json!([pos, size])); }
@@ -176,6 +178,23 @@ pub(crate) fn takes_pointer(n: &Node) -> bool {
         || n.input.is_some() || n.window_drag == crate::el::WindowDrag::Drag
         || n.a11y.more.as_ref().is_some_and(|m| m.href.is_some())
         || roles::takes_pointer(n.role)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CheckedAttr { Pressed, Checked, Selected }
+
+/// Which ARIA state attribute carries `El::checked` for `aria_role` (`None` is an HTML `<button>`).
+fn checked_attr(aria_role: Option<&str>) -> Option<CheckedAttr> {
+    match aria_role {
+        None | Some("button") => Some(CheckedAttr::Pressed),
+        Some("checkbox" | "radio" | "switch" | "menuitem" | "menuitemcheckbox" | "menuitemradio" | "treeitem") => Some(CheckedAttr::Checked),
+        Some("tab" | "option") => Some(CheckedAttr::Selected),
+        _ => None,
+    }
+}
+
+fn checked_str(c: crate::el::Checked) -> &'static str {
+    match c { crate::el::Checked::True => "true", crate::el::Checked::False => "false", crate::el::Checked::Mixed => "mixed" }
 }
 
 fn round1(v: f32) -> f32 { (v * 10.0).round() / 10.0 }
@@ -454,9 +473,17 @@ impl RuntimeCore {
                     if let Some(role) = roles::web_control_role(n.role) {
                         item.role = Some(role);
                         if self.a11y_role(i).is_some_and(roles::selectable_item) { item.selected = Some(n.focus.selected); }
-                        item.checked = n.a11y.checked.map(|c| match c { crate::el::Checked::True => "true", crate::el::Checked::False => "false", crate::el::Checked::Mixed => "mixed" })
-                            .or_else(|| (n.role == "radio").then_some(if n.focus.selected { "true" } else { "false" }));
                         item.set = n.a11y.more.as_ref().and_then(|m| m.set);
+                    }
+                    let checked = n.a11y.checked
+                        .or_else(|| (n.role == "radio").then_some(if n.focus.selected { crate::el::Checked::True } else { crate::el::Checked::False }));
+                    if let Some(c) = checked {
+                        match checked_attr(item.role) {
+                            Some(CheckedAttr::Pressed) => item.pressed = Some(checked_str(c)),
+                            Some(CheckedAttr::Checked) => item.checked = Some(checked_str(c)),
+                            Some(CheckedAttr::Selected) => item.selected = Some(c == crate::el::Checked::True),
+                            None => {}
+                        }
                     }
                     push(&mut out, item);
                     i = end;
@@ -641,17 +668,24 @@ impl RuntimeCore {
     fn web_focus_item(&self, i: usize) -> Value {
         let n = &self.tree.nodes[i];
         let role = self.a11y_role(i);
+        let focus_role = role.map_or("group", roles::focus_role);
         let mut o = serde_json::Map::new();
-        o.insert("o".into(), json!(role.map_or("group", roles::focus_role)));
+        o.insert("o".into(), json!(focus_role));
         let name = self.mirror_name(i).unwrap_or_else(|| self.descendant_label(i, self.subtree_end(i)));
         o.insert("t".into(), json!(name));
         let description = self.mirror_description(i);
         if !description.is_empty() { o.insert("d".into(), json!(description)); }
+        let mut selected = role.is_some_and(roles::selectable_item).then_some(n.focus.selected);
         let checked = n.a11y.checked.or_else(|| (role == Some(accesskit::Role::RadioButton)).then_some(if n.focus.selected { crate::el::Checked::True } else { crate::el::Checked::False }));
         if let Some(c) = checked {
-            o.insert("c".into(), json!(match c { crate::el::Checked::True => "true", crate::el::Checked::False => "false", crate::el::Checked::Mixed => "mixed" }));
+            match checked_attr(Some(focus_role)) {
+                Some(CheckedAttr::Pressed) => { o.insert("pr".into(), json!(checked_str(c))); }
+                Some(CheckedAttr::Checked) => { o.insert("c".into(), json!(checked_str(c))); }
+                Some(CheckedAttr::Selected) => { selected = Some(c == crate::el::Checked::True); }
+                None => {}
+            }
         }
-        if role.is_some_and(roles::selectable_item) { o.insert("s".into(), json!(n.focus.selected)); }
+        if let Some(s) = selected { o.insert("s".into(), json!(s)); }
         if let Some(open) = n.a11y.expanded { o.insert("x".into(), json!(open)); }
         if let Some((pos, size)) = n.a11y.more.as_ref().and_then(|m| m.set) { o.insert("n".into(), json!([pos, size])); }
         if let Some(level) = n.a11y.level { o.insert("l".into(), json!(level)); }

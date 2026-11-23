@@ -1,0 +1,1 @@
+- Web: the accessibility mirror and focus proxy now map `El::checked` and `El::checked_mixed` to the role's ARIA state—`aria-pressed` on toggle buttons, `aria-checked` on checkboxes, switches, radios, menu items and tree items, and `aria-selected` on tabs and options.
