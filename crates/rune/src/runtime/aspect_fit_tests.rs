@@ -82,3 +82,78 @@ fn grow_and_content_do_not_size_the_fitted_box() {
     assert_eq!((a[2..].to_vec(), b[2..].to_vec()), (vec![300.0, 150.0], vec![300.0, 150.0]),
         "a 200 pt child doesn't take its cell a bigger share of the row");
 }
+
+#[test]
+fn cross_max_larger_than_column_fits_inside_column() {
+    // 3-column row (300 / grow / 300) in a 1000x1000 viewport leaves a 400 pt middle column.
+    fn three_col(r: &f32, _: &mut Cx<f32>) -> El {
+        row().w_full().h_full()
+            .child(col().key("left").w(300.0).h_full())
+            .child(col().key("mid").grow(1.0).h_full()
+                .child(el().key("pic").aspect_fit(*r).max_w(2000.0))
+                .child(el().key("below").h(100.0)))
+            .child(col().key("right").w(300.0).h_full())
+    }
+    let mut rt = Runtime::new(9.0 / 16.0, three_col, (1000.0, 1000.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let [mid, pic, below, right] = rects(&rt, &["mid", "pic", "below", "right"])[..] else { unreachable!() };
+    assert_eq!(mid[2], 400.0, "middle column stays 400 pt wide");
+    assert_eq!(right[0], 700.0, "right column is not pushed out");
+    assert!((pic[2] - 400.0).abs() < 0.01 && (pic[3] - 400.0 / (9.0 / 16.0)).abs() < 0.05,
+        "9:16 fits the 400 pt column width instead of 2000 pt: {pic:?}");
+    assert!((below[1] - pic[3]).abs() < 0.05, "sibling sits under the fitted box: {below:?}");
+
+    // Same 3-column row at 1600x1000 (1000 pt middle column) with a 16:9 box.
+    let mut rt = Runtime::new(16.0 / 9.0, three_col, (1600.0, 1000.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let [mid, pic, below, right] = rects(&rt, &["mid", "pic", "below", "right"])[..] else { unreachable!() };
+    assert_eq!(mid[2], 1000.0);
+    assert_eq!(right[0], 1300.0);
+    assert!((pic[2] - 1000.0).abs() < 0.01 && (pic[3] - 562.5).abs() < 0.05, "16:9 fits 1000 pt width: {pic:?}");
+    assert!((below[1] - 562.5).abs() < 0.05, "sibling sits at 562.5: {below:?}");
+}
+
+#[test]
+fn cross_max_smaller_than_column_still_caps_room() {
+    fn view(r: &f32, _: &mut Cx<f32>) -> El {
+        col().child(col().size(600.0, 400.0).items_center()
+            .child(el().key("pic").aspect_fit(*r).max_w(200.0)))
+    }
+    let rt = run(2.0, view);
+    let [pic] = rects(&rt, &["pic"])[..] else { unreachable!() };
+    assert_eq!(pic, [200.0, 0.0, 200.0, 100.0]);
+}
+
+#[test]
+fn cross_max_in_a_row_respects_row_height_and_caps_when_smaller() {
+    fn view(r: &f32, _: &mut Cx<f32>) -> El {
+        col()
+            .child(row().size(600.0, 200.0).child(el().key("big").aspect_fit(*r).max_h(2000.0)))
+            .child(row().size(600.0, 200.0).items_center().child(el().key("small").aspect_fit(2.0).max_h(80.0)))
+    }
+    let rt = run(0.5, view);
+    let [big, small] = rects(&rt, &["big", "small"])[..] else { unreachable!() };
+    assert_eq!(big, [0.0, 0.0, 100.0, 200.0], "max_h above row height fits the 200 pt row");
+    assert_eq!(small, [0.0, 260.0, 160.0, 80.0], "max_h below row height caps at 80 pt, centred");
+}
+
+#[test]
+fn main_max_and_cross_max_both_apply() {
+    fn view(r: &f32, _: &mut Cx<f32>) -> El {
+        col()
+            .child(col().w(300.0).child(el().key("col_both").aspect_fit(*r).max_w(2000.0).max_h(100.0)))
+            .child(col().size(300.0, 200.0)
+                .child(el().key("col_shrink").aspect_fit(*r).max_w(2000.0).max_h(2000.0))
+                .child(el().key("cap").h(20.0)))
+            .child(row().size(300.0, 200.0)
+                .child(el().key("row_shrink").aspect_fit(0.5).max_w(2000.0).max_h(2000.0))
+                .child(el().key("side").w(20.0)))
+    }
+    let rt = run(2.0, view);
+    let [col_both, col_shrink, cap, row_shrink, side] = rects(&rt, &["col_both", "col_shrink", "cap", "row_shrink", "side"])[..] else { unreachable!() };
+    assert_eq!(col_both[2..], [200.0, 100.0], "auto-height column uses max_h and stretches width within max_w");
+    assert_eq!(col_shrink[2..], [300.0, 150.0], "bounded column shrinks main max_h and stretches cross width");
+    assert_eq!(cap[1], 250.0, "caption sits under the fitted box");
+    assert_eq!(row_shrink[2..], [100.0, 200.0], "bounded row shrinks main max_w and stretches cross height");
+    assert_eq!(side[0], 100.0, "sibling sits next to the fitted box");
+}

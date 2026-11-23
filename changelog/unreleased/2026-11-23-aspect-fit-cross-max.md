@@ -1,0 +1,1 @@
+- Layout: `El::aspect_fit` leaves the cross axis `auto` during room measurement so `align_self: stretch` fits the parent's cross side within `max_w` or `max_h` instead of turning a cross-axis maximum into a fixed room size that overflows narrower columns or shorter rows.
