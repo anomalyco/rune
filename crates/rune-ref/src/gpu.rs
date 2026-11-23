@@ -58,6 +58,29 @@ impl From<&Primitive> for Instance {
     }
 }
 
+/// Default per-channel tolerance for a single draw and for exact-blending composites.
+pub const DEFAULT_TOLERANCE: u8 = 2;
+
+/// `(backend, pci_vendor_id, composite_tolerance)` entries measured on hardware whose fixed-function
+/// sRGB ROP pre-quantizes linear fragment output to 8 bits before blending.
+///
+/// Direct3D 11.3 Functional Specification §17.5 permits fixed-point render target blending at
+/// output-format precision (8 bits). On NVIDIA under DX12, four to five overlapping translucent
+/// draws into `Rgba8UnormSrgb` accumulate up to 3 LSB against the CPU oracle, whereas AMD Radeon
+/// DX12, WARP DX12, and Apple M4 Pro / Metal stay within 2 LSB. Single draws stay within 2 LSB on
+/// every measured adapter. NVIDIA under Vulkan is not measured and stays at 2 until measured.
+const MEASURED_COMPOSITE_TOLERANCE: [(wgpu::Backend, u32, u8); 1] =
+    [(wgpu::Backend::Dx12, 0x10DE, 3)];
+
+/// Composite per-channel tolerance for `info`: 3 for NVIDIA under DX12 (vendor `0x10DE`), and 2
+/// everywhere else. Single-primitive checks always stay at [`DEFAULT_TOLERANCE`] (2).
+pub fn composite_tolerance(info: &wgpu::AdapterInfo) -> u8 {
+    MEASURED_COMPOSITE_TOLERANCE
+        .iter()
+        .find(|&&(backend, vendor, _)| backend == info.backend && vendor == info.vendor)
+        .map_or(DEFAULT_TOLERANCE, |&(_, _, tol)| tol)
+}
+
 pub struct GpuRenderer {
     gpu: Gpu,
     renderer: Renderer,
@@ -66,7 +89,12 @@ pub struct GpuRenderer {
 impl Default for GpuRenderer {
     fn default() -> Self {
         let gpu = Gpu::new(Gpu::instance(), None);
-        eprintln!("reference adapter: {:?}", gpu.adapter.get_info());
+        let info = gpu.adapter.get_info();
+        let composite_tol = composite_tolerance(&info);
+        eprintln!(
+            "reference adapter: {} ({:?}, vendor=0x{:04x}) single_tolerance={DEFAULT_TOLERANCE} composite_tolerance={composite_tol}",
+            info.name, info.backend, info.vendor
+        );
         let renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
         Self {
             gpu,
@@ -76,6 +104,24 @@ impl Default for GpuRenderer {
     }
 }
 impl GpuRenderer {
+    pub fn adapter_info(&self) -> wgpu::AdapterInfo {
+        self.gpu.adapter.get_info()
+    }
+
+    pub fn composite_tolerance(&self) -> u8 {
+        composite_tolerance(&self.adapter_info())
+    }
+
+    /// Tolerance for `scene`: [`DEFAULT_TOLERANCE`] (2) for a single draw, and
+    /// [`Self::composite_tolerance`] when several draws can blend into a pixel.
+    pub fn scene_tolerance(&self, scene: &Scene) -> u8 {
+        if scene.primitives.len() > 1 {
+            self.composite_tolerance()
+        } else {
+            DEFAULT_TOLERANCE
+        }
+    }
+
     pub fn render(&mut self, scene: &Scene) -> Vec<u8> {
         scene.validate().expect("valid differential scene");
         let atlas = &mut self.text.atlas;

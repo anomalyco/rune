@@ -1,0 +1,1 @@
+- Reference renderer: `rune-ref` keeps the 2-LSB per-channel tolerance for all single draws and non-NVIDIA/non-DX12 composites, and allows 3 LSB for multi-draw composites only on NVIDIA under DX12 (vendor `0x10DE`, `Backend::Dx12`), where the ROP pre-quantizes fragment output to 8 bits before blending as permitted by Direct3D 11.3 §17.5.

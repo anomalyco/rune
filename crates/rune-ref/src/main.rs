@@ -40,8 +40,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("--diff requires --features gpu".into());
         #[cfg(feature = "gpu")]
         {
-            let actual = rune_ref::gpu::GpuRenderer::default().render(&scene);
-            let report = rune_ref::compare(&scene, &frame, &actual, 2);
+            let mut gpu = rune_ref::gpu::GpuRenderer::default();
+            let tolerance = gpu.scene_tolerance(&scene);
+            let actual = gpu.render(&scene);
+            let report = rune_ref::compare(&scene, &frame, &actual, tolerance);
             println!("{}", serde_json::to_string_pretty(&report)?);
             if report.outlier_pixels > 0 {
                 return Err("GPU differs from reference".into());
