@@ -2,8 +2,9 @@
 //! spent by the one `Resized` it causes, never read as motion, and never left for a later move.
 //! The reference keeps the two fields this replaced apart exactly as dev had them.
 
-use super::stepping::FrameMove;
+use super::stepping::{FrameMove, apply_immediate_resize};
 use crate::window::frame::FrameAnim;
+use crate::{Env, Runtime, col, el};
 
 /// The anim a walk's `Animate` requests start, and the origin it is taken from.
 fn animation() -> FrameAnim {
@@ -171,4 +172,125 @@ fn a_later_request_or_landing_keeps_the_rules() {
     feed(&mut slot, Step::Animate);
     assert!(feed(&mut slot, Step::Resized(HIS)).moving, "and no Resized spends it");
     assert!(!feed(&mut slot, Step::Land).moving, "landing stops it");
+}
+
+/// On Wayland, `Window::request_inner_size` applies the resize immediately and returns
+/// `Some(size)` without emitting `WindowEvent::Resized`. The surface config, runtime viewport
+/// and jump coupon must all update immediately, including at fractional scales.
+#[test]
+fn immediate_resize_reconfigures_surface_steps_viewport_and_consumes_jump() {
+    let mut rt = Runtime::new((), |_, _| el().size(1200.0, 720.0), (1200.0, 720.0), Env::default());
+    rt.frame(0.0);
+    let mut surface = (1200u32, 720u32);
+    let mut frame_move = Some(FrameMove::jumped((900.0, 600.0)));
+
+    let changed = apply_immediate_resize(rt.core_mut(), &mut frame_move, (900, 600), 1.0, |next| {
+        let resized = surface != next;
+        surface = next;
+        (resized, surface)
+    });
+    assert!(changed, "an immediate resize must mark the window changed so a redraw follows");
+    assert_eq!(surface, (900, 600), "the surface config must follow the immediate size");
+    assert_eq!(rt.core().window_viewport(), (900.0, 600.0));
+    assert_eq!(frame_move, None, "the jump coupon must be consumed when no Resized will arrive");
+
+    // Fractional scaling: logical (900, 601) at 1.25x rounds to physical (1125, 751) -> (900.0, 600.8).
+    let mut rt_scaled = Runtime::new((), |_, _| el().size(1200.0, 720.0), (1200.0, 720.0), Env { scale: 1.25, ..Env::default() });
+    rt_scaled.frame(0.0);
+    let mut scaled_surface = (1500u32, 900u32);
+    let mut scaled_move = Some(FrameMove::jumped((900.0, 601.0)));
+
+    let changed = apply_immediate_resize(rt_scaled.core_mut(), &mut scaled_move, (1125, 751), 1.25, |next| {
+        let resized = scaled_surface != next;
+        scaled_surface = next;
+        (resized, scaled_surface)
+    });
+    assert!(changed);
+    assert_eq!(scaled_surface, (1125, 751));
+    assert_eq!(rt_scaled.core().window_viewport(), (900.0, 600.8));
+    assert_eq!(scaled_move, None);
+}
+
+/// A `fit_content_height` window resizing itself on Wayland updates its surface and viewport
+/// through `step_viewport`, so it does not trigger `fit_resized` relayout as if a user dragged it.
+#[test]
+fn immediate_resize_for_fit_content_height_steps_without_fit_resized_relayout() {
+    let mut rt = Runtime::new(200.0f32, |&h, _| col().w_full().child(el().size(100.0, h)), (400.0, 200.0), Env::default());
+    rt.core_mut().host.fit_height = true;
+    rt.core_mut().host.window_resting = true;
+    rt.frame(0.0);
+    rt.core_mut().host.window_frame.take();
+
+    rt.update(|h, _| *h = 350.0);
+    rt.frame(0.0);
+    let requested = rt.core_mut().host.window_frame.take().and_then(|r| r.size).expect("fit height requests new size");
+    assert_eq!(requested, (400.0, 350.0));
+
+    let mut surface = (400u32, 200u32);
+    let mut frame_move = Some(FrameMove::jumped(requested));
+    let changed = apply_immediate_resize(rt.core_mut(), &mut frame_move, (400, 350), 1.0, |next| {
+        let resized = surface != next;
+        surface = next;
+        (resized, surface)
+    });
+    assert!(changed);
+    assert_eq!(surface, (400, 350));
+    assert_eq!(rt.core().window_viewport(), (400.0, 350.0));
+    assert_eq!(frame_move, None);
+    assert!(!rt.core().stale(), "step_viewport must not mark a fit-height resize stale as a user resize");
+}
+
+/// When the compositor keeps the current size (e.g. a tiled or maximised Wayland window),
+/// clamps it to a different size, or reports zero or an oversized dimension, the jump coupon is
+/// still spent and the surface and viewport stay consistent.
+#[test]
+fn immediate_resize_handles_ignored_clamped_zero_and_oversized_results() {
+    let mut rt = Runtime::new(200.0f32, |&h, _| col().w_full().child(el().size(100.0, h)), (400.0, 200.0), Env::default());
+    rt.core_mut().host.fit_height = true;
+    rt.core_mut().host.window_resting = true;
+    rt.frame(0.0);
+    rt.core_mut().host.window_frame.take();
+
+    // Compositor ignores the request and returns the unchanged size: no redraw, coupon spent.
+    let mut surface = (400u32, 200u32);
+    let mut frame_move = Some(FrameMove::jumped((400.0, 350.0)));
+    let changed = apply_immediate_resize(rt.core_mut(), &mut frame_move, (400, 200), 1.0, |next| {
+        let resized = surface != next;
+        surface = next;
+        (resized, surface)
+    });
+    assert!(!changed, "unchanged size needs no redraw");
+    assert_eq!(surface, (400, 200));
+    assert_eq!(rt.core().window_viewport(), (400.0, 200.0));
+    assert_eq!(frame_move, None, "ignored immediate resize must not leak the jump coupon");
+
+    // Zero size leaves surface and viewport intact and spends the coupon.
+    let mut frame_move = Some(FrameMove::jumped((400.0, 350.0)));
+    let mut called = false;
+    let changed = apply_immediate_resize(rt.core_mut(), &mut frame_move, (0, 200), 1.0, |_| {
+        called = true;
+        (false, surface)
+    });
+    assert!(!changed && !called);
+    assert_eq!(frame_move, None);
+
+    // Oversized dimension rejected by drawable_size keeps previous drawable and viewport.
+    let mut frame_move = Some(FrameMove::jumped((20_000.0, 20_000.0)));
+    let changed = apply_immediate_resize(rt.core_mut(), &mut frame_move, (20_000, 20_000), 1.0, |_| (false, surface));
+    assert!(!changed);
+    assert_eq!(rt.core().window_viewport(), (400.0, 200.0));
+    assert_eq!(frame_move, None);
+
+    // Compositor applies a different size than requested: falls back to set_viewport (triggers fit_resized).
+    let mut frame_move = Some(FrameMove::jumped((400.0, 350.0)));
+    let changed = apply_immediate_resize(rt.core_mut(), &mut frame_move, (400, 280), 1.0, |next| {
+        let resized = surface != next;
+        surface = next;
+        (resized, surface)
+    });
+    assert!(changed);
+    assert_eq!(surface, (400, 280));
+    assert_eq!(rt.core().window_viewport(), (400.0, 280.0));
+    assert_eq!(frame_move, None);
+    assert!(rt.core().stale(), "a compositor-chosen height different from the request uses set_viewport");
 }

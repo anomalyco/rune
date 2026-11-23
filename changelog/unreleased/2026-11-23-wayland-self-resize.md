@@ -1,0 +1,1 @@
+- Wayland: self-initiated window resizes (`fit_content_height`, `resize_window`, `resize_window_instant`, and placement) now use the immediate `Some(size)` returned by `Window::request_inner_size` to reconfigure the GPU surface, update the runtime viewport, and consume the pending jump coupon instead of waiting for a `WindowEvent::Resized` that Wayland does not send.
