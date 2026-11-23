@@ -18,13 +18,20 @@ use crate::Span;
 pub(crate) const ADVANCE: f32 = 1.0;
 
 /// The brush bit of a glyph run in synthetic bold; the rest is its `Ink`.
-pub(crate) const SYNTHETIC_BOLD: u16 = 0x8000;
+pub(crate) const SYNTHETIC_BOLD: u32 = 0x8000_0000;
 
 /// The brushes `ranges` take: each piece's layout-span ordinal (the last layout-affecting span
 /// over it) with [`SYNTHETIC_BOLD`], split where those spans change.
-pub(crate) fn inks(ranges: &[Range<usize>], spans: &[Span]) -> Vec<(Range<usize>, u16)> {
+pub(crate) fn inks(ranges: &[Range<usize>], spans: &[Span]) -> Vec<(Range<usize>, u32)> {
     let layout_spans: Vec<&Span> = crate::layout::span::layout_spans(spans).collect();
-    let ink_at = |at: usize| layout_spans.iter().rposition(|s| (s.start as usize) <= at && at < s.end as usize).map_or(0, |i| i as u16 + 1);
+    let ink_at = |at: usize| {
+        layout_spans
+            .iter()
+            .rposition(|s| (s.start as usize) <= at && at < s.end as usize)
+            .and_then(|i| i.checked_add(1)?.try_into().ok())
+            .filter(|&n: &u32| n < SYNTHETIC_BOLD)
+            .unwrap_or(0)
+    };
     let mut out = Vec::new();
     for r in ranges {
         let mut cuts: Vec<usize> = layout_spans.iter().flat_map(|s| [s.start as usize, s.end as usize]).filter(|&c| r.start < c && c < r.end).collect();

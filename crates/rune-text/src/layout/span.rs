@@ -5,7 +5,7 @@ use crate::*;
 /// Brush carried through Parley: 0 is unspanned, n is the nth layout-affecting span; glyph
 /// colour is resolved from [`TextSystem::set_glyph_inks`] at emission.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Ink(pub u16);
+pub struct Ink(pub u32);
 
 /// A styled byte range of a text element (markdown inline code, bold, links).
 #[derive(Clone, Debug, Default, PartialEq)]
