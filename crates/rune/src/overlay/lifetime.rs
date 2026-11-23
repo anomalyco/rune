@@ -15,7 +15,8 @@ impl OverlayCore {
         let fading = self.presence.fading();
         let size = self.at.size;
         self.resolve_size(event_loop);
-        if self.surface.live().is_none() {
+        let was_live = self.surface.live().is_some();
+        if !was_live {
             self.prepare(app, event_loop, true);
             if self.shared.failure.lock().unwrap().is_some() { return; }
         }
@@ -38,6 +39,11 @@ impl OverlayCore {
             if frame::retained_reveal_presents(self.retained(), self.dirty, self.surface.live().is_some()) {
                 frame::record_presented(false);
             }
+        }
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if let Some(Live { backing: Backing::Xwayland(surface), .. }) = self.surface.live_mut() {
+            if was_live && size == self.at.size { surface.place(self.at, &self.options); }
+            surface.show();
         }
         let effects = self.presence.step(presence::Event::Show, self.release);
         self.carry_out(app, effects);

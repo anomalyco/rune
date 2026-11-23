@@ -1,10 +1,11 @@
 //! An overlay on XWayland, for a Wayland compositor without layer-shell (GNOME's Mutter): an
-//! override-redirect ARGB window of the notification type on its own libxcb connection. Like a
-//! layer surface it is mapped while it lives and destroyed when hidden. An overlay that takes no
-//! input gets an empty input shape, so it never takes a click. One whose host set
+//! override-redirect ARGB window of the notification type on its own libxcb connection. It starts
+//! unmapped with an empty input shape (so a prewarmed surface never takes clicks before its first
+//! show), is mapped by `show`, and is destroyed when hidden. An overlay that takes no input keeps
+//! an empty input shape, so it never takes a click. One whose host set
 //! `OverlayOptions::xwayland_input` takes the pointer in its input shape (all of it, or its hit
-//! regions) and reads its own events; being override-redirect, it never takes keyboard focus.
-//! The rest of the app stays on Wayland.
+//! regions) once shown and reads its own events; being override-redirect, it never takes keyboard
+//! focus. The rest of the app stays on Wayland.
 
 use std::num::NonZeroU32;
 use std::os::fd::AsRawFd;
@@ -23,6 +24,7 @@ use x11rb::wrapper::ConnectionExt as _;
 use x11rb::xcb_ffi::XCBConnection;
 
 use crate::overlay::Placement;
+use crate::overlay::xwayland::{SurfaceEffect, SurfaceEvent, SurfaceState, step};
 use crate::platform::layer_shell::{Input, Watch};
 use crate::runtime::Waker;
 use crate::{DisplayTarget, OverlayInput, OverlayOptions};
@@ -36,13 +38,14 @@ fn events(input: OverlayInput) -> EventMask {
 pub(crate) struct XwaylandSurface {
     /// Dropped first: its thread stops polling the connection's socket within one timeout.
     watch: Option<Watch>,
+    wake: Option<Waker>,
     connection: XCBConnection,
     screen: usize,
     root: u32,
     window: u32,
     colormap: u32,
     scale: f32,
-    input: OverlayInput,
+    state: SurfaceState,
     /// The input shape's rectangles (pixels) last set for `OverlayInput::Regions`.
     regions: Option<Vec<(i16, i16, u16, u16)>>,
     size: (u16, u16),
@@ -51,7 +54,8 @@ pub(crate) struct XwaylandSurface {
 impl XwaylandSurface {
     /// `None` without an X server (`DISPLAY`), a 32-bit visual, or the SHAPE extension the
     /// input region needs. `input` is the overlay's resolved input; anything but `None` asks
-    /// for pointer events, and `wake` turns the event loop when they arrive.
+    /// for pointer events once `show` maps the window, and `wake` turns the event loop when
+    /// they arrive.
     pub fn new(name: &str, at: Placement, options: &OverlayOptions, input: OverlayInput, wake: Option<Waker>) -> Option<Self> {
         std::env::var_os("DISPLAY").filter(|display| !display.is_empty())?;
         let (connection, screen) = XCBConnection::connect(None).ok()?;
@@ -65,11 +69,13 @@ impl XwaylandSurface {
         let colormap = connection.generate_id().ok()?;
         connection.create_colormap(ColormapAlloc::NONE, colormap, root, visual).ok()?.check().ok()?;
         let window = connection.generate_id().ok()?;
-        let mut this = Self { watch: None, connection, screen, root, window: 0, colormap, scale, input: OverlayInput::None, regions: None, size: (1, 1) };
+        let wake = (input != OverlayInput::None).then_some(wake).flatten();
+        let state = SurfaceState::new(input, wake.is_some());
+        let mut this = Self { watch: None, wake, connection, screen, root, window: 0, colormap, scale, state, regions: None, size: (1, 1) };
         let (x, y, w, h) = this.rect(at, options)?;
         this.size = (w, h);
         let aux = CreateWindowAux::new().override_redirect(1).background_pixel(0).border_pixel(0).colormap(colormap)
-            .event_mask(events(input));
+            .event_mask(EventMask::NO_EVENT);
         this.connection.create_window(32, window, root, x, y, w, h, 0, WindowClass::INPUT_OUTPUT, visual, &aux).ok()?.check().ok()?;
         this.window = window;
         let atom = |name: &[u8]| Some(this.connection.intern_atom(false, name).ok()?.reply().ok()?.atom);
@@ -80,14 +86,43 @@ impl XwaylandSurface {
         let id = crate::tooling::app_id().unwrap_or(name);
         let class = [id.as_bytes(), b"\0", id.as_bytes(), b"\0"].concat();
         c.change_property8(PropMode::REPLACE, window, AtomEnum::WM_CLASS, AtomEnum::STRING, &class).ok()?;
-        this.shape(input)?;
-        let c = &this.connection;
-        c.map_window(window).ok()?;
-        c.configure_window(window, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE)).ok()?;
-        c.flush().ok()?;
-        this.input = input;
-        if input != OverlayInput::None { this.watch = wake.map(|wake| Watch::spawn(this.connection.as_raw_fd(), wake)); }
+        // Start unmapped with an empty input shape: a prewarmed overlay takes no clicks before
+        // `show` maps it.
+        this.shape(OverlayInput::None)?;
+        this.connection.flush().ok()?;
         Some(this)
+    }
+
+    /// Maps the window above siblings and applies its pending input policy and socket watch.
+    pub fn show(&mut self) {
+        let effects = step(&mut self.state, SurfaceEvent::Show);
+        self.carry_out(effects);
+    }
+
+    fn carry_out(&mut self, effects: crate::machine::Effects<SurfaceEffect>) {
+        let mut flush = false;
+        for effect in effects {
+            match effect {
+                SurfaceEffect::Drain => self.drain(),
+                SurfaceEffect::ApplyInput(input) => {
+                    self.connection.change_window_attributes(self.window, &ChangeWindowAttributesAux::new().event_mask(events(input))).ok();
+                    let _ = self.shape(input);
+                    flush = true;
+                }
+                SurfaceEffect::MapAbove => {
+                    self.connection.map_window(self.window).ok();
+                    let _ = self.connection.configure_window(self.window, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE))
+                        .ok().and_then(|request| request.check().ok());
+                    flush = true;
+                }
+                SurfaceEffect::StartWatch => {
+                    if self.watch.is_none() && let Some(wake) = self.wake.clone() {
+                        self.watch = Some(Watch::spawn(self.connection.as_raw_fd(), wake));
+                    }
+                }
+            }
+        }
+        if flush { self.connection.flush().ok(); }
     }
 
     /// The input shape for `input`: the whole window, nothing, or (for regions) nothing until
@@ -102,20 +137,17 @@ impl XwaylandSurface {
     }
 
     /// Changes what the window takes. Turning input on needs a watch made with the surface, so
-    /// an overlay made without input stays click-through until it is made again.
+    /// an overlay made without input stays click-through until it is made again. While hidden,
+    /// the choice waits for `show`.
     pub fn set_input(&mut self, input: OverlayInput) {
-        let input = if self.watch.is_none() { OverlayInput::None } else { input };
-        if input == self.input { return; }
-        self.input = input;
-        self.connection.change_window_attributes(self.window, &ChangeWindowAttributesAux::new().event_mask(events(input))).ok();
-        let _ = self.shape(input);
-        self.connection.flush().ok();
+        let effects = step(&mut self.state, SurfaceEvent::SetInput(input));
+        self.carry_out(effects);
     }
 
-    /// Sets the input shape to the overlay's hit regions (points) while it takes input in
-    /// regions; checked, so the shape applies before the frame's pixels present.
+    /// Sets the input shape to the overlay's hit regions (points) while it is shown and takes
+    /// input in regions; checked, so the shape applies before the frame's pixels present.
     pub fn regions(&mut self, rects: &[[f32; 4]]) {
-        if self.input != OverlayInput::Regions { return; }
+        if !self.state.accepts_regions() { return; }
         let scale = self.scale;
         let rects: Vec<_> = rects.iter().filter_map(|r| {
             let x = (r[0] * scale).floor().clamp(0.0, f32::from(i16::MAX)) as i16;
@@ -138,17 +170,25 @@ impl XwaylandSurface {
     pub fn place(&mut self, at: Placement, options: &OverlayOptions) {
         let Some((x, y, w, h)) = self.rect(at, options) else { return };
         self.size = (w, h);
-        let aux = ConfigureWindowAux::new().x(i32::from(x)).y(i32::from(y)).width(u32::from(w)).height(u32::from(h)).stack_mode(StackMode::ABOVE);
+        let mut aux = ConfigureWindowAux::new().x(i32::from(x)).y(i32::from(y)).width(u32::from(w)).height(u32::from(h));
+        if self.state.shown() { aux = aux.stack_mode(StackMode::ABOVE); }
         self.connection.configure_window(self.window, &aux).ok();
         self.connection.flush().ok();
     }
 
-    /// What the server sent since the last call, as overlay input in points. A window that
-    /// takes no input asks for no events, so only errors arrive and are dropped.
+    /// Drops any events queued while the surface is hidden so nothing arrives at its first show.
+    pub fn drain(&mut self) {
+        while let Ok(Some(_)) = self.connection.poll_for_event() {}
+        if let Some(watch) = &self.watch { watch.turned(); }
+    }
+
+    /// What the server sent since the last call, as overlay input in points. A hidden surface or
+    /// one that takes no input asks for no events, so only errors arrive and are dropped.
     pub fn dispatch(&mut self) -> Vec<Input> {
         let mut input = Vec::new();
+        let active = self.state.active_input();
         while let Ok(Some(event)) = self.connection.poll_for_event() {
-            if self.input != OverlayInput::None { pointer_input(event, self.scale, self.size, &mut input); }
+            if active != OverlayInput::None { pointer_input(event, self.scale, self.size, &mut input); }
         }
         if let Some(watch) = &self.watch { watch.turned(); }
         input

@@ -1,0 +1,1 @@
+- XWayland: a prewarmed overlay now keeps its override-redirect X11 window unmapped with an empty input shape and `NO_EVENT` until its first `show()`, so clicks before the first show reach windows underneath and never replay as presses when it opens.

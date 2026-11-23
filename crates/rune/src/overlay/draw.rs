@@ -435,11 +435,20 @@ impl OverlayCore {
         more
     }
 
-    /// A layer surface kept while hidden (prewarmed, not shown yet) still hears the compositor.
+    /// A layer or XWayland surface kept while hidden (prewarmed, not shown yet) still drains its
+    /// connection so nothing queues for the first show.
     fn drain_hidden(&mut self, app: &mut dyn OverlayApp) {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut() && layer.drain() {
-            self.hide(app);
+        {
+            let closed = match self.surface.live_mut().map(|l| &mut l.backing) {
+                Some(Backing::Layer(layer)) => layer.drain(),
+                Some(Backing::Xwayland(surface)) => {
+                    surface.drain();
+                    false
+                }
+                _ => false,
+            };
+            if closed { self.hide(app); }
         }
         #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
         let _ = app;

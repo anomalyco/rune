@@ -68,7 +68,7 @@ use requests::{Requests, Update, Visibility};
 #[path = "overlay/surface.rs"]
 mod surface;
 #[path = "overlay/xwayland.rs"]
-mod xwayland;
+pub(crate) mod xwayland;
 
 pub(crate) use app::OverlayHost;
 use app::OverlayApp;
