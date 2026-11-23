@@ -1600,3 +1600,23 @@ diff --git a/src/platform_impl/macos/event_loop.rs b/src/platform_impl/macos/eve
              attributes.activate_ignoring_other_apps,
 +            attributes.init_before_finish_launching,
          );
+diff --git a/src/platform_impl/macos/window_delegate.rs b/src/platform_impl/macos/window_delegate.rs
+--- a/src/platform_impl/macos/window_delegate.rs
++++ b/src/platform_impl/macos/window_delegate.rs
+@@ -780,2 +780,11 @@ impl WindowDelegate {
+ 
++        // A window that opens maximized is zoomed before it is ordered front: `zoom:` animates
++        // a window on screen and returns only when the animation is over (about 260,000 µs),
++        // with the window on screen at its restored size meanwhile. A full screen window keeps
++        // its zoom for `window_did_exit_fullscreen`, as before.
++        let maximize_first = attrs.maximized && attrs.fullscreen.is_none();
++        if maximize_first {
++            delegate.set_maximized(true);
++        }
++
+         // Set fullscreen mode after we setup everything
+@@ -795,3 +804,3 @@ impl WindowDelegate {
+ 
+-        if attrs.maximized {
++        if attrs.maximized && !maximize_first {
+             delegate.set_maximized(attrs.maximized);
