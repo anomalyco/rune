@@ -1,0 +1,1 @@
+- Wayland: layer-shell overlays now join libwayland's multi-thread reader protocol (`prepare_read` / `poll` / `read` and `dispatch_inner_queue`) with an `eventfd` stop signal instead of only polling the shared display socket on a 250 ms timeout, so input read off the socket by winit or Mesa WSI wakes the overlay immediately and idle overlays produce zero wakeups per second.

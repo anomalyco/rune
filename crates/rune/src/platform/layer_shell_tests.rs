@@ -141,3 +141,155 @@ fn xkb_compose_feeds_dead_keys_and_resets_after_composed_or_cancelled() {
     compose.reset();
     assert_eq!(feed_compose(&mut compose, key_a), ComposeOutcome::Nothing);
 }
+
+#[test]
+#[allow(unsafe_code)]
+fn wayland_watch_wakes_for_prequeued_and_concurrent_reads_and_stops_cleanly() -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::time::{Duration, Instant};
+    use wayland_backend::client::Backend;
+    use wayland_client::protocol::wl_callback::{self, WlCallback};
+    use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
+
+    #[derive(Default)]
+    struct CbState(usize);
+    impl Dispatch<WlCallback, ()> for CbState {
+        fn event(state: &mut Self, _: &WlCallback, _: wl_callback::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+            state.0 += 1;
+        }
+    }
+
+    fn send_callback_done(server: &mut UnixStream, id: u32, serial: u32) -> std::io::Result<()> {
+        let mut msg = [0u8; 12];
+        msg[0..4].copy_from_slice(&id.to_ne_bytes());
+        msg[4..8].copy_from_slice(&((12u32 << 16) | 0u32).to_ne_bytes());
+        msg[8..12].copy_from_slice(&serial.to_ne_bytes());
+        server.write_all(&msg)
+    }
+
+    fn make_waker() -> (Arc<(Mutex<usize>, Condvar)>, crate::runtime::Waker) {
+        let wakes = Arc::new((Mutex::new(0usize), Condvar::new()));
+        let w = wakes.clone();
+        let wake: crate::runtime::Waker = Arc::new(move || {
+            let (lock, cond) = &*w;
+            *lock.lock().unwrap() += 1;
+            cond.notify_all();
+        });
+        (wakes, wake)
+    }
+
+    fn wait_wakes(wakes: &(Mutex<usize>, Condvar), target: usize) -> bool {
+        let (lock, cond) = wakes;
+        let guard = lock.lock().unwrap();
+        let (guard, _) = cond.wait_timeout_while(guard, Duration::from_secs(2), |n| *n < target).unwrap();
+        *guard >= target
+    }
+
+    // 1. Events another reader already moved off the socket into the layer's queue wake the
+    //    watch immediately, and dropping the watch while blocked in poll finishes promptly.
+    {
+        let (client, mut server) = UnixStream::pair()?;
+        let Ok(host) = Connection::from_socket(client) else { return Ok(()); };
+        // SAFETY: `host` owns the `wl_display` and outlives `guest` and `watch`.
+        let guest = Connection::from_backend(unsafe { Backend::from_foreign_display(host.backend().display_ptr()) });
+        let mut guest_queue = guest.new_event_queue::<CbState>();
+        let cb = guest.display().sync(&guest_queue.handle(), ());
+        send_callback_done(&mut server, cb.id().protocol_id(), 1)?;
+        if let Some(guard) = host.prepare_read() {
+            let _ = guard.read();
+        }
+
+        let (wakes, wake) = make_waker();
+        let watch = super::WaylandWatch::spawn(guest.clone(), wake).expect("spawn wayland watch");
+        assert!(wait_wakes(&wakes, 1), "pre-queued layer event must wake the loop");
+        let mut state = CbState::default();
+        guest_queue.dispatch_pending(&mut state).expect("dispatch guest queue");
+        assert_eq!(state.0, 1);
+        watch.turned();
+
+        let started = Instant::now();
+        drop(watch);
+        assert!(started.elapsed() < Duration::from_secs(1), "drop during poll must not stall");
+    }
+
+    // 2. While a sibling thread continuously reads the shared display (as winit does), layer
+    //    events still wake the watch, the sibling reader never stalls while the watch waits for a
+    //    turn, and dropping the watch during that wait returns promptly.
+    {
+        let (client, mut server) = UnixStream::pair()?;
+        let Ok(host) = Connection::from_socket(client) else { return Ok(()); };
+        let mut host_queue = host.new_event_queue::<CbState>();
+        // SAFETY: `host` owns the `wl_display` and outlives `guest`, `watch` and `reader`.
+        let guest = Connection::from_backend(unsafe { Backend::from_foreign_display(host.backend().display_ptr()) });
+        let mut guest_queue = guest.new_event_queue::<CbState>();
+
+        let stop_reader = Arc::new(AtomicBool::new(false));
+        let reader_stop = stop_reader.clone();
+        let reader_host = host.clone();
+        let reader = std::thread::spawn(move || {
+            while !reader_stop.load(Ordering::Relaxed) {
+                let Some(guard) = reader_host.prepare_read() else {
+                    let _ = reader_host.backend().dispatch_inner_queue();
+                    continue;
+                };
+                let mut pfd = libc::pollfd { fd: guard.connection_fd().as_raw_fd(), events: libc::POLLIN, revents: 0 };
+                // SAFETY: `pfd.fd` is the live Wayland socket borrowed by `guard`.
+                let ret = unsafe { libc::poll(&mut pfd, 1, 10) };
+                if ret > 0 && pfd.revents & libc::POLLIN != 0 {
+                    let _ = guard.read();
+                } else {
+                    drop(guard);
+                }
+            }
+        });
+
+        let (wakes, wake) = make_waker();
+        let watch = super::WaylandWatch::spawn(guest.clone(), wake).expect("spawn wayland watch");
+        let guest_cb = guest.display().sync(&guest_queue.handle(), ());
+        send_callback_done(&mut server, guest_cb.id().protocol_id(), 2)?;
+        assert!(wait_wakes(&wakes, 1), "concurrent reader must not strand layer event");
+
+        // Watch is now waiting for `turned()` with no read guard held; host reads must proceed.
+        let host_cb = host.display().sync(&host_queue.handle(), ());
+        send_callback_done(&mut server, host_cb.id().protocol_id(), 3)?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut host_state = CbState::default();
+        while host_state.0 == 0 && Instant::now() < deadline {
+            host_queue.dispatch_pending(&mut host_state).expect("dispatch host queue");
+            if host_state.0 == 0 {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+        assert_eq!(host_state.0, 1, "host reads must not wait while layer watch waits for a turn");
+
+        let started = Instant::now();
+        drop(watch);
+        assert!(started.elapsed() < Duration::from_secs(1), "drop during turn wait must not stall");
+        let mut guest_state = CbState::default();
+        guest_queue.dispatch_pending(&mut guest_state).expect("dispatch guest queue");
+        assert_eq!(guest_state.0, 1);
+
+        stop_reader.store(true, Ordering::Relaxed);
+        reader.join().expect("join sibling reader");
+    }
+
+    // 3. Compositor hangup exits the watch loop cleanly without stalling drop.
+    {
+        let (client, server) = UnixStream::pair()?;
+        let Ok(host) = Connection::from_socket(client) else { return Ok(()); };
+        // SAFETY: `host` owns the `wl_display` and outlives `guest` and `watch`.
+        let guest = Connection::from_backend(unsafe { Backend::from_foreign_display(host.backend().display_ptr()) });
+        let (_wakes, wake) = make_waker();
+        let watch = super::WaylandWatch::spawn(guest, wake).expect("spawn wayland watch");
+        drop(server);
+        let started = Instant::now();
+        drop(watch);
+        assert!(started.elapsed() < Duration::from_secs(1), "drop after hangup must not stall");
+    }
+
+    Ok(())
+}
