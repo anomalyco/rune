@@ -1,0 +1,1 @@
+- `rune-kit`: markdown fixture goldens under `tests/golden/*.json` now encode strings as valid RFC 8259 JSON instead of Rust `{:?}` debug escapes, and `markdown_fixture` verifies every JSON golden parses with `serde_json`.
