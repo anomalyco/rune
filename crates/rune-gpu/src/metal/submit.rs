@@ -8,7 +8,7 @@ use std::sync::Arc;
 #[cfg(debug_assertions)]
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder, MTLCommandQueue, MTLDrawable, MTLEvent, MTLSharedEvent,
+    MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandBufferError, MTLCommandBufferStatus, MTLCommandEncoder, MTLCommandQueue, MTLDrawable, MTLEvent, MTLSharedEvent,
 };
 use objc2_quartz_core::CAMetalDrawable;
 use objc2::rc::autoreleasepool;
@@ -71,6 +71,21 @@ struct Uploads {
     blit: Obj<dyn MTLBlitCommandEncoder>,
     cb: Obj<dyn MTLCommandBuffer>,
     keep: Keep,
+}
+
+/// Whether a command buffer failing with `code` means the GPU won't run its queue's work any more:
+/// it timed out on it (and then ignores what the queue commits), revoked the queue's access, or the
+/// device went away. Others, such as a buffer discarded while the GPU recovered from another's
+/// fault, leave the queue working.
+pub(super) fn kills_queue(code: MTLCommandBufferError) -> bool {
+    matches!(code, MTLCommandBufferError::Timeout | MTLCommandBufferError::AccessRevoked | MTLCommandBufferError::DeviceRemoved)
+}
+
+/// `cb`'s error, when it ended its queue (`kills_queue`).
+fn queue_killed(cb: &ProtocolObject<dyn MTLCommandBuffer>) -> Option<String> {
+    if cb.status() != MTLCommandBufferStatus::Error { return None }
+    let error = cb.error()?;
+    kills_queue(MTLCommandBufferError(error.code() as usize)).then(|| error.localizedDescription().to_string())
 }
 
 fn completed(cb: &ProtocolObject<dyn MTLCommandBuffer>) -> bool {
@@ -181,6 +196,7 @@ impl Shared {
     fn retire_inner(&self, check_unsignaled: bool) -> u64 {
         let signaled = if check_unsignaled { u64::MAX } else { self.event.signaledValue() };
         let mut emptied: Option<Keep> = None;
+        let mut lost: Option<String> = None;
         let (done, has_callbacks) = loop {
             let pending = {
                 let mut st = self.lock();
@@ -203,12 +219,15 @@ impl Shared {
                 }
             };
             let Some(Pending { cb, mut keep, drawable, .. }) = pending else { continue };
+            if lost.is_none() { lost = queue_killed(&cb); }
             // Drop the completed command buffer before any object it referenced without retaining.
             drop(cb);
             drop(drawable);
             keep.clear();
             if keep.capacity() > 0 { emptied = Some(keep); }
         };
+        // Outside the lock: the callback may call back into the device.
+        if let Some(message) = lost { self.lose(message); }
         if has_callbacks {
             loop {
                 let next = {

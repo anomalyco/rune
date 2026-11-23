@@ -1072,3 +1072,92 @@ index 09ee3e9..4edbf3b 100644
  
          let device = create_instance_device()?;
          let dc = device.dc;
+diff --git a/src/metal/device.rs b/src/metal/device.rs
+index d7287b9..b0468ca 100644
+--- a/src/metal/device.rs
++++ b/src/metal/device.rs
+@@ -2002,6 +2002,7 @@ impl crate::Device for super::Device {
+         };
+         Ok(super::Fence {
+             sync: Arc::new((Mutex::new(0), Condvar::new())),
++            lost: Arc::new(core::sync::atomic::AtomicBool::new(false)),
+             pending_command_buffers: RwLock::new(Vec::new()),
+             shared_event,
+         })
+@@ -2012,6 +2013,9 @@ impl crate::Device for super::Device {
+     }
+ 
+     unsafe fn get_fence_value(&self, fence: &super::Fence) -> DeviceResult<crate::FenceValue> {
++        if fence.lost.load(core::sync::atomic::Ordering::Acquire) {
++            return Err(crate::DeviceError::Lost);
++        }
+         Ok(fence.get_latest())
+     }
+     unsafe fn wait(
+@@ -2020,6 +2024,9 @@ impl crate::Device for super::Device {
+         wait_value: crate::FenceValue,
+         timeout: Option<core::time::Duration>,
+     ) -> DeviceResult<bool> {
++        if fence.lost.load(core::sync::atomic::Ordering::Acquire) {
++            return Err(crate::DeviceError::Lost);
++        }
+         let (ref mutex, ref condvar) = *fence.sync;
+         let mut lock = mutex.lock();
+ 
+diff --git a/src/metal/mod.rs b/src/metal/mod.rs
+index e227590..b66b5b9 100644
+--- a/src/metal/mod.rs
++++ b/src/metal/mod.rs
+@@ -47,7 +47,8 @@ use objc2::{
+ use objc2_foundation::ns_string;
+ use objc2_metal::{
+     MTLAccelerationStructure, MTLAccelerationStructureCommandEncoder, MTLArgumentBuffersTier,
+-    MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandQueue,
++    MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandBufferError,
++    MTLCommandBufferStatus, MTLCommandQueue,
+     MTLComputeCommandEncoder, MTLComputePipelineState, MTLCounterSampleBuffer, MTLCullMode,
+     MTLDepthClipMode, MTLDepthStencilState, MTLDevice, MTLDrawable, MTLIndexType,
+     MTLLanguageVersion, MTLLibrary, MTLPrimitiveType, MTLReadWriteTextureTier,
+@@ -736,7 +737,12 @@ impl crate::Queue for Queue {
+ 
+             let extra_command_buffer = {
+                 let fence_sync = Arc::clone(&signal_fence.sync);
+-                let block = block2::RcBlock::new(move |_cmd_buf| {
++                let fence_lost = Arc::clone(&signal_fence.lost);
++                let block = block2::RcBlock::new(move |cmd_buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
++                    // SAFETY: Metal passes the command buffer that completed.
++                    if queue_killed(unsafe { cmd_buf.as_ref() }) {
++                        fence_lost.store(true, atomic::Ordering::Release);
++                    }
+                     *fence_sync.0.lock() = signal_value;
+                     fence_sync.1.notify_all();
+                 });
+@@ -1253,11 +1259,28 @@ unsafe impl Sync for QuerySet {}
+ #[derive(Debug)]
+ pub struct Fence {
+     sync: Arc<(Mutex<crate::FenceValue>, Condvar)>,
++    /// The GPU stopped running the queue's work (`queue_killed`): the device is lost.
++    lost: Arc<atomic::AtomicBool>,
+     /// The pending fence values have to be ascending.
+     pending_command_buffers: RwLock<Vec<PendingCommandBuffer>>,
+     shared_event: Option<Retained<ProtocolObject<dyn MTLSharedEvent>>>,
+ }
+ 
++/// Whether `cmd_buf` failed in a way that means the GPU won't run its queue's work any more: it
++/// timed out on it (and then ignores what the queue commits), revoked the queue's access, or the
++/// device went away. A buffer discarded while the GPU recovered from another's fault isn't one.
++fn queue_killed(cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>) -> bool {
++    cmd_buf.status() == MTLCommandBufferStatus::Error
++        && cmd_buf.error().is_some_and(|e| {
++            matches!(
++                MTLCommandBufferError(e.code() as usize),
++                MTLCommandBufferError::Timeout
++                    | MTLCommandBufferError::AccessRevoked
++                    | MTLCommandBufferError::DeviceRemoved
++            )
++        })
++}
++
+ type PendingCommandBuffer = (
+     crate::FenceValue,
+     Retained<ProtocolObject<dyn MTLCommandBuffer>>,

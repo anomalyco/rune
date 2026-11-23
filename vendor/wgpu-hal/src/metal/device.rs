@@ -2002,6 +2002,7 @@ impl crate::Device for super::Device {
         };
         Ok(super::Fence {
             sync: Arc::new((Mutex::new(0), Condvar::new())),
+            lost: Arc::new(core::sync::atomic::AtomicBool::new(false)),
             pending_command_buffers: RwLock::new(Vec::new()),
             shared_event,
         })
@@ -2012,6 +2013,9 @@ impl crate::Device for super::Device {
     }
 
     unsafe fn get_fence_value(&self, fence: &super::Fence) -> DeviceResult<crate::FenceValue> {
+        if fence.lost.load(core::sync::atomic::Ordering::Acquire) {
+            return Err(crate::DeviceError::Lost);
+        }
         Ok(fence.get_latest())
     }
     unsafe fn wait(
@@ -2020,6 +2024,9 @@ impl crate::Device for super::Device {
         wait_value: crate::FenceValue,
         timeout: Option<core::time::Duration>,
     ) -> DeviceResult<bool> {
+        if fence.lost.load(core::sync::atomic::Ordering::Acquire) {
+            return Err(crate::DeviceError::Lost);
+        }
         let (ref mutex, ref condvar) = *fence.sync;
         let mut lock = mutex.lock();
 

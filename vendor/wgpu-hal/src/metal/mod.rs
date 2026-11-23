@@ -47,7 +47,8 @@ use objc2::{
 use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLAccelerationStructure, MTLAccelerationStructureCommandEncoder, MTLArgumentBuffersTier,
-    MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandQueue,
+    MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandBufferError,
+    MTLCommandBufferStatus, MTLCommandQueue,
     MTLComputeCommandEncoder, MTLComputePipelineState, MTLCounterSampleBuffer, MTLCullMode,
     MTLDepthClipMode, MTLDepthStencilState, MTLDevice, MTLDrawable, MTLIndexType,
     MTLLanguageVersion, MTLLibrary, MTLPrimitiveType, MTLReadWriteTextureTier,
@@ -736,7 +737,12 @@ impl crate::Queue for Queue {
 
             let extra_command_buffer = {
                 let fence_sync = Arc::clone(&signal_fence.sync);
-                let block = block2::RcBlock::new(move |_cmd_buf| {
+                let fence_lost = Arc::clone(&signal_fence.lost);
+                let block = block2::RcBlock::new(move |cmd_buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+                    // SAFETY: Metal passes the command buffer that completed.
+                    if queue_killed(unsafe { cmd_buf.as_ref() }) {
+                        fence_lost.store(true, atomic::Ordering::Release);
+                    }
                     *fence_sync.0.lock() = signal_value;
                     fence_sync.1.notify_all();
                 });
@@ -1253,9 +1259,26 @@ unsafe impl Sync for QuerySet {}
 #[derive(Debug)]
 pub struct Fence {
     sync: Arc<(Mutex<crate::FenceValue>, Condvar)>,
+    /// The GPU stopped running the queue's work (`queue_killed`): the device is lost.
+    lost: Arc<atomic::AtomicBool>,
     /// The pending fence values have to be ascending.
     pending_command_buffers: RwLock<Vec<PendingCommandBuffer>>,
     shared_event: Option<Retained<ProtocolObject<dyn MTLSharedEvent>>>,
+}
+
+/// Whether `cmd_buf` failed in a way that means the GPU won't run its queue's work any more: it
+/// timed out on it (and then ignores what the queue commits), revoked the queue's access, or the
+/// device went away. A buffer discarded while the GPU recovered from another's fault isn't one.
+fn queue_killed(cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>) -> bool {
+    cmd_buf.status() == MTLCommandBufferStatus::Error
+        && cmd_buf.error().is_some_and(|e| {
+            matches!(
+                MTLCommandBufferError(e.code() as usize),
+                MTLCommandBufferError::Timeout
+                    | MTLCommandBufferError::AccessRevoked
+                    | MTLCommandBufferError::DeviceRemoved
+            )
+        })
 }
 
 type PendingCommandBuffer = (
