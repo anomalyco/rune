@@ -416,6 +416,7 @@ impl RuntimeCore {
                 gliding,
                 caret,
                 shown: if !turned && !pinh.in_cache { [clip[1].max(vp[1] - m), clip[3].min(vp[3] + m)] } else { [clip[1], clip[3]] },
+                shown_x: if !turned && !pinh.in_cache { [clip[0].max(vp[0] - m), clip[2].min(vp[2] + m)] } else { [clip[0], clip[2]] },
             },
             sel_ranges,
             mark_ranges,

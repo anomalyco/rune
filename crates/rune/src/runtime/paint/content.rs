@@ -32,6 +32,8 @@ pub(in crate::runtime) struct LeafBox {
     /// window's unless it draws into a layer turned or cached first. A long text draws its
     /// lines there and no others.
     pub shown: [f32; 2],
+    /// The horizontal columns of the screen, in pixels, matching `shown`.
+    pub shown_x: [f32; 2],
 }
 
 /// `v` (device px) on the device grid inside a paint containment at `c`: the containment's
@@ -75,6 +77,7 @@ impl RuntimeCore {
             gliding,
             caret: input_caret,
             shown,
+            shown_x,
         } = b;
         let (w, h) = ((r[2] - r[0]).max(0.0), (r[3] - r[1]).max(0.0));
         let (w_exact, h_exact) = ((r_exact[2] - r_exact[0]).max(0.0), (r_exact[3] - r_exact[1]).max(0.0));
@@ -124,15 +127,10 @@ impl RuntimeCore {
             let span = [crop[2] - crop[0], crop[3] - crop[1]];
             if rect[2] > 0.0 && rect[3] > 0.0 && span[0] > 0.0 && span[1] > 0.0 {
                 // The mip covers the whole image's drawn size, not just its visible window.
-                let placed = self.images.place_at(pixels, [rect[2] / span[0], rect[3] / span[1]], Some(now));
-                // An animated image wakes the window for its next frame only while drawn in a shown
-                // window: off screen it isn't painted, so it asks for nothing.
-                if let Some((_, Some(at))) = placed && self.frame.live.visible() && self.time_scale > 0.0 {
-                    let wake = self.clock + (at - now).max(0.0) / self.time_scale as f64;
-                    self.paint.keep.cycles.other_deadline();
-                    self.motion.arm_loop_wake(wake, at);
-                }
-                if let Some((image, _)) = placed {
+                if let Some((image, next)) = self.images.place_at(pixels, [rect[2] / span[0], rect[3] / span[1]], Some(now)) {
+                    if let Some(at) = next {
+                        arm_image_wake(&mut self.paint, &mut self.motion, self.frame.live.visible(), self.clock, self.time_scale, now, at);
+                    }
                     let [x, y, iw, ih] = image.rect.map(|v| v as f32);
                     // A letterboxed image rounds its own, smaller corners.
                     let half = rect[2].min(rect[3]) * 0.5;
@@ -570,6 +568,7 @@ impl RuntimeCore {
                     fade,
                 );
             }
+            let mut inline_image_wake: Option<f64> = None;
             for (pill, at, px) in bare_all {
                 let Some(b) = pill.bare.as_deref() else { continue };
                 let mut at = [
@@ -591,7 +590,15 @@ impl RuntimeCore {
                     let (w, h) = (w as f32, h as f32);
                     let k = (drawn[0] / w).min(drawn[1] / h);
                     let rect = [at[0] + (drawn[0] - w * k) * 0.5, at[1] + (drawn[1] - h * k) * 0.5, w * k, h * k];
-                    if rect[2] > 0.0 && rect[3] > 0.0 && let Some(image) = self.images.place(pixels, [rect[2], rect[3]]) {
+                    // An inline image outside its clip or viewport draws nothing and wakes nothing.
+                    let visible = shown_x[1] > shown_x[0] && shown[1] > shown[0]
+                        && rect[2] > 0.0 && rect[3] > 0.0
+                        && rect[0] + rect[2] > shown_x[0] && rect[0] < shown_x[1]
+                        && rect[1] + rect[3] > shown[0] && rect[1] < shown[1];
+                    if visible && let Some((image, next)) = self.images.place_at(pixels, [rect[2], rect[3]], Some(now)) {
+                        if let Some(at) = next {
+                            inline_image_wake = Some(inline_image_wake.map_or(at, |prev| prev.min(at)));
+                        }
                         self.instances.push(Instance {
                             rect,
                             radii: [(b.radius * s * tk).min(rect[2].min(rect[3]) * 0.5); 4],
@@ -803,6 +810,9 @@ impl RuntimeCore {
             if let (Some(c), Some(inp)) = (caret, &n.input) {
                 self.instances.push(rect_inst(c, premul(inp.caret, o, srgb), 0.0, clip, fade));
             }
+            if let Some(at) = inline_image_wake {
+                arm_image_wake(&mut self.paint, &mut self.motion, self.frame.live.visible(), self.clock, self.time_scale, now, at);
+            }
             self.text.set_emit(crate::text::outline::Emit::Atlas);
         }
     }
@@ -875,6 +885,23 @@ impl RuntimeCore {
                 }
             }
         }
+    }
+}
+
+/// Wakes a shown window for an animated image's next frame at animation time `at`.
+fn arm_image_wake(
+    paint: &mut state::PaintState,
+    motion: &mut crate::runtime::tracks::MotionState,
+    live_visible: bool,
+    clock: f64,
+    time_scale: f32,
+    now: f64,
+    at: f64,
+) {
+    if live_visible && time_scale > 0.0 {
+        let wake = clock + (at - now).max(0.0) / time_scale as f64;
+        paint.keep.cycles.other_deadline();
+        motion.arm_loop_wake(wake, at);
     }
 }
 

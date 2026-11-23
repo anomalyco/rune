@@ -1,0 +1,1 @@
+- Paint: animated GIF, WebP and APNG images used inline in text (`El::inline_image` and `El::inline_icon`) now advance their frames on the animation clock and schedule wakes only while visible in their clip and viewport, and no longer freeze under `El::cache` or paint reuse.

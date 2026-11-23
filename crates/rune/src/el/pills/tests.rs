@@ -217,4 +217,119 @@ mod live {
         rt.frame(3.0 / 60.0);
         assert!(pilled(&rt).is_empty(), "a range the text no longer reaches is dropped");
     }
+
+    fn animated_apng(first: [u8; 4], second: [u8; 4], delay_ms: u16) -> crate::Pixels {
+        let mut out = Vec::new();
+        let mut enc = png::Encoder::new(&mut out, 2, 2);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.set_animated(2, 0).unwrap();
+        enc.set_frame_delay(delay_ms, 1000).unwrap();
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&first.repeat(4)).unwrap();
+        w.write_image_data(&second.repeat(4)).unwrap();
+        w.finish().unwrap();
+        let cache = crate::ImageCache::new(std::sync::Arc::new(|| {}));
+        let img = cache.load(out);
+        img.wait().unwrap();
+        img.pixels().clone()
+    }
+
+    fn placed_rgba<T: 'static>(rt: &Runtime<T>) -> Option<[u8; 4]> {
+        let inst = rt.instances.iter().find(|q| q.params[1] == crate::render::KIND_IMAGE)?;
+        let page = &rt.images.pages[inst.params[0] as usize];
+        let (x, y) = (inst.uv[0] as usize, inst.uv[1] as usize);
+        let at = (y * page.width as usize + x) * 4;
+        Some(page.data[at..at + 4].try_into().unwrap())
+    }
+
+    #[test]
+    fn an_animated_inline_image_advances_frames_and_stops_waking_off_screen() {
+        let red = [255, 0, 0, 255];
+        let green = [0, 255, 0, 255];
+        let px = animated_apng(red, green, 100);
+
+        struct Anim {
+            px: crate::Pixels,
+            as_icon: bool,
+            prefix_lines: usize,
+            cached: bool,
+            mounted: bool,
+        }
+        fn anim_view(s: &Anim, _: &mut Cx<Anim>) -> El {
+            let mut body = "line
+".repeat(s.prefix_lines);
+            let at = body.len();
+            body.push_str("go");
+            let style = TextStyle::new(14.0, 400.0).lh(20.0);
+            let t = if s.as_icon {
+                text(body).key("t").font(style).inline_icon(at, crate::InlineIcon::image(s.px.clone()).size(12.0))
+            } else {
+                text(body).key("t").font(style).inline_image(at..at + 2, crate::InlineImage::new(s.px.clone(), 12.0, 10.0, 2.0))
+            };
+            let mut inner = col().key("inner").w(200.0);
+            if s.mounted {
+                inner = inner.child(t);
+            }
+            if s.cached {
+                inner = inner.cache();
+            }
+            col().key("scroll").size(200.0, 40.0).scroll(crate::ScrollSpec { stick_bottom: false }).child(inner)
+        }
+
+        // Both El::inline_image and El::inline_icon(InlineIcon::image) advance frames and arm wakes.
+        for as_icon in [false, true] {
+            let mut rt = Runtime::new(
+                Anim { px: px.clone(), as_icon, prefix_lines: 0, cached: false, mounted: true },
+                anim_view,
+                (200.0, 40.0),
+                Env::new(true, 1.0),
+            );
+            rt.frame(0.0);
+            assert_eq!(placed_rgba(&rt), Some(red), "as_icon={as_icon}: frame 0");
+            let wake0 = rt.wake_deadline().expect("animated inline image arms a wake for frame 1");
+            assert!((wake0 - 0.1).abs() < 1e-4, "as_icon={as_icon}: wake0={wake0}");
+
+            rt.frame(0.1);
+            assert_eq!(placed_rgba(&rt), Some(green), "as_icon={as_icon}: frame 1");
+            let wake1 = rt.wake_deadline().expect("animated inline image arms a wake for next loop");
+            assert!((wake1 - 0.2).abs() < 1e-4, "as_icon={as_icon}: wake1={wake1}");
+
+            // Hidden window asks for no frames.
+            rt.set_live_visible(false);
+            rt.frame(0.1);
+            assert_eq!(rt.wake_deadline(), None, "as_icon={as_icon}: hidden window must not wake");
+            rt.set_live_visible(true);
+
+            // Clipped off screen inside a still-visible tall text element: draws and wakes nothing.
+            rt.update(|s, _| s.prefix_lines = 10);
+            rt.frame(0.0);
+            assert_eq!(placed_rgba(&rt), None, "as_icon={as_icon}: clipped inline image draws nothing");
+            assert_eq!(rt.wake_deadline(), None, "as_icon={as_icon}: off-screen inline image must not wake");
+
+            // Back in view it wakes again; with its text unmounted it asks for nothing.
+            rt.update(|s, _| s.prefix_lines = 0);
+            rt.frame(0.0);
+            assert!(rt.wake_deadline().is_some(), "as_icon={as_icon}: back in view, it wakes again");
+            rt.update(|s, _| s.mounted = false);
+            // Its exit fade may still draw it; once that ends, nothing is left.
+            for _ in 0..30 { rt.frame(0.1); }
+            assert_eq!(placed_rgba(&rt), None, "as_icon={as_icon}: unmounted inline image draws nothing");
+            assert_eq!(rt.wake_deadline(), None, "as_icon={as_icon}: unmounted inline image must not wake");
+        }
+
+        // Under El::cache(), an animated inline image draws live instead of freezing on frame 0's raster.
+        let mut rt = Runtime::new(
+            Anim { px, as_icon: false, prefix_lines: 0, cached: true, mounted: true },
+            anim_view,
+            (200.0, 40.0),
+            Env::new(true, 1.0),
+        );
+        rt.frame(0.0);
+        assert!(rt.instances.iter().all(|q| q.params[1] != crate::render::KIND_LAYER), "cached ancestor must draw live for inline images");
+        assert_eq!(placed_rgba(&rt), Some(red), "cached: frame 0");
+        rt.frame(0.1);
+        assert_eq!(placed_rgba(&rt), Some(green), "cached: advances to frame 1");
+        assert!(rt.wake_deadline().is_some(), "cached: keeps arming wakes");
+    }
 }
