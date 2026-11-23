@@ -1,0 +1,1 @@
+- A `text_input` whose `TextEdit` holds a `Mark::Link` now registers its full border box for hit testing, so presses and hover work anywhere in the field rather than only on the link's glyphs.

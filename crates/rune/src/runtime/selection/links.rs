@@ -264,9 +264,13 @@ impl RuntimeCore {
     }
 
     /// Hit rects for node `i`: only its links' boxes, clipped like `clipped`. False when it
-    /// has no links, or is selectable (it takes its whole box).
+    /// is a text field, has no links, or is selectable (it takes its whole box).
     pub(in crate::runtime) fn push_link_hits(&mut self, i: usize, rect: [f32; 4], clipped: [f32; 4]) -> bool {
-        if self.tree.nodes[i].text.as_ref().is_none_or(|t| t.cold.links.is_empty() || t.selectable) { return false; }
+        if self.tree.nodes[i].input.is_some()
+            || self.tree.nodes[i].text.as_ref().is_none_or(|t| t.cold.links.is_empty() || t.selectable)
+        {
+            return false;
+        }
         let id = self.tree.nodes[i].id;
         for (_, r) in self.link_boxes(i, rect) {
             let c = [r[0].max(clipped[0]), r[1].max(clipped[1]), r[2].min(clipped[2]), r[3].min(clipped[3])];

@@ -3,7 +3,7 @@
 //! reported to tools with its role.
 
 use rune::runtime::ElementInfo;
-use rune::{Color, Cursor, Cx, El, Env, Key, KeyEvent, Link, LinkPaint, Mods, Runtime, Span, TextEdit, TextStyle, col, rich, text_input};
+use rune::{Color, Cursor, Cx, El, Env, Key, KeyEvent, Link, LinkPaint, Mark, MarkRange, Mods, Runtime, Span, TextEdit, TextStyle, col, rich, text_input};
 use crate::support::{centre, click, find};
 
 const TEXT: &str = "Hi @kit see docs and notes.md ok";
@@ -218,4 +218,44 @@ fn link_boxes_match_drawn_glyphs_beside_emoji_and_in_centred_lines() {
     rt.pointer_up(mid(images[2], s).0, mid(images[2], s).1);
     rt.frame(1.0 / 60.0);
     assert_eq!(rt.state.opened, ["party"]);
+}
+
+#[test]
+fn text_input_with_link_mark_takes_presses_anywhere_in_field() {
+    struct Form { edit: TextEdit }
+    fn form_view(s: &Form, _: &mut Cx<Form>) -> El {
+        let style = TextStyle::new(14.0, 400.0).lh(20.0);
+        col().w_full().h_full().padding(10.0)
+            .child(text_input(&s.edit, style).key("field").label("Field").w_full().on_edit(|s: &mut Form| &mut s.edit))
+    }
+
+    let link = MarkRange::new(8..12, Mark::Link("https://example.com".into()));
+    let mut edit = TextEdit::from_parts("See the docs for more detail", vec![link], vec![]);
+    edit.set_caret(0);
+    let mut rt = Runtime::new(Form { edit }, form_view, (500.0, 120.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+
+    let field = find(&rt, "field");
+    let link_el = find(&rt, "https://example.com");
+    let y = field.rect[1] + field.rect[3] * 0.5;
+    let after_link = (link_el.rect[0] + link_el.rect[2] + 40.0).min(field.rect[0] + field.rect[2] - 4.0);
+    let before_link = field.rect[0] + 4.0;
+
+    // Hover and click outside the link glyphs (to the right of the link) still hit the field.
+    rt.pointer_move(after_link, y);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.cursor(), Cursor::Text);
+    click(&mut rt, (after_link, y));
+    assert!(rt.state.edit.focused, "clicking outside the link focuses the field");
+    assert!(rt.state.edit.focus > 12, "caret moves past the link: {}", rt.state.edit.focus);
+
+    // Clicking plain text before the link moves the caret there.
+    click(&mut rt, (before_link, y));
+    assert!(rt.state.edit.focused);
+    assert!(rt.state.edit.focus < 8, "caret moves before the link: {}", rt.state.edit.focus);
+
+    // Clicking on the link glyphs themselves also moves the caret into the link.
+    click(&mut rt, centre(&link_el));
+    assert!(rt.state.edit.focused);
+    assert!((8..=12).contains(&rt.state.edit.focus), "caret moves into the link: {}", rt.state.edit.focus);
 }
