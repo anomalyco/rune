@@ -10,6 +10,7 @@
 use std::time::Duration;
 
 use crate::time::Instant;
+use crate::window::state::Life;
 
 /// How long a look holds while the window draws.
 pub(super) const FRESH: Duration = Duration::from_millis(250);
@@ -65,8 +66,11 @@ impl Look {
         }
     }
 
-    /// When a covered window looks again.
-    pub(in crate::window) fn deadline(self) -> Option<Instant> {
+    /// When a covered window looks again, or `None` unless `life` is still covered.
+    /// `Host::wake_deadline` and `Host::new_events_in_turn` both read this so hiding or uncovering
+    /// a covered window never leaves an expired `WaitUntil` armed that `new_events` won't run.
+    pub(in crate::window) fn deadline(self, life: Life) -> Option<Instant> {
+        if !life.covered() { return None; }
         match self {
             Look::Covered { again } => again.map(|(at, _)| at),
             Look::Due | Look::Seen { .. } => None,
@@ -79,6 +83,7 @@ impl crate::window::host::Host {
     /// Before a frame draws: looks whether other windows cover the window when the last look is
     /// stale, and covers or uncovers it (`Cover::Windows`).
     pub(in crate::window) fn look(&mut self) {
+        if !self.life.shown() { return; }
         let Some(w) = self.win.as_mut() else { return };
         let now = crate::time::now();
         let (look, effect) = w.native.look.step(LookEvent::Frame { now });
@@ -109,3 +114,7 @@ impl crate::window::host::Host {
         self.set_cover(crate::window::state::Cover::Windows, !seen);
     }
 }
+
+#[cfg(test)]
+#[path = "look_tests.rs"]
+mod tests;

@@ -1,0 +1,1 @@
+- Windows: hiding a covered window with a running animation loop no longer leaves its occlusion re-look deadline armed in `wake_deadline` while `new_events` skips it, so the hidden window sleeps instead of spinning on an expired `WaitUntil`.

@@ -466,6 +466,8 @@ impl Host {
             #[cfg(target_os = "macos")]
             { w.native.prime.stop(); }
         }
+        #[cfg(target_os = "windows")]
+        self.look_stale();
         self.secure_input.set(false);
         self.ime.clear();
         if let Some(w) = &self.win { w.window.set_ime_allowed(false); }
