@@ -253,6 +253,14 @@ impl RuntimeCore {
         self.span_boxes(n, rect, z, spec.cold.links.iter().map(|l| (l.start, l.end)))
     }
 
+    /// Like [`Self::link_boxes`], laying out only link `k` of node `i`.
+    fn link_boxes_for(&self, i: usize, k: usize, rect: [f32; 4]) -> Vec<(usize, [f32; 4])> {
+        let n = &self.tree.nodes[i];
+        let Some(l) = n.text.as_deref().and_then(|spec| spec.cold.links.get(k)) else { return Vec::new() };
+        let z = self.paint.drawn_scale.get(i).copied().unwrap_or(1.0);
+        self.span_boxes_indexed(n, rect, z, std::iter::once((k, l.start, l.end)))
+    }
+
     /// The link of node `i` under window point (x, y).
     pub(in crate::runtime) fn link_at(&self, i: usize, x: f32, y: f32) -> Option<usize> {
         if self.tree.nodes[i].text.as_ref().is_none_or(|t| t.cold.links.is_empty()) { return None; }
@@ -377,7 +385,7 @@ impl RuntimeCore {
     pub(in crate::runtime) fn find_link(&self, id: &str) -> Option<(f32, f32)> {
         (0..self.tree.nodes.len()).filter(|&i| !self.subtree_exiting(i)).find_map(|i| {
             let k = self.tree.nodes[i].text.as_ref()?.cold.links.iter().position(|l| l.id == id)?;
-            let (_, r) = self.link_boxes(i, self.drawn_box(i)).into_iter().find(|(j, _)| *j == k)?;
+            let (_, r) = self.link_boxes_for(i, k, self.drawn_box(i)).into_iter().next()?;
             Some(((r[0] + r[2]) * 0.5, (r[1] + r[3]) * 0.5))
         })
     }
@@ -395,7 +403,7 @@ impl RuntimeCore {
     pub(in crate::runtime) fn focused_link_menu(&mut self, app: &mut dyn AppDriver, i: usize, tx: &mut Tx) -> bool {
         let Some(k) = self.edit.link_focus().filter(|&k| k < link_count(&self.tree.nodes[i])) else { return false };
         if self.tree.nodes[i].text.as_ref().is_none_or(|t| t.cold.on_link_secondary.is_none()) { return false; }
-        let Some((_, r)) = self.link_boxes(i, self.drawn_box(i)).into_iter().find(|(j, _)| *j == k) else { return false };
+        let Some((_, r)) = self.link_boxes_for(i, k, self.drawn_box(i)).into_iter().next() else { return false };
         let path = self.tree.nodes[i].path.clone();
         let point = self.pointer_event(i, r[0], r[3]);
         self.secondary_press_link(app, &path, k, point, tx)
