@@ -287,37 +287,55 @@ impl RuntimeCore {
         self.span_boxes_indexed(n, rect, z, spans)
     }
 
-    /// The link of node `i` under window point (x, y).
-    pub(in crate::runtime) fn link_at(&self, i: usize, x: f32, y: f32) -> Option<usize> {
+    /// Index of the first `(start, end)` byte span on node `i` whose `range_boxes(..., false)`
+    /// line box (shifted left by `scroll_x` window points) contains window point `(x, y)`.
+    fn span_at(
+        &self,
+        i: usize,
+        x: f32,
+        y: f32,
+        scroll_x: f32,
+        spans: impl IntoIterator<Item = (u32, u32)>,
+    ) -> Option<usize> {
         let n = &self.tree.nodes[i];
         let (Some(spec), Some(laid)) = (n.text.as_deref(), n.text_layout.as_ref()) else { return None };
-        if spec.cold.links.is_empty() { return None; }
-        let (rect, x, y) = self.unturned_box_and_point(i, x, y);
-        if !x.is_finite() || !y.is_finite() { return None; }
+        let (rect, ux, uy) = self.unturned_box_and_point(i, x, y);
+        if !ux.is_finite() || !uy.is_finite() { return None; }
         let flow = laid.view();
         let s = self.env.scale;
         let z = self.paint.drawn_scale.get(i).copied().unwrap_or(1.0);
         let orig = origin(n, spec, flow, rect, s, z);
         let px = s / z.max(1e-4);
-        if !(px > 0.0 && px.is_finite() && orig[0].is_finite() && orig[1].is_finite()) {
-            return (0..spec.cold.links.len()).find(|&k| {
-                self.link_boxes_for(i, k, rect).into_iter().any(|(_, r)| contains(r, x, y))
-            });
+        let hit = |k: usize, start: u32, end: u32| {
+            self.span_boxes_indexed(n, rect, z, std::iter::once((k, start, end)))
+                .into_iter()
+                .any(|(_, r)| contains([r[0] - scroll_x, r[1], r[2] - scroll_x, r[3]], ux, uy))
+        };
+        let cx = ux + scroll_x;
+        if !(px > 0.0 && px.is_finite() && orig[0].is_finite() && orig[1].is_finite() && cx.is_finite()) {
+            return spans.into_iter().enumerate().find_map(|(k, (start, end))| hit(k, start, end).then_some(k));
         }
-        let candidates = link_hit_candidates(flow, spec, orig, px, s, x, y);
+        let candidates = link_hit_candidates(flow, spec, orig, px, s, cx, uy);
         if candidates.is_empty() { return None; }
         let len = layout_len(n, spec);
-        for (k, l) in spec.cold.links.iter().enumerate() {
-            let (a, b) = drawn(n, l.start, l.end);
+        for (k, (start, end)) in spans.into_iter().enumerate() {
+            let (a, b) = drawn(n, start, end);
             let (a, b) = ((a as usize).min(len), (b as usize).min(len));
             if a >= b || !candidates.iter().any(|c| c.matches(a, b)) {
                 continue;
             }
-            if self.link_boxes_for(i, k, rect).into_iter().any(|(_, r)| contains(r, x, y)) {
+            if hit(k, start, end) {
                 return Some(k);
             }
         }
         None
+    }
+
+    /// The link of node `i` under window point (x, y).
+    pub(in crate::runtime) fn link_at(&self, i: usize, x: f32, y: f32) -> Option<usize> {
+        let spec = self.tree.nodes[i].text.as_deref()?;
+        if spec.cold.links.is_empty() { return None; }
+        self.span_at(i, x, y, 0.0, spec.cold.links.iter().map(|l| (l.start, l.end)))
     }
 
     /// The id of the `Mark::Pill` in text field `i` under window point `(x, y)`, if any.
@@ -327,13 +345,10 @@ impl RuntimeCore {
         if input.edit.is_secure() || input.edit.preedit().is_some() { return None; }
         let pills = input.edit.display_pills();
         if pills.is_empty() { return None; }
-        let (rect, ux, uy) = self.unturned_box_and_point(i, x, y);
         let z = self.paint.drawn_scale.get(i).copied().unwrap_or(1.0);
         let scroll_x = if input.single_line { self.edit.input_scroll.get(&n.path).copied().unwrap_or(0.0) * z } else { 0.0 };
-        self.span_boxes(n, rect, z, pills.iter().map(|&(s, e, _)| (s, e)))
-            .into_iter()
-            .find(|(_, r)| contains([r[0] - scroll_x, r[1], r[2] - scroll_x, r[3]], ux, uy))
-            .map(|(k, _)| pills[k].2.to_owned())
+        self.span_at(i, x, y, scroll_x, pills.iter().map(|&(s, e, _)| (s, e)))
+            .map(|k| pills[k].2.to_owned())
     }
 
     /// Hit rects for node `i`: only its links' boxes, clipped like `clipped`. False when it
@@ -697,3 +712,7 @@ pub(crate) fn count_span_box_queries<R>(f: impl FnOnce() -> R) -> (R, usize) {
 #[cfg(test)]
 #[path = "links_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "pill_hit_tests.rs"]
+mod pill_hit_tests;
