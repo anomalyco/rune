@@ -1,0 +1,1 @@
+- Secure text fields: refreshing a field's internal `TextEdit` copy during focus sync now drops the previous copy so `TextEdit::drop` wipes its text buffer, instead of reusing the buffer with `String::clone_from` (which could reallocate and free old secret bytes unwiped or leave a previous secret's tail in spare capacity when shortened or cleared).
