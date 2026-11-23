@@ -1,0 +1,1 @@
+- Strikethrough: a struck span on a line that starts with text of another size now takes its vertical offset and thickness from the struck run rather than the line's first glyph run.
