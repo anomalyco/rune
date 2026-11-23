@@ -185,24 +185,38 @@ fn open(url: &str) -> Result<(), OpenUrlError> {
 
 #[cfg(target_os = "macos")]
 fn build_macos_url(url: &str) -> Option<objc2::rc::Retained<objc2_foundation::NSURL>> {
-    use objc2_foundation::{NSString, NSURL};
-    let ascii = percent_encode_non_ascii(url);
-    let ns = NSString::from_str(&ascii);
-    NSURL::URLWithString(&ns)
+    use objc2_foundation::{NSString, NSURL, NSURLComponents};
+    let ns = NSString::from_str(&encode_outside_host(url));
+    // Foundation IDNA-encodes the host (UTS 46, as Chrome's URL parser does) in `URLWithString:`
+    // for apps linked with the macOS 14 SDK, and in `NSURLComponents` from macOS 13.
+    NSURL::URLWithString(&ns).or_else(|| NSURLComponents::componentsWithString(&ns).and_then(|c| c.URL()))
 }
 
+/// Percent-encodes non-ASCII bytes everywhere but an http(s) link's host, which Foundation
+/// IDNA-encodes. Only the host is left for it to fix, so it leaves existing `%XX` escapes alone.
 #[cfg(any(target_os = "macos", test))]
-fn percent_encode_non_ascii(url: &str) -> std::borrow::Cow<'_, str> {
+fn encode_outside_host(url: &str) -> std::borrow::Cow<'_, str> {
     if url.is_ascii() { return std::borrow::Cow::Borrowed(url); }
+    let host = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).map(|after| {
+        let start = url.len() - after.len();
+        let authority = &after[..after.find(['/', '?', '#']).unwrap_or(after.len())];
+        let host_start = authority.rfind('@').map_or(0, |i| i + 1);
+        let host_end = authority[host_start..].find(':').map_or(authority.len(), |i| host_start + i);
+        start + host_start..start + host_end
+    });
+    let host = host.unwrap_or(0..0);
     let mut out = String::with_capacity(url.len() + 16);
-    for &b in url.as_bytes() {
+    let encode = |out: &mut String, part: &str| for &b in part.as_bytes() {
         if b < 0x80 {
             out.push(b as char);
         } else {
             use std::fmt::Write;
             write!(out, "%{b:02X}").ok();
         }
-    }
+    };
+    encode(&mut out, &url[..host.start]);
+    out.push_str(&url[host.clone()]);
+    encode(&mut out, &url[host.end..]);
     std::borrow::Cow::Owned(out)
 }
 
@@ -373,25 +387,25 @@ mod tests {
 
     #[test]
     fn macos_url_prep_preserves_host_and_encodes_rest() {
-        assert_eq!(percent_encode_non_ascii("https://münchen.de"), "https://münchen.de");
+        assert_eq!(encode_outside_host("https://münchen.de"), "https://münchen.de");
         assert_eq!(
-            percent_encode_non_ascii("https://münchen.de/a%20b/straße?q=café%20latte#ü%20x"),
+            encode_outside_host("https://münchen.de/a%20b/straße?q=café%20latte#ü%20x"),
             "https://münchen.de/a%20b/stra%C3%9Fe?q=caf%C3%A9%20latte#%C3%BC%20x",
         );
         assert_eq!(
-            percent_encode_non_ascii("https://üser%201:päss@münchen.de:8443/straße"),
+            encode_outside_host("https://üser%201:päss@münchen.de:8443/straße"),
             "https://%C3%BCser%201:p%C3%A4ss@münchen.de:8443/stra%C3%9Fe",
         );
         assert_eq!(
-            percent_encode_non_ascii("https://[::1]:8080/straße"),
+            encode_outside_host("https://[::1]:8080/straße"),
             "https://[::1]:8080/stra%C3%9Fe",
         );
         assert_eq!(
-            percent_encode_non_ascii("mailto:user@münchen.de?subject=Grüß%20Gott"),
+            encode_outside_host("mailto:user@münchen.de?subject=Grüß%20Gott"),
             "mailto:user@m%C3%BCnchen.de?subject=Gr%C3%BC%C3%9F%20Gott",
         );
         assert_eq!(
-            percent_encode_non_ascii("https://example.com/a%20b?c=%2F"),
+            encode_outside_host("https://example.com/a%20b?c=%2F"),
             "https://example.com/a%20b?c=%2F",
         );
     }
@@ -430,7 +444,7 @@ mod tests {
             assert!(build_macos_url("https://-münchen.de/").is_none(), "invalid IDNA host must be rejected");
             // The macOS 13 fallback path (NSURLComponents) must also IDNA-encode the host without
             // double-encoding existing %XX escapes in the path, query, or fragment.
-            let prepared = percent_encode_non_ascii("https://münchen.de/a%20b/straße?q=café%20latte#ü%20x");
+            let prepared = encode_outside_host("https://münchen.de/a%20b/straße?q=café%20latte#ü%20x");
             let fallback = NSURLComponents::componentsWithString(&NSString::from_str(&prepared))
                 .and_then(|c| c.URL())
                 .expect("NSURLComponents fallback");

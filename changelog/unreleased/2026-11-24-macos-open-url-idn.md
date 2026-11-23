@@ -1,0 +1,1 @@
+- macOS: `Tx::open_url` opens links whose host is not ASCII (`https://münchen.de`). Rune percent-encoded the whole link, host included, so `NSWorkspace` got `m%C3%BCnchen.de`, which no resolver answers. It now percent-encodes only the other parts and leaves the host to Foundation, which IDNA-encodes it (`xn--mnchen-3ya.de`), as Chrome and the `webbrowser` crate hand macOS a link.
