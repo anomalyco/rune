@@ -63,6 +63,7 @@ pub use choreo::StepId;
 pub use choreo::When;
 pub use choreo::stagger;
 pub use clock::Clock;
+pub use clock::ManualClock;
 pub use curve::Anim;
 pub use curve::AnimExt;
 pub use curve::Blend;
@@ -156,6 +157,7 @@ pub mod prelude {
     pub use crate::Edge;
     pub use crate::Keyframes;
     pub use crate::LayoutAnim;
+    pub use crate::ManualClock;
     pub use crate::Mount;
     pub use crate::NodeId;
     pub use crate::NodeSpec;

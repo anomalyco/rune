@@ -53,7 +53,7 @@ let x = store.get(id, X);
 | Choreography | `Choreography` steps cue on `Cue::now/at/started/arrived/settled(step).after(s).not_before(t)`. Also `Stagger` (from start, end, centre or an index, eased), `PhaseAnimator` and `Keyframes`. |
 | Gestures | `VelocityTracker`, `project`, `rubber_band*`, `deceleration`. |
 | `Animated<T>` | A single value outside any store, for one-off widgets. |
-| `Clock` | A display clock with pause, scale and seek, or a manual clock for tests and offline renders. |
+| `Clock` / `ManualClock` | A display clock with pause, scale and seek, and a separate manual clock for tests and offline renders. |
 | `LoopTrack` / `LoopSpec` | Periodic eased opacity or clockwise rotation, sampled at clock time. `retime` preserves phase; `enabled` springs the pulse amplitude toward rest. The renderer owns visibility and scheduling. |
 | `MotionTrace` | motion-trace JSONL. `MotionTrace::from_env` opens `$RUNE_MOTION_TRACE`. |
 

@@ -299,6 +299,7 @@ pub use rune_motion::Effect;
 pub use rune_motion::LayoutAnim;
 pub use rune_motion::LoopKind;
 pub use rune_motion::LoopSpec;
+pub use rune_motion::ManualClock;
 pub use rune_motion::NodeId;
 pub use rune_motion::Phase as PresencePhase;
 pub use rune_motion::Presented;

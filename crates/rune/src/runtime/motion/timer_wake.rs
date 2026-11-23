@@ -15,7 +15,7 @@ pub(crate) struct FrameState {
     /// When the frame being built will present; videos pull the picture for it.
     frame_target: Option<crate::time::Instant>,
     #[cfg(test)]
-    test_clock: Option<crate::Clock>,
+    test_clock: Option<crate::ManualClock>,
     /// Tooling opts in before any callbacks. Absent in ordinary app runs.
     trace_channels: Option<HashMap<&'static str, (&'static str, f32)>>,
     #[cfg(feature = "hot")]
@@ -96,20 +96,20 @@ impl FrameState {
 
     #[cfg(test)]
     #[inline]
-    pub(crate) fn set_test_clock(&mut self, clock: crate::Clock) {
+    pub(crate) fn set_test_clock(&mut self, clock: crate::ManualClock) {
         self.test_clock = Some(clock);
     }
 
     #[cfg(test)]
     #[inline]
-    pub(crate) fn test_clock_mut(&mut self) -> Option<&mut crate::Clock> {
+    pub(crate) fn test_clock_mut(&mut self) -> Option<&mut crate::ManualClock> {
         self.test_clock.as_mut()
     }
 
     #[cfg(test)]
     #[inline]
     pub(in crate::runtime) fn test_clock_now(&self) -> Option<f64> {
-        self.test_clock.as_ref().map(crate::Clock::now)
+        self.test_clock.as_ref().map(crate::ManualClock::now)
     }
 
     #[inline]

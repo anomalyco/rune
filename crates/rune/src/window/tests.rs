@@ -273,7 +273,7 @@ impl CompHost {
     fn new(comp: Option<bool>, poll: fn(&mut u32, f64, &mut Tx) -> bool) -> Self {
         fn view(_: &u32, _: &mut crate::Cx<u32>) -> crate::El { crate::el().key("box").size(20.0, 20.0).fill(crate::Color::WHITE) }
         let mut rt = Runtime::new(0u32, view, (20.0, 20.0), crate::Env::default());
-        rt.frame.set_test_clock(crate::Clock::manual(1.0 / crate::frame::clock::RESUME_STEP));
+        rt.frame.set_test_clock(crate::ManualClock::new(1.0 / crate::frame::clock::RESUME_STEP));
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: wgpu::TextureFormat::Bgra8UnormSrgb,

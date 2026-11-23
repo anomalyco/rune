@@ -205,14 +205,14 @@ fn cooling_keeps_phase_and_settles() {
 fn clock_pause_scale_step_and_seek_match_reference() {
     let spec = LoopSpec::rotation(0.9);
     let t = LoopTrack::new(spec, 0.0);
-    let mut clock = crate::Clock::manual(120.0);
+    let mut clock = crate::ManualClock::new(120.0);
     for _ in 0..17 { clock.step(); }
     let first = t.sample(clock.now(), false);
-    clock.pause(0.0);
+    clock.pause();
     for _ in 0..40 { clock.step(); }
     assert_eq!(t.sample(clock.now(), false), first);
-    clock.resume(0.0);
-    clock.set_scale(0.25, 0.0);
+    clock.resume();
+    clock.set_scale(0.25);
     clock.step();
     let reference = ((17.0 / 120.0 + 0.25 / 120.0) / 0.9) as f32 * core::f32::consts::TAU;
     assert!((t.sample(clock.now(), false) - reference).abs() < 1e-6);
