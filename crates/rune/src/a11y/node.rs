@@ -132,6 +132,33 @@ impl RuntimeCore {
         h.finish()
     }
 
+    /// Signature of a live region's spoken content and politeness (`Polite` or `Assertive`),
+    /// independent of layout geometry. `None` when the element is not an active live root.
+    pub(super) fn a11y_live_sig(&self, i: usize, content_print: u64) -> Option<u64> {
+        let n = &self.tree.nodes[i];
+        let live = n.a11y.live.or_else(|| roles::default_live(n.role))?;
+        if live == crate::LiveRegion::Off { return None; }
+        let mut h = rustc_hash::FxHasher::default();
+        live.hash(&mut h);
+        let secure = n.is_secure();
+        secure.hash(&mut h);
+        n.label.hash(&mut h);
+        if let Some(m) = n.a11y.more.as_deref() {
+            m.value.hash(&mut h);
+            m.labelled_by.as_deref().and_then(|k| self.a11y_keyed(i, k)).map(|j| self.a11y_words(j)).hash(&mut h);
+            if let Some(r) = m.range { r.value.to_bits().hash(&mut h); }
+        }
+        if !secure {
+            if let Some(input) = n.input.as_deref() {
+                input.edit.text.hash(&mut h);
+            } else if let Some(t) = n.text.as_deref() {
+                t.source_text().hash(&mut h);
+            }
+        }
+        content_print.hash(&mut h);
+        Some(h.finish())
+    }
+
     /// Per node, a hash of the text its name could be taken from (`a11y_content_name`): its
     /// own text or label, and its descendants', folded bottom-up. Zero for nodes whose role
     /// doesn't read it.
@@ -225,6 +252,8 @@ impl RuntimeCore {
         if roles::selectable_item(role) && (n.focus.selected || self.focus_group(i).is_some()) { node.set_selected(n.focus.selected); }
         let live = n.a11y.live.or_else(|| roles::default_live(n.role));
         match live {
+            Some(crate::LiveRegion::Polite | crate::LiveRegion::Assertive)
+                if self.a11y_live_muted(element_id(n.id)) => node.set_live(Live::Off),
             Some(crate::LiveRegion::Polite) => node.set_live(Live::Polite),
             Some(crate::LiveRegion::Assertive) => node.set_live(Live::Assertive),
             Some(crate::LiveRegion::Off) => node.set_live(Live::Off),
