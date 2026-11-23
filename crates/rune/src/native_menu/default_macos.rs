@@ -20,8 +20,6 @@ thread_local! {
 /// Preserve any existing menu, including an app-supplied empty menu. AppKit owns
 /// the fallback for the app's lifetime; removing Rune's custom items leaves it alone.
 pub(crate) fn ensure(app: &NSApplication) -> Retained<NSMenu> {
-    // A launch's menu bar that still waits for the first frame is made first.
-    super::bar_ready();
     // SAFETY: NSApplication and its menus are main-thread-only. All objects are
     // retained and the standard selectors use AppKit's responder chain, as in winit.
     unsafe {

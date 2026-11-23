@@ -22,7 +22,7 @@ mod standard;
 #[cfg(target_os = "macos")]
 mod standard_macos;
 #[cfg(target_os = "macos")]
-pub(crate) use default_macos::{ensure as ensure_default_menu, promote as promote_default_menu, set_layout_direction};
+pub(crate) use default_macos::set_layout_direction;
 #[cfg(target_os = "macos")]
 pub(crate) use standard_macos::{adopt as adopt_standard_view, install as install_standard_menus, settle as settle_standard_menus};
 #[cfg(target_os = "macos")]
@@ -343,6 +343,21 @@ fn bar_state<R>(f: impl FnOnce(&mut bar_wait::BarWait) -> R) -> R {
     })
 }
 
+/// `default_macos::ensure`, once a launch's waiting menu bar is made: winit's default menu is
+/// the root it keeps.
+#[cfg(target_os = "macos")]
+pub(crate) fn ensure_default_menu(app: &objc2_app_kit::NSApplication) -> objc2::rc::Retained<objc2_app_kit::NSMenu> {
+    bar_ready();
+    default_macos::ensure(app)
+}
+
+/// `default_macos::promote`, once a launch's waiting menu bar is made.
+#[cfg(target_os = "macos")]
+pub(crate) fn promote_default_menu(app: &objc2_app_kit::NSApplication) {
+    bar_ready();
+    default_macos::promote(app);
+}
+
 /// The event loop starts a regular app with winit's default menu turned off: the menu bar is
 /// made once the first window's first frame is on its way (`bar_ready`).
 #[cfg(target_os = "macos")]
@@ -353,7 +368,7 @@ pub(crate) fn bar_waits() {
 /// The menu bar a launch left waiting, now: winit's default menu, then the standard items its
 /// window starts asked for. A window's own items follow as its guard drains. Called once the
 /// first window's first frame is on its way, at the end of a launch that drew none, and by
-/// whatever needs the menu bar before that (`default_macos::ensure`).
+/// whatever needs the menu bar before that (`ensure_default_menu`).
 #[cfg(target_os = "macos")]
 pub(crate) fn bar_ready() {
     let Some(owed) = bar_state(bar_wait::BarWait::end) else { return };
