@@ -327,17 +327,23 @@ impl Decoder {
                     if s.stop {
                         return Ok(());
                     }
-                    if let Some((to, g)) = s.seek.take() {
+                    if s.seek.is_some() {
                         end_due = None;
-                        s.flush();
-                        generation = g;
-                        landing = Landing::at(to);
-                        epoch = 0.0;
-                        mf::seek(&self.reader, to)?;
-                        self.reopen_streams();
-                        if let Some(o) = &self.output {
-                            o.flush();
-                        }
+                        // The source moves with the inbox unlocked: the UI thread never waits
+                        // for it.
+                        s = pipe.land_seeks(s, |to, g| {
+                            generation = g;
+                            landing = Landing::at(to);
+                            epoch = 0.0;
+                            mf::seek(&self.reader, to)?;
+                            self.reopen_streams();
+                            if let Some(o) = &self.output {
+                                o.flush();
+                            }
+                            Ok::<(), String>(())
+                        })?;
+                        // The UI may have asked for a stop meanwhile.
+                        continue;
                     }
                     if self.output.is_some() != s.sound.is_some() {
                         let on = s.sound.is_some();

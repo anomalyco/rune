@@ -135,6 +135,20 @@ impl Pipe {
     pub(super) fn poke(&self) {
         self.wake.notify_all();
     }
+    /// Lands the UI's seeks: takes the newest ask, drops the queue for it and runs `seek` (the
+    /// source's own seek, which can take as long as a network round trip) with the inbox
+    /// unlocked, since the UI thread locks it in every frame that draws the clip and for every
+    /// seek it asks for. A seek asked for meanwhile is landed next, before the caller reads
+    /// anything for the one before it, so only the newest is decoded.
+    pub(super) fn land_seeks<'a, E>(&'a self, mut inbox: MutexGuard<'a, Inbox>, mut seek: impl FnMut(f64, u32) -> Result<(), E>) -> Result<MutexGuard<'a, Inbox>, E> {
+        while let Some((to, generation)) = inbox.seek.take() {
+            inbox.flush();
+            drop(inbox);
+            seek(to, generation)?;
+            inbox = self.lock();
+        }
+        Ok(inbox)
+    }
     /// The decoder sleeps until it's poked or `patience` passes.
     pub(super) fn wait<'a>(&self, inbox: MutexGuard<'a, Inbox>, patience: Duration) -> MutexGuard<'a, Inbox> {
         self.wake.wait_timeout(inbox, patience).unwrap().0
