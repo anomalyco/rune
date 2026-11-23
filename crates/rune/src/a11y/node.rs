@@ -222,7 +222,8 @@ impl RuntimeCore {
         match live {
             Some(crate::LiveRegion::Polite) => node.set_live(Live::Polite),
             Some(crate::LiveRegion::Assertive) => node.set_live(Live::Assertive),
-            _ => {}
+            Some(crate::LiveRegion::Off) => node.set_live(Live::Off),
+            None => {}
         }
         if modal { node.set_modal(); }
         if !enabled { node.set_disabled(); }

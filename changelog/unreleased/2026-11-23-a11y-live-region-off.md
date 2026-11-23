@@ -1,0 +1,1 @@
+- Accessibility: `El::live_region(LiveRegion::Off)` now sets `accesskit::Live::Off` on the node instead of leaving its live property unset, so a child inside a live region (such as `role("status")`) opts out of live announcements instead of inheriting its parent's live setting.
