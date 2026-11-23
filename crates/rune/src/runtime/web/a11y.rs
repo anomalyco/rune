@@ -14,6 +14,7 @@ use crate::a11y::roles;
 pub(crate) struct A11yMirror {
     commits: u64,
     viewport: (u32, u32),
+    zoom: u32,
     scroll_digest: u64,
     /// Whether motion ran at the last build, and when (clock seconds) it was.
     moving: bool,
@@ -391,19 +392,22 @@ impl RuntimeCore {
         serde_json::to_string(&values).unwrap_or_else(|_| "[]".into())
     }
 
-    /// Node `i`'s drawn box in the mirror's coordinates: the band's, plus where the band starts in
-    /// the document, and `dx` points right for content inside a horizontal scroller the browser
-    /// scrolls itself. Both are added in `f64` and rounded once, so a fractional device-pixel
-    /// scroll offset can't round the same document position two ways between frames.
+    /// Node `i`'s drawn box in the mirror's coordinates (CSS pixels): the band's, plus where the
+    /// band starts in the document, and `dx` points right for content inside a horizontal scroller
+    /// the browser scrolls itself, scaled by UI zoom (`Cx::zoom`). Both are added and scaled in
+    /// `f64` and rounded once, so a fractional device-pixel scroll offset can't round the same
+    /// document position two ways between frames.
     fn mirror_rect(&self, i: usize, dx: f64) -> [f32; 4] {
         let b = self.drawn_box(i);
+        let z = f64::from(self.zoom());
         let (dx, dy) = (dx, f64::from(self.page_offset()));
-        let (left, right) = (f64::from(b[0]) + dx, f64::from(b[2]) + dx);
-        let (top, bottom) = (f64::from(b[1]) + dy, f64::from(b[3]) + dy);
+        let (left, right) = ((f64::from(b[0]) + dx) * z, (f64::from(b[2]) + dx) * z);
+        let (top, bottom) = ((f64::from(b[1]) + dy) * z, (f64::from(b[3]) + dy) * z);
         [round1(left as f32), round1(top as f32), round1((right - left).max(0.0) as f32), round1((bottom - top).max(0.0) as f32)]
     }
 
     pub(crate) fn web_a11y_items(&self) -> Vec<A11yItem> {
+        let zoom = self.zoom();
         let mut out: Vec<A11yItem> = Vec::new();
         let mut last_flow_parent: Option<usize> = None;
         let mut inline: Option<Inline> = None;
@@ -598,7 +602,7 @@ impl RuntimeCore {
                         i += 1;
                         continue;
                     }
-                    let text_rect = inset_rect(rect, n.inset);
+                    let text_rect = inset_rect(rect, n.inset.map(|v| v * zoom));
                     if plain_text && flow_group.is_none()
                         && let Some(prev) = inline.filter(|l| l.item + 1 == out.len() && l.parent == n.parent)
                         && let Some(gap) = prev.gap(n.target, spec.style, selectable)
@@ -617,7 +621,7 @@ impl RuntimeCore {
                         (String::new(), runs)
                     };
                     let mut item = A11yItem::new(if is_heading { "heading" } else { "text" }, &n.path, rect);
-                    item.font_size = round1(spec.style.size);
+                    item.font_size = round1(spec.style.size * zoom);
                     item.level = is_heading.then(|| n.a11y.level.unwrap_or(2).clamp(1, 6));
                     item.role = if is_heading { None } else { live_role };
                     item.live = live;
@@ -631,8 +635,8 @@ impl RuntimeCore {
                     item.font = Some(A11yFont {
                         family: family_name(style.family),
                         weight: style.weight,
-                        line_height: round1(if style.line_height > 0.0 { style.line_height } else { style.size * 1.25 }),
-                        tracking: style.tracking,
+                        line_height: round1((if style.line_height > 0.0 { style.line_height } else { style.size * 1.25 }) * zoom),
+                        tracking: style.tracking * zoom,
                         italic: style.italic,
                         align: align_name(spec.align),
                     });
@@ -653,7 +657,7 @@ impl RuntimeCore {
                 }
             } else if !in_control && n.role == "heading" && let Some(lbl) = self.mirror_name(i) {
                 let mut item = A11yItem::new("heading", &n.path, rect);
-                item.font_size = 16.0;
+                item.font_size = round1(16.0 * zoom);
                 item.level = Some(n.a11y.level.unwrap_or(2).clamp(1, 6));
                 item.live = live;
                 item.text = lbl;
@@ -705,27 +709,30 @@ impl RuntimeCore {
             .collect()
     }
 
-    /// Returns updated JSON only when layout commits, viewport or scroll positions changed.
+    /// Returns updated JSON only when layout commits, viewport, zoom or scroll positions changed.
     /// Whether only scrolling moved the mirror since it was last built: nothing committed and the
-    /// viewport is the same.
+    /// zoom is the same.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn web_a11y_scrolled_only(&self, mirror: &A11yMirror) -> bool {
-        mirror.commits == self.commit.commits && !mirror.json.is_empty() && mirror.scroll_digest != self.scroll_digest()
+        mirror.commits == self.commit.commits && mirror.zoom == self.zoom().to_bits()
+            && !mirror.json.is_empty() && mirror.scroll_digest != self.scroll_digest()
     }
 
     pub(crate) fn web_a11y<'a>(&self, mirror: &'a mut A11yMirror) -> Option<&'a str> {
         let vp = (self.viewport.0.to_bits(), if self.host.page.is_some() { 0 } else { self.viewport.1.to_bits() });
+        let zoom = self.zoom().to_bits();
         let sd = self.scroll_digest();
         // Motion moves drawn boxes without a commit: follow it while it runs, and once more where it stops.
         let moving = self.animating;
         let follow = moving != mirror.moving || (moving && self.clock - mirror.built_at >= MOVING_EVERY);
-        if mirror.commits == self.commit.commits && mirror.viewport == vp && mirror.scroll_digest == sd && !follow && !mirror.json.is_empty() {
+        if mirror.commits == self.commit.commits && mirror.viewport == vp && mirror.zoom == zoom && mirror.scroll_digest == sd && !follow && !mirror.json.is_empty() {
             return None;
         }
         mirror.moving = moving;
         mirror.built_at = self.clock;
         mirror.commits = self.commit.commits;
         mirror.viewport = vp;
+        mirror.zoom = zoom;
         mirror.scroll_digest = sd;
         let values: Vec<Value> = self.web_a11y_items().iter().map(A11yItem::to_json).collect();
         let next = serde_json::to_string(&values).unwrap_or_else(|_| "[]".into());

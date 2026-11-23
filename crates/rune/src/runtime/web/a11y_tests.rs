@@ -906,3 +906,86 @@ fn combobox_and_a11y_value_project_to_web_mirror_and_focus_proxy() {
         assert!(!raw.contains("top-secret") && !raw.contains("boxed-secret"), "leaked secret: {raw}");
     }
 }
+
+#[test]
+fn web_a11y_scales_rects_insets_and_font_metrics_under_cx_zoom() {
+    fn view(zoom: &f32, cx: &mut Cx<f32>) -> El {
+        cx.zoom(*zoom);
+        let styled = crate::tok::TextStyle { size: 14.0, line_height: 20.0, tracking: 0.25, ..crate::tok::type_::BODY };
+        let auto_lh = crate::tok::TextStyle { size: 12.0, line_height: 0.0, tracking: -0.02, ..crate::tok::type_::BODY };
+        let token = crate::tok::TextStyle { size: 12.0, line_height: 16.0, ..crate::tok::type_::BODY };
+        crate::col().w_full().h_full()
+            .child(crate::col().key("panel").role("group").label("Panel").absolute(12.0, 16.0).size(240.0, 210.0)
+                .child(crate::row().key("btn").role("button").label("Save").on_press(|_: &mut f32| {}).absolute(8.0, 8.0).size(80.0, 32.0))
+                .child(crate::row().key("lnk").href("https://example.com").label("Docs").absolute(8.0, 48.0).size(64.0, 20.0))
+                .child(crate::text("Hello world").key("styled").font(styled).padding(8.0).absolute(8.0, 76.0).size(120.0, 40.0))
+                .child(crate::text("Caption").key("caption").font(auto_lh).absolute(8.0, 124.0).size(100.0, 24.0))
+                .child(crate::el().key("named-h").role("heading").level(3).label("Section").absolute(8.0, 152.0).size(100.0, 24.0))
+                .child(crate::row().key("inline").gap(4.0).absolute(8.0, 180.0).size(120.0, 20.0)
+                    .child(crate::text("let").key("tok-a").font(token))
+                    .child(crate::text("x").key("tok-b").font(token))))
+    }
+    let by_key = |items: &[A11yItem], key: &str| {
+        let suffix = format!("/{key}");
+        items.iter().position(|it| it.path.ends_with(&suffix)).unwrap_or_else(|| panic!("missing {key}: {items:?}"))
+    };
+    let mut rt = Runtime::new(1.25f32, view, (400.0, 300.0), Env::new(false, 1.0));
+    rt.frame(0.0);
+    let items = rt.web_a11y_items();
+
+    assert_eq!((items[by_key(&items, "panel")].kind, items[by_key(&items, "panel")].rect), ("group", [15.0, 20.0, 300.0, 262.5]));
+    assert_eq!((items[by_key(&items, "btn")].kind, items[by_key(&items, "btn")].rect), ("button", [25.0, 30.0, 100.0, 40.0]));
+    assert_eq!((items[by_key(&items, "lnk")].kind, items[by_key(&items, "lnk")].rect), ("link", [25.0, 80.0, 80.0, 25.0]));
+
+    let styled = &items[by_key(&items, "styled")];
+    let sf = styled.font.as_ref().expect("styled text font");
+    assert_eq!((styled.rect, styled.font_size, sf.line_height, sf.tracking), ([35.0, 125.0, 130.0, 30.0], 17.5, 25.0, 0.3125));
+
+    let caption = &items[by_key(&items, "caption")];
+    let cf = caption.font.as_ref().expect("caption text font");
+    assert_eq!((caption.font_size, cf.line_height), (15.0, 18.8));
+    assert!((cf.tracking - -0.025).abs() < 1e-6, "fine tracking scales unrounded: {}", cf.tracking);
+
+    let named_h = &items[by_key(&items, "named-h")];
+    assert_eq!((named_h.kind, named_h.rect, named_h.font_size), ("heading", [25.0, 210.0, 125.0, 30.0], 20.0));
+    assert_eq!(items[by_key(&items, "tok-a")].text, "let x", "Inline::gap stays in view points under zoom");
+    assert!(items.iter().all(|it| !it.path.ends_with("/tok-b")));
+}
+
+#[test]
+fn web_a11y_invalidates_mirror_when_zoom_changes() {
+    fn view(zoom: &f32, cx: &mut Cx<f32>) -> El {
+        cx.zoom(*zoom);
+        crate::col().w_full().h_full()
+            .child(crate::row().key("btn").role("button").label("Go").on_press(|_: &mut f32| {}).absolute(20.0, 24.0).size(80.0, 32.0))
+    }
+    let mut rt = Runtime::new(1.0f32, view, (400.0, 300.0), Env::new(false, 1.0));
+    rt.frame(0.0);
+    let mut mirror = A11yMirror::default();
+    let at_1 = rt.web_a11y(&mut mirror).expect("initial mirror at 1.0").to_owned();
+    assert_eq!(mirror.zoom, 1.0f32.to_bits());
+    assert!(rt.web_a11y(&mut mirror).is_none(), "unchanged zoom emits nothing");
+
+    // Scale window viewport alongside zoom so view-space viewport stays (400, 300).
+    rt.set_viewport((500.0, 375.0), 1.0);
+    rt.update(|z, _| *z = 1.25);
+    rt.frame(0.0);
+    let at_125 = rt.web_a11y(&mut mirror).expect("zoom change invalidates mirror").to_owned();
+    assert_eq!(mirror.zoom, 1.25f32.to_bits());
+    assert_ne!(at_1, at_125);
+    let items_125: Vec<serde_json::Value> = serde_json::from_str(&at_125).unwrap();
+    assert_eq!(items_125[0]["r"], json!([25.0, 30.0, 100.0, 40.0]));
+    assert!(rt.web_a11y(&mut mirror).is_none(), "second read at 1.25 emits nothing");
+
+    // Even with matching commits, viewport and scroll digest, a mismatched mirror.zoom rebuilds.
+    mirror.zoom = 1.0f32.to_bits();
+    mirror.json = at_1.clone();
+    assert_eq!(rt.web_a11y(&mut mirror), Some(at_125.as_str()));
+    assert_eq!(mirror.zoom, 1.25f32.to_bits());
+
+    // Returning to zoom 1.0 rebuilds and matches the original unzoomed output bit-for-bit.
+    rt.set_viewport((400.0, 300.0), 1.0);
+    rt.update(|z, _| *z = 1.0);
+    rt.frame(0.0);
+    assert_eq!(rt.web_a11y(&mut mirror).expect("returning to 1.0 invalidates mirror"), at_1);
+}
