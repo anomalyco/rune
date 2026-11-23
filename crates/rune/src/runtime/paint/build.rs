@@ -232,18 +232,31 @@ impl RuntimeCore {
             let sequence = track
                 .filter(|_| matches!(n.looping.as_ref().map(|l| l.kind), Some(rune_motion::LoopKind::Sequence(_))));
             let static_k = if n.scale_track { self.scene.get(n.id, P_SCALE).unwrap_or(n.static_scale) } else { n.static_scale };
-            let own_sc = p.transform.scale.x * press_k * static_k
+            let own_sc_rest = p.transform.scale.x * press_k
                 * sequence.and_then(|l| l.pose(lnow, self.reduced_motion)).map_or(1.0, |p| p.scale);
+            let own_sc = own_sc_rest * static_k;
             // An `El::scale` or `El::live_scale` an app drives from a slider, wheel or pinch
             // counts as moving until it holds still, then rasterizes crisp at its resting scale.
+            // When Rune's own `P_SCALE` track drives the scale (without `live_scale`), the target
+            // is known ahead of time: record `Still(target)` while it animates so the landing frame
+            // rests immediately without starting a `STATIC_SCALE_SETTLE` tail.
             let has_live_scale = n.live.iter().any(|b| b.property == crate::live::Property::Scale);
             let tracked_scale = if has_live_scale { static_k * p.transform.scale.x } else { static_k };
-            let scale_settling = if tracked_scale != 1.0 || has_live_scale || self.paint.static_scales.contains_key(&n.id) {
+            let store = self.scene.store();
+            let p_scale_anim = n.scale_track && store.is_animating(n.id, P_SCALE);
+            let p_scale_target = if !has_live_scale && p_scale_anim {
+                Some(store.target(n.id, P_SCALE).unwrap_or(tracked_scale))
+            } else {
+                None
+            };
+            let scale_settling = if let Some(target) = p_scale_target {
+                self.paint.static_scales.insert(n.id, ScaleSettle::Still(target));
+                false
+            } else if tracked_scale != 1.0 || has_live_scale || self.paint.static_scales.contains_key(&n.id) {
                 pose::step_static_scale(&mut self.paint.static_scales, &mut self.paint.scale_frame, n.id, tracked_scale, self.t, self.settled, has_live_scale)
             } else { false };
-            let store = self.scene.store();
             let own_scale_anim = (has_press_scale && store.is_animating(n.id, P_PRESS_SCALE))
-                || (n.scale_track && store.is_animating(n.id, P_SCALE))
+                || p_scale_anim
                 || sequence.is_some_and(|l| !self.reduced_motion && l.active(lnow));
             let presence_anim = store.is_animating(n.id, prop::PRESENCE);
             let scale_animating = store.is_animating(n.id, prop::SCALE) || presence_anim || own_scale_anim;
@@ -261,6 +274,12 @@ impl RuntimeCore {
             // Scale about this node's centre where its ancestors' scales put it, so a scaled child
             // of a scaled parent stays in place.
             let sc = pinh.scale * own_sc;
+            let p_scale_tracked = !has_live_scale && pinh.scale_motion != ScaleMotion::Live && (p_scale_target.is_some() || pinh.scale_tracked);
+            let scale_target = if p_scale_tracked {
+                pinh.scale_target * own_sc_rest * p_scale_target.unwrap_or(static_k)
+            } else {
+                sc
+            };
             let pivot = match n.vis.origin {
                 Some([ox, oy]) => [p.rect.x + ox * p.rect.w, p.rect.y + oy * p.rect.h],
                 None => [p.anchor.x, p.anchor.y],
@@ -471,6 +490,7 @@ impl RuntimeCore {
                 w,
                 h,
                 sc,
+                p_scale_tracked.then_some(scale_target),
                 m,
                 effective_opacity,
                 paint_own,
@@ -667,6 +687,8 @@ impl RuntimeCore {
                 scale_motion, still: if scale_motion == ScaleMotion::Still { (scale, anchor, anchor_to) } else { pinh.still },
                 held_moving: pinh.held_moving || own_scale_moving || cover.is_some(),
                 held: if !(pinh.held_moving || own_scale_moving || cover.is_some()) { (scale, anchor, anchor_to) } else { pinh.held },
+                scale_target: if cover.is_some() { scale } else { scale_target },
+                scale_tracked: p_scale_tracked && cover.is_none(),
                 in_cache, skip_paint, anchor_hidden: false, turn: turn_index,
                 snap: pixel_snap::Inherit { off: snap_off, steps, shifted: pinh.snap.shifted || n.vis.offset != [0.0; 2], layer: if cover.is_some() { 0 } else { snap_layer }, parent: snap_rest.filter(|_| cover.is_none() && snap.rigid == pinh.snap.rigid && pixel_snap::frames(&n.vis)), ..snap } };
             // Shown only under its group's hover, it takes presses where the pointer hovers the

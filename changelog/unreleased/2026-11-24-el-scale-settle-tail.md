@@ -1,0 +1,1 @@
+- Paint: `El::scale` animations driven by Rune's `P_SCALE` track now stop requesting frames as soon as the track lands instead of running a 0.1 s `STATIC_SCALE_SETTLE` tail; app-stepped and `live_scale` changes keep their settle window.

@@ -260,7 +260,7 @@ impl crate::runtime::tracks::MotionState {
             *pinh = Inh { opacity: 1.0, paint_opacity: 1.0, hit_opacity: 1.0, clip, fade, fade_origin, paint_clip: clip, paint_fade: fade,
                 paint_fade_origin: fade_origin, rounded: None, scale, anchor, anchor_to, blur: 0.0,
                 dx: dxy[0], dy: dxy[1], cover: [0.0; 2], outer: None,
-                scale_motion: ScaleMotion::Still, in_cache: false, skip_paint: false, turn: 0, snap: pixel_snap::Inherit { layer: 0, parent: None, ..pinh.snap }, ..*pinh };
+                scale_motion: ScaleMotion::Still, scale_target: scale, scale_tracked: false, in_cache: false, skip_paint: false, turn: 0, snap: pixel_snap::Inherit { layer: 0, parent: None, ..pinh.snap }, ..*pinh };
             let fix = self.launches_mut().offset_fix(scene, node_id, [pinh.dx, pinh.dy], commit_gen);
             (pinh.dx, pinh.dy) = (pinh.dx + fix[0], pinh.dy + fix[1]);
             return None;
@@ -275,7 +275,7 @@ impl crate::runtime::tracks::MotionState {
         *pinh = Inh { opacity: 1.0, paint_opacity: 1.0, hit_opacity: 1.0, clip, fade, fade_origin, paint_clip: clip, paint_fade: fade,
             paint_fade_origin: fade_origin, rounded: None, scale, anchor: [0.0; 2], anchor_to: [0.0; 2], blur: 0.0,
             dx: dxy[0], dy: dxy[1], cover: [0.0; 2], outer: None,
-            scale_motion: ScaleMotion::Still, in_cache: false, skip_paint: false, turn: 0, snap: pixel_snap::Inherit { layer: 0, parent: None, ..pinh.snap }, ..*pinh };
+            scale_motion: ScaleMotion::Still, scale_target: scale, scale_tracked: false, in_cache: false, skip_paint: false, turn: 0, snap: pixel_snap::Inherit { layer: 0, parent: None, ..pinh.snap }, ..*pinh };
         Some(FlightDest { held, dxy, anc_off, travel })
     }
 

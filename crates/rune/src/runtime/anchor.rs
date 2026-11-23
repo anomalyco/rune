@@ -379,6 +379,8 @@ impl RuntimeCore {
             pinh.still = (1.0, [0.0; 2], [0.0; 2]);
             pinh.held = (1.0, [0.0; 2], [0.0; 2]);
             pinh.held_moving = false;
+            pinh.scale_target = 1.0;
+            pinh.scale_tracked = false;
             return;
         }
         pinh.dx = pivot[0] + (ax - pivot[0]) / k - world.x;
@@ -389,5 +391,7 @@ impl RuntimeCore {
         pinh.still = if pinh.scale_motion == ScaleMotion::Still { (k, pivot, pivot) } else { (1.0, [0.0; 2], [0.0; 2]) };
         pinh.held = if pinh.scale_motion != ScaleMotion::Moving { (k, pivot, pivot) } else { (1.0, [0.0; 2], [0.0; 2]) };
         pinh.held_moving = pinh.scale_motion == ScaleMotion::Moving;
+        pinh.scale_target = k;
+        pinh.scale_tracked = false;
     }
 }

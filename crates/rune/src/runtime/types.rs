@@ -338,6 +338,10 @@ pub(super) struct Inh {
     pub(super) held: (f32, [f32; 2], [f32; 2]),
     /// True once an ancestor above had its own animating scale so descendants stop updating `held`.
     pub(super) held_moving: bool,
+    /// Composed resting target scale when a `P_SCALE` track drives this subtree (no live scale).
+    pub(super) scale_target: f32,
+    /// True while an ancestor's own `P_SCALE` track is animating without a live scale.
+    pub(super) scale_tracked: bool,
     /// Inside an active `El::cache` scope: do not cull children against the window viewport.
     pub(super) in_cache: bool,
     /// Inside an elided or off-screen `El::cache` scope: skip primitive emission.
@@ -384,7 +388,7 @@ impl Default for Inh {
             paint_clip: NO_CLIP, paint_fade: [0.0; 4], paint_fade_origin: NO_CLIP, rounded: None,
             scale: 1.0, anchor: [0.0; 2], anchor_to: [0.0; 2], blur: 0.0, dy: 0.0, dx: 0.0, cover: [0.0; 2], outer: None, mark: 0, group: 0.0, pressed: 0.0, press_to: None,
             hit_opacity: 1.0, group_rect: [f32::NEG_INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::INFINITY],
-            scale_motion: ScaleMotion::Still, still: (1.0, [0.0; 2], [0.0; 2]), held: (1.0, [0.0; 2], [0.0; 2]), held_moving: false, in_cache: false, skip_paint: false, anchor_hidden: false, turn: 0,
+            scale_motion: ScaleMotion::Still, still: (1.0, [0.0; 2], [0.0; 2]), held: (1.0, [0.0; 2], [0.0; 2]), held_moving: false, scale_target: 1.0, scale_tracked: false, in_cache: false, skip_paint: false, anchor_hidden: false, turn: 0,
             snap: Default::default() }
     }
 }
