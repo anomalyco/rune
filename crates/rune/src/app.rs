@@ -168,12 +168,15 @@ impl<S: 'static> App<S> {
         self
     }
 
-    /// How this app's windows rasterise and place glyphs (see [`crate::FontSmoothing`]):
-    /// `On` by default on macOS and in a Mac's browser, `Off` elsewhere (CoreGraphics' pipeline
-    /// without font smoothing's dilation, as `-webkit-font-smoothing: antialiased` draws).
+    /// How this app's windows and overlays rasterise and place glyphs (see [`crate::FontSmoothing`]):
+    /// `On` by default on macOS and in a Mac's browser, `WindfoilChromium` elsewhere.
+    /// `ConfiguredOverlay::font_smoothing` overrides it per overlay, and
     /// `Tx::set_font_smoothing` switches it while running.
     pub fn font_smoothing(mut self, mode: crate::FontSmoothing) -> Self {
         self.runtime.font_smoothing = mode;
+        for overlay in &mut self.overlays {
+            overlay.inherit_font_smoothing(mode);
+        }
         self
     }
 
@@ -330,9 +333,10 @@ impl<S: 'static> App<S> {
     /// Adds a transparent overlay with its own state, hidden until `OverlayHandle::show`.
     /// Bare specs preserve primary-display edge placement and never request key focus;
     /// `OverlaySpec::options` selects displays, placement and native input policy.
-    /// Uses this app's fonts. Headless runs don't draw overlays.
+    /// Uses this app's fonts and font smoothing (`ConfiguredOverlay::font_smoothing` overrides it).
+    /// Headless runs don't draw overlays.
     pub fn overlay<T: 'static>(&mut self, spec: impl Into<crate::ConfiguredOverlay<T>>, state: T) -> crate::overlay::OverlayHandle<T> {
-        let (overlay, handle) = crate::overlay::OverlayHost::new(spec.into(), state, &self.spec);
+        let (overlay, handle) = crate::overlay::OverlayHost::new(spec.into(), state, &self.spec, self.runtime.font_smoothing);
         self.overlays.push(Box::new(overlay));
         handle
     }

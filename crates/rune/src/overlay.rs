@@ -342,6 +342,9 @@ impl<T: 'static> OverlayHandle<T> {
 /// An overlay before the event loop runs: the shell gives it a wake-up and the GPU pool.
 pub(crate) trait PendingOverlay: AnyHost {
     fn connect(&mut self, wake: Waker, frame_wake: Waker, slot_wake: Waker, gpu: Rc<RefCell<Weak<Gpu>>>);
+    fn inherit_font_smoothing(&mut self, mode: crate::FontSmoothing);
+    #[cfg(test)]
+    fn font_smoothing(&self) -> crate::FontSmoothing;
 }
 
 enum Backing {

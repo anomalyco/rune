@@ -153,6 +153,7 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<T>>>,
     pub(crate) setup: Option<fn(&mut T, crate::Waker)>,
     pub(crate) runtime: crate::app::RuntimeConfig<T>,
+    pub(crate) font_smoothing: Option<crate::FontSmoothing>,
     pub(crate) macos_level: Option<isize>,
     pub(crate) animate_reveal: bool,
     pub(crate) release_after: Option<std::time::Duration>,
@@ -172,6 +173,10 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// default). With a `Compositor`, `Frame::srgb_blend` says which encoding its passes must
     /// match.
     pub fn srgb_blend(mut self, enabled: bool) -> Self { self.runtime.srgb_blend = enabled; self }
+    /// How this overlay rasterises and places glyphs (see [`crate::FontSmoothing`]).
+    /// Defaults to the app's `App::font_smoothing`; `Tx::set_font_smoothing` switches it
+    /// while running.
+    pub fn font_smoothing(mut self, mode: crate::FontSmoothing) -> Self { self.font_smoothing = Some(mode); self }
     /// Called before each frame; true means state changed, not that another frame is due.
     /// Defaults to the app's poll when its state type matches this overlay's. Other state
     /// types have no inherited poll. Use `Tx::wake_after` for the next timed update;
@@ -237,7 +242,7 @@ impl<T: 'static> OverlaySpec<T> {
     pub fn options(self, options: OverlayOptions) -> ConfiguredOverlay<T> {
         ConfiguredOverlay {
             spec: self, options, on_key: None, on_created: None, poll: None, compositor: None,
-            setup: None, runtime: crate::app::RuntimeConfig::default(), macos_level: None,
+            setup: None, runtime: crate::app::RuntimeConfig::default(), font_smoothing: None, macos_level: None,
             animate_reveal: false, release_after: None,
         }
     }
