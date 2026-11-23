@@ -314,10 +314,8 @@ impl OverlayCore {
         live.config.width = (self.at.size.0 * scale).round().max(1.0) as u32;
         live.config.height = (self.at.size.1 * scale).round().max(1.0) as u32;
         live.settle();
-        // `configure` waits for the present queue to drain, so unregister any outstanding wait
-        // before reconfiguring the swap chain (and keep it cleared if `configure` fails).
-        #[cfg(target_os = "windows")]
-        live.slot.reset();
+        // DX12 `configure` calls `ResizeBuffers` on the same swap chain, preserving its waitable
+        // semaphore and count; on failure `surface_refused` -> `release` resets the slot.
         if let Err(error) = crate::window::configure(&live.surface, gpu, &live.config) {
             self.surface_refused(app, format!("could not resize its GPU surface: {error}"));
             return;

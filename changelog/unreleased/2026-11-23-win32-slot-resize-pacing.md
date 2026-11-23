@@ -1,0 +1,1 @@
+- Windows: resizing a window or rescaling an overlay no longer resets its DXGI frame-latency slot or leaks waitable semaphore counts, and `Slot` drains any surplus counts on poll so live resize, hover and scrolling stay paced to the compositor.

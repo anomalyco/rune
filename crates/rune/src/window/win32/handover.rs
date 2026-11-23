@@ -237,8 +237,9 @@ impl Host {
         if !matches!(l.native.mode, SurfaceMode::HandingOver { paused: false, .. }) { return; }
         if renderer.srgb_blend() != self.app.rt().srgb_blend() {
             let Some(surface) = l.surface.as_ref() else { return };
-            l.native.slot.reset();
-            if !reblend_core(surface, gpu, &mut l.config, renderer, &mut l.alpha, self.app.rt_mut()) {
+            let ok = reblend_core(surface, gpu, &mut l.config, renderer, &mut l.alpha, self.app.rt_mut());
+            l.native.slot.reconfigured(ok);
+            if !ok {
                 l.surface_ok = false;
                 return;
             }
@@ -290,9 +291,7 @@ impl Host {
         });
         renderer.submit(&gpu.queue, enc);
         gpu.queue.present(frame);
-        if let Some(surface) = l.surface.as_ref() {
-            l.native.slot.presented_surface(surface);
-        }
+        l.native.slot.presented();
         let flag = Arc::new(AtomicBool::new(false));
         let set = flag.clone();
         gpu.queue.on_submitted_work_done(move || set.store(true, Ordering::Release));
