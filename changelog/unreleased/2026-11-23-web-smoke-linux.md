@@ -1,0 +1,1 @@
+- Web: `scripts/web-smoke.mjs` now enables SwiftShader WebGPU flags on Linux, uses `ControlOrMeta+A` for select-all, waits for the link popup URL to match `rust-lang.org` before asserting, waits on a submitted momentum frame instead of a fixed 250 ms timer, and asserts that screenshots contain more than one pixel color so a blank canvas fails.
