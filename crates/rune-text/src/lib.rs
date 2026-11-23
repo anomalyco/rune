@@ -103,6 +103,10 @@ pub use layout::cursor::line_edge;
 pub use layout::cursor::move_line;
 #[doc(hidden)]
 pub use layout::cursor::range_boxes;
+#[doc(hidden)]
+pub use layout::cursor::space_ahead;
+#[doc(hidden)]
+pub use layout::cursor::visual_step;
 pub use layout::decorations::Deco;
 #[doc(hidden)]
 pub use layout::decorations::PaintedDeco;

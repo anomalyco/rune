@@ -3,53 +3,193 @@
 
 use crate::*;
 
-/// Parley 0.12's `Cursor::geometry` omits `line.metrics().inline_min_coord`; add it so carets on
-/// indented paragraphs (`Block::Bullet`, `Block::Numbered`, `Block::Quote`, `Block::Code`) align
-/// with their shaped glyph runs.
+#[derive(Clone, Copy)]
+struct VisCluster {
+    start: usize,
+    end: usize,
+    x0: f32,
+    x1: f32,
+    rtl: bool,
+    word_boundary: bool,
+    space: bool,
+}
+
+pub(crate) fn line_has_mixed_dir(line: &parley::Line<'_, Ink>, base_rtl: bool) -> bool {
+    line.runs().any(|r| r.is_rtl() != base_rtl)
+}
+
+/// Visual line holding byte `at` with `affinity`, resolving line breaks by byte range rather than
+/// Parley's `visual_clusters` / `is_end_of_line` (which misplaces RTL line-0 byte 0 before an
+/// explicit break and wrapped pills).
+fn line_for_cursor(
+    layout: &Layout<Ink>,
+    at: usize,
+    affinity: parley::layout::Affinity,
+) -> Option<(usize, parley::Line<'_, Ink>)> {
+    use parley::{BreakReason, layout::Affinity};
+    let n = layout.len();
+    if n == 0 {
+        return None;
+    }
+    for (li, line) in layout.lines().enumerate() {
+        let lr = line.text_range();
+        if at < lr.end {
+            if at == lr.start
+                && li > 0
+                && affinity == Affinity::Upstream
+                && let Some(prev) = layout.get(li - 1)
+                && prev.break_reason() != BreakReason::Explicit
+            {
+                return Some((li - 1, prev));
+            }
+            return Some((li, line));
+        }
+        if at == lr.end {
+            if li + 1 < n {
+                if line.break_reason() != BreakReason::Explicit && affinity == Affinity::Upstream {
+                    return Some((li, line));
+                }
+                continue;
+            }
+            return Some((li, line));
+        }
+    }
+    let last = n - 1;
+    Some((last, layout.get(last)?))
+}
+
+fn line_clusters(line: &parley::Line<'_, Ink>) -> Vec<VisCluster> {
+    let m = line.metrics();
+    let mut out = Vec::new();
+    for run in line.runs() {
+        let mut cx = m.inline_min_coord
+            + run.visual_clusters().next().and_then(|c| c.visual_offset()).unwrap_or(m.offset);
+        for cl in run.visual_clusters() {
+            let adv = cl.advance();
+            if !cl.is_hard_line_break() {
+                let r = cl.text_range();
+                out.push(VisCluster {
+                    start: r.start,
+                    end: r.end,
+                    x0: cx,
+                    x1: cx + adv,
+                    rtl: cl.is_rtl(),
+                    word_boundary: cl.is_word_boundary(),
+                    space: cl.is_space_or_nbsp(),
+                });
+            }
+            cx += adv;
+        }
+    }
+    out
+}
+
+/// Primary (enclosing-direction) caret x on `line` at byte `at`, matching UAX #9 and Blink's
+/// `BidiAdjustment`: at a boundary between opposite-direction runs, attaches to the lower-level
+/// enclosing run; at a line start or end whose adjacent run runs opposite to `base_rtl`, places
+/// the caret at the line's leading or trailing edge in `base_rtl`.
+fn primary_x_on_line(
+    clusters: &[VisCluster],
+    base_rtl: bool,
+    line: &parley::Line<'_, Ink>,
+    at: usize,
+) -> f32 {
+    let m = line.metrics();
+    if clusters.is_empty() {
+        return m.inline_min_coord + m.offset;
+    }
+    let at = clusters.iter().find(|c| c.start < at && at < c.end).map_or(at, |c| c.start);
+    let prev = clusters.iter().enumerate().filter(|(_, c)| c.end <= at).max_by_key(|(_, c)| c.end);
+    let next = clusters.iter().enumerate().filter(|(_, c)| c.start >= at).min_by_key(|(_, c)| c.start);
+    let trailing = |c: &VisCluster| if c.rtl { c.x0 } else { c.x1 };
+    let leading = |c: &VisCluster| if c.rtl { c.x1 } else { c.x0 };
+
+    match (prev, next) {
+        (Some((pi, p)), Some((ni, n))) => {
+            if p.rtl == n.rtl {
+                trailing(p)
+            } else {
+                // By UAX #9 L2, logically adjacent clusters with opposite directions have
+                // `pi > ni` iff their enclosing bidi level is odd (RTL).
+                let enclosing_rtl = pi > ni;
+                if p.rtl == enclosing_rtl { trailing(p) } else { leading(n) }
+            }
+        }
+        (Some((_, p)), None) => {
+            if p.rtl == base_rtl {
+                trailing(p)
+            } else if base_rtl {
+                clusters.first().unwrap().x0
+            } else {
+                clusters.last().unwrap().x1
+            }
+        }
+        (None, Some((_, n))) => {
+            if n.rtl == base_rtl {
+                leading(n)
+            } else if base_rtl {
+                clusters.last().unwrap().x1
+            } else {
+                clusters.first().unwrap().x0
+            }
+        }
+        (None, None) => m.inline_min_coord + m.offset,
+    }
+}
+
+fn line_stops(
+    clusters: &[VisCluster],
+    base_rtl: bool,
+    line: &parley::Line<'_, Ink>,
+) -> Vec<(usize, f32)> {
+    if clusters.is_empty() {
+        let m = line.metrics();
+        return vec![(line.text_range().start, m.inline_min_coord + m.offset)];
+    }
+    let mut bytes = Vec::with_capacity(clusters.len() + 1);
+    for c in clusters {
+        bytes.push(c.start);
+        bytes.push(c.end);
+    }
+    bytes.sort_unstable();
+    bytes.dedup();
+    let mut stops: Vec<(usize, f32)> = bytes
+        .into_iter()
+        .map(|b| (b, primary_x_on_line(clusters, base_rtl, line, b)))
+        .collect();
+    stops.sort_by(|a, b| {
+        a.1.total_cmp(&b.1)
+            .then_with(|| if base_rtl { b.0.cmp(&a.0) } else { a.0.cmp(&b.0) })
+    });
+    stops
+}
+
+/// Caret rectangle in layout device px, resolving the line by byte range and affinity and placing
+/// bidi boundaries at their primary (enclosing-direction) visual edge. Also adds
+/// `line.metrics().inline_min_coord` for indented blocks and moves carets outside pill chips.
 #[doc(hidden)]
 pub fn cursor_geometry(
     cursor: &parley::editing::Cursor,
     layout: &Layout<Ink>,
     size: f32,
 ) -> parley::BoundingBox {
-    let mut bb = cursor.geometry(layout, size);
-    let mut inline_min = match cursor.visual_clusters(layout) {
-        [Some(left), _] => left.line().metrics().inline_min_coord,
-        [_, Some(right)] => right.line().metrics().inline_min_coord,
-        _ => layout
-            .get(layout.len().saturating_sub(1))
-            .map_or(0.0, |l| l.metrics().inline_min_coord),
-    };
-    // Parley's `Cluster::is_end_of_line` is false when a line ends with a pill's trailing box,
-    // which leaves a Downstream cursor after a wrapped pill on the previous line.
-    if let [Some(left), Some(right)] = cursor.visual_clusters(layout) {
-        let (ll, rl) = (left.line(), right.line());
-        let (lm, rm) = (ll.metrics(), rl.metrics());
-        if lm.block_min_coord != rm.block_min_coord {
-            let on_right = ll.break_reason() == parley::BreakReason::Explicit
-                || (!left.is_rtl() && cursor.affinity() == parley::layout::Affinity::Downstream)
-                || (left.is_rtl() && cursor.affinity() == parley::layout::Affinity::Upstream);
-            if on_right {
-                let x = right.visual_offset().unwrap_or_default();
-                bb = parley::BoundingBox::new(
-                    x as f64,
-                    rm.block_min_coord.min(rm.content_block_min_coord) as f64,
-                    (x + size) as f64,
-                    rm.block_max_coord.max(rm.content_block_max_coord) as f64,
-                );
-                inline_min = rm.inline_min_coord;
-            }
-        }
-    }
-    if inline_min != 0.0 {
-        bb.x0 += inline_min as f64;
-        bb.x1 += inline_min as f64;
-    }
-    // Parley puts a caret at a pill's edge against its label, inside the chip: move it outside.
     let at = cursor.index();
-    if let Some(x) = pill_edge(layout, at, ((bb.y0 + bb.y1) * 0.5) as f32) {
+    let Some((_, line)) = line_for_cursor(layout, at, cursor.affinity()) else {
+        return parley::BoundingBox::default();
+    };
+    let m = line.metrics();
+    let clusters = line_clusters(&line);
+    let x = primary_x_on_line(&clusters, layout.is_rtl(), &line, at);
+    let mut bb = parley::BoundingBox::new(
+        x as f64,
+        m.block_min_coord.min(m.content_block_min_coord) as f64,
+        (x + size) as f64,
+        m.block_max_coord.max(m.content_block_max_coord) as f64,
+    );
+    // Parley puts a caret at a pill's edge against its label, inside the chip: move it outside.
+    if let Some(px) = pill_edge(layout, at, ((bb.y0 + bb.y1) * 0.5) as f32) {
         let w = bb.x1 - bb.x0;
-        bb.x0 = x as f64;
+        bb.x0 = px as f64;
         bb.x1 = bb.x0 + w;
     }
     bb
@@ -109,7 +249,9 @@ pub(crate) fn line_for_offset(layout: &Layout<Ink>, offset: f32) -> Option<(usiz
 #[doc(hidden)]
 pub fn cursor_from_point(layout: &Layout<Ink>, x: f32, y: f32) -> parley::editing::Cursor {
     use parley::{BreakReason, editing::Cursor, layout::Affinity};
-    if layout.inline_boxes().next().is_none() && layout.lines().all(|l| l.metrics().inline_min_coord == 0.0) {
+    let rtl = layout.is_rtl();
+    let mixed = layout.lines().any(|l| line_has_mixed_dir(&l, rtl));
+    if !mixed && layout.inline_boxes().next().is_none() && layout.lines().all(|l| l.metrics().inline_min_coord == 0.0) {
         return Cursor::from_point(layout, x, y);
     }
     if layout.len() == 0 {
@@ -117,29 +259,24 @@ pub fn cursor_from_point(layout: &Layout<Ink>, x: f32, y: f32) -> parley::editin
     }
     let first = layout.get(0).unwrap();
     let fm = first.metrics();
-    if y <= fm.block_min_coord && x <= fm.inline_min_coord + fm.offset {
+    if !rtl && y <= fm.block_min_coord && x <= fm.inline_min_coord + fm.offset {
         return Cursor::from_byte_index(layout, 0, Affinity::Downstream);
     }
     let last_idx = layout.len() - 1;
     let last = layout.get(last_idx).unwrap();
     let lm = last.metrics();
-    if y >= lm.block_max_coord && x >= lm.inline_min_coord + lm.offset + lm.advance {
+    if !rtl && y >= lm.block_max_coord && x >= lm.inline_min_coord + lm.offset + lm.advance {
         return Cursor::from_byte_index(layout, last.text_range().end, Affinity::Upstream);
     }
-    let line = if y <= fm.block_min_coord {
-        first
+    let (line_ix, line) = if y <= fm.block_min_coord {
+        (0, first)
     } else if y >= lm.block_max_coord {
-        last
+        (last_idx, last)
     } else {
-        line_for_offset(layout, y).map_or(last, |(_, l)| l)
+        line_for_offset(layout, y).unwrap_or((last_idx, last))
     };
     let m = line.metrics();
     let r = line.text_range();
-    // Left of a right-to-left line is its end, and right of it its start.
-    let rtl = layout.is_rtl();
-    if x <= m.inline_min_coord + m.offset {
-        return if rtl { Cursor::from_byte_index(layout, r.end, Affinity::Upstream) } else { Cursor::from_byte_index(layout, r.start, Affinity::Downstream) };
-    }
     for item in line.items() {
         if let PositionedLayoutItem::InlineBox(b) = item
             && b.id & PILL_BOX != 0
@@ -150,6 +287,32 @@ pub fn cursor_from_point(layout: &Layout<Ink>, x: f32, y: f32) -> parley::editin
             let aff = if b.id & 1 == 0 { Affinity::Downstream } else { Affinity::Upstream };
             return Cursor::from_byte_index(layout, ib.index, aff);
         }
+    }
+    if line_has_mixed_dir(&line, rtl) {
+        let clusters = line_clusters(&line);
+        let stops = line_stops(&clusters, rtl, &line);
+        let chosen = if x <= stops[0].1 {
+            stops[0].0
+        } else if x >= stops.last().unwrap().1 {
+            stops.last().unwrap().0
+        } else {
+            stops
+                .windows(2)
+                .find_map(|w| {
+                    (x <= w[1].1).then(|| if x - w[0].1 <= (w[1].1 - w[0].1) * 0.5 { w[0].0 } else { w[1].0 })
+                })
+                .unwrap_or_else(|| stops.last().unwrap().0)
+        };
+        let aff = if chosen == r.end && line.break_reason() != BreakReason::Explicit && line_ix + 1 < layout.len() {
+            Affinity::Upstream
+        } else {
+            Affinity::Downstream
+        };
+        return Cursor::from_byte_index(layout, chosen, aff);
+    }
+    // Left of a right-to-left line is its end, and right of it its start.
+    if x <= m.inline_min_coord + m.offset {
+        return if rtl { Cursor::from_byte_index(layout, r.end, Affinity::Upstream) } else { Cursor::from_byte_index(layout, r.start, Affinity::Downstream) };
     }
     for run in line.runs() {
         let mut cx = m.inline_min_coord + run.visual_clusters().next().and_then(|c| c.visual_offset()).unwrap_or(m.offset);
@@ -326,6 +489,120 @@ pub fn range_boxes(
         }
     }
     rects
+}
+
+/// Starting byte of the visual cluster directly under `(x, y)` on a mixed-direction line,
+/// used by [`TextFlow::hit`] so double-click word selection picks the clicked cluster even
+/// when primary-caret hit-testing maps the boundary to the opposite side of an embedded run.
+pub(crate) fn cluster_start_at_point(layout: &Layout<Ink>, x: f32, y: f32) -> Option<usize> {
+    if layout.len() == 0 {
+        return None;
+    }
+    let first = layout.get(0)?;
+    let last = layout.get(layout.len() - 1)?;
+    let line = if y <= first.metrics().block_min_coord {
+        first
+    } else if y >= last.metrics().block_max_coord {
+        last
+    } else {
+        line_for_offset(layout, y).map_or(last, |(_, l)| l)
+    };
+    if !line_has_mixed_dir(&line, layout.is_rtl()) {
+        return None;
+    }
+    line_clusters(&line)
+        .into_iter()
+        .find(|c| x >= c.x0 && x <= c.x1)
+        .map(|c| c.start)
+}
+
+/// One visual step left (`!right`) or right (`right`), by cluster or `word`, across the line
+/// holding `(at, side)`. Returns `None` at the line's visual edge that way.
+#[doc(hidden)]
+pub fn visual_step(
+    layout: &Layout<Ink>,
+    at: usize,
+    side: parley::layout::Affinity,
+    right: bool,
+    word: bool,
+) -> Option<(usize, parley::layout::Affinity)> {
+    use parley::{BreakReason, layout::Affinity};
+    let (line_ix, line) = line_for_cursor(layout, at, side)?;
+    let rtl = layout.is_rtl();
+    let clusters = line_clusters(&line);
+    let stops = line_stops(&clusters, rtl, &line);
+    let snapped = clusters.iter().find(|c| c.start < at && at < c.end).map_or(at, |c| c.start);
+    let mut pos = stops.iter().position(|&(b, _)| b == snapped).unwrap_or_else(|| {
+        let x = primary_x_on_line(&clusters, rtl, &line, snapped);
+        stops.iter().enumerate().min_by(|(_, a), (_, b)| (a.1 - x).abs().total_cmp(&(b.1 - x).abs())).map_or(0, |(i, _)| i)
+    });
+    let r = line.text_range();
+    let stop_aff = |byte: usize| {
+        if byte == r.end && line.break_reason() != BreakReason::Explicit && line_ix + 1 < layout.len() {
+            Affinity::Upstream
+        } else {
+            Affinity::Downstream
+        }
+    };
+    if !right {
+        if pos == 0 {
+            return None;
+        }
+        pos -= 1;
+        if word && clusters.len() + 1 == stops.len() {
+            while pos > 0 {
+                let (left, right_cl) = (&clusters[pos - 1], &clusters[pos]);
+                let hit = if left.rtl {
+                    left.word_boundary && (left.space || (right_cl.word_boundary && !right_cl.space))
+                } else {
+                    right_cl.word_boundary && !right_cl.space
+                };
+                if hit {
+                    break;
+                }
+                pos -= 1;
+            }
+        }
+    } else {
+        if pos + 1 >= stops.len() {
+            return None;
+        }
+        pos += 1;
+        if word && clusters.len() + 1 == stops.len() {
+            while pos + 1 < stops.len() {
+                let (left, right_cl) = (&clusters[pos - 1], &clusters[pos]);
+                let hit = if left.rtl {
+                    left.word_boundary && !left.space
+                } else {
+                    right_cl.word_boundary && !left.space
+                };
+                if hit {
+                    break;
+                }
+                pos += 1;
+            }
+        }
+    }
+    let byte = stops[pos].0;
+    Some((byte, stop_aff(byte)))
+}
+
+/// Whether the cluster visually immediately `right` (else left) of `(at, side)` is a space
+/// the text runs into that way (LTR going right, RTL going left).
+#[doc(hidden)]
+pub fn space_ahead(layout: &Layout<Ink>, at: usize, side: parley::layout::Affinity, right: bool) -> bool {
+    let Some((_, line)) = line_for_cursor(layout, at, side) else { return false };
+    let rtl = layout.is_rtl();
+    let clusters = line_clusters(&line);
+    let stops = line_stops(&clusters, rtl, &line);
+    if clusters.len() + 1 != stops.len() {
+        let c = parley::editing::Cursor::from_byte_index(layout, at, side);
+        return c.visual_clusters(layout)[usize::from(right)].as_ref().is_some_and(|cl| cl.is_space_or_nbsp() && cl.is_rtl() != right);
+    }
+    let snapped = clusters.iter().find(|c| c.start < at && at < c.end).map_or(at, |c| c.start);
+    let Some(pos) = stops.iter().position(|&(b, _)| b == snapped) else { return false };
+    let adj = if right { clusters.get(pos) } else { pos.checked_sub(1).and_then(|i| clusters.get(i)) };
+    adj.is_some_and(|cl| cl.space && cl.rtl != right)
 }
 
 #[cfg(test)]
