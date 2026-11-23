@@ -399,9 +399,13 @@ impl Native {
             self.rate = c.rate;
             self.event(shared, c, Event::Rate { target, rate: f64::from(c.rate) });
         }
-        let sound = self.sounding(c).then_some(c.volume);
         if let Some(pipe) = &self.pipe {
             let mut inbox = pipe.lock();
+            // Until the clip has opened, whether it has sound isn't known: the decoder keeps
+            // the ask it started with. Taking it for "no sound" closed the output the decoder
+            // had just opened and deselected the audio stream, which reads from the clip's
+            // start when it's selected again.
+            let sound = if self.facts.is_some() { self.sounding(c).then_some(c.volume) } else { inbox.sound };
             if inbox.looping != c.looping || inbox.sound != sound {
                 inbox.looping = c.looping;
                 inbox.sound = sound;

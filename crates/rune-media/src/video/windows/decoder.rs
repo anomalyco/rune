@@ -35,6 +35,12 @@ const RING_POLL: Duration = Duration::from_millis(2);
 /// shows it at the first refresh after.
 const LAYER_LEAD: Duration = Duration::from_millis(2);
 
+/// Sound samples read in a row while a picture could be read instead. Enough for the sound to
+/// gain on the clock at any picture rate (8 AAC packets are about 170 ms of sound), and few
+/// enough that sound with a lot to catch up on (after a seek, or turned on mid-clip, when its
+/// stream starts from the clip's start) never holds the pictures back.
+const SOUND_BURST: u32 = 8;
+
 /// A layer that presented nothing for this long shows its decoder's next picture however late
 /// (`superseded`), so a decoder that can't keep up with the clip still moves.
 const LAYER_STARVED: Duration = Duration::from_millis(250);
@@ -90,6 +96,11 @@ impl Landing {
         keep
     }
 
+    /// A picture was kept: the seek has landed.
+    pub(super) fn landed(&self) -> bool {
+        self.kept
+    }
+
     /// The video stream ended. When no picture was kept, the time of the last one to seek back
     /// to; the landing then keeps that picture. None once a picture was kept, or the second time.
     pub(super) fn ended(&mut self) -> Option<f64> {
@@ -99,6 +110,31 @@ impl Landing {
         let last = self.passed?;
         *self = Self { skip_before: last, passed: None, kept: false, went_back: true };
         Some(last)
+    }
+}
+
+/// A stream of the clip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Stream {
+    Sound,
+    Picture,
+}
+
+/// Which stream the decoder reads next; None when it waits. `sound`: the sound output wants
+/// more (it holds less than a second ahead). `picture`: the queue has room and a texture is
+/// free. Each stream is read by its own index and for its own need: read as they come in the
+/// file (any stream, only while the queue has room for a picture), the sound was never more
+/// than the picture queue ahead of the clock, three pictures or one on the layer, while the
+/// sound output writes about 100 ms ahead of it, so every sample came too late to be heard.
+/// `landed`: a picture of the current seek was kept, before which nothing is heard and the
+/// pictures come first. `burst`: sound samples read since the last picture (`SOUND_BURST`).
+pub(super) fn next_read(sound: bool, picture: bool, landed: bool, burst: u32) -> Option<Stream> {
+    match (sound, picture) {
+        (false, false) => None,
+        (true, false) => Some(Stream::Sound),
+        (false, true) => Some(Stream::Picture),
+        (true, true) if !landed || burst >= SOUND_BURST => Some(Stream::Picture),
+        (true, true) => Some(Stream::Sound),
     }
 }
 
@@ -336,7 +372,10 @@ impl Decoder {
         let mut waiting_since = rune_core::time::now();
         // Audio alone: the clip's end, until the clock passes it and the clip hears so.
         let mut end_due: Option<f64> = None;
+        // Sound samples read since the last picture (`next_read`).
+        let mut burst = 0;
         loop {
+            let stream;
             // Take the UI's asks, then wait for room in the queue and a free texture.
             {
                 let mut s = pipe.lock();
@@ -379,10 +418,20 @@ impl Decoder {
                         return Err(DEVICE_CHANGED.into());
                     }
                     let ended = s.ended == Some(generation);
-                    let room = s.frames.len() < AHEAD || !self.video_open;
+                    let room = s.frames.len() < AHEAD;
                     let texture = self.ring.as_ref().is_none_or(Ring::free);
                     let sound_full = self.output.as_ref().is_some_and(Output::full);
-                    if !ended && room && texture && !(sound_full && !self.video_open) {
+                    let sound = !ended && self.audio_open && !sound_full;
+                    let picture = !ended && self.video_open && room && texture;
+                    // No stream left to read and no end reached (an audio clip whose sound output
+                    // is closed): the read from any stream says so, as it always did.
+                    let idle = !ended && !self.video_open && !self.audio_open;
+                    if let Some(next) = next_read(sound, picture, landing.landed(), burst) {
+                        stream = Some(next);
+                        break;
+                    }
+                    if idle {
+                        stream = None;
                         break;
                     }
                     let touched = s.touched.unwrap_or(waiting_since);
@@ -402,13 +451,24 @@ impl Decoder {
                         (job.notify)();
                         return Ok(());
                     }
-                    let patience = if (room && !texture) || sound_full { RING_POLL } else { PARK };
+                    let patience = if (self.video_open && room && !texture) || sound_full { RING_POLL } else { PARK };
                     let patience = heard_end.map_or(patience, |at| patience.min(at.saturating_duration_since(rune_core::time::now()) + Duration::from_millis(1)));
                     s = pipe.wait(s, patience);
                     waiting_since = waiting_since.max(touched);
                 }
             }
-            let mut read = mf::read(&self.reader, MF_SOURCE_READER_ANY_STREAM.0 as u32)?;
+            let index = match stream {
+                Some(Stream::Sound) => {
+                    burst += 1;
+                    self.audio
+                }
+                Some(Stream::Picture) => {
+                    burst = 0;
+                    self.video
+                }
+                None => None,
+            };
+            let mut read = mf::read(&self.reader, index.unwrap_or(MF_SOURCE_READER_ANY_STREAM.0 as u32))?;
             if read.flags & MF_SOURCE_READERF_ERROR.0 != 0 {
                 return Err("the decoder stopped with an error".into());
             }

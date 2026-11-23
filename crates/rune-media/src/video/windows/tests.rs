@@ -113,6 +113,13 @@ impl Rig {
         }
     }
 
+    /// What the decoder is asked for: a seek, sound and looping. Read out before it's compared,
+    /// so a failed assertion never unwinds with the inbox locked.
+    fn asked(&self) -> (Option<(f64, u32)>, Option<f32>, bool) {
+        let inbox = self.pipe.lock();
+        (inbox.seek, inbox.sound, inbox.looping)
+    }
+
     /// The decoder reached the end of the current seek's pictures.
     fn decoder_ends(&self) {
         let generation = self.native().seeks.current().0;
@@ -216,7 +223,7 @@ fn a_paused_clip_whose_held_picture_left_the_queue_decodes_it_again() {
     rig.pipe.lock().frames.clear();
     rig.window_draws();
     assert_eq!(rig.phase(), Phase::Buffering { at: 5.0, play: false });
-    assert_eq!(rig.pipe.lock().seek, Some((5.0, rig.generation())));
+    assert_eq!(rig.asked().0, Some((5.0, rig.generation())));
     // Its picture lands as any seek's does.
     rig.pipe.lock().seek = None;
     rig.decodes(5.0);
@@ -304,4 +311,34 @@ fn a_clip_let_go_while_it_waits_for_a_seeks_picture_opens_again_at_the_seek() {
     rig.pipe.lock().news.push(News::Parked);
     rig.reconcile();
     assert_eq!(rig.phase(), Phase::Idle { at: 7.5 });
+}
+
+#[test]
+fn a_clip_that_hasnt_opened_yet_keeps_the_sound_its_decoder_was_asked_for() {
+    let rig = rig();
+    // The decoder started with sound on, and hasn't said yet what the clip holds.
+    rig.native().facts = None;
+    rig.pipe.lock().sound = Some(1.0);
+    rig.player.shared.ctl.lock().unwrap().muted = false;
+    rig.stand(Phase::Opening { at: 0.0, play: false }, None);
+    rig.reconcile();
+    assert_eq!(rig.asked().1, Some(1.0));
+    // Looping still reaches the decoder before it opens.
+    rig.player.shared.ctl.lock().unwrap().looping = true;
+    rig.reconcile();
+    assert_eq!(rig.asked(), (None, Some(1.0), true));
+}
+
+#[test]
+fn an_opened_clip_follows_the_handles_mute() {
+    let rig = rig();
+    let sound = mf::Sound { channels: 2, rate: 48_000 };
+    rig.native().facts.as_mut().unwrap().sound = Some(sound);
+    rig.player.shared.ctl.lock().unwrap().muted = false;
+    rig.stand(Phase::Paused { at: 0.0 }, Some(0.0));
+    rig.reconcile();
+    assert_eq!(rig.asked().1, Some(1.0));
+    rig.player.shared.ctl.lock().unwrap().muted = true;
+    rig.reconcile();
+    assert_eq!(rig.asked().1, None);
 }
