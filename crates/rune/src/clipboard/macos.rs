@@ -207,6 +207,7 @@ fn declare_utf8(html: &str) -> std::borrow::Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::macos::test_pasteboard;
 
     const RTF: &str = r"{\rtf1\ansi\ansicpg1252\cocoartf2761
 {\fonttbl\f0\fswiss\fcharset0 Helvetica;}
@@ -231,10 +232,7 @@ mod tests {
     /// build machine's SSH session).
     #[test]
     fn every_form_round_trips_in_one_change() {
-        use objc2::ClassType;
-        // SAFETY: `+[NSPasteboard pasteboardWithUniqueName]` takes no arguments and returns an owned or nil `NSPasteboard`.
-        let pb: Option<Retained<NSPasteboard>> = unsafe { objc2::msg_send![NSPasteboard::class(), pasteboardWithUniqueName] };
-        let Some(pb) = pb else { return eprintln!("no pasteboard server; skipped") };
+        let Some(pb) = test_pasteboard::unique() else { return };
         let before = pb.changeCount();
         let content = ClipboardContent::new("Hi there").with_html("<b>Hi</b> there").with_rtf(RTF);
         write(&pb, &content).unwrap();
@@ -269,18 +267,13 @@ mod tests {
         }
         let both = read(&pb, true).unwrap();
         assert_eq!((both.text(), both.image().map(|i| i.png().to_vec())), ("shot.png", Some(png_2x3())), "PNG passes through as is");
-        // SAFETY: `pb` is a private pasteboard from `pasteboardWithUniqueName` and is not used after `releaseGlobally`.
-        let _: () = unsafe { objc2::msg_send![&pb, releaseGlobally] };
     }
 
     /// An image Rune copies goes on as PNG and TIFF with no empty text beside it; files go on
     /// one item each, with every other form on the first.
     #[test]
     fn images_and_files_are_written_for_other_apps() {
-        use objc2::ClassType;
-        // SAFETY: `+[NSPasteboard pasteboardWithUniqueName]` takes no arguments and returns an owned or nil `NSPasteboard`.
-        let pb: Option<Retained<NSPasteboard>> = unsafe { objc2::msg_send![NSPasteboard::class(), pasteboardWithUniqueName] };
-        let Some(pb) = pb else { return eprintln!("no pasteboard server; skipped") };
+        let Some(pb) = test_pasteboard::unique() else { return };
         let before = pb.changeCount();
         let image = ClipboardImage::from_png(png_2x3()).unwrap();
         write(&pb, &ClipboardContent::default().with_image(image.clone())).unwrap();
@@ -305,8 +298,34 @@ mod tests {
         let back = read(&pb, true).unwrap();
         assert_eq!((back.text(), back.files()), ("a.txt b c.png", &files[..]));
         assert!(read(&pb, false).unwrap().files().is_empty(), "files are read only when asked for");
-        // SAFETY: `pb` is a private pasteboard from `pasteboardWithUniqueName` and is not used after `releaseGlobally`.
-        let _: () = unsafe { objc2::msg_send![&pb, releaseGlobally] };
+    }
+
+    /// Parallel clipboard tests each get their own private named pasteboard, so concurrent writes
+    /// and reads never overwrite each other's contents or change counts.
+    #[test]
+    fn parallel_clipboard_boards_do_not_collide() {
+        if !test_pasteboard::available() { return; }
+        const THREADS: usize = 8;
+        const ROUNDS: usize = 20;
+        for round in 0..ROUNDS {
+            let start = std::sync::Arc::new(std::sync::Barrier::new(THREADS));
+            std::thread::scope(|scope| {
+                for slot in 0..THREADS {
+                    let start = start.clone();
+                    scope.spawn(move || {
+                        let text = format!("clipboard-test-{round}-{slot}");
+                        let content = ClipboardContent::new(text.clone());
+                        start.wait();
+                        let pb = test_pasteboard::unique().expect("pasteboard available");
+                        let before = pb.changeCount();
+                        write(&pb, &content).unwrap();
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                        assert_eq!(pb.changeCount(), before + 1);
+                        assert_eq!(read(&pb, false).as_ref().map(ClipboardContent::text), Some(text.as_str()));
+                    });
+                }
+            });
+        }
     }
 
     fn png_2x3() -> Vec<u8> {

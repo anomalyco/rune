@@ -1,0 +1,1 @@
+- macOS clipboard tests: pasteboard round-trip tests now share the process- and sequence-unique named pasteboard helper (`pasteboardWithName:`) instead of `pasteboardWithUniqueName`, preventing parallel test collisions and releasing the private pasteboard on unwind.

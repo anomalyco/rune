@@ -369,3 +369,67 @@ pub(crate) fn dock_badge(window: &winit::window::Window, count: u32) {
         let _: () = msg_send![tile, setBadgeLabel: label];
     }
 }
+
+#[cfg(test)]
+#[allow(unsafe_code)]
+pub(crate) mod test_pasteboard {
+    use objc2::rc::Retained;
+    use objc2::{class, msg_send};
+    use objc2_app_kit::{NSPasteboard, NSPasteboardItem};
+    use objc2_foundation::{NSArray, NSString};
+
+    /// A private named pasteboard, released globally when dropped.
+    pub(crate) struct Board(Retained<NSPasteboard>);
+
+    impl Drop for Board {
+        fn drop(&mut self) {
+            // SAFETY: `self.0` is a private named pasteboard created via `pasteboardWithName:` and released once on drop.
+            unsafe { msg_send![&*self.0, releaseGlobally] }
+        }
+    }
+
+    impl std::ops::Deref for Board {
+        type Target = NSPasteboard;
+        fn deref(&self) -> &NSPasteboard { &self.0 }
+    }
+
+    /// Creates a private named pasteboard unique to this call. `+[NSPasteboard pasteboardWithUniqueName]`
+    /// stamps names from `mach_absolute_time`, so parallel tests that start within one tick receive
+    /// the same `NSPasteboard` instance and overwrite each other's items.
+    fn create() -> Option<Board> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let name = NSString::from_str(&format!("dev.rune.test.{}.{n}", std::process::id()));
+        // SAFETY: `+[NSPasteboard pasteboardWithName:]` takes an `NSString` and returns a retained or
+        // nil `NSPasteboard`; the private pasteboard is released once in `Board::drop`.
+        let pb: Option<Retained<NSPasteboard>> = unsafe { msg_send![class!(NSPasteboard), pasteboardWithName: &*name] };
+        pb.map(Board)
+    }
+
+    /// Whether this session has a pasteboard server. A headless or SSH-only session (no window
+    /// server) has none, and `pasteboardWithName:` returns nil or refuses writes there, so tests
+    /// skip with a note instead of panicking.
+    pub(crate) fn available() -> bool {
+        static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *AVAILABLE.get_or_init(|| {
+            let probe = std::panic::catch_unwind(|| {
+                let Some(pb) = create() else { return false };
+                pb.clearContents();
+                let item = NSPasteboardItem::new();
+                let kind = NSString::from_str("public.utf8-plain-text");
+                item.setString_forType(&NSString::from_str("probe"), &kind)
+                    && pb.writeObjects(&NSArray::from_retained_slice(&[objc2::runtime::ProtocolObject::from_retained(item)]))
+                    && pb.stringForType(&kind).is_some_and(|s| s.to_string() == "probe")
+            });
+            let ok = probe.unwrap_or(false);
+            if !ok { eprintln!("macos: no pasteboard in this session (headless?); skipping pasteboard round-trip tests"); }
+            ok
+        })
+    }
+
+    /// A private named pasteboard unique to this call, or `None` without a pasteboard server.
+    pub(crate) fn unique() -> Option<Board> {
+        if !available() { return None; }
+        create()
+    }
+}
