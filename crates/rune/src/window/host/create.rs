@@ -340,6 +340,15 @@ impl Host {
             let presents = self.meter.totals().presents;
             self.ime_waits = true;
             self.redraw();
+            // The view's first run may set the titlebar (`Cx::set_titlebar`, `Cx::titlebar_height`):
+            // the traffic lights move and the view's inset with them. The shell would do that
+            // after this turn, but while AppKit launches the app the next frame is 50,000 µs
+            // away and the first one would stand on screen with the lights where `App::chrome`
+            // put them. So the frame is drawn again before either reaches the screen.
+            if crate::platform::macos::launching() && self.app.rt_mut().take_titlebar_changed() {
+                if let Some(w) = &self.win { sync_chrome_core(self.app.rt_mut(), w, self.chrome, self.titlebar); }
+                if self.app.rt().stale() { self.redraw(); }
+            }
             self.ime_waits = false;
             drew = self.meter.totals().presents > presents;
             if drew { crate::platform::macos::flush_while_launching(); }
