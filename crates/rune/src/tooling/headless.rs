@@ -104,16 +104,15 @@ pub fn headless<S: 'static>(app: crate::app::App<S>, args: Args) {
     started(try_headless(app, args));
 }
 
-/// `headless`, returning the error when a window whose own arguments aren't headless can't open.
+/// `headless`, returning the error when a window whose own arguments aren't headless can't open
+/// or when `--html` fails to read its template or write its output.
 pub(crate) fn try_headless<S: 'static>(mut app: crate::app::App<S>, args: Args) -> Result<(), String> {
     crate::render::discard_prewarm();
-    if args.html.is_some() { return crate::tooling::html::export(app, &args); }
     if app.windows.is_empty() && args.desktop.is_none() {
         if single_window_list_only(&args) { return Ok(()); }
         let scale = args.scale.unwrap_or(2.0);
         let options = app.window_options.clone();
-        headless_window_spec(app, options, args, scale);
-        return Ok(());
+        return headless_window_spec(app, options, args, scale);
     }
     let windows = std::mem::take(&mut app.windows);
     let accessory = app.accessory;
@@ -121,13 +120,17 @@ pub(crate) fn try_headless<S: 'static>(mut app: crate::app::App<S>, args: Args) 
     try_headless_multi(main, windows, args, accessory)
 }
 
-pub(crate) fn headless_window_spec<S: 'static>(mut app: crate::app::App<S>, options: crate::WindowOptions, args: Args, scale: f32) {
+pub(crate) fn headless_window_spec<S: 'static>(mut app: crate::app::App<S>, options: crate::WindowOptions, args: Args, scale: f32) -> Result<(), String> {
     if let Some((w, h)) = options.physical_size {
         app.spec.size = (w as f32 / scale, h as f32 / scale);
+    }
+    if args.html.is_some() {
+        return crate::tooling::html::export(app, &args);
     }
     let transparent = options.transparent;
     app.window_options = options;
     headless_configured(app, args, transparent);
+    Ok(())
 }
 
 pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, transparent: bool) {
