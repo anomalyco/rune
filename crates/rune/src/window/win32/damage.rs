@@ -28,13 +28,44 @@ const MANY: usize = 256;
 /// Rectangles a change is gathered into, at most.
 pub(super) const RECTS: usize = crate::render::MAX_RECTS;
 
+/// The glyph atlas state `Damage` needs to tell whether an unchanged instance may sample
+/// different texels than in the last frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::window) struct GlyphAtlas {
+    pub(in crate::window) resets: u64,
+    pub(in crate::window) rasterized: u64,
+    pub(in crate::window) dirty_rows: bool,
+    pub(in crate::window) pending_fills: bool,
+}
+
+impl GlyphAtlas {
+    pub(in crate::window) fn of(atlas: &crate::text::Atlas) -> Self {
+        Self {
+            resets: atlas.resets(),
+            rasterized: atlas.rasterized(),
+            dirty_rows: atlas.dirty.is_some() || atlas.pages.iter().any(|p| p.dirty.is_some()),
+            pending_fills: atlas.has_pending_fills(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct Shape {
+    size: (u32, u32),
+    clear: [f32; 4],
+    swap: u64,
+    atlas_resets: u64,
+}
+
 /// The last frames' changes.
 #[derive(Default)]
 pub(in crate::window) struct Damage {
-    /// The last frame's instances, and its size, clear colour and swap chain (the surface's
-    /// configuration, `configure::generation`).
+    /// The last frame's instances, and its size, clear colour, swap chain (the surface's
+    /// configuration, `configure::generation`), and glyph atlas reset count.
     last: Vec<Instance>,
-    shape: Option<((u32, u32), [f32; 4], u64)>,
+    shape: Option<Shape>,
+    /// `Atlas::rasterized()` as of the last planned frame.
+    atlas_rasterized: u64,
     scratch: Scratch,
     /// The last change seen, however much was drawn (frame-profile).
     #[cfg_attr(not(feature = "frame-profile"), allow(dead_code))]
@@ -62,17 +93,81 @@ pub(in crate::window) enum Plan {
 }
 
 impl Damage {
+    /// Whether a loop-only frame (`Renderer::arm_loop`) may patch only `patched` instead of going
+    /// through `plan`: the swap chain, size and clear colour still match, the glyph atlas has had
+    /// no eviction, new rasterization or pending GPU fill since the last frame, and if CPU glyph
+    /// rows are dirty (an animated icon's in-place slot write), at least one patched instance's
+    /// bytes differ from the last frame's.
+    pub(in crate::window) fn can_patch_loop(
+        &self,
+        instances: &[Instance],
+        patched: &[u32],
+        size: (u32, u32),
+        clear: [f32; 4],
+        swap: u64,
+        atlas: GlyphAtlas,
+    ) -> Result<(), &'static str> {
+        if !self.current(size, clear, swap) {
+            return Err("a new swap chain");
+        }
+        if !self.shape.is_some_and(|s| s.atlas_resets == atlas.resets)
+            || self.atlas_rasterized != atlas.rasterized
+            || atlas.pending_fills
+        {
+            return Err("glyph atlas");
+        }
+        if atlas.dirty_rows && !self.any_patched_differs(instances, patched) {
+            return Err("glyph atlas");
+        }
+        Ok(())
+    }
+
+    fn any_patched_differs(&self, instances: &[Instance], patched: &[u32]) -> bool {
+        self.last.len() == instances.len()
+            && patched.iter().any(|&i| {
+                let idx = i as usize;
+                idx < instances.len()
+                    && bytemuck::bytes_of(&self.last[idx]) != bytemuck::bytes_of(&instances[idx])
+            })
+    }
+
     /// The frame about to draw `instances` into a `size` target cleared to `clear`, on swap chain
-    /// `swap`; `in_place` when nothing but its instances draws there.
-    pub(in crate::window) fn plan(&mut self, instances: &[Instance], size: (u32, u32), clear: [f32; 4], swap: u64, in_place: bool) -> Plan {
-        let (now, why) = match (in_place && !whole_frames(), self.shape == Some((size, clear, swap))) {
-            (false, _) => (Area::All, "not in place"),
-            (_, false) => (Area::All, "new size, colour or swap chain"),
+    /// `swap`, with glyph atlas state `atlas`; `in_place` when nothing but its instances draws there.
+    pub(in crate::window) fn plan(
+        &mut self,
+        instances: &[Instance],
+        size: (u32, u32),
+        clear: [f32; 4],
+        swap: u64,
+        atlas: GlyphAtlas,
+        in_place: bool,
+    ) -> Plan {
+        let shape = Shape { size, clear, swap, atlas_resets: atlas.resets };
+        let prev_shape = self.shape;
+        let prev_rasterized = self.atlas_rasterized;
+        // Pending GPU fills with no new rasterizations mean existing glyph slots were queued for
+        // refill (e.g. `rows_uploaded` or `refill_gpu_masks`) while their instance bytes stay put.
+        let glyph_refill = atlas.pending_fills && atlas.rasterized == prev_rasterized;
+        let (now, why) = match (
+            in_place && !whole_frames(),
+            prev_shape.is_some_and(|s| s.size == size && s.clear == clear && s.swap == swap),
+            prev_shape.is_some_and(|s| s.atlas_resets == atlas.resets),
+            !glyph_refill,
+        ) {
+            (false, _, _, _) => (Area::All, "not in place"),
+            (_, false, _, _) => (Area::All, "new size, colour or swap chain"),
+            (_, _, false, _) => (Area::All, "glyph atlas reset"),
+            (_, _, _, false) => (Area::All, "glyph atlas fill"),
             _ => {
                 let now = changed(&self.last, instances, size, &mut self.scratch);
                 self.seen = match &now { Area::Rects(r) => r.iter().copied().reduce(join), Area::All | Area::Many => None };
                 match now {
-                    Area::Rects(r) if r.iter().map(|r| area(*r)).sum::<u32>() as f32 > MOST * (size.0 * size.1) as f32 => (Area::All, "most of it changed"),
+                    Area::Rects(r) if r.is_empty() && (atlas.dirty_rows || atlas.pending_fills || atlas.rasterized != prev_rasterized) => {
+                        (Area::All, "glyph atlas")
+                    }
+                    Area::Rects(r) if r.iter().map(|r| area(*r)).sum::<u32>() as f32 > MOST * (size.0 * size.1) as f32 => {
+                        (Area::All, "most of it changed")
+                    }
                     Area::All => (Area::All, "reordered"),
                     Area::Many => (Area::All, "many changed"),
                     other => (other, ""),
@@ -81,7 +176,8 @@ impl Damage {
         };
         self.last.clear();
         self.last.extend_from_slice(instances);
-        self.shape = Some((size, clear, swap));
+        self.shape = Some(shape);
+        self.atlas_rasterized = atlas.rasterized;
         match now {
             Area::All | Area::Many => Plan::All(why),
             // Nothing changed: one pixel keeps the present, which DWM composes again as is.
@@ -99,7 +195,9 @@ impl Damage {
     /// The last frame drew into swap chain `swap` at this size and clear colour: a frame may draw
     /// and present only part of it. False after `reset` or a configure (a new swap chain), so its
     /// first frame, loop-only or not, goes through `plan` and draws whole.
-    pub(in crate::window) fn current(&self, size: (u32, u32), clear: [f32; 4], swap: u64) -> bool { self.shape == Some((size, clear, swap)) }
+    pub(in crate::window) fn current(&self, size: (u32, u32), clear: [f32; 4], swap: u64) -> bool {
+        self.shape.is_some_and(|s| s.size == size && s.clear == clear && s.swap == swap)
+    }
 
     /// A loop-only frame changed only `patched` (ascending) and drew them where they were and
     /// are (`Renderer::arm_loop`): the next frame compares with them.
