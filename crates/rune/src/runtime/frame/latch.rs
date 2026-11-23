@@ -56,6 +56,27 @@ impl RuntimeCore {
         self.latch_after_picks(app, tx);
     }
 
+    /// Latches programmatic focus requests (`Tx::blur`, `Tx::focus*`) so the next commit's
+    /// `sync_requested_focus` applies them against the new view's accessors.
+    pub(in crate::runtime) fn latch_focus(&mut self, tx: &mut Tx) {
+        if std::mem::take(&mut tx.blur) {
+            if self.kbd.focus.path().is_some() {
+                self.kbd.focus_request = Some(focus_machine::FocusRequest::Blur);
+                self.commit.dirty = true;
+            } else if matches!(self.kbd.focus_request, Some(focus_machine::FocusRequest::Focus(..))) {
+                self.kbd.focus_request = None;
+            }
+            // An explicit blur is not the temporary pointer-down blur of a scrim, and nothing
+            // hands focus on from it: only a control the user blurred and then left does.
+            self.kbd.focus.step(focus_machine::FocusEvent::Dropped);
+            self.kbd.focus.step(focus_machine::FocusEvent::Settled);
+        }
+        if let Some((key, ring, ask)) = tx.focus_to.take() {
+            self.kbd.focus_request = Some(focus_machine::FocusRequest::Focus(key, ring, ask));
+            self.commit.dirty = true;
+        }
+    }
+
     /// [`Self::latch_requests`] once the pick callbacks have run.
     fn latch_after_picks(&mut self, app: &mut dyn AppDriver, tx: &mut Tx) {
         self.shell_request = self.shell_request.max(tx.shell.take());
@@ -100,20 +121,7 @@ impl RuntimeCore {
         if let Some((sans, mono)) = tx.font_families.take() { self.set_font_families(&sans, &mono); }
         if let Some(srgb) = tx.srgb_blend.take() { self.set_srgb_blend(srgb); }
         if let Some(rewind) = tx.rewind.take() { self.motion.set_rewind(rewind); }
-        if std::mem::take(&mut tx.blur) {
-            if self.kbd.focus.path().is_some() {
-                self.set_focus(app, None, self.kbd.focus.keyboard());
-                self.commit.dirty = true;
-            }
-            // An explicit blur is not the temporary pointer-down blur of a scrim, and nothing
-            // hands focus on from it: only a control the user blurred and then left does.
-            self.kbd.focus.step(focus_machine::FocusEvent::Dropped);
-            self.kbd.focus.step(focus_machine::FocusEvent::Settled);
-        }
-        if let Some(request) = tx.focus_to.take() {
-            self.kbd.focus_request = Some(request);
-            self.commit.dirty = true;
-        }
+        self.latch_focus(tx);
         if let Some(title) = tx.title.take() { self.host.window_title.set(title); }
         if let Some((text, how)) = tx.announce.take() { self.host.announcement.say(text, how); }
         if let Some(mut request) = tx.window_frame.take() {

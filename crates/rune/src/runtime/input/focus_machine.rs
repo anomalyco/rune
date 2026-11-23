@@ -215,6 +215,14 @@ impl FocusState {
 /// How long a list waits for the next typed letter before its prefix starts over (AppKit's).
 pub(crate) const TYPE_SELECT_PAUSE: f64 = 1.0;
 
+/// A pending programmatic focus change from `Tx::focus*` or `Tx::blur`, resolved in
+/// `sync_requested_focus` once the new view is built so stale input accessors never run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::runtime) enum FocusRequest {
+    Blur,
+    Focus(String, bool, crate::el::FocusAsk),
+}
+
 /// A list's type-select: nothing typed, or a prefix and when its last letter arrived.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum TypeSelect {
@@ -267,8 +275,8 @@ pub(crate) struct KeyboardState {
     /// Focus when the running commit began, before a new view's focus request applied: what a
     /// modal that opens in this commit returns focus to.
     pub(in crate::runtime) focus_before_commit: Option<String>,
-    /// `Tx::focus`: the key the next commit focuses, and whether its ring shows.
-    pub(in crate::runtime) focus_request: Option<(String, bool, crate::el::FocusAsk)>,
+    /// `Tx::focus*` or `Tx::blur`: the focus change the next commit applies.
+    pub(in crate::runtime) focus_request: Option<FocusRequest>,
     /// `Tx::focus_when_shown` still waiting for its element: the key and whether its ring shows.
     pub(in crate::runtime) focus_owed: Option<(String, bool)>,
     /// Focused text fields that unmounted without being blurred: while another field holds focus,
