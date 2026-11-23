@@ -53,6 +53,8 @@ impl OverlayCore {
         #[cfg(target_os = "macos")]
         {
             self.occlusion_read = false;
+            // AppKit updates `occlusionState` some milliseconds after the order-in.
+            if self.panel.is_some() { self.prime.arm(); }
             self.sync_occlusion(app);
             if !self.presence.occluded() { self.ensure_pacing(); }
         }
@@ -154,7 +156,7 @@ impl OverlayCore {
         // Any Fn change the monitor saw reaches the view while it's still shown; the hide
         // then releases what it held.
         #[cfg(target_os = "macos")]
-        self.fn_key(app);
+        { self.fn_key(app); self.prime.stop(); }
         // Only macOS and Windows fade the window; elsewhere it goes at once, and so does drawing.
         let fade = if cfg!(any(target_os = "macos", target_os = "windows")) { fade } else { Duration::ZERO };
         let effects = self.presence.step(presence::Event::Hide { fade, now: crate::time::now() }, self.release);
