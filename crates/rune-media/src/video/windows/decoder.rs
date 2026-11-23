@@ -10,15 +10,13 @@
 
 use super::audio::{self, Output};
 use super::gpu::{self, Ring};
+use super::inbox::{Decoded, Inbox, News, Pic, Pipe};
 use super::layer::Layer;
 use super::machine::Anchor;
 use super::mf::{self, Decode, Picture, Sound};
 use super::super::{Kind, MediaSource, Meta};
-use crate::native_surface::ByteFrame;
-use crate::native_surface::windows::DecodedPlanes;
 use rune_core::time::Instant;
-use std::collections::VecDeque;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::time::Duration;
 use windows::Win32::Graphics::Direct3D11::{D3D11_BIND_DECODER, ID3D11Texture2D};
 use windows::Win32::Media::MediaFoundation::*;
@@ -40,40 +38,6 @@ const LAYER_LEAD: Duration = Duration::from_millis(2);
 /// How long a clip that opens before Rune has a GPU waits for it (`rune_device`).
 const GPU_WAIT: Duration = Duration::from_secs(3);
 
-/// What the UI asks of the decoder and what the decoder hands back, under one lock.
-#[derive(Default)]
-pub(super) struct Inbox {
-    /// A seek to land: clip seconds and the generation its pictures carry.
-    pub seek: Option<(f64, u32)>,
-    pub looping: bool,
-    /// Play sound, at this gain (unmuted, and the clip has some).
-    pub sound: Option<f32>,
-    pub stop: bool,
-    /// When a frame last drew the clip.
-    pub touched: Option<Instant>,
-    pub news: Vec<News>,
-    pub frames: VecDeque<Decoded>,
-    /// The generation whose last picture is in the queue: the clip ended there.
-    pub ended: Option<u32>,
-    /// The window shows the clip on its own layer at this size (device pixels): while the clock
-    /// runs, the decoder presents each picture there itself (`layer`). None: the UI draws them.
-    pub layer: Option<(u32, u32)>,
-    /// The layer's DirectComposition surface handle, once made, for the window's visual.
-    pub layer_handle: Option<usize>,
-    /// The size of the last picture presented on the layer, and the generation it belongs to.
-    pub layer_shown: Option<((u32, u32), u32)>,
-    /// The clip can't have a layer (a rotated clip, software pictures, no video processor): the
-    /// UI keeps drawing it.
-    pub layer_refused: bool,
-}
-
-pub(super) enum News {
-    Opened(Facts),
-    Failed(String),
-    /// Let go after `PARK` undrawn.
-    Parked,
-}
-
 /// `decode`'s answer when Rune's device was replaced under the ring: not a failure.
 const DEVICE_CHANGED: &str = "Rune's GPU device changed";
 
@@ -87,33 +51,6 @@ pub(super) struct Facts {
     pub hardware: bool,
     /// Pictures reach the screen on the GPU (false: through system memory).
     pub gpu: bool,
-}
-
-pub(super) struct Decoded {
-    pub generation: u32,
-    /// Seconds from the clip's start, counting on through loops.
-    pub pts: f64,
-    pub picture: Pic,
-}
-
-pub(super) enum Pic {
-    Gpu(Arc<DecodedPlanes>, u64),
-    Cpu(ByteFrame),
-}
-
-pub(super) struct Pipe {
-    inbox: Mutex<Inbox>,
-    wake: Condvar,
-}
-
-impl Pipe {
-    pub(super) fn lock(&self) -> MutexGuard<'_, Inbox> {
-        self.inbox.lock().unwrap()
-    }
-    /// Tell the decoder something changed (a seek, a picture taken, a stop).
-    pub(super) fn poke(&self) {
-        self.wake.notify_all();
-    }
 }
 
 /// What a decoder starts with.
@@ -135,10 +72,7 @@ pub(super) struct Job {
 
 /// Starts a decoder thread; it runs until `stop` or parking.
 pub(super) fn start(job: Job) -> Arc<Pipe> {
-    let pipe = Arc::new(Pipe {
-        inbox: Mutex::new(Inbox { looping: job.looping, sound: job.sound, touched: Some(rune_core::time::now()), ..Inbox::default() }),
-        wake: Condvar::new(),
-    });
+    let pipe = Pipe::new(Inbox { looping: job.looping, sound: job.sound, touched: Some(rune_core::time::now()), ..Inbox::default() });
     let thread_pipe = pipe.clone();
     let spawned = std::thread::Builder::new().name("rune-video-decode".into()).spawn(move || {
         // SAFETY: COM for this thread, matched below.
@@ -350,8 +284,7 @@ impl Decoder {
                     }
                     if let Some((to, g)) = s.seek.take() {
                         end_due = None;
-                        s.frames.clear();
-                        s.ended = None;
+                        s.flush();
                         generation = g;
                         skip_before = to;
                         epoch = 0.0;
@@ -402,7 +335,7 @@ impl Decoder {
                     }
                     let patience = if (room && !texture) || sound_full { RING_POLL } else { PARK };
                     let patience = heard_end.map_or(patience, |at| patience.min(at.saturating_duration_since(rune_core::time::now()) + Duration::from_millis(1)));
-                    s = pipe.wake.wait_timeout(s, patience).unwrap().0;
+                    s = pipe.wait(s, patience);
                     waiting_since = waiting_since.max(touched);
                 }
             }
@@ -426,25 +359,22 @@ impl Decoder {
                         drop(sample);
                         let layered = blitted.is_some_and(|clock| self.present_when_due(pipe, job, clock, pts, generation));
                         let mut s = pipe.lock();
-                        let was_empty = s.frames.is_empty();
-                        s.frames.push_back(Decoded { generation, pts, picture });
+                        let was_empty = s.push(Decoded { generation, pts, picture });
                         let mut unread = Vec::new();
                         if layered {
                             // The window takes no pictures while its layer shows them: only the
                             // newest stays, for when it draws the clip itself again, and the
                             // others' textures are free at once (Rune never read them). Presenting
                             // counts as being drawn, so the decoder doesn't park.
-                            while s.frames.len() > 1 {
-                                if let Some(Decoded { picture: Pic::Gpu(planes, _), .. }) = s.frames.pop_front() {
-                                    unread.push(planes);
-                                }
-                            }
+                            unread = s.keep_newest();
                             s.touched = Some(rune_core::time::now());
                         }
                         drop(s);
                         if let Some(ring) = &mut self.ring {
-                            for planes in &unread {
-                                ring.unread(planes);
+                            for old in &unread {
+                                if let Pic::Gpu(planes, _) = &old.picture {
+                                    ring.unread(planes);
+                                }
                             }
                         }
                         drop(unread);
@@ -562,7 +492,7 @@ impl Decoder {
             if now >= at {
                 break;
             }
-            s = pipe.wake.wait_timeout(s, at - now).unwrap().0;
+            s = pipe.wait(s, at - now);
         }
         // Paused, or the rate changed, while it waited: the window decides again.
         if job.clock.get() != Some(clock) {
