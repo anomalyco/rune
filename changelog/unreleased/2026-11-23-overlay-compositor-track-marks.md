@@ -1,0 +1,1 @@
+- Overlays: a custom compositor now receives populated `Runtime::marks` on each frame (`Runtime::track_marks` is enabled when a compositor is attached, matching the native, web, embed, headless and virtual-desktop hosts).
