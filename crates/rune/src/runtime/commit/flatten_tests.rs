@@ -89,6 +89,7 @@ fn assert_nodes_match(owned: &[Node], borrowed: &[Node], taffy_owned: Option<&La
         assert_eq!(a.in_row, b.in_row, "node {i} in_row");
         assert_eq!(a.width_leads, b.width_leads, "node {i} width_leads");
         assert_eq!(a.instant_changes, b.instant_changes, "node {i} instant_changes");
+        assert_eq!(a.animated_changes, b.animated_changes, "node {i} animated_changes");
         assert_eq!(a.streaming, b.streaming, "node {i} streaming");
         assert_eq!(a.whole, b.whole, "node {i} whole");
         assert_eq!(a.inert, b.inert, "node {i} inert");
@@ -180,6 +181,7 @@ fn cold_packing_handles_el_only_cold_meta_only_and_shared_clones() {
     assert!(by_key(&owned_unique, "plain").cold.is_empty());
     assert!(by_key(&owned_unique, "el-only").cold.is_empty());
     assert_eq!(by_key(&owned_unique, "el-only").motion, own_spring);
+    assert!(by_key(&owned_unique, "el-only").animated_changes);
     assert_eq!(by_key(&owned_unique, "el-only").time_scale, 0.5);
     assert!(by_key(&owned_unique, "el-only").ime_option_as_alt);
     assert!(!by_key(&owned_unique, "pic-only").cold.is_empty());

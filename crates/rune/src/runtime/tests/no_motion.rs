@@ -77,3 +77,54 @@ fn closing_at_once_returns_focus_to_the_opener() {
         }
     }
 }
+
+#[test]
+fn instant_changes_on_parent_lands_removed_child_on_the_same_commit() {
+    struct S {
+        parent_instant: bool,
+        child: bool,
+        child_animated: bool,
+        child_instant: bool,
+    }
+
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let mut parent = col().key("parent").size(200.0, 100.0);
+        if s.parent_instant { parent = parent.instant_changes(); }
+        if s.child {
+            let mut child = el().key("child").size(80.0, 24.0);
+            if s.child_animated { child = child.animated_changes(); }
+            if s.child_instant { child = child.instant_changes(); }
+            parent = parent.child(child);
+        }
+        col().w_full().h_full().child(parent)
+    }
+
+    let cases = [
+        // (label, parent_before, parent_after, child_animated, child_instant, expect_fades)
+        ("parent gains instant_changes in this commit", false, true, false, false, false),
+        ("parent already had instant_changes", true, true, false, false, false),
+        ("parent never has instant_changes", false, false, false, false, true),
+        ("parent already had instant_changes, child has animated_changes", true, true, true, false, true),
+        ("parent gains instant_changes, child has animated_changes", false, true, true, false, true),
+        ("parent drops instant_changes in this commit", true, false, false, false, true),
+        ("parent never has it, child itself has instant_changes", false, false, false, true, true),
+    ];
+
+    for (label, before, after, child_animated, child_instant, expect_fades) in cases {
+        let mut rt = Runtime::new(
+            S { parent_instant: before, child: true, child_animated, child_instant },
+            view,
+            (200.0, 100.0),
+            Env::new(true, 1.0),
+        );
+        rt.frame(0.0);
+        rt.update(move |s, tx| {
+            s.parent_instant = after;
+            s.child = false;
+            tx.animated();
+        });
+        let animating = rt.frame(1.0 / 60.0);
+        assert_eq!(find(&rt, "child").is_some(), expect_fades, "{label}: child presence");
+        assert_eq!(animating, expect_fades, "{label}: animating");
+    }
+}
