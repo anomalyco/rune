@@ -544,6 +544,15 @@ pub enum OptionAsAlt {
     None,
 }
 
+/// Rune: the default menu `with_default_menu` installs before the init events, for an app that
+/// turned it off there to install it later in the same launch (after its first window's first
+/// frame). On the main thread; elsewhere it does nothing.
+pub fn install_default_menu() {
+    if let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
+        crate::platform_impl::menu::initialize(&objc2_app_kit::NSApplication::sharedApplication(mtm));
+    }
+}
+
 /// Rune: the focused field's text around its selection (the selection a byte range of it), which
 /// the input method reads through `selectedRange` and `attributedSubstringForProposedRange:` to
 /// convert committed text again; `None` when nothing takes text.

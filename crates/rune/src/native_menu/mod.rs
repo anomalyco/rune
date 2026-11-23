@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex, Weak};
 use crate::machine::{Attempt, Seq};
 use crate::{App, AppHandle, Shortcut, Tx, app::Shared};
 
+#[cfg(any(test, target_os = "macos"))]
+mod bar_wait;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
@@ -327,6 +329,36 @@ enum Bar {
 thread_local! {
     static BAR: std::cell::RefCell<Bar> = const { std::cell::RefCell::new(Bar::Free) };
     static NEXT_GUARD: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+    /// The launch's menu bar while it waits for the first window's first frame.
+    static BAR_WAIT: std::cell::Cell<bar_wait::BarWait> = const { std::cell::Cell::new(bar_wait::BarWait::new()) };
+}
+
+#[cfg(target_os = "macos")]
+fn bar_state<R>(f: impl FnOnce(&mut bar_wait::BarWait) -> R) -> R {
+    BAR_WAIT.with(|cell| {
+        let mut wait = cell.get();
+        let out = f(&mut wait);
+        cell.set(wait);
+        out
+    })
+}
+
+/// The event loop starts a regular app with winit's default menu turned off: the menu bar is
+/// made once the first window's first frame is on its way (`bar_ready`).
+#[cfg(target_os = "macos")]
+pub(crate) fn bar_waits() {
+    bar_state(bar_wait::BarWait::begin);
+}
+
+/// The menu bar a launch left waiting, now: winit's default menu, then the standard items its
+/// window starts asked for. A window's own items follow as its guard drains. Called once the
+/// first window's first frame is on its way, at the end of a launch that drew none, and by
+/// whatever needs the menu bar before that (`default_macos::ensure`).
+#[cfg(target_os = "macos")]
+pub(crate) fn bar_ready() {
+    let Some(owed) = bar_state(bar_wait::BarWait::end) else { return };
+    winit::platform::macos::install_default_menu();
+    if let Some(opt_in) = owed.standard { standard_macos::install(opt_in); }
 }
 
 pub(crate) struct MenuGuard {
@@ -406,6 +438,9 @@ impl MenuGuard {
     }
 
     pub(crate) fn drain(&mut self) {
+        // A launch's menu bar waits for the first frame; this guard's items go in after it.
+        #[cfg(target_os = "macos")]
+        if bar_state(|wait| wait.waits()) { return; }
         let Some(core) = self.core.upgrade() else { return };
         let state = core.state.lock().unwrap();
         if matches!(self.placed, Placed::Synced(at) if at == state.revision.current()) { return; }
