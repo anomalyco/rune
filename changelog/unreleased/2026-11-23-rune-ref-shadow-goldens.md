@@ -1,0 +1,1 @@
+- Tests (`rune-ref`): update the `goldens.json` hashes for seeds 7, 9, 11, 13 and 14 after per-corner radii were enabled on blurred inset shadows in #1573.
