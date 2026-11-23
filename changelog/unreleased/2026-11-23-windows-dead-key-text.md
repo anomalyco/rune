@@ -1,0 +1,1 @@
+- Keyboard input: a second dead-key press that produces printable text (such as `'` then `'` -> `''` or `'` then `"` -> `'"` on Windows) now types that text instead of being dropped.
