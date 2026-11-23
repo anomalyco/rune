@@ -1,0 +1,1 @@
+- Scroll viewports removed in an `instant_changes` or `Tx::instant` commit now drop their scroll state and `path_ids` entry on commit instead of leaking them until remount, so returning viewports start at offset 0 just as faded exits do.
