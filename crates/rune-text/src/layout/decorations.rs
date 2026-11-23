@@ -283,7 +283,7 @@ impl TextSystem {
                                     (None, true) => boxes.push((parley::BoundingBox::new(x - ws, top, x, bot), li)),
                                 }
                             } else {
-                                let x = if p.flow == crate::Flow::Rtl { (pl.max_width.unwrap_or(pl.width) - pl.newline).max(0.0) } else { 0.0 } as f64;
+                                let x = flow.blank_start(&p, pl.newline) as f64;
                                 boxes.push((parley::BoundingBox::new(x, 0.0, x + pl.newline as f64, p.height as f64), 0));
                             }
                         }

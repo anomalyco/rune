@@ -74,4 +74,11 @@ impl Block {
             Block::Code => (font_size * 0.75).round().max(10.0),
         }
     }
+
+    /// Left indent and right padding in device px reserved during line breaking for this block.
+    pub(crate) fn pad_px(self, font_size: f32, scale: f32) -> [f32; 2] {
+        let indent = (self.indent_pt(font_size) * scale).round();
+        let right = if self == Block::Code { indent } else { 0.0 };
+        [indent, right]
+    }
 }
