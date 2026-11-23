@@ -1,0 +1,1 @@
+- `--tree` and `Runtime::accessibility_json` now include `scroll-right` in a horizontal scroll view's `actions` list.
