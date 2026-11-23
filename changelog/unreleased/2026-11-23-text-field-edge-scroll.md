@@ -1,0 +1,1 @@
+- Text fields: dragging a selection in a multiline `text_input` past the top or bottom edge of its scroll viewport now autoscrolls at the edge-scroll rate and extends the field's selection until the pointer returns inside, the press ends, focus leaves, the field unmounts or the viewport reaches its end.

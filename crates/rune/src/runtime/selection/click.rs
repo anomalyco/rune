@@ -232,7 +232,7 @@ impl RuntimeCore {
             self.edit.input_click.presses.clear();
         }
         if !self.tree.nodes.iter().enumerate().any(|(i, n)| n.path == path && !self.subtree_exiting(i) && n.input.is_some()) {
-            self.edit.input_click.drop_drag();
+            self.edit.drop_input_drag();
             return;
         }
         self.edit.input_click.steps.push_back((path.clone(), Step::Drag));
@@ -252,11 +252,11 @@ impl RuntimeCore {
             .find(|&(i, n)| n.path == path && !self.subtree_exiting(i) && !self.subtree_unmounted(i))
             .map(|(i, _)| i)
         else {
-            self.edit.input_click.drop_drag();
+            self.edit.drop_input_drag();
             return false;
         };
         let Some(access) = self.tree.nodes[i].input.as_ref().and_then(|inp| inp.access.clone()) else {
-            self.edit.input_click.drop_drag();
+            self.edit.drop_input_drag();
             return false;
         };
         let single = self.tree.nodes[i].input.as_ref().is_some_and(|inp| inp.single_line);
@@ -275,7 +275,7 @@ impl RuntimeCore {
                 e.break_history_group();
                 e.clear_typing_style();
                 if e.preedit().is_some() {
-                    self.edit.input_click.clear();
+                    self.edit.clear_input_click();
                     one.commit = one.commit.instant();
                     return true;
                 }
@@ -305,13 +305,13 @@ impl RuntimeCore {
             }
             Step::Drag => {
                 if self.kbd.focus.path() != Some(path.as_str()) {
-                    self.edit.input_click.drop_drag();
+                    self.edit.drop_input_drag();
                     return false;
                 }
                 let e = access(app.states());
                 e.set_single_line(single);
                 if e.preedit().is_some() {
-                    self.edit.input_click.clear();
+                    self.edit.clear_input_click();
                     return false;
                 }
                 let (Some(l), Some([tx, ty])) = (layout, point) else { return false };

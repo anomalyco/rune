@@ -93,7 +93,7 @@ impl RuntimeCore {
                 self.pointer.hover_paused = true;
             }
         }
-        if !focused { self.edit.input_click.clear(); self.wheel_lost(); }
+        if !focused { self.edit.clear_input_click(); self.wheel_lost(); }
     }
 
     /// The window gets no more keys: it lost focus or hid, which may never report a blur. The

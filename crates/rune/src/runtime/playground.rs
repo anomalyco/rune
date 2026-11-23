@@ -56,7 +56,7 @@ impl RuntimeCore {
         for id in exiting { self.scene.unmount(id); }
         self.drop_drag_out_request();
         self.select_step(selectable::phase::Event::Release);
-        self.edit.input_click.clear();
+        self.edit.clear_input_click();
         self.pointer.clear_for_stage();
         self.host.clear_titlebar();
         let Some(playground) = app.playground_mut() else { return };
