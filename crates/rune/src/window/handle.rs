@@ -83,6 +83,12 @@ impl WindowHandle {
         let number = self.native.number.load(Ordering::Acquire);
         (number != 0).then_some(number)
     }
+    /// The window's scale factor, as `placement` reports it, without reading where the window
+    /// is and how it is shown (on macOS the position is asked of the window server: about
+    /// 1,700 µs in a first frame). None while it's closed. Call it on the UI thread.
+    pub fn scale(&self) -> Option<f64> {
+        Some(self.window().ok()?.scale_factor())
+    }
     /// Where the window is on the desktop and whether it's maximized, minimized or full screen,
     /// to save and reopen it there. None while it's closed, and on Wayland, which hides window
     /// positions. Call it on the UI thread.
