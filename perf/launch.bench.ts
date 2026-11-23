@@ -27,17 +27,24 @@ const milestones = {
 }
 const stages = ["launch.main", "launch.loop_built", "launch.window_native", "launch.window_created", "launch.first_layout", "launch.first_painted", "launch.input_ready"]
 const outside = ["cpu.work", "memory.app.private"]
+// Windows: the window's first frame is the CPU's; these are the GPU being made behind it and taking the window over.
+const handover = { ...milestones, gpu_device: mark("gpu.device"), gpu_warmed: mark("gpu.window.warmed"), gpu_handed: mark("gpu.window.handed") }
+const floors = ["bare", "shell"]
 
 export default bench({
   targets: {
     bare: native("floor", { name: "Rune floor: one text, one rectangle", output: true }),
     shell: native("floor-shell", { name: "Rune floor: a desktop app's first screen", output: true }),
+    // The same screen, reporting once the GPU has taken the window over (Windows).
+    handover: native("floor-handover", { name: "Rune floor: to the GPU's first frame", output: true }),
+    "handover-serial": native("floor-handover-serial", { name: "Rune floor: to the GPU's first frame, its pipelines made one after the other", output: true }),
   },
   cases: {
     // A later launch: the exe in the file cache, the launch's home kept, the GPU's shader cache warm.
     warm: {
       primary: "launch.ready",
       hero: true,
+      targets: floors,
       metrics: [...stages, ...outside],
       launch: { until: { milestone: "first_frame" }, milestones, profile: "warm" },
     },
@@ -46,14 +53,27 @@ export default bench({
     cold: {
       primary: "launch.ready",
       gpuCache: "cold",
+      targets: floors,
       metrics: [...stages, ...outside],
       launch: { until: { milestone: "first_frame" }, milestones, profile: "fresh" },
     },
     // To the loop waiting for input after the first frame.
     input: {
       primary: "launch.ready",
+      targets: floors,
       metrics: ["launch.first_frame", "cpu.work"],
       launch: { until: { milestone: "input_ready" }, milestones, profile: "warm" },
+    },
+    // Windows, a machine that has never run the app: no shader cache, so the driver compiles each
+    // pipeline as it is created. To the frame the GPU takes the window over with (until then the
+    // CPU draws every frame).
+    //   strobe bench perf/launch.bench.ts --base handover-serial --head handover --filter handover
+    handover: {
+      primary: "launch.ready",
+      gpuCache: "cold",
+      targets: ["handover", "handover-serial"],
+      metrics: ["launch.first_frame", "launch.gpu_device", "launch.gpu_warmed", "cpu.work"],
+      launch: { until: { milestone: "gpu_handed" }, milestones: handover, profile: "fresh" },
     },
   },
 })
