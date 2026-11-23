@@ -162,7 +162,7 @@ pub struct GlyphQuad {
     /// Atlas origin with the page packed into y (`page * ATLAS_SIZE + y`).
     /// Use [`Self::atlas_page`] and [`Self::atlas_uv`] when sampling an atlas page directly.
     pub uv: [f32; 2],
-    pub ink: u16,
+    pub ink: u32,
     pub byte: u32,
     /// A colour glyph (emoji) drawn from [`TextSystem::color_glyph`] instead of the alpha
     /// atlas: 0 for none, else its index plus one.
@@ -197,7 +197,7 @@ pub(super) struct ColorGlyph {
 impl ColorGlyph {
     /// The quad for a resting pen at `[x, y]`, rounded at rest, then moved by `glide`
     /// (the image draws filtered).
-    pub(super) fn quad(&self, x: f32, y: f32, glide: [f32; 2], ink: u16, byte: u32) -> GlyphQuad {
+    pub(super) fn quad(&self, x: f32, y: f32, glide: [f32; 2], ink: u32, byte: u32) -> GlyphQuad {
         let rect = [
             x.round() + self.left as f32 + glide[0],
             y.round() - self.top as f32 + glide[1],

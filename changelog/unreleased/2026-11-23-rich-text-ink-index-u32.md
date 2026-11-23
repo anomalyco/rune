@@ -1,0 +1,1 @@
+- Rich text (`rune-text`): widened `GlyphQuad::ink` and the span ink table from `u16` to `u32` with checked indexing in `set_ink_spans`, so rich text with 65,536 or more coloured spans keeps every span's colour instead of panicking in debug builds or wrapping in release builds.
