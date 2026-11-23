@@ -10,6 +10,7 @@ class FakeNode {
         this.children = [];
         this.parentElement = null;
         this.tabIndex = 0;
+        this._inert = false;
         this.inputMode = '';
         this.type = '';
         this.wrap = '';
@@ -20,6 +21,15 @@ class FakeNode {
         this.selectionEnd = 0;
         this.selectionDirection = 'forward';
         this.onFocus = null;
+    }
+
+    get inert() { return this._inert; }
+    set inert(next) {
+        this._inert = Boolean(next);
+        if (this._inert && globalThis.document?.activeElement === this) {
+            globalThis.document.activeElement = globalThis.document.body;
+            this.dispatchEvent({ type: 'blur' });
+        }
     }
 
     get value() { return this._value; }
@@ -94,6 +104,7 @@ class FakeNode {
     }
 
     focus() {
+        if (this._inert) return;
         const prev = globalThis.document.activeElement;
         if (prev === this) return;
         globalThis.document.activeElement = this;
@@ -334,4 +345,69 @@ test('standalone launch focuses the synced field whether sync runs before or aft
     assert.equal(second.h.textarea.selectionStart, 5);
     assert.equal(second.h.textarea.selectionEnd, 5);
     bridge.destroy(second.h);
+});
+
+test('mount keeps both hidden editing proxies inert until a field is focused', async () => {
+    for (const opts of [{}, { embedded: true }, { page: true }]) {
+        const { h } = setup(opts);
+        assert.equal(h.textarea.inert, true);
+        assert.equal(h.password.inert, true);
+        await Promise.resolve();
+        assert.equal(h.textarea.inert, true);
+        assert.equal(h.password.inert, true);
+        bridge.destroy(h);
+    }
+});
+
+test('sync exposes only the active editing proxy and returns both to inert on blur', async () => {
+    const { doc, canvas, h } = setup();
+    await Promise.resolve();
+    assert.equal(doc.activeElement, canvas);
+    assert.equal(h.textarea.inert, true);
+    assert.equal(h.password.inert, true);
+
+    // Focusing a plain text field clears inert on textarea only before focusing it.
+    bridge.sync(h, 'plain', 'hello', 0, 5, 5, false);
+    assert.equal(h.textarea.inert, false);
+    assert.equal(h.password.inert, true);
+    assert.equal(doc.activeElement, h.textarea);
+
+    // Switching directly from plain text to password focuses password before making textarea inert.
+    const textareaBlurTargets = [];
+    h.textarea.addEventListener('blur', () => textareaBlurTargets.push(doc.activeElement));
+    const passwordBlurTargets = [];
+    h.password.addEventListener('blur', () => passwordBlurTargets.push(doc.activeElement));
+
+    bridge.sync(h, 'secret', '', 0, 0, 0, true);
+    assert.deepEqual(textareaBlurTargets, [h.password], 'focus must move to password before textarea becomes inert');
+    assert.equal(doc.activeElement, h.password);
+    assert.equal(h.textarea.inert, true);
+    assert.equal(h.password.inert, false);
+
+    // Switching directly from password back to plain text focuses textarea before making password inert.
+    bridge.sync(h, 'plain', 'hello', 0, 5, 5, false);
+    assert.deepEqual(passwordBlurTargets, [h.textarea], 'focus must move to textarea before password becomes inert');
+    assert.equal(doc.activeElement, h.textarea);
+    assert.equal(h.textarea.inert, false);
+    assert.equal(h.password.inert, true);
+
+    // Blurring returns focus to the canvas before making both proxies inert.
+    bridge.sync(h, '', '', 0, 0, 0, false);
+    assert.deepEqual(textareaBlurTargets, [h.password, canvas], 'focus must return to canvas before textarea becomes inert');
+    assert.equal(doc.activeElement, canvas);
+    assert.equal(h.textarea.inert, true);
+    assert.equal(h.password.inert, true);
+
+    // Blurring from a password field also returns focus to the canvas before making both inert.
+    bridge.sync(h, 'secret', '', 0, 0, 0, true);
+    assert.equal(doc.activeElement, h.password);
+    assert.equal(h.textarea.inert, true);
+    assert.equal(h.password.inert, false);
+    bridge.sync(h, '', '', 0, 0, 0, false);
+    assert.deepEqual(passwordBlurTargets, [h.textarea, canvas], 'focus must return to canvas before password becomes inert');
+    assert.equal(doc.activeElement, canvas);
+    assert.equal(h.textarea.inert, true);
+    assert.equal(h.password.inert, true);
+
+    bridge.destroy(h);
 });
