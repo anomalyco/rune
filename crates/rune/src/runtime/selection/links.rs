@@ -267,6 +267,17 @@ impl RuntimeCore {
         self.span_boxes_indexed(n, rect, z, std::iter::once((k, l.start, l.end)))
     }
 
+    /// Like [`Self::link_boxes`], laying out only links of node `i` that match `pred`.
+    pub(crate) fn link_boxes_matching(&self, i: usize, rect: [f32; 4], mut pred: impl FnMut(&crate::Link) -> bool) -> Vec<(usize, [f32; 4])> {
+        let n = &self.tree.nodes[i];
+        let Some(spec) = n.text.as_deref() else { return Vec::new() };
+        let z = self.paint.drawn_scale.get(i).copied().unwrap_or(1.0);
+        let spans = spec.cold.links.iter().enumerate()
+            .filter(|(_, l)| pred(l))
+            .map(|(k, l)| (k, l.start, l.end));
+        self.span_boxes_indexed(n, rect, z, spans)
+    }
+
     /// The link of node `i` under window point (x, y).
     pub(in crate::runtime) fn link_at(&self, i: usize, x: f32, y: f32) -> Option<usize> {
         if self.tree.nodes[i].text.as_ref().is_none_or(|t| t.cold.links.is_empty()) { return None; }
