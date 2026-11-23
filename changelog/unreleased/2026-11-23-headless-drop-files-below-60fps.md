@@ -1,0 +1,1 @@
+- File drops: `hold_files` now consumes its `waited` latch only when file steps are in the frame's queue, so headless runs below 60 fps whose frames split around timer wakes no longer hold `drag_files` and `drop_files` indefinitely.
