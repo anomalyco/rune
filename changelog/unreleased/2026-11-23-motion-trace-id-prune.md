@@ -1,0 +1,1 @@
+- `MotionTrace` now allocates element ids from a monotonic counter and prunes unmounted entries from its `ids`, `described`, `names`, and `namespaces` maps on `gone`, keeping memory bounded under keyed churn without reusing retired or live ids.
