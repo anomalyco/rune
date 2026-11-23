@@ -293,7 +293,7 @@ impl RuntimeCore {
         if let Some(i) = self.active_modal()
             && target.is_none_or(|t| !self.allowed(t))
         {
-            if self.tree.nodes[i].handlers.modal.as_ref().is_some_and(|m| m.outside) {
+            if self.tree.nodes[i].handlers.modal.as_ref().is_some_and(|m| m.outside && m.dismiss.is_some()) {
                 self.frame.queue.push(Action::Dismiss(self.tree.nodes[i].path.clone()));
             }
             return;

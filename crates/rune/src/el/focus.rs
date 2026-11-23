@@ -83,7 +83,7 @@ impl crate::cold::Empty for FocusSpec {
 
 #[derive(Clone)]
 pub(crate) struct ModalSpec {
-    pub dismiss: PressFn,
+    pub dismiss: Option<PressFn>,
     pub outside: bool,
 }
 
@@ -292,14 +292,20 @@ impl El {
     /// Trap focus and make the background inert while mounted. Escape requests dismissal.
     pub fn modal<S: 'static>(mut self, click_outside: bool, dismiss: impl Fn(&mut S) + 'static) -> Self {
         self.handlers.modal = Some(ModalSpec { outside: click_outside,
-            dismiss: Rc::new(move |s, _| dismiss(downcast::<S>(s))) });
+            dismiss: Some(Rc::new(move |s, _| dismiss(downcast::<S>(s)))) });
         self
     }
     /// [`El::modal`] whose dismissal gets the change's [`Tx`]: a dialog that closes at once
     /// (`tx.instant()`), say.
     pub fn modal_tx<S: 'static>(mut self, click_outside: bool, dismiss: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
         self.handlers.modal = Some(ModalSpec { outside: click_outside,
-            dismiss: Rc::new(move |s, tx| dismiss(downcast::<S>(s), tx)) });
+            dismiss: Some(Rc::new(move |s, tx| dismiss(downcast::<S>(s), tx))) });
+        self
+    }
+    /// Trap focus and make the background inert while mounted, with no Escape or outside-click
+    /// dismissal (as HTML's `<dialog closedby="none">`): the modal's own controls close it.
+    pub fn modal_trap(mut self) -> Self {
+        self.handlers.modal = Some(ModalSpec { outside: false, dismiss: None });
         self
     }
     pub fn modal_click_outside(mut self, enabled: bool) -> Self {
