@@ -1,0 +1,1 @@
+- Windows: single-instance pipe connections now use overlapped I/O with bounded deadlines and message-size checks, so a silent, slow, or oversized client is disconnected instead of wedging later launches or `release_instance`.
