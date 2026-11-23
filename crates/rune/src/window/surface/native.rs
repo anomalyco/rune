@@ -31,6 +31,8 @@ pub(in crate::window) struct Native {
     pub(in crate::window) launch_drawables: super::LaunchDrawables,
     /// Forgets the window's traffic-light spot.
     pub(in crate::window) _spot: crate::platform::macos::traffic_lights::Spot,
+    /// Forgets the window's drag-destination state.
+    pub(in crate::window) _drop: Option<crate::platform::macos::drop::DropTarget>,
 }
 
 /// Whether a frame may presume the window on screen before AppKit says so: `Host::try_create`'s
@@ -92,6 +94,8 @@ pub(in crate::window) struct Native {
     pub(in crate::window) a11y_start: A11yStart,
     /// Playing clips shown on their own layer under the UI (`video_layer`).
     pub(in crate::window) video_layers: crate::window::win32::video_layer::VideoLayers,
+    /// Revokes the window's OLE drop target and prunes its registry entry when the window goes.
+    pub(in crate::window) drop_target: Option<crate::platform::win32::drop_target::DropTarget>,
 }
 
 /// When a window's UI Automation adapter is made: with the window (a screen reader is running),

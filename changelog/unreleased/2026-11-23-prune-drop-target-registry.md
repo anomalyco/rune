@@ -1,0 +1,1 @@
+- Windows and macOS: each window's drop-target registration now prunes its thread-local registry entry (and calls `RevokeDragDrop` on Windows) when the window goes, so a later window reusing the same `HWND` or content view address registers cleanly without inheriting stale drag state.

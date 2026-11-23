@@ -376,7 +376,8 @@ impl Host {
         self.close_hook();
         crate::marks::mark("window.close.hooked");
         #[cfg(target_os = "windows")]
-        if ends && let Some(w) = &self.win {
+        if ends && let Some(w) = &mut self.win {
+            w.native.drop_target = None;
             crate::platform::win32::destroy_window_now(&w.window);
             crate::marks::mark("window.destroyed");
         }

@@ -160,8 +160,10 @@ impl Host {
     #[cfg(target_os = "windows")]
     pub(in crate::window) fn run_ready_hooks(&mut self) {
         // After the first frame: files can only be dragged onto a window a person has seen.
-        if let Some(w) = &self.win {
-            crate::platform::win32::drop_target::install(&w.window);
+        if let Some(w) = &mut self.win {
+            if w.native.drop_target.is_none() {
+                w.native.drop_target = crate::platform::win32::drop_target::install(&w.window);
+            }
             // Win+L wipes a secret left on the clipboard.
             crate::platform::win32::session_lock::install(&w.window);
         }

@@ -8,7 +8,7 @@
 
 #![allow(unsafe_code)]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -20,8 +20,10 @@ use objc2_foundation::{NSArray, NSDictionary, NSError, NSPoint, NSString, NSURL}
 
 use crate::window::FileStep;
 
-#[derive(Default)]
 struct Dest {
+    /// Identifies one window's registration so a late promise from a closed window cannot land in
+    /// a later window allocated at the same content view address.
+    token: u64,
     steps: Vec<FileStep>,
     /// A drag this view takes is over it.
     over: bool,
@@ -30,6 +32,41 @@ struct Dest {
 thread_local! {
     /// Each content view's steps since its host last took them, by the view's address.
     static DESTS: RefCell<HashMap<usize, Dest>> = RefCell::default();
+    static NEXT_TOKEN: Cell<u64> = const { Cell::new(1) };
+}
+
+/// Removes a window's content view from `DESTS` when the window goes, so a later window whose
+/// view reuses the same address inherits no queued drag steps or hover state.
+pub(crate) struct DropTarget {
+    key: usize,
+    token: u64,
+}
+
+impl Drop for DropTarget {
+    fn drop(&mut self) {
+        unregister(self.key, self.token);
+    }
+}
+
+fn register(key: usize) -> DropTarget {
+    let token = NEXT_TOKEN.with(|n| {
+        let next = n.get();
+        n.set(next.wrapping_add(1).max(1));
+        next
+    });
+    DESTS.with(|d| {
+        d.borrow_mut().insert(key, Dest { token, steps: Vec::new(), over: false });
+    });
+    DropTarget { key, token }
+}
+
+fn unregister(key: usize, token: u64) {
+    DESTS.try_with(|d| {
+        let mut d = d.borrow_mut();
+        if d.get(&key).is_some_and(|dest| dest.token == token) {
+            d.remove(&key);
+        }
+    }).ok();
 }
 
 const FILE_URL: &str = "public.file-url";
@@ -63,14 +100,16 @@ impl Item {
     }
 }
 
-/// The content view of `window` takes drags of files, file promises and image data.
-pub(crate) fn install(window: &winit::window::Window) {
-    let Some(view) = crate::platform::macos::content_view(window) else { return };
+/// The content view of `window` takes drags of files, file promises and image data. The
+/// returned guard removes the view's entry from `DESTS` when the window goes.
+pub(crate) fn install(window: &winit::window::Window) -> Option<DropTarget> {
+    let view = crate::platform::macos::content_view(window)?;
+    let key = Retained::as_ptr(&view) as usize;
     // SAFETY: main thread (windows are created there), on winit's live content view.
     unsafe {
         let base = view.class();
         if !base.name().to_string_lossy().contains("RuneDrops_") {
-            let Ok(name) = std::ffi::CString::new(format!("RuneDrops_{}", base.name().to_string_lossy())) else { return };
+            let Ok(name) = std::ffi::CString::new(format!("RuneDrops_{}", base.name().to_string_lossy())) else { return None };
             let class = match ClassBuilder::new(&name, base) {
                 Some(mut b) => {
                     b.add_method(sel!(draggingEntered:), entered as unsafe extern "C" fn(_, _, _) -> _);
@@ -80,34 +119,54 @@ pub(crate) fn install(window: &winit::window::Window) {
                     b.add_method(sel!(performDragOperation:), perform as unsafe extern "C" fn(_, _, _) -> _);
                     b.register()
                 }
-                None => match AnyClass::get(&name) { Some(c) => c, None => return },
+                None => match AnyClass::get(&name) { Some(c) => c, None => return None },
             };
             // Only this instance's class changes, to a subclass without ivars.
             AnyObject::set_class(&view, class);
         }
         view.registerForDraggedTypes(&NSArray::from_retained_slice(&registered_types()));
     }
+    Some(register(key))
 }
 
 /// The steps of drags over `window` since the last call.
 pub(crate) fn take(window: &winit::window::Window) -> Vec<FileStep> {
     let Some(view) = crate::platform::macos::content_view(window) else { return Vec::new() };
-    let key = Retained::as_ptr(&view) as usize;
+    take_key(Retained::as_ptr(&view) as usize)
+}
+
+fn take_key(key: usize) -> Vec<FileStep> {
     DESTS.with(|d| d.borrow_mut().get_mut(&key).map(|d| std::mem::take(&mut d.steps)).unwrap_or_default())
+}
+
+fn push_into(dest: &mut Dest, step: FileStep) {
+    // A move replaces the move before it: the host wants only the latest position.
+    if matches!(step, FileStep::Move(_)) && matches!(dest.steps.last(), Some(FileStep::Move(_))) { dest.steps.pop(); }
+    match step {
+        FileStep::Enter(..) | FileStep::Move(_) => dest.over = true,
+        FileStep::Drop(..) | FileStep::Leave => dest.over = false,
+    }
+    dest.steps.push(step);
 }
 
 fn push(key: usize, step: FileStep) {
     DESTS.with(|d| {
-        let mut d = d.borrow_mut();
-        let dest = d.entry(key).or_default();
-        // A move replaces the move before it: the host wants only the latest position.
-        if matches!(step, FileStep::Move(_)) && matches!(dest.steps.last(), Some(FileStep::Move(_))) { dest.steps.pop(); }
-        match step {
-            FileStep::Enter(..) | FileStep::Move(_) => dest.over = true,
-            FileStep::Drop(..) | FileStep::Leave => dest.over = false,
+        if let Some(dest) = d.borrow_mut().get_mut(&key) {
+            push_into(dest, step);
         }
-        dest.steps.push(step);
     });
+}
+
+fn push_for(key: usize, token: u64, step: FileStep) {
+    DESTS.with(|d| {
+        if let Some(dest) = d.borrow_mut().get_mut(&key).filter(|dest| dest.token == token) {
+            push_into(dest, step);
+        }
+    });
+}
+
+fn token(key: usize) -> Option<u64> {
+    DESTS.with(|d| d.borrow().get(&key).map(|d| d.token))
 }
 
 fn over(key: usize) -> bool { DESTS.with(|d| d.borrow().get(&key).is_some_and(|d| d.over)) }
@@ -311,7 +370,7 @@ unsafe extern "C" fn perform(this: &AnyObject, _: Sel, info: &AnyObject) -> Bool
                     Item::Promise(_) => promised = true,
                 }
             }
-            if promised && let Some(dir) = dir.or_else(drop_dir) && receive(key, &pb, &dir, paths.clone(), at) {
+            if promised && let Some(tok) = token(key) && let Some(dir) = dir.or_else(drop_dir) && receive(key, tok, &pb, &dir, paths.clone(), at) {
                 return Bool::YES;
             }
             if paths.is_empty() {
@@ -326,7 +385,7 @@ unsafe extern "C" fn perform(this: &AnyObject, _: Sel, info: &AnyObject) -> Bool
 
 /// Asks each promise's source to write its files into `dir`. Once all have answered, `paths`
 /// and the promised files drop at `at`.
-unsafe fn receive(key: usize, pb: &NSPasteboard, dir: &Path, paths: Vec<PathBuf>, at: (f32, f32)) -> bool {
+unsafe fn receive(key: usize, token: u64, pb: &NSPasteboard, dir: &Path, paths: Vec<PathBuf>, at: (f32, f32)) -> bool {
     // SAFETY: called on the main thread with a live `NSPasteboard`; Objective-C selectors match
     // `NSPasteboard`/`NSFilePromiseReceiver`/`NSOperationQueue`, `keep` retains each receiver
     // until its reader block finishes (where AppKit passes a live `NSURL` when `error` is null),
@@ -359,7 +418,7 @@ unsafe fn receive(key: usize, pb: &NSPasteboard, dir: &Path, paths: Vec<PathBuf>
                 let paths = std::mem::take(&mut p.1);
                 drop(p);
                 let deliver = block2::RcBlock::new(move || {
-                    if paths.is_empty() { push(key, FileStep::Leave) } else { push(key, FileStep::Drop(paths.clone(), Some(at))) }
+                    if paths.is_empty() { push_for(key, token, FileStep::Leave) } else { push_for(key, token, FileStep::Drop(paths.clone(), Some(at))) }
                 });
                 let main: Retained<AnyObject> = msg_send![class!(NSOperationQueue), mainQueue];
                 let _: () = msg_send![&main, addOperationWithBlock: &*deliver];
