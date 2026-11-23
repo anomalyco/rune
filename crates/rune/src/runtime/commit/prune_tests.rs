@@ -244,3 +244,95 @@ fn directly_unmounted_scroll_viewport_forgets_offset_before_next_frame() {
     let new_id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("vp")).unwrap().id;
     assert_eq!(rt.scroll.scrolls[&new_id].offset, 0.0, "remounted viewport starts at offset 0");
 }
+
+#[test]
+fn virtual_list_path_reused_by_unkeyed_element_prunes_and_places_children() {
+    use std::borrow::Cow;
+
+    struct S {
+        list: bool,
+    }
+
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let body = if s.list {
+            col()
+                .w_full()
+                .min_h(0.0)
+                .virtual_rows(40, 30.0, |_: &S, i| Cow::Owned(format!("row-{i}")), |_: &S, _| el().w_full().h(30.0).child(text("row")))
+                .growth(GrowthSpec::default())
+        } else {
+            col().child(text("a")).child(text("b"))
+        };
+        col()
+            .key("pane")
+            .size(400.0, 200.0)
+            .scroll(ScrollSpec { stick_bottom: true })
+            .child(col())
+            .child(body)
+    }
+
+    let mut rt = Runtime::new(S { list: true }, view, (400.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.frame(0.1);
+    assert!(rt.commit.virtuals.contains_key("pane/#1"), "virtual list registered at unkeyed path");
+    assert!(rt.commit.virtuals["pane/#1"].before > 0.0, "sticky list culled rows above the viewport");
+
+    rt.update(|s, _| s.list = false);
+    rt.frame(0.1);
+    assert!(rt.commit.virtuals.is_empty(), "reused non-virtual path drops stale virtual metadata on commit");
+    let first_text = rt.elements().into_iter().find(|e| e.text.as_deref() == Some("a")).expect("replacement text mounted");
+    assert!(
+        (first_text.rect[1] - first_text.target[1]).abs() < 1.0,
+        "replacement child must not be shifted by stale virtual before offset: rect={:?} target={:?}",
+        first_text.rect,
+        first_text.target,
+    );
+
+    rt.frame(0.1);
+    assert!(rt.commit.virtuals.is_empty(), "stale virtual metadata stays gone on subsequent frames");
+
+    rt.update(|s, _| s.list = true);
+    rt.frame(0.1);
+    assert!(rt.commit.virtuals.contains_key("pane/#1"), "virtual list re-registers when swapped back");
+}
+
+#[test]
+fn virtual_list_path_reused_by_wrapper_with_inner_virtual_list_is_not_nested() {
+    use std::borrow::Cow;
+
+    struct S {
+        wrapped: bool,
+    }
+
+    fn make_list() -> El {
+        col()
+            .w_full()
+            .min_h(0.0)
+            .virtual_rows(10, 20.0, |_: &S, i| Cow::Owned(format!("row-{i}")), |_: &S, _| el().w_full().h(20.0))
+            .growth(GrowthSpec::default())
+    }
+
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let body = if s.wrapped {
+            col().w_full().child(make_list().key("inner"))
+        } else {
+            make_list()
+        };
+        col()
+            .key("pane")
+            .size(400.0, 200.0)
+            .scroll(ScrollSpec { stick_bottom: false })
+            .child(col())
+            .child(body)
+    }
+
+    let mut rt = Runtime::new(S { wrapped: false }, view, (400.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    assert!(rt.commit.virtuals.contains_key("pane/#1"));
+
+    rt.update(|s, _| s.wrapped = true);
+    rt.frame(0.1);
+    assert!(!rt.commit.virtuals.contains_key("pane/#1"), "outer stale path pruned");
+    assert!(rt.commit.virtuals.contains_key("pane/#1/inner"), "inner virtual list registered");
+    assert!(!rt.commit.virtuals["pane/#1/inner"].nested, "inner list is not nested in a stale non-virtual wrapper");
+}

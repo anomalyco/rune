@@ -53,7 +53,7 @@ impl CommitState {
             }
             let Some(&list_id) = tree.path_ids.get(path) else { return false };
             let Some(&list_idx) = tree.node_index.get(&list_id) else { return false };
-            if !tree.nodes.get(list_idx).is_some_and(|n| n.id == list_id && n.path == *path && n.growth.is_some()) {
+            if !tree.nodes.get(list_idx).is_some_and(|n| n.id == list_id && n.path == *path && n.virtual_list && n.growth.is_some()) {
                 return false;
             }
             let Some(&scroll_id) = tree.path_ids.get(&v.scroll_path) else { return false };

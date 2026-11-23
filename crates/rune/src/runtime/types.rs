@@ -147,6 +147,8 @@ pub(crate) struct Node {
     /// `P_GROUP_REST` fades a dropped `El::group_opacity` to full: paint reads it until it lands.
     pub(super) group_fade: bool,
     pub(super) virtual_mount: bool,
+    /// Built from `El::virtualize` or `El::virtual_rows`.
+    pub(super) virtual_list: bool,
     /// `El::selection_group`.
     pub(super) selection_group: bool,
     pub(super) window_drag: crate::el::WindowDrag,
@@ -221,6 +223,7 @@ impl Node {
             scale_track: old.scale_track,
             group_fade: old.group_fade,
             virtual_mount: false,
+            virtual_list: false,
             selection_group: false,
             window_drag: crate::el::WindowDrag::None,
             ime_cursor: false,

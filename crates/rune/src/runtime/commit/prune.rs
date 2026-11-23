@@ -70,7 +70,12 @@ impl RuntimeCore {
         }
         if !self.commit.virtuals.is_empty() {
             let Self { commit, tree, .. } = self;
-            commit.virtuals.retain(|path, _| tree.path_ids.get(path).is_some_and(|id| tree.node_index.contains_key(id)));
+            commit.virtuals.retain(|path, _| {
+                tree.path_ids.get(path)
+                    .and_then(|id| tree.node_index.get(id))
+                    .and_then(|&i| tree.nodes.get(i))
+                    .is_some_and(|n| n.virtual_list)
+            });
         }
         if prune_paths {
             self.prune_path_ids();

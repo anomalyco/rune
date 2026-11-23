@@ -41,6 +41,18 @@ impl RuntimeCore {
                 }
             }
         }
+        // A path reused by a non-virtual element is no longer a virtual list; drop its stale
+        // metadata before `apply` shifts child frames or skips spans against `v.before`.
+        // Lists removed from `nodes` stay until their exiting node prunes.
+        if !self.commit.virtuals.is_empty() {
+            let Self { commit, tree, .. } = self;
+            commit.virtuals.retain(|path, _| {
+                !tree.path_ids.get(path)
+                    .and_then(|id| tree.node_index.get(id))
+                    .and_then(|&i| nodes.get(i))
+                    .is_some_and(|n| !n.virtual_list)
+            });
+        }
         for v in self.commit.virtuals.values_mut() {
             v.shown = v.keys[v.range.clone()].iter().cloned().collect();
             v.mounted = v.indexed.then(|| crate::el::virtual_list::Mounted::of(v));
