@@ -1,0 +1,1 @@
+- Windows headless: `Cx::chrome_insets` now reports mirrored right-to-left caption button width in `leading` instead of `trailing`, matching native Windows windows and the rendered `rune-caption` bounds.
