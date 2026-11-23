@@ -744,6 +744,91 @@ pub(crate) fn exclusive_zone(placement: Option<crate::OverlayPlacement>) -> i32 
     }
 }
 
+/// Dead-connection decisions for a Wayland layer surface and its socket watch thread, kept
+/// cross-platform so they compile and run tests on every host without a compositor.
+pub(crate) mod connection {
+    /// What one `poll(2)` call on a display socket saw.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum WatchPoll {
+        /// `poll` timed out without socket activity.
+        TimedOut,
+        /// `poll` failed with `EINTR`.
+        Interrupted,
+        /// `poll` failed with another OS error (for example `EBADF`).
+        Error,
+        /// `poll` reported socket flags (`readable`: `POLLIN`, `hangup_or_error`:
+        /// `POLLHUP | POLLERR`, `invalid`: `POLLNVAL`).
+        Ready { readable: bool, hangup_or_error: bool, invalid: bool },
+    }
+
+    /// What `Watch::spawn` does next after one `poll(2)` call.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum WatchAction {
+        /// Keep polling without waking the event loop.
+        Continue,
+        /// Wake the event loop, wait for a turn, and keep polling.
+        Wake,
+        /// Wake the event loop once so it observes the dead connection, then exit the thread.
+        WakeAndStop,
+        /// Exit the watch thread immediately without waking.
+        Stop,
+    }
+
+    pub(crate) fn watch_action(poll: WatchPoll) -> WatchAction {
+        match poll {
+            WatchPoll::TimedOut | WatchPoll::Interrupted => WatchAction::Continue,
+            WatchPoll::Error => WatchAction::Stop,
+            WatchPoll::Ready { invalid: true, .. } => WatchAction::Stop,
+            WatchPoll::Ready { hangup_or_error: true, .. } => WatchAction::WakeAndStop,
+            WatchPoll::Ready { readable: true, .. } => WatchAction::Wake,
+            WatchPoll::Ready { .. } => WatchAction::Continue,
+        }
+    }
+
+    /// Platform-independent classification of a Wayland queue operation error.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum ErrorKind {
+        /// Transient `EAGAIN` / `WouldBlock` on a live socket.
+        WouldBlock,
+        /// Wayland protocol error (`wl_display.error`) or malformed message on the queue.
+        Protocol,
+        /// Fatal socket I/O error (peer closed, reset, broken pipe).
+        Io,
+    }
+
+    /// Whether `kind` means the Wayland display connection is permanently dead.
+    pub(crate) fn is_fatal(kind: ErrorKind) -> bool {
+        !matches!(kind, ErrorKind::WouldBlock)
+    }
+
+    /// What a layer surface does after a queue turn (`dispatch_pending` + `flush`).
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum TurnAction {
+        /// Connection is live and the surface is still open: notify the watch that the loop turned.
+        Continue,
+        /// Compositor closed the surface cleanly: stop the watch without logging an error.
+        StopClosed,
+        /// Connection died for the first time on this surface: close readiness, stop repeat and
+        /// the watch, and report the cause once.
+        FailAndClose,
+        /// Surface was already closed before this turn: do nothing and do not log again.
+        AlreadyClosed,
+    }
+
+    pub(crate) fn turn_action(was_closed: bool, error: Option<ErrorKind>, now_closed: bool) -> TurnAction {
+        if was_closed {
+            return TurnAction::AlreadyClosed;
+        }
+        if error.is_some_and(is_fatal) {
+            return TurnAction::FailAndClose;
+        }
+        if now_closed {
+            return TurnAction::StopClosed;
+        }
+        TurnAction::Continue
+    }
+}
+
 #[cfg(test)]
 #[path = "layer_shell_machine_tests.rs"]
 mod tests;

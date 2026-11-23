@@ -73,7 +73,7 @@ fn wait_for_configure_times_out_on_silent_socket_and_errors_on_hangup() -> std::
     let mut queue = conn.new_event_queue::<super::State>();
     let mut state = super::State::default();
     let started = Instant::now();
-    let outcome = super::wait_for_configure(&mut queue, &mut state, Duration::from_millis(40));
+    let outcome = super::wait_for_configure(&conn, &mut queue, &mut state, Duration::from_millis(40));
     assert_eq!(outcome, Outcome::TimedOut);
     assert!(started.elapsed() >= Duration::from_millis(30));
     assert!(started.elapsed() < Duration::from_secs(2));
@@ -84,7 +84,7 @@ fn wait_for_configure_times_out_on_silent_socket_and_errors_on_hangup() -> std::
     let mut queue = conn.new_event_queue::<super::State>();
     let mut state = super::State::default();
     let started = Instant::now();
-    let outcome = super::wait_for_configure(&mut queue, &mut state, Duration::from_secs(2));
+    let outcome = super::wait_for_configure(&conn, &mut queue, &mut state, Duration::from_secs(2));
     assert_eq!(outcome, Outcome::Error);
     assert!(started.elapsed() < Duration::from_secs(1));
     Ok(())
@@ -290,6 +290,49 @@ fn wayland_watch_wakes_for_prequeued_and_concurrent_reads_and_stops_cleanly() ->
         drop(watch);
         assert!(started.elapsed() < Duration::from_secs(1), "drop after hangup must not stall");
     }
+    Ok(())
+}
 
+#[test]
+fn watch_exits_after_one_wake_on_closed_socket() -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    use std::time::Duration;
+
+    let (client, server) = UnixStream::pair()?;
+    drop(server);
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let count = wakes.clone();
+    let watch = super::Watch::spawn(client.as_raw_fd(), Arc::new(move || {
+        count.fetch_add(1, Ordering::Relaxed);
+    }));
+    std::thread::sleep(Duration::from_millis(300));
+    drop(watch);
+    assert_eq!(wakes.load(Ordering::Relaxed), 1);
+    Ok(())
+}
+
+#[test]
+fn display_error_reports_dead_connection_and_none_when_live() -> std::io::Result<()> {
+    use std::os::unix::net::UnixStream;
+    use std::ptr::NonNull;
+    use wayland_client::{Connection, Proxy};
+    use winit::raw_window_handle::{RawDisplayHandle, WaylandDisplayHandle};
+
+    let (client, _server) = UnixStream::pair()?;
+    let Ok(live) = Connection::from_socket(client) else { return Ok(()); };
+    let live_ptr = NonNull::new(live.display().id().as_ptr().cast()).expect("wl_display");
+    assert_eq!(super::display_error(RawDisplayHandle::Wayland(WaylandDisplayHandle::new(live_ptr))), None);
+
+    let (client, server) = UnixStream::pair()?;
+    drop(server);
+    let Ok(dead) = Connection::from_socket(client) else { return Ok(()); };
+    let mut queue = dead.new_event_queue::<super::State>();
+    let mut state = super::State::default();
+    let _ = super::wait_for_configure(&dead, &mut queue, &mut state, std::time::Duration::from_secs(1));
+    let dead_ptr = NonNull::new(dead.display().id().as_ptr().cast()).expect("wl_display");
+    let err = super::display_error(RawDisplayHandle::Wayland(WaylandDisplayHandle::new(dead_ptr)));
+    assert!(err.is_some(), "expected socket error from dead display");
     Ok(())
 }

@@ -26,6 +26,18 @@ fn event_loop_error(error: winit::error::EventLoopError) -> String {
     format!("event loop: {error}")
 }
 
+/// Formats an error returned by `event_loop.run_app`, preferring a captured Wayland display
+/// failure over winit's opaque `ExitFailure(code)`.
+#[cfg(any(test, not(target_arch = "wasm32")))]
+fn format_run_error(error: winit::error::EventLoopError, display_error: Option<&str>) -> String {
+    match (error, display_error) {
+        (winit::error::EventLoopError::ExitFailure(_), Some(cause)) => {
+            format!("run: the display connection failed: {cause}")
+        }
+        (error, _) => format!("run: {error}"),
+    }
+}
+
 /// Whether this process can reach the window server. Over ssh to a Mac no one is logged in to,
 /// AppKit starts but never finishes launching, so the app would wait forever.
 #[cfg(target_os = "macos")]
@@ -105,7 +117,11 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
             TURN_QUEUED.store(false, std::sync::atomic::Ordering::Release);
         }
     }));
-    let mut windows = Windows { factory: Some(factory), args, proxy, hosts: Vec::new(), gpu: Rc::default() };
+    let mut windows = Windows {
+        factory: Some(factory), args, proxy, hosts: Vec::new(), gpu: Rc::default(),
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        display_error: None,
+    };
     crate::open_url::incoming::prepare();
     crate::marks::mark("loop.run");
     let result = event_loop.run_app(&mut windows);
@@ -115,11 +131,15 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     crate::render::discard_prewarm();
     crate::clipboard::shutdown(); // Also cover an event-loop error before `exiting`.
     crate::platform::ready_signal::clear();
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    let display_error = windows.display_error.take();
+    #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+    let display_error: Option<String> = None;
     // An orderly exit: the windows and their renderers go here. `RUNE_LOOP_CHECK=2` found a
     // differing picture: the process ends with 3, as a fast exit does (`quit::end_process`).
     drop(windows);
     if crate::render::loop_pixel_check_failed() { std::process::exit(3); }
-    result.map_err(|error| format!("run: {error}"))
+    result.map_err(|error| format_run_error(error, display_error.as_deref()))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -160,4 +180,30 @@ impl Windows {
 fn an_event_loop_that_cant_start_is_an_error_naming_the_event_loop() {
     let error = event_loop_error(winit::error::EventLoopError::RecreationAttempt);
     assert!(error.starts_with("event loop: ") && error.contains("recreated"), "{error}");
+}
+
+#[test]
+fn run_exit_failure_reports_captured_display_error() {
+    let proto = format_run_error(
+        winit::error::EventLoopError::ExitFailure(71),
+        Some("Protocol error 2 on object wl_surface@7"),
+    );
+    assert_eq!(proto, "run: the display connection failed: Protocol error 2 on object wl_surface@7");
+
+    let io = format_run_error(
+        winit::error::EventLoopError::ExitFailure(32),
+        Some("Broken pipe (os error 32)"),
+    );
+    assert_eq!(io, "run: the display connection failed: Broken pipe (os error 32)");
+
+    // Without a captured display error, ExitFailure keeps winit's message.
+    let opaque = format_run_error(winit::error::EventLoopError::ExitFailure(1), None);
+    assert_eq!(opaque, "run: Exit Failure: 1");
+
+    // Non-ExitFailure errors are never replaced by a display error string.
+    let other = format_run_error(
+        winit::error::EventLoopError::RecreationAttempt,
+        Some("Broken pipe (os error 32)"),
+    );
+    assert!(other.starts_with("run: ") && other.contains("recreated"), "{other}");
 }

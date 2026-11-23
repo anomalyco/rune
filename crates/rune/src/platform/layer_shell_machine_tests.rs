@@ -959,3 +959,86 @@ fn watch_loop_wakes_on_prequeued_and_read_events_releases_guard_before_wait_and_
     assert_eq!(poll_err.cancelled.get(), 1);
     assert_eq!(poll_err.live_guards.get(), 0);
 }
+
+#[test]
+fn watch_poll_exits_on_hangup_error_or_invalid_fd_instead_of_spinning() {
+    use super::connection::{WatchAction, WatchPoll, watch_action};
+
+    // Idle timeout and EINTR keep polling without waking.
+    assert_eq!(watch_action(WatchPoll::TimedOut), WatchAction::Continue);
+    assert_eq!(watch_action(WatchPoll::Interrupted), WatchAction::Continue);
+
+    // Fatal poll(2) OS error (e.g. EBADF) stops immediately instead of tight-looping.
+    assert_eq!(watch_action(WatchPoll::Error), WatchAction::Stop);
+
+    // Normal readable socket wakes and keeps watching.
+    assert_eq!(
+        watch_action(WatchPoll::Ready { readable: true, hangup_or_error: false, invalid: false }),
+        WatchAction::Wake,
+    );
+
+    // Hangup or socket error (with or without POLLIN for a final error event) wakes once so
+    // the overlay observes the dead connection, then stops the watch thread.
+    assert_eq!(
+        watch_action(WatchPoll::Ready { readable: false, hangup_or_error: true, invalid: false }),
+        WatchAction::WakeAndStop,
+    );
+    assert_eq!(
+        watch_action(WatchPoll::Ready { readable: true, hangup_or_error: true, invalid: false }),
+        WatchAction::WakeAndStop,
+    );
+
+    // POLLNVAL means the fd is gone: stop without waking, even if other bits are set.
+    assert_eq!(
+        watch_action(WatchPoll::Ready { readable: false, hangup_or_error: false, invalid: true }),
+        WatchAction::Stop,
+    );
+    assert_eq!(
+        watch_action(WatchPoll::Ready { readable: true, hangup_or_error: true, invalid: true }),
+        WatchAction::Stop,
+    );
+
+    // Defensive: poll returned >0 with no matching flags.
+    assert_eq!(
+        watch_action(WatchPoll::Ready { readable: false, hangup_or_error: false, invalid: false }),
+        WatchAction::Continue,
+    );
+}
+
+#[test]
+fn dead_connection_closes_layer_surface_and_reports_once() {
+    use super::connection::{ErrorKind, TurnAction, is_fatal, turn_action};
+
+    // Only WouldBlock is transient; protocol and socket I/O errors mean the display is gone.
+    assert!(!is_fatal(ErrorKind::WouldBlock));
+    assert!(is_fatal(ErrorKind::Protocol));
+    assert!(is_fatal(ErrorKind::Io));
+
+    // Healthy turn and transient WouldBlock keep the surface open.
+    assert_eq!(turn_action(false, None, false), TurnAction::Continue);
+    assert_eq!(turn_action(false, Some(ErrorKind::WouldBlock), false), TurnAction::Continue);
+
+    // Compositor-requested close stops the watch without treating it as a connection failure.
+    assert_eq!(turn_action(false, None, true), TurnAction::StopClosed);
+    assert_eq!(turn_action(false, Some(ErrorKind::WouldBlock), true), TurnAction::StopClosed);
+
+    // Fatal protocol or I/O error closes the surface and reports once.
+    for kind in [ErrorKind::Protocol, ErrorKind::Io] {
+        let mut ready = readiness::State::default();
+        readiness::step(&mut ready, readiness::Event::Configure { width: 320, height: 80 });
+        assert_eq!(turn_action(ready.closed(), Some(kind), ready.closed()), TurnAction::FailAndClose);
+        readiness::step(&mut ready, readiness::Event::Closed);
+        assert!(ready.closed());
+        assert!(ready.configured());
+        assert_eq!(ready.size(), None);
+        assert_eq!(ready.take_size(), None);
+        assert_eq!(ready.take_scale(), None);
+        // Any later turn on the already-closed surface is a quiet no-op (never reports twice).
+        assert_eq!(turn_action(ready.closed(), Some(kind), ready.closed()), TurnAction::AlreadyClosed);
+        assert_eq!(turn_action(ready.closed(), None, ready.closed()), TurnAction::AlreadyClosed);
+    }
+
+    // Even if a compositor close event arrived in the same batch as a fatal connection error,
+    // the connection failure is still reported once.
+    assert_eq!(turn_action(false, Some(ErrorKind::Io), true), TurnAction::FailAndClose);
+}
