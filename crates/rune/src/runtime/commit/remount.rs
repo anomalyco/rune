@@ -43,7 +43,7 @@ impl CommitState {
             return false;
         }
         if !tree.nodes.iter().all(|n| {
-            relayout::reusable(n) && n.text.as_ref().is_none_or(|t| !t.redacted && t.cold.live.is_none())
+            relayout::reusable(n) && n.text.as_ref().is_none_or(|t| !t.redacted)
         }) {
             return false;
         }
