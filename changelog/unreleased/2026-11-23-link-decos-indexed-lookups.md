@@ -1,0 +1,1 @@
+- Rich text: `LinkFx::decos` now indexes existing underlines and backgrounds by position and caches per-line run metrics instead of linearly rescanning `out` and `line.runs()` for each link box, keeping hover/focus decoration updates linear without changing painted decorations.

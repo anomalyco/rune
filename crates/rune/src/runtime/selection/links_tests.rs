@@ -428,3 +428,310 @@ fn link_fx_decos_scans_each_lines_end_once_and_matches_underline_edges() {
     let got: Vec<_> = actual.iter().map(|d| (d.rect, d.color, d.radius)).collect();
     assert_eq!(got, expected, "LinkFx::decos underlines must match underline_edges identically");
 }
+
+fn reference_link_decos(
+    fx: &LinkFx,
+    layout: &parley::Layout<crate::text::Ink>,
+    len: usize,
+    s: f32,
+    origin: [f32; 2],
+    out: &mut Vec<PaintedDeco>,
+) {
+    for &(a, b, p, bg_pad, has_rings) in &fx.0 {
+        for (bb, line) in boxes(layout, len, a, b) {
+            let (x0, w) = (origin[0] + bb.x0 as f32, (bb.x1 - bb.x0) as f32);
+            if p.bg.is_some() || p.ring.is_some() {
+                let pad = bg_pad * s;
+                let (mut y0, mut y1) = ((origin[1] + bb.y0 as f32).round(), (origin[1] + bb.y1 as f32).round());
+                if let Some(l) = layout.get(line) {
+                    let base = origin[1] + l.metrics().baseline;
+                    let (mut asc, mut desc) = (0.0f32, 0.0f32);
+                    for run in l.runs() {
+                        let r = run.text_range();
+                        if r.start < b as usize && (a as usize) < r.end {
+                            let fm = run.font_metrics();
+                            (asc, desc) = (asc.max(fm.ascent), desc.max(fm.descent.abs()));
+                        }
+                    }
+                    if asc > 0.0 || desc > 0.0 {
+                        y0 = (base - asc - 1.0 * s).round();
+                        y1 = (base + desc + 1.0 * s).round();
+                    }
+                }
+                let rect = [x0 - pad, y0, w + 2.0 * pad, y1 - y0];
+                let ring = p.ring.map(|(c, rw)| (c, rw * s));
+                let contained = |d: &&PaintedDeco| {
+                    d.radius > 0.0
+                        && d.rect[0] >= rect[0] - 1.5
+                        && d.rect[0] + d.rect[2] <= rect[0] + rect[2] + 1.5
+                        && d.rect[1] < y1
+                        && y0 < d.rect[1] + d.rect[3]
+                };
+                let split = has_rings
+                    && out.iter().filter(contained).any(|d| d.ring.is_some())
+                    && out.iter().filter(contained).any(|d| (d.rect[0] - rect[0]).abs() < 1.5)
+                    && out.iter().filter(contained).any(|d| (d.rect[0] + d.rect[2] - rect[0] - rect[2]).abs() < 1.5);
+                let mut matched = false;
+                for d in out.iter_mut().filter(|d| {
+                    d.radius > 0.0
+                        && d.rect[0] >= rect[0] - 1.5
+                        && d.rect[0] + d.rect[2] <= rect[0] + rect[2] + 1.5
+                        && (split || ((d.rect[0] - rect[0]).abs() < 1.5 && (d.rect[2] - rect[2]).abs() < 1.5))
+                        && d.rect[1] < y1
+                        && y0 < d.rect[1] + d.rect[3]
+                }) {
+                    matched = true;
+                    if let Some(c) = p.bg {
+                        d.color = c;
+                    }
+                    if ring.is_some() {
+                        d.ring = ring;
+                    }
+                }
+                if !matched {
+                    out.push(PaintedDeco {
+                        deco: Deco { rect, color: p.bg.unwrap_or(Color::TRANSPARENT), radius: 4.0 * s },
+                        ring,
+                        byte: b.saturating_sub(1),
+                    });
+                }
+            }
+            if let (Some(c), Some(l)) = (p.underline, layout.get(line)) {
+                let y = (origin[1] + l.metrics().baseline + 2.0 * s).round();
+                let (x0, x1) = crate::text::underline_edges(&l, origin[0], bb.x0 as f32, bb.x1 as f32);
+                let w = x1 - x0;
+                if let Some(d) = out.iter_mut().find(|d| {
+                    d.radius == 0.0
+                        && (d.rect[0] - x0).abs() < 1.5
+                        && (d.rect[2] - w).abs() < 1.5
+                        && (d.rect[1] - y).abs() < 1.5
+                }) {
+                    d.color = c;
+                } else {
+                    out.push(PaintedDeco {
+                        deco: Deco { rect: [x0, y, w, s.max(1.0)], color: c, radius: 0.0 },
+                        ring: None,
+                        byte: 0,
+                    });
+                }
+            }
+        }
+    }
+}
+
+fn deco_snapshot(out: &[PaintedDeco]) -> Vec<([f32; 4], Color, f32, Option<(Color, f32)>, u32)> {
+    out.iter().map(|d| (d.rect, d.color, d.radius, d.ring, d.byte)).collect()
+}
+
+fn clone_decos(out: &[PaintedDeco]) -> Vec<PaintedDeco> {
+    out.iter().map(|d| PaintedDeco { deco: d.deco, ring: d.ring, byte: d.byte }).collect()
+}
+
+#[test]
+fn link_fx_decos_bg_and_underline_scans_scale_linearly_with_boxes() {
+    let mut ts = crate::text::TextSystem::default();
+    let scale = 2.0;
+    let origin = [11.25, 23.5];
+    let bg_rest = Color { r: 0.2, g: 0.3, b: 0.4, a: 1.0 };
+    let bg_hover = Color { r: 0.5, g: 0.6, b: 0.7, a: 1.0 };
+    let ring_col = Color { r: 0.1, g: 0.4, b: 0.9, a: 1.0 };
+
+    // Case 1: Single link split by n pills on one line (many boxes + many runs on line 0,
+    // with pre-existing pill chips, resting backgrounds, rings and underlines in `out`).
+    let measure_single_line = |ts: &mut crate::text::TextSystem, n: usize| {
+        let mut src = String::new();
+        let mut pills = Vec::with_capacity(n);
+        let mut spans = Vec::with_capacity(n);
+        let mut rings = Vec::with_capacity(n);
+        for i in 0..n {
+            let ws = src.len();
+            src.push_str("ab");
+            let we = src.len();
+            spans.push(crate::Span::new(ws, we).bg(bg_rest, 2.0).underline(Color::WHITE));
+            if i % 3 == 0 {
+                rings.push((ws as u32, we as u32, ring_col, 1.0));
+            }
+            src.push(' ');
+            let ps = src.len() as u32;
+            src.push('p');
+            let pe = src.len() as u32;
+            pills.push(crate::text::PillChip { start: ps, end: pe, icon: None, bg: None, fg: None, bare: None });
+            if i + 1 < n {
+                src.push(' ');
+            }
+        }
+        let layout = ts.layout_blocks(&src, &spans, &[], &pills, TextStyle::new(14.0, 400.0), scale, None, parley::Alignment::Start);
+        let mut base_out = Vec::new();
+        let mut icons = Vec::new();
+        crate::text::pill_chips(&layout, &pills, 14.0, scale, origin, bg_rest, &mut base_out, &mut icons);
+        ts.decorations_with_rings(&layout, &spans, &rings, 4.0, scale, origin, &mut base_out);
+        let fx = LinkFx(vec![(
+            0,
+            src.len() as u32,
+            crate::text::LinkPaint::new().bg(bg_hover).underline(Color::BLACK),
+            2.0,
+            true,
+        )]);
+        let mut got = clone_decos(&base_out);
+        let _ = take_link_deco_visits();
+        fx.decos(&layout, src.len(), scale, origin, &mut got);
+        let visits = take_link_deco_visits();
+        let mut expected = base_out;
+        reference_link_decos(&fx, &layout, src.len(), scale, origin, &mut expected);
+        assert_eq!(deco_snapshot(&got), deco_snapshot(&expected), "single-line link decos must match reference");
+        visits
+    };
+
+    let (r40, b40, u40) = measure_single_line(&mut ts, 40);
+    let (r80, b80, u80) = measure_single_line(&mut ts, 80);
+
+    // Case 2: Single wrapped link spanning n lines (no pills), with both bg and underline.
+    let measure_multiline = |ts: &mut crate::text::TextSystem, n: usize| {
+        let src = (0..n).map(|i| format!("line{i:03}")).collect::<Vec<_>>().join("\n");
+        let spans = vec![crate::Span::new(0, src.len()).bg(bg_rest, 2.0).underline(Color::WHITE)];
+        let layout = ts.layout_rich(&src, &spans, TextStyle::new(14.0, 400.0), scale, None);
+        let mut base_out = Vec::new();
+        ts.decorations_with_rings(&layout, &spans, &[], 4.0, scale, origin, &mut base_out);
+        let fx = LinkFx(vec![(
+            0,
+            src.len() as u32,
+            crate::text::LinkPaint::new().bg(bg_hover).underline(Color::BLACK),
+            2.0,
+            false,
+        )]);
+        let mut got = clone_decos(&base_out);
+        let _ = take_link_deco_visits();
+        fx.decos(&layout, src.len(), scale, origin, &mut got);
+        let visits = take_link_deco_visits();
+        let mut expected = base_out;
+        reference_link_decos(&fx, &layout, src.len(), scale, origin, &mut expected);
+        assert_eq!(deco_snapshot(&got), deco_snapshot(&expected), "multi-line link decos must match reference");
+        visits
+    };
+
+    let (mr40, mb40, mu40) = measure_multiline(&mut ts, 40);
+    let (mr80, mb80, mu80) = measure_multiline(&mut ts, 80);
+
+    // Case 3: n distinct links on a single line in LinkFx, with resting spans and underlines.
+    let measure_many_links = |ts: &mut crate::text::TextSystem, n: usize| {
+        let mut src = String::new();
+        let mut spans = Vec::with_capacity(n);
+        let mut fx_items = Vec::with_capacity(n);
+        for i in 0..n {
+            if i > 0 {
+                src.push(' ');
+            }
+            let a = src.len();
+            src.push_str(&format!("lnk{i:03}"));
+            let b = src.len();
+            let sp = crate::Span::new(a, b).bg(bg_rest, 2.0).underline(Color::WHITE);
+            spans.push(if i % 2 == 0 { sp.bold() } else { sp });
+            fx_items.push((
+                a as u32,
+                b as u32,
+                crate::text::LinkPaint::new().bg(bg_hover).underline(Color::BLACK),
+                2.0,
+                false,
+            ));
+        }
+        let layout = ts.layout_rich(&src, &spans, TextStyle::new(14.0, 400.0), scale, None);
+        let mut base_out = Vec::new();
+        ts.decorations_with_rings(&layout, &spans, &[], 4.0, scale, origin, &mut base_out);
+        let fx = LinkFx(fx_items);
+        let mut got = clone_decos(&base_out);
+        let _ = take_link_deco_visits();
+        fx.decos(&layout, src.len(), scale, origin, &mut got);
+        let visits = take_link_deco_visits();
+        let mut expected = base_out;
+        reference_link_decos(&fx, &layout, src.len(), scale, origin, &mut expected);
+        assert_eq!(deco_snapshot(&got), deco_snapshot(&expected), "many-links decos must match reference");
+        visits
+    };
+
+    let (lr40, lb40, lu40) = measure_many_links(&mut ts, 40);
+    let (lr80, lb80, lu80) = measure_many_links(&mut ts, 80);
+    assert!(r80 > 0 && b80 > 0 && u80 > 0 && mb80 > 0 && mu80 > 0 && lr80 > 0 && lb80 > 0 && lu80 > 0);
+    assert!(
+        r80 * 10 <= r40 * 25,
+        "bg run visits on one line should scale ~2x when doubling n, not ~4x (r40={r40}, r80={r80})"
+    );
+    assert!(
+        b80 * 10 <= b40 * 25,
+        "bg out visits on one line should scale ~2x when doubling n, not ~4x (b40={b40}, b80={b80})"
+    );
+    assert!(
+        u80 * 10 <= u40 * 25,
+        "underline out visits on one line should scale ~2x when doubling n, not ~4x (u40={u40}, u80={u80})"
+    );
+    assert!(
+        mr80 * 10 <= mr40 * 25,
+        "multi-line bg run visits should scale ~2x (mr40={mr40}, mr80={mr80})"
+    );
+    assert!(
+        mb80 * 10 <= mb40 * 25,
+        "multi-line bg out visits should scale ~2x (mb40={mb40}, mb80={mb80})"
+    );
+    assert!(
+        mu80 * 10 <= mu40 * 25,
+        "multi-line underline out visits should scale ~2x (mu40={mu40}, mu80={mu80})"
+    );
+    assert!(
+        lr80 * 10 <= lr40 * 25,
+        "many-links bg run visits should scale ~2x (lr40={lr40}, lr80={lr80})"
+    );
+    assert!(
+        lb80 * 10 <= lb40 * 25,
+        "many-links bg out visits should scale ~2x (lb40={lb40}, lb80={lb80})"
+    );
+    assert!(
+        lu80 * 10 <= lu40 * 25,
+        "many-links underline out visits should scale ~2x (lu40={lu40}, lu80={lu80})"
+    );
+}
+
+#[test]
+fn link_fx_decos_matches_reference_for_split_rings_inline_code_and_overlaps() {
+    let mut ts = crate::text::TextSystem::default();
+    let scale = 2.0;
+    let origin = [7.5, 13.0];
+    let bg_rest = Color { r: 0.9, g: 0.9, b: 0.9, a: 1.0 };
+    let bg_code = Color { r: 0.8, g: 0.8, b: 0.85, a: 1.0 };
+    let bg_hover = Color { r: 0.3, g: 0.5, b: 0.9, a: 1.0 };
+    let bg_focus = Color { r: 0.2, g: 0.7, b: 0.4, a: 1.0 };
+    let ring_col = Color { r: 0.1, g: 0.2, b: 0.8, a: 1.0 };
+
+    // 1. Ring splits one uniform link background into three pieces; hover recolors all three
+    //    in place, while a second link with only an isolated inline-code span inside it pushes
+    //    a fresh hover background rather than mistaking the code chip for the whole link.
+    let src = "aa middle zz  and  pre code post";
+    let (l1a, l1b) = (0usize, 12usize);
+    let (l2a, l2b) = (19usize, src.len());
+    let code_a = src.find("code").unwrap();
+    let spans = vec![
+        crate::Span::new(l1a, l1b).bg(bg_rest, 3.0).underline(Color::WHITE),
+        crate::Span::new(code_a, code_a + 4).mono().bg(bg_code, 2.0),
+    ];
+    let rings = vec![(3u32, 9u32, ring_col, 1.0)];
+    let layout = ts.layout_rich(src, &spans, TextStyle::new(14.0, 400.0), scale, None);
+    let mut base_out = Vec::new();
+    ts.decorations_with_rings(&layout, &spans, &rings, 4.0, scale, origin, &mut base_out);
+
+    // Exercise both single-entry (fast path) and multi-entry (indexed path), including duplicate
+    // overlapping link paints that recolor a newly-pushed background/underline in place.
+    let cases = vec![
+        LinkFx(vec![(l1a as u32, l1b as u32, crate::text::LinkPaint::new().bg(bg_hover).underline(Color::BLACK), 3.0, true)]),
+        LinkFx(vec![(l2a as u32, l2b as u32, crate::text::LinkPaint::new().bg(bg_hover).underline(Color::BLACK), 2.0, true)]),
+        LinkFx(vec![
+            (l1a as u32, l1b as u32, crate::text::LinkPaint::new().bg(bg_hover).underline(Color::BLACK), 3.0, true),
+            (l2a as u32, l2b as u32, crate::text::LinkPaint::new().bg(bg_hover).underline(Color::BLACK), 2.0, true),
+            (l2a as u32, l2b as u32, crate::text::LinkPaint::new().bg(bg_focus).ring(ring_col, 1.0).underline(Color::WHITE), 2.0, true),
+        ]),
+    ];
+    for (idx, fx) in cases.iter().enumerate() {
+        let mut got = clone_decos(&base_out);
+        fx.decos(&layout, src.len(), scale, origin, &mut got);
+        let mut expected = clone_decos(&base_out);
+        reference_link_decos(fx, &layout, src.len(), scale, origin, &mut expected);
+        assert_eq!(deco_snapshot(&got), deco_snapshot(&expected), "case {idx} must match reference");
+    }
+}
