@@ -436,3 +436,118 @@ fn a11y_mirror_strips_unsafe_hrefs_and_sanitizes_named_fonts() {
     let gf = items.iter().find(|i| i.text == "good font").unwrap().font.as_ref().unwrap();
     assert_eq!(gf.family, "Inter");
 }
+
+#[test]
+fn checked_state_maps_to_role_appropriate_aria_attributes() {
+    fn view(on: &bool, _: &mut Cx<bool>) -> El {
+        let on = *on;
+        crate::col().w_full().gap(4.0)
+            .child(crate::row().key("wrap").role("button").label("Wrap").checked(on)
+                .focusable(true).on_press(|s: &mut bool| *s = !*s).size(80.0, 24.0))
+            .child(crate::row().key("mixed-btn").role("button").label("Bold").checked_mixed()
+                .focusable(true).on_press(|_: &mut bool| {}).size(80.0, 24.0))
+            .child(crate::row().key("plain-btn").role("button").label("Run")
+                .focusable(true).on_press(|_: &mut bool| {}).size(80.0, 24.0))
+            .child(crate::row().key("check").role("checkbox").label("All").checked_mixed()
+                .focusable(true).on_press(|_: &mut bool| {}).size(80.0, 24.0))
+            .child(crate::row().key("switch").role("switch").label("Lights").checked(on)
+                .focusable(true).on_press(|s: &mut bool| *s = !*s).size(80.0, 24.0))
+            .child(crate::row().key("radio-checked").role("radio").label("Fast").checked(true)
+                .focusable(true).on_press(|_: &mut bool| {}).size(80.0, 24.0))
+            .child(crate::row().key("radio-sel").role("radio").label("Slow").focus_selected(true)
+                .focusable(true).on_press(|_: &mut bool| {}).size(80.0, 24.0))
+            .child(crate::row().key("menu-check").role("menuitemcheckbox").label("Minimap").checked(true)
+                .focusable(true).on_press(|_: &mut bool| {}).size(80.0, 24.0))
+            .child(crate::row().key("menu-radio").role("menuitemradio").label("Dark").checked(false)
+                .focusable(true).on_press(|_: &mut bool| {}).size(80.0, 24.0))
+            .child(crate::row().key("menu-plain").role("menuitem").label("Wrap item").checked(true)
+                .focusable(true).on_press(|_: &mut bool| {}).size(80.0, 24.0))
+            .child(crate::row().key("tab-checked").role("tab").label("Files").checked(true)
+                .focusable(true).on_press(|_: &mut bool| {}).size(80.0, 24.0))
+            .child(crate::row().key("tab-sel").role("tab").label("Search").focus_selected(true)
+                .focusable(true).on_press(|_: &mut bool| {}).size(80.0, 24.0))
+            .child(crate::row().key("opt-checked").role("option").label("Item A").checked(true)
+                .focusable(true).on_press(|_: &mut bool| {}).size(80.0, 24.0))
+            .child(crate::row().key("opt-off").role("option").label("Item B").checked(false)
+                .focusable(true).on_press(|_: &mut bool| {}).size(80.0, 24.0))
+    }
+
+    let mut rt = Runtime::new(false, view, (480.0, 600.0), Env::default());
+    rt.frame(0.0);
+    let mut mirror = A11yMirror::default();
+    let parse_items = |json: &str| -> Vec<serde_json::Value> { serde_json::from_str(json).unwrap() };
+    let find = |items: &[serde_json::Value], label: &str| -> serde_json::Value {
+        items.iter().find(|v| v["t"] == label).unwrap_or_else(|| panic!("missing {label}: {items:?}")).clone()
+    };
+
+    let items = parse_items(rt.web_a11y(&mut mirror).expect("initial mirror"));
+    let wrap = find(&items, "Wrap");
+    assert_eq!(wrap.get("o"), None);
+    assert_eq!(wrap.get("pr"), Some(&json!("false")));
+    assert_eq!(wrap.get("c"), None);
+    assert_eq!(wrap.get("se"), None);
+
+    let mixed_btn = find(&items, "Bold");
+    assert_eq!(mixed_btn.get("pr"), Some(&json!("mixed")));
+    assert_eq!(mixed_btn.get("c"), None);
+
+    let plain_btn = find(&items, "Run");
+    assert_eq!(plain_btn.get("pr"), None);
+    assert_eq!(plain_btn.get("c"), None);
+    assert_eq!(plain_btn.get("se"), None);
+
+    for (label, role, val) in [
+        ("All", "checkbox", "mixed"),
+        ("Lights", "switch", "false"),
+        ("Fast", "radio", "true"),
+        ("Slow", "radio", "true"),
+        ("Minimap", "menuitemcheckbox", "true"),
+        ("Dark", "menuitemradio", "false"),
+        ("Wrap item", "menuitem", "true"),
+    ] {
+        let it = find(&items, label);
+        assert_eq!(it.get("o"), Some(&json!(role)), "{label} role");
+        assert_eq!(it.get("c"), Some(&json!(val)), "{label} checked");
+        assert_eq!(it.get("pr"), None, "{label} must not emit pressed");
+    }
+
+    for (label, role, val) in [
+        ("Files", "tab", true),
+        ("Search", "tab", true),
+        ("Item A", "option", true),
+        ("Item B", "option", false),
+    ] {
+        let it = find(&items, label);
+        assert_eq!(it.get("o"), Some(&json!(role)), "{label} role");
+        assert_eq!(it.get("se"), Some(&json!(val)), "{label} selected");
+        assert_eq!(it.get("c"), None, "{label} must not emit checked");
+        assert_eq!(it.get("pr"), None, "{label} must not emit pressed");
+    }
+
+    // Activating the toggle button flips both aria-pressed on the button and aria-checked on the switch.
+    let wrap_path = wrap["p"].as_str().unwrap().to_owned();
+    assert!(rt.web_a11y_action(&json!({"kind": "a11y_press", "path": wrap_path})));
+    rt.frame(0.0);
+    let after = parse_items(rt.web_a11y(&mut mirror).expect("toggle updates mirror"));
+    assert_eq!(find(&after, "Wrap").get("pr"), Some(&json!("true")));
+    assert_eq!(find(&after, "Wrap").get("c"), None);
+    assert_eq!(find(&after, "Lights").get("c"), Some(&json!("true")));
+
+    // The focus proxy uses the same role-specific attributes.
+    let focus_json = |rt: &mut Runtime<bool>, mirror: &mut A11yMirror, key: &str| -> serde_json::Value {
+        let key = key.to_owned();
+        rt.update(move |_, tx| tx.focus(key, true));
+        rt.frame(0.0);
+        serde_json::from_str(rt.core().web_a11y_focus(mirror).expect("focus proxy update")).unwrap()
+    };
+    let f_wrap = focus_json(&mut rt, &mut mirror, "wrap");
+    assert_eq!((f_wrap.get("o"), f_wrap.get("pr"), f_wrap.get("c")), (Some(&json!("button")), Some(&json!("true")), None));
+    let f_mixed = focus_json(&mut rt, &mut mirror, "mixed-btn");
+    assert_eq!((f_mixed.get("o"), f_mixed.get("pr"), f_mixed.get("c")), (Some(&json!("button")), Some(&json!("mixed")), None));
+    let f_check = focus_json(&mut rt, &mut mirror, "check");
+    assert_eq!((f_check.get("o"), f_check.get("c"), f_check.get("pr")), (Some(&json!("checkbox")), Some(&json!("mixed")), None));
+    let f_tab = focus_json(&mut rt, &mut mirror, "tab-checked");
+    assert_eq!((f_tab.get("o"), f_tab.get("s"), f_tab.get("c"), f_tab.get("pr")), (Some(&json!("tab")), Some(&json!(true)), None, None));
+    let f_opt = focus_json(&mut rt, &mut mirror, "opt-checked");
+    assert_eq!((f_opt.get("o"), f_opt.get("s"), f_opt.get("c"), f_opt.get("pr")), (Some(&json!("option")), Some(&json!(true)), None, None));
+}

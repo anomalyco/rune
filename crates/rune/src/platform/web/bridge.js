@@ -935,8 +935,9 @@ export function syncA11y(h, json) {
         if (tag === 'button') {
             if (item.x === true || item.x === false) el.setAttribute('aria-expanded', String(item.x));
             else el.removeAttribute('aria-expanded');
-            // A control's role and states (a palette's option, a tab, a switch): `control_role`.
-            const states = [['role', item.o], ['aria-selected', item.se === undefined ? undefined : String(item.se)], ['aria-checked', item.c],
+            // A control's role and states (a palette's option, a tab, a switch, a toggle button).
+            const states = [['role', item.o], ['aria-selected', item.se === undefined ? undefined : String(item.se)],
+                ['aria-checked', item.c], ['aria-pressed', item.pr],
                 ['aria-posinset', item.n ? String(item.n[0]) : undefined], ['aria-setsize', item.n ? String(item.n[1]) : undefined]];
             for (const [name, value] of states) {
                 if (value === undefined) el.removeAttribute(name);
@@ -1015,6 +1016,7 @@ export function focusA11y(h, json) {
     el.setAttribute('aria-label', f.t ?? '');
     if (f.d) el.setAttribute('aria-description', f.d);
     if (f.c) el.setAttribute('aria-checked', f.c);
+    if (f.pr) el.setAttribute('aria-pressed', f.pr);
     if (f.s !== undefined) el.setAttribute('aria-selected', String(f.s));
     if (f.x !== undefined) el.setAttribute('aria-expanded', String(f.x));
     if (f.n) { el.setAttribute('aria-posinset', String(f.n[0])); el.setAttribute('aria-setsize', String(f.n[1])); }
