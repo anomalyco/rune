@@ -29,6 +29,7 @@ mod surface;
 mod time;
 
 use alloc::{
+    collections::VecDeque,
     string::{String, ToString as _},
     sync::Arc,
     vec::Vec,
@@ -684,6 +685,21 @@ impl crate::Queue for Queue {
         _surface_textures: &[&SurfaceTexture],
         (signal_fence, signal_value): (&Fence, crate::FenceValue),
     ) -> Result<(), crate::DeviceError> {
+        // Every command buffer of this submission is counted before any is
+        // committed, so a fast one cannot complete the submission early.
+        // Once registered, a failure to create a command buffer loses the
+        // fence, as the submission can never complete.
+        let fence_lost = || {
+            signal_fence.sync.0.lock().lost = true;
+            signal_fence.sync.1.notify_all();
+            crate::DeviceError::Lost
+        };
+        signal_fence
+            .sync
+            .0
+            .lock()
+            .in_flight
+            .push_back((signal_value, command_buffers.len().max(1)));
         autoreleasepool(|_| {
             // Drain caller-staged waits onto a dedicated command buffer
             // committed before the user CBs.
@@ -719,9 +735,10 @@ impl crate::Queue for Queue {
                         .shared
                         .raw
                         .commandBufferWithUnretainedReferences()
-                        .ok_or(crate::DeviceError::Lost)?;
+                        .ok_or_else(fence_lost)?;
                     wait_cb.setLabel(Some(ns_string!("(wgpu internal) Wait")));
-                    signal_fence.lose_on_error(&wait_cb);
+                    signal_fence.sync.0.lock().add_command_buffer(signal_value);
+                    signal_fence.attach_completed_handler(&wait_cb, signal_value);
                     for (event, value) in waits.drain(..) {
                         wait_cb.encodeWaitForEvent_value(event.as_ref(), value);
                     }
@@ -736,17 +753,6 @@ impl crate::Queue for Queue {
             }
 
             let extra_command_buffer = {
-                let fence_sync = Arc::clone(&signal_fence.sync);
-                let fence_lost = Arc::clone(&signal_fence.lost);
-                let block = block2::RcBlock::new(move |cmd_buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
-                    // SAFETY: Metal passes the command buffer that completed.
-                    if command_buffer_failed(unsafe { cmd_buf.as_ref() }) {
-                        fence_lost.store(true, atomic::Ordering::Release);
-                    }
-                    *fence_sync.0.lock() = signal_value;
-                    fence_sync.1.notify_all();
-                });
-
                 let raw = match command_buffers.last() {
                     Some(&cmd_buf) => cmd_buf.raw.clone(),
                     None => {
@@ -755,17 +761,10 @@ impl crate::Queue for Queue {
                         self.shared
                             .raw
                             .commandBufferWithUnretainedReferences()
-                            .ok_or(crate::DeviceError::Lost)?
+                            .ok_or_else(fence_lost)?
                     }
                 };
                 raw.setLabel(Some(ns_string!("(wgpu internal) Signal")));
-                unsafe { raw.addCompletedHandler(block2::RcBlock::as_ptr(&block)) };
-
-                signal_fence.maintain();
-                signal_fence
-                    .pending_command_buffers
-                    .write()
-                    .push((signal_value, raw.clone()));
 
                 if let Some(shared_event) = &signal_fence.shared_event {
                     raw.encodeSignalEvent_value(shared_event.as_ref(), signal_value);
@@ -787,11 +786,8 @@ impl crate::Queue for Queue {
                 }
             };
 
-            // The last one's handler above advances the fence; any may fail.
-            for cmd_buffer in command_buffers.iter().rev().skip(1) {
-                signal_fence.lose_on_error(&cmd_buffer.raw);
-            }
             for cmd_buffer in command_buffers {
+                signal_fence.attach_completed_handler(&cmd_buffer.raw, signal_value);
                 cmd_buffer.raw.commit();
                 // One command buffer per `end_encoding` call moves from the
                 // "created but not yet submitted" bucket into the submitted
@@ -804,6 +800,7 @@ impl crate::Queue for Queue {
             }
 
             if let Some(raw) = extra_command_buffer {
+                signal_fence.attach_completed_handler(&raw, signal_value);
                 raw.commit();
             }
             Ok(())
@@ -1260,13 +1257,37 @@ impl crate::DynQuerySet for QuerySet {}
 unsafe impl Send for QuerySet {}
 unsafe impl Sync for QuerySet {}
 
+/// Progress of the submissions signalling a [`Fence`].
+#[derive(Debug, Default)]
+struct FenceState {
+    /// The highest value whose submission, and every earlier one, finished.
+    completed: crate::FenceValue,
+    /// Submissions in submit order, with the number of their command buffers
+    /// still running.
+    in_flight: VecDeque<(crate::FenceValue, usize)>,
+    /// Some command buffer ended with an error.
+    lost: bool,
+}
+
+impl FenceState {
+    fn add_command_buffer(&mut self, value: crate::FenceValue) {
+        let entry = self.in_flight.iter_mut().rev().find(|e| e.0 == value);
+        entry.expect("submission is not in flight").1 += 1;
+    }
+
+    fn finish_command_buffer(&mut self, value: crate::FenceValue) {
+        let entry = self.in_flight.iter_mut().rev().find(|e| e.0 == value);
+        entry.expect("submission is not in flight").1 -= 1;
+        while let Some(&(value, 0)) = self.in_flight.front() {
+            self.completed = self.completed.max(value);
+            self.in_flight.pop_front();
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Fence {
-    sync: Arc<(Mutex<crate::FenceValue>, Condvar)>,
-    /// A command buffer failed (`command_buffer_failed`): the device is lost.
-    lost: Arc<atomic::AtomicBool>,
-    /// The pending fence values have to be ascending.
-    pending_command_buffers: RwLock<Vec<PendingCommandBuffer>>,
+    sync: Arc<(Mutex<FenceState>, Condvar)>,
     shared_event: Option<Retained<ProtocolObject<dyn MTLSharedEvent>>>,
 }
 
@@ -1288,50 +1309,44 @@ fn command_buffer_failed(cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>) -> bool
     true
 }
 
-type PendingCommandBuffer = (
-    crate::FenceValue,
-    Retained<ProtocolObject<dyn MTLCommandBuffer>>,
-);
-
 impl crate::DynFence for Fence {}
 
 unsafe impl Send for Fence {}
 unsafe impl Sync for Fence {}
 
 impl Fence {
-    fn get_latest(&self) -> crate::FenceValue {
-        let mut max_value = *self.sync.0.lock();
-        let pending_command_buffers = self.pending_command_buffers.read();
-        for &(value, ref cmd_buf) in pending_command_buffers.iter() {
-            // A failed one finishes in its completion handler, once the loss is set.
-            if cmd_buf.status() == MTLCommandBufferStatus::Completed {
-                max_value = value;
-            }
+    fn get_latest(&self) -> Result<crate::FenceValue, crate::DeviceError> {
+        let state = self.sync.0.lock();
+        if state.lost {
+            Err(crate::DeviceError::Lost)
+        } else {
+            Ok(state.completed)
         }
-        max_value
     }
 
-    fn maintain(&self) {
-        let latest = self.get_latest();
-        self.pending_command_buffers
-            .write()
-            .retain(|&(value, _)| value > latest);
+    /// Makes `cmd_buf` count towards the completion of submission `value`,
+    /// which must be in flight.
+    fn attach_completed_handler(
+        &self,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        value: crate::FenceValue,
+    ) {
+        let sync = Arc::clone(&self.sync);
+        let block = block2::RcBlock::new(
+            move |cmd_buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+                let failed = command_buffer_failed(unsafe { cmd_buf.as_ref() });
+                let mut state = sync.0.lock();
+                state.lost |= failed;
+                state.finish_command_buffer(value);
+                drop(state);
+                sync.1.notify_all();
+            },
+        );
+        unsafe { cmd_buf.addCompletedHandler(block2::RcBlock::as_ptr(&block)) };
     }
 
     pub fn raw_shared_event(&self) -> Option<&ProtocolObject<dyn MTLSharedEvent>> {
         self.shared_event.as_deref()
-    }
-
-    /// `cmd_buf` loses the device if it fails (`command_buffer_failed`).
-    fn lose_on_error(&self, cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>) {
-        let lost = Arc::clone(&self.lost);
-        let block = block2::RcBlock::new(move |cmd_buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
-            // SAFETY: Metal passes the command buffer that completed.
-            if command_buffer_failed(unsafe { cmd_buf.as_ref() }) {
-                lost.store(true, atomic::Ordering::Release);
-            }
-        });
-        unsafe { cmd_buf.addCompletedHandler(block2::RcBlock::as_ptr(&block)) };
     }
 }
 
@@ -1447,4 +1462,46 @@ pub enum OsType {
     Ios,
     Tvos,
     VisionOs,
+}
+
+#[cfg(test)]
+mod fence_tests {
+    use super::*;
+
+    fn fence() -> Fence {
+        Fence { sync: Arc::new((Mutex::new(FenceState::default()), Condvar::new())), shared_event: None }
+    }
+
+    /// What a command buffer's completion handler does (`Fence::attach_completed_handler`).
+    fn finish(fence: &Fence, value: crate::FenceValue, failed: bool) {
+        let mut state = fence.sync.0.lock();
+        state.lost |= failed;
+        state.finish_command_buffer(value);
+    }
+
+    #[test]
+    fn a_submission_finishes_with_its_last_command_buffer_in_any_order() {
+        let f = fence();
+        f.sync.0.lock().in_flight.push_back((1, 2));
+        f.sync.0.lock().in_flight.push_back((2, 1));
+        finish(&f, 2, false);
+        assert_eq!(f.get_latest().unwrap(), 0, "a later submission doesn't finish an earlier one");
+        finish(&f, 1, false);
+        assert_eq!(f.get_latest().unwrap(), 0, "one of its two command buffers is still running");
+        finish(&f, 1, false);
+        assert_eq!(f.get_latest().unwrap(), 2);
+    }
+
+    #[test]
+    fn a_failed_submission_never_reads_as_finished() {
+        let f = fence();
+        f.sync.0.lock().in_flight.push_back((1, 2));
+        // The last command buffer completes first; the earlier one fails after.
+        finish(&f, 1, false);
+        assert_eq!(f.get_latest().unwrap(), 0);
+        finish(&f, 1, true);
+        // The loss and the fence's advance are one change: no read sees the value without it.
+        assert!(f.get_latest().is_err());
+        assert_eq!(f.sync.0.lock().completed, 1);
+    }
 }
