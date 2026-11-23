@@ -1,0 +1,1 @@
+- Staging: returned upload chunks up to the 4 MiB keep cap are now retained for reuse instead of freeing every chunk above 1 MiB, and `Staging` now picks the smallest fitting free chunk so 2–4 MiB uploads reuse buffers without churning allocations.

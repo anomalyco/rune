@@ -14,6 +14,8 @@
 
 mod buffer;
 pub mod health;
+#[cfg(test)]
+mod tests;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
@@ -40,7 +42,7 @@ const CHUNK: u64 = 128 * 1024;
 /// Returned chunks kept for reuse, by count and in bytes; larger chunks are freed on return.
 const KEEP_CHUNKS: usize = 8;
 const KEEP_BYTES: u64 = 4 << 20;
-const KEEP_CHUNK_MAX: u64 = 1 << 20;
+const KEEP_CHUNK_MAX: u64 = KEEP_BYTES;
 /// Staged bytes past which a write first submits what is pending, so a caller that never
 /// flushes can't grow the chunks without bound.
 const MAX_PENDING: u64 = 16 << 20;
@@ -244,7 +246,11 @@ impl Inner {
             Some(i) => i,
             None => {
                 self.receive();
-                let chunk = match self.free.iter().position(|c| c.buffer.size() >= size) {
+                let chunk = match self.free.iter().enumerate()
+                    .filter(|(_, c)| c.buffer.size() >= size)
+                    .min_by_key(|(_, c)| c.buffer.size())
+                    .map(|(i, _)| i)
+                {
                     Some(i) => self.free.swap_remove(i),
                     None => {
                         self.stats.chunks += 1;
