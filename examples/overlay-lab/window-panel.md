@@ -20,7 +20,7 @@ borderless, transparent and non-resizable, with no inherited minimum size. AppSp
 size. On macOS it prepares even with `App::windowless()`. `on_created` still means native
 creation; `on_ready` means the first surface frame completed on the GPU, not merely submission.
 Both callbacks run on the event thread. Readiness is per native lifetime, not a freshness
-guarantee for later state updates. Headless rendering does not invoke native callbacks.
+guarantee for later state updates. Headless rendering does not invoke `on_created`, and skips `on_ready` unless `--realtime` is passed (which runs it after the first frame).
 
 `WindowHandle::set_visible(true)`/`show()` and `AppHandle::show()`/`open()` reveal cached
 pixels and take keys without app activation. A show before readiness waits behind the

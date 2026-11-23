@@ -62,9 +62,11 @@ and query again. The native reference refreshes if a retained host is recreated.
 Borrow raw-window-handles only through the handle's callback while the native
 window is alive, on a platform-appropriate thread.
 
-These are winit windows, not non-activating `NSPanel`s. Non-activating panels,
-all-Spaces/fullscreen-space behavior and a status item still require Rune's own
-Mac shell. This example does not implement them.
+These are winit windows, not non-activating `NSPanel`s. On macOS, non-activating
+panels with all-Spaces and full-screen policy are available through `App::overlay`,
+`WindowOptions::launcher_panel()`, and `MacWindowOptions::nonactivating_panel(true)`
+(`MacWindowOptions::collection_behavior` sets Spaces policy on ordinary windows);
+macOS status items are not implemented. This example does not use them.
 
 All windows share a GPU device. Unsupported transparency uses opaque rendering
 with a diagnostic, and unsupported click-through reports the platform error.

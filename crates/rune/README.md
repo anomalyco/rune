@@ -977,7 +977,11 @@ close/recreation. On Wayland, use `activate(token)` for authorized focus; tokenl
 also restores them. On macOS, no-focus show uses `orderFrontRegardless`, rather than winit's
 `makeKeyAndOrderFront`. Window-manager focus policy still applies. `WindowHandle`
 also provides show/hide/focus, placement and topmost control on the event thread.
-The app owns its tray; Rune supplies the window lifetime and handles.
+`rune::Tray` provides a system tray icon and menu on Windows (`Shell_NotifyIcon`) and
+Linux (StatusNotifierItem / `dbusmenu`, with the default `dbus` feature). On macOS (and
+other platforms), `Tray::new` returns `Err(TrayError::Unsupported)` because macOS status
+items are not implemented yet, so a macOS app still owns its status item while Rune
+supplies the window lifetime and handles.
 `RunOptions::accessory` applies the macOS process policy before the event loop is
 created: no Dock icon/default menu and no activation at launch. Other platforms
 ignore it; `run_windows` keeps its regular-launch default.
@@ -1833,9 +1837,11 @@ PNGs. See [`examples/overlay`](../../examples/overlay) for a normal control wind
 one overlay per monitor, a shared remote cursor, a stroke and hit-test toggling.
 
 Monitor enumeration is a startup snapshot. Winit platform/window-manager support
-still governs transparency, placement and topmost behavior. Non-activating macOS
-`NSPanel`s, all-Spaces/fullscreen-space policy and status items need Rune's own Mac
-shell; they are not implemented here.
+still governs transparency, placement and topmost behavior. On macOS, non-activating
+`NSPanel`s with all-Spaces and full-screen policy are available through `App::overlay`
+(see "Edge overlays" below), `WindowOptions::launcher_panel()`, and
+`MacWindowOptions::nonactivating_panel(true)` (ordinary windows can also set
+`MacWindowOptions::collection_behavior`); macOS status items are not implemented.
 Unsupported transparency falls back to opaque rendering; unsupported click-through
 prints the platform error. Metal surfaces retain premultiplied colour for Core Animation.
 
