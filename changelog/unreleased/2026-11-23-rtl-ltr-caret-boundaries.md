@@ -1,0 +1,1 @@
+- Text (`cursor_geometry`, `cursor_from_point`, visual caret motion): carets at the boundaries of embedded opposite-direction runs (such as digits or Latin words inside right-to-left text) now draw, hit-test, and step visually at the enclosing-direction primary edge — including at line starts and ends — matching UAX #9 and Chromium instead of swapping boundary edges.

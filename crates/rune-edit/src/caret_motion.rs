@@ -3,7 +3,7 @@
 //! as a browser's caret moves through mixed Arabic or Hebrew and Latin; a word back and forward
 //! go by the text's order; Up and Down keep the column they started in.
 
-use parley::{Affinity, Cursor, Layout};
+use parley::{Affinity, Layout};
 
 use rune_text::Ink;
 
@@ -201,39 +201,10 @@ pub(super) enum Arrow {
     WordRight,
 }
 
-/// Seeking the caret's next place across the drawn line. A caret between two runs has two
-/// places, one per affinity: the seek tries the caret's own side, then the other when that one
-/// is the line's end, and stops at the first that moves.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Seek {
-    /// Trying the caret's place on `side`; `then`, the other side, is still to try.
-    Try { side: Affinity, then: Option<Affinity> },
-    /// It moves to this display byte, on this side.
-    Found(usize, Affinity),
-    /// Neither place moves: the caret is at the line's edge that way.
-    Edge,
-}
-
-/// What trying one place gave.
-enum Tried {
-    Moved(usize, Affinity),
-    Stayed,
-}
-
-fn step(state: Seek, event: Tried) -> Seek {
-    match (state, event) {
-        (Seek::Try { .. }, Tried::Moved(j, side)) => Seek::Found(j, side),
-        (Seek::Try { then: Some(side), .. }, Tried::Stayed) => Seek::Try { side, then: None },
-        (Seek::Try { then: None, .. }, Tried::Stayed) => Seek::Edge,
-        (done, _) => done,
-    }
-}
-
 /// Where an arrow press lands across the drawn line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Landing {
-    /// On this display byte, on this side of it (where two runs meet, the byte has a place at
-    /// each).
+    /// On this display byte, on this side of it.
     At(usize, Affinity),
     /// The caret is at the line's edge that way: it leaves the line the way its paragraph runs
     /// (left out of a right-to-left line goes on to the next line), or stays at the text's end.
@@ -249,12 +220,18 @@ pub(super) fn visual_in(text: rune_text::TextFlow<'_>, at: usize, side: Affinity
     if CaretMotion::of(p.layout, hidden) == CaretMotion::Logical {
         return None;
     }
+    let (right, word) = match arrow {
+        Arrow::Left => (false, false),
+        Arrow::Right => (true, false),
+        Arrow::WordLeft => (false, true),
+        Arrow::WordRight => (true, true),
+    };
     let (mut from, mut side) = (p.shaped(at), side);
     for _ in 0..4 {
-        match visual(p.layout, from, side, arrow) {
-            Landing::At(j, s) if p.content(j) == at && j != from => (from, side) = (j, s),
-            Landing::At(j, s) => return Some((Landing::At(p.content(j), s), p.flow)),
-            Landing::Edge => return Some((Landing::Edge, p.flow)),
+        match rune_text::visual_step(p.layout, from, side, right, word) {
+            Some((j, s)) if p.content(j) == at && j != from => (from, side) = (j, s),
+            Some((j, s)) => return Some((Landing::At(p.content(j), s), p.flow)),
+            None => return Some((Landing::Edge, p.flow)),
         }
     }
     Some((Landing::Edge, p.flow))
@@ -265,29 +242,5 @@ pub(super) fn visual_in(text: rune_text::TextFlow<'_>, at: usize, side: Affinity
 /// right-to-left run to the left. A word forward goes on past it off macOS.
 pub(super) fn space_ahead(text: rune_text::TextFlow<'_>, at: usize, side: Affinity, right: bool) -> bool {
     let p = text.piece_at(at);
-    let c = Cursor::from_byte_index(p.layout, p.shaped(at), side);
-    c.visual_clusters(p.layout)[usize::from(right)].as_ref().is_some_and(|cl| cl.is_space_or_nbsp() && cl.is_rtl() != right)
-}
-
-/// Where `arrow` takes a caret at display byte `at`, on `side` of it, across `layout` as drawn.
-fn visual(layout: &Layout<Ink>, at: usize, side: Affinity, arrow: Arrow) -> Landing {
-    let other = match side { Affinity::Downstream => Affinity::Upstream, Affinity::Upstream => Affinity::Downstream };
-    let mut state = Seek::Try { side, then: Some(other) };
-    loop {
-        state = match state {
-            Seek::Try { side, .. } => {
-                let c = Cursor::from_byte_index(layout, at, side);
-                let to = match arrow {
-                    Arrow::Left => c.previous_visual(layout),
-                    Arrow::Right => c.next_visual(layout),
-                    Arrow::WordLeft => c.previous_visual_word(layout),
-                    Arrow::WordRight => c.next_visual_word(layout),
-                };
-                let moved = to.index() != at || to.geometry(layout, 0.0).x0 != c.geometry(layout, 0.0).x0;
-                step(state, if moved { Tried::Moved(to.index(), to.affinity()) } else { Tried::Stayed })
-            }
-            Seek::Found(j, s) => return Landing::At(j, s),
-            Seek::Edge => return Landing::Edge,
-        };
-    }
+    rune_text::space_ahead(p.layout, p.shaped(at), side, right)
 }

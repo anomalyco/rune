@@ -449,11 +449,15 @@ impl<'a> TextFlow<'a> {
             return Hit { index: p.start, side: parley::layout::Affinity::Downstream, before: None };
         }
         let cur = cursor_from_point(p.layout, x, y - p.y);
-        let before = (cur.affinity() == parley::layout::Affinity::Upstream)
-            .then(|| cur.index().checked_sub(1).and_then(|b| parley::Cluster::from_byte_index(p.layout, b)))
-            .flatten()
-            .filter(|cl| !cl.is_hard_line_break())
-            .map(|cl| p.content(cl.text_range().start));
+        let before = cursor::cluster_start_at_point(p.layout, x, y - p.y)
+            .map(|b| p.content(b))
+            .or_else(|| {
+                (cur.affinity() == parley::layout::Affinity::Upstream)
+                    .then(|| cur.index().checked_sub(1).and_then(|b| parley::Cluster::from_byte_index(p.layout, b)))
+                    .flatten()
+                    .filter(|cl| !cl.is_hard_line_break())
+                    .map(|cl| p.content(cl.text_range().start))
+            });
         Hit { index: p.content(cur.index()), side: cur.affinity(), before }
     }
 
