@@ -234,6 +234,7 @@ fn build_parts<S, T: 'static>(
     let text = TextSystem::for_window(app.fonts, app.families);
     let mut rt = Runtime::with_text(state, spec.view, spec.size, Env::default(), text);
     rt.configure(runtime);
+    rt.track_marks = compositor.is_some();
     rt.on_key = on_key;
     // App and overlay may use different state types. Downcast the function pointer
     // once, without a per-frame adapter or changing App::overlay's generic API.
@@ -449,3 +450,7 @@ impl<T: 'static> Overlay<T> {
         with_app!(self, |core, app| core.observe_pointer(&mut app, x, y))
     }
 }
+
+#[cfg(test)]
+#[path = "app_tests.rs"]
+mod tests;
