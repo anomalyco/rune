@@ -1,0 +1,1 @@
+- Text (`range_boxes`): selections, underlines, strikethroughs and link hit boxes starting at a right-to-left line ending in a hard line break now paint every covered line, and selected line breaks highlight at the reading-order end of the line (left for right-to-left lines, right for left-to-right).

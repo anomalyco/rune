@@ -242,18 +242,13 @@ pub fn range_boxes(
     b: usize,
     pill_boxes: bool,
 ) -> Vec<(parley::BoundingBox, usize)> {
-    use parley::{BreakReason, editing::Cursor, editing::Selection, layout::Affinity};
+    use parley::BreakReason;
     if a >= b {
         return Vec::new();
     }
-    if layout.inline_boxes().next().is_none() {
-        return Selection::new(
-            Cursor::from_byte_index(layout, a, Affinity::Downstream),
-            Cursor::from_byte_index(layout, b, Affinity::Upstream),
-        )
-        .geometry(layout);
-    }
     let range = a..b;
+    let plain = layout.inline_boxes().next().is_none();
+    let justified = layout.alignment() == Some(Alignment::Justify);
     let mut rects = Vec::new();
     for (line_ix, line) in layout.lines().enumerate() {
         let lr = line.text_range();
@@ -263,45 +258,58 @@ pub fn range_boxes(
         let m = line.metrics();
         let line_min = m.block_min_coord.min(m.content_block_min_coord) as f64;
         let line_max = m.block_max_coord.max(m.content_block_max_coord) as f64;
-        let newline_ws = if line.break_reason() == BreakReason::Explicit
+        let (newline_ws, newline_rtl) = if line.break_reason() == BreakReason::Explicit
             && lr.end > lr.start
             && range.contains(&(lr.end - 1))
         {
-            parley::Cluster::from_byte_index(layout, lr.end - 1).map_or(0.0, |c| {
+            parley::Cluster::from_byte_index(layout, lr.end - 1).map_or((0.0, false), |c| {
                 let run = c.run();
                 let fm = run.font_metrics();
-                (fm.ascent as f64 + fm.descent as f64) * 0.25
+                ((fm.ascent as f64 + fm.descent as f64) * 0.25, c.is_rtl())
             })
         } else {
-            0.0
+            (0.0, false)
+        };
+        let start = (m.inline_min_coord + m.offset) as f64;
+        let end = if justified && plain {
+            start + line.runs().map(|r| r.advance() as f64).sum::<f64>()
+        } else {
+            start + m.advance as f64
         };
         let mut intervals: Vec<(f64, f64)> = Vec::new();
-        for run in line.runs() {
-            let mut cx = (m.inline_min_coord + run.visual_clusters().next().and_then(|c| c.visual_offset()).unwrap_or(m.offset)) as f64;
-            for cl in run.visual_clusters() {
-                let adv = cl.advance() as f64;
-                if range.contains(&cl.text_range().start) && adv > 0.0 {
-                    intervals.push((cx, cx + adv));
+        if plain && a <= lr.start && lr.end <= b {
+            intervals.push((start, end));
+        } else {
+            for run in line.runs() {
+                let mut cx = (m.inline_min_coord + run.visual_clusters().next().and_then(|c| c.visual_offset()).unwrap_or(m.offset)) as f64;
+                for cl in run.visual_clusters() {
+                    let adv = cl.advance() as f64;
+                    if range.contains(&cl.text_range().start) && adv > 0.0 {
+                        intervals.push((cx, cx + adv));
+                    }
+                    cx += adv;
                 }
-                cx += adv;
+            }
+            if pill_boxes {
+                for item in line.items() {
+                    if let PositionedLayoutItem::InlineBox(ib) = item
+                        && ib.id & PILL_BOX != 0
+                        && ib.width > 0.0
+                        && layout.inline_boxes().find(|b| b.id == ib.id).is_some_and(|b| {
+                            if ib.id & 1 == 0 {
+                                range.contains(&b.index)
+                            } else {
+                                b.index > 0 && range.contains(&(b.index - 1))
+                            }
+                        })
+                    {
+                        intervals.push((ib.x as f64, (ib.x + ib.width) as f64));
+                    }
+                }
             }
         }
-        if pill_boxes {
-            for item in line.items() {
-                if let PositionedLayoutItem::InlineBox(ib) = item
-                    && ib.id & PILL_BOX != 0
-                    && ib.width > 0.0
-                    && layout.inline_boxes().find(|b| b.id == ib.id).is_some_and(|b| {
-                        if ib.id & 1 == 0 {
-                            range.contains(&b.index)
-                        } else {
-                            b.index > 0 && range.contains(&(b.index - 1))
-                        }
-                    })
-                {
-                    intervals.push((ib.x as f64, (ib.x + ib.width) as f64));
-                }
-            }
+        if newline_ws > 0.0 {
+            intervals.push(if newline_rtl { (start - newline_ws, start) } else { (end, end + newline_ws) });
         }
         intervals.sort_by(|p, q| p.0.total_cmp(&q.0));
         let mut merged: Vec<(f64, f64)> = Vec::new();
@@ -311,12 +319,6 @@ pub fn range_boxes(
                 _ => merged.push((x0, x1)),
             }
         }
-        if let Some(last) = merged.last_mut() {
-            last.1 += newline_ws;
-        } else if newline_ws > 0.0 {
-            let x0 = (m.inline_min_coord + m.offset + m.advance) as f64;
-            merged.push((x0, x0 + newline_ws));
-        }
         for (x0, x1) in merged {
             if x1 > x0 {
                 rects.push((parley::BoundingBox::new(x0, line_min, x1, line_max), line_ix));
@@ -325,3 +327,7 @@ pub fn range_boxes(
     }
     rects
 }
+
+#[cfg(test)]
+#[path = "cursor_tests.rs"]
+mod tests;
