@@ -35,6 +35,16 @@ pub(crate) struct Range {
     pub step: Option<f64>,
 }
 
+impl Range {
+    /// The step when the range is finite, ordered (`min <= max`) and has a finite positive step.
+    pub(crate) fn usable_step(self) -> Option<f64> {
+        if !self.value.is_finite() || !self.min.is_finite() || !self.max.is_finite() || self.min > self.max {
+            return None;
+        }
+        self.step.filter(|s| s.is_finite() && *s > 0.0)
+    }
+}
+
 /// The rarer accessibility properties, boxed so an element without them stays small.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct A11yMore {

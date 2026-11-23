@@ -12,6 +12,8 @@ use accesskit::{ActionHandler, ActionRequest, ActivationHandler, DeactivationHan
 use crate::runtime::Runtime;
 
 pub(crate) mod actions;
+#[cfg(test)]
+mod actions_tests;
 pub(crate) mod dump;
 #[cfg(test)]
 mod dump_tests;

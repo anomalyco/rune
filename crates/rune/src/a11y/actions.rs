@@ -90,9 +90,10 @@ impl RuntimeCore {
             // A slider with a stated step takes a number as that many steps from its value.
             (Ak::SetValue, None) if steps => {
                 let Some(ActionData::NumericValue(target)) = request.data else { return false };
+                if !target.is_finite() { return false; }
                 let Some(delta) = n.a11y.more.as_deref().and_then(|m| m.range).and_then(|r| {
-                    let step = r.step.filter(|s| *s > 0.0)?;
-                    let target = target.clamp(r.min.min(r.max), r.max.max(r.min));
+                    let step = r.usable_step()?;
+                    let target = target.clamp(r.min, r.max);
                     Some(((target - r.value) / step).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32)
                 }) else { return false };
                 if delta == 0 { return false; }
