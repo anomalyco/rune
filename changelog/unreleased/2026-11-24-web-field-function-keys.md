@@ -1,0 +1,1 @@
+- Web: `bridge.js` now forwards non-browser function keys (`F1`–`F24` other than `F5` and `F12`, which remain reserved for the browser) on `keydown` from focused text and password fields, so focused editors and app shortcuts receive unmodified and Shift/Alt-modified function keys as they do on canvas.
