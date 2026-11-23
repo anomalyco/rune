@@ -266,12 +266,32 @@ unsafe fn system_window_items(mtm: MainThreadMarker, window: &NSMenu) {
         }
     }
 }
-/// Moves the `system_edit_items` back to the end of the Edit menu after the app added its own.
+/// The Edit menu's AutoFill submenu. AppKit adds it, after a separator of its own, at the end
+/// of an Edit menu the app has as it finishes launching: one made with the first window in
+/// `applicationWillFinishLaunching:`, not one made after the launch.
+const AUTOFILL: &str = "_NSMenuItemAutoFillIdentifier";
+
+fn is_autofill(item: &NSMenuItem) -> bool {
+    // SAFETY: NSMenuItem implements NSUserInterfaceItemIdentification; main thread.
+    let id: Option<Retained<NSString>> = unsafe { msg_send![item, identifier] };
+    id.is_some_and(|id| id.to_string() == AUTOFILL)
+}
+
+/// Keeps the `system_edit_items` at the end of the Edit menu after the app added its own, and
+/// AppKit's AutoFill with them, in the order of every Mac app's Edit menu: a separator,
+/// AutoFill, Start Dictation, Emoji & Symbols. AppKit's own separator before AutoFill goes.
 unsafe fn system_edit_last(edit: &NSMenu) {
     let items: Vec<_> = (0..edit.numberOfItems()).filter_map(|i| edit.itemAtIndex(i)).collect();
-    let first = items.iter().position(|i| i.tag() == SYSTEM);
-    if first.is_none_or(|first| items[first..].iter().all(|i| i.tag() == SYSTEM)) { return; }
-    for entry in items.iter().filter(|i| i.tag() == SYSTEM) {
+    let mut last: Vec<_> = items.iter().filter(|i| i.tag() == SYSTEM).collect();
+    if last.is_empty() { return; }
+    let autofill = items.iter().position(|i| is_autofill(i));
+    let stray = autofill.and_then(|at| at.checked_sub(1)).filter(|&at| items[at].isSeparatorItem() && items[at].tag() != SYSTEM);
+    if let Some(at) = autofill {
+        last.insert(last.iter().position(|i| i.isSeparatorItem()).map_or(0, |i| i + 1), &items[at]);
+    }
+    if stray.is_none() && items[items.len() - last.len()..].iter().zip(&last).all(|(a, b)| std::ptr::eq(&**a, &***b)) { return; }
+    if let Some(at) = stray { edit.removeItem(&items[at]); }
+    for entry in last {
         edit.removeItem(entry);
         edit.addItem(entry);
     }
