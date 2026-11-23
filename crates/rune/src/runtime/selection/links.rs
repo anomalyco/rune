@@ -192,6 +192,8 @@ impl RuntimeCore {
     /// Inline font-metric boxes `(x0, y0, x1, y1)` in window points for each `(start, end)` byte
     /// span in `spans` of node `n`, matching Blink's `Range::getBoundingClientRect()`.
     fn span_inline_boxes(&self, n: &Node, rect: [f32; 4], z: f32, spans: impl IntoIterator<Item = (u32, u32)>) -> Vec<(usize, [f32; 4])> {
+        let mut spans = spans.into_iter().peekable();
+        if spans.peek().is_none() { return Vec::new(); }
         let (Some(spec), Some(laid)) = (&n.text, &n.text_layout) else { return Vec::new() };
         let flow = laid.view();
         let s = self.env.scale;
@@ -199,9 +201,34 @@ impl RuntimeCore {
         let px = s / z.max(1e-4);
         let len = layout_len(n, spec);
         let mut out = Vec::new();
-        for (k, (start, end)) in spans.into_iter().enumerate() {
+        for (k, (start, end)) in spans.enumerate() {
             let (a, b) = drawn(n, start, end);
+            #[cfg(test)]
+            SPAN_BOX_QUERIES.with(|c| c.set(c.get() + 1));
             for bb in flow.inline_range_boxes((a as usize).min(len), (b as usize).min(len)) {
+                out.push((k, [ox + bb.x0 as f32 / px, oy + bb.y0 as f32 / px, ox + bb.x1 as f32 / px, oy + bb.y1 as f32 / px]));
+            }
+        }
+        out
+    }
+
+    /// Line boxes in window points `(x0, y0, x1, y1)` for each `(index, start, end)` byte span in
+    /// `spans` of node `n`, inside border box `rect` drawn at scale `z`.
+    fn span_boxes_indexed(&self, n: &Node, rect: [f32; 4], z: f32, spans: impl IntoIterator<Item = (usize, u32, u32)>) -> Vec<(usize, [f32; 4])> {
+        let mut spans = spans.into_iter().peekable();
+        if spans.peek().is_none() { return Vec::new(); }
+        let (Some(spec), Some(laid)) = (&n.text, &n.text_layout) else { return Vec::new() };
+        let flow = laid.view();
+        let s = self.env.scale;
+        let [ox, oy] = origin(n, spec, flow, rect, s, z);
+        let px = s / z.max(1e-4);
+        let len = layout_len(n, spec);
+        let mut out = Vec::new();
+        for (k, start, end) in spans {
+            let (a, b) = drawn(n, start, end);
+            #[cfg(test)]
+            SPAN_BOX_QUERIES.with(|c| c.set(c.get() + 1));
+            for (bb, _) in flow.range_boxes((a as usize).min(len), (b as usize).min(len), false) {
                 out.push((k, [ox + bb.x0 as f32 / px, oy + bb.y0 as f32 / px, ox + bb.x1 as f32 / px, oy + bb.y1 as f32 / px]));
             }
         }
@@ -211,20 +238,7 @@ impl RuntimeCore {
     /// Line boxes in window points `(x0, y0, x1, y1)` for each `(start, end)` byte span in `spans`
     /// of node `n`, inside border box `rect` drawn at scale `z`.
     fn span_boxes(&self, n: &Node, rect: [f32; 4], z: f32, spans: impl IntoIterator<Item = (u32, u32)>) -> Vec<(usize, [f32; 4])> {
-        let (Some(spec), Some(laid)) = (&n.text, &n.text_layout) else { return Vec::new() };
-        let flow = laid.view();
-        let s = self.env.scale;
-        let [ox, oy] = origin(n, spec, flow, rect, s, z);
-        let px = s / z.max(1e-4);
-        let len = layout_len(n, spec);
-        let mut out = Vec::new();
-        for (k, (start, end)) in spans.into_iter().enumerate() {
-            let (a, b) = drawn(n, start, end);
-            for (bb, _) in flow.range_boxes((a as usize).min(len), (b as usize).min(len), false) {
-                out.push((k, [ox + bb.x0 as f32 / px, oy + bb.y0 as f32 / px, ox + bb.x1 as f32 / px, oy + bb.y1 as f32 / px]));
-            }
-        }
-        out
+        self.span_boxes_indexed(n, rect, z, spans.into_iter().enumerate().map(|(k, (a, b))| (k, a, b)))
     }
 
     /// Node `i`'s link line boxes in window points (x0, y0, x1, y1) for border box `rect`.
@@ -444,10 +458,27 @@ impl RuntimeCore {
     }
 
     pub(in crate::runtime) fn highlight_boxes_in(&self, nodes: &[Node], i: usize, rect: [f32; 4], z: f32) -> Vec<(usize, [f32; 4])> {
+        self.highlight_boxes_where(nodes, i, rect, z, |_, _| true)
+    }
+
+    /// Like [`Self::highlight_boxes_in`], laying out only highlights `wanted` selects.
+    fn highlight_boxes_where(
+        &self,
+        nodes: &[Node],
+        i: usize,
+        rect: [f32; 4],
+        z: f32,
+        mut wanted: impl FnMut(usize, &crate::text::TextHighlight) -> bool,
+    ) -> Vec<(usize, [f32; 4])> {
         let n = &nodes[i];
         let Some(spec) = n.text.as_deref() else { return Vec::new() };
         if spec.cold.highlights.is_empty() || n.is_secure() { return Vec::new(); }
-        self.span_boxes(n, rect, z, spec.cold.highlights.iter().map(|h| (h.start, h.end)))
+        self.span_boxes_indexed(
+            n,
+            rect,
+            z,
+            spec.cold.highlights.iter().enumerate().filter_map(|(k, h)| wanted(k, h).then_some((k, h.start, h.end))),
+        )
     }
 
     /// Unscrolled inline font-metric target rect `[x0, y0, x1, y1]` (in window points) and first
@@ -463,16 +494,16 @@ impl RuntimeCore {
             if !n.parent.is_none_or(|p| super::in_scope(&nodes[p].path, scope)) {
                 return;
             }
-            let matches: Vec<_> = spec.cold.highlights.iter().map(|h| h.key.as_deref().is_some_and(|hkey| {
-                crate::flight::selects_under(key, &n.path, hkey)
-            })).collect();
-            if matches.iter().any(|m| *m) {
-                for (k, r) in self.span_inline_boxes(n, n.target, 1.0, spec.cold.highlights.iter().map(|h| (h.start, h.end))) {
-                    if matches[k] {
-                        first_node.get_or_insert(i);
-                        union = Some(union.map_or(r, |u| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]));
-                    }
-                }
+            for (_, r) in self.span_inline_boxes(
+                n,
+                n.target,
+                1.0,
+                spec.cold.highlights.iter()
+                    .filter(|h| h.key.as_deref().is_some_and(|hkey| crate::flight::selects_under(key, &n.path, hkey)))
+                    .map(|h| (h.start, h.end)),
+            ) {
+                first_node.get_or_insert(i);
+                union = Some(union.map_or(r, |u| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]));
             }
         };
         match index {
@@ -494,20 +525,15 @@ impl RuntimeCore {
         let mut union: Option<[f32; 4]> = None;
         let mut visit = |i: usize| {
             let n = &nodes[i];
-            let Some(spec) = n.text.as_ref().filter(|t| !t.cold.highlights.is_empty()) else { return };
+            if !n.text.as_ref().is_some_and(|t| !t.cold.highlights.is_empty() && !n.is_secure()) { return; }
             if !n.parent.is_none_or(|p| super::in_scope(&nodes[p].path, scope)) {
                 return;
             }
-            let matches: Vec<_> = spec.cold.highlights.iter().map(|h| h.key.as_deref().is_some_and(|hkey| {
-                crate::flight::selects_under(key, &n.path, hkey)
-            })).collect();
-            if matches.iter().any(|m| *m) {
-                for (k, r) in self.highlight_boxes_in(nodes, i, n.target, 1.0) {
-                    if matches[k] {
-                        first_node.get_or_insert(i);
-                        union = Some(union.map_or(r, |u| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]));
-                    }
-                }
+            for (_, r) in self.highlight_boxes_where(nodes, i, n.target, 1.0, |_, h| {
+                h.key.as_deref().is_some_and(|hkey| crate::flight::selects_under(key, &n.path, hkey))
+            }) {
+                first_node.get_or_insert(i);
+                union = Some(union.map_or(r, |u| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]));
             }
         };
         match index {
@@ -524,7 +550,8 @@ impl RuntimeCore {
             let k = n.text.as_ref()?.cold.highlights.iter().position(|h| {
                 h.key.as_deref().is_some_and(|hk| crate::flight::selects_under(key, &n.path, hk))
             })?;
-            let (_, r) = self.highlight_boxes(i, self.drawn_box(i)).into_iter().find(|(j, _)| *j == k)?;
+            let z = self.paint.drawn_scale.get(i).copied().unwrap_or(1.0);
+            let (_, r) = self.highlight_boxes_where(&self.tree.nodes, i, self.drawn_box(i), z, |j, _| j == k).into_iter().next()?;
             Some(((r[0] + r[2]) * 0.5, (r[1] + r[3]) * 0.5))
         })
     }
@@ -585,3 +612,20 @@ impl RuntimeCore {
         }
     }
 }
+
+#[cfg(test)]
+thread_local! {
+    static SPAN_BOX_QUERIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn count_span_box_queries<R>(f: impl FnOnce() -> R) -> (R, usize) {
+    SPAN_BOX_QUERIES.with(|c| c.set(0));
+    let out = f();
+    let count = SPAN_BOX_QUERIES.with(|c| c.get());
+    (out, count)
+}
+
+#[cfg(test)]
+#[path = "links_tests.rs"]
+mod tests;

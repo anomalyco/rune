@@ -92,3 +92,60 @@ fn a_scoped_highlight_read_follows_scrolls_and_commits() {
 fn many_reads_follow_scrolls_and_commits() {
     reads_follow_scrolls_and_commits(12);
 }
+
+#[test]
+fn a_read_answers_its_own_highlights_among_many_in_one_text() {
+    struct Multi {
+        body: String,
+        spans: Vec<(usize, usize, String)>,
+        reads: Vec<String>,
+        seen: RefCell<Vec<Option<[f32; 4]>>>,
+    }
+    fn multi_view(s: &Multi, cx: &mut Cx<Multi>) -> El {
+        *s.seen.borrow_mut() = s.reads.iter().map(|k| cx.window_layout(k)).collect();
+        let mut t = text(s.body.clone()).key("doc").font(TextStyle::new(14.0, 400.0).lh(20.0)).wrap().w_full();
+        for (a, b, k) in &s.spans {
+            t = t.text_highlight(TextHighlight::new(*a..*b, Color::WHITE).key(k.as_str()));
+        }
+        col().w(180.0).h(400.0).child(t)
+    }
+
+    let mut body = String::new();
+    let mut spans = Vec::new();
+    for i in 0..32 {
+        if i > 0 { body.push(' '); }
+        let a = body.len();
+        body.push_str(&format!("term{i:02}"));
+        let b = body.len();
+        let key = if i == 1 || i == 29 { "pair".to_owned() } else { format!("k{i}") };
+        spans.push((a, b, key));
+    }
+    let reads = vec!["k0".to_owned(), "k15".to_owned(), "doc/k28".to_owned(), "pair".to_owned()];
+    let mut rt = Runtime::new(
+        Multi { body, spans, reads: reads.clone(), seen: RefCell::new(Vec::new()) },
+        multi_view,
+        (180.0, 400.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    for _ in 0..60 { if !rt.frame(1.0 / 60.0) { break; } }
+
+    let els = rt.elements();
+    let seen = rt.state.seen.borrow().clone();
+    for (key, got) in reads.iter().zip(seen) {
+        let got = got.unwrap_or_else(|| panic!("{key}: read saw nothing"));
+        let leaf = key.rsplit('/').next().unwrap();
+        let u = els.iter()
+            .filter(|e| e.role == "mark" && e.key.as_deref() == Some(leaf))
+            .map(|e| [e.rect[0], e.rect[1], e.rect[0] + e.rect[2], e.rect[1] + e.rect[3]])
+            .fold(None, |u: Option<[f32; 4]>, r| {
+                Some(u.map_or(r, |u| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]))
+            })
+            .unwrap_or_else(|| panic!("{key}: no mark in tree"));
+        let want = [u[0], u[1], u[2] - u[0], u[3] - u[1]];
+        assert!(close(got, want), "{key}: read {got:?}, mark union {want:?}");
+        if key == "pair" {
+            assert!(got[3] > 25.0, "pair should span multiple lines: {got:?}");
+        }
+    }
+}
