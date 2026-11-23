@@ -2,7 +2,11 @@
 //! effect, its `effect_data` carries the effect's few live numbers, and its presented rect and
 //! radius are the shape. Glass, lenses and shockwaves read a backdrop copy taken at their slot.
 
-use rune::compose::{Compositor, Frame};
+#[cfg(test)]
+#[path = "gfx_tests.rs"]
+mod tests;
+
+use rune::compose::{Compositor, DeviceKey, Frame};
 use rune::render::{EffectPhase, EffectSite, KIND_EFFECT};
 use rune_fx::*;
 
@@ -128,9 +132,15 @@ fn layer(kind: u32, d: [f32; 4], shape: Shape, t: f32) -> Option<FxLayer> {
     Some(fx.on(shape).at(t))
 }
 
+struct FxCache {
+    device_key: DeviceKey,
+    format: wgpu::TextureFormat,
+    fx: FxRenderer,
+}
+
 #[derive(Default)]
 pub struct Gfx {
-    fx: Option<FxRenderer>,
+    fx: Option<FxCache>,
 }
 
 impl Compositor<State> for Gfx {
@@ -160,13 +170,16 @@ impl Compositor<State> for Gfx {
             layers.push(l);
             placements.push(FxSlot::default().scale(k).clip(i.clip, i.fade));
         }
-        let fx = self.fx.get_or_insert_with(|| {
+        let device_key = f.device_key();
+        if self.fx.as_ref().is_none_or(|c| c.device_key != device_key || c.format != f.format) {
+            self.fx = None;
             let mut fx = FxRenderer::new(device, f.format, FxOptions { dither: true });
             fx.set_fire_sim(device, true);
-            fx
-        });
+            fx.add_format(device, wgpu::TextureFormat::Rgba16Float);
+            self.fx = Some(FxCache { device_key, format: f.format, fx });
+        }
+        let fx = &mut self.fx.as_mut().unwrap().fx;
         fx.set_srgb_blend(f.srgb_blend());
-        fx.add_format(device, wgpu::TextureFormat::Rgba16Float);
         fx.prepare_with_slots(device, queue, &FxFrame { viewport: [size.0, size.1], scale: 1.0, layers: &layers, backdrop: None, sources: &[] }, &placements);
         if fire {
             fx.simulate(queue, f.encoder, None);

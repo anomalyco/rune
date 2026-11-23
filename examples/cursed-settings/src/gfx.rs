@@ -3,11 +3,15 @@
 //! lights the whole window with rune-light when a gag needs the lights, and resolves once with
 //! dither. With nothing burning it draws the plain UI and asks for no frames.
 
+#[cfg(test)]
+#[path = "gfx_tests.rs"]
+mod tests;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
-use rune::compose::{Compositor, Frame, is_glyph};
+use rune::compose::{Compositor, DeviceKey, Frame, is_glyph};
 use rune::render::{Instance, KIND_RECT};
 use rune_fx::{Fx, FxFrame, FxLayer, FxOptions, FxRenderer, Rect, Shape};
 use rune_light::{Light, LightRenderer, Prim, Scene as LightScene};
@@ -206,6 +210,7 @@ impl Timer {
 }
 
 struct Res {
+    device_key: DeviceKey,
     size: (u32, u32),
     format: wgpu::TextureFormat,
     scene: Tex,
@@ -225,7 +230,7 @@ struct Res {
 }
 
 impl Res {
-    fn new(device: &wgpu::Device, queue: &wgpu::Queue, size: (u32, u32), format: wgpu::TextureFormat, ui: &mut rune::render::Renderer) -> Res {
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue, device_key: DeviceKey, size: (u32, u32), format: wgpu::TextureFormat, ui: &mut rune::render::Renderer) -> Res {
         use wgpu::TextureUsages as U;
         ui.add_format(device, HDR);
         let rt = U::RENDER_ATTACHMENT | U::TEXTURE_BINDING;
@@ -257,6 +262,7 @@ impl Res {
         let resolve_bg = bind(&resolve, &scene.view);
         let blit_bg = bind(&blit, &lit.view);
         Res {
+            device_key,
             size,
             format,
             light: None,
@@ -344,8 +350,10 @@ impl Compositor<Cursed> for Gfx {
     }
 
     fn render(&mut self, f: &mut Frame<'_, Cursed>) {
-        if self.res.as_ref().is_none_or(|r| r.size != f.size || r.format != f.format) {
-            self.res = Some(Res::new(f.device, f.queue, f.size, f.format, f.ui));
+        let device_key = f.device_key();
+        if self.res.as_ref().is_none_or(|r| r.device_key != device_key || r.size != f.size || r.format != f.format) {
+            self.res = None;
+            self.res = Some(Res::new(f.device, f.queue, device_key, f.size, f.format, f.ui));
         }
         self.view_pending = false;
         f.device.poll(wgpu::PollType::Poll).ok();
