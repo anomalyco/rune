@@ -670,3 +670,39 @@ fn text_input_preserves_combobox_and_spinbutton_roles_with_text_and_range() {
     rt.frame(0.0);
     assert_eq!(rt.state.size.text, "12");
 }
+
+#[test]
+fn live_region_off_sets_explicit_off_on_accesskit_node() {
+    fn view(off: &bool, _: &mut Cx<bool>) -> El {
+        let mut when = text("2 minutes ago").key("when");
+        if *off { when = when.live_region(LiveRegion::Off); }
+        col().size(400.0, 200.0)
+            .child(
+                row().key("status").role("status").size(300.0, 40.0)
+                    .child(text("Saved").key("words"))
+                    .child(when),
+            )
+            .child(text("Muted alert").key("muted-alert").role("alert").live_region(LiveRegion::Off))
+    }
+    let mut rt = Runtime::new(true, view, (400.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let tree = rt.accessibility_tree();
+    let live_of = |key: &str| {
+        tree.nodes.iter().find(|(_, n)| n.author_id() == Some(key)).unwrap().1.live()
+    };
+    assert_eq!(live_of("status"), Some(accesskit::Live::Polite));
+    assert_eq!(live_of("words"), None, "unset child inherits its parent's live region");
+    assert_eq!(live_of("when"), Some(accesskit::Live::Off), "explicit LiveRegion::Off must stop inheritance from a live parent");
+    assert_eq!(live_of("muted-alert"), Some(accesskit::Live::Off), "explicit LiveRegion::Off overrides a live role default");
+
+    // Incremental update: toggling LiveRegion::Off emits an updated node with Live::Off.
+    let mut rt = Runtime::new(false, view, (400.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.a11y_activate("Test");
+    let _ = rt.a11y_update().expect("initial tree");
+    rt.update(|off, _| *off = true);
+    rt.frame(1.0 / 60.0);
+    let update = rt.a11y_update().expect("toggling LiveRegion::Off emits an update");
+    let (_, when) = update.nodes.iter().find(|(_, n)| n.author_id() == Some("when")).expect("updated when node");
+    assert_eq!(when.live(), Some(accesskit::Live::Off));
+}
