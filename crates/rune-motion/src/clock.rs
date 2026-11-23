@@ -36,7 +36,7 @@ impl Clock {
 
     /// Driven by `step()` at a fixed rate, starting at τ = 0.
     pub fn manual(hz: f64) -> Clock {
-        assert!(hz > 0.0);
+        assert!(hz.is_finite() && hz > 0.0);
         Clock { source: Source::Manual { hz }, ..Clock::display() }
     }
 
@@ -182,5 +182,11 @@ mod tests {
             c.step();
         }
         assert!((c.now() - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    #[should_panic]
+    fn manual_rejects_infinite_rate() {
+        let _ = Clock::manual(f64::INFINITY);
     }
 }
