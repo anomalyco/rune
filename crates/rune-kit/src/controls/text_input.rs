@@ -126,6 +126,11 @@ fn name_field(e: El, label: Option<&str>, placeholder: &str, description: Option
 }
 
 /// A single-line field: `TextInput::new(&s.name).placeholder("Name").on_edit(|s: &mut S| &mut s.name)`.
+///
+/// For a visible label and wrapped help text, wrap it in [`crate::Field`] and pass `.width(None)`
+/// so it fills the field (the default width is 280 pt). [`Self::label`] and [`Self::description`]
+/// are accessibility-only and are not drawn; still pass `.label(..)` on the inner `TextInput` to
+/// name the editor itself for assistive technology.
 pub struct TextInput {
     edit: TextEdit,
     label: Option<String>,
@@ -210,7 +215,8 @@ impl TextInput {
         self
     }
     /// The accessible name ("Search", "Email"), when no visible label names the field. Without
-    /// it the placeholder names it.
+    /// it the placeholder names it. Accessibility-only (not drawn); wrap in [`crate::Field`] for a
+    /// visible label.
     pub fn label(mut self, l: impl Into<String>) -> Self {
         self.label = Some(l.into());
         self
@@ -221,6 +227,8 @@ impl TextInput {
         self
     }
     /// Help or a validation error for the inner editor, separate from its name.
+    /// Accessibility-only (not drawn); use [`crate::Field::prefix`] / [`crate::Field::suffix`] for
+    /// visible wrapped help text.
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
@@ -398,6 +406,7 @@ impl TextInput {
 }
 
 /// A multi-line field (`Textarea`): 80 points tall at least, 13/1.35 type, 8 points of padding.
+/// Wrap in [`crate::Field`] with `.width(None)` for a visible label and wrapped help text.
 pub struct TextArea {
     edit: TextEdit,
     label: Option<String>,
@@ -567,6 +576,10 @@ impl TextArea {
 }
 
 /// The older labelled field (`components/text-field`): label over a bordered 32 point input.
+///
+/// Draws a visible label and a wrapped, assertive [`Self::error`] line, but has no `secure`,
+/// `on_change`, `on_submit` or help text. Prefer [`crate::Field`] with [`TextInput`] or
+/// [`TextArea`] for new forms.
 pub struct TextField {
     label: String,
     edit: TextEdit,

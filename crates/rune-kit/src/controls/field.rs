@@ -10,6 +10,61 @@ pub static INFO: Icon = Icon {
     body: r#"<path fill-rule="evenodd" d="M13 13H3V3H13V13ZM6.46777 6.81641V7.81641H7.5791V11.3721H8.5791V6.81641H6.46777ZM7.30078 4.62891V5.62891H8.85645V4.62891H7.30078Z" fill="currentColor"/>"#,
 };
 
+/// A labelled form field (`@opencode/ui` `forms/field`): draws a visible label, an optional
+/// [`Self::info`] icon, wrapped [`Self::prefix`] and [`Self::suffix`] help lines, and sets the
+/// outer `group`'s accessible name and description.
+///
+/// Wrap [`crate::TextInput`], [`crate::TextArea`] or [`crate::Select`] in `Field` for new forms
+/// instead of the older [`crate::TextField`]:
+///
+/// - [`crate::TextInput::label`] and [`crate::TextInput::description`] (and
+///   [`crate::TextArea::label`]) are accessibility-only and are not drawn; still pass `.label(..)`
+///   on the inner control so assistive technology names the editor itself.
+/// - [`crate::TextInput`] and [`crate::TextArea`] default to a 280 pt width; pass `.width(None)`
+///   to fill the `Field`.
+/// - Mark validation errors with `.invalid(true)` on the inner control alongside error text.
+///
+/// ```
+/// # use rune::{TextEdit, Tx};
+/// # use rune_kit::{Field, Kit, TextInput};
+/// # #[derive(Default)]
+/// # struct App { host: TextEdit, password: TextEdit, error: Option<String> }
+/// # impl App { fn connect(&mut self, _: &mut Tx) {} }
+/// # let s = App::default();
+/// # let k = &Kit::neutral(true);
+/// let host = Field::new()
+///     .label("Host")
+///     .info()
+///     .prefix("Hostname or IP of the remote server.")
+///     .control(
+///         TextInput::new(&s.host)
+///             .label("Host")
+///             .placeholder("api.example.com")
+///             .width(None)
+///             .on_edit(|s: &mut App| &mut s.host)
+///             .on_submit(|s: &mut App, tx: &mut Tx| s.connect(tx))
+///             .build(k),
+///     )
+///     .build(k);
+///
+/// let password = Field::new()
+///     .label("Password")
+///     .control(
+///         TextInput::new(&s.password)
+///             .label("Password")
+///             .placeholder("Required")
+///             .width(None)
+///             .secure()
+///             .invalid(s.error.is_some())
+///             .on_edit(|s: &mut App| &mut s.password)
+///             .on_change(|s: &mut App, _: &mut Tx| s.error = None)
+///             .on_submit(|s: &mut App, tx: &mut Tx| s.connect(tx))
+///             .build(k),
+///     )
+///     .suffix(s.error.as_deref().unwrap_or("Stored in your system keychain."))
+///     .build(k);
+/// # let _ = (host, password);
+/// ```
 pub struct Field {
     label: Option<String>,
     info: bool,

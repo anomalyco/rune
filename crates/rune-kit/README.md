@@ -105,6 +105,57 @@ attributed `TextEdit` marks, paragraph blocks and per-frame syntax highlights, a
 
 ![rich editor](../../demo/kit/rich-editor.png)
 
+**Labelled form fields.** Wrap `TextInput`, `TextArea` or `Select` in `Field` for a visible label
+and wrapped help text:
+
+```rust
+let host = Field::new()
+    .label("Host")
+    .info()
+    .prefix("Hostname or IP of the remote server.")
+    .control(
+        TextInput::new(&s.host)
+            .label("Host")
+            .placeholder("api.example.com")
+            .width(None)
+            .on_edit(|s: &mut App| &mut s.host)
+            .on_submit(|s: &mut App, tx: &mut Tx| s.connect(tx))
+            .build(k),
+    )
+    .build(k);
+
+let password = Field::new()
+    .label("Password")
+    .control(
+        TextInput::new(&s.password)
+            .label("Password")
+            .placeholder("Required")
+            .width(None)
+            .secure()
+            .invalid(s.error.is_some())
+            .on_edit(|s: &mut App| &mut s.password)
+            .on_change(|s: &mut App, _: &mut Tx| s.error = None)
+            .on_submit(|s: &mut App, tx: &mut Tx| s.connect(tx))
+            .build(k),
+    )
+    .suffix(s.error.as_deref().unwrap_or("Stored in your system keychain."))
+    .build(k);
+```
+
+- `Field` draws the visible label, optional `.info()` icon (pair with a `Tooltip` if needed) and
+  wrapped `.prefix()` / `.suffix()` help lines, and exposes them as the outer group's accessible
+  name and description.
+- `TextInput::label` and `TextInput::description` (and `TextArea::label`) are accessibility-only
+  and are not drawn. Still pass `.label(..)` on the inner `TextInput` so assistive technology
+  names the editor itself rather than falling back to the placeholder.
+- `TextInput` and `TextArea` default to a 280 pt width; pass `.width(None)` so they fill `Field`.
+- Mark validation errors with `.invalid(true)` on the inner control alongside error text (in
+  `.suffix(..)` or an assertive error element beneath the control, plus `.description(..)` on the
+  `TextInput` when the error should also be read as the editor's description).
+- `TextField` is the older self-contained labelled field (`components/text-field`): it draws a
+  label and an assertive wrapped `.error()` line, but has no `secure`, `on_change`, `on_submit`
+  or help text. Prefer `Field` + `TextInput` / `TextArea` for new forms.
+
 `k.selection()` is the selection highlight TextInput and TextArea draw. Pass it to Rune's
 selectable text so a selected command line looks like a selected field:
 `text(cmd).selectable(true).selection_color(k.selection())`. `rune-text--selectable-help` in the
