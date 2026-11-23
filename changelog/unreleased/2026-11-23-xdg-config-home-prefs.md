@@ -1,0 +1,1 @@
+- Linux / XDG preferences (`Prefs::open`): an absolute `XDG_CONFIG_HOME` is used even when `HOME` and the other XDG base directory variables are unset.

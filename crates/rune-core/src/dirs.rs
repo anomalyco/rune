@@ -126,10 +126,23 @@ pub fn home_from(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
 pub(crate) fn config_base(var: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     let config = Bases::resolve(var).map(|b| b.config.base);
     // A caller asking only for preferences doesn't need a cache directory. A Windows process
-    // can have its roaming folder without a local folder or a user profile to derive one from.
+    // can have its roaming folder without a local folder or a user profile to derive one from,
+    // and an XDG process can have `XDG_CONFIG_HOME` without `HOME` or the other XDG folders.
     #[cfg(target_os = "windows")]
     let config = config.or_else(|| var("APPDATA").filter(|v| !v.is_empty()).map(PathBuf::from));
+    #[cfg(all(not(target_arch = "wasm32"), not(any(target_os = "macos", target_os = "ios", target_os = "windows"))))]
+    let config = config.or_else(|| xdg_config_home(var));
     config
+}
+
+/// An absolute `XDG_CONFIG_HOME` from `var`, ignoring empty or relative values as the XDG spec
+/// requires.
+#[cfg_attr(
+    any(target_arch = "wasm32", target_os = "macos", target_os = "ios", target_os = "windows"),
+    allow(dead_code)
+)]
+pub(crate) fn xdg_config_home(var: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    var("XDG_CONFIG_HOME").filter(|v| !v.is_empty()).map(PathBuf::from).filter(|p| p.is_absolute())
 }
 
 /// One kind of folder: `<base>/<id>`, then `tail` when the platform nests it.
