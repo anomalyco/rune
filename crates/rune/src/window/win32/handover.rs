@@ -22,7 +22,7 @@ use crate::render::{Gpu, Renderer};
 use crate::time::Instant;
 use crate::window::WakeEvent;
 use crate::window::host::{CompositorFrame, Host};
-use crate::window::surface::{Win, acquire, configure, reblend_core, rebuild_renderer_core, surface_config};
+use crate::window::surface::{Win, acquire, configure, drawable_size, max_surface_dim, reblend_core, rebuild_renderer_core, surface_config};
 
 /// Where a window's frames go. Windows that need the GPU from their first frame (a compositor,
 /// a translucent window, an overlay) are `Gpu` from the start, as on every other platform.
@@ -448,7 +448,8 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
     // to it, and the window keeps the `Handover` as long as it keeps the surface.
     let (gpu, surface, renderer) = Gpu::for_surface(features, false,
         |instance| unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual)) }.map_err(|e| e.to_string()))?;
-    let (config, _) = surface_config(&surface, &gpu.adapter, (size.0.max(1), size.1.max(1)), srgb).ok_or("the GPU can't present to this window")?;
+    let size = drawable_size(None, size, max_surface_dim(Some(&gpu)));
+    let (config, _) = surface_config(&surface, &gpu.adapter, size, srgb).ok_or("the GPU can't present to this window")?;
     configure(&surface, &gpu, &config)?;
     let target_format = if srgb { config.format.remove_srgb_suffix() } else { config.format };
     let mut renderer = renderer.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));

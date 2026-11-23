@@ -48,11 +48,41 @@ mod occluded_surface_tests;
 /// (`slot`) rather than in `acquire`. Elsewhere two.
 pub(crate) const FRAME_LATENCY: u32 = if cfg!(target_os = "windows") { 1 } else { 2 };
 
+/// The largest 2D surface side accepted while no GPU device is attached yet (Windows CPU boot, or
+/// between surfaces): matches D3D12 and Metal's 2D texture limit, large enough for multi-monitor
+/// desktops while rejecting wrapped negative Windows client sizes (such as `65527` for `-9`).
+pub(in crate::window) const CPU_MAX_SURFACE_DIM: u32 = 16_384;
+
+/// The largest 2D surface side the active GPU accepts, or `CPU_MAX_SURFACE_DIM` while no GPU is
+/// attached yet.
+pub(in crate::window) fn max_surface_dim(gpu: Option<&Gpu>) -> u32 {
+    gpu.map_or(CPU_MAX_SURFACE_DIM, |gpu| gpu.device.limits().max_texture_dimension_2d.max(1))
+}
+
+/// The physical drawable size for a platform-reported extent under `max_dim`.
+///
+/// Windows can report a transient negative client extent wrapped to `u16` (in `WM_SIZE`, e.g.
+/// `65527` for `-9`) or `u32` (from `GetClientRect`), exceeding `max_texture_dimension_2d`. When
+/// a window already has a drawable (`Some(prev)`), a zero or out-of-range size is ignored so the
+/// surface, viewport and CPU buffer keep the previous size until a valid resize arrives; when
+/// creating a surface (`None`), each edge is clamped to `1..=max_dim`.
+pub(in crate::window) fn drawable_size(current: Option<(u32, u32)>, reported: (u32, u32), max_dim: u32) -> (u32, u32) {
+    let max_dim = max_dim.max(1);
+    if reported.0 > 0 && reported.1 > 0 && reported.0 <= max_dim && reported.1 <= max_dim {
+        return reported;
+    }
+    match current {
+        Some(prev) => (prev.0.clamp(1, max_dim), prev.1.clamp(1, max_dim)),
+        None => (reported.0.clamp(1, max_dim), reported.1.clamp(1, max_dim)),
+    }
+}
+
 /// A vsynced sRGB (or non-sRGB when `srgb_blend` is set) configuration for the surface, and the
 /// first alpha mode it supports that composites translucent pixels.
 pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (width, height): (u32, u32), srgb_blend: bool)
     -> Option<(wgpu::SurfaceConfiguration, Option<wgpu::CompositeAlphaMode>)> {
-    let mut config = surface.get_default_config(adapter, width.max(1), height.max(1))?;
+    let (width, height) = drawable_size(None, (width, height), adapter.limits().max_texture_dimension_2d);
+    let mut config = surface.get_default_config(adapter, width, height)?;
     let caps = surface.get_capabilities(adapter);
     let srgb = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(config.format);
     config.format = if srgb_blend {
