@@ -78,9 +78,12 @@ impl capture::PointerState {
 
     /// Holds file steps for this frame's build when the tree changed since its last build.
     pub(in crate::runtime) fn hold_files(&mut self, queue: ActionQueue, stale: bool) -> ActionQueue {
-        let waited = std::mem::take(&mut self.file_drag.waited);
         let aims = |a: &Action| matches!(a, Action::Files(FileEvent::Hover(..) | FileEvent::Move | FileEvent::Drop(..)));
-        if waited || !stale || !queue.iter().any(aims) { return queue; }
+        // Intermediate timer sub-steps in `frame_split` stash queued input; keep `waited` until
+        // the held file steps return to the queue.
+        if !queue.iter().any(aims) { return queue; }
+        let waited = std::mem::take(&mut self.file_drag.waited);
+        if waited || !stale { return queue; }
         let (files, rest): (_, Vec<_>) = queue.into_iter().partition(|q| matches!(q.action, Action::Files(_)));
         self.file_drag.held = files;
         rest.into_iter().collect()

@@ -333,3 +333,52 @@ fn a_drag_that_left_or_dropped_carries_nothing_into_the_next_sample() {
     rt.frame(3.0 / 60.0);
     assert_eq!(rt.state.hover, [("outer", true)], "the next drag starts from its own files, not the last one's");
 }
+
+#[test]
+fn held_file_steps_survive_headless_timer_substeps_below_60_fps() {
+    use std::time::Duration;
+
+    fn poll_1s(_: &mut Drops, _: f64, tx: &mut Tx) -> bool {
+        tx.wake_after(Duration::from_secs(1));
+        true
+    }
+    fn poll_16ms(_: &mut Drops, _: f64, tx: &mut Tx) -> bool {
+        tx.wake_after(Duration::from_millis(16));
+        true
+    }
+
+    for (label, poll) in [("1s", poll_1s as fn(&mut Drops, f64, &mut Tx) -> bool), ("16ms", poll_16ms)] {
+        for fps in [30.0_f64, 45.0] {
+            let dt = 1.0 / fps;
+            let mut rt = Runtime::new(Drops { root_takes: true, ..Default::default() }, view, (400.0, 300.0), Env::new(true, 1.0));
+            rt.poll = Some(poll);
+            rt.frame(0.0);
+
+            let early = (0.4 * fps).round() as usize;
+            let late = (1.6 * fps).round() as usize;
+            let total = (2.0 * fps).round() as usize;
+            for k in 1..=total {
+                if k == early {
+                    rt.drag_files(files(&["early.png"]), Some((50.0, 50.0)));
+                    rt.drop_files(files(&["early.png"]), Some((50.0, 50.0)));
+                } else if k == late {
+                    rt.drag_files(files(&["late.png"]), Some((50.0, 50.0)));
+                    rt.drop_files(files(&["late.png"]), Some((50.0, 50.0)));
+                }
+                rt.frame(dt);
+            }
+
+            assert_eq!(
+                dropped(&rt),
+                [("inner", vec!["early.png"]), ("inner", vec!["late.png"])],
+                "poll={label} fps={fps}: drops before and after 1s must survive timer sub-steps"
+            );
+            assert_eq!(
+                rt.state.hover,
+                [("inner", true), ("inner", false), ("inner", true), ("inner", false)],
+                "poll={label} fps={fps}: hover must pair with each drop"
+            );
+            assert!(!rt.pointer.files_held(), "poll={label} fps={fps}: waited flag must clear once delivered");
+        }
+    }
+}
