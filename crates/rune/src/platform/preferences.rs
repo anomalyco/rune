@@ -24,17 +24,72 @@ pub(crate) fn reduced_motion() -> bool {
     unsafe { SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, (&mut animations as *mut i32).cast(), 0) != 0 && animations == 0 }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "dbus"))]
 pub(crate) fn reduced_motion() -> bool {
+    crate::platform::portal_appearance::reduced_motion()
+}
+
+#[cfg(all(target_os = "linux", not(feature = "dbus")))]
+pub(crate) fn reduced_motion() -> bool {
+    static CACHED: CachedReducedMotion = CachedReducedMotion::new();
+    CACHED.get_or_init(read_reduced_motion_fallback)
+}
+
+/// One-shot off-UI-thread cache for the Linux fallback reduced-motion read when the `dbus`
+/// feature is disabled: spawns one short-lived worker thread per process so focus changes never
+/// touch the filesystem or `dlopen` libgio on the UI thread.
+#[cfg(any(test, all(target_os = "linux", not(feature = "dbus"))))]
+struct CachedReducedMotion {
+    started: std::sync::OnceLock<()>,
+    value: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(any(test, all(target_os = "linux", not(feature = "dbus"))))]
+impl CachedReducedMotion {
+    const FIRST_ANSWER: std::time::Duration = std::time::Duration::from_millis(100);
+
+    const fn new() -> Self {
+        Self {
+            started: std::sync::OnceLock::new(),
+            value: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    fn get_or_init(&'static self, read: fn() -> bool) -> bool {
+        self.started.get_or_init(|| {
+            let (ready, first) = std::sync::mpsc::sync_channel(1);
+            let worker = std::thread::Builder::new().name("rune-reduced-motion".into()).spawn(move || {
+                self.value.store(read(), std::sync::atomic::Ordering::Relaxed);
+                ready.send(()).ok();
+            });
+            if worker.is_ok() { first.recv_timeout(Self::FIRST_ANSWER).ok(); }
+        });
+        self.value.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn parse_kdeglobals_reduced_motion(contents: &str) -> Option<bool> {
+    contents.lines()
+        .filter_map(|line| line.trim().split_once('='))
+        .find_map(|(k, v)| (k.trim() == "AnimationDurationFactor").then(|| v.trim().parse::<f64>().ok()).flatten())
+        .map(|factor| factor == 0.0)
+}
+
+/// Fallback reduced-motion read for Linux desktops whose Settings portal answers neither
+/// `org.freedesktop.appearance` `reduced-motion` nor `org.gnome.desktop.interface`
+/// `enable-animations`, or builds without the `dbus` feature. Called at most once per process,
+/// on a background worker thread.
+#[cfg(target_os = "linux")]
+pub(crate) fn read_reduced_motion_fallback() -> bool {
     // KDE exposes animation duration in kdeglobals; zero disables animation.
     let config = std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")));
     if rune_core::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().split(':').any(|d| d.eq_ignore_ascii_case("KDE"))
         && let Some(config) = config
         && let Ok(contents) = std::fs::read_to_string(config.join("kdeglobals"))
-        && let Some(factor) = contents.lines().filter_map(|line| line.trim().split_once('='))
-            .find_map(|(k, v)| (k.trim() == "AnimationDurationFactor").then(|| v.trim().parse::<f64>().ok()).flatten())
-    { return factor == 0.0; }
+        && let Some(reduced) = parse_kdeglobals_reduced_motion(&contents)
+    { return reduced; }
     // Optional GNOME GSettings, with schema lookup before constructing settings (missing
     // schemas otherwise abort GLib). No subprocess or required GNOME dependency.
     // SAFETY: `gnome_animations` dynamically resolves GIO symbols, checks every pointer for null,
@@ -206,3 +261,7 @@ pub(crate) fn full_keyboard_access() -> bool {
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn full_keyboard_access() -> bool { true }
+
+#[cfg(test)]
+#[path = "preferences_tests.rs"]
+mod tests;

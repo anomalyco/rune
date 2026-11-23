@@ -216,9 +216,11 @@ impl AnyHost for OverlayHost {
                 }
             }
             WindowEvent::RedrawRequested | WindowEvent::Resized(_) => {
-                // A new accent or scroller style asks every window to redraw (`accent::watch`, `scroll_bars::watch`).
+                // A new accent, scroller style or Linux portal preference asks every window to redraw.
                 core.accent_changed(app.rt_mut(), crate::system_accent());
                 core.scroll_bars_changed(app.rt_mut(), crate::platform::scroll_bars::current());
+                #[cfg(target_os = "linux")]
+                app.rt_mut().set_system_reduced_motion(crate::platform::preferences::reduced_motion());
                 core.dirty = true;
             }
             WindowEvent::CursorMoved { position, .. } if input_enabled => {

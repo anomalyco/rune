@@ -1271,8 +1271,10 @@ Native hosts populate `cx.system_reduced_motion()` at creation and refresh it on
 window focus changes. Rune uses it by default; `cx.reduced_motion(value)` overrides
 it **for the current commit only**. Call it each time the view runs to keep an
 override; otherwise the next commit uses the host preference. macOS reads the accessibility preference, Windows reads client
-area animation, and Linux reads KDE's duration factor or GNOME's enable-animations
-setting when available. The preference lives on Runtime/Cx, so existing
+area animation, and Linux follows the XDG Settings portal (`org.freedesktop.appearance`
+`reduced-motion` and `org.gnome.desktop.interface` `enable-animations`) on a background
+thread, falling back once off the UI thread to KDE's duration factor or GNOME's
+`enable-animations` when the portal answers neither. The preference lives on Runtime/Cx, so existing
 `Env { system_dark, scale }` literals remain valid. Headless runtimes default to
 false; tests can call `rt.set_system_reduced_motion(value)` and inspect
 `rt.system_reduced_motion()`.
