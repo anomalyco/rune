@@ -192,7 +192,6 @@ impl RuntimeCore {
         let mut tx = std::mem::take(&mut self.frame.pending);
         let mut ran = false;
         let mut why = if tx.polled_change && self.commit.dirty { CommitWhy::POLL } else { 0 };
-        #[cfg(debug_assertions)]
         let commits0 = self.commit.commits;
         let shaped0 = self.text.shaped;
         self.settled = false;
@@ -428,20 +427,9 @@ impl RuntimeCore {
         #[cfg(debug_assertions)]
         { self.frame.clear_live_check(); }
         tx.keep_on_screen.clear();
-        for (path, v) in &mut self.commit.virtuals {
-            if let Some(key) = v.reveal_selected.take() && !pointer_hover {
-                // Use the keyed ancestor path so identical row keys in other lists do not
-                // intercept the reveal, including when this row is still virtual.
-                let scope = element_path::keyed_scope(path);
-                let key = if scope.is_empty() { key } else { format!("{scope}/{key}") };
-                tx.scroll_to.push(ScrollReveal::into_view(None, key));
-            }
-        }
+        self.queue_reveal_selected(&mut tx, pointer_hover);
         #[cfg(debug_assertions)]
-        {
-            let scrolling = self.scrolling();
-            self.commit.watch_frame(commits0, scrolling, tx.scroll_offsets.iter().find(|r| tx.commit.snaps() || r.glide.is_none()).map(|r| r.key.as_str()));
-        }
+        let instant_scroll = tx.scroll_offsets.iter().find(|r| tx.commit.snaps() || r.glide.is_none()).map(|r| r.key.clone());
         let follow = std::mem::take(&mut self.edit.caret_follow);
         let commits_before_scroll = self.commit.commits;
         self.finish_scroll_requests(app, &mut tx, follow);
@@ -450,6 +438,12 @@ impl RuntimeCore {
         }
         // Those scrolls moved the caret after the commit a view placed from it saw.
         if self.edit.caret_watch && self.caret_moved(None) { self.commit(app, &Tx { commit: Commit::Instant, ..Tx::default() }); }
+        self.deliver_visible_rows(app, &tx, commits0, pointer_hover);
+        #[cfg(debug_assertions)]
+        {
+            let scrolling = self.scrolling();
+            self.commit.watch_frame(commits0, scrolling, instant_scroll.as_deref());
+        }
         if let Some(request) = tx.select.take() {
             let from_change = std::mem::take(&mut tx.select_from_change);
             self.apply_select_request(app, request, from_change);

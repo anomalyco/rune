@@ -1,0 +1,1 @@
+- `El::on_visible_rows` now delivers changed row ranges in the same frame after commits, rekeys and scroll requests (bounded against feedback loops); handlers returning `false` skip an extra commit and frame, while handlers returning `true` update derived views before paint.

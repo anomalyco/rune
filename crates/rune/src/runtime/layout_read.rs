@@ -36,7 +36,7 @@ mod selection_rects;
 pub(crate) use selection_rects::{SELECTION, SelectedRange, boxes_moved};
 
 /// Extra measurements one commit may take while a read moves.
-const PASSES: usize = 2;
+pub(super) const PASSES: usize = 2;
 /// Commits in a row that layout feedback alone may cause.
 const ECHOES: u32 = 4;
 

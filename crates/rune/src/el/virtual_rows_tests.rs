@@ -674,6 +674,179 @@ fn visible_rows_reports_range_without_committing_when_unchanged() {
 }
 
 #[test]
+fn visible_rows_reports_rekeyed_range_same_frame_without_extra_commit() {
+    const CELLS: usize = 4000;
+    const LINE: f32 = 30.0;
+    struct S { per: usize, keys: Vec<String>, report: Option<(usize, usize)> }
+    impl S {
+        fn rekey(&mut self) {
+            self.keys = (0..CELLS.div_ceil(self.per)).map(|l| format!("line{}", l * self.per)).collect();
+        }
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        col().w_full().h_full().child(
+            col().key("vp").w(400.0).h(500.0).scroll(ScrollSpec { stick_bottom: false }).child(
+                col().key("rows").w_full().growth(GrowthSpec::default())
+                    .virtual_rows(s.keys.len(), LINE,
+                        |s: &S, i| std::borrow::Cow::Borrowed(s.keys[i].as_str()),
+                        |s: &S, i| {
+                            let first = i * s.per;
+                            crate::row().h(LINE).w_full().children(
+                                (first..(first + s.per).min(CELLS)).map(|c| el().key(format!("c{c}")).w(20.0).h(LINE)),
+                            )
+                        })
+                    .virtual_rows_version(s.per)
+                    .on_visible_rows(|s: &mut S, r| {
+                        s.report = Some((r.start * s.per, (r.end * s.per).min(CELLS)));
+                        false
+                    })))
+    }
+    let mut s = S { per: 5, keys: Vec::new(), report: None };
+    s.rekey();
+    let mut rt = Runtime::new(s, view, (400.0, 500.0), Env::new(false, 1.0));
+    rt.frame(0.0);
+    rt.update(|_, tx| tx.scroll_to_instant("vp", 0.0, 76.0 * LINE));
+    for _ in 0..10 { rt.frame(1.0 / 60.0); }
+    assert_eq!(rt.state.report, Some((380, 465)));
+    let commits = rt.stats.commits;
+    rt.update(|s, _| { s.per = 2; s.rekey(); });
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.report, Some((380, 414)), "rekey reports the new range on frame 1");
+    assert_eq!(rt.stats.commits, commits + 1, "returning false costs no extra commit");
+
+    // A short list whose overscan fits in one commit needs no extra animating frame either.
+    struct Short { version: u32, count: usize, report: Option<std::ops::Range<usize>> }
+    fn short_view(s: &Short, _: &mut Cx<Short>) -> El {
+        col().key("vp").w(200.0).h(200.0).scroll(ScrollSpec { stick_bottom: false }).child(
+            col().key("rows").w_full().growth(GrowthSpec::default())
+                .virtual_rows(s.count, 20.0,
+                    |s: &Short, i| format!("v{}-{i}", s.version).into(),
+                    |_: &Short, i| el().h(20.0).w_full().key(format!("r{i}")))
+                .virtual_rows_version(s.version)
+                .on_visible_rows(|s: &mut Short, r| { s.report = Some(r); false }))
+    }
+    let mut rt = Runtime::new(Short { version: 0, count: 10, report: None }, short_view, (200.0, 200.0), Env::new(false, 1.0));
+    assert!(!rt.frame(0.0), "first mount with returning-false handler asks for no extra frame");
+    assert_eq!(rt.state.report, Some(0..10));
+    let commits = rt.stats.commits;
+    rt.update(|s, tx| { s.version = 1; s.count = 6; tx.instant(); });
+    let animating = rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.report, Some(0..6));
+    assert_eq!(rt.stats.commits, commits + 1);
+    assert!(!animating, "rekeying with a returning-false handler forces no extra GPU frame");
+}
+
+#[test]
+fn visible_rows_reports_first_mount_same_frame_and_keeps_follow_up_instant() {
+    struct S { range: Option<std::ops::Range<usize>>, commit: bool }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let hdr = match &s.range {
+            Some(r) => format!("hdr-{}..{}", r.start, r.end),
+            None => "hdr-none".into(),
+        };
+        col().w(200.0).h(240.0).children([
+            el().key(hdr).h(40.0).w_full().transition(crate::Transition::opacity()),
+            col().key("scroll").w(200.0).h(200.0).scroll(ScrollSpec { stick_bottom: false }).child(
+                col().key("rows").w_full().growth(GrowthSpec::default())
+                    .virtual_rows(10, 20.0,
+                        |_: &S, i| format!("r{i}").into(),
+                        |_: &S, _| el().h(20.0).w_full())
+                    .virtual_rows_version(0u32)
+                    .on_visible_rows(|s: &mut S, r| {
+                        let changed = s.range.as_ref() != Some(&r);
+                        s.range = Some(r);
+                        s.commit && changed
+                    })),
+        ])
+    }
+    // Returning false delivers on frame 1 with 1 commit and no animation.
+    let mut rt = Runtime::new(S { range: None, commit: false }, view, (200.0, 240.0), Env::new(false, 1.0));
+    let animating = rt.frame(0.0);
+    assert_eq!(rt.state.range, Some(0..10));
+    assert_eq!(rt.stats.commits, 1);
+    assert!(!animating);
+
+    // Returning true updates derived UI on frame 1 and lands the follow-up commit instantly.
+    let mut rt = Runtime::new(S { range: None, commit: true }, view, (200.0, 240.0), Env::new(false, 1.0));
+    let animating = rt.frame(0.0);
+    assert_eq!(rt.state.range, Some(0..10));
+    assert!(rt.find("hdr-0..10").is_some(), "derived header updates on frame 1");
+    assert_eq!(rt.stats.commits, 2);
+    assert!(!animating, "first-frame follow-up commit must not start enter animations");
+}
+
+#[test]
+fn visible_rows_returning_true_updates_derived_ui_same_frame() {
+    struct S { version: u32, count: usize, visible: std::ops::Range<usize> }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        col().w(200.0).h(240.0).children([
+            el().key(format!("hdr-{}..{}", s.visible.start, s.visible.end)).h(40.0).w_full(),
+            col().key("scroll").w(200.0).h(200.0).scroll(ScrollSpec { stick_bottom: false }).child(
+                col().key("rows").w_full().growth(GrowthSpec::default())
+                    .virtual_rows(s.count, 20.0,
+                        |s: &S, i| format!("v{}-r{i}", s.version).into(),
+                        |_: &S, _| el().h(20.0).w_full())
+                    .virtual_rows_version(s.version)
+                    .on_visible_rows(|s: &mut S, r| {
+                        let changed = s.visible != r;
+                        s.visible = r;
+                        changed
+                    })),
+        ])
+    }
+    let mut rt = Runtime::new(S { version: 0, count: 100, visible: 0..0 }, view, (200.0, 240.0), Env::new(false, 1.0));
+    rt.frame(0.0);
+    assert!(rt.find("hdr-0..10").is_some());
+
+    // Rekey shrinking the list updates the derived header on the same frame.
+    rt.update(|s, _| { s.version = 1; s.count = 4; });
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.visible, 0..4);
+    assert!(rt.find("hdr-0..4").is_some(), "header reflects rekeyed range on the same frame");
+
+    // Restoring rows and jumping via scroll_to_instant updates the header on the same frame.
+    rt.update(|s, tx| {
+        s.version = 2;
+        s.count = 100;
+        tx.scroll_to_instant("scroll", 0.0, 200.0);
+    });
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.visible, 10..20);
+    assert!(rt.find("hdr-10..20").is_some(), "header reflects scroll_to_instant range on the same frame");
+}
+
+#[test]
+fn visible_rows_runaway_handler_stops_under_cap_and_quiet_feedback() {
+    struct S { version: u32, calls: u32 }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        col().key("scroll").w(200.0).h(200.0).scroll(ScrollSpec { stick_bottom: false }).child(
+            col().key("rows").w_full().growth(GrowthSpec::default())
+                .virtual_rows(10, 20.0,
+                    |s: &S, i| format!("v{}-r{i}", s.version).into(),
+                    |_: &S, _| el().h(20.0).w_full())
+                .virtual_rows_version(s.version)
+                .on_visible_rows(|s: &mut S, _| {
+                    s.version += 1;
+                    s.calls += 1;
+                    true
+                }))
+    }
+    let mut rt = Runtime::new(S { version: 0, calls: 0 }, view, (200.0, 200.0), Env::new(false, 1.0));
+    rt.motion.enable_motion_needs_cause();
+    assert!(rt.frame(0.0), "still open after 2 follow-up passes, so frame 2 delivers the queued report");
+    assert_eq!(rt.stats.commits, 3, "per-frame cap bounds follow-up commits to PASSES (2)");
+    assert_eq!(rt.state.calls, 2);
+    // Frame 2 completes ECHOES (4) layout-echo commits, enters Feedback::Quiet, and gates
+    // step_motion's report_visible_rows queueing so no further frame is requested.
+    assert!(!rt.frame(1.0 / 60.0), "runaway handler stops animating once Feedback::Quiet triggers");
+    assert_eq!((rt.stats.commits, rt.state.calls), (5, 4));
+    for _ in 0..5 {
+        assert!(!rt.frame(1.0 / 60.0));
+    }
+    assert_eq!((rt.stats.commits, rt.state.calls), (5, 4), "quiet runaway does no further work");
+}
+
+#[test]
 fn culled_rows_unmount_their_whole_subtree_immediately() {
     fn view(_: &(), _: &mut Cx<()>) -> El {
         col().key("scroll").w_full().h_full().scroll(ScrollSpec { stick_bottom: false }).child(

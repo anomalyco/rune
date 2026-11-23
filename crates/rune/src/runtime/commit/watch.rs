@@ -15,7 +15,7 @@ impl CommitState {
         self.watch.cause = 0;
     }
 
-    /// After a frame's commits, before its scroll requests run: whether it committed since the
+    /// After a frame's commits, scroll requests and same-frame visible-rows handlers: whether it committed since the
     /// `commits0`th commit, while a viewport scrolled; `instant` is the viewport an instant scroll
     /// it asked for moves.
     #[cfg(debug_assertions)]
