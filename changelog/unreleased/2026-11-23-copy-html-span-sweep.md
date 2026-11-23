@@ -1,0 +1,1 @@
+- Selection: copying rich text as HTML (`inline_html`) skips boundaries from paint-only spans and sweeps markup-emitting spans, strikes and links in O(N log N) instead of rescanning all spans at every cut.
