@@ -557,3 +557,114 @@ fn hoverable_child_with_own_cursor_overrides_draggable_parent() {
     rt.pointer_move(50.0, 230.0);
     assert_eq!(rt.cursor(), Cursor::Move, "hoverable child with no primary ancestor inherits cursor from its wrapper");
 }
+
+#[test]
+fn preserve_focus_on_press_keeps_focus_on_focusable_rows_and_on_key_ancestors() {
+    #[derive(Default)]
+    struct State {
+        field: crate::TextEdit,
+        row_presses: u32,
+        child_presses: u32,
+        scroll_btn_presses: u32,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        col().size(240.0, 320.0)
+            .child(
+                crate::text_input(&s.field, crate::TextStyle::new(14.0, 400.0))
+                    .key("field")
+                    .size(200.0, 30.0)
+                    .on_edit(|s: &mut State| &mut s.field),
+            )
+            .child(
+                crate::row().key("kept-row").size(200.0, 60.0).padding(10.0)
+                    .focusable(true)
+                    .on_key(|_: &mut State, _, _| false)
+                    .preserve_focus_on_press(true)
+                    .on_press(|s: &mut State| s.row_presses += 1)
+                    .child(el().key("bare-child").size(40.0, 40.0))
+                    .child(el().key("plain-child").size(40.0, 40.0).on_press(|s: &mut State| s.child_presses += 1))
+                    .child(el().key("focusable-child").size(40.0, 40.0).focusable(true)),
+            )
+            .child(
+                crate::row().key("normal-row").size(200.0, 60.0).padding(10.0)
+                    .focusable(true)
+                    .on_key(|_: &mut State, _, _| false)
+                    .child(el().key("normal-child").size(40.0, 40.0).on_press(|_: &mut State| {})),
+            )
+            .child(
+                col().key("scroller").size(200.0, 60.0)
+                    .scroll(ScrollSpec { stick_bottom: false })
+                    .focusable(true)
+                    .child(
+                        el().key("scroll-btn").size(80.0, 30.0)
+                            .preserve_focus_on_press(true)
+                            .on_press(|s: &mut State| s.scroll_btn_presses += 1),
+                    ),
+            )
+    }
+    let mut field = crate::TextEdit::new("draft");
+    field.focused = true;
+    let mut rt = Runtime::new(State { field, ..State::default() }, view, (240.0, 320.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    let focused_key = |rt: &Runtime<State>| rt.elements().into_iter().find(|e| e.focused).and_then(|e| e.key);
+    let click = |rt: &mut Runtime<State>, x: f32, y: f32| {
+        rt.pointer_move(x, y);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+    };
+    let refocus_field = |rt: &mut Runtime<State>| {
+        let (x, y) = rt.find("field").unwrap();
+        click(rt, x, y);
+        assert_eq!(focused_key(rt).as_deref(), Some("field"));
+    };
+
+    assert_eq!(focused_key(&rt).as_deref(), Some("field"));
+
+    // Pressing the focusable, on_key row's padding keeps focus on the field.
+    let kept_rect = rt.presented("kept-row").unwrap().0;
+    click(&mut rt, kept_rect[0] + 5.0, kept_rect[1] + 5.0);
+    assert_eq!(rt.state.row_presses, 1, "the press still reaches the row's on_press");
+    assert_eq!(focused_key(&rt).as_deref(), Some("field"), "a focusable row with preserve_focus_on_press must not take focus on click");
+    assert!(rt.state.field.focused);
+
+    // Pressing a bare child inside the row keeps focus on the field.
+    let (x, y) = rt.find("bare-child").unwrap();
+    click(&mut rt, x, y);
+    assert_eq!(focused_key(&rt).as_deref(), Some("field"), "clicking a bare child must not focus its preserve_focus_on_press ancestor");
+
+    // Pressing an unfocusable interactive child keeps focus instead of focusing the on_key ancestor.
+    let (x, y) = rt.find("plain-child").unwrap();
+    click(&mut rt, x, y);
+    assert_eq!(rt.state.child_presses, 1, "the press still reaches the child's on_press");
+    assert_eq!(focused_key(&rt).as_deref(), Some("field"), "clicking an unfocusable child must not focus its on_key ancestor");
+
+    // Pressing a preserve_focus_on_press button inside a focusable scroll region does not focus the scroller.
+    let (x, y) = rt.find("scroll-btn").unwrap();
+    click(&mut rt, x, y);
+    assert_eq!(rt.state.scroll_btn_presses, 1);
+    assert_eq!(focused_key(&rt).as_deref(), Some("field"), "clicking a preserve_focus_on_press child must not focus a focusable scroll ancestor");
+
+    // An explicitly focusable descendant inside the row still takes focus normally.
+    let (x, y) = rt.find("focusable-child").unwrap();
+    click(&mut rt, x, y);
+    assert_eq!(focused_key(&rt).as_deref(), Some("focusable-child"), "focusable descendants still take focus on click");
+
+    // Keyboard focus (Tab) still reaches the focusable row.
+    refocus_field(&mut rt);
+    rt.key(crate::KeyEvent { key: crate::Key::Tab, mods: crate::Mods::default() });
+    rt.frame(0.0);
+    assert_eq!(focused_key(&rt).as_deref(), Some("kept-row"), "Tab still reaches a focusable preserve_focus_on_press row");
+
+    // Without preserve_focus_on_press, clicking the row's padding or its unfocusable child still focuses the row.
+    refocus_field(&mut rt);
+    let normal_rect = rt.presented("normal-row").unwrap().0;
+    click(&mut rt, normal_rect[0] + 5.0, normal_rect[1] + 5.0);
+    assert_eq!(focused_key(&rt).as_deref(), Some("normal-row"), "a row without preserve_focus_on_press still takes focus on click");
+
+    refocus_field(&mut rt);
+    let (x, y) = rt.find("normal-child").unwrap();
+    click(&mut rt, x, y);
+    assert_eq!(focused_key(&rt).as_deref(), Some("normal-row"), "an unfocusable child still focuses its on_key ancestor without preserve_focus_on_press");
+}
