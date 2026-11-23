@@ -1,0 +1,1 @@
+- Windows: the mask cache (`rune_text::mask_cache`) keeps the first screen's icon masks beside its glyph masks, keyed by what each icon draws, its size and its facing, so a later launch of the same build places them from the saved bytes instead of parsing and filling each icon again (0.8 ms of a desktop app's first frame).

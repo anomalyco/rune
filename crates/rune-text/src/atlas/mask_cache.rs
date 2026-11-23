@@ -1,6 +1,8 @@
 //! Windfoil's atlas masks kept across launches: a glyph whose mask an earlier launch of this
 //! build made is placed from those bytes, with no outline built and no fill, so a first screen
-//! of text seen before costs a copy. It's a cache of computed inputs, not a picture: every mask
+//! of text seen before costs a copy. An icon's mask is kept the same way, under what it draws
+//! (its body and view box) and its size and facing, so a first screen's icons aren't parsed and
+//! filled again either. It's a cache of computed inputs, not a picture: every mask
 //! is keyed by what decides its texels (the font by its identity, ont_identity, never this run's id;
 //! the glyph, size, variation, x and y phase, dilation, look, slant and synthetic bold), and the
 //! whole cache by this build's link stamp, so any other build, font or setting misses and fills
@@ -47,12 +49,25 @@ struct StableKey {
     color: bool,
 }
 
+/// The font an icon's mask is stored under: no font's identity (`font_identity` hashes a file).
+const ICON_FONT: u64 = u64::from_le_bytes(*b"runeicon");
 const KEY_BYTES: usize = 40;
 const ENTRY_BYTES: usize = KEY_BYTES + 16;
 
 impl StableKey {
     fn of(key: &GlyphKey, font: u64) -> StableKey {
         StableKey { font, index: key.index, glyph: key.glyph, size: key.size, coords: key.coords, dilation: key.dilation, subpx: key.subpx, subpy: key.subpy, apple: key.apple, skew: key.skew, bold: key.bold, color: false }
+    }
+
+    /// An icon's drawing at `size` (the atlas's word for it: canvas, shortfall and facing), named
+    /// by what it draws, so the same icon is the same key in every launch of a build.
+    fn icon(icon: &Icon, size: u32) -> StableKey {
+        use std::hash::{Hash, Hasher};
+        let mut h = rustc_hash::FxHasher::default();
+        icon.body.hash(&mut h);
+        icon.view.to_bits().hash(&mut h);
+        let id = h.finish();
+        StableKey { font: ICON_FONT, index: 0, glyph: (id >> 32) as u32, size, coords: id, dilation: 0, subpx: 0, subpy: 0, apple: 0, skew: 0, bold: false, color: false }
     }
 
     /// Colour glyph `key`'s (its `color_key`).
@@ -238,6 +253,8 @@ pub(crate) struct Masks {
     offered: Option<Arc<MaskCache>>,
     /// Each font's (blob id's) bytes and their identity, once worked out.
     fonts: FxHashMap<u64, (parley::fontique::Blob<u8>, Option<u64>)>,
+    /// Each icon the atlas was asked for (its `icons` key), by the key a write stores it under.
+    icons: FxHashMap<(usize, u32), StableKey>,
     saving: Saving,
 }
 
@@ -259,6 +276,24 @@ impl TextSystem {
         mask.lcd = entry.lcd;
         self.atlas.map.insert(*key, Residency::Uploaded(mask));
         Some(Rasterized::Placed(mask))
+    }
+
+    /// The mask an earlier launch saved for `icon` on a `px` canvas (`key` is the atlas's, its
+    /// second word the size), placed as a fresh drawing is; None when there's no cache or it
+    /// lacks the icon. Either way the icon is noted, so a write can name it.
+    pub(crate) fn cached_icon(&mut self, icon: &Icon, px: u32, key: (usize, u32)) -> Option<Rasterized> {
+        let stable = StableKey::icon(icon, key.1);
+        self.masks.icons.insert(key, stable);
+        let cache = self.masks.offered.clone()?;
+        let entry = *cache.entries.get(&stable)?;
+        if entry.w == 0 || entry.h == 0 {
+            if rune_core::marks::counting() { rune_core::marks::add("text.mask_cache_hits", 1); }
+            return Some(Rasterized::Empty);
+        }
+        if entry.w != px || entry.h != px || entry.color { return None; }
+        let (slot, _) = self.atlas.put_bordered(px, &cache.data[entry.at..entry.at + entry.len()])?;
+        if rune_core::marks::counting() { rune_core::marks::add("text.mask_cache_hits", 1); }
+        Some(Rasterized::Placed(slot))
     }
 
     /// The colour glyph an earlier launch saved for `key` (its `color_key`), as a fresh paint
@@ -349,9 +384,25 @@ impl TextSystem {
             if bytes.len() != (glyph.w * glyph.h * 4) as usize { continue; }
             items.push((*key, Item::Bytes(Mask { w: glyph.w, h: glyph.h, left: glyph.left, top: glyph.top, lcd: false, color: true }, bytes)));
         }
+        // Icons, each its coverage inside its slot's one-texel border.
+        let mut icons = Vec::new();
+        for (key, slot) in self.atlas.icons.iter() {
+            let Some(&stable) = self.masks.icons.get(key) else { continue };
+            let Some(g) = *slot else {
+                icons.push((stable, Item::Blank));
+                continue;
+            };
+            let Some(page) = self.atlas.page_data(g.page as usize) else { continue };
+            let px = g.w.saturating_sub(2);
+            let bytes = (0..px).flat_map(|row| {
+                let at = ((g.y + 1 + row) * ATLAS_SIZE + g.x + 1) as usize;
+                page[at..at + px as usize].iter().copied()
+            }).collect();
+            icons.push((stable, Item::Bytes(Mask { w: px, h: px, left: 0, top: 0, lcd: false, color: false }, bytes)));
+        }
         let store = (!fills.is_empty()).then(|| outline::OutlineStore::from_texels(self.atlas.outlines.used_texels().to_vec()));
         let fonts = self.masks.fonts.iter().map(|(&id, (blob, hash))| (id, (blob.clone(), *hash))).collect();
-        Snapshot { stamp, items, fills, store, fonts, earlier: self.masks.offered.clone() }
+        Snapshot { stamp, items, icons, fills, store, fonts, earlier: self.masks.offered.clone() }
     }
 }
 
@@ -370,6 +421,7 @@ enum Item {
 struct Snapshot {
     stamp: u64,
     items: Vec<(GlyphKey, Item)>,
+    icons: Vec<(StableKey, Item)>,
     fills: Vec<QueuedFill>,
     store: Option<outline::OutlineStore>,
     fonts: FxHashMap<u64, (parley::fontique::Blob<u8>, Option<u64>)>,
@@ -413,6 +465,13 @@ impl Snapshot {
                 Item::Fill(m, i) => add(stable, Some(*m), &filled[*i], &mut table, &mut data),
             }
         }
+        for (key, item) in &self.icons {
+            match item {
+                Item::Blank => add(*key, None, &[], &mut table, &mut data),
+                Item::Bytes(m, bytes) => add(*key, Some(*m), bytes, &mut table, &mut data),
+                Item::Fill(..) => {}
+            }
+        }
         if let Some(earlier) = &self.earlier {
             for (key, e) in &earlier.entries {
                 let bytes = &earlier.data[e.at..e.at + e.len()];
@@ -445,3 +504,7 @@ fn font_identity(bytes: &[u8]) -> u64 {
     if let Some(head) = swash::FontRef::from_index(bytes, 0).and_then(|f| f.table(swash::tag_from_bytes(b"head"))) { h.write(head); }
     h.finish()
 }
+
+#[cfg(test)]
+#[path = "mask_cache_tests.rs"]
+mod tests;

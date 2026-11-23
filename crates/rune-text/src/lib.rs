@@ -826,7 +826,7 @@ impl TextSystem {
                 }
                 e
             }
-            None => match rasterize_icon(icon, (px, size), facing, &mut self.atlas) {
+            None => match self.cached_icon(icon, px, key).unwrap_or_else(|| rasterize_icon(icon, (px, size), facing, &mut self.atlas)) {
                 Rasterized::Placed(g) => {
                     self.atlas.icons.insert(key, Some(g));
                     Some(g)
