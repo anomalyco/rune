@@ -1,0 +1,1 @@
+- Web: resizing the window or changing the display scale no longer flashes a blank canvas for a frame. The resized frame is drawn in a microtask right after winit's ResizeObserver callback, before the browser paints, instead of on the next animation frame.

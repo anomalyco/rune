@@ -722,3 +722,20 @@ mod web_frame_host_tests {
         assert_eq!(cpu.log, ["gate:draw", "acquire:cpu", "step", "sync", "prepare:abort"]);
     }
 }
+
+#[test]
+fn a_resize_draws_in_one_microtask_before_the_browser_paints() {
+    let steps = |state: &mut ResizeRedraw, events: &[ResizeRedrawEvent]| -> Vec<ResizeRedrawEffect> {
+        events.iter().flat_map(|&e| step_resize_redraw(state, e)).collect()
+    };
+    let mut state = ResizeRedraw::Idle;
+    // A scale change and the resize it brings queue one microtask, which draws once.
+    use ResizeRedrawEvent::*;
+    assert_eq!(steps(&mut state, &[Resized, Resized]), [ResizeRedrawEffect::QueueMicrotask]);
+    assert_eq!(steps(&mut state, &[Fired, Fired]), [ResizeRedrawEffect::Draw]);
+    assert_eq!(state, ResizeRedraw::Idle);
+    // A frame drawn before the microtask runs leaves it nothing to draw.
+    assert_eq!(steps(&mut state, &[Resized, Drawing, Fired]), [ResizeRedrawEffect::QueueMicrotask]);
+    // The next resize queues again.
+    assert_eq!(steps(&mut state, &[Resized]), [ResizeRedrawEffect::QueueMicrotask]);
+}

@@ -78,6 +78,8 @@ enum Wake {
     /// Time to see whether the page is quiet enough to start the GPU (`Browser::maybe_start_gpu`).
     StartGpu,
     App,
+    /// A resize reconfigured the canvas, which clears it: draw now, before the browser paints.
+    ResizeRedraw,
 }
 
 /// How a page's frames start: on the CPU until WebGPU takes over (a full-window app, the
@@ -133,7 +135,8 @@ fn spawn(mut app: PendingApp) -> Result<(), String> {
     let wake = proxy.clone();
     shared.connect(Arc::new(move || { wake.send_event(Wake::App).ok(); }));
     page::occupy(quitting(&shared), app.same_tab_router.take());
-    event_loop.spawn_app(Browser { app: Some(app), shared, proxy, window: None, embedded: false, document: false, owns_canvas: true,
+    let resize_redraw = frame::ResizeRedraw::new(proxy.clone());
+    event_loop.spawn_app(Browser { app: Some(app), shared, proxy, resize_redraw, window: None, embedded: false, document: false, owns_canvas: true,
         borrowed: page::Borrowed::default(), start: Start::GpuFirst, fonts: Rc::default(), pending: Rc::default(), warmed: Rc::default(), running: Rc::default(),
         lost: Rc::default(), webgl_watch: None, webgl_restored: Rc::default(), webgl_restoring: false, waiting: None, first_at: None, drawn_at: None, gpu_asked: false });
     Ok(())
@@ -150,6 +153,7 @@ struct Browser {
     app: Option<PendingApp>,
     shared: Arc<SharedCore>,
     proxy: EventLoopProxy<Wake>,
+    resize_redraw: frame::ResizeRedraw,
     window: Option<Arc<Window>>,
     /// Inline in the page at its parent's width, rather than covering the viewport.
     embedded: bool,
@@ -500,6 +504,10 @@ impl ApplicationHandler<Wake> for Browser {
             }
             Wake::StartGpu => self.maybe_start_gpu(),
             Wake::App => self.hand_over_if_done(),
+            Wake::ResizeRedraw => {
+                if self.resize_redraw.fired() { self.redraw(event_loop); }
+                return;
+            }
         }
         let Some(window) = self.window.as_ref() else { return };
         if let Some(r) = &mut *self.running.borrow_mut() {
@@ -528,13 +536,17 @@ impl ApplicationHandler<Wake> for Browser {
         r.full_redraw = true;
         if r.window_input(&event, window) { window.request_redraw(); return; }
         match event {
+            // Reconfiguring the surface clears the canvas. These arrive from winit's
+            // ResizeObserver, after this frame's rAF and before it paints, so a requested redraw
+            // would land a frame late over a blank canvas. winit holds its canvas borrowed while
+            // it delivers them, so the frame is drawn in the microtask right after.
             WindowEvent::Resized(size) => {
                 r.resize_surface(window, size, window.scale_factor() as f32);
-                window.request_redraw();
+                self.resize_redraw.resized();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 r.resize_surface(window, window.inner_size(), scale_factor as f32);
-                window.request_redraw();
+                self.resize_redraw.resized();
             }
             WindowEvent::ThemeChanged(theme) => { r.app.rt_mut().set_system_dark(theme == winit::window::Theme::Dark); window.request_redraw(); }
             _ => {}
