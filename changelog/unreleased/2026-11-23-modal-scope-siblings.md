@@ -1,0 +1,1 @@
+- Focus: an open modal now keeps only its own subtree, popovers anchored inside it, and window caption buttons live, making elements after it in tree order inert to Tab, pointer input, and the accessibility tree.

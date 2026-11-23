@@ -116,13 +116,13 @@ impl ModalScope {
         // leaves them to the pointer and assistive technology, as the native ones are.
         let caption = |n: &Node| n.key.as_deref() == Some(crate::titlebar::BUTTONS_KEY)
             && n.parent.is_some_and(|p| nodes[p].key.as_deref() == Some(crate::titlebar::FRAME_KEY));
-        let mut members: Vec<bool> = nodes.iter().enumerate().map(|(i, n)| i >= index || caption(n)).collect();
+        let mut members: Vec<bool> = nodes.iter().enumerate().map(|(i, n)| i == index || caption(n)).collect();
         // Portals are root siblings. Follow their anchor ownership, including chained
         // popovers, rather than requiring their layout parent to be the modal.
         loop {
             let mut changed = false;
             for (i, n) in nodes.iter().enumerate() {
-                if members[i] || is_exiting(i) { continue; }
+                if members[i] || is_exiting(i) || is_unmounted(i) { continue; }
                 let parent_inside = n.parent.is_some_and(|p| members[p]);
                 let anchor_inside = n.above.as_ref().is_some_and(|a| nodes.iter().enumerate()
                     .any(|(j, anchor)| anchor.key.as_deref() == Some(&a.key) && members[j]));
@@ -140,10 +140,10 @@ impl focus_machine::KeyboardState {
         self.modal_scope.as_ref().map(|m| m.index)
     }
 
-    /// Node `i` (its subtree ending before `end`) holds the open modal.
+    /// Node `i` (its subtree ending before `end`) holds an open modal member.
     #[inline]
     pub(in crate::runtime) fn modal_ancestor(&self, i: usize, end: usize) -> bool {
-        self.modal_scope.as_ref().is_some_and(|m| m.index > i && m.index < end)
+        self.modal_scope.as_ref().is_some_and(|m| m.members.get(i + 1..end).is_some_and(|s| s.iter().any(|&b| b)))
     }
 
     /// Node `i` is inside the open modal's scope, or no modal is open.
@@ -216,7 +216,7 @@ impl RuntimeCore {
     pub(crate) fn active_modal(&self) -> Option<usize> {
         self.kbd.active_modal()
     }
-    /// Node `i` (its subtree ending before `end`) holds the open modal.
+    /// Node `i` (its subtree ending before `end`) holds an open modal member.
     #[inline]
     pub(crate) fn modal_ancestor(&self, i: usize, end: usize) -> bool {
         self.kbd.modal_ancestor(i, end)
@@ -648,7 +648,7 @@ impl RuntimeCore {
         // as OpenCode Desktop's focus rescue does (opencode#64909); focus never falls to the window.
         if nodes.iter().any(|n| n.path == gone && self.can_take_focus(n)) { return None; }
         if self.kbd.focus.path().is_none() && self.tree.nodes[at].input.is_none() { return None; }
-        if self.active_modal().is_some_and(|m| at >= m && self.modal_member(at)) { return None; }
+        if self.active_modal().is_some() && self.modal_member(at) { return None; }
         let new: rustc_hash::FxHashMap<&str, usize> = nodes.iter().enumerate().map(|(j, n)| (n.path.as_str(), j)).collect();
         // Building the new tree hands an old node's path and id to the node that replaces it and
         // leaves it without a path, so a control still here can look absent. Resolve those by id.
