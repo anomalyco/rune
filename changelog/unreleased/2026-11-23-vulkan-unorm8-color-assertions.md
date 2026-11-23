@@ -1,0 +1,1 @@
+- Headless colour integration tests (`radial_srgb`, `srgb_blend_runtime`): allow 1 LSB of RGB rounding on the linear glow centre and the live-switch red channel so UNORM8 blending and spec-compliant sRGB transfer approximations on Vulkan drivers pass.
