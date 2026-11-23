@@ -171,6 +171,11 @@ impl AccessibilityLink {
         self.shared.inbox.lock().map(|mut i| std::mem::take(&mut *i)).unwrap_or_default()
     }
 
+    #[cfg(test)]
+    pub(crate) fn receive_core(&mut self, rt: &mut crate::runtime::RuntimeCore, name: &str) -> bool {
+        self.receive(rt, name)
+    }
+
     fn receive(&mut self, rt: &mut crate::runtime::RuntimeCore, name: &str) -> bool {
         self.adopt(rt);
         let inbox = self.take();
@@ -183,7 +188,10 @@ impl AccessibilityLink {
             queued |= !was_dirty && rt.commit.dirty;
         }
         match inbox.asked {
-            Asked::Activate => rt.a11y_activate(name),
+            Asked::Activate => {
+                rt.a11y_activate(name);
+                queued |= rt.a11y_activation_build_pending();
+            }
             Asked::Deactivate => rt.a11y_deactivate(),
             Asked::Nothing => {}
         }
