@@ -1,0 +1,1 @@
+- Web: mark the hidden `Text input` and `Password input` editing proxies in `bridge.js` `inert` on mount and whenever inactive, exposing only the active proxy in the browser accessibility tree while a Rune text or password field has focus.

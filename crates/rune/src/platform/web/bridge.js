@@ -77,6 +77,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         field.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;padding:0;border:0;opacity:0;font-size:16px;resize:none;pointer-events:none;';
         field.tabIndex = -1;
         field.inputMode = coarse() ? 'none' : 'text';
+        field.inert = true;
         document.body.append(field);
     }
     // The mirror's text is transparent over the canvas. `forced-color-adjust:none` keeps it so in
@@ -393,8 +394,11 @@ export function sync(h, key, text, base, anchor, focus, secure) {
         h.selection = null;
         h.textarea.value = '';
         if (editing) h.canvas.focus({ preventScroll: true });
+        h.textarea.inert = true;
+        h.password.inert = true;
         h.textarea.inputMode = h.password.inputMode = coarse() ? 'none' : 'text';
     } else {
+        h.field.inert = false;
         if (h.textarea.value !== text) h.textarea.value = text;
         if (secure) {
             h.selection = null;
@@ -406,6 +410,7 @@ export function sync(h, key, text, base, anchor, focus, secure) {
         if (editing && active !== h.field) activate(h);
         else if (active === h.canvas) h.field.focus({ preventScroll: true });
         reselect(h);
+        (secure ? h.textarea : h.password).inert = true;
     }
     h.syncing = false;
 }
