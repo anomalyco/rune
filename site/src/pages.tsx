@@ -686,7 +686,7 @@ export function LaunchFastView() {
             window creation, after the first frame is ready. For a launcher it runs while the window is still hidden,
             once its cached frame has finished on the GPU, which is the place to register a global shortcut. A window
             that isn't on screen (covered, occluded, hidden or on another Space) doesn't wait to draw: it runs at the
-            first frame skipped for that, or a second after the window opens. It isn't called by headless tooling. The callback gets a <code>WindowHandle</code>, not the state, so capture an{" "}
+            first frame skipped for that, or a second after the window opens. Headless tooling skips it unless <code>--realtime</code> is passed, which runs it after the first frame. The callback gets a <code>WindowHandle</code>, not the state, so capture an{" "}
             <code>AppHandle</code> and hand the work to <code>update</code>, which runs on the UI thread with{" "}
             <code>&amp;mut S</code> and a <code>Tx</code>.
           </p>

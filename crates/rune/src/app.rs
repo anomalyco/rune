@@ -514,7 +514,8 @@ impl<S: 'static> App<S> {
     /// hidden, after GPU completion of its cached surface frame. A window that isn't on screen
     /// (covered, occluded, hidden or on another Space) doesn't wait to draw: this runs at its
     /// first frame skipped for that, or a second after it opens with no frame at all.
-    /// Not called by headless tooling. May queue a show through the supplied handle.
+    /// Headless tooling skips this unless `--realtime` is passed, which runs it after
+    /// the first frame. May queue a show through the supplied handle.
     pub fn on_ready(mut self, f: impl FnMut(&crate::WindowHandle) + 'static) -> Self {
         self.on_ready = Some(Box::new(f));
         self
