@@ -354,14 +354,23 @@ impl RuntimeCore {
         // A glyph mask cache write that came due while nothing draws (`mask_cache`).
         let _ = self.text.mask_cache_frame(false);
         let patched = self.patch_pending();
-        if !app.has_poll() { return patched; }
+        let has_poll = app.has_poll();
+        let has_playground = app.playground().is_some_and(|p| p.polls());
+        if !has_poll && !has_playground { return patched; }
+        let queued = self.frame.queue.len();
         let mut one = self.transaction(app);
-        let changed = self.frame.idle_meter.polled(crate::tooling::perf_warn::timed("poll", || app.poll(self.clock, &mut one)));
+        let mut changed = has_poll && self.frame.idle_meter.polled(crate::tooling::perf_warn::timed("poll", || app.poll(self.clock, &mut one)));
+        if has_playground {
+            let mut stage = self.transaction(app);
+            let clock = self.clock;
+            changed |= self.poll_playground(app, clock, &mut stage);
+            merge(&mut one, stage);
+        }
         self.commit.dirty |= changed;
         self.frame.pending.polled_change |= changed;
         let asks_frame = one.srgb_blend.is_some_and(|b| b != self.paint.srgb_blend()) || one.font_smoothing.is_some_and(|m| m != self.text.smoothing) || self.changes_families(&one) || (one.blur && self.kbd.focus.path().is_some());
         self.latch_requests(app, &mut one);
-        let stale = changed || one.frame_work() || patched || asks_frame;
+        let stale = changed || one.frame_work() || patched || asks_frame || self.frame.queue.len() > queued;
         merge(&mut self.frame.pending, one);
         stale
     }

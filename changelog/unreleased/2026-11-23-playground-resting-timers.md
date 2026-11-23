@@ -1,0 +1,1 @@
+- Playground: a resting window's due timer now polls the open story and runs its due `Play::after` steps (queuing any `Play::press` keys), drawing a frame only when that changes state, queues input, or steps every frame, and without polling the story a second time on that frame.

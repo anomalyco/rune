@@ -39,14 +39,21 @@ fn runtime(app: App) -> Runtime<App> {
 }
 
 /// Moves the wall clock `secs` on.
-fn advance(rt: &mut Runtime<App>, secs: f64) {
+fn advance<S>(rt: &mut Runtime<S>, secs: f64) {
     rt.wall_start = rt.wall_start.map(|t| t - Duration::from_secs_f64(secs));
 }
 
 /// Moves the wall clock to just past every armed timer: the setup frames each armed one a
 /// moment apart in real time, and the later ones would otherwise outlast the poll.
-fn reach_timer(rt: &mut Runtime<App>) {
+fn reach_timer<S>(rt: &mut Runtime<S>) {
     let due = rt.frame.wake_deadlines().last().copied().expect("a timer is armed");
+    let now = rt.wall_start.unwrap().elapsed().as_secs_f64();
+    advance(rt, (due - now).max(0.0) + 1e-4);
+}
+
+/// Moves the wall clock to just past the earliest armed timer.
+fn reach_next_timer<S>(rt: &mut Runtime<S>) {
+    let due = rt.wake_deadline().expect("a timer is armed");
     let now = rt.wall_start.unwrap().elapsed().as_secs_f64();
     advance(rt, (due - now).max(0.0) + 1e-4);
 }
@@ -54,7 +61,7 @@ fn reach_timer(rt: &mut Runtime<App>) {
 /// As the window host's `new_events`: a resting window polls first, `shell` runs what that
 /// left (a close may hide the window), and a frame is asked for only when needed. Returns
 /// whether it asked; the frame itself comes later.
-fn host_wake(rt: &mut Runtime<App>, shell: impl FnOnce(&mut Runtime<App>) -> bool) -> bool {
+fn host_wake<S: 'static>(rt: &mut Runtime<S>, shell: impl FnOnce(&mut Runtime<S>) -> bool) -> bool {
     reach_timer(rt);
     let Some(stale) = rt.resting_wake() else { return true };
     let visible = shell(rt);
@@ -64,7 +71,7 @@ fn host_wake(rt: &mut Runtime<App>, shell: impl FnOnce(&mut Runtime<App>) -> boo
 }
 
 /// A timer wake with nothing between it and its frame. Returns whether it drew.
-fn timer_wake(rt: &mut Runtime<App>) -> bool {
+fn timer_wake<S: 'static>(rt: &mut Runtime<S>) -> bool {
     if !host_wake(rt, |_| true) { return false; }
     rt.frame(crate::frame::clock::RESUME_STEP);
     true
@@ -221,4 +228,146 @@ fn a_timer_frame_that_runs_covered_does_not_poll_again() {
     advance(&mut rt, 0.005);
     rt.hidden_wake();
     assert_eq!(rt.state.polls, polls + 2);
+}
+
+#[derive(Default)]
+struct StoryClock {
+    polls: u32,
+    change_at: u32,
+    steps: u32,
+    keys: Vec<crate::Key>,
+}
+
+fn story_clock_view(s: &StoryClock, _: &mut Cx<StoryClock>) -> El {
+    crate::col().children([
+        crate::text(format!("polls {} steps {}", s.polls, s.steps)),
+    ])
+}
+
+fn story_clock_poll(s: &mut StoryClock, _: f64, tx: &mut Tx) -> bool {
+    s.polls += 1;
+    tx.wake_after(PERIOD);
+    s.polls == s.change_at
+}
+
+#[test]
+fn a_resting_window_polls_an_open_playground_story_and_draws_only_on_change() {
+    let story = crate::Story::new("Repro/Clock", || StoryClock { change_at: 4, ..StoryClock::default() }, story_clock_view)
+        .poll(story_clock_poll);
+    let spec = crate::AppSpec::new("story_timer", (800.0, 400.0), App::default, view);
+    let mut rt = crate::App::new(spec)
+        .playground(crate::Playground::new().enabled(true).story(story))
+        .headless_runtime((800.0, 400.0), Env::default());
+    rt.wall_start = Some(crate::time::now());
+    rt.frame(0.0);
+    rt.open_playground("Repro/Clock", None);
+    rt.frame(crate::frame::clock::RESUME_STEP);
+    assert!(!rt.animating && rt.rests(), "window rests with story open");
+
+    let commits = rt.stats.commits;
+    let polls = rt.playground_state::<StoryClock>().unwrap().polls;
+    assert_eq!(polls, 2, "open_playground and the settle frame each polled once");
+
+    // Next wake (poll 3): returns false, draws nothing, and re-arms the story's timer.
+    assert!(!timer_wake(&mut rt), "an unchanged story poll draws no frame");
+    assert_eq!(rt.playground_state::<StoryClock>().unwrap().polls, polls + 1, "the story polled");
+    assert_eq!(rt.stats.commits, commits, "no view commit ran");
+    assert!(rt.wake_deadline().is_some_and(|d| d > rt.clock), "the story's next timer is armed");
+
+    // Next wake (poll 4 == change_at): returns true, draws one frame, and does not double-poll.
+    assert!(timer_wake(&mut rt), "a changing story poll draws one frame");
+    assert_eq!(rt.playground_state::<StoryClock>().unwrap().polls, polls + 2, "one poll for the wake, not a second on the frame");
+    assert_eq!(rt.stats.commits, commits + 1, "one view commit ran");
+    assert!(rt.wake_deadline().is_some_and(|d| d > rt.clock), "the story's next timer is armed");
+
+    // Next wake (poll 5): returns false again, draws nothing.
+    assert!(!timer_wake(&mut rt), "back to resting without drawing");
+    assert_eq!(rt.playground_state::<StoryClock>().unwrap().polls, polls + 3);
+    assert_eq!(rt.stats.commits, commits + 1);
+}
+
+#[test]
+fn a_resting_window_runs_playground_play_after_steps_and_queues_pressed_keys() {
+    static SCENES: &[(&str, fn(&mut StoryClock))] = &[("Repro/Steps", |_| {})];
+    let mut spec = crate::AppSpec::new("story_steps", (800.0, 400.0), StoryClock::default, story_clock_view);
+    spec.scenes = SCENES;
+    spec.on_key = Some(|s, ev, _| {
+        s.keys.push(ev.key.clone());
+        true
+    });
+    let playground = crate::Playground::new()
+        .enabled(true)
+        .trigger("Repro/Steps", 'r', "Three steps", |_, play| {
+            play.after(5.0, |s: &mut StoryClock, _| s.steps += 1);
+            play.after(10.0, |s: &mut StoryClock, play| {
+                s.steps += 1;
+                play.press(crate::Key::Down);
+            });
+            play.after(15.0, |s: &mut StoryClock, _| s.steps += 1);
+        });
+    let mut rt = crate::App::new(spec)
+        .playground(playground)
+        .headless_runtime((800.0, 400.0), Env::default());
+    rt.wall_start = Some(crate::time::now());
+    rt.frame(0.0);
+    rt.open_playground("Repro/Steps", None);
+    rt.frame(crate::frame::clock::RESUME_STEP);
+    assert!(!rt.animating && rt.rests(), "window rests waiting for Play::after");
+    assert_eq!(rt.playground_state::<StoryClock>().unwrap().steps, 0);
+
+    // Step 1 at +5 s.
+    assert!(timer_wake(&mut rt), "step 1 draws a frame");
+    assert_eq!(rt.playground_state::<StoryClock>().unwrap().steps, 1);
+    assert!(rt.playground_state::<StoryClock>().unwrap().keys.is_empty());
+
+    // Step 2 at +10 s presses Key::Down, which routes to the stage's on_key on the frame it asked for.
+    assert!(timer_wake(&mut rt), "step 2 draws a frame");
+    assert_eq!(rt.playground_state::<StoryClock>().unwrap().steps, 2);
+    assert_eq!(rt.playground_state::<StoryClock>().unwrap().keys, [crate::Key::Down]);
+
+    // Step 3 at +15 s.
+    assert!(timer_wake(&mut rt), "step 3 draws a frame");
+    assert_eq!(rt.playground_state::<StoryClock>().unwrap().steps, 3);
+    assert_eq!(rt.wake_deadline(), None, "no timer remains after the last step");
+    assert!(rt.rests(), "the window rests again");
+}
+
+#[test]
+fn an_earlier_app_timer_does_not_draw_before_a_play_after_step_is_due() {
+    let story = crate::Story::new("Repro/Delayed", StoryClock::default, story_clock_view)
+        .trigger('r', "Delayed", |_, play| {
+            play.after(12.0, |s: &mut StoryClock, _| s.steps += 1);
+        });
+    let mut spec = crate::AppSpec::new("story_mixed", (800.0, 400.0), App::default, view);
+    spec.poll = Some(poll);
+    let mut rt = crate::App::new(spec)
+        .playground(crate::Playground::new().enabled(true).story(story))
+        .headless_runtime((800.0, 400.0), Env::default());
+    rt.wall_start = Some(crate::time::now());
+    rt.frame(0.0);
+    rt.open_playground("Repro/Delayed", None);
+    rt.frame(crate::frame::clock::RESUME_STEP);
+    assert!(!rt.animating && rt.rests());
+
+    // Clear every setup frame's +5 s app timer at once; Play::after is not due until +12 s.
+    let commits = rt.stats.commits;
+    advance(&mut rt, 5.5);
+    assert_eq!(rt.resting_wake(), Some(false), "neither app poll nor pending step changed anything");
+    rt.resting_wake_frame(false);
+    assert_eq!(rt.playground_state::<StoryClock>().unwrap().steps, 0);
+
+    // Next app poll at +10.5 s still draws nothing.
+    reach_next_timer(&mut rt);
+    assert_eq!(rt.resting_wake(), Some(false), "second app poll before the step still draws nothing");
+    rt.resting_wake_frame(false);
+    assert_eq!(rt.playground_state::<StoryClock>().unwrap().steps, 0);
+    assert_eq!(rt.stats.commits, commits, "no view commit ran before the step was due");
+
+    // At +12 s the Play::after step is due and asks for a frame.
+    reach_next_timer(&mut rt);
+    assert_eq!(rt.resting_wake(), Some(true), "the due Play::after step asks for a frame");
+    rt.resting_wake_frame(true);
+    rt.frame(crate::frame::clock::RESUME_STEP);
+    assert_eq!(rt.playground_state::<StoryClock>().unwrap().steps, 1);
+    assert_eq!(rt.stats.commits, commits + 1);
 }
