@@ -682,3 +682,81 @@ fn key_repeat_filters_non_repeating_keys_and_stops_on_release_leave_or_keyboard_
     let effects: Vec<_> = step(&mut seq, &mut state, Event::Press { key: 14, repeats: true, now: t2 }).into_iter().collect();
     assert_eq!(effects, [Effect::WakeAt(t2 + Duration::from_millis(200))]);
 }
+
+#[test]
+fn dead_key_compose_emits_composed_text_and_suppresses_composing_and_cancelled() {
+    use super::keyboard::{ComposeAction, ComposeOutcome, compose_action, compose_locale, key_event_with_compose};
+    use crate::{Key, KeyEvent, Mods, PhysicalKeyCode};
+
+    let none = Mods::default();
+    let shift = Mods { shift: true, ..Default::default() };
+    let ctrl = Mods { ctrl: true, cmd: true, ..Default::default() };
+    let alt = Mods { alt: true, ..Default::default() };
+    let logo = Mods { logo: true, ..Default::default() };
+
+    // Only non-repeat presses feed compose; command chords reset and bypass; releases and repeats bypass.
+    assert_eq!(compose_action(true, false, none), ComposeAction::Feed);
+    assert_eq!(compose_action(true, false, shift), ComposeAction::Feed);
+    assert_eq!(compose_action(true, false, alt), ComposeAction::Feed);
+    assert_eq!(compose_action(true, false, ctrl), ComposeAction::ResetAndBypass);
+    assert_eq!(compose_action(true, false, Mods { ctrl: true, ..Default::default() }), ComposeAction::ResetAndBypass);
+    assert_eq!(compose_action(true, false, logo), ComposeAction::ResetAndBypass);
+    assert_eq!(compose_action(false, false, none), ComposeAction::Bypass);
+    assert_eq!(compose_action(true, true, none), ComposeAction::Bypass);
+    assert_eq!(compose_action(false, false, ctrl), ComposeAction::Bypass);
+
+    // Dead key press (Composing) suppresses both bare dead keys and mid-sequence Multi_key letters.
+    assert_eq!(key_event_with_compose(ComposeOutcome::Composing, None, 0, String::new(), none, Some(PhysicalKeyCode::BracketLeft)), None);
+    assert_eq!(key_event_with_compose(ComposeOutcome::Composing, None, 'a' as u32, "a".into(), none, Some(PhysicalKeyCode::KeyA)), None);
+
+    // Completing dead_acute + a emits "á" instead of uncomposed "a".
+    assert_eq!(
+        key_event_with_compose(ComposeOutcome::Composed(Some("á".into())), None, 'a' as u32, "a".into(), none, Some(PhysicalKeyCode::KeyA)),
+        Some(KeyEvent { key: Key::Text("á".into()), mods: none })
+    );
+    // Completing dead_acute + Shift+A preserves Shift in mods and emits "Á".
+    assert_eq!(
+        key_event_with_compose(ComposeOutcome::Composed(Some("Á".into())), None, 'A' as u32, "A".into(), shift, Some(PhysicalKeyCode::KeyA)),
+        Some(KeyEvent { key: Key::Text("Á".into()), mods: shift })
+    );
+    // Double dead key (dead_acute + dead_acute) emits "´" even though raw xkb utf8 is empty.
+    assert_eq!(
+        key_event_with_compose(ComposeOutcome::Composed(Some("´".into())), None, 0, String::new(), none, Some(PhysicalKeyCode::BracketLeft)),
+        Some(KeyEvent { key: Key::Text("´".into()), mods: none })
+    );
+    // Multi-character compose results emit verbatim; empty, missing, or control results emit None.
+    assert_eq!(
+        key_event_with_compose(ComposeOutcome::Composed(Some("ff".into())), None, 'f' as u32, "f".into(), none, Some(PhysicalKeyCode::KeyF)),
+        Some(KeyEvent { key: Key::Text("ff".into()), mods: none })
+    );
+    assert_eq!(key_event_with_compose(ComposeOutcome::Composed(None), None, 'a' as u32, "a".into(), none, Some(PhysicalKeyCode::KeyA)), None);
+    assert_eq!(key_event_with_compose(ComposeOutcome::Composed(Some(String::new())), None, 'a' as u32, "a".into(), none, Some(PhysicalKeyCode::KeyA)), None);
+    assert_eq!(key_event_with_compose(ComposeOutcome::Composed(Some("\x07".into())), None, 'a' as u32, "a".into(), none, Some(PhysicalKeyCode::KeyA)), None);
+
+    // Cancelled compose suppresses uncomposed letters (e.g. dead_acute + q) but still delivers named keys (Escape/Backspace).
+    assert_eq!(key_event_with_compose(ComposeOutcome::Cancelled, None, 'q' as u32, "q".into(), none, Some(PhysicalKeyCode::KeyQ)), None);
+    assert_eq!(
+        key_event_with_compose(ComposeOutcome::Cancelled, Some(Key::Escape), 0x1b, "\x1b".into(), none, Some(PhysicalKeyCode::Escape)),
+        Some(KeyEvent { key: Key::Escape, mods: none })
+    );
+    assert_eq!(
+        key_event_with_compose(ComposeOutcome::Cancelled, Some(Key::Backspace), 0x08, "\x08".into(), none, Some(PhysicalKeyCode::Backspace)),
+        Some(KeyEvent { key: Key::Backspace, mods: none })
+    );
+
+    // Nothing falls back to uncomposed key_event_from (plain text, named keys, and command chords).
+    assert_eq!(
+        key_event_with_compose(ComposeOutcome::Nothing, None, 'a' as u32, "a".into(), none, Some(PhysicalKeyCode::KeyA)),
+        Some(KeyEvent { key: Key::Text("a".into()), mods: none })
+    );
+    assert_eq!(
+        key_event_with_compose(ComposeOutcome::Nothing, None, 'v' as u32, "v".into(), ctrl, Some(PhysicalKeyCode::KeyV)),
+        Some(KeyEvent { key: Key::Command('v'), mods: ctrl })
+    );
+
+    // Locale precedence: LC_ALL > LC_CTYPE > LANG > "C", skipping empty or NUL-containing values.
+    assert_eq!(compose_locale(|k| match k { "LC_ALL" => Some("es_AR.UTF-8".into()), "LC_CTYPE" => Some("fr_FR.UTF-8".into()), "LANG" => Some("en_US.UTF-8".into()), _ => None }), "es_AR.UTF-8");
+    assert_eq!(compose_locale(|k| match k { "LC_ALL" => Some(String::new()), "LC_CTYPE" => Some("es_ES.UTF-8".into()), "LANG" => Some("en_US.UTF-8".into()), _ => None }), "es_ES.UTF-8");
+    assert_eq!(compose_locale(|k| match k { "LC_ALL" => Some("bad\0loc".into()), "LANG" => Some("en_US.UTF-8".into()), _ => None }), "en_US.UTF-8");
+    assert_eq!(compose_locale(|_| None), "C");
+}

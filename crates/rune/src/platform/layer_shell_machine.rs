@@ -232,6 +232,85 @@ pub(crate) mod keyboard {
         Some(crate::KeyEvent { key, mods })
     }
 
+    /// Result of feeding a key press into `xkb::compose::State`.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub(crate) enum ComposeOutcome {
+        /// Compose did not consume this key (not fed, ignored by xkb compose, or `Status::Nothing`).
+        Nothing,
+        /// The key started or advanced a compose sequence; suppress logical output.
+        Composing,
+        /// The compose sequence finished with `utf8`, if any.
+        Composed(Option<String>),
+        /// The compose sequence was cancelled by an invalid follow-up key; suppress text output
+        /// while still letting named keys (such as Escape or Backspace) pass through.
+        Cancelled,
+    }
+
+    /// What the Wayland keyboard handler should do with `xkb::compose::State` for a key event.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum ComposeAction {
+        /// Feed the keysym into `xkb::compose::State`.
+        Feed,
+        /// Command chord (`Ctrl`/cmd or `Super`/logo): reset any pending dead-key sequence and
+        /// bypass compose so shortcuts work immediately after a dead key.
+        ResetAndBypass,
+        /// Release or auto-repeat: leave the compose state untouched and bypass compose.
+        Bypass,
+    }
+
+    /// Decides how a Wayland key event interacts with `xkb::compose::State`, matching winit
+    /// (only non-repeat presses feed compose) and keeping command chords working after a dead key.
+    pub(crate) fn compose_action(pressed: bool, repeat: bool, mods: crate::Mods) -> ComposeAction {
+        if !pressed || repeat {
+            ComposeAction::Bypass
+        } else if mods.cmd || mods.ctrl || mods.logo {
+            ComposeAction::ResetAndBypass
+        } else {
+            ComposeAction::Feed
+        }
+    }
+
+    /// Resolves the compose locale using POSIX precedence (`LC_ALL` > `LC_CTYPE` > `LANG` > `"C"`),
+    /// skipping empty values and values with embedded NUL bytes.
+    pub(crate) fn compose_locale(mut env: impl FnMut(&str) -> Option<String>) -> String {
+        for var in ["LC_ALL", "LC_CTYPE", "LANG"] {
+            if let Some(value) = env(var)
+                && !value.is_empty()
+                && !value.as_bytes().contains(&0)
+            {
+                return value;
+            }
+        }
+        "C".to_owned()
+    }
+
+    /// Applies an XKB compose outcome to key translation:
+    /// - `Composing`: suppresses logical key output while a dead-key or Compose sequence is open.
+    /// - `Composed(Some(s))`: emits `Key::Text(s)` when `s` is non-empty and free of control chars,
+    ///   otherwise `None` (never falling back to the uncomposed key).
+    /// - `Cancelled`: suppresses text output while still delivering named keys (`Escape`, `Backspace`).
+    /// - `Nothing`: falls back to uncomposed `key_event_from`.
+    pub(crate) fn key_event_with_compose(
+        compose: ComposeOutcome,
+        named: Option<crate::Key>,
+        utf32: u32,
+        text: String,
+        mods: crate::Mods,
+        physical: Option<crate::PhysicalKeyCode>,
+    ) -> Option<crate::KeyEvent> {
+        match compose {
+            ComposeOutcome::Nothing => key_event_from(named, utf32, text, mods, physical),
+            ComposeOutcome::Composing => None,
+            ComposeOutcome::Composed(Some(composed))
+                if !composed.is_empty() && !composed.chars().any(char::is_control) =>
+            {
+                Some(crate::KeyEvent { key: crate::Key::Text(composed), mods })
+            }
+            ComposeOutcome::Composed(_) => None,
+            ComposeOutcome::Cancelled => named.map(|key| crate::KeyEvent { key, mods }),
+        }
+    }
+
     /// Whether a layer-shell overlay with `policy` may request keyboard interactivity on
     /// `zwlr_layer_surface_v1` `layer_version`.
     pub(crate) fn can_request_keys(policy: crate::KeyPolicy, layer_version: u32) -> bool {

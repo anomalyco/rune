@@ -68,6 +68,7 @@ struct State {
     shape: Option<WpCursorShapeDeviceV1>,
     keyboard: Option<WlKeyboard>,
     xkb: Option<xkbcommon::xkb::State>,
+    compose: Option<xkbcommon::xkb::compose::State>,
     mod_state: Option<keyboard::ModState>,
     repeat_seq: crate::machine::Seq,
     repeat: repeat::State,
@@ -96,6 +97,12 @@ impl State {
         let _ = repeat::step(&mut self.repeat_seq, &mut self.repeat, event);
     }
 
+    fn reset_compose(&mut self) {
+        if let Some(compose) = &mut self.compose {
+            compose.reset();
+        }
+    }
+
     fn emit_key(&mut self, key: u32, pressed: bool, repeat: bool) {
         use winit::platform::scancode::PhysicalKeyExtScancode;
         let Some(xkb) = &self.xkb else { return };
@@ -103,10 +110,11 @@ impl State {
             winit::keyboard::PhysicalKey::Code(code) => Some(code),
             _ => None,
         };
-        let fallback = key_event(xkb, key, physical);
+        let mods = key_mods(xkb);
+        let fallback = key_event(xkb, self.compose.as_mut(), key, physical, pressed, repeat);
         if let Some(code) = physical {
             self.input.push(Input::Physical(
-                crate::PhysicalInput::Key { key: code, mods: key_mods(xkb), pressed, repeat },
+                crate::PhysicalInput::Key { key: code, mods, pressed, repeat },
                 fallback,
             ));
         } else if let Some(key) = fallback {
@@ -155,6 +163,7 @@ impl State {
         if !keyboard && let Some(k) = self.keyboard.take() {
             if k.version() >= 3 { k.release(); }
             self.xkb = None;
+            self.compose = None;
             self.mod_state = None;
             self.step_repeat(repeat::Event::KeyboardGone);
             self.step_keyboard_focus(keyboard::FocusEvent::KeyboardGone);
@@ -216,6 +225,7 @@ impl Dispatch<WlKeyboard, ()> for State {
         match event {
             wl_keyboard::Event::Enter { surface, .. } => {
                 state.step_repeat(repeat::Event::Stop);
+                state.reset_compose();
                 let focus_event = if state.surface.as_ref() == Some(&surface) {
                     keyboard::FocusEvent::EnterOurs
                 } else {
@@ -225,6 +235,7 @@ impl Dispatch<WlKeyboard, ()> for State {
             }
             wl_keyboard::Event::Leave { surface, .. } if state.surface.as_ref() == Some(&surface) => {
                 state.step_repeat(repeat::Event::Stop);
+                state.reset_compose();
                 state.step_keyboard_focus(keyboard::FocusEvent::LeaveOurs);
             }
             wl_keyboard::Event::Keymap { format: wayland_client::WEnum::Value(wl_keyboard::KeymapFormat::XkbV1), fd, size } => {
@@ -237,6 +248,11 @@ impl Dispatch<WlKeyboard, ()> for State {
                         }
                         xkb_state
                     });
+                    if let Some(compose) = &mut state.compose {
+                        compose.reset();
+                    } else if state.xkb.is_some() {
+                        state.compose = new_compose_state(&context);
+                    }
                     if let Some(held) = state.repeat.key()
                         && !state.xkb.as_ref().is_some_and(|xkb| xkb.get_keymap().key_repeats(xkb::Keycode::new(held + 8)))
                     {
@@ -292,13 +308,64 @@ fn key_mods(state: &xkbcommon::xkb::State) -> crate::Mods {
     crate::input::key_table::mods_from_keys(active(xkb::MOD_NAME_SHIFT), active(xkb::MOD_NAME_CTRL), active(xkb::MOD_NAME_ALT), active(xkb::MOD_NAME_LOGO))
 }
 
-fn key_event(state: &xkbcommon::xkb::State, key: u32, physical: Option<crate::PhysicalKeyCode>) -> Option<crate::KeyEvent> {
+fn new_compose_state(context: &xkbcommon::xkb::Context) -> Option<xkbcommon::xkb::compose::State> {
+    use std::ffi::OsStr;
+    use xkbcommon::xkb::compose;
+    let locale = keyboard::compose_locale(|name| std::env::var(name).ok());
+    let table = compose::Table::new_from_locale(context, OsStr::new(&locale), compose::COMPILE_NO_FLAGS)
+        .or_else(|()| {
+            if locale != "C" {
+                compose::Table::new_from_locale(context, OsStr::new("C"), compose::COMPILE_NO_FLAGS)
+            } else {
+                Err(())
+            }
+        })
+        .ok()?;
+    Some(compose::State::new(&table, compose::STATE_NO_FLAGS))
+}
+
+fn feed_compose(compose: &mut xkbcommon::xkb::compose::State, sym: xkbcommon::xkb::Keysym) -> keyboard::ComposeOutcome {
+    use xkbcommon::xkb::compose::{FeedResult, Status};
+    match compose.feed(sym) {
+        FeedResult::Ignored => keyboard::ComposeOutcome::Nothing,
+        FeedResult::Accepted => match compose.status() {
+            Status::Nothing => keyboard::ComposeOutcome::Nothing,
+            Status::Composing => keyboard::ComposeOutcome::Composing,
+            Status::Composed => {
+                let text = compose.utf8();
+                compose.reset();
+                keyboard::ComposeOutcome::Composed(text)
+            }
+            Status::Cancelled => {
+                compose.reset();
+                keyboard::ComposeOutcome::Cancelled
+            }
+        },
+    }
+}
+
+fn key_event(
+    state: &xkbcommon::xkb::State,
+    compose: Option<&mut xkbcommon::xkb::compose::State>,
+    key: u32,
+    physical: Option<crate::PhysicalKeyCode>,
+    pressed: bool,
+    repeat: bool,
+) -> Option<crate::KeyEvent> {
     use xkbcommon::xkb;
     let code = xkb::Keycode::new(key + 8);
     let sym = state.key_get_one_sym(code);
     let mods = key_mods(state);
+    let outcome = match (compose, keyboard::compose_action(pressed, repeat, mods)) {
+        (Some(compose), keyboard::ComposeAction::Feed) => feed_compose(compose, sym),
+        (Some(compose), keyboard::ComposeAction::ResetAndBypass) => {
+            compose.reset();
+            keyboard::ComposeOutcome::Nothing
+        }
+        (_, keyboard::ComposeAction::Bypass) | (None, _) => keyboard::ComposeOutcome::Nothing,
+    };
     let text = state.key_get_utf8(code);
-    keyboard::key_event_from(named_keysym(sym.raw()), xkb::keysym_to_utf32(sym), text, mods, physical)
+    keyboard::key_event_with_compose(outcome, named_keysym(sym.raw()), xkb::keysym_to_utf32(sym), text, mods, physical)
 }
 
 /// The named key an XKB keysym is, or None for one that types (or nothing Rune names).
@@ -694,6 +761,7 @@ impl LayerSurface {
     pub fn drain(&mut self) -> bool {
         self.turn();
         self.state.step_repeat(repeat::Event::Stop);
+        self.state.reset_compose();
         self.state.input.clear();
         self.state.readiness.closed()
     }
