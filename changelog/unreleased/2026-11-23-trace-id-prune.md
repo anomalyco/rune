@@ -1,0 +1,1 @@
+- `tooling::Trace` now allocates element ids from a monotonic counter and prunes unmounted entries from its `ids` and `described` maps during the `gone` pass, keeping dictionary memory bounded under keyed churn without ever reusing a retired or live id.

@@ -9,6 +9,7 @@ use super::*;
 
 pub(crate) struct Trace {
     out: std::io::BufWriter<std::fs::File>,
+    next_id: u32,
     ids: HashMap<String, u32>,
     described: HashMap<u32, (String, &'static str, &'static str)>,
     states: HashMap<u32, ([i64; 6], u32, [i64; 4])>,
@@ -58,7 +59,7 @@ impl Trace {
         });
         if clock == "wall" { header["timestamp"] = "cpu-submit".into(); }
         writeln!(out, "{header}").ok();
-        Trace { out, ids: HashMap::new(), described: HashMap::new(), states: HashMap::new(), scrolled: HashMap::new(), effects: HashMap::new(),
+        Trace { out, next_id: 1, ids: HashMap::new(), described: HashMap::new(), states: HashMap::new(), scrolled: HashMap::new(), effects: HashMap::new(),
             goals: HashMap::new(), channels: Default::default(), path: path.clone(), all: false, presents: None, surface: None }
     }
 
@@ -90,8 +91,13 @@ impl Trace {
     }
 
     fn id(&mut self, key: &str) -> u32 {
-        let next = self.ids.len() as u32 + 1;
-        *self.ids.entry(key.to_owned()).or_insert(next)
+        if let Some(&id) = self.ids.get(key) {
+            return id;
+        }
+        let id = self.next_id;
+        self.next_id = self.next_id.checked_add(1).expect("trace element id overflow");
+        self.ids.insert(key.to_owned(), id);
+        id
     }
 
     #[cfg(test)]
@@ -201,6 +207,7 @@ impl Trace {
         // A settle unmounts what it replaces at once: a cut (transition | opacity) at its last place.
         let mut cuts = Vec::new();
         for id in &gone {
+            self.described.remove(id);
             self.scrolled.remove(id);
             if let Some(names) = self.effects.remove(id) {
                 for name in names { self.channels.remove(&name); }
@@ -211,6 +218,9 @@ impl Trace {
                 let [x, y, w, h] = [q[0], q[1], q[2], q[3]].map(|v| v as f64 / 100.0);
                 cuts.push(json!([id, x, y, w, h, rune_motion::Intent::TRANSITION | rune_motion::Intent::OPACITY, 0]));
             }
+        }
+        if !gone.is_empty() {
+            self.ids.retain(|_, id| seen.contains(id));
         }
 
         let mut line = json!({ "t": (t_ms * 1000.0).round() / 1000.0, "n": 1 });
@@ -436,3 +446,7 @@ fn video_json(v: &crate::video::Snapshot) -> Value {
     if let Some(e) = error { out["error"] = e.into(); }
     out
 }
+
+#[cfg(test)]
+#[path = "trace_tests.rs"]
+mod tests;
