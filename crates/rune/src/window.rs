@@ -52,7 +52,7 @@ pub(crate) use state::{Life, Minimize, MinimizeEvent, Sight};
 pub(crate) use surface::{
     Backoff, BackoffEffect, BackoffEvent, HiddenPace, Missed, Presented, TIMER_FRAME,
     acquire_checked, configure, reblend_core, rebuild_renderer_core,
-    surface_config, timer_deadline_core, timer_wants_frame_core,
+    poll_timer_deadline_core, surface_config, timer_deadline_core, timer_wants_frame_core,
 };
 #[cfg(target_arch = "wasm32")]
 pub(crate) use surface::configure_then;

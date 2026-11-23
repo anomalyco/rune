@@ -277,19 +277,41 @@ impl OverlayCore {
         }
     }
 
-    /// Hidden, or shown but not on screen: no frame will come to run what's due.
+    /// Wayland layer-shell: true while a presented frame's `wl_surface.frame` callback is
+    /// outstanding and the GPU device is still live, so the overlay must not acquire or present
+    /// again until the compositor answers.
+    pub(super) fn awaiting_layer_frame(&self) -> bool {
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        let surface_ready = match self.surface.live().map(|l| &l.backing) {
+            Some(Backing::Layer(layer)) => layer.frame_ready(),
+            _ => true,
+        };
+        #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+        let surface_ready = true;
+        #[cfg(test)]
+        let surface_ready = surface_ready && !self.layer_frame_pending;
+        let lost = self.gpu.as_ref().is_some_and(|gpu| gpu.is_lost());
+        frame::is_awaiting_frame(surface_ready, lost)
+    }
+
+    /// Hidden, shown but not on screen, or awaiting a Wayland layer frame callback: no frame will
+    /// come on its own to run what's due.
     pub(super) fn frameless(&self) -> bool {
-        !self.presence.drawing() || self.presence.occluded()
+        frame::is_frameless(self.presence.drawing(), self.presence.occluded(), self.awaiting_layer_frame())
     }
 
     pub(super) fn advance_at(&mut self, app: &mut dyn OverlayApp, now: Instant) {
-        // Covered or asleep, a shown overlay only polls. What it would commit waits for the
-        // first uncovered frame, which resumes running motion and starts new motion fresh
-        // (`step`). Hidden, an overlay only polls too, and its view waits for the frame that
-        // shows it; a retained one commits at most every `HIDDEN_REFRESH` to keep its cached
-        // frame near. Input and drag ends still run their handlers now.
+        // Covered, asleep or awaiting a Wayland layer frame callback, a shown overlay only polls.
+        // What it would commit waits for the next drawn frame, which resumes running motion and
+        // starts new motion fresh (`step`). Hidden, an overlay only polls too, and its view waits
+        // for the frame that shows it; a retained one commits at most every `HIDDEN_REFRESH` to
+        // keep its cached frame near. Input and drag ends still run their handlers now.
         let handlers = app.rt().has_pending_input() || app.rt().drag_ends_pending();
-        let polls_only = !handlers && if self.presence.drawing() { self.presence.shown() && self.presence.occluded() } else { !self.retained() || !self.hidden_pace.ready(now) };
+        let polls_only = !handlers && if self.presence.drawing() {
+            frame::polls_only_when_drawing(self.presence.shown(), self.presence.occluded(), self.awaiting_layer_frame())
+        } else {
+            !self.retained() || !self.hidden_pace.ready(now)
+        };
         if !polls_only { return self.commit_at(app, now); }
         app.poll_hidden();
         if app.rt().has_pending_input() { return self.commit_at(app, now); }
@@ -330,7 +352,7 @@ impl OverlayCore {
         self.presence_due(app, now);
         // Paced to a frame interval: a hidden or covered overlay's poll that keeps asking for
         // the next frame runs once a frame, however often other events turn the loop.
-        let deadline = crate::window::timer_deadline_core(app.rt());
+        let deadline = frame::timer_deadline(app.rt(), self.awaiting_layer_frame());
         if deadline.is_some_and(|deadline| deadline <= now) {
             // Backing off, the frame waits for the retry and would leave the timer due.
             if !self.frameless() && !self.backing_off(now) {

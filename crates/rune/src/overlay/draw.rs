@@ -100,6 +100,7 @@ impl FrameHost for OverlayFrame<'_> {
         let gate = frame::Gate {
             prewarm: self.prewarm,
             occluded: cfg!(target_os = "macos") && self.core.presence.occluded(),
+            awaiting_frame: self.core.awaiting_layer_frame(),
             dirty: self.core.dirty,
             idle: self.core.idle,
             retry: self.core.backoff.deadline(),
@@ -115,6 +116,14 @@ impl FrameHost for OverlayFrame<'_> {
             }
             // `wake_due` runs due timers while it backs off.
             frame::Turn::Rest | frame::Turn::BackedOff => return Gate::Skip,
+            frame::Turn::AwaitingFrame => {
+                if self.app.rt().has_pending_input() {
+                    self.core.commit_at(self.app, crate::time::now());
+                }
+                self.core.meter.skipped();
+                self.core.meter.set_pacing(self.core.pacing_state(true));
+                return Gate::Skip;
+            }
             frame::Turn::Draw => if !self.prewarm { self.core.backoff_step(crate::window::BackoffEvent::Lapsed); },
         }
         // The swap chain still holds a frame the compositor hasn't shown: this one draws when it
@@ -377,6 +386,17 @@ impl FrameHost for OverlayFrame<'_> {
     }
 
     fn settle(&mut self, submitted: Instant, info: &StepInfo) {
+        // If the device was lost during a layer surface's own present, Mesa never committed the
+        // buffer or the `wl_surface.frame` callback we just requested, so take the surface down
+        // instead of waiting on a callback that will never arrive.
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if matches!(self.core.surface.live().map(|l| &l.backing), Some(Backing::Layer(_)))
+            && self.core.gpu.as_ref().is_some_and(|gpu| gpu.is_lost())
+        {
+            self.core.surface_refused(self.app, "its GPU device was lost".into());
+            self.more = false;
+            return;
+        }
         if !self.prewarm { self.core.meter.presented(); }
         self.core.dirty = false;
         let Some(live) = self.core.surface.live_mut() else {
@@ -417,8 +437,8 @@ impl FrameHost for OverlayFrame<'_> {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = submitted;
-            if !self.prewarm { self.core.meter.set_pacing(if self.core.idle { crate::Pacing::Idle } else { crate::Pacing::Vsync }); }
-            self.more = !self.core.idle;
+            if !self.prewarm { self.core.meter.set_pacing(self.core.pacing_state(!self.core.idle)); }
+            self.more = frame::wants_more(self.core.idle, self.core.awaiting_layer_frame());
         }
     }
 }
