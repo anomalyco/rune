@@ -933,6 +933,10 @@ scripts/mac-app --name Example --id com.example.app --exe example --bin target/r
   permission answers across rebuilds. Without it the bundle is signed ad hoc, which macOS treats
   as a new app each build.
 
+`--bin` builds a development bundle (version `0.0.1`, macOS 13.0+, no Hardened Runtime, timestamp,
+or entitlements) that cannot be notarized; see [`scripts/mac-app.md`](../../scripts/mac-app.md) for
+the bundle details and how `--bundle` installs a pre-signed release bundle unchanged.
+
 The `rune-mac` crate holds the app's side (all no-ops off macOS):
 
 - `rune_mac::launch()`, first thing in `main`, keeps a relaunch behind the app in front from
