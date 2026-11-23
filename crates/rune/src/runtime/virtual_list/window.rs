@@ -43,6 +43,19 @@ impl RuntimeCore {
         self.commit.virtuals.iter().any(|(path, v)| self.wants_window(path, v))
     }
 
+    /// Whether any live virtual list's viewport reaches past its mounted rows, leaving part of it
+    /// blank until another commit mounts rows there.
+    pub(in crate::runtime) fn virtual_viewport_uncovered(&self) -> bool {
+        self.commit.virtuals.iter().any(|(path, v)| self.viewport_uncovered(path, v))
+    }
+
+    fn viewport_uncovered(&self, path: &str, v: &crate::el::virtual_list::VirtualList) -> bool {
+        let Some(i) = self.tree.id_of_path(path).and_then(|id| self.tree.index_of_id(id)) else { return false };
+        if self.subtree_exiting(i) { return false; }
+        let (offset, pinned) = self.tree.virtual_window_offset(&self.scroll.scrolls, v);
+        v.viewport_uncovered(offset, pinned)
+    }
+
     pub(in crate::runtime) fn report_visible_rows(&mut self) -> bool {
         if self.commit.virtuals.is_empty() { return false; }
         let mut queued = false;

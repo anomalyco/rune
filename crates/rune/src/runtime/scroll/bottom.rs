@@ -140,7 +140,7 @@ impl RuntimeCore {
         }
         for _ in 0..3 {
             if !self.virtual_window_changed() { break; }
-            self.commit(app, &Tx::default());
+            self.commit_virtual_scroll(app, &Tx::default());
             self.step_scroll(0.0);
             for (id, ..) in &targets {
                 if let Some(st) = self.scroll.scrolls.get_mut(id) { st.offset = st.max; }
@@ -159,7 +159,7 @@ impl RuntimeCore {
             }
         }
         if self.virtual_window_changed() {
-            self.commit(app, &Tx::default());
+            self.commit_virtual_scroll(app, &Tx::default());
             self.step_scroll(0.0);
         }
     }
@@ -173,7 +173,7 @@ impl RuntimeCore {
             self.page_to(i, |offset, _, page| offset + page * f64::from(pages));
         }
         if self.virtual_window_changed() {
-            self.commit(app, &Tx::default());
+            self.commit_virtual_scroll(app, &Tx::default());
             self.step_scroll(0.0);
         }
     }

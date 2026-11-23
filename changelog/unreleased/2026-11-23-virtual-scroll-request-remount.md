@@ -1,0 +1,1 @@
+- Virtual lists: programmatic scroll requests (`Tx::scroll_to_instant`, `scroll_to_with`, `scroll_key_to`, `scroll_to_bottom`, `scroll_page`, `scroll_into_view`) now remount `virtual_rows` once per frame without re-running `view`, deferring pending overscan fills until the request lands and no longer tripping the instant-scroll commit warning during scrollbar thumb drags.

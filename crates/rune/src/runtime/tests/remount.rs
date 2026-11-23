@@ -426,3 +426,177 @@ fn virtual_remount_keeps_live_text_bound_without_running_view() {
     full.frame(1.0 / 120.0);
     assert_eq!(shown_elements(&rt), shown_elements(&full));
 }
+
+#[test]
+fn scroll_requests_past_mounted_rows_remount_once_without_running_view() {
+    #[derive(Default)]
+    struct S {
+        views: Cell<u32>,
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        s.views.set(s.views.get() + 1);
+        col().w_full().h_full().child(
+            col().key("vp").size(300.0, 400.0).scroll(ScrollSpec { stick_bottom: false }).child(
+                col().key("list").w_full().growth(GrowthSpec::default()).virtual_rows(
+                    1000,
+                    20.0,
+                    |_: &S, i| Cow::Owned(format!("r{i}")),
+                    |_: &S, _| el().w_full().h(20.0),
+                ),
+            ),
+        )
+    }
+    fn make() -> Runtime<S> {
+        let mut rt = Runtime::new(S::default(), view, (300.0, 400.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        for _ in 0..10 {
+            rt.frame(0.016);
+        }
+        rt
+    }
+    fn top_row(rt: &Runtime<S>) -> (Option<String>, f32) {
+        let e = rt
+            .elements()
+            .into_iter()
+            .filter(|e| e.key.as_deref().is_some_and(|k| k.starts_with('r')) && e.rect[1] >= -0.01)
+            .min_by(|a, b| a.rect[1].total_cmp(&b.rect[1]))
+            .expect("visible row");
+        (e.key, e.rect[1])
+    }
+    fn offset(rt: &Runtime<S>) -> f64 {
+        rt.scroll.scrolls.values().next().unwrap().offset
+    }
+
+    let step = 1250.0f32;
+    let steps = 10usize;
+    let run = |mut ask: Box<dyn FnMut(&mut Runtime<S>, usize)>| {
+        #[cfg(debug_assertions)]
+        let _ = crate::tooling::perf_warn::take_log();
+        let mut rt = make();
+        let mut counts = Vec::with_capacity(steps);
+        for i in 0..steps {
+            let (c0, v0) = (rt.stats.commits, rt.state.views.get());
+            ask(&mut rt, i);
+            rt.frame(0.016);
+            counts.push((rt.stats.commits - c0, rt.state.views.get() - v0));
+        }
+        let v_before_settle = rt.state.views.get();
+        for _ in 0..60 {
+            rt.frame(0.016);
+        }
+        let settle_views = rt.state.views.get() - v_before_settle;
+        #[cfg(debug_assertions)]
+        let warnings: Vec<_> = crate::tooling::perf_warn::take_log()
+            .into_iter()
+            .filter(|l| l.contains("an instant scroll"))
+            .collect();
+        #[cfg(not(debug_assertions))]
+        let warnings: Vec<String> = Vec::new();
+        (counts, settle_views, offset(&rt), top_row(&rt), shown_elements(&rt), warnings)
+    };
+
+    let (wheel_counts, wheel_settle_views, wheel_off, wheel_top, wheel_shown, _) =
+        run(Box::new(move |rt, _| {
+            rt.pointer_move(150.0, 200.0);
+            rt.wheel(150.0, 200.0, -step);
+        }));
+    let (inst_counts, inst_settle_views, inst_off, inst_top, inst_shown, inst_warnings) =
+        run(Box::new(move |rt, i| {
+            rt.update_if(|_, tx| {
+                tx.scroll_to_instant("vp", 0.0, step * (i + 1) as f32);
+                false
+            });
+        }));
+    let (glide_counts, glide_settle_views, glide_off, glide_top, glide_shown, _) =
+        run(Box::new(move |rt, i| {
+            rt.update_if(|_, tx| {
+                tx.scroll_to_with("vp", 0.0, step * (i + 1) as f32, crate::Spring::new(0.18, 0.0));
+                false
+            });
+        }));
+
+    let expected_counts = vec![(1, 0); steps];
+    assert_eq!(wheel_counts, expected_counts, "wheel baseline");
+    assert_eq!(inst_counts, expected_counts, "scroll_to_instant must remount once with 0 view runs");
+    assert_eq!(glide_counts, expected_counts, "scroll_to_with must remount once with 0 view runs");
+    assert_eq!((wheel_settle_views, inst_settle_views, glide_settle_views), (0, 0, 0));
+    assert!(inst_warnings.is_empty(), "instant scroll must not trip perf warning: {inst_warnings:?}");
+
+    assert_eq!(inst_off, wheel_off, "scroll_to_instant lands at the same offset as wheel");
+    assert_eq!(glide_off, wheel_off, "scroll_to_with lands at the same offset as wheel");
+    assert_eq!(inst_top, wheel_top, "scroll_to_instant lands on the same top row");
+    assert_eq!(glide_top, wheel_top, "scroll_to_with lands on the same top row");
+    assert_eq!(inst_top.0.as_deref(), Some("r625"));
+    assert_eq!(inst_shown, wheel_shown);
+    assert_eq!(glide_shown, wheel_shown);
+}
+
+#[test]
+fn scroll_requests_on_variable_height_virtual_list_land_exact_without_running_view() {
+    #[derive(Default)]
+    struct S {
+        views: Cell<u32>,
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        s.views.set(s.views.get() + 1);
+        col().w_full().h_full().child(
+            col().key("vp").size(300.0, 400.0).scroll(ScrollSpec { stick_bottom: false }).child(
+                col().key("list").w_full().growth(GrowthSpec::default()).virtual_rows(
+                    1000,
+                    20.0,
+                    |_: &S, i| Cow::Owned(format!("r{i}")),
+                    |_: &S, i| {
+                        let h = if i >= 950 { 60.0 } else if i % 5 == 0 { 34.0 } else { 20.0 };
+                        el().w_full().h(h)
+                    },
+                ),
+            ),
+        )
+    }
+    fn make() -> Runtime<S> {
+        let mut rt = Runtime::new(S::default(), view, (300.0, 400.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        while rt.frame(0.016) {}
+        rt
+    }
+    fn offset(rt: &Runtime<S>) -> f64 {
+        rt.scroll.scrolls.values().next().unwrap().offset
+    }
+
+    // 1. Anchored jump (scroll_key_to) onto an unmounted row with variable heights.
+    let (mut rt, mut full) = (make(), make());
+    full.commit.set_reuse_scale(f32::NAN);
+    let v0 = rt.state.views.get();
+    rt.update_if(|_, tx| { tx.scroll_key_to("r500", 40.0); false });
+    rt.frame(0.016);
+    full.update_if(|_, tx| { tx.scroll_key_to("r500", 40.0); false });
+    full.frame(0.016);
+    assert_eq!(rt.state.views.get() - v0, 0, "scroll_key_to must not run view");
+    assert_eq!(offset(&rt), offset(&full), "scroll_key_to lands at the exact same offset");
+    let r500 = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("r500")).expect("r500 mounted");
+    assert!((r500.rect[1] - 40.0).abs() < 0.01, "r500 anchored at y=40: {:?}", r500.rect);
+
+    // 2. Instant jump past the estimated end when tail rows are taller than estimated.
+    let (mut rt, mut full) = (make(), make());
+    full.commit.set_reuse_scale(f32::NAN);
+    let v0 = rt.state.views.get();
+    rt.update_if(|_, tx| { tx.scroll_to_instant("vp", 0.0, 99_999.0); false });
+    rt.frame(0.016);
+    full.update_if(|_, tx| { tx.scroll_to_instant("vp", 0.0, 99_999.0); false });
+    full.frame(0.016);
+    assert_eq!(rt.state.views.get() - v0, 0, "scroll_to_instant to end must not run view");
+    assert_eq!(offset(&rt), offset(&full), "scroll_to_instant lands at the exact measured bottom");
+    let last = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("r999")).expect("r999 mounted");
+    assert!((last.rect[1] + last.rect[3] - 400.0).abs() < 0.01, "r999 bottom flush with viewport: {:?}", last.rect);
+
+    // 3. scroll_to_bottom_instant on the same variable-height list.
+    let (mut rt, mut full) = (make(), make());
+    full.commit.set_reuse_scale(f32::NAN);
+    let v0 = rt.state.views.get();
+    rt.update_if(|_, tx| { tx.scroll_to_bottom_instant("vp"); false });
+    rt.frame(0.016);
+    full.update_if(|_, tx| { tx.scroll_to_bottom_instant("vp"); false });
+    full.frame(0.016);
+    assert_eq!(rt.state.views.get() - v0, 0, "scroll_to_bottom_instant must not run view");
+    assert_eq!(offset(&rt), offset(&full), "scroll_to_bottom_instant lands at the exact measured bottom");
+}

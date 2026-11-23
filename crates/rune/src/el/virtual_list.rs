@@ -533,6 +533,21 @@ impl VirtualList {
             || (self.range.end < self.keys.len() && offset + self.viewport > bottom - edge)
     }
 
+    /// Whether the viewport at `offset` (or the end when `pinned`) reaches past the mounted rows,
+    /// leaving part of it blank.
+    pub fn viewport_uncovered(&self, offset: f32, pinned: bool) -> bool {
+        if self.keys.is_empty() { return false; }
+        let end = self.row_end(self.range.end);
+        if pinned {
+            let mounted = (end - self.before).max(0.0);
+            self.range.end < self.keys.len() || (self.range.start > 0 && mounted < self.viewport)
+        } else {
+            let offset = offset.min(self.max_offset());
+            (self.range.start > 0 && offset < self.pad_top + self.before)
+                || (self.range.end < self.keys.len() && offset + self.viewport > self.pad_top + end)
+        }
+    }
+
     /// How many rows of the overscan around `offset` are still unmounted: zero when the window
     /// is filled. The fill measures this at its bound to tell a list that is still making
     /// progress from one whose heights keep changing under it. Only the overscan's own rows

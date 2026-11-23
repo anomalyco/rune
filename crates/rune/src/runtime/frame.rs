@@ -391,8 +391,13 @@ impl RuntimeCore {
         self.commit.set_read_moved(read_moved);
         if self.tree.has_pixel_aspect && self.pixel_aspect_changed() { self.commit.relayout = true; }
         let settling = self.commit.is_settling();
+        let has_scroll_request = !tx.scroll_to.is_empty() || !tx.scroll_bottom.is_empty()
+            || !tx.scroll_pages.is_empty() || !tx.scroll_offsets.is_empty() || self.edit.caret_follow;
         let shifted = !(self.commit.dirty || self.commit.relayout || settling) && self.virtual_window_changed();
-        let besides = self.commit.dirty || self.commit.relayout || settling || shifted;
+        // When a scroll request is about to move viewports and nothing else needs a commit,
+        // wait for the request so we remount once at the new offset instead of filling the old one.
+        let defer_shift = shifted && !ran && !ran_layout && !read_moved && !tx.commit.lands() && has_scroll_request;
+        let besides = self.commit.dirty || self.commit.relayout || settling || (shifted && !defer_shift);
         let other = ran || besides;
         self.count_layout_echo(ran_layout || read_moved, other);
         if other || ran_layout || read_moved {
@@ -438,7 +443,11 @@ impl RuntimeCore {
             self.commit.watch_frame(commits0, scrolling, tx.scroll_offsets.iter().find(|r| tx.commit.snaps() || r.glide.is_none()).map(|r| r.key.as_str()));
         }
         let follow = std::mem::take(&mut self.edit.caret_follow);
+        let commits_before_scroll = self.commit.commits;
         self.finish_scroll_requests(app, &mut tx, follow);
+        if defer_shift && self.commit.commits == commits_before_scroll && self.virtual_window_changed() {
+            self.commit_virtual_scroll(app, &Tx::default());
+        }
         // Those scrolls moved the caret after the commit a view placed from it saw.
         if self.edit.caret_watch && self.caret_moved(None) { self.commit(app, &Tx { commit: Commit::Instant, ..Tx::default() }); }
         if let Some(request) = tx.select.take() {
