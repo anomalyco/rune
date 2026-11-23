@@ -1,0 +1,1 @@
+- Windows: `WindowOptions::attributes` now sets `WS_EX_NOREDIRECTIONBITMAP` (`with_no_redirection_bitmap(true)`) when `transparent` is true, so transparent windows (including `WindowOptions::overlay`) composite over the desktop instead of an opaque redirection bitmap.
