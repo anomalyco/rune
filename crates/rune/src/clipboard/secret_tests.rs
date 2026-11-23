@@ -2,6 +2,7 @@
 //! flags they replaced. The two have to agree on everything an app or another app can see.
 use std::cell::Cell;
 use std::rc::Rc;
+use std::collections::HashSet;
 use std::sync::atomic::AtomicUsize;
 use crate::machine::Effects;
 use super::secret::{REFUSED, Report, Secret, SecretEffect, SecretEvent, step};
@@ -69,22 +70,22 @@ mod flags {
         }
     }
 
-    struct Held {
-        slot: Option<Arc<Slot>>,
-        notify: Option<Notify>,
-        deadline: Option<Instant>,
-        revision: Option<u64>,
-        print: u64,
+    pub(super) struct Held {
+        pub(super) slot: Option<Arc<Slot>>,
+        pub(super) notify: Option<Notify>,
+        pub(super) deadline: Option<Instant>,
+        pub(super) revision: Option<u64>,
+        pub(super) print: u64,
     }
 
-    struct OwnPills {
-        revision: Option<u64>,
+    pub(super) struct OwnPills {
+        pub(super) revision: Option<u64>,
         text_print: u64,
         pills: Vec<(std::ops::Range<usize>, String)>,
     }
 
     #[derive(Default)]
-    pub struct Core { keys: RandomState, held: Option<Held>, own_pills: Option<OwnPills> }
+    pub struct Core { pub(super) keys: RandomState, pub(super) held: Option<Held>, pub(super) own_pills: Option<OwnPills> }
     impl Core {
         pub fn watching(&self) -> bool { self.held.is_some() }
 
@@ -227,7 +228,7 @@ enum Logged {
 type Log = Arc<Mutex<Vec<Logged>>>;
 
 /// How a clipboard responds to being wiped.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum WipeMode {
     Works,
     Refused,
@@ -662,45 +663,199 @@ fn keeps_clear_nows_promise(machines: &mut Rig<Core>, reference: &mut Rig<flags:
     Ok(())
 }
 
-/// Every sequence of up to six events, on either layout of change counts.
-fn exhaust_all(alphabet: &[Ev]) {
-    for counted in COUNTS {
-        for len in 1..=6 { assert_eq!(exhaust(alphabet, len, counted), alphabet.len().pow(len)); }
+/// Canonical snapshot of everything in `(Rig<Core>, Rig<flags::Core>)` that can affect any
+/// future transition or check. Two sequences reaching the same `StateKey` behave identically
+/// under every continuation, so breadth-first exploration up to depth `max_len` covers every
+/// reachable transition of every sequence up to `max_len` without re-exploring equivalent paths.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum ContentTag { Empty, Secret, Other, Forever, Theirs, Pills }
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum StateTag { Pending, Holding, Cleared, Replaced, Failed(u8) }
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum ReportTag { Said(StateTag), Refused }
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct BoardKey(ContentTag, bool, bool, Option<u8>, bool, WipeMode, bool);
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct HoldKey(Option<u8>, bool, u8, u8, u8);
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct StateKey {
+    first: Option<usize>,
+    writes: [bool; 3],
+    m_boards: [BoardKey; 2],
+    f_boards: [BoardKey; 2],
+    m_engines: [(Option<HoldKey>, Option<(bool, bool)>, Option<u8>); 2],
+    f_engines: [(Option<HoldKey>, Option<u8>); 2],
+    m_secrets: [(bool, ReportTag, u32, bool); 3],
+    f_secrets: [(bool, StateTag, usize, bool); 3],
+    m_queues: [Vec<u8>; 2],
+    f_queues: [Vec<u8>; 2],
+}
+
+const KNOWN_TEXTS: [&str; 5] = [SECRET, "fixture-other", "fixture-forever", "theirs", "a @x b"];
+
+struct ErrInterner(Vec<String>);
+impl ErrInterner {
+    fn id(&mut self, err: &str) -> u8 {
+        if err == REFUSED { return u8::MAX; }
+        if let Some(pos) = self.0.iter().position(|s| s == err) { return pos as u8; }
+        let id = self.0.len() as u8;
+        self.0.push(err.to_owned());
+        id
+    }
+    fn state(&mut self, state: &SecretState) -> StateTag {
+        match state {
+            SecretState::Pending => StateTag::Pending,
+            SecretState::Holding => StateTag::Holding,
+            SecretState::Cleared => StateTag::Cleared,
+            SecretState::Replaced => StateTag::Replaced,
+            SecretState::Failed(e) => StateTag::Failed(self.id(e)),
+        }
+    }
+    fn report(&mut self, report: &Report) -> ReportTag {
+        match report { Report::Said(s) => ReportTag::Said(self.state(s)), Report::Refused => ReportTag::Refused }
     }
 }
 
-/// Every sequence of exactly `len` events, across threads. Returns how many ran.
-fn exhaust(alphabet: &[Ev], len: u32, counted: [bool; 2]) -> usize {
-    let total = alphabet.len().pow(len);
-    let start = crate::time::now();
-    let next = AtomicUsize::new(0);
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
-    const CHUNK: usize = 4096;
-    let failure = Mutex::new(None);
-    std::thread::scope(|scope| {
-        for _ in 0..threads {
-            scope.spawn(|| {
-                let mut sequence = vec![alphabet[0]; len as usize];
-                loop {
-                    let from = next.fetch_add(CHUNK, Ordering::Relaxed);
-                    if from >= total || lock(&failure).is_some() { return; }
-                    for index in from..(from + CHUNK).min(total) {
-                        let mut rest = index;
-                        for slot in sequence.iter_mut() {
-                            *slot = alphabet[rest % alphabet.len()];
-                            rest /= alphabet.len();
-                        }
-                        if let Err(why) = check(&sequence, counted, start) {
-                            *lock(&failure) = Some(why);
-                            return;
-                        }
-                    }
-                }
-            });
-        }
+fn content_tag(content: &Option<ClipboardContent>) -> ContentTag {
+    match content {
+        None => ContentTag::Empty,
+        Some(c) if c.html() == Some(PILLS) && c.text() == "a @x b" => ContentTag::Pills,
+        Some(c) if c.html().is_none() => match c.text() {
+            SECRET => ContentTag::Secret,
+            "fixture-other" => ContentTag::Other,
+            "fixture-forever" => ContentTag::Forever,
+            "theirs" => ContentTag::Theirs,
+            other => panic!("unexpected clipboard text in secret test: {other:?}"),
+        },
+        Some(c) => panic!("unexpected clipboard content in secret test: {:?} {:?}", c.text(), c.html()),
+    }
+}
+
+fn print_mask(keys: &RandomState, print: u64) -> u8 {
+    KNOWN_TEXTS.iter().enumerate().fold(0u8, |m, (i, t)| m | if keys.hash_one(*t) == print { 1 << i } else { 0 })
+}
+fn rev_tag(rev: Option<u64>, count: u64) -> u8 { rev.map_or(0, |r| if r == count { 1 } else { 2 }) }
+fn due_tag(due: Option<Instant>, now: Instant) -> u8 { due.map_or(0, |d| if now < d { 1 } else { 2 }) }
+fn slot_id<T>(slot: &Arc<T>, s: &Arc<T>, t: &Arc<T>, f: &Arc<T>) -> u8 {
+    if Arc::ptr_eq(slot, s) { 0 } else if Arc::ptr_eq(slot, t) { 1 } else if Arc::ptr_eq(slot, f) { 2 } else { 3 }
+}
+fn board_key(board: &Fake, alive: bool, errs: &mut ErrInterner) -> BoardKey {
+    BoardKey(content_tag(&board.content), board.ours(), board.others, board.fail.as_deref().map(|e| errs.id(e)), board.unreadable, board.wipe, alive)
+}
+
+fn state_key(machines: &Rig<Core>, reference: &Rig<flags::Core>) -> StateKey {
+    let mut errs = ErrInterner(Vec::new());
+    let (m_now, f_now) = (machines.clock.get(), reference.clock.get());
+    let m_boards = [0, 1].map(|i| board_key(&machines.boards[i], machines.alive[i], &mut errs));
+    let f_boards = [0, 1].map(|i| board_key(&reference.boards[i], reference.alive[i], &mut errs));
+    let m_engines = [0, 1].map(|i| {
+        let (eng, count) = (&machines.engines[i], machines.boards[i].count);
+        let hold = match &eng.hold {
+            Hold::Free => None,
+            Hold::Holding { slot, notify, due, revision, print, .. } => Some(HoldKey(
+                slot.upgrade().map(|s| slot_id(&s, &machines.s.0, &machines.t.0, &machines.forever.0)),
+                notify.is_some(), due_tag(*due, m_now), rev_tag(*revision, count), print_mask(&eng.keys, *print),
+            )),
+        };
+        (hold, eng.alarm.map(|a| (eng.hold.armed(a.attempt), m_now >= a.due)), eng.own_pills.as_ref().map(|o| rev_tag(o.revision, count)))
     });
-    if let Some(why) = failure.into_inner().unwrap() { panic!("{why}"); }
-    total
+    let f_engines = [0, 1].map(|i| {
+        let (eng, count) = (&reference.engines[i], reference.boards[i].count);
+        let held = eng.held.as_ref().map(|h| HoldKey(
+            h.slot.as_ref().map(|s| slot_id(s, &reference.s.0, &reference.t.0, &reference.forever.0)),
+            h.notify.is_some(), due_tag(h.deadline, f_now), rev_tag(h.revision, count), print_mask(&eng.keys, h.print),
+        ));
+        (held, eng.own_pills.as_ref().map(|o| rev_tag(o.revision, count)))
+    });
+    let m_secrets = [&machines.s, &machines.t, &machines.forever].map(|copy| {
+        let (cancelled, report, holds) = match copy.0.snapshot() {
+            Secret::Live { report, holds } => (false, report, holds),
+            Secret::Cancelled { report, holds } => (true, report, holds),
+        };
+        (cancelled, errs.report(&report), holds, copy.0.route.get().is_some())
+    });
+    let f_secrets = [&reference.s, &reference.t, &reference.forever].map(|copy| {
+        (copy.0.cancel.load(Ordering::SeqCst), errs.state(&lock(&copy.0.state)), copy.0.holders.load(Ordering::SeqCst), copy.0.route.get().is_some())
+    });
+    let m_queues = [0, 1].map(|b| {
+        let queued: Vec<_> = machines.queues[b].1.try_iter().collect();
+        let ids = queued.iter().map(|r| match r {
+            Request::Clear(Some(s)) => slot_id(s, &machines.s.0, &machines.t.0, &machines.forever.0),
+            Request::Clear(None) => 3,
+            _ => 4,
+        }).collect();
+        for r in queued { machines.queues[b].0.send(r).ok(); }
+        ids
+    });
+    let f_queues = [0, 1].map(|b| {
+        let queued: Vec<_> = reference.queues[b].1.try_iter().collect();
+        let ids = queued.iter().map(|s| slot_id(s, &reference.s.0, &reference.t.0, &reference.forever.0)).collect();
+        for s in queued { reference.queues[b].0.send(s).ok(); }
+        ids
+    });
+    StateKey {
+        first: machines.first,
+        writes: [machines.s_write.is_some(), machines.t_write.is_some(), machines.forever_write.is_some()],
+        m_boards, f_boards, m_engines, f_engines, m_secrets, f_secrets, m_queues, f_queues,
+    }
+}
+
+/// Drives `sequence` through both rigs, verifying `same` after every step and
+/// `keeps_clear_nows_promise` at the end, and returns the canonical state before the final clear.
+fn check_and_key(sequence: &[Ev], counted: [bool; 2], start: Instant) -> Result<StateKey, String> {
+    let mut machines = Rig::<Core>::new(counted, start);
+    let mut reference = Rig::<flags::Core>::new(counted, start);
+    for (i, &ev) in sequence.iter().enumerate() {
+        machines.apply(ev);
+        reference.apply(ev);
+        same(&machines, &reference).map_err(|why| format!("{:?} with change counts {counted:?}, after event {i}: {why}", sequence))?;
+    }
+    let key = state_key(&machines, &reference);
+    keeps_clear_nows_promise(&mut machines, &mut reference).map_err(|why| format!("{:?} with change counts {counted:?}, then clear_now: {why}", sequence))?;
+    Ok(key)
+}
+
+/// Every reachable state and transition up to six events, on either layout of change counts.
+fn exhaust_all(alphabet: &[Ev]) {
+    for counted in COUNTS {
+        assert!(exhaust_up_to(alphabet, 6, counted) >= alphabet.len());
+    }
+}
+
+/// Breadth-first exploration of every reachable transition up to `max_len` events, deduplicating
+/// canonical states so equivalent paths are never re-expanded. Runs on the test's own thread.
+fn exhaust_up_to(alphabet: &[Ev], max_len: usize, counted: [bool; 2]) -> usize {
+    let start = crate::time::now();
+    let init = {
+        let machines = Rig::<Core>::new(counted, start);
+        let reference = Rig::<flags::Core>::new(counted, start);
+        state_key(&machines, &reference)
+    };
+    let mut seen = HashSet::new();
+    seen.insert(init);
+    let mut frontier: Vec<Vec<Ev>> = vec![Vec::new()];
+    let mut checked = 0usize;
+    for depth in 1..=max_len {
+        let mut next_frontier = Vec::new();
+        for prefix in &frontier {
+            let mut sequence = Vec::with_capacity(depth);
+            sequence.extend_from_slice(prefix);
+            sequence.push(alphabet[0]);
+            for &ev in alphabet {
+                *sequence.last_mut().unwrap() = ev;
+                checked += 1;
+                let key = match check_and_key(&sequence, counted, start) {
+                    Ok(key) => key,
+                    Err(why) => panic!("{why}"),
+                };
+                if depth < max_len && seen.insert(key) {
+                    next_frontier.push(sequence.clone());
+                }
+            }
+        }
+        frontier = next_frontier;
+    }
+    checked
 }
 
 const COUNTS: [[bool; 2]; 2] = [[true, false], [false, true]];
@@ -741,7 +896,7 @@ const ALL: &[Ev] = &[
 ];
 
 fn exhaust_whole_alphabet(counted: [bool; 2]) {
-    for len in 1..=6 { assert_eq!(exhaust(ALL, len, counted), ALL.len().pow(len)); }
+    assert!(exhaust_up_to(ALL, 6, counted) >= ALL.len());
 }
 
 #[test]

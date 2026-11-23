@@ -136,6 +136,8 @@ impl Slot {
     pub(super) fn released(&self, report: Report) { self.step(SecretEvent::Released(report)); }
     pub(super) fn cancelled(&self) -> bool { matches!(*lock(&self.secret), Secret::Cancelled { .. }) }
     fn state(&self) -> SecretState { lock(&self.secret).report().shown() }
+    #[cfg(test)]
+    pub(super) fn snapshot(&self) -> Secret { lock(&self.secret).clone() }
 }
 
 /// Settles a secret write that was dropped before reaching a clipboard (replaced in its

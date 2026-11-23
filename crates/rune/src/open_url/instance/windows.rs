@@ -25,7 +25,12 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     IsWindowVisible, SW_RESTORE, SetForegroundWindow, ShowWindow, WS_EX_TOOLWINDOW,
 };
 
+use crate::machine::{Effects, Seq};
+
 use super::handoff::{ACCEPTED, ANSWER_WITHIN, HANDED_WAIT, MAGIC, MAX_MESSAGE, QUITTING, REACH_FOR, relaunched};
+
+#[path = "session.rs"]
+mod session;
 
 /// An older build's message: the arguments until the sender closes, and no answer.
 const MAGIC_V1: &[u8] = b"rune-instance 1\0";
@@ -95,6 +100,25 @@ struct Listener {
 
 impl Listener {
     fn start(pipe: HANDLE, timeout: Duration, on_launch: impl Fn(Vec<String>) -> bool + Send + 'static) -> Option<Self> {
+        Self::start_inner(pipe, timeout, on_launch, #[cfg(test)] None)
+    }
+
+    #[cfg(test)]
+    fn start_notifying_read(
+        pipe: HANDLE,
+        timeout: Duration,
+        on_reading: std::sync::mpsc::Sender<()>,
+        on_launch: impl Fn(Vec<String>) -> bool + Send + 'static,
+    ) -> Option<Self> {
+        Self::start_inner(pipe, timeout, on_launch, Some(on_reading))
+    }
+
+    fn start_inner(
+        pipe: HANDLE,
+        timeout: Duration,
+        on_launch: impl Fn(Vec<String>) -> bool + Send + 'static,
+        #[cfg(test)] on_reading: Option<std::sync::mpsc::Sender<()>>,
+    ) -> Option<Self> {
         let Some(stop) = StopEvent::new().map(Arc::new) else {
             // SAFETY: the handle no thread took.
             unsafe { CloseHandle(pipe) };
@@ -103,7 +127,7 @@ impl Listener {
         let pipe_raw = pipe as usize;
         let stop_thread = Arc::clone(&stop);
         let spawned = std::thread::Builder::new().name("rune-instance".into()).spawn(move || {
-            serve(pipe_raw as HANDLE, timeout, &stop_thread, &on_launch);
+            serve(pipe_raw as HANDLE, timeout, &stop_thread, &on_launch, #[cfg(test)] on_reading.as_ref());
         });
         match spawned {
             Ok(thread) => Some(Self { stop, thread: Some(thread) }),
@@ -378,85 +402,133 @@ fn connect(pipe: HANDLE, stop: &StopEvent) -> bool {
     )
 }
 
-/// Writes the one-byte `byte` answer and waits until the client reads it and closes its end (or
-/// `deadline` / `stop` fires), so `DisconnectNamedPipe` doesn't discard an unread answer and a
-/// client that never reads can't wedge the listener.
-fn answer(pipe: HANDLE, byte: u8, deadline: Instant, stop: Option<HANDLE>) -> Result<(), (&'static str, u32)> {
-    let buf = [byte];
-    match io_result(pipe, Some(deadline), stop, |o| {
-        // SAFETY: writes one byte from `buf`, which outlives the wait in `io_result`.
-        unsafe { WriteFile(pipe, buf.as_ptr(), 1, std::ptr::null_mut(), o) }
-    }) {
-        Ok(1) => {}
-        Ok(_) => return Err(("write", 0)),
-        Err(e) => return Err(("write", e)),
-    }
-    let mut drain = [0u8; 1];
-    loop {
-        match io_result(pipe, Some(deadline), stop, |o| {
-            // SAFETY: reads at most one byte into `drain`, which outlives the wait in `io_result`.
-            unsafe { ReadFile(pipe, drain.as_mut_ptr(), 1, std::ptr::null_mut(), o) }
-        }) {
-            Err(ERROR_BROKEN_PIPE) => return Ok(()),
-            // A normal v2 client writes nothing after its framed message; unexpected bytes mean
-            // it isn't following the handshake.
-            Ok(0) => {}
-            Ok(_) => return Err(("flush", 0)),
-            Err(e) => return Err(("flush", e)),
-        }
-    }
-}
+/// Reads one launch at a time from the pipe until `stop` (or the process ends), driven by
+/// `session::step`. The handle stays open meanwhile, so the name stays this process's.
+fn serve(
+    pipe: HANDLE,
+    timeout: Duration,
+    stop: &StopEvent,
+    on_launch: &impl Fn(Vec<String>) -> bool,
+    #[cfg(test)] on_reading: Option<&std::sync::mpsc::Sender<()>>,
+) {
+    let mut seq = Seq::default();
+    let mut state = session::State::default();
+    let mut effects = Effects::one(session::Effect::Connect);
+    let mut read_buf = [0u8; session::READ_CHUNK];
+    let mut drain_buf = [0u8; 1];
 
-/// Reads one launch at a time from the pipe until `stop` (or the process ends), and answers
-/// each (`ACCEPTED`, or `QUITTING` while the app quits: the launch then claims the instance
-/// itself once this process lets go). The handle stays open meanwhile, so the name stays this
-/// process's.
-fn serve(pipe: HANDLE, timeout: Duration, stop: &StopEvent, on_launch: &impl Fn(Vec<String>) -> bool) {
-    loop {
-        if stop.is_set() {
-            break;
-        }
-        if connect(pipe, stop) {
-            let read_deadline = crate::time::now() + timeout;
-            if let Some(launch) = read(pipe, read_deadline, stop) {
-                hold();
-                let stopping = stop.is_set();
-                let quitting = crate::quit::quitting() || stopping;
-                // A launch that waits for its answer is acted on only once it has read it: one
-                // that gave up first (or never reads its answer) asks again, and that ask is the
-                // one acted on, so a click opens once.
-                let told = !launch.answers || {
-                    let byte = if quitting { QUITTING } else { ACCEPTED };
-                    let wait = if stopping { timeout.min(ANSWER_WITHIN) } else { timeout };
-                    let answer_deadline = crate::time::now() + wait;
-                    let answer_stop = (!stopping).then(|| stop.handle());
-                    match answer(pipe, byte, answer_deadline, answer_stop) {
-                        Ok(()) => true,
-                        Err((phase, e)) => {
-                            eprintln!("rune-instance: a launch gave up before it read its answer ({phase} failed, error {e}); not acted on");
-                            false
-                        }
+    while !effects.is_empty() {
+        let mut next = Effects::none();
+        for effect in effects {
+            match effect {
+                session::Effect::Connect => {
+                    let ev = if stop.is_set() {
+                        session::Event::Stopped
+                    } else if connect(pipe, stop) {
+                        session::Event::Connected { now: crate::time::now() }
+                    } else if stop.is_set() {
+                        session::Event::Stopped
+                    } else {
+                        session::Event::ConnectFailed
+                    };
+                    next.extend(session::step(&mut seq, &mut state, timeout, ev));
+                }
+                session::Effect::Read { attempt, want, deadline } => {
+                    #[cfg(test)]
+                    if let Some(tx) = on_reading {
+                        let _ = tx.send(());
                     }
-                };
-                // A launch told the app quits claims the instance itself; one that couldn't
-                // be told (an older sender) is started again once this process exits.
-                if told && !(quitting && launch.answers) {
-                    let acted = on_launch(launch.args);
+                    let ev = if stop.is_set() {
+                        session::Event::Stopped
+                    } else {
+                        match io_result(pipe, Some(deadline), Some(stop.handle()), |o| {
+                            // SAFETY: reads at most `want <= read_buf.len()` bytes into `read_buf`, which outlives the wait.
+                            unsafe { ReadFile(pipe, read_buf.as_mut_ptr(), want as u32, std::ptr::null_mut(), o) }
+                        }) {
+                            Ok(n) => session::Event::ReadBytes { attempt, bytes: &read_buf[..n as usize] },
+                            Err(ERROR_BROKEN_PIPE) => session::Event::ReadEof { attempt },
+                            Err(_) if stop.is_set() => session::Event::Stopped,
+                            Err(err) if err == WAIT_TIMEOUT || crate::time::now() >= deadline => {
+                                session::Event::TimedOut { attempt, err }
+                            }
+                            Err(_) => session::Event::ReadFailed { attempt },
+                        }
+                    };
+                    next.extend(session::step(&mut seq, &mut state, timeout, ev));
+                }
+                session::Effect::Hold => {
+                    hold();
+                    let stopping = stop.is_set();
+                    let quitting = crate::quit::quitting() || stopping;
+                    next.extend(session::step(&mut seq, &mut state, timeout, session::Event::Held {
+                        now: crate::time::now(),
+                        stopping,
+                        quitting,
+                    }));
+                }
+                session::Effect::WriteAnswer { attempt, byte, deadline, cancellable } => {
+                    let buf = [byte];
+                    let stop_handle = cancellable.then(|| stop.handle());
+                    let ev = if cancellable && stop.is_set() {
+                        session::Event::Stopped
+                    } else {
+                        match io_result(pipe, Some(deadline), stop_handle, |o| {
+                            // SAFETY: writes one byte from `buf`, which outlives the wait in `io_result`.
+                            unsafe { WriteFile(pipe, buf.as_ptr(), 1, std::ptr::null_mut(), o) }
+                        }) {
+                            Ok(n) => session::Event::WroteAnswer { attempt, bytes: n as usize },
+                            Err(_) if cancellable && stop.is_set() => session::Event::Stopped,
+                            Err(err) if err == WAIT_TIMEOUT || crate::time::now() >= deadline => {
+                                session::Event::TimedOut { attempt, err }
+                            }
+                            Err(err) => session::Event::WriteAnswerFailed { attempt, err },
+                        }
+                    };
+                    next.extend(session::step(&mut seq, &mut state, timeout, ev));
+                }
+                session::Effect::DrainAnswer { attempt, deadline, cancellable } => {
+                    let stop_handle = cancellable.then(|| stop.handle());
+                    let ev = if cancellable && stop.is_set() {
+                        session::Event::Stopped
+                    } else {
+                        match io_result(pipe, Some(deadline), stop_handle, |o| {
+                            // SAFETY: reads at most one byte into `drain_buf`, which outlives the wait in `io_result`.
+                            unsafe { ReadFile(pipe, drain_buf.as_mut_ptr(), 1, std::ptr::null_mut(), o) }
+                        }) {
+                            Err(ERROR_BROKEN_PIPE) => session::Event::DrainEof { attempt },
+                            Ok(n) => session::Event::DrainRead { attempt, bytes: n as usize },
+                            Err(_) if cancellable && stop.is_set() => session::Event::Stopped,
+                            Err(err) if err == WAIT_TIMEOUT || crate::time::now() >= deadline => {
+                                session::Event::TimedOut { attempt, err }
+                            }
+                            Err(err) => session::Event::DrainFailed { attempt, err },
+                        }
+                    };
+                    next.extend(session::step(&mut seq, &mut state, timeout, ev));
+                }
+                session::Effect::AnswerFailed { phase, err } => {
+                    eprintln!("rune-instance: a launch gave up before it read its answer ({phase} failed, error {err}); not acted on");
+                }
+                session::Effect::Deliver(args) => {
+                    let acted = on_launch(args);
                     // Counted by the harness (no arguments: they may hold what the person typed).
                     if HOLD.get().is_some_and(|ms| *ms > 0) {
                         eprintln!("rune-instance: {}", if acted { "acted on a launch" } else { "a launch asked again after it was acted on; skipped" });
                     }
                 }
+                session::Effect::Disconnect => {
+                    // SAFETY: ends this client's connection, so the next can connect.
+                    unsafe { DisconnectNamedPipe(pipe) };
+                }
+                session::Effect::Close => {
+                    // SAFETY: the server handle this thread owns, closed once: the name is free.
+                    unsafe { CloseHandle(pipe) };
+                }
             }
-            // SAFETY: ends this client's connection, so the next can connect.
-            unsafe { DisconnectNamedPipe(pipe) };
         }
-        if stop.is_set() {
-            break;
-        }
+        effects = next;
     }
-    // SAFETY: the server handle this thread owns, closed once: the name is free.
-    unsafe { CloseHandle(pipe) };
+    debug_assert!(matches!(state, session::State::Stopped));
 }
 
 /// A harness's stand-in for a busy machine: `RUNE_INSTANCE_HOLD_MS` holds each launch that long
@@ -470,63 +542,6 @@ fn hold() {
     if ms > 0 {
         std::thread::sleep(Duration::from_millis(ms));
     }
-}
-
-/// A launch read from the pipe: its arguments, and whether its sender waits for an answer.
-struct Launch {
-    args: Vec<String>,
-    answers: bool,
-}
-
-/// One client's message: `MAGIC`, the body's length (u32, little-endian) and the body, after
-/// which the client waits for its answer; or, from an older sender, `MAGIC_V1` and the body
-/// until it closes its end. None for anything else, or when the client exceeds `deadline` or
-/// `MAX_MESSAGE`.
-fn read(pipe: HANDLE, deadline: Instant, stop: &StopEvent) -> Option<Launch> {
-    const V2_HEAD: usize = MAGIC.len() + 4;
-    let mut message = Vec::new();
-    let mut buf = [0u8; 4096];
-    let mut expected_v2: Option<usize> = None;
-    let (body, answers) = loop {
-        if let Some(len) = expected_v2 && message.len() >= V2_HEAD + len {
-            break (&message[V2_HEAD..V2_HEAD + len], true);
-        }
-        let want = match expected_v2 {
-            Some(len) => (V2_HEAD + len - message.len()).min(buf.len()),
-            None => (MAX_V1_WIRE + 1 - message.len()).min(buf.len()),
-        };
-        let got = match io_result(pipe, Some(deadline), Some(stop.handle()), |o| {
-            // SAFETY: reads at most `want <= buf.len()` bytes into `buf`, which outlives the wait.
-            unsafe { ReadFile(pipe, buf.as_mut_ptr(), want as u32, std::ptr::null_mut(), o) }
-        }) {
-            Ok(n) => n as usize,
-            Err(ERROR_BROKEN_PIPE) => break (message.strip_prefix(MAGIC_V1)?, false),
-            Err(_) => return None,
-        };
-        let limit = match expected_v2 {
-            Some(len) => V2_HEAD + len,
-            None => MAX_V1_WIRE,
-        };
-        if got > limit - message.len() {
-            return None;
-        }
-        message.extend_from_slice(&buf[..got]);
-        // Reject bytes that cannot begin either protocol magic right away.
-        let v2_prefix = MAGIC.starts_with(&message[..message.len().min(MAGIC.len())]);
-        let v1_prefix = MAGIC_V1.starts_with(&message[..message.len().min(MAGIC_V1.len())]);
-        if !v2_prefix && !v1_prefix {
-            return None;
-        }
-        if expected_v2.is_none() && message.len() >= V2_HEAD && message.starts_with(MAGIC) {
-            let len = u32::from_le_bytes(message[MAGIC.len()..V2_HEAD].try_into().ok()?) as usize;
-            if len > MAX_MESSAGE {
-                return None;
-            }
-            expected_v2 = Some(len);
-        }
-    };
-    let text = std::str::from_utf8(body).ok()?;
-    Some(Launch { args: text.split('\0').filter(|a| !a.is_empty()).map(str::to_owned).collect(), answers })
 }
 
 enum Sent {
