@@ -22,7 +22,7 @@ fn main() {}
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 fn main() {
-    use objc2::{MainThreadMarker, sel, rc::Retained};
+    use objc2::{MainThreadMarker, msg_send, sel, rc::Retained};
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSEventModifierFlags as Flags, NSMenu, NSMenuItem};
     use objc2_foundation::{NSProcessInfo, NSString};
     let mtm = MainThreadMarker::new().unwrap();
@@ -125,6 +125,24 @@ fn main() {
         assert_eq!(&edit_titles[6..], ["Select All", "Find", "-", "Start Dictation…", "Emoji & Symbols"]);
         edit_menu.removeItem(&find);
         default_macos::sync_standard(&app);
+        // AppKit ends the launch of an app that has an Edit menu by then with a separator and
+        // AutoFill at its end: AutoFill joins the system items where every Mac app has it, and
+        // stays there when the app adds its own.
+        let autofill = NSMenuItem::initWithTitle_action_keyEquivalent(mtm.alloc(), &NSString::from_str("AutoFill"), None, &NSString::from_str(""));
+        let _: () = msg_send![&autofill, setIdentifier: &*NSString::from_str("_NSMenuItemAutoFillIdentifier")];
+        let appkit_separator = NSMenuItem::separatorItem(mtm);
+        edit_menu.addItem(&appkit_separator);
+        edit_menu.addItem(&autofill);
+        default_macos::sync_standard(&app);
+        let edit_titles: Vec<_> = plan(&edit_menu).into_iter().map(|e| e.0).collect();
+        assert_eq!(&edit_titles[6..], ["Select All", "-", "AutoFill", "Start Dictation…", "Emoji & Symbols"]);
+        default_macos::adding(&app, || edit_menu.addItem(&find));
+        let edit_titles: Vec<_> = plan(&edit_menu).into_iter().map(|e| e.0).collect();
+        assert_eq!(&edit_titles[6..], ["Select All", "Find", "-", "AutoFill", "Start Dictation…", "Emoji & Symbols"]);
+        edit_menu.removeItem(&find);
+        edit_menu.removeItem(&autofill);
+        default_macos::sync_standard(&app);
+        assert_eq!(plan(&edit_menu).len(), 10, "the Edit menu is as it was");
 
         // An app's custom menus take the Mac order around the standard ones, and an item of
         // its own with a standard equivalent takes it from the standard item, set before or after.

@@ -18,6 +18,8 @@ thread_local! {
     /// Whether a window start has looked for winit's default menu yet.
     static CHECKED: Cell<bool> = const { Cell::new(false) };
     static HOOKED: Cell<bool> = const { Cell::new(false) };
+    /// Whether the standard items wait for AppKit to finish launching the app (`settle`).
+    static SETTLES: Cell<bool> = const { Cell::new(false) };
     /// What the key a menu item is handing Rune does if no handler takes it: a standard item's
     /// own ⌘-letter, or whatever key an app's `keys_first` item was picked by.
     static UNHANDLED: Cell<Option<(Option<char>, Unhandled)>> = const { Cell::new(None) };
@@ -37,7 +39,18 @@ pub(crate) fn install(opt_in: bool) {
     if !opt_in && !default { return; }
     INSTALLED.with(|i| i.set(true));
     default_macos::add_standard(&app);
+    SETTLES.with(|s| s.set(crate::platform::macos::launching()));
     hook_view_class();
+}
+
+/// Each turn of the event loop. The standard items made while AppKit still launched the app
+/// (its first window is made in `applicationWillFinishLaunching:`) settle once it has: AppKit
+/// ends its launch by adding its own items to the Edit menu there is by then.
+pub(crate) fn settle() {
+    if !SETTLES.with(Cell::get) || crate::platform::macos::launching() { return; }
+    SETTLES.with(|s| s.set(false));
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    default_macos::sync_standard(&NSApplication::sharedApplication(mtm));
 }
 
 /// The window host, for a key press it maps to `key`: what to do if no handler takes it, when

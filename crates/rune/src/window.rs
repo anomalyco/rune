@@ -382,6 +382,8 @@ impl ApplicationHandler<WakeEvent> for Windows {
             }
         }
         crate::marks::loop_waits();
+        #[cfg(target_os = "macos")]
+        crate::native_menu::settle_standard_menus();
         crate::cursor::os::make_pending(event_loop);
         let mut animating = false;
         for host in self.hosts.iter_mut().flatten() {
