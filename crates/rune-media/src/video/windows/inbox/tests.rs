@@ -106,3 +106,37 @@ fn a_picture_taken_for_the_surface_is_not_handed_back() {
     assert!(inbox.take(2, Pick::Due(9.1)).is_some());
     assert!(inbox.unread.is_empty());
 }
+
+#[test]
+fn the_inbox_is_unlocked_while_the_source_seeks_and_only_the_newest_seek_stays() {
+    let pipe = Pipe::new(inbox(&[(1, 4.0), (1, 4.1)]));
+    let mut asked = pipe.lock();
+    asked.seek = Some((9.0, 2));
+    asked.ended = Some(1);
+    let mut landed = Vec::new();
+    let after = pipe
+        .land_seeks(asked, |to, generation| {
+            // The UI thread's part while the source moves: it takes the lock without waiting,
+            // and during the first seek it asks for a newer one.
+            let mut ui = pipe.inbox.try_lock().expect("the inbox is locked while the source seeks");
+            assert!(ui.frames.is_empty() && ui.ended.is_none());
+            if landed.is_empty() {
+                ui.seek = Some((12.0, 3));
+            }
+            landed.push((to, generation));
+            Ok::<(), String>(())
+        })
+        .unwrap();
+    assert_eq!(landed, vec![(9.0, 2), (12.0, 3)]);
+    assert!(after.seek.is_none());
+    assert_eq!(unread(&after), vec![4.0, 4.1]);
+}
+
+#[test]
+fn a_source_that_fails_to_seek_leaves_the_inbox_unlocked() {
+    let pipe = Pipe::new(Inbox::default());
+    let mut asked = pipe.lock();
+    asked.seek = Some((9.0, 2));
+    assert_eq!(pipe.land_seeks(asked, |_, _| Err("seek: no")).err(), Some("seek: no"));
+    assert!(pipe.inbox.try_lock().is_ok());
+}
