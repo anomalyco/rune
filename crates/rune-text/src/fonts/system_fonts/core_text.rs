@@ -7,6 +7,7 @@
 #![allow(unsafe_code)]
 
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use objc2_core_foundation::{CFDictionary, CFRange, CFRetained, CFString, CFType, CFURL, CFURLPathStyle};
 use objc2_core_text::{CTFont, CTFontDescriptor, CTFontManagerCreateFontDescriptorsFromURL, CTFontUIFontType, kCTFontFamilyNameAttribute, kCTFontURLAttribute};
@@ -66,8 +67,19 @@ fn family_paths(name: &str) -> Vec<PathBuf> {
 /// with the rest of its family's files, so a bold label draws in the family's own bold (Hiragino
 /// Sans W6, not W3 emboldened). Chars no installed font covers add nothing.
 pub(super) fn fallback_family_files(chars: &[char], locale: Option<&str>) -> Vec<PathBuf> {
+    fallback_family_files_with(chars, locale, public_family)
+}
+
+fn fallback_family_files_with(
+    chars: &[char],
+    locale: Option<&str>,
+    mut resolve_public: impl FnMut(&CTFont) -> Option<String>,
+) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     let mut families: Vec<String> = Vec::new();
+    // Raw family names CoreText already answered with in this call: later characters from the
+    // same family add nothing and are skipped before reading font descriptors again.
+    let mut seen: Vec<String> = Vec::new();
     // SAFETY: CoreText fonts made for the lookup and read for their names and files only.
     unsafe {
         let Some(base) = CTFont::new_ui_font_for_language(CTFontUIFontType::System, 0.0, None) else { return out };
@@ -78,6 +90,11 @@ pub(super) fn fallback_family_files(chars: &[char], locale: Option<&str>) -> Vec
             let range = CFRange { location: 0, length: text.length() };
             let font = CTFont::for_string_with_language(&base, &text, range, language.as_deref());
             let family = font.family_name().to_string();
+            // The system font itself (`.AppleSystemUIFont`, which is hidden too) already covered
+            // the character. Check before `resolve_public`, which reads every face name in the
+            // file (369 faces in `SFNS.ttf`).
+            if family == base_name || seen.contains(&family) { continue; }
+            seen.push(family.clone());
             // PingFang (CoreText's Chinese fallback) draws with `hvgl` outlines, which no
             // outline reader here can draw: Chinese takes Hiragino Sans GB, or Heiti TC for
             // Traditional, as fontique does.
@@ -95,8 +112,7 @@ pub(super) fn fallback_family_files(chars: &[char], locale: Option<&str>) -> Vec
             // A hidden family (`.Hiragino Kaku Gothic Interface`, CoreText's Japanese fallback)
             // matches no descriptors, so its weights would never load: take the family of its
             // file's first public face instead (Hiragino Sans, W0-W9).
-            let family = if family.starts_with('.') { public_family(&font).unwrap_or(family) } else { family };
-            // The system font itself: it had the character, nothing to add.
+            let family = if family.starts_with('.') { resolve_public(&font).unwrap_or(family) } else { family };
             if family == base_name || families.contains(&family) { continue; }
             if let Some(path) = path_of(font.attribute(kCTFontURLAttribute))
                 && !out.contains(&path)
@@ -112,12 +128,70 @@ pub(super) fn fallback_family_files(chars: &[char], locale: Option<&str>) -> Vec
     out
 }
 
+/// Bounds for `PublicFamilyCache` (entry count and slot + heap bytes).
+const MAX_PUBLIC_FAMILY_ENTRIES: usize = 64;
+const MAX_PUBLIC_FAMILY_BYTES: usize = 16 * 1024;
+
+/// Bounded cache mapping a hidden-family font file path to the first public family name in that
+/// file, so later fallback calls for the same hidden family avoid re-reading its descriptors.
+struct PublicFamilyCache {
+    entries: Vec<(String, Option<String>)>,
+    bytes: usize,
+}
+
+impl PublicFamilyCache {
+    const fn new() -> Self {
+        Self { entries: Vec::new(), bytes: 0 }
+    }
+
+    fn entry_bytes(key: &str, value: &Option<String>) -> usize {
+        std::mem::size_of::<(String, Option<String>)>()
+            + key.len()
+            + value.as_deref().map_or(0, str::len)
+    }
+
+    fn get(&self, key: &str) -> Option<Option<String>> {
+        self.entries.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+    }
+
+    fn insert(&mut self, key: String, value: Option<String>) {
+        if self.entries.iter().any(|(k, _)| k == &key) {
+            return;
+        }
+        let cost = Self::entry_bytes(&key, &value);
+        if cost > MAX_PUBLIC_FAMILY_BYTES {
+            return;
+        }
+        while self.entries.len() >= MAX_PUBLIC_FAMILY_ENTRIES || self.bytes + cost > MAX_PUBLIC_FAMILY_BYTES {
+            let (old_key, old_val) = self.entries.remove(0);
+            self.bytes -= Self::entry_bytes(&old_key, &old_val);
+        }
+        self.bytes += cost;
+        self.entries.push((key, value));
+    }
+}
+
 /// The family of the first face in `font`'s file whose family isn't hidden (`.`-prefixed).
 fn public_family(font: &CTFont) -> Option<String> {
+    static CACHE: Mutex<PublicFamilyCache> = Mutex::new(PublicFamilyCache::new());
+    // SAFETY: `font` is a live `CTFont` and `kCTFontURLAttribute` is CoreText's constant URL attribute key.
+    let url = unsafe { font.attribute(kCTFontURLAttribute) }?.downcast::<CFURL>().ok()?;
+    let Some(key) = url.file_system_path(CFURLPathStyle::CFURLPOSIXPathStyle).map(|p| p.to_string()) else {
+        return scan_public_family(&url);
+    };
+    if let Some(hit) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        return hit;
+    }
+    let found = scan_public_family(&url);
+    CACHE.lock().unwrap_or_else(|e| e.into_inner()).insert(key, found.clone());
+    found
+}
+
+/// Reads the descriptors in `url` and returns the first non-hidden family name.
+fn scan_public_family(url: &CFURL) -> Option<String> {
     // SAFETY: CoreText's descriptors for the file, read for their family names only.
     unsafe {
-        let url = font.attribute(kCTFontURLAttribute)?.downcast::<CFURL>().ok()?;
-        let faces = CTFontManagerCreateFontDescriptorsFromURL(&url)?;
+        let faces = CTFontManagerCreateFontDescriptorsFromURL(url)?;
         // An array of font descriptors, as CoreText documents it.
         let faces: CFRetained<objc2_core_foundation::CFArray<CTFontDescriptor>> = CFRetained::cast_unchecked(faces);
         (0..faces.len()).filter_map(|i| faces.get(i)).find_map(|d| {
@@ -126,3 +200,7 @@ fn public_family(font: &CTFont) -> Option<String> {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "core_text_tests.rs"]
+mod tests;
