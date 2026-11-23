@@ -835,3 +835,9 @@ pub(crate) mod connection {
 #[cfg(test)]
 #[path = "layer_shell_machine_tests.rs"]
 mod tests;
+#[cfg(test)]
+mod configure_wait_tests;
+#[cfg(test)]
+mod connection_tests;
+#[cfg(test)]
+mod keyboard_tests;
