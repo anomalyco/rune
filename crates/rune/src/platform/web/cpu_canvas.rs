@@ -64,7 +64,8 @@ impl CpuCanvas {
         over.parent_node()?.insert_before(&canvas, Some(over)).ok()?;
         let options = js_sys::Object::new();
         js_sys::Reflect::set(&options, &"alpha".into(), &JsValue::FALSE).ok();
-        let ctx = canvas.get_context_with_context_options("2d", &options).ok()??.dyn_into().ok()?;
+        let ctx: web_sys::CanvasRenderingContext2d = canvas.get_context_with_context_options("2d", &options).ok()??.dyn_into().ok()?;
+        ctx.set_image_smoothing_enabled(false);
         Some(CpuCanvas { over: over.clone(), canvas, ctx, painter: CpuPainter::new(1), buffer: Vec::new(), size: (0, 0), rows: Vec::new(), staged: js_sys::Uint8ClampedArray::new_with_length(0), half: HalfRounding::default() })
     }
 
@@ -94,6 +95,8 @@ impl CpuCanvas {
             // A new size clears the canvas, and the buffer starts again: every tile paints.
             self.canvas.set_width(w);
             self.canvas.set_height(h);
+            // Resizing resets the 2D context state back to defaults.
+            self.ctx.set_image_smoothing_enabled(false);
             self.buffer.clear();
             self.buffer.resize(w as usize * h as usize * 4, 0);
             self.painter.forget();
@@ -110,9 +113,31 @@ impl CpuCanvas {
             .font_smoothing(rt.font_smoothing());
         let painted = self.painter.paint(&scene, &mut Target::new(&mut self.buffer, w, h))?;
         let put = crate::time::Instant::now();
+        let plan = self.painter.upload_plan(&painted, (w, h));
+        // When the frame scrolled cleanly, shift the moved region inside the opaque 2D canvas
+        // directly (exact 1:1 copy without readback or putImageData) and upload only the dirty
+        // tiles; fall back to uploading `painted.rects` if the self-blit fails.
+        let rects = match plan.blit {
+            Some(b)
+                if self
+                    .ctx
+                    .draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                        &self.canvas,
+                        f64::from(b.src_x),
+                        f64::from(b.src_y),
+                        f64::from(b.width),
+                        f64::from(b.height),
+                        f64::from(b.dst_x),
+                        f64::from(b.dst_y),
+                        f64::from(b.width),
+                        f64::from(b.height),
+                    )
+                    .is_ok() => plan.uploads,
+            _ => &painted.rects,
+        };
         let mut px = 0u64;
         let mut swizzle = std::time::Duration::ZERO;
-        for &[x0, y0, x1, y1] in &painted.rects {
+        for &[x0, y0, x1, y1] in rects {
             let (rw, rh) = (x1.saturating_sub(x0), y1.saturating_sub(y0));
             if rw == 0 || rh == 0 { continue; }
             let began = crate::time::Instant::now();

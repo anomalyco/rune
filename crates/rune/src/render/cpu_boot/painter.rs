@@ -30,6 +30,8 @@ pub struct CpuPainter {
     /// The buffer's row pitch last frame, in bytes.
     stride: usize,
     dirty: Vec<u32>,
+    /// Pre-scroll-merge dirty tile rectangles from the last frame painted.
+    dirty_rects: Vec<[u32; 4]>,
     /// The last frame's instances and bins, for telling a scroll (`scroll.rs`) and for a frame
     /// that only recolours (`recoloured`).
     prev: Option<scroll::Prev>,
@@ -44,6 +46,28 @@ pub struct CpuPainter {
 
 /// Instances a frame may recolour and still take `recoloured`.
 const RECOLOURED_MAX: usize = 256;
+
+/// One self-copy on a retained surface: copy `width × height` pixels from `(src_x, src_y)` to
+/// `(dst_x, dst_y)`.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ScrollBlit {
+    pub src_x: u32,
+    pub src_y: u32,
+    pub dst_x: u32,
+    pub dst_y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// How a host with a retained surface updates it from a painted frame: an optional self-blit of
+/// the scrolled region followed by uploading `uploads` from the CPU buffer.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UploadPlan<'a> {
+    pub blit: Option<ScrollBlit>,
+    pub uploads: &'a [[u32; 4]],
+}
 
 /// What a frame painted.
 #[derive(Clone, Debug, Default)]
@@ -68,7 +92,7 @@ impl CpuPainter {
     /// A painter running on `threads` threads, the caller among them (the others are made now,
     /// and park between frames).
     pub fn new(threads: usize) -> CpuPainter {
-        CpuPainter { pool: Pool::new(threads), hashes: Vec::new(), next: Vec::new(), each: Vec::new(), size: (0, 0), stride: 0, dirty: Vec::new(), prev: None, resets: 0, flags: None, changed: Vec::new(), marked: Vec::new() }
+        CpuPainter { pool: Pool::new(threads), hashes: Vec::new(), next: Vec::new(), each: Vec::new(), size: (0, 0), stride: 0, dirty: Vec::new(), dirty_rects: Vec::new(), prev: None, resets: 0, flags: None, changed: Vec::new(), marked: Vec::new() }
     }
 
     /// The buffer's pixels are no longer the last frame's (a new buffer): the next frame paints
@@ -76,6 +100,8 @@ impl CpuPainter {
     /// whole in both sizes keep what they held, and only those that changed paint.
     pub fn forget(&mut self) {
         self.hashes.clear();
+        self.dirty.clear();
+        self.dirty_rects.clear();
         self.prev = None;
         self.flags = None;
     }
@@ -83,6 +109,17 @@ impl CpuPainter {
     /// Fills the masks the text system queued (`fill_masks`) on this painter's threads.
     pub fn fill_masks(&self, atlas: &mut crate::text::Atlas) -> super::FillReport {
         super::fill::fill_with(atlas, &|threads| Threads { pool: &self.pool, extra: (threads - 1).min(self.pool.threads() - 1) })
+    }
+
+    /// How a host with a retained surface updates it for `painted` on a `size` surface: when the
+    /// frame scrolled cleanly, returns the in-surface blit and the dirty-only rectangles to upload;
+    /// otherwise returns no blit and `painted.rects`.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn upload_plan<'a>(&'a self, painted: &'a Painted, size: (u32, u32)) -> UploadPlan<'a> {
+        match scroll_blit(painted.scrolled, size) {
+            Some(blit) => UploadPlan { blit: Some(blit), uploads: &self.dirty_rects },
+            None => UploadPlan { blit: None, uploads: &painted.rects },
+        }
     }
 
     /// Paints `scene` into `target`, which holds the frame this painter painted last unless
@@ -159,9 +196,27 @@ impl CpuPainter {
         report.tiles = bins.tile_count();
         report.binned = bins.len();
         report.culled = bins.culled;
-        let mut rects = damage::rects(&self.dirty, bins.cols, scene.size, MAX_RECTS);
-        if let Some(s) = &shift { damage::add(&mut rects, s.rect, MAX_RECTS); }
-        let scrolled = shift.as_ref().map(|s| (s.rect, s.dy));
+        let dirty_rects = damage::rects(&self.dirty, bins.cols, scene.size, MAX_RECTS);
+        // Tile-aligned bounding box of the clean tiles moved in `touched(s, _)`: every tile is
+        // either completely inside it (moved cleanly or overwritten by `dirty_rects`) or disjoint
+        // from it (unchanged or overwritten by `dirty_rects`), and both source and destination
+        // stay within `scene.size` because `tile_moved` verified `back` for every clean tile.
+        let scrolled = shift.as_ref().and_then(|s| {
+            let mut r = [u32::MAX, u32::MAX, 0u32, 0u32];
+            for t in 0..self.next.len() {
+                if touched(s, t) && !bins.quiet[t] && s.clean[t] {
+                    let (tx, ty) = (t as u32 % bins.cols, t as u32 / bins.cols);
+                    r[0] = r[0].min(tx * TILE_W);
+                    r[1] = r[1].min(ty * TILE_H);
+                    r[2] = r[2].max(((tx + 1) * TILE_W).min(scene.size.0));
+                    r[3] = r[3].max(((ty + 1) * TILE_H).min(scene.size.1));
+                }
+            }
+            (r[0] < r[2] && r[1] < r[3]).then_some((r, s.dy))
+        });
+        let mut rects = dirty_rects.clone();
+        if let Some((r, _)) = scrolled { damage::add(&mut rects, r, MAX_RECTS); }
+        self.dirty_rects = dirty_rects;
         self.prev = Some(scroll::Prev { instances: scene.instances.to_vec(), bins });
         Ok(Painted { dirty_tiles: self.dirty.len(), tiles: report.tiles, rects, scrolled, hash_ns: super::ns(hashed - binned), plan_ns: super::ns(moving - planning), move_ns: super::ns(moved - moving), report })
     }
@@ -181,6 +236,8 @@ impl CpuPainter {
         // The whole list at memcmp's speed first: most frames that get here changed nothing.
         let images = scene.images.iter().any(|p| p.dirty.is_some());
         if !images && bytemuck::cast_slice::<Instance, u8>(scene.instances) == bytemuck::cast_slice::<Instance, u8>(&prev.instances) {
+            self.dirty.clear();
+            self.dirty_rects.clear();
             let mut report = Report { total_ns: super::ns(start.elapsed()), tiles: prev.bins.tile_count(), ..Report::default() };
             report.raster_ns = 0;
             return Some(Painted { tiles: report.tiles, hash_ns: report.total_ns, report, ..Painted::default() });
@@ -228,8 +285,31 @@ impl CpuPainter {
         report.total_ns = super::ns(done - start);
         report.tiles = tiles;
         let rects = damage::rects(&self.dirty, bins.cols, scene.size, MAX_RECTS);
+        self.dirty_rects.clone_from(&rects);
         Some(Painted { dirty_tiles: self.dirty.len(), tiles, rects, scrolled: None, hash_ns: super::ns(hashed - start), plan_ns: 0, move_ns: 0, report })
     }
+}
+
+/// Validates `scrolled` against a `size` surface and turns it into source/destination copy bounds.
+#[cfg(any(target_arch = "wasm32", test))]
+fn scroll_blit(scrolled: Option<([u32; 4], i32)>, size: (u32, u32)) -> Option<ScrollBlit> {
+    let ([x0, y0, x1, y1], dy) = scrolled?;
+    if dy == 0 || x1 <= x0 || y1 <= y0 || x1 > size.0 || y1 > size.1 {
+        return None;
+    }
+    let src_y0 = i64::from(y0) - i64::from(dy);
+    let src_y1 = i64::from(y1) - i64::from(dy);
+    if src_y0 < 0 || src_y1 > i64::from(size.1) {
+        return None;
+    }
+    Some(ScrollBlit {
+        src_x: x0,
+        src_y: src_y0 as u32,
+        dst_x: x0,
+        dst_y: y0,
+        width: x1 - x0,
+        height: y1 - y0,
+    })
 }
 
 /// Whether `new` is `old` in other colours: every word the same but its fill, a box's border and
