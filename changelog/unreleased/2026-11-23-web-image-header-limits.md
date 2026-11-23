@@ -1,0 +1,1 @@
+- Web: `ImageCache::url`, `ImageCache::file`, and `ImageCache::load` now validate declared image dimensions in PNG, JPEG, GIF, WebP, BMP, ICO, and AVIF headers against the shared 8192 px per side and 256 MiB limits before calling `createImageBitmap`, keeping the post-decode dimension check as a second guard.

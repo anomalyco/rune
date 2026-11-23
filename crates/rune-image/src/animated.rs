@@ -95,7 +95,7 @@ pub(super) fn decode(bytes: &[u8]) -> Option<Result<Decoded, ImageError>> {
         }
     };
     let (w, h) = size;
-    if w == 0 || h == 0 || w > 8192 || h > 8192 { return Some(Err(ImageError("animation is too large".into()))); }
+    if w == 0 || h == 0 || w > super::MAX_SIDE || h > super::MAX_SIDE { return Some(Err(ImageError("animation is too large".into()))); }
     let per_frame = w as usize * h as usize * 16 / 3;
     let mut chains = Vec::new();
     let mut ends = Vec::new();

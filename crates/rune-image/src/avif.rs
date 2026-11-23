@@ -10,7 +10,7 @@ pub(super) fn is_avif(bytes: &[u8]) -> bool {
 #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
 pub(super) fn rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageError> {
     use avif_decode::Image;
-    limits::check(bytes)?;
+    check_limits(bytes)?;
     let error = |e: avif_decode::Error| ImageError(format!("AVIF: {e}"));
     let image = avif_decode::Decoder::from_avif(bytes).map_err(error)?.to_image().map_err(error)?;
     let eight = |v: u16| ((u32::from(v) * 255 + 32767) / 65535) as u8;
@@ -33,16 +33,22 @@ pub(super) fn rgba(_: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageError> {
     Err(ImageError("AVIF images need rune's `avif` feature".into()))
 }
 
+/// Validates an AVIF container and its AV1 headers against the shared image limits.
+#[cfg_attr(not(any(test, target_arch = "wasm32", feature = "avif")), allow(dead_code))]
+pub(super) fn check_limits(bytes: &[u8]) -> Result<(), ImageError> {
+    limits::check(bytes)
+}
+
 /// Pre-decode ISO-BMFF and AV1 header validation so oversized or malformed AVIF inputs fail
-/// before `avif-decode` / `rav1d` allocates raster buffers.
-#[cfg(any(test, all(feature = "avif", not(target_arch = "wasm32"))))]
+/// before `avif-decode` / `rav1d` or the browser allocates raster buffers.
+#[cfg_attr(not(any(test, target_arch = "wasm32", feature = "avif")), allow(dead_code))]
 mod limits {
     use std::borrow::Cow;
 
     use super::ImageError;
 
-    pub(super) const MAX_DIM: u32 = 8192;
-    const MAX_ALLOC: u64 = 256 * 1024 * 1024;
+    pub(super) const MAX_DIM: u32 = crate::MAX_SIDE;
+    const MAX_ALLOC: u64 = crate::MAX_ALLOC;
     pub(super) const ALPHA_AUX_URN: &[u8] = b"urn:mpeg:mpegB:cicp:systems:auxiliary:alpha";
 
     pub(super) fn too_large() -> ImageError { ImageError("AVIF is too large".into()) }
