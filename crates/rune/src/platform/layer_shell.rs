@@ -434,6 +434,10 @@ impl LayerSurface {
         (!this.state.readiness.closed()).then_some(this)
     }
 
+    pub fn set_placement(&mut self, placement: Option<OverlayPlacement>) {
+        self.options.placement = placement;
+    }
+
     pub fn place(&mut self, at: Placement) {
         match self.options.placement {
             Some(OverlayPlacement::FullScreen) => {

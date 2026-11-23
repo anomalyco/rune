@@ -1,0 +1,1 @@
+- Wayland: `OverlayHandle::set_placement` now updates anchors, margins, and size on the live `zwlr_layer_surface_v1` in place instead of destroying and recreating the layer surface, avoiding flicker, keyboard-focus loss, and interrupted drags; the layer is recreated only when `set_display` changes the target display.
