@@ -161,9 +161,11 @@ pub fn fit_in(
     let whole = [0.0, 0.0, 1.0, 1.0];
     let [x, y, w, h] = rect;
     let (iw, ih) = (size.0 as f32, size.1 as f32);
-    if fit.is_none() || iw <= 0.0 || ih <= 0.0 || w <= 0.0 || h <= 0.0 { return (rect, whole); }
+    if fit.is_none() || iw <= 0.0 || ih <= 0.0 || !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 {
+        return (rect, whole);
+    }
     let [kx, ky] = place.share();
-    let u = if (w - w.round()).abs() < 1.0 / 512.0 && (h - h.round()).abs() < 1.0 / 512.0 {
+    let u = if (w - w.round()).abs() < 1.0 / 512.0 && (h - h.round()).abs() < 1.0 / 512.0 && !snap_weight.is_nan() {
         snap_weight.clamp(0.0, 1.0)
     } else {
         0.0
@@ -187,17 +189,19 @@ pub fn fit_in(
     }
     if fit == Some(SurfaceFit::Fit) {
         let k = (w / iw).min(h / ih);
-        let (dw, dh) = ((iw * k).clamp(1.0, w), (ih * k).clamp(1.0, h));
+        let (min_w, min_h) = (w.min(1.0), h.min(1.0));
+        let (dw, dh) = ((iw * k).clamp(min_w, w), (ih * k).clamp(min_h, h));
         let exact = [x + (w - dw) * kx, y + (h - dh) * ky, dw, dh];
         if u <= 0.0 {
             return (exact, whole);
         }
-        let (sw, sh) = ((iw * k).round().clamp(1.0, w), (ih * k).round().clamp(1.0, h));
+        let (sw, sh) = ((iw * k).round().clamp(min_w, w), (ih * k).round().clamp(min_h, h));
         let snapped = [x + ((w - sw) * kx).round(), y + ((h - sh) * ky).round(), sw, sh];
         return (blend(exact, snapped), whole);
     }
     let k = (w / iw).max(h / ih);
-    let (sx, sy) = (w / (iw * k), h / (ih * k));
+    if !(k > 0.0 && k.is_finite()) { return (rect, whole); }
+    let (sx, sy) = ((w / (iw * k)).clamp(0.0, 1.0), (h / (ih * k)).clamp(0.0, 1.0));
     let ((x0, x1), (y0, y1)) = (window(sx, kx), window(sy, ky));
     (rect, [x0, y0, x1, y1])
 }
