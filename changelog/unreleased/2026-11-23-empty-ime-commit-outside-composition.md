@@ -1,0 +1,1 @@
+- Ignore empty `Ime::Commit("")` events for a focused text field when no composition is open, so they no longer clear the double-click count or set `caret_follow` and snap a scrolled viewport back to the caret (an empty commit during an open composition still ends it).

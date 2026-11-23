@@ -231,3 +231,71 @@ fn empty_preedit_without_composition_does_not_snap_scroll_back_to_caret() {
     rt.frame(1.0 / 60.0);
     assert_eq!(rt.state.field.preedit(), None, "empty preedit cancels an open composition");
 }
+
+#[test]
+fn empty_commit_without_composition_keeps_scroll_and_double_click_while_ending_open_composition() {
+    struct Page {
+        field: TextEdit,
+    }
+    fn page_view(s: &Page, _: &mut Cx<Page>) -> El {
+        col().key("viewport").size(300.0, 120.0).scroll(crate::ScrollSpec { stick_bottom: false }).child(
+            text_input(&s.field, TextStyle::new(14.0, 400.0).lh(20.0))
+                .key("field")
+                .label("Field")
+                .w_full()
+                .on_edit(|s: &mut Page| &mut s.field),
+        )
+    }
+    let scroll_y = |rt: &Runtime<Page>| {
+        rt.elements().into_iter().find(|e| e.key.as_deref() == Some("field")).unwrap().scrolled[1]
+    };
+
+    let text: String = (1..=80).map(|i| format!("alpha line {i}\n")).collect();
+    let mut field = TextEdit::new(text.clone());
+    field.focused = true;
+    field.set_caret(0);
+    let mut rt = Runtime::new(Page { field }, page_view, (300.0, 120.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    assert_eq!(scroll_y(&rt), 0.0);
+
+    // 1. An empty commit arriving between the two clicks of a double-click must not clear
+    // the click count.
+    let field_rect = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("field")).unwrap().rect;
+    let pt = (field_rect[0] + 12.0, field_rect[1] + 10.0);
+    rt.pointer_down(pt.0, pt.1);
+    rt.pointer_up(pt.0, pt.1);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.field.anchor, rt.state.field.focus, "first click places a caret");
+
+    rt.ime(Ime::Commit(String::new()));
+    rt.frame(1.0 / 60.0);
+
+    rt.pointer_down(pt.0, pt.1);
+    rt.pointer_up(pt.0, pt.1);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.field.selected(), "alpha", "empty commit outside composition must not break double-click");
+
+    // 2. Wheel-scroll far past the caret on line 1; an empty commit outside composition must
+    // neither trigger caret_follow nor commit a frame.
+    rt.wheel(150.0, 60.0, -400.0);
+    rt.frame(1.0 / 60.0);
+    let scrolled = scroll_y(&rt);
+    assert!(scrolled > 200.0, "wheel scrolled past the caret: {scrolled}");
+
+    let commits_before = rt.core().commit.commits;
+    rt.ime(Ime::Commit(String::new()));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(scroll_y(&rt), scrolled, "empty commit outside composition must not trigger caret_follow");
+    assert_eq!(rt.core().commit.commits, commits_before, "empty commit outside composition must not commit");
+
+    // 3. An empty commit while a composition is open must still end that composition without
+    // inserting text.
+    rt.ime(Ime::Preedit("か".into(), Some((0, 3)), Vec::new()));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.field.preedit(), Some(("か", Some((0, 3)))));
+
+    rt.ime(Ime::Commit(String::new()));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.field.preedit(), None, "empty commit ends an open composition");
+    assert_eq!(rt.state.field.text, text, "empty commit inserts no text");
+}
