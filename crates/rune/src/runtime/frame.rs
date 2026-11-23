@@ -111,14 +111,29 @@ impl RuntimeCore {
     }
 
     /// [`Runtime::hidden_wake`] for a shown window that can't draw (covered, minimised, on a
-    /// locked or sleeping display). While an assistive client reads its tree, what changed is
-    /// built at once, without drawing or motion, so the tree it reads and focus asked of what
-    /// the change shows (a permission's card) are current whatever the window's motion does.
+    /// locked or sleeping display). Like Chrome Blink's occluded lifecycle, ordinary updates do
+    /// not rebuild the view while covered even with an assistive client attached; the tree
+    /// catches up in one frame when the window uncovers. Three exceptions still build at once,
+    /// without drawing or motion: an assistive client's own action (handled by `hidden_wake`
+    /// via pending input), the window's first activation when out of date, and a programmatic
+    /// focus request (`Tx::focus`, `Tx::focus_when_shown`, `Tx::return_focus`, `Tx::blur`).
     /// Returns what `hidden_wake` does.
     pub(crate) fn covered_wake(&mut self, app: &mut dyn AppDriver) -> bool {
         let stale = self.hidden_wake(app);
-        if self.host.a11y.is_some() && self.needs_commit() { self.hidden_timer_frame(app); }
+        if self.host.a11y.is_some()
+            && (self.a11y_activation_build_pending() || self.has_focus_request())
+            && (self.needs_commit() || self.commit.commits == 0)
+        {
+            self.hidden_timer_frame(app);
+        }
         stale
+    }
+
+    /// Whether the app has a latched or pending programmatic focus request.
+    fn has_focus_request(&self) -> bool {
+        self.kbd.focus_request.is_some()
+            || self.frame.pending.focus_to.is_some()
+            || self.frame.pending.blur
     }
 
     /// One frame in one pass that steps `catch_up + dt` seconds. Motion already running advances

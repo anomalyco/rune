@@ -571,6 +571,7 @@ impl RuntimeCore {
         self.text.end_commit();
         self.commit.dirty = false;
         self.commit.relayout = false;
+        self.clear_a11y_activation_build();
         self.tree.aspect_snap.clear();
         self.commit.viewport_stepped = false;
         self.commit.settle = false;

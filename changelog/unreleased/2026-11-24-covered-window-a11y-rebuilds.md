@@ -1,0 +1,1 @@
+- Accessibility: covered and minimised windows with an assistive client attached no longer rebuild the view on ordinary background wakes (matching Chrome Blink's occluded lifecycle), while still rebuilding once for assistive actions, stale first activation, programmatic focus requests (`Tx::focus*` / `Tx::blur`), and uncovering.

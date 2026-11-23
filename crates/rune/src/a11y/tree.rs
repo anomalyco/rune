@@ -66,6 +66,9 @@ pub(crate) struct A11yTree {
     stamp: Option<Stamp>,
     /// The next update must hold the whole tree (activation, or the adapter asked again).
     full: bool,
+    /// First activation found the runtime out of date (or unbuilt), so one covered wake must
+    /// build the view once to make the initial tree current.
+    activation_build: bool,
     /// The last whole tree held back the announcer's words: an adapter raises no events for the
     /// tree it starts from, so words said as a reader attached (a request arriving as it starts)
     /// would never be spoken. The next update sends them as a change.
@@ -158,11 +161,28 @@ pub(super) fn rect(r: [f32; 4], shift: [f32; 2]) -> AkRect {
 
 impl RuntimeCore {
     /// An assistive client asked for this surface's tree: the next update holds all of it.
+    /// On the first activation while the last frame is out of date or unbuilt, record that one
+    /// covered wake must build the view once so the initial tree is current.
     pub(crate) fn a11y_activate(&mut self, name: &str) {
+        let first = self.host.a11y().is_none();
+        let stale = self.needs_commit() || self.commit.commits == 0;
         let tree = self.host.a11y_or_insert();
         tree.full = true;
         tree.stamp = None;
+        if first && stale { tree.activation_build = true; }
         name.clone_into(&mut tree.name);
+    }
+
+    /// Whether first activation still owes one view build while covered.
+    pub(crate) fn a11y_activation_build_pending(&self) -> bool {
+        self.host.a11y().is_some_and(|t| t.activation_build)
+    }
+
+    /// Clears the first-activation covered-build debt once a frame has committed.
+    pub(crate) fn clear_a11y_activation_build(&mut self) {
+        if let Some(tree) = self.host.a11y_mut() {
+            tree.activation_build = false;
+        }
     }
 
     /// Nobody listens any more: drop the tree and stop building it.

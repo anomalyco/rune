@@ -161,7 +161,7 @@ impl Host {
                 if let Some(w) = self.shown_win() { w.request_redraw(); }
                 self.shell(event_loop);
             }
-            WakeEvent::A11y(_) => self.a11y_receive(),
+            WakeEvent::A11y(_) => self.a11y_receive(event_loop),
             #[cfg(target_os = "windows")]
             WakeEvent::FrameSlot(_) => {
                 // The frame that waited for room in the swap chain draws now, after the input
@@ -181,11 +181,18 @@ impl Host {
         }
     }
 
-    /// Runs what assistive clients asked; an action draws the frame that runs it.
-    fn a11y_receive(&mut self) {
+    /// Runs what assistive clients asked; an action or stale first activation builds or draws
+    /// the frame that runs it.
+    fn a11y_receive(&mut self, event_loop: &ActiveEventLoop) {
         let Some(w) = self.win.as_mut() else { return };
         let Some(adapter) = w.a11y.as_mut() else { return };
-        if adapter.receive_core(self.app.rt_mut(), self.geometry.title) { w.request_redraw(); }
+        if !adapter.receive_core(self.app.rt_mut(), self.geometry.title) { return; }
+        if self.life.shown() && (self.life.covered() || w.minimized()) {
+            self.covered_frame();
+            self.shell(event_loop);
+        } else {
+            w.request_redraw();
+        }
     }
 
     /// Sends the tree's changes at the end of the turn, after its frames.
