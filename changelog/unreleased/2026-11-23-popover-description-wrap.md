@@ -1,0 +1,1 @@
+- `rune-kit` `Popover`: a long description now wraps inside the surface's padding instead of laying out on a single overflowing line, expanding up to the 320 pt maximum width (or the surface's explicit width) before wrapping.

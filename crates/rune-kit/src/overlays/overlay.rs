@@ -280,7 +280,7 @@ impl Popover {
         }
         if let Some(d) = &self.description {
             content = content.child(
-                row().key("description").px(12.0).child(text(d.clone()).font(k.ty.text_small).color(c.std_text)),
+                row().key("description").px(12.0).child(text(d.clone()).font(k.ty.text_small).color(c.std_text).wrap().shrink()),
             );
         }
         content = content.child(col().key("body").padding(self.padding).shrink().min_h(0.0).children(self.body));
