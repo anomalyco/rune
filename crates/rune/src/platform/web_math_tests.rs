@@ -250,6 +250,57 @@ fn rtl_scroll_x_normalizes_all_browser_models_and_round_trips() {
     }
 }
 
+#[test]
+fn web_runtime_tracks_marks_only_when_compositor_is_attached() {
+    use std::sync::Arc;
+    use crate::compose::{Compositor, Frame};
+    use crate::render::KIND_EFFECT;
+    use crate::{App, AppSpec, Cx, El, Env, col, effect};
+
+    struct NoopCompositor;
+    impl Compositor<()> for NoopCompositor {
+        fn render(&mut self, f: &mut Frame<'_, ()>) {
+            f.draw_ui();
+        }
+    }
+
+    let view = |_: &(), _: &mut Cx<()>| -> El {
+        col().size(120.0, 80.0).child(effect(42).size(60.0, 20.0))
+    };
+
+    let spec_with = AppSpec::new("web-marks-on", (120.0, 80.0), || (), view);
+    let (mut rt_with, _, comp_with, _) = start_web_runtime(
+        App::new(spec_with).compositor(NoopCompositor),
+        (120.0, 80.0),
+        Env::default(),
+        Arc::new(|| {}),
+    );
+    assert!(comp_with.is_some());
+    assert!(rt_with.track_marks, "web runtime with a compositor must enable track_marks");
+    rt_with.frame(0.0);
+    assert_eq!(rt_with.marks.len(), rt_with.instances.len());
+    let effect_marks: Vec<u32> = rt_with
+        .instances
+        .iter()
+        .enumerate()
+        .filter(|(_, inst)| inst.params[1] == KIND_EFFECT)
+        .map(|(i, _)| rt_with.marks[i])
+        .collect();
+    assert_eq!(effect_marks, [42]);
+
+    let spec_without = AppSpec::new("web-marks-off", (120.0, 80.0), || (), view);
+    let (mut rt_without, _, comp_without, _) = start_web_runtime(
+        App::new(spec_without),
+        (120.0, 80.0),
+        Env::default(),
+        Arc::new(|| {}),
+    );
+    assert!(comp_without.is_none());
+    assert!(!rt_without.track_marks, "web runtime without a compositor keeps track_marks off");
+    rt_without.frame(0.0);
+    assert!(rt_without.marks.is_empty());
+}
+
 mod web_frame_host_tests {
     use std::collections::VecDeque;
     use std::time::Duration;
