@@ -65,6 +65,9 @@ impl RuntimeCore {
         self.paint.prune_caches(self.tree.has_cache, &self.scene, &mut self.text.atlas.resident_caches);
         self.paint.prune_static_scales(&self.scene);
         self.motion.prune_detached(&self.scene, &self.tree.node_index, REVEALS_KEPT);
+        if !self.scroll.scrolls.is_empty() {
+            self.scroll.scrolls.retain(|id, _| self.scene.contains(*id));
+        }
         if !self.commit.virtuals.is_empty() {
             let Self { commit, tree, .. } = self;
             commit.virtuals.retain(|path, _| tree.path_ids.get(path).is_some_and(|id| tree.node_index.contains_key(id)));
@@ -91,7 +94,6 @@ impl RuntimeCore {
             if !self.scene.contains(n.id) {
                 self.hover_pruned(&n);
                 self.motion.remove_reveal(n.id);
-                self.scroll.scrolls.remove(&n.id);
                 continue;
             }
             n.parent = n.parent.and_then(|p| remap[p]);

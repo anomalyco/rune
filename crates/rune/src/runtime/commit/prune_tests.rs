@@ -148,3 +148,99 @@ fn virtual_list_stays_during_exit_and_prunes_when_exit_finishes() {
     assert!(!rt.tree.nodes.iter().any(|n| n.path == list_path), "list finished exiting");
     assert!(rt.commit.virtuals.is_empty(), "virtual metadata pruned when exit finishes");
 }
+
+#[test]
+fn removed_scroll_viewport_forgets_offset_across_exit_and_instant_unmount() {
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Mode { Fade, PageInstant, RowInstant, TxInstant }
+
+    struct S {
+        page: usize,
+        mode: Mode,
+    }
+
+    fn page(i: usize, s: &S) -> El {
+        let rows = (0..30).map(|r| el().key(format!("p{i}-r{r}")).h(30.0).w_full().child(text(format!("row {r}"))));
+        let body = col()
+            .key(format!("p{i}-scroll"))
+            .h(150.0)
+            .scroll(ScrollSpec { stick_bottom: false })
+            .child(col().key(format!("p{i}-content")).children(rows));
+        let p = col().key(format!("page{i}")).grid_cell(0).child(body);
+        if s.mode == Mode::PageInstant { p.instant_changes() } else { p }
+    }
+
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let stack = crate::row().key("stack").equal_columns(1).w(300.0).child(page(s.page, s));
+        col().child(if s.mode == Mode::RowInstant { stack.instant_changes() } else { stack })
+    }
+
+    for mode in [Mode::Fade, Mode::PageInstant, Mode::RowInstant, Mode::TxInstant] {
+        let mut rt = Runtime::new(S { page: 0, mode }, view, (500.0, 400.0), Env::new(false, 1.0));
+        rt.frame(0.0);
+        for _ in 0..3 { rt.frame(1.0 / 60.0); }
+
+        let scroll_el = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("p0-scroll")).unwrap();
+        let scroll_id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("p0-scroll")).unwrap().id;
+        let scroll_path = rt.tree.nodes.iter().find(|n| n.id == scroll_id).unwrap().path.clone();
+        rt.pointer_move(scroll_el.rect[0] + 10.0, scroll_el.rect[1] + 10.0);
+        for _ in 0..2 { rt.frame(1.0 / 60.0); }
+        rt.wheel(scroll_el.rect[0] + 10.0, scroll_el.rect[1] + 10.0, -200.0);
+        for _ in 0..60 { rt.frame(1.0 / 60.0); }
+
+        let before = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("p0-content")).unwrap().scrolled;
+        assert!(before[1] > 100.0, "{mode:?}: expected viewport to scroll down, got {before:?}");
+
+        rt.update(|s, tx| {
+            s.page = 1;
+            if s.mode == Mode::TxInstant { tx.instant(); }
+        });
+        rt.frame(1.0 / 60.0);
+
+        if matches!(mode, Mode::Fade | Mode::PageInstant) {
+            assert!(rt.scroll.scrolls.contains_key(&scroll_id), "{mode:?}: exiting viewport keeps its scroll offset mid-fade");
+        } else {
+            assert!(!rt.scroll.scrolls.contains_key(&scroll_id), "{mode:?}: instantly unmounted viewport drops its scroll state immediately");
+            assert!(!rt.tree.path_ids.contains_key(&scroll_path), "{mode:?}: instantly unmounted viewport drops its path_ids entry");
+        }
+
+        for _ in 0..60 { rt.frame(1.0 / 60.0); }
+        assert!(!rt.scroll.scrolls.contains_key(&scroll_id), "{mode:?}: removed viewport must not retain scroll state");
+
+        rt.update(|s, tx| {
+            s.page = 0;
+            if s.mode == Mode::TxInstant { tx.instant(); }
+        });
+        for _ in 0..40 { rt.frame(1.0 / 60.0); }
+
+        let back = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("p0-content")).unwrap().scrolled;
+        assert_eq!(back, [0.0, 0.0], "{mode:?}: remounted viewport must come back at offset 0");
+    }
+}
+
+#[test]
+fn directly_unmounted_scroll_viewport_forgets_offset_before_next_frame() {
+    fn view(present: &bool, _: &mut Cx<bool>) -> El {
+        col().key("root").size(300.0, 200.0).children(present.then(|| {
+            col().key("vp").size(200.0, 100.0).scroll(ScrollSpec { stick_bottom: false }).child(
+                col().key("content").children((0..20).map(|r| el().key(format!("r{r}")).h(30.0).w_full())),
+            )
+        }))
+    }
+
+    let mut rt = Runtime::new(true, view, (300.0, 200.0), Env::new(false, 1.0));
+    rt.frame(0.0);
+    let scroll_id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("vp")).unwrap().id;
+    rt.scroll.scrolls.get_mut(&scroll_id).unwrap().offset = 180.0;
+
+    let mut instant_tx = Tx::default();
+    instant_tx.instant();
+    rt.state = false;
+    rt.commit(&instant_tx);
+    assert!(!rt.scroll.scrolls.contains_key(&scroll_id), "directly unmounted viewport drops scroll state on commit");
+
+    rt.state = true;
+    rt.commit(&Tx::default());
+    let new_id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("vp")).unwrap().id;
+    assert_eq!(rt.scroll.scrolls[&new_id].offset, 0.0, "remounted viewport starts at offset 0");
+}
