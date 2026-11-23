@@ -80,6 +80,7 @@ async fn run(kind: FileDialogKind, options: FileDialogOptions, parent: String, r
         reply.closed().await;
         Ok(None)
     }.or(async {
+        portal::register_app_id(&conn).await;
         Proxy::new(&conn, DEST, PATH, INTERFACE).await.map(Some).map_err(dbus_error)
     })).await {
         Some(Ok(Some(proxy))) => proxy,

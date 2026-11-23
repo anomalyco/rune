@@ -98,6 +98,7 @@ impl Native {
                 let setup = portal::timeout(RPC_TIMEOUT, async {
                     // No session bus means this desktop cannot supply the portal.
                     let conn = Connection::session().await.map_err(|_| ShortcutError::Unsupported)?;
+                    portal::register_app_id(&conn).await;
                     let portal = Proxy::new(&conn, DEST, PATH, INTERFACE).await.map_err(dbus_error)?;
                     // Some portal frontends report InvalidArgs rather than UnknownInterface
                     // when a backend for this interface is absent. The property is fixed here.
