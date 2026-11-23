@@ -77,14 +77,20 @@ fn sync_input_focus(input: &mut crate::el::InputSpec, states: crate::states::Sta
         edit.break_history_group();
         changed = true;
     }
-    // Into the copy's own buffer: a long draft's field is copied without a new allocation, and
-    // without wiping the old one.
-    let mut text = std::mem::take(&mut input.edit.text);
-    let kept = std::mem::take(&mut edit.text);
-    input.edit = edit.clone();
-    edit.text = kept;
-    text.clone_from(&edit.text);
-    input.edit.text = text;
+    if edit.is_secure() {
+        // Drop the previous copy whole so `TextEdit::drop` wipes its buffer instead of freeing
+        // old bytes unwiped on growth or leaving them in spare capacity on shrink/clear.
+        input.edit = edit.clone();
+    } else {
+        // Into the copy's own buffer: a long draft's field is copied without a new allocation, and
+        // without wiping the old one.
+        let mut text = std::mem::take(&mut input.edit.text);
+        let kept = std::mem::take(&mut edit.text);
+        input.edit = edit.clone();
+        edit.text = kept;
+        text.clone_from(&edit.text);
+        input.edit.text = text;
+    }
     changed
 }
 
