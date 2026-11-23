@@ -173,6 +173,23 @@ pub(super) fn clip_done(video_open: bool, audio_open: bool, has_video: bool, out
     !video_open && (!audio_open || (has_video && !output_open))
 }
 
+/// Next loop's unwrapped start: at least `epoch + duration`, and past any trailing audio.
+pub(super) fn next_loop_epoch(epoch: f64, duration: f64, audio_end: Option<f64>) -> f64 {
+    audio_end.map_or(epoch + duration, |end| (epoch + duration).max(end))
+}
+
+/// Unwrapped time when trailing audio or an audio-only clip finishes draining.
+pub(super) fn drain_end(epoch: f64, duration: f64, video_end: Option<f64>, audio_end: Option<f64>) -> Option<f64> {
+    let duration_end = (duration > 0.0).then_some(epoch + duration);
+    [duration_end, video_end, audio_end].into_iter().flatten().reduce(f64::max)
+}
+
+/// When `pts` is due on the layer for `current`, or `None` if stopped or rate changed.
+pub(super) fn layer_due(initial: Anchor, current: Option<Anchor>, pts: f64) -> Option<Instant> {
+    let due = current.filter(|c| c.rate == initial.rate)?.when(pts);
+    Some(due.checked_sub(LAYER_LEAD).unwrap_or(due))
+}
+
 /// Whether the layer skips the picture at `pts`: on the clock, now at `pos`, its successor is
 /// due too (`frame` is the seconds a picture lasts). The window's own path shows only the
 /// newest picture whose time has come; the layer presents each picture it's given, one per
@@ -409,13 +426,15 @@ impl Decoder {
         let mut landing = Landing::at(job.start);
         // Added to stream times: the loops so far times the duration.
         let mut epoch = 0.0;
-        // Unwrapped timestamp of the last audio sample read since open, seek or loop.
+        // Unwrapped timestamps of audio read/pushed and video kept since open, seek or loop.
         let mut audio_pts: Option<f64> = None;
+        let mut audio_end: Option<f64> = None;
+        let mut last_video_pts: Option<f64> = None;
         // Unwrapped media time before which decoded audio samples are dropped on push.
         let mut audio_skip_before = job.start;
         let mut first = true;
         let mut waiting_since = rune_core::time::now();
-        // Audio alone: the clip's end, until the clock passes it and the clip hears so.
+        // Audio-only or active sound drain: the clip's end, until the clock passes it.
         let mut end_due: Option<f64> = None;
         // Sound samples read since the last picture (`next_read`).
         let mut burst = 0;
@@ -437,6 +456,8 @@ impl Decoder {
                             landing = Landing::at(to);
                             epoch = 0.0;
                             audio_pts = None;
+                            audio_end = None;
+                            last_video_pts = None;
                             audio_skip_before = to;
                             mf::seek(&self.reader, to)?;
                             self.reopen_streams();
@@ -450,6 +471,8 @@ impl Decoder {
                     }
                     if self.output_on != s.sound.is_some() {
                         let want = s.sound;
+                        let wake = want.is_none() && s.audio_end.take().is_some() && s.ended == Some(generation);
+                        if wake { end_due = None; }
                         drop(s);
                         if want.is_some()
                             && let Some(clock) = job.clock.get()
@@ -457,6 +480,7 @@ impl Decoder {
                             audio_skip_before = audio_skip_before.max(clock.position(rune_core::time::now()));
                         }
                         self.set_output(want, &job.clock);
+                        if wake { (job.notify)(); }
                         s = pipe.lock();
                     }
                     if let (Some(q), Some(gain)) = (&self.audio_queue, s.sound) {
@@ -470,12 +494,17 @@ impl Decoder {
                         return Err(DEVICE_CHANGED.into());
                     }
                     let ended = s.ended == Some(generation);
+                    if !ended && self.video.is_some() && !self.video_open {
+                        s.video_ended = Some(generation);
+                    }
                     if !ended && clip_done(self.video_open, self.audio_open, self.video.is_some(), self.output.is_some()) {
+                        let active_audio_end = self.output.is_some().then_some(audio_end).flatten();
                         if s.looping && self.facts.meta.duration > 0.0 {
-                            epoch += self.facts.meta.duration;
+                            epoch = next_loop_epoch(epoch, self.facts.meta.duration, active_audio_end);
                             landing = Landing::at(0.0);
-                            audio_pts = None;
+                            (audio_pts, audio_end, last_video_pts) = (None, None, None);
                             audio_skip_before = epoch;
+                            (s.video_ended, s.audio_end) = (None, None);
                             drop(s);
                             mf::seek(&self.reader, 0.0)?;
                             self.reopen_streams();
@@ -485,9 +514,11 @@ impl Decoder {
                         s.ended = Some(generation);
                         if let Some(o) = &self.output {
                             o.end(generation);
+                            s.audio_end = audio_end;
                         }
-                        if job.kind == Kind::Audio {
-                            end_due = Some(epoch + self.facts.meta.duration);
+                        if job.kind == Kind::Audio || self.output.is_some() {
+                            let video_end = last_video_pts.map(|pts| pts + self.facts.meta.frame);
+                            end_due = drain_end(epoch, self.facts.meta.duration, video_end, active_audio_end);
                         }
                         drop(s);
                         (job.notify)();
@@ -558,7 +589,11 @@ impl Decoder {
                     let pts = epoch + read.time;
                     // A picture the layer would only show late is decoded and no more: not
                     // copied, not queued, not presented.
-                    if landing.keeps(read.time, self.facts.meta.frame) && !self.late_on_layer(pipe, job, pts) {
+                    let keep = landing.keeps(read.time, self.facts.meta.frame);
+                    if keep {
+                        last_video_pts = Some(last_video_pts.map_or(pts, |prev| prev.max(pts)));
+                    }
+                    if keep && !self.late_on_layer(pipe, job, pts) {
                         let (picture, texture) = self.picture(&sample)?;
                         let blitted = self.blit_on_layer(pipe, job, texture);
                         // The decoder's surface goes back before the wait for the picture's time:
@@ -606,8 +641,9 @@ impl Decoder {
                     audio_pts = Some(pts);
                     if self.output.is_some()
                         && let Some(q) = &self.audio_queue
+                        && let Some(end) = q.push(&sample, pts, audio_skip_before)
                     {
-                        q.push(&sample, pts, audio_skip_before);
+                        audio_end = Some(audio_end.map_or(end, |prev| prev.max(end)));
                     }
                 }
             }
@@ -618,7 +654,7 @@ impl Decoder {
             {
                 mf::seek(&self.reader, last)?;
                 self.reopen_streams();
-                audio_pts = None;
+                (audio_pts, audio_end, last_video_pts) = (None, None, None);
                 audio_skip_before = last;
                 if let Some(q) = &self.audio_queue {
                     q.flush();
@@ -713,25 +749,26 @@ impl Decoder {
         Some(clock)
     }
 
-    /// Waits for the time on `clock` of the picture `blit_on_layer` scaled, and returns the
-    /// locked inbox when the layer should present it now; None leaves it to the window. The wait
-    /// ends early for a seek, a stop or the window taking the pictures back.
+    /// Waits for the time on the clock of the picture `blit_on_layer` scaled, and returns the
+    /// locked inbox when the layer should present it now; None leaves it to the window. Follows
+    /// audio-clock nudges at the same rate, and ends early for pause, rate change, seek, stop or
+    /// the window taking the pictures back.
     fn wait_until_due<'a>(&self, pipe: &'a Pipe, job: &Job, clock: Anchor, pts: f64) -> Option<MutexGuard<'a, Inbox>> {
         self.layer.as_ref()?;
-        let at = clock.when(pts).checked_sub(LAYER_LEAD).unwrap_or_else(|| clock.when(pts));
         let mut s = pipe.lock();
         loop {
             if s.stop || s.seek.is_some() || s.layer.is_none() {
                 return None;
             }
+            // Paused, or the rate changed, while it waited: the window decides again.
+            let at = layer_due(clock, job.clock.get(), pts)?;
             let now = rune_core::time::now();
             if now >= at {
                 break;
             }
             s = pipe.wait(s, at - now);
         }
-        // Paused, or the rate changed, while it waited: the window decides again.
-        (job.clock.get() == Some(clock)).then_some(s)
+        Some(s)
     }
 
     /// Presents the picture `blit_on_layer` scaled; false when the layer couldn't.

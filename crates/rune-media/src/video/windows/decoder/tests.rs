@@ -383,6 +383,36 @@ fn clip_done_ends_muted_video_with_pictures_and_waits_for_sound_when_unmuted_or_
 }
 
 #[test]
+fn trailing_audio_extends_drain_end_and_next_loop_epoch() {
+    // Audio ends at 12.5 s on a 10 s video clip: drain_end and next_loop_epoch reach 12.5 s.
+    assert_eq!(drain_end(0.0, 10.0, Some(10.0), Some(12.5)), Some(12.5));
+    assert_eq!(next_loop_epoch(0.0, 10.0, Some(12.5)), 12.5);
+    // Audio shorter than video keeps duration end and regular loop epoch.
+    assert_eq!(drain_end(0.0, 10.0, Some(10.0), Some(8.0)), Some(10.0));
+    assert_eq!(next_loop_epoch(0.0, 10.0, Some(8.0)), 10.0);
+    // Muted (no active audio end) uses duration/video end.
+    assert_eq!(drain_end(0.0, 10.0, Some(10.0), None), Some(10.0));
+    assert_eq!(next_loop_epoch(0.0, 10.0, None), 10.0);
+    // Unknown duration (0.0) falls back to max(video_end, audio_end).
+    assert_eq!(drain_end(0.0, 0.0, Some(9.967), Some(12.5)), Some(12.5));
+}
+
+#[test]
+fn layer_due_follows_nudged_clock_at_same_rate_and_stops_on_pause_or_rate_change() {
+    let at = rune_core::time::now();
+    let initial = Anchor { at, pos: 2.0, rate: 1.0 };
+    let base_due = layer_due(initial, Some(initial), 2.5).unwrap();
+    // Audio nudged clock forward by 10 ms: picture at 2.5 s is due 10 ms earlier.
+    let nudged = Anchor { pos: 2.01, ..initial };
+    let nudged_due = layer_due(initial, Some(nudged), 2.5).unwrap();
+    let shift = base_due.saturating_duration_since(nudged_due).as_secs_f64();
+    assert!((shift - 0.010).abs() < 1e-6, "expected 10 ms earlier due, got {shift}");
+    // Paused or rate changed: returns None so the window takes over.
+    assert_eq!(layer_due(initial, None, 2.5), None);
+    assert_eq!(layer_due(initial, Some(Anchor { rate: 2.0, ..initial }), 2.5), None);
+}
+
+#[test]
 fn a_real_clip_unmuted_mid_clip_reads_audio_at_playback_position_without_seeking_video() {
     // SAFETY: COM on this test's thread for the reader; left initialised, as the thread may open more.
     unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok().ok();
