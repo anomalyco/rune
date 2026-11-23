@@ -74,7 +74,7 @@ struct Glyph {
     y: f32,
     /// Start byte of the cluster this glyph belongs to (its first byte for a ligature).
     byte: u32,
-    face: u16,
+    face: u32,
     /// The x and y phases, and the ink's raster bucket, its mask was looked up at.
     sub: [u8; 2],
     bucket: u8,
@@ -115,7 +115,7 @@ impl Entry {
             let at = self.coords.len() as u32;
             self.coords.extend_from_slice(coords);
             self.faces.push((face, at, self.coords.len() as u32));
-            let face = (self.faces.len() - 1) as u16;
+            let face = (self.faces.len() - 1) as u32;
             let mut rel = glyph_run.offset();
             for g in glyph_run.glyphs() {
                 let byte = table.get(gi).copied().unwrap_or(0);
@@ -281,7 +281,7 @@ impl TextSystem {
     #[allow(clippy::too_many_arguments)]
     fn replay(&mut self, entry: &mut Entry, i: usize, origin: [f32; 2], k: f32, bytes: bool, cursor: &mut usize, out: &mut Vec<GlyphQuad>) {
         let (start, end) = entry.lines[i];
-        let (mut face, mut baseline, mut size) = (u16::MAX, 0.0, 0.0);
+        let (mut face, mut baseline, mut size) = (None, 0.0, 0.0);
         let quarters = self.quarter_pens();
         for gi in start as usize..end as usize {
             if entry.clock != self.atlas.clock {
@@ -291,8 +291,8 @@ impl TextSystem {
             }
             let g = entry.glyphs[gi];
             let f = &entry.faces[g.face as usize];
-            if g.face != face {
-                (face, baseline, size) = (g.face, (origin[1] + f.0.baseline * k).round(), f.0.size * k);
+            if face != Some(g.face) {
+                (face, baseline, size) = (Some(g.face), (origin[1] + f.0.baseline * k).round(), f.0.size * k);
             }
             let at = if k == 1.0 { [origin[0] + g.rel + g.x, baseline + g.y] }
                 else { [origin[0] + (g.rel + g.x) * k, baseline + g.y * k] };

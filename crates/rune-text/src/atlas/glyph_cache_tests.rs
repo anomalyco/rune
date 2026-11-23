@@ -148,3 +148,23 @@ fn a_new_entry_grows_into_the_room_of_one_that_went() {
     ts.begin_frame();
     assert!(ts.glyph_cache.spare.is_none(), "room nobody took goes");
 }
+
+#[test]
+fn glyph_cache_face_index_does_not_collide_or_wrap_at_65536_runs() {
+    let mut ts = TextSystem::default();
+    ts.set_glyph_inks(Color::WHITE, &[]);
+    // 65,537 single-character lines give 65,537 glyph runs in one layout:
+    // run index 65,535 collides with a u16::MAX sentinel, and 65,536 wraps to 0.
+    let text = "a\n".repeat(65_537);
+    let layout = ts.layout_rich(&text, &[], TextStyle::new(14.0, 400.0), 1.0, None);
+    assert!(layout.len() >= 65_537, "got {} lines", layout.len());
+    let all = f32::NEG_INFINITY..f32::INFINITY;
+    let mut direct_out = Vec::new();
+    ts.glyphs_in_band(&layout, [0.0, 0.0], 1.0, false, all.clone(), &mut direct_out);
+    let mut cached_out = Vec::new();
+    ts.glyphs_in_band_cached(&layout, [0.0, 0.0], 1.0, false, all, &mut cached_out);
+    assert_eq!(cached_out.len(), direct_out.len());
+    // Check runs 65,535 and 65,536 match direct emission (baseline and rect).
+    assert_eq!(cached_out[65_535].rect, direct_out[65_535].rect, "run 65,535 must not collide with sentinel");
+    assert_eq!(cached_out[65_536].rect, direct_out[65_536].rect, "run 65,536 must not wrap to face 0");
+}

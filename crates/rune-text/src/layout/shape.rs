@@ -256,7 +256,7 @@ impl TextSystem {
         let off = [b"liga", b"clig", b"calt", b"dlig"].map(|tag| parley::FontFeature::new(parley::setting::Tag::new(tag), 0));
         let unligated: Vec<parley::FontFeature> = features.iter().chain(&off).copied().collect();
         type Spacings = [(std::ops::Range<usize>, f32)];
-        let build = |lcx: &mut LayoutContext<Ink>, fcx: &mut FontContext, exact: &Spacings, widen: &Spacings, weights: &Spacings, fits: &Spacings, bold: &[(std::ops::Range<usize>, u16)]| {
+        let build = |lcx: &mut LayoutContext<Ink>, fcx: &mut FontContext, exact: &Spacings, widen: &Spacings, weights: &Spacings, fits: &Spacings, bold: &[(std::ops::Range<usize>, u32)]| {
             let mut b = lcx.ranged_builder(fcx, text, scale, true);
             b.set_base_direction(base);
             // Lines break where Chromium breaks them: after every run of spaces, even before a
@@ -296,17 +296,18 @@ impl TextSystem {
             if base_spacing != 0.0 {
                 b.push_default(StyleProperty::LetterSpacing(base_spacing));
             }
-            let mut layout_span = 0u16;
+            let mut layout_span = 0u32;
             for (i, s) in spans.iter().enumerate() {
                 if !(s.start < s.end && s.affects_layout()) {
                     continue;
                 }
-                layout_span += 1;
+                layout_span = layout_span.saturating_add(1);
                 let r = span_range(s);
                 if r.is_empty() {
                     continue;
                 }
-                b.push(StyleProperty::Brush(Ink(layout_span)), r.clone());
+                let brush = if layout_span < synthetic_bold::SYNTHETIC_BOLD { layout_span } else { 0 };
+                b.push(StyleProperty::Brush(Ink(brush)), r.clone());
                 if s.mono {
                     b.push(FontFamily::from(mono.as_slice()), r.clone());
                     b.push(StyleProperty::FontFeatures(unligated.as_slice().into()), r.clone());

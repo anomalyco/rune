@@ -195,3 +195,57 @@ fn underline_and_strikethrough_preserve_positions_and_thickness() {
     let (tail_y, tail_h) = expected_strike(&line, tail_idx, origin[1], scale);
     assert_eq!((strikes[1].rect[1], strikes[1].rect[3]), (tail_y, tail_h));
 }
+
+#[test]
+fn layout_span_indexes_do_not_collide_at_32768_or_overflow_at_65536() {
+    let mut ts = TextSystem::default();
+    let style = TextStyle::new(14.0, 400.0);
+    let bg_color = Color { r: 0.2, g: 0.4, b: 0.6, a: 1.0 };
+    let ul_color = Color { r: 0.8, g: 0.1, b: 0.2, a: 1.0 };
+
+    // 32,767 preceding layout-affecting spans put the next two at ordinals 0x8000 and 0x8001,
+    // where a 16-bit brush collides with SYNTHETIC_BOLD (0x8000).
+    let mut spans = vec![Span::new(100, 101).underline(Color::BLACK); 32_767];
+    spans.push(Span::new(0, 1).bg(bg_color, 2.0));
+    spans.push(Span::new(1, 2).underline(ul_color));
+    let layout = ts.layout_rich("AB", &spans, style, 1.0, None);
+
+    // Neither span asks for bold; Face::of must not read ordinal 0x8000 as synthetic bold.
+    let mut coords = Vec::new();
+    let line = layout.get(0).expect("single line");
+    for item in line.items() {
+        if let PositionedLayoutItem::GlyphRun(gr) = item {
+            let face = Face::of(&gr, &mut coords);
+            assert!(!face.bold, "ordinal 32,768 must not set synthetic bold on a non-bold run");
+        }
+    }
+
+    let mut decos = Vec::new();
+    ts.decorations(&layout, &spans, 1.0, [0.0, 0.0], &mut decos);
+    assert_eq!(decos.len(), 2, "both spans at ordinals 32,768 and 32,769 must emit decorations");
+    assert_eq!(decos[0].color, bg_color, "span 32,768 must keep its own background colour");
+    assert_eq!(decos[1].color, ul_color, "span 32,769 must keep its own underline colour");
+
+    // synthetic_bold::inks must also keep ordinals 32,768 and 32,769 intact alongside the flag.
+    let bold_inks = crate::raster::synthetic_bold::inks(&[0..2], &spans);
+    assert_eq!(bold_inks.len(), 2);
+    assert_eq!(bold_inks[0].1 & crate::raster::synthetic_bold::SYNTHETIC_BOLD, crate::raster::synthetic_bold::SYNTHETIC_BOLD);
+    assert_eq!((bold_inks[0].1 & !crate::raster::synthetic_bold::SYNTHETIC_BOLD) as usize, 32_768);
+    assert_eq!((bold_inks[1].1 & !crate::raster::synthetic_bold::SYNTHETIC_BOLD) as usize, 32_769);
+
+    // Past 65,535 layout-affecting spans must neither overflow nor wrap.
+    let mut spans64k = vec![Span::new(100, 101).underline(Color::BLACK); 65_535];
+    spans64k.push(Span::new(0, 1).bg(bg_color, 2.0));
+    spans64k.push(Span::new(1, 2).underline(ul_color));
+    let layout64k = ts.layout_rich("AB", &spans64k, style, 1.0, None);
+    decos.clear();
+    ts.decorations(&layout64k, &spans64k, 1.0, [0.0, 0.0], &mut decos);
+    assert_eq!(decos.len(), 2, "both spans at ordinals 65,536 and 65,537 must emit decorations");
+    assert_eq!(decos[0].color, bg_color);
+    assert_eq!(decos[1].color, ul_color);
+
+    let bold_inks64k = crate::raster::synthetic_bold::inks(&[0..2], &spans64k);
+    assert_eq!(bold_inks64k.len(), 2);
+    assert_eq!((bold_inks64k[0].1 & !crate::raster::synthetic_bold::SYNTHETIC_BOLD) as usize, 65_536);
+    assert_eq!((bold_inks64k[1].1 & !crate::raster::synthetic_bold::SYNTHETIC_BOLD) as usize, 65_537);
+}
