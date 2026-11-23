@@ -1,5 +1,6 @@
 use super::gpu_tests::{Gpu, OFFSCREEN_FORMAT, Offscreen, draw};
-use super::pipeline::completion::CompletionWorker;
+use super::pipeline::completion::{CompletionWorker, Parked};
+use rune_gpu::configure::Gate;
 use super::*;
 use rune_gpu::health::PollFailed;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -295,4 +296,121 @@ fn dropping_surface_renderer_joins_completion_thread_before_returning() {
 #[test]
 fn dropping_surface_renderer_with_timestamps_joins_completion_thread_without_deadlock() {
     drop_joins_completion_thread(true);
+}
+
+#[test]
+fn parked_work_is_submitted_at_once_when_no_surface_is_being_configured() {
+    let (gate, parked, submitted) = (Gate::new(), Parked::default(), Mutex::new(Vec::new()));
+    assert!(parked.flush(&gate, |_: Vec<u32>| panic!("nothing was parked")));
+    parked.park(1);
+    parked.park(2);
+    assert!(parked.flush(&gate, |work| submitted.lock().unwrap().extend(work)));
+    assert_eq!(*submitted.lock().unwrap(), vec![1, 2]);
+    assert!(parked.flush(&gate, |_| panic!("submitted twice")));
+}
+
+#[test]
+fn parked_work_waits_out_a_surface_configure() {
+    let (gate, parked, submitted) = (Gate::new(), Parked::default(), Mutex::new(Vec::new()));
+    // A completion callback that wgpu runs inside `Surface::configure`, on the configuring
+    // thread, and one on another thread meanwhile: neither submits.
+    gate.configuring(|| {
+        parked.park(1);
+        assert!(!parked.flush(&gate, |_| panic!("submitted inside the configure")));
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                parked.park(2);
+                assert!(!parked.flush(&gate, |_| panic!("submitted beside the configure")));
+            });
+        });
+    });
+    // The surface is configured: everything kept back goes, in order.
+    assert!(parked.flush(&gate, |work| submitted.lock().unwrap().extend(work)));
+    assert_eq!(*submitted.lock().unwrap(), vec![1, 2]);
+}
+
+/// The completion thread as `CompletionWorker::spawn` runs it, over a gate and a submit of the
+/// test's own: flush what is parked, then poll.
+fn worker_over(gate: Arc<Gate>, parked: Arc<Parked<u32>>, submitted: mpsc::Sender<u32>) -> CompletionWorker {
+    CompletionWorker::spawn_with(move || {
+        let flushed = parked.flush(&gate, |work| work.into_iter().for_each(|w| submitted.send(w).unwrap()));
+        Ok(if flushed { wgpu::PollStatus::QueueEmpty } else { wgpu::PollStatus::Poll })
+    })
+}
+
+#[test]
+fn the_completion_thread_submits_what_a_configure_kept_back_once_it_is_done() {
+    let (gate, parked) = (Arc::new(Gate::new()), Arc::new(Parked::default()));
+    let (submitted_tx, submitted) = mpsc::channel();
+    let worker = worker_over(gate.clone(), parked.clone(), submitted_tx);
+    gate.configuring(|| {
+        // The callback's part: park, try, wake the worker.
+        parked.park(7);
+        assert!(!parked.flush(&gate, |_| panic!("submitted inside the configure")));
+        worker.wake();
+        // The worker keeps coming back, and keeps being refused, while the surface configures.
+        assert!(submitted.recv_timeout(Duration::from_millis(60)).is_err(), "submitted while a surface was being configured");
+    });
+    assert_eq!(submitted.recv_timeout(Duration::from_secs(5)), Ok(7), "the parked work was never submitted");
+    drop(worker);
+}
+
+/// A frame drawn with timestamp queries, whose resolve a completion callback submits after it.
+fn timed_frame_resolves(configure_meanwhile: bool) {
+    let gpu = Gpu::headless_wgpu();
+    if !gpu.device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+        eprintln!("adapter has no timestamp queries: {:?}", gpu.adapter.get_info());
+        return;
+    }
+    let surface = NativeSurface::new();
+    surface.push_bytes(synthetic(16, 16, 0), 1).unwrap();
+    let (completed_tx, completed) = mpsc::channel();
+    surface.set_observer(Arc::new(move |t| {
+        if t.completed_at.is_some() {
+            completed_tx.send(t.gpu_end_seconds.is_some()).ok();
+        }
+    }));
+    let mut renderer = SurfaceRenderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    renderer.prepare(&gpu.device, &gpu.queue, &[draw(&surface, [0.0, 0.0, 16.0, 16.0])], (16, 16));
+    let target = Offscreen::new(&gpu.device, 16, 16);
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &target.view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+            })],
+            timestamp_writes: renderer.timestamp_writes(),
+            ..Default::default()
+        });
+        renderer.draw(&mut pass, 0);
+    }
+    if configure_meanwhile {
+        // What `Surface::configure` does, in the window's place: it holds off other threads'
+        // submissions, waits for the frame, and runs the frame's completion callback itself.
+        rune_gpu::configure::configuring(|| {
+            renderer.submit(&gpu.queue, encoder);
+            gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            // The frame is done and its callback has run, here or on the completion thread: the
+            // resolve it has to submit stays parked, so nothing lands in the queue wgpu is
+            // about to check, and the frame isn't reported complete yet.
+            assert!(completed.recv_timeout(Duration::from_millis(150)).is_err(), "the resolve was submitted while a surface was being configured");
+        });
+    } else {
+        renderer.submit(&gpu.queue, encoder);
+    }
+    // With no configure in the way (any more), the resolve is submitted and brings the GPU's times.
+    assert_eq!(gpu.wait(&completed, Duration::from_secs(10)), Some(true), "the frame's times never came");
+}
+
+#[test]
+fn a_timestamp_resolve_is_not_submitted_while_a_surface_is_being_configured() {
+    timed_frame_resolves(true);
+}
+
+#[test]
+fn a_timestamp_resolve_is_submitted_at_once_with_no_configure_in_the_way() {
+    timed_frame_resolves(false);
 }

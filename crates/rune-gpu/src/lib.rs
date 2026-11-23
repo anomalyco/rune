@@ -5,6 +5,7 @@
 //! wgpu's unless it chooses `GpuBackend::Metal`. Apps normally reach this crate through `rune`.
 
 pub mod backend;
+pub mod configure;
 pub mod health;
 #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
 pub mod metal;

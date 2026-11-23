@@ -40,6 +40,60 @@ impl CompletionWake {
     }
 }
 
+/// Work a completion callback has to submit, parked until it may be. A callback runs on
+/// whichever thread polls the device, usually the completion thread, and a submission from
+/// there that lands while the window's thread configures a surface makes wgpu refuse the
+/// configuration (`rune_gpu::configure`). So nothing is submitted from a callback directly: it
+/// parks the work here and flushes, and what a configure kept back the completion thread
+/// flushes once the configure is done.
+pub(crate) struct Parked<T> {
+    waiting: Mutex<Vec<T>>,
+}
+
+impl<T> Default for Parked<T> {
+    fn default() -> Self {
+        Self { waiting: Mutex::new(Vec::new()) }
+    }
+}
+
+impl<T> Parked<T> {
+    pub(crate) fn park(&self, work: T) {
+        self.waiting.lock().unwrap_or_else(|e| e.into_inner()).push(work);
+    }
+
+    /// Hands everything parked to `submit`, in the order it was parked, unless `gate` says a
+    /// surface is being configured. True when nothing is left parked.
+    pub(crate) fn flush(&self, gate: &rune_gpu::configure::Gate, submit: impl FnOnce(Vec<T>)) -> bool {
+        if self.waiting.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
+            return true;
+        }
+        gate.try_submit(|| {
+            let work = std::mem::take(&mut *self.waiting.lock().unwrap_or_else(|e| e.into_inner()));
+            if !work.is_empty() {
+                submit(work);
+            }
+        })
+        .is_some()
+    }
+}
+
+/// A frame's timestamp resolve and the queue it goes to, held weakly: a renderer that is gone
+/// resolves nothing.
+pub(crate) type Resolve = (std::sync::Weak<wgpu::Queue>, wgpu::CommandBuffer);
+
+impl Parked<Resolve> {
+    /// Submits the parked resolves unless a surface is being configured; true when none is left.
+    pub(crate) fn submit(&self) -> bool {
+        self.flush(rune_gpu::configure::gate(), |resolves| {
+            for (queue, resolve) in resolves {
+                if let Some(queue) = queue.upgrade() {
+                    queue.submit([resolve]);
+                }
+            }
+        })
+    }
+}
+
 /// Marks the worker `Stopped` on every thread exit path (normal stop, lost device, or panic
 /// unwind) so no waiter can hang.
 struct ExitGuard(Arc<Shared>);
@@ -60,8 +114,15 @@ pub(crate) struct CompletionWorker {
 }
 
 impl CompletionWorker {
-    pub(crate) fn spawn(device: wgpu::Device) -> Self {
-        Self::spawn_with(move || rune_gpu::health::poll(&device, wgpu::PollType::Poll))
+    /// Polls `device` after each wakeup, and submits the resolves a surface configure kept
+    /// back (`Parked`) once it may: while one is still parked the device counts as busy, so the
+    /// worker comes back for it instead of going idle.
+    pub(crate) fn spawn(device: wgpu::Device, resolves: Arc<Parked<Resolve>>) -> Self {
+        Self::spawn_with(move || {
+            let submitted = resolves.submit();
+            let status = rune_gpu::health::poll(&device, wgpu::PollType::Poll)?;
+            Ok(if submitted { status } else { wgpu::PollStatus::Poll })
+        })
     }
 
     pub(crate) fn spawn_with(

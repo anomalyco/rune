@@ -16,7 +16,9 @@ pub(crate) fn configure(surface: &wgpu::Surface, gpu: &Gpu, config: &wgpu::Surfa
     let validation = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
     let memory = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
     let internal = gpu.device.push_error_scope(wgpu::ErrorFilter::Internal);
-    surface.configure(&gpu.device, config);
+    // No other thread of Rune's submits while wgpu waits for the queue to empty: a submission
+    // that lands inside the wait makes it refuse the configuration (`rune_gpu::configure`).
+    rune_gpu::configure::configuring(|| surface.configure(&gpu.device, config));
     // `Device::destroy` only marks the device invalid: its lost callback runs when the device
     // next maintains itself, at the soonest a poll. Without this, a device destroyed before it
     // reported itself configures nothing while `is_lost` still reads false, and the drawable
