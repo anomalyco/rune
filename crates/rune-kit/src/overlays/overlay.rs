@@ -167,6 +167,7 @@ pub struct Popover {
     placement: Placement,
     gutter: f32,
     padding: f32,
+    width: Option<f32>,
     close: Acts,
     dismiss: Option<El>,
 }
@@ -184,6 +185,7 @@ impl Popover {
             placement: Placement::Bottom,
             gutter: 4.0,
             padding: 12.0,
+            width: None,
             close: Acts::default(),
             dismiss: None,
         }
@@ -227,6 +229,11 @@ impl Popover {
         self.gutter = g;
         self
     }
+    /// Fixes the surface width in points in place of the default 200..320 clamp.
+    pub(crate) fn width(mut self, w: f32) -> Self {
+        self.width = Some(w);
+        self
+    }
     /// Close requests: the close button and presses outside.
     pub fn on_close<S: 'static>(mut self, f: impl Fn(&mut S) + Clone + 'static) -> Self {
         self.dismiss = Some(scrim(scrim_key(&self.key), f.clone()));
@@ -245,7 +252,11 @@ impl Popover {
         }
         let mut content = col().key(content_key(&self.key)).role("dialog")
             .description(self.description.clone().unwrap_or_default())
-            .focus_return(&anchor_key).min_w(200.0).max_w(320.0);
+            .focus_return(&anchor_key);
+        content = match self.width {
+            Some(w) => content.w(w),
+            None => content.min_w(200.0).max_w(320.0),
+        };
         if let Some(l) = &self.label {
             content = content.label(l.clone());
         }
