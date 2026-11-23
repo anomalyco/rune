@@ -441,3 +441,33 @@ fn a_pending_peek_does_not_open_after_blur() {
     rt.frame(0.2);
     assert!(!rt.state.sidebar.is_peeking());
 }
+
+#[test]
+fn resting_on_a_row_or_toggle_in_a_peek_keeps_it_open_until_leaving() {
+    let mut rt = peeked();
+    settle(&mut rt);
+    let (rx, ry) = rt.find("row2").unwrap();
+    rt.pointer_move(rx, ry);
+    rt.frame(0.3);
+    assert!(rt.state.sidebar.is_peeking(), "resting on a row inside the peek past the grace keeps it open");
+    rt.pointer_move(600.0, 300.0);
+    rt.frame(0.09);
+    assert!(rt.state.sidebar.is_peeking(), "within the grace after leaving the row");
+    rt.frame(0.02);
+    assert!(!rt.state.sidebar.is_peeking(), "closes after the grace");
+
+    // Peeking from the toggle and moving straight out past the margin also closes after the grace.
+    let mut rt = runtime(closed());
+    settle(&mut rt);
+    let (tx, ty) = rt.find("sidebar-toggle").unwrap();
+    rt.pointer_move(tx, ty);
+    rt.frame(0.09);
+    assert!(rt.state.sidebar.is_peeking());
+    settle(&mut rt);
+    assert!(rt.state.sidebar.is_peeking(), "resting on the toggle keeps it open");
+    rt.pointer_move(600.0, 300.0);
+    rt.frame(0.09);
+    assert!(rt.state.sidebar.is_peeking(), "within the grace after leaving the toggle");
+    rt.frame(0.02);
+    assert!(!rt.state.sidebar.is_peeking(), "closes after leaving the toggle");
+}

@@ -294,6 +294,20 @@ impl RuntimeCore {
         inputs.next().is_none().then_some(first)
     }
 
+    /// The topmost live, allowed element in `hits` under (x, y), in paint order.
+    pub(in crate::runtime) fn top_hit(&self, x: f32, y: f32) -> Option<usize> {
+        self.hit.find_hit(|id, r| {
+            if !self.hit_contains(id, r, x, y) { return None; }
+            let i = *self.tree.node_index.get(&id)?;
+            (!self.subtree_exiting(i) && self.allowed(i)).then_some(i)
+        })
+    }
+
+    /// Whether node `i` is `target` or an ancestor of it.
+    pub(in crate::runtime) fn node_holds(&self, i: usize, target: usize) -> bool {
+        std::iter::successors(Some(target), |&p| self.tree.nodes[p].parent).any(|p| p == i)
+    }
+
     /// The topmost element under (x, y) that takes primary input, selectable text included.
     pub(in crate::runtime) fn top_target(&self, x: f32, y: f32) -> Option<usize> {
         self.hit.find_hit(|id, r| {

@@ -433,3 +433,88 @@ fn interactive_overlay_immediately_after_non_interactive_help_suppresses_tooltip
     rt.frame(rt.help_delay + 0.1);
     assert!(rt.help_tooltip().is_some(), "uncovered interactive element still shows its own tooltip");
 }
+
+#[test]
+fn pinned_sibling_blocks_pointer_move_hover_change_and_hover_delays_underneath() {
+    #[derive(Default)]
+    struct State {
+        moves: Vec<&'static str>,
+        hovers: Vec<(&'static str, bool)>,
+        delayed: Vec<bool>,
+        parent_moves: usize,
+        parent_hovers: Vec<bool>,
+    }
+    fn view(_: &State, _: &mut Cx<State>) -> El {
+        col().size(300.0, 200.0)
+            // Parent container with an interactive child: moves and hover over the child still reach the parent.
+            .child(
+                el().key("parent").size(300.0, 100.0)
+                    .on_pointer_move_local(|s: &mut State, _, _| s.parent_moves += 1)
+                    .on_hover_change(|s: &mut State, inside, _| s.parent_hovers.push(inside))
+                    .child(
+                        el().key("canvas").size(300.0, 100.0)
+                            .on_press(|_: &mut State| {})
+                            .on_pointer_move_local(|s: &mut State, _, _| s.moves.push("canvas"))
+                            .on_hover_change(|s: &mut State, inside, _| s.hovers.push(("canvas", inside))),
+                    ),
+            )
+            // Delayed-hover row underneath a scrim/card.
+            .child(
+                el().key("row").size(300.0, 40.0)
+                    .on_press(|_: &mut State| {})
+                    .hover_delays(std::time::Duration::from_millis(50), std::time::Duration::ZERO)
+                    .on_hover_change(|s: &mut State, inside, _| s.delayed.push(inside)),
+            )
+            // Pinned interactive card over part of canvas and row.
+            .child(
+                el().key("card").pin(Some(50.0), Some(0.0), None, None).size(100.0, 140.0)
+                    .on_press(|_: &mut State| {})
+                    .on_pointer_move_local(|s: &mut State, _, _| s.moves.push("card"))
+                    .on_hover_change(|s: &mut State, inside, _| s.hovers.push(("card", inside))),
+            )
+            // Pinned hover/move-only sibling over another part of canvas (no on_press).
+            .child(
+                el().key("observer").pin(Some(180.0), Some(0.0), None, None).size(80.0, 100.0)
+                    .on_pointer_move_local(|s: &mut State, _, _| s.moves.push("observer"))
+                    .on_hover_change(|s: &mut State, inside, _| s.hovers.push(("observer", inside))),
+            )
+    }
+    let mut rt = Runtime::new(State::default(), view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    // Over uncovered canvas: parent and canvas both hear move and hover.
+    rt.pointer_move(20.0, 20.0);
+    rt.frame(0.0);
+    assert_eq!(rt.state.moves, ["canvas"]);
+    assert_eq!(rt.state.hovers, [("canvas", true)]);
+    assert_eq!(rt.state.parent_moves, 1);
+    assert_eq!(rt.state.parent_hovers, [true]);
+
+    // Move onto pinned interactive card: canvas and parent underneath leave and stop hearing moves.
+    rt.state.moves.clear();
+    rt.state.hovers.clear();
+    rt.pointer_move(80.0, 20.0);
+    rt.frame(0.0);
+    assert_eq!(rt.state.moves, ["card"], "card blocks pointer moves to canvas underneath");
+    assert_eq!(rt.state.hovers, [("canvas", false), ("card", true)], "canvas leaves hover under card");
+    assert_eq!(rt.state.parent_moves, 1, "parent underneath card stops hearing moves");
+    assert_eq!(rt.state.parent_hovers, [true, false], "parent underneath card leaves hover");
+
+    // Hover over the card where it covers the delayed-hover row: row's hover_delays must not fire.
+    rt.pointer_move(80.0, 120.0);
+    rt.frame(0.1);
+    assert!(rt.state.delayed.is_empty(), "delayed hover under pinned card must not fire");
+
+    // Move onto uncovered part of the delayed-hover row: hover_delays fires after 50 ms.
+    rt.pointer_move(20.0, 120.0);
+    rt.frame(0.06);
+    assert_eq!(rt.state.delayed, [true]);
+
+    // Move onto move/hover-only pinned sibling: it receives events and blocks canvas underneath.
+    rt.state.moves.clear();
+    rt.state.hovers.clear();
+    rt.pointer_move(200.0, 20.0);
+    rt.frame(0.0);
+    assert_eq!(rt.state.moves, ["observer"], "observer blocks canvas underneath and is not blocked by it");
+    assert_eq!(rt.state.hovers, [("observer", true)]);
+}

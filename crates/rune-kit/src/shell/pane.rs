@@ -55,11 +55,19 @@ enum Dock {
     Closed(ClosedPeek),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Eq)]
 enum ClosedPeek {
     Rest,
-    Shown,
+    /// Bitmask of the peeking sidebar's surfaces currently holding the pointer
+    /// (`PEEK_HOLD`, `PEEK_PANE`, `PEEK_TOGGLE`).
+    Shown(u8),
     Left,
+}
+
+impl PartialEq for ClosedPeek {
+    fn eq(&self, other: &Self) -> bool {
+        matches!((self, other), (Self::Rest, Self::Rest) | (Self::Shown(_), Self::Shown(_)) | (Self::Left, Self::Left))
+    }
 }
 
 impl PaneState {
@@ -126,10 +134,14 @@ impl PaneState {
             self.width = width.round().clamp(self.min, self.max);
         }
     }
+    pub(super) const PEEK_HOLD: u8 = 1;
+    pub(super) const PEEK_PANE: u8 = 2;
+    pub(super) const PEEK_TOGGLE: u8 = 4;
+
     /// Opening a peeking sidebar docks it where it floats; closing ends any peek.
     pub fn set_open(&mut self, open: bool) {
         self.dock = match (self.dock, open) {
-            (Dock::Closed(peek), true) => Dock::Open { from_peek: peek == ClosedPeek::Shown },
+            (Dock::Closed(peek), true) => Dock::Open { from_peek: matches!(peek, ClosedPeek::Shown(_)) },
             (Dock::Open { .. }, false) => Dock::Closed(ClosedPeek::Rest),
             (dock, _) => dock,
         };
@@ -141,7 +153,7 @@ impl PaneState {
     /// Whether the closed sidebar floats over the content (a `SplitView` with
     /// [`SidebarPeek`]).
     pub fn is_peeking(&self) -> bool {
-        self.dock == Dock::Closed(ClosedPeek::Shown)
+        matches!(self.dock, Dock::Closed(ClosedPeek::Shown(_)))
     }
     /// Slides a peeking sidebar away (Escape, say). Leaving it with the pointer, or the window
     /// losing focus, ends a peek too.
@@ -152,15 +164,33 @@ impl PaneState {
     }
     /// Shows the closed sidebar as a peek, over the content.
     pub fn peek(&mut self) {
+        self.peek_from(0);
+    }
+    pub(super) fn peek_from(&mut self, zone: u8) {
         if !self.is_open() {
-            self.dock = Dock::Closed(ClosedPeek::Shown);
+            self.dock = Dock::Closed(ClosedPeek::Shown(zone));
         }
+    }
+    /// Updates whether `zone` holds the pointer while peeking. Returns true when the last held
+    /// zone left and the peek ended.
+    pub(super) fn peek_hover(&mut self, zone: u8, inside: bool) -> bool {
+        let Dock::Closed(ClosedPeek::Shown(mask)) = &mut self.dock else { return false };
+        if inside {
+            *mask |= zone;
+            return false;
+        }
+        *mask &= !zone;
+        if *mask == 0 {
+            self.dock = Dock::Closed(ClosedPeek::Left);
+            return true;
+        }
+        false
     }
     pub(super) fn peek_phase(&self) -> Peek {
         match self.dock {
             Dock::Open { from_peek: true } => Peek::Docked,
             Dock::Open { from_peek: false } | Dock::Closed(ClosedPeek::Rest) => Peek::None,
-            Dock::Closed(ClosedPeek::Shown) => Peek::Shown,
+            Dock::Closed(ClosedPeek::Shown(_)) => Peek::Shown,
             Dock::Closed(ClosedPeek::Left) => Peek::Left,
         }
     }

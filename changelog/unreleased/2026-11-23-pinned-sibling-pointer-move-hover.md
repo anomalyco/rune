@@ -1,0 +1,1 @@
+- Input: `on_pointer_move`, `on_hover_change` and `hover_delays` now reach only the topmost hit element under the pointer and its ancestors, so a pinned interactive sibling or scrim blocks moves and hover from reaching elements underneath while parent containers still receive them over their own children.
