@@ -93,3 +93,9 @@ fn default_faces_keep_batch_c_pixels() {
         assert_eq!(hash.finish(), expected, "sans/mono pixels changed at {scale}×");
     }
 }
+
+#[test]
+fn app_spec_defaults_mono_slot_to_ui_monospace() {
+    let spec = rune::AppSpec::new("mono-default", (320.0, 200.0), || (), |_, _| rune::el());
+    assert_eq!(spec.families, ("Inter", "ui-monospace"));
+}

@@ -77,9 +77,17 @@ impl TextSystem {
         self.load_installed(mono);
         self.families = (sans.to_owned(), mono.to_owned());
         (self.sans, self.mono) = slots(sans, mono);
-        self.slot_system_mono = names_system_mono(sans) || names_system_mono(mono);
+        self.slot_system_mono = [names_system_mono(sans), names_system_mono(mono)];
         self.load_slot_fallbacks();
         self.drop_shaped();
+    }
+
+    /// Whether shaping `family` (with `has_mono_span` inline mono spans) can resolve
+    /// `ui-monospace` and therefore needs the platform's system monospace families loaded.
+    pub(crate) fn needs_system_mono(&self, family: rune_core::tok::Family, has_mono_span: bool) -> bool {
+        family == rune_core::tok::Family::SystemMono
+            || (self.slot_system_mono[1] && (family == rune_core::tok::Family::Mono || has_mono_span))
+            || (self.slot_system_mono[0] && matches!(family, rune_core::tok::Family::Sans | rune_core::tok::Family::Named(_)))
     }
 
     /// Drops every layout, run and measurement shaped so far, for new families or a new

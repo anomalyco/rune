@@ -126,7 +126,7 @@ fn ensure_fonts(slot: &mut Option<Fonts>) -> &mut Fonts {
         generation: 1,
         fonts_generation: next_fonts_generation(),
         fonts: Vec::new(),
-        families: ("Inter".to_owned(), "Inter".to_owned()),
+        families: ("Inter".to_owned(), "ui-monospace".to_owned()),
         scope: 0,
     })
 }

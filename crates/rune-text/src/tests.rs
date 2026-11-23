@@ -114,7 +114,7 @@ fn mono_tabs_fill_to_four_column_stops() {
 /// arrow in prose, but code keeps both characters.
 #[test]
 fn mono_text_has_no_ligatures() {
-    let mut ts = TextSystem::default();
+    let mut ts = TextSystem::new(&[], ("Inter", "Inter"));
     let ids = |ts: &mut TextSystem, text: &str, spans: &[Span], style: TextStyle| -> Vec<u32> {
         let layout = ts.layout_rich(text, spans, style, 2.0, None);
         layout
@@ -196,6 +196,40 @@ fn ui_monospace_with_no_mono_font_falls_back_to_sans() {
     assert_eq!(names("ui-monospace", &["Menlo".into()]), ["Menlo"]);
     assert_eq!(names("ui-monospace, Iosevka", &[]), ["Iosevka"], "a named family after it still wins");
     assert_eq!(names("monospace", &[]), ["Monospace"], "only ui-monospace falls back");
+}
+
+/// The default mono slot resolves to the platform's monospaced font lazily: launch and
+/// sans-only frames load no system fonts, and the first mono style or span loads it.
+#[test]
+fn default_mono_slot_is_monospaced_and_lazy() {
+    let mut ts = TextSystem::default();
+    assert_eq!(ts.families(), ("Inter", "ui-monospace"));
+    assert!(ts.system_mono.is_none(), "launch must not load system monospace fonts");
+    assert!(ts.font_files.is_empty(), "launch must not open system font files");
+    assert!(ts.installed.is_empty(), "launch must not query installed fonts for ui-monospace");
+
+    let sans = TextStyle::new(13.0, 400.0);
+    let _ = ts.measure("Hello world 0123", sans, 2.0);
+    assert!(ts.system_mono.is_none(), "sans-only layout must not load system monospace fonts");
+    assert!(ts.font_files.is_empty(), "sans-only layout must not open system font files");
+    assert!(ts.installed.is_empty(), "sans-only layout must not query installed fonts");
+
+    let mono = sans.mono();
+    let width = |ts: &mut TextSystem, text: &str, style: TextStyle| ts.layout_rich(text, &[], style, 2.0, None).full_width();
+    let narrow = width(&mut ts, "iiiiiiii", mono);
+    let wide = width(&mut ts, "MMMMMMMM", mono);
+    assert!(ts.system_mono.is_some(), "mono layout loads system monospace lazily");
+    if !ts.system_mono().is_empty() {
+        assert!((narrow - wide).abs() < 0.5, "default mono slot must be fixed-pitch: {narrow} vs {wide}");
+        assert!(width(&mut ts, "iiiiiiii", sans) < narrow * 0.7, "sans slot stays proportional");
+    }
+
+    // Inline mono spans also trigger lazy loading without loading during earlier sans layouts.
+    let mut span_ts = TextSystem::default();
+    let _ = span_ts.layout_rich("plain sans text", &[], sans, 2.0, None);
+    assert!(span_ts.system_mono.is_none());
+    let _ = span_ts.layout_rich("see code", &[Span::new(4, 8).mono()], sans, 2.0, None);
+    assert!(span_ts.system_mono.is_some());
 }
 
 /// Each glyph run of `text` with the font it shaped with.
