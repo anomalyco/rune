@@ -191,9 +191,7 @@ pub(crate) fn register_cjk_fallbacks(collection: &mut Collection, registered: &[
 fn register_system_cjk(collection: &mut Collection, loaded: &mut LoadedFiles, files: Vec<std::path::PathBuf>, families: (&str, &str), all: &mut Vec<FamilyId>) {
     let primary = [collection.family_id(families.0), collection.family_id(families.1)];
     let before = all.len();
-    // Only files new to the collection: one already loaded is a fallback already.
-    let new: Vec<std::path::PathBuf> = files.into_iter().filter(|f| !loaded.contains_key(f)).take(16).collect();
-    for id in load_files(collection, loaded, new) {
+    for id in load_files(collection, loaded, files.into_iter().take(16)) {
         if !primary.contains(&Some(id)) && !all.contains(&id) {
             all.push(id);
         }
@@ -585,3 +583,6 @@ pub(crate) fn font_file_name(path: &std::path::Path) -> Option<String> {
     let name = path.file_name()?.to_string_lossy().to_lowercase();
     [".ttf", ".otf", ".ttc", ".otc"].iter().any(|ext| name.ends_with(ext)).then(|| name.replace([' ', '.'], ""))
 }
+
+#[cfg(test)]
+mod tests;
