@@ -1,16 +1,14 @@
 #![allow(unsafe_code)]
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED,
-    GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_NO_DATA, ERROR_PIPE_BUSY,
+    ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, FlushFileBuffers, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, ReadFile,
-    WriteFile,
+    CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
 };
 use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 use windows_sys::Win32::System::Pipes::{
@@ -18,7 +16,10 @@ use windows_sys::Win32::System::Pipes::{
     PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT, WaitNamedPipeW,
 };
 use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
-use windows_sys::Win32::System::Threading::{CreateEventW, GetCurrentProcessId, OpenEventW, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
+use windows_sys::Win32::System::Threading::{
+    CreateEventW, GetCurrentProcessId, INFINITE, OpenEventW, OpenProcess, PROCESS_SYNCHRONIZE, SetEvent, WaitForMultipleObjects,
+    WaitForSingleObject,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, EnumWindows, GW_OWNER, GWL_EXSTYLE, GetWindow, GetWindowLongW, GetWindowThreadProcessId, IsIconic,
     IsWindowVisible, SW_RESTORE, SetForegroundWindow, ShowWindow, WS_EX_TOOLWINDOW,
@@ -38,43 +39,109 @@ const ANSWER_LIVE: Duration = Duration::from_secs(1);
 /// waits, the person sees the pointer Windows shows for an app that's starting; then the
 /// running copy's window comes forward with what they clicked.
 const LIVE_WAIT: Duration = Duration::from_secs(5);
+/// How long the server waits for a connected client to send its launch message, or to read its
+/// answer and close, before disconnecting it so later launches aren't held up.
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(1);
+/// Maximum wire size of a `MAGIC_V1` message (`MAGIC_V1` plus `MAX_MESSAGE` bytes of body).
+const MAX_V1_WIRE: usize = MAGIC_V1.len() + MAX_MESSAGE;
 
-/// The claimed name, and the listener's thread, for `release`.
-static CLAIMED: OnceLock<Vec<u16>> = OnceLock::new();
-static LISTENER: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
-/// `release` asked the listener to close the name.
-static RELEASED: AtomicBool = AtomicBool::new(false);
+/// The active listener for this process's claimed instance, stopped by `release`.
+static LISTENER: Mutex<Option<Listener>> = Mutex::new(None);
 
-/// Closes the name: the listener takes what's connected (a launch then is handed on, since
-/// the app is quitting), closes its handle and ends; this returns once it has.
-pub(super) fn release() {
-    let Some(name) = CLAIMED.get() else { return };
-    if RELEASED.swap(true, Ordering::AcqRel) {
-        return;
+/// A manual-reset Win32 event shared between `release` and the listener thread to wake and stop
+/// overlapped pipe operations cleanly.
+struct StopEvent(HANDLE);
+
+// SAFETY: a Win32 event handle can be signalled and waited on from any thread, and is closed
+// once when the last `Arc<StopEvent>` drops.
+unsafe impl Send for StopEvent {}
+// SAFETY: Win32 `SetEvent` and `WaitForSingleObject`/`WaitForMultipleObjects` are thread-safe.
+unsafe impl Sync for StopEvent {}
+
+impl StopEvent {
+    fn new() -> Option<Self> {
+        // SAFETY: creates an unnamed, unsignalled manual-reset event; closed in `Drop`.
+        let handle = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
+        (!handle.is_null()).then_some(Self(handle))
     }
-    // An empty connection wakes the listener from ConnectNamedPipe; one that's busy with a
-    // launch sees the flag once it's done with it.
-    // SAFETY: `name` is NUL-terminated; the handle, when opened, is closed once.
-    let woken = unsafe {
-        let wake = CreateFileW(name.as_ptr(), GENERIC_WRITE, 0, std::ptr::null(), OPEN_EXISTING, 0, std::ptr::null_mut());
-        if wake != INVALID_HANDLE_VALUE {
-            CloseHandle(wake);
-            true
-        } else {
-            // Busy: a launch is connected. Not found: the listener already closed the name (it saw
-            // `RELEASED` after a launch): either way it ends now, and is joined.
-            matches!(GetLastError(), ERROR_PIPE_BUSY | ERROR_FILE_NOT_FOUND)
+
+    fn handle(&self) -> HANDLE {
+        self.0
+    }
+
+    fn signal(&self) {
+        // SAFETY: `self.0` is an open event handle until `Drop`.
+        unsafe { SetEvent(self.0) };
+    }
+
+    fn is_set(&self) -> bool {
+        // SAFETY: `self.0` is an open event handle until `Drop`.
+        unsafe { WaitForSingleObject(self.0, 0) == WAIT_OBJECT_0 }
+    }
+}
+
+impl Drop for StopEvent {
+    fn drop(&mut self) {
+        // SAFETY: opened in `new`, closed once when the last `Arc` drops.
+        unsafe { CloseHandle(self.0) };
+    }
+}
+
+/// An active pipe listener thread and its stop signal.
+struct Listener {
+    stop: Arc<StopEvent>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Listener {
+    fn start(pipe: HANDLE, timeout: Duration, on_launch: impl Fn(Vec<String>) -> bool + Send + 'static) -> Option<Self> {
+        let Some(stop) = StopEvent::new().map(Arc::new) else {
+            // SAFETY: the handle no thread took.
+            unsafe { CloseHandle(pipe) };
+            return None;
+        };
+        let pipe_raw = pipe as usize;
+        let stop_thread = Arc::clone(&stop);
+        let spawned = std::thread::Builder::new().name("rune-instance".into()).spawn(move || {
+            serve(pipe_raw as HANDLE, timeout, &stop_thread, &on_launch);
+        });
+        match spawned {
+            Ok(thread) => Some(Self { stop, thread: Some(thread) }),
+            Err(_) => {
+                // SAFETY: the handle no thread took.
+                unsafe { CloseHandle(pipe) };
+                None
+            }
         }
-    };
-    // A listener that can't be woken keeps the name until the process ends.
-    if let Some(listener) = LISTENER.lock().unwrap_or_else(|e| e.into_inner()).take().filter(|_| woken) {
-        listener.join().ok();
-        // The name is free, and the app holds nothing a next process needs: say so, so that one
-        // claims now rather than once this process has ended (`released`). A manual-reset event,
-        // set; its handle stays open, so it lasts as long as this process.
-        // SAFETY: the name is NUL-terminated and outlives the call.
-        unsafe { CreateEventW(std::ptr::null(), 1, 1, released_name(GetCurrentProcessId()).as_ptr()) };
     }
+
+    fn stop(mut self) {
+        self.stop.signal();
+        if let Some(thread) = self.thread.take() {
+            thread.join().ok();
+        }
+    }
+}
+
+impl Drop for Listener {
+    fn drop(&mut self) {
+        self.stop.signal();
+        if let Some(thread) = self.thread.take() {
+            thread.join().ok();
+        }
+    }
+}
+
+/// Closes the name: the listener cancels any pending wait, finishes answering a launch that
+/// already arrived, closes its handle and ends; this returns once it has.
+pub(super) fn release() {
+    let Some(listener) = LISTENER.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+    listener.stop();
+    // The name is free, and the app holds nothing a next process needs: say so, so that one
+    // claims now rather than once this process has ended (`released`). A manual-reset event,
+    // set; its handle stays open, so it lasts as long as this process.
+    // SAFETY: the name is NUL-terminated and outlives the call.
+    unsafe { CreateEventW(std::ptr::null(), 1, 1, released_name(GetCurrentProcessId()).as_ptr()) };
 }
 
 /// The event a process sets once it has let go of the name itself ([`release`]), per session.
@@ -113,7 +180,7 @@ pub(super) fn claim(id: &str) -> bool {
         let mut slow: Option<Instant> = None;
         loop {
             match create(&name) {
-                Ok(pipe) => return claimed(name, pipe),
+                Ok(pipe) => return claimed(pipe),
                 Err(ERROR_ACCESS_DENIED) => {}
                 // Not a pipe name this process may use: run unclaimed rather than not at all.
                 Err(_) => return true,
@@ -131,7 +198,7 @@ pub(super) fn claim(id: &str) -> bool {
                 Sent::Delivered => return false,
                 // It quits: the name is free once it has closed what it holds.
                 Sent::Quitting(server) => match wait_free(&name, server) {
-                    Free::Claimed(pipe) => return claimed(name, pipe),
+                    Free::Claimed(pipe) => return claimed(pipe),
                     // Still not ended after the wait (a debugger holding an exiting thread, a
                     // driver that doesn't let go): pass this name over, as a quit's own wait does.
                     Free::Held => break,
@@ -153,9 +220,8 @@ pub(super) fn claim(id: &str) -> bool {
     true
 }
 
-fn claimed(name: Vec<u16>, pipe: HANDLE) -> bool {
-    CLAIMED.set(name).ok();
-    listen(pipe);
+fn claimed(pipe: HANDLE) -> bool {
+    *LISTENER.lock().unwrap_or_else(|e| e.into_inner()) = Listener::start(pipe, CLIENT_TIMEOUT, relaunched);
     true
 }
 
@@ -274,15 +340,16 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
 
-/// The pipe's first instance, or the error that says why not (`ERROR_ACCESS_DENIED`: another
-/// process has it).
+/// The pipe's first instance, opened overlapped so `ConnectNamedPipe`, `ReadFile` and
+/// `WriteFile` can be bounded by deadlines and cancelled on `release`; or the error that says
+/// why not (`ERROR_ACCESS_DENIED`: another process has it).
 fn create(name: &[u16]) -> Result<HANDLE, u32> {
     // SAFETY: `name` is NUL-terminated and outlives the call; no security attributes means
     // the default ACL, which lets only this user (and administrators) write to it.
     let pipe = unsafe {
         CreateNamedPipeW(
             name.as_ptr(),
-            PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE | FILE_FLAG_OVERLAPPED,
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
             PIPE_UNLIMITED_INSTANCES,
             16,
@@ -295,45 +362,86 @@ fn create(name: &[u16]) -> Result<HANDLE, u32> {
     if pipe == INVALID_HANDLE_VALUE { Err(unsafe { GetLastError() }) } else { Ok(pipe) }
 }
 
-/// Reads one launch at a time from the pipe until `release` (or the process ends), and answers
+/// Waits for one client to connect to the overlapped server `pipe`, or returns false when
+/// `stop` is signalled. `ERROR_NO_DATA` means a client connected, wrote and closed before this
+/// call: its buffered bytes are still readable and `DisconnectNamedPipe` must still reset the pipe.
+fn connect(pipe: HANDLE, stop: &StopEvent) -> bool {
+    if stop.is_set() {
+        return false;
+    }
+    matches!(
+        io_result(pipe, None, Some(stop.handle()), |o| {
+            // SAFETY: `pipe` is an overlapped server handle; `o` outlives the wait in `io_result`.
+            unsafe { ConnectNamedPipe(pipe, o) }
+        }),
+        Ok(_) | Err(ERROR_PIPE_CONNECTED) | Err(ERROR_NO_DATA)
+    )
+}
+
+/// Writes the one-byte `byte` answer and waits until the client reads it and closes its end (or
+/// `deadline` / `stop` fires), so `DisconnectNamedPipe` doesn't discard an unread answer and a
+/// client that never reads can't wedge the listener.
+fn answer(pipe: HANDLE, byte: u8, deadline: Instant, stop: Option<HANDLE>) -> Result<(), (&'static str, u32)> {
+    let buf = [byte];
+    match io_result(pipe, Some(deadline), stop, |o| {
+        // SAFETY: writes one byte from `buf`, which outlives the wait in `io_result`.
+        unsafe { WriteFile(pipe, buf.as_ptr(), 1, std::ptr::null_mut(), o) }
+    }) {
+        Ok(1) => {}
+        Ok(_) => return Err(("write", 0)),
+        Err(e) => return Err(("write", e)),
+    }
+    let mut drain = [0u8; 1];
+    loop {
+        match io_result(pipe, Some(deadline), stop, |o| {
+            // SAFETY: reads at most one byte into `drain`, which outlives the wait in `io_result`.
+            unsafe { ReadFile(pipe, drain.as_mut_ptr(), 1, std::ptr::null_mut(), o) }
+        }) {
+            Err(ERROR_BROKEN_PIPE) => return Ok(()),
+            // A normal v2 client writes nothing after its framed message; unexpected bytes mean
+            // it isn't following the handshake.
+            Ok(0) => {}
+            Ok(_) => return Err(("flush", 0)),
+            Err(e) => return Err(("flush", e)),
+        }
+    }
+}
+
+/// Reads one launch at a time from the pipe until `stop` (or the process ends), and answers
 /// each (`ACCEPTED`, or `QUITTING` while the app quits: the launch then claims the instance
 /// itself once this process lets go). The handle stays open meanwhile, so the name stays this
 /// process's.
-fn listen(pipe: HANDLE) {
-    let pipe = pipe as usize;
-    let spawned = std::thread::Builder::new().name("rune-instance".into()).spawn(move || {
-        let pipe = pipe as HANDLE;
-        loop {
-            // SAFETY: `pipe` is the open server handle; a client that connected before this
-            // call answers ERROR_PIPE_CONNECTED.
-            let connected = unsafe { ConnectNamedPipe(pipe, std::ptr::null_mut()) } != 0 || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
-            if connected && let Some(launch) = read(pipe) {
+fn serve(pipe: HANDLE, timeout: Duration, stop: &StopEvent, on_launch: &impl Fn(Vec<String>) -> bool) {
+    loop {
+        if stop.is_set() {
+            break;
+        }
+        if connect(pipe, stop) {
+            let read_deadline = crate::time::now() + timeout;
+            if let Some(launch) = read(pipe, read_deadline, stop) {
                 hold();
-                let quitting = crate::quit::quitting();
+                let stopping = stop.is_set();
+                let quitting = crate::quit::quitting() || stopping;
                 // A launch that waits for its answer is acted on only once it has read it: one
-                // that gave up first (the flush fails once it closes its end) asks again, and
-                // that ask is the one acted on, so a click opens once.
+                // that gave up first (or never reads its answer) asks again, and that ask is the
+                // one acted on, so a click opens once.
                 let told = !launch.answers || {
-                    let answer = [if quitting { QUITTING } else { ACCEPTED }];
-                    let mut written = 0;
-                    // SAFETY: one byte from `answer` to the connected client; the flush waits
-                    // for the client to read it (or to close), so the disconnect below
-                    // doesn't discard it. The error is read right after the call that failed.
-                    let (wrote, flushed) = unsafe {
-                        let wrote = WriteFile(pipe, answer.as_ptr(), 1, &mut written, std::ptr::null_mut()) != 0 && written == 1;
-                        let wrote_error = GetLastError();
-                        let flushed = wrote && FlushFileBuffers(pipe) != 0;
-                        (if wrote { Ok(()) } else { Err(wrote_error) }, if flushed || !wrote { Ok(()) } else { Err(GetLastError()) })
-                    };
-                    if let Err(e) = wrote.and(flushed) {
-                        eprintln!("rune-instance: a launch gave up before it read its answer ({} failed, error {e}); not acted on", if wrote.is_err() { "write" } else { "flush" });
+                    let byte = if quitting { QUITTING } else { ACCEPTED };
+                    let wait = if stopping { timeout.min(ANSWER_WITHIN) } else { timeout };
+                    let answer_deadline = crate::time::now() + wait;
+                    let answer_stop = (!stopping).then(|| stop.handle());
+                    match answer(pipe, byte, answer_deadline, answer_stop) {
+                        Ok(()) => true,
+                        Err((phase, e)) => {
+                            eprintln!("rune-instance: a launch gave up before it read its answer ({phase} failed, error {e}); not acted on");
+                            false
+                        }
                     }
-                    wrote.is_ok() && flushed.is_ok()
                 };
                 // A launch told the app quits claims the instance itself; one that couldn't
                 // be told (an older sender) is started again once this process exits.
                 if told && !(quitting && launch.answers) {
-                    let acted = relaunched(launch.args);
+                    let acted = on_launch(launch.args);
                     // Counted by the harness (no arguments: they may hold what the person typed).
                     if HOLD.get().is_some_and(|ms| *ms > 0) {
                         eprintln!("rune-instance: {}", if acted { "acted on a launch" } else { "a launch asked again after it was acted on; skipped" });
@@ -342,20 +450,13 @@ fn listen(pipe: HANDLE) {
             }
             // SAFETY: ends this client's connection, so the next can connect.
             unsafe { DisconnectNamedPipe(pipe) };
-            if RELEASED.load(Ordering::Acquire) {
-                // SAFETY: the server handle this thread owns, closed once: the name is free.
-                unsafe { CloseHandle(pipe) };
-                return;
-            }
         }
-    });
-    match spawned {
-        Ok(listener) => *LISTENER.lock().unwrap_or_else(|e| e.into_inner()) = Some(listener),
-        // SAFETY: the handle no thread took.
-        Err(_) => unsafe {
-            CloseHandle(pipe as HANDLE);
-        },
+        if stop.is_set() {
+            break;
+        }
     }
+    // SAFETY: the server handle this thread owns, closed once: the name is free.
+    unsafe { CloseHandle(pipe) };
 }
 
 /// A harness's stand-in for a busy machine: `RUNE_INSTANCE_HOLD_MS` holds each launch that long
@@ -379,35 +480,52 @@ struct Launch {
 
 /// One client's message: `MAGIC`, the body's length (u32, little-endian) and the body, after
 /// which the client waits for its answer; or, from an older sender, `MAGIC_V1` and the body
-/// until it closes its end. None for anything else.
-fn read(pipe: HANDLE) -> Option<Launch> {
+/// until it closes its end. None for anything else, or when the client exceeds `deadline` or
+/// `MAX_MESSAGE`.
+fn read(pipe: HANDLE, deadline: Instant, stop: &StopEvent) -> Option<Launch> {
+    const V2_HEAD: usize = MAGIC.len() + 4;
     let mut message = Vec::new();
     let mut buf = [0u8; 4096];
-    let complete = |m: &[u8]| {
-        let len = m.strip_prefix(MAGIC)?.get(..4)?;
-        let len = u32::from_le_bytes(len.try_into().ok()?) as usize;
-        (m.len() >= MAGIC.len() + 4 + len).then_some(len)
-    };
+    let mut expected_v2: Option<usize> = None;
     let (body, answers) = loop {
-        if let Some(len) = complete(&message) {
-            break (message[MAGIC.len() + 4..MAGIC.len() + 4 + len].to_vec(), true);
+        if let Some(len) = expected_v2 && message.len() >= V2_HEAD + len {
+            break (&message[V2_HEAD..V2_HEAD + len], true);
         }
-        let mut got = 0;
-        // SAFETY: reads at most `buf.len()` bytes into `buf`.
-        let ok = unsafe { ReadFile(pipe, buf.as_mut_ptr(), buf.len() as u32, &mut got, std::ptr::null_mut()) } != 0;
-        message.extend_from_slice(&buf[..got as usize]);
-        if message.len() > MAX_MESSAGE {
+        let want = match expected_v2 {
+            Some(len) => (V2_HEAD + len - message.len()).min(buf.len()),
+            None => (MAX_V1_WIRE + 1 - message.len()).min(buf.len()),
+        };
+        let got = match io_result(pipe, Some(deadline), Some(stop.handle()), |o| {
+            // SAFETY: reads at most `want <= buf.len()` bytes into `buf`, which outlives the wait.
+            unsafe { ReadFile(pipe, buf.as_mut_ptr(), want as u32, std::ptr::null_mut(), o) }
+        }) {
+            Ok(n) => n as usize,
+            Err(ERROR_BROKEN_PIPE) => break (message.strip_prefix(MAGIC_V1)?, false),
+            Err(_) => return None,
+        };
+        let limit = match expected_v2 {
+            Some(len) => V2_HEAD + len,
+            None => MAX_V1_WIRE,
+        };
+        if got > limit - message.len() {
             return None;
         }
-        // SAFETY: reads this thread's last error.
-        if !ok && unsafe { GetLastError() } == ERROR_BROKEN_PIPE {
-            break (message.strip_prefix(MAGIC_V1)?.to_vec(), false);
-        }
-        if !ok {
+        message.extend_from_slice(&buf[..got]);
+        // Reject bytes that cannot begin either protocol magic right away.
+        let v2_prefix = MAGIC.starts_with(&message[..message.len().min(MAGIC.len())]);
+        let v1_prefix = MAGIC_V1.starts_with(&message[..message.len().min(MAGIC_V1.len())]);
+        if !v2_prefix && !v1_prefix {
             return None;
+        }
+        if expected_v2.is_none() && message.len() >= V2_HEAD && message.starts_with(MAGIC) {
+            let len = u32::from_le_bytes(message[MAGIC.len()..V2_HEAD].try_into().ok()?) as usize;
+            if len > MAX_MESSAGE {
+                return None;
+            }
+            expected_v2 = Some(len);
         }
     };
-    let text = std::str::from_utf8(&body).ok()?;
+    let text = std::str::from_utf8(body).ok()?;
     Some(Launch { args: text.split('\0').filter(|a| !a.is_empty()).map(str::to_owned).collect(), answers })
 }
 
@@ -504,27 +622,61 @@ fn send(name: &[u16], within: Duration) -> Sent {
 /// none when it failed. One that didn't finish in time is cancelled, but if it completed as the
 /// wait ran out, what it moved counts: an answer read is an answer the other end saw taken.
 fn io(pipe: HANDLE, deadline: Instant, start: impl FnOnce(*mut OVERLAPPED) -> i32) -> Option<u32> {
+    io_result(pipe, Some(deadline), None, start).ok()
+}
+
+/// One overlapped operation on `pipe`, optionally bounded by `deadline` and cancellable by
+/// `stop`. Returns the bytes moved, or the Win32 error code when it failed or was cancelled.
+fn io_result(
+    pipe: HANDLE,
+    deadline: Option<Instant>,
+    stop: Option<HANDLE>,
+    start: impl FnOnce(*mut OVERLAPPED) -> i32,
+) -> Result<u32, u32> {
+    if let Some(until) = deadline && crate::time::now() >= until {
+        return Err(WAIT_TIMEOUT);
+    }
     // SAFETY: a manual-reset event, unnamed; closed once below.
     let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
     if event.is_null() {
-        return None;
+        // SAFETY: reads this thread's last error.
+        return Err(unsafe { GetLastError() });
     }
     // SAFETY: an all-zero OVERLAPPED is a valid start for an operation; it lives until the
     // operation is done or cancelled and waited for.
     let mut o: OVERLAPPED = unsafe { std::mem::zeroed() };
     o.hEvent = event;
-    let left = u32::try_from(deadline.saturating_duration_since(crate::time::now()).as_millis()).unwrap_or(u32::MAX);
-    // SAFETY: `o` outlives the operation: it's waited for, or cancelled and waited for, below.
+    // SAFETY: `o` outlives the operation: when `start` pends, it is waited for, or cancelled and
+    // waited for via `GetOverlappedResult(..., 1)`, before returning.
     unsafe {
-        let started = start(&mut o) != 0 || GetLastError() == ERROR_IO_PENDING;
-        let finished = started && WaitForSingleObject(event, left) == WAIT_OBJECT_0;
-        if started && !finished {
-            CancelIoEx(pipe, &o);
+        if start(&mut o) == 0 {
+            let err = GetLastError();
+            if err != ERROR_IO_PENDING {
+                CloseHandle(event);
+                return Err(err);
+            }
+            let left = match deadline {
+                Some(until) => u32::try_from(until.saturating_duration_since(crate::time::now()).as_millis())
+                    .unwrap_or(u32::MAX - 1)
+                    .clamp(1, u32::MAX - 1),
+                None => INFINITE,
+            };
+            let waited = match stop {
+                Some(stop) => {
+                    let handles = [event, stop];
+                    WaitForMultipleObjects(2, handles.as_ptr(), 0, left)
+                }
+                None => WaitForSingleObject(event, left),
+            };
+            if waited != WAIT_OBJECT_0 {
+                CancelIoEx(pipe, &o);
+            }
         }
         let mut n = 0;
-        let ok = started && GetOverlappedResult(pipe, &o, &mut n, 1) != 0;
+        let ok = GetOverlappedResult(pipe, &o, &mut n, 1) != 0;
+        let err = if ok { 0 } else { GetLastError() };
         CloseHandle(event);
-        ok.then_some(n)
+        if ok { Ok(n) } else { Err(err) }
     }
 }
 
@@ -558,3 +710,7 @@ pub(crate) fn raise_front() {
         SetForegroundWindow(found);
     }
 }
+
+#[cfg(test)]
+#[path = "windows_tests.rs"]
+mod tests;
