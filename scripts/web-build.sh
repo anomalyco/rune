@@ -136,6 +136,100 @@ try {
 HTML
 }
 
+# Rune's default fonts embed Inter cut to Latin, Greek and Cyrillic text and fetch the full faces from beside
+# app.js once the first frame is up. Locate them in the build's dep-info first (normalizing Windows backslashes
+# and Make-escaped spaces); Cargo omits non-path (git/registry) crates from dep-info, so fall back to following
+# the package's resolved dependencies in cargo metadata when dep-info has no match.
+copy_inter_faces() {
+    local dep=$1 dest=$2 cut= dir= has_dep=0 full_meta= face=
+    local faces=(Inter-Regular.ttf Inter-Medium.ttf Inter-SemiBold.ttf)
+    if [[ -f $dep ]]; then
+        has_dep=1
+        cut=$(awk '
+            {
+                gsub(/\r$/, "")
+                gsub(/\\ /, "\034")
+                gsub(/\\/, "/")
+                n = split($0, a, /[ \t]+/)
+                for (i = 1; i <= n; i++) {
+                    gsub(/\034/, " ", a[i])
+                    sub(/:$/, "", a[i])
+                    if (a[i] ~ /(^|\/)assets\/web\/first\/Inter-Regular\.ttf$/) {
+                        print a[i]
+                        exit
+                    }
+                }
+            }
+        ' "$dep") || return 1
+        cut=${cut%$'\r'}
+        if [[ -n $cut ]]; then
+            dir=${cut%/first/Inter-Regular.ttf}
+        fi
+    fi
+    if [[ -z $dir ]]; then
+        if ! full_meta=$("$cargo" metadata --format-version 1 --offline --filter-platform wasm32-unknown-unknown); then
+            echo "failed to locate Rune Inter faces: cargo metadata failed" >&2
+            return 1
+        fi
+        dir=$(python3 -c '
+import json, sys
+m = json.load(sys.stdin)
+pkg_name, kind, has_dep = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+pkgs = {p["id"]: p for p in m["packages"]}
+members = set(m.get("workspace_members", []))
+root = next((p["id"] for p in m["packages"] if p["id"] in members and p["name"] == pkg_name), None)
+if root is None:
+    root = next((p["id"] for p in m["packages"] if p["name"] == pkg_name), None)
+if root is None:
+    sys.exit(f"failed to locate Rune Inter faces: package {pkg_name!r} not in cargo metadata")
+resolve = m.get("resolve") or {}
+nodes = {n["id"]: n for n in resolve.get("nodes", [])}
+if root not in nodes:
+    sys.exit(f"failed to locate Rune Inter faces: package {pkg_name!r} missing from resolve graph")
+seen, todo, runes = {root}, [root], []
+while todo:
+    cur = todo.pop()
+    node = nodes.get(cur)
+    if node is None:
+        continue
+    if pkgs[cur]["name"] == "rune":
+        runes.append((pkgs[cur], node))
+    allow_dev = cur == root and kind == "example"
+    for dep in node.get("deps", []):
+        kinds = dep.get("dep_kinds") or [{"kind": None}]
+        if not any(dk.get("kind") is None or (allow_dev and dk.get("kind") == "dev") for dk in kinds):
+            continue
+        pid = dep["pkg"]
+        if pid not in seen and pid in pkgs:
+            seen.add(pid)
+            todo.append(pid)
+embedded = [p for p, n in runes if "embedded-fonts" in n.get("features", []) and not (has_dep and p.get("source") is None)]
+if not embedded:
+    sys.exit(0)
+dirs = set()
+for p in embedded:
+    parts = p["manifest_path"].replace("\\", "/").rsplit("/", 1)
+    dirs.add((parts[0] + "/assets/web") if len(parts) == 2 else "assets/web")
+if len(dirs) != 1:
+    sys.exit("failed to locate Rune Inter faces: multiple rune packages with embedded-fonts found")
+sys.stdout.write(next(iter(dirs)))
+' "$package" "$kind" "$has_dep" <<< "$full_meta") || return 1
+        dir=${dir%$'\r'}
+    fi
+    if [[ -n $dir ]]; then
+        if [[ $dir != /* && $dir != [A-Za-z]:/* && -n ${root:-} && -d "$root/$dir" ]]; then
+            dir="$root/$dir"
+        fi
+        for face in "${faces[@]}"; do
+            if [[ ! -f "$dir/$face" ]]; then
+                echo "missing Rune full Inter face: $dir/$face" >&2
+                return 1
+            fi
+            cp "$dir/$face" "$dest/"
+        done
+    fi
+}
+
 build_once() {
     local start=$SECONDS
     "$cargo" build -p "$package" --target wasm32-unknown-unknown "${build[@]}" "${args[@]}" || return 1
@@ -160,11 +254,7 @@ build_once() {
             "$next/app_bg.wasm" -o "$next/app_bg.opt.wasm" || return 1
         mv "$next/app_bg.opt.wasm" "$next/app_bg.wasm"
     fi
-    # Rune's default fonts embed Inter cut to Latin, Greek and Cyrillic text and fetch the full faces from beside
-    # app.js once the first frame is up: copy those of the Rune this build embedded the cut from.
-    local cut
-    cut=$(tr ' ' '\n' < "${artifact%.wasm}.d" 2>/dev/null | grep -m1 '/assets/web/first/Inter-Regular\.ttf$' || true)
-    if [[ -n $cut ]]; then cp "${cut%/first/*}"/Inter-*.ttf "$next/"; fi
+    copy_inter_faces "${artifact%.wasm}.d" "$next" || return 1
     local entry
     for entry in "$next"/*; do
         if [[ -d $entry ]]; then
