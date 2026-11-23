@@ -86,6 +86,8 @@ function appWindow() {
 
 // Keys that scroll a page when nothing in Rune has focus.
 const SCROLL_KEYS = [' ', 'PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown'];
+// Function keys Rune parses (`named_key_from_str`: F1–F24).
+const FUNCTION_KEY = /^F([1-9]|1\d|2[0-4])$/;
 
 const graphemeSegmenter = typeof Intl?.Segmenter === 'function'
     ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
@@ -309,7 +311,10 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
                 if (field.selectionStart === 0 && field.selectionEnd === 0) editing.push('Backspace');
                 if (field.selectionStart === field.value.length && field.selectionEnd === field.value.length) editing.push('Delete');
             }
-            if (!chord && !editing.includes(event.key)) return;
+            // Forward function keys other than what `browserShortcut` leaves to the browser so
+            // focused fields receive them as canvas focus does.
+            const functionKey = FUNCTION_KEY.test(event.key) && !browserShortcut(event);
+            if (!chord && !functionKey && !editing.includes(event.key)) return;
             if (chord && event.key.toLowerCase() === 'v') return;
             event.preventDefault();
             key(event.key, event);

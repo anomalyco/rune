@@ -1257,3 +1257,89 @@ test('syncA11y mirrors radiogroup container with child radios and determinate/in
 
     bridge.destroy(h);
 });
+
+test('keydown forwards non-browser function keys on focused textarea and password fields', () => {
+    const { events, h } = setup();
+
+    bridge.sync(h, 'field', 'hello', 0, 5, 5, false);
+    bridge.activate(h);
+
+    // Every F1–F24 except browser-reserved F5 and F12 is prevented and forwarded.
+    for (let n = 1; n <= 24; n++) {
+        if (n === 5 || n === 12) continue;
+        const name = `F${n}`;
+        events.length = 0;
+        assert.equal(dispatchKeydown(h.textarea, { key: name, code: name }), true, `${name} should be prevented`);
+        assert.deepEqual(events, [{
+            kind: 'key',
+            key: name,
+            code: name,
+            shift: false,
+            ctrl: false,
+            alt: false,
+            meta: false,
+            repeat: false,
+        }]);
+    }
+
+    // Shift/Alt modifiers and repeat pass through for non-chord function keys.
+    events.length = 0;
+    assert.equal(dispatchKeydown(h.textarea, { key: 'F10', code: 'F10', shiftKey: true }), true);
+    assert.equal(dispatchKeydown(h.textarea, { key: 'F8', code: 'F8', altKey: true, repeat: true }), true);
+    assert.deepEqual(events, [
+        { kind: 'key', key: 'F10', code: 'F10', shift: true, ctrl: false, alt: false, meta: false, repeat: false },
+        { kind: 'key', key: 'F8', code: 'F8', shift: false, ctrl: false, alt: true, meta: false, repeat: true },
+    ]);
+
+    // Focused password fields forward non-browser function keys too.
+    events.length = 0;
+    bridge.sync(h, 'secret', '', 0, 0, 0, true);
+    bridge.activate(h);
+    assert.equal(dispatchKeydown(h.password, { key: 'F8', code: 'F8' }), true);
+    assert.deepEqual(events, [{
+        kind: 'key',
+        key: 'F8',
+        code: 'F8',
+        shift: false,
+        ctrl: false,
+        alt: false,
+        meta: false,
+        repeat: false,
+    }]);
+
+    bridge.destroy(h);
+});
+
+test('keydown leaves browser-reserved function keys, non-function keys, and composing function keys untouched', () => {
+    const { events, h } = setup();
+
+    bridge.sync(h, 'field', 'hello', 0, 5, 5, false);
+    bridge.activate(h);
+
+    // Browser-reserved F5 and F12 stay un-prevented and unforwarded on both fields.
+    for (const key of ['F5', 'F12']) {
+        assert.equal(dispatchKeydown(h.textarea, { key, code: key }), false);
+        assert.equal(dispatchKeydown(h.textarea, { key, code: key, shiftKey: true }), false);
+    }
+    bridge.sync(h, 'secret', '', 0, 0, 0, true);
+    bridge.activate(h);
+    for (const key of ['F5', 'F12']) {
+        assert.equal(dispatchKeydown(h.password, { key, code: key }), false);
+    }
+
+    // Out-of-range F-names and regular keys must not be intercepted.
+    bridge.sync(h, 'field', 'hello', 0, 5, 5, false);
+    bridge.activate(h);
+    for (const key of ['F', 'f8', 'F0', 'F01', 'F25', 'Fn', 'a']) {
+        assert.equal(dispatchKeydown(h.textarea, { key, code: key }), false);
+    }
+
+    // IME composition owns function keys (e.g. Japanese kana conversion F6–F10).
+    assert.equal(dispatchKeydown(h.textarea, { key: 'F8', code: 'F8', isComposing: true }), false);
+    assert.equal(dispatchKeydown(h.textarea, { key: 'F8', code: 'F8', keyCode: 229 }), false);
+    h.textarea.dispatchEvent({ type: 'compositionstart' });
+    assert.equal(dispatchKeydown(h.textarea, { key: 'F8', code: 'F8' }), false);
+
+    assert.equal(events.length, 0);
+    bridge.destroy(h);
+});

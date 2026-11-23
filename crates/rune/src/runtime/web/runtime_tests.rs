@@ -167,6 +167,40 @@ fn web_key_forwards_function_keys_f1_through_f24() {
 }
 
 #[test]
+fn web_key_delivers_unmodified_function_key_to_focused_input() {
+    #[derive(Default)]
+    struct S { edit: crate::TextEdit, fallback: Vec<crate::Key> }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        crate::text_input(&s.edit, crate::tok::type_::BODY).key("input")
+            .on_edit(|s: &mut S| &mut s.edit)
+            .on_input_key(|s: &mut S, ev, _| {
+                if ev.key == crate::Key::Function(8) {
+                    s.edit.insert("[F8]");
+                    true
+                } else {
+                    false
+                }
+            })
+    }
+    let mut rt = Runtime::new(S::default(), view, (300.0, 100.0), Env::default());
+    rt.on_key = Some(|s, ev, _| { s.fallback.push(ev.key.clone()); true });
+    rt.frame(0.0);
+    let key = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("input")).unwrap().path.clone();
+    rt.set_focus(Some(key), true);
+    rt.frame(0.0);
+
+    rt.web_key(&json!({"kind":"key", "key":"F8", "code":"F8", "shift":false, "ctrl":false, "alt":false, "meta":false, "repeat":false}));
+    rt.frame(0.0);
+    assert_eq!(rt.state.edit.text, "[F8]");
+    assert!(rt.state.fallback.is_empty());
+
+    rt.web_key(&json!({"kind":"key", "key":"F9", "code":"F9", "shift":false, "ctrl":false, "alt":false, "meta":false, "repeat":false}));
+    rt.frame(0.0);
+    assert_eq!(rt.state.edit.text, "[F8]");
+    assert_eq!(rt.state.fallback, [crate::Key::Function(9)]);
+}
+
+#[test]
 fn web_key_keeps_cmd_space_as_text_and_normalizes_non_ascii_chords() {
     type Seen = Vec<(crate::Key, Option<crate::PhysicalKeyCode>)>;
     fn view(_: &Seen, _: &mut Cx<Seen>) -> El { crate::el() }
