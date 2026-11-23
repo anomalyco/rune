@@ -318,6 +318,7 @@ fn virtual_desktop_window_follows_fit_content_height_and_resize_window() {
 
 #[test]
 fn virtual_desktop_reports_frames_to_on_frame_encoded() {
+    let _turn = crate::tooling::headless_run::test_turn();
     let dir = std::env::temp_dir().join(format!("rune-desktop-encoded-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let backdrop = dir.join("backdrop.png");

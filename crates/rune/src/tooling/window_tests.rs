@@ -7,7 +7,7 @@ fn transparent_png_unpremultiplies_in_linear_space() {
 
 #[test]
 fn headless_snap_after_uncaptured_frames_paces_and_writes_pixels() {
-    let _turn = super::tests::HEADLESS.lock().unwrap_or_else(|e| e.into_inner());
+    let _turn = super::headless_run::test_turn();
     let snap = std::env::temp_dir().join(format!("rune-paced-snap-{}.png", std::process::id()));
     let spec = crate::AppSpec::new("paced", (32.0, 20.0), || (), |_, _| {
         crate::el().w_full().h_full().fill(crate::oklch(0.7, 0.15, 220.0))
@@ -94,7 +94,7 @@ fn chrome_overlay_mirrors_traffic_lights_and_overlap_zone_in_rtl() {
 
 #[test]
 fn headless_chrome_overlay_paints_nothing_over_borderless_window() {
-    let _turn = super::tests::HEADLESS.lock().unwrap_or_else(|e| e.into_inner());
+    let _turn = super::headless_run::test_turn();
     let snap = std::env::temp_dir().join(format!("rune-borderless-chrome-{}.png", std::process::id()));
     let run = |chrome: crate::Chrome, titlebar: Option<crate::Titlebar>| {
         let spec = crate::AppSpec::new("borderless", (120.0, 40.0), || (), |_, _| {
@@ -131,7 +131,7 @@ fn headless_chrome_overlay_paints_nothing_over_borderless_window() {
 
 #[test]
 fn headless_chrome_overlay_follows_dynamic_titlebar_changes() {
-    let _turn = super::tests::HEADLESS.lock().unwrap_or_else(|e| e.into_inner());
+    let _turn = super::headless_run::test_turn();
     let dir = std::env::temp_dir().join(format!("rune-dynamic-chrome-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

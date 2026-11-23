@@ -1,0 +1,1 @@
+- Tests (`tooling`): serialize `virtual_desktop_reports_frames_to_on_frame_encoded` with the headless-run test turn and assert that turn inside `headless_run::publish` under `cfg(test)`, so unit tests cannot race on the process-wide `headless_run()` slot.
