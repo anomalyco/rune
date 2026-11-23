@@ -1,0 +1,1 @@
+- Paint: elements whose drawn width or height is zero no longer emit fill, gradient, border, or zero-area shadow instances, so zero-height or zero-width elements at fractional device coordinates paint nothing instead of a one-pixel line.

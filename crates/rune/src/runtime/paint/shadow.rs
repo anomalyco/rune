@@ -26,6 +26,9 @@ pub(in crate::runtime) fn push_shadow(out: &mut Vec<Instance>, sh: &crate::el::S
     let [x, y, w, h] = cast.rect;
     let sp = sh.spread * cast.k_px;
     let rect = [x + sh.x * cast.k_px - sp, y + sh.y * cast.k_px - sp, w + 2.0 * sp, h + 2.0 * sp];
+    if rect[2] <= 0.0 || rect[3] <= 0.0 {
+        return;
+    }
     let sradii = cast.radii.map(|v| if v > 0.0 { (v + sp).max(0.0) } else { 0.0 });
     let (clip, fade) = (cast.clip, crate::render::pack_fade(cast.fade, cast.clip, cast.clip));
     let fill = premul(c, cast.opacity, cast.srgb);
