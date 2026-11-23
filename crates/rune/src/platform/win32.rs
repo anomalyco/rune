@@ -350,10 +350,19 @@ impl OverlayWindow {
     pub fn set_input(&mut self, input: OverlayInput) {
         self.input.input.set(input);
         self.refresh_watch();
-        if let Some((x, y)) = pointer_position() { self.input.observe(POINT { x, y }); }
+        self.observe_current();
     }
     pub fn set_follow_pointer(&mut self, follow: bool) { self.input.follow.set(follow); self.refresh_watch(); }
 
+    fn current_pointer(&self) -> Option<(i32, i32)> {
+        match &self.watch {
+            Some(watch) => watch.current_point(),
+            None => pointer_position(),
+        }
+    }
+    fn observe_current(&self) {
+        if let Some((x, y)) = self.current_pointer() { self.input.observe(POINT { x, y }); }
+    }
     fn refresh_watch(&mut self) {
         if self.input.visible.get() && self.input.track() {
             if self.watch.is_none() { self.watch = Some(crate::platform::win32::pointer::MouseWatch::new(self.wake.clone())); }
@@ -367,7 +376,7 @@ impl OverlayWindow {
         self.input.scale.set(scale);
         if self.input.regions.borrow().as_slice() != regions { *self.input.regions.borrow_mut() = regions.to_vec(); }
         if let Some(watch) = &self.watch { watch.geometry(self.input.hwnd, self.input.follow.get()); }
-        if let Some((x, y)) = pointer_position() {
+        if let Some((x, y)) = self.current_pointer() {
             self.input.observe(POINT { x, y });
             if let Some(watch) = &self.watch { watch.observe((x, y)); }
         }
@@ -396,11 +405,12 @@ impl OverlayWindow {
         if read >= 0 && cloaked != 0 { return Err(format!("Windows cloaked the overlay window (DWMWA_CLOAKED {cloaked:#x})")); }
         self.input.visible.set(true);
         raise_levels();
-        if self.observing { return Ok(()); }
-        INPUTS.with(|inputs| inputs.borrow_mut().push(self.input.clone()));
-        self.refresh_watch();
-        self.observing = true;
-        if let Some((x, y)) = pointer_position() { self.input.observe(POINT { x, y }); }
+        if !self.observing {
+            INPUTS.with(|inputs| inputs.borrow_mut().push(self.input.clone()));
+            self.refresh_watch();
+            self.observing = true;
+        }
+        self.observe_current();
         Ok(())
     }
     /// Gives the shown window the foreground and the keys, for `request_keys`, when Windows lets
@@ -413,9 +423,7 @@ impl OverlayWindow {
     /// Keeps the shown window up at `alpha` (255 opaque) while it fades out, taking no clicks.
     #[allow(unsafe_code)]
     pub fn fade(&self, alpha: u8) {
-        if !self.input.fading.replace(true) && let Some((x, y)) = pointer_position() {
-            self.input.observe(POINT { x, y });
-        }
+        if !self.input.fading.replace(true) { self.observe_current(); }
         // SAFETY: a Win32 call on a live layered window owned by this thread.
         unsafe { SetLayeredWindowAttributes(self.input.hwnd, 0, alpha, LWA_ALPHA); }
     }
