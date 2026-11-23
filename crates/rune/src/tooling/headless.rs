@@ -303,6 +303,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
         renderer,
         target,
         readback,
+        in_flight: crate::tooling::record::InFlight::new(crate::tooling::record::DEPTH),
         alpha,
         overlay,
         reports,

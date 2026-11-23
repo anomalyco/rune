@@ -56,6 +56,7 @@ pub(super) struct HeadlessLoop<'a> {
     pub(super) renderer: Renderer,
     pub(super) target: Offscreen,
     pub(super) readback: crate::tooling::record::Readback<Shot>,
+    pub(super) in_flight: crate::tooling::record::InFlight,
     pub(super) alpha: Option<crate::render::surface_alpha::AlphaSurface>,
     pub(super) overlay: Option<(crate::input::keycaps::Overlay, Renderer)>,
     pub(super) reports: crate::frame::encoded::FrameReports,
@@ -285,7 +286,8 @@ impl<F: FnMut(Shot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
     #[inline]
     fn submit_and_present(&mut self, prepared: PreparedHeadlessFrame, _info: &StepInfo) -> Instant {
         let s = &mut *self.state;
-        s.renderer.submit(&s.gpu.queue, prepared.encoder);
+        let submission = s.renderer.submit(&s.gpu.queue, prepared.encoder);
+        s.in_flight.push(submission);
         self.encoded_stamp = s.reports.stamp();
         if self.want_pixels { s.readback.submitted(); }
         crate::time::now()
@@ -324,6 +326,7 @@ impl<F: FnMut(Shot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
         if s.has_comp {
             // Pace like a display link so a compositor's async readbacks (GPU timers) land between frames.
             rune_gpu::health::poll(&s.gpu.device, wgpu::PollType::wait_indefinitely()).ok();
+            s.in_flight.clear();
         }
         if let Some(tr) = s.trace.as_mut() {
             tr.frame_timed_core(self.app.rt_mut(), self.real_t * 1000.0, ms, FrameTiming::default());
@@ -332,6 +335,7 @@ impl<F: FnMut(Shot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
         if self.first_pixels {
             let wait = crate::time::now();
             let done = s.readback.finish(&s.gpu.device);
+            s.in_flight.clear();
             let marker = json!({
                 "headless_ms": s.launched.elapsed().as_secs_f64() * 1000.0,
                 "state_ms": s.state_ms, "runtime_ms": s.runtime_ms, "gpu_init_ms": s.init_ms,
@@ -344,6 +348,7 @@ impl<F: FnMut(Shot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
         } else if self.want_pixels {
             for (shot, px) in s.readback.ready(&s.gpu.device) { (self.deliver)(shot, px); }
         }
+        s.in_flight.pace(&s.gpu.device);
         if self.k == s.snap_frame
             && s.args.chrome_overlay
             && let Some(lights) = s.chrome.traffic_light_rects()

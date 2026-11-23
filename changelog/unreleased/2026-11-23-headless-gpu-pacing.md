@@ -1,0 +1,1 @@
+- Headless runs (`--snap`, `--script`, and `--desktop`) now bound in-flight GPU submissions to three frames by waiting on the oldest submission, preventing unbounded private-memory growth on Windows D3D12 when frames submit faster than the GPU retires them.
