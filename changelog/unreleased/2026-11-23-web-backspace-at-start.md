@@ -1,0 +1,1 @@
+- Web: `bridge.js` now forwards `Backspace` as a key event from the hidden textarea (on `keydown` and backward-delete `beforeinput`) when the caret is at offset 0 with nothing selected, matching native platforms and password fields where browsers fire no `input` event.

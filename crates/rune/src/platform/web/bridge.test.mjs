@@ -411,3 +411,132 @@ test('sync exposes only the active editing proxy and returns both to inert on bl
 
     bridge.destroy(h);
 });
+
+function dispatchKeydown(target, props) {
+    let prevented = false;
+    target.dispatchEvent({
+        type: 'keydown',
+        code: '',
+        shiftKey: false,
+        ctrlKey: false,
+        altKey: false,
+        metaKey: false,
+        repeat: false,
+        isComposing: false,
+        keyCode: 0,
+        preventDefault() { prevented = true; },
+        ...props,
+    });
+    return prevented;
+}
+
+function dispatchBeforeInput(target, props) {
+    let prevented = false;
+    target.dispatchEvent({
+        type: 'beforeinput',
+        isComposing: false,
+        preventDefault() { prevented = true; },
+        ...props,
+    });
+    return prevented;
+}
+
+test('keydown forwards Backspace at offset 0 with empty selection on textarea', () => {
+    const { events, h } = setup();
+
+    // Empty field: caret at 0..0.
+    bridge.sync(h, 'field', '', 0, 0, 0, false);
+    bridge.activate(h);
+    assert.equal(dispatchKeydown(h.textarea, { key: 'Backspace', code: 'Backspace', keyCode: 8 }), true);
+    assert.deepEqual(events, [{
+        kind: 'key',
+        key: 'Backspace',
+        code: 'Backspace',
+        shift: false,
+        ctrl: false,
+        alt: false,
+        meta: false,
+        repeat: false,
+    }]);
+
+    // Non-empty field with caret at offset 0: modifiers and repeat pass through.
+    events.length = 0;
+    bridge.sync(h, 'field', 'hello', 0, 0, 0, false);
+    assert.equal(dispatchKeydown(h.textarea, {
+        key: 'Backspace',
+        code: 'Backspace',
+        altKey: true,
+        repeat: true,
+        keyCode: 8,
+    }), true);
+    assert.deepEqual(events, [{
+        kind: 'key',
+        key: 'Backspace',
+        code: 'Backspace',
+        shift: false,
+        ctrl: false,
+        alt: true,
+        meta: false,
+        repeat: true,
+    }]);
+
+    bridge.destroy(h);
+});
+
+test('keydown leaves Backspace to browser editing past offset 0, with a selection, or while composing', () => {
+    const { events, h } = setup();
+
+    // Caret after text: browser deletes via input event.
+    bridge.sync(h, 'field', 'hello', 0, 5, 5, false);
+    bridge.activate(h);
+    assert.equal(dispatchKeydown(h.textarea, { key: 'Backspace', code: 'Backspace', keyCode: 8 }), false);
+    assert.equal(events.length, 0);
+
+    // Non-empty forward selection starting at 0.
+    bridge.sync(h, 'field', 'hello', 0, 0, 3, false);
+    assert.equal(dispatchKeydown(h.textarea, { key: 'Backspace', code: 'Backspace', keyCode: 8 }), false);
+    assert.equal(events.length, 0);
+
+    // Non-empty backward selection ending at 0.
+    bridge.sync(h, 'field', 'hello', 0, 3, 0, false);
+    assert.equal(dispatchKeydown(h.textarea, { key: 'Backspace', code: 'Backspace', keyCode: 8 }), false);
+    assert.equal(events.length, 0);
+
+    // IME composition at offset 0 must not be intercepted.
+    bridge.sync(h, 'field', '', 0, 0, 0, false);
+    assert.equal(dispatchKeydown(h.textarea, { key: 'Backspace', code: 'Backspace', isComposing: true, keyCode: 8 }), false);
+    assert.equal(dispatchKeydown(h.textarea, { key: 'Backspace', code: 'Backspace', keyCode: 229 }), false);
+    h.textarea.dispatchEvent({ type: 'compositionstart' });
+    assert.equal(dispatchKeydown(h.textarea, { key: 'Backspace', code: 'Backspace', keyCode: 8 }), false);
+    assert.equal(events.length, 0);
+
+    bridge.destroy(h);
+});
+
+test('beforeinput forwards backward delete at offset 0 when soft keyboard bypasses keydown', () => {
+    const { events, h } = setup();
+
+    bridge.sync(h, 'field', 'hello', 0, 0, 0, false);
+    bridge.activate(h);
+    assert.equal(dispatchBeforeInput(h.textarea, { inputType: 'deleteContentBackward' }), true);
+    assert.equal(dispatchBeforeInput(h.textarea, { inputType: 'deleteWordBackward' }), true);
+    assert.deepEqual(events, [
+        { kind: 'key', key: 'Backspace', code: 'Backspace', shift: false, ctrl: false, alt: false, meta: false, repeat: false },
+        { kind: 'key', key: 'Backspace', code: 'Backspace', shift: false, ctrl: false, alt: true, meta: false, repeat: false },
+    ]);
+
+    // Must not intercept forward delete, non-zero caret, selection, or composition.
+    events.length = 0;
+    assert.equal(dispatchBeforeInput(h.textarea, { inputType: 'deleteContentForward' }), false);
+    assert.equal(dispatchBeforeInput(h.textarea, { inputType: 'deleteContentBackward', isComposing: true }), false);
+    bridge.sync(h, 'field', 'hello', 0, 1, 1, false);
+    assert.equal(dispatchBeforeInput(h.textarea, { inputType: 'deleteContentBackward' }), false);
+    bridge.sync(h, 'field', 'hello', 0, 0, 2, false);
+    assert.equal(dispatchBeforeInput(h.textarea, { inputType: 'deleteContentBackward' }), false);
+    bridge.sync(h, 'field', '', 0, 0, 0, false);
+    h.textarea.dispatchEvent({ type: 'compositionstart' });
+    assert.equal(dispatchBeforeInput(h.textarea, { inputType: 'deleteContentBackward' }), false);
+    assert.equal(events.length, 0);
+
+    bridge.destroy(h);
+});
