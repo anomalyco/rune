@@ -171,15 +171,11 @@ fn open(url: &str) -> Result<(), OpenUrlError> { crate::platform::web::open_url(
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 fn open(url: &str) -> Result<(), OpenUrlError> {
-    use objc2::{class, msg_send, rc::{Retained, autoreleasepool}};
-    use objc2_foundation::{NSString, NSURL};
-    let ascii = percent_encode_non_ascii(url);
+    use objc2::{class, msg_send, rc::autoreleasepool};
     // SAFETY: NSWorkspace's shared instance lives for the process; `openURL:` takes an NSURL
     // and returns BOOL. Handlers run on the UI thread.
     autoreleasepool(|_| unsafe {
-        let ns = NSString::from_str(&ascii);
-        let url: Option<Retained<NSURL>> = NSURL::URLWithString(&ns);
-        let url = url.ok_or(OpenUrlError::Invalid)?;
+        let url = build_macos_url(url).ok_or(OpenUrlError::Invalid)?;
         let workspace: *mut objc2::runtime::AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
         if workspace.is_null() { return Err(OpenUrlError::Failed("NSWorkspace unavailable".into())); }
         let opened: objc2::runtime::Bool = msg_send![workspace, openURL: &*url];
@@ -188,17 +184,39 @@ fn open(url: &str) -> Result<(), OpenUrlError> {
 }
 
 #[cfg(target_os = "macos")]
-fn percent_encode_non_ascii(url: &str) -> std::borrow::Cow<'_, str> {
+fn build_macos_url(url: &str) -> Option<objc2::rc::Retained<objc2_foundation::NSURL>> {
+    use objc2_foundation::{NSString, NSURL, NSURLComponents};
+    let ns = NSString::from_str(&encode_outside_host(url));
+    // Foundation IDNA-encodes the host (UTS 46, as Chrome's URL parser does) in `URLWithString:`
+    // for apps linked with the macOS 14 SDK, and in `NSURLComponents` from macOS 13.
+    NSURL::URLWithString(&ns).or_else(|| NSURLComponents::componentsWithString(&ns).and_then(|c| c.URL()))
+}
+
+/// Percent-encodes non-ASCII bytes everywhere but an http(s) link's host, which Foundation
+/// IDNA-encodes. Only the host is left for it to fix, so it leaves existing `%XX` escapes alone.
+#[cfg(any(target_os = "macos", test))]
+fn encode_outside_host(url: &str) -> std::borrow::Cow<'_, str> {
     if url.is_ascii() { return std::borrow::Cow::Borrowed(url); }
+    let host = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).map(|after| {
+        let start = url.len() - after.len();
+        let authority = &after[..after.find(['/', '?', '#']).unwrap_or(after.len())];
+        let host_start = authority.rfind('@').map_or(0, |i| i + 1);
+        let host_end = authority[host_start..].find(':').map_or(authority.len(), |i| host_start + i);
+        start + host_start..start + host_end
+    });
+    let host = host.unwrap_or(0..0);
     let mut out = String::with_capacity(url.len() + 16);
-    for &b in url.as_bytes() {
+    let encode = |out: &mut String, part: &str| for &b in part.as_bytes() {
         if b < 0x80 {
             out.push(b as char);
         } else {
             use std::fmt::Write;
             write!(out, "%{b:02X}").ok();
         }
-    }
+    };
+    encode(&mut out, &url[..host.start]);
+    out.push_str(&url[host.clone()]);
+    encode(&mut out, &url[host.end..]);
     std::borrow::Cow::Owned(out)
 }
 
@@ -365,5 +383,75 @@ mod tests {
             "https://example.com/clicked",
         ]);
         assert!(rt.take_url_requests().is_empty());
+    }
+
+    #[test]
+    fn macos_url_prep_preserves_host_and_encodes_rest() {
+        assert_eq!(encode_outside_host("https://münchen.de"), "https://münchen.de");
+        assert_eq!(
+            encode_outside_host("https://münchen.de/a%20b/straße?q=café%20latte#ü%20x"),
+            "https://münchen.de/a%20b/stra%C3%9Fe?q=caf%C3%A9%20latte#%C3%BC%20x",
+        );
+        assert_eq!(
+            encode_outside_host("https://üser%201:päss@münchen.de:8443/straße"),
+            "https://%C3%BCser%201:p%C3%A4ss@münchen.de:8443/stra%C3%9Fe",
+        );
+        assert_eq!(
+            encode_outside_host("https://[::1]:8080/straße"),
+            "https://[::1]:8080/stra%C3%9Fe",
+        );
+        assert_eq!(
+            encode_outside_host("mailto:user@münchen.de?subject=Grüß%20Gott"),
+            "mailto:user@m%C3%BCnchen.de?subject=Gr%C3%BC%C3%9F%20Gott",
+        );
+        assert_eq!(
+            encode_outside_host("https://example.com/a%20b?c=%2F"),
+            "https://example.com/a%20b?c=%2F",
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_build_url_idna_encodes_host_without_double_encoding() {
+        use objc2::rc::autoreleasepool;
+        use objc2_foundation::{NSString, NSURLComponents};
+        autoreleasepool(|_| {
+            for (input, want) in [
+                ("https://münchen.de", "https://xn--mnchen-3ya.de"),
+                ("https://MÜNCHEN.DE/Path", "https://xn--mnchen-3ya.de/Path"),
+                ("https://faß.de/", "https://xn--fa-hia.de/"),
+                ("https://日本語.jp/パス", "https://xn--wgv71a119e.jp/%E3%83%91%E3%82%B9"),
+                ("https://a\u{3002}b.example/", "https://a.b.example/"),
+                ("https://e\u{0301}.example/", "https://xn--9ca.example/"),
+                (
+                    "https://münchen.de/a%20b/straße?q=café%20latte#ü%20x",
+                    "https://xn--mnchen-3ya.de/a%20b/stra%C3%9Fe?q=caf%C3%A9%20latte#%C3%BC%20x",
+                ),
+                (
+                    "https://üser%201:päss@münchen.de:8443/a%20b/ü",
+                    "https://%C3%BCser%201:p%C3%A4ss@xn--mnchen-3ya.de:8443/a%20b/%C3%BC",
+                ),
+                ("https://example.com/café%20latte", "https://example.com/caf%C3%A9%20latte"),
+                (
+                    "mailto:user@münchen.de?subject=Grüß%20Gott",
+                    "mailto:user@m%C3%BCnchen.de?subject=Gr%C3%BC%C3%9F%20Gott",
+                ),
+            ] {
+                let built = build_macos_url(input).unwrap_or_else(|| panic!("expected NSURL for {input:?}"));
+                let got = built.absoluteString().expect("absoluteString").to_string();
+                assert_eq!(got, want, "{input:?}");
+            }
+            assert!(build_macos_url("https://-münchen.de/").is_none(), "invalid IDNA host must be rejected");
+            // The macOS 13 fallback path (NSURLComponents) must also IDNA-encode the host without
+            // double-encoding existing %XX escapes in the path, query, or fragment.
+            let prepared = encode_outside_host("https://münchen.de/a%20b/straße?q=café%20latte#ü%20x");
+            let fallback = NSURLComponents::componentsWithString(&NSString::from_str(&prepared))
+                .and_then(|c| c.URL())
+                .expect("NSURLComponents fallback");
+            assert_eq!(
+                fallback.absoluteString().expect("absoluteString").to_string(),
+                "https://xn--mnchen-3ya.de/a%20b/stra%C3%9Fe?q=caf%C3%A9%20latte#%C3%BC%20x",
+            );
+        });
     }
 }
