@@ -77,7 +77,8 @@ impl Messages {
             return None;
         }
         let len = u32::from_le_bytes([span[4], span[5], span[6], span[7]]);
-        text.get(start as usize..(start + len) as usize)
+        let text_end = start.checked_add(len)?;
+        text.get(start as usize..text_end as usize)
     }
 }
 
