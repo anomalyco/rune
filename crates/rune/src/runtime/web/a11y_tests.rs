@@ -641,3 +641,188 @@ fn web_a11y_mirror_omits_secure_fields_labels_and_containers() {
         assert_eq!(btn.text, "Reveal", "button label must omit secure descendant text");
     }
 }
+
+#[test]
+fn status_alert_and_live_regions_preserve_role_politeness_and_skip_unchanged_repaints() {
+    struct State {
+        status: &'static str,
+        empty_status: &'static str,
+        tick: u32,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        crate::col().w_full().gap(4.0)
+            .child(crate::text(s.status).key("save-status").role("status").live_region(crate::LiveRegion::Polite))
+            .child(crate::text(s.empty_status).key("empty-status").role("status"))
+            .child(crate::text("Save failed").key("save-alert").role("alert"))
+            .child(crate::text("Muted alert").key("muted-alert").role("alert").live_region(crate::LiveRegion::Off))
+            .child(crate::text("Field error").key("field-err").live_region(crate::LiveRegion::Assertive))
+            .child(crate::text("Activity log").key("log-line").role("log"))
+            .child(crate::row().key("inline-row").gap(4.0)
+                .child(crate::text("State:").key("prefix"))
+                .child(crate::text("Ready").key("inline-status").role("status")))
+            .child(crate::col().key("toast").role("status").label("Saved").size(240.0, 40.0)
+                .child(crate::text("3 files written").key("toast-body")))
+            .child(crate::col().key("live-box").live_region(crate::LiveRegion::Polite).size(240.0, 24.0)
+                .child(crate::text("Updated").key("live-body")))
+            .child(crate::text("top-secret-status").key("sec-status").secure().role("status").live_region(crate::LiveRegion::Assertive))
+            .child(crate::el().key("tint").size(10.0, 10.0).fill(crate::Color::WHITE.alpha((s.tick % 2) as f32 * 0.25)))
+    }
+
+    let mut rt = Runtime::new(
+        State { status: "Changes saved", empty_status: "", tick: 0 },
+        view,
+        (320.0, 320.0),
+        Env::new(false, 1.0),
+    );
+    rt.frame(0.0);
+
+    let mut mirror = A11yMirror::default();
+    let json = rt.web_a11y(&mut mirror).expect("initial mirror").to_owned();
+    assert!(!json.contains("top-secret-status"), "secure status text must never reach the mirror: {json}");
+    let items: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+    let by_key = |items: &[serde_json::Value], key: &str| -> serde_json::Value {
+        let suffix = format!("/{key}");
+        items.iter().find(|v| v["p"].as_str().is_some_and(|p| p.ends_with(&suffix)))
+            .unwrap_or_else(|| panic!("missing {key}: {items:?}")).clone()
+    };
+
+    let status = by_key(&items, "save-status");
+    assert_eq!((&status["k"], status.get("o"), status.get("lv"), &status["t"]),
+        (&json!("text"), Some(&json!("status")), Some(&json!("polite")), &json!("Changes saved")));
+
+    let empty = by_key(&items, "empty-status");
+    assert_eq!((&empty["k"], empty.get("o"), empty.get("lv"), empty.get("t")),
+        (&json!("text"), Some(&json!("status")), Some(&json!("polite")), None));
+
+    let alert = by_key(&items, "save-alert");
+    assert_eq!((&alert["k"], alert.get("o"), alert.get("lv"), &alert["t"]),
+        (&json!("text"), Some(&json!("alert")), Some(&json!("assertive")), &json!("Save failed")));
+
+    let muted = by_key(&items, "muted-alert");
+    assert_eq!((&muted["k"], muted.get("o"), muted.get("lv")),
+        (&json!("text"), Some(&json!("alert")), Some(&json!("off"))));
+
+    let field_err = by_key(&items, "field-err");
+    assert_eq!((&field_err["k"], field_err.get("o"), field_err.get("lv"), &field_err["t"]),
+        (&json!("text"), None, Some(&json!("assertive")), &json!("Field error")));
+
+    let log_line = by_key(&items, "log-line");
+    assert_eq!((&log_line["k"], log_line.get("o"), log_line.get("lv")),
+        (&json!("text"), Some(&json!("log")), Some(&json!("polite"))));
+
+    let prefix = by_key(&items, "prefix");
+    assert_eq!(prefix["t"], json!("State:"));
+    assert_eq!(prefix.get("o"), None);
+    let inline_status = by_key(&items, "inline-status");
+    assert_eq!((&inline_status["t"], inline_status.get("o"), inline_status.get("lv")),
+        (&json!("Ready"), Some(&json!("status")), Some(&json!("polite"))));
+
+    let toast_idx = items.iter().position(|v| v["p"].as_str().is_some_and(|p| p.ends_with("/toast"))).expect("toast");
+    assert_eq!((&items[toast_idx]["k"], &items[toast_idx]["g"], items[toast_idx].get("o"), items[toast_idx].get("lv"), &items[toast_idx]["t"]),
+        (&json!("group"), &json!("div"), Some(&json!("status")), Some(&json!("polite")), &json!("Saved")));
+    let toast_body = by_key(&items, "toast-body");
+    assert_eq!(toast_body["a"], json!(toast_idx));
+
+    let live_idx = items.iter().position(|v| v["p"].as_str().is_some_and(|p| p.ends_with("/live-box"))).expect("live-box");
+    assert_eq!((&items[live_idx]["k"], &items[live_idx]["g"], items[live_idx].get("o"), items[live_idx].get("lv")),
+        (&json!("group"), &json!("div"), None, Some(&json!("polite"))));
+    assert_eq!(by_key(&items, "live-body")["a"], json!(live_idx));
+
+    // A repaint that does not change any mirrored item emits nothing.
+    rt.update(|s, _| s.tick += 1);
+    rt.frame(0.0);
+    assert!(rt.web_a11y(&mut mirror).is_none(), "repaint with unchanged status emits nothing");
+
+    // Updating the status text keeps the same path/key and live attributes.
+    let status_path = status["p"].clone();
+    let empty_path = empty["p"].clone();
+    rt.update(|s, _| {
+        s.status = "All changes saved";
+        s.empty_status = "Connected";
+    });
+    rt.frame(0.0);
+    let updated: Vec<serde_json::Value> = serde_json::from_str(rt.web_a11y(&mut mirror).expect("status update")).unwrap();
+    let status2 = by_key(&updated, "save-status");
+    assert_eq!(status2["p"], status_path);
+    assert_eq!((status2.get("o"), status2.get("lv"), &status2["t"]),
+        (Some(&json!("status")), Some(&json!("polite")), &json!("All changes saved")));
+    let empty2 = by_key(&updated, "empty-status");
+    assert_eq!(empty2["p"], empty_path);
+    assert_eq!((empty2.get("o"), empty2.get("lv"), &empty2["t"]),
+        (Some(&json!("status")), Some(&json!("polite")), &json!("Connected")));
+}
+
+#[test]
+fn radiogroup_mirrors_named_container_around_radio_children() {
+    fn view(selected: &usize, _: &mut Cx<usize>) -> El {
+        let sel = *selected;
+        crate::col().key("theme").role("radiogroup").label("Theme").description("How windows look").focus_group().size(200.0, 80.0)
+            .child(crate::row().key("r0").role("radio").label("Light").focus_selected(sel == 0).position_in_set(1, 2)
+                .focusable(true).on_press(|s: &mut usize| *s = 0).size(120.0, 24.0))
+            .child(crate::row().key("r1").role("radio").label("Dark").focus_selected(sel == 1).position_in_set(2, 2)
+                .focusable(true).on_press(|s: &mut usize| *s = 1).size(120.0, 24.0))
+    }
+
+    let mut rt = Runtime::new(0usize, view, (320.0, 200.0), Env::new(false, 1.0));
+    rt.frame(0.0);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&rt.a11y_json()).unwrap();
+    let group_idx = items.iter().position(|v| v["k"] == "group" && v.get("o") == Some(&json!("radiogroup")))
+        .unwrap_or_else(|| panic!("missing radiogroup container: {items:?}"));
+    assert_eq!(items[group_idx]["g"], json!("div"));
+    assert_eq!(items[group_idx]["t"], json!("Theme"));
+    assert_eq!(items[group_idx]["d"], json!("How windows look"));
+
+    let radios: Vec<_> = items.iter().filter(|v| v["k"] == "button" && v.get("o") == Some(&json!("radio"))).collect();
+    assert_eq!(radios.len(), 2, "expected two radio children: {items:?}");
+    assert_eq!((&radios[0]["t"], &radios[0]["c"], &radios[0]["a"], &radios[0]["n"]),
+        (&json!("Light"), &json!("true"), &json!(group_idx), &json!([1, 2])));
+    assert_eq!((&radios[1]["t"], &radios[1]["c"], &radios[1]["a"], &radios[1]["n"]),
+        (&json!("Dark"), &json!("false"), &json!(group_idx), &json!([2, 2])));
+}
+
+#[test]
+fn named_progressbar_mirrors_role_range_and_value_text() {
+    fn view(progress: &Option<f64>, _: &mut Cx<Option<f64>>) -> El {
+        let mut usage = crate::col().key("usage").role("progressbar").label("5 hours plan usage").size(240.0, 24.0)
+            .child(crate::row().key("header").a11y_hidden().child(crate::text("5 hours plan usage")))
+            .child(crate::row().key("track").a11y_hidden().size(240.0, 8.0));
+        if let Some(v) = *progress {
+            usage = usage.range_value(v, 0.0, 1.0).a11y_value(format!("{}%", (v * 100.0).round()));
+        }
+        crate::col().w_full().gap(8.0)
+            .child(usage)
+            .child(crate::el().key("plain-range").role("progressbar").label("Download").range_value(42.0, 0.0, 100.0).size(200.0, 8.0))
+            .child(crate::el().key("indeterminate").role("progressbar").label("Syncing").size(200.0, 8.0))
+            .child(crate::el().key("unnamed").role("progressbar").range_value(0.5, 0.0, 1.0).size(200.0, 8.0))
+    }
+
+    let mut rt = Runtime::new(Some(0.42), view, (320.0, 200.0), Env::new(false, 1.0));
+    rt.frame(0.0);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&rt.a11y_json()).unwrap();
+    let bars: Vec<_> = items.iter().filter(|v| v["k"] == "progressbar").collect();
+    assert_eq!(bars.len(), 3, "expected 3 named progressbars (unnamed omitted): {items:?}");
+
+    assert_eq!(bars[0]["o"], json!("progressbar"));
+    assert_eq!(bars[0]["t"], json!("5 hours plan usage"));
+    assert_eq!(bars[0]["rg"], json!([0.0, 1.0, 0.42]));
+    assert_eq!(bars[0]["vt"], json!("42%"));
+
+    assert_eq!(bars[1]["o"], json!("progressbar"));
+    assert_eq!(bars[1]["t"], json!("Download"));
+    assert_eq!(bars[1]["rg"], json!([0.0, 100.0, 42.0]));
+    assert_eq!(bars[1].get("vt"), None);
+
+    assert_eq!(bars[2]["o"], json!("progressbar"));
+    assert_eq!(bars[2]["t"], json!("Syncing"));
+    assert_eq!(bars[2].get("rg"), None);
+    assert_eq!(bars[2].get("vt"), None);
+
+    // Updating to indeterminate keeps the same path and drops range/value text.
+    let usage_path = bars[0]["p"].clone();
+    rt.update(|p, _| *p = None);
+    rt.frame(0.0);
+    let after: Vec<serde_json::Value> = serde_json::from_str(&rt.a11y_json()).unwrap();
+    let usage2 = after.iter().find(|v| v["p"] == usage_path).expect("usage progressbar kept");
+    assert_eq!((&usage2["k"], &usage2["o"], &usage2["t"], usage2.get("rg"), usage2.get("vt")),
+        (&json!("progressbar"), &json!("progressbar"), &json!("5 hours plan usage"), None, None));
+}

@@ -878,7 +878,7 @@ function safeHref(url) {
     return null;
 }
 
-const TAGS = { heading: null, button: 'button', link: 'a', image: 'div', text: 'p', scroll_x: 'div' };
+const TAGS = { heading: null, button: 'button', link: 'a', image: 'div', progressbar: 'div', text: 'p', scroll_x: 'div' };
 
 function family(name) {
     if (name === 'sans') return 'var(--rune-sans,sans-serif)';
@@ -925,7 +925,7 @@ function itemStyle(h, item, origin) {
     // page.
     if (item.k === 'scroll_x') return css + 'overflow-x:auto;overflow-y:hidden;pointer-events:auto;touch-action:pan-x pan-y pinch-zoom;scrollbar-width:none;';
     if (item.k === 'link') return css + 'display:block;overflow:hidden;text-decoration:none;cursor:pointer;pointer-events:auto;font:14px/1.25 sans-serif;';
-    if (item.k === 'image' || item.k === 'button') return css + 'overflow:hidden;pointer-events:none;font:14px/1.25 sans-serif;';
+    if (item.k === 'image' || item.k === 'button' || item.k === 'progressbar') return css + 'overflow:hidden;pointer-events:none;font:14px/1.25 sans-serif;';
     const fs = item.s || 14;
     if (!item.f) return css + `font:${fs}px/1.25 sans-serif;overflow:hidden;white-space:pre-wrap;pointer-events:none;`;
     const [fam, weight, lh, tracking, italic, align] = item.f;
@@ -976,9 +976,32 @@ export function syncA11y(h, json) {
         if (item.i) el.id = item.i; else el.removeAttribute('id');
         // `El::description` and `El::described_by`'s words: what a reader says after the name.
         if (item.d) el.setAttribute('aria-description', item.d); else el.removeAttribute('aria-description');
-        // A table's parts: the role says what the div is (`aria_role`).
-        if ((el.getAttribute('role') ?? undefined) !== item.o && item.k === 'group') {
-            if (item.o) el.setAttribute('role', item.o); else el.removeAttribute('role');
+        // Role-carrying containers, live text (`status`, `alert`, `log`) and progressbars.
+        if (item.k !== 'image' && tag !== 'button') {
+            const role = item.o ?? (item.k === 'progressbar' ? 'progressbar' : null);
+            if (role === null) {
+                if (el.getAttribute('role') !== null) el.removeAttribute('role');
+            } else if (el.getAttribute('role') !== role) {
+                el.setAttribute('role', role);
+            }
+        }
+        if (item.lv === undefined) {
+            if (el.getAttribute('aria-live') !== null) el.removeAttribute('aria-live');
+        } else if (el.getAttribute('aria-live') !== item.lv) {
+            el.setAttribute('aria-live', item.lv);
+        }
+        const rangeAttrs = [
+            ['aria-valuemin', item.rg ? String(item.rg[0]) : undefined],
+            ['aria-valuemax', item.rg ? String(item.rg[1]) : undefined],
+            ['aria-valuenow', item.rg ? String(item.rg[2]) : undefined],
+            ['aria-valuetext', item.vt],
+        ];
+        for (const [name, value] of rangeAttrs) {
+            if (value === undefined) {
+                if (el.getAttribute(name) !== null) el.removeAttribute(name);
+            } else if (el.getAttribute(name) !== value) {
+                el.setAttribute(name, value);
+            }
         }
         if (tag === 'button') {
             if (item.x === true || item.x === false) el.setAttribute('aria-expanded', String(item.x));
@@ -992,8 +1015,12 @@ export function syncA11y(h, json) {
                 else if (el.getAttribute(name) !== value) el.setAttribute(name, value);
             }
         }
-        if (item.k === 'group' || item.k === 'image') {
-            if (item.t) el.setAttribute('aria-label', item.t); else el.removeAttribute('aria-label');
+        if (item.k === 'group' || item.k === 'image' || item.k === 'progressbar') {
+            if (item.t) {
+                if (el.getAttribute('aria-label') !== item.t) el.setAttribute('aria-label', item.t);
+            } else if (el.getAttribute('aria-label') !== null) {
+                el.removeAttribute('aria-label');
+            }
         } else if (item.k === 'link') {
             const href = safeHref(item.h);
             if (href) {
@@ -1007,13 +1034,18 @@ export function syncA11y(h, json) {
             }
         }
         const container = item.k === 'group' || item.k === 'scroll_x';
+        const noContent = container || item.k === 'image' || item.k === 'progressbar';
         if (item.k === 'scroll_x' && el._path !== item.p) { el._path = item.p; h.scrollEls.set(item.p, el); }
-        const sig = container || item.k === 'image' ? '' : item.u?.length ? JSON.stringify(item.u) : item.t ?? '';
-        if (!container && el._sig !== sig) {
+        const sig = noContent ? '' : item.u?.length ? JSON.stringify(item.u) : item.t ?? '';
+        if (!noContent && el._sig !== sig) {
             el._sig = sig;
-            el.replaceChildren();
-            if (item.u?.length) runs(h, el, item);
-            else if (item.k !== 'image') el.textContent = item.t ?? '';
+            if (item.u?.length) {
+                el.replaceChildren();
+                runs(h, el, item);
+            } else {
+                if (el.firstElementChild) el.replaceChildren();
+                el.textContent = item.t ?? '';
+            }
         }
         els.push(el);
         if (container && !cursors.has(el)) cursors.set(el, el.firstElementChild);

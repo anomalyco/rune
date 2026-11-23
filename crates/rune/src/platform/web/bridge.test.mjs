@@ -1120,3 +1120,140 @@ test('secureKind falls back to typing when Intl.Segmenter is unavailable', () =>
         'secure_replace',
     );
 });
+
+test('syncA11y preserves status/alert roles and aria-live, keeps node identity, and skips unchanged writes', () => {
+    const { h } = setup();
+
+    bridge.syncA11y(h, JSON.stringify([
+        { k: 'text', p: '#0/save-status', r: [0, 0, 120, 20], t: 'Changes saved', o: 'status', lv: 'polite' },
+        { k: 'text', p: '#0/err', r: [0, 24, 120, 20], t: 'Failed', o: 'alert', lv: 'assertive' },
+        { k: 'text', p: '#0/muted', r: [0, 48, 120, 20], t: 'Muted', o: 'alert', lv: 'off' },
+        { k: 'text', p: '#0/live-only', r: [0, 72, 120, 20], t: 'Hint', lv: 'assertive' },
+        { k: 'group', g: 'div', p: '#0/toast', r: [0, 96, 200, 40], t: 'Notice', o: 'status', lv: 'polite' },
+        { k: 'text', p: '#0/toast/body', r: [0, 100, 180, 20], t: '3 files written', a: 4 },
+    ]));
+
+    const statusEl = h.a11yNodes.get('p:#0/save-status');
+    assert.equal(statusEl.getAttribute('role'), 'status');
+    assert.equal(statusEl.getAttribute('aria-live'), 'polite');
+    assert.equal(statusEl.textContent, 'Changes saved');
+
+    const alertEl = h.a11yNodes.get('p:#0/err');
+    assert.equal(alertEl.getAttribute('role'), 'alert');
+    assert.equal(alertEl.getAttribute('aria-live'), 'assertive');
+    assert.equal(alertEl.textContent, 'Failed');
+
+    const mutedEl = h.a11yNodes.get('p:#0/muted');
+    assert.equal(mutedEl.getAttribute('role'), 'alert');
+    assert.equal(mutedEl.getAttribute('aria-live'), 'off');
+
+    const liveOnlyEl = h.a11yNodes.get('p:#0/live-only');
+    assert.equal(liveOnlyEl.getAttribute('role'), null);
+    assert.equal(liveOnlyEl.getAttribute('aria-live'), 'assertive');
+
+    const toastEl = h.a11yNodes.get('div:#0/toast');
+    assert.equal(toastEl.getAttribute('role'), 'status');
+    assert.equal(toastEl.getAttribute('aria-live'), 'polite');
+    assert.equal(toastEl.getAttribute('aria-label'), 'Notice');
+    assert.equal(toastEl.children.length, 1);
+    assert.equal(toastEl.children[0].textContent, '3 files written');
+
+    // Spy on textContent writes and replaceChildren calls to prove unchanged repaints do not rewrite.
+    let textWrites = 0;
+    let replaceCalls = 0;
+    let currentText = statusEl.textContent;
+    Object.defineProperty(statusEl, 'textContent', {
+        get() { return currentText; },
+        set(v) { textWrites += 1; currentText = v; },
+        configurable: true,
+    });
+    const origReplace = statusEl.replaceChildren.bind(statusEl);
+    statusEl.replaceChildren = (...args) => { replaceCalls += 1; return origReplace(...args); };
+
+    // Repaint with unchanged status text (only another node changed): no rewrite.
+    bridge.syncA11y(h, JSON.stringify([
+        { k: 'text', p: '#0/save-status', r: [0, 0, 120, 20], t: 'Changes saved', o: 'status', lv: 'polite' },
+        { k: 'text', p: '#0/err', r: [0, 24, 120, 20], t: 'Retry failed', o: 'alert', lv: 'assertive' },
+    ]));
+    assert.equal(h.a11yNodes.get('p:#0/save-status'), statusEl);
+    assert.equal(textWrites, 0, 'unchanged status text must not be rewritten on repaint');
+    assert.equal(replaceCalls, 0, 'unchanged status node must not call replaceChildren on repaint');
+    assert.equal(h.a11yNodes.get('p:#0/err'), alertEl);
+    assert.equal(alertEl.textContent, 'Retry failed');
+
+    // Update status text: same DOM node, single textContent write.
+    bridge.syncA11y(h, JSON.stringify([
+        { k: 'text', p: '#0/save-status', r: [0, 0, 120, 20], t: 'All changes saved', o: 'status', lv: 'polite' },
+    ]));
+    assert.equal(h.a11yNodes.get('p:#0/save-status'), statusEl, 'status updates must keep the same DOM node');
+    assert.equal(statusEl.textContent, 'All changes saved');
+    assert.equal(textWrites, 1);
+    assert.equal(replaceCalls, 0, 'plain text status update writes textContent directly without extra replaceChildren');
+
+    // Dropping role and live removes the attributes cleanly.
+    bridge.syncA11y(h, JSON.stringify([
+        { k: 'text', p: '#0/save-status', r: [0, 0, 120, 20], t: 'All changes saved' },
+    ]));
+    assert.equal(h.a11yNodes.get('p:#0/save-status'), statusEl);
+    assert.equal(statusEl.getAttribute('role'), null);
+    assert.equal(statusEl.getAttribute('aria-live'), null);
+
+    bridge.destroy(h);
+});
+
+test('syncA11y mirrors radiogroup container with child radios and determinate/indeterminate progressbar', () => {
+    const { h } = setup();
+
+    bridge.syncA11y(h, JSON.stringify([
+        { k: 'group', g: 'div', p: '#0/theme', r: [0, 0, 200, 60], o: 'radiogroup', t: 'Theme' },
+        { k: 'button', p: '#0/theme/r0', r: [0, 0, 100, 24], o: 'radio', t: 'Light', c: 'true', a: 0 },
+        { k: 'button', p: '#0/theme/r1', r: [0, 28, 100, 24], o: 'radio', t: 'Dark', c: 'false', a: 0 },
+        { k: 'progressbar', p: '#0/usage', r: [0, 68, 240, 24], o: 'progressbar', t: '5 hours plan usage', rg: [0, 1, 0.42], vt: '42%' },
+        { k: 'progressbar', p: '#0/loading', r: [0, 100, 240, 24], o: 'progressbar', t: 'Syncing' },
+    ]));
+
+    const group = h.a11yNodes.get('div:#0/theme');
+    assert.equal(group.getAttribute('role'), 'radiogroup');
+    assert.equal(group.getAttribute('aria-label'), 'Theme');
+    assert.equal(group.children.length, 2);
+    assert.equal(group.children[0].getAttribute('role'), 'radio');
+    assert.equal(group.children[0].getAttribute('aria-checked'), 'true');
+    assert.equal(group.children[1].getAttribute('role'), 'radio');
+    assert.equal(group.children[1].getAttribute('aria-checked'), 'false');
+
+    const usage = h.a11yNodes.get('div:#0/usage');
+    assert.equal(usage.getAttribute('role'), 'progressbar');
+    assert.equal(usage.getAttribute('aria-label'), '5 hours plan usage');
+    assert.equal(usage.getAttribute('aria-valuemin'), '0');
+    assert.equal(usage.getAttribute('aria-valuemax'), '1');
+    assert.equal(usage.getAttribute('aria-valuenow'), '0.42');
+    assert.equal(usage.getAttribute('aria-valuetext'), '42%');
+    assert.equal(usage.textContent, undefined);
+
+    const loading = h.a11yNodes.get('div:#0/loading');
+    assert.equal(loading.getAttribute('role'), 'progressbar');
+    assert.equal(loading.getAttribute('aria-label'), 'Syncing');
+    assert.equal(loading.getAttribute('aria-valuemin'), null);
+    assert.equal(loading.getAttribute('aria-valuemax'), null);
+    assert.equal(loading.getAttribute('aria-valuenow'), null);
+    assert.equal(loading.getAttribute('aria-valuetext'), null);
+
+    // Update progressbar value in-place, then switch it to indeterminate.
+    bridge.syncA11y(h, JSON.stringify([
+        { k: 'progressbar', p: '#0/usage', r: [0, 68, 240, 24], o: 'progressbar', t: '5 hours plan usage', rg: [0, 1, 0.75], vt: '75%' },
+    ]));
+    assert.equal(h.a11yNodes.get('div:#0/usage'), usage);
+    assert.equal(usage.getAttribute('aria-valuenow'), '0.75');
+    assert.equal(usage.getAttribute('aria-valuetext'), '75%');
+
+    bridge.syncA11y(h, JSON.stringify([
+        { k: 'progressbar', p: '#0/usage', r: [0, 68, 240, 24], o: 'progressbar', t: '5 hours plan usage' },
+    ]));
+    assert.equal(h.a11yNodes.get('div:#0/usage'), usage);
+    assert.equal(usage.getAttribute('aria-valuemin'), null);
+    assert.equal(usage.getAttribute('aria-valuemax'), null);
+    assert.equal(usage.getAttribute('aria-valuenow'), null);
+    assert.equal(usage.getAttribute('aria-valuetext'), null);
+
+    bridge.destroy(h);
+});

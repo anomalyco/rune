@@ -65,6 +65,12 @@ pub(crate) struct A11yItem {
     pub selected: Option<bool>,
     pub checked: Option<&'static str>,
     pub set: Option<(usize, usize)>,
+    /// Effective live-region politeness (`aria-live`: `"polite"`, `"assertive"` or `"off"`).
+    pub live: Option<&'static str>,
+    /// Numeric range (`[min, max, value]` -> `aria-valuemin`, `aria-valuemax`, `aria-valuenow`).
+    pub range: Option<[f64; 3]>,
+    /// Human-readable value (`El::a11y_value` -> `aria-valuetext`).
+    pub value_text: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -90,7 +96,8 @@ pub(crate) struct A11yRun {
 impl A11yItem {
     fn new(kind: &'static str, path: &str, rect: [f32; 4]) -> Self {
         A11yItem { kind, path: path.to_owned(), rect, font_size: 0.0, level: None, expanded: None, text: String::new(),
-            runs: Vec::new(), tag: None, role: None, parent: None, id: None, href: None, font: None, selectable: false, description: String::new(), pressed: None, selected: None, checked: None, set: None }
+            runs: Vec::new(), tag: None, role: None, parent: None, id: None, href: None, font: None, selectable: false, description: String::new(), pressed: None, selected: None, checked: None, set: None,
+            live: None, range: None, value_text: String::new() }
     }
 
     fn to_json(&self) -> Value {
@@ -107,6 +114,9 @@ impl A11yItem {
         if let Some(s) = self.selected { obj.insert("se".into(), json!(s)); }
         if let Some(c) = self.checked { obj.insert("c".into(), json!(c)); }
         if let Some((pos, size)) = self.set { obj.insert("n".into(), json!([pos, size])); }
+        if let Some(lv) = self.live { obj.insert("lv".into(), json!(lv)); }
+        if let Some([min, max, val]) = self.range { obj.insert("rg".into(), json!([min, max, val])); }
+        if !self.value_text.is_empty() { obj.insert("vt".into(), json!(self.value_text)); }
         if let Some(g) = self.tag { obj.insert("g".into(), json!(g)); }
         if let Some(o) = self.role { obj.insert("o".into(), json!(o)); }
         if let Some(a) = self.parent { obj.insert("a".into(), json!(a)); }
@@ -195,6 +205,23 @@ fn checked_attr(aria_role: Option<&str>) -> Option<CheckedAttr> {
 
 fn checked_str(c: crate::el::Checked) -> &'static str {
     match c { crate::el::Checked::True => "true", crate::el::Checked::False => "false", crate::el::Checked::Mixed => "mixed" }
+}
+
+fn live_str(live: crate::LiveRegion) -> &'static str {
+    match live {
+        crate::LiveRegion::Off => "off",
+        crate::LiveRegion::Polite => "polite",
+        crate::LiveRegion::Assertive => "assertive",
+    }
+}
+
+fn effective_live(n: &Node) -> Option<&'static str> {
+    n.a11y.live.or_else(|| roles::default_live(n.role)).map(live_str)
+}
+
+fn finite_range(n: &Node) -> Option<[f64; 3]> {
+    let r = n.a11y.more.as_deref()?.range?;
+    (r.min.is_finite() && r.max.is_finite() && r.value.is_finite()).then_some([r.min, r.max, r.value])
 }
 
 fn round1(v: f32) -> f32 { (v * 10.0).round() / 10.0 }
@@ -436,13 +463,24 @@ impl RuntimeCore {
             };
 
             let in_control = i < control_end;
+            let live = effective_live(n);
+            let live_role = roles::default_live(n.role).and_then(|_| roles::container_aria(n.role));
+            let raw_href = n.a11y.more.as_ref().and_then(|m| m.href.as_deref());
             // A labelled `group` (a game's surface naming its keys, a set of controls) is a div
-            // with the role and its label; an unlabelled one adds nothing a reader would say.
+            // with the role and its label; an unlabelled one adds nothing a reader would say unless
+            // it is a live region container.
             let labelled_group = n.role == "group" && self.mirror_name(i).is_some();
-            if !in_control && let Some(tag) = roles::container_tag(n.role).or(labelled_group.then_some("div")) {
+            let live_group = n.role == "group" && n.text.is_none() && n.handlers.on_press.is_none()
+                && raw_href.is_none() && live.is_some();
+            let container_tag = (n.text.is_none() || live_role.is_none())
+                .then(|| roles::container_tag(n.role))
+                .flatten()
+                .or((labelled_group || live_group).then_some("div"));
+            if !in_control && let Some(tag) = container_tag {
                 let mut item = A11yItem::new("group", &n.path, rect);
                 item.tag = Some(tag);
                 item.role = roles::container_aria(n.role).or(labelled_group.then_some("group"));
+                item.live = live;
                 item.id = anchor_id(n.key.as_deref());
                 item.text = self.mirror_name(i).unwrap_or_default();
                 item.description = self.mirror_description(i);
@@ -452,7 +490,6 @@ impl RuntimeCore {
                 i += 1;
                 continue;
             }
-            let raw_href = n.a11y.more.as_ref().and_then(|m| m.href.as_deref());
             if let Some(href) = raw_href.and_then(|u| crate::open_url::check_href(u).ok()) {
                 let label = self.mirror_name(i).unwrap_or_else(|| self.descendant_label(i, end));
                 if !label.is_empty() && rect[2] > 0.0 && rect[3] > 0.0 {
@@ -469,6 +506,19 @@ impl RuntimeCore {
             if !in_control && matches!(n.role, "image" | "img") && let Some(label) = self.mirror_name(i) {
                 let mut item = A11yItem::new("image", &n.path, rect);
                 item.text = label;
+                push(&mut out, item);
+                i = end;
+                last_flow_parent = None;
+                continue;
+            }
+            if !in_control && n.role == "progressbar" && let Some(label) = self.mirror_name(i) {
+                let mut item = A11yItem::new("progressbar", &n.path, rect);
+                item.role = Some("progressbar");
+                item.live = live;
+                item.text = label;
+                item.description = self.mirror_description(i);
+                item.range = finite_range(n);
+                item.value_text = n.a11y.more.as_deref().and_then(|m| m.value.as_deref()).unwrap_or_default().to_owned();
                 push(&mut out, item);
                 i = end;
                 last_flow_parent = None;
@@ -515,11 +565,13 @@ impl RuntimeCore {
                     continue;
                 }
             }
-            if !in_control && let Some(spec) = n.text.as_deref().filter(|t| !t.redacted && rect[2] > 0.0 && rect[3] > 0.0) {
+            let is_live_text = live_role.is_some() || live.is_some();
+            if !in_control && let Some(spec) = n.text.as_deref().filter(|t| !t.redacted && (is_live_text || (rect[2] > 0.0 && rect[3] > 0.0))) {
                 let runs = text_runs(&n.path, spec);
                 let selectable = spec.selectable || selects.get(i).copied().unwrap_or(false);
-                if !runs.is_empty() {
+                if !runs.is_empty() || is_live_text {
                     let is_heading = n.role == "heading";
+                    let plain_text = !is_heading && !is_live_text;
                     // Flowed word-by-word paragraphs (`pr_chips::flow`) put sibling words (or 1-word
                     // wrapper rows) inside one flex-wrap line row: merge consecutive inline text runs
                     // sharing that flow container so screen readers and Find-in-page see whole sentences.
@@ -534,25 +586,27 @@ impl RuntimeCore {
                             None
                         }
                     });
-                    if !is_heading && flow_group.is_some() && flow_group == last_flow_parent
-                        && let Some(prev) = out.last_mut().filter(|it| it.kind == "text")
+                    if plain_text && flow_group.is_some() && flow_group == last_flow_parent
+                        && let Some(prev) = out.last_mut().filter(|it| it.kind == "text" && it.role.is_none() && it.live.is_none())
                     {
                         merge_flow(prev, rect, runs);
                         i += 1;
                         continue;
                     }
                     let text_rect = inset_rect(rect, n.inset);
-                    if !is_heading && flow_group.is_none()
+                    if plain_text && flow_group.is_none()
                         && let Some(prev) = inline.filter(|l| l.item + 1 == out.len() && l.parent == n.parent)
                         && let Some(gap) = prev.gap(n.target, spec.style, selectable)
-                        && let Some(item) = out.last_mut().filter(|it| it.kind == "text")
+                        && let Some(item) = out.last_mut().filter(|it| it.kind == "text" && it.role.is_none() && it.live.is_none())
                     {
                         join_inline(item, text_rect, runs, gap > spec.style.size * 0.15);
                         inline = Some(Inline { right: n.target[2], ..prev });
                         i += 1;
                         continue;
                     }
-                    let (plain, rich_runs) = if runs.len() == 1 && runs[0].href.is_none() && flow_group.is_none() {
+                    let (plain, rich_runs) = if runs.is_empty() {
+                        (String::new(), Vec::new())
+                    } else if runs.len() == 1 && runs[0].href.is_none() && flow_group.is_none() {
                         (runs.into_iter().next().unwrap().text, Vec::new())
                     } else {
                         (String::new(), runs)
@@ -560,6 +614,8 @@ impl RuntimeCore {
                     let mut item = A11yItem::new(if is_heading { "heading" } else { "text" }, &n.path, rect);
                     item.font_size = round1(spec.style.size);
                     item.level = is_heading.then(|| n.a11y.level.unwrap_or(2).clamp(1, 6));
+                    item.role = if is_heading { None } else { live_role };
+                    item.live = live;
                     item.text = plain;
                     item.runs = rich_runs;
                     item.id = if is_heading { anchor_id(n.key.as_deref()) } else { None };
@@ -579,8 +635,8 @@ impl RuntimeCore {
                         item.selectable = selectable;
                     }
                     push(&mut out, item);
-                    last_flow_parent = if is_heading { None } else { flow_group };
-                    inline = (!is_heading && flow_group.is_none()).then(|| Inline {
+                    last_flow_parent = if plain_text { flow_group } else { None };
+                    inline = (plain_text && flow_group.is_none()).then(|| Inline {
                         parent: n.parent,
                         item: out.len() - 1,
                         right: n.target[2],
@@ -594,6 +650,7 @@ impl RuntimeCore {
                 let mut item = A11yItem::new("heading", &n.path, rect);
                 item.font_size = 16.0;
                 item.level = Some(n.a11y.level.unwrap_or(2).clamp(1, 6));
+                item.live = live;
                 item.text = lbl;
                 item.id = anchor_id(n.key.as_deref());
                 push(&mut out, item);
