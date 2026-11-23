@@ -89,3 +89,59 @@ fn a_drag_released_over_its_tab_does_not_swallow_the_next_keyboard_press() {
     rt.frame(1.0 / 60.0);
     assert_eq!(rt.state.selected, ["tab0"]);
 }
+
+#[test]
+fn web_a11y_mirror_exposes_tablist_closable_tabs_and_close_buttons() {
+    struct State {
+        active: String,
+        closable: bool,
+        hover_none: bool,
+        closed: usize,
+    }
+    fn strip_view(s: &State, _: &mut rune::Cx<State>) -> El {
+        TabStrip::new("tabs", TabOrientation::Horizontal)
+            .tabs([
+                TabItem::new("a", "Alpha").closable(s.closable),
+                TabItem::new("b", "Beta").closable(s.closable),
+            ])
+            .active(Some(&s.active))
+            .close_tab_stop(true)
+            .hover_none(s.hover_none)
+            .on_select(|s: &mut State, id, _| s.active = id.into())
+            .on_close(|s: &mut State, _, _| s.closed += 1)
+            .build(&Kit::neutral(false))
+    }
+
+    for (closable, hover_none, want_closes) in [(true, true, 2usize), (true, false, 2usize), (false, true, 0usize)] {
+        let mut rt = rune::Runtime::new(
+            State { active: "a".into(), closable, hover_none, closed: 0 },
+            strip_view,
+            (800.0, 120.0),
+            rune::Env::new(false, 1.0),
+        );
+        rt.frame(0.0);
+        for _ in 0..30 { rt.frame(1.0 / 60.0); }
+
+        let items: Vec<serde_json::Value> = serde_json::from_str(&rt.a11y_json()).unwrap();
+        let tablist_idx = items.iter().position(|e| e["k"] == "group" && e["o"] == "tablist")
+            .unwrap_or_else(|| panic!("missing tablist (closable={closable}, hover_none={hover_none}): {items:?}"));
+        assert_eq!(items[tablist_idx]["g"], "div");
+        assert_eq!(items[tablist_idx]["t"], "Tabs");
+
+        let tabs: Vec<_> = items.iter().filter(|e| e["k"] == "button" && e["o"] == "tab").collect();
+        assert_eq!(tabs.len(), 2, "closable={closable}, hover_none={hover_none}: {items:?}");
+        assert_eq!(tabs[0]["t"], "Alpha");
+        assert_eq!(tabs[0]["se"], true);
+        assert_eq!(tabs[0]["a"], tablist_idx);
+        assert_eq!(tabs[1]["t"], "Beta");
+        assert_eq!(tabs[1]["se"], false);
+        assert_eq!(tabs[1]["a"], tablist_idx);
+
+        let closes: Vec<_> = items.iter().filter(|e| e["k"] == "button" && e.get("o").is_none()).collect();
+        assert_eq!(closes.len(), want_closes, "closable={closable}, hover_none={hover_none}: {items:?}");
+        for close in closes {
+            assert_eq!(close["t"], "Close tab");
+            assert_eq!(close["a"], tablist_idx);
+        }
+    }
+}

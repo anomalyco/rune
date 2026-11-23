@@ -328,16 +328,25 @@ impl RuntimeCore {
 
     pub(crate) fn descendant_label(&self, root: usize, end: usize) -> String {
         let mut parts = Vec::new();
-        for j in root..end {
-            if !self.allowed(j) || self.subtree_exiting(j) || self.tree.nodes[j].vis.opacity <= 0.01 { continue; }
-            if let Some(lbl) = self.tree.nodes[j].label.as_deref().filter(|s| !s.trim().is_empty()) {
-                parts.push(lbl.trim().to_owned());
+        let mut j = root;
+        while j < end {
+            let n = &self.tree.nodes[j];
+            if !self.allowed(j) || self.subtree_exiting(j) || n.vis.opacity <= 0.01
+                || (j > root && (n.a11y.hidden || n.handlers.on_press.is_some() || n.role == "button"))
+            {
+                j = if j > root { self.subtree_end(j).min(end) } else { j + 1 };
                 continue;
             }
-            if let Some(spec) = self.tree.nodes[j].text.as_deref().filter(|t| !t.redacted && self.tree.nodes[j].input.is_none()) {
+            if let Some(lbl) = n.label.as_deref().filter(|s| !s.trim().is_empty()) {
+                parts.push(lbl.trim().to_owned());
+                j += 1;
+                continue;
+            }
+            if let Some(spec) = n.text.as_deref().filter(|t| !t.redacted && n.input.is_none()) {
                 let s = clean_slice(spec, 0, spec.content.len());
                 if !s.trim().is_empty() { parts.push(s.trim().to_owned()); }
             }
+            j += 1;
         }
         parts.join(" ")
     }
@@ -371,6 +380,9 @@ impl RuntimeCore {
         // Open horizontal scrollers and how far the browser has scrolled each, so their content
         // mirrors where it sits inside them rather than where the scroll puts it.
         let mut scrollers: Vec<(usize, f64)> = Vec::new();
+        // End of an emitted control whose subtree is walked for nested interactive descendants, so
+        // its own non-interactive content isn't duplicated beside the control.
+        let mut control_end: usize = 0;
         let mut i = 0;
         while i < self.tree.nodes.len() {
             while open.last().is_some_and(|&(end, _)| i >= end) { open.pop(); }
@@ -419,10 +431,11 @@ impl RuntimeCore {
                 out.push(item);
             };
 
+            let in_control = i < control_end;
             // A labelled `group` (a game's surface naming its keys, a set of controls) is a div
             // with the role and its label; an unlabelled one adds nothing a reader would say.
             let labelled_group = n.role == "group" && self.mirror_name(i).is_some();
-            if let Some(tag) = roles::container_tag(n.role).or(labelled_group.then_some("div")) {
+            if !in_control && let Some(tag) = roles::container_tag(n.role).or(labelled_group.then_some("div")) {
                 let mut item = A11yItem::new("group", &n.path, rect);
                 item.tag = Some(tag);
                 item.role = roles::container_aria(n.role).or(labelled_group.then_some("group"));
@@ -449,7 +462,7 @@ impl RuntimeCore {
                 last_flow_parent = None;
                 continue;
             }
-            if matches!(n.role, "image" | "img") && let Some(label) = self.mirror_name(i) {
+            if !in_control && matches!(n.role, "image" | "img") && let Some(label) = self.mirror_name(i) {
                 let mut item = A11yItem::new("image", &n.path, rect);
                 item.text = label;
                 push(&mut out, item);
@@ -461,16 +474,18 @@ impl RuntimeCore {
                 && (n.role == "button" || n.handlers.on_press.is_some())
                 && n.window_drag != crate::el::WindowDrag::Drag;
             // Only collapse a pressable container into one button when it doesn't wrap an entire
-            // multi-block section with independent buttons inside.
+            // multi-block section with independent buttons inside, unless it has an explicit
+            // control role (such as a closable tab, whose close button mirrors as a sibling).
             let nested_press = (i + 1..end).any(|j| self.tree.nodes[j].handlers.on_press.is_some() || self.tree.nodes[j].role == "button");
-            if button_like && !nested_press && rect[2] > 0.0 && rect[3] > 0.0 {
+            let control_role = roles::web_control_role(n.role);
+            if button_like && (!nested_press || control_role.is_some()) && rect[2] > 0.0 && rect[3] > 0.0 {
                 let label = self.mirror_name(i).unwrap_or_else(|| self.descendant_label(i, end));
                 if !label.is_empty() {
                     let mut item = A11yItem::new("button", &n.path, rect);
                     item.expanded = n.a11y.expanded;
                     item.text = label;
                     item.description = self.mirror_description(i);
-                    if let Some(role) = roles::web_control_role(n.role) {
+                    if let Some(role) = control_role {
                         item.role = Some(role);
                         if self.a11y_role(i).is_some_and(roles::selectable_item) { item.selected = Some(n.focus.selected); }
                         item.set = n.a11y.more.as_ref().and_then(|m| m.set);
@@ -486,12 +501,17 @@ impl RuntimeCore {
                         }
                     }
                     push(&mut out, item);
-                    i = end;
+                    if nested_press {
+                        control_end = control_end.max(end);
+                        i += 1;
+                    } else {
+                        i = end;
+                    }
                     last_flow_parent = None;
                     continue;
                 }
             }
-            if let Some(spec) = n.text.as_deref().filter(|t| !t.redacted && rect[2] > 0.0 && rect[3] > 0.0) {
+            if !in_control && let Some(spec) = n.text.as_deref().filter(|t| !t.redacted && rect[2] > 0.0 && rect[3] > 0.0) {
                 let runs = text_runs(&n.path, spec);
                 let selectable = spec.selectable || selects.get(i).copied().unwrap_or(false);
                 if !runs.is_empty() {
@@ -566,7 +586,7 @@ impl RuntimeCore {
                         selectable,
                     });
                 }
-            } else if n.role == "heading" && let Some(lbl) = self.mirror_name(i) {
+            } else if !in_control && n.role == "heading" && let Some(lbl) = self.mirror_name(i) {
                 let mut item = A11yItem::new("heading", &n.path, rect);
                 item.font_size = 16.0;
                 item.level = Some(n.a11y.level.unwrap_or(2).clamp(1, 6));

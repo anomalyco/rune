@@ -551,3 +551,53 @@ fn checked_state_maps_to_role_appropriate_aria_attributes() {
     let f_opt = focus_json(&mut rt, &mut mirror, "opt-checked");
     assert_eq!((f_opt.get("o"), f_opt.get("s"), f_opt.get("c"), f_opt.get("pr")), (Some(&json!("option")), Some(&json!(true)), None, None));
 }
+
+#[test]
+fn tablist_and_closable_tabs_mirror_with_sibling_close_buttons() {
+    #[derive(Default)]
+    struct State {
+        active: usize,
+        closed: usize,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let tab_a = crate::row().key("t-a").role("tab").label("Alpha")
+            .focus_selected(s.active == 0).position_in_set(1, 2).size(120.0, 28.0)
+            .on_press(|s: &mut State| s.active = 0)
+            .child(crate::text("Alpha").font(crate::tok::type_::BODY))
+            .child(crate::row().key("close-a").role("button").label("Close Alpha").size(20.0, 20.0)
+                .on_press(|s: &mut State| s.closed += 1));
+        let tab_b = crate::row().key("t-b").role("tab")
+            .focus_selected(s.active == 1).position_in_set(2, 2).size(120.0, 28.0)
+            .on_press(|s: &mut State| s.active = 1)
+            .child(crate::text("Beta").font(crate::tok::type_::BODY))
+            .child(crate::row().key("close-b").role("button").label("Close Beta").size(20.0, 20.0)
+                .on_press(|s: &mut State| s.closed += 10));
+        crate::row().key("tabs").role("tablist").label("Tabs").focus_group().size(300.0, 28.0)
+            .child(tab_a)
+            .child(tab_b)
+    }
+    let mut rt = Runtime::new(State::default(), view, (400.0, 100.0), Env::default());
+    rt.frame(0.0);
+
+    let items = rt.web_a11y_items();
+    let summary: Vec<_> = items.iter().map(|i| (i.kind, i.tag, i.role, i.text.as_str(), i.selected, i.set, i.parent)).collect();
+    assert_eq!(summary, [
+        ("group", Some("div"), Some("tablist"), "Tabs", None, None, None),
+        ("button", None, Some("tab"), "Alpha", Some(true), Some((1, 2)), Some(0)),
+        ("button", None, None, "Close Alpha", None, None, Some(0)),
+        ("button", None, Some("tab"), "Beta", Some(false), Some((2, 2)), Some(0)),
+        ("button", None, None, "Close Beta", None, None, Some(0)),
+    ]);
+
+    let tab_b_path = items[3].path.clone();
+    let close_a_path = items[2].path.clone();
+    assert!(rt.web_a11y_action(&json!({"kind": "a11y_press", "path": tab_b_path})));
+    rt.frame(0.0);
+    assert_eq!(rt.state.active, 1);
+    let updated = rt.web_a11y_items();
+    assert_eq!((updated[1].selected, updated[3].selected), (Some(false), Some(true)));
+
+    assert!(rt.web_a11y_action(&json!({"kind": "a11y_press", "path": close_a_path})));
+    rt.frame(0.0);
+    assert_eq!(rt.state.closed, 1);
+}
