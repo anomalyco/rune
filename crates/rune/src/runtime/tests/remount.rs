@@ -316,3 +316,113 @@ fn virtual_remount_keeps_view_and_mounted_row_memos_and_evicts_culled_ones() {
     rt.frame(1.0 / 120.0);
     assert_eq!(rt.state.clicked, Some(expected_idx));
 }
+
+#[test]
+fn virtual_remount_keeps_live_text_bound_without_running_view() {
+    struct State {
+        tick: u32,
+        clock: crate::LiveText,
+        row_badge: crate::LiveText,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        VIEWS.set(VIEWS.get() + 1);
+        let list = col().key("rows").w_full().growth(GrowthSpec::default()).virtual_rows(
+            400,
+            32.0,
+            |_: &State, i| Cow::Owned(format!("r{i}")),
+            |s: &State, i| {
+                row().w_full().h(32.0).gap(6.0).children([
+                    text(format!("Row {i} v{}", s.tick)).key("title").grow(1.0),
+                    text("00").key("badge").live_text(&s.row_badge),
+                ])
+            },
+        );
+        col().w_full().h_full().children([
+            row().key("bar").w_full().h(28.0).gap(8.0).children([
+                text("00:00").key("clock").live_text(&s.clock),
+                text(format!("v{}", s.tick)).key("ver"),
+            ]),
+            col()
+                .key("scroll")
+                .w_full()
+                .grow(1.0)
+                .min_h(0.0)
+                .scroll(ScrollSpec { stick_bottom: false })
+                .child(list),
+        ])
+    }
+
+    let make = || State {
+        tick: 0,
+        clock: crate::LiveText::new("00:00"),
+        row_badge: crate::LiveText::new("00"),
+    };
+    let mut rt = Runtime::new(make(), view, (420.0, 260.0), Env::new(true, 2.0));
+    let mut full = Runtime::new(make(), view, (420.0, 260.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    full.frame(0.0);
+    while rt.frame(1.0 / 120.0) {}
+    while full.frame(1.0 / 120.0) {}
+
+    let clock_info = |rt: &Runtime<State>| {
+        rt.elements().into_iter().find(|e| e.key.as_deref() == Some("clock")).expect("clock")
+    };
+    let initial_clock_rect = clock_info(&rt).rect;
+
+    // Publish before scrolling so both staying live_text nodes already carry latched content.
+    for s in [&rt.state, &full.state] {
+        s.clock.set("00:01");
+        s.row_badge.set("b1");
+    }
+    let (views_ran, _) = take_views(|| { rt.frame(1.0 / 120.0); });
+    assert_eq!(views_ran, 0);
+    full.frame(1.0 / 120.0);
+    assert_eq!(clock_info(&rt).text.as_deref(), Some("00:01"));
+    assert_eq!(shown_elements(&rt), shown_elements(&full));
+
+    let mut scroll_commits = 0u32;
+    for step in 0..30 {
+        if step == 10 {
+            for s in [&rt.state, &full.state] {
+                s.clock.set("a much longer clock value");
+                s.row_badge.set("b2");
+            }
+        }
+        let c0 = rt.stats.commits;
+        let (views_ran, _) = take_views(|| {
+            rt.wheel(200.0, 150.0, -90.0);
+            rt.frame(1.0 / 120.0);
+        });
+        assert_eq!(views_ran, 0, "step {step}: scrolling with live_text must not re-run view");
+        if rt.stats.commits > c0 {
+            scroll_commits += 1;
+        }
+
+        full.commit.set_reuse_scale(f32::NAN);
+        full.wheel(200.0, 150.0, -90.0);
+        full.frame(1.0 / 120.0);
+        assert_eq!(shown_elements(&rt), shown_elements(&full), "step {step}");
+        assert_eq!(clock_info(&rt).rect, initial_clock_rect, "step {step}: placeholder box holds");
+    }
+    assert!(scroll_commits >= 10, "expected window shifts, got {scroll_commits}");
+
+    // Publishing after remounts still wakes and updates without running view.
+    for s in [&rt.state, &full.state] {
+        s.clock.set("09:59");
+        s.row_badge.set("b3");
+    }
+    assert!(rt.live_pending(), "live_text subscription survived remounts");
+    let (views_ran, _) = take_views(|| { rt.frame(1.0 / 120.0); });
+    assert_eq!(views_ran, 0);
+    full.frame(1.0 / 120.0);
+    assert_eq!(clock_info(&rt).text.as_deref(), Some("09:59"));
+    assert_eq!(shown_elements(&rt), shown_elements(&full));
+
+    // A state mutation still runs view once and stays in sync.
+    rt.update(|s, _| s.tick = 1);
+    let (views_ran, _) = take_views(|| { rt.frame(1.0 / 120.0); });
+    assert_eq!(views_ran, 1);
+    full.update(|s, _| s.tick = 1);
+    full.frame(1.0 / 120.0);
+    assert_eq!(shown_elements(&rt), shown_elements(&full));
+}

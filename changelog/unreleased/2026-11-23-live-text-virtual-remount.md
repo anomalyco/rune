@@ -1,0 +1,1 @@
+- Virtual lists: a `live_text` element anywhere in the tree no longer disqualifies virtual-window remounts, so scrolling across `virtual_rows` windows skips rebuilding the view while staying and newly entering live labels keep updating on publish.
