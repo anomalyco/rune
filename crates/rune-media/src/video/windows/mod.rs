@@ -58,12 +58,24 @@ pub(crate) struct Native {
     layered: bool,
 }
 
+/// A clip's layer as the window shows it: the DirectComposition surface handle to wrap in a
+/// visual, and the layer's id. A clip's layer is closed and made again at every pause, seek and
+/// move, and Windows often gives the new surface handle the closed one's value, so the handle
+/// alone can't tell the window that its visual shows a layer that is gone: the id can.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LayerSurface {
+    /// Unique among the process's layers, never 0.
+    pub id: u64,
+    pub handle: usize,
+}
+
 /// The window's side of a clip's layer (`layer`): what the decoder has made of its ask.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LayerStatus {
-    /// The layer's DirectComposition surface handle, once made.
-    pub handle: Option<usize>,
+    /// The layer's surface, once made.
+    pub surface: Option<LayerSurface>,
     /// A picture of the current seek is on the layer at the asked size, and the clock runs.
     pub showing: bool,
     /// The clock runs: only then does the layer take the pictures.
@@ -88,7 +100,7 @@ pub(crate) fn layer(shared: &Arc<Shared>, ask: Option<(u32, u32)>) -> LayerStatu
     let changed = s.layer != ask;
     s.layer = ask;
     let showing = running && ask.is_some_and(|size| s.layer_shown == Some((size, generation)));
-    let status = LayerStatus { handle: s.layer_handle, showing, running, refused: s.layer_refused };
+    let status = LayerStatus { surface: s.layer_surface, showing, running, refused: s.layer_refused };
     drop(s);
     if changed {
         pipe.poke();

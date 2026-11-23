@@ -51,7 +51,7 @@ mod windows;
 use self::windows as backend;
 #[cfg(target_os = "windows")]
 #[doc(hidden)]
-pub use self::windows::LayerStatus;
+pub use self::windows::{LayerStatus, LayerSurface};
 #[cfg(target_os = "windows")]
 pub(crate) use self::windows::release_removed_device;
 mod waker;
