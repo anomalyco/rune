@@ -488,3 +488,25 @@ fn adapters_are_the_ones_wgpu_picks() {
     let count = |instance: &wgpu::Instance| pollster::block_on(instance.enumerate_adapters(wgpu::Backends::METAL)).len();
     assert_eq!(count(&ours), count(&theirs));
 }
+
+#[test]
+fn errors_that_end_the_queue_lose_the_device() {
+    use objc2_metal::MTLCommandBufferError as E;
+    for code in [E::Timeout, E::AccessRevoked, E::DeviceRemoved] {
+        assert!(submit::kills_queue(code), "{code:?}");
+    }
+    for code in [E::Internal, E::PageFault, E::NotPermitted, E::OutOfMemory, E::InvalidResource, E::Memoryless, E::StackOverflow] {
+        assert!(!submit::kills_queue(code), "{code:?}");
+    }
+}
+
+#[test]
+fn a_lost_device_tells_its_callback_once_even_one_set_after() {
+    let (device, _queue) = gpu();
+    let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+    shared(&device).lose("the GPU timed out".into());
+    let into = heard.clone();
+    device.set_device_lost_callback(move |reason, message| into.lock().unwrap().push((reason, message)));
+    shared(&device).lose("again".into());
+    assert_eq!(*heard.lock().unwrap(), [(wgpu::DeviceLostReason::Unknown, "the GPU timed out".to_owned())]);
+}

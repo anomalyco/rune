@@ -43,8 +43,38 @@ pub(crate) struct Shared {
     pub(super) zeros: OnceLock<Zeros>,
     /// Rune's precompiled pipelines, loaded with the first pipeline that looks one up.
     pub(super) builtin: OnceLock<Option<Obj<dyn MTLLibrary>>>,
+    /// Whether the GPU stopped running this queue's work, and who hears it.
+    pub(super) lost: Mutex<Lost>,
 }
 send_sync!(Shared);
+
+/// The device's loss (`Device::set_device_lost_callback`). Metal reports one only through a
+/// command buffer's error (`submit::kills_queue`).
+#[derive(Default)]
+pub(super) struct Lost {
+    pub(super) message: Option<String>,
+    pub(super) callback: Option<BoxDeviceLostCallback>,
+}
+
+impl std::fmt::Debug for Lost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Lost").field("message", &self.message).finish_non_exhaustive()
+    }
+}
+
+impl Shared {
+    /// The GPU won't run the queue's work any more: the device is lost, and its callback hears
+    /// it once.
+    pub(super) fn lose(&self, message: String) {
+        let callback = {
+            let mut lost = self.lost.lock();
+            if lost.message.is_some() { return }
+            lost.message = Some(message.clone());
+            lost.callback.take()
+        };
+        if let Some(f) = callback { f(wgpu::DeviceLostReason::Unknown, message) }
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct MetalDevice {
@@ -72,6 +102,7 @@ pub(super) fn new(device: Obj<dyn MTLDevice>, desc: &wgpu::DeviceDescriptor<'_>)
         recording: AtomicUsize::new(0),
         zeros: OnceLock::new(),
         builtin: OnceLock::new(),
+        lost: Mutex::new(Lost::default()),
         device,
     });
     let device = MetalDevice { shared: shared.clone(), features: desc.required_features, limits: desc.required_limits.clone() };
@@ -153,7 +184,16 @@ impl DeviceInterface for MetalDevice {
     fn create_render_bundle_encoder(&self, _: &wgpu::RenderBundleEncoderDescriptor<'_>) -> DispatchRenderBundleEncoder {
         super::unsupported!("render bundles")
     }
-    fn set_device_lost_callback(&self, _: BoxDeviceLostCallback) {}
+    fn set_device_lost_callback(&self, callback: BoxDeviceLostCallback) {
+        let mut lost = self.shared.lost.lock();
+        match lost.message.clone() {
+            Some(message) => {
+                drop(lost);
+                callback(wgpu::DeviceLostReason::Unknown, message);
+            }
+            None => lost.callback = Some(callback),
+        }
+    }
     fn on_uncaptured_error(&self, _: Arc<dyn wgpu::UncapturedErrorHandler>) {}
     // The backend validates nothing, so a scope never catches an error.
     fn push_error_scope(&self, _: wgpu::ErrorFilter) -> u32 { 0 }
