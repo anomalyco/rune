@@ -5,13 +5,14 @@ use proptest::{
 };
 use rune_ref::{
     Frame, Primitive, Scene, compare, generate,
-    gpu::{GpuRenderer, text_run},
+    gpu::{DEFAULT_TOLERANCE, GpuRenderer, text_run},
 };
 use std::{cell::RefCell, path::PathBuf};
 
-// A provisional 2-LSB cap per primitive; measured maxima and backend in research/24.
-// Composite has its own 2-LSB cap, never multiplied by primitive count.
-const BUDGET: [u8; 5] = [2, 2, 2, 2, 2];
+// Single draws stay at 2 LSB on every adapter; measured maxima and backends in research/24.
+// Composites use `GpuRenderer::composite_tolerance` (2 everywhere except 3 on NVIDIA DX12),
+// never multiplied by primitive count.
+const BUDGET: [u8; 5] = [DEFAULT_TOLERANCE; 5];
 fn check(gpu: &mut GpuRenderer, scene: &Scene, tolerance: u8) -> Result<u8, String> {
     let mut cpu = Frame::new(scene.width, scene.height, true);
     cpu.render(scene);
@@ -36,6 +37,8 @@ fn save(name: &str, scene: &Scene) {
 #[test]
 fn cpu_gpu_corpus() {
     let mut gpu = GpuRenderer::default();
+    let info = gpu.adapter_info();
+    let composite_tol = gpu.composite_tolerance();
     let mut maxima = [0u8; 6];
     for seed in 0..128 {
         let scene = generate::seeded(seed, 8);
@@ -51,7 +54,7 @@ fn cpu_gpu_corpus() {
                 }
             }
         }
-        match check(&mut gpu, &scene, 2) {
+        match check(&mut gpu, &scene, composite_tol) {
             Ok(max) => maxima[5] = maxima[5].max(max),
             Err(e) => {
                 save(&format!("seed-{seed}-composite"), &scene);
@@ -62,17 +65,22 @@ fn cpu_gpu_corpus() {
     for seed in 0..16 {
         let mut scene = generate::seeded(seed, 4);
         text_run(&mut scene, seed);
-        if let Err(e) = check(&mut gpu, &scene, 2) {
+        if let Err(e) = check(&mut gpu, &scene, composite_tol) {
             save(&format!("text-{seed}"), &scene);
             panic!("{e}");
         }
     }
-    eprintln!("METRIC channel_max_rect_shadow_glyph_inset_gradient_composite={maxima:?}");
+    eprintln!(
+        "METRIC adapter={} backend={:?} single_tolerance={DEFAULT_TOLERANCE} composite_tolerance={composite_tol} channel_max_rect_shadow_glyph_inset_gradient_composite={maxima:?}",
+        info.name, info.backend
+    );
 }
 
 #[test]
 fn cpu_gpu_proptest() {
     let gpu = RefCell::new(GpuRenderer::default());
+    let info = gpu.borrow().adapter_info();
+    let composite_tol = gpu.borrow().composite_tolerance();
     let mut runner = TestRunner::new(Config {
         cases: 128,
         max_shrink_iters: 2048,
@@ -84,13 +92,18 @@ fn cpu_gpu_proptest() {
     let strategy = prop::collection::vec(any::<[u8; 32]>(), 1..9);
     let result = runner.run(&strategy, |records| {
         let scene = generate::scene(&records);
-        check(&mut gpu.borrow_mut(), &scene, 2).map_err(TestCaseError::fail)?;
+        let tol = gpu.borrow().scene_tolerance(&scene);
+        check(&mut gpu.borrow_mut(), &scene, tol).map_err(TestCaseError::fail)?;
         Ok(())
     });
     if let Err(TestError::Fail(reason, records)) = &result {
         save("minimized", &generate::scene(records));
         eprintln!("minimized differential failure: {reason}");
     }
+    eprintln!(
+        "METRIC adapter={} backend={:?} single_tolerance={DEFAULT_TOLERANCE} composite_tolerance={composite_tol} proptest_cases=128",
+        info.name, info.backend
+    );
     assert!(result.is_ok(), "{result:?}");
 }
 
@@ -105,7 +118,8 @@ fn saved_regressions() {
         }
         let scene: Scene = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         scene.validate().unwrap();
-        assert!(check(&mut gpu, &scene, 2).is_ok(), "{}", path.display());
+        let tol = gpu.scene_tolerance(&scene);
+        assert!(check(&mut gpu, &scene, tol).is_ok(), "{}", path.display());
     }
 }
 
@@ -213,13 +227,15 @@ fn gpu_metamorphic() {
 #[test]
 fn cpu_gpu_dashed() {
     let mut gpu = GpuRenderer::default();
+    let info = gpu.adapter_info();
+    let composite_tol = gpu.composite_tolerance();
     let mut max = 0;
     for seed in 0..64 {
         let scene = generate::dashed(seed, 8);
         for (n, primitive) in scene.primitives.iter().enumerate() {
             let mut single = scene.clone();
             single.primitives = vec![primitive.clone()];
-            match check(&mut gpu, &single, 2) {
+            match check(&mut gpu, &single, DEFAULT_TOLERANCE) {
                 Ok(m) => max = max.max(m),
                 Err(e) => {
                     save(&format!("dashed-{seed}-{n}"), &single);
@@ -227,17 +243,21 @@ fn cpu_gpu_dashed() {
                 }
             }
         }
-        if let Err(e) = check(&mut gpu, &scene, 2) {
+        if let Err(e) = check(&mut gpu, &scene, composite_tol) {
             save(&format!("dashed-{seed}-composite"), &scene);
             panic!("{e}");
         }
     }
-    eprintln!("METRIC channel_max_dashed={max}");
+    eprintln!(
+        "METRIC adapter={} backend={:?} single_tolerance={DEFAULT_TOLERANCE} composite_tolerance={composite_tol} channel_max_dashed={max}",
+        info.name, info.backend
+    );
 }
 
 #[test]
 fn cpu_gpu_effect_slots() {
     let mut gpu = GpuRenderer::default();
+    let composite_tol = gpu.composite_tolerance();
     for seed in 0..16 {
         let mut scene = generate::seeded(seed, 8);
         let mut slots = scene.primitives.clone();
@@ -249,7 +269,7 @@ fn cpu_gpu_effect_slots() {
         }
         scene.primitives.extend(slots);
         scene.primitives.rotate_right(4);
-        if let Err(e) = check(&mut gpu, &scene, 2) {
+        if let Err(e) = check(&mut gpu, &scene, composite_tol) {
             save(&format!("effect-{seed}"), &scene);
             panic!("{e}");
         }
@@ -259,13 +279,15 @@ fn cpu_gpu_effect_slots() {
 #[test]
 fn cpu_gpu_radial() {
     let mut gpu = GpuRenderer::default();
+    let info = gpu.adapter_info();
+    let composite_tol = gpu.composite_tolerance();
     let mut max = 0;
     for seed in 0..64 {
         let scene = generate::radial(seed, 8);
         for (n, primitive) in scene.primitives.iter().enumerate() {
             let mut single = scene.clone();
             single.primitives = vec![primitive.clone()];
-            match check(&mut gpu, &single, 2) {
+            match check(&mut gpu, &single, DEFAULT_TOLERANCE) {
                 Ok(m) => max = max.max(m),
                 Err(e) => {
                     save(&format!("radial-{seed}-{n}"), &single);
@@ -273,7 +295,7 @@ fn cpu_gpu_radial() {
                 }
             }
         }
-        if let Err(e) = check(&mut gpu, &scene, 2) {
+        if let Err(e) = check(&mut gpu, &scene, composite_tol) {
             save(&format!("radial-{seed}-composite"), &scene);
             panic!("{e}");
         }
@@ -311,7 +333,10 @@ fn cpu_gpu_radial() {
             panic!("{e}");
         }
     }
-    eprintln!("METRIC channel_max_radial={max}");
+    eprintln!(
+        "METRIC adapter={} backend={:?} single_tolerance={DEFAULT_TOLERANCE} composite_tolerance={composite_tol} channel_max_radial={max}",
+        info.name, info.backend
+    );
 }
 
 #[test]
@@ -368,13 +393,14 @@ fn cpu_gpu_cached_subtrees() {
         cached.primitives.iter().any(|p| p.params[1] == 8.0 && p.params[3] == 1.0),
         "cached scene must emit KIND_LAYER with cache marker"
     );
-    check(&mut gpu, &uncached, 2).expect("uncached CPU vs GPU");
-    check(&mut gpu, &cached, 2).expect("cached CPU vs GPU");
+    let composite_tol = gpu.composite_tolerance();
+    check(&mut gpu, &uncached, composite_tol).expect("uncached CPU vs GPU");
+    check(&mut gpu, &cached, composite_tol).expect("cached CPU vs GPU");
     let gpu_uncached = gpu.render(&uncached);
     let gpu_cached = gpu.render(&cached);
     let mut cpu_uncached = Frame::new(64, 64, true);
     cpu_uncached.render(&uncached);
-    let diff = compare(&cached, &cpu_uncached, &gpu_cached, 2);
+    let diff = compare(&cached, &cpu_uncached, &gpu_cached, composite_tol);
     assert_eq!(diff.outlier_pixels, 0, "cached GPU vs uncached CPU: {diff:?}");
     for (a, b) in gpu_uncached.iter().zip(&gpu_cached) {
         assert!(a.abs_diff(*b) <= 1, "cached vs uncached GPU mismatch: {a} vs {b}");
@@ -416,7 +442,7 @@ fn cpu_gpu_cached_subtrees() {
             data: rt.text.atlas.data.clone(),
         },
     };
-    check(&mut gpu, &scrolled_scene, 2).expect("scrolled multi-line text CPU vs GPU");
+    check(&mut gpu, &scrolled_scene, composite_tol).expect("scrolled multi-line text CPU vs GPU");
 }
 
 #[test]
@@ -498,7 +524,8 @@ fn cpu_gpu_turned_layers() {
                 data: rt.text.atlas.data.clone(),
             },
         };
-        if let Err(e) = check(&mut gpu, &scene, 2) {
+        let composite_tol = gpu.composite_tolerance();
+        if let Err(e) = check(&mut gpu, &scene, composite_tol) {
             save(&format!("turned-{n}"), &scene);
             panic!("{e}");
         }
@@ -587,7 +614,8 @@ fn cpu_gpu_plus_lighter_layers() {
         .enumerate()
         .map(|(i, inst)| Primitive::from_instance(inst, i as u32 + 1, format!("plus-lighter/{i}")))
         .collect();
-    if let Err(e) = check(&mut gpu, &scene, 2) {
+    let composite_tol = gpu.composite_tolerance();
+    if let Err(e) = check(&mut gpu, &scene, composite_tol) {
         save("plus-lighter", &scene);
         panic!("{e}");
     }
@@ -784,7 +812,8 @@ fn cpu_gpu_turned_plus_lighter_saturates_before_interpolation() {
     }
     assert!(gpu_max <= 1, "GPU turned PlusLighter clamped after interpolation: max={gpu_max} worst={gpu_worst:?}");
 
-    if let Err(e) = check(&mut gpu, &doubled, 2) {
+    let composite_tol = gpu.composite_tolerance();
+    if let Err(e) = check(&mut gpu, &doubled, composite_tol) {
         save("turned-plus-lighter", &doubled);
         panic!("{e}");
     }

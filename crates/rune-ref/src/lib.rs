@@ -9,6 +9,8 @@ pub mod blend;
 pub mod generate;
 #[cfg(feature = "gpu")]
 pub mod gpu;
+#[cfg(all(test, feature = "gpu"))]
+mod gpu_tests;
 mod layer;
 mod shader;
 

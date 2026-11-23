@@ -8,7 +8,9 @@ the production wgpu renderer against it. The first corpus found a glyph sampling
 bug: interpolated screen coordinates selected an adjacent atlas column. Its
 single-primitive regression differed by up to 83 channel levels before the fix.
 After the fix, measured single-primitive errors are at most 1 level; composited
-scenes reach 2. The gate allows 2 per channel and **zero outlier pixels**.
+scenes reach 2 on Metal, AMD DX12 and WARP, and 3 on NVIDIA under DX12. The gate
+allows 2 per channel (3 for multi-draw composites on NVIDIA under DX12) and
+**zero outlier pixels**.
 
 ## The oracle evaluates the formulas Rune actually ships
 
@@ -104,8 +106,26 @@ There are no permitted outliers. One LSB covers rounding around an RGBA8 encodin
 boundary; the second covers accumulated blend/encode rounding. This is an
 empirical bounded-corpus budget, not a theorem or a cross-vendor certification.
 WGSL allows FMA fusion and reassociation [2], and sRGB conversion accuracy adds
-another backend-dependent rounding step. Measure Vulkan/D3D12 before claiming
-their budget. Never increase the cap to hide a large geometric/texel mismatch.
+another backend-dependent rounding step. Never increase the cap to hide a large
+geometric/texel mismatch.
+
+### Measured budget on Windows / D3D12
+
+| Adapter (DX12) | Single primitive | Multi-draw composite | Gate (single / composite) |
+|---|---:|---:|---:|
+| AMD Radeon Graphics | 1 | 2 | 2 / 2 |
+| Microsoft Basic Render Driver (WARP) | 0–1 | 2 | 2 / 2 |
+| NVIDIA GeForce (DX12) | 1 | 3 | 2 / 3 |
+
+Direct3D 11.3 Functional Specification §17.5 permits fixed-point render target
+blending at output-format precision (8 bits). On NVIDIA under DX12, the ROP
+pre-quantizes linear fragment output to 8-bit sRGB (and alpha to 8-bit UNORM)
+before blending into `Rgba8UnormSrgb`, so four to five overlapping translucent
+draws can accumulate 3 LSB against the CPU oracle while single draws stay within
+2 LSB. `rune_ref::gpu::composite_tolerance` therefore allows 3 for composites
+only when the adapter is NVIDIA under DX12 (vendor `0x10DE`, `Backend::Dx12`)
+and keeps 2 everywhere else (and 2 for every single draw). NVIDIA under Vulkan
+has not been measured and stays at 2 until measured.
 
 Also passed: 128 GPU proptest scenes, 128 CPU metamorphic cases, 32 GPU
 metamorphic scenes, and the saved glyph regression. The allocation gates passed
@@ -188,5 +208,6 @@ position has the required coordinates. Static glyphs are pixel-snapped, which
 keeps their texel choices unchanged. Non-Linux workspace benches skip cleanly; the
 instruction-gate script still rejects non-Linux execution.
 
-Remaining: Linux instruction execution, x86/arm CPU hash comparison, Vulkan/D3D12
-budget measurement, broader app snapshot comparison, and the new vector kinds.
+Remaining: Linux instruction execution, x86/arm CPU hash comparison, Vulkan
+budget measurement (including NVIDIA under Vulkan), broader app snapshot
+comparison, and the new vector kinds.
