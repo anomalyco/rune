@@ -121,10 +121,11 @@ fn erf2(x: vec2<f32>) -> vec2<f32> {
     return s - s / (r * r);
 }
 
-fn shadow_x(x: f32, y: f32, sigma: f32, corner: f32, half: vec2<f32>) -> f32 {
-    let delta = min(half.y - corner - abs(y), 0.0);
-    let curved = half.x - corner + sqrt(max(0.0, corner * corner - delta * delta));
-    let integral = 0.5 + 0.5 * erf2((x + vec2<f32>(-curved, curved)) * (sqrt(0.5) / sigma));
+fn shadow_x(x: f32, y: f32, sigma: f32, radii: vec4<f32>, half: vec2<f32>) -> f32 {
+    let corner = select(radii.xy, radii.wz, y > 0.0);
+    let delta = min(vec2<f32>(half.y) - corner - vec2<f32>(abs(y)), vec2<f32>(0.0));
+    let curved = vec2<f32>(half.x) - corner + sqrt(max(vec2<f32>(0.0), corner * corner - delta * delta));
+    let integral = 0.5 + 0.5 * erf2((x + vec2<f32>(-curved.y, curved.x)) * (sqrt(0.5) / sigma));
     return integral.y - integral.x;
 }
 
@@ -132,9 +133,10 @@ fn shadow_x(x: f32, y: f32, sigma: f32, corner: f32, half: vec2<f32>) -> f32 {
 // four midpoint weights of the ±3σ window, 3·(g(0.75) + g(2.25)) for a unit Gaussian g.
 const SHADOW_INSIDE: f32 = 0.99863125;
 
-fn shadow(p: vec2<f32>, half: vec2<f32>, sigma: f32, corner: f32) -> f32 {
+fn shadow(p: vec2<f32>, half: vec2<f32>, sigma: f32, radii: vec4<f32>) -> f32 {
     // A big panel's shadow is mostly interior, and its erf rows there cost a 5K frame
     // milliseconds. 6σ in, each row is within 1e-6 of fully covered.
+    let corner = max(max(radii.x, radii.y), max(radii.z, radii.w));
     if (abs(p.x) <= half.x - 6.0 * sigma && abs(p.y) <= half.y - corner - 6.0 * sigma) {
         return SHADOW_INSIDE;
     }
@@ -146,7 +148,7 @@ fn shadow(p: vec2<f32>, half: vec2<f32>, sigma: f32, corner: f32) -> f32 {
     var y = start + step * 0.5;
     var v = 0.0;
     for (var i = 0; i < 4; i = i + 1) {
-        v = v + shadow_x(p.x, p.y - y, sigma, corner, half) * gaussian(y, sigma) * step;
+        v = v + shadow_x(p.x, p.y - y, sigma, radii, half) * gaussian(y, sigma) * step;
         y = y + step;
     }
     return v;
@@ -447,8 +449,8 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
         }
     } else if (kind < 1.5) {
         let sigma = max(i.params.z, 0.01);
-        let corner = min(abs(i.radii.x), min(half.x, half.y));
-        col = i.fill * shadow(screen - center, half, sigma, corner);
+        let radii = min(abs(select(i.radii, i.radii.xxxx, i.uv.z > 0.0)), vec4<f32>(min(half.x, half.y)));
+        col = i.fill * shadow(screen - center, half, sigma, radii);
         // A shadow under a native system material leaves its interior clear: `uv` holds the
         // hole relative to this rect and `radii.w` its corner radius.
         if (i.uv.z > 0.0) {
@@ -520,7 +522,8 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
             if (i.params.z < 0.3) {
                 lit = box_cov(q, ih, sign(i.radii) * max(abs(i.radii) - vec4<f32>(spread), vec4<f32>(0.0)));
             } else {
-                lit = shadow(q, ih, i.params.z, max(min(abs(i.radii.x) - spread, min(ih.x, ih.y)), 0.0));
+                let radii = max(min(abs(i.radii) - vec4<f32>(spread), vec4<f32>(min(ih.x, ih.y))), vec4<f32>(0.0));
+                lit = shadow(q, ih, i.params.z, radii);
             }
             col = i.fill * box_cov(screen - center, half, i.radii) * (1.0 - clamp(lit, 0.0, 1.0));
         } else {

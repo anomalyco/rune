@@ -200,7 +200,7 @@ fn rows_alike(i: &Instance, r: [f32; 4]) -> bool {
         // `shadow_row`'s samples and its interior test are the same on every row there.
         Some(Kind::Shadow) => i.uv[2] <= 0.0 && {
             let half = [i.rect[2] * 0.5, i.rect[3] * 0.5];
-            let corner = i.radii[0].abs().min(half[0].min(half[1]));
+            let corner = reach.min(half[0].min(half[1]));
             middle(corner + shader_consts::SHADOW_INSIDE_SIGMA * i.params[2].max(shader_consts::SHADOW_MIN_SIGMA) + 1.0)
         },
         Some(

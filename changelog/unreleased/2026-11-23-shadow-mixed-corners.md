@@ -1,0 +1,1 @@
+- Paint: blurred outer and inset shadows now use all four corner radii instead of applying the top-left radius to every corner, fixing mixed-corner and RTL-mirrored shadow shapes.
