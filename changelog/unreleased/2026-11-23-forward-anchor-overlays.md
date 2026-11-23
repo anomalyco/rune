@@ -1,0 +1,1 @@
+- Anchored overlays: `El::anchored` / `El::above` overlays mounted before their anchor in tree order (such as a select portal built before its enclosing dialog) now resolve their later anchor, place and fit against it, and lift in paint and hit order to draw above it while keeping missing anchors suppressed.

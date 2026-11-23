@@ -546,7 +546,7 @@ impl RuntimeCore {
         self.find_app_root();
         self.commit.commit_gen = self.commit.commit_gen.wrapping_add(1);
         let any_loop = self.prune_detached_tables(true);
-        if self.tree.nodes.len() > present_len || !self.motion.flying.is_empty() || landed || self.tree.has_sticky || self.tree.has_raise || self.tree.has_paint_order { self.update_layer_paint_order(); }
+        if self.tree.nodes.len() > present_len || !self.motion.flying.is_empty() || landed || self.tree.has_sticky || self.tree.has_raise || self.tree.has_paint_order || self.tree.has_above { self.update_layer_paint_order(); }
         else { self.paint.clear_layer_paint_order(); }
         self.tree.built = false;
         self.subscribe_live();

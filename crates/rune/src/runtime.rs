@@ -181,7 +181,7 @@ pub(crate) use web::{a11y as web_a11y, export as web_export, page as web_page};
 pub(crate) use web::runtime as web_runtime;
 
 pub(crate) use anchor::anchor_position;
-use anchor::{anchor_index, anchor_index_live, step_up};
+use anchor::{anchor_ancestors, anchor_index, anchor_index_live, step_up};
 pub use cx::{Cx, Env, Waker, commit_generation};
 pub(crate) use cx::caret_of;
 use cx::COMMITS;

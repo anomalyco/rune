@@ -205,7 +205,7 @@ impl RuntimeCore {
         self.paint.keep.painted = self.paint.keep.frame;
         // Paint goes depth first, siblings in paint order (`update_layer_paint_order`), so a subtree
         // paints in one run unless it holds a node lifted out to paint last.
-        let lifted = !self.motion.flying.is_empty() || self.tree.has_raise;
+        let lifted = !self.motion.flying.is_empty() || self.tree.has_raise || self.paint.has_lifted_anchors();
         let shareable = !lifted && self.motion.flights().is_empty() && self.paint.paint_rank.is_none()
             && self.kbd.modal_scope.is_none() && !self.commit.defaults.force_focus_rings && !disabled();
         let key = shareable.then(|| {

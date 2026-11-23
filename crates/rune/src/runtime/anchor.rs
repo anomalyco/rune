@@ -3,17 +3,37 @@
 use super::*;
 use crate::el::{Anchor, Flow, Pin, Side};
 
-/// The node an `El::above` anchor `a` names, among the `before` nodes ahead of its element.
-pub(super) fn anchor_index(nodes: &[Node], before: usize, a: &Anchor) -> Option<usize> {
-    nodes[..before].iter().position(|n| n.key.as_ref() == Some(&a.key))
+/// Maximum depth of chained anchored overlays followed for zoom or target placement.
+pub(super) const MAX_ANCHOR_CHAIN: usize = 32;
+
+/// Whether `candidate` is `root` or inside `root`'s subtree.
+fn in_subtree(nodes: &[Node], mut candidate: usize, root: usize) -> bool {
+    loop {
+        if candidate == root { return true; }
+        let Some(p) = nodes[candidate].parent else { return false };
+        candidate = p;
+    }
+}
+
+/// The node an `El::above` / `El::anchored` anchor `a` names, preferring an earlier node and
+/// falling back to a later one (for example a trigger inside a dialog mounted after its portal),
+/// never matching `overlay` itself or any of its descendants.
+pub(super) fn anchor_index(nodes: &[Node], overlay: usize, a: &Anchor) -> Option<usize> {
+    nodes[..overlay].iter().position(|n| n.key.as_ref() == Some(&a.key))
+        .or_else(|| {
+            nodes[overlay + 1..].iter().enumerate()
+                .find(|(off, n)| n.key.as_ref() == Some(&a.key) && !in_subtree(nodes, overlay + 1 + *off, overlay))
+                .map(|(off, _)| overlay + 1 + off)
+        })
 }
 
 /// Like [`anchor_index`], preferring a live (non-exiting) anchor when both a live and an exiting
 /// node share the key.
-pub(super) fn anchor_index_live(nodes: &[Node], before: usize, a: &Anchor, exiting: impl Fn(usize) -> bool) -> Option<usize> {
+pub(super) fn anchor_index_live(nodes: &[Node], overlay: usize, a: &Anchor, exiting: impl Fn(usize) -> bool) -> Option<usize> {
     let mut fallback = None;
-    for (idx, n) in nodes[..before].iter().enumerate() {
-        if n.key.as_ref() != Some(&a.key) { continue; }
+    for idx in (0..overlay).chain(overlay + 1..nodes.len()) {
+        if nodes[idx].key.as_ref() != Some(&a.key) { continue; }
+        if idx > overlay && in_subtree(nodes, idx, overlay) { continue; }
         if !exiting(idx) { return Some(idx); }
         fallback.get_or_insert(idx);
     }
@@ -23,6 +43,16 @@ pub(super) fn anchor_index_live(nodes: &[Node], before: usize, a: &Anchor, exiti
 /// Where a walk from node `i` goes next: the node it is anchored above, else its parent.
 pub(super) fn step_up(nodes: &[Node], i: usize) -> Option<usize> {
     nodes[i].above.as_ref().and_then(|a| anchor_index(nodes, i, a)).or(nodes[i].parent)
+}
+
+/// Walks upward from `start` via [`step_up`], stopping before any cycle.
+pub(super) fn anchor_ancestors(nodes: &[Node], start: usize) -> impl Iterator<Item = usize> + '_ {
+    let limit = nodes.len();
+    let mut count = 0usize;
+    std::iter::successors(Some(start), move |&p| {
+        count += 1;
+        (count < limit).then(|| step_up(nodes, p)).flatten()
+    })
 }
 
 /// How far an anchored overlay stays inside the window.
@@ -92,6 +122,7 @@ impl Measurement<'_> {
     /// anchored overlays beside their anchors.
     pub(super) fn place(&mut self, taffy: &LayoutEngine, nodes: &mut [Node]) {
         self.node_index.rebuild(nodes.len());
+        let mut deferred = Vec::new();
         for i in 0..nodes.len() {
             let id = if nodes[i].id != NodeId(0) {
                 debug_assert_eq!(self.path_ids.get(&nodes[i].path).copied(), Some(nodes[i].id));
@@ -115,12 +146,16 @@ impl Measurement<'_> {
             let mut y = py + l.y;
             let mut resolved = true;
             if let Some(a) = &nodes[i].above {
-                if let Some(j) = anchor_index(&nodes, i, a) {
-                    // Anchors inside scroll viewports sit where they are scrolled (and stuck) to.
-                    let target = sticky::anchored_target(nodes, self.scrolls, j, self.viewport);
-                    (x, y) = anchor_position(a, target, (l.w, l.h), self.viewport);
-                    nodes[i].local.x = x - px;
-                    nodes[i].local.y = y - py;
+                if let Some(j) = anchor_index(nodes, i, a) {
+                    if j < i && deferred.is_empty() {
+                        // Anchors inside scroll viewports sit where they are scrolled (and stuck) to.
+                        let target = sticky::anchored_target(nodes, self.scrolls, j, self.viewport);
+                        (x, y) = anchor_position(a, target, (l.w, l.h), self.viewport);
+                        nodes[i].local.x = x - px;
+                        nodes[i].local.y = y - py;
+                    } else {
+                        deferred.push((i, j));
+                    }
                 } else {
                     // Never leave an unresolved anchored overlay at (0, 0) of the window.
                     nodes[i].local.x = 0.0;
@@ -130,6 +165,53 @@ impl Measurement<'_> {
             }
             nodes[i].target = if resolved { [x, y, x + l.w, y + l.h] } else { [0.0; 4] };
             nodes[i].inset = l.inset;
+        }
+        if !deferred.is_empty() {
+            self.place_deferred(nodes, &mut deferred);
+        }
+    }
+
+    /// Places anchored overlays whose anchor appeared later in `nodes` (or inside another deferred
+    /// overlay), then updates their descendants' target rects to match. Cyclic overlays that never
+    /// resolve are suppressed at `[0.0; 4]`.
+    fn place_deferred(&self, nodes: &mut [Node], deferred: &mut Vec<(usize, usize)>) {
+        let mut remaining = std::mem::take(deferred);
+        while !remaining.is_empty() {
+            let mut next = Vec::new();
+            let mut progressed = false;
+            for &(i, j) in &remaining {
+                if remaining.iter().any(|&(k, _)| k != i && in_subtree(nodes, j, k)) {
+                    next.push((i, j));
+                    continue;
+                }
+                let a = nodes[i].above.as_ref().unwrap().clone();
+                let target = sticky::anchored_target(nodes, self.scrolls, j, self.viewport);
+                let (w, h) = (nodes[i].local.w, nodes[i].local.h);
+                let (x, y) = anchor_position(&a, target, (w, h), self.viewport);
+                let (px, py) = nodes[i].parent.map_or((0.0, 0.0), |p| (nodes[p].target[0], nodes[p].target[1]));
+                nodes[i].local.x = x - px;
+                nodes[i].local.y = y - py;
+                nodes[i].target = [x, y, x + w, y + h];
+                for c in i + 1..nodes.len() {
+                    let Some(p) = nodes[c].parent else { break };
+                    if p < i { break; }
+                    if nodes[c].above.is_some() { continue; }
+                    let (cpx, cpy) = (nodes[p].target[0], nodes[p].target[1]);
+                    let cx = cpx + nodes[c].local.x;
+                    let cy = cpy + nodes[c].local.y;
+                    nodes[c].target = [cx, cy, cx + nodes[c].local.w, cy + nodes[c].local.h];
+                }
+                progressed = true;
+            }
+            if !progressed {
+                for (i, _) in next {
+                    nodes[i].local.x = 0.0;
+                    nodes[i].local.y = 0.0;
+                    nodes[i].target = [0.0; 4];
+                }
+                break;
+            }
+            remaining = next;
         }
     }
 
@@ -167,6 +249,9 @@ impl Measurement<'_> {
 }
 
 #[cfg(test)]
+#[path = "anchor_order_tests.rs"]
+mod order_tests;
+#[cfg(test)]
 #[path = "anchor_zoom_tests.rs"]
 mod zoom_tests;
 #[cfg(test)]
@@ -181,18 +266,23 @@ const MIN_ZOOM: f32 = 1e-3;
 /// opts out with `El::anchored_unscaled`, or scales itself with `El::scale`, as an app that
 /// already zooms its popovers by hand does. `own` reads a node's own `El::scale`.
 pub(super) fn inherited_zoom(nodes: &[Node], i: usize, own: &impl Fn(&Node) -> f32) -> f32 {
+    inherited_zoom_inner(nodes, i, own, 0)
+}
+
+fn inherited_zoom_inner(nodes: &[Node], i: usize, own: &impl Fn(&Node) -> f32, depth: usize) -> f32 {
+    if depth >= MAX_ANCHOR_CHAIN { return 1.0; }
     let n = &nodes[i];
     let Some(a) = n.above.as_ref().filter(|a| !a.unscaled) else { return 1.0 };
     if n.scale_track || n.static_scale != 1.0 {
         return 1.0;
     }
-    let Some(j) = anchor_index(&nodes, i, a) else { return 1.0 };
+    let Some(j) = anchor_index(nodes, i, a) else { return 1.0 };
     let mut k = 1.0;
     let mut at = nodes[j].parent;
     while let Some(p) = at {
         k *= own(&nodes[p]);
         if nodes[p].above.is_some() {
-            return k * inherited_zoom(nodes, p, own);
+            return k * inherited_zoom_inner(nodes, p, own, depth + 1);
         }
         at = nodes[p].parent;
     }
