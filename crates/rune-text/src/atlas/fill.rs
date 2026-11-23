@@ -133,6 +133,12 @@ impl Atlas {
         for key in queued { self.queue(page, key); }
     }
 
+    /// Whether any page has queued GPU fills waiting for the renderer.
+    #[doc(hidden)]
+    pub fn has_pending_fills(&self) -> bool {
+        self.fills.iter().any(|q| !q.is_empty())
+    }
+
     /// Each page's queued fills, stepped as run: the renderer draws them before the frame.
     #[doc(hidden)]
     pub fn take_fills(&mut self) -> Vec<(usize, Vec<QueuedFill>)> {

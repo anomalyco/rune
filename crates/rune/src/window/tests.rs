@@ -113,6 +113,51 @@ fn a_frame_that_draws_the_same_pixels_is_the_same() {
     assert!(!p.same(&rt, &config), "a glyph upload draws again");
     rt.text.atlas.dirty = None;
 
+    // A GPU-filled glyph advances `rasterized` and queues a fill without marking CPU rows dirty.
+    rt.text.atlas.outlines.set_support(crate::text::outline::Support::Drawn);
+    let mut quads = Vec::new();
+    let rasterized_before = rt.text.atlas.rasterized();
+    rt.text.glyphs("A", crate::TextStyle::new(16.0, 400.0), 2.0, [0.0, 0.0], &mut quads);
+    assert!(rt.text.atlas.rasterized() > rasterized_before, "expected glyph rasterization");
+    assert!(rt.text.atlas.dirty.is_none(), "GPU-filled masks leave CPU rows clean");
+    assert!(!p.same(&rt, &config), "a GPU-filled glyph draws again without dirty CPU rows");
+    // Even after the renderer drains the queued fills, the presented frame predates the glyph work.
+    assert!(!rt.text.atlas.take_fills().is_empty(), "expected queued GPU fill");
+    assert!(!p.same(&rt, &config), "glyphs rasterized since the presented frame draw again even after fills drain");
+
+    // Re-record on the drained atlas, then re-queue a fill without advancing counters or dirty rows.
+    Presented::record(&mut presented, &rt, &config, false);
+    let p = presented.as_ref().unwrap();
+    assert!(p.same(&rt, &config));
+    rt.text.atlas.rows_uploaded(0, (0, crate::text::ATLAS_SIZE));
+    assert!(rt.text.atlas.dirty.is_none());
+    assert!(!p.same(&rt, &config), "queued GPU fills draw again even when counters and dirty rows match");
+    assert!(!rt.text.atlas.take_fills().is_empty());
+    assert!(p.same(&rt, &config), "draining the queued fills restores match");
+
+    // An atlas page eviction advances `resets` and clears `dirty`, without advancing `rasterized`.
+    const ICON: crate::text::Icon = crate::text::Icon {
+        name: "box",
+        view: 16.0,
+        body: r#"<rect x="1" y="1" width="14" height="14" fill="currentColor"/>"#,
+    };
+    for px in [1500, 1501, 1502] {
+        assert!(rt.text.icon_quad(&ICON, px, [0.0, 0.0]).is_some());
+    }
+    // End the burst frame (zeroing `live_texels` while keeping the overflow page), then record.
+    rt.text.begin_frame();
+    rt.text.atlas.dirty = None;
+    for page in &mut rt.text.atlas.pages { page.dirty = None; }
+    let _ = rt.text.atlas.take_fills();
+    Presented::record(&mut presented, &rt, &config, false);
+    let p = presented.as_ref().unwrap();
+    let (rasterized_before, resets_before) = (rt.text.atlas.rasterized(), rt.text.atlas.resets());
+    rt.text.begin_frame();
+    assert!(rt.text.atlas.resets() > resets_before, "expected atlas page eviction");
+    assert_eq!(rt.text.atlas.rasterized(), rasterized_before);
+    assert!(rt.text.atlas.dirty.is_none() && rt.text.atlas.pages.iter().all(|pg| pg.dirty.is_none()));
+    assert!(!p.same(&rt, &config), "an atlas reset draws again even with dirty cleared");
+
     rt.update(|n, _| *n = 8);
     rt.settle_all();
     rt.frame(0.0);
