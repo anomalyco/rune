@@ -4,10 +4,16 @@
 //! window's first commit, since nothing is laid out yet, and runs a second time once layout
 //! knows the rect: a desktop app's whole first screen, built twice before its first frame. An
 //! app that keeps its window's state across launches can keep the reads too
-//! ([`App::layout_seed`](crate::App::layout_seed)): Rune hands it the rects the view read when
-//! the window rests, closes or quits, and takes them back before the next launch's first
-//! commit. That commit's view is then given them at once, and when layout agrees with them it
-//! runs once.
+//! ([`App::layout_seed`](crate::App::layout_seed)): Rune hands it the rects the window's FIRST
+//! view read, when the window rests, closes or quits, and takes them back before the next
+//! launch's first commit. That commit's view is then given them at once, and when layout agrees
+//! with them it runs once.
+//!
+//! The first view's reads, not the last one's: a launch's first frame is drawn before a server
+//! or a plugin has answered, and what arrives afterwards moves things (a header's buttons, say)
+//! that the next launch's first frame will find where this one's did. A launch after the person
+//! changed the layout (a pane opened, a divider moved) has a stale seed once, and its own first
+//! frame replaces it.
 //!
 //! A seed is a guess, checked like any read: the first commit compares what the view was given
 //! with its layout, by each read's own test, and runs the view again where they differ, as it
@@ -16,7 +22,7 @@
 use super::layout_read::SELECTION;
 use super::*;
 
-/// What a window's view read from layout, to give to the first view of its next launch
+/// What a window's first view read from layout, to give to the first view of its next launch
 /// ([`App::layout_seed`](crate::App::layout_seed)). Plain data, so an app can keep it wherever
 /// it keeps the window's state.
 #[derive(Clone, Debug, PartialEq)]
@@ -56,6 +62,13 @@ impl RuntimeCore {
         if rects.is_empty() { return None; }
         rects.sort_by(|a, b| a.0.cmp(&b.0));
         Some(LayoutSeed { viewport: [self.viewport.0, self.viewport.1], scale: self.env.scale, zoom: self.host.zoom(), rects })
+    }
+
+    /// What the FIRST commit's view read, as its layout settled them: what a launch's first view
+    /// reads again at the next launch, before a server or a plugin has answered. `None` before
+    /// the first commit, and when that view read no rect.
+    pub fn first_layout_seed(&self) -> Option<&LayoutSeed> {
+        self.commit.layout_first.as_ref()
     }
 
     /// Before the first commit: `seed` is what its view's layout reads are given, when the

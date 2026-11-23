@@ -67,6 +67,8 @@ impl RuntimeCore {
             }
         }
         let first = self.commit.commits == 0;
+        // The first frame's own reads, for the next launch's first view (`layout_seed`).
+        if first { self.commit.layout_first = self.layout_seed(); }
         self.commit.commits += 1;
         self.stats.commits = self.commit.commits;
         // Concealing is a security boundary: old geometry must not disclose the revealed

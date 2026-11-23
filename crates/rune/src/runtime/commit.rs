@@ -60,6 +60,8 @@ pub(crate) struct CommitState {
     pub(in crate::runtime) virtual_fill: virtual_fill::Fill,
     /// Keys the last view read with `Cx::layout` or `Cx::layout_size`, and what each resolved to.
     pub(in crate::runtime) layout_seen: layout_read::LayoutSeen,
+    /// What the first commit's view read (`layout_seed`): the next launch's first view starts from it.
+    pub(in crate::runtime) layout_first: Option<crate::LayoutSeed>,
     /// Rect last sent to each element's `El::on_layout`.
     layout_fired: HashMap<NodeId, [f32; 4]>,
     /// Rect last sent to each element's `El::on_screen_layout`.
@@ -99,6 +101,7 @@ impl CommitState {
             virtual_inputs: HashMap::default(),
             virtual_fill: virtual_fill::Fill::default(),
             layout_seen: Default::default(),
+            layout_first: None,
             layout_fired: HashMap::default(),
             screen_fired: HashMap::default(),
             drawn_fired: HashMap::default(),
