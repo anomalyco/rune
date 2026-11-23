@@ -2038,7 +2038,7 @@ impl crate::Device for super::Device {
             let pending_command_buffers = fence.pending_command_buffers.read();
             if !pending_command_buffers
                 .iter()
-                .any(|&(value, _)| value >= wait_value)
+                .any(|&(value, _, _)| value >= wait_value)
             {
                 log::error!("No active command buffers for fence value {wait_value}");
                 return Err(crate::DeviceError::Lost);
