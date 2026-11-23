@@ -30,114 +30,9 @@ fn layout_len(n: &Node, spec: &TextSpec) -> usize {
     n.elided.map_or(spec.content.len(), |e| e.drawn_len(spec.content.len()))
 }
 
-/// Line boxes of bytes `start..end` in layout device px, with each box's line index.
-fn boxes(layout: &Layout<Ink>, len: usize, start: u32, end: u32) -> Vec<(parley::BoundingBox, usize)> {
-    let (a, b) = ((start as usize).min(len), (end as usize).min(len));
-    crate::text::range_boxes(layout, a, b, false)
-}
-
-/// The link paints to draw this frame, by byte range, with the resting span's `bg_pad`.
-pub(in crate::runtime) struct LinkFx(Vec<(u32, u32, LinkPaint, f32, bool)>);
-
-impl LinkFx {
-    pub(in crate::runtime) fn is_empty(&self) -> bool { self.0.is_empty() }
-
-    pub(in crate::runtime) fn glyph_color(&self, byte: u32) -> Option<Color> {
-        self.0.iter().find(|(a, b, p, _, _)| byte >= *a && byte < *b && p.color.is_some()).and_then(|(_, _, p, _, _)| p.color)
-    }
-
-    pub(in crate::runtime) fn decos_piece(&self, piece: &crate::text::Piece<'_>, len: usize, s: f32, origin: [f32; 2], out: &mut Vec<PaintedDeco>) {
-        if self.is_empty() { return; }
-        if piece.is_whole() { return self.decos(piece.layout, len, s, origin, out); }
-        let clipped: Vec<_> = self.0.iter().filter_map(|&(a, b, p, pad, rings)| {
-            let (sa, sb) = piece.clip((a as usize).min(len), (b as usize).min(len))?;
-            Some((sa as u32, sb as u32, p, pad, rings))
-        }).collect();
-        if !clipped.is_empty() { LinkFx(clipped).decos(piece.layout, piece.shaped(piece.end), s, origin, out); }
-    }
-
-    /// Backgrounds and underlines (device px, layout top-left at `origin`).
-    pub(in crate::runtime) fn decos(&self, layout: &Layout<Ink>, len: usize, s: f32, origin: [f32; 2], out: &mut Vec<PaintedDeco>) {
-        let mut line_ends: HashMap<usize, f32> = HashMap::default();
-        for &(a, b, p, bg_pad, has_rings) in &self.0 {
-            for (bb, line) in boxes(layout, len, a, b) {
-                let (x0, w) = (origin[0] + bb.x0 as f32, (bb.x1 - bb.x0) as f32);
-                if p.bg.is_some() || p.ring.is_some() {
-                    let pad = bg_pad * s;
-                    let (mut y0, mut y1) = ((origin[1] + bb.y0 as f32).round(), (origin[1] + bb.y1 as f32).round());
-                    if let Some(l) = layout.get(line) {
-                        let base = origin[1] + l.metrics().baseline;
-                        let (mut asc, mut desc) = (0.0f32, 0.0f32);
-                        for run in l.runs() {
-                            let r = run.text_range();
-                            if r.start < b as usize && (a as usize) < r.end {
-                                let fm = run.font_metrics();
-                                (asc, desc) = (asc.max(fm.ascent), desc.max(fm.descent.abs()));
-                            }
-                        }
-                        if asc > 0.0 || desc > 0.0 {
-                            y0 = (base - asc - 1.0 * s).round();
-                            y1 = (base + desc + 1.0 * s).round();
-                        }
-                    }
-                    let rect = [x0 - pad, y0, w + 2.0 * pad, y1 - y0];
-                    let ring = p.ring.map(|(c, rw)| (c, rw * s));
-                    // A ring can split an otherwise uniform link background. Recolor those
-                    // pieces in place, but don't mistake an isolated inline-code background
-                    // for the whole link's hover background.
-                    let contained = |d: &&PaintedDeco| {
-                        d.radius > 0.0 && d.rect[0] >= rect[0] - 1.5
-                            && d.rect[0] + d.rect[2] <= rect[0] + rect[2] + 1.5
-                            && d.rect[1] < y1 && y0 < d.rect[1] + d.rect[3]
-                    };
-                    let split = has_rings && out.iter().filter(contained).any(|d| d.ring.is_some())
-                        && out.iter().filter(contained).any(|d| (d.rect[0] - rect[0]).abs() < 1.5)
-                        && out.iter().filter(contained).any(|d| (d.rect[0] + d.rect[2] - rect[0] - rect[2]).abs() < 1.5);
-                    let mut matched = false;
-                    for d in out.iter_mut().filter(|d| {
-                        d.radius > 0.0
-                            && d.rect[0] >= rect[0] - 1.5
-                            && d.rect[0] + d.rect[2] <= rect[0] + rect[2] + 1.5
-                            && (split || ((d.rect[0] - rect[0]).abs() < 1.5 && (d.rect[2] - rect[2]).abs() < 1.5))
-                            && d.rect[1] < y1
-                            && y0 < d.rect[1] + d.rect[3]
-                    }) {
-                        matched = true;
-                        if let Some(c) = p.bg {
-                            d.color = c;
-                        }
-                        if ring.is_some() {
-                            d.ring = ring;
-                        }
-                    }
-                    if !matched {
-                        out.push(PaintedDeco { deco: Deco { rect, color: p.bg.unwrap_or(Color::TRANSPARENT), radius: 4.0 * s }, ring, byte: b.saturating_sub(1) });
-                    }
-                }
-                if let (Some(c), Some(l)) = (p.underline, layout.get(line)) {
-                    let y = (origin[1] + l.metrics().baseline + 2.0 * s).round();
-                    let end = *line_ends.entry(line).or_insert_with(|| {
-                        #[cfg(test)]
-                        count_link_line_end_visits(&l);
-                        crate::text::line_end(&l)
-                    });
-                    let (x0, x1) = crate::text::underline_edges_with_end(end, origin[0], bb.x0 as f32, bb.x1 as f32);
-                    let w = x1 - x0;
-                    if let Some(d) = out.iter_mut().find(|d| {
-                        d.radius == 0.0
-                            && (d.rect[0] - x0).abs() < 1.5
-                            && (d.rect[2] - w).abs() < 1.5
-                            && (d.rect[1] - y).abs() < 1.5
-                    }) {
-                        d.color = c;
-                    } else {
-                        out.push(PaintedDeco { deco: Deco { rect: [x0, y, w, s.max(1.0)], color: c, radius: 0.0 }, ring: None, byte: 0 });
-                    }
-                }
-            }
-        }
-    }
-}
+pub(in crate::runtime) use super::link_decos::LinkFx;
+#[cfg(test)]
+use super::link_decos::{boxes, take_link_deco_visits, take_link_line_end_visits};
 
 pub(in crate::runtime) fn link_count(n: &Node) -> usize {
     n.text.as_ref().map_or(0, |t| t.cold.links.len())
@@ -639,18 +534,6 @@ impl RuntimeCore {
 #[cfg(test)]
 thread_local! {
     static SPAN_BOX_QUERIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static LINK_LINE_END_ITEM_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-fn count_link_line_end_visits(line: &parley::Line<'_, Ink>) {
-    let runs = line.items().filter(|it| matches!(it, parley::PositionedLayoutItem::GlyphRun(_))).count();
-    LINK_LINE_END_ITEM_VISITS.with(|c| c.set(c.get() + runs));
-}
-
-#[cfg(test)]
-fn take_link_line_end_visits() -> usize {
-    LINK_LINE_END_ITEM_VISITS.with(|c| c.replace(0))
 }
 
 #[cfg(test)]
