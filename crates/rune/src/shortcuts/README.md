@@ -66,6 +66,10 @@ even if other threads retain `AppHandle`s.
   chord fires once, as on macOS and Windows. Keys use the current keymap's
   base keysyms; restart/re-register after changing the keymap.
 - Wayland: xdg-desktop-portal GlobalShortcuts. No portal returns `Unsupported`.
+  An XWayland app in a Wayland session (`XDG_SESSION_TYPE=wayland` or
+  `WAYLAND_DISPLAY` set) tries the portal first so shortcuts fire while native
+  Wayland windows have focus, falling back to X11 grabs only if the portal is
+  unavailable or the `dbus` feature is off.
   The portal may ask for permission or let the user choose another trigger;
   `preferred_trigger` is a preference, not an exclusive-grab guarantee. Cancellation
   is `PermissionDenied`, not `Conflict`. Each shortcut owns a portal session so

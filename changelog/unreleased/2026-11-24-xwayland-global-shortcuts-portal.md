@@ -1,0 +1,1 @@
+- Linux/Wayland: apps running under XWayland in a Wayland session (`XDG_SESSION_TYPE=wayland` or `WAYLAND_DISPLAY` set) now try the xdg-desktop-portal `GlobalShortcuts` backend first so global shortcuts fire while native Wayland windows have focus, falling back to X11 grabs if the portal is unavailable or the `dbus` feature is off.
