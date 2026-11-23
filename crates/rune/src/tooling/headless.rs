@@ -32,6 +32,8 @@ struct HeadlessPrep {
 
 impl HeadlessPrep {
     fn begin(args: &Args, spec_size: (f32, f32)) -> Self {
+        #[cfg(all(windows, feature = "frame-profile"))]
+        let _ = crate::frame::host_clock::cycles_per_ns();
         crate::tooling::interaction::gate::headless();
         let source = read_script(args);
         let script = source.as_ref().map(load_script).unwrap_or_default();
@@ -333,7 +335,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
         #[cfg(feature = "frame-profile")]
         let (alloc0, commits0, cpu0) = {
             crate::frame::profile::take();
-            (procwatch::alloc::thread_allocations(), app.rt().stats.commits, crate::frame::profile::cpu_ms())
+            (procwatch::alloc::thread_allocations(), app.rt().stats.commits, crate::frame::profile::thread_cpu_mark())
         };
         let real_t = k as f64 * dt;
         #[cfg(not(target_arch = "wasm32"))]

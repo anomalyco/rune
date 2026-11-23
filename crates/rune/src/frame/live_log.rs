@@ -7,8 +7,8 @@
 use std::cell::{Cell, RefCell};
 use std::io::Write;
 
-use super::host_clock::{cpu_ns, now_ns, thread_cpu};
-use super::profile::PHASES;
+use super::host_clock::now_ns;
+use super::profile::{PHASES, ThreadCpuMark, thread_cpu_mark};
 
 thread_local! {
     static OUT: RefCell<Option<Option<std::io::BufWriter<std::fs::File>>>> = const { RefCell::new(None) };
@@ -77,12 +77,18 @@ pub(crate) fn waker(at: &'static std::panic::Location<'static>, wait: std::time:
 /// Now on the monotonic clock, in ns.
 pub(crate) fn now() -> u64 { now_ns() }
 
-/// The clocks at a stage boundary: monotonic and this thread's CPU, in ns.
+/// The clocks at a stage boundary: monotonic in ns and this thread's raw CPU mark, converted
+/// when the frame is logged so stamps taken before Windows knows the cycles' rate still measure
+/// from that boundary once it does.
 #[derive(Clone, Copy)]
-pub(crate) struct Stamp { pub(crate) wall: u64, pub(crate) cpu: u64 }
+pub(crate) struct Stamp { pub(crate) wall: u64, pub(crate) cpu: Option<ThreadCpuMark> }
 
 impl Stamp {
-    pub(crate) fn now() -> Self { Stamp { wall: now_ns(), cpu: thread_cpu().and_then(cpu_ns).unwrap_or(0.0) as u64 } }
+    pub(crate) fn now() -> Self { Stamp { wall: now_ns(), cpu: thread_cpu_mark() } }
+}
+
+fn cpu_delta(a: Stamp, b: Stamp) -> Option<u64> {
+    a.cpu.zip(b.cpu).and_then(|(a, b)| a.delta_ns(b)).map(|ns| ns as u64)
 }
 
 /// One drawn frame's stage boundaries and counts.
@@ -142,7 +148,7 @@ pub(crate) fn frame(f: Frame) {
         "view": ns(p[0]), "commit": ns(p[1]), "layout": ns(p[2]), "text": ns(p[3]), "paint": ns(p[4]), "apply": ns(p[5]),
         "upload": d(f.built, f.uploaded), "encode": d(f.uploaded, f.encoded), "submit": d(f.encoded, f.submitted),
         "present": d(f.submitted, f.presented), "total": d(f.entry, f.presented),
-        "cpu": f.presented.cpu.saturating_sub(f.entry.cpu), "build_cpu": f.built.cpu.saturating_sub(f.acquired.cpu), "acquire_cpu": f.acquired.cpu.saturating_sub(f.start.cpu), "encode_cpu": f.encoded.cpu.saturating_sub(f.uploaded.cpu), "submit_cpu": f.submitted.cpu.saturating_sub(f.encoded.cpu), "present_cpu": f.presented.cpu.saturating_sub(f.submitted.cpu),
+        "cpu": cpu_delta(f.entry, f.presented), "build_cpu": cpu_delta(f.acquired, f.built), "acquire_cpu": cpu_delta(f.start, f.acquired), "encode_cpu": cpu_delta(f.uploaded, f.encoded), "submit_cpu": cpu_delta(f.encoded, f.submitted), "present_cpu": cpu_delta(f.submitted, f.presented),
         "nodes": f.nodes, "shaped": f.shaped, "instances": f.instances, "animating": f.animating,
         "why": crate::runtime::CommitWhy::names(f.why),
         "next": next, "poll_due": f.poll_due, "loop_due": f.loop_due, "loops": f.loops, "damage": f.damage, "whole": f.whole, "change": f.change,
@@ -161,3 +167,7 @@ pub(crate) fn frame(f: Frame) {
         }
     });
 }
+
+#[cfg(test)]
+#[path = "live_log_tests.rs"]
+mod tests;
