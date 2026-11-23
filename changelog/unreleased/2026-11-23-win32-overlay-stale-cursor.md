@@ -1,0 +1,1 @@
+- Windows: `OverlayWindow` now tracks the latest `WH_MOUSE_LL` point and pre-move cursor position so `set_regions`, `set_input`, `show` and `fade` do not re-apply `WS_EX_TRANSPARENT` or requeue a stale pre-move `GetCursorPos` sample while Windows finishes applying a mouse move.
