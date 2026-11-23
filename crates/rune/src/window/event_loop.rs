@@ -38,25 +38,6 @@ fn format_run_error(error: winit::error::EventLoopError, display_error: Option<&
     }
 }
 
-/// Whether this process can reach the window server. Over ssh to a Mac no one is logged in to,
-/// AppKit starts but never finishes launching, so the app would wait forever.
-#[cfg(target_os = "macos")]
-#[allow(unsafe_code)]
-fn window_server_session() -> bool {
-    use std::ffi::c_void;
-    #[link(name = "CoreGraphics", kind = "framework")]
-    unsafe extern "C" { fn CGSessionCopyCurrentDictionary() -> *const c_void; }
-    #[link(name = "CoreFoundation", kind = "framework")]
-    unsafe extern "C" { fn CFRelease(cf: *const c_void); }
-    // SAFETY: a Copy-rule CF function; a non-null result is released exactly once.
-    unsafe {
-        let session = CGSessionCopyCurrentDictionary();
-        if session.is_null() { return false; }
-        CFRelease(session);
-    }
-    true
-}
-
 #[cfg(target_arch = "wasm32")]
 fn run_configured(_: Factory, _: Args, _: bool) -> Result<(), String> {
     Err("native window factories are unsupported on web; use App::run for one canvas".into())
@@ -70,18 +51,19 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     crate::relaunch::wait_for_previous();
     crate::tooling::perf_warn::launch::run_starts();
     crate::platform::ready_signal::run_starts();
+    // `RUNE_OPEN_INACTIVE` (a tool's launch): the app doesn't take activation at launch either.
     #[cfg(target_os = "macos")]
-    if !window_server_session() {
-        crate::render::discard_prewarm();
-        return Err("event loop: no window server session (no one is logged in to this Mac)".into());
-    }
+    let inactive = accessory || std::env::var_os("RUNE_OPEN_INACTIVE").is_some();
+    // Beside AppKit's start: whether there is a window server session to launch in (read below,
+    // before the loop runs), and what AppKit would otherwise wait for on this thread.
+    #[cfg(target_os = "macos")]
+    let beside = crate::platform::macos::launch::begin(!inactive).inspect_err(|_| crate::render::discard_prewarm())?;
     // While AppKit starts up.
     crate::render::prewarm_gpu();
     #[allow(unused_mut)]
     let mut builder = EventLoop::<WakeEvent>::with_user_event();
     #[cfg(target_os = "macos")]
-    // `RUNE_OPEN_INACTIVE` (a tool's launch): the app doesn't take activation at launch either.
-    if accessory || std::env::var_os("RUNE_OPEN_INACTIVE").is_some() {
+    if inactive {
         use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
         if accessory {
             builder.with_activation_policy(ActivationPolicy::Accessory).with_default_menu(false);
@@ -97,6 +79,11 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
         builder.with_init_before_finish_launching(true);
     }
     let event_loop = builder.build().inspect_err(|_| crate::render::discard_prewarm()).map_err(event_loop_error)?;
+    #[cfg(target_os = "macos")]
+    if !beside.session() {
+        crate::render::discard_prewarm();
+        return Err("event loop: no window server session (no one is logged in to this Mac)".into());
+    }
     crate::marks::mark("loop.built");
     // While the app sets up, after winit's first window: the first CPU frame's rounding needs it.
     // Beside `EventLoop::new` it waited on the window manager's lock that window takes, and made
