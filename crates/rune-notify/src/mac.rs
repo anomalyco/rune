@@ -16,8 +16,11 @@ use objc2::{class, msg_send, sel};
 #[link(name = "UserNotifications", kind = "framework")]
 unsafe extern "C" {}
 
-// UNAuthorizationOptionAlert: banners only, never a sound or badge.
-const AUTH_ALERT: usize = 1 << 2;
+// UNAuthorizationOptionBadge | UNAuthorizationOptionAlert: banners and Dock icon badges, never a
+// sound. Notifications themselves never set `content.badge`; including the badge option keeps
+// macOS from suppressing `NSDockTile.badgeLabel` (`WindowHandle::set_taskbar`) and exposes the
+// "Badge application icon" toggle in System Settings.
+const AUTH_OPTIONS: usize = (1 << 0) | (1 << 2);
 // UNNotificationPresentationOptionList | Banner: shown even while the app is in front.
 const PRESENT_LIST_BANNER: usize = (1 << 3) | (1 << 4);
 
@@ -56,6 +59,14 @@ pub(super) unsafe fn string(s: *mut AnyObject) -> Option<String> {
     (!utf8.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(utf8) }.to_string_lossy().into_owned())
 }
 
+pub(super) unsafe fn request_authorization(center: *mut AnyObject, done: &Block<dyn Fn(Bool, *mut AnyObject)>) {
+    // SAFETY: caller passes a live `UNUserNotificationCenter` (or test stand-in) and a valid
+    // ObjC completion block matching `requestAuthorizationWithOptions:completionHandler:`.
+    unsafe {
+        let _: () = msg_send![center, requestAuthorizationWithOptions: AUTH_OPTIONS, completionHandler: done];
+    }
+}
+
 pub(super) fn post(n: Notification) {
     let done = RcBlock::new(move |granted: Bool, _error: *mut AnyObject| {
         if granted.as_bool() {
@@ -65,7 +76,7 @@ pub(super) fn post(n: Notification) {
     });
     // SAFETY: `post` is gated on `bundled()`; `&*done` is a valid ObjC block copied by the center.
     unsafe {
-        let _: () = msg_send![center(), requestAuthorizationWithOptions: AUTH_ALERT, completionHandler: &*done];
+        request_authorization(center(), &*done);
     }
 }
 
