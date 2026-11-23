@@ -351,7 +351,8 @@ impl<S: 'static> TabBind for TabHandlers<S> {
 /// active or hovered. In a `.window_drag()` titlebar the gaps between tabs, the bands above and
 /// below them and the space after the trailing action move the window, as only the tabs and
 /// buttons take presses. Vertical tabs fill the row with 3 points between them, each reaching
-/// across half the gap so no press misses.
+/// across half the gap so no press misses. Each tab is keyed `t-{id}`; a vertical tab's row as
+/// drawn, without that reach, is keyed `t-{id}-pill`, for overlays anchored beside it.
 ///
 /// A press selects a tab as the button goes down, so a drag carries the selected tab and the
 /// release draws nothing ([`Self::select_on_drag_start`]); a press on the selected tab and a

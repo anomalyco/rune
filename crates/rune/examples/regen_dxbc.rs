@@ -136,6 +136,23 @@ fn main() {
     let composite_wgsl_hash = blake3::hash(format!("{}\n{}", read("clip.wgsl"), read("backdrop_composite.wgsl")).as_bytes()).to_hex();
     println!("backdrop blur: {} bytes in 5 stages, WGSL {blur_wgsl_hash} and {composite_wgsl_hash}", backdrop.iter().map(|(_, b)| b.len()).sum::<usize>());
 
+    drop(logged);
+
+    // rune-media's video pass (native surfaces: browser pages, video frames), written into rune-media.
+    let start = HLSL.lock().unwrap().len();
+    rune::native_surface::SurfaceRenderer::compile_wgsl_now(&gpu.device, wgpu::TextureFormat::Bgra8Unorm);
+    let logged = HLSL.lock().unwrap();
+    let (video_vs, video_fs) = (fxc(&stage(&logged[start..], "vs"), "vs", "vs_5_1"), fxc(&stage(&logged[start..], "fs"), "fs", "ps_5_1"));
+    let media = format!("{root}/../rune-media");
+    std::fs::create_dir_all(format!("{media}/shaders/dxbc")).unwrap();
+    std::fs::write(format!("{media}/shaders/dxbc/video.vs.dxbc"), &video_vs).unwrap();
+    std::fs::write(format!("{media}/shaders/dxbc/video.fs.dxbc"), &video_fs).unwrap();
+    let video_wgsl = blake3::hash(std::fs::read_to_string(format!("{media}/src/native_surface/video.wgsl")).unwrap().replace("\r\n", "\n").as_bytes()).to_hex();
+    std::fs::write(format!("{media}/src/native_surface/dxbc_hash.rs"), format!(
+        "// Written by `cargo run -p rune --example regen_dxbc` on Windows.\n\
+         pub(super) const VIDEO_DXBC_WGSL_BLAKE3: &str = \"{video_wgsl}\";\n")).unwrap();
+    println!("video.vs.dxbc {} bytes, video.fs.dxbc {} bytes, WGSL {video_wgsl}", video_vs.len(), video_fs.len());
+
     std::fs::write(format!("{root}/src/render/uber/pass_dxbc_hash.rs"), format!(
         "// Written by `cargo run -p rune --example regen_dxbc` on Windows.\n\
          pub(super) const ALPHA_DXBC_WGSL_BLAKE3: &str = \"{alpha_wgsl}\";\n\

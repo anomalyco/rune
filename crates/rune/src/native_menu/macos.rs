@@ -147,6 +147,7 @@ impl Native {
             item.setTarget(Some(&target));
             item.setEnabled(d.enabled);
             item.setState(if d.checked { 1 } else { 0 });
+            item.setAlternate(d.alternate);
             super::set_key_equivalent(&item, d.equivalent.as_ref());
             (d, item, Some(target))
         }).collect();

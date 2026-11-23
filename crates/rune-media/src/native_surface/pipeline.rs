@@ -4,6 +4,9 @@ use super::*;
 use rune_core::Blend;
 use std::collections::HashMap;
 
+/// The video pass's shader; on Windows its DX12 bytecode ships precompiled (`dxbc.rs`).
+pub(super) const WGSL: &str = include_str!("video.wgsl");
+
 fn blend_state(blend: Blend) -> wgpu::BlendState {
     match blend {
         Blend::SourceOver => wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
@@ -288,10 +291,38 @@ impl SurfaceRenderer {
     }
 
     fn pipeline_with(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, format: wgpu::TextureFormat, blend: wgpu::BlendState) -> wgpu::RenderPipeline {
+        #[cfg(target_os = "windows")]
+        if let Some(pipeline) = super::dxbc::pipeline(device, |vertex, fragment| Self::make_pipeline(device, layout, format, blend, vertex, fragment)) {
+            return pipeline;
+        }
+        Self::wgsl_pipeline(device, layout, format, blend)
+    }
+
+    fn wgsl_pipeline(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, format: wgpu::TextureFormat, blend: wgpu::BlendState) -> wgpu::RenderPipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("video"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("video.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(WGSL.into()),
         });
+        Self::make_pipeline(device, layout, format, blend, &shader, &shader)
+    }
+
+    /// The pipeline from WGSL whatever the precompiled bytecode is, for `regen_dxbc` and its
+    /// freshness test, which take the HLSL wgpu logs while it compiles.
+    #[cfg(target_os = "windows")]
+    #[doc(hidden)]
+    pub fn compile_wgsl_now(device: &wgpu::Device, format: wgpu::TextureFormat) {
+        let layout = Self::bind_layout(device);
+        drop(Self::wgsl_pipeline(device, &layout, format, blend_state(Blend::SourceOver)));
+    }
+
+    fn make_pipeline(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        format: wgpu::TextureFormat,
+        blend: wgpu::BlendState,
+        vertex: &wgpu::ShaderModule,
+        fragment: &wgpu::ShaderModule,
+    ) -> wgpu::RenderPipeline {
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("video"),
             bind_group_layouts: &[Some(layout)],
@@ -301,7 +332,7 @@ impl SurfaceRenderer {
             label: Some("video"),
             layout: Some(&pl),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: vertex,
                 entry_point: Some("vs"),
                 compilation_options: Default::default(),
                 buffers: &[],
@@ -310,7 +341,7 @@ impl SurfaceRenderer {
             depth_stencil: None,
             multisample: Default::default(),
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: fragment,
                 entry_point: Some("fs"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {

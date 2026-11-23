@@ -2,12 +2,12 @@ use super::*;
 use crate::{Env, Mods, PhysicalInput, PhysicalKeyCode, el};
 
 #[derive(Default)]
-struct State { ups: Vec<crate::Key>, swallow: bool, zoom: Vec<f32> }
+struct State { ups: Vec<crate::Key>, swallow: bool, zoom: Vec<f32>, from_wheel: Vec<bool> }
 
 fn view(_: &State, _: &mut crate::Cx<State>) -> El {
     el().w_full().h_full()
         .on_key_up(|s: &mut State, e, _| { s.ups.push(e.key.clone()); true })
-        .on_magnify(|s: &mut State, e, _| { s.zoom.push(e.delta); true })
+        .on_magnify(|s: &mut State, e, _| { s.zoom.push(e.delta); s.from_wheel.push(e.wheel); true })
         .child(el().key("field").size(40.0, 40.0).focusable(true).on_physical_input(|s: &mut State, _, _| s.swallow))
 }
 
@@ -99,9 +99,11 @@ fn an_unfocused_release_in_a_modal_stays_inside_it() {
 fn a_ctrl_wheel_pinches_only_where_a_magnify_handler_is() {
     let mut rt = Runtime::new(State::default(), view, (100.0, 100.0), Env::new(true, 1.0));
     rt.frame(0.0);
-    assert!(rt.pinch_wheel(50.0, 50.0, -20.0));
+    // The wheel turned away from the user moves content down (positive dy) and zooms in.
+    assert!(rt.pinch_wheel(50.0, 50.0, 20.0));
     rt.frame(0.0);
     assert_eq!(rt.state.zoom, [20.0 / PINCH_WHEEL]);
+    assert_eq!(rt.state.from_wheel, [true], "a handler tells Ctrl + wheel from a pinch gesture");
     assert!(!rt.pinch_wheel(500.0, 50.0, -20.0), "off the window nothing takes it");
 }
 

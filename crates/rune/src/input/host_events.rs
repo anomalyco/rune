@@ -35,7 +35,7 @@ pub(crate) struct WheelInput {
     pub phase: crate::GesturePhase,
     pub precise: bool,
     pub notch: bool,
-    /// Whether Ctrl+wheel tries `pinch_wheel` before scrolling (true off macOS).
+    /// Whether Ctrl+wheel tries `pinch_wheel` before scrolling.
     pub pinch: bool,
 }
 
@@ -402,7 +402,10 @@ pub(crate) fn wheel(
             phase,
             precise,
             notch,
-            pinch: !cfg!(target_os = "macos"),
+            // On macOS too: Chromium hands a page Ctrl + wheel and a trackpad pinch alike, as a
+            // wheel with `ctrlKey`, so a zoom handler hears both (`MagnifyEvent::wheel` tells them
+            // apart); a real pinch still arrives as its own gesture.
+            pinch: true,
         },
     );
 }

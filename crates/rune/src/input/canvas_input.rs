@@ -63,6 +63,10 @@ pub struct MagnifyEvent {
     pub x: f32,
     pub y: f32,
     pub phase: GesturePhase,
+    /// It came from Ctrl + wheel (a mouse wheel, or a two-finger scroll with Ctrl held), not a
+    /// pinch gesture: `delta` is the wheel's `dy / 200` points, so a browser's `deltaY` is
+    /// `-delta * 200`.
+    pub wheel: bool,
 }
 
 impl MagnifyEvent {

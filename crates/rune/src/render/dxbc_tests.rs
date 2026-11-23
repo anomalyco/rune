@@ -175,6 +175,24 @@ fn pass_dxbc_is_fresh() {
     assert!(fxc(&fragments[0], "fs", "ps_5_1") == super::BACKDROP_COMPOSITE[1], "backdrop_composite.fs.dxbc: {STALE}");
 }
 
+/// rune-media's video pass (native surfaces): its two stages and the hash of the WGSL they came
+/// from, which `native_surface::dxbc` checks before it uses them.
+#[test]
+fn video_dxbc_is_fresh() {
+    capture();
+    let gpu = crate::render::Gpu::headless();
+    let media = concat!(env!("CARGO_MANIFEST_DIR"), "/../rune-media");
+    let wgsl = std::fs::read_to_string(format!("{media}/src/native_surface/video.wgsl")).unwrap();
+    let recorded = std::fs::read_to_string(format!("{media}/src/native_surface/dxbc_hash.rs")).unwrap();
+    assert!(recorded.contains(&format!("\"{}\"", wgsl_hash(&wgsl))), "video.wgsl: {STALE}");
+    let start = logged_here().len();
+    crate::native_surface::SurfaceRenderer::compile_wgsl_now(&gpu.device, wgpu::TextureFormat::Bgra8Unorm);
+    let logged = logged_here();
+    let (vs, fs) = (fxc(&stage(&logged[start..], "vs"), "vs", "vs_5_1"), fxc(&stage(&logged[start..], "fs"), "fs", "ps_5_1"));
+    assert!(vs == std::fs::read(format!("{media}/shaders/dxbc/video.vs.dxbc")).unwrap(), "video.vs.dxbc: {STALE}");
+    assert!(fs == std::fs::read(format!("{media}/shaders/dxbc/video.fs.dxbc")).unwrap(), "video.fs.dxbc: {STALE}");
+}
+
 /// A DX12 device loads every precompiled shader (general uber, pinned kinds and built-in passes),
 /// and without the passthrough path compiles the WGSL.
 #[test]
