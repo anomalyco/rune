@@ -116,6 +116,30 @@ fn default_options_inherit_the_app_minimum() {
     assert_eq!(attrs.min_inner_size, Some(Size::Logical(LogicalSize::new(860.0, 560.0))));
 }
 
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_transparent_attributes_disable_redirection_bitmap() {
+    let opaque = WindowOptions::default().attributes("opaque", (400.0, 300.0), None, true);
+    assert!(!opaque.transparent);
+    assert!(format!("{opaque:?}").contains("no_redirection_bitmap: false"), "{opaque:?}");
+
+    let transparent = WindowOptions { transparent: true, ..Default::default() }
+        .attributes("transparent", (400.0, 300.0), None, true);
+    assert!(transparent.transparent);
+    assert!(format!("{transparent:?}").contains("no_redirection_bitmap: true"), "{transparent:?}");
+
+    let display = Display {
+        id: None, name: None, position: (0, 0), size: (1920, 1080), scale: 1.0, primary: true,
+    };
+    let overlay = WindowOptions::overlay(&display).attributes("overlay", (400.0, 300.0), None, true);
+    assert!(overlay.transparent);
+    assert!(format!("{overlay:?}").contains("no_redirection_bitmap: true"), "{overlay:?}");
+
+    let launcher = WindowOptions::launcher_panel().options.attributes("launcher", (300.0, 100.0), None, false);
+    assert!(launcher.transparent);
+    assert!(format!("{launcher:?}").contains("no_redirection_bitmap: true"), "{launcher:?}");
+}
+
 #[test]
 fn a_window_that_fits_its_content_has_no_default_minimum_height() {
     let fit = WindowOptions::default().fit_min_size(None);
