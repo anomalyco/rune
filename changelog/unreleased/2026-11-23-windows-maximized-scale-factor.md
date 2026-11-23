@@ -1,0 +1,1 @@
+- Windows: moving a maximised or full-screen window to a monitor with a different scale factor no longer rescales its drawable size a second time, so the window fills the new monitor at the right scale.
