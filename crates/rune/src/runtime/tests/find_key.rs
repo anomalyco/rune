@@ -121,3 +121,45 @@ fn keyed_lookups_skip_exiting_nodes_and_popup_anchors_match_keyed_suffix() {
         assert!(rt.core().stuck_cover(&sc_path, "leaving").is_some_and(|c| c > 0.0), "stuck_cover must ignore exiting node");
     }
 }
+
+#[test]
+fn presented_resolves_key_paths_while_mounted_and_exiting() {
+    fn view(show_card_two_title: &bool, _: &mut Cx<bool>) -> El {
+        let mut card_two = row();
+        if *show_card_two_title {
+            card_two = card_two.child(
+                el().key("title").size(60.0, 10.0).fill(Color::WHITE).transition(crate::Transition::opacity()),
+            );
+        }
+        col()
+            .child(el().key("title").size(100.0, 20.0))
+            .child(col().key("card-1").child(el().key("title").size(80.0, 10.0)))
+            .child(col().key("card-2").child(card_two))
+    }
+    let mut rt = Runtime::new(true, view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    // Plain key keeps returning the first matching node; key paths resolve nested nodes across unkeyed wrappers.
+    assert_eq!(rt.presented("title"), Some(([0.0, 0.0, 100.0, 20.0], 1.0)));
+    assert_eq!(rt.presented("card-1/title"), Some(([0.0, 20.0, 80.0, 10.0], 1.0)));
+    assert_eq!(rt.presented("card-2/title"), Some(([0.0, 30.0, 60.0, 10.0], 1.0)));
+    assert_eq!(rt.find("card-2/title"), Some((30.0, 35.0)));
+    assert!(rt.presented_pose("card-2/title").is_some());
+    assert_eq!(rt.presented("missing/title"), None);
+
+    // While card-2/title is playing its exit transition, find skips it and presented still reads it.
+    rt.update(|show, _| *show = false);
+    for _ in 0..10 {
+        rt.frame(1.0 / 120.0);
+    }
+    assert_eq!(rt.find("card-2/title"), None);
+    let (rect, opacity) = rt.presented("card-2/title").expect("exiting card-2/title is still presented");
+    assert_eq!(rect, [0.0, 30.0, 60.0, 10.0]);
+    assert!(opacity > 0.0 && opacity < 1.0, "expected fading opacity, got {opacity}");
+
+    // Once the exit transition finishes, presented drops it.
+    for _ in 0..240 {
+        rt.frame(1.0 / 120.0);
+    }
+    assert_eq!(rt.presented("card-2/title"), None);
+}
