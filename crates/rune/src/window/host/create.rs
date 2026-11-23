@@ -344,10 +344,14 @@ impl Host {
             // the traffic lights move and the view's inset with them. The shell would do that
             // after this turn, but while AppKit launches the app the next frame is 50,000 µs
             // away and the first one would stand on screen with the lights where `App::chrome`
-            // put them. So the frame is drawn again before either reaches the screen.
+            // put them. So the frame is drawn again before either reaches the screen: at once,
+            // as a frame for a new size is (the frame pacing would put a plain redraw off).
             if crate::platform::macos::launching() && self.app.rt_mut().take_titlebar_changed() {
                 if let Some(w) = &self.win { sync_chrome_core(self.app.rt_mut(), w, self.chrome, self.titlebar); }
-                if self.app.rt().stale() { self.redraw(); }
+                if self.app.rt().stale() {
+                    self.draw(true);
+                    if let Some(l) = self.win.as_mut() && !crate::platform::macos::in_live_resize(&l.window) { l.set_live_resize(false); }
+                }
             }
             self.ime_waits = false;
             drew = self.meter.totals().presents > presents;
