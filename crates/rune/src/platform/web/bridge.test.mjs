@@ -34,7 +34,8 @@ class FakeNode {
 
     get value() { return this._value; }
     set value(next) {
-        this._value = String(next);
+        // HTML <textarea> normalizes CRLF and lone CR to LF in its API value.
+        this._value = this.tagName === 'TEXTAREA' ? String(next).replace(/\r\n?/g, '\n') : String(next);
         this.selectionStart = this._value.length;
         this.selectionEnd = this._value.length;
         this.selectionDirection = 'forward';
@@ -537,6 +538,256 @@ test('beforeinput forwards backward delete at offset 0 when soft keyboard bypass
     h.textarea.dispatchEvent({ type: 'compositionstart' });
     assert.equal(dispatchBeforeInput(h.textarea, { inputType: 'deleteContentBackward' }), false);
     assert.equal(events.length, 0);
+
+    bridge.destroy(h);
+});
+
+test('typing at the end of CRLF text emits a pure insertion without rewriting existing CRLFs', () => {
+    const { events, h } = setup();
+    const before = 'a\r\nb\r\nc';
+    bridge.sync(h, 'field', before, 0, before.length, before.length, false);
+    bridge.activate(h);
+    assert.equal(h.textarea.value, 'a\nb\nc');
+    assert.equal(h.textarea.selectionStart, 5);
+    assert.equal(h.textarea.selectionEnd, 5);
+
+    insertAtCaret(h.textarea, 'x');
+    assert.equal(events.length, 1);
+    assert.deepEqual(events[0], {
+        kind: 'edit',
+        key: 'field',
+        base: 0,
+        expected: before,
+        start: 7,
+        end: 7,
+        text: 'x',
+        anchor: 8,
+        focus: 8,
+    });
+    const after = before.slice(0, events[0].start) + events[0].text + before.slice(events[0].end);
+    assert.equal(after, 'a\r\nb\r\ncx');
+    bridge.destroy(h);
+});
+
+test('CRLF edits translate middle insertions, CRLF deletions, replacements, and trailing selections', () => {
+    const { events, h } = setup();
+    const before = 'a\r\nb\r\nc';
+
+    // Insert after 'b' (raw offset 4 -> DOM offset 3).
+    bridge.sync(h, 'field', before, 0, 4, 4, false);
+    bridge.activate(h);
+    assert.equal(h.textarea.selectionStart, 3);
+    assert.equal(h.textarea.selectionEnd, 3);
+    insertAtCaret(h.textarea, 'x');
+    assert.deepEqual(events.pop(), {
+        kind: 'edit',
+        key: 'field',
+        base: 0,
+        expected: before,
+        start: 4,
+        end: 4,
+        text: 'x',
+        anchor: 5,
+        focus: 5,
+    });
+
+    // Delete the first CRLF via Backspace after it (raw offset 3 -> DOM offset 2).
+    bridge.sync(h, 'field', before, 0, 3, 3, false);
+    h.textarea.value = 'ab\nc';
+    h.textarea.setSelectionRange(1, 1, 'forward');
+    h.textarea.dispatchEvent({ type: 'input', isComposing: false });
+    const del = events.pop();
+    assert.deepEqual(del, {
+        kind: 'edit',
+        key: 'field',
+        base: 0,
+        expected: before,
+        start: 1,
+        end: 3,
+        text: '',
+        anchor: 1,
+        focus: 1,
+    });
+    assert.equal(before.slice(0, del.start) + del.text + before.slice(del.end), 'ab\r\nc');
+
+    // Replace across the first CRLF ('a\r\nb', raw 0..4 -> DOM 0..3) while leaving the second intact.
+    bridge.sync(h, 'field', before, 0, 0, 4, false);
+    assert.equal(h.textarea.selectionStart, 0);
+    assert.equal(h.textarea.selectionEnd, 3);
+    insertAtCaret(h.textarea, 'Z');
+    const rep = events.pop();
+    assert.deepEqual(rep, {
+        kind: 'edit',
+        key: 'field',
+        base: 0,
+        expected: before,
+        start: 0,
+        end: 4,
+        text: 'Z',
+        anchor: 1,
+        focus: 1,
+    });
+    assert.equal(before.slice(0, rep.start) + rep.text + before.slice(rep.end), 'Z\r\nc');
+
+    // Replacement before a trailing selection keeps anchor/focus aligned in post-edit raw coordinates.
+    bridge.sync(h, 'field', before, 0, 4, 7, false);
+    h.textarea.value = 'AA\nb\nc';
+    h.textarea.setSelectionRange(4, 6, 'backward');
+    h.textarea.dispatchEvent({ type: 'input', isComposing: false });
+    assert.deepEqual(events.pop(), {
+        kind: 'edit',
+        key: 'field',
+        base: 0,
+        expected: before,
+        start: 0,
+        end: 1,
+        text: 'AA',
+        anchor: 8,
+        focus: 5,
+    });
+
+    bridge.destroy(h);
+});
+
+test('CRLF selection sync, reselect, and DOM select events translate offsets cleanly', () => {
+    const { canvas, events, h } = setup();
+    const before = 'a\r\nb\r\nc';
+
+    bridge.sync(h, 'field', before, 0, 7, 3, false);
+    bridge.activate(h);
+    assert.equal(h.textarea.selectionStart, 2);
+    assert.equal(h.textarea.selectionEnd, 5);
+    assert.equal(h.textarea.selectionDirection, 'backward');
+    assert.equal(events.length, 0);
+
+    // Chrome blur collapses textarea selection; activate() restores the DOM-translated range.
+    canvas.focus();
+    h.textarea.selectionStart = 0;
+    h.textarea.selectionEnd = 0;
+    h.textarea.selectionDirection = 'forward';
+    bridge.activate(h);
+    assert.equal(h.textarea.selectionStart, 2);
+    assert.equal(h.textarea.selectionEnd, 5);
+    assert.equal(h.textarea.selectionDirection, 'backward');
+    assert.equal(events.length, 0);
+
+    // User selects all in the hidden textarea: selection event maps back to raw UTF-16 offsets.
+    h.textarea.setSelectionRange(0, 5, 'forward');
+    assert.deepEqual(events.pop(), {
+        kind: 'selection',
+        key: 'field',
+        base: 0,
+        expected: before,
+        anchor: 0,
+        focus: 7,
+    });
+
+    h.textarea.setSelectionRange(1, 4, 'backward');
+    assert.deepEqual(events.pop(), {
+        kind: 'selection',
+        key: 'field',
+        base: 0,
+        expected: before,
+        anchor: 6,
+        focus: 1,
+    });
+
+    bridge.destroy(h);
+});
+
+test('lone CR, consecutive CRLFs, surrogate pairs, and IME preedit preserve untouched breaks', async () => {
+    const { events, h } = setup();
+
+    // Lone CR normalizes 1-to-1 in <textarea> without rewriting it on edit.
+    const loneCr = 'a\rb';
+    bridge.sync(h, 'field', loneCr, 0, 3, 3, false);
+    bridge.activate(h);
+    assert.equal(h.textarea.value, 'a\nb');
+    insertAtCaret(h.textarea, 'x');
+    assert.deepEqual(events.pop(), {
+        kind: 'edit',
+        key: 'field',
+        base: 0,
+        expected: loneCr,
+        start: 3,
+        end: 3,
+        text: 'x',
+        anchor: 4,
+        focus: 4,
+    });
+
+    // Consecutive CRLFs and mixed lone CR + CRLF map offsets accurately.
+    const mixed = '\r\r\n\r\n';
+    bridge.sync(h, 'field', mixed, 0, 3, 5, false);
+    assert.equal(h.textarea.value, '\n\n\n');
+    assert.equal(h.textarea.selectionStart, 2);
+    assert.equal(h.textarea.selectionEnd, 3);
+    insertAtCaret(h.textarea, 'k');
+    assert.deepEqual(events.pop(), {
+        kind: 'edit',
+        key: 'field',
+        base: 0,
+        expected: mixed,
+        start: 3,
+        end: 5,
+        text: 'k',
+        anchor: 4,
+        focus: 4,
+    });
+
+    // Mixed lone CR + CRLF and surrogate pairs keep UTF-16 boundaries aligned.
+    const emojiCrlf = '🦀\r\n🦀';
+    bridge.sync(h, 'field', emojiCrlf, 0, 6, 6, false);
+    assert.equal(h.textarea.selectionStart, 5);
+    h.textarea.value = '🦀\n🦁';
+    h.textarea.setSelectionRange(5, 5, 'forward');
+    h.textarea.dispatchEvent({ type: 'input', isComposing: false });
+    const emojiEdit = events.pop();
+    assert.deepEqual(emojiEdit, {
+        kind: 'edit',
+        key: 'field',
+        base: 0,
+        expected: emojiCrlf,
+        start: 4,
+        end: 6,
+        text: '🦁',
+        anchor: 6,
+        focus: 6,
+    });
+    assert.equal(emojiCrlf.slice(0, emojiEdit.start) + emojiEdit.text + emojiCrlf.slice(emojiEdit.end), '🦀\r\n🦁');
+
+    // IME composition at the end of CRLF text emits translated preedit and commit ranges.
+    const crlf = 'a\r\nb\r\nc';
+    bridge.sync(h, 'field', crlf, 0, crlf.length, crlf.length, false);
+    h.textarea.dispatchEvent({ type: 'compositionstart' });
+    h.textarea.value = 'a\nb\ncに';
+    h.textarea.setSelectionRange(6, 6, 'forward');
+    h.textarea.dispatchEvent({ type: 'compositionupdate', data: 'に' });
+    await Promise.resolve();
+    assert.deepEqual(events.pop(), {
+        kind: 'preedit',
+        key: 'field',
+        base: 0,
+        expected: crlf,
+        start: 7,
+        end: 7,
+        text: 'に',
+        anchor: 8,
+        focus: 8,
+    });
+    h.textarea.dispatchEvent({ type: 'compositionend' });
+    assert.deepEqual(events.shift(), {
+        kind: 'edit',
+        key: 'field',
+        base: 0,
+        expected: crlf,
+        start: 7,
+        end: 7,
+        text: 'に',
+        anchor: 8,
+        focus: 8,
+    });
+    assert.deepEqual(events.shift(), { kind: 'sync' });
 
     bridge.destroy(h);
 });
