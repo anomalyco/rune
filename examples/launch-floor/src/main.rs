@@ -141,7 +141,10 @@ fn main() {
     let app = rune::App::new(spec).on_ready(|_| {
         // Off the UI thread, once the loop has gone to wait for input.
         std::thread::spawn(|| {
-            std::thread::sleep(Duration::from_millis(300));
+            // LAUNCH_FLOOR_SETTLE_MS: how long after the first frame the report waits (300); a GPU
+            // hand-over on a machine that has never compiled the pipelines needs about 2,500.
+            let settle = rune::env::var("LAUNCH_FLOOR_SETTLE_MS").and_then(|v| v.parse().ok()).unwrap_or(300);
+            std::thread::sleep(Duration::from_millis(settle));
             report();
         });
     });
