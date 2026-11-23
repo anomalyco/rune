@@ -345,9 +345,13 @@ impl Host {
             // after this turn, but while AppKit launches the app the next frame is 50,000 µs
             // away and the first one would stand on screen with the lights where `App::chrome`
             // put them. So the frame is drawn again before either reaches the screen.
-            if crate::platform::macos::launching() && self.app.rt_mut().take_titlebar_changed() {
+            let (dbg_launching, dbg_changed) = (crate::platform::macos::launching(), self.app.rt_mut().take_titlebar_changed());
+            crate::marks::mark(if !dbg_launching { "dbg.chrome.launched" } else if dbg_changed { "dbg.chrome.changed" } else { "dbg.chrome.same" });
+            if dbg_launching && dbg_changed {
                 if let Some(w) = &self.win { sync_chrome_core(self.app.rt_mut(), w, self.chrome, self.titlebar); }
+                crate::marks::mark(if self.app.rt().stale() { "dbg.chrome.stale" } else { "dbg.chrome.fresh" });
                 if self.app.rt().stale() { self.redraw(); }
+                crate::marks::mark("dbg.chrome.redrawn");
             }
             self.ime_waits = false;
             drew = self.meter.totals().presents > presents;
