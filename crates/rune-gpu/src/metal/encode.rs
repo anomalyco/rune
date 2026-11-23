@@ -12,7 +12,7 @@ use objc2_foundation::NSRange;
 use objc2_foundation::NSString;
 #[cfg(debug_assertions)]
 use objc2_metal::MTLResource;
-use objc2_metal::{MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLDevice, MTLOrigin, MTLResourceOptions, MTLSize, MTLTexture};
+use objc2_metal::{MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLDevice, MTLEvent, MTLOrigin, MTLResourceOptions, MTLSize, MTLTexture};
 use objc2::rc::autoreleasepool;
 use objc2::runtime::ProtocolObject;
 use parking_lot::Mutex;
@@ -33,9 +33,16 @@ pub(super) struct Rec {
     pub(super) keep: Keep,
     /// Whether a pass drew into a drawable, so the buffer waits for its present.
     pub(super) drawable: bool,
+    /// Events set once the buffer's work finished (`super::signal_event_on_finish`).
+    signals: Vec<(Obj<dyn MTLEvent>, u64)>,
     #[cfg(debug_assertions)]
     label: Option<Box<str>>,
 }
+
+/// An event a command buffer waits for or signals, kept until the buffer completes (it doesn't
+/// retain what it uses).
+struct KeptEvent(#[allow(dead_code)] Obj<dyn MTLEvent>);
+send_sync!(KeptEvent);
 
 /// The command buffer as recorded so far.
 #[derive(Debug, Default)]
@@ -156,11 +163,29 @@ impl MetalEncoder {
                 open: Open::Empty,
                 keep,
                 drawable: false,
+                signals: Vec::new(),
                 #[cfg(debug_assertions)]
                 label: label.map(Box::from),
             })),
         }
     }
+
+    /// Before what this encoder records next, the GPU waits until `event` reaches `value`.
+    pub(super) fn wait_for_event(&self, event: &ProtocolObject<dyn MTLEvent>, value: u64) {
+        let event = retain(event);
+        let mut rec = self.rec.lock();
+        rec.pass_buffer().encodeWaitForEvent_value(&event, value);
+        rec.keep([Arc::new(KeptEvent(event)) as _]);
+    }
+
+    /// Once all this encoder's work finished, the GPU sets `event` to `value`.
+    pub(super) fn signal_on_finish(&self, event: &ProtocolObject<dyn MTLEvent>, value: u64) {
+        self.rec.lock().signals.push((retain(event), value));
+    }
+}
+
+fn retain(event: &ProtocolObject<dyn MTLEvent>) -> Obj<dyn MTLEvent> {
+    objc2::Message::retain(event)
 }
 
 impl MetalCommandBuffer {
@@ -335,7 +360,17 @@ impl CommandEncoderInterface for MetalEncoder {
     }
     fn finish(&mut self) -> DispatchCommandBuffer {
         let mut rec = self.rec.lock();
-        let recorded = std::mem::take(&mut rec.open).close().map(|cb| Recorded { cb, keep: std::mem::take(&mut rec.keep), drawable: rec.drawable, shared: rec.shared.clone() });
+        let signals = std::mem::take(&mut rec.signals);
+        if !signals.is_empty() {
+            rec.cb();
+        }
+        let recorded = std::mem::take(&mut rec.open).close().map(|cb| {
+            for (event, value) in signals {
+                cb.encodeSignalEvent_value(&event, value);
+                rec.keep([Arc::new(KeptEvent(event)) as _]);
+            }
+            Recorded { cb, keep: std::mem::take(&mut rec.keep), drawable: rec.drawable, shared: rec.shared.clone() }
+        });
         DispatchCommandBuffer::custom(MetalCommandBuffer(Mutex::new(recorded)))
     }
     fn clear_texture(&self, _: &DispatchTexture, _: &wgpu::ImageSubresourceRange) {
