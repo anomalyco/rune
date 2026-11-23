@@ -1,0 +1,1 @@
+- Web (`CpuCanvas` / `cpu_boot`): vertical scroll frames on the CPU 2D canvas now shift the clean scrolled region in-surface with `drawImage` and upload only the dirty tile rectangles instead of re-uploading the whole scrolled viewport, and `cpu_boot::scroll` recognizes scrolled tiles covered by opaque boxes when the source rows straddled an uncovered tile.
