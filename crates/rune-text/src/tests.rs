@@ -584,3 +584,157 @@ fn linux_symbol_fallbacks_include_noto_sans_after_dejavu() {
         assert!(!matches_symbol_files("NotoSans-Italic.ttf"));
     }
 }
+
+/// Inserts an empty SFNT table record for `tag` into `font`'s table directory so parsers see
+/// `tag` without changing any existing table's bytes.
+fn with_sfnt_table(font: &[u8], tag: [u8; 4]) -> Vec<u8> {
+    let num = u16::from_be_bytes([font[4], font[5]]) as usize;
+    let dir_end = 12 + num * 16;
+    let mut records: Vec<[u8; 16]> = font[12..dir_end]
+        .chunks_exact(16)
+        .map(|chunk| {
+            let mut rec: [u8; 16] = chunk.try_into().unwrap();
+            let off = u32::from_be_bytes([rec[8], rec[9], rec[10], rec[11]]) + 16;
+            rec[8..12].copy_from_slice(&off.to_be_bytes());
+            rec
+        })
+        .collect();
+    let mut added = [0u8; 16];
+    added[0..4].copy_from_slice(&tag);
+    let end = (font.len() as u32) + 16;
+    added[8..12].copy_from_slice(&end.to_be_bytes());
+    let at = records.partition_point(|rec| &rec[0..4] < &tag[..]);
+    records.insert(at, added);
+    let mut out = Vec::with_capacity(font.len() + 16);
+    out.extend_from_slice(&font[0..4]);
+    out.extend_from_slice(&((num + 1) as u16).to_be_bytes());
+    out.extend_from_slice(&font[6..12]);
+    for rec in records {
+        out.extend_from_slice(&rec);
+    }
+    out.extend_from_slice(&font[dir_end..]);
+    out
+}
+
+/// A colour emoji family whose name does not contain "Emoji" (such as Twemoji or JoyPixels) is
+/// recognised by its colour tables and kept at the end of `symbol_families` when non-emoji
+/// fallbacks are added later.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn non_emoji_named_color_emoji_stays_last_in_symbol_families() {
+    const FONT: &[u8] = include_bytes!("../../rune/assets/IBMPlexMono-Regular.ttf");
+
+    let dir = std::env::temp_dir().join(format!("rune-text-emoji-test-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let mono_path = dir.join("mono.ttf");
+    let color_path = dir.join("color.ttf");
+    std::fs::write(&mono_path, FONT).unwrap();
+    std::fs::write(&color_path, with_sfnt_table(FONT, *b"COLR")).unwrap();
+
+    // A non-emoji fallback added after `ts.emoji = Some("Twemoji")` inserts before Twemoji,
+    // even though "Twemoji" does not contain "Emoji".
+    let mut ts = TextSystem::new(&[], ("", ""));
+    ts.symbol_families = vec!["DejaVu Sans", "Twemoji"];
+    ts.emoji = Some("Twemoji");
+    ts.add_symbol_files(vec![mono_path.clone()]);
+    assert_eq!(ts.symbol_families, vec!["DejaVu Sans", "IBM Plex Mono", "Twemoji"]);
+    assert_eq!(ts.emoji, Some("Twemoji"));
+
+    // A colour font file whose family name does not contain "Emoji" is recognised as the emoji
+    // family and placed at the end.
+    let mut ts_color = TextSystem::new(&[], ("", ""));
+    ts_color.symbol_families = vec!["DejaVu Sans"];
+    ts_color.add_symbol_files(vec![color_path.clone()]);
+    assert_eq!(ts_color.emoji, Some("IBM Plex Mono"));
+    assert_eq!(ts_color.symbol_families, vec!["DejaVu Sans", "IBM Plex Mono"]);
+
+    // `add_fallback_emoji` loads the generic emoji family when none is set, and keeps
+    // Noto Color Emoji first when it is already installed.
+    let mut ts_fallback = TextSystem::new(&[], ("", ""));
+    ts_fallback.symbol_families = vec!["DejaVu Sans"];
+    ts_fallback.add_fallback_emoji("Twemoji", vec![color_path.clone()]);
+    assert_eq!(ts_fallback.emoji, Some("IBM Plex Mono"));
+    assert_eq!(ts_fallback.symbol_families, vec!["DejaVu Sans", "IBM Plex Mono"]);
+
+    let mut ts_noto = TextSystem::new(&[], ("", ""));
+    ts_noto.symbol_families = vec!["DejaVu Sans", "Noto Color Emoji"];
+    ts_noto.emoji = Some("Noto Color Emoji");
+    ts_noto.add_fallback_emoji("Twemoji", vec![color_path]);
+    assert_eq!(ts_noto.emoji, Some("Noto Color Emoji"));
+    assert_eq!(ts_noto.symbol_families, vec!["DejaVu Sans", "Noto Color Emoji"]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `first_color_emoji_family` picks the first colour font (`COLR`, `CBDT` or `sbix`) from
+/// `GenericFamily::Emoji`, skipping monochrome fonts such as DejaVu Sans or Noto Emoji, and
+/// `reader_has_color_table` checks single SFNT files and TTC face indices without full reads.
+#[test]
+fn generic_emoji_lookup_picks_first_color_font() {
+    use std::io::Cursor;
+    use std::sync::Arc;
+    use parley::fontique::{Blob, FontInfoOverride, GenericFamily};
+
+    const FONT: &[u8] = include_bytes!("../../rune/assets/IBMPlexMono-Regular.ttf");
+
+    let colr = with_sfnt_table(FONT, *b"COLR");
+    let cbdt = with_sfnt_table(FONT, *b"CBDT");
+    let sbix = with_sfnt_table(FONT, *b"sbix");
+
+    assert!(!system_fonts::reader_has_color_table(&mut Cursor::new(FONT), Some(0)));
+    assert!(system_fonts::reader_has_color_table(&mut Cursor::new(colr.as_slice()), Some(0)));
+    assert!(system_fonts::reader_has_color_table(&mut Cursor::new(cbdt.as_slice()), Some(0)));
+    assert!(system_fonts::reader_has_color_table(&mut Cursor::new(sbix.as_slice()), Some(0)));
+    assert!(!system_fonts::reader_has_color_table(&mut Cursor::new(b""), None));
+    assert!(!system_fonts::reader_has_color_table(&mut Cursor::new(b"not a font"), None));
+
+    // Minimal TTC header with face 0 monochrome and face 1 COLR.
+    let face0_off = 20u32;
+    let face1_off = face0_off + 28;
+    let mut ttc = Vec::new();
+    ttc.extend_from_slice(b"ttcf");
+    ttc.extend_from_slice(&[0, 1, 0, 0]);
+    ttc.extend_from_slice(&2u32.to_be_bytes());
+    ttc.extend_from_slice(&face0_off.to_be_bytes());
+    ttc.extend_from_slice(&face1_off.to_be_bytes());
+    // Face 0: 1 table ("head")
+    ttc.extend_from_slice(&[0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
+    ttc.extend_from_slice(b"head            ");
+    // Face 1: 1 table ("COLR")
+    ttc.extend_from_slice(&[0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
+    ttc.extend_from_slice(b"COLR            ");
+    assert!(!system_fonts::reader_has_color_table(&mut Cursor::new(ttc.as_slice()), Some(0)));
+    assert!(system_fonts::reader_has_color_table(&mut Cursor::new(ttc.as_slice()), Some(1)));
+    assert!(system_fonts::reader_has_color_table(&mut Cursor::new(ttc.as_slice()), None));
+    assert!(!system_fonts::reader_has_color_table(&mut Cursor::new(ttc.as_slice()), Some(2)));
+
+    let mut collection = Collection::new(CollectionOptions { shared: false, system_fonts: false });
+    let dejavu = collection.register_fonts(
+        Blob::new(Arc::new(FONT)),
+        Some(FontInfoOverride { family_name: Some("DejaVu Sans"), ..Default::default() }),
+    )[0].0;
+    let noto_mono = collection.register_fonts(
+        Blob::new(Arc::new(FONT)),
+        Some(FontInfoOverride { family_name: Some("Noto Emoji"), ..Default::default() }),
+    )[0].0;
+    let twemoji = collection.register_fonts(
+        Blob::new(Arc::new(colr)),
+        Some(FontInfoOverride { family_name: Some("Twemoji"), ..Default::default() }),
+    )[0].0;
+    let joypixels = collection.register_fonts(
+        Blob::new(Arc::new(cbdt)),
+        Some(FontInfoOverride { family_name: Some("JoyPixels"), ..Default::default() }),
+    )[0].0;
+
+    // Skips monochrome families (DejaVu Sans, Noto Emoji) to find Twemoji.
+    collection.set_generic_families(GenericFamily::Emoji, [dejavu, noto_mono, twemoji, joypixels].into_iter());
+    assert_eq!(system_fonts::first_color_emoji_family(&mut collection), Some((twemoji, "Twemoji".into())));
+
+    // Finds JoyPixels when it is first among colour emoji families.
+    collection.set_generic_families(GenericFamily::Emoji, [joypixels, twemoji].into_iter());
+    assert_eq!(system_fonts::first_color_emoji_family(&mut collection), Some((joypixels, "JoyPixels".into())));
+
+    // Returns None when only monochrome families are installed.
+    collection.set_generic_families(GenericFamily::Emoji, [dejavu, noto_mono].into_iter());
+    assert_eq!(system_fonts::first_color_emoji_family(&mut collection), None);
+}

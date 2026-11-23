@@ -1,0 +1,1 @@
+- Linux: when `Noto Color Emoji` is not installed, symbol fallback now resolves fontconfig's generic `emoji` family (such as `Twemoji` or `JoyPixels`) by checking colour glyph tables (`COLR`, `CBDT`, `sbix`), and keeps the active colour emoji family last in `symbol_families` regardless of whether its name contains `"Emoji"`.
