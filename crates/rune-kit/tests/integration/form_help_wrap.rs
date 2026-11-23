@@ -415,3 +415,65 @@ fn short_help_text_stays_single_line_and_preserves_layout() {
     assert!(sw[2] < 200.0 && cb[2] < 200.0, "Switch {sw:?} and Checkbox {cb:?} stay compact");
     assert!(ri[2] < 200.0 && rg[2] < 200.0, "RadioItem {ri:?} and RadioGroup {rg:?} stay compact");
 }
+
+#[test]
+fn inline_controls_wrap_inside_narrow_field() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let k = Kit::neutral(true);
+        let mk = |desc: &'static str, tag: &str| {
+            col()
+                .key(format!("box-{tag}"))
+                .w(240.0)
+                .gap(12.0)
+                .child(
+                    Field::new()
+                        .label("Switch")
+                        .control(Switch::new(false).label("Alerts").description(desc).build(&k).key(format!("sw-{tag}")))
+                        .build(&k),
+                )
+                .child(
+                    Field::new()
+                        .label("Checkbox")
+                        .control(Checkbox::new(false).label("Sync").description(desc).build(&k).key(format!("cb-{tag}")))
+                        .build(&k),
+                )
+                .child(
+                    Field::new()
+                        .label("RadioItem")
+                        .control(RadioItem::new("Dark", true).description(desc).build(&k).key(format!("ri-{tag}")))
+                        .build(&k),
+                )
+                .child(
+                    Field::new()
+                        .label("RadioGroup")
+                        .control(
+                            RadioGroup::new()
+                                .label("Theme")
+                                .description(desc)
+                                .item(RadioItem::new("Light", true).description(desc))
+                                .build(&k)
+                                .key(format!("rg-{tag}")),
+                        )
+                        .build(&k),
+                )
+        };
+        row().gap(16.0).child(mk(SHORT, "short")).child(mk(LONG, "long"))
+    }
+
+    let mut rt = Runtime::new((), view, (800.0, 1200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let els = rt.elements();
+    let long_box = by_key(&els, "box-long").rect;
+    for (prefix, name) in [
+        ("sw", "Field(Switch)"),
+        ("cb", "Field(Checkbox)"),
+        ("ri", "Field(RadioItem)"),
+        ("rg", "Field(RadioGroup)"),
+    ] {
+        let sc = by_key(&els, &format!("{prefix}-short")).rect;
+        let lc = by_key(&els, &format!("{prefix}-long")).rect;
+        let sd = find_under(&els, &format!("{prefix}-short"), "description").rect;
+        let ld = find_under(&els, &format!("{prefix}-long"), "description").rect;
+        assert_wraps_inside(name, long_box, sc, sd, lc, ld);
+    }
+}

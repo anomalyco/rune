@@ -10,6 +10,8 @@
 
 mod baseline_store;
 mod cache;
+#[cfg(test)]
+mod fit_content_tests;
 pub mod prelude;
 mod stack;
 mod store;
