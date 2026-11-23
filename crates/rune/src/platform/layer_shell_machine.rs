@@ -410,6 +410,176 @@ pub(crate) mod configure_wait {
     }
 }
 
+/// Held-key auto-repeat for Wayland layer-shell surfaces. Wayland leaves key repeat to
+/// clients: `wl_keyboard.repeat_info` gives the rate (keys/s, 0 disables repeat) and initial
+/// delay (ms), and `xkb_keymap_key_repeats` marks which keys may repeat.
+///
+/// The machine holds the repeat policy and, while a repeating key is down, the keycode,
+/// fencing [`Attempt`] and next repeat [`Instant`]. Entering or advancing a hold returns
+/// [`Effect::WakeAt`] for the overlay's wake deadline; [`Event::Due`] fires only when its
+/// attempt still matches and `now >= due`, advancing one repeat per wake so stalls never burst.
+pub(crate) mod repeat {
+    use std::time::Duration;
+    use crate::machine::{Attempt, Effects, Seq};
+    use crate::time::Instant;
+
+    /// Repeat cadence from `wl_keyboard.repeat_info`.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Policy {
+        /// Keys repeat after `delay`, then every `interval`.
+        Repeat { delay: Duration, interval: Duration },
+        /// `rate <= 0`: repeating is disabled.
+        Disabled,
+    }
+
+    impl Default for Policy {
+        /// 25 keys/s after 200 ms, matching winit until `wl_keyboard.repeat_info` arrives.
+        fn default() -> Self {
+            Self::Repeat {
+                delay: Duration::from_millis(200),
+                interval: Duration::from_millis(40),
+            }
+        }
+    }
+
+    impl Policy {
+        /// Converts Wayland `wl_keyboard.repeat_info` arguments (`rate` in keys/s, `delay_ms` in ms).
+        pub(crate) fn from_wayland(rate: i32, delay_ms: i32) -> Self {
+            if rate <= 0 {
+                return Self::Disabled;
+            }
+            let interval = Duration::from_nanos((1_000_000_000 / rate as u64).max(1));
+            let delay = Duration::from_millis(delay_ms.max(0) as u64);
+            Self::Repeat { delay, interval }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum State {
+        /// No key is repeating.
+        Idle { policy: Policy },
+        /// `key` (Wayland evdev scancode) is held and repeats next at `due` under `attempt`.
+        Holding {
+            delay: Duration,
+            interval: Duration,
+            key: u32,
+            attempt: Attempt,
+            due: Instant,
+        },
+    }
+
+    impl Default for State {
+        fn default() -> Self {
+            Self::Idle { policy: Policy::default() }
+        }
+    }
+
+    impl State {
+        /// Next repeat deadline while a key is held, for the overlay's wake timer.
+        pub(crate) fn deadline(&self) -> Option<Instant> {
+            match *self {
+                Self::Holding { due, .. } => Some(due),
+                Self::Idle { .. } => None,
+            }
+        }
+
+        /// Fencing token of the currently armed repeat timer, if any.
+        pub(crate) fn attempt(&self) -> Option<Attempt> {
+            match *self {
+                Self::Holding { attempt, .. } => Some(attempt),
+                Self::Idle { .. } => None,
+            }
+        }
+
+        /// Currently repeating Wayland keycode, if any.
+        #[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+        pub(crate) fn key(&self) -> Option<u32> {
+            match *self {
+                Self::Holding { key, .. } => Some(key),
+                Self::Idle { .. } => None,
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Event {
+        /// Compositor updated `wl_keyboard.repeat_info`.
+        RepeatInfo { rate: i32, delay_ms: i32 },
+        /// Key pressed while focused; `repeats` comes from `xkb_keymap_key_repeats`.
+        Press { key: u32, repeats: bool, now: Instant },
+        /// Key released.
+        Release { key: u32 },
+        /// Focus left/changed, keymap invalidated the held key, or the surface was drained while hidden.
+        Stop,
+        /// The seat lost its keyboard capability: stops any repeat and resets policy to default
+        /// for the next `wl_keyboard` object.
+        KeyboardGone,
+        /// The wake timer fired at `now` for `attempt`.
+        Due { attempt: Attempt, now: Instant },
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Effect {
+        /// Emit a repeated press of Wayland keycode `key` using the current XKB state.
+        Repeat { key: u32 },
+        /// Wake the overlay at `Instant` for the next repeat.
+        WakeAt(Instant),
+    }
+
+    pub(crate) fn step(seq: &mut Seq, state: &mut State, event: Event) -> Effects<Effect> {
+        match (*state, event) {
+            (State::Idle { .. }, Event::RepeatInfo { rate, delay_ms }) => {
+                *state = State::Idle { policy: Policy::from_wayland(rate, delay_ms) };
+                Effects::none()
+            }
+            (State::Holding { key, attempt, due, .. }, Event::RepeatInfo { rate, delay_ms }) => {
+                match Policy::from_wayland(rate, delay_ms) {
+                    Policy::Disabled => {
+                        *state = State::Idle { policy: Policy::Disabled };
+                    }
+                    Policy::Repeat { delay, interval } => {
+                        *state = State::Holding { delay, interval, key, attempt, due };
+                    }
+                }
+                Effects::none()
+            }
+            (_, Event::Press { repeats: false, .. }) => Effects::none(),
+            (State::Idle { policy: Policy::Disabled }, Event::Press { .. }) => Effects::none(),
+            (
+                State::Idle { policy: Policy::Repeat { delay, interval } }
+                | State::Holding { delay, interval, .. },
+                Event::Press { key, repeats: true, now },
+            ) => {
+                let attempt = seq.next();
+                let due = now + delay;
+                *state = State::Holding { delay, interval, key, attempt, due };
+                Effects::one(Effect::WakeAt(due))
+            }
+            (State::Holding { delay, interval, key: held, .. }, Event::Release { key }) if held == key => {
+                *state = State::Idle { policy: Policy::Repeat { delay, interval } };
+                Effects::none()
+            }
+            (State::Holding { delay, interval, .. }, Event::Stop) => {
+                *state = State::Idle { policy: Policy::Repeat { delay, interval } };
+                Effects::none()
+            }
+            (_, Event::KeyboardGone) => {
+                *state = State::default();
+                Effects::none()
+            }
+            (State::Holding { delay, interval, key, attempt: armed, due }, Event::Due { attempt, now })
+                if armed == attempt && now >= due =>
+            {
+                let next_attempt = seq.next();
+                let next_due = now + interval;
+                *state = State::Holding { delay, interval, key, attempt: next_attempt, due: next_due };
+                Effects::two(Effect::Repeat { key }, Effect::WakeAt(next_due))
+            }
+            _ => Effects::none(),
+        }
+    }
+}
+
 /// The `zwlr_layer_surface_v1.set_exclusive_zone` value for `placement`: `-1` lets a full-screen
 /// overlay cover bars and other surfaces that reserve space; other placements keep `0` so they
 /// neither reserve space nor ignore other surfaces' exclusive zones.

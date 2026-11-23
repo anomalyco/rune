@@ -28,6 +28,14 @@ impl OverlayCore {
         // A Windows fade-out steps its alpha once a frame.
         #[cfg(target_os = "windows")]
         let deadline = deadline.into_iter().chain(self.presence.fading().then(|| crate::time::now() + crate::window::TIMER_FRAME)).min();
+        // Wayland layer-shell overlays schedule held-key repeats on the overlay wake timer.
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        let deadline = deadline.into_iter().chain(self.presence.drawing().then(|| {
+            match self.surface.live().map(|l| &l.backing) {
+                Some(Backing::Layer(layer)) => layer.repeat_deadline(),
+                _ => None,
+            }
+        }).flatten()).min();
         deadline.into_iter().chain(self.backoff.deadline().filter(|_| self.presence.drawing())).chain(self.presence.deadline())
             .chain(self.hidden_pace.deadline().filter(|_| !self.presence.drawing())).min()
     }
