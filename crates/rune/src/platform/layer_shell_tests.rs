@@ -1,4 +1,4 @@
-use super::{named_keysym, read_keymap_fd};
+use super::{feed_compose, named_keysym, read_keymap_fd};
 use crate::platform::layer_shell_machine::keyboard::MAX_KEYMAP_BYTES;
 use crate::Key;
 
@@ -88,4 +88,56 @@ fn wait_for_configure_times_out_on_silent_socket_and_errors_on_hangup() -> std::
     assert_eq!(outcome, Outcome::Error);
     assert!(started.elapsed() < Duration::from_secs(1));
     Ok(())
+}
+
+#[test]
+fn xkb_compose_feeds_dead_keys_and_resets_after_composed_or_cancelled() {
+    use xkbcommon::xkb;
+    use crate::platform::layer_shell_machine::keyboard::ComposeOutcome;
+
+    let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+    let table_src = concat!(
+        "<dead_acute> <a> : \"á\" aacute\n",
+        "<dead_acute> <A> : \"Á\" Aacute\n",
+        "<dead_acute> <dead_acute> : \"´\" acute\n",
+    );
+    let table = xkb::compose::Table::new_from_buffer(
+        &context,
+        table_src.as_bytes(),
+        "en_US.UTF-8",
+        xkb::compose::FORMAT_TEXT_V1,
+        xkb::compose::COMPILE_NO_FLAGS,
+    )
+    .expect("in-memory compose table");
+    let mut compose = xkb::compose::State::new(&table, xkb::compose::STATE_NO_FLAGS);
+
+    let dead_acute = xkb::Keysym::new(xkb::keysyms::KEY_dead_acute);
+    let shift = xkb::Keysym::new(xkb::keysyms::KEY_Shift_L);
+    let key_a = xkb::Keysym::new('a' as u32);
+    let key_cap_a = xkb::Keysym::new('A' as u32);
+    let key_q = xkb::Keysym::new('q' as u32);
+
+    // Dead key + a -> Composing then Composed("á"), then plain a -> Nothing.
+    assert_eq!(feed_compose(&mut compose, dead_acute), ComposeOutcome::Composing);
+    assert_eq!(feed_compose(&mut compose, key_a), ComposeOutcome::Composed(Some("á".into())));
+    assert_eq!(feed_compose(&mut compose, key_a), ComposeOutcome::Nothing);
+
+    // Modifier between dead key and letter is ignored by xkb compose and keeps Composing alive.
+    assert_eq!(feed_compose(&mut compose, dead_acute), ComposeOutcome::Composing);
+    assert_eq!(feed_compose(&mut compose, shift), ComposeOutcome::Nothing);
+    assert_eq!(feed_compose(&mut compose, key_cap_a), ComposeOutcome::Composed(Some("Á".into())));
+
+    // Double dead key emits the standalone acute accent.
+    assert_eq!(feed_compose(&mut compose, dead_acute), ComposeOutcome::Composing);
+    assert_eq!(feed_compose(&mut compose, dead_acute), ComposeOutcome::Composed(Some("´".into())));
+
+    // Invalid follow-up cancels compose and leaves the next key uncomposed.
+    assert_eq!(feed_compose(&mut compose, dead_acute), ComposeOutcome::Composing);
+    assert_eq!(feed_compose(&mut compose, key_q), ComposeOutcome::Cancelled);
+    assert_eq!(feed_compose(&mut compose, key_a), ComposeOutcome::Nothing);
+
+    // Explicit reset (focus loss / keymap change / command chord) clears a pending dead key.
+    assert_eq!(feed_compose(&mut compose, dead_acute), ComposeOutcome::Composing);
+    compose.reset();
+    assert_eq!(feed_compose(&mut compose, key_a), ComposeOutcome::Nothing);
 }

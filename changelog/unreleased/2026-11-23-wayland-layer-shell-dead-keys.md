@@ -1,0 +1,1 @@
+- Wayland: layer-shell overlays run key presses through XKB compose for the user's locale (`LC_ALL`, `LC_CTYPE`, `LANG`, then `C`), so dead keys type accented letters (`´` then `a` types `á`) as winit windows do.
