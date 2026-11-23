@@ -11,7 +11,7 @@
 
 [package]
 edition = "2018"
-name = "tiny-skia-path"
+name = "rune-tiny-skia-path"
 version = "0.11.4"
 authors = ["Yevhenii Reizner <razrfalcon@gmail.com>"]
 description = "A tiny-skia Bezier path implementation"
@@ -27,6 +27,9 @@ keywords = [
 categories = ["graphics"]
 license = "BSD-3-Clause"
 repository = "https://github.com/RazrFalcon/tiny-skia/tree/master/path"
+
+[lib]
+name = "tiny_skia_path"
 
 [dependencies.arrayref]
 version = "0.3.6"
