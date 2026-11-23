@@ -86,8 +86,8 @@ impl TextInputState {
     }
 
     #[inline]
-    pub(in crate::runtime) fn step_app_ime(&mut self, ev: &Ime) {
-        self.app_ime_comp.step(ev);
+    pub(in crate::runtime) fn step_app_ime(&mut self, ev: &Ime) -> crate::machine::Effects<app_ime::AppImeEffect> {
+        self.app_ime_comp.step(ev)
     }
 
     #[inline]
