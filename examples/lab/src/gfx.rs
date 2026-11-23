@@ -8,6 +8,8 @@
 
 mod gpu;
 mod scenes;
+#[cfg(test)]
+mod tests;
 
 use std::collections::HashMap;
 
@@ -126,9 +128,11 @@ impl Compositor<Lab> for LabGfx {
 
     fn render(&mut self, f: &mut Frame<'_, Lab>) {
         let started = rune::time::now();
-        let rebuilt = self.res.as_ref().is_none_or(|r| r.size != f.size || r.format != f.format);
+        let device_key = f.device_key();
+        let rebuilt = self.res.as_ref().is_none_or(|r| r.device_key != device_key || r.size != f.size || r.format != f.format);
         if rebuilt {
-            self.res = Some(Res::new(f.device, f.queue, f.size, f.format, f.ui));
+            self.res = None;
+            self.res = Some(Res::new(f.device, f.queue, device_key, f.size, f.format, f.ui));
         }
         self.view_pending = false;
         f.device.poll(wgpu::PollType::Poll).ok();

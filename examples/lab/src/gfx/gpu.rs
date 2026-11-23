@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
+use rune::compose::DeviceKey;
 use rune_fx::{FxOptions, FxRenderer, MaskPyramid};
 use rune_light::LightRenderer;
 
@@ -194,6 +195,7 @@ impl Timer {
 }
 
 pub(super) struct Res {
+    pub(super) device_key: DeviceKey,
     pub(super) size: (u32, u32),
     pub(super) format: wgpu::TextureFormat,
     pub(super) scene: Tex,
@@ -214,7 +216,7 @@ pub(super) struct Res {
 }
 
 impl Res {
-    pub(super) fn new(device: &wgpu::Device, queue: &wgpu::Queue, size: (u32, u32), format: wgpu::TextureFormat, ui: &mut rune::render::Renderer) -> Res {
+    pub(super) fn new(device: &wgpu::Device, queue: &wgpu::Queue, device_key: DeviceKey, size: (u32, u32), format: wgpu::TextureFormat, ui: &mut rune::render::Renderer) -> Res {
         use wgpu::TextureUsages as U;
         ui.add_format(device, HDR);
         let rt = U::RENDER_ATTACHMENT | U::TEXTURE_BINDING;
@@ -246,6 +248,7 @@ impl Res {
         let resolve_bg = bind(&resolve, &scene.view);
         let blit_bg = bind(&blit, &lit.view);
         Res {
+            device_key,
             size,
             format,
             pyramid: MaskPyramid::new(device, size.0, size.1),
