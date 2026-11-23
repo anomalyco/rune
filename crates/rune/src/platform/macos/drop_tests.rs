@@ -1,61 +1,12 @@
 #![allow(unsafe_code)]
 
 use super::*;
+use crate::platform::macos::test_pasteboard::{self, Board};
 use objc2_foundation::NSData;
-
-/// A private pasteboard, released when dropped.
-struct Board(Retained<NSPasteboard>);
-
-impl Drop for Board {
-    fn drop(&mut self) {
-        // SAFETY: `self.0` is a private named pasteboard created via `pasteboardWithName:` and released once on drop.
-        unsafe { msg_send![&*self.0, releaseGlobally] }
-    }
-}
-
-impl std::ops::Deref for Board {
-    type Target = NSPasteboard;
-    fn deref(&self) -> &NSPasteboard { &self.0 }
-}
-
-/// A private named pasteboard unique to this call. `+[NSPasteboard pasteboardWithUniqueName]`
-/// stamps names from `mach_absolute_time`, so parallel tests that start within one tick receive
-/// the same `NSPasteboard` instance and overwrite each other's items.
-fn unique_board() -> Option<Board> {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let name = NSString::from_str(&format!("dev.rune.drop-test.{}.{n}", std::process::id()));
-    // SAFETY: `+[NSPasteboard pasteboardWithName:]` takes an `NSString` and returns a retained or
-    // nil `NSPasteboard`; the private pasteboard is released once in `Board::drop`.
-    let pb: Option<Retained<NSPasteboard>> = unsafe { msg_send![class!(NSPasteboard), pasteboardWithName: &*name] };
-    pb.map(Board)
-}
-
-/// Whether this session has a pasteboard server. A headless or SSH-only session (no window
-/// server) has none, and `pasteboardWithName:` returns nil or refuses writes there, so the
-/// round-trip tests skip with a note instead of panicking.
-fn pasteboard_available() -> bool {
-    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        let probe = std::panic::catch_unwind(|| {
-            let Some(pb) = unique_board() else { return false };
-            pb.clearContents();
-            let item = NSPasteboardItem::new();
-            let kind = NSString::from_str("public.utf8-plain-text");
-            item.setString_forType(&NSString::from_str("probe"), &kind)
-                && pb.writeObjects(&NSArray::from_retained_slice(&[objc2::runtime::ProtocolObject::from_retained(item)]))
-                && pb.stringForType(&kind).is_some_and(|s| s.to_string() == "probe")
-        });
-        let ok = probe.unwrap_or(false);
-        if !ok { eprintln!("macos_drop: no pasteboard in this session (headless?); skipping pasteboard round-trip tests"); }
-        ok
-    })
-}
 
 /// A private pasteboard holding `items`, or None without a pasteboard.
 fn board(items: &[&[(&str, &[u8])]]) -> Option<Board> {
-    if !pasteboard_available() { return None; }
-    let pb = unique_board()?;
+    let pb = test_pasteboard::unique()?;
     pb.clearContents();
     let items: Vec<Retained<NSPasteboardItem>> = items.iter().map(|types| {
         let item = NSPasteboardItem::new();
@@ -144,7 +95,7 @@ fn text_alone_gives_nothing() {
 
 #[test]
 fn parallel_boards_do_not_collide() {
-    if !pasteboard_available() { return; }
+    if !test_pasteboard::available() { return; }
     const THREADS: usize = 8;
     const ROUNDS: usize = 20;
     for round in 0..ROUNDS {
