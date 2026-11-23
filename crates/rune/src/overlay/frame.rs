@@ -294,6 +294,20 @@ pub(super) fn submit_and_present(live: &mut Live, renderer: &Renderer, gpu: &Gpu
     }
 }
 
+/// Records a presented overlay frame for launch marks once it is actually shown. Prewarm frames
+/// render while the panel is hidden, so they do not record `frame.first.presented`.
+pub(super) fn record_presented(prewarm: bool) {
+    if !prewarm {
+        crate::window::frame_presented();
+    }
+}
+
+/// Whether revealing a retained macOS overlay exposes an already-drawn prewarm frame without
+/// scheduling another draw (so the reveal itself is the first visible present).
+pub(super) fn retained_reveal_presents(retained: bool, dirty: bool, live: bool) -> bool {
+    retained && !dirty && live
+}
+
 impl Live {
     /// Waits for the frame on the present thread, before the surface is touched again.
     pub(super) fn settle(&mut self) {
@@ -301,3 +315,7 @@ impl Live {
         if let Some(worker) = &mut self.present { worker.wait(); }
     }
 }
+
+#[cfg(test)]
+#[path = "frame_tests.rs"]
+mod tests;

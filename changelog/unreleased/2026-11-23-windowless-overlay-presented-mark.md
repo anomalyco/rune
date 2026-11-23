@@ -1,0 +1,1 @@
+- Marks: presenting a shown overlay (and revealing a prewarmed retained macOS overlay) now records `frame.first.presented` via `window::frame_presented()`, so `.windowless()` overlay-only apps record their startup end mark (and wake Windows' deferred ICU word segmenter) on first present without firing during hidden prewarm.

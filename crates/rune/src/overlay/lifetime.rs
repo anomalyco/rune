@@ -33,6 +33,11 @@ impl OverlayCore {
             // the surface before exposing it, rather than flashing the old frame.
             if !fading { self.refresh_for_reveal_at(app, crate::time::now()); }
             self.show_window(&window, fade);
+            // A retained macOS panel drew while hidden during prewarm and does not mark itself
+            // dirty on reveal, so exposing its retained pixels is the first visible present.
+            if frame::retained_reveal_presents(self.retained(), self.dirty, self.surface.live().is_some()) {
+                frame::record_presented(false);
+            }
         }
         let effects = self.presence.step(presence::Event::Show, self.release);
         self.carry_out(app, effects);
