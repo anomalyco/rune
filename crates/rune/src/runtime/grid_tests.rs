@@ -54,3 +54,20 @@ fn one_changed_row_draws_as_a_fresh_screen_would() {
     fresh.frame(0.0);
     assert_eq!(placed(&rt), placed(&fresh));
 }
+
+#[test]
+fn zero_size_grid_cells_emit_no_row_fill_rects() {
+    fn view((cw, ch): &(f32, f32), _: &mut Cx<(f32, f32)>) -> El {
+        let style = TextStyle::new(14.0, 400.0).lh(18.0);
+        let fill = Color { r: 0.2, g: 0.8, b: 0.4, a: 1.0 };
+        let r = Rc::new(GridRow::new("", vec![], style).fill(0, 4, fill));
+        col().w_full().h_full().child(grid(24, *cw, *ch, vec![r]).w(192.0).h(18.0))
+    }
+
+    for (cw, ch) in [(0.0, 18.0), (8.0, 0.0), (0.0, 0.0), (-8.0, 18.0), (8.0, -18.0)] {
+        let mut rt = Runtime::new((cw, ch), view, (240.0, 40.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let rect_count = rt.instances.iter().filter(|i| i.params[1] == crate::render::KIND_RECT).count();
+        assert_eq!(rect_count, 0, "zero/negative cell ({cw}, {ch}) emitted fill rects: {:?}", rt.instances);
+    }
+}

@@ -118,34 +118,36 @@ impl RuntimeCore {
                 push_shape(&mut self.instances, shape, origin, k, k_px, o, srgb, clip, fade);
             }
         }
-        if let Some(pixels) = &n.vis.pixels {
+        if w > 0.0 && h > 0.0 && let Some(pixels) = &n.vis.pixels {
             let snap_u = if cover.is_none() { (1.0 - (sc - 1.0).abs() * 32.0).clamp(0.0, 1.0) } else { 0.0 };
             let (rect, crop) = crate::pixels::fit_in(n.vis.pixels_fit, n.vis.surface_place, [r[0], r[1], w, h], pixels.size(), snap_u);
             let span = [crop[2] - crop[0], crop[3] - crop[1]];
-            // The mip covers the whole image's drawn size, not just its visible window.
-            let placed = self.images.place_at(pixels, [rect[2] / span[0], rect[3] / span[1]], Some(now));
-            // An animated image wakes the window for its next frame only while drawn in a shown
-            // window: off screen it isn't painted, so it asks for nothing.
-            if let Some((_, Some(at))) = placed && self.frame.live.visible() && self.time_scale > 0.0 {
-                let wake = self.clock + (at - now).max(0.0) / self.time_scale as f64;
-                self.paint.keep.cycles.other_deadline();
-                self.motion.arm_loop_wake(wake, at);
-            }
-            if let Some((image, _)) = placed {
-                let [x, y, iw, ih] = image.rect.map(|v| v as f32);
-                // A letterboxed image rounds its own, smaller corners.
-                let half = rect[2].min(rect[3]) * 0.5;
-                self.instances.push(Instance {
-                    rect,
-                    radii: if n.vis.pixels_fit.is_some() { radii.map(|v| v.min(half)) } else { radii },
-                    fill: [0.0, 0.0, 0.0, o],
-                    border: [0.0; 4],
-                    params: [image.page as f32, KIND_IMAGE, image.premultiplied as u8 as f32, 1.0],
-                    // The shader samples from a whole-texel origin; the span may be fractional.
-                    uv: [x + (crop[0] * iw).round(), y + (crop[1] * ih).round(), span[0] * iw, span[1] * ih],
-                    clip,
-                    fade: crate::render::pack_fade(fade, clip, clip),
-                });
+            if rect[2] > 0.0 && rect[3] > 0.0 && span[0] > 0.0 && span[1] > 0.0 {
+                // The mip covers the whole image's drawn size, not just its visible window.
+                let placed = self.images.place_at(pixels, [rect[2] / span[0], rect[3] / span[1]], Some(now));
+                // An animated image wakes the window for its next frame only while drawn in a shown
+                // window: off screen it isn't painted, so it asks for nothing.
+                if let Some((_, Some(at))) = placed && self.frame.live.visible() && self.time_scale > 0.0 {
+                    let wake = self.clock + (at - now).max(0.0) / self.time_scale as f64;
+                    self.paint.keep.cycles.other_deadline();
+                    self.motion.arm_loop_wake(wake, at);
+                }
+                if let Some((image, _)) = placed {
+                    let [x, y, iw, ih] = image.rect.map(|v| v as f32);
+                    // A letterboxed image rounds its own, smaller corners.
+                    let half = rect[2].min(rect[3]) * 0.5;
+                    self.instances.push(Instance {
+                        rect,
+                        radii: if n.vis.pixels_fit.is_some() { radii.map(|v| v.min(half)) } else { radii },
+                        fill: [0.0, 0.0, 0.0, o],
+                        border: [0.0; 4],
+                        params: [image.page as f32, KIND_IMAGE, image.premultiplied as u8 as f32, 1.0],
+                        // The shader samples from a whole-texel origin; the span may be fractional.
+                        uv: [x + (crop[0] * iw).round(), y + (crop[1] * ih).round(), span[0] * iw, span[1] * ih],
+                        clip,
+                        fade: crate::render::pack_fade(fade, clip, clip),
+                    });
+                }
             }
         }
         if let Some((ic, _)) = n.vis.icon {
@@ -589,7 +591,7 @@ impl RuntimeCore {
                     let (w, h) = (w as f32, h as f32);
                     let k = (drawn[0] / w).min(drawn[1] / h);
                     let rect = [at[0] + (drawn[0] - w * k) * 0.5, at[1] + (drawn[1] - h * k) * 0.5, w * k, h * k];
-                    if let Some(image) = self.images.place(pixels, [rect[2], rect[3]]) {
+                    if rect[2] > 0.0 && rect[3] > 0.0 && let Some(image) = self.images.place(pixels, [rect[2], rect[3]]) {
                         self.instances.push(Instance {
                             rect,
                             radii: [(b.radius * s * tk).min(rect[2].min(rect[3]) * 0.5); 4],

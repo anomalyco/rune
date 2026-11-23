@@ -1,0 +1,1 @@
+- Paint: images in zero-width or zero-height boxes no longer emit `KIND_IMAGE` instances (avoiding division by zero in the shader), and grid row fills with zero or non-positive area no longer emit fill rectangles.
