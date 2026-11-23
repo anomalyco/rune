@@ -300,3 +300,52 @@ fn a_commit_records_why_for_the_frame_log() {
         assert_eq!(rt.commit.commit_why() & want, want, "source {source}: {:?}", CommitWhy::names(rt.commit.commit_why()));
     }
 }
+
+#[test]
+fn live_only_without_live_subscriptions_rests_after_one_frame() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        el().size(200.0, 200.0)
+            .child(el().key("target").size(100.0, 100.0).focusable(true)
+                .on_physical_input(|_: &mut (), e, tx| {
+                    if !matches!(e, PhysicalInput::Key { pressed: false, .. }) { return false; }
+                    tx.live_only();
+                    true
+                })
+                .on_wheel(|_: &mut (), _, tx| { tx.live_only(); true }))
+    }
+    let mut rt = Runtime::new((), view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.check_live_only(false);
+    rt.on_key = Some(|_, _, tx| { tx.live_only(); true });
+    rt.frame(0.0);
+    let (x, y) = rt.find("target").unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    for _ in 0..60 { rt.frame(1.0 / 120.0); }
+    assert!(!rt.live_pending());
+    assert_eq!(rt.core().waiting_work(), None);
+    let before = rt.stats.commits;
+
+    // 1. Key handler via physical_with_fallback (native path).
+    let (ev, fallback) = key(PhysicalKeyCode::KeyJ, Key::Text("j".into()), true);
+    rt.physical_with_fallback(ev, fallback);
+    rt.frame(1.0 / 120.0);
+    assert_eq!(rt.stats.commits, before);
+    assert!(!rt.live_pending(), "key live_only must not stick live_pending without subscriptions");
+    assert_eq!(rt.core().waiting_work(), None);
+
+    // 2. Physical release observation at rest (outside frame_step).
+    let release = PhysicalInput::Key { key: PhysicalKeyCode::ShiftLeft, mods: Mods::default(), pressed: false, repeat: false };
+    assert!(rt.physical_with_fallback(release, None));
+    assert!(!rt.live_pending(), "physical observation must not mark live_pending without subscriptions");
+    rt.frame(1.0 / 120.0);
+    assert_eq!(rt.stats.commits, before);
+    assert!(!rt.live_pending());
+    assert_eq!(rt.core().waiting_work(), None);
+
+    // 3. Wheel handler calling live_only.
+    rt.wheel(x, y, -20.0);
+    rt.frame(1.0 / 120.0);
+    assert_eq!(rt.stats.commits, before);
+    assert!(!rt.live_pending(), "wheel live_only must not stick live_pending without subscriptions");
+    assert_eq!(rt.core().waiting_work(), None);
+}

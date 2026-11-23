@@ -40,12 +40,12 @@ impl RuntimeCore {
         if self.frame.live_only_check && self.clock - self.commit.last_commit_clock() >= LIVE_ONLY_CHECK {
             if self.frame.live_check.is_none() { self.frame.live_check = Some((label.to_string(), self.view_print())); }
             self.frame.live_checks += 1;
-            self.frame.live.set();
+            if self.frame.has_live_subscriptions() { self.frame.live.set(); }
             return true;
         }
         let _ = label;
         self.frame.live_only_skips += 1;
-        self.frame.live.set();
+        if self.frame.has_live_subscriptions() { self.frame.live.set(); }
         false
     }
 
