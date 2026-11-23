@@ -1,0 +1,1 @@
+- Docs: root `README.md` "Add it" now includes the required `[patch.crates-io]` entries (`winit`, `sctk-adwaita`, `parley_engine`, `wgpu-hal`, `accesskit_windows`, `accesskit_macos`), notes that Cargo does not inherit patches from a dependency, and links to root `Cargo.toml` and `crates/rune/README.md#depending-on-rune`.

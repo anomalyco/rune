@@ -49,10 +49,19 @@ Give your coding agent this repo. Have it start from [`examples/hello`](examples
 ## Add it
 
 ```toml
+[dependencies]
 rune = { git = "https://github.com/anomalyco/rune", rev = "<dev rev>" }
+
+[patch.crates-io]
+winit = { git = "https://github.com/anomalyco/rune", rev = "<dev rev>" }
+sctk-adwaita = { git = "https://github.com/anomalyco/rune", rev = "<dev rev>" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "<dev rev>" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "<dev rev>" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "<dev rev>" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "<dev rev>" }
 ```
 
-Rune is pre-release. Pin a rev of `dev`; `dev` is never rewritten.
+Rune is pre-release. Pin a rev of `dev`; `dev` is never rewritten. Cargo does not inherit `[patch.crates-io]` from a dependency, so put those patches in your workspace root `Cargo.toml` at the same `rev`. When pinning or bumping `rev`, check Rune's [`Cargo.toml`](Cargo.toml) for the current `[patch.crates-io]` list and see [Depending on Rune](crates/rune/README.md#depending-on-rune) for details.
 
 On Windows, the MSVC toolchain (`x86_64-pc-windows-msvc`, rustup's default) needs only the Visual Studio C++ build tools rustup asks for. The GNU toolchain (`x86_64-pc-windows-gnu`) also needs MinGW-w64's binutils on `PATH`: `windows-link` (under `parking_lot`, `libloading`, `windows-core` and `windows-sys`, so under every Windows UI crate) imports with `raw-dylib`, rustc makes those import libraries with `dlltool` on GNU targets, and the `dlltool` in rustup's `rust-mingw` can't run without an `as` it doesn't ship ([rust-lang/rust#140704](https://github.com/rust-lang/rust/issues/140704)). Without binutils the build stops at `windows-result` with `error calling dlltool 'dlltool.exe': program not found`. Install [MSYS2](https://www.msys2.org), run `pacman -S mingw-w64-ucrt-x86_64-binutils`, and put `C:\msys64\ucrt64\bin` on `PATH` (or build with `RUSTFLAGS=-Cdlltool=C:\msys64\ucrt64\bin\dlltool.exe`).
 
