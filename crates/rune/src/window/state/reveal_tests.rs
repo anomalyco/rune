@@ -26,13 +26,22 @@ fn an_open_reads_the_system_style_before_it_builds() {
 
 #[test]
 fn a_cached_reveal_cancels_the_timer_frame_as_every_show_does() {
-    for found in [HIDDEN, SHOWN] {
-        assert_eq!(effects(Reveal::Cached, found), [OrderIn { focus: true }, Shown { live: true }, CancelTimerFrame, Number, RedrawIfMoving]);
-    }
+    assert_eq!(effects(Reveal::Cached, HIDDEN), [ApplyFrame, Place, OrderIn { focus: true }, Shown { live: true }, CancelTimerFrame, Number, RedrawIfMoving]);
+    assert_eq!(effects(Reveal::Cached, SHOWN), [OrderIn { focus: true }, Shown { live: true }, CancelTimerFrame, Number, RedrawIfMoving]);
     for reveal in [Reveal::Show, Reveal::Open] {
         assert!(effects(reveal, SHOWN).contains(&CancelTimerFrame), "{reveal:?}");
     }
     assert!(effects(Reveal::Cached, Found::Missing).is_empty(), "a launcher reveal never creates");
+}
+
+#[test]
+fn a_hidden_cached_reveal_applies_pending_frame_and_placement_before_ordering_in() {
+    let steps = effects(Reveal::Cached, HIDDEN);
+    let apply = steps.iter().position(|e| *e == ApplyFrame).expect("applies pending window_frame");
+    let place = steps.iter().position(|e| *e == Place).expect("re-places at the new height");
+    let order = steps.iter().position(|e| *e == OrderIn { focus: true }).expect("orders in");
+    assert!(apply < place && place < order, "frame and placement precede order-in: {steps:?}");
+    assert!(!effects(Reveal::Cached, SHOWN).contains(&ApplyFrame), "an already-shown launcher keeps its frame animation");
 }
 
 #[test]

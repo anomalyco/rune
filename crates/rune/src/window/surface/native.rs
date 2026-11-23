@@ -34,8 +34,9 @@ pub(in crate::window) struct Native {
 }
 
 /// Whether a frame may presume the window on screen before AppKit says so: `Host::try_create`'s
-/// frame and one follow-up do, since the window reaches the screen with that turn's Core
-/// Animation commit. Once AppKit answers, or the window leaves the screen, none does.
+/// frame, a panel ordered in (`Win::show`), and one follow-up do, since the window reaches the
+/// screen with that turn's Core Animation commit. Once AppKit answers, or the window leaves the
+/// screen, none does.
 #[cfg(target_os = "macos")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::window) enum Prime {
@@ -46,6 +47,9 @@ pub(in crate::window) enum Prime {
 #[cfg(target_os = "macos")]
 impl Prime {
     pub(in crate::window) fn launching() -> Self { Prime::Launching { left: 2 } }
+
+    /// Presumes the window shown for the next two frames (used when ordering a panel in).
+    pub(in crate::window) fn arm(&mut self) { *self = Self::launching(); }
 
     pub(in crate::window) fn presumes(self) -> bool { matches!(self, Prime::Launching { .. }) }
 

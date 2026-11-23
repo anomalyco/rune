@@ -34,6 +34,9 @@ pub(in crate::window) enum RevealEffect {
     /// Builds what changed while the window was away and takes its new height before it is
     /// ordered in (`Host::build_for_show`).
     Build,
+    /// Applies a pending window frame request (such as a `fit_content_height` height queued
+    /// while hidden) at once and resizes the surface before ordering in.
+    ApplyFrame,
     /// Applies a placement request.
     Place,
     /// Creates the window, which comes on screen as it opens.
@@ -69,6 +72,7 @@ impl Reveal {
             Found::Shown { covered, minimized } => (false, covered, minimized),
         };
         if self == Reveal::Cached {
+            if hidden { out.extend([ApplyFrame, Place]); }
             out.extend([OrderIn { focus: true }, Shown { live: true }, CancelTimerFrame, Number, RedrawIfMoving]);
             return out;
         }
