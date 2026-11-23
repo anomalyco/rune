@@ -82,66 +82,11 @@ enum Picture {
 /// A measured picture's measure key: its ratio, so a new one measures again.
 fn picture_key(ratio: f32) -> u64 { 0x7069_6300_0000_0000 | u64::from(ratio.to_bits()) }
 
-// Build the owned path directly, without cloning a key or formatting an index into a
-// temporary segment first. Measurement and flattening must use the same identity rule.
-/// Whether `path` lies inside an element keyed `scope` (always, without one).
-pub(crate) fn in_scope(path: &str, scope: Option<&str>) -> bool {
-    scope.is_none_or(|s| path.split('/').any(|seg| seg == s))
-}
-
-pub(in crate::runtime) fn node_path(parent: &str, key: Option<&str>, index: usize) -> String {
-    match (parent.is_empty(), key) {
-        (true, Some(key)) => key.to_owned(),
-        (true, None) => format!("#{index}"),
-        // Sized up front: `format!` guesses short and reallocates every deep path, twice a
-        // commit per element.
-        (false, Some(key)) => {
-            let mut path = String::with_capacity(parent.len() + 1 + key.len());
-            path.push_str(parent);
-            path.push('/');
-            path.push_str(key);
-            path
-        }
-        (false, None) => {
-            use std::fmt::Write;
-            let mut path = String::with_capacity(parent.len() + 22);
-            path.push_str(parent);
-            write!(path, "/#{index}").ok();
-            path
-        }
-    }
-}
-
-#[inline(always)]
-fn push_usize(buf: &mut String, mut n: usize) {
-    if n < 10 {
-        buf.push((b'0' + n as u8) as char);
-        return;
-    }
-    let mut digits = [0u8; 20];
-    let mut i = digits.len();
-    while n > 0 {
-        i -= 1;
-        digits[i] = b'0' + (n % 10) as u8;
-        n /= 10;
-    }
-    if let Ok(s) = std::str::from_utf8(&digits[i..]) {
-        buf.push_str(s);
-    }
-}
-
-fn push_segment(path: &mut String, key: Option<&str>, index: usize) {
-    if !path.is_empty() {
-        path.push('/');
-    }
-    match key {
-        Some(k) => path.push_str(k),
-        None => {
-            path.push('#');
-            push_usize(path, index);
-        }
-    }
-}
+pub(crate) use super::path::in_scope;
+pub(in crate::runtime) use super::path::node_path;
+use super::path::push_segment;
+#[cfg(test)]
+use super::path::push_usize;
 
 #[inline]
 fn can_take_old_path(old: &Node, path_buf: &str) -> bool {

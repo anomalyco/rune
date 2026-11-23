@@ -358,5 +358,5 @@ impl<S> Cx<S> {
 /// [`Cx::caret`] for the caret `caret` (the focused field's path and rect).
 pub(crate) fn caret_of(caret: &Option<(String, [f32; 4])>, key: &str) -> Option<[f32; 4]> {
     let (path, rect) = caret.as_ref()?;
-    path.split('/').any(|seg| seg == key).then_some(*rect)
+    path.split('/').any(|seg| element_path::segment_matches_key(seg, key)).then_some(*rect)
 }

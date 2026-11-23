@@ -200,3 +200,50 @@ fn push_usize_formats_single_and_multi_digit_indices() {
         assert_eq!(buf, format!("root/#{n}"));
     }
 }
+
+#[test]
+fn path_segment_encoding_is_injective_and_preserves_unambiguous_paths() {
+    use super::path::*;
+
+    // Unambiguous keys stay verbatim.
+    for plain in ["root", "ancestor:a", "row:R-94#dup1", "width:50%", "C:\\dir\\file", "#header", "#fff", "#"] {
+        assert_eq!(node_path("#0", Some(plain), 0), format!("#0/{plain}"));
+        assert_eq!(decode_key_segment(plain).as_deref(), Some(plain));
+        assert!(segment_matches_key(plain, plain));
+    }
+
+    // Distinct keys and positional indices never collide, and round-trip through decode.
+    let tricky = [
+        "", "#0", "#12", "#!", "#!foo", "#!a%2Fb", "a/b", "a/b/c",
+        "ancestor:a/#0", "ancestor:a%2F#0", "#!ancestor:a%2F#0", "a/b%25c", "café/50%/%2F",
+    ];
+    let mut encoded = std::collections::HashSet::new();
+    for &k in &tricky {
+        let p = node_path("#0", Some(k), 0);
+        let mut buf = String::from("#0");
+        push_segment(&mut buf, Some(k), 0);
+        assert_eq!(p, buf, "node_path and push_segment agree for {k:?}");
+        let seg = p.strip_prefix("#0/").unwrap();
+        assert!(!seg.is_empty() && !seg.contains('/'), "encoded segment {seg:?} for {k:?}");
+        assert!(!is_unkeyed_segment(seg), "escaped key {seg:?} must not read as unkeyed");
+        assert!(encoded.insert(seg.to_owned()), "collision for {k:?} -> {seg:?}");
+        assert_eq!(decode_key_segment(seg).as_deref(), Some(k), "round-trip for {k:?}");
+        assert!(segment_matches_key(seg, k));
+        assert!(in_scope(&p, Some(k)));
+    }
+    assert!(encoded.insert("#0".to_owned()), "unkeyed #0 must not collide with any escaped key");
+    assert_eq!(decode_key_segment("#0"), None);
+
+    // Child path vs sibling key containing '/'.
+    let child_path = node_path(&node_path("#0", Some("ancestor:a"), 0), None, 0);
+    let sibling_path = node_path("#0", Some("ancestor:a/#0"), 1);
+    assert_eq!(child_path, "#0/ancestor:a/#0");
+    assert_ne!(child_path, sibling_path);
+
+    // Keyed suffix matching across unkeyed nodes and escaped '/' keys.
+    let row_field = node_path(&node_path("#0/viewport/rows", Some("row/0"), 0), Some("field"), 0);
+    assert!(keyed_suffix_matches(&row_field, "row/0/field"));
+    assert!(keyed_suffix_matches(&row_field, "rows/row/0/field"));
+    assert!(crate::flight::selects("row/0/field", &row_field, Some("field")));
+    assert!(!keyed_suffix_matches(&row_field, "viewport/field"));
+}

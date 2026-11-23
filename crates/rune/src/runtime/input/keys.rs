@@ -295,7 +295,10 @@ impl RuntimeCore {
         let path = self.kbd.focus.path()?;
         if let Some(id) = self.focused_index().and_then(|i| self.edit.focused_link_id(&self.tree.nodes[i])) { return Some(id); }
         Some(self.focused_index().and_then(|i| self.tree.nodes[i].key.clone())
-            .unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path).to_owned()))
+            .unwrap_or_else(|| {
+                let last = path.rsplit('/').next().unwrap_or(path);
+                element_path::decode_key_segment(last).map_or_else(|| last.to_owned(), std::borrow::Cow::into_owned)
+            }))
     }
 
     /// The focused element's index. Unlike [`Runtime::node`], this finds it while it exits.

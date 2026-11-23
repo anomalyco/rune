@@ -706,3 +706,46 @@ fn live_region_off_sets_explicit_off_on_accesskit_node() {
     let (_, when) = update.nodes.iter().find(|(_, n)| n.author_id() == Some("when")).expect("updated when node");
     assert_eq!(when.live(), Some(accesskit::Live::Off));
 }
+
+#[test]
+fn sibling_keys_with_slashes_or_indices_produce_distinct_node_and_a11y_ids() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        col().motion(crate::Spring::NONE)
+            .child(row().key("ancestor:a").child(text("A")))
+            .child(row().key("ancestor:a/#0").child(text("B")))
+            .child(row().child(text("C")))
+            .child(row().key("#2").child(text("D")))
+            .child(row().key("ancestor:a%2F#0").child(text("E")))
+            .child(row().key("#!ancestor:a%2F#0").child(text("F")))
+    }
+    let mut rt = Runtime::new((), view, (400.0, 200.0), Env::default());
+    rt.frame(0.0);
+
+    let mut seen_paths = std::collections::HashSet::new();
+    let mut seen_ids = std::collections::HashSet::new();
+    for n in &rt.tree.nodes {
+        assert!(seen_paths.insert(n.path.as_str()), "duplicate node path: {}", n.path);
+        assert!(seen_ids.insert(n.id), "duplicate node id {:?} for path {}", n.id, n.path);
+    }
+
+    let update = rt.accessibility_tree();
+    let mut a11y_ids = std::collections::HashSet::new();
+    let mut child_ids = std::collections::HashSet::new();
+    for (id, node) in &update.nodes {
+        assert!(a11y_ids.insert(*id), "duplicate AccessKit node id {id:?}");
+        for child in node.children() {
+            assert!(child_ids.insert(*child), "duplicate AccessKit child {child:?}");
+        }
+    }
+    for child in &child_ids {
+        assert!(a11y_ids.contains(child), "missing AccessKit child {child:?}");
+    }
+
+    // Unambiguous paths stay identical.
+    let plain = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("ancestor:a")).unwrap();
+    assert_eq!(plain.path, "#0/ancestor:a");
+    let plain_child = rt.tree.nodes.iter().find(|n| n.text.as_ref().is_some_and(|t| t.content == "A")).unwrap();
+    assert_eq!(plain_child.path, "#0/ancestor:a/#0");
+    let pct = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("ancestor:a%2F#0")).unwrap();
+    assert_eq!(pct.path, "#0/ancestor:a%2F#0");
+}

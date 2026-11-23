@@ -204,13 +204,19 @@ fn dist_x(r: [f32; 4], x: f32) -> f32 { (r[0] - x).max(x - r[2]).max(0.0) }
 /// key, so a keyed text keeps its selection when a sibling shifts an unkeyed ancestor's index.
 pub(in crate::runtime) fn same_keyed_path(a: &str, b: &str) -> bool {
     fn split(p: &str) -> Option<(&str, &str)> {
-        let last_key = p.rmatch_indices('/').find(|&(i, _)| !p[i + 1..].starts_with('#'))
-            .map_or_else(|| (!p.starts_with('#')).then_some(0), |(i, _)| Some(i + 1))?;
-        let end = last_key + p[last_key..].find('/').unwrap_or(p.len() - last_key);
+        let seg_end = |start: usize| start + p[start..].find('/').unwrap_or(p.len() - start);
+        let end = p.rmatch_indices('/').find_map(|(i, _)| {
+            let end = seg_end(i + 1);
+            (!element_path::is_unkeyed_segment(&p[i + 1..end])).then_some(end)
+        }).or_else(|| {
+            let end = seg_end(0);
+            (!element_path::is_unkeyed_segment(&p[..end])).then_some(end)
+        })?;
         Some((&p[..end], &p[end..]))
     }
     let (Some((ka, ta)), Some((kb, tb))) = (split(a), split(b)) else { return false };
-    ta == tb && ka.split('/').filter(|s| !s.starts_with('#')).eq(kb.split('/').filter(|s| !s.starts_with('#')))
+    ta == tb && ka.split('/').filter(|s| !element_path::is_unkeyed_segment(s))
+        .eq(kb.split('/').filter(|s| !element_path::is_unkeyed_segment(s)))
 }
 
 impl caret::TextInputState {

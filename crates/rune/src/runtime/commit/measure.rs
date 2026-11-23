@@ -13,8 +13,7 @@ pub(in crate::runtime) fn collect_virtual_inputs(el: &El, parent: &str, index: u
     if input.is_none() && el.children.is_empty() && skip == el.memo_children().map_or(0, |m| m.children.len()) {
         return;
     }
-    let segment = el.key.clone().unwrap_or_else(|| format!("#{index}"));
-    let path = format!("{parent}/{segment}");
+    let path = node_path(parent, el.key.as_deref(), index);
     if let Some(input) = input {
         let mut input = input.clone();
         if inert { input.edit.focused = false; }
@@ -393,7 +392,7 @@ impl Measurement<'_> {
         if force_all { v.range = 0..v.keys.len(); v.before = 0.0; v.after = 0.0; }
         // Keys are unique, so a key is mounted when its row's index is in the range.
         for key in shown.iter().filter(|k| v.index_of(k).is_some_and(|i| !v.range.contains(&i))) {
-            self.virtual_culled.insert(format!("{path}/{key}"));
+            self.virtual_culled.insert(node_path(path, Some(key), 0));
         }
         v.shown = shown;
         Window { same, renamed: renamed_children, pad_top: v.pad_top + v.before, pad_bottom: v.pad_bottom + v.after }
@@ -696,7 +695,9 @@ impl RuntimeCore {
                     i = p;
                 }
             } else {
-                let matches = |k: &str| rest == k || rest.strip_prefix(k).is_some_and(|t| t.starts_with('/'));
+                let seg = rest.split('/').next().unwrap_or(rest);
+                let decoded = super::path::decode_key_segment(seg);
+                let matches = |k: &str| decoded.as_deref() == Some(k);
                 if !v.focused_row.as_deref().is_some_and(matches) {
                     v.focused_row = v.keys.iter().find(|k| matches(k)).cloned();
                 }

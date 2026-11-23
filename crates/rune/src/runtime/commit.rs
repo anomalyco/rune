@@ -10,6 +10,7 @@ pub(super) mod flatten;
 pub(super) mod layout_diagnostics;
 pub(super) mod measure;
 pub(crate) mod memo_reuse;
+pub(crate) mod path;
 pub(super) mod prune;
 #[cfg(test)]
 mod prune_tests;

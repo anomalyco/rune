@@ -64,7 +64,7 @@ impl RuntimeCore {
         if !unseen.contains(&nodes[i].id) { return; }
         let Some(p) = nodes[i].parent else { return };
         let Some(v) = self.commit.virtuals.get_mut(&nodes[p].path) else { return };
-        let Some(key) = nodes[i].path.strip_prefix(nodes[p].path.as_str()).and_then(|k| k.strip_prefix('/')) else { return };
+        let Some(key) = nodes[i].key.as_deref() else { return };
         if !v.replaced_view() { return; }
         v.entering.insert(key.to_owned());
         self.scene.reenter(nodes[i].id);
@@ -81,7 +81,7 @@ impl RuntimeCore {
         let mut land = Vec::new();
         for (path, v) in &mut self.commit.virtuals {
             for key in v.entering.drain() {
-                let Some(&id) = self.tree.path_ids.get(&format!("{path}/{key}")) else { continue };
+                let Some(&id) = self.tree.path_ids.get(&node_path(path, Some(&key), 0)) else { continue };
                 let Some(&i) = self.tree.node_index.get(&id) else { continue };
                 let Some(&[x, y, rw, rh]) = self.paint.drawn.get(i) else { continue };
                 let clip = screen_clip_of(self.tree.nodes[i].parent, &self.paint.inh_scratch, &self.paint.turn_scratch);
