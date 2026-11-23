@@ -249,7 +249,15 @@ impl AnyHost for OverlayHost {
                 core.dirty = true;
             }
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } if core.options.keys == KeyPolicy::OnDemand => {
-                core.dirty |= app.keyboard(&core.clipboard, &event, core.mods);
+                if event.state == winit::event::ElementState::Pressed
+                    && let Some(window) = core.surface.live().and_then(|l| l.backing.window())
+                    && let Some(text) = crate::platform::ime::take_direct_commit(window)
+                {
+                    host_events::ime(app.rt_mut(), window, &mut core.ime, winit::event::Ime::Commit(text));
+                    core.dirty = true;
+                } else {
+                    core.dirty |= app.keyboard(&core.clipboard, &event, core.mods);
+                }
             }
             WindowEvent::Ime(ime) if core.options.keys == KeyPolicy::OnDemand => {
                 if let Some(window) = core.surface.live().and_then(|l| l.backing.window()) {

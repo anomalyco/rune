@@ -5,43 +5,99 @@
 //! And what winit's input method handling leaves out: clauses and reconversion (`windows`,
 //! `macos`).
 
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(target_os = "macos")]
+pub(crate) use macos::{sync, take_clauses, take_direct_commit, take_select};
 #[cfg(target_os = "windows")]
 pub(crate) use windows::{sync, take_clauses, take_select};
-#[cfg(target_os = "macos")]
-pub(crate) use macos::{sync, take_clauses, take_select};
 
-/// macOS: through the vendored winit's `NSTextInputClient` (`platform::macos::set_ime_text`
-/// and the rest), which reads `setMarkedText:`'s clause attributes and answers `selectedRange`
-/// and `attributedSubstringForProposedRange:` from the text published here.
-#[cfg(target_os = "macos")]
-mod macos {
-    use std::cell::Cell;
-    use std::ops::Range;
+/// Text an input method inserted directly without marked text during the current key press,
+/// when the platform drops it and emits the raw key instead (macOS).
+#[cfg(not(target_os = "macos"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) fn take_direct_commit(_window: &winit::window::Window) -> Option<String> { None }
 
-    use crate::edit::{Clause, ImeText};
+/// Key-down context captured while macOS `WinitView::keyDown:` runs `interpretKeyEvents:`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(crate) struct KeyDown {
+    pub(crate) view: usize,
+    pub(crate) chars: Option<String>,
+    pub(crate) chars_ignoring_mods: Option<String>,
+    pub(crate) ctrl: bool,
+    pub(crate) cmd: bool,
+    pub(crate) alt: bool,
+    pub(crate) option_as_alt: bool,
+}
 
-    thread_local! {
-        /// Where the published text starts in its field, in bytes.
-        static START: Cell<usize> = const { Cell::new(0) };
+/// Decides whether an `insertText:replacementRange:` call without marked text during `key_down`
+/// is text the input method substituted for the key (such as full-width CJK punctuation `，`
+/// for `,`) and should be committed as `Ime::Commit` instead of falling through as the raw
+/// `KeyboardInput`.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(crate) fn should_direct_commit(
+    key_down: &KeyDown,
+    has_marked_text: bool,
+    inserted: &str,
+) -> bool {
+    if has_marked_text || inserted.is_empty() || inserted.chars().any(char::is_control) {
+        return false;
+    }
+    if key_down.ctrl || key_down.cmd || (key_down.alt && key_down.option_as_alt) {
+        return false;
+    }
+    if key_down.chars.as_deref() == Some(inserted) {
+        return false;
+    }
+    if key_down.alt && key_down.chars_ignoring_mods.as_deref() == Some(inserted) {
+        return false;
+    }
+    true
+}
+
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+struct ActiveKeyDown {
+    key_down: KeyDown,
+    commit: Option<String>,
+}
+
+/// Tracks active `keyDown:` calls on macOS so an `insertText:replacementRange:` without marked
+/// text that substitutes the key's characters is handed to the matching `KeyboardInput` press
+/// as `Ime::Commit` and never leaks across views or keypresses.
+#[derive(Default)]
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(crate) struct DirectCommit {
+    stack: Vec<ActiveKeyDown>,
+}
+
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+impl DirectCommit {
+    pub(crate) const fn new() -> Self {
+        Self { stack: Vec::new() }
     }
 
-    pub(crate) fn sync(_window: &winit::window::Window, text: Option<ImeText>) {
-        START.set(text.as_ref().map_or(0, |t| t.start));
-        winit::platform::macos::set_ime_text(text.map(|t| (t.text.clone(), t.selection.clone())));
+    pub(crate) fn begin(&mut self, key_down: KeyDown) {
+        self.stack.push(ActiveKeyDown { key_down, commit: None });
     }
 
-    pub(crate) fn take_clauses(_window: &winit::window::Window, preedit: &str) -> Vec<Clause> {
-        winit::platform::macos::take_ime_clauses(preedit).into_iter().map(|(range, target)| {
-            let clause = Clause::new(range);
-            if target { clause.target() } else { clause }
-        }).collect()
+    pub(crate) fn record_insert(&mut self, view: usize, has_marked_text: bool, inserted: &str) {
+        let Some(active) = self.stack.last_mut().filter(|a| a.key_down.view == view) else { return };
+        if !should_direct_commit(&active.key_down, has_marked_text, inserted) { return; }
+        match &mut active.commit {
+            Some(existing) => existing.push_str(inserted),
+            None => active.commit = Some(inserted.to_owned()),
+        }
     }
 
-    pub(crate) fn take_select(_window: &winit::window::Window) -> Option<Range<usize>> {
-        let start = START.get();
-        winit::platform::macos::take_ime_replacement().map(|r| start + r.start..start + r.end)
+    pub(crate) fn take(&mut self, view: usize) -> Option<String> {
+        self.stack.last_mut().filter(|a| a.key_down.view == view)?.commit.take()
+    }
+
+    pub(crate) fn end(&mut self) {
+        self.stack.pop();
     }
 }
 
@@ -96,3 +152,7 @@ pub(crate) fn cancel(window: &winit::window::Window) {
 /// web's text field does when it blurs.
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub(crate) fn cancel(_window: &winit::window::Window) {}
+
+#[cfg(test)]
+#[path = "ime_tests.rs"]
+mod tests;
