@@ -1,0 +1,1 @@
+- Web: `bridge.js` now forwards `Delete` as a key event from the hidden textarea (on `keydown` and forward-delete `beforeinput`) when the caret is at the end of the textarea's value with nothing selected, matching native platforms, password fields, and `Backspace` at offset 0.

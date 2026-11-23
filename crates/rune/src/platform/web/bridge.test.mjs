@@ -565,6 +565,146 @@ test('beforeinput forwards backward delete at offset 0 when soft keyboard bypass
     bridge.destroy(h);
 });
 
+test('keydown forwards Delete at end of value with empty selection on textarea', () => {
+    const { events, h } = setup();
+
+    // Empty field: caret is at both start (0) and end (0).
+    bridge.sync(h, 'field', '', 0, 0, 0, false);
+    bridge.activate(h);
+    assert.equal(dispatchKeydown(h.textarea, { key: 'Delete', code: 'Delete', keyCode: 46 }), true);
+    assert.deepEqual(events, [{
+        kind: 'key',
+        key: 'Delete',
+        code: 'Delete',
+        shift: false,
+        ctrl: false,
+        alt: false,
+        meta: false,
+        repeat: false,
+    }]);
+
+    // Non-empty field with caret at the end: modifiers and repeat pass through.
+    events.length = 0;
+    bridge.sync(h, 'field', 'hello', 0, 5, 5, false);
+    assert.equal(dispatchKeydown(h.textarea, {
+        key: 'Delete',
+        code: 'Delete',
+        altKey: true,
+        repeat: true,
+        keyCode: 46,
+    }), true);
+    assert.deepEqual(events, [{
+        kind: 'key',
+        key: 'Delete',
+        code: 'Delete',
+        shift: false,
+        ctrl: false,
+        alt: true,
+        meta: false,
+        repeat: true,
+    }]);
+
+    // CRLF text: raw length is 7 while the LF-normalized textarea mirror has length 5.
+    events.length = 0;
+    const crlf = 'a\r\nb\r\nc';
+    bridge.sync(h, 'field', crlf, 0, crlf.length, crlf.length, false);
+    assert.equal(h.textarea.value.length, 5);
+    assert.equal(h.textarea.selectionStart, 5);
+    assert.equal(h.textarea.selectionEnd, 5);
+    assert.equal(dispatchKeydown(h.textarea, { key: 'Delete', code: 'Delete', keyCode: 46 }), true);
+    assert.deepEqual(events, [{
+        kind: 'key',
+        key: 'Delete',
+        code: 'Delete',
+        shift: false,
+        ctrl: false,
+        alt: false,
+        meta: false,
+        repeat: false,
+    }]);
+
+    bridge.destroy(h);
+});
+
+test('keydown leaves Delete to browser editing before end, with a selection, or while composing', () => {
+    const { events, h } = setup();
+
+    // Caret at start or middle: browser deletes via input event.
+    bridge.sync(h, 'field', 'hello', 0, 0, 0, false);
+    bridge.activate(h);
+    assert.equal(dispatchKeydown(h.textarea, { key: 'Delete', code: 'Delete', keyCode: 46 }), false);
+    bridge.sync(h, 'field', 'hello', 0, 2, 2, false);
+    assert.equal(dispatchKeydown(h.textarea, { key: 'Delete', code: 'Delete', keyCode: 46 }), false);
+    assert.equal(events.length, 0);
+
+    // Caret before last character in CRLF text (raw 6 -> DOM 4 < 5).
+    const crlf = 'a\r\nb\r\nc';
+    bridge.sync(h, 'field', crlf, 0, 6, 6, false);
+    assert.equal(dispatchKeydown(h.textarea, { key: 'Delete', code: 'Delete', keyCode: 46 }), false);
+    assert.equal(events.length, 0);
+
+    // Non-empty forward selection ending at the end.
+    bridge.sync(h, 'field', 'hello', 0, 2, 5, false);
+    assert.equal(dispatchKeydown(h.textarea, { key: 'Delete', code: 'Delete', keyCode: 46 }), false);
+    assert.equal(events.length, 0);
+
+    // Non-empty backward selection starting at the end.
+    bridge.sync(h, 'field', 'hello', 0, 5, 2, false);
+    assert.equal(dispatchKeydown(h.textarea, { key: 'Delete', code: 'Delete', keyCode: 46 }), false);
+    assert.equal(events.length, 0);
+
+    // IME composition at the end must not be intercepted.
+    bridge.sync(h, 'field', 'hello', 0, 5, 5, false);
+    assert.equal(dispatchKeydown(h.textarea, { key: 'Delete', code: 'Delete', isComposing: true, keyCode: 46 }), false);
+    assert.equal(dispatchKeydown(h.textarea, { key: 'Delete', code: 'Delete', keyCode: 229 }), false);
+    h.textarea.dispatchEvent({ type: 'compositionstart' });
+    assert.equal(dispatchKeydown(h.textarea, { key: 'Delete', code: 'Delete', keyCode: 46 }), false);
+    assert.equal(events.length, 0);
+
+    bridge.destroy(h);
+});
+
+test('beforeinput forwards forward delete at end of value when soft keyboard bypasses keydown', () => {
+    const { events, h } = setup();
+
+    bridge.sync(h, 'field', 'hello', 0, 5, 5, false);
+    bridge.activate(h);
+    assert.equal(dispatchBeforeInput(h.textarea, { inputType: 'deleteContentForward' }), true);
+    assert.equal(dispatchBeforeInput(h.textarea, { inputType: 'deleteWordForward' }), true);
+    assert.deepEqual(events, [
+        { kind: 'key', key: 'Delete', code: 'Delete', shift: false, ctrl: false, alt: false, meta: false, repeat: false },
+        { kind: 'key', key: 'Delete', code: 'Delete', shift: false, ctrl: false, alt: true, meta: false, repeat: false },
+    ]);
+
+    // Empty field and CRLF field at end also forward deleteContentForward.
+    events.length = 0;
+    bridge.sync(h, 'field', '', 0, 0, 0, false);
+    assert.equal(dispatchBeforeInput(h.textarea, { inputType: 'deleteContentForward' }), true);
+    const crlf = 'a\r\nb';
+    bridge.sync(h, 'field', crlf, 0, crlf.length, crlf.length, false);
+    assert.equal(dispatchBeforeInput(h.textarea, { inputType: 'deleteContentForward' }), true);
+    assert.deepEqual(events, [
+        { kind: 'key', key: 'Delete', code: 'Delete', shift: false, ctrl: false, alt: false, meta: false, repeat: false },
+        { kind: 'key', key: 'Delete', code: 'Delete', shift: false, ctrl: false, alt: false, meta: false, repeat: false },
+    ]);
+
+    // Must not intercept backward delete at end, non-end caret, selection, or composition.
+    events.length = 0;
+    bridge.sync(h, 'field', 'hello', 0, 5, 5, false);
+    assert.equal(dispatchBeforeInput(h.textarea, { inputType: 'deleteContentBackward' }), false);
+    assert.equal(dispatchBeforeInput(h.textarea, { inputType: 'deleteContentForward', isComposing: true }), false);
+    bridge.sync(h, 'field', 'hello', 0, 4, 4, false);
+    assert.equal(dispatchBeforeInput(h.textarea, { inputType: 'deleteContentForward' }), false);
+    bridge.sync(h, 'field', 'hello', 0, 3, 5, false);
+    assert.equal(dispatchBeforeInput(h.textarea, { inputType: 'deleteContentForward' }), false);
+    bridge.sync(h, 'field', 'hello', 0, 5, 5, false);
+    h.textarea.dispatchEvent({ type: 'compositionstart' });
+    assert.equal(dispatchBeforeInput(h.textarea, { inputType: 'deleteContentForward' }), false);
+    assert.equal(events.length, 0);
+
+    bridge.destroy(h);
+});
+
 test('typing at the end of CRLF text emits a pure insertion without rewriting existing CRLFs', () => {
     const { events, h } = setup();
     const before = 'a\r\nb\r\nc';
