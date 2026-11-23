@@ -599,3 +599,34 @@ fn a_failed_command_buffer_is_heard_lost_before_its_work_is_done() {
     sh.retire();
     assert_eq!(*heard.lock().unwrap(), ["lost", "done"]);
 }
+
+/// Mappings that complete after a loss fail, as WebGPU says (their data can't be right): one asked
+/// before the failed work retired and one asked after; work-done callbacks still run, after the loss.
+#[test]
+fn mappings_fail_once_the_device_is_lost() {
+    use objc2_metal::{MTLCommandBuffer, MTLDevice, MTLEvent};
+    let (device, queue) = gpu();
+    let sh = shared(&device);
+    let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let into = heard.clone();
+    device.set_device_lost_callback(move |_, _| into.lock().unwrap().push("lost".to_owned()));
+    let buffer = |label| device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size: 16, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+    let (before, after) = (buffer("before"), buffer("after"));
+    // A wait for an event nothing signals: Metal times it out after about 5 s, an error.
+    let never = sh.device.newSharedEvent().unwrap();
+    let cb = sh.command_buffer();
+    cb.encodeWaitForEvent_value(ProtocolObject::<dyn MTLEvent>::from_ref(&*never), 1);
+    sh.commit(cb);
+    let map = |b: &wgpu::Buffer, name: &'static str| {
+        let into = heard.clone();
+        b.slice(..).map_async(wgpu::MapMode::Read, move |r| into.lock().unwrap().push(format!("{name} {}", if r.is_ok() { "mapped" } else { "failed" })));
+    };
+    map(&before, "before");
+    let into = heard.clone();
+    queue.on_submitted_work_done(move || into.lock().unwrap().push("done".to_owned()));
+    let (_, failing) = sh.pending_cbs().pop().expect("tracked");
+    failing.waitUntilCompleted();
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    map(&after, "after");
+    assert_eq!(*heard.lock().unwrap(), ["lost", "before failed", "done", "after failed"]);
+}
