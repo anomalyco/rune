@@ -1,0 +1,1 @@
+- Lab example (`examples/lab`): `LabGfx` now tracks `Frame::device_key()` alongside target size and format, rebuilding its HDR resources and re-registering `Rgba16Float` with `Renderer::add_format` when Rune replaces the GPU device.
