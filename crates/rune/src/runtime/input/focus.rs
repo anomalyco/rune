@@ -485,6 +485,16 @@ impl RuntimeCore {
             path == root || (path.len() > root.len() && path.starts_with(root) && path.as_bytes()[root.len()] == b'/')
         };
         let shown = |idx: usize| node_shown(nodes, idx);
+        let first_link = |j: usize| {
+            (nodes[j].input.is_none() && links::link_count(&nodes[j]) > 0).then_some(0)
+        };
+        let link_target = |key: &str| {
+            (0..nodes.len()).find_map(|j| {
+                if !shown(j) || nodes[j].input.is_some() || !self.can_take_focus(&nodes[j]) { return None; }
+                let k = nodes[j].text.as_ref()?.cold.links.iter().position(|l| l.id == key)?;
+                Some((j, k))
+            })
+        };
         let restore = (!blurred).then(|| self.tree.nodes.iter().enumerate().rev().find_map(|(i, old)| {
             let key = old.focus.return_to.as_deref()?;
             if self.subtree_exiting(i) || nodes.iter().any(|n| n.path == old.path) { return None; }
@@ -502,19 +512,27 @@ impl RuntimeCore {
                 old.path.as_str()
             };
             if !within(focused, scope) { return None; }
-            let anchor = nodes.iter().find(|n| n.key.as_deref() == Some(key))?;
-            let candidates = (0..nodes.len()).filter(|&j| within(&nodes[j].path, &anchor.path) && shown(j)
-                && self.can_take_focus(&nodes[j]));
-            candidates.clone().find(|&j| nodes[j].focus.selected)
-                .or_else(|| candidates.into_iter().next())
-                .map(|j| nodes[j].path.clone())
+            let by_key = nodes.iter().find(|n| n.key.as_deref() == Some(key)).and_then(|anchor| {
+                let candidates = (0..nodes.len()).filter(|&j| within(&nodes[j].path, &anchor.path) && shown(j)
+                    && self.can_take_focus(&nodes[j]));
+                candidates.clone().find(|&j| nodes[j].focus.selected)
+                    .or_else(|| candidates.into_iter().next())
+                    .map(|j| (j, first_link(j)))
+            });
+            let (j, link) = by_key.or_else(|| link_target(key).map(|(j, k)| (j, Some(k))))?;
+            Some((nodes[j].path.clone(), link))
         })).flatten();
-        // `Tx::focus`: the first shown element with the key, or its first focusable child.
+        // `Tx::focus`: the first shown element with the key, or its first focusable child,
+        // else a shown text's `Link` with that id.
         let asked = asked.and_then(|(key, ring, ask)| {
-            let anchor = (0..nodes.len()).find(|&j| nodes[j].key.as_deref() == Some(key.as_str()) && shown(j))?;
-            (anchor..nodes.len()).take_while(|&j| within(&nodes[j].path, &nodes[anchor].path))
-                .find(|&j| shown(j) && self.can_take_focus(&nodes[j]))
-                .map(|j| (nodes[j].path.clone(), ring, ask))
+            let by_key = (0..nodes.len()).find(|&j| nodes[j].key.as_deref() == Some(key.as_str()) && shown(j))
+                .and_then(|anchor| {
+                    (anchor..nodes.len()).take_while(|&j| within(&nodes[j].path, &nodes[anchor].path))
+                        .find(|&j| shown(j) && self.can_take_focus(&nodes[j]))
+                        .map(|j| (j, first_link(j)))
+                });
+            let (j, link) = by_key.or_else(|| link_target(key.as_str()).map(|(j, k)| (j, Some(k))))?;
+            Some((nodes[j].path.clone(), link, ring, ask))
         });
         let input_focused = self.kbd.focus.path().is_some_and(|p| {
             nodes.iter().any(|n| n.path == p && !n.inert && n.input.as_ref().is_some_and(|i| i.edit.focused))
@@ -542,7 +560,7 @@ impl RuntimeCore {
             .or_else(|| virtual_req().filter(|&(p, edit)| newly_requested(p, edit)).min_by_key(|&(p, _)| p))
             .map(|(p, _)| p.to_owned())
             .or_else(|| asked.as_ref().map(|(p, ..)| p.clone()))
-            .or(restore)
+            .or_else(|| restore.as_ref().map(|(p, _)| p.clone()))
             .or_else(|| (!blurred).then(|| self.kbd.focus.owned().filter(|p| (0..nodes.len()).any(|j| &nodes[j].path == p && shown(j)
                 && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.edit.focused)))
                 || self.commit.virtual_inputs.get(p).is_some_and(|i| i.edit.focused))).flatten())
@@ -552,13 +570,26 @@ impl RuntimeCore {
         // Use the same focus path as input events, then restore the old presentation
         // tree so apply can retain its exit visuals.
         let explicit = asked.as_ref().filter(|(p, ..)| next.as_deref() == Some(p.as_str()));
+        let restored = explicit.is_none().then(|| restore.as_ref().filter(|(p, _)| next.as_deref() == Some(p.as_str()))).flatten();
+        let target_link = explicit.map(|(_, link, ..)| *link).or_else(|| restored.map(|(_, link)| *link));
         let keep_entry = explicit.is_none() && next.as_deref() == self.kbd.focus.path();
-        let keyboard = explicit.map_or_else(|| self.kbd.focus.keyboard(), |(_, ring, _)| *ring);
-        self.kbd.set_focus_returned(matches!(explicit, Some((_, _, crate::el::FocusAsk::Return))));
+        let keyboard = explicit.map_or_else(|| self.kbd.focus.keyboard(), |(_, _, ring, _)| *ring);
+        self.kbd.set_focus_returned(matches!(explicit, Some((_, _, _, crate::el::FocusAsk::Return))));
         if asked.is_none() && let Some(owed) = waits { self.kbd.focus_owed = Some(owed); }
         std::mem::swap(&mut self.tree.nodes, nodes);
         self.nodes_replaced();
         let changed = self.set_focus_entry(app, next, keyboard, keep_entry, true);
+        if let Some(link) = target_link {
+            match link {
+                Some(k) => self.edit.set_link_focus(k),
+                None => self.edit.blur_links(),
+            }
+        } else if let Some(i) = self.focused_index()
+            && self.tree.nodes[i].input.is_none()
+            && !self.edit.link_focused(&self.tree.nodes[i])
+        {
+            self.edit.enter_links(&self.tree.nodes[i], false);
+        }
         std::mem::swap(&mut self.tree.nodes, nodes);
         self.nodes_replaced();
         if blurred && self.kbd.focus.path().is_none() {
