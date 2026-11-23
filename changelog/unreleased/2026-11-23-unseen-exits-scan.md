@@ -1,0 +1,1 @@
+- Motion: `Scene::exiting()` now tracks nodes in `Phase::Exiting` directly, and `end_unseen_exits` iterates only exiting nodes instead of scanning every unseen node in the tree on every motion frame.

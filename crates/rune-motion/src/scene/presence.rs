@@ -143,7 +143,7 @@ impl Scene {
             let n = &self.nodes[i];
             (n.transition.removal.kit_rules(true), Anim::from(n.transition.springs.exit))
         };
-        let acts = self.nodes[i].phase_step(PhaseEvent::Exit { p, rem, exit });
+        let acts = self.nodes[i].phase_step(&mut self.exiting, PhaseEvent::Exit { p, rem, exit });
         self.apply(i, acts);
     }
 
@@ -192,14 +192,14 @@ impl Scene {
             let n = &self.nodes[i];
             (n.transition.insertion.kit_rules(false), Anim::from(n.transition.springs.enter))
         };
-        let acts = self.nodes[i].phase_step(PhaseEvent::Revive { p, ins, entrance });
+        let acts = self.nodes[i].phase_step(&mut self.exiting, PhaseEvent::Revive { p, ins, entrance });
         self.apply(i, acts);
     }
 
     /// An exiting node is present again at once: no presence effect, nothing left to settle.
     fn present_now(&mut self, i: usize) {
         let ins = self.nodes[i].transition.insertion.kit_rules(false);
-        let acts = self.nodes[i].phase_step(PhaseEvent::Land { ins });
+        let acts = self.nodes[i].phase_step(&mut self.exiting, PhaseEvent::Land { ins });
         self.apply(i, acts);
     }
 

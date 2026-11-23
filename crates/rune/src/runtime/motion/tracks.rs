@@ -50,6 +50,9 @@ pub(crate) struct MotionState {
     pub(super) rewind: Option<crate::rewind::Rewind>,
     #[cfg(debug_assertions)]
     pub(super) matched_warned: HashSet<Rc<str>>,
+    /// Candidate nodes inspected by `end_unseen_exits`, for tests.
+    #[cfg(test)]
+    pub(in crate::runtime) unseen_exit_checks: u64,
 }
 
 impl MotionState {
@@ -82,6 +85,8 @@ impl MotionState {
             rewind: None,
             #[cfg(debug_assertions)]
             matched_warned: HashSet::default(),
+            #[cfg(test)]
+            unseen_exit_checks: 0,
         }
     }
 

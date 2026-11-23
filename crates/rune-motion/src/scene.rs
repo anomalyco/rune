@@ -266,9 +266,20 @@ struct Node {
 }
 
 impl Node {
-    /// Moves this node's presence one event on, and asks for what the scene should do about it.
-    fn phase_step(&mut self, event: PhaseEvent) -> phase::Acts {
-        phase::step(&mut self.presence, &mut self.generation, event)
+    /// Moves this node's presence one event on, updating `exiting`, and asks for what the scene
+    /// should do about it.
+    fn phase_step(&mut self, exiting: &mut Vec<NodeId>, event: PhaseEvent) -> phase::Acts {
+        let was_exiting = self.presence.exiting();
+        let acts = phase::step(&mut self.presence, &mut self.generation, event);
+        let now_exiting = self.presence.exiting();
+        if !was_exiting && now_exiting {
+            exiting.push(self.id);
+        } else if was_exiting && !now_exiting
+            && let Some(k) = exiting.iter().position(|&x| x == self.id)
+        {
+            exiting.swap_remove(k);
+        }
+        acts
     }
 }
 
@@ -299,6 +310,8 @@ pub struct Scene {
     out: Vec<Presented>,
     /// What [`Scene::present`] presented after the motion trace wrote its frame, for the next.
     late: Vec<Presented>,
+    /// Nodes currently in [`Phase::Exiting`], in no fixed order.
+    exiting: Vec<NodeId>,
     exited: Carry<NodeId>,
     to_remove: Vec<u32>,
     /// Who is on a screen path, in the order the paths started. It only says who travels and in
@@ -330,6 +343,7 @@ impl Scene {
             order_dirty: false,
             out: Vec::new(),
             late: Vec::new(),
+            exiting: Vec::new(),
             exited: Carry::new(),
             to_remove: Vec::new(),
             travelling: Vec::new(),
@@ -421,6 +435,10 @@ impl Scene {
         let i = self.slot(id)?;
         Some(self.nodes[i].presence.public(self.nodes[i].generation))
     }
+    /// Nodes currently in [`Phase::Exiting`], in no fixed order.
+    pub fn exiting(&self) -> &[NodeId] {
+        &self.exiting
+    }
     /// The last presented snapshot (hit-test against what the user sees). Not tracked.
     pub fn presented(&self, id: NodeId) -> Option<Presented> {
         self.slot(id).and_then(|i| self.nodes[i].last)
@@ -484,10 +502,16 @@ impl Scene {
         } else {
             self.nodes[next as usize].prev_sibling = prev;
         }
+        if self.nodes[i].presence.exiting()
+            && let Some(k) = self.exiting.iter().position(|&x| x == id)
+        {
+            self.exiting.swap_remove(k);
+        }
         self.travelling.retain(|&x| x as usize != i);
         self.store.remove_node(id);
         self.index.remove(&id.0);
         let n = &mut self.nodes[i];
+        n.presence = Presence::LANDED;
         n.alive = false;
         n.dirty = false;
         n.first_child = NONE;

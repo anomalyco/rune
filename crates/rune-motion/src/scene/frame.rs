@@ -26,7 +26,7 @@ impl Scene {
                     continue;
                 }
                 let Some(&i) = self.index.get(&node.0) else { continue };
-                let acts = self.nodes[i as usize].phase_step(PhaseEvent::Settle);
+                let acts = self.nodes[i as usize].phase_step(&mut self.exiting, PhaseEvent::Settle);
                 for act in acts {
                     if let Act::Retire = act {
                         self.to_remove.push(i);
@@ -47,7 +47,7 @@ impl Scene {
                 continue;
             }
             let Some(&[presence, ..]) = self.store.values_of(t) else { continue };
-            let acts = self.nodes[i as usize].phase_step(PhaseEvent::Faded { p: presence });
+            let acts = self.nodes[i as usize].phase_step(&mut self.exiting, PhaseEvent::Faded { p: presence });
             for act in acts {
                 if let Act::Retire = act {
                     retire.push(i);

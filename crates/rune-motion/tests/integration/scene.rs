@@ -549,3 +549,55 @@ fn a_node_without_a_presence_track_still_fades_out() {
     }
     assert!(gone);
 }
+
+#[test]
+fn exiting_tracks_nodes_leaving_across_exit_revive_unmount_and_slot_reuse() {
+    let mut s = Scene::new();
+    let (p, c, other, reused) = (NodeId(1), NodeId(2), NodeId(3), NodeId(4));
+    s.insert(p, spec(0.0, 0.0, 100.0, 40.0), Mount::Initial);
+    s.insert(c, spec(0.0, 0.0, 40.0, 20.0).parent(p), Mount::Initial);
+    s.insert(other, spec(0.0, 50.0, 100.0, 40.0), Mount::Animated);
+    s.frame_at(0.0);
+    assert!(s.exiting().is_empty(), "present and entering nodes are not exiting");
+
+    // Removing adds the node once; duplicate remove does not duplicate it.
+    s.remove(c);
+    s.remove(c);
+    assert_eq!(s.exiting(), &[c]);
+
+    // Reviving mid-exit removes it immediately.
+    s.frame_at(0.05);
+    s.insert(c, spec(0.0, 0.0, 40.0, 20.0).parent(p), Mount::Animated);
+    assert!(s.exiting().is_empty(), "revived node leaves exiting");
+
+    // Landing an exiting node via Mount::Initial removes it immediately.
+    s.remove(c);
+    assert_eq!(s.exiting(), &[c]);
+    s.insert(c, spec(0.0, 0.0, 40.0, 20.0).parent(p), Mount::Initial);
+    assert!(s.exiting().is_empty(), "landed node leaves exiting");
+
+    // Unmounting a parent drops both the parent and any exiting child from exiting.
+    s.remove(c);
+    s.remove(p);
+    let mut both = s.exiting().to_vec();
+    both.sort_by_key(|id| id.0);
+    assert_eq!(both, vec![p, c]);
+    s.unmount(p);
+    assert!(s.exiting().is_empty(), "unmount clears parent and subtree from exiting");
+
+    // Reusing a freed slot does not resurrect stale exiting state.
+    s.insert(reused, spec(0.0, 0.0, 60.0, 20.0), Mount::Initial);
+    s.frame_at(0.1);
+    assert!(s.exiting().is_empty(), "node mounted into freed slot is not exiting");
+
+    // An exit that plays out to completion clears itself when retired.
+    s.remove(reused);
+    assert_eq!(s.exiting(), &[reused]);
+    let mut t = 0.1;
+    while t < 3.0 && s.contains(reused) {
+        t += 1.0 / HZ;
+        s.frame_at(t);
+    }
+    assert!(!s.contains(reused));
+    assert!(s.exiting().is_empty(), "retired exit leaves exiting");
+}
