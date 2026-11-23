@@ -354,10 +354,15 @@ impl El {
         }
         self
     }
-    /// Draw this element and everything in it `k` times its size about its centre, like
-    /// SwiftUI's `scaleEffect`: fills, borders, text, icons and images all scale, and text
-    /// rasterizes at the scaled size once it rests. Layout keeps the unscaled size, so siblings
-    /// don't move; hit testing follows the scaled rect. A change springs on the element's layout
+    /// Draw this element and everything in it `k` times its size about its
+    /// [`origin`](Self::origin) (default centre `(0.5, 0.5)`), like SwiftUI's `scaleEffect`:
+    /// fills, borders, text, icons and images all scale, and text rasterizes at the scaled size
+    /// once it rests. Layout keeps the unscaled size, so siblings don't move; hit testing follows
+    /// the drawn rect in paint order. Scaling does not clip to the parent: put
+    /// [`Self::clip_soft`] (e.g. `.clip_soft(0.0)`) or [`Self::clip_rounded`] on an unscaled
+    /// parent viewport wrapping this element—not on the scaled element itself, whose own clip
+    /// scales with its drawn rect—or the scaled subtree will paint over siblings and take their
+    /// presses. A change springs on the element's layout
     /// spring (or [`Self::scale_motion`]); under Reduce Motion, and in an instant transaction, it
     /// lands at once. Multiplies with transitions, `live_scale` and `press_scale`. Anything not
     /// finite or below zero is `1.0`.

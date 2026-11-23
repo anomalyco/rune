@@ -349,9 +349,15 @@ impl El {
     pub fn live_offset(mut self, value: impl Into<crate::live::Binding<[f32; 2]>>) -> Self {
         self.bind_live(crate::live::Bound::new(value, crate::live::Property::Offset)); self
     }
-    /// Bind uniform scale around the node's centre; layout remains at its target size. Text,
-    /// icons and images in the subtree scale with it, as under [`El::scale`]. Text rasterizes
-    /// at the scale rounded to 1/32, so a dragged value doesn't fill the glyph atlas.
+    /// Bind uniform scale about the element's [`origin`](Self::origin) (default centre
+    /// `(0.5, 0.5)`); layout remains at its target size, and hit testing follows the drawn rect
+    /// in paint order. Text, icons and images in the subtree scale with it, as under
+    /// [`El::scale`]. While changing, text rasterizes at logarithmic 2^(1/4) scale buckets so a
+    /// zoom gesture doesn't fill the glyph atlas, then re-rasterizes crisp at the exact resting
+    /// scale after holding still for 0.1 s. Scaling does not clip to the parent: put
+    /// [`El::clip_soft`] (e.g. `.clip_soft(0.0)`) or [`El::clip_rounded`] on an unscaled parent
+    /// viewport wrapping this element—not on the scaled element itself, whose own clip scales
+    /// with its drawn rect—or the scaled subtree will paint over siblings and take their presses.
     pub fn live_scale(mut self, value: impl Into<crate::live::Binding<f32>>) -> Self {
         self.bind_live(crate::live::Bound::new(value, crate::live::Property::Scale)); self
     }
