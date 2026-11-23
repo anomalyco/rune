@@ -286,7 +286,10 @@ impl FrameHost for WindowFrame<'_> {
         } else { None };
         #[cfg(target_os = "macos")]
         let shown = if !hidden && l.native.prime.presumes() {
-            l.native.prime.spend();
+            // A frame drawn while AppKit still launches the app isn't counted: AppKit says
+            // nothing of the window until its own launch work is done, and the frames right
+            // after it presume as those of a window made after the launch do.
+            if !crate::platform::macos::launching() { l.native.prime.spend(); }
             if let Some(surface) = l.surface.as_ref()
                 && let Some(shown) = crate::platform::macos::PresumeShown::new(surface) {
                 Some(shown)
