@@ -129,7 +129,7 @@ fn double_and_triple_clicks_stay_in_one_text() {
     let x = (code[3].0 - 1.0, code[3].1);
     click(&mut rt, x);
     click(&mut rt, x);
-    assert_eq!(rt.selected_text().as_deref(), Some("x"));
+    assert_eq!(rt.selected_text(), Some(w("x")));
     click(&mut rt, x);
     assert_eq!(rt.selected_text().as_deref(), Some("let x = 1;\n"));
     wait(&mut rt);
@@ -403,3 +403,7 @@ fn a_selection_in_a_virtual_row_scrolled_out_drops_without_panicking() {
     assert_eq!(rt.selected_text().as_deref(), Some("row 0 title\nrow 0 body"));
 }
 
+/// A double-click's word as selected: on Windows with the space after it (`selectable::with_trailing_space`).
+fn w(word: &str) -> String {
+    if cfg!(target_os = "windows") { format!("{word} ") } else { word.to_owned() }
+}

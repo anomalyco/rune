@@ -110,6 +110,16 @@ fn word_ends(text: &str) -> impl Iterator<Item = usize> {
     rune_text::segmenter::word_ends(text).into_iter()
 }
 
+/// A double-click's word on Windows takes the spaces after it along, as Chromium's does there
+/// (`select_trailing_whitespace_enabled`, measured on official OpenCode Desktop 2.4.0: `aaa bbb`
+/// selects `aaa `, `trail  ` selects `trail  `); a line break stays out, and a drag from it
+/// extends by plain words. Elsewhere the word as it is.
+pub(crate) fn with_trailing_space(text: &str, (a, b): (usize, usize)) -> (usize, usize) {
+    if !cfg!(target_os = "windows") || b > text.len() || text[a..b].trim().is_empty() {
+        return (a, b);
+    }
+    (a, text.len() - text[b..].trim_start_matches([' ', '\t']).len())
+}
 /// The selection a drag from unit range `origin` to unit range `at` makes: (anchor, focus).
 pub(crate) fn extend(origin: (usize, usize), at: (usize, usize)) -> (usize, usize) {
     if at.0 < origin.0 { (origin.1, at.0) } else { (origin.0, at.1.max(origin.1)) }
@@ -653,6 +663,7 @@ impl RuntimeCore {
             _ => {
                 let unit = match clicks { 1 => Unit::Char, 2 => Unit::Word, _ => Unit::Paragraph };
                 let origin = self.unit_in(i, at, unit);
+                let origin = if unit == Unit::Word { with_trailing_space(&content, origin) } else { origin };
                 self.select_step(phase::Event::Press { path, content, unit, origin });
             }
         }
@@ -794,6 +805,15 @@ mod tests {
         assert_eq!(unit_at("1,000.50 x", 2, Unit::Word), (0, 8));
         assert_eq!(unit_at("can't stop", 1, Unit::Word), (0, 5));
         assert_eq!(unit_at("user@example.com", 7, Unit::Word), (5, 12));
+    }
+
+    #[test]
+    fn a_double_click_word_takes_its_trailing_spaces_on_windows() {
+        let win = cfg!(target_os = "windows");
+        assert_eq!(super::with_trailing_space("aaa bbb", (0, 3)), if win { (0, 4) } else { (0, 3) });
+        assert_eq!(super::with_trailing_space("trail  ", (0, 5)), if win { (0, 7) } else { (0, 5) });
+        assert_eq!(super::with_trailing_space("end\nnext", (0, 3)), (0, 3), "a line break stays out");
+        assert_eq!(super::with_trailing_space("a  b", (1, 3)), (1, 3), "a run of spaces takes nothing more");
     }
 
     #[test]

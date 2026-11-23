@@ -273,7 +273,7 @@ fn empty_commit_without_composition_keeps_scroll_and_double_click_while_ending_o
     rt.pointer_down(pt.0, pt.1);
     rt.pointer_up(pt.0, pt.1);
     rt.frame(1.0 / 60.0);
-    assert_eq!(rt.state.field.selected(), "alpha", "empty commit outside composition must not break double-click");
+    assert_eq!(rt.state.field.selected(), w("alpha"), "empty commit outside composition must not break double-click");
 
     // 2. Wheel-scroll far past the caret on line 1; an empty commit outside composition must
     // neither trigger caret_follow nor commit a frame.
@@ -298,4 +298,9 @@ fn empty_commit_without_composition_keeps_scroll_and_double_click_while_ending_o
     rt.frame(1.0 / 60.0);
     assert_eq!(rt.state.field.preedit(), None, "empty commit ends an open composition");
     assert_eq!(rt.state.field.text, text, "empty commit inserts no text");
+}
+
+/// A double-click's word as selected: on Windows with the space after it (`selectable::with_trailing_space`).
+fn w(word: &str) -> String {
+    if cfg!(target_os = "windows") { format!("{word} ") } else { word.to_owned() }
 }

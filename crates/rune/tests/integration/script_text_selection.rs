@@ -37,6 +37,11 @@ fn script_events_select_text() {
     let dragged = run(r#"[{"t": 0.1, "type": "drag", "key": "cmd", "dx": 150, "dy": 0}]"#, "drag");
     let [(key, text)] = &dragged[..] else { panic!("{dragged:?}") };
     assert!(key == "cmd" && text.ends_with("e --port 4096") && CMD[9..].ends_with(text.as_str()), "{text:?}");
-    assert_eq!(run(r#"[{"t": 0.1, "type": "double-click", "key": "cmd"}]"#, "double"), selected("cmd", "serve"));
+    assert_eq!(run(r#"[{"t": 0.1, "type": "double-click", "key": "cmd"}]"#, "double"), selected("cmd", &w("serve")));
     assert_eq!(run(r#"[{"t": 0.1, "type": "triple-click", "key": "para"}]"#, "triple"), selected("para", "second line\n"));
+}
+
+/// A double-click's word as selected: on Windows with the space after it (`selectable::with_trailing_space`).
+fn w(word: &str) -> String {
+    if cfg!(target_os = "windows") { format!("{word} ") } else { word.to_owned() }
 }
