@@ -4,7 +4,8 @@
 //! `NSApplication.shared` spends most of its time waiting for other processes (the window
 //! server, Launch Services, `cfprefsd`), one after another on the main thread. What needs no
 //! `NSApplication` is asked on threads meanwhile: whether there is a window server session at
-//! all, and for the process's connection to the window server. (The first read of the app's
+//! all, the process's connection to the window server, and what AppKit loads once per process
+//! (its symbol images, CoreText's font registry). (The first read of the app's
 //! preferences is the first thing `NSApplication` does: a thread started here only waits for
 //! the same answer.)
 //!
@@ -56,6 +57,12 @@ unsafe extern "C" {
 unsafe extern "C" {
     fn CFRelease(cf: *const c_void);
 }
+#[link(name = "CoreText", kind = "framework")]
+unsafe extern "C" {
+    fn CTFontCreateUIFontForLanguage(kind: u32, size: f64, language: *const c_void) -> *const c_void;
+}
+/// `kCTFontUIFontSystem`.
+const UI_FONT_SYSTEM: u32 = 2;
 
 /// What `begin` started; the event loop asks it for the session before it runs.
 pub(crate) struct Beside { session: Option<mpsc::Receiver<bool>> }
@@ -103,6 +110,20 @@ pub(crate) fn begin(takes_activation: bool) -> Result<Beside, String> {
         interactive();
         // SAFETY: no arguments; CoreGraphics makes the connection once, under its own lock.
         unsafe { CGMainDisplayID() };
+    }).ok();
+    // What AppKit loads once per process on whichever thread asks first: its symbol images
+    // (the first menu item has one) and CoreText's font registry (the first title bar).
+    std::thread::Builder::new().name("rune-launch-symbols".into()).spawn(|| {
+        interactive();
+        symbol_image();
+    }).ok();
+    std::thread::Builder::new().name("rune-launch-fonts".into()).spawn(|| {
+        interactive();
+        // SAFETY: a Create-rule CF function; a non-null result is released once.
+        unsafe {
+            let font = CTFontCreateUIFontForLanguage(UI_FONT_SYSTEM, 13.0, std::ptr::null());
+            if !font.is_null() { CFRelease(font); }
+        }
     }).ok();
     Ok(Beside { session: Some(session) })
 }
@@ -174,6 +195,21 @@ fn active() -> bool {
         let active: Bool = msg_send![current, isActive];
         active.as_bool()
     }
+}
+
+/// Makes one system symbol image, which loads AppKit's symbol catalogs. `NSImage` may be made
+/// on any thread.
+fn symbol_image() {
+    use objc2::msg_send;
+    use objc2::rc::{Retained, autoreleasepool};
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2_foundation::NSString;
+    autoreleasepool(|_| {
+        let Some(image) = AnyClass::get(c"NSImage") else { return };
+        let name = NSString::from_str("info.circle");
+        // SAFETY: a class method taking a string and a nullable string; the image is dropped here.
+        let _: Option<Retained<AnyObject>> = unsafe { msg_send![image, imageWithSystemSymbolName: &*name, accessibilityDescription: None::<&NSString>] };
+    });
 }
 
 /// The threads' waits are the main thread's: they run at its priority.
