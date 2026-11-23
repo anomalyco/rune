@@ -1,0 +1,1 @@
+- Runtime: `FrameState::subscribe_live` now indexes live subscriptions by source id in a hash map instead of linearly scanning a `Vec`, making commits linear rather than quadratic in the number of bound `Live` sources.

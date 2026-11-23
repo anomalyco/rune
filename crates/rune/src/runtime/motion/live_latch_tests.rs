@@ -346,3 +346,221 @@ fn nothing_reads_without_sources_or_while_hidden() {
     lane.set_visible(false);
     assert!(!lane.latch_begin(true, true), "hidden, no read");
 }
+
+/// `subscribe_live` looks up existing subscriptions by source id in O(1) per binding, so a
+/// commit over N distinct bound `Live` sources stays linear instead of scanning all subscriptions.
+#[test]
+fn subscribe_live_scales_linearly_with_bound_sources() {
+    struct State {
+        rev: u32,
+        sources: Vec<crate::Live<[f32; 2]>>,
+    }
+    fn view(s: &State, _: &mut crate::Cx<State>) -> crate::El {
+        let mut root = crate::el().size(400.0, 400.0);
+        for (i, src) in s.sources.iter().enumerate() {
+            root = root.child(
+                crate::el()
+                    .key(format!("n{i}"))
+                    .size(4.0, 4.0)
+                    .live_offset(src),
+            );
+        }
+        let _ = s.rev;
+        root
+    }
+    let measure = |n: usize| -> (usize, usize) {
+        let state = State {
+            rev: 0,
+            sources: (0..n).map(|i| crate::Live::new([i as f32, 0.0])).collect(),
+        };
+        let mut rt = crate::Runtime::new(state, view, (400.0, 400.0), crate::Env::new(true, 1.0));
+        take_source_key_comparisons();
+        rt.frame(0.0);
+        let first_commit = take_source_key_comparisons();
+        assert_eq!(rt.core().frame.live_subscriptions.len(), n);
+
+        rt.update(|s, _| s.rev += 1);
+        take_source_key_comparisons();
+        rt.frame(0.0);
+        let recommit = take_source_key_comparisons();
+        assert_eq!(rt.core().frame.live_subscriptions.len(), n);
+        (first_commit, recommit)
+    };
+
+    let n = 256;
+    let (first_n, recommit_n) = measure(n);
+    let (first_2n, recommit_2n) = measure(n * 2);
+
+    assert!(first_n <= n * 2, "initial subscribe at n={n} was superlinear: {first_n} comparisons");
+    assert!(first_2n <= n * 4, "initial subscribe at n={} was superlinear: {first_2n} comparisons", n * 2);
+    assert!(recommit_n >= n, "counter did not observe lookups at n={n}: {recommit_n}");
+    assert!(recommit_n <= n * 2, "recommit at n={n} was superlinear: {recommit_n} comparisons");
+    assert!(recommit_2n >= n * 2, "counter did not observe lookups at n={}: {recommit_2n}", n * 2);
+    assert!(recommit_2n <= n * 4, "recommit at n={} was superlinear: {recommit_2n} comparisons", n * 2);
+    assert!(
+        recommit_2n < recommit_n * 3,
+        "doubling n from {n} to {} grew comparisons from {recommit_n} to {recommit_2n} (quadratic)",
+        n * 2,
+    );
+}
+
+/// Subscription deduplication, reuse, addition, pruning, re-addition, `set_live_waker`, and clear
+/// across `Live`, `LiveText`, and `Pixels` sources.
+#[test]
+fn subscribe_live_reuses_adds_prunes_and_replaces_waker() {
+    struct State {
+        rev: u32,
+        show_a: bool,
+        show_b: bool,
+        show_c: bool,
+        show_text: bool,
+        show_pixels: bool,
+        a: crate::Live<f32>,
+        b: crate::Live<f32>,
+        c: crate::Live<f32>,
+        label: crate::LiveText,
+        pixels: crate::Pixels,
+    }
+    fn view(s: &State, _: &mut crate::Cx<State>) -> crate::El {
+        let mut root = crate::el().size(200.0, 200.0);
+        if s.show_a {
+            // Bind `a` twice across two elements to verify deduplication.
+            root = root
+                .child(crate::el().key("a1").size(10.0, 10.0).live_opacity(&s.a).live_scale(&s.a))
+                .child(crate::el().key("a2").size(10.0, 10.0).live_opacity(&s.a));
+        }
+        if s.show_b {
+            root = root.child(crate::el().key("b").size(10.0, 10.0).live_opacity(&s.b));
+        }
+        if s.show_c {
+            root = root.child(crate::el().key("c").size(10.0, 10.0).live_opacity(&s.c));
+        }
+        if s.show_text {
+            root = root.child(crate::text("init").key("lbl").live_text(&s.label));
+        }
+        if s.show_pixels {
+            root = root.child(crate::el().key("px").size(4.0, 4.0).pixels(&s.pixels));
+        }
+        let _ = s.rev;
+        root
+    }
+
+    let a = crate::Live::new(1.0f32);
+    let b = crate::Live::new(1.0f32);
+    let c = crate::Live::new(1.0f32);
+    let label = crate::LiveText::new("init");
+    let pixels = crate::Pixels::new();
+    pixels.set(2, 2, vec![255u8; 16]);
+    let state = State {
+        rev: 0,
+        show_a: true,
+        show_b: true,
+        show_c: false,
+        show_text: true,
+        show_pixels: true,
+        a: a.clone(),
+        b: b.clone(),
+        c: c.clone(),
+        label: label.clone(),
+        pixels: pixels.clone(),
+    };
+    let mut rt = crate::Runtime::new(state, view, (200.0, 200.0), crate::Env::new(true, 1.0));
+    let woke_1 = Arc::new(AtomicUsize::new(0));
+    rt.set_live_waker({
+        let woke = woke_1.clone();
+        Arc::new(move || { woke.fetch_add(1, Ordering::SeqCst); })
+    });
+    rt.frame(0.0);
+
+    // Deduplicated to 4 distinct sources: a, b, label, pixels.
+    assert_eq!(rt.core().frame.live_subscriptions.len(), 4);
+    let sub_a = rt.core().frame.live_subscriptions[&SourceKey(a.source.id())].clone();
+    let sub_b = rt.core().frame.live_subscriptions[&SourceKey(b.source.id())].clone();
+    assert!(sub_a.active.load(Ordering::Acquire));
+    assert!(sub_b.active.load(Ordering::Acquire));
+
+    // Re-commit with the same bound sources reuses the exact same Arc<Subscription>s.
+    rt.update(|s, _| s.rev += 1);
+    rt.frame(0.0);
+    assert_eq!(rt.core().frame.live_subscriptions.len(), 4);
+    assert!(Arc::ptr_eq(&rt.core().frame.live_subscriptions[&SourceKey(a.source.id())], &sub_a));
+    assert!(Arc::ptr_eq(&rt.core().frame.live_subscriptions[&SourceKey(b.source.id())], &sub_b));
+
+    // Remove b, add c: b's subscription is pruned and deactivated; c is subscribed.
+    rt.update(|s, _| { s.show_b = false; s.show_c = true; });
+    rt.frame(0.0);
+    assert_eq!(rt.core().frame.live_subscriptions.len(), 4);
+    assert!(!rt.core().frame.live_subscriptions.contains_key(&SourceKey(b.source.id())));
+    assert!(rt.core().frame.live_subscriptions.contains_key(&SourceKey(c.source.id())));
+    assert!(!sub_b.active.load(Ordering::Acquire));
+
+    // Drain any pending wake before probing publishers.
+    rt.frame(1.0 / 120.0);
+    let before = woke_1.load(Ordering::SeqCst);
+    b.set(0.5);
+    assert_eq!(woke_1.load(Ordering::SeqCst), before, "pruned source must not wake");
+    c.set(0.5);
+    assert_eq!(woke_1.load(Ordering::SeqCst), before + 1, "added source must wake");
+    rt.frame(1.0 / 120.0);
+
+    // Re-add b: its subscription becomes active and wakes again.
+    rt.update(|s, _| s.show_b = true);
+    rt.frame(0.0);
+    rt.frame(1.0 / 120.0);
+    assert!(rt.core().frame.live_subscriptions.contains_key(&SourceKey(b.source.id())));
+    assert!(sub_b.active.load(Ordering::Acquire));
+    let before = woke_1.load(Ordering::SeqCst);
+    b.set(0.25);
+    assert_eq!(woke_1.load(Ordering::SeqCst), before + 1, "re-added source must wake");
+    rt.frame(1.0 / 120.0);
+
+    // Replacing the waker deactivates old subscriptions and re-subscribes bound sources to the new waker.
+    let woke_2 = Arc::new(AtomicUsize::new(0));
+    rt.set_live_waker({
+        let woke = woke_2.clone();
+        Arc::new(move || { woke.fetch_add(1, Ordering::SeqCst); })
+    });
+    assert!(!sub_a.active.load(Ordering::Acquire));
+    assert_eq!(rt.core().frame.live_subscriptions.len(), 5);
+    rt.frame(1.0 / 120.0);
+    let old_before = woke_1.load(Ordering::SeqCst);
+    let new_before = woke_2.load(Ordering::SeqCst);
+    a.set(0.4);
+    assert_eq!(woke_1.load(Ordering::SeqCst), old_before, "old waker must not fire after replace");
+    assert_eq!(woke_2.load(Ordering::SeqCst), new_before + 1, "new waker must fire");
+    rt.frame(1.0 / 120.0);
+
+    // LiveText and Pixels also wake through the replaced waker.
+    let new_before = woke_2.load(Ordering::SeqCst);
+    label.set("next");
+    assert_eq!(woke_2.load(Ordering::SeqCst), new_before + 1, "LiveText must wake");
+    rt.frame(1.0 / 120.0);
+    let new_before = woke_2.load(Ordering::SeqCst);
+    pixels.set(2, 2, vec![128u8; 16]);
+    assert_eq!(woke_2.load(Ordering::SeqCst), new_before + 1, "Pixels must wake");
+    rt.frame(1.0 / 120.0);
+
+    // Removing all live sources drops `Live` bindings on commit and prunes exiting
+    // `LiveText`/`Pixels` subscriptions once their exits finish.
+    let sub_a_new = rt.core().frame.live_subscriptions[&SourceKey(a.source.id())].clone();
+    rt.update(|s, _| {
+        s.show_a = false;
+        s.show_b = false;
+        s.show_c = false;
+        s.show_text = false;
+        s.show_pixels = false;
+    });
+    rt.frame(0.0);
+    assert!(!sub_a_new.active.load(Ordering::Acquire));
+    for _ in 0..120 {
+        if !rt.core().frame.has_live_subscriptions() { break; }
+        rt.frame(1.0 / 60.0);
+    }
+    assert!(!rt.core().frame.has_live_subscriptions());
+    assert!(rt.core().frame.live_subscriptions.is_empty());
+    let new_before = woke_2.load(Ordering::SeqCst);
+    a.set(0.1);
+    label.set("gone");
+    pixels.set(2, 2, vec![64u8; 16]);
+    assert_eq!(woke_2.load(Ordering::SeqCst), new_before, "cleared sources must not wake");
+}
