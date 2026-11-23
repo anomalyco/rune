@@ -383,3 +383,200 @@ fn display_error_reports_dead_connection_and_none_when_live() -> std::io::Result
     assert!(err.is_some(), "expected socket error from dead display");
     Ok(())
 }
+
+#[test]
+fn drop_destroys_all_proxies_and_drains_queued_events_so_event_queue_does_not_leak() -> std::io::Result<()> {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use std::ptr::NonNull;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use wayland_client::{Connection, Proxy};
+    use winit::raw_window_handle::{RawDisplayHandle, WaylandDisplayHandle};
+    use crate::el::Align;
+    use crate::overlay::{Placement, ScreenEdge};
+    use crate::OverlayOptions;
+
+    fn push_u32(buf: &mut Vec<u8>, v: u32) {
+        buf.extend_from_slice(&v.to_ne_bytes());
+    }
+    fn push_str(buf: &mut Vec<u8>, s: &str) {
+        let bytes = s.as_bytes();
+        push_u32(buf, (bytes.len() + 1) as u32);
+        buf.extend_from_slice(bytes);
+        buf.push(0);
+        while buf.len() % 4 != 0 {
+            buf.push(0);
+        }
+    }
+    fn send_msg(stream: &mut UnixStream, sender_id: u32, opcode: u16, payload: &[u8]) -> std::io::Result<()> {
+        let total = 8 + payload.len();
+        let mut msg = Vec::with_capacity(total);
+        push_u32(&mut msg, sender_id);
+        push_u32(&mut msg, ((total as u32) << 16) | u32::from(opcode));
+        msg.extend_from_slice(payload);
+        stream.write_all(&msg)
+    }
+    fn u32_at(buf: &[u8], offset: usize) -> u32 {
+        u32::from_ne_bytes([buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]])
+    }
+    fn spawn_mock_compositor(mut server: UnixStream) -> (Arc<AtomicBool>, std::thread::JoinHandle<()>) {
+        let shell_destroyed = Arc::new(AtomicBool::new(false));
+        let destroyed = shell_destroyed.clone();
+        let handle = std::thread::spawn(move || {
+            let mut registry_id = 0u32;
+            let mut shell_id = 0u32;
+            let mut header = [0u8; 8];
+            while server.read_exact(&mut header).is_ok() {
+                let sender_id = u32_at(&header, 0);
+                let word1 = u32_at(&header, 4);
+                let size = (word1 >> 16) as usize;
+                let opcode = (word1 & 0xffff) as u16;
+                if size < 8 { break; }
+                let mut payload = vec![0u8; size - 8];
+                if server.read_exact(&mut payload).is_err() { break; }
+                if sender_id == 1 && opcode == 1 && payload.len() >= 4 {
+                    registry_id = u32_at(&payload, 0);
+                    let mut p1 = Vec::new();
+                    push_u32(&mut p1, 1);
+                    push_str(&mut p1, "wl_compositor");
+                    push_u32(&mut p1, 6);
+                    if send_msg(&mut server, registry_id, 0, &p1).is_err() { break; }
+                    let mut p2 = Vec::new();
+                    push_u32(&mut p2, 2);
+                    push_str(&mut p2, "zwlr_layer_shell_v1");
+                    push_u32(&mut p2, 4);
+                    if send_msg(&mut server, registry_id, 0, &p2).is_err() { break; }
+                } else if sender_id == 1 && opcode == 0 && payload.len() >= 4 {
+                    let cb_id = u32_at(&payload, 0);
+                    if send_msg(&mut server, cb_id, 0, &0u32.to_ne_bytes()).is_err() { break; }
+                } else if sender_id == registry_id && registry_id != 0 && opcode == 0 && payload.len() >= 8 {
+                    let name = u32_at(&payload, 0);
+                    let str_len = u32_at(&payload, 4) as usize;
+                    let str_padded = (str_len + 3) & !3;
+                    let new_id_off = 8 + str_padded + 4;
+                    if name == 2 && payload.len() >= new_id_off + 4 {
+                        shell_id = u32_at(&payload, new_id_off);
+                    }
+                } else if sender_id == shell_id && shell_id != 0 && opcode == 0 && payload.len() >= 4 {
+                    let layer_id = u32_at(&payload, 0);
+                    let mut cfg = Vec::new();
+                    push_u32(&mut cfg, 1);
+                    push_u32(&mut cfg, 200);
+                    push_u32(&mut cfg, 100);
+                    if send_msg(&mut server, layer_id, 0, &cfg).is_err() { break; }
+                } else if sender_id == shell_id && shell_id != 0 && opcode == 1 {
+                    destroyed.store(true, Ordering::Release);
+                }
+            }
+        });
+        (shell_destroyed, handle)
+    }
+
+    let placement = Placement { size: (200.0, 100.0), edge: ScreenEdge::Top, margin: 0.0, align: Align::Start, inset: 0.0 };
+    let options = OverlayOptions::default();
+
+    // Case 1: queued undispatched events (including `wl_callback.done` from `request_frame`) and
+    // replaced frame callbacks must not retain any proxy `ObjectData` / `QueueHandle` after drop.
+    {
+        let (client, server) = UnixStream::pair()?;
+        let mut server_tx = server.try_clone()?;
+        let (shell_destroyed, server_thread) = spawn_mock_compositor(server);
+        let Ok(host) = Connection::from_socket(client) else { return Ok(()); };
+        let display = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
+            NonNull::new(host.display().id().as_ptr().cast()).unwrap(),
+        ));
+        let mut layer = super::LayerSurface::new(display, "test-queued", placement, false, &options, None, None)
+            .expect("configured layer surface");
+        let conn_probe = layer.conn.clone();
+
+        // Requesting a second frame callback destroys the previous pending one immediately.
+        layer.request_frame();
+        let cb1 = layer.state.frame_callback.as_ref().unwrap().1.clone();
+        let cb1_weak = Arc::downgrade(cb1.object_data().unwrap());
+        let cb1_id = cb1.id();
+        drop(cb1);
+        layer.request_frame();
+        assert!(conn_probe.object_info(cb1_id).is_err(), "replaced frame callback must be destroyed");
+        assert!(cb1_weak.upgrade().is_none(), "replaced frame callback data must be freed");
+
+        let cb2 = layer.state.frame_callback.as_ref().unwrap().1.clone();
+        let cb2_id = cb2.id();
+        let cb2_proto_id = cb2_id.protocol_id();
+        let surface_id = layer.surface.id();
+        let surface_proto_id = surface_id.protocol_id();
+        let layer_id = layer.layer.id();
+        let shell_id = layer.shell.id();
+        let compositor_id = layer.compositor.id();
+        let registry_id = layer.globals.as_ref().unwrap().registry().id();
+        let weaks = [
+            ("registry", Arc::downgrade(layer.globals.as_ref().unwrap().registry().object_data().unwrap())),
+            ("compositor", Arc::downgrade(layer.compositor.object_data().unwrap())),
+            ("shell", Arc::downgrade(layer.shell.object_data().unwrap())),
+            ("surface", Arc::downgrade(layer.surface.object_data().unwrap())),
+            ("layer", Arc::downgrade(layer.layer.object_data().unwrap())),
+            ("frame_callback", Arc::downgrade(cb2.object_data().unwrap())),
+        ];
+        drop(cb2);
+
+        // Queue `wl_callback.done` and `wl_surface.preferred_buffer_scale` into `EventQueueInner`
+        // without calling `layer.dispatch()`, then drop `layer` while `conn_probe` keeps the
+        // backend alive so any proxy `Drop` forgot to destroy stays visible.
+        send_msg(&mut server_tx, cb2_proto_id, 0, &42u32.to_ne_bytes())?;
+        send_msg(&mut server_tx, surface_proto_id, 2, &2u32.to_ne_bytes())?;
+        let guard = host.prepare_read().or_else(|| {
+            host.backend().dispatch_inner_queue().ok();
+            host.prepare_read()
+        });
+        if let Some(guard) = guard {
+            guard.read().ok();
+        }
+        let moved = conn_probe.backend().dispatch_inner_queue().unwrap();
+        assert!(moved >= 2, "expected both events to be queued into EventQueueInner before drop");
+
+        drop(layer);
+
+        for (name, weak) in &weaks {
+            assert!(weak.upgrade().is_none(), "{name} ObjectData still alive after LayerSurface::drop");
+        }
+        for (name, id) in [
+            ("registry", registry_id), ("compositor", compositor_id), ("shell", shell_id),
+            ("surface", surface_id), ("layer", layer_id), ("frame_callback", cb2_id),
+        ] {
+            assert!(conn_probe.object_info(id).is_err(), "{name} proxy still alive after LayerSurface::drop");
+        }
+        drop(conn_probe);
+        drop(host);
+        drop(server_tx);
+        server_thread.join().unwrap();
+        assert!(shell_destroyed.load(Ordering::Acquire), "Drop must send zwlr_layer_shell_v1.destroy on v3+");
+    }
+
+    // Case 2: an unanswered pending `wl_surface.frame` callback at `Drop` is explicitly destroyed.
+    {
+        let (client, server) = UnixStream::pair()?;
+        let (shell_destroyed, server_thread) = spawn_mock_compositor(server);
+        let Ok(host) = Connection::from_socket(client) else { return Ok(()); };
+        let display = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
+            NonNull::new(host.display().id().as_ptr().cast()).unwrap(),
+        ));
+        let mut layer = super::LayerSurface::new(display, "test-pending-cb", placement, false, &options, None, None)
+            .expect("configured layer surface");
+        let conn_probe = layer.conn.clone();
+        layer.request_frame();
+        let cb = layer.state.frame_callback.as_ref().unwrap().1.clone();
+        let cb_id = cb.id();
+        let cb_weak = Arc::downgrade(cb.object_data().unwrap());
+        drop(cb);
+
+        drop(layer);
+
+        assert!(conn_probe.object_info(cb_id).is_err(), "pending frame callback proxy must be destroyed on drop");
+        assert!(cb_weak.upgrade().is_none(), "pending frame callback ObjectData must be freed on drop");
+        drop(conn_probe);
+        drop(host);
+        server_thread.join().unwrap();
+        assert!(shell_destroyed.load(Ordering::Acquire), "Drop must send zwlr_layer_shell_v1.destroy on v3+");
+    }
+    Ok(())
+}
