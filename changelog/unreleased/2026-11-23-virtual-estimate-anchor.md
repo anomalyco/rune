@@ -1,0 +1,1 @@
+- Virtual lists: changing a list's estimated row height (`El::virtualize`, `El::virtual_rows`) now finds the scroll anchor against the previous row heights before applying the new estimate, so unmeasured rows above the viewport no longer shift the reader.

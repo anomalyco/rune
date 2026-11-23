@@ -308,7 +308,7 @@ impl Measurement<'_> {
         // A list in a row of another list windows against that list's viewport too.
         let nested = self.virtuals.keys().any(|p| p.starts_with(scroll_path) && path.strip_prefix(p.as_str()).is_some_and(|r| r.starts_with('/')));
         let v = self.virtuals.entry(path.to_owned()).or_default();
-        v.set_estimate(if el.style.whole_rows_column() { (estimate + 0.5).floor() } else { estimate });
+        let estimate = if el.style.whole_rows_column() { (estimate + 0.5).floor() } else { estimate };
         v.scroll_path = scroll_path.to_owned();
         // A retry keeps the viewport the last pass measured; `self.nodes` is the last commit's.
         if self.pass.trusts_estimates() { v.viewport = height; }
@@ -369,6 +369,9 @@ impl Measurement<'_> {
                 && (slides || list.is_some_and(|list| self.nodes.iter().any(|n| n.vis.offset != [0.0; 2] && n.parent == Some(list))));
             v.set_keys(keys, self.commits, (!pinned && !reorder && !v.passed()).then_some(offset))
         };
+        // Apply the new estimate after finding the anchor against the previous heights, so
+        // `anchor_delta` compensates the scroll offset for unmeasured rows above the viewport.
+        v.set_estimate(estimate);
         v.anchor = anchor;
         let delta = v.anchor_delta();
         offset = (offset + delta).max(0.0);
