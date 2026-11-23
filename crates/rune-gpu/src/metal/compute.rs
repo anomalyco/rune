@@ -215,6 +215,7 @@ impl ComputePassInterface for MetalComputePass {
         if let Some((bound, bound_offsets)) = &self.groups[index]
             && Arc::ptr_eq(bound, group) && bound_offsets[..] == *offsets { return }
         self.keep.push(group.clone());
+        for uses in &group.texture_uses { self.keep.use_texture(uses); }
         self.groups[index] = Some((group.clone(), offsets.to_vec()));
         self.dirty |= 1 << index;
     }

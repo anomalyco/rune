@@ -15,7 +15,7 @@ use objc2_metal::{MTLCommandQueue, MTLDevice, MTLLanguageVersion, MTLLibrary, MT
 use parking_lot::Mutex;
 use wgpu::custom::*;
 
-use super::encode::{Inert, MetalEncoder, Zeros, zero_texture};
+use super::encode::{Inert, MetalEncoder, Zeros, zero_shared_texture, zero_texture};
 use super::layout::{BindGroup, BindGroupLayout, PipelineLayout};
 use super::resource::{Live, MetalBuffer, MetalSampler, MetalTexture};
 use super::shader::ShaderModule;
@@ -164,10 +164,14 @@ impl DeviceInterface for MetalDevice {
         DispatchBuffer::custom(MetalBuffer::new(&self.shared, desc.size, desc.label))
     }
     fn create_texture(&self, desc: &wgpu::TextureDescriptor<'_>) -> DispatchTexture {
-        let texture = MetalTexture::new(&self.shared.device, desc, Live::new(&self.shared.textures));
+        let texture = MetalTexture::new(&self.shared, desc, Live::new(&self.shared.textures));
         let raw = texture.raw.clone();
-        let zeros = self.shared.zeros.get_or_init(|| Zeros::new(&self.shared));
-        self.shared.upload(|blit| zero_texture(blit, zeros, &raw), [raw.clone() as _]);
+        if raw.is_shared() {
+            zero_shared_texture(&raw);
+        } else {
+            let zeros = self.shared.zeros.get_or_init(|| Zeros::new(&self.shared));
+            self.shared.upload(|blit| zero_texture(blit, zeros, &raw), [raw.clone() as _], None);
+        }
         DispatchTexture::custom(texture)
     }
     fn create_external_texture(&self, _: &wgpu::ExternalTextureDescriptor<'_>, _: &[&wgpu::TextureView]) -> DispatchExternalTexture {

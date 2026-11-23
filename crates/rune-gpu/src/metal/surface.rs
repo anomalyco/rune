@@ -133,7 +133,7 @@ impl SurfaceInterface for MetalSurface {
         if occluded(&self.layer) { return none(wgpu::SurfaceStatus::Occluded, shared) }
         if let Some(shared) = &shared { shared.pace(); }
         let Some(drawable) = autoreleasepool(|_| self.layer.nextDrawable()) else { return none(wgpu::SurfaceStatus::Timeout, shared) };
-        let texture = MetalTexture { raw: Arc::new(TextureRaw::drawable(drawable.texture(), format)) };
+        let texture = MetalTexture { raw: Arc::new(TextureRaw::drawable(drawable.texture(), format)), shared: None };
         let output = MetalOutput { drawable: Some(drawable), transaction: self.layer.presentsWithTransaction(), shared };
         (Some(DispatchTexture::custom(texture)), wgpu::SurfaceStatus::Good, DispatchSurfaceOutputDetail::custom(output))
     }

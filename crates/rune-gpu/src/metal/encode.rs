@@ -4,6 +4,7 @@
 #![allow(unsafe_code)]
 
 use std::any::Any;
+use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -12,7 +13,7 @@ use objc2_foundation::NSRange;
 use objc2_foundation::NSString;
 #[cfg(debug_assertions)]
 use objc2_metal::MTLResource;
-use objc2_metal::{MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLDevice, MTLEvent, MTLOrigin, MTLResourceOptions, MTLSize, MTLTexture};
+use objc2_metal::{MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLDevice, MTLEvent, MTLOrigin, MTLRegion, MTLResourceOptions, MTLSize, MTLTexture};
 use objc2::rc::autoreleasepool;
 use objc2::runtime::ProtocolObject;
 use parking_lot::Mutex;
@@ -274,6 +275,87 @@ pub(super) fn zero_texture(blit: &ProtocolObject<dyn MTLBlitCommandEncoder>, zer
     }
 }
 
+/// Zeroes every mip and layer of a new `MTLStorageMode::Shared` texture on the CPU, avoiding a
+/// `zero_texture` blit encoder.
+pub(super) fn zero_shared_texture(texture: &TextureRaw) {
+    static ZERO_BYTES: [u8; ZEROS] = [0; ZEROS];
+    let Some(block) = texture.format.block_copy_size(None) else { return };
+    let (bw, bh) = texture.format.block_dimensions();
+    let three = texture.dimension == wgpu::TextureDimension::D3;
+    let one_d = texture.dimension == wgpu::TextureDimension::D1;
+    let raw = &texture.raw;
+    for mip in 0..texture.mips as usize {
+        let (w, h) = ((raw.width() >> mip).max(1), (raw.height() >> mip).max(1));
+        let row = w.div_ceil(bw as usize) * block as usize;
+        let strip = (ZEROS / row).max(1) * bh as usize;
+        let slices = if three { (raw.depth() >> mip).max(1) } else { texture.layers as usize };
+        for s in 0..slices {
+            let (slice, z) = if three { (0, s) } else { (s, 0) };
+            for y in (0..h).step_by(strip) {
+                let rows = strip.min(h - y);
+                let region = MTLRegion {
+                    origin: MTLOrigin { x: 0, y, z },
+                    size: MTLSize { width: w, height: rows, depth: 1 },
+                };
+                let bpr = if one_d { 0 } else { row };
+                let bpi = if three { row * rows.div_ceil(bh as usize) } else { 0 };
+                // SAFETY: each strip is within the mip and reads at most `ZEROS` bytes.
+                unsafe {
+                    raw.replaceRegion_mipmapLevel_slice_withBytes_bytesPerRow_bytesPerImage(
+                        region, mip, slice, NonNull::from(&ZERO_BYTES[0]).cast(), bpr, bpi,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Writes tightly packed full-width rows of an idle shared texture starting at row `y`.
+pub(super) fn replace_texture_rows(texture: &TextureRaw, y: u32, rows: &[u8]) {
+    let Some(block) = texture.format.block_copy_size(None) else { return };
+    let w = texture.raw.width();
+    let row = w * block as usize;
+    let count = rows.len() / row;
+    if count == 0 { return }
+    assert!(y as usize + count <= texture.raw.height(), "row write past the end of a texture");
+    let region = MTLRegion {
+        origin: MTLOrigin { x: 0, y: y as usize, z: 0 },
+        size: MTLSize { width: w, height: count, depth: 1 },
+    };
+    let bpr = if texture.dimension == wgpu::TextureDimension::D1 { 0 } else { row };
+    // SAFETY: `rows` holds `count` tightly packed full-width rows within mip 0, checked above.
+    unsafe {
+        texture.raw.replaceRegion_mipmapLevel_slice_withBytes_bytesPerRow_bytesPerImage(
+            region, 0, 0, NonNull::from(&rows[0]).cast(), bpr, 0,
+        );
+    }
+}
+
+/// Writes an arbitrary region of an idle shared texture on the CPU (`Queue::write_texture`).
+pub(super) fn replace_texture(
+    texture: &TextureRaw,
+    mip: u32,
+    at: wgpu::Origin3d,
+    data: &[u8],
+    layout: wgpu::TexelCopyBufferLayout,
+    size: wgpu::Extent3d,
+) {
+    let (row, image) = strides(texture.format, layout, size);
+    let one_d = texture.dimension == wgpu::TextureDimension::D1;
+    for (slice, z, depth, i) in layers(texture, at, size) {
+        let offset = layout.offset as usize + image * i;
+        let region = MTLRegion { origin: origin(at, z), size: extent(size.width, size.height, depth) };
+        let bpr = if one_d { 0 } else { row };
+        let bpi = if depth > 1 { image } else { 0 };
+        // SAFETY: wgpu validated `data`, `layout`, `at`, `size`, and `mip` against `texture`.
+        unsafe {
+            texture.raw.replaceRegion_mipmapLevel_slice_withBytes_bytesPerRow_bytesPerImage(
+                region, mip as usize, slice, NonNull::from(&data[offset]).cast(), bpr, bpi,
+            );
+        }
+    }
+}
+
 pub(super) fn buffer_to_texture(blit: &ProtocolObject<dyn MTLBlitCommandEncoder>, buffer: &ProtocolObject<dyn MTLBuffer>,
     layout: wgpu::TexelCopyBufferLayout, texture: &TextureRaw, mip: u32, at: wgpu::Origin3d, size: wgpu::Extent3d) {
     let (row, image) = strides(texture.format, layout, size);
@@ -327,6 +409,7 @@ impl CommandEncoderInterface for MetalEncoder {
         let (src, dst) = (source.buffer.as_custom::<MetalBuffer>().expect("a Metal buffer").raw(), texture(&destination));
         buffer_to_texture(rec.blit(), &src.raw, source.layout, &dst, destination.mip_level, destination.origin, size);
         rec.drawable |= dst.drawable;
+        if let Some(uses) = &dst.uses { rec.keep.use_texture(uses); }
         rec.keep([src as _, dst as _]);
     }
     fn copy_texture_to_buffer(&self, source: wgpu::TexelCopyTextureInfo<'_>, destination: wgpu::TexelCopyBufferInfo<'_>, size: wgpu::Extent3d) {
@@ -334,6 +417,7 @@ impl CommandEncoderInterface for MetalEncoder {
         let (src, dst) = (texture(&source), destination.buffer.as_custom::<MetalBuffer>().expect("a Metal buffer").store.gpu_write());
         let mut rec = self.rec.lock();
         texture_to_buffer(rec.blit(), &src, source.mip_level, source.origin, &dst.raw, destination.layout, size);
+        if let Some(uses) = &src.uses { rec.keep.use_texture(uses); }
         rec.keep([src as _, dst as _]);
     }
     fn copy_texture_to_texture(&self, source: wgpu::TexelCopyTextureInfo<'_>, destination: wgpu::TexelCopyTextureInfo<'_>, size: wgpu::Extent3d) {
@@ -350,6 +434,8 @@ impl CommandEncoderInterface for MetalEncoder {
             }
         }
         rec.drawable |= dst.drawable;
+        if let Some(uses) = &src.uses { rec.keep.use_texture(uses); }
+        if let Some(uses) = &dst.uses { rec.keep.use_texture(uses); }
         rec.keep([src as _, dst as _]);
     }
     fn begin_compute_pass(&self, desc: &wgpu::ComputePassDescriptor<'_>) -> DispatchComputePass {

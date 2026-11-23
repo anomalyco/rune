@@ -55,6 +55,8 @@ mod submit;
 mod surface;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod texture_tests;
 
 use std::future::ready;
 use std::pin::Pin;
@@ -138,6 +140,7 @@ pub fn enabled() -> bool {
 
 pub fn instance() -> wgpu::Instance {
     rune_staging::set_direct(write_in_place);
+    rune_staging::set_direct_texture(write_texture_in_place);
     wgpu::Instance::from_custom(MetalInstance)
 }
 
@@ -148,6 +151,16 @@ pub(crate) fn owns(queue: &wgpu::Queue) -> bool { queue.as_custom::<submit::Meta
 /// Staging's in-place writer: a Metal buffer the GPU only reads takes writes into its storage.
 fn write_in_place(buffer: &wgpu::Buffer, offset: u64, data: &[u8]) -> bool {
     buffer.as_custom::<resource::MetalBuffer>().is_some_and(|b| b.store.write_ahead(&b.shared, offset, data, || true))
+}
+
+/// Staging's in-place texture row writer: an idle Apple Silicon shared texture takes rows via
+/// `replaceRegion`, falling back to staged blits whenever the GPU still references it.
+fn write_texture_in_place(texture: &wgpu::Texture, y: u32, rows: &[u8]) -> bool {
+    let Some(tex) = texture.as_custom::<resource::MetalTexture>() else { return false };
+    let Some(shared) = &tex.shared else { return false };
+    if !tex.raw.is_idle(shared) { return false }
+    encode::replace_texture_rows(&tex.raw, y, rows);
+    true
 }
 
 /// The CAMetalLayer a surface of this backend presents into.
