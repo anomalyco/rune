@@ -23,7 +23,7 @@ use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1:
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1};
 
-use super::layer_shell_machine::{configure_wait, connection, exclusive_zone, keyboard, readiness, repeat, touch, watch_loop};
+use super::layer_shell_machine::{configure_wait, connection, exclusive_zone, keyboard, pointer, readiness, repeat, touch, watch_loop};
 use crate::el::Align;
 use crate::overlay::{Placement, ScreenEdge};
 use crate::runtime::Waker;
@@ -34,7 +34,9 @@ pub(crate) use dead::display_error;
 use dead::{classify_turn_error, format_wayland_error};
 
 pub(crate) enum Input {
-    Move(f32, f32), Leave, Button(bool), Secondary(bool), Focus(bool), Key(crate::KeyEvent), KeyRepeat(crate::KeyEvent), KeyUp(crate::KeyEvent),
+    Move(f32, f32), Leave, Button(bool), Secondary(bool), ExtraButton(crate::PointerButton, bool),
+    Wheel(crate::input::host_events::WheelInput),
+    Focus(bool), Key(crate::KeyEvent), KeyRepeat(crate::KeyEvent), KeyUp(crate::KeyEvent),
     Physical(crate::PhysicalInput, Option<crate::KeyEvent>),
 }
 
@@ -64,6 +66,7 @@ struct State {
     want_keys: bool,
     capabilities: Option<wl_seat::Capability>,
     pointer: Option<WlPointer>,
+    pointer_axis: pointer::State,
     /// A finger on the surface acts as the primary button, so a tap is a click.
     touch: Option<WlTouch>,
     finger: touch::State,
@@ -107,6 +110,17 @@ impl State {
         }
     }
 
+    fn step_pointer(&mut self, event: pointer::Event) {
+        for effect in pointer::step(&mut self.pointer_axis, event) {
+            let pointer::Effect::Wheel(wheel) = effect;
+            self.input.push(Input::Wheel(wheel));
+        }
+    }
+
+    fn flush_pointer_frame(&mut self, framed: bool) {
+        let mods = self.xkb.as_ref().map_or_else(crate::Mods::default, key_mods);
+        self.step_pointer(pointer::Event::Frame { mods, framed });
+    }
     fn emit_key(&mut self, key: u32, pressed: bool, repeat: bool) {
         use winit::platform::scancode::PhysicalKeyExtScancode;
         let Some(xkb) = &self.xkb else { return };
@@ -159,6 +173,7 @@ impl State {
             if let Some(shape) = self.shape.take() { shape.destroy(); }
             if p.version() >= 3 { p.release(); }
             self.over = Over::Outside;
+            self.step_pointer(pointer::Event::Reset);
         }
         if !touch && let Some(t) = self.touch.take() {
             if t.version() >= 3 { t.release(); }
@@ -174,31 +189,72 @@ impl State {
         }
     }
 }
+fn pointer_axis(axis: wl_pointer::Axis) -> Option<pointer::Axis> {
+    match axis {
+        wl_pointer::Axis::VerticalScroll => Some(pointer::Axis::Vertical),
+        wl_pointer::Axis::HorizontalScroll => Some(pointer::Axis::Horizontal),
+        _ => None,
+    }
+}
+
+fn pointer_axis_source(source: wl_pointer::AxisSource) -> Option<pointer::AxisSource> {
+    match source {
+        wl_pointer::AxisSource::Wheel => Some(pointer::AxisSource::Wheel),
+        wl_pointer::AxisSource::Finger => Some(pointer::AxisSource::Finger),
+        wl_pointer::AxisSource::Continuous => Some(pointer::AxisSource::Continuous),
+        wl_pointer::AxisSource::WheelTilt => Some(pointer::AxisSource::WheelTilt),
+        _ => None,
+    }
+}
+
 impl Dispatch<WlPointer, ()> for State {
-    fn event(state: &mut Self, _: &WlPointer, event: wl_pointer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(state: &mut Self, wl_pointer: &WlPointer, event: wl_pointer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         match event {
             wl_pointer::Event::Enter { serial, surface, surface_x, surface_y } => {
                 // Until the surface sets a cursor, the pointer keeps the one it arrived with.
                 let inside = state.surface.as_ref() == Some(&surface);
+                state.step_pointer(pointer::Event::Reset);
                 state.over = if inside { Over::Inside { serial, cursor: None } } else { Over::Outside };
                 if inside { state.input.push(Input::Move(surface_x as f32, surface_y as f32)); }
             }
             wl_pointer::Event::Motion { surface_x, surface_y, .. } if state.over.inside() => state.input.push(Input::Move(surface_x as f32, surface_y as f32)),
             wl_pointer::Event::Leave { surface, .. } if state.surface.as_ref() == Some(&surface) => {
                 state.over = Over::Outside;
+                state.step_pointer(pointer::Event::Reset);
                 state.input.push(Input::Leave);
             }
-            wl_pointer::Event::Button { button: 0x110, state: wayland_client::WEnum::Value(button), .. } if state.over.inside() => {
-                let pressed = button == wl_pointer::ButtonState::Pressed;
-                state.input.push(Input::Button(pressed));
-                if pressed && let Some(xkb) = &state.xkb {
-                    state.input.push(Input::Physical(crate::PhysicalInput::Modifiers(key_mods(xkb)), None));
+            wl_pointer::Event::Button { button, state: wayland_client::WEnum::Value(button_state), .. } if state.over.inside() => {
+                let pressed = button_state == wl_pointer::ButtonState::Pressed;
+                match pointer::button_from_linux(button) {
+                    crate::PointerButton::Primary => {
+                        state.input.push(Input::Button(pressed));
+                        if pressed && let Some(xkb) = &state.xkb {
+                            state.input.push(Input::Physical(crate::PhysicalInput::Modifiers(key_mods(xkb)), None));
+                        }
+                    }
+                    crate::PointerButton::Secondary => state.input.push(Input::Secondary(pressed)),
+                    other => state.input.push(Input::ExtraButton(other, pressed)),
                 }
             }
-            // BTN_RIGHT: the secondary gesture, as a window's right button is.
-            wl_pointer::Event::Button { button: 0x111, state: wayland_client::WEnum::Value(button), .. } if state.over.inside() => {
-                state.input.push(Input::Secondary(button == wl_pointer::ButtonState::Pressed));
+            wl_pointer::Event::Axis { axis: wayland_client::WEnum::Value(axis), value, .. } if state.over.inside() => {
+                if let Some(axis) = pointer_axis(axis) {
+                    state.step_pointer(pointer::Event::Axis { axis, value });
+                    if wl_pointer.version() < 5 { state.flush_pointer_frame(false); }
+                }
             }
+            wl_pointer::Event::AxisSource { axis_source: wayland_client::WEnum::Value(source) } if state.over.inside() => {
+                if let Some(source) = pointer_axis_source(source) { state.step_pointer(pointer::Event::AxisSource(source)); }
+            }
+            wl_pointer::Event::AxisDiscrete { axis: wayland_client::WEnum::Value(axis), discrete } if state.over.inside() => {
+                if let Some(axis) = pointer_axis(axis) { state.step_pointer(pointer::Event::AxisDiscrete { axis, discrete }); }
+            }
+            wl_pointer::Event::AxisValue120 { axis: wayland_client::WEnum::Value(axis), value120 } if state.over.inside() => {
+                if let Some(axis) = pointer_axis(axis) { state.step_pointer(pointer::Event::AxisValue120 { axis, value120 }); }
+            }
+            wl_pointer::Event::AxisStop { axis: wayland_client::WEnum::Value(axis), .. } if state.over.inside() => {
+                if let Some(axis) = pointer_axis(axis) { state.step_pointer(pointer::Event::AxisStop { axis }); }
+            }
+            wl_pointer::Event::Frame if state.over.inside() => state.flush_pointer_frame(true),
             _ => {}
         }
     }
@@ -998,6 +1054,7 @@ impl LayerSurface {
         self.turn();
         self.state.step_repeat(repeat::Event::Stop);
         self.state.reset_compose();
+        self.state.step_pointer(pointer::Event::Reset);
         self.state.input.clear();
         self.state.readiness.closed()
     }

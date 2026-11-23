@@ -27,7 +27,7 @@ pub(crate) struct KeyInput {
 }
 
 /// Host-neutral wheel input in window points (before dividing by `rt.zoom()`).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct WheelInput {
     pub dx: f32,
     pub dy: f32,
