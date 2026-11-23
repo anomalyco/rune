@@ -400,6 +400,7 @@ fn check_state(scene: &Scene, dev: &Dev, steps: &[Step]) {
     assert_eq!(scene.contains(ID), dev.alive, "in the scene after {steps:?}");
     if !dev.alive {
         assert_eq!(scene.phase(ID), None, "phase after {steps:?}");
+        assert!(scene.exiting().is_empty(), "exiting after {steps:?}");
         return;
     }
     let want = match dev.phase {
@@ -408,6 +409,8 @@ fn check_state(scene: &Scene, dev: &Dev, steps: &[Step]) {
         DevPhase::Exiting { generation } => Phase::Exiting { generation },
     };
     assert_eq!(scene.phase(ID), Some(want), "phase after {steps:?}");
+    let want_exiting: &[NodeId] = if matches!(dev.phase, DevPhase::Exiting { .. }) { &[ID] } else { &[] };
+    assert_eq!(scene.exiting(), want_exiting, "exiting after {steps:?}");
 }
 
 fn check_presented(p: &Presented, dev: &Dev, presence: f32, frame: Rect, steps: &[Step]) {

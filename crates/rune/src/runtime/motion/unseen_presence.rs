@@ -43,17 +43,30 @@ impl RuntimeCore {
 
     /// Ends the exits that drew nothing last frame. A flight paints outside its clips, so it stays.
     pub(in crate::runtime) fn end_unseen_exits(&mut self) {
-        if !self.tree.built { return; }
+        if !self.tree.built || self.scene.exiting().is_empty() { return; }
         let mut hid: Option<Vec<bool>> = None;
-        for i in 0..self.tree.nodes.len() {
-            let id = self.tree.nodes[i].id;
+        let mut unmount: Vec<(usize, NodeId)> = Vec::new();
+        #[cfg(test)]
+        let mut checks = 0u64;
+        for &id in self.scene.exiting() {
+            #[cfg(test)]
+            { checks += 1; }
+            let Some(&i) = self.tree.node_index.get(&id) else { continue };
             let faded = self.paint.inh_scratch.get(i).is_some_and(|h| h.opacity < 1.0 / 512.0);
-            if (!faded && self.paint.was_seen(i, true)) || !self.is_exiting(id) || self.motion.flying.iter().any(|f| f.0 == id) {
+            if (!faded && self.paint.was_seen(i, true)) || self.motion.flying.iter().any(|f| f.0 == id) {
                 continue;
             }
             if hid.get_or_insert_with(|| self.drew_nothing()).get(i).copied().unwrap_or(false) {
-                self.scene.unmount(id);
+                unmount.push((i, id));
             }
+        }
+        #[cfg(test)]
+        { self.motion.unseen_exit_checks += checks; }
+        if unmount.len() > 1 {
+            unmount.sort_unstable_by_key(|&(i, _)| i);
+        }
+        for (_, id) in unmount {
+            self.scene.unmount(id);
         }
     }
 
@@ -186,3 +199,7 @@ impl RuntimeCore {
         (0..nodes.len()).map(|i| !after[i] && olds[i].is_none_or(|o| !seen[o])).collect()
     }
 }
+
+#[cfg(test)]
+#[path = "unseen_presence_tests.rs"]
+mod tests;
