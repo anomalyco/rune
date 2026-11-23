@@ -510,3 +510,50 @@ fn a_lost_device_tells_its_callback_once_even_one_set_after() {
     shared(&device).lose("again".into());
     assert_eq!(*heard.lock().unwrap(), [(wgpu::DeviceLostReason::Unknown, "the GPU timed out".to_owned())]);
 }
+
+/// Another queue's signal releases what a Rune encoder records after `wait_for_event`, and its
+/// `signal_event_on_finish` comes once that work finished: a copy the other queue then reads.
+#[test]
+#[allow(unsafe_code)]
+fn an_encoder_waits_for_and_signals_events_across_queues() {
+    use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLCommandQueue, MTLDevice, MTLEvent, MTLSharedEvent};
+    let (device, queue) = gpu();
+    let sh = shared(&device);
+    let other = sh.device.newCommandQueue().expect("a second Metal queue");
+    let (ready, read, seen) = (sh.device.newSharedEvent().unwrap(), sh.device.newSharedEvent().unwrap(), sh.device.newSharedEvent().unwrap());
+    fn event(e: &Obj<dyn MTLSharedEvent>) -> &ProtocolObject<dyn MTLEvent> { ProtocolObject::from_ref(&**e) }
+    let usage = wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ;
+    let src = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16, usage, mapped_at_creation: false });
+    let dst = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16, usage, mapped_at_creation: false });
+    queue.write_buffer(&src, 0, &[7; 16]);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    assert!(wait_for_event(&mut encoder, event(&ready), 1));
+    encoder.copy_buffer_to_buffer(&src, 0, &dst, 0, 16);
+    assert!(signal_event_on_finish(&mut encoder, event(&read), 1));
+    queue.submit([encoder.finish()]);
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert_eq!(read.signaledValue(), 0, "held until the other queue signals");
+    // The other queue releases it, then waits for its signal before its own work.
+    let cb = other.commandBuffer().unwrap();
+    cb.encodeSignalEvent_value(event(&ready), 1);
+    cb.encodeWaitForEvent_value(event(&read), 1);
+    cb.encodeSignalEvent_value(event(&seen), 1);
+    cb.commit();
+    assert!(seen.waitUntilSignaledValue_timeoutMS(1, 2000), "the encoder's signal came");
+    let raw = dst.as_custom::<MetalBuffer>().unwrap().store.current();
+    // SAFETY: shared storage of 16 bytes, which the GPU finished writing (`read` reached 1).
+    let bytes = unsafe { std::slice::from_raw_parts(raw.raw.contents().as_ptr() as *const u8, 16) };
+    assert_eq!(bytes, [7; 16], "the signal came after the copy");
+}
+
+/// A stock wgpu encoder isn't this backend's: nothing is encoded.
+#[test]
+fn events_need_this_backends_encoder() {
+    use objc2_metal::{MTLDevice, MTLEvent};
+    let (device, _queue) = wgpu_metal();
+    let (ours, _q) = gpu();
+    let e = shared(&ours).device.newSharedEvent().unwrap();
+    let mut encoder = device.create_command_encoder(&Default::default());
+    assert!(!wait_for_event(&mut encoder, ProtocolObject::<dyn MTLEvent>::from_ref(&*e), 1));
+    assert!(!signal_event_on_finish(&mut encoder, ProtocolObject::<dyn MTLEvent>::from_ref(&*e), 1));
+}
