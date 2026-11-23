@@ -28,6 +28,7 @@ members = [
     "crates/rune-taffy",
     "themes/opencode",
     "examples/hello",
+    "examples/launch-floor",
     "examples/web-hello",
     "examples/web-showcase",
     "www/app",

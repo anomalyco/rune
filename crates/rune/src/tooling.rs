@@ -195,6 +195,8 @@ pub use args::{Args, is_headless};
 pub use args::{RELAUNCH_DROPS, without_relaunch_drops};
 pub(crate) use args::*;
 pub use headless::headless;
+#[cfg(not(target_arch = "wasm32"))]
+pub use perf_warn::launch::process_age;
 pub(crate) use headless::*;
 pub(crate) use key_names::{key_named, script_key_base, script_mods};
 use script::parse_script;
