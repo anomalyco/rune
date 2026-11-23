@@ -350,7 +350,7 @@ impl Host {
             if dbg_launching && dbg_changed {
                 if let Some(w) = &self.win { sync_chrome_core(self.app.rt_mut(), w, self.chrome, self.titlebar); }
                 crate::marks::mark(if self.app.rt().stale() { "dbg.chrome.stale" } else { "dbg.chrome.fresh" });
-                if self.app.rt().stale() { self.redraw(); }
+                if self.app.rt().stale() { self.draw(true); }
                 crate::marks::mark("dbg.chrome.redrawn");
             }
             self.ime_waits = false;
