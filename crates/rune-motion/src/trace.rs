@@ -163,6 +163,7 @@ impl Write for SharedBuffer {
 /// unmounted ones go in `g`.
 pub struct MotionTrace {
     out: Box<dyn Write + Send>,
+    next_id: u32,
     ids: FxMap<u64, u32>,
     states: FxMap<u32, [f32; 12]>,
     last_t: Option<f64>,
@@ -192,6 +193,7 @@ impl MotionTrace {
         )?;
         Ok(MotionTrace {
             out,
+            next_id: 1,
             ids: FxMap::default(),
             states: FxMap::default(),
             last_t: None,
@@ -261,8 +263,13 @@ impl MotionTrace {
     pub fn event(&mut self, event: impl std::fmt::Display) { self.events.push(event.to_string()); }
 
     fn id(&mut self, node: NodeId) -> u32 {
-        let next = self.ids.len() as u32 + 1;
-        *self.ids.entry(node.0).or_insert(next)
+        if let Some(&id) = self.ids.get(&node.0) {
+            return id;
+        }
+        let id = self.next_id;
+        self.next_id = self.next_id.checked_add(1).expect("motion trace element id overflow");
+        self.ids.insert(node.0, id);
+        id
     }
 
     /// Writes one frame. `t` is animation time in seconds.
@@ -379,16 +386,21 @@ impl MotionTrace {
             write!(line, r#","e":[{elems}]"#).ok();
         }
         if !gone.is_empty() {
-            line.push_str(r#","g":["#);
-            for (k, node) in gone.iter().enumerate() {
-                let id = self.id(*node);
+            let mut removed = String::new();
+            for node in gone {
+                self.described.remove(&node.0);
+                self.names.remove(&node.0);
+                self.namespaces.remove(&node.0);
+                let Some(id) = self.ids.remove(&node.0) else { continue };
                 self.states.remove(&id);
-                if k > 0 {
-                    line.push(',');
+                if !removed.is_empty() {
+                    removed.push(',');
                 }
-                write!(line, "{id}").ok();
+                write!(removed, "{id}").ok();
             }
-            line.push(']');
+            if !removed.is_empty() {
+                write!(line, r#","g":[{removed}]"#).ok();
+            }
         }
         self.channels.write_json(&mut line);
         line.push('}');
@@ -436,3 +448,7 @@ fn json_str(s: &str) -> String {
     out.push('"');
     out
 }
+
+#[cfg(test)]
+#[path = "trace_tests.rs"]
+mod tests;
