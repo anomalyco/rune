@@ -321,6 +321,27 @@ impl RuntimeCore {
         })
     }
 
+    /// The element under (x, y) that chooses the pointer's cursor: the topmost live, allowed hit
+    /// target painted above any primary target that sets a cursor (itself or on an ancestor not
+    /// also enclosing the primary target), else the topmost primary target.
+    pub(in crate::runtime) fn cursor_target(&self, x: f32, y: f32) -> Option<usize> {
+        let primary = self.top_target(x, y);
+        let shared_ancestor = |a: usize| primary.is_some_and(|p| self.node_holds(a, p));
+        for &(id, r) in self.hit.hits().iter().rev() {
+            if !self.hit_contains(id, r, x, y) { continue; }
+            let Some(&i) = self.tree.node_index.get(&id) else { continue };
+            if self.subtree_exiting(i) || !self.allowed(i) { continue; }
+            if Some(i) == primary { return primary; }
+            if std::iter::successors(Some(i), |&k| self.tree.nodes[k].parent)
+                .take_while(|&k| !shared_ancestor(k))
+                .any(|k| self.tree.nodes[k].handlers.cursor.is_some())
+            {
+                return Some(i);
+            }
+        }
+        primary
+    }
+
     /// The element a press, hover or drag at (x, y) goes to. Selectable text passes them to the
     /// nearest ancestor that handles them (a clickable or draggable row), unless the text has
     /// its own handlers or the point is on one of its links; selecting goes on beside that

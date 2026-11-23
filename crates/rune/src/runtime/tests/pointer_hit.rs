@@ -518,3 +518,42 @@ fn pinned_sibling_blocks_pointer_move_hover_change_and_hover_delays_underneath()
     assert_eq!(rt.state.moves, ["observer"], "observer blocks canvas underneath and is not blocked by it");
     assert_eq!(rt.state.hovers, [("observer", true)]);
 }
+
+#[test]
+fn hoverable_child_with_own_cursor_overrides_draggable_parent() {
+    use crate::el::Cursor;
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        col().size(300.0, 260.0)
+            .child(col().key("page").size(300.0, 200.0).cursor(Cursor::Grab).on_drag(|_: &mut (), _: &mut crate::Drag, _| {})
+                .child(el().key("text-band").size(300.0, 40.0).cursor(Cursor::Text).on_hover_change(|_: &mut (), _, _| {}))
+                .child(el().key("default-band").size(300.0, 40.0).cursor(Cursor::Default).on_hover_change(|_: &mut (), _, _| {}))
+                .child(el().key("wrapped").size(300.0, 40.0).cursor(Cursor::Crosshair)
+                    .child(el().key("wrapped-hover").size(150.0, 40.0).on_hover_change(|_: &mut (), _, _| {})))
+                .child(el().key("row").size(300.0, 40.0)
+                    .child(el().key("btn").size(100.0, 40.0).cursor(Cursor::Pointer).on_press(|_: &mut ()| {}))
+                    .child(el().key("observer").absolute(0.0, 0.0).size(100.0, 40.0).on_pointer_move(|_: &mut (), _| {}))))
+            .child(el().key("handle").size(300.0, 60.0).cursor(Cursor::Move)
+                .child(el().key("hover-only").size(100.0, 60.0).on_hover_change(|_: &mut (), _, _| {})))
+    }
+    let mut rt = Runtime::new((), view, (300.0, 260.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.pointer_move(100.0, 20.0);
+    rt.frame(0.016);
+    assert_eq!(rt.cursor(), Cursor::Text, "hoverable child with Cursor::Text overrides draggable parent");
+    rt.pointer_down(100.0, 20.0);
+    assert_eq!(rt.cursor(), Cursor::Grab, "while dragging, the captured draggable parent owns the cursor");
+    rt.pointer_up(100.0, 20.0);
+    assert_eq!(rt.cursor(), Cursor::Text, "after release, the child's cursor returns");
+    rt.pointer_move(100.0, 60.0);
+    assert_eq!(rt.cursor(), Cursor::Default, "explicit Cursor::Default overrides parent's Grab");
+    rt.pointer_move(50.0, 100.0);
+    assert_eq!(rt.cursor(), Cursor::Crosshair, "hoverable child inherits cursor from wrapper inside parent");
+    rt.pointer_move(200.0, 100.0);
+    assert_eq!(rt.cursor(), Cursor::Grab, "outside the hoverable child, the draggable parent's cursor shows");
+    rt.pointer_move(50.0, 140.0);
+    assert_eq!(rt.cursor(), Cursor::Pointer, "a pointer-move observer without a cursor does not mask a pressable sibling");
+    rt.pointer_move(100.0, 180.0);
+    assert_eq!(rt.cursor(), Cursor::Grab, "bare area of the draggable parent shows Grab");
+    rt.pointer_move(50.0, 230.0);
+    assert_eq!(rt.cursor(), Cursor::Move, "hoverable child with no primary ancestor inherits cursor from its wrapper");
+}
