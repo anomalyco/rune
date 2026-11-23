@@ -98,10 +98,13 @@ unsafe fn add_app_items(app: &NSApplication, menu: &NSMenu) {
     }
 }
 
-/// The app menu items `add_app_items` made, titled with the app's labels (`rune::set_labels`).
+/// The app menu items `add_app_items` made, and winit's own About, Hide and Quit (titled with the
+/// process name, `opencode-desktop` for a bundled app), titled with the app's labels (`rune::set_labels`).
 unsafe fn relabel_app_items(menu: &NSMenu) {
     let name = app_name();
-    for entry in (0..menu.numberOfItems()).filter_map(|i| menu.itemAtIndex(i)).filter(|i| i.tag() == APP_ITEM) {
+    let process = format!(" {}", NSProcessInfo::processInfo().processName());
+    let ours = |i: &NSMenuItem| i.tag() == APP_ITEM || i.title().to_string().ends_with(&process);
+    for entry in (0..menu.numberOfItems()).filter_map(|i| menu.itemAtIndex(i)).filter(|i| ours(i)) {
         let label = match entry.action().and_then(|a| a.name().to_str().ok()) {
             Some("orderFrontStandardAboutPanel:") => Label::About(&name),
             Some("hide:") => Label::Hide(&name),
@@ -200,6 +203,10 @@ pub(crate) fn add_standard(app: &NSApplication) {
     // SAFETY: main-thread AppKit calls on retained menus; nil-target items keep no target.
     unsafe {
         let root = app.mainMenu().unwrap_or_else(|| empty_root(app));
+        // winit's default app menu names the process; the app's name is the bundle's.
+        if let Some(first) = (root.numberOfItems() > 0).then(|| root.itemAtIndex(0)).flatten().and_then(|i| i.submenu()) {
+            relabel_app_items(&first);
+        }
         for standard in &super::standard::ITEMS {
             let menu = top(mtm, &root, standard.menu);
             let action = Sel::register(&std::ffi::CString::new(standard.action).expect("selector"));
