@@ -16,7 +16,7 @@ use super::machine::Anchor;
 use super::mf::{self, Decode, Picture, Sound};
 use super::super::{Kind, MediaSource, Meta};
 use rune_core::time::Instant;
-use std::sync::Arc;
+use std::sync::{Arc, MutexGuard};
 use std::time::Duration;
 use windows::Win32::Graphics::Direct3D11::{D3D11_BIND_DECODER, ID3D11Texture2D};
 use windows::Win32::Media::MediaFoundation::*;
@@ -409,18 +409,28 @@ impl Decoder {
                         // held through it, Media Foundation's decoder ran out of surfaces and spun
                         // in the driver with the device's lock, and the next copy here never got it.
                         drop(sample);
-                        let layered = blitted.is_some_and(|clock| self.present_when_due(pipe, job, clock, pts, generation));
-                        let mut s = pipe.lock();
-                        let was_empty = s.push(Decoded { generation, pts, picture });
-                        if layered {
-                            // The window takes no pictures while its layer shows them: only the
-                            // newest stays, for when it draws the clip itself again, and the
-                            // others' textures are freed before the next picture (`reclaim`).
-                            // Presenting counts as being drawn, so the decoder doesn't park.
-                            s.keep_newest();
-                            s.touched = Some(rune_core::time::now());
+                        let decoded = Decoded { generation, pts, picture };
+                        match blitted.and_then(|clock| self.wait_until_due(pipe, job, clock, pts)) {
+                            // The window takes no pictures while its layer shows them: only this
+                            // one stays, and the others' textures are freed before the next
+                            // picture (`reclaim`). It is queued, and noted as the one the layer
+                            // shows, under the lock that saw the clock still run: a pause stops
+                            // the clock and then asks what the layer showed, so it hears of
+                            // every picture presented after it stopped.
+                            Some(mut s) => {
+                                s.push_presented(decoded, rune_core::time::now());
+                                drop(s);
+                                // A layer that can't present leaves the picture to the window.
+                                if !self.present(pipe, generation) {
+                                    (job.notify)();
+                                }
+                            }
+                            None => {
+                                if pipe.lock().push(decoded) {
+                                    (job.notify)();
+                                }
+                            }
                         }
-                        drop(s);
                         if first {
                             rune_core::marks::mark("video.first_frame");
                             rune_core::marks::note("video.decoder", if self.facts.hardware { "hardware" } else { "software" });
@@ -433,9 +443,6 @@ impl Decoder {
                                 );
                             }
                             first = false;
-                        }
-                        if was_empty && !layered {
-                            (job.notify)();
                         }
                     }
                 } else if let Some(o) = &self.output {
@@ -545,15 +552,16 @@ impl Decoder {
         Some(clock)
     }
 
-    /// Presents the picture `blit_on_layer` scaled at its time on `clock`; false leaves it to the
-    /// window. The wait ends early for a seek, a stop or the window taking the pictures back.
-    fn present_when_due(&mut self, pipe: &Pipe, job: &Job, clock: Anchor, pts: f64, generation: u32) -> bool {
-        let Some(layer) = &self.layer else { return false };
+    /// Waits for the time on `clock` of the picture `blit_on_layer` scaled, and returns the
+    /// locked inbox when the layer should present it now; None leaves it to the window. The wait
+    /// ends early for a seek, a stop or the window taking the pictures back.
+    fn wait_until_due<'a>(&self, pipe: &'a Pipe, job: &Job, clock: Anchor, pts: f64) -> Option<MutexGuard<'a, Inbox>> {
+        self.layer.as_ref()?;
         let at = clock.when(pts).checked_sub(LAYER_LEAD).unwrap_or_else(|| clock.when(pts));
         let mut s = pipe.lock();
         loop {
             if s.stop || s.seek.is_some() || s.layer.is_none() {
-                return false;
+                return None;
             }
             let now = rune_core::time::now();
             if now >= at {
@@ -562,10 +570,12 @@ impl Decoder {
             s = pipe.wait(s, at - now);
         }
         // Paused, or the rate changed, while it waited: the window decides again.
-        if job.clock.get() != Some(clock) {
-            return false;
-        }
-        drop(s);
+        (job.clock.get() == Some(clock)).then_some(s)
+    }
+
+    /// Presents the picture `blit_on_layer` scaled; false when the layer couldn't.
+    fn present(&mut self, pipe: &Pipe, generation: u32) -> bool {
+        let Some(layer) = &self.layer else { return false };
         if let Err(e) = layer.present() {
             if logging() {
                 log!("{e}; the window draws the pictures");

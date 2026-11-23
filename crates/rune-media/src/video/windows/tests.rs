@@ -3,7 +3,8 @@
 
 use super::inbox::Inbox;
 use super::*;
-use crate::native_surface::{ColorInfo, Format, Orient};
+use crate::native_surface::{ByteFrame, ColorInfo, Format, Orient, Source};
+use machine::Anchor;
 use crate::video::phases;
 use std::sync::MutexGuard;
 
@@ -65,11 +66,185 @@ impl Rig {
         self.native().phase
     }
 
+    fn generation(&self) -> u32 {
+        self.native().seeks.current().0
+    }
+
+    /// The decoder queues the picture at `pts` for the window.
+    fn decodes(&self, pts: f64) {
+        self.pipe.lock().push(picture(self.generation(), pts));
+    }
+
+    /// The decoder presents the picture at `pts` on the clip's layer.
+    fn presents(&self, pts: f64) {
+        self.pipe.lock().push_presented(picture(self.generation(), pts), rune_core::time::now());
+    }
+
+    /// A playing clip showing the picture at 2 s, with its clock started at `start`.
+    fn plays_from_two(&self, start: Instant) {
+        self.edit(phases::Event::Play);
+        self.stand(Phase::Buffering { at: 2.0, play: true }, None);
+        self.decodes(2.0);
+        self.show(start);
+        assert_eq!(self.phase(), Phase::Playing { clock: Anchor { at: start, pos: 2.0, rate: 1.0 } });
+        assert_eq!(self.on_surface(), Some(20));
+    }
+
+    /// The window's frame while the clip's place is still: it asks for the layer at the clip's
+    /// size, and the decoder has presented there.
+    fn window_layers(&self) -> LayerStatus {
+        self.pipe.lock().layer_shown = Some((SIZE, self.generation()));
+        layer(&self.player.shared, Some(SIZE))
+    }
+
+    /// The window's frame once the layer can't show the clip (the clock stopped, its place
+    /// moved): it asks for no layer and draws the clip itself.
+    fn window_draws(&self) {
+        layer(&self.player.shared, Some(SIZE));
+        layer(&self.player.shared, None);
+        unlayer(&self.player.shared, self.player.surface());
+    }
+
+    /// The picture on the surface, as `picture` marks it: its time in tenths of a second.
+    fn on_surface(&self) -> Option<u8> {
+        match &self.player.surface().latest()?.source {
+            Source::Bytes(bytes) => bytes.planes[0].first().copied(),
+            _ => None,
+        }
+    }
+
     /// The decoder reached the end of the current seek's pictures.
     fn decoder_ends(&self) {
         let generation = self.native().seeks.current().0;
         self.pipe.lock().ended = Some(generation);
     }
+}
+
+const SIZE: (u32, u32) = (2, 2);
+
+/// A decoded picture whose luma says its time, in tenths of a second.
+fn picture(generation: u32, pts: f64) -> Decoded {
+    let luma = (pts * 10.0).round() as u8;
+    let bytes = ByteFrame { width: 2, height: 2, format: Format::Nv12Video, color: ColorInfo::default(), planes: [vec![luma; 4], vec![128; 2]] };
+    Decoded { generation, pts, picture: Pic::Cpu(bytes) }
+}
+
+#[test]
+fn a_pause_on_the_layer_holds_the_picture_and_the_time_the_layer_shows() {
+    let rig = rig();
+    rig.plays_from_two(rune_core::time::now());
+    // The clip goes on its layer and plays there for three seconds: no frame pulls a picture.
+    assert!(rig.window_layers().showing);
+    rig.presents(4.9);
+    rig.presents(5.0);
+    rig.edit(phases::Event::Pause);
+    rig.reconcile();
+    assert_eq!(rig.phase(), Phase::Paused { at: 5.0 });
+    assert_eq!(rig.player.time(), 5.0);
+    assert_eq!(rig.native().clock.get(), None);
+    // The window draws the clip again: the surface gets the picture the layer showed.
+    rig.window_draws();
+    assert_eq!(rig.on_surface(), Some(50));
+    assert_eq!(rig.native().screen, Screen::Surface);
+    assert_eq!(rig.native().shown, Some(5.0));
+    // Play goes on from there.
+    rig.edit(phases::Event::Play);
+    rig.reconcile();
+    let Phase::Playing { clock } = rig.phase() else { panic!("{:?}", rig.phase()) };
+    assert!((5.0..5.1).contains(&clock.pos), "{clock:?}");
+}
+
+#[test]
+fn a_clip_that_ends_on_its_layer_shows_its_last_picture() {
+    let rig = rig();
+    let start = rune_core::time::now();
+    rig.plays_from_two(start);
+    assert!(rig.window_layers().showing);
+    rig.presents(9.9);
+    rig.decoder_ends();
+    // The frame that hears of the end, once the clock passed it.
+    rig.show(start + Duration::from_secs(9));
+    assert_eq!(rig.phase(), Phase::Ended { at: 9.9 });
+    assert_eq!(rig.player.state(), PlayerState::Ended);
+    rig.window_draws();
+    assert_eq!(rig.on_surface(), Some(99));
+}
+
+#[test]
+fn a_playing_clip_the_window_takes_back_from_its_layer_goes_on_from_the_layers_picture() {
+    let rig = rig();
+    let start = rune_core::time::now();
+    rig.plays_from_two(start);
+    assert!(rig.window_layers().showing);
+    rig.presents(5.0);
+    // The clip's place moves: the window asks for no layer.
+    layer(&rig.player.shared, None);
+    assert_eq!(rig.native().screen, Screen::Behind);
+    assert_eq!(rig.native().shown, Some(5.0));
+    assert_eq!(rig.player.time(), 5.0);
+    rig.decodes(5.1);
+    rig.show(start + Duration::from_millis(3050));
+    assert_eq!(rig.on_surface(), Some(50));
+    assert_eq!(rig.native().screen, Screen::Surface);
+}
+
+#[test]
+fn a_pause_after_the_window_let_go_holds_a_picture_the_layer_showed_since() {
+    let rig = rig();
+    rig.plays_from_two(rune_core::time::now());
+    assert!(rig.window_layers().showing);
+    rig.presents(5.0);
+    // The window lets go, and the decoder, already past its checks, presents one more.
+    layer(&rig.player.shared, None);
+    rig.presents(5.1);
+    rig.edit(phases::Event::Pause);
+    rig.reconcile();
+    assert_eq!(rig.phase(), Phase::Paused { at: 5.1 });
+    assert_eq!(rig.player.time(), 5.1);
+    rig.show(rune_core::time::now());
+    assert_eq!(rig.on_surface(), Some(51));
+}
+
+#[test]
+fn a_paused_clip_whose_held_picture_left_the_queue_decodes_it_again() {
+    let rig = rig();
+    rig.plays_from_two(rune_core::time::now());
+    assert!(rig.window_layers().showing);
+    rig.presents(5.0);
+    rig.edit(phases::Event::Pause);
+    rig.reconcile();
+    rig.pipe.lock().frames.clear();
+    rig.window_draws();
+    assert_eq!(rig.phase(), Phase::Buffering { at: 5.0, play: false });
+    assert_eq!(rig.pipe.lock().seek, Some((5.0, rig.generation())));
+    // Its picture lands as any seek's does.
+    rig.pipe.lock().seek = None;
+    rig.decodes(5.0);
+    rig.show(rune_core::time::now());
+    assert_eq!(rig.phase(), Phase::Paused { at: 5.0 });
+    assert_eq!(rig.on_surface(), Some(50));
+}
+
+#[test]
+fn a_clip_let_go_while_its_surface_is_behind_opens_again_when_drawn() {
+    let rig = rig();
+    rig.plays_from_two(rune_core::time::now());
+    // Paused with its picture on the surface: let go, it keeps that picture and needs no decoder.
+    rig.edit(phases::Event::Pause);
+    rig.reconcile();
+    assert!(!rig.native().wants_decoder(false, Kind::Video));
+    // Paused on the layer, and never drawn again before the decoder lets go.
+    rig.edit(phases::Event::Play);
+    rig.reconcile();
+    assert!(rig.window_layers().showing);
+    rig.presents(5.0);
+    rig.edit(phases::Event::Pause);
+    rig.reconcile();
+    layer(&rig.player.shared, None);
+    rig.pipe.lock().news.push(News::Parked);
+    rig.reconcile();
+    assert_eq!(rig.phase(), Phase::Idle { at: 5.0 });
+    assert!(rig.native().wants_decoder(false, Kind::Video));
 }
 
 #[test]
