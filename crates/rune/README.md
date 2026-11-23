@@ -745,6 +745,27 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
 - **Reuse a hidden window.** `keep_running()` / `windowless()` plus `AppHandle::hide()`, `show()` and `open()`
   (or `WindowOptions::launcher_panel()` for a retained panel that reveals cached pixels) make a re-summon cost a
   show instead of a launch.
+- **Windows: the first frame needs no GPU.** A window opens on the CPU renderer: its first frame is painted into
+  a buffer, copied to the window with GDI while it is cloaked, and shown; a below-normal thread then makes the
+  adapter, device, swap chain and pipelines and takes the frames over. What is left before that frame is the
+  loader, the event loop's first window, `CreateWindowExW` and the view itself, so keep the DLLs a first frame
+  doesn't call out of the import table (`/DELAYLOAD` in the app's `build.rs`: a linker argument a library can't
+  pass for an app).
+- **Windows: start the app without the setup's compatibility layer.** Windows starts anything it takes for a
+  setup program (a file named `*-setup.exe`, for one) with `__COMPAT_LAYER=DetectorsAppHealth` in its
+  environment, and every process created with that variable runs with ntdll's shim engine: `apphelp.dll` loads
+  and hooks each module's imports before `main` (a plain Rune window: 13,272 µs to `main` without it, 24,424 µs
+  with it). The variable is inherited, so an app its setup starts has it, and so does everything that app starts,
+  an update's relaunch included. Have the setup start the app with the variable removed
+  (`Command::env_remove("__COMPAT_LAYER")`), and drop the assistant's layers (`DetectorsAppHealth`, `Installer`)
+  from the app's own environment first thing in `main`. A terminal inside an app started that way carries it too:
+  remove it from the environment of anything you time.
+- **The floor**: `examples/launch-floor` is one window with the least a first frame can hold (`LAUNCH_FLOOR=bare`)
+  or a desktop app's first screen (`LAUNCH_FLOOR=shell`); it prints every `rune::marks` step in µs from the
+  process's start (`rune::process_age`). `perf/launch.bench.ts` times it with strobe
+  (`strobe bench perf/launch.bench.ts --base exe:<old> --head exe:<new> --target shell --filter warm`). On a
+  12th-generation laptop's integrated GPU the bare window's first frame is 20 ms after the process starts and the
+  shell-shaped one 27 ms, 10 of them before `main`; from a new exe file nothing of which is in memory, 65 and 82 ms.
 - **Measuring**: launch with `open` on a quiet Mac, interleave base and changed builds for 5 to 10 rounds, and
   report medians for window-visible and first-content times, cold and warm. Cold means deleting the app's Metal
   shader caches under `getconf DARWIN_USER_CACHE_DIR`: `com.apple.metal/<bundle id>` and
