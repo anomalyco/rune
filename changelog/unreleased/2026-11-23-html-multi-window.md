@@ -1,0 +1,1 @@
+- Tooling: `--html` now exports the window `--window KEY` selects (or the first window by default) in multi-window apps built with `run_windows*` or `App::window`, and returns an error instead of exiting silently when the HTML file cannot be written.

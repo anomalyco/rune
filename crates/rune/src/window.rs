@@ -273,7 +273,7 @@ pub(crate) fn start<S: 'static>(mut spec: WindowSpec<S>, handle: Option<WindowHa
     #[cfg(any(feature = "tooling", debug_assertions))]
     if args.headless() {
         let scale = args.scale.unwrap_or(2.0);
-        crate::tooling::headless_window_spec(spec.app, spec.options, args, scale);
+        crate::tooling::started(crate::tooling::headless_window_spec(spec.app, spec.options, args, scale));
         return None;
     }
     let open_urls = crate::open_url::incoming::listen(&spec.app);

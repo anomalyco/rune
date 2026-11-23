@@ -302,8 +302,7 @@ fn headless_window(windows: Vec<crate::AnyWindowSpec>, displays: &[crate::Displa
         return crate::window::run_windows(Box::new(move |_| vec![window]), args, options);
     }
     let scale = displays.iter().find(|d| d.primary).unwrap_or(&displays[0]).scale;
-    window.headless(args, scale as f32);
-    Ok(())
+    window.headless(args, scale as f32)
 }
 
 /// `run` with a compositor drawing every frame (see `compose`); `App::compositor` for other lifetimes.
