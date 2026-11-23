@@ -326,7 +326,7 @@ pub struct TextSystem {
     /// Reused across lines and frames when mapping glyphs back to cluster start bytes.
     cluster_scratch: Vec<u32>,
     /// Byte ranges `(start, end, ink)` of coloured spans set by [`Self::set_glyph_inks`].
-    ink_spans: Vec<(u32, u32, u16)>,
+    ink_spans: Vec<(u32, u32, u32)>,
     coords_scratch: Vec<i16>,
     traks: Traks,
     /// The mode glyphs draw in: [`Self::requested`]'s, or its grayscale twin while subpixel

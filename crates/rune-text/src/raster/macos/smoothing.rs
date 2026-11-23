@@ -142,7 +142,7 @@ impl Smoothing {
     /// The dilation radius of a glyph in `ink` at `ppem` device px (0 without the dilation
     /// stage). The radius, not the bucket, keys the atlas: buckets that reach the cap share
     /// masks.
-    pub(crate) fn radius(&self, ink: u16, ppem: f32) -> f64 {
+    pub(crate) fn radius(&self, ink: u32, ppem: f32) -> f64 {
         if !self.pipeline.dilate { return 0.0; }
         let bucket = self.inks.get(ink as usize).or(self.inks.first()).copied().unwrap_or(0);
         radius_for_bucket(ppem as f64, bucket)

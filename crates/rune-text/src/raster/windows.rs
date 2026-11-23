@@ -55,7 +55,7 @@ impl Rasterizer {
     pub(crate) fn inks(&self) -> &[u8] { &self.inks }
 
     /// The luminance bucket glyphs in `ink` rasterise for.
-    pub(crate) fn bucket(&self, ink: u16) -> u8 {
+    pub(crate) fn bucket(&self, ink: u32) -> u8 {
         self.inks.get(ink as usize).or(self.inks.first()).copied().unwrap_or(0)
     }
 

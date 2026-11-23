@@ -6,7 +6,7 @@ const PROSE: &str = "Amber lantern orchard quiet harbor, copper meadow signal dr
 fn bits(quads: &[GlyphQuad]) -> Vec<[u32; 9]> {
     quads.iter().map(|q| {
         let [x, y, w, h] = q.rect.map(f32::to_bits);
-        [x, y, w, h, q.uv[0].to_bits(), q.uv[1].to_bits(), q.ink as u32, q.byte, q.color]
+        [x, y, w, h, q.uv[0].to_bits(), q.uv[1].to_bits(), q.ink, q.byte, q.color]
     }).collect()
 }
 

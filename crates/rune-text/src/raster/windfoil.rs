@@ -117,7 +117,7 @@ impl TextSystem {
     /// The dilation radius (device px) and hint record a glyph of `face` at `ppem` draws with,
     /// widened for synthetic bold; a TrueType-hinted outline (`tt_hinted`) takes CoreGraphics' hint
     /// no further.
-    fn outline_look(&mut self, face: &Face, coords: &[i16], ppem: f32, ink: u16, tt_hinted: bool) -> (f32, u32) {
+    fn outline_look(&mut self, face: &Face, coords: &[i16], ppem: f32, ink: u32, tt_hinted: bool) -> (f32, u32) {
         if self.direct_write() {
             return (0.0, 0);
         }
@@ -137,7 +137,7 @@ impl TextSystem {
     /// [`Self::push_glyph`] from the glyph's outline, on the pen its atlas mask would sit at.
     /// None for a glyph outlines can't draw, which takes the atlas.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn push_outline(&mut self, face: &Face, coords: &[i16], glyph: u32, at: [f32; 2], k: f32, ink: u16, byte: u32, out: &mut Vec<GlyphQuad>) -> Option<Placed> {
+    pub(crate) fn push_outline(&mut self, face: &Face, coords: &[i16], glyph: u32, at: [f32; 2], k: f32, ink: u32, byte: u32, out: &mut Vec<GlyphQuad>) -> Option<Placed> {
         let ppem = face.size * k;
         let (g, tt_hinted) = match self.find_outline(face, coords, glyph, ppem) {
             Found::Draws(g, tt_hinted) => (g, tt_hinted),
@@ -161,7 +161,7 @@ impl TextSystem {
     /// renderer's GPU fill when it draws outlines, filled here on the CPU otherwise, from the same
     /// coverage. Its box doesn't move with the y phase, which moves the ink down inside it. None
     /// for a glyph outlines can't draw.
-    pub(crate) fn windfoil_mask(&mut self, key: GlyphKey, face: &Face, coords: &[i16], ppem: f32, ink: u16, phase: [u8; 2]) -> Option<Rasterized> {
+    pub(crate) fn windfoil_mask(&mut self, key: GlyphKey, face: &Face, coords: &[i16], ppem: f32, ink: u32, phase: [u8; 2]) -> Option<Rasterized> {
         let (g, tt_hinted) = match self.find_outline(face, coords, key.glyph, ppem) {
             Found::Draws(g, tt_hinted) => (g, tt_hinted),
             Found::Blank => {
