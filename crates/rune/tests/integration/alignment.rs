@@ -41,3 +41,71 @@ fn alignment_builders_match_css() {
         if case == 2 { assert_eq!(rect(&rt, "b")[3], 60.0, "self_stretch fills the cross axis"); }
     }
 }
+
+#[test]
+fn non_stretched_items_in_column_clamp_to_fit_content_width() {
+    use rune::text;
+    const SHORT: &str = "Short label";
+    const LONG: &str = "This sentence is much longer than two hundred and forty points so it must wrap across multiple lines.";
+    const UNBROKEN: &str = "SupercalifragilisticexpialidociousSupercalifragilisticexpialidocious tail";
+
+    fn fit_view(_: &(), _: &mut Cx<()>) -> El {
+        col()
+            .gap(4.0)
+            .child(col().w(240.0).items_start().child(text(SHORT).key("short_leaf").wrap()))
+            .child(col().w(240.0).items_start().child(text(LONG).key("start_leaf").wrap()))
+            .child(col().w(240.0).items_center().child(text(LONG).key("center_leaf").wrap()))
+            .child(col().w(240.0).items_end().child(text(LONG).key("end_leaf").wrap()))
+            .child(col().w(240.0).child(text(LONG).key("self_start_leaf").wrap().self_start()))
+            .child(col().w(240.0).items_start().child(row().key("start_row").child(text(LONG).key("start_row_text").wrap().shrink())))
+            .child(col().w(240.0).items_center().child(row().key("center_row").child(text(LONG).key("center_row_text").wrap().shrink())))
+            .child(col().w(240.0).items_end().child(row().key("end_row").child(text(LONG).key("end_row_text").wrap().shrink())))
+            .child(col().w(240.0).child(row().key("self_start_row").self_start().child(text(LONG).key("self_start_row_text").wrap().shrink())))
+            .child(col().w(240.0).items_start().child(row().key("short_row").child(text(SHORT).wrap().shrink())))
+            .child(col().w(240.0).items_start().child(row().key("wrap_row").flex_wrap().child(text(LONG).key("wrap_row_text").wrap().shrink())))
+            .child(col().w(240.0).items_start().child(row().key("explicit_row").w(320.0).child(text(LONG).wrap().shrink())))
+            .child(col().w(240.0).items_start().child(row().key("unbroken_row").child(text(UNBROKEN).wrap().shrink())))
+            .child(col().w(240.0).items_start().child(col().key("nested_col").child(row().key("nested_row").child(text(LONG).key("nested_text").wrap().shrink()))))
+            .child(row().h(60.0).items_start().child(col().key("mirrored_col").child(el().w(40.0).h(120.0).shrink().min_h(0.0))))
+    }
+
+    let mut rt = Runtime::new((), fit_view, (800.0, 1200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let r = |key: &str| {
+        rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap().target
+    };
+    let one_line = r("short_leaf")[3];
+
+    for key in ["start_leaf", "center_leaf", "end_leaf", "self_start_leaf"] {
+        let b = r(key);
+        assert!(b[2] <= 240.5, "{key} overflows 240: {b:?}");
+        assert!(b[3] >= one_line * 2.0 - 0.5, "{key} did not wrap: {b:?}");
+    }
+    for (row_k, txt_k) in [
+        ("start_row", "start_row_text"),
+        ("center_row", "center_row_text"),
+        ("end_row", "end_row_text"),
+        ("self_start_row", "self_start_row_text"),
+        ("nested_col", "nested_text"),
+    ] {
+        let rb = r(row_k);
+        let tb = r(txt_k);
+        assert!(rb[0] >= -0.5 && rb[0] + rb[2] <= 240.5, "{row_k} overflows 240: {rb:?}");
+        assert!(tb[2] <= 240.5, "{txt_k} overflows 240: {tb:?}");
+        assert!(tb[3] >= one_line * 2.0 - 0.5, "{txt_k} did not wrap: {tb:?}");
+        assert!(rb[3] >= tb[3] - 0.5, "{row_k} did not grow for wrapped text: {rb:?} vs {tb:?}");
+    }
+    let short_row = r("short_row");
+    assert!(short_row[2] < 200.0, "short auto-width row stays compact: {short_row:?}");
+    let wrap_row = r("wrap_row");
+    let wrap_row_text = r("wrap_row_text");
+    assert!(wrap_row[2] <= 240.5, "flex_wrap row clamps to 240: {wrap_row:?}");
+    assert!(wrap_row_text[3] >= one_line * 2.0 - 0.5, "flex_wrap row wraps child: {wrap_row_text:?}");
+    let explicit_row = r("explicit_row");
+    assert!((explicit_row[2] - 320.0).abs() < 0.5, "explicit width is preserved: {explicit_row:?}");
+    let unbroken = r("unbroken_row");
+    assert!(unbroken[2] > 240.0, "unbroken min-content wider than container floors fit-content: {unbroken:?}");
+    assert!(unbroken[3] >= one_line * 2.0 - 0.5, "tail word after unbroken word wraps onto second line: {unbroken:?}");
+    let mirrored = r("mirrored_col");
+    assert!((mirrored[3] - 120.0).abs() < 0.5, "auto-height column in fixed-height row keeps content height: {mirrored:?}");
+}

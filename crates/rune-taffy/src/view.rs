@@ -8,13 +8,14 @@ use taffy::compute::{
 };
 use taffy::geometry::{Point, Rect, Size};
 use taffy::style::{
-    AlignSelf, BoxGenerationMode, BoxSizing, Contain, CoreStyle, Dimension, Direction, Display, ExpandedDimension,
-    ExpandedLengthPercentageAuto, FlexboxItemStyle, LengthPercentage, LengthPercentageAuto, Overflow, Position, Style,
+    AlignSelf, AvailableSpace, BoxGenerationMode, BoxSizing, Contain, CoreStyle, Dimension, Direction, Display,
+    ExpandedDimension, ExpandedLengthPercentageAuto, FlexDirection, FlexboxItemStyle, LengthPercentage, LengthPercentageAuto,
+    Overflow, Position, Style,
 };
 use taffy::tree::{
     DetailedLayoutInfo, Layout, LayoutBlockContainer, LayoutContainingBlock, LayoutFlexboxContainer,
-    LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree, NodeId, RunMode, TraversePartialTree,
-    TraverseTree,
+    LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree, NodeId, RequestedAxis, RunMode, SizingMode,
+    TraversePartialTree, TraverseTree,
 };
 use taffy::{BlockContext, CacheTree, DetailedGridInfo};
 
@@ -22,6 +23,39 @@ use crate::store::{BoxLayout, LayoutStore, RetainedSlot, SlotChildIter};
 use crate::style::CompactStyle;
 
 const NONE_DETAIL: DetailedLayoutInfo = DetailedLayoutInfo::None;
+
+/// Available border-box width to clamp an auto-width flex row against under CSS fit-content sizing.
+///
+/// Upstream Taffy 0.15's `determine_container_main_size` returns a single line's sum of flex bases
+/// under `AvailableSpace::Definite(avail)` without clamping to `min(max-content, max(min-content, avail))`,
+/// so non-stretched row items in columns (`align-items: flex-start` / `center` / `end`) expand to
+/// their unwrapped width instead of shrinking their flexible children.
+#[inline]
+fn fit_content_row_limit(style: &CompactStyle, inputs: &LayoutInput) -> Option<f32> {
+    if !matches!(style.flex_direction(), FlexDirection::Row | FlexDirection::RowReverse) || inputs.known_dimensions.width.is_some() {
+        return None;
+    }
+    let AvailableSpace::Definite(avail_w) = inputs.available_space.width else {
+        return None;
+    };
+    if inputs.sizing_mode == SizingMode::InherentSize {
+        match style.size().width.expand() {
+            ExpandedDimension::Auto | ExpandedDimension::FitContent => {}
+            ExpandedDimension::Percent(_) if inputs.parent_size.width.is_none() => {}
+            _ => return None,
+        }
+        let height_definite = inputs.known_dimensions.height.is_some()
+            || match style.size().height.expand() {
+                ExpandedDimension::Length(_) => true,
+                ExpandedDimension::Percent(_) => inputs.parent_size.height.is_some(),
+                _ => false,
+            };
+        if style.aspect_ratio().is_some() && height_definite {
+            return None;
+        }
+    }
+    Some(avail_w)
+}
 
 #[inline(always)]
 fn round_dim(d: Dimension) -> Dimension {
@@ -160,6 +194,9 @@ where
             let s = &view.store.slots[idx];
             let (display_mode, has_children, whole_col) =
                 (s.style.display(), s.child_len() != 0, s.style.whole_rows_column());
+            let fit_row_avail = (display_mode == Display::Flex && has_children)
+                .then(|| fit_content_row_limit(&s.style, &inputs))
+                .flatten();
 
             match (display_mode, has_children) {
                 (Display::None, _) => compute_hidden_layout(view, node_id),
@@ -170,7 +207,40 @@ where
                             Display::FlowRoot => compute_block_layout(view, node_id, inputs, None),
                             Display::Flex => {
                                 view.in_whole_rows_col = whole_col;
-                                let r = compute_flexbox_layout(view, node_id, inputs);
+                                let mut r = compute_flexbox_layout(view, node_id, inputs);
+                                if let Some(avail_w) = fit_row_avail && r.size.width > avail_w {
+                                    let min_inputs = LayoutInput {
+                                        run_mode: RunMode::ComputeSize,
+                                        axis: RequestedAxis::Horizontal,
+                                        available_space: Size {
+                                            width: AvailableSpace::MinContent,
+                                            height: inputs.available_space.height,
+                                        },
+                                        ..inputs
+                                    };
+                                    let min_w = compute_flexbox_layout(view, node_id, min_inputs).size.width;
+                                    let clamped_w = r.size.width.min(avail_w.max(min_w));
+                                    if clamped_w < r.size.width {
+                                        if inputs.run_mode == RunMode::ComputeSize
+                                            && inputs.axis == RequestedAxis::Horizontal
+                                        {
+                                            r = LayoutOutput::from_outer_size(Size { width: clamped_w, height: 0.0 });
+                                        } else {
+                                            let clamped_inputs = LayoutInput {
+                                                known_dimensions: Size {
+                                                    width: Some(clamped_w),
+                                                    height: inputs.known_dimensions.height,
+                                                },
+                                                known_dimensions_are_definite: Size {
+                                                    width: true,
+                                                    height: inputs.known_dimensions_are_definite.height,
+                                                },
+                                                ..inputs
+                                            };
+                                            r = compute_flexbox_layout(view, node_id, clamped_inputs);
+                                        }
+                                    }
+                                }
                                 view.in_whole_rows_col = false;
                                 r
                             }
