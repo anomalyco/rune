@@ -278,7 +278,7 @@ impl Renderer {
                     let quote = bidi::directed(
                         row().role("blockquote").w_full()
                             .child(el().w(q.width).h_full().radius((q.width / 2.0).min(1.0)).fill(self.s.quote_rule))
-                            .child(drawn.grow(1.0).shrink().pl(q.pad)),
+                            .child(drawn.shrink().pl(q.pad)),
                         dirs.of(quote_block),
                     );
                     ret = Some(match &self.quote_frame {
@@ -296,7 +296,7 @@ impl Renderer {
                         let (k, gap_mt, task, is_deep_tail) = pending_item.take().unwrap();
                         if is_deep_tail {
                             *list_col = std::mem::replace(list_col, el()).child(
-                                row().key(format!("i{k}")).w_full().mt(gap_mt).pl(*indent).child(item_body.grow(1.0).shrink()),
+                                row().key(format!("i{k}")).w_full().mt(gap_mt).pl(*indent).child(item_body.shrink()),
                             );
                         } else if let Some((checked, marker_offset)) = task {
                             *list_col = std::mem::replace(list_col, el()).child(self.task_item_body((k, real_n), *indent, &items[k], item_body, marker_offset, checked).mt(gap_mt));
@@ -305,7 +305,7 @@ impl Renderer {
                             *list_col = std::mem::replace(list_col, el()).child(
                                 row().key(format!("i{k}")).role("listitem").position_in_set(k + 1, real_n).w_full().mt(gap_mt)
                                     .child(self.with_reveal(marker).a11y_hidden())
-                                    .child(item_body.grow(1.0).shrink()),
+                                    .child(item_body.shrink()),
                             );
                         }
                         continue;
@@ -359,7 +359,7 @@ impl Renderer {
                                             vec![RenderFrame::Blocks { blocks: item, pre: ipre.map(|p| &*p.inner), maps: imap, names: rendered_keys(item.len(), &[]), top_level: false, in_item: true, open_tail: false, allow_memo: false, idx: 0, prev_mb: 0.0, after_heading: false, last_dir: None, col: col().w_full(), pending: None }],
                                             dirs,
                                             &mut sub_qpc,
-                                        ).grow(1.0).shrink();
+                                        ).shrink();
                                         debug_assert_eq!(self.next_source.get(), src_at + src_n);
                                         debug_assert_eq!(self.next_task.get(), task_at + task_n);
                                         b
@@ -426,7 +426,7 @@ impl Renderer {
             .focusable(interactive)
             .w_full()
             .child(control)
-            .child(item_body.grow(1.0).shrink());
+            .child(item_body.shrink());
         if let Some(on_task) = self.on_task.as_ref().filter(|_| !self.tasks_read_only) {
             let block_key = self.current_block_key.borrow().clone();
             r = on_task(r.cursor(Cursor::Pointer), block_key, item_idx, !checked);
