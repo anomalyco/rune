@@ -97,10 +97,18 @@ export function viewport(canvas, callback, embedded) {
     const update = () => {
         if (!embedded) {
             const v = window.visualViewport;
-            canvas.style.width = `${v?.width ?? innerWidth}px`;
-            canvas.style.height = `${v?.height ?? innerHeight}px`;
-            canvas.style.left = `${v?.offsetLeft ?? 0}px`;
-            canvas.style.top = `${v?.offsetTop ?? 0}px`;
+            const width = `${v?.width ?? innerWidth}px`;
+            const height = `${v?.height ?? innerHeight}px`;
+            const left = `${v?.offsetLeft ?? 0}px`;
+            const top = `${v?.offsetTop ?? 0}px`;
+            const sibling = canvas.previousElementSibling;
+            const targets = sibling?.hasAttribute?.('data-rune-cpu') ? [canvas, sibling] : [canvas];
+            for (const target of targets) {
+                target.style.width = width;
+                target.style.height = height;
+                target.style.left = left;
+                target.style.top = top;
+            }
         }
         const s = getComputedStyle(probe);
         callback(JSON.stringify({ kind: 'viewport', h: largest.offsetHeight || innerHeight,

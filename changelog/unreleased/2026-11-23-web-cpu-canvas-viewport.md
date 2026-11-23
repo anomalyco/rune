@@ -1,0 +1,1 @@
+- Web: the CPU fallback canvas now keeps its CSS `width`, `height`, `left`, and `top` synchronized with the input canvas when `visualViewport` resizes or scrolls, instead of keeping `height: 100%` and stretching.
