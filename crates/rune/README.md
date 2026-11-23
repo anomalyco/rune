@@ -2654,6 +2654,8 @@ $L --desktop examples/launcher/backdrop.png --script examples/launcher/scripts/d
   previous presented frame, written only when that frame asked for this one right away, so idle
   time isn't counted.
   `present_ms` is `null` when the system skipped the drawable and absent when no time arrived.
+  A frame carries `hz` when the display's refresh rate differs from the last one written (the
+  header's, at first), so the summary below uses the rate the display settled at.
   Lines are written once their present time arrives, two or three frames late. When the trace
   ends, stderr gets a summary: present-interval p50/p95/max, intervals under 2 ms (frames
   bunched onto the screen together) and over 1.5 refresh periods (missed refreshes), and the

@@ -431,9 +431,7 @@ pub(super) fn open_trace_if_needed(host: &mut Host, now: Instant) {
     let Some(path) = &host.args.trace else { return };
     if host.trace.is_some() { return; }
     let Some(l) = host.win.as_ref() else { return };
-    let hz = l.window.current_monitor().and_then(|m| m.refresh_rate_millihertz()).map_or(60.0, |hz| hz as f64 / 1000.0);
-    #[cfg(target_os = "macos")]
-    let hz = l.native.pacing.as_ref().map_or(hz, |pacing| pacing.refresh_hz());
+    let hz = super::draw::display_hz(l).unwrap_or(60.0);
     let rt = host.app.rt_mut();
     let mut trace = crate::tooling::Trace::open_clock(path, rt.viewport, hz, rt.env.scale, "wall");
     trace.all = host.args.trace_all;
@@ -454,10 +452,11 @@ pub(super) fn record_trace_frame(
     drawable: Option<u64>,
 ) -> bool {
     let Some(trace) = host.trace.as_mut() else { return false };
+    let hz = host.win.as_ref().and_then(super::draw::display_hz);
     let target_ms = target.zip(host.trace_start).map(|(target, start)| crate::frame::present_time::ms_since(start, target));
     // A frame count keeps the trace redrawing while idle, as below.
     let continuous = !host.idle || host.args.frames.is_some();
-    let timing = crate::tooling::FrameTiming { target_ms, drawable, continuous };
+    let timing = crate::tooling::FrameTiming { target_ms, drawable, continuous, hz };
     trace.frame_timed_core(
         host.app.rt_mut(),
         (submitted - host.trace_start.unwrap()).as_secs_f64() * 1000.0,

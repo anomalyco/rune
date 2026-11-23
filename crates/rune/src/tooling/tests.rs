@@ -102,7 +102,7 @@ fn native_traces_add_target_and_present_times_without_changing_other_fields() {
             if timed { trace.record_presents(source.clone(), start); }
             for k in 0..3u64 {
                 rt.frame(1.0 / 120.0);
-                let timing = FrameTiming { target_ms: timed.then_some(k as f64 * 8.333), drawable: timed.then_some(k + 1), continuous: k > 0 };
+                let timing = FrameTiming { target_ms: timed.then_some(k as f64 * 8.333), drawable: timed.then_some(k + 1), continuous: k > 0, hz: None };
                 trace.frame_timed(&mut rt, k as f64 * 8.0, 0.0, timing);
                 let at = start + std::time::Duration::from_micros(20_000 + k * 8_333);
                 source.0.lock().unwrap().push((k + 1, Some(at)));

@@ -25,6 +25,8 @@ pub(crate) struct Trace {
     presents: Option<crate::frame::present_time::Presents>,
     /// The native surface's frame counts and `App::dev_stats`, printed when the trace closes.
     surface: Option<(std::sync::Arc<std::sync::Mutex<crate::SurfaceStats>>, Option<fn() -> String>)>,
+    /// Last refresh rate written to the header or a frame line, rounded to 0.01 Hz.
+    hz: f64,
 }
 
 /// A native frame's timing beyond its submission time.
@@ -36,10 +38,16 @@ pub(crate) struct FrameTiming {
     pub drawable: Option<u64>,
     /// The previous frame asked for this one right away (it wasn't idle).
     pub continuous: bool,
+    /// The display's current refresh rate, when known.
+    pub hz: Option<f64>,
 }
 
 pub(super) fn r2(v: f32) -> f64 {
-    (f64::from(v) * 100.0).round() / 100.0
+    r2_f64(f64::from(v))
+}
+
+fn r2_f64(v: f64) -> f64 {
+    (v * 100.0).round() / 100.0
 }
 
 impl Trace {
@@ -60,7 +68,7 @@ impl Trace {
         if clock == "wall" { header["timestamp"] = "cpu-submit".into(); }
         writeln!(out, "{header}").ok();
         Trace { out, next_id: 1, ids: HashMap::new(), described: HashMap::new(), states: HashMap::new(), scrolled: HashMap::new(), effects: HashMap::new(),
-            goals: HashMap::new(), channels: Default::default(), path: path.clone(), all: false, presents: None, surface: None }
+            goals: HashMap::new(), channels: Default::default(), path: path.clone(), all: false, presents: None, surface: None, hz: r2_f64(fps) }
     }
 
     /// Holds each frame's line until its present time arrives from `source`, then writes
@@ -288,6 +296,10 @@ impl Trace {
         self.channels.write_json(&mut line);
         if let Some(target) = timing.target_ms {
             line.push_str(&format!(r#","target_ms":{target}"#));
+        }
+        if let Some(hz) = timing.hz.filter(|hz| hz.is_finite() && *hz > 0.0).map(r2_f64).filter(|&hz| hz > 0.0 && hz != self.hz) {
+            self.hz = hz;
+            line.push_str(&format!(r#","hz":{hz}"#));
         }
         if let Some(presents) = self.presents.as_mut() {
             presents.push(line, timing.drawable, timing.continuous, &mut self.out);

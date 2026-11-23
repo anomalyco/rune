@@ -1,0 +1,1 @@
+- macOS / `--native --trace`: `DisplayLink` now initializes its refresh period from the display's nominal or monitor refresh rate before the first tick, and native traces record refresh-rate changes on frame lines so `present_time::Summary` uses the active display rate (e.g. 120 Hz on ProMotion panels) when counting missed intervals.
