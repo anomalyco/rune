@@ -27,18 +27,20 @@ fn the_role_goes_back_when_the_app_is_not_active_after_the_launch() {
     assert_eq!(gives_back(TASK_DEFAULT_APPLICATION, false, None), None);
 }
 
-/// macOS answers a task about its own role and lets it set the role it has (the public
-/// `task_policy_get` / `task_policy_set` with `TASK_CATEGORY_POLICY`), then the foreground
-/// role and the first one again.
+/// macOS answers a task about its own role and lets it move between the roles of an app (the
+/// public `task_policy_get` / `task_policy_set` with `TASK_CATEGORY_POLICY`): default, the
+/// foreground, and default again, which is the way `begin` and `settle` go. It refuses "no
+/// role" (a test process's own), so the role is never raised from anything but default.
 #[test]
 fn a_task_reads_and_sets_its_own_role() {
-    let before = role().expect("the task's role");
-    assert!(set_role(before));
-    assert_eq!(role(), Some(before));
+    assert!(role().is_some());
+    assert!(set_role(TASK_DEFAULT_APPLICATION));
+    assert_eq!(role(), Some(TASK_DEFAULT_APPLICATION));
     assert!(set_role(TASK_FOREGROUND_APPLICATION));
     assert_eq!(role(), Some(TASK_FOREGROUND_APPLICATION));
-    assert!(set_role(before));
-    assert_eq!(role(), Some(before));
+    assert!(set_role(TASK_DEFAULT_APPLICATION));
+    assert_eq!(role(), Some(TASK_DEFAULT_APPLICATION));
+    assert!(!set_role(TASK_UNSPECIFIED));
 }
 
 /// A test process never took the role, so a loop turn has nothing to give back.
