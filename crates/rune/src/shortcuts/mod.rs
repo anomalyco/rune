@@ -68,6 +68,85 @@ type NativeBackend = Box<dyn Backend + Send>;
 #[cfg(not(target_os = "linux"))]
 type NativeBackend = Box<dyn Backend>;
 
+/// Linux session environment used to choose between the GlobalShortcuts portal and X11 grabs.
+#[cfg(any(test, target_os = "linux"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LinuxEnv<'a> {
+    /// Whether the app's own event loop is connected to Wayland (false on X11 and XWayland).
+    wayland: bool,
+    session_type: Option<&'a str>,
+    wayland_display: Option<&'a str>,
+    display: Option<&'a str>,
+    dbus: bool,
+}
+
+#[cfg(any(test, target_os = "linux"))]
+impl LinuxEnv<'_> {
+    /// True when the desktop session is Wayland, including an XWayland app whose own event loop
+    /// is X11. Explicit `XDG_SESSION_TYPE=x11` keeps X11 even if a stale `WAYLAND_DISPLAY` is
+    /// present; an unset or other session type falls back to a non-empty `WAYLAND_DISPLAY`.
+    fn wayland_session(self) -> bool {
+        if self.wayland { return true; }
+        match self.session_type.map(str::trim) {
+            Some(t) if t.eq_ignore_ascii_case("wayland") => true,
+            Some(t) if t.eq_ignore_ascii_case("x11") => false,
+            _ => self.wayland_display.is_some_and(|d| !d.trim().is_empty()),
+        }
+    }
+
+    fn has_x11_display(self) -> bool {
+        self.display.is_some_and(|d| !d.trim().is_empty())
+    }
+}
+
+/// Chooses and opens the Linux global shortcuts backend for `env`. Native Wayland apps require
+/// the GlobalShortcuts portal; an XWayland app in a Wayland session tries the portal first so
+/// shortcuts fire while native Wayland windows have focus, falling back to X11 grabs when the
+/// portal is unavailable or `dbus` is disabled. Real X11 sessions open X11 directly.
+#[cfg(any(test, target_os = "linux"))]
+fn open_linux_backend<T>(
+    env: LinuxEnv<'_>,
+    open_portal: impl FnOnce() -> Result<T, ShortcutError>,
+    open_x11: impl FnOnce() -> Result<T, ShortcutError>,
+) -> Result<T, ShortcutError> {
+    if env.wayland_session() {
+        if env.dbus {
+            match open_portal() {
+                Ok(portal) => return Ok(portal),
+                Err(error) if env.wayland || !env.has_x11_display() => return Err(error),
+                Err(_) => {}
+            }
+        } else if env.wayland {
+            return Err(ShortcutError::Unsupported);
+        }
+    }
+    if env.has_x11_display() { open_x11() } else { Err(ShortcutError::Unsupported) }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_backend(wayland: bool, sink: Sink) -> Result<NativeBackend, ShortcutError> {
+    let session_type = std::env::var("XDG_SESSION_TYPE").ok();
+    let wayland_display = std::env::var("WAYLAND_DISPLAY").ok();
+    let display = std::env::var("DISPLAY").ok();
+    let env = LinuxEnv {
+        wayland,
+        session_type: session_type.as_deref(),
+        wayland_display: wayland_display.as_deref(),
+        display: display.as_deref(),
+        dbus: cfg!(feature = "dbus"),
+    };
+    open_linux_backend(
+        env,
+        || {
+            #[cfg(feature = "dbus")]
+            { Ok(Box::new(wayland::Native::new(sink.clone())?) as NativeBackend) }
+            #[cfg(not(feature = "dbus"))]
+            { Err(ShortcutError::Unsupported) }
+        },
+        || Ok(Box::new(x11::Native::new(sink.clone())?) as NativeBackend),
+    )
+}
+
 fn backend(wayland: bool, sink: Sink) -> Result<NativeBackend, ShortcutError> {
     let _ = wayland;
     #[cfg(target_os = "macos")]
@@ -75,12 +154,7 @@ fn backend(wayland: bool, sink: Sink) -> Result<NativeBackend, ShortcutError> {
     #[cfg(target_os = "windows")]
     return Ok(Box::new(windows::Native::new(sink)?));
     #[cfg(target_os = "linux")]
-    return if wayland {
-        #[cfg(feature = "dbus")]
-        { Ok(Box::new(wayland::Native::new(sink)?)) }
-        #[cfg(not(feature = "dbus"))]
-        { Err(ShortcutError::Unsupported) }
-    } else { Ok(Box::new(x11::Native::new(sink)?)) };
+    return linux_backend(wayland, sink);
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     { let _ = sink; Err(ShortcutError::Unsupported) }
 }
@@ -156,3 +230,6 @@ impl crate::Tx {
     /// `AppHandle::activate(token)` to show and focus the quick panel. None on other backends.
     pub fn activation_token(&self) -> Option<&str> { self.shortcut_activation_token.as_deref() }
 }
+
+#[cfg(test)]
+mod tests;
