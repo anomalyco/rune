@@ -852,3 +852,7 @@ fn attach(style: ScrollBarStyle, area: &str, key: &str, outer: El, viewport: El)
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod motion_tests;
+#[cfg(test)]
+mod visibility_tests;
