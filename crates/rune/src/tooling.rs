@@ -88,11 +88,22 @@ impl Chrome {
     /// Where macOS will draw the three buttons (x, y, w, h in points), assuming macOS 26 metrics
     /// and AppKit's default origin (7, 6) when unpositioned.
     pub fn traffic_light_rects(&self) -> Option<[[f32; 4]; 3]> {
+        self.traffic_light_rects_in(0.0, false)
+    }
+
+    /// Where macOS will draw the three buttons (x, y, w, h in points) inside a window `width`
+    /// points wide; right to left mirrors them to the right edge with Close outermost, matching
+    /// native macOS placement and [`Chrome::titlebar_inset`].
+    pub(crate) fn traffic_light_rects_in(&self, width: f32, rtl: bool) -> Option<[[f32; 4]; 3]> {
         if !self.full_size_content && self.traffic_lights.is_none() {
             return None;
         }
         let (x, y) = self.traffic_lights.unwrap_or((7.0, 6.0));
-        Some(std::array::from_fn(|i| [x + i as f32 * Self::TRAFFIC_PITCH, y, Self::TRAFFIC_LIGHT, Self::TRAFFIC_LIGHT]))
+        Some(std::array::from_fn(|i| {
+            let at = x + i as f32 * Self::TRAFFIC_PITCH;
+            let left = if rtl { width - at - Self::TRAFFIC_LIGHT } else { at };
+            [left, y, Self::TRAFFIC_LIGHT, Self::TRAFFIC_LIGHT]
+        }))
     }
 
     /// The trailing edge of [`Chrome::traffic_light_rects`]' zoom button, or 0 without them:

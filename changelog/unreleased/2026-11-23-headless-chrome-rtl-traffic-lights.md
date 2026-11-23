@@ -1,0 +1,1 @@
+- Headless `--chrome`: right-to-left runs now paint the macOS traffic lights and 4 pt clearance box on the right edge (with Close outermost) and check element overlaps there, matching `Cx::chrome_insets` and native macOS placement.
