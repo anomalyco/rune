@@ -1,0 +1,1 @@
+- X11: `pointer_position` and `output_crtc` now share one lazily-opened X11 connection instead of opening and tearing down a fresh connection per query, dropping and reconnecting only on transport errors.
