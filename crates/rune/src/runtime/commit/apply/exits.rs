@@ -130,8 +130,9 @@ pub(super) fn retire_removed_nodes(
             let wrap = spec.wrap.then_some(w * scale);
             let mut layout = text.layout_for_spec(&spec.as_text_input(scale, false), scale, wrap, line_alignment(spec));
             let mut elided = None;
-            if spec.truncate && layout.full_width() > w * scale + 0.5 {
-                let (cut, e) = truncated(text, spec, scale, w * scale);
+            if spec.truncate && layout.full_width() > w * scale + 0.5
+                && let Some((cut, e)) = truncated(text, spec, scale, w * scale)
+            {
                 (layout, elided) = (cut, Some(e));
             }
             old.text_layout = Some(TextLayout::Single(layout));

@@ -373,8 +373,9 @@ pub(in crate::runtime) fn lay_out_text(text: &mut TextSystem, n: &mut Node, w: f
     };
     let mut elided = None;
     if spec.truncate && layout.full_width() > w * scale + 0.5 {
-        let (cut, e) = truncated(text, spec, scale, w * scale);
-        (layout, elided) = (cut, Some(e));
+        if let Some((cut, e)) = truncated(text, spec, scale, w * scale) {
+            (layout, elided) = (cut, Some(e));
+        }
     } else if let Some((cut, e)) = clamped(text, spec, scale, w * scale, &layout) {
         (layout, elided) = (cut, Some(e));
     }

@@ -304,6 +304,12 @@ impl RuntimeCore {
                 if layout.full_width() * tk > x1 - x0 {
                     clip = [clip[0].max(x0), clip[1], clip[2].min(x1), clip[3]];
                 }
+            } else if let Some(tc) = self.truncate_clip(i, (r, r_exact), sc, clip) {
+                if tc[2] <= tc[0] || tc[3] <= tc[1] {
+                    self.text.set_emit(crate::text::outline::Emit::Atlas);
+                    return;
+                }
+                clip = tc;
             }
             let rest_origin = [origin[0] - off[0], origin[1] - off[1]];
             // Paragraph block backgrounds, quote bars and list markers.
@@ -820,6 +826,23 @@ impl RuntimeCore {
     fn push_icon(&mut self, inst: Instance) {
         if self.paint.paint_rank.is_some() && inst.uv[2] > 0.0 { self.paint.icon_aprons.push(apron_key(&inst)); }
         self.instances.push(inst);
+    }
+
+    /// The horizontal clip for a truncated or line-clamped text whose laid-out content still runs
+    /// past its content box (for instance when the box is narrower than the ellipsis or first
+    /// grapheme). `None` when the cut fits.
+    pub(in crate::runtime) fn truncate_clip(&self, i: usize, (r, r_exact): ([f32; 4], [f32; 4]), sc: f32, clip: [f32; 4]) -> Option<[f32; 4]> {
+        let s = self.env.scale;
+        let n = &self.tree.nodes[i];
+        let (Some(spec), Some(layout)) = (&n.text, n.text_layout.as_ref().and_then(TextLayout::single)) else { return None };
+        if !(spec.truncate || n.elided.is_some()) { return None; }
+        let ins = n.inset.map(|v| v * sc * s);
+        let (x0, x1) = (r[0] + ins[0], r[2] - ins[2]);
+        let exact = r_exact[2] - r_exact[0] - ins[0] - ins[2];
+        let laid_out = (n.local.w - n.inset[0] - n.inset[2]).max(0.0) * s;
+        let overflows = (laid_out <= 0.0 && layout.full_width() > 0.0)
+            || (layout.full_width() > laid_out + 0.5 && layout.full_width() * sc > (x1 - x0).max(exact) + 0.5 * sc);
+        overflows.then(|| [clip[0].max(x0), clip[1], clip[2].min(x1), clip[3]])
     }
 
     /// The rectangle a live or truncated text clips its glyphs to (edges, device pixels), its
