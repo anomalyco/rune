@@ -270,21 +270,21 @@ fn drop_joins_completion_thread(with_timestamps: bool) {
     let worker_tid = gpu.wait(&entered_rx, Duration::from_secs(10)).expect("completion callback on worker");
     assert_ne!(worker_tid, std::thread::current().id(), "completion should run on the worker thread");
 
-    // Dropping the renderer on another thread must block until the worker finishes its in-flight
-    // poll and exits, rather than returning while the worker is still polling the device.
-    let (dropped_tx, dropped_rx) = mpsc::channel();
-    let dropper = std::thread::spawn(move || {
-        drop(renderer);
-        dropped_tx.send(()).ok();
+    // Dropping the renderer must block until the worker finishes its in-flight poll and exits,
+    // rather than returning while the worker is still polling the device. The renderer stays on
+    // this thread (on macOS it isn't `Send`): another thread lets the observer go after a moment.
+    let (released_tx, released_rx) = mpsc::channel();
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        released_tx.send(std::time::Instant::now()).ok();
+        release_tx.send(()).ok();
     });
+    drop(renderer);
+    let dropped = std::time::Instant::now();
+    releaser.join().expect("releaser thread");
+    let released = released_rx.recv().expect("the observer was let go");
 
-    let returned_early = dropped_rx.recv_timeout(Duration::from_millis(50)).is_ok();
-    release_tx.send(()).ok();
-    let joined = dropped_rx.recv_timeout(Duration::from_secs(10)).is_ok() || returned_early;
-    dropper.join().expect("dropper thread");
-
-    assert!(!returned_early, "SurfaceRenderer::drop returned while the completion thread was still polling");
-    assert!(joined, "SurfaceRenderer::drop did not finish after the completion poll returned");
+    assert!(dropped >= released, "SurfaceRenderer::drop returned while the completion thread was still polling");
 }
 
 #[test]
