@@ -510,25 +510,3 @@ fn a_lost_device_tells_its_callback_once_even_one_set_after() {
     shared(&device).lose("again".into());
     assert_eq!(*heard.lock().unwrap(), [(wgpu::DeviceLostReason::Unknown, "the GPU timed out".to_owned())]);
 }
-
-#[test]
-fn a_submission_index_reads_as_wgpu_debug_prints_it() {
-    // `aborted` reads the index from this format: a wgpu that changes it fails here.
-    let (device, queue) = wgpu_metal();
-    let first = queue.submit([device.create_command_encoder(&Default::default()).finish()]);
-    let second = queue.submit([device.create_command_encoder(&Default::default()).finish()]);
-    let value = submission_value(&first).expect("wgpu prints SubmissionIndex { index: N }");
-    assert_eq!(format!("{first:?}"), format!("SubmissionIndex {{ index: {value} }}"));
-    assert_eq!(submission_value(&second), Some(value + 1));
-}
-
-#[test]
-fn work_that_finished_wasnt_aborted() {
-    let (device, queue) = wgpu_metal();
-    let target = texture(&device, wgpu::TextureFormat::Rgba8Unorm, (W, H), wgpu::TextureUsages::RENDER_ATTACHMENT);
-    let mut encoder = device.create_command_encoder(&Default::default());
-    drop(clear(&mut encoder, &target.create_view(&Default::default())));
-    let submission = queue.submit([encoder.finish()]);
-    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    assert_eq!(aborted(&queue, &submission), None);
-}

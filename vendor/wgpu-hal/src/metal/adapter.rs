@@ -118,7 +118,6 @@ impl crate::Adapter for super::Adapter {
                         pending_waits: Mutex::new(Vec::new()),
                         pending_signals: Mutex::new(Vec::new()),
                         relay: OnceLock::new(),
-                        aborts: Arc::default(),
                     }),
                     timestamp_period,
                 },

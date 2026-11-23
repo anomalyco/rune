@@ -20,7 +20,6 @@ end of the VS buffer table.
         See https://github.com/gpuweb/gpuweb/issues/1069 for minimum spec.
         TODO: Eventually all deprecated features should be abstracted and use new api when available."
 )]
-mod aborts;
 mod adapter;
 mod command;
 mod conv;
@@ -486,7 +485,6 @@ impl Queue {
                 pending_waits: Mutex::new(Vec::new()),
                 pending_signals: Mutex::new(Vec::new()),
                 relay: OnceLock::new(),
-                aborts: Arc::default(),
             }),
             timestamp_period,
         }
@@ -494,14 +492,6 @@ impl Queue {
 
     pub fn as_raw(&self) -> &ProtocolObject<dyn MTLCommandQueue> {
         &self.shared.raw
-    }
-
-    /// How long submission `submission`'s work had executed when the GPU aborted it: ended its
-    /// command buffers with an error, as a GPU recovering from a hang (its own work's or another
-    /// process's) does to everything it was running or held. Zero for work that never ran; `None`
-    /// for one not aborted or not finished yet. A Rune patch: the last few hundred are kept.
-    pub fn aborted(&self, submission: crate::FenceValue) -> Option<core::time::Duration> {
-        self.shared.aborts.get(submission)
     }
 
     /// Enable strict GPU-side ordering for [`Self::add_wait_event`].
@@ -640,8 +630,6 @@ pub struct QueueShared {
     pending_waits: PendingEvents,
     pending_signals: PendingEvents,
     relay: OnceLock<Relay>,
-    /// Submissions the GPU aborted ([`Queue::aborted`]).
-    aborts: Arc<aborts::Aborts>,
 }
 
 #[derive(Debug)]
@@ -747,26 +735,12 @@ impl crate::Queue for Queue {
                 }
             }
 
-            // The submission's other command buffers, finished before its last (one queue runs
-            // them in order): an abort is read from them all.
-            let others: Vec<_> = match command_buffers.split_last() {
-                Some((_, others)) => others.iter().map(|c| c.raw.clone()).collect(),
-                None => Vec::new(),
-            };
             let extra_command_buffer = {
                 let fence_sync = Arc::clone(&signal_fence.sync);
                 let fence_lost = Arc::clone(&signal_fence.lost);
-                let queue_aborts = Arc::clone(&self.shared.aborts);
-                let earlier = others.clone();
                 let block = block2::RcBlock::new(move |cmd_buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
                     // SAFETY: Metal passes the command buffer that completed.
-                    let cmd_buf = unsafe { cmd_buf.as_ref() };
-                    // Kept before the submission reads as finished or the device as lost.
-                    let all = iter::once(cmd_buf).chain(earlier.iter().map(|c| &**c));
-                    if let Some(ran) = aborts::aborted(all) {
-                        queue_aborts.record(signal_value, ran);
-                    }
-                    if queue_killed(cmd_buf) {
+                    if queue_killed(unsafe { cmd_buf.as_ref() }) {
                         fence_lost.store(true, atomic::Ordering::Release);
                     }
                     *fence_sync.0.lock() = signal_value;
@@ -791,7 +765,7 @@ impl crate::Queue for Queue {
                 signal_fence
                     .pending_command_buffers
                     .write()
-                    .push((signal_value, raw.clone(), others));
+                    .push((signal_value, raw.clone()));
 
                 if let Some(shared_event) = &signal_fence.shared_event {
                     raw.encodeSignalEvent_value(shared_event.as_ref(), signal_value);
@@ -1307,11 +1281,9 @@ fn queue_killed(cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>) -> bool {
         })
 }
 
-/// A submission's fence value, its last command buffer (which signals it) and the others.
 type PendingCommandBuffer = (
     crate::FenceValue,
     Retained<ProtocolObject<dyn MTLCommandBuffer>>,
-    Vec<Retained<ProtocolObject<dyn MTLCommandBuffer>>>,
 );
 
 impl crate::DynFence for Fence {}
@@ -1323,12 +1295,12 @@ impl Fence {
     fn get_latest(&self) -> crate::FenceValue {
         let mut max_value = *self.sync.0.lock();
         let pending_command_buffers = self.pending_command_buffers.read();
-        for (value, cmd_buf, others) in pending_command_buffers.iter() {
-            // A submission that ended in error finishes when its completion handler ran, which
-            // keeps the abort first (`Queue::aborted`).
-            let errored = |c: &Retained<ProtocolObject<dyn MTLCommandBuffer>>| c.status() == MTLCommandBufferStatus::Error;
-            if cmd_buf.status() == MTLCommandBufferStatus::Completed && !others.iter().any(errored) {
-                max_value = *value;
+        for &(value, ref cmd_buf) in pending_command_buffers.iter() {
+            match cmd_buf.status() {
+                MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error => {
+                    max_value = value;
+                }
+                _ => {}
             }
         }
         max_value
@@ -1338,7 +1310,7 @@ impl Fence {
         let latest = self.get_latest();
         self.pending_command_buffers
             .write()
-            .retain(|&(value, _, _)| value > latest);
+            .retain(|&(value, _)| value > latest);
     }
 
     pub fn raw_shared_event(&self) -> Option<&ProtocolObject<dyn MTLSharedEvent>> {

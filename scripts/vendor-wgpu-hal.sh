@@ -4,8 +4,7 @@
 # adapter it picked through DXGI; FXC loaded on first use; `Surface::set_present_rects`, partial presents;
 # Windows system DLLs loaded with `LOAD_LIBRARY_SEARCH_SYSTEM32`; a removed device's work stays pending,
 # never finished; GPU-written drain markers on software adapters so releasing a removed WARP device waits for queued command lists;
-# a Metal device lost when a command buffer's error says the GPU stopped running its queue's work;
-# the submissions a Metal GPU aborted, with how long they had executed, `metal::Queue::aborted`). Run it when wgpu is bumped, then build: a patch
+# a Metal device lost when a command buffer's error says the GPU stopped running its queue's work). Run it when wgpu is bumped, then build: a patch
 # that no longer applies fails here, and the function goes back in by hand. If upstream wgpu takes
 # the function, delete vendor/ and the `[patch.crates-io]` entries instead.
 # Usage: scripts/vendor-wgpu-hal.sh <version>     e.g. scripts/vendor-wgpu-hal.sh 30.0.1
