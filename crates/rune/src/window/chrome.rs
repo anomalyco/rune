@@ -4,7 +4,7 @@
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
 #[cfg(not(target_os = "macos"))]
-use winit::dpi::LogicalSize;
+use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::window::Window;
 
 use crate::runtime::RuntimeCore;
@@ -154,10 +154,11 @@ pub(in crate::window) fn has_window_menu(window: &Window) -> bool {
     { let _ = window; false }
 }
 
-/// Sizes the window's content to `size` points.
+/// Sizes the window's content to `size` points. Returns the applied physical size when the
+/// platform resizes immediately without sending `WindowEvent::Resized` (Wayland).
 #[cfg(not(target_os = "macos"))]
-pub(in crate::window) fn request_inner_size(window: &Window, size: (f32, f32)) {
+pub(in crate::window) fn request_inner_size(window: &Window, size: (f32, f32)) -> Option<PhysicalSize<u32>> {
     #[cfg(target_os = "windows")]
-    if crate::platform::win32::request_inner_size(window, size) { return; }
-    let _size = window.request_inner_size(LogicalSize::new(size.0, size.1));
+    if crate::platform::win32::request_inner_size(window, size) { return None; }
+    window.request_inner_size(LogicalSize::new(size.0, size.1))
 }
