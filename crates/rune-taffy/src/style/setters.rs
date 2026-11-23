@@ -191,10 +191,14 @@ impl CompactStyle {
 
     #[inline(always)]
     pub fn set_flex_wrap(&mut self, wrap: FlexWrap) {
-        self.box_flags = (self.box_flags & !(0b11 << 2)) | (encode_wrap(wrap) << 2);
-        if let Some(s) = &mut self.extra {
-            s.flex_wrap = wrap;
+        if let Some(code) = encode_wrap(wrap) {
+            self.box_flags = (self.box_flags & !(0b11 << 2)) | (code << 2);
+            if let Some(s) = &mut self.extra {
+                s.flex_wrap = wrap;
+            }
+            return;
         }
+        self.modify_cold(|s| s.flex_wrap = wrap);
     }
 
     #[inline(always)]

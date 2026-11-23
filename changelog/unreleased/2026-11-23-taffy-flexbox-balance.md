@@ -1,0 +1,1 @@
+- `rune-taffy` now compiles when another crate in the build enables `taffy/flexbox_balance`, spilling balanced `FlexWrap` variants into `CompactStyle`'s cold box instead of failing on an exhaustive match.
