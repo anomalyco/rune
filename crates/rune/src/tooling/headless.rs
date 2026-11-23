@@ -15,7 +15,7 @@ mod app;
 mod frame;
 use app::{HeadlessApp, TypedHeadlessApp};
 pub(in crate::tooling) use frame::{step_window_frame, take_window_frame};
-use frame::{HeadlessFrame, HeadlessLoop};
+use frame::{FrameShot, HeadlessFrame, HeadlessLoop};
 
 #[cfg(test)]
 pub(crate) use crate::render::surface_alpha::straight_alpha;
@@ -178,7 +178,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
     // A `--realtime` run stands in for a window, so it starts the app's live work as one does.
     let mut on_ready = on_ready.filter(|_| args.realtime);
     let mut reports = crate::frame::encoded::FrameReports::new(on_frame_encoded, Some("main"));
-    let chrome = app.rt_mut().headless_chrome(chrome, titlebar, app_options.borderless);
+    app.rt_mut().headless_chrome(chrome, titlebar, app_options.borderless);
     app.rt_mut().transparent = transparent;
     app.rt_mut().host.fit_height = fit_height;
     if let Some(bars) = args.scroll_bars { app.rt_mut().set_system_scroll_bars(bars); }
@@ -252,9 +252,9 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
     let snap_crop = std::cell::Cell::new(None::<[u32; 4]>);
     let cpu_boot = std::cell::RefCell::new(args.cpu_boot.clone().map(|dir| crate::render::cpu_boot::tool::Tool::new(dir, args.cpu_boot_threads, gpu.adapter.get_info().vendor)));
     // Finished readbacks, in frame order.
-    let mut deliver = |shot: Shot, mut px: Vec<u8>| {
+    let mut deliver = |FrameShot { shot, chrome }: FrameShot, mut px: Vec<u8>| {
         if shot.snap && let Some(tool) = cpu_boot.borrow_mut().as_mut() { tool.gpu(&px, (wp, hp)); }
-        if args.chrome_overlay
+        if let Some(chrome) = chrome
             && let Some(lights) = chrome.traffic_light_rects_in(size.0, crate::labels::rtl())
         {
             paint_traffic_lights(&mut px, wp, hp, scale, &lights);
@@ -283,7 +283,6 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
         runtime_ms,
         init_ms,
         args: &args,
-        chrome,
         dark,
         scale,
         size,

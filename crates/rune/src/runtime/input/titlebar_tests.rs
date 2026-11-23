@@ -170,3 +170,44 @@ fn headless_chrome_clears_traffic_lights_for_borderless_windows() {
         }
     }
 }
+
+#[test]
+fn headless_chrome_current_tracks_dynamic_titlebar_and_ignores_borderless_or_native() {
+    use crate::el::el;
+    use crate::runtime::Runtime;
+    use crate::{Chrome, Cx, El, Env, Titlebar};
+
+    struct State { phase: usize }
+
+    fn view(s: &State, cx: &mut Cx<State>) -> El {
+        match s.phase {
+            1 => cx.titlebar_height(72.0),
+            2 => cx.set_titlebar(Titlebar::new(72.0).traffic_lights(30.0, 52.0)),
+            _ => {}
+        }
+        el().key("root").w_full().h_full()
+    }
+
+    let mut rt = Runtime::new(State { phase: 0 }, view, (300.0, 100.0), Env::new(true, 1.0));
+    let initial = rt.headless_chrome(Chrome::DEFAULT, Some(Titlebar::new(36.0)), false);
+    assert_eq!(initial.traffic_lights, Some((16.0, 11.0)));
+    assert_eq!(rt.core().headless_chrome_current(), initial);
+
+    for (phase, origin) in [(0, (16.0, 11.0)), (1, (16.0, 29.0)), (2, (30.0, 52.0)), (3, (16.0, 11.0))] {
+        rt.update(move |s, _| s.phase = phase);
+        rt.frame(0.1);
+        assert_eq!(rt.core().headless_chrome_current().traffic_lights, Some(origin), "phase {phase}");
+    }
+
+    // Borderless windows keep traffic lights cleared even when the view sets a titlebar.
+    let mut borderless = Runtime::new(State { phase: 2 }, view, (300.0, 100.0), Env::new(true, 1.0));
+    borderless.headless_chrome(Chrome::DEFAULT, Some(Titlebar::new(36.0)), true);
+    borderless.frame(0.0);
+    assert!(borderless.core().headless_chrome_current().traffic_light_rects().is_none());
+
+    // Windows without App::titlebar keep their initial Chrome when the view calls Cx::set_titlebar.
+    let mut native = Runtime::new(State { phase: 2 }, view, (300.0, 100.0), Env::new(true, 1.0));
+    native.headless_chrome(Chrome::DEFAULT, None, false);
+    native.frame(0.0);
+    assert_eq!(native.core().headless_chrome_current(), Chrome::DEFAULT);
+}
