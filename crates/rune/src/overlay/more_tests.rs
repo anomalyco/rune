@@ -563,7 +563,7 @@ fn overlay_misses_back_off_until_their_retry() {
     overlay.presence = Presence::Shown { occluded: false };
     let t0 = crate::time::now();
     overlay.rt.wall_start = Some(t0);
-    overlay.rt.frame.set_test_clock(crate::Clock::manual(60.0));
+    overlay.rt.frame.set_test_clock(crate::ManualClock::new(60.0));
 
     overlay.missed_at(Missed::Timeout, false, false, t0);
     assert_eq!(overlay.rt.state.polls, 1, "the missed frame still polls");

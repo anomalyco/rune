@@ -1,0 +1,1 @@
+- Motion: added `ManualClock` (re-exported by `rune-motion` and `rune`) for deterministic manual stepping without risking a display-clock panic, and deprecated `Clock::step` (which continues to panic on a display clock with an actionable message and `# Panics` documentation).
