@@ -1,0 +1,1 @@
+- `Checkbox::indeterminate` draws `k.glyph.dash` instead of `k.glyph.check` when no custom `.icon(...)` is set.
