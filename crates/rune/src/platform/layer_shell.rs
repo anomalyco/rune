@@ -30,6 +30,7 @@ use crate::overlay::{Placement, ScreenEdge};
 use crate::runtime::Waker;
 use crate::{OverlayInput, OverlayOptions, OverlayPlacement};
 
+mod compose;
 mod dead;
 pub(crate) use dead::display_error;
 use dead::{classify_turn_error, format_wayland_error};
@@ -82,7 +83,7 @@ struct State {
     shape: Option<WpCursorShapeDeviceV1>,
     keyboard: Option<WlKeyboard>,
     xkb: Option<xkbcommon::xkb::State>,
-    compose: Option<xkbcommon::xkb::compose::State>,
+    compose: compose::Slot,
     mod_state: Option<keyboard::ModState>,
     repeat_seq: crate::machine::Seq,
     repeat: repeat::State,
@@ -112,9 +113,7 @@ impl State {
     }
 
     fn reset_compose(&mut self) {
-        if let Some(compose) = &mut self.compose {
-            compose.reset();
-        }
+        self.compose.reset();
     }
 
     fn step_pointer(&mut self, event: pointer::Event) {
@@ -136,7 +135,8 @@ impl State {
             _ => None,
         };
         let mods = key_mods(xkb);
-        let fallback = key_event(xkb, self.compose.as_mut(), key, physical, pressed, repeat);
+        let compose_action = keyboard::compose_action(pressed, repeat, mods);
+        let fallback = key_event(xkb, self.compose.for_key(compose_action), key, physical, pressed, repeat);
         if let Some(code) = physical {
             self.input.push(Input::Physical(
                 crate::PhysicalInput::Key { key: code, mods, pressed, repeat },
@@ -189,7 +189,7 @@ impl State {
         if !keyboard && let Some(k) = self.keyboard.take() {
             if k.version() >= 3 { k.release(); } else { destroy_proxy(&k); }
             self.xkb = None;
-            self.compose = None;
+            self.compose.clear();
             self.mod_state = None;
             self.step_repeat(repeat::Event::KeyboardGone);
             self.step_keyboard_focus(keyboard::FocusEvent::KeyboardGone);
@@ -315,11 +315,7 @@ impl Dispatch<WlKeyboard, ()> for State {
                         }
                         xkb_state
                     });
-                    if let Some(compose) = &mut state.compose {
-                        compose.reset();
-                    } else if state.xkb.is_some() {
-                        state.compose = new_compose_state(&context);
-                    }
+                    state.compose.on_keymap(state.xkb.is_some());
                     if let Some(held) = state.repeat.key()
                         && !state.xkb.as_ref().is_some_and(|xkb| xkb.get_keymap().key_repeats(xkb::Keycode::new(held + 8)))
                     {
@@ -373,22 +369,6 @@ fn key_mods(state: &xkbcommon::xkb::State) -> crate::Mods {
     use xkbcommon::xkb;
     let active = |name: &str| state.mod_name_is_active(name, xkb::STATE_MODS_EFFECTIVE);
     crate::input::key_table::mods_from_keys(active(xkb::MOD_NAME_SHIFT), active(xkb::MOD_NAME_CTRL), active(xkb::MOD_NAME_ALT), active(xkb::MOD_NAME_LOGO))
-}
-
-fn new_compose_state(context: &xkbcommon::xkb::Context) -> Option<xkbcommon::xkb::compose::State> {
-    use std::ffi::OsStr;
-    use xkbcommon::xkb::compose;
-    let locale = keyboard::compose_locale(|name| std::env::var(name).ok());
-    let table = compose::Table::new_from_locale(context, OsStr::new(&locale), compose::COMPILE_NO_FLAGS)
-        .or_else(|()| {
-            if locale != "C" {
-                compose::Table::new_from_locale(context, OsStr::new("C"), compose::COMPILE_NO_FLAGS)
-            } else {
-                Err(())
-            }
-        })
-        .ok()?;
-    Some(compose::State::new(&table, compose::STATE_NO_FLAGS))
 }
 
 fn feed_compose(compose: &mut xkbcommon::xkb::compose::State, sym: xkbcommon::xkb::Keysym) -> keyboard::ComposeOutcome {
@@ -901,6 +881,8 @@ impl LayerSurface {
     #[allow(unsafe_code)]
     pub fn new(display: RawDisplayHandle, namespace: &str, at: Placement, interactive: bool, options: &OverlayOptions, output_id: Option<u32>, wake: Option<Waker>) -> Option<LayerSurface> {
         let RawDisplayHandle::Wayland(display) = display else { return None };
+        let want_keys = options.keys == crate::KeyPolicy::OnDemand;
+        if want_keys { compose::warm(); }
         // SAFETY: winit owns this `wl_display` for the life of the event loop, which outlives
         // every overlay; a foreign backend never closes it.
         let backend = unsafe { Backend::from_foreign_display(display.display.as_ptr().cast()) };
@@ -934,7 +916,6 @@ impl LayerSurface {
             }))
         });
         let want_pointer = options.input.resolved(interactive) != OverlayInput::None;
-        let want_keys = options.keys == crate::KeyPolicy::OnDemand;
         let seat_global = globals.contents().with_list(|list| list.iter().find(|g| g.interface == "wl_seat").map(|g| (g.name, g.version.min(8))));
         let seat = if want_pointer || want_keys { seat_global.map(|(name, version)| globals.registry().bind::<WlSeat, _, _>(name, version, &qh, ())) } else { None };
         let surface = compositor.create_surface(&qh, ());
