@@ -12,7 +12,9 @@ pub(crate) mod animated;
 mod app_icon;
 mod avif;
 mod from_url;
-#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+#[cfg(feature = "svg")]
+mod gzip;
+#[cfg_attr(not(any(test, target_arch = "wasm32", feature = "svg")), allow(dead_code))]
 mod header;
 #[cfg(test)]
 mod mip_tests;
@@ -21,6 +23,7 @@ mod mips;
 pub mod pixels;
 #[doc(hidden)]
 pub mod place;
+mod svg;
 #[cfg(test)]
 mod tests;
 
@@ -31,6 +34,9 @@ pub use from_url::font_file;
 pub use pixels::Pixels;
 pub use place::Align;
 pub use place::SurfaceFit;
+#[doc(hidden)]
+pub use svg::svg_rgba;
+pub use svg::svg_rgba_cover;
 
 #[cfg(test)]
 use mips::byte;
@@ -144,7 +150,7 @@ impl Input {
             Input::Icon(path, px) => app_icon_rgba(&path, px).and_then(|(w, h, bytes)| mip_chain(w, h, &bytes)),
             #[cfg(not(target_arch = "wasm32"))]
             Input::File(path, px) => {
-                let bytes = std::fs::read(&path).map_err(|e| ImageError(format!("{}: {e}", path.display())))?;
+                let bytes = read_regular_file(&path)?;
                 if has_svg_extension(&path) || is_svg(&bytes) {
                     svg_rgba(&bytes, px).and_then(|(w, h, bytes)| mip_chain(w, h, &bytes))
                 } else {
@@ -442,200 +448,31 @@ fn is_svg(bytes: &[u8]) -> bool {
     bytes.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'<')
 }
 
-/// Options for `usvg` that resolve nothing outside the SVG's own bytes: non-`data:` `<image>` and
-/// `<feImage>` `href`s never touch the filesystem or UNC paths, and `data:` URLs accept raster
-/// formats only (`image/svg+xml` and `text/plain` SVG fall-through are refused).
-///
-/// Rune builds `resvg` with `raster-images` off, so those raster arms are resolved in the tree but
-/// never drawn today; they—and raster decoder pixel/memory bounds—become live if `raster-images` is
-/// ever enabled (for example via feature unification).
-#[cfg(feature = "svg")]
-fn svg_options() -> resvg::usvg::Options<'static> {
-    use resvg::usvg::{ImageHrefResolver, ImageKind, Options};
-    let raster = |data: Arc<Vec<u8>>| {
-        if data.starts_with(b"\x89PNG\r\n\x1a\n") {
-            Some(ImageKind::PNG(data))
-        } else if data.starts_with(&[0xff, 0xd8, 0xff]) {
-            Some(ImageKind::JPEG(data))
-        } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
-            Some(ImageKind::GIF(data))
-        } else if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" {
-            Some(ImageKind::WEBP(data))
-        } else {
-            None
-        }
-    };
-    Options {
-        image_href_resolver: ImageHrefResolver {
-            resolve_string: Box::new(|_, _| None),
-            resolve_data: Box::new(move |mime, data, _| match mime {
-                "image/png" => Some(ImageKind::PNG(data)),
-                "image/jpg" | "image/jpeg" => Some(ImageKind::JPEG(data)),
-                "image/gif" => Some(ImageKind::GIF(data)),
-                "image/webp" => Some(ImageKind::WEBP(data)),
-                "text/plain" => raster(data),
-                _ => None,
-            }),
-        },
-        ..Options::default()
+/// Reads a regular file up to [`MAX_ALLOC`] bytes, refusing directories, FIFOs, sockets and
+/// device files before and after opening so a special file cannot block or exhaust memory.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn read_regular_file(path: &std::path::Path) -> Result<Vec<u8>, ImageError> {
+    use std::io::Read;
+    let err = |e: std::io::Error| ImageError(format!("{}: {e}", path.display()));
+    let meta = std::fs::metadata(path).map_err(err)?;
+    if !meta.is_file() {
+        return Err(ImageError(format!("{}: not a regular file", path.display())));
     }
-}
-
-/// Maximum nested XML container elements inside an SVG's root element (513 open elements in all,
-/// matching Blink's 512-element HTML/SVG tree bound; Chromium's standalone XML limit of 5,000
-/// exceeds both `usvg`'s 1,024 node cap and a worker stack at ~4.5 KiB per `<g>`).
-#[cfg(feature = "svg")]
-const MAX_SVG_DEPTH: usize = 512;
-
-#[cfg(feature = "svg")]
-fn svg_tree(bytes: &[u8]) -> Result<resvg::usvg::Tree, ImageError> {
-    use resvg::usvg;
-    const MAX_BYTES: usize = 32 << 20;
-    if bytes.len() > MAX_BYTES { return Err(ImageError("SVG is too large".into())); }
-    let unzipped;
-    let raw = if bytes.starts_with(&[0x1f, 0x8b]) {
-        unzipped = usvg::decompress_svgz(bytes).map_err(|e| ImageError(format!("SVG: {e}")))?;
-        if unzipped.len() > MAX_BYTES { return Err(ImageError("SVG is too large".into())); }
-        unzipped.as_slice()
-    } else {
-        bytes
-    };
-    let text = std::str::from_utf8(raw).map_err(|_| ImageError("SVG is not UTF-8".into()))?;
-    if svg_exceeds_depth(text, MAX_SVG_DEPTH) {
-        return Err(ImageError(format!("SVG exceeds maximum nesting depth of {MAX_SVG_DEPTH}")));
+    if meta.len() > MAX_ALLOC {
+        return Err(ImageError(format!("{}: file is too large", path.display())));
     }
-    usvg::Tree::from_str(text, &svg_options()).map_err(|e| ImageError(format!("SVG: {e}")))
-}
-
-/// Iterative byte scan for open XML element depth, run before `roxmltree` so deeply nested input
-/// cannot overflow the decoder stack inside the XML parser or `usvg`/`resvg`.
-#[cfg(feature = "svg")]
-fn svg_exceeds_depth(text: &str, max_nested: usize) -> bool {
-    let b = text.as_bytes();
-    let limit = max_nested + 1;
-    let (mut i, mut depth) = (0usize, 0usize);
-    while i < b.len() {
-        let Some(rel) = b[i..].iter().position(|&c| c == b'<') else { return false };
-        i += rel;
-        if b[i..].starts_with(b"<!--") {
-            i += 4;
-            let Some(end) = b[i..].windows(3).position(|w| w == b"-->") else { return false };
-            i += end + 3;
-        } else if b[i..].starts_with(b"<![CDATA[") {
-            i += 9;
-            let Some(end) = b[i..].windows(3).position(|w| w == b"]]>") else { return false };
-            i += end + 3;
-        } else if b[i..].starts_with(b"<?") {
-            i += 2;
-            let Some(end) = b[i..].windows(2).position(|w| w == b"?>") else { return false };
-            i += end + 2;
-        } else if b[i..].starts_with(b"<!") {
-            i += 2;
-            let (mut decl, mut quote) = (1usize, 0u8);
-            while i < b.len() && decl > 0 {
-                let c = b[i];
-                if quote != 0 {
-                    if c == quote { quote = 0; }
-                } else if c == b'"' || c == b'\'' {
-                    quote = c;
-                } else if c == b'<' {
-                    decl += 1;
-                } else if c == b'>' {
-                    decl -= 1;
-                }
-                i += 1;
-            }
-        } else if b[i..].starts_with(b"</") {
-            i += 2;
-            depth = depth.saturating_sub(1);
-            let mut quote = 0u8;
-            while i < b.len() {
-                let c = b[i];
-                i += 1;
-                if quote != 0 {
-                    if c == quote { quote = 0; }
-                } else if c == b'"' || c == b'\'' {
-                    quote = c;
-                } else if c == b'>' {
-                    break;
-                }
-            }
-        } else {
-            i += 1;
-            let (mut quote, mut last_non_ws, mut closed) = (0u8, 0u8, false);
-            while i < b.len() {
-                let c = b[i];
-                i += 1;
-                if quote != 0 {
-                    if c == quote { quote = 0; }
-                } else if c == b'"' || c == b'\'' {
-                    quote = c;
-                    last_non_ws = c;
-                } else if c == b'>' {
-                    closed = true;
-                    break;
-                } else if !c.is_ascii_whitespace() {
-                    last_non_ws = c;
-                }
-            }
-            if !closed { return false; }
-            if last_non_ws != b'/' {
-                depth += 1;
-                if depth > limit { return true; }
-            }
-        }
+    let file = std::fs::File::open(path).map_err(err)?;
+    let handle_meta = file.metadata().map_err(err)?;
+    if !handle_meta.is_file() {
+        return Err(ImageError(format!("{}: not a regular file", path.display())));
     }
-    false
-}
-
-#[cfg(feature = "svg")]
-fn demultiply_rgba(pixmap: &resvg::tiny_skia::Pixmap) -> Vec<u8> {
-    pixmap.pixels().iter().flat_map(|p| {
-        let c = p.demultiply();
-        [c.red(), c.green(), c.blue(), c.alpha()]
-    }).collect()
-}
-
-/// An SVG scaled to fit `px` square, keeping its aspect ratio, as straight-alpha sRGB RGBA8.
-/// `px == 0` rasterizes at twice the drawing's own size, at most 4096 pixels per side.
-#[cfg(feature = "svg")]
-#[doc(hidden)]
-pub fn svg_rgba(bytes: &[u8], px: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
-    use resvg::tiny_skia;
-    let tree = svg_tree(bytes)?;
-    let size = tree.size();
-    let px = if px == 0 { (size.width().max(size.height()) * 2.0).ceil().clamp(1.0, 4096.0) as u32 } else { px };
-    let k = px as f32 / size.width().max(size.height());
-    let (w, h) = (((size.width() * k).round() as u32).clamp(1, px), ((size.height() * k).round() as u32).clamp(1, px));
-    let mut pixmap = tiny_skia::Pixmap::new(w, h).ok_or_else(|| ImageError("empty SVG".into()))?;
-    resvg::render(&tree, tiny_skia::Transform::from_scale(k, k), &mut pixmap.as_mut());
-    Ok((w, h, demultiply_rgba(&pixmap)))
-}
-
-#[cfg(not(feature = "svg"))]
-#[doc(hidden)]
-pub fn svg_rgba(_: &[u8], _: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
-    Err(ImageError("SVG images need rune's `svg` feature".into()))
-}
-
-/// An SVG centre-cropped to fill `px` square (`object-fit: cover`), as straight-alpha sRGB RGBA8,
-/// decoded through the same sandboxed `usvg` options as [`ImageCache`].
-#[cfg(feature = "svg")]
-pub fn svg_rgba_cover(bytes: &[u8], px: u32) -> Result<Vec<u8>, ImageError> {
-    use resvg::tiny_skia;
-    if px == 0 || px > 4096 { return Err(ImageError("invalid SVG raster size".into())); }
-    let tree = svg_tree(bytes)?;
-    let size = tree.size();
-    let k = px as f32 / size.width().min(size.height());
-    let t = tiny_skia::Transform::from_row(k, 0.0, 0.0, k, (px as f32 - size.width() * k) / 2.0, (px as f32 - size.height() * k) / 2.0);
-    let mut pixmap = tiny_skia::Pixmap::new(px, px).ok_or_else(|| ImageError("empty SVG".into()))?;
-    resvg::render(&tree, t, &mut pixmap.as_mut());
-    Ok(demultiply_rgba(&pixmap))
-}
-
-#[cfg(not(feature = "svg"))]
-pub fn svg_rgba_cover(_: &[u8], _: u32) -> Result<Vec<u8>, ImageError> {
-    Err(ImageError("SVG images need rune's `svg` feature".into()))
+    let cap = handle_meta.len().min(MAX_ALLOC) as usize;
+    let mut out = Vec::with_capacity(cap.min(64 * 1024));
+    file.take(MAX_ALLOC + 1).read_to_end(&mut out).map_err(err)?;
+    if out.len() as u64 > MAX_ALLOC {
+        return Err(ImageError(format!("{}: file is too large", path.display())));
+    }
+    Ok(out)
 }
 
 fn decode(bytes: &[u8]) -> Result<Decoded, ImageError> {

@@ -14,6 +14,10 @@ pub(super) const MAX_ELEMENT_DEPTH: usize = 511;
 /// remaining lines are grouped into one selectable, searchable plain block with a count marker.
 pub(super) const MAX_FLATTENED_TAIL_ITEMS: usize = 64;
 
+/// Maximum columns kept in a GFM table; cells past this column are dropped the way GFM drops a
+/// row's cells past its header's.
+pub(super) const MAX_TABLE_COLUMNS: usize = 128;
+
 /// Maximum nested flex containers on targets without `rune-taffy` stack continuation (`wasm32`,
 /// `ios` 1 MiB main thread, `android` 2 MiB `NativeActivity` thread, etc.). `770` preserves all
 /// `255` nested lists (`765`), `1` quote + `255` lists (`767`), and `10` quotes + `250` lists
@@ -86,6 +90,7 @@ pub(super) struct Builder {
     pub(super) image_ranges: Vec<(usize, usize)>,
     /// Each open image's source and title, beside `image_starts`.
     pub(super) image_dests: Vec<(String, String)>,
+    pub(super) skip_cell: bool,
     pub(super) tail: Tail,
 }
 
@@ -108,6 +113,7 @@ impl Builder {
             image_starts: Vec::new(),
             image_ranges: Vec::new(),
             image_dests: Vec::new(),
+            skip_cell: false,
             tail: Tail::None,
         }
     }
@@ -249,8 +255,10 @@ impl Builder {
             self.image_ranges.clear();
             self.image_starts.clear();
             if let InlineKind::Cell = kind {
-                // Empty cells still hold their column.
-                if let Some((Container::Table(_, cells, _, _, cell_maps), _, _)) = self.stack.last_mut() {
+                // Empty cells still hold their column, up to MAX_TABLE_COLUMNS.
+                if let Some((Container::Table(_, cells, _, _, cell_maps), _, _)) = self.stack.last_mut()
+                    && cells.len() < MAX_TABLE_COLUMNS
+                {
                     cells.push(inl);
                     cell_maps.push(map);
                 }

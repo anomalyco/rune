@@ -629,3 +629,54 @@ fn lists_and_quotes_in_fixed_and_stretched_containers_fill_their_parent_width() 
         );
     }
 }
+
+#[test]
+fn wide_gfm_tables_cap_columns_and_hostile_nesting_stays_bounded() {
+    use std::fmt::Write;
+    let cols = 500usize;
+    let (mut head, mut delim, mut row) = (String::from("|"), String::from("|"), String::from("|"));
+    for i in 0..cols {
+        let _ = write!(head, " h{i} |");
+        delim.push_str("---|");
+        let _ = write!(row, " v{i} |");
+    }
+    let table_src = format!("{head}\n{delim}\n{row}\n");
+    let blocks = parse(&table_src);
+    let [Block::Table(t)] = blocks.as_slice() else {
+        panic!("expected a single table block, got {blocks:?}");
+    };
+    assert_eq!(t.align.len(), 128, "table alignments capped at 128 columns");
+    assert_eq!(t.head.len(), 128, "table header capped at 128 columns");
+    assert_eq!(t.rows.len(), 1);
+    assert_eq!(t.rows[0].len(), 128, "table row capped at 128 columns");
+    assert_eq!(t.head[0].text, "h0");
+    assert_eq!(t.head[127].text, "h127");
+    assert_eq!(t.rows[0][0].text, "v0");
+    assert_eq!(t.rows[0][127].text, "v127");
+
+    // Streaming pending table header (before delimiter row arrives) obeys the same column cap.
+    let pending_blocks = parse(&head);
+    let [Block::Table(pt)] = pending_blocks.as_slice() else {
+        panic!("expected a pending table block, got {pending_blocks:?}");
+    };
+    assert_eq!(pt.align.len(), 128, "pending table alignments capped at 128 columns");
+    assert_eq!(pt.head.len(), 128, "pending table header capped at 128 columns");
+    assert_eq!(pt.head[127].text, "h127");
+
+    // Deeply nested quotes, lists, and nine-digit numbered lists parse and render without overflowing.
+    let deep_quotes = format!("{}leaf", "> ".repeat(2_000));
+    let deep_lists: String = (0..2_000).map(|i| format!("{}- item {i}\n", "  ".repeat(i.min(600)))).collect();
+    let nine_digit: String = (0..30).map(|i| format!("{}123456789. item {i}\n", " ".repeat(i * 11))).collect();
+    for src in [table_src, deep_quotes, deep_lists, nine_digit] {
+        let mut rt = rune::Runtime::new(
+            src,
+            |s: &String, _: &mut rune::Cx<String>| {
+                let style = MarkdownStyle::neutral(true);
+                Markdown::new(s).render(&style)
+            },
+            (400.0, 400.0),
+            rune::Env::new(true, 1.0),
+        );
+        rt.frame(0.0);
+    }
+}

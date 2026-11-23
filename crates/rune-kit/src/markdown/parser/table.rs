@@ -1,6 +1,7 @@
 //! Partial GFM table headers arriving at the end of a stream.
 
 use super::super::*;
+use super::builder::MAX_TABLE_COLUMNS;
 use super::{BlockMap, SpanMap, parse_doc};
 
 /// The header (and partial delimiter row) of a table still streaming in, from the source of the
@@ -53,13 +54,19 @@ fn split_row(line: &str, base_offset: usize) -> Vec<(usize, String)> {
             '\\' if chars.peek().is_some_and(|&(_, next)| next == '|') => {
                 cells.last_mut().unwrap().1.extend(['\\', chars.next().unwrap().1]);
             }
-            '|' => cells.push((base_offset + pipe_off + idx + 1, String::new())),
+            '|' => {
+                if cells.len() > MAX_TABLE_COLUMNS {
+                    break;
+                }
+                cells.push((base_offset + pipe_off + idx + 1, String::new()));
+            }
             c => cells.last_mut().unwrap().1.push(c),
         }
     }
     if cells.last().is_some_and(|(_, c)| c.trim().is_empty()) && inner.trim_end().ends_with('|') {
         cells.pop();
     }
+    cells.truncate(MAX_TABLE_COLUMNS);
     cells
         .into_iter()
         .map(|(off, c)| {
