@@ -230,14 +230,33 @@ fn launcher_refresh_with_no_drawable_retries_and_never_reveals_stale_pixels() {
     assert!(shown.deadline().is_none() && shown.ready());
 }
 
+#[test]
+fn launcher_hidden_resize_holds_reveal_until_the_resized_frame_draws() {
+    let now = crate::time::now();
+    let mut frame = FirstFrame::drawn_notified();
+    assert!(!frame.request_reveal(true, false, now), "changed state refreshes hidden first");
+    let deadline = frame.deadline();
+    assert!(deadline.is_some());
+    frame.gpu_done(); // Hidden refresh drew at the old height and queued a fit_content_height resize.
+    assert!(frame.pending());
+    frame.missed(); // The hidden surface resized, invalidating the old-height cached pixels.
+    assert!(!frame.pending() && !frame.ready() && frame.revealing(), "reveal waits for the resized draw");
+    assert_eq!(frame.deadline(), deadline, "keeps the original reveal deadline");
+    frame.gpu_done(); // Hidden frame drew at the new height.
+    assert!(frame.pending() && frame.complete(), "reveals once the new-height frame finishes");
+}
+
 impl Win {
-    pub(in crate::window) fn show(&self, focus: bool) {
+    pub(in crate::window) fn show(&mut self, focus: bool) {
         #[cfg(target_os = "macos")]
         {
             if let Some(shadow) = &self.native.shadow { shadow.shown(); }
             if let Some(panel) = &self.native.panel {
                 panel.show(std::time::Duration::ZERO);
                 if focus { panel.request_keys(); }
+                // A frame right after order-in can read as occluded before AppKit's commit
+                // lands, and launchers drop native occlusion events.
+                self.native.prime.arm();
                 return;
             }
             if !focus { crate::platform::macos::show_without_focus(&self.window); return; }

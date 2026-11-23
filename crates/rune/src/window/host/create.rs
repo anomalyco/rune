@@ -305,7 +305,7 @@ impl Host {
         if launcher { self.win.as_mut().unwrap().first_frame.prepare(crate::time::now()); }
         self.apply_placement(event_loop);
         #[cfg(target_os = "macos")]
-        if visible && let Some(w) = &self.win && w.native.panel.is_some() { w.show(focus); }
+        if visible && let Some(w) = &mut self.win && w.native.panel.is_some() { w.show(focus); }
         crate::marks::mark("window.created");
         if let Some(created) = self.on_created.take() { created(self.native_handle.clone()); }
         if let Some(on_window) = self.on_window.as_mut() { on_window(&self.native_handle); }

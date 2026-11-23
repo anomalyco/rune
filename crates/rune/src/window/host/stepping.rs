@@ -178,22 +178,22 @@ impl Host {
     /// Takes the frame change handlers asked for. A painting macOS window moves over its next
     /// frames on the request's spring, from `start`; anywhere else the frame jumps. Sizes stay
     /// inside the window's minimum and maximum. A size outlives the window: one created later
-    /// opens at it.
-    pub(in crate::window) fn take_frame_request(&mut self, start: f64, painting: bool) {
+    /// opens at it. Returns whether macOS resized the surface immediately.
+    pub(in crate::window) fn take_frame_request(&mut self, start: f64, painting: bool) -> bool {
         let rt = self.app.rt_mut();
         rt.host.fit.take_held();
-        let Some(mut request) = rt.host.window_frame.take() else { return };
+        let Some(mut request) = rt.host.window_frame.take() else { return false };
         let (min, max) = self.options.size_limits(self.geometry.min_size);
         request.size = request.size.map(|size| crate::window::frame::clamp_size(size, min, max));
         if let Some(size) = request.size {
             self.geometry.size = size;
             self.args.size = None;
         }
-        let Some(w) = &self.win else { return };
+        let Some(w) = &self.win else { return false };
         #[cfg(target_os = "macos")]
         {
             use crate::window::frame::{FrameAnim, snap, target};
-            let Some((frame, visible, scale)) = crate::platform::macos::window_geometry(&w.window) else { return };
+            let Some((frame, visible, scale)) = crate::platform::macos::window_geometry(&w.window) else { return false };
             // Resizing again mid-flight keeps the edge the first resize keeps.
             let base = match &self.frame_move {
                 Some(FrameMove::Moving { anim, .. }) => anim.to,
@@ -214,10 +214,12 @@ impl Host {
                 };
                 let anim = FrameAnim::retarget(previous, spring, start, frame, to);
                 self.frame_move = Some(FrameMove::animating(anim, [frame[0], frame[1]]));
+                false
             } else {
                 self.frame_move = None;
                 crate::platform::macos::set_window_frame(&w.window, to);
                 self.sync_origin();
+                self.sync_surface_size()
             }
         }
         #[cfg(not(target_os = "macos"))]
@@ -231,8 +233,8 @@ impl Host {
                 chrome::request_inner_size(window, (width, height));
             }
             // Wayland windows can't see or set their position.
-            if self.wayland { return; }
-            let (Some(monitor), Ok(position), outer, inner) = geometry else { return };
+            if self.wayland { return false; }
+            let (Some(monitor), Ok(position), outer, inner) = geometry else { return false };
             let scale = window.scale_factor() as f32;
             let size = request.size.map(|(width, height)| (
                 width * scale + outer.width.saturating_sub(inner.width) as f32,
@@ -246,7 +248,21 @@ impl Host {
                 window.set_outer_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
                 self.sync_origin();
             }
+            false
         }
+    }
+
+    /// Matches the surface and runtime viewport to the window's inner size after a synchronous
+    /// macOS frame jump (`take_frame_request` with `painting = false`). Returns whether the
+    /// surface size changed.
+    #[cfg(target_os = "macos")]
+    fn sync_surface_size(&mut self) -> bool {
+        let (Some(w), Some((gpu, ..))) = (self.win.as_mut(), self.gpu.as_ref()) else { return false };
+        let size = w.window.inner_size();
+        let resized = w.resize_surface(Some(&**gpu), size);
+        let scale = w.window.scale_factor() as f32;
+        self.app.rt_mut().set_viewport((size.width as f32 / scale, size.height as f32 / scale), scale);
+        resized
     }
 
     /// Moves the frame one display frame along, before the frame's drawable is acquired, and

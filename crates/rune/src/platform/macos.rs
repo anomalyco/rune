@@ -188,7 +188,7 @@ impl Panel {
 
     #[allow(unsafe_code)]
     fn adopt_kind(window: &winit::window::Window, at: crate::overlay::Placement, interactive: bool, options: &OverlayOptions, wake: Option<crate::Waker>, ordinary: bool) -> Option<Panel> {
-        use objc2_app_kit::{NSBackingStoreType, NSColor, NSWindowCollectionBehavior, NSWindowStyleMask};
+        use objc2_app_kit::{NSBackingStoreType, NSColor, NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowStyleMask};
         let mtm = MainThreadMarker::new()?;
         crate::platform::macos::appearance::install();
         let view = content_view(window)?;
@@ -239,6 +239,9 @@ impl Panel {
         if options.prewarm {
             panel.setAlphaValue(0.0);
             panel.setIgnoresMouseEvents(true);
+            // AppKit's default animation scales and fades an NSPanel in over ~280 ms on
+            // order-in; a prewarmed panel reveals cached pixels at once (or runs its own fade).
+            panel.setAnimationBehavior(NSWindowAnimationBehavior::None);
         }
         // defer:NO creates the WindowServer identity while hidden. Never publish a sentinel
         // (-1/0) cast to CGWindowID as a successful native creation.

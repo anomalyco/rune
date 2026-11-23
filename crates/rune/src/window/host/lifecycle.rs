@@ -88,6 +88,11 @@ impl Host {
                     rt.set_system_scroll_bars_state(crate::platform::scroll_bars::current().with_override(self.args.scroll_bars));
                 }
                 RevealEffect::Build => built = self.build_for_show(),
+                RevealEffect::ApplyFrame => {
+                    if self.take_frame_request(self.frame_secs(crate::time::now()), false) {
+                        self.idle = false;
+                    }
+                }
                 RevealEffect::Place => self.apply_placement(event_loop),
                 RevealEffect::Create => {
                     // `App::open_inactive`: the first open leaves focus where it is.
@@ -98,7 +103,7 @@ impl Host {
                     #[cfg(target_os = "macos")]
                     if focus && self.started && let Some(w) = self.shown_win() { w.focus(); }
                 }
-                RevealEffect::OrderIn { focus } => if let Some(w) = &self.win { w.show(focus) },
+                RevealEffect::OrderIn { focus } => if let Some(w) = &mut self.win { w.show(focus) },
                 RevealEffect::Unminimize => if let Some(w) = &self.win { w.window.set_minimized(false) },
                 RevealEffect::Settle => {
                     if !built { self.app.rt_mut().settle_all(); }
@@ -164,16 +169,8 @@ impl Host {
     pub(in crate::window) fn build_for_show(&mut self) -> bool {
         if !self.app.build_for_show() { return false; }
         self.clipboard.flush_core(self.app.rt_mut());
+        // macOS sets the frame and resizes the surface at once; elsewhere `Resized` brings it.
         self.take_frame_request(0.0, false);
-        // macOS sets the frame at once: the first drawable and layout take the new size.
-        // Elsewhere the window's `Resized` brings it.
-        #[cfg(target_os = "macos")]
-        if let (Some(w), Some((gpu, ..))) = (self.win.as_mut(), self.gpu.as_ref()) {
-            let size = w.window.inner_size();
-            w.resize_surface(Some(&**gpu), size);
-            let scale = w.window.scale_factor() as f32;
-            self.app.rt_mut().set_viewport((size.width as f32 / scale, size.height as f32 / scale), scale);
-        }
         true
     }
 
@@ -341,7 +338,13 @@ impl Host {
             let paints = self.shown_win().is_some_and(|w| !self.life.covered() && !w.minimized());
             // A painting macOS window moves its frame over its next frames (`redraw`).
             if self.app.rt().host.window_frame.is_some() && !(paints && cfg!(target_os = "macos")) {
-                self.take_frame_request(self.frame_secs(crate::time::now()), false);
+                let resized = self.take_frame_request(self.frame_secs(crate::time::now()), false);
+                if resized && !self.life.shown() && self.launcher() && let Some(w) = &mut self.win {
+                    // The hidden surface resized, invalidating its old-size cached pixels; draw at
+                    // the new height before any pending reveal orders it in.
+                    w.first_frame.missed();
+                    w.request_redraw();
+                }
             }
             let shown = self.win.as_ref().filter(|_| self.life.shown());
             let window = shown.map(|w| &w.window);
