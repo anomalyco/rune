@@ -208,13 +208,8 @@ impl<S: 'static> TypedWebApp<S> {
         let shared = app.shared.core.clone();
         let start: StartFn = Box::new(move |fonts, viewport, env, wake| {
             app.spec.fonts = with_fonts(app.spec.fonts, fonts);
-            let compositor = app.compositor.take();
-            let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
-            let spec_fonts = app.spec.fonts;
-            let (spec, state, shared, runtime) = app.into_parts(None);
-            let mut rt = crate::tooling::runtime_for(&spec, state, viewport, env, wake.clone());
-            if let Some(attach) = attach_playground { attach(&mut rt, playground, &spec, None, None, true); }
-            rt.configure(runtime);
+            let (rt, shared, compositor, spec_fonts) =
+                super::super::web_math::start_web_runtime(app, viewport, env, wake.clone());
             let menus = crate::native_menu::MenuGuard::attach(&shared, false);
             let shortcuts = crate::shortcuts::Guard::attach(&shared, wake, false, false);
             StartedWebApp {

@@ -327,6 +327,32 @@ pub(crate) fn scroll_x_to_dom(
     }
 }
 
+/// Builds the web host's `Runtime` and splits off its shared state, compositor and fonts.
+/// Kept out of `platform/web/app.rs` so web startup configuration runs in native unit tests.
+pub(crate) fn start_web_runtime<S: 'static>(
+    mut app: crate::App<S>,
+    viewport: (f32, f32),
+    env: crate::Env,
+    wake: crate::Waker,
+) -> (
+    crate::Runtime<S>,
+    std::sync::Arc<crate::app::Shared<S>>,
+    Option<Box<dyn crate::compose::Compositor<S>>>,
+    &'static [&'static [u8]],
+) {
+    let compositor = app.compositor.take();
+    let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
+    let spec_fonts = app.spec.fonts;
+    let (spec, state, shared, runtime) = app.into_parts(None);
+    let mut rt = crate::tooling::runtime_for(&spec, state, viewport, env, wake);
+    if let Some(attach) = attach_playground {
+        attach(&mut rt, playground, &spec, None, None, true);
+    }
+    rt.configure(runtime);
+    rt.track_marks = compositor.is_some();
+    (rt, shared, compositor, spec_fonts)
+}
+
 #[cfg(test)]
 #[path = "web_math_tests.rs"]
 mod tests;
