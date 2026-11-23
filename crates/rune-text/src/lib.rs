@@ -307,8 +307,8 @@ pub struct TextSystem {
     mono_scripts: Option<Vec<&'static str>>,
     /// The installed `Family::SystemMono` families, once a text has needed them.
     system_mono: Option<Vec<String>>,
-    /// The sans or mono slot names `ui-monospace` (see `family_list`).
-    slot_system_mono: bool,
+    /// Whether the sans (`[0]`) or mono (`[1]`) slot names `ui-monospace` (see `family_list`).
+    slot_system_mono: [bool; 2],
     /// Bit `i` is set once `fallback::SCRIPT_FONTS[i]` has been looked up.
     scripts: u64,
     font_files: LoadedFiles,
@@ -367,7 +367,7 @@ pub struct TextSystem {
 
 impl Default for TextSystem {
     fn default() -> Self {
-        Self::new(&[], ("Inter", "Inter"))
+        Self::new(&[], ("Inter", "ui-monospace"))
     }
 }
 
@@ -420,7 +420,7 @@ impl TextSystem {
             families: (families.0.to_owned(), families.1.to_owned()),
             sans,
             mono,
-            slot_system_mono: names_system_mono(families.0) || names_system_mono(families.1),
+            slot_system_mono: [names_system_mono(families.0), names_system_mono(families.1)],
             fallbacks: system_fonts::Fallbacks::new(list, cjk),
             atlas: Atlas::new(),
             ..Self::empty()
@@ -464,7 +464,7 @@ impl TextSystem {
             math: None,
             mono_scripts: None,
             system_mono: None,
-            slot_system_mono: false,
+            slot_system_mono: [false; 2],
             scripts: 0,
             font_files: LoadedFiles::new(),
             fallbacks: system_fonts::Fallbacks::default(),
@@ -536,7 +536,7 @@ impl TextSystem {
 
     /// The font text in `family` at `weight` shapes with first.
     fn primary_font(&mut self, family: Family, weight: f32, italic: bool) -> Option<parley::fontique::QueryFont> {
-        if family == Family::SystemMono || self.slot_system_mono {
+        if self.needs_system_mono(family, false) {
             self.system_mono();
         }
         if let Family::Named(list) = family {

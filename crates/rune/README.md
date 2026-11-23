@@ -1213,11 +1213,12 @@ falls back to the mono slot. SF Mono has no `trak` table, so it is untracked, as
 `tracking` still adds, and glyphs that fall back to the system font get that font's own
 tracking. Mono rich spans keep using the mono slot.
 
-To put the mono slot itself (so `Family::Mono`, `.mono()` and mono rich spans) in that
-font, name CSS's `ui-monospace` in it: `families: ("Inter", "ui-monospace")`. It stands for
-the same families as `Family::SystemMono`, and the rest of the list follows it, so
-`"ui-monospace, Menlo"` falls back to Menlo where none is installed. Inline code then
-matches a code block set in `Family::SystemMono`.
+The mono slot defaults to `ui-monospace` on native (`families: ("Inter", "ui-monospace")`,
+and `("Inter", "IBM Plex Mono")` on web when `fonts` is empty), so `Family::Mono`, `.mono()`,
+`Cell::mono()`, `ty.mono` and mono rich spans use the platform's monospaced UI font without
+loading any system font until mono text is first laid out. `ui-monospace` stands for the same
+families as `Family::SystemMono`, and any names after it follow as fallbacks (for example
+`"ui-monospace, Menlo"`); when no system monospaced font is installed it falls back to sans.
 
 `tx.set_font_families(sans, mono)` swaps what's behind the slots while the app runs, for a
 UI or code font picker; it takes the same lists as `AppSpec::families`. Every window and
@@ -1467,8 +1468,8 @@ newline on `Shift+Return` and pastes plain text. The mark and block methods work
   - Inside `Block::Code`, `Return` elsewhere inserts a newline (never submits), inline marks do not apply,
     and a typed or pasted `\t` inserts a literal tab byte that advances to the next 4-column stop
     (one byte, so offsets and copy/paste keep the tab).
-  - Code blocks and `Mark::Code` runs draw in the mono slot (name a monospaced family in
-    `AppSpec::families`; the default is Inter) without ligatures.
+  - Code blocks and `Mark::Code` runs draw in the mono slot (default `ui-monospace` on native,
+    `IBM Plex Mono` on web; override in `AppSpec::families`) without ligatures.
 - **Inline pills** (`Mark::Pill(id)`, for `@file`, `@agent` or attachment mentions): an atomic
   run whose label is the text under the mark and whose id is the app's. The caret steps over a
   pill in one move, a selection that reaches into one grows to cover it, `Backspace`/`Delete`

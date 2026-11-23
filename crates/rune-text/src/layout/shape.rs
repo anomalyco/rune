@@ -182,8 +182,9 @@ impl TextSystem {
             .collect();
         // Each style range's predicted first font at its weight, drawn at its named instance.
         let base_axes = self.primary_axes(style.family, style.weight, style.italic);
+        let has_mono_span = spans.iter().any(|s| s.mono);
         // The strut inline code keeps inside (`inline_fit`).
-        let strut = if mono_style || !spans.iter().any(|s| s.mono) { None } else { self.primary_extents(style.family, style.weight, style.italic) };
+        let strut = if mono_style || !has_mono_span { None } else { self.primary_extents(style.family, style.weight, style.italic) };
         let span_axes: Vec<Rc<[parley::FontVariation]>> = spans
             .iter()
             .map(|s| {
@@ -196,7 +197,7 @@ impl TextSystem {
             settings.extend(extra);
             settings
         };
-        if style.family == Family::SystemMono || self.slot_system_mono {
+        if self.needs_system_mono(style.family, has_mono_span) {
             self.system_mono();
         }
         if let Family::Named(list) = style.family {
@@ -226,7 +227,7 @@ impl TextSystem {
                 families
             }
         };
-        let mono = with_symbols(self.mono.as_str(), mono_scripts);
+        let mono = if has_mono_span { with_symbols(self.mono.as_str(), mono_scripts) } else { Vec::new() };
         // Routed clusters try their fallback first, then the run's own stack (mono spans included).
         // Each of the four {math, emoji} × {sans, mono} stacks is built at most once.
         let mono_spans = if routes.is_empty() {

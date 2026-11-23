@@ -24,8 +24,9 @@ pub struct AppSpec<S: 'static> {
     /// Named states for snapshots: each modifies the initial state.
     pub scenes: &'static [(&'static str, fn(&mut S))],
     /// Font files replacing the built-in Inter (empty keeps it), and the sans/mono family names
-    /// (CSS lists; `ui-monospace` stands for [`Family::SystemMono`](crate::Family::SystemMono)'s
-    /// families, so mono spans can be SF Mono).
+    /// (CSS lists; defaults to `("Inter", "ui-monospace")` on native, where `ui-monospace` stands
+    /// for [`Family::SystemMono`](crate::Family::SystemMono)'s families loaded lazily on first
+    /// mono use, and `("Inter", "IBM Plex Mono")` on web when `fonts` is empty).
     pub fonts: &'static [&'static [u8]],
     pub families: (&'static str, &'static str),
     /// Called once with a waker other threads use when new data arrives.
@@ -51,7 +52,7 @@ impl<S: 'static> AppSpec<S> {
             view,
             scenes: &[],
             fonts: &[],
-            families: ("Inter", "Inter"),
+            families: ("Inter", "ui-monospace"),
             setup: None,
             poll: None,
             on_key: None,

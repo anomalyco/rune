@@ -467,11 +467,23 @@ pub(crate) fn installed_family_files(name: &str) -> Vec<std::path::PathBuf> {
     platform::family_files(&[name])
 }
 
+/// Parses a CSS family list, falling back to one literal family name when CSS parsing yields
+/// nothing (for hidden family names such as `.SF NS` that are not CSS identifiers).
+fn css_or_named(list: &str) -> Vec<FontFamilyName<'_>> {
+    let parsed: Vec<FontFamilyName<'_>> = FontFamilyName::parse_css_list(list).flatten().collect();
+    if parsed.is_empty() && !list.trim().is_empty() && !list.contains(',') {
+        vec![FontFamilyName::named(list)]
+    } else {
+        parsed
+    }
+}
+
 /// Loads the installed families the CSS family list `list` names that the collection lacks,
-/// each looked up once (`tried`).
+/// each looked up once (`tried`). Generic CSS keywords (`ui-monospace`, `monospace`, ...) are
+/// skipped so they trigger no system font lookup at launch.
 pub(crate) fn load_installed(collection: &mut Collection, loaded: &mut LoadedFiles, tried: &mut std::collections::HashSet<String>, list: &str) -> bool {
     let mut added = false;
-    for family in named_list(list) {
+    for family in css_or_named(list) {
         let FontFamilyName::Named(name) = family else { continue };
         if collection.family_id(&name).is_some() || !tried.insert(name.to_lowercase()) {
             continue;
@@ -485,7 +497,7 @@ pub(crate) fn load_installed(collection: &mut Collection, loaded: &mut LoadedFil
 /// families load with the text that asks for them (`family_list` then falls back to sans).
 fn slot_resolves(collection: &mut Collection, list: &str) -> bool {
     names_system_mono(list)
-        || named_list(list).iter().any(|f| matches!(f, FontFamilyName::Named(name) if collection.family_id(name).is_some()))
+        || css_or_named(list).iter().any(|f| matches!(f, FontFamilyName::Named(name) if collection.family_id(name).is_some()))
 }
 
 /// `Family::Named`'s families: one literal name, or a CSS list when it has a comma.
