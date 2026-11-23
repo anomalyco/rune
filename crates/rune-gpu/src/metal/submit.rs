@@ -8,7 +8,7 @@ use std::sync::Arc;
 #[cfg(debug_assertions)]
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandBufferError, MTLCommandBufferStatus, MTLCommandEncoder, MTLCommandQueue, MTLDrawable, MTLEvent, MTLSharedEvent,
+    MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder, MTLCommandQueue, MTLDrawable, MTLEvent, MTLSharedEvent,
 };
 use objc2_quartz_core::CAMetalDrawable;
 use objc2::rc::autoreleasepool;
@@ -73,19 +73,12 @@ struct Uploads {
     keep: Keep,
 }
 
-/// Whether a command buffer failing with `code` means the GPU won't run its queue's work any more:
-/// it timed out on it (and then ignores what the queue commits), revoked the queue's access, or the
-/// device went away. Others, such as a buffer discarded while the GPU recovered from another's
-/// fault, leave the queue working.
-pub(super) fn kills_queue(code: MTLCommandBufferError) -> bool {
-    matches!(code, MTLCommandBufferError::Timeout | MTLCommandBufferError::AccessRevoked | MTLCommandBufferError::DeviceRemoved)
-}
-
-/// `cb`'s error, when it ended its queue (`kills_queue`).
-fn queue_killed(cb: &ProtocolObject<dyn MTLCommandBuffer>) -> Option<String> {
+/// `cb`'s error, when it ended with one: the device is lost, whatever the error, as in Dawn and
+/// WebGPU ("lose the device"). Work that failed, a buffer the GPU discarded while recovering from a
+/// hang included, didn't run, and a GPU that timed out on a queue ignores what it commits after.
+fn failed(cb: &ProtocolObject<dyn MTLCommandBuffer>) -> Option<String> {
     if cb.status() != MTLCommandBufferStatus::Error { return None }
-    let error = cb.error()?;
-    kills_queue(MTLCommandBufferError(error.code() as usize)).then(|| error.localizedDescription().to_string())
+    Some(cb.error().map_or_else(|| "a Metal command buffer failed".to_owned(), |e| e.localizedDescription().to_string()))
 }
 
 fn completed(cb: &ProtocolObject<dyn MTLCommandBuffer>) -> bool {
@@ -219,7 +212,7 @@ impl Shared {
                 }
             };
             let Some(Pending { cb, mut keep, drawable, .. }) = pending else { continue };
-            if lost.is_none() { lost = queue_killed(&cb); }
+            if lost.is_none() { lost = failed(&cb); }
             // Drop the completed command buffer before any object it referenced without retaining.
             drop(cb);
             drop(drawable);

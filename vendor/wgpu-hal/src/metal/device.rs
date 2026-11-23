@@ -2054,6 +2054,9 @@ impl crate::Device for super::Device {
             condvar.wait_while(&mut lock, |value| *value < wait_value);
         }
 
+        if fence.lost.load(core::sync::atomic::Ordering::Acquire) {
+            return Err(crate::DeviceError::Lost);
+        }
         Ok(true)
     }
 

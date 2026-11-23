@@ -489,15 +489,30 @@ fn adapters_are_the_ones_wgpu_picks() {
     assert_eq!(count(&ours), count(&theirs));
 }
 
+/// Any command buffer of a submission that fails loses a stock wgpu Metal device (the vendored
+/// wgpu-hal), not only the last: here the internal one that waits for an event nothing signals,
+/// which Metal times out after about 5 s, while the submission's own work completes.
 #[test]
-fn errors_that_end_the_queue_lose_the_device() {
-    use objc2_metal::MTLCommandBufferError as E;
-    for code in [E::Timeout, E::AccessRevoked, E::DeviceRemoved] {
-        assert!(submit::kills_queue(code), "{code:?}");
+#[allow(unsafe_code)]
+fn a_failed_command_buffer_loses_a_stock_wgpu_metal_device() {
+    use objc2_metal::MTLDevice;
+    let (device, queue) = wgpu_metal();
+    let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let into = heard.clone();
+    device.set_device_lost_callback(move |_, message| into.lock().unwrap().push(message));
+    // SAFETY: the hal device and queue are only read, to make an event and stage a wait on it.
+    let event = unsafe { device.as_hal::<wgpu::hal::api::Metal>() }.and_then(|d| d.raw_device().newSharedEvent()).expect("a Metal shared event");
+    // Kept alive here: the wait's command buffer doesn't retain it.
+    unsafe { queue.as_hal::<wgpu::hal::api::Metal>() }.expect("a Metal queue").add_wait_event(event.clone(), 1);
+    queue.submit([device.create_command_encoder(&Default::default()).finish()]);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while heard.lock().unwrap().is_empty() && std::time::Instant::now() < deadline {
+        // wgpu 30 panics in `Device::poll` once the hal reports the device lost (gfx-rs/wgpu#10031).
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| device.poll(wgpu::PollType::Poll)));
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    for code in [E::Internal, E::PageFault, E::NotPermitted, E::OutOfMemory, E::InvalidResource, E::Memoryless, E::StackOverflow] {
-        assert!(!submit::kills_queue(code), "{code:?}");
-    }
+    assert_eq!(heard.lock().unwrap().len(), 1, "the failed wait loses the device");
+    drop(event);
 }
 
 #[test]

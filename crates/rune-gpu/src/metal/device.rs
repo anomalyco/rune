@@ -49,7 +49,7 @@ pub(crate) struct Shared {
 send_sync!(Shared);
 
 /// The device's loss (`Device::set_device_lost_callback`). Metal reports one only through a
-/// command buffer's error (`submit::kills_queue`).
+/// command buffer's error (`submit::failed`).
 #[derive(Default)]
 pub(super) struct Lost {
     pub(super) message: Option<String>,
