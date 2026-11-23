@@ -1,3 +1,6 @@
+//! A small chat view with safe-area insets, text input and clipboard copy, built for both
+//! desktop and `wasm32` browsers (`scripts/web-build.sh web-hello`).
+
 #![forbid(unsafe_code)]
 
 use rune::{AppSpec, Cx, El, ScrollSpec, TextEdit, Tx, col, el, row, text, text_input};

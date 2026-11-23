@@ -1,3 +1,6 @@
+//! A control window plus one transparent, click-through overlay per display sharing a `Live`
+//! remote cursor.
+
 #![forbid(unsafe_code)]
 
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};

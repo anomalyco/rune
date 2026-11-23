@@ -1,3 +1,6 @@
+//! Multi-display overlay lab: a pointer-following pill with regional hit testing and
+//! full-screen area pickers, with optional capture exclusion.
+
 use std::sync::{Arc, Mutex};
 use rune::{App, AppSpec, Color, Cx, DisplayTarget, El, Key, KeyEvent, KeyPolicy, OverlayHandle, OverlayInput, OverlayLevel, OverlayOptions, OverlayPlacement, OverlaySpec, Phase, RunOptions, Tx, WindowSpec, col, el, row, text};
 
