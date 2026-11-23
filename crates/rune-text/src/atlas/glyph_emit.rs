@@ -453,23 +453,7 @@ pub(crate) fn set_ink_spans(out: &mut Vec<(u32, u32, u32)>, spans: &[Span]) {
         return;
     }
     let input = std::mem::take(out);
-    let mut bounds = Vec::with_capacity(input.len() * 2);
-    for &(a, b, _) in &input {
-        bounds.push(a);
-        bounds.push(b);
-    }
-    bounds.sort_unstable();
-    bounds.dedup();
-    for w in bounds.windows(2) {
-        let (a, b) = (w[0], w[1]);
-        if let Some(&(_, _, ink)) = input.iter().rev().find(|&&(sa, sb, _)| sa <= a && b <= sb) {
-            if let Some(last) = out.last_mut().filter(|l| l.1 == a && l.2 == ink) {
-                last.1 = b;
-            } else {
-                out.push((a, b, ink));
-            }
-        }
-    }
+    crate::layout::span_map::flatten_into(&input, out);
 }
 
 /// For each glyph that `line.items()`'s `GlyphRun`s yield on `line`, in visual order, the

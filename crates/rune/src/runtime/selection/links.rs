@@ -58,6 +58,7 @@ impl LinkFx {
 
     /// Backgrounds and underlines (device px, layout top-left at `origin`).
     pub(in crate::runtime) fn decos(&self, layout: &Layout<Ink>, len: usize, s: f32, origin: [f32; 2], out: &mut Vec<PaintedDeco>) {
+        let mut line_ends: HashMap<usize, f32> = HashMap::default();
         for &(a, b, p, bg_pad, has_rings) in &self.0 {
             for (bb, line) in boxes(layout, len, a, b) {
                 let (x0, w) = (origin[0] + bb.x0 as f32, (bb.x1 - bb.x0) as f32);
@@ -115,7 +116,12 @@ impl LinkFx {
                 }
                 if let (Some(c), Some(l)) = (p.underline, layout.get(line)) {
                     let y = (origin[1] + l.metrics().baseline + 2.0 * s).round();
-                    let (x0, x1) = crate::text::underline_edges(&l, origin[0], bb.x0 as f32, bb.x1 as f32);
+                    let end = *line_ends.entry(line).or_insert_with(|| {
+                        #[cfg(test)]
+                        count_link_line_end_visits(&l);
+                        crate::text::line_end(&l)
+                    });
+                    let (x0, x1) = crate::text::underline_edges_with_end(end, origin[0], bb.x0 as f32, bb.x1 as f32);
                     let w = x1 - x0;
                     if let Some(d) = out.iter_mut().find(|d| {
                         d.radius == 0.0
@@ -633,6 +639,18 @@ impl RuntimeCore {
 #[cfg(test)]
 thread_local! {
     static SPAN_BOX_QUERIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static LINK_LINE_END_ITEM_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn count_link_line_end_visits(line: &parley::Line<'_, Ink>) {
+    let runs = line.items().filter(|it| matches!(it, parley::PositionedLayoutItem::GlyphRun(_))).count();
+    LINK_LINE_END_ITEM_VISITS.with(|c| c.set(c.get() + runs));
+}
+
+#[cfg(test)]
+fn take_link_line_end_visits() -> usize {
+    LINK_LINE_END_ITEM_VISITS.with(|c| c.replace(0))
 }
 
 #[cfg(test)]

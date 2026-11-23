@@ -68,3 +68,19 @@ fn monotonic_queries_are_linear_in_spans_plus_queries() {
     let steps = take_span_scan_steps();
     assert!(steps <= n * 4, "expected O(n) steps, got {steps} for n={n}");
 }
+
+#[test]
+fn for_each_in_splits_ranges_across_entries_and_gaps() {
+    let map = SpanMap::new([(2..5, 10u32), (8..12, 20), (12..15, 30)]);
+    let collect = |r: Range<usize>| {
+        let mut out = Vec::new();
+        map.for_each_in(r, |piece, v| out.push((piece, v)));
+        out
+    };
+    assert_eq!(collect(0..10), vec![(0..2, None), (2..5, Some(10)), (5..8, None), (8..10, Some(20))]);
+    assert_eq!(collect(10..16), vec![(10..12, Some(20)), (12..15, Some(30)), (15..16, None)]);
+    // Backwards jump resets via binary search.
+    assert_eq!(collect(3..9), vec![(3..5, Some(10)), (5..8, None), (8..9, Some(20))]);
+    assert_eq!(collect(5..5), vec![]);
+    assert_eq!(collect(20..25), vec![(20..25, None)]);
+}

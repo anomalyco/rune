@@ -1,0 +1,1 @@
+- Rich text: `synthetic_bold::inks` and overlapping coloured spans in `set_ink_spans` now flatten through the sorted `SpanMap` sweep instead of rescanning all spans per range or interval, and `LinkFx::decos` caches each line's right edge once per line instead of rescanning every glyph run for each link box, keeping painted brushes, ink spans, and link underlines identical.

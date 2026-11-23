@@ -44,3 +44,93 @@ fn ink_spans_do_not_overflow_at_65536() {
     assert_eq!(cached.len(), 3);
     assert_eq!(cached.iter().map(|q| q.ink).collect::<Vec<_>>(), [65_536, 65_537, 65_537]);
 }
+
+fn reference_ink_spans(spans: &[Span]) -> Vec<(u32, u32, u32)> {
+    let input: Vec<(u32, u32, u32)> = spans
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| (s.start < s.end && s.color.is_some()).then_some((s.start, s.end, i as u32 + 1)))
+        .collect();
+    if input.is_empty() {
+        return Vec::new();
+    }
+    let mut bounds = Vec::with_capacity(input.len() * 2);
+    for &(a, b, _) in &input {
+        bounds.push(a);
+        bounds.push(b);
+    }
+    bounds.sort_unstable();
+    bounds.dedup();
+    let mut out: Vec<(u32, u32, u32)> = Vec::new();
+    for w in bounds.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if let Some(&(_, _, ink)) = input.iter().rev().find(|&&(sa, sb, _)| sa <= a && b <= sb) {
+            if let Some(last) = out.last_mut().filter(|l| l.1 == a && l.2 == ink) {
+                last.1 = b;
+            } else {
+                out.push((a, b, ink));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn set_ink_spans_matches_reference_on_overlapping_and_unsorted_inputs() {
+    let cases = vec![
+        vec![
+            Span::new(10, 20).color(Color::BLACK),
+            Span::new(0, 15).color(Color::WHITE),
+            Span::new(4, 12).bold(), // no colour: ignored but occupies span ordinal
+            Span::new(5, 12).color(Color::BLACK),
+            Span::new(8, 8).color(Color::WHITE), // empty: ignored
+            Span::new(12, 18).color(Color::WHITE),
+        ],
+        vec![
+            Span::new(0, 30).color(Color::BLACK),
+            Span::new(5, 10).color(Color::WHITE),
+            Span::new(15, 20).color(Color::WHITE),
+            Span::new(0, 30).color(Color::BLACK), // fully shadows earlier spans
+        ],
+        vec![
+            Span::new(20, 25).color(Color::BLACK),
+            Span::new(10, 15).color(Color::WHITE),
+            Span::new(0, 5).color(Color::BLACK),
+        ],
+    ];
+    let mut out = Vec::new();
+    for spans in cases {
+        set_ink_spans(&mut out, &spans);
+        assert_eq!(out, reference_ink_spans(&spans));
+    }
+}
+
+#[test]
+fn set_ink_spans_overlap_path_scales_linearly() {
+    let measure = |n: usize| -> usize {
+        let spans: Vec<Span> = (0..n)
+            .map(|i| {
+                let c = if i % 2 == 0 { Color::BLACK } else { Color::WHITE };
+                Span::new(i * 2, i * 2 + 16).color(c)
+            })
+            .collect();
+        let mut out = Vec::new();
+        let _ = crate::layout::span_map::take_span_scan_steps();
+        set_ink_spans(&mut out, &spans);
+        let steps = crate::layout::span_map::take_span_scan_steps();
+        assert_eq!(out.first().unwrap().0, 0);
+        assert_eq!(out.last().unwrap().1, (n * 2 + 14) as u32);
+        steps
+    };
+
+    let s200 = measure(200);
+    let s400 = measure(400);
+    assert!(
+        s400 <= 400 * 12,
+        "expected linear sweep steps for 400 overlapping ink spans, got {s400} (s200={s200})"
+    );
+    assert!(
+        s400 * 10 <= s200 * 25,
+        "doubling overlapping ink spans should scale ~2x, not ~4x (s200={s200}, s400={s400})"
+    );
+}

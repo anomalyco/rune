@@ -152,7 +152,11 @@ pub use layout::span::TextHighlight;
 #[doc(hidden)]
 pub use layout::span::flatten_spans;
 #[doc(hidden)]
+pub use layout::underline::line_end;
+#[doc(hidden)]
 pub use layout::underline::underline_edges;
+#[doc(hidden)]
+pub use layout::underline::underline_edges_with_end;
 pub use measure::FamiliesGuard;
 pub use measure::TextInk;
 pub use measure::advance;
