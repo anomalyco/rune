@@ -197,6 +197,57 @@ pub(super) struct Built {
     pub source: Source,
 }
 
+/// What [`Renderer::build_windfoil`] makes beside the uber pipeline, from its pipeline layout,
+/// bind group layout and shader. On Windows it runs on a thread of its own.
+#[cfg(target_os = "windows")]
+pub(super) type With<'a> = dyn Fn(&wgpu::PipelineLayout, &wgpu::BindGroupLayout, &dxbc::Shaders) + Sync + 'a;
+#[cfg(not(target_os = "windows"))]
+pub(super) type With<'a> = dyn Fn(&wgpu::PipelineLayout, &wgpu::BindGroupLayout, &dxbc::Shaders) + 'a;
+
+/// `make`'s result, with `other` run too: on Windows on a thread of its own while `make` runs,
+/// elsewhere after it. A DX12 driver compiles each pipeline when it's created, and the first
+/// time a machine sees one that takes hundreds of milliseconds (Iris Xe: 341 ms for the uber
+/// pipeline and 266 ms for the atlas fill's, one after the other, on the thread a window's GPU is
+/// made on, so its first GPU frame waited for both). The thread runs at the caller's priority.
+/// `RUNE_GPU_PIPELINES=serial` makes them one after the other, as before.
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+fn beside<T>(other: impl FnOnce() + Send, make: impl FnOnce() -> T) -> T {
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, GetThreadPriority, SetThreadPriority};
+    static SERIAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    // A slot the thread empties: when it can't start, `other` is still here to run.
+    let other = std::sync::Mutex::new(Some(other));
+    let take = || other.lock().unwrap_or_else(|e| e.into_inner()).take();
+    if *SERIAL.get_or_init(|| crate::env::var("RUNE_GPU_PIPELINES").is_some_and(|v| v == "serial")) {
+        let made = make();
+        if let Some(other) = take() { other(); }
+        return made;
+    }
+    // SAFETY: this thread's pseudo-handle.
+    let priority = unsafe { GetThreadPriority(GetCurrentThread()) };
+    std::thread::scope(|scope| {
+        let thread = std::thread::Builder::new().name("rune-gpu-pipeline".into()).spawn_scoped(scope, || {
+            // SAFETY: this thread's pseudo-handle; a priority another thread of this process has.
+            unsafe { SetThreadPriority(GetCurrentThread(), priority) };
+            if let Some(other) = take() { other(); }
+        });
+        let made = make();
+        match thread.map(std::thread::ScopedJoinHandle::join) {
+            Ok(Err(panic)) => std::panic::resume_unwind(panic),
+            Ok(Ok(())) => {}
+            Err(_) => if let Some(other) = take() { other(); },
+        }
+        made
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn beside<T>(other: impl FnOnce(), make: impl FnOnce() -> T) -> T {
+    let made = make();
+    other();
+    made
+}
+
 impl Renderer {
     /// Which uber shader draws, for diagnostics: `classic`, `windfoil (precompiled)`,
     /// `windfoil (compiled)` or `unavailable` (Windfoil couldn't be built).
@@ -227,11 +278,18 @@ impl Renderer {
         while let Some(effect) = queue.pop() {
             match effect {
                 Effect::Build => {
-                    let next = match Self::build_windfoil(device, cx.format, cx.vertex_entry) {
+                    let outlines = Self::outline_texture(device, outlines::MIN_ROWS);
+                    let fill_pass = |layout: &wgpu::PipelineLayout, bind_layout: &wgpu::BindGroupLayout, shader: &dxbc::Shaders| {
+                        fill::FillPass::new(device, layout, shader, fill::FillBindings { layout: bind_layout, globals: cx.globals, outlines: &outlines, stand_in: cx.stand_in })
+                    };
+                    // The fill pass's pipeline is made while the uber pipeline is (`beside`).
+                    let made = std::sync::Mutex::new(None);
+                    let with = |layout: &wgpu::PipelineLayout, bind_layout: &wgpu::BindGroupLayout, shader: &dxbc::Shaders| {
+                        *made.lock().unwrap_or_else(|e| e.into_inner()) = Some(fill_pass(layout, bind_layout, shader));
+                    };
+                    let next = match Self::build_windfoil(device, cx.format, cx.vertex_entry, &with) {
                         Ok(b) => {
-                            let outlines = Self::outline_texture(device, outlines::MIN_ROWS);
-                            let fill = fill::FillPass::new(device, &b.layout, &b.shader, fill::FillBindings {
-                                layout: &b.bind_layout, globals: cx.globals, outlines: &outlines, stand_in: cx.stand_in });
+                            let fill = made.into_inner().unwrap_or_else(|e| e.into_inner()).unwrap_or_else(|| fill_pass(&b.layout, &b.bind_layout, &b.shader));
                             let event = Event::Built { source: b.source, outlines, fill };
                             built = Some(b);
                             event
@@ -265,14 +323,16 @@ impl Renderer {
     }
 
     /// Windfoil's layouts, shader and pipeline for `format`, from the shipped bytecode where it
-    /// matches, else from WGSL; an error where neither builds.
-    pub(super) fn build_windfoil(device: &wgpu::Device, format: wgpu::TextureFormat, vertex_entry: &'static str) -> Result<Built, String> {
+    /// matches, else from WGSL; an error where neither builds. `with` makes what else draws with
+    /// that shader and layout (the atlas fill pass's pipeline) while the pipeline is made
+    /// ([`beside`]); it runs again for each shader tried.
+    pub(super) fn build_windfoil(device: &wgpu::Device, format: wgpu::TextureFormat, vertex_entry: &'static str, with: &With<'_>) -> Result<Built, String> {
         if vertex_entry != "vs" {
             return Err("GPU springs draw the classic shader".into());
         }
         let bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &windfoil_bind_entries() });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&bind_layout)], immediate_size: 0 });
-        let make_pipeline = |shader: &dxbc::Shaders| Self::pipeline(device, &layout, shader, format, vertex_entry, Blend::SourceOver);
+        let make_pipeline = |shader: &dxbc::Shaders| beside(|| with(&layout, &bind_layout, shader), || Self::pipeline(device, &layout, shader, format, vertex_entry, Blend::SourceOver));
         #[cfg(target_os = "windows")]
         if let Some((shader, pipeline)) = dxbc::uber(device, make_pipeline) {
             return Ok(Built { bind_layout, layout, shader, pipeline, source: Source::Precompiled });
