@@ -2,10 +2,11 @@
 //! own start, and the scheduling role the task holds while it launches.
 //!
 //! `NSApplication.shared` spends most of its time waiting for other processes (the window
-//! server, Launch Services, `cfprefsd`), one after another on the main thread. The questions
-//! that need no `NSApplication` are asked on threads meanwhile: whether there is a window
-//! server session at all, the process's connection to the window server, and the first read
-//! of the app's preferences.
+//! server, Launch Services, `cfprefsd`), one after another on the main thread. What needs no
+//! `NSApplication` is asked on threads meanwhile: whether there is a window server session at
+//! all, and for the process's connection to the window server. (The first read of the app's
+//! preferences is the first thing `NSApplication` does: a thread started here only waits for
+//! the same answer.)
 //!
 //! macOS keeps an app Launch Services started in the role "default" (not known to be in
 //! front) until AppKit has registered it as the front app, some 30,000 µs into
@@ -53,8 +54,6 @@ unsafe extern "C" {
 }
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
-    static kCFPreferencesCurrentApplication: *const c_void;
-    fn CFPreferencesCopyAppValue(key: *const c_void, application: *const c_void) -> *const c_void;
     fn CFRelease(cf: *const c_void);
 }
 
@@ -88,12 +87,7 @@ pub(crate) fn begin(takes_activation: bool) -> Result<Beside, String> {
         interactive();
         let session = window_server_session();
         let _ = found.send(session);
-        if session {
-            // The connection AppKit asks for after it has registered with Launch Services.
-            // SAFETY: no arguments; CoreGraphics makes the connection once, under its own lock.
-            unsafe { CGMainDisplayID() };
-            return;
-        }
+        if session { return; }
         // Without a session AppKit may never come back to the loop that reads the answer.
         std::thread::sleep(Duration::from_secs(2));
         if !TAKEN.load(Ordering::Acquire) {
@@ -104,14 +98,11 @@ pub(crate) fn begin(takes_activation: bool) -> Result<Beside, String> {
     if asked.is_err() {
         return if window_server_session() { Ok(Beside { session: None }) } else { Err(NO_SESSION.into()) };
     }
-    std::thread::Builder::new().name("rune-launch-prefs".into()).spawn(|| {
+    // The connection AppKit asks for once it has registered with Launch Services, 15,000 us in.
+    std::thread::Builder::new().name("rune-launch-display".into()).spawn(|| {
         interactive();
-        let key = objc2_core_foundation::CFString::from_str("AppleLanguages");
-        // SAFETY: a Copy-rule CF function on live strings; a non-null result is released once.
-        unsafe {
-            let value = CFPreferencesCopyAppValue((&*key as *const objc2_core_foundation::CFString).cast(), kCFPreferencesCurrentApplication);
-            if !value.is_null() { CFRelease(value); }
-        }
+        // SAFETY: no arguments; CoreGraphics makes the connection once, under its own lock.
+        unsafe { CGMainDisplayID() };
     }).ok();
     Ok(Beside { session: Some(session) })
 }
