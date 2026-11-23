@@ -83,6 +83,46 @@ impl TitlebarSet {
         let titlebar = self.titlebar.unwrap_or(base);
         self.height.map_or(titlebar, |height| Titlebar { height, ..titlebar })
     }
+
+    /// Whether the window draws another titlebar for this set than it did for `before`, over
+    /// the app's `base`. A view that sets the titlebar the window opened with changes nothing,
+    /// and without `App::titlebar` nothing the view sets applies.
+    #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+    pub(crate) fn changes(self, before: TitlebarSet, base: Option<Titlebar>) -> bool {
+        base.is_some_and(|base| self.over(base) != before.over(base))
+    }
+}
+
+#[cfg(test)]
+mod set_tests {
+    use super::*;
+
+    #[test]
+    fn a_view_that_sets_the_titlebar_the_window_opened_with_changes_nothing() {
+        let base = Titlebar::new(36.0).traffic_lights(14.0, 15.0);
+        let unset = TitlebarSet::default();
+        let same = TitlebarSet { titlebar: Some(base), height: None };
+        assert!(!same.changes(unset, Some(base)));
+        assert!(!TitlebarSet { titlebar: None, height: Some(36.0) }.changes(unset, Some(base)));
+        assert!(!unset.changes(unset, Some(base)));
+    }
+
+    #[test]
+    fn another_height_or_other_traffic_lights_change_it() {
+        let base = Titlebar::new(48.0).traffic_lights(20.0, 25.0);
+        let unset = TitlebarSet::default();
+        assert!(TitlebarSet { titlebar: Some(Titlebar::new(36.0).traffic_lights(14.0, 15.0)), height: None }.changes(unset, Some(base)));
+        assert!(TitlebarSet { titlebar: Some(Titlebar::new(48.0).traffic_lights(14.0, 15.0)), height: None }.changes(unset, Some(base)));
+        assert!(TitlebarSet { titlebar: None, height: Some(52.0) }.changes(unset, Some(base)));
+        // Lights the titlebar leaves to `App::chrome` against lights it places itself.
+        assert!(TitlebarSet { titlebar: Some(Titlebar::new(48.0)), height: None }.changes(unset, Some(base)));
+    }
+
+    #[test]
+    fn a_window_without_a_titlebar_of_its_own_never_changes() {
+        let set = TitlebarSet { titlebar: Some(Titlebar::new(36.0)), height: Some(40.0) };
+        assert!(!set.changes(TitlebarSet::default(), None));
+    }
 }
 
 /// What the window's own controls take of the app's titlebar, in points
