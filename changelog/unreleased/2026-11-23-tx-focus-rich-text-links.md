@@ -1,0 +1,1 @@
+- `Tx::focus`, `Tx::return_focus`, `Tx::focus_when_shown`, and `El::focus_return` now resolve shown rich-text `Link` ids and focus the first link when targeting a text element with links, matching Tab and `Tx::focused`.

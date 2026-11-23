@@ -404,3 +404,223 @@ fn text_input_link_drag_selects_without_opening() {
     tick(&mut rt);
     assert!(rt.state.opened.is_empty(), "drag away and back must not open the link");
 }
+
+#[test]
+fn tx_focus_targets_rich_text_links_by_id_and_text_key() {
+    use rune::row;
+
+    struct State {
+        target: &'static str,
+        ring: bool,
+        use_return: bool,
+        show_late: bool,
+        popup: bool,
+        opened: Vec<String>,
+        seen: Vec<Option<String>>,
+    }
+
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let mut root = col().size(400.0, 300.0).gap(10.0)
+            .child(
+                row().key("go").role("button").label("Go").focusable(true).size(100.0, 30.0)
+                    .on_press_tx(|s: &mut State, tx| {
+                        if s.use_return {
+                            tx.return_focus(s.target, s.ring);
+                        } else {
+                            tx.focus(s.target, s.ring);
+                        }
+                    }),
+            )
+            .child(
+                rich("3 open shifts need cover list", Vec::new()).key("para").w(300.0)
+                    .link(Link::new(0..13, "open-shifts"))
+                    .link(Link::new(19..29, "cover-list"))
+                    .on_link(|s: &mut State, id, _| s.opened.push(id.to_owned())),
+            );
+        if s.show_late {
+            root = root.child(
+                rich("Late details here", Vec::new()).key("late").w(300.0)
+                    .link(Link::new(5..12, "late-link"))
+                    .on_link(|s: &mut State, id, _| s.opened.push(id.to_owned())),
+            );
+        }
+        if s.popup {
+            root = root.child(
+                col().key("popup").size(120.0, 40.0).focus_return("cover-list")
+                    .child(row().key("popup-item").role("button").label("Item").focusable(true).size(100.0, 30.0)),
+            );
+        }
+        root
+    }
+
+    let mut rt = Runtime::new(
+        State {
+            target: "open-shifts",
+            ring: true,
+            use_return: false,
+            show_late: false,
+            popup: false,
+            opened: Vec::new(),
+            seen: Vec::new(),
+        },
+        view,
+        (400.0, 300.0),
+        Env::new(true, 1.0),
+    );
+    rt.on_key = Some(|s, _, tx| {
+        s.seen.push(tx.focused().map(str::to_owned));
+        false
+    });
+    rt.set_tab_visits_controls(true);
+    rt.frame(0.0);
+
+    let send = |rt: &mut Runtime<State>, key: Key| {
+        rt.key(KeyEvent { key, mods: Mods::default() });
+        rt.frame(1.0 / 60.0);
+    };
+    let focused_el = |rt: &Runtime<State>| {
+        rt.elements().into_iter().find(|e| e.focused)
+    };
+    let press_go = |rt: &mut Runtime<State>| {
+        let (x, y) = rt.find("go").unwrap();
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+        rt.frame(1.0 / 60.0);
+    };
+
+    // 1. Tx::focus("<link id>", true) focuses the link with its focus ring and activates on Enter.
+    press_go(&mut rt);
+    let el = focused_el(&rt).expect("open-shifts should be focused");
+    assert_eq!(el.key.as_deref(), Some("open-shifts"));
+    assert!(el.focus_visible, "ring=true shows focus_visible");
+    send(&mut rt, Key::Text("x".into()));
+    assert_eq!(rt.state.seen.last(), Some(&Some("open-shifts".to_owned())));
+    send(&mut rt, Key::Enter);
+    assert_eq!(rt.state.opened, ["open-shifts"]);
+
+    // Tab advances from that link to the next link in the same text node.
+    send(&mut rt, Key::Tab);
+    assert_eq!(focused_el(&rt).and_then(|e| e.key).as_deref(), Some("cover-list"));
+
+    // 2. Tx::focus("<link id>", false) focuses another link in the same text without a ring.
+    rt.update(|_, tx| tx.focus("open-shifts", false));
+    rt.frame(1.0 / 60.0);
+    let el = focused_el(&rt).expect("open-shifts should be focused");
+    assert_eq!(el.key.as_deref(), Some("open-shifts"));
+    assert!(!el.focus_visible, "ring=false hides focus_visible");
+    send(&mut rt, Key::Enter);
+    assert_eq!(rt.state.opened, ["open-shifts", "open-shifts"]);
+
+    // 3. Tx::focus("<second link id>", true) moves between links inside the same text node.
+    rt.update(|_, tx| tx.focus("cover-list", true));
+    rt.frame(1.0 / 60.0);
+    let el = focused_el(&rt).expect("cover-list should be focused");
+    assert_eq!(el.key.as_deref(), Some("cover-list"));
+    assert!(el.focus_visible);
+    send(&mut rt, Key::Enter);
+    assert_eq!(rt.state.opened, ["open-shifts", "open-shifts", "cover-list"]);
+
+    // 4. Tx::return_focus("<link id>", true) focuses the link.
+    rt.state.target = "cover-list";
+    rt.state.ring = true;
+    rt.state.use_return = true;
+    press_go(&mut rt);
+    let el = focused_el(&rt).expect("return_focus should focus cover-list");
+    assert_eq!(el.key.as_deref(), Some("cover-list"));
+    assert!(el.focus_visible);
+    send(&mut rt, Key::Text("x".into()));
+    assert_eq!(rt.state.seen.last(), Some(&Some("cover-list".to_owned())));
+    send(&mut rt, Key::Enter);
+    assert_eq!(rt.state.opened, ["open-shifts", "open-shifts", "cover-list", "cover-list"]);
+
+    // 5. Tx::focus("<text key>", true) focuses the text node's first link rather than no link.
+    rt.state.target = "para";
+    rt.state.use_return = false;
+    press_go(&mut rt);
+    let el = focused_el(&rt).expect("focusing text key should focus its first link");
+    assert_eq!(el.key.as_deref(), Some("open-shifts"));
+    assert!(el.focus_visible);
+    send(&mut rt, Key::Text("x".into()));
+    assert_eq!(rt.state.seen.last(), Some(&Some("open-shifts".to_owned())));
+    send(&mut rt, Key::Enter);
+    assert_eq!(rt.state.opened, ["open-shifts", "open-shifts", "cover-list", "cover-list", "open-shifts"]);
+
+    // 6. Tx::focus_when_shown("<link id>", true) waits until the text mounts, then focuses the link.
+    rt.update(|_, tx| tx.focus_when_shown("late-link", true));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(focused_el(&rt).and_then(|e| e.key).as_deref(), Some("open-shifts"));
+    rt.update(|s, _| s.show_late = true);
+    rt.frame(1.0 / 60.0);
+    let el = focused_el(&rt).expect("focus_when_shown should focus late-link once shown");
+    assert_eq!(el.key.as_deref(), Some("late-link"));
+    assert!(el.focus_visible);
+    send(&mut rt, Key::Enter);
+    assert_eq!(rt.state.opened.last().map(String::as_str), Some("late-link"));
+
+    // 7. El::focus_return("<link id>") returns focus to the link when the popup closes.
+    rt.update(|s, tx| {
+        s.popup = true;
+        tx.focus("popup-item", true);
+    });
+    rt.frame(1.0 / 60.0);
+    assert_eq!(focused_el(&rt).and_then(|e| e.key).as_deref(), Some("popup-item"));
+    rt.update(|s, _| s.popup = false);
+    rt.frame(1.0 / 60.0);
+    let el = focused_el(&rt).expect("focus_return should restore cover-list");
+    assert_eq!(el.key.as_deref(), Some("cover-list"));
+    send(&mut rt, Key::Enter);
+    assert_eq!(rt.state.opened.last().map(String::as_str), Some("cover-list"));
+}
+
+#[test]
+fn tx_focus_ignores_mark_link_inside_text_input() {
+    use rune::row;
+
+    struct Form {
+        edit: TextEdit,
+        opened: Vec<String>,
+        seen: Vec<Option<String>>,
+    }
+
+    fn view(s: &Form, _: &mut Cx<Form>) -> El {
+        let style = TextStyle::new(14.0, 400.0).lh(20.0);
+        col().size(400.0, 150.0).gap(10.0)
+            .child(row().key("btn").role("button").label("Btn").focusable(true).size(100.0, 30.0))
+            .child(
+                text_input(&s.edit, style).key("field").label("Field").w_full()
+                    .on_edit(|s: &mut Form| &mut s.edit)
+                    .on_link(|s: &mut Form, id, _| s.opened.push(id.to_owned())),
+            )
+    }
+
+    let link = MarkRange::new(8..12, Mark::Link("https://example.com".into()));
+    let edit = TextEdit::from_parts("See the docs here", vec![link], vec![]);
+    let mut rt = Runtime::new(
+        Form { edit, opened: Vec::new(), seen: Vec::new() },
+        view,
+        (400.0, 150.0),
+        Env::new(true, 1.0),
+    );
+    rt.on_key = Some(|s, _, tx| {
+        s.seen.push(tx.focused().map(str::to_owned));
+        false
+    });
+    rt.frame(0.0);
+
+    // Focusing the button, then asking for the Mark::Link url leaves focus on the button.
+    rt.update(|_, tx| tx.focus("btn", true));
+    rt.frame(1.0 / 60.0);
+    rt.update(|_, tx| tx.focus("https://example.com", true));
+    rt.frame(1.0 / 60.0);
+    assert!(!rt.state.edit.focused, "Mark::Link inside a text_input is not a link focus target");
+
+    // Focusing the text_input by its own key focuses the field (not a link inside it).
+    rt.update(|_, tx| tx.focus("field", true));
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.edit.focused);
+    rt.key(KeyEvent { key: Key::Text("!".into()), mods: Mods::default() });
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.opened.is_empty(), "typing in the focused field must not fire on_link");
+    assert!(rt.state.edit.text.ends_with('!'), "field received typed text: {}", rt.state.edit.text);
+}
