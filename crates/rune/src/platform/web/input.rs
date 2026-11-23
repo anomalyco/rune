@@ -344,12 +344,12 @@ impl Running {
                 return true;
             }
             Some(kind @ ("edit" | "selection" | "preedit")) => {
-                self.app.web_edit(event);
+                self.app.web_edit(event, &mut self.input.mirror);
                 // A typed edit is in the model and the page's field: the display's next frame
                 // draws it, one frame for every key and press that came before it.
                 if kind == "edit" && self.sync_live_edit() { return true; }
             }
-            Some("sync") => self.input.mirror.key.clear(), // Composition's final sync was deferred by the DOM.
+            Some("sync") => self.input.mirror.invalidate(), // Composition's final sync was deferred by the DOM.
             Some("paste") => {
                 let mut content = crate::ClipboardContent::new(event["text"].as_str().unwrap_or_default());
                 if let Some(html) = event["html"].as_str().filter(|html| !html.is_empty()) { content = content.with_html(html); }

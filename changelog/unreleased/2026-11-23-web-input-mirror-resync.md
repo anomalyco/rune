@@ -1,0 +1,1 @@
+- Web: a text field whose `on_input_change` clears or reverts the typed text now resyncs the hidden DOM textarea after each DOM edit, so subsequent keystrokes report only the new character instead of repeating everything typed so far.

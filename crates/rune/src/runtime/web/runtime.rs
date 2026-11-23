@@ -12,6 +12,9 @@ pub(crate) struct Mirror {
     pub anchor: u32,
     pub focus: u32,
     pub secure: bool,
+    /// True after the browser mutates the hidden textarea outside a Rust sync (a DOM edit or a
+    /// deferred composition sync), so the next diff resyncs even if the model matches the cache.
+    stale: bool,
 }
 
 /// Read at most 512 UTF-16 units on each side, without scanning the document prefix.
@@ -67,11 +70,14 @@ fn whole_lines<'a>(edit: &'a crate::TextEdit, (start, text, anchor, focus): (usi
 }
 
 impl Mirror {
+    pub(crate) fn invalidate(&mut self) { self.stale = true; }
+
     fn update(&mut self, key: &str, edit: Option<&crate::TextEdit>) -> bool {
         let secure = edit.is_some_and(|e| e.is_secure());
         let (base, text, anchor, focus) = edit.filter(|_| !secure).map(|e| whole_lines(e, context_window(e))).unwrap_or((0, "", 0, 0));
-        if self.key == key && self.base == base && self.text == text && self.anchor == anchor
+        if !self.stale && self.key == key && self.base == base && self.text == text && self.anchor == anchor
             && self.focus == focus && self.secure == secure { return false; }
+        self.stale = false;
         self.key.clear(); self.key.push_str(key);
         self.text.clear(); self.text.push_str(text);
         self.base = base; self.anchor = anchor; self.focus = focus; self.secure = secure;
@@ -187,7 +193,10 @@ impl RuntimeCore {
         }
     }
 
-    pub(crate) fn web_edit(&mut self, app: &mut dyn AppDriver, event: &serde_json::Value) {
+    pub(crate) fn web_edit(&mut self, app: &mut dyn AppDriver, event: &serde_json::Value, mirror: &mut Mirror) {
+        // The browser just mutated its hidden textarea, so the cached mirror no longer matches
+        // the DOM even if the edit is rejected or `on_input_change` reverts or clears the text.
+        if event["kind"] == "edit" { mirror.invalidate(); }
         let Some(key) = event["key"].as_str() else { return };
         if self.kbd.focus.path() != Some(key) || self.has_secure_focus() { return; }
         let number = |key: &str| event[key].as_u64().and_then(|n| usize::try_from(n).ok());

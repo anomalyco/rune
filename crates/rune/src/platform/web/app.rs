@@ -175,8 +175,8 @@ impl dyn WebApp + '_ {
         self.driver(|rt, app| rt.web_key(app, event))
     }
 
-    pub(super) fn web_edit(&mut self, event: &serde_json::Value) {
-        self.driver(|rt, app| rt.web_edit(app, event));
+    pub(super) fn web_edit(&mut self, event: &serde_json::Value, mirror: &mut crate::runtime::web_runtime::Mirror) {
+        self.driver(|rt, app| rt.web_edit(app, event, mirror));
     }
 }
 

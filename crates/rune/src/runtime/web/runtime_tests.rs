@@ -12,12 +12,13 @@ fn utf16_replacement_preserves_callbacks_and_rejects_stale_context() {
     rt.frame(0.0);
     let key = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("input")).unwrap().path.clone();
     rt.set_focus(Some(key.clone()), true);
+    let mut mirror = Mirror::default();
     let event = json!({"kind":"edit", "key":key, "base":0, "expected":"a🦀c",
         "start":1, "end":3, "text":"é", "anchor":2, "focus":2});
-    rt.web_edit(&event);
+    rt.web_edit(&event, &mut mirror);
     rt.frame(0.0);
     assert_eq!((&*rt.state.0.text, rt.state.1, rt.state.0.focus), ("aéc", 1, 3));
-    rt.web_edit(&event);
+    rt.web_edit(&event, &mut mirror);
     rt.frame(0.0);
     assert_eq!((&*rt.state.0.text, rt.state.1), ("aéc", 1));
     assert_eq!(byte_at("a🦀c", 2), None);
@@ -81,24 +82,25 @@ fn recomposition_replaces_its_range_without_changing_committed_text() {
     rt.frame(0.0);
     let key = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("input")).unwrap().path.clone();
     rt.set_focus(Some(key.clone()), true);
+    let mut mirror = Mirror::default();
     let mut event = json!({"kind":"preedit", "key":key, "base":5, "expected":"hello ",
         "start":0, "end":6, "text":"hello", "anchor":5, "focus":5});
-    rt.web_edit(&event);
+    rt.web_edit(&event, &mut mirror);
     assert_eq!(rt.state.text, "🦀 hello ");
     assert_eq!(rt.state.display().0, "🦀 hello", "preedit replaces the word, not appends");
     event["text"] = json!("help");
     event["anchor"] = json!(4); event["focus"] = json!(4);
-    rt.web_edit(&event);
+    rt.web_edit(&event, &mut mirror);
     assert_eq!(rt.state.display().0, "🦀 help");
     event["kind"] = json!("edit");
-    rt.web_edit(&event);
+    rt.web_edit(&event, &mut mirror);
     assert_eq!(rt.state.text, "🦀 help");
     assert!(rt.state.preedit().is_none());
     assert_eq!(rt.state.focus, rt.state.text.len());
-    rt.web_edit(&event);
+    rt.web_edit(&event, &mut mirror);
     assert_eq!(rt.state.text, "🦀 help", "stale context rejected");
     event["base"] = json!(1);
-    rt.web_edit(&event);
+    rt.web_edit(&event, &mut mirror);
     assert_eq!(rt.state.text, "🦀 help", "base must be a UTF-8 boundary");
 }
 
@@ -111,15 +113,16 @@ fn replacement_offsets_are_local_utf16_and_cannot_escape_the_snapshot() {
     rt.frame(0.0);
     let key = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("input")).unwrap().path.clone();
     rt.set_focus(Some(key.clone()), true);
+    let mut mirror = Mirror::default();
     let mut event = json!({"kind":"edit", "key":key, "base":2, "expected":"🦀 ",
         "start":1, "end":2, "text":"x", "anchor":1, "focus":1});
-    rt.web_edit(&event);
+    rt.web_edit(&event, &mut mirror);
     assert_eq!(rt.state.text, "é🦀 tail", "mid-surrogate offsets rejected");
     event["start"] = json!(0); event["end"] = json!(4);
-    rt.web_edit(&event);
+    rt.web_edit(&event, &mut mirror);
     assert_eq!(rt.state.text, "é🦀 tail", "replacement must stay inside expected context");
     event["end"] = json!(2);
-    rt.web_edit(&event);
+    rt.web_edit(&event, &mut mirror);
     assert_eq!(rt.state.text, "éx tail");
     assert_eq!(rt.state.focus, 3);
 }
@@ -178,4 +181,68 @@ fn web_key_keeps_cmd_space_as_text_and_normalizes_non_ascii_chords() {
         (crate::Key::Text(" ".into()), Some(crate::PhysicalKeyCode::Space)),
         (crate::Key::Command('v'), Some(crate::PhysicalKeyCode::KeyV)),
     ]);
+}
+
+#[test]
+fn clearing_text_in_on_input_change_resyncs_mirror_after_each_dom_edit() {
+    #[derive(Default)]
+    struct S { edit: crate::TextEdit, sent: Vec<String>, copy: bool, blur: bool }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        crate::text_input(&s.edit, crate::tok::type_::BODY).key("input").label("Input")
+            .on_edit(|s: &mut S| &mut s.edit)
+            .on_input_change(|s: &mut S, tx| {
+                let typed = std::mem::take(&mut s.edit.text);
+                s.edit.clear();
+                s.sent.push(typed);
+                if s.copy { tx.copy("copied"); }
+                if s.blur { tx.blur(); }
+            })
+    }
+    let mut rt = Runtime::new(S::default(), view, (300.0, 100.0), Env::default());
+    rt.frame(0.0);
+    let key = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("input")).unwrap().path.clone();
+    rt.set_focus(Some(key.clone()), true);
+    rt.frame(0.0);
+
+    let mut mirror = Mirror::default();
+    assert!(rt.web_context(&mut mirror));
+    assert_eq!((mirror.key.as_str(), mirror.text.as_str()), (key.as_str(), ""));
+    assert!(!rt.web_context(&mut mirror), "unchanged idle frame skips DOM sync");
+
+    // Two consecutive edits where on_input_change clears the field: fast-path web_edit_context
+    // must resync the hidden DOM textarea back to empty after each edit.
+    for ch in ["l", "s"] {
+        let event = json!({"kind":"edit", "key":key, "base":0, "expected":"",
+            "start":0, "end":0, "text":ch, "anchor":1, "focus":1});
+        rt.web_edit(&event, &mut mirror);
+        assert_eq!(rt.web_edit_context(&mut mirror), Some(true), "mirror must resync after clearing '{ch}'");
+        assert_eq!((mirror.key.as_str(), mirror.text.as_str(), mirror.anchor, mirror.focus), (key.as_str(), "", 0, 0));
+        rt.frame(0.0);
+        assert!(!rt.web_context(&mut mirror), "subsequent idle frame skips DOM sync");
+    }
+    assert_eq!(rt.state.sent, ["l", "s"]);
+    assert!(rt.state.edit.text.is_empty());
+
+    // Full-frame fallback path (web_edit_context returns None when tx has a frame-bound effect):
+    // web_context after frame() must still resync the DOM textarea back to empty.
+    rt.state.copy = true;
+    let event = json!({"kind":"edit", "key":key, "base":0, "expected":"",
+        "start":0, "end":0, "text":"x", "anchor":1, "focus":1});
+    rt.web_edit(&event, &mut mirror);
+    assert_eq!(rt.web_edit_context(&mut mirror), None);
+    rt.frame(0.0);
+    assert!(rt.web_context(&mut mirror), "fallback web_context must resync after clearing");
+    assert_eq!((mirror.key.as_str(), mirror.text.as_str()), (key.as_str(), ""));
+    assert!(!rt.web_context(&mut mirror));
+
+    // Clearing and blurring in on_input_change must still resync mirror to empty key.
+    rt.state.copy = false;
+    rt.state.blur = true;
+    let event = json!({"kind":"edit", "key":key, "base":0, "expected":"",
+        "start":0, "end":0, "text":"q", "anchor":1, "focus":1});
+    rt.web_edit(&event, &mut mirror);
+    assert_eq!(rt.web_edit_context(&mut mirror), None);
+    rt.frame(0.0);
+    assert!(rt.web_context(&mut mirror), "blur after clearing must resync to empty key");
+    assert_eq!((mirror.key.as_str(), mirror.text.as_str()), ("", ""));
 }
