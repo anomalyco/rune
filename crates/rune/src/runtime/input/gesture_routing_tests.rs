@@ -259,3 +259,128 @@ fn a_third_gesture_scrolling_before_the_frame_keeps_both_queued_owners() {
     let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("list")).unwrap().id;
     assert_eq!(rt.scroll.scrolls[&id].offset, 10.0, "only the third gesture's own delta scrolled");
 }
+
+/// An ancestor above a scroll view hears `on_wheel` (bubbling past scroll views as DOM `wheel`
+/// does), and a modifier change mid-run breaks the unphased wheel gesture immediately.
+#[test]
+fn wheel_routing_ancestor_on_wheel_hears_deltas_past_scroll_view_and_on_modifier_change() {
+    #[derive(Default)]
+    struct S { zoom: u32, plain: u32 }
+    fn view(_: &S, _: &mut crate::Cx<S>) -> El {
+        crate::col().w_full().h_full()
+            .on_wheel(|s: &mut S, e: crate::WheelEvent, _| {
+                if e.mods.ctrl && e.mods.shift { s.zoom += 1; true } else { s.plain += 1; false }
+            })
+            .child(crate::col().key("vp").size(300.0, 200.0).scroll(crate::ScrollSpec { stick_bottom: false })
+                .child(el().w_full().h(4000.0)))
+    }
+    let mut rt = Runtime::new(S::default(), view, (400.0, 300.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let vp = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("vp")).unwrap().id;
+    let ctrl_shift = Mods { ctrl: true, cmd: true, shift: true, ..Mods::default() };
+
+    // Plain wheel bubbles to ancestor (returns false) and scrolls the viewport.
+    rt.wheel_event(crate::WheelEvent::new(0.0, -40.0).at(150.0, 100.0));
+    rt.frame(0.016);
+    assert_eq!((rt.state.plain, rt.state.zoom), (1, 0));
+    assert_eq!(rt.scroll.scrolls[&vp].offset, 40.0);
+
+    // Immediately (within WHEEL_IDLE 0.1 s), Ctrl+Shift+wheel breaks the scroll gesture and
+    // reaches the ancestor above the scroll view without scrolling.
+    rt.wheel_event(crate::WheelEvent::new(0.0, -120.0).at(150.0, 100.0).mods(ctrl_shift));
+    rt.frame(0.016);
+    assert_eq!(rt.state.zoom, 1, "ancestor above scroll view hears Ctrl+Shift+wheel immediately");
+    assert_eq!(rt.scroll.scrolls[&vp].offset, 40.0, "viewport did not scroll on claimed Ctrl+Shift+wheel");
+
+    // Releasing modifiers immediately starts a new gesture that scrolls again.
+    rt.wheel_event(crate::WheelEvent::new(0.0, -30.0).at(150.0, 100.0));
+    rt.frame(0.016);
+    assert_eq!(rt.scroll.scrolls[&vp].offset, 70.0, "plain wheel right after scrolls again");
+}
+
+/// When a handler holding a gesture declines a later delta (returns false), the delta is not
+/// dropped: it bubbles to outer `on_wheel` ancestors and, if none take it, scrolls as usual.
+#[test]
+fn wheel_routing_declined_delta_from_owning_handler_bubbles_and_scrolls() {
+    #[derive(Default)]
+    struct S { inner_takes: bool, outer_takes: bool, log: Vec<&'static str> }
+    fn view(_: &S, _: &mut crate::Cx<S>) -> El {
+        crate::col().w_full().h_full()
+            .on_wheel(|s: &mut S, _, _| { s.log.push("outer"); s.outer_takes })
+            .child(crate::col().key("list").size(300.0, 200.0).scroll(crate::ScrollSpec { stick_bottom: false })
+                .child(el().w_full().h(2000.0)
+                    .child(el().key("inner").size(200.0, 100.0)
+                        .on_wheel(|s: &mut S, _, _| { s.log.push("inner"); s.inner_takes }))))
+    }
+    let mut rt = Runtime::new(S { inner_takes: true, outer_takes: true, log: Vec::new() }, view, (300.0, 200.0), Env::default());
+    rt.frame(0.0);
+    let list = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("list")).unwrap().id;
+
+    // Tick 1: inner claims the gesture.
+    rt.wheel_event(crate::WheelEvent::new(0.0, -20.0).at(50.0, 50.0));
+    rt.frame(0.016);
+    assert_eq!(rt.state.log, ["inner"]);
+    assert_eq!(rt.scroll.scrolls[&list].offset, 0.0);
+
+    // Tick 2 (same gesture): inner declines -> bubbles to outer, which claims it.
+    rt.state.inner_takes = false;
+    rt.wheel_event(crate::WheelEvent::new(0.0, -20.0).at(50.0, 50.0));
+    rt.frame(0.016);
+    assert_eq!(rt.state.log, ["inner", "inner", "outer"]);
+    assert_eq!(rt.scroll.scrolls[&list].offset, 0.0);
+
+    // Tick 3 (same gesture): outer declines -> falls through to scrolling instead of dropping.
+    rt.state.outer_takes = false;
+    rt.wheel_event(crate::WheelEvent::new(0.0, -25.0).at(50.0, 50.0));
+    rt.frame(0.016);
+    assert_eq!(rt.state.log, ["inner", "inner", "outer", "outer"]);
+    assert_eq!(rt.scroll.scrolls[&list].offset, 25.0, "declined delta scrolls instead of being dropped");
+}
+
+/// A phased vertical trackpad gesture stays latched to the vertical viewport it began on even
+/// when the pointer moves across sibling columns (and through its momentum), as Chromium latches
+/// phased scroll gestures without applying mouse-wheel slop.
+#[test]
+fn wheel_routing_phased_vertical_gesture_latches_across_columns_and_momentum() {
+    fn tall(key: &str) -> El {
+        crate::col().key(key.to_owned()).size(400.0, 300.0).scroll(crate::ScrollSpec { stick_bottom: false })
+            .child(el().w_full().h(4000.0))
+    }
+    fn strip(_: &(), _: &mut crate::Cx<()>) -> El {
+        crate::row().key("strip").size(800.0, 300.0).scroll_x().child(
+            crate::row().w(1200.0).h_full().child(tall("c0")).child(tall("c1")).child(tall("c2"))
+        )
+    }
+    let mut rt = Runtime::new((), strip, (800.0, 300.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let id = |k: &str| rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some(k)).unwrap().id;
+    let (c0, c1, strip_id) = (id("c0"), id("c1"), id("strip"));
+
+    let phases = [crate::GesturePhase::Began, crate::GesturePhase::Moved, crate::GesturePhase::Moved, crate::GesturePhase::Ended];
+    for (x, phase) in [300.0, 390.0, 450.0, 500.0].into_iter().zip(phases) {
+        rt.wheel_event(crate::WheelEvent::new(0.0, -40.0).at(x, 150.0).phase(phase).precise(true));
+        rt.frame(0.016);
+    }
+    assert_eq!((rt.scroll.scrolls[&c0].offset, rt.scroll.scrolls[&c1].offset), (160.0, 0.0), "whole phased gesture stays on c0");
+
+    // Momentum immediately following Ended stays latched to c0 even over c1.
+    rt.wheel_event(crate::WheelEvent::new(0.0, -20.0).at(550.0, 150.0).phase(crate::GesturePhase::Began).precise(true));
+    rt.wheel_event(crate::WheelEvent::new(0.0, 0.0).at(550.0, 150.0).phase(crate::GesturePhase::Ended).precise(true));
+    rt.frame(0.016);
+    assert_eq!((rt.scroll.scrolls[&c0].offset, rt.scroll.scrolls[&c1].offset), (180.0, 0.0), "momentum stays on c0");
+
+    // A Shift + vertical mouse wheel in Runtime::wheel_event turns horizontal and scrolls strip.
+    let shift = Mods { shift: true, ..Mods::default() };
+    rt.wheel_event(crate::WheelEvent::new(0.0, -120.0).at(600.0, 150.0).mods(shift).precise(false));
+    rt.frame(0.016);
+    assert_eq!((rt.scroll.scrolls[&strip_id].x.offset, rt.scroll.scrolls[&c1].offset), (120.0, 0.0), "Shift + mouse wheel scrolls strip sideways");
+
+    // A second Shift + wheel tick within WHEEL_IDLE continues horizontal scrolling; releasing
+    // Shift immediately scrolls c1 vertically.
+    rt.wheel_event(crate::WheelEvent::new(0.0, -60.0).at(600.0, 150.0).mods(shift).precise(false));
+    rt.frame(0.016);
+    assert_eq!(rt.scroll.scrolls[&strip_id].x.offset, 180.0);
+    rt.wheel_event(crate::WheelEvent::new(0.0, -50.0).at(600.0, 150.0).precise(false));
+    rt.frame(0.016);
+    assert_eq!((rt.scroll.scrolls[&strip_id].x.offset, rt.scroll.scrolls[&c1].offset), (180.0, 50.0), "plain wheel scrolls c1");
+}

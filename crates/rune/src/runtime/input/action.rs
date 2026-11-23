@@ -46,7 +46,7 @@ pub(in crate::runtime) enum Action {
     /// A wheel delta at window point (x, y) for the `on_wheel` handlers at the pointer,
     /// innermost first, with the gesture's own axis policy: whether the platform reported its
     /// phases (`runtime/input/gesture.rs`).
-    Wheel { gesture: crate::machine::Attempt, chain: Vec<String>, ev: crate::WheelEvent, phased: bool },
+    Wheel { gesture: crate::machine::Attempt, chain: Option<Vec<String>>, ev: crate::WheelEvent, phased: bool },
     Gesture(Vec<String>, gesture_dispatch::Gesture),
     Ime(Ime),
     /// The window went inactive: an open composition becomes text (`Runtime::finish_composition`).
@@ -167,7 +167,8 @@ pub(in crate::runtime) fn action_path(action: &Action) -> Option<&str> {
         Action::PointerMove(path, _) | Action::DrawnLayout(path, ..) | Action::Layout(path, _) | Action::Hover(path) | Action::HoverChange(path, _) | Action::SelectionChange(path, _) | Action::Press(path, ..) | Action::DoublePress(path) | Action::MiddlePress(path)
         | Action::Link(path, ..) | Action::LinkSecondary(path, ..) | Action::SecondaryPress(path, _) | Action::Drag(path, ..) | Action::DragRepeat(path, ..) | Action::DragStart(path)
         | Action::DragEnd(path, _) | Action::Visible(path, _) => Some(path),
-        Action::Wheel { chain, .. } | Action::Gesture(chain, _) => chain.first().map(String::as_str),
+        Action::Wheel { chain, .. } => chain.as_deref().and_then(|c| c.first()).map(String::as_str),
+        Action::Gesture(chain, _) => chain.first().map(String::as_str),
         _ => None,
     }
 }

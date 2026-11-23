@@ -187,7 +187,7 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
     };
 
     let clean = |v: f32| if v == 0.0 { 0.0 } else { v };
-    let (dx, dy) = if mods.shift && raw_dx == 0.0 {
+    let (dx, dy) = if mods.shift && !mods.ctrl && raw_dx == 0.0 {
         (clean(raw_dy), 0.0)
     } else {
         (clean(raw_dx), clean(raw_dy))

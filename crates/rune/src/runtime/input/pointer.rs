@@ -660,16 +660,17 @@ impl RuntimeCore {
     /// negative deltaY). Applied 1:1: the platform supplies its own momentum phases. A run of
     /// deltas keeps to the viewport it began on (`WheelLock::vertical_run`), even at its end.
     pub fn wheel(&mut self, x: f32, y: f32, dy: f32) {
-        self.wheel_from(x, y, dy, crate::runtime::gesture_dispatch::WheelStart::Unknown);
+        let phased = self.scroll.wheel_phased();
+        self.wheel_from(x, y, dy, crate::Mods::default(), phased, crate::runtime::gesture_dispatch::WheelStart::Unknown);
     }
 
     /// [`Self::wheel`], with where its chain starts when the caller already found it.
-    pub(in crate::runtime) fn wheel_from(&mut self, x: f32, y: f32, dy: f32, start: crate::runtime::gesture_dispatch::WheelStart) {
+    pub(in crate::runtime) fn wheel_from(&mut self, x: f32, y: f32, dy: f32, mods: crate::Mods, phased: bool, start: crate::runtime::gesture_dispatch::WheelStart) {
         self.release_hover_hold();
         self.drop_scroll_holds();
         self.dismiss_help();
         let now = self.now_clock();
-        let Some((id, held)) = self.wheel_run(now, x, y, dy, start) else { return };
+        let Some((id, held)) = self.wheel_run(now, x, y, dy, mods, phased, start) else { return };
         let stick = self.tree.node_index.get(&id).and_then(|&i| self.tree.nodes[i].scroll).is_some_and(|s| s.stick_bottom);
         let Some(st) = self.scroll.scrolls.get_mut(&id) else { return };
         let before = st.offset;
@@ -679,14 +680,14 @@ impl RuntimeCore {
         log_event!(self, "wheel {dy:.1}");
         let moved = st.offset != before;
         if moved { self.pointer.scroll_cancels_press(&self.tree.nodes, id); }
-        self.scroll.ran_wheel_vertical(id, now, x, y, dy, moved, held);
+        self.scroll.ran_wheel_vertical(id, now, x, y, dy, mods, phased, moved, held);
     }
 
     /// The vertical viewport a delta `dy` at (x, y) at `now` scrolls, and whether it continues the
     /// run (`WheelLock::vertical_run`) rather than starting one (`Self::wheel_target`). None ends
     /// the run.
-    fn wheel_run(&mut self, now: f64, x: f32, y: f32, dy: f32, start: crate::runtime::gesture_dispatch::WheelStart) -> Option<(NodeId, bool)> {
-        let held = self.scroll.wheel_vertical_run(now, x, y, dy).filter(|id| {
+    fn wheel_run(&mut self, now: f64, x: f32, y: f32, dy: f32, mods: crate::Mods, phased: bool, start: crate::runtime::gesture_dispatch::WheelStart) -> Option<(NodeId, bool)> {
+        let held = self.scroll.wheel_vertical_run(now, x, y, dy, mods, phased).filter(|id| {
             self.tree.node_index.get(id).is_some_and(|&i| self.is_scroll_viewport(i, false))
         });
         let picked = held.map(|id| (id, true)).or_else(|| self.wheel_target(x, y, dy, start).map(|id| (id, false)));
@@ -703,16 +704,16 @@ impl RuntimeCore {
     /// eases to where they send it as Chromium's does (`runtime/scroll/wheel.rs`), a notch that
     /// comes while it moves sending it on from where it is. A run of notches keeps to the viewport
     /// it began on, as `Self::wheel`'s deltas do. With reduced motion, it jumps.
-    pub(in crate::runtime) fn wheel_notch(&mut self, x: f32, y: f32, dy: f32, start: crate::runtime::gesture_dispatch::WheelStart) {
+    pub(in crate::runtime) fn wheel_notch(&mut self, x: f32, y: f32, dy: f32, mods: crate::Mods, phased: bool, start: crate::runtime::gesture_dispatch::WheelStart) {
         if !self.wheel_glides() {
-            self.wheel_from(x, y, dy, start);
+            self.wheel_from(x, y, dy, mods, phased, start);
             return;
         }
         self.release_hover_hold();
         self.drop_scroll_holds();
         self.dismiss_help();
         let now = self.now_clock();
-        let Some((id, held)) = self.wheel_run(now, x, y, dy, start) else { return };
+        let Some((id, held)) = self.wheel_run(now, x, y, dy, mods, phased, start) else { return };
         // The ease's time follows the distance in device pixels, as Chromium measures it.
         let scale = f64::from(self.env.scale * self.zoom());
         let stick = self.tree.node_index.get(&id).and_then(|&i| self.tree.nodes[i].scroll).is_some_and(|s| s.stick_bottom);
@@ -733,7 +734,7 @@ impl RuntimeCore {
             // Chromium's does, rather than finishing the ease the notch before started.
             st.land(stick);
         }
-        self.scroll.ran_wheel_vertical(id, now, x, y, dy, moved, held);
+        self.scroll.ran_wheel_vertical(id, now, x, y, dy, mods, phased, moved, held);
     }
 
     /// Releases a scroll with `velocity` (points per second, positive moves content down);
