@@ -185,6 +185,32 @@ impl AnimationStore {
         self.index.get(&(node.0, prop.id.0)).is_some_and(|&t| self.t_slot[t as usize] != NONE)
     }
 
+    /// True when lane `lane` of `prop` on `node` is currently animating (running, stacked or
+    /// waiting on a delayed start). Out-of-range lanes return `false`.
+    pub fn is_lane_animating<T>(&self, node: NodeId, prop: Prop<T>, lane: usize) -> bool {
+        let Some(&t) = self.index.get(&(node.0, prop.id.0)) else { return false };
+        let t = t as usize;
+        if self.t_slot[t] == NONE || lane >= self.t_n[t] as usize {
+            return false;
+        }
+        let l = self.t_lane0[t] as usize + lane;
+        if self.l_pending[l] != NONE {
+            return true;
+        }
+        let now = self.time_of(t);
+        if self.l_layer[l].kind != Kind::Rest && self.l_layer[l].end > now {
+            return true;
+        }
+        let mut m = self.l_more[l];
+        while m != NONE {
+            if self.extra[m as usize].layer.end > now {
+                return true;
+            }
+            m = self.extra[m as usize].next;
+        }
+        false
+    }
+
     /// True when any property track on `node` is currently active.
     pub fn is_node_animating(&self, node: NodeId) -> bool {
         let mut t = self.node_head.get(&node.0).copied().unwrap_or(NONE);
