@@ -76,11 +76,12 @@ impl RuntimeCore {
     pub(in crate::runtime) fn run_ime(&mut self, app: &mut dyn AppDriver, ev: Ime, one: &mut Tx) -> bool {
         let app_target = self.app_ime_composing(app) || matches!(ev, Ime::Enabled | Ime::Disabled) || self.focused_input().is_none();
         let composing = self.composing(app);
-        // An empty preedit while the focused field has no open composition changes nothing.
-        // Wayland's text-input protocol replies to cursor-area updates (including from scrolling)
-        // with an empty preedit; routing it through `with_focused` would set `caret_follow` and
-        // pull the scrolled viewport back to the caret.
-        if !app_target && !composing && matches!(&ev, Ime::Preedit(s, ..) if s.is_empty()) {
+        // An empty preedit or commit while the focused field has no open composition changes
+        // nothing (`TextEdit::commit_composed` returns early on an empty string). Routing it
+        // through `with_focused` would clear the last input click (breaking a double-click) and
+        // set `caret_follow` (pulling a scrolled viewport back to the caret, as with Wayland's
+        // empty preedit replies to cursor-area updates).
+        if !app_target && !composing && matches!(&ev, Ime::Preedit(s, ..) | Ime::Commit(s) if s.is_empty()) {
             return false;
         }
         let active = !matches!(ev, Ime::Enabled | Ime::Disabled)
