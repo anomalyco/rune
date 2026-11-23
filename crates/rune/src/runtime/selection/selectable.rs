@@ -90,13 +90,8 @@ pub(crate) fn unit_at(text: &str, i: usize, unit: Unit) -> (usize, usize) {
             let mut start = 0;
             for end in word_ends(text) {
                 last = (start, end);
-                if i < end { break; }
+                if i < end { return last; }
                 start = end;
-            }
-            // On Windows a word takes the spaces after it along, as a double-click there does
-            // (Chromium's `ShouldSelectTrailingWhitespace`); a line break stays out.
-            if cfg!(target_os = "windows") && !text[last.0..last.1].trim().is_empty() {
-                last.1 = text.len() - text[last.1..].trim_start_matches([' ', '\t']).len();
             }
             last
         }
@@ -766,11 +761,9 @@ mod tests {
     #[test]
     fn units_cover_words_spaces_and_paragraphs() {
         let s = "opencode --port 4096\nnext line";
-        // Windows takes the spaces after a word along, as Chromium's double-click there does.
-        let space = usize::from(cfg!(target_os = "windows"));
-        assert_eq!(unit_at(s, 3, Unit::Word), (0, 8 + space));
+        assert_eq!(unit_at(s, 3, Unit::Word), (0, 8));
         assert_eq!(unit_at(s, 8, Unit::Word), (8, 9), "a space run is its own word");
-        assert_eq!(unit_at(s, 12, Unit::Word), (11, 15 + space));
+        assert_eq!(unit_at(s, 12, Unit::Word), (11, 15));
         assert_eq!(unit_at(s, s.len(), Unit::Word), (26, 30), "past the end takes the last word");
         assert_eq!(unit_at(s, 5, Unit::Paragraph), (0, 21), "a paragraph takes its line break");
         assert_eq!(unit_at(s, 23, Unit::Paragraph), (21, s.len()));
@@ -779,18 +772,15 @@ mod tests {
 
     #[test]
     fn words_break_as_chromium_breaks_them() {
-        let space = usize::from(cfg!(target_os = "windows"));
         // A full stop or colon between letters ends a word; between digits, and an apostrophe, don't.
         let s = "foo.bar_baz qux";
         assert_eq!(unit_at(s, 1, Unit::Word), (0, 3));
         assert_eq!(unit_at(s, 3, Unit::Word), (3, 4));
-        assert_eq!(unit_at(s, 6, Unit::Word), (4, 11 + space));
+        assert_eq!(unit_at(s, 6, Unit::Word), (4, 11));
         assert_eq!(unit_at("a:b c", 0, Unit::Word), (0, 1));
-        assert_eq!(unit_at("1,000.50 x", 2, Unit::Word), (0, 8 + space));
-        assert_eq!(unit_at("can't stop", 1, Unit::Word), (0, 5 + space));
+        assert_eq!(unit_at("1,000.50 x", 2, Unit::Word), (0, 8));
+        assert_eq!(unit_at("can't stop", 1, Unit::Word), (0, 5));
         assert_eq!(unit_at("user@example.com", 7, Unit::Word), (5, 12));
-        // On Windows the spaces after a word go along, but not a line break.
-        assert_eq!(unit_at("trail  \nx", 1, Unit::Word), (0, 5 + 2 * space));
     }
 
     #[test]
