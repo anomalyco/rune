@@ -1,0 +1,1 @@
+- Web: leave `power_preference` unset (`wgpu::PowerPreference::None`) when requesting a WebGPU or WebGL2 adapter so the browser picks the GPU instead of forcing `"low-power"`, fixing black canvases in Chromium on two-GPU Linux desktops where the discrete GPU drives the display and removing Chrome's Windows DevTools warning about `powerPreference`.
