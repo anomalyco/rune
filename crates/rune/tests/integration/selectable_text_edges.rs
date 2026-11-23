@@ -101,7 +101,7 @@ fn a_clickable_row_keeps_its_clicks_hover_press_and_menu() {
     click(&mut rt, g[0]);
     click(&mut rt, g[0]);
     assert_eq!((rt.state.row_presses, rt.state.row_doubles), (3, 1));
-    assert_eq!(rt.selected_text().as_deref(), Some("open"));
+    assert_eq!(rt.selected_text(), Some(w("open")));
     wait(&mut rt);
 
     // A drag that selects text is a selection, not a press.
@@ -128,7 +128,7 @@ fn dragging_a_draggable_row_drags_it_and_clicks_still_select() {
     wait(&mut rt);
     click(&mut rt, g[0]);
     click(&mut rt, g[0]);
-    assert_eq!(rt.selected_text().as_deref(), Some("drag"));
+    assert_eq!(rt.selected_text(), Some(w("drag")));
 }
 
 #[test]
@@ -151,7 +151,7 @@ fn pressing_plain_words_beside_a_link_neither_focuses_nor_rebuilds() {
     let before = VIEWS.with(Cell::get);
     click(&mut rt, g[0]);
     click(&mut rt, g[0]);
-    assert_eq!(rt.selected_text().as_deref(), Some("read"));
+    assert_eq!(rt.selected_text(), Some(w("read")));
     assert_eq!(VIEWS.with(Cell::get), before, "selecting never re-runs the view");
     assert!(!find(&rt, "linked").focused);
     wait(&mut rt);
@@ -174,14 +174,14 @@ fn only_the_plain_chords_belong_to_the_selection() {
     let g = glyphs(&rt, "rowtext");
     click(&mut rt, g[0]);
     click(&mut rt, g[0]);
-    assert_eq!(rt.selected_text().as_deref(), Some("open"));
+    assert_eq!(rt.selected_text(), Some(w("open")));
 
     // Shift or Option added: the app's shortcut, the selection untouched.
     chord(&mut rt, 'c', Mods { shift: true, ..Mods::default() });
     chord(&mut rt, 'a', Mods { alt: true, ..Mods::default() });
     assert_eq!(rt.state.keys.len(), 2, "{:?}", rt.state.keys);
     assert!(clipboard.text().is_none());
-    assert_eq!(rt.selected_text().as_deref(), Some("open"));
+    assert_eq!(rt.selected_text(), Some(w("open")));
     if cfg!(target_os = "macos") {
         chord(&mut rt, 'a', Mods { ctrl: true, ..Mods::default() });
         assert_eq!(rt.state.keys.len(), 3, "Cmd+Ctrl+A is the app's");
@@ -274,4 +274,9 @@ fn a_selection_drops_when_its_text_changes_or_goes() {
     rt.invalidate();
     tick(&mut rt);
     assert_eq!(rt.text_selection(), None);
+}
+
+/// A double-click's word as selected: on Windows with the space after it (`selectable::with_trailing_space`).
+fn w(word: &str) -> String {
+    if cfg!(target_os = "windows") { format!("{word} ") } else { word.to_owned() }
 }

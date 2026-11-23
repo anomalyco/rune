@@ -293,6 +293,8 @@ impl RuntimeCore {
                             _ => Unit::Paragraph,
                         };
                         let origin = unit_at(e, h, unit);
+                        // Not after a pill: it is a word of its own.
+                        let origin = if unit == Unit::Word && e.pills().all(|(r, _)| (r.start, r.end) != origin) { super::selectable::with_trailing_space(&e.text, origin) } else { origin };
                         self.edit.input_click.unit = unit;
                         self.edit.input_click.origin = origin;
                         e.set_selection(origin.0, origin.1);

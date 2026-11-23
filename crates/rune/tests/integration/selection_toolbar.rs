@@ -186,7 +186,7 @@ fn a_double_click_drag_by_words_is_dragging_until_it_releases() {
     rt.pointer_up(x, y);
     rt.pointer_down(x, y);
     tick(&mut rt);
-    assert_eq!(heard(&mut rt), [Heard(Some("alpha".into()), true)], "the second press selects a word");
+    assert_eq!(heard(&mut rt), [Heard(Some(w("alpha")), true)], "the second press selects a word");
     rt.pointer_move(x + 60.0, y);
     tick(&mut rt);
     let calls = heard(&mut rt);
@@ -255,4 +255,9 @@ fn a_shift_click_extension_is_dragging_until_it_releases() {
     tick(&mut rt);
     rt.physical_input(PhysicalInput::Modifiers(Mods::default()));
     assert_eq!(heard(&mut rt), [Heard(Some(text.clone()), false)]);
+}
+
+/// A double-click's word as selected: on Windows with the space after it (`selectable::with_trailing_space`).
+fn w(word: &str) -> String {
+    if cfg!(target_os = "windows") { format!("{word} ") } else { word.to_owned() }
 }

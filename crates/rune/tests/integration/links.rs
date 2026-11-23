@@ -304,7 +304,7 @@ fn text_input_link_click_opens_and_shows_pointer_cursor() {
 
     // Double-clicking the link selects the word without firing on_link a second time.
     click(&mut rt, link_mid);
-    assert_eq!(rt.state.edit.selected(), "docs");
+    assert_eq!(rt.state.edit.selected(), w("docs"));
     assert_eq!(rt.state.opened, ["https://example.com"]);
 
     // Clicking the link while focused (even with an active selection) opens it again.
@@ -623,4 +623,9 @@ fn tx_focus_ignores_mark_link_inside_text_input() {
     rt.frame(1.0 / 60.0);
     assert!(rt.state.opened.is_empty(), "typing in the focused field must not fire on_link");
     assert!(rt.state.edit.text.ends_with('!'), "field received typed text: {}", rt.state.edit.text);
+}
+
+/// A double-click's word as selected: on Windows with the space after it (`selectable::with_trailing_space`).
+fn w(word: &str) -> String {
+    if cfg!(target_os = "windows") { format!("{word} ") } else { word.to_owned() }
 }

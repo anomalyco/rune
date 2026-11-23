@@ -71,7 +71,7 @@ fn drag_double_and_triple_click_select_without_moving_layout() {
     // Double-click takes the word, triple-click the whole line.
     click(&mut rt, g[11]);
     click(&mut rt, g[11]);
-    assert_eq!(rt.selected_text().as_deref(), Some("port"));
+    assert_eq!(rt.selected_text(), Some(w("port")));
     click(&mut rt, g[11]);
     assert_eq!(rt.selected_text().as_deref(), Some(CMD));
     wait(&mut rt);
@@ -182,7 +182,7 @@ fn links_open_and_plain_words_select() {
     let g = glyphs(&rt, "linked");
     click(&mut rt, g[0]);
     click(&mut rt, g[0]);
-    assert_eq!(rt.selected_text().as_deref(), Some("read"));
+    assert_eq!(rt.selected_text(), Some(w("read")));
     assert_eq!(rt.state.opened, ["docs"]);
 }
 
@@ -197,7 +197,7 @@ fn bidi_text_selects_by_logical_words() {
     // Visual order: a b c, the Hebrew word (drawn right to left), d e f.
     click(&mut rt, g[5]);
     click(&mut rt, g[5]);
-    assert_eq!(rt.selected_text().as_deref(), Some("שלום"));
+    assert_eq!(rt.selected_text(), Some(w("שלום")));
     wait(&mut rt);
     let e = find(&rt, "bidi");
     drag(&mut rt, (e.rect[0] + 0.5, g[0].1), (g[9].0 + 6.0, g[9].1));
@@ -219,6 +219,11 @@ fn the_highlight_matches_a_text_fields() {
     click(&mut rt, g[1]);
     click(&mut rt, g[1]);
     let selectable = boxes(&rt, highlight());
-    assert_eq!(rt.selected_text().as_deref(), Some("opencode"));
+    assert_eq!(rt.selected_text(), Some(w("opencode")));
     assert_eq!(selectable, field, "same fill, height and corners");
+}
+
+/// A double-click's word as selected: on Windows with the space after it (`selectable::with_trailing_space`).
+fn w(word: &str) -> String {
+    if cfg!(target_os = "windows") { format!("{word} ") } else { word.to_owned() }
 }

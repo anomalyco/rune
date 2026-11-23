@@ -1,6 +1,9 @@
 use super::*;
 use crate::{Cx, El, Env, Ime, Key, KeyEvent, Mods, PhysicalInput, Runtime, TextEdit, TextStyle, col, text_input};
 
+/// 1 where a double-click's word takes the space after it (Windows, `selectable::with_trailing_space`).
+const WIN: usize = if cfg!(target_os = "windows") { 1 } else { 0 };
+
 struct Form {
     single: TextEdit,
     multi: TextEdit,
@@ -144,12 +147,13 @@ fn double_and_triple_click_select_word_and_line_in_single_line_input() {
     assert_eq!(rt.state.single.anchor, rt.state.single.focus);
     assert!(rt.state.single.focus > 0 && rt.state.single.focus < 4);
 
-    // Second press within double_click_interval and CLICK_SLOP selects "make" (0..4).
+    // Second press within double_click_interval and CLICK_SLOP selects "make" (0..4), and on
+    // Windows the space after it (0..5), as Chromium's double-click there does.
     rt.pointer_down(x, y);
     rt.pointer_up(x, y);
     rt.frame(1.0 / 60.0);
-    assert_eq!((rt.state.single.anchor, rt.state.single.focus), (0, 4));
-    assert_eq!(rt.state.single.selected(), "make");
+    assert_eq!((rt.state.single.anchor, rt.state.single.focus), (0, 4 + WIN));
+    assert_eq!(rt.state.single.selected(), if WIN == 1 { "make " } else { "make" });
 
     // Third press selects the whole single-line text; fourth stays at three.
     rt.pointer_down(x, y);
@@ -171,8 +175,8 @@ fn triple_click_in_multiline_input_selects_hard_line_paragraph() {
 
     click(&mut rt, pt);
     click(&mut rt, pt);
-    assert_eq!((rt.state.multi.anchor, rt.state.multi.focus), (second, second + 6));
-    assert_eq!(rt.state.multi.selected(), "second");
+    assert_eq!((rt.state.multi.anchor, rt.state.multi.focus), (second, second + 6 + WIN));
+    assert_eq!(rt.state.multi.selected(), if WIN == 1 { "second " } else { "second" });
 
     click(&mut rt, pt);
     assert_eq!((rt.state.multi.anchor, rt.state.multi.focus), (second, third));
@@ -205,7 +209,7 @@ fn click_drag_double_drag_and_triple_drag_extend_by_unit_in_both_directions() {
     click(&mut rt, p_the);
     rt.pointer_down(p_the.0, p_the.1);
     rt.frame(1.0 / 60.0);
-    assert_eq!((rt.state.single.anchor, rt.state.single.focus), (5, 8));
+    assert_eq!((rt.state.single.anchor, rt.state.single.focus), (5, 8 + WIN));
     rt.pointer_move(p_smaller.0, p_smaller.1);
     rt.frame(1.0 / 60.0);
     assert_eq!((rt.state.single.anchor, rt.state.single.focus), (5, 22));
@@ -215,8 +219,8 @@ fn click_drag_double_drag_and_triple_drag_extend_by_unit_in_both_directions() {
     rt.pointer_move(p_make.0, p_make.1);
     rt.pointer_up(p_make.0, p_make.1);
     rt.frame(1.0 / 60.0);
-    assert_eq!((rt.state.single.anchor, rt.state.single.focus), (8, 0));
-    assert_eq!(rt.state.single.selected(), "make the");
+    assert_eq!((rt.state.single.anchor, rt.state.single.focus), (8 + WIN, 0));
+    assert_eq!(rt.state.single.selected(), if WIN == 1 { "make the " } else { "make the" });
 
     // Triple-click on line 2 of multi ("second line there\n") and drag down to line 3, then up to line 1.
     rt.frame(1.0);
@@ -261,7 +265,7 @@ fn double_click_drag_extends_by_word_across_paragraphs() {
     rt.pointer_move(back.0, back.1);
     rt.pointer_up(back.0, back.1);
     rt.frame(1.0 / 60.0);
-    assert_eq!((rt.state.multi.anchor, rt.state.multi.focus), (second + 6, line));
+    assert_eq!((rt.state.multi.anchor, rt.state.multi.focus), (second + 6 + WIN, line));
 }
 
 #[test]
@@ -370,8 +374,8 @@ fn right_half_of_char_and_pill_trailing_padding_select_the_hit_word_and_pill() {
     click(&mut rt, right_of_e);
     assert_eq!((rt.state.single.anchor, rt.state.single.focus), (4, 4));
     click(&mut rt, right_of_e);
-    assert_eq!((rt.state.single.anchor, rt.state.single.focus), (0, 4));
-    assert_eq!(rt.state.single.selected(), "make");
+    assert_eq!((rt.state.single.anchor, rt.state.single.focus), (0, 4 + WIN));
+    assert_eq!(rt.state.single.selected(), if WIN == 1 { "make " } else { "make" });
 
     // In "pills" ("@maya hello" where 0..5 is a pill), find the trailing inline box of "@maya".
     let n = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("pills")).unwrap();
