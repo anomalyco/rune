@@ -155,6 +155,128 @@ pub(super) fn dbusmenu_label(label: &str) -> String {
     out
 }
 
+#[cfg_attr(not(any(all(target_os = "linux", feature = "dbus"), test)), allow(dead_code))]
+pub(super) const DBUSMENU_ROOT: i32 = 0;
+
+#[cfg_attr(not(any(all(target_os = "linux", feature = "dbus"), test)), allow(dead_code))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum DbusMenuValue {
+    StaticStr(&'static str),
+    Str(String),
+    Bool(bool),
+}
+
+#[cfg_attr(not(any(all(target_os = "linux", feature = "dbus"), test)), allow(dead_code))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum DbusMenuKey {
+    Action(String, usize),
+    Separator(usize),
+}
+
+#[cfg_attr(not(any(all(target_os = "linux", feature = "dbus"), test)), allow(dead_code))]
+struct DbusMenuEntry {
+    id: i32,
+    key: DbusMenuKey,
+    item: TrayItem,
+}
+
+/// Assigns `com.canonical.dbusmenu` item ids that stay stable for items kept across updates and
+/// never reuse an id for another item or kind (KDE Plasma's `libdbusmenu-qt` keeps an existing
+/// id's separator/action type across `LayoutUpdated`).
+#[cfg_attr(not(any(all(target_os = "linux", feature = "dbus"), test)), allow(dead_code))]
+pub(super) struct DbusMenu {
+    entries: Vec<DbusMenuEntry>,
+    next_id: i32,
+    revision: u32,
+}
+
+#[cfg_attr(not(any(all(target_os = "linux", feature = "dbus"), test)), allow(dead_code))]
+impl DbusMenu {
+    pub(super) fn new(items: Vec<TrayItem>) -> Self {
+        let mut menu = Self { entries: Vec::new(), next_id: 1, revision: 1 };
+        menu.assign(items);
+        menu
+    }
+
+    pub(super) fn update(&mut self, items: Vec<TrayItem>) -> u32 {
+        self.assign(items);
+        self.revision = self.revision.wrapping_add(1);
+        if self.revision == 0 { self.revision = 1; }
+        self.revision
+    }
+
+    pub(super) fn revision(&self) -> u32 { self.revision }
+
+    pub(super) fn ids(&self) -> impl Iterator<Item = i32> + '_ {
+        self.entries.iter().map(|entry| entry.id)
+    }
+
+    pub(super) fn action_id(&self, id: i32) -> Option<&str> {
+        if id <= DBUSMENU_ROOT { return None; }
+        match &self.entries.iter().find(|entry| entry.id == id)?.item {
+            TrayItem::Action { id, enabled: true, .. } => Some(id.as_str()),
+            _ => None,
+        }
+    }
+
+    pub(super) fn properties(&self, id: i32) -> Vec<(&'static str, DbusMenuValue)> {
+        if id == DBUSMENU_ROOT {
+            return vec![("children-display", DbusMenuValue::StaticStr("submenu"))];
+        }
+        if id < DBUSMENU_ROOT { return Vec::new(); }
+        match self.entries.iter().find(|entry| entry.id == id).map(|entry| &entry.item) {
+            Some(TrayItem::Action { label, enabled, .. }) => vec![
+                ("type", DbusMenuValue::StaticStr("standard")),
+                ("label", DbusMenuValue::Str(dbusmenu_label(label))),
+                ("enabled", DbusMenuValue::Bool(*enabled)),
+            ],
+            Some(TrayItem::Separator) => vec![("type", DbusMenuValue::StaticStr("separator"))],
+            None => Vec::new(),
+        }
+    }
+
+    fn assign(&mut self, items: Vec<TrayItem>) {
+        let mut previous: std::collections::HashMap<DbusMenuKey, i32> =
+            self.entries.drain(..).map(|entry| (entry.key, entry.id)).collect();
+        let mut action_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut separators = 0usize;
+        let mut assigned_ids: Vec<i32> = Vec::with_capacity(items.len());
+        let mut entries = Vec::with_capacity(items.len());
+        for item in items {
+            let key = match &item {
+                TrayItem::Action { id, .. } => {
+                    let count = action_counts.entry(id.clone()).or_insert(0);
+                    let key = DbusMenuKey::Action(id.clone(), *count);
+                    *count += 1;
+                    key
+                }
+                TrayItem::Separator => {
+                    let key = DbusMenuKey::Separator(separators);
+                    separators += 1;
+                    key
+                }
+            };
+            let id = match previous.remove(&key) {
+                Some(existing) => existing,
+                None => self.alloc_id(&previous, &assigned_ids),
+            };
+            assigned_ids.push(id);
+            entries.push(DbusMenuEntry { id, key, item });
+        }
+        self.entries = entries;
+    }
+
+    fn alloc_id(&mut self, previous: &std::collections::HashMap<DbusMenuKey, i32>, assigned: &[i32]) -> i32 {
+        loop {
+            let id = self.next_id;
+            self.next_id = if id == i32::MAX { 1 } else { id + 1 };
+            if !assigned.contains(&id) && !previous.values().any(|&old| old == id) {
+                return id;
+            }
+        }
+    }
+}
+
 /// Encodes `text` as UTF-16 code units fitting in `max_units` without splitting a surrogate pair
 /// or embedding interior NULs.
 #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
@@ -210,6 +332,137 @@ mod tests {
         let units = truncate_utf16(&fits, 127);
         assert_eq!(units.len(), 127);
         assert_eq!(String::from_utf16(&units).unwrap(), fits);
+    }
+
+    #[test]
+    fn dbusmenu_ids_stay_stable_and_never_switch_kind_across_updates() {
+        let mut menu = DbusMenu::new(vec![
+            TrayItem::action("show", "Show"),
+            TrayItem::Separator,
+            TrayItem::action("quit", "Quit"),
+        ]);
+        assert_eq!(menu.revision(), 1);
+        let initial_ids: Vec<i32> = menu.ids().collect();
+        assert_eq!(initial_ids.len(), 3);
+        let (show_id, sep_id, quit_id) = (initial_ids[0], initial_ids[1], initial_ids[2]);
+
+        // Inserting an action before the separator must not reuse the separator's id for the new
+        // action or the quit action's id for the separator.
+        let rev = menu.update(vec![
+            TrayItem::action("show", "Show"),
+            TrayItem::action("disconnect", "Disconnect"),
+            TrayItem::Separator,
+            TrayItem::action("quit", "Quit"),
+        ]);
+        assert_eq!(rev, 2);
+        assert_eq!(menu.revision(), 2);
+        let updated_ids: Vec<i32> = menu.ids().collect();
+        assert_eq!(updated_ids.len(), 4);
+        let disconnect_id = updated_ids[1];
+        assert_eq!(updated_ids[0], show_id);
+        assert_eq!(updated_ids[2], sep_id);
+        assert_eq!(updated_ids[3], quit_id);
+        assert!(!initial_ids.contains(&disconnect_id));
+        assert_eq!(menu.action_id(disconnect_id), Some("disconnect"));
+        assert_eq!(menu.action_id(sep_id), None);
+        assert_eq!(menu.action_id(quit_id), Some("quit"));
+
+        // Removing the action keeps the remaining items' ids and retires the removed id.
+        menu.update(vec![
+            TrayItem::action("show", "Show"),
+            TrayItem::Separator,
+            TrayItem::action("quit", "Quit"),
+        ]);
+        assert_eq!(menu.ids().collect::<Vec<_>>(), vec![show_id, sep_id, quit_id]);
+        assert_eq!(menu.action_id(disconnect_id), None);
+        assert!(menu.properties(disconnect_id).is_empty());
+
+        // Replacing a separator with an action at the same slot allocates a fresh id.
+        menu.update(vec![
+            TrayItem::action("show", "Show"),
+            TrayItem::action("about", "About"),
+            TrayItem::action("quit", "Quit"),
+        ]);
+        let replaced_ids: Vec<i32> = menu.ids().collect();
+        assert_eq!(replaced_ids[0], show_id);
+        assert_ne!(replaced_ids[1], sep_id);
+        assert_ne!(replaced_ids[1], disconnect_id);
+        assert_eq!(replaced_ids[2], quit_id);
+    }
+
+    #[test]
+    fn dbusmenu_actions_emit_explicit_type_and_enabled_properties() {
+        let mut menu = DbusMenu::new(vec![
+            TrayItem::action("show", "Show_Now"),
+            TrayItem::Separator,
+            TrayItem::action("quit", "Quit").enabled(false),
+        ]);
+        let ids: Vec<i32> = menu.ids().collect();
+        let (show_id, sep_id, quit_id) = (ids[0], ids[1], ids[2]);
+
+        assert_eq!(menu.properties(DBUSMENU_ROOT), vec![
+            ("children-display", DbusMenuValue::StaticStr("submenu")),
+        ]);
+        assert_eq!(menu.properties(show_id), vec![
+            ("type", DbusMenuValue::StaticStr("standard")),
+            ("label", DbusMenuValue::Str("Show__Now".into())),
+            ("enabled", DbusMenuValue::Bool(true)),
+        ]);
+        assert_eq!(menu.properties(sep_id), vec![
+            ("type", DbusMenuValue::StaticStr("separator")),
+        ]);
+        assert_eq!(menu.properties(quit_id), vec![
+            ("type", DbusMenuValue::StaticStr("standard")),
+            ("label", DbusMenuValue::Str("Quit".into())),
+            ("enabled", DbusMenuValue::Bool(false)),
+        ]);
+        assert_eq!(menu.action_id(quit_id), None);
+
+        // Re-enabling a previously disabled item must explicitly emit enabled = true.
+        menu.update(vec![
+            TrayItem::action("show", "Show_Now"),
+            TrayItem::Separator,
+            TrayItem::action("quit", "Quit").enabled(true),
+        ]);
+        assert_eq!(menu.properties(quit_id), vec![
+            ("type", DbusMenuValue::StaticStr("standard")),
+            ("label", DbusMenuValue::Str("Quit".into())),
+            ("enabled", DbusMenuValue::Bool(true)),
+        ]);
+        assert_eq!(menu.action_id(quit_id), Some("quit"));
+    }
+
+    #[test]
+    fn dbusmenu_duplicate_action_ids_and_multiple_separators_get_distinct_ids() {
+        let mut menu = DbusMenu::new(vec![
+            TrayItem::action("dup", "First"),
+            TrayItem::Separator,
+            TrayItem::action("dup", "Second"),
+            TrayItem::Separator,
+        ]);
+        let ids: Vec<i32> = menu.ids().collect();
+        assert_eq!(ids.len(), 4);
+        assert_ne!(ids[0], ids[2]);
+        assert_ne!(ids[1], ids[3]);
+        assert!(ids.iter().all(|&id| id > DBUSMENU_ROOT));
+
+        // Re-adding a removed action gives it a fresh id instead of reusing a retired one.
+        let removed_sep = ids[3];
+        menu.update(vec![
+            TrayItem::action("dup", "First"),
+            TrayItem::Separator,
+            TrayItem::action("dup", "Second"),
+        ]);
+        assert!(menu.properties(removed_sep).is_empty());
+        menu.update(vec![
+            TrayItem::action("dup", "First"),
+            TrayItem::Separator,
+            TrayItem::action("dup", "Second"),
+            TrayItem::Separator,
+        ]);
+        let ids_after: Vec<i32> = menu.ids().collect();
+        assert_eq!(&ids_after[..3], &ids[..3]);
+        assert_ne!(ids_after[3], removed_sep);
     }
 
     #[cfg(target_os = "windows")]

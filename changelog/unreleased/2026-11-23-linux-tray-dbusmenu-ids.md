@@ -1,0 +1,1 @@
+- Linux tray: `com.canonical.dbusmenu` menu items now keep stable ids across `Tray::set_menu` updates instead of reusing positional ids across item kinds, and action items emit explicit `type = "standard"` and `enabled` properties so KDE Plasma updates changed menus without retaining stale separator or disabled states.
