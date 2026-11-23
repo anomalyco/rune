@@ -1,0 +1,1 @@
+- `rune-i18n`: `Messages::get` now checks `start.checked_add(len)` when computing a message's text range, returning `None` on overflowing spans instead of panicking in debug builds or wrapping in release builds.
