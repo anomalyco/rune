@@ -53,7 +53,7 @@ fn png_size(path: &std::path::Path) -> (u32, u32) {
 
 #[test]
 fn a_playground_scene_renders_its_script_the_same_every_run() {
-    let _turn = HEADLESS.lock().unwrap_or_else(|e| e.into_inner());
+    let _turn = headless_run::test_turn();
     let dir = std::env::temp_dir().join(format!("rune-playground-cli-{}", std::process::id()));
     let script = dir.join("script.json");
     std::fs::create_dir_all(&dir).unwrap();
@@ -80,7 +80,7 @@ fn a_playground_scene_renders_its_script_the_same_every_run() {
 
 #[test]
 fn variant_and_crop_pick_a_storys_variant_and_crop_the_snap_to_an_element() {
-    let _turn = HEADLESS.lock().unwrap_or_else(|e| e.into_inner());
+    let _turn = headless_run::test_turn();
     let dir = std::env::temp_dir().join(format!("rune-playground-crop-{}", std::process::id()));
     let parsed = Args::parse_from(["--playground", "--snap", "s.png", "--crop", "1,2,3,4", "--crop", "puck", "--variant", "Big"].map(String::from).into());
     assert_eq!((parsed.crops, parsed.crop_key.as_deref(), parsed.variant.as_deref()), (vec![[1.0, 2.0, 3.0, 4.0]], Some("puck"), Some("Big")));
@@ -95,7 +95,7 @@ fn variant_and_crop_pick_a_storys_variant_and_crop_the_snap_to_an_element() {
 
 #[test]
 fn whole_window_snaps_the_list_and_side_column_and_crops_to_their_keys() {
-    let _turn = HEADLESS.lock().unwrap_or_else(|e| e.into_inner());
+    let _turn = headless_run::test_turn();
     let dir = std::env::temp_dir().join(format!("rune-playground-whole-{}", std::process::id()));
     let stage = run(&dir, "stage", &["--at", "0"]);
     let whole = run(&dir, "whole", &["--at", "0", "--whole-window"]);
