@@ -15,6 +15,7 @@
 mod audio;
 mod decoder;
 mod gpu;
+mod inbox;
 mod layer;
 mod machine;
 mod mf;
@@ -22,7 +23,8 @@ mod still;
 mod vsync;
 
 use super::*;
-use decoder::{Decoded, Facts, Job, News, Pic, Pipe};
+use decoder::{Facts, Job};
+use inbox::{Decoded, News, Pic, Pick, Pipe};
 use machine::{Effect, Event, Phase};
 use std::time::Duration;
 
@@ -392,7 +394,7 @@ impl Native {
         if self.layered {
             let (newest, ended) = {
                 let inbox = pipe.lock();
-                (inbox.frames.back().filter(|f| f.generation == generation).map(|f| f.pts), inbox.ended == Some(generation))
+                (inbox.newest(generation), inbox.ended == Some(generation))
             };
             if let Some(pts) = newest {
                 self.shown = Some(pts);
@@ -407,25 +409,13 @@ impl Native {
             }
             return;
         }
-        let picked = {
-            let mut inbox = pipe.lock();
-            while inbox.frames.front().is_some_and(|f| f.generation != generation) {
-                inbox.frames.pop_front();
-            }
-            match self.phase {
-                Phase::Buffering { .. } => inbox.frames.pop_front(),
-                Phase::Paused { .. } if self.shown.is_none() => inbox.frames.pop_front(),
-                Phase::Playing { clock } => {
-                    let pos = clock.position(target);
-                    let mut newest = None;
-                    while inbox.frames.front().is_some_and(|f| f.pts <= pos) {
-                        newest = inbox.frames.pop_front();
-                    }
-                    newest
-                }
-                _ => None,
-            }
+        let pick = match self.phase {
+            Phase::Buffering { .. } => Pick::First,
+            Phase::Paused { .. } if self.shown.is_none() => Pick::First,
+            Phase::Playing { clock } => Pick::Due(clock.position(target)),
+            _ => Pick::Hold,
         };
+        let picked = pipe.lock().take(generation, pick);
         let Some(frame) = picked else {
             self.check_end(shared, c, &pipe, generation, target);
             return;

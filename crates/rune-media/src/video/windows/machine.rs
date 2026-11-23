@@ -190,3 +190,6 @@ pub(super) fn step(phase: &mut Phase, event: Event) -> Effects<Effect> {
         _ => Effects::none(),
     }
 }
+
+#[cfg(test)]
+mod tests;

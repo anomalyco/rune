@@ -1,0 +1,139 @@
+//! What the UI thread and a clip's decoder thread tell each other, under one lock: the UI's asks
+//! (a seek, sound, the layer, a stop) and the decoder's answers (its news, the pictures it
+//! decoded, the end). The picture queue's steps are methods here, apart from Media Foundation
+//! and D3D, so they can be driven with plain data.
+
+use super::decoder::Facts;
+use crate::native_surface::ByteFrame;
+use crate::native_surface::windows::DecodedPlanes;
+use rune_core::time::Instant;
+use std::collections::VecDeque;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::Duration;
+
+/// What the UI asks of the decoder and what the decoder hands back, under one lock.
+#[derive(Default)]
+pub(super) struct Inbox {
+    /// A seek to land: clip seconds and the generation its pictures carry.
+    pub seek: Option<(f64, u32)>,
+    pub looping: bool,
+    /// Play sound, at this gain (unmuted, and the clip has some).
+    pub sound: Option<f32>,
+    pub stop: bool,
+    /// When a frame last drew the clip.
+    pub touched: Option<Instant>,
+    pub news: Vec<News>,
+    pub frames: VecDeque<Decoded>,
+    /// The generation whose last picture is in the queue: the clip ended there.
+    pub ended: Option<u32>,
+    /// The window shows the clip on its own layer at this size (device pixels): while the clock
+    /// runs, the decoder presents each picture there itself (`layer`). None: the UI draws them.
+    pub layer: Option<(u32, u32)>,
+    /// The layer's DirectComposition surface handle, once made, for the window's visual.
+    pub layer_handle: Option<usize>,
+    /// The size of the last picture presented on the layer, and the generation it belongs to.
+    pub layer_shown: Option<((u32, u32), u32)>,
+    /// The clip can't have a layer (a rotated clip, software pictures, no video processor): the
+    /// UI keeps drawing it.
+    pub layer_refused: bool,
+}
+
+pub(super) enum News {
+    Opened(Facts),
+    Failed(String),
+    /// Let go after `PARK` undrawn.
+    Parked,
+}
+
+pub(super) struct Decoded {
+    pub generation: u32,
+    /// Seconds from the clip's start, counting on through loops.
+    pub pts: f64,
+    pub picture: Pic,
+}
+
+pub(super) enum Pic {
+    Gpu(Arc<DecodedPlanes>, u64),
+    Cpu(ByteFrame),
+}
+
+/// Which picture a frame takes off the queue.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Pick {
+    /// The first of the current seek: nothing of it shows yet.
+    First,
+    /// The newest whose time has come at this clock position; the ones before it are late.
+    Due(f64),
+    /// None: the picture on screen holds.
+    Hold,
+}
+
+impl Inbox {
+    /// Drops the pictures of seeks before `generation`, then takes the one `pick` asks for.
+    pub(super) fn take(&mut self, generation: u32, pick: Pick) -> Option<Decoded> {
+        while self.frames.front().is_some_and(|f| f.generation != generation) {
+            self.frames.pop_front();
+        }
+        match pick {
+            Pick::First => self.frames.pop_front(),
+            Pick::Due(pos) => {
+                let mut newest = None;
+                while self.frames.front().is_some_and(|f| f.pts <= pos) {
+                    newest = self.frames.pop_front();
+                }
+                newest
+            }
+            Pick::Hold => None,
+        }
+    }
+
+    /// The newest picture of `generation` in the queue: its time.
+    pub(super) fn newest(&self, generation: u32) -> Option<f64> {
+        self.frames.back().filter(|f| f.generation == generation).map(|f| f.pts)
+    }
+
+    /// A seek lands: its pictures replace the queue's, and the end is ahead again.
+    pub(super) fn flush(&mut self) {
+        self.frames.clear();
+        self.ended = None;
+    }
+
+    /// Queues a decoded picture; true when the queue was empty.
+    pub(super) fn push(&mut self, decoded: Decoded) -> bool {
+        let was_empty = self.frames.is_empty();
+        self.frames.push_back(decoded);
+        was_empty
+    }
+
+    /// Keeps only the newest picture and returns the others: the layer showed them, so the
+    /// window never takes them.
+    pub(super) fn keep_newest(&mut self) -> Vec<Decoded> {
+        let older = self.frames.len().saturating_sub(1);
+        self.frames.drain(..older).collect()
+    }
+}
+
+pub(super) struct Pipe {
+    inbox: Mutex<Inbox>,
+    wake: Condvar,
+}
+
+impl Pipe {
+    pub(super) fn new(inbox: Inbox) -> Arc<Pipe> {
+        Arc::new(Pipe { inbox: Mutex::new(inbox), wake: Condvar::new() })
+    }
+    pub(super) fn lock(&self) -> MutexGuard<'_, Inbox> {
+        self.inbox.lock().unwrap()
+    }
+    /// Tell the decoder something changed (a seek, a picture taken, a stop).
+    pub(super) fn poke(&self) {
+        self.wake.notify_all();
+    }
+    /// The decoder sleeps until it's poked or `patience` passes.
+    pub(super) fn wait<'a>(&self, inbox: MutexGuard<'a, Inbox>, patience: Duration) -> MutexGuard<'a, Inbox> {
+        self.wake.wait_timeout(inbox, patience).unwrap().0
+    }
+}
+
+#[cfg(test)]
+mod tests;
