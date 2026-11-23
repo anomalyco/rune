@@ -1,0 +1,1 @@
+- Motion: `Clock::manual` now rejects non-finite frame rates (`f64::INFINITY`) alongside zero, negative, and `NaN` values, instead of creating a manual clock whose `step()` never advances.
