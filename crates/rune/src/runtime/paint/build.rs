@@ -2,7 +2,7 @@
 use super::*;
 
 mod layers;
-mod pose;
+pub(in crate::runtime) mod pose;
 mod primitives;
 
 impl RuntimeCore {
@@ -180,9 +180,11 @@ impl RuntimeCore {
             if raised {
                 self.paint.reopen_raised_layers(&self.tree.nodes, &self.scene, &mut self.instances, self.surfaces.len(), node_parent, &mut pinh, &mut layers, s);
             }
-            if lift {
-                self.motion.lift_flight_inh(&self.paint, &self.scene, self.commit.commit_gen(), node_id, node_parent, &mut pinh);
-            }
+            let flight_dest = if lift {
+                self.motion.lift_flight_inh(&self.tree.nodes, &self.paint, &self.scene, self.commit.commit_gen(), node_id, node_parent, &mut pinh)
+            } else {
+                None
+            };
             let n = &self.tree.nodes[i];
             let mark = if n.vis.mark != 0 { n.vis.mark } else { pinh.mark };
             let mut own = p.opacity;
@@ -240,10 +242,14 @@ impl RuntimeCore {
                 pose::step_static_scale(&mut self.paint.static_scales, &mut self.paint.scale_frame, n.id, tracked_scale, self.t, self.settled, has_live_scale)
             } else { false };
             let store = self.scene.store();
-            let scale_animating = store.is_animating(n.id, prop::SCALE) || store.is_animating(n.id, prop::PRESENCE)
-                || (has_press_scale && store.is_animating(n.id, P_PRESS_SCALE))
+            let own_scale_anim = (has_press_scale && store.is_animating(n.id, P_PRESS_SCALE))
                 || (n.scale_track && store.is_animating(n.id, P_SCALE))
                 || sequence.is_some_and(|l| !self.reduced_motion && l.active(lnow));
+            let presence_anim = store.is_animating(n.id, prop::PRESENCE);
+            let scale_animating = store.is_animating(n.id, prop::SCALE) || presence_anim || own_scale_anim;
+            let presence_scales = presence_anim
+                && n.transition.as_deref().is_some_and(|t| t.insertion.scale != 1.0 || t.removal.scale != 1.0);
+            let own_scale_moving = presence_scales || own_scale_anim;
             let scale_motion = pinh.scale_motion.max(
                 if !has_live_scale && (scale_animating || scale_settling) {
                     ScaleMotion::Moving
@@ -281,7 +287,9 @@ impl RuntimeCore {
                 pose::update_sticky_frame(&mut self.scroll.sticky_frame, i, n, raw_edges);
             }
             // A product of 1 (0.5 inside 2.0) can still move the box.
-            let mut rect_pt = if (sc - 1.0).abs() > 1e-5 || anchor != anchor_to {
+            let mut rect_pt = if let Some(dest) = flight_dest {
+                pose::flight_frame(&self.scene, n, &p, own_sc, self.paint.row_h[i], dest)
+            } else if (sc - 1.0).abs() > 1e-5 || anchor != anchor_to {
                 [
                     anchor_to[0] + (raw_edges[0] - anchor[0]) * sc,
                     anchor_to[1] + (raw_edges[1] - anchor[1]) * sc,
@@ -302,7 +310,7 @@ impl RuntimeCore {
             // A matched flight scales its laid-out content uniformly to cover the moving rect,
             // centred: `k` and the centring offset in points. A launch flies at its own size.
             let cover = if lift && n.local.w > 0.0 && n.local.h > 0.0 {
-                pose::flight_cover(self.motion.launches(), node_id, n, rect_pt)
+                pose::flight_cover(self.motion.launches(), node_id, n, rect_pt, sc)
             } else { None };
             let r_exact = rect_pt.map(snap_px);
             // A node the visibility test below culls paints nothing, and any clip it hands down is
@@ -657,6 +665,8 @@ impl RuntimeCore {
                 cover: cover_offset, outer, mark, group, pressed, press_to,
                 hit_opacity: hit_opacity * kids_fade, group_rect,
                 scale_motion, still: if scale_motion == ScaleMotion::Still { (scale, anchor, anchor_to) } else { pinh.still },
+                held_moving: pinh.held_moving || own_scale_moving || cover.is_some(),
+                held: if !(pinh.held_moving || own_scale_moving || cover.is_some()) { (scale, anchor, anchor_to) } else { pinh.held },
                 in_cache, skip_paint, anchor_hidden: false, turn: turn_index,
                 snap: pixel_snap::Inherit { off: snap_off, steps, shifted: pinh.snap.shifted || n.vis.offset != [0.0; 2], layer: if cover.is_some() { 0 } else { snap_layer }, parent: snap_rest.filter(|_| cover.is_none() && snap.rigid == pinh.snap.rigid && pixel_snap::frames(&n.vis)), ..snap } };
             // Shown only under its group's hover, it takes presses where the pointer hovers the

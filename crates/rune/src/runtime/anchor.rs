@@ -287,6 +287,8 @@ impl RuntimeCore {
             (pinh.dx, pinh.dy) = (ax - world.x, ay - world.y);
             (pinh.scale, pinh.anchor, pinh.anchor_to) = (1.0, [0.0; 2], [0.0; 2]);
             pinh.still = (1.0, [0.0; 2], [0.0; 2]);
+            pinh.held = (1.0, [0.0; 2], [0.0; 2]);
+            pinh.held_moving = false;
             return;
         }
         pinh.dx = pivot[0] + (ax - pivot[0]) / k - world.x;
@@ -295,5 +297,7 @@ impl RuntimeCore {
         // Text rasterizes as the anchor's does: crisp at the zoom once it rests.
         pinh.scale_motion = pinh.scale_motion.max(motion);
         pinh.still = if pinh.scale_motion == ScaleMotion::Still { (k, pivot, pivot) } else { (1.0, [0.0; 2], [0.0; 2]) };
+        pinh.held = if pinh.scale_motion != ScaleMotion::Moving { (k, pivot, pivot) } else { (1.0, [0.0; 2], [0.0; 2]) };
+        pinh.held_moving = pinh.scale_motion == ScaleMotion::Moving;
     }
 }

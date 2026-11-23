@@ -286,7 +286,8 @@ impl RuntimeCore {
                         scrolled = [scrolled[0] - fix[0] * k, scrolled[1] - fix[1] * k];
                     }
                     if lifted.is_none() && self.motion.flying.iter().any(|f| f.0 == id) {
-                        lifted = Some(parent.and_then(|p| self.paint.inh_scratch.get(p)).map_or(1.0, |h| h.still.0));
+                        let is_launch = self.motion.launches().launched(id);
+                        lifted = Some(parent.and_then(|p| self.paint.inh_scratch.get(p)).map_or(1.0, |h| if is_launch { h.still.0 } else { h.held.0 }));
                     }
                     let Some(pi) = step_up(&self.tree.nodes, j) else { break };
                     let p = &self.tree.nodes[pi];
