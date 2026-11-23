@@ -57,9 +57,13 @@ fn a_presented_picture_is_the_only_one_queued_and_the_one_the_layer_shows() {
 fn a_flush_empties_the_queue_and_forgets_the_end() {
     let mut inbox = inbox(&[(2, 9.0), (2, 9.1)]);
     inbox.ended = Some(2);
+    inbox.video_ended = Some(2);
+    inbox.audio_end = Some(12.5);
     inbox.flush();
     assert!(inbox.frames.is_empty());
     assert_eq!(inbox.ended, None);
+    assert_eq!(inbox.video_ended, None);
+    assert_eq!(inbox.audio_end, None);
 }
 
 #[test]

@@ -105,3 +105,23 @@ fn a_seek_while_parked_forgets_the_picture_and_opens_at_the_target() {
     assert_eq!(phase, Phase::Idle { at: 7.5 });
     assert_eq!(effects(&mut phase, Event::Open { play: false }), vec![Effect::Open { at: 7.5 }]);
 }
+
+#[test]
+fn a_synced_clock_updates_a_playing_clip_without_emitting_effects() {
+    let (mut phase, clock) = playing(5.0);
+    let nudged = Anchor { pos: 5.006, ..clock };
+    assert_eq!(effects(&mut phase, Event::Synced { clock: nudged }), vec![]);
+    assert_eq!(phase, Phase::Playing { clock: nudged });
+}
+
+#[test]
+fn a_synced_clock_with_a_different_rate_or_outside_playing_is_ignored() {
+    let (mut phase, clock) = playing(5.0);
+    let other_rate = Anchor { pos: 5.01, rate: 2.0, ..clock };
+    assert_eq!(effects(&mut phase, Event::Synced { clock: other_rate }), vec![]);
+    assert_eq!(phase, Phase::Playing { clock });
+
+    let mut paused = Phase::Paused { at: 5.0 };
+    assert_eq!(effects(&mut paused, Event::Synced { clock }), vec![]);
+    assert_eq!(paused, Phase::Paused { at: 5.0 });
+}

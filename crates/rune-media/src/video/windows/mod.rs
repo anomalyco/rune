@@ -202,10 +202,18 @@ pub(super) fn drive(shared: &Arc<Shared>) {
         }
         Phase::Playing { clock } => {
             let generation = native.seeks.current().0;
-            let ended = native.pipe.as_ref().is_some_and(|p| p.lock().ended == Some(generation));
+            let (ended, audio_end) = native.pipe.as_ref().map_or((false, None), |p| {
+                let inbox = p.lock();
+                (inbox.ended == Some(generation), inbox.audio_end)
+            });
             let duration = c.duration.unwrap_or(0.0);
             let pos = clock.position(now);
-            if ended && duration > 0.0 && pos >= (clock.pos / duration).floor() * duration + duration {
+            let duration_end = (duration > 0.0).then(|| (clock.pos / duration).floor() * duration + duration);
+            let end = match (duration_end, audio_end.filter(|_| native.sounding(&c))) {
+                (Some(d), Some(a)) => Some(d.max(a)),
+                (a, b) => a.or(b),
+            };
+            if ended && end.is_some_and(|end| pos >= end) {
                 native.end(shared, &mut c, duration, duration);
             }
         }
@@ -376,6 +384,11 @@ impl Native {
             self.event(shared, c, Event::Failed);
             return;
         }
+        if let (Phase::Playing { clock }, Some(heard)) = (self.phase, self.clock.get())
+            && heard != clock
+        {
+            self.event(shared, c, Event::Synced { clock: heard });
+        }
         let lead = vsync::period().as_secs_f64() / 2.0;
         if let Some(to) = c.seek.take() {
             self.event(shared, c, Event::Seek { to });
@@ -481,16 +494,14 @@ impl Native {
         // The layer shows the pictures: the surface keeps the one it has, so the window has
         // nothing to draw, and playback stands at the newest picture presented.
         if self.screen == Screen::Layer {
-            let (presented, ended) = {
+            let (presented, ended, audio_end) = {
                 let inbox = pipe.lock();
-                (inbox.presented(generation), inbox.ended == Some(generation))
+                (inbox.presented(generation), inbox.ended == Some(generation), inbox.audio_end)
             };
             self.follow_layer(presented);
             if let (true, Phase::Playing { clock }, Some(shown)) = (ended, self.phase, self.shown) {
-                let frame = self.facts.map_or(1.0 / 30.0, |f| f.meta.frame);
                 let duration = c.duration.unwrap_or(0.0);
-                let end = if duration > 0.0 { (shown / duration).floor() * duration + duration } else { shown + frame };
-                if clock.position(target) >= end.max(shown + frame) {
+                if clock.position(target) >= self.end_pos(c, shown, audio_end) {
                     self.end(shared, c, shown, duration);
                 }
             }
@@ -529,13 +540,30 @@ impl Native {
         }
     }
 
+    /// Unwrapped media time at which playback ends once the clip's streams reached EOS.
+    fn end_pos(&self, c: &Control, shown: f64, audio_end: Option<f64>) -> f64 {
+        let frame = self.facts.map_or(1.0 / 30.0, |f| f.meta.frame);
+        let duration = c.duration.unwrap_or(0.0);
+        let end = if duration > 0.0 { (shown / duration).floor() * duration + duration } else { shown + frame };
+        let end = end.max(shown + frame);
+        match audio_end.filter(|_| self.sounding(c)) {
+            Some(a) => end.max(a),
+            None => end,
+        }
+    }
+
     /// Playing with nothing due: the end, or a decoder that fell behind. Waiting for a seek's
     /// picture when the decoder ended with none: the clip ends, or holds, where it was asked to
     /// stand.
     fn check_end(&mut self, shared: &Arc<Shared>, c: &mut Control, pipe: &Pipe, generation: u32, target: Instant) {
-        let (empty, ended) = {
+        let (empty, video_ended, ended, audio_end) = {
             let inbox = pipe.lock();
-            (inbox.frames.is_empty(), inbox.ended == Some(generation))
+            (
+                inbox.frames.is_empty(),
+                inbox.video_ended == Some(generation),
+                inbox.ended == Some(generation),
+                inbox.audio_end,
+            )
         };
         if !empty {
             return;
@@ -555,11 +583,10 @@ impl Native {
         let frame = self.facts.map_or(1.0 / 30.0, |f| f.meta.frame);
         let shown = self.shown.unwrap_or(clock.pos);
         if ended {
-            let end = if duration > 0.0 { (shown / duration).floor() * duration + duration } else { shown + frame };
-            if pos >= end.max(shown + frame) {
+            if pos >= self.end_pos(c, shown, audio_end) {
                 self.end(shared, c, shown, duration);
             }
-        } else if pos > shown + frame * 2.0 + 0.1 {
+        } else if !video_ended && pos > shown + frame * 2.0 + 0.1 {
             self.event(shared, c, Event::Stalled { at: shown + frame });
         }
     }
@@ -610,16 +637,41 @@ impl Native {
         let Phase::Playing { clock } = self.phase else { return (false, None) };
         let frame = self.facts.map_or(1.0 / 30.0, |f| f.meta.frame);
         let shown = self.shown.unwrap_or(clock.pos);
+        let generation = self.seeks.current().0;
+        let (next_frame, video_ended, ended, audio_end) = self.pipe.as_ref().map_or((None, false, false, None), |p| {
+            let inbox = p.lock();
+            (
+                inbox.frames.front().map(|f| f.pts),
+                inbox.video_ended == Some(generation),
+                inbox.ended == Some(generation),
+                inbox.audio_end,
+            )
+        });
         // The layer shows the pictures: a frame is due only to hear that the clip ended.
         if self.screen == Screen::Layer {
-            let generation = self.seeks.current().0;
-            let ended = self.pipe.as_ref().is_some_and(|p| p.lock().ended == Some(generation));
-            return if ended { (true, Some(clock.when(shown + frame).max(now))) } else { (false, None) };
+            if !ended {
+                return (false, None);
+            }
+            let end = self.end_pos(c, shown, audio_end);
+            if self.sounding(c) && audio_end.is_some() && clock.when(end) > now + Duration::from_millis(50) {
+                return (false, None);
+            }
+            return (true, Some(clock.when(end).max(now)));
         }
-        let next = self.pipe.as_ref().and_then(|p| p.lock().frames.front().map(|f| f.pts));
-        let pos = next.unwrap_or(shown + frame);
-        let _ = c;
-        (true, Some(clock.when(pos).max(now)))
+        if let Some(pts) = next_frame {
+            return (true, Some(clock.when(pts).max(now)));
+        }
+        if video_ended {
+            if !ended {
+                return (false, None);
+            }
+            let end = self.end_pos(c, shown, audio_end);
+            if self.sounding(c) && audio_end.is_some() && clock.when(end) > now + Duration::from_millis(50) {
+                return (false, None);
+            }
+            return (true, Some(clock.when(end).max(now)));
+        }
+        (true, Some(clock.when(shown + frame).max(now)))
     }
 }
 

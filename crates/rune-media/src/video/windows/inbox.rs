@@ -27,6 +27,11 @@ pub(super) struct Inbox {
     pub frames: VecDeque<Decoded>,
     /// The generation whose last picture is in the queue: the clip ended there.
     pub ended: Option<u32>,
+    /// The generation whose video stream reached its end: no more pictures will arrive for it,
+    /// though trailing sound may still be playing out.
+    pub video_ended: Option<u32>,
+    /// Unwrapped end time of the clip's audio when audio plays past the video or duration.
+    pub audio_end: Option<f64>,
     /// Pictures dropped before they reached the surface (an earlier seek's, late ones, ones the
     /// layer showed): Rune never draws them, so no draw releases their textures. The decoder
     /// frees those itself (`Decoder::reclaim`).
@@ -101,6 +106,8 @@ impl Inbox {
     pub(super) fn flush(&mut self) {
         self.unread.extend(self.frames.drain(..));
         self.ended = None;
+        self.video_ended = None;
+        self.audio_end = None;
     }
 
     /// Queues a decoded picture; true when the queue was empty.

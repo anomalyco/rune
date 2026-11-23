@@ -359,3 +359,118 @@ fn unmuting_mid_clip_turns_sound_on_without_seeking_or_interrupting_playback() {
     assert!(matches!(rig.phase(), Phase::Playing { .. }), "{:?}", rig.phase());
     assert_eq!(rig.asked(), (None, Some(1.0), false));
 }
+
+#[test]
+fn trailing_audio_past_last_picture_holds_without_stalling_idles_next_and_ends_after_drain() {
+    let rig = rig();
+    rig.native().facts.as_mut().unwrap().sound = Some(mf::Sound { channels: 2, rate: 48_000 });
+    rig.player.shared.ctl.lock().unwrap().muted = false;
+    let start = rune_core::time::now();
+    rig.plays_from_two(start);
+    // Last video picture at 9.967 s; video hits EOS while trailing audio continues to 12.5 s.
+    rig.decodes(9.967);
+    let t_last = start + Duration::from_millis(7_970);
+    rig.show(t_last);
+    assert_eq!(rig.native().shown, Some(9.967));
+    rig.pipe.lock().video_ended = Some(rig.generation());
+
+    // 1.5 s past the last video frame (pos = 11.5 s): must stay Playing (no Stall) with clock running.
+    let t_mid = start + Duration::from_millis(9_500);
+    rig.show(t_mid);
+    assert!(matches!(rig.phase(), Phase::Playing { .. }), "trailing audio stalled: {:?}", rig.phase());
+    assert!(rig.native().clock.get().is_some(), "clock stopped during trailing audio");
+    // Frame queue is empty and video ended: next() idles instead of spinning every vsync.
+    {
+        let native = rig.native();
+        let c = rig.player.shared.ctl.lock().unwrap();
+        assert_eq!(native.next(&c, t_mid), (false, None));
+    }
+
+    // Audio stream reaches EOS at 12.5 s while clock is at 11.5 s: still holds and idles until drain.
+    {
+        let mut inbox = rig.pipe.lock();
+        inbox.ended = Some(rig.generation());
+        inbox.audio_end = Some(12.5);
+    }
+    rig.show(t_mid);
+    assert!(matches!(rig.phase(), Phase::Playing { .. }), "ended before audio drained: {:?}", rig.phase());
+    {
+        let native = rig.native();
+        let c = rig.player.shared.ctl.lock().unwrap();
+        assert_eq!(native.next(&c, t_mid), (false, None));
+    }
+
+    // Once clock passes audio_end (12.5 s), playback ends cleanly.
+    rig.show(start + Duration::from_millis(10_550));
+    assert_eq!(rig.phase(), Phase::Ended { at: 9.967 });
+    assert_eq!(rig.player.state(), PlayerState::Ended);
+}
+
+#[test]
+fn muting_during_trailing_audio_drain_ends_immediately() {
+    let rig = rig();
+    rig.native().facts.as_mut().unwrap().sound = Some(mf::Sound { channels: 2, rate: 48_000 });
+    rig.player.shared.ctl.lock().unwrap().muted = false;
+    let start = rune_core::time::now();
+    rig.plays_from_two(start);
+    rig.decodes(9.967);
+    rig.show(start + Duration::from_millis(7_970));
+    {
+        let mut inbox = rig.pipe.lock();
+        inbox.video_ended = Some(rig.generation());
+        inbox.ended = Some(rig.generation());
+        inbox.audio_end = Some(12.5);
+    }
+    // Unmuted at 11.5 s: still playing while trailing audio drains.
+    let t_mid = start + Duration::from_millis(9_500);
+    rig.show(t_mid);
+    assert!(matches!(rig.phase(), Phase::Playing { .. }));
+    // Mute mid-drain: ends immediately instead of waiting silently until 12.5 s.
+    rig.player.shared.ctl.lock().unwrap().muted = true;
+    rig.reconcile();
+    rig.show(t_mid);
+    assert_eq!(rig.phase(), Phase::Ended { at: 9.967 });
+    assert_eq!(rig.player.state(), PlayerState::Ended);
+}
+
+#[test]
+fn a_clip_on_its_layer_waits_for_trailing_audio_before_ending() {
+    let rig = rig();
+    rig.native().facts.as_mut().unwrap().sound = Some(mf::Sound { channels: 2, rate: 48_000 });
+    rig.player.shared.ctl.lock().unwrap().muted = false;
+    let start = rune_core::time::now();
+    rig.plays_from_two(start);
+    assert!(rig.window_layers().showing);
+    rig.presents(9.9);
+    {
+        let mut inbox = rig.pipe.lock();
+        inbox.video_ended = Some(rig.generation());
+        inbox.ended = Some(rig.generation());
+        inbox.audio_end = Some(12.5);
+    }
+    // Past duration (10 s) at 11.5 s, still waits for trailing audio to drain to 12.5 s.
+    let t_mid = start + Duration::from_millis(9_500);
+    rig.show(t_mid);
+    assert!(matches!(rig.phase(), Phase::Playing { .. }));
+    {
+        let native = rig.native();
+        let c = rig.player.shared.ctl.lock().unwrap();
+        assert_eq!(native.next(&c, t_mid), (false, None));
+    }
+    // Past 12.5 s: ends cleanly.
+    rig.show(start + Duration::from_millis(10_550));
+    assert_eq!(rig.phase(), Phase::Ended { at: 9.9 });
+}
+
+#[test]
+fn reconcile_folds_nudged_audio_clock_into_playing_phase() {
+    let rig = rig();
+    let start = rune_core::time::now();
+    rig.plays_from_two(start);
+    let Phase::Playing { clock } = rig.phase() else { panic!("{:?}", rig.phase()) };
+    let nudged = Anchor { pos: clock.pos + 0.006, ..clock };
+    rig.native().clock.nudge(clock, 0.006);
+    rig.reconcile();
+    assert_eq!(rig.phase(), Phase::Playing { clock: nudged });
+    assert_eq!(rig.native().clock.get(), Some(nudged));
+}
