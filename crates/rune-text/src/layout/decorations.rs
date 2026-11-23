@@ -182,8 +182,17 @@ impl TextSystem {
                 let m = line.metrics();
                 let mut strike_off = m.line_height * 0.25;
                 let mut h = scale.round().max(1.0);
+                let (bx0, bx1) = (bb.x0 as f32, bb.x1 as f32);
+                let mut best_overlap: Option<f32> = None;
                 for item in line.items() {
-                    if let PositionedLayoutItem::GlyphRun(gr) = item {
+                    let PositionedLayoutItem::GlyphRun(gr) = item else { continue };
+                    let run = gr.run().text_range();
+                    if run.end <= a || b <= run.start {
+                        continue;
+                    }
+                    let overlap = (gr.offset() + gr.advance()).min(bx1) - gr.offset().max(bx0);
+                    if best_overlap.is_none_or(|prev| overlap > prev) {
+                        best_overlap = Some(overlap);
                         let fm = gr.run().font_metrics();
                         strike_off = if fm.strikethrough_offset != 0.0 {
                             fm.strikethrough_offset
@@ -191,7 +200,6 @@ impl TextSystem {
                             fm.ascent * 0.32
                         };
                         h = fm.strikethrough_size.max(scale).round().max(1.0);
-                        break;
                     }
                 }
                 let x0 = origin[0] + bb.x0 as f32;
@@ -351,3 +359,7 @@ fn push_highlight_boxes(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "decorations_tests.rs"]
+mod tests;
