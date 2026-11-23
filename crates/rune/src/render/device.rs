@@ -240,9 +240,29 @@ impl Gpu {
     }
 
     fn new_wgpu_instance(backends: wgpu::Backends) -> wgpu::Instance {
+        #[cfg(target_os = "linux")]
+        {
+            Self::select_wgpu_instance(
+                |allow_noncompliant| wgpu::Instance::new(Self::instance_descriptor(backends, allow_noncompliant)),
+                |instance| !pollster::block_on(instance.enumerate_adapters(backends)).is_empty(),
+            )
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            wgpu::Instance::new(Self::instance_descriptor(backends, false))
+        }
+    }
+
+    /// Builds a `wgpu::InstanceDescriptor` for `backends`. When `allow_noncompliant` is true,
+    /// `ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER` is set so Vulkan drivers reporting conformance
+    /// version `0.0.0.0` (such as Mesa Honeykrisp/Aurora on Apple silicon Linux) are enumerated.
+    fn instance_descriptor(backends: wgpu::Backends, allow_noncompliant: bool) -> wgpu::InstanceDescriptor {
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.backends = backends;
         descriptor.flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
+        if allow_noncompliant {
+            descriptor.flags.insert(wgpu::InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER);
+        }
         // An HWND's DXGI swapchain is opaque only; DirectComposition composites alpha on every GPU.
         descriptor.backend_options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromVisual;
         // A window waits for room in its swap chain itself, in the loop rather than in
@@ -252,7 +272,27 @@ impl Gpu {
         // dxcompiler.dll on PATH, where another app's incompatible copy crashes the first
         // shader compile (Hex #587).
         descriptor.backend_options.dx12.shader_compiler = wgpu::Dx12Compiler::Fxc;
-        wgpu::Instance::new(descriptor)
+        descriptor
+    }
+
+    /// Builds a conformant-only instance first and returns it whenever it sees at least one
+    /// adapter, so machines with a conformant adapter never expose non-conformant drivers. Only
+    /// when the conformant instance finds no adapters at all does it retry with
+    /// `ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER` (Apple silicon Linux Asahi/Aurora Honeykrisp).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    fn select_wgpu_instance<I>(
+        mut build: impl FnMut(bool) -> I,
+        mut has_adapters: impl FnMut(&I) -> bool,
+    ) -> I {
+        let compliant = build(false);
+        if has_adapters(&compliant) {
+            return compliant;
+        }
+        let noncompliant = build(true);
+        if has_adapters(&noncompliant) {
+            return noncompliant;
+        }
+        compliant
     }
 
     /// The GPU for a window's first surface, which `surface` makes from the instance:
@@ -379,3 +419,7 @@ fn report_gpu_allocations(device: wgpu::Device) {
         out
     });
 }
+
+#[cfg(test)]
+#[path = "device_tests.rs"]
+mod tests;
