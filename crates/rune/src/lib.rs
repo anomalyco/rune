@@ -364,6 +364,8 @@ pub use tooling::Chrome;
 pub use tooling::RELAUNCH_DROPS;
 pub use tooling::extra_args;
 pub use tooling::is_headless;
+#[cfg(not(target_arch = "wasm32"))]
+pub use tooling::process_age;
 pub use tooling::run;
 pub use tooling::run_windows;
 pub use tooling::run_windows_with;

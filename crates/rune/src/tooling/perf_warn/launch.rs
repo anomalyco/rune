@@ -107,10 +107,11 @@ pub(crate) fn report(setup: f64, init: f64, view: f64, total: f64) -> Option<Str
     ))
 }
 
-/// How long this process has run, from the system's record of its start.
+/// How long this process has run, from the system's record of its start: with [marks](crate::marks),
+/// what places a launch's steps from the process's start, the time before `main` included.
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(unsafe_code)]
-pub(crate) fn process_age() -> Option<std::time::Duration> {
+pub fn process_age() -> Option<std::time::Duration> {
     #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     use std::time::Duration;
     #[cfg(target_os = "macos")]

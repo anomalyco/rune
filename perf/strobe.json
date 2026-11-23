@@ -1,0 +1,37 @@
+{
+  "$schema": "https://unpkg.com/@hona/strobe/schema/strobe.v1.json",
+  // The floor app (examples/launch-floor), optimised as `--profile perf` and with line tables, so
+  // strobe's stacks name Rune's own source. A machine that builds through its own cargo wrapper
+  // builds first and passes `--head exe:<path>` instead of a folder or a ref.
+  "build": {
+    "command": "cargo build --profile perf -p launch-floor",
+    "env": {
+      "CARGO_PROFILE_PERF_DEBUG": "line-tables-only",
+      "CARGO_PROFILE_PERF_STRIP": "false",
+      "CARGO_TARGET_DIR": "{cache}/cargo-target"
+    },
+    "output": {
+      "linux": "{cache}/cargo-target/perf/launch-floor",
+      "macos": "{cache}/cargo-target/perf/launch-floor",
+      "windows": "{cache}/cargo-target/perf/launch-floor.exe"
+    }
+  },
+  "apps": {
+    // One window, one line of text, one rectangle. Every folder Rune reads or writes is in the
+    // launch's own home.
+    "floor": {
+      "kind": "native",
+      "exe": {
+        "linux": "../target/perf/launch-floor",
+        "macos": "../target/perf/launch-floor",
+        "windows": "../target/perf/launch-floor.exe"
+      },
+      "env": { "RUNE_DIRS_ROOT": "{home}", "LAUNCH_FLOOR": "bare" },
+      // `__COMPAT_LAYER`: a shell started by an installed app's chain carries Windows' compatibility layer,
+      // which loads the shim engine into every process it starts; a launch from the Start menu has none.
+      "unset": ["RUNE_*", "WGPU_*", "LAUNCH_FLOOR*", "__COMPAT_LAYER"]
+    },
+    // What a desktop app's first screen is made of: title bar, sidebar rows, paragraphs, cards.
+    "floor-shell": { "extends": "floor", "env": { "RUNE_DIRS_ROOT": "{home}", "LAUNCH_FLOOR": "shell" } }
+  }
+}
