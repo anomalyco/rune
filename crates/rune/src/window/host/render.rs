@@ -376,9 +376,7 @@ pub(super) fn submit_and_present_window(
     #[cfg(not(target_os = "macos"))]
     gpu.queue.present(prepared.frame);
     #[cfg(target_os = "windows")]
-    if let Some(surface) = l.surface.as_ref() {
-        l.native.slot.presented_surface(surface);
-    }
+    l.native.slot.presented();
     // A swap chain made again on a handed-over window's visual takes over now (`cpu_frame`).
     #[cfg(target_os = "windows")]
     if matches!(l.native.mode, handover::SurfaceMode::Rebinding { .. }) {

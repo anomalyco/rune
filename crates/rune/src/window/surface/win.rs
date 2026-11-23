@@ -142,11 +142,12 @@ impl Win {
         // No surface: `Host::reattach` is between the old one and the new, and takes this size
         // from the window itself; or the CPU renderer draws it, whose buffer follows this size.
         let (Some(surface), Some(gpu)) = (&self.surface, gpu) else { return true };
-        // `configure` drains the present queue and reconfigures the swap chain; unregister any
-        // outstanding wait before it touches the swap chain.
+        let configured = super::configure(surface, gpu, &self.config);
+        // DX12 `configure` calls `ResizeBuffers` on the same swap chain, preserving its waitable
+        // semaphore and count; only a failed configure drops the swap chain.
         #[cfg(target_os = "windows")]
-        self.native.slot.reset();
-        if let Err(error) = super::configure(surface, gpu, &self.config) {
+        self.native.slot.reconfigured(configured.is_ok());
+        if let Err(error) = configured {
             eprintln!("rune: a window's surface refused its new size: {error}");
             self.surface_ok = false;
         }

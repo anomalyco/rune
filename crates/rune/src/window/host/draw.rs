@@ -189,9 +189,10 @@ impl WindowFrame<'_> {
     fn reblend_surface(&mut self) -> bool {
         let (Some(l), Some((gpu, renderer))) = (self.host.win.as_mut(), self.host.gpu.as_mut()) else { return false };
         let Some(surface) = l.surface.as_ref() else { return false };
+        let ok = reblend_core(surface, gpu, &mut l.config, renderer, &mut l.alpha, self.host.app.rt_mut());
         #[cfg(target_os = "windows")]
-        l.native.slot.reset();
-        reblend_core(surface, gpu, &mut l.config, renderer, &mut l.alpha, self.host.app.rt_mut())
+        l.native.slot.reconfigured(ok);
+        ok
     }
 }
 

@@ -38,9 +38,10 @@ impl OverlayFrame<'_> {
         ) else {
             return false;
         };
+        let ok = crate::window::reblend_core(&live.surface, gpu, &mut live.config, renderer, &mut live.alpha, self.app.rt_mut());
         #[cfg(target_os = "windows")]
-        live.slot.reset();
-        crate::window::reblend_core(&live.surface, gpu, &mut live.config, renderer, &mut live.alpha, self.app.rt_mut())
+        live.slot.reconfigured(ok);
+        ok
     }
 }
 
@@ -365,7 +366,7 @@ impl FrameHost for OverlayFrame<'_> {
         frame::submit_and_present(live, renderer, gpu, self.app.rt(), prepared.encoder, prepared.frame, self.prewarm);
         // The next frame waits for the room this one took (`slot`).
         #[cfg(target_os = "windows")]
-        live.slot.presented_surface(&live.surface);
+        live.slot.presented();
         frame::record_presented(self.prewarm);
         crate::render::gpu_events::presented();
         crate::time::now()
