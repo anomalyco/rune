@@ -23,12 +23,29 @@ diff --git a/src/platform_impl/linux/wayland/seat/pointer/mod.rs b/src/platform_
 +                            LogicalPosition::new(-horizontal.absolute * gain, -vertical.absolute * gain)
                                  .to_physical(scale_factor),
 diff --git a/src/platform/macos.rs b/src/platform/macos.rs
-index 30623b0..943e97b 100644
 --- a/src/platform/macos.rs
 +++ b/src/platform/macos.rs
-@@ -529,3 +529,25 @@ pub enum OptionAsAlt {
-     #[default]
-     None,
+@@ -435,2 +435,10 @@ pub trait EventLoopBuilderExtMacOS {
+     fn with_activate_ignoring_other_apps(&mut self, ignore: bool) -> &mut Self;
++
++    /// Whether a bundled app with no activation policy of its own gets `NewEvents(Init)` and
++    /// `Resumed` in `applicationWillFinishLaunching:` instead of `applicationDidFinishLaunching:`,
++    /// so its first window is made and drawn before AppKit's own launch work, not after it.
++    /// Activation still waits for `applicationDidFinishLaunching:`.
++    ///
++    /// Off by default.
++    fn with_init_before_finish_launching(&mut self, early: bool) -> &mut Self;
+ }
+@@ -438,2 +446,8 @@ pub trait EventLoopBuilderExtMacOS {
+ impl<T> EventLoopBuilderExtMacOS for EventLoopBuilder<T> {
++    #[inline]
++    fn with_init_before_finish_launching(&mut self, early: bool) -> &mut Self {
++        self.platform_specific.init_before_finish_launching = early;
++        self
++    }
++
+     #[inline]
+@@ -531 +545,23 @@ pub enum OptionAsAlt {
  }
 +
 +/// Rune: the focused field's text around its selection (the selection a byte range of it), which
@@ -1480,3 +1497,106 @@ index 9c109490..705976d6 100644
  #[derive(Debug, Copy, Clone)]
  struct KeyLParam {
      pub scancode: u8,
+diff --git a/src/platform_impl/macos/app_state.rs b/src/platform_impl/macos/app_state.rs
+--- a/src/platform_impl/macos/app_state.rs
++++ b/src/platform_impl/macos/app_state.rs
+@@ -25,2 +25,5 @@ pub(super) struct AppState {
+     activate_ignoring_other_apps: bool,
++    init_before_finish_launching: bool,
++    /// Whether `applicationWillFinishLaunching:` dispatched the init events.
++    init_dispatched: Cell<bool>,
+     run_loop: RunLoop,
+@@ -63,2 +66,7 @@ declare_class!(
+     unsafe impl NSApplicationDelegate for ApplicationDelegate {
++        #[method(applicationWillFinishLaunching:)]
++        fn app_will_finish_launching(&self, notification: &NSNotification) {
++            self.will_finish_launching(notification)
++        }
++
+         #[method(applicationDidFinishLaunching:)]
+@@ -81,2 +89,3 @@ impl ApplicationDelegate {
+         activate_ignoring_other_apps: bool,
++        init_before_finish_launching: bool,
+     ) -> Retained<Self> {
+@@ -86,2 +95,4 @@ impl ApplicationDelegate {
+             activate_ignoring_other_apps,
++            init_before_finish_launching,
++            init_dispatched: Cell::new(false),
+             run_loop: RunLoop::main(mtm),
+@@ -104,2 +115,31 @@ impl ApplicationDelegate {
+ 
++    /// With `init_before_finish_launching`: the default menu and the init events now, so the
++    /// app's first window is made and drawn before AppKit's own launch work (on macOS 27 about
++    /// 30,000 to 55,000 µs between this notification and `applicationDidFinishLaunching:`).
++    /// Only where `did_finish_launching` leaves the activation policy alone, a bundled app
++    /// that names none: any other app's windows wait for the policy it sets after the launch.
++    fn will_finish_launching(&self, _notification: &NSNotification) {
++        trace_scope!("applicationWillFinishLaunching:");
++        if !self.ivars().init_before_finish_launching
++            || self.ivars().activation_policy.is_some()
++            || self.ivars().stop_on_launch.get()
++        {
++            return;
++        }
++        let is_bundled =
++            unsafe { NSRunningApplication::currentApplication().bundleIdentifier().is_some() };
++        if !is_bundled {
++            return;
++        }
++        let mtm = MainThreadMarker::from(self);
++        let app = NSApplication::sharedApplication(mtm);
++        if self.ivars().default_menu {
++            menu::initialize(&app);
++        }
++        self.ivars().waker.borrow_mut().start();
++        self.set_is_running(true);
++        self.ivars().init_dispatched.set(true);
++        self.dispatch_init_events();
++    }
++
+     // NOTE: This will, globally, only be run once, no matter how many
+@@ -138,12 +178,15 @@ impl ApplicationDelegate {
+ 
+-        if self.ivars().default_menu {
+-            // The menubar initialization should be before the `NewEvents` event, to allow
+-            // overriding of the default menu even if it's created
+-            menu::initialize(&app);
+-        }
++        // `will_finish_launching` did the rest already.
++        if !self.ivars().init_dispatched.get() {
++            if self.ivars().default_menu {
++                // The menubar initialization should be before the `NewEvents` event, to allow
++                // overriding of the default menu even if it's created
++                menu::initialize(&app);
++            }
+ 
+-        self.ivars().waker.borrow_mut().start();
++            self.ivars().waker.borrow_mut().start();
+ 
+-        self.set_is_running(true);
+-        self.dispatch_init_events();
++            self.set_is_running(true);
++            self.dispatch_init_events();
++        }
+ 
+diff --git a/src/platform_impl/macos/event_loop.rs b/src/platform_impl/macos/event_loop.rs
+--- a/src/platform_impl/macos/event_loop.rs
++++ b/src/platform_impl/macos/event_loop.rs
+@@ -207,2 +207,3 @@ pub(crate) struct PlatformSpecificEventLoopAttributes {
+     pub(crate) activate_ignoring_other_apps: bool,
++    pub(crate) init_before_finish_launching: bool,
+ }
+@@ -211,3 +212,8 @@ impl Default for PlatformSpecificEventLoopAttributes {
+     fn default() -> Self {
+-        Self { activation_policy: None, default_menu: true, activate_ignoring_other_apps: true }
++        Self {
++            activation_policy: None,
++            default_menu: true,
++            activate_ignoring_other_apps: true,
++            init_before_finish_launching: false,
++        }
+     }
+@@ -236,2 +242,3 @@ impl<T> EventLoop<T> {
+             attributes.activate_ignoring_other_apps,
++            attributes.init_before_finish_launching,
+         );

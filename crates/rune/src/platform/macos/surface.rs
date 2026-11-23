@@ -15,6 +15,41 @@ pub(crate) fn present_with_transaction(surface: &wgpu::Surface, on: bool) {
     crate::gpu::with_layer(surface, |layer| unsafe { let _: () = msg_send![layer, setPresentsWithTransaction: Bool::new(on)]; });
 }
 
+/// A first frame drawn before AppKit has finished launching (the first window is made in
+/// `applicationWillFinishLaunching:`): Core Animation's transaction, which holds the window's
+/// layers and the drawable presented in it, goes to the window server now. The run loop turn
+/// that would commit it comes only after AppKit's own launch work.
+pub(crate) fn flush_while_launching() {
+    if !launching() { return; }
+    // SAFETY: a class method on the main thread.
+    unsafe {
+        if let Some(transaction) = objc2::runtime::AnyClass::get(c"CATransaction") {
+            let _: () = msg_send![transaction, flush];
+            crate::marks::mark("frame.first.flushed");
+        }
+    }
+}
+
+/// Whether AppKit is still launching the app (`applicationDidFinishLaunching:` hasn't come).
+/// Until then it reports nothing of a window made in `applicationWillFinishLaunching:`: not
+/// that it is on screen, and no change of that.
+pub(crate) fn launching() -> bool {
+    use objc2::runtime::{AnyClass, AnyObject, Bool};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static LAUNCHED: AtomicBool = AtomicBool::new(false);
+    if LAUNCHED.load(Ordering::Relaxed) { return false; }
+    // SAFETY: a class method and a property read.
+    let launched = unsafe {
+        let Some(running) = AnyClass::get(c"NSRunningApplication") else { return false };
+        let current: *const AnyObject = msg_send![running, currentApplication];
+        if current.is_null() { return false; }
+        let launched: Bool = msg_send![current, isFinishedLaunching];
+        launched.as_bool()
+    };
+    if launched { LAUNCHED.store(true, Ordering::Relaxed); }
+    !launched
+}
+
 #[link(name = "QuartzCore", kind = "framework")]
 unsafe extern "C" {
     static kCAGravityTopLeft: &'static objc2::runtime::AnyObject;

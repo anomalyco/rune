@@ -433,9 +433,23 @@ pub trait EventLoopBuilderExtMacOS {
     ///
     /// The default behavior is to ignore other applications and activate when launched.
     fn with_activate_ignoring_other_apps(&mut self, ignore: bool) -> &mut Self;
+
+    /// Whether a bundled app with no activation policy of its own gets `NewEvents(Init)` and
+    /// `Resumed` in `applicationWillFinishLaunching:` instead of `applicationDidFinishLaunching:`,
+    /// so its first window is made and drawn before AppKit's own launch work, not after it.
+    /// Activation still waits for `applicationDidFinishLaunching:`.
+    ///
+    /// Off by default.
+    fn with_init_before_finish_launching(&mut self, early: bool) -> &mut Self;
 }
 
 impl<T> EventLoopBuilderExtMacOS for EventLoopBuilder<T> {
+    #[inline]
+    fn with_init_before_finish_launching(&mut self, early: bool) -> &mut Self {
+        self.platform_specific.init_before_finish_launching = early;
+        self
+    }
+
     #[inline]
     fn with_activation_policy(&mut self, activation_policy: ActivationPolicy) -> &mut Self {
         self.platform_specific.activation_policy = Some(activation_policy);

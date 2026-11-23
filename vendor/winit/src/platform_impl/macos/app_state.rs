@@ -23,6 +23,9 @@ pub(super) struct AppState {
     activation_policy: Option<NSApplicationActivationPolicy>,
     default_menu: bool,
     activate_ignoring_other_apps: bool,
+    init_before_finish_launching: bool,
+    /// Whether `applicationWillFinishLaunching:` dispatched the init events.
+    init_dispatched: Cell<bool>,
     run_loop: RunLoop,
     event_handler: EventHandler,
     stop_on_launch: Cell<bool>,
@@ -61,6 +64,11 @@ declare_class!(
     unsafe impl NSObjectProtocol for ApplicationDelegate {}
 
     unsafe impl NSApplicationDelegate for ApplicationDelegate {
+        #[method(applicationWillFinishLaunching:)]
+        fn app_will_finish_launching(&self, notification: &NSNotification) {
+            self.will_finish_launching(notification)
+        }
+
         #[method(applicationDidFinishLaunching:)]
         fn app_did_finish_launching(&self, notification: &NSNotification) {
             self.did_finish_launching(notification)
@@ -79,11 +87,14 @@ impl ApplicationDelegate {
         activation_policy: Option<NSApplicationActivationPolicy>,
         default_menu: bool,
         activate_ignoring_other_apps: bool,
+        init_before_finish_launching: bool,
     ) -> Retained<Self> {
         let this = mtm.alloc().set_ivars(AppState {
             activation_policy,
             default_menu,
             activate_ignoring_other_apps,
+            init_before_finish_launching,
+            init_dispatched: Cell::new(false),
             run_loop: RunLoop::main(mtm),
             event_handler: EventHandler::new(),
             stop_on_launch: Cell::new(false),
@@ -100,6 +111,35 @@ impl ApplicationDelegate {
             pending_redraw: RefCell::new(vec![]),
         });
         unsafe { msg_send_id![super(this), init] }
+    }
+
+    /// With `init_before_finish_launching`: the default menu and the init events now, so the
+    /// app's first window is made and drawn before AppKit's own launch work (on macOS 27 about
+    /// 30,000 to 55,000 µs between this notification and `applicationDidFinishLaunching:`).
+    /// Only where `did_finish_launching` leaves the activation policy alone, a bundled app
+    /// that names none: any other app's windows wait for the policy it sets after the launch.
+    fn will_finish_launching(&self, _notification: &NSNotification) {
+        trace_scope!("applicationWillFinishLaunching:");
+        if !self.ivars().init_before_finish_launching
+            || self.ivars().activation_policy.is_some()
+            || self.ivars().stop_on_launch.get()
+        {
+            return;
+        }
+        let is_bundled =
+            unsafe { NSRunningApplication::currentApplication().bundleIdentifier().is_some() };
+        if !is_bundled {
+            return;
+        }
+        let mtm = MainThreadMarker::from(self);
+        let app = NSApplication::sharedApplication(mtm);
+        if self.ivars().default_menu {
+            menu::initialize(&app);
+        }
+        self.ivars().waker.borrow_mut().start();
+        self.set_is_running(true);
+        self.ivars().init_dispatched.set(true);
+        self.dispatch_init_events();
     }
 
     // NOTE: This will, globally, only be run once, no matter how many
@@ -136,16 +176,19 @@ impl ApplicationDelegate {
         #[allow(deprecated)]
         app.activateIgnoringOtherApps(self.ivars().activate_ignoring_other_apps);
 
-        if self.ivars().default_menu {
-            // The menubar initialization should be before the `NewEvents` event, to allow
-            // overriding of the default menu even if it's created
-            menu::initialize(&app);
+        // `will_finish_launching` did the rest already.
+        if !self.ivars().init_dispatched.get() {
+            if self.ivars().default_menu {
+                // The menubar initialization should be before the `NewEvents` event, to allow
+                // overriding of the default menu even if it's created
+                menu::initialize(&app);
+            }
+
+            self.ivars().waker.borrow_mut().start();
+
+            self.set_is_running(true);
+            self.dispatch_init_events();
         }
-
-        self.ivars().waker.borrow_mut().start();
-
-        self.set_is_running(true);
-        self.dispatch_init_events();
 
         // If the application is being launched via `EventLoop::pump_app_events()` then we'll
         // want to stop the app once it is launched (and return to the external loop)

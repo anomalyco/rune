@@ -88,6 +88,14 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
         }
         builder.with_activate_ignoring_other_apps(false);
     }
+    // The first window is made and drawn as AppKit starts to launch, not after it has finished:
+    // on macOS 27 AppKit's own launch work takes 30,000 to 55,000 µs after
+    // `applicationWillFinishLaunching:`. `RUNE_WINDOW_AFTER_LAUNCH` keeps the old order.
+    #[cfg(target_os = "macos")]
+    if !accessory && std::env::var_os("RUNE_WINDOW_AFTER_LAUNCH").is_none() {
+        use winit::platform::macos::EventLoopBuilderExtMacOS;
+        builder.with_init_before_finish_launching(true);
+    }
     let event_loop = builder.build().inspect_err(|_| crate::render::discard_prewarm()).map_err(event_loop_error)?;
     crate::marks::mark("loop.built");
     // While the app sets up, after winit's first window: the first CPU frame's rounding needs it.
