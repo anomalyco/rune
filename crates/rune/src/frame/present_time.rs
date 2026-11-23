@@ -242,11 +242,14 @@ impl Summary {
     pub(crate) fn of_trace(text: &str) -> Option<Summary> {
         let mut lines = text.lines().filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok());
         let header = lines.next()?;
-        let hz = header["hz"].as_f64().filter(|hz| *hz > 0.0).unwrap_or(60.0);
+        let mut hz = header["hz"].as_f64().filter(|hz| hz.is_finite() && *hz > 0.0).unwrap_or(60.0);
         let (mut frames, mut presented, mut skipped, mut timed) = (0, 0, 0, false);
         let (mut intervals, mut lags) = (Vec::new(), Vec::new());
         for frame in lines.filter(|l| l.get("t").is_some()) {
             frames += 1;
+            if let Some(rate) = frame["hz"].as_f64().filter(|hz| hz.is_finite() && *hz > 0.0) {
+                hz = rate;
+            }
             let Some(present) = frame.get("present_ms") else { continue };
             timed = true;
             let Some(present) = present.as_f64() else { skipped += 1; continue };

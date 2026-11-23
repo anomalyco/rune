@@ -93,3 +93,42 @@ fn keyed_churn_prunes_dictionaries_and_never_reuses_retired_ids() {
     assert_eq!(retired.len(), 255 + toggle_ids.len() - 1);
     assert_eq!(live.len(), 4);
 }
+
+#[test]
+fn trace_records_refresh_rate_changes_for_present_summary() {
+    struct Presents(std::sync::Mutex<Vec<crate::frame::present_time::Presented>>);
+    impl crate::frame::present_time::Source for Presents {
+        fn take(&self, out: &mut Vec<crate::frame::present_time::Presented>) { out.append(&mut self.0.lock().unwrap()); }
+    }
+    let view = |_: &bool, _: &mut Cx<bool>| crate::el().key("box").size(20.0, 20.0);
+    let mut rt = Runtime::new(false, view, (100.0, 100.0), Env { scale: 1.0, system_dark: true });
+    let tmp = TempFile(std::env::temp_dir().join(format!("rune-trace-hz-{}.jsonl", std::process::id())));
+    let start = crate::time::now();
+    let source = std::sync::Arc::new(Presents(Default::default()));
+    {
+        let mut trace = Trace::open_clock(&tmp.0, rt.viewport, 60.0000024, 1.0, "wall");
+        trace.record_presents(source.clone(), start);
+        let steps = [
+            (0.0, 20_000u64, Some(60.0000024)),
+            (8.3, 28_333, Some(120.0000048)),
+            (25.0, 45_000, Some(119.9999904)), // 16.667 ms gap: missed at 120 Hz, not at 60 Hz
+            (33.3, 53_333, Some(120.0)),
+        ];
+        for (k, (t_ms, present_us, hz)) in steps.into_iter().enumerate() {
+            rt.frame(1.0 / 120.0);
+            let seq = k as u64 + 1;
+            let timing = FrameTiming { target_ms: Some(t_ms), drawable: Some(seq), continuous: k > 0, hz };
+            trace.frame_timed(&mut rt, t_ms, 0.0, timing);
+            source.0.lock().unwrap().push((seq, Some(start + std::time::Duration::from_micros(present_us))));
+        }
+    }
+    let text = std::fs::read_to_string(&tmp.0).unwrap();
+    let frames: Vec<Value> = text.lines().skip(1).map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert!(frames[0].get("hz").is_none(), "unchanged rate is omitted: {}", frames[0]);
+    assert_eq!(frames[1]["hz"], 120.0, "rate change is recorded on the frame where it settled");
+    assert!(frames[2].get("hz").is_none(), "sub-0.01 Hz jitter does not repeat hz: {}", frames[2]);
+    assert!(frames[3].get("hz").is_none(), "steady rate is omitted: {}", frames[3]);
+    let summary = crate::frame::present_time::Summary::of_trace(&text).unwrap();
+    assert_eq!((summary.hz, summary.frames, summary.presented, summary.missed), (120.0, 4, 4, 1));
+    assert!(summary.to_string().contains("at 120 Hz") && summary.to_string().contains("1 missed (>12.50 ms)"), "{summary}");
+}

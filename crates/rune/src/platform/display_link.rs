@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use objc2_core_foundation::CFRetained;
-use objc2_core_video::{CVDisplayLink, CVGetCurrentHostTime, CVGetHostClockFrequency, CVOptionFlags, CVReturn, CVTimeStamp, CVTimeStampFlags};
+use objc2_core_video::{CVDisplayLink, CVGetCurrentHostTime, CVGetHostClockFrequency, CVOptionFlags, CVReturn, CVTime, CVTimeFlags, CVTimeStamp, CVTimeStampFlags};
 use winit::{platform::macos::MonitorHandleExtMacOS, window::Window};
 
 struct Callback {
@@ -76,9 +76,8 @@ unsafe extern "C-unwind" fn tick(
     let callback = unsafe { &*context.cast::<Callback>() };
     // SAFETY: CoreVideo provides a valid timestamp for this callback invocation.
     let output = unsafe { output.as_ref() };
-    if output.videoTimeScale > 0 && output.videoRefreshPeriod > 0 {
-        let period = Duration::from_secs_f64(output.videoRefreshPeriod as f64 / output.videoTimeScale as f64);
-        callback.period_ns.store(period.as_nanos() as u64, Ordering::Relaxed);
+    if let Some(ns) = cv_period_ns(output.videoRefreshPeriod, output.videoTimeScale) {
+        callback.period_ns.store(ns, Ordering::Relaxed);
     }
     let target = if output.flags & CVTimeStampFlags::HostTimeValid.0 != 0 {
         output.hostTime
@@ -139,10 +138,18 @@ impl DisplayLink {
 
     /// AppKit monitor lookup is only needed on creation and display/visibility changes.
     pub(crate) fn update_display(&mut self, window: &Window) {
-        let display = window.current_monitor().map(|m| m.native_id());
-        if display != self.display {
+        let monitor = window.current_monitor();
+        let display = monitor.as_ref().map(|m| m.native_id());
+        let changed = display != self.display;
+        if changed {
             if let Some(display) = display { self.link.set_current_cg_display(display); }
             self.display = display;
+        }
+        if (changed || !self.running)
+            && let Some(ns) = nominal_period_ns(self.link.nominal_output_video_refresh_period())
+                .or_else(|| monitor.as_ref().and_then(|m| m.refresh_rate_millihertz()).and_then(millihertz_period_ns))
+        {
+            self.callback.period_ns.store(ns, Ordering::Relaxed);
         }
         self.capped = low_power_caps(self.display);
     }
@@ -198,6 +205,23 @@ impl DisplayLink {
 
 impl Drop for DisplayLink {
     fn drop(&mut self) { self.stop(); }
+}
+
+fn cv_period_ns(value: i64, scale: i32) -> Option<u64> {
+    if value <= 0 || scale <= 0 { return None; }
+    let period = Duration::try_from_secs_f64(value as f64 / scale as f64).ok()?;
+    u64::try_from(period.as_nanos()).ok().filter(|&ns| ns > 0)
+}
+
+fn nominal_period_ns(time: CVTime) -> Option<u64> {
+    if time.flags & CVTimeFlags::IsIndefinite.0 != 0 { return None; }
+    cv_period_ns(time.timeValue, time.timeScale)
+}
+
+fn millihertz_period_ns(mhz: u32) -> Option<u64> {
+    if mhz == 0 { return None; }
+    let period = Duration::try_from_secs_f64(1000.0 / f64::from(mhz)).ok()?;
+    u64::try_from(period.as_nanos()).ok().filter(|&ns| ns > 0)
 }
 
 fn target_time(now: Instant, host_now: u64, host_target: u64, frequency: f64) -> Instant {
@@ -334,5 +358,18 @@ mod tests {
         assert_eq!(opportunity(None, Some(ms(100)), Some(ms(100)), ms(118), Duration::from_millis(16)), Opportunity::Wait);
         // While moving, a rejected tick right after a frame waits for the next one.
         assert_eq!(opportunity(Some(ms(116)), Some(ms(100)), Some(ms(108)), ms(102), period), Opportunity::Wait);
+    }
+
+    #[test]
+    fn nominal_and_monitor_refresh_periods_seed_the_display_rate() {
+        let ns_120 = nominal_period_ns(CVTime { timeValue: 1, timeScale: 120, flags: 0 }).unwrap();
+        assert!((1.0 / Duration::from_nanos(ns_120).as_secs_f64() - 120.0).abs() < 0.01);
+        let ns_ntsc = nominal_period_ns(CVTime { timeValue: 1001, timeScale: 60000, flags: 0 }).unwrap();
+        assert!((1.0 / Duration::from_nanos(ns_ntsc).as_secs_f64() - 59.94).abs() < 0.01);
+        assert_eq!(nominal_period_ns(CVTime { timeValue: 1, timeScale: 120, flags: CVTimeFlags::IsIndefinite.0 }), None);
+        assert_eq!(nominal_period_ns(CVTime { timeValue: 0, timeScale: 120, flags: 0 }), None);
+        assert_eq!(nominal_period_ns(CVTime { timeValue: 1, timeScale: 0, flags: 0 }), None);
+        assert_eq!(millihertz_period_ns(120_000), Some(ns_120));
+        assert_eq!(millihertz_period_ns(0), None);
     }
 }

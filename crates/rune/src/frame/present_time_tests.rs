@@ -145,6 +145,23 @@ fn traces_without_present_times_have_no_summary() {
 }
 
 #[test]
+fn summary_uses_settled_frame_refresh_rate_over_initial_header() {
+    let header = r#"{"type":"header","launch":"rune","width":480,"height":120,"hz":60.0000024000001,"scale":2,"clock":"wall"}"#;
+    let trace = [
+        header,
+        r#"{"t":0,"n":1,"present_ms":16.0}"#,
+        r#"{"t":8.3,"n":1,"hz":120,"present_ms":null}"#,
+        r#"{"t":16.6,"n":1,"present_ms":24.33,"present_dt_ms":8.33}"#,
+        r#"{"t":33.3,"n":1,"present_ms":41.0,"present_dt_ms":16.67}"#,
+        r#"{"t":41.6,"n":1,"hz":0,"present_ms":49.33,"present_dt_ms":8.33}"#,
+        r#"{"t":66.6,"n":1,"present_ms":74.83,"present_dt_ms":25.5}"#,
+    ].join("\n");
+    let s = Summary::of_trace(&trace).unwrap();
+    assert_eq!((s.hz, s.frames, s.presented, s.skipped, s.missed), (120.0, 6, 5, 1, 2));
+    assert!(s.to_string().contains("at 120 Hz") && s.to_string().contains("2 missed (>12.50 ms)"), "{s}");
+}
+
+#[test]
 fn spread_uses_nearest_rank() {
     let s = Spread::of((1..=20).map(f64::from).collect()).unwrap();
     assert_eq!((s.p50, s.p95, s.max), (10.0, 19.0, 20.0));
