@@ -438,8 +438,7 @@ impl Running {
                     (x, y, rt.page_window().0)
                 };
                 // The mirror's pointer is in window points; the canvas draws the band.
-                self.app.pointer_move(x, y + offset);
-                return true;
+                return self.app.observe_pointer(x, y + offset);
             }
             _ => {}
         }
@@ -461,8 +460,9 @@ impl Running {
             }
             WindowEvent::CursorMoved { position, .. } if !self.app.rt().touching() => {
                 let (x, y) = crate::input::host_events::physical_point(self.app.rt(), position.x, position.y);
-                self.app.pointer_move(x, y);
+                let changed = self.app.observe_pointer(x, y);
                 self.cursor.apply(window, self.app.rt().cursor(), true);
+                return changed;
             }
             WindowEvent::CursorLeft { .. } if !self.app.rt().touching() => {
                 self.app.rt_mut().pointer_leave();

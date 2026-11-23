@@ -548,22 +548,23 @@ impl ApplicationHandler<Wake> for Browser {
         let mut running = self.running.borrow_mut();
         let (Some(window), Some(r)) = (&self.window, &mut *running) else { return };
         let _input = crate::input::time::arrived(&event);
-        r.full_redraw = true;
-        if r.window_input(&event, window) { window.request_redraw(); return; }
+        if r.window_input(&event, window) { r.full_redraw = true; window.request_redraw(); return; }
         match event {
             // Reconfiguring the surface clears the canvas. These arrive from winit's
             // ResizeObserver, after this frame's rAF and before it paints, so a requested redraw
             // would land a frame late over a blank canvas. winit holds its canvas borrowed while
             // it delivers them, so the frame is drawn in the microtask right after.
             WindowEvent::Resized(size) => {
+                r.full_redraw = true;
                 r.resize_surface(window, size, window.scale_factor() as f32);
                 self.resize_redraw.resized();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                r.full_redraw = true;
                 r.resize_surface(window, window.inner_size(), scale_factor as f32);
                 self.resize_redraw.resized();
             }
-            WindowEvent::ThemeChanged(theme) => { r.app.rt_mut().set_system_dark(theme == winit::window::Theme::Dark); window.request_redraw(); }
+            WindowEvent::ThemeChanged(theme) => { r.full_redraw = true; r.app.rt_mut().set_system_dark(theme == winit::window::Theme::Dark); window.request_redraw(); }
             _ => {}
         }
     }

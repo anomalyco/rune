@@ -127,6 +127,10 @@ impl dyn WindowApp + '_ {
         self.driver(|rt, app| rt.pointer_move(app, x, y));
     }
 
+    pub(in crate::window) fn observe_pointer(&mut self, x: f32, y: f32) -> bool {
+        self.driver(|rt, app| rt.observe_pointer(app, x, y))
+    }
+
     pub(in crate::window) fn pointer_down(&mut self, x: f32, y: f32) {
         self.driver(|rt, app| rt.pointer_down(app, x, y));
     }

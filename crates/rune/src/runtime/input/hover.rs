@@ -334,6 +334,51 @@ impl RuntimeCore {
         Some(Flip { i, id: n.id, on, anim, changed, now: !on && !allowed })
     }
 
+    /// Whether node `i` shows pressed right now (primary capture, secondary capture, or tint).
+    fn press_down_node(&self, i: usize, captured: Option<&str>) -> bool {
+        let n = &self.tree.nodes[i];
+        let capture_inside = if self.pointer.secondary_held() {
+            self.pointer.pos.is_some_and(|(x, y)| self.node_contains(i, x, y))
+        } else {
+            self.pointer.press_inside()
+        };
+        // The middle or secondary button shows pressed what it went down on while it's over
+        // it, as the primary does.
+        let tinted = self.pointer.tint_path() == Some(n.path.as_str()) && self.pointer.pos.is_some_and(|(x, y)| self.node_contains(i, x, y));
+        self.allowed(i) && ((captured == Some(n.path.as_str()) && capture_inside) || tinted)
+    }
+
+    /// Whether `update_interaction` would retarget any hover, press or press-scale track from
+    /// the current pointer state.
+    pub(in crate::runtime) fn interaction_changes(&self) -> bool {
+        if !self.tree.nodes.iter().map(|n| n.id).eq(self.tree.built_ids.iter().copied()) {
+            return false;
+        }
+        let captured = self.pointer.captured_path();
+        let alone = self.hovered_alone();
+        let shared = self.shared_hovered();
+        for i in 0..self.tree.nodes.len() {
+            let n = &self.tree.nodes[i];
+            let press_scale = n.handlers.get().and_then(|h| h.press_scale);
+            if n.vis.hover().a <= 0.0 && !n.vis_flags.hover_group() && !n.vis.tracks_press() && press_scale.is_none() { continue; }
+            if self.subtree_exiting(i) { continue; }
+            if self.hover_flip(i, captured, alone, &shared).is_some_and(|f| f.changed) { return true; }
+            if !n.vis.tracks_press() && press_scale.is_none() { continue; }
+            let down = self.press_down_node(i, captured);
+            let id = n.id;
+            if n.vis.tracks_press() && self.scene.store().target(id, P_PRESS).unwrap_or(0.0) != down as u8 as f32 {
+                return true;
+            }
+            if let Some(k) = press_scale {
+                let want = if down && !self.reduced_motion { k } else { 1.0 };
+                if self.scene.store().target(id, P_PRESS_SCALE).unwrap_or(1.0) != want {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Retargets the hover, press and press-scale tracks. `held` is the hold `refresh_hover`
     /// just decided; without it (a commit's pass) this decides it.
     pub(in crate::runtime) fn update_interaction(&mut self, held: Option<bool>) -> bool {
@@ -367,15 +412,7 @@ impl RuntimeCore {
                 None => {}
             }
             if !n.vis.tracks_press() && press_scale.is_none() { continue; }
-            let capture_inside = if self.pointer.secondary_held() {
-                self.pointer.pos.is_some_and(|(x, y)| self.node_contains(i, x, y))
-            } else {
-                self.pointer.press_inside()
-            };
-            // The middle or secondary button shows pressed what it went down on while it's over
-            // it, as the primary does.
-            let tinted = self.pointer.tint_path() == Some(n.path.as_str()) && self.pointer.pos.is_some_and(|(x, y)| self.node_contains(i, x, y));
-            let down = self.allowed(i) && ((captured == Some(n.path.as_str()) && capture_inside) || tinted);
+            let down = self.press_down_node(i, captured);
             let pressed = down && n.vis.tracks_press();
             let id = n.id;
             changed |= self.scene.store().target(id, P_PRESS).unwrap_or(0.0) != pressed as u8 as f32;

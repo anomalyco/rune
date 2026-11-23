@@ -293,6 +293,15 @@ impl RuntimeCore {
         true
     }
 
+    /// The text node and link index currently hovered by the pointer, if any.
+    pub(in crate::runtime) fn hovered_link(&self) -> Option<(NodeId, usize)> {
+        let (x, y) = self.pointer.pos?;
+        let path = self.pointer.hovered.as_deref()?;
+        let i = self.live_index(path)?;
+        if self.tree.nodes[i].text.as_ref().is_none_or(|t| t.cold.links.is_empty()) { return None; }
+        Some((self.tree.nodes[i].id, self.link_at(i, x, y)?))
+    }
+
     /// Which of node `i`'s links are hovered, pressed and keyboard-focused.
     pub(in crate::runtime) fn link_states(&self, i: usize) -> (Option<usize>, Option<usize>, Option<usize>) {
         let path = &self.tree.nodes[i].path;

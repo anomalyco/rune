@@ -230,3 +230,135 @@ fn pre_step_reblend_failure_runs_covered_wake_once_and_schedules_backoff() {
     );
     assert_eq!(*outcomes.borrow(), [FrameOutcome::Skipped]);
 }
+
+#[test]
+fn cursor_moved_skips_redraw_within_same_hovered_row_and_keeps_quiet_timer_and_loop_frames() {
+    use crate::el::Cursor;
+    use crate::window::host::events::cursor_moved_core;
+    use crate::window::surface::{LoopFrame, TimerFrame};
+    use crate::{Color, Phase, ScrollSpec, Spring, col};
+
+    struct HoverState {
+        live: crate::Live<[f32; 2]>,
+        drag_moves: u32,
+        pointer_moves: u32,
+    }
+    fn hover_view(s: &HoverState, _: &mut Cx<HoverState>) -> El {
+        col().size(300.0, 260.0)
+            .hover_motion_within(Spring::NONE, Spring::NONE)
+            .motion(Spring::NONE)
+            // 1000 virtual rows, 24 pt each (y = 0..120).
+            .child(
+                col().key("list").size(300.0, 120.0).scroll(ScrollSpec { stick_bottom: false })
+                    .child(col().key("rows").w_full().growth(crate::GrowthSpec::default()).virtual_rows(
+                        1000,
+                        24.0,
+                        |_: &HoverState, i| format!("r{i}").into(),
+                        |_: &HoverState, _| el().size(300.0, 24.0).hover(Color::WHITE.alpha(0.08)),
+                    )),
+            )
+            // Cursor-only hit target with no hover fill (y = 120..150).
+            .child(el().key("cursor-only").size(300.0, 30.0).hit().cursor(Cursor::Pointer))
+            // Element asking for pointer positions via on_pointer_move_local + live_only (y = 150..190).
+            .child(
+                el().key("live-box").size(300.0, 40.0)
+                    .on_pointer_move_local(|s: &mut HoverState, p, tx| {
+                        s.pointer_moves += 1;
+                        s.live.set([p.x, p.y]);
+                        tx.live_only();
+                    })
+                    .child(el().key("knob").size(8.0, 8.0).fill(Color::WHITE).live_offset(&s.live)),
+            )
+            // Held drag target (y = 190..230).
+            .child(
+                el().key("drag-box").size(300.0, 40.0)
+                    .on_drag(|s: &mut HoverState, d, _| {
+                        if d.phase == Phase::Move { s.drag_moves += 1; }
+                    }),
+            )
+    }
+
+    let now = crate::time::now();
+    let live = crate::Live::new([0.0, 0.0]);
+    let mut rt = Runtime::new(
+        HoverState { live: live.clone(), drag_moves: 0, pointer_moves: 0 },
+        hover_view,
+        (300.0, 260.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    let mut app = TypedWindowApp {
+        rt,
+        shared: Arc::new(Shared::default()),
+        comp: None,
+        on_frame_drawn: None,
+        on_close: None,
+        on_rest: None,
+        on_quit: None,
+        on_reopen: None,
+        turn_scope: None,
+    };
+    let mut timer = TimerFrame::default();
+    let mut loops = LoopFrame::default();
+
+    // Sweep 4 pt per move across 5 virtual rows of 24 pt (30 moves total -> 5 redraws).
+    let mut redraws = 0u32;
+    for step in 0..30 {
+        let y = 2.0 + step as f32 * 4.0;
+        timer.asked_quiet(now);
+        let _ = loops.only_loops(); // reset to untouched
+        let (redraw, drag_out) = cursor_moved_core(&mut app, &mut timer, &mut loops, 100.0, y);
+        assert!(drag_out.is_none());
+        if redraw {
+            redraws += 1;
+            assert!(!timer.take_quiet(), "a redraw-causing move cancels quiet timer");
+            assert!(!loops.only_loops(), "a redraw-causing move touches loop_frame");
+            app.rt.frame(0.016);
+        } else {
+            assert!(timer.take_quiet(), "an unchanged move leaves timer_frame quiet");
+            assert!(loops.only_loops(), "an unchanged move leaves loop_frame untouched");
+        }
+    }
+    assert_eq!(redraws, 5, "only moves entering a new hovered row must request a redraw");
+
+    // Moving off the last hovered row onto a cursor-only element repaints once to clear the row hover,
+    // then subsequent moves within the cursor-only element skip redraws while keeping Cursor::Pointer.
+    let (redraw, _) = cursor_moved_core(&mut app, &mut timer, &mut loops, 50.0, 135.0);
+    assert!(redraw, "leaving row 4 clears its hover fill");
+    app.rt.frame(0.016);
+    assert_eq!(app.rt().cursor(), Cursor::Pointer);
+    let (redraw, _) = cursor_moved_core(&mut app, &mut timer, &mut loops, 80.0, 135.0);
+    assert!(!redraw, "moving within cursor-only target needs no redraw");
+    assert_eq!(app.rt().cursor(), Cursor::Pointer);
+    let (redraw, _) = cursor_moved_core(&mut app, &mut timer, &mut loops, 80.0, 245.0);
+    assert!(!redraw, "moving from cursor-only target to empty background changes only the OS cursor");
+    assert_eq!(app.rt().cursor(), Cursor::Default);
+
+    // An element with on_pointer_move_local + live_only still requests a redraw on every move with 0 commits.
+    app.rt.check_live_only(false);
+    let commits_before = app.rt.stats.commits;
+    let mut live_redraws = 0u32;
+    for step in 0..4 {
+        let x = 10.0 + step as f32 * 15.0;
+        let (redraw, _) = cursor_moved_core(&mut app, &mut timer, &mut loops, x, 170.0);
+        assert!(redraw, "on_pointer_move element must request a redraw on every move");
+        live_redraws += 1;
+        app.rt.frame(0.016);
+        assert_eq!(live.get()[0], x);
+    }
+    assert_eq!(live_redraws, 4);
+    assert_eq!(app.rt.state.pointer_moves, 4);
+    assert_eq!(app.rt.stats.commits, commits_before, "live_only pointer moves need no view commits");
+
+    // A held drag still requests a redraw on every move.
+    app.rt.pointer_move(20.0, 210.0);
+    app.rt.pointer_down(20.0, 210.0);
+    app.rt.frame(0.016);
+    for step in 1..=3 {
+        let (redraw, _) = cursor_moved_core(&mut app, &mut timer, &mut loops, 20.0 + step as f32 * 10.0, 210.0);
+        assert!(redraw, "held drag must request a redraw on every move");
+        app.rt.frame(0.016);
+    }
+    assert_eq!(app.rt.state.drag_moves, 3);
+    app.rt.pointer_up(50.0, 210.0);
+}

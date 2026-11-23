@@ -658,6 +658,13 @@ impl RuntimeCore {
         }
     }
 
+    /// Snapshot of an in-progress text selection drag's endpoints, used to detect whether a
+    /// pointer move changed the painted selection.
+    pub(in crate::runtime) fn selection_drag_snapshot(&self) -> Option<(usize, usize, Option<String>)> {
+        let phase::Phase::Dragging { selection, .. } = &self.edit.selectable.phase else { return None };
+        Some((selection.anchor, selection.focus, selection.far.as_ref().map(|f| f.path.clone())))
+    }
+
     /// The held press moved: extend the selection it started to the pointer, by its unit, into
     /// the other texts of its selection group. The press itself may belong to an ancestor (a
     /// clickable row), so this follows the selection's own text.

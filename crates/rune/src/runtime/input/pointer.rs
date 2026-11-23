@@ -68,19 +68,28 @@ impl RuntimeCore {
         }
     }
 
-    /// Overlay observation updates coordinates without presenting unchanged hover pixels.
+    /// Updates pointer coordinates and hover/drag state, returning true only when the move
+    /// changed something the next frame must run or paint (queued handlers or drags, hover,
+    /// hover-group or press tracks, hovered links, tooltips, text selection drags, OS drag-out,
+    /// or a newly armed autoscroll or edge-scroll step).
     pub(crate) fn observe_pointer(&mut self, app: &dyn ViewDriver, x: f32, y: f32) -> bool {
         if self.pointer.pos == Some((x, y)) { return false; }
-        let visual_changed = self.tree.nodes.iter().enumerate().any(|(i, n)| {
-            if n.vis.hover().a <= 0.0 && !n.vis.tracks_press() && n.handlers.get().is_none_or(|h| h.press_scale.is_none()) { return false; }
-            let inside = |p: Option<(f32, f32)>| p.is_some_and(|(x, y)| self.node_contains(i, x, y));
-            inside(self.pointer.pos) != inside(Some((x, y)))
-        });
-        // Reaching or leaving a help element starts or ends its tooltip's wait.
-        let help_changed = self.help_target_changes(x, y);
-        let (queued, capture_inside) = (self.frame.queue.len(), self.pointer.press_inside());
+        let queued = self.frame.queue.len();
+        let capture_inside = self.pointer.press_inside();
+        let prev_link = self.hovered_link();
+        let prev_sel = self.selection_drag_snapshot();
+        let prev_edge = self.edit.selectable.edge.running();
+        let prev_autoscroll = self.pointer.autoscroll_armed();
         self.pointer_move(app, x, y);
-        visual_changed || help_changed || self.frame.queue.len() != queued || self.pointer.press_inside() != capture_inside
+        self.frame.queue.len() != queued
+            || self.pointer.press_inside() != capture_inside
+            || self.pointer.drag_out_request.is_some()
+            || self.hovered_link() != prev_link
+            || self.selection_drag_snapshot() != prev_sel
+            || (!prev_edge && self.edit.selectable.edge.running())
+            || (!prev_autoscroll && self.pointer.autoscroll_armed())
+            || self.interaction_changes()
+            || self.help_changes()
     }
 
     /// A button holds the pointer: the OS keeps sending its moves to this window, and a leave

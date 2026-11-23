@@ -330,12 +330,6 @@ impl RuntimeCore {
         }
     }
 
-    /// The help element under (x, y): the topmost one, unless something interactive drawn over
-    /// it (not inside it) is there too.
-    fn help_at(&self, x: f32, y: f32) -> Option<(usize, Option<usize>)> {
-        self.help_under(x, y).filter(|u| u.2).map(|(h, link, _)| (h, link))
-    }
-
     /// The topmost help element under (x, y), and whether the pointer reaches it: not behind a
     /// modal, and nothing interactive drawn over it (not inside it) is there too.
     fn help_under(&self, x: f32, y: f32) -> Option<(usize, Option<usize>, bool)> {
@@ -349,13 +343,22 @@ impl RuntimeCore {
         Some((h, link, self.allowed(h) && !covered))
     }
 
-    /// Whether moving the pointer to (x, y) changes the help element under it, so a host that
-    /// skips frames for unchanged pixels still starts or ends a tooltip's wait.
-    pub(in crate::runtime) fn help_target_changes(&self, x: f32, y: f32) -> bool {
-        let target = self.pointer.help.state.target();
-        if self.pointer.native_help(self.commit.defaults.help.is_some()) || !self.hit.has_help_hits() && target.is_none() { return false; }
-        let at = self.help_at(x, y).map(|(i, k)| (self.tree.nodes[i].path.as_str(), k));
-        at != target.map(|t| (t.path.as_str(), t.link))
+    /// Whether the current pointer position changes what the tooltip machine sees, so a host
+    /// that skips frames for unchanged pixels still starts, hides or switches a tooltip.
+    pub(in crate::runtime) fn help_changes(&self) -> bool {
+        let tip = &self.pointer.help.state;
+        if self.pointer.native_help(self.commit.defaults.help.is_some())
+            || (!self.hit.has_help_hits() && tip.target().is_none())
+        {
+            return false;
+        }
+        match self.help_over().0 {
+            Over::Forced(at) => !matches!(tip, Tip::Open { target, .. } if *target == at),
+            Over::Focused(at) | Over::Help(at) => tip.target() != Some(&at),
+            Over::Covered(at) if tip.target() == Some(&at) => !matches!(tip, Tip::Suppressed { .. }),
+            Over::Away if matches!(tip, Tip::Suppressed { .. }) => false,
+            Over::Away | Over::Nothing | Over::Covered(_) => tip.target().is_some(),
+        }
     }
 
     /// What the pointer is over for the tooltip, and the node of a help element it reaches.

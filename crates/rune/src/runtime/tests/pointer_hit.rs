@@ -668,3 +668,172 @@ fn preserve_focus_on_press_keeps_focus_on_focusable_rows_and_on_key_ancestors() 
     click(&mut rt, x, y);
     assert_eq!(focused_key(&rt).as_deref(), Some("normal-row"), "an unfocusable child still focuses its on_key ancestor without preserve_focus_on_press");
 }
+
+#[test]
+fn observe_pointer_skips_unchanged_moves_and_repaints_hover_groups_links_live_and_drags() {
+    struct State {
+        live_pos: crate::Live<[f32; 2]>,
+        drags: u32,
+        moves: u32,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        col().size(300.0, 320.0)
+            .hover_motion_within(crate::Spring::NONE, crate::Spring::NONE)
+            .motion(crate::Spring::NONE)
+            // Rows 0..3: 24 pt each, plain hover fill, row 0 has a hover_alone child.
+            .child(
+                col().w_full()
+                    .child(
+                        crate::row().key("row-0").size(300.0, 24.0).hover(Color::WHITE.alpha(0.1))
+                            .child(el().key("alone").size(40.0, 24.0).hover_alone()),
+                    )
+                    .child(el().key("row-1").size(300.0, 24.0).hover(Color::WHITE.alpha(0.1)))
+                    .child(el().key("row-2").size(300.0, 24.0).hover(Color::WHITE.alpha(0.1))),
+            )
+            // Hover group with no hover fill of its own (y = 72..102).
+            .child(
+                el().key("group").size(300.0, 30.0).hover_group()
+                    .child(el().key("reveal").size(20.0, 20.0).fill(Color::WHITE).group_opacity(0.0, 1.0)),
+            )
+            // Shared hover group across two siblings (y = 102..132).
+            .child(
+                crate::row().size(300.0, 30.0)
+                    .child(el().key("share-a").size(100.0, 30.0).hover_group_shared("pair"))
+                    .child(el().key("share-b").size(100.0, 30.0).hover_group_shared("pair").hover(Color::WHITE.alpha(0.2))),
+            )
+            // Selectable text with two links (y = 132..162).
+            .child(
+                el().key("link-box").size(300.0, 30.0)
+                    .child(
+                        crate::text("aaaa bbbb cccc")
+                            .key("linked")
+                            .font(crate::TextStyle::new(14.0, 400.0))
+                            .selectable(true)
+                            .link(crate::Link::new(0..4, "one"))
+                            .link(crate::Link::new(10..14, "two"))
+                            .on_link(|_: &mut State, _, _| {}),
+                    ),
+            )
+            // Element asking for pointer positions via on_pointer_move_local + live_only (y = 162..202).
+            .child(
+                el().key("live-canvas").size(300.0, 40.0)
+                    .on_pointer_move_local(|s: &mut State, p, tx| {
+                        s.moves += 1;
+                        s.live_pos.set([p.x, p.y]);
+                        tx.live_only();
+                    })
+                    .child(el().key("dot").size(8.0, 8.0).fill(Color::WHITE).live_offset(&s.live_pos)),
+            )
+            // Draggable element (y = 202..242).
+            .child(
+                el().key("drag-box").size(300.0, 40.0)
+                    .on_drag(|s: &mut State, d, _| {
+                        if d.phase == crate::Phase::Move { s.drags += 1; }
+                    }),
+            )
+            // Plain text for drag selection (y = 242..272).
+            .child(
+                crate::text("select me across chars")
+                    .key("sel-text")
+                    .size(300.0, 30.0)
+                    .font(crate::TextStyle::new(14.0, 400.0))
+                    .selectable(true),
+            )
+    }
+    let live_pos = crate::Live::new([0.0, 0.0]);
+    let mut rt = Runtime::new(
+        State { live_pos: live_pos.clone(), drags: 0, moves: 0 },
+        view,
+        (300.0, 320.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+
+    // 1. Sweep across 3 rows of 24 pt, stepping 4 pt at a time (6 moves per row):
+    //    only the move entering each row should ask for a repaint (3 total, not 18).
+    let mut repaints = 0u32;
+    for step in 0..18 {
+        let y = 2.0 + step as f32 * 4.0;
+        if rt.observe_pointer(100.0, y) {
+            repaints += 1;
+            rt.frame(0.016);
+        }
+    }
+    assert_eq!(repaints, 3, "staying inside the same hovered row must not repaint; only row transitions repaint");
+
+    // 2. hover_alone child shadows row-0's hover; moving inside it repaints once on enter and once on exit.
+    assert!(rt.observe_pointer(100.0, 12.0), "re-enter row-0 outside alone child");
+    rt.frame(0.016);
+    assert!(rt.observe_pointer(20.0, 12.0), "entering hover_alone child shadows row-0");
+    rt.frame(0.016);
+    assert!(!rt.observe_pointer(24.0, 12.0), "moving inside hover_alone child changes nothing");
+    assert!(rt.observe_pointer(100.0, 12.0), "leaving hover_alone child restores row-0 hover");
+    rt.frame(0.016);
+
+    // 3. hover_group without its own hover fill repaints on enter and leave, not on interior moves.
+    assert!(rt.observe_pointer(100.0, 84.0), "entering hover_group lights its track");
+    rt.frame(0.016);
+    assert!(!rt.observe_pointer(110.0, 84.0), "moving inside hover_group changes nothing");
+    assert!(rt.observe_pointer(100.0, 300.0), "leaving hover_group clears its track");
+    rt.frame(0.016);
+
+    // 4. hover_group_shared lights its peer on enter and clears on leave, not on interior moves.
+    assert!(rt.observe_pointer(20.0, 115.0), "entering share-a lights shared peer share-b");
+    rt.frame(0.016);
+    assert!(!rt.observe_pointer(40.0, 115.0), "moving inside share-a changes nothing");
+    assert!(rt.observe_pointer(250.0, 115.0), "leaving share-a clears shared peer");
+    rt.frame(0.016);
+
+    // 5. Links inside a single selectable text node repaint on link enter, switch, and leave.
+    let linked_idx = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("linked")).unwrap();
+    let linked_rect = rt.core().drawn_edges(linked_idx);
+    let boxes = rt.core().link_boxes(linked_idx, linked_rect);
+    let l0 = boxes.iter().find(|(k, _)| *k == 0).unwrap().1;
+    let l1 = boxes.iter().find(|(k, _)| *k == 1).unwrap().1;
+    let mid_y = (l0[1] + l0[3]) * 0.5;
+    let plain_x = (l0[2] + l1[0]) * 0.5;
+    assert!(rt.observe_pointer((l0[0] + l0[2]) * 0.5, mid_y), "entering link 0 repaints");
+    rt.frame(0.016);
+    assert!(!rt.observe_pointer((l0[0] + l0[2]) * 0.5 + 1.0, mid_y), "moving within link 0 needs no repaint");
+    assert!(rt.observe_pointer(plain_x, mid_y), "moving off link 0 onto plain text repaints");
+    rt.frame(0.016);
+    assert!(!rt.observe_pointer(plain_x + 1.0, mid_y), "moving within plain text needs no repaint");
+    assert!(rt.observe_pointer((l1[0] + l1[2]) * 0.5, mid_y), "moving onto link 1 repaints");
+    rt.frame(0.016);
+    assert!(rt.observe_pointer(100.0, 300.0), "leaving text off link 1 repaints");
+    rt.frame(0.016);
+
+    // 6. Element with on_pointer_move_local updating a Live value repaints on every move with 0 commits.
+    rt.check_live_only(false);
+    let commits_before = rt.stats.commits;
+    for step in 0..4 {
+        let x = 20.0 + step as f32 * 10.0;
+        assert!(rt.observe_pointer(x, 180.0), "on_pointer_move element must repaint on every move");
+        rt.frame(0.016);
+        assert_eq!(live_pos.get()[0], x);
+    }
+    assert_eq!(rt.state.moves, 4);
+    assert_eq!(rt.stats.commits, commits_before, "live_only pointer moves need no view commits");
+
+    // 7. Held on_drag repaints on every move.
+    rt.pointer_move(20.0, 220.0);
+    rt.pointer_down(20.0, 220.0);
+    rt.frame(0.016);
+    for step in 1..=3 {
+        assert!(rt.observe_pointer(20.0 + step as f32 * 8.0, 220.0), "held drag must repaint on every move");
+        rt.frame(0.016);
+    }
+    assert_eq!(rt.state.drags, 3);
+    rt.pointer_up(44.0, 220.0);
+    rt.frame(0.016);
+
+    // 8. Held text selection drag repaints as selection extends.
+    rt.pointer_move(4.0, 252.0);
+    rt.pointer_down(4.0, 252.0);
+    rt.frame(0.016);
+    assert!(rt.observe_pointer(90.0, 252.0), "extending a text selection drag must repaint");
+    rt.frame(0.016);
+    assert!(rt.text_selection().is_some_and(|(_, r)| !r.is_empty()));
+    rt.pointer_up(90.0, 252.0);
+    rt.frame(0.016);
+}

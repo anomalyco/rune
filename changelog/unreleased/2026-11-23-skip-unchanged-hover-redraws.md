@@ -1,0 +1,1 @@
+- Performance: pointer moves that leave hover, hover groups, hovered links, press tracks, tooltips, text selection drags and pointer-move handlers unchanged now skip requesting a redraw (and keep quiet timers and loop-only frames intact), updating only the OS cursor.
