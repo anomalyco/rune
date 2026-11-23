@@ -10,8 +10,13 @@ pub(in crate::runtime) fn fit_room(own: &CompactStyle, parent_row: bool) -> Comp
     let raw = own.to_style();
     let zero = |d: LengthPercentageAuto| if d.is_auto() { length(0.0) } else { d };
     let main_max = if parent_row { raw.max_size.width } else { raw.max_size.height };
+    let size = if parent_row {
+        Size { width: main_max.into(), height: auto() }
+    } else {
+        Size { width: auto(), height: main_max.into() }
+    };
     CompactStyle::from_style(Style {
-        size: raw.max_size.map(Into::into),
+        size,
         min_size: Size { width: zero(raw.min_size.width), height: zero(raw.min_size.height) },
         flex_grow: 1.0,
         flex_shrink: 1.0,
