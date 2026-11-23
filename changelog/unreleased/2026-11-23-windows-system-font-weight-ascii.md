@@ -1,0 +1,1 @@
+- Windows: `TextSystem::layout_keyed` now applies DirectWrite system-face weight matching (`system_weight::corrections`) to ASCII text as well whenever system font files are loaded, so static system fonts such as Segoe UI at weight 500 select the same face whether or not a label contains non-ASCII characters.
