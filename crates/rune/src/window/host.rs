@@ -119,6 +119,10 @@ pub(in crate::window) struct Host {
     pub(in crate::window) clipboard: crate::clipboard::Client,
     pub(in crate::window) secure_input: crate::input::secure_input::SecureInput,
     pub(in crate::window) ime: crate::input::host_events::ImeSync,
+    /// While a new window's first frame is drawn: its text input starts once that frame is with
+    /// the window server, not inside it. On macOS, allowing the IME for a window of the app in
+    /// front (one started from the Dock) loads AppKit's text input services: about 15,000 µs.
+    pub(in crate::window) ime_waits: bool,
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub(in crate::window) wayland: bool,
     /// The frame moving or jumping to where a handler asked (`stepping::FrameMove`).
@@ -414,6 +418,7 @@ impl Host {
             files: FileDrop::default(),
             clipboard,
             secure_input: Default::default(),
+            ime_waits: false,
             ime: Default::default(),
             wayland,
             frame_move: None,

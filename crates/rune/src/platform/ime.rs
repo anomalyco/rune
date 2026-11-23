@@ -141,6 +141,14 @@ pub(crate) fn cancel(window: &winit::window::Window) {
     // returns it or nil, and `discardMarkedText` takes no arguments.
     unsafe {
         let view = h.ns_view.as_ptr().cast::<objc2::runtime::AnyObject>();
+        // Nothing is marked in a view no input method is composing in. Asking the input context
+        // to drop it anyway starts AppKit's text input services for a window of the app in
+        // front: about 15,000 µs, in a new window's first frame.
+        let responds: objc2::runtime::Bool = objc2::msg_send![view, respondsToSelector: objc2::sel!(hasMarkedText)];
+        if responds.as_bool() {
+            let marked: objc2::runtime::Bool = objc2::msg_send![view, hasMarkedText];
+            if !marked.as_bool() { return; }
+        }
         let context: *mut objc2::runtime::AnyObject = objc2::msg_send![view, inputContext];
         if !context.is_null() {
             let () = objc2::msg_send![context, discardMarkedText];

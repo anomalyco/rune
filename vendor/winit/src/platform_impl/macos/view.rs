@@ -855,7 +855,10 @@ impl WinitView {
             )
         }
 
-        *this.ivars().input_source.borrow_mut() = this.current_input_source();
+        // The input source is not read here: making the view's input context and asking the
+        // keyboard's input source took about 8,500 µs of a first window's creation. It is
+        // compared only while the IME is enabled (`keyDown:`), and `setMarkedText:` reads it
+        // as the IME becomes enabled.
 
         this
     }
