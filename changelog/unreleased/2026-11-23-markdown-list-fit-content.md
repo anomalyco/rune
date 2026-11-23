@@ -1,0 +1,1 @@
+- `rune-kit` `Markdown`: lists and block quotes inside fit-content containers now measure at their natural width instead of collapsing to one word wide, while still filling and wrapping inside fixed-width or stretched containers.

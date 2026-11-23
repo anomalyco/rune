@@ -444,3 +444,188 @@ Quis autem vel eum iure reprehenderit qui in ea voluptate velit esse quam.";
     assert_eq!(right(), 30.0, "the wheel over the right pane's table bar scrolled its own pane");
     assert_eq!(left(), 0.0, "the left pane, keyed alike, stayed where it was");
 }
+
+#[test]
+fn lists_and_quotes_in_fit_content_containers_keep_their_natural_width_and_wrap_when_bounded() {
+    use rune::{Cx, Env, Runtime};
+
+    struct FitCase {
+        src: &'static str,
+        max_w: f32,
+        streaming: bool,
+    }
+    fn fit_view(c: &FitCase, _: &mut Cx<FitCase>) -> El {
+        let style = MarkdownStyle::neutral(true);
+        col().w_full().items_end().child(
+            col().key("bubble").max_w(c.max_w).min_w(0.0).px(12.0).child(
+                Markdown::new(c.src).streaming(c.streaming).render(&style).key("md").min_w(0.0),
+            ),
+        )
+    }
+
+    let line = MarkdownStyle::neutral(true).body.line_px();
+
+    // 1. Ordered list in a fit-content container aligned to the end: both items fit on one line
+    // each instead of collapsing to one word wide (both memoised and streaming/unmemoised paths).
+    let ordered = "1. Yes, they were all through me. Choose option a\n2. Option a";
+    for streaming in [false, true] {
+        let mut rt = Runtime::new(FitCase { src: ordered, max_w: 680.0, streaming }, fit_view, (800.0, 600.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let els = rt.elements();
+        let bubble = els.iter().find(|e| e.key.as_deref() == Some("bubble")).unwrap();
+        let first = els.iter().find(|e| e.text.as_deref() == Some("Yes, they were all through me. Choose option a")).unwrap();
+        let second = els.iter().find(|e| e.text.as_deref() == Some("Option a")).unwrap();
+        assert!(
+            first.rect[3] <= line * 1.5,
+            "streaming={streaming}: first item should fit on one line (line={line}), got rect={:?}, bubble={:?}",
+            first.rect, bubble.rect
+        );
+        assert!(
+            second.rect[3] <= line * 1.5,
+            "streaming={streaming}: second item should fit on one line (line={line}), got rect={:?}, bubble={:?}",
+            second.rect, bubble.rect
+        );
+        assert!(
+            bubble.rect[2] > 200.0 && bubble.rect[2] < 680.0,
+            "streaming={streaming}: bubble should size to content width, got {:?}",
+            bubble.rect
+        );
+        assert!(
+            first.rect[0] + first.rect[2] <= bubble.rect[0] + bubble.rect[2] + 0.5,
+            "streaming={streaming}: item text must not spill past bubble: first={:?}, bubble={:?}",
+            first.rect, bubble.rect
+        );
+    }
+
+    // 2. Unordered, task, nested lists, and blockquotes also size to their natural width.
+    let mixed = "- Unordered item with several words here\n  - Nested child item with several words\n- [ ] Task item with several words here\n\n> Blockquote text with several words here";
+    {
+        let mut rt = Runtime::new(FitCase { src: mixed, max_w: 680.0, streaming: false }, fit_view, (800.0, 600.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let els = rt.elements();
+        let bubble = els.iter().find(|e| e.key.as_deref() == Some("bubble")).unwrap();
+        for needle in [
+            "Unordered item with several words here",
+            "Nested child item with several words",
+            "Task item with several words here",
+            "Blockquote text with several words here",
+        ] {
+            let item = els.iter().find(|e| e.text.as_deref() == Some(needle)).unwrap();
+            assert!(
+                item.rect[3] <= line * 1.5,
+                "{needle:?} should fit on one line (line={line}), got rect={:?}, bubble={:?}",
+                item.rect, bubble.rect
+            );
+            assert!(
+                item.rect[0] + item.rect[2] <= bubble.rect[0] + bubble.rect[2] + 0.5,
+                "{needle:?} must not spill past bubble: item={:?}, bubble={:?}",
+                item.rect, bubble.rect
+            );
+        }
+        assert!(bubble.rect[2] < 680.0, "bubble should fit content, got {:?}", bubble.rect);
+    }
+
+    // 3. Narrow fit-content container wraps long list items and stays within max_w.
+    {
+        let mut rt = Runtime::new(FitCase { src: ordered, max_w: 180.0, streaming: false }, fit_view, (800.0, 600.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let els = rt.elements();
+        let bubble = els.iter().find(|e| e.key.as_deref() == Some("bubble")).unwrap();
+        let first = els.iter().find(|e| e.text.as_deref() == Some("Yes, they were all through me. Choose option a")).unwrap();
+        let second = els.iter().find(|e| e.text.as_deref() == Some("Option a")).unwrap();
+        assert!(
+            bubble.rect[2] <= 180.5,
+            "bubble must respect max_w(180.0), got {:?}",
+            bubble.rect
+        );
+        assert!(
+            first.rect[3] >= line * 1.9,
+            "first item should wrap in narrow container (line={line}), got {:?}",
+            first.rect
+        );
+        assert!(
+            second.rect[3] <= line * 1.5,
+            "short second item should still fit on one line, got {:?}",
+            second.rect
+        );
+        assert!(
+            first.rect[0] + first.rect[2] <= bubble.rect[0] + bubble.rect[2] + 0.5,
+            "wrapped text must stay inside bubble: first={:?}, bubble={:?}",
+            first.rect, bubble.rect
+        );
+    }
+}
+
+#[test]
+fn lists_and_quotes_in_fixed_and_stretched_containers_fill_their_parent_width() {
+    use rune::{Cx, Env, Runtime};
+
+    struct HostCase {
+        doc: &'static str,
+        fixed_w: Option<f32>,
+    }
+    fn host_view(c: &HostCase, _: &mut Cx<HostCase>) -> El {
+        let style = MarkdownStyle::neutral(true);
+        let box_el = match c.fixed_w {
+            Some(w) => col().key("host").w(w),
+            None => col().key("host").w_full(),
+        };
+        col().w_full().h_full().child(box_el.child(Markdown::new(c.doc).render(&style).key("md")))
+    }
+
+    let style = MarkdownStyle::neutral(true);
+    let indent = style.list_indent;
+    let quote_inset = style.quote.width + style.quote.pad;
+    let doc = "1. Short item\n2. A much longer list item that wraps cleanly when the container is narrow enough to force wrapping\n\n- [x] Checked task\n\n> Quoted line";
+
+    // Fixed-width container (320 pt) and stretched container (500 pt window).
+    for (label, fixed_w, win_w) in [("fixed", Some(320.0), 600.0), ("stretched", None, 500.0)] {
+        let expected_w = fixed_w.unwrap_or(win_w);
+        let mut rt = Runtime::new(HostCase { doc, fixed_w }, host_view, (win_w, 600.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let els = rt.elements();
+
+        let short_item = els.iter().find(|e| e.text.as_deref() == Some("Short item")).unwrap();
+        let long_item = els.iter().find(|e| e.text.as_deref() == Some("A much longer list item that wraps cleanly when the container is narrow enough to force wrapping")).unwrap();
+        let task_item = els.iter().find(|e| e.text.as_deref() == Some("Checked task")).unwrap();
+        let quote_item = els.iter().find(|e| e.text.as_deref() == Some("Quoted line")).unwrap();
+
+        let expected_item_w = expected_w - indent;
+        assert!(
+            (short_item.rect[2] - expected_item_w).abs() < 0.5,
+            "{label}: short list item body should span remaining width {expected_item_w}, got {:?}",
+            short_item.rect
+        );
+        assert!(
+            (short_item.rect[0] - indent).abs() < 0.5,
+            "{label}: short list item text should start after indent {indent}, got {:?}",
+            short_item.rect
+        );
+        assert!(
+            (long_item.rect[2] - expected_item_w).abs() < 0.5,
+            "{label}: long list item body should span remaining width {expected_item_w}, got {:?}",
+            long_item.rect
+        );
+        assert!(
+            (long_item.rect[0] - indent).abs() < 0.5,
+            "{label}: long list item text should start after indent {indent}, got {:?}",
+            long_item.rect
+        );
+        let task_inset = indent.max(style.task.left + style.task.size);
+        assert!(
+            (task_item.rect[2] - (expected_w - task_inset)).abs() < 0.5,
+            "{label}: task item body should span remaining width {}, got {:?}",
+            expected_w - task_inset, task_item.rect
+        );
+        assert!(
+            (quote_item.rect[2] - (expected_w - quote_inset)).abs() < 0.5,
+            "{label}: quote body should span remaining width {}, got {:?}",
+            expected_w - quote_inset, quote_item.rect
+        );
+        assert!(
+            (quote_item.rect[0] - quote_inset).abs() < 0.5,
+            "{label}: quote text should start after rule+pad {quote_inset}, got {:?}",
+            quote_item.rect
+        );
+    }
+}
