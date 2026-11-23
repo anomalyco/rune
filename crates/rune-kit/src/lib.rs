@@ -259,7 +259,7 @@ pub(crate) fn over(top: Color, bottom: Color) -> Color {
 }
 
 /// Mounts overlays above `base`: `base` fills the window and each overlay follows it in paint
-/// and hit order. Place popover/menu/select/tooltip contents and toast regions here.
+/// and hit order. Place dialog/popover/menu/select/tooltip contents and toast regions here.
 pub fn root(base: El, overlays: impl IntoIterator<Item = El>) -> El {
     let within = base.hover_within_curves();
     let root = rune::el().key("kit-root").w_full().h_full().child(base.w_full().h_full()).children(overlays);

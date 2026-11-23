@@ -112,7 +112,7 @@ gallery shows both, with an icon button explained by `.help`.
 
 Button (10 variants × 3 sizes × 5 states), IconButton, Switch (compact, standard), Checkbox,
 RadioGroup/RadioItem, TextInput, TextArea, TextField (older), Field, Select (inline and field
-triggers, grouped), Popover, Menu (compact and standard, checkbox/radio items, submenus,
+triggers, grouped), Dialog, Popover, Menu (compact and standard, checkbox/radio items, submenus,
 context menus via `.at(x, y)`), Tooltip (compact, standard, large), HoverCard, Toast and
 ToastRegion, Card, List, Accordion, Collapsible, Badge, Divider, Keybind, Spinner, Loader,
 Progress, ProgressCircle, SegmentedControl.
