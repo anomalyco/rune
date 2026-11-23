@@ -1,0 +1,1 @@
+- Web: the accessibility mirror and `--html` static export now validate element and inline link `href` targets through the same `open_url` check (`http:`, `https:`, `mailto:`, or non-`//` relative links), dropping `javascript:`, `data:`, `vbscript:`, control-character and scheme-relative URLs, and strip control and CSS/HTML syntax characters from `Family::Named` font names.

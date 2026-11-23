@@ -797,12 +797,46 @@ function webLink(url) {
     return url.startsWith('https://') || url.startsWith('http://') || url.startsWith('mailto:');
 }
 
+// Matches Rust's `open_url::check_href`: allows http:, https:, mailto:, or a relative
+// path/query/fragment that isn't scheme-relative (`//`).
+function safeHref(url) {
+    if (typeof url !== 'string') return null;
+    const s = url.trim();
+    if (!s || s.length > 8192 || /[\s\u0000-\u001f\u007f-\u009f\\"<>^`{|}]/.test(s)) return null;
+    if (/%(?![0-9a-fA-F]{2})|%00/.test(s)) return null;
+    const delim = s.search(/[:/?#]/);
+    if (!s.startsWith('//') && (delim === -1 || s[delim] !== ':')) return s;
+    const colon = s.indexOf(':');
+    if (colon <= 0) return null;
+    const scheme = s.slice(0, colon).toLowerCase();
+    const rest = s.slice(colon + 1);
+    if (scheme === 'http' || scheme === 'https') {
+        if (!rest.startsWith('//')) return null;
+        const after = rest.slice(2);
+        const end = after.search(/[/?#]/);
+        const auth = end === -1 ? after : after.slice(0, end);
+        const tail = end === -1 ? '' : after.slice(end);
+        if (!auth || /[\[\]]/.test(tail)) return null;
+        const at = auth.lastIndexOf('@');
+        const hp = at === -1 ? auth : auth.slice(at + 1);
+        if (at !== -1 && (!auth.slice(0, at) || /[\[\]@]/.test(auth.slice(0, at)))) return null;
+        if (!hp || hp.startsWith('.') || hp.includes('..')) return null;
+        return `${scheme}:${rest}`;
+    }
+    if (scheme === 'mailto') {
+        if (!rest || rest.startsWith('//') || /[\[\]]/.test(rest)) return null;
+        return `${scheme}:${rest}`;
+    }
+    return null;
+}
+
 const TAGS = { heading: null, button: 'button', link: 'a', image: 'div', text: 'p', scroll_x: 'div' };
 
 function family(name) {
     if (name === 'sans') return 'var(--rune-sans,sans-serif)';
     if (name === 'mono') return 'var(--rune-mono,monospace)';
-    return `"${name.replace(/["\\]/g, '')}",var(--rune-sans,sans-serif)`;
+    const clean = String(name).replace(/[\u0000-\u001f\u007f-\u009f"'\\;{}<>]/g, '').trim();
+    return clean ? `"${clean}",var(--rune-sans,sans-serif)` : 'var(--rune-sans,sans-serif)';
 }
 
 // The mirror's first item element, after its stylesheet.
@@ -814,12 +848,13 @@ function firstItem(el) {
 
 function runs(h, el, item) {
     for (const run of item.u) {
-        if (!run.h) { el.append(document.createTextNode(run.t)); continue; }
+        const href = run.h ? safeHref(run.h) : null;
+        if (!href) { el.append(document.createTextNode(run.t)); continue; }
         const a = document.createElement('a');
         a.textContent = run.t;
         a.style.cssText = `color:transparent;text-decoration:none;pointer-events:${h.page ? 'auto' : 'none'};`;
-        if (webLink(run.h)) {
-            a.href = run.h;
+        if (webLink(href)) {
+            a.href = href;
             a.target = '_blank';
             a.rel = 'noopener noreferrer';
         } else {
@@ -911,8 +946,16 @@ export function syncA11y(h, json) {
         if (item.k === 'group' || item.k === 'image') {
             if (item.t) el.setAttribute('aria-label', item.t); else el.removeAttribute('aria-label');
         } else if (item.k === 'link') {
-            el.href = item.h;
-            if (!h.page && webLink(item.h)) { el.target = '_blank'; el.rel = 'noopener noreferrer'; }
+            const href = safeHref(item.h);
+            if (href) {
+                el.href = href;
+                if (!h.page && webLink(href)) { el.target = '_blank'; el.rel = 'noopener noreferrer'; }
+                else { el.removeAttribute('target'); el.removeAttribute('rel'); }
+            } else {
+                el.removeAttribute('href');
+                el.removeAttribute('target');
+                el.removeAttribute('rel');
+            }
         }
         const container = item.k === 'group' || item.k === 'scroll_x';
         if (item.k === 'scroll_x' && el._path !== item.p) { el._path = item.p; h.scrollEls.set(item.p, el); }

@@ -225,7 +225,10 @@ fn family(f: crate::tok::Family) -> String {
     match f {
         crate::tok::Family::Sans => "var(--rune-sans)".into(),
         crate::tok::Family::Mono | crate::tok::Family::SystemMono => "var(--rune-mono)".into(),
-        crate::tok::Family::Named(name) => format!("\"{}\"", escape(name)),
+        crate::tok::Family::Named(name) => {
+            let clean = crate::runtime::web_a11y::sanitize_font_family(name);
+            if clean.is_empty() { "var(--rune-sans)".into() } else { format!("\"{clean}\"") }
+        }
     }
 }
 
@@ -260,9 +263,14 @@ pub(super) fn text(spec: &TextSpec, d: &mut Decls) {
 /// The text with its spans (weight, size, colour, code backgrounds, underlines) and its links.
 pub(super) fn text_html(spec: &TextSpec) -> String {
     let content = &spec.content;
+    let hrefs: Vec<Option<String>> = spec.cold.links.iter()
+        .map(|l| crate::open_url::check_href(&l.id).ok())
+        .collect();
     let mut cuts: Vec<usize> = vec![0, content.len()];
     for s in &spec.spans { cuts.extend([s.start as usize, s.end as usize]); }
-    for l in &spec.cold.links { cuts.extend([l.start as usize, l.end as usize]); }
+    for (k, l) in spec.cold.links.iter().enumerate() {
+        if hrefs[k].is_some() { cuts.extend([l.start as usize, l.end as usize]); }
+    }
     cuts.retain(|&c| c <= content.len() && content.is_char_boundary(c));
     cuts.sort_unstable();
     cuts.dedup();
@@ -270,10 +278,14 @@ pub(super) fn text_html(spec: &TextSpec) -> String {
     let mut open_link: Option<usize> = None;
     for w in cuts.windows(2) {
         let (a, b) = (w[0], w[1]);
-        let link = spec.cold.links.iter().position(|l| (l.start as usize) <= a && b <= l.end as usize);
+        let link = spec.cold.links.iter().enumerate()
+            .find(|&(k, l)| hrefs[k].is_some() && (l.start as usize) <= a && b <= l.end as usize)
+            .map(|(k, _)| k);
         if link != open_link {
             if open_link.is_some() { out.push_str("</a>"); }
-            if let Some(k) = link { write!(out, "<a href=\"{}\">", escape(&spec.cold.links[k].id)).ok(); }
+            if let Some(k) = link && let Some(href) = &hrefs[k] {
+                write!(out, "<a href=\"{}\">", escape(href)).ok();
+            }
             open_link = link;
         }
         let piece = escape(&content[a..b]);

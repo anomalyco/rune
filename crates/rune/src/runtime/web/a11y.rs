@@ -137,11 +137,24 @@ pub(crate) fn anchor_id(key: Option<&str>) -> Option<String> {
     ok.then(|| key.to_owned())
 }
 
+/// Strips control characters and CSS/HTML syntax characters from a font family name so it
+/// stays inside a CSS double-quoted string and cannot break out of `<style>` or `cssText`.
+pub(crate) fn sanitize_font_family(name: &str) -> String {
+    name.chars()
+        .filter(|&c| !c.is_control() && !matches!(c, '"' | '\'' | '\\' | ';' | '{' | '}' | '<' | '>'))
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
 pub(crate) fn family_name(family: crate::tok::Family) -> String {
     match family {
         crate::tok::Family::Sans => "sans".into(),
         crate::tok::Family::Mono | crate::tok::Family::SystemMono => "mono".into(),
-        crate::tok::Family::Named(name) => name.into(),
+        crate::tok::Family::Named(name) => {
+            let clean = sanitize_font_family(name);
+            if clean.is_empty() { "sans".into() } else { clean }
+        }
     }
 }
 
@@ -191,34 +204,40 @@ fn text_runs(path: &str, spec: &crate::el::TextSpec) -> Vec<A11yRun> {
         let t = clean_slice(spec, 0, spec.content.len());
         return if t.is_empty() { Vec::new() } else { vec![A11yRun { text: t, href: None, path: None, link: None }] };
     }
-    let mut out = Vec::new();
+    let mut out: Vec<A11yRun> = Vec::new();
     let mut at = 0usize;
+    let push_plain = |out: &mut Vec<A11yRun>, text: String| {
+        if text.is_empty() { return; }
+        if let Some(last) = out.last_mut().filter(|r| r.href.is_none()) {
+            last.text.push_str(&text);
+        } else {
+            out.push(A11yRun { text, href: None, path: None, link: None });
+        }
+    };
     for (idx, link) in spec.cold.links.iter().enumerate() {
         let (la, lb) = ((link.start as usize).min(spec.content.len()), (link.end as usize).min(spec.content.len()));
         if la > at {
-            let before = clean_slice(spec, at, la);
-            if !before.is_empty() {
-                out.push(A11yRun { text: before, href: None, path: None, link: None });
-            }
+            push_plain(&mut out, clean_slice(spec, at, la));
         }
         if lb > la {
             let label = clean_slice(spec, la, lb);
             if !label.is_empty() {
-                out.push(A11yRun {
-                    text: label,
-                    href: Some(link.id.clone()),
-                    path: Some(path.to_owned()),
-                    link: Some(idx),
-                });
+                if let Ok(href) = crate::open_url::check_href(&link.id) {
+                    out.push(A11yRun {
+                        text: label,
+                        href: Some(href),
+                        path: Some(path.to_owned()),
+                        link: Some(idx),
+                    });
+                } else {
+                    push_plain(&mut out, label);
+                }
             }
         }
         at = at.max(lb);
     }
     if at < spec.content.len() {
-        let tail = clean_slice(spec, at, spec.content.len());
-        if !tail.is_empty() {
-            out.push(A11yRun { text: tail, href: None, path: None, link: None });
-        }
+        push_plain(&mut out, clean_slice(spec, at, spec.content.len()));
     }
     out
 }
@@ -397,7 +416,8 @@ impl RuntimeCore {
                 i += 1;
                 continue;
             }
-            if let Some(href) = n.a11y.more.as_ref().and_then(|m| m.href.clone()) {
+            let raw_href = n.a11y.more.as_ref().and_then(|m| m.href.as_deref());
+            if let Some(href) = raw_href.and_then(|u| crate::open_url::check_href(u).ok()) {
                 let label = self.mirror_name(i).unwrap_or_else(|| self.descendant_label(i, end));
                 if !label.is_empty() && rect[2] > 0.0 && rect[3] > 0.0 {
                     let mut item = A11yItem::new("link", &n.path, rect);
@@ -418,7 +438,9 @@ impl RuntimeCore {
                 last_flow_parent = None;
                 continue;
             }
-            let button_like = (n.role == "button" || n.handlers.on_press.is_some()) && n.window_drag != crate::el::WindowDrag::Drag;
+            let button_like = raw_href.is_none()
+                && (n.role == "button" || n.handlers.on_press.is_some())
+                && n.window_drag != crate::el::WindowDrag::Drag;
             // Only collapse a pressable container into one button when it doesn't wrap an entire
             // multi-block section with independent buttons inside.
             let nested_press = (i + 1..end).any(|j| self.tree.nodes[j].handlers.on_press.is_some() || self.tree.nodes[j].role == "button");

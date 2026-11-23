@@ -54,6 +54,10 @@ pub(crate) fn check(url: &str) -> Result<String, OpenUrlError> { check_link(url,
 /// is relative to the page, and the browser resolves it.
 pub(crate) fn check_same_tab(url: &str) -> Result<String, OpenUrlError> { check_link(url, cfg!(target_arch = "wasm32")) }
 
+/// `check` for a web `<a href>` (the accessibility mirror and `--html` export): `http:`,
+/// `https:`, `mailto:`, or a relative path/query/fragment that isn't scheme-relative (`//`).
+pub(crate) fn check_href(url: &str) -> Result<String, OpenUrlError> { check_link(url, true) }
+
 fn check_link(url: &str, relative: bool) -> Result<String, OpenUrlError> {
     let url = url.trim();
     if url.is_empty() { return Err(OpenUrlError::Empty); }
@@ -286,6 +290,49 @@ mod tests {
         ] {
             assert_eq!(check_link(bad, true), Err(OpenUrlError::Invalid), "web: {bad:?}");
             assert_eq!(check_link(bad, false), Err(OpenUrlError::Invalid), "native: {bad:?}");
+        }
+    }
+
+    #[test]
+    fn check_href_blocks_unsafe_schemes_and_allows_web_and_relative_links() {
+        for (raw, want) in [
+            ("http://example.com/a?b=1#c", "http://example.com/a?b=1#c"),
+            ("HTTP://example.com/a", "http://example.com/a"),
+            ("https://example.com/docs?a=1&b=2", "https://example.com/docs?a=1&b=2"),
+            ("  HTTPS://example.com/docs  ", "https://example.com/docs"),
+            ("mailto:someone@example.com?subject=Hi", "mailto:someone@example.com?subject=Hi"),
+            ("MAILTO:someone@example.com", "mailto:someone@example.com"),
+            ("/", "/"),
+            ("/docs", "/docs"),
+            ("  /notes/42 ", "/notes/42"),
+            ("notes/42?x=1", "notes/42?x=1"),
+            ("?q=a", "?q=a"),
+            ("#install", "#install"),
+            ("./a", "./a"),
+            ("../c", "../c"),
+            ("a/b:c", "a/b:c"),
+        ] {
+            assert_eq!(check_href(raw).as_deref(), Ok(want), "{raw:?}");
+        }
+        for bad in [
+            "", "   ",
+            "javascript:alert(1)", "JAVASCRIPT:alert(1)", "JaVaScRiPt:void(0)",
+            "javascript://%0aalert(1)",
+            "  javascript:alert(1)  ", "\tjavascript:alert(1)", "\njavascript:alert(1)",
+            "\rjavascript:alert(1)", "\x0cjavascript:alert(1)", "\u{00a0}javascript:alert(1)",
+            "\x00javascript:alert(1)", "\x01javascript:alert(1)", "\x1fjavascript:alert(1)",
+            "\x7fjavascript:alert(1)", " \x01javascript:alert(1)",
+            "java\tscript:alert(1)", "java\nscript:alert(1)", "java\rscript:alert(1)",
+            "java\x00script:alert(1)",
+            "data:text/html,<script>alert(1)</script>", "data:text/html;base64,PHNjcmlwdD4=",
+            "DATA:text/plain,hi", "  DaTa:text/plain,hi",
+            "vbscript:msgbox(1)", "VbScript:msgbox(1)", " \tVBSCRIPT:msgbox(1)",
+            "file:///etc/passwd", "blob:https://example.com/1",
+            "//evil.example/x", "///evil.example/x", "  //evil.example/x",
+            "/\\evil.example/x", "\\\\evil.example/x",
+            "\x00https://example.com", "\x01/docs", "/docs\x00",
+        ] {
+            assert!(check_href(bad).is_err(), "must refuse {bad:?}");
         }
     }
 
