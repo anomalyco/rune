@@ -8,7 +8,7 @@
 
 #![allow(unsafe_code)]
 
-use super::audio::{self, Output};
+use super::audio::{self, Output, Queue};
 use super::gpu::{self, Ring};
 use super::inbox::{Decoded, Inbox, News, Pic, Pipe};
 use super::layer::Layer;
@@ -37,9 +37,14 @@ const LAYER_LEAD: Duration = Duration::from_millis(2);
 
 /// Sound samples read in a row while a picture could be read instead. Enough for the sound to
 /// gain on the clock at any picture rate (8 AAC packets are about 170 ms of sound), and few
-/// enough that sound with a lot to catch up on (after a seek, or turned on mid-clip, when its
-/// stream starts from the clip's start) never holds the pictures back.
+/// enough that sound with a lot to catch up on (after a seek, or right after unmute) never holds
+/// the pictures back.
 const SOUND_BURST: u32 = 8;
+
+/// While muted, the audio stream stays selected and advances this far behind playback so
+/// unmuting mid-clip starts at once and in sync without opening a WASAPI output while muted, and
+/// without discarding a sample before it would be heard.
+const MUTE_MARGIN: f64 = 0.1;
 
 /// A layer that presented nothing for this long shows its decoder's next picture however late
 /// (`superseded`), so a decoder that can't keep up with the clip still moves.
@@ -136,6 +141,36 @@ pub(super) fn next_read(sound: bool, picture: bool, landed: bool, burst: u32) ->
         (true, true) if !landed || burst >= SOUND_BURST => Some(Stream::Picture),
         (true, true) => Some(Stream::Sound),
     }
+}
+
+/// Unwrapped media time up to which muted audio may advance without discarding unplayed sound.
+/// Caps at both the running clock (so a low-fps clip whose picture queue sits seconds ahead never
+/// drops future sound) and the screen's video position (so an undrawn muted clip whose picture
+/// queue froze stops advancing and stays ready for resume or parking). `front` is the first
+/// queued picture (one frame ahead of screen off the layer; the presented picture on it).
+pub(super) fn muted_audio_target(clock_pos: Option<f64>, front: Option<f64>, frame: f64, layered: bool, has_video: bool) -> Option<f64> {
+    let video_pos = front.map(|pts| if layered { pts } else { (pts - frame).max(0.0) });
+    let pos = match (clock_pos, video_pos) {
+        (Some(c), Some(v)) => Some(c.min(v)),
+        (None, Some(v)) => Some(v),
+        (Some(c), None) if !has_video => Some(c),
+        _ => None,
+    };
+    pos.map(|p| p - MUTE_MARGIN)
+}
+
+/// Whether muted audio should read the next sample to stay near playback: true while the stream
+/// is still behind `target` (defaulting to `epoch` before any sample was read after a seek or
+/// loop, so a clip at the start of a loop never discards its first packet).
+pub(super) fn muted_audio_want(audio_pts: Option<f64>, epoch: f64, target: Option<f64>) -> bool {
+    target.is_some_and(|t| audio_pts.unwrap_or(epoch) < t)
+}
+
+/// Whether every stream that controls the clip's end or loop has reached its end. A muted video
+/// keeps its audio stream selected to stay in position for unmute, but still ends or loops with
+/// its pictures so trailing muted audio never stalls the end.
+pub(super) fn clip_done(video_open: bool, audio_open: bool, has_video: bool, output_open: bool) -> bool {
+    !video_open && (!audio_open || (has_video && !output_open))
 }
 
 /// Whether the layer skips the picture at `pts`: on the clock, now at `pos`, its successor is
@@ -282,7 +317,11 @@ struct Decoder {
     reader: IMFSourceReader,
     facts: Facts,
     ring: Option<Ring>,
+    audio_queue: Option<Queue>,
     output: Option<Output>,
+    /// Whether the UI currently asks for sound output; tracks transitions so a failed device
+    /// open isn't retried on every decode step.
+    output_on: bool,
     video: Option<u32>,
     audio: Option<u32>,
     /// Selected streams not at their end yet.
@@ -338,28 +377,30 @@ impl Decoder {
         let facts = Facts { meta, picture, sound: opened.sound, hardware, gpu: ring.is_some() };
         let opened_us = us(t0);
         let steps = format!("Media Foundation at {t_mf}, D3D11 at {t_device}, source at {t_source}, reader at {t_reader}, ring at {opened_us}");
-        let mut d = Self { reader: opened.reader, facts, ring, output: None, video: opened.video, audio: opened.audio, video_open: picture.is_some(), audio_open: false, opened_us, steps, layer: None, presented_at: None, awaiting_gpu };
-        d.select_sound(job.sound.is_some() || job.kind == Kind::Audio, &job.clock);
+        let audio_queue = opened.sound.map(Queue::new);
+        let audio_open = opened.audio.is_some();
+        let mut d = Self { reader: opened.reader, facts, ring, audio_queue, output: None, output_on: false, video: opened.video, audio: opened.audio, video_open: picture.is_some(), audio_open, opened_us, steps, layer: None, presented_at: None, awaiting_gpu };
+        d.set_output(job.sound, &job.clock);
         Ok(d)
     }
 
-    /// Turns the audio stream on (opening the output) or off (so it isn't decoded at all).
-    fn select_sound(&mut self, on: bool, clock: &Arc<audio::Clock>) {
-        let Some(sound) = self.facts.sound else { return };
-        if on && self.output.is_none() {
-            match Output::open(sound, clock.clone()) {
+    /// Opens or closes the WASAPI sound output while leaving the Media Foundation audio stream
+    /// selected, so muted playback holds no OS audio stream and unmuting mid-clip continues at
+    /// the current playback position instead of restarting from the clip's start.
+    fn set_output(&mut self, sound: Option<f32>, clock: &Arc<audio::Clock>) {
+        self.output_on = sound.is_some();
+        let Some(queue) = &self.audio_queue else { return };
+        let Some(gain) = sound else {
+            self.output = None;
+            return;
+        };
+        queue.set_gain(gain);
+        if self.output.is_none() {
+            match Output::open(queue, clock.clone()) {
                 Ok(output) => self.output = Some(output),
                 Err(e) => eprintln!("rune: no sound for the clip: {e}"),
             }
         }
-        if !on {
-            self.output = None;
-        }
-        if let Some(index) = self.audio {
-            // SAFETY: stream selection on this thread's reader.
-            unsafe { self.reader.SetStreamSelection(index, self.output.is_some()) }.ok();
-        }
-        self.audio_open = self.output.is_some();
     }
 
     fn decode(&mut self, pipe: &Pipe, job: &Job) -> Result<(), String> {
@@ -368,6 +409,10 @@ impl Decoder {
         let mut landing = Landing::at(job.start);
         // Added to stream times: the loops so far times the duration.
         let mut epoch = 0.0;
+        // Unwrapped timestamp of the last audio sample read since open, seek or loop.
+        let mut audio_pts: Option<f64> = None;
+        // Unwrapped media time before which decoded audio samples are dropped on push.
+        let mut audio_skip_before = job.start;
         let mut first = true;
         let mut waiting_since = rune_core::time::now();
         // Audio alone: the clip's end, until the clock passes it and the clip hears so.
@@ -391,24 +436,31 @@ impl Decoder {
                             generation = g;
                             landing = Landing::at(to);
                             epoch = 0.0;
+                            audio_pts = None;
+                            audio_skip_before = to;
                             mf::seek(&self.reader, to)?;
                             self.reopen_streams();
-                            if let Some(o) = &self.output {
-                                o.flush();
+                            if let Some(q) = &self.audio_queue {
+                                q.flush();
                             }
                             Ok::<(), String>(())
                         })?;
                         // The UI may have asked for a stop meanwhile.
                         continue;
                     }
-                    if self.output.is_some() != s.sound.is_some() {
-                        let on = s.sound.is_some();
+                    if self.output_on != s.sound.is_some() {
+                        let want = s.sound;
                         drop(s);
-                        self.select_sound(on, &job.clock);
+                        if want.is_some()
+                            && let Some(clock) = job.clock.get()
+                        {
+                            audio_skip_before = audio_skip_before.max(clock.position(rune_core::time::now()));
+                        }
+                        self.set_output(want, &job.clock);
                         s = pipe.lock();
                     }
-                    if let (Some(o), Some(gain)) = (&self.output, s.sound) {
-                        o.set_gain(gain);
+                    if let (Some(q), Some(gain)) = (&self.audio_queue, s.sound) {
+                        q.set_gain(gain);
                     }
                     self.follow_layer(&mut s);
                     self.reclaim(&mut s);
@@ -418,20 +470,51 @@ impl Decoder {
                         return Err(DEVICE_CHANGED.into());
                     }
                     let ended = s.ended == Some(generation);
+                    if !ended && clip_done(self.video_open, self.audio_open, self.video.is_some(), self.output.is_some()) {
+                        if s.looping && self.facts.meta.duration > 0.0 {
+                            epoch += self.facts.meta.duration;
+                            landing = Landing::at(0.0);
+                            audio_pts = None;
+                            audio_skip_before = epoch;
+                            drop(s);
+                            mf::seek(&self.reader, 0.0)?;
+                            self.reopen_streams();
+                            s = pipe.lock();
+                            continue;
+                        }
+                        s.ended = Some(generation);
+                        if let Some(o) = &self.output {
+                            o.end(generation);
+                        }
+                        if job.kind == Kind::Audio {
+                            end_due = Some(epoch + self.facts.meta.duration);
+                        }
+                        drop(s);
+                        (job.notify)();
+                        s = pipe.lock();
+                        continue;
+                    }
                     let room = s.frames.len() < AHEAD;
                     let texture = self.ring.as_ref().is_none_or(Ring::free);
-                    let sound_full = self.output.as_ref().is_some_and(Output::full);
-                    let sound = !ended && self.audio_open && !sound_full;
+                    let (sound, sound_full, muted_due) = if self.output.is_some() {
+                        let full = self.audio_queue.as_ref().is_some_and(Queue::full);
+                        (!ended && self.audio_open && !full, full, None)
+                    } else {
+                        let clock_pos = job.clock.get().map(|c| c.position(rune_core::time::now()));
+                        let front = s.frames.front().map(|f| f.pts);
+                        let layered = s.presented(generation).is_some_and(|p| front == Some(p));
+                        let target = muted_audio_target(clock_pos, front, self.facts.meta.frame, layered, self.video.is_some());
+                        if let (Some(q), Some(t)) = (&self.audio_queue, target) {
+                            q.discard_before(t);
+                        }
+                        let want = !ended && self.audio_open && muted_audio_want(audio_pts, epoch, target);
+                        let due = (!ended && self.audio_open && self.video.is_none())
+                            .then(|| job.clock.get().map(|c| c.when(audio_pts.unwrap_or(epoch) + MUTE_MARGIN + 0.05))).flatten();
+                        (want, false, due)
+                    };
                     let picture = !ended && self.video_open && room && texture;
-                    // No stream left to read and no end reached (an audio clip whose sound output
-                    // is closed): the read from any stream says so, as it always did.
-                    let idle = !ended && !self.video_open && !self.audio_open;
                     if let Some(next) = next_read(sound, picture, landing.landed(), burst) {
-                        stream = Some(next);
-                        break;
-                    }
-                    if idle {
-                        stream = None;
+                        stream = next;
                         break;
                     }
                     let touched = s.touched.unwrap_or(waiting_since);
@@ -453,20 +536,14 @@ impl Decoder {
                     }
                     let patience = if (self.video_open && room && !texture) || sound_full { RING_POLL } else { PARK };
                     let patience = heard_end.map_or(patience, |at| patience.min(at.saturating_duration_since(rune_core::time::now()) + Duration::from_millis(1)));
+                    let patience = muted_due.map_or(patience, |at| patience.min(at.saturating_duration_since(rune_core::time::now()) + Duration::from_millis(1)));
                     s = pipe.wait(s, patience);
                     waiting_since = waiting_since.max(touched);
                 }
             }
             let index = match stream {
-                Some(Stream::Sound) => {
-                    burst += 1;
-                    self.audio
-                }
-                Some(Stream::Picture) => {
-                    burst = 0;
-                    self.video
-                }
-                None => None,
+                Stream::Sound => { burst += 1; self.audio }
+                Stream::Picture => { burst = 0; self.video }
             };
             let mut read = mf::read(&self.reader, index.unwrap_or(MF_SOURCE_READER_ANY_STREAM.0 as u32))?;
             if read.flags & MF_SOURCE_READERF_ERROR.0 != 0 {
@@ -524,8 +601,14 @@ impl Decoder {
                             first = false;
                         }
                     }
-                } else if let Some(o) = &self.output {
-                    o.push(&sample, epoch + read.time, landing.skip_before, generation);
+                } else {
+                    let pts = epoch + read.time;
+                    audio_pts = Some(pts);
+                    if self.output.is_some()
+                        && let Some(q) = &self.audio_queue
+                    {
+                        q.push(&sample, pts, audio_skip_before);
+                    }
                 }
             }
             // A seek past the last picture kept none: back for the last one, so the clip shows
@@ -535,28 +618,12 @@ impl Decoder {
             {
                 mf::seek(&self.reader, last)?;
                 self.reopen_streams();
-                if let Some(o) = &self.output {
-                    o.flush();
+                audio_pts = None;
+                audio_skip_before = last;
+                if let Some(q) = &self.audio_queue {
+                    q.flush();
                 }
                 continue;
-            }
-            if !self.video_open && !self.audio_open {
-                let looping = pipe.lock().looping;
-                if looping && self.facts.meta.duration > 0.0 {
-                    epoch += self.facts.meta.duration;
-                    landing = Landing::at(0.0);
-                    mf::seek(&self.reader, 0.0)?;
-                    self.reopen_streams();
-                } else {
-                    pipe.lock().ended = Some(generation);
-                    if let Some(o) = &self.output {
-                        o.end(generation);
-                    }
-                    if job.kind == Kind::Audio {
-                        end_due = Some(epoch + self.facts.meta.duration);
-                    }
-                    (job.notify)();
-                }
             }
         }
     }
@@ -576,7 +643,7 @@ impl Decoder {
     /// After a seek or a loop, every selected stream reads again.
     fn reopen_streams(&mut self) {
         self.video_open = self.facts.picture.is_some();
-        self.audio_open = self.output.is_some();
+        self.audio_open = self.audio.is_some();
     }
 
 

@@ -60,51 +60,48 @@ struct Feed {
     /// Interleaved samples buffered.
     samples: usize,
     gain: f32,
-    stop: bool,
+    /// Identifies the active WASAPI stream; bumped on open and drop so an older stream exits
+    /// without touching chunks kept across mute and unmute.
+    stream: u64,
     /// Media time of the next sample the device gets, once it's writing in line with the clock.
     cursor: Option<f64>,
 }
 
-/// A clip's sound output; dropping it stops the stream.
-pub(super) struct Output {
+impl Feed {
+    /// Drops buffered chunks that end at or before `pos`.
+    fn discard_before(&mut self, pos: f64, channels: usize, rate: f64) {
+        while let Some(c) = self.chunks.front() {
+            let end = c.pts + (c.samples.len() / channels) as f64 / rate;
+            if end > pos {
+                break;
+            }
+            self.samples -= c.samples.len();
+            self.chunks.pop_front();
+        }
+    }
+}
+
+/// Decoded sound shared between the decoder and whichever WASAPI [`Output`] is open. Kept across
+/// mute and unmute so muting closes the audio device without losing sound already decoded ahead
+/// of the clock.
+pub(super) struct Queue {
     feed: Arc<Mutex<Feed>>,
-    clock: Arc<Clock>,
     sound: Sound,
 }
 
-impl Output {
-    pub(super) fn open(sound: Sound, clock: Arc<Clock>) -> Result<Self, String> {
-        let feed = Arc::new(Mutex::new(Feed { gain: 1.0, ..Feed::default() }));
-        let (thread_feed, thread_clock) = (feed.clone(), clock.clone());
-        let (ready, started) = std::sync::mpsc::sync_channel(1);
-        std::thread::Builder::new()
-            .name("rune-video-sound".into())
-            .spawn(move || {
-                // SAFETY: COM for this thread, matched below.
-                let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
-                match Stream::new(sound) {
-                    Ok(stream) => {
-                        ready.send(Ok(())).ok();
-                        stream.run(&thread_feed, &thread_clock, sound);
-                    }
-                    Err(e) => {
-                        ready.send(Err(e)).ok();
-                    }
-                }
-                if com {
-                    // SAFETY: matches the initialisation above.
-                    unsafe { CoUninitialize() };
-                }
-            })
-            .map_err(|e| e.to_string())?;
-        started.recv().map_err(|_| "the sound thread stopped".to_string())??;
-        Ok(Self { feed, clock, sound })
+impl Queue {
+    pub(super) fn new(sound: Sound) -> Self {
+        Self { feed: Arc::new(Mutex::new(Feed { gain: 1.0, ..Feed::default() })), sound }
     }
 
-    /// Queues a decoded float sample at `pts` seconds; sound before `skip_before` (a seek's
-    /// pre-roll) is dropped.
-    pub(super) fn push(&self, sample: &IMFSample, pts: f64, skip_before: f64, _generation: u32) {
+    /// Queues a decoded float sample at `pts` seconds; sound ending at or before `skip_before`
+    /// (a seek's pre-roll, or sound behind the clock on unmute) is dropped.
+    pub(super) fn push(&self, sample: &IMFSample, pts: f64, skip_before: f64) {
         let Some(samples) = samples(sample) else { return };
+        self.push_pcm(pts, samples, skip_before);
+    }
+
+    fn push_pcm(&self, pts: f64, samples: Vec<f32>, skip_before: f64) {
         let channels = usize::from(self.sound.channels);
         let rate = f64::from(self.sound.rate);
         let end = pts + (samples.len() / channels) as f64 / rate;
@@ -124,6 +121,15 @@ impl Output {
         feed.cursor = None;
     }
 
+    /// Drops queued sound that playback has already passed while muted.
+    pub(super) fn discard_before(&self, pos: f64) {
+        let mut feed = self.feed.lock().unwrap();
+        if feed.chunks.is_empty() {
+            return;
+        }
+        feed.discard_before(pos, usize::from(self.sound.channels), f64::from(self.sound.rate));
+    }
+
     pub(super) fn set_gain(&self, gain: f32) {
         self.feed.lock().unwrap().gain = gain.clamp(0.0, 1.0);
     }
@@ -132,6 +138,49 @@ impl Output {
     pub(super) fn full(&self) -> bool {
         let per_second = f64::from(self.sound.rate) * f64::from(self.sound.channels);
         self.feed.lock().unwrap().samples as f64 >= AHEAD * per_second
+    }
+}
+
+/// A clip's sound output; dropping it stops the WASAPI stream and thread while leaving its
+/// [`Queue`] intact for a prompt unmute.
+pub(super) struct Output {
+    feed: Arc<Mutex<Feed>>,
+    clock: Arc<Clock>,
+    stream: u64,
+}
+
+impl Output {
+    pub(super) fn open(queue: &Queue, clock: Arc<Clock>) -> Result<Self, String> {
+        let stream = {
+            let mut feed = queue.feed.lock().unwrap();
+            feed.stream = feed.stream.wrapping_add(1).max(1);
+            feed.cursor = None;
+            feed.stream
+        };
+        let (thread_feed, thread_clock, sound) = (queue.feed.clone(), clock.clone(), queue.sound);
+        let (ready, started) = std::sync::mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("rune-video-sound".into())
+            .spawn(move || {
+                // SAFETY: COM for this thread, matched below.
+                let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
+                match Stream::new(sound) {
+                    Ok(s) => {
+                        ready.send(Ok(())).ok();
+                        s.run(&thread_feed, stream, &thread_clock, sound);
+                    }
+                    Err(e) => {
+                        ready.send(Err(e)).ok();
+                    }
+                }
+                if com {
+                    // SAFETY: matches the initialisation above.
+                    unsafe { CoUninitialize() };
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        started.recv().map_err(|_| "the sound thread stopped".to_string())??;
+        Ok(Self { feed: queue.feed.clone(), clock, stream })
     }
 
     /// Nothing plays: paused, stalled or ended.
@@ -145,7 +194,12 @@ impl Output {
 
 impl Drop for Output {
     fn drop(&mut self) {
-        self.feed.lock().unwrap().stop = true;
+        {
+            let mut feed = self.feed.lock().unwrap();
+            if feed.stream == self.stream {
+                feed.stream = feed.stream.wrapping_add(1);
+            }
+        }
         self.clock.changed.notify_all();
     }
 }
@@ -199,7 +253,7 @@ impl Stream {
         }
     }
 
-    fn run(&self, feed: &Mutex<Feed>, clock: &Clock, sound: Sound) {
+    fn run(&self, feed: &Mutex<Feed>, stream: u64, clock: &Clock, sound: Sound) {
         let channels = usize::from(sound.channels);
         let rate = f64::from(sound.rate);
         let mut started = false;
@@ -210,7 +264,7 @@ impl Stream {
             }
             // SAFETY: a wait on this stream's own event.
             let woke = started && unsafe { WaitForSingleObject(self.event, 20) } == WAIT_OBJECT_0;
-            if feed.lock().unwrap().stop {
+            if feed.lock().unwrap().stream != stream {
                 break;
             }
             let anchor = clock.get().filter(|a| (a.rate - 1.0).abs() < 1e-6);
@@ -222,7 +276,10 @@ impl Stream {
                         self.client.Reset().ok();
                     }
                     started = false;
-                    feed.lock().unwrap().cursor = None;
+                    let mut guard = feed.lock().unwrap();
+                    if guard.stream == stream {
+                        guard.cursor = None;
+                    }
                 }
                 continue;
             };
@@ -230,7 +287,7 @@ impl Stream {
                 continue;
             }
             // SAFETY: buffer calls on this stream; the device buffer holds `free` frames.
-            unsafe {
+            let alive = unsafe {
                 let padding = self.client.GetCurrentPadding().unwrap_or(self.frames);
                 let free = self.frames.saturating_sub(padding);
                 if free == 0 {
@@ -238,12 +295,25 @@ impl Stream {
                 }
                 let Ok(data) = self.render.GetBuffer(free) else { continue };
                 let out = std::slice::from_raw_parts_mut(data.cast::<f32>(), free as usize * channels);
-                let heard = rune_core::time::now() + self.latency + Duration::from_secs_f64(f64::from(padding) / rate);
-                fill(&mut feed.lock().unwrap(), out, channels, rate, anchor.position(heard));
+                let alive = {
+                    let mut guard = feed.lock().unwrap();
+                    if guard.stream != stream {
+                        out.fill(0.0);
+                        false
+                    } else {
+                        let heard = rune_core::time::now() + self.latency + Duration::from_secs_f64(f64::from(padding) / rate);
+                        fill(&mut guard, out, channels, rate, anchor.position(heard));
+                        true
+                    }
+                };
                 self.render.ReleaseBuffer(free, 0).ok();
-                if !started {
+                if alive && !started {
                     started = self.client.Start().is_ok();
                 }
+                alive
+            };
+            if !alive {
+                break;
             }
         }
         // SAFETY: stops this stream and closes its event.
@@ -295,3 +365,6 @@ fn fill(feed: &mut Feed, out: &mut [f32], channels: usize, rate: f64, want: f64)
     }
     feed.cursor = Some(cursor);
 }
+
+#[cfg(test)]
+mod tests;
