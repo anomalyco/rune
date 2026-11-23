@@ -1,0 +1,1 @@
+- macOS / iOS: Rune's native Metal backend is chosen only from macOS 13 and iOS 16, the oldest it runs on. On macOS 11 and 12 an app draws with wgpu instead of failing to build its pipelines, even when `RUNE_GPU_BACKEND=metal` or `App::gpu_backend(GpuBackend::Metal)` asked for the native backend; Rune says so once on stderr, and `describe` gives the reason.

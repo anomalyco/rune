@@ -62,8 +62,47 @@ fn env() -> Option<String> {
 /// The backend GPUs are made with: `RUNE_GPU_BACKEND` (`wgpu` or `metal`) over the app's
 /// choice, over the default.
 pub fn current() -> GpuBackend {
-    resolve(env().as_deref(), chosen())
+    let backend = gate(resolve(env().as_deref(), chosen()), os_major());
+    #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
+    if backend == GpuBackend::Wgpu && resolve(env().as_deref(), chosen()) == GpuBackend::Metal && !defaulted(env().as_deref(), chosen()) {
+        static SAID: std::sync::Once = std::sync::Once::new();
+        SAID.call_once(|| eprintln!("rune: Rune's Metal backend needs macOS {MACOS_FLOOR} or iOS {IOS_FLOOR}; drawing with wgpu"));
+    }
+    backend
 }
+
+/// The oldest macOS and iOS the native backend runs on: it writes MSL 3.0, and its precompiled
+/// libraries are built for macOS 13 and iOS 16.
+const MACOS_FLOOR: u32 = 13;
+const IOS_FLOOR: u32 = 16;
+
+/// `backend`, or wgpu when it is the native one and the OS (`os_major`) is older than it runs on.
+/// An unknown version (`None`) keeps `backend`.
+fn gate(backend: GpuBackend, os_major: Option<u32>) -> GpuBackend {
+    let floor = if cfg!(target_os = "ios") { IOS_FLOOR } else { MACOS_FLOOR };
+    match os_major {
+        Some(major) if backend == GpuBackend::Metal && major < floor => GpuBackend::Wgpu,
+        _ => backend,
+    }
+}
+
+/// The OS's major version (`kern.osproductversion`), read once.
+#[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
+fn os_major() -> Option<u32> {
+    static MAJOR: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *MAJOR.get_or_init(|| {
+        let mut buf = [0u8; 32];
+        let mut len = buf.len();
+        // SAFETY: sysctlbyname writes at most `len` bytes into `buf` and the length it wrote into `len`.
+        #[allow(unsafe_code)]
+        let ok = unsafe { libc::sysctlbyname(c"kern.osproductversion".as_ptr(), buf.as_mut_ptr().cast(), &mut len, std::ptr::null_mut(), 0) } == 0;
+        if !ok { return None; }
+        String::from_utf8_lossy(&buf[..len.saturating_sub(1)]).split('.').next()?.trim().parse().ok()
+    })
+}
+
+#[cfg(not(all(target_vendor = "apple", feature = "metal-backend")))]
+fn os_major() -> Option<u32> { None }
 
 /// What `RUNE_GPU_LOG` calls the backend `adapter` is on.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -149,6 +188,7 @@ fn reason(native: bool) -> String {
             (false, Some("wgpu"), _) => "RUNE_GPU_BACKEND=wgpu".into(),
             (false, _, Some(GpuBackend::Wgpu)) => "App::gpu_backend chose it".into(),
             (false, ..) if DEFAULT == GpuBackend::Wgpu => "the default here".into(),
+            (false, ..) if gate(GpuBackend::Metal, os_major()) == GpuBackend::Wgpu => format!("Rune's Metal backend needs macOS {MACOS_FLOOR} or iOS {IOS_FLOOR}"),
             (false, ..) if !missing.is_empty() => format!("a compositor wants {missing}, which Rune's Metal backend lacks"),
             (false, ..) => String::new(),
         };
@@ -190,7 +230,18 @@ fn defaulted(env: Option<&str>, chosen: Option<GpuBackend>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT, GpuBackend, defaulted, resolve};
+    use super::{DEFAULT, GpuBackend, defaulted, gate, resolve};
+
+    #[test]
+    fn the_native_backend_falls_back_to_wgpu_below_its_os_floor() {
+        let floor = if cfg!(target_os = "ios") { 16 } else { 13 };
+        assert_eq!(gate(GpuBackend::Metal, Some(floor - 2)), GpuBackend::Wgpu, "macOS 11 / iOS 14");
+        assert_eq!(gate(GpuBackend::Metal, Some(floor - 1)), GpuBackend::Wgpu, "macOS 12 / iOS 15");
+        assert_eq!(gate(GpuBackend::Metal, Some(floor)), GpuBackend::Metal);
+        assert_eq!(gate(GpuBackend::Metal, Some(26)), GpuBackend::Metal);
+        assert_eq!(gate(GpuBackend::Metal, None), GpuBackend::Metal, "an unknown version keeps the choice");
+        assert_eq!(gate(GpuBackend::Wgpu, Some(11)), GpuBackend::Wgpu);
+    }
 
     #[test]
     fn the_environment_overrides_the_app() {
