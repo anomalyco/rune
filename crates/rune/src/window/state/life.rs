@@ -64,6 +64,19 @@ impl Life {
 
     pub(crate) fn finish(&mut self) { *self = Life::Finished; }
 
+    /// What a failed window creation does to a host's life: an app that didn't ask to stay alive
+    /// without a window (`!keep_running`) and has never created one (`!shown`) finishes so the
+    /// run ends with the error; `keep_running` (including `windowless`) and windows that already
+    /// showed stay alive so a later open can retry.
+    pub(crate) fn fail_create(&mut self, keep_running: bool, shown: bool) -> bool {
+        if !keep_running && !shown {
+            self.finish();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Whether a close runs `App::on_close`: the window is shown, or it isn't and
     /// `keep_running` doesn't keep it. A window hidden without its native window closes as
     /// one that kept it does; one never created (`exists`) has nothing to close.

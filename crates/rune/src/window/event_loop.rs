@@ -38,6 +38,21 @@ fn format_run_error(error: winit::error::EventLoopError, display_error: Option<&
     }
 }
 
+/// Resolves `try_run`'s result once `event_loop.run_app` returns, surfacing a startup window
+/// creation error when the loop exited cleanly because no initial window could be created.
+#[cfg(any(test, not(target_arch = "wasm32")))]
+fn finish_run(
+    result: Result<(), winit::error::EventLoopError>,
+    display_error: Option<&str>,
+    startup_error: Option<String>,
+) -> Result<(), String> {
+    match (result, startup_error) {
+        (Err(error), _) => Err(format_run_error(error, display_error)),
+        (Ok(()), Some(error)) => Err(error),
+        (Ok(()), None) => Ok(()),
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 fn run_configured(_: Factory, _: Args, _: bool) -> Result<(), String> {
     Err("native window factories are unsupported on web; use App::run for one canvas".into())
@@ -127,6 +142,7 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     }));
     let mut windows = Windows {
         factory: Some(factory), args, proxy, hosts: Vec::new(), gpu: Rc::default(),
+        any_shown: false, startup_error: None,
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         display_error: None,
     };
@@ -143,11 +159,12 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     let display_error = windows.display_error.take();
     #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
     let display_error: Option<String> = None;
+    let startup_error = windows.startup_error.take();
     // An orderly exit: the windows and their renderers go here. `RUNE_LOOP_CHECK=2` found a
     // differing picture: the process ends with 3, as a fast exit does (`quit::end_process`).
     drop(windows);
     if crate::render::loop_pixel_check_failed() { std::process::exit(3); }
-    result.map_err(|error| format_run_error(error, display_error.as_deref()))
+    finish_run(result, display_error.as_deref(), startup_error)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -214,4 +231,21 @@ fn run_exit_failure_reports_captured_display_error() {
         Some("Broken pipe (os error 32)"),
     );
     assert!(other.starts_with("run: ") && other.contains("recreated"), "{other}");
+}
+
+#[test]
+fn finish_run_returns_startup_window_error_when_the_loop_exits_cleanly() {
+    assert_eq!(finish_run(Ok(()), None, None), Ok(()));
+    assert_eq!(
+        finish_run(Ok(()), None, Some("could not create the window main: no GPU adapter".into())),
+        Err("could not create the window main: no GPU adapter".into()),
+    );
+    assert_eq!(
+        finish_run(
+            Err(winit::error::EventLoopError::ExitFailure(71)),
+            Some("Protocol error 2 on object wl_surface@7"),
+            Some("could not create the window main: no GPU adapter".into()),
+        ),
+        Err("run: the display connection failed: Protocol error 2 on object wl_surface@7".into()),
+    );
 }

@@ -619,11 +619,15 @@ app.run();
   request attention (most compositors mark it urgent); X11, macOS and Windows use `focus_window`.
 - Headless tooling runs ignore window requests and apply updates before each frame.
 - `AppHandle::is_visible()` reports whether the window is on screen; `AppHandle::window_error()`
-  says why it couldn't be created (no display, no GPU adapter or device). A failed creation is
-  logged and leaves the app windowless; the next open tries again (`Gpu::try_new`).
-- `run` panics when the event loop can't start: no Wayland or X11 display, or a Mac no one is
-  logged in to (over ssh or in CI). `App::try_run`, `try_run_windows_with` and
-  `try_run_windows_with_args` return that error instead.
+  says why it couldn't be created (no display, no GPU adapter or device). When an app's first
+  window can't be created, `run` prints the error to stderr and exits 1 and `try_run` returns
+  it instead of leaving an invisible process; apps that opt into `keep_running()` or
+  `windowless()` (such as tray apps or apps that retry) log the error, keep running windowless,
+  and retry on the next `open` / `show` (`Gpu::try_new`).
+- `run` prints the error to stderr and exits 1 (panics on wasm32) when the event loop can't
+  start: no Wayland or X11 display, or a Mac no one is logged in to (over ssh or in CI).
+  `App::try_run`, `try_run_windows_with` and `try_run_windows_with_args` return that error
+  instead.
 - `App::on_window(|w: &WindowHandle| ..)` runs on the UI thread after every native creation, for
   icons or native styles through `WindowHandle::with_raw_handle`.
 - `AppSpec::min_size` sets the smallest window (None keeps 420×400).

@@ -108,6 +108,8 @@ pub(in crate::window) struct Host {
     pub(in crate::window) gpu_pool: Rc<RefCell<Weak<Gpu>>>,
     /// A window has shown before: the next one opens settled.
     pub(in crate::window) shown: bool,
+    /// Why the first window couldn't be created when this host won't stay alive without one.
+    pub(in crate::window) startup_error: Option<String>,
     pub(in crate::window) started: bool,
     pub(in crate::window) clock: FrameClock,
     pub(in crate::window) idle: bool,
@@ -417,6 +419,7 @@ impl Host {
             gpu: None,
             gpu_pool,
             shown: false,
+            startup_error: None,
             started: false,
             clock: FrameClock::new(crate::time::now()),
             idle: true,

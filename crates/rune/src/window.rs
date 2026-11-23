@@ -136,6 +136,10 @@ pub(crate) trait AnyHost {
     /// The turn ends: the next frame it wants is asked for, or a paint put off runs (`redraw`).
     fn turn_ends(&mut self, _event_loop: &ActiveEventLoop, _now: Instant) {}
     fn finished(&self) -> bool { false }
+    /// Whether this host has ever created a native window.
+    fn has_shown(&self) -> bool { false }
+    /// The error that finished this host when its first window couldn't be created.
+    fn take_startup_error(&mut self) -> Option<String> { None }
     /// The OS is ending the app without Rune asking: run close hooks before the hosts drop.
     fn terminate(&mut self) {}
     /// The app starts to quit: runs `App::on_quit`, unless the window already closed.
@@ -162,6 +166,29 @@ pub(crate) trait AnyHost {
     fn reopen(&mut self, _event_loop: &ActiveEventLoop) {}
 }
 
+/// Collects startup creation errors from finished hosts and returns whether any loop-keeping host
+/// remains alive. When another loop-keeping host stays alive or one has already created a window,
+/// a finished host's startup error is logged to stderr; otherwise the first error is stored in
+/// `startup_error` so `run` / `try_run` returns it.
+fn collect_startup_errors(
+    hosts: &mut [Option<Box<dyn AnyHost>>],
+    any_shown: &mut bool,
+    startup_error: &mut Option<String>,
+) -> bool {
+    *any_shown |= hosts.iter().flatten().any(|h| h.keeps_loop() && h.has_shown());
+    let keeps_running = hosts.iter().flatten().any(|h| h.keeps_loop() && !h.finished());
+    for host in hosts.iter_mut().flatten().filter(|h| h.finished()) {
+        if let Some(error) = host.take_startup_error() {
+            if keeps_running || *any_shown {
+                eprintln!("rune: {error}");
+            } else if startup_error.is_none() {
+                *startup_error = Some(error);
+            }
+        }
+    }
+    keeps_running
+}
+
 /// Builds every host, attaching its shortcut and menu guards, before any resumes: a window's
 /// first updates drain on resume and may register on a later window.
 fn start_all<T, H>(items: Vec<T>, mut build: impl FnMut(usize, T) -> Option<H>, resume: impl FnMut(&mut H)) -> Vec<Option<H>> {
@@ -179,6 +206,10 @@ struct Windows {
     hosts: Vec<Option<Box<dyn AnyHost>>>,
     // Weak pool preserves release_gpu_when_closed when the last GPU owner closes.
     gpu: Rc<RefCell<Weak<Gpu>>>,
+    /// True once any loop-keeping host has created a native window.
+    any_shown: bool,
+    /// First startup window creation error when no loop-keeping host stays alive or ever showed.
+    startup_error: Option<String>,
     /// Fatal Wayland display error captured while `ActiveEventLoop` is still alive.
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     display_error: Option<String>,
@@ -225,10 +256,11 @@ impl Windows {
 
     fn cleanup(&mut self, event_loop: &ActiveEventLoop) {
         if !event_loop.exiting() { self.open_requested(event_loop); }
+        let keeps_running = collect_startup_errors(&mut self.hosts, &mut self.any_shown, &mut self.startup_error);
         // The last window closing ends a fast-exiting app: its host isn't dropped first, which
         // tore down its window, swap chain and device (~37 ms) before the process ended anyway.
         #[cfg(not(target_arch = "wasm32"))]
-        let ending = crate::quit::fast_exit_hook().is_some() && !self.hosts.iter().flatten().any(|h| !h.finished() && h.keeps_loop());
+        let ending = self.startup_error.is_none() && crate::quit::fast_exit_hook().is_some() && !keeps_running;
         #[cfg(target_arch = "wasm32")]
         let ending = false;
         for host in &mut self.hosts {
@@ -241,11 +273,11 @@ impl Windows {
         if event_loop.exiting() {
             for host in self.hosts.iter_mut().flatten() { host.cancel_menus(); }
         }
-        if !self.hosts.iter().flatten().any(|h| h.keeps_loop() && !h.finished()) {
+        if !keeps_running {
             // The app ends with its last main window: windows still open close as their close
             // button would, once the quit's hooks ran. A quit already asked to exit and skips
-            // their close hooks.
-            if !event_loop.exiting() {
+            // their close hooks. A startup failure ends without running quit hooks.
+            if !event_loop.exiting() && self.startup_error.is_none() {
                 self.quit(event_loop, false, true);
                 for host in self.hosts.iter_mut().flatten() { host.terminate(); }
             }
@@ -443,22 +475,28 @@ impl ApplicationHandler<WakeEvent> for Windows {
         {
             self.display_error = crate::platform::layer_shell::display_error(display.as_raw());
         }
-        // Every quit ends here, so the windows still open run `App::on_quit` first, unless the
-        // quit's hooks already ran (a Windows logoff, the last window closing).
-        self.quit(event_loop, false, true);
-        // Rune didn't ask to exit, so the OS is ending the app: macOS Quit, Cmd-Q, the Dock's
-        // Quit, logout. Windows close as their close button would, before the clipboard stops.
-        if !event_loop.exiting() {
-            for host in self.hosts.iter_mut().flatten() { host.terminate(); }
+        if self.startup_error.is_none() {
+            // Every quit ends here, so the windows still open run `App::on_quit` first, unless the
+            // quit's hooks already ran (a Windows logoff, the last window closing).
+            self.quit(event_loop, false, true);
+            // Rune didn't ask to exit, so the OS is ending the app: macOS Quit, Cmd-Q, the Dock's
+            // Quit, logout. Windows close as their close button would, before the clipboard stops.
+            if !event_loop.exiting() {
+                for host in self.hosts.iter_mut().flatten() { host.terminate(); }
+            }
         }
         for host in self.hosts.iter_mut().flatten() { host.cancel_menus(); }
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(last) = crate::quit::fast_exit_hook() { crate::quit::end_fast(last); }
+        if self.startup_error.is_none() && let Some(last) = crate::quit::fast_exit_hook() {
+            crate::quit::end_fast(last);
+        }
         // Surfaces go while winit's display connection is still open (layer surfaces live on it).
         self.hosts.clear();
         crate::marks::mark("windows.dropped");
         crate::clipboard::shutdown();
-        if crate::quit::send(crate::quit::Event::Exited).contains(&crate::quit::Effect::Relaunch) {
+        if self.startup_error.is_none()
+            && crate::quit::send(crate::quit::Event::Exited).contains(&crate::quit::Effect::Relaunch)
+        {
             crate::relaunch::spawn();
         }
         #[cfg(any(target_os = "windows", target_os = "linux"))]
