@@ -1,0 +1,1 @@
+- `rune_kit::Dialog`: an open dialog built without `on_close` now renders as a modal with no close button and no Escape or outside-click dismissal (via the new `El::modal_trap`), instead of being dropped silently.

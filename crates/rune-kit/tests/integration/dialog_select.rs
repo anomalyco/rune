@@ -1,5 +1,5 @@
-use rune::{Cx, El, Env, Runtime, ScrollSpec, col, el, row, text};
-use rune_kit::{Dialog, Kit, Placement, Select, SelectAppearance, root};
+use rune::{Cx, El, Env, Key, KeyEvent, Mods, Runtime, ScrollSpec, col, el, row, text};
+use rune_kit::{Button, Dialog, Kit, Placement, Select, SelectAppearance, root};
 
 struct State { dialog: bool, select: bool, value: String }
 fn view(s: &State, _: &mut Cx<State>) -> El {
@@ -213,4 +213,82 @@ fn a_standard_dialog_shrinks_inside_a_short_window() {
     assert!(panel[1] >= 16.0 - 0.5 && panel[1] + panel[3] <= 260.0 - 16.0 + 0.5, "panel in window: {panel:?}");
     assert!((header[1] - panel[1]).abs() < 0.5, "header at top: {header:?}");
     assert!((body[1] + body[3] - (panel[1] + panel[3])).abs() < 0.5, "body fills remainder: {body:?}");
+}
+
+#[test]
+fn dialog_without_on_close_renders_as_modal_without_close_button() {
+    #[derive(Default)]
+    struct Confirm { open: bool, behind_presses: usize, confirmed: usize }
+
+    fn view(s: &Confirm, _: &mut Cx<Confirm>) -> El {
+        let k = Kit::neutral(true);
+        let mut layer = Vec::new();
+        let behind = Button::new("Open")
+            .on_press(|s: &mut Confirm| { s.behind_presses += 1; s.open = true; })
+            .build(&k)
+            .key("behind");
+        Dialog::new("confirm", "Delete item?")
+            .description("This cannot be undone.")
+            .fit()
+            .open(s.open)
+            .child(
+                row().gap(8.0).padding(16.0)
+                    .child(Button::new("Cancel").on_press(|s: &mut Confirm| s.open = false).build(&k).key("cancel"))
+                    .child(Button::new("Delete").on_press(|s: &mut Confirm| { s.confirmed += 1; s.open = false; }).build(&k).key("delete")),
+            )
+            .build(&k, &mut layer);
+        root(col().w_full().h_full().child(behind), layer)
+    }
+
+    let focused = |rt: &Runtime<Confirm>| rt.elements().into_iter().find(|e| e.focused).and_then(|e| e.key);
+
+    let mut rt = Runtime::new(Confirm::default(), view, (800.0, 600.0), Env::new(true, 1.0));
+    rt.set_full_keyboard_access(true);
+    rt.frame(0.0);
+
+    // Open the dialog from the keyboard so focus return can be checked too.
+    rt.key(KeyEvent { key: Key::Tab, mods: Mods::default() });
+    rt.frame(0.016);
+    assert_eq!(focused(&rt).as_deref(), Some("behind"));
+    rt.key(KeyEvent { key: Key::Text(" ".into()), mods: Mods::default() });
+    for _ in 0..60 { rt.frame(1.0 / 60.0); }
+
+    assert!(rt.state.open);
+    let els = rt.elements();
+    assert!(els.iter().any(|e| e.key.as_deref() == Some("confirm-dialog")), "dialog panel renders without on_close");
+    assert!(els.iter().any(|e| e.key.as_deref() == Some("confirm-scrim")), "dialog scrim renders without on_close");
+    assert!(els.iter().all(|e| e.key.as_deref() != Some("close")), "header omits close button without on_close");
+    assert!(els.iter().find(|e| e.key.as_deref() == Some("behind")).unwrap().inert, "background is inert while open");
+
+    // Focus opens inside the dialog and Tab stays trapped between its own buttons.
+    assert_eq!(focused(&rt).as_deref(), Some("cancel"));
+    rt.key(KeyEvent { key: Key::Tab, mods: Mods::default() });
+    rt.frame(0.016);
+    assert_eq!(focused(&rt).as_deref(), Some("delete"));
+    rt.key(KeyEvent { key: Key::Tab, mods: Mods::default() });
+    rt.frame(0.016);
+    assert_eq!(focused(&rt).as_deref(), Some("cancel"), "Tab wraps inside the dialog");
+
+    // Escape neither closes the dialog nor clears focus inside it.
+    rt.key(KeyEvent { key: Key::Escape, mods: Mods::default() });
+    rt.frame(0.016);
+    assert!(rt.state.open, "Escape does not close a dialog without on_close");
+    assert_eq!(focused(&rt).as_deref(), Some("cancel"), "Escape keeps focus inside the dialog");
+
+    // Clicking outside (including over the behind button) neither closes the dialog nor presses behind.
+    let (bx, by) = rt.find("behind").unwrap();
+    rt.pointer_down(bx, by);
+    rt.pointer_up(bx, by);
+    rt.frame(0.016);
+    assert!(rt.state.open, "outside click does not close a dialog without on_close");
+    assert_eq!(rt.state.behind_presses, 1, "background button stays inert");
+
+    // The dialog's own button closes it and returns focus to the opener.
+    let (dx, dy) = rt.find("delete").unwrap();
+    rt.pointer_down(dx, dy);
+    rt.pointer_up(dx, dy);
+    for _ in 0..60 { rt.frame(1.0 / 60.0); }
+    assert!(!rt.state.open && rt.state.confirmed == 1);
+    assert!(rt.elements().iter().all(|e| e.key.as_deref() != Some("confirm-dialog")));
+    assert_eq!(focused(&rt).as_deref(), Some("behind"), "closing returns focus to the opener");
 }

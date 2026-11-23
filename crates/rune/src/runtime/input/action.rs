@@ -364,7 +364,7 @@ impl RuntimeCore {
                 }
             },
             Action::Dismiss(path) => {
-                let Some(f) = self.node(&path).and_then(|n| n.handlers.modal.as_ref().map(|m| m.dismiss.clone())) else { return false };
+                let Some(f) = self.node(&path).and_then(|n| n.handlers.modal.as_ref().and_then(|m| m.dismiss.clone())) else { return false };
                 self.set_focus(app, None, self.kbd.focus.keyboard());
                 f(app.states(), &mut one);
                 true

@@ -50,6 +50,37 @@ fn a_dialog_is_modal_named_and_described() {
     assert!(!rt.state.open, "Escape dismisses it");
 }
 
+#[test]
+fn a_dialog_without_on_close_is_modal_and_omits_close_button() {
+    fn view(s: &App, _: &mut Cx<App>) -> El {
+        let k = kit();
+        let mut layer = Vec::new();
+        let behind = Button::new("Delete").on_press(toggle).build(&k).key("delete");
+        Dialog::new("confirm", "Delete file?")
+            .description("This can't be undone.")
+            .open(s.open)
+            .fit()
+            .child(Button::new("Cancel").on_press(close).build(&k).key("cancel"))
+            .build(&k, &mut layer);
+        root(col().child(behind), layer)
+    }
+
+    let mut rt = mount(App::default(), view);
+    assert!(act(&mut rt, "delete", Action::Click));
+    let tree = rt.accessibility_json();
+    let panel = node(&tree, "confirm-dialog");
+    assert_eq!((said(panel), panel["description"].as_str()), (("dialog", "Delete file?"), Some("This can't be undone.")));
+    assert!(has(panel, "modal"));
+    assert!(find(&tree, "delete").is_none(), "the page behind a modal leaves the tree");
+    assert!(find(&tree, "close").is_none(), "no close button without on_close");
+    assert_eq!(said(node(&tree, "cancel")), ("button", "Cancel"));
+
+    press_key(&mut rt, Key::Escape);
+    assert!(rt.state.open, "Escape does not dismiss a dialog without on_close");
+    assert!(act(&mut rt, "cancel", Action::Click));
+    assert!(!rt.state.open, "dialog's own button closes it");
+}
+
 fn menu(s: &App, _: &mut Cx<App>) -> El {
     let k = kit();
     let mut layer = Vec::new();

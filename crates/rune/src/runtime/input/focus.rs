@@ -783,9 +783,10 @@ impl RuntimeCore {
         let repeat = tx.key_repeat;
         if ev.key == Key::Escape && let Some(i) = self.active_modal() {
             if repeat { return true; }
-            let f = self.tree.nodes[i].handlers.modal.as_ref().unwrap().dismiss.clone();
-            self.set_focus(app, None, self.kbd.focus.keyboard());
-            f(app.states(), tx);
+            if let Some(f) = self.tree.nodes[i].handlers.modal.as_ref().and_then(|m| m.dismiss.clone()) {
+                self.set_focus(app, None, self.kbd.focus.keyboard());
+                f(app.states(), tx);
+            }
             return true;
         }
         if ev.key == Key::Function(6) {

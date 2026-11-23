@@ -320,3 +320,60 @@ fn playground_stage_modal_makes_side_column_inert_and_traps_tab() {
     rt.frame(0.016);
     assert_eq!(side_presses.load(Ordering::SeqCst), 0, "side column button must ignore clicks while stage modal is open");
 }
+
+#[test]
+fn modal_trap_blocks_background_ignores_escape_and_restores_focus() {
+    #[derive(Default)]
+    struct S { open: bool, behind_presses: usize, root_escapes: usize }
+
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let mut root = col()
+            .on_key(|s: &mut S, ev, _| {
+                if ev.key == Key::Escape { s.root_escapes += 1; return true; }
+                false
+            })
+            .child(
+                button("opener").on_press(|s: &mut S| { s.behind_presses += 1; s.open = true; }),
+            );
+        if s.open {
+            root = root.child(
+                col().key("trap").absolute(120.0, 0.0).size(160.0, 120.0)
+                    .modal_trap()
+                    .child(button("stay"))
+                    .child(button("done").on_press(|s: &mut S| s.open = false)),
+            );
+        }
+        root
+    }
+
+    let mut rt = Runtime::new(S::default(), view, (400.0, 300.0), Env::new(false, 1.0));
+    rt.set_full_keyboard_access(true);
+    rt.frame(0.0);
+
+    press(&mut rt, Key::Tab);
+    assert_eq!(focused_element(&rt).map(|(k, _)| k), Some("opener".into()));
+    press(&mut rt, Key::Text(" ".into()));
+    assert!(rt.state.open);
+    assert_eq!(focused_element(&rt).map(|(k, _)| k), Some("stay".into()));
+
+    // Escape neither closes the modal, blurs focus inside it, nor leaks to the root handler.
+    press(&mut rt, Key::Escape);
+    assert!(rt.state.open);
+    assert_eq!(focused_element(&rt).map(|(k, _)| k), Some("stay".into()));
+    assert_eq!(rt.state.root_escapes, 0);
+
+    // Outside click does not reach the inert background.
+    let (ox, oy) = element_center(&rt, "opener");
+    rt.pointer_down(ox, oy);
+    rt.pointer_up(ox, oy);
+    rt.frame(0.016);
+    assert!(rt.state.open);
+    assert_eq!(rt.state.behind_presses, 1);
+
+    // Tab stays trapped inside the modal, and its own button closes it and returns focus.
+    press(&mut rt, Key::Tab);
+    assert_eq!(focused_element(&rt).map(|(k, _)| k), Some("done".into()));
+    press(&mut rt, Key::Text(" ".into()));
+    assert!(!rt.state.open);
+    assert_eq!(focused_element(&rt).map(|(k, _)| k), Some("opener".into()));
+}
