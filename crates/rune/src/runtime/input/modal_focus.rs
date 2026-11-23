@@ -162,10 +162,10 @@ impl RuntimeCore {
     /// focuses its content (Kobalte's `onOpenAutoFocus` in OpenCode's `Dialog`).
     fn modal_initial_focus(&self) -> Option<String> {
         let i = self.active_modal()?;
-        let inside = |j: usize| self.modal_member(j) && j > i;
-        let autofocus = (i..self.tree.nodes.len()).find(|&j| inside(j) && self.tree.nodes[j].focus.autofocus && self.can_focus(j));
+        let inside = |j: usize| j != i && self.modal_member(j);
+        let autofocus = (0..self.tree.nodes.len()).find(|&j| inside(j) && self.tree.nodes[j].focus.autofocus && self.can_focus(j));
         let first = if self.commit.defaults.web_focus {
-            (i..self.tree.nodes.len()).find(|&j| inside(j) && self.tree.nodes[j].input.is_some() && self.can_focus(j))
+            (0..self.tree.nodes.len()).find(|&j| inside(j) && self.tree.nodes[j].input.is_some() && self.can_focus(j))
         } else {
             self.tab_order().first().copied()
         };
