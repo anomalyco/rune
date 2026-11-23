@@ -15,7 +15,8 @@ pub(crate) fn take_line_end_item_visits() -> usize {
 }
 
 /// Rightmost glyph-run edge on `line` in layout device px.
-pub(crate) fn line_end(line: &parley::Line<'_, Ink>) -> f32 {
+#[doc(hidden)]
+pub fn line_end(line: &parley::Line<'_, Ink>) -> f32 {
     line.items().fold(0.0f32, |e, item| match item {
         PositionedLayoutItem::GlyphRun(gr) => {
             #[cfg(test)]
@@ -27,7 +28,8 @@ pub(crate) fn line_end(line: &parley::Line<'_, Ink>) -> f32 {
 }
 
 /// [`underline_edges`] given a precomputed [`line_end`] for `line`.
-pub(crate) fn underline_edges_with_end(end: f32, origin_x: f32, a: f32, b: f32) -> (f32, f32) {
+#[doc(hidden)]
+pub fn underline_edges_with_end(end: f32, origin_x: f32, a: f32, b: f32) -> (f32, f32) {
     let r = if b >= end - 0.01 { b } else { b.round() };
     ((origin_x + a.round()).round(), (origin_x + r).round())
 }

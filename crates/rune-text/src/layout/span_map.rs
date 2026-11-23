@@ -17,13 +17,13 @@ pub(crate) fn take_span_scan_steps() -> usize {
 
 #[cfg(test)]
 #[inline]
-fn count_span_step() {
+pub(crate) fn count_span_step() {
     SPAN_SCAN_STEPS.with(|c| c.set(c.get() + 1));
 }
 
 #[cfg(not(test))]
 #[inline]
-fn count_span_step() {}
+pub(crate) fn count_span_step() {}
 
 /// Sorted, non-overlapping `(start, end, value)` byte intervals where later input entries win on
 /// overlap. Queries advance a cursor in O(1) amortized time when offsets are monotonic and fall
@@ -64,7 +64,9 @@ impl<T: Copy> SpanMap<T> {
         if disjoint || raw.len() <= 1 {
             return Self { entries: raw, cursor: Cell::new(0) };
         }
-        Self { entries: flatten(raw), cursor: Cell::new(0) }
+        let mut entries = Vec::new();
+        flatten_into(&raw, &mut entries);
+        Self { entries, cursor: Cell::new(0) }
     }
 
     /// Smallest index `i` in `0..=entries.len()` with `entries[i].1 > at`.
@@ -104,11 +106,47 @@ impl<T: Copy> SpanMap<T> {
         count_span_step();
         self.entries.get(i).is_some_and(|e| e.0 < range.end)
     }
+
+    /// Visits the maximal contiguous sub-ranges of `range` with constant coverage (`Some(v)`
+    /// where an entry covers it, `None` for uncovered gaps), in ascending byte order.
+    pub(crate) fn for_each_in(&self, range: Range<usize>, mut f: impl FnMut(Range<usize>, Option<T>)) {
+        if range.is_empty() {
+            return;
+        }
+        if self.entries.is_empty() {
+            count_span_step();
+            f(range, None);
+            return;
+        }
+        let mut i = self.seek(range.start);
+        let mut pos = range.start;
+        while i < self.entries.len() {
+            let (a, b, v) = self.entries[i];
+            if a >= range.end {
+                break;
+            }
+            count_span_step();
+            if a > pos {
+                f(pos..a, None);
+            }
+            let end = b.min(range.end);
+            f(pos.max(a)..end, Some(v));
+            pos = end;
+            if b >= range.end {
+                break;
+            }
+            i += 1;
+        }
+        self.cursor.set(i);
+        if pos < range.end {
+            f(pos..range.end, None);
+        }
+    }
 }
 
 /// Flattens unsorted or overlapping `(start, end, value)` entries into sorted, non-overlapping
-/// intervals where higher input index wins, in O(n log n) time.
-fn flatten<T: Copy>(input: Vec<(usize, usize, T)>) -> Vec<(usize, usize, T)> {
+/// intervals where higher input index wins, in O(n log n) time, appending into `out`.
+pub(crate) fn flatten_into<K: Ord + Copy, T: Copy>(input: &[(K, K, T)], out: &mut Vec<(K, K, T)>) {
     let mut bounds = Vec::with_capacity(input.len() * 2);
     let mut order: Vec<usize> = Vec::with_capacity(input.len());
     for (i, &(a, b, _)) in input.iter().enumerate() {
@@ -122,18 +160,21 @@ fn flatten<T: Copy>(input: Vec<(usize, usize, T)>) -> Vec<(usize, usize, T)> {
 
     // Max-heap of `(input_index, end)` for all entries with `start <= a`; stale entries whose
     // `end <= a` are discarded lazily when they reach the top.
-    let mut active: BinaryHeap<(usize, usize)> = BinaryHeap::new();
+    let mut active: BinaryHeap<(usize, K)> = BinaryHeap::new();
     let mut next = 0usize;
-    let mut out: Vec<(usize, usize, T)> = Vec::with_capacity(bounds.len());
+    out.reserve(bounds.len());
     let mut last_idx: Option<usize> = None;
     for w in bounds.windows(2) {
+        count_span_step();
         let (a, b) = (w[0], w[1]);
         while next < order.len() && input[order[next]].0 <= a {
+            count_span_step();
             let i = order[next];
             active.push((i, input[i].1));
             next += 1;
         }
         while active.peek().is_some_and(|&(_, end)| end <= a) {
+            count_span_step();
             active.pop();
         }
         if let Some(&(i, _)) = active.peek() {
@@ -147,7 +188,6 @@ fn flatten<T: Copy>(input: Vec<(usize, usize, T)>) -> Vec<(usize, usize, T)> {
             last_idx = None;
         }
     }
-    out
 }
 
 #[cfg(test)]

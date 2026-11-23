@@ -23,26 +23,24 @@ pub(crate) const SYNTHETIC_BOLD: u32 = 0x8000_0000;
 /// The brushes `ranges` take: each piece's layout-span ordinal (the last layout-affecting span
 /// over it) with [`SYNTHETIC_BOLD`], split where those spans change.
 pub(crate) fn inks(ranges: &[Range<usize>], spans: &[Span]) -> Vec<(Range<usize>, u32)> {
-    let layout_spans: Vec<&Span> = crate::layout::span::layout_spans(spans).collect();
-    let ink_at = |at: usize| {
-        layout_spans
-            .iter()
-            .rposition(|s| (s.start as usize) <= at && at < s.end as usize)
-            .and_then(|i| i.checked_add(1)?.try_into().ok())
-            .filter(|&n: &u32| n < SYNTHETIC_BOLD)
-            .unwrap_or(0)
-    };
+    if ranges.is_empty() {
+        return Vec::new();
+    }
+    let map = crate::layout::span_map::SpanMap::new(
+        crate::layout::span::layout_spans(spans).enumerate().map(|(i, s)| {
+            let ink = i
+                .checked_add(1)
+                .and_then(|n| u32::try_from(n).ok())
+                .filter(|&n| n < SYNTHETIC_BOLD)
+                .unwrap_or(0);
+            (s.start as usize..s.end as usize, ink)
+        }),
+    );
     let mut out = Vec::new();
     for r in ranges {
-        let mut cuts: Vec<usize> = layout_spans.iter().flat_map(|s| [s.start as usize, s.end as usize]).filter(|&c| r.start < c && c < r.end).collect();
-        cuts.push(r.end);
-        cuts.sort_unstable();
-        cuts.dedup();
-        let mut at = r.start;
-        for c in cuts {
-            out.push((at..c, ink_at(at) | SYNTHETIC_BOLD));
-            at = c;
-        }
+        map.for_each_in(r.clone(), |piece, ink| {
+            out.push((piece, ink.unwrap_or(0) | SYNTHETIC_BOLD));
+        });
     }
     out
 }
@@ -90,3 +88,7 @@ pub(crate) fn mask(cx: &mut ScaleContext, font: FontRef<'_>, coords: &[i16], gly
     }
     Some((out, at))
 }
+
+#[cfg(test)]
+#[path = "synthetic_bold_tests.rs"]
+mod tests;

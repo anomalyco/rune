@@ -367,3 +367,64 @@ fn focused_link_menu_lays_out_only_focused_link() {
     assert!(!handled);
     assert_eq!(queries, 0, "focused_link_menu without on_link_secondary should query 0 spans");
 }
+
+#[test]
+fn link_fx_decos_scans_each_lines_end_once_and_matches_underline_edges() {
+    let mut ts = crate::text::TextSystem::default();
+    let scale = 2.0;
+    let origin = [11.25, 23.5];
+
+    let build = |ts: &mut crate::text::TextSystem, n: usize| {
+        let mut src = String::new();
+        let mut pills = Vec::with_capacity(n);
+        for i in 0..n {
+            src.push_str("a ");
+            let start = src.len() as u32;
+            src.push_str("p");
+            let end = src.len() as u32;
+            pills.push(crate::text::PillChip { start, end, icon: None, bg: None, fg: None, bare: None });
+            if i + 1 < n {
+                src.push(' ');
+            }
+        }
+        let layout = ts.layout_blocks(&src, &[], &[], &pills, TextStyle::new(14.0, 400.0), scale, None, parley::Alignment::Start);
+        (src, layout)
+    };
+
+    let measure = |ts: &mut crate::text::TextSystem, n: usize| -> (usize, usize, usize, Vec<PaintedDeco>, String, std::rc::Rc<parley::Layout<crate::text::Ink>>) {
+        let (src, layout) = build(ts, n);
+        let line = layout.get(0).expect("single unwrapped line");
+        let run_count = line.items().filter(|it| matches!(it, parley::PositionedLayoutItem::GlyphRun(_))).count();
+        let link_boxes = boxes(&layout, src.len(), 0, src.len() as u32);
+        let fx = LinkFx(vec![
+            (0, src.len() as u32, crate::text::LinkPaint::new().underline(Color::WHITE), 2.0, false),
+            (0, src.len() as u32, crate::text::LinkPaint::new().underline(Color::BLACK), 2.0, false),
+        ]);
+        let _ = take_link_line_end_visits();
+        let mut out = Vec::new();
+        fx.decos(&layout, src.len(), scale, origin, &mut out);
+        let visits = take_link_line_end_visits();
+        (visits, run_count, link_boxes.len(), out, src, layout)
+    };
+
+    let (v40, runs40, boxes40, ..) = measure(&mut ts, 40);
+    let (v80, runs80, boxes80, actual, src, layout) = measure(&mut ts, 80);
+    assert!(boxes40 >= 80 && boxes80 >= 160, "pills should split the link into many boxes (got {boxes40}, {boxes80})");
+    assert!(
+        v80 <= runs80,
+        "LinkFx::decos should compute line_end once per line, not per box (got {v80} visits for {runs80} runs and {boxes80} boxes; v40={v40}, runs40={runs40})"
+    );
+
+    // Every underline rect must match the per-box underline_edges calculation identically.
+    let line = layout.get(0).unwrap();
+    let y = (origin[1] + line.metrics().baseline + 2.0 * scale).round();
+    let expected: Vec<_> = boxes(&layout, src.len(), 0, src.len() as u32)
+        .into_iter()
+        .map(|(bb, _)| {
+            let (x0, x1) = crate::text::underline_edges(&line, origin[0], bb.x0 as f32, bb.x1 as f32);
+            ([x0, y, x1 - x0, scale.max(1.0)], Color::BLACK, 0.0f32)
+        })
+        .collect();
+    let got: Vec<_> = actual.iter().map(|d| (d.rect, d.color, d.radius)).collect();
+    assert_eq!(got, expected, "LinkFx::decos underlines must match underline_edges identically");
+}
