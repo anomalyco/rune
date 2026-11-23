@@ -53,6 +53,51 @@ pub(super) struct Facts {
     pub gpu: bool,
 }
 
+/// Where a seek lands. The reader starts at the key frame before the target, so the pictures
+/// before the target are decoded only to reach it. A target after the clip's last picture keeps
+/// none of them: at the stream's end the decoder goes back, once, for the newest one it passed,
+/// so the clip shows its last picture instead of waiting for one that never comes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Landing {
+    /// Clip seconds: pictures before this are dropped, and sound that ends before it.
+    pub skip_before: f64,
+    /// The newest picture dropped on the way.
+    passed: Option<f64>,
+    /// A picture was kept.
+    kept: bool,
+    /// The decoder already went back for the last picture.
+    went_back: bool,
+}
+
+impl Landing {
+    pub(super) fn at(skip_before: f64) -> Self {
+        Self { skip_before, passed: None, kept: false, went_back: false }
+    }
+
+    /// Whether the picture at clip second `time` is kept: the one nearest the target, and all
+    /// after it. `frame` is the seconds a picture lasts.
+    pub(super) fn keeps(&mut self, time: f64, frame: f64) -> bool {
+        let keep = time + frame * 0.5 >= self.skip_before;
+        if keep {
+            self.kept = true;
+        } else {
+            self.passed = Some(self.passed.map_or(time, |passed| passed.max(time)));
+        }
+        keep
+    }
+
+    /// The video stream ended. When no picture was kept, the time of the last one to seek back
+    /// to; the landing then keeps that picture. None once a picture was kept, or the second time.
+    pub(super) fn ended(&mut self) -> Option<f64> {
+        if self.kept || self.went_back {
+            return None;
+        }
+        let last = self.passed?;
+        *self = Self { skip_before: last, passed: None, kept: false, went_back: true };
+        Some(last)
+    }
+}
+
 /// What a decoder starts with.
 pub(super) struct Job {
     pub source: MediaSource,
@@ -267,7 +312,7 @@ impl Decoder {
     fn decode(&mut self, pipe: &Pipe, job: &Job) -> Result<(), String> {
         let mut generation = job.generation;
         // Pictures before a seek's target are decoded only to reach it.
-        let mut skip_before = job.start;
+        let mut landing = Landing::at(job.start);
         // Added to stream times: the loops so far times the duration.
         let mut epoch = 0.0;
         let mut first = true;
@@ -286,7 +331,7 @@ impl Decoder {
                         end_due = None;
                         s.flush();
                         generation = g;
-                        skip_before = to;
+                        landing = Landing::at(to);
                         epoch = 0.0;
                         mf::seek(&self.reader, to)?;
                         self.reopen_streams();
@@ -350,7 +395,7 @@ impl Decoder {
             }
             if let Some(sample) = read.sample.take() {
                 if video {
-                    if read.time + self.facts.meta.frame * 0.5 >= skip_before {
+                    if landing.keeps(read.time, self.facts.meta.frame) {
                         let (picture, texture) = self.picture(&sample)?;
                         let pts = epoch + read.time;
                         let blitted = self.blit_on_layer(pipe, job, texture);
@@ -388,14 +433,26 @@ impl Decoder {
                         }
                     }
                 } else if let Some(o) = &self.output {
-                    o.push(&sample, epoch + read.time, skip_before, generation);
+                    o.push(&sample, epoch + read.time, landing.skip_before, generation);
                 }
+            }
+            // A seek past the last picture kept none: back for the last one, so the clip shows
+            // it and ends (or holds) there.
+            if !self.video_open
+                && let Some(last) = landing.ended()
+            {
+                mf::seek(&self.reader, last)?;
+                self.reopen_streams();
+                if let Some(o) = &self.output {
+                    o.flush();
+                }
+                continue;
             }
             if !self.video_open && !self.audio_open {
                 let looping = pipe.lock().looping;
                 if looping && self.facts.meta.duration > 0.0 {
                     epoch += self.facts.meta.duration;
-                    skip_before = 0.0;
+                    landing = Landing::at(0.0);
                     mf::seek(&self.reader, 0.0)?;
                     self.reopen_streams();
                 } else {
@@ -550,3 +607,6 @@ impl Decoder {
         Ok((Pic::Gpu(planes, value), texture))
     }
 }
+
+#[cfg(test)]
+mod tests;
