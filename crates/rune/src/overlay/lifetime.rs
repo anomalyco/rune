@@ -189,7 +189,7 @@ impl OverlayCore {
         if self.options.keys == KeyPolicy::OnDemand { app.rt_mut().keys_lost(); }
         self.mods = Default::default();
         self.control_click = false;
-        self.ime_allowed = false;
+        self.ime.clear();
         app.popup_cancel(&mut self.popup);
         app.rt_mut().cancel_pointer();
         self.apply_cursor(app.rt());

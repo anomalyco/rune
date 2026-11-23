@@ -5,7 +5,7 @@ use crate::window::surface::Win;
 /// What a built frame hands the window besides its pixels: secure input, the IME, the cursor,
 /// help tags and the clipboard.
 pub(in crate::window) fn sync_platform_core(l: &mut Win, rt: &mut RuntimeCore, secure_input: &mut crate::input::secure_input::SecureInput,
-    ime: &mut bool, clipboard: &crate::clipboard::Client) {
+    ime: &mut host_events::ImeSync, clipboard: &crate::clipboard::Client) {
     let focused = l.window.has_focus();
     secure_input.set(rt.has_secure_focus() && focused);
     l.apply_cursor_core(rt, focused);

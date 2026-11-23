@@ -158,7 +158,7 @@ impl AnyHost for OverlayHost {
                 {
                     crate::platform::ime::cancel(window);
                     window.set_ime_allowed(false);
-                    core.ime_allowed = false;
+                    core.ime.clear();
                 }
             }
             app.rt_mut().ignore_minimize("an overlay");
@@ -253,7 +253,7 @@ impl AnyHost for OverlayHost {
             }
             WindowEvent::Ime(ime) if core.options.keys == KeyPolicy::OnDemand => {
                 if let Some(window) = core.surface.live().and_then(|l| l.backing.window()) {
-                    host_events::ime(app.rt_mut(), window, ime);
+                    host_events::ime(app.rt_mut(), window, &mut core.ime, ime);
                     core.dirty = true;
                 }
             }

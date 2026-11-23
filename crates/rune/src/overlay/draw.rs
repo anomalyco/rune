@@ -501,7 +501,7 @@ impl OverlayCore {
             let focused = self.panel.as_ref().map_or_else(|| window.has_focus(), |p| p.is_key());
             #[cfg(not(target_os = "macos"))]
             let focused = window.has_focus();
-            crate::input::host_events::sync_ime(window, app.rt_mut(), &mut self.ime_allowed, focused);
+            crate::input::host_events::sync_ime(window, app.rt_mut(), &mut self.ime, focused);
         }
     }
 
