@@ -15,7 +15,7 @@ extern "C" {
     #[wasm_bindgen(js_name = fetchBytes)]
     fn fetch_bytes(url: &str) -> js_sys::Promise;
     /// Resolves to `[width, height, Uint8Array]`, straight sRGB RGBA the browser decoded from
-    /// encoded image bytes (PNG, JPEG, GIF's first frame, WebP, BMP, ICO, AVIF).
+    /// encoded image bytes (PNG, JPEG, GIF's first frame, WebP, BMP, ICO, AVIF, JPEG XL).
     #[wasm_bindgen(js_name = decodeImage)]
     fn decode_image(bytes: &[u8], mime: &str, max_side: u32) -> js_sys::Promise;
     /// Resolves in a later task, letting the browser draw and handle input in between.
@@ -29,7 +29,8 @@ impl ImageCache {
     /// arrives, then the cache's waker redraws.
     ///
     /// On web the browser fetches `url`, relative to the page, and decodes it off the main
-    /// thread: PNG, JPEG, GIF's first frame, WebP, BMP, ICO and AVIF, turned
+    /// thread, following the raster formats Chrome decodes in every browser: PNG, JPEG, GIF's
+    /// first frame, WebP, BMP, ICO, AVIF (stills and sequence first frame) and JPEG XL, turned
     /// upright by EXIF orientation. `image/svg+xml` and `.svg`/`.svgz` URLs rasterize with
     /// Rune's SVG renderer. Images over 8192 pixels a side, failed requests and cross-origin
     /// images without CORS resolve to [`Image::error`]. On native, where Rune has no HTTP
