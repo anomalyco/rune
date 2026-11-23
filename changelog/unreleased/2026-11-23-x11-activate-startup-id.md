@@ -1,0 +1,1 @@
+- X11: `AppHandle::activate(token)` on an already-open window now sends `_NET_ACTIVE_WINDOW` with the `DESKTOP_STARTUP_ID` `_TIME` timestamp and broadcasts the startup-notification `remove: ID=` message instead of discarding the token.

@@ -52,7 +52,7 @@ pub(in crate::window) enum RevealEffect {
     CancelTimerFrame,
     /// Publishes the native window number.
     Number,
-    /// Focuses it, or on Wayland activates it with the open's token.
+    /// Focuses it, or on Wayland and X11 activates it with the open's token.
     Focus,
     Redraw,
     /// Asks for a frame only when the frame it reveals left motion running.

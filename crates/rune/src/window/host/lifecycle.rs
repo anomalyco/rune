@@ -140,7 +140,7 @@ impl Host {
         None
     }
 
-    /// Focuses a shown window; Wayland's compositor wants the open's token for that.
+    /// Focuses a shown window; Wayland and X11 use the open's startup token for that.
     fn activate(&mut self, event_loop: &ActiveEventLoop, token: Option<String>) {
         let Some(w) = self.win.as_mut() else { return };
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -157,6 +157,10 @@ impl Host {
                 // Without a token the compositor may only mark the window urgent.
                 None => w.window.request_user_attention(Some(winit::window::UserAttentionType::Informational)),
             }
+            return;
+        } else if let Some(token) = token.as_deref()
+            && crate::platform::x11::activation::activate(&w.window, token)
+        {
             return;
         }
         let _ = (event_loop, token);
