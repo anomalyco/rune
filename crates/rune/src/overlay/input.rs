@@ -342,7 +342,7 @@ impl OverlayCore {
             } else {
                 // No frame will come to run it in time: a hidden, occluded or backing-off
                 // overlay steps without drawing, so its timers fire (and may hide it) on time.
-                self.advance(app);
+                self.advance_at(app, now);
                 self.turn_frame.step(frame::TurnEvent::WakeStepped);
             }
         }
@@ -358,7 +358,10 @@ impl OverlayCore {
     /// without drawing, as a hidden overlay does, unless it already `stepped`. The next try
     /// waits, with the display link stopped so no tick tries sooner.
     pub(super) fn missed(&mut self, app: &mut dyn OverlayApp, missed: crate::window::Missed, paced: bool, stepped: bool) {
-        let now = crate::time::now();
+        self.missed_at(app, missed, paced, stepped, crate::time::now());
+    }
+
+    pub(super) fn missed_at(&mut self, app: &mut dyn OverlayApp, missed: crate::window::Missed, paced: bool, stepped: bool, now: Instant) {
         self.quiet.step(frame::QuietEvent::Forget);
         self.turn_frame.step(frame::TurnEvent::FrameMissed);
         if stepped {

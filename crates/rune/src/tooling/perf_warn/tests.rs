@@ -14,6 +14,7 @@ fn list(key: &'static str, rows: usize) -> El {
 
 #[test]
 fn a_virtualize_list_that_builds_far_more_rows_than_it_mounts_warns_once() {
+    let _clock = FakeStallClock::new();
     take_log();
     fn view(_: &u32, _: &mut Cx<u32>) -> El { list("overbuilt-rows", 1000) }
     let mut rt = Runtime::new(0u32, view, (200.0, 200.0), Env::new(true, 1.0));
@@ -27,6 +28,7 @@ fn a_virtualize_list_that_builds_far_more_rows_than_it_mounts_warns_once() {
 
 #[test]
 fn a_short_virtualize_list_stays_quiet() {
+    let _clock = FakeStallClock::new();
     take_log();
     fn view(_: &u32, _: &mut Cx<u32>) -> El { list("short-rows", 150) }
     let mut rt = Runtime::new(0u32, view, (200.0, 200.0), Env::new(true, 1.0));
@@ -36,13 +38,11 @@ fn a_short_virtualize_list_stays_quiet() {
 
 #[test]
 fn a_callback_blocked_past_its_cpu_time_warns_once_per_site() {
-    if super::runq::wait_ms().is_none() && super::runq::overloaded() {
-        return eprintln!("skipped: the machine has no core to spare, so a sleep can't be told from a wait");
-    }
+    let _clock = FakeStallClock::new();
     take_log();
     for _ in 0..2 {
         let stall = Stall::start();
-        std::thread::sleep(Duration::from_millis(30));
+        FakeStallClock::advance(30.0, 0.0, Some(0.0));
         stall.end(|| ("test-blocked".into(), "`poll`".into()));
     }
     let log = take_log();
@@ -50,18 +50,12 @@ fn a_callback_blocked_past_its_cpu_time_warns_once_per_site() {
     assert!(log[0].starts_with("rune: `poll` blocked ") && log[0].contains("on the main thread: move IO off it with `rune::Latest` or a thread"), "{}", log[0]);
 }
 
-/// Computes 30 ms of this thread's CPU time. A machine too loaded to give the thread a quarter of
-/// a core makes that look blocked, as it would in an app, so the test skips then.
 #[test]
 fn a_callback_that_computes_is_not_a_stall() {
+    let _clock = FakeStallClock::new();
     take_log();
-    let (wall, cpu) = (crate::time::now(), crate::frame::profile::cpu_ms().unwrap());
     let stall = Stall::start();
-    let mut n = 0u64;
-    while crate::frame::profile::cpu_ms().unwrap() - cpu < 30.0 { n = std::hint::black_box(n.wrapping_add(1)); }
-    if wall.elapsed() > Duration::from_millis(30 * STALL_CPU_RATIO as u64 / 2) {
-        return eprintln!("skipped: the thread got too little CPU to compute in time");
-    }
+    FakeStallClock::advance(30.0, 30.0, Some(0.0));
     stall.end(|| ("test-computing".into(), "`poll`".into()));
     let quick = Stall::start();
     quick.end(|| ("test-quick".into(), "`poll`".into()));
@@ -70,13 +64,11 @@ fn a_callback_that_computes_is_not_a_stall() {
 
 #[test]
 fn a_blocking_poll_names_poll() {
-    if super::runq::wait_ms().is_none() && super::runq::overloaded() {
-        return eprintln!("skipped: the machine has no core to spare, so a sleep can't be told from a wait");
-    }
+    let _clock = FakeStallClock::new();
     take_log();
     fn view(_: &u32, _: &mut Cx<u32>) -> El { col() }
     let mut rt = Runtime::new(0u32, view, (100.0, 100.0), Env::new(true, 1.0));
-    rt.poll = Some(|_, _, _| { std::thread::sleep(Duration::from_millis(30)); false });
+    rt.poll = Some(|_, _, _| { FakeStallClock::advance(30.0, 0.0, Some(0.0)); false });
     rt.frame(0.0);
     rt.frame(1.0 / 60.0);
     let log = take_log();
@@ -85,14 +77,12 @@ fn a_blocking_poll_names_poll() {
 
 #[test]
 fn a_blocking_update_names_update() {
-    if super::runq::wait_ms().is_none() && super::runq::overloaded() {
-        return eprintln!("skipped: the machine has no core to spare, so a sleep can't be told from a wait");
-    }
+    let _clock = FakeStallClock::new();
     take_log();
     fn view(_: &u32, _: &mut Cx<u32>) -> El { col() }
     let mut rt = Runtime::new(0u32, view, (100.0, 100.0), Env::new(true, 1.0));
-    rt.update(|_, _| std::thread::sleep(Duration::from_millis(30)));
-    rt.update(|_, _| std::thread::sleep(Duration::from_millis(30)));
+    rt.update(|_, _| FakeStallClock::advance(30.0, 0.0, Some(0.0)));
+    rt.update(|_, _| FakeStallClock::advance(30.0, 0.0, Some(0.0)));
     let log = take_log();
     assert!(log.len() == 1 && log[0].starts_with("rune: an `update` closure blocked "), "{log:?}");
 }
@@ -116,6 +106,7 @@ fn still(_: &u32, _: &mut Cx<u32>) -> El {
 
 #[test]
 fn a_poll_that_always_says_changed_but_changes_nothing_warns_after_30_frames() {
+    let _clock = FakeStallClock::new();
     take_log();
     let mut rt = titled(0u32, still, "poll-noop", |n, _, _| { *n += 1; true });
     for _ in 0..29 { rt.frame(1.0 / 60.0); }
@@ -129,6 +120,7 @@ fn a_poll_that_always_says_changed_but_changes_nothing_warns_after_30_frames() {
 
 #[test]
 fn a_frame_whose_poll_does_not_say_changed_breaks_the_run() {
+    let _clock = FakeStallClock::new();
     take_log();
     // 29 quiet identical frames whose `poll` returns true, one whose `poll` returns false, one
     // more that returns true: the false frame ends the run, so 30 in a row never happened.
@@ -147,6 +139,7 @@ fn a_frame_whose_poll_does_not_say_changed_breaks_the_run() {
 
 #[test]
 fn a_poll_that_changes_what_shows_stays_quiet() {
+    let _clock = FakeStallClock::new();
     take_log();
     fn view(n: &u32, _: &mut Cx<u32>) -> El {
         col().size(200.0, 200.0).child(crate::el::text(format!("tick {n}")))
@@ -158,6 +151,7 @@ fn a_poll_that_changes_what_shows_stays_quiet() {
 
 #[test]
 fn an_endless_16_ms_wake_after_loop_on_an_idle_window_warns() {
+    let _clock = FakeStallClock::new();
     take_log();
     let mut rt = titled(0u32, still, "idle-loop", |_, _, tx| { tx.wake_after(Duration::from_millis(16)); false });
     for _ in 0..100 { rt.frame(1.0 / 60.0); }
@@ -171,6 +165,7 @@ fn an_endless_16_ms_wake_after_loop_on_an_idle_window_warns() {
 
 #[test]
 fn a_wake_after_loop_that_always_says_changed_names_poll_too() {
+    let _clock = FakeStallClock::new();
     take_log();
     let mut rt = titled(0u32, still, "idle-poll-loop", |_, _, tx| { tx.wake_after(Duration::from_millis(16)); true });
     for _ in 0..200 { rt.frame(1.0 / 60.0); }
@@ -182,6 +177,7 @@ fn a_wake_after_loop_that_always_says_changed_names_poll_too() {
 
 #[test]
 fn a_wake_after_loop_that_stops_stays_quiet() {
+    let _clock = FakeStallClock::new();
     take_log();
     let mut rt = titled(0u32, still, "loop-stops", |n, _, tx| {
         *n += 1;
@@ -194,6 +190,7 @@ fn a_wake_after_loop_that_stops_stays_quiet() {
 
 #[test]
 fn a_wake_after_loop_under_running_motion_stays_quiet() {
+    let _clock = FakeStallClock::new();
     take_log();
     fn view(_: &u32, _: &mut Cx<u32>) -> El {
         col().size(200.0, 200.0).child(row().size(20.0, 20.0).fill(crate::Color::WHITE)
@@ -230,6 +227,7 @@ fn a_slow_launch_names_its_slowest_part_and_rune_s_own_time_stays_quiet() {
 
 #[test]
 fn a_memo_over_a_differently_keyed_root_warns_once_per_site() {
+    let _clock = FakeStallClock::new();
     take_log();
     fn view(_: &u32, _: &mut Cx<u32>) -> El {
         let same = crate::memo("same", 0, || col().key("same"));

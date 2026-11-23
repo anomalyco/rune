@@ -1,0 +1,1 @@
+- Tests (`perf_warn`, `overlay`): drive stall detection and overlay miss backoff tests from synthetic clocks instead of the wall clock so host load cannot trigger spurious stall or backoff-expiry failures.

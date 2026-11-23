@@ -5,6 +5,8 @@ impl RuntimeCore {
     /// Clock seconds now: the wall clock in a window (input arrives between frames), the
     /// virtual clock headless.
     pub(in crate::runtime) fn now_clock(&self) -> f64 {
+        #[cfg(test)]
+        if let Some(now) = self.frame.test_clock_now() { return now; }
         self.wall_start.map_or(self.clock, |t| t.elapsed().as_secs_f64())
     }
 
