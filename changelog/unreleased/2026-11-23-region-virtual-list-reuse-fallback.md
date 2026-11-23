@@ -1,0 +1,1 @@
+- Memo / Virtual lists: a `region` holding a `virtual_rows` list now expands its rows instead of flattening an empty list when flattening skips memo reuse (such as under a `scroll_x` or `scroll_xy` parent, after a root modifier is added to the region, or when inherited flatten state changes).

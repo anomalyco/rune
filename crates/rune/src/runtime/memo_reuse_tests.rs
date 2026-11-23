@@ -850,3 +850,115 @@ fn move_path_preserves_allocations_and_matches_fresh_across_exits_focus_selectio
     }
     step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "system-dark-again", |rt| rt.set_system_dark(true));
 }
+
+#[test]
+fn region_virtual_list_keeps_rows_when_parent_gains_scroll_x_or_reuse_skips() {
+    struct State {
+        use_region: bool,
+        scroll_x: bool,
+        inert: bool,
+        dim: bool,
+        tick: u32,
+        count: usize,
+    }
+
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let mut list_region = if s.use_region {
+            crate::region("list-region", || {
+                col().w_full().child(
+                    col().key("vrows").w_full().gap(4.0).growth(GrowthSpec::default()).virtual_rows(
+                        s.count,
+                        32.0,
+                        |_: &State, i| Cow::Owned(format!("row-{i}")),
+                        |_: &State, i| {
+                            row().w(360.0).h(32.0).px(8.0).center_y()
+                                .fill(Color::WHITE.alpha(0.08))
+                                .child(text(format!("Item {i}")).key("lbl").font(TextStyle::new(13.0, 400.0)))
+                        },
+                    ),
+                )
+            })
+        } else {
+            col().key("list-region").w_full().child(
+                col().key("vrows").w_full().gap(4.0).growth(GrowthSpec::default()).virtual_rows(
+                    s.count,
+                    32.0,
+                    |_: &State, i| Cow::Owned(format!("row-{i}")),
+                    |_: &State, i| {
+                        row().w(360.0).h(32.0).px(8.0).center_y()
+                            .fill(Color::WHITE.alpha(0.08))
+                            .child(text(format!("Item {i}")).key("lbl").font(TextStyle::new(13.0, 400.0)))
+                    },
+                ),
+            )
+        };
+        if s.dim {
+            list_region = list_region.opacity(0.5);
+        }
+        let mut sc = col().key("sc").w_full().grow(1.0).min_h(0.0);
+        sc = if s.scroll_x {
+            sc.scroll_xy()
+        } else {
+            sc.scroll(ScrollSpec { stick_bottom: false })
+        };
+        let mut root = col().w_full().h_full().padding(8.0).gap(6.0).children([
+            text(format!("tick {}", s.tick)).key("tick").font(TextStyle::new(12.0, 400.0)),
+            sc.child(list_region),
+        ]);
+        if s.inert {
+            root = root.inert();
+        }
+        root
+    }
+
+    let make = |use_region, scroll_x| State { use_region, scroll_x, inert: false, dim: false, tick: 0, count: 40 };
+
+    // Always a direct child of scroll_xy across commits.
+    let mut rt_sx_m = Runtime::new(make(true, true), view, (300.0, 260.0), Env::new(true, 1.0));
+    let mut rt_sx_f = Runtime::new(make(false, true), view, (300.0, 260.0), Env::new(true, 1.0));
+    step_both(&mut rt_sx_m, &mut rt_sx_f, 0.0, "always-scroll-xy-init", |_| {});
+    for k in 0..3 {
+        step_both(&mut rt_sx_m, &mut rt_sx_f, 1.0 / 60.0, &format!("always-scroll-xy-tick-{k}"), |rt| {
+            rt.update(|s, _| s.tick += 1);
+        });
+    }
+    assert!(rt_sx_m.find("row-0/lbl").is_some(), "direct scroll_xy child mounts rows");
+
+    // Starts under vertical scroll (recorded in flattened), then parent gains scroll_xy.
+    let mut rt_m = Runtime::new(make(true, false), view, (300.0, 260.0), Env::new(true, 1.0));
+    let mut rt_f = Runtime::new(make(false, false), view, (300.0, 260.0), Env::new(true, 1.0));
+    step_both(&mut rt_m, &mut rt_f, 0.0, "init", |_| {});
+    for f in 0..12 {
+        step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, &format!("fill-{f}"), |_| {});
+    }
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "steady-before-scroll-xy", |rt| {
+        rt.update(|s, _| s.tick += 1);
+    });
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "enable-scroll-xy", |rt| {
+        rt.update(|s, _| s.scroll_x = true);
+    });
+    assert!(rt_m.find("row-0/lbl").is_some(), "rows stay mounted when parent gains scroll_xy");
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "disable-scroll-xy", |rt| {
+        rt.update(|s, _| s.scroll_x = false);
+    });
+
+    // Ancestor toggles inert (inherited flatten mismatch): must not flatten an empty list
+    // or cache an empty slice for later commits.
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "enable-inert", |rt| {
+        rt.update(|s, _| s.inert = true);
+    });
+    assert!(rt_m.find("row-0/lbl").is_some(), "rows stay mounted when ancestor turns inert");
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "inert-next-commit", |rt| {
+        rt.update(|s, _| s.tick += 1);
+    });
+    assert!(rt_m.find("row-0/lbl").is_some(), "rows stay mounted on subsequent commits while inert");
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "disable-inert", |rt| {
+        rt.update(|s, _| s.inert = false);
+    });
+
+    // Caller root modifier toggled on the region placeholder (same_root_el mismatch).
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "enable-dim", |rt| {
+        rt.update(|s, _| s.dim = true);
+    });
+    assert!(rt_m.find("row-0/lbl").is_some(), "rows stay mounted when region gains opacity");
+}
