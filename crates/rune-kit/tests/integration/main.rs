@@ -8,6 +8,7 @@ mod diff;
 mod disabled;
 mod elevation_compat;
 mod focus_ring;
+mod form_help_wrap;
 mod glyphs;
 mod hover_within;
 mod image_zoom;

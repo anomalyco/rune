@@ -63,7 +63,7 @@ impl Field {
             root = root.child(lab.a11y_hidden());
         }
         let aside =
-            |key: &str, s: String| text(s).key(key).w_full().min_h(11.0).font(k.ty.small.lh(11.0)).color(c.text_muted).a11y_hidden();
+            |key: &str, s: String| text(s).key(key).w_full().min_h(11.0).font(k.ty.small.lh(11.0)).color(c.text_muted).wrap().a11y_hidden();
         if let Some(p) = self.prefix {
             root = root.child(aside("prefix", p));
         }

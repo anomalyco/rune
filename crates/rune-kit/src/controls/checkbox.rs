@@ -104,13 +104,13 @@ impl Checkbox {
         if let Some(l) = &self.label {
             root = root.label(l.clone());
             // The label and description above say it.
-            let mut content = col().key("content").a11y_hidden();
+            let mut content = col().key("content").shrink().a11y_hidden();
             if !self.hide_label {
                 content = content.child(text(l.clone()).key("label").font(k.ty.text_small.lh(24.0)).color(c.std_text));
             }
             if let Some(d) = &self.description {
                 content =
-                    content.child(text(d.clone()).key("description").font(k.ty.text_xsmall.lh(15.6)).color(c.std_text));
+                    content.child(text(d.clone()).key("description").font(k.ty.text_xsmall.lh(15.6)).color(c.std_text).wrap());
             }
             root = root.child(content);
         }

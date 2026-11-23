@@ -109,7 +109,7 @@ impl Switch {
         if let Some(d) = &self.description {
             root = root
                 .description(d.clone())
-                .child(text(d.clone()).key("description").font(k.ty.text_xsmall.lh(15.6)).color(c.std_text).a11y_hidden());
+                .child(text(d.clone()).key("description").font(k.ty.text_xsmall.lh(15.6)).color(c.std_text).wrap().shrink().a11y_hidden());
         }
         root = root.child(control.key("control").a11y_hidden());
         self.acts.apply(root.focusable(!disabled).disabled(disabled), !disabled)

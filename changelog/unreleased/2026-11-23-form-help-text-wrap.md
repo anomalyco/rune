@@ -1,0 +1,1 @@
+- `rune-kit`: form control help, description and error texts (`Field` prefix/suffix, `TextField` error, `Switch`, `Checkbox`, `RadioItem` and `RadioGroup` descriptions, and `ShortcutRecorder` error) now wrap inside their container instead of overflowing on a single line, growing the control's height to enclose wrapped lines.
