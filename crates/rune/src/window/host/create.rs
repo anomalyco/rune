@@ -339,6 +339,7 @@ impl Host {
         {
             let presents = self.meter.totals().presents;
             self.ime_waits = true;
+            let opened_with = self.app.rt().titlebar_set();
             self.redraw();
             // The view's first run may set the titlebar (`Cx::set_titlebar`, `Cx::titlebar_height`):
             // the traffic lights move and the view's inset with them. The shell would do that
@@ -346,7 +347,11 @@ impl Host {
             // away and the first one would stand on screen with the lights where `App::chrome`
             // put them. So the frame is drawn again before either reaches the screen: at once,
             // as a frame for a new size is (the frame pacing would put a plain redraw off).
-            if crate::platform::macos::launching() && self.app.rt_mut().take_titlebar_changed() {
+            // A view that set the titlebar the window opened with (the app gave `App::titlebar`
+            // the one its view sets) moved nothing: that frame is drawn once.
+            if crate::platform::macos::launching() && self.app.rt_mut().take_titlebar_changed()
+                && self.app.rt().titlebar_set().changes(opened_with, self.titlebar)
+            {
                 if let Some(w) = &self.win { sync_chrome_core(self.app.rt_mut(), w, self.chrome, self.titlebar); }
                 if self.app.rt().stale() {
                     self.draw(true);
