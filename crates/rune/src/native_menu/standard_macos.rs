@@ -34,6 +34,8 @@ unsafe extern "C" {
 pub(crate) fn install(opt_in: bool) {
     let Some(mtm) = MainThreadMarker::new() else { return };
     if INSTALLED.with(Cell::get) { return; }
+    // A launch's menu bar waits for the first frame: winit's default menu isn't there yet.
+    if super::bar_state(|wait| wait.standard(opt_in)) { return; }
     let app = NSApplication::sharedApplication(mtm);
     let default = !CHECKED.with(|c| c.replace(true)) && default_macos::is_winit_default(&app);
     if !opt_in && !default { return; }

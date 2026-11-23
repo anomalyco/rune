@@ -369,6 +369,13 @@ impl Host {
             }
             self.shell(event_loop);
         }
+        // The launch's menu bar, which waited for that frame: winit's default menu, the
+        // standard items, then this window's own.
+        #[cfg(target_os = "macos")]
+        {
+            if crate::native_menu::bar_ready() && visible && let Some(w) = &self.win { crate::native_menu::list_window(&w.window); }
+            self.menus.drain();
+        }
         if !drew && (visible || launcher) && let Some(w) = &self.win {
             w.request_redraw();
         }

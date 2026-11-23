@@ -315,6 +315,9 @@ impl ApplicationHandler<WakeEvent> for Windows {
             spec.start(self.args.clone(), Start { proxy: self.proxy.clone(), slot, gpu: self.gpu.clone(), wayland, traced, overlays: &mut overlays })
         }, |host| host.resumed(event_loop));
         self.connect_overlays(overlays, event_loop);
+        // A launch with no window makes its menu bar now; a window's first frame made it.
+        #[cfg(target_os = "macos")]
+        crate::native_menu::bar_ready();
         #[cfg(target_os = "macos")]
         {
             let proxy = self.proxy.clone();
