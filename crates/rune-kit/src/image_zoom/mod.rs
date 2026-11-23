@@ -220,7 +220,9 @@ impl ImageZoom {
 
     fn magnify(&mut self, e: rune::MagnifyEvent, tx: &mut Tx) -> bool {
         let v = self.view();
-        let factor = math::wheel_zoom_factor(-100.0 * (1.0 + e.delta).max(0.01).ln());
+        // A browser's `deltaY`: Ctrl + wheel's own, or what Chromium makes of a macOS pinch.
+        let delta_y = if e.wheel { -e.delta * 200.0 } else { -100.0 * (1.0 + e.delta).max(0.01).ln() };
+        let factor = math::wheel_zoom_factor(delta_y);
         let to = math::zoom_at(v, v.scale * factor, self.centred([e.x, e.y]), &self.bounds.get());
         self.follow(to, tx);
         true

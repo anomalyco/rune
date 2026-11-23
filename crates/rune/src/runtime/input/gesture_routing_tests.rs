@@ -99,7 +99,8 @@ fn an_unfocused_release_in_a_modal_stays_inside_it() {
 fn a_ctrl_wheel_pinches_only_where_a_magnify_handler_is() {
     let mut rt = Runtime::new(State::default(), view, (100.0, 100.0), Env::new(true, 1.0));
     rt.frame(0.0);
-    assert!(rt.pinch_wheel(50.0, 50.0, -20.0));
+    // The wheel turned away from the user moves content down (positive dy) and zooms in.
+    assert!(rt.pinch_wheel(50.0, 50.0, 20.0));
     rt.frame(0.0);
     assert_eq!(rt.state.zoom, [20.0 / PINCH_WHEEL]);
     assert_eq!(rt.state.from_wheel, [true], "a handler tells Ctrl + wheel from a pinch gesture");
