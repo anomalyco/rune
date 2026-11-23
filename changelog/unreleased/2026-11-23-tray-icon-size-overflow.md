@@ -1,0 +1,1 @@
+- Tray: `Tray::new` now computes the expected icon pixel buffer length with checked multiplication, returning `TrayError::Backend` instead of overflowing on oversized icon dimensions.
