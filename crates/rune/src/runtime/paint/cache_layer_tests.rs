@@ -182,3 +182,118 @@ fn a_scale_that_overflows_at_two_x_stops_asking_for_frames() {
         assert!(rt.paint.scale_frame.is_none(), "and stay stopped");
     }
 }
+
+#[test]
+fn an_el_scale_animation_stops_asking_for_frames_when_it_lands() {
+    fn view(k: &f32, _: &mut Cx<f32>) -> El {
+        crate::col().size(64.0, 64.0).child(
+            crate::el().key("box").size(32.0, 32.0).scale(*k).fill(Color::WHITE),
+        )
+    }
+    let mut rt = Runtime::new(0.9f32, view, (64.0, 64.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("box")).unwrap().id;
+
+    // Spring from 0.9 to 1.0: stops asking for frames on the frame P_SCALE lands.
+    rt.update(|k, _| *k = 1.0);
+    let mut animating_frames = 0usize;
+    let mut landed_animating = None;
+    for _ in 0..240 {
+        let wants = rt.frame(1.0 / 60.0);
+        if rt.scene.store().is_animating(id, P_SCALE) {
+            animating_frames += 1;
+        } else {
+            landed_animating = Some(wants);
+            break;
+        }
+    }
+    assert!(animating_frames > 0, "P_SCALE spring animated before landing");
+    assert_eq!(rt.scene.get(id, P_SCALE), Some(1.0));
+    let mut tail_frames = usize::from(landed_animating.expect("P_SCALE landed"));
+    while tail_frames < 30 && rt.frame(1.0 / 60.0) {
+        tail_frames += 1;
+    }
+    assert_eq!(tail_frames, 0, "no trailing scale_settle frames after El::scale lands at 1.0");
+    assert!(rt.paint.scale_frame.is_none());
+
+    // Spring from 1.0 to 0.5 (whole-pixel scaled box): also lands with zero trailing frames.
+    rt.update(|k, _| *k = 0.5);
+    let mut animating_frames = 0usize;
+    let mut landed_animating = None;
+    for _ in 0..240 {
+        let wants = rt.frame(1.0 / 60.0);
+        if rt.scene.store().is_animating(id, P_SCALE) {
+            animating_frames += 1;
+        } else {
+            landed_animating = Some(wants);
+            break;
+        }
+    }
+    assert!(animating_frames > 0, "P_SCALE spring animated toward 0.5");
+    assert_eq!(rt.scene.get(id, P_SCALE), Some(0.5));
+    let mut tail_frames = usize::from(landed_animating.expect("P_SCALE landed at 0.5"));
+    while tail_frames < 30 && rt.frame(1.0 / 60.0) {
+        tail_frames += 1;
+    }
+    assert_eq!(tail_frames, 0, "no trailing scale_settle frames after El::scale lands at 0.5");
+
+    // A spring that finishes in a single large frame step also leaves no settle tail.
+    rt.update(|k, _| *k = 1.0);
+    assert!(!rt.frame(10.0), "single-step completion requests no follow-up frame");
+    assert!(rt.paint.scale_frame.is_none());
+}
+
+#[test]
+fn a_cached_el_scale_animation_stops_asking_for_frames_when_it_lands() {
+    fn self_cached(k: &f32, _: &mut Cx<f32>) -> El {
+        crate::col().size(64.0, 64.0).child(
+            crate::el().key("scaled").size(32.0, 32.0).scale(*k).cache().fill(Color::WHITE),
+        )
+    }
+    fn child_cached(k: &f32, _: &mut Cx<f32>) -> El {
+        crate::col().size(64.0, 64.0).child(
+            crate::el().key("scaled").size(64.0, 64.0).scale(*k).child(
+                crate::el().key("cache").size(32.0, 32.0).cache().fill(Color::WHITE),
+            ),
+        )
+    }
+    for (name, view) in [("self", self_cached as fn(&f32, &mut Cx<f32>) -> El), ("child", child_cached)] {
+        let mut rt = Runtime::new(0.9f32, view, (64.0, 64.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("scaled")).unwrap().id;
+        rt.update(|k, _| *k = 1.0);
+        let mut animating_frames = 0usize;
+        let mut landed_animating = None;
+        for _ in 0..240 {
+            let wants = rt.frame(1.0 / 60.0);
+            if rt.scene.store().is_animating(id, P_SCALE) {
+                animating_frames += 1;
+            } else {
+                landed_animating = Some(wants);
+                break;
+            }
+        }
+        assert!(animating_frames > 0, "{name}: P_SCALE spring animated");
+        assert_eq!(landed_animating, Some(false), "{name}: no trailing settle frames after landing");
+        assert!(rt.paint.scale_frame.is_none(), "{name}: scale_frame cleared on landing");
+    }
+}
+
+#[test]
+fn an_app_stepped_el_scale_keeps_its_settle_window() {
+    fn view(k: &f32, _: &mut Cx<f32>) -> El {
+        crate::col().size(64.0, 64.0).child(
+            crate::el().key("box").size(32.0, 32.0).scale(*k).scale_motion(rune_motion::Curve::Instant).fill(Color::WHITE),
+        )
+    }
+    let mut rt = Runtime::new(0.9f32, view, (64.0, 64.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|k, _| *k = 1.0);
+    assert!(rt.frame(1.0 / 60.0), "instant scale step enters the settle window");
+    assert!(rt.paint.scale_settling());
+    let mut frames = 1usize;
+    while frames < 30 && rt.frame(1.0 / 60.0) {
+        frames += 1;
+    }
+    assert!((2..=12).contains(&frames), "settle window runs for ~0.1 s then stops: {frames}");
+}

@@ -416,7 +416,15 @@ impl RuntimeCore {
             let k = nodes[i].static_scale;
             nodes[i].scale_track = k != 1.0 || self.scene.store().has(id, P_SCALE);
             if nodes[i].scale_track {
-                self.snap_or_animate(id, P_SCALE, k, rest_quiet, 1.0, nodes[i].vis.scale_motion.as_deref().copied(), spring_l);
+                let motion = nodes[i].vis.scale_motion.as_deref().copied();
+                let anim = motion.unwrap_or_else(|| spring_l.into());
+                let starting = !rest_quiet && anim.curve != rune_motion::Curve::Instant
+                    && self.scene.store().target(id, P_SCALE) != Some(k);
+                self.snap_or_animate(id, P_SCALE, k, rest_quiet, 1.0, motion, spring_l);
+                if starting && !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Scale) {
+                    let target = self.scene.store().target(id, P_SCALE).unwrap_or(k);
+                    self.paint.record_static_scale_target(id, target);
+                }
             }
             let turn = nodes[i].vis.rotate;
             if turn != 0.0 || self.scene.store().has(id, prop::ROTATION) {

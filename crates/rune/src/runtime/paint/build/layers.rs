@@ -215,6 +215,7 @@ impl RuntimeCore {
         w: f32,
         h: f32,
         sc: f32,
+        scale_target: Option<f32>,
         m: f32,
         effective_opacity: f32,
         paint_own: f32,
@@ -252,10 +253,15 @@ impl RuntimeCore {
         let mut committed_scale_moving = false;
         if n.vis_flags.cache() && let Some(entry) = self.paint.node_caches.get_mut(&n.id)
             && entry.commit_gen != self.commit.commit_gen()
-            && let Some(frame) = entry.committed_scale(sc * s, now)
         {
-            committed_scale_moving = true;
-            self.paint.scale_frame = Some(frame);
+            if let Some(target) = scale_target {
+                entry.phase = RasterPhase::Live;
+                entry.scale = ScaleSettle::Still(target * s);
+                committed_scale_moving = true;
+            } else if let Some(frame) = entry.committed_scale(sc * s, now) {
+                committed_scale_moving = true;
+                self.paint.scale_frame = Some(frame);
+            }
         }
         if n.vis_flags.cache() && active_cache.is_none() && !lift && !skip_paint && !self.paint.cache_live_scratch[i]
             && !committed_scale_moving && own_turn.is_none()

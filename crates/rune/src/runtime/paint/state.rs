@@ -231,6 +231,11 @@ impl PaintState {
         }
     }
 
+    #[inline]
+    pub(in crate::runtime) fn record_static_scale_target(&mut self, id: NodeId, target: f32) {
+        self.static_scales.insert(id, ScaleSettle::Still(target));
+    }
+
     #[cfg(test)]
     #[inline]
     pub(in crate::runtime) fn tracks_static_scale(&self, id: NodeId) -> bool {
