@@ -10,7 +10,7 @@ use winit::window::WindowId;
 use super::Host;
 use crate::time::Instant;
 use crate::window::file_drop::DROP_SAMPLE;
-use crate::window::state::{Cover, RestEvent, Reveal};
+use crate::window::state::{Cover, Life, RestEvent, Reveal};
 use crate::window::surface::{BackoffEvent, RedrawEffect, RedrawEvent, Win, timer_deadline_core};
 #[cfg(target_os = "windows")]
 use crate::window::win32::covered_draw::CoveredDrawEvent;
@@ -66,7 +66,7 @@ impl AnyHost for Host {
             .chain(win.and_then(Win::cloak_deadline))
             .chain(win.and_then(|w| w.backoff.deadline()))
             .chain(win.filter(|_| shown.is_none()).and_then(|w| w.hidden_pace.deadline()))
-            .chain(look_deadline(win))
+            .chain(look_deadline(win, self.life))
             .chain(self.files.pointer.as_ref().filter(|_| shown.is_some()).map(|_| now + DROP_SAMPLE))
             .chain(shown.and_then(|w| w.cursor.reassert_at(now)))
             .chain(self.rest.deadline())
@@ -226,7 +226,7 @@ impl Host {
         // A covered window with motion on screen looks again whether it's still covered (`look`),
         // without a frame: asked for while covered, one would draw (`CoveredDraw`) for no one.
         #[cfg(target_os = "windows")]
-        if self.win.as_ref().is_some_and(|w| look_deadline(Some(w)).is_some_and(|at| at <= crate::time::now())) && self.life.covered() {
+        if look_deadline(self.win.as_ref(), self.life).is_some_and(|at| at <= crate::time::now()) {
             self.look();
         }
         if matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll)
@@ -335,9 +335,9 @@ impl Host {
 }
 
 /// When a covered window looks again whether it's still covered (`look`).
-fn look_deadline(win: Option<&Win>) -> Option<Instant> {
+fn look_deadline(win: Option<&Win>, life: Life) -> Option<Instant> {
     #[cfg(target_os = "windows")]
-    return win.and_then(|w| w.native.look.deadline());
+    return win.and_then(|w| w.native.look.deadline(life));
     #[cfg(not(target_os = "windows"))]
-    { let _ = win; None }
+    { let _ = (win, life); None }
 }
