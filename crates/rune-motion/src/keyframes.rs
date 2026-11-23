@@ -80,6 +80,9 @@ impl<T: Animatable> Keyframes<T> {
     pub fn duration(&self) -> f32 {
         self.frames.iter().map(Keyframe::duration).sum()
     }
+    pub fn is_empty(&self) -> bool {
+        self.frames.is_empty()
+    }
     pub fn frames(&self) -> &[Keyframe<T>] {
         &self.frames
     }
@@ -109,11 +112,10 @@ impl<T: Animatable> Keyframe<T> {
 
 impl AnimationStore {
     /// Plays `keyframes` on a property from its current value (cancels anything scheduled on it).
+    /// Returns `None` without creating or modifying a track when `kf` is empty.
     /// Under Reduce Motion, spatial tracks jump to the final value and fades take the short fade.
-    pub fn play_keyframes<T: Animatable>(&mut self, node: crate::NodeId, prop: Prop<T>, kf: &Keyframes<T>) -> TrackId {
-        let Some(last) = kf.last_value() else {
-            return self.track_id(node, prop).unwrap_or_else(|| panic!("empty keyframes on a new property"));
-        };
+    pub fn play_keyframes<T: Animatable>(&mut self, node: crate::NodeId, prop: Prop<T>, kf: &Keyframes<T>) -> Option<TrackId> {
+        let last = kf.last_value()?;
         let first = kf.frames[0].value();
         let start = if self.has(node, prop) { self.sample(node, prop).unwrap() } else { first };
         let init = lanes(&start);
@@ -123,7 +125,7 @@ impl AnimationStore {
             let target = lanes(&last);
             let anim = crate::Anim { delay: kf.delay, ..crate::Anim::new(Curve::Spring(Spring::SMOOTH)) };
             self.animate_raw(t, &target[..n], anim, None);
-            return self.id_of(t);
+            return Some(self.id_of(t));
         }
         self.cancel_track_pending(t);
         let mut at = self.time_of(t) + kf.delay as f64;
@@ -159,6 +161,6 @@ impl AnimationStore {
         }
         // Final segment: a spring keyframe may not have arrived when its slot ends; let it finish.
         self.commit_scheduled(t, at, 0);
-        self.id_of(t)
+        Some(self.id_of(t))
     }
 }
