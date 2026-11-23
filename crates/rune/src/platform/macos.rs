@@ -15,6 +15,7 @@ pub(crate) mod drop;
 mod geometry;
 mod hold;
 pub(crate) mod help;
+pub(crate) mod launch;
 #[doc(hidden)]
 pub mod panel_bridge;
 mod pointer;
