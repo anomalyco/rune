@@ -1,0 +1,1 @@
+- Luau: `Script::poll` now advances the task scheduler's clock on its early-return path when no task is due, so `task.wait` and `task.delay` started after idle virtual-clock frames count from the current frame instead of the last task that ran.
