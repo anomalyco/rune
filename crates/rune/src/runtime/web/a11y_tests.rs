@@ -338,3 +338,101 @@ fn rtl_horizontal_scroller_mirror_undoes_rtl_shift() {
     let x1 = rt.web_a11y_items().into_iter().find(|it| it.text == "مرحبا").unwrap().rect[0];
     assert!((x1 - x0).abs() < 0.2, "mirror rect must stay in scroller content coordinates across RTL scroll: {x0} -> {x1}");
 }
+
+#[test]
+fn a11y_mirror_strips_unsafe_hrefs_and_sanitizes_named_fonts() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let bad_urls = [
+            ("bad-js", "javascript:alert(1)"),
+            ("bad-js-case", "JaVaScRiPt:alert(1)"),
+            ("bad-js-ws", "  \tjavascript:alert(1)"),
+            ("bad-js-ctrl", "\x01javascript:alert(1)"),
+            ("bad-data", "data:text/html,<script>alert(1)</script>"),
+            ("bad-data-b64", "DaTa:text/plain;base64,SGk="),
+            ("bad-vbs", "VbScript:msgbox(1)"),
+            ("bad-proto", "//evil.example/x"),
+            ("bad-ctrl-rel", "\x00/docs"),
+        ];
+        let good_urls = [
+            ("good-http", "http://example.com/a"),
+            ("good-https", "  HTTPS://example.com/b  "),
+            ("good-mail", "MAILTO:a@example.com"),
+            ("good-abs", "/docs"),
+            ("good-frag", "#install"),
+            ("good-rel", "notes/42"),
+        ];
+        let mut root = crate::col().w_full().role("main");
+        for (k, u) in bad_urls {
+            root = root.child(crate::row().key(k).href(u).child(crate::text(k).font(crate::tok::type_::BODY)));
+        }
+        for (k, u) in good_urls {
+            root = root.child(crate::row().key(k).href(u).child(crate::text(k).font(crate::tok::type_::BODY)));
+        }
+        let mut inline_bad = crate::rich("a b c d e f", vec![]).key("inline-bad").font(crate::tok::type_::BODY);
+        inline_bad = inline_bad
+            .link(crate::Link::new(0..1, "javascript:alert(1)"))
+            .link(crate::Link::new(2..3, "data:text/html,hi"))
+            .link(crate::Link::new(4..5, "VbScript:1"))
+            .link(crate::Link::new(6..7, " \tJaVaScRiPt:1"))
+            .link(crate::Link::new(8..9, "\x01javascript:1"))
+            .link(crate::Link::new(10..11, "//evil.example/x"));
+        let mut inline_good = crate::rich("one two three four five", vec![]).key("inline-good").font(crate::tok::type_::BODY);
+        inline_good = inline_good
+            .link(crate::Link::new(0..3, "http://example.com/1"))
+            .link(crate::Link::new(4..7, "HTTPS://example.com/2"))
+            .link(crate::Link::new(8..13, "mailto:a@example.com"))
+            .link(crate::Link::new(14..18, "/guide"))
+            .link(crate::Link::new(19..23, "#top"));
+        let mut bad_font = crate::tok::type_::BODY;
+        bad_font.family = crate::tok::Family::Named("Bad\";\\}\n</style><script>");
+        let mut good_font = crate::tok::type_::BODY;
+        good_font.family = crate::tok::Family::Named("Inter");
+        root.child(inline_bad)
+            .child(inline_good)
+            .child(crate::text("bad font").key("bad-font").font(bad_font))
+            .child(crate::text("good font").key("good-font").font(good_font))
+    }
+
+    let mut rt = Runtime::new((), view, (480.0, 600.0), Env::default());
+    rt.frame(0.0);
+    let items = rt.web_a11y_items();
+    let json = rt.a11y_json();
+    let lower = json.to_ascii_lowercase();
+    for forbidden in ["javascript:", "data:", "vbscript:", "//evil.example"] {
+        assert!(!lower.contains(forbidden), "a11y JSON leaked {forbidden}: {json}");
+    }
+    let links: Vec<(&str, &str)> = items.iter()
+        .filter(|i| i.kind == "link")
+        .map(|i| (i.text.as_str(), i.href.as_deref().unwrap_or("")))
+        .collect();
+    assert_eq!(links, [
+        ("good-http", "http://example.com/a"),
+        ("good-https", "https://example.com/b"),
+        ("good-mail", "mailto:a@example.com"),
+        ("good-abs", "/docs"),
+        ("good-frag", "#install"),
+        ("good-rel", "notes/42"),
+    ]);
+    assert!(!items.iter().any(|i| i.kind == "button"), "refused hrefs must not become buttons");
+    assert!(items.iter().any(|i| i.kind == "text" && i.text == "bad-js"), "refused link label still mirrors as text");
+
+    let ibad = items.iter().find(|i| i.path.ends_with("inline-bad")).expect("inline-bad");
+    assert!(ibad.runs.is_empty(), "refused inline links collapse to plain text: {:?}", ibad.runs);
+    assert_eq!(ibad.text, "a b c d e f");
+
+    let igood = items.iter().find(|i| i.path.ends_with("inline-good")).expect("inline-good");
+    let run_hrefs: Vec<Option<&str>> = igood.runs.iter().filter_map(|r| r.href.as_deref().map(Some)).collect();
+    assert_eq!(run_hrefs, [
+        Some("http://example.com/1"),
+        Some("https://example.com/2"),
+        Some("mailto:a@example.com"),
+        Some("/guide"),
+        Some("#top"),
+    ]);
+
+    let bf = items.iter().find(|i| i.text == "bad font").unwrap().font.as_ref().unwrap();
+    assert!(!bf.family.chars().any(|c| c.is_control() || matches!(c, '"' | '\'' | '\\' | ';' | '{' | '}' | '<' | '>')),
+        "named font must be sanitized: {:?}", bf.family);
+    let gf = items.iter().find(|i| i.text == "good font").unwrap().font.as_ref().unwrap();
+    assert_eq!(gf.family, "Inter");
+}

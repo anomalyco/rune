@@ -119,3 +119,94 @@ fn an_image_source_set_gets_sizes_from_every_width() {
     // `aspect-ratio` or height decides, so the reset sits under every class (`:where`).
     assert!(css.contains(":where([data-rune-static]) img{height:auto}"), "{css}");
 }
+
+#[test]
+fn html_export_blocks_unsafe_hrefs_and_sanitizes_named_fonts() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let bad_urls = [
+            ("bad-js", "javascript:alert(1)"),
+            ("bad-js-case", "JaVaScRiPt:alert(1)"),
+            ("bad-js-ws", "  \tjavascript:alert(1)"),
+            ("bad-js-ctrl", "\x01javascript:alert(1)"),
+            ("bad-data", "data:text/html,<script>alert(1)</script>"),
+            ("bad-data-b64", "DaTa:text/plain;base64,SGk="),
+            ("bad-vbs", "VbScript:msgbox(1)"),
+            ("bad-proto", "//evil.example/x"),
+            ("bad-ctrl-rel", "\x00/docs"),
+        ];
+        let good_urls = [
+            ("good-http", "http://example.com/a"),
+            ("good-https", "  HTTPS://example.com/b  "),
+            ("good-mail", "MAILTO:a@example.com"),
+            ("good-abs", "/docs"),
+            ("good-frag", "#install"),
+            ("good-rel", "notes/42"),
+        ];
+        let mut root = crate::col().key("root").w_full().role("main");
+        for (k, u) in bad_urls {
+            root = root.child(crate::row().key(k).href(u).child(crate::text(k).font(crate::tok::type_::BODY)));
+        }
+        for (k, u) in good_urls {
+            root = root.child(crate::row().key(k).href(u).child(crate::text(k).font(crate::tok::type_::BODY)));
+        }
+        let inline_bad = crate::rich("a b c d e f", vec![]).key("inline-bad").font(crate::tok::type_::BODY)
+            .link(crate::Link::new(0..1, "javascript:alert(1)"))
+            .link(crate::Link::new(2..3, "data:text/html,hi"))
+            .link(crate::Link::new(4..5, "VbScript:1"))
+            .link(crate::Link::new(6..7, " \tJaVaScRiPt:1"))
+            .link(crate::Link::new(8..9, "\x01javascript:1"))
+            .link(crate::Link::new(10..11, "//evil.example/x"));
+        let inline_good = crate::rich("one two three four five", vec![]).key("inline-good").font(crate::tok::type_::BODY)
+            .link(crate::Link::new(0..3, "http://example.com/1"))
+            .link(crate::Link::new(4..7, "HTTPS://example.com/2"))
+            .link(crate::Link::new(8..13, "mailto:a@example.com"))
+            .link(crate::Link::new(14..18, "/guide"))
+            .link(crate::Link::new(19..23, "#top"));
+        let mut bad_font = crate::tok::type_::BODY;
+        bad_font.family = crate::tok::Family::Named("Bad\";\\}\nbody{color:red}</style>");
+        let mut good_font = crate::tok::type_::BODY;
+        good_font.family = crate::tok::Family::Named("Inter");
+        root.child(inline_bad)
+            .child(inline_good)
+            .child(crate::text("bad font").key("bad-font").font(bad_font))
+            .child(crate::text("good font").key("good-font").font(good_font))
+    }
+
+    let mut rt = Runtime::new((), view, (400.0, 600.0), Env::default());
+    rt.page_mode();
+    let nodes = taken(&mut rt, 400.0);
+    let (body, css) = page(&[(400.0, nodes.clone())]);
+
+    let lower_body = body.to_ascii_lowercase();
+    for forbidden in ["javascript:", "data:", "vbscript:", "//evil.example"] {
+        assert!(!lower_body.contains(forbidden), "exported HTML leaked {forbidden}: {body}");
+    }
+    for bad in ["bad-js", "bad-data", "bad-vbs", "bad-proto"] {
+        let node = nodes.iter().find(|n| n.path.ends_with(bad)).expect(bad);
+        assert_ne!(node.tag, "a", "refused href must not export as <a>: {node:?}");
+        assert!(!node.attrs.contains("href="), "refused href must not write href attr: {node:?}");
+    }
+    let ibad = nodes.iter().find(|n| n.path.ends_with("inline-bad")).expect("inline-bad");
+    assert_eq!(ibad.inner, "a b c d e f", "refused inline links export as plain text");
+
+    for expected in [
+        "href=\"http://example.com/a\"",
+        "href=\"https://example.com/b\"",
+        "href=\"mailto:a@example.com\"",
+        "href=\"/docs\"",
+        "href=\"#install\"",
+        "href=\"notes/42\"",
+        "<a href=\"http://example.com/1\">one</a>",
+        "<a href=\"https://example.com/2\">two</a>",
+        "<a href=\"mailto:a@example.com\">three</a>",
+        "<a href=\"/guide\">four</a>",
+        "<a href=\"#top\">five</a>",
+    ] {
+        assert!(body.contains(expected), "missing safe link {expected} in {body}");
+    }
+
+    assert!(css.contains("font-family:\"Inter\""), "normal named font preserved: {css}");
+    assert!(!css.contains("</style>"), "CSS must not contain closing style tag: {css}");
+    assert!(!css.contains('\n'), "CSS must not contain raw newlines: {css}");
+    assert!(!css.contains("body{color:red}"), "CSS must not allow rule breakout: {css}");
+}

@@ -92,7 +92,7 @@ impl RuntimeCore {
         let n = &self.tree.nodes[i];
         let mut attrs = String::new();
         let mut inner = String::new();
-        let href = n.a11y.more.as_ref().and_then(|m| m.href.clone());
+        let href = n.a11y.more.as_ref().and_then(|m| m.href.as_deref()).and_then(|u| crate::open_url::check_href(u).ok());
         let label = n.label.as_deref().filter(|s| !s.trim().is_empty());
         let pixels = n.vis.cold.pixels.as_ref().filter(|_| i + 1 == self.subtree_end(i));
         let pixels_url = pixels.and_then(|p| p.source_url());
