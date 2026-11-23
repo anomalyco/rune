@@ -100,7 +100,7 @@ impl Node {
     /// content in its layout, so it has no [`Elision`]; it only reads as cut.
     pub(crate) fn text_cut(&self, scale: f32) -> bool {
         self.elided.is_some()
-            || self.text.as_ref().is_some_and(|t| t.truncate_fade) && self.run_layout.is_none()
+            || self.text.as_ref().is_some_and(|t| t.truncate || t.truncate_fade) && self.run_layout.is_none()
                 && self.text_layout.as_ref().is_some_and(|l| l.view().full_width() > (self.local.w - self.inset[0] - self.inset[2]).max(0.0) * scale + 0.5)
     }
 }
@@ -207,18 +207,23 @@ fn spec_elide_keys(spec: &TextSpec, scale: f32, mode: u8, param: usize, max_w: f
 
 /// `spec`'s content cut to fit `max_w` device px with an ellipsis, keeping as many whole
 /// graphemes as fit at the start, the end or both ends (half each) as its `elide` says.
-/// Whitespace graphemes beside the ellipsis are dropped whole.
-pub(in crate::runtime) fn truncated(text: &mut TextSystem, spec: &TextSpec, scale: f32, max_w: f32) -> (Rc<Layout<Ink>>, Elision) {
+/// Whitespace graphemes beside the ellipsis are dropped whole. For end truncation in a non-zero
+/// box, the first grapheme is clipped rather than replaced by an ellipsis (CSS Overflow 3 / Blink),
+/// returning `None` for a single-grapheme string so the caller keeps and clips it as-is.
+pub(in crate::runtime) fn truncated(text: &mut TextSystem, spec: &TextSpec, scale: f32, max_w: f32) -> Option<(Rc<Layout<Ink>>, Elision)> {
     use unicode_segmentation::UnicodeSegmentation;
     let keys = spec_elide_keys(spec, scale, 0, spec.elide as usize, max_w, parley::Alignment::Start);
     if let Some((_, key)) = keys
         && let Some(hit) = text.get_elision(key)
     {
-        return (hit.layout, Elision { head: hit.head, tail: hit.tail });
+        return Some((hit.layout, Elision { head: hit.head, tail: hit.tail }));
     }
     let content = spec.content.as_str();
     let bounds: Vec<usize> = content.grapheme_indices(true).map(|(i, _)| i).chain([content.len()]).collect();
     let n = bounds.len() - 1;
+    if spec.elide == crate::el::Elide::End && max_w > 0.0 && n <= 1 {
+        return None;
+    }
     let blank = |g: usize| content[bounds[g]..bounds[g + 1]].chars().all(char::is_whitespace);
     let cut = |k: usize| {
         let (mut head, tail) = match spec.elide {
@@ -263,7 +268,11 @@ pub(in crate::runtime) fn truncated(text: &mut TextSystem, spec: &TextSpec, scal
     let (layout, e) = match best {
         Some((k, l, e)) if k == lo => (l, e),
         _ => {
-            let e = cut(lo);
+            let e = if lo == 0 && spec.elide == crate::el::Elide::End && max_w > 0.0 {
+                Elision { head: bounds[1], tail: content.len() }
+            } else {
+                cut(lo)
+            };
             (make(text, e), e)
         }
     };
@@ -275,7 +284,7 @@ pub(in crate::runtime) fn truncated(text: &mut TextSystem, spec: &TextSpec, scal
             crate::text::CachedElision { layout: layout.clone(), head: e.head, tail: e.tail },
         );
     }
-    (layout, e)
+    Some((layout, e))
 }
 
 /// Drops the text layouts of the last commit's nodes this pass flattened again (`nodes`, laid

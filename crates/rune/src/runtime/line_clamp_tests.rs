@@ -220,3 +220,19 @@ fn clamped_elision_cache_reuses_cut_across_commits() {
     assert_eq!(rt.text.shaped, shaped_before, "repeat commit reuses cached clamped cut");
     assert_eq!(drawn(&rt).1, cut0);
 }
+
+#[test]
+fn narrow_clamped_text_clips_to_box_and_draws_nothing_at_zero_width() {
+    use crate::render::KIND_GLYPH;
+    let zero = clamp("Hello world", 1, None, 0.0);
+    assert_eq!(zero.instances.iter().filter(|i| i.params[1] == KIND_GLYPH).count(), 0);
+
+    let narrow = clamp("Hello world", 1, None, 5.0);
+    let n = node(&narrow);
+    let (x0, x1) = (n.target[0] * 2.0, n.target[2] * 2.0);
+    let glyphs: Vec<_> = narrow.instances.iter().filter(|i| i.params[1] == KIND_GLYPH).collect();
+    assert!(!glyphs.is_empty());
+    for g in glyphs {
+        assert!(g.clip[0] >= x0 - 0.5 && g.clip[2] <= x1 + 0.5, "glyph clip {:?} overflows [{x0}, {x1}]", g.clip);
+    }
+}

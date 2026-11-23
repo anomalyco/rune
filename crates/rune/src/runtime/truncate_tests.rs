@@ -240,3 +240,68 @@ fn elision_cache_reuses_cut_evicts_superseded_and_bypasses_secure() {
     assert!(sec.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap().elided.is_some());
     assert_eq!(sec.text.cached_elision_count(), 0, "redacted text bypasses elision cache");
 }
+
+#[test]
+fn narrow_truncated_text_clips_to_box_and_draws_nothing_at_zero_width() {
+    use crate::render::KIND_GLYPH;
+    use crate::row;
+
+    type RowState = (&'static str, Elide, f32, bool);
+    fn row_view(s: &RowState, _: &mut Cx<RowState>) -> El {
+        let spans = if s.3 { vec![Span { bg: Some(pill()), underline: Some(pill()), ..Span::new(0, s.0.len()) }] } else { Vec::new() };
+        let t = rich(s.0, spans).key("t").font(style()).w(s.2);
+        let t = match s.1 { Elide::End => t.truncate(), Elide::Middle => t.truncate_middle(), Elide::Head => t.truncate_head() };
+        row().w(200.0).child(crate::el().w(10.0).h(16.0)).child(t)
+    }
+
+    let scale = 2.0;
+    for elide in [Elide::End, Elide::Middle, Elide::Head] {
+        // Zero-width box: draws no glyphs or decorations, keeps full a11y text.
+        let mut zero = Runtime::new(("Hello world", elide, 0.0, true), row_view, (200.0, 40.0), Env::new(true, scale));
+        zero.frame(0.0);
+        let glyphs = zero.instances.iter().filter(|i| i.params[1] == KIND_GLYPH).count();
+        assert_eq!(glyphs, 0, "{elide:?}: zero-width truncated text must draw no glyphs");
+        let want_pill = pill().premul(1.0);
+        let deco = zero.instances.iter().filter(|i| i.fill.iter().zip(want_pill).all(|(a, b)| (a - b).abs() < 1e-3)).count();
+        assert_eq!(deco, 0, "{elide:?}: zero-width truncated text must draw no span decorations");
+        let el = zero.elements().into_iter().find(|e| e.key.as_deref() == Some("t")).unwrap();
+        assert_eq!(el.text.as_deref(), Some("Hello world"));
+
+        // Box narrower than the ellipsis (5 pt < ~11 pt): every glyph and decoration clips to the box.
+        let mut narrow = Runtime::new(("Hello world", elide, 5.0, true), row_view, (200.0, 40.0), Env::new(true, scale));
+        narrow.frame(0.0);
+        let n = narrow.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
+        let (x0, x1) = (n.target[0] * scale, n.target[2] * scale);
+        let glyph_list: Vec<_> = narrow.instances.iter().filter(|i| i.params[1] == KIND_GLYPH).collect();
+        assert!(!glyph_list.is_empty(), "{elide:?}: 5 pt box should paint clipped content");
+        for g in &glyph_list {
+            assert!(g.clip[0] >= x0 - 0.5 && g.clip[2] <= x1 + 0.5,
+                "{elide:?}: glyph clip {:?} overflows box [{x0}, {x1}]", g.clip);
+        }
+        for d in narrow.instances.iter().filter(|i| i.fill.iter().zip(want_pill).all(|(a, b)| (a - b).abs() < 1e-3)) {
+            assert!(d.clip[0] >= x0 - 0.5 && d.clip[2] <= x1 + 0.5,
+                "{elide:?}: decoration clip {:?} overflows box [{x0}, {x1}]", d.clip);
+        }
+    }
+
+    // End truncation keeps the first grapheme clipped rather than replacing it with "…" (CSS Overflow 3 / Blink).
+    let mut end_narrow = Runtime::new(("Hello world", Elide::End, 5.0, false), row_view, (200.0, 40.0), Env::new(true, scale));
+    end_narrow.frame(0.0);
+    let n = end_narrow.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
+    let e = n.elided.expect("overflowing multi-grapheme text is elided");
+    assert_eq!(e.head, 1, "first grapheme 'H' is kept before the ellipsis");
+    assert_eq!(e.tail, "Hello world".len());
+
+    // Single grapheme narrower than its own width stays un-ellipsized and clipped to the box.
+    let mut single = Runtime::new(("W", Elide::End, 4.0, false), row_view, (200.0, 40.0), Env::new(true, scale));
+    single.frame(0.0);
+    let n = single.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
+    assert!(n.elided.is_none(), "single grapheme is clipped rather than replaced by an ellipsis");
+    assert!(n.text_cut(scale), "clipped single grapheme still counts as truncated for tooltips");
+    let (x0, x1) = (n.target[0] * scale, n.target[2] * scale);
+    let glyphs: Vec<_> = single.instances.iter().filter(|i| i.params[1] == KIND_GLYPH).collect();
+    assert!(!glyphs.is_empty());
+    for g in glyphs {
+        assert!(g.clip[0] >= x0 - 0.5 && g.clip[2] <= x1 + 0.5, "single glyph clip {:?} overflows [{x0}, {x1}]", g.clip);
+    }
+}

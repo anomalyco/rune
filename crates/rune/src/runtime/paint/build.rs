@@ -569,7 +569,11 @@ impl RuntimeCore {
             };
             let packed_fade = crate::render::pack_fade(fade, fade_origin, clip);
             for instance in &mut self.instances[first_instance..] {
-                instance.fade = packed_fade;
+                instance.fade = if instance.clip == clip {
+                    packed_fade
+                } else {
+                    crate::render::pack_fade(fade, fade_origin, instance.clip)
+                };
             }
             self.clip_text_instances(i, first_instance, (r, r_exact), sc, clip, fade, fade_origin);
             let n = &self.tree.nodes[i];
