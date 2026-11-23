@@ -51,6 +51,67 @@ fn fit_letterboxes_on_whole_pixels_and_fill_crops_the_centre() {
 }
 
 #[test]
+fn fit_in_handles_sub_pixel_negative_and_non_finite_boxes_without_panicking() {
+    use SurfaceFit::{Fill, Fit};
+    const C: SurfacePlace = SurfacePlace::CENTRED;
+    const UNSCALED: SurfacePlace = SurfacePlace { unscaled: true, ..C };
+
+    // Boxes narrower or shorter than 1 px (both continuous and within 1/512 of 0 or 1, where
+    // pixel snapping runs) stay finite, positive, and inside the box across every mode.
+    for (w, h) in [
+        (0.5, 40.0),
+        (40.0, 0.5),
+        (0.5, 0.5),
+        (0.001, 40.0),
+        (40.0, 0.001),
+        (0.999, 40.0),
+        (40.0, 0.999),
+        (0.001, 0.001),
+    ] {
+        let rect = [10.0, 20.0, w, h];
+        for (mode, place) in [(None, C), (Some(Fit), C), (Some(Fill), C), (Some(Fit), UNSCALED), (Some(Fill), UNSCALED)] {
+            for snap in [0.0, 0.5, 1.0, f32::NAN] {
+                let (out, crop) = fit_in(mode, place, rect, (80, 20), snap);
+                assert!(out.iter().all(|v| v.is_finite()), "non-finite rect for {mode:?} {place:?} ({w}, {h}) snap={snap}: {out:?}");
+                assert!(out[2] > 0.0 && out[2] <= w, "width out of bounds for ({w}, {h}): {out:?}");
+                assert!(out[3] > 0.0 && out[3] <= h, "height out of bounds for ({w}, {h}): {out:?}");
+                assert!(out[0] >= rect[0] - 1e-4 && out[0] + out[2] <= rect[0] + w + 1e-4, "x out of bounds for ({w}, {h}): {out:?}");
+                assert!(out[1] >= rect[1] - 1e-4 && out[1] + out[3] <= rect[1] + h + 1e-4, "y out of bounds for ({w}, {h}): {out:?}");
+                assert!(crop.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "bad crop: {crop:?}");
+                assert!(crop[0] <= crop[2] && crop[1] <= crop[3], "inverted crop: {crop:?}");
+            }
+        }
+    }
+
+    // Aspect ratio is kept when only one axis is under 1 px and the other scales to >= 1 px.
+    assert_eq!(fit(Some(Fit), C, [10.0, 20.0, 0.5, 40.0], (20, 80)), ([10.0, 39.0, 0.5, 2.0], [0.0, 0.0, 1.0, 1.0]));
+    assert_eq!(fit(Some(Fit), C, [10.0, 20.0, 40.0, 0.5], (80, 20)), ([29.0, 20.0, 2.0, 0.5], [0.0, 0.0, 1.0, 1.0]));
+    assert_eq!(fit(Some(Fit), C, [10.0, 20.0, 0.5, 0.5], (80, 20)), ([10.0, 20.0, 0.5, 0.5], [0.0, 0.0, 1.0, 1.0]));
+
+    // Zero, negative, NaN and infinite box sizes return the rect and whole crop without panicking.
+    for (w, h) in [
+        (0.0, 40.0),
+        (40.0, 0.0),
+        (-10.0, 40.0),
+        (40.0, -10.0),
+        (-0.5, -0.5),
+        (f32::NAN, 40.0),
+        (40.0, f32::NAN),
+        (f32::NAN, f32::NAN),
+        (f32::INFINITY, 40.0),
+        (40.0, f32::INFINITY),
+        (f32::NEG_INFINITY, 40.0),
+    ] {
+        let rect = [10.0, 20.0, w, h];
+        for (mode, place) in [(None, C), (Some(Fit), C), (Some(Fill), C), (Some(Fit), UNSCALED)] {
+            let (out, crop) = fit_in(mode, place, rect, (80, 20), 1.0);
+            assert_eq!(out.map(f32::to_bits), rect.map(f32::to_bits));
+            assert_eq!(crop, [0.0, 0.0, 1.0, 1.0]);
+        }
+    }
+}
+
+#[test]
 fn frames_copy_in_once_per_generation_and_resize_moves_the_slot() {
     let mut atlas = ImageAtlas::default();
     let px = Pixels::new();

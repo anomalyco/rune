@@ -1,0 +1,1 @@
+- Image (`rune-image`): fitting an image (`SurfaceFit::Fit`) into a box narrower or shorter than one pixel, or with non-finite dimensions, no longer panics in `f32::clamp`.
