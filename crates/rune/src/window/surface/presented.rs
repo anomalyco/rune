@@ -29,6 +29,8 @@ pub(crate) struct Presented {
     scale: f32,
     transparent: bool,
     composed: bool,
+    atlas_rasterized: u64,
+    atlas_resets: u64,
 }
 
 impl Presented {
@@ -60,11 +62,14 @@ impl Presented {
 
     pub(crate) fn record_core(this: &mut Option<Self>, rt: &RuntimeCore, config: &wgpu::SurfaceConfiguration, composed: bool) {
         let (clear, size, srgb, scale, transparent) = (rt.clear_color(), (config.width, config.height), rt.srgb_blend(), rt.env.scale, rt.transparent);
+        let (atlas_rasterized, atlas_resets) = (rt.text.atlas.rasterized(), rt.text.atlas.resets());
         let p = this.get_or_insert_with(|| Self {
             instances: Vec::new(), clear, size, format: config.format, srgb, scale, transparent, composed,
+            atlas_rasterized, atlas_resets,
         });
         if composed { p.instances.clear() } else { p.instances.clone_from(&rt.instances) }
-        (p.clear, p.size, p.format, p.srgb, p.scale, p.transparent, p.composed) = (clear, size, config.format, srgb, scale, transparent, composed);
+        (p.clear, p.size, p.format, p.srgb, p.scale, p.transparent, p.composed, p.atlas_rasterized, p.atlas_resets) =
+            (clear, size, config.format, srgb, scale, transparent, composed, atlas_rasterized, atlas_resets);
     }
 
     /// Whether a timer frame `rt` built before taking a drawable can go without one: nothing
@@ -97,7 +102,8 @@ impl Presented {
         !self.composed && self.size == (config.width, config.height) && self.format == config.format && self.srgb == rt.srgb_blend()
             && self.scale == rt.env.scale && self.clear == rt.clear_color() && self.transparent == rt.transparent
             && rt.surfaces.is_empty() && rt.paint.materials().is_empty()
-            && atlas.dirty.is_none() && atlas.pages.iter().all(|p| p.dirty.is_none())
+            && self.atlas_rasterized == atlas.rasterized() && self.atlas_resets == atlas.resets()
+            && atlas.dirty.is_none() && atlas.pages.iter().all(|p| p.dirty.is_none()) && !atlas.has_pending_fills()
             && rt.images.pages.iter().all(|p| p.dirty.is_none())
             && bytemuck::cast_slice::<_, u8>(&self.instances) == bytemuck::cast_slice::<_, u8>(&rt.instances)
     }

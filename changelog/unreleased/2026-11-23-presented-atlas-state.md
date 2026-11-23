@@ -1,0 +1,1 @@
+- `Presented` now records the glyph atlas's rasterization and reset counters and checks queued GPU fills, so a quiet timer frame after new glyph work or an atlas eviction is presented instead of skipped as unchanged.
