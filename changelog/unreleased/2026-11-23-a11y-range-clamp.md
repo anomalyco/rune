@@ -1,0 +1,1 @@
+- Accessibility: numeric `SetValue` actions on ranged controls no longer panic in `f64::clamp` when the range bounds are `NaN`, and ignore unusable ranges (non-finite value, bounds, or step; `min > max`; or non-positive step) and non-finite requested values instead of clamping or stepping.
