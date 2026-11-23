@@ -198,6 +198,8 @@ impl std::ops::DerefMut for LayoutRects {
 pub(crate) struct LayoutSeen {
     pub(crate) rects: LayoutRects,
     pub(super) reads: LayoutReads,
+    /// Whether `rects` are the last launch's, for the first view (`layout_seed`).
+    pub(super) seeded: super::layout_seed::Seeded,
 }
 
 impl LayoutSeen {
@@ -442,9 +444,17 @@ impl RuntimeCore {
             Some((nodes, ranges)) => self.selection_boxes_in(nodes, ranges),
             None => self.selection_boxes(),
         });
+        // The first commit's layout, checking rects the last launch read (`layout_seed`).
+        let seed = self.seed_unchecked();
         let rects = &mut self.commit.layout_seen.rects;
         let moved = reads.iter().zip(&now).position(|(r, rect)| rects.get(&r.key).is_none_or(|old| r.moved(*old, *rect)));
         let changed = moved.is_some() || boxes.as_ref().is_some_and(|b| boxes_moved(&rects.selection, b));
+        if seed && moved.is_some() {
+            for (r, rect) in reads.iter().zip(&now) {
+                let seeded = rects.get(&r.key).copied();
+                if seeded.is_none_or(|old| r.moved(old, *rect)) { super::layout_seed::log_moved(&r.key, seeded, *rect); }
+            }
+        }
         // The once-a-frame check names the read for the scroll warning.
         #[cfg(debug_assertions)]
         if !nodes_given && let Some(k) = moved { self.commit.watch.meter.read(&reads[k].key, reads[k].at); }
@@ -458,6 +468,7 @@ impl RuntimeCore {
             }
         }
         self.commit.layout_seen.reads = reads;
+        if seed { self.seed_checked(!changed); }
         changed
     }
 
@@ -500,7 +511,7 @@ impl RuntimeCore {
             measured = self.measure(app, tx);
         }
         if !settled { self.layout_moved(Some(std::mem::take(&mut measured.layout_reads)), Some((&measured.nodes, &measured.selection)), true); }
-        let LayoutSeen { rects, reads } = &mut self.commit.layout_seen;
+        let LayoutSeen { rects, reads, seeded: _ } = &mut self.commit.layout_seen;
         rects.retain(|k, _| reads.iter().any(|r| r.key == *k));
         if !rects.contains_key(SELECTION) { rects.selection = Rc::default(); }
         measured

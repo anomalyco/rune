@@ -84,6 +84,8 @@ mod input;
 mod interaction;
 mod key_index;
 pub(crate) mod layout_read;
+mod layout_seed;
+pub use layout_seed::LayoutSeed;
 mod motion;
 mod node_index;
 use node_index::NodeIndex;
@@ -227,6 +229,8 @@ mod select_all_tests;
 mod selection_api_tests;
 #[cfg(test)]
 mod anchored_grow_tests;
+#[cfg(test)]
+mod layout_seed_tests;
 #[cfg(test)]
 mod pixel_snap_tests;
 #[cfg(test)]

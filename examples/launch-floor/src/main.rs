@@ -3,7 +3,11 @@
 //!
 //! `LAUNCH_FLOOR=bare` (the default) draws one line of text and one rectangle. `LAUNCH_FLOOR=shell`
 //! draws what a desktop app's first screen is made of: a custom title bar, a sidebar of icon and
-//! text rows, wrapped paragraphs, bordered cards and a composer with a shadow.
+//! text rows, wrapped paragraphs, bordered cards and a composer with a shadow. `LAUNCH_FLOOR=reads` is
+//! that screen with a view that reads three rects from layout, as a desktop app's does: with
+//! `LAUNCH_FLOOR_SEED=<file>` it keeps what it read in the file and gives it to the next launch
+//! (`App::layout_seed`), whose first frame then builds the view once. `LAUNCH_FLOOR_QUIT_MS=<n>`
+//! quits the app that long after its report, as a person would, so the file is written.
 //!
 //! A moment after the first frame it prints every `rune::marks` step as
 //! `launch-mark <name> <µs since the process started> at=<epoch ms>`, then one JSON line
@@ -15,6 +19,7 @@
 
 use std::io::Write;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use rune::time::Instant;
@@ -32,20 +37,45 @@ static BOOT: OnceLock<(Instant, Duration, std::time::SystemTime)> = OnceLock::ne
 
 struct State {
     shell: bool,
+    reads: bool,
 }
+
+/// Runs of the view so far, and how many the first frame took.
+static VIEWS: AtomicU32 = AtomicU32::new(0);
+static FIRST_VIEWS: AtomicU32 = AtomicU32::new(0);
 
 /// Whether `LAUNCH_FLOOR` asks for the desktop app's first screen.
 fn shell_scene() -> bool {
-    rune::env::var("LAUNCH_FLOOR").is_some_and(|v| v == "shell")
+    rune::env::var("LAUNCH_FLOOR").is_some_and(|v| v == "shell" || v == "reads")
+}
+
+/// Whether `LAUNCH_FLOOR` asks for that screen with a view that reads rects from layout.
+fn reads_scene() -> bool {
+    rune::env::var("LAUNCH_FLOOR").is_some_and(|v| v == "reads")
 }
 
 fn init() -> State {
-    State { shell: shell_scene() }
+    State { shell: shell_scene(), reads: reads_scene() }
 }
 
-fn view(s: &State, _: &mut Cx<State>) -> El {
+fn view(s: &State, cx: &mut Cx<State>) -> El {
+    VIEWS.fetch_add(1, Ordering::Relaxed);
     let t = tok::theme(true);
-    if s.shell { shell(t) } else { bare(t) }
+    if !s.shell { return bare(t); }
+    // What a desktop app's view asks layout: a breakpoint, a pane's size, where the composer is.
+    let read = s.reads.then(|| Read {
+        wide: cx.layout_with("main", |r| r[2] >= 600.0).unwrap_or(false),
+        side: cx.layout_size("sidebar").map_or(0.0, |[w, _]| w),
+        dock: cx.layout("composer").map_or(0.0, |r| r[1]),
+    });
+    shell(t, read)
+}
+
+/// What the `reads` scene's view read from layout.
+struct Read {
+    wide: bool,
+    side: f32,
+    dock: f32,
 }
 
 fn bare(t: Theme) -> El {
@@ -54,10 +84,14 @@ fn bare(t: Theme) -> El {
         .child(el().key("rect").size(120.0, 40.0).fill(tok::accent(0, true)))
 }
 
-fn shell(t: Theme) -> El {
+fn shell(t: Theme, read: Option<Read>) -> El {
+    let title = match &read {
+        Some(r) if r.wide => format!("Launch floor, sidebar {:.0}, composer at {:.0}", r.side, r.dock),
+        _ => "Launch floor".to_owned(),
+    };
     let titlebar = row().key("titlebar").w_full().h(TITLEBAR_H).px(16.0).gap(12.0).center_y()
         .child(icon(&CHAT, 16.0).color(t.text_secondary))
-        .child(text("Launch floor").font(type_::LABEL).color(t.text).grow(1.0))
+        .child(text(title).font(type_::LABEL).color(t.text).grow(1.0))
         .child(icon(&PLUS, 16.0).color(t.text_secondary));
     let mut sidebar = col().key("sidebar").w(280.0).h_full().padding(8.0).gap(2.0).fill(t.card);
     for (i, name) in SESSIONS.iter().enumerate() {
@@ -115,8 +149,9 @@ fn report() {
     }
     let list = |items: Vec<String>| items.join(",");
     let json = format!(
-        "{{\"scene\":\"{}\",\"marks\":{{{}}},\"metrics\":{{{}}},\"notes\":{{{}}}}}",
-        if shell_scene() { "shell" } else { "bare" },
+        "{{\"scene\":\"{}\",\"first_views\":{},\"marks\":{{{}}},\"metrics\":{{{}}},\"notes\":{{{}}}}}",
+        if reads_scene() { "reads" } else if shell_scene() { "shell" } else { "bare" },
+        FIRST_VIEWS.load(Ordering::Relaxed),
         list(marks.iter().map(|(name, at)| format!("\"{name}\":{}", micros(*at))).collect()),
         list(rune::marks::metrics().iter().map(|(name, total)| format!("\"{name}\":{total}")).collect()),
         list(rune::marks::notes().iter().map(|(key, value)| format!("\"{key}\":\"{value}\"")).collect()),
@@ -132,22 +167,66 @@ fn report() {
     }
 }
 
+/// A seed as text: the viewport, scale and zoom on the first line, then a line per key with
+/// its rect (`-` for a key with no element). Rust prints a float so that it parses back exactly.
+fn encode(seed: &rune::LayoutSeed) -> String {
+    let mut out = format!("{} {} {} {}\n", seed.viewport[0], seed.viewport[1], seed.scale, seed.zoom);
+    for (key, rect) in &seed.rects {
+        match rect {
+            Some([x, y, w, h]) => out.push_str(&format!("{x} {y} {w} {h}\t{key}\n")),
+            None => out.push_str(&format!("-\t{key}\n")),
+        }
+    }
+    out
+}
+
+fn decode(text: &str) -> Option<rune::LayoutSeed> {
+    let floats = |s: &str| s.split(' ').map(|v| v.parse::<f32>().ok()).collect::<Option<Vec<f32>>>();
+    let mut lines = text.lines();
+    let &[w, h, scale, zoom] = floats(lines.next()?)?.as_slice() else { return None };
+    let rects = lines
+        .map(|line| {
+            let (rect, key) = line.split_once('\t')?;
+            if rect == "-" { return Some((key.to_owned(), None)); }
+            let &[x, y, w, h] = floats(rect)?.as_slice() else { return None };
+            Some((key.to_owned(), Some([x, y, w, h])))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(rune::LayoutSeed { viewport: [w, h], scale, zoom, rects })
+}
+
 fn main() {
     let age = rune::process_age().unwrap_or_default();
     BOOT.get_or_init(|| (rune::time::now(), age, rune::time::system_now()));
     rune::marks::mark("main.entered");
     let spec = AppSpec::new("Launch floor", (1280.0, 800.0), init, view);
     let shell = shell_scene();
-    let app = rune::App::new(spec).on_ready(|_| {
+    let app = rune::App::new(spec);
+    let handle = app.handle();
+    let app = app.on_ready(move |_| {
+        FIRST_VIEWS.store(VIEWS.load(Ordering::Relaxed), Ordering::Relaxed);
+        let handle = handle.clone();
         // Off the UI thread, once the loop has gone to wait for input.
-        std::thread::spawn(|| {
+        std::thread::spawn(move || {
             // LAUNCH_FLOOR_SETTLE_MS: how long after the first frame the report waits (300); a GPU
             // hand-over on a machine that has never compiled the pipelines needs about 2,500.
             let settle = rune::env::var("LAUNCH_FLOOR_SETTLE_MS").and_then(|v| v.parse().ok()).unwrap_or(300);
             std::thread::sleep(Duration::from_millis(settle));
             report();
+            if let Some(quit) = rune::env::var("LAUNCH_FLOOR_QUIT_MS").and_then(|v| v.parse().ok()) {
+                std::thread::sleep(Duration::from_millis(quit));
+                handle.quit();
+            }
         });
     });
+    // The view's layout reads, kept in a file between launches.
+    let app = match rune::env::var_os("LAUNCH_FLOOR_SEED") {
+        Some(path) => {
+            let seed = std::fs::read_to_string(&path).ok().and_then(|s| decode(&s));
+            app.layout_seed(seed, move |seed| { std::fs::write(&path, encode(&seed)).ok(); })
+        }
+        None => app,
+    };
     let app = if shell {
         app.titlebar(rune::Titlebar::new(TITLEBAR_H)).chrome(rune::Chrome { full_size_content: true, traffic_lights: Some((20.0, 20.0)), drag_regions: true })
     } else {
