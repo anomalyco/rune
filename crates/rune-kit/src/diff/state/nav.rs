@@ -28,7 +28,7 @@ impl DiffState {
             let gap = self.gaps.get(file).and_then(|g| {
                 g.iter().position(|g| {
                     let first = if at.side == Side::Old { g.old } else { g.new };
-                    at.line >= first && g.len.is_none_or(|n| at.line < first + n)
+                    at.line >= first && g.len.is_none_or(|n| u64::from(at.line) < u64::from(first) + u64::from(n))
                 })
             });
             if let Some(gap) = gap {
@@ -50,8 +50,9 @@ impl DiffState {
             self.hunk_rows.iter().rev().copied().find(|&r| r < from)
         };
         let Some(r) = target else { return false };
+        let Some(&row) = self.rows.get(r as usize) else { return false };
         self.reveal_below_header(r, tx);
-        self.visible = self.rows[r as usize].file();
+        self.visible = row.file();
         self.nav = Some(r);
         true
     }
@@ -175,16 +176,20 @@ impl DiffState {
 
     /// Scroll so row `r` is at the top: to the end first, so the reveal comes from below.
     fn reveal_at_top(&self, r: u32, tx: &mut Tx) {
+        let Some(key) = self.keys.get(r as usize) else { return };
         if let Some(last) = self.keys.last() {
             tx.scroll_into_view(last.clone());
         }
-        tx.scroll_into_view(self.keys[r as usize].clone());
+        tx.scroll_into_view(key.clone());
     }
 
     /// Scroll so row `r` sits just below the sticky header: the row a header's height above
     /// it goes to the top.
     fn reveal_below_header(&self, r: u32, tx: &mut Tx) {
         let mut top = r as usize;
+        if top >= self.rows.len() {
+            return;
+        }
         let mut room = 0.0;
         while top > 0 && room < HEADER_H {
             if matches!(self.rows[top], Row::File(_)) {

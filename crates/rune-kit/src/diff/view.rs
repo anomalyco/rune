@@ -456,7 +456,7 @@ impl View {
             let fill = if selected { l.selected } else { l.tints(kind).map_or(l.bg, |t| t.line) };
             let n = if side == Side::Old { c.old } else { c.new };
             let mut cell = c;
-            if kind == LineKind::Context {
+            if kind == LineKind::Context && matches!(st.rows[i], Row::Ctx { .. }) {
                 cell.text = st.side_line(f, side, n.unwrap_or(1)).unwrap_or(c.text);
             }
             let copy = st.copy_side() == side;
@@ -538,7 +538,7 @@ impl View {
         let l = &self.look;
         let (src, n) = c.source();
         let syntax: Vec<(Range<usize>, Color)> = st
-            .highlights(f, src, n)
+            .highlights_for(f, src, n, c.text)
             .into_iter()
             .map(|(r, p)| (r, l.syntax.paint(p)))
             .collect();

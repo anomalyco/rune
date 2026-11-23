@@ -176,6 +176,8 @@ pub struct DiffState {
     chunks: RefCell<HashMap<(u32, Side, u32), Rc<Chunk>>>,
     /// Per file, per hunk, per side: the index in the hunk of each of its lines on that side.
     side_lines: Vec<Vec<[Vec<u32>; 2]>>,
+    /// Per file, per side: whether hunks are sorted, disjoint, and match their line counts.
+    hunks_ordered: Vec<[bool; 2]>,
     gaps: Vec<Vec<Gap>>,
     /// Per file, the digits its line numbers take (at least three).
     digits: Vec<u32>,
@@ -224,6 +226,7 @@ impl DiffState {
             highlighter: Highlighter::builtin(),
             chunks: RefCell::new(HashMap::new()),
             side_lines: Vec::new(),
+            hunks_ordered: Vec::new(),
             gaps: Vec::new(),
             digits: Vec::new(),
             columns: 0,
@@ -258,6 +261,20 @@ impl DiffState {
                         [on(Side::Old), on(Side::New)]
                     })
                     .collect()
+            })
+            .collect();
+        self.hunks_ordered = files
+            .iter()
+            .zip(&self.side_lines)
+            .map(|(f, sl)| {
+                let ordered = |side: Side| {
+                    let counts_match = f.hunks.iter().zip(sl).all(|(h, s)| {
+                        let count = if side == Side::Old { h.old_count } else { h.new_count };
+                        s[side as usize].len() == count as usize
+                    });
+                    counts_match && f.hunks.windows(2).all(|w| w[0].end_u64(side) <= w[1].first_u64(side))
+                };
+                [ordered(Side::Old), ordered(Side::New)]
             })
             .collect();
         self.gaps = files.iter().map(gaps).collect();
@@ -347,7 +364,7 @@ impl DiffState {
     pub fn hidden(&self, file: usize, gap: usize) -> Option<u32> {
         let g = self.gaps.get(file)?.get(gap)?;
         let (top, bottom) = self.ui[file].revealed[gap];
-        g.len.map(|n| n.saturating_sub(top + bottom))
+        g.len.map(|n| n.saturating_sub(top.saturating_add(bottom)))
     }
 
     /// Reveal more of `file`'s unchanged range before hunk `gap` (`hunks.len()`: after the
@@ -361,13 +378,13 @@ impl DiffState {
         let r = &mut self.ui[file].revealed[gap];
         match how {
             // Nothing below the first range and nothing above the last to grow from.
-            Expand::All => r.0 += hidden,
+            Expand::All => r.0 = r.0.saturating_add(hidden),
             Expand::Up if gap > 0 || last => {
-                if last { r.0 += hidden.min(EXPAND_STEP) } else { r.1 += hidden.min(EXPAND_STEP) }
+                if last { r.0 = r.0.saturating_add(hidden.min(EXPAND_STEP)) } else { r.1 = r.1.saturating_add(hidden.min(EXPAND_STEP)) }
             }
-            Expand::Up => r.1 += hidden.min(EXPAND_STEP),
-            Expand::Down if last => r.0 += hidden.min(EXPAND_STEP),
-            Expand::Down => r.0 += hidden.min(EXPAND_STEP),
+            Expand::Up => r.1 = r.1.saturating_add(hidden.min(EXPAND_STEP)),
+            Expand::Down if last => r.0 = r.0.saturating_add(hidden.min(EXPAND_STEP)),
+            Expand::Down => r.0 = r.0.saturating_add(hidden.min(EXPAND_STEP)),
         }
         self.rebuild();
     }
@@ -412,7 +429,9 @@ impl DiffState {
         let (a, b) = self.selected_rows(&sel)?;
         let mut out = Vec::new();
         for r in a..=b {
-            if let Some(n) = self.row_line(self.rows[r as usize], side) {
+            if let Some(&row) = self.rows.get(r as usize)
+                && let Some(n) = self.row_line(row, side)
+            {
                 out.push(self.side_line(sel.file, side, n).unwrap_or_default().to_owned());
             }
         }

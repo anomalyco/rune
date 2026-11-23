@@ -38,16 +38,35 @@ fn a_missing_final_newline_is_a_change() {
 
 #[test]
 fn hostile_and_fuzzed_patches_never_panic_or_blow_up() {
+    let check_state = |state: &mut crate::diff::DiffState| {
+        for mode in [crate::diff::DiffMode::Unified, crate::diff::DiffMode::Split] {
+            state.set_mode(mode);
+            let unique: std::collections::HashSet<&str> = state.keys.iter().map(String::as_str).collect();
+            assert_eq!(unique.len(), state.keys.len(), "duplicate virtual row keys: {:?}", state.keys);
+            for &r in &state.rows {
+                let f = r.file();
+                for side in [Side::Old, Side::New] {
+                    if let Some(n) = state.row_line(r, side) {
+                        let _ = state.side_line(f, side, n);
+                        let _ = state.highlights(f, side, n);
+                    }
+                }
+            }
+        }
+    };
     let cases = [
         "",
         "diff --git\n--- \n+++ \n@@ -4294967295,4294967295 +4294967295,4294967295 @@\n-a\n+b\n\\ No newline",
+        "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -4294967295,2 +4294967295,2 @@\n let a = 1;\n-let b = 2;\n+let c = 3;\n let d = 4;\n",
+        "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,2 +1,2 @@\n let a = 1;\n-old\n+new\n@@ -1,2 +1,2 @@\n let a = 1;\n-old2\n+new2\n",
         "diff --git \"a/unclosed b/unclosed\n--- \"a/\\777\\x\n+++ b/\n@@ -0,0 +0,0 @@\n",
         "diff --git 🚀 a/x 🚀 b/y\n@@ -1,999999 +1,999999 @@\n+truncated",
         "--- a/f\n+++ b/f\n@@ -10,2 +10,2 @@\n ctx\n-old\n+new\n@@ -2,1 +2,1 @@\n-out_of_order\n+ok\n",
     ];
     for patch in cases {
         let files = parse(patch);
-        let _ = crate::diff::DiffState::new(files);
+        let mut state = crate::diff::DiffState::new(files);
+        check_state(&mut state);
     }
 
     // Fuzz-style random line soup of headers, hunks, escapes and markers.
@@ -83,10 +102,12 @@ fn hostile_and_fuzzed_patches_never_panic_or_blow_up() {
         let patch: String = (0..len).map(|_| fragments[next(fragments.len())]).collect();
         let files = parse(&patch);
         let mut state = crate::diff::DiffState::new(files);
-        state.set_mode(crate::diff::DiffMode::Split);
+        check_state(&mut state);
         for f in 0..state.files().len() {
             let _ = state.side_line(f, Side::Old, 1);
             let _ = state.side_line(f, Side::New, 1);
+            let _ = state.side_line(f, Side::Old, u32::MAX);
+            let _ = state.side_line(f, Side::New, u32::MAX);
         }
     }
 }
