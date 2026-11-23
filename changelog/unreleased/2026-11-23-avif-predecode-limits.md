@@ -1,0 +1,1 @@
+- Image: AVIF decoding (`avif` feature) now validates ISO-BMFF container bounds, `ispe` dimensions, and primary and alpha AV1 sequence and frame headers against the 8192 px per side and 256 MiB decoded-buffer limits before invoking `avif-decode`, rejecting oversized files before any raster allocation.
