@@ -128,3 +128,103 @@ fn headless_chrome_overlay_paints_nothing_over_borderless_window() {
         assert!(painted.is_none(), "{label}: borderless --chrome must paint no traffic lights, found {painted:?}");
     }
 }
+
+#[test]
+fn headless_chrome_overlay_follows_dynamic_titlebar_changes() {
+    let _turn = super::tests::HEADLESS.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("rune-dynamic-chrome-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    struct State { phase: usize }
+    fn poll(s: &mut State, t: f64, _: &mut crate::Tx) -> bool {
+        let next = (t * 10.0).round() as usize;
+        if next != s.phase { s.phase = next; true } else { false }
+    }
+    fn view(s: &State, cx: &mut crate::Cx<State>) -> crate::El {
+        match s.phase {
+            1 => cx.titlebar_height(72.0),
+            2 => cx.set_titlebar(crate::Titlebar::new(72.0).traffic_lights(30.0, 52.0)),
+            _ => {}
+        }
+        crate::el().w_full().h_full().fill(crate::Color::BLACK)
+    }
+
+    let mut spec = crate::AppSpec::new("dynamic-titlebar", (300.0, 100.0), || State { phase: 0 }, view);
+    spec.poll = Some(poll);
+    let app = crate::App::new(spec).titlebar(crate::Titlebar::new(36.0));
+    super::headless(app, super::Args {
+        out: Some(dir.clone()),
+        frames: Some(4),
+        every: 1,
+        fps: 10.0,
+        chrome_overlay: true,
+        scale: Some(1.0),
+        ..Default::default()
+    });
+
+    let at = |img: &image::RgbaImage, x: u32, y: u32| -> [u8; 3] {
+        let p = img.get_pixel(x, y);
+        [p[0], p[1], p[2]]
+    };
+    let is_red = |c: [u8; 3]| c[0] > 200 && c[1] < 120 && c[2] < 120;
+    let centers = [(23u32, 18u32), (23, 36), (37, 59)];
+    let expected = [
+        (0, 0, "frame 0 default App::titlebar(36)"),
+        (1, 1, "frame 1 Cx::titlebar_height(72)"),
+        (2, 2, "frame 2 Cx::set_titlebar((30, 52))"),
+        (3, 0, "frame 3 cleared back to App::titlebar(36)"),
+    ];
+    for (frame, want, label) in expected {
+        let img = image::open(dir.join(format!("frame_{frame:04}.png"))).unwrap().into_rgba8();
+        for (i, &(x, y)) in centers.iter().enumerate() {
+            let c = at(&img, x, y);
+            if i == want {
+                assert!(is_red(c), "{label}: expected red close disc at ({x}, {y}), got {c:?}");
+            } else {
+                assert_eq!(c, [0, 0, 0], "{label}: unexpected paint at old/other center ({x}, {y}): {c:?}");
+            }
+        }
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    // --snap on a later frame paints the updated titlebar too.
+    let snap = std::env::temp_dir().join(format!("rune-dynamic-chrome-snap-{}.png", std::process::id()));
+    let mut spec = crate::AppSpec::new("dynamic-titlebar-snap", (300.0, 100.0), || State { phase: 0 }, view);
+    spec.poll = Some(poll);
+    super::headless(crate::App::new(spec).titlebar(crate::Titlebar::new(36.0)), super::Args {
+        snap: Some(snap.clone()),
+        at: Some(0.2),
+        fps: 10.0,
+        chrome_overlay: true,
+        scale: Some(1.0),
+        ..Default::default()
+    });
+    let img = image::open(&snap).unwrap().into_rgba8();
+    std::fs::remove_file(&snap).unwrap();
+    assert!(is_red(at(&img, 37, 59)), "snap at phase 2 expected red close disc at (37, 59), got {:?}", at(&img, 37, 59));
+    assert_eq!(at(&img, 23, 18), [0, 0, 0], "snap at phase 2 must not paint old close disc at (23, 18)");
+
+    // Overlap check uses the runtime's current headless chrome on each frame.
+    fn overlap_view(s: &State, cx: &mut crate::Cx<State>) -> crate::El {
+        match s.phase {
+            1 => cx.titlebar_height(72.0),
+            2 => cx.set_titlebar(crate::Titlebar::new(72.0).traffic_lights(30.0, 52.0)),
+            _ => {}
+        }
+        crate::el().w_full().h_full()
+            .child(crate::el().key("default-btn").role("button").absolute(18.0, 12.0).size(12.0, 12.0))
+            .child(crate::el().key("tall-btn").role("button").absolute(18.0, 30.0).size(12.0, 12.0))
+            .child(crate::el().key("custom-btn").role("button").absolute(32.0, 54.0).size(12.0, 12.0))
+    }
+    let mut rt = crate::Runtime::new(State { phase: 0 }, overlap_view, (300.0, 100.0), crate::Env::new(true, 1.0));
+    rt.headless_chrome(crate::Chrome::DEFAULT, Some(crate::Titlebar::new(36.0)), false);
+    for (phase, want) in [(0, "default-btn"), (1, "tall-btn"), (2, "custom-btn"), (3, "default-btn")] {
+        rt.update(move |s, _| s.phase = phase);
+        rt.frame(0.1);
+        let lights = rt.core().headless_chrome_current().traffic_light_rects_in(300.0, false).expect("traffic lights");
+        let hits = super::traffic_light_overlaps(rt.core(), &lights);
+        assert_eq!(hits.len(), 1, "phase {phase}: expected only {want} to overlap {lights:?}, got {hits:?}");
+        assert!(hits[0].0.contains(want), "phase {phase}: expected {want}, got {hits:?}");
+    }
+}

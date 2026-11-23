@@ -24,9 +24,17 @@ use crate::tooling::{
 use super::app::{HeadlessApp, HeadlessRenderArgs};
 use super::report_traffic_light_overlaps;
 
+/// A frame readback's destination and, when `--chrome` is active, the resolved macOS chrome on
+/// that frame so asynchronous readbacks paint the traffic lights that frame drew with.
+#[derive(Clone, Copy)]
+pub(super) struct FrameShot {
+    pub(super) shot: Shot,
+    pub(super) chrome: Option<Chrome>,
+}
+
 pub(super) struct PreparedHeadlessFrame {
     encoder: wgpu::CommandEncoder,
-    shot: Shot,
+    shot: FrameShot,
 }
 
 /// Persistent offscreen rendering resources and frame-to-frame state owned by `run_headless`.
@@ -36,7 +44,6 @@ pub(super) struct HeadlessLoop<'a> {
     pub(super) runtime_ms: f64,
     pub(super) init_ms: f64,
     pub(super) args: &'a Args,
-    pub(super) chrome: Chrome,
     pub(super) dark: bool,
     pub(super) scale: f32,
     pub(super) size: (f32, f32),
@@ -55,7 +62,7 @@ pub(super) struct HeadlessLoop<'a> {
     pub(super) target_format: wgpu::TextureFormat,
     pub(super) renderer: Renderer,
     pub(super) target: Offscreen,
-    pub(super) readback: crate::tooling::record::Readback<Shot>,
+    pub(super) readback: crate::tooling::record::Readback<FrameShot>,
     pub(super) in_flight: crate::tooling::record::InFlight,
     pub(super) alpha: Option<crate::render::surface_alpha::AlphaSurface>,
     pub(super) overlay: Option<(crate::input::keycaps::Overlay, Renderer)>,
@@ -116,7 +123,7 @@ pub(super) struct HeadlessFrame<'a, 'b, F> {
     pub(super) fp_events: usize,
 }
 
-impl<F: FnMut(Shot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
+impl<F: FnMut(FrameShot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
     type Drawable = ();
     type Prepared = PreparedHeadlessFrame;
 
@@ -235,9 +242,10 @@ impl<F: FnMut(Shot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
         };
         let first_pixels = s.args.first_pixels && self.k == 0;
         let want_pixels = shot.dump || shot.video || shot.snap || first_pixels;
+        let chrome = (want_pixels && s.args.chrome_overlay).then(|| self.app.rt().headless_chrome_current());
         self.want_pixels = want_pixels;
         self.first_pixels = first_pixels;
-        RenderPrep::Ready(PreparedHeadlessFrame { encoder, shot })
+        RenderPrep::Ready(PreparedHeadlessFrame { encoder, shot: FrameShot { shot, chrome } })
     }
 
     #[inline]
@@ -273,7 +281,7 @@ impl<F: FnMut(Shot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
         if let Some(alpha) = &s.alpha {
             alpha.draw(&mut prepared.encoder, &s.target.view);
         }
-        if prepared.shot.snap {
+        if prepared.shot.shot.snap {
             s.snap_crop.set(crop::snap_rect(self.app.rt(), s.args, s.scale, (s.wp, s.hp)));
         }
         if self.want_pixels {
@@ -351,7 +359,7 @@ impl<F: FnMut(Shot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
         s.in_flight.pace(&s.gpu.device);
         if self.k == s.snap_frame
             && s.args.chrome_overlay
-            && let Some(lights) = s.chrome.traffic_light_rects_in(s.size.0, crate::labels::rtl())
+            && let Some(lights) = self.app.rt().headless_chrome_current().traffic_light_rects_in(s.size.0, crate::labels::rtl())
         {
             report_traffic_light_overlaps(self.app.rt(), &lights);
         }

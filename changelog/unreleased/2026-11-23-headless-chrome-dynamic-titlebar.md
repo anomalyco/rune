@@ -1,0 +1,1 @@
+- Headless `--chrome`: the traffic-light overlay and overlap checks now follow dynamic `Cx::set_titlebar` and `Cx::titlebar_height` changes on every frame across all platforms, instead of keeping the pre-frame-0 chrome (and skipping `Titlebar::mac_chrome` off macOS).
