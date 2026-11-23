@@ -1,0 +1,1 @@
+- Text: a face's glyphs at one size share one TrueType hinting instance instead of each making its own, so a hinted font's set-up programs (`fpgm`, `prep`) run once per size, not once per glyph outline. The outlines are unchanged.
