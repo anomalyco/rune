@@ -1,0 +1,1 @@
+- Scoped reveals (`Tx::scroll_into_view_in`, `Tx::scroll_center_in`, `Tx::scroll_center_in_instant`) now resolve sticky-header cover within the reveal's scope and viewport, so a same-keyed row in another list no longer suppresses or misplaces a reveal.

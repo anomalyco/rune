@@ -389,7 +389,7 @@ impl RuntimeCore {
             let Some(s) = self.viewport_of(i).filter(|&s| self.tree.nodes[s].path == r.viewport) else { continue };
             let scale = self.paint.drawn_scale[s];
             if scale <= 1e-4 { continue; }
-            let Some(cover) = self.stuck_cover(&r.viewport, &r.key) else { continue };
+            let Some(cover) = self.stuck_cover(&r.viewport, r.scope.as_deref(), &r.key) else { continue };
             let cover = cover / f64::from(scale);
             let rel_top = f64::from((drawn_top - self.paint.drawn[s][1]) / scale) - cover;
             let height = f64::from(drawn_h / scale) + cover;
@@ -470,14 +470,15 @@ impl RuntimeCore {
                 .is_some_and(|(i, _)| !self.subtree_exiting(i) && in_viewport(i))
     }
 
-    /// What a reveal of row `key` in viewport `path` must leave to stuck headers: `None` when
-    /// the row is, or is inside, a header stuck in view (it shows already), else the height
-    /// stuck headers cover at the viewport's top, which the reveal keeps the row clear of.
-    pub(in crate::runtime) fn stuck_cover(&self, path: &str, key: &str) -> Option<f64> {
+    /// What a reveal of row `key` (within `scope`, when given) in viewport `path` must leave to
+    /// stuck headers: `None` when the row is, or is inside, a header stuck in view (it shows
+    /// already), else the height stuck headers cover at the viewport's top, which the reveal keeps
+    /// the row clear of.
+    pub(in crate::runtime) fn stuck_cover(&self, path: &str, scope: Option<&str>, key: &str) -> Option<f64> {
         if !self.tree.has_sticky || self.scroll.stuck.len() != self.tree.nodes.len() || self.paint.drawn.len() != self.tree.nodes.len() { return Some(0.0) }
         let Some(s) = self.tree.nodes.iter().position(|n| n.path == path) else { return Some(0.0) };
         let view = self.paint.drawn[s];
-        let row = self.live_named(None, key);
+        let row = self.live_named(scope, key).filter(|&r| self.viewport_of(r) == Some(s));
         let holder = row.and_then(|r| std::iter::successors(Some(r), |&p| self.tree.nodes[p].parent).take_while(|&p| p != s).find(|&p| self.scroll.stuck[p] != 0.0 && self.tree.nodes[p].sticky.as_ref().is_none_or(|s| s.edge != Some(StickyEdge::Left))));
         if let (Some(r), Some(_)) = (row, holder) {
             let d = self.paint.drawn[r];

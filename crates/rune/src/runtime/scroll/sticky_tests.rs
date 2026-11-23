@@ -238,3 +238,81 @@ fn cached_section_with_sticky_descendant_stays_live_on_scroll() {
     assert_eq!(h.rect[1], 0.0);
     assert_eq!(h.stuck, 100.0);
 }
+
+#[test]
+fn scoped_reveal_stuck_cover_stays_within_its_scope() {
+    // 1. A same-keyed node inside another list's stuck header must not suppress a scoped reveal
+    //    (on the initial reveal or while follow_keeps tracks growth).
+    fn two_lists(grow: &f32, _: &mut Cx<f32>) -> El {
+        let left = col().key("left").size(300.0, 200.0).scroll(ScrollSpec { stick_bottom: false })
+            .child(col().w_full()
+                .child(col().key("left_hdr").w_full().h(30.0).sticky_top(0.0)
+                    .child(el().key("row").w_full().h(20.0)))
+                .child(el().w_full().h(600.0)));
+        let right = col().key("right").size(300.0, 200.0).scroll(ScrollSpec { stick_bottom: false })
+            .child(col().w_full()
+                .child(el().key("right_hdr").w_full().h(30.0).sticky_top(0.0))
+                .child(col().key("stack").w_full().growth(GrowthSpec::default())
+                    .child(el().key("lead").w_full().h(400.0))
+                    .child(el().key("grow").w_full().h(*grow))
+                    .child(el().key("row").w_full().h(20.0))
+                    .child(el().key("tail").w_full().h(400.0))));
+        row().size(600.0, 200.0).child(left).child(right)
+    }
+    let mut rt = Runtime::new(0.0f32, two_lists, (600.0, 200.0), Env::default());
+    rt.frame(0.0);
+    rt.update(|_, tx| {
+        tx.instant();
+        tx.scroll_to_y("left", 100.0);
+        tx.scroll_to_y("right", 60.0);
+    });
+    rt.frame(1.0 / 120.0);
+    let right_y = |rt: &Runtime<f32>| rt.scroll.scrolls[&rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("right")).unwrap().id].offset;
+    let right_row_rect = |rt: &Runtime<f32>| {
+        rt.elements().into_iter().find(|e| e.path.contains("right") && e.key.as_deref() == Some("row")).unwrap().rect
+    };
+
+    // Initial reveal scrolls right down to show right's "row" (laid at y=430..450).
+    rt.update(|_, tx| tx.scroll_into_view_in("right", "row"));
+    rt.frame(1.0 / 120.0);
+    assert!(right_y(&rt) >= 250.0, "right must reveal its own row despite left's stuck row: {}", right_y(&rt));
+
+    // Scrolling up to right's "row" lands it clear of right's 30pt stuck header.
+    rt.update(|_, tx| { tx.instant(); tx.scroll_to_y("right", 500.0); });
+    rt.frame(1.0 / 120.0);
+    rt.update(|_, tx| tx.scroll_into_view_in("right", "row"));
+    rt.frame(1.0 / 120.0);
+    let r = right_row_rect(&rt);
+    assert!((r[1] - 30.0).abs() < 0.5, "row must clear right's 30pt stuck header, got y={}", r[1]);
+
+    // While growth pushes right's "row" down, follow_keeps keeps following it in right.
+    rt.update(|grow, tx| {
+        *grow = 200.0;
+        tx.scroll_into_view_in("right", "row");
+    });
+    for _ in 0..240 { rt.frame(1.0 / 120.0); }
+    let r = right_row_rect(&rt);
+    assert!(r[1] >= 30.0 - 0.5 && r[1] + r[3] <= 200.0 + 0.5, "follow_keeps must keep right's row in view after growth: {r:?}");
+
+    // 2. A same-keyed non-stuck row in another list must not make a scoped reveal jump away from
+    //    a sticky header that is already stuck in view in its own list.
+    fn stuck_target(_: &(), _: &mut Cx<()>) -> El {
+        let left = col().key("left").size(300.0, 200.0).scroll(ScrollSpec { stick_bottom: false })
+            .child(col().w_full()
+                .child(el().key("hdr").w_full().h(30.0))
+                .child(el().w_full().h(600.0)));
+        let right = col().key("right").size(300.0, 200.0).scroll(ScrollSpec { stick_bottom: false })
+            .child(col().w_full()
+                .child(el().key("hdr").w_full().h(30.0).sticky_top(0.0))
+                .child(el().w_full().h(600.0)));
+        row().size(600.0, 200.0).child(left).child(right)
+    }
+    let mut rt2 = Runtime::new((), stuck_target, (600.0, 200.0), Env::default());
+    rt2.frame(0.0);
+    rt2.update(|_, tx| { tx.instant(); tx.scroll_to_y("right", 100.0); });
+    rt2.frame(1.0 / 120.0);
+    rt2.update(|_, tx| tx.scroll_into_view_in("right", "hdr"));
+    rt2.frame(1.0 / 120.0);
+    let offset = rt2.scroll.scrolls[&rt2.tree.nodes.iter().find(|n| n.key.as_deref() == Some("right")).unwrap().id].offset;
+    assert!((offset - 100.0).abs() < 0.5, "right's stuck hdr is already in view; must stay at 100, got {offset}");
+}

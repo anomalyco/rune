@@ -125,7 +125,7 @@ impl RuntimeCore {
         });
         let Some((path, top, height, viewport, laid_top, laid_h, laid_end)) = geometry else { return (false, None) };
         // Stuck headers cover the viewport's top: land the row below them.
-        let Some(cover) = self.stuck_cover(&path, key) else { return (false, None) };
+        let Some(cover) = self.stuck_cover(&path, scope, key) else { return (false, None) };
         let (top, height) = (top - cover, height + cover);
         let (laid_top, laid_h) = (laid_top - cover, laid_h + cover);
         let margin = self.node(&path).map_or(0.0, |n| f64::from(n.scroll_edges.margin));

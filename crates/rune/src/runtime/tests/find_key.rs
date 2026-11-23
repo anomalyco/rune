@@ -117,8 +117,8 @@ fn keyed_lookups_skip_exiting_nodes_and_popup_anchors_match_keyed_suffix() {
         rt.update(|show, _| *show = false);
         rt.frame(1.0 / 60.0);
         let sc_path = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("sc")).unwrap().path.clone();
-        assert_eq!(rt.core().stuck_cover(&sc_path, "hdr/pin"), None, "stuck_cover must match keyed suffix inside stuck header");
-        assert!(rt.core().stuck_cover(&sc_path, "leaving").is_some_and(|c| c > 0.0), "stuck_cover must ignore exiting node");
+        assert_eq!(rt.core().stuck_cover(&sc_path, None, "hdr/pin"), None, "stuck_cover must match keyed suffix inside stuck header");
+        assert!(rt.core().stuck_cover(&sc_path, None, "leaving").is_some_and(|c| c > 0.0), "stuck_cover must ignore exiting node");
     }
 }
 
