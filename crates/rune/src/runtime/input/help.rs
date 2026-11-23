@@ -297,11 +297,8 @@ impl RuntimeCore {
     /// During `build`: the line boxes of node `i`'s links that have help, for border box
     /// `rect` and clipped to `clip` (points, x0 y0 x1 y1), after the first `seq` hits.
     pub(in crate::runtime) fn push_link_help_hits(&mut self, i: usize, rect: [f32; 4], clip: [f32; 4], seq: usize) {
-        let Some(t) = self.tree.nodes[i].text.as_ref() else { return };
-        if !t.cold.links.iter().any(|l| l.help.is_some()) { return; }
         let id = self.tree.nodes[i].id;
-        for (k, r) in self.link_boxes(i, rect) {
-            if self.tree.nodes[i].text.as_ref().and_then(|t| t.cold.links.get(k)).is_none_or(|l| l.help.is_none()) { continue; }
+        for (k, r) in self.link_boxes_matching(i, rect, |l| l.help.is_some()) {
             let c = [r[0].max(clip[0]), r[1].max(clip[1]), r[2].min(clip[2]), r[3].min(clip[3])];
             self.hit.push_help_hit(id, c, seq, Some(k));
         }

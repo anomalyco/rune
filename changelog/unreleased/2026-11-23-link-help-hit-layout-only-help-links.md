@@ -1,0 +1,1 @@
+- Runtime: link help hit registration during frame paint now lays out range boxes only for links that have help set instead of every link on the text node.
