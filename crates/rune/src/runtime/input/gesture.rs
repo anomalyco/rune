@@ -125,10 +125,11 @@ impl RuntimeCore {
     }
 
     /// A Ctrl + wheel `dy` at (x, y), which is how a trackpad pinch reaches Windows, Linux and
-    /// web apps: a pinch when an `on_magnify` handler is there (true), else nothing.
+    /// web apps, and how Chromium hands any page Ctrl + wheel: a pinch (`MagnifyEvent::wheel`) when
+    /// an `on_magnify` handler is there (true), else nothing.
     pub(crate) fn pinch_wheel(&mut self, x: f32, y: f32, dy: f32) -> bool {
         if dy == 0.0 || self.gesture_chain(x, y, |g| g.magnify.is_some(), false).is_empty() { return false; }
-        self.magnify_event(MagnifyEvent::new(-dy / PINCH_WHEEL).at(x, y));
+        self.magnify_event(MagnifyEvent { wheel: true, ..MagnifyEvent::new(-dy / PINCH_WHEEL).at(x, y) });
         true
     }
 
