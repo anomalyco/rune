@@ -340,6 +340,7 @@ impl Host {
             let presents = self.meter.totals().presents;
             self.redraw();
             drew = self.meter.totals().presents > presents;
+            if drew { crate::platform::macos::flush_while_launching(); }
             self.shell(event_loop);
         }
         if !drew && (visible || launcher) && let Some(w) = &self.win {

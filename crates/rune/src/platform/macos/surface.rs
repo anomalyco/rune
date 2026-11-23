@@ -15,6 +15,26 @@ pub(crate) fn present_with_transaction(surface: &wgpu::Surface, on: bool) {
     crate::gpu::with_layer(surface, |layer| unsafe { let _: () = msg_send![layer, setPresentsWithTransaction: Bool::new(on)]; });
 }
 
+/// A first frame drawn before AppKit has finished launching (the first window is made in
+/// `applicationWillFinishLaunching:`): Core Animation's transaction, which holds the window's
+/// layers and the drawable presented in it, goes to the window server now. The run loop turn
+/// that would commit it comes only after AppKit's own launch work.
+pub(crate) fn flush_while_launching() {
+    use objc2::runtime::{AnyClass, Bool};
+    // SAFETY: class methods and a property read, on the main thread.
+    unsafe {
+        let Some(running) = AnyClass::get(c"NSRunningApplication") else { return };
+        let current: *const objc2::runtime::AnyObject = msg_send![running, currentApplication];
+        if current.is_null() { return; }
+        let launched: Bool = msg_send![current, isFinishedLaunching];
+        if launched.as_bool() { return; }
+        if let Some(transaction) = AnyClass::get(c"CATransaction") {
+            let _: () = msg_send![transaction, flush];
+            crate::marks::mark("frame.first.flushed");
+        }
+    }
+}
+
 #[link(name = "QuartzCore", kind = "framework")]
 unsafe extern "C" {
     static kCAGravityTopLeft: &'static objc2::runtime::AnyObject;
