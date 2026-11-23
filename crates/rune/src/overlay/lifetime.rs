@@ -6,8 +6,10 @@ use super::*;
 impl OverlayCore {
     pub(super) fn show_fading(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop, fade: Duration) {
         if self.presence.shown() { return; }
-        // Hidden, it missed the redraws a new accent asks for (`accent::watch`).
+        // Hidden, it missed the redraws a new accent or portal preference asks for.
         app.rt_mut().set_system_dark(crate::platform::preferences::dark().unwrap_or(self.dark));
+        #[cfg(target_os = "linux")]
+        app.rt_mut().set_system_reduced_motion(crate::platform::preferences::reduced_motion());
         self.accent_changed(app.rt_mut(), crate::system_accent());
         self.scroll_bars_changed(app.rt_mut(), crate::platform::scroll_bars::current());
         // Shown again mid fade-out: the window is still up with current pixels, and its motion
@@ -332,6 +334,8 @@ impl OverlayCore {
         };
         #[cfg(target_os = "macos")]
         crate::native_menu::adopt_standard_view();
+        #[cfg(all(target_os = "linux", feature = "dbus"))]
+        crate::platform::portal_appearance::follow(&window);
         self.dark = window.theme().map_or_else(|| crate::platform::preferences::desktop_dark(&window).unwrap_or(true), |t| t == winit::window::Theme::Dark);
         app.rt_mut().set_system_dark(self.dark);
         if self.cursor.is_none() { self.cursor = Some(crate::cursor::os::OsCursor::new()); }
