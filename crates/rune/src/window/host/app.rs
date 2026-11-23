@@ -192,14 +192,14 @@ pub(super) struct TypedWindowApp<S: 'static> {
 }
 
 impl<S: 'static> TypedWindowApp<S> {
-    /// Hands the view's layout reads to `App::layout_seed`'s keeper when they changed since it
-    /// last had them. Before the app's own close, quit and rest hooks, which save.
+    /// Hands the first view's layout reads to `App::layout_seed`'s keeper when they aren't the
+    /// ones it last had. Before the app's own close, quit and rest hooks, which save.
     fn keep_layout(&mut self) {
         let Some(keep) = self.keep_layout.as_mut() else { return };
-        let Some(seed) = self.rt.core().layout_seed() else { return };
-        if self.kept_layout.as_ref() == Some(&seed) { return; }
+        let Some(seed) = self.rt.core().first_layout_seed() else { return };
+        if self.kept_layout.as_ref() == Some(seed) { return; }
         keep(seed.clone());
-        self.kept_layout = Some(seed);
+        self.kept_layout = Some(seed.clone());
     }
 }
 

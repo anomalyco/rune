@@ -557,12 +557,13 @@ impl<S: 'static> App<S> {
     /// Keep the view's layout reads across launches, so the window's first frame builds the
     /// view once. A view that reads a rect ([`Cx::layout`](crate::Cx::layout), `layout_with`,
     /// `layout_size`) gets nothing in a window's first commit and runs again once layout knows
-    /// it. `keep` is given what the view read when the window rests, closes or quits, each time
-    /// it changed: save it with the window's own state, and pass it back here as `seed` at the
-    /// next launch. The first view is then given those rects, and runs once when layout agrees
-    /// with them. A seed for another window size or scale isn't used, and one from another
-    /// state costs what no seed costs: every read is still checked against the layout. Desktop
-    /// windows only.
+    /// it. `keep` is given what the window's first view read (its first frame's reads, as layout
+    /// settled them: what the next launch's first frame reads again), once, when the window
+    /// rests, closes or quits, unless they are the seed's own: save it with the window's own
+    /// state, and pass it back here as `seed` at the next launch. The first view is then given
+    /// those rects, and runs once when layout agrees with them. A seed for another window size
+    /// or scale isn't used, and one from another state costs what no seed costs: every read is
+    /// still checked against the layout. Desktop windows only.
     pub fn layout_seed(mut self, seed: Option<crate::LayoutSeed>, keep: impl FnMut(crate::LayoutSeed) + 'static) -> Self {
         self.layout_seed = seed;
         self.keep_layout = Some(Box::new(keep));

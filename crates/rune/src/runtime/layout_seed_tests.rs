@@ -103,6 +103,21 @@ fn a_zoomed_view_given_its_seed_runs_once_at_its_zoom() {
 }
 
 #[test]
+fn the_first_frames_reads_stay_what_the_first_frame_read() {
+    let (mut rt, _) = first_frame(200.0, 1.0, (800.0, 600.0), None);
+    let first = rt.core().first_layout_seed().cloned().expect("the first view reads layout");
+    assert_eq!(Some(&first), rt.core().layout_seed().as_ref(), "after the first frame they are the current reads");
+    // The side pane narrows, as content arriving after a launch's first frame moves things.
+    rt.update(|s, _| s.side = 120.0);
+    rt.frame(1.0 / 60.0);
+    assert_ne!(rt.core().layout_seed(), Some(first.clone()), "the current reads moved");
+    assert_eq!(rt.core().first_layout_seed(), Some(&first), "the first frame's did not");
+    // And they are what a new launch in the first frame's state settles at in one run.
+    let (_, runs) = first_frame(200.0, 1.0, (800.0, 600.0), Some(first));
+    assert_eq!(runs, 1);
+}
+
+#[test]
 fn a_seed_offered_after_the_first_commit_does_nothing() {
     let (mut rt, _) = first_frame(200.0, 1.0, (800.0, 600.0), None);
     let seed = rt.core().layout_seed().unwrap();
