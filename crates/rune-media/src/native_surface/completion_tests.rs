@@ -1,5 +1,6 @@
 use super::gpu_tests::{Gpu, OFFSCREEN_FORMAT, Offscreen, draw};
-use super::pipeline::completion::{CompletionWorker, Parked};
+use super::pipeline::completion::{CompletionWorker, Parked, ReadWorker};
+use std::ops::ControlFlow;
 use rune_gpu::configure::Gate;
 use super::*;
 use rune_gpu::health::PollFailed;
@@ -9,6 +10,7 @@ use std::time::Duration;
 
 /// Drop witness representing the worker's `wgpu::Device` clone: records the instant the worker
 /// releases it so tests can assert the device is dropped before `CompletionWorker::drop` returns.
+#[derive(Debug)]
 struct DeviceWitness(Arc<AtomicBool>);
 
 impl Drop for DeviceWitness {
@@ -413,4 +415,270 @@ fn a_timestamp_resolve_is_not_submitted_while_a_surface_is_being_configured() {
 #[test]
 fn a_timestamp_resolve_is_submitted_at_once_with_no_configure_in_the_way() {
     timed_frame_resolves(false);
+}
+
+#[test]
+fn read_worker_idle_joins_and_releases_device_on_drop() {
+    let released = Arc::new(AtomicBool::new(false));
+    let waits = Arc::new(AtomicUsize::new(0));
+    let witness = DeviceWitness(released.clone());
+    let waits_for = waits.clone();
+    let worker = ReadWorker::<u32>::spawn("test-dmabuf-read", move |_| {
+        let _ = &witness;
+        waits_for.fetch_add(1, Ordering::SeqCst);
+        ControlFlow::Continue(())
+    })
+    .unwrap();
+    assert!(!released.load(Ordering::SeqCst));
+    drop(worker);
+    assert!(released.load(Ordering::SeqCst), "worker must release its device before drop returns");
+    assert_eq!(waits.load(Ordering::SeqCst), 0, "idle worker should never wait");
+}
+
+#[test]
+fn read_worker_drop_waits_for_in_flight_wait_and_skips_queued_items() {
+    let released = Arc::new(AtomicBool::new(false));
+    let waits = Arc::new(AtomicUsize::new(0));
+    let skipped_a = Arc::new(AtomicBool::new(false));
+    let skipped_b = Arc::new(AtomicBool::new(false));
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let witness = DeviceWitness(released.clone());
+    let waits_for = waits.clone();
+    let worker = ReadWorker::spawn("test-dmabuf-read", move |(id, _item): (u32, DeviceWitness)| {
+        let _ = &witness;
+        waits_for.fetch_add(1, Ordering::SeqCst);
+        if id == 1 {
+            entered_tx.send(()).ok();
+            let _ = release_rx.recv();
+        }
+        ControlFlow::Continue(())
+    })
+    .unwrap();
+
+    let first_dropped = Arc::new(AtomicBool::new(false));
+    worker.send((1, DeviceWitness(first_dropped))).unwrap();
+    entered_rx.recv_timeout(Duration::from_secs(5)).expect("worker entered wait");
+    // Enqueue two more items while the first wait is blocked in flight.
+    worker.send((2, DeviceWitness(skipped_a.clone()))).unwrap();
+    worker.send((3, DeviceWitness(skipped_b.clone()))).unwrap();
+
+    let (dropped_tx, dropped_rx) = mpsc::channel();
+    let dropper = std::thread::spawn(move || {
+        drop(worker);
+        dropped_tx.send(()).ok();
+    });
+
+    assert!(
+        dropped_rx.recv_timeout(Duration::from_millis(40)).is_err(),
+        "drop must wait for the in-flight wait to finish"
+    );
+    release_tx.send(()).ok();
+    dropped_rx.recv_timeout(Duration::from_secs(5)).expect("drop finishes once wait returns");
+    dropper.join().expect("dropper thread");
+
+    assert!(released.load(Ordering::SeqCst), "device witness must drop before join returns");
+    assert_eq!(waits.load(Ordering::SeqCst), 1, "worker must not wait on queued items after stop");
+    assert!(skipped_a.load(Ordering::SeqCst) && skipped_b.load(Ordering::SeqCst), "unpolled queued items must be dropped on stop");
+}
+
+#[test]
+fn read_worker_lost_device_exits_releases_device_and_rejects_further_sends() {
+    let released = Arc::new(AtomicBool::new(false));
+    let waits = Arc::new(AtomicUsize::new(0));
+    let queued_dropped = Arc::new(AtomicBool::new(false));
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let witness = DeviceWitness(released.clone());
+    let waits_for = waits.clone();
+    let worker = ReadWorker::spawn("test-dmabuf-read", move |(id, _item): (u32, DeviceWitness)| {
+        let _ = &witness;
+        waits_for.fetch_add(1, Ordering::SeqCst);
+        if id == 1 {
+            entered_tx.send(()).ok();
+            let _ = release_rx.recv();
+        }
+        ControlFlow::Break(())
+    })
+    .unwrap();
+
+    worker.send((1, DeviceWitness(Arc::new(AtomicBool::new(false))))).unwrap();
+    entered_rx.recv_timeout(Duration::from_secs(5)).expect("worker entered wait");
+    worker.send((2, DeviceWitness(queued_dropped.clone()))).unwrap();
+    release_tx.send(()).ok();
+    worker.wait_stopped();
+
+    assert!(released.load(Ordering::SeqCst), "lost device must exit worker and release device before drop");
+    assert!(queued_dropped.load(Ordering::SeqCst), "queued items after lost device must be dropped");
+    assert!(worker.send((3, DeviceWitness(Arc::new(AtomicBool::new(false))))).is_err(), "sends after exit must fail");
+    drop(worker);
+    assert_eq!(waits.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn read_worker_continues_after_non_fatal_wait_error() {
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = ReadWorker::spawn("test-dmabuf-read", move |id: u32| {
+        done_tx.send(id).ok();
+        ControlFlow::Continue(())
+    })
+    .unwrap();
+
+    worker.send(1).unwrap();
+    worker.send(2).unwrap();
+    assert_eq!(done_rx.recv_timeout(Duration::from_secs(5)), Ok(1));
+    assert_eq!(done_rx.recv_timeout(Duration::from_secs(5)), Ok(2));
+    drop(worker);
+}
+
+#[test]
+fn read_worker_panic_releases_device_and_drop_does_not_panic() {
+    let released = Arc::new(AtomicBool::new(false));
+    let queued_dropped = Arc::new(AtomicBool::new(false));
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let witness = DeviceWitness(released.clone());
+    let worker = ReadWorker::spawn("test-dmabuf-read", move |(_id, _item): (u32, DeviceWitness)| {
+        let _ = &witness;
+        entered_tx.send(()).ok();
+        let _ = release_rx.recv();
+        panic!("simulated on_read panic");
+    })
+    .unwrap();
+
+    worker.send((1, DeviceWitness(Arc::new(AtomicBool::new(false))))).unwrap();
+    entered_rx.recv_timeout(Duration::from_secs(5)).expect("worker entered wait");
+    worker.send((2, DeviceWitness(queued_dropped.clone()))).unwrap();
+    release_tx.send(()).ok();
+    worker.wait_stopped();
+
+    assert!(released.load(Ordering::SeqCst), "panicking worker must release its device");
+    assert!(queued_dropped.load(Ordering::SeqCst), "panicking worker must drop queued items");
+    assert!(worker.send((3, DeviceWitness(Arc::new(AtomicBool::new(false))))).is_err());
+    drop(worker);
+}
+
+#[test]
+fn read_worker_caller_unwind_joins_worker_without_aborting() {
+    let released = Arc::new(AtomicBool::new(false));
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let witness = DeviceWitness(released.clone());
+    let worker = ReadWorker::spawn("test-dmabuf-read", move |(): ()| {
+        let _ = &witness;
+        entered_tx.send(()).ok();
+        let _ = release_rx.recv();
+        ControlFlow::Continue(())
+    })
+    .unwrap();
+
+    worker.send(()).unwrap();
+    entered_rx.recv_timeout(Duration::from_secs(5)).expect("worker entered wait");
+    let unblocker = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(20));
+        release_tx.send(()).ok();
+    });
+
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _keep = worker;
+        panic!("simulated caller panic");
+    }));
+    unblocker.join().expect("unblocker thread");
+    assert!(unwound.is_err());
+    assert!(released.load(Ordering::SeqCst), "unwind drop must join worker and release device");
+}
+
+#[test]
+fn read_worker_self_drop_from_callback_does_not_deadlock() {
+    let released = Arc::new(AtomicBool::new(false));
+    let waits = Arc::new(AtomicUsize::new(0));
+    let queued_dropped = Arc::new(AtomicBool::new(false));
+    let slot: Arc<Mutex<Option<ReadWorker<(u32, DeviceWitness)>>>> = Arc::new(Mutex::new(None));
+    let slot_for = slot.clone();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let witness = DeviceWitness(released.clone());
+    let waits_for = waits.clone();
+    let worker = ReadWorker::spawn("test-dmabuf-read", move |(id, _item): (u32, DeviceWitness)| {
+        let _ = &witness;
+        waits_for.fetch_add(1, Ordering::SeqCst);
+        if id == 1 {
+            entered_tx.send(()).ok();
+            let _ = release_rx.recv();
+            // Drop the worker from inside its own callback (e.g. an on_read closure).
+            slot_for.lock().unwrap().take();
+        }
+        ControlFlow::Continue(())
+    })
+    .unwrap();
+
+    worker.send((1, DeviceWitness(Arc::new(AtomicBool::new(false))))).unwrap();
+    entered_rx.recv_timeout(Duration::from_secs(5)).expect("worker entered wait");
+    worker.send((2, DeviceWitness(queued_dropped.clone()))).unwrap();
+    *slot.lock().unwrap() = Some(worker);
+    release_tx.send(()).ok();
+
+    let deadline = rune_core::time::now() + Duration::from_secs(5);
+    while !released.load(Ordering::SeqCst) && rune_core::time::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(released.load(Ordering::SeqCst), "worker dropped from its own callback must exit cleanly");
+    assert!(queued_dropped.load(Ordering::SeqCst), "self-drop must discard unpolled items");
+    assert_eq!(waits.load(Ordering::SeqCst), 1, "worker must not wait again after self-drop");
+}
+
+#[test]
+fn read_worker_stop_is_idempotent() {
+    let released = Arc::new(AtomicBool::new(false));
+    let witness = DeviceWitness(released.clone());
+    let mut worker = ReadWorker::<()>::spawn("test-dmabuf-read", move |()| {
+        let _ = &witness;
+        ControlFlow::Continue(())
+    })
+    .unwrap();
+    worker.stop();
+    assert!(released.load(Ordering::SeqCst));
+    worker.stop();
+    drop(worker);
+}
+
+#[test]
+fn read_worker_device_notifies_on_read_and_drop_joins_in_flight_callback() {
+    let gpu = Gpu::headless_wgpu();
+    let worker = ReadWorker::spawn_device("rune-dmabuf-read", gpu.device.clone(), Duration::from_secs(10)).unwrap();
+    let encoder = gpu.device.create_command_encoder(&Default::default());
+    let submission = gpu.queue.submit([encoder.finish()]);
+
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    assert!(
+        worker
+            .send((
+                submission,
+                Box::new(move |result| {
+                    assert!(result.is_ok(), "submitted copy should succeed: {result:?}");
+                    let current = std::thread::current();
+                    entered_tx.send((current.id(), current.name().map(str::to_owned))).ok();
+                    let _ = release_rx.recv();
+                }),
+            ))
+            .is_ok()
+    );
+
+    let (worker_tid, worker_name) = gpu.wait(&entered_rx, Duration::from_secs(10)).expect("on_read ran on worker");
+    assert_ne!(worker_tid, std::thread::current().id(), "on_read must run on the worker thread");
+    assert_eq!(worker_name.as_deref(), Some("rune-dmabuf-read"));
+
+    let (released_tx, released_rx) = mpsc::channel();
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        released_tx.send(rune_core::time::now()).ok();
+        release_tx.send(()).ok();
+    });
+    drop(worker);
+    let dropped = rune_core::time::now();
+    releaser.join().expect("releaser thread");
+    let released = released_rx.recv().expect("callback was let go");
+
+    assert!(dropped >= released, "ReadWorker::drop returned while the read thread was still running");
 }

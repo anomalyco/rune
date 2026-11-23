@@ -11,9 +11,9 @@
 //! callback is dropped without running: the next frame's covers it.
 
 use super::*;
+use pipeline::completion::{OnRead, ReadWorker};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::Weak;
-use std::sync::mpsc::Sender;
 use std::time::Duration;
 use wgpu::hal::api::Vulkan;
 
@@ -79,8 +79,6 @@ impl DmabufBuffer {
         u64::from(self.plane.stride) * u64::from(self.size[1])
     }
 }
-
-type OnRead = Box<dyn FnOnce(Result<(), String>) + Send>;
 
 /// Whether the producer has heard about its frame.
 enum Release {
@@ -210,10 +208,16 @@ pub(crate) fn import(slot: &mut Option<Importer>, device: &wgpu::Device, queue: 
 }
 
 pub(crate) struct Importer {
+    /// The thread that waits for each copy and tells its producer; dropped before `device`.
+    reads: ReadWorker<(wgpu::SubmissionIndex, OnRead)>,
     device: wgpu::Device,
     opened: Vec<(Weak<DmabufBuffer>, wgpu::Texture)>,
-    /// The thread that waits for each copy and tells its producer.
-    reads: Sender<(wgpu::SubmissionIndex, OnRead)>,
+}
+
+impl Drop for Importer {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 impl Importer {
@@ -221,18 +225,14 @@ impl Importer {
         if !device.features().contains(wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF) {
             return Err("this GPU device doesn't import dmabufs".into());
         }
-        let (reads, waits) = std::sync::mpsc::channel::<(wgpu::SubmissionIndex, OnRead)>();
-        let waiter = device.clone();
-        std::thread::Builder::new()
-            .name("rune-dmabuf-read".into())
-            .spawn(move || {
-                for (submission, f) in waits {
-                    let done = rune_gpu::health::poll(&waiter, wgpu::PollType::Wait { submission_index: Some(submission), timeout: Some(READ_TIMEOUT) });
-                    f(done.map(|_| ()).map_err(|e| format!("wait for the dmabuf copy: {e}")));
-                }
-            })
+        let reads = ReadWorker::spawn_device("rune-dmabuf-read", device.clone(), READ_TIMEOUT)
             .map_err(|e| format!("start the dmabuf read thread: {e}"))?;
-        Ok(Self { device: device.clone(), opened: Vec::new(), reads })
+        Ok(Self { reads, device: device.clone(), opened: Vec::new() })
+    }
+
+    /// Stops and joins the dmabuf read thread before its device is torn down.
+    pub(crate) fn stop(&mut self) {
+        self.reads.stop();
     }
 
     /// Rune's copy of `frame` on this device, made the first time; the producer hears once the
@@ -246,8 +246,10 @@ impl Importer {
         }
         let (copy, submission) = self.copy(queue, &frame.buffer)?;
         frame.copies.lock().unwrap().push((self.device.clone(), copy.clone()));
-        if let Some(f) = frame.tell() {
-            self.reads.send((submission, f)).ok();
+        if let Some(f) = frame.tell()
+            && let Err((_, f)) = self.reads.send((submission, f))
+        {
+            f(Err("wait for the dmabuf copy: the dmabuf read thread stopped".into()));
         }
         Ok([copy.clone(), copy])
     }
