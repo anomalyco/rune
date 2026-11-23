@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 use super::*;
-use crate::{Color, Cx, El, Env, Runtime, TextHighlight, TextStyle, col, text};
+use crate::{Color, Cx, El, Env, Link, Runtime, TextHighlight, TextStyle, Tx, col, text};
 
 struct Doc {
     words: Vec<(usize, usize, String)>,
@@ -210,4 +210,160 @@ fn window_layout_reads_scale_with_reads_not_total_highlights() {
             "{key}: window_layout {got:?} != mark union {want:?}"
         );
     }
+}
+
+struct LinkDoc {
+    links: Vec<(usize, usize, String)>,
+    body: String,
+    with_secondary: bool,
+    menus: Vec<(String, f32, f32)>,
+}
+
+fn make_link_doc(link_count: usize, with_secondary: bool) -> LinkDoc {
+    let mut body = String::new();
+    let mut links = Vec::with_capacity(link_count);
+    for i in 0..link_count {
+        if i > 0 {
+            body.push(' ');
+        }
+        let start = body.len();
+        let (label, id) = if i == 15 {
+            ("long_wrapped_link_phrase across_two_lines".to_owned(), "wrapped".to_owned())
+        } else if i == 2 || i == link_count - 3 {
+            (format!("link{i:02}"), "dup".to_owned())
+        } else {
+            (format!("link{i:02}"), format!("l{i}"))
+        };
+        body.push_str(&label);
+        let end = body.len();
+        links.push((start, end, id));
+    }
+    LinkDoc {
+        links,
+        body,
+        with_secondary,
+        menus: Vec::new(),
+    }
+}
+
+fn link_doc_view(s: &LinkDoc, _: &mut Cx<LinkDoc>) -> El {
+    let mut t = text(s.body.clone())
+        .key("doc")
+        .font(TextStyle::new(14.0, 400.0).lh(20.0))
+        .wrap()
+        .w_full();
+    for (start, end, id) in &s.links {
+        t = t.link(Link::new(*start..*end, id.as_str()));
+    }
+    if s.with_secondary {
+        t = t.on_link_secondary(|s: &mut LinkDoc, id, ev, _| {
+            s.menus.push((id.to_owned(), ev.x, ev.y));
+        });
+    }
+    col().w(180.0).h(500.0).child(t)
+}
+
+fn settle_link_doc(rt: &mut Runtime<LinkDoc>) {
+    for _ in 0..60 {
+        if !rt.frame(1.0 / 60.0) {
+            return;
+        }
+    }
+    panic!("never settled");
+}
+
+fn link_text_node_index(rt: &Runtime<LinkDoc>) -> usize {
+    rt.tree.nodes.iter().position(|n| n.text.is_some()).expect("text node")
+}
+
+#[test]
+fn find_link_lays_out_only_first_matching_link() {
+    let mut rt = Runtime::new(make_link_doc(40, false), link_doc_view, (180.0, 500.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    settle_link_doc(&mut rt);
+
+    let core = rt.core();
+    let i = link_text_node_index(&rt);
+    let drawn_boxes = core.link_boxes(i, core.drawn_box(i));
+    let link_index = |id: &str| {
+        core.tree.nodes[i].text.as_ref().unwrap().cold.links.iter().position(|l| l.id == id).unwrap()
+    };
+    let expected_center = |id: &str| {
+        let k = link_index(id);
+        let (_, r) = drawn_boxes.iter().find(|(j, _)| *j == k).unwrap();
+        ((r[0] + r[2]) * 0.5, (r[1] + r[3]) * 0.5)
+    };
+
+    let wrapped_k = link_index("wrapped");
+    let wrapped_boxes = drawn_boxes.iter().filter(|(j, _)| *j == wrapped_k).count();
+    assert!(wrapped_boxes >= 2, "expected wrapped link to span at least 2 line boxes, got {wrapped_boxes}");
+
+    let (single, single_queries) = count_span_box_queries(|| core.find_link("l10"));
+    let (sx, sy) = single.expect("l10 center");
+    let (ex, ey) = expected_center("l10");
+    assert!((sx - ex).abs() < 0.01 && (sy - ey).abs() < 0.01, "got ({sx}, {sy}), want ({ex}, {ey})");
+    assert_eq!(single_queries, 1, "find_link should query only the matching link");
+
+    let (dup, dup_queries) = count_span_box_queries(|| core.find_link("dup"));
+    let (sx, sy) = dup.expect("dup center");
+    let (ex, ey) = expected_center("dup");
+    assert!((sx - ex).abs() < 0.01 && (sy - ey).abs() < 0.01, "got ({sx}, {sy}), want ({ex}, {ey})");
+    assert_eq!(dup_queries, 1, "find_link should query only the first matching link");
+
+    let (wrapped, wrapped_queries) = count_span_box_queries(|| core.find_link("wrapped"));
+    let (sx, sy) = wrapped.expect("wrapped center");
+    let (ex, ey) = expected_center("wrapped");
+    assert!((sx - ex).abs() < 0.01 && (sy - ey).abs() < 0.01, "got ({sx}, {sy}), want ({ex}, {ey})");
+    assert_eq!(wrapped_queries, 1, "find_link on a wrapped link should query only that link");
+
+    let (missing, missing_queries) = count_span_box_queries(|| core.find_link("missing"));
+    assert!(missing.is_none());
+    assert_eq!(missing_queries, 0, "missing find_link should query 0 spans");
+}
+
+#[test]
+fn focused_link_menu_lays_out_only_focused_link() {
+    let mut rt = Runtime::new(make_link_doc(40, true), link_doc_view, (180.0, 500.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    settle_link_doc(&mut rt);
+
+    let i = link_text_node_index(&rt);
+    let drawn_boxes = rt.core().link_boxes(i, rt.core().drawn_box(i));
+    let expected_bottom_left = |rt: &Runtime<LinkDoc>, id: &str| {
+        let k = rt.core().tree.nodes[i].text.as_ref().unwrap().cold.links.iter().position(|l| l.id == id).unwrap();
+        let (_, r) = drawn_boxes.iter().find(|(j, _)| *j == k).unwrap();
+        (r[0], r[3])
+    };
+
+    for id in ["l10", "wrapped"] {
+        rt.update(|_, tx| tx.focus(id, true));
+        settle_link_doc(&mut rt);
+        assert_eq!(rt.focused_key().as_deref(), Some(id));
+        let (ex, ey) = expected_bottom_left(&rt, id);
+
+        let (handled, queries) = count_span_box_queries(|| {
+            let (core, mut app) = rt.split_mut();
+            let mut tx = Tx::default();
+            core.focused_link_menu(&mut app, i, &mut tx)
+        });
+        assert!(handled, "focused_link_menu should handle {id}");
+        assert_eq!(queries, 1, "focused_link_menu should query only the focused link ({id})");
+        let (got_id, gx, gy) = rt.state.menus.pop().expect("on_link_secondary hit");
+        assert_eq!(got_id, id);
+        assert!((gx - ex).abs() < 0.01 && (gy - ey).abs() < 0.01, "{id}: got ({gx}, {gy}), want ({ex}, {ey})");
+    }
+
+    let mut no_menu = Runtime::new(make_link_doc(40, false), link_doc_view, (180.0, 500.0), Env::new(true, 1.0));
+    no_menu.frame(0.0);
+    settle_link_doc(&mut no_menu);
+    let j = link_text_node_index(&no_menu);
+    no_menu.update(|_, tx| tx.focus("l10", true));
+    settle_link_doc(&mut no_menu);
+    let (handled, queries) = count_span_box_queries(|| {
+        let (core, mut app) = no_menu.split_mut();
+        let mut tx = Tx::default();
+        core.focused_link_menu(&mut app, j, &mut tx)
+    });
+    assert!(!handled);
+    assert_eq!(queries, 0, "focused_link_menu without on_link_secondary should query 0 spans");
 }

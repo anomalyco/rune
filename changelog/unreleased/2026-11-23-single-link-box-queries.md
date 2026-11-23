@@ -1,0 +1,1 @@
+- Runtime: `find_link` and `focused_link_menu` now compute range boxes only for the requested link index instead of laying out every link on the text node.
