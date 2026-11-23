@@ -37,6 +37,18 @@ pub fn set_direct(direct: Direct) {
     DIRECT.set(direct).ok();
 }
 
+/// Writes tightly packed full-width rows of `texture` starting at row `y` in place, for the
+/// commands recorded after it, or returns false to have them staged. Commands recorded before it
+/// keep reading what they would have, so the write lands no later than a flush would land it.
+pub type DirectTexture = fn(&wgpu::Texture, u32, &[u8]) -> bool;
+
+static DIRECT_TEXTURE: OnceLock<DirectTexture> = OnceLock::new();
+
+/// Registers the process's `DirectTexture` writer. The first one stays.
+pub fn set_direct_texture(direct: DirectTexture) {
+    DIRECT_TEXTURE.set(direct).ok();
+}
+
 /// The size of a new chunk; a larger write gets a chunk sized to its next power of two.
 const CHUNK: u64 = 128 * 1024;
 /// Returned chunks kept for reuse, by count and in bytes; larger chunks are freed on return.
@@ -157,6 +169,17 @@ impl Staging {
         let row = texture.width() * texture.format().block_copy_size(None).expect("a color format");
         let count = (rows.len() / row as usize) as u32;
         if count == 0 { return; }
+        let byte_len = row as usize * count as usize;
+        if let Some(direct) = DIRECT_TEXTURE.get() {
+            let has_pending = self.busy() && self.lock().has_pending_texture(texture);
+            if !has_pending && direct(texture, y, &rows[..byte_len]) {
+                let mut s = self.lock();
+                s.stats.direct += 1;
+                s.stats.writes += 1;
+                s.stats.bytes += byte_len as u64;
+                return;
+            }
+        }
         let mut s = self.lock();
         if cfg!(target_arch = "wasm32") {
             return s.queue.write_texture(
@@ -237,6 +260,10 @@ impl Staging {
 }
 
 impl Inner {
+    fn has_pending_texture(&self, texture: &wgpu::Texture) -> bool {
+        self.pending.iter().any(|p| matches!(&p.dst, Dst::Rows { texture: t, .. } if t == texture))
+    }
+
     /// Reserves `size` bytes (rounded up to 4) at `align` in a mapped chunk and fills them.
     fn stage(&mut self, size: u64, align: u64, staging: &Staging, fill: impl FnOnce(&mut wgpu::WriteOnly<'_, [u8]>)) -> (wgpu::Buffer, u64) {
         let size = size.next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT);

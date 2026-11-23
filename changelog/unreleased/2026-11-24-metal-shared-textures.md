@@ -1,0 +1,1 @@
+- macOS (Apple Silicon): CPU-written, GPU-sampled textures (image atlas, Classic glyph atlas, outline store) now allocate `MTLStorageMode::Shared`, zero on the CPU, and upload idle rows via `replaceRegion` instead of a blit encoder, falling back to staged blits whenever an encoder or in-flight command buffer still references the texture.

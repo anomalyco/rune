@@ -4,6 +4,7 @@
 use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(debug_assertions)]
 use objc2_foundation::NSString;
@@ -16,13 +17,64 @@ use objc2::runtime::ProtocolObject;
 use parking_lot::MutexGuard;
 use wgpu::custom::*;
 
-use super::encode::{MetalCommandBuffer, buffer_to_texture};
+use super::encode::{MetalCommandBuffer, buffer_to_texture, replace_texture};
 use super::resource::{BufferRaw, MetalBuffer, MetalTexture};
 use super::surface::MetalOutput;
 use super::{Obj, Shared};
 
-/// What a command buffer uses, kept alive until it completes.
-pub(super) type Keep = Vec<Arc<dyn Any + Send + Sync>>;
+/// What a command buffer uses, kept alive until it completes, plus in-flight shared texture
+/// usage guards decremented when the buffer retires or is dropped.
+#[derive(Debug, Default)]
+pub(super) struct Keep {
+    objects: Vec<Arc<dyn Any + Send + Sync>>,
+    texture_uses: Vec<Arc<AtomicUsize>>,
+}
+
+impl Keep {
+    pub(super) fn with_capacity(capacity: usize) -> Self {
+        Keep { objects: Vec::with_capacity(capacity), texture_uses: Vec::new() }
+    }
+
+    pub(super) fn push(&mut self, item: Arc<dyn Any + Send + Sync>) {
+        self.objects.push(item);
+    }
+
+    pub(super) fn extend(&mut self, items: impl IntoIterator<Item = Arc<dyn Any + Send + Sync>>) {
+        self.objects.extend(items);
+    }
+
+    pub(super) fn use_texture(&mut self, uses: &Arc<AtomicUsize>) {
+        uses.fetch_add(1, Ordering::AcqRel);
+        self.texture_uses.push(uses.clone());
+    }
+
+    pub(super) fn append(&mut self, other: &mut Self) {
+        self.objects.append(&mut other.objects);
+        self.texture_uses.append(&mut other.texture_uses);
+    }
+
+    pub(super) fn clear(&mut self) {
+        for uses in self.texture_uses.drain(..) {
+            uses.fetch_sub(1, Ordering::AcqRel);
+        }
+        self.objects.clear();
+    }
+
+    pub(super) fn capacity(&self) -> usize {
+        self.objects.capacity() + self.texture_uses.capacity()
+    }
+
+    #[cfg(test)]
+    pub(super) fn as_ptr(&self) -> *const Arc<dyn Any + Send + Sync> {
+        self.objects.as_ptr()
+    }
+}
+
+impl Drop for Keep {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
 
 /// Frames the CPU may run ahead of the GPU.
 const IN_FLIGHT: usize = 2;
@@ -104,7 +156,7 @@ impl Shared {
 
     /// An empty keep list, reusing one a retired command buffer emptied.
     pub(super) fn keep_list(&self) -> Keep {
-        self.lock().spare.pop().unwrap_or_else(|| Vec::with_capacity(32))
+        self.lock().spare.pop().unwrap_or_else(|| Keep::with_capacity(32))
     }
 
     /// Empties `keep`, releasing what it held, and saves it for a later encoder.
@@ -155,6 +207,7 @@ impl Shared {
         &self,
         encode: impl FnOnce(&ProtocolObject<dyn MTLBlitCommandEncoder>),
         keep: impl IntoIterator<Item = Arc<dyn Any + Send + Sync>>,
+        texture_use: Option<&Arc<AtomicUsize>>,
     ) {
         let mut st = self.lock();
         let State { uploads, spare, .. } = &mut *st;
@@ -166,11 +219,12 @@ impl Shared {
                 cb.setLabel(Some(&NSString::from_str("rune metal uploads")));
                 blit.setLabel(Some(&NSString::from_str("rune metal uploads blit")));
             }
-            let keep = spare.pop().unwrap_or_else(|| Vec::with_capacity(8));
+            let keep = spare.pop().unwrap_or_else(|| Keep::with_capacity(8));
             Uploads { blit, cb, keep }
         });
         encode(&uploads.blit);
         uploads.keep.extend(keep);
+        if let Some(uses) = texture_use { uploads.keep.use_texture(uses); }
     }
 
     /// `callback` once the work submitted so far finished; at once (in order) on a lost device.
@@ -329,7 +383,7 @@ impl Shared {
             self.commit_uploads(&mut st);
             st.last += 1;
             let value = st.last;
-            self.commit_pending(&mut st, value, cb, Vec::new(), None);
+            self.commit_pending(&mut st, value, cb, Keep::default(), None);
         }
         self.retire();
     }
@@ -384,14 +438,14 @@ impl QueueInterface for MetalQueue {
         // Staged, it pins the storage, since a later swap would copy the rest without this write.
         // An encoder counts in `recording` before it reads any storage, which it does under the
         // store's lock, the one `may_swap` is asked under.
-        let idle = || self.0.recording.load(std::sync::atomic::Ordering::Acquire) == 0;
+        let idle = || self.0.recording.load(Ordering::Acquire) == 0;
         if store.write_ahead(&self.0, offset, data, idle) { return }
         let target = store.gpu_write();
         let staging = Arc::new(BufferRaw::with_bytes(&self.0, data, Some("rune metal write_buffer")));
         self.0.upload(|blit| {
             // SAFETY: both ranges are in bounds; wgpu checked the target's.
             unsafe { blit.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(&staging.raw, 0, &target.raw, offset as usize, data.len()) }
-        }, [staging.clone() as _, target.clone() as _]);
+        }, [staging.clone() as _, target.clone() as _], None);
     }
     fn create_staging_buffer(&self, _: wgpu::BufferSize) -> Option<DispatchQueueWriteBuffer> { None }
     fn validate_write_buffer(&self, _: &DispatchBuffer, _: wgpu::BufferAddress, _: wgpu::BufferSize) -> Option<()> { Some(()) }
@@ -402,9 +456,21 @@ impl QueueInterface for MetalQueue {
         let data = &data[layout.offset as usize..];
         if data.is_empty() || size.width == 0 || size.height == 0 || size.depth_or_array_layers == 0 { return }
         let texture = dst.texture.as_custom::<MetalTexture>().expect("a Metal texture").raw.clone();
-        let staging = Arc::new(BufferRaw::with_bytes(&self.0, data, Some("rune metal write_texture")));
         let layout = wgpu::TexelCopyBufferLayout { offset: 0, ..layout };
-        self.0.upload(|blit| buffer_to_texture(blit, &staging.raw, layout, &texture, dst.mip_level, dst.origin, size), [staging.clone() as _, texture.clone() as _]);
+        if dst.aspect == wgpu::TextureAspect::All
+            && self.0.recording.load(Ordering::Acquire) == 0
+            && texture.is_idle(&self.0)
+        {
+            replace_texture(&texture, dst.mip_level, dst.origin, data, layout, size);
+            return;
+        }
+        let staging = Arc::new(BufferRaw::with_bytes(&self.0, data, Some("rune metal write_texture")));
+        let uses = texture.uses.clone();
+        self.0.upload(
+            |blit| buffer_to_texture(blit, &staging.raw, layout, &texture, dst.mip_level, dst.origin, size),
+            [staging.clone() as _, texture.clone() as _],
+            uses.as_ref(),
+        );
     }
     fn submit(&self, command_buffers: &mut dyn Iterator<Item = DispatchCommandBuffer>) -> u64 {
         let last = {
@@ -445,7 +511,7 @@ impl QueueInterface for MetalQueue {
                     #[cfg(debug_assertions)]
                     cb.setLabel(Some(&NSString::from_str("rune metal present")));
                     st.last += 1;
-                    Held { cb, value: st.last, keep: Vec::new() }
+                    Held { cb, value: st.last, keep: Keep::default() }
                 }
             };
             if !output.transaction {

@@ -5,6 +5,7 @@
 //! group's first, so binding it is adding the layout's base.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 
 use objc2_metal::{MTLSamplerState, MTLTexture};
 use wgpu::custom::*;
@@ -67,6 +68,8 @@ pub(crate) struct GroupRaw {
     pub(super) stages: [StageBinds; 3],
     /// Storage buffers' bound lengths by binding, which the sizes buffer reports.
     pub(super) sizes: Vec<(u32, u32)>,
+    /// In-flight usage counters of shared textures bound by this group.
+    pub(super) texture_uses: Vec<Arc<AtomicUsize>>,
     /// Owners of the textures it binds that this backend didn't make.
     #[allow(dead_code, reason = "held, never read")]
     owners: Vec<super::Owner>,
@@ -202,6 +205,9 @@ impl BindGroup {
                     wgpu::BindingResource::TextureView(v) => {
                         let view = &v.as_custom::<MetalView>().expect("a Metal texture view").raw;
                         binds.textures.push((slot.texture.unwrap(), view.raw.clone()));
+                        if let Some(uses) = &view.uses && !group.texture_uses.iter().any(|u| Arc::ptr_eq(u, uses)) {
+                            group.texture_uses.push(uses.clone());
+                        }
                         group.owners.extend(view.owner.clone());
                     }
                     wgpu::BindingResource::Sampler(sampler) => {
