@@ -1,0 +1,1 @@
+- Accessibility: live regions pruned behind an open modal now return with `accesskit::Live::Off` when their spoken content is unchanged, restoring their live setting on the next content change so closing a modal does not re-announce unchanged status lines or logs.

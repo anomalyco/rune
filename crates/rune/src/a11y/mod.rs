@@ -23,6 +23,8 @@ pub(crate) mod roles;
 mod tests;
 mod text;
 pub(crate) mod tree;
+#[cfg(test)]
+mod tree_tests;
 
 #[cfg(all(feature = "accessibility", target_os = "macos"))]
 mod macos;
