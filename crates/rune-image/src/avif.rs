@@ -1,5 +1,6 @@
 //! AVIF stills (`avif` feature), decoded by rav1d, a Rust port of dav1d, as straight-alpha
-//! sRGB RGBA8. An animated AVIF shows its first frame.
+//! sRGB RGBA8. Animated AVIF (`avis`) is rejected natively; on the web the browser decodes its
+//! first frame.
 use super::ImageError;
 
 /// Whether `bytes` are an ISO-BMFF file of an AVIF brand.

@@ -268,8 +268,9 @@ impl ImageCache {
     /// [`ImageCache::svg`] to rasterize it at the size it draws at. Legacy ICNS codecs return an
     /// explicit error; callers can provide platform-decoded RGBA instead. An animation decodes
     /// every frame on the worker, and plays only while an element draws it in a shown window.
-    /// On web the browser decodes everything but PNG, SVG and ICNS, so GIF and WebP show their
-    /// first frame there.
+    /// On web the browser decodes everything but PNG, SVG and ICNS, matching the raster formats
+    /// Chrome decodes (including animated AVIF and JPEG XL), so GIF, WebP, animated AVIF and
+    /// animated JPEG XL show their first frame there.
     pub fn load(&self, bytes: impl Into<Arc<[u8]>>) -> Image {
         let bytes = bytes.into();
         let mut hash = blake3::Hasher::new();
