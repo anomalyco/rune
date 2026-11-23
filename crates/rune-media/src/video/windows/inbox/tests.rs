@@ -63,11 +63,46 @@ fn a_push_says_whether_the_queue_was_empty() {
     assert!(!inbox.push(picture(1, 0.1)));
 }
 
+fn unread(inbox: &Inbox) -> Vec<f64> {
+    inbox.unread.iter().map(|f| f.pts).collect()
+}
+
 #[test]
 fn keeping_the_newest_hands_back_the_older_pictures() {
     let mut inbox = inbox(&[(2, 9.0), (2, 9.1), (2, 9.2)]);
-    let older: Vec<f64> = inbox.keep_newest().iter().map(|f| f.pts).collect();
-    assert_eq!(older, vec![9.0, 9.1]);
+    inbox.keep_newest();
+    assert_eq!(unread(&inbox), vec![9.0, 9.1]);
     assert_eq!(times(&inbox), vec![9.2]);
-    assert!(inbox.keep_newest().is_empty());
+    inbox.keep_newest();
+    assert_eq!(unread(&inbox), vec![9.0, 9.1]);
+}
+
+#[test]
+fn pictures_of_earlier_seeks_are_handed_back_undrawn() {
+    let mut inbox = inbox(&[(1, 4.0), (1, 4.1), (2, 9.0)]);
+    assert!(inbox.take(2, Pick::Hold).is_none());
+    assert_eq!(unread(&inbox), vec![4.0, 4.1]);
+}
+
+#[test]
+fn late_pictures_a_due_pick_skips_are_handed_back_undrawn() {
+    let mut inbox = inbox(&[(2, 9.0), (2, 9.1), (2, 9.2), (2, 9.3)]);
+    assert_eq!(inbox.take(2, Pick::Due(9.25)).map(|f| f.pts), Some(9.2));
+    assert_eq!(unread(&inbox), vec![9.0, 9.1]);
+    assert_eq!(times(&inbox), vec![9.3]);
+}
+
+#[test]
+fn a_flush_hands_back_the_pictures_it_drops() {
+    let mut inbox = inbox(&[(2, 9.0), (2, 9.1)]);
+    inbox.flush();
+    assert_eq!(unread(&inbox), vec![9.0, 9.1]);
+}
+
+#[test]
+fn a_picture_taken_for_the_surface_is_not_handed_back() {
+    let mut inbox = inbox(&[(2, 9.0), (2, 9.1)]);
+    assert!(inbox.take(2, Pick::First).is_some());
+    assert!(inbox.take(2, Pick::Due(9.1)).is_some());
+    assert!(inbox.unread.is_empty());
 }
