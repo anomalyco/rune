@@ -1,0 +1,1 @@
+- Text: `register_system_cjk` now passes candidate font files directly to `load_files` instead of skipping paths already in `LoadedFiles`, so a font file already loaded for another purpose still registers its cached families as CJK fallbacks without reloading the file.
