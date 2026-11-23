@@ -1,0 +1,1 @@
+- Web: configure WebGPU canvas surfaces with `COPY_SRC` unconditionally instead of only during hand-over drift readback, so `El::backdrop_blur` and effect backdrops copy and blur behind the element in WebGPU browsers instead of silently falling back to their fill.
