@@ -510,3 +510,91 @@ fn rows_regrowing_under_a_shrink_glide_stay_near() {
     for _ in 0..240 { rt.frame(1.0 / 120.0); }
     assert_eq!(rt.state.2, [false], "the regrown end is near, while the rows still collapse to it");
 }
+
+/// Prepending rows above a virtual list mid-glide shifts the running glide's target along with
+/// the scroll offset, so the glide lands on the row it aimed for without overshooting.
+#[test]
+fn virtual_list_prepend_mid_glide_shifts_glide_target() {
+    use crate::el::{GrowthSpec, ScrollSpec};
+    struct List { front: usize }
+    fn view(s: &List, _: &mut Cx<List>) -> El {
+        let count = s.front + 40;
+        let rows = col().key("rows").w_full().growth(GrowthSpec::default()).virtual_rows(
+            count,
+            40.0,
+            |s: &List, i| {
+                if i < s.front { format!("p{i}").into() } else { format!("r{}", i - s.front).into() }
+            },
+            |_: &List, _| el().w_full().h(40.0),
+        );
+        col().size(200.0, 200.0).child(
+            col().key("scroll").size(200.0, 200.0).scroll(ScrollSpec { stick_bottom: false }).child(rows),
+        )
+    }
+    let mut rt = Runtime::new(List { front: 0 }, view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, 800.0));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.scroll.scrolls.values().next().unwrap().offset, 800.0);
+
+    // Glide up toward r10 (currently at 400 pt).
+    rt.update(|_, tx| tx.scroll_to("scroll", 0.0, 400.0));
+    for _ in 0..5 { rt.frame(1.0 / 60.0); }
+    let st = rt.scroll.scrolls.values().next().unwrap();
+    assert!(st.glide().is_some() && st.offset > 400.0 && st.offset < 800.0, "mid-glide: {:?}", st.offset);
+
+    // Prepend 10 rows (400 pt) above the viewport mid-glide; r10 moves from 400 pt to 800 pt.
+    rt.update(|s, _| s.front = 10);
+    rt.frame(1.0 / 60.0);
+    let st = rt.scroll.scrolls.values().next().unwrap();
+    assert_eq!(st.glide_to(), Some(800.0), "glide target shifts with the anchor");
+
+    let mut low = f64::MAX;
+    for _ in 0..240 {
+        rt.frame(1.0 / 60.0);
+        let st = rt.scroll.scrolls.values().next().unwrap();
+        low = low.min(st.offset);
+        if st.glide().is_none() { break; }
+    }
+    let st = rt.scroll.scrolls.values().next().unwrap();
+    assert!(st.glide().is_none(), "glide settled");
+    assert!((st.offset - 800.0).abs() < 0.05, "landed on shifted target: {}", st.offset);
+    assert!(low >= 800.0 - 0.1, "never overshot past the shifted target: {low}");
+    let r10 = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("r10")).unwrap();
+    assert!(r10.rect[1].abs() < 0.5, "r10 sits at the top of the viewport: {:?}", r10.rect);
+}
+
+/// Measuring taller-than-estimated rows above a virtual list mid-glide shifts the running glide's
+/// target along with the anchor, so the glide still lands on the row it aimed for.
+#[test]
+fn virtual_list_measure_above_mid_glide_shifts_glide_target() {
+    use crate::el::{GrowthSpec, ScrollSpec};
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let rows = col().key("rows").w_full().growth(GrowthSpec::default()).virtual_rows(
+            80,
+            20.0,
+            |_: &(), i| format!("r{i}").into(),
+            |_: &(), i| el().w_full().h(if i < 25 { 50.0 } else { 20.0 }),
+        );
+        col().size(200.0, 200.0).child(
+            col().key("scroll").size(200.0, 200.0).scroll(ScrollSpec { stick_bottom: true }).child(rows),
+        )
+    }
+    let mut rt = Runtime::new((), view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    // Opens pinned at the bottom: rows 0..25 are unmounted and still at the 20 pt estimate.
+    assert_eq!(rt.scroll.scrolls.values().next().unwrap().offset, 1400.0);
+
+    // Glide up toward r30 (estimated at 600 pt). As the glide enters overscan of rows < 25,
+    // those rows measure 50 pt instead of 20 pt and push r30 down.
+    rt.update(|_, tx| tx.scroll_to("scroll", 0.0, 600.0));
+    for _ in 0..240 {
+        rt.frame(1.0 / 60.0);
+        if rt.scroll.scrolls.values().next().unwrap().glide().is_none() { break; }
+    }
+    let st = rt.scroll.scrolls.values().next().unwrap();
+    assert!(st.glide().is_none(), "glide settled");
+    assert!(st.offset > 600.0, "rows above measured taller and shifted the target: {}", st.offset);
+    let r30 = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("r30")).unwrap();
+    assert!(r30.rect[1].abs() < 0.5, "r30 sits at the top of the viewport: {:?}", r30.rect);
+}

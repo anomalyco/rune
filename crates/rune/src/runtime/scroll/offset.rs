@@ -282,6 +282,16 @@ impl ScrollState {
     /// Momentum and any glide stop; a pinned viewport stays pinned.
     pub(in crate::runtime) fn halt(&mut self) { let _ = mode::step(&mut self.mode, mode::Event::Halt); }
 
+    /// Shifts the vertical offset by `delta` points when content above a virtual list's anchor
+    /// changed height, carrying a running glide's target offset along with it.
+    pub(in crate::runtime) fn shift_anchor(&mut self, delta: f32) {
+        let delta = f64::from(delta);
+        self.offset = (self.offset + delta).max(0.0);
+        if let ScrollMode::Glide { to: GlideTo::Offset(to) | GlideTo::ShrunkEnd(to), .. } = &mut self.mode {
+            *to = (*to + delta).max(0.0);
+        }
+    }
+
     /// A hand or an app put the offset where it is: momentum and any glide stop, and a
     /// stick-to-bottom viewport (`stick`) follows its end only if it sits there.
     /// An app's keep moved the offset (rows above measured, an anchor held what's on screen): a

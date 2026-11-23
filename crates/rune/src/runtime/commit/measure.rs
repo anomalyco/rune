@@ -129,7 +129,7 @@ impl Measurement<'_> {
             let sticky = scroll.scroll.unwrap().stick_bottom;
             let held = (settle && sticky) || st.as_ref().map_or(sticky, |s| s.pinned());
             let offset = if let Some(st) = st {
-                if !held { st.offset = (st.offset + f64::from(v.anchor_delta())).max(0.0); }
+                if !held { st.shift_anchor(v.anchor_delta()); }
                 st.offset as f32
             } else { 0.0 };
             // Rows that shrank or went leave the offset past the end until scrolling clamps it;
@@ -373,7 +373,7 @@ impl Measurement<'_> {
         let delta = v.anchor_delta();
         offset = (offset + delta).max(0.0);
         if let Some(st) = self.path_ids.get(scroll_path).and_then(|id| self.scrolls.get_mut(id)) {
-            if !held { st.offset = (st.offset + f64::from(delta)).max(0.0); }
+            if !held { st.shift_anchor(delta); }
         }
         // Rows new since the last commit spread over frames, unless this pass is a retry to
         // fill the viewport or a settle. A list's first showing is all new rows: it mounts
