@@ -31,7 +31,7 @@ impl RuntimeCore {
         }
         self.refresh_hover(x, y);
         let Some(held) = self.pointer.press.held() else { return };
-        let (path, d, at, button) = (held.path.clone(), held.drag, held.at, held.button);
+        let (path, d, at, button, is_drag) = (held.path.clone(), held.drag, held.at, held.button, held.drag_handler.is_some());
         if held.drag_out.is_some_and(|threshold| crate::drag_out::past_threshold(at, (x, y), threshold)) && self.start_drag_out(app, path.clone()) {
             return;
         }
@@ -45,7 +45,7 @@ impl RuntimeCore {
             return;
         }
         let Some(i) = self.live_index(&path) else { return };
-        let (id, r, has_drag) = (self.tree.nodes[i].id, self.tree.nodes[i].target, self.drags_with(i, button));
+        let (id, r, has_drag) = (self.tree.nodes[i].id, self.tree.nodes[i].target, is_drag && self.drags_with(i, button));
         // A hit rect is where the element was drawn (after scrolling); `target` is its
         // unscrolled layout rect, kept only for elements that were never drawn. Only the
         // pointer moving decides whether it's still inside: a button that springs out from
@@ -143,18 +143,67 @@ impl RuntimeCore {
     fn cancel_drag_at(&mut self, point: Option<(f32, f32)>) -> bool {
         if self.edit.input_click.captured() { return false; }
         let Some(held) = self.pointer.press.held() else { return false };
-        let Some(i) = self.live_index(&held.path) else { return false };
-        if !self.drags_with(i, held.button) { return false; }
+        let Some(fallback) = held.drag_handler.clone() else { return false };
+        let live = self.node_index(&held.path).filter(|&i| self.drags_with(i, held.button));
+        let handler = live.and_then(|i| self.tree.nodes[i].handlers.on_drag.clone()).unwrap_or(fallback);
         let at = held.at;
         let (x, y) = point.unwrap_or(at);
-        let [lx, ly] = self.to_local(i, x, y);
         let (dx, dy) = (x - at.0, y - at.1);
+        let [lx, ly] = match live {
+            Some(i) if self.tree.built || self.tree.built_ids.get(i) == Some(&self.tree.nodes[i].id) => self.to_local(i, x, y),
+            _ => [held.drag.start_x + dx, held.drag.start_y + dy],
+        };
         let screen = self.screen_at(x, y);
         let Some(held) = self.drop_press() else { return false };
         let d = Drag { phase: Phase::Up, x: lx, y: ly, dx, dy, cancelled: true, window: [x, y], screen, ..held.drag };
+        self.pointer.push_drag_gone(held.path.clone(), handler);
         self.frame.queue.push(Action::Drag(held.path, d, held.button));
         self.pointer.end_press_repeat();
         true
+    }
+
+    /// Before `apply` mutates `self.scene` and replaces `self.tree.nodes`: if the held press's
+    /// path left `nodes` only because a sibling shifted an unkeyed ancestor's index, returns its
+    /// unique new path so the press follows the element across the commit.
+    pub(in crate::runtime) fn rebound_press_path(&self, nodes: &[Node]) -> Option<String> {
+        let held = self.pointer.press.held()?;
+        if nodes.iter().any(|n| n.path == held.path) { return None; }
+        let (is_drag, button) = (held.drag_handler.is_some(), held.button);
+        let matches = |n: &Node| {
+            selectable::same_keyed_path(&held.path, &n.path)
+                && (!is_drag || (n.handlers.on_drag.is_some() && !self.drags_out(n)
+                    && (button == crate::PointerButton::Primary
+                        || n.handlers.gestures.as_ref().is_some_and(|g| g.buttons & button.bit() != 0))))
+        };
+        let mut found = nodes.iter().filter(|n| matches(n));
+        let next = found.next()?;
+        if found.next().is_some() { return None; }
+        // Do not steal another element that was already live at `next.path` before this commit.
+        let already_live = self.tree.nodes.iter().enumerate()
+            .find(|(_, o)| o.id == next.id)
+            .is_some_and(|(oi, _)| !self.subtree_exiting(oi) && !self.subtree_unmounted(oi));
+        (!already_live).then(|| next.path.clone())
+    }
+
+    /// After a commit: a held drag whose element left the tree, started exiting, turned inert
+    /// or stopped dragging ends with a cancelled `Phase::Up`; one that stayed live refreshes
+    /// its fallback handler from the new view.
+    pub(in crate::runtime) fn sync_held_drag(&mut self) {
+        let Some((path, button)) = self.pointer.press.held()
+            .filter(|h| h.drag_handler.is_some())
+            .map(|h| (h.path.clone(), h.button))
+        else { return };
+        if let Some(i) = self.node_index(&path)
+            && self.allowed(i)
+            && self.drags_with(i, button)
+        {
+            let fresh = self.tree.nodes[i].handlers.on_drag.clone();
+            if let Some(held) = self.pointer.press.held_mut() {
+                held.drag_handler = fresh;
+            }
+            return;
+        }
+        self.cancel_drag();
     }
 
     /// The button is up, so the held press can no longer start a drag-out; it stays a press.
@@ -328,14 +377,15 @@ impl RuntimeCore {
         };
         let path = n.path.clone();
         let drag_out = self.drags_out(n).then(|| n.handlers.drag_threshold.unwrap_or(crate::drag_out::DRAG_THRESHOLD));
-        if n.handlers.on_drag.is_some() && drag_out.is_none() {
+        let drag_handler = drag_out.is_none().then(|| n.handlers.on_drag.clone()).flatten();
+        if drag_handler.is_some() {
             self.frame.queue.push(Action::Drag(path.clone(), d, crate::PointerButton::Primary));
         }
         let on_down = !touch && n.handlers.press_on_down && n.handlers.on_press.is_some();
         if on_down {
             self.frame.queue.push(Action::Press(path.clone(), crate::PointerButton::Primary, false));
         }
-        let mut held = capture::Held::new(path, d, crate::PointerButton::Primary, (x, y), now, second, drag_out).on_link(link).pressed_on_down(on_down);
+        let mut held = capture::Held::new(path, d, crate::PointerButton::Primary, (x, y), now, second, drag_out).on_link(link).pressed_on_down(on_down).drag_handler(drag_handler);
         held.touch = touch;
         self.pointer.press.hold(held);
     }
@@ -370,6 +420,7 @@ impl RuntimeCore {
     /// What input has queued for handlers, emptied: each drag event, `None` for a press.
     #[cfg(all(test, target_os = "macos"))]
     pub(crate) fn take_queued_pointer(&mut self) -> Vec<Option<Drag>> {
+        self.pointer.clear_drag_gone();
         let heard = self.frame.queue.iter().filter_map(|action| match action {
             Action::Drag(_, drag, _) => Some(Some(*drag)),
             Action::Press(..) => Some(None),
@@ -413,7 +464,7 @@ impl RuntimeCore {
             .then(|| capture::FirstClick { path: h.path.clone(), at: h.down_at, point: h.at });
         let Some(held) = self.pointer.press.release(first) else { return };
         let inside = held.inside();
-        let capture::Held { path, drag: d, button, at, down_at, moved, second: double, link, pressed_on_down, .. } = *held;
+        let capture::Held { path, drag: d, button, at, down_at, moved, second: double, link, pressed_on_down, drag_handler, .. } = *held;
         self.refresh_hover_within();
         if moved { self.pointer.clear_press_clicks(); }
         if input_capture {
@@ -432,7 +483,7 @@ impl RuntimeCore {
         // A button the element didn't opt in to is the middle button's click on a link or on
         // `on_middle_press`: neither its `on_press` nor its `on_drag` hears it.
         let opted = self.takes_button(i, button);
-        let (has_drag, has_press, has_double) = (self.drags_with(i, button), opted && n.handlers.on_press.is_some(), n.handlers.on_double_press.is_some());
+        let (has_drag, has_press, has_double) = (drag_handler.is_some() && self.drags_with(i, button), opted && n.handlers.on_press.is_some(), n.handlers.on_double_press.is_some());
         let middle_press = !opted && link.is_none() && n.handlers.on_middle_press.is_some();
         if has_drag {
             let (dx, dy) = (x - at.0, y - at.1);

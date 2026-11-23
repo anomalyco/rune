@@ -1,0 +1,1 @@
+- Input: held `El::on_drag` gestures now receive a cancelled `Phase::Up` when a modal opens or when the dragged element leaves the tree, starts exiting, turns inert or stops dragging, and follow a keyed element whose path shifts across sibling changes.
