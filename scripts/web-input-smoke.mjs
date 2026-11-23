@@ -23,6 +23,17 @@ export async function inputSmoke(page, url) {
     await page.touchscreen.tap(100, 36);
     assert.equal(await page.evaluate(() => window.__editorBlurs), 0);
 
+    // WebKit on iOS 27 still dispatches a tap's compatibility mousedown to the canvas after a
+    // prevented pointerdown; bridge.js must prevent it so the canvas does not steal focus back.
+    const compatMousedownPrevented = await page.evaluate(() => {
+        const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: 100, clientY: 36 });
+        document.querySelector('canvas').dispatchEvent(event);
+        return event.defaultPrevented;
+    });
+    assert.equal(compatMousedownPrevented, true, 'compatibility mousedown on canvas must be prevented');
+    assert.equal(await page.evaluate(() => document.activeElement.tagName), 'TEXTAREA');
+    assert.equal(await page.evaluate(() => window.__editorBlurs), 0);
+
     // Gboard reopens an existing word: include its unchanged prefix in the preedit range.
     await page.locator('textarea').evaluate(field => {
         field.dispatchEvent(new CompositionEvent('compositionstart'));

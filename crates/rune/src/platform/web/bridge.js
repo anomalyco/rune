@@ -250,6 +250,10 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         if (file.type.startsWith('text/') || file.size < 1048576 && !file.type) send({ kind: 'paste', text: await file.text(), html: '', image: false });
     });
     listen(canvas, 'pointerdown', event => event.preventDefault(), { capture: true });
+    // WebKit on iOS 27 still fires a tap's compatibility mousedown to the canvas after a
+    // prevented pointerdown; preventing it keeps the canvas's tabindex from taking focus
+    // back from the hidden field that activate() just focused on pointerup.
+    listen(canvas, 'mousedown', event => event.preventDefault(), { capture: true });
     // winit's web backend ignores pointercancel for mouse/pen and does not listen to
     // lostpointercapture; forward non-touch cancellations so held presses and drags never stick.
     listen(canvas, 'pointercancel', event => {

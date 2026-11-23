@@ -1,0 +1,1 @@
+- Web: prevent default on `mousedown` on the canvas in `bridge.js`, so a tap's compatibility `mousedown` on iOS 27 WebKit no longer steals focus back to the canvas and dismisses the soft keyboard after `pointerup` focuses the hidden text field.
