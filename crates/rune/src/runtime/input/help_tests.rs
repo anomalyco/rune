@@ -132,3 +132,82 @@ fn native_regions_carry_a_links_help() {
     let texts: Vec<&str> = rt.help_regions().iter().map(|(_, t)| t.as_str()).collect();
     assert_eq!(texts, ["Goes to b"]);
 }
+
+#[test]
+fn link_tooltip_lays_out_only_hovered_link() {
+    struct Doc {
+        body: String,
+        links: Vec<(usize, usize, String, Option<String>)>,
+    }
+    let mut body = String::new();
+    let mut links = Vec::with_capacity(40);
+    for idx in 0..40 {
+        if idx > 0 { body.push(' '); }
+        let start = body.len();
+        let (label, id, help) = if idx == 15 {
+            ("long_wrapped_link_phrase across_two_lines".to_owned(), "wrapped".to_owned(), Some("Help for wrapped".to_owned()))
+        } else if idx == 10 {
+            (format!("link{idx:02}"), format!("l{idx}"), Some("Help for l10".to_owned()))
+        } else {
+            (format!("link{idx:02}"), format!("l{idx}"), None)
+        };
+        body.push_str(&label);
+        links.push((start, body.len(), id, help));
+    }
+    fn view(s: &Doc, _: &mut Cx<Doc>) -> El {
+        let mut t = crate::text(s.body.clone())
+            .key("doc")
+            .font(crate::TextStyle::new(14.0, 400.0).lh(20.0))
+            .wrap()
+            .w_full();
+        for (start, end, id, help) in &s.links {
+            let mut l = crate::Link::new(*start..*end, id.as_str());
+            if let Some(h) = help { l = l.help(h.as_str()); }
+            t = t.link(l);
+        }
+        el().w_full().h_full()
+            .child(el().pin(Some(10.0), Some(10.0), None, None).w(180.0).child(t))
+            .child(el().key("plain").size(40.0, 20.0).pin(Some(220.0), Some(20.0), None, None).help("Plain"))
+    }
+    let mut rt = Runtime::new(Doc { body, links }, view, (320.0, 500.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    let i = rt.tree.nodes.iter().position(|n| n.text.is_some()).expect("text node");
+    let drawn_boxes = rt.link_boxes(i, rt.drawn_box(i));
+    let link_index = |rt: &Runtime<Doc>, id: &str| {
+        rt.tree.nodes[i].text.as_ref().unwrap().cold.links.iter().position(|l| l.id == id).unwrap()
+    };
+    let wrapped_k = link_index(&rt, "wrapped");
+    let wrapped_boxes = drawn_boxes.iter().filter(|(j, _)| *j == wrapped_k).count();
+    assert!(wrapped_boxes >= 2, "expected wrapped link to span at least 2 line boxes, got {wrapped_boxes}");
+
+    for (id, want_help) in [("l10", "Help for l10"), ("wrapped", "Help for wrapped")] {
+        let k = link_index(&rt, id);
+        let first = drawn_boxes.iter().find(|(j, _)| *j == k).unwrap().1;
+        let expected_anchor = drawn_boxes.iter().filter(|(j, _)| *j == k).map(|(_, r)| *r)
+            .reduce(|u, r| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])])
+            .unwrap();
+
+        rt.pointer_move((first[0] + first[2]) * 0.5, (first[1] + first[3]) * 0.5);
+        rt.frame(1.0 / 60.0);
+        rt.frame(rt.help_delay + 0.1);
+        let (tip_text, _) = rt.help_tooltip().expect("tooltip open");
+        assert_eq!(tip_text, want_help);
+
+        let ((), queries) = crate::runtime::count_span_box_queries(|| rt.core_mut().update_help());
+        assert_eq!(queries, 1, "update_help should lay out only hovered link {id}");
+        let got_anchor = rt.pointer.help.drawn.as_ref().expect("drawn tooltip").anchor;
+        assert!(
+            got_anchor.iter().zip(expected_anchor).all(|(a, b)| (a - b).abs() < 0.01),
+            "{id}: got anchor {got_anchor:?}, want {expected_anchor:?}"
+        );
+    }
+
+    // A non-link element tooltip lays out 0 link spans.
+    rt.pointer_move(240.0, 30.0);
+    rt.frame(1.0 / 60.0);
+    rt.frame(rt.help_delay + 0.1);
+    assert_eq!(rt.help_tooltip().map(|(t, _)| t), Some("Plain"));
+    let ((), queries) = crate::runtime::count_span_box_queries(|| rt.core_mut().update_help());
+    assert_eq!(queries, 0, "non-link tooltip should query 0 link spans");
+}

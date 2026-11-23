@@ -460,7 +460,7 @@ impl RuntimeCore {
             let node = under.or_else(|| self.hover_live(&target.path));
             if let Some(i) = node && let Some(text) = self.help_text(i, link).cloned() {
                 let e = self.drawn_box(i);
-                let anchor = link.and_then(|k| self.link_boxes(i, e).into_iter().filter(|(j, _)| *j == k).map(|(_, r)| r)
+                let anchor = link.and_then(|k| self.link_boxes_for(i, k, e).into_iter().map(|(_, r)| r)
                     .reduce(|u, r| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]));
                 let box_rect = anchor.unwrap_or(e);
                 if box_rect[2] <= box_rect[0] && box_rect[3] <= box_rect[1] {

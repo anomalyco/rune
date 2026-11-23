@@ -65,7 +65,7 @@ impl RuntimeCore {
         match (request.action, link) {
             (Ak::Click, Some(k)) => self.queue_a11y_link(path, k),
             (Ak::ShowContextMenu, Some(k)) => {
-                let Some((_, r)) = self.link_boxes(i, self.drawn_box(i)).into_iter().find(|(j, _)| *j == k) else { return false };
+                let Some((_, r)) = self.link_boxes_for(i, k, self.drawn_box(i)).into_iter().next() else { return false };
                 let ev = self.pointer_event(i, r[0], r[3]);
                 self.queue_a11y_link_secondary(path, k, ev);
             }
