@@ -1,0 +1,1 @@
+- Text fields: `Tx::blur` now applies in `sync_requested_focus` after the view rebuilds instead of running `set_focus` against the previous view's nodes, so removing a field's backing state in `on_submit` or `Runtime::update` and calling `tx.blur()` no longer invokes the removed field's `on_edit` accessor, and focus changes only sync the fields gaining or losing focus.

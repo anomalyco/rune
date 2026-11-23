@@ -240,8 +240,11 @@ impl RuntimeCore {
             // file drag find only what is mounted and reachable now (a covered window builds
             // nothing until this).
             let routed = matches!(&action, Action::Key { .. } | Action::KeyUp(_) | Action::Physical(..) | Action::Ime(_) | Action::FinishIme | Action::Paste(..) | Action::Files(_));
-            // So is a playground an earlier handler opened or moved.
-            if routed { self.latch_playground(app, &mut tx); }
+            // So is a playground an earlier handler opened or moved, and a focus change.
+            if routed {
+                self.latch_playground(app, &mut tx);
+                self.latch_focus(&mut tx);
+            }
             // Both callbacks see ordinary &mut S. After the next mutation a single view
             // cannot tell which one introduced a row. Observe the poll's tree now, without
             // drawing it or advancing time. A key already needed this same routing boundary.
