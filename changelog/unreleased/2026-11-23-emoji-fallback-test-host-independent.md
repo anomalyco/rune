@@ -1,0 +1,1 @@
+- Tests (`rune-text`): `non_emoji_named_color_emoji_stays_last_in_symbol_families` now starts from `TextSystem::empty()` so host symbol fallbacks (such as `Apple Color Emoji` on macOS) do not pre-populate `emoji` before the test runs.
