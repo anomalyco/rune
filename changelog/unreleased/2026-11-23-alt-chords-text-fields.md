@@ -1,0 +1,1 @@
+- Text fields: off macOS, `Alt` chords without `Ctrl` (such as `Alt+D` or `Alt+Shift+D`) no longer insert their character into a focused field and reach `on_key` instead, while `AltGr` (`Ctrl+Alt` or Level 3) and macOS `Option` text continue to type.

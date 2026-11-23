@@ -483,6 +483,16 @@ fn altgr_text_still_types() {
     assert_eq!(e.text, "€");
 }
 
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn alt_chords_type_nothing_off_macos() {
+    let mut e = TextEdit::new("");
+    e.key(&chord("d", Mods { alt: true, ..Mods::default() }), None);
+    e.key(&chord("D", Mods { alt: true, shift: true, ..Mods::default() }), None);
+    assert_eq!(e.text, "");
+}
+
+#[cfg(target_os = "macos")]
 #[test]
 fn option_text_still_types() {
     let mut e = TextEdit::new("").secure();
