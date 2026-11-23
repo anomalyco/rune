@@ -1,0 +1,1 @@
+- Linux/Wayland: register `rune::set_app_id` with `org.freedesktop.host.portal.Registry.Register` on newly opened XDG desktop portal connections (`GlobalShortcuts` and `FileChooser`), so unsandboxed apps launched outside a named systemd scope no longer fail `CreateSession` with `NotAllowed: An app id is required`.

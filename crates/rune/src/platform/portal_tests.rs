@@ -34,3 +34,22 @@ fn settings_portal_watcher_exits_when_portal_is_absent() {
     assert!(should_watch_settings(false, false), "live portal with unset key still watches changes");
     assert!(!should_watch_settings(false, true), "absent portal must not keep watcher thread alive forever");
 }
+
+#[test]
+fn registry_app_id_trims_and_skips_missing_or_blank_ids() {
+    assert_eq!(REGISTRY_INTERFACE, "org.freedesktop.host.portal.Registry");
+    assert_eq!(REGISTRY_METHOD, "Register");
+    assert_eq!(registry_app_id(None), None);
+    assert_eq!(registry_app_id(Some("")), None);
+    assert_eq!(registry_app_id(Some("   \t\n")), None);
+    assert_eq!(registry_app_id(Some("org.example.App")), Some("org.example.App"));
+    assert_eq!(registry_app_id(Some(" org.example.App ")), Some("org.example.App"));
+}
+
+#[cfg(all(target_os = "linux", feature = "dbus"))]
+#[test]
+fn registry_register_body_matches_portal_signature() {
+    use std::collections::HashMap;
+    use zbus::zvariant::{Type, Value};
+    assert_eq!(<(&str, HashMap<&str, Value<'_>>) as Type>::SIGNATURE.to_string(), "(sa{sv})");
+}

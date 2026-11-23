@@ -1,11 +1,14 @@
 //! Shared XDG desktop portal helpers for Linux D-Bus clients (`portal_appearance`,
 //! `shortcuts::wayland`, `file_dialog::portal`): monotonic request tokens, Request object path
-//! construction, portal availability classification, subscribe-before-call Request/Response
-//! round-trips, and a shared background worker runtime for one-shot portal calls.
+//! construction, host app-id registration, portal availability classification,
+//! subscribe-before-call Request/Response round-trips, and a shared background worker runtime for
+//! one-shot portal calls.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) const PATH: &str = "/org/freedesktop/portal/desktop";
+pub(crate) const REGISTRY_INTERFACE: &str = "org.freedesktop.host.portal.Registry";
+pub(crate) const REGISTRY_METHOD: &str = "Register";
 
 static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1);
 
@@ -41,6 +44,12 @@ pub(crate) fn should_watch_settings(read_ok: bool, unavailable: bool) -> bool {
     read_ok || !unavailable
 }
 
+/// The application id to send to `org.freedesktop.host.portal.Registry.Register`, or `None`
+/// when unset or blank.
+pub(crate) fn registry_app_id(app_id: Option<&str>) -> Option<&str> {
+    app_id.map(str::trim).filter(|id| !id.is_empty())
+}
+
 #[cfg(all(target_os = "linux", feature = "dbus"))]
 mod dbus {
     use std::collections::HashMap;
@@ -54,10 +63,10 @@ mod dbus {
     use futures_lite::{FutureExt, StreamExt};
     use zbus::{
         Connection, Proxy, fdo,
-        zvariant::{OwnedObjectPath, OwnedValue, Type},
+        zvariant::{OwnedObjectPath, OwnedValue, Type, Value},
     };
 
-    use super::request_path;
+    use super::{PATH, REGISTRY_INTERFACE, REGISTRY_METHOD, registry_app_id, request_path};
 
     pub(crate) const DEST: &str = "org.freedesktop.portal.Desktop";
 
@@ -96,6 +105,18 @@ mod dbus {
         }
         .or(future)
         .await
+    }
+
+    /// Registers the process's application id (`rune::set_app_id`) with
+    /// `org.freedesktop.host.portal.Registry.Register` on a freshly opened portal connection.
+    /// Must run before any other portal call on `conn`; errors (older portals without `Registry`,
+    /// or sandboxed / systemd-scoped apps that already carry an app id) are ignored.
+    pub(crate) async fn register_app_id(conn: &Connection) {
+        let Some(app_id) = registry_app_id(crate::tooling::app_id()) else { return };
+        let options: HashMap<&str, Value<'_>> = HashMap::new();
+        let _ = conn
+            .call_method(Some(DEST), PATH, Some(REGISTRY_INTERFACE), REGISTRY_METHOD, &(app_id, options))
+            .await;
     }
 
     /// Whether `e` indicates that the XDG desktop portal service or interface is absent or
@@ -236,7 +257,7 @@ mod dbus {
 }
 
 #[cfg(all(target_os = "linux", feature = "dbus"))]
-pub(crate) use dbus::{DEST, RequestError, RequestTimeouts, is_unavailable, request, spawn, timeout};
+pub(crate) use dbus::{DEST, RequestError, RequestTimeouts, is_unavailable, register_app_id, request, spawn, timeout};
 
 #[cfg(test)]
 #[path = "portal_tests.rs"]
