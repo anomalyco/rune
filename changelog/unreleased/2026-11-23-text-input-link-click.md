@@ -1,0 +1,1 @@
+- Clicking a `Mark::Link` in a `text_input` now invokes `El::on_link` (while still placing the caret and letting drags, double-clicks, and Shift-clicks select text), and hovering a link in a field with `on_link` shows `Cursor::Pointer`.

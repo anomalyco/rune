@@ -272,7 +272,7 @@ impl RuntimeCore {
             first.path == n.path && press_run::follows(first.at, first.point, now, (x, y), self.double_click_interval)
         });
         if let Some(ji) = self.textbox_input(ti) {
-            self.input_down(ji, x, y, now, second);
+            self.input_down(ji, x, y, now, second, link.filter(|_| ji == ti));
             return;
         }
         // Clicking a link leaves focus where it is (a composer keeps typing). Selectable text
@@ -400,6 +400,7 @@ impl RuntimeCore {
         // A drag that selected text is a selection, not a press.
         let selected = self.selected_by_drag();
         self.select_step(selectable::phase::Event::Release);
+        let input_following = self.edit.input_click.dragging_path().is_some();
         let input_capture = self.edit.input_click.end_press();
         self.pointer.end_press_repeat();
         let now = self.now_clock();
@@ -415,7 +416,17 @@ impl RuntimeCore {
         let capture::Held { path, drag: d, button, at, down_at, moved, second: double, link, pressed_on_down, .. } = *held;
         self.refresh_hover_within();
         if moved { self.pointer.clear_press_clicks(); }
-        if input_capture { return; }
+        if input_capture {
+            if input_following
+                && inside
+                && !moved
+                && let Some(k) = link
+                && self.live_index(&path).is_some_and(|i| !self.input_drag_selects(i, at, (x, y)))
+            {
+                self.link_up(&path, k, x, y, button);
+            }
+            return;
+        }
         let Some(i) = self.live_index(&path) else { return };
         let n = &self.tree.nodes[i];
         // A button the element didn't opt in to is the middle button's click on a link or on
@@ -484,7 +495,12 @@ impl RuntimeCore {
             return crate::el::Cursor::Default;
         };
         if self.tree.nodes[i].handlers.cursor.is_none() && (self.tree.nodes[i].input.is_some() || self.tree.nodes[i].role == "textbox") {
-            return crate::el::Cursor::Text;
+            let input_link = self.tree.nodes[i].input.is_some()
+                && self.tree.nodes[i].text.as_ref().is_some_and(|t| t.cold.on_link.is_some())
+                && (!self.edit.input_click.captured()
+                    || self.pointer.press.held().is_some_and(|h| !h.moved && h.link.is_some()))
+                && self.link_at(i, x, y).is_some();
+            return if input_link { crate::el::Cursor::Pointer } else { crate::el::Cursor::Text };
         }
         if self.is_selectable(i) && !self.edit.selectable.phase.dragging() && self.link_at(i, x, y).is_some() {
             return crate::el::Cursor::Pointer;
