@@ -152,6 +152,7 @@ impl AnyHost for OverlayHost {
         #[cfg(target_os = "macos")]
         if let WindowEvent::Occluded(occluded) = event {
             let occluded = core.panel.as_ref().map_or(occluded, |p| p.occluded());
+            let occluded = core.occlusion_reading(occluded);
             core.occluded(app, occluded);
             return;
         }

@@ -439,6 +439,9 @@ pub(in crate::overlay) struct OverlayCore {
     /// This loop turn already read the panel's occlusion (`sync_occlusion`).
     #[cfg(target_os = "macos")]
     occlusion_read: bool,
+    /// The frames right after a show, which may draw before AppKit reports the panel on screen.
+    #[cfg(target_os = "macos")]
+    prime: crate::window::Prime,
     /// When to try a frame again that had no drawable, or the next frame of motion with no
     /// display link to pace it, and the waits behind it (`window::Backoff`).
     backoff: crate::window::Backoff,
@@ -520,6 +523,8 @@ impl OverlayCore {
             clock: FrameClock::new(crate::time::now()),
             #[cfg(target_os = "macos")]
             occlusion_read: false,
+            #[cfg(target_os = "macos")]
+            prime: crate::window::Prime::Steady,
             backoff: Default::default(),
             hidden_pace: Default::default(),
             #[cfg(target_os = "macos")]

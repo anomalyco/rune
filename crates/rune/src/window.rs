@@ -59,6 +59,8 @@ pub(crate) use surface::{
 };
 #[cfg(target_arch = "wasm32")]
 pub(crate) use surface::configure_then;
+#[cfg(target_os = "macos")]
+pub(crate) use surface::native::Prime;
 #[cfg(test)]
 pub(crate) use surface::{
     HIDDEN_REFRESH, OCCLUDED_MAX, OCCLUDED_RETRY, TIMEOUT_RETRY, TIMER_FRAME_STALL, TimerFrame,

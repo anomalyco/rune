@@ -25,6 +25,9 @@ struct OverlayFrame<'a> {
     target: Option<Instant>,
     #[cfg(target_os = "macos")]
     materials_checked: bool,
+    /// This frame draws presuming the panel on screen (`OverlayCore::prime`).
+    #[cfg(target_os = "macos")]
+    presume: bool,
     now: Option<Instant>,
     more: bool,
 }
@@ -136,6 +139,8 @@ impl FrameHost for OverlayFrame<'_> {
                 return Gate::Skip;
             }
         }
+        #[cfg(target_os = "macos")]
+        { self.presume = !self.prewarm && self.core.prime.presumes(); }
         let (Some(live), Some(renderer)) = (self.core.surface.live_mut(), self.core.renderer.as_ref()) else {
             return Gate::Skip;
         };
@@ -167,6 +172,8 @@ impl FrameHost for OverlayFrame<'_> {
         }
         // The present queue's vsync paces redraws where no display link does.
         if !self.prewarm { self.core.meter.redraw(self.paced || !cfg!(target_os = "macos")); }
+        #[cfg(target_os = "macos")]
+        if self.presume { self.core.prime.spend(); }
         Gate::Draw
     }
 
@@ -220,12 +227,17 @@ impl FrameHost for OverlayFrame<'_> {
             }
         }
         if !self.prewarm { self.core.meter.redraw(self.paced || !cfg!(target_os = "macos")); }
+        #[cfg(target_os = "macos")]
+        if self.presume { self.core.prime.spend(); }
     }
 
     fn acquire(&mut self) -> Acquire<wgpu::SurfaceTexture> {
         let (Some(live), Some(gpu)) = (self.core.surface.live(), self.core.gpu.as_ref()) else {
             return Acquire::Missed(crate::window::Missed::Unconfigured);
         };
+        // wgpu checks the panel's occlusion itself before it hands out a drawable.
+        #[cfg(target_os = "macos")]
+        let _shown = if self.presume { crate::platform::macos::PresumeShown::new(&live.surface) } else { None };
         match crate::window::acquire_checked(
             &live.surface,
             gpu,
@@ -556,6 +568,8 @@ impl OverlayCore {
             target: None,
             #[cfg(target_os = "macos")]
             materials_checked: false,
+            #[cfg(target_os = "macos")]
+            presume: false,
             now: None,
             more: false,
         };
@@ -626,7 +640,17 @@ impl OverlayCore {
     pub(super) fn sync_occlusion(&mut self, app: &mut dyn OverlayApp) {
         if std::mem::replace(&mut self.occlusion_read, true) { return; }
         let occluded = self.panel.as_ref().is_some_and(|p| p.occluded());
+        let occluded = self.occlusion_reading(occluded);
         self.set_occluded(app, occluded);
+    }
+
+    /// What a reading of the panel's occlusion means now. Right after a show AppKit may not yet
+    /// report the panel on screen, so a primed overlay stays shown and its first frames draw
+    /// (`prime`); a visible reading ends that.
+    #[cfg(target_os = "macos")]
+    pub(super) fn occlusion_reading(&mut self, occluded: bool) -> bool {
+        if !occluded { self.prime.stop(); }
+        occluded && !self.prime.presumes()
     }
 
     /// Applies an occlusion reading when it changes what the panel holds.
