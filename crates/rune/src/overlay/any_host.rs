@@ -17,7 +17,7 @@ impl OverlayCore {
         // A running display link consumes due runtime timers. Keep the independent
         // pointer deadline, but do not spin on an overdue animation timer. Without one (hidden,
         // covered, faded out or unpaced), a timer due sooner than a frame waits a frame.
-        let deadline = crate::window::timer_deadline_core(rt);
+        let deadline = frame::timer_deadline(rt, self.awaiting_layer_frame());
         // A frame waiting for room in the swap chain comes when there is (`slot`): its timers
         // would turn the loop at once until then.
         let deadline = deadline.filter(|_| !self.waits_for_slot());

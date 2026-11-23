@@ -12,6 +12,7 @@ use std::time::Duration;
 use winit::raw_window_handle::{RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle};
 use wayland_backend::client::{Backend, ReadEventsGuard, WaylandError};
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
+use wayland_client::protocol::wl_callback::{self, WlCallback};
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_registry::WlRegistry;
@@ -23,7 +24,7 @@ use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1:
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1};
 
-use super::layer_shell_machine::{configure_wait, connection, exclusive_zone, keyboard, pointer, readiness, repeat, touch, watch_loop};
+use super::layer_shell_machine::{configure_wait, connection, exclusive_zone, frame_callback, keyboard, pointer, readiness, repeat, touch, watch_loop};
 use crate::el::Align;
 use crate::overlay::{Placement, ScreenEdge};
 use crate::runtime::Waker;
@@ -58,6 +59,9 @@ struct State {
     /// How far the compositor has got with the surface: its first configure is what makes it
     /// drawable, and closing it is final.
     readiness: readiness::State,
+    /// Tracks whether the compositor has answered the last presented frame's `wl_surface.frame`
+    /// callback so the overlay never blocks in Mesa's FIFO wait when the surface isn't painted.
+    frame: frame_callback::State,
     input: Vec<Input>,
     surface: Option<WlSurface>,
     over: Over,
@@ -481,6 +485,13 @@ fn shape(c: crate::el::Cursor) -> Shape {
         Cursor::ZoomOut => Shape::ZoomOut,
     }
 }
+impl Dispatch<WlCallback, u64> for State {
+    fn event(state: &mut Self, _: &WlCallback, event: wl_callback::Event, id: &u64, _: &Connection, _: &QueueHandle<Self>) {
+        if matches!(event, wl_callback::Event::Done { .. }) {
+            frame_callback::step(&mut state.frame, frame_callback::Event::Done(*id));
+        }
+    }
+}
 impl Dispatch<WlSurface, ()> for State {
     fn event(state: &mut Self, _: &WlSurface, event: wl_surface::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         if let wl_surface::Event::PreferredBufferScale { factor } = event {
@@ -495,7 +506,10 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for State {
                 layer.ack_configure(serial);
                 readiness::step(&mut state.readiness, readiness::Event::Configure { width, height });
             }
-            zwlr_layer_surface_v1::Event::Closed => readiness::step(&mut state.readiness, readiness::Event::Closed),
+            zwlr_layer_surface_v1::Event::Closed => {
+                readiness::step(&mut state.readiness, readiness::Event::Closed);
+                frame_callback::step(&mut state.frame, frame_callback::Event::Reset);
+            }
             _ => {}
         }
     }
@@ -1013,6 +1027,22 @@ impl LayerSurface {
         self.flush_checked();
     }
 
+    /// Requests a `wl_surface.frame` callback on this surface's private queue without committing,
+    /// so it commits alongside the buffer in the immediately following `queue.present`.
+    pub fn request_frame(&mut self) {
+        if self.state.readiness.closed() { return; }
+        for effect in frame_callback::step(&mut self.state.frame, frame_callback::Event::Request) {
+            let frame_callback::Effect::Request(id) = effect;
+            self.surface.frame(&self.queue.handle(), id);
+        }
+    }
+
+    /// True when no `wl_surface.frame` callback is outstanding, so acquiring and presenting will
+    /// not block in Mesa's FIFO wait.
+    pub fn frame_ready(&self) -> bool {
+        self.state.frame.ready()
+    }
+
     /// Commit role state (placement) without a new buffer; wgpu's present commits buffers.
     pub fn commit(&mut self) {
         self.surface.commit();
@@ -1088,6 +1118,7 @@ impl LayerSurface {
     fn fail_connection(&mut self, reason: Option<String>) {
         let was_closed = self.state.readiness.closed();
         readiness::step(&mut self.state.readiness, readiness::Event::Closed);
+        frame_callback::step(&mut self.state.frame, frame_callback::Event::Reset);
         self.state.step_repeat(repeat::Event::Stop);
         self.state.input.clear();
         self.watch = None;

@@ -734,6 +734,7 @@ pub(crate) mod watch_loop {
     }
 }
 
+pub(crate) mod frame_callback;
 pub(crate) mod pointer;
 
 /// The `zwlr_layer_surface_v1.set_exclusive_zone` value for `placement`: `-1` lets a full-screen

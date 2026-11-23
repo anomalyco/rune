@@ -766,6 +766,7 @@ fn missed_frame_in_turn_prevents_second_step_in_same_turn() {
     let decided = frame::turn(Gate {
         prewarm: false,
         occluded: false,
+        awaiting_frame: false,
         dirty: true,
         idle: false,
         retry: None,
@@ -778,6 +779,7 @@ fn missed_frame_in_turn_prevents_second_step_in_same_turn() {
     let next = frame::turn(Gate {
         prewarm: false,
         occluded: false,
+        awaiting_frame: false,
         dirty: true,
         idle: false,
         retry: None,

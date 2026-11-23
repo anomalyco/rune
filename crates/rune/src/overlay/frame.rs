@@ -127,6 +127,9 @@ pub(super) enum Turn {
     Rest,
     /// Waiting out a missed frame's retry, or the timer pacing unpaced motion.
     BackedOff,
+    /// Waiting for a Wayland layer surface's `wl_surface.frame` callback from the last present
+    /// before acquiring or presenting again.
+    AwaitingFrame,
     /// A frame is due. A timer frame may still find nothing new to present (`Quiet`).
     Draw,
 }
@@ -171,11 +174,13 @@ impl TurnFrame {
     }
 }
 
-/// What `turn` decides from. `occluded` is the panel's reading this turn (macOS).
+/// What `turn` decides from. `occluded` is the panel's reading this turn (macOS);
+/// `awaiting_frame` is an outstanding Wayland layer-shell `wl_surface.frame` callback.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Gate {
     pub(super) prewarm: bool,
     pub(super) occluded: bool,
+    pub(super) awaiting_frame: bool,
     pub(super) dirty: bool,
     pub(super) idle: bool,
     pub(super) retry: Option<Instant>,
@@ -183,8 +188,10 @@ pub(super) struct Gate {
 }
 
 /// Until it's uncovered, only the retry (or a due timer, in `wake_due`) steps an occluded
-/// overlay, however often other windows turn the loop; input waits for the retry too. A
-/// prewarm frame draws regardless of both. `now` is read only where a retry is compared.
+/// overlay, however often other windows turn the loop; input waits for the retry too. While a
+/// Wayland layer surface awaits its `wl_surface.frame` callback, draws are skipped until the
+/// compositor answers. A prewarm frame draws regardless. `now` is read only where a retry is
+/// compared.
 pub(super) fn turn(gate: Gate, now: impl Fn() -> Instant) -> Turn {
     if !gate.prewarm && gate.missed_this_turn {
         return Turn::BackedOff;
@@ -193,8 +200,45 @@ pub(super) fn turn(gate: Gate, now: impl Fn() -> Instant) -> Turn {
         return Turn::Occluded { recheck: gate.retry.is_none_or(|retry| retry <= now()) };
     }
     if !gate.dirty && gate.idle { return Turn::Rest; }
+    if !gate.prewarm && gate.awaiting_frame { return Turn::AwaitingFrame; }
     if !gate.prewarm && gate.retry.is_some_and(|retry| retry > now()) { return Turn::BackedOff; }
     Turn::Draw
+}
+
+/// Whether a Wayland layer surface must wait for its outstanding `wl_surface.frame` callback.
+/// Once the GPU device is lost, nothing was committed so the callback will never arrive and the
+/// surface must not wait on it.
+pub(super) fn is_awaiting_frame(frame_ready: bool, device_lost: bool) -> bool {
+    !frame_ready && !device_lost
+}
+
+/// Whether a non-macOS overlay asks the event loop to keep polling after presenting a frame.
+/// A layer surface awaiting its `wl_surface.frame` callback wakes through its watch thread rather
+/// than `ControlFlow::Poll`.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub(super) fn wants_more(idle: bool, awaiting_frame: bool) -> bool {
+    !idle && !awaiting_frame
+}
+
+/// Whether no frame will come on its own to run due timers, updates, or drag ends.
+pub(super) fn is_frameless(drawing: bool, occluded: bool, awaiting_frame: bool) -> bool {
+    !drawing || occluded || awaiting_frame
+}
+
+/// Whether advancing a drawing overlay without pending input handlers only polls instead of
+/// rebuilding the view and laying out.
+pub(super) fn polls_only_when_drawing(shown: bool, occluded: bool, awaiting_frame: bool) -> bool {
+    shown && (occluded || awaiting_frame)
+}
+
+/// The runtime timer deadline for an overlay: while awaiting a Wayland layer frame callback,
+/// ambient visual loops pause until the compositor paints again while app timers still fire.
+pub(super) fn timer_deadline(rt: &RuntimeCore, awaiting_frame: bool) -> Option<Instant> {
+    if awaiting_frame {
+        crate::window::poll_timer_deadline_core(rt)
+    } else {
+        crate::window::timer_deadline_core(rt)
+    }
 }
 
 /// A resting overlay's timer frame, stepped before any drawable: `None` when it draws what
@@ -291,6 +335,10 @@ pub(super) fn submit_and_present(live: &mut Live, renderer: &Renderer, gpu: &Gpu
     {
         let _ = (rt, prewarm);
         renderer.submit(&gpu.queue, encoder);
+        #[cfg(all(unix, not(target_os = "ios"), not(target_os = "android")))]
+        if !gpu.is_lost() && let Backing::Layer(layer) = &mut live.backing {
+            layer.request_frame();
+        }
         gpu.queue.present(frame);
     }
 }

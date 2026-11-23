@@ -24,8 +24,8 @@ pub(in crate::window) use launch_drawables::LaunchDrawables;
 pub(in crate::window) use loop_frame::LoopFrame;
 pub(in crate::window) use native::Native;
 pub(crate) use pacing::{
-    HiddenPace, Missed, TimerFrame, TIMER_FRAME, acquire, acquire_checked, timer_deadline_core,
-    timer_wants_frame_core,
+    HiddenPace, Missed, TimerFrame, TIMER_FRAME, acquire, acquire_checked,
+    poll_timer_deadline_core, timer_deadline_core, timer_wants_frame_core,
 };
 #[cfg(test)]
 pub(crate) use pacing::{
