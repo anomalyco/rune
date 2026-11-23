@@ -179,7 +179,7 @@ impl<'a> TabStripCore<'a> {
         let incoming = usize::from(drag.incoming().is_some());
         let (tab_w, pinned_w) = match overflow {
             TabOverflow::ShrinkThenScroll { max_width, pinned_width, min_width, .. } => {
-                let w = self.viewport.map_or(max_width, |v| overflow.tab_width(v - trailing, count - pinned + incoming, pinned, gap));
+                let w = self.viewport.map_or(max_width.max(min_width), |v| overflow.tab_width(v - trailing, count - pinned + incoming, pinned, gap));
                 (drag.width_lock.map_or(w, |l| l.max(min_width)), pinned_width)
             }
             TabOverflow::Scroll { .. } => (f32::INFINITY, f32::INFINITY),

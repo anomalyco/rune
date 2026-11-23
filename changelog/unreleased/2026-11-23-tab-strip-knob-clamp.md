@@ -1,0 +1,1 @@
+- `rune-kit` / `rune-knobs`: `TabOverflow::tab_width` and `Knob` clamping no longer panic when `min` exceeds `max` or either bound is NaN (`min_width` wins on tab strips; knobs collapse an unusable range to `min` and clamp NaN values to `min`).
