@@ -912,3 +912,66 @@ fn a_resize_draws_in_one_microtask_before_the_browser_paints() {
     // The next resize queues again.
     assert_eq!(steps(&mut state, &[Resized]), [ResizeRedrawEffect::QueueMicrotask]);
 }
+
+#[test]
+fn surface_health_backs_off_ignores_stale_attempts_and_gives_up_until_resize() {
+    use std::time::Duration;
+    let mut seq = crate::machine::Seq::default();
+    let mut health = SurfaceHealth::default();
+    assert!(health.can_draw());
+
+    // A stale attempt answer after a newer configure began is ignored.
+    let stale = seq.next();
+    health.step(&mut seq, SurfaceHealthEvent::Begin(stale));
+    let current = seq.next();
+    health.step(&mut seq, SurfaceHealthEvent::Begin(current));
+    let ignored: Vec<_> = health.step(&mut seq, SurfaceHealthEvent::Outcome {
+        attempt: stale,
+        error: Some("stale failure".into()),
+    }).into_iter().collect();
+    assert!(ignored.is_empty());
+    assert!(health.can_draw());
+
+    // First failure reports once and schedules 50ms backoff; subsequent failures double up to 5.
+    let expected_delays = [50u64, 100, 200, 400];
+    let mut attempt = current;
+    for (i, ms) in expected_delays.into_iter().enumerate() {
+        let effects: Vec<_> = health.step(&mut seq, SurfaceHealthEvent::Outcome {
+            attempt,
+            error: Some(format!("fail {i}")),
+        }).into_iter().collect();
+        assert!(!health.can_draw(), "waiting for retry should pause drawing");
+        let retry_attempt = match (i, effects.as_slice()) {
+            (0, [SurfaceHealthEffect::ReportFirst(_), SurfaceHealthEffect::ScheduleRetry { attempt, delay }]) => {
+                assert_eq!(*delay, Duration::from_millis(ms));
+                *attempt
+            }
+            (1.., [SurfaceHealthEffect::ScheduleRetry { attempt, delay }]) => {
+                assert_eq!(*delay, Duration::from_millis(ms));
+                *attempt
+            }
+            other => panic!("unexpected effects on failure {i}: {other:?}"),
+        };
+        let due: Vec<_> = health.step(&mut seq, SurfaceHealthEvent::RetryDue(retry_attempt)).into_iter().collect();
+        assert_eq!(due, [SurfaceHealthEffect::Configure]);
+        attempt = seq.next();
+        health.step(&mut seq, SurfaceHealthEvent::Begin(attempt));
+    }
+
+    // Fifth consecutive failure gives up and waits for a resize.
+    let gave_up: Vec<_> = health.step(&mut seq, SurfaceHealthEvent::Outcome {
+        attempt,
+        error: Some("final fail".into()),
+    }).into_iter().collect();
+    assert_eq!(gave_up, [SurfaceHealthEffect::ReportGaveUp("final fail".into())]);
+    assert!(!health.can_draw());
+
+    // Resize wakes the surface back up; a presented frame resets failure count.
+    health.step(&mut seq, SurfaceHealthEvent::Resized);
+    assert!(health.can_draw());
+    let next = seq.next();
+    health.step(&mut seq, SurfaceHealthEvent::Begin(next));
+    health.step(&mut seq, SurfaceHealthEvent::Outcome { attempt: next, error: None });
+    health.step(&mut seq, SurfaceHealthEvent::Presented);
+    assert_eq!(health, SurfaceHealth::Ready { failures: 0, active: None });
+}

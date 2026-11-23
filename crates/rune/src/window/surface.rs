@@ -17,6 +17,8 @@ pub(in crate::window) mod win;
 
 pub(crate) use backoff::{Backoff, BackoffEffect, BackoffEvent};
 pub(crate) use configure::configure;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use configure::configure_then;
 #[cfg(target_os = "macos")]
 pub(in crate::window) use launch_drawables::LaunchDrawables;
 pub(in crate::window) use loop_frame::LoopFrame;

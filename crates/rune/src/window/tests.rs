@@ -881,3 +881,31 @@ fn a_drawable_never_takes_a_size_exceeding_the_texture_limit() {
     assert_eq!(max_surface_dim(None), CPU_MAX_SURFACE_DIM);
     assert_eq!(drawable_size(prev, (1156, 65527), max_surface_dim(None)), (1156, 777));
 }
+
+#[test]
+fn no_direct_surface_configure_outside_helper() {
+    fn walk(dir: &std::path::Path, bad: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|n| n == "tests") { continue; }
+                walk(&path, bad);
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+            if !name.ends_with(".rs") || name == "tests.rs" || name.ends_with("_tests.rs") { continue; }
+            let rel = path.to_string_lossy().replace('\\', "/");
+            if rel.ends_with("window/surface/configure.rs") { continue; }
+            let src = std::fs::read_to_string(&path).unwrap();
+            for (idx, line) in src.lines().enumerate() {
+                if line.contains("surface.configure(") {
+                    bad.push(format!("{rel}:{}: {}", idx + 1, line.trim()));
+                }
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut bad = Vec::new();
+    walk(&root, &mut bad);
+    assert!(bad.is_empty(), "direct surface.configure calls bypass window::configure:\n{}", bad.join("\n"));
+}

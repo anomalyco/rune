@@ -14,6 +14,9 @@ pub(super) struct GpuSide {
     pub(super) config: wgpu::SurfaceConfiguration,
     pub(super) renderer: Renderer,
     pub(super) backend: wgpu::Backend,
+    health: Rc<RefCell<(crate::machine::Seq, super::web_math::SurfaceHealth)>>,
+    retry_due: Rc<Cell<Option<crate::machine::Attempt>>>,
+    proxy: EventLoopProxy<Wake>,
 }
 
 /// A GPU device or WebGL2 context loss waiting for `Browser::lost_device` to handle.
@@ -175,10 +178,10 @@ pub(super) fn gpu_side(gpu: Gpu, surface: wgpu::Surface<'static>, size: (u32, u3
     };
     let backend = gpu.adapter.get_info().backend;
     let is_gl = backend == wgpu::Backend::Gl;
-    surface.configure(&gpu.device, &config);
+    let watch_proxy = proxy.clone();
     health::watch(&gpu.device, move |why| {
         *lost.borrow_mut() = Some(if is_gl { Loss::WebGl(why) } else { Loss::WebGpu(why) });
-        proxy.send_event(Wake::App).ok();
+        watch_proxy.send_event(Wake::App).ok();
     });
     let mut renderer = Renderer::new(&gpu.device, format);
     renderer.set_srgb_blend(!format.is_srgb());
@@ -186,7 +189,18 @@ pub(super) fn gpu_side(gpu: Gpu, surface: wgpu::Surface<'static>, size: (u32, u3
     // Re-upload every placed glyph row and outline record on a fresh renderer (for example after
     // a WebGL2 context restore, where a previous renderer had already cleared `atlas.dirty`).
     rt.text.atlas.invalidate();
-    Ok(GpuSide { gpu, surface, config, renderer, backend })
+    let side = GpuSide {
+        gpu,
+        surface,
+        config,
+        renderer,
+        backend,
+        health: Rc::new(RefCell::new((crate::machine::Seq::default(), super::web_math::SurfaceHealth::default()))),
+        retry_due: Rc::new(Cell::new(None)),
+        proxy,
+    };
+    configure_surface(&side);
+    Ok(side)
 }
 
 /// The canvas's configuration for `size`, and the format the renderer draws in: the canvas's,
@@ -226,12 +240,91 @@ pub(super) fn reblend(side: &mut GpuSide, rt: &mut RuntimeCore) {
         reconfigure = true;
     }
     if reconfigure {
-        side.surface.configure(&side.gpu.device, &side.config);
+        configure_surface(side);
     }
     if side.renderer.format() != chosen.render {
         crate::window::rebuild_renderer_core(&side.gpu.device, &mut side.renderer, chosen.render, rt);
     }
     side.renderer.set_srgb_blend(chosen.srgb_blend());
+}
+
+/// Configures `side.surface` through the guarded web helper and updates `side.health` with its
+/// outcome (synchronously on WebGL2, asynchronously on WebGPU).
+pub(super) fn configure_surface(side: &GpuSide) {
+    use super::web_math::{CONFIGURE_MAX_FAILURES, SurfaceHealthEffect, SurfaceHealthEvent};
+    let attempt = {
+        let mut h = side.health.borrow_mut();
+        let (seq, state) = &mut *h;
+        let attempt = seq.next();
+        state.step(seq, SurfaceHealthEvent::Begin(attempt));
+        attempt
+    };
+    let health = side.health.clone();
+    let retry_due = side.retry_due.clone();
+    let proxy = side.proxy.clone();
+    crate::window::configure_then(&side.surface, &side.gpu, &side.config, move |res| {
+        let effects = {
+            let mut h = health.borrow_mut();
+            let (seq, state) = &mut *h;
+            state.step(seq, SurfaceHealthEvent::Outcome { attempt, error: res.err() })
+        };
+        for effect in effects {
+            match effect {
+                SurfaceHealthEffect::ReportFirst(err) => {
+                    web_sys::console::error_1(&format!("rune: web canvas surface refused configuration: {err}").into());
+                }
+                SurfaceHealthEffect::ReportGaveUp(err) => {
+                    web_sys::console::error_1(&format!(
+                        "rune: web canvas surface gave up after {CONFIGURE_MAX_FAILURES} failures, waiting for resize: {err}"
+                    ).into());
+                }
+                SurfaceHealthEffect::ScheduleRetry { attempt, delay } => {
+                    let retry_due = retry_due.clone();
+                    let proxy = proxy.clone();
+                    super::after(delay, move || {
+                        retry_due.set(Some(attempt));
+                        proxy.send_event(Wake::App).ok();
+                    });
+                }
+                SurfaceHealthEffect::Configure => {}
+            }
+        }
+    });
+}
+
+/// Runs a due configure retry if the surface is not suspended.
+pub(super) fn drain_configure_retry(side: &GpuSide, suspended: bool) {
+    if suspended { return; }
+    let Some(attempt) = side.retry_due.take() else { return };
+    let should_configure = {
+        let mut h = side.health.borrow_mut();
+        let (seq, state) = &mut *h;
+        state.step(seq, super::web_math::SurfaceHealthEvent::RetryDue(attempt))
+            .into_iter()
+            .any(|e| matches!(e, super::web_math::SurfaceHealthEffect::Configure))
+    };
+    if should_configure {
+        configure_surface(side);
+    }
+}
+
+pub(super) fn can_draw(side: &GpuSide) -> bool {
+    side.health.borrow().1.can_draw()
+}
+
+pub(super) fn on_presented(side: &GpuSide) {
+    let mut h = side.health.borrow_mut();
+    let (seq, state) = &mut *h;
+    state.step(seq, super::web_math::SurfaceHealthEvent::Presented);
+}
+
+/// Wakes a surface that was retrying or had given up so a resize can reconfigure it.
+pub(super) fn on_resized(side: &GpuSide) -> bool {
+    let was_blocked = !can_draw(side);
+    let mut h = side.health.borrow_mut();
+    let (seq, state) = &mut *h;
+    state.step(seq, super::web_math::SurfaceHealthEvent::Resized);
+    was_blocked
 }
 
 /// Acquires the next canvas texture, reconfiguring and retrying once on `Outdated`/`Lost`.
@@ -253,7 +346,10 @@ pub(super) fn acquire_texture(side: &mut GpuSide) -> Result<wgpu::SurfaceTexture
         match web_acquire_action(status, retries) {
             WebAcquireAction::UseTexture => return Ok(frame.expect("ready acquisition carries texture")),
             WebAcquireAction::ReconfigureAndRetry => {
-                side.surface.configure(&side.gpu.device, &side.config);
+                configure_surface(side);
+                if !can_draw(side) {
+                    return Err(crate::window::Missed::Occluded);
+                }
                 retries -= 1;
             }
             WebAcquireAction::Miss(missed) => return Err(missed),
