@@ -1,0 +1,1 @@
+- `rune-i18n`: `I18n::info`, `integer`, `decimal`, `list`, `plural`, `plural_format` and `plural_category` now fall back to the CLDR root locale (`und`) when a `Catalog` has no locales instead of panicking with an out-of-bounds index.

@@ -73,6 +73,15 @@ impl Formats {
         }
     }
 
+    pub(crate) fn root() -> Self {
+        Self {
+            locale: Locale::UNKNOWN,
+            plurals: OnceLock::new(),
+            decimal: OnceLock::new(),
+            list: OnceLock::new(),
+        }
+    }
+
     pub(crate) fn plural(&self, count: u64) -> PluralCategory {
         let rules = self.plurals.get_or_init(|| {
             PluralRules::try_new_cardinal((&self.locale).into())

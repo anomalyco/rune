@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::catalog::{Catalog, Key, LocaleInfo, PluralKey};
 use crate::format::{Formats, PluralCategory};
 
+const ROOT_LOCALE: LocaleInfo = LocaleInfo::new("und", "und", "und", false);
+
 /// A translator: the catalog, the current locale, and each locale's formatters once used. Apps
 /// keep one in a `static` and wrap it in macros that resolve keys at compile time.
 ///
@@ -37,7 +39,7 @@ impl I18n {
     }
 
     pub fn info(&self) -> LocaleInfo {
-        self.locales()[self.locale()]
+        self.locales().get(self.locale()).or_else(|| self.locales().first()).copied().unwrap_or(ROOT_LOCALE)
     }
 
     /// The index of the locale whose id is `id`.
@@ -126,7 +128,12 @@ impl I18n {
     }
 
     fn formats(&self) -> &Formats {
+        static ROOT: OnceLock<Formats> = OnceLock::new();
         let all = self.formats.get_or_init(|| self.locales().iter().map(|locale| Formats::new(locale.tag())).collect());
-        &all[self.locale().min(all.len().saturating_sub(1))]
+        all.get(self.locale()).or_else(|| all.first()).unwrap_or_else(|| ROOT.get_or_init(Formats::root))
     }
 }
+
+#[cfg(test)]
+#[path = "i18n_tests.rs"]
+mod tests;
