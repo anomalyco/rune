@@ -1,0 +1,1 @@
+- macOS: `PixelBuffer::info` (`rune-media`) now accepts AVFoundation's `"YCbCrMatrix#5"` (BT.470BG) and `"YCbCrMatrix#6"` (SMPTE 170M) YCbCr matrix attachments as `Matrix::Bt601`, fixing playback of H.264 videos encoded with `matrix_coefficients = 5` (such as ffmpeg/libx264 output) while continuing to reject BT.2020 and other unsupported matrices.

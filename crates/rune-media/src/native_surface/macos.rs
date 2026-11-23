@@ -105,6 +105,17 @@ impl PixelBuffer {
             Some(v) if unsafe { cf_equal(&v, kCVImageBufferYCbCrMatrix_ITU_R_601_4) } => Matrix::Bt601,
             // SAFETY: `kCVImageBufferYCbCrMatrix_ITU_R_709_2` is an immutable static `CFString` constant.
             Some(v) if unsafe { cf_equal(&v, kCVImageBufferYCbCrMatrix_ITU_R_709_2) } => Matrix::Bt709,
+            // ITU-T H.264 Table E-5 and ITU-T H.273 Table 4 define matrix_coefficients 5
+            // (BT.470BG / BT.601-7 625) as functionally the same as 6 (SMPTE 170M /
+            // BT.601-7 525), both using Kr = 0.299 and Kb = 0.114 (BT.601). CoreVideo has no
+            // named constant for code 5 and attaches "YCbCrMatrix#5" (and "YCbCrMatrix#6" if
+            // code 6 is not normalised to `kCVImageBufferYCbCrMatrix_ITU_R_601_4`).
+            Some(v)
+                if cf_equal(&v, &CFString::from_str("YCbCrMatrix#5"))
+                    || cf_equal(&v, &CFString::from_str("YCbCrMatrix#6")) =>
+            {
+                Matrix::Bt601
+            }
             _ => return Err("unsupported YCbCr matrix; use BT.601 or BT.709".into()),
         };
         // SAFETY: `b` is a live `CVPixelBuffer` and `kCVImageBufferTransferFunctionKey` is a static `CFString` constant.
@@ -328,3 +339,7 @@ fn check(status: i32, operation: &str) -> Result<(), String> {
 fn cf_equal(value: &CFType, string: &CFString) -> bool {
     value == AsRef::<CFType>::as_ref(string)
 }
+
+#[cfg(test)]
+#[path = "macos_tests.rs"]
+mod tests;
