@@ -539,3 +539,48 @@ fn linux_symbol_fallbacks_include_noto_sans_symbols_2() {
     assert!(pos("Noto Sans Symbols 2") < pos("Noto Color Emoji"));
     assert!(pos("Noto Sans Symbols2") < pos("Noto Color Emoji"));
 }
+
+/// Linux symbol fallbacks include Noto Sans right after DejaVu Sans so Latin combining marks
+/// Inter lacks (U+0322, U+0335, U+0336) resolve on Noto-only systems without DejaVu Sans.
+#[test]
+fn linux_symbol_fallbacks_include_noto_sans_after_dejavu() {
+    use std::sync::Arc;
+    use parley::fontique::{Blob, FontInfoOverride};
+
+    const FONT: &[u8] = include_bytes!("../../rune/assets/IBMPlexMono-Regular.ttf");
+
+    // Noto-only system (no DejaVu Sans): Noto Sans resolves ahead of symbol and emoji fonts.
+    let mut noto_only = Collection::new(CollectionOptions { shared: false, system_fonts: false });
+    for family in ["Noto Sans", "Noto Sans Symbols 2", "Noto Color Emoji"] {
+        noto_only.register_fonts(Blob::new(Arc::new(FONT)), Some(FontInfoOverride { family_name: Some(family), ..Default::default() }));
+    }
+    assert_eq!(
+        system_fonts::present_families(&mut noto_only, system_fonts::LINUX_SYMBOL_FAMILIES),
+        vec!["Noto Sans", "Noto Sans Symbols 2", "Noto Color Emoji"],
+    );
+
+    // When DejaVu Sans is also installed, it stays ahead of Noto Sans.
+    let mut both = Collection::new(CollectionOptions { shared: false, system_fonts: false });
+    for family in ["Noto Sans", "DejaVu Sans"] {
+        both.register_fonts(Blob::new(Arc::new(FONT)), Some(FontInfoOverride { family_name: Some(family), ..Default::default() }));
+    }
+    assert_eq!(
+        system_fonts::present_families(&mut both, system_fonts::LINUX_SYMBOL_FAMILIES),
+        vec!["DejaVu Sans", "Noto Sans"],
+    );
+
+    // File-name fragments match Noto Sans's upright regular or variable file without matching
+    // other Noto Sans* script families.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let matches_symbol_files = |file: &str| {
+            let name = system_fonts::font_file_name(std::path::Path::new(file)).unwrap();
+            system_fonts::LINUX_SYMBOL_FONT_FILES.iter().any(|frag| name.contains(frag))
+        };
+        assert!(matches_symbol_files("NotoSans-Regular.ttf"));
+        assert!(matches_symbol_files("NotoSans[wdth,wght].ttf"));
+        assert!(!matches_symbol_files("NotoSansArabic-Regular.ttf"));
+        assert!(!matches_symbol_files("NotoSansCJK-Regular.ttc"));
+        assert!(!matches_symbol_files("NotoSans-Italic.ttf"));
+    }
+}

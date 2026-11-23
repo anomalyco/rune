@@ -44,11 +44,14 @@ pub(crate) const SYMBOL_FONT_FILES: &[&str] = &["sfnsttf", "sfnsitalic", "apples
 #[cfg(windows)]
 pub(crate) const SYMBOL_FAMILIES: &[&str] = &["Segoe UI Emoji"];
 // DejaVu Sans lacks ⎋ (U+238B), which DejaVu Sans Mono has; `dejavusans` loads both files.
+// Noto Sans stands in where DejaVu isn't installed (Arch and its derivatives ship Noto alone):
+// without one of them, a Latin combining mark Inter lacks (U+0335, U+0322) draws as tofu.
 // Current Noto releases name Symbols 2 with a space ("Noto Sans Symbols 2"), while older packages
 // used "Noto Sans Symbols2"; list both so either matches fontique's family lookup.
 #[cfg_attr(any(target_vendor = "apple", windows), allow(dead_code))]
 pub(crate) const LINUX_SYMBOL_FAMILIES: &[&str] = &[
     "DejaVu Sans",
+    "Noto Sans",
     "Noto Sans Symbols 2",
     "Noto Sans Symbols2",
     "Noto Sans Symbols",
@@ -57,8 +60,18 @@ pub(crate) const LINUX_SYMBOL_FAMILIES: &[&str] = &[
 ];
 #[cfg(not(any(target_vendor = "apple", windows)))]
 pub(crate) const SYMBOL_FAMILIES: &[&str] = LINUX_SYMBOL_FAMILIES;
+// Only Noto Sans's upright regular file, static or variable, so other Noto Sans* script fonts
+// stay out when matching by file name.
+#[cfg_attr(any(target_vendor = "apple", windows), allow(dead_code))]
+pub(crate) const LINUX_SYMBOL_FONT_FILES: &[&str] = &[
+    "dejavusans",
+    "notosans-regular",
+    "notosans[",
+    "notosanssymbols",
+    "notocoloremoji",
+];
 #[cfg(not(any(target_vendor = "apple", windows)))]
-pub(crate) const SYMBOL_FONT_FILES: &[&str] = &["dejavusans", "notosanssymbols", "notocoloremoji"];
+pub(crate) const SYMBOL_FONT_FILES: &[&str] = LINUX_SYMBOL_FONT_FILES;
 
 // `Family::SystemMono`: the platform's monospaced UI families, most preferred first, and the
 // files they're in. SF Mono's family name is `.SF NS Mono`, as SF's is `.SF NS`.
@@ -568,7 +581,7 @@ fn walk_font_dirs() -> Vec<(String, std::path::PathBuf)> {
 
 /// `path`'s file name, lowercase without spaces and dots, when it's a font file Rune loads.
 #[cfg(not(target_arch = "wasm32"))]
-fn font_file_name(path: &std::path::Path) -> Option<String> {
+pub(crate) fn font_file_name(path: &std::path::Path) -> Option<String> {
     let name = path.file_name()?.to_string_lossy().to_lowercase();
     [".ttf", ".otf", ".ttc", ".otc"].iter().any(|ext| name.ends_with(ext)).then(|| name.replace([' ', '.'], ""))
 }
