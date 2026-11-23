@@ -6,12 +6,12 @@
 // descriptor while one is alive), so the hand-over no longer holds the GPU thread that also
 // presents the CPU canvas's frames.
 
-// Whether this browser's WebGPU has an async pipeline compile, before there's a device.
-// Requires `navigator.gpu`: when WebGPU is disabled by flag, `GPUDevice` may still exist while
-// the page falls back to WebGL2 (which compiles pipelines synchronously).
+// Whether this browser's WebGPU can be probed early after the first CPU frame because it
+// advertises `navigator.gpu.requestAdapter` and `createRenderPipelineAsync`. Only governs the
+// async WebGPU probe: if `requestAdapter` later returns no adapter, the Rust startup machine
+// still waits for a quiet window before starting synchronous WebGL2 setup.
 export function compilesAsync() {
-    return typeof globalThis.navigator?.gpu === 'object'
-        && globalThis.navigator.gpu !== null
+    return typeof globalThis.navigator?.gpu?.requestAdapter === 'function'
         && typeof globalThis.GPUDevice?.prototype?.createRenderPipelineAsync === 'function';
 }
 

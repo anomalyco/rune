@@ -1,0 +1,1 @@
+- Web: a CPU-first page whose WebGPU probe finds no adapter now waits for a quiet window (`250 ms` after non-ambient draws, up to `3 s`) before starting WebGL2 fallback, and WebGL2 setup yields a browser macrotask between `create_surface`, `request_adapter`, `request_device`, and `gpu_side` (`Renderer::new`) instead of running them in one unbroken task.

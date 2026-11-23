@@ -75,8 +75,10 @@ enum Wake {
     Start,
     /// The GPU came, or couldn't.
     Ready,
-    /// Time to see whether the page is quiet enough to start the GPU (`Browser::maybe_start_gpu`).
-    StartGpu,
+    /// Time to see whether the page is quiet enough to start the GPU (`Browser::gpu_startup_due`).
+    StartGpu(crate::machine::Attempt),
+    /// A CPU-first WebGPU probe failed; defer WebGL2 fallback until quiet or stay on CPU.
+    WebGpuFailed,
     App,
     /// A live value published: asks for a frame only while one is still pending.
     Live,
@@ -140,7 +142,8 @@ fn spawn(mut app: PendingApp) -> Result<(), String> {
     let resize_redraw = frame::ResizeRedraw::new(proxy.clone());
     event_loop.spawn_app(Browser { app: Some(app), shared, proxy, resize_redraw, window: None, embedded: false, document: false, owns_canvas: true,
         borrowed: page::Borrowed::default(), start: Start::GpuFirst, fonts: Rc::default(), pending: Rc::default(), warmed: Rc::default(), running: Rc::default(),
-        lost: Rc::default(), webgl_watch: None, webgl_restored: Rc::default(), webgl_restoring: false, waiting: None, first_at: None, drawn_at: None, gpu_asked: false });
+        lost: Rc::default(), webgl_watch: None, webgl_restored: Rc::default(), webgl_restoring: false, waiting: None,
+        gpu_startup: (crate::machine::Seq::default(), web_math::GpuStartup::default()), webgpu_err: Rc::default() });
     Ok(())
 }
 
@@ -184,12 +187,11 @@ struct Browser {
     /// browser task for each new control flow and aborts the last one's, so the same deadline
     /// isn't set again.
     waiting: Option<u64>,
-    /// For a page that starts on the CPU: when its first frame was presented, when it last drew
-    /// one that changed more than an ambient loop (a spinner's step), and whether the GPU was
-    /// asked for.
-    first_at: Option<Instant>,
-    drawn_at: Option<Instant>,
-    gpu_asked: bool,
+    /// For a page that starts on the CPU: schedules the early WebGPU probe and gates
+    /// synchronous GPU / WebGL2 setup on a quiet window after non-ambient draws.
+    gpu_startup: (crate::machine::Seq, web_math::GpuStartup),
+    /// Error from a failed CPU-first WebGPU probe, kept for the combined error if WebGL2 fails too.
+    webgpu_err: Rc<RefCell<Option<String>>>,
 }
 
 struct Running {
@@ -494,9 +496,9 @@ impl ApplicationHandler<Wake> for Browser {
             *slot.borrow_mut() = Some(loaded);
             proxy.send_event(Wake::Start).ok();
         });
-        // A page that starts on the CPU asks for the GPU once its first frames are up and it's
-        // quiet (`maybe_start_gpu`): asked at once, the browser's GPU process makes the adapter
-        // and compiles the renderer's pipelines while the first frame waits on it to show.
+        // A page that starts on the CPU asks for the GPU once its first frame is presented
+        // (`gpu_startup`): asked at once, the browser's GPU process makes the adapter and
+        // compiles the renderer's pipelines while the first frame waits on it to show.
         if self.start == Start::GpuFirst { self.ask_gpu(); }
     }
 
@@ -510,7 +512,8 @@ impl ApplicationHandler<Wake> for Browser {
                 self.start_app(event_loop);
                 self.gpu_came();
             }
-            Wake::StartGpu => self.maybe_start_gpu(),
+            Wake::StartGpu(attempt) => { self.gpu_startup_due(attempt); return; }
+            Wake::WebGpuFailed => { self.webgpu_probe_failed(); return; }
             Wake::App => self.hand_over_if_done(),
             Wake::Live => {
                 if let Some(r) = &mut *self.running.borrow_mut() && r.app.rt().live_pending() {
@@ -619,4 +622,23 @@ fn after(delay: Duration, f: impl FnOnce() + 'static) {
     if let Some(window) = web_sys::window() {
         window.set_timeout_with_callback_and_timeout_and_arguments_0(callback.unchecked_ref(), delay.as_millis().min(i32::MAX as u128) as i32).ok();
     }
+}
+
+/// Yields one browser macrotask (`setTimeout(0)`), letting the browser paint and handle input
+/// before the next synchronous step runs.
+async fn yield_turn() {
+    let promise = js_sys::Promise::new(&mut |resolve, _| {
+        let Some(window) = web_sys::window() else {
+            resolve.call0(&wasm_bindgen::JsValue::UNDEFINED).ok();
+            return;
+        };
+        let done = resolve.clone();
+        let callback = wasm_bindgen::closure::Closure::once_into_js(move || {
+            done.call0(&wasm_bindgen::JsValue::UNDEFINED).ok();
+        });
+        if window.set_timeout_with_callback_and_timeout_and_arguments_0(callback.unchecked_ref(), 0).is_err() {
+            resolve.call0(&wasm_bindgen::JsValue::UNDEFINED).ok();
+        }
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
 }
