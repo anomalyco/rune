@@ -93,9 +93,20 @@ impl Hunk {
         if count == 0 { start.saturating_add(1) } else { start.max(1) }
     }
 
-    /// One past the last line number the hunk covers on `side`.
-    pub(crate) fn end(&self, side: Side) -> u32 {
-        self.first(side).saturating_add(if side == Side::Old { self.old_count } else { self.new_count })
+    /// The first line number the hunk covers on `side`, in `u64` so a hunk at `u32::MAX`
+    /// never saturates before range checks.
+    pub(crate) fn first_u64(&self, side: Side) -> u64 {
+        let (start, count) = match side {
+            Side::Old => (self.old_start, self.old_count),
+            Side::New => (self.new_start, self.new_count),
+        };
+        if count == 0 { u64::from(start) + 1 } else { u64::from(start.max(1)) }
+    }
+
+    /// One past the last line number the hunk covers on `side`, in `u64` so a hunk at
+    /// `u32::MAX` still covers line `u32::MAX`.
+    pub(crate) fn end_u64(&self, side: Side) -> u64 {
+        self.first_u64(side) + u64::from(if side == Side::Old { self.old_count } else { self.new_count })
     }
 
     /// The header line as a patch writes it, `@@ -1,4 +1,5 @@ section`.
@@ -362,9 +373,9 @@ impl FileDiff {
         let (old, new) = (Rc::new(Source::new(&text(Side::Old))), Rc::new(Source::new(&text(Side::New))));
         let lines = std::mem::take(&mut self.hunks).pop().map(|h| h.lines).unwrap_or_default();
         let ranges = lines.iter().enumerate().filter(|(_, l)| l.kind != LineKind::Context).fold(Vec::<(usize, usize)>::new(), |mut out, (i, _)| {
-            let (start, end) = (i.saturating_sub(context as usize), (i + context as usize).min(lines.len() - 1));
+            let (start, end) = (i.saturating_sub(context as usize), i.saturating_add(context as usize).min(lines.len() - 1));
             match out.last_mut() {
-                Some(r) if start <= r.1 + 1 => r.1 = end,
+                Some(r) if start <= r.1.saturating_add(1) => r.1 = end,
                 _ => out.push((start, end)),
             }
             out
@@ -377,9 +388,9 @@ impl FileDiff {
                 let count = |side: Side| lines.iter().filter(|l| l.number(side).is_some()).count() as u32;
                 let (ob, nb, oc, nc) = (before(Side::Old, start), before(Side::New, start), count(Side::Old), count(Side::New));
                 Hunk {
-                    old_start: if oc == 0 { ob } else { ob + 1 },
+                    old_start: if oc == 0 { ob } else { ob.saturating_add(1) },
                     old_count: oc,
-                    new_start: if nc == 0 { nb } else { nb + 1 },
+                    new_start: if nc == 0 { nb } else { nb.saturating_add(1) },
                     new_count: nc,
                     section: section(&old, ob),
                     lines,
@@ -408,7 +419,7 @@ impl FileDiff {
         }
         let t = self.new_text.as_ref()?;
         let (added, removed) = (self.additions() as i64, self.deletions() as i64);
-        Some((i64::from(t.len()) - added + removed).max(0) as u32)
+        Some((i64::from(t.len()) - added + removed).clamp(0, i64::from(u32::MAX)) as u32)
     }
 
     /// The widest line it can show, in columns with tabs stopping every four.
@@ -420,7 +431,16 @@ impl FileDiff {
 
     /// The largest line number either side shows.
     pub(crate) fn last_line(&self) -> u32 {
-        let hunks = self.hunks.last().map_or(0, |h| h.end(Side::Old).max(h.end(Side::New)).saturating_sub(1));
+        let hunks = self
+            .hunks
+            .iter()
+            .map(|h| {
+                let end = h.end_u64(Side::Old).max(h.end_u64(Side::New)).saturating_sub(1).min(u64::from(u32::MAX)) as u32;
+                let lines = h.lines.iter().filter_map(|l| l.old.max(l.new)).max().unwrap_or(0);
+                end.max(lines)
+            })
+            .max()
+            .unwrap_or(0);
         let texts = [&self.old_text, &self.new_text].into_iter().flatten().map(|t| t.len()).max().unwrap_or(0);
         hunks.max(texts)
     }

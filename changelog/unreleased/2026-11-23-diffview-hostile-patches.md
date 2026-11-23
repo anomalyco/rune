@@ -1,0 +1,1 @@
+- `rune-kit` (`DiffView`, `DiffState`): checked hunk line arithmetic, `u64` hunk range lookups with an out-of-order fallback, chunked highlight bounds, and unique row-key disambiguation prevent panics on malformed patches with `u32::MAX`, overlapping, duplicate, zero-length, out-of-order, past-EOF, or count-mismatched hunks.

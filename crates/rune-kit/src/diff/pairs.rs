@@ -26,9 +26,10 @@ impl Hunk {
     /// The hunk's rows in split view: each line once, a paired removed line beside its added
     /// line ([`Line::pair`]), and every other line on a row of its own.
     pub fn split_rows(&self) -> impl Iterator<Item = SplitRow> + '_ {
-        self.lines.iter().enumerate().filter_map(|(i, l)| match (l.kind, l.pair) {
-            (LineKind::Added, Some(_)) => None,
-            (LineKind::Removed, Some(add)) => Some(SplitRow::Pair { del: i, add }),
+        let len = self.lines.len();
+        self.lines.iter().enumerate().filter_map(move |(i, l)| match (l.kind, l.pair) {
+            (LineKind::Added, Some(del)) if del < len => None,
+            (LineKind::Removed, Some(add)) if add < len => Some(SplitRow::Pair { del: i, add }),
             _ => Some(SplitRow::Line(i)),
         })
     }
@@ -87,7 +88,7 @@ fn push_run(lines: &mut Vec<Line>, run: &mut (Vec<Line>, Vec<Line>)) {
 fn blocks(removed: &[Line], added: &[Line]) -> Vec<(usize, usize)> {
     let (d, a) = (removed.len(), added.len());
     let (pairs, surplus) = (d.min(a), d.abs_diff(a));
-    if pairs == 0 || surplus == 0 || pairs * (surplus + 1) > MAX_COMPARISONS {
+    if pairs == 0 || surplus == 0 || pairs.saturating_mul(surplus.saturating_add(1)) > MAX_COMPARISONS {
         return vec![(d, a)];
     }
     let (removed, added): (Vec<Vec<u16>>, Vec<Vec<u16>>) = (removed.iter().map(stripped).collect(), added.iter().map(stripped).collect());
