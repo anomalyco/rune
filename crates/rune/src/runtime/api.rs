@@ -474,13 +474,13 @@ impl<S: 'static> Runtime<S> {
         let (core, mut app) = self.split_mut();
         core.web_focus_field(&mut app)
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(test, target_arch = "wasm32"))]
     #[inline(always)]
     pub(crate) fn web_edit_context(&mut self, mirror: &mut web_runtime::Mirror) -> Option<bool> {
         let (core, mut app) = self.split_mut();
         core.web_edit_context(&mut app, mirror)
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(test, target_arch = "wasm32"))]
     #[inline(always)]
     pub(crate) fn web_context(&self, mirror: &mut web_runtime::Mirror) -> bool { self.core().web_context(mirror) }
     #[cfg(any(test, target_arch = "wasm32"))]
@@ -494,9 +494,9 @@ impl<S: 'static> Runtime<S> {
     pub(crate) fn web_secure(&mut self, key: &str, text: String) { self.core_mut().web_secure(key, text); }
     #[cfg(any(test, target_arch = "wasm32"))]
     #[inline(always)]
-    pub(crate) fn web_edit(&mut self, event: &serde_json::Value) {
+    pub(crate) fn web_edit(&mut self, event: &serde_json::Value, mirror: &mut web_runtime::Mirror) {
         let (core, mut app) = self.split_mut();
-        core.web_edit(&mut app, event);
+        core.web_edit(&mut app, event, mirror);
     }
 
     // ── Test-only helpers called directly on `Runtime<S>` inside unit tests ───────────────────
