@@ -1,0 +1,1 @@
+- Runtime: `Runtime::presented` now resolves key paths such as `card-2/title` (skipping unkeyed wrappers), matching `Runtime::find`, `Runtime::contains`, and `Runtime::presented_pose` for both mounted and exiting elements.

@@ -410,9 +410,10 @@ impl RuntimeCore {
     }
 
     /// Drawn rect `[x, y, w, h]` in points and effective opacity (ancestors included) of the
-    /// element keyed `key`, exiting or not, as of the last frame.
+    /// element keyed `key` (or key path such as `card-2/title`), exiting or not, as of the last
+    /// frame.
     pub fn presented(&self, key: &str) -> Option<([f32; 4], f32)> {
-        let i = self.tree.index_of_key(key)?;
+        let i = self.tree.selects_index(key)?;
         Some((*self.paint.drawn.get(i)?, self.paint.inh_scratch.get(i)?.opacity))
     }
 

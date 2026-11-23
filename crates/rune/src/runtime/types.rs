@@ -742,11 +742,6 @@ impl TreeState {
     }
 
     #[inline]
-    pub(super) fn index_of_key(&self, key: &str) -> Option<usize> {
-        self.nodes.iter().position(|n| n.key.as_deref() == Some(key))
-    }
-
-    #[inline]
     pub(super) fn selects_index(&self, selector: &str) -> Option<usize> {
         self.nodes.iter().position(|n| crate::flight::selects(selector, &n.path, n.key.as_deref()))
     }
