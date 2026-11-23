@@ -1,0 +1,1 @@
+- Windows: a program that posts each key's down and up back to back (or all downs, then all ups) no longer loses letters: a key's own character that arrives while a later key waits for its own now types on its own, in order, instead of being appended to the later key's event and dropped.

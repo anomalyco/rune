@@ -226,6 +226,29 @@ impl KeyEventBuilder {
                             MessageAsKeyEvent { event: ev, is_synthetic: false },
                         ));
                     }
+                    // Rune: an earlier posted key's own character, arriving while a later key waits
+                    // for its own: the earlier key-down's event went out with no text (its key-up
+                    // came first), so this is that key's text. It types now, on its own, before the
+                    // waiting key's; appended to the waiting key it would be lost (that event types
+                    // by its own key). A real keyboard's character always follows its own key-down.
+                    let stray = msg_kind == WM_CHAR
+                        && self.building.lock().unwrap().is_some_and(|down| down != lparam)
+                        && claim_untyped_copy(&mut self.translated.lock().unwrap(), lparam, Instant::now());
+                    if stray {
+                        drop(event_info);
+                        let pending_token = self.pending.add_pending();
+                        *result = ProcResult::Value(0);
+                        let mut pending_high = self.pending_high_surrogate.lock().unwrap();
+                        let Some(text) = bare_char_text(&mut pending_high, wparam, ime_composing)
+                        else {
+                            return MatchResult::TokenToRemove(pending_token);
+                        };
+                        let ev = standalone_char_event(text, false);
+                        return MatchResult::MessagesToDispatch(self.pending.complete_pending(
+                            pending_token,
+                            MessageAsKeyEvent { event: ev, is_synthetic: false },
+                        ));
+                    }
                     let pending_token = self.pending.add_pending();
                     *result = ProcResult::Value(0);
                     if let Some(ev_info) = event_info.as_mut() {
@@ -752,6 +775,17 @@ fn bare_char_is_copy(list: &mut VecDeque<Translated>, wparam: WPARAM, lparam: LP
     false
 }
 
+/// Rune: whether a `WM_CHAR` that arrives while another key-down waits for its own character is
+/// the copy of an earlier remembered key-down that typed nothing (oldest first): that entry is
+/// claimed, and the character is that key's text. Any other `lParam`, or an entry older than a
+/// second, matches nothing.
+fn claim_untyped_copy(list: &mut VecDeque<Translated>, lparam: LPARAM, now: Instant) -> bool {
+    list.retain(|t| now.saturating_duration_since(t.at) < TRANSLATED_FOR);
+    let Some(i) = list.iter().position(|t| t.lparam == lparam && t.typed.is_none()) else { return false };
+    list.remove(i);
+    true
+}
+
 /// Rune: appends a `WM_CHAR` `wparam` (UTF-16 surrogate unit or Unicode scalar) onto
 /// `utf16parts`.
 fn append_wparam_utf16(wparam: WPARAM, utf16parts: &mut Vec<u16>) {
@@ -1197,6 +1231,53 @@ mod rune_posted_key_handler_tests {
         assert!(b.translated.lock().unwrap().is_empty());
         // So a copy arriving after focus came back types as text.
         assert_eq!(feed(&b, &[(WM_CHAR, H, lp(0x23))]), "h");
+    }
+
+    const VK_L: usize = 0x4c;
+    const VK_O: usize = 0x4f;
+    const L: usize = 'l' as usize;
+    const O: usize = 'o' as usize;
+
+    #[test]
+    fn an_earlier_key_s_copy_that_reaches_a_waiting_key_types_on_its_own() {
+        // The order a driver's back-to-back down + up made (typing run 09:51, rep Aauto 1, was
+        // `hllo`): E's event goes out with no text (its key-up came first); L's key-down waits for
+        // a WM_CHAR, and E's copy arrives before L's own.
+        let b = KeyEventBuilder::default();
+        let typed = feed(&b, &[
+            (WM_KEYDOWN, VK_H, lp(0x23)), (WM_CHAR, H, lp(0x23)), (WM_KEYUP, VK_H, up(0x23)),
+            (WM_KEYDOWN, VK_E, lp(0x12)), (WM_KEYUP, VK_E, up(0x12)),
+            (WM_KEYDOWN, VK_L, lp(0x26)), (WM_CHAR, E, lp(0x12)), (WM_CHAR, L, lp(0x26)), (WM_KEYUP, VK_L, up(0x26)),
+        ]);
+        assert_eq!(typed, "hel");
+    }
+
+    #[test]
+    fn all_downs_then_all_ups_with_late_copies_type_every_letter_in_order() {
+        // The order of rep A2 3 of the same run (was `heo`): both L key-downs go out with no text,
+        // O's waits, and both L copies arrive before O's own character.
+        let b = KeyEventBuilder::default();
+        let typed = feed(&b, &[
+            (WM_KEYDOWN, VK_H, lp(0x23)), (WM_CHAR, H, lp(0x23)),
+            (WM_KEYDOWN, VK_E, lp(0x12)), (WM_CHAR, E, lp(0x12)),
+            (WM_KEYDOWN, VK_L, lp(0x26)), (WM_KEYDOWN, VK_L, lp(0x26)), (WM_KEYDOWN, VK_O, lp(0x18)),
+            (WM_CHAR, L, lp(0x26)), (WM_CHAR, L, lp(0x26)), (WM_CHAR, O, lp(0x18)),
+            (WM_KEYUP, VK_H, up(0x23)), (WM_KEYUP, VK_E, up(0x12)), (WM_KEYUP, VK_L, up(0x26)),
+            (WM_KEYUP, VK_L, up(0x26)), (WM_KEYUP, VK_O, up(0x18)),
+        ]);
+        assert_eq!(typed, "hello");
+    }
+
+    #[test]
+    fn the_same_key_s_copy_reaching_its_own_next_press_still_types_twice() {
+        // L down (no text, its up first), then L down again waiting: the first L's copy has the
+        // waiting key's own lParam, so it joins that event; the second L's copy comes bare and types.
+        let b = KeyEventBuilder::default();
+        let typed = feed(&b, &[
+            (WM_KEYDOWN, VK_L, lp(0x26)), (WM_KEYUP, VK_L, up(0x26)),
+            (WM_KEYDOWN, VK_L, lp(0x26)), (WM_CHAR, L, lp(0x26)), (WM_KEYUP, VK_L, up(0x26)), (WM_CHAR, L, lp(0x26)),
+        ]);
+        assert_eq!(typed, "ll");
     }
 }
 
