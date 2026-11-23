@@ -95,6 +95,9 @@ pub struct SurfaceRenderer {
     timing_queue: std::sync::OnceLock<Arc<wgpu::Queue>>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) completion: completion::CompletionWorker,
+    /// Timestamp resolves a completion callback couldn't submit yet (`completion::Parked`).
+    #[cfg(not(target_arch = "wasm32"))]
+    resolves: Arc<completion::Parked<completion::Resolve>>,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     device: wgpu::Device,
     timing_pool: Option<Arc<TimingPool>>,
@@ -209,7 +212,8 @@ impl SurfaceRenderer {
                 free: std::sync::Mutex::new((0..TIMING_SLOTS).map(|i| i * 2).collect()),
             })
         });
-        let completion = completion::CompletionWorker::spawn(device.clone());
+        let resolves = Arc::new(completion::Parked::default());
+        let completion = completion::CompletionWorker::spawn(device.clone(), resolves.clone());
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("video linear"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -219,6 +223,7 @@ impl SurfaceRenderer {
         Self {
             timing_queue: std::sync::OnceLock::new(),
             completion,
+            resolves,
             device: device.clone(),
             timing_pool,
             queries: None,
