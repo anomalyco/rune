@@ -229,6 +229,10 @@ impl RuntimeCore {
     /// its window would at rest: `Cx::titlebar_inset`, `Cx::chrome_insets` and the caption
     /// buttons. Returns the frame the headless traffic-light checks see.
     pub(crate) fn headless_chrome(&mut self, chrome: crate::Chrome, titlebar: Option<crate::Titlebar>, borderless: bool) -> crate::Chrome {
+        self.headless_chrome_with(chrome, titlebar, borderless, crate::labels::rtl())
+    }
+
+    fn headless_chrome_with(&mut self, chrome: crate::Chrome, titlebar: Option<crate::Titlebar>, borderless: bool, rtl: bool) -> crate::Chrome {
         let titlebar = titlebar.filter(|_| !borderless);
         self.host.titlebar.headless = titlebar.map(|t| (chrome, t));
         let titlebar = titlebar.map(|t| self.host.titlebar.set.over(t));
@@ -238,10 +242,15 @@ impl RuntimeCore {
         };
         let inset = if borderless { 0.0 } else { chrome.titlebar_inset() };
         self.set_titlebar_inset(inset);
-        let caption = titlebar.filter(|_| cfg!(target_os = "windows")).map(|t| crate::titlebar::Caption::new(t.height()));
+        let caption = titlebar.filter(|_| cfg!(target_os = "windows")).map(|t| {
+            let mut caption = crate::titlebar::Caption::new(t.height());
+            caption.mirrored = rtl;
+            caption
+        });
         let height = titlebar.filter(|_| cfg!(any(target_os = "macos", target_os = "windows"))).map_or(0.0, |t| t.height());
         let leading = if cfg!(target_os = "macos") { inset } else { 0.0 };
-        let trailing = caption.map_or(0.0, |c| c.width(self.env.scale));
+        let buttons = caption.map_or(0.0, |c| c.width(self.env.scale));
+        let (leading, trailing) = if caption.is_some_and(|c| c.mirrored) { (leading + buttons, 0.0) } else { (leading, buttons) };
         self.set_chrome_insets(crate::ChromeInsets::new(leading, trailing, height));
         self.set_caption(caption);
         chrome
@@ -319,3 +328,7 @@ impl RuntimeCore {
             && n.handlers.drag_out.is_none() && self.textbox_input(t).is_none()
     }
 }
+
+#[cfg(test)]
+#[path = "titlebar_tests.rs"]
+mod tests;
