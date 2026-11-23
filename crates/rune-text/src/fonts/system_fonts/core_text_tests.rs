@@ -73,3 +73,28 @@ fn public_family_cache_bounds_entries_and_bytes() {
     assert_eq!(byte_cache.get("/big/0.ttc"), None);
     assert_eq!(byte_cache.get("/big/19.ttc"), Some(Some(big_val)));
 }
+
+/// Unassigned code points and noncharacters have no covering font: CoreText answers with
+/// `.LastResort`, which `fallback_family_files` must skip without adding `LastResort.otf` or
+/// scanning its descriptors.
+#[test]
+fn uncovered_chars_skip_last_resort() {
+    let uncovered = ['\u{0378}', '\u{FDD0}'];
+    let mut scans = 0usize;
+    let files = fallback_family_files_with(&uncovered, None, |font| {
+        scans += 1;
+        public_family(font)
+    });
+    assert!(files.is_empty(), "uncovered chars must not add LastResort or other fallback files: {files:?}");
+    assert_eq!(scans, 0, "LastResort must be skipped before calling public_family");
+}
+
+/// Real fallback symbols (such as `⏵`) still resolve their font files even when mixed with an
+/// uncovered code point, without pulling LastResort along.
+#[test]
+fn symbol_resolves_without_last_resort_beside_uncovered_char() {
+    let symbol = fallback_family_files(&['⏵'], None);
+    assert!(!symbol.is_empty(), "symbol fallback should find a system font for ⏵");
+    let mixed = fallback_family_files(&['\u{0378}', '\u{FDD0}', '⏵'], None);
+    assert_eq!(mixed, symbol, "uncovered chars must not add files beside a real fallback symbol");
+}

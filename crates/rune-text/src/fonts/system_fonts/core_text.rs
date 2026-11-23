@@ -91,9 +91,10 @@ fn fallback_family_files_with(
             let font = CTFont::for_string_with_language(&base, &text, range, language.as_deref());
             let family = font.family_name().to_string();
             // The system font itself (`.AppleSystemUIFont`, which is hidden too) already covered
-            // the character. Check before `resolve_public`, which reads every face name in the
-            // file (369 faces in `SFNS.ttf`).
-            if family == base_name || seen.contains(&family) { continue; }
+            // the character, and `.LastResort` means no installed font covers it (loading it as a
+            // fallback face would box every later fallback symbol). Check both before
+            // `resolve_public`, which reads every face name in the file (369 faces in `SFNS.ttf`).
+            if family == base_name || family.trim_start_matches('.') == "LastResort" || seen.contains(&family) { continue; }
             seen.push(family.clone());
             // PingFang (CoreText's Chinese fallback) draws with `hvgl` outlines, which no
             // outline reader here can draw: Chinese takes Hiragino Sans GB, or Heiti TC for
