@@ -1,0 +1,1 @@
+- Web: `Tx::open_url_same_tab` and `rune::platform::web::open_url_same_tab` now refuse scheme-relative links starting with `//` with `OpenUrlError::Invalid`, matching native builds instead of treating them as relative paths and navigating off-origin.
