@@ -455,11 +455,8 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
             done.send(rune_core::time::now()).ok();
         });
         renderer.submit(&gpu.queue, encoder);
-        // The worker has taken submit's wakeup once its one-slot channel has room again: it is
-        // in its polling loop, which only leaves once the queue is empty.
-        while renderer.completion.try_send(()).is_err() {
-            std::thread::yield_now();
-        }
+        // Wait until the worker has taken submit's wakeup and entered its polling loop.
+        renderer.completion.wait_polling();
         std::thread::sleep(Duration::from_millis(1));
         let (outcome, finished) = if let Ok(at) = completed.try_recv() {
             ("finished before the probe", at)

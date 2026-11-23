@@ -371,7 +371,7 @@ impl SurfaceRenderer {
             // Weak: the queue keeps this closure until it runs, and a queue held by it would keep
             // the queue (and the closure) alive for good if its device is lost first.
             let queue = Arc::downgrade(self.timing_queue.get_or_init(|| Arc::new(queue.clone())));
-            let completion = self.completion.clone();
+            let completion = self.completion.waker();
             // Metal counter resolves can race the render pass's final fragment sample when
             // encoded into the same command buffer. Resolve after its completion fence; this
             // is timestamp metadata only, never a readback or wait on the video pixel path.
@@ -413,7 +413,7 @@ impl SurfaceRenderer {
                     }
                 });
                 queue.submit([timestamps.finish()]);
-                completion.try_send(()).ok();
+                completion.wake();
             });
         } else {
             encoder.on_submitted_work_done(move || {
@@ -425,7 +425,7 @@ impl SurfaceRenderer {
         }
         let index = queue.submit([encoder.finish()]);
         self.release_decoded(queue);
-        self.completion.try_send(()).ok();
+        self.completion.wake();
         index
     }
 

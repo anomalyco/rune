@@ -1,3 +1,5 @@
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) mod completion;
 mod frame;
 
 use super::*;
@@ -88,16 +90,16 @@ impl Drop for TimingSlot {
 /// Standalone pipeline, also used by Rune's renderer. A frame must be submitted through `submit`
 /// for timing notifications; texture lifetimes are safe even with ordinary wgpu submission.
 pub struct SurfaceRenderer {
+    /// The queue timestamp resolves go to, held here so their callbacks hold it weakly.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    timing_queue: std::sync::OnceLock<Arc<wgpu::Queue>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) completion: completion::CompletionWorker,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     device: wgpu::Device,
     timing_pool: Option<Arc<TimingPool>>,
     queries: Option<Arc<TimingSlot>>,
     queries_used: std::sync::atomic::AtomicBool,
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    pub(super) completion: std::sync::mpsc::SyncSender<()>,
-    /// The queue timestamp resolves go to, held here so their callbacks hold it weakly.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    timing_queue: std::sync::OnceLock<Arc<wgpu::Queue>>,
     pipeline: wgpu::RenderPipeline,
     format: wgpu::TextureFormat,
     extra: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
@@ -122,6 +124,18 @@ pub struct SurfaceRenderer {
     #[cfg(target_os = "linux")]
     dmabuf: Option<linux::Importer>,
 }
+impl Drop for SurfaceRenderer {
+    fn drop(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Release the queue before joining so any in-flight completion callback won't submit
+            // another timestamp resolve to a renderer that is going away.
+            self.timing_queue.take();
+            self.completion.stop();
+        }
+    }
+}
+
 impl SurfaceRenderer {
     #[cfg(target_arch = "wasm32")]
     pub fn new(_: &wgpu::Device, _: wgpu::TextureFormat) -> Self {
@@ -195,26 +209,7 @@ impl SurfaceRenderer {
                 free: std::sync::Mutex::new((0..TIMING_SLOTS).map(|i| i * 2).collect()),
             })
         });
-        let (completion, receiver) = std::sync::mpsc::sync_channel(1);
-        let poll_device = device.clone();
-        std::thread::Builder::new()
-            .name("rune-video-completion".into())
-            .spawn(move || {
-                // Nonblocking poll releases wgpu's snatch lock before sleeping. A fence wait here
-                // would keep that read lock and serialize queue.present's write lock behind GPU work.
-                // Wakeups are coalesced; the final frame still completes after the window goes idle.
-                // A lost device's work never finishes: the worker stops rather than poll it forever.
-                while receiver.recv().is_ok() {
-                    loop {
-                        match rune_gpu::health::poll(&poll_device, wgpu::PollType::Poll) {
-                            Ok(wgpu::PollStatus::QueueEmpty) => break,
-                            Ok(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
-                            Err(_) => return,
-                        }
-                    }
-                }
-            })
-            .expect("video completion thread");
+        let completion = completion::CompletionWorker::spawn(device.clone());
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("video linear"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -222,12 +217,12 @@ impl SurfaceRenderer {
             ..Default::default()
         });
         Self {
+            timing_queue: std::sync::OnceLock::new(),
+            completion,
             device: device.clone(),
             timing_pool,
             queries: None,
             queries_used: std::sync::atomic::AtomicBool::new(false),
-            completion,
-            timing_queue: std::sync::OnceLock::new(),
             pipeline,
             format,
             extra: Vec::new(),
