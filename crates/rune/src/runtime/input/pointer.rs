@@ -491,7 +491,7 @@ impl RuntimeCore {
             self.frame.queue.push(Action::Drag(path.clone(), Drag { phase: Phase::Up, x: lx, y: ly, dx, dy, window: [x, y], screen: self.screen_at(x, y), ..d }, button));
         }
         if let Some(k) = link.filter(|_| inside) { self.link_up(&path, k, x, y, button); }
-        if has_press && inside && !selected && !pressed_on_down {
+        if has_press && inside && !selected && !pressed_on_down && !(has_drag && moved) {
             self.frame.queue.push(Action::Press(path.clone(), button, held.touch));
         }
         if middle_press && inside {

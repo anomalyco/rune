@@ -236,8 +236,8 @@ impl Reference {
                 let released = if click.forgotten { self.runtime_at } else { click.at };
                 self.position(released, &mut expect);
                 if let Some(drag) = self.drag.take() {
-                    expect.extend([Heard::Up(released), Heard::Press]);
-                    if drag.moved { self.run = None; }
+                    expect.push(Heard::Up(released));
+                    if drag.moved { self.run = None; } else { expect.push(Heard::Press); }
                 }
                 let holding = self.live().any(|click| click.down);
                 self.holding = holding;
@@ -304,7 +304,7 @@ impl Reference {
             } else {
                 let own = dispatched.is_some_and(|click| !click.down && click.press == press) && letter == Letter::MouseUp;
                 if !own || press <= self.given_up { return Err(("no-drop-after-cancel", format!("press {press} ended normally after losing its release"))); }
-                dropped = true;
+                dropped = !moved;
             }
             self.open = None;
         }

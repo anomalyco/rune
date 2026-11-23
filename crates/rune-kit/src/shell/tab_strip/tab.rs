@@ -428,6 +428,7 @@ pub(super) fn drag_move(
     want_tear_move: bool,
     tx: &mut Tx,
 ) -> Option<TabTearMove> {
+    drag.note_travel([d.dx, d.dy]);
     // A strip that neither reorders nor lets a tab tear out (`TabStrip::tear_out`) only
     // selects: its tabs stay put under a drag.
     if !can_reorder && t.lane.tear.is_none() {
@@ -458,6 +459,7 @@ pub(super) fn drag_move(
 }
 
 pub(super) fn drag_up(drag: &mut TabDragState, d: &Drag, select_early: bool, tx: &mut Tx) -> Release {
+    drag.note_travel([d.dx, d.dy]);
     let on_tab = (0.0..=d.w).contains(&d.x) && (0.0..=d.h).contains(&d.y);
     // A press already selected the tab; its click needn't again.
     let release = drag.release(d.cancelled(), on_tab, select_early && on_tab);

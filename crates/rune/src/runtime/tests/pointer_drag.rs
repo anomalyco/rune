@@ -793,3 +793,56 @@ fn a_held_drag_follows_a_keyed_element_across_sibling_path_changes() {
     assert_eq!(rt.state.first_ended, [true], "removed first knob ends cancelled");
     assert!(rt.state.second_ended.is_empty(), "existing second knob must not inherit the drag");
 }
+
+#[test]
+fn a_drag_past_slop_suppresses_on_press_while_clicks_and_plain_buttons_still_press() {
+    #[derive(Default)]
+    struct S { drags: Vec<(Phase, bool)>, drag_presses: u32, plain_presses: u32 }
+    fn view(_: &S, _: &mut Cx<S>) -> El {
+        col().size(200.0, 200.0)
+            .child(el().key("row").size(100.0, 40.0)
+                .on_drag(|s: &mut S, d, _| s.drags.push((d.phase, d.cancelled())))
+                .on_press(|s: &mut S| s.drag_presses += 1))
+            .child(el().key("btn").size(100.0, 40.0)
+                .on_press(|s: &mut S| s.plain_presses += 1))
+    }
+    let mut rt = Runtime::new(S::default(), view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    // Drag 20 pt and return to the start inside the row: Up fires, on_press does not.
+    rt.pointer_down(10.0, 10.0);
+    rt.pointer_move(30.0, 10.0);
+    rt.pointer_move(10.0, 10.0);
+    rt.pointer_up(10.0, 10.0);
+    rt.frame(0.0);
+    assert_eq!(rt.state.drags.last(), Some(&(Phase::Up, false)));
+    assert_eq!(rt.state.drag_presses, 0, "a drag returning inside its element must not fire on_press");
+
+    // Drag past slop and release elsewhere inside the row: still no on_press.
+    rt.pointer_down(10.0, 10.0);
+    rt.pointer_move(15.0, 10.0);
+    rt.pointer_up(15.0, 10.0);
+    rt.frame(0.0);
+    assert_eq!(rt.state.drags.last(), Some(&(Phase::Up, false)));
+    assert_eq!(rt.state.drag_presses, 0, "dragging past CLICK_SLOP suppresses on_press");
+
+    // Click within slop (including on the slop boundary) still fires on_press.
+    rt.pointer_down(10.0, 10.0);
+    rt.pointer_move(13.0, 12.0);
+    rt.pointer_up(13.0, 12.0);
+    rt.frame(0.0);
+    assert_eq!(rt.state.drag_presses, 1, "a press within slop fires on_press");
+
+    rt.pointer_down(10.0, 10.0);
+    rt.pointer_move(10.0 + CLICK_SLOP, 10.0 + CLICK_SLOP);
+    rt.pointer_up(10.0 + CLICK_SLOP, 10.0 + CLICK_SLOP);
+    rt.frame(0.0);
+    assert_eq!(rt.state.drag_presses, 2, "at the slop boundary it is still a press");
+
+    // A plain button without on_drag still presses after moving 20 pt inside it.
+    rt.pointer_down(10.0, 50.0);
+    rt.pointer_move(30.0, 50.0);
+    rt.pointer_up(30.0, 50.0);
+    rt.frame(0.0);
+    assert_eq!(rt.state.plain_presses, 1, "a plain on_press button still fires after moving inside it");
+}
