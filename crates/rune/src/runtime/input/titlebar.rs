@@ -236,11 +236,17 @@ impl RuntimeCore {
         let titlebar = titlebar.filter(|_| !borderless);
         self.host.titlebar.headless = titlebar.map(|t| (chrome, t));
         let titlebar = titlebar.map(|t| self.host.titlebar.set.over(t));
-        let chrome = match titlebar {
-            Some(t) if cfg!(target_os = "macos") => t.mac_chrome(chrome),
-            _ => chrome,
+        // A borderless window has no title bar and no traffic lights, even under `Chrome::DEFAULT`
+        // or explicit `Chrome::traffic_lights`.
+        let chrome = if borderless {
+            crate::Chrome { full_size_content: false, traffic_lights: None, ..chrome }
+        } else {
+            match titlebar {
+                Some(t) if cfg!(target_os = "macos") => t.mac_chrome(chrome),
+                _ => chrome,
+            }
         };
-        let inset = if borderless { 0.0 } else { chrome.titlebar_inset() };
+        let inset = chrome.titlebar_inset();
         self.set_titlebar_inset(inset);
         let caption = titlebar.filter(|_| cfg!(target_os = "windows")).map(|t| {
             let mut caption = crate::titlebar::Caption::new(t.height());

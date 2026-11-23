@@ -91,3 +91,40 @@ fn chrome_overlay_mirrors_traffic_lights_and_overlap_zone_in_rtl() {
     assert_eq!(ltr_hits.len(), 1, "LTR overlap check should flag only left-btn: {ltr_hits:?}");
     assert!(ltr_hits[0].0.contains("left-btn"), "expected left-btn overlap, got {ltr_hits:?}");
 }
+
+#[test]
+fn headless_chrome_overlay_paints_nothing_over_borderless_window() {
+    let _turn = super::tests::HEADLESS.lock().unwrap_or_else(|e| e.into_inner());
+    let snap = std::env::temp_dir().join(format!("rune-borderless-chrome-{}.png", std::process::id()));
+    let run = |chrome: crate::Chrome, titlebar: Option<crate::Titlebar>| {
+        let spec = crate::AppSpec::new("borderless", (120.0, 40.0), || (), |_, _| {
+            crate::el().w_full().h_full().fill(crate::Color::BLACK)
+        });
+        let mut app = crate::App::new(spec)
+            .chrome(chrome)
+            .window_options(crate::WindowOptions { borderless: true, ..Default::default() });
+        if let Some(titlebar) = titlebar {
+            app = app.titlebar(titlebar);
+        }
+        super::headless(app, super::Args {
+            snap: Some(snap.clone()),
+            chrome_overlay: true,
+            scale: Some(1.0),
+            ..Default::default()
+        });
+        let img = image::open(&snap).unwrap().into_rgba8();
+        std::fs::remove_file(&snap).unwrap();
+        img
+    };
+
+    let custom = crate::Chrome { full_size_content: true, traffic_lights: Some((16.0, 12.0)), drag_regions: true };
+    for (label, chrome, titlebar) in [
+        ("default chrome", crate::Chrome::DEFAULT, None),
+        ("explicit traffic lights and titlebar", custom, Some(crate::Titlebar::new(36.0))),
+    ] {
+        let img = run(chrome, titlebar);
+        assert_eq!(img.dimensions(), (120, 40));
+        let painted = img.pixels().find(|p| p.0 != [0, 0, 0, 255]);
+        assert!(painted.is_none(), "{label}: borderless --chrome must paint no traffic lights, found {painted:?}");
+    }
+}
