@@ -145,3 +145,171 @@ fn changed_order_check_handles_inserts_deletes_duplicates_and_reorders() {
     let swapped = [r(0.0), r(60.0), r(30.0), r(90.0)];
     assert_eq!(changed(&old, &swapped, size, &mut s), Area::All);
 }
+
+#[test]
+fn glyph_atlas_changes_force_full_redraw_without_breaking_partial_updates() {
+    let size = (400, 200);
+    let clear = [0.0, 0.0, 0.0, 1.0];
+    let swap = 1;
+    let glyph = |x: f32, uv: [f32; 4]| Instance {
+        rect: [x, 20.0, 16.0, 16.0],
+        fill: [1.0; 4],
+        params: [0.0, KIND_GLYPH, 0.0, 1.0],
+        uv,
+        clip: NO_CLIP,
+        ..Instance::zeroed()
+    };
+    let caret = |x: f32| Instance {
+        rect: [x, 20.0, 2.0, 16.0],
+        fill: [1.0; 4],
+        params: [0.0, KIND_RECT, 0.0, 1.0],
+        clip: NO_CLIP,
+        ..Instance::zeroed()
+    };
+
+    let mut rt = crate::Runtime::new((), |_, _| crate::el().size(200.0, 100.0), (200.0, 100.0), crate::Env::new(false, 2.0));
+    let text = &mut rt.text;
+    let base_instances = [glyph(10.0, [1.0, 1.0, 16.0, 16.0]), caret(30.0)];
+
+    // First frame always draws whole and records the baseline atlas state.
+    let mut damage = Damage::default();
+    assert!(matches!(
+        damage.plan(&base_instances, size, clear, swap, GlyphAtlas::of(&text.atlas), true),
+        Plan::All(_)
+    ));
+
+    // Unchanged instances and clean atlas keep the 1x1 partial present.
+    assert_eq!(
+        damage.plan(&base_instances, size, clear, swap, GlyphAtlas::of(&text.atlas), true),
+        Plan::Part { draw: vec![[0, 0, 1, 1]], present: vec![[0, 0, 1, 1]] }
+    );
+
+    // Dirty CPU rows on page 0 with unchanged instances must draw whole.
+    text.atlas.dirty = Some((0, 16));
+    assert!(
+        matches!(damage.plan(&base_instances, size, clear, swap, GlyphAtlas::of(&text.atlas), true), Plan::All(_)),
+        "dirty page 0 glyph rows with unchanged instances must redraw whole"
+    );
+    text.atlas.dirty = None;
+
+    // GPU-filled glyph advances `rasterized` and queues fills without marking CPU rows dirty.
+    text.atlas.outlines.set_support(crate::text::outline::Support::Drawn);
+    let mut quads = Vec::new();
+    let rasterized_before = text.atlas.rasterized();
+    text.glyphs("A", crate::TextStyle::new(16.0, 400.0), 2.0, [0.0, 0.0], &mut quads);
+    assert!(text.atlas.rasterized() > rasterized_before, "expected glyph rasterization");
+    assert!(text.atlas.dirty.is_none(), "GPU-filled masks leave CPU rows clean");
+    assert!(text.atlas.has_pending_fills(), "expected queued GPU fill");
+
+    // Typing a new glyph whose instance was added stays partial (no eviction occurred).
+    let with_new_glyph = [base_instances[0], base_instances[1], glyph(50.0, [20.0, 1.0, 16.0, 16.0])];
+    assert!(
+        matches!(damage.plan(&with_new_glyph, size, clear, swap, GlyphAtlas::of(&text.atlas), true), Plan::Part { .. }),
+        "adding a newly rasterized glyph without eviction must stay partial"
+    );
+    assert!(!text.atlas.take_fills().is_empty());
+
+    // GPU-filled glyph with unchanged instances must draw whole (both before and after fills drain).
+    text.glyphs("B", crate::TextStyle::new(16.0, 400.0), 2.0, [0.0, 0.0], &mut quads);
+    assert!(text.atlas.dirty.is_none() && text.atlas.has_pending_fills());
+    let before_drain = GlyphAtlas::of(&text.atlas);
+    assert!(!text.atlas.take_fills().is_empty());
+    let after_drain = GlyphAtlas::of(&text.atlas);
+    assert!(!after_drain.pending_fills && !after_drain.dirty_rows);
+
+    let mut d_before = Damage::default();
+    let baseline = GlyphAtlas { resets: before_drain.resets, rasterized: before_drain.rasterized - 1, dirty_rows: false, pending_fills: false };
+    let _ = d_before.plan(&with_new_glyph, size, clear, swap, baseline, true);
+    assert!(
+        matches!(d_before.plan(&with_new_glyph, size, clear, swap, before_drain, true), Plan::All(_)),
+        "pending GPU fills with unchanged instances must redraw whole"
+    );
+
+    let mut d_after = Damage::default();
+    let _ = d_after.plan(&with_new_glyph, size, clear, swap, baseline, true);
+    assert!(
+        matches!(d_after.plan(&with_new_glyph, size, clear, swap, after_drain, true), Plan::All(_)),
+        "new glyph rasterization with unchanged instances must redraw whole even after fills drain"
+    );
+
+    // Re-queued fills without advancing `rasterized` (e.g. `rows_uploaded`) must draw whole
+    // both when instances are unchanged and when another instance (like a caret) moves.
+    let _ = damage.plan(&with_new_glyph, size, clear, swap, GlyphAtlas::of(&text.atlas), true);
+    text.atlas.rows_uploaded(0, (0, crate::text::ATLAS_SIZE));
+    assert!(text.atlas.dirty.is_none() && text.atlas.has_pending_fills());
+    let refilled = GlyphAtlas::of(&text.atlas);
+    assert!(
+        matches!(damage.plan(&with_new_glyph, size, clear, swap, refilled, true), Plan::All(_)),
+        "re-queued GPU fills with unchanged instances must redraw whole"
+    );
+    let caret_moved = [with_new_glyph[0], caret(40.0), with_new_glyph[2]];
+    assert!(
+        matches!(damage.plan(&caret_moved, size, clear, swap, refilled, true), Plan::All(_)),
+        "re-queued GPU fills without new rasterizations must redraw whole even if a caret moved"
+    );
+    assert!(!text.atlas.take_fills().is_empty());
+
+    // Dirty CPU rows on a secondary atlas page with unchanged instances must draw whole,
+    // and an atlas page eviction (`resets` incremented, `dirty` cleared) must draw whole
+    // even when instances are unchanged or only another instance changed.
+    const ICON: crate::text::Icon = crate::text::Icon {
+        name: "box",
+        view: 16.0,
+        body: r#"<rect x="1" y="1" width="14" height="14" fill="currentColor"/>"#,
+    };
+    for px in [1500, 1501, 1502] {
+        assert!(text.icon_quad(&ICON, px, [0.0, 0.0]).is_some());
+    }
+    text.begin_frame();
+    text.atlas.dirty = None;
+    for page in &mut text.atlas.pages { page.dirty = None; }
+    let _ = text.atlas.take_fills();
+    assert!(!text.atlas.pages.is_empty(), "expected secondary glyph atlas page");
+    let _ = damage.plan(&caret_moved, size, clear, swap, GlyphAtlas::of(&text.atlas), true);
+
+    text.atlas.pages[0].dirty = Some((0, 16));
+    assert!(
+        matches!(damage.plan(&caret_moved, size, clear, swap, GlyphAtlas::of(&text.atlas), true), Plan::All(_)),
+        "dirty secondary glyph page with unchanged instances must redraw whole"
+    );
+    text.atlas.pages[0].dirty = None;
+
+    let (rasterized_before, resets_before) = (text.atlas.rasterized(), text.atlas.resets());
+    let _ = damage.plan(&caret_moved, size, clear, swap, GlyphAtlas::of(&text.atlas), true);
+    text.begin_frame();
+    assert!(text.atlas.resets() > resets_before, "expected atlas page eviction");
+    assert_eq!(text.atlas.rasterized(), rasterized_before);
+    assert!(text.atlas.dirty.is_none() && text.atlas.pages.iter().all(|p| p.dirty.is_none()));
+    let after_reset = GlyphAtlas::of(&text.atlas);
+
+    assert!(
+        matches!(damage.plan(&caret_moved, size, clear, swap, after_reset, true), Plan::All(_)),
+        "atlas reset with unchanged instances must redraw whole even with dirty cleared"
+    );
+    let mut d_reset_partial = Damage::default();
+    let before_reset = GlyphAtlas { resets: resets_before, rasterized: rasterized_before, dirty_rows: false, pending_fills: false };
+    let _ = d_reset_partial.plan(&caret_moved, size, clear, swap, before_reset, true);
+    assert!(
+        matches!(d_reset_partial.plan(&with_new_glyph, size, clear, swap, after_reset, true), Plan::All(_)),
+        "atlas reset must redraw whole even when another instance also changed"
+    );
+
+    // Animated icon in-place double-buffered update: dirty rows with flipped icon UV stays
+    // partial in both `can_patch_loop` and `plan`.
+    let icon_a = [glyph(10.0, [1.0, 1.0, 18.0, 18.0])];
+    let icon_b = [glyph(10.0, [20.0, 1.0, 18.0, 18.0])];
+    let clean = GlyphAtlas { resets: 3, rasterized: 10, dirty_rows: false, pending_fills: false };
+    let icon_dirty = GlyphAtlas { dirty_rows: true, ..clean };
+    let mut d_icon = Damage::default();
+    let _ = d_icon.plan(&icon_a, size, clear, swap, clean, true);
+    assert!(d_icon.can_patch_loop(&icon_b, &[0], size, clear, swap, icon_dirty).is_ok());
+    assert!(d_icon.can_patch_loop(&icon_a, &[0], size, clear, swap, icon_dirty).is_err());
+    assert!(d_icon.can_patch_loop(&icon_a, &[], size, clear, swap, icon_dirty).is_err());
+    assert!(d_icon.can_patch_loop(&icon_b, &[0], size, clear, swap, GlyphAtlas { pending_fills: true, ..clean }).is_err());
+    assert!(d_icon.can_patch_loop(&icon_b, &[0], size, clear, swap, GlyphAtlas { resets: 4, ..clean }).is_err());
+    assert!(d_icon.can_patch_loop(&icon_b, &[0], size, clear, swap, GlyphAtlas { rasterized: 11, ..clean }).is_err());
+    assert!(
+        matches!(d_icon.plan(&icon_b, size, clear, swap, icon_dirty, true), Plan::Part { .. }),
+        "animated icon UV flip with dirty rows must stay partial"
+    );
+}

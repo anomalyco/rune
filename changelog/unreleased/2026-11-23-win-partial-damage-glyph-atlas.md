@@ -1,0 +1,1 @@
+- Windows partial damage now tracks the glyph atlas's reset and rasterization counters alongside dirty rows and queued GPU fills, so a frame with unchanged instances after glyph work, re-queued fills, or an atlas eviction redraws whole instead of presenting a 1x1 rectangle.

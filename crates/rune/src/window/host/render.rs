@@ -268,9 +268,12 @@ pub(super) fn prepare_window_render(
         // switch, `acquire` retrying an outdated surface) draws its first frame whole, through
         // `plan`, even when only a loop asked for it (the step has run; the frame draws it whole).
         let swap = l.surface.as_ref().map_or(0, crate::window::surface::configure::generation);
-        let fresh = !l.native.damage.current(size, rt.clear_color(), swap);
-        if fresh && looped.is_some() { profile.set_loop_why("a new swap chain"); }
-        let armed = looped.map(Vec::as_slice).filter(|_| whole.is_none() && !fresh).and_then(|p| {
+        let atlas = damage::GlyphAtlas::of(&rt.text.atlas);
+        let loop_ok = looped.is_none_or(|p| match l.native.damage.can_patch_loop(&rt.instances, p, size, rt.clear_color(), swap, atlas) {
+            Ok(()) => true,
+            Err(why) => { profile.set_loop_why(why); false }
+        });
+        let armed = looped.map(Vec::as_slice).filter(|_| whole.is_none() && loop_ok).and_then(|p| {
             match renderer.arm_loop(&gpu.device, &gpu.queue, rt.paint_count(), &rt.instances, p, rt.clear_color(), size, l.config.format) {
                 Ok(rects) => Some((p, rects)),
                 Err(why) => { profile.set_loop_why(why); None }
@@ -280,7 +283,7 @@ pub(super) fn prepare_window_render(
             l.native.damage.patched(&rt.instances, p);
             Some(present)
         } else {
-            match l.native.damage.plan(&rt.instances, size, rt.clear_color(), swap, whole.is_none()) {
+            match l.native.damage.plan(&rt.instances, size, rt.clear_color(), swap, atlas, whole.is_none()) {
                 damage::Plan::All(why) => { profile.set_whole_why(whole.unwrap_or(why)); None }
                 damage::Plan::Part { draw, present } => {
                     renderer.arm_damage(&gpu.device, &gpu.queue, &draw, rt.clear_color(), size, l.config.format);
