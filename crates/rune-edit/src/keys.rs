@@ -217,13 +217,19 @@ impl KeyEvent {
         }
     }
 
-    /// Text typed with Cmd (macOS) or Ctrl held, such as an unclaimed Shift-Cmd-Space. It never
-    /// inserts, matching browsers and AppKit, but still reaches key handlers. Ctrl+Alt is AltGr
-    /// on Windows and Linux, so text typed with both still inserts there; Option alone types.
+    /// Text typed with Cmd (macOS), Ctrl, or (off macOS) Alt alone held, such as an unclaimed
+    /// Shift-Cmd-Space or Alt+D. It never inserts, matching browsers, AppKit and GTK, but still
+    /// reaches key handlers. Ctrl+Alt is AltGr on Windows and Linux, so text typed with both
+    /// still inserts there; Option alone types on macOS.
     #[doc(hidden)]
     pub fn is_command_chord(&self) -> bool {
+        self.is_command_chord_on(KeyPlatform::current())
+    }
+
+    pub(crate) fn is_command_chord_on(&self, platform: KeyPlatform) -> bool {
         let m = self.mods;
-        matches!(self.key, Key::Text(_)) && (m.cmd || m.ctrl) && (cfg!(target_os = "macos") || !m.alt)
+        matches!(self.key, Key::Text(_))
+            && if platform.mac() { m.cmd || m.ctrl } else { (m.cmd || m.ctrl) ^ m.alt }
     }
 
     /// The standard edit command this is (paste, copy, cut, select all, undo, redo, format):

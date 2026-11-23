@@ -155,3 +155,35 @@ fn fold_merges_primary_alias_per_platform() {
         assert_eq!(fold(bits, KeyPlatform::Linux), if bits & CTRL != 0 { (bits & !CTRL) | PRIMARY } else { bits });
     }
 }
+
+#[test]
+fn is_command_chord_matches_platform_alt_and_altgr_conventions() {
+    let text = |s: &str, mods: Mods| KeyEvent { key: Key::Text(s.into()), mods };
+    let cases = [
+        // Plain and Shift text (including Linux and Windows Right-Alt AltGr) always types.
+        (text("d", Mods::default()), [false, false, false]),
+        (text("D", Mods { shift: true, ..Mods::default() }), [false, false, false]),
+        // Alt alone (or with Shift/Super) types on macOS (Option), but is a chord elsewhere.
+        (text("d", Mods { alt: true, ..Mods::default() }), [false, true, true]),
+        (text("D", Mods { alt: true, shift: true, ..Mods::default() }), [false, true, true]),
+        (text("d", Mods { alt: true, logo: true, ..Mods::default() }), [false, true, true]),
+        // Ctrl+Alt is AltGr off macOS (types), but a command chord on macOS.
+        (text("€", Mods { ctrl: true, cmd: true, alt: true, ..Mods::default() }), [true, false, false]),
+        (text("€", Mods { ctrl: true, alt: true, ..Mods::default() }), [true, false, false]),
+        // Cmd or Ctrl without Alt is always a command chord.
+        (text(" ", Mods { cmd: true, ..Mods::default() }), [true, true, true]),
+        (text("a", Mods { ctrl: true, ..Mods::default() }), [true, true, true]),
+        // Non-text keys are never text command chords.
+        (KeyEvent { key: Key::Left, mods: Mods { alt: true, ..Mods::default() } }, [false, false, false]),
+    ];
+    for (ev, want) in cases {
+        for (idx, platform) in PLATFORMS.into_iter().enumerate() {
+            assert_eq!(
+                ev.is_command_chord_on(platform),
+                want[idx],
+                "{ev:?} on {platform:?}"
+            );
+        }
+        assert_eq!(ev.is_command_chord(), ev.is_command_chord_on(KeyPlatform::current()), "{ev:?}");
+    }
+}

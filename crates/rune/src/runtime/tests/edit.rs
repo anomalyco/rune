@@ -77,6 +77,27 @@ fn command_chord_reaches_on_key() {
     assert_eq!(rt.state.keys, [Key::Text(" ".into())]);
 }
 
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn alt_chord_reaches_on_key_without_typing_off_macos() {
+    struct Form { edit: TextEdit, keys: Vec<Key> }
+    fn view(s: &Form, _: &mut Cx<Form>) -> El {
+        text_input(&s.edit, TextStyle::new(14.0, 400.0)).single_line().key("f").size(200.0, 40.0)
+            .on_edit(|s: &mut Form| &mut s.edit)
+    }
+    let mut edit = TextEdit::new("");
+    edit.focused = true;
+    let mut rt = Runtime::new(Form { edit, keys: vec![] }, view, (200.0, 40.0), Env::new(true, 1.0));
+    rt.on_key = Some(|s, ev, _| { s.keys.push(ev.key.clone()); true });
+    rt.frame(0.0);
+    rt.key(chord("d", Mods { alt: true, ..Mods::default() })); rt.frame(0.0);
+    rt.key(chord("D", Mods { alt: true, shift: true, ..Mods::default() })); rt.frame(0.0);
+    rt.key(chord("€", Mods { ctrl: true, cmd: true, alt: true, ..Mods::default() })); rt.frame(0.0);
+    rt.key(chord("€", Mods::default())); rt.frame(0.0);
+    assert_eq!(rt.state.edit.text, "€€");
+    assert_eq!(rt.state.keys, [Key::Text("d".into()), Key::Text("D".into())]);
+}
+
 #[test]
 fn spans_on_text_input_hold_through_ime_and_undo() {
     struct App {
