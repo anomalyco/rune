@@ -206,7 +206,7 @@ impl RuntimeCore {
 
             for r in row_start..=row_end {
                 if v.range.contains(&r) {
-                    let row_path = format!("{list_path}/{}", v.keys[r]);
+                    let row_path = crate::runtime::flatten::node_path(&list_path, Some(&v.keys[r]), 0);
                     let Some(row_node) = self.tree.direct_child_by_path(list_node, list_end + 1, &row_path)
                     else { continue };
                     for j in (row_node..=list_end).take_while(|&j| self.tree.is_descendant(j, row_node)).filter(|&j| self.member(j, g)) {
@@ -303,7 +303,7 @@ impl RuntimeCore {
             for r in 0..count {
                 let range = self.commit.virtuals[&list_path].range.clone();
                 if range.contains(&r) {
-                    let row_path = format!("{list_path}/{}", self.commit.virtuals[&list_path].keys[r]);
+                    let row_path = crate::runtime::flatten::node_path(&list_path, Some(&self.commit.virtuals[&list_path].keys[r]), 0);
                     if let Some(j) = (list_node + 1..self.tree.nodes.len())
                         .take_while(|&j| self.tree.is_descendant(j, root))
                         .filter(|&j| {
@@ -363,7 +363,7 @@ impl RuntimeCore {
             for r in (0..count).rev() {
                 let range = self.commit.virtuals[&list_path].range.clone();
                 if range.contains(&r) {
-                    let row_path = format!("{list_path}/{}", self.commit.virtuals[&list_path].keys[r]);
+                    let row_path = crate::runtime::flatten::node_path(&list_path, Some(&self.commit.virtuals[&list_path].keys[r]), 0);
                     if let Some(j) = (list_node + 1..=list_end)
                         .filter(|&j| {
                             (self.tree.nodes[j].path == row_path
@@ -498,7 +498,7 @@ impl RuntimeCore {
                         }
                     }
                     SelectRequest::All(_) => {
-                        let row_path = format!("{list_path}/{}", self.commit.virtuals[&list_path].keys[r]);
+                        let row_path = crate::runtime::flatten::node_path(&list_path, Some(&self.commit.virtuals[&list_path].keys[r]), 0);
                         let row_key = &self.commit.virtuals[&list_path].keys[r];
                         let row_matches = row_path == selector || crate::flight::selects(selector, &row_path, Some(row_key));
                         let matching: Vec<&OffscreenText> = if row_matches {

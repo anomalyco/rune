@@ -542,7 +542,5 @@ impl RuntimeCore {
 /// Whether `path`'s keyed segments end with `key`'s: `slider/knob` matches
 /// `form/#2/slider/#0/knob`, since the `#n` segments stand for elements without keys.
 fn keyed_suffix(path: &str, key: &str) -> bool {
-    let unkeyed = |s: &&str| s.len() > 1 && s.starts_with('#') && s[1..].bytes().all(|b| b.is_ascii_digit());
-    let mut keyed = path.rsplit('/').filter(|s| !unkeyed(s));
-    key.rsplit('/').all(|want| keyed.next() == Some(want))
+    element_path::keyed_suffix_matches(path, key)
 }

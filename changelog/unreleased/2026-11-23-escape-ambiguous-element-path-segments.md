@@ -1,0 +1,1 @@
+- **Runtime: keys containing `/`, empty keys, or keys matching `#<index>` no longer alias another element's path or accessibility ID.** Path segments now escape only keys that would collide with path separators, positional indices, or the `#!` escape marker, leaving unambiguous paths unchanged while giving every distinct element its own `NodeId` and AccessKit ID.

@@ -483,7 +483,7 @@ fn path_matches(old_path: &str, parent_path: &str, key: Option<&str>, index: usi
         rest
     };
     match key {
-        Some(k) => tail == k,
+        Some(k) => !tail.contains('/') && super::path::segment_matches_key(tail, k),
         None => tail.strip_prefix('#').is_some_and(|n| !n.contains('/') && n.parse::<usize>().ok() == Some(index)),
     }
 }

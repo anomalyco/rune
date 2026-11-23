@@ -191,7 +191,7 @@ impl Measurement<'_> {
             let shown = std::mem::take(&mut v.shown);
             v.select(offset, pinned, Some(&shown));
             for key in shown.iter().filter(|k| v.index_of(k).is_some_and(|i| !v.range.contains(&i))) {
-                self.virtual_culled.insert(format!("{path}/{key}"));
+                self.virtual_culled.insert(node_path(path, Some(key), 0));
             }
             v.shown = shown;
 

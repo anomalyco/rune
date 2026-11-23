@@ -69,11 +69,11 @@ impl Names {
 
 /// Writes `path`'s last `keep` keyed segments, normalized, joined by `/`.
 pub(crate) fn normalize(path: &str, keep: usize, out: &mut String) {
-    let keyed = path.split('/').filter(|s| !s.is_empty() && !s.starts_with('#'));
+    let keyed = path.split('/').filter_map(crate::runtime::element_path::decode_key_segment);
     let skip = keyed.clone().count().saturating_sub(keep);
     for (i, seg) in keyed.skip(skip).enumerate() {
         if i > 0 { out.push('/'); }
-        segment(seg, out);
+        segment(&seg, out);
     }
 }
 

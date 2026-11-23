@@ -110,8 +110,7 @@ impl RuntimeCore {
                 let index = v.index_of(key).or_else(|| {
                     key.rmatch_indices('/').find_map(|(at, _)| {
                         let (scope, row_key) = (&key[..at], &key[at + 1..]);
-                        let mut keyed = n.path.rsplit('/').filter(|seg| !seg.starts_with('#'));
-                        scope.rsplit('/').all(|seg| keyed.next() == Some(seg)).then(|| v.index_of(row_key))?
+                        element_path::keyed_suffix_matches(&n.path, scope).then(|| v.index_of(row_key))?
                     })
                 }).or_else(|| {
                     // `"row/mark"` names an element or highlight inside unmounted row `row`.

@@ -38,10 +38,11 @@ pub(crate) struct VirtualEnd {
 
 impl VirtualEnd {
     pub fn full_path(&self) -> String {
+        let row = crate::runtime::flatten::node_path(&self.list_path, Some(&self.row_key), 0);
         if self.rel_path.is_empty() {
-            format!("{}/{}", self.list_path, self.row_key)
+            row
         } else {
-            format!("{}/{}/{}", self.list_path, self.row_key, self.rel_path)
+            format!("{row}/{}", self.rel_path)
         }
     }
 }
@@ -67,7 +68,7 @@ pub(crate) fn collect_virtual_row_selection(
     copy_providers: &mut Vec<(String, SelectionCopy)>,
 ) {
     let mut order_in_row = 0usize;
-    let row_path = format!("{list_path}/{row_key}");
+    let row_path = crate::runtime::flatten::node_path(list_path, Some(row_key), 0);
     walk_row_el(
         row_el, list_path, row_key, row_index, &row_path, "",
         list_group, list_inert, &mut order_in_row, texts, copy_providers,
@@ -398,7 +399,7 @@ impl RuntimeCore {
 
     fn mounted_row_hash(&self, list_path: &str, row_key: &str, g_path: &str) -> Option<u64> {
         let list_node = self.live(list_path)?;
-        let row_path = format!("{list_path}/{row_key}");
+        let row_path = crate::runtime::flatten::node_path(list_path, Some(row_key), 0);
         let row_node = self.tree.direct_child_by_path(list_node, self.tree.nodes.len(), &row_path)?;
         let mut hasher = rustc_hash::FxHasher::default();
         for j in (row_node..self.tree.nodes.len()).take_while(|&j| self.tree.is_descendant(j, row_node)) {

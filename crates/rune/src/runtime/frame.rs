@@ -427,7 +427,7 @@ impl RuntimeCore {
             if let Some(key) = v.reveal_selected.take() && !pointer_hover {
                 // Use the keyed ancestor path so identical row keys in other lists do not
                 // intercept the reveal, including when this row is still virtual.
-                let scope = path.split('/').filter(|seg| !seg.starts_with('#')).collect::<Vec<_>>().join("/");
+                let scope = element_path::keyed_scope(path);
                 let key = if scope.is_empty() { key } else { format!("{scope}/{key}") };
                 tx.scroll_to.push(ScrollReveal::into_view(None, key));
             }

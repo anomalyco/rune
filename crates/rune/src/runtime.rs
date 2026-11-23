@@ -103,6 +103,7 @@ mod window_requests;
 mod zoom;
 
 pub(crate) use commit::memo_reuse;
+pub(crate) use commit::path as element_path;
 pub(crate) use commit::text_layout::{caret_index, text_width};
 pub(crate) use commit::why::CommitWhy;
 #[cfg(all(test, debug_assertions))]
