@@ -77,6 +77,24 @@ pub fn raw_device(device: &wgpu::Device) -> Option<&ProtocolObject<dyn MTLDevice
     device.as_custom::<MetalDevice>().map(|d| &*d.shared.device)
 }
 
+/// How long `submission`'s work had executed when the GPU aborted it, on a stock wgpu Metal
+/// queue: as a GPU recovering from a hang (its own work's or another process's) does to everything
+/// it was running or held. Zero for work that only waited behind it; `None` for work not aborted,
+/// not finished yet, or not on a stock Metal queue (`vendor/wgpu-hal`'s `Queue::aborted`).
+#[allow(unsafe_code)]
+pub fn aborted(queue: &wgpu::Queue, submission: &wgpu::SubmissionIndex) -> Option<std::time::Duration> {
+    let value = submission_value(submission)?;
+    // SAFETY: the hal queue is only read.
+    let hal = unsafe { queue.as_hal::<wgpu::hal::api::Metal>() }?;
+    hal.aborted(value)
+}
+
+/// A submission's index, the fence value wgpu-hal signals for it. wgpu keeps it private; its
+/// `Debug` shows it (`SubmissionIndex { index: 7 }`), which a test pins.
+pub(crate) fn submission_value(submission: &wgpu::SubmissionIndex) -> Option<u64> {
+    format!("{submission:?}").strip_prefix("SubmissionIndex { index: ")?.strip_suffix(" }")?.parse().ok()
+}
+
 /// A texture over `raw`, made on `raw_device`'s device and matching `desc`, which `owner` keeps valid.
 pub fn texture_from_raw(raw: Obj<dyn objc2_metal::MTLTexture>, desc: &wgpu::TextureDescriptor<'_>, owner: Owner) -> wgpu::Texture {
     wgpu::Texture::from_custom(resource::MetalTexture::from_raw(raw, desc, owner), desc)
