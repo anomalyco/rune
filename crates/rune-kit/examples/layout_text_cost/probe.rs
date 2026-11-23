@@ -29,8 +29,23 @@ thread_local! {
     static BUSY: Cell<bool> = const { Cell::new(false) };
 }
 
-unsafe extern "C" {
-    fn pthread_self() -> usize;
+/// This thread's id for `on_main`: `pthread_self` on Unix, `GetCurrentThreadId` on Windows.
+#[cfg(unix)]
+fn thread_id() -> usize {
+    unsafe extern "C" {
+        fn pthread_self() -> usize;
+    }
+    // SAFETY: pthread_self has no preconditions.
+    unsafe { pthread_self() }
+}
+
+#[cfg(windows)]
+fn thread_id() -> usize {
+    unsafe extern "system" {
+        fn GetCurrentThreadId() -> u32;
+    }
+    // SAFETY: GetCurrentThreadId has no preconditions.
+    unsafe { GetCurrentThreadId() as usize }
 }
 
 /// Data touched only by the main thread with `BUSY` set, or after its measured work ends.
@@ -65,8 +80,7 @@ impl Book {
 static BOOK: Only<Option<Book>> = Only(UnsafeCell::new(None));
 
 fn on_main() -> bool {
-    // SAFETY: pthread_self has no preconditions.
-    MAIN.load(Relaxed) == unsafe { pthread_self() }
+    MAIN.load(Relaxed) == thread_id()
 }
 
 /// Runs `f` on the book with the reentrancy guard set (its own allocations go untracked).
@@ -150,8 +164,7 @@ pub fn live_bytes() -> i64 { LIVE.load(Relaxed) }
 /// Marks the calling thread as the one measured, and starts recording allocation stacks when
 /// `heap`. Call first thing in `main`.
 pub fn init(heap: bool) {
-    // SAFETY: pthread_self has no preconditions.
-    MAIN.store(unsafe { pthread_self() }, Relaxed);
+    MAIN.store(thread_id(), Relaxed);
     BUSY.set(false);
     if heap && cfg!(all(target_os = "macos", target_arch = "aarch64")) { TRACK.store(true, Relaxed); }
 }
@@ -326,8 +339,7 @@ mod mac {
         pub fn current() -> Target {
             // SAFETY: no preconditions; the send right is kept for the process's lifetime.
             let port = unsafe { mach_thread_self() };
-            // SAFETY: pthread_self has no preconditions.
-            let (lo, hi) = stack_bounds(unsafe { super::pthread_self() });
+            let (lo, hi) = stack_bounds(super::thread_id());
             Target { port, lo, hi }
         }
 

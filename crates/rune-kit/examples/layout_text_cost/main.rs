@@ -23,8 +23,11 @@
 //!   notes sit next to a scrolling list.
 //! - `tree`: 80 keyed groups of 20 keyed rows (about 5,000 layout nodes) in a scroll view with
 //!   one layout read; each frame bumps one row's count and keeps that row on screen.
-//! - `memo-chat`: a three-pane workspace — a sidebar of 300 memo'd rows, an item page of memo'd
+//! - `memo-chat`: a three-pane workspace - a sidebar of 300 memo'd rows, an item page of memo'd
 //!   Markdown sections, and a chat of memo'd `virtual_rows` whose composer input changes per keystroke.
+//! - `md-stream`: the `memo-chat` workspace with a reply streaming into the chat's last row (a
+//!   streaming `Markdown`, memo'd by its length); each frame appends 12 bytes of it, as a model's
+//!   text pieces arrive. Only that row changes.
 //!
 //! `--mode time` (default) prints `METRIC case=.. metric=.. median=.. p95=.. mean=..` per measurement,
 //! and again as `case=..:commit` over only the frames that committed when not all of them did;
@@ -51,7 +54,7 @@ use rune_kit::{Badge, Button, ButtonVariant, Card, Kit, Markdown, MarkdownStyle,
 #[global_allocator]
 static ALLOC: probe::Probe = probe::Probe;
 
-const CASES: &[&str] = &["stack", "stack-same", "list", "edit", "md-resize", "md-resize-live", "md-same", "md-open", "md-virtual", "md-beside", "tree", "vlist-resize", "vlist-resize-live", "memo-chat"];
+const CASES: &[&str] = &["stack", "stack-same", "list", "edit", "md-resize", "md-resize-live", "md-same", "md-open", "md-virtual", "md-beside", "tree", "vlist-resize", "vlist-resize-live", "memo-chat", "md-stream"];
 const METRICS: &[&str] = &["cpu_ms", "view_ms", "commit_ms", "layout_ms", "text_ms", "paint_ms", "apply_ms", "allocs", "alloc_bytes", "shaped", "rebroken", "nodes", "view_runs"];
 thread_local! {
     static VIEWS: Cell<usize> = const { Cell::new(0) };
@@ -313,6 +316,8 @@ struct MemoChat {
     chat_keys: Vec<String>,
     picked: usize,
     composer: TextEdit,
+    /// `md-stream`'s reply so far, shown as the chat's last row while it streams.
+    reply: Option<String>,
 }
 
 fn memo_side_row(r: &SideRow, i: usize, picked: bool, k: &Kit) -> El {
@@ -352,13 +357,22 @@ fn memo_chat_view(s: &MemoChat, _: &mut Cx<MemoChat>) -> El {
     let chat_list = col().key("chat-scroll").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: true }).child(
         col().key("chat-rows").w_full().px(12.0).py(12.0).gap(10.0).growth(GrowthSpec::default())
             .virtual_rows(
-                s.chat.len(),
+                s.chat.len() + usize::from(s.reply.is_some()),
                 56.0,
-                |s: &MemoChat, i| Cow::Borrowed(s.chat_keys[i].as_str()),
-                |s: &MemoChat, i| rune::memo(s.chat_keys[i].as_str(), 0u64, || {
-                    col().w_full().padding(8.0).radius(8.0).fill(Color::WHITE.alpha(0.04))
-                        .child(Markdown::new(s.chat[i].as_str()).render(&s.md_style))
-                }),
+                |s: &MemoChat, i| Cow::Borrowed(s.chat_keys.get(i).map_or("reply", String::as_str)),
+                |s: &MemoChat, i| match (s.chat.get(i), &s.reply) {
+                    (Some(md), _) => rune::memo(s.chat_keys[i].as_str(), 0u64, || {
+                        col().w_full().padding(8.0).radius(8.0).fill(Color::WHITE.alpha(0.04))
+                            .child(Markdown::new(md.as_str()).render(&s.md_style))
+                    }),
+                    (None, reply) => {
+                        let reply = reply.as_deref().unwrap_or_default();
+                        rune::memo("reply", reply.len(), || {
+                            col().w_full().padding(8.0).radius(8.0).fill(Color::WHITE.alpha(0.04))
+                                .child(Markdown::new(reply).streaming(true).render(&s.md_style))
+                        })
+                    }
+                },
             )
             .virtual_rows_version(0u64),
     );
@@ -396,7 +410,7 @@ fn memo_chat_state(src: &str) -> MemoChat {
     let mut composer = TextEdit::new("Draft reply: ");
     composer.focused = true;
     composer.set_caret(composer.text.len());
-    MemoChat { kit: Kit::neutral(true), md_style: MarkdownStyle::neutral(true), side, notes, chat, chat_keys, picked: 0, composer }
+    MemoChat { kit: Kit::neutral(true), md_style: MarkdownStyle::neutral(true), side, notes, chat, chat_keys, picked: 0, composer, reply: None }
 }
 
 fn fonts() -> TextSystem {
@@ -563,6 +577,19 @@ fn run(case: &str, tag: u32, kb: usize, meta: &mut Vec<String>) -> Vec<Vec<f64>>
                 } else {
                     rt.ime(Ime::Commit(chars[i % chars.len()].into()));
                 }
+            })).collect()
+        }
+        "md-stream" => {
+            let mut rt = runtime(MemoChat { reply: Some(String::new()), ..memo_chat_state(&src) }, memo_chat_view, (1440.0, 860.0));
+            probe::snapshot(tag);
+            meta.push(census(&rt, case, heap0));
+            // 12 bytes a frame for 600 frames: about 7 KB of reply, its paragraphs, lists and code.
+            let mut at = 0;
+            (0..600).map(|_| timed(&mut rt, tag, |rt| {
+                let end = (at + 12..).find(|&e| src.is_char_boundary(e)).unwrap_or(src.len()).min(src.len());
+                let piece = &src[at..end];
+                at = end;
+                rt.update(|s, _| s.reply.get_or_insert_default().push_str(piece));
             })).collect()
         }
         other => panic!("unknown case {other}; one of {CASES:?}"),
