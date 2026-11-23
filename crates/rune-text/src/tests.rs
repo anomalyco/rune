@@ -632,8 +632,9 @@ fn non_emoji_named_color_emoji_stays_last_in_symbol_families() {
     std::fs::write(&color_path, with_sfnt_table(FONT, *b"COLR")).unwrap();
 
     // A non-emoji fallback added after `ts.emoji = Some("Twemoji")` inserts before Twemoji,
-    // even though "Twemoji" does not contain "Emoji".
-    let mut ts = TextSystem::new(&[], ("", ""));
+    // even though "Twemoji" does not contain "Emoji". Use `TextSystem::empty()` so host
+    // slot/symbol fallbacks (e.g. Apple Color Emoji on macOS) do not pre-populate `emoji`.
+    let mut ts = TextSystem::empty();
     ts.symbol_families = vec!["DejaVu Sans", "Twemoji"];
     ts.emoji = Some("Twemoji");
     ts.add_symbol_files(vec![mono_path.clone()]);
@@ -642,7 +643,7 @@ fn non_emoji_named_color_emoji_stays_last_in_symbol_families() {
 
     // A colour font file whose family name does not contain "Emoji" is recognised as the emoji
     // family and placed at the end.
-    let mut ts_color = TextSystem::new(&[], ("", ""));
+    let mut ts_color = TextSystem::empty();
     ts_color.symbol_families = vec!["DejaVu Sans"];
     ts_color.add_symbol_files(vec![color_path.clone()]);
     assert_eq!(ts_color.emoji, Some("IBM Plex Mono"));
@@ -650,13 +651,13 @@ fn non_emoji_named_color_emoji_stays_last_in_symbol_families() {
 
     // `add_fallback_emoji` loads the generic emoji family when none is set, and keeps
     // Noto Color Emoji first when it is already installed.
-    let mut ts_fallback = TextSystem::new(&[], ("", ""));
+    let mut ts_fallback = TextSystem::empty();
     ts_fallback.symbol_families = vec!["DejaVu Sans"];
     ts_fallback.add_fallback_emoji("Twemoji", vec![color_path.clone()]);
     assert_eq!(ts_fallback.emoji, Some("IBM Plex Mono"));
     assert_eq!(ts_fallback.symbol_families, vec!["DejaVu Sans", "IBM Plex Mono"]);
 
-    let mut ts_noto = TextSystem::new(&[], ("", ""));
+    let mut ts_noto = TextSystem::empty();
     ts_noto.symbol_families = vec!["DejaVu Sans", "Noto Color Emoji"];
     ts_noto.emoji = Some("Noto Color Emoji");
     ts_noto.add_fallback_emoji("Twemoji", vec![color_path]);
