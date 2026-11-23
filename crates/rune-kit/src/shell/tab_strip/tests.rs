@@ -145,3 +145,53 @@ fn web_a11y_mirror_exposes_tablist_closable_tabs_and_close_buttons() {
         }
     }
 }
+
+#[test]
+fn tab_width_handles_inverted_and_nan_bounds_without_panicking() {
+    let normal = TabOverflow::HORIZONTAL_DEFAULT;
+    assert_eq!(normal.tab_width(1000.0, 2, 0, 6.0), 224.0);
+    assert_eq!(normal.tab_width(206.0, 2, 0, 6.0), 100.0);
+    assert_eq!(normal.tab_width(20.0, 2, 0, 6.0), 28.0);
+    assert_eq!(normal.tab_width(400.0, 0, 1, 6.0), 224.0);
+
+    // min_width above max_width: minimum wins (CSS min-width beats max-width).
+    let inverted = TabOverflow::ShrinkThenScroll { min_width: 200.0, max_width: 100.0, pinned_width: 36.0, fade_width: 24.0 };
+    assert_eq!(inverted.tab_width(500.0, 2, 0, 6.0), 200.0);
+    assert_eq!(inverted.tab_width(100.0, 2, 0, 6.0), 200.0);
+    assert_eq!(inverted.tab_width(500.0, 0, 0, 6.0), 200.0);
+
+    // NaN in either or both bounds never panics.
+    let nan_min = TabOverflow::ShrinkThenScroll { min_width: f32::NAN, max_width: 224.0, pinned_width: 36.0, fade_width: 24.0 };
+    assert_eq!(nan_min.tab_width(206.0, 2, 0, 6.0), 100.0);
+    assert_eq!(nan_min.tab_width(1000.0, 2, 0, 6.0), 224.0);
+    assert_eq!(nan_min.tab_width(400.0, 0, 0, 6.0), 224.0);
+
+    let nan_max = TabOverflow::ShrinkThenScroll { min_width: 28.0, max_width: f32::NAN, pinned_width: 36.0, fade_width: 24.0 };
+    assert_eq!(nan_max.tab_width(500.0, 2, 0, 6.0), 28.0);
+    assert_eq!(nan_max.tab_width(400.0, 0, 0, 6.0), 28.0);
+
+    let both_nan = TabOverflow::ShrinkThenScroll { min_width: f32::NAN, max_width: f32::NAN, pinned_width: 36.0, fade_width: 24.0 };
+    assert_eq!(both_nan.tab_width(206.0, 2, 0, 6.0), 100.0);
+    assert_eq!(normal.tab_width(f32::NAN, 2, 0, 6.0), 28.0);
+
+    // Building and laying out a strip with degenerate overflow bounds does not panic.
+    for policy in [inverted, nan_min, nan_max] {
+        for viewport in [Some(400.0), None] {
+            let mut rt = rune::Runtime::new(
+                (policy, viewport),
+                |&(policy, viewport), _: &mut rune::Cx<_>| {
+                    let k = Kit::neutral(true);
+                    let strip = TabStrip::<(TabOverflow, Option<f32>)>::new("strip", TabOrientation::Horizontal)
+                        .tabs([TabItem::new("a", "Alpha"), TabItem::new("b", "Beta")])
+                        .overflow(policy)
+                        .viewport_width(viewport)
+                        .build(&k);
+                    col().size(400.0, 80.0).child(strip)
+                },
+                (400.0, 80.0),
+                rune::Env::new(true, 1.0),
+            );
+            rt.frame(0.0);
+        }
+    }
+}

@@ -81,7 +81,10 @@ pub struct Knob {
     pub name: &'static str,
     /// What the panel calls it, in plain words, when that differs from `name`.
     pub label: &'static str,
+    /// Lower bound. When `min >= max` or `max` is NaN, the range collapses to `min` (falling
+    /// back to `max`, `default`, or `0.0` if `min` is NaN). A NaN value clamps to `min`.
     pub min: f32,
+    /// Upper bound; see [`Self::min`] when bounds are inverted or NaN.
     pub max: f32,
     pub default: f32,
     pub step: f32,
@@ -175,8 +178,25 @@ impl Knob {
         Self { name, label: "", min: 0.0, max: (labels.len().saturating_sub(1)) as f32, default: default as f32, step: 1.0, labels, about: "", hints: &[] }
     }
     fn clamp(&self, v: f32) -> f32 {
-        let v = v.clamp(self.min, self.max);
-        if self.step > 0.0 { (self.min + ((v - self.min) / self.step).round() * self.step).min(self.max) } else { v }
+        if !(self.min < self.max) {
+            return if !self.min.is_nan() {
+                self.min
+            } else if !self.max.is_nan() {
+                self.max
+            } else if !self.default.is_nan() {
+                self.default
+            } else {
+                0.0
+            };
+        }
+        let v = if v.is_nan() { self.min } else { v.clamp(self.min, self.max) };
+        if self.step > 0.0 && self.step.is_finite() {
+            let snapped = self.min + ((v - self.min) / self.step).round() * self.step;
+            if snapped.is_finite() {
+                return snapped.min(self.max);
+            }
+        }
+        v
     }
 }
 

@@ -86,3 +86,60 @@ fn keep_marks_what_differs_and_revert_goes_back_undoably() {
     k.revert(&G.knobs);
     assert_eq!((k.get(&A), k.get(&C)), (8.0, 1.0));
 }
+
+#[test]
+fn clamp_handles_inverted_bounds_nan_bounds_and_nan_values() {
+    // Valid continuous and stepped knobs preserve existing clamping and snapping.
+    let mut k = Knobs::default();
+    k.set(&A, -5.0);
+    assert_eq!(k.get(&A), 0.0);
+    k.set(&A, 42.0);
+    assert_eq!(k.get(&A), 10.0);
+    k.set(&B, 0.3);
+    assert_eq!(k.get(&B), 0.5);
+
+    // Inverted bounds (min > max) treat the range as empty at min, with or without step.
+    const INV: Knob = Knob::new("Inv", 10.0, 2.0, 5.0);
+    const INV_STEP: Knob = Knob::new("InvStep", 10.0, 2.0, 5.0).step(1.0);
+    const INV_GROUP: Group = Group::new("InvG", "g", &[INV, INV_STEP]);
+    assert_eq!(k.get(&INV), 10.0);
+    assert_eq!(k.get(&INV_STEP), 10.0);
+    k.set(&INV, 4.0);
+    k.set(&INV_STEP, 4.0);
+    assert_eq!((k.get(&INV), k.get(&INV_STEP)), (10.0, 10.0));
+    k.step(&INV, true, false);
+    k.random(&INV_GROUP);
+    assert_eq!((k.get(&INV), k.get(&INV_STEP)), (10.0, 10.0));
+
+    // NaN values on valid ranges clamp to min without panicking or leaking NaN.
+    k.set(&A, f32::NAN);
+    assert_eq!(k.get(&A), 0.0);
+    k.set(&B, f32::NAN);
+    assert_eq!(k.get(&B), -1.0);
+    const NAN_DEFAULT: Knob = Knob::new("NanDefault", 2.0, 8.0, f32::NAN);
+    assert_eq!(k.get(&NAN_DEFAULT), 2.0);
+
+    // NaN in either or both bounds never panics.
+    const NAN_MAX: Knob = Knob::new("NanMax", 3.0, f32::NAN, 5.0).step(0.5);
+    const NAN_MIN: Knob = Knob::new("NanMin", f32::NAN, 7.0, 5.0).step(0.5);
+    const BOTH_NAN: Knob = Knob::new("BothNan", f32::NAN, f32::NAN, 4.0);
+    const ALL_NAN: Knob = Knob::new("AllNan", f32::NAN, f32::NAN, f32::NAN);
+    assert_eq!(k.get(&NAN_MAX), 3.0);
+    assert_eq!(k.get(&NAN_MIN), 7.0);
+    assert_eq!(k.get(&BOTH_NAN), 4.0);
+    assert_eq!(k.get(&ALL_NAN), 0.0);
+    for knob in [&NAN_MAX, &NAN_MIN, &BOTH_NAN, &ALL_NAN] {
+        k.set(knob, 5.0);
+        k.set(knob, f32::NAN);
+        assert!(k.get(knob).is_finite(), "{} must stay finite", knob.name);
+    }
+
+    // Non-finite step or infinite bounds with a step do not panic or turn finite values into NaN.
+    const INF_STEP: Knob = Knob::new("InfStep", 0.0, 10.0, 5.0).step(f32::INFINITY);
+    const NAN_STEP: Knob = Knob::new("NanStep", 0.0, 10.0, 5.0).step(f32::NAN);
+    const INF_BOUNDS: Knob = Knob::new("InfBounds", f32::NEG_INFINITY, f32::INFINITY, 5.0).step(1.0);
+    k.set(&INF_STEP, 6.0);
+    k.set(&NAN_STEP, 6.0);
+    k.set(&INF_BOUNDS, 6.0);
+    assert_eq!((k.get(&INF_STEP), k.get(&NAN_STEP), k.get(&INF_BOUNDS)), (6.0, 6.0, 6.0));
+}
