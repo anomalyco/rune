@@ -118,7 +118,7 @@ pub(super) struct HeadlessFrame<'a, 'b, F> {
     #[cfg(feature = "frame-profile")]
     pub(super) fp_commits0: u64,
     #[cfg(feature = "frame-profile")]
-    pub(super) fp_cpu0: Option<f64>,
+    pub(super) fp_cpu0: Option<crate::frame::profile::ThreadCpuMark>,
     #[cfg(feature = "frame-profile")]
     pub(super) fp_events: usize,
 }
@@ -313,9 +313,13 @@ impl<F: FnMut(FrameShot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
         let ms = self.frame_start.elapsed().as_secs_f64() * 1000.0;
         #[cfg(feature = "frame-profile")]
         {
+            // Convert the frame's raw CPU mark before taking phase deltas so that once Windows'
+            // cycle rate is known here, `take()` sees the cached rate for every phase too.
+            let cpu_ms = frame_cpu_ms(self.fp_cpu0, crate::frame::profile::thread_cpu_since);
+            let phases = crate::frame::profile::take();
             let rt = self.app.rt_mut();
             s.profile.push(crate::frame::profile::Row {
-                phases: crate::frame::profile::take(),
+                phases,
                 update_ms: info.update_ms,
                 encode_ms: ms - info.update_ms,
                 events: self.fp_events,
@@ -324,7 +328,7 @@ impl<F: FnMut(FrameShot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
                 why: rt.commit.take_commit_why(),
                 shaped: rt.stats.shaped,
                 animating: info.animating,
-                cpu_ms: self.fp_cpu0.map(|start| crate::frame::profile::cpu_ms().unwrap() - start),
+                cpu_ms,
             });
         }
         s.cpu_ms.push(ms);
@@ -391,6 +395,14 @@ pub(in crate::tooling) fn take_window_frame(
     *anim = Some(FrameAnim::retarget(anim.as_ref(), request.spring, start, from, [0.0, 0.0, w, h]));
 }
 
+#[cfg(feature = "frame-profile")]
+fn frame_cpu_ms(
+    start: Option<crate::frame::profile::ThreadCpuMark>,
+    since: impl FnOnce(crate::frame::profile::ThreadCpuMark) -> Option<f64>,
+) -> Option<f64> {
+    start.and_then(since).map(|ns| ns / 1e6)
+}
+
 /// Moves a headless window's viewport one frame along, before the frame lays out.
 pub(in crate::tooling) fn step_window_frame(
     rt: &mut RuntimeCore,
@@ -403,3 +415,7 @@ pub(in crate::tooling) fn step_window_frame(
     rt.step_viewport((w, h), scale);
     if moving.done(now) { *anim = None; }
 }
+
+#[cfg(all(test, feature = "frame-profile"))]
+#[path = "frame_tests.rs"]
+mod tests;

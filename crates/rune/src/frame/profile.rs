@@ -7,44 +7,65 @@ pub(crate) enum Phase { View, Commit, Layout, Text, Paint, Apply }
 #[cfg_attr(not(feature = "frame-profile"), allow(dead_code))]
 pub const PHASES: usize = 6;
 
-/// CPU consumed by this thread, excluding time the scheduler runs other work.
-/// On Windows it counts the thread's cycles (`QueryThreadCycleTime`), so short phases read
-/// true; `GetThreadTimes` moves in 15.6 ms ticks.
+/// Converts raw `thread_cpu` units (cycles on Windows, ns elsewhere) to nanoseconds, or
+/// `None` until Windows knows the cycles' rate or where there is no CPU clock.
 #[cfg(feature = "frame-profile")]
-pub(crate) fn cpu_ms() -> Option<f64> {
+pub(crate) fn raw_cpu_ns(raw: u64) -> Option<f64> {
     #[cfg(any(unix, windows))]
-    { super::host_clock::thread_cpu().and_then(super::host_clock::cpu_ns).map(|ns| ns / 1e6) }
+    return super::host_clock::cpu_ns(raw);
     #[cfg(not(any(unix, windows)))]
-    { None }
+    {
+        let _ = raw;
+        None
+    }
 }
 
 #[cfg(feature = "frame-profile")]
 mod enabled {
-    use super::{PHASES, Phase, cpu_ms};
+    use super::{PHASES, Phase, ThreadCpuMark, raw_cpu_ns, thread_cpu_mark};
     use crate::time::Instant;
     use std::cell::Cell;
 
     thread_local! {
-        static TIMES: Cell<[f64; 2 * PHASES]> = const { Cell::new([0.0; 2 * PHASES]) };
+        static WALL: Cell<[f64; PHASES]> = const { Cell::new([0.0; PHASES]) };
+        /// Raw thread-CPU units per phase (cycles on Windows, ns on Unix), converted in
+        /// [`take`] so phases timed before Windows knows the cycles' rate convert once it does.
+        static CPU_RAW: Cell<[u64; PHASES]> = const { Cell::new([0; PHASES]) };
     }
 
-    pub(crate) struct Scope(Phase, Instant, Option<f64>);
+    pub(crate) struct Scope(Phase, Instant, Option<ThreadCpuMark>);
     impl Scope {
-        pub(crate) fn new(phase: Phase) -> Self { Self(phase, crate::time::now(), cpu_ms()) }
+        pub(crate) fn new(phase: Phase) -> Self { Self(phase, crate::time::now(), thread_cpu_mark()) }
     }
     impl Drop for Scope {
         fn drop(&mut self) {
-            if crate::tooling::perf_warn::budget::on() { crate::tooling::perf_warn::budget::add(self.0, self.1.elapsed().as_secs_f64() * 1000.0); }
-            if crate::tooling::interaction::active() { crate::tooling::interaction::add(self.0, self.1.elapsed().as_secs_f64() * 1000.0); }
-            TIMES.with(|times| {
-                let mut row = times.get();
-                row[self.0 as usize] += self.1.elapsed().as_secs_f64() * 1000.0;
-                if let (Some(start), Some(end)) = (self.2, cpu_ms()) { row[self.0 as usize + PHASES] += end - start; }
-                times.set(row);
+            let wall_ms = self.1.elapsed().as_secs_f64() * 1000.0;
+            if crate::tooling::perf_warn::budget::on() { crate::tooling::perf_warn::budget::add(self.0, wall_ms); }
+            if crate::tooling::interaction::active() { crate::tooling::interaction::add(self.0, wall_ms); }
+            WALL.with(|wall| {
+                let mut row = wall.get();
+                row[self.0 as usize] += wall_ms;
+                wall.set(row);
             });
+            if let (Some(start), Some(end)) = (self.2, thread_cpu_mark()) {
+                CPU_RAW.with(|cpu| {
+                    let mut row = cpu.get();
+                    row[self.0 as usize] = row[self.0 as usize].saturating_add(start.raw_delta(end));
+                    cpu.set(row);
+                });
+            }
         }
     }
-    pub(crate) fn take() -> [f64; 2 * PHASES] { TIMES.replace([0.0; 2 * PHASES]) }
+    pub(crate) fn take() -> [f64; 2 * PHASES] {
+        let wall = WALL.replace([0.0; PHASES]);
+        let raw = CPU_RAW.replace([0; PHASES]);
+        let mut out = [0.0; 2 * PHASES];
+        out[..PHASES].copy_from_slice(&wall);
+        for i in 0..PHASES {
+            out[PHASES + i] = raw_cpu_ns(raw[i]).map_or(0.0, |ns| ns / 1e6);
+        }
+        out
+    }
 }
 
 #[cfg(feature = "frame-profile")]
@@ -103,24 +124,37 @@ impl Log {
         self.rows.push(row);
     }
 
-    /// Prints the `rune-frame-profile` means (first frame left out) and closes the log.
-    pub(crate) fn report(&mut self) {
+    /// Means over the logged frames (first frame left out when more than one ran). CPU means
+    /// average only rows that had a CPU reading, so early frames before Windows knows the
+    /// cycles' rate neither null out the summary nor drag the averages down with zeros.
+    pub(crate) fn summary(&self) -> serde_json::Value {
         let rows = &self.rows[usize::from(self.rows.len() > 1)..];
         let n = rows.len() as f64;
         let avg = |f: &dyn Fn(&Row) -> f64| rows.iter().map(f).sum::<f64>() / n;
-        let cpu = rows.first().and_then(|r| r.cpu_ms).is_some();
-        let phase_cpu = |i: usize| cpu.then(|| avg(&|r| r.phases[PHASES + i]));
-        eprintln!("rune-frame-profile {}", serde_json::json!({
+        let cpu_count = rows.iter().filter(|r| r.cpu_ms.is_some()).count();
+        let cpu_n = cpu_count as f64;
+        let thread_cpu_ms = (cpu_count > 0).then(|| rows.iter().filter_map(|r| r.cpu_ms).sum::<f64>() / cpu_n);
+        let phase_cpu = |i: usize| {
+            (cpu_count > 0).then(|| {
+                rows.iter().filter(|r| r.cpu_ms.is_some()).map(|r| r.phases[PHASES + i]).sum::<f64>() / cpu_n
+            })
+        };
+        serde_json::json!({
             "view_ms": avg(&|r| r.phases[0]), "commit_inclusive_ms": avg(&|r| r.phases[1]),
             "layout_inclusive_ms": avg(&|r| r.phases[2]), "shape_ms": avg(&|r| r.phases[3]),
             "paint_ms": avg(&|r| r.phases[4]), "apply_ms": avg(&|r| r.phases[5]),
             "update_ms": avg(&|r| r.update_ms), "encode_submit_ms": avg(&|r| r.encode_ms),
             "allocations": avg(&|r| r.allocations as f64), "commits": avg(&|r| r.commits as f64),
             "shaped": avg(&|r| r.shaped as f64), "animating_fraction": avg(&|r| u8::from(r.animating) as f64),
-            "thread_cpu_ms": cpu.then(|| avg(&|r| r.cpu_ms.unwrap_or(0.0))),
+            "thread_cpu_ms": thread_cpu_ms,
             "view_cpu_ms": phase_cpu(0), "commit_cpu_ms": phase_cpu(1), "layout_cpu_ms": phase_cpu(2),
             "shape_cpu_ms": phase_cpu(3), "paint_cpu_ms": phase_cpu(4), "apply_cpu_ms": phase_cpu(5),
-        }));
+        })
+    }
+
+    /// Prints the `rune-frame-profile` means (first frame left out) and closes the log.
+    pub(crate) fn report(&mut self) {
+        eprintln!("rune-frame-profile {}", self.summary());
         if let Some(mut out) = self.out.take() {
             use std::io::Write;
             let mem = procwatch::snapshot();
@@ -149,7 +183,7 @@ pub fn take_frame_phases() -> [f64; 2 * PHASES] {
 pub fn thread_cpu_ms() -> f64 {
     #[cfg(windows)]
     super::host_clock::cycles_per_ns_waiting();
-    cpu_ms().unwrap_or(0.0)
+    thread_cpu_ns().map_or(0.0, |ns| ns / 1e6)
 }
 
 /// This thread's own CPU time in nanoseconds: its cycles on Windows (`QueryThreadCycleTime`),
@@ -168,6 +202,20 @@ pub fn thread_cpu_ns() -> Option<f64> {
 /// measures from that moment once it does.
 #[derive(Clone, Copy, Debug)]
 pub struct ThreadCpuMark(u64);
+
+#[cfg(feature = "frame-profile")]
+impl ThreadCpuMark {
+    /// Raw thread-CPU units elapsed from `self` to `later` (cycles on Windows, ns elsewhere).
+    pub(crate) fn raw_delta(self, later: Self) -> u64 {
+        later.0.saturating_sub(self.0)
+    }
+
+    /// Nanoseconds of thread CPU from `self` to `later`, or `None` until Windows knows the
+    /// cycles' rate or where there is no CPU clock.
+    pub(crate) fn delta_ns(self, later: Self) -> Option<f64> {
+        raw_cpu_ns(self.raw_delta(later))
+    }
+}
 
 /// This thread's CPU clock now, raw; `None` where there is none or it can't be read. On Windows it
 /// also starts measuring the cycles' rate (no wait).
@@ -241,3 +289,7 @@ pub(crate) fn install_text_hook() {
         crate::text::profile::set_text_phase_hooks(enter_text_phase, exit_text_phase);
     }
 }
+
+#[cfg(all(test, feature = "frame-profile"))]
+#[path = "profile_tests.rs"]
+mod tests;
