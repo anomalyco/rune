@@ -174,16 +174,50 @@ fn the_operation_follows_the_source() {
 #[test]
 fn moves_coalesce_and_steps_track_the_drag() {
     let key = 0xd0d0;
+    let _guard = register(key);
     push(key, FileStep::Enter(vec!["a".into()], Some((1.0, 1.0))));
     push(key, FileStep::Move((2.0, 2.0)));
     push(key, FileStep::Move((3.0, 3.0)));
     assert!(over(key));
     push(key, FileStep::Drop(vec!["a".into()], Some((3.0, 3.0))));
     assert!(!over(key));
-    let steps = DESTS.with(|d| std::mem::take(&mut d.borrow_mut().get_mut(&key).unwrap().steps));
+    let steps = take_key(key);
     assert_eq!(steps, [
         FileStep::Enter(vec!["a".into()], Some((1.0, 1.0))),
         FileStep::Move((3.0, 3.0)),
         FileStep::Drop(vec!["a".into()], Some((3.0, 3.0))),
     ]);
+}
+
+#[test]
+fn dropping_guard_prunes_view_and_rejects_stale_promises_on_recycled_address() {
+    let key = 0xd0d1;
+    let first = register(key);
+    let stale_token = first.token;
+    push(key, FileStep::Enter(vec!["stale".into()], Some((1.0, 1.0))));
+    assert!(over(key));
+
+    drop(first);
+    assert!(DESTS.with(|d| !d.borrow().contains_key(&key)), "dropping the guard must prune DESTS");
+    assert!(!over(key));
+
+    // A late promise arriving after the window closed must not re-insert into DESTS.
+    push_for(key, stale_token, FileStep::Drop(vec!["late".into()], Some((2.0, 2.0))));
+    assert!(DESTS.with(|d| !d.borrow().contains_key(&key)));
+
+    // A new window allocated at the same content view address starts clean and ignores the
+    // closed window's late promise.
+    let second = register(key);
+    assert_ne!(second.token, stale_token);
+    assert!(!over(key));
+    assert!(take_key(key).is_empty());
+
+    push_for(key, stale_token, FileStep::Drop(vec!["late".into()], Some((2.0, 2.0))));
+    assert!(take_key(key).is_empty());
+
+    push_for(key, second.token, FileStep::Drop(vec!["fresh".into()], Some((4.0, 5.0))));
+    assert_eq!(take_key(key), [FileStep::Drop(vec!["fresh".into()], Some((4.0, 5.0)))]);
+
+    drop(second);
+    assert!(DESTS.with(|d| !d.borrow().contains_key(&key)));
 }

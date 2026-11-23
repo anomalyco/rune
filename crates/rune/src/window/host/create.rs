@@ -117,7 +117,7 @@ impl Host {
         #[cfg(target_os = "macos")]
         crate::platform::macos::configure_window(&window, &self.macos_window);
         #[cfg(target_os = "macos")]
-        crate::platform::macos::drop::install(&window);
+        let drop_target = crate::platform::macos::drop::install(&window);
         if self.options.click_through && let Err(error) = window.set_cursor_hittest(false) {
             eprintln!("click-through unavailable for {}: {error}", self.native_handle.key());
         }
@@ -274,6 +274,7 @@ impl Host {
             prime,
             launch_drawables,
             _spot: crate::platform::macos::traffic_lights::Spot::new(&window),
+            _drop: drop_target,
         };
         // Making the GPU and surface took part of the cloak's wait; the frame gets all of it.
         #[cfg(target_os = "windows")]
