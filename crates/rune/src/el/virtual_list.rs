@@ -345,7 +345,9 @@ impl VirtualList {
     pub fn set_estimate(&mut self, estimate: f32) {
         if estimate != self.estimate {
             self.estimate = estimate;
-            self.row_heights = self.keys.iter().map(|k| self.height(k)).collect();
+            for (h, m) in self.row_heights.iter_mut().zip(&self.measured) {
+                if m.is_none() { *h = estimate; }
+            }
             self.sums_stale.set(true);
         }
     }
@@ -649,5 +651,26 @@ mod tests {
         v.viewport = 40.0;
         v.range = 0..10;
         assert_eq!(v.unfilled(0.0, true), 32, "a window left at the top after rows landed below it");
+    }
+
+    #[test]
+    fn set_estimate_after_anchor_compensates_only_unmeasured_rows_above() {
+        let mut v = VirtualList::default();
+        v.viewport = 200.0;
+        v.set_keys((0..50).map(|i| format!("r{i}")).collect(), 0, None);
+        v.set_estimate(100.0);
+        // Measure rows 20..30 at 100 pt; rows 0..20 stay unmeasured.
+        for i in 20..30 { v.set_height(&format!("r{i}"), 100.0); }
+        // Anchor at r25 (offset 2500) before applying a smaller estimate.
+        v.anchor = v.first_visible(2500.0, |_| true);
+        v.set_estimate(95.0);
+        // 20 unmeasured rows above r25 shrank by 5 pt each; the 5 measured rows kept 100 pt.
+        assert_eq!(v.anchor_delta(), -100.0);
+        // Removing r25 while changing estimate keeps surviving r26 anchored against old heights.
+        let keys: Vec<_> = (0..50).filter(|&i| i != 25).map(|i| format!("r{i}")).collect();
+        v.anchor = v.set_keys(keys, 1, Some(2400.0));
+        v.set_estimate(105.0);
+        // r26 was at 2500 (20*95 + 6*100); now at index 25 with 20*105 + 5*100 = 2600 -> delta +100.
+        assert_eq!(v.anchor_delta(), 100.0);
     }
 }

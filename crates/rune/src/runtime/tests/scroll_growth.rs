@@ -598,3 +598,111 @@ fn virtual_list_measure_above_mid_glide_shifts_glide_target() {
     let r30 = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("r30")).unwrap();
     assert!(r30.rect[1].abs() < 0.5, "r30 sits at the top of the viewport: {:?}", r30.rect);
 }
+
+/// Resizing a viewport whose virtual-row estimate follows the width keeps the top visible row
+/// anchored even when hundreds of rows above the viewport were never measured.
+#[test]
+fn virtual_rows_estimate_change_on_resize_keeps_anchor_over_unmeasured_rows() {
+    use crate::el::{GrowthSpec, ScrollSpec};
+    fn view(_: &(), cx: &mut Cx<()>) -> El {
+        let w = cx.layout_size("scroll").map_or(1280.0, |s| s[0]);
+        let h = w / 10.0;
+        let rows = col().key("rows").w_full().growth(GrowthSpec::default()).virtual_rows(
+            600,
+            h,
+            |_: &(), i| format!("r{i}").into(),
+            move |_: &(), _| el().w_full().h(h),
+        );
+        col().w_full().h_full().child(
+            col().key("scroll").w_full().h_full().scroll(ScrollSpec { stick_bottom: false }).child(rows),
+        )
+    }
+    let mut rt = Runtime::new((), view, (1280.0, 400.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, 300.0 * 128.0));
+    rt.frame(1.0 / 60.0);
+    let r300_y = |rt: &Runtime<()>| {
+        rt.elements().into_iter().find(|e| e.key.as_deref() == Some("r300")).map(|e| e.rect[1])
+    };
+    assert!(r300_y(&rt).is_some_and(|y| y.abs() < 0.5), "r300 starts at top: {:?}", r300_y(&rt));
+
+    rt.set_viewport((1240.0, 400.0), 1.0);
+    for _ in 0..4 { rt.frame(1.0 / 60.0); }
+    assert!(r300_y(&rt).is_some_and(|y| y.abs() < 0.5), "narrower resize keeps r300 at top: {:?}", r300_y(&rt));
+
+    rt.set_viewport((1320.0, 400.0), 1.0);
+    for _ in 0..4 { rt.frame(1.0 / 60.0); }
+    assert!(r300_y(&rt).is_some_and(|y| y.abs() < 0.5), "wider resize keeps r300 at top: {:?}", r300_y(&rt));
+}
+
+/// Changing a virtual list's row-height estimate alongside a key change (`virtual_rows_version`
+/// bumped) or alone keeps the surviving anchor row at the same viewport position over unmeasured
+/// rows above it.
+#[test]
+fn virtual_rows_estimate_and_key_change_keeps_surviving_anchor_over_unmeasured_rows() {
+    use crate::el::{GrowthSpec, ScrollSpec};
+    struct List { keys: Vec<usize>, version: u64, estimate: f32 }
+    fn view(s: &List, _: &mut Cx<List>) -> El {
+        let rows = col().key("rows").w_full().growth(GrowthSpec::default())
+            .virtual_rows(
+                s.keys.len(),
+                s.estimate,
+                |s: &List, i| format!("r{}", s.keys[i]).into(),
+                |_: &List, _| el().w_full().h(80.0),
+            )
+            .virtual_rows_version(s.version);
+        col().size(400.0, 300.0).child(
+            col().key("scroll").size(400.0, 300.0).scroll(ScrollSpec { stick_bottom: false }).child(rows),
+        )
+    }
+    let mut rt = Runtime::new(
+        List { keys: (0..600).collect(), version: 0, estimate: 80.0 },
+        view,
+        (400.0, 300.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, 300.0 * 80.0));
+    rt.frame(1.0 / 60.0);
+    let y_of = |rt: &Runtime<List>, key: &str| {
+        rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).map(|e| e.rect[1])
+    };
+    assert!(y_of(&rt, "r300").is_some_and(|y| y.abs() < 0.5), "r300 starts at top: {:?}", y_of(&rt, "r300"));
+    assert!(y_of(&rt, "r301").is_some_and(|y| (y - 80.0).abs() < 0.5), "r301 starts at 80: {:?}", y_of(&rt, "r301"));
+
+    // Remove r300 (so r301 is the surviving anchor), bump version, and shrink the estimate at once.
+    rt.update(|s, tx| {
+        s.keys.remove(300);
+        s.version += 1;
+        s.estimate = 75.0;
+        tx.instant();
+    });
+    rt.frame(1.0 / 60.0);
+    assert!(
+        y_of(&rt, "r301").is_some_and(|y| (y - 80.0).abs() < 0.5),
+        "r301 stays at 80 after key + estimate change: {:?}",
+        y_of(&rt, "r301"),
+    );
+
+    // Prepend unmeasured rows above, bump version, and grow the estimate at once.
+    rt.update(|s, _| {
+        for k in 1000..1005 { s.keys.insert(0, k); }
+        s.version += 1;
+        s.estimate = 90.0;
+    });
+    for _ in 0..4 { rt.frame(1.0 / 60.0); }
+    assert!(
+        y_of(&rt, "r301").is_some_and(|y| (y - 80.0).abs() < 0.5),
+        "r301 stays at 80 after prepend + estimate change: {:?}",
+        y_of(&rt, "r301"),
+    );
+
+    // Change only the estimate (keys unchanged) in the opposite direction.
+    rt.update(|s, _| s.estimate = 70.0);
+    for _ in 0..4 { rt.frame(1.0 / 60.0); }
+    assert!(
+        y_of(&rt, "r301").is_some_and(|y| (y - 80.0).abs() < 0.5),
+        "r301 stays at 80 after estimate-only change: {:?}",
+        y_of(&rt, "r301"),
+    );
+}
