@@ -142,3 +142,85 @@ fn plain_space_named_keys_and_command_chords_keep_their_keys() {
     assert_eq!(pick_typed_text(None, Some(" ")), Some(" "));
     assert_eq!(pick_typed_text(None, None), None);
 }
+
+#[test]
+fn dead_key_sequences_type_their_text_and_insert_into_a_field() {
+    use winit::keyboard::{KeyCode, NamedKey};
+    let code = PhysicalKey::Code;
+    let ch = |s: &str| WKey::Character(s.into());
+    let plain = ModifiersState::empty();
+    let shift = ModifiersState::SHIFT;
+    let altgr = ModifiersState::CONTROL | ModifiersState::ALT;
+
+    // First press of a dead key carries no text and types nothing.
+    assert_eq!(map_parts(true, code(KeyCode::Quote), &WKey::Dead(Some('\'')), None, plain), None);
+
+    // Dead key followed by Space, another dead key, a non-combining letter, a combined
+    // character, or Right-Alt AltGr (whose modifiers winit clears).
+    let cases = [
+        (code(KeyCode::Space), WKey::Named(NamedKey::Space), "'", plain),
+        (code(KeyCode::Space), WKey::Named(NamedKey::Space), "\"", shift),
+        (code(KeyCode::Quote), WKey::Dead(Some('\'')), "''", plain),
+        (code(KeyCode::Quote), WKey::Dead(Some('"')), "'\"", shift),
+        (code(KeyCode::Digit6), WKey::Dead(None), "^^", shift),
+        (code(KeyCode::KeyS), ch("s"), "'s", plain),
+        (code(KeyCode::KeyA), ch("á"), "á", plain),
+        (code(KeyCode::KeyQ), ch("@"), "'@", plain),
+    ];
+    for (physical, logical, text, mods) in cases {
+        assert_eq!(
+            map_parts(true, physical, &logical, Some(text), mods),
+            Some(KeyEvent { key: Key::Text(text.into()), mods: map_mods(mods) }),
+            "{logical:?} {text:?} {mods:?}",
+        );
+    }
+
+    // Left Ctrl + Left Alt AltGr dead key twice types off macOS (chord on macOS).
+    let altgr_dead = map_parts(true, code(KeyCode::BracketRight), &WKey::Dead(Some('~')), Some("~~"), altgr);
+    let expected_altgr_dead = (!cfg!(target_os = "macos")).then(|| KeyEvent { key: Key::Text("~~".into()), mods: map_mods(altgr) });
+    assert_eq!(altgr_dead, expected_altgr_dead);
+
+    // Left Ctrl + Left Alt AltGr character after a dead key on Windows.
+    if cfg!(target_os = "windows") {
+        assert_eq!(
+            map_parts(true, code(KeyCode::KeyQ), &ch("@"), Some("'@"), altgr),
+            Some(KeyEvent { key: Key::Text("'@".into()), mods: map_mods(altgr) }),
+        );
+    }
+
+    // Chords and control text on a dead key never type text.
+    for mods in [ModifiersState::CONTROL, ModifiersState::SUPER] {
+        assert_eq!(map_parts(true, code(KeyCode::Quote), &WKey::Dead(Some('\'')), Some("''"), mods), None, "{mods:?}");
+    }
+    if !cfg!(target_os = "macos") {
+        assert_eq!(map_parts(true, code(KeyCode::Quote), &WKey::Dead(Some('\'')), Some("''"), ModifiersState::ALT), None);
+    }
+    for text in ["", "\r", "'\n", "\u{1b}"] {
+        assert_eq!(map_parts(true, code(KeyCode::Quote), &WKey::Dead(Some('\'')), Some(text), plain), None, "{text:?}");
+    }
+
+    // End-to-end into a focused field: ' + Space, ' + ', ' + s, ' + a.
+    let mut rt = Runtime::new(Field::default(), field, (200.0, 40.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let (x, y) = rt.find("reply").unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(0.0);
+    let send = |rt: &mut Runtime<Field>, key: KeyCode, logical: WKey, text: Option<&str>, mods: ModifiersState| {
+        let ev = map_parts(cfg!(target_os = "windows"), code(key), &logical, text, mods);
+        rt.physical_with_fallback(
+            PhysicalInput::Key { key, mods: map_mods(mods), pressed: true, repeat: false },
+            ev,
+        );
+        rt.frame(0.0);
+    };
+    send(&mut rt, KeyCode::Quote, WKey::Dead(Some('\'')), None, plain);
+    send(&mut rt, KeyCode::Space, WKey::Named(NamedKey::Space), Some("'"), plain);
+    send(&mut rt, KeyCode::Quote, WKey::Dead(Some('\'')), None, plain);
+    send(&mut rt, KeyCode::Quote, WKey::Dead(Some('\'')), Some("''"), plain);
+    send(&mut rt, KeyCode::Quote, WKey::Dead(Some('\'')), None, plain);
+    send(&mut rt, KeyCode::KeyS, ch("s"), Some("'s"), plain);
+    send(&mut rt, KeyCode::Quote, WKey::Dead(Some('\'')), None, plain);
+    send(&mut rt, KeyCode::KeyA, ch("á"), Some("á"), plain);
+    assert_eq!(rt.state.edit.text, "''''sá");
+}

@@ -91,9 +91,12 @@ fn typed_text(event: &winit::event::KeyEvent) -> Option<&str> {
     pick_typed_text(with_all_mods, event.text.as_deref())
 }
 
-/// `map_key`, with two text-carrying adjustments:
+/// `map_key`, with three text-carrying adjustments:
 /// - On Windows, text with no key behind it (`NO_KEY`) types as itself with no modifiers, even
 ///   while a hotkey's modifier is still held.
+/// - A second dead key (`WKey::Dead(_)`) carrying printable text (such as `'` then `'` -> `''`
+///   on Windows) types that text unless a chord modifier is held; a first dead key carries no
+///   text and still returns `None`.
 /// - When a non-chord key maps to `Key::Text` (such as `NamedKey::Space`) and the layout typed
 ///   different non-control text (such as ZWNJ U+200C for Shift+Space on a Persian layout, or
 ///   NBSP U+00A0 for Option+Space on macOS), keep the typed text instead of the named key's
@@ -106,6 +109,13 @@ fn map_parts(windows: bool, physical: PhysicalKey, logical: &WKey, text: Option<
         && let Some(text) = text
     {
         return Some(KeyEvent { key: Key::Text(text.to_owned()), mods: Mods::default() });
+    }
+    if matches!(logical, WKey::Dead(_))
+        && !m.super_key()
+        && let Some(text) = text
+    {
+        let ev = KeyEvent { key: Key::Text(text.to_owned()), mods: map_mods(m) };
+        return (!ev.is_command_chord()).then_some(ev);
     }
     let mut ev = map_key(logical, m)?;
     if let Key::Text(t) = &ev.key
