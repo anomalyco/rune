@@ -129,6 +129,8 @@ pub(crate) struct Node {
     pub(super) width_leads: bool,
     /// Inside an `El::instant_changes` element, or one itself.
     pub(super) instant_changes: bool,
+    /// `El::animated_changes` set directly on this element: stops an ancestor's `instant_changes`.
+    pub(super) animated_changes: bool,
     pub(super) streaming: bool,
     pub(super) whole: bool,
     /// Inside an `El::inert` subtree (this element or an ancestor).
@@ -208,7 +210,8 @@ impl Node {
             time_scale: 1.0,
             in_row: RowLayout::Free,
             width_leads: false,
-            instant_changes: false,
+            instant_changes: old.instant_changes,
+            animated_changes: old.animated_changes,
             streaming: false,
             whole: false,
             inert: false,

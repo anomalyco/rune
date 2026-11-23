@@ -84,7 +84,9 @@ pub(super) fn retire_removed_nodes(
         let parent_remained_present =
             old_parent_id.is_none_or(|pid| node_index.get(&pid).is_some_and(|&i| i < present_len));
         if parent_remained_present {
-            let instant = instant || (old.instant_changes && old_parent_id.and_then(|pid| node_index.get(&pid)).is_some_and(|&p| nodes[p].instant_changes));
+            let parent_now_instant = old_parent_id.and_then(|pid| node_index.get(&pid)).is_some_and(|&p| nodes[p].instant_changes);
+            let kept_its_exit = old.animated_changes && !old.instant_changes;
+            let instant = instant || (parent_now_instant && !kept_its_exit);
             let rides_parent = old_parent_id.is_some_and(|p| exit_parents.contains(&p));
             let is_exiting = matches!(scene.phase(old.id), Some(PresencePhase::Exiting { .. }));
             if tx.commit.lands() || ((instant || tx.unprompted) && !rides_parent && !is_exiting) || drew_nothing.get(oi).copied().unwrap_or(false) {

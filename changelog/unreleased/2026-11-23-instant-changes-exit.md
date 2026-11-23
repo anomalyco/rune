@@ -1,0 +1,1 @@
+- Motion (`El::instant_changes`): a child removed in the same commit that first puts `instant_changes` on its parent now leaves immediately instead of fading out, while a child with `El::animated_changes` still keeps its exit transition.

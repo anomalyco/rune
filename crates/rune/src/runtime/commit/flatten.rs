@@ -679,7 +679,8 @@ fn flatten_node<E: FlattenEl>(
     } else {
         in_row
     };
-    let instant_changes = flags.has(ElFlags::INSTANT_CHANGES) || (parent.is_some_and(|p| nodes[p].instant_changes) && !el_ref.cold.animated_changes);
+    let animated_changes = el_ref.cold.animated_changes;
+    let instant_changes = flags.has(ElFlags::INSTANT_CHANGES) || (parent.is_some_and(|p| nodes[p].instant_changes) && !animated_changes);
     let trace_namespace = el_ref.cold.trace_namespace.or_else(|| parent.and_then(|p| nodes[p].trace_namespace));
     let parent_flow = parent.map_or(crate::el::Flow::Ltr, |p| nodes[p].flow);
     let (flow, dir_effect) = crate::el::step_direction(parent_flow, crate::el::DirEvent::of(el_ref));
@@ -758,6 +759,7 @@ fn flatten_node<E: FlattenEl>(
         motion, static_scale, time_scale, in_row,
         width_leads: flags.has(ElFlags::WIDTH_LEADS),
         instant_changes,
+        animated_changes,
         streaming: flags.has(ElFlags::STREAMING),
         whole: flags.has(ElFlags::WHOLE),
         inert, flow, directed, pin, scale_track: false, group_fade: false,
