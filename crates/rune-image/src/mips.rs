@@ -21,7 +21,7 @@ pub(super) struct MipSteps<'a> {
 
 impl<'a> MipSteps<'a> {
     pub(super) fn new(width: u32, height: u32, bytes: &'a [u8]) -> Result<Self, ImageError> {
-        if width == 0 || height == 0 || width > 8192 || height > 8192
+        if width == 0 || height == 0 || width > super::MAX_SIDE || height > super::MAX_SIDE
             || bytes.len() != width as usize * height as usize * 4
         { return Err(ImageError("RGBA image dimensions or byte length are invalid".into())); }
         let srgb = &*SRGB;

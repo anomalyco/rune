@@ -3,26 +3,25 @@
 //! RGBA lands through the same mip path as `ImageCache::rgba`. On native a URL without a scheme
 //! is a path and a `file:` URL names one; both load like `ImageCache::file`.
 use super::{Decoded, Image, ImageCache, ImageError, Input, icon_pixels, mip_chain, svg_rgba};
+#[cfg(any(test, target_arch = "wasm32"))]
+use super::MAX_SIDE;
+#[cfg(target_arch = "wasm32")]
+use super::header;
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen(module = "/src/from_url.js")]
 extern "C" {
-    /// Resolves to `[width, height, Uint8Array]`: straight sRGB RGBA, or `[0, 0, svg bytes]`.
-    #[wasm_bindgen(js_name = fetchImage)]
-    fn fetch_image(url: &str, max_side: u32) -> js_sys::Promise;
+    /// Resolves to `[isSvg, mimeType, Uint8Array]`, the raw bytes fetched from `url`.
+    #[wasm_bindgen(js_name = fetchBytes)]
+    fn fetch_bytes(url: &str) -> js_sys::Promise;
     /// Resolves to `[width, height, Uint8Array]`, straight sRGB RGBA the browser decoded from
-    /// encoded image bytes (JPEG, WebP, AVIF, GIF's first frame).
+    /// encoded image bytes (PNG, JPEG, GIF's first frame, WebP, BMP, ICO, AVIF).
     #[wasm_bindgen(js_name = decodeImage)]
-    fn decode_image(bytes: &[u8], max_side: u32) -> js_sys::Promise;
+    fn decode_image(bytes: &[u8], mime: &str, max_side: u32) -> js_sys::Promise;
     /// Resolves in a later task, letting the browser draw and handle input in between.
     #[wasm_bindgen(js_name = nextTask)]
     fn next_task() -> js_sys::Promise;
 }
-
-/// The largest side a fetched image may have, as for decoded files: 8192 pixels, so at most
-/// 256 MiB of decoded RGBA before mips.
-#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
-pub(super) const MAX_SIDE: u32 = 8192;
 
 impl ImageCache {
     /// The image at `url`, shared by URL, size and scale like [`ImageCache::file`] (SVG
@@ -30,7 +29,7 @@ impl ImageCache {
     /// arrives, then the cache's waker redraws.
     ///
     /// On web the browser fetches `url`, relative to the page, and decodes it off the main
-    /// thread: PNG, JPEG, GIF's first frame, WebP and AVIF, whatever the browser reads, turned
+    /// thread: PNG, JPEG, GIF's first frame, WebP, BMP, ICO and AVIF, turned
     /// upright by EXIF orientation. `image/svg+xml` and `.svg`/`.svgz` URLs rasterize with
     /// Rune's SVG renderer. Images over 8192 pixels a side, failed requests and cross-origin
     /// images without CORS resolve to [`Image::error`]. On native, where Rune has no HTTP
@@ -106,31 +105,48 @@ pub(super) async fn land_in_slices(url: &str, fetched: Fetched, px: u32) -> Resu
     Ok(steps.finish())
 }
 
-/// Fetch and decode `url` in the browser, resolving in a task of its own so each image's mips
-/// are a separate piece of main-thread work.
+/// Fetch and decode `url` in the browser, checking declared dimensions before the browser
+/// allocates a raster and resolving in a task of its own so each image's mips are a separate
+/// piece of main-thread work.
 #[cfg(target_arch = "wasm32")]
 pub(super) async fn fetch(url: &str) -> Result<Fetched, ImageError> {
-    browser_reply(url, fetch_image(url, MAX_SIDE)).await
+    use wasm_bindgen::JsCast;
+    let reply: js_sys::Array = js_await(url, fetch_bytes(url)).await?.unchecked_into();
+    let is_svg = reply.get(0).as_bool().unwrap_or(false);
+    let mime = reply.get(1).as_string().unwrap_or_default();
+    let bytes = reply.get(2).unchecked_into::<js_sys::Uint8Array>().to_vec();
+    if is_svg {
+        wasm_bindgen_futures::JsFuture::from(next_task()).await.ok();
+        return Ok(Fetched::Svg(bytes));
+    }
+    header::check(&bytes).map_err(|e| ImageError(format!("{url}: {e}")))?;
+    browser_reply(url, decode_image(&bytes, &mime, MAX_SIDE)).await
 }
 
 /// Encoded image bytes decoded by the browser's own codecs, off the main thread, so a web build
-/// carries no JPEG decoder of its own.
+/// carries no JPEG decoder of its own. Declared dimensions are checked before `createImageBitmap`.
 #[cfg(target_arch = "wasm32")]
 pub(super) async fn decode_in_browser(bytes: &[u8]) -> Result<Fetched, ImageError> {
-    browser_reply("image", decode_image(bytes, MAX_SIDE)).await
+    header::check(bytes).map_err(|e| ImageError(format!("image: {e}")))?;
+    browser_reply("image", decode_image(bytes, "", MAX_SIDE)).await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn js_await(url: &str, promise: js_sys::Promise) -> Result<wasm_bindgen::JsValue, ImageError> {
+    use wasm_bindgen::JsCast;
+    wasm_bindgen_futures::JsFuture::from(promise).await.map_err(|e| {
+        let why = e.dyn_ref::<js_sys::Error>().map_or_else(|| format!("{e:?}"), |e| String::from(e.message()));
+        ImageError(format!("{url}: {why}"))
+    })
 }
 
 #[cfg(target_arch = "wasm32")]
 async fn browser_reply(url: &str, promise: js_sys::Promise) -> Result<Fetched, ImageError> {
     use wasm_bindgen::JsCast;
-    let reply = wasm_bindgen_futures::JsFuture::from(promise).await.map_err(|e| {
-        let why = e.dyn_ref::<js_sys::Error>().map_or_else(|| format!("{e:?}"), |e| String::from(e.message()));
-        ImageError(format!("{url}: {why}"))
-    })?;
-    let reply: js_sys::Array = reply.unchecked_into();
+    let reply: js_sys::Array = js_await(url, promise).await?.unchecked_into();
     let side = |i| reply.get(i).as_f64().unwrap_or(0.0) as u32;
     let bytes = reply.get(2).unchecked_into::<js_sys::Uint8Array>().to_vec();
-    Ok(if side(0) == 0 { Fetched::Svg(bytes) } else { Fetched::Rgba(side(0), side(1), bytes) })
+    Ok(Fetched::Rgba(side(0), side(1), bytes))
 }
 
 /// The file a native `url` names: a path with no scheme, or a `file:` URL.

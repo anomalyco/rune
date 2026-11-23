@@ -272,7 +272,7 @@ impl ImageAtlas {
     pub fn place_at(&mut self, pixels: &Pixels, drawn: [f32; 2], now: Option<f64>) -> Option<(Placed, Option<f64>)> {
         let frame = pixels.frame.lock().unwrap();
         let (mut w, mut h) = (frame.width, frame.height);
-        if w == 0 || h == 0 || w > 8192 || h > 8192 {
+        if w == 0 || h == 0 || w > crate::MAX_SIDE || h > crate::MAX_SIDE {
             return None;
         }
         let mut level = 0;

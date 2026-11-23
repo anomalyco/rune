@@ -12,6 +12,8 @@ pub(crate) mod animated;
 mod app_icon;
 mod avif;
 mod from_url;
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+mod header;
 #[cfg(test)]
 mod mip_tests;
 mod mips;
@@ -33,6 +35,12 @@ pub use place::SurfaceFit;
 #[cfg(test)]
 use mips::byte;
 use mips::mip_chain;
+
+/// Largest image side Rune decodes or accepts on native and web: 8192 pixels, so 8-bit RGBA
+/// stays within [`MAX_ALLOC`] before mips.
+pub(crate) const MAX_SIDE: u32 = 8192;
+/// Largest decoded raster buffer Rune allocates: 256 MiB.
+pub(crate) const MAX_ALLOC: u64 = 256 * 1024 * 1024;
 
 pub type ImageId = [u8; 32];
 
@@ -646,9 +654,9 @@ fn decode(bytes: &[u8]) -> Result<Decoded, ImageError> {
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format().map_err(|e| ImageError(e.to_string()))?;
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(8192);
-    limits.max_image_height = Some(8192);
-    limits.max_alloc = Some(256 * 1024 * 1024);
+    limits.max_image_width = Some(MAX_SIDE);
+    limits.max_image_height = Some(MAX_SIDE);
+    limits.max_alloc = Some(MAX_ALLOC);
     reader.limits(limits.clone());
     // `ImageReader::decode`, keeping the decoder to read its EXIF orientation (a phone's JPEG
     // stores its pixels as the sensor saw them and says how to turn them upright).
@@ -689,7 +697,7 @@ fn icns_png(bytes: &[u8]) -> Result<&[u8], ImageError> {
             let w = u32::from_be_bytes(chunk[16..20].try_into().unwrap());
             let h = u32::from_be_bytes(chunk[20..24].try_into().unwrap());
             let candidate = u64::from(w) * u64::from(h);
-            if w <= 8192 && h <= 8192 && candidate > area { best = Some(chunk); area = candidate; }
+            if w <= MAX_SIDE && h <= MAX_SIDE && candidate > area { best = Some(chunk); area = candidate; }
         }
         pos = end;
     }

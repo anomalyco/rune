@@ -1,26 +1,22 @@
-// `url` (relative to the page) decoded by the browser's own codecs, which run off the main
-// thread: `[width, height, rgba]` with straight-alpha sRGB RGBA bytes, upright by EXIF. SVG comes
-// back as `[0, 0, bytes]` for Rune to rasterize. Images over `maxSide` a side are refused
-// before their pixels are read. It resolves in a task of its own, so Rune's work on one image
-// (its mips) never runs in the same long task as another's or a frame's.
-export async function fetchImage(url, maxSide) {
-    const reply = await readImage(url, maxSide);
-    await nextTask();
-    return reply;
-}
-
-async function readImage(url, maxSide) {
+// Fetch `url` (relative to the page) as `[isSvg, mimeType, bytes]` so Rust can validate
+// declared image dimensions before the browser decodes its raster.
+export async function fetchBytes(url) {
     const response = await fetch(new URL(url, document.baseURI));
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const blob = await response.blob();
-    const type = (response.headers.get('content-type') || blob.type).split(';')[0].trim().toLowerCase();
+    const type = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
     const path = response.url ? new URL(response.url).pathname : '';
-    if (type === 'image/svg+xml' || /\.svgz?$/i.test(path)) return [0, 0, new Uint8Array(await blob.arrayBuffer())];
-    return blobRgba(blob, maxSide);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return [type === 'image/svg+xml' || /\.svgz?$/i.test(path), type, bytes];
 }
 
-export async function decodeImage(bytes, maxSide) {
-    const reply = await blobRgba(new Blob([bytes]), maxSide);
+// Encoded image bytes decoded by the browser's own codecs, which run off the main thread:
+// `[width, height, rgba]` with straight-alpha sRGB RGBA bytes, upright by EXIF. Images over
+// `maxSide` a side are refused again after decode as a second guard. It resolves in a task of
+// its own, so Rune's work on one image (its mips) never runs in the same long task as another's
+// or a frame's.
+export async function decodeImage(bytes, mime, maxSide) {
+    const blob = mime ? new Blob([bytes], { type: mime }) : new Blob([bytes]);
+    const reply = await blobRgba(blob, maxSide);
     await nextTask();
     return reply;
 }
