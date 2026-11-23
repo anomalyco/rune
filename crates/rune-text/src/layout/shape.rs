@@ -382,7 +382,7 @@ impl TextSystem {
         };
         let mut layout = build(&mut self.layout_cx, &mut self.font_cx, &[], &widen, &[], &[], &[]);
         // On Windows, system faces as DirectWrite picks them for each run's weight, as Chromium.
-        let system = cfg!(target_os = "windows") && !text.is_ascii();
+        let system = cfg!(target_os = "windows") && !self.font_files.is_empty();
         let wanted = |at: usize| spans.iter().rev().find_map(|s| s.weight.filter(|_| span_range(s).contains(&at))).unwrap_or(style.weight);
         let weights = if system {
             system_weight::corrections(&mut self.system_faces, &mut self.font_cx, &self.font_files, &layout, wanted)
@@ -395,7 +395,7 @@ impl TextSystem {
         // Inline code keeps inside the line box its text sets, as a browser's does.
         let fits = strut.map_or_else(Vec::new, |strut| inline_fit::mono_fits(&layout, text, spans, style, scale, strut));
         // Bold asked of a system face with no bold draws synthetic bold, as Chromium's does.
-        let bolds = cfg!(target_os = "windows") && (style.weight >= 600.0 || spans.iter().any(|s| s.weight.is_some_and(|w| w >= 600.0)));
+        let bolds = system && (style.weight >= 600.0 || spans.iter().any(|s| s.weight.is_some_and(|w| w >= 600.0)));
         let bold = if bolds {
             synthetic_bold::inks(&system_weight::synthetic_bold(&mut self.system_faces, &mut self.font_cx, &self.font_files, &layout, wanted), spans)
         } else {

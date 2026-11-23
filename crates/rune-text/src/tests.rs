@@ -738,3 +738,59 @@ fn generic_emoji_lookup_picks_first_color_font() {
     collection.set_generic_families(GenericFamily::Emoji, [dejavu, noto_mono].into_iter());
     assert_eq!(system_fonts::first_color_emoji_family(&mut collection), None);
 }
+
+/// On Windows, static system fonts use DirectWrite's weight pick for ASCII text too, so adding
+/// a covered non-ASCII character (such as `…` or `é`) does not change the face or weight of
+/// the shared ASCII prefix. Bundled fonts keep their own matching.
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_system_font_weight_matches_for_ascii_and_unicode() {
+    let mut ts = TextSystem::default();
+    ts.load_installed("Segoe UI");
+    if ts.font_cx.collection.family_id("Segoe UI").is_none() {
+        eprintln!("skipping: Segoe UI not installed");
+        return;
+    }
+    let first_face = |ts: &mut TextSystem, text: &str, spans: &[Span], style: TextStyle, at: usize| {
+        let mut found = None;
+        runs(ts, text, spans, style, |run, font| {
+            if found.is_none() && run.run().text_range().contains(&at) {
+                let raw = run.run().font();
+                found = Some((raw.data.id(), raw.index, font.attributes().weight().0));
+            }
+        });
+        found.expect("run covering byte offset")
+    };
+
+    let segoe = TextStyle::new(13.0, 500.0).family(Family::Named("Segoe UI"));
+    let ascii = first_face(&mut ts, "Sample motion 'cafe' - ...", &[], segoe, 0);
+    for text in [
+        "Sample motion 'cafe' - …",
+        "Sample motion 'café' - ...",
+        "Sample motion — test",
+    ] {
+        let unicode = first_face(&mut ts, text, &[], segoe, 0);
+        assert_eq!(ascii, unicode, "Segoe UI 500 ASCII prefix differed for {text:?}");
+    }
+    assert_eq!(ascii.2, 600, "DirectWrite breaks the 400/600 tie at 500 toward 600");
+
+    // A weight-500 span inside a regular label behaves the same for ASCII and Unicode.
+    let regular = TextStyle::new(13.0, 400.0).family(Family::Named("Segoe UI"));
+    let span = [Span::new(6, 12).weight(500.0)];
+    assert_eq!(
+        first_face(&mut ts, "plain medium", &span, regular, 6),
+        first_face(&mut ts, "plain medium…", &span, regular, 6),
+    );
+
+    // Exact weights keep their faces, and bundled Inter keeps its own 500 face.
+    for weight in [400.0, 600.0, 700.0] {
+        let style = TextStyle::new(13.0, weight).family(Family::Named("Segoe UI"));
+        let face = first_face(&mut ts, "Sample", &[], style, 0);
+        assert_eq!(face, first_face(&mut ts, "Sample…", &[], style, 0));
+        assert_eq!(face.2, weight as u16);
+    }
+    let inter = TextStyle::new(13.0, 500.0);
+    let inter_ascii = first_face(&mut ts, "Sample", &[], inter, 0);
+    assert_eq!(inter_ascii, first_face(&mut ts, "Sample…", &[], inter, 0));
+    assert_eq!(inter_ascii.2, 500);
+}
