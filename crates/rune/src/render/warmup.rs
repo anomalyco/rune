@@ -160,6 +160,25 @@ impl Renderer {
         }
     }
 
+    /// Drops surface-specific textures and scratch buffers before parking this renderer for a
+    /// future surface (`warm::park`), keeping compiled pipelines and the glyph atlas.
+    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+    pub(super) fn clear_for_park(&mut self) {
+        self.clear_images();
+        self.layers.clear_all();
+        self.backdrops.clear();
+        if let Some(blur) = &mut self.backdrop_blur { blur.give_back(); }
+        self.uploads.forget_instances();
+        self.uploads.trim();
+        self.image_batches.clear();
+        self.count = 0;
+        self.effects.clear();
+        #[cfg(target_os = "windows")]
+        { *self.damage.get_mut().unwrap_or_else(|e| e.into_inner()) = Default::default(); }
+        #[cfg(all(feature = "alloc-sites", not(target_arch = "wasm32")))]
+        self.report_pools();
+    }
+
     /// Extracts the `Send` core when no native surface renderer has been created; drops `self` on
     /// the calling thread and returns `None` otherwise.
     #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]

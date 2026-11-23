@@ -27,6 +27,44 @@ impl RuntimeCore {
         self.commit.dirty = true;
     }
 
+    /// Drops uploaded image atlas pages and every `Pixels` reference kept in the last committed
+    /// tree and memo cache, marking the view dirty so the next frame rebuilds and re-uploads any
+    /// image the view still shows.
+    #[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+    pub(crate) fn drop_images(&mut self) {
+        let mut dropped = self.images.clear();
+        let has_tree_pixels = self.tree.nodes.iter().any(|n| {
+            n.vis.cold.get().is_some_and(|v| v.pixels.is_some())
+                || n.text.as_ref().is_some_and(|t| t.cold.pills.iter().any(|p| p.bare.as_ref().is_some_and(|b| b.image.is_some())))
+        });
+        if has_tree_pixels {
+            // Clear memos first so `Cold` / `SharedBox` refcounts drop to 1 before mutating in place.
+            self.commit.clear_memo();
+            for node in &mut self.tree.nodes {
+                if node.vis.cold.get().is_some_and(|v| v.pixels.is_some())
+                    && let Some(vis) = node.vis.cold.get_mut_if_some()
+                {
+                    vis.pixels = None;
+                }
+                if node.text.as_ref().is_some_and(|t| t.cold.pills.iter().any(|p| p.bare.as_ref().is_some_and(|b| b.image.is_some())))
+                    && let Some(text) = node.text.as_mut()
+                    && let Some(cold) = text.cold.get_mut_if_some()
+                {
+                    for pill in &mut cold.pills {
+                        if let Some(bare) = pill.bare.as_mut() {
+                            bare.image = None;
+                        }
+                    }
+                }
+            }
+            dropped = true;
+        }
+        if dropped {
+            self.commit.clear_memo();
+            self.commit.dirty = true;
+        }
+    }
+
     /// Lands every track before the next frame: growth, reveals and follow-the-end (guarantee 8,
     /// for returning to a window or session).
     pub fn settle_all(&mut self) {

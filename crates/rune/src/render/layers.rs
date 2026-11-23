@@ -114,6 +114,21 @@ impl Layers {
         }
     }
 
+    #[cfg_attr(not(any(test, not(any(target_os = "macos", target_arch = "wasm32")))), allow(dead_code))]
+    pub(super) fn clear_images(&mut self) {
+        for t in self.targets.iter_mut().flatten().chain(&mut self.retained).chain(&mut self.spare) {
+            t.images.clear();
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+    pub(super) fn clear_all(&mut self) {
+        self.plan.clear();
+        self.targets.clear();
+        self.retained.clear();
+        self.spare.clear();
+    }
+
     /// Test-only: notes the peak of the bytes this frame holds live, targets and blur scratches
     /// alike, so a test can pin it against the peak dev held.
     #[cfg(test)]

@@ -379,6 +379,16 @@ impl ImageAtlas {
         self.pages.truncate(keep);
     }
 
+    /// Drops every page, slot and animation start, freeing all CPU image buffers. Returns whether
+    /// the atlas held any pages or slots.
+    pub fn clear(&mut self) -> bool {
+        let had = !self.pages.is_empty() || !self.slots.is_empty() || !self.starts.is_empty();
+        self.pages.clear();
+        self.slots.clear();
+        self.starts.clear();
+        had
+    }
+
     /// Marks every row for upload (a new texture).
     pub fn invalidate(&mut self) {
         for page in &mut self.pages { page.dirty = Some((0, page.height)); }

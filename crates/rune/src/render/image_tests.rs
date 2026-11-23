@@ -259,3 +259,35 @@ fn gpu_pixels_fit_letterboxes_and_fill_crops() {
     }
     assert!(out.as_chunks::<4>().0.iter().all(|p| p[0] < 200), "red and white columns are cropped");
 }
+
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+#[test]
+fn clear_for_park_drops_image_textures_and_reuploads_cleanly() {
+    use crate::el::{El, el};
+    use crate::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
+    use crate::runtime::{Cx, Env, Runtime};
+    fn view(px: &Pixels, _: &mut Cx<Pixels>) -> El { el().size(4.0, 4.0).pixels(px) }
+    let px = Pixels::new();
+    px.set(4, 4, [240, 30, 80, 255].repeat(16));
+    let mut rt = Runtime::new(px, view, (4.0, 4.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let gpu = Gpu::headless();
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (4, 4));
+    renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+    assert!(renderer.has_images());
+    renderer.clear_for_park();
+    assert!(!renderer.has_images(), "parking a renderer drops its image textures");
+    rt.images.invalidate();
+    renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (4, 4));
+    renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+    let target = Offscreen::new(&gpu.device, 4, 4);
+    let mut enc = gpu.device.create_command_encoder(&Default::default());
+    renderer.draw(&mut enc, &target.view, [0.0; 4]);
+    target.copy(&mut enc);
+    renderer.submit(&gpu.queue, enc);
+    let out = target.read(&gpu.device);
+    for (got, want) in out[..4].iter().zip([240u8, 30, 80, 255]) {
+        assert!(got.abs_diff(want) <= 1, "re-uploaded pixel {got} != {want}");
+    }
+}

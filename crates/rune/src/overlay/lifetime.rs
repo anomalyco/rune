@@ -220,7 +220,26 @@ impl OverlayCore {
                 window.set_visible(false);
             }
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-            Backing::Layer(_) | Backing::Xwayland(_) => { self.surface.take_live(); }
+            Backing::Layer(_) | Backing::Xwayland(_) => {
+                self.surface.take_live();
+                self.drop_hidden_images(app);
+            }
+        }
+    }
+
+    /// Drops the last shown frame's `Pixels` references, CPU image atlas pages and GPU image
+    /// textures when a Wayland overlay's surface is destroyed on hide. The next show rebuilds
+    /// the view and uploads whatever images it still draws.
+    #[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+    pub(super) fn drop_hidden_images(&mut self, app: &mut dyn OverlayApp) {
+        app.rt_mut().drop_images();
+        let dropped_gpu = self.renderer.as_mut().is_some_and(Renderer::clear_images);
+        if dropped_gpu && self.release != Release::Now
+            && let Some(gpu) = &self.gpu
+            && !gpu.is_lost()
+        {
+            gpu.queue.submit(std::iter::empty());
+            rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
         }
     }
 
@@ -373,21 +392,40 @@ impl OverlayCore {
     /// screen-sized panels that join every Space empty Mission Control's Space thumbnails.
     /// There the window goes too, and the next show makes a new one.
     pub(super) fn park(&mut self) {
-        if !matches!(self.surface.live().map(|l| &l.backing), Some(Backing::Window(_))) { return; }
-        #[cfg(any(target_os = "windows", target_os = "macos"))]
-        self.release();
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        {
-            let Some(Live { alpha, surface, backing, .. }) = self.surface.take_live() else { return };
-            // The surface goes before the device that made it and the window it draws into.
-            drop(alpha);
-            drop(surface);
-            self.surface.park(backing);
+        if let Some(live) = self.surface.live() {
+            if !matches!(live.backing, Backing::Window(_)) { return; }
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            self.release();
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+            {
+                let Some(Live { alpha, surface, backing, .. }) = self.surface.take_live() else { return };
+                // The surface goes before the device that made it and the window it draws into.
+                drop(alpha);
+                drop(surface);
+                self.surface.park(backing);
+            }
         }
         // The device goes to the next surface rather than with this one; one another
-        // surface still draws with stays there.
-        if let (Some(gpu), Some(renderer)) = (self.gpu.take(), self.renderer.take()) && let Ok(gpu) = Arc::try_unwrap(gpu) {
-            crate::render::park_gpu(gpu, renderer);
+        // surface still draws with stays there, polled now so finished frames and this
+        // overlay's dropped surface and renderer resources retire immediately.
+        match (self.gpu.take(), self.renderer.take()) {
+            (Some(gpu), Some(renderer)) => match Arc::try_unwrap(gpu) {
+                Ok(gpu) => crate::render::park_gpu(gpu, renderer),
+                Err(gpu) => {
+                    drop(renderer);
+                    if !gpu.is_lost() {
+                        gpu.queue.submit(std::iter::empty());
+                        rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
+                    }
+                }
+            },
+            (Some(gpu), None) => {
+                if !gpu.is_lost() {
+                    gpu.queue.submit(std::iter::empty());
+                    rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
+                }
+            }
+            (None, renderer) => drop(renderer),
         }
         *self.shared.surface.lock().unwrap() = None;
     }

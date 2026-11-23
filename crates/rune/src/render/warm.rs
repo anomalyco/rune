@@ -111,8 +111,10 @@ fn wait_for_surface(mut state: std::sync::MutexGuard<'_, State>) {
 /// take within `linger`. The device first finishes its work, so what the dropped surface and
 /// its swapchain left is freed now rather than whenever the device next runs. When something
 /// already waits in the slot, this one goes; so does a device that died while it was hidden.
-pub(crate) fn park(gpu: Gpu, renderer: Renderer, linger: Duration) {
+pub(crate) fn park(gpu: Gpu, mut renderer: Renderer, linger: Duration) {
     if gpu.is_lost() { return; }
+    renderer.clear_for_park();
+    gpu.queue.submit(std::iter::empty());
     rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
     let Some(renderer) = renderer.into_warm() else { return };
     let mut state = lock(&SLOT.state);

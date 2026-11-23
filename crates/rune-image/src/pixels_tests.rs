@@ -170,3 +170,26 @@ fn pages_expand_reclaim_and_keep_streaming_slots_stable() {
     atlas.end_frame();
     assert_eq!(atlas.pages.len(), 1, "the first page keeps its images");
 }
+
+#[test]
+fn clear_drops_pages_slots_and_replaces_cleanly() {
+    let mut atlas = ImageAtlas::default();
+    assert!(!atlas.clear());
+    let big = Pixels::new();
+    big.set(2048, 2, vec![7; 2048 * 2 * 4]);
+    let small = Pixels::new();
+    small.set(4, 4, vec![9; 4 * 4 * 4]);
+    atlas.place(&big, [2048.0, 2.0]).unwrap();
+    atlas.place(&small, [4.0, 4.0]).unwrap();
+    atlas.end_frame();
+    assert_eq!(atlas.pages.len(), 2);
+    assert!(atlas.has_slot(&big, 0));
+    assert!(atlas.clear());
+    assert!(atlas.pages.is_empty());
+    assert!(!atlas.has_slot(&big, 0));
+    assert!(!atlas.has_slot(&small, 0));
+    assert!(!atlas.clear());
+    let placed = atlas.place(&small, [4.0, 4.0]).unwrap();
+    assert_eq!(placed.page, 0);
+    assert_eq!(atlas.pages[0].dirty, Some((0, 4)));
+}

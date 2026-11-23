@@ -1,0 +1,1 @@
+- Wayland: hiding an overlay now drops its last shown `Pixels` references, CPU image atlas pages, and GPU image textures without requiring an extra frame; `release_gpu_when_hidden` and `release_gpu_after` now release and park the renderer and GPU device on Wayland even after hide destroys the surface, polling shared devices and dropping transient GPU textures before parking.
