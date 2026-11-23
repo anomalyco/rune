@@ -479,6 +479,7 @@ impl OverlayCore {
                 }
             }
             Input::Key(key) => app.rt_mut().key(key),
+            Input::KeyRepeat(key) => app.rt_mut().repeat_key(key),
             Input::KeyUp(key) => {
                 self.dirty |= app.key_up(key);
                 return;

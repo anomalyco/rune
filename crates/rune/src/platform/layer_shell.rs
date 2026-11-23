@@ -23,14 +23,14 @@ use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1:
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1};
 
-use super::layer_shell_machine::{configure_wait, exclusive_zone, keyboard, readiness, touch};
+use super::layer_shell_machine::{configure_wait, exclusive_zone, keyboard, readiness, repeat, touch};
 use crate::el::Align;
 use crate::overlay::{Placement, ScreenEdge};
 use crate::runtime::Waker;
 use crate::{OverlayInput, OverlayOptions, OverlayPlacement};
 
 pub(crate) enum Input {
-    Move(f32, f32), Leave, Button(bool), Secondary(bool), Focus(bool), Key(crate::KeyEvent), KeyUp(crate::KeyEvent),
+    Move(f32, f32), Leave, Button(bool), Secondary(bool), Focus(bool), Key(crate::KeyEvent), KeyRepeat(crate::KeyEvent), KeyUp(crate::KeyEvent),
     Physical(crate::PhysicalInput, Option<crate::KeyEvent>),
 }
 
@@ -69,6 +69,8 @@ struct State {
     keyboard: Option<WlKeyboard>,
     xkb: Option<xkbcommon::xkb::State>,
     mod_state: Option<keyboard::ModState>,
+    repeat_seq: crate::machine::Seq,
+    repeat: repeat::State,
 }
 
 impl Dispatch<WlOutput, ()> for State {
@@ -87,6 +89,45 @@ impl State {
         for effect in keyboard::step(&mut self.keyboard_focus, event) {
             let keyboard::FocusEffect::Focus(focused) = effect;
             self.input.push(Input::Focus(focused));
+        }
+    }
+
+    fn step_repeat(&mut self, event: repeat::Event) {
+        let _ = repeat::step(&mut self.repeat_seq, &mut self.repeat, event);
+    }
+
+    fn emit_key(&mut self, key: u32, pressed: bool, repeat: bool) {
+        use winit::platform::scancode::PhysicalKeyExtScancode;
+        let Some(xkb) = &self.xkb else { return };
+        let physical = match crate::PhysicalKeyCode::from_scancode(key) {
+            winit::keyboard::PhysicalKey::Code(code) => Some(code),
+            _ => None,
+        };
+        let fallback = key_event(xkb, key, physical);
+        if let Some(code) = physical {
+            self.input.push(Input::Physical(
+                crate::PhysicalInput::Key { key: code, mods: key_mods(xkb), pressed, repeat },
+                fallback,
+            ));
+        } else if let Some(key) = fallback {
+            self.input.push(match (pressed, repeat) {
+                (true, true) => Input::KeyRepeat(key),
+                (true, false) => Input::Key(key),
+                (false, _) => Input::KeyUp(key),
+            });
+        }
+    }
+
+    fn fire_repeat(&mut self, attempt: crate::machine::Attempt, now: crate::time::Instant) {
+        for effect in repeat::step(&mut self.repeat_seq, &mut self.repeat, repeat::Event::Due { attempt, now }) {
+            match effect {
+                repeat::Effect::Repeat { key } => {
+                    if self.keyboard_focus.focused() {
+                        self.emit_key(key, true, true);
+                    }
+                }
+                repeat::Effect::WakeAt(_) => {}
+            }
         }
     }
 
@@ -115,6 +156,7 @@ impl State {
             if k.version() >= 3 { k.release(); }
             self.xkb = None;
             self.mod_state = None;
+            self.step_repeat(repeat::Event::KeyboardGone);
             self.step_keyboard_focus(keyboard::FocusEvent::KeyboardGone);
         }
     }
@@ -173,6 +215,7 @@ impl Dispatch<WlKeyboard, ()> for State {
         use xkbcommon::xkb;
         match event {
             wl_keyboard::Event::Enter { surface, .. } => {
+                state.step_repeat(repeat::Event::Stop);
                 let focus_event = if state.surface.as_ref() == Some(&surface) {
                     keyboard::FocusEvent::EnterOurs
                 } else {
@@ -181,6 +224,7 @@ impl Dispatch<WlKeyboard, ()> for State {
                 state.step_keyboard_focus(focus_event);
             }
             wl_keyboard::Event::Leave { surface, .. } if state.surface.as_ref() == Some(&surface) => {
+                state.step_repeat(repeat::Event::Stop);
                 state.step_keyboard_focus(keyboard::FocusEvent::LeaveOurs);
             }
             wl_keyboard::Event::Keymap { format: wayland_client::WEnum::Value(wl_keyboard::KeymapFormat::XkbV1), fd, size } => {
@@ -193,6 +237,11 @@ impl Dispatch<WlKeyboard, ()> for State {
                         }
                         xkb_state
                     });
+                    if let Some(held) = state.repeat.key()
+                        && !state.xkb.as_ref().is_some_and(|xkb| xkb.get_keymap().key_repeats(xkb::Keycode::new(held + 8)))
+                    {
+                        state.step_repeat(repeat::Event::Stop);
+                    }
                 }
             }
             wl_keyboard::Event::Modifiers { mods_depressed, mods_latched, mods_locked, group, .. } => {
@@ -202,20 +251,24 @@ impl Dispatch<WlKeyboard, ()> for State {
                     state.input.push(Input::Physical(crate::PhysicalInput::Modifiers(key_mods(xkb)), None));
                 }
             }
-            wl_keyboard::Event::Key { key, state: wayland_client::WEnum::Value(pressed), .. } if state.keyboard_focus.focused() => {
-                use winit::platform::scancode::PhysicalKeyExtScancode;
-                if let Some(xkb) = &state.xkb {
-                    let pressed = pressed == wl_keyboard::KeyState::Pressed;
-                    let physical = match crate::PhysicalKeyCode::from_scancode(key) {
-                        winit::keyboard::PhysicalKey::Code(code) => Some(code),
-                        _ => None,
-                    };
-                    let fallback = key_event(xkb, key, physical);
-                    if let Some(code) = physical {
-                        state.input.push(Input::Physical(crate::PhysicalInput::Key { key: code, mods: key_mods(xkb), pressed, repeat: false }, fallback));
-                    } else if let Some(key) = fallback {
-                        state.input.push(if pressed { Input::Key(key) } else { Input::KeyUp(key) });
+            wl_keyboard::Event::RepeatInfo { rate, delay } => {
+                state.step_repeat(repeat::Event::RepeatInfo { rate, delay_ms: delay });
+            }
+            wl_keyboard::Event::Key { key, state: wayland_client::WEnum::Value(key_state), .. } if state.keyboard_focus.focused() => {
+                match key_state {
+                    wl_keyboard::KeyState::Pressed => {
+                        state.emit_key(key, true, false);
+                        let repeats = state.xkb.as_ref().is_some_and(|xkb| xkb.get_keymap().key_repeats(xkb::Keycode::new(key + 8)));
+                        state.step_repeat(repeat::Event::Press { key, repeats, now: crate::time::now() });
                     }
+                    wl_keyboard::KeyState::Released => {
+                        state.emit_key(key, false, false);
+                        state.step_repeat(repeat::Event::Release { key });
+                    }
+                    wl_keyboard::KeyState::Repeated => {
+                        state.emit_key(key, true, true);
+                    }
+                    _ => {}
                 }
             }
             _ => {}
@@ -613,9 +666,19 @@ impl LayerSurface {
         }
     }
 
-    /// Handles what the compositor sent since the last call (winit reads the socket).
+    /// Next held-key repeat deadline for the overlay's wake timer, or `None` when idle.
+    pub fn repeat_deadline(&self) -> Option<crate::time::Instant> {
+        self.state.repeat.deadline()
+    }
+
+    /// Handles what the compositor sent since the last call (winit reads the socket) and fires
+    /// any due held-key repeat.
     pub fn dispatch(&mut self) -> Changes {
+        let armed = self.state.repeat.attempt();
         self.turn();
+        if let Some(attempt) = armed {
+            self.state.fire_repeat(attempt, crate::time::now());
+        }
         Changes {
             size: self.state.readiness.take_size(),
             input: std::mem::take(&mut self.state.input),
@@ -630,6 +693,7 @@ impl LayerSurface {
     /// `wl_keyboard.keymap` (each virtual keyboard a paste tool makes sends a few).
     pub fn drain(&mut self) -> bool {
         self.turn();
+        self.state.step_repeat(repeat::Event::Stop);
         self.state.input.clear();
         self.state.readiness.closed()
     }

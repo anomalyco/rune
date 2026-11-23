@@ -528,3 +528,157 @@ fn fullscreen_placement_uses_exclusive_zone_minus_one_and_others_stay_zero() {
         0
     );
 }
+
+#[test]
+fn key_repeat_uses_default_delay_and_rate_until_repeat_info_and_ignores_stale_or_early_timers() {
+    use super::repeat::{Effect, Event, State, step};
+    use crate::machine::Seq;
+    use std::time::Duration;
+
+    let t0 = crate::time::now();
+    let mut seq = Seq::default();
+    let mut state = State::default();
+    assert_eq!(state.deadline(), None);
+    assert_eq!(state.attempt(), None);
+    assert_eq!(state.key(), None);
+
+    // Default policy before wl_keyboard.repeat_info arrives: 200 ms delay, 25 Hz (40 ms).
+    let effects: Vec<_> = step(&mut seq, &mut state, Event::Press { key: 14, repeats: true, now: t0 }).into_iter().collect();
+    let first_due = t0 + Duration::from_millis(200);
+    assert_eq!(effects, [Effect::WakeAt(first_due)]);
+    assert_eq!(state.deadline(), Some(first_due));
+    assert_eq!(state.key(), Some(14));
+    let a1 = state.attempt().expect("armed attempt");
+
+    // Early wake changes nothing.
+    assert!(step(&mut seq, &mut state, Event::Due { attempt: a1, now: t0 + Duration::from_millis(199) }).is_empty());
+    assert_eq!(state.deadline(), Some(first_due));
+    assert_eq!(state.attempt(), Some(a1));
+
+    // At the initial delay: fires once and advances by 40 ms with a fresh attempt.
+    let effects: Vec<_> = step(&mut seq, &mut state, Event::Due { attempt: a1, now: first_due }).into_iter().collect();
+    let second_due = first_due + Duration::from_millis(40);
+    assert_eq!(effects, [Effect::Repeat { key: 14 }, Effect::WakeAt(second_due)]);
+    let a2 = state.attempt().expect("second armed attempt");
+    assert_ne!(a1, a2);
+    assert_eq!(state.deadline(), Some(second_due));
+
+    // Stale attempt from before the first repeat is ignored even at or past the new deadline.
+    assert!(step(&mut seq, &mut state, Event::Due { attempt: a1, now: second_due }).is_empty());
+    assert_eq!(state.deadline(), Some(second_due));
+
+    // Second repeat fires at 240 ms.
+    let effects: Vec<_> = step(&mut seq, &mut state, Event::Due { attempt: a2, now: second_due }).into_iter().collect();
+    let third_due = second_due + Duration::from_millis(40);
+    assert_eq!(effects, [Effect::Repeat { key: 14 }, Effect::WakeAt(third_due)]);
+    let a3 = state.attempt().expect("third armed attempt");
+
+    // A stall (wake way past due) emits one repeat without bursting and schedules strictly in the future.
+    let stalled_now = t0 + Duration::from_secs(2);
+    let effects: Vec<_> = step(&mut seq, &mut state, Event::Due { attempt: a3, now: stalled_now }).into_iter().collect();
+    assert_eq!(effects, [Effect::Repeat { key: 14 }, Effect::WakeAt(stalled_now + Duration::from_millis(40))]);
+}
+
+#[test]
+fn key_repeat_applies_compositor_repeat_info_and_disables_on_rate_zero() {
+    use super::repeat::{Effect, Event, Policy, State, step};
+    use crate::machine::Seq;
+    use std::time::Duration;
+
+    let t0 = crate::time::now();
+    let mut seq = Seq::default();
+    let mut state = State::default();
+
+    // Custom compositor rate (10 Hz -> 100 ms) and delay (500 ms).
+    assert!(step(&mut seq, &mut state, Event::RepeatInfo { rate: 10, delay_ms: 500 }).is_empty());
+    let effects: Vec<_> = step(&mut seq, &mut state, Event::Press { key: 105, repeats: true, now: t0 }).into_iter().collect();
+    let first_due = t0 + Duration::from_millis(500);
+    assert_eq!(effects, [Effect::WakeAt(first_due)]);
+    let a1 = state.attempt().unwrap();
+
+    // Dynamic RepeatInfo update while held changes subsequent interval (50 Hz -> 20 ms) and future delay (300 ms).
+    assert!(step(&mut seq, &mut state, Event::RepeatInfo { rate: 50, delay_ms: 300 }).is_empty());
+    let effects: Vec<_> = step(&mut seq, &mut state, Event::Due { attempt: a1, now: first_due }).into_iter().collect();
+    assert_eq!(effects, [Effect::Repeat { key: 105 }, Effect::WakeAt(first_due + Duration::from_millis(20))]);
+    let a2 = state.attempt().unwrap();
+
+    // rate == 0 stops an active repeat immediately and prevents future repeats.
+    assert!(step(&mut seq, &mut state, Event::RepeatInfo { rate: 0, delay_ms: 200 }).is_empty());
+    assert_eq!(state.deadline(), None);
+    assert_eq!(state.attempt(), None);
+    assert!(step(&mut seq, &mut state, Event::Due { attempt: a2, now: first_due + Duration::from_secs(1) }).is_empty());
+    assert!(step(&mut seq, &mut state, Event::Press { key: 105, repeats: true, now: t0 + Duration::from_secs(2) }).is_empty());
+    assert_eq!(state.deadline(), None);
+
+    // Re-enabling repeat restores repeating with the new values; negative delay clamps to zero
+    // and negative rate disables cleanly.
+    assert_eq!(Policy::from_wayland(-1, 200), Policy::Disabled);
+    assert_eq!(Policy::from_wayland(25, -50), Policy::Repeat { delay: Duration::ZERO, interval: Duration::from_millis(40) });
+    assert_eq!(Policy::from_wayland(i32::MAX, 100), Policy::Repeat { delay: Duration::from_millis(100), interval: Duration::from_nanos(1) });
+
+    assert!(step(&mut seq, &mut state, Event::RepeatInfo { rate: 50, delay_ms: 300 }).is_empty());
+    let t3 = t0 + Duration::from_secs(3);
+    let effects: Vec<_> = step(&mut seq, &mut state, Event::Press { key: 106, repeats: true, now: t3 }).into_iter().collect();
+    assert_eq!(effects, [Effect::WakeAt(t3 + Duration::from_millis(300))]);
+}
+
+#[test]
+fn key_repeat_filters_non_repeating_keys_and_stops_on_release_leave_or_keyboard_loss() {
+    use super::repeat::{Effect, Event, State, step};
+    use crate::machine::Seq;
+    use std::time::Duration;
+
+    let t0 = crate::time::now();
+    let mut seq = Seq::default();
+    let mut state = State::default();
+    step(&mut seq, &mut state, Event::RepeatInfo { rate: 20, delay_ms: 250 });
+
+    // Non-repeating key (e.g. Shift) while idle does not arm a timer.
+    assert!(step(&mut seq, &mut state, Event::Press { key: 42, repeats: false, now: t0 }).is_empty());
+    assert_eq!(state.deadline(), None);
+
+    // Repeating key A arms a timer; pressing and releasing Shift does not interrupt A.
+    step(&mut seq, &mut state, Event::Press { key: 30, repeats: true, now: t0 });
+    let a_attempt = state.attempt().unwrap();
+    let a_due = t0 + Duration::from_millis(250);
+    assert!(step(&mut seq, &mut state, Event::Press { key: 42, repeats: false, now: t0 + Duration::from_millis(50) }).is_empty());
+    assert!(step(&mut seq, &mut state, Event::Release { key: 42 }).is_empty());
+    assert_eq!(state.attempt(), Some(a_attempt));
+    assert_eq!(state.deadline(), Some(a_due));
+
+    // Pressing another repeating key B replaces A and invalidates A's attempt; releasing A keeps B repeating.
+    let t1 = t0 + Duration::from_millis(100);
+    let effects: Vec<_> = step(&mut seq, &mut state, Event::Press { key: 48, repeats: true, now: t1 }).into_iter().collect();
+    let b_due = t1 + Duration::from_millis(250);
+    assert_eq!(effects, [Effect::WakeAt(b_due)]);
+    let b_attempt = state.attempt().unwrap();
+    assert_ne!(a_attempt, b_attempt);
+    assert!(step(&mut seq, &mut state, Event::Due { attempt: a_attempt, now: b_due }).is_empty());
+    assert!(step(&mut seq, &mut state, Event::Release { key: 30 }).is_empty());
+    assert_eq!(state.key(), Some(48));
+    let effects: Vec<_> = step(&mut seq, &mut state, Event::Due { attempt: b_attempt, now: b_due }).into_iter().collect();
+    assert_eq!(effects, [Effect::Repeat { key: 48 }, Effect::WakeAt(b_due + Duration::from_millis(50))]);
+
+    // Releasing B stops repeating.
+    let b_next = state.attempt().unwrap();
+    assert!(step(&mut seq, &mut state, Event::Release { key: 48 }).is_empty());
+    assert_eq!(state.deadline(), None);
+    assert!(step(&mut seq, &mut state, Event::Due { attempt: b_next, now: b_due + Duration::from_secs(1) }).is_empty());
+
+    // Stop (focus leave / enter other / drain) cancels repeat but keeps the compositor's RepeatInfo (250 ms).
+    let t2 = t0 + Duration::from_secs(2);
+    step(&mut seq, &mut state, Event::Press { key: 14, repeats: true, now: t2 });
+    let c_attempt = state.attempt().unwrap();
+    assert!(step(&mut seq, &mut state, Event::Stop).is_empty());
+    assert_eq!(state.deadline(), None);
+    assert!(step(&mut seq, &mut state, Event::Due { attempt: c_attempt, now: t2 + Duration::from_secs(1) }).is_empty());
+    let effects: Vec<_> = step(&mut seq, &mut state, Event::Press { key: 14, repeats: true, now: t2 }).into_iter().collect();
+    assert_eq!(effects, [Effect::WakeAt(t2 + Duration::from_millis(250))]);
+
+    // KeyboardGone cancels repeat and resets RepeatInfo back to default (200 ms / 40 ms) for the next wl_keyboard.
+    step(&mut seq, &mut state, Event::RepeatInfo { rate: 0, delay_ms: 999 });
+    step(&mut seq, &mut state, Event::KeyboardGone);
+    assert_eq!(state.deadline(), None);
+    let effects: Vec<_> = step(&mut seq, &mut state, Event::Press { key: 14, repeats: true, now: t2 }).into_iter().collect();
+    assert_eq!(effects, [Effect::WakeAt(t2 + Duration::from_millis(200))]);
+}

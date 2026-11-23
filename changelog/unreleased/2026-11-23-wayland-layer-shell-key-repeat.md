@@ -1,0 +1,1 @@
+- Wayland: held keys now auto-repeat in layer-shell overlays using the compositor's `wl_keyboard.repeat_info` delay and rate (respecting rate `0` as disabled, defaulting to 200 ms / 25 Hz until received, filtering through `xkb_keymap_key_repeats`, and stopping on release, focus loss, or keyboard loss) via the overlay's wake deadline.
