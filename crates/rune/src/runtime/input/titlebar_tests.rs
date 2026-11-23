@@ -56,3 +56,74 @@ mod windows {
         }
     }
 }
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::cell::Cell;
+
+    use crate::el::el;
+    use crate::runtime::Runtime;
+    use crate::{Chrome, ChromeInsets, Cx, El, Env, Titlebar};
+
+    #[derive(Default)]
+    struct State {
+        seen: Cell<ChromeInsets>,
+        seen_inset: Cell<f32>,
+    }
+
+    fn view(state: &State, cx: &mut Cx<State>) -> El {
+        state.seen.set(cx.chrome_insets());
+        state.seen_inset.set(cx.titlebar_inset());
+        el().key("root").w_full().h_full()
+    }
+
+    #[test]
+    fn headless_chrome_reserves_rtl_traffic_light_space_on_the_right() {
+        let titlebar = Titlebar::new(36.0);
+        let custom_inset = titlebar.mac_chrome(Chrome::DEFAULT).titlebar_inset();
+        let default_inset = Chrome::DEFAULT.titlebar_inset();
+
+        // LTR custom titlebar: traffic lights sit on the left and reserve leading space.
+        let mut rt = Runtime::new(State::default(), view, (400.0, 200.0), Env::new(true, 2.0));
+        rt.core_mut().headless_chrome_with(Chrome::DEFAULT, Some(titlebar), false, false);
+        rt.frame(0.0);
+        let expected_ltr = ChromeInsets::new(custom_inset, 0.0, 36.0);
+        assert_eq!(rt.chrome_insets(), expected_ltr, "LTR custom titlebar runtime insets");
+        assert_eq!(rt.state.seen.get(), expected_ltr, "LTR custom titlebar view insets");
+        assert_eq!(rt.state.seen_inset.get(), custom_inset, "LTR custom titlebar titlebar_inset");
+
+        // RTL custom titlebar: traffic lights sit on the right and reserve trailing space.
+        let mut rt = Runtime::new(State::default(), view, (400.0, 200.0), Env::new(true, 2.0));
+        rt.core_mut().headless_chrome_with(Chrome::DEFAULT, Some(titlebar), false, true);
+        rt.frame(0.0);
+        let expected_rtl = ChromeInsets::new(0.0, custom_inset, 36.0);
+        assert_eq!(rt.chrome_insets(), expected_rtl, "RTL custom titlebar runtime insets");
+        assert_eq!(rt.state.seen.get(), expected_rtl, "RTL custom titlebar view insets");
+        assert_eq!(rt.state.seen_inset.get(), custom_inset, "RTL custom titlebar titlebar_inset");
+
+        // Full-size content without App::titlebar also moves the inset to trailing in RTL.
+        let mut rt = Runtime::new(State::default(), view, (400.0, 200.0), Env::new(true, 2.0));
+        rt.core_mut().headless_chrome_with(Chrome::DEFAULT, None, false, false);
+        rt.frame(0.0);
+        assert_eq!(rt.chrome_insets(), ChromeInsets::new(default_inset, 0.0, 0.0), "LTR default chrome insets");
+        assert_eq!(rt.state.seen.get(), ChromeInsets::new(default_inset, 0.0, 0.0), "LTR default chrome view insets");
+
+        rt.core_mut().headless_chrome_with(Chrome::DEFAULT, None, false, true);
+        rt.frame(0.0);
+        assert_eq!(rt.chrome_insets(), ChromeInsets::new(0.0, default_inset, 0.0), "RTL default chrome insets");
+        assert_eq!(rt.state.seen.get(), ChromeInsets::new(0.0, default_inset, 0.0), "RTL default chrome view insets");
+        assert_eq!(rt.state.seen_inset.get(), default_inset, "RTL default chrome titlebar_inset");
+
+        // Borderless and standard titled windows reserve no traffic-light inset in RTL.
+        rt.core_mut().headless_chrome_with(Chrome::DEFAULT, Some(titlebar), true, true);
+        rt.frame(0.0);
+        assert_eq!(rt.chrome_insets(), ChromeInsets::default(), "RTL borderless insets");
+        assert_eq!(rt.state.seen_inset.get(), 0.0, "RTL borderless titlebar_inset");
+
+        let standard = Chrome { full_size_content: false, traffic_lights: None, drag_regions: false };
+        rt.core_mut().headless_chrome_with(standard, None, false, true);
+        rt.frame(0.0);
+        assert_eq!(rt.chrome_insets(), ChromeInsets::default(), "RTL standard titled insets");
+        assert_eq!(rt.state.seen_inset.get(), 0.0, "RTL standard titled titlebar_inset");
+    }
+}
