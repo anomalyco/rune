@@ -244,11 +244,15 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
                 const forward = event.inputType.endsWith('Forward');
                 key(forward ? 'Delete' : 'Backspace',
                     { altKey: event.inputType.includes('Word'), code: forward ? 'Delete' : 'Backspace' });
-            } else if (field === textarea && !h.composing && !event.isComposing
-                && field.selectionStart === 0 && field.selectionEnd === 0
-                && event.inputType.startsWith('delete') && event.inputType.endsWith('Backward')) {
-                event.preventDefault();
-                key('Backspace', { altKey: event.inputType.includes('Word'), code: 'Backspace' });
+            } else if (field === textarea && !h.composing && !event.isComposing && event.inputType.startsWith('delete')) {
+                if (field.selectionStart === 0 && field.selectionEnd === 0 && event.inputType.endsWith('Backward')) {
+                    event.preventDefault();
+                    key('Backspace', { altKey: event.inputType.includes('Word'), code: 'Backspace' });
+                } else if (field.selectionStart === field.value.length && field.selectionEnd === field.value.length
+                    && event.inputType.endsWith('Forward')) {
+                    event.preventDefault();
+                    key('Delete', { altKey: event.inputType.includes('Word'), code: 'Delete' });
+                }
             }
         });
         listen(field, 'keydown', event => {
@@ -258,9 +262,13 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             const chord = (event.metaKey || event.ctrlKey) && !event.getModifierState?.('AltGraph');
             const editing = ['Enter', 'Tab', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'];
             if (field === password) editing.push('Backspace', 'Delete');
-            // At offset 0 with nothing selected, the browser deletes nothing and fires no `input`
-            // event, so forward Backspace as a key as native platforms and password fields do.
-            else if (field.selectionStart === 0 && field.selectionEnd === 0) editing.push('Backspace');
+            else {
+                // At either boundary with nothing selected, the browser deletes nothing and fires
+                // no `input` event, so forward Backspace or Delete as a key as native platforms
+                // and password fields do.
+                if (field.selectionStart === 0 && field.selectionEnd === 0) editing.push('Backspace');
+                if (field.selectionStart === field.value.length && field.selectionEnd === field.value.length) editing.push('Delete');
+            }
             if (!chord && !editing.includes(event.key)) return;
             if (chord && event.key.toLowerCase() === 'v') return;
             event.preventDefault();
