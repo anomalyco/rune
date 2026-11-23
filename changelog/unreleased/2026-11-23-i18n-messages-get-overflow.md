@@ -1,0 +1,1 @@
+- `rune-i18n`: `Messages::get` now computes its span slice bounds with checked arithmetic (`checked_mul` and `checked_add`), returning `None` on out-of-range key indices instead of panicking in debug builds or wrapping in release builds.
