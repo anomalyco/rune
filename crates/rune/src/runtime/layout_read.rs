@@ -599,7 +599,7 @@ impl RuntimeCore {
         let store = self.scene.store();
         let n = &self.tree.nodes[i];
         self.motion.flights().iter().any(|f| f.lands(&n.path, n.key.as_deref()))
-            || std::iter::successors(Some(i), |&p| step_up(&self.tree.nodes, p)).any(|p| {
+            || anchor_ancestors(&self.tree.nodes, i).any(|p| {
                 let id = self.tree.nodes[p].id;
                 store.is_animating(id, prop::FRAME) || store.is_animating(id, prop::TRAVEL) || store.is_animating(id, prop::PRESENCE)
                     || store.is_animating(id, prop::OFFSET) || store.is_animating(id, prop::SCALE) || store.is_animating(id, P_PRESS_SCALE)

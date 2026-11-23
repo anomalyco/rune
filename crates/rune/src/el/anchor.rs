@@ -26,15 +26,15 @@ pub struct Anchor {
 }
 
 impl El {
-    /// Position an out-of-flow overlay above an earlier keyed element, clamped to the window.
+    /// Position an out-of-flow overlay above a keyed element, clamped to the window.
     /// Attach the overlay at the root to escape the anchor's clipping ancestors.
     pub fn above(self, key: impl Into<String>, gutter: f32) -> Self {
         self.anchored(key, Side::Top, Align::Start, gutter)
     }
-    /// Position an out-of-flow overlay on `side` of an earlier keyed element, aligned along that
+    /// Position an out-of-flow overlay on `side` of a keyed element, aligned along that
     /// side, `gap` points away. It flips to the opposite side when it doesn't fit, and stays
-    /// 8 points inside the window. Attach it at the root (after the anchor) so it draws above
-    /// later siblings and escapes clipping ancestors.
+    /// 8 points inside the window. Attach it at the root to escape clipping ancestors; an overlay
+    /// mounted before its anchor lifts to draw above it.
     ///
     /// It draws at its anchor's zoom: inside a page drawn at [`El::scale`]`(1.6)`, the overlay
     /// and its text draw 1.6 times their size too, growing away from the anchor. Its gap zooms

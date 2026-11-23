@@ -308,14 +308,20 @@ impl PaintState {
         self.lifted_anchors.binary_search(&i).is_ok()
     }
 
-    /// Subtree (preorder) paint order, then each flying or raised element's subtree on top.
-    /// A sticky element paints after its normal siblings (and before overlay siblings), so it
-    /// covers the rows it's stuck over.
+    #[inline]
+    pub(in crate::runtime) fn has_lifted_anchors(&self) -> bool {
+        !self.lifted_anchors.is_empty()
+    }
+
+    /// Subtree (preorder) paint order, then each flying, raised, or lifted-anchor element's
+    /// subtree on top. A sticky element paints after its normal siblings (and before overlay
+    /// siblings), so it covers the rows it's stuck over.
     pub(in crate::runtime) fn update_layer_paint_order(
         &mut self,
         tree: &types::TreeState,
         flying: &[(NodeId, MRect)],
         sticky_of: impl Fn(usize) -> bool,
+        exiting: impl Fn(usize) -> bool,
     ) {
         let n = tree.nodes.len();
         let mut first = vec![n; n + 1];
@@ -348,45 +354,79 @@ impl PaintState {
         lifted.sort_unstable();
         lifted.dedup();
         self.lifted_anchors.clear();
-        if !lifted.is_empty() {
-            // An anchored overlay whose anchor lives inside a lifted (`.raise()` or flying) subtree
-            // must paint after that subtree so `drawn[anchor]` is populated and the overlay draws
-            // above its anchor (e.g. a hover card or menu over a peeked sidebar or raised modal).
-            let mut lifted_mask = vec![false; n];
-            for &r in &lifted { lifted_mask[r] = true; }
-            let lifted_root = |mut k: usize, mask: &[bool]| -> Option<usize> {
+        let mut lifted_pos = if !lifted.is_empty() || tree.has_above { vec![0u32; n] } else { Vec::new() };
+        let mut next_pass = 1u32;
+        for &r in &lifted {
+            lifted_pos[r] = next_pass;
+            next_pass += 1;
+        }
+        if tree.has_above {
+            // An anchored overlay whose anchor paints after it (either mounted later in tree order,
+            // such as a select portal built before its dialog, or inside a `.raise()`/flying
+            // subtree) must paint after its anchor so `drawn[anchor]` is populated and the overlay
+            // draws and hit-tests above it.
+            let mut base_rank = vec![0usize; n];
+            let mut rank_pos = 0usize;
+            let mut cur = first[0];
+            while cur < n {
+                base_rank[cur] = rank_pos;
+                rank_pos += 1;
+                if first[cur + 1] < n { cur = first[cur + 1]; continue; }
                 loop {
-                    if mask[k] { return Some(k); }
-                    k = tree.nodes[k].parent?;
+                    if next[cur] < n { cur = next[cur]; break; }
+                    match tree.nodes[cur].parent { Some(parent) => cur = parent, None => { cur = n; break; } }
+                }
+            }
+            let above_nodes: Vec<usize> = (0..n).filter(|&i| tree.nodes[i].above.is_some()).collect();
+            let pass_of = |mut k: usize, pos: &[u32]| -> u32 {
+                loop {
+                    if pos[k] != 0 { return pos[k]; }
+                    let Some(p) = tree.nodes[k].parent else { return 0 };
+                    k = p;
                 }
             };
-            let mut changed = true;
-            while changed {
-                changed = false;
-                for i in 0..n {
-                    if lifted_mask[i] { continue; }
+            let max_rounds = above_nodes.len() + lifted.len() + 2;
+            for _ in 0..max_rounds {
+                let mut changed = false;
+                for &i in &above_nodes {
                     let Some(a) = &tree.nodes[i].above else { continue };
-                    let Some(j) = super::anchor_index(&tree.nodes, i, a) else { continue };
-                    let Some(ar) = lifted_root(j, &lifted_mask) else { continue };
-                    if lifted_root(i, &lifted_mask) != Some(ar) {
-                        lifted_mask[i] = true;
-                        lifted.push(i);
-                        self.lifted_anchors.push(i);
+                    let Some(j) = super::anchor_index_live(&tree.nodes, i, a, &exiting) else { continue };
+                    if (pass_of(j, &lifted_pos), base_rank[j]) > (pass_of(i, &lifted_pos), base_rank[i]) {
+                        if lifted_pos[i] == 0 {
+                            self.lifted_anchors.push(i);
+                        }
+                        lifted_pos[i] = next_pass;
+                        next_pass += 1;
                         changed = true;
                     }
                 }
+                // Keep any lifted node after every lifted ancestor so `inh_scratch[parent]` is
+                // populated before the lifted child paints.
+                for u in 0..n {
+                    if lifted_pos[u] == 0 { continue; }
+                    let Some(p) = tree.nodes[u].parent else { continue };
+                    if pass_of(p, &lifted_pos) > lifted_pos[u] {
+                        lifted_pos[u] = next_pass;
+                        next_pass += 1;
+                        changed = true;
+                    }
+                }
+                if !changed { break; }
             }
-            if !self.lifted_anchors.is_empty() {
-                lifted.sort_unstable();
+            if !self.lifted_anchors.is_empty() || !lifted.is_empty() {
+                lifted.clear();
+                lifted.extend((0..n).filter(|&i| lifted_pos[i] != 0));
+                lifted.sort_unstable_by_key(|&i| lifted_pos[i]);
                 self.lifted_anchors.sort_unstable();
+                self.lifted_anchors.dedup();
             }
         }
         self.layer_paint_order.clear();
         for top in std::iter::once(None).chain(lifted.iter().map(|&r| Some(r))) {
             let mut i = top.unwrap_or(first[0]);
             while i < n {
-                // A flying subtree paints in its own pass, not where the tree reaches it.
-                if top == Some(i) || lifted.binary_search(&i).is_err() {
+                // A flying, raised or lifted-anchor subtree paints in its own pass, not where the tree reaches it.
+                if top == Some(i) || lifted_pos.get(i).copied().unwrap_or(0) == 0 {
                     self.layer_paint_order.push(i);
                     if first[i + 1] < n { i = first[i + 1]; continue; }
                 }

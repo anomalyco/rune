@@ -76,6 +76,10 @@ pub(in crate::runtime) fn shift(edge: StickyEdge, inset: f32, [top, bottom, left
 /// Target rect of node `j` after its scroll viewports' offsets and any sticky shift on `j` or
 /// its ancestors, for `El::anchored`.
 pub(in crate::runtime) fn anchored_target(nodes: &[Node], scrolls: &HashMap<NodeId, ScrollState>, j: usize, viewport: (f32, f32)) -> [f32; 4] {
+    anchored_target_inner(nodes, scrolls, j, viewport, 0)
+}
+
+fn anchored_target_inner(nodes: &[Node], scrolls: &HashMap<NodeId, ScrollState>, j: usize, viewport: (f32, f32), depth: usize) -> [f32; 4] {
     let mut t = nodes[j].target;
     for [ox, oy] in scroll_offsets(scrolls, nodes, j) {
         t[0] -= ox;
@@ -84,11 +88,12 @@ pub(in crate::runtime) fn anchored_target(nodes: &[Node], scrolls: &HashMap<Node
         t[3] -= oy;
     }
     let [mut dx, mut dy] = target_shift(nodes, scrolls, j);
-    if let Some(anc) = std::iter::successors(Some(j), |&p| nodes[p].parent).find(|&p| nodes[p].above.is_some())
+    if depth < crate::runtime::anchor::MAX_ANCHOR_CHAIN
+        && let Some(anc) = std::iter::successors(Some(j), |&p| nodes[p].parent).find(|&p| nodes[p].above.is_some())
         && let Some(a) = &nodes[anc].above
         && let Some(k) = super::anchor_index(nodes, anc, a)
     {
-        let at = anchored_target(nodes, scrolls, k, viewport);
+        let at = anchored_target_inner(nodes, scrolls, k, viewport, depth + 1);
         let (w, h) = (nodes[anc].target[2] - nodes[anc].target[0], nodes[anc].target[3] - nodes[anc].target[1]);
         let (ax, ay) = super::anchor_position(a, at, (w, h), viewport);
         dx += ax - nodes[anc].target[0];

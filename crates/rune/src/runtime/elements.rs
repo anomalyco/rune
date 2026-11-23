@@ -267,6 +267,7 @@ impl RuntimeCore {
                 // window), the scales holding still above it carry them, unturned.
                 let mut lifted = None;
                 let mut j = i;
+                let mut steps = 0usize;
                 loop {
                     let to_window = |at: Option<usize>, v: [f32; 2]| match lifted {
                         Some(k) => v.map(|c| c * k),
@@ -289,6 +290,8 @@ impl RuntimeCore {
                         let is_launch = self.motion.launches().launched(id);
                         lifted = Some(parent.and_then(|p| self.paint.inh_scratch.get(p)).map_or(1.0, |h| if is_launch { h.still.0 } else { h.held.0 }));
                     }
+                    steps += 1;
+                    if steps >= self.tree.nodes.len() { break; }
                     let Some(pi) = step_up(&self.tree.nodes, j) else { break };
                     let p = &self.tree.nodes[pi];
                     moving |= animating(p.id)
@@ -517,7 +520,7 @@ impl RuntimeCore {
             }
         }).collect();
         let moving = self.rect_springing(i)
-            || std::iter::successors(Some(i), |&p| step_up(&self.tree.nodes, p)).any(|p| {
+            || anchor_ancestors(&self.tree.nodes, i).any(|p| {
                 let id = self.tree.nodes[p].id;
                 paint_pose_springing(store, id)
                     || (!self.reduced_motion && self.motion.loop_active(id, store.node_time(id)))

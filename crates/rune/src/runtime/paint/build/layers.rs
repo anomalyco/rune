@@ -75,7 +75,7 @@ impl paint_state::PaintState {
         // Exiting descendants are appended to storage. Bring them back into their subtree
         // only when isolation requires it; the ordinary painter stream stays byte-identical.
         // Matched flights paint last (see `update_layer_paint_order`).
-        ((flying || tree.has_sticky || tree.has_raise || tree.has_paint_order) && !self.layer_paint_order.is_empty()) || self.layer_paint_order.windows(2).any(|pair| {
+        ((flying || tree.has_sticky || tree.has_raise || tree.has_paint_order || !self.lifted_anchors.is_empty()) && !self.layer_paint_order.is_empty()) || self.layer_paint_order.windows(2).any(|pair| {
             let n = &tree.nodes[pair[0]];
             tree.nodes[pair[1]].parent == Some(pair[0]) && ((tree.has_dissolve && self.dissolve_scratch[pair[0]]) || n.vis_flags.cache() || n.vis.clip_radius.is_some() || n.vis.group_opacity.is_some() || n.group_fade
                 || n.vis.layer_opacity < 1.0 || fades(n.looping.as_deref().copied())

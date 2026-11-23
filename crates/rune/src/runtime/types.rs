@@ -593,6 +593,8 @@ pub(crate) struct TreeState {
     pub(in crate::runtime) has_raise: bool,
     /// Some element sets `El::paint_order`: its siblings paint out of tree order.
     pub(in crate::runtime) has_paint_order: bool,
+    /// Some element is `El::anchored` / `El::above`.
+    pub(in crate::runtime) has_above: bool,
     pub(in crate::runtime) has_cache: bool,
     /// Some picture sizes a side from its image's ratio (`pixel_aspect`).
     pub(in crate::runtime) has_pixel_aspect: bool,
@@ -631,6 +633,7 @@ impl TreeState {
             has_dissolve: false,
             has_raise: false,
             has_paint_order: false,
+            has_above: false,
             has_cache: false,
             has_pixel_aspect: false,
             has_drawn_layout: false,
