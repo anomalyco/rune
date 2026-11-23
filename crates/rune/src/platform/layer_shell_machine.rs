@@ -242,6 +242,30 @@ pub(crate) mod keyboard {
     pub(crate) fn supports_keys(policy: crate::KeyPolicy, layer_version: u32, has_seat: bool) -> bool {
         can_request_keys(policy, layer_version) && has_seat
     }
+
+    /// Maximum size accepted for a Wayland `wl_keyboard.keymap` payload (16 MiB).
+    pub(crate) const MAX_KEYMAP_BYTES: u32 = 16 * 1024 * 1024;
+
+    /// Reads a `wl_keyboard.keymap` payload of `size` bytes from offset `0` via `read_at`,
+    /// truncates at the first NUL byte, and validates UTF-8. Rejects empty or oversized payloads
+    /// before allocating.
+    pub(crate) fn decode_keymap(
+        size: u32,
+        read_at: impl FnOnce(&mut [u8], u64) -> std::io::Result<()>,
+    ) -> Option<String> {
+        if size == 0 || size > MAX_KEYMAP_BYTES {
+            return None;
+        }
+        let mut buf = vec![0u8; size as usize];
+        read_at(&mut buf, 0).ok()?;
+        if let Some(nul) = buf.iter().position(|&b| b == 0) {
+            buf.truncate(nul);
+        }
+        if buf.is_empty() {
+            return None;
+        }
+        String::from_utf8(buf).ok()
+    }
 }
 
 #[cfg(test)]

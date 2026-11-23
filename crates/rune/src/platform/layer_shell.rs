@@ -3,7 +3,7 @@
 //! input regions and the rendered buffer share a commit. Global pointer observation and
 //! capture exclusion are unavailable. wgpu draws through the raw `wl_surface`.
 
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -184,11 +184,9 @@ impl Dispatch<WlKeyboard, ()> for State {
                 state.step_keyboard_focus(keyboard::FocusEvent::LeaveOurs);
             }
             wl_keyboard::Event::Keymap { format: wayland_client::WEnum::Value(wl_keyboard::KeymapFormat::XkbV1), fd, size } => {
-                use std::io::Read;
-                let mut map = String::new();
-                if size <= 16 * 1024 * 1024 && std::fs::File::from(fd).take(u64::from(size)).read_to_string(&mut map).is_ok() {
+                if let Some(map) = read_keymap_fd(fd, size) {
                     let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
-                    state.xkb = xkb::Keymap::new_from_string(&context, map.trim_end_matches('\0').to_owned(), xkb::KEYMAP_FORMAT_TEXT_V1, xkb::COMPILE_NO_FLAGS).map(|map| {
+                    state.xkb = xkb::Keymap::new_from_string(&context, map, xkb::KEYMAP_FORMAT_TEXT_V1, xkb::COMPILE_NO_FLAGS).map(|map| {
                         let mut xkb_state = xkb::State::new(&map);
                         if let Some(m) = state.mod_state {
                             xkb_state.update_mask(m.depressed, m.latched, m.locked, 0, 0, m.group);
@@ -223,6 +221,16 @@ impl Dispatch<WlKeyboard, ()> for State {
             _ => {}
         }
     }
+}
+
+/// Reads a Wayland `wl_keyboard.keymap` fd from offset `0` without touching the open file
+/// description's file offset. Compositors such as Hyprland and niri share one open file
+/// description across clients and binds, so sequential `read()` advances the shared offset and
+/// leaves later readers at EOF.
+fn read_keymap_fd(fd: OwnedFd, size: u32) -> Option<String> {
+    use std::os::unix::fs::FileExt;
+    let file = std::fs::File::from(fd);
+    keyboard::decode_keymap(size, |buf, offset| file.read_exact_at(buf, offset))
 }
 
 fn key_mods(state: &xkbcommon::xkb::State) -> crate::Mods {

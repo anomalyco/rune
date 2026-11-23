@@ -247,3 +247,45 @@ fn layer_shell_key_translation_handles_ctrl_modifiers_space_and_non_ascii_layout
     assert!(!supports_keys(KeyPolicy::OnDemand, 3, true));
     assert!(!supports_keys(KeyPolicy::OnDemand, 4, false));
 }
+
+#[test]
+fn keymap_decode_reads_at_offset_zero_strips_nul_and_enforces_cap() {
+    use super::keyboard::{MAX_KEYMAP_BYTES, decode_keymap};
+    use std::io::{Error, ErrorKind};
+
+    let bytes = b"xkb_keymap { xkb_keycodes {}; };\0";
+    let mut seen_offset = None;
+    let decoded = decode_keymap(bytes.len() as u32, |buf, offset| {
+        seen_offset = Some(offset);
+        buf.copy_from_slice(bytes);
+        Ok(())
+    });
+    assert_eq!(seen_offset, Some(0));
+    assert_eq!(decoded.as_deref(), Some("xkb_keymap { xkb_keycodes {}; };"));
+
+    // Payload without a NUL terminator is accepted verbatim.
+    let no_nul = b"xkb_keymap {};";
+    let decoded = decode_keymap(no_nul.len() as u32, |buf, offset| {
+        assert_eq!(offset, 0);
+        buf.copy_from_slice(no_nul);
+        Ok(())
+    });
+    assert_eq!(decoded.as_deref(), Some("xkb_keymap {};"));
+
+    // Trailing padding (even non-UTF-8) after the first NUL terminator is ignored.
+    let padded = b"xkb_keymap {};\0\0\xff";
+    let decoded = decode_keymap(padded.len() as u32, |buf, _| {
+        buf.copy_from_slice(padded);
+        Ok(())
+    });
+    assert_eq!(decoded.as_deref(), Some("xkb_keymap {};"));
+
+    // Empty and over-cap sizes are rejected before calling read_at.
+    assert_eq!(decode_keymap(0, |_, _| panic!("must not read empty keymap")), None);
+    assert_eq!(decode_keymap(MAX_KEYMAP_BYTES + 1, |_, _| panic!("must not allocate over cap")), None);
+
+    // All-NUL payloads, read errors, and invalid UTF-8 return None.
+    assert_eq!(decode_keymap(4, |buf, _| { buf.fill(0); Ok(()) }), None);
+    assert_eq!(decode_keymap(8, |_, _| Err(Error::from(ErrorKind::UnexpectedEof))), None);
+    assert_eq!(decode_keymap(2, |buf, _| { buf.copy_from_slice(&[0xff, 0xfe]); Ok(()) }), None);
+}

@@ -1,0 +1,1 @@
+- Wayland: layer-shell overlays now read `wl_keyboard.keymap` from offset 0 via `FileExt::read_exact_at` without advancing the shared file offset, so compositors that reuse one keymap file description across clients and binds (such as Hyprland and niri) no longer yield an empty keymap and dropped keys.
