@@ -123,6 +123,11 @@ pub(in crate::window) struct Host {
     /// the window server, not inside it. On macOS, allowing the IME for a window of the app in
     /// front (one started from the Dock) loads AppKit's text input services: about 15,000 µs.
     pub(in crate::window) ime_waits: bool,
+    /// macOS, while a new window's first frame is drawn: its display link is made once that
+    /// frame is with the window server. The frame is drawn at once, unpaced, and making the
+    /// link asks the window server three times (about 2,000 µs).
+    #[cfg(target_os = "macos")]
+    pub(in crate::window) pacing_waits: bool,
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub(in crate::window) wayland: bool,
     /// The frame moving or jumping to where a handler asked (`stepping::FrameMove`).
@@ -422,6 +427,8 @@ impl Host {
             clipboard,
             secure_input: Default::default(),
             ime_waits: false,
+            #[cfg(target_os = "macos")]
+            pacing_waits: false,
             ime: Default::default(),
             wayland,
             frame_move: None,
