@@ -160,7 +160,7 @@ pub(crate) const ROLES: &[RoleSpec] = &[
     RoleSpec::role("code", Role::Code),
     RoleSpec::role("columnheader", Role::ColumnHeader).aria_container(),
     RoleSpec::new("separator", AkRole::Separator),
-    RoleSpec::role("tablist", Role::TabList),
+    RoleSpec::role("tablist", Role::TabList).aria_container(),
     RoleSpec::role("segment", Role::RadioButton).warn_nameless(),
     RoleSpec::role("window", Role::Window),
     RoleSpec::role("navigation", Role::Navigation).container("nav"),
@@ -523,6 +523,8 @@ mod tests {
         assert_eq!(container_tag("listitem"), Some("li"));
         assert_eq!(container_tag("dialog"), Some("div"));
         assert_eq!(container_aria("dialog"), Some("dialog"));
+        assert_eq!(container_tag("tablist"), Some("div"));
+        assert_eq!(container_aria("tablist"), Some("tablist"));
         assert_eq!(container_aria("table"), Some("table"));
         assert_eq!(container_aria("main"), None);
         assert_eq!(web_control_role("option"), Some("option"));

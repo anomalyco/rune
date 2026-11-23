@@ -1,0 +1,1 @@
+- Web accessibility mirror: `tablist` now mirrors as a `div` with `role="tablist"`, and controls with an explicit web control role (such as closable `TabStrip` tabs) are emitted even when they contain nested pressable descendants, which mirror as sibling buttons.
