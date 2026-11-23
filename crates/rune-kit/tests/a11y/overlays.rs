@@ -179,6 +179,28 @@ fn a_select_reads_its_name_choice_and_options() {
     assert_eq!(node(&rt.accessibility_json(), "fruit-trigger")["value"], "Plum");
 }
 
+#[test]
+fn a_select_exposes_its_selected_value_in_the_web_mirror() {
+    fn view(s: &App, _: &mut Cx<App>) -> El {
+        let mut layers = Vec::new();
+        Select::new("preset", &["Nothing", "Balanced", "Everything"])
+            .label("Message content preset")
+            .current(s.chosen.as_deref())
+            .build(&kit(), &mut layers)
+    }
+    let mut rt = mount(App { chosen: Some("Balanced".into()), ..App::default() }, view);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&rt.a11y_json()).unwrap();
+    let combo = items.iter().find(|v| v["t"] == "Message content preset").expect("select mirrored");
+    assert_eq!((combo.get("o"), combo.get("x"), combo.get("v")),
+        (Some(&serde_json::json!("combobox")), Some(&serde_json::json!(false)), Some(&serde_json::json!("Balanced"))));
+
+    rt.update(|s, _| s.chosen = Some("Everything".into()));
+    rt.frame(0.0);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&rt.a11y_json()).unwrap();
+    let combo = items.iter().find(|v| v["t"] == "Message content preset").expect("select mirrored");
+    assert_eq!(combo.get("v"), Some(&serde_json::json!("Everything")));
+}
+
 fn combobox(s: &App, _: &mut Cx<App>) -> El {
     let k = kit();
     let mut layer = Vec::new();

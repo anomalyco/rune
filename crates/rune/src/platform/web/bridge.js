@@ -884,6 +884,7 @@ function safeHref(url) {
 }
 
 const TAGS = { heading: null, button: 'button', link: 'a', image: 'div', progressbar: 'div', text: 'p', scroll_x: 'div' };
+const RANGE_ROLES = new Set(['slider', 'spinbutton', 'progressbar', 'meter', 'scrollbar']);
 
 function family(name) {
     if (name === 'sans') return 'var(--rune-sans,sans-serif)';
@@ -1020,12 +1021,15 @@ export function syncA11y(h, json) {
                 else if (el.getAttribute(name) !== value) el.setAttribute(name, value);
             }
         }
-        if (item.k === 'group' || item.k === 'image' || item.k === 'progressbar') {
+        const combobox = item.k === 'button' && item.o === 'combobox';
+        if (item.k === 'group' || item.k === 'image' || item.k === 'progressbar' || combobox) {
             if (item.t) {
                 if (el.getAttribute('aria-label') !== item.t) el.setAttribute('aria-label', item.t);
             } else if (el.getAttribute('aria-label') !== null) {
                 el.removeAttribute('aria-label');
             }
+        } else if (item.k === 'button') {
+            if (el.getAttribute('aria-label') !== null) el.removeAttribute('aria-label');
         } else if (item.k === 'link') {
             const href = safeHref(item.h);
             if (href) {
@@ -1041,7 +1045,8 @@ export function syncA11y(h, json) {
         const container = item.k === 'group' || item.k === 'scroll_x';
         const noContent = container || item.k === 'image' || item.k === 'progressbar';
         if (item.k === 'scroll_x' && el._path !== item.p) { el._path = item.p; h.scrollEls.set(item.p, el); }
-        const sig = noContent ? '' : item.u?.length ? JSON.stringify(item.u) : item.t ?? '';
+        const content = combobox ? (item.v ?? '') : (item.t ?? '');
+        const sig = noContent ? '' : item.u?.length ? JSON.stringify(item.u) : content;
         if (!noContent && el._sig !== sig) {
             el._sig = sig;
             if (item.u?.length) {
@@ -1049,7 +1054,7 @@ export function syncA11y(h, json) {
                 runs(h, el, item);
             } else {
                 if (el.firstElementChild) el.replaceChildren();
-                el.textContent = item.t ?? '';
+                el.textContent = content;
             }
         }
         els.push(el);
@@ -1097,6 +1102,7 @@ export function focusA11y(h, json) {
     h.focusTurn ^= 1;
     const el = h.focusProxies[h.focusTurn];
     for (const a of [...el.attributes]) if (a.name === 'role' || a.name.startsWith('aria-')) el.removeAttribute(a.name);
+    el.textContent = '';
     el.setAttribute('role', f.o);
     el.setAttribute('aria-label', f.t ?? '');
     if (f.d) el.setAttribute('aria-description', f.d);
@@ -1106,6 +1112,10 @@ export function focusA11y(h, json) {
     if (f.x !== undefined) el.setAttribute('aria-expanded', String(f.x));
     if (f.n) { el.setAttribute('aria-posinset', String(f.n[0])); el.setAttribute('aria-setsize', String(f.n[1])); }
     if (f.l) el.setAttribute('aria-level', String(f.l));
+    if (f.v) {
+        if (RANGE_ROLES.has(f.o)) el.setAttribute('aria-valuetext', f.v);
+        else el.textContent = f.v;
+    }
     h.canvas.setAttribute('aria-activedescendant', el.id);
     // Typing in a field whose highlighted row this is (the palette): the field says it too.
     if (f.o !== 'textbox') h.textarea.setAttribute('aria-activedescendant', el.id);

@@ -1109,6 +1109,80 @@ test('focusA11y writes aria-pressed on focused toggle buttons and keeps aria-che
     bridge.destroy(h);
 });
 
+test('focusA11y exposes combobox values via textContent, range values via aria-valuetext, and clears stale values', () => {
+    const { h } = setup();
+
+    bridge.focusA11y(h, JSON.stringify({ o: 'combobox', t: 'Message content preset', x: false, v: 'Balanced' }));
+    const first = h.focusProxies[h.focusTurn];
+    assert.equal(first.getAttribute('role'), 'combobox');
+    assert.equal(first.getAttribute('aria-label'), 'Message content preset');
+    assert.equal(first.getAttribute('aria-expanded'), 'false');
+    assert.equal(first.getAttribute('aria-valuetext'), null);
+    assert.equal(first.textContent, 'Balanced');
+
+    bridge.focusA11y(h, JSON.stringify({ o: 'slider', t: 'Volume', v: '50%' }));
+    const second = h.focusProxies[h.focusTurn];
+    assert.equal(second.getAttribute('role'), 'slider');
+    assert.equal(second.getAttribute('aria-label'), 'Volume');
+    assert.equal(second.getAttribute('aria-valuetext'), '50%');
+    assert.equal(second.textContent, '');
+
+    // Reusing the first proxy slot for a control without a value clears the old textContent.
+    bridge.focusA11y(h, JSON.stringify({ o: 'button', t: 'Save' }));
+    assert.equal(h.focusProxies[h.focusTurn], first);
+    assert.equal(first.getAttribute('role'), 'button');
+    assert.equal(first.getAttribute('aria-label'), 'Save');
+    assert.equal(first.getAttribute('aria-valuetext'), null);
+    assert.equal(first.textContent, '');
+
+    // Reusing the second proxy slot clears aria-valuetext too.
+    bridge.focusA11y(h, JSON.stringify({ o: 'combobox', t: 'Message content preset', x: false }));
+    assert.equal(h.focusProxies[h.focusTurn], second);
+    assert.equal(second.getAttribute('role'), 'combobox');
+    assert.equal(second.getAttribute('aria-label'), 'Message content preset');
+    assert.equal(second.getAttribute('aria-valuetext'), null);
+    assert.equal(second.textContent, '');
+
+    bridge.destroy(h);
+});
+
+test('syncA11y mirrors combobox name in aria-label and selected value in textContent across updates', () => {
+    const { h } = setup();
+
+    bridge.syncA11y(h, JSON.stringify([
+        { k: 'button', p: 'preset', r: [0, 0, 140, 28], t: 'Message content preset', o: 'combobox', x: false, v: 'Balanced' },
+    ]));
+    const el = h.a11yNodes.get('button:preset');
+    assert.equal(el.getAttribute('role'), 'combobox');
+    assert.equal(el.getAttribute('aria-label'), 'Message content preset');
+    assert.equal(el.getAttribute('aria-expanded'), 'false');
+    assert.equal(el.textContent, 'Balanced');
+
+    // Updating the selected value updates textContent while preserving the label.
+    bridge.syncA11y(h, JSON.stringify([
+        { k: 'button', p: 'preset', r: [0, 0, 140, 28], t: 'Message content preset', o: 'combobox', x: false, v: 'Everything' },
+    ]));
+    assert.equal(el.getAttribute('aria-label'), 'Message content preset');
+    assert.equal(el.textContent, 'Everything');
+
+    // Clearing the value empties textContent without turning the label into the value.
+    bridge.syncA11y(h, JSON.stringify([
+        { k: 'button', p: 'preset', r: [0, 0, 140, 28], t: 'Message content preset', o: 'combobox', x: false },
+    ]));
+    assert.equal(el.getAttribute('aria-label'), 'Message content preset');
+    assert.equal(el.textContent, '');
+
+    // Changing back to a plain button clears aria-label and restores label textContent.
+    bridge.syncA11y(h, JSON.stringify([
+        { k: 'button', p: 'preset', r: [0, 0, 140, 28], t: 'Apply' },
+    ]));
+    assert.equal(el.getAttribute('role'), null);
+    assert.equal(el.getAttribute('aria-label'), null);
+    assert.equal(el.textContent, 'Apply');
+
+    bridge.destroy(h);
+});
+
 test('secureKind falls back to typing when Intl.Segmenter is unavailable', () => {
     const fakeInput = { value: '👨‍👩‍👧‍👦', matches: () => false };
     assert.equal(bridge.secureKind({ inputType: 'insertText', data: '👨‍👩‍👧‍👦' }, fakeInput, null), 'secure');
