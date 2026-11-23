@@ -1,0 +1,1 @@
+- Linux: `SYMBOL_FAMILIES` now lists `"Noto Sans Symbols 2"` alongside `"Noto Sans Symbols2"`, so current Noto Symbols 2 packages resolve as a symbol fallback instead of drawing missing-glyph boxes when DejaVu Sans is absent.

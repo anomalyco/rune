@@ -520,3 +520,22 @@ fn run_lookups_off_a_grapheme_start_find_nothing() {
         assert!(out.is_empty());
     }
 }
+
+/// Both current ("Noto Sans Symbols 2") and legacy ("Noto Sans Symbols2") Noto Symbols 2 family
+/// names match Linux's symbol fallback list and resolve before colour emoji.
+#[test]
+fn linux_symbol_fallbacks_include_noto_sans_symbols_2() {
+    use std::sync::Arc;
+    use parley::fontique::{Blob, FontInfoOverride};
+
+    const FONT: &[u8] = include_bytes!("../../rune/assets/IBMPlexMono-Regular.ttf");
+
+    for family in ["Noto Sans Symbols 2", "Noto Sans Symbols2"] {
+        let mut collection = Collection::new(CollectionOptions { shared: false, system_fonts: false });
+        collection.register_fonts(Blob::new(Arc::new(FONT)), Some(FontInfoOverride { family_name: Some(family), ..Default::default() }));
+        assert_eq!(system_fonts::present_families(&mut collection, system_fonts::LINUX_SYMBOL_FAMILIES), vec![family]);
+    }
+    let pos = |name: &str| system_fonts::LINUX_SYMBOL_FAMILIES.iter().position(|f| *f == name);
+    assert!(pos("Noto Sans Symbols 2") < pos("Noto Color Emoji"));
+    assert!(pos("Noto Sans Symbols2") < pos("Noto Color Emoji"));
+}
