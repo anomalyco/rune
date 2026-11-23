@@ -7,7 +7,7 @@ use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::WindowId;
 
-use super::Host;
+use super::{Host, WindowApp};
 use crate::time::Instant;
 use crate::window::file_drop::DROP_SAMPLE;
 use crate::window::state::{Cover, Life, RestEvent, Reveal};
@@ -145,10 +145,9 @@ impl Host {
     }
 
     fn quit_hook_in_turn(&mut self) {
-        if self.life.finished() || !self.app.run_on_quit() { return; }
-        // Before the loop ends or the session does: a lock or clear must reach the worker.
-        self.clipboard.flush_core(self.app.rt_mut());
-        if let Some(w) = self.shown_win() { w.request_redraw(); }
+        if quit_hook_core(&mut *self.app, &mut self.clipboard, self.life) && let Some(w) = self.shown_win() {
+            w.request_redraw();
+        }
     }
 
     fn cancel_menus_in_turn(&mut self) {
@@ -334,6 +333,16 @@ impl Host {
         #[cfg(feature = "frame-profile")]
         if let Some(start) = logged { crate::frame::live_log::input(start); }
     }
+}
+
+/// Runs a window's `App::on_quit`, flushes clipboard requests made there, and reports whether
+/// a still-shown window should request a redraw. Runs even when `life` is `Life::Finished`
+/// because the window whose close ended the app has already finished when the quit starts.
+pub(in crate::window) fn quit_hook_core(app: &mut dyn WindowApp, clipboard: &mut crate::clipboard::Client, life: Life) -> bool {
+    if !app.run_on_quit() { return false; }
+    // Before the loop ends or the session does: a lock or clear must reach the worker.
+    clipboard.flush_core(app.rt_mut());
+    life.shown()
 }
 
 /// When a covered window looks again whether it's still covered (`look`).

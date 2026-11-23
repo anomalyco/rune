@@ -175,6 +175,27 @@ impl dyn WindowApp + '_ {
     }
 }
 
+#[cfg(test)]
+pub(in crate::window) fn test_app<S: 'static>(
+    rt: Runtime<S>,
+    on_close: Option<fn(&mut S, &mut Tx)>,
+    on_quit: Option<fn(&mut S, &mut Tx)>,
+) -> Box<dyn WindowApp> {
+    Box::new(TypedWindowApp {
+        rt,
+        shared: Arc::new(Shared::default()),
+        comp: None,
+        on_frame_drawn: None,
+        on_close,
+        on_rest: None,
+        on_quit,
+        on_reopen: None,
+        turn_scope: None,
+        keep_layout: None,
+        kept_layout: None,
+    })
+}
+
 /// The only per-state-type structure owned by a native window host.
 pub(super) struct TypedWindowApp<S: 'static> {
     pub(super) rt: Runtime<S>,

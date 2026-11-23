@@ -142,7 +142,7 @@ pub(crate) trait AnyHost {
     fn take_startup_error(&mut self) -> Option<String> { None }
     /// The OS is ending the app without Rune asking: run close hooks before the hosts drop.
     fn terminate(&mut self) {}
-    /// The app starts to quit: runs `App::on_quit`, unless the window already closed.
+    /// The app starts to quit: runs `App::on_quit` (including in a window whose close ended the app).
     fn quit_hook(&mut self) {}
     /// The app quits: off the screen now, before any hook runs.
     fn vanish(&mut self) {}
@@ -256,31 +256,19 @@ impl Windows {
 
     fn cleanup(&mut self, event_loop: &ActiveEventLoop) {
         if !event_loop.exiting() { self.open_requested(event_loop); }
-        let keeps_running = collect_startup_errors(&mut self.hosts, &mut self.any_shown, &mut self.startup_error);
-        // The last window closing ends a fast-exiting app: its host isn't dropped first, which
-        // tore down its window, swap chain and device (~37 ms) before the process ended anyway.
+        let _ = collect_startup_errors(&mut self.hosts, &mut self.any_shown, &mut self.startup_error);
+        let ok = self.startup_error.is_none();
         #[cfg(not(target_arch = "wasm32"))]
-        let ending = self.startup_error.is_none() && crate::quit::fast_exit_hook().is_some() && !keeps_running;
+        let fast_exit = ok && crate::quit::fast_exit_hook().is_some();
         #[cfg(target_arch = "wasm32")]
-        let ending = false;
-        for host in &mut self.hosts {
-            if let Some(h) = host.as_mut().filter(|h| h.finished()) {
-                h.cancel_menus();
-                if !ending { *host = None; }
-            }
-        }
+        let fast_exit = false;
+        let exiting = event_loop.exiting();
+        let should_exit = app_events::cleanup_hosts(&mut self.hosts, !exiting && ok, fast_exit, crate::quit::send);
         // Another window's quit: a menu still tracking would hold the loop open.
-        if event_loop.exiting() {
+        if exiting || should_exit {
             for host in self.hosts.iter_mut().flatten() { host.cancel_menus(); }
         }
-        if !keeps_running {
-            // The app ends with its last main window: windows still open close as their close
-            // button would, once the quit's hooks ran. A quit already asked to exit and skips
-            // their close hooks. A startup failure ends without running quit hooks.
-            if !event_loop.exiting() && self.startup_error.is_none() {
-                self.quit(event_loop, false, true);
-                for host in self.hosts.iter_mut().flatten() { host.terminate(); }
-            }
+        if should_exit {
             event_loop.exit();
         }
     }
