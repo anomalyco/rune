@@ -31,7 +31,7 @@ pub(crate) fn map_key(key: &WKey, m: ModifiersState) -> Option<KeyEvent> {
 /// follow the key's Latin virtual key and macOS's switch to a Latin layout under ⌘: Ctrl+V
 /// pastes on every layout.
 pub(crate) fn map_key_event(event: &winit::event::KeyEvent, m: ModifiersState) -> Option<KeyEvent> {
-    let mut ev = map_parts(cfg!(target_os = "windows"), event.physical_key, &event.logical_key, event.text.as_deref(), m)
+    let mut ev = map_parts(cfg!(target_os = "windows"), event.physical_key, &event.logical_key, typed_text(event), m)
         .or_else(|| unidentified(event, m))?;
     if !cfg!(target_os = "macos")
         && let Key::Command(c) = ev.key
@@ -64,18 +64,59 @@ fn unidentified(event: &winit::event::KeyEvent, m: ModifiersState) -> Option<Key
 /// key this way: one with an unknown scan code is `NativeKeyCode::Windows(_)`.
 const NO_KEY: PhysicalKey = PhysicalKey::Unidentified(NativeKeyCode::Unidentified);
 
-/// `map_key`, except that on Windows text with no key behind it (`NO_KEY`) types as itself with
-/// no modifiers, even while a hotkey's modifier is still held. Anything else, including such
-/// text that is a control character, is `map_key`'s, as before.
+/// Picks the typed text from winit's `text_with_all_modifiers()` and `text`: prefers the layout's
+/// modifier-supplement text when it is non-empty and carries no control characters, falling back
+/// to `text` so Ctrl+letter chords (whose supplement is a control byte such as `"\x01"`) keep the
+/// key they name.
+fn pick_typed_text<'a>(with_all_mods: Option<&'a str>, text: Option<&'a str>) -> Option<&'a str> {
+    with_all_mods
+        .filter(|t| !t.is_empty() && !t.chars().any(char::is_control))
+        .or(text)
+}
+
+/// The text `event`'s key typed under the current layout and modifiers.
+///
+/// `KeyEvent::text` is the logical key's text (`logical_key.to_text()` in winit), not what the
+/// layout produced: a key winit names from its keycode reports the name's character. Shift+Space
+/// on a Persian layout types ZWNJ (U+200C), while `text` stays `" "` and AppKit's character sits
+/// in `text_with_all_modifiers()`.
+fn typed_text(event: &winit::event::KeyEvent) -> Option<&str> {
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    let with_all_mods = {
+        use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+        event.text_with_all_modifiers()
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    let with_all_mods = None;
+    pick_typed_text(with_all_mods, event.text.as_deref())
+}
+
+/// `map_key`, with two text-carrying adjustments:
+/// - On Windows, text with no key behind it (`NO_KEY`) types as itself with no modifiers, even
+///   while a hotkey's modifier is still held.
+/// - When a non-chord key maps to `Key::Text` (such as `NamedKey::Space`) and the layout typed
+///   different non-control text (such as ZWNJ U+200C for Shift+Space on a Persian layout, or
+///   NBSP U+00A0 for Option+Space on macOS), keep the typed text instead of the named key's
+///   default character.
 fn map_parts(windows: bool, physical: PhysicalKey, logical: &WKey, text: Option<&str>, m: ModifiersState) -> Option<KeyEvent> {
+    let text = text.filter(|t| !t.is_empty() && !t.chars().any(char::is_control));
     if windows
         && physical == NO_KEY
         && matches!(logical, WKey::Character(_) | WKey::Unidentified(_))
-        && let Some(text) = text.filter(|t| !t.is_empty() && !t.chars().any(char::is_control))
+        && let Some(text) = text
     {
         return Some(KeyEvent { key: Key::Text(text.to_owned()), mods: Mods::default() });
     }
-    map_key(logical, m)
+    let mut ev = map_key(logical, m)?;
+    if let Key::Text(t) = &ev.key
+        && !m.super_key()
+        && !ev.is_command_chord()
+        && let Some(text) = text
+        && text != t.as_str()
+    {
+        ev.key = Key::Text(text.to_owned());
+    }
+    Some(ev)
 }
 
 /// The character `event`'s key types under the current layout with no modifiers, for
