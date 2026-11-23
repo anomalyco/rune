@@ -1,0 +1,1 @@
+- Linux GPU: when the default Vulkan instance finds no conformant adapters, `Gpu::instance` retries with `wgpu::InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER` so drivers reporting conformance version `0.0.0.0` (such as Mesa Honeykrisp/Aurora on Apple silicon Linux) are enumerated without changing adapter selection on machines that already have a conformant adapter.
