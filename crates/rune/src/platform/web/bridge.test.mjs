@@ -1417,3 +1417,82 @@ test('keydown leaves browser-reserved function keys, non-function keys, and comp
     assert.equal(events.length, 0);
     bridge.destroy(h);
 });
+
+test('page mode mouse release focusing a field via sync + activate focuses textarea and restores selection', () => {
+    const { doc, body, events, h } = setup({ page: true });
+    assert.equal(doc.activeElement, body);
+
+    // PrimaryDown on a button in page mode calls activate() with no focused field; it leaves
+    // document.activeElement on the page (not the canvas).
+    bridge.activate(h);
+    assert.equal(doc.activeElement, body);
+
+    // Without activate() (sync_input(false)), sync() updates value/selection but leaves textarea
+    // unfocused because activeElement is not canvas.
+    bridge.sync(h, 'editor', 'Recalled text', 0, 13, 13, false);
+    assert.equal(doc.activeElement, body);
+    assert.equal(h.textarea.inert, false);
+    assert.equal(h.textarea.value, 'Recalled text');
+
+    // Simulate Chrome collapsing an unfocused textarea's selection to 0 when focus moves to it.
+    h.textarea.onFocus = () => {
+        h.textarea.selectionStart = 0;
+        h.textarea.selectionEnd = 0;
+        h.textarea.selectionDirection = 'none';
+    };
+    bridge.activate(h);
+    h.textarea.onFocus = null;
+
+    assert.equal(doc.activeElement, h.textarea);
+    assert.equal(h.textarea.inputMode, 'text');
+    assert.equal(h.textarea.selectionStart, 13);
+    assert.equal(h.textarea.selectionEnd, 13);
+    assert.equal(h.textarea.selectionDirection, 'forward');
+
+    insertAtCaret(h.textarea, '!');
+    assert.equal(events.length, 1);
+    assert.deepEqual(events[0], {
+        kind: 'edit',
+        key: 'editor',
+        base: 0,
+        expected: 'Recalled text',
+        start: 13,
+        end: 13,
+        text: '!',
+        anchor: 14,
+        focus: 14,
+    });
+
+    // Blur back to body and focus a secure field on release.
+    bridge.sync(h, '', '', 0, 0, 0, false);
+    body.focus();
+    bridge.sync(h, 'secret', '', 0, 0, 0, true);
+    assert.equal(doc.activeElement, body);
+    bridge.activate(h);
+    assert.equal(doc.activeElement, h.password);
+    assert.equal(h.password.inert, false);
+    assert.equal(h.password.inputMode, 'text');
+    bridge.destroy(h);
+});
+
+test('coarse pointer release focusing a field via sync + activate restores inputMode text', async () => {
+    const { doc, canvas, h } = setup({ coarse: true });
+    await Promise.resolve();
+    assert.equal(doc.activeElement, canvas);
+
+    // Blur resets inputMode to none on coarse pointers.
+    bridge.sync(h, '', '', 0, 0, 0, false);
+    assert.equal(h.textarea.inputMode, 'none');
+
+    // sync() alone reclaims focus from canvas but keeps inputMode none; activate() sets text.
+    bridge.sync(h, 'editor', 'Recalled text', 0, 13, 13, false);
+    assert.equal(doc.activeElement, h.textarea);
+    assert.equal(h.textarea.inputMode, 'none');
+
+    bridge.activate(h);
+    assert.equal(doc.activeElement, h.textarea);
+    assert.equal(h.textarea.inputMode, 'text');
+    assert.equal(h.textarea.selectionStart, 13);
+    assert.equal(h.textarea.selectionEnd, 13);
+    bridge.destroy(h);
+});
