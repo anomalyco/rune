@@ -63,6 +63,7 @@ fn run_flatten<E: FlattenEl>(el: E, foreground: Option<Color>) -> (Vec<Node>, La
         path_ids: &mut path_ids,
         next_id: &mut next_id,
         foreground,
+        missed_virtual_memo: false,
     };
     let _ = flatten_node(el, None, &mut path_buf, 0, crate::tok::motion::DEFAULT, RowLayout::Free, true, None, &mut taffy, &mut nodes, 2.0, &mut memo_ctx);
     taffy.finish_flatten();

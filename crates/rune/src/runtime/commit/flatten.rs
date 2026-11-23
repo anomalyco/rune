@@ -603,6 +603,9 @@ fn flatten_node<E: FlattenEl>(
     {
         return (slot, false);
     }
+    if el_ref.flags.has(ElFlags::HAS_VIRTUAL) && el_ref.memo.is_some() {
+        memo_ctx.missed_virtual_memo = true;
+    }
     let record_built = parent_sx.is_none().then(|| {
         let built = el_ref.memo_built().filter(|b| b.reusable && memo_reuse::same_root_el(el_ref, b, false))
             .or_else(|| el_ref.cold.expanded_memo.as_ref().filter(|b| b.reusable && memo_reuse::same_root_el(el_ref, b, true)))?;
