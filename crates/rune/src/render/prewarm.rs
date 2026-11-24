@@ -34,7 +34,7 @@ impl Slot {
                 let gpu = Gpu::try_new(Gpu::instance(), None).ok()?;
                 #[cfg(test)]
                 let loads_before = super::metallib::thread_loads();
-                let renderer = Renderer::new_warm(&gpu.device, FORMAT);
+                let renderer = Renderer::try_new_warm(&gpu.device, FORMAT).ok()?;
                 #[cfg(test)]
                 if super::metallib::metallib_enabled() {
                     assert_eq!(super::metallib::thread_loads(), loads_before + 1, "prewarm_gpu loads the precompiled metallib");

@@ -368,12 +368,15 @@ fn cursor_moved_skips_redraw_within_same_hovered_row_and_keeps_quiet_timer_and_l
     app.rt.pointer_up(50.0, 210.0);
 }
 
-/// A device lost during `submit` / `present` (or a synchronous `Rebinding` wait) must not reset
-/// `SurfaceRetries` back to zero, must invalidate the surface and schedule a non-zero backoff
-/// instead of spinning immediately, and must reach `GiveUp` after `SURFACE_TRIES` consecutive
-/// replacements that each lose their device.
+/// A device lost during `submit` / `present` (or a synchronous `Rebinding` wait) invalidates
+/// the surface, schedules a non-zero backoff instead of spinning immediately, falls back from
+/// hardware to software after `SURFACE_TRIES` losses within 5 minutes, and gives up after
+/// `SURFACE_TRIES` software losses. A single healthy frame does not reset the loss count; losses
+/// decay only via `FORGIVE_LOSS` (1 per 5 minutes).
 #[test]
 fn lost_device_during_present_keeps_retry_count_backs_off_and_gives_up_after_surface_tries() {
+    use std::time::Duration;
+    use crate::gpu::fallback::{FORGIVE_LOSS, GpuMode, Policy};
     use crate::render::Gpu;
     use crate::window::surface::win::{SURFACE_BACKOFF, SURFACE_TRIES, SurfaceRetries, SurfaceStep};
 
@@ -396,9 +399,12 @@ fn lost_device_during_present_keeps_retry_count_backs_off_and_gives_up_after_sur
     // presented state, marks idle, reports skipped, and arms a non-zero backoff.
     let lost_gpu = make_lost_gpu();
     let is_lost = lost_gpu.as_ref().map_or(true, Gpu::is_lost);
-    assert!(!finalize_present_retries(is_lost, &mut retries), "a lost present must not reset retries");
+    assert!(!finalize_present_retries(is_lost, &mut retries), "a lost present must return false");
     assert_eq!(
-        apply_lost_present_core(&retries, &mut host.surface_ok, &mut host.presented, &mut host.backoff, &mut host.reports, &mut idle, now),
+        apply_lost_present_core(
+            &retries, Policy::Automatic, true,
+            &mut host.surface_ok, &mut host.presented, &mut host.backoff, &mut host.reports, &mut idle, now,
+        ),
         LostPresent::Retry,
     );
     assert!(!host.surface_ok, "a lost present marks the surface unconfigured");
@@ -408,27 +414,38 @@ fn lost_device_during_present_keeps_retry_count_backs_off_and_gives_up_after_sur
     assert_eq!(*outcomes.borrow(), [FrameOutcome::Skipped]);
     drop(lost_gpu);
 
-    // 2. Repeated replacements whose frames each lose their device during submit/present must
-    // advance through SURFACE_TRIES with increasing backoff and then give up instead of looping.
-    let mut replacements = 0u8;
-    let mut waits = Vec::new();
+    // 2. Consecutive lost presents walk Hardware (2 retries -> switch to Software on 3rd) ->
+    // Software (2 retries -> GiveUp on 3rd), with growing hardware backoff waits.
+    let mut hw_waits = Vec::new();
+    let mut switched = 0u8;
     let mut gave_up = false;
     for _ in 0..10 {
-        assert_eq!(retries.attempt(), SurfaceStep::Replace);
-        replacements += 1;
+        let step = retries.attempt(now, Policy::Automatic, true);
+        let SurfaceStep::Replace { mode, switched_to_software } = step else {
+            panic!("expected Replace before GiveUp, got {step:?}");
+        };
+        if switched_to_software {
+            assert_eq!(mode, GpuMode::Software);
+            switched += 1;
+        }
         host.surface_ok = true;
         idle = false;
         let gpu = make_lost_gpu();
         let is_lost = gpu.as_ref().map_or(true, Gpu::is_lost);
-        assert!(!finalize_present_retries(is_lost, &mut retries), "lost replacement {replacements} must not call worked()");
-        assert_eq!(retries.failures(), replacements, "failure count must keep advancing across lost presents");
-        match apply_lost_present_core(&retries, &mut host.surface_ok, &mut host.presented, &mut host.backoff, &mut host.reports, &mut idle, now) {
+        assert!(!finalize_present_retries(is_lost, &mut retries));
+        match apply_lost_present_core(
+            &retries, Policy::Automatic, true,
+            &mut host.surface_ok, &mut host.presented, &mut host.backoff, &mut host.reports, &mut idle, now,
+        ) {
             LostPresent::Retry => {
                 let at = host.backoff.deadline().expect("retry must set a backoff deadline");
-                waits.push(at - now);
+                if mode == GpuMode::Hardware {
+                    hw_waits.push(at - now);
+                }
                 now = at;
             }
             LostPresent::GiveUp => {
+                assert_eq!(mode, GpuMode::Software, "GiveUp must happen only after exhausting Software");
                 gave_up = true;
                 drop(gpu);
                 break;
@@ -437,17 +454,22 @@ fn lost_device_during_present_keeps_retry_count_backs_off_and_gives_up_after_sur
         drop(gpu);
     }
     assert!(gave_up, "consecutive lost presents must terminate with GiveUp instead of spinning forever");
-    assert_eq!(replacements, SURFACE_TRIES);
-    assert_eq!(waits.len() as u8, SURFACE_TRIES - 1);
-    assert!(waits.windows(2).all(|w| w[1] > w[0]), "backoffs must grow across consecutive losses: {waits:?}");
-    assert_eq!(retries.attempt(), SurfaceStep::GiveUp, "subsequent replace_lost_surface must give up");
+    assert_eq!(switched, 1, "must switch from Hardware to Software exactly once");
+    assert_eq!(hw_waits.len() as u8, SURFACE_TRIES - 1);
+    assert!(hw_waits.windows(2).all(|w| w[1] > w[0]), "backoffs must grow across consecutive losses: {hw_waits:?}");
+    assert_eq!(retries.attempt(now, Policy::Automatic, true), SurfaceStep::GiveUp, "subsequent replace_lost_surface must give up");
 
-    // 3. A healthy frame resets the retry budget.
+    // 3. A single healthy frame does NOT reset losses; only FORGIVE_LOSS (5 min) forgives one.
+    let t0 = crate::time::now();
     let mut recovering = SurfaceRetries::default();
-    assert_eq!(recovering.attempt(), SurfaceStep::Replace);
-    assert_eq!(recovering.failures(), 1);
+    assert_eq!(
+        recovering.attempt(t0, Policy::Automatic, true),
+        SurfaceStep::Replace { mode: GpuMode::Hardware, switched_to_software: false },
+    );
+    assert_eq!(recovering.failures(t0), 1);
     assert!(finalize_present_retries(false, &mut recovering));
-    assert_eq!(recovering.failures(), 0);
+    assert_eq!(recovering.failures(t0 + Duration::from_secs(10)), 1, "a single healthy frame must not reset losses");
+    assert_eq!(recovering.failures(t0 + FORGIVE_LOSS), 0, "one loss is forgiven after 5 minutes");
 }
 
 #[test]

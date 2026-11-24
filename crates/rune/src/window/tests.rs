@@ -694,53 +694,73 @@ fn a_destroyed_device_that_has_not_reported_its_loss_is_not_configured() {
     assert_eq!(acquire(&surface, &gpu, &config, true, 1, &mut meter), Err(Missed::Unconfigured));
 }
 
-/// A surface that won't come back is replaced a bounded number of times, waiting longer after
-/// each failure, and then the window gives it up: a lost device can never be replaced, and a
-/// frame must not ask again forever.
+/// Repeated losses within 5 minutes fall back from hardware to software after `SURFACE_TRIES`
+/// losses and give up after `SURFACE_TRIES` software losses; one loss is forgiven per 5 minutes
+/// elapsed, and a pinned adapter (`WGPU_ADAPTER_NAME`) never switches to software.
 #[test]
 fn surface_replacements_give_up_after_a_bounded_number_of_tries() {
+    use std::time::Duration;
+    use crate::gpu::fallback::{FORGIVE_LOSS, GpuMode, Policy};
     use super::surface::win::{SurfaceStep, SURFACE_TRIES};
-    let now = crate::time::now();
-    let mut retries = SurfaceRetries::default();
-    let mut waits = Vec::new();
-    loop {
-        assert_eq!(retries.attempt(), SurfaceStep::Replace);
-        match retries.retry(now) {
-            Some(at) => waits.push(at - now),
-            None => break,
-        }
-        assert!(waits.len() < 100, "a replacement that keeps failing never gives up");
-    }
-    assert_eq!(waits.len() as u8, SURFACE_TRIES - 1, "one try, then bounded retries");
-    assert!(waits.windows(2).all(|pair| pair[1] > pair[0]), "each wait is longer: {waits:?}");
-    assert_eq!(retries.failures(), SURFACE_TRIES);
-    assert_eq!(retries.attempt(), SurfaceStep::GiveUp);
 
-    // A frame that reached the screen starts over.
-    retries.worked();
-    assert_eq!(retries.failures(), 0);
-    assert_eq!(retries.attempt(), SurfaceStep::Replace);
+    // 1. Automatic + software available: 3 hardware losses 10 s apart switch to Software, then
+    // 3 software losses give up, with growing backoff waits across consecutive failures.
+    let mut now = crate::time::now();
+    let mut retries = SurfaceRetries::default();
+    assert_eq!(retries.attempt(now, Policy::Automatic, true), SurfaceStep::Replace { mode: GpuMode::Hardware, switched_to_software: false });
+    let w1 = retries.retry(now, Policy::Automatic, true).expect("wait after 1st hardware loss") - now;
+    now += Duration::from_secs(10);
+    assert_eq!(retries.attempt(now, Policy::Automatic, true), SurfaceStep::Replace { mode: GpuMode::Hardware, switched_to_software: false });
+    let w2 = retries.retry(now, Policy::Automatic, true).expect("wait after 2nd hardware loss") - now;
+    assert!(w2 > w1, "backoff must grow across consecutive losses: {w1:?} -> {w2:?}");
+    now += Duration::from_secs(10);
+    assert_eq!(retries.attempt(now, Policy::Automatic, true), SurfaceStep::Replace { mode: GpuMode::Software, switched_to_software: true });
+    assert_eq!(retries.failures(now), 0);
+    assert_eq!(retries.mode(), Some(GpuMode::Software));
+
+    for expected in 1..SURFACE_TRIES {
+        now += Duration::from_secs(10);
+        assert_eq!(retries.attempt(now, Policy::Automatic, true), SurfaceStep::Replace { mode: GpuMode::Software, switched_to_software: false });
+        assert_eq!(retries.failures(now), expected);
+    }
+    now += Duration::from_secs(10);
+    assert_eq!(retries.attempt(now, Policy::Automatic, true), SurfaceStep::GiveUp);
+    assert_eq!(retries.retry(now, Policy::Automatic, true), None);
+
+    // 2. Forgiveness: 1 loss + >5 min healthy forgives that loss and stays on Hardware.
+    let mut t = crate::time::now();
+    let mut forgiven = SurfaceRetries::default();
+    assert_eq!(forgiven.attempt(t, Policy::Automatic, true), SurfaceStep::Replace { mode: GpuMode::Hardware, switched_to_software: false });
+    assert_eq!(forgiven.failures(t), 1);
+    t += FORGIVE_LOSS + Duration::from_secs(1);
+    assert_eq!(forgiven.failures(t), 0);
+    assert_eq!(forgiven.attempt(t, Policy::Automatic, true), SurfaceStep::Replace { mode: GpuMode::Hardware, switched_to_software: false });
+    assert_eq!(forgiven.failures(t), 1);
+    assert_eq!(forgiven.mode(), Some(GpuMode::Hardware));
 }
 
-/// A replacement that works still counts: a surface replaced and lost again before its frame
-/// presents gives the window up after `SURFACE_TRIES` replacements instead of making one
-/// forever. This is the shape `Host::replace_lost_surface` runs, where only `draw`'s present
-/// calls `worked`.
+/// A pinned adapter (`WGPU_ADAPTER_NAME`) or a platform without a software adapter never switches
+/// to software and gives up on the 3rd loss within the forgiveness window.
 #[test]
 fn a_surface_lost_after_every_replacement_gives_up_after_the_tries() {
+    use std::time::Duration;
+    use crate::gpu::fallback::{GpuMode, Policy};
     use super::surface::win::{SurfaceStep, SURFACE_TRIES};
-    let mut retries = SurfaceRetries::default();
-    let mut replaced = 0;
-    while retries.attempt() == SurfaceStep::Replace {
-        // The replacement worked, and the frame it made was lost before it presented.
-        replaced += 1;
-        assert!(replaced < 100, "a surface lost before it presents never stops being replaced");
-    }
-    assert_eq!(replaced, SURFACE_TRIES, "the window gives up after a bounded number of replacements");
 
-    // One frame reaches the screen: the next loss starts over.
-    retries.worked();
-    assert_eq!(retries.attempt(), SurfaceStep::Replace);
+    for (policy, software_available) in [(Policy::Pinned, true), (Policy::Automatic, false)] {
+        let mut now = crate::time::now();
+        let mut retries = SurfaceRetries::default();
+        let mut replaced = 0u8;
+        while let SurfaceStep::Replace { mode, switched_to_software } = retries.attempt(now, policy, software_available) {
+            assert_eq!(mode, GpuMode::Hardware, "must never switch to software for policy={policy:?}, software_available={software_available}");
+            assert!(!switched_to_software);
+            replaced += 1;
+            now += Duration::from_secs(10);
+            assert!(replaced < 10, "must give up after a bounded number of losses");
+        }
+        assert_eq!(replaced, SURFACE_TRIES - 1, "two hardware replacements before the 3rd loss gives up");
+        assert_eq!(retries.attempt(now, policy, software_available), SurfaceStep::GiveUp);
+    }
 }
 
 /// A device that went away (a driver reset, a GPU removed, Windows' Modern Standby) configures

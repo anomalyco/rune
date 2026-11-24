@@ -42,7 +42,7 @@ pub(crate) struct Ir {
     label: String,
     source: String,
     pub(super) hash: blake3::Hash,
-    parsed: OnceLock<(naga::Module, naga::valid::ModuleInfo)>,
+    parsed: OnceLock<Result<(naga::Module, naga::valid::ModuleInfo), String>>,
     pub(super) checks: wgpu::ShaderRuntimeChecks,
 }
 
@@ -90,10 +90,15 @@ unsafe extern "C" {
 impl Ir {
     /// Parses and validates `source` now, unless it is a built-in shader, which parses only if a
     /// pipeline needs a function the precompiled library lacks.
-    pub(super) fn new(label: &str, source: &str, checks: wgpu::ShaderRuntimeChecks) -> Self {
+    pub(super) fn new(shared: &Shared, label: &str, source: &str, checks: wgpu::ShaderRuntimeChecks) -> Self {
         let hash = source_hash(source);
         let ir = Ir { label: label.into(), source: source.into(), hash, parsed: OnceLock::new(), checks };
-        if !builtin::known(&hash) { ir.parsed(); }
+        if !builtin::known(&hash)
+            && let Err(error) = ir.try_parsed()
+            && !shared.capture_error(wgpu::ErrorFilter::Validation, error.clone())
+        {
+            panic!("{error}");
+        }
         ir
     }
 
@@ -103,15 +108,23 @@ impl Ir {
         ir
     }
 
+    fn try_parsed(&self) -> Result<&(naga::Module, naga::valid::ModuleInfo), String> {
+        self.parsed
+            .get_or_init(|| {
+                let (label, source) = (&self.label, &self.source);
+                let module = naga::front::wgsl::parse_str(source)
+                    .map_err(|e| format!("{label}: {}", e.emit_to_string(source)))?;
+                let info = Validator::new(ValidationFlags::all(), Capabilities::all())
+                    .validate(&module)
+                    .map_err(|e| format!("{label}: {}", e.emit_to_string(source)))?;
+                Ok((module, info))
+            })
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+
     fn parsed(&self) -> &(naga::Module, naga::valid::ModuleInfo) {
-        self.parsed.get_or_init(|| {
-            let (label, source) = (&self.label, &self.source);
-            let module = naga::front::wgsl::parse_str(source).unwrap_or_else(|e| panic!("{label}: {}", e.emit_to_string(source)));
-            let info = Validator::new(ValidationFlags::all(), Capabilities::all())
-                .validate(&module)
-                .unwrap_or_else(|e| panic!("{label}: {}", e.emit_to_string(source)));
-            (module, info)
-        })
+        self.try_parsed().unwrap_or_else(|error| panic!("{error}"))
     }
 
     pub(super) fn parts(&self) -> (&naga::Module, &naga::valid::ModuleInfo) {
@@ -139,9 +152,9 @@ fn source_hash(source: &str) -> blake3::Hash {
 }
 
 impl ShaderModule {
-    pub(crate) fn new(desc: wgpu::ShaderModuleDescriptor<'_>, checks: wgpu::ShaderRuntimeChecks) -> Self {
+    pub(crate) fn new(shared: &Shared, desc: wgpu::ShaderModuleDescriptor<'_>, checks: wgpu::ShaderRuntimeChecks) -> Self {
         let wgpu::ShaderSource::Wgsl(source) = desc.source else { super::unsupported!("shaders other than WGSL") };
-        ShaderModule::Naga(Ir::new(desc.label.unwrap_or("shader"), &source, checks))
+        ShaderModule::Naga(Ir::new(shared, desc.label.unwrap_or("shader"), &source, checks))
     }
 
     pub(crate) fn passthrough(shared: &Shared, desc: &wgpu::ShaderModuleDescriptorPassthrough<'_>) -> Self {
@@ -154,7 +167,7 @@ impl ShaderModule {
     /// them all. A module from WGSL already passed validation.
     pub(crate) fn ready(&self) -> bool {
         match self {
-            ShaderModule::Naga(_) => true,
+            ShaderModule::Naga(ir) => ir.parsed.get().is_none_or(Result::is_ok),
             ShaderModule::Library { library: Ok(library), entries } => {
                 let names = library.functionNames();
                 entries.iter().all(|(name, _)| names.iter().any(|n| n.to_string() == *name))
@@ -229,7 +242,7 @@ pub(super) fn function(library: &ProtocolObject<dyn MTLLibrary>, name: &str) -> 
 
 /// Translates `point` to MSL `lang`, binding `resources`.
 pub(super) fn translate(ir: &Ir, point: &Point<'_>, resources: &msl::EntryPointResources, points: bool, lang: (u8, u8)) -> Result<Msl, String> {
-    let (module, info) = ir.parsed();
+    let (module, info) = ir.try_parsed()?;
     let checks = &ir.checks;
     let name = match point.entry {
         Some(name) => name.to_string(),

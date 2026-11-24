@@ -182,7 +182,8 @@ impl Measurement<'_> {
         // window's frame takes it after, and drawing the old one first would spring the buttons
         // to the new one, at launch and on every zoom step.
         let height = cx.titlebar.height.or(cx.titlebar.titlebar.map(|t| t.height())).unwrap_or(caption.height);
-        let caption = crate::titlebar::Caption { height, ..*caption };
+        let hidden = caption.hidden || cx.titlebar.titlebar.is_some_and(|t| !t.has_controls());
+        let caption = crate::titlebar::Caption { height, hidden, ..*caption };
         (crate::titlebar::frame(root, &caption, symbol, (self.env.scale, self.zoom), self.fit_height), cx)
     }
 

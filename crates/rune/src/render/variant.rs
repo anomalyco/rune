@@ -330,6 +330,10 @@ impl Renderer {
         if vertex_entry != "vs" {
             return Err("GPU springs draw the classic shader".into());
         }
+        #[cfg(test)]
+        if super::shader_check::refuse_windfoil() {
+            return Err("windfoil shader refused by test hook".into());
+        }
         let bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &windfoil_bind_entries() });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&bind_layout)], immediate_size: 0 });
         let make_pipeline = |shader: &dxbc::Shaders| beside(|| with(&layout, &bind_layout, shader), || Self::pipeline(device, &layout, shader, format, vertex_entry, Blend::SourceOver));
@@ -563,15 +567,12 @@ fn lcd_pipeline(device: &wgpu::Device, layout: &wgpu::PipelineLayout, format: wg
 
 /// `wgsl`'s module and pipeline, compiled now, or the error the device reported.
 fn compile(device: &wgpu::Device, wgsl: &str, make_pipeline: impl FnOnce(&dxbc::Shaders) -> wgpu::RenderPipeline) -> Result<(dxbc::Shaders, wgpu::RenderPipeline), String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    let scopes = (device.push_error_scope(wgpu::ErrorFilter::Validation), device.push_error_scope(wgpu::ErrorFilter::Internal));
-    let shader = dxbc::Shaders::one(device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("uber"), source: wgpu::ShaderSource::Wgsl(wgsl.into()) }));
-    let pipeline = make_pipeline(&shader);
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Some(error) = pollster::block_on(scopes.1.pop()).or(pollster::block_on(scopes.0.pop())) {
-        return Err(error.to_string());
-    }
-    Ok((shader, pipeline))
+    super::shader_check::checked_sync(device, || {
+        let shader = dxbc::Shaders::one(device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("uber"), source: wgpu::ShaderSource::Wgsl(wgsl.into()) }));
+        let pipeline = make_pipeline(&shader);
+        (shader, pipeline)
+    })
+    .map_err(Into::into)
 }
 
 /// The pinned pipelines for `format` (`Renderer::start_pinned`'s thread): none taken (refused, or every fragment

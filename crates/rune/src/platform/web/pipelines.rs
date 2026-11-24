@@ -33,7 +33,7 @@ pub(super) async fn warm(device: &wgpu::Device, format: wgpu::TextureFormat) -> 
     let js: &JsValue = device.as_webgpu()?.as_ref();
     if !can_divert(js) { return None; }
     let diverted = divert(js);
-    let renderer = Renderer::new(device, format);
+    let renderer = Renderer::try_new(device, format).ok()?;
     let pipelines = wasm_bindgen_futures::JsFuture::from(settle(&diverted)).await.ok()?;
     Some(Warmed { _renderer: renderer, _pipelines: pipelines })
 }

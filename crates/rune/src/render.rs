@@ -33,6 +33,7 @@ mod prewarm {
     pub(super) fn take() -> Option<(super::Gpu, super::Renderer)> { None }
     pub(super) fn discard() {}
 }
+mod shader_check;
 mod surface_setup;
 mod uber_wgsl;
 mod upload;
@@ -70,6 +71,7 @@ use pass::{ActivePass, Backdrop};
 
 #[cfg(target_os = "windows")]
 pub(crate) use damaged::MAX_RECTS;
+pub(crate) use shader_check::ShaderError;
 pub(crate) use surface_setup::{PresentationFallback, SurfaceSetupError};
 pub(crate) use device::choose_gpu_backend;
 pub(crate) use device::discard_prewarm;
@@ -327,6 +329,12 @@ pub struct Renderer {
     backdrop_blur: Option<backdrop_blur::BackdropBlur>,
     /// Which lazily built pipelines the device took (`breaker`).
     breakers: breaker::Breakers,
+    /// Health of the primary uber shader and pipeline (`shader_check`), tracking async WebGPU
+    /// error scopes on the web.
+    uber_check: shader_check::UberCheck,
+    uber_check_seq: crate::machine::Seq,
+    #[cfg(target_arch = "wasm32")]
+    uber_check_wake: shader_check::WakeSlot,
     uploads: upload::Uploads,
     /// Atlas fills `prepare` staged, recorded into the frame's encoder with the uploads.
     fills: std::sync::Mutex<Option<fill::PendingFills>>,
@@ -349,8 +357,24 @@ impl Renderer {
         self.device_key
     }
 
+    /// Creates a renderer for `device` drawing into `format`, panicking if the GPU rejects
+    /// Rune's last-resort uber shader or pipeline. Windows and headless runs use [`Self::try_new`].
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Renderer {
-        Self::create(device, format, None, cfg!(target_os = "macos"))
+        Self::try_new(device, format).unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    /// Creates a renderer for `device` drawing into `format`, returning an error instead of
+    /// leaving an invalid pipeline if the GPU rejects Rune's last-resort uber shader or pipeline.
+    ///
+    /// On native devices and WebGL2 the shader and pipeline are checked synchronously inside
+    /// validation, out-of-memory and internal error scopes. On browser WebGPU, error scopes
+    /// resolve asynchronously and are checked by the web host without blocking startup.
+    pub fn try_new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Result<Renderer, String> {
+        Self::try_new_classified(device, format).map_err(Into::into)
+    }
+
+    pub(crate) fn try_new_classified(device: &wgpu::Device, format: wgpu::TextureFormat) -> Result<Renderer, ShaderError> {
+        Self::try_create(device, format, None, cfg!(target_os = "macos"))
     }
 
     pub fn set_srgb_blend(&mut self, enabled: bool) {
@@ -370,15 +394,29 @@ impl Renderer {
 
     /// Opt-in retained geometry. IDs map instances to shared translation/opacity nodes.
     /// Upload geometry once with `prepare`, then use `present_at` without rebuilding instances.
+    /// Panics if the GPU rejects the spring uber shader or pipeline; use [`Self::try_with_springs`]
+    /// to handle that failure.
     pub fn with_springs(device: &wgpu::Device, format: wgpu::TextureFormat, nodes: &[crate::gpu::springs::Node], ids: &[u32]) -> Renderer {
-        Self::create(device, format, Some((nodes, ids)), true)
+        Self::try_with_springs(device, format, nodes, ids).unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    /// Like [`Self::with_springs`], returning an error if the GPU rejects the shader or pipeline.
+    pub fn try_with_springs(device: &wgpu::Device, format: wgpu::TextureFormat, nodes: &[crate::gpu::springs::Node], ids: &[u32]) -> Result<Renderer, String> {
+        Self::try_create(device, format, Some((nodes, ids)), true).map_err(Into::into)
     }
 
     /// A renderer that starts with the Classic uber shader, as on macOS, and builds Windfoil when
     /// text first draws from outlines (render/variant.rs); for checking that path elsewhere.
     #[doc(hidden)]
     pub fn new_classic(device: &wgpu::Device, format: wgpu::TextureFormat) -> Renderer {
-        Self::create(device, format, None, true)
+        Self::try_new_classic(device, format).unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    /// Like [`Self::new_classic`], returning an error if the GPU rejects the Classic shader or
+    /// pipeline.
+    #[doc(hidden)]
+    pub fn try_new_classic(device: &wgpu::Device, format: wgpu::TextureFormat) -> Result<Renderer, String> {
+        Self::try_create(device, format, None, true).map_err(Into::into)
     }
 
     /// Draws uploaded instances `range` into a pass whose target has `format` (the renderer's

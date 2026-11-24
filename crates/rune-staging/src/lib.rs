@@ -9,15 +9,17 @@
 //! Writes land in the order they were made, at the next `flush` or `submit`. A write must be
 //! flushed into an encoder ahead of the commands that read it, or submitted before them.
 //! On the web, whose `writeBuffer` already stages, writes go straight to the queue. A backend
-//! whose buffers the CPU can write in place registers a `Direct` writer, and buffer writes it
-//! takes skip the staging.
+//! whose buffers or textures the CPU can write in place registers a `Direct` / `DirectTexture`
+//! writer, and writes it takes skip the staging.
 
 mod buffer;
 pub mod health;
+mod oversized;
 #[cfg(test)]
 mod tests;
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
 pub use buffer::GrowBuffer;
@@ -49,9 +51,9 @@ pub fn set_direct_texture(direct: DirectTexture) {
     DIRECT_TEXTURE.set(direct).ok();
 }
 
-/// The size of a new chunk; a larger write gets a chunk sized to its next power of two.
+/// The size of a new chunk; a larger write up to `KEEP_CHUNK_MAX` gets its next power of two.
 const CHUNK: u64 = 128 * 1024;
-/// Returned chunks kept for reuse, by count and in bytes; larger chunks are freed on return.
+/// Returned normal chunks kept for reuse, by count and in bytes.
 const KEEP_CHUNKS: usize = 8;
 const KEEP_BYTES: u64 = 4 << 20;
 const KEEP_CHUNK_MAX: u64 = KEEP_BYTES;
@@ -62,10 +64,17 @@ const MAX_PENDING: u64 = 16 << 20;
 const ROW_ALIGN: u64 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64;
 
 /// A shared handle to one set of staging chunks and the writes pending in them: the chunks,
-/// the count of lost ones, and whether any are pending or mapped (so `flush` and `submit` with
-/// nothing to do never lock).
+/// the count of lost ones, whether any are pending or mapped (so `flush` and `submit` with
+/// nothing to do never lock), whether the oversized pool is active, and how many recyclable
+/// oversized chunks are in flight on the GPU.
 #[derive(Clone)]
-pub struct Staging(Arc<Mutex<Inner>>, Arc<AtomicU64>, Arc<AtomicBool>);
+pub struct Staging {
+    inner: Arc<Mutex<Inner>>,
+    lost: Arc<AtomicU64>,
+    busy: Arc<AtomicBool>,
+    oversized_active: Arc<AtomicBool>,
+    oversized_in_flight: Arc<AtomicUsize>,
+}
 
 /// Counters, for tests and benchmarks.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -91,6 +100,8 @@ struct Chunk {
     /// The whole chunk's mapping, made at its first write and dropped before it unmaps, so a
     /// write costs wgpu no mapped-range bookkeeping of its own.
     view: Option<wgpu::BufferViewMut>,
+    /// False for one-shot oversized chunks, which unmap and drop on encode without remapping.
+    recyclable: bool,
 }
 
 enum Dst {
@@ -112,6 +123,8 @@ struct Inner {
     /// Mapped chunks holding pending writes.
     active: Vec<Chunk>,
     free: Vec<Chunk>,
+    oversized_free: VecDeque<Chunk>,
+    oversized: oversized::State,
     recycle: mpsc::Sender<Chunk>,
     returned: mpsc::Receiver<Chunk>,
     pending: Vec<Pending>,
@@ -125,25 +138,55 @@ struct Return {
     chunk: Option<Chunk>,
     recycle: mpsc::Sender<Chunk>,
     lost: Arc<AtomicU64>,
+    in_flight: Option<Arc<AtomicUsize>>,
 }
 
 impl Drop for Return {
     fn drop(&mut self) {
+        if let Some(in_flight) = &self.in_flight {
+            in_flight.fetch_sub(1, Ordering::AcqRel);
+        }
         if self.chunk.is_some() { self.lost.fetch_add(1, Ordering::Relaxed); }
+    }
+}
+
+/// Zero-buffer lost-chunk guard attached to `encoder.on_submitted_work_done` for one-shot
+/// oversized chunks, preserving `Staging::lost()` without retaining or remapping the buffer.
+struct LostGuard {
+    ran: bool,
+    lost: Arc<AtomicU64>,
+}
+
+impl LostGuard {
+    fn complete(&mut self) {
+        self.ran = true;
+    }
+}
+
+impl Drop for LostGuard {
+    fn drop(&mut self) {
+        if !self.ran { self.lost.fetch_add(1, Ordering::Relaxed); }
     }
 }
 
 impl Staging {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Staging {
         let (recycle, returned) = mpsc::channel();
-        Staging(Arc::new(Mutex::new(Inner {
-            device: device.clone(), queue: queue.clone(), active: Vec::new(), free: Vec::new(), recycle, returned,
-            pending: Vec::new(), pending_bytes: 0, stats: Stats::default(),
-        })), Arc::default(), Arc::default())
+        Staging {
+            inner: Arc::new(Mutex::new(Inner {
+                device: device.clone(), queue: queue.clone(), active: Vec::new(), free: Vec::new(),
+                oversized_free: VecDeque::new(), oversized: oversized::State::Cold, recycle, returned,
+                pending: Vec::new(), pending_bytes: 0, stats: Stats::default(),
+            })),
+            lost: Arc::default(),
+            busy: Arc::default(),
+            oversized_active: Arc::default(),
+            oversized_in_flight: Arc::default(),
+        }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner())
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Stages a write of `data` to `buffer` at `offset`. Both are multiples of 4.
@@ -205,9 +248,13 @@ impl Staging {
     /// Records the pending writes into `encoder` here, ahead of what is recorded after them.
     /// `encoder` must be submitted: dropped, the writes never land (`lost` counts it).
     pub fn flush(&self, encoder: &mut wgpu::CommandEncoder) {
-        if !self.busy() { return; }
+        let busy = self.busy();
+        if !busy && !self.oversized_active.load(Ordering::Acquire) { return; }
         let mut s = self.lock();
-        if s.pending.is_empty() && s.active.is_empty() { return; }
+        if s.pending.is_empty() && s.active.is_empty() {
+            s.step_oversized(self, oversized::Event::Flush { had_oversized: false });
+            return;
+        }
         s.encode(encoder, self);
         s.stats.flushes += 1;
     }
@@ -232,7 +279,7 @@ impl Staging {
 
     /// Whether writes are pending or chunks still mapped since the last `flush` or `submit`.
     pub fn busy(&self) -> bool {
-        self.2.load(Ordering::Acquire)
+        self.busy.load(Ordering::Acquire)
     }
 
     /// Whether writes are waiting for a `flush` or `submit`.
@@ -240,10 +287,16 @@ impl Staging {
         !self.lock().pending.is_empty()
     }
 
+    /// Whether any recyclable oversized (> 4 MiB) staging chunks are currently in flight on the
+    /// GPU awaiting return via `map_buffer_on_submit`.
+    pub fn has_oversized_in_flight(&self) -> bool {
+        self.oversized_in_flight.load(Ordering::Acquire) > 0
+    }
+
     /// Chunks whose writes may never have landed because their encoder was dropped unsubmitted.
     /// A caller that skips writes matching what it last wrote resends everything when it grows.
     pub fn lost(&self) -> u64 {
-        self.1.load(Ordering::Relaxed)
+        self.lost.load(Ordering::Relaxed)
     }
 
     pub fn stats(&self) -> Stats {
@@ -254,8 +307,21 @@ impl Staging {
     /// makes a new one. Chunks holding pending writes stay.
     pub fn trim(&self) {
         let mut s = self.lock();
+        s.step_oversized(self, oversized::Event::Trim);
         while s.returned.try_recv().is_ok() {}
         s.free.clear();
+        s.oversized_free.clear();
+    }
+
+    /// Frees only retained oversized (> 4 MiB) chunks and resets the oversized pool, keeping
+    /// normal <= 4 MiB chunks intact for the next frame.
+    pub fn trim_oversized(&self) {
+        let mut s = self.lock();
+        s.step_oversized(self, oversized::Event::Trim);
+        s.oversized_free.clear();
+        // Drain returned chunks: normal <= 4 MiB chunks move into `free`; oversized chunks are
+        // dropped because the pool is now `Cold`.
+        s.receive();
     }
 }
 
@@ -264,30 +330,82 @@ impl Inner {
         self.pending.iter().any(|p| matches!(&p.dst, Dst::Rows { texture: t, .. } if t == texture))
     }
 
+    fn oversized_bytes(&self) -> u64 {
+        self.oversized_free.iter().map(|c| c.buffer.size()).sum()
+    }
+
+    fn step_oversized(&mut self, staging: &Staging, event: oversized::Event) -> Option<oversized::Effect> {
+        let effect = oversized::step(&mut self.oversized, event);
+        staging.oversized_active.store(self.oversized.is_active(), Ordering::Release);
+        if matches!(effect, Some(oversized::Effect::Evict)) {
+            self.oversized_free.clear();
+        }
+        effect
+    }
+
     /// Reserves `size` bytes (rounded up to 4) at `align` in a mapped chunk and fills them.
     fn stage(&mut self, size: u64, align: u64, staging: &Staging, fill: impl FnOnce(&mut wgpu::WriteOnly<'_, [u8]>)) -> (wgpu::Buffer, u64) {
         let size = size.next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT);
         if self.pending_bytes + size > MAX_PENDING { self.submit(staging); }
-        let fits = |c: &Chunk| c.used.next_multiple_of(align) + size <= c.buffer.size();
+        let is_oversized = size > KEEP_CHUNK_MAX;
+        let recyclable = if is_oversized {
+            let poolable = oversized::alloc_size(size) <= oversized::OVERSIZED_KEEP_BYTES;
+            matches!(
+                self.step_oversized(staging, oversized::Event::OversizedWrite { poolable }),
+                Some(oversized::Effect::Chunk(oversized::Disposition::Recycle))
+            )
+        } else {
+            true
+        };
+        let fits = |c: &Chunk| {
+            (c.buffer.size() > KEEP_CHUNK_MAX) == is_oversized
+                && c.used.next_multiple_of(align) + size <= c.buffer.size()
+        };
         let index = match self.active.iter().position(fits) {
             Some(i) => i,
             None => {
                 self.receive();
-                let chunk = match self.free.iter().enumerate()
-                    .filter(|(_, c)| c.buffer.size() >= size)
-                    .min_by_key(|(_, c)| c.buffer.size())
-                    .map(|(i, _)| i)
-                {
-                    Some(i) => self.free.swap_remove(i),
-                    None => {
-                        self.stats.chunks += 1;
-                        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                            label: Some("rune staging"),
-                            size: CHUNK.max(size.next_power_of_two()),
-                            usage: wgpu::BufferUsages::MAP_WRITE | wgpu::BufferUsages::COPY_SRC,
-                            mapped_at_creation: true,
-                        });
-                        Chunk { buffer, used: 0, view: None }
+                let chunk = if is_oversized {
+                    let reused = recyclable.then(|| {
+                        self.oversized_free.iter().enumerate()
+                            .filter(|(_, c)| oversized::fits_reusable(c.buffer.size(), size))
+                            .min_by_key(|(_, c)| c.buffer.size())
+                            .map(|(i, _)| i)
+                    }).flatten();
+                    match reused {
+                        Some(i) => {
+                            let mut c = self.oversized_free.remove(i).expect("matched oversized index");
+                            c.recyclable = true;
+                            c
+                        }
+                        None => {
+                            self.stats.chunks += 1;
+                            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                                label: Some("rune staging oversized"),
+                                size: oversized::alloc_size(size),
+                                usage: wgpu::BufferUsages::MAP_WRITE | wgpu::BufferUsages::COPY_SRC,
+                                mapped_at_creation: true,
+                            });
+                            Chunk { buffer, used: 0, view: None, recyclable }
+                        }
+                    }
+                } else {
+                    match self.free.iter().enumerate()
+                        .filter(|(_, c)| c.buffer.size() >= size)
+                        .min_by_key(|(_, c)| c.buffer.size())
+                        .map(|(i, _)| i)
+                    {
+                        Some(i) => self.free.swap_remove(i),
+                        None => {
+                            self.stats.chunks += 1;
+                            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                                label: Some("rune staging"),
+                                size: CHUNK.max(size.next_power_of_two()),
+                                usage: wgpu::BufferUsages::MAP_WRITE | wgpu::BufferUsages::COPY_SRC,
+                                mapped_at_creation: true,
+                            });
+                            Chunk { buffer, used: 0, view: None, recyclable: true }
+                        }
                     }
                 };
                 self.active.push(chunk);
@@ -310,34 +428,57 @@ impl Inner {
         self.pending_bytes += size;
         self.stats.writes += 1;
         self.stats.bytes += size;
-        staging.2.store(true, Ordering::Release);
+        staging.busy.store(true, Ordering::Release);
         (chunk.buffer.clone(), at)
     }
 
-    /// Moves chunks the GPU is done with to the free list, within the keep bounds.
+    /// Moves chunks the GPU is done with to the free lists, within their keep bounds.
     fn receive(&mut self) {
         while let Ok(mut chunk) = self.returned.try_recv() {
             chunk.used = 0;
-            let kept: u64 = self.free.iter().map(|c| c.buffer.size()).sum();
             let size = chunk.buffer.size();
-            if size <= KEEP_CHUNK_MAX && self.free.len() < KEEP_CHUNKS && kept + size <= KEEP_BYTES {
-                self.free.push(chunk);
+            if size <= KEEP_CHUNK_MAX {
+                let kept: u64 = self.free.iter().map(|c| c.buffer.size()).sum();
+                if self.free.len() < KEEP_CHUNKS && kept + size <= KEEP_BYTES {
+                    self.free.push(chunk);
+                }
+            } else if size <= oversized::OVERSIZED_KEEP_BYTES && self.oversized.accepts_returns() {
+                while self.oversized_free.len() >= oversized::OVERSIZED_KEEP_CHUNKS
+                    || self.oversized_bytes() + size > oversized::OVERSIZED_KEEP_BYTES
+                {
+                    if self.oversized_free.pop_front().is_none() { break; }
+                }
+                self.oversized_free.push_back(chunk);
             }
         }
     }
 
     fn encode(&mut self, encoder: &mut wgpu::CommandEncoder, staging: &Staging) {
         self.copy(encoder);
+        let mut had_oversized = false;
         for mut chunk in self.active.drain(..) {
+            let is_oversized = chunk.buffer.size() > KEEP_CHUNK_MAX;
+            had_oversized |= is_oversized;
             chunk.view = None;
             chunk.buffer.unmap();
+            if !chunk.recyclable {
+                drop(chunk);
+                let mut guard = LostGuard { ran: false, lost: staging.lost.clone() };
+                encoder.on_submitted_work_done(move || guard.complete());
+                continue;
+            }
+            let in_flight = is_oversized.then(|| {
+                staging.oversized_in_flight.fetch_add(1, Ordering::AcqRel);
+                staging.oversized_in_flight.clone()
+            });
             let buffer = chunk.buffer.clone();
-            let mut back = Return { chunk: Some(chunk), recycle: self.recycle.clone(), lost: staging.1.clone() };
+            let mut back = Return { chunk: Some(chunk), recycle: self.recycle.clone(), lost: staging.lost.clone(), in_flight };
             encoder.map_buffer_on_submit(&buffer, wgpu::MapMode::Write, .., move |mapped| {
                 if mapped.is_ok() && let Some(chunk) = back.chunk.take() { back.recycle.send(chunk).ok(); }
             });
         }
-        staging.2.store(false, Ordering::Release);
+        staging.busy.store(false, Ordering::Release);
+        self.step_oversized(staging, oversized::Event::Flush { had_oversized });
     }
 
     /// Records the pending copies; their chunks stay mapped and active.

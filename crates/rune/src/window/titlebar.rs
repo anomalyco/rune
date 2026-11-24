@@ -32,6 +32,7 @@ pub(crate) use caption::{BUTTONS_KEY, FRAME_KEY, frame};
 pub struct Titlebar {
     height: f32,
     traffic_lights: Option<(f32, f32)>,
+    controls: bool,
 }
 
 impl Titlebar {
@@ -39,7 +40,7 @@ impl Titlebar {
     pub const CAPTION_BUTTON_WIDTH: f32 = 46.0;
 
     pub const fn new(height: f32) -> Self {
-        Self { height, traffic_lights: None }
+        Self { height, traffic_lights: None, controls: true }
     }
 
     /// macOS: the close button's top-left, in points from the window's top-left, for this
@@ -47,6 +48,20 @@ impl Titlebar {
     /// the band's middle. Ignored elsewhere and in full screen.
     pub const fn traffic_lights(mut self, x: f32, y: f32) -> Self {
         self.traffic_lights = Some((x, y));
+        self
+    }
+
+    /// Whether the window shows its own caption controls over the titlebar: traffic lights on
+    /// macOS and the minimize/maximize/close buttons on Windows. Defaults to `true`.
+    ///
+    /// When `false`, Windows still installs the custom frame (keeping invisible outer side and
+    /// bottom resize borders, the top inside resize edge, Aero Snap, Alt+Space and right-click
+    /// window menu, and `Tx::minimize()`/`Tx::toggle_maximized()`), macOS hides its traffic
+    /// lights while keeping the full-size content view and `.window_drag()` regions, and
+    /// [`ChromeInsets`] reports zero `leading` and `trailing` insets. Use this when the app
+    /// draws both its own titlebar and its own window controls.
+    pub const fn controls(mut self, shown: bool) -> Self {
+        self.controls = shown;
         self
     }
 
@@ -59,10 +74,18 @@ impl Titlebar {
         self.traffic_lights
     }
 
+    /// Whether the window shows its own caption controls over the titlebar (`true` by default).
+    pub const fn has_controls(&self) -> bool {
+        self.controls
+    }
+
     /// The frame macOS draws for this titlebar over `chrome`: full-size content, drag regions
     /// only, and the traffic lights where this titlebar or the app placed them, else in the
-    /// band's middle.
+    /// band's middle (`None` when [`Self::controls`] is `false`).
     pub(crate) fn mac_chrome(&self, chrome: Chrome) -> Chrome {
+        if !self.controls {
+            return Chrome { full_size_content: true, drag_regions: true, traffic_lights: None };
+        }
         let y = ((self.height - Chrome::TRAFFIC_LIGHT) / 2.0).max(0.0).round();
         let lights = self.traffic_lights.or(chrome.traffic_lights).or(Some((16.0, y)));
         Chrome { full_size_content: true, drag_regions: true, traffic_lights: lights }
@@ -122,6 +145,22 @@ mod set_tests {
     fn a_window_without_a_titlebar_of_its_own_never_changes() {
         let set = TitlebarSet { titlebar: Some(Titlebar::new(36.0)), height: Some(40.0) };
         assert!(!set.changes(TitlebarSet::default(), None));
+    }
+
+    #[test]
+    fn controls_builder_defaults_true_and_is_tracked_by_titlebar_set() {
+        let base = Titlebar::new(36.0);
+        assert!(base.has_controls());
+        let hidden = base.controls(false);
+        assert!(!hidden.has_controls());
+        assert!(hidden.controls(true).has_controls());
+
+        let unset = TitlebarSet::default();
+        let hide_set = TitlebarSet { titlebar: Some(hidden), height: None };
+        assert!(hide_set.changes(unset, Some(base)));
+        assert!(!hide_set.changes(unset, Some(hidden)));
+        assert!(!TitlebarSet { titlebar: None, height: Some(44.0) }.over(hidden).has_controls());
+        assert_eq!(hidden.mac_chrome(Chrome::DEFAULT), Chrome { full_size_content: true, drag_regions: true, traffic_lights: None });
     }
 }
 

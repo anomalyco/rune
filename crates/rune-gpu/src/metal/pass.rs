@@ -228,8 +228,9 @@ impl RenderPassInterface for MetalPass {
     fn set_pipeline(&mut self, pipeline: &DispatchRenderPipeline) {
         let next = &pipeline.as_custom::<RenderPipeline>().expect("a Metal render pipeline").raw;
         if self.pipeline.as_ref().is_some_and(|p| Arc::ptr_eq(p, next)) { return }
+        let Some(state) = &next.state else { return };
         let relayout = self.pipeline.as_ref().is_none_or(|p| !Arc::ptr_eq(&p.layout, &next.layout));
-        self.raw.setRenderPipelineState(&next.state);
+        self.raw.setRenderPipelineState(state);
         self.raw.setCullMode(next.cull);
         self.raw.setFrontFacingWinding(next.winding);
         self.raw.setTriangleFillMode(next.fill);

@@ -31,7 +31,7 @@ pub fn prewarm() {
     STARTED.get_or_init(|| {
         std::thread::Builder::new().name("rune-embed-prewarm".into()).spawn(|| {
             if let Ok(gpu) = shared_gpu() {
-                let _ = Renderer::new(&gpu.device, wgpu::TextureFormat::Bgra8Unorm);
+                let _ = Renderer::try_new(&gpu.device, wgpu::TextureFormat::Bgra8Unorm);
             }
         }).ok();
     });
@@ -100,7 +100,7 @@ impl LayerHostCore {
             .ok_or_else(|| "CAMetalLayer has no supported wgpu surface configuration".to_owned())?;
         crate::window::configure(&surface, &gpu, &config)?;
         let target_format = config.format.remove_srgb_suffix();
-        let mut renderer = Renderer::new(&gpu.device, target_format);
+        let mut renderer = Renderer::try_new(&gpu.device, target_format)?;
         renderer.set_srgb_blend(true);
         let size = (px_w as f32 / scale, px_h as f32 / scale);
         let now = crate::time::now();

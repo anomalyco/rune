@@ -146,7 +146,7 @@ impl Renderer {
     /// Whether a frame drew a fallback while the browser checks a pipeline; draw another soon, and
     /// it draws with the pipeline if the device took it.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    pub(crate) fn checking_gpu(&self) -> bool { self.breakers.checking() }
+    pub(crate) fn checking_gpu(&self) -> bool { self.breakers.checking() || self.uber_check.checking() }
 
     /// Takes the answers that came since the last frame, then builds what `wanted` needs.
     pub(super) fn check_features(&mut self, device: &wgpu::Device, wanted: impl Fn(Feature) -> bool) {

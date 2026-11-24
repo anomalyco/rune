@@ -269,6 +269,7 @@ impl RuntimeCore {
             crate::Chrome { full_size_content: false, traffic_lights: None, ..chrome }
         } else {
             match titlebar {
+                Some(t) if !t.has_controls() => crate::Chrome { full_size_content: false, traffic_lights: None, drag_regions: true },
                 Some(t) => t.mac_chrome(chrome),
                 None => chrome,
             }
@@ -278,6 +279,7 @@ impl RuntimeCore {
         self.set_titlebar_inset(inset);
         let caption = titlebar.filter(|_| cfg!(target_os = "windows")).map(|t| {
             let mut caption = crate::titlebar::Caption::new(t.height());
+            caption.hidden = !t.has_controls();
             caption.mirrored = rtl;
             caption
         });

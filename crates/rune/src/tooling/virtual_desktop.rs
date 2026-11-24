@@ -363,7 +363,13 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
 
     let t0 = crate::time::now();
     let features = desk.members.iter().fold(wgpu::Features::empty(), |f, m| f | m.features());
-    let gpu = Gpu::try_with_features(Gpu::instance_for(features), None, features).unwrap_or_else(|e| die(&e));
+    let need_overlay = args.keys.is_some() || args.pointer;
+    let (gpu, overlay_renderer) = Gpu::for_headless_setup(features, |gpu| {
+        let renderer = Renderer::try_new_classified(&gpu.device, OFFSCREEN_FORMAT)
+            .map_err(crate::render::SurfaceSetupError::from_shader)?;
+        Ok(need_overlay.then_some(renderer))
+    })
+    .unwrap_or_else(|e| die(&e.message));
     let max = gpu.device.limits().max_texture_dimension_2d;
     let (wp, hp) = pixels(size, scale, max).unwrap_or_else(|| die(&format!(
         "--desktop: the output, {}x{} points at --scale {scale}, must be 1 to {max} pixels a side", size.0, size.1)));
@@ -376,8 +382,8 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
     let mut readback = crate::tooling::record::Readback::new(&gpu.device, &target, crate::tooling::record::DEPTH);
     let mut in_flight = crate::tooling::record::InFlight::new(crate::tooling::record::DEPTH);
     let mut slots: Vec<Option<Slot>> = (0..n).map(|_| None).collect();
-    let mut overlay = (args.keys.is_some() || args.pointer)
-        .then(|| (crate::input::keycaps::Overlay::new(size, scale, args.keys, args.keys_theme, args.pointer), Renderer::new(&gpu.device, OFFSCREEN_FORMAT)));
+    let mut overlay = overlay_renderer
+        .map(|renderer| (crate::input::keycaps::Overlay::new(size, scale, args.keys, args.keys_theme, args.pointer), renderer));
     let dark = args.theme.as_deref() != Some("light");
     let init_ms = t0.elapsed().as_secs_f64() * 1000.0;
 

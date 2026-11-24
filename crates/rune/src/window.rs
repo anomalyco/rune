@@ -49,6 +49,8 @@ pub(crate) fn warm_gpu_cache() -> Result<(), String> { win32::handover::warm_gpu
 pub use handle::WindowHandle;
 #[cfg(not(target_arch = "wasm32"))]
 pub use event_loop::run;
+#[cfg(test)]
+pub(crate) use event_loop::finish_run;
 pub(crate) use event_loop::run_windows;
 #[cfg(any(test, target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android"))))]
 pub(crate) use file_drop::FileStep;

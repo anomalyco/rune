@@ -163,7 +163,9 @@ impl Host {
         crate::marks::mark("gpu.window.switched");
         // In the log where a protocol trace has it in order with the display's requests.
         if std::env::var_os("RUNE_GPU_LOG").is_some_and(|v| v != "0") { eprintln!("rune: the window is the GPU's from here: the CPU sends the display nothing more"); }
-        if let Err(error) = self.reattach() { return self.fail_surface(error, tries); }
+        if let Err(error) = self.reattach(crate::gpu::fallback::GpuMode::Hardware) { return self.fail_surface(error.message, tries); }
+        let on_software = self.gpu.as_ref().is_some_and(|(gpu, _)| gpu.adapter.get_info().device_type == wgpu::DeviceType::Cpu);
+        if on_software && let Some(w) = self.win.as_mut() { w.surface_retries.note_software(); }
         crate::marks::mark("gpu.window.attached");
         if let Some(w) = self.win.as_ref() { w.request_redraw(); }
     }
@@ -183,6 +185,7 @@ impl Host {
         w.surface = None;
         w.surface_ok = false;
         self.gpu = None;
+        self.app.release_compositor_gpu();
         w.request_redraw();
     }
 
@@ -205,6 +208,7 @@ impl Host {
         // Whatever the try made of a surface and device goes; the display kept the CPU's frame.
         w.surface = None;
         self.gpu = None;
+        self.app.release_compositor_gpu();
         w.request_redraw();
     }
 

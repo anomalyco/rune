@@ -83,7 +83,8 @@ impl Host {
         crate::platform::win32::press_point::install(&window);
         // Before it shows, so the title bar never appears.
         #[cfg(target_os = "windows")]
-        let frame = self.titlebar.and_then(|t| crate::platform::win32::CustomFrame::install(&window, t.height()));
+        let frame = self.titlebar.map(|t| self.app.rt().titlebar_set().over(t))
+            .and_then(|t| crate::platform::win32::CustomFrame::install(&window, t.height(), t.has_controls()));
         crate::marks::mark("window.frame_installed");
         #[cfg(target_os = "windows")]
         let cloak = crate::platform::win32::Cloak::default();
@@ -128,6 +129,10 @@ impl Host {
         if uses_drag_regions(chrome, self.options.borderless, false) {
             mac::own_window_dragging(&window);
         }
+        #[cfg(target_os = "macos")]
+        if let Some(t) = self.titlebar.map(|t| self.app.rt().titlebar_set().over(t)) {
+            crate::platform::macos::traffic_lights::set_hidden(&window, !t.has_controls());
+        }
         self.app.rt_mut().set_titlebar_inset(place_chrome(&window, chrome));
         #[cfg(target_os = "macos")]
         {
@@ -165,7 +170,7 @@ impl Host {
         // one under a compositor that draws the decorations itself keeps the surface it always had.
         let client_frame = self.client_frame(&window);
         let make_surface = |instance: &wgpu::Instance, _| instance.create_surface(window.clone()).map_err(|e| e.to_string());
-        let setup_surface = |gpu: &Gpu, surface: &wgpu::Surface<'_>| -> Result<_, SurfaceSetupError> {
+        let setup_surface = |gpu: &Gpu, surface: &wgpu::Surface<'_>, prewarmed: Option<Renderer>| -> Result<_, SurfaceSetupError> {
             let initial = drawable_size(None, (phys.width, phys.height), max_surface_dim(Some(gpu)));
             let (mut config, translucent) = surface_config(surface, &gpu.adapter, initial, srgb_blend)
                 .ok_or_else(|| SurfaceSetupError::unsupported("the GPU adapter can't present to this window"))?;
@@ -179,12 +184,24 @@ impl Host {
             // fallback chain moves on to the next adapter.
             configure_checked(surface, gpu, &config)
                 .map_err(|error| SurfaceSetupError::from_configure("the window's GPU surface refused its configuration", error))?;
+            crate::marks::mark("gpu.surface");
+            let target_format = if srgb_blend { config.format.remove_srgb_suffix() } else { config.format };
+            crate::marks::mark("renderer.begin");
+            let mut renderer = match prewarmed {
+                Some(mut renderer) => {
+                    renderer.try_set_format(&gpu.device, target_format).map_err(SurfaceSetupError::from_shader)?;
+                    renderer
+                }
+                None => Renderer::try_new_classified(&gpu.device, target_format).map_err(SurfaceSetupError::from_shader)?,
+            };
+            crate::marks::note("uber", renderer.uber_shader());
+            crate::marks::mark("renderer.ready");
+            renderer.set_srgb_blend(srgb_blend);
             #[cfg(target_os = "macos")]
-            return Ok((config, launch_drawables));
+            return Ok((config, launch_drawables, renderer));
             #[cfg(not(target_os = "macos"))]
-            Ok(config)
+            Ok((config, renderer))
         };
-        let mut prewarmed = None;
         let (wanted_pres, pres_policy) = Gpu::dx12_presentation();
         // A device that died while this window was closed, or uses a presentation mode that was
         // since switched to plain HWND, draws nothing: release it and any compositor resources on
@@ -194,7 +211,7 @@ impl Host {
             self.gpu = None;
             self.app.release_compositor_gpu();
         }
-        let (new_gpu, surface, configured) = match self.gpu.take() {
+        let (gpu, surface, configured) = match self.gpu.take() {
             Some((gpu, renderer)) => {
                 let surface = match make_surface(&gpu.instance, gpu.presentation()) {
                     Ok(surface) => surface,
@@ -204,53 +221,48 @@ impl Host {
                         return Err(error);
                     }
                 };
-                match setup_surface(&gpu, &surface) {
-                    Ok(configured) => {
-                        self.gpu = Some((gpu, renderer));
-                        (None, surface, configured)
-                    }
+                match setup_surface(&gpu, &surface, Some(renderer)) {
+                    Ok(configured) => (gpu, surface, configured),
                     Err(err) => {
                         use crate::gpu::fallback::Action;
                         match crate::gpu::fallback::decide_with_presentation(Gpu::env_fallback_policy(), gpu.presentation(), pres_policy, err.kind) {
                             Action::Stop => {
+                                drop((surface, gpu));
+                                self.app.release_compositor_gpu();
                                 if err.kind == crate::gpu::fallback::Failure::DeviceLost {
-                                    drop((surface, renderer, gpu));
-                                    self.app.release_compositor_gpu();
                                     *self.gpu_pool.borrow_mut() = Weak::default();
-                                } else {
-                                    self.gpu = Some((gpu, renderer));
                                 }
                                 return Err(err.message);
                             }
                             Action::SwitchToHwnd => {
-                                drop((surface, renderer, gpu));
+                                drop((surface, gpu));
                                 self.app.release_compositor_gpu();
                                 *self.gpu_pool.borrow_mut() = Weak::default();
                                 let _ = Gpu::switch_to_hwnd_instance(features, &err.message);
-                                let (gpu, surface, renderer, configured) = Gpu::for_surface_setup(
+                                let (gpu, surface, configured) = Gpu::for_surface_setup(
                                     features, transparent, PresentationFallback::Allow, make_surface, setup_surface,
                                 ).map_err(|e| e.message)?;
-                                prewarmed = renderer;
                                 let gpu = Arc::new(gpu);
                                 *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
                                 crate::render::surface_gpu(&gpu);
-                                (Some(gpu), surface, configured)
+                                (gpu, surface, configured)
                             }
                             Action::MoveOn => {
                                 let instance = gpu.instance.clone();
                                 let gpu_pres = gpu.presentation();
                                 let first_info = gpu.adapter.get_info();
                                 let excluded = Gpu::candidate_info(0, &gpu.adapter, Some(&surface));
-                                drop((surface, renderer, gpu));
+                                drop((surface, gpu));
                                 self.app.release_compositor_gpu();
                                 *self.gpu_pool.borrow_mut() = Weak::default();
                                 let (gpu, surface, configured) = Gpu::for_surface_setup_excluding(
-                                    instance, gpu_pres, PresentationFallback::Allow, excluded, first_info, err.message, features, transparent, make_surface, setup_surface,
+                                    instance, gpu_pres, PresentationFallback::Allow, excluded, first_info, err.kind, err.message, features, transparent, make_surface,
+                                    |gpu, surface| setup_surface(gpu, surface, None),
                                 ).map_err(|e| e.message)?;
                                 let gpu = Arc::new(gpu);
                                 *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
                                 crate::render::surface_gpu(&gpu);
-                                (Some(gpu), surface, configured)
+                                (gpu, surface, configured)
                             }
                         }
                     }
@@ -262,8 +274,8 @@ impl Host {
                     let surface = gpu.instance.create_surface(window.clone()).ok()?;
                     crate::render::translucency::serves(&gpu, &surface, features, transparent).then_some((gpu, surface))
                 });
-                let (gpu, surface, configured) = if let Some((gpu, surface)) = cached {
-                    match setup_surface(&gpu, &surface) {
+                if let Some((gpu, surface)) = cached {
+                    match setup_surface(&gpu, &surface, None) {
                         Ok(configured) => (gpu, surface, configured),
                         Err(err) => {
                             use crate::gpu::fallback::Action;
@@ -278,10 +290,9 @@ impl Host {
                                     drop((surface, gpu));
                                     *self.gpu_pool.borrow_mut() = Weak::default();
                                     let _ = Gpu::switch_to_hwnd_instance(features, &err.message);
-                                    let (gpu, surface, renderer, configured) = Gpu::for_surface_setup(
+                                    let (gpu, surface, configured) = Gpu::for_surface_setup(
                                         features, transparent, PresentationFallback::Allow, make_surface, setup_surface,
                                     ).map_err(|e| e.message)?;
-                                    prewarmed = renderer;
                                     let gpu = Arc::new(gpu);
                                     *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
                                     crate::render::surface_gpu(&gpu);
@@ -295,7 +306,8 @@ impl Host {
                                     drop((surface, gpu));
                                     *self.gpu_pool.borrow_mut() = Weak::default();
                                     let (gpu, surface, configured) = Gpu::for_surface_setup_excluding(
-                                        instance, gpu_pres, PresentationFallback::Allow, excluded, first_info, err.message, features, transparent, make_surface, setup_surface,
+                                        instance, gpu_pres, PresentationFallback::Allow, excluded, first_info, err.kind, err.message, features, transparent, make_surface,
+                                        |gpu, surface| setup_surface(gpu, surface, None),
                                     ).map_err(|e| e.message)?;
                                     let gpu = Arc::new(gpu);
                                     *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
@@ -306,23 +318,20 @@ impl Host {
                         }
                     }
                 } else {
-                    let (gpu, surface, renderer, configured) = Gpu::for_surface_setup(
+                    let (gpu, surface, configured) = Gpu::for_surface_setup(
                         features, transparent, PresentationFallback::Allow, make_surface, setup_surface,
                     ).map_err(|e| e.message)?;
-                    prewarmed = renderer;
                     let gpu = Arc::new(gpu);
                     *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
                     crate::render::surface_gpu(&gpu);
                     (gpu, surface, configured)
-                };
-                (Some(gpu), surface, configured)
+                }
             }
         };
         #[cfg(target_os = "macos")]
-        let (config, launch_drawables) = configured;
+        let (config, launch_drawables, renderer) = configured;
         #[cfg(not(target_os = "macos"))]
-        let config = configured;
-        crate::marks::mark("gpu.surface");
+        let (config, renderer) = configured;
         if transparent {
             if config.alpha_mode == wgpu::CompositeAlphaMode::Opaque {
                 eprintln!("transparency unavailable for {}; using an opaque window", self.native_handle.key());
@@ -330,14 +339,7 @@ impl Host {
             self.app.rt_mut().transparent = config.alpha_mode != wgpu::CompositeAlphaMode::Opaque;
         }
         let target_format = if srgb_blend { config.format.remove_srgb_suffix() } else { config.format };
-        if let Some(gpu) = new_gpu {
-            crate::marks::mark("renderer.begin");
-            let mut renderer = prewarmed.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));
-            crate::marks::note("uber", renderer.uber_shader());
-            crate::marks::mark("renderer.ready");
-            renderer.set_srgb_blend(srgb_blend);
-            self.gpu = Some((gpu, renderer));
-        }
+        self.gpu = Some((gpu, renderer));
         let (gpu, renderer) = self.gpu.as_mut().unwrap();
         rebuild_renderer_core(&gpu.device, renderer, target_format, self.app.rt_mut());
         #[cfg(target_os = "macos")]
@@ -408,6 +410,11 @@ impl Host {
         };
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let native = Native::default();
+        let initial_mode = if self.gpu.as_ref().is_some_and(|(gpu, _)| gpu.adapter.get_info().device_type == wgpu::DeviceType::Cpu) {
+            crate::gpu::fallback::GpuMode::Software
+        } else {
+            crate::gpu::fallback::GpuMode::Hardware
+        };
         self.win = Some(Win {
             a11y,
             native,
@@ -415,7 +422,7 @@ impl Host {
             surface: Some(surface),
             config,
             surface_ok: true,
-            surface_retries: SurfaceRetries::default(),
+            surface_retries: SurfaceRetries::for_mode(initial_mode),
             window,
             backoff: Backoff::default(),
             hidden_pace: HiddenPace::default(),
@@ -545,8 +552,8 @@ impl Host {
     /// The next frame draws with what this makes; `replace_lost_surface` gives the window up if
     /// this keeps failing.
     #[allow(unsafe_code)]
-    pub(in crate::window) fn reattach(&mut self) -> Result<(), String> {
-        let Some(w) = self.win.as_mut() else { return Err("there is no window to draw into".into()) };
+    pub(in crate::window) fn reattach(&mut self, mode: crate::gpu::fallback::GpuMode) -> Result<(), ReattachError> {
+        let Some(w) = self.win.as_mut() else { return Err(ReattachError::other("there is no window to draw into")) };
         let window = w.window.clone();
         // The old surface goes before the device that made it and before the new surface is
         // made: a DX12 surface takes the window's one DirectComposition target
@@ -578,40 +585,62 @@ impl Host {
         let prev = self.win.as_ref().map(|w| (w.config.width, w.config.height));
         let srgb_blend = self.app.rt().srgb_blend();
         let client_frame = self.client_frame(&window);
-        let (gpu, surface, prewarmed, config) = Gpu::for_surface_setup(
-            features,
-            transparent,
-            PresentationFallback::Allow,
-            |instance, presentation| {
-                #[cfg(target_os = "windows")]
-                if presentation == crate::gpu::fallback::Presentation::DirectComposition
-                    && let Some(visual) = visual
-                {
-                    // SAFETY: the window keeps the visual's `Handover` as long as it keeps this surface.
-                    return unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual)) }.map_err(|e| e.to_string());
+        let make_surface = |instance: &wgpu::Instance, presentation: crate::gpu::fallback::Presentation| {
+            #[cfg(target_os = "windows")]
+            if presentation == crate::gpu::fallback::Presentation::DirectComposition
+                && let Some(visual) = visual
+            {
+                // SAFETY: the window keeps the visual's `Handover` as long as it keeps this surface.
+                return unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual)) }.map_err(|e| e.to_string());
+            }
+            #[cfg(not(target_os = "windows"))]
+            let _ = presentation;
+            instance.create_surface(window.clone()).map_err(|e| e.to_string())
+        };
+        let setup_surface = |gpu: &Gpu, surface: &wgpu::Surface<'_>, prewarmed: Option<Renderer>| {
+            let size = drawable_size(prev, (raw_size.width, raw_size.height), max_surface_dim(Some(gpu)));
+            let (mut config, translucent) = surface_config(surface, &gpu.adapter, size, srgb_blend)
+                .ok_or_else(|| SurfaceSetupError::unsupported("the GPU adapter can't present to this window"))?;
+            if transparent || client_frame {
+                config.alpha_mode = alpha_mode(transparent, client_frame, translucent);
+            }
+            configure_checked(surface, gpu, &config)
+                .map_err(|error| SurfaceSetupError::from_configure("the new GPU surface refused its configuration", error))?;
+            let target_format = if srgb_blend { config.format.remove_srgb_suffix() } else { config.format };
+            let mut renderer = match prewarmed {
+                Some(mut renderer) => {
+                    renderer.try_set_format(&gpu.device, target_format).map_err(SurfaceSetupError::from_shader)?;
+                    renderer
                 }
-                #[cfg(not(target_os = "windows"))]
-                let _ = presentation;
-                instance.create_surface(window.clone()).map_err(|e| e.to_string())
-            },
-            |gpu, surface| {
-                let size = drawable_size(prev, (raw_size.width, raw_size.height), max_surface_dim(Some(gpu)));
-                let (mut config, translucent) = surface_config(surface, &gpu.adapter, size, srgb_blend)
-                    .ok_or_else(|| SurfaceSetupError::unsupported("the GPU adapter can't present to this window"))?;
-                if transparent || client_frame {
-                    config.alpha_mode = alpha_mode(transparent, client_frame, translucent);
-                }
-                configure_checked(surface, gpu, &config)
-                    .map_err(|error| SurfaceSetupError::from_configure("the new GPU surface refused its configuration", error))?;
-                Ok(config)
-            },
-        ).map_err(|e| e.message)?;
+                None => Renderer::try_new_classified(&gpu.device, target_format).map_err(SurfaceSetupError::from_shader)?,
+            };
+            renderer.set_srgb_blend(srgb_blend);
+            Ok((config, renderer))
+        };
+        let (gpu, surface, (config, mut renderer)) = match mode {
+            crate::gpu::fallback::GpuMode::Hardware => Gpu::for_surface_setup(
+                features,
+                transparent,
+                PresentationFallback::Allow,
+                make_surface,
+                setup_surface,
+            )
+            .map_err(|e| ReattachError::other(e.message))?,
+            crate::gpu::fallback::GpuMode::Software => Gpu::for_surface_setup_software(
+                features,
+                PresentationFallback::Allow,
+                make_surface,
+                setup_surface,
+            )
+            .map_err(|e| ReattachError {
+                no_software: e.kind == crate::gpu::fallback::Failure::SurfaceUnsupported,
+                message: e.message,
+            })?,
+        };
         let gpu = Arc::new(gpu);
         // A surface that fell back to opaque draws an opaque window, as the first one did.
         self.app.rt_mut().transparent = transparent && config.alpha_mode != wgpu::CompositeAlphaMode::Opaque;
         let target_format = if srgb_blend { config.format.remove_srgb_suffix() } else { config.format };
-        let mut renderer = prewarmed.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));
-        renderer.set_srgb_blend(srgb_blend);
         rebuild_renderer_core(&gpu.device, &mut renderer, target_format, self.app.rt_mut());
         let alpha = alpha_pass(&gpu, transparent, &config, target_format);
         #[cfg(target_os = "macos")]
@@ -622,7 +651,7 @@ impl Host {
         let present = self.win.as_ref()
             .and_then(|w| w.native.present_log.clone())
             .and_then(|log| crate::frame::present_time::metal::LayerHook::attach(&surface, log));
-        let Some(w) = self.win.as_mut() else { return Err("the window closed while it made a new surface".into()) };
+        let Some(w) = self.win.as_mut() else { return Err(ReattachError::other("the window closed while it made a new surface")) };
         w.surface = Some(surface);
         w.config = config;
         w.surface_ok = true;
@@ -688,11 +717,12 @@ impl Host {
     }
 
     /// Replaces the window's surface and device when either can't draw a frame: a device that is
-    /// gone, or a surface whose last configuration failed (`Win::surface_ok`). Every replacement
-    /// counts against `SURFACE_TRIES` (`SurfaceRetries`), whether it worked or not: only a frame
-    /// that presents starts the count over (`Host::draw`), so a surface replaced and lost again
-    /// before it presents still ends in the window being given up. A failed replacement waits a
-    /// backoff before the next try.
+    /// gone, or a surface whose last configuration failed (`Win::surface_ok`). Follows Chromium's
+    /// repeated-loss policy via `SurfaceRetries` (`rune_gpu::fallback::LossState`): up to
+    /// `SURFACE_TRIES` (3) losses per mode with one forgiven per 5 minutes (a single healthy frame
+    /// does not reset the count), switching an automatic pick from hardware to software (WARP /
+    /// `DeviceType::Cpu`) before giving up after 3 software losses. A pinned adapter
+    /// (`WGPU_ADAPTER_NAME`) or a platform without a software adapter gives up immediately.
     ///
     /// Giving the window up leaves it hidden (`Life::Hidden`, as `hide` does), gives back its
     /// device and surface, and records why (`AppHandle::window_error`); opening it again makes a
@@ -702,26 +732,53 @@ impl Host {
         let surface_missing = self.win.as_ref().is_some_and(|w| !w.surface_ok || w.surface.is_none());
         if !lost && !surface_missing { return true; }
         let now = crate::time::now();
-        let Some(step) = self.win.as_mut().map(|w| w.surface_retries.attempt()) else { return false };
-        if step == SurfaceStep::GiveUp {
-            return self.give_up_surface(format!("the window's GPU surface was replaced {SURFACE_TRIES} times without a frame reaching the screen"));
-        }
-        match self.reattach() {
+        let policy = Gpu::env_fallback_policy();
+        let software_available = crate::gpu::fallback::software_fallback_available();
+        let Some(step) = self.win.as_mut().map(|w| w.surface_retries.attempt(now, policy, software_available)) else { return false };
+        let mode = match step {
+            SurfaceStep::Replace { mode, switched_to_software } => {
+                if switched_to_software {
+                    eprintln!(
+                        "rune: the GPU device was lost {SURFACE_TRIES} times within {} minutes; falling back to the software adapter",
+                        crate::gpu::fallback::FORGIVE_LOSS.as_secs() / 60,
+                    );
+                }
+                mode
+            }
+            SurfaceStep::GiveUp => {
+                return self.give_up_surface(format!("the window's GPU surface was lost {SURFACE_TRIES} times; giving up"));
+            }
+        };
+        match self.reattach(mode) {
             Ok(()) => {
-                if let Some(w) = self.win.as_mut() { w.backoff_step(BackoffEvent::Lapsed); }
+                let on_software = self.gpu.as_ref().is_some_and(|(gpu, _)| gpu.adapter.get_info().device_type == wgpu::DeviceType::Cpu);
+                if let Some(w) = self.win.as_mut() {
+                    w.backoff_step(BackoffEvent::Lapsed);
+                    if on_software { w.surface_retries.note_software(); }
+                }
                 true
             }
-            Err(error) => match self.win.as_ref().and_then(|w| w.surface_retries.retry(now)) {
-                Some(at) => {
-                    eprintln!("rune: could not replace the window's GPU surface, trying again: {error}");
-                    if let Some(w) = self.win.as_mut() {
-                        w.surface_ok = false;
-                        w.backoff_step(BackoffEvent::At(at));
-                    }
-                    false
+            Err(err) => {
+                if err.no_software {
+                    if let Some(w) = self.win.as_mut() { w.surface_retries.note_no_software(); }
+                    return self.give_up_surface(format!(
+                        "the window's GPU surface was lost {SURFACE_TRIES} times and no software adapter is available: {}",
+                        err.message
+                    ));
                 }
-                None => self.give_up_surface(format!("the window's GPU surface could not be replaced: {error}")),
-            },
+                if let Some(w) = self.win.as_mut() { w.surface_retries.note_replace_failed(now); }
+                match self.win.as_ref().and_then(|w| w.surface_retries.retry(now, policy, software_available)) {
+                    Some(at) => {
+                        eprintln!("rune: could not replace the window's GPU surface, trying again: {}", err.message);
+                        if let Some(w) = self.win.as_mut() {
+                            w.surface_ok = false;
+                            w.backoff_step(BackoffEvent::At(at));
+                        }
+                        false
+                    }
+                    None => self.give_up_surface(format!("the window's GPU surface could not be replaced: {}", err.message)),
+                }
+            }
         }
     }
 
@@ -763,6 +820,17 @@ pub(crate) fn alpha_mode(
     match supports {
         Some(wgpu::CompositeAlphaMode::PreMultiplied) => wgpu::CompositeAlphaMode::PreMultiplied,
         _ => wgpu::CompositeAlphaMode::Opaque,
+    }
+}
+
+pub(in crate::window) struct ReattachError {
+    pub(in crate::window) message: String,
+    no_software: bool,
+}
+
+impl ReattachError {
+    fn other(message: impl Into<String>) -> Self {
+        Self { message: message.into(), no_software: false }
     }
 }
 

@@ -315,6 +315,9 @@ impl Renderer {
             self.backdrops.clear();
             if let Some(blur) = &mut self.backdrop_blur { blur.give_back(); }
         }
+        if !all {
+            self.uploads.trim_oversized();
+        }
         #[cfg(all(feature = "alloc-sites", not(target_arch = "wasm32")))]
         self.report_pools();
     }
@@ -323,6 +326,11 @@ impl Renderer {
     /// frame's uploads would make new ones).
     pub(crate) fn trim_uploads(&self) {
         self.uploads.trim();
+    }
+
+    /// Whether any recyclable oversized (> 4 MiB) upload chunks are in flight on the GPU.
+    pub(crate) fn has_oversized_uploads_in_flight(&self) -> bool {
+        self.uploads.has_oversized_in_flight()
     }
 
     pub(super) fn sync_resident_caches(&self, out: &mut std::collections::HashMap<u64, u64>) {

@@ -12,7 +12,10 @@
 # leaves the window's content's bottom corners at, 0 when it draws none or draws it square; and
 # `platform::wayland::ActiveEventLoopExtWayland::set_wake_on_wayland_read` opts into waking from
 # `ControlFlow::Wait` on any successful Wayland display read so foreign queues such as layer-shell
-# overlays dispatch without background reader threads). Run it when winit is bumped, then build: a patch
+# overlays dispatch without background reader threads; and Windows `handle_os_dragging` packs signed
+# screen coordinates by value into `WM_NCLBUTTONDOWN`'s `LPARAM`, skips the dummy `WM_MOUSEMOVE(0, 0)`
+# during programmatic drags, and clears `state.dragging` if `DefWindowProcW` exits without
+# `WM_EXITSIZEMOVE`). Run it when winit is bumped, then build: a patch
 # that no longer applies fails here, and the change goes back in by hand. If upstream winit takes
 # the change, delete vendor/winit and its `[patch.crates-io]` entry instead.
 # Usage: scripts/vendor-winit.sh <version>     e.g. scripts/vendor-winit.sh 0.30.13

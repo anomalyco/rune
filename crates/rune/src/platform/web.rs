@@ -366,7 +366,12 @@ impl Browser {
                         started_webgl = side.backend == wgpu::Backend::Gl;
                         Draw::Gpu(side)
                     }
-                    Err(e) => { error(&e, window.canvas().as_ref(), self.embedded, self.document); self.end(event_loop); return; }
+                    Err(e) => {
+                        self.shared.set_window_error(Some(e.clone()));
+                        error(&e, window.canvas().as_ref(), self.embedded, self.document);
+                        self.end(event_loop);
+                        return;
+                    }
                 }
             }
             None => {
@@ -505,7 +510,7 @@ impl ApplicationHandler<Wake> for Browser {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Wake) {
         if self.shared.quitting.load(Ordering::Acquire) { self.end(event_loop); return; }
-        if self.lost_device(event_loop) { return; }
+        if self.lost_device(event_loop) || self.failed_shader(event_loop) { return; }
         if self.window.is_none() { return; }
         self.maybe_restore_webgl();
         match event {
@@ -547,7 +552,7 @@ impl ApplicationHandler<Wake> for Browser {
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         if matches!(event, WindowEvent::Focused(_)) { return; }
-        if self.lost_device(event_loop) { return; }
+        if self.lost_device(event_loop) || self.failed_shader(event_loop) { return; }
         if matches!(event, WindowEvent::RedrawRequested) { return self.redraw(event_loop); }
         let mut running = self.running.borrow_mut();
         let (Some(window), Some(r)) = (&self.window, &mut *running) else { return };
