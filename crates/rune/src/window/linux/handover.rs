@@ -22,15 +22,16 @@
 //! explicit synchronization the window stays the GPU's and its surface is tried again as a lost
 //! one is (`Host::replace_lost_surface`).
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::cpu_frame::{Cpu, RetiredCpu};
-use crate::render::Gpu;
+use crate::render::{Gpu, Instance, Renderer};
 use crate::time::Instant;
 use crate::window::WakeEvent;
 use crate::window::host::Host;
 use crate::window::surface::Win;
+use crate::window::warm_frame::{warm_frame, warm_instances};
 
 /// Where a window's frames go. Windows that need the GPU from their first frame (a translucent
 /// window, a second window) are `Gpu` from the start.
@@ -54,9 +55,19 @@ pub(in crate::window) enum GpuJob {
     /// `retry_at`.
     Waiting { tries: u8, retry_at: Option<Instant> },
     /// Being made on a thread, which wakes the loop when it's done (`WakeEvent::GpuReady`).
-    Building { tries: u8 },
+    /// `latest`: what the window draws now, for the frame that thread draws once before it
+    /// reports (`warm_frame`); each CPU frame leaves its own here.
+    Building { tries: u8, latest: Arc<Mutex<Latest>> },
     /// It failed `TRIES` times: the window stays on the CPU.
     Failed,
+}
+
+/// A CPU frame as the GPU thread's warm frame draws it: its instances (`warm_instances`) and
+/// the window's size in device pixels.
+#[derive(Default)]
+pub(in crate::window) struct Latest {
+    pub(super) instances: Vec<Instance>,
+    pub(super) size: (u32, u32),
 }
 
 /// A failed try is made again after this long.
@@ -89,7 +100,7 @@ impl SurfaceMode {
     /// from here nothing of the CPU's reaches the display. Only a window whose GPU was being made
     /// switches; its try's number comes back.
     pub(super) fn switch(&mut self) -> Option<u8> {
-        let SurfaceMode::Cpu { job: GpuJob::Building { tries }, .. } = self else { return None };
+        let SurfaceMode::Cpu { job: GpuJob::Building { tries, .. }, .. } = self else { return None };
         let tries = *tries;
         let SurfaceMode::Cpu { cpu, .. } = std::mem::take(self) else { unreachable!("checked above") };
         *self = SurfaceMode::Handing { cpu: cpu.retire(), tries };
@@ -132,15 +143,34 @@ impl Host {
 
     /// Starts making the GPU for this window on a thread.
     pub(super) fn start_gpu(&mut self) {
+        let Some(w) = self.win.as_ref() else { return };
+        let SurfaceMode::Cpu { job: GpuJob::Waiting { tries, retry_at }, .. } = &w.native.mode else { return };
+        let (tries, retried) = (*tries, retry_at.is_some());
+        if retried { crate::marks::mark("gpu.window.retry"); }
+        let handle = self.native_handle.clone();
+        // The frame the GPU thread draws once, offscreen, before it reports: what the window
+        // shows by then. In an app whose view has layers the GPU's first frame makes their
+        // pipelines, and made on this thread at the hand-over they held the window still for as
+        // long as the driver took (a quarter of a second on a software GPU, far more through a
+        // translation layer).
+        let srgb = self.app.rt().srgb_blend();
+        let latest = Arc::new(Mutex::new(Latest { instances: warm_instances(&self.app.rt().instances), size: (w.config.width, w.config.height) }));
+        let drawn = latest.clone();
+        let frame = move |gpu: &Gpu, renderer: &mut Renderer| {
+            let Latest { instances, size } = std::mem::take(&mut *drawn.lock().unwrap_or_else(|e| e.into_inner()));
+            // The format a window's swap chain has here (`surface_config`); in another one the
+            // hand-over frame makes its pipelines itself, as it did.
+            let format = if srgb { wgpu::TextureFormat::Bgra8Unorm } else { wgpu::TextureFormat::Bgra8UnormSrgb };
+            warm_frame(gpu, renderer, format, srgb, size, &instances);
+            crate::marks::mark("gpu.window.warmed");
+        };
+        let started = crate::render::warm_gpu_then(self.app.compositor_features(), frame, move || handle.send(WakeEvent::GpuReady));
         let Some(w) = self.win.as_mut() else { return };
         let SurfaceMode::Cpu { job, .. } = &mut w.native.mode else { return };
-        let GpuJob::Waiting { tries, retry_at } = *job else { return };
-        if retry_at.is_some() { crate::marks::mark("gpu.window.retry"); }
-        let handle = self.native_handle.clone();
-        match crate::render::warm_gpu_then(self.app.compositor_features(), move || handle.send(WakeEvent::GpuReady)) {
+        match started {
             Ok(()) => {
                 crate::marks::mark("gpu.window.start");
-                *job = GpuJob::Building { tries: tries + 1 };
+                *job = GpuJob::Building { tries: tries + 1, latest };
             }
             Err(error) => self.fail_gpu(format!("its thread couldn't start: {error}"), tries + 1),
         }
@@ -151,7 +181,7 @@ impl Host {
     /// With none, the window's surface is left alone and the CPU goes on drawing.
     pub(in crate::window) fn gpu_ready(&mut self) {
         let Some(w) = self.win.as_mut() else { return };
-        let SurfaceMode::Cpu { job: GpuJob::Building { tries }, .. } = &w.native.mode else { return };
+        let SurfaceMode::Cpu { job: GpuJob::Building { tries, .. }, .. } = &w.native.mode else { return };
         let tries = *tries;
         crate::marks::mark("gpu.window.ready");
         // Every adapter refused a device: a surface made now would only ask them again, on this

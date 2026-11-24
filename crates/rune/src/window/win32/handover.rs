@@ -15,12 +15,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::cpu_frame::{Cpu, Shown};
-use crate::gpu::fallback::{Action, Failure, Presentation, PresentationPolicy, decide_with_presentation};
-use crate::platform::win32::dcomp_handover::{Handover, HandoverError};
+use crate::platform::win32::dcomp_handover::Handover;
 use crate::platform::win32::dib::{Dib, free_later};
 use crate::render::cpu_boot::HalfRounding;
-use crate::render::{Gpu, PresentationFallback, Renderer, SurfaceSetupError};
+use crate::render::{Gpu, Renderer, SurfaceSetupError, format_window_setup_error, with_wine_hwnd_hint};
 use crate::time::Instant;
+pub(super) use crate::window::warm_frame::{warm_frame, warm_instances};
 use crate::window::WakeEvent;
 use crate::window::host::{CompositorFrame, Host};
 use crate::window::surface::{Win, acquire, configure_checked, drawable_size, max_surface_dim, reblend_core, rebuild_renderer_core, surface_config};
@@ -92,7 +92,7 @@ const RETRY_AFTER: Duration = Duration::from_secs(30);
 const TRIES: u8 = 3;
 
 /// What the GPU thread makes for a window. `handover` is `Some` on DirectComposition and
-/// `None` on the plain HWND swap-chain fallback (`DxgiFromHwnd`, opaque only).
+/// `None` when `WGPU_DX12_PRESENTATION_SYSTEM=hwnd` selects a plain HWND swap chain (opaque only).
 pub(in crate::window) struct Prepared {
     gpu: Gpu,
     renderer: Renderer,
@@ -461,24 +461,6 @@ fn raise_priority(thread: &std::thread::JoinHandle<()>) {
 
 static FIRST_GPU: AtomicBool = AtomicBool::new(false);
 
-/// Pure policy choice when `Handover::new` fails: whether to latch DirectComposition as
-/// unavailable and continue with a plain HWND swap chain, or stop and report the error.
-fn handover_fallback_action(
-    adapter_policy: crate::gpu::fallback::Policy,
-    presentation_policy: PresentationPolicy,
-    error: &HandoverError,
-) -> Action {
-    match error {
-        HandoverError::Unavailable(_) => decide_with_presentation(
-            adapter_policy,
-            Presentation::DirectComposition,
-            presentation_policy,
-            Failure::DirectCompositionUnavailable,
-        ),
-        HandoverError::Other(_) => Action::Stop,
-    }
-}
-
 /// Creates a plain HWND `wgpu::Surface` from a raw Win32 `hwnd` on a `DxgiFromHwnd` instance.
 #[allow(unsafe_code)]
 fn create_hwnd_surface(instance: &wgpu::Instance, hwnd: isize) -> Result<wgpu::Surface<'static>, String> {
@@ -505,41 +487,21 @@ fn create_hwnd_surface(instance: &wgpu::Instance, hwnd: isize) -> Result<wgpu::S
 /// configured for `size`.
 #[allow(unsafe_code)]
 fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, latest: &Mutex<Vec<crate::render::Instance>>) -> Result<Prepared, String> {
-    let (initial_pres, pres_policy) = Gpu::dx12_presentation();
-    let mut handover = match initial_pres {
-        Presentation::PlainHwnd => None,
-        Presentation::DirectComposition => match Handover::new(hwnd) {
-            Ok(handover) => Some(handover),
-            Err(error) => {
-                if handover_fallback_action(Gpu::env_fallback_policy(), pres_policy, &error) == Action::SwitchToHwnd {
-                    let _ = Gpu::switch_to_hwnd_instance(features, &error.into_message());
-                    None
-                } else {
-                    return Err(error.into_message());
-                }
-            }
-        },
+    let handover = match Gpu::dx12_swapchain_kind() {
+        wgpu::Dx12SwapchainKind::DxgiFromHwnd => None,
+        wgpu::Dx12SwapchainKind::DxgiFromVisual => Some(Handover::new(hwnd).map_err(with_wine_hwnd_hint)?),
     };
     let (gpu, surface, (config, mut renderer)) = Gpu::for_surface_setup(
         features,
         false,
-        PresentationFallback::Allow,
-        |instance, presentation| match presentation {
-            Presentation::DirectComposition => {
-                let visual = handover
-                    .as_ref()
-                    .ok_or_else(|| "DirectComposition handover visual is missing".to_owned())?
-                    .visual();
+        |instance| match &handover {
+            Some(handover) => {
                 // SAFETY: the visual stays alive while the surface does: the surface takes its own
                 // reference to it, and the window keeps the `Handover` as long as it keeps the surface.
-                unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual)) }
+                unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(handover.visual())) }
                     .map_err(|e| e.to_string())
             }
-            Presentation::PlainHwnd => {
-                // Release any DirectComposition target on `hwnd` before binding an HWND swap chain.
-                drop(handover.take());
-                create_hwnd_surface(instance, hwnd)
-            }
+            None => create_hwnd_surface(instance, hwnd),
         },
         |gpu, surface, prewarmed| {
             let size = drawable_size(None, size, max_surface_dim(Some(gpu)));
@@ -556,63 +518,12 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
             };
             Ok((config, renderer))
         },
-    ).map_err(|e| e.message)?;
+    ).map_err(format_window_setup_error)?;
     let target_format = if srgb { config.format.remove_srgb_suffix() } else { config.format };
     let instances = std::mem::take(&mut *latest.lock().unwrap_or_else(|e| e.into_inner()));
     warm_frame(&gpu, &mut renderer, target_format, srgb, (config.width, config.height), &instances);
     crate::marks::mark("gpu.window.warmed");
     Ok(Prepared { gpu, renderer, surface, config, handover })
-}
-
-/// On the GPU thread, before the hand-over: the renderer draws the window's latest CPU frame once,
-/// into a target of the swap chain's format, and waits for the GPU. Its first frame's costs are
-/// paid here, so the hand-over frame on the app's thread costs what a frame does: the pipelines
-/// its layers' formats need, its layers' targets (the hand-over frame's layers are the latest
-/// frame's, or nearly), the staging space and the instance buffer. Its own target goes as soon as
-/// the GPU is done with it. The atlas is an empty one: the glyphs land with the hand-over frame's
-/// own prepare.
-fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, srgb: bool, size: (u32, u32), instances: &[crate::render::Instance]) {
-    renderer.set_format(&gpu.device, format);
-    renderer.set_srgb_blend(srgb);
-    debug_assert_eq!(renderer.format(), format);
-    let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("rune warm frame"),
-        size: wgpu::Extent3d { width: size.0.max(1), height: size.1.max(1), depth_or_array_layers: 1 },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
-    });
-    let view = target.create_view(&Default::default());
-    let mut atlas = crate::text::Atlas::new();
-    let mut enc = gpu.device.create_command_encoder(&Default::default());
-    renderer.prepare_ui(&gpu.device, &gpu.queue, &mut atlas, instances, size);
-    renderer.draw(&mut enc, &view, [0.0; 4]);
-    renderer.submit(&gpu.queue, enc);
-    rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
-    target.destroy();
-    rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
-}
-
-/// A CPU frame's instances as the warm frame draws them: what reads the app's own state (an
-/// image's slot, a glyph's atlas page, a compositor's effect) draws as a plain box, so the frame
-/// needs nothing but the renderer.
-pub(super) fn warm_instances(instances: &[crate::render::Instance]) -> Vec<crate::render::Instance> {
-    use crate::render::{KIND_RECT, Kind};
-    instances
-        .iter()
-        .map(|i| {
-            let mut i = *i;
-            match i.kind() {
-                Some(Kind::Image | Kind::Effect) => i.params[1] = KIND_RECT,
-                Some(Kind::Glyph) => i.params[2] = 0.0,
-                _ => {}
-            }
-            i
-        })
-        .collect()
 }
 
 /// On a worker: maps the GPU frame's copy, counts the pixels that differ from the CPU's buffer

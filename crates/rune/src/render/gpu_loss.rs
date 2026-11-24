@@ -31,17 +31,6 @@ impl Gpu {
     /// under `cfg(test)` nothing logs so Rune's own tests see wgpu's panic.
     pub(crate) fn made(instance: wgpu::Instance, adapter: wgpu::Adapter, device: wgpu::Device, queue: wgpu::Queue,
         draws_surfaces: bool) -> Gpu {
-        Self::made_with_presentation(instance, adapter, device, queue, draws_surfaces, Self::dx12_presentation().0)
-    }
-
-    pub(crate) fn made_with_presentation(
-        instance: wgpu::Instance,
-        adapter: wgpu::Adapter,
-        device: wgpu::Device,
-        queue: wgpu::Queue,
-        draws_surfaces: bool,
-        presentation: crate::gpu::fallback::Presentation,
-    ) -> Gpu {
         let lost = Arc::new(AtomicBool::new(false));
         let lost_by_callback = lost.clone();
         device.set_device_lost_callback(move |reason, message| {
@@ -64,7 +53,7 @@ impl Gpu {
         #[cfg(target_arch = "wasm32")]
         let _ = draws_surfaces;
         let removal = rune_gpu::health::Removal::watch(&device);
-        Gpu { instance, adapter, device, queue, lost, removal, presentation }
+        Gpu { instance, adapter, device, queue, lost, removal }
     }
 
     /// Whether the device went away: a driver reset, a GPU removed, a resume from Modern Standby.

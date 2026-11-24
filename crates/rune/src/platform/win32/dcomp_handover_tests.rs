@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use windows_sys::Win32::Foundation::FreeLibrary;
 use windows_sys::Win32::System::LibraryLoader::GetModuleFileNameW;
 
-use super::{HandoverError, is_dcomp_unavailable_hresult, load_dll};
+use super::load_dll;
 
 struct TempDll {
     path: PathBuf,
@@ -55,25 +55,4 @@ fn system_dll_loader_refuses_app_directory_hijack_and_loads_from_system32() {
     assert!(loaded.is_null(), "system DLL loader must not load a DLL from the application directory");
     assert!(load_dll("..\\dcomp.dll").is_null(), "relative paths are rejected");
     assert!(load_dll(&dcomp_path.to_string_lossy()).is_null(), "full paths are rejected");
-}
-
-#[test]
-fn dcomp_unavailable_hresult_separates_unimplemented_from_oom_and_device_loss() {
-    use windows::Win32::Foundation::{
-        E_ACCESSDENIED, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_OUTOFMEMORY,
-    };
-    const DXGI_ERROR_DEVICE_REMOVED: windows::core::HRESULT =
-        windows::core::HRESULT(0x887A_0005u32 as i32);
-
-    assert!(is_dcomp_unavailable_hresult(E_NOTIMPL));
-    assert!(is_dcomp_unavailable_hresult(E_NOINTERFACE));
-    assert!(!is_dcomp_unavailable_hresult(E_OUTOFMEMORY));
-    assert!(!is_dcomp_unavailable_hresult(E_ACCESSDENIED));
-    assert!(!is_dcomp_unavailable_hresult(E_INVALIDARG));
-    assert!(!is_dcomp_unavailable_hresult(DXGI_ERROR_DEVICE_REMOVED));
-
-    let notimpl = HandoverError::from_win32("CreateTargetForHwnd", &windows::core::Error::from(E_NOTIMPL));
-    assert!(matches!(notimpl, HandoverError::Unavailable(_)));
-    let oom = HandoverError::from_win32("CreateTargetForHwnd", &windows::core::Error::from(E_OUTOFMEMORY));
-    assert!(matches!(oom, HandoverError::Other(_)));
 }

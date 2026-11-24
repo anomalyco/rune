@@ -104,9 +104,7 @@ exclude = ["tools/rune-dev-guard", "tools/ratex-math-wasm", "tools/ratex-math-wa
 # adapters (`DXGI_ADAPTER_FLAG_SOFTWARE`, WARP) so releasing a removed WARP device or unconfiguring
 # its surface waits until queued command lists finish executing instead of freeing resources under
 # its worker threads (`DrainTracker`; hardware adapters pay zero marker cost, while skipping
-# `ExecuteCommandLists` and `allocator.Reset()` once removed on every adapter), and DirectComposition
-# unavailability detection (`Surface::dcomp_unavailable` when `CreateSwapChainForComposition` returns
-# `E_NOTIMPL` or `dcomp.dll` / `DCompositionCreateDevice2` / `CreateTargetForHwnd` fails), and Linux `vulkan::Instance::with_direct_drivers` (`VK_LUNARG_direct_driver_loading` exclusive mode). Re-made by
+# `ExecuteCommandLists` and `allocator.Reset()` once removed on every adapter), Linux `vulkan::Instance::with_direct_drivers` (`VK_LUNARG_direct_driver_loading` exclusive mode), and GLES lazy shader compile-status checks (querying `COMPILE_STATUS`/logs only on link failure) plus opt-in `KHR_parallel_shader_compile` deferred program linking (`gles::Device::{supports_parallel_shader_compile,set_defer_program_links,pending_deferred_links,poll_deferred_links}`). Re-made by
 # `scripts/vendor-wgpu-hal.sh <version>` when wgpu is bumped. An app that builds Rune patches it too:
 # a dependency's `[patch]` doesn't apply to the workspace that depends on it.
 [patch.crates-io]

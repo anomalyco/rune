@@ -39,6 +39,8 @@ mod surface;
 pub(crate) mod titlebar;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod warm_frame;
 mod wayland_wake;
 #[cfg(target_os = "windows")]
 mod win32;

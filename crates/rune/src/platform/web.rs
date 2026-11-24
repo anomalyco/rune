@@ -4,7 +4,7 @@ use std::{cell::RefCell, rc::Rc, sync::{Arc, atomic::Ordering}, time::Duration};
 use wasm_bindgen::JsCast;
 use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     platform::web::{EventLoopExtWebSys, WindowAttributesExtWebSys, WindowExtWebSys}, window::{Window, WindowId}};
-use crate::{App, Env, app::SharedCore, render::Gpu, time::Instant};
+use crate::{App, Env, app::SharedCore, time::Instant};
 use super::web_math;
 use app::{PendingApp, TypedWebApp, WebApp};
 use gpu::Draw;
@@ -171,7 +171,7 @@ struct Browser {
     /// The bytes of `App::font_url`'s fonts that loaded, once all have answered.
     fonts: Rc<RefCell<Option<Vec<Vec<u8>>>>>,
     /// The GPU, once the browser answered for it.
-    pending: Rc<RefCell<Option<Result<(Gpu, wgpu::Surface<'static>), String>>>>,
+    pending: Rc<RefCell<Option<Result<gpu::ReadyGpu, String>>>>,
     /// The pipelines compiled ahead for that GPU (`pipelines::warm`), kept until its renderer is made.
     warmed: Rc<RefCell<Option<pipelines::Warmed>>>,
     running: Rc<RefCell<Option<Running>>>,
@@ -296,7 +296,7 @@ impl Browser {
         let late_fonts = std::mem::take(&mut pending.late_font_urls);
         let scale = window.scale_factor() as f32;
         let document = self.document;
-        let max_dim = gpu.as_ref().map_or(frame::CPU_MAX_DIM, |(gpu, _)| gpu.device.limits().max_texture_dimension_2d.max(1));
+        let max_dim = gpu.as_ref().map_or(frame::CPU_MAX_DIM, |ready| ready.gpu.device.limits().max_texture_dimension_2d.max(1));
         // A page's canvas is its band: the visible height plus a skirt of overscan, sized
         // before the box is measured so the first frame is that tall.
         let band = if document {
@@ -360,8 +360,8 @@ impl Browser {
         let physical = (size.width.clamp(1, max_dim), size.height.clamp(1, max_dim));
         let mut started_webgl = false;
         let draw = match gpu {
-            Some((gpu, surface)) => {
-                match gpu::gpu_side(gpu, surface, physical, app.rt_mut(), self.lost.clone(), self.proxy.clone()) {
+            Some(ready) => {
+                match gpu::gpu_side(ready, physical, app.rt_mut(), self.lost.clone(), self.proxy.clone()) {
                     Ok(side) => {
                         started_webgl = side.backend == wgpu::Backend::Gl;
                         Draw::Gpu(side)
@@ -612,7 +612,10 @@ impl ApplicationHandler<Wake> for Browser {
         let running = self.running.borrow_mut().take();
         if let Some(r) = running { r.close(); }
         self.warmed.borrow_mut().take();
-        if let Some(Ok((gpu, _))) = self.pending.borrow_mut().take() { gpu.device.destroy(); }
+        if let Some(Ok(ready)) = self.pending.borrow_mut().take() {
+            drop(ready.renderer);
+            ready.gpu.device.destroy();
+        }
         if let Some(window) = self.window.take() && self.owns_canvas && let Some(canvas) = window.canvas() { canvas.remove(); }
         std::mem::take(&mut self.borrowed).give_back();
         INSETS.set([0.0; 4]);
@@ -633,6 +636,12 @@ fn after(delay: Duration, f: impl FnOnce() + 'static) {
 /// Yields one browser macrotask (`setTimeout(0)`), letting the browser paint and handle input
 /// before the next synchronous step runs.
 async fn yield_turn() {
+    sleep_turn(Duration::ZERO).await;
+}
+
+/// Waits `delay` on the browser's timer queue before resuming the async task.
+async fn sleep_turn(delay: Duration) {
+    let ms = delay.as_millis().min(i32::MAX as u128) as i32;
     let promise = js_sys::Promise::new(&mut |resolve, _| {
         let Some(window) = web_sys::window() else {
             resolve.call0(&wasm_bindgen::JsValue::UNDEFINED).ok();
@@ -642,7 +651,7 @@ async fn yield_turn() {
         let callback = wasm_bindgen::closure::Closure::once_into_js(move || {
             done.call0(&wasm_bindgen::JsValue::UNDEFINED).ok();
         });
-        if window.set_timeout_with_callback_and_timeout_and_arguments_0(callback.unchecked_ref(), 0).is_err() {
+        if window.set_timeout_with_callback_and_timeout_and_arguments_0(callback.unchecked_ref(), ms).is_err() {
             resolve.call0(&wasm_bindgen::JsValue::UNDEFINED).ok();
         }
     });
