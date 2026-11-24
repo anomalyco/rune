@@ -3,6 +3,39 @@
 //! is re-measured in the same commit when an edit moves it.
 use super::*;
 
+/// Snapshot of a focused field's text and caret before an `El::on_input_key` handler runs.
+pub(in crate::runtime) struct CaretFollowCheck {
+    path: String,
+    text: crate::edit::Wiped,
+    anchor: usize,
+    focus: usize,
+    affinity: parley::Affinity,
+}
+
+impl CaretFollowCheck {
+    pub(in crate::runtime) fn new(path: String, edit: &crate::TextEdit) -> Self {
+        let (a, b) = edit.range();
+        let (anchor, focus) = if edit.anchor <= edit.focus { (a, b) } else { (b, a) };
+        Self {
+            path,
+            text: crate::edit::Wiped(edit.text.clone()),
+            anchor,
+            focus,
+            affinity: edit.affinity,
+        }
+    }
+
+    pub(in crate::runtime) fn changed(&self, path: &str, edit: &crate::TextEdit) -> bool {
+        if self.path != path { return false; }
+        let (a, b) = edit.range();
+        let (anchor, focus) = if edit.anchor <= edit.focus { (a, b) } else { (b, a) };
+        self.anchor != anchor
+            || self.focus != focus
+            || self.affinity != edit.affinity
+            || self.text.as_str() != edit.text.as_str()
+    }
+}
+
 /// Text selection, links, field click/scroll, caret, IME, spellcheck and clipboard state owned by
 /// [`RuntimeCore`].
 pub(crate) struct TextInputState {
@@ -23,6 +56,10 @@ pub(crate) struct TextInputState {
     pub(in crate::runtime) caret_watch: bool,
     /// An edit ran this frame: keep the caret in its scroll viewport after the commit.
     pub(in crate::runtime) caret_follow: bool,
+    /// Snapshot of the focused field before an `El::on_input_key` handler consumed a key; resolved
+    /// against the committed tree so edits and caret moves follow the caret without calling
+    /// `access` after a handler that may have removed the field.
+    pub(in crate::runtime) caret_follow_check: Option<CaretFollowCheck>,
     /// The composition `App::on_ime` currently has open.
     app_ime_comp: app_ime::AppComposition,
     /// The `El::ime_cursor` that has the input method asks for Option as Alt (`El::ime_option_as_alt`).
@@ -64,6 +101,7 @@ impl TextInputState {
             caret: None,
             caret_watch: false,
             caret_follow: false,
+            caret_follow_check: None,
             app_ime_comp: Default::default(),
             ime_option_as_alt: false,
             ime_reset: false,
@@ -232,6 +270,18 @@ impl RuntimeCore {
         if scrolled && self.virtual_window_changed() {
             self.commit_virtual_scroll(app, &Tx::default());
             self.step_scroll(0.0);
+        }
+    }
+
+    /// Promotes a pending `El::on_input_key` snapshot into `caret_follow` when the committed tree's
+    /// focused field is still the same field and its text or caret changed.
+    pub(in crate::runtime) fn resolve_caret_follow(&mut self) {
+        let Some(check) = self.edit.caret_follow_check.take() else { return };
+        if let Some(path) = self.kbd.focus.path()
+            && let Some(input) = self.focused_input()
+            && check.changed(path, &input.edit)
+        {
+            self.edit.caret_follow = true;
         }
     }
 

@@ -461,6 +461,7 @@ impl RuntimeCore {
         self.queue_reveal_selected(&mut tx, pointer_hover);
         #[cfg(debug_assertions)]
         let instant_scroll = tx.scroll_offsets.iter().find(|r| tx.commit.snaps() || r.glide.is_none()).map(|r| r.key.clone());
+        self.edit.caret_follow_check = None;
         let follow = std::mem::take(&mut self.edit.caret_follow);
         let commits_before_scroll = self.commit.commits;
         self.finish_scroll_requests(app, &mut tx, follow);

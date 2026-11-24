@@ -469,6 +469,7 @@ impl RuntimeCore {
             measured = self.settle_layout_reads(app, measured, tx);
         }
         self.apply(app, measured, tx);
+        self.resolve_caret_follow();
         self.scene.keep_flights(false);
         self.commit.memo.keep_since(self.commit.memo_since);
         self.track_focused_rows();

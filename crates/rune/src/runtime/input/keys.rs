@@ -29,9 +29,7 @@ impl RuntimeCore {
         if self.focused_input().is_some() {
             self.edit.input_click.clear_last();
         }
-        if let Some(f) = self.focused_input().and_then(|input| input.key.clone())
-            && Tx::took(f(app.states(), ev, one), one)
-        {
+        if self.run_input_key(app, ev, one) {
             return true;
         }
         one.physical_key = None;
@@ -104,6 +102,29 @@ impl RuntimeCore {
         if !repeat && self.selection_key(app, ev, one) { return true; }
         if !repeat && self.context_menu_key(app, ev, one) { return true; }
         self.page_scroll(app, ev) || self.playground_key(app, ev, one)
+    }
+
+    /// Offer `ev` to the focused text field's `El::on_input_key` handler. If it consumes the key
+    /// and changes the field's text or caret, keep the caret in view after the commit, as an
+    /// editor-handled edit does.
+    pub(in crate::runtime) fn run_input_key(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, one: &mut Tx) -> bool {
+        let Some((f, access)) = self.focused_input().and_then(|input| Some((input.key.clone()?, input.access.clone()))) else {
+            return false;
+        };
+        let before = (!self.edit.caret_follow && self.edit.caret_follow_check.is_none()).then(|| {
+            let path = self.kbd.focus.owned()?;
+            Some(match access {
+                Some(access) => selection::caret::CaretFollowCheck::new(path, access(app.states())),
+                None => selection::caret::CaretFollowCheck::new(path, &self.focused_input()?.edit),
+            })
+        }).flatten();
+        if !Tx::took(f(app.states(), ev, one), one) {
+            return false;
+        }
+        if !one.live_only && let Some(check) = before {
+            self.edit.caret_follow_check = Some(check);
+        }
+        true
     }
 
     /// Page Up and Page Down scroll by most of a viewport, and Home and End to the top and
