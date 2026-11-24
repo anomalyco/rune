@@ -11,8 +11,9 @@
 use std::path::PathBuf;
 
 use rune::color::{Color, oklch, oklcha};
-use rune::render::{Gpu, Instance, KIND_RADIAL, KIND_RECT, KIND_SHADOW, NO_CLIP, Offscreen, Renderer, write_png};
+use rune::render::{Gpu, Instance, KIND_RADIAL, KIND_RECT, KIND_SHADOW, NO_CLIP, OFFSCREEN_FORMAT, Offscreen, Renderer, write_png};
 use rune::text::TextSystem;
+use rune::{Align, Cx, El, Env, Pixels, Runtime, TextStyle, col, el, row, text};
 use rune_fx::{FillAnchor, Fx, FxFrame, FxOptions, FxRenderer, LiquidMetalParams, Shape, rgb};
 use rune_light::{Gi, Glass, GlassLight, GlassRenderer, GlassSettings, Light, LightRenderer, Prim, Scene, Settings};
 
@@ -331,8 +332,74 @@ fn render(ctx: &mut Ctx, name: &str, t: f32) -> Vec<u8> {
                 }
             }
         }),
-        _ => panic!("unknown scene {name}; scenes: {}", SCENES.join(", ")),
+        "runtime" => runtime_scene(ctx, t),
+        _ => panic!("unknown scene {name}; scenes: {}, runtime", SCENES.join(", ")),
     }
+}
+
+/// A Rune `Runtime` card rendered directly through `Renderer::render_runtime_to_offscreen`.
+fn runtime_scene(ctx: &Ctx, t: f32) -> Vec<u8> {
+    let swatch = Pixels::new();
+    let (sw, sh) = (128u32, 128u32);
+    let mut rgba = Vec::with_capacity((sw * sh * 4) as usize);
+    for y in 0..sh {
+        for x in 0..sw {
+            let u = x as f32 / (sw - 1) as f32;
+            let v = y as f32 / (sh - 1) as f32;
+            rgba.extend_from_slice(&[(u * 64.0) as u8, ((0.35 + 0.45 * v) * 255.0) as u8, 255, 255]);
+        }
+    }
+    swatch.set(sw, sh, rgba);
+
+    fn view(swatch: &Pixels, _: &mut Cx<Pixels>) -> El {
+        let bg = oklch(0.11, 0.006, HUE);
+        let card = oklch(0.18, 0.008, HUE);
+        let border = oklcha(0.75, 0.02, HUE, 0.22);
+        let accent = oklch(0.62, 0.16, HUE);
+        let fg = oklch(0.95, 0.004, HUE);
+        let muted = oklch(0.72, 0.01, HUE);
+        col()
+            .w_full()
+            .h_full()
+            .fill(bg)
+            .center()
+            .child(
+                row()
+                    .w(420.0)
+                    .padding(24.0)
+                    .gap(20.0)
+                    .radius(16.0)
+                    .fill(card)
+                    .border(1.0, border)
+                    .align(Align::Center)
+                    .child(el().size(64.0, 64.0).radius(10.0).pixels(swatch))
+                    .child(
+                        col()
+                            .gap(6.0)
+                            .grow(1.0)
+                            .child(
+                                row().gap(8.0).align(Align::Center)
+                                    .child(el().size(8.0, 8.0).radius(4.0).fill(accent))
+                                    .child(text("Offscreen Runtime").font(TextStyle::new(16.0, 600.0)).color(fg)),
+                            )
+                            .child(
+                                text("Rendered via Renderer::render_runtime_to_offscreen")
+                                    .font(TextStyle::new(12.0, 400.0))
+                                    .color(muted),
+                            ),
+                    ),
+            )
+    }
+
+    let format = OFFSCREEN_FORMAT.remove_srgb_suffix();
+    let mut renderer = Renderer::new(&ctx.device, format);
+    renderer.set_srgb_blend(true);
+    let target = Offscreen::with_format(&ctx.device, PW, PH, format);
+    let mut rt = Runtime::new(swatch, view, (W, H), Env::new(true, S));
+    rt.set_srgb_blend(true);
+    rt.frame(t as f64);
+    renderer.render_runtime_to_offscreen(&ctx.device, &ctx.queue, &target, &mut rt);
+    target.read(&ctx.device)
 }
 
 fn main() {
@@ -343,7 +410,11 @@ fn main() {
     let only = get("--only");
     std::fs::create_dir_all(&out).unwrap();
     let mut ctx = Ctx::new();
-    for name in SCENES.iter().copied().filter(|n| only.as_deref().is_none_or(|o| o == *n)) {
+    let names: Vec<&str> = match only.as_deref() {
+        Some(name) => vec![name],
+        None => SCENES.to_vec(),
+    };
+    for name in names {
         let px = render(&mut ctx, name, t);
         write_png(&out.join(format!("{name}.png")), PW, PH, &px).unwrap();
         eprintln!("wrote {name}.png");

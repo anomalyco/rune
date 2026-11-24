@@ -1,0 +1,1 @@
+- Renderer: added `Renderer::render_runtime_to_offscreen` to upload a `Runtime<S>`'s images, native surfaces, fade stops, glyph atlas and instances, draw into an `Offscreen` target, copy to its readback buffer, and submit on the queue in one call.
