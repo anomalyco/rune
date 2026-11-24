@@ -38,6 +38,10 @@ pub struct G {
     /// The split-view story's sidebar and inspector panes.
     pub split_sidebar: rune_kit::PaneState,
     pub split_inspector: rune_kit::PaneState,
+    /// The table options story's state, row count and open row context menu.
+    pub table: rune_kit::TableState,
+    pub table_rows: usize,
+    pub table_menu: Option<(String, rune::PointerPress)>,
     pub neutral: bool,
     pub palette: bool,
     /// `--reduced-motion`: the runtime's reduced-motion mode.
@@ -72,6 +76,13 @@ fn init() -> G {
         files: files(),
         split_sidebar: rune_kit::PaneState::new(180.0).range(120.0, 280.0),
         split_inspector: rune_kit::PaneState::new(170.0).range(120.0, 260.0),
+        table: {
+            let mut t = rune_kit::TableState::new().key("log-table").multi_select(true);
+            t.select("log-15");
+            t
+        },
+        table_rows: 16,
+        table_menu: None,
         neutral: rune::extra_args().iter().any(|a| a == "neutral"),
         palette: rune::extra_args().iter().any(|a| a == "palette"),
         reduced: rune::extra_args().iter().any(|a| a == "--reduced-motion"),

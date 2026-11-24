@@ -7,6 +7,7 @@ use super::{Cell, CellContent, KeyOutcome, SortDir, TableColumn, TableState, Tab
 use crate::Kit;
 
 type CellFn<S> = Rc<dyn Fn(&S, usize, &str) -> Cell>;
+type RowFn<S> = Rc<dyn Fn(&S, usize, El) -> El>;
 type RowIdFn<S> = for<'a> fn(&'a S, usize) -> Cow<'a, str>;
 
 struct RowSpec {
@@ -14,6 +15,7 @@ struct RowSpec {
     sizes: Rc<Vec<Width>>,
     style: TableStyle,
     zebra: bool,
+    cursor_outline: bool,
     focus: Color,
 }
 
@@ -32,6 +34,7 @@ struct TableHandlers<S> {
     len: fn(&S) -> usize,
     row_id: RowIdFn<S>,
     cell: Option<CellFn<S>>,
+    row: Option<RowFn<S>>,
     on_sort: Option<Rc<dyn Fn(&mut S, &str, SortDir, &mut Tx)>>,
     on_select: Option<Rc<dyn Fn(&mut S, &str, &mut Tx)>>,
     on_open: Option<Rc<dyn Fn(&mut S, &str, &mut Tx)>>,
@@ -63,7 +66,7 @@ impl<S: 'static> TableBind for TableHandlers<S> {
 
     fn bind_virtual_rows(&self, rows: El, count: usize, spec: RowSpec) -> El {
         let (get, get_mut, len, row_id) = (self.get, self.get_mut, self.len, self.row_id);
-        let (cell, sel, open) = (self.cell.clone(), self.on_select.clone(), self.on_open.clone());
+        let (cell, row_hook, sel, open) = (self.cell.clone(), self.row.clone(), self.on_select.clone(), self.on_open.clone());
         let row_height = spec.style.row_height;
         let build_row = move |s: &S, i: usize| -> El {
             let st = get(s);
@@ -94,6 +97,9 @@ impl<S: 'static> TableBind for TableHandlers<S> {
                         f(s, &id, tx);
                     }
                 });
+            }
+            if let Some(f) = &row_hook {
+                r = f(s, i, r);
             }
             r
         };
@@ -140,13 +146,15 @@ impl<S: 'static> TableBind for TableHandlers<S> {
 struct TableCore {
     columns: Vec<TableColumn>,
     zebra: bool,
+    stick_bottom: bool,
+    cursor_outline: bool,
     style: Option<TableStyle>,
     name: Option<String>,
 }
 
 impl TableCore {
     fn build(self, state: &TableState, count: usize, k: &Kit, bind: &dyn TableBind) -> El {
-        let TableCore { columns, zebra, style, name } = self;
+        let TableCore { columns, zebra, stick_bottom, cursor_outline, style, name } = self;
         let style = style.unwrap_or_else(|| TableStyle::from_kit(k));
         let columns = Rc::new(columns);
         let sizes: Rc<Vec<Width>> = Rc::new(columns.iter().map(|c| state.column_width(&c.id).map_or(c.width, |w| Width::Fixed(c.clamp(w)))).collect());
@@ -154,11 +162,11 @@ impl TableCore {
         let rows = bind.bind_virtual_rows(
             col().key("rows").w_full().growth(GrowthSpec::default()),
             count,
-            RowSpec { cols: columns, sizes, style, zebra, focus: k.c.border_focus },
+            RowSpec { cols: columns, sizes, style, zebra, cursor_outline, focus: k.c.border_focus },
         );
         let viewport = bind
             .bind_viewport_layout(
-                col().key("viewport").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }),
+                col().key("viewport").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom }),
                 style.row_height,
             )
             .child(rows);
@@ -190,13 +198,46 @@ impl<S: 'static> Table<S> {
     /// row `i` (in the app's current order) with an id unique among them.
     pub fn new(get: fn(&S) -> &TableState, get_mut: fn(&mut S) -> &mut TableState, len: fn(&S) -> usize, row_id: RowIdFn<S>) -> Self {
         Table {
-            core: TableCore { columns: Vec::new(), zebra: false, style: None, name: None },
-            handlers: TableHandlers { get, get_mut, len, row_id, cell: None, on_sort: None, on_select: None, on_open: None },
+            core: TableCore { columns: Vec::new(), zebra: false, stick_bottom: false, cursor_outline: true, style: None, name: None },
+            handlers: TableHandlers { get, get_mut, len, row_id, cell: None, row: None, on_sort: None, on_select: None, on_open: None },
         }
     }
     pub fn column(mut self, c: TableColumn) -> Self { self.core.columns.push(c); self }
     /// What row `i` shows in column `col` (the column's id).
     pub fn cell(mut self, f: impl Fn(&S, usize, &str) -> Cell + 'static) -> Self { self.handlers.cell = Some(Rc::new(f)); self }
+    /// Customise each mounted row element after the table has added its striping, selection,
+    /// hover, cursor outline, and click/double-click handlers.
+    ///
+    /// Runs only for rows currently mounted by `virtual_rows`, so large tables keep their
+    /// virtualisation cost. Use it to attach per-row handlers such as
+    /// [`El::on_secondary_press`] (context menus), [`El::on_drag`], or row decorations without
+    /// wrapping every cell in [`Cell::el`] (which would drop [`Cell::text`]'s truncation tooltip).
+    /// Attaching `on_press` / `on_double_press` replaces the table's own handler on that row.
+    ///
+    /// When opening a context menu from `on_secondary_press`, select the clicked row only if it is
+    /// not already selected so multi-selections stay intact on already-selected rows:
+    ///
+    /// ```
+    /// use std::borrow::Cow;
+    /// use rune::PointerPress;
+    /// use rune_kit::{Cell, Kit, Table, TableColumn, TableState};
+    ///
+    /// struct App { rows: Vec<String>, table: TableState, menu: Option<(String, PointerPress)> }
+    /// let app = App { rows: vec!["alpha".into()], table: TableState::new(), menu: None };
+    /// let k = Kit::neutral(true);
+    /// let _el = Table::new(|s: &App| &s.table, |s: &mut App| &mut s.table, |s: &App| s.rows.len(), |s: &App, i| Cow::Borrowed(s.rows[i].as_str()))
+    ///     .column(TableColumn::new("name", "Name"))
+    ///     .cell(|s: &App, i, _| Cell::text(&s.rows[i]))
+    ///     .row(|s: &App, i, row| {
+    ///         let id = s.rows[i].clone();
+    ///         row.on_secondary_press(move |s: &mut App, p, _| {
+    ///             if !s.table.is_selected(&id) { s.table.select(id.clone()); }
+    ///             s.menu = Some((id.clone(), p));
+    ///         })
+    ///     })
+    ///     .build(&app, &k);
+    /// ```
+    pub fn row(mut self, f: impl Fn(&S, usize, El) -> El + 'static) -> Self { self.handlers.row = Some(Rc::new(f)); self }
     /// A sortable column's header was clicked: the table already shows the new sort; reorder
     /// the rows to match.
     pub fn on_sort(mut self, f: impl Fn(&mut S, &str, SortDir, &mut Tx) + 'static) -> Self { self.handlers.on_sort = Some(Rc::new(f)); self }
@@ -206,6 +247,42 @@ impl<S: 'static> Table<S> {
     pub fn on_open(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self { self.handlers.on_open = Some(Rc::new(f)); self }
     /// Fill every other row.
     pub fn zebra(mut self, on: bool) -> Self { self.core.zebra = on; self }
+    /// Keep the bottom of the table in view as rows are appended while scrolled to the end
+    /// (`ScrollSpec { stick_bottom: on }`, off by default). Scrolling up detaches and preserves
+    /// the scroll position until the user returns to the bottom.
+    ///
+    /// ```
+    /// use std::borrow::Cow;
+    /// use rune_kit::{Cell, Kit, Table, TableColumn, TableState};
+    ///
+    /// struct App { logs: Vec<String>, table: TableState }
+    /// let app = App { logs: vec!["ready".into()], table: TableState::new() };
+    /// let k = Kit::neutral(true);
+    /// let _el = Table::new(|s: &App| &s.table, |s: &mut App| &mut s.table, |s: &App| s.logs.len(), |s: &App, i| Cow::Borrowed(s.logs[i].as_str()))
+    ///     .column(TableColumn::new("msg", "Message"))
+    ///     .cell(|s: &App, i, _| Cell::text(&s.logs[i]))
+    ///     .stick_bottom(true)
+    ///     .build(&app, &k);
+    /// ```
+    pub fn stick_bottom(mut self, on: bool) -> Self { self.core.stick_bottom = on; self }
+    /// Draw the 1 pt inset focus outline around the cursor row in multi-select mode (on by
+    /// default). Pass `false` when rows draw their own selection or cursor mark; keyboard
+    /// navigation and accessibility (`active_descendant`) are unchanged.
+    ///
+    /// ```
+    /// use std::borrow::Cow;
+    /// use rune_kit::{Cell, Kit, Table, TableColumn, TableState};
+    ///
+    /// struct App { rows: Vec<String>, table: TableState }
+    /// let app = App { rows: vec!["a".into()], table: TableState::new().multi_select(true) };
+    /// let k = Kit::neutral(true);
+    /// let _el = Table::new(|s: &App| &s.table, |s: &mut App| &mut s.table, |s: &App| s.rows.len(), |s: &App, i| Cow::Borrowed(s.rows[i].as_str()))
+    ///     .column(TableColumn::new("name", "Name"))
+    ///     .cell(|s: &App, i, _| Cell::text(&s.rows[i]))
+    ///     .cursor_outline(false)
+    ///     .build(&app, &k);
+    /// ```
+    pub fn cursor_outline(mut self, on: bool) -> Self { self.core.cursor_outline = on; self }
     pub fn style(mut self, s: TableStyle) -> Self { self.core.style = Some(s); self }
     /// The table's accessibility label.
     pub fn name(mut self, n: impl Into<String>) -> Self { self.core.name = Some(n.into()); self }
@@ -241,7 +318,7 @@ fn build_row_el(
     } else {
         r.hover(style.stripe.mix(style.selected, 0.5))
     };
-    if st.multi && st.cursor.as_deref() == Some(id) {
+    if spec.cursor_outline && st.multi && st.cursor.as_deref() == Some(id) {
         r = r.outline(1.0, -1.0, spec.focus);
     }
     for (j, c) in spec.cols.iter().enumerate() {

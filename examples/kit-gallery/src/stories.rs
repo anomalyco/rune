@@ -15,6 +15,7 @@ mod inputs;
 mod markdown;
 mod overlays;
 mod split_view;
+mod table;
 
 use controls::{button_all_states, button_icon, button_playground, button_shortcuts, button_sizes, button_variants, checkbox_basic, checkbox_custom_icon, checkbox_hidden_label, checkbox_states, icon_button_all_states, icon_button_playground, icon_button_sizes, icon_button_variants, radio_basic, radio_controlled, radio_states, switch_appearances, switch_basic, switch_hidden_label, switch_sizes, switch_states, switch_web};
 use display::{accordion_basic, accordion_multiple, accordion_single, badge_accent, badge_appearances, badge_basic, badge_high_contrast, badge_subtle, card_error, card_info, card_normal, card_success, card_warning, collapsible_basic, collapsible_ghost, keybind_all, keybind_keep_case, keybind_multiple, keybind_playground, keybind_symbols, keybind_variants, list_active_icon, list_basic, list_divider, list_empty, list_grouped, list_no_search, list_with_add, loader_basic, loader_sizes, progress_basic, progress_indeterminate, progress_no_label, rolling_text_basic, scroll_view_thumb, segmented_basic, segmented_controlled, spinner_basic, spinner_sizes};
@@ -41,6 +42,12 @@ macro_rules! stories {
             if $id == "rune-split-view--flat-main" {
                 s.split_sidebar.set_open(true);
                 s.split_inspector.set_open(true);
+            }
+            if $id == "rune-table--options" {
+                s.table = TableState::new().key("log-table").multi_select(true);
+                s.table.select("log-15");
+                s.table_rows = 16;
+                s.table_menu = None;
             }
             s.open = OPENED.iter().find(|(id, _)| *id == $id).map(|(_, k)| (*k).to_owned());
         }),)*];
@@ -226,6 +233,7 @@ stories! {
     "rune-tree-icon--catalog" => icons::tree_icon_catalog,
     "rune-tree--files" => icons::file_tree,
     "rune-split-view--flat-main" => split_view::flat_main,
+    "rune-table--options" => table::options,
 }
 
 fn popup_list_composer(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
