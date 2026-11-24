@@ -2,9 +2,9 @@
 //!
 //! Supported elements:
 //! - Inline: `<b>`, `<strong>`, `<i>`, `<em>`, `<u>`, `<ins>`, `<s>`, `<del>`, `<strike>`,
-//!   `<a href="...">`, `<code>`, and CSS `style` attributes (`font-weight`, `font-style`,
-//!   `text-decoration`, `text-decoration-line`), and `<span data-pill="id">` for
-//!   [`Mark::Pill`].
+//!   `<a href="...">`, `<code>`, `<font color="...">`, CSS `style` attributes (`font-weight`,
+//!   `font-style`, `text-decoration`, `text-decoration-line`, `color`), and `<span data-pill="id">`
+//!   for [`Mark::Pill`].
 //! - Block: `<p>`, `<div>`, `<br>`, `<ul>`, `<ol>`, `<li>`, `<blockquote>`, `<pre>`.
 //! - Stripped with content: `<script>`, `<style>`, `<head>`.
 //! - Unknown tags drop their wrapper and keep their text. Nothing is executed, and dangerous
@@ -12,9 +12,11 @@
 
 use super::Mark;
 
+pub(crate) mod color;
 mod parse;
 mod serialize;
 
+pub(crate) use color::normalize_hex;
 pub(crate) use parse::parse_html;
 pub(crate) use serialize::serialize_html;
 
@@ -177,7 +179,7 @@ fn extract_attr(attrs: &str, name: &str) -> Option<String> {
     None
 }
 
-/// Parses inline CSS `style="..."` for `font-weight`, `font-style`, and `text-decoration`.
+/// Parses inline CSS `style="..."` for `font-weight`, `font-style`, `text-decoration`, and `color`.
 fn parse_style_marks(style: &str, add: &mut Vec<Mark>, remove: &mut Vec<Mark>) {
     for decl in style.split(';') {
         let Some((prop, val)) = decl.split_once(':') else { continue };
@@ -215,6 +217,10 @@ fn parse_style_marks(style: &str, add: &mut Vec<Mark>, remove: &mut Vec<Mark>) {
                     remove.push(Mark::Underline);
                     remove.push(Mark::Strike);
                 }
+            }
+        } else if prop.eq_ignore_ascii_case("color") {
+            if let Some(hex) = color::parse_css_color(val) {
+                add.push(Mark::Color(hex));
             }
         }
     }

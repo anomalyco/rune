@@ -449,8 +449,8 @@ impl TextEdit {
         if !pills {
             frag.marks.retain(|m| !m.mark.is_pill());
         }
-        // HTML that only colours or lays out text (a code editor's copy) would collapse the
-        // plain text's whitespace for nothing.
+        // HTML with no formatting this field keeps (such as layout-only markup, or a code
+        // editor's copy when colour is disallowed) would collapse plain whitespace for nothing.
         let frag = self.keep_allowed(frag);
         let unformatted = frag.marks.is_empty() && frag.blocks.iter().all(|&b| b == Block::Paragraph);
         if !plain.is_empty() && (frag.text.is_empty() || unformatted) {

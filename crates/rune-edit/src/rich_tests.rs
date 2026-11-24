@@ -88,15 +88,29 @@ fn list_levels_stop_at_max_list_level() {
 
 #[test]
 fn paste_html_without_formatting_keeps_the_plain_whitespace() {
-    // VS Code's copy: colour spans in a `white-space: pre` div.
-    let html = concat!(
+    // Layout-only HTML (no marks the model keeps) falls back to the plain text's whitespace.
+    let layout_only = concat!(
+        "<meta charset='utf-8'><div style=\"font-family: monospace; white-space: pre;\">",
+        "<div><span>fn</span><span>&nbsp;a()&nbsp;{</span></div>",
+        "<div><span>&nbsp; &nbsp; b</span></div><div><span>}</span></div></div>",
+    );
+    let mut e = TextEdit::new("").rich();
+    e.paste_html(layout_only, "fn a() {\n    b\n}");
+    assert_eq!(e.text, "fn a() {\n    b\n}");
+
+    // VS Code's coloured copy keeps plain whitespace when the field disallows `Mark::Color`.
+    let vscode = concat!(
         "<meta charset='utf-8'><div style=\"color: #d4d4d4;white-space: pre;\">",
         "<div><span style=\"color: #569cd6;\">fn</span><span>&nbsp;a()&nbsp;{</span></div>",
         "<div><span>&nbsp; &nbsp; b</span></div><div><span>}</span></div></div>",
     );
-    let mut e = TextEdit::new("").rich();
-    e.paste_html(html, "fn a() {\n    b\n}");
-    assert_eq!(e.text, "fn a() {\n    b\n}");
+    let mut no_color = TextEdit::new("")
+        .rich()
+        .allow_marks([Mark::Bold, Mark::Italic, Mark::Underline, Mark::Strike, Mark::Code, Mark::Link(String::new())]);
+    no_color.paste_html(vscode, "fn a() {\n    b\n}");
+    assert_eq!(no_color.text, "fn a() {\n    b\n}");
+    assert!(no_color.marks().is_empty());
+
     let mut e = TextEdit::new("").rich();
     e.paste_html("<p>a  <b>b</b></p>", "a  b");
     assert_eq!((e.text.as_str(), marked(&e, &Mark::Bold)), ("a b", vec!["b"]), "formatted HTML still wins");
@@ -493,7 +507,7 @@ fn random_edits_keep_ranges_blocks_and_soft_breaks_consistent() {
                 8 => { e.key(&KeyEvent { key: if next(2) == 0 { Key::Home } else { Key::End }, mods }, None); }
                 9 => { e.key(&KeyEvent { key: Key::Tab, mods: Mods { shift: mods.shift, ..Mods::default() } }, None); }
                 10 => { e.key(&cmd(['b', 'i', 'u'][next(3) as usize]), None); }
-                11 => e.toggle_mark([Mark::Code, Mark::Strike, Mark::Link(format!("https://e.x/{}", next(3)))][next(3) as usize].clone()),
+                11 => e.toggle_mark([Mark::Code, Mark::Strike, Mark::Link(format!("https://e.x/{}", next(3))), Mark::Color(["#ff0000", "#00ff00", "#0000ff"][next(3) as usize].into())][next(4) as usize].clone()),
                 12 => {
                     let l = next(6) as u8;
                     e.set_block([Block::Paragraph, Block::Bullet(l), Block::Numbered(l), Block::Quote, Block::Code][next(5) as usize]);

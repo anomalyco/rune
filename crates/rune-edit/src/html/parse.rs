@@ -1,6 +1,6 @@
 //! Safe HTML fragment parser into [`TextEdit`].
 
-use super::{ListKind, decode_entities, extract_attr, is_safe_href, parse_style_marks};
+use super::{ListKind, color::parse_font_color, decode_entities, extract_attr, is_safe_href, parse_style_marks};
 use crate::{Block, MAX_LIST_LEVEL, Mark, MarkRange, TextEdit};
 
 const MAX_DEPTH: usize = 512;
@@ -318,6 +318,11 @@ pub(crate) fn parse_html(html: &str) -> TextEdit {
                             to_add.push(Mark::Pill(id));
                         }
                     }
+                    "font" => {
+                        if let Some(c) = extract_attr(attrs, "color").and_then(|v| parse_font_color(&v)) {
+                            to_add.push(Mark::Color(c));
+                        }
+                    }
                     _ => {}
                 }
                 if let Some(style) = extract_attr(attrs, "style") {
@@ -325,6 +330,17 @@ pub(crate) fn parse_html(html: &str) -> TextEdit {
                     // The element's own style wins over its tag: Google Docs wraps a whole
                     // paste in `<b style="font-weight:normal">`.
                     to_add.retain(|m| !to_suppress.iter().any(|r| r.same_kind(m)));
+                }
+                // Keep only the last declaration of each mark kind on the same element (e.g.
+                // `<font color="red" style="color:blue">` or `style="color:red; color:blue"`)
+                // so the superseded value isn't pushed onto `frame.suppressed_marks`.
+                let mut k = 0;
+                while k < to_add.len() {
+                    if to_add[k + 1..].iter().any(|later| later.same_kind(&to_add[k])) {
+                        to_add.remove(k);
+                    } else {
+                        k += 1;
+                    }
                 }
 
                 let pos = text.len();

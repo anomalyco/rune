@@ -1,0 +1,1 @@
+- Added inline text colour mark `Mark::Color(String)` (with `Mark::color_hex`, `TextEdit::set_color`, and `TextEdit::active_color`), gated by `allow_marks`, rendered in `text_input` beneath link and selection colours, and round-tripped through `to_html` (`<span style="color:#rrggbb">`) and `from_html` (CSS `style="color:..."` and `<font color>`).

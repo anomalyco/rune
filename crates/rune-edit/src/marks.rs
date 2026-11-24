@@ -95,10 +95,14 @@ impl TextEdit {
         }
 
         // Merge overlapping or adjacent ranges of the same mark kind.
-        // For `Mark::Link`, later entries win over earlier overlapping links.
-        let mut by_kind: [Vec<MarkRange>; 7] = Default::default();
-        for m in self.marks.drain(..) {
+        // For `Mark::Link` and `Mark::Color`, later entries win over earlier overlapping ones.
+        let mut by_kind: [Vec<MarkRange>; 8] = Default::default();
+        for mut m in self.marks.drain(..) {
             if m.start < m.end {
+                if let Mark::Color(ref mut raw) = m.mark {
+                    let Some(norm) = html::normalize_hex(raw) else { continue };
+                    *raw = norm;
+                }
                 by_kind[m.mark.kind_order() as usize].push(m);
             }
         }
@@ -119,8 +123,9 @@ impl TextEdit {
                         merged.push(m);
                     }
                 }
-            } else if kind_idx == 5 {
-                // `Mark::Link`: resolve overlaps so later links overwrite earlier ones, then merge adjacent equal URLs.
+            } else if kind_idx == 5 || kind_idx == 7 {
+                // `Mark::Link` / `Mark::Color`: resolve overlaps so later entries overwrite earlier
+                // ones, then merge adjacent equal values.
                 let mut bounds: Vec<(usize, usize)> = list.iter().map(|m| (m.start, m.end)).collect();
                 bounds.sort_unstable();
                 let overlapping = bounds.windows(2).any(|w| w[1].0 < w[0].1);
@@ -128,29 +133,29 @@ impl TextEdit {
                 if !overlapping {
                     resolved = std::mem::take(&mut list);
                 }
-                for link in list {
+                for entry in list {
                     let mut next_resolved = Vec::with_capacity(resolved.len() + 1);
                     for old in resolved {
-                        if old.end <= link.start || old.start >= link.end {
+                        if old.end <= entry.start || old.start >= entry.end {
                             next_resolved.push(old);
                         } else {
-                            if old.start < link.start {
+                            if old.start < entry.start {
                                 next_resolved.push(MarkRange {
                                     start: old.start,
-                                    end: link.start,
+                                    end: entry.start,
                                     mark: old.mark.clone(),
                                 });
                             }
-                            if old.end > link.end {
+                            if old.end > entry.end {
                                 next_resolved.push(MarkRange {
-                                    start: link.end,
+                                    start: entry.end,
                                     end: old.end,
                                     mark: old.mark,
                                 });
                             }
                         }
                     }
-                    next_resolved.push(link);
+                    next_resolved.push(entry);
                     resolved = next_resolved;
                 }
                 resolved.sort_by_key(|m| (m.start, m.end));
@@ -211,6 +216,17 @@ impl TextEdit {
         out
     }
 
+    fn mark_matches(present: &Mark, query: &Mark) -> bool {
+        match (present, query) {
+            (Mark::Link(_), Mark::Link(u)) if u.is_empty() => true,
+            (Mark::Color(_), Mark::Color(c)) if c.is_empty() => true,
+            (Mark::Color(a), Mark::Color(b)) => {
+                a == b || html::normalize_hex(b).as_deref() == Some(a.as_str())
+            }
+            _ => present == query,
+        }
+    }
+
     /// Whether `mark` covers the entire byte range `start..end` (`start < end`).
     fn range_has_mark(&self, start: usize, end: usize, mark: &Mark) -> bool {
         if start >= end {
@@ -218,16 +234,8 @@ impl TextEdit {
         }
         // Because `normalize_marks` merges contiguous ranges of the same mark, a mark covers
         // the entire `start..end` iff a single `MarkRange` with `m.start <= start && end <= m.end` exists
-        // (for `Link("")`, any link covering each subrange, or a single link covering `start..end`).
-        let match_any_link = matches!(mark, Mark::Link(u) if u.is_empty());
-        self.marks.iter().any(|m| {
-            let kind_matches = if match_any_link {
-                matches!(m.mark, Mark::Link(_))
-            } else {
-                &m.mark == mark
-            };
-            kind_matches && m.start <= start && end <= m.end
-        })
+        // (for `Link("")` or `Color("")`, a single range of that kind covering `start..end`).
+        self.marks.iter().any(|m| Self::mark_matches(&m.mark, mark) && m.start <= start && end <= m.end)
     }
 
     /// Active inline marks at the caret (including pending typing style) or covering the whole
@@ -254,16 +262,10 @@ impl TextEdit {
     }
 
     /// Whether `mark` is active at the caret or covers the whole selection.
-    /// Passing `Mark::Link(String::new())` checks whether *any* link is active.
+    /// Passing `Mark::Link(String::new())` checks whether *any* link is active, and passing
+    /// `Mark::Color(String::new())` checks whether *any* colour is active.
     pub fn has_mark(&self, mark: &Mark) -> bool {
-        let match_any_link = matches!(mark, Mark::Link(u) if u.is_empty());
-        self.active_marks().iter().any(|m| {
-            if match_any_link {
-                matches!(m, Mark::Link(_))
-            } else {
-                m == mark
-            }
-        })
+        self.active_marks().iter().any(|m| Self::mark_matches(m, mark))
     }
 
     /// The URL of the active [`Mark::Link`] at the caret or covering the selection, if any.
@@ -287,6 +289,39 @@ impl TextEdit {
             .find_map(|m| (m.start <= a && b <= m.end).then(|| m.mark.link_url()).flatten())
     }
 
+    /// The normalized lowercase `#rrggbb` hex colour of the active [`Mark::Color`] at the caret
+    /// (including pending typing style) or covering the whole selection, if any.
+    ///
+    /// ```
+    /// use rune_edit::TextEdit;
+    /// let mut e = TextEdit::new("hello").rich();
+    /// e.set_selection(0, 5);
+    /// e.set_color(Some("#D93025"));
+    /// assert_eq!(e.active_color(), Some("#d93025"));
+    /// ```
+    pub fn active_color(&self) -> Option<&str> {
+        let (a, b) = self.range();
+        if a == b {
+            let line_idx = self.line_of_byte(a);
+            if self.blocks.get(line_idx) == Some(&Block::Code) {
+                return None;
+            }
+            if let Some(p) = self.typing.at((self.anchor, self.focus)) {
+                return p.iter().find_map(Mark::color_hex);
+            }
+            if a <= self.line_range(line_idx).start {
+                return None;
+            }
+            return self
+                .marks
+                .iter()
+                .find_map(|m| (m.start < a && a <= m.end).then(|| m.mark.color_hex()).flatten());
+        }
+        self.marks
+            .iter()
+            .find_map(|m| (m.start <= a && b <= m.end).then(|| m.mark.color_hex()).flatten())
+    }
+
     fn edit_typing_style(&mut self, pos: usize, f: impl FnOnce(&mut Vec<Mark>)) {
         if self.blocks.get(self.line_of_byte(pos)) == Some(&Block::Code) {
             return;
@@ -303,18 +338,30 @@ impl TextEdit {
         if self.secure || !self.allows_mark(&mark) {
             return;
         }
+        let mark = match mark {
+            Mark::Color(ref raw) if raw.is_empty() => mark,
+            Mark::Color(raw) => match html::normalize_hex(&raw) {
+                Some(norm) => Mark::Color(norm),
+                None => return,
+            },
+            other => other,
+        };
+        let empty_color = matches!(mark, Mark::Color(ref c) if c.is_empty());
         self.sync_invariants();
         let (a, b) = self.range();
         if a == b {
             if !mark.is_pill() {
                 self.edit_typing_style(a, |active| {
                     if let Some(pos) = active.iter().position(|m| m.same_kind(&mark)) {
-                        if active[pos] == mark || matches!(mark, Mark::Link(ref u) if u.is_empty()) {
+                        if active[pos] == mark
+                            || matches!(mark, Mark::Link(ref u) if u.is_empty())
+                            || empty_color
+                        {
                             active.remove(pos);
                         } else {
                             active[pos] = mark;
                         }
-                    } else {
+                    } else if !empty_color {
                         active.push(mark);
                     }
                 });
@@ -323,7 +370,7 @@ impl TextEdit {
         }
         if self.range_has_mark(a, b, &mark) {
             self.remove_mark(&mark);
-        } else {
+        } else if !empty_color {
             self.set_mark(mark);
         }
     }
@@ -333,6 +380,13 @@ impl TextEdit {
         if self.secure || !self.allows_mark(&mark) {
             return;
         }
+        let mark = match mark {
+            Mark::Color(raw) => match html::normalize_hex(&raw) {
+                Some(norm) => Mark::Color(norm),
+                None => return,
+            },
+            other => other,
+        };
         self.sync_invariants();
         let (a, b) = self.range();
         if a == b {
@@ -401,6 +455,31 @@ impl TextEdit {
         match url.map(str::trim).filter(|u| !u.is_empty()) {
             Some(u) => self.set_mark(Mark::Link(u.to_owned())),
             None => self.remove_mark(&Mark::Link(String::new())),
+        }
+    }
+
+    /// Apply or remove a [`Mark::Color`] on the selection (or pending typing style when empty).
+    ///
+    /// Accepts `#rgb` or `#rrggbb` in either case and stores lowercase `#rrggbb`. Passing `None`
+    /// or an empty string removes any colour on the selection; any other invalid string is ignored.
+    ///
+    /// ```
+    /// use rune_edit::TextEdit;
+    /// let mut e = TextEdit::new("hello").rich();
+    /// e.set_selection(0, 5);
+    /// e.set_color(Some("#f00"));
+    /// assert_eq!(e.active_color(), Some("#ff0000"));
+    /// e.set_color(None);
+    /// assert_eq!(e.active_color(), None);
+    /// ```
+    pub fn set_color(&mut self, color: Option<&str>) {
+        match color.map(str::trim) {
+            None | Some("") => self.remove_mark(&Mark::Color(String::new())),
+            Some(raw) => {
+                if let Some(hex) = html::normalize_hex(raw) {
+                    self.set_mark(Mark::Color(hex));
+                }
+            }
         }
     }
 
