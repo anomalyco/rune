@@ -238,6 +238,31 @@ struct Memory { core: Core, board: Board }
 #[derive(Default)]
 struct Board { content: Option<ClipboardContent>, revision: u64, fail: Option<String> }
 
+/// The OS clipboard's current change counter, when the platform exposes one without reading
+/// the clipboard's contents.
+///
+/// Returns `Some(n)` on macOS (`NSPasteboard.changeCount`) and Windows
+/// (`GetClipboardSequenceNumber`), where the counter changes on every write to the system
+/// clipboard. Returns `None` on Linux, web, iOS and Android, which expose no portable
+/// generation counter.
+///
+/// Reading the counter never opens or reads the clipboard's contents and starts no background
+/// work. Compare two readings for inequality (`!=`) rather than ordering, as the Windows
+/// sequence number is a 32-bit counter that can wrap.
+///
+/// ```
+/// if let Some(rev) = rune::clipboard::revision() {
+///     // Compare against the last seen revision before requesting a read.
+///     let _ = rev;
+/// }
+/// ```
+pub fn revision() -> Option<u64> {
+    #[cfg(not(target_arch = "wasm32"))]
+    { native::revision() }
+    #[cfg(target_arch = "wasm32")]
+    { None }
+}
+
 pub fn memory() -> MemoryClipboard {
     MemoryClipboard(Arc::new(Mutex::new(Memory { core: Core::default(), board: Board::default() })))
 }
@@ -245,6 +270,19 @@ impl MemoryClipboard {
     pub fn text(&self) -> Option<Zeroizing<String>> { self.content().filter(ClipboardContent::has_plain).map(|mut c| Zeroizing::new(std::mem::take(&mut c.text.0))) }
     /// Every form on the clipboard, as written: pastes from it are sanitised, this isn't.
     pub fn content(&self) -> Option<ClipboardContent> { self.ticked(|_, board| board.content.clone()) }
+    /// Current monotonic revision counter, incremented on every write, clear, or secret expiry.
+    ///
+    /// Starts at `0` on a fresh [`memory()`] clipboard and advances by `1` for each change.
+    /// Failed writes (while [`fail_writes`](Self::fail_writes) is set) leave the revision
+    /// unchanged.
+    ///
+    /// ```
+    /// let board = rune::clipboard::memory();
+    /// assert_eq!(board.revision(), 0);
+    /// board.set_text("hello");
+    /// assert_eq!(board.revision(), 1);
+    /// ```
+    pub fn revision(&self) -> u64 { self.ticked(|_, board| board.revision) }
     /// Changes the clipboard as another app would.
     pub fn set_text(&self, text: &str) { self.set_content(ClipboardContent::new(text)); }
     /// Puts several forms on the clipboard as another app would, e.g. HTML from a browser or

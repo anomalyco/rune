@@ -261,3 +261,78 @@ fn a_staged_pending_copy_stays_pending_and_clear_now_is_a_no_op() {
     assert_eq!(clone.state(), SecretState::Pending);
     assert!(!clone.holds());
 }
+
+#[test]
+fn memory_clipboard_revision_tracks_writes_clears_and_failures() {
+    use crate::{col, Cx, El, Env};
+    fn view(_: &u8, _: &mut Cx<u8>) -> El { col() }
+
+    let m = memory();
+    let shared = m.clone();
+    assert_eq!(m.revision(), 0);
+    assert_eq!(shared.revision(), 0);
+
+    // Reads never advance the revision.
+    assert_eq!(m.text(), None);
+    assert_eq!(m.content(), None);
+    assert_eq!(m.revision(), 0);
+
+    // External writes advance even when the text is unchanged.
+    m.set_text("hello");
+    assert_eq!((m.revision(), shared.revision()), (1, 1));
+    m.set_text("hello");
+    assert_eq!(m.revision(), 2);
+    m.set_content(ClipboardContent::new("rich").with_html("<b>rich</b>"));
+    assert_eq!(m.revision(), 3);
+    assert_eq!(m.text().as_deref().map(String::as_str), Some("rich"));
+    assert_eq!(m.revision(), 3);
+
+    // Writes and secret clears routed through a Runtime advance the revision.
+    let mut rt = Runtime::new(0, view, (100.0, 100.0), Env::new(true, 1.0));
+    rt.use_clipboard(&m);
+    rt.frame(0.0);
+    rt.update(|_, tx| tx.copy("plain"));
+    assert_eq!(m.revision(), 4);
+    rt.update(|_, tx| tx.copy_rich(ClipboardContent::new("fmt").with_html("<i>fmt</i>")));
+    assert_eq!(m.revision(), 5);
+    rt.update(|_, tx| { tx.copy_secret("token", LONG); });
+    assert_eq!(m.revision(), 6);
+    rt.update(|_, tx| tx.clear_secret_clipboard());
+    assert_eq!(m.revision(), 7);
+
+    // Clear via SecretCopy advances once; idempotent repeat does not.
+    let held = copy(&m, "token2", LONG);
+    assert_eq!(m.revision(), 8);
+    held.clear_now();
+    assert_eq!(m.revision(), 9);
+    held.clear_now();
+    assert_eq!(m.revision(), 9);
+
+    // Failed writes leave the revision untouched.
+    m.fail_writes(Some("pasteboard denied"));
+    let failed = copy(&m, "denied", LONG);
+    assert_eq!(failed.state(), SecretState::Failed("pasteboard denied".into()));
+    assert_eq!(m.revision(), 9);
+    m.fail_writes(None);
+
+    // An expired secret clears and advances the revision when revision() is queried.
+    let _expired = copy(&m, "brief", Duration::ZERO);
+    assert_eq!(m.revision(), 11);
+    assert_eq!(m.revision(), 11);
+    assert_eq!(m.text(), None);
+}
+
+#[test]
+fn system_clipboard_revision_matches_platform_support() {
+    let first = revision();
+    let second = revision();
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        assert!(first.is_some() && second.is_some());
+        assert!(!native::worker_started(), "reading the change counter must not start the clipboard worker");
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        assert_eq!((first, second), (None, None));
+    }
+}
