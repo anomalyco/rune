@@ -47,9 +47,30 @@ pub struct ElementInfo {
     pub blur: f32,
     pub radius: f32,
     pub fill: Color,
+    /// Presented border colour, when this element has a non-zero border width.
+    pub border_color: Option<Color>,
     pub text_color: Option<Color>,
     /// Resolved typography for text, rich text and text input elements.
     pub text_style: Option<ResolvedTextStyle>,
+    /// Padding plus border `[left, top, right, bottom]` in window points: text draws inside it.
+    pub inset: [f32; 4],
+    /// Laid-out text `[width, height]` in window points (`None` for non-text elements and secure text).
+    pub text_size: Option<[f32; 2]>,
+    /// Whether this text element wraps lines ([`El::wrap`]).
+    pub wrap: bool,
+    /// Whether this text element truncates or line-clamps on purpose
+    /// ([`El::truncate`], [`El::truncate_fade`], or [`El::max_lines`]).
+    pub truncate: bool,
+    /// Whether truncation or line clamping cut or faded the text on the last frame
+    /// (`false` for secure text).
+    pub text_cut: bool,
+    /// Whether this element clips its descendants (a scroll viewport,
+    /// [`El::clip_soft`]/[`El::clip_rounded`]/[`El::clip_corners`]/[`El::clip_fade`], or an active scene mask).
+    pub clips: bool,
+    /// Axes this element scrolls along (`[x, y]`).
+    pub scroll_axes: [bool; 2],
+    /// Whether this element paints above siblings ([`El::raise`]).
+    pub raised: bool,
     pub hover: f32,
     pub press: f32,
     pub moving: bool,
@@ -81,6 +102,9 @@ pub struct ElementInfo {
     pub drag_out: bool,
     /// Its tooltip and accessibility help ([`El::help`]).
     pub help: Option<String>,
+    /// Its explicit accessibility description ([`El::description`], [`El::description_static`]),
+    /// omitting empty strings. Separate from [`Self::help`].
+    pub description: Option<String>,
     /// The part of this [`El::selectable`] text that is selected, as copying would take it.
     pub selected: Option<String>,
     /// Its outline depth ([`El::level`]).
@@ -255,6 +279,8 @@ impl RuntimeCore {
     }
 
     pub fn elements(&self) -> Vec<ElementInfo> {
+        #[cfg(test)]
+        ELEMENTS_BUILDS.with(|c| c.set(c.get() + 1));
         fn intent(n: &Node) -> u32 {
             n.live.iter().filter(|b| b.enter.is_none()).fold(0, |bits, b| bits | match b.property {
                 crate::live::Property::Offset => 1,
@@ -354,6 +380,19 @@ impl RuntimeCore {
                     j = pi;
                 }
                 let secure = n.is_secure();
+                let text_size = (!secure).then(|| {
+                    let spec = n.text.as_deref()?;
+                    if let (Some(r), Some((_, at))) = (&n.run_layout, &spec.cold.advance_in)
+                        && let Some(w) = r.advance(*at, s)
+                    {
+                        return Some([w, crate::text::spec_height(&r.layout, spec.style, s, spec.exact_lines) / s]);
+                    }
+                    let laid = n.text_layout.as_ref()?;
+                    let l = laid.view();
+                    let w = text_width(if spec.wrap { l.width() } else { l.full_width() }) / s;
+                    let h = l.spec_height(spec.style, s, spec.exact_lines) / s;
+                    Some([w, h])
+                }).flatten();
                 Some(ElementInfo {
                     trace_name: n.trace_name,
                     trace_namespace: n.trace_namespace,
@@ -382,6 +421,7 @@ impl RuntimeCore {
                     blur: if flight.is_some() { 0.0 } else { self.paint.inh_scratch.get(i).map_or(p.blur, |h| h.blur) },
                     radius: p.radius.0[0],
                     fill: self.color(n.id, P_FILL, n.vis.fill),
+                    border_color: (n.vis.border_width() > 0.0).then(|| self.color(n.id, P_BORDER, n.vis.border())),
                     text_color: paint_tracks::text_color(n)
                         .map(|c| paint_tracks::group_tint(n, self.color(n.id, P_TEXT, c), self.paint.inh_scratch.get(i).map_or(0.0, |h| h.group))),
                     text_style: n.text.as_deref().map(|spec| {
@@ -402,6 +442,14 @@ impl RuntimeCore {
                             italic: spec.style.italic,
                         }
                     }),
+                    inset: n.inset,
+                    text_size,
+                    wrap: n.text.as_ref().is_some_and(|t| t.wrap),
+                    truncate: n.text.as_ref().is_some_and(|t| t.truncate || t.truncate_fade || t.max_lines > 0),
+                    text_cut: !secure && n.text_cut(s),
+                    clips: n.scroll.is_some() || n.vis.clip.is_some() || n.vis.clip_radius.is_some() || !p.mask.is_none(),
+                    scroll_axes: [n.scroll.is_some() && n.scroll_axes.x(), n.scroll.is_some() && n.scroll_axes.y()],
+                    raised: n.vis_flags.raise(),
                     hover: if (n.focus.highlight.is_some() && self.highlight_visible(i)) || (n.focus.fill.is_some() && self.focus_ring_visible(i)) { 1.0 }
                         else { self.scene.get(n.id, P_HOVER).unwrap_or(0.0) },
                     press: self.scene.get(n.id, P_PRESS).unwrap_or(0.0),
@@ -417,6 +465,7 @@ impl RuntimeCore {
                     edit_range: n.input.as_ref().filter(|inp| inp.edit.focused && !inp.edit.is_secure()).map(|inp| [inp.edit.anchor, inp.edit.focus]),
                     drag_out: n.handlers.drag_out.is_some(),
                     help: n.help.as_deref().filter(|_| !n.help_cut || n.text_cut(s)).map(|h| crate::el::help_words(h).into_owned()),
+                    description: n.a11y.more.as_deref().and_then(|m| m.description.as_deref()).filter(|d| !d.is_empty()).map(str::to_owned),
                     selected: n.text.as_ref().filter(|t| t.selectable && !secure).and_then(|t| {
                         let (a, b) = selectable::range_in(&sel_ranges, i)?;
                         t.copy_slice(a as u32, b as u32)
@@ -443,12 +492,13 @@ impl RuntimeCore {
                 focusable: false, focused: false, focus_visible: false, inert: true, exiting: false,
                 key: Some(path.clone()), path, role: "text", label: None, text: None,
                 rect: [r.x, r.y, r.w, r.h], target: [t.x, t.y, t.w, t.h],
-                opacity: f.source_alpha, scale: 1.0, blur: 0.0, radius: 0.0, fill: Color::TRANSPARENT, text_color: None, text_style: None,
+                opacity: f.source_alpha, scale: 1.0, blur: 0.0, radius: 0.0, fill: Color::TRANSPARENT, border_color: None, text_color: None, text_style: None,
+                inset: [0.0; 4], text_size: None, wrap: false, truncate: false, text_cut: false, clips: false, scroll_axes: [false, false], raised: false,
                 hover: 0.0, press: 0.0, moving: true, parent: None,
                 visible: [r.x.max(c[0]), r.y.max(c[1]), (r.edges()[2].min(c[2]) - r.x.max(c[0])).max(0.0),
                     (r.edges()[3].min(c[3]) - r.y.max(c[1])).max(0.0)],
                 revealing: true, in_growing_row: false, scrolling: false, scrolled: [0.0; 2], virtual_extent: false, live_intent: 0, caret: None, edit_range: None, drag_out: false,
-                help: None, selected: None, level: None, expanded: None, item_selected: false, stuck: 0.0, material_fallback: false,
+                help: None, description: None, selected: None, level: None, expanded: None, item_selected: false, stuck: 0.0, material_fallback: false,
             });
         }
         self.link_elements(&mut elements);
@@ -489,6 +539,23 @@ impl RuntimeCore {
     pub fn presented(&self, key: &str) -> Option<([f32; 4], f32)> {
         let i = self.tree.selects_index(key)?;
         Some((*self.paint.drawn.get(i)?, self.paint.inh_scratch.get(i)?.opacity))
+    }
+
+    /// Authored key of the non-exiting presented focused element, or the focused inline link's
+    /// id, matching `self.elements().into_iter().find(|e| e.focused && !e.exiting).and_then(|e| e.key)`
+    /// without building the inspection list.
+    pub fn presented_focus_key(&self) -> Option<&str> {
+        let path = self.kbd.focus.path()?;
+        let (i, n) = self.tree.nodes.iter().enumerate().find(|&(i, n)| {
+            n.path == path && !self.subtree_exiting(i) && self.scene.presented(n.id).is_some()
+        })?;
+        if let Some(spec) = n.text.as_ref().filter(|t| !t.cold.links.is_empty()) {
+            let k = self.edit.link_focus()?;
+            let link = spec.cold.links.get(k)?;
+            return (!self.link_boxes_for(i, k, self.drawn_box(i)).is_empty())
+                .then_some(link.id.as_str());
+        }
+        n.key.as_deref()
     }
 
     /// The topmost element drawn at window point (`x`, `y`) in points, as of the last frame: the
@@ -533,6 +600,7 @@ impl RuntimeCore {
     }
 
     pub(super) fn run_pick_reads(&mut self, app: &mut dyn AppDriver, tx: &mut Tx) {
+        let mut elements: Option<Vec<ElementInfo>> = None;
         for read in std::mem::take(&mut tx.pick_reads) {
             match read {
                 crate::el::PickRead::Element { within, x, y, pick, f } => {
@@ -547,6 +615,13 @@ impl RuntimeCore {
                     let offset = self.text_offset_at(&key, x, y);
                     if let Some(f) = f.take() {
                         f(app.states(), offset, tx);
+                        self.commit.dirty = true;
+                    }
+                }
+                crate::el::PickRead::Elements { f } => {
+                    if let Some(f) = f.take() {
+                        let list = elements.get_or_insert_with(|| self.elements());
+                        f(app.states(), list, tx);
                         self.commit.dirty = true;
                     }
                 }
@@ -648,4 +723,17 @@ impl RuntimeCore {
 /// `form/#2/slider/#0/knob`, since the `#n` segments stand for elements without keys.
 fn keyed_suffix(path: &str, key: &str) -> bool {
     element_path::keyed_suffix_matches(path, key)
+}
+
+#[cfg(test)]
+thread_local! {
+    static ELEMENTS_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn count_elements_builds<R>(f: impl FnOnce() -> R) -> (R, usize) {
+    ELEMENTS_BUILDS.with(|c| c.set(0));
+    let out = f();
+    let count = ELEMENTS_BUILDS.with(|c| c.get());
+    (out, count)
 }

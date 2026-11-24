@@ -1095,7 +1095,8 @@ For an app's own perf log, with nothing changed about how its windows draw:
   app's input-to-encode latency.
 - **`App::on_frame_drawn(|rt: &Runtime<S>| ..)`** runs on the UI thread after each `Drawn` frame (on desktop
   windows and in the web runner, and not on unchanged or skipped frames) with the runtime as it presented that frame,
-  so an app can watch its own motion or wait for presented frames (`rt.elements()`, `rt.state`).
+  so an app can watch its own motion, query the focused presented element without building the tree
+  (`rt.presented_focus_key()`), or inspect presented frames (`rt.elements()`, `rt.state`).
   **`rune::last_input()`** is when the thread last took an input event from the platform, stamped at dispatch: input
   later than the previous frame landed in this one.
 
@@ -2874,9 +2875,9 @@ $S --script examples/settings/scripts/keycaps.json --video keys.mp4 --keys [top-
 $S --script examples/settings/scripts/keycaps.json --video keys.mov --keys --keys-theme light
 $S --script examples/settings/scripts/demo.json --start 0.12 --frames 24 --every 3 --cols 4 \
    --strip strip.png --crop 370,74,214,36 --crop 530,305,60,30     # crops stacked per frame
-$S --tree tree.json [--at T] [--settle]  # key, path, role, label, text, presented rect, target, opacity,
-                                 # radius, fill/text colour, textStyle (resolved family, size,
-                                 # weight, lineHeight, tracking, italic), hover/press, moving
+$S --tree tree.json [--at T] [--settle]  # key, path, role, label, description, text, presented rect, target,
+                                 # opacity, radius, fill/borderColor/text colour, textStyle (resolved
+                                 # family, size, weight, lineHeight, tracking, italic), hover/press, moving
 $S --trace run.jsonl             # motion-trace JSONL (the app trace format); keyed elements only
 $S --native --trace run.jsonl --frames 240  # native submission timestamps, then close the traced window
 L=target/release/launcher        # every window of a multi-window app, composited over a backdrop
@@ -3080,8 +3081,12 @@ if let Some(menu) = rt.popup_menu() {
 - Drive input with `pointer_move`, `pointer_down`/`pointer_up`, `secondary_down`/`secondary_up`,
   `key`, `paste`, and `ime`, then step the logical clock with `rt.frame(dt)` (`0.0` for an
   immediate commit, or `1.0 / 60.0` to advance animations and timers).
-- Inspect `rt.state`, `rt.elements()` (`ElementInfo`: `key`, `path`, `role`, `label`, `text`,
-  `rect`, `focused`, `exiting`, ...), `rt.accessibility_json()` / `rt.accessibility_tree()`,
+- Inspect `rt.state`, `rt.presented_focus_key()` (zero-allocation focus key query matching
+  `rt.elements()`), `rt.elements()` (`ElementInfo`: `key`, `path`, `role`, `label`,
+  `description`, `text`, `rect`, `inset`, `fill`, `border_color`, `text_color`,
+  `text_style`, `text_size`, `wrap`, `truncate`, `text_cut`, `clips`, `scroll_axes`,
+  `raised`, `focused`, `exiting`, ...), `Tx::read_elements` (deferred presented-frame element
+  reads from handlers and `poll`), `rt.accessibility_json()` / `rt.accessibility_tree()`,
   and `rt.popup_menu()` (`PopupMenu::entries()`, `selected_id()`, `find()`).
 
 ## Playground

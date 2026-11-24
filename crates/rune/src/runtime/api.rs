@@ -343,6 +343,33 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     pub fn presented_pose(&self, key: &str) -> Option<Pose> { self.core().presented_pose(key) }
 
+    /// The authored key of the non-exiting presented focused element, or the focused inline link's
+    /// id, matching `rt.elements().into_iter().find(|e| e.focused && !e.exiting).and_then(|e| e.key)`
+    /// without building the inspection list.
+    ///
+    /// Returns `None` when nothing has focus, the focused control has no key, the focused element
+    /// is exiting or not presented (such as an unmounted virtual field), or a focused inline link
+    /// has no presented line box.
+    ///
+    /// ```
+    /// use rune::{Cx, El, Env, Runtime, col, el};
+    ///
+    /// fn view(_: &(), _: &mut Cx<()>) -> El {
+    ///     col().size(120.0, 40.0).child(el().key("save").size(80.0, 32.0).focusable(true))
+    /// }
+    ///
+    /// let mut rt = Runtime::new((), view, (120.0, 40.0), Env::new(true, 1.0));
+    /// rt.frame(0.0);
+    /// assert_eq!(rt.presented_focus_key(), None);
+    /// let (x, y) = rt.find("save").unwrap();
+    /// rt.pointer_down(x, y);
+    /// rt.pointer_up(x, y);
+    /// rt.frame(0.0);
+    /// assert_eq!(rt.presented_focus_key(), Some("save"));
+    /// ```
+    #[inline(always)]
+    pub fn presented_focus_key(&self) -> Option<&str> { self.core().presented_focus_key() }
+
     #[inline(always)]
     pub(crate) fn backdrop_dark(&self) -> Option<bool> { self.core().backdrop_dark() }
 

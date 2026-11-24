@@ -186,6 +186,7 @@ impl PillStyle {
 pub(crate) type InputPasteFn = Rc<dyn Fn(crate::states::States<'_>, &crate::ClipboardContent, &mut Tx) -> bool>;
 pub(crate) type PickFn = Box<dyn FnOnce(crate::states::States<'_>, Option<crate::Picked>, &mut Tx)>;
 pub(crate) type TextOffsetFn = Box<dyn FnOnce(crate::states::States<'_>, Option<usize>, &mut Tx)>;
+pub(crate) type ElementsReadFn = Box<dyn FnOnce(crate::states::States<'_>, &[crate::ElementInfo], &mut Tx)>;
 
 #[derive(Clone)]
 pub(crate) enum PickRead {
@@ -202,12 +203,16 @@ pub(crate) enum PickRead {
         y: f32,
         f: Rc<std::cell::Cell<Option<TextOffsetFn>>>,
     },
+    Elements {
+        f: Rc<std::cell::Cell<Option<ElementsReadFn>>>,
+    },
 }
 impl std::fmt::Debug for PickRead {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Element { .. } => f.write_str("PickRead::Element"),
             Self::TextOffset { .. } => f.write_str("PickRead::TextOffset"),
+            Self::Elements { .. } => f.write_str("PickRead::Elements"),
         }
     }
 }
