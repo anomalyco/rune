@@ -281,7 +281,7 @@ impl RuntimeCore {
             // gliding box carries its rest's offset, so the frame a glide ends or
             // a flight lands places glyphs exactly as the resting frame after it. A field keeps its
             // snapped box, which its caret and selection share.
-            let zr = if scale_motion == ScaleMotion::Still && (sc - 1.0).abs() < 1e-5 && n.input.is_none() {
+            let zr = if cover.is_none() && (sc - 1.0).abs() <= 1e-5 && n.input.is_none() {
                 let by = exact_off;
                 [zr[0] + by[0], zr[1] + by[1], zr[2] + by[0], zr[3] + by[1]]
             } else {
