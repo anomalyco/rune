@@ -203,7 +203,11 @@ and `*End`). `HoverCard` accepts `.gutter(f32)` (default 4 pt), `.min_width(f32)
 open), and `.role` / `.label` for accessibility (see `rune-hover-card--placements` in the
 gallery). `scrim_tx`, `Popover::on_close_tx`, `Select::on_toggle_tx`, and `Select::on_close_tx`
 pass `&mut Tx` to overlay toggle and close callbacks so focus, scroll or announcements run in the
-same commit (see `rune-overlays--tx-callbacks`).
+same commit (see `rune-overlays--tx-callbacks`). `Select::step_closed(true)` opts a closed
+`Select` into stepping through choices with Up and Down via `on_choose` without opening the
+popup, clamping at the ends while `Alt+Down`, Space and clicking still open it (see
+`rune-select--step-closed`, and `rune-focus--keyboard` for `El::press_on_return()` and
+entering a `focus_group` from a focused container).
 
 ### Accessibility
 

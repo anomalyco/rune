@@ -362,6 +362,96 @@ pub(super) fn overlays_tx_callbacks(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
     row().gap(16.0).center_y().child(popover).child(select).child(target)
 }
 
+/// Keyboard focus features: `El::press_on_return()` on an individual button (ahead of a window
+/// `default_button()`), and entering a `focus_group` menu's items directly from its focused
+/// container via arrows, Home/End, PageUp/PageDown or typeahead.
+pub(super) fn focus_keyboard(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let last_btn = s.picked("focus-btn", "None");
+    let last_item = s.picked("focus-item", "None");
+    let buttons = col()
+        .gap(8.0)
+        .items_start()
+        .child(text("El::press_on_return()").font(k.ty.ui_medium).color(k.c.text_base))
+        .child(
+            row()
+                .gap(8.0)
+                .child(
+                    Button::new("Apply (Return)")
+                        .variant(ButtonVariant::Contrast)
+                        .on_press(|s: &mut G| { s.pick.insert("focus-btn".into(), "Apply (Return)".into()); })
+                        .build(k)
+                        .key("return-btn")
+                        .press_on_return(),
+                )
+                .child(
+                    Button::new("Ordinary (Space)")
+                        .variant(ButtonVariant::Outline)
+                        .on_press(|s: &mut G| { s.pick.insert("focus-btn".into(), "Ordinary (Space)".into()); })
+                        .build(k)
+                        .key("ordinary-btn"),
+                )
+                .child(
+                    Button::new("Default")
+                        .variant(ButtonVariant::Ghost)
+                        .on_press(|s: &mut G| { s.pick.insert("focus-btn".into(), "Default".into()); })
+                        .build(k)
+                        .key("default-btn")
+                        .default_button(),
+                ),
+        )
+        .child(text(format!("Last button: {last_btn}")).font(k.ty.small).color(k.c.text_muted));
+
+    const ITEMS: [(&str, &str); 4] = [("alpha", "Alpha"), ("alpine", "Alpine"), ("bravo", "Bravo"), ("charlie", "Charlie")];
+    let mut menu = col()
+        .key("focus-menu")
+        .role("menu")
+        .label("Actions")
+        .focus_group()
+        .focusable(true)
+        .tab_index(-1)
+        .w(220.0)
+        .padding(8.0)
+        .gap(2.0)
+        .radius(k.radius.md)
+        .fill(k.c.layer_01)
+        .outline(1.0, 0.0, k.c.border_base);
+    for (key, label) in ITEMS {
+        menu = menu.child(
+            row()
+                .key(key)
+                .role("menuitem")
+                .label(label)
+                .focusable(true)
+                .focus_highlight(k.c.hover)
+                .w_full()
+                .h(28.0)
+                .px(8.0)
+                .center_y()
+                .radius(4.0)
+                .on_press(move |s: &mut G| { s.pick.insert("focus-item".into(), label.into()); })
+                .child(text(label).font(k.ty.ui_compact).color(k.c.text_base)),
+        );
+    }
+    let group = col()
+        .gap(8.0)
+        .items_start()
+        .child(text("focus_group container entry").font(k.ty.ui_medium).color(k.c.text_base))
+        .child(
+            Button::new("Focus menu container")
+                .variant(ButtonVariant::Outline)
+                .on_press_tx(|_: &mut G, tx: &mut Tx| tx.focus("focus-menu", true))
+                .build(k)
+                .key("focus-menu-btn"),
+        )
+        .child(menu)
+        .child(
+            text(format!("Chosen item: {last_item} — focus menu, then press Down, End, or type a/c."))
+                .font(k.ty.small)
+                .color(k.c.text_muted),
+        );
+    col().gap(20.0).items_start().child(buttons).child(group)
+}
+
 static DOWNLOAD: rune::Icon = rune::Icon {
     name: "story-download",
     view: 16.0,

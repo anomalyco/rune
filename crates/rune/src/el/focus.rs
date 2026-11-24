@@ -34,6 +34,8 @@ pub(crate) struct FocusSpec {
     pub ring_for: Option<Rc<str>>,
     /// `default_button`: Return presses it.
     pub default: bool,
+    /// [`crate::El::press_on_return`]: Return presses this element while it has focus.
+    pub press_on_return: bool,
     pub highlight: Option<Color>,
     /// `focus_fill`: painted over the element while it shows keyboard focus.
     pub fill: Option<Color>,
@@ -73,6 +75,7 @@ impl crate::cold::Empty for FocusSpec {
         within_keyboard: false,
         ring_for: None,
         default: false,
+        press_on_return: false,
         highlight: None,
         fill: None,
         follows: false,
@@ -196,6 +199,30 @@ impl El {
     /// or behind a modal. A focused button presses on Space, and passes Return on to this.
     pub fn default_button(mut self) -> Self {
         self.cold_mut().focus.default = true;
+        self
+    }
+    /// Return presses this element while it has focus (as Space does), without enabling
+    /// [`Cx::web_focus`](crate::Cx::web_focus) window-wide.
+    ///
+    /// Rune follows AppKit by default: Return goes to the window's [`El::default_button`], while
+    /// Space presses the focused control. Set this on a focusable control with `on_press` that
+    /// should also activate on Return (matching the WAI-ARIA Button pattern, GTK and Win32).
+    /// While this element has focus, Return activates it ahead of any [`El::default_button`] and
+    /// ignores key repeats.
+    ///
+    /// ```
+    /// use rune::{El, el};
+    ///
+    /// struct App { count: usize }
+    /// let _btn: El = el()
+    ///     .role("button")
+    ///     .label("Apply")
+    ///     .focusable(true)
+    ///     .press_on_return()
+    ///     .on_press(|s: &mut App| s.count += 1);
+    /// ```
+    pub fn press_on_return(mut self) -> Self {
+        self.cold_mut().focus.press_on_return = true;
         self
     }
     /// A slider's or spin button's keyboard, as NSSlider's: while this element is focused, Left
