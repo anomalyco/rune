@@ -10,10 +10,12 @@ pub(super) fn is_avif(bytes: &[u8]) -> bool {
 
 #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
 pub(super) fn rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageError> {
-    check_limits(bytes)?;
+    let icc = limits::inspect(bytes)?;
     let error = |e: avif_decode::Error| ImageError(format!("AVIF: {e}"));
     let image = avif_decode::Decoder::from_avif(bytes).map_err(error)?.to_image().map_err(error)?;
-    image_to_rgba(image)
+    let (w, h, mut pixels) = image_to_rgba(image)?;
+    super::icc::convert_rgba_to_srgb(icc, &mut pixels);
+    Ok((w, h, pixels))
 }
 
 /// Validates decoded dimensions and checked RGBA8 byte size against [`crate::MAX_SIDE`] and
@@ -77,9 +79,7 @@ pub(super) fn rgba(_: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageError> {
 
 /// Validates an AVIF container and its AV1 headers against the shared image limits.
 #[cfg_attr(not(any(test, target_arch = "wasm32", feature = "avif")), allow(dead_code))]
-pub(super) fn check_limits(bytes: &[u8]) -> Result<(), ImageError> {
-    limits::check(bytes)
-}
+pub(super) fn check_limits(bytes: &[u8]) -> Result<(), ImageError> { limits::check(bytes) }
 
 /// Pre-decode ISO-BMFF and AV1 header validation so oversized or malformed AVIF inputs fail
 /// before `avif-decode` / `rav1d` or the browser allocates raster buffers.
@@ -105,7 +105,9 @@ mod limits {
         Ok(())
     }
 
-    pub(super) fn check(bytes: &[u8]) -> Result<(), ImageError> {
+    pub(super) fn check(bytes: &[u8]) -> Result<(), ImageError> { inspect(bytes).map(|_| ()) }
+
+    pub(super) fn inspect(bytes: &[u8]) -> Result<Option<&[u8]>, ImageError> {
         let mut top = BoxIter::new(bytes, 0);
         let first = top.next_box()?.ok_or_else(|| invalid("empty file"))?;
         if first.kind != *b"ftyp" { return Err(invalid("ftyp box must occur first")); }
@@ -132,27 +134,27 @@ mod limits {
             .map(|&(from, _)| from)
             .find(|&id| meta.has_alpha_aux(id));
 
+        let mut icc = None;
         for &(item_id, prop_idx) in &meta.associations {
             if item_id != primary_id && Some(item_id) != alpha_id { continue; }
-            if let Some(&Property::Ispe(w, h)) = meta.properties.get(prop_idx) {
-                check_dimensions(w, h, 4)?;
+            match meta.properties.get(prop_idx) {
+                Some(&Property::Ispe(w, h)) => check_dimensions(w, h, 4)?,
+                Some(&Property::ColrIcc(p)) if item_id == primary_id && icc.is_none() => icc = Some(p),
+                _ => {}
             }
         }
 
         let iloc = meta.iloc.ok_or_else(|| invalid("missing iloc box"))?;
         let (primary_extents, alpha_extents) = parse_iloc(iloc, primary_id, alpha_id)?;
         let primary = resolve_extents(&primary_extents, &mdats, bytes.len())?;
-        let alpha = if alpha_extents.is_empty() {
-            None
-        } else {
-            Some(resolve_extents(&alpha_extents, &mdats, bytes.len())?)
-        };
+        let alpha = (!alpha_extents.is_empty())
+            .then(|| resolve_extents(&alpha_extents, &mdats, bytes.len())).transpose()?;
 
         check_av1_bitstream(&primary, false, alpha.is_some())?;
         if let Some(alpha) = &alpha {
             check_av1_bitstream(alpha, true, false)?;
         }
-        Ok(())
+        Ok(icc)
     }
 
     struct BmffBox<'a> {
@@ -203,9 +205,10 @@ mod limits {
         Ok((data[0], flags, &data[4..]))
     }
 
-    enum Property {
+    enum Property<'a> {
         Ispe(u32, u32),
         AlphaAux,
+        ColrIcc(&'a [u8]),
         Other,
     }
 
@@ -213,7 +216,7 @@ mod limits {
         primary_item_id: Option<u32>,
         iloc: Option<&'a [u8]>,
         auxl_refs: Vec<(u32, u32)>,
-        properties: Vec<Property>,
+        properties: Vec<Property<'a>>,
         associations: Vec<(u32, usize)>,
     }
 
@@ -289,7 +292,7 @@ mod limits {
         Ok(())
     }
 
-    fn parse_iprp(data: &[u8], properties: &mut Vec<Property>, associations: &mut Vec<(u32, usize)>) -> Result<(), ImageError> {
+    fn parse_iprp<'a>(data: &'a [u8], properties: &mut Vec<Property<'a>>, associations: &mut Vec<(u32, usize)>) -> Result<(), ImageError> {
         let mut iter = BoxIter::new(data, 0);
         while let Some(b) = iter.next_box()? {
             match &b.kind {
@@ -311,6 +314,9 @@ mod limits {
                                 let urn = d.split(|&b| b == 0).next().unwrap_or(d);
                                 if urn == ALPHA_AUX_URN { Property::AlphaAux } else { Property::Other }
                             }
+                            b"colr" => p.data.split_at_checked(4)
+                                .filter(|(t, d)| matches!(*t, b"prof" | b"rICC") && !d.is_empty())
+                                .map_or(Property::Other, |(_, d)| Property::ColrIcc(d)),
                             _ => Property::Other,
                         };
                         properties.push(prop);

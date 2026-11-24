@@ -1,5 +1,5 @@
-//! Scaled raster decoding (`ImageCache::load_scaled`) and intrinsic SVG dimensions
-//! (`Image::intrinsic_size`).
+//! Scaled raster decoding (`ImageCache::load_scaled`), intrinsic SVG dimensions
+//! (`Image::intrinsic_size`), and embedded Display P3 ICC-to-sRGB colour conversion.
 
 use std::sync::Arc;
 
@@ -32,6 +32,8 @@ pub struct ImageDemo {
     target_idx: usize,
     raster_full: Option<Image>,
     raster_scaled: Option<Image>,
+    icc_untagged: Option<Image>,
+    icc_display_p3: Option<Image>,
     svg_default: Option<Image>,
     svg_scaled: Option<Image>,
     svg_capped: Option<Image>,
@@ -52,8 +54,12 @@ impl ImageDemo {
             let cache = ImageCache::new(waker);
             let png: Arc<[u8]> = encode_demo_png(256, 128).into();
             let target_pt = TARGET_PTS[self.target_idx];
+            let swatch_untagged = encode_swatch_png(160, 48, None);
+            let swatch_p3 = encode_swatch_png(160, 48, Some(&display_p3_icc_profile()));
             self.raster_full = Some(cache.load(png.clone()));
             self.raster_scaled = Some(cache.load_scaled(png.clone(), target_pt, 2.0));
+            self.icc_untagged = Some(cache.load(swatch_untagged));
+            self.icc_display_p3 = Some(cache.load(swatch_p3));
             self.svg_default = Some(cache.load(BADGE_SVG));
             self.svg_scaled = Some(cache.load_scaled(BADGE_SVG, 48.0, 2.0));
             self.svg_capped = Some(cache.load(WIDE_SVG));
@@ -64,6 +70,8 @@ impl ImageDemo {
             for img in [
                 self.raster_full.as_ref(),
                 self.raster_scaled.as_ref(),
+                self.icc_untagged.as_ref(),
+                self.icc_display_p3.as_ref(),
                 self.svg_default.as_ref(),
                 self.svg_scaled.as_ref(),
                 self.svg_capped.as_ref(),
@@ -71,7 +79,8 @@ impl ImageDemo {
             .into_iter()
             .flatten()
             {
-                let _ = img.wait();
+                // Story fixture assets decode synchronously before snapping; errors surface on the card.
+                let _decoded = img.wait();
             }
         }
     }
@@ -164,6 +173,28 @@ pub(super) fn decode(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
                 ),
         )
         .child(row().gap(12.0).child(raster_full_card).child(raster_scaled_card))
+        .child(
+            row()
+                .gap(12.0)
+                .child(image_card(
+                    k,
+                    "Untagged PNG swatches",
+                    "Raw sRGB bytes",
+                    demo.icc_untagged.as_ref(),
+                    "Untagged PNG colour swatches",
+                    160.0,
+                    48.0,
+                ))
+                .child(image_card(
+                    k,
+                    "Display P3 PNG (iCCP)",
+                    "Converted to sRGB",
+                    demo.icc_display_p3.as_ref(),
+                    "Display P3 PNG colour swatches converted to sRGB",
+                    160.0,
+                    48.0,
+                )),
+        )
         .child(svg_row)
 }
 
@@ -288,6 +319,142 @@ fn encode_demo_png(width: u32, height: u32) -> Vec<u8> {
     png
 }
 
+/// Encodes a 5-band colour swatch PNG with an optional embedded `iCCP` profile so the Display P3
+/// to sRGB colour shift is directly visible alongside the same raw bytes untagged.
+fn encode_swatch_png(width: u32, height: u32, icc: Option<&[u8]>) -> Vec<u8> {
+    const SWATCHES: [[u8; 4]; 5] = [
+        [200, 120, 60, 255],
+        [0, 200, 0, 255],
+        [30, 200, 220, 255],
+        [200, 60, 120, 255],
+        [60, 120, 200, 255],
+    ];
+    let mut scanline = Vec::with_capacity(width as usize * 4 + 1);
+    scanline.push(0); // filter: None
+    for x in 0..width {
+        let band = ((x as usize * SWATCHES.len()) / width as usize).min(SWATCHES.len() - 1);
+        scanline.extend_from_slice(&SWATCHES[band]);
+    }
+    let raw = scanline.repeat(height as usize);
+    let zlib_stored = |data: &[u8]| {
+        let mut z = Vec::with_capacity(data.len() + 32);
+        z.extend_from_slice(&[0x78, 0x01]);
+        let mut offset = 0usize;
+        while offset < data.len() {
+            let chunk_len = (data.len() - offset).min(65_535);
+            let is_final = offset + chunk_len == data.len();
+            z.push(u8::from(is_final));
+            let len16 = chunk_len as u16;
+            z.extend_from_slice(&len16.to_le_bytes());
+            z.extend_from_slice(&(!len16).to_le_bytes());
+            z.extend_from_slice(&data[offset..offset + chunk_len]);
+            offset += chunk_len;
+        }
+        let (mut s1, mut s2) = (1u32, 0u32);
+        for &b in data {
+            s1 = (s1 + u32::from(b)) % 65_521;
+            s2 = (s2 + s1) % 65_521;
+        }
+        z.extend_from_slice(&((s2 << 16) | s1).to_be_bytes());
+        z
+    };
+    let push_chunk = |out: &mut Vec<u8>, kind: &[u8; 4], body: &[u8]| {
+        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(body);
+        let mut c = !0u32;
+        for &b in kind.iter().chain(body.iter()) {
+            c ^= u32::from(b);
+            for _ in 0..8 {
+                c = (c >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(c & 1));
+            }
+        }
+        out.extend_from_slice(&(!c).to_be_bytes());
+    };
+    let mut png = Vec::with_capacity(raw.len() + 512);
+    png.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+    let mut ihdr = [0u8; 13];
+    ihdr[0..4].copy_from_slice(&width.to_be_bytes());
+    ihdr[4..8].copy_from_slice(&height.to_be_bytes());
+    ihdr[8] = 8;
+    ihdr[9] = 6;
+    push_chunk(&mut png, b"IHDR", &ihdr);
+    if let Some(profile) = icc {
+        let mut iccp = b"Display P3\0".to_vec();
+        iccp.push(0); // deflate compression method
+        iccp.extend_from_slice(&zlib_stored(profile));
+        push_chunk(&mut png, b"iCCP", &iccp);
+    }
+    push_chunk(&mut png, b"IDAT", &zlib_stored(&raw));
+    push_chunk(&mut png, b"IEND", &[]);
+    png
+}
+
+/// Minimal ICC v4.3 Display P3 RGB matrix-shaper profile (D50-adapted primaries + sRGB parametric
+/// transfer curve) built directly without extra crate dependencies.
+fn display_p3_icc_profile() -> Vec<u8> {
+    let s15f16 = |v: f64| (v * 65_536.0).round() as i32;
+    let xyz_tag = |x: f64, y: f64, z: f64| -> [u8; 20] {
+        let mut t = [0u8; 20];
+        t[0..4].copy_from_slice(b"XYZ ");
+        t[8..12].copy_from_slice(&s15f16(x).to_be_bytes());
+        t[12..16].copy_from_slice(&s15f16(y).to_be_bytes());
+        t[16..20].copy_from_slice(&s15f16(z).to_be_bytes());
+        t
+    };
+    // Parametric curve function type 3 (sRGB transfer function).
+    let mut trc = [0u8; 32];
+    trc[0..4].copy_from_slice(b"para");
+    trc[8..10].copy_from_slice(&3u16.to_be_bytes());
+    for (i, v) in [2.4, 1.0 / 1.055, 0.055 / 1.055, 1.0 / 12.92, 0.04045].into_iter().enumerate() {
+        trc[12 + i * 4..16 + i * 4].copy_from_slice(&s15f16(v).to_be_bytes());
+    }
+
+    let r_xyz = xyz_tag(0.515_121, 0.241_196, -0.001_053);
+    let g_xyz = xyz_tag(0.291_977, 0.692_245, 0.041_885);
+    let b_xyz = xyz_tag(0.157_104, 0.066_574, 0.784_073);
+    let wtpt = xyz_tag(0.964_203, 1.0, 0.824_905);
+
+    // 128-byte header + 4-byte tag count + 7 * 12-byte entries = 216 bytes before tag data.
+    const DATA_OFF: u32 = 128 + 4 + 7 * 12;
+    const TOTAL_SIZE: u32 = DATA_OFF + 4 * 20 + 32;
+    let mut icc = vec![0u8; TOTAL_SIZE as usize];
+    icc[0..4].copy_from_slice(&TOTAL_SIZE.to_be_bytes());
+    icc[8..12].copy_from_slice(&0x0430_0000u32.to_be_bytes()); // v4.3.0
+    icc[12..16].copy_from_slice(b"mntr");
+    icc[16..20].copy_from_slice(b"RGB ");
+    icc[20..24].copy_from_slice(b"XYZ ");
+    icc[36..40].copy_from_slice(b"acsp");
+    icc[64..68].copy_from_slice(&1u32.to_be_bytes()); // Relative colorimetric
+    icc[68..72].copy_from_slice(&s15f16(0.964_203).to_be_bytes());
+    icc[72..76].copy_from_slice(&s15f16(1.0).to_be_bytes());
+    icc[76..80].copy_from_slice(&s15f16(0.824_905).to_be_bytes());
+
+    let trc_off = DATA_OFF + 80;
+    let tags: [(&[u8; 4], u32, u32); 7] = [
+        (b"rXYZ", DATA_OFF, 20),
+        (b"gXYZ", DATA_OFF + 20, 20),
+        (b"bXYZ", DATA_OFF + 40, 20),
+        (b"wtpt", DATA_OFF + 60, 20),
+        (b"rTRC", trc_off, 32),
+        (b"gTRC", trc_off, 32),
+        (b"bTRC", trc_off, 32),
+    ];
+    icc[128..132].copy_from_slice(&(tags.len() as u32).to_be_bytes());
+    for (i, (sig, off, len)) in tags.into_iter().enumerate() {
+        let p = 132 + i * 12;
+        icc[p..p + 4].copy_from_slice(sig);
+        icc[p + 4..p + 8].copy_from_slice(&off.to_be_bytes());
+        icc[p + 8..p + 12].copy_from_slice(&len.to_be_bytes());
+    }
+    icc[DATA_OFF as usize..DATA_OFF as usize + 20].copy_from_slice(&r_xyz);
+    icc[DATA_OFF as usize + 20..DATA_OFF as usize + 40].copy_from_slice(&g_xyz);
+    icc[DATA_OFF as usize + 40..DATA_OFF as usize + 60].copy_from_slice(&b_xyz);
+    icc[DATA_OFF as usize + 60..DATA_OFF as usize + 80].copy_from_slice(&wtpt);
+    icc[trc_off as usize..trc_off as usize + 32].copy_from_slice(&trc);
+    icc
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,6 +465,17 @@ mod tests {
         demo.enter(true);
         assert_eq!(demo.raster_full.as_ref().unwrap().size(), Some([256, 128]));
         assert_eq!(demo.raster_scaled.as_ref().unwrap().size(), Some([64, 32]));
+        assert_eq!(demo.icc_untagged.as_ref().unwrap().size(), Some([160, 48]));
+        assert_eq!(demo.icc_display_p3.as_ref().unwrap().size(), Some([160, 48]));
+        // Verify the embedded Display P3 profile actually shifts decoded sRGB bytes vs untagged.
+        let untagged_rgba = rune::image::png_rgba8(&encode_swatch_png(160, 48, None)).unwrap();
+        let p3_rgba = rune::image::png_rgba8(&encode_swatch_png(160, 48, Some(&display_p3_icc_profile()))).unwrap();
+        assert_eq!(&untagged_rgba.as_raw()[0..4], &[200, 120, 60, 255]);
+        assert!(
+            p3_rgba.as_raw()[0] >= 212 && p3_rgba.as_raw()[2] <= 44,
+            "Display P3 swatch must convert toward sRGB (213, 115, 42..43): {:?}",
+            &p3_rgba.as_raw()[0..4],
+        );
         assert_eq!(demo.svg_default.as_ref().unwrap().size(), Some([48, 24]));
         assert_eq!(demo.svg_default.as_ref().unwrap().intrinsic_size(), Some([24.0, 12.0]));
         assert_eq!(demo.svg_scaled.as_ref().unwrap().size(), Some([96, 48]));

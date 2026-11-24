@@ -19,6 +19,7 @@ avif = ["dep:avif-decode"]
 [dependencies]
 blake3 = { workspace = true }
 image = { workspace = true, features = ["png"] }
+moxcms = { workspace = true }
 resvg = { workspace = true, optional = true }
 rune-core = { workspace = true }
 

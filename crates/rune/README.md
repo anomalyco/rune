@@ -2180,8 +2180,8 @@ For static assets, construct an `ImageCache` once with the app's setup waker:
 
 ```rust,ignore
 let cache = rune::ImageCache::new(waker);
-let icon = cache.load(png_bytes); // PNG (APNG), JPEG, GIF, WebP, BMP, ICO, AVIF (with `avif`), PNG-backed ICNS, or SVG
-let thumb = cache.load_scaled(avatar_bytes, 32.0, env.scale); // downsampled to fit 32 pt at display scale, first frame only
+let icon = cache.load(png_bytes); // PNG (APNG), JPEG, GIF, WebP, BMP, ICO, AVIF (with `avif`), PNG-backed ICNS, or SVG (embedded RGB ICC profiles convert to sRGB)
+let thumb = cache.load_scaled(avatar_bytes, 32.0, env.scale); // ICC-converted and downsampled to fit 32 pt at display scale, first frame only
 // Keep `icon` in app state; pending images paint nothing, completion wakes the app.
 el().size(32.0, 32.0).pixels(icon.pixels())
 ```

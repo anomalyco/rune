@@ -204,6 +204,9 @@ let avatar = cache.url(&user.avatar_url, 32.0, env.scale);  // size and scale ma
 
 SVG (by `Content-Type` or a `.svg`/`.svgz` path) rasterizes with Rune's renderer at the size
 asked for while preserving the document's CSS-pixel dimensions on `Image::intrinsic_size`.
+PNG, APNG, and PNG-backed ICNS bytes decoded in Rust convert embedded RGB ICC profiles to sRGB
+before downsampling and mip generation, matching the browser's colour management for formats
+decoded via `createImageBitmap`.
 `ImageCache::load_scaled(bytes, size_pt, scale)` downsamples decoded rasters to fit `size_pt × scale`
 pixels (without upscaling, first frame only) before building mips in main-thread slices, and
 rasterizes SVGs directly at that size. Images over 8192 pixels a side are refused before their
