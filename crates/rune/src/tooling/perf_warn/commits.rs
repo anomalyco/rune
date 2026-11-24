@@ -58,8 +58,10 @@ struct Meter {
     /// Frames of the scroll underway, and how many of them each site committed.
     frames: u32,
     counts: HashMap<String, u32>,
-    /// Frames in a row that committed and asked for an instant scroll.
+    /// Frames in a row that ran the view and asked for an instant scroll.
     instant: u32,
+    /// Committing measure passes that ran the app's view.
+    view_commits: u64,
     /// The elements each hover handler committed for, by where it was set, until it warns.
     hover_rows: HashMap<&'static std::panic::Location<'static>, Vec<String>>,
 }
@@ -107,8 +109,23 @@ impl CommitMeter {
         self.meter.sources.push(Source { site: format!("read {key}"), cause: Cause::Read, subject: Some(key.to_owned()), at });
     }
 
+    /// A committing measure pass ran the app's view (as opposed to a pure relayout or virtual-row
+    /// remount).
+    #[cfg(debug_assertions)]
+    #[inline(always)]
+    pub(crate) fn view_commit(&mut self) {
+        self.meter.view_commits += 1;
+    }
+
+    /// View-running commits completed so far.
+    #[cfg(debug_assertions)]
+    #[inline(always)]
+    pub(crate) fn view_commits(&self) -> u64 {
+        self.meter.view_commits
+    }
+
     /// The frame's commits are done. `scrolling`: a hand, momentum or a glide moves a viewport;
-    /// `committed`: the frame committed; `instant`: the viewport an instant scroll this frame
+    /// `committed`: the frame ran the view; `instant`: the viewport an instant scroll this frame
     /// asked to move, if any.
     #[inline(always)]
     #[cfg_attr(not(debug_assertions), allow(unused_variables))]
