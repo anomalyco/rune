@@ -27,6 +27,8 @@ pub(crate) struct PaintState {
     /// Current node painted a live animated icon (moving or waiting): prevents `PaintKeep` from
     /// freezing its quad across frames while active, without blocking sibling subtrees.
     pub(super) node_animated_icon: bool,
+    /// Last `step_motion` wrote a changed rect to a bound `El::drawn_rect_into` live value.
+    pub(in crate::runtime) drawn_rect_wrote: bool,
     /// Earliest runtime timestamp when a flat-hold animated icon resumes moving (`wake_for_motion`).
     pub(super) icon_anim_wake: Option<f64>,
     /// Mount time (runtime `t`) per `(NodeId, icon_ptr)` for finite-duration animated icons.
@@ -109,6 +111,7 @@ impl PaintState {
             animated_icons: false,
             animated_icons_shown: false,
             node_animated_icon: false,
+            drawn_rect_wrote: false,
             icon_anim_wake: None,
             icon_anim_mounts: HashMap::default(),
             scale_frame: None,
@@ -265,6 +268,7 @@ impl PaintState {
     #[inline]
     pub(in crate::runtime) fn begin_frame(&mut self) {
         self.keep.frame += 1;
+        self.drawn_rect_wrote = false;
     }
 
     #[inline]

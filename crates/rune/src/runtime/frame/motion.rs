@@ -112,7 +112,8 @@ impl RuntimeCore {
             animating |= self.build();
         }
         self.finish_keeps();
-        animating |= self.write_drawn_rects();
+        self.paint.drawn_rect_wrote = self.write_drawn_rects();
+        animating |= self.paint.drawn_rect_wrote;
         // A selection's edge scroll stepped: it follows the pointer over this layout, and shows.
         let edge = self.laid_edge_scroll(app);
         if edge.repaint { animating |= self.build(); }

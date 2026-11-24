@@ -17,6 +17,37 @@ impl RuntimeCore {
         self.needs_commit() || self.commit.relayout || !self.frame.queue.is_empty()
     }
 
+    /// Whether layout callbacks, a drawn-rect live write, or a pending commit/relayout are
+    /// waiting for another pass. Used by headless `--settle` to stop early once layout settles.
+    pub(crate) fn layout_settle_pending(&self) -> bool {
+        self.needs_commit()
+            || self.commit.relayout
+            || self.paint.drawn_rect_wrote
+            || self.frame.queue.iter().any(|a| matches!(
+                a,
+                Action::Layout(..)
+                    | Action::ScreenLayout(..)
+                    | Action::DrawnLayout(..)
+                    | Action::Visible(..)
+                    | Action::VisibleRows(..)
+                    | Action::AtBottom(..)
+                    | Action::FarFromBottom(..)
+            ))
+    }
+
+    /// Runs up to `max_passes` zero-dt passes while [`Self::layout_settle_pending`] holds,
+    /// returning the passes run and the latest animating flag.
+    pub(crate) fn settle_layout_passes(&mut self, app: &mut dyn AppDriver, max_passes: usize) -> (usize, Option<bool>) {
+        let mut animating = None;
+        for pass in 0..max_passes {
+            if !self.layout_settle_pending() {
+                return (pass, animating);
+            }
+            animating = Some(self.frame(app, 0.0));
+        }
+        (max_passes, animating)
+    }
+
     /// A live-edit patch arrived that the next frame hasn't rebuilt the view with yet.
     pub(crate) fn patch_pending(&self) -> bool {
         self.frame.hot_pending()

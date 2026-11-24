@@ -1,0 +1,1 @@
+- Headless tooling: added `--settle` (valid with `--snap` or `--tree`) to run up to 3 zero-dt passes at the capture frame until queued layout callbacks (`on_layout`, `on_layout_tx`, `on_screen_layout`, `on_drawn_layout`, `drawn_rect_into`, `on_visible`) and commits settle; default `--snap` and `--tree` without `--settle` remain unchanged at frame 0.

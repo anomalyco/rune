@@ -2591,7 +2591,7 @@ links only its window, parses none of Rune's command-line flags (every process a
 
 ```sh
 S=target/release/settings
-$S --snap out.png [--scene light] [--at 0.4] [--size 620x520] [--scale 2] [--theme dark|light]
+$S --snap out.png [--scene light] [--at 0.4] [--settle] [--size 620x520] [--scale 2] [--theme dark|light]
 $S --list-scenes            # default light dark reduced-motion toggles-off accent-pink slow
 $S --script examples/settings/scripts/toggle.json --frames 30 --start 0.1 --out frames/
 $S --script examples/settings/scripts/demo.json --video demo.mp4 [--fps 60] [--duration 3|auto]
@@ -2600,7 +2600,7 @@ $S --script examples/settings/scripts/keycaps.json --video keys.mp4 --keys [top-
 $S --script examples/settings/scripts/keycaps.json --video keys.mov --keys --keys-theme light
 $S --script examples/settings/scripts/demo.json --start 0.12 --frames 24 --every 3 --cols 4 \
    --strip strip.png --crop 370,74,214,36 --crop 530,305,60,30     # crops stacked per frame
-$S --tree tree.json [--at T]     # key, path, role, label, text, presented rect, target, opacity,
+$S --tree tree.json [--at T] [--settle]  # key, path, role, label, text, presented rect, target, opacity,
                                  # radius, fill/text colour, textStyle (resolved family, size,
                                  # weight, lineHeight, tracking, italic), hover/press, moving
 $S --trace run.jsonl             # motion-trace JSONL (the app trace format); keyed elements only
@@ -2610,6 +2610,11 @@ $L --desktop examples/launcher/backdrop.png --script examples/launcher/scripts/d
    --video desktop.mp4 --keys --pointer
 ```
 
+- **Settling layout callbacks** (`--settle`, valid with `--snap` or `--tree`): runs up to 3
+  zero-dt passes at the capture frame while layout callbacks (`on_layout`, `on_layout_tx`,
+  `on_screen_layout`, `on_drawn_layout`, `drawn_rect_into`, `on_visible`, `on_visible_rows`,
+  `on_at_bottom`, `on_far_from_bottom`) or commits remain pending, stopping early once layout
+  settles. Without `--settle`, `--snap` and `--tree` at t=0 observe true frame 0 unchanged.
 - **Scripts** are timestamped `move`, `down`, `up`, `tap` (`hold`), `double-click` (`hold`,
   `gap`, default 0.15 s between presses) and `drag` (`dx`, `dy`, `dur`) events, at `x,y` in points or at an element by `key` (or a path of keys such as `slider/knob`, where elements without keys
   between them don't count).

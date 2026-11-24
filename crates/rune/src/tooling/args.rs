@@ -61,6 +61,10 @@ pub struct Args {
     pub(crate) crop_key: Option<String>,
     /// `--whole-window`: `--snap` with `--playground` takes the whole window, not just the stage.
     pub(crate) whole_window: bool,
+    /// `--settle`: run up to 3 zero-dt passes at the `--snap`/`--tree` capture frame so layout
+    /// callbacks (`on_layout`, `on_layout_tx`, `on_screen_layout`, `on_drawn_layout`,
+    /// `drawn_rect_into`, `on_visible`) deliver and re-commit before capture.
+    pub(crate) settle: bool,
     /// `--html OUT.html`: write the scene as a static page (`tooling::html`).
     pub(crate) html: Option<PathBuf>,
     /// `--html-widths 360,640,1000`: the widths `--html` lays the page out at, each the
@@ -183,6 +187,7 @@ impl Args {
                 "--playground" => a.playground = Some(crate::playground::arg(&argv, &mut i)),
                 "--variant" => a.variant = Some(val(&mut i)),
                 "--whole-window" => a.whole_window = true,
+                "--settle" => a.settle = true,
                 "--at" => {
                     let v = val(&mut i);
                     a.at_mark = mark_time(&v);
@@ -255,14 +260,20 @@ impl Args {
             }
             i += 1;
         }
-        if a.variant.is_some() && a.playground.is_none() { die("--variant needs --playground"); }
-        if a.crop_key.is_some() && a.snap.is_none() { die("--crop KEY needs --snap"); }
-        if a.whole_window && (a.playground.is_none() || a.snap.is_none()) { die("--whole-window needs --playground and --snap"); }
-        if a.cpu_boot.is_some() && a.snap.is_none() { die("--cpu-boot needs --snap"); }
-        if a.window_script.is_some() && a.headless() { die("--window-script replays in a real window: it does not combine with a headless run (--script, --snap, --tree, ...)"); }
+        a.validate().unwrap_or_else(|e| die(e));
         // Parsed here, before any window opens: an unreadable or malformed file ends the run now.
         if a.window_script.is_some() { super::read_window_script(&a); }
         (a, extra)
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+        if self.variant.is_some() && self.playground.is_none() { return Err("--variant needs --playground"); }
+        if self.crop_key.is_some() && self.snap.is_none() { return Err("--crop KEY needs --snap"); }
+        if self.whole_window && (self.playground.is_none() || self.snap.is_none()) { return Err("--whole-window needs --playground and --snap"); }
+        if self.settle && self.snap.is_none() && self.tree.is_none() { return Err("--settle needs --snap or --tree"); }
+        if self.cpu_boot.is_some() && self.snap.is_none() { return Err("--cpu-boot needs --snap"); }
+        if self.window_script.is_some() && self.headless() { return Err("--window-script replays in a real window: it does not combine with a headless run (--script, --snap, --tree, ...)"); }
+        Ok(())
     }
 
     pub fn headless(&self) -> bool {
@@ -327,6 +338,7 @@ const HELP: &str = "usage: <app> [window]
                         one on the stage, or anywhere in the window with --whole-window)
   --at SECONDS          virtual time of the snapshot/tree (default: end of frames or script);
                         mark:NAME or mark:NAME+0.5 for a script mark's time (also --start)
+  --settle              run up to 3 zero-dt layout-callback passes before --snap/--tree capture
   --size WxH            viewport in points      --scale N   device scale (default 2)
   --theme dark|light    system appearance
   --scroll-bars MODE    scroll bars: when-scrolling (headless default), always, automatic
