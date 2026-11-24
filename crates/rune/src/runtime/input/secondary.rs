@@ -65,6 +65,19 @@ impl capture::PointerState {
 }
 
 impl RuntimeCore {
+    /// Whether node `i` or any of its ancestors is marked disabled (`El::disabled` or
+    /// `El::aria_disabled`).
+    pub(super) fn node_disabled(&self, i: usize) -> bool {
+        std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent)
+            .any(|k| self.tree.nodes[k].a11y.disabled)
+    }
+
+    /// Whether node `i` is an enabled editable text field eligible for its own field menu.
+    fn editable_field_menu(&self, i: usize) -> bool {
+        self.tree.nodes[i].input.as_ref().is_some_and(|spec| spec.access.is_some())
+            && !self.node_disabled(i)
+    }
+
     /// The single reachable editor inside a `role("textbox")` container that handles secondary
     /// presses (its own `on_secondary_press`, or its editable `field_menu`).
     fn textbox_secondary_input(&self, i: usize) -> Option<usize> {
@@ -75,8 +88,7 @@ impl RuntimeCore {
                 && (n.handlers.on_secondary_press.is_some()
                     || n.input.as_ref().is_some_and(|spec| spec.access.is_some()))
                 && self.reachable(j)
-                && !std::iter::successors(Some(j), |&p| self.tree.nodes[p].parent)
-                    .any(|k| self.tree.nodes[k].a11y.disabled)
+                && !self.node_disabled(j)
                 && std::iter::successors(n.parent, |&p| self.tree.nodes[p].parent).any(|p| p == i)
         });
         let first = inputs.next()?;
@@ -94,9 +106,12 @@ impl RuntimeCore {
         loop {
             let n = &self.tree.nodes[index];
             if self.subtree_exiting(index) || !self.allowed(index) { break; }
-            if n.handlers.on_secondary_press.is_some() || self.secondary_link_at(index, x, y).is_some() { return Some(&n.path); }
+            let disabled_input = n.input.is_some() && self.node_disabled(index);
+            if !disabled_input && (n.handlers.on_secondary_press.is_some() || self.secondary_link_at(index, x, y).is_some()) {
+                return Some(&n.path);
+            }
             // A text field's own menu (`field_menu`) wins over its ancestors'.
-            if n.input.as_ref().is_some_and(|i| i.access.is_some()) { return Some(&n.path); }
+            if self.editable_field_menu(index) { return Some(&n.path); }
             // A `role("textbox")` wrapper's padding routes secondary presses to its single editor.
             if first && let Some(input_i) = self.textbox_secondary_input(index) {
                 return Some(&self.tree.nodes[input_i].path);
@@ -207,14 +222,16 @@ impl RuntimeCore {
             capture::Secondary::Held { path, link, .. } => (path, link),
             capture::Secondary::Up | capture::Secondary::DismissRepost { .. } => return "",
         };
-        let Some(n) = self.tree.nodes.iter().find(|n| n.path == *path) else { return "" };
+        let Some(i) = self.live(path) else { return "" };
+        let n = &self.tree.nodes[i];
+        if n.input.is_some() && self.node_disabled(i) { return ""; }
         if link.is_some() || n.handlers.on_secondary_press.is_some() { return "app"; }
         // On a misspelled word or a pill with a secondary handler, Rune's own menu wins over the browser's.
         if let Some(input) = n.input.as_deref()
             && input.access.is_some()
         {
             let on_pill = input.on_pill_secondary.is_some()
-                && self.pointer.pos.and_then(|(x, y)| self.live(path).and_then(|i| self.input_pill_at(i, x, y))).is_some();
+                && self.pointer.pos.and_then(|(x, y)| self.input_pill_at(i, x, y)).is_some();
             return if on_pill || self.on_misspelled_word(path) { "app" } else { "field" };
         }
         "text"
@@ -332,11 +349,10 @@ impl RuntimeCore {
             Some(k) => self.secondary_press_link(app, &path, k, point, one),
             None => {
                 if self.selection_menu(app, &path, up.0, up.1) { return true; }
-                let n = &self.tree.nodes[i];
-                if n.handlers.on_secondary_press.is_none() && n.input.as_ref().is_some_and(|i| i.access.is_some()) {
+                if self.tree.nodes[i].handlers.on_secondary_press.is_none() && self.editable_field_menu(i) {
                     return self.field_menu(app, path, up, Some(up), one);
                 }
-                let Some(f) = n.handlers.on_secondary_press.clone() else { return false };
+                let Some(f) = self.tree.nodes[i].handlers.on_secondary_press.clone() else { return false };
                 log_event!(self, "secondary press {path}");
                 f(app.states(), point, one);
                 true
@@ -348,8 +364,7 @@ impl RuntimeCore {
     /// its menu (`field_menu`), queued.
     fn queue_field_menu(&mut self, path: &str, x: f32, y: f32) -> bool {
         let Some(i) = self.live(path) else { return false };
-        let n = &self.tree.nodes[i];
-        if n.handlers.on_secondary_press.is_some() || n.input.as_ref().is_none_or(|i| i.access.is_none()) { return false; }
+        if self.tree.nodes[i].handlers.on_secondary_press.is_some() || !self.editable_field_menu(i) { return false; }
         self.frame.queue.push(Action::FieldMenu(path.to_owned(), (x, y), Some((x, y))));
         true
     }
@@ -372,7 +387,9 @@ impl RuntimeCore {
         let [fx0, fy0, fx1, fy1] = self.drawn_box(focused);
         if let Some(active) = self.a11y_active_descendant(focused) {
             let inside = std::iter::successors(self.tree.nodes[active].parent, |&p| self.tree.nodes[p].parent).any(|p| p == focused);
-            if (inside || self.tree.nodes[focused].input.is_some())
+            let disabled_input = self.tree.nodes[focused].input.is_some() && self.node_disabled(focused);
+            if !disabled_input
+                && (inside || self.tree.nodes[focused].input.is_some())
                 && self.allowed(active)
                 && let Some(f) = self.tree.nodes[active].handlers.on_secondary_press.clone()
             {
@@ -390,15 +407,16 @@ impl RuntimeCore {
             }
         }
         let (x, y) = (fx0, fy1);
-        let n = &self.tree.nodes[focused];
-        if n.handlers.on_secondary_press.is_none() && n.input.as_ref().is_some_and(|i| i.access.is_some()) {
-            return self.field_menu(app, n.path.clone(), (x, y), None, tx);
+        if self.tree.nodes[focused].handlers.on_secondary_press.is_none() && self.editable_field_menu(focused) {
+            let path = self.tree.nodes[focused].path.clone();
+            return self.field_menu(app, path, (x, y), None, tx);
         }
         let mut index = focused;
         loop {
             let n = &self.tree.nodes[index];
             if !self.allowed(index) { return false; }
-            if let Some(f) = n.handlers.on_secondary_press.clone() {
+            let disabled_input = n.input.is_some() && self.node_disabled(index);
+            if !disabled_input && let Some(f) = n.handlers.on_secondary_press.clone() {
                 let path = n.path.clone();
                 let point = self.pointer_event(index, x, y);
                 log_event!(self, "secondary press {path}");

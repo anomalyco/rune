@@ -881,3 +881,73 @@ fn on_pill_press_on_pill_secondary_and_on_input_selection_forward_and_skip_disab
     rt.frame(1.0 / 60.0);
     assert_eq!(rt.state.sel_moves.last().map(|&(k, _, f)| (k, f > 0)), Some(("tf", true)));
 }
+
+#[test]
+fn disabled_kit_text_fields_never_open_field_menu_and_fall_through_to_ancestor() {
+    struct State {
+        ti: TextEdit,
+        ta: TextEdit,
+        tf: TextEdit,
+        under_dis_ti: TextEdit,
+        under_dis_ta: TextEdit,
+        under_dis_tf: TextEdit,
+        ancestor_hits: usize,
+    }
+
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let k = Kit::neutral(true);
+        col()
+            .w_full()
+            .h_full()
+            .padding(8.0)
+            .gap(8.0)
+            .on_secondary_press(|s: &mut State, _, _| s.ancestor_hits += 1)
+            .child(TextInput::new(&s.ti).disabled(true).on_edit(|s: &mut State| &mut s.ti).build(&k).key("ti"))
+            .child(TextArea::new(&s.ta).disabled(true).on_edit(|s: &mut State| &mut s.ta).build(&k).key("ta"))
+            .child(TextField::new("Name", &s.tf).disabled(true).on_edit(|s: &mut State| &mut s.tf).build(&k).key("tf"))
+            .child(
+                col()
+                    .disabled(true)
+                    .gap(8.0)
+                    .child(TextInput::new(&s.under_dis_ti).label("Ancestor disabled input").on_edit(|s: &mut State| &mut s.under_dis_ti).build(&k).key("anc-ti"))
+                    .child(TextArea::new(&s.under_dis_ta).label("Ancestor disabled area").on_edit(|s: &mut State| &mut s.under_dis_ta).build(&k).key("anc-ta"))
+                    .child(TextField::new("Locked", &s.under_dis_tf).on_edit(|s: &mut State| &mut s.under_dis_tf).build(&k).key("anc-tf")),
+            )
+    }
+
+    let mut rt = Runtime::new(
+        State {
+            ti: TextEdit::new("a"),
+            ta: TextEdit::new("b"),
+            tf: TextEdit::new("c"),
+            under_dis_ti: TextEdit::new("d"),
+            under_dis_ta: TextEdit::new("e"),
+            under_dis_tf: TextEdit::new("f"),
+            ancestor_hits: 0,
+        },
+        view,
+        (320.0, 520.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+
+    let suffixes = [
+        "ti/value/input",
+        "ta/input",
+        "tf/wrapper/input",
+        "anc-ti/value/input",
+        "anc-ta/input",
+        "anc-tf/wrapper/input",
+    ];
+    for (idx, suffix) in suffixes.iter().enumerate() {
+        let r = find_path_rect(&rt, suffix);
+        rclick(&mut rt, r[0] + r[2] * 0.5, r[1] + r[3] * 0.5);
+        assert!(rt.popup_menu().is_none(), "{suffix} must not open native field menu");
+        assert_eq!(rt.state.ancestor_hits, idx + 1, "{suffix} should fall through to ancestor");
+    }
+    assert!(
+        !rt.events.iter().any(|e| e.starts_with("field menu ")),
+        "disabled kit fields must never open field menu: {:?}",
+        rt.events
+    );
+}
