@@ -291,3 +291,81 @@ fn clear_for_park_drops_image_textures_and_reuploads_cleanly() {
         assert!(got.abs_diff(want) <= 1, "re-uploaded pixel {got} != {want}");
     }
 }
+
+#[test]
+fn gpu_sub_texel_image_crop_samples_own_texel_not_atlas_neighbour() {
+    use crate::pixels::ImageAtlas;
+    use crate::render::{
+        Gpu, Instance, KIND_IMAGE, NO_CLIP, Offscreen, Renderer,
+        cpu_boot::{HalfRounding, Pixels as BootPixels, Scene, Target, drift, paint},
+    };
+    use crate::text::Atlas;
+
+    let (w, h) = (32u32, 32u32);
+    let clear = [0.0, 0.0, 0.0, 1.0];
+    let gpu = Gpu::headless();
+    let half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
+
+    // Place a 16x16 red slot, then paint a 4x4 blue sub-region at (4, 4) inside it.
+    // A sub-texel crop rooted at (ox, oy) whose clamp sets hi = lo - 1 bleeds the red
+    // neighbour at lo - 1 instead of sampling the blue texel at lo.
+    let mut images = ImageAtlas::default();
+    let probe = Pixels::new();
+    probe.set(16, 16, [255, 0, 0, 255].repeat(16 * 16));
+    let placed = images.place(&probe, [16.0, 16.0]).expect("places image");
+    let page = &mut images.pages[placed.page];
+    for y in 4..8 {
+        for x in 4..8 {
+            let at = ((placed.rect[1] + y) * page.width + (placed.rect[0] + x)) as usize * 4;
+            page.data[at..at + 4].copy_from_slice(&[0, 64, 240, 255]);
+        }
+    }
+    let ox = (placed.rect[0] + 4) as f32;
+    let oy = (placed.rect[1] + 4) as f32;
+
+    let format = wgpu::TextureFormat::Bgra8Unorm;
+    let mut renderer = Renderer::new(&gpu.device, format);
+    renderer.set_srgb_blend(true);
+    renderer.upload_images(&gpu.device, &gpu.queue, &mut images);
+    let target = Offscreen::with_format(&gpu.device, w, h, format);
+    let mut atlas = Atlas::new();
+
+    for uv in [[ox, oy, 0.5, 4.0], [ox, oy, 4.0, 0.5], [ox, oy, 0.5, 0.5]] {
+        let inst = Instance {
+            rect: [4.0, 4.0, 8.0, 8.0],
+            radii: [0.0; 4],
+            fill: [0.0, 0.0, 0.0, 1.0],
+            border: [0.0; 4],
+            params: [placed.page as f32, KIND_IMAGE, 0.0, 1.0],
+            uv,
+            clip: NO_CLIP,
+            fade: [0; 4],
+        };
+        renderer.prepare_ui(&gpu.device, &gpu.queue, &mut atlas, std::slice::from_ref(&inst), (w, h));
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        renderer.draw(&mut enc, &target.view, clear);
+        target.copy(&mut enc);
+        renderer.submit(&gpu.queue, enc);
+        let gpu_px = target.read(&gpu.device);
+
+        // Centre pixel (8, 8) in BGRA must be the slot's blue [240, 64, 0, 255], not red [0, 0, 255, 255].
+        let at = ((8 * w + 8) * 4) as usize;
+        assert_eq!(
+            &gpu_px[at..at + 4],
+            &[240, 64, 0, 255],
+            "GPU sub-texel crop uv={uv:?} sampled wrong texel",
+        );
+
+        let scene = Scene::new(std::slice::from_ref(&inst), &atlas, &images, (w, h), clear)
+            .srgb_blend(true)
+            .half_rounding(half);
+        let mut cpu_px = vec![0u8; (w * h * 4) as usize];
+        paint(&scene, &mut Target::new(&mut cpu_px, w, h), 1).expect("CPU paints sub-texel image");
+        let d = drift(
+            BootPixels::bgra(&cpu_px, w, h, w as usize * 4),
+            BootPixels::bgra(&gpu_px, w, h, w as usize * 4),
+        );
+        assert_eq!(d.over_two, 0, "sub-texel uv={uv:?} CPU/GPU drift: {d:?}");
+        assert!(d.max <= 1, "sub-texel uv={uv:?} CPU/GPU max diff > 1: {d:?}");
+    }
+}
