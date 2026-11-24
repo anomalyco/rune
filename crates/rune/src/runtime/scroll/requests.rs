@@ -167,6 +167,9 @@ pub(in crate::runtime) enum Event<'a> {
     Cancel,
     /// An explicit destination wins over a reveal for its whole lifetime; holds stay.
     Destination,
+    /// `Tx::stop_scroll` on `viewport`: drop any pending reveal targeting it, leaving other
+    /// viewports' reveals and holds alone.
+    Stop { viewport: &'a str },
 }
 
 /// What placing a reveal asks of its viewport.
@@ -275,6 +278,7 @@ impl Transition for Event<'_> {
             }
             Event::Cancel => { requests.keeps.clear(); requests.reveals.clear(); }
             Event::Destination => requests.reveals.clear(),
+            Event::Stop { viewport } => requests.reveals.retain(|r| r.viewport != viewport),
         }
         Effects::none()
     }
@@ -318,9 +322,12 @@ where G: Fn(&str) -> bool, A: Fn(&str) -> bool, M: Fn(&Reveal) -> bool {
 }
 
 impl RuntimeCore {
-    /// Resolve reveals and destinations against the tree from the update that requested them.
+    /// Resolve stops, reveals and destinations against the tree from the update that requested them.
     pub(in crate::runtime) fn finish_scroll_requests(&mut self, app: &mut dyn AppDriver, tx: &mut Tx, follow: bool) {
         let destination = !tx.scroll_bottom.is_empty() || !tx.scroll_pages.is_empty() || !tx.scroll_offsets.is_empty();
+        let stops = !tx.scroll_stops.is_empty();
+        if tx.scroll_to.is_empty() && !destination && !stops && !follow { return; }
+        if stops { self.stop_scrolls(std::mem::take(&mut tx.scroll_stops)); }
         if tx.scroll_to.is_empty() && !destination && !follow { return; }
         self.drop_scroll_holds();
         for r in tx.scroll_to.drain(..) { self.reveal_row(app, &r, tx.commit.snaps()); }

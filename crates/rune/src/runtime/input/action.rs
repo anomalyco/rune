@@ -220,6 +220,7 @@ pub(crate) fn merge(tx: &mut Tx, one: Tx) {
     tx.scroll_bottom.extend(one.scroll_bottom);
     tx.scroll_pages.extend(one.scroll_pages);
     tx.scroll_offsets.extend(one.scroll_offsets);
+    tx.scroll_stops.extend(one.scroll_stops);
     tx.keep_on_screen.extend(one.keep_on_screen);
     tx.evict_memos.extend(one.evict_memos);
     tx.wakes.extend(one.wakes);

@@ -188,3 +188,23 @@ fn every_keep_release_matches_the_old_conditions() {
         FoldOpen { viewport: "b", mounted: Some("item"), end: 2 }];
     walk(INPUTS, &Old::default(), &Requests::default(), &mut Vec::new());
 }
+
+#[test]
+fn stop_drops_only_the_target_viewports_reveals_and_keeps_holds() {
+    let mut reqs = Requests::default();
+    let anchor = |v: &str| Keep { path: "item".into(), viewport: v.into(), was: 7.0, virtual_row: None, hold: None };
+    reqs.step(Event::Arrive(Request::Capture(anchor("a"))));
+    reqs.step(Event::Arrive(Request::Capture(anchor("b"))));
+    reqs.step(Event::Place { first: true, scope: None, key: "r1", viewport: "a", center: true, at_end: false, from: 0.0, to: 100.0 });
+    reqs.step(Event::Place { first: true, scope: None, key: "r2", viewport: "b", center: true, at_end: false, from: 0.0, to: 100.0 });
+
+    reqs.step(Event::Stop { viewport: "missing" });
+    assert_eq!(reqs.reveals().count(), 2);
+    assert_eq!(reqs.keeps().count(), 2);
+
+    reqs.step(Event::Stop { viewport: "a" });
+    let reveals: Vec<&str> = reqs.reveals().map(|r| r.viewport.as_str()).collect();
+    let keeps: Vec<&str> = reqs.keeps().map(|k| k.viewport.as_str()).collect();
+    assert_eq!(reveals, vec!["b"], "only viewport a's reveal was dropped");
+    assert_eq!(keeps, vec!["a", "b"], "keep_on_screen holds stay intact");
+}

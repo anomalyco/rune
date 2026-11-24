@@ -177,3 +177,32 @@ fn scroll_center_mounts_virtual_rows_and_centres_elements_and_text_highlights() 
     let mark = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("active-hit")).unwrap();
     assert!((mark.rect[1] - 24.0).abs() < 2.0, "scroll_key_to placed TextHighlight at 24pt: {mark:?}");
 }
+
+#[test]
+fn scroll_spec_default_stick_bottom_and_stop_scroll_public_api() {
+    fn split_view(_: &(), _: &mut Cx<()>) -> El {
+        let plain = (0..30).fold(col().w_full(), |c, i| c.child(el().key(format!("p{i}")).w_full().h(40.0)));
+        let log = (0..30).fold(col().w_full(), |c, i| c.child(el().key(format!("l{i}")).w_full().h(40.0)));
+        row().w_full().h_full()
+            .child(col().key("plain").w(150.0).h(200.0).scroll(ScrollSpec::default()).child(plain))
+            .child(col().key("log").w(150.0).h(200.0).scroll(ScrollSpec::stick_bottom()).child(log))
+    }
+    let mut rt = Runtime::new((), split_view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let y_of = |rt: &Runtime<()>, key: &str| {
+        rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap().rect[1]
+    };
+    assert_eq!(y_of(&rt, "p0"), 0.0, "ScrollSpec::default opens at the top");
+    assert_eq!(y_of(&rt, "l29"), 160.0, "ScrollSpec::stick_bottom opens at the bottom");
+
+    rt.update(|_, tx| tx.scroll_to("plain", 0.0, 800.0));
+    for _ in 0..4 { assert!(rt.frame(1.0 / 60.0)); }
+    let mid = y_of(&rt, "p0");
+    assert!(mid < -10.0 && mid > -750.0, "mid-glide: {mid}");
+
+    rt.update(|_, tx| tx.stop_scroll("plain"));
+    assert!(!rt.frame(1.0 / 60.0), "stop_scroll halts glide and settles idle");
+    assert_eq!(y_of(&rt, "p0"), mid, "drawn offset stays frozen");
+    assert!(!rt.frame(1.0 / 60.0));
+    assert_eq!(y_of(&rt, "p0"), mid);
+}
