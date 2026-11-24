@@ -38,7 +38,7 @@ return {
 | `ScriptOptions::start(..).around(..).around_read(..).shadows(..).text(..)` | A hook that runs with each new VM and the table its entry returned (call a setup function it hands over); hooks around entries from the UI with the app's state and transaction; elevation shadows; the base text style and the weights `regular`..`bold` name. |
 | `Sources::entry(path)` | Starts from another module than `init.luau` (`app.luau` beside it). |
 | `script.render_fn(id, version, dark, f, args)`, `script.spawn_fn(f, args, tx)`, `script.eval_fn(f, args)` | Functions a script handed the host: render one as a memoized surface, run one as a task, or call one at once without letting it wait. `script.version()` moves whenever script code runs. |
-| `script.view(cx)`, `script.surface(cx, name)` | The module's `render(view)` (or `name(view)`), memoized on the script's version: a view rebuilt for other reasons reuses it without entering the VM. |
+| `script.view(cx)`, `script.surface(cx, name)` | The module's `render(view)` (or `name(view)`), memoized on the script's version and `Cx::is_reduced_motion()`: a view rebuilt for other reasons reuses it without entering the VM, while toggling reduced motion rebuilds the surface and nested memos. Host nodes read the same flag via `NodeArgs::reduced_motion()`. |
 | `script.poll(now, tx)` | Runs finished host calls, due `task.wait`/`task.delay` deadlines and deferred tasks, then arms `Tx::wake_after` for the next deadline. With nothing due it never enters the VM. |
 | `script.reload(sources)`, `script.watch(dir)` | Hot reload: the new VM gets `loadHotState(saveHotState())`. A compile or start error keeps the running VM. |
 | `script.fire(name, data)`, `script.call(name, data)`, `script.query(name, data)` | Fires a host signal; runs an export as a task; calls an export and returns its result. |
@@ -57,19 +57,21 @@ return {
   Values after a text's props fill `{1}`, `{2}`... in its content, straight into the string the
   element keeps (`ui.text("{1} / {2}", VALUE, read, write)`). Props: `key`, `w`/`h` (points, `"full"`, or a non-negative CSS percentage string such as `"40%"`), `minW`..`maxH`, `grow`, `shrink`, `cols` (positive integer equal-width grid columns, `El::equal_columns`), `aspect` (positive finite aspect ratio, `El::aspect_ratio`), `pad`,
   `px`..`pl`, `m`..`ml`, `gap`, `align`, `justify`, `center`, `wrap`, `fill`, `hover`, `press`,
-  `border`, `borderWidth`, `outline`, `outlineWidth` (default `1.0`, `El::outline(width, 0.0, color)`), `radius`, `clip` (`true` for rectangular soft clip or a non-negative radius number for `El::clip_rounded`), `scrollY`, `scrollX`, `opacity`, `pressScale` (positive scale while held), `scale` (non-negative uniform scale), `rotate` (clockwise degrees), `origin` (`{ x?, y? }`, unset axes default to `0.5`), `offset` (`{ x?, y? }`, unset axes default to `0.0`), `raise` (`El::raise`), `matched` (non-empty shared-element flight id, `El::matched`), `matchedCrop` (boolean, `El::matched_crop`), `role` (`"none"`, `"group"`, `"region"`, `"button"`, `"link"`, `"switch"`, `"checkbox"`, `"radio"`, `"tab"`, `"tablist"`, `"list"`, `"listitem"`, `"heading"`, `"img"`, `"status"`, `"timer"`, `"alert"`, `"slider"`, `"spinbutton"`, `"textbox"`, `"progressbar"`, `"dialog"`, `"combobox"`, `"tooltip"`), `label`,
+  `border`, `borderWidth`, `outline`, `outlineWidth` (default `1.0`, `El::outline(width, 0.0, color)`), `radius`, `clip` (`true` for rectangular soft clip or a non-negative radius number for `El::clip_rounded`), `scrollY`, `scrollX`, `stickBottom`, `onScroll` (coalesced scroll callback on scroll views and `ui.virtualList`, delivering `{ kind = "scroll", key?, x, y, maxX, maxY, fy }` at `poll` only when `(offset, max)` changed, so unchanged re-renders never wake idle scripts), `opacity`, `pressScale` (positive scale while held), `scale` (non-negative uniform scale), `rotate` (clockwise degrees), `origin` (`{ x?, y? }`, unset axes default to `0.5`), `offset` (`{ x?, y? }`, unset axes default to `0.0`), `raise` (`El::raise`), `matched` (non-empty shared-element flight id, `El::matched`), `matchedCrop` (boolean, `El::matched_crop`), `role` (`"none"`, `"group"`, `"region"`, `"button"`, `"link"`, `"switch"`, `"checkbox"`, `"radio"`, `"tab"`, `"tablist"`, `"list"`, `"listitem"`, `"heading"`, `"img"`, `"status"`, `"timer"`, `"alert"`, `"slider"`, `"spinbutton"`, `"textbox"`, `"progressbar"`, `"dialog"`, `"combobox"`, `"tooltip"`), `label`,
   `help`, `helpSide`, `helpOpen` (keeps the tooltip up while true, as a `Tooltip forceOpen`), `dir` (`"ltr"`, `"rtl"` or `"auto"`), `pin`, `corners`, `shadow`, `selected`, `focusable`, `disabled`, `hoverTransition`, `hoverGroup`, `hoverGroupColor`, `revealOnHover`, `onPress`, `onMiddlePress` (a middle click: a `middle-press` event), `menuTrigger` (its `onPress` opens a menu: a mouse runs it as the button goes down, as Kobalte's `Menu.Trigger`; a key, a screen reader's Invoke or a tap runs it on the click), `onHover`, and for text `size`, `weight`, `lineHeight`, `tracking`, `color`, `mono`,
   `tabular`, `noWrap`, `truncate`, `fadeOut`, `maxLines` (non-negative integer line clamp with ellipsis; `0` shows every wrapped line), `selectable`, `textAlign`. Colours are palette names or
   `ui.hex("#rrggbb")`. Inside `view:Memo`, `matched` nodes still participate in shared-element flights (Rune does not skip matched elements during memo reuse); inside `ui.virtualList`, only rows currently built in the rendered window participate, as with `El::virtual_rows`.
 - **`view:Memo(key, version, build)`** reuses the subtree while `version` (a string, number or
-  boolean) is unchanged, without calling `build`. Its memo id, and its root's key, is `key` under
-  the script's prefix (`luau:<name>:<key>`), so scripts in one window never share a memo. **`view:Handler(fn)`** returns `fn`; handlers
-  run as tasks and receive a `UiEvent` (`kind`, `key`, `shift`, `alt`, `mod`).
+  boolean) is unchanged (and `view.reducedMotion` has not flipped), without calling `build`. Its
+  memo id, and its root's key, is `key` under the script's prefix (`luau:<name>:<key>`), so
+  scripts in one window never share a memo. **`view.dark`** and **`view.reducedMotion`** expose
+  the host's appearance and reduced-motion state. **`view:Handler(fn)`** returns `fn`; handlers
+  run as tasks and receive a `UiEvent` (`kind`, `key`, `shift`, `alt`, `mod`; or `x`, `y`, `maxX`, `maxY`, `fy` for `scroll`).
 - **`ui.each(items, key, version, build)`** returns `build(item, index)` for each item as a list
   of children, each a memo of its own on the item's key (also its node's key) and version, so a
   render rebuilds only the items whose version moved. `key` and `version` are field names or
   functions of `(item, index)`.
-- **`ui.virtualList({ count, estimatedRowHeight, version, renderRow, rowKey?, rowVersions?, onVisibleRows?, gap?, scrollY? })`**
+- **`ui.virtualList({ count, estimatedRowHeight, version, renderRow, rowKey?, rowVersions?, onVisibleRows?, onScroll?, gap?, scrollY? })`**
   is `El::virtual_rows`: `renderRow(i)` (from 1) runs only for rows entering the window, and each
   row is memoized on `version` and its entry in `rowVersions`. With `scrollY = false` it has no
   viewport of its own: it sits in a scrolling column under or among other content and builds the
@@ -114,7 +116,7 @@ finish browser-async work (a `fetch`) from its own callback through the `Complet
 
 `examples/luau-panel`: a header, a pulse driven by `task.wait`, a signal, a 1,000-row virtual
 list, and a **Props** showcase (`--scene props`) covering `maxLines`, `matched`/`matchedCrop`,
-transforms, `outline`, `raise`, rounded `clip`, `cols`, `aspect`, percentage `w`/`h`, and ARIA
-roles. `cargo run -p luau-panel --bin luau-panel` (or `-- --scene props --snap target/luau-panel-props.png`);
+transforms, `outline`, `raise`, rounded `clip`, `cols`, `aspect`, percentage `w`/`h`, ARIA
+roles, a coalesced `onScroll` indicator, and a `view.reducedMotion` readout. `cargo run -p luau-panel --bin luau-panel` (or `-- --scene props --snap target/luau-panel-props.png`);
 `cargo run -p luau-panel --bin luau-bench --profile perf` measures idle frames, memo hits, a 20-row
 rebuild, list scrolling and hot reload.

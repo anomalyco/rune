@@ -102,6 +102,7 @@ atoms! {
     OnVisibleRows = "onVisibleRows",
     OnHover = "onHover",
     OnMiddlePress = "onMiddlePress",
+    OnScroll = "onScroll",
     HoverTransition = "hoverTransition",
     HoverGroup = "hoverGroup",
     HoverGroupColor = "hoverGroupColor",
@@ -196,6 +197,7 @@ pub(crate) struct Props {
     pub(crate) key: Option<String>,
     pub(crate) on_hover: Option<Rc<Callback>>,
     pub(crate) on_middle_press: Option<Rc<Callback>>,
+    pub(crate) on_scroll: Option<Rc<Callback>>,
     pad: Option<f32>,
     sides: u8,
     role: Option<&'static str>,
@@ -233,6 +235,7 @@ impl Props {
             key: None,
             on_hover: None,
             on_middle_press: None,
+            on_scroll: None,
             pad: None,
             sides: 0,
             role: None,
@@ -261,12 +264,13 @@ impl Props {
         }
     }
 
-    /// Applies what waited for the whole table: the press, middle-click and hover handlers (`press`
-    /// is the node's `onPress`), then the props that depend on others, the text style and the key.
+    /// Applies what waited for the whole table: the press, middle-click, hover and scroll handlers
+    /// (`press` is the node's `onPress`), then the props that depend on others, the text style and
+    /// the key.
     pub(crate) fn finish(self, e: &mut El, env: &Env, is_text: bool, press: Option<Rc<Callback>>, attach: &'static Attach) {
         let press = press.filter(|_| !self.disabled);
         let middle = self.on_middle_press.filter(|_| !self.disabled);
-        let key: Option<Rc<str>> = (press.is_some() || middle.is_some() || self.on_hover.is_some()).then(|| self.key.as_deref().map(Into::into)).flatten();
+        let key: Option<Rc<str>> = (press.is_some() || middle.is_some() || self.on_hover.is_some() || self.on_scroll.is_some()).then(|| self.key.as_deref().map(Into::into)).flatten();
         if let Some(cb) = press {
             (attach.press)(e, cb, key.clone(), Rc::new([]));
             // Kobalte's `Menu.Trigger` opens on a mouse's `pointerdown`; keys and taps on the click.
@@ -278,7 +282,7 @@ impl Props {
             with(e, |e| (attach.middle)(e, cb, key.clone()));
         }
         if let Some(cb) = self.on_hover {
-            with(e, |e| (attach.hover)(e, cb, key));
+            with(e, |e| (attach.hover)(e, cb, key.clone()));
         }
         match (self.pad, self.sides) {
             (Some(p), 0) => _ = e.set_padding(p),
@@ -367,6 +371,11 @@ impl Props {
             Some((false, _)) => e.set_scroll(ScrollSpec { stick_bottom: self.stick_bottom }),
             None => e,
         };
+        if let Some(cb) = self.on_scroll
+            && self.scroll.is_some()
+        {
+            with(e, |e| (attach.scroll)(e, cb, key));
+        }
         if let Some(k) = self.key {
             e.set_key(k);
         }
@@ -658,7 +667,7 @@ impl Props {
                 })
             }
             // Read by the node that takes them; elsewhere they mean nothing.
-            Atom::OnPress | Atom::OnHover | Atom::OnMiddlePress | Atom::Count | Atom::EstimatedRowHeight | Atom::Version | Atom::RenderRow | Atom::RowKey | Atom::RowVersions | Atom::OnVisibleRows => {
+            Atom::OnPress | Atom::OnHover | Atom::OnMiddlePress | Atom::OnScroll | Atom::Count | Atom::EstimatedRowHeight | Atom::Version | Atom::RenderRow | Atom::RowKey | Atom::RowVersions | Atom::OnVisibleRows => {
                 super::unknown_prop(env, None, name)?;
             }
         }

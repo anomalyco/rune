@@ -225,7 +225,7 @@ unsafe fn build(state: *mut ffi::lua_State, base: Base, layers: Layers, children
                 let colors = env.recording.take();
                 let mut press = decoded?;
                 // The template is the node without children, words or handlers, finished and not.
-                if let (Some(key), Some(colors), None, None, false) = (template, colors, &press, p.on_hover.as_ref().or(p.on_middle_press.as_ref()), p.uncacheable) {
+                if let (Some(key), Some(colors), None, None, false) = (template, colors, &press, p.on_hover.as_ref().or(p.on_middle_press.as_ref()).or(p.on_scroll.as_ref()), p.uncacheable) {
                     let mut under = arena.get_mut(slot).clone();
                     if is_text {
                         under.set_content(String::new());
@@ -289,6 +289,11 @@ unsafe fn decode_props(state: *mut ffi::lua_State, props: c_int, env: &Env, is_t
                         Value::Func => p.on_middle_press = Some(env.reference(state, -1)),
                         Value::Nil => {}
                         other => return Err(format!("onMiddlePress must be a function, got {}", props::name(other))),
+                    },
+                    Ok(Atom::OnScroll) => match v {
+                        Value::Func => p.on_scroll = Some(env.reference(state, -1)),
+                        Value::Nil => {}
+                        other => return Err(format!("onScroll must be a function, got {}", props::name(other))),
                     },
                     Ok(atom) => p.decode_at(el, state, atom, -1, env, is_text)?,
                     Err(name) => super::unknown_prop(env, None, name)?,
