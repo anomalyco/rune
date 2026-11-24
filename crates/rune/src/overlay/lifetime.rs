@@ -251,10 +251,8 @@ impl OverlayCore {
         let dropped_gpu = self.renderer.as_mut().is_some_and(Renderer::clear_images);
         if dropped_gpu && self.release != Release::Now
             && let Some(gpu) = &self.gpu
-            && !gpu.is_lost()
         {
-            gpu.queue.submit(std::iter::empty());
-            rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
+            self.retire.retire_now(gpu, crate::time::now());
         }
     }
 
@@ -423,23 +421,24 @@ impl OverlayCore {
             }
         }
         // The device goes to the next surface rather than with this one; one another
-        // surface still draws with stays there, polled now so finished frames and this
-        // overlay's dropped surface and renderer resources retire immediately.
+        // surface still draws with stays there, polled without waiting so finished frames
+        // retire now and anything still in flight retires on a later turn.
         match (self.gpu.take(), self.renderer.take()) {
             (Some(gpu), Some(renderer)) => match Arc::try_unwrap(gpu) {
-                Ok(gpu) => crate::render::park_gpu(gpu, renderer),
+                Ok(gpu) => {
+                    self.retire.clear();
+                    crate::render::park_gpu(gpu, renderer);
+                }
                 Err(gpu) => {
                     drop(renderer);
-                    if !gpu.is_lost() {
-                        gpu.queue.submit(std::iter::empty());
-                        rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
-                    }
+                    self.retire.retire_now(&gpu, crate::time::now());
                 }
             },
             (Some(gpu), None) => {
-                if !gpu.is_lost() {
-                    gpu.queue.submit(std::iter::empty());
-                    rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
+                if Arc::strong_count(&gpu) > 1 {
+                    self.retire.retire_now(&gpu, crate::time::now());
+                } else {
+                    self.retire.clear();
                 }
             }
             (None, renderer) => drop(renderer),
