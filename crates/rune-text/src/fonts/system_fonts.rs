@@ -15,6 +15,7 @@ mod core_text;
 mod direct_write;
 #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
 mod fontconfig;
+mod installed;
 #[cfg(target_vendor = "apple")]
 use core_text as platform;
 #[cfg(windows)]
@@ -26,7 +27,10 @@ use fontconfig as platform;
 mod platform {
     pub(crate) fn family_files(_: &[&str]) -> Vec<std::path::PathBuf> { Vec::new() }
     pub(crate) fn fallback_family_files(_: &[char], _: Option<&str>) -> Vec<std::path::PathBuf> { Vec::new() }
+    pub(super) fn installed_families() -> Vec<super::installed::RawFamily> { Vec::new() }
 }
+
+pub use installed::{InstalledFamily, installed_families};
 
 // Common-script symbols can inherit the script of adjacent letters. Put these families at
 // the end of the requested family list, rather than registering only a Zyyy fallback.

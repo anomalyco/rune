@@ -9,13 +9,97 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use objc2_core_foundation::{CFDictionary, CFRange, CFRetained, CFString, CFType, CFURL, CFURLPathStyle};
-use objc2_core_text::{CTFont, CTFontDescriptor, CTFontManagerCreateFontDescriptorsFromURL, CTFontUIFontType, kCTFontFamilyNameAttribute, kCTFontURLAttribute};
+use objc2_core_foundation::{CFArray, CFDictionary, CFNumber, CFRange, CFRetained, CFString, CFType, CFURL, CFURLPathStyle};
+use objc2_core_text::{
+    CTFont, CTFontCollection, CTFontDescriptor, CTFontManagerCreateFontDescriptorsFromURL,
+    CTFontSymbolicTraits, CTFontUIFontType, kCTFontFamilyNameAttribute, kCTFontSymbolicTrait,
+    kCTFontTraitsAttribute, kCTFontURLAttribute, kCTFontVariationAxesAttribute,
+    kCTFontVariationAxisIdentifierKey, kCTFontVariationAxisMaximumValueKey,
+    kCTFontVariationAxisMinimumValueKey, kCTFontWeightTrait,
+};
 
 /// The file behind a CoreText attribute holder's `kCTFontURLAttribute`.
 fn path_of(url: Option<CFRetained<CFType>>) -> Option<PathBuf> {
     let url = url?.downcast::<CFURL>().ok()?;
     Some(PathBuf::from(url.file_system_path(CFURLPathStyle::CFURLPOSIXPathStyle)?.to_string()))
+}
+
+/// Every available public font family from CoreText's font collection, read from CoreText's
+/// descriptor metadata without walking font directories or opening font files.
+pub(super) fn installed_families() -> Vec<super::installed::RawFamily> {
+    const WGHT_TAG: i64 = u32::from_be_bytes(*b"wght") as i64;
+    let mut out = Vec::new();
+    // SAFETY: CoreText collection and descriptor attributes are read-only and retain-counted.
+    unsafe {
+        let collection = CTFontCollection::from_available_fonts(None);
+        let Some(descriptors) = collection.matching_font_descriptors() else {
+            return out;
+        };
+        let descriptors: CFRetained<CFArray<CTFontDescriptor>> = CFRetained::cast_unchecked(descriptors);
+        for i in 0..descriptors.len() {
+            let Some(descriptor) = descriptors.get(i) else { continue };
+            let Some(name) = descriptor
+                .attribute(kCTFontFamilyNameAttribute)
+                .and_then(|v| v.downcast::<CFString>().ok())
+                .map(|s| s.to_string())
+            else {
+                continue;
+            };
+            if name.is_empty() || name.starts_with('.') {
+                continue;
+            }
+            let mut monospace = false;
+            let mut weights = Vec::new();
+            if let Some(traits_raw) = descriptor.attribute(kCTFontTraitsAttribute)
+                && let Ok(traits) = traits_raw.downcast::<CFDictionary>()
+            {
+                let traits: CFRetained<CFDictionary<CFString, CFType>> = CFRetained::cast_unchecked(traits);
+                if let Some(sym) = traits
+                    .get(kCTFontSymbolicTrait)
+                    .and_then(|v| v.downcast::<CFNumber>().ok())
+                    .and_then(|n| n.as_i64().or_else(|| n.as_i32().map(i64::from)))
+                {
+                    monospace = ((sym as u32) & CTFontSymbolicTraits::TraitMonoSpace.0) != 0;
+                }
+                if let Some(weight) = traits
+                    .get(kCTFontWeightTrait)
+                    .and_then(|v| v.downcast::<CFNumber>().ok())
+                    .and_then(|n| n.as_f64())
+                {
+                    weights.push(super::installed::apple_weight_trait_to_css(weight));
+                }
+            }
+            if let Some(axes_raw) = descriptor.attribute(kCTFontVariationAxesAttribute)
+                && let Ok(axes) = axes_raw.downcast::<CFArray>()
+            {
+                let axes: CFRetained<CFArray<CFDictionary>> = CFRetained::cast_unchecked(axes);
+                for j in 0..axes.len() {
+                    let Some(axis_raw) = axes.get(j) else { continue };
+                    let axis: CFRetained<CFDictionary<CFString, CFType>> = CFRetained::cast_unchecked(axis_raw);
+                    let tag = axis
+                        .get(kCTFontVariationAxisIdentifierKey)
+                        .and_then(|v| v.downcast::<CFNumber>().ok())
+                        .and_then(|n| n.as_i64().or_else(|| n.as_i32().map(i64::from)));
+                    if tag != Some(WGHT_TAG) {
+                        continue;
+                    }
+                    let min = axis
+                        .get(kCTFontVariationAxisMinimumValueKey)
+                        .and_then(|v| v.downcast::<CFNumber>().ok())
+                        .and_then(|n| n.as_f64());
+                    let max = axis
+                        .get(kCTFontVariationAxisMaximumValueKey)
+                        .and_then(|v| v.downcast::<CFNumber>().ok())
+                        .and_then(|n| n.as_f64());
+                    if let (Some(min), Some(max)) = (min, max) {
+                        super::installed::push_weight_range(&mut weights, min as f32, max as f32);
+                    }
+                }
+            }
+            out.push(super::installed::RawFamily { name, monospace, weights });
+        }
+    }
+    out
 }
 
 /// The files of the installed families `names`, in order, each file once.
