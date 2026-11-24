@@ -183,6 +183,15 @@ A `RollingText` reads as its whole label wherever text is looked up: its row's `
 `.keep_case()` to preserve authored letter case verbatim (for example Vim-style `g` vs
 `Shift` + `G`, shown in `rune-keybind--keep-case` in the gallery).
 
+**Scroll bars.** Any `El::scroll` (or `El::scroll_x`) viewport takes `.scroll_bar(&k)` or
+`.scroll_bar_styled(style)` with zero view commits per scroll frame. `ScrollBarStyle` ships
+presets (`from_kit`, `neutral`, `scroll_view`, `native`, `menu_scroll`) and builders to
+customise thumb colour/width (`thumb`, `thumb_hover`, `width`, `hover_width`, `min_thumb`,
+`webkit_parts`), track inset (`track_inset`), optional trough fills (`track`, `track_hover`),
+and `always_visible()` to keep a bar visible whenever content overflows regardless of the
+system scroll bar preference. The gallery's `rune-scroll-bar--basic`, `rune-scroll-bar--grow`
+and `rune-scroll-bar--styled` scenes show them.
+
 ### Accessibility
 
 Every component reports what a screen reader needs through Rune's accessibility tree (Rune's

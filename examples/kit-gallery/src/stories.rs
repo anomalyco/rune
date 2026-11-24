@@ -218,6 +218,7 @@ stories! {
     "rune-popup-list--composer" => popup_list_composer,
     "rune-scroll-bar--basic" => scroll_bar_basic,
     "rune-scroll-bar--grow" => scroll_bar_grow,
+    "rune-scroll-bar--styled" => scroll_bar_styled,
     "components-file-icon--samples" => icons::file_icon_samples,
     "components-file-icon--folder" => icons::file_icon_folder,
     "ui-icon--gallery" => icons::icon_gallery,
@@ -443,7 +444,24 @@ fn scroll_bar_grow(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
         .child(scroll_feed(k, 12, Some(if s.is("more") { 600.0 } else { 0.0 })))
 }
 
+/// An always-visible thin scroll bar with custom `track_inset`, `min_thumb`, and `track` /
+/// `track_hover` trough fills.
+fn scroll_bar_styled(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let style = ScrollBarStyle::native(k.c.border_base, k.c.border_strong)
+        .inside()
+        .always_visible()
+        .track_inset(8.0)
+        .min_thumb(40.0)
+        .track(k.c.layer_02)
+        .track_hover(k.c.surface_hover);
+    scroll_feed_with(k, 24, None, style)
+}
+
 fn scroll_feed(k: &Kit, rows: usize, tail: Option<f32>) -> El {
+    scroll_feed_with(k, rows, tail, ScrollBarStyle::from_kit(k))
+}
+
+fn scroll_feed_with(k: &Kit, rows: usize, tail: Option<f32>, style: ScrollBarStyle) -> El {
     col()
         .key("panel")
         .w(360.0)
@@ -474,6 +492,6 @@ fn scroll_feed(k: &Kit, rows: usize, tail: Option<f32>) -> El {
                         .child(text(format!("{} ms", 12 + i * 7)).font(k.ty.small).color(k.c.text_muted))
                 }))
                 .children(tail.map(|h| el().key("tail").w_full().h(h)))
-                .scroll_bar(k),
+                .scroll_bar_styled(style),
         )
 }

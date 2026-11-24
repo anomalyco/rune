@@ -61,17 +61,31 @@ const PAGE_EVERY: Duration = Duration::from_millis(60);
 /// its next commit.
 const KEPT: usize = 256;
 
-/// How a scroll bar's thumb looks, at rest and while the pointer is over the bar or holds the
-/// thumb: `viewport.scroll_bar_styled(ScrollBarStyle::from_kit(&k).thumb_hover(k.c.border_hover))`.
+/// How a scroll bar's thumb and optional track look, at rest and while the pointer is over the
+/// bar or holds the thumb: `viewport.scroll_bar_styled(ScrollBarStyle::from_kit(&k).thumb_hover(k.c.border_hover))`.
 /// Built from a kit by [`ScrollBarStyle::from_kit`] or [`ScrollBarStyle::scroll_view`], or
 /// without one by [`ScrollBarStyle::neutral`]; each builder overrides one thing.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScrollBarStyle {
     thumb: Color,
     thumb_hover: Color,
+    track_fill: Option<Color>,
+    track_hover: Option<Color>,
     width: f32,
     hover_width: f32,
     track: Track,
+}
+
+/// Whether the scroll bar follows the system preference, stays an overlay, or stays always shown
+/// while content overflows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShowMode {
+    /// Follow [`rune::system_scroll_bars`] and [`rune::system_scroller_overlay`].
+    System,
+    /// Overlaid and faded at rest whatever the system preference.
+    Overlay,
+    /// Always shown whenever content overflows, whatever the system preference.
+    Always,
 }
 
 /// Where the thumb runs and when it shows.
@@ -87,8 +101,8 @@ struct Track {
     /// transparent` on a Chromium thumb): the thumb is sized and placed on the track with it, and
     /// drawn without it.
     border: f32,
-    /// Overlaid and faded at rest whatever the system preference.
-    overlay: bool,
+    /// How the bar's visibility relates to the system preference.
+    show: ShowMode,
     /// The strip sits beside the viewport, in room the caller leaves for it, rather than over
     /// its edge.
     gutter: bool,
@@ -123,7 +137,7 @@ const KIT_TRACK: Track = Track {
     inset: INSET,
     min_thumb: MIN_THUMB,
     border: 0.0,
-    overlay: false,
+    show: ShowMode::System,
     gutter: false,
     x: false,
     thumb_only: false,
@@ -148,7 +162,7 @@ const SCROLL_VIEW_TRACK: Track = Track {
     inset: 8.0,
     min_thumb: 32.0,
     border: 0.0,
-    overlay: true,
+    show: ShowMode::Overlay,
     gutter: false,
     x: false,
     thumb_only: true,
@@ -175,7 +189,7 @@ const NATIVE_TRACK: Track = Track {
     inset: 4.0,
     min_thumb: 32.0,
     border: 2.0,
-    overlay: true,
+    show: ShowMode::Overlay,
     gutter: true,
     x: false,
     thumb_only: false,
@@ -221,14 +235,30 @@ impl ScrollBarStyle {
     /// The kit's thumb: `border_base` and 6 points wide at rest, `border_strong` and 10 points
     /// under the pointer.
     pub fn from_kit(k: &Kit) -> Self {
-        Self { thumb: k.c.border_base, thumb_hover: k.c.border_strong, width: THUMB, hover_width: THUMB_HOVER, track: KIT_TRACK }
+        Self {
+            thumb: k.c.border_base,
+            thumb_hover: k.c.border_strong,
+            track_fill: None,
+            track_hover: None,
+            width: THUMB,
+            hover_width: THUMB_HOVER,
+            track: KIT_TRACK,
+        }
     }
 
     /// `@opencode/ui`'s ScrollView thumb: always an overlay, hidden at rest and shown while the
     /// pointer is over the area or it scrolls; a 4 point `border_muted` pill that turns
     /// `border_strong` under the pointer or while dragged.
     pub fn scroll_view(k: &Kit) -> Self {
-        Self { thumb: k.c.border_muted, thumb_hover: k.c.border_strong, width: 4.0, hover_width: 4.0, track: SCROLL_VIEW_TRACK }
+        Self {
+            thumb: k.c.border_muted,
+            thumb_hover: k.c.border_strong,
+            track_fill: None,
+            track_hover: None,
+            width: 4.0,
+            hover_width: 4.0,
+            track: SCROLL_VIEW_TRACK,
+        }
     }
 
     /// `@opencode/ui`'s `scrollbar.css`, the scroll bar of every plain `overflow: auto` box in
@@ -239,7 +269,15 @@ impl ScrollBarStyle {
     /// is over the thumb or drags it. It shows and hides at once. Pass `border_muted` and
     /// `border_strong`.
     pub fn native(thumb: Color, thumb_hover: Color) -> Self {
-        Self { thumb, thumb_hover, width: 4.0, hover_width: 4.0, track: NATIVE_TRACK }
+        Self {
+            thumb,
+            thumb_hover,
+            track_fill: None,
+            track_hover: None,
+            width: 4.0,
+            hover_width: 4.0,
+            track: NATIVE_TRACK,
+        }
     }
 
     /// `@opencode/ui`'s MenuScroll thumb, for menus, popovers and dialog lists such as the
@@ -247,7 +285,15 @@ impl ScrollBarStyle {
     /// scrolls (and 800 ms after) or the thumb is held or under the pointer, and `thumb_hover`
     /// under the pointer or held. Pass `border_muted` and `border_strong`.
     pub fn menu_scroll(thumb: Color, thumb_hover: Color) -> Self {
-        Self { thumb, thumb_hover, width: 4.0, hover_width: 4.0, track: MENU_SCROLL_TRACK }
+        Self {
+            thumb,
+            thumb_hover,
+            track_fill: None,
+            track_hover: None,
+            width: 4.0,
+            hover_width: 4.0,
+            track: MENU_SCROLL_TRACK,
+        }
     }
 
     /// A [`Self::native`] bar over the viewport's own end edge, in room its content leaves there,
@@ -286,9 +332,10 @@ impl ScrollBarStyle {
         self
     }
 
-    /// How thick the strip beside the viewport is, for the room a [`Self::native`] bar takes.
+    /// How thick the strip beside the viewport is, for the room a [`Self::native`] bar takes
+    /// ([`TRACK`], the preset's own strip, or wider for a thumb too wide to sit in it).
     pub fn strip(&self) -> f32 {
-        self.track()
+        self.track.strip.max(self.widest() + 2.0 * self.track.edge)
     }
 
     /// The kit's thumb on Rune's neutral light or dark tokens, for apps without a kit.
@@ -305,6 +352,61 @@ impl ScrollBarStyle {
     /// The thumb's colour while the pointer is over the bar or holds the thumb.
     pub fn thumb_hover(mut self, c: Color) -> Self {
         self.thumb_hover = c;
+        self
+    }
+
+    /// Paints a trough fill behind the thumb at rest (CSS `::-webkit-scrollbar-track { background }`).
+    /// Without [`Self::track_hover`], the same colour stays while hovered; by default no trough is
+    /// drawn.
+    ///
+    /// ```ignore
+    /// let style = ScrollBarStyle::native(k.c.border_base, k.c.border_strong)
+    ///     .always_visible()
+    ///     .track(k.c.layer_02);
+    /// ```
+    pub fn track(mut self, c: Color) -> Self {
+        self.track_fill = Some(c);
+        self
+    }
+
+    /// Paints a trough fill while the pointer is over the scroll bar strip or dragging it (CSS
+    /// `::-webkit-scrollbar-track:hover { background }`). Pair with [`Self::track`] for a rest and
+    /// hover pair, or set alone to show a trough only on hover.
+    ///
+    /// ```ignore
+    /// let style = ScrollBarStyle::native(k.c.border_base, k.c.border_strong)
+    ///     .always_visible()
+    ///     .track(k.c.layer_02)
+    ///     .track_hover(k.c.surface_hover);
+    /// ```
+    pub fn track_hover(mut self, c: Color) -> Self {
+        self.track_hover = Some(c);
+        self
+    }
+
+    /// Keeps the scroll bar visible whenever its content overflows, overriding overlay presets
+    /// ([`Self::native`], [`Self::scroll_view`], [`Self::menu_scroll`]) and the system "Show
+    /// scroll bars" preference ([`rune::ScrollBars`]). The bar still hides when the content fits.
+    ///
+    /// ```ignore
+    /// let style = ScrollBarStyle::native(k.c.border_muted, k.c.border_strong)
+    ///     .inside()
+    ///     .always_visible();
+    /// ```
+    pub fn always_visible(mut self) -> Self {
+        self.track.show = ShowMode::Always;
+        self
+    }
+
+    /// Sets the track's gap from both ends of the viewport, in points (clamped at 0), without
+    /// changing the strip width, thumb width or clear border (CSS
+    /// `::-webkit-scrollbar-track { margin }`).
+    ///
+    /// ```ignore
+    /// let style = ScrollBarStyle::from_kit(&k).track_inset(4.0).min_thumb(40.0);
+    /// ```
+    pub fn track_inset(mut self, inset: f32) -> Self {
+        self.track.inset = inset.max(0.0);
         self
     }
 
@@ -357,11 +459,6 @@ impl ScrollBarStyle {
     fn widest(&self) -> f32 {
         self.width.max(self.hover_width)
     }
-
-    /// The press strip: [`TRACK`] (or the look's own), or wider for a thumb too wide to sit in it.
-    fn track(&self) -> f32 {
-        self.track.strip.max(self.widest() + 2.0 * self.track.edge)
-    }
 }
 
 /// What one scroll bar keeps across rebuilds: where its viewport stands, its visibility state,
@@ -376,8 +473,10 @@ struct Bar {
     press: Cell<Grip<BarPress>>,
     /// The pointer is near the right edge, where it reveals an overlay bar.
     near: Cell<bool>,
-    /// The pointer is over the track.
+    /// The pointer is over the thumb (or anywhere on the strip when the style widens on strip hover).
     over: Cell<bool>,
+    /// The pointer is over the track strip while the bar is shown.
+    over_track: Cell<bool>,
     /// The pointer is over the bar's own area (kept while content fits, so an area-revealed bar
     /// shows as soon as the content overflows, as CSS `:hover::-webkit-scrollbar-thumb` does).
     inside: Cell<bool>,
@@ -393,6 +492,7 @@ struct Bar {
     /// The thumb drawn in its slot, against the slot's right edge.
     thumb: Live<[f32; 4]>,
     fill: Live<Color>,
+    track_fill: Live<Color>,
     opacity: Live<f32>,
 }
 
@@ -418,6 +518,7 @@ fn kept(area_path: &str) -> Rc<Bar> {
                     press: Cell::new(Grip::Idle),
                     near: Cell::new(false),
                     over: Cell::new(false),
+                    over_track: Cell::new(false),
                     inside: Cell::new(false),
                     target: Cell::new(false),
                     style: Cell::new(None),
@@ -426,6 +527,7 @@ fn kept(area_path: &str) -> Rc<Bar> {
                     slot: Live::new([0.0; 4]),
                     thumb: Live::new([0.0; 4]),
                     fill: Live::new(Color::TRANSPARENT),
+                    track_fill: Live::new(Color::TRANSPARENT),
                     opacity: Live::new(1.0),
                 })
             })
@@ -510,7 +612,7 @@ impl Bar {
     fn thumb_rect(&self, h: f32) -> [f32; 4] {
         let style = self.style();
         let w = if self.wide() { style.hover_width } else { style.width };
-        let (slot, end) = if style.track.thumb_only { (style.track(), style.track.edge) } else { (style.widest(), 0.0) };
+        let (slot, end) = if style.track.thumb_only { (style.strip(), style.track.edge) } else { (style.widest(), 0.0) };
         self.flowed(turned(&style.track, [slot - end - w, 0.0, w, h]), if style.track.x { h } else { slot })
     }
 
@@ -538,8 +640,8 @@ impl Bar {
         let t = style.track;
         let a = t.along();
         let across = at.viewport[1 - a] - t.end;
-        let from = if t.gutter { across } else { across - style.track() };
-        self.flowed(turned(&t, [from, t.top + t.inset, style.track(), len]), at.viewport[0])
+        let from = if t.gutter { across } else { across - style.strip() };
+        self.flowed(turned(&t, [from, t.top + t.inset, style.strip(), len]), at.viewport[0])
     }
 
     fn thumb_fill(&self) -> Color {
@@ -547,10 +649,25 @@ impl Bar {
         if self.wide() { style.thumb_hover } else { style.thumb }
     }
 
-    /// Widens or narrows the thumb, and changes its colour, after the pointer or a press changed.
+    fn track_hovered(&self) -> bool {
+        self.over_track.get() || self.pressed()
+    }
+
+    fn track_fill_color(&self) -> Color {
+        let style = self.style();
+        if self.track_hovered() {
+            style.track_hover.or(style.track_fill).unwrap_or(Color::TRANSPARENT)
+        } else {
+            style.track_fill.unwrap_or(Color::TRANSPARENT)
+        }
+    }
+
+    /// Widens or narrows the thumb, and changes thumb and track colours, after the pointer or a
+    /// press changed.
     fn widen(&self) {
         self.thumb.set(self.thumb_rect(self.thumb_len()));
         self.fill.set(self.thumb_fill());
+        self.track_fill.set(self.track_fill_color());
     }
 
     /// Takes the style a view built the bar with; a new one lands at once.
@@ -559,6 +676,7 @@ impl Bar {
             return;
         }
         self.fill.snap(self.thumb_fill());
+        self.track_fill.snap(self.track_fill_color());
         let at = self.pos.get();
         let (len, shows) = track_len(at, &style.track);
         let (top, h) = style.track.pill(thumb_along(at, len.max(0.0), style.track.min_thumb, style.track.along(), style.track.pixels));
@@ -572,8 +690,8 @@ impl Bar {
     fn slot_rect(&self, top: f32, h: f32) -> [f32; 4] {
         let style = self.style();
         let t = style.track;
-        let within = if t.x { track_len(self.pos.get(), &t).0.max(0.0) } else { style.track() };
-        let (start, width) = if t.thumb_only { (0.0, style.track()) } else { (style.track() - t.edge - style.widest(), style.widest()) };
+        let within = if t.x { track_len(self.pos.get(), &t).0.max(0.0) } else { style.strip() };
+        let (start, width) = if t.thumb_only { (0.0, style.strip()) } else { (style.strip() - t.edge - style.widest(), style.widest()) };
         self.flowed(turned(&t, [start, top, width, h]), within)
     }
 
@@ -635,8 +753,8 @@ impl Bar {
         let a = t.along();
         // The pointer and viewport in a vertical bar's terms: `across` the bar, `along` it.
         let (w, h_all) = (at.viewport[1 - a], at.viewport[a]);
-        let gutter = if t.gutter { style.track() } else { 0.0 };
-        let track = style.track();
+        let gutter = if t.gutter { style.strip() } else { 0.0 };
+        let track = style.strip();
         let bar_end = w + gutter - t.end;
         // Where the track starts down the viewport.
         let lo = t.top + t.inset;
@@ -648,16 +766,20 @@ impl Bar {
         let on_thumb = |(across, along): (f32, f32)| in_strip(across, along) && (!t.area_reveals || (lo + top..=lo + top + h).contains(&along));
         // A bar its hover target reveals shows here only under the pointer on its thumb, which
         // belongs to the target as a ScrollView's thumb mounted in the target's track does.
+        let seen = self.state.get().seen(self.last_now.get());
         let near = shows
             && p.is_some_and(|(across, along)| match (t.targeted || t.scroll_only, t.area_reveals) {
                 // A scroll-only thumb holds while the pointer is on it as it shows.
-                _ if t.scroll_only => on_thumb((across, along)) && (self.near.get() || self.last_now.get() < self.state.get().pulse_until()),
+                _ if t.scroll_only => on_thumb((across, along)) && (self.near.get() || seen),
                 (true, _) => on_thumb((across, along)),
                 (false, true) => (0.0..=w + gutter).contains(&across) && (0.0..=h_all).contains(&along),
                 (false, false) => across >= bar_end - REVEAL.max(track) && across <= bar_end && (lo..=lo + len).contains(&along),
             });
         let over = near && p.is_some_and(on_thumb);
-        if self.over.replace(over) != over {
+        let over_track = shows && (near || seen) && p.is_some_and(|(across, along)| in_strip(across, along));
+        let over_changed = self.over.replace(over) != over;
+        let track_changed = self.over_track.replace(over_track) != over_track;
+        if over_changed || track_changed {
             self.widen();
         }
         self.reveal(|| self.near.set(near));
@@ -692,7 +814,7 @@ impl Bar {
 
     /// The pointer entered or left the bar's own area.
     fn area_hover(&self, inside: bool) {
-        if !inside && self.over.replace(false) {
+        if !inside && (self.over.replace(false) | self.over_track.replace(false)) {
             self.widen();
         }
         self.reveal(|| {
@@ -858,7 +980,11 @@ pub fn scroll_bar(k: &Kit, area: &str, key: &str, viewport: El) -> El {
 }
 
 fn attach(style: ScrollBarStyle, key: &str, outer: El, viewport: El) -> El {
-    let overlay = style.track.overlay || rune::system_scroll_bars().is_overlay(rune::system_scroller_overlay());
+    let overlay = match style.track.show {
+        ShowMode::Always => false,
+        ShowMode::Overlay => true,
+        ShowMode::System => rune::system_scroll_bars().is_overlay(rune::system_scroller_overlay()),
+    };
     let jumps = rune::system_scroller_jumps();
     let key = key.to_owned();
     let viewport = viewport.bind_path(move |viewport_path, patch| {
@@ -883,9 +1009,12 @@ fn attach(style: ScrollBarStyle, key: &str, outer: El, viewport: El) -> El {
             // A wheel over the bar is the viewport's, the track standing beside it rather than in it, on
             // either axis: a sideways wheel over a table's bar scrolls the table, and a vertical wheel
             // over it chains on up from the table to the pane that holds it.
-            let track = el().key("scroll-bar").absolute(0.0, 0.0).live_rect(&bar.track)
+            let mut track = el().key("scroll-bar").absolute(0.0, 0.0).live_rect(&bar.track)
                 .live_opacity(bar.opacity.smooth_with(style.track.enter).rest_with(style.track.leave)).a11y_hidden()
                 .wheel_scrolls(follows);
+            if style.track_fill.is_some() || style.track_hover.is_some() {
+                track = track.live_fill(bar.track_fill.smooth(style.track.tint));
+            }
             // The transparent area beyond a ScrollView/MenuScroll thumb belongs to the viewport. A
             // press there must not capture a drag, swallow a row's click, page or start a repeat timer.
             let track = if style.track.thumb_only { track.child(slot.on_drag_any(on_drag)) } else { track.on_drag_any(on_drag).child(slot) };

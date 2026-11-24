@@ -503,3 +503,106 @@ fn escaped_viewport_keys_and_moved_memo_scroll_bars_target_their_own_viewport() 
     frames(&mut rt, 2);
     assert!(scrolled_in(&rt, "#0/p2/", "vp") > 100.0, "dragging moved memo bar scrolls its new path");
 }
+
+#[test]
+fn track_inset_adjusts_thumb_travel_endpoints_without_changing_thumb_width() {
+    fn inset_view(inset: &f32, _: &mut rune::Cx<f32>) -> El {
+        let k = Kit::neutral(true);
+        let style = ScrollBarStyle::from_kit(&k).always_visible().track_inset(*inset);
+        col().size(200.0, 100.0).child(
+            col()
+                .key("scroll")
+                .w_full()
+                .h(100.0)
+                .scroll(rune::ScrollSpec { stick_bottom: false })
+                .child(col().children((0..20).map(|i| el().key(format!("r{i}")).w_full().h(20.0))))
+                .scroll_bar_styled(style),
+        )
+    }
+
+    // Normal inset: track starts at 10 pt, ends at 90 pt, thumb width unchanged.
+    let mut rt = rune::Runtime::new(10.0f32, inset_view, (200.0, 100.0), rune::Env::new(true, 1.0));
+    frames(&mut rt, 2);
+    assert_eq!(rect(&rt, "scroll-bar"), [186.0, 10.0, TRACK, 80.0]);
+    let t0 = rect(&rt, "thumb");
+    assert_eq!((t0[1], t0[2], t0[3]), (10.0, THUMB, MIN_THUMB), "top at inset, width unchanged");
+    rt.wheel(100.0, 50.0, -10_000.0);
+    frames(&mut rt, 20);
+    let t_end = rect(&rt, "thumb");
+    assert_eq!(t_end[1] + t_end[3], 90.0, "bottom stops at viewport - inset");
+
+    // Edge: zero and negative clamp to 0 (flush to both ends).
+    for inset in [0.0f32, -8.0] {
+        let mut rt = rune::Runtime::new(inset, inset_view, (200.0, 100.0), rune::Env::new(true, 1.0));
+        frames(&mut rt, 2);
+        assert_eq!(rect(&rt, "scroll-bar"), [186.0, 0.0, TRACK, 100.0]);
+        assert_eq!(rect(&rt, "thumb")[1], 0.0);
+    }
+
+    // Edge: huge inset leaves less than min_thumb, hiding the bar cleanly.
+    let mut rt = rune::Runtime::new(60.0f32, inset_view, (200.0, 100.0), rune::Env::new(true, 1.0));
+    frames(&mut rt, 2);
+    assert_eq!(rect(&rt, "scroll-bar")[3], 0.0);
+    assert_eq!(rect(&rt, "thumb")[3], 0.0);
+
+    // Preserves webkit_parts strip width and thumb border while overriding only track inset.
+    let parts = ScrollBarStyle::native(Color::WHITE, Color::WHITE)
+        .webkit_parts(10.0, 2.0, 4.0)
+        .track_inset(8.0);
+    assert_eq!(parts.strip(), 10.0);
+    assert_eq!((parts.width, parts.hover_width, parts.track.border, parts.track.inset), (6.0, 6.0, 2.0, 8.0));
+}
+
+#[test]
+fn always_visible_track_inset_and_track_fill_work_in_rtl_and_horizontal() {
+    const TROUGH: Color = Color { r: 0.2, g: 0.2, b: 0.2, a: 1.0 };
+
+    // Vertical RTL: bar sits on the left edge with track inset and trough fill.
+    fn rtl_view(_: &(), _: &mut rune::Cx<()>) -> El {
+        let style = ScrollBarStyle::native(Color::WHITE, Color::WHITE)
+            .inside()
+            .always_visible()
+            .track_inset(10.0)
+            .track(TROUGH);
+        col().size(200.0, 100.0).dir(rune::Direction::Rtl).child(
+            col()
+                .key("scroll")
+                .w_full()
+                .h(100.0)
+                .scroll(rune::ScrollSpec { stick_bottom: false })
+                .child(col().children((0..20).map(|i| el().key(format!("r{i}")).w_full().h(20.0))))
+                .scroll_bar_styled(style),
+        )
+    }
+    let mut rt = rune::Runtime::new((), rtl_view, (200.0, 100.0), rune::Env::new(true, 1.0));
+    frames(&mut rt, 2);
+    let bar = info(&rt, "scroll-bar");
+    assert_eq!(bar.rect, [0.0, 10.0, 8.0, 80.0], "RTL vertical track sits on left edge, inset 10 pt");
+    assert_eq!(bar.opacity, 1.0);
+    assert_eq!(bar.fill, TROUGH);
+
+    // Horizontal: bar sits along the bottom edge, inset horizontally at both ends.
+    fn horiz_view(_: &(), _: &mut rune::Cx<()>) -> El {
+        let style = ScrollBarStyle::native(Color::WHITE, Color::WHITE)
+            .inside()
+            .horizontal()
+            .always_visible()
+            .track_inset(12.0)
+            .track(TROUGH);
+        col().size(200.0, 100.0).child(
+            rune::row()
+                .key("hscroll")
+                .w_full()
+                .h(100.0)
+                .scroll_x()
+                .child(el().key("wide").w(600.0).h(100.0))
+                .scroll_bar_styled(style),
+        )
+    }
+    let mut rt = rune::Runtime::new((), horiz_view, (200.0, 100.0), rune::Env::new(true, 1.0));
+    frames(&mut rt, 2);
+    let bar = info(&rt, "scroll-bar");
+    assert_eq!(bar.rect, [12.0, 92.0, 176.0, 8.0], "horizontal track inset 12 pt from both ends");
+    assert_eq!(bar.opacity, 1.0);
+    assert_eq!(bar.fill, TROUGH);
+}

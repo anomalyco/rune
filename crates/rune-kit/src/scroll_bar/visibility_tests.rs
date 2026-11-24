@@ -465,3 +465,228 @@ fn scroll_view_bar_fade_rests_at_exactly_zero() {
     assert!(fading, "the bar faded out");
     assert_eq!(last, Some(0.0), "the last frame drawn shows the bar at exactly 0");
 }
+
+#[test]
+fn always_visible_keeps_native_and_preset_bars_shown_when_overflowing_and_hidden_when_fitting() {
+    const THUMB_C: Color = Color { r: 0.7, g: 0.7, b: 0.7, a: 1.0 };
+    const HOVER_C: Color = Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
+
+    #[derive(Clone, Copy)]
+    enum Preset { NativeAlways, NativeDefault, KitAlways, MenuAlways }
+
+    fn pane(s: &(usize, Preset), _: &mut rune::Cx<(usize, Preset)>) -> El {
+        let k = Kit::neutral(true);
+        let style = match s.1 {
+            Preset::NativeAlways => ScrollBarStyle::native(THUMB_C, HOVER_C).inside().always_visible(),
+            Preset::NativeDefault => ScrollBarStyle::native(THUMB_C, HOVER_C).inside(),
+            Preset::KitAlways => ScrollBarStyle::from_kit(&k).always_visible(),
+            Preset::MenuAlways => ScrollBarStyle::menu_scroll(THUMB_C, HOVER_C).always_visible(),
+        };
+        col().size(200.0, 100.0).child(
+            col()
+                .key("scroll")
+                .w_full()
+                .h(100.0)
+                .scroll(rune::ScrollSpec { stick_bottom: false })
+                .child(col().children((0..s.0).map(|i| el().key(format!("r{i}")).w_full().h(20.0))))
+                .scroll_bar_styled(style),
+        )
+    }
+
+    // 1. native().always_visible() stays opacity 1.0 under WhenScrolling and Automatic+trackpad,
+    //    goes idle with zero redraws, hides when content fits or is empty, and returns on overflow.
+    let mut rt = rune::Runtime::new((20, Preset::NativeAlways), pane, (200.0, 100.0), rune::Env::new(true, 1.0));
+    rt.set_live_waker(std::sync::Arc::new(|| {}));
+    assert_eq!(rt.system_scroll_bars(), ScrollBars::WhenScrolling);
+    rt.frame(0.0);
+    assert_eq!(opacity(&rt, "scroll-bar"), 1.0, "shown on frame 0 without hover or scroll");
+    frames(&mut rt, 120);
+    assert_eq!(opacity(&rt, "scroll-bar"), 1.0, "stays visible at rest");
+    rt.pointer_move(100.0, 50.0);
+    frames(&mut rt, 10);
+    rt.pointer_leave();
+    frames(&mut rt, 30);
+    assert_eq!(opacity(&rt, "scroll-bar"), 1.0, "leaving the area keeps always_visible bar up");
+    rt.set_system_scroll_bars(ScrollBars::Automatic);
+    rt.set_system_scroller_overlay(true);
+    frames(&mut rt, 30);
+    assert_eq!(opacity(&rt, "scroll-bar"), 1.0, "ignores Automatic+trackpad overlay preference");
+    assert_eq!((rt.frame(1.0 / 60.0), rt.live_pending()), (false, false), "idle window draws nothing");
+
+    // Empty and fitting content hide the bar cleanly.
+    for rows in [0usize, 3] {
+        rt.update(|s, _| s.0 = rows);
+        frames(&mut rt, 2);
+        assert_eq!(rect(&rt, "scroll-bar")[3], 0.0, "hidden when {rows} rows fit");
+        assert_eq!(rect(&rt, "thumb")[3], 0.0);
+    }
+    // Growing back to overflow shows it again at opacity 1.0.
+    rt.update(|s, _| s.0 = 20);
+    frames(&mut rt, 2);
+    assert_eq!(opacity(&rt, "scroll-bar"), 1.0);
+    assert!(rect(&rt, "thumb")[3] > 0.0);
+
+    // 2. Unchanged preset: native() without always_visible() still rests at opacity 0.0.
+    let mut default_native = rune::Runtime::new((20, Preset::NativeDefault), pane, (200.0, 100.0), rune::Env::new(true, 1.0));
+    default_native.frame(0.0);
+    assert_eq!(opacity(&default_native, "scroll-bar"), 0.0, "native() default unchanged");
+
+    // 3. from_kit().always_visible() ignores WhenScrolling.
+    let mut kit = rune::Runtime::new((20, Preset::KitAlways), pane, (200.0, 100.0), rune::Env::new(true, 1.0));
+    kit.frame(0.0);
+    frames(&mut kit, 60);
+    assert_eq!(opacity(&kit, "scroll-bar"), 1.0);
+
+    // 4. menu_scroll().always_visible() stays visible and highlights thumb on hover.
+    let mut menu = rune::Runtime::new((20, Preset::MenuAlways), pane, (200.0, 100.0), rune::Env::new(true, 1.0));
+    frames(&mut menu, 2);
+    assert_eq!(opacity(&menu, "scroll-bar"), 1.0);
+    assert_eq!(info(&menu, "thumb").fill, THUMB_C);
+    let tr = rect(&menu, "thumb");
+    menu.pointer_move(tr[0] + tr[2] / 2.0, tr[1] + tr[3] / 2.0);
+    frames(&mut menu, 2);
+    assert_eq!(info(&menu, "thumb").fill, HOVER_C, "always_visible menu_scroll thumb highlights on hover");
+}
+
+#[test]
+fn track_and_track_hover_paint_trough_at_rest_and_on_hover_without_view_runs() {
+    thread_local! {
+        static RUNS: Cell<usize> = const { Cell::new(0) };
+    }
+    const THUMB_C: Color = Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 };
+    const THUMB_HOVER_C: Color = Color { r: 0.0, g: 0.0, b: 1.0, a: 1.0 };
+    const TROUGH: Color = Color { r: 0.1, g: 0.2, b: 0.3, a: 1.0 };
+    const TROUGH_HOVER: Color = Color { r: 0.4, g: 0.5, b: 0.6, a: 1.0 };
+
+    #[derive(Clone, Copy)]
+    enum Mode { Both, RestOnly, HoverOnly, Neither, KitSmooth }
+
+    fn pane(mode: &Mode, _: &mut rune::Cx<Mode>) -> El {
+        RUNS.set(RUNS.get() + 1);
+        let k = Kit::neutral(true);
+        let style = match *mode {
+            Mode::Both => ScrollBarStyle::native(THUMB_C, THUMB_HOVER_C)
+                .inside()
+                .always_visible()
+                .track(TROUGH)
+                .track_hover(TROUGH_HOVER),
+            Mode::RestOnly => ScrollBarStyle::native(THUMB_C, THUMB_HOVER_C)
+                .inside()
+                .always_visible()
+                .track(TROUGH),
+            Mode::HoverOnly => ScrollBarStyle::native(THUMB_C, THUMB_HOVER_C)
+                .inside()
+                .always_visible()
+                .track_hover(TROUGH_HOVER),
+            Mode::Neither => ScrollBarStyle::native(THUMB_C, THUMB_HOVER_C)
+                .inside()
+                .always_visible(),
+            Mode::KitSmooth => ScrollBarStyle::from_kit(&k)
+                .always_visible()
+                .track(TROUGH)
+                .track_hover(TROUGH_HOVER),
+        };
+        col().size(200.0, 100.0).child(
+            col()
+                .key("scroll")
+                .w_full()
+                .h(100.0)
+                .scroll(rune::ScrollSpec { stick_bottom: false })
+                .child(col().children((0..20).map(|i| el().key(format!("r{i}")).w_full().h(20.0))))
+                .scroll_bar_styled(style),
+        )
+    }
+
+    // 1. Both track() and track_hover(): rest trough, strip hover (without thumb hover), thumb hover, drag.
+    RUNS.set(0);
+    let mut rt = rune::Runtime::new(Mode::Both, pane, (200.0, 100.0), rune::Env::new(true, 1.0));
+    rt.check_live_only(false);
+    frames(&mut rt, 2);
+    let (runs, generation) = (RUNS.get(), rune::commit_generation());
+    assert_eq!(info(&rt, "scroll-bar").fill, TROUGH, "rest trough colour");
+    assert_eq!(info(&rt, "thumb").fill, THUMB_C);
+    // Still hidden from the accessibility tree.
+    let a11y = rt.a11y_json();
+    assert!(!a11y.contains("scroll-bar") && !a11y.contains("\"thumb\""), "scrollbar chrome stays a11y_hidden");
+
+    // Hovering viewport middle leaves both at rest colours.
+    rt.pointer_move(100.0, 50.0);
+    frames(&mut rt, 2);
+    assert_eq!(info(&rt, "scroll-bar").fill, TROUGH);
+    assert_eq!(info(&rt, "thumb").fill, THUMB_C);
+
+    // Hovering the track strip below the thumb activates track_hover while thumb stays at rest.
+    rt.pointer_move(196.0, 85.0);
+    frames(&mut rt, 2);
+    assert_eq!(info(&rt, "scroll-bar").fill, TROUGH_HOVER, "track hover active over strip");
+    assert_eq!(info(&rt, "thumb").fill, THUMB_C, "thumb stays at rest when pointer is only on track");
+
+    // Hovering the thumb activates both track_hover and thumb_hover.
+    let tr = rect(&rt, "thumb");
+    let (tx, ty) = (tr[0] + tr[2] / 2.0, tr[1] + tr[3] / 2.0);
+    rt.pointer_move(tx, ty);
+    frames(&mut rt, 2);
+    assert_eq!(info(&rt, "scroll-bar").fill, TROUGH_HOVER);
+    assert_eq!(info(&rt, "thumb").fill, THUMB_HOVER_C);
+
+    // Dragging the thumb off the strip holds track_hover until release.
+    rt.pointer_down(tx, ty);
+    rt.pointer_move(100.0, ty + 20.0);
+    frames(&mut rt, 2);
+    assert_eq!(info(&rt, "scroll-bar").fill, TROUGH_HOVER, "trough stays hovered while dragging");
+    rt.pointer_up(100.0, ty + 20.0);
+    frames(&mut rt, 2);
+    assert_eq!(info(&rt, "scroll-bar").fill, TROUGH, "returns to rest trough on release");
+    assert_eq!(info(&rt, "thumb").fill, THUMB_C);
+
+    // Leaving window clears hover cleanly.
+    rt.pointer_move(196.0, 85.0);
+    frames(&mut rt, 2);
+    assert_eq!(info(&rt, "scroll-bar").fill, TROUGH_HOVER);
+    rt.pointer_leave();
+    frames(&mut rt, 2);
+    assert_eq!(info(&rt, "scroll-bar").fill, TROUGH);
+    assert_eq!((RUNS.get(), rune::commit_generation()), (runs, generation), "zero view runs and commits");
+    assert!(rt.live_only_warnings().is_empty(), "{:#?}", rt.live_only_warnings());
+
+    // 2. track() alone keeps the same colour on hover.
+    let mut rest_only = rune::Runtime::new(Mode::RestOnly, pane, (200.0, 100.0), rune::Env::new(true, 1.0));
+    frames(&mut rest_only, 2);
+    assert_eq!(info(&rest_only, "scroll-bar").fill, TROUGH);
+    rest_only.pointer_move(196.0, 85.0);
+    frames(&mut rest_only, 2);
+    assert_eq!(info(&rest_only, "scroll-bar").fill, TROUGH, "track() without track_hover stays visible on hover");
+
+    // 3. track_hover() alone is transparent at rest and fills on strip hover.
+    let mut hover_only = rune::Runtime::new(Mode::HoverOnly, pane, (200.0, 100.0), rune::Env::new(true, 1.0));
+    frames(&mut hover_only, 2);
+    assert_eq!(info(&hover_only, "scroll-bar").fill, Color::TRANSPARENT);
+    hover_only.pointer_move(196.0, 85.0);
+    frames(&mut hover_only, 2);
+    assert_eq!(info(&hover_only, "scroll-bar").fill, TROUGH_HOVER);
+    hover_only.pointer_move(100.0, 50.0);
+    frames(&mut hover_only, 2);
+    assert_eq!(info(&hover_only, "scroll-bar").fill, Color::TRANSPARENT);
+
+    // 4. Default (neither set) paints transparent at rest and on hover.
+    let mut neither = rune::Runtime::new(Mode::Neither, pane, (200.0, 100.0), rune::Env::new(true, 1.0));
+    frames(&mut neither, 2);
+    assert_eq!(info(&neither, "scroll-bar").fill, Color::TRANSPARENT);
+    neither.pointer_move(196.0, 85.0);
+    frames(&mut neither, 2);
+    assert_eq!(info(&neither, "scroll-bar").fill, Color::TRANSPARENT);
+
+    // 5. Smooth preset (from_kit) transitions track fill on hover, settles cleanly, and goes idle
+    //    (and under reduced motion snaps spatial widening immediately while settling colour).
+    let mut reduced = rune::Runtime::new(Mode::KitSmooth, pane, (200.0, 100.0), rune::Env::new(true, 1.0));
+    reduced.set_system_reduced_motion(true);
+    reduced.set_live_waker(std::sync::Arc::new(|| {}));
+    frames(&mut reduced, 2);
+    assert_eq!(info(&reduced, "scroll-bar").fill, TROUGH);
+    reduced.pointer_move(195.0, 50.0);
+    reduced.frame(1.0 / 60.0);
+    assert_eq!(rect(&reduced, "thumb")[2], THUMB_HOVER, "spatial widening snaps under reduced motion");
+    frames(&mut reduced, 30);
+    assert_eq!(info(&reduced, "scroll-bar").fill, TROUGH_HOVER, "track hover colour settles");
+    assert_eq!((reduced.frame(1.0 / 60.0), reduced.live_pending()), (false, false), "idle once settled");
+}
