@@ -81,7 +81,7 @@ fn uber_check_state_machine_handles_async_ok_failure_and_stale_answers() {
 
 #[test]
 fn rejected_classic_shader_returns_error_without_uncaptured_gpu_error() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
     let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
     let res = with_classic_shader_refused(true, || Renderer::try_new_classic(&gpu.device, OFFSCREEN_FORMAT));
     let leaked = pollster::block_on(scope.pop());
@@ -92,7 +92,7 @@ fn rejected_classic_shader_returns_error_without_uncaptured_gpu_error() {
 
 #[test]
 fn rejected_uber_shaders_return_classified_error_from_try_new() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
     let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
     let res = with_uber_shaders_refused(true, || Renderer::try_new_classified(&gpu.device, OFFSCREEN_FORMAT));
     let leaked = pollster::block_on(scope.pop());
@@ -103,7 +103,7 @@ fn rejected_uber_shaders_return_classified_error_from_try_new() {
 
 #[test]
 fn try_set_format_rejects_unrenderable_format_without_poisoning_renderer() {
-    let gpu = Gpu::headless_wgpu();
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
     let mut renderer = Renderer::try_new(&gpu.device, OFFSCREEN_FORMAT).expect("valid renderer");
     let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
     // Rgba8Snorm never allows RENDER_ATTACHMENT, so pipeline creation fails validation.

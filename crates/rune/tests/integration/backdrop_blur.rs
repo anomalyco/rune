@@ -56,13 +56,13 @@ fn stripes(s: &Scene, _: &mut Cx<Scene>) -> El {
     }))
 }
 
-fn render(scene: Scene, scale: f32) -> (Runtime<Scene>, Vec<u8>) {
-    let gpu = Gpu::headless();
+fn render(scene: Scene, scale: f32) -> Option<(Runtime<Scene>, Vec<u8>)> {
+    let gpu = Gpu::test_headless()?;
     let mut rt = Runtime::new(scene, stripes, (200.0, 120.0), Env::new(false, scale));
     rt.frame(0.0);
     let size = ((200.0 * scale) as u32, (120.0 * scale) as u32);
     let px = pixels(&gpu, &mut rt, size);
-    (rt, px)
+    Some((rt, px))
 }
 
 fn records<S>(rt: &Runtime<S>) -> usize {
@@ -71,8 +71,8 @@ fn records<S>(rt: &Runtime<S>) -> usize {
 
 #[test]
 fn stripes_blur_inside_the_rounded_rect_and_nowhere_else() {
-    let (rt, blurred) = render(Scene { bars: vec![BAR], blur: true }, 1.0);
-    let (_, plain) = render(Scene { bars: vec![BAR], blur: false }, 1.0);
+    let Some((rt, blurred)) = render(Scene { bars: vec![BAR], blur: true }, 1.0) else { return };
+    let Some((_, plain)) = render(Scene { bars: vec![BAR], blur: false }, 1.0) else { return };
     assert_eq!(records(&rt), 1);
     let w = 200;
     assert!(spread(&plain, w, 60, 60, 140) > 200, "stripes under a plain bar");
@@ -94,7 +94,7 @@ fn stripes_blur_inside_the_rounded_rect_and_nowhere_else() {
 #[test]
 fn the_fill_tints_over_the_blur() {
     let tinted = Bar { fill: RED.alpha(0.5), ..BAR };
-    let (_, px) = render(Scene { bars: vec![tinted], blur: true }, 1.0);
+    let Some((_, px)) = render(Scene { bars: vec![tinted], blur: true }, 1.0) else { return };
     let [r, g, b, _] = at(&px, 200, 100, 60);
     // Linear: grey 0.5 under red at 0.5 gives (0.75, 0.25, 0.25).
     assert!((r as i32 - 225).abs() <= 8 && (g as i32 - 137).abs() <= 8 && (b as i32 - 137).abs() <= 8, "{r} {g} {b}");
@@ -103,8 +103,8 @@ fn the_fill_tints_over_the_blur() {
 #[test]
 fn without_backdrop_blur_the_frame_is_unchanged() {
     let off = Bar { blur: 0.0, ..BAR };
-    let (rt, zero) = render(Scene { bars: vec![off], blur: true }, 1.0);
-    let (plain_rt, plain) = render(Scene { bars: vec![off], blur: false }, 1.0);
+    let Some((rt, zero)) = render(Scene { bars: vec![off], blur: true }, 1.0) else { return };
+    let Some((plain_rt, plain)) = render(Scene { bars: vec![off], blur: false }, 1.0) else { return };
     assert_eq!(records(&rt), 0);
     assert_eq!(bytemuck::cast_slice::<_, u8>(&rt.instances), bytemuck::cast_slice::<_, u8>(&plain_rt.instances));
     assert_eq!(zero, plain);
@@ -114,7 +114,7 @@ fn without_backdrop_blur_the_frame_is_unchanged() {
 fn two_bars_each_blur_their_own_backdrop() {
     let left = Bar { rect: [10.0, 30.0, 70.0, 60.0], ..BAR };
     let right = Bar { rect: [120.0, 30.0, 70.0, 60.0], fill: RED.alpha(0.5), ..BAR };
-    let (rt, px) = render(Scene { bars: vec![left, right], blur: true }, 1.0);
+    let Some((rt, px)) = render(Scene { bars: vec![left, right], blur: true }, 1.0) else { return };
     assert_eq!(records(&rt), 2);
     assert!(spread(&px, 200, 60, 25, 65) <= 3);
     assert!(spread(&px, 200, 60, 135, 175) <= 3);
@@ -125,7 +125,7 @@ fn two_bars_each_blur_their_own_backdrop() {
 
 #[test]
 fn more_than_four_bars_all_blur() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 200, 120);
     let draw = |renderer: &mut Renderer, rt: &mut Runtime<Scene>| -> Vec<u8> {
@@ -159,7 +159,7 @@ fn more_than_four_bars_all_blur() {
 #[test]
 fn a_faded_bar_blurs_the_window_not_its_own_layer() {
     let faded = Bar { opacity: 0.5, fill: Color::WHITE.alpha(0.2), ..BAR };
-    let (rt, px) = render(Scene { bars: vec![faded], blur: true }, 1.0);
+    let Some((rt, px)) = render(Scene { bars: vec![faded], blur: true }, 1.0) else { return };
     let record = rt.instances.iter().position(|i| i.params[1] == KIND_BACKDROP_BLUR).expect("a record");
     let layer = rt.instances.iter().position(|i| i.params[1] == KIND_LAYER).expect("the faded bar's layer");
     assert!(record < layer, "the record sits ahead of the bar's layer");
@@ -171,12 +171,12 @@ fn a_faded_bar_blurs_the_window_not_its_own_layer() {
 
 #[test]
 fn hidpi_blurs_in_device_pixels() {
-    let (rt, px) = render(Scene { bars: vec![BAR], blur: true }, 2.0);
+    let Some((rt, px)) = render(Scene { bars: vec![BAR], blur: true }, 2.0) else { return };
     let record = rt.instances.iter().find(|i| i.params[1] == KIND_BACKDROP_BLUR).unwrap();
     assert_eq!(record.params[0], 16.0);
     assert_eq!(record.rect, [80.0, 60.0, 240.0, 120.0]);
     assert!(spread(&px, 400, 120, 120, 280) <= 3);
-    let (_, plain) = render(Scene { bars: vec![BAR], blur: false }, 2.0);
+    let Some((_, plain)) = render(Scene { bars: vec![BAR], blur: false }, 2.0) else { return };
     assert_eq!(at(&px, 400, 20, 120), at(&plain, 400, 20, 120));
 }
 
@@ -191,7 +191,7 @@ fn white_corners(_: &Edge, _: &mut Cx<Edge>) -> El {
 
 #[test]
 fn window_edges_do_not_darken() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut rt = Runtime::new(Edge, white_corners, (100.0, 100.0), Env::new(false, 1.0));
     rt.frame(0.0);
     let px = pixels(&gpu, &mut rt, (100, 100));
@@ -213,7 +213,7 @@ fn scrolling(_: &Scroll, _: &mut Cx<Scroll>) -> El {
 
 #[test]
 fn scrolled_content_changes_the_blur_and_a_still_frame_stays_idle() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut rt = Runtime::new(Scroll, scrolling, (100.0, 120.0), Env::new(false, 1.0));
     rt.frame(0.0);
     for _ in 0..3 { rt.frame(1.0 / 60.0); }
@@ -241,7 +241,7 @@ fn clipped(_: &Clipped, _: &mut Cx<Clipped>) -> El {
 
 #[test]
 fn the_blur_stops_at_an_ancestor_clip() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut rt = Runtime::new(Clipped, clipped, (200.0, 120.0), Env::new(false, 1.0));
     rt.frame(0.0);
     let px = pixels(&gpu, &mut rt, (200, 120));
@@ -264,7 +264,7 @@ fn grouped(_: &Grouped, _: &mut Cx<Grouped>) -> El {
 
 #[test]
 fn inside_a_layer_the_blur_reads_the_layer() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut rt = Runtime::new(Grouped, grouped, (200.0, 120.0), Env::new(false, 1.0));
     rt.frame(0.0);
     assert_eq!(records(&rt), 1);
@@ -278,7 +278,7 @@ fn inside_a_layer_the_blur_reads_the_layer() {
 /// while its own layer fades in and out, matching Chrome's backdrop-filter + opacity rule.
 #[test]
 fn entering_and_exiting_element_blurs_while_fading() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let view = |open: &bool, _: &mut Cx<bool>| -> El {
         let stripes = row().size(200.0, 120.0).absolute(0.0, 0.0)
             .children((0..50).map(|i| el().size(4.0, 120.0).fill(if i % 2 == 0 { Color::BLACK } else { Color::WHITE })));
@@ -342,7 +342,7 @@ fn entering_and_exiting_element_blurs_while_fading() {
 /// a descendant backdrop blur sees only what that ancestor's layer has drawn, not the window behind it.
 #[test]
 fn fading_ancestor_scopes_blur_to_its_layer() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let view = |_: &(), _: &mut Cx<()>| -> El {
         let stripes = row().size(200.0, 120.0).absolute(0.0, 0.0)
             .children((0..50).map(|i| el().size(4.0, 120.0).fill(if i % 2 == 0 { Color::BLACK } else { Color::WHITE })));

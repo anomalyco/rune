@@ -89,7 +89,7 @@ fn pair(s: &Pair, _: &mut Cx<Pair>) -> El {
 
 #[test]
 fn sibling_slots_each_hand_the_hook_their_own_mark_and_payload() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut rt = Runtime::new(Pair { version: 1, other: 1 }, pair, (96.0, 96.0), Env::new(true, 1.0));
     rt.frame(0.0);
@@ -125,7 +125,7 @@ fn pages(s: &Pages, _: &mut Cx<Pages>) -> El {
 
 #[test]
 fn an_exiting_slot_keeps_its_mark_and_payload_while_its_replacement_enters() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut rt = Runtime::new(Pages { page: 1, phase: 0.25 }, pages, (96.0, 96.0), Env::new(true, 1.0));
     rt.frame(0.0);
@@ -186,7 +186,7 @@ fn presented(seen: &Seen, e: &ElementInfo, k: f32, what: &str) {
 #[test]
 fn slots_follow_scale_offset_and_transitions_and_turn_in_a_layer() {
     let k = 2.0;
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut rt = Runtime::new(Moves { extra: false }, moves, (160.0, 160.0), Env::new(true, k));
     let size = (320, 320);

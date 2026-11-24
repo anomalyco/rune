@@ -107,7 +107,7 @@ fn solid_border_springs_from_a_gradient_without_moving_a_settled_bottom() {
 
 #[test]
 fn border_gradient_pixels_run_top_to_bottom_with_border_coverage() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let px = |out: &[u8], x: usize, y: usize| -> [u8; 4] { out[(y * 136 + x) * 4..][..4].try_into().unwrap() };
     let out = pixels(&gpu, &mut frame(Mode::Gradient));
     // The 1 px ring's top row is y = 8 and its bottom row y = 35, at the capsule's centre column.

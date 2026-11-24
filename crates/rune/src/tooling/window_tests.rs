@@ -7,6 +7,7 @@ fn transparent_png_unpremultiplies_in_linear_space() {
 
 #[test]
 fn headless_snap_after_uncaptured_frames_paces_and_writes_pixels() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = super::headless_run::test_turn();
     let snap = std::env::temp_dir().join(format!("rune-paced-snap-{}.png", std::process::id()));
     let spec = crate::AppSpec::new("paced", (32.0, 20.0), || (), |_, _| {
@@ -94,6 +95,7 @@ fn chrome_overlay_mirrors_traffic_lights_and_overlap_zone_in_rtl() {
 
 #[test]
 fn headless_chrome_overlay_paints_nothing_over_borderless_window() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = super::headless_run::test_turn();
     let snap = std::env::temp_dir().join(format!("rune-borderless-chrome-{}.png", std::process::id()));
     let run = |chrome: crate::Chrome, titlebar: Option<crate::Titlebar>| {
@@ -131,6 +133,7 @@ fn headless_chrome_overlay_paints_nothing_over_borderless_window() {
 
 #[test]
 fn headless_chrome_overlay_follows_dynamic_titlebar_changes() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = super::headless_run::test_turn();
     let dir = std::env::temp_dir().join(format!("rune-dynamic-chrome-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

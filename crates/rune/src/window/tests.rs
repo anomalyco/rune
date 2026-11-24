@@ -838,7 +838,7 @@ fn the_surface_alpha_mode_follows_what_the_window_asked_for() {
 #[test]
 fn a_square_window_never_fades_its_corners() {
     use crate::render::{Gpu, Offscreen, OFFSCREEN_FORMAT};
-    let gpu = Gpu::new(Gpu::instance(), None);
+    let Some(gpu) = Gpu::test_headless() else { return };
     let size = (8, 8);
     let target = Offscreen::new(&gpu.device, size.0, size.1);
     let mut enc = gpu.device.create_command_encoder(&Default::default());

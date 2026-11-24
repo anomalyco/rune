@@ -496,7 +496,7 @@ impl AnyWindowSpec {
     pub(crate) fn resolve_args(&mut self, inherited: crate::tooling::Args) -> crate::tooling::Args { self.0.resolve_args(inherited) }
 
     /// Render this window headless; `scale` converts a physical size option to points.
-    pub(crate) fn headless(self, args: crate::tooling::Args, scale: f32) -> Result<(), String> { self.0.headless(args, scale) }
+    pub(crate) fn headless(self, args: crate::tooling::Args, scale: f32) -> Result<(), crate::tooling::StartError> { self.0.headless(args, scale) }
 
     /// This window as one member of a `--desktop` composite; `selected` takes `--scene`.
     pub(crate) fn desktop(self, args: &crate::tooling::Args, selected: bool, scale: f32) -> Box<dyn crate::desktop::Member> {
@@ -516,7 +516,7 @@ trait ErasedWindow {
     fn key(&self) -> &str;
     fn take_windows(&mut self) -> Vec<AnyWindowSpec>;
     fn resolve_args(&mut self, inherited: crate::tooling::Args) -> crate::tooling::Args;
-    fn headless(self: Box<Self>, args: crate::tooling::Args, scale: f32) -> Result<(), String>;
+    fn headless(self: Box<Self>, args: crate::tooling::Args, scale: f32) -> Result<(), crate::tooling::StartError>;
     fn desktop(self: Box<Self>, args: &crate::tooling::Args, selected: bool, scale: f32) -> Box<dyn crate::desktop::Member>;
     fn start(self: Box<Self>, inherited: crate::tooling::Args, cx: crate::window::Start<'_>) -> Option<Box<dyn crate::window::AnyHost>>;
 }
@@ -535,11 +535,11 @@ impl<S: 'static> ErasedWindow for Erased<S> {
     // bodies (never called then: `run` refuses a headless run first) keep headless rendering
     // out of a release app.
     #[cfg(not(any(feature = "tooling", debug_assertions)))]
-    fn headless(self: Box<Self>, _: crate::tooling::Args, _: f32) -> Result<(), String> { unreachable!("{}", crate::tooling::WITHOUT_TOOLING) }
+    fn headless(self: Box<Self>, _: crate::tooling::Args, _: f32) -> Result<(), crate::tooling::StartError> { unreachable!("{}", crate::tooling::WITHOUT_TOOLING) }
     #[cfg(not(any(feature = "tooling", debug_assertions)))]
     fn desktop(self: Box<Self>, _: &crate::tooling::Args, _: bool, _: f32) -> Box<dyn crate::desktop::Member> { unreachable!("{}", crate::tooling::WITHOUT_TOOLING) }
     #[cfg(any(feature = "tooling", debug_assertions))]
-    fn headless(self: Box<Self>, args: crate::tooling::Args, scale: f32) -> Result<(), String> {
+    fn headless(self: Box<Self>, args: crate::tooling::Args, scale: f32) -> Result<(), crate::tooling::StartError> {
         crate::tooling::headless_window_spec(self.spec.app, self.spec.options, args, scale)
     }
     #[cfg(any(feature = "tooling", debug_assertions))]

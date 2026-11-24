@@ -97,18 +97,23 @@ fn single_window_list_only(args: &Args) -> bool {
     false
 }
 
-fn try_headless_multi(main: crate::AnyWindowSpec, windows: Vec<crate::AnyWindowSpec>, args: Args, accessory: bool) -> Result<(), String> {
+fn try_headless_multi(main: crate::AnyWindowSpec, windows: Vec<crate::AnyWindowSpec>, args: Args, accessory: bool) -> Result<(), StartError> {
     let displays = desktop(&args, read_script(&args).as_ref()).displays();
     headless_window(std::iter::once(main).chain(windows).collect(), &displays, args, crate::RunOptions { accessory })
 }
 
 pub fn headless<S: 'static>(app: crate::app::App<S>, args: Args) {
-    started(try_headless(app, args));
+    #[cfg(test)]
+    if let Err(error) = try_headless(app, args) {
+        panic!("{}", error.message());
+    }
+    #[cfg(not(test))]
+    finish_start(try_headless(app, args));
 }
 
-/// `headless`, returning the error when a window whose own arguments aren't headless can't open
-/// or when `--html` fails to read its template or write its output.
-pub(crate) fn try_headless<S: 'static>(mut app: crate::app::App<S>, args: Args) -> Result<(), String> {
+/// `headless`, returning the error when GPU/renderer setup fails, when a window whose own
+/// arguments aren't headless can't open, or when `--html` fails to read its template or write.
+pub(crate) fn try_headless<S: 'static>(mut app: crate::app::App<S>, args: Args) -> Result<(), StartError> {
     crate::render::discard_prewarm();
     if app.windows.is_empty() && args.desktop.is_none() {
         if single_window_list_only(&args) { return Ok(()); }
@@ -122,28 +127,35 @@ pub(crate) fn try_headless<S: 'static>(mut app: crate::app::App<S>, args: Args) 
     try_headless_multi(main, windows, args, accessory)
 }
 
-pub(crate) fn headless_window_spec<S: 'static>(mut app: crate::app::App<S>, options: crate::WindowOptions, args: Args, scale: f32) -> Result<(), String> {
+pub(crate) fn headless_window_spec<S: 'static>(mut app: crate::app::App<S>, options: crate::WindowOptions, args: Args, scale: f32) -> Result<(), StartError> {
     if let Some((w, h)) = options.physical_size {
         app.spec.size = (w as f32 / scale, h as f32 / scale);
     }
     if args.html.is_some() {
-        return crate::tooling::html::export(app, &args);
+        return crate::tooling::html::export(app, &args).map_err(StartError::Window);
     }
     let transparent = options.transparent;
     app.window_options = options;
-    headless_configured(app, args, transparent);
-    Ok(())
+    try_headless_configured(app, args, transparent).map_err(StartError::Headless)
 }
 
-pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, transparent: bool) {
+#[cfg(test)]
+pub(crate) fn headless_configured<S: 'static>(app: crate::app::App<S>, args: Args, transparent: bool) {
+    if let Err(error) = try_headless_configured(app, args, transparent) {
+        panic!("{error}");
+    }
+}
+
+fn try_headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, transparent: bool) -> Result<(), String> {
     let launched = wait_for_profiler();
     if args.list_scenes {
         for (n, _) in app.spec.scenes { println!("{n}"); }
-        return;
+        return Ok(());
     }
     #[cfg(feature = "hot")]
     if args.snap_on_patch.is_some() {
-        return crate::hot::snap_window(app, args);
+        crate::hot::snap_window(app, args);
+        return Ok(());
     }
     let prep = HeadlessPrep::begin(&args, app.spec.size);
     let (chrome, titlebar, fit_height) = (app.chrome, app.titlebar, app.fit_content_height);
@@ -168,10 +180,10 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
         shared_core: shared.core.clone(), shortcuts_core: shared.shortcuts.core.clone(), shortcuts, menus,
     };
     let mut typed = TypedHeadlessApp { rt, shared, comp, on_reopen, on_open_url };
-    run_headless(prep, config, &mut typed);
+    run_headless(prep, config, &mut typed)
 }
 
-fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn HeadlessApp) {
+fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn HeadlessApp) -> Result<(), String> {
     let HeadlessPrep { source, script, timeline, scale, size, dark, mut writer } = prep;
     let HeadlessConfig {
         launched, state_ms, args, transparent, chrome, titlebar, fit_height, app_options,
@@ -208,20 +220,22 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
     let (gpu, mut renderer) = Gpu::for_headless_setup(features, |gpu| {
         Renderer::try_new_classified(&gpu.device, target_format).map_err(crate::render::SurfaceSetupError::from_shader)
     })
-    .unwrap_or_else(|e| die(&e.message));
+    .map_err(|e| e.message)?;
     renderer.set_srgb_blend(srgb_blend);
     renderer.attach_text(&mut app.rt_mut().text.atlas);
     let (wp, hp) = ((size.0 * scale).round() as u32, (size.1 * scale).round() as u32);
     let target = Offscreen::with_format(&gpu.device, wp, hp, target_format);
     let readback = crate::tooling::record::Readback::new(&gpu.device, &target, crate::tooling::record::DEPTH);
     let alpha = transparent.then(|| crate::render::surface_alpha::AlphaSurface::new(&gpu.device, target_format, (wp, hp)));
-    let overlay = (args.keys.is_some() || args.pointer).then(|| {
+    let overlay = if args.keys.is_some() || args.pointer {
         let mut ov = crate::input::keycaps::Overlay::new(size, scale, args.keys, args.keys_theme, args.pointer);
         ov.set_srgb_blend(srgb_blend);
-        let mut ui = Renderer::try_new(&gpu.device, target_format).unwrap_or_else(|e| die(&e));
+        let mut ui = Renderer::try_new(&gpu.device, target_format)?;
         ui.set_srgb_blend(srgb_blend);
-        (ov, ui)
-    });
+        Some((ov, ui))
+    } else {
+        None
+    };
     let init_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
     let trace = args.trace.as_ref().map(|p| {
@@ -468,6 +482,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
         eprintln!("rune: open_url {url} (headless: not opened)");
     }
     if !loop_checked { std::process::exit(3); }
+    Ok(())
 }
 
 /// Which frames a headless run renders and dumps.

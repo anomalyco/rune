@@ -60,7 +60,7 @@ fn only_a_fading_shape_of_several_pieces_paints_through_a_layer() {
 
 #[test]
 fn where_faded_pieces_meet_is_no_darker_than_one() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     // (40, 40) px is where the cross's strokes and the corner's segments meet; (8, 40) and
     // (16, 40) are on one stroke alone.
     for (shape, alone) in [(cross(), (8, 40)), (corner(), (16, 40))] {

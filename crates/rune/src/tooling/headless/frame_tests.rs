@@ -30,6 +30,7 @@ fn frame_cpu_ms_measures_a_frame_whose_rate_arrives_before_settle() {
 
 #[test]
 fn headless_run_under_frame_profile_completes_cleanly() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = crate::tooling::headless_run::test_turn();
     let snap = std::env::temp_dir().join(format!("rune-fp-headless-{}.png", std::process::id()));
     let app = crate::App::new(crate::AppSpec::new("fp", (16.0, 16.0), || (), |_, _| crate::el()));

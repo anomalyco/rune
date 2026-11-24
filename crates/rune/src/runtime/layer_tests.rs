@@ -17,7 +17,7 @@ fn raised_children_of_cached_clipped_groups_stay_visible_and_clipped() {
         el().size(32.0, 32.0).child(el().size(16.0, 16.0).clip_rounded(8.0).cache().opacity(0.5)
             .child(el().size(24.0, 24.0).raise().fill(Color::WHITE)))
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 32, 32);
     let mut rt = Runtime::new((), view, (32.0, 32.0), Env::new(true, 1.0));
@@ -53,7 +53,7 @@ pub(super) fn near(got: &[u8], want: [u8; 4]) {
 
 #[test]
 fn isolated_layers_match_scalar_overlap_crossfade_and_nesting() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 32, 16);
     let mut atlas = crate::text::TextSystem::default().atlas;
@@ -121,7 +121,7 @@ fn leaf_dimming_keeps_container_opacity_isolated() {
             .child(el().size(12.0, 8.0).absolute(10.0, 4.0).fill(Color::WHITE))
             .dim(0.5)
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 32, 16);
     let mut rt = Runtime::new(Live::new(0.5), view, (32.0, 16.0), Env { scale: 1.0, system_dark: true });
@@ -148,7 +148,7 @@ fn dissolve_keeps_opaque_coverage_and_isolates_each_state() {
             .child(state(&s.0, Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 }))
             .child(state(&s.1, Color { r: 0.0, g: 0.0, b: 1.0, a: 1.0 }))
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     // Linear destination makes the exact colour-average assertion independent of sRGB encoding.
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let mut renderer = Renderer::new(&gpu.device, format);
@@ -213,7 +213,7 @@ fn dissolve_samples_sequence_opacity_before_selecting_scopes() {
             .child(el().size(32.0, 16.0).absolute(0.0, 0.0).fill(Color::WHITE).sequence(crate::Sequence::new(OUT)))
             .child(el().size(32.0, 16.0).absolute(0.0, 0.0).fill(Color::WHITE).sequence(crate::Sequence::new(IN)))
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 32, 16);
     let mut rt = Runtime::new((), view, (32.0, 16.0), Env::new(true, 1.0));
@@ -229,7 +229,7 @@ fn dissolve_samples_sequence_opacity_before_selecting_scopes() {
 #[test]
 fn dissolve_adds_direct_primitives_and_native_surfaces_then_clamps_before_opacity() {
     use crate::native_surface::{ByteFrame, ColorInfo, Format, NativeSurface, SurfaceDraw, SurfaceFit};
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let mut renderer = Renderer::new(&gpu.device, format);
     let target = Offscreen::with_format(&gpu.device, 32, 16, format);
@@ -259,7 +259,7 @@ fn scale_and_fade_reuse_bucket_for_sixty_growing_frames() {
             .child(el().size(180.0, 180.0).fill(Color::WHITE))
             .child(el().size(90.0, 90.0).fill(Color::WHITE)))
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 256, 256);
     let mut rt = Runtime::new((Live::new(0.9), Live::new(0.1)), view, (256.0, 256.0), Env { scale: 1.0, system_dark: true });
@@ -382,7 +382,7 @@ fn clipped_single_draw_fades_do_not_allocate_targets() {
         };
         el().child(clip.child(el().size(48.0, 32.0).opacity(0.5).child(child)))
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 64, 48);
     let surface = NativeSurface::new();
@@ -440,7 +440,7 @@ fn isolated_layers_preserve_image_video_spring_and_list_order() {
     use crate::native_surface::{ByteFrame, ColorInfo, Format, NativeSurface, SurfaceDraw, SurfaceFit};
     use crate::gpu::springs::{Node, Track};
     use crate::pixels::Pixels;
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let bounds = [4.0, 4.0, 24.0, 8.0];
     let mut content = group(bounds, 0.5, [1.0, 0.0, 0.0, 1.0]);
     // A glyph, a vector and a page-1 image inside the nonzero-origin layer. Absolute spring

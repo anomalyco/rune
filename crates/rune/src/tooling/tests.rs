@@ -195,6 +195,7 @@ fn mark_names_win_over_offsets_and_offsets_must_be_complete() {
 
 #[test]
 fn duration_and_out_select_headless_png_output_unless_native() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     let args = |v: &[&str]| Args::parse_from(v.iter().map(|s| (*s).into()).collect());
     for flags in [vec!["--out", "frames"], vec!["--duration", "auto"], vec!["--duration", "auto", "--out", "frames"]] {
@@ -224,6 +225,7 @@ fn duration_and_out_select_headless_png_output_unless_native() {
 
 #[test]
 fn headless_runs_report_each_frame_to_on_frame_encoded() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     let snap = std::env::temp_dir().join(format!("rune-encoded-{}.png", std::process::id()));
     let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -243,6 +245,7 @@ fn headless_runs_report_each_frame_to_on_frame_encoded() {
 
 #[test]
 fn single_window_snapshots_honor_transparency_and_physical_size() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     let dir = std::env::temp_dir().join(format!("rune-window-options-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -272,6 +275,7 @@ fn single_window_snapshots_honor_transparency_and_physical_size() {
 
 #[test]
 fn window_resizes_move_the_headless_viewport_on_the_virtual_clock() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     let dir = std::env::temp_dir().join(format!("rune-window-resize-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -304,6 +308,7 @@ fn window_resizes_move_the_headless_viewport_on_the_virtual_clock() {
 
 #[test]
 fn a_scripted_resize_steps_the_viewport_with_the_hand() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     let dir = std::env::temp_dir().join(format!("rune-script-resize-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -327,6 +332,7 @@ fn a_scripted_resize_steps_the_viewport_with_the_hand() {
 
 #[test]
 fn fit_content_height_follows_the_content() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     let dir = std::env::temp_dir().join(format!("rune-fit-content-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -352,6 +358,7 @@ fn fit_content_height_follows_the_content() {
 
 #[test]
 fn snapshots_leave_the_playground_out_unless_asked() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     let dir = std::env::temp_dir().join(format!("rune-playground-snap-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -374,6 +381,7 @@ fn snapshots_leave_the_playground_out_unless_asked() {
 
 #[test]
 fn apps_read_the_headless_run_from_init() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     let dir = std::env::temp_dir().join(format!("rune-run-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -404,6 +412,7 @@ fn apps_read_the_headless_run_from_init() {
 
 #[test]
 fn video_streams_every_frame_into_ffmpeg() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     if std::process::Command::new("ffprobe").arg("-version").output().is_err() {
         eprintln!("skipped: ffmpeg and ffprobe aren't installed");
@@ -453,6 +462,7 @@ fn video_streams_every_frame_into_ffmpeg() {
 
 #[test]
 fn desktop_composites_each_window_at_its_frame_with_a_shadow() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     let dir = std::env::temp_dir().join(format!("rune-desktop-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -468,14 +478,14 @@ fn desktop_composites_each_window_at_its_frame_with_a_shadow() {
         let snap = dir.join(name);
         let args = ["--desktop", backdrop.to_str().unwrap(), "--script", script.to_str().unwrap(),
             "--scale", "2", "--at", "0.5", "--snap", snap.to_str().unwrap()];
-        crate::run_windows_with_args(crate::RunOptions::default(), args.map(String::from), move |displays| {
+        crate::try_run_windows_with_args(crate::RunOptions::default(), args.map(String::from), move |displays| {
             assert_eq!(displays[0].size, (240, 160), "one display the backdrop's size");
             [crate::WindowSpec::new("back", fill()).state(red).options(crate::WindowOptions {
                 position: Some((40, 40)), physical_size: Some((100, 60)), ..Default::default()
             }), crate::WindowSpec::new("panel", fill()).state(blue).configured_options(crate::WindowOptions {
                 borderless: true, position: Some((160, 100)), physical_size: Some((40, 40)), ..Default::default()
             }.macos(crate::MacWindowOptions::default().shadow(false)))]
-        });
+        }).unwrap();
         std::fs::read(snap).unwrap()
     };
     let bytes = render("a.png");
@@ -538,7 +548,7 @@ fn desktop_case(name: &str, script: &str, at: f64, extra: &[&str], windows: impl
     let mut args = vec!["--desktop", backdrop.to_str().unwrap(), "--script", script_path.to_str().unwrap(),
         "--scale", "2", "--fps", "10", "--at", &at, "--snap", snap.to_str().unwrap()];
     args.extend_from_slice(extra);
-    crate::run_windows_with_args(crate::RunOptions::default(), args.into_iter().map(String::from).collect::<Vec<_>>(), move |_| windows());
+    crate::try_run_windows_with_args(crate::RunOptions::default(), args.into_iter().map(String::from).collect::<Vec<_>>(), move |_| windows()).unwrap();
     let png = ::image::open(&snap).unwrap().into_rgba8();
     std::fs::remove_dir_all(&dir).unwrap();
     (png, headless_run().unwrap())
@@ -554,6 +564,7 @@ fn focus_of(run: &HeadlessRun, t: f64, key: &str) -> (bool, bool) {
 
 #[test]
 fn desktop_frame_shows_what_a_handler_did_to_another_window_that_frame() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     // The launcher's Return updates and focuses the notes window and closes the launcher;
     // the frame of that key shows the new note in the focused window.
@@ -574,6 +585,7 @@ fn desktop_frame_shows_what_a_handler_did_to_another_window_that_frame() {
 
 #[test]
 fn desktop_window_closing_itself_on_blur_closes_in_that_frame() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     // Return in `a` focuses `b`, which blurs `a`, whose on_focus closes it.
     let script = r#"[{"t": 0.1, "type": "tap", "x": 30, "y": 25}, {"t": 0.2, "type": "key", "name": "Enter"}]"#;
@@ -600,6 +612,7 @@ fn desktop_window_closing_itself_on_blur_closes_in_that_frame() {
 
 #[test]
 fn desktop_click_on_the_backdrop_deactivates_the_app_until_it_refocuses() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     // As on macOS, a click on the desktop activates another app: no window has focus and
     // keys go nowhere until the app is active again.
@@ -625,6 +638,7 @@ fn desktop_click_on_the_backdrop_deactivates_the_app_until_it_refocuses() {
 
 #[test]
 fn desktop_click_through_window_never_takes_the_keyboard() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     // `a` opens and focuses a click-through HUD; `a` keeps the keyboard.
     let script = r#"[{"t": 0.1, "type": "key", "name": "Enter"}, {"t": 0.2, "type": "key", "name": "Enter"}]"#;
@@ -680,13 +694,14 @@ fn reopen_case(script: &str, accessory: bool, windows: impl FnOnce() -> Vec<crat
     let args = ["--desktop", backdrop.to_str().unwrap(), "--script", script_path.to_str().unwrap(),
         "--scale", "2", "--fps", "10", "--tree", tree.to_str().unwrap()];
     let options = crate::RunOptions { accessory, ..Default::default() };
-    crate::run_windows_with_args(options, args.map(String::from), move |_| windows());
+    crate::try_run_windows_with_args(options, args.map(String::from), move |_| windows()).unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     headless_run().unwrap()
 }
 
 #[test]
 fn desktop_reopen_shows_the_window_closed_last_with_the_keyboard() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     // Enter closes `b` (on top, with the keyboard), then `a`; reopening brings back `a`.
     let script = r#"[{"t": 0.1, "type": "key", "name": "Enter"}, {"t": 0.2, "type": "key", "name": "Enter"},
@@ -701,6 +716,7 @@ fn desktop_reopen_shows_the_window_closed_last_with_the_keyboard() {
 
 #[test]
 fn desktop_reopen_with_a_window_showing_changes_nothing() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     let script = r#"[{"t": 0.1, "type": "key", "name": "Enter"}, {"t": 0.2, "reopen": true}]"#;
     let run = reopen_case(script, false, || vec![closer("a", RED, false, left().macos(Default::default())),
@@ -711,6 +727,7 @@ fn desktop_reopen_with_a_window_showing_changes_nothing() {
 
 #[test]
 fn desktop_reopen_default_sees_what_the_hooks_did() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     // `a` closes, then `b`, so `b` would come back; but `b`'s hook opens `a` and leaves
     // the rest to the default, which then finds a window showing.
@@ -728,6 +745,7 @@ fn desktop_reopen_default_sees_what_the_hooks_did() {
 
 #[test]
 fn desktop_reopen_hook_that_handles_it_skips_the_default() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     let script = r#"[{"t": 0.1, "type": "key", "name": "Enter"}, {"t": 0.2, "reopen": true}]"#;
     let run = reopen_case(script, false, || vec![closer("a", RED, true, left().macos(Default::default()))]);
@@ -737,6 +755,7 @@ fn desktop_reopen_hook_that_handles_it_skips_the_default() {
 
 #[test]
 fn desktop_reopen_never_brings_back_a_launcher_or_an_accessory_app_window() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     // The launcher closes last, so a launcher-blind rule would pick it; `a` comes back.
     let launcher = || {
@@ -773,6 +792,7 @@ fn size_and_scale_must_be_positive() {
 
 #[test]
 fn keycaps_draw_over_frames_but_never_enter_the_tree() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     let dir = std::env::temp_dir().join(format!("rune-keys-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -810,6 +830,7 @@ fn script_chords_only_fire_global_handlers_even_when_the_window_is_key() {
     assert!(matches!(&script[0].kind, Kind::Shortcut(c) if *c == "cmd+space".parse().unwrap()));
     assert!(matches!(&script[1].kind, Kind::Shortcut(c) if *c == "cmd+k".parse().unwrap()));
 
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
     let dir = std::env::temp_dir().join(format!("rune-chords-{}", std::process::id()));

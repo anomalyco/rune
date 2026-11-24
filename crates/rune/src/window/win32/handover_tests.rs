@@ -21,7 +21,7 @@ fn rect_instance() -> Instance {
 /// and `srgb_blend` must match the window's mode even when the format already agrees.
 #[test]
 fn warm_frame_rebuilds_renderer_for_target_format() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let instances = [rect_instance()];
     for (initial, target, srgb) in [
         (wgpu::TextureFormat::Bgra8Unorm, wgpu::TextureFormat::Bgra8UnormSrgb, false),

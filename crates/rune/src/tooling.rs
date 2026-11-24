@@ -223,32 +223,49 @@ pub fn run_windows<I: IntoIterator<Item: Into<crate::AnyWindowSpec>>>(factory: i
 
 /// Run a window factory with process-level options, such as macOS accessory activation.
 pub fn run_windows_with<I: IntoIterator<Item: Into<crate::AnyWindowSpec>>>(options: crate::RunOptions, factory: impl FnOnce(&[crate::Display]) -> I + 'static) {
-    started(try_run_windows_with(options, factory));
+    finish_start(run_window_factory(options, window_args(None, Args::parse), erase(factory)));
 }
 
 /// `run_windows_with`, returning an error instead of exiting when the event loop can't start
 /// (no display over ssh or in CI, no Wayland or X11 server), fails, or no initial window can
 /// be created.
 pub fn try_run_windows_with<I: IntoIterator<Item: Into<crate::AnyWindowSpec>>>(options: crate::RunOptions, factory: impl FnOnce(&[crate::Display]) -> I + 'static) -> Result<(), String> {
-    run_window_factory(options, window_args(None, Args::parse), erase(factory))
+    run_window_factory(options, window_args(None, Args::parse), erase(factory)).map_err(StartError::message)
 }
 
 /// Run a window factory with explicit Rune arguments, without reading the host CLI.
 /// Pass `[]` to isolate an embedding application's flags before display discovery.
 pub fn run_windows_with_args<I: IntoIterator<Item: Into<crate::AnyWindowSpec>>>(options: crate::RunOptions, args: impl IntoIterator<Item = String>, factory: impl FnOnce(&[crate::Display]) -> I + 'static) {
-    started(try_run_windows_with_args(options, args, factory));
+    finish_start(run_window_factory(options, window_args(Some(args.into_iter().collect()), Args::parse), erase(factory)));
 }
 
 /// `run_windows_with_args`, returning an error instead of exiting when the event loop can't
 /// start, fails, or no initial window can be created.
 pub fn try_run_windows_with_args<I: IntoIterator<Item: Into<crate::AnyWindowSpec>>>(options: crate::RunOptions, args: impl IntoIterator<Item = String>, factory: impl FnOnce(&[crate::Display]) -> I + 'static) -> Result<(), String> {
-    run_window_factory(options, window_args(Some(args.into_iter().collect()), Args::parse), erase(factory))
+    run_window_factory(options, window_args(Some(args.into_iter().collect()), Args::parse), erase(factory)).map_err(StartError::message)
 }
 
 /// What `run` says to a release build without the `tooling` feature asked for a headless run.
 #[cfg(not(any(feature = "tooling", debug_assertions)))]
 pub(crate) const WITHOUT_TOOLING: &str = "this build has no agent tooling (--snap, --tree, --script, --trace, --strip, --video, ...): \
     a release build has it with Rune's `tooling` feature (rune = { ..., features = [\"tooling\"] }); debug builds always do";
+
+/// Distinguishes window startup errors (CLI exit 1) from headless tooling errors (CLI exit 2)
+/// so fallible `try_run*` paths return `Err(String)` without terminating a test process while
+/// CLI `run*` entry points keep their exit codes.
+pub(crate) enum StartError {
+    Window(String),
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    Headless(String),
+}
+
+impl StartError {
+    pub(crate) fn message(self) -> String {
+        match self {
+            Self::Window(error) | Self::Headless(error) => error,
+        }
+    }
+}
 
 /// Reports a failed startup and exits the process on native targets. wasm32 has no process
 /// exit, so there it panics.
@@ -265,6 +282,21 @@ pub(crate) fn started(result: Result<(), String>) {
     if let Err(error) = result { panic!("{error}"); }
 }
 
+/// Like `started`, preserving exit code 2 for headless tooling failures.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn finish_start(result: Result<(), StartError>) {
+    match result {
+        Ok(()) => {}
+        Err(StartError::Window(error)) => started(Err(error)),
+        Err(StartError::Headless(error)) => die(&error),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn finish_start(result: Result<(), StartError>) {
+    started(result.map_err(StartError::message));
+}
+
 type Factory = Box<dyn FnOnce(&[crate::Display]) -> Vec<crate::AnyWindowSpec>>;
 
 fn erase<I: IntoIterator<Item: Into<crate::AnyWindowSpec>>>(factory: impl FnOnce(&[crate::Display]) -> I + 'static) -> Factory {
@@ -275,7 +307,7 @@ pub(crate) fn window_args(args: Option<Vec<String>>, process: impl FnOnce() -> A
     args.map_or_else(process, Args::parse_from)
 }
 
-fn run_window_factory(options: crate::RunOptions, args: Args, factory: Factory) -> Result<(), String> {
+fn run_window_factory(options: crate::RunOptions, args: Args, factory: Factory) -> Result<(), StartError> {
     if args.headless() {
         #[cfg(any(feature = "tooling", debug_assertions))]
         {
@@ -284,15 +316,15 @@ fn run_window_factory(options: crate::RunOptions, args: Args, factory: Factory) 
             headless_window(factory(&displays), &displays, args, options)
         }
         #[cfg(not(any(feature = "tooling", debug_assertions)))]
-        Err(WITHOUT_TOOLING.into())
+        Err(StartError::Window(WITHOUT_TOOLING.into()))
     } else {
-        crate::window::run_windows(factory, args, options)
+        crate::window::run_windows(factory, args, options).map_err(StartError::Window)
     }
 }
 
 /// Lists the windows, or renders the one `--window KEY` selects (the first by default) with its
 /// own state. Windows that apps added with `App::window` are selectable too.
-fn headless_window(windows: Vec<crate::AnyWindowSpec>, displays: &[crate::Display], args: Args, options: crate::RunOptions) -> Result<(), String> {
+fn headless_window(windows: Vec<crate::AnyWindowSpec>, displays: &[crate::Display], args: Args, options: crate::RunOptions) -> Result<(), StartError> {
     let mut windows = crate::windows::flatten(windows);
     crate::windows::validate(&windows).unwrap_or_else(|e| die(&e));
     if args.list_windows {
@@ -306,13 +338,12 @@ fn headless_window(windows: Vec<crate::AnyWindowSpec>, displays: &[crate::Displa
     };
     if args.desktop.is_some() {
         crate::tooling::interaction::gate::headless();
-        crate::desktop::run(windows, index, args, options.accessory);
-        return Ok(());
+        return crate::desktop::run(windows, index, args, options.accessory).map_err(StartError::Headless);
     }
     let mut window = windows.remove(index);
     let args = window.resolve_args(args);
     if !args.headless() {
-        return crate::window::run_windows(Box::new(move |_| vec![window]), args, options);
+        return crate::window::run_windows(Box::new(move |_| vec![window]), args, options).map_err(StartError::Window);
     }
     let scale = displays.iter().find(|d| d.primary).unwrap_or(&displays[0]).scale;
     window.headless(args, scale as f32)

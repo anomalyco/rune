@@ -36,7 +36,7 @@ fn cache_matches_uncached_at_rest_and_skips_rerasterize_on_ancestor_live_offset(
             .live_offset(&s.1)
             .child(card)
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let target = Offscreen::new(&gpu.device, 64, 48);
 
     // 1. Crisp card is byte-for-byte identical between cached and uncached at rest and under pan.
@@ -112,7 +112,7 @@ fn cache_invalidates_on_state_and_hover_changes() {
                 ),
         )
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 32, 32);
     let mut rt = Runtime::new(false, view, (32.0, 32.0), Env { scale: 1.0, system_dark: true });
@@ -168,7 +168,7 @@ fn cache_draws_live_while_subtree_animates_and_recaches_when_settled() {
                 ),
         )
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 48, 24);
     let mut rt = Runtime::new(false, view, (48.0, 24.0), Env { scale: 1.0, system_dark: true });
@@ -219,7 +219,7 @@ fn cache_rerasterizes_at_new_resolution_after_ancestor_scale_settles() {
                     .child(el().size(24.0, 24.0).fill(Color::WHITE)),
             )
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 200, 200);
     let scale = Live::new(1.0);
@@ -272,7 +272,7 @@ fn cache_lru_eviction_under_small_budget_evicts_oldest_and_recaches_cleanly() {
                 .child(card("c", 200.0, Color { r: 0.0, g: 0.0, b: 1.0, a: 1.0 })),
         )
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let one_bucket = 64 * 64 * 8;
     // Budget fits at most 2 cached 64x64 textures.
@@ -334,8 +334,8 @@ fn cache_lru_eviction_under_small_budget_evicts_oldest_and_recaches_cleanly() {
 /// apart); the cached one must draw the same pixels after every frame. Returns the cached
 /// renderer's stats per frame.
 fn same_as_uncached<T: Clone + 'static>(state: T, view: fn(&(bool, T), &mut Cx<(bool, T)>) -> El, size: (u32, u32),
-    steps: &[(&str, usize, &dyn Fn(&mut Runtime<(bool, T)>))]) -> Vec<(String, LayerStats)> {
-    let gpu = Gpu::headless();
+    steps: &[(&str, usize, &dyn Fn(&mut Runtime<(bool, T)>))]) -> Option<Vec<(String, LayerStats)>> {
+    let gpu = Gpu::test_headless()?;
     let target = Offscreen::new(&gpu.device, size.0, size.1);
     let env = Env { scale: 1.0, system_dark: true };
     let viewport = (size.0 as f32, size.1 as f32);
@@ -360,7 +360,7 @@ fn same_as_uncached<T: Clone + 'static>(state: T, view: fn(&(bool, T), &mut Cx<(
         }
     }
     assert!(runs[1].0.instances.iter().any(|i| i.params[1] == KIND_LAYER && i.params[3] == 1.0), "the subtree stays cached");
-    stats
+    Some(stats)
 }
 
 #[test]
@@ -375,11 +375,11 @@ fn cache_follows_press_paint_that_lands_without_a_view_run() {
         if s.0 { card = card.cache(); }
         el().size(32.0, 32.0).child(card)
     }
-    let stats = same_as_uncached((), view, (32, 32), &[
+    let Some(stats) = same_as_uncached((), view, (32, 32), &[
         ("hover", 2, &|rt| rt.pointer_move(12.0, 12.0)),
         ("down", 2, &|rt| rt.pointer_down(12.0, 12.0)),
         ("up", 40, &|rt| rt.pointer_up(12.0, 12.0)),
-    ]);
+    ]) else { return };
     assert_eq!(stats.last().unwrap().1.extra_passes, 0, "the released card hits its cache again");
 }
 
@@ -425,9 +425,9 @@ fn cache_redraws_a_same_length_text_change() {
         if s.0 { card = card.cache(); }
         el().size(64.0, 32.0).child(card)
     }
-    let stats = same_as_uncached(false, view, (64, 32), &[
+    let Some(stats) = same_as_uncached(false, view, (64, 32), &[
         ("swap", 40, &|rt| { rt.state.1 = true; rt.invalidate(); }),
-    ]);
+    ]) else { return };
     let passes: Vec<_> = stats.iter().map(|(_, s)| s.extra_passes).collect();
     assert_eq!(passes[..2], [1, 0]);
     assert_eq!(passes[2..].iter().sum::<usize>(), 1, "the new text rasterizes once: {passes:?}");
@@ -461,7 +461,7 @@ fn clicks_land_inside_a_cached_card_after_a_pan() {
             ),
         )
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let pan = Live::new([0.0, 0.0]);
     let mut rt = Runtime::new((0, pan.clone()), view, (96.0, 64.0), Env { scale: 1.0, system_dark: true });
@@ -490,7 +490,7 @@ fn cache_updates_same_size_image_pixels_after_the_first_raster() {
     fn view(image: &crate::Pixels, _: &mut Cx<crate::Pixels>) -> El {
         el().size(32.0, 32.0).child(el().size(24.0, 24.0).cache().pixels(image))
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let target = Offscreen::new(&gpu.device, 32, 32);
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let image = crate::Pixels::new();
@@ -520,7 +520,7 @@ fn cached_card_stays_elided_during_sixty_live_only_wheel_frames() {
                         .fill(Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 })
                         .on_press(|s: &mut S| s.0 += 1))))
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 160, 100);
     let mut rt = Runtime::new((0, Live::new([0.0, 0.0])), view, (160.0, 100.0), Env::new(true, 1.0));
@@ -559,7 +559,7 @@ fn cache_does_not_hide_a_radius_change_during_scale_settling() {
             ),
         )
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let target = Offscreen::new(&gpu.device, 100, 100);
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let scale = Live::new(1.0);
@@ -584,7 +584,7 @@ fn slow_pinch_composites_until_the_scale_holds_still() {
                 .child(el().size(24.0, 24.0).fill(Color::WHITE)),
         )
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let scale = Live::new(1.0);
     let mut rt = Runtime::new(scale.clone(), view, (200.0, 200.0), Env { scale: 1.0, system_dark: true });
@@ -610,7 +610,7 @@ fn over_budget_cache_falls_back_to_a_viewport_sized_target() {
                 .child(el().size(20.0, 20.0).fill(Color::WHITE)),
         )
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let target = Offscreen::new(&gpu.device, 32, 32);
     let mut want = None;
     // In budget it caches a 320 px bucket; the fallback draws the same group through the 32 px it shows.
@@ -641,7 +641,7 @@ fn scale_commits_draw_live_without_repeated_cache_passes() {
             el().size(48.0, 48.0).cache().fill(Color::WHITE),
         )
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let target = Offscreen::new(&gpu.device, 200, 200);
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut rt = Runtime::new(1.0, view, (200.0, 200.0), Env::new(true, 1.0));
@@ -683,7 +683,7 @@ fn glyph_atlas_survives_four_hundred_scales_and_renders_fresh_and_cached_text() 
                     .child(crate::text(s.card_text).font(crate::TextStyle::new(16.0, 500.0)).color(Color::WHITE)),
             )
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let target = Offscreen::new(&gpu.device, 360, 120);
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut rt = Runtime::new(
@@ -753,7 +753,7 @@ fn single_frame_spanning_multiple_glyph_atlas_pages_draws_all_pages() {
         }
         root
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let target = Offscreen::new(&gpu.device, 512, 512);
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut rt = Runtime::new((), view, (512.0, 512.0), Env::new(true, 1.0));
@@ -865,7 +865,7 @@ fn pill_styles_follow_captured_state_through_a_cached_subtree() {
     edit.insert_pill("p:2", "two");
     let calls = Rc::new(Cell::new(0));
     let mut rt = Runtime::new((edit, false, calls.clone()), view, (200.0, 40.0), Env { scale: 1.0, system_dark: true });
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let target = Offscreen::new(&gpu.device, 200, 40);
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut step = |rt: &mut Runtime<S>| {

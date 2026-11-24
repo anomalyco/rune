@@ -386,7 +386,7 @@ mod tests {
 
     #[test]
     fn pipelined_readbacks_match_serial_pixels_in_order_across_wraps() {
-        let gpu = crate::render::Gpu::headless();
+        let Some(gpu) = crate::render::Gpu::test_headless() else { return };
         // An odd width exercises row-padding removal as well as ring reuse and final draining.
         let target = Offscreen::new(&gpu.device, 37, 23);
         let mut ring = Readback::new(&gpu.device, &target, DEPTH);
@@ -468,7 +468,7 @@ mod tests {
     fn in_flight_paces_gpu_submissions_before_exceeding_depth() {
         use std::sync::atomic::AtomicUsize;
 
-        let gpu = crate::render::Gpu::headless();
+        let Some(gpu) = crate::render::Gpu::test_headless_or_noop() else { return };
         let target = Offscreen::new(&gpu.device, 32, 32);
         let mut ring = InFlight::new(DEPTH);
         let completed = Arc::new(AtomicUsize::new(0));

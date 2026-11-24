@@ -20,7 +20,8 @@ fn run(events: &str, name: &str) -> Vec<(String, String)> {
     std::fs::write(&script, events).unwrap();
     App::new(AppSpec::new("select", (300.0, 200.0), || (), view))
         .args(["--script", script.to_str().unwrap(), "--tree", tree.to_str().unwrap()].map(String::from))
-        .run();
+        .try_run()
+        .unwrap();
     let tree: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&tree).unwrap()).unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     tree["elements"].as_array().unwrap().iter()
@@ -32,6 +33,7 @@ fn selected(key: &str, text: &str) -> Vec<(String, String)> { vec![(key.to_owned
 
 #[test]
 fn script_events_select_text() {
+    if !rune::render::Gpu::test_adapter_available() { return; }
     // Events aim at the element's centre: inside "serve", and on the middle line.
     // A drag from there past the end selects the rest of the line.
     let dragged = run(r#"[{"t": 0.1, "type": "drag", "key": "cmd", "dx": 150, "dy": 0}]"#, "drag");

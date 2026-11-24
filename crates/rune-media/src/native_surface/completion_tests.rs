@@ -236,7 +236,7 @@ fn rewake_during_active_poll_runs_another_poll_before_parking() {
 }
 
 fn drop_joins_completion_thread(with_timestamps: bool) {
-    let gpu = Gpu::headless_wgpu();
+    let Some(gpu) = Gpu::headless_wgpu() else { return };
     let surface = NativeSurface::new();
     surface.push_bytes(synthetic(16, 16, 0), 1).unwrap();
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -359,7 +359,7 @@ fn the_completion_thread_submits_what_a_configure_kept_back_once_it_is_done() {
 
 /// A frame drawn with timestamp queries, whose resolve a completion callback submits after it.
 fn timed_frame_resolves(configure_meanwhile: bool) {
-    let gpu = Gpu::headless_wgpu();
+    let Some(gpu) = Gpu::headless_wgpu() else { return };
     if !gpu.device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
         eprintln!("adapter has no timestamp queries: {:?}", gpu.adapter.get_info());
         return;
@@ -644,7 +644,7 @@ fn read_worker_stop_is_idempotent() {
 
 #[test]
 fn read_worker_device_notifies_on_read_and_drop_joins_in_flight_callback() {
-    let gpu = Gpu::headless_wgpu();
+    let Some(gpu) = Gpu::headless_wgpu() else { return };
     let worker = ReadWorker::spawn_device("rune-dmabuf-read", gpu.device.clone(), Duration::from_secs(10)).unwrap();
     let encoder = gpu.device.create_command_encoder(&Default::default());
     let submission = gpu.queue.submit([encoder.finish()]);

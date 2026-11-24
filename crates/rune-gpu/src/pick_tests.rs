@@ -124,3 +124,27 @@ fn adapter_name_pins_fallback_policy() {
     assert_eq!(super::policy_for_adapter_name(Some("AMD Radeon(TM) Graphics")), Policy::Pinned);
     assert_eq!(super::policy_for_adapter_name(Some("Microsoft Basic Render Driver")), Policy::Pinned);
 }
+
+#[test]
+fn skip_test_without_gpu_skips_only_missing_adapter_when_opted_in() {
+    assert!(crate::is_missing_adapter_error("no GPU adapter: No suitable graphics adapter found"));
+    assert!(!crate::is_missing_adapter_error(r#"no GPU adapter matches WGPU_ADAPTER_NAME="foo""#));
+    assert!(!crate::is_missing_adapter_error("no GPU device: OutOfMemory"));
+    assert!(!crate::is_missing_adapter_error("GPU rejected Rune's shader"));
+
+    assert!(crate::skip_test_without_gpu_with(true, "no GPU adapter: No suitable graphics adapter found"));
+
+    let panicked = std::panic::catch_unwind(|| {
+        crate::skip_test_without_gpu_with(false, "no GPU adapter: No suitable graphics adapter found")
+    });
+    assert!(panicked.is_err(), "missing adapter must fail when RUNE_ALLOW_NO_GPU is unset");
+
+    for error in [
+        r#"no GPU adapter matches WGPU_ADAPTER_NAME="foo""#,
+        "no GPU device: OutOfMemory",
+        "GPU rejected Rune's shader",
+    ] {
+        let panicked = std::panic::catch_unwind(|| crate::skip_test_without_gpu_with(true, error));
+        assert!(panicked.is_err(), "real GPU error must not be skipped even with opt-in: {error}");
+    }
+}

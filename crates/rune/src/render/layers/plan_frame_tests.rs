@@ -24,7 +24,7 @@ fn warm_sized(renderer: &Renderer) -> bool {
 /// there, and neither may the plan, however many layers closed on the frame before.
 #[test]
 fn a_layerless_frame_plans_nothing() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut atlas = crate::text::TextSystem::default().atlas;
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &burst(), (256, 256));
@@ -44,7 +44,7 @@ fn a_layerless_frame_plans_nothing() {
 /// pool again, and neither may the plan, frame after frame.
 #[test]
 fn one_layer_left_of_a_burst_reads_no_spare() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut atlas = crate::text::TextSystem::default().atlas;
     let burst = burst();
@@ -62,7 +62,7 @@ fn one_layer_left_of_a_burst_reads_no_spare() {
 /// target is made again, as dev reused its vectors and the target it parked.
 #[test]
 fn a_warm_menu_opens_and_closes_without_allocating() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut atlas = crate::text::TextSystem::default().atlas;
     let menu = group([4.0, 4.0, 40.0, 24.0], 0.0);
@@ -96,7 +96,7 @@ fn rows(count: u64) -> Vec<Instance> {
 /// so the plan's copy of the pool's order stays at the pool's size, as dev reused its pool.
 #[test]
 fn a_list_showing_twelve_and_thirteen_cached_rows_by_turns_allocates_nothing() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut atlas = crate::text::TextSystem::default().atlas;
     let (all, twelve, thirteen) = (rows(160), rows(12), rows(13));
@@ -119,7 +119,7 @@ fn a_list_showing_twelve_and_thirteen_cached_rows_by_turns_allocates_nothing() {
 /// order to do it: closing again must not give that copy back while the pool is still that large.
 #[test]
 fn a_menu_after_a_burst_opens_and_closes_without_allocating() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut atlas = crate::text::TextSystem::default().atlas;
     let burst = burst();
@@ -141,7 +141,7 @@ fn a_menu_after_a_burst_opens_and_closes_without_allocating() {
 /// The frame a menu closes on forgets its plan; the empty frames after it have nothing to forget.
 #[test]
 fn an_empty_frame_after_an_empty_frame_does_nothing() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut atlas = crate::text::TextSystem::default().atlas;
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &group([4.0, 4.0, 40.0, 24.0], 0.0), (64, 64));
@@ -158,7 +158,7 @@ fn an_empty_frame_after_an_empty_frame_does_nothing() {
 /// scratch before the sibling's texture existed: at most 64 MiB is ever live at once.
 #[test]
 fn a_frame_never_holds_more_layer_textures_than_dev() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut atlas = crate::text::TextSystem::default().atlas;
     let (one, two) = ([4.0, 4.0, 2000.0, 2000.0], [8.0, 8.0, 2000.0, 2000.0]);

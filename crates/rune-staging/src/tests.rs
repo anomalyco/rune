@@ -15,11 +15,21 @@ fn block_on<F: Future>(future: F) -> F::Output {
     }
 }
 
-fn gpu() -> (wgpu::Device, wgpu::Queue) {
+fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-        .expect("a wgpu adapter");
-    block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("a wgpu device")
+    let adapter = match block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) {
+        Ok(adapter) => adapter,
+        Err(error) => {
+            if std::env::var("RUNE_ALLOW_NO_GPU")
+                .is_ok_and(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes"))
+            {
+                eprintln!("skipped: no GPU adapter: {error} (RUNE_ALLOW_NO_GPU=1)");
+                return None;
+            }
+            panic!("a wgpu adapter: {error}");
+        }
+    };
+    Some(block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("a wgpu device"))
 }
 
 fn texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
@@ -46,7 +56,7 @@ fn flush_and_wait(device: &wgpu::Device, queue: &wgpu::Queue, staging: &Staging)
 /// a new chunk on every upload, while chunks above `KEEP_BYTES` are still freed on return.
 #[test]
 fn large_chunks_up_to_keep_bytes_are_reused() {
-    let (device, queue) = gpu();
+    let Some((device, queue)) = gpu() else { return };
     let tex = texture(&device, 1024, 1024);
 
     // 2 MiB: 512 rows of 1024-wide RGBA8 (4096 bytes/row).
@@ -87,7 +97,7 @@ fn large_chunks_up_to_keep_bytes_are_reused() {
 /// so the large chunk stays free for the next large write instead of causing a second allocation.
 #[test]
 fn stage_picks_smallest_fitting_free_chunk() {
-    let (device, queue) = gpu();
+    let Some((device, queue)) = gpu() else { return };
     let tex = texture(&device, 1024, 512);
     let staging = Staging::new(&device, &queue);
     let large = vec![1u8; 2 << 20];
@@ -128,7 +138,7 @@ fn kept_oversized(staging: &Staging) -> (usize, u64) {
 /// recyclable chunks, and still increments `Staging::lost()` if its encoder is dropped unsubmitted.
 #[test]
 fn one_shot_oversized_retains_zero_bytes_and_preserves_lost_counter() {
-    let (device, queue) = gpu();
+    let Some((device, queue)) = gpu() else { return };
     let tex = texture(&device, 1080, 2400);
     let staging = Staging::new(&device, &queue);
     let frame = vec![0x5Au8; 1080 * 2400 * 4];
@@ -159,7 +169,7 @@ fn one_shot_oversized_retains_zero_bytes_and_preserves_lost_counter() {
 /// serial (1 chunk = 10.0 MiB held) and 2-in-flight pipelined (2 chunks = 20.0 MiB held) loops.
 #[test]
 fn recurring_oversized_1080x2400_reuses_10mib_chunks_serial_and_pipelined() {
-    let (device, queue) = gpu();
+    let Some((device, queue)) = gpu() else { return };
     let tex = texture(&device, 1080, 2400);
     let frame = vec![0x3Cu8; 1080 * 2400 * 4];
 
@@ -216,7 +226,7 @@ fn recurring_oversized_1080x2400_reuses_10mib_chunks_serial_and_pipelined() {
 /// <= 4 MiB writes steal oversized chunks, and refuses reuse beyond 2x slack.
 #[test]
 fn oversized_pool_bounds_and_2x_slack_limit() {
-    let (device, queue) = gpu();
+    let Some((device, queue)) = gpu() else { return };
 
     // > 32 MiB is never kept even when repeated.
     let buf_36m = device.create_buffer(&wgpu::BufferDescriptor {
@@ -286,7 +296,7 @@ fn oversized_pool_bounds_and_2x_slack_limit() {
 /// `trim_oversized()`, while normal <= 4 MiB chunks stay kept.
 #[test]
 fn oversized_evicts_after_idle_flushes_and_on_trim_oversized() {
-    let (device, queue) = gpu();
+    let Some((device, queue)) = gpu() else { return };
     let buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("staging idle test"),
         size: 10 << 20,

@@ -19,6 +19,7 @@ fn on_key(s: &mut State, k: &KeyEvent, _: &mut Tx) -> bool {
 
 #[test]
 fn script_events_at_t_zero_see_the_first_layout() {
+    if !rune::render::Gpu::test_adapter_available() { return; }
     let dir = std::env::temp_dir().join(format!("rune-script-t0-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let (script, tree) = (dir.join("script.json"), dir.join("tree.json"));
@@ -31,7 +32,8 @@ fn script_events_at_t_zero_see_the_first_layout() {
     let spec = AppSpec { on_key: Some(on_key), ..AppSpec::new("t0", (200.0, 200.0), State::default, view) };
     App::new(spec)
         .args(["--script", script.to_str().unwrap(), "--tree", tree.to_str().unwrap()].map(String::from))
-        .run();
+        .try_run()
+        .unwrap();
     let tree: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&tree).unwrap()).unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let out = tree["elements"].as_array().unwrap().iter().find(|e| e["key"] == "out").unwrap();

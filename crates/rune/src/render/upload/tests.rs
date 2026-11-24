@@ -27,7 +27,7 @@ fn pixel(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
 #[cfg(feature = "test-gpu-counters")]
 #[test]
 fn a_steady_animating_frame_creates_no_buffers_and_skips_unchanged_globals() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let (device, queue) = (&gpu.device, &gpu.queue);
     let mut renderer = Renderer::new(device, OFFSCREEN_FORMAT);
     let mut text = crate::text::TextSystem::new(&[], ("Inter", "Inter"));
@@ -63,7 +63,7 @@ fn a_steady_animating_frame_creates_no_buffers_and_skips_unchanged_globals() {
 /// write lands: the frame draws each square where it is now.
 #[test]
 fn instances_are_written_in_the_spans_that_changed() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let (device, queue) = (&gpu.device, &gpu.queue);
     let mut renderer = Renderer::new(device, OFFSCREEN_FORMAT);
     let mut text = crate::text::TextSystem::new(&[], ("Inter", "Inter"));
@@ -104,7 +104,7 @@ fn instances_are_written_in_the_spans_that_changed() {
 /// caller may submit without `Renderer::submit`.
 #[test]
 fn uploads_land_before_a_draw_into_a_callers_pass() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let (device, queue) = (&gpu.device, &gpu.queue);
     let mut renderer = Renderer::new(device, OFFSCREEN_FORMAT);
     let mut text = crate::text::TextSystem::new(&[], ("Inter", "Inter"));
@@ -134,7 +134,7 @@ fn uploads_land_before_a_draw_into_a_callers_pass() {
 /// it would otherwise skip as unchanged.
 #[test]
 fn a_dropped_encoder_makes_the_next_frame_resend_everything() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let (device, queue) = (&gpu.device, &gpu.queue);
     let mut renderer = Renderer::new(device, OFFSCREEN_FORMAT);
     let mut text = crate::text::TextSystem::new(&[], ("Inter", "Inter"));
@@ -157,7 +157,7 @@ fn a_dropped_encoder_makes_the_next_frame_resend_everything() {
 #[cfg(feature = "test-gpu-counters")]
 #[test]
 fn compositor_buffer_writes_land_in_order_and_reuse_staging() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let (device, queue) = (&gpu.device, &gpu.queue);
     let mut renderer = Renderer::new(device, OFFSCREEN_FORMAT);
     let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
@@ -198,7 +198,7 @@ fn compositor_buffer_writes_land_in_order_and_reuse_staging() {
 
 #[test]
 fn a_frame_with_nothing_to_upload_never_touches_the_staging() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
     let (device, queue) = (&gpu.device, &gpu.queue);
     let mut renderer = Renderer::new(device, OFFSCREEN_FORMAT);
     renderer.upload_images(device, queue, &mut ImageAtlas::default());
@@ -222,11 +222,11 @@ fn a_frame_with_nothing_to_upload_never_touches_the_staging() {
 /// draw with `set_immediates`, no buffer written.
 #[test]
 fn a_device_asked_for_immediates_draws_with_them() {
-    let Ok(gpu) = Gpu::try_with_features(Gpu::instance(), None, wgpu::Features::IMMEDIATES) else { return };
+    let Some(gpu) = Gpu::test_with_features(wgpu::Features::IMMEDIATES) else { return };
     let device = &gpu.device;
     if !device.features().contains(wgpu::Features::IMMEDIATES) { return; }
     assert!(device.limits().max_immediate_size >= 16, "the limit came with the feature");
-    let plain = Gpu::headless();
+    let Some(plain) = Gpu::test_headless() else { return };
     if crate::gpu::backend::native(&plain.device) {
         assert!(plain.device.features().contains(wgpu::Features::IMMEDIATES), "free on the native backend, so always there");
     } else {
@@ -306,7 +306,7 @@ fn same_takes_lists_at_any_word_offset() {
 /// start one.
 #[test]
 fn batches_break_only_where_the_bound_page_changes() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
     let (device, queue) = (&gpu.device, &gpu.queue);
     let mut renderer = Renderer::new(device, OFFSCREEN_FORMAT);
     let mut text = crate::text::TextSystem::new(&[], ("Inter", "Inter"));
@@ -328,7 +328,7 @@ fn batches_break_only_where_the_bound_page_changes() {
 /// a changed `params`, a longer list or a lost staging batches again.
 #[test]
 fn only_a_changed_params_or_length_batches_again() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
     let (device, queue) = (&gpu.device, &gpu.queue);
     let mut renderer = Renderer::new(device, OFFSCREEN_FORMAT);
     let mut text = crate::text::TextSystem::new(&[], ("Inter", "Inter"));

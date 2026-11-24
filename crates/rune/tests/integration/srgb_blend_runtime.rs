@@ -55,7 +55,7 @@ fn hover_tints_follow_the_runtime_blend_mode() {
 
 #[test]
 fn a_self_drawn_runtime_renders_gamma_blended_pixels() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let near = |got: [u8; 4], want: [u8; 4]| assert!(got.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= 1), "{got:?} != {want:?}");
     // Half white over red: 128 in sRGB space, as CSS draws it; linear light reads 188.
     near(pixel(&gpu, &mut hovered(true)), [255, 128, 128, 255]);
@@ -92,6 +92,7 @@ fn a_handler_switches_blend_mode_live() {
 /// compositor's `Frame` change format on the frame that switches.
 #[test]
 fn a_headless_run_follows_a_live_switch() {
+    if !Gpu::test_adapter_available() { return; }
     use rune::compose::{Compositor, Frame};
     use rune::{App, AppSpec};
     use std::sync::Mutex;
@@ -115,7 +116,8 @@ fn a_headless_run_follows_a_live_switch() {
     };
     App::new(AppSpec::new("srgb-live", (40.0, 40.0), || (), view)).srgb_blend(false).compositor(Watch)
         .args(["--snap", png.to_str().unwrap(), "--scale", "1", "--script", script.to_str().unwrap(), "--at", "0.5"].map(String::from))
-        .run();
+        .try_run()
+        .unwrap();
     let decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&png).unwrap()));
     let mut reader = decoder.read_info().unwrap();
     let mut buf = vec![0u8; reader.output_buffer_size().unwrap()];
@@ -136,7 +138,7 @@ fn a_headless_run_follows_a_live_switch() {
 
 #[test]
 fn switching_format_keeps_the_glyph_atlas_and_extra_pipelines() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let text = TextSystem::new(&[], ("Inter", "Inter"));
     let view = |_: &(), _: &mut Cx<()>| {
         el().size(80.0, 40.0).fill(RED)

@@ -27,7 +27,7 @@ fn store(rows: usize) -> OutlineStore {
 /// parked target kept binding the outline texture it was made against.
 #[test]
 fn a_parked_target_binds_the_outline_texture_when_it_is_taken_back() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut atlas = crate::text::TextSystem::default().atlas;
     let text = group([8.0, 8.0, 32.0, 16.0]);
@@ -62,7 +62,7 @@ fn a_parked_target_binds_the_outline_texture_when_it_is_taken_back() {
 /// a layer takes it, and one no layer takes again costs nothing.
 #[test]
 fn a_texture_switch_binds_no_parked_target_until_one_returns() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
     let mut renderer = Renderer::new_classic(&gpu.device, OFFSCREEN_FORMAT);
     let mut atlas = crate::text::TextSystem::default().atlas;
     // Nothing has asked for outlines: the renderer is Classic, and four half-opaque groups make

@@ -61,7 +61,7 @@ fn a_dashed_border_is_its_own_ring_over_the_fill() {
 
 #[test]
 fn dashes_antialias_like_the_solid_border_and_show_the_fill_between() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let px = |out: &[u8], x: usize, y: usize| -> [u8; 4] { out[(y * 136 + x) * 4..][..4].try_into().unwrap() };
     let solid = pixels(&gpu, &mut frame(Mode::Solid));
     let dashed = pixels(&gpu, &mut frame(Mode::Dashed));

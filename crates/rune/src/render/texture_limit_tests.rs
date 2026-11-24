@@ -8,8 +8,8 @@ use crate::{Cx, El, Env, Runtime, el, image::ImageCache, pixels::Pixels};
 
 const LIMIT: u32 = 2048;
 
-fn small_gpu() -> Gpu {
-    let base = Gpu::headless();
+fn small_gpu() -> Option<Gpu> {
+    let base = Gpu::test_headless()?;
     let limits = wgpu::Limits { max_texture_dimension_2d: LIMIT, ..base.device.limits() };
     let (device, queue) = pollster::block_on(base.adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("rune 2048"),
@@ -19,7 +19,7 @@ fn small_gpu() -> Gpu {
         memory_hints: Default::default(),
         trace: Default::default(),
     })).expect("a device with a 2048 texture limit");
-    Gpu::from_device(base.instance.clone(), base.adapter.clone(), device, queue)
+    Some(Gpu::from_device(base.instance.clone(), base.adapter.clone(), device, queue))
 }
 
 fn scoped<T>(gpu: &Gpu, f: impl FnOnce() -> T) -> (T, Option<String>) {
@@ -31,7 +31,7 @@ fn scoped<T>(gpu: &Gpu, f: impl FnOnce() -> T) -> (T, Option<String>) {
 #[test]
 fn an_image_larger_than_the_device_s_largest_texture_draws_from_a_mip_that_fits() {
     fn view(s: &Pixels, _: &mut Cx<Pixels>) -> El { el().size(64.0, 64.0).pixels(s) }
-    let gpu = small_gpu();
+    let Some(gpu) = small_gpu() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let cache = ImageCache::new(Arc::new(|| {}));
     let image = cache.rgba(4096, 4096, [200u8, 30, 30, 255].repeat(4096 * 4096));
@@ -57,7 +57,7 @@ fn an_image_larger_than_the_device_s_largest_texture_draws_from_a_mip_that_fits(
 
 #[test]
 fn the_outline_store_never_outgrows_the_device_s_largest_texture() {
-    let gpu = small_gpu();
+    let Some(gpu) = small_gpu() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut atlas = crate::text::TextSystem::default().atlas;
     renderer.attach_text(&mut atlas);

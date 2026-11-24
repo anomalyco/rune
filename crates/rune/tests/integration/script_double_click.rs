@@ -15,6 +15,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
 
 #[test]
 fn a_double_click_event_runs_on_double_press() {
+    if !rune::render::Gpu::test_adapter_available() { return; }
     let dir = std::env::temp_dir().join(format!("rune-script-double-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let (script, tree) = (dir.join("script.json"), dir.join("tree.json"));
@@ -25,7 +26,8 @@ fn a_double_click_event_runs_on_double_press() {
     ]"#).unwrap();
     App::new(AppSpec::new("double", (200.0, 200.0), State::default, view))
         .args(["--script", script.to_str().unwrap(), "--tree", tree.to_str().unwrap()].map(String::from))
-        .run();
+        .try_run()
+        .unwrap();
     let tree: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&tree).unwrap()).unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let out = tree["elements"].as_array().unwrap().iter().find(|e| e["key"] == "out").unwrap();

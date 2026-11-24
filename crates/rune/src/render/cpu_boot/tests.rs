@@ -67,7 +67,7 @@ fn many_backdrop_blurs_match_gpu() {
 
     let atlas = Atlas::new();
     let images = ImageAtlas::default();
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
     let scene = Scene::new(&instances, &atlas, &images, (w, h), clear).srgb_blend(true).half_rounding(half);
     let bins = Bins::of(&scene);
@@ -133,7 +133,7 @@ fn scissor_clipped_layer_flattens_and_matches_gpu() {
         Instance::end_layer(),
         Instance::end_layer(),
     ];
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
     let scene = Scene::new(&instances, &atlas, &images, (w, h), clear).srgb_blend(true).half_rounding(half);
     let mut cpu_px = vec![0u8; (w * h * 4) as usize];
@@ -201,7 +201,7 @@ fn plus_lighter_overlapping_opaque_rects_match_gpu() {
 
     let atlas = Atlas::new();
     let images = ImageAtlas::default();
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
     let scene = Scene::new(&instances, &atlas, &images, (w, h), clear).srgb_blend(true).half_rounding(half);
     let mut cpu_px = vec![0u8; (w * h * 4) as usize];
@@ -237,7 +237,7 @@ fn plus_lighter_turned_and_scaled_layers_saturate_before_interpolation() {
     use crate::render::{Blend, OFFSCREEN_FORMAT, pack_u64_f32};
 
     let (w, h) = (64u32, 48u32);
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let render = |renderer: &mut Renderer, instances: &[Instance]| -> Vec<u8> {
         let mut atlas = Atlas::new();
         renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, instances, (w, h));
