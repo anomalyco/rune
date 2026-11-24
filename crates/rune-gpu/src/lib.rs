@@ -10,6 +10,7 @@ pub mod fallback;
 pub mod health;
 #[cfg(any(test, all(target_vendor = "apple", feature = "metal-backend")))]
 mod lazy_init;
+pub mod memory;
 #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
 pub mod metal;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -20,6 +21,7 @@ pub mod springs;
 
 pub use backend::GpuBackend;
 pub use backend::describe as describe_gpu;
+pub use memory::GpuMemoryPolicy;
 
 /// Opt-in environment switch for GPU-less test hosts (such as a headless Linux container without
 /// Vulkan): when set to `"1"`, `"true"`, `"TRUE"`, or `"yes"`, GPU test helpers skip with one

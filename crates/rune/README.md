@@ -596,6 +596,7 @@ let app = rune::App::new(spec)
     .windowless()                  // start with no window (implies keep_running)
     .keep_running()                // closing the window keeps the process, state and loop
     .release_gpu_when_closed()     // optional: drop the GPU device while closed
+    .gpu_memory_policy(GpuMemoryPolicy::MemoryUsage) // optional: wgpu suballocation policy
     .accessory()                   // macOS: menu-bar app, no Dock icon (h.set_dock_icon(true) shows it)
     .standard_menus()              // macOS: Edit, Minimize ⌘M and Close ⌘W (no Quit); regular apps get them anyway
     .on_close(|s, tx| ..)          // runs before every close; tx.quit() quits instead
@@ -766,6 +767,15 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   if the MSL, flags or library hash changed, run `scripts/precompile-metal-shaders.sh` (needs
   Xcode's Metal toolchain) and commit the updated libraries and hash files. Metal binary archives on
   wgpu's backend would need `wgpu-hal` support.
+- **GPU memory policy (`GpuMemoryPolicy`).** By default Rune creates wgpu devices with
+  `GpuMemoryPolicy::MemoryUsage` (smaller suballocation blocks than wgpu's `Performance` default).
+  Apps can choose `MemoryUsage`, `Performance`, or `Manual { block_size }` at startup via
+  `App::gpu_memory_policy` or `rune::set_gpu_memory_policy` (call before `prewarm_gpu`, `warm_gpu`,
+  or `warm_gpu_cache`; changing it discards or restarts any prewarmed or parked device built under
+  the previous policy). Honored by wgpu's D3D12 (Windows) and Vulkan (Linux) suballocators, and
+  ignored by Rune's native Metal backend, wgpu's Metal backend, and browser backends (WebGPU/WebGL2).
+  In `Manual`, `block_size` bounds suballocator block sizes rather than texture or buffer sizes:
+  larger resources still succeed via dedicated allocations.
 - **The first frame draws during window creation** on macOS for visible windows (not launcher windows or panels).
   The first view build and layout run inside creation, right after the window-created callbacks, so keep the initial
   state, `view` and `on_window` cheap.

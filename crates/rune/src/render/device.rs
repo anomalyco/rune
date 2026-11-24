@@ -259,11 +259,10 @@ impl Gpu {
             required_features,
             required_limits,
             experimental_features: Default::default(),
-            // `Performance` suballocates from 128 MB device and 64 MB host blocks, so a device
-            // that holds a few atlases commits about 190 MB more than it uses: process memory on
-            // an integrated GPU, and on Windows on a discrete one too. Rune keeps and reuses its
-            // buffers and textures, so the smaller blocks only cost a few more heaps.
-            memory_hints: wgpu::MemoryHints::MemoryUsage,
+            // Defaults to `MemoryUsage` (`Performance` suballocates from 128 MB device and
+            // 64 MB host blocks, committing ~190 MB more than a few atlases use). Callers can
+            // override this at startup via `App::gpu_memory_policy` or `set_gpu_memory_policy`.
+            memory_hints: crate::gpu::memory::wgpu_hints(),
             trace: Default::default(),
         }))
         .map_err(|error| format!("no GPU device: {error}"));
@@ -682,6 +681,50 @@ pub(crate) fn choose_gpu_backend(backend: crate::GpuBackend) {
     }
     #[cfg(not(all(target_os = "macos", feature = "metal-backend")))]
     let _ = changed;
+}
+
+/// Sets the startup GPU suballocation policy for wgpu devices created from now on, process-wide.
+///
+/// Call this before [`prewarm_gpu`], [`crate::warm_gpu`], [`crate::warm_gpu_cache`], or
+/// [`crate::App::run`] (or use [`crate::App::gpu_memory_policy`]). When the effective policy
+/// changes while a prewarmed or parked GPU is already in flight or waiting, that cached device
+/// is restarted (macOS) or discarded (Windows/Linux) so the next window or overlay creates its
+/// device under the new policy.
+///
+/// Honored by wgpu's D3D12 (Windows) and Vulkan (Linux) suballocators; ignored by Rune's native
+/// Metal backend, wgpu's Metal backend, and browser backends (WebGPU and WebGL2). Does not
+/// affect devices that are already live. In [`crate::GpuMemoryPolicy::Manual`], `block_size`
+/// bounds suballocator block sizes rather than resource sizes: larger textures and buffers
+/// still succeed via dedicated allocations.
+///
+/// # Example
+///
+/// ```no_run
+/// rune::set_gpu_memory_policy(rune::GpuMemoryPolicy::Manual {
+///     block_size: (4 * 1024 * 1024)..(8 * 1024 * 1024),
+/// });
+/// ```
+pub fn set_gpu_memory_policy(policy: crate::GpuMemoryPolicy) {
+    apply_gpu_memory_policy(policy, crate::gpu::memory::choose, invalidate_prewarm_for_policy);
+}
+
+/// Updates the policy before invalidating any prewarmed or parked GPU so a restarted thread
+/// always reads the new policy.
+pub(super) fn apply_gpu_memory_policy(
+    policy: crate::GpuMemoryPolicy,
+    choose: impl FnOnce(crate::GpuMemoryPolicy) -> bool,
+    invalidate: impl FnOnce(),
+) {
+    if choose(policy) {
+        invalidate();
+    }
+}
+
+fn invalidate_prewarm_for_policy() {
+    #[cfg(target_os = "macos")]
+    prewarm::restart();
+    #[cfg(not(target_os = "macos"))]
+    prewarm::discard();
 }
 
 /// Drops what `prewarm_gpu` made if no window took it.
