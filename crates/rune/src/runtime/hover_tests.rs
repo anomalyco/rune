@@ -337,3 +337,146 @@ fn hover_passes_below_a_layer_that_asks_for_it_while_the_layer_keeps_its_press()
         assert_eq!(rt.state.pressed, 1, "passes={passes}: the layer's press");
     }
 }
+
+#[test]
+fn press_motion_drives_press_and_press_scale_tracks_with_defaults_and_reduced_motion() {
+    #[derive(Clone, Copy)]
+    enum Mode { Default, Instant, Timed, Inert }
+
+    fn view(mode: &Mode, _: &mut Cx<Mode>) -> El {
+        let mut btn = el().key("btn").size(100.0, 40.0)
+            .press(Color::WHITE.alpha(0.2))
+            .press_scale(0.9)
+            .on_press(|_: &mut Mode| {});
+        btn = match *mode {
+            Mode::Default => btn,
+            Mode::Instant => btn.press_motion(Anim::INSTANT, Anim::INSTANT),
+            Mode::Timed => btn.press_motion(
+                rune_motion::Curve::linear(0.2),
+                rune_motion::Curve::linear(0.4),
+            ),
+            Mode::Inert => btn
+                .press_motion(rune_motion::Curve::linear(0.2), rune_motion::Curve::linear(0.4))
+                .inert(),
+        };
+        col().size(200.0, 100.0).child(btn)
+    }
+
+    let id = |rt: &Runtime<Mode>| rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("btn")).unwrap().id;
+    let press_v = |rt: &Runtime<Mode>| rt.scene.get(id(rt), P_PRESS).unwrap_or(0.0);
+    let scale_v = |rt: &Runtime<Mode>| rt.scene.get(id(rt), P_PRESS_SCALE).unwrap_or(1.0);
+
+    // Default: P_PRESS and P_PRESS_SCALE use tok::motion::INSTANT (0.1 s spring) down, then spring up (SNAPPY / POP).
+    let mut def = Runtime::new(Mode::Default, view, (200.0, 100.0), Env::new(true, 1.0));
+    def.frame(0.0);
+    def.pointer_move(50.0, 20.0);
+    def.pointer_down(50.0, 20.0);
+    def.frame(1.0 / 120.0);
+    assert!(press_v(&def) > 0.0 && press_v(&def) < 1.0, "default P_PRESS down springs on tok::motion::INSTANT, got {}", press_v(&def));
+    assert!(scale_v(&def) > 0.9 && scale_v(&def) < 1.0, "default P_PRESS_SCALE down springs on tok::motion::INSTANT, got {}", scale_v(&def));
+    def.frame(0.15);
+    assert!(press_v(&def) > 0.95, "default P_PRESS settles near 1.0");
+    assert!((scale_v(&def) - 0.9).abs() < 0.01, "default P_PRESS_SCALE settles near 0.9");
+    def.pointer_up(50.0, 20.0);
+    def.frame(1.0 / 120.0);
+    assert!(press_v(&def) > 0.1 && press_v(&def) < 1.0, "default P_PRESS release eases on SNAPPY");
+    assert!(scale_v(&def) > 0.9 && scale_v(&def) < 1.0, "default P_PRESS_SCALE release springs on POP");
+
+    // Instant: both down and release snap immediately on both tracks.
+    let mut inst = Runtime::new(Mode::Instant, view, (200.0, 100.0), Env::new(true, 1.0));
+    inst.frame(0.0);
+    inst.pointer_move(50.0, 20.0);
+    inst.pointer_down(50.0, 20.0);
+    inst.frame(1.0 / 120.0);
+    assert!((press_v(&inst) - 1.0).abs() < 1e-4);
+    assert!((scale_v(&inst) - 0.9).abs() < 1e-4);
+    inst.pointer_up(50.0, 20.0);
+    inst.frame(1.0 / 120.0);
+    assert!(press_v(&inst) < 1e-4, "instant press_motion snaps P_PRESS release");
+    assert!((scale_v(&inst) - 1.0).abs() < 1e-4, "instant press_motion snaps P_PRESS_SCALE release");
+
+    // Timed: down interpolates over 0.2 s linear, release interpolates over 0.4 s linear.
+    let mut timed = Runtime::new(Mode::Timed, view, (200.0, 100.0), Env::new(true, 1.0));
+    timed.frame(0.0);
+    timed.pointer_move(50.0, 20.0);
+    timed.pointer_down(50.0, 20.0);
+    timed.frame(0.0);
+    timed.frame(0.1);
+    assert!((press_v(&timed) - 0.5).abs() < 0.08, "P_PRESS down midpoint ~0.5, got {}", press_v(&timed));
+    assert!((scale_v(&timed) - 0.95).abs() < 0.01, "P_PRESS_SCALE down midpoint ~0.95, got {}", scale_v(&timed));
+    timed.frame(0.15);
+    assert!((press_v(&timed) - 1.0).abs() < 1e-4);
+    assert!((scale_v(&timed) - 0.9).abs() < 1e-4);
+
+    timed.pointer_up(50.0, 20.0);
+    timed.frame(0.0);
+    timed.frame(0.2);
+    assert!((press_v(&timed) - 0.5).abs() < 0.08, "P_PRESS up midpoint ~0.5, got {}", press_v(&timed));
+    assert!((scale_v(&timed) - 0.95).abs() < 0.01, "P_PRESS_SCALE up midpoint ~0.95, got {}", scale_v(&timed));
+    timed.frame(0.25);
+    assert!(press_v(&timed) < 1e-4);
+    assert!((scale_v(&timed) - 1.0).abs() < 1e-4);
+
+    // Reduce Motion: press_scale stays off (1.0), instant P_PRESS stays instant, long timed P_PRESS reduces to ~0.18 s fade.
+    let mut rm_inst = Runtime::new(Mode::Instant, view, (200.0, 100.0), Env::new(true, 1.0));
+    rm_inst.set_system_reduced_motion(true);
+    rm_inst.frame(0.0);
+    rm_inst.pointer_move(50.0, 20.0);
+    rm_inst.pointer_down(50.0, 20.0);
+    rm_inst.frame(1.0 / 120.0);
+    assert!((press_v(&rm_inst) - 1.0).abs() < 1e-4);
+    assert!((scale_v(&rm_inst) - 1.0).abs() < 1e-4, "press_scale is disabled under Reduce Motion");
+    rm_inst.pointer_up(50.0, 20.0);
+    rm_inst.frame(1.0 / 120.0);
+    assert!(press_v(&rm_inst) < 1e-4, "Anim::INSTANT P_PRESS stays instant under Reduce Motion");
+
+    let mut rm_timed = Runtime::new(Mode::Timed, view, (200.0, 100.0), Env::new(true, 1.0));
+    rm_timed.set_system_reduced_motion(true);
+    rm_timed.frame(0.0);
+    rm_timed.pointer_move(50.0, 20.0);
+    rm_timed.pointer_down(50.0, 20.0);
+    rm_timed.frame(0.0);
+    rm_timed.frame(0.25);
+    assert!((press_v(&rm_timed) - 1.0).abs() < 1e-4);
+    assert!((scale_v(&rm_timed) - 1.0).abs() < 1e-4, "press_scale stays off under Reduce Motion");
+    rm_timed.pointer_up(50.0, 20.0);
+    rm_timed.frame(0.0);
+    rm_timed.frame(0.22);
+    assert!(press_v(&rm_timed) < 1e-4, "0.4 s timed P_PRESS release reduced to 0.18 s fade settles by 0.22 s");
+
+    // Inert element with press_motion does not animate on press.
+    let mut inert = Runtime::new(Mode::Inert, view, (200.0, 100.0), Env::new(true, 1.0));
+    inert.frame(0.0);
+    inert.pointer_move(50.0, 20.0);
+    inert.pointer_down(50.0, 20.0);
+    inert.frame(0.1);
+    assert_eq!(press_v(&inert), 0.0);
+    assert_eq!(scale_v(&inert), 1.0);
+}
+
+#[test]
+fn press_motion_change_on_memo_root_is_not_reused_as_stale() {
+    fn view(instant: &bool, _: &mut Cx<bool>) -> El {
+        let base = crate::memo("btn", 0u32, || {
+            el().size(100.0, 40.0).press(Color::WHITE.alpha(0.2)).on_press(|_: &mut bool| {})
+        });
+        let btn = if *instant {
+            base.press_motion(Anim::INSTANT, Anim::INSTANT)
+        } else {
+            base.press_motion(Anim::INSTANT, rune_motion::Curve::linear(0.4))
+        };
+        col().size(200.0, 100.0).child(btn)
+    }
+
+    let mut rt = Runtime::new(false, view, (200.0, 100.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|inst, _| *inst = true);
+    rt.frame(0.0);
+    let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("btn")).unwrap().id;
+    rt.pointer_move(50.0, 20.0);
+    rt.pointer_down(50.0, 20.0);
+    rt.frame(1.0 / 120.0);
+    rt.pointer_up(50.0, 20.0);
+    rt.frame(1.0 / 120.0);
+    assert!(rt.scene.get(id, P_PRESS).unwrap_or(0.0) < 1e-4, "updated press_motion took effect on memo root");
+}

@@ -352,11 +352,17 @@ impl tracks::MotionState {
                 .and_then(|k| paint.inh_scratch.get(k))
                 .copied();
             let row = built.get(&from).and_then(|&k| paint.row_dy.get(k)).copied().unwrap_or(0.0);
-            let spring = tx.motion.map(MotionSource::spring).or(nodes[i].matched.as_ref().and_then(|m| m.1)).unwrap_or(crate::tok::motion::REFLOW);
+            let flight_anim: Anim = nodes[i]
+                .matched_motion
+                .as_deref()
+                .copied()
+                .or_else(|| tx.motion.map(MotionSource::anim))
+                .or_else(|| nodes[i].matched.as_ref().and_then(|m| m.1).map(Anim::from))
+                .unwrap_or_else(|| Anim::from(crate::tok::motion::REFLOW));
             let rest_fill = tree.nodes[from_i].vis.fill;
             let fill = if scene.store().is_animating(from, P_FILL) { scene.get(from, P_FILL).unwrap_or(rest_fill) } else { rest_fill };
             let opacity = scene.get(from, prop::OPACITY);
-            let anim = LayoutAnim::new(spring).screen();
+            let anim = LayoutAnim::new(flight_anim).screen();
             if self.flying.iter().any(|f| f.0 == from) && !self.launches.launched(from) {
                 // Mid-flight toggle: `from` drew along its blended flight frame rather than its
                 // parent's full zoom, so continue from that exact drawn rect and speed.
@@ -407,11 +413,11 @@ impl tracks::MotionState {
             let live = |p: crate::live::Property| nodes[i].live.iter().any(|b| b.property == p);
             if fill != nodes[i].vis.fill && !live(crate::live::Property::Fill) {
                 scene.set(to, P_FILL, fill);
-                scene.animate(to, P_FILL, nodes[i].vis.fill, spring);
+                scene.animate(to, P_FILL, nodes[i].vis.fill, flight_anim);
             }
             if let Some(o) = opacity.filter(|&o| o != nodes[i].vis.opacity) && !live(crate::live::Property::Opacity) {
                 scene.set(to, prop::OPACITY, o);
-                scene.animate(to, prop::OPACITY, nodes[i].vis.opacity, spring);
+                scene.animate(to, prop::OPACITY, nodes[i].vis.opacity, flight_anim);
             }
             // Its content mounted with it and flies as part of what was seen, so none of it fades
             // in on its own (each fresh level under a present parent otherwise would).

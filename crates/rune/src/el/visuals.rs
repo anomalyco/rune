@@ -344,7 +344,8 @@ impl El {
         self
     }
     /// Shrink to `scale` about the centre while a press on this element is held, as iOS tiles
-    /// and buttons do (0.96 to 0.97), springing back on release or when the pointer leaves.
+    /// and buttons do (0.96 to 0.97), springing back on release or when the pointer leaves
+    /// (override the down/up curves with [`Self::press_motion`]).
     /// Put it on the element with `on_press`. Layout and hit testing keep the resting size, and
     /// Reduce Motion turns it off. `1.0` (or anything not positive) removes it.
     pub fn press_scale(mut self, scale: f32) -> Self {
@@ -520,6 +521,30 @@ impl El {
     /// leaves (e.g. a delayed reveal).
     pub fn hover_motion(mut self, enter: impl Into<Anim>, exit: impl Into<Anim>) -> Self {
         self.vis.cold_mut().hover_motion = Some(Rc::new((enter.into(), exit.into())));
+        self
+    }
+    /// Curves for this element's press tracks ([`Self::press`], [`Self::press_color`] and
+    /// [`Self::press_scale`]): `down` while a press is held and `up` on release or leave.
+    ///
+    /// When unset, press highlights and colour use `tok::motion::INSTANT` down / `SNAPPY` up,
+    /// and `press_scale` uses `INSTANT` down / `POP` up. Under Reduce Motion, `press_scale`
+    /// stays off and press highlight curves reduce as opacity tracks do ([`Anim::INSTANT`] stays
+    /// instant).
+    ///
+    /// ```
+    /// use rune::{Color, Curve, Easing, el};
+    ///
+    /// let btn = el()
+    ///     .press(Color::WHITE.alpha(0.12))
+    ///     .press_scale(0.97)
+    ///     .press_motion(
+    ///         Curve::tween(0.12, Easing::EASE_OUT),
+    ///         Curve::tween(0.16, Easing::EASE_OUT),
+    ///     );
+    /// # let _ = btn;
+    /// ```
+    pub fn press_motion(mut self, down: impl Into<Anim>, up: impl Into<Anim>) -> Self {
+        self.vis.cold_mut().press_motion = Some(Rc::new((down.into(), up.into())));
         self
     }
     /// Default hover curves for this element and everything below it: any hover track (an

@@ -23,6 +23,7 @@ pub(crate) struct ElCold {
     pub(crate) above: Option<Anchor>,
     pub(crate) above_boundary: Option<String>,
     pub(crate) motion: Option<Spring>,
+    pub(crate) frame_motion: Option<Box<Anim>>,
     pub(crate) opacity_motion: Option<Box<Anim>>,
     pub(crate) lead: Option<(Spring, Spring)>,
     /// `El::animated_changes`: an ancestor's `El::instant_changes` stops here.
@@ -30,7 +31,9 @@ pub(crate) struct ElCold {
     /// `El::ime_option_as_alt`.
     pub(crate) option_as_alt: bool,
     pub(crate) transition: Option<Box<Transition>>,
+    pub(crate) transition_motion: Option<Box<(Anim, Anim)>>,
     pub(crate) matched: Option<Rc<str>>,
+    pub(crate) matched_motion: Option<Box<Anim>>,
     pub(crate) scroll: Option<ScrollSpec>,
     pub(crate) scroll_axes: ScrollAxes,
     /// `El::wheel_scrolls`: the viewport a wheel over this element scrolls, in place of what it
@@ -87,12 +90,15 @@ impl Empty for ElCold {
         above: None,
         above_boundary: None,
         motion: None,
+        frame_motion: None,
         opacity_motion: None,
         lead: None,
         animated_changes: false,
         option_as_alt: false,
         transition: None,
+        transition_motion: None,
         matched: None,
+        matched_motion: None,
         scroll: None,
         scroll_axes: ScrollAxes::Y,
         wheel_scrolls: None,

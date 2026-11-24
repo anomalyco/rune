@@ -66,6 +66,8 @@ pub struct VisualCold {
     pub hover_motion: Option<Rc<(Anim, Anim)>>,
     /// Hover curves for this element and the hover tracks below it without their own.
     pub(crate) hover_within: Option<Rc<(Anim, Anim)>>,
+    /// The press tracks' down and up curves (default: instant down, snappy/pop up).
+    pub(crate) press_motion: Option<Rc<(Anim, Anim)>>,
     /// Opacity factor (rest, hovered) following the nearest ancestor group's hover.
     pub group_opacity: Option<[f32; 2]>,
     /// Text or icon colour while the nearest ancestor group is hovered.
@@ -158,6 +160,7 @@ impl Empty for VisualCold {
         backdrop_blur: 0.0,
         hover_motion: None,
         hover_within: None,
+        press_motion: None,
         group_opacity: None,
         group_color: None,
         hover_alone: false,

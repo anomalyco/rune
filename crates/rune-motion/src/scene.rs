@@ -331,6 +331,8 @@ pub struct Scene {
     intents: Vec<(NodeId, u32, f32)>,
     /// Matched-geometry handovers completed since the last [`Scene::take_handovers`].
     handovers: Vec<Handover>,
+    /// Per-node enter/exit curves overriding `Transition::springs` (`set_transition_motion`).
+    transition_motion: FxMap<u64, (Anim, Anim)>,
     /// `keep_flights`: landings leave motion already on its way to the same value.
     keep: bool,
 }
@@ -362,6 +364,7 @@ impl Scene {
             trace: None,
             intents: Vec::new(),
             handovers: Vec::new(),
+            transition_motion: FxMap::default(),
             keep: false,
         }
     }
@@ -522,6 +525,9 @@ impl Scene {
         }
         self.travelling.retain(|&x| x as usize != i);
         self.store.remove_node(id);
+        if !self.transition_motion.is_empty() {
+            self.transition_motion.remove(&id.0);
+        }
         self.index.remove(&id.0);
         let n = &mut self.nodes[i];
         n.presence = Presence::LANDED;

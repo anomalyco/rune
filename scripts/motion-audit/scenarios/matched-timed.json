@@ -1,0 +1,8 @@
+{
+  "events": [
+    { "t": 0.25, "type": "tap", "key": "tile-2", "hold": 0.14, "expect": "smooth", "element": "tile-2" },
+    { "t": 1.1, "type": "key", "name": "Escape", "expect": "smooth", "element": "tile-2" },
+    { "t": 1.9, "type": "key", "name": "3", "expect": "smooth", "element": "pick-bar" },
+    { "t": 2.4, "type": "tap", "key": "mode", "hold": 0.14 }
+  ]
+}

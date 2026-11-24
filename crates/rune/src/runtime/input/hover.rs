@@ -462,16 +462,27 @@ impl RuntimeCore {
             if !n.vis.tracks_press() && press_scale.is_none() { continue; }
             let down = self.press_down_node(i, captured);
             let pressed = down && n.vis.tracks_press();
+            let press_motion = n.vis.press_motion.as_deref().copied();
             let id = n.id;
             changed |= self.scene.store().target(id, P_PRESS).unwrap_or(0.0) != pressed as u8 as f32;
             if paint_tracks::ready_from_rest(&mut self.scene, id, P_PRESS, 0.0, pressed as u8 as f32) {
-                self.scene.animate(id, P_PRESS, pressed as u8 as f32, if pressed { crate::tok::motion::INSTANT } else { crate::tok::motion::SNAPPY });
+                let anim = match press_motion {
+                    Some((d, u)) => if pressed { d } else { u },
+                    None => if pressed { crate::tok::motion::INSTANT.into() } else { crate::tok::motion::SNAPPY.into() },
+                };
+                self.scene.animate(id, P_PRESS, pressed as u8 as f32, anim);
             }
             if let Some(k) = press_scale {
                 // Down follows the hand; the release springs back with a little life.
                 let down = down && !self.reduced_motion;
-                if paint_tracks::ready_from_rest(&mut self.scene, id, P_PRESS_SCALE, 1.0, if down { k } else { 1.0 }) {
-                    self.scene.animate(id, P_PRESS_SCALE, if down { k } else { 1.0 }, if down { crate::tok::motion::INSTANT } else { crate::tok::motion::POP });
+                let want = if down { k } else { 1.0 };
+                changed |= self.scene.store().target(id, P_PRESS_SCALE).unwrap_or(1.0) != want;
+                if paint_tracks::ready_from_rest(&mut self.scene, id, P_PRESS_SCALE, 1.0, want) {
+                    let anim = match press_motion {
+                        Some((d, u)) => if down { d } else { u },
+                        None => if down { crate::tok::motion::INSTANT.into() } else { crate::tok::motion::POP.into() },
+                    };
+                    self.scene.animate(id, P_PRESS_SCALE, want, anim);
                 }
             }
         }

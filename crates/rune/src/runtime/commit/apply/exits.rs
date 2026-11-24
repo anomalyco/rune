@@ -192,19 +192,23 @@ fn plan_hold_layout_collapses(
             LayoutAnim::INSTANT
         } else {
             let sib = hi.or(lo).map(|s| &nodes[s.new_idx]);
-            let anim_l = tx.motion.map_or_else(
-                || sib.map_or(old.motion, |s| s.motion).into(),
-                MotionSource::anim,
-            );
-            let mut la = LayoutAnim::new(anim_l);
-            if tx.motion.is_none() {
-                if let Some((lead, trail)) = sib.and_then(|s| s.lead).or(old.lead) {
-                    la = la.lead(lead, trail);
-                } else if sib.map_or(old.width_leads, |s| s.width_leads) {
-                    la = la.width_leads();
+            if let Some(&anim) = sib.and_then(|s| s.frame_motion.as_deref()) {
+                LayoutAnim::new(anim)
+            } else {
+                let anim_l = tx.motion.map_or_else(
+                    || sib.map_or(old.motion, |s| s.motion).into(),
+                    MotionSource::anim,
+                );
+                let mut la = LayoutAnim::new(anim_l);
+                if tx.motion.is_none() {
+                    if let Some((lead, trail)) = sib.and_then(|s| s.lead).or(old.lead) {
+                        la = la.lead(lead, trail);
+                    } else if sib.map_or(old.width_leads, |s| s.width_leads) {
+                        la = la.width_leads();
+                    }
                 }
+                la
             }
-            la
         };
         plans.insert(oi, CollapsePlan { local, scene: scene_rect, anim, retarget });
     }
@@ -312,6 +316,9 @@ pub(super) fn retire_removed_nodes(
             } else {
                 if let Some(t) = old_parent_id.and_then(|pid| node_index.get(&pid)).and_then(|&p| nodes[p].vis.child_exit.as_deref().copied()) {
                     scene.set_transition(old.id, t);
+                    if !is_exiting {
+                        scene.clear_transition_motion(old.id);
+                    }
                 }
                 scene.remove(old.id);
                 if let Some(plan) = collapses.get(&oi).copied() && scene.contains(old.id) {

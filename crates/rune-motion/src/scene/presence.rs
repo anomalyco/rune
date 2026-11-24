@@ -48,7 +48,17 @@ impl Scene {
         // its own, and the fades multiply until its deep rows show long after it has arrived.
         // An entrance of its own (anything beyond the plain fade, or a delay) asks only its parent,
         // so a list staggering its rows in under an entering surface keeps its stagger.
-        let plain = delay <= 0.0 && spec.transition.insertion == Transition::opacity().insertion;
+        let base_enter = if !self.transition_motion.is_empty()
+            && let Some(&(enter, _)) = self.transition_motion.get(&id.0)
+        {
+            enter
+        } else {
+            Anim::from(spec.transition.springs.enter)
+        };
+        let base_delay = if base_enter.delay.is_finite() { base_enter.delay.max(0.0) } else { 0.0 };
+        let extra_delay = if delay.is_finite() { delay.max(0.0) } else { 0.0 };
+        let total_delay = base_delay + extra_delay;
+        let plain = total_delay <= 0.0 && spec.transition.insertion == Transition::opacity().insertion;
         let rides_parent = {
             let mut a = parent;
             loop {
@@ -64,8 +74,7 @@ impl Scene {
         let ins = spec.transition.insertion.kit_rules(false);
         // An entrance that changes nothing on screen (an identity insertion) has nothing to play.
         let animate = mount == Mount::Animated && !rides_parent && !ins.shows_nothing();
-        let delay = if delay.is_finite() { delay.max(0.0) } else { 0.0 };
-        let entrance = Anim { delay, ..Anim::from(spec.transition.springs.enter) };
+        let entrance = Anim { delay: total_delay, ..base_enter };
         let mut generation = 0;
         let mut presence = Presence::LANDED;
         let acts = phase::step(&mut presence, &mut generation, PhaseEvent::Mount { ins, animate, entrance });
@@ -131,7 +140,59 @@ impl Scene {
         }
     }
 
-    /// The app removed a keyed node. It stays drawn, plays its removal effect on the exit spring,
+    /// Overrides the enter and exit curves for `id`'s presence transitions, accepting any
+    /// [`Anim`] (including timed curves) in place of [`Transition::springs`].
+    ///
+    /// Call before [`insert`](Self::insert) / [`insert_delayed`](Self::insert_delayed) so the
+    /// initial entrance uses `enter`, or on a present node so its next exit or revive uses them.
+    /// An entrance or exit already running is left undisturbed. Reduce Motion continues to apply
+    /// to presence tracks as usual.
+    ///
+    /// ```
+    /// use rune_motion::{Curve, Easing, Mount, NodeId, NodeSpec, Rect, Scene, Transition};
+    ///
+    /// let mut scene = Scene::new();
+    /// let id = NodeId(1);
+    /// scene.set_transition_motion(
+    ///     id,
+    ///     Curve::tween(0.16, Easing::EASE_OUT),
+    ///     Curve::tween(0.11, Easing::EASE_IN),
+    /// );
+    /// scene.insert(id, NodeSpec::new(Rect::new(0.0, 0.0, 100.0, 40.0)).transition(Transition::opacity()), Mount::Animated);
+    /// ```
+    pub fn set_transition_motion(&mut self, id: NodeId, enter: impl Into<Anim>, exit: impl Into<Anim>) {
+        self.transition_motion.insert(id.0, (enter.into(), exit.into()));
+    }
+
+    /// Removes any curve override installed by [`set_transition_motion`](Self::set_transition_motion)
+    /// for `id`, falling back to [`Transition::springs`].
+    pub fn clear_transition_motion(&mut self, id: NodeId) {
+        if !self.transition_motion.is_empty() {
+            self.transition_motion.remove(&id.0);
+        }
+    }
+
+    pub(super) fn enter_anim(&self, i: usize) -> Anim {
+        if !self.transition_motion.is_empty()
+            && let Some(&(enter, _)) = self.transition_motion.get(&self.nodes[i].id.0)
+        {
+            enter
+        } else {
+            Anim::from(self.nodes[i].transition.springs.enter)
+        }
+    }
+
+    pub(super) fn exit_anim(&self, i: usize) -> Anim {
+        if !self.transition_motion.is_empty()
+            && let Some(&(_, exit)) = self.transition_motion.get(&self.nodes[i].id.0)
+        {
+            exit
+        } else {
+            Anim::from(self.nodes[i].transition.springs.exit)
+        }
+    }
+
+    /// The app removed a keyed node. It stays drawn, plays its removal effect on the exit curve,
     /// and is reported in `exited` only once its presence has settled at 0 (opacity 0).
     pub fn remove(&mut self, id: NodeId) {
         let Some(i) = self.slot(id) else { return };
@@ -139,10 +200,8 @@ impl Scene {
             return;
         }
         let p = self.presence_now(i);
-        let (rem, exit) = {
-            let n = &self.nodes[i];
-            (n.transition.removal.kit_rules(true), Anim::from(n.transition.springs.exit))
-        };
+        let rem = self.nodes[i].transition.removal.kit_rules(true);
+        let exit = self.exit_anim(i);
         let acts = self.nodes[i].phase_step(&mut self.exiting, PhaseEvent::Exit { p, rem, exit });
         self.apply(i, acts);
     }
@@ -188,10 +247,8 @@ impl Scene {
 
     fn revive(&mut self, i: usize) {
         let p = self.presence_now(i);
-        let (ins, entrance) = {
-            let n = &self.nodes[i];
-            (n.transition.insertion.kit_rules(false), Anim::from(n.transition.springs.enter))
-        };
+        let ins = self.nodes[i].transition.insertion.kit_rules(false);
+        let entrance = self.enter_anim(i);
         let acts = self.nodes[i].phase_step(&mut self.exiting, PhaseEvent::Revive { p, ins, entrance });
         self.apply(i, acts);
     }

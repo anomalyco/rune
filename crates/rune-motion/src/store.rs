@@ -631,6 +631,50 @@ impl AnimationStore {
         }
         changed
     }
+
+    /// Animates a 2-lane track (`prop::TRAVEL`) with independent per-axis curves and starting
+    /// velocities in one pass, avoiding double-starting lane 0 when `anim_x` and `anim_y` are
+    /// additive tweens or differ by axis.
+    pub(crate) fn animate_axes_2(
+        &mut self,
+        t: usize,
+        targets: [f32; 2],
+        anims: [Anim; 2],
+        vels: [f32; 2],
+    ) {
+        let now = self.time_of(t);
+        if self.t_next_due[t] <= now {
+            self.apply_due(t, now);
+        }
+        let class = self.t_meta[t].class;
+        let eps = class.eps(self.pixel_scale);
+        let l0 = self.t_lane0[t] as usize;
+        let mut end = now;
+        for (i, (&target, &vel)) in targets.iter().zip(&vels).enumerate() {
+            let mut anim = anims[i];
+            if self.reduced_motion {
+                anim.curve = class.reduce(anim.curve);
+            }
+            let blend = anim.resolved_blend();
+            let l = l0 + i;
+            self.cancel_pending(l);
+            if anim.delay > 0.0 {
+                self.push_pending(l, Pending {
+                    at: now + anim.delay as f64,
+                    target,
+                    velocity: vel,
+                    curve: anim.curve,
+                    blend,
+                    next: NONE,
+                });
+            } else {
+                self.start_lane(l, now, target, anim.curve, blend, Some(vel), eps);
+            }
+            end = end.max(now + anim.delay as f64 + anim.curve.logical_duration() as f64);
+        }
+        let token = if anims[1].token != 0 { anims[1].token } else { anims[0].token };
+        self.commit_scheduled(t, end, token);
+    }
 }
 
 impl Meta {

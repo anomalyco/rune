@@ -145,6 +145,26 @@ impl El {
         }
         self
     }
+    /// Override the curve this element's own layout frame changes on, accepting any [`Anim`]
+    /// (a spring, a timed [`Curve::tween`](crate::Curve::tween), or [`Anim::INSTANT`]).
+    ///
+    /// Not inherited: descendants keep the commit's [`Tx::motion`](crate::Tx::motion) /
+    /// [`Tx::motion_curve`](crate::Tx::motion_curve) or their own [`motion`](Self::motion).
+    /// Overrides commit motion and skips [`lead`](Self::lead) / [`width_leads`](Self::width_leads)
+    /// on this element. Explicit instant/settle commits, [`instant_changes`](Self::instant_changes),
+    /// window resize steps and Reduce Motion still land immediately.
+    ///
+    /// ```
+    /// use rune::{Anim, Curve, Easing, el};
+    ///
+    /// let eased = el().key("bar").w(120.0).frame_motion(Curve::tween(0.24, Easing::EASE_OUT));
+    /// let snapped = el().key("label").frame_motion(Anim::INSTANT);
+    /// # let _ = (eased, snapped);
+    /// ```
+    pub fn frame_motion(mut self, anim: impl Into<Anim>) -> Self {
+        self.cold_mut().frame_motion = Some(Box::new(anim.into()));
+        self
+    }
     /// Override the curve this element's own opacity changes on, with an optional delay
     /// ([`AnimExt::delay`](crate::AnimExt::delay)). The first paint and explicit
     /// instant/settle transactions still land immediately. A new element's entrance runs on
@@ -213,6 +233,30 @@ impl El {
         self.cold_mut().transition = Some(Box::new(t));
         self
     }
+    /// Override the enter and exit curves for this element's presence [`transition`](Self::transition),
+    /// accepting any [`Anim`] (including timed [`Curve::tween`](crate::Curve::tween) curves and
+    /// [`Anim::INSTANT`]) in place of `Transition::springs`.
+    ///
+    /// Instant/settle commits still mount and unmount at once, and Reduce Motion applies to
+    /// presence tracks as usual (timed curves reduce to a short crossfade; [`Anim::INSTANT`]
+    /// stays instant).
+    ///
+    /// ```
+    /// use rune::{Curve, Easing, Transition, el};
+    ///
+    /// let menu = el()
+    ///     .key("menu")
+    ///     .transition(Transition::opacity())
+    ///     .transition_motion(
+    ///         Curve::tween(0.16, Easing::EASE_OUT),
+    ///         Curve::tween(0.11, Easing::EASE_IN),
+    ///     );
+    /// # let _ = menu;
+    /// ```
+    pub fn transition_motion(mut self, enter: impl Into<Anim>, exit: impl Into<Anim>) -> Self {
+        self.cold_mut().transition_motion = Some(Box::new((enter.into(), exit.into())));
+        self
+    }
     /// Shared-element motion (SwiftUI `matchedGeometryEffect`, Motion `layoutId`). When an
     /// element with `id` leaves the tree in the same commit that another with `id` mounts
     /// somewhere else, the new one starts exactly where the old one was seen, with its
@@ -230,6 +274,27 @@ impl El {
     /// When two elements share an id in one tree, the last one in tree order is matched.
     pub fn matched(mut self, id: impl Into<String>) -> Self {
         self.cold_mut().matched = Some(Rc::from(id.into()));
+        self
+    }
+    /// Override the curve this [`matched`](Self::matched) element flies on, accepting any
+    /// [`Anim`] (a spring, a timed [`Curve::tween`](crate::Curve::tween), or [`Anim::INSTANT`]).
+    ///
+    /// Drives the flight's geometry, corner radius, fill and opacity interpolation, overriding
+    /// [`Tx::motion`](crate::Tx::motion), [`Tx::motion_curve`](crate::Tx::motion_curve) and
+    /// [`motion`](Self::motion). Under Reduce Motion or instant/settle commits, nothing is
+    /// matched as usual.
+    ///
+    /// ```
+    /// use rune::{Curve, Easing, el};
+    ///
+    /// let pill = el()
+    ///     .key("active-pill")
+    ///     .matched("active-pill")
+    ///     .matched_motion(Curve::tween(0.18, Easing::EASE_OUT));
+    /// # let _ = pill;
+    /// ```
+    pub fn matched_motion(mut self, anim: impl Into<Anim>) -> Self {
+        self.cold_mut().matched_motion = Some(Box::new(anim.into()));
         self
     }
     /// While this [`matched`](Self::matched) element flies, its children keep their final

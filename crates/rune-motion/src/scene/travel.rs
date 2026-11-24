@@ -75,7 +75,7 @@ impl Scene {
         let (Some(a), Some(b)) = (self.slot(from), self.slot(to)) else { return };
         if self.store.reduced_motion() {
             self.remove(from);
-            let entrance = Anim::from(self.nodes[b].transition.springs.enter);
+            let entrance = self.enter_anim(b);
             let acts = self.nodes[b].phase_step(&mut self.exiting, PhaseEvent::FadeIn { entrance });
             self.apply(b, acts);
             return;
@@ -186,8 +186,7 @@ impl Scene {
         }
         self.track_set(i, prop::TRAVEL, Vec2::ZERO);
         let t = self.nodes[i].tracks[prop::TRAVEL.id.0 as usize].unwrap().index_usize();
-        self.store.animate_raw(t, &[1.0, 0.0], anim.x, Some(&[px, 0.0]));
-        self.store.animate_raw(t, &[1.0, 1.0], anim.y, Some(&[px, py]));
+        self.store.animate_axes_2(t, [1.0, 1.0], [anim.x, anim.y], [px, py]);
         if self.nodes[i].tracks[prop::FRAME.id.0 as usize].is_some() {
             self.track_set(i, prop::FRAME, end_local);
         }
