@@ -345,8 +345,15 @@ fn confirming_timer_drains_queued_release_or_move_after_700ms_stall_before_firin
     assert_eq!((rt.state.taps, rt.state.secondary), (0, 0), "must not fire secondary press inside rAF");
     assert_eq!(rt.wake_deadline(), None, "Confirming state schedules no extra runtime wake");
 
-    // Queued pointerup (event_time = 0.08) drains ahead of the low-priority confirm macrotask.
-    rt.touch(1, TouchPhase::Ended, 100.0, 30.0, 0.08);
+    // An intermediate post-stall animation frame (raf1) runs before Chromium delivers pointerup:
+    // Confirming must stay pending without re-emitting ConfirmHold or firing early.
+    rt.frame.test_clock_mut().unwrap().seek(0.716);
+    rt.frame(0.016);
+    assert_eq!(rt.core_mut().take_touch_hold_command(), None);
+    assert_eq!((rt.state.taps, rt.state.secondary), (0, 0));
+
+    // Waiting pointerup (event_time = 0.046) arrives after raf1 commits, cancelling raf2 + confirm.
+    rt.touch(1, TouchPhase::Ended, 100.0, 30.0, 0.046);
     assert_eq!(rt.core_mut().take_touch_hold_command(), Some(TouchHoldCommand::Cancel));
     rt.frame(0.0);
     assert_eq!((rt.state.taps, rt.state.secondary), (1, 0), "draining release must commit a tap");

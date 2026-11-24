@@ -2166,3 +2166,88 @@ test('document contextmenu forwards touch_hold only while a canvas touch is acti
         bridge.destroy(h);
     }
 });
+
+test('scheduleTouchHoldConfirm waits two animation frames before confirming so pointerup delivered after raf1 cancels the hold', () => {
+    const { events, h } = setup();
+    const origRAF = globalThis.requestAnimationFrame;
+    const origCAF = globalThis.cancelAnimationFrame;
+    const origScheduler = globalThis.scheduler;
+    const origNav = globalThis.navigator;
+    let nextRafId = 1;
+    const rafs = new Map();
+    const tasks = [];
+    Object.defineProperty(globalThis, 'requestAnimationFrame', {
+        value: cb => { const id = nextRafId++; rafs.set(id, cb); return id; },
+        configurable: true,
+    });
+    Object.defineProperty(globalThis, 'cancelAnimationFrame', {
+        value: id => { rafs.delete(id); },
+        configurable: true,
+    });
+    Object.defineProperty(globalThis, 'scheduler', {
+        value: {
+            postTask(fn, opts) {
+                const entry = { fn, opts, aborted: false };
+                opts?.signal?.addEventListener?.('abort', () => { entry.aborted = true; });
+                tasks.push(entry);
+                return new Promise((resolve, reject) => {
+                    entry.run = () => {
+                        if (entry.aborted) { reject(new Error('aborted')); return; }
+                        fn();
+                        resolve();
+                    };
+                });
+            },
+        },
+        configurable: true,
+    });
+    Object.defineProperty(globalThis, 'navigator', {
+        value: { ...origNav, scheduling: { isInputPending: () => false } },
+        configurable: true,
+    });
+    const flushOneRaf = () => {
+        const batch = [...rafs.entries()];
+        rafs.clear();
+        for (const [, cb] of batch) cb(performance.now());
+    };
+    const flushTasks = () => {
+        const batch = tasks.splice(0);
+        for (const t of batch) t.run();
+    };
+    try {
+        // Reproduce the measured Chromium post-stall order:
+        // 1. Stale rAF schedules confirmation.
+        // 2. Background tasks + raf1 + post-raf1 tasks all run with isInputPending() === false.
+        // 3. Waiting pointerup arrives AFTER raf1 and calls cancelTouchHoldConfirm(h).
+        // 4. raf2 + trailing tasks run: touch_hold_confirm must NOT have fired.
+        bridge.scheduleTouchHoldConfirm(h, 99);
+        flushTasks();
+        assert.deepEqual(events, [], 'must not confirm on a background task before raf1');
+        flushOneRaf(); // raf1 (overdue post-stall frame)
+        flushTasks();
+        assert.deepEqual(events, [], 'must not confirm after only raf1 before fresh post-stall raf2');
+
+        // Waiting pointerup arrives after raf1 commits and cancels the hold.
+        bridge.cancelTouchHoldConfirm(h);
+        assert.equal(rafs.size, 0, 'cancelling must cancel pending raf2 so idle page sleeps');
+        flushOneRaf();
+        flushTasks();
+        assert.deepEqual(events, []);
+
+        // Genuine hold (no pointerup): confirms after raf1 -> raf2 -> background task.
+        bridge.scheduleTouchHoldConfirm(h, 100);
+        flushOneRaf(); // raf1
+        assert.deepEqual(events, []);
+        flushOneRaf(); // raf2
+        assert.deepEqual(events, [], 'must wait for trailing background task after raf2');
+        flushTasks();
+        assert.deepEqual(events, [{ kind: 'touch_hold_confirm', attempt: 100 }]);
+        assert.equal(rafs.size, 0);
+    } finally {
+        Object.defineProperty(globalThis, 'requestAnimationFrame', { value: origRAF, configurable: true });
+        Object.defineProperty(globalThis, 'cancelAnimationFrame', { value: origCAF, configurable: true });
+        Object.defineProperty(globalThis, 'scheduler', { value: origScheduler, configurable: true });
+        Object.defineProperty(globalThis, 'navigator', { value: origNav, configurable: true });
+        bridge.destroy(h);
+    }
+});
