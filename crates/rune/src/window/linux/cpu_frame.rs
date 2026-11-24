@@ -17,7 +17,7 @@ use winit::window::Window;
 use super::handover::{GpuJob, SurfaceMode};
 use crate::frame::clock::FrameClock;
 use crate::frame::host_step::{self, Acquire, FrameHost, Gate, RenderPrep, StepInfo};
-use crate::platform::cpu_frames::{Frames, Put};
+use crate::platform::cpu_frames::{Frames, Put, Retired};
 use crate::render::cpu_boot::{CpuPainter, HalfRounding, Scene, Target};
 use crate::runtime::RuntimeCore;
 use crate::time::Instant;
@@ -41,6 +41,48 @@ pub(in crate::window) struct Cpu {
     half: HalfRounding,
     /// The radius the frames' bottom corners were last cleared at (`clear_corners`).
     radius: f32,
+}
+
+/// A window's CPU side after the window went to the GPU (`Cpu::retire`): it draws nothing and
+/// can send the display nothing. What it showed last stays readable, and its buffers stay alive,
+/// until the GPU's first frame is on screen.
+pub(in crate::window) struct RetiredCpu {
+    pub(super) frames: Retired,
+    painter: CpuPainter,
+    half: HalfRounding,
+    radius: f32,
+}
+
+impl Cpu {
+    /// The window goes to the GPU (`handover::SurfaceMode::switch`).
+    pub(super) fn retire(self) -> RetiredCpu {
+        RetiredCpu { frames: self.frames.retire(), painter: self.painter, half: self.half, radius: self.radius }
+    }
+}
+
+#[cfg(test)]
+impl Cpu {
+    /// A CPU side with no display behind it, and the count of frames a display would have had.
+    pub(super) fn fake(explicit_sync: bool) -> (Cpu, Arc<std::sync::atomic::AtomicUsize>) {
+        let (frames, sent) = crate::platform::cpu_frames::fake::Frames::new(explicit_sync);
+        (Cpu { frames, painter: CpuPainter::new(1), half: HalfRounding::default(), radius: 0. }, sent)
+    }
+}
+
+impl RetiredCpu {
+    /// The CPU side back, where the display allows that (`Retired::revive`); its next frame is
+    /// painted and sent whole.
+    pub(super) fn revive(self) -> Result<Cpu, RetiredCpu> {
+        let RetiredCpu { frames, mut painter, half, radius } = self;
+        match frames.revive() {
+            Ok(mut frames) => {
+                frames.forget();
+                painter.forget();
+                Ok(Cpu { frames, painter, half, radius })
+            }
+            Err(frames) => Err(RetiredCpu { frames, painter, half, radius }),
+        }
+    }
 }
 
 /// Threads the CPU renderer paints on: the UI thread and up to five workers that park between
@@ -166,7 +208,7 @@ impl FrameHost for CpuWindowFrame<'_> {
 
     fn gate(&mut self) -> Gate {
         let Some(l) = self.host.win.as_mut() else { return Gate::Skip };
-        let SurfaceMode::Cpu { cpu, .. } = &mut l.native.mode else { return Gate::Skip };
+        let Some(cpu) = l.native.mode.cpu() else { return Gate::Skip };
         // The display threw away what the window showed and asks for it again: the window is in
         // sight, so this frame is drawn and sent whole.
         let owed = cpu.frames.exposed(false);
@@ -219,7 +261,7 @@ impl FrameHost for CpuWindowFrame<'_> {
         let Some(l) = self.host.win.as_mut() else { return RenderPrep::Abort };
         let (width, height) = (l.config.width, l.config.height);
         let rt = self.host.app.rt_mut();
-        let SurfaceMode::Cpu { cpu, .. } = &mut l.native.mode else { return RenderPrep::Abort };
+        let Some(cpu) = l.native.mode.cpu() else { return RenderPrep::Abort };
         cpu.painter.fill_masks(&mut rt.text.atlas);
         crate::marks::mark_once(&FIRST_MASKS, "frame.first.masks");
         let scene = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, (width, height), rt.clear_color())
@@ -267,7 +309,7 @@ impl FrameHost for CpuWindowFrame<'_> {
     fn render(&mut self, prepared: &mut Option<Vec<[u32; 4]>>, _info: &StepInfo) -> bool {
         let Some(rects) = prepared.as_deref() else { return false };
         let Some(l) = self.host.win.as_mut() else { return false };
-        let SurfaceMode::Cpu { cpu, .. } = &mut l.native.mode else { return false };
+        let Some(cpu) = l.native.mode.cpu() else { return false };
         // A frame that changed nothing looks again, having waited for the display, whether it
         // wants the window's pixels: the request that asked for this frame may be why.
         let owed = self.owed || (rects.is_empty() && cpu.frames.exposed(true));
@@ -311,7 +353,7 @@ impl FrameHost for CpuWindowFrame<'_> {
         // Motion's next frame: a Wayland compositor says when (its frame callback holds winit's
         // redraw until then), if this frame sent it anything; otherwise the display's refresh
         // interval from now, as nothing else paces a CPU frame.
-        let paced = self.sent && matches!(&l.native.mode, SurfaceMode::Cpu { cpu, .. } if cpu.frames.paced());
+        let paced = self.sent && l.native.mode.cpu().is_some_and(|cpu| cpu.frames.paced());
         if !self.host.idle && !paced {
             let hz = l.window.current_monitor().and_then(|m| m.refresh_rate_millihertz()).map_or(60., |mhz| f64::from(mhz) / 1000.);
             l.backoff_step(BackoffEvent::At(crate::time::now() + std::time::Duration::from_secs_f64(1. / hz.clamp(24., 480.))));

@@ -348,6 +348,12 @@ pub(crate) fn warm_gpu_then(features: wgpu::Features, done: impl FnOnce() + Send
     super::prewarm::warm_then(features, done)
 }
 
+/// Whether `warm_gpu_then` left a device for the window's surface (or another surface's lives).
+#[cfg(target_os = "linux")]
+pub(crate) fn warm_gpu_made() -> bool {
+    super::prewarm::made()
+}
+
 /// Makes what a window's GPU frames start from (the device, the renderer's pipelines for a
 /// window's swap chain, the pipelines pinned to one kind each) in a process that shows nothing,
 /// and returns once the driver has compiled them. Direct3D keeps what the driver compiled, and

@@ -26,6 +26,9 @@ use super::{Canvas, Put};
 const SLOTS: usize = 3;
 /// Rectangles a buffer is known to be missing, past which it takes the whole newest frame.
 const MISSED: usize = 32;
+/// The global of a compositor with explicit synchronization: with it, a driver's swap chain puts
+/// an object on the surface beside which no `wl_shm` buffer may be committed (`super`).
+const SYNCOBJ: &str = "wp_linux_drm_syncobj_manager_v1";
 
 pub(crate) struct Frames {
     conn: Connection,
@@ -37,6 +40,8 @@ pub(crate) struct Frames {
     pool: Option<Pool>,
     /// Pools made so far: a `release` names the pool its buffer was in.
     made: u32,
+    /// The compositor has explicit synchronization (`wp_linux_drm_syncobj_manager_v1`).
+    explicit_sync: bool,
 }
 
 /// Buffers the compositor released since the last look: (pool, slot).
@@ -159,13 +164,14 @@ impl Frames {
         let conn = Connection::from_backend(backend);
         let (globals, queue) = registry_queue_init::<State>(&conn).ok()?;
         let shm = globals.bind::<WlShm, _, _>(&queue.handle(), 1..=1, ()).ok()?;
+        let explicit_sync = globals.contents().with_list(|list| list.iter().any(|global| global.interface == SYNCOBJ));
         // SAFETY: the pointer is the live `wl_surface` proxy winit created for this window, and
         // the window keeps these frames no longer than itself.
         let id = unsafe { ObjectId::from_ptr(WlSurface::interface(), surface.cast()) }.ok()?;
         let surface = WlSurface::from_id(&conn, id).ok()?;
         // Both formats are ones every compositor takes.
         let format = if alpha { wl_shm::Format::Argb8888 } else { wl_shm::Format::Xrgb8888 };
-        let mut frames = Frames { conn, queue, state: State::default(), shm, surface, format, pool: None, made: 0 };
+        let mut frames = Frames { conn, queue, state: State::default(), shm, surface, format, pool: None, made: 0, explicit_sync };
         frames.pool = frames.new_pool(size);
         frames.pool.as_ref()?.touch_first();
         Some(frames)
@@ -251,6 +257,8 @@ impl Frames {
     pub(super) fn forget(&mut self) {
         if let Some(pool) = &mut self.pool { pool.slots.forget(); }
     }
+
+    pub(super) fn explicit_sync(&self) -> bool { self.explicit_sync }
 
     pub(super) fn last(&self) -> Option<(Vec<u8>, (u32, u32))> {
         let pool = self.pool.as_ref()?;
