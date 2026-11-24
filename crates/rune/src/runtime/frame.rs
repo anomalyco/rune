@@ -322,7 +322,7 @@ impl RuntimeCore {
         // A host settle (an uncover, a restore, a shown window) lands the tree the frame began
         // with, before this frame's input runs. The input's own commit below then animates, so
         // a dialog the first press closes still plays its exit.
-        if self.commit.is_settling() && queue.has_input_action() {
+        if self.commit.is_settling() && queue.has_input() {
             self.settle_before_input(app, &mut tx, &mut why);
             ran = false;
             #[cfg(debug_assertions)]
