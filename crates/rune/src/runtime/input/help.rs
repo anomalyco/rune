@@ -176,12 +176,12 @@ fn suppress(tip: &mut Tip) -> Effects<Effect> {
 }
 
 /// A tooltip as drawn: its text, the box it hangs from (window points, x0 y0 x1 y1), the side
-/// of that box it asks for (None: under it), and its opacity.
+/// of that box it asks for, and its opacity.
 #[derive(Clone, Debug)]
 struct Drawn {
     text: String,
     anchor: [f32; 4],
-    side: Option<crate::Side>,
+    side: crate::Side,
     alpha: f32,
     scale: f32,
 }
@@ -469,7 +469,10 @@ impl RuntimeCore {
                         eprintln!("rune: tooltip on {path:?} skipped because its anchor rect is empty (never drawn at origin)");
                     }
                 } else {
-                    let side = link.is_none().then(|| self.tree.nodes[i].cold.get().and_then(|c| c.help_side)).flatten();
+                    let side = link.is_none()
+                        .then(|| self.tree.nodes[i].cold.get().and_then(|c| c.help_side))
+                        .flatten()
+                        .unwrap_or_else(|| if self.tree.nodes[i].flow == crate::el::Flow::Rtl { crate::el::mirror_side(look.side) } else { look.side });
                     let t = if motion && look.fade[0] > 0.0 { ((self.clock - since) / look.fade[0]) as f32 } else { 1.0 };
                     let e_in = rune_motion::Easing::EASE_OUT.eval(t.clamp(0.0, 1.0));
                     let d = Drawn { text, anchor: box_rect, side, alpha: e_in, scale: look.fade_scale + (1.0 - look.fade_scale) * e_in };
@@ -519,7 +522,7 @@ impl RuntimeCore {
         let gaps = look.row_gap * rows.len().saturating_sub(1) as f32;
         let w = rows.iter().map(|r| r.tw + r.keys_w).fold(0.0, f32::max) + 2.0 * pad_x;
         let h = rows.iter().map(|r| r.ch).sum::<f32>() + gaps + 2.0 * pad_y;
-        let [below, over] = look.gap;
+        let [below, over] = [look.gap[0] + look.arrow, look.gap[1] + look.arrow];
         // On a line (`HelpLook::sit_on_line`), how far under its place the tooltip sits: the
         // line's baseline less its first row's, where the row centres its words beside keycaps.
         let drop = look.line.and_then(|strut| {
@@ -529,24 +532,32 @@ impl RuntimeCore {
             let base = pad_y * s + ((first.ch - first.th) * 0.5 * s).round() + words;
             Some(((line - base) / s).max(0.0))
         }).unwrap_or(0.0);
-        let (x, y) = match d.side {
+        let (x, y, placed) = match d.side {
             // Beside it, centred down it: right of it unless only the left has room, and the
             // other way round (`placement="right"` / `"left"`).
-            Some(side @ (crate::Side::Left | crate::Side::Right)) => {
+            side @ (crate::Side::Left | crate::Side::Right) => {
                 let (left, right) = (e[0] - over - w, e[2] + over);
                 let (fits_left, fits_right) = (left >= margin, right + w <= vw - margin);
                 let on_left = if side == crate::Side::Left { fits_left || !fits_right } else { fits_left && !fits_right };
-                let x = if on_left { left } else { right };
-                (x, (e[1] + e[3] - h) * 0.5)
+                let (x, placed) = if on_left { (left, crate::Side::Left) } else { (right, crate::Side::Right) };
+                (x, (e[1] + e[3] - h) * 0.5, placed)
             }
             side => {
-                let mut y = e[3] + below + drop;
-                if side == Some(crate::Side::Top) && e[1] - over - h >= margin {
-                    y = e[1] - over - h;
-                } else if y + h > vh - margin && e[1] - below - h >= margin {
-                    y = e[1] - below - h;
-                }
-                ((e[0] + e[2] - w) * 0.5, y)
+                let below_y = e[3] + below + drop;
+                let above_over = e[1] - over - h;
+                let above_below = e[1] - below - h;
+                let (y, placed) = if side == crate::Side::Top {
+                    if above_over >= margin || below_y + h > vh - margin {
+                        (above_over, crate::Side::Top)
+                    } else {
+                        (below_y, crate::Side::Bottom)
+                    }
+                } else if below_y + h > vh - margin && above_below >= margin {
+                    (above_below, crate::Side::Top)
+                } else {
+                    (below_y, crate::Side::Bottom)
+                };
+                ((e[0] + e[2] - w) * 0.5, y, placed)
             }
         };
         let x = x.clamp(margin, (vw - w - margin).max(margin));
@@ -574,16 +585,66 @@ impl RuntimeCore {
             super::shadow_paint::push_shadow(&mut self.instances, sh, sh.color, &cast);
         }
         let (ring_w, ring) = look.ring.map_or((0.0, Color::TRANSPARENT), |(rw, c)| ((rw * s).max(1.0), c));
+        let fill = premul(look.fill, alpha, srgb);
         self.instances.push(Instance {
             rect: r,
             radii,
-            fill: premul(look.fill, alpha, srgb),
+            fill,
             border: premul(ring, alpha, srgb),
             params: [ring_w, KIND_RECT, 0.0, 1.0],
             uv: [0.0; 4],
             clip: NO_CLIP,
             fade: crate::render::pack_fade([0.0; 4], NO_CLIP, NO_CLIP),
         });
+        if look.arrow > 0.0 {
+            let cr = (look.radius * s).min(full[2] * 0.5).min(full[3] * 0.5);
+            let tri = match placed {
+                crate::Side::Top | crate::Side::Bottom => {
+                    let (lo, hi) = (full[0] + cr, full[0] + full[2] - cr);
+                    let hb = (look.arrow * s).min((hi - lo).max(0.0) * 0.5);
+                    (hb > 0.0).then(|| {
+                        let (cmin, cmax) = (lo + hb, hi - hb);
+                        let cx = if cmin >= cmax { (lo + hi) * 0.5 } else { ((e[0] + e[2]) * 0.5 * s).clamp(cmin, cmax) };
+                        let (base_y, tip_y) = if placed == crate::Side::Top {
+                            (full[1] + full[3], full[1] + full[3] + hb)
+                        } else {
+                            (full[1], full[1] - hb)
+                        };
+                        ([cx - hb, base_y], [cx + hb, base_y], [cx, tip_y])
+                    })
+                }
+                crate::Side::Left | crate::Side::Right => {
+                    let (lo, hi) = (full[1] + cr, full[1] + full[3] - cr);
+                    let hb = (look.arrow * s).min((hi - lo).max(0.0) * 0.5);
+                    (hb > 0.0).then(|| {
+                        let (cmin, cmax) = (lo + hb, hi - hb);
+                        let cy = if cmin >= cmax { (lo + hi) * 0.5 } else { ((e[1] + e[3]) * 0.5 * s).clamp(cmin, cmax) };
+                        let (base_x, tip_x) = if placed == crate::Side::Left {
+                            (full[0] + full[2], full[0] + full[2] + hb)
+                        } else {
+                            (full[0], full[0] - hb)
+                        };
+                        ([base_x, cy - hb], [base_x, cy + hb], [tip_x, cy])
+                    })
+                }
+            };
+            if let Some((a, b, c)) = tri {
+                let (a, b, c) = (at_k(a), at_k(b), at_k(c));
+                let (x0, y0) = (a[0].min(b[0]).min(c[0]), a[1].min(b[1]).min(c[1]));
+                let (x1, y1) = (a[0].max(b[0]).max(c[0]), a[1].max(b[1]).max(c[1]));
+                self.instances.push(Instance {
+                    rect: [x0, y0, x1 - x0, y1 - y0],
+                    radii: [a[0], a[1], b[0], b[1]],
+                    fill,
+                    border: [0.0; 4],
+                    // Base edge a->b meets the tooltip card hard; slanted legs b->c and c->a are antialiased.
+                    params: [6.0, KIND_TRIANGLE, 0.0, 1.0],
+                    uv: [c[0], c[1], 0.0, 0.0],
+                    clip: NO_CLIP,
+                    fade: crate::render::pack_fade([0.0; 4], NO_CLIP, NO_CLIP),
+                });
+            }
+        }
         let mut top = full[1] + pad_y * s;
         // In a right-to-left app a row reads from the right: its words, then its keycaps to their
         // left, as the mirrored tooltip of a browser in Arabic or Hebrew does.

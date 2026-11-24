@@ -124,6 +124,14 @@ fn view(s: &G, cx: &mut Cx<G>) -> El {
         cx.reduced_motion(true);
     }
     let k = kit(s, cx.system_dark());
+    if s.story == "rune-tooltip--help-arrow" {
+        cx.help_look(
+            rune_kit::TooltipStyle::from_kit(k, rune_kit::TooltipAppearance::Compact)
+                .help_look()
+                .side(rune::Side::Top)
+                .arrow(5.0),
+        );
+    }
     let mut overlays = Vec::new();
     let body = stories::render(s, k, &mut overlays);
     // Storybook's decorator: the page colour and 24 px of padding around the story.

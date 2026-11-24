@@ -1721,8 +1721,16 @@ panels. Elsewhere Rune draws it: Windows' tooltip control and GTK's would need
 to own the window procedure or toolkit that winit already owns, and Linux and the web have no
 toolkit-free tooltip API. The drawn tooltip waits 0.5 s (the double-click time on Windows; set
 `Runtime::help_delay` to change it), sits under the element or above it when there's no room,
-stays inside the window, and follows the theme's light or dark appearance. Headless runs always
-draw it, so `--snap` shows it and `--tree` has a top-level `tooltip` object.
+stays inside the window, and follows the theme's light or dark appearance.
+
+Call `cx.help_look(HelpLook::system(dark)...)` to style tooltips and have Rune draw them on every
+platform, macOS included (drawn tooltips stay inside the window, whereas AppKit's native tooltips
+can extend past its edge). `HelpLook` configures colours, ring, corner radius, padding, font, max
+width, shadows, gap, margin, delay, warm `skip_delay`, `on_focus`, fade, keycaps (`El::help_keys`),
+default placement (`HelpLook::side(Side)`, overridden per element by `El::help_side` / `El::help_above`),
+and an optional pointer triangle facing the anchor (`HelpLook::arrow(size)`).
+
+Headless runs always draw it, so `--snap` shows it and `--tree` has a top-level `tooltip` object.
 `Runtime::help_regions()` and `help_tooltip()` read them; `--tree` carries each element's `help`.
 
 ### File dialogs
