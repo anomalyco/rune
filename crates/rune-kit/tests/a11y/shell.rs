@@ -1,8 +1,8 @@
 //! The app shell: sidebar sections and rows, split panes and their grips, toolbar and page.
 
 use rune::accesskit::{Action, ActionData};
-use rune::{Cx, El, Key, col};
-use rune_kit::shell::{Page, PaneState, RowStatus, Sidebar, SidebarRow, SidebarSection, SidebarToggle, SplitView, Toolbar};
+use rune::{Cx, El, Env, Key, LiveRegion, Runtime, Tx, col};
+use rune_kit::shell::{Page, PaneState, Reorder, ReorderLanding, RowStatus, Sidebar, SidebarRow, SidebarSection, SidebarToggle, SplitView, Toolbar};
 use rune_kit::*;
 
 use crate::support::*;
@@ -133,4 +133,85 @@ fn localized_sidebar_toggle_and_flat_main_expose_accessible_names_and_roles() {
     assert_eq!(toggle["description"].as_str(), Some("显示侧边栏"));
     assert!(has(toggle, "collapsed") && can(toggle, "expand"));
     no_echo(&tree);
+}
+
+#[test]
+fn reorder_tx_preserves_listitem_role_set_position_and_keyboard_navigation() {
+    struct ReorderApp {
+        items: Vec<&'static str>,
+        picked: usize,
+        reorder: Reorder,
+    }
+
+    fn view(s: &ReorderApp, _: &mut Cx<ReorderApp>) -> El {
+        let k = kit();
+        let count = s.items.len();
+        let sb = Sidebar::new().label("Places").row_gap(2.0);
+        let sb = s.items.iter().enumerate().fold(sb, |sb, (i, name)| {
+            sb.child(
+                SidebarRow::new(*name)
+                    .height(24.0)
+                    .selected(s.picked == i)
+                    .on_select(move |s: &mut ReorderApp, _| s.picked = i)
+                    .reorder_tx(
+                        &s.reorder,
+                        i,
+                        count,
+                        |s: &mut ReorderApp| &mut s.reorder,
+                        |s: &mut ReorderApp, from, to, tx: &mut Tx| {
+                            let moved = s.items.remove(from);
+                            s.items.insert(to, moved);
+                            s.picked = to;
+                            tx.announce(format!("Moved {moved} to position {}", to + 1), LiveRegion::Polite);
+                        },
+                    )
+                    .build(&k)
+                    .key(*name),
+            )
+        });
+        sb.build(&k)
+    }
+
+    let state = ReorderApp {
+        items: vec!["Alpha", "Bravo", "Charlie"],
+        picked: 0,
+        reorder: Reorder::new().gap(2.0).landing(ReorderLanding::HalfRow).cancel_outside_x(80.0),
+    };
+    let mut rt = Runtime::new(state, view, (260.0, 240.0), Env::new(false, 1.0));
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(1.0 / 60.0);
+
+    let tree = rt.accessibility_json();
+    assert_eq!(said(node(&tree, "sidebar-list")), ("list", "Places"));
+    let alpha = node(&tree, "Alpha");
+    let bravo = node(&tree, "Bravo");
+    assert_eq!(said(alpha), ("list-item", "Alpha"));
+    assert_eq!(alpha["position"], 1);
+    assert_eq!(bravo["position"], 2);
+    assert!(has(alpha, "selected"));
+    no_echo(&tree);
+
+    // Keyboard navigation still steps selection across reorder_tx rows.
+    assert!(rt.accessibility_action("Alpha", Action::Focus, None));
+    rt.frame(1.0 / 60.0);
+    rt.key(rune::KeyEvent { key: Key::Down, mods: rune::Mods::default() });
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.picked, 1);
+
+    // Drag Alpha down 39 pt (HalfRow -> position 2) and check updated set positions.
+    let rect = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("Alpha")).expect("Alpha").rect;
+    let (x, y) = (rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0);
+    rt.pointer_move(x, y);
+    rt.pointer_down(x, y);
+    rt.pointer_move(x, y + 39.0);
+    rt.frame(1.0 / 60.0);
+    rt.pointer_up(x, y + 39.0);
+    rt.settle_all();
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.items, ["Bravo", "Alpha", "Charlie"]);
+    let tree = rt.accessibility_json();
+    assert_eq!(node(&tree, "Bravo")["position"], 1);
+    assert_eq!(node(&tree, "Alpha")["position"], 2);
+    assert!(has(node(&tree, "Alpha"), "selected"));
 }

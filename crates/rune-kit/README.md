@@ -299,9 +299,13 @@ SidebarRow::new(&x.title).height(45.0).avatar(avatar(x)).subtitle(&x.project)
   `frame_inset` to `0.0` unless set explicitly, and draws 1-point hairlines only on edges that
   meet an open sidebar, open inspector or outer toolbar band (`rune-split-view--flat-main` in
   the gallery).
-- `SidebarRow::reorder` lifts the row above its neighbours and follows the pointer; they step
-  aside on springs, a drop calls the app's move, and Escape or losing focus puts it back. It
-  works in `virtual_rows` lists too.
+- `SidebarRow::reorder` (and `SidebarRow::reorder_tx`, which also passes `&mut Tx` to the
+  drop callback) lifts the row above its neighbours and follows the pointer; they step aside on
+  springs, a drop calls the app's move, and Escape or losing focus puts it back. Configure
+  `Reorder::landing(ReorderLanding::HalfRow)` for half-row/gap targeting (default
+  `ReorderLanding::Nearest`), `Reorder::cancel_outside_x(max_dx)` to cancel drops dragged past
+  a horizontal margin, and read `Reorder::offset`, `Reorder::pitch` and `Reorder::shift` while
+  dragging. It works in `virtual_rows` lists too.
 - Rune's `El::raise`, `El::offset` and `El::hover_delays` do the floating, the stepping aside
   and the resting, and `Kit::interactive` gives an app's own elements the rows' hover look.
 
