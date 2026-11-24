@@ -14,10 +14,12 @@ use super::state::{Annotation, DiffMode, DiffState, Expand, LINE_H, LineRange, L
 use crate::Kit;
 
 mod chrome;
+mod labels;
 mod line_info;
 mod look;
 mod spans;
 
+pub use labels::DiffLabel;
 pub use line_info::FoldRow;
 
 use look::Look;
@@ -40,6 +42,7 @@ type AnnotateFn<S> = Rc<dyn Fn(&S, &Annotation) -> El>;
 type HeaderFn<S> = Rc<dyn Fn(&S, usize) -> El>;
 type SelectFn<S> = Rc<dyn Fn(&mut S, Option<LineRange>, &mut Tx)>;
 type CommentFn<S> = Rc<dyn Fn(&mut S, LineRange, &mut Tx)>;
+type CommentFilterFn = Rc<dyn Fn(usize, LineRef) -> bool>;
 type VisibleFileFn<S> = Rc<dyn Fn(&mut S, usize)>;
 
 #[derive(Clone, Copy)]
@@ -53,6 +56,7 @@ struct GutterDrag {
 
 trait DiffBind {
     fn has_comment(&self) -> bool;
+    fn can_comment(&self, f: usize, at: LineRef) -> bool;
     fn has_annotation(&self) -> bool;
     fn header_action(&self, s: &dyn Any, f: usize) -> Option<El>;
     fn annotation(&self, s: &dyn Any, a: &Annotation) -> Option<El>;
@@ -72,11 +76,15 @@ struct DiffHandlers<S> {
     header: Option<HeaderFn<S>>,
     on_select: Option<SelectFn<S>>,
     on_comment: Option<CommentFn<S>>,
+    comment_filter: Option<CommentFilterFn>,
     on_visible_file: Option<VisibleFileFn<S>>,
 }
 
 impl<S: 'static> DiffBind for DiffHandlers<S> {
     fn has_comment(&self) -> bool { self.on_comment.is_some() }
+    fn can_comment(&self, f: usize, at: LineRef) -> bool {
+        self.on_comment.is_some() && self.comment_filter.as_ref().is_none_or(|allow| allow(f, at))
+    }
     fn has_annotation(&self) -> bool { self.annotation.is_some() }
 
     fn header_action(&self, s: &dyn Any, f: usize) -> Option<El> {
@@ -114,8 +122,11 @@ impl<S: 'static> DiffBind for DiffHandlers<S> {
     }
 
     fn bind_plus(&self, el: El, f: usize, at: LineRef) -> El {
-        let (get, cb) = (self.get_mut.clone(), self.on_comment.clone());
+        let (get, cb, filter) = (self.get_mut.clone(), self.on_comment.clone(), self.comment_filter.clone());
         el.on_press_tx(move |s: &mut S, tx| {
+            if filter.as_ref().is_some_and(|allow| !allow(f, at)) {
+                return;
+            }
             let lines = comment_lines(get(s), f, at);
             if let Some(cb) = &cb {
                 cb(s, lines, tx);
@@ -163,6 +174,7 @@ impl<S: 'static> DiffBind for DiffHandlers<S> {
 pub struct DiffView<S> {
     key: String,
     fold_row: FoldRow,
+    labels: Option<labels::LabelsFn>,
     handlers: DiffHandlers<S>,
 }
 
@@ -171,7 +183,17 @@ impl<S: 'static> DiffView<S> {
         DiffView {
             key: "diff".into(),
             fold_row: FoldRow::default(),
-            handlers: DiffHandlers { get: Rc::new(get), get_mut: Rc::new(get_mut), annotation: None, header: None, on_select: None, on_comment: None, on_visible_file: None },
+            labels: None,
+            handlers: DiffHandlers {
+                get: Rc::new(get),
+                get_mut: Rc::new(get_mut),
+                annotation: None,
+                header: None,
+                on_select: None,
+                on_comment: None,
+                comment_filter: None,
+                on_visible_file: None,
+            },
         }
     }
 
@@ -181,6 +203,26 @@ impl<S: 'static> DiffView<S> {
     /// How folded unchanged lines draw: [`FoldRow::Summary`] by default, or Pierre's
     /// [`FoldRow::LineInfo`] as OpenCode Desktop's review has them.
     pub fn fold_row(mut self, fold_row: FoldRow) -> Self { self.fold_row = fold_row; self }
+
+    /// Localise or rename every visible and accessible string `DiffView` emits.
+    ///
+    /// Returning `None` (or an empty or whitespace-only string) keeps the default English text
+    /// for that [`DiffLabel`].
+    ///
+    /// ```ignore
+    /// DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
+    ///     .labels(|label| match label {
+    ///         DiffLabel::ExpandFile => Some("Déplier le fichier".into()),
+    ///         DiffLabel::CollapseFile => Some("Replier le fichier".into()),
+    ///         DiffLabel::CommentLine => Some("Commenter cette ligne".into()),
+    ///         _ => None,
+    ///     })
+    ///     .build(s, &k)
+    /// ```
+    pub fn labels(mut self, f: impl Fn(DiffLabel<'_>) -> Option<String> + 'static) -> Self {
+        self.labels = Some(Rc::new(f));
+        self
+    }
 
     /// Build each [`Annotation`] under its line. Rows holding annotations are built every
     /// commit, so a widget can read app state (a composer's text) freely.
@@ -196,13 +238,39 @@ impl<S: 'static> DiffView<S> {
     /// stands for when pressed: the selection when the line is in it, else that line.
     pub fn on_comment(mut self, f: impl Fn(&mut S, LineRange, &mut Tx) + 'static) -> Self { self.handlers.on_comment = Some(Rc::new(f)); self }
 
+    /// Restrict which lines show the "+" comment button (when [`Self::on_comment`] is set) and
+    /// can invoke it. `file` is the index in [`DiffState::files`] and `at` is the candidate
+    /// line. Both sides are enabled by default.
+    ///
+    /// In [`DiffMode::Unified`], unchanged context lines carry both an old and a new line number;
+    /// the new side is tried first and the old side is used as a fallback so old-side-only filters
+    /// work on context lines too.
+    ///
+    /// ```ignore
+    /// DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
+    ///     .on_comment(|s: &mut App, lines, _| s.compose(lines))
+    ///     .comment_filter(|_, at| at.side == Side::New)
+    ///     .build(s, &k)
+    /// ```
+    pub fn comment_filter(mut self, f: impl Fn(usize, LineRef) -> bool + 'static) -> Self {
+        self.handlers.comment_filter = Some(Rc::new(f));
+        self
+    }
+
     /// Called when the file at the top of the view changes as it scrolls, to follow it in a
     /// file tree.
     pub fn on_visible_file(mut self, f: impl Fn(&mut S, usize) + 'static) -> Self { self.handlers.on_visible_file = Some(Rc::new(f)); self }
 
     pub fn build(self, s: &S, k: &Kit) -> El {
         let st = (self.handlers.get)(s);
-        let view = Rc::new(View { look: Look::new(k), fold_row: self.fold_row, bind: Box::new(self.handlers) });
+        let labels_version = labels::fingerprint(self.labels.as_ref());
+        let view = Rc::new(View {
+            look: Look::new(k),
+            fold_row: self.fold_row,
+            labels: self.labels,
+            labels_version,
+            bind: Box::new(self.handlers),
+        });
         view.build_root(st, self.key, s)
     }
 }
@@ -234,31 +302,50 @@ impl Cell<'_> {
         }
     }
 
-    fn label(&self) -> String {
-        let (_, n) = self.source();
-        let kind = match self.kind {
-            LineKind::Added => "added",
-            LineKind::Removed => "removed",
-            LineKind::Context => "unchanged",
-        };
-        format!("{kind} line {n}: {}", self.text)
-    }
 }
 
 struct View {
     look: Look,
     fold_row: FoldRow,
+    labels: Option<labels::LabelsFn>,
+    labels_version: u64,
     bind: Box<dyn DiffBind>,
 }
 
 impl View {
+    pub(super) fn label(&self, label: DiffLabel<'_>) -> String {
+        labels::resolve(self.labels.as_ref(), label)
+    }
+
+    fn cell_label(&self, c: &Cell<'_>) -> String {
+        let (_, number) = c.source();
+        self.label(DiffLabel::Line { kind: c.kind, number, text: c.text })
+    }
+
+    fn comment_sides(&self, st: &DiffState, r: Row) -> (bool, bool) {
+        if !self.bind.has_comment() {
+            return (false, false);
+        }
+        let f = r.file();
+        let can = |side: Side| st.row_line(r, side).is_some_and(|n| self.bind.can_comment(f, LineRef::new(side, n)));
+        (can(Side::Old), can(Side::New))
+    }
+
+    fn unified_comment_target(&self, f: usize, c: Cell<'_>) -> Option<LineRef> {
+        if !self.bind.has_comment() {
+            return None;
+        }
+        let new = c.new.map(|n| LineRef::new(Side::New, n)).filter(|&at| self.bind.can_comment(f, at));
+        new.or_else(|| c.old.map(|n| LineRef::new(Side::Old, n)).filter(|&at| self.bind.can_comment(f, at)))
+    }
+
     fn build_root(self: &Rc<Self>, st: &DiffState, key: String, s: &dyn Any) -> El {
         let wrap = st.wraps();
         if !wrap && let Some(r) = rune::memo::layout(&format!("{key}/scroll")) {
             st.set_viewport(r);
         }
         let count = st.rows.len();
-        let mut list = col().key("rows").w_full().growth(GrowthSpec::default()).selection_group(true).role("list").label("Diff");
+        let mut list = col().key("rows").w_full().growth(GrowthSpec::default()).selection_group(true).role("list").label(self.label(DiffLabel::List));
         if !wrap {
             list = list.min_w(self.content_width(st).max(st.view_width()));
         }
@@ -293,14 +380,22 @@ impl View {
         let key = st.keys[i].as_str();
         match r {
             Row::File(f) => self.file_header(s, st, f as usize, false),
-            Row::Note(f) => memo(key, (self.look.version, st.rev, st.view_width().to_bits()), || self.note(st, f as usize)),
-            Row::Gap { f, gap } => memo(key, (self.look.version, st.rev, st.view_width().to_bits(), self.fold_row), || match self.fold_row {
+            Row::Note(f) => memo(key, (self.look.version, st.rev, st.view_width().to_bits(), self.labels_version), || self.note(st, f as usize)),
+            Row::Gap { f, gap } => memo(key, (self.look.version, st.rev, st.view_width().to_bits(), self.fold_row, self.labels_version), || match self.fold_row {
                 FoldRow::Summary => self.gap(st, f as usize, gap as usize),
                 FoldRow::LineInfo => self.line_info(st, f as usize, gap as usize),
             }),
             _ if !st.annotations().is_empty() && self.bind.has_annotation() && self.annotated(st, r) => self.line(s, st, i),
             _ => {
-                let version = (self.look.version, st.rev, st.row_selected(i, None), st.copy_side(), st.selection().map(|s| s.start.side));
+                let version = (
+                    self.look.version,
+                    st.rev,
+                    st.row_selected(i, None),
+                    st.copy_side(),
+                    st.selection().map(|s| s.start.side),
+                    self.comment_sides(st, r),
+                    self.labels_version,
+                );
                 memo(key, version, || self.line(s, st, i))
             }
         }
@@ -418,11 +513,8 @@ impl View {
             .child(self.bar(c.kind))
             .child(self.number(st, i, f, c.old, Side::Old, c.kind, selected, digits).key("no"))
             .child(self.number(st, i, f, c.new, Side::New, c.kind, selected, digits).key("nn"));
-        if self.bind.has_comment() {
-            let at = c.new.map(|n| LineRef::new(Side::New, n)).or(c.old.map(|n| LineRef::new(Side::Old, n)));
-            if let Some(at) = at {
-                gutter = gutter.child(self.plus(f, at).absolute(BAR + 2.0 * l.number_w(digits) - 10.0, 2.0));
-            }
+        if let Some(at) = self.unified_comment_target(f, c) {
+            gutter = gutter.child(self.plus(f, at).absolute(BAR + 2.0 * l.number_w(digits) - 10.0, 2.0));
         }
         if !st.wraps() {
             gutter = gutter.sticky_left(0.0);
@@ -435,7 +527,7 @@ impl View {
             .hover(l.hover)
             .hover_group()
             .role("listitem")
-            .label(c.label())
+            .label(self.cell_label(&c))
             .child(gutter)
             .child(self.code(st, f, &c, copy, hover_side, &st.keys[i]).key("code"))
     }
@@ -465,12 +557,12 @@ impl View {
                 .hover(l.hover)
                 .hover_group()
                 .role("listitem")
-                .label(cell.label())
+                .label(self.cell_label(&cell))
                 .child(self.bar(kind))
                 .child(self.number(st, i, f, n, side, kind, selected, digits).key("n"))
                 .child(self.code(st, f, &cell, copy, side, &st.keys[i]).key("code"));
-            if let (Some(n), true) = (n, self.bind.has_comment()) {
-                h = h.child(self.plus(f, LineRef::new(side, n)).absolute(BAR + l.number_w(digits) - 10.0, 2.0));
+            if let Some(at) = n.map(|n| LineRef::new(side, n)).filter(|&at| self.bind.can_comment(f, at)) {
+                h = h.child(self.plus(f, at).absolute(BAR + l.number_w(digits) - 10.0, 2.0));
             }
             h
         };
@@ -528,7 +620,7 @@ impl View {
             .group_opacity(0.0, 1.0)
             .cursor(Cursor::Pointer)
             .role("button")
-            .label("Comment on this line")
+            .label(self.label(DiffLabel::CommentLine))
             .child(icon(&PLUS, 12.0).color(l.on_accent));
         self.bind.bind_plus(button, f, at)
     }
@@ -557,7 +649,7 @@ impl View {
             format!("{row_key}.{}", side as u8),
         );
         if c.no_newline {
-            code = code.child(text("No newline at end of file").font(l.small).color(l.muted).opacity(0.6).key("eof").pb(2.0));
+            code = code.child(text(self.label(DiffLabel::NoNewlineAtEndOfFile)).font(l.small).color(l.muted).opacity(0.6).key("eof").pb(2.0));
         }
         code
     }

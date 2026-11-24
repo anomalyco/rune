@@ -5,7 +5,7 @@ use std::any::Any;
 
 use rune::{Color, Cursor, El, Icon, col, icon, row, text};
 
-use super::{CODE_PAD, View};
+use super::{CODE_PAD, DiffLabel, View};
 use crate::diff::model::FileStatus;
 use crate::diff::state::{DiffState, EXPAND_STEP, Expand, GAP_H, HEADER_H, NOTE_H};
 
@@ -51,13 +51,13 @@ impl View {
             };
             let step = hidden.min(EXPAND_STEP);
             if hidden <= EXPAND_STEP {
-                add(Expand::All, &EXPAND_ALL, format!("Show {hidden} hidden lines"));
+                add(Expand::All, &EXPAND_ALL, self.label(DiffLabel::ShowHiddenLines(hidden)));
             } else {
                 if gap > 0 {
-                    add(Expand::Down, &EXPAND_DOWN, format!("Show {step} more lines below"));
+                    add(Expand::Down, &EXPAND_DOWN, self.label(DiffLabel::ShowMoreLinesBelow(step)));
                 }
                 if !last {
-                    add(Expand::Up, &EXPAND_UP, format!("Show {step} more lines above"));
+                    add(Expand::Up, &EXPAND_UP, self.label(DiffLabel::ShowMoreLinesAbove(step)));
                 }
             }
         }
@@ -67,21 +67,22 @@ impl View {
             inner = inner.max_w(w).sticky_left(0.0);
         }
         if hidden > 0 {
-            let count = text(if hidden == 1 { "1 unchanged line".to_owned() } else { format!("{hidden} unchanged lines") }).font(l.small).color(l.muted).key("count");
+            let count = text(self.label(DiffLabel::UnchangedLines(hidden))).font(l.small).color(l.muted).key("count");
             let count = if expandable && hidden > EXPAND_STEP {
-                let all = row().key("all").px(6.0).h(24.0).items_center().radius(6.0).hover(l.hover).cursor(Cursor::Pointer).role("button").label(format!("Show all {hidden} lines"));
+                let all = row().key("all").px(6.0).h(24.0).items_center().radius(6.0).hover(l.hover).cursor(Cursor::Pointer).role("button").label(self.label(DiffLabel::ShowAllLines(hidden)));
                 self.bind.bind_expand(all, f, gap, Expand::All, false).child(count)
             } else {
                 row().key("all").px(6.0).child(count)
             };
             inner = inner.child(count);
         }
-        if let Some(h) = file.hunks.get(gap) {
-            inner = inner.child(text(h.header()).font(l.small).color(l.faint).single_line().key("header"));
+        let header = file.hunks.get(gap).map(|h| h.header());
+        if let Some(header) = &header {
+            inner = inner.child(text(header.clone()).font(l.small).color(l.faint).single_line().key("header"));
         }
-        let label = match file.hunks.get(gap) {
-            Some(h) => format!("{hidden} unchanged lines, then {}", h.header()),
-            None => format!("{hidden} unchanged lines"),
+        let label = match header.as_deref() {
+            Some(header) => self.label(DiffLabel::UnchangedLinesBefore { count: hidden, header }),
+            None => self.label(DiffLabel::UnchangedLines(hidden)),
         };
         row().w_full().h(GAP_H).items_center().fill(l.gap_bg).role("group").label(label).child(inner)
     }
@@ -90,18 +91,19 @@ impl View {
     pub(super) fn note(&self, st: &DiffState, f: usize) -> El {
         let l = &self.look;
         let file = &st.files()[f];
-        let msg = if file.binary {
-            "Binary file not shown"
+        let kind = if file.binary {
+            DiffLabel::BinaryFile
         } else if file.status == FileStatus::Renamed || file.status == FileStatus::Copied {
-            "File moved without changes"
+            DiffLabel::MovedWithoutChanges
         } else if file.old_mode != file.new_mode {
-            "File mode changed"
+            DiffLabel::ModeChanged
         } else if file.status == FileStatus::Added || file.status == FileStatus::Deleted {
-            "Empty file"
+            DiffLabel::EmptyFile
         } else {
-            "No changes"
+            DiffLabel::NoChanges
         };
-        let mut inner = row().key("inner").h(NOTE_H).items_center().pl(self.gutter_w(st, f) + CODE_PAD.0).child(text(msg).font(l.small).color(l.muted));
+        let msg = self.label(kind);
+        let mut inner = row().key("inner").h(NOTE_H).items_center().pl(self.gutter_w(st, f) + CODE_PAD.0).child(text(msg.clone()).font(l.small).color(l.muted));
         if let Some(w) = self.view_w(st, false) {
             inner = inner.max_w(w).sticky_left(0.0);
         }
@@ -112,6 +114,7 @@ impl View {
         let l = &self.look;
         let file = &st.files()[f];
         let collapsed = st.collapsed(f);
+        let toggle_label = self.label(if collapsed { DiffLabel::ExpandFile } else { DiffLabel::CollapseFile });
         let toggle = row()
             .key("toggle")
             .size(24.0, 24.0)
@@ -120,7 +123,7 @@ impl View {
             .hover(l.hover)
             .cursor(Cursor::Pointer)
             .role("button")
-            .label(if collapsed { "Expand file" } else { "Collapse file" }).expanded(!collapsed)
+            .label(toggle_label).expanded(!collapsed)
             .child(icon(if collapsed { l.triangle_right } else { l.triangle_down }, 16.0).color(l.muted));
         let toggle = self.bind.bind_toggle_file(toggle, f, sticky);
         let path = |p: &str, c: Color| text(p.to_owned()).font(l.label).color(c).truncate_head().min_w(0.0).shrink();
@@ -132,16 +135,15 @@ impl View {
             }
             _ => name.child(path(file.path(), l.text).key("new")),
         };
-        let status = match file.status {
-            FileStatus::Added => Some(("Added", l.add.count)),
-            FileStatus::Deleted => Some(("Deleted", l.del.count)),
-            FileStatus::Renamed => Some(("Renamed", l.muted)),
-            FileStatus::Copied => Some(("Copied", l.muted)),
+        let status_color = match file.status {
+            FileStatus::Added => Some(l.add.count),
+            FileStatus::Deleted => Some(l.del.count),
+            FileStatus::Renamed | FileStatus::Copied => Some(l.muted),
             FileStatus::Modified => None,
         };
         let mut inner = row().key("inner").w_full().grow(1.0).px(10.0).gap(8.0).items_center().child(toggle).child(name);
-        if let Some((word, color)) = status {
-            inner = inner.child(text(word).font(l.small).color(color).key("status"));
+        if let Some(color) = status_color {
+            inner = inner.child(text(self.label(DiffLabel::FileStatus(file.status))).font(l.small).color(color).key("status"));
         }
         if let (Some(a), Some(b)) = (&file.old_mode, &file.new_mode)
             && a != b
@@ -159,11 +161,13 @@ impl View {
         if let Some(actions) = self.bind.header_action(s, f) {
             inner = inner.child(actions.key("actions"));
         }
-        let mut label = file.path().to_owned();
-        if let (FileStatus::Renamed, Some(a)) = (file.status, old) {
-            label.push_str(&format!(", renamed from {a}"));
-        }
-        label.push_str(&format!(", {adds} added, {dels} removed"));
+        let renamed_from = (file.status == FileStatus::Renamed).then_some(old).flatten();
+        let label = self.label(DiffLabel::FileSummary {
+            path: file.path(),
+            renamed_from,
+            additions: adds,
+            deletions: dels,
+        });
         let line = |key: &'static str, c: Color| col().key(key).w_full().h(1.0).fill(c).a11y_hidden();
         let mut h = col().w_full().h(HEADER_H).fill(l.header_bg).role("heading").label(label);
         // In the list, as wide as the view and held to its left edge while the code scrolls

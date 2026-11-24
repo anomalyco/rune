@@ -9,7 +9,10 @@ use crate::G;
 
 mod combobox;
 mod controls;
+mod diff;
 mod display;
+
+pub(crate) use diff::sample_diff;
 mod icons;
 mod inputs;
 mod markdown;
@@ -244,6 +247,7 @@ stories! {
     "rune-tree--files" => icons::file_tree,
     "rune-split-view--flat-main" => split_view::flat_main,
     "rune-table--options" => table::options,
+    "rune-diff--localized" => diff::localized,
 }
 
 fn popup_list_composer(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
