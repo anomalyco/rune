@@ -45,7 +45,7 @@ fn reserve_fiber_stack_guarantee() {
     }
 }
 
-/// Runs `f` on the current stack when at least [`STACK_RED_ZONE`] bytes remain, or continues on
+/// Runs `f` on the current stack when at least `STACK_RED_ZONE` bytes remain, or continues on
 /// a new segment on Windows, macOS, and Linux.
 ///
 /// Every other target (`wasm32`, `android`, `ios`, `tvos`, `watchos`, `visionos`, etc.) runs `f`

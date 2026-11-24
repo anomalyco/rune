@@ -335,10 +335,10 @@ pub fn with_fonts(fonts: &[&'static [u8]], families: (&str, &str)) -> FontsGuard
     FontsGuard { previous, _not_send: PhantomData }
 }
 
-/// The size in points of `text` (with `spans`, as [`crate::rich`] takes them) set in `style`,
+/// The size in points of `text` (with `spans`, as `rune::rich` takes them) set in `style`,
 /// wrapped at `max_width` points when given, as the runtime will lay it out. Widths round up
 /// to a 64th of a point, as Chromium keeps a text run's width; heights are the lines' own, as a text lays out unless it asks for
-/// [`El::rounded_lines`](crate::El::rounded_lines). `max_width: Some(0.0)` gives the widest unbreakable run (CSS min-content).
+/// `El::rounded_lines`. `max_width: Some(0.0)` gives the widest unbreakable run (CSS min-content).
 ///
 /// The first call on a thread loads the fonts (a few milliseconds); later calls cost a hash
 /// lookup when the same text was measured recently, or one shaping pass when not.
@@ -346,8 +346,8 @@ pub fn measure(text: &str, spans: &[Span], style: TextStyle, max_width: Option<f
     measure_with(text, spans, style, max_width, RichLayoutOptions::default())
 }
 
-/// [`measure`] laid out with [`RichLayoutOptions`], so text that an [`El`](crate::El) draws with
-/// [`wrap_anywhere`](crate::El::wrap_anywhere) measures to the lines it will actually take:
+/// [`measure`] laid out with [`RichLayoutOptions`], so text that an `El` draws with
+/// `wrap_anywhere` measures to the lines it will actually take:
 /// `measure_with(text, &[], style, Some(w), RichLayoutOptions::new().wrap_anywhere())`.
 pub fn measure_with(
     text: &str,
@@ -376,7 +376,7 @@ pub fn content_widths(text: &str, spans: &[Span], style: TextStyle) -> (f32, f32
 }
 
 /// The advance in points of `text` set on one line in `style`, unrounded: how much wider a row
-/// of [`El::advance_in`](crate::El::advance_in) cells gets for it, to within a device pixel.
+/// of `El::advance_in` cells gets for it, to within a device pixel.
 pub fn advance(text: &str, style: TextStyle) -> f32 {
     with_text(|t| t.layout_rich(text, &[], style, 1.0, None).full_width())
 }

@@ -460,7 +460,7 @@ impl TextSpec {
 
 /// A display-only full-width line background fill and/or left vertical bar over the visual lines
 /// intersecting UTF-8 bytes `start..end` of a [`text_input`](crate::text_input) or
-/// [`text`](crate::text) element (for fenced code blocks, block quotes, diff hunks, and similar
+/// [`text`](crate::text()) element (for fenced code blocks, block quotes, diff hunks, and similar
 /// line-level decorations).
 ///
 /// Attach with [`El::line_fill`](crate::El::line_fill) or [`El::line_fills`](crate::El::line_fills).

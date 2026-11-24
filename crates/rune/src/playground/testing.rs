@@ -26,7 +26,7 @@ impl<S: 'static> App<S> {
 
 impl<S: 'static> Runtime<S> {
     /// Opens the playground at `story` (its `"Group/Name"` path, its name, or its path's
-    /// [`slug`](crate::playground::slug)), on `variant` (by number from 1, or by name) if given,
+    /// [`slug`]), on `variant` (by number from 1, or by name) if given,
     /// as `--playground NAME --variant V` and [`Tx::open_playground_at`] do. Like a handler's
     /// [`Tx::open_playground`], it applies on a frame; this one takes
     /// two that advance no time, so on return the stage is made and the steps its `'r'`

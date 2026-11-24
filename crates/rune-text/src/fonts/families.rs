@@ -58,7 +58,7 @@ impl TextSystem {
 
     /// Puts `sans` and `mono` (CSS lists, as `AppSpec::families` takes them) behind the slots.
     /// Styles name slots, not families, so every `Family::Sans` and `Family::Mono` text follows.
-    /// Every layout shaped in the old families goes, and [`measure`](super::measure) follows
+    /// Every layout shaped in the old families goes, and [`measure`] follows
     /// too. Glyphs stay in the atlas under their own font's key until they age out. A family
     /// that isn't registered or installed falls back as it would at launch. Returns false,
     /// dropping nothing, when the slots already hold these families.

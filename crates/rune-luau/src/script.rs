@@ -198,7 +198,7 @@ impl Script {
         Ok(report)
     }
 
-    /// Fires the signal the host made with [`Host::signal`] as `name`.
+    /// Fires the signal the host made with [`crate::Host::signal`] as `name`.
     pub fn fire(&self, name: &str, args: impl IntoIterator<Item = Data>) -> bool {
         let args: Vec<Data> = args.into_iter().collect();
         let fired = self.inner.enter(None, |vm| Ok(vm.fire(name, args)?));
@@ -268,7 +268,7 @@ impl Script {
         self.inner.sources.borrow().clone()
     }
 
-    /// The Luau VM, for host bindings beyond [`Host`]. Changes here don't survive a reload.
+    /// The Luau VM, for host bindings beyond [`crate::Host`]. Changes here don't survive a reload.
     pub fn with_lua<R>(&self, f: impl FnOnce(&mlua::Lua) -> R) -> Option<R> {
         self.inner.vm().map(|vm| f(&vm.lua))
     }

@@ -387,7 +387,7 @@ impl<S: 'static> Combobox<S> {
     pub fn trigger(mut self, trigger: El) -> Self { self.core.trigger = Some(trigger); self }
     pub fn disabled(mut self, disabled: bool) -> Self { self.core.disabled = disabled; self }
     /// Animate each keystroke's filtering: the popover springs to its new height and the
-    /// rows crossfade, as [`PopupList::animate_filtering`]. Off by default, so the rows and
+    /// rows crossfade, as [`crate::PopupList::animate_filtering`]. Off by default, so the rows and
     /// the height a keystroke changes land in the same frame.
     pub fn animate_filtering(mut self, animate: bool) -> Self { self.core.animate_filtering = animate; self }
     pub fn on_choose(mut self, choose: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {

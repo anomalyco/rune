@@ -105,8 +105,15 @@ macro_rules! field_hook_forwarders {
     ($ctor:literal) => {
         /// Secondary press (right-click, control-click, Menu, Shift+F10) on the inner editor in
         /// place of the default field menu (`El::on_secondary_press`). Skipped when disabled.
-        /// ```ignore
+        /// ```
+        /// # use rune::{PointerPress, TextEdit};
+        /// # use rune_kit::{Kit, TextArea, TextField, TextInput};
+        /// # struct App { edit: TextEdit, menu: Option<PointerPress> }
+        /// # let s = App { edit: TextEdit::default(), menu: None };
+        /// # let k = Kit::neutral(true);
+        /// # let _ =
         #[doc = concat!($ctor, ".on_edit(|s: &mut App| &mut s.edit).on_secondary_press(|s: &mut App, p, _| s.menu = Some(p)).build(&k)")]
+        /// # ;
         /// ```
         pub fn on_secondary_press<S: 'static>(mut self, f: impl Fn(&mut S, rune::PointerPress, &mut Tx) + 'static) -> Self {
             self.edits.secondary_press(f);
@@ -114,8 +121,15 @@ macro_rules! field_hook_forwarders {
         }
         /// Intercept pastes into the focused inner editor (`El::on_input_paste`): return `true` to
         /// consume or `false` for default plain-text insertion. Skipped when disabled.
-        /// ```ignore
+        /// ```
+        /// # use rune::TextEdit;
+        /// # use rune_kit::{Kit, TextArea, TextField, TextInput};
+        /// # struct App { edit: TextEdit }
+        /// # let s = App { edit: TextEdit::default() };
+        /// # let k = Kit::neutral(true);
+        /// # let _ =
         #[doc = concat!($ctor, ".on_edit(|s: &mut App| &mut s.edit).on_input_paste(|s: &mut App, c, _| !c.files().is_empty()).build(&k)")]
+        /// # ;
         /// ```
         pub fn on_input_paste<S: 'static>(mut self, f: impl Fn(&mut S, &rune::ClipboardContent, &mut Tx) -> bool + 'static) -> Self {
             self.edits.paste(f);
@@ -123,8 +137,15 @@ macro_rules! field_hook_forwarders {
         }
         /// Intercept Copy and Cut on the focused inner editor (`El::on_input_copy`) across both
         /// keyboard shortcuts and the context menu. Skipped when disabled.
-        /// ```ignore
+        /// ```
+        /// # use rune::TextEdit;
+        /// # use rune_kit::{Kit, TextArea, TextField, TextInput};
+        /// # struct App { edit: TextEdit }
+        /// # let s = App { edit: TextEdit::default() };
+        /// # let k = Kit::neutral(true);
+        /// # let _ =
         #[doc = concat!($ctor, ".on_edit(|s: &mut App| &mut s.edit).on_input_copy(|s: &mut App, _cut, _| Some(rune::ClipboardContent::new(s.edit.selected()))).build(&k)")]
+        /// # ;
         /// ```
         pub fn on_input_copy<S: 'static>(
             mut self,
@@ -136,8 +157,15 @@ macro_rules! field_hook_forwarders {
         /// Called after the inner editor's caret or selection moves from keys, clicks, drags, or
         /// edits ([`El::on_input_selection`](rune::El::on_input_selection)), in the same turn
         /// before the view rebuilds. Skipped when disabled.
-        /// ```ignore
+        /// ```
+        /// # use rune::TextEdit;
+        /// # use rune_kit::{Kit, TextArea, TextField, TextInput};
+        /// # struct App { edit: TextEdit, sel: (usize, usize) }
+        /// # let s = App { edit: TextEdit::default(), sel: (0, 0) };
+        /// # let k = Kit::neutral(true);
+        /// # let _ =
         #[doc = concat!($ctor, ".on_edit(|s: &mut App| &mut s.edit).on_input_selection(|s: &mut App, _| s.sel = (s.edit.anchor, s.edit.focus)).build(&k)")]
+        /// # ;
         /// ```
         pub fn on_input_selection<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
             self.edits.selection(f);
@@ -146,8 +174,15 @@ macro_rules! field_hook_forwarders {
         /// Primary press (left-click or tap) on a [`Mark::Pill`](rune::Mark::Pill) chip inside
         /// the inner editor ([`El::on_pill_press`](rune::El::on_pill_press)): return `true` to
         /// consume before caret placement, or `false` to fall through. Skipped when disabled.
-        /// ```ignore
+        /// ```
+        /// # use rune::TextEdit;
+        /// # use rune_kit::{Kit, TextArea, TextField, TextInput};
+        /// # struct App { edit: TextEdit, picked: Option<String> }
+        /// # let s = App { edit: TextEdit::default(), picked: None };
+        /// # let k = Kit::neutral(true);
+        /// # let _ =
         #[doc = concat!($ctor, ".on_edit(|s: &mut App| &mut s.edit).on_pill_press(|s: &mut App, id, _, _| { s.picked = Some(id.to_owned()); true }).build(&k)")]
+        /// # ;
         /// ```
         pub fn on_pill_press<S: 'static>(
             mut self,
@@ -160,8 +195,15 @@ macro_rules! field_hook_forwarders {
         /// [`Mark::Pill`](rune::Mark::Pill) chip inside the inner editor
         /// ([`El::on_pill_secondary`](rune::El::on_pill_secondary)): return `true` to consume or
         /// `false` to fall through to the field menu. Skipped when disabled.
-        /// ```ignore
+        /// ```
+        /// # use rune::{PointerPress, TextEdit};
+        /// # use rune_kit::{Kit, TextArea, TextField, TextInput};
+        /// # struct App { edit: TextEdit, menu: Option<(String, PointerPress)> }
+        /// # let s = App { edit: TextEdit::default(), menu: None };
+        /// # let k = Kit::neutral(true);
+        /// # let _ =
         #[doc = concat!($ctor, ".on_edit(|s: &mut App| &mut s.edit).on_pill_secondary(|s: &mut App, id, p, _| { s.menu = Some((id.to_owned(), p)); true }).build(&k)")]
+        /// # ;
         /// ```
         pub fn on_pill_secondary<S: 'static>(
             mut self,

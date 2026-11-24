@@ -383,7 +383,7 @@ impl SidebarRow {
     }
     /// A second line under the label, smaller and fainter than it (11 point `caption` in
     /// `text_faint`, under a medium-weight 13 point label). The row's accessible name is then
-    /// "Label, Subtitle". Give the row the height for it (default [`TWO_LINE_ROW_HEIGHT`]).
+    /// "Label, Subtitle". Give the row the height for it (default `TWO_LINE_ROW_HEIGHT`).
     pub fn subtitle(mut self, s: impl Into<String>) -> Self {
         self.subtitle = Some(s.into());
         self
@@ -416,7 +416,7 @@ impl SidebarRow {
         self.select_only = true;
         self
     }
-    /// The row's height (default [`ROW_HEIGHT`], or [`TWO_LINE_ROW_HEIGHT`] with a subtitle).
+    /// The row's height (default [`ROW_HEIGHT`], or `TWO_LINE_ROW_HEIGHT` with a subtitle).
     pub fn height(mut self, points: f32) -> Self {
         self.height = Some(points.max(1.0));
         self

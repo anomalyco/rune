@@ -92,14 +92,14 @@ impl RichLayoutOptions {
 
     /// Breaks inside a word that has no break opportunity and is wider than the wrap width
     /// (a long URL, hash or token) instead of letting it run past the line, as
-    /// [`El::wrap_anywhere`](crate::El::wrap_anywhere) does. Words that fit still break at spaces.
+    /// `El::wrap_anywhere` does. Words that fit still break at spaces.
     pub fn wrap_anywhere(mut self) -> Self {
         self.wrap_anywhere = true;
         self
     }
 
     /// The paragraph's direction (its bidi base level), as a text element inside
-    /// [`El::dir`](crate::El::dir) lays out in: `Rtl` aligns `Start` to the right edge and gives
+    /// `El::dir` lays out in: `Rtl` aligns `Start` to the right edge and gives
     /// neutral characters at its ends the right-to-left side, `Auto` takes the first strong
     /// character's. Left to right by default.
     pub fn direction(mut self, direction: crate::Direction) -> Self {

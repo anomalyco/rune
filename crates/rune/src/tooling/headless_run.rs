@@ -141,9 +141,14 @@ pub enum ScriptEvent {
     FileDialog(Option<std::path::PathBuf>),
     /// `{"type": "file-dialog", "paths": […]}`: the files chosen in a multi-file open dialog.
     ///
-    /// ```ignore
+    /// ```
+    /// # use std::path::PathBuf;
+    /// # use rune::tooling::ScriptEvent;
+    /// # let event = ScriptEvent::FileDialogFiles(vec![PathBuf::from("/a.csv"), PathBuf::from("/b.csv")]);
+    /// # assert!(
     /// // JSON script event: {"t": 0.2, "type": "file-dialog", "paths": ["/a.csv", "/b.csv"]}
     /// matches!(event, ScriptEvent::FileDialogFiles(ref paths) if paths.len() == 2)
+    /// # );
     /// ```
     FileDialogFiles(Vec<std::path::PathBuf>),
     /// `{"drag_files": …}`: a file drag from another app moved over the window.

@@ -38,12 +38,14 @@ impl PlaceRequest {
 /// Maps directly to `winit::window::ResizeDirection` (Win32 sizing borders, X11
 /// `_NET_WM_MOVERESIZE`, Wayland `xdg_toplevel.resize`).
 ///
-/// ```ignore
+/// ```
 /// use rune::{ResizeEdge, el};
 ///
+/// # let _ =
 /// el().pin(None, None, Some(0.0), Some(0.0))
 ///     .size(12.0, 12.0)
 ///     .window_resize(ResizeEdge::SouthEast)
+/// # ;
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ResizeEdge {

@@ -56,8 +56,15 @@ impl TextArea {
     /// keeping `Cmd+Home`/`Cmd+End`, `Ctrl+Home`/`Ctrl+End`, and `Cmd+Up`/`Cmd+Down` on the
     /// document's ends. Off by default (`false`).
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::TextEdit;
+    /// # use rune_kit::{Kit, TextArea};
+    /// # struct App { code: TextEdit }
+    /// # let s = App { code: TextEdit::default() };
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// TextArea::new(&s.code).line_home_end(true).on_edit(|s: &mut App| &mut s.code).build(&k)
+    /// # ;
     /// ```
     pub fn line_home_end(mut self, on: bool) -> Self {
         self.edit.set_line_home_end(on);
@@ -94,8 +101,15 @@ impl TextArea {
     /// Help or a validation error for the inner editor, separate from its name, as
     /// [`TextInput::description`](super::TextInput::description). Accessibility-only (not drawn).
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::TextEdit;
+    /// # use rune_kit::{Kit, TextArea};
+    /// # struct App { notes: TextEdit }
+    /// # let s = App { notes: TextEdit::default() };
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// TextArea::new(&s.notes).label("Notes").description("Markdown supported").build(&k)
+    /// # ;
     /// ```
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
@@ -130,9 +144,16 @@ impl TextArea {
     /// dims. Inner 8-point padding, `width`, `rows`, `auto_grow`, `max_height`, `trailing`,
     /// `scroll_bar` and press-anywhere focus all keep working.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{TextEdit, col};
+    /// # use rune_kit::{Kit, TextArea};
+    /// # struct App { draft: TextEdit }
+    /// # let s = App { draft: TextEdit::default() };
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// col().role("textbox").fill(k.c.layer_01).radius(k.radius.lg)
     ///     .child(TextArea::new(&s.draft).plain().auto_grow(1, 8).width(None).build(&k))
+    /// # ;
     /// ```
     pub fn plain(mut self) -> Self {
         self.plain = true;
@@ -143,12 +164,20 @@ impl TextArea {
     /// the accessory, wraps and scrolls inside `auto_grow` / `max_height`, and leaves the
     /// accessory independently focusable and clickable.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::TextEdit;
+    /// # use rune_kit::{Button, Kit, TextArea};
+    /// # struct App { draft: TextEdit }
+    /// # impl App { fn send(&mut self) {} }
+    /// # let s = App { draft: TextEdit::default() };
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// TextArea::new(&s.draft)
     ///     .auto_grow(1, 4)
     ///     .width(None)
     ///     .trailing(Button::new("Send").on_press(|s: &mut App| s.send()).build(&k))
     ///     .build(&k)
+    /// # ;
     /// ```
     pub fn trailing(mut self, e: El) -> Self {
         self.trailing = Some(e);
@@ -159,8 +188,15 @@ impl TextArea {
     /// Applies when [`Self::auto_grow`] or [`Self::max_height`] creates an internal scroll
     /// viewport; otherwise a no-op. Off by default.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::TextEdit;
+    /// # use rune_kit::{Kit, TextArea};
+    /// # struct App { draft: TextEdit }
+    /// # let s = App { draft: TextEdit::default() };
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// TextArea::new(&s.draft).auto_grow(2, 6).scroll_bar(true).build(&k)
+    /// # ;
     /// ```
     pub fn scroll_bar(mut self, on: bool) -> Self {
         self.scroll_bar = if on { AreaScrollBar::Kit } else { AreaScrollBar::None };
@@ -170,11 +206,18 @@ impl TextArea {
     /// [`rune::system_scroll_bars`]. Applies when [`Self::auto_grow`] or [`Self::max_height`]
     /// creates an internal scroll viewport; otherwise a no-op.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::TextEdit;
+    /// # use rune_kit::{Kit, ScrollBarStyle, TextArea};
+    /// # struct App { draft: TextEdit }
+    /// # let s = App { draft: TextEdit::default() };
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// TextArea::new(&s.draft)
     ///     .max_height(120.0)
     ///     .scroll_bar_styled(ScrollBarStyle::from_kit(&k).always_visible())
     ///     .build(&k)
+    /// # ;
     /// ```
     pub fn scroll_bar_styled(mut self, style: ScrollBarStyle) -> Self {
         self.scroll_bar = AreaScrollBar::Styled(style);

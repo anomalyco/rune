@@ -3,7 +3,7 @@
 //! Message catalogs for Rune apps, laid out for lookups that cost an index:
 //!
 //! - **Catalogs are data generated at build time.** An app keeps its catalogs as flat JSON files,
-//!   one per locale and layer, and its build script runs [`codegen::generate`] (feature
+//!   one per locale and layer, and its build script runs `codegen::generate` (feature
 //!   `codegen`). Each locale becomes one text blob plus a span table that `include_str!` and
 //!   `include_bytes!` embed, so nothing parses, allocates or relocates at launch, and a locale
 //!   added to the folder is in the next build.

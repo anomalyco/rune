@@ -496,7 +496,15 @@ impl<S: 'static, T: 'static> Tree<S, T> {
     /// assistive `Expand` / `Collapse` action, after the model's expanded state has updated. Use
     /// this to lazily insert children under a branch added with [`TreeModel::insert_branch`].
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Kit, Tree, TreeModel};
+    /// # struct FileNode(String);
+    /// # impl FileNode { fn label(&self) -> &str { &self.0 } }
+    /// # struct App { files: TreeModel<FileNode> }
+    /// # impl App { fn load_dir(&mut self, _: &str) {} }
+    /// # let s = &App { files: TreeModel::new() };
+    /// # let kit = Kit::neutral(true);
+    /// # let _ =
     /// Tree::new(|s: &App| &s.files, |s: &mut App| &mut s.files, FileNode::label)
     ///     .on_toggle(|s: &mut App, id, open, _| {
     ///         if open && !s.files.has_children(id) {
@@ -504,6 +512,7 @@ impl<S: 'static, T: 'static> Tree<S, T> {
     ///         }
     ///     })
     ///     .build(s, &kit)
+    /// # ;
     /// ```
     pub fn on_toggle(mut self, f: impl Fn(&mut S, &str, bool, &mut Tx) + 'static) -> Self {
         self.handlers.on_toggle = Some(Rc::new(f));

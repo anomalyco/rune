@@ -325,7 +325,7 @@ impl Tx {
     }
 
     /// [`Tx::element_at`] with options ([`Pick`](crate::Pick)): transparent layers,
-    /// [`Pick::interactive`] hit targets, or [`Pick::drop_targets`].
+    /// [`crate::Pick::interactive`] hit targets, or [`crate::Pick::drop_targets`].
     pub fn element_at_with<S: 'static>(&mut self, x: f32, y: f32, pick: crate::Pick, f: impl FnOnce(&mut S, Option<crate::Picked>, &mut Tx) + 'static) {
         self.pick_read(None, x, y, pick, f);
     }
@@ -462,7 +462,7 @@ impl Tx {
 
     /// Maximize this window after this handler, or restore it when it is maximized, as its
     /// maximize button would (macOS zooms). Does nothing for overlays, macOS non-activating
-    /// panels, and headless runs. Read the confirmed OS state with [`Cx::is_maximized`].
+    /// panels, and headless runs. Read the confirmed OS state with [`crate::Cx::is_maximized`].
     pub fn toggle_maximized(&mut self) {
         self.toggle_maximized = true;
     }
@@ -472,7 +472,7 @@ impl Tx {
     /// its display, which hides a custom titlebar's caption buttons (`Cx::chrome_insets`).
     /// Does nothing for overlays, macOS non-activating panels, and headless runs. When both
     /// `toggle_full_screen` and [`Self::set_full_screen`] run in one turn, the last call wins.
-    /// Read the confirmed OS state with [`Cx::is_full_screen`].
+    /// Read the confirmed OS state with [`crate::Cx::is_full_screen`].
     pub fn toggle_full_screen(&mut self) {
         self.full_screen = Some(FullScreenRequest::Toggle);
     }
@@ -483,7 +483,7 @@ impl Tx {
     /// non-activating panels, and headless runs, and is a no-op when the window is already in
     /// the requested state. When multiple calls to `set_full_screen` or
     /// [`Self::toggle_full_screen`] run in one turn, the last call wins. Read the confirmed OS
-    /// state with [`Cx::is_full_screen`].
+    /// state with [`crate::Cx::is_full_screen`].
     ///
     /// ```
     /// # use rune::{el, Tx};
@@ -629,12 +629,16 @@ impl Tx {
     /// [`El::window_resize`](crate::El::window_resize), which also supplies the matching resize
     /// cursor. Ignored on macOS, on the web, in overlays, and in headless runs.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{Cursor, Phase, ResizeEdge, el};
+    /// # struct App;
+    /// # let _ =
     /// el().size(12.0, 12.0).cursor(Cursor::ResizeNwse).on_drag(|_: &mut App, d, tx| {
     ///     if d.phase == Phase::Down {
     ///         tx.drag_resize_window(ResizeEdge::SouthEast);
     ///     }
     /// })
+    /// # ;
     /// ```
     pub fn drag_resize_window(&mut self, edge: crate::ResizeEdge) {
         self.frame_request(crate::window::frame::FrameRequest { resize_drag: Some(edge), ..Default::default() });
@@ -731,7 +735,7 @@ impl Tx {
     /// handler's commit: an element the same change builds can be selected, and an unbuilt
     /// [`El::virtual_rows`] or [`El::virtualize`] row is built and pinned without scrolling.
     /// The range is clamped to the text and its character boundaries; Cmd+C then copies it and Cmd+A selects all of its text or group.
-    /// Nothing happens when `key` (the element's final key; a [`memo`](crate::memo)'s id replaces one set inside) names no selectable text.
+    /// Nothing happens when `key` (the element's final key; a [`memo`](crate::memo())'s id replaces one set inside) names no selectable text.
     pub fn select_text(&mut self, key: impl Into<String>, range: std::ops::Range<usize>) {
         self.select = Some(SelectRequest::Range(key.into(), range));
         self.select_from_change = false;
@@ -800,7 +804,10 @@ impl Tx {
     /// an empty list. Registering bytes that are already registered returns their family names
     /// without duplicating data or triggering a relayout.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::Tx;
+    /// # let mut tx = Tx::default();
+    /// # let bytes: Vec<u8> = Vec::new();
     /// let families = tx.add_font(bytes);
     /// if let Some(family) = families.first() {
     ///     tx.set_font_families(family, "ui-monospace");

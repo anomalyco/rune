@@ -86,7 +86,7 @@ impl crate::Tx {
     /// Open a local file or folder in the system's default application once this handler's frame
     /// is done.
     ///
-    /// Unlike [`Tx::open_url`], which accepts only `http:`, `https:` and `mailto:` links, this
+    /// Unlike [`crate::Tx::open_url`], which accepts only `http:`, `https:` and `mailto:` links, this
     /// handles local filesystem paths on desktop platforms (macOS, Windows, Linux). Only syntax is
     /// checked here (`Empty`, embedded NUL -> `Invalid`, web/mobile -> `Unsupported`); the
     /// filesystem is never touched on the UI thread. Headless runs and tests open nothing; read

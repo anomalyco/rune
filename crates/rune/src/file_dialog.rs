@@ -121,11 +121,17 @@ impl FileDialogs {
     /// Show an Open dialog that lets the user pick multiple files at once. Returns `Ok(None)`
     /// when cancelled.
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use std::path::PathBuf;
+    /// # use rune::{FileDialogError, FileDialogOptions, FileDialogs};
+    /// # fn import(_: PathBuf) {}
+    /// # async fn example(dialogs: FileDialogs) -> Result<(), FileDialogError> {
     /// let options = FileDialogOptions { title: "Import".into(), ..Default::default() }.filter("CSV", &["csv"]);
     /// if let Some(paths) = dialogs.open_files(options).await? {
     ///     for path in paths { import(path); }
     /// }
+    /// # Ok(())
+    /// # }
     /// ```
     pub async fn open_files(&self, options: FileDialogOptions) -> FileDialogFilesResult {
         match &self.0 {
@@ -376,7 +382,12 @@ impl Tx {
     /// In headless `--tree` output `fileDialog` includes `"multiple": true`, and scripts answer
     /// it with `{"type": "file-dialog", "paths": [...]}` or `{"type": "file-dialog-cancel"}`.
     ///
-    /// ```ignore
+    /// ```
+    /// # use std::path::PathBuf;
+    /// # use rune::{FileDialogOptions, Tx, el};
+    /// # struct App { error: Option<String> }
+    /// # impl App { fn import_all(&mut self, _: Vec<PathBuf>) {} }
+    /// # let _ = el()
     /// .on_press_tx(|_: &mut App, tx: &mut Tx| {
     ///     let options = FileDialogOptions { title: "Import".into(), ..Default::default() }.filter("CSV", &["csv"]);
     ///     tx.open_files(options, |s: &mut App, result, _| match result {
@@ -385,6 +396,7 @@ impl Tx {
     ///         Err(e) => s.error = Some(e.to_string()),
     ///     });
     /// })
+    /// # ;
     /// ```
     pub fn open_files<S: 'static>(&mut self, options: FileDialogOptions, on_answer: impl FnOnce(&mut S, FileDialogFilesResult, &mut Tx) + 'static) {
         let on_answer: AnswerFn = Box::new(move |s, result, tx| {

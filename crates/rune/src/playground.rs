@@ -5,7 +5,7 @@
 //!
 //! While it's open, handlers in the stage act on the stage's state: a fresh scene state, a
 //! story's own state, or the real state for a [`Playground::page`]. Its own controls act on
-//! [`Controls`], beside it, through [`crate::states::States`]. The real state keeps polling
+//! `Controls`, beside it, through `crate::states::States`. The real state keeps polling
 //! throughout and is back, untouched, after Back.
 
 use std::any::Any;

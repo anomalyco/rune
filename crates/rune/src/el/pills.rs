@@ -7,7 +7,7 @@ use crate::el::{El, PillStyle};
 use crate::text::{BareIcon, PillChip, Replace, Span};
 
 impl El {
-    /// Draws bytes `range` of a [`text`](crate::text) or [`rich`](crate::rich) element as a
+    /// Draws bytes `range` of a [`text`](crate::text()) or [`rich`](crate::rich) element as a
     /// pill: a rounded chip in `style`'s colour (default: the rich style's link colour at 20%,
     /// or [`El::pill_colors`]) with its label in `style`'s text colour and its icon before it,
     /// the way a field draws a [`Mark::Pill`](crate::Mark::Pill). The label never splits across
@@ -57,12 +57,18 @@ impl El {
     /// tinting. Takes precedence over `style.icon(..)`. On a field this does nothing: attach
     /// [`El::pill_image`] instead.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{Color, PillStyle, Pixels, text};
+    /// # let chip = Color::WHITE;
+    /// # let border = Color::WHITE;
+    /// # let gmail_logo = Pixels::new();
+    /// # let _ =
     /// text("open @Gmail now").pill_with_image(
     ///     5..11,
     ///     PillStyle::new().bg(chip).ring(border, 1.0).radius(999.0),
     ///     gmail_logo,
     /// )
+    /// # ;
     /// ```
     pub fn pill_with_image(mut self, range: Range<usize>, style: PillStyle, image: crate::Pixels) -> Self {
         if self.cold.input.is_some() {
@@ -95,7 +101,7 @@ impl El {
 }
 
 impl El {
-    /// Sets `icon` inline in a [`text`](crate::text) or [`rich`](crate::rich) element, before
+    /// Sets `icon` inline in a [`text`](crate::text()) or [`rich`](crate::rich) element, before
     /// byte `at` (a char boundary), in room of its own that moves the text after it aside. It
     /// stays on the line of the word that follows it, as an icon before a link does on a web
     /// page, and sits centred on that word's letters. Its glyph takes `icon`'s colour or the
@@ -125,7 +131,7 @@ impl El {
         self
     }
 
-    /// Draws `image` in place of bytes `range` of a [`text`](crate::text) or
+    /// Draws `image` in place of bytes `range` of a [`text`](crate::text()) or
     /// [`rich`](crate::rich) element, standing on the baseline as a glyph does (rendered math
     /// in a sentence). The bytes take no room and draw nothing, but selection, copy and search
     /// still see them. A line grows to fit a taller or deeper image, and one too wide for the

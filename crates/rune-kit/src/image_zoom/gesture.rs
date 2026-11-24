@@ -1,6 +1,6 @@
 //! The preview's gestures (`@opencode/ui` `image-zoom-machine.ts`): whether an eased zoom is
 //! gliding, and the press under way. Scale and offsets live on springs in the driver
-//! ([`super::glide`]), not here, so a frame of a glide or a pan changes no state.
+//! (`super::glide`), not here, so a frame of a glide or a pan changes no state.
 
 use rune::machine::Effects;
 

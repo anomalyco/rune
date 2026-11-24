@@ -8,7 +8,7 @@ use super::*;
 const MARK: u32 = 3;
 
 impl El {
-    /// Lays bytes `range` of a [`text`](crate::text) or [`rich`](crate::rich) element out as an
+    /// Lays bytes `range` of a [`text`](crate::text()) or [`rich`] element out as an
     /// isolate (UAX #9 LRI, RLI or FSI .. PDI): it reads in `dir` (`Auto` from its own first
     /// strong character) and the text around it reads as if it were one neutral character, so
     /// `src/app.ts`, `-v` or `npm install` in an Arabic sentence keeps its own order, and an

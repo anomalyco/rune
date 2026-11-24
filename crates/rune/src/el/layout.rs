@@ -710,10 +710,13 @@ impl El {
     /// headless tests observe the edge via
     /// [`Runtime::take_resize_action`](crate::Runtime::take_resize_action)).
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{ResizeEdge, el};
+    /// # let _ =
     /// el().pin(None, None, Some(0.0), Some(0.0))
     ///     .size(12.0, 12.0)
     ///     .window_resize(ResizeEdge::SouthEast)
+    /// # ;
     /// ```
     pub fn window_resize(mut self, edge: crate::ResizeEdge) -> Self {
         self.flags.set_window_drag(WindowDrag::Resize(edge));

@@ -109,7 +109,7 @@ pub(crate) fn blob<'m, 's>(keys: &[&str], message: impl Fn(&str) -> Option<&'m s
     (text, spans)
 }
 
-/// Everything [`crate::codegen::generate`] emits, in one static.
+/// Everything `codegen::generate` emits, in one static.
 #[derive(Debug)]
 pub struct Catalog {
     keys: &'static [&'static str],

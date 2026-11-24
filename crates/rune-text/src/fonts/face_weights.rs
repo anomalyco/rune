@@ -20,7 +20,7 @@ pub struct FaceWeights {
 static DECLARED: Mutex<&'static [FaceWeights]> = Mutex::new(&[]);
 
 /// Declares the weights the app's faces answer, as its `@font-face` rules would. Call it before
-/// the first [`super::TextSystem`] is made: faces are registered then.
+/// the first [`crate::TextSystem`] is made: faces are registered then.
 pub fn set_face_weights(faces: &'static [FaceWeights]) {
     if let Ok(mut d) = DECLARED.lock() {
         *d = faces;
