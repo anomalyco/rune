@@ -451,3 +451,26 @@ fn on_display_close_stores_once_hook_and_replaces_previous() {
     hook();
     assert_eq!(ran.load(Ordering::Relaxed), 10);
 }
+
+#[test]
+fn on_close_request_defaults_to_none_and_keeps_on_close_independent() {
+    let default_app = App::new(spec());
+    assert!(default_app.on_close_request.is_none());
+    assert!(default_app.on_close.is_none());
+
+    let app = App::new(spec())
+        .on_close_request(|_, _| crate::CloseResponse::Defer)
+        .on_close_request(|n, _| {
+            *n += 1;
+            crate::CloseResponse::Close
+        })
+        .on_close(|n, _| { *n += 10; });
+    assert!(app.on_close_request.is_some());
+    assert!(app.on_close.is_some());
+    let mut rt = Runtime::new(0u32, |_: &u32, _: &mut Cx<u32>| el(), (100.0, 100.0), Env::default());
+    let mut resp = crate::CloseResponse::Defer;
+    let f = app.on_close_request.unwrap();
+    rt.update(|s, tx| resp = f(s, tx));
+    assert_eq!(resp, crate::CloseResponse::Close);
+    assert_eq!(rt.state, 1);
+}

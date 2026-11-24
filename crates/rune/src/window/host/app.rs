@@ -36,6 +36,7 @@ pub(crate) trait WindowApp {
 
     fn enter_turn(&mut self) -> bool;
     fn leave_turn(&mut self);
+    fn run_on_close_request(&mut self) -> Option<crate::CloseResponse>;
     fn run_on_close(&mut self);
     fn run_on_quit(&mut self) -> bool;
     fn run_on_rest(&mut self);
@@ -181,11 +182,22 @@ pub(in crate::window) fn test_app<S: 'static>(
     on_close: Option<fn(&mut S, &mut Tx)>,
     on_quit: Option<fn(&mut S, &mut Tx)>,
 ) -> Box<dyn WindowApp> {
+    test_app_with_close_request(rt, None, on_close, on_quit)
+}
+
+#[cfg(test)]
+pub(in crate::window) fn test_app_with_close_request<S: 'static>(
+    rt: Runtime<S>,
+    on_close_request: Option<fn(&mut S, &mut Tx) -> crate::CloseResponse>,
+    on_close: Option<fn(&mut S, &mut Tx)>,
+    on_quit: Option<fn(&mut S, &mut Tx)>,
+) -> Box<dyn WindowApp> {
     Box::new(TypedWindowApp {
         rt,
         shared: Arc::new(Shared::default()),
         comp: None,
         on_frame_drawn: None,
+        on_close_request,
         on_close,
         on_rest: None,
         on_quit,
@@ -202,6 +214,7 @@ pub(crate) struct TypedWindowApp<S: 'static> {
     pub(crate) shared: Arc<Shared<S>>,
     pub(super) comp: Option<Box<dyn Compositor<S>>>,
     pub(super) on_frame_drawn: Option<OnFrameDrawn<S>>,
+    pub(super) on_close_request: Option<fn(&mut S, &mut Tx) -> crate::CloseResponse>,
     pub(super) on_close: Option<fn(&mut S, &mut Tx)>,
     pub(super) on_rest: Option<fn(&mut S, &mut Tx) -> bool>,
     pub(super) on_quit: Option<fn(&mut S, &mut Tx)>,
@@ -215,14 +228,16 @@ pub(crate) struct TypedWindowApp<S: 'static> {
 impl<S: 'static> TypedWindowApp<S> {
     #[cfg(all(test, feature = "hot"))]
     pub(crate) fn from_app(mut app: crate::App<S>, waker: crate::runtime::Waker) -> Self {
-        let (on_close, on_rest, on_reopen, on_quit, turn_scope) = (app.on_close, app.on_rest, app.on_reopen, app.on_quit, app.turn_scope);
+        let (on_close_request, on_close, on_rest, on_reopen, on_quit, turn_scope) = (
+            app.on_close_request, app.on_close, app.on_rest, app.on_reopen, app.on_quit, app.turn_scope,
+        );
         let comp = app.compositor.take();
         let (layout_seed, keep_layout) = (app.layout_seed.take(), app.keep_layout.take());
         let (spec, state, shared, runtime) = app.into_parts(None);
         let mut rt = crate::tooling::runtime_for(&spec, state, spec.size, crate::runtime::Env::default(), waker);
         rt.configure(runtime);
         Self {
-            rt, shared, comp, on_frame_drawn: None, on_close, on_rest, on_quit, on_reopen, turn_scope,
+            rt, shared, comp, on_frame_drawn: None, on_close_request, on_close, on_rest, on_quit, on_reopen, turn_scope,
             keep_layout, kept_layout: layout_seed,
         }
     }
@@ -264,6 +279,18 @@ impl<S: 'static> WindowApp for TypedWindowApp<S> {
             #[cfg(not(feature = "hot"))]
             (scope.leave)(&mut self.rt.state);
         }
+    }
+
+    fn run_on_close_request(&mut self) -> Option<crate::CloseResponse> {
+        let f = self.on_close_request?;
+        let mut response = crate::CloseResponse::Close;
+        self.rt.update(|s, tx| {
+            #[cfg(feature = "hot")]
+            { response = crate::hot::patched_or_original!("on_close_request", f, s, tx); }
+            #[cfg(not(feature = "hot"))]
+            { response = f(s, tx); }
+        });
+        Some(response)
     }
 
     fn run_on_close(&mut self) {

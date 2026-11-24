@@ -804,6 +804,19 @@ impl<S: 'static> WindowSpec<S> {
         on_rest(f: fn(&mut S, &mut crate::Tx) -> bool);
         /// This window's editor's input method events, like `App::on_ime`.
         on_ime(f: fn(&mut S, &crate::Ime, &mut crate::Tx) -> bool);
+        /// Intercepts a native close request before hiding or closing this window, like
+        /// [`App::on_close_request`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, CloseResponse, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("draft", AppSpec::new("Draft", (480.0, 320.0), || true, |_, _| el()))
+        ///     .on_close_request(|dirty, _| {
+        ///         if *dirty { CloseResponse::Defer } else { CloseResponse::Close }
+        ///     });
+        /// let _ = spec;
+        /// ```
+        on_close_request(f: fn(&mut S, &mut crate::Tx) -> crate::CloseResponse);
         /// Runs whenever this window closes, like `App::on_close`.
         on_close(f: fn(&mut S, &mut crate::Tx));
         /// Runs in this window when the app starts to quit, like `App::on_quit`.

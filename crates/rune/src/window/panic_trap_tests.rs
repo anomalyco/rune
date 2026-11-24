@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{PanicTrap, is_nested_run_loop_mode};
 use crate::runtime::{Env, Runtime};
-use crate::window::host::app::test_app;
+use crate::window::host::app::{test_app, test_app_with_close_request};
 use crate::{Cx, El, Tx, el};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -113,6 +113,29 @@ fn on_focus_and_on_close_panics_are_captured_with_original_message_and_skip_quit
     let caught = catch_unwind(AssertUnwindSafe(|| resume_unwind(payload))).unwrap_err();
     let msg = caught.downcast_ref::<&str>().copied().expect("static str panic message");
     assert_eq!(msg, "on_close panic");
+
+    // 3. on_close_request panic through WindowApp::run_on_close_request.
+    let rt = Runtime::new((), view, (100.0, 100.0), Env::default());
+    let mut app = test_app_with_close_request(
+        rt,
+        Some(|_: &mut (), _: &mut Tx| panic!("on_close_request panic")),
+        Some(|_, _| { QUIT_COUNT.fetch_add(1, Ordering::SeqCst); }),
+        Some(|_, _| { QUIT_COUNT.fetch_add(1, Ordering::SeqCst); }),
+    );
+    let mut trap = PanicTrap::default();
+    let mut exited = 0;
+    trap.guard(|| exited += 1, || { let _ = app.run_on_close_request(); });
+    assert_eq!(exited, 1);
+    assert!(trap.is_panicking());
+    if !trap.is_panicking() {
+        app.run_on_close();
+        app.run_on_quit();
+    }
+    assert_eq!(QUIT_COUNT.load(Ordering::SeqCst), 0, "on_close/on_quit must not run after on_close_request panic");
+    let payload = trap.take().expect("on_close_request panic payload");
+    let caught = catch_unwind(AssertUnwindSafe(|| resume_unwind(payload))).unwrap_err();
+    let msg = caught.downcast_ref::<&str>().copied().expect("static str panic message");
+    assert_eq!(msg, "on_close_request panic");
 }
 
 #[test]

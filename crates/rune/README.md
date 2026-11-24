@@ -699,6 +699,7 @@ let app = rune::App::new(spec)
     .gpu_memory_policy(GpuMemoryPolicy::MemoryUsage) // optional: wgpu suballocation policy
     .accessory()                   // macOS: menu-bar app, no Dock icon (h.set_dock_icon(true) shows it)
     .standard_menus()              // macOS: Edit, Minimize ⌘M and Close ⌘W (no Quit); regular apps get them anyway
+    .on_close_request(|s, tx| CloseResponse::Defer) // optional: intercept native close before hiding
     .on_close(|s, tx| ..)          // runs before every close; tx.quit() quits instead
     .on_reopen(|s, has_visible, tx| false); // macOS: Dock icon clicked; true skips the default
     // .window_options(WindowOptions { max_size, resizable, .. }) for this window
@@ -758,6 +759,14 @@ app.run();
   start (no Wayland or X11 display, or a Mac no one is logged in to over ssh or in CI) or loses
   its display connection, bypassing fast exit so `App::try_run`, `try_run_windows_with` and
   `try_run_windows_with_args` return that error instead. Normal quits keep fast exit.
+- `App::on_close_request(|s, tx| -> CloseResponse)` (also forwarded on `WindowSpec::on_close_request`)
+  intercepts a native `WindowEvent::CloseRequested` inside a normal update transaction before the
+  window hides, changes lifecycle or first-frame state, or calls `App::on_close`. Returning
+  `CloseResponse::Defer` keeps the window open, commits any state or `Tx` changes (such as showing
+  an unsaved-changes dialog), and requests a redraw; returning `CloseResponse::Close` proceeds to
+  close as usual. Programmatic close (`Tx::close_window`, `AppHandle::close`, `WindowHandle::close`),
+  quit/relaunch, teardown, and an already-exiting loop bypass `on_close_request`, and apps without
+  the hook behave as before.
 - `App::on_window(|w: &WindowHandle| ..)` runs on the UI thread after every native creation, for
   icons, native styles, or display-bound protocol objects through `WindowHandle::with_raw_handle`
   and `WindowHandle::with_raw_display_handle`. Pair `with_raw_display_handle` with

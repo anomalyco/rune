@@ -8,7 +8,7 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::ModifiersState;
 use winit::window::WindowLevel;
 
-use super::Host;
+use super::{Host, WindowApp};
 use crate::app::{Activation, WindowRequest};
 use crate::el::Shell;
 use crate::window::chrome::{self, sync_chrome_core};
@@ -23,6 +23,44 @@ use crate::window::state::{
 use crate::window::surface::{BackoffEvent, Win};
 #[cfg(target_os = "windows")]
 use crate::window::win32::covered_draw::CoveredDrawEvent;
+
+/// What a host does after consulting [`crate::App::on_close_request`] for a native
+/// `WindowEvent::CloseRequested`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::window) enum CloseDecision {
+    /// Proceed to `Host::close` (no hook registered, hook returned `CloseResponse::Close`, the
+    /// event loop is already exiting, or the window cannot close).
+    Close,
+    /// Keep the window open: clipboard has been flushed; apply `Host::shell` and request a
+    /// redraw (or run a covered frame / schedule pending wakes) if the window stays open.
+    Defer,
+}
+
+/// Evaluates [`crate::App::on_close_request`] for a native `WindowEvent::CloseRequested` without
+/// hiding the window or changing `Life` or `FirstFrame`.
+///
+/// Bypasses the hook when the event loop is already exiting or the window would not close
+/// (`!closes`), and clears `ends_app` on deferral so a later non-final close never mistakes
+/// itself for a fast-exiting last window.
+pub(in crate::window) fn close_request_core(
+    app: &mut dyn WindowApp,
+    clipboard: &mut crate::clipboard::Client,
+    closes: bool,
+    exiting: bool,
+    ends_app: &mut bool,
+) -> CloseDecision {
+    if exiting || !closes {
+        return CloseDecision::Close;
+    }
+    match app.run_on_close_request() {
+        None | Some(crate::CloseResponse::Close) => CloseDecision::Close,
+        Some(crate::CloseResponse::Defer) => {
+            *ends_app = false;
+            clipboard.flush_core(app.rt_mut());
+            CloseDecision::Defer
+        }
+    }
+}
 
 /// Whether a window creation reveal should request foreground activation.
 /// `App::open_inactive` suppresses activation on the first open only;
@@ -439,6 +477,40 @@ impl Host {
             // A callback that ran (a menu that couldn't open) may have asked to close, quit or
             // minimize.
             if self.app.rt().shell_request.is_none() && !self.app.rt().host.minimize.field() { return; }
+        }
+    }
+
+    /// Handles a native `WindowEvent::CloseRequested`. Runs [`App::on_close_request`] inside a
+    /// normal update transaction before hiding the window or changing `Life`/`FirstFrame`;
+    /// `CloseResponse::Defer` keeps the window open, applies any `Tx` requests made in the hook,
+    /// and schedules a redraw (or covered frame / pending wakes).
+    pub(in crate::window) fn close_requested(&mut self, event_loop: &ActiveEventLoop) {
+        let closes = self.closes();
+        let decision = close_request_core(
+            &mut *self.app,
+            &mut self.clipboard,
+            closes,
+            event_loop.exiting(),
+            &mut self.ends_app,
+        );
+        match decision {
+            CloseDecision::Close => self.close(event_loop),
+            CloseDecision::Defer => {
+                self.shell(event_loop);
+                if self.life.finished() || event_loop.exiting() {
+                    return;
+                }
+                if let Some(w) = self.shown_win() {
+                    if !self.life.covered() && !w.minimized() {
+                        w.request_redraw();
+                    } else {
+                        self.covered_frame();
+                        self.shell(event_loop);
+                    }
+                } else {
+                    self.app.rt_mut().schedule_pending_wakes();
+                }
+            }
         }
     }
 

@@ -10,7 +10,9 @@ use crate::clipboard::MemoryClipboard;
 use crate::quit::{Effect, Event, State as QuitState, step as quit_step};
 use crate::runtime::{Env, Runtime};
 use crate::window::host::any_host::quit_hook_core;
-use crate::window::host::app::{WindowApp, test_app};
+use crate::window::host::app::{WindowApp, test_app, test_app_with_close_request};
+use crate::window::host::lifecycle::{CloseDecision, close_request_core};
+use crate::window::state::FirstFrame;
 use crate::window::{AnyHost, Life, WakeEvent};
 use crate::{Cx, El, Tx, el};
 
@@ -468,5 +470,289 @@ fn on_display_close_runs_once_in_exiting_hosts_for_app_quit_os_quit_and_error_ex
         );
         assert_eq!(step, ExitStep::FastExit);
         assert_eq!(*events.borrow(), vec!["main:on_close", "main:on_quit", "main:on_display_close"]);
+    }
+}
+
+struct CloseRequestState {
+    events: Rc<RefCell<Vec<String>>>,
+    dirty: bool,
+    prompt_open: bool,
+    defer_count: u32,
+    copy_on_defer: Option<&'static str>,
+    title_on_defer: Option<&'static str>,
+}
+
+fn close_request_view(s: &CloseRequestState, _: &mut Cx<CloseRequestState>) -> El {
+    if s.prompt_open { el().key("save-prompt") } else { el().key("editor") }
+}
+
+fn on_close_request_guard(s: &mut CloseRequestState, tx: &mut Tx) -> crate::CloseResponse {
+    s.events.borrow_mut().push("on_close_request".into());
+    if s.dirty {
+        s.prompt_open = true;
+        s.defer_count += 1;
+        if let Some(copy) = s.copy_on_defer {
+            tx.copy(copy);
+        }
+        if let Some(title) = s.title_on_defer {
+            tx.set_title(title);
+        }
+        crate::CloseResponse::Defer
+    } else {
+        crate::CloseResponse::Close
+    }
+}
+
+fn on_close_guard(s: &mut CloseRequestState, _: &mut Tx) {
+    s.events.borrow_mut().push("on_close".into());
+}
+
+fn on_quit_guard(s: &mut CloseRequestState, _: &mut Tx) {
+    s.events.borrow_mut().push("on_quit".into());
+}
+
+/// Simulates `Host::close_requested` + `Host::close` using the real `close_request_core`,
+/// `TypedWindowApp`, `Life`, `FirstFrame`, and `clipboard::Client`.
+struct GuardedHost {
+    app: Box<dyn WindowApp>,
+    clipboard: crate::clipboard::Client,
+    life: Life,
+    first_frame: FirstFrame,
+    keep_running: bool,
+    ends_app: bool,
+    redraws: u32,
+    hides: u32,
+}
+
+impl GuardedHost {
+    fn new(
+        dirty: bool,
+        with_hook: bool,
+        keep_running: bool,
+        events: Rc<RefCell<Vec<String>>>,
+        mem: &MemoryClipboard,
+    ) -> Self {
+        let mut rt = Runtime::new(
+            CloseRequestState {
+                events: events.clone(),
+                dirty,
+                prompt_open: false,
+                defer_count: 0,
+                copy_on_defer: Some("unsaved-draft"),
+                title_on_defer: Some("Save changes?"),
+            },
+            close_request_view,
+            (200.0, 140.0),
+            Env::default(),
+        );
+        rt.frame(0.0);
+        let app = test_app_with_close_request(
+            rt,
+            with_hook.then_some(on_close_request_guard as fn(&mut CloseRequestState, &mut Tx) -> crate::CloseResponse),
+            Some(on_close_guard),
+            Some(on_quit_guard),
+        );
+        let mut clipboard = crate::clipboard::Client::default();
+        clipboard.use_memory(mem);
+        let mut life = Life::Unopened;
+        life.show();
+        let mut first_frame = FirstFrame::drawn_notified();
+        // Arm a pending reveal so `FirstFrame::hide` would visibly mutate it if called.
+        let _ = first_frame.request_reveal(true, false, crate::time::now());
+        Self {
+            app,
+            clipboard,
+            life,
+            first_frame,
+            keep_running,
+            ends_app: false,
+            redraws: 0,
+            hides: 0,
+        }
+    }
+
+    fn close_requested(&mut self, exiting: bool) -> CloseDecision {
+        let closes = self.life.closes(self.keep_running, true);
+        let decision = close_request_core(
+            &mut *self.app,
+            &mut self.clipboard,
+            closes,
+            exiting,
+            &mut self.ends_app,
+        );
+        match decision {
+            CloseDecision::Close => self.close(),
+            CloseDecision::Defer => {
+                if self.life.shown() {
+                    self.redraws += 1;
+                }
+            }
+        }
+        decision
+    }
+
+    /// Programmatic close (`Tx::close_window`, `AppHandle::close`, `WindowHandle::close`):
+    /// bypasses `on_close_request`, mutates `first_frame` / hides, runs `on_close`, and finishes
+    /// or hides according to `keep_running`.
+    fn close(&mut self) {
+        self.first_frame.hide();
+        if !self.life.closes(self.keep_running, true) { return; }
+        let _ = std::mem::take(&mut self.ends_app);
+        self.hides += 1;
+        self.app.run_on_close();
+        self.clipboard.flush_core(self.app.rt_mut());
+        if self.keep_running {
+            self.life.hide(crate::platform::reopen::stamp);
+        } else {
+            self.life.finish();
+        }
+    }
+}
+
+impl AnyHost for GuardedHost {
+    fn resumed(&mut self, _: &ActiveEventLoop) {}
+    fn user_event(&mut self, _: &ActiveEventLoop, _: WakeEvent) {}
+    fn owns(&self, _: WindowId) -> bool { false }
+    fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+    fn finished(&self) -> bool { self.life.finished() }
+    fn keeps_loop(&self) -> bool { true }
+    fn quit_hook(&mut self) {
+        let _ = quit_hook_core(&mut *self.app, &mut self.clipboard, self.life);
+    }
+    fn terminate(&mut self) {
+        if !self.life.closes(self.keep_running, true) { return; }
+        self.life.finish();
+        self.app.run_on_close();
+        self.clipboard.flush_core(self.app.rt_mut());
+    }
+}
+
+#[test]
+fn close_request_defer_keeps_window_open_commits_tx_and_programmatic_close_bypasses() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let mem = crate::clipboard::memory();
+    let mut host = GuardedHost::new(true, true, false, events.clone(), &mem);
+    host.ends_app = true;
+    let first_frame_before = host.first_frame;
+    assert!(first_frame_before.revealing());
+
+    // Native WindowEvent::CloseRequested while dirty -> Defer.
+    assert_eq!(host.close_requested(false), CloseDecision::Defer);
+    assert!(host.life.shown(), "Defer must keep Life::Shown");
+    assert!(!host.life.finished(), "Defer must not finish the host");
+    assert_eq!(host.first_frame, first_frame_before, "Defer must not mutate FirstFrame");
+    assert_eq!(host.hides, 0, "Defer must not hide the window");
+    assert!(!host.ends_app, "Defer must clear ends_app so later closes don't reuse stale fast-exit state");
+    assert_eq!(host.redraws, 1, "Defer schedules a redraw to paint the confirmation dialog");
+    assert!(host.app.rt().needs_commit(), "state updates in on_close_request mark the view dirty");
+    assert_eq!(host.app.rt_mut().host.window_title.take_change(), Some("Save changes?"));
+    assert_eq!(mem.text().as_deref().map(String::as_str), Some("unsaved-draft"), "clipboard flushes on Defer");
+    assert_eq!(*events.borrow(), vec!["on_close_request"], "on_close must not run on Defer");
+
+    // Next frame commits the deferred dialog into the live tree.
+    host.app.frame(0.0);
+    assert!(host.app.rt().find("save-prompt").is_some());
+
+    // cleanup_hosts keeps the event loop alive while the window stays open.
+    let mut hosts: Vec<Option<Box<dyn AnyHost>>> = vec![Some(Box::new(host))];
+    let mut display_close = vec![log_display_close(&events, "main")];
+    let mut quit_state = QuitState::Running;
+    assert!(!cleanup_hosts(&mut hosts, &mut display_close, true, false, false, step_quit(&mut quit_state)));
+    assert_eq!(*events.borrow(), vec!["on_close_request"]);
+    assert_eq!(display_close.len(), 1);
+
+    // User cancels and presses Close again -> on_close_request runs a second time.
+    let mut host = GuardedHost::new(true, true, false, events.clone(), &mem);
+    assert_eq!(host.close_requested(false), CloseDecision::Defer);
+    assert_eq!(host.close_requested(false), CloseDecision::Defer);
+    assert_eq!(host.redraws, 2);
+
+    // User confirms via programmatic close (Tx::close_window / AppHandle::close / WindowHandle::close):
+    // bypasses on_close_request and completes through on_close once.
+    events.borrow_mut().clear();
+    host.close();
+    assert!(host.life.finished());
+    assert!(!host.first_frame.revealing(), "actual close hides FirstFrame");
+    assert_eq!(*events.borrow(), vec!["on_close"], "programmatic close bypasses on_close_request");
+
+    let mut hosts: Vec<Option<Box<dyn AnyHost>>> = vec![Some(Box::new(host))];
+    let mut display_close = vec![log_display_close(&events, "main")];
+    let mut quit_state = QuitState::Running;
+    assert!(cleanup_hosts(&mut hosts, &mut display_close, true, false, false, step_quit(&mut quit_state)));
+    assert_eq!(*events.borrow(), vec!["on_close", "on_quit", "main:on_display_close"]);
+}
+
+#[test]
+fn close_request_close_and_default_no_hook_proceed_through_on_close() {
+    // 1. Registered hook returning CloseResponse::Close proceeds to on_close and preserves ends_app.
+    {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mem = crate::clipboard::memory();
+        let mut host = GuardedHost::new(false, true, false, events.clone(), &mem);
+        host.ends_app = true;
+        let decision = close_request_core(&mut *host.app, &mut host.clipboard, true, false, &mut host.ends_app);
+        assert_eq!(decision, CloseDecision::Close);
+        assert!(host.ends_app, "CloseResponse::Close preserves ends_app for Host::close");
+        host.close();
+        assert!(host.life.finished());
+        assert_eq!(*events.borrow(), vec!["on_close_request", "on_close"]);
+    }
+
+    // 2. Default (no hook registered) performs no update transaction and closes as before.
+    {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mem = crate::clipboard::memory();
+        let mut host = GuardedHost::new(true, false, false, events.clone(), &mem);
+        host.ends_app = true;
+        assert!(!host.app.rt().needs_commit());
+        let decision = close_request_core(&mut *host.app, &mut host.clipboard, true, false, &mut host.ends_app);
+        assert_eq!(decision, CloseDecision::Close);
+        assert!(host.ends_app, "default no-hook preserves ends_app");
+        assert!(!host.app.rt().needs_commit(), "default no-hook runs no update transaction");
+        host.close();
+        assert!(host.life.finished());
+        assert_eq!(*events.borrow(), vec!["on_close"]);
+    }
+}
+
+#[test]
+fn close_request_bypassed_when_exiting_terminating_or_already_closed_and_works_with_keep_running() {
+    // 1. Exiting loop bypasses on_close_request even when dirty.
+    {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mem = crate::clipboard::memory();
+        let mut host = GuardedHost::new(true, true, false, events.clone(), &mem);
+        assert_eq!(host.close_requested(true), CloseDecision::Close);
+        assert!(host.life.finished());
+        assert_eq!(*events.borrow(), vec!["on_close"], "exiting loop skips on_close_request");
+    }
+
+    // 2. OS teardown (terminate) bypasses on_close_request and runs on_close.
+    {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mem = crate::clipboard::memory();
+        let mut host = GuardedHost::new(true, true, false, events.clone(), &mem);
+        host.terminate();
+        assert!(host.life.finished());
+        assert_eq!(*events.borrow(), vec!["on_close"], "terminate skips on_close_request");
+    }
+
+    // 3. keep_running window: Defer keeps it Shown; Close hides it; once Hidden, CloseRequested skips hook.
+    {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mem = crate::clipboard::memory();
+        let mut host = GuardedHost::new(true, true, true, events.clone(), &mem);
+        assert_eq!(host.close_requested(false), CloseDecision::Defer);
+        assert!(host.life.shown(), "keep_running Defer keeps window shown");
+        assert_eq!(*events.borrow(), vec!["on_close_request"]);
+
+        // Programmatic close hides keep_running window without re-asking on_close_request.
+        host.close();
+        assert!(matches!(host.life, Life::Hidden { .. }));
+        assert_eq!(*events.borrow(), vec!["on_close_request", "on_close"]);
+
+        // Already-hidden keep_running window has closes() == false -> hook does not run.
+        assert_eq!(host.close_requested(false), CloseDecision::Close);
+        assert_eq!(*events.borrow(), vec!["on_close_request", "on_close"]);
     }
 }

@@ -261,7 +261,9 @@ impl Host {
             app.open, app.keep_running, app.release_gpu, app.prewarm_effects, app.fit_content_height, app.float_on_open,
         );
         let (open_inactive, open_as, chrome, titlebar) = (app.open_inactive, app.open_as, app.chrome, app.titlebar);
-        let (on_close, on_rest, on_reopen, on_quit, turn_scope) = (app.on_close, app.on_rest, app.on_reopen, app.on_quit, app.turn_scope);
+        let (on_close_request, on_close, on_rest, on_reopen, on_quit, turn_scope) = (
+            app.on_close_request, app.on_close, app.on_rest, app.on_reopen, app.on_quit, app.turn_scope,
+        );
         let comp = app.compositor.take();
         let (layout_seed, keep_layout) = (app.layout_seed.take(), app.keep_layout.take());
         let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
@@ -279,7 +281,7 @@ impl Host {
         let shared_core = shared.core.clone();
         let geometry = WindowGeometry { title: spec.title, size: spec.size, min_size: spec.min_size };
         let typed = Box::new(TypedWindowApp {
-            rt, shared, comp, on_frame_drawn, on_close, on_rest, on_quit, on_reopen, turn_scope,
+            rt, shared, comp, on_frame_drawn, on_close_request, on_close, on_rest, on_quit, on_reopen, turn_scope,
             keep_layout, kept_layout: layout_seed,
         });
         Self::from_app(typed, HostInit {
