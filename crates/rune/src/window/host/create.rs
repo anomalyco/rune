@@ -205,6 +205,7 @@ impl Host {
         crate::marks::mark("gpu.begin");
         let phys = window.inner_size();
         let srgb_blend = self.app.rt().srgb_blend();
+        let prewarm_effects = self.prewarm_effects;
         let features = self.app.compositor_features();
         let transparent = self.options.transparent;
         // A window with a client-side frame keeps its pixels' alpha for the frame's corner arcs;
@@ -238,6 +239,7 @@ impl Host {
             crate::marks::note("uber", renderer.uber_shader());
             crate::marks::mark("renderer.ready");
             renderer.set_srgb_blend(srgb_blend);
+            renderer.set_prewarm_effects(prewarm_effects);
             #[cfg(target_os = "macos")]
             return Ok((config, launch_drawables, renderer));
             #[cfg(not(target_os = "macos"))]
@@ -596,6 +598,7 @@ impl Host {
         let raw_size = window.inner_size();
         let prev = self.win.as_ref().map(|w| (w.config.width, w.config.height));
         let srgb_blend = self.app.rt().srgb_blend();
+        let prewarm_effects = self.prewarm_effects;
         let client_frame = self.client_frame(&window);
         let make_surface = |instance: &wgpu::Instance| {
             #[cfg(target_os = "windows")]
@@ -623,6 +626,7 @@ impl Host {
                 None => Renderer::try_new_classified(&gpu.device, target_format).map_err(SurfaceSetupError::from_shader)?,
             };
             renderer.set_srgb_blend(srgb_blend);
+            renderer.set_prewarm_effects(prewarm_effects);
             Ok((config, renderer))
         };
         let (gpu, surface, (config, mut renderer)) = match mode {

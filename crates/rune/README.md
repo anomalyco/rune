@@ -860,18 +860,21 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   ignored by Rune's native Metal backend, wgpu's Metal backend, and browser backends (WebGPU/WebGL2).
   In `Manual`, `block_size` bounds suballocator block sizes rather than texture or buffer sizes:
   larger resources still succeed via dedicated allocations.
-- **Post-first-frame effect pipeline warming.** On native targets (Windows, macOS, Linux, iOS),
-  after a renderer's first frame finishes presenting it spawns one background worker thread from
-  cloned `wgpu` handles to compile and error-scope-check any still-unbuilt optional effect
-  pipelines: isolated layers (`Rgba16Float` uber target and composites), `Blend::PlusLighter`,
-  Gaussian layer blur, and backdrop blur (`El::backdrop_blur`). When the standard `"vs"` vertex
-  entry is active, layer compositing and `PlusLighter` also clone identical existing pipelines
-  instead of compiling duplicates. Warmed pipelines stay held aside until their feature is first
-  used (never inserting `Rgba16Float` into extra target formats up front, so glass-only frames
-  allocate zero `Rgba16Float` backdrop textures), fall back synchronously without blocking if an
-  effect draws before the worker completes, re-warm after a `Classic -> Windfoil` shader swap,
-  and cancel and drain cleanly when the renderer drops. Browser builds (`wasm32`) keep lazy
-  first-use compilation.
+- **Opt-in post-first-frame effect pipeline warming (`App::prewarm_effects(true)`,
+  `Renderer::set_prewarm_effects(true)`).** Off by default so apps that never blur or isolate pay
+  no background compilation CPU, driver memory, or `Renderer::drop` worker-join latency, and
+  one-shot `Renderer::render_runtime_to_offscreen` renders never trigger warming. When opted in
+  on native targets (Windows, macOS, Linux, iOS), after a window's or overlay's first frame
+  finishes presenting it spawns one background worker thread (`THREAD_PRIORITY_BELOW_NORMAL` on
+  Windows) from cloned `wgpu` handles to compile and error-scope-check any still-unbuilt optional
+  effect pipelines: isolated layers (`Rgba16Float` uber target and composites),
+  `Blend::PlusLighter`, Gaussian layer blur, and backdrop blur (`El::backdrop_blur`). Identical
+  `"vs"` layer compositing and `PlusLighter` pipelines are always cloned instead of recompiled.
+  Warmed pipelines stay held aside until first use (never inserting `Rgba16Float` into extra
+  target formats up front, so glass-only frames allocate zero `Rgba16Float` backdrop textures),
+  fall back synchronously without blocking while in flight, re-warm after a `Classic -> Windfoil`
+  shader swap, and cancel and drain cleanly when the renderer drops. Browser builds (`wasm32`)
+  always compile lazily on first use.
 - **The first frame draws during window creation** on macOS for visible windows (not launcher windows or panels).
   The first view build and layout run inside creation, right after the window-created callbacks, so keep the initial
   state, `view` and `on_window` cheap.

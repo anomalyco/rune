@@ -608,6 +608,16 @@ impl<S: 'static> WindowSpec<S> {
         tab_visits_controls(on: bool);
         /// Release this window's GPU device and renderer when it closes, like `App::release_gpu_when_closed`.
         release_gpu_when_closed();
+        /// Opt this window in (or out) of post-first-frame effect-pipeline warming, like [`App::prewarm_effects`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("notes", AppSpec::new("Notes", (480.0, 360.0), || (), |_, _| el()))
+        ///     .prewarm_effects(true);
+        /// let _ = spec;
+        /// ```
+        prewarm_effects(enabled: bool);
         on_focus(f: fn(&mut S, bool, &mut crate::Tx));
         on_modifiers(f: fn(&mut S, crate::Mods, &mut crate::Tx));
         /// This window going off screen and back, like `App::on_visibility`.

@@ -249,6 +249,7 @@ impl Host {
         }
         // The window changed size while the GPU was made.
         if size.width > 0 && size.height > 0 { w.resize_surface(Some(&*gpu), size); }
+        renderer.set_prewarm_effects(self.prewarm_effects);
         self.gpu = Some((gpu, renderer));
         w.request_redraw();
     }

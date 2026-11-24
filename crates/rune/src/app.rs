@@ -58,6 +58,7 @@ pub struct App<S: 'static> {
     argv: Option<Vec<String>>,
     pub(crate) open: bool,
     pub(crate) release_gpu: bool,
+    pub(crate) prewarm_effects: bool,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) accessory: bool,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -123,6 +124,7 @@ impl<S: 'static> App<S> {
             argv: None,
             open: true,
             release_gpu: false,
+            prewarm_effects: false,
             accessory: false,
             standard_menus: false,
             keep_running: false,
@@ -421,7 +423,8 @@ impl<S: 'static> App<S> {
     /// Uses this app's fonts and font smoothing (`ConfiguredOverlay::font_smoothing` overrides it).
     /// Headless runs don't draw overlays.
     pub fn overlay<T: 'static>(&mut self, spec: impl Into<crate::ConfiguredOverlay<T>>, state: T) -> crate::overlay::OverlayHandle<T> {
-        let (overlay, handle) = crate::overlay::OverlayHost::new(spec.into(), state, &self.spec, self.runtime.font_smoothing);
+        let (mut overlay, handle) = crate::overlay::OverlayHost::new(spec.into(), state, &self.spec, self.runtime.font_smoothing);
+        overlay.set_prewarm_effects(self.prewarm_effects);
         self.overlays.push(Box::new(overlay));
         handle
     }
@@ -477,6 +480,32 @@ impl<S: 'static> App<S> {
     /// recreates them, which costs a device creation.
     pub fn release_gpu_when_closed(mut self) -> Self {
         self.release_gpu = true;
+        self
+    }
+
+    /// Opts this app's windows and overlays in (or out) of post-first-frame background warming for
+    /// optional effect GPU pipelines: isolated layers (`Rgba16Float`), `Blend::PlusLighter`,
+    /// Gaussian layer blur, and `El::backdrop_blur`.
+    ///
+    /// Defaults to `false` so apps that never blur or isolate pay no background pipeline-compile
+    /// CPU, driver memory, or `Renderer::drop` worker-join latency. Set `true` for animated UIs
+    /// that want the first blur, isolated layer, or `PlusLighter` frame to avoid a synchronous
+    /// pipeline compilation hitch. Ignored on `wasm32`.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, el};
+    ///
+    /// App::new(AppSpec::new("Frosted", (640.0, 480.0), || (), |_, _| el()))
+    ///     .prewarm_effects(true)
+    ///     .run();
+    /// ```
+    pub fn prewarm_effects(mut self, enabled: bool) -> Self {
+        self.prewarm_effects = enabled;
+        for overlay in &mut self.overlays {
+            overlay.set_prewarm_effects(enabled);
+        }
         self
     }
 

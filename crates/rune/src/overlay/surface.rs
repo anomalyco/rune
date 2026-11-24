@@ -219,6 +219,7 @@ impl OverlayCore {
         let reused = pooled.and_then(|(gpu, translucent)| make(&gpu.instance).filter(|s| crate::render::translucency::serves(&gpu, s, features, translucent)).map(|s| (gpu, s)));
         let (w, h) = ((self.at.size.0 * scale).round() as u32, (self.at.size.1 * scale).round() as u32);
         let srgb_blend = app.rt().srgb_blend();
+        let prewarm_effects = self.prewarm_effects;
         let make_surface = |instance: &wgpu::Instance| make(instance).ok_or_else(|| "could not create its GPU surface".to_owned());
         let setup_surface = |gpu: &Gpu, surface: &wgpu::Surface<'_>, existing: Option<Renderer>| -> Result<_, crate::render::SurfaceSetupError> {
             let (mut config, translucent) = crate::window::surface_config(surface, &gpu.adapter, (w, h), srgb_blend)
@@ -243,13 +244,14 @@ impl OverlayCore {
             crate::window::configure_checked(surface, gpu, &config)
                 .map_err(|error| crate::render::SurfaceSetupError::from_configure(&prefix, error))?;
             let target_format = if srgb_blend { config.format.remove_srgb_suffix() } else { config.format };
-            let renderer = match existing {
+            let mut renderer = match existing {
                 Some(mut renderer) => {
                     renderer.try_set_format(&gpu.device, target_format).map_err(crate::render::SurfaceSetupError::from_shader)?;
                     renderer
                 }
                 None => Renderer::try_new_classified(&gpu.device, target_format).map_err(crate::render::SurfaceSetupError::from_shader)?,
             };
+            renderer.set_prewarm_effects(prewarm_effects);
             Ok((config, translucent.is_none(), renderer))
         };
         let (surface, (config, opaque_fallback, mut renderer), reused_renderer) = match reused {
