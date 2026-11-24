@@ -12,8 +12,16 @@
 #![forbid(unsafe_code)]
 
 use rune::clipboard;
+use rune::color::hex;
 use rune::tok::{self, radius, space, type_};
-use rune::{AppSpec, ClipboardContent, Cx, El, TextEdit, Tx, col, row, text, text_input};
+use rune::{AppSpec, ClipboardContent, Cx, El, Mark, TextEdit, Tx, col, el, row, text, text_input};
+
+const SWATCHES: &[(&str, &str, &str)] = &[
+    ("color-red", "Red text colour", "#e05252"),
+    ("color-amber", "Amber text colour", "#e09f3e"),
+    ("color-green", "Green text colour", "#3fb950"),
+    ("color-blue", "Blue text colour", "#3b82f6"),
+];
 
 struct State {
     field: TextEdit,
@@ -25,14 +33,14 @@ struct State {
 
 impl Default for State {
     fn default() -> Self {
-        Self { field: TextEdit::default(), last: None, revision: clipboard::revision() }
+        Self { field: TextEdit::new("").rich(), last: None, revision: clipboard::revision() }
     }
 }
 
 fn sample() -> ClipboardContent {
-    ClipboardContent::new("Rune copies bold and italic text.")
-        .with_html("Rune copies <b>bold</b> and <i>italic</i> text.")
-        .with_rtf(r"{\rtf1\ansi{\fonttbl\f0\fswiss Helvetica;}\f0 Rune copies {\b bold} and {\i italic} text.}")
+    ClipboardContent::new("Rune copies bold, italic and coloured text.")
+        .with_html("Rune copies <b>bold</b>, <i>italic</i> and <span style=\"color:#e05252\">coloured</span> text.")
+        .with_rtf(r"{\rtf1\ansi{\fonttbl\f0\fswiss Helvetica;}\f0 Rune copies {\b bold}, {\i italic} and coloured text.}")
 }
 
 fn seen(s: &mut State, how: &'static str, content: &ClipboardContent) {
@@ -64,15 +72,44 @@ fn button(key: &'static str, label: &str, f: impl Fn(&mut State, &mut Tx) + 'sta
         .on_press_tx(f)
 }
 
+fn swatch_button(key: &'static str, label: &'static str, code: &'static str, active: bool) -> El {
+    let t = tok::theme(true);
+    let fill = hex(code).unwrap_or(t.text);
+    row()
+        .key(key)
+        .role("button")
+        .label(label)
+        .center()
+        .size(26.0, 26.0)
+        .radius(radius::MD)
+        .fill(t.card)
+        .border(if active { 2.0 } else { 1.0 }, if active { t.text } else { t.card_border })
+        .child(el().size(14.0, 14.0).radius(3.0).fill(fill))
+        .on_press(move |s: &mut State| {
+            let next = if s.field.active_color() == Some(code) { None } else { Some(code) };
+            s.field.set_color(next);
+        })
+}
+
 fn view(s: &State, _: &mut Cx<State>) -> El {
     let t = tok::theme(true);
     let (head, preview) = summary(&s.last);
+    let active_color = s.field.active_color();
+    let mut toolbar = row().key("toolbar").gap(space::S2).center_y()
+        .child(button("bold", "B", |s, _| s.field.toggle_mark(Mark::Bold)));
+    for &(key, label, code) in SWATCHES {
+        toolbar = toolbar.child(swatch_button(key, label, code, active_color == Some(code)));
+    }
+    toolbar = toolbar.child(button("color-clear", "Reset colour", |s, _| s.field.set_color(None)));
+
     let field = text_input(&s.field, type_::BODY).key("field").w_full().min_h(80.0).padding(space::S2)
         .radius(radius::MD).fill(t.card).border(1.0, t.card_border).color(t.text)
         .on_edit(|s: &mut State| &mut s.field)
         // Look at every form, then let the editor paste the text as usual.
         .on_input_paste(|s: &mut State, content, _| { seen(s, "Pasted", content); false });
+    let html_out = s.field.to_html();
     col().w_full().h_full().padding(space::S6).gap(space::S3).fill(t.bg)
+        .child(toolbar)
         .child(field)
         .child(row().gap(space::S2)
             .child(button("copy", "Copy formatted", |_, tx| tx.copy_rich(sample())))
@@ -81,6 +118,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         .child(text(revision_status(s.revision)).key("revision").font(type_::LABEL).color(t.text_secondary))
         .child(text(head).key("summary").font(type_::BODY).color(t.text_secondary))
         .child(text(preview).key("preview").font(type_::LABEL).color(t.text_secondary).w_full())
+        .child(text(html_out).key("html-out").font(type_::LABEL).color(t.text_secondary).w_full())
 }
 
 fn main() {
@@ -124,5 +162,15 @@ mod tests {
         assert_eq!(rt.state.revision, clipboard::revision());
         assert_eq!(revision_status(Some(7)), "Clipboard revision: 7");
         assert_eq!(revision_status(None), "Clipboard revision: unavailable");
+
+        // Selecting text and pressing a colour swatch applies Mark::Color and updates to_html().
+        rt.update(|s, _| s.field.set_selection(0, 2));
+        rt.frame(0.0);
+        let (rx, ry) = rt.find("color-red").unwrap();
+        rt.pointer_down(rx, ry);
+        rt.pointer_up(rx, ry);
+        rt.frame(0.0);
+        assert_eq!(rt.state.field.active_color(), Some("#e05252"));
+        assert!(rt.state.field.to_html().contains("<span style=\"color:#e05252\">"));
     }
 }

@@ -425,3 +425,86 @@ fn strike_on_text_input_survives_spans_and_follows_preedit() {
     rt.frame(0.0);
     assert_eq!(strikes_of(&rt, "plain"), vec![(2, 5, Some(STRIKE_COLOR)), (8, 11, Some(STRIKE_COLOR))]);
 }
+
+#[test]
+fn text_input_paints_color_marks_and_keeps_links_and_selection_on_top() {
+    use crate::render::{KIND_GLYPH, KIND_RECT};
+    use crate::{RichStyle, color::hex};
+
+    struct App {
+        rich: TextEdit,
+        plain: TextEdit,
+    }
+    const SEL_COLOR: Color = Color { r: 0.0, g: 1.0, b: 0.0, a: 0.4 };
+    fn view(s: &App, _: &mut Cx<App>) -> El {
+        let st = TextStyle::new(14.0, 400.0);
+        col().size(320.0, 120.0)
+            .child(
+                text_input(&s.rich, st)
+                    .key("rich")
+                    .size(300.0, 50.0)
+                    .color(Color::WHITE)
+                    .selection_color(SEL_COLOR)
+                    .on_edit(|s: &mut App| &mut s.rich),
+            )
+            .child(
+                text_input(&s.plain, st)
+                    .key("plain")
+                    .size(300.0, 40.0)
+                    .color(Color::WHITE)
+                    .on_edit(|s: &mut App| &mut s.plain),
+            )
+    }
+
+    // "red link plain" where "red " is underlined red, "link" is both red and a link, " plain" is default.
+    let mut rich = TextEdit::from_html(
+        r#"<p><span style="color:#ff0000"><u>red</u> <a href="https://example.com">link</a></span> plain</p>"#,
+    );
+    rich.focused = true;
+    rich.set_selection(0, 3);
+    let plain = TextEdit::new("unchanged");
+    let mut rt = Runtime::new(App { rich, plain }, view, (320.0, 120.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    let spans_of = |rt: &Runtime<App>, key: &str| {
+        rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some(key)).unwrap().text.as_ref().unwrap().spans.clone()
+    };
+
+    // Plain field is unaffected by Mark::Color support.
+    assert!(spans_of(&rt, "plain").is_empty());
+
+    // Rich field spans: red with matching red underline on "red", red on " ", link colour & underline on "link".
+    let red = hex("#ff0000").unwrap();
+    let link = RichStyle::default().link;
+    let spans = spans_of(&rt, "rich");
+    assert_eq!(
+        spans.iter().map(|s| (s.start, s.end, s.color, s.underline)).collect::<Vec<_>>(),
+        [
+            (0, 3, Some(red), Some(red)),
+            (3, 4, Some(red), None),
+            (4, 8, Some(link), Some(link.alpha(0.65))),
+        ],
+    );
+
+    // Painted instances include red glyphs for "red", link-coloured glyphs for "link", and a selection rect.
+    let has_red_glyph = rt.instances.iter().any(|q| {
+        q.params[1] == KIND_GLYPH && q.fill[0] > 0.9 && q.fill[1] < 0.05 && q.fill[2] < 0.05 && q.fill[3] > 0.9
+    });
+    let link_srgb = link.premul_srgb(1.0);
+    let link_lin = link.premul(1.0);
+    let has_link_glyph = rt.instances.iter().any(|q| {
+        q.params[1] == KIND_GLYPH
+            && (((q.fill[0] - link_srgb[0]).abs() < 0.03
+                && (q.fill[1] - link_srgb[1]).abs() < 0.03
+                && (q.fill[2] - link_srgb[2]).abs() < 0.03)
+                || ((q.fill[0] - link_lin[0]).abs() < 0.03
+                    && (q.fill[1] - link_lin[1]).abs() < 0.03
+                    && (q.fill[2] - link_lin[2]).abs() < 0.03))
+    });
+    let has_sel_rect = rt.instances.iter().any(|q| {
+        q.params[1] == KIND_RECT && q.fill[1] > q.fill[0] + 0.1 && q.fill[1] > q.fill[2] + 0.1 && q.rect[2] > 0.0
+    });
+    assert!(has_red_glyph, "expected red-tinted glyph quads for Mark::Color");
+    assert!(has_link_glyph, "expected link-coloured glyph quads on top of Mark::Color");
+    assert!(has_sel_rect, "expected selection highlight rect over coloured text");
+}

@@ -4,6 +4,7 @@
 //! Run headless to capture the demo still:
 //! `cargo run -p rune-kit --example rich_editor -- --snap demo/kit/rich-editor.png`
 
+use rune::color::hex;
 use rune::tok::type_;
 use rune::{AppSpec, Block, Cx, El, Icon, Mark, PillStyle, Span, TextEdit, col, el, row, text};
 use rune_kit::syntax::{SyntaxTheme, highlight};
@@ -19,6 +20,7 @@ impl Default for State {
     fn default() -> Self {
         let html = concat!(
             "<p>Ship the <b>attributed</b> composer with <i>inline marks</i>, ",
+            "<span style=\"color:#e05252\">text colour</span>, ",
             "<u>underline</u>, <del>legacy markdown</del>, <code>Span</code> ",
             "decorations, and <a href=\"https://opencode.ai\">opencode.ai</a>. Ask ",
             "<span data-pill=\"agent:review\">@review</span> to check ",
@@ -100,6 +102,25 @@ fn code_block_spans(edit: &TextEdit, theme: &SyntaxTheme) -> Vec<Span> {
     out
 }
 
+fn color_btn(k: &Kit, key: &str, label: &'static str, code: &'static str, active: Option<&str>) -> El {
+    let on = active == Some(code);
+    let fill = hex(code).unwrap_or(k.c.text_base);
+    row()
+        .key(key)
+        .role("button")
+        .label(label)
+        .center()
+        .size(22.0, 22.0)
+        .radius(k.radius.sm)
+        .fill(if on { k.c.layer_03 } else { k.c.layer_02 })
+        .border(if on { 1.5 } else { 1.0 }, if on { k.c.text_base } else { k.c.border_base })
+        .child(el().size(11.0, 11.0).radius(2.0).fill(fill))
+        .on_press(move |s: &mut State| {
+            let next = if s.edit.active_color() == Some(code) { None } else { Some(code) };
+            s.edit.set_color(next);
+        })
+}
+
 fn bar_btn(
     k: &Kit,
     key: &str,
@@ -144,6 +165,9 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             let next = if s.edit.active_link().is_some() { None } else { Some("https://opencode.ai") };
             s.edit.set_link(next);
         }))
+        .child(color_btn(&k, "color-red", "Red text colour", "#e05252", s.edit.active_color()))
+        .child(color_btn(&k, "color-green", "Green text colour", "#3fb950", s.edit.active_color()))
+        .child(color_btn(&k, "color-blue", "Blue text colour", "#3b82f6", s.edit.active_color()))
         .child(bar_btn(&k, "mention", "@", false, |s| mention(&mut s.edit)))
         .child(el().w(4.0))
         .child(bar_btn(&k, "bullet", "• List", matches!(blk, Block::Bullet(_)), |s| {

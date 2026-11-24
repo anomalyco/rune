@@ -220,15 +220,16 @@ fn serialize_marks(edit: &TextEdit, range: Range<usize>, out: &mut String) {
             next += 1;
         }
         let mut active: Vec<&Mark> = covering.iter().map(|m| &m.mark).collect();
-        // Canonical nesting order: Link, Bold, Italic, Underline, Strike, Code
+        // Canonical nesting order: Link, Color, Bold, Italic, Underline, Strike, Code
         active.sort_by_key(|m| match m {
             Mark::Link(_) => 0u8,
-            Mark::Bold => 1,
-            Mark::Italic => 2,
-            Mark::Underline => 3,
-            Mark::Strike => 4,
-            Mark::Code => 5,
-            Mark::Pill(_) => 6,
+            Mark::Color(_) => 1,
+            Mark::Bold => 2,
+            Mark::Italic => 3,
+            Mark::Underline => 4,
+            Mark::Strike => 5,
+            Mark::Code => 6,
+            Mark::Pill(_) => 7,
         });
         for m in &active {
             match m {
@@ -237,6 +238,11 @@ fn serialize_marks(edit: &TextEdit, range: Range<usize>, out: &mut String) {
                 Mark::Underline => out.push_str("<u>"),
                 Mark::Strike => out.push_str("<s>"),
                 Mark::Code => out.push_str("<code>"),
+                Mark::Color(hex) => {
+                    out.push_str("<span style=\"color:");
+                    escape_html(hex, out);
+                    out.push_str("\">");
+                }
                 Mark::Link(url) => {
                     out.push_str("<a href=\"");
                     escape_html(url, out);
@@ -253,6 +259,7 @@ fn serialize_marks(edit: &TextEdit, range: Range<usize>, out: &mut String) {
                 Mark::Underline => out.push_str("</u>"),
                 Mark::Strike => out.push_str("</s>"),
                 Mark::Code => out.push_str("</code>"),
+                Mark::Color(_) => out.push_str("</span>"),
                 Mark::Link(_) => out.push_str("</a>"),
                 Mark::Pill(_) => {}
             }

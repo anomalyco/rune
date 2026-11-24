@@ -23,10 +23,17 @@ pub enum Mark {
     /// chip (`El::pill_style`, `El::pill_colors`, `El::pill_icon`). Insert one with
     /// [`TextEdit::insert_pill`](super::TextEdit::insert_pill).
     Pill(String),
+    /// Inline text colour stored as lowercase `#rrggbb` (sRGB hex).
+    ///
+    /// Apply or remove it on the selection or pending typing style with
+    /// [`TextEdit::set_color`](super::TextEdit::set_color), and query it with
+    /// [`TextEdit::active_color`](super::TextEdit::active_color).
+    Color(String),
 }
 
 impl Mark {
-    /// Whether `self` and `other` are the same kind of mark (`Link(_)` matches any `Link(_)`).
+    /// Whether `self` and `other` are the same kind of mark (`Link(_)` matches any `Link(_)`,
+    /// `Color(_)` matches any `Color(_)`).
     pub fn same_kind(&self, other: &Mark) -> bool {
         match (self, other) {
             (Mark::Bold, Mark::Bold)
@@ -35,7 +42,8 @@ impl Mark {
             | (Mark::Strike, Mark::Strike)
             | (Mark::Code, Mark::Code)
             | (Mark::Link(_), Mark::Link(_))
-            | (Mark::Pill(_), Mark::Pill(_)) => true,
+            | (Mark::Pill(_), Mark::Pill(_))
+            | (Mark::Color(_), Mark::Color(_)) => true,
             _ => false,
         }
     }
@@ -56,6 +64,20 @@ impl Mark {
         }
     }
 
+    /// The normalized lowercase `#rrggbb` hex colour when `self` is [`Mark::Color`].
+    ///
+    /// ```
+    /// use rune_edit::Mark;
+    /// assert_eq!(Mark::Color("#d93025".into()).color_hex(), Some("#d93025"));
+    /// assert_eq!(Mark::Bold.color_hex(), None);
+    /// ```
+    pub fn color_hex(&self) -> Option<&str> {
+        match self {
+            Mark::Color(hex) => Some(hex),
+            _ => None,
+        }
+    }
+
     pub(crate) fn is_pill(&self) -> bool {
         matches!(self, Mark::Pill(_))
     }
@@ -69,6 +91,7 @@ impl Mark {
             Mark::Code => 4,
             Mark::Link(_) => 5,
             Mark::Pill(_) => 6,
+            Mark::Color(_) => 7,
         }
     }
 }

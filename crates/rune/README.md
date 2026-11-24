@@ -1527,15 +1527,18 @@ soft breaks and rich paste are opt-in with `TextEdit::new(text).rich()` (`from_h
 `from_parts` turn it on); without it a field keeps `⌘B`/`⌘I`/`⌘U` for the app, inserts a plain
 newline on `Shift+Return` and pastes plain text. The mark and block methods work either way.
 
-- **Inline marks** (`Mark::Bold`, `Italic`, `Underline`, `Strike`, `Code`, `Link(url)`): stored as
-  sorted byte ranges (`MarkRange { start, end, mark }`) on `edit.text`. Insertions and deletions
-  shift and split ranges automatically. Typing inherits the marks of the character before the caret
-  (following AppKit's rules: never extending backwards from the start of a link or code mark's
-  run). `edit.toggle_mark(mark)`, `set_mark`, `remove_mark` and `set_link(Some(url))` apply or
-  remove marks on a selection, or arm a pending typing style when the selection is empty (cleared
-  when the caret moves). In a rich field `⌘B`, `⌘I` and `⌘U` (`Ctrl` on Windows/Linux) toggle
-  bold, italic and underline. Query `edit.has_mark(&Mark::Bold)`, `edit.active_marks()` and `edit.active_link()` to
-  drive a formatting bar's pressed state.
+- **Inline marks** (`Mark::Bold`, `Italic`, `Underline`, `Strike`, `Code`, `Link(url)`,
+  `Color(hex)`): stored as sorted byte ranges (`MarkRange { start, end, mark }`) on `edit.text`.
+  Insertions and deletions shift and split ranges automatically. Typing inherits the marks of the
+  character before the caret (following AppKit's rules: never extending backwards from the start of
+  a link or code mark's run). `edit.toggle_mark(mark)`, `set_mark`, `remove_mark`,
+  `set_link(Some(url))` and `set_color(Some("#d93025"))` apply or remove marks on a selection, or
+  arm a pending typing style when the selection is empty (cleared when the caret moves).
+  `set_color` normalizes `#rgb` and `#rrggbb` (in either case) to lowercase `#rrggbb`, clears on
+  `None` or empty, and ignores invalid values; link and selection colours stay on top when drawing.
+  In a rich field `⌘B`, `⌘I` and `⌘U` (`Ctrl` on Windows/Linux) toggle bold, italic and
+  underline. Query `edit.has_mark(&Mark::Bold)`, `edit.active_marks()`, `edit.active_link()` and
+  `edit.active_color()` to drive a formatting bar's pressed state.
 - **Paragraph block attributes** (`Block::Paragraph`, `Bullet(level)`, `Numbered(level)`, `Quote`,
   `Code`): one `Block` per `\n`-delimited paragraph (`edit.blocks()`, `edit.paragraphs()`,
   `edit.active_block()`, `edit.set_block(block)`, `edit.toggle_block(block)`). Bullet and numbered
@@ -1586,11 +1589,12 @@ newline on `Shift+Return` and pastes plain text. The mark and block methods work
   mention highlights hold through IME composition and undo/redo.
 - **HTML paste and export, and data out**: `TextEdit::from_html(html)` and
   `edit.paste_html(html, plain)` parse a safe HTML subset (`b`/`strong`, `i`/`em`, `u`,
-  `s`/`del`/`strike`, `a[href]`, `code`, `pre`, `ul`/`ol`/`li`, `blockquote`, `p`/`div`/`br`, and
-  `style` attributes for `font-weight`, `font-style`, `text-decoration`; `<script>`/`<style>` are
-  dropped and links keep only `http`, `https`, `mailto`, `tel` and scheme-less URLs). A plain
-  field, a code block, or HTML with no formatting the model keeps (a code editor's coloured copy)
-  pastes the plain text. `edit.to_html()` and `edit.selected_html()` serialize back to HTML
+  `s`/`del`/`strike`, `a[href]`, `code`, `font[color]`, `pre`, `ul`/`ol`/`li`, `blockquote`,
+  `p`/`div`/`br`, and `style` attributes for `font-weight`, `font-style`, `text-decoration`,
+  `color` as hex, `rgb()`/`rgba()`, `hsl()`/`hsla()` or CSS named colours; `<script>`/`<style>` are
+  dropped and links keep only `http`, `https`, `mailto`, `tel` and scheme-less URLs). `to_html()`
+  writes text colours as `<span style="color:#rrggbb">`. A plain field, a code block, or HTML with
+  no formatting the field allows pastes the plain text. `edit.to_html()` and `edit.selected_html()` serialize back to HTML
   alongside plain `edit.text`. A focused rich field uses the rich clipboard on its own: `⌘C` / `⌘X`
   write `selected_html()` beside the text, and paste goes through `paste_html` unless an
   `on_input_paste` hook takes it. Construct or inspect the model directly with
@@ -1609,8 +1613,8 @@ newline on `Shift+Return` and pastes plain text. The mark and block methods work
   underline, say). The field never holds the rest: its shortcut (`⌘U`) goes on to the app's key
   handlers, `toggle_mark`, `set_mark`, `toggle_block` and `set_block` skip it, paste drops it
   (a pasted disallowed block becomes a paragraph), and marks or blocks the field already had
-  are removed. Kinds match whatever they carry (any `Mark::Link` allows links, any
-  `Block::Bullet` level allows bullets); `Block::Paragraph` is always allowed.
+  are removed. Kinds match whatever they carry (any `Mark::Link` allows links, any `Mark::Color`
+  allows colours, any `Block::Bullet` level allows bullets); `Block::Paragraph` is always allowed.
   `edit.allows_mark(&mark)` and `allows_block(block)` tell a formatting bar which buttons to show.
 
 ### Selectable text

@@ -662,6 +662,7 @@ fn meta_json(m: &Meta) -> serde_json::Value {
                 Mark::Code => serde_json::json!("c"),
                 Mark::Link(url) => serde_json::json!(["l", url]),
                 Mark::Pill(id) => serde_json::json!(["p", id]),
+                Mark::Color(hex) => serde_json::json!(["fg", hex]),
             };
             serde_json::json!([m.start, m.end, kind])
         })
@@ -697,6 +698,7 @@ fn meta_from(v: &serde_json::Value) -> Option<Meta> {
                 (k, _, _) if k == "c" => Mark::Code,
                 (_, Some("l"), Some(url)) => Mark::Link(url.to_owned()),
                 (_, Some("p"), Some(id)) => Mark::Pill(id.to_owned()),
+                (_, Some("fg"), Some(hex)) => Mark::Color(crate::html::normalize_hex(hex)?),
                 _ => return None,
             };
             Some(MarkRange { start, end, mark })

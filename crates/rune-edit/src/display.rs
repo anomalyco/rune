@@ -102,6 +102,16 @@ impl TextEdit {
                         ..Span::default()
                     });
                 }
+                Mark::Color(hex) => {
+                    if let Some(c) = rune_core::color::hex(hex) {
+                        spans.push(Span {
+                            start: r_start,
+                            end: r_end,
+                            color: Some(c),
+                            ..Span::default()
+                        });
+                    }
+                }
                 Mark::Link(url) => {
                     spans.push(Span {
                         start: r_start,
@@ -117,7 +127,14 @@ impl TextEdit {
             }
         };
 
-        for m in &self.marks {
+        // Emit non-link marks (including `Mark::Color`) before `Mark::Link` so link colour
+        // and underline always win over an overlapping `Mark::Color`.
+        for m in self.marks.iter().filter(|m| !matches!(m.mark, Mark::Link(_))) {
+            for (ds, de) in self.map_range_to_display(m.start, m.end) {
+                push_mark_span(ds, de, &m.mark, &mut spans, &mut strikes, &mut links);
+            }
+        }
+        for m in self.marks.iter().filter(|m| matches!(m.mark, Mark::Link(_))) {
             for (ds, de) in self.map_range_to_display(m.start, m.end) {
                 push_mark_span(ds, de, &m.mark, &mut spans, &mut strikes, &mut links);
             }
@@ -131,7 +148,11 @@ impl TextEdit {
             let (a, _) = self.range();
             let ps = a as u32;
             let pe = (a + p.len()) as u32;
-            for m in self.active_marks().iter().filter(|m| !m.is_pill()) {
+            let active = self.active_marks();
+            for m in active.iter().filter(|m| !m.is_pill() && !matches!(m, Mark::Link(_))) {
+                push_mark_span(ps, pe, m, &mut spans, &mut strikes, &mut links);
+            }
+            for m in active.iter().filter(|m| matches!(m, Mark::Link(_))) {
                 push_mark_span(ps, pe, m, &mut spans, &mut strikes, &mut links);
             }
         }

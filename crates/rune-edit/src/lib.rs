@@ -298,7 +298,8 @@ impl TextEdit {
     /// Keep only these kinds of inline mark, for a field whose storage can't hold the rest (an
     /// app that saves Markdown has no underline). A disallowed mark's shortcut (`⌘U`) goes on
     /// to the app's key handlers, `toggle_mark` and `set_mark` ignore it, and paste drops it.
-    /// Kinds match by [`Mark::same_kind`], so any [`Mark::Link`] allows links. The field never
+    /// Kinds match by [`Mark::same_kind`], so any [`Mark::Link`] allows links and any
+    /// [`Mark::Color`] allows colours. The field never
     /// holds a disallowed mark: marks it already has, or that `set_marks` adds, are dropped.
     /// Every kind is allowed by default, and [`Mark::Pill`] always is: pills are the app's own
     /// tokens, not formatting.
@@ -366,8 +367,9 @@ impl TextEdit {
     }
 
     /// Parse an HTML fragment (`<b>`, `<strong>`, `<i>`, `<em>`, `<u>`, `<s>`, `<del>`, `<strike>`,
-    /// `<a href>`, `<code>`, `<pre>`, `<ul>`, `<ol>`, `<li>`, `<blockquote>`, `<p>`, `<div>`, `<br>`,
-    /// and inline `style` for `font-weight`, `font-style`, `text-decoration`) into a [`TextEdit`].
+    /// `<a href>`, `<code>`, `<font color>`, `<pre>`, `<ul>`, `<ol>`, `<li>`, `<blockquote>`,
+    /// `<p>`, `<div>`, `<br>`, and inline `style` for `font-weight`, `font-style`, `text-decoration`,
+    /// `color`) into a [`TextEdit`].
     /// Unknown tags keep their text and strip the wrapper; `<script>` and `<style>` are dropped.
     pub fn from_html(html_str: &str) -> TextEdit {
         html::parse_html(html_str).rich()
@@ -755,5 +757,7 @@ impl TextEdit {
     }
 }
 
+#[cfg(test)]
+mod color_tests;
 #[cfg(test)]
 mod tests;
