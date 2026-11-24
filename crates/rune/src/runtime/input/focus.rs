@@ -71,6 +71,12 @@ fn sync_input_focus(input: &mut crate::el::InputSpec, states: crate::states::Sta
         edit.set_revealed(revealed);
         changed = true;
     }
+    if let Some(line_home_end) = input.line_home_end_override
+        && edit.line_home_end() != line_home_end
+    {
+        edit.set_line_home_end(line_home_end);
+        changed = true;
+    }
     if edit.focused != focused || (!focused && edit.is_composing()) {
         edit.focused = focused;
         if !focused { edit.cancel_composition(); }
@@ -515,7 +521,8 @@ impl RuntimeCore {
                     && (input.edit.focused != focused
                         || (!focused && input.edit.is_composing())
                         || input.edit.is_secure()
-                        || input.revealed_override.is_some()))
+                        || input.revealed_override.is_some()
+                        || input.line_home_end_override.is_some()))
         };
         for n in &mut self.tree.nodes {
             if let Some(input) = &mut n.input {

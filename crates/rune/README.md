@@ -375,11 +375,14 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   pickers. `Display` writes the canonical string back for settings files; `Keybind` parses
   alternatives ("mod+t, mod+n") and `Keybind::spec_on(platform)` writes one platform's chords.
 
-  A text field's edit commands (copy, cut, paste, select all, undo, redo, and Ctrl+Y redo
-  off macOS) take only the plain chord: Ctrl+Alt+V, Ctrl+Shift+V or ⌃⌘C reach `on_key`.
+  A text field's edit commands (copy, cut, paste, select all, undo, redo, Ctrl+Y redo off
+  macOS, and `Shift+Insert` paste off macOS) take only the plain chord: Ctrl+Alt+V,
+  Ctrl+Shift+V, Ctrl+Shift+Insert or ⌃⌘C reach `on_key`.
   On Windows, Left Ctrl + Left Alt is AltGr, so a character typed with both inserts, and
   Home and End move to the line's edge in a multi-line field (Ctrl+Home and Ctrl+End to
-  the text's ends).
+  the text's ends). On macOS, Home and End move to the document's ends by default; opt into
+  visual line edges (keeping Cmd+Home/End and Ctrl+Home/End on the document's ends) with
+  `El::line_home_end(true)` or `TextEdit::set_line_home_end(true)` / `with_line_home_end(true)`.
 - **Periodic motion**: `.looping(rune_motion::LoopSpec::opacity(..))` or `LoopSpec::rotation(period)`
   (icon quads). Tracks use animation time, preserve phase when retimed and only request frames
   while visible through ancestor clips. Removal uses the existing spring presence fade. Reduced

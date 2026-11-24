@@ -105,6 +105,7 @@ pub(crate) fn primary_alone_on(m: Mods, platform: KeyPlatform) -> bool {
 }
 
 /// [`primary_alone_on`] for [`KeyPlatform::current`].
+#[cfg(test)]
 pub(crate) fn primary_alone(m: Mods) -> bool {
     primary_alone_on(m, KeyPlatform::current())
 }
@@ -128,7 +129,8 @@ pub enum Key {
     PageUp,
     /// Page Down, as `PageUp` the other way.
     PageDown,
-    /// Insert (Help on older Mac keyboards). Text fields ignore it; apps can bind it.
+    /// Insert (Help on older Mac keyboards). Off macOS, `Shift+Insert` pastes into a focused text
+    /// field or root `on_paste` handler; bare `Insert` and other chords are left for apps to bind.
     Insert,
     /// Print Screen (SysRq). Text fields ignore it; apps can bind it. Windows sends it only
     /// on release, so its press and release arrive together.
@@ -234,12 +236,20 @@ impl KeyEvent {
 
     /// The standard edit command this is (paste, copy, cut, select all, undo, redo, format):
     /// `Key::Command(c)` with the primary modifier alone, ⌘ on macOS and Ctrl elsewhere, or
-    /// Shift too for ⇧⌘Z. Another modifier (Ctrl+Alt+V, ⌃⌘C, Ctrl+Shift+V) makes it an
-    /// app's chord, which reaches `on_key` instead.
+    /// Shift too for ⇧⌘Z, plus `Shift+Insert` for paste off macOS. Another modifier
+    /// (Ctrl+Alt+V, ⌃⌘C, Ctrl+Shift+V, Ctrl+Shift+Insert) makes it an app's chord, which
+    /// reaches `on_key` instead.
     #[doc(hidden)]
     pub fn edit_command(&self) -> Option<char> {
-        let Key::Command(c) = self.key else { return None };
-        (primary_alone(self.mods) && (c == 'z' || !self.mods.shift)).then_some(c)
+        self.edit_command_on(KeyPlatform::current())
+    }
+
+    pub(crate) fn edit_command_on(&self, platform: KeyPlatform) -> Option<char> {
+        match self.key {
+            Key::Command(c) => (primary_alone_on(self.mods, platform) && (c == 'z' || !self.mods.shift)).then_some(c),
+            Key::Insert => (!platform.mac() && held(self.mods, platform) == SHIFT).then_some('v'),
+            _ => None,
+        }
     }
 
     /// Alt+Space off macOS: the window menu's key. It never types a space, and on Windows opens

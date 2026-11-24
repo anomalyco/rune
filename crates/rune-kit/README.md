@@ -108,7 +108,7 @@ keeping padding, forced-colors focus outline, invalid red ink and disabled dimmi
 `.trailing(el)` (reserving bottom-end width beside the wrapping/scrolling viewport while keeping
 the accessory independently focusable), and `.scroll_bar(bool)` / `.scroll_bar_styled(style)`
 (attaching a kit scroll bar to its internal `auto_grow` or `max_height` scroll viewport; see
-`rune-textarea--composer` in `kit-gallery`). `TextInput`, `TextArea`
+`rune-textarea--composer` in `kit-gallery`), and `.line_home_end(bool)` (opting into visual line-based Home/End and Shift+Home/End on macOS for code editors while keeping Cmd+Home/End and Cmd+Up/Down on document ends; see `rune-textarea--code-keys` in `kit-gallery`). `TextInput`, `TextArea`
 and `TextField` forward `on_secondary_press` (replacing the default field context menu) and
 `on_input_paste` (intercepting pastes before plain-text insertion, skipped when disabled), as well
 as `on_submit` and accessible `description`. They also accept `.decorations(spans)` (or `.spans(spans)`), `.line_fill(fill)` / `.line_fills(fills)`,

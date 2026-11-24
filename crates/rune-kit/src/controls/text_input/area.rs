@@ -51,6 +51,19 @@ impl TextArea {
         self.edits.visual(move |e| e.spellcheck(on));
         self
     }
+    /// Use visual line start/end for plain `Home` and `End` (and `Shift+Home` / `Shift+End`) on
+    /// macOS instead of document start/end ([`El::line_home_end`](rune::El::line_home_end)),
+    /// keeping `Cmd+Home`/`Cmd+End`, `Ctrl+Home`/`Ctrl+End`, and `Cmd+Up`/`Cmd+Down` on the
+    /// document's ends. Off by default (`false`).
+    ///
+    /// ```ignore
+    /// TextArea::new(&s.code).line_home_end(true).on_edit(|s: &mut App| &mut s.code).build(&k)
+    /// ```
+    pub fn line_home_end(mut self, on: bool) -> Self {
+        self.edit.set_line_home_end(on);
+        self.edits.visual(move |e| e.line_home_end(on));
+        self
+    }
     pub fn new(edit: &TextEdit) -> TextArea {
         TextArea {
             edit: edit.clone(),

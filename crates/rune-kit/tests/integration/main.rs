@@ -41,6 +41,7 @@ mod table;
 mod table_columns;
 mod text_area_chrome;
 mod text_area_grow;
+mod text_area_keys;
 mod text_input_hooks;
 mod text_input_press;
 mod tooltip;

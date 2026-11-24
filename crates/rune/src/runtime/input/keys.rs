@@ -248,8 +248,17 @@ impl RuntimeCore {
         tx: &mut Tx,
     ) -> bool {
         let Some(path) = self.kbd.focus.owned() else { return false };
-        let Some((access, submit, change, animate_layout, single_line, secure, revealed_override)) =
-            self.focused_input().map(|i| (i.access.clone(), i.submit.clone(), i.change.clone(), i.animate_layout, i.single_line, i.edit.is_secure(), i.revealed_override))
+        let Some((access, submit, change, animate_layout, single_line, secure, revealed_override, line_home_end_override)) =
+            self.focused_input().map(|i| (
+                i.access.clone(),
+                i.submit.clone(),
+                i.change.clone(),
+                i.animate_layout,
+                i.single_line,
+                i.edit.is_secure(),
+                i.revealed_override,
+                i.line_home_end_override,
+            ))
         else {
             return false;
         };
@@ -260,6 +269,7 @@ impl RuntimeCore {
             edit.set_single_line(single_line);
             if secure && !edit.is_secure() { edit.set_secure(true); }
             if let Some(rev) = revealed_override { edit.set_revealed(rev); }
+            if let Some(line_home_end) = line_home_end_override { edit.set_line_home_end(line_home_end); }
         }
         let before = change.as_ref().map(|_| zeroize::Zeroizing::new(access(app.states()).text.clone()));
         let mut out = f(app.states(), &access, tx);
