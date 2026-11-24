@@ -682,7 +682,9 @@ impl RuntimeCore {
                 }
                 self.paint.unturned_drawn[i] = (r.map(|v| v / s), full_clip);
             }
-            let group_rect = if hover_owner { rect_pt } else { pinh.group_rect };
+            let group_rect = if hover_owner {
+                if effective_opacity > 0.001 { rect_pt } else { intersect(rect_pt, pinh.group_rect) }
+            } else { pinh.group_rect };
             self.paint.inh_scratch[i] = Inh { opacity: effective_opacity, paint_opacity: o, first_fade: kids_fade,
                 clip: full_clip, fade: hit_fade, fade_origin: hit_origin,
                 paint_clip: clip, paint_fade: fade, paint_fade_origin: fade_origin, rounded, scale, anchor, anchor_to, blur, dy, dx,

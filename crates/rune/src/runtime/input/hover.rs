@@ -148,11 +148,10 @@ impl RuntimeCore {
         if let Some((x, y)) = self.pointer.pos
             && let Some(top) = self.top_hit(x, y)
         {
-            for &(id, r) in self.hit.hits() {
+            for &(id, _) in self.hit.hits() {
                 if let Some((i, n)) = self.tree.node_index.get(&id).map(|&i| (i, &self.tree.nodes[i]))
                     && self.allowed(i)
                     && n.handlers.get().is_some_and(|h| h.on_hover_change.is_some())
-                    && self.hit_contains(id, r, x, y)
                     && self.node_holds(i, top)
                     && !inside.contains(&n.path)
                 {
@@ -210,8 +209,9 @@ impl RuntimeCore {
         match flips {
             Some(flips) => flips.iter().any(held),
             None => {
-                let (captured, alone, shared) = (self.pointer.captured_path(), self.hovered_alone(), self.shared_hovered());
-                (0..self.tree.nodes.len()).filter_map(|i| self.hover_flip(i, captured, alone, &shared)).any(|f| held(&f))
+                let top = self.pointer.pos.and_then(|(x, y)| self.top_hit(x, y));
+                let (captured, alone, shared) = (self.pointer.captured_path(), self.hovered_alone_at(top), self.shared_hovered_at(top));
+                (0..self.tree.nodes.len()).filter_map(|i| self.hover_flip(i, top, captured, alone, &shared)).any(|f| held(&f))
             }
         }
     }
@@ -303,13 +303,31 @@ impl RuntimeCore {
             .filter(|&i| self.allowed(i))
     }
 
+    /// Whether the pointer hovers node `i`, given the topmost hit target `top` under it:
+    /// follows the hit-tested element and its ancestors (as CSS `:hover` does), so an
+    /// overhanging hit child keeps its group lit and another subtree's hit blocks elements
+    /// underneath. When `top` is `None` or a strict ancestor of `i`, `i`'s own box decides.
+    fn pointer_hovers(&self, i: usize, top: Option<usize>) -> bool {
+        let Some((x, y)) = self.pointer.pos else { return false };
+        match top {
+            Some(t) if self.node_holds(i, t) => true,
+            Some(t) => self.node_contains(i, x, y) && self.node_holds(t, i),
+            None => self.node_contains(i, x, y),
+        }
+    }
+
     /// The innermost `hover_alone` element under the pointer: the elements around it show no
     /// hover.
-    fn hovered_alone(&self) -> Option<usize> {
-        let (x, y) = self.pointer.pos?;
+    fn hovered_alone_at(&self, top: Option<usize>) -> Option<usize> {
+        self.pointer.pos?;
         (0..self.tree.nodes.len())
-            .filter(|&i| self.tree.nodes[i].vis.hover_alone && !self.subtree_exiting(i) && self.allowed(i) && self.node_contains(i, x, y))
+            .filter(|&i| self.tree.nodes[i].vis.hover_alone && !self.subtree_exiting(i) && self.allowed(i) && self.pointer_hovers(i, top))
             .max_by_key(|&i| self.tree.nodes[i].path.len())
+    }
+
+    #[cfg(test)]
+    fn hovered_alone(&self) -> Option<usize> {
+        self.hovered_alone_at(self.pointer.pos.and_then(|(x, y)| self.top_hit(x, y)))
     }
 
     /// Keyboard focus shows on node `i` or inside it (CSS `:has(:focus-visible)`): a hover group
@@ -320,23 +338,28 @@ impl RuntimeCore {
     }
 
     /// The `hover_group_shared` keys of the elements under the pointer or holding keyboard focus.
-    fn shared_hovered(&self) -> Vec<Rc<str>> {
-        let (x, y) = self.pointer.pos.unwrap_or((f32::NAN, f32::NAN));
+    fn shared_hovered_at(&self, top: Option<usize>) -> Vec<Rc<str>> {
         (0..self.tree.nodes.len())
             .filter_map(|i| {
                 let key = self.tree.nodes[i].vis.hover_share.as_ref()?;
-                (!self.subtree_exiting(i) && self.allowed(i) && (self.node_contains(i, x, y) || self.keyboard_within(i))).then(|| key.clone())
+                (!self.subtree_exiting(i) && self.allowed(i) && (self.pointer_hovers(i, top) || self.keyboard_within(i))).then(|| key.clone())
             })
             .collect()
     }
 
-    /// Node `i`'s hover track, if it has one and isn't leaving. `alone`: the `hover_alone`
-    /// element under the pointer, which turns off the tracks of the elements around it.
-    /// `shared`: the `hover_group_shared` keys the pointer is over.
-    fn hover_flip(&self, i: usize, captured: Option<&str>, alone: Option<usize>, shared: &[Rc<str>]) -> Option<Flip> {
+    #[cfg(test)]
+    fn shared_hovered(&self) -> Vec<Rc<str>> {
+        self.shared_hovered_at(self.pointer.pos.and_then(|(x, y)| self.top_hit(x, y)))
+    }
+
+    /// Node `i`'s hover track, if it has one and isn't leaving. `top`: the topmost hit under
+    /// the pointer. `alone`: the `hover_alone` element under the pointer, which turns off the
+    /// tracks of the elements around it. `shared`: the `hover_group_shared` keys the pointer
+    /// is over.
+    fn hover_flip(&self, i: usize, top: Option<usize>, captured: Option<&str>, alone: Option<usize>, shared: &[Rc<str>]) -> Option<Flip> {
         let n = &self.tree.nodes[i];
         if !(n.vis.hover().a > 0.0 || n.vis_flags.hover_group()) || self.subtree_exiting(i) { return None; }
-        let inside = self.pointer.pos.is_some_and(|(x, y)| self.node_contains(i, x, y))
+        let inside = self.pointer_hovers(i, top)
             || n.vis.hover_share.as_ref().is_some_and(|k| shared.contains(k))
             || (n.vis_flags.hover_group() && self.keyboard_within(i));
         let capture_inside = if self.pointer.secondary_held() { inside } else { self.pointer.press_inside() };
@@ -377,15 +400,16 @@ impl RuntimeCore {
         if !self.tree.nodes.iter().map(|n| n.id).eq(self.tree.built_ids.iter().copied()) {
             return false;
         }
+        let top = self.pointer.pos.and_then(|(x, y)| self.top_hit(x, y));
         let captured = self.pointer.captured_path();
-        let alone = self.hovered_alone();
-        let shared = self.shared_hovered();
+        let alone = self.hovered_alone_at(top);
+        let shared = self.shared_hovered_at(top);
         for i in 0..self.tree.nodes.len() {
             let n = &self.tree.nodes[i];
             let press_scale = n.handlers.get().and_then(|h| h.press_scale);
             if n.vis.hover().a <= 0.0 && !n.vis_flags.hover_group() && !n.vis.tracks_press() && press_scale.is_none() { continue; }
             if self.subtree_exiting(i) { continue; }
-            if self.hover_flip(i, captured, alone, &shared).is_some_and(|f| f.changed) { return true; }
+            if self.hover_flip(i, top, captured, alone, &shared).is_some_and(|f| f.changed) { return true; }
             if !n.vis.tracks_press() && press_scale.is_none() { continue; }
             let down = self.press_down_node(i, captured);
             let id = n.id;
@@ -413,15 +437,16 @@ impl RuntimeCore {
         }
         let mut changed = false;
         let mut flips = std::mem::take(&mut self.pointer.hover_hold.flips);
+        let top = self.pointer.pos.and_then(|(x, y)| self.top_hit(x, y));
         let captured = self.pointer.captured_path();
-        let alone = self.hovered_alone();
-        let shared = self.shared_hovered();
+        let alone = self.hovered_alone_at(top);
+        let shared = self.shared_hovered_at(top);
         for i in 0..self.tree.nodes.len() {
             let n = &self.tree.nodes[i];
             let press_scale = n.handlers.get().and_then(|h| h.press_scale);
             if n.vis.hover().a <= 0.0 && !n.vis_flags.hover_group() && !n.vis.tracks_press() && press_scale.is_none() { continue; }
             if self.subtree_exiting(i) { continue; }
-            match self.hover_flip(i, captured, alone, &shared) {
+            match self.hover_flip(i, top, captured, alone, &shared) {
                 Some(f) if f.changed => flips.push(f),
                 // Default hover animations inherit velocity and have no completion token.
                 // An unchanged target preserves its trajectory in the store already; avoid

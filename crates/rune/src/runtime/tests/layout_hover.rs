@@ -31,11 +31,17 @@ fn view(s: &Rows, _: &mut Cx<Rows>) -> El {
     });
     let mut list = col().key("rows").w_full().children(rows);
     if s.growth { list = list.growth(crate::el::GrowthSpec::default()); }
-    let mut root = col().size(200.0, 400.0).child(list);
-    if let Some(pan) = &s.pan {
-        root = root.child(el().key("spot").absolute(90.0, 100.0).size(20.0, 20.0).live_offset(pan)
-            .on_press(|_: &mut Rows| {}).on_hover_change(|s: &mut Rows, inside, _| s.spot.push(inside)));
-    }
+    let root = if let Some(pan) = &s.pan {
+        // Place `list` inside `spot` so `spot` is an ancestor rather than a covering sibling:
+        // `spot` holds `hovered` and `hover_within` while `r5` holds the layout-carried hover track.
+        col().size(200.0, 400.0).child(
+            el().key("spot").absolute(90.0, 100.0).size(20.0, 20.0).live_offset(pan)
+                .on_press(|_: &mut Rows| {}).on_hover_change(|s: &mut Rows, inside, _| s.spot.push(inside))
+                .child(list.absolute(-90.0, -100.0).w(200.0)),
+        )
+    } else {
+        col().size(200.0, 400.0).child(list)
+    };
     if s.modal { root.child(col().key("sheet").absolute(150.0, 350.0).size(40.0, 40.0).modal(true, |s: &mut Rows| s.modal = false)) } else { root }
 }
 
