@@ -6,6 +6,8 @@ pub(crate) mod app_icon;
 pub(crate) mod cpu_frames;
 #[cfg(target_os = "macos")]
 pub(crate) mod display_link;
+#[cfg(any(test, target_os = "macos"))]
+pub(crate) mod display_link_machine;
 #[cfg(target_vendor = "apple")]
 pub mod embed;
 #[cfg(any(test, target_vendor = "apple"))]
@@ -28,6 +30,8 @@ pub(crate) mod preferences;
 pub(crate) mod ready_signal;
 pub(crate) mod reopen;
 pub(crate) mod scroll_bars;
+#[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+pub(crate) mod wayland_drop;
 #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
 pub(crate) mod wayland_output;
 #[cfg(target_arch = "wasm32")]

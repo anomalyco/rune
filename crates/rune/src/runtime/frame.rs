@@ -142,6 +142,7 @@ impl RuntimeCore {
     /// frame or a sleeping host's gap belongs to old tracks, never to targets first observed
     /// on this frame.
     pub(crate) fn frame_split(&mut self, app: &mut dyn AppDriver, catch_up: f64, dt: f64) -> bool {
+        self.motion.clear_handovers();
         // Like a native shell: the logical clock follows host time (timers, poll), while
         // animations step by the frame's own dt, so idle time never lands on a fresh commit.
         let elapsed = catch_up + dt;
@@ -208,6 +209,8 @@ impl RuntimeCore {
         let mut ran = false;
         let mut why = if tx.polled_change && self.commit.dirty { CommitWhy::POLL } else { 0 };
         let commits0 = self.commit.commits;
+        #[cfg(debug_assertions)]
+        let view_commits0 = self.commit.view_commits();
         let shaped0 = self.text.shaped;
         self.settled = false;
         self.motion.clear_landing_holds();
@@ -235,7 +238,8 @@ impl RuntimeCore {
         if catch_up > 0.0 { self.catch_up_motion(catch_up); }
         self.motion.keep_loops_on_clock(&self.scene, self.t, self.clock, self.time_scale, dt);
         let (polled, due) = self.frame.begin_frame_poll(self.clock);
-        self.frame.idle_frame_begins(self.animating, polled || due > 0, live_woke);
+        let due_touch = self.pointer.touch_hold_deadline().is_some_and(|d| d <= self.clock);
+        self.frame.idle_frame_begins(self.animating, polled || due > 0 || due_touch, live_woke);
         self.frame.drain_due_wakes(due);
         self.fire_hover_delays();
         self.fire_press_repeat();
@@ -457,7 +461,7 @@ impl RuntimeCore {
         #[cfg(debug_assertions)]
         {
             let scrolling = self.scrolling();
-            self.commit.watch_frame(commits0, scrolling, instant_scroll.as_deref());
+            self.commit.watch_frame(view_commits0, scrolling, instant_scroll.as_deref());
         }
         if let Some(request) = tx.select.take() {
             let from_change = std::mem::take(&mut tx.select_from_change);

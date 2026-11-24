@@ -1,0 +1,1 @@
+- Windows: shown, uncovered windows and overlays now pace sub-frame `poll` wakes (`Tx::wake_after(Duration::ZERO)`) to the display's vblank grid (120, 144, 165 Hz, etc.) instead of capping them at the 60 Hz `TIMER_FRAME` floor, while idle windows still ask for no frames and hidden, covered or minimized surfaces keep the 60 Hz floor.

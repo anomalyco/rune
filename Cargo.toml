@@ -91,7 +91,7 @@ default-members = [
     "crates/rune-taffy",
     "themes/opencode",
 ]
-exclude = ["tools/rune-dev-guard", "tools/ratex-math-wasm", "tools/ratex-math-wasm/pack", "vendor/accesskit_macos", "vendor/accesskit_windows", "vendor/parley_engine", "vendor/sctk-adwaita", "vendor/tiny-skia-path", "vendor/wgpu-hal", "vendor/winit"]
+exclude = ["tools/rune-dev-guard", "tools/ratex-math-wasm", "tools/ratex-math-wasm/pack", "vendor/accesskit_atspi_common", "vendor/accesskit_macos", "vendor/accesskit_windows", "vendor/naga", "vendor/parley_engine", "vendor/sctk-adwaita", "vendor/tiny-skia-path", "vendor/wgpu-hal", "vendor/winit"]
 
 # wgpu-hal as published plus `vendor/wgpu-hal.patch`: `dx12::Instance::expose_adapter` (a `wgpu::Adapter` for the
 # one adapter Rune picks through DXGI, with no device made on the others, `crates/rune-gpu/src/pick.rs`), FXC loaded on
@@ -109,6 +109,14 @@ exclude = ["tools/rune-dev-guard", "tools/ratex-math-wasm", "tools/ratex-math-wa
 # a dependency's `[patch]` doesn't apply to the workspace that depends on it.
 [patch.crates-io]
 wgpu-hal = { path = "vendor/wgpu-hal" }
+# naga as published plus `vendor/naga.patch`: `back::pipeline_constants::process_function` remaps
+# `Statement::Emit` ranges from the per-expression index spans newly appended to
+# `function.expressions` rather than `Range::new_from_bounds(new_pos[first], new_pos[last])`, so
+# constant-folding an expression (such as indexing a `let`-bound constant vector or composite) to an
+# earlier handle neither stretches an `Emit` backwards over earlier emits
+# (`ExpressionAlreadyInScope`) nor inverts it (`NotInScope`; gfx-rs/wgpu#7793). Re-made by
+# `scripts/vendor-naga.sh <version>` when wgpu/naga is bumped; apps that build Rune patch it too.
+naga = { path = "vendor/naga" }
 # winit as published plus `vendor/winit.patch`: on Windows a new window isn't added again to the
 # taskbar it's already on (that took CoInitializeEx and a TaskbarList COM object, about 7,800 µs
 # and nine shell DLLs, before every window's first frame), a window given a position is made there, so it is
@@ -140,11 +148,20 @@ sctk-adwaita = { path = "vendor/sctk-adwaita" }
 parley_engine = { path = "vendor/parley_engine" }
 # accesskit_windows as published plus `vendor/accesskit_windows.patch`: headings and landmarks reach
 # UI Automation (HeadingLevel, LandmarkType, LocalizedLandmarkType), which Narrator's and NVDA's
-# heading and landmark navigation read; and a field past Rune's 64 KiB text-run limit keeps its text
-# pattern, its lines answered from its value when a reader asks (`src/long_text.rs`). Re-made by
-# `scripts/vendor-accesskit-windows.sh <version>`
-# when AccessKit is bumped; apps that build Rune patch it too.
+# heading and landmark navigation read; a field past Rune's 64 KiB text-run limit keeps its text
+# pattern, its lines answered from its value when a reader asks (`src/long_text.rs`); and item roles
+# read their own `size_of_set` before falling back to `size_of_set_from_container`, so levelled
+# items in a flat tree report their own level's set size without leaking container sizes onto
+# containers. Re-made by `scripts/vendor-accesskit-windows.sh <version>` when AccessKit is bumped;
+# apps that build Rune patch it too.
 accesskit_windows = { path = "vendor/accesskit_windows" }
+# accesskit_atspi_common as published plus `vendor/accesskit_atspi_common.patch`: item roles read
+# their own `size_of_set` before falling back to `size_of_set_from_container`, so levelled items in
+# a flat tree report their own level's `setsize` to AT-SPI without leaking container sizes onto
+# containers. Re-made by `scripts/vendor-accesskit-atspi-common.sh <version>` when AccessKit is
+# bumped; apps that build Rune patch it too (omitting it still compiles and falls back to the
+# container's set size on Linux).
+accesskit_atspi_common = { path = "vendor/accesskit_atspi_common" }
 # accesskit_macos as published plus `vendor/accesskit_macos.patch`: headings reach NSAccessibility as
 # AppKit's `AXHeading` with their level as the value (the published role, `Heading`, is none VoiceOver
 # knows), so VoiceOver's rotor and VO-Command-H find them and say their level; and the accessibility

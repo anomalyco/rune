@@ -1,0 +1,1 @@
+- Debug perf warnings: instant scrolls that only trigger a `virtual_rows` remount without running `view` no longer count as committing frames in the instant-scroll glide warning, while frames where `view` actually runs (including via a same-frame `on_visible_rows` handler returning `true`) still warn.

@@ -152,7 +152,17 @@ fn inline_code_copies_without_its_padding() {
         rt.pointer_up(a.0, a.1);
         tick(&mut rt);
     }
-    assert_eq!(rt.selected_text().as_deref(), Some("cargo"), "a double-click's word stops at the padding");
+    assert_eq!(rt.selected_text(), Some(w("cargo")), "a double-click's word stops at the opening padding");
+    // Double-clicking the final word stops at the closing padding without taking the space past it.
+    rt.frame(1.0);
+    let e = (g[9].0 - 1.0, g[9].1);
+    for _ in 0..2 {
+        rt.pointer_move(e.0, e.1);
+        rt.pointer_down(e.0, e.1);
+        rt.pointer_up(e.0, e.1);
+        tick(&mut rt);
+    }
+    assert_eq!(rt.selected_text().as_deref(), Some("test"), "a double-click's word stops at the closing padding");
     command(&mut rt, 'a');
     assert_eq!(rt.selected_text().as_deref(), Some("Run cargo test now"));
     assert_eq!(find(&rt, "m0/b0").selected.as_deref(), Some("Run cargo test now"));
@@ -171,7 +181,7 @@ fn highlighted_code_copies_as_plain_text() {
         rt.pointer_up(g[1].0, g[1].1);
         tick(&mut rt);
     }
-    assert_eq!(rt.selected_text().as_deref(), Some("def"), "a double-click picks the keyword's word");
+    assert_eq!(rt.selected_text(), Some(w("def")), "a double-click picks the keyword's word");
     command(&mut rt, 'a');
     command(&mut rt, 'c');
     assert_eq!(clipboard.text().as_deref().map(String::as_str), Some(code));
@@ -233,4 +243,9 @@ fn a_quote_with_paragraphs_a_list_and_code_copies_as_plain_text() {
     let one = glyphs(&rt, "m0/b1/#1/b2/i0/#1/b0");
     drag(&mut rt, before(one[1]), (two[2].0 + 3.0, two[2].1));
     assert_eq!(rt.selected_text().as_deref(), Some("ne\n- two"));
+}
+
+/// A double-click's word as selected: on Windows with the space after it (`selectable::with_trailing_space`).
+fn w(word: &str) -> String {
+    if cfg!(target_os = "windows") { format!("{word} ") } else { word.to_owned() }
 }

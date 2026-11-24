@@ -152,6 +152,17 @@ impl Host {
         if let Some(ready) = self.on_ready.as_mut() {
             crate::tooling::perf_warn::timed("on_ready", || ready(&self.native_handle));
         }
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if self.wayland
+            && let Some(w) = &mut self.win
+            && w.native.drop_target.is_none()
+        {
+            let handle = self.native_handle.clone();
+            w.native.drop_target = crate::platform::wayland_drop::install(
+                &w.window,
+                std::sync::Arc::new(move || handle.send(|_| crate::window::WakeEvent::FileDrop)),
+            );
+        }
         #[cfg(not(target_arch = "wasm32"))]
         crate::platform::ready_signal::ready();
     }

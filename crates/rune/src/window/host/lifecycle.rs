@@ -402,6 +402,8 @@ impl Host {
             self.app.file_dialog_cancel(&mut self.file_dialog);
             self.app.rt_mut().cancel_pointer();
             self.files = FileDrop::default();
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            if let Some(w) = &mut self.win { w.native.drop_target = None; }
             if !ends && let Some(w) = &mut self.win { w.apply_cursor_core(self.app.rt(), false); w.hide(); }
             crate::marks::mark("window.hidden");
             self.life.finish();
@@ -433,6 +435,8 @@ impl Host {
             self.native_handle.native.number.store(0, Ordering::Release);
         } else if let Some(w) = self.win.as_mut() {
             w.stop_pacing();
+            #[cfg(target_os = "windows")]
+            let _ = w.native.poll_pace.step(crate::window::poll_pace::PollPaceEvent::Reset);
             w.backoff_step(BackoffEvent::Lapsed);
             w.presented = None;
             // Its hidden frame delivers the focus loss.
@@ -528,6 +532,8 @@ impl Host {
         if self.life.covered() {
             self.secure_input.set(false);
             l.stop_pacing();
+            #[cfg(target_os = "windows")]
+            let _ = l.native.poll_pace.step(crate::window::poll_pace::PollPaceEvent::Reset);
             self.idle = true;
             self.app.set_live_visible(live);
             self.app.rt_mut().cancel_timer_frame();

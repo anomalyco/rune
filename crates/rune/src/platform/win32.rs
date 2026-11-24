@@ -34,6 +34,8 @@ pub(crate) use cloak::Cloak;
 pub(crate) use dpi_drag::follow_suggested_rect;
 pub(crate) use dpi_drag::in_size_move;
 pub(crate) use frame::CustomFrame;
+pub(crate) use frame::DragHitSync;
+pub(crate) use frame::DragRegions;
 pub(crate) use frame::has_window_menu;
 pub(crate) use frame::request_inner_size;
 pub(crate) use frame::window_menu;
@@ -83,6 +85,41 @@ pub(crate) fn next_vblank(now: std::time::Instant) -> std::time::Instant {
         let next = last + ((qpc - last) / period + 1) * period;
         now + std::time::Duration::from_nanos(((next - qpc).max(0) as i128 * 1_000_000_000 / freq as i128) as u64)
     }
+}
+
+/// The window's display vblank grid from `DwmGetCompositionTimingInfo` and `monitor_mhz`,
+/// following Chromium's `VSyncProviderWin` validation and mixed-rate monitor rules.
+#[allow(unsafe_code)]
+pub(crate) fn vsync_grid(
+    now: std::time::Instant,
+    monitor_mhz: Option<u32>,
+    previous: Option<crate::window::poll_pace::VSyncGrid>,
+) -> Option<crate::window::poll_pace::VSyncGrid> {
+    use windows_sys::Win32::Graphics::Dwm::{DWM_TIMING_INFO, DwmGetCompositionTimingInfo};
+    use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+    // SAFETY: plain out-parameters.
+    let dwm = unsafe {
+        let mut t: DWM_TIMING_INFO = std::mem::zeroed();
+        t.cbSize = size_of::<DWM_TIMING_INFO>() as u32;
+        let (mut qpc, mut freq) = (0i64, 0i64);
+        if DwmGetCompositionTimingInfo(std::ptr::null_mut(), &mut t) >= 0
+            && QueryPerformanceCounter(&mut qpc) != 0
+            && QueryPerformanceFrequency(&mut freq) != 0
+        {
+            crate::window::poll_pace::dwm_grid_from_raw(
+                now,
+                qpc,
+                freq,
+                t.qpcVBlank,
+                t.qpcRefreshPeriod,
+                t.rateRefresh.uiNumerator,
+                t.rateRefresh.uiDenominator,
+            )
+        } else {
+            None
+        }
+    };
+    crate::window::poll_pace::resolve_grid(dwm, monitor_mhz, previous, now)
 }
 
 /// Whether a screen reader is running (`SPI_GETSCREENREADER`).

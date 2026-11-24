@@ -45,8 +45,17 @@ diff --git a/src/platform/macos.rs b/src/platform/macos.rs
 +    }
 +
      #[inline]
-@@ -531 +545,23 @@ pub enum OptionAsAlt {
+@@ -531 +545,32 @@ pub enum OptionAsAlt {
  }
++
++/// Rune: the default menu `with_default_menu` installs before the init events, for an app that
++/// turned it off there to install it later in the same launch (after its first window's first
++/// frame). On the main thread; elsewhere it does nothing.
++pub fn install_default_menu() {
++    if let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
++        crate::platform_impl::menu::initialize(&objc2_app_kit::NSApplication::sharedApplication(mtm));
++    }
++}
 +
 +/// Rune: the focused field's text around its selection (the selection a byte range of it), which
 +/// the input method reads through `selectedRange` and `attributedSubstringForProposedRange:` to
@@ -114,7 +123,8 @@ index 1b427a8..fff68ab 100644
  mod event_loop;
  mod ffi;
 +pub(crate) mod ime_text;
- mod menu;
+-mod menu;
++pub(crate) mod menu;
  mod monitor;
  mod observer;
 diff --git a/src/platform_impl/macos/view.rs b/src/platform_impl/macos/view.rs
@@ -1633,3 +1643,356 @@ index 13ef99c26..27b73b6a4 100644
          let registry_state = RegistryState::new(globals);
          let compositor_state =
              CompositorState::bind(globals, queue_handle).map_err(WaylandError::Bind)?;
+diff --git a/src/platform_impl/linux/wayland/seat/touch/mod.rs b/src/platform_impl/linux/wayland/seat/touch/mod.rs
+index 124504fee..86dc8b4e8 100644
+--- a/src/platform_impl/linux/wayland/seat/touch/mod.rs
++++ b/src/platform_impl/linux/wayland/seat/touch/mod.rs
+@@ -21,15 +21,15 @@ impl TouchHandler for WinitState {
+         _: &Connection,
+         _: &QueueHandle<Self>,
+         touch: &WlTouch,
+-        _: u32,
++        serial: u32,
+         _: u32,
+         surface: WlSurface,
+         id: i32,
+         position: (f64, f64),
+     ) {
+         let window_id = wayland::make_wid(&surface);
+-        let scale_factor = match self.windows.get_mut().get(&window_id) {
+-            Some(window) => window.lock().unwrap().scale_factor(),
++        let window = match self.windows.get_mut().get(&window_id) {
++            Some(window) => window.clone(),
+             None => return,
+         };
+ 
+@@ -41,6 +41,12 @@ impl TouchHandler for WinitState {
+             },
+         };
+ 
++        let scale_factor = {
++            let mut window = window.lock().unwrap();
++            window.touch_down(id, touch.seat().clone(), serial);
++            window.scale_factor()
++        };
++
+         // Update the state of the point.
+         let location = LogicalPosition::<f64>::from(position);
+         seat_state.touch_map.insert(id, TouchPoint { surface, location });
+@@ -84,7 +90,11 @@ impl TouchHandler for WinitState {
+ 
+         let window_id = wayland::make_wid(&touch_point.surface);
+         let scale_factor = match self.windows.get_mut().get(&window_id) {
+-            Some(window) => window.lock().unwrap().scale_factor(),
++            Some(window) => {
++                let mut window = window.lock().unwrap();
++                window.touch_up(id, touch.seat());
++                window.scale_factor()
++            },
+             None => return,
+         };
+ 
+@@ -159,7 +169,11 @@ impl TouchHandler for WinitState {
+         for (id, touch_point) in seat_state.touch_map.drain() {
+             let window_id = wayland::make_wid(&touch_point.surface);
+             let scale_factor = match self.windows.get_mut().get(&window_id) {
+-                Some(window) => window.lock().unwrap().scale_factor(),
++                Some(window) => {
++                    let mut window = window.lock().unwrap();
++                    window.touch_up(id, touch.seat());
++                    window.scale_factor()
++                },
+                 None => return,
+             };
+ 
+diff --git a/src/platform_impl/linux/wayland/window/state.rs b/src/platform_impl/linux/wayland/window/state.rs
+index 9cd83c4a3..077451053 100644
+--- a/src/platform_impl/linux/wayland/window/state.rs
++++ b/src/platform_impl/linux/wayland/window/state.rs
+@@ -69,6 +69,9 @@ pub struct WindowState {
+     /// The pointers observed on the window.
+     pub pointers: Vec<Weak<ThemedPointer<WinitPointerData>>>,
+ 
++    /// Rune: active touches on the window, for interactive move/resize/menu serials.
++    active_touches: ActiveTouches<WlSeat>,
++
+     selected_cursor: SelectedCursor,
+ 
+     /// Whether the cursor is visible.
+@@ -206,6 +209,7 @@ impl WindowState {
+             resize_increments: None,
+             pointer_constraints,
+             pointers: Default::default(),
++            active_touches: ActiveTouches::default(),
+             queue_handle: queue_handle.clone(),
+             resizable: true,
+             scale_factor: 1.,
+@@ -234,6 +238,28 @@ impl WindowState {
+         })
+     }
+ 
++    /// Rune: record an active touch down on this window.
++    pub fn touch_down(&mut self, id: i32, seat: WlSeat, serial: u32) {
++        self.active_touches.down(id, seat, serial);
++    }
++
++    /// Rune: clear a touch point that ended or was cancelled on this window.
++    pub fn touch_up(&mut self, id: i32, seat: &WlSeat) {
++        self.active_touches.up(id, seat);
++    }
++
++    /// Rune: run an interactive xdg-shell request using the active touch's `(seat, serial)`,
++    /// falling back to the observed pointers' latest button serial when no touch is down.
++    fn with_interactive_serial(&self, mut callback: impl FnMut(&WlSeat, u32)) {
++        if let Some((seat, serial)) = self.active_touches.latest() {
++            callback(seat, serial);
++            return;
++        }
++        self.apply_on_pointer(|_, data| {
++            callback(data.seat(), data.latest_button_serial());
++        });
++    }
++
+     /// Get the current state of the frame callback.
+     pub fn frame_callback_state(&self) -> FrameCallbackState {
+         self.frame_callback_state
+@@ -435,11 +461,7 @@ impl WindowState {
+     /// Start interacting drag resize.
+     pub fn drag_resize_window(&self, direction: ResizeDirection) -> Result<(), ExternalError> {
+         let xdg_toplevel = self.window.xdg_toplevel();
+-
+-        // TODO(kchibisov) handle touch serials.
+-        self.apply_on_pointer(|_, data| {
+-            let serial = data.latest_button_serial();
+-            let seat = data.seat();
++        self.with_interactive_serial(|seat, serial| {
+             xdg_toplevel.resize(seat, serial, direction.into());
+         });
+ 
+@@ -449,10 +471,7 @@ impl WindowState {
+     /// Start the window drag.
+     pub fn drag_window(&self) -> Result<(), ExternalError> {
+         let xdg_toplevel = self.window.xdg_toplevel();
+-        // TODO(kchibisov) handle touch serials.
+-        self.apply_on_pointer(|_, data| {
+-            let serial = data.latest_button_serial();
+-            let seat = data.seat();
++        self.with_interactive_serial(|seat, serial| {
+             xdg_toplevel._move(seat, serial);
+         });
+ 
+@@ -982,10 +1001,7 @@ impl WindowState {
+     }
+ 
+     pub fn show_window_menu(&self, position: LogicalPosition<u32>) {
+-        // TODO(kchibisov) handle touch serials.
+-        self.apply_on_pointer(|_, data| {
+-            let serial = data.latest_button_serial();
+-            let seat = data.seat();
++        self.with_interactive_serial(|seat, serial| {
+             self.window.show_window_menu(seat, serial, position.into());
+         });
+     }
+@@ -1268,3 +1284,58 @@ fn into_sctk_adwaita_config(theme: Option<Theme>) -> sctk_adwaita::FrameConfig {
+         None => sctk_adwaita::FrameConfig::auto(),
+     }
+ }
++
++/// Rune: active touches on a window `(id, seat, down_serial)` in arrival order.
++#[derive(Debug)]
++struct ActiveTouches<S> {
++    points: Vec<(i32, S, u32)>,
++}
++
++impl<S> Default for ActiveTouches<S> {
++    fn default() -> Self {
++        Self { points: Vec::new() }
++    }
++}
++
++impl<S: PartialEq> ActiveTouches<S> {
++    fn down(&mut self, id: i32, seat: S, serial: u32) {
++        self.points.retain(|(i, s, _)| !(*i == id && *s == seat));
++        self.points.push((id, seat, serial));
++    }
++
++    fn up(&mut self, id: i32, seat: &S) {
++        self.points.retain(|(i, s, _)| !(*i == id && s == seat));
++    }
++
++    fn latest(&self) -> Option<(&S, u32)> {
++        self.points.last().map(|(_, seat, serial)| (seat, *serial))
++    }
++}
++
++#[cfg(test)]
++mod touch_serial_tests {
++    use super::ActiveTouches;
++
++    #[test]
++    fn active_touch_serial_tracks_down_up_and_multitouch() {
++        let mut touches = ActiveTouches::default();
++        assert_eq!(touches.latest(), None);
++
++        touches.down(0, "seat0", 41);
++        assert_eq!(touches.latest(), Some((&"seat0", 41)));
++
++        // Second finger down becomes latest; lifting it restores the first finger's serial.
++        touches.down(1, "seat0", 42);
++        assert_eq!(touches.latest(), Some((&"seat0", 42)));
++        touches.up(1, &"seat0");
++        assert_eq!(touches.latest(), Some((&"seat0", 41)));
++
++        // Duplicate id on the same seat updates its serial without duplicating entries.
++        touches.down(0, "seat0", 43);
++        assert_eq!(touches.latest(), Some((&"seat0", 43)));
++
++        // Lifting the last finger returns None so callers fall back to pointer serials.
++        touches.up(0, &"seat0");
++        assert_eq!(touches.latest(), None);
++    }
++}
+diff --git a/src/platform/wayland.rs b/src/platform/wayland.rs
+index 63c0a922d..7b22e69f0 100644
+--- a/src/platform/wayland.rs
++++ b/src/platform/wayland.rs
+@@ -27,6 +27,12 @@ pub use crate::window::Theme;
+ pub trait ActiveEventLoopExtWayland {
+     /// True if the [`ActiveEventLoop`] uses Wayland.
+     fn is_wayland(&self) -> bool;
++
++    /// Rune: when `wake` is true, any successful Wayland display read marks the event loop as
++    /// having dispatched events so `ControlFlow::Wait` runs a turn even when winit's own queues
++    /// had no events. Foreign Wayland queues sharing the display (such as layer-shell overlays)
++    /// dispatch on that turn without background reader threads. Off by default; no-op on X11.
++    fn set_wake_on_wayland_read(&self, wake: bool);
+ }
+ 
+ impl ActiveEventLoopExtWayland for ActiveEventLoop {
+@@ -34,6 +40,11 @@ impl ActiveEventLoopExtWayland for ActiveEventLoop {
+     fn is_wayland(&self) -> bool {
+         self.p.is_wayland()
+     }
++
++    #[inline]
++    fn set_wake_on_wayland_read(&self, wake: bool) {
++        self.p.set_wake_on_wayland_read(wake);
++    }
+ }
+ 
+ /// Additional methods on [`EventLoop`] that are specific to Wayland.
+diff --git a/src/platform_impl/linux/mod.rs b/src/platform_impl/linux/mod.rs
+index bc0e71c80..0071dfee2 100644
+--- a/src/platform_impl/linux/mod.rs
++++ b/src/platform_impl/linux/mod.rs
+@@ -869,6 +869,19 @@ impl ActiveEventLoop {
+         }
+     }
+ 
++    /// Rune: opt into waking from `ControlFlow::Wait` on any Wayland display read; no-op on X11.
++    #[inline]
++    pub fn set_wake_on_wayland_read(&self, wake: bool) {
++        match *self {
++            #[cfg(wayland_platform)]
++            ActiveEventLoop::Wayland(ref evlp) => evlp.set_wake_on_wayland_read(wake),
++            #[cfg(x11_platform)]
++            ActiveEventLoop::X(_) => {
++                let _ = wake;
++            },
++        }
++    }
++
+     pub fn create_custom_cursor(&self, cursor: CustomCursorSource) -> CustomCursor {
+         x11_or_wayland!(match self; ActiveEventLoop(evlp) => evlp.create_custom_cursor(cursor))
+     }
+diff --git a/src/platform_impl/linux/wayland/event_loop/mod.rs b/src/platform_impl/linux/wayland/event_loop/mod.rs
+index fef13f455..f73e50056 100644
+--- a/src/platform_impl/linux/wayland/event_loop/mod.rs
++++ b/src/platform_impl/linux/wayland/event_loop/mod.rs
+@@ -107,10 +107,12 @@ impl<T: 'static> EventLoop<T> {
+         let wayland_dispatcher =
+             calloop::Dispatcher::new(wayland_source, |_, queue, winit_state: &mut WinitState| {
+                 let result = queue.dispatch_pending(winit_state);
+-                if result.is_ok()
+-                    && (!winit_state.events_sink.is_empty()
+-                        || !winit_state.window_compositor_updates.is_empty())
+-                {
++                if should_mark_dispatched(
++                    result.is_ok(),
++                    winit_state.wake_on_wayland_read,
++                    !winit_state.events_sink.is_empty(),
++                    !winit_state.window_compositor_updates.is_empty(),
++                ) {
+                     winit_state.dispatched_events = true;
+                 }
+                 result
+@@ -656,6 +658,12 @@ pub struct ActiveEventLoop {
+ }
+ 
+ impl ActiveEventLoop {
++    /// Rune: opt into waking from `ControlFlow::Wait` on any Wayland display read.
++    #[inline]
++    pub(crate) fn set_wake_on_wayland_read(&self, wake: bool) {
++        self.state.borrow_mut().wake_on_wayland_read = wake;
++    }
++
+     pub(crate) fn set_control_flow(&self, control_flow: ControlFlow) {
+         self.control_flow.set(control_flow)
+     }
+@@ -808,3 +816,32 @@ enum PumpEventNotifierAction {
+     /// Shutdown the thread.
+     Shutdown,
+ }
++
++/// Rune: whether a completed Wayland source read should set `WinitState::dispatched_events`.
++fn should_mark_dispatched(
++    read_ok: bool,
++    wake_on_wayland_read: bool,
++    has_events: bool,
++    has_compositor_updates: bool,
++) -> bool {
++    read_ok && (wake_on_wayland_read || has_events || has_compositor_updates)
++}
++
++#[cfg(test)]
++mod wake_on_wayland_read_tests {
++    use super::should_mark_dispatched;
++
++    #[test]
++    fn empty_sink_read_sets_dispatched_events_only_when_wake_flag_is_enabled() {
++        // Default (flag off): empty-sink reads do not wake from ControlFlow::Wait.
++        assert!(!should_mark_dispatched(true, false, false, false));
++        // Flag on: a successful empty-sink read wakes the loop for foreign queues.
++        assert!(should_mark_dispatched(true, true, false, false));
++        // Dispatch errors never mark dispatched_events even with the flag on.
++        assert!(!should_mark_dispatched(false, true, false, false));
++        assert!(!should_mark_dispatched(false, false, true, true));
++        // Non-empty winit sinks still wake when the flag is off.
++        assert!(should_mark_dispatched(true, false, true, false));
++        assert!(should_mark_dispatched(true, false, false, true));
++    }
++}
+diff --git a/src/platform_impl/linux/wayland/state.rs b/src/platform_impl/linux/wayland/state.rs
+index 27b73b6a4..eda2cea4b 100644
+--- a/src/platform_impl/linux/wayland/state.rs
++++ b/src/platform_impl/linux/wayland/state.rs
+@@ -115,6 +115,11 @@ pub struct WinitState {
+     /// Whether we have dispatched events to the user thus we want to
+     /// send `AboutToWait` and normally wakeup the user.
+     pub dispatched_events: bool,
++
++    /// Rune: when true, any successful Wayland display read marks `dispatched_events = true`
++    /// even when winit's own event sinks are empty, so foreign queues sharing the display
++    /// dispatch on that turn without background reader threads.
++    pub wake_on_wayland_read: bool,
+ }
+ 
+ impl WinitState {
+@@ -205,6 +210,7 @@ impl WinitState {
+             loop_handle,
+             // Make it true by default.
+             dispatched_events: true,
++            wake_on_wayland_read: false,
+         })
+     }
+ 

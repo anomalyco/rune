@@ -213,6 +213,16 @@ impl Presented {
     }
 }
 
+/// One matched-geometry handover completed by [`Scene::match_geometry`] and its siblings:
+/// `from` left the scene immediately and `to` took over from `start` toward `end`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Handover {
+    pub from: NodeId,
+    pub to: NodeId,
+    pub start: Rect,
+    pub end: Rect,
+}
+
 /// One frame's output.
 pub struct FrameOutput<'a> {
     /// Nodes whose presented values changed, parents before children.
@@ -319,6 +329,8 @@ pub struct Scene {
     travelling: Vec<u32>,
     trace: Option<MotionTrace>,
     intents: Vec<(NodeId, u32, f32)>,
+    /// Matched-geometry handovers completed since the last [`Scene::take_handovers`].
+    handovers: Vec<Handover>,
     /// `keep_flights`: landings leave motion already on its way to the same value.
     keep: bool,
 }
@@ -349,6 +361,7 @@ impl Scene {
             travelling: Vec::new(),
             trace: None,
             intents: Vec::new(),
+            handovers: Vec::new(),
             keep: false,
         }
     }

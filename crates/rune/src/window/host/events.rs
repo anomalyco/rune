@@ -73,7 +73,9 @@ impl Host {
         let native = self.win.as_ref().map(|l| crate::platform::macos::drop::take(&l.window)).unwrap_or_default();
         #[cfg(target_os = "windows")]
         let native = self.win.as_ref().map(|l| crate::platform::win32::drop_target::take(&l.window)).unwrap_or_default();
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        let native = self.win.as_ref().map(|l| crate::platform::wayland_drop::take(&l.window)).unwrap_or_default();
+        #[cfg(not(any(target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))))]
         let native: Vec<FileStep> = Vec::new();
         let Some(l) = self.win.as_ref().filter(|_| self.life.shown()) else {
             self.files = FileDrop::default();
@@ -139,6 +141,11 @@ impl Host {
                 if self.win.as_ref().is_some_and(Win::paced) {
                     self.redraw();
                     self.shell(event_loop);
+                } else {
+                    #[cfg(target_os = "macos")]
+                    if let Some(w) = &mut self.win {
+                        w.stop_expired_pacing();
+                    }
                 }
             }
             WakeEvent::Live(_) => {
@@ -177,7 +184,7 @@ impl Host {
             WakeEvent::GpuReady(_) => self.gpu_ready(),
             #[cfg(not(any(target_os = "windows", target_os = "linux")))]
             WakeEvent::GpuReady(_) => {}
-            WakeEvent::Reopen | WakeEvent::Turn | WakeEvent::Quit(_) => {}
+            WakeEvent::Reopen | WakeEvent::Turn | WakeEvent::Quit(_) | WakeEvent::FileDrop | WakeEvent::LayerPending => {}
         }
     }
 
@@ -236,6 +243,12 @@ impl Host {
         if !matches!(event, WindowEvent::RedrawRequested | WindowEvent::CursorMoved { .. }) && let Some(w) = &mut self.win {
             w.timer_frame.no_longer_quiet();
             w.loop_frame.touched();
+        }
+        #[cfg(target_os = "windows")]
+        if matches!(event, WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. })
+            && let Some(w) = &mut self.win
+        {
+            let _ = w.native.poll_pace.step(crate::window::poll_pace::PollPaceEvent::DisplayChanged);
         }
         #[cfg(target_os = "macos")]
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } | WindowEvent::Occluded(_))
@@ -532,7 +545,18 @@ impl Host {
                 l.request_redraw();
             }
             WindowEvent::Touch(touch) => {
+                #[cfg(target_os = "macos")]
+                if touch.phase == winit::event::TouchPhase::Started {
+                    app.rt_mut().set_native_titlebar_band(mac::native_titlebar_band(&l.window));
+                }
                 app.touch(&touch);
+                match app.rt_mut().take_titlebar_action() {
+                    Some(TitlebarAction::Drag) => {
+                        l.window.drag_window().ok();
+                    }
+                    Some(TitlebarAction::DoubleClick) => titlebar_double_click(&l.window),
+                    None => {}
+                }
                 l.request_redraw();
             }
             WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
@@ -649,6 +673,8 @@ impl Host {
         // AppKit paints off its own display link; elsewhere a paint holds what it asks for.
         #[cfg(not(target_os = "macos"))]
         if let Some(l) = &self.win { l.redraw_step(RedrawEvent::Paint); }
+        #[cfg(target_os = "macos")]
+        let satisfied = self.win.as_ref().is_some_and(Win::take_redraw_on_paint);
         // A new accent, scroller style, light/dark or reduced-motion preference asks every window
         // to redraw.
         {
@@ -664,6 +690,16 @@ impl Host {
         #[cfg(target_os = "macos")]
         if let Some(l) = self.win.as_ref().filter(|l| l.native.full_screen.take()) {
             sync_chrome_core(self.app.rt_mut(), l, self.chrome, self.titlebar);
+        }
+        // A `DisplayTick` that already drew and settled the queued work leaves a stale
+        // `RedrawRequested` in winit's queue. Skip it while resting with nothing changed so it
+        // cannot bump a coasting display link back to `Active` for a duplicate frame.
+        #[cfg(target_os = "macos")]
+        if satisfied && self.win.as_ref().is_some_and(|l| l.presented.is_some()) {
+            let rt = self.app.rt();
+            if !rt.stale() && !rt.live_pending() && !rt.has_pending_input() && rt.host.window_frame.is_none() {
+                return;
+            }
         }
         // The window procedure asks for this paint when a caption button's hover or
         // press changes.

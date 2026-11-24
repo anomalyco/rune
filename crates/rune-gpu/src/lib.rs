@@ -6,9 +6,12 @@
 
 pub mod backend;
 pub mod configure;
+pub mod fallback;
 pub mod health;
 #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
 pub mod metal;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod naga_override_tests;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pick;
 pub mod springs;

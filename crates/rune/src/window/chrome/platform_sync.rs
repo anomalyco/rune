@@ -19,7 +19,20 @@ pub(in crate::window) fn sync_platform_core(l: &mut Win, rt: &mut RuntimeCore, s
     }
     // The process has one menu theme: the active window's, so its window menu matches it.
     #[cfg(target_os = "windows")]
-    if focused { crate::platform::win32::dark_mode::menus(rt.backdrop_dark().unwrap_or(rt.env.system_dark)); }
+    {
+        if focused { crate::platform::win32::dark_mode::menus(rt.backdrop_dark().unwrap_or(rt.env.system_dark)); }
+        let fullscreen = l.window.fullscreen().is_some();
+        if l.native.drag_sync.needs_update(rt.commit_generation(), rt.zoom(), fullscreen, rt.animating) {
+            let hits = if fullscreen { Vec::new() } else { rt.window_drag_hits() };
+            if let Some(frame) = &l.native.frame {
+                frame.set_drag_hits(hits);
+            } else if let Some(regions) = &l.native.drag_regions {
+                regions.set(hits);
+            } else if !hits.is_empty() {
+                l.native.drag_regions = crate::platform::win32::DragRegions::install(&l.window, hits);
+            }
+        }
+    }
     clipboard.flush_core(rt);
     if !ime_waits { host_events::sync_ime(&l.window, rt, ime, focused); }
 }

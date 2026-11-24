@@ -16,7 +16,9 @@ python3 scripts/motion-audit/test_analyze.py        # analyze.py on synthetic tr
 motion-lint JSONL, and every trace now says why each frame animated (`quality.why`) and which
 tracks it sampled (`tk`: `[element id or path, property, active]`; inactive means settling).
 It also says how far scrolling carries each element when that changes (`sc`: `[id, x, y]` in
-window points, scaled and turned as its rect is). The motion checks (overshoot, jiggle, reversal, stall, dog-leg) add it back, so a node
+window points, scaled and turned as its rect is), and which `El::matched` pairs handed over on
+that frame (`handover`: `[{"from": id, "to": id, "from_rect": [x, y, w, h], "to_rect": [x, y, w, h]}]`).
+The motion checks (overshoot, jiggle, reversal, stall, dog-leg) add `sc` back, so a node
 gliding inside a list that follows its end is judged against the list, not the screen.
 
 `analyze.py` reports, per trace:
@@ -25,7 +27,8 @@ gliding inside a list that follows its end is judged against the list, not the s
 | --- | --- |
 | `invisible-work` | tracks sampled on an element that is transparent, off-window, clipped or occluded |
 | `idle-frames`, `never-settles` | frames that animate with no visible change; motion still running at the end |
-| `pop-in`, `pop-out` | an element appears or disappears at full opacity and size with no transition |
+| `pop-in`, `pop-out` | an element appears or disappears at full opacity and size with no transition (paired `El::matched` handovers that hand off on the same frame, rect and opacity are excluded) |
+| `bad-handover` | a recorded `El::matched` handover whose target was not born on the same frame, within 2 pt of the source's last drawn rect, or at its opacity |
 | `appear-then-jump` | mounts in one place, then moves there in a frame |
 | `jump`, `step`, `sibling-jump` | a one-frame change in position or size, on its own or next to something animating, seen on both frames and in what shows: the visible part in the window moves, or what the element holds that shows moves with it, or it brings what it holds into view with no input (a scroll offset that lands in one frame with nothing asking for it; a loop wrapping while transparent or clipped, or a fold dropping rows above the window with the scroll offset, is not one) |
 | `overshoot`, `jiggle` | passes its target, or reverses direction more than once |

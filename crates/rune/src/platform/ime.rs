@@ -161,6 +161,29 @@ pub(crate) fn cancel(window: &winit::window::Window) {
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub(crate) fn cancel(_window: &winit::window::Window) {}
 
+/// Whether a Windows primary language ID (`PRIMARYLANGID(LOWORD(hkl))`) belongs to a
+/// right-to-left keyboard layout, matching Chrome's `IsRTLPrimaryLangID`
+/// (`ui/base/ime/win/input_method_win_base.cc`).
+#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+pub(crate) fn is_rtl_primary_lang_id(lang: u16) -> bool {
+    const LANG_ARABIC: u16 = 0x01;
+    const LANG_HEBREW: u16 = 0x0d;
+    const LANG_URDU: u16 = 0x20;
+    const LANG_PERSIAN: u16 = 0x29;
+    const LANG_SYRIAC: u16 = 0x5a;
+    const LANG_UIGHUR: u16 = 0x80;
+    matches!(lang, LANG_ARABIC | LANG_HEBREW | LANG_URDU | LANG_PERSIAN | LANG_SYRIAC | LANG_UIGHUR)
+}
+
+/// Whether the system has a right-to-left keyboard layout installed (Windows only, matching
+/// Chrome's `IsRTLKeyboardLayoutInstalled`). Always false on other platforms.
+pub(crate) fn has_rtl_keyboard_layout() -> bool {
+    #[cfg(target_os = "windows")]
+    { windows::has_rtl_keyboard_layout() }
+    #[cfg(not(target_os = "windows"))]
+    { false }
+}
+
 #[cfg(test)]
 #[path = "ime_tests.rs"]
 mod tests;

@@ -2,7 +2,9 @@
 
 use std::sync::{Arc, atomic::AtomicBool};
 
-use super::{Renderer, gpu_events, prewarm};
+#[cfg(all(test, target_os = "macos"))]
+use super::{Renderer, gpu_events};
+use super::prewarm;
 
 pub struct Gpu {
     pub instance: wgpu::Instance,
@@ -56,48 +58,91 @@ impl Gpu {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn try_picked(instance: wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, wanted: wgpu::Features, translucent: bool, presented: bool) -> Result<Gpu, String> {
+        use crate::gpu::fallback::{self, Candidate, Effect, Event, Failure, State};
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
         // D3D12 keeps one device per adapter in a process: while a removed one is still held, a
         // new device on that adapter is the removed one again.
         crate::native_surface::release_removed_device();
         let pick = crate::gpu::pick::pick(&instance, surface, presented)?;
-        let named = pick.reason == crate::gpu::pick::Reason::EnvName;
+        let policy = pick.policy();
+        let compositor = pick.compositor().map(str::to_owned);
         crate::marks::mark("gpu.adapter");
         if !crate::marks::noted("adapter") { crate::marks::note("adapter", Box::leak(pick.adapter.get_info().name.into_boxed_str())); }
         let adapter = match surface {
             Some(s) if translucent && !pick.from_env() => crate::render::translucency::prefer(&instance, s, &pick),
             _ => pick.adapter,
         };
-        match Self::device_on(&adapter, wanted) {
+        let draws_surfaces = surface.is_some() || presented;
+        let first_info = adapter.get_info();
+        let first_candidate = Self::candidate_info(0, &adapter, surface);
+        let mut state = State::first(policy);
+        let mut event = match Self::device_on(&adapter, wanted) {
             Ok((device, queue)) => {
                 crate::marks::mark("gpu.device");
-                crate::native_surface::note_device(&device, surface.is_some() || presented);
-                Ok(Gpu::made(instance, adapter, device, queue, surface.is_some() || presented))
+                crate::native_surface::note_device(&device, draws_surfaces);
+                return Ok(Gpu::made(instance, adapter, device, queue, draws_surfaces));
             }
-            // A named adapter (`WGPU_ADAPTER_NAME`) never falls through to another GPU.
-            Err(error) if named => Err(error),
-            // A driver that can't make a device (a broken integrated GPU on a hybrid laptop)
-            // leaves the window to the next adapter that presents to its surface.
-            Err(error) => {
-                let first = adapter.get_info();
-                let others = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()))
-                    .into_iter()
-                    .filter(|other| {
-                        let info = other.get_info();
-                        (info.name != first.name || info.backend != first.backend)
-                            && surface.is_none_or(|s| other.is_surface_supported(s))
-                            && (!translucent || surface.is_none_or(|s| crate::render::translucency::mode(s, other).is_some()))
-                    });
-                for other in others {
-                    if let Ok((device, queue)) = Self::device_on(&other, wanted) {
-                        eprintln!("rune: {} ({:?}) made no device ({error}); using {}", first.name, first.backend, other.get_info().name);
-                        crate::native_surface::note_device(&device, surface.is_some() || presented);
-                        return Ok(Gpu::made(instance, other, device, queue, surface.is_some() || presented));
+            Err(error) => Event::Failed { kind: Failure::DeviceCreate, error },
+        };
+        let mut adapters: Vec<wgpu::Adapter> = Vec::new();
+        loop {
+            let mut next_event = None;
+            for effect in fallback::step(&mut state, event) {
+                match effect {
+                    Effect::EnumerateFallbacks => {
+                        adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
+                        let candidates: Vec<Candidate> = adapters
+                            .iter()
+                            .enumerate()
+                            .map(|(i, other)| Self::candidate_info(i, other, surface))
+                            .collect();
+                        let ordered = fallback::order_fallbacks(
+                            std::slice::from_ref(&first_candidate),
+                            &candidates,
+                            &crate::gpu::pick::display_devices(),
+                            compositor.as_deref(),
+                            translucent,
+                        );
+                        next_event = Some(Event::Candidates(ordered));
                     }
+                    Effect::TryCandidate(index) => {
+                        let other = &adapters[index];
+                        match Self::device_on(other, wanted) {
+                            Ok((device, queue)) => {
+                                let info = other.get_info();
+                                let first_error = state.first_error().unwrap_or("");
+                                eprintln!(
+                                    "rune: {} ({:?}) made no device ({first_error}); falling back to {} ({:?}, {:?})",
+                                    first_info.name, first_info.backend, info.name, info.backend, info.device_type
+                                );
+                                crate::native_surface::note_device(&device, draws_surfaces);
+                                return Ok(Gpu::made(instance, other.clone(), device, queue, draws_surfaces));
+                            }
+                            Err(error) => {
+                                next_event = Some(Event::Failed { kind: Failure::DeviceCreate, error });
+                            }
+                        }
+                    }
+                    Effect::FinishOk { .. } => unreachable!("returned on Ok above"),
+                    Effect::FinishErr(error) => return Err(error),
                 }
-                Err(error)
             }
+            event = next_event.expect("fallback state machine must emit an effect");
         }
+    }
+
+    pub(crate) fn candidate_info(index: usize, adapter: &wgpu::Adapter, surface: Option<&wgpu::Surface<'_>>) -> crate::gpu::fallback::Candidate {
+        let info = adapter.get_info();
+        let supported = surface.is_none_or(|s| adapter.is_surface_supported(s));
+        let translucent = surface.is_none_or(|s| crate::render::translucency::mode(s, adapter).is_some());
+        crate::gpu::fallback::Candidate::from_info(index, &info, supported, translucent)
+    }
+
+    pub(crate) fn env_fallback_policy() -> crate::gpu::fallback::Policy {
+        #[cfg(not(target_arch = "wasm32"))]
+        { crate::gpu::pick::env_policy() }
+        #[cfg(target_arch = "wasm32")]
+        { crate::gpu::fallback::Policy::Pinned }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -300,13 +345,13 @@ impl Gpu {
     /// surface and has `wanted`'s features; otherwise a new device on the same instance, so the
     /// window never gets a second surface.
     /// A `translucent` surface gets an adapter that composites translucent pixels when any can.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg(all(test, target_os = "macos"))]
     pub(crate) fn for_surface<'w>(wanted: wgpu::Features, translucent: bool,
         surface: impl FnOnce(&wgpu::Instance) -> Result<wgpu::Surface<'w>, String>) -> Result<(Gpu, wgpu::Surface<'w>, Option<Renderer>), String> {
         Self::for_surface_from(prewarm::take(), wanted, translucent, surface)
     }
 
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg(all(test, target_os = "macos"))]
     pub(super) fn for_surface_from<'w>(early: Option<(Gpu, Renderer)>, wanted: wgpu::Features, translucent: bool,
         surface: impl FnOnce(&wgpu::Instance) -> Result<wgpu::Surface<'w>, String>) -> Result<(Gpu, wgpu::Surface<'w>, Option<Renderer>), String> {
         let made = Self::surface_gpu_from(early, wanted, translucent, surface)?;
@@ -316,7 +361,7 @@ impl Gpu {
         Ok(made)
     }
 
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg(all(test, target_os = "macos"))]
     fn surface_gpu_from<'w>(early: Option<(Gpu, Renderer)>, wanted: wgpu::Features, translucent: bool,
         surface: impl FnOnce(&wgpu::Instance) -> Result<wgpu::Surface<'w>, String>) -> Result<(Gpu, wgpu::Surface<'w>, Option<Renderer>), String> {
         // A prewarmed native Metal GPU lacking a wanted feature, or one that died since it was
@@ -336,8 +381,43 @@ impl Gpu {
         gpu_events::starting();
         Ok((Self::try_for(instance, Some(&surface), wanted, translucent)?, surface, None))
     }
-}
 
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn pick_first_adapter(
+        instance: &wgpu::Instance,
+        surface: Option<&wgpu::Surface<'_>>,
+        policy_override: Option<crate::gpu::fallback::Policy>,
+        translucent: bool,
+    ) -> Result<(wgpu::Adapter, crate::gpu::fallback::Policy, Option<String>), super::SurfaceSetupError> {
+        let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
+        crate::native_surface::release_removed_device();
+        let pick = crate::gpu::pick::pick(instance, surface, false)
+            .map_err(|message| super::SurfaceSetupError { kind: crate::gpu::fallback::Failure::DeviceCreate, message })?;
+        let policy = policy_override.unwrap_or_else(|| pick.policy());
+        let compositor = pick.compositor().map(str::to_owned);
+        crate::marks::mark("gpu.adapter");
+        if !crate::marks::noted("adapter") {
+            crate::marks::note("adapter", Box::leak(pick.adapter.get_info().name.into_boxed_str()));
+        }
+        let adapter = match surface {
+            Some(s) if translucent && !pick.from_env() => crate::render::translucency::prefer(instance, s, &pick),
+            _ => pick.adapter,
+        };
+        Ok((adapter, policy, compositor))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn create_device_serialized(adapter: &wgpu::Adapter, wanted: wgpu::Features) -> Result<(wgpu::Device, wgpu::Queue), String> {
+        let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
+        Self::device_on(adapter, wanted)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn enumerate_adapters_serialized(instance: &wgpu::Instance) -> Vec<wgpu::Adapter> {
+        let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
+        pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()))
+    }
+}
 /// Starts the GPU device and Rune's render pipeline on a thread, so they're ready when the first
 /// window opens instead of being made after AppKit starts, which is most of a first launch after
 /// an install or update (when Metal compiles the shaders). Call it first thing in `main`; Rune's

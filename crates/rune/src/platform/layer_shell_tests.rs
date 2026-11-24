@@ -239,16 +239,17 @@ fn xkb_compose_table_is_cached_per_locale_and_states_reset_independently() {
 
 #[test]
 #[allow(unsafe_code)]
-fn wayland_watch_wakes_for_prequeued_and_concurrent_reads_and_stops_cleanly() -> std::io::Result<()> {
-    use std::io::Write;
-    use std::os::fd::AsRawFd;
+fn has_pending_events_tracks_foreign_queue_until_dispatched_and_false_when_closed() -> std::io::Result<()> {
+    use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Condvar, Mutex};
-    use std::time::{Duration, Instant};
+    use std::ptr::NonNull;
     use wayland_backend::client::Backend;
     use wayland_client::protocol::wl_callback::{self, WlCallback};
     use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
+    use winit::raw_window_handle::{RawDisplayHandle, WaylandDisplayHandle};
+    use crate::el::Align;
+    use crate::overlay::{Placement, ScreenEdge};
+    use crate::OverlayOptions;
 
     #[derive(Default)]
     struct CbState(usize);
@@ -258,132 +259,166 @@ fn wayland_watch_wakes_for_prequeued_and_concurrent_reads_and_stops_cleanly() ->
         }
     }
 
-    fn send_callback_done(server: &mut UnixStream, id: u32, serial: u32) -> std::io::Result<()> {
-        let mut msg = [0u8; 12];
-        msg[0..4].copy_from_slice(&id.to_ne_bytes());
-        msg[4..8].copy_from_slice(&((12u32 << 16) | 0u32).to_ne_bytes());
-        msg[8..12].copy_from_slice(&serial.to_ne_bytes());
-        server.write_all(&msg)
+    fn push_u32(buf: &mut Vec<u8>, v: u32) {
+        buf.extend_from_slice(&v.to_ne_bytes());
     }
-
-    fn make_waker() -> (Arc<(Mutex<usize>, Condvar)>, crate::runtime::Waker) {
-        let wakes = Arc::new((Mutex::new(0usize), Condvar::new()));
-        let w = wakes.clone();
-        let wake: crate::runtime::Waker = Arc::new(move || {
-            let (lock, cond) = &*w;
-            *lock.lock().unwrap() += 1;
-            cond.notify_all();
+    fn push_str(buf: &mut Vec<u8>, s: &str) {
+        let bytes = s.as_bytes();
+        push_u32(buf, (bytes.len() + 1) as u32);
+        buf.extend_from_slice(bytes);
+        buf.push(0);
+        while buf.len() % 4 != 0 {
+            buf.push(0);
+        }
+    }
+    fn send_msg(stream: &mut UnixStream, sender_id: u32, opcode: u16, payload: &[u8]) -> std::io::Result<()> {
+        let total = 8 + payload.len();
+        let mut msg = Vec::with_capacity(total);
+        push_u32(&mut msg, sender_id);
+        push_u32(&mut msg, ((total as u32) << 16) | u32::from(opcode));
+        msg.extend_from_slice(payload);
+        stream.write_all(&msg)
+    }
+    fn u32_at(buf: &[u8], offset: usize) -> u32 {
+        u32::from_ne_bytes([buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]])
+    }
+    fn host_read_once(host: &Connection) {
+        let guard = host.prepare_read().or_else(|| {
+            host.backend().dispatch_inner_queue().ok();
+            host.prepare_read()
         });
-        (wakes, wake)
-    }
-
-    fn wait_wakes(wakes: &(Mutex<usize>, Condvar), target: usize) -> bool {
-        let (lock, cond) = wakes;
-        let guard = lock.lock().unwrap();
-        let (guard, _) = cond.wait_timeout_while(guard, Duration::from_secs(2), |n| *n < target).unwrap();
-        *guard >= target
-    }
-
-    // 1. Events another reader already moved off the socket into the layer's queue wake the
-    //    watch immediately, and dropping the watch while blocked in poll finishes promptly.
-    {
-        let (client, mut server) = UnixStream::pair()?;
-        let Ok(host) = Connection::from_socket(client) else { return Ok(()); };
-        // SAFETY: `host` owns the `wl_display` and outlives `guest` and `watch`.
-        let guest = Connection::from_backend(unsafe { Backend::from_foreign_display(host.backend().display_ptr()) });
-        let mut guest_queue = guest.new_event_queue::<CbState>();
-        let cb = guest.display().sync(&guest_queue.handle(), ());
-        send_callback_done(&mut server, cb.id().protocol_id(), 1)?;
-        if let Some(guard) = host.prepare_read() {
+        if let Some(guard) = guard {
             let _ = guard.read();
         }
-
-        let (wakes, wake) = make_waker();
-        let watch = super::WaylandWatch::spawn(guest.clone(), wake).expect("spawn wayland watch");
-        assert!(wait_wakes(&wakes, 1), "pre-queued layer event must wake the loop");
-        let mut state = CbState::default();
-        guest_queue.dispatch_pending(&mut state).expect("dispatch guest queue");
-        assert_eq!(state.0, 1);
-        watch.turned();
-
-        let started = Instant::now();
-        drop(watch);
-        assert!(started.elapsed() < Duration::from_secs(1), "drop during poll must not stall");
     }
 
-    // 2. While a sibling thread continuously reads the shared display (as winit does), layer
-    //    events still wake the watch, the sibling reader never stalls while the watch waits for a
-    //    turn, and dropping the watch during that wait returns promptly.
+    // 1. A host Connection reading an event into a foreign guest queue makes
+    //    `guest_queue.prepare_read().is_none()` true until `dispatch_pending` drains it, and
+    //    checking an empty queue drops the guard without blocking the host's next read.
     {
         let (client, mut server) = UnixStream::pair()?;
         let Ok(host) = Connection::from_socket(client) else { return Ok(()); };
-        let mut host_queue = host.new_event_queue::<CbState>();
-        // SAFETY: `host` owns the `wl_display` and outlives `guest`, `watch` and `reader`.
+        // SAFETY: `host` owns the `wl_display` and outlives `guest`.
         let guest = Connection::from_backend(unsafe { Backend::from_foreign_display(host.backend().display_ptr()) });
+        let mut host_queue = host.new_event_queue::<CbState>();
         let mut guest_queue = guest.new_event_queue::<CbState>();
 
-        let stop_reader = Arc::new(AtomicBool::new(false));
-        let reader_stop = stop_reader.clone();
-        let reader_host = host.clone();
-        let reader = std::thread::spawn(move || {
-            while !reader_stop.load(Ordering::Relaxed) {
-                let Some(guard) = reader_host.prepare_read() else {
-                    let _ = reader_host.backend().dispatch_inner_queue();
-                    continue;
-                };
-                let mut pfd = libc::pollfd { fd: guard.connection_fd().as_raw_fd(), events: libc::POLLIN, revents: 0 };
-                // SAFETY: `pfd.fd` is the live Wayland socket borrowed by `guard`.
-                let ret = unsafe { libc::poll(&mut pfd, 1, 10) };
-                if ret > 0 && pfd.revents & libc::POLLIN != 0 {
-                    let _ = guard.read();
-                } else {
-                    drop(guard);
+        assert!(guest_queue.prepare_read().is_some(), "empty foreign queue has no pending events");
+
+        let guest_cb = guest.display().sync(&guest_queue.handle(), ());
+        send_msg(&mut server, guest_cb.id().protocol_id(), 0, &1u32.to_ne_bytes())?;
+        host_read_once(&host);
+
+        assert!(guest_queue.prepare_read().is_none(), "host read into foreign queue must mark events pending");
+
+        let mut guest_state = CbState::default();
+        guest_queue.dispatch_pending(&mut guest_state).expect("dispatch guest queue");
+        assert_eq!(guest_state.0, 1);
+        assert!(guest_queue.prepare_read().is_some(), "drained foreign queue must report no pending events");
+
+        // Checking the drained queue immediately cancelled its read guard, so the host's next
+        // read completes without blocking.
+        let host_cb = host.display().sync(&host_queue.handle(), ());
+        send_msg(&mut server, host_cb.id().protocol_id(), 0, &2u32.to_ne_bytes())?;
+        host_read_once(&host);
+        let mut host_state = CbState::default();
+        host_queue.dispatch_pending(&mut host_state).expect("dispatch host queue");
+        assert_eq!(host_state.0, 1);
+    }
+
+    // 2. End-to-end `LayerSurface::has_pending_events` and `is_live` over a mock compositor:
+    //    false when idle, true after a host read queues an event until `dispatch` drains it,
+    //    and false once the compositor closes the surface even if another event is queued.
+    {
+        let (client, mut server) = UnixStream::pair()?;
+        let mut server_tx = server.try_clone()?;
+        let server_thread = std::thread::spawn(move || {
+            let mut registry_id = 0u32;
+            let mut shell_id = 0u32;
+            let mut header = [0u8; 8];
+            while server.read_exact(&mut header).is_ok() {
+                let sender_id = u32_at(&header, 0);
+                let word1 = u32_at(&header, 4);
+                let size = (word1 >> 16) as usize;
+                let opcode = (word1 & 0xffff) as u16;
+                if size < 8 { break; }
+                let mut payload = vec![0u8; size - 8];
+                if server.read_exact(&mut payload).is_err() { break; }
+                if sender_id == 1 && opcode == 1 && payload.len() >= 4 {
+                    registry_id = u32_at(&payload, 0);
+                    let mut p1 = Vec::new();
+                    push_u32(&mut p1, 1);
+                    push_str(&mut p1, "wl_compositor");
+                    push_u32(&mut p1, 6);
+                    if send_msg(&mut server, registry_id, 0, &p1).is_err() { break; }
+                    let mut p2 = Vec::new();
+                    push_u32(&mut p2, 2);
+                    push_str(&mut p2, "zwlr_layer_shell_v1");
+                    push_u32(&mut p2, 4);
+                    if send_msg(&mut server, registry_id, 0, &p2).is_err() { break; }
+                } else if sender_id == 1 && opcode == 0 && payload.len() >= 4 {
+                    let cb_id = u32_at(&payload, 0);
+                    if send_msg(&mut server, cb_id, 0, &0u32.to_ne_bytes()).is_err() { break; }
+                } else if sender_id == registry_id && registry_id != 0 && opcode == 0 && payload.len() >= 8 {
+                    let name = u32_at(&payload, 0);
+                    let str_len = u32_at(&payload, 4) as usize;
+                    let str_padded = (str_len + 3) & !3;
+                    let new_id_off = 8 + str_padded + 4;
+                    if name == 2 && payload.len() >= new_id_off + 4 {
+                        shell_id = u32_at(&payload, new_id_off);
+                    }
+                } else if sender_id == shell_id && shell_id != 0 && opcode == 0 && payload.len() >= 4 {
+                    let layer_id = u32_at(&payload, 0);
+                    let mut cfg = Vec::new();
+                    push_u32(&mut cfg, 1);
+                    push_u32(&mut cfg, 200);
+                    push_u32(&mut cfg, 100);
+                    if send_msg(&mut server, layer_id, 0, &cfg).is_err() { break; }
                 }
             }
         });
 
-        let (wakes, wake) = make_waker();
-        let watch = super::WaylandWatch::spawn(guest.clone(), wake).expect("spawn wayland watch");
-        let guest_cb = guest.display().sync(&guest_queue.handle(), ());
-        send_callback_done(&mut server, guest_cb.id().protocol_id(), 2)?;
-        assert!(wait_wakes(&wakes, 1), "concurrent reader must not strand layer event");
-
-        // Watch is now waiting for `turned()` with no read guard held; host reads must proceed.
-        let host_cb = host.display().sync(&host_queue.handle(), ());
-        send_callback_done(&mut server, host_cb.id().protocol_id(), 3)?;
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let mut host_state = CbState::default();
-        while host_state.0 == 0 && Instant::now() < deadline {
-            host_queue.dispatch_pending(&mut host_state).expect("dispatch host queue");
-            if host_state.0 == 0 {
-                std::thread::sleep(Duration::from_millis(2));
-            }
-        }
-        assert_eq!(host_state.0, 1, "host reads must not wait while layer watch waits for a turn");
-
-        let started = Instant::now();
-        drop(watch);
-        assert!(started.elapsed() < Duration::from_secs(1), "drop during turn wait must not stall");
-        let mut guest_state = CbState::default();
-        guest_queue.dispatch_pending(&mut guest_state).expect("dispatch guest queue");
-        assert_eq!(guest_state.0, 1);
-
-        stop_reader.store(true, Ordering::Relaxed);
-        reader.join().expect("join sibling reader");
-    }
-
-    // 3. Compositor hangup exits the watch loop cleanly without stalling drop.
-    {
-        let (client, server) = UnixStream::pair()?;
         let Ok(host) = Connection::from_socket(client) else { return Ok(()); };
-        // SAFETY: `host` owns the `wl_display` and outlives `guest` and `watch`.
-        let guest = Connection::from_backend(unsafe { Backend::from_foreign_display(host.backend().display_ptr()) });
-        let (_wakes, wake) = make_waker();
-        let watch = super::WaylandWatch::spawn(guest, wake).expect("spawn wayland watch");
-        drop(server);
-        let started = Instant::now();
-        drop(watch);
-        assert!(started.elapsed() < Duration::from_secs(1), "drop after hangup must not stall");
+        let display = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
+            NonNull::new(host.display().id().as_ptr().cast()).unwrap(),
+        ));
+        let placement = Placement { size: (200.0, 100.0), edge: ScreenEdge::Top, margin: 0.0, align: Align::Start, inset: 0.0 };
+        let options = OverlayOptions::default();
+        let mut layer = super::LayerSurface::new(display, "test-pending", placement, false, &options, None)
+            .expect("configured layer surface");
+
+        assert!(layer.is_live());
+        assert!(!layer.has_pending_events(), "idle layer surface must report no pending events");
+
+        // Host reads a wl_surface.preferred_buffer_scale event into the layer's foreign queue.
+        let surface_proto_id = layer.surface.id().protocol_id();
+        send_msg(&mut server_tx, surface_proto_id, 2, &2u32.to_ne_bytes())?;
+        host_read_once(&host);
+        assert!(layer.has_pending_events(), "queued event must make has_pending_events return true");
+
+        let changes = layer.dispatch();
+        assert_eq!(changes.scale, Some(2));
+        assert!(!layer.has_pending_events(), "dispatch must clear pending events");
+
+        // Compositor closes the layer surface (zwlr_layer_surface_v1.closed opcode 1).
+        let layer_proto_id = layer.layer.id().protocol_id();
+        send_msg(&mut server_tx, layer_proto_id, 1, &[])?;
+        host_read_once(&host);
+        assert!(layer.has_pending_events());
+        let changes = layer.dispatch();
+        assert!(changes.closed);
+        assert!(!layer.is_live());
+        assert!(!layer.has_pending_events(), "closed surface must never report pending events");
+
+        // Even if another event lands in the queue after close, has_pending_events stays false.
+        send_msg(&mut server_tx, surface_proto_id, 2, &3u32.to_ne_bytes())?;
+        host_read_once(&host);
+        assert!(!layer.has_pending_events());
+
+        drop(layer);
+        drop(host);
+        drop(server_tx);
+        server_thread.join().unwrap();
     }
     Ok(())
 }
@@ -534,7 +569,7 @@ fn drop_destroys_all_proxies_and_drains_queued_events_so_event_queue_does_not_le
         let display = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
             NonNull::new(host.display().id().as_ptr().cast()).unwrap(),
         ));
-        let mut layer = super::LayerSurface::new(display, "test-queued", placement, false, &options, None, None)
+        let mut layer = super::LayerSurface::new(display, "test-queued", placement, false, &options, None)
             .expect("configured layer surface");
         let conn_probe = layer.conn.clone();
 
@@ -608,7 +643,7 @@ fn drop_destroys_all_proxies_and_drains_queued_events_so_event_queue_does_not_le
         let display = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
             NonNull::new(host.display().id().as_ptr().cast()).unwrap(),
         ));
-        let mut layer = super::LayerSurface::new(display, "test-pending-cb", placement, false, &options, None, None)
+        let mut layer = super::LayerSurface::new(display, "test-pending-cb", placement, false, &options, None)
             .expect("configured layer surface");
         let conn_probe = layer.conn.clone();
         layer.request_frame();

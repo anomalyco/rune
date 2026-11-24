@@ -269,8 +269,7 @@ impl OverlayCore {
             DisplayTarget::Native(crate::NativeDisplayId::Wayland(id)) if event_loop.available_monitors().any(|m| m.native_id() == *id) => Some(*id),
             _ => None,
         };
-        let wake = self.shared.wake.lock().unwrap().clone();
-        let mut layer = crate::platform::layer_shell::LayerSurface::new(display, self.name, self.at, self.interactive, &self.options, output, wake)?;
+        let mut layer = crate::platform::layer_shell::LayerSurface::new(display, self.name, self.at, self.interactive, &self.options, output)?;
         layer.set_buffer_scale(scale);
         if let Some((w, h)) = layer.configured_size() {
             if w > 0 { self.at.size.0 = w as f32; }

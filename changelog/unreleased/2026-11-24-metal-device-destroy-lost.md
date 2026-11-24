@@ -1,0 +1,1 @@
+- Native Metal backend (`metal-backend`): `Device::destroy` now marks the device lost with `DeviceLostReason::Destroyed`, fires `set_device_lost_callback` once, and fails subsequent buffer mappings to match wgpu and WebGPU.

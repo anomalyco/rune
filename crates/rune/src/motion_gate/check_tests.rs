@@ -257,3 +257,67 @@ fn a_jump_is_what_shows_jumping() {
     let row = |y: f32| (0..60).map(|k| at(k, [0.0, y, 100.0, 40.0], [0.0, y + 100.0, 100.0, 40.0])).collect::<Vec<_>>();
     assert_eq!(kinds(&scrolled_list(vec![("list", content), ("list/a", row(0.0)), ("list/b", row(100.0)), ("list/c", row(200.0))])), ["offset-jump"]);
 }
+
+#[test]
+fn matched_handover_pairs_source_and_target_and_rejects_broken_or_unrecorded_remounts() {
+    let smooth = |from: [f32; 4], to: [f32; 4], start: usize, len: usize| -> Vec<(usize, [f32; 4], f32)> {
+        (0..len).map(|j| {
+            let t = (j + 1) as f32 / 8.0;
+            let p = 1.0 - (1.0 + t) * (-t).exp();
+            let rect = std::array::from_fn(|a| from[a] + (to[a] - from[a]) * p);
+            (start + j, rect, 1.0)
+        }).collect()
+    };
+    let src_rect = [180.0, 115.0, 50.0, 25.0];
+    let dst_end = [120.0, 20.0, 160.0, 80.0];
+    let before: Vec<_> = (0..30).map(|k| (k, src_rect, 1.0)).collect();
+    let after = smooth(src_rect, dst_end, 30, 30);
+
+    // 1. Clean morphing handover (like matched-zoom): 0 findings.
+    let mut r = rec(vec![("board/card", before.clone()), ("card", after.clone())], 60);
+    r.handover(30, "board/card", "card", src_rect, after[0].1);
+    assert!(kinds(&r).is_empty(), "clean morphing handover: {:?}", check(&r));
+
+    // 2. Clean same-size flight: no pop-out, pop-in, or appear-then-jump.
+    let same_end = [260.0, 115.0, 50.0, 25.0];
+    let same_after = smooth(src_rect, same_end, 30, 30);
+    let mut r = rec(vec![("left/card", before.clone()), ("right/card", same_after.clone())], 60);
+    r.handover(30, "left/card", "right/card", src_rect, same_after[0].1);
+    assert!(kinds(&r).is_empty(), "clean same-size handover: {:?}", check(&r));
+
+    // 3. Handover with target one frame late: bad-handover (and pop-out).
+    let late = smooth(src_rect, dst_end, 31, 29);
+    let mut r = rec(vec![("board/card", before.clone()), ("card", late.clone())], 60);
+    r.handover(30, "board/card", "card", src_rect, late[0].1);
+    let ks = kinds(&r);
+    assert!(ks.contains(&"bad-handover"), "late target must report bad-handover: {ks:?}");
+    assert!(ks.contains(&"pop-out"), "late target must not excuse pop-out: {ks:?}");
+
+    // 4. Handover with target already mounted (early): bad-handover.
+    let mut early = vec![(29, src_rect, 1.0)];
+    early.extend(after.iter().copied());
+    let mut r = rec(vec![("board/card", before.clone()), ("card", early)], 60);
+    r.handover(30, "board/card", "card", src_rect, after[0].1);
+    assert!(kinds(&r).contains(&"bad-handover"), "early target: {:?}", check(&r));
+
+    // 5. Handover to a rect 5 px away: bad-handover.
+    let shifted_start = [185.0, 115.0, 50.0, 25.0];
+    let shifted = smooth(shifted_start, dst_end, 30, 30);
+    let mut r = rec(vec![("board/card", before.clone()), ("card", shifted.clone())], 60);
+    r.handover(30, "board/card", "card", src_rect, shifted[0].1);
+    assert!(kinds(&r).contains(&"bad-handover"), "5 px jump: {:?}", check(&r));
+
+    // 6. Handover with mismatched opacity: bad-handover.
+    let mut dim = after.clone();
+    dim[0].2 = 0.5;
+    let mut r = rec(vec![("board/card", before.clone()), ("card", dim)], 60);
+    r.handover(30, "board/card", "card", src_rect, after[0].1);
+    assert!(kinds(&r).contains(&"bad-handover"), "opacity mismatch: {:?}", check(&r));
+
+    // 7. Plain remount with no recorded handover: still a pop-out (and pop-in for same-size).
+    let plain_still: Vec<_> = (30..60).map(|k| (k, src_rect, 1.0)).collect();
+    let r = rec(vec![("board/card", before), ("card", plain_still)], 60);
+    let ks = kinds(&r);
+    assert!(ks.contains(&"pop-out"), "plain remount must still report pop-out: {ks:?}");
+    assert!(ks.contains(&"pop-in"), "plain remount must still report pop-in: {ks:?}");
+}

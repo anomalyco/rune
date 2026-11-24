@@ -1,0 +1,1 @@
+- Web: dismissing or picking from a pop-up menu while a text field holds Rune focus now restores DOM focus, selection, and `inputMode = 'text'` to the active editing proxy instead of focusing `<canvas>`, and lifting a finger after a long press or while a pop-up menu is open no longer steals DOM focus out of `[data-rune-menu]`.

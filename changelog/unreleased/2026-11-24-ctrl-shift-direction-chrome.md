@@ -1,0 +1,1 @@
+- Fields: Ctrl+Left Shift and Ctrl+Right Shift direction switching now runs on Windows only when a right-to-left keyboard layout is installed (matching Chrome), disarms on Alt/Super/Fn or focus loss, and `TextEdit::clear_dir` resets a forced direction back to natural without clearing text or undo history.

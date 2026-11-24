@@ -9,7 +9,10 @@
 # helper window is cloaked, so screen readers and window pickers don't meet it; and Windows system DLLs
 # load via `LoadLibraryExA` with `LOAD_LIBRARY_SEARCH_SYSTEM32`; and on macOS the input method reads the app's text around its selection, to convert it again, and its marked text's clauses reach the app, beside `Ime::Preedit`, through `platform::macos::{set_ime_text, take_ime_clauses, take_ime_replacement}`; and
 # `platform::wayland::WindowExtWayland::content_corner_radius` says what radius a Wayland client-side frame
-# leaves the window's content's bottom corners at, 0 when it draws none or draws it square). Run it when winit is bumped, then build: a patch
+# leaves the window's content's bottom corners at, 0 when it draws none or draws it square; and
+# `platform::wayland::ActiveEventLoopExtWayland::set_wake_on_wayland_read` opts into waking from
+# `ControlFlow::Wait` on any successful Wayland display read so foreign queues such as layer-shell
+# overlays dispatch without background reader threads). Run it when winit is bumped, then build: a patch
 # that no longer applies fails here, and the change goes back in by hand. If upstream winit takes
 # the change, delete vendor/winit and its `[patch.crates-io]` entry instead.
 # Usage: scripts/vendor-winit.sh <version>     e.g. scripts/vendor-winit.sh 0.30.13

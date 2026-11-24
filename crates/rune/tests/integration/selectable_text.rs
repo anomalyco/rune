@@ -139,7 +139,7 @@ fn copy_select_all_and_the_context_menu() {
     click(&mut rt, g[11]);
     click(&mut rt, g[11]);
     command(&mut rt, 'c');
-    assert_eq!(clipboard.text().as_deref().map(String::as_str), Some("port"));
+    assert_eq!(clipboard.text().as_deref().map(String::as_str), Some(w("port").as_str()));
 
     // Cmd+A selects all of the text holding the selection.
     command(&mut rt, 'a');

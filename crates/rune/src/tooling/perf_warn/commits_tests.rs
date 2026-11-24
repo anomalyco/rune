@@ -130,6 +130,88 @@ fn instant_scrolls_with_no_commit_stay_quiet() {
     assert_eq!(log, Vec::<String>::new());
 }
 
+struct VirtualState {
+    viewport: &'static str,
+    commit_on_visible: bool,
+    views: std::cell::Cell<u32>,
+    seen: Option<std::ops::Range<usize>>,
+}
+
+fn virtual_view(s: &VirtualState, _: &mut Cx<VirtualState>) -> El {
+    s.views.set(s.views.get() + 1);
+    col().size(200.0, 200.0).child(
+        col().key(s.viewport).size(200.0, 200.0).scroll(ScrollSpec { stick_bottom: false }).child(
+            col().key("list").w_full().growth(crate::GrowthSpec::default())
+                .virtual_rows(
+                    1000,
+                    20.0,
+                    |_: &VirtualState, i| std::borrow::Cow::Owned(format!("r{i}")),
+                    |_: &VirtualState, _| row().w_full().h(20.0),
+                )
+                .on_visible_rows(|s: &mut VirtualState, range| {
+                    let changed = s.seen.as_ref() != Some(&range);
+                    s.seen = Some(range);
+                    s.commit_on_visible && changed
+                }),
+        ),
+    )
+}
+
+fn virtual_list_runtime(viewport: &'static str, commit_on_visible: bool) -> Runtime<VirtualState> {
+    let mut rt = Runtime::new(
+        VirtualState { viewport, commit_on_visible, views: std::cell::Cell::new(0), seen: None },
+        virtual_view,
+        (200.0, 200.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    for _ in 0..10 { rt.frame(1.0 / 120.0); }
+    rt
+}
+
+#[test]
+fn instant_scrolls_that_only_remount_virtual_rows_stay_quiet() {
+    take_log();
+    let mut rt = virtual_list_runtime("vp-virtual-quiet", false);
+    let (commits0, views0) = (rt.stats.commits, rt.state.views.get());
+    for i in 0..10 {
+        rt.update_if(|_, tx| {
+            tx.scroll_to_instant("vp-virtual-quiet", 0.0, 1250.0 * (i + 1) as f32);
+            false
+        });
+        rt.frame(1.0 / 120.0);
+    }
+    assert_eq!(rt.stats.commits - commits0, 10, "each jump remounted virtual rows once");
+    assert_eq!(rt.state.views.get() - views0, 0, "virtual remounts must not run the view");
+    assert!(rt.state.seen.is_some());
+    let log: Vec<_> = take_log()
+        .into_iter()
+        .filter(|l| l.contains("an instant scroll") || l.contains("of a scroll"))
+        .collect();
+    assert_eq!(log, Vec::<String>::new());
+}
+
+#[test]
+fn instant_scrolls_whose_visible_rows_handler_commits_still_warn() {
+    take_log();
+    let mut rt = virtual_list_runtime("vp-virtual-commit", true);
+    let views0 = rt.state.views.get();
+    for i in 0..10 {
+        rt.update_if(|_, tx| {
+            tx.scroll_to_instant("vp-virtual-commit", 0.0, 1250.0 * (i + 1) as f32);
+            false
+        });
+        rt.frame(1.0 / 120.0);
+    }
+    assert_eq!(rt.state.views.get() - views0, 10, "returning true from on_visible_rows ran the view each frame");
+    let log = take_log();
+    let instant: Vec<_> = log.iter().filter(|l| l.contains("an instant scroll")).collect();
+    assert_eq!(instant.len(), 1, "{log:?}");
+    assert!(instant[0].contains("\"vp-virtual-commit\"") && instant[0].contains("scroll_to_with"), "{}", instant[0]);
+    let visible: Vec<_> = log.iter().filter(|l| l.contains("of a scroll") && l.contains("on_visible_rows")).collect();
+    assert_eq!(visible.len(), 1, "{log:?}");
+}
+
 #[test]
 fn a_budget_line_names_the_phase_that_took_most_and_why_the_frame_committed() {
     let times = [9.0, 14.0, 3.0, 1.0, 0.0, 1.5];

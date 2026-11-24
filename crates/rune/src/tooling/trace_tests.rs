@@ -269,3 +269,52 @@ fn element_info_and_tree_report_resolved_text_style_and_fallbacks() {
     assert_eq!(json_el("secret-input")["textStyle"]["family"], "IBM Plex Mono");
     assert!(!tree.to_string().contains("top-secret-password"));
 }
+
+#[test]
+fn trace_records_matched_handover_with_ids_and_rects() {
+    fn view(open: &bool, _: &mut Cx<bool>) -> El {
+        let card = |w: f32, h: f32| {
+            crate::el().key("card").matched("card").size(w, h).fill(crate::Color::WHITE)
+        };
+        let mut root = crate::el().key("root").size(400.0, 300.0);
+        if *open {
+            root = root.child(card(160.0, 80.0).absolute(120.0, 20.0));
+        } else {
+            root = root.child(crate::el().key("board").size(400.0, 300.0).child(card(100.0, 50.0).absolute(40.0, 40.0)));
+        }
+        root
+    }
+
+    let tmp = TempFile(std::env::temp_dir().join(format!("rune-trace-handover-{}.jsonl", std::process::id())));
+    let mut rt = Runtime::new(false, view, (400.0, 300.0), Env { scale: 1.0, system_dark: true });
+    {
+        let mut trace = Trace::open(&tmp.0, rt.viewport, 120.0, 1.0);
+        trace.all = true;
+        rt.frame(0.0);
+        trace.frame(&mut rt, 0.0, 0.0);
+        rt.frame(1.0 / 120.0);
+        trace.frame(&mut rt, 1000.0 / 120.0, 0.0);
+        rt.update(|open, _| *open = true);
+        rt.frame(1.0 / 120.0);
+        trace.frame(&mut rt, 2000.0 / 120.0, 0.0);
+        rt.frame(1.0 / 120.0);
+        trace.frame(&mut rt, 3000.0 / 120.0, 0.0);
+    }
+
+    let text = std::fs::read_to_string(&tmp.0).unwrap();
+    let frames: Vec<Value> = text.lines().skip(1).map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert!(frames[0].get("handover").is_none());
+    assert!(frames[1].get("handover").is_none());
+    assert!(frames[3].get("handover").is_none());
+    let hos = frames[2].get("handover").and_then(Value::as_array).expect("handover recorded on frame 2");
+    assert_eq!(hos.len(), 1);
+    let from_id = hos[0]["from"].as_u64().expect("from id");
+    let to_id = hos[0]["to"].as_u64().expect("to id");
+    assert_ne!(from_id, to_id);
+    let gone: Vec<u64> = frames[2]["g"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
+    let born: Vec<u64> = frames[2]["m"].as_array().unwrap().iter().map(|v| v["id"].as_u64().unwrap()).collect();
+    assert!(gone.contains(&from_id), "from_id {from_id} must be in g: {gone:?}");
+    assert!(born.contains(&to_id), "to_id {to_id} must be in m: {born:?}");
+    assert_eq!(hos[0]["from_rect"].as_array().unwrap().len(), 4);
+    assert_eq!(hos[0]["to_rect"].as_array().unwrap().len(), 4);
+}

@@ -47,6 +47,14 @@ extern "C" {
     fn show_menu(handle: &JsValue, json: &str, x: f32, y: f32, min_width: f32, dark: bool);
     #[wasm_bindgen(js_name = hideMenu)]
     fn hide_menu(handle: &JsValue);
+    #[wasm_bindgen(js_name = takeTouchTimestamp)]
+    fn take_touch_timestamp(handle: &JsValue, id: f64) -> f64;
+    #[wasm_bindgen(js_name = performanceNow)]
+    fn performance_now() -> f64;
+    #[wasm_bindgen(js_name = scheduleTouchHoldConfirm)]
+    fn schedule_touch_hold_confirm(handle: &JsValue, attempt: u32);
+    #[wasm_bindgen(js_name = cancelTouchHoldConfirm)]
+    fn cancel_touch_hold_confirm(handle: &JsValue);
 }
 
 /// How the canvas sits in the page.
@@ -132,7 +140,20 @@ impl Drop for Bridge {
 }
 
 impl Running {
+    fn sync_touch_hold(&mut self) {
+        match self.app.rt_mut().take_touch_hold_command() {
+            Some(crate::runtime::TouchHoldCommand::Confirm(attempt)) => {
+                schedule_touch_hold_confirm(&self.input.handle, attempt.0);
+            }
+            Some(crate::runtime::TouchHoldCommand::Cancel) => {
+                cancel_touch_hold_confirm(&self.input.handle);
+            }
+            None => {}
+        }
+    }
+
     pub(super) fn sync_input(&mut self, focus: bool) {
+        self.sync_touch_hold();
         let (reset, caret) = crate::input::host_events::ime_sync_state(self.app.rt_mut());
         if reset {
             cancel_ime(&self.input.handle);
@@ -295,6 +316,16 @@ impl Running {
             Some("a11y_flush") => {
                 self.run_a11y_schedule(crate::runtime::web_a11y::schedule::ScheduleEvent::ConsumerDemand);
                 return false;
+            }
+            Some("touch_hold_confirm") => {
+                let attempt = crate::machine::Attempt(event["attempt"].as_u64().unwrap_or(0) as u32);
+                if !self.app.confirm_touch_hold(attempt) { return false; }
+                self.full_redraw = true;
+                self.app.frame(0.0);
+                self.apply_frame_requests(window);
+                self.clipboard.flush_core(self.app.rt_mut());
+                self.sync_input(false);
+                return true;
             }
             _ => {}
         }
@@ -608,16 +639,20 @@ impl Running {
             // On a canvas as tall as its content the browser takes vertical pans and cancels the
             // touch; taps and horizontal drags stay Rune's.
             WindowEvent::Touch(touch) => {
-                self.app.touch(touch);
+                let ts_ms = take_touch_timestamp(&self.input.handle, touch.id as f64);
+                let event_time = super::web_math::web_touch_event_time(self.app.rt().now_clock(), ts_ms, performance_now());
+                let ended_in_menu = matches!(touch.phase, TouchPhase::Ended) && self.app.rt().touch_in_menu();
+                self.app.touch_at(touch, event_time);
+                self.sync_touch_hold();
                 // A tap is a user activation: links, the clipboard and focus act before the handler
-                // returns. In a page only a tap that left something focused needs it; anything else
-                // would focus the canvas and drop the reader's selection.
+                // returns. Lifting the finger after a long press opened a menu leaves DOM focus in
+                // the menu; in a page only a tap that left something focused needs activation.
                 if matches!(touch.phase, TouchPhase::Ended) {
-                    activate = if !self.input.document || self.app.rt().has_focus() {
-                        crate::input::host_events::WebActivate::Always
-                    } else {
-                        crate::input::host_events::WebActivate::Never
-                    };
+                    activate = crate::input::host_events::web_touch_end_activate(
+                        self.app.rt(),
+                        self.input.document,
+                        ended_in_menu,
+                    );
                     immediate = true;
                 }
             }

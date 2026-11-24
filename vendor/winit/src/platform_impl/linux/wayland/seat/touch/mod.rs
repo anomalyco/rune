@@ -21,15 +21,15 @@ impl TouchHandler for WinitState {
         _: &Connection,
         _: &QueueHandle<Self>,
         touch: &WlTouch,
-        _: u32,
+        serial: u32,
         _: u32,
         surface: WlSurface,
         id: i32,
         position: (f64, f64),
     ) {
         let window_id = wayland::make_wid(&surface);
-        let scale_factor = match self.windows.get_mut().get(&window_id) {
-            Some(window) => window.lock().unwrap().scale_factor(),
+        let window = match self.windows.get_mut().get(&window_id) {
+            Some(window) => window.clone(),
             None => return,
         };
 
@@ -39,6 +39,12 @@ impl TouchHandler for WinitState {
                 warn!("Received wl_touch::down without seat");
                 return;
             },
+        };
+
+        let scale_factor = {
+            let mut window = window.lock().unwrap();
+            window.touch_down(id, touch.seat().clone(), serial);
+            window.scale_factor()
         };
 
         // Update the state of the point.
@@ -84,7 +90,11 @@ impl TouchHandler for WinitState {
 
         let window_id = wayland::make_wid(&touch_point.surface);
         let scale_factor = match self.windows.get_mut().get(&window_id) {
-            Some(window) => window.lock().unwrap().scale_factor(),
+            Some(window) => {
+                let mut window = window.lock().unwrap();
+                window.touch_up(id, touch.seat());
+                window.scale_factor()
+            },
             None => return,
         };
 
@@ -159,7 +169,11 @@ impl TouchHandler for WinitState {
         for (id, touch_point) in seat_state.touch_map.drain() {
             let window_id = wayland::make_wid(&touch_point.surface);
             let scale_factor = match self.windows.get_mut().get(&window_id) {
-                Some(window) => window.lock().unwrap().scale_factor(),
+                Some(window) => {
+                    let mut window = window.lock().unwrap();
+                    window.touch_up(id, touch.seat());
+                    window.scale_factor()
+                },
                 None => return,
             };
 

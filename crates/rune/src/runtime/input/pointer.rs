@@ -118,6 +118,7 @@ impl RuntimeCore {
 
     pub(crate) fn cancel_pointer(&mut self) {
         // differs from dev: a cancelled press cannot pair with a click after refocusing.
+        self.cancel_touch_hold();
         self.host.titlebar.clear();
         self.pointer.autoscroll_cancel();
         self.cancel_drag();

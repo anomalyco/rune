@@ -76,6 +76,8 @@ pub(in crate::window) struct Native {
     /// Whether the CPU renderer or the GPU draws its frames (`linux::cpu_frame`).
     #[cfg(target_os = "linux")]
     pub(in crate::window) mode: crate::window::linux::handover::SurfaceMode,
+    /// Unregisters the window's Wayland drop target before the window's `wl_surface` drops.
+    pub(in crate::window) drop_target: Option<crate::platform::wayland_drop::DropTarget>,
 }
 
 #[cfg(target_os = "windows")]
@@ -85,10 +87,17 @@ pub(in crate::window) struct Native {
     pub(in crate::window) cloak: crate::platform::win32::Cloak,
     /// The frame without a title bar a window with `App::titlebar` has.
     pub(in crate::window) frame: Option<crate::platform::win32::CustomFrame>,
+    /// Lightweight `WM_NCHITTEST` subclass for windows without `frame` that have `.window_drag()`.
+    pub(in crate::window) drag_regions: Option<crate::platform::win32::DragRegions>,
+    /// Tracks the last commit/zoom/fullscreen/motion state synced into Win32 drag hit-testing so
+    /// idle and non-committing frames do zero work.
+    pub(in crate::window) drag_sync: crate::platform::win32::DragHitSync,
     /// Whether other windows cover it whole, as the last frame that looked found (`look`).
     pub(in crate::window) look: crate::window::win32::look::Look,
     /// Whether its swap chain can take the next frame (`slot`).
     pub(in crate::window) slot: crate::window::win32::slot::Slot,
+    /// Paces sub-frame `poll` wakes onto the display's vblank grid (`poll_pace`).
+    pub(in crate::window) poll_pace: crate::window::win32::poll_pace::PollPace,
     /// What its last frames changed, so the next redraws only that (`damage`).
     pub(in crate::window) damage: crate::window::win32::damage::Damage,
     /// Whether the CPU renderer or the GPU draws its frames (`cpu_frame`).

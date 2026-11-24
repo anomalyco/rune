@@ -308,20 +308,30 @@ impl Win {
         self.presented.is_some()
     }
 
-    /// The display link's next tick after `now`, while it runs.
+    /// The display link's next tick after `now`, while actively driving redraws.
     pub(in crate::window) fn next_tick(&self, now: Instant) -> Option<Instant> {
         #[cfg(target_os = "macos")]
-        return self.native.pacing.as_ref().filter(|p| p.running()).map(|p| now + Duration::from_secs_f64(1.0 / p.refresh_hz()));
+        return self.native.pacing.as_ref().filter(|p| p.paced()).map(|p| now + Duration::from_secs_f64(1.0 / p.refresh_hz()));
         #[cfg(not(target_os = "macos"))]
         { let _ = now; None }
     }
 
-    /// Whether the display link drives redraws. Other platforms redraw on request.
+    /// Whether the display link actively drives redraws (false while coasting or stopped). Other
+    /// platforms redraw on request.
     pub(in crate::window) fn paced(&self) -> bool {
         #[cfg(target_os = "macos")]
-        return self.native.pacing.as_ref().is_some_and(|p| p.running());
+        return self.native.pacing.as_ref().is_some_and(|p| p.paced());
         #[cfg(not(target_os = "macos"))]
         false
+    }
+
+    /// Consumes a macOS `RedrawRequested` on entry to `paint`, returning `true` when a prior
+    /// `DisplayTick` or synchronous draw already satisfied it.
+    #[cfg(target_os = "macos")]
+    pub(in crate::window) fn take_redraw_on_paint(&self) -> bool {
+        let (next, satisfied) = self.redraw.get().take_on_paint();
+        self.redraw.set(next);
+        satisfied
     }
 
     /// Whether something other than events paces the window's redraws: the display link on
@@ -366,6 +376,21 @@ impl Win {
             Some(panel) => panel.occluded(),
             None => crate::platform::macos::window_occluded(&self.window),
         }
+    }
+
+    /// Keeps the macOS display link coasting briefly (~150 ms) with zero draws and zero presents
+    /// when a visible window settles idle after presenting.
+    pub(in crate::window) fn coast_pacing(&mut self) {
+        #[cfg(target_os = "macos")]
+        if let Some(pacing) = &mut self.native.pacing { pacing.coast(); }
+        #[cfg(target_os = "macos")]
+        self.present_with_transaction(false);
+    }
+
+    /// Stops a coasting macOS display link once its keep-alive budget hits zero (zero redraws).
+    #[cfg(target_os = "macos")]
+    pub(in crate::window) fn stop_expired_pacing(&mut self) {
+        if let Some(pacing) = &mut self.native.pacing { pacing.stop_expired(); }
     }
 
     pub(in crate::window) fn stop_pacing(&mut self) {

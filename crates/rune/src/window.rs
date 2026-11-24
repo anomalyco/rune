@@ -39,6 +39,7 @@ mod surface;
 pub(crate) mod titlebar;
 #[cfg(target_os = "linux")]
 mod linux;
+mod wayland_wake;
 #[cfg(target_os = "windows")]
 mod win32;
 /// `crate::warm_gpu_cache` on Windows (`win32::handover`).
@@ -49,15 +50,16 @@ pub use handle::WindowHandle;
 #[cfg(not(target_arch = "wasm32"))]
 pub use event_loop::run;
 pub(crate) use event_loop::run_windows;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(test, target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android"))))]
 pub(crate) use file_drop::FileStep;
 pub(crate) use keys::{key_base, map_key_event, map_mods};
 pub(crate) use state::frame;
 pub(crate) use state::{Life, Minimize, MinimizeEvent, Sight};
 pub(crate) use surface::{
-    Backoff, BackoffEffect, BackoffEvent, HiddenPace, Missed, Presented, TIMER_FRAME,
-    acquire_checked, configure, reblend_core, rebuild_renderer_core,
-    poll_timer_deadline_core, surface_config, timer_deadline_core, timer_wants_frame_core,
+    Backoff, BackoffEffect, BackoffEvent, ConfigureError, HiddenPace, Missed,
+    Presented, TIMER_FRAME, acquire_checked, configure, configure_checked, reblend_core,
+    rebuild_renderer_core, poll_timer_deadline_core, surface_config, timer_deadline_core,
+    timer_wants_frame_core,
 };
 #[cfg(target_arch = "wasm32")]
 pub(crate) use surface::configure_then;
@@ -65,11 +67,14 @@ pub(crate) use surface::configure_then;
 pub(crate) use surface::native::Prime;
 #[cfg(test)]
 pub(crate) use surface::{
+    ConfigureErrorKind, classify_scope_error,
     HIDDEN_REFRESH, OCCLUDED_MAX, OCCLUDED_RETRY, TIMEOUT_RETRY, TIMER_FRAME_STALL, TimerFrame,
     timer_deadline, timer_wants_frame, wall_wake_deadline,
 };
 #[cfg(all(test, target_os = "linux"))]
 use surface::acquire;
+#[cfg(target_os = "windows")]
+pub(crate) use win32::poll_pace;
 #[cfg(target_os = "windows")]
 pub(crate) use win32::slot;
 
@@ -125,6 +130,12 @@ pub(crate) enum WakeEvent {
     /// Windows: the GPU a CPU-drawn window was waiting for is made, or failed (`cpu_frame`).
     #[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
     GpuReady(usize),
+    /// Wayland: native `wl_data_device` drop events or pipe reads are ready for `Host::flush_files`.
+    #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
+    FileDrop,
+    /// Wayland: a live layer surface already has events queued in libwayland from a mid-turn read;
+    /// wakes the immediate next turn so `about_to_wait` drains it without entering `ControlFlow::Poll`.
+    LayerPending,
 }
 
 /// What `Windows` needs of a host, whatever its state type: an app window or an overlay.
@@ -137,6 +148,11 @@ pub(crate) trait AnyHost {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent);
     /// Draws what has no redraw event (a layer surface); true while it needs more frames.
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) -> bool { false }
+    /// Whether this host owns a live Wayland layer-shell surface sharing winit's `wl_display`.
+    fn has_live_wayland_layer(&self) -> bool { false }
+    /// Whether this host has unread platform events already queued in memory (for example a
+    /// Wayland layer surface whose queue filled during a mid-turn read).
+    fn has_pending_platform_events(&self) -> bool { false }
     /// The turn ends: the next frame it wants is asked for, or a paint put off runs (`redraw`).
     fn turn_ends(&mut self, _event_loop: &ActiveEventLoop, _now: Instant) {}
     fn finished(&self) -> bool { false }
@@ -217,6 +233,8 @@ struct Windows {
     /// Fatal Wayland display error captured while `ActiveEventLoop` is still alive.
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     display_error: Option<String>,
+    /// Scheduling state for waking winit on Wayland display reads and draining mid-turn layer events.
+    wayland_wake: wayland_wake::State,
 }
 impl Windows {
     /// Starts the windows `crate::open_window` asked for this turn, in fresh slots, each like
@@ -274,6 +292,26 @@ impl Windows {
         }
         if should_exit {
             event_loop.exit();
+        }
+    }
+
+    fn apply_wayland_wake(
+        &self,
+        event_loop: &ActiveEventLoop,
+        effects: crate::machine::Effects<wayland_wake::Effect>,
+    ) {
+        for effect in effects {
+            match effect {
+                wayland_wake::Effect::SetWakeOnRead(on) => {
+                    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                    winit::platform::wayland::ActiveEventLoopExtWayland::set_wake_on_wayland_read(event_loop, on);
+                    #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+                    let _ = (event_loop, on);
+                }
+                wayland_wake::Effect::SendWake => {
+                    self.proxy.send_event(WakeEvent::LayerPending).ok();
+                }
+            }
         }
     }
 }
@@ -404,6 +442,11 @@ impl ApplicationHandler<WakeEvent> for Windows {
                 return;
             }
             WakeEvent::Turn => { #[cfg(not(target_arch = "wasm32"))] self.turn(event_loop); return; }
+            WakeEvent::FileDrop => return,
+            WakeEvent::LayerPending => {
+                let _ = wayland_wake::step(&mut self.wayland_wake, wayland_wake::Event::WakeReceived);
+                return;
+            }
         };
         if let Some(Some(host)) = self.hosts.get_mut(slot) {
             host.user_event(event_loop, event);
@@ -452,6 +495,8 @@ impl ApplicationHandler<WakeEvent> for Windows {
         // putting off behind another window's.
         let now = crate::time::now();
         for host in self.hosts.iter_mut().flatten() { host.turn_ends(event_loop, now); }
+        let effects = wayland_wake::about_to_wait(&mut self.wayland_wake, &self.hosts);
+        self.apply_wayland_wake(event_loop, effects);
         // Layer surfaces have no redraw events: keep turning while one animates (its vsync
         // paces the loop). Hosts whose only motion is an ambient loop sleep until its next step.
         let deadline = self.hosts.iter().flatten().filter_map(|host| host.wake_deadline()).min();
@@ -488,6 +533,8 @@ impl ApplicationHandler<WakeEvent> for Windows {
         if step == app_events::ExitStep::FastExit && let Some(last) = fast_hook {
             crate::quit::end_fast(last);
         }
+        let effects = wayland_wake::step(&mut self.wayland_wake, wayland_wake::Event::Exiting);
+        self.apply_wayland_wake(event_loop, effects);
         // Surfaces go while winit's display connection is still open (layer surfaces live on it).
         self.hosts.clear();
         crate::marks::mark("windows.dropped");
@@ -576,16 +623,23 @@ fn gesture_phase(phase: TouchPhase) -> crate::GesturePhase {
 }
 
 /// Hands a winit touch (a finger, or a pen where the system reports it as one) to the runtime
-/// in the view's points, timed on a clock that starts with the first touch.
-pub(crate) fn touch_core(rt: &mut RuntimeCore, app: &mut dyn AppDriver, touch: &winit::event::Touch) {
+/// in the view's points at `time` (seconds on a steady clock; on Web, mapped onto the runtime
+/// clock from `PointerEvent.timeStamp`).
+pub(crate) fn touch_core_at(rt: &mut RuntimeCore, app: &mut dyn AppDriver, touch: &winit::event::Touch, time: f64) {
     let scale = rt.input_scale();
-    static START: std::sync::OnceLock<crate::time::Instant> = std::sync::OnceLock::new();
     let phase = match touch.phase {
         TouchPhase::Started => crate::TouchPhase::Started,
         TouchPhase::Moved => crate::TouchPhase::Moved,
         TouchPhase::Ended => crate::TouchPhase::Ended,
         TouchPhase::Cancelled => crate::TouchPhase::Cancelled,
     };
-    let time = START.get_or_init(crate::time::now).elapsed().as_secs_f64();
     rt.touch(app, touch.id, phase, touch.location.x as f32 / scale, touch.location.y as f32 / scale, time);
+}
+
+/// Hands a winit touch to the runtime, timed on a clock that starts with the first touch.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) fn touch_core(rt: &mut RuntimeCore, app: &mut dyn AppDriver, touch: &winit::event::Touch) {
+    static START: std::sync::OnceLock<crate::time::Instant> = std::sync::OnceLock::new();
+    let time = START.get_or_init(crate::time::now).elapsed().as_secs_f64();
+    touch_core_at(rt, app, touch, time);
 }

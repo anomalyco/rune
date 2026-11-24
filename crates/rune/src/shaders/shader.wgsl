@@ -405,7 +405,7 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
             discard;
         } else if (i.uv.z > 0.0) {
             let local = p * i.uv.zw / i.rect.zw - vec2<f32>(0.5);
-            let hi = vec2<i32>(i.uv.zw) - vec2<i32>(1);
+            let hi = max(vec2<i32>(i.uv.zw) - vec2<i32>(1), vec2<i32>(0));
             let base = floor(local);
             let f = local - base;
             let t0 = clamp(vec2<i32>(base), vec2<i32>(0), hi);
@@ -496,7 +496,7 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
             // Bilinear, clamped to the image's own texels so neighbours in the atlas never bleed.
             let local = (screen - i.rect.xy) * i.uv.zw / i.rect.zw - vec2<f32>(0.5);
             let lo = vec2<i32>(i.uv.xy);
-            let hi = lo + vec2<i32>(i.uv.zw) - vec2<i32>(1);
+            let hi = max(lo + vec2<i32>(i.uv.zw) - vec2<i32>(1), lo);
             let base = floor(local);
             let f = local - base;
             let t0 = clamp(lo + vec2<i32>(base), lo, hi);

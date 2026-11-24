@@ -227,6 +227,20 @@ impl Trace {
                 cuts.push(json!([id, x, y, w, h, rune_motion::Intent::TRANSITION | rune_motion::Intent::OPACITY, 0]));
             }
         }
+        let mut handovers = Vec::new();
+        for h in rt.matched_handovers() {
+            let from_id = self.ids.get(&h.from).copied();
+            let to_id = self.ids.get(&h.to).copied();
+            if from_id.is_none() && to_id.is_none() {
+                continue;
+            }
+            handovers.push(json!({
+                "from": from_id,
+                "to": to_id,
+                "from_rect": h.from_rect.map(r2),
+                "to_rect": h.to_rect.map(r2),
+            }));
+        }
         if !gone.is_empty() {
             self.ids.retain(|_, id| seen.contains(id));
         }
@@ -280,6 +294,9 @@ impl Trace {
         }
         if !gone.is_empty() {
             line["g"] = gone.into();
+        }
+        if !handovers.is_empty() {
+            line["handover"] = handovers.into();
         }
         // How far scrolling carries each element, when that changed: [id, x, y] in points.
         if !scrolled.is_empty() {

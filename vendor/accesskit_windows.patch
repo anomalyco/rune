@@ -116,7 +116,7 @@ index 7aee09b..890b9b3 100644
  mod node;
  mod text;
  mod util;
-diff --git a/src/long_text.rs b/src/long_text.rs
+diff --git b/src/long_text.rs wb/src/long_text.rs
 new file mode 100644
 index 0000000..dcadab3
 --- /dev/null
@@ -919,7 +919,7 @@ index 0000000..dcadab3
 +    }
 +}
 diff --git a/src/node.rs b/src/node.rs
-index f4a97e3..26fa8be 100644
+index f4a97e3..66c11cf 100644
 --- a/src/node.rs
 +++ b/src/node.rs
 @@ -12,7 +12,7 @@
@@ -939,7 +939,23 @@ index f4a97e3..26fa8be 100644
      text::PlatformRange as PlatformTextRange,
      util::*,
  };
-@@ -708,7 +709,7 @@ impl NodeWrapper<'_> {
+@@ -687,8 +688,13 @@ impl NodeWrapper<'_> {
+     }
+ 
+     fn size_of_set(&self) -> Option<i32> {
+-        self.node
+-            .size_of_set_from_container(&filter)
++        // Rune (vendor/accesskit_windows.patch): a levelled item in a flat tree carries its own
++        // level's set size; read it on item roles before falling back to the container, so
++        // containers never report their children's count as their own sibling set size.
++        (self.node.is_item_like() || self.node.role() == Role::Row)
++            .then(|| self.node.size_of_set())
++            .flatten()
++            .or_else(|| self.node.size_of_set_from_container(&filter))
+             .and_then(|s| s.try_into().ok())
+     }
+ 
+@@ -708,7 +714,7 @@ impl NodeWrapper<'_> {
      }
  
      fn is_text_pattern_supported(&self) -> bool {
@@ -948,7 +964,7 @@ index f4a97e3..26fa8be 100644
      }
  
      fn is_expand_collapse_pattern_supported(&self) -> bool {
-@@ -732,6 +733,41 @@ impl NodeWrapper<'_> {
+@@ -732,6 +738,41 @@ impl NodeWrapper<'_> {
          self.node.is_dialog()
      }
  
@@ -990,7 +1006,7 @@ index f4a97e3..26fa8be 100644
      fn is_window_pattern_supported(&self) -> bool {
          self.node.is_dialog()
      }
-@@ -770,6 +806,10 @@ impl NodeWrapper<'_> {
+@@ -770,6 +811,10 @@ impl NodeWrapper<'_> {
      }
  }
  
@@ -1001,7 +1017,7 @@ index f4a97e3..26fa8be 100644
  fn enqueue_property_change(
      queue: &mut Vec<QueuedEvent>,
      element: &IRawElementProviderSimple,
-@@ -799,6 +839,7 @@ fn enqueue_property_change(
+@@ -799,6 +844,7 @@ fn enqueue_property_change(
      ISelectionItemProvider,
      ISelectionProvider,
      ITextProvider,
@@ -1009,7 +1025,7 @@ index f4a97e3..26fa8be 100644
      IExpandCollapseProvider,
      IWindowProvider
  )]
-@@ -839,9 +880,12 @@ impl PlatformNode {
+@@ -839,9 +885,12 @@ impl PlatformNode {
      where
          F: FnOnce(&Tree, &Arc<Context>) -> Result<T>,
      {
@@ -1025,7 +1041,7 @@ index f4a97e3..26fa8be 100644
      }
  
      fn node<'a>(&self, tree: &'a Tree) -> Result<NodeRef<'a>> {
-@@ -907,6 +951,18 @@ impl PlatformNode {
+@@ -907,6 +956,18 @@ impl PlatformNode {
          })
      }
  
@@ -1044,7 +1060,7 @@ index f4a97e3..26fa8be 100644
      fn resolve_for_text_pattern<F, T>(&self, f: F) -> Result<T>
      where
          for<'a> F: FnOnce(NodeRef<'a>) -> Result<T>,
-@@ -918,17 +974,20 @@ impl PlatformNode {
+@@ -918,17 +979,20 @@ impl PlatformNode {
      where
          for<'a> F: FnOnce(NodeRef<'a>, NodeId, TreeId) -> Result<Option<ActionRequest>>,
      {
@@ -1076,7 +1092,7 @@ index f4a97e3..26fa8be 100644
      }
  
      fn do_action<F>(&self, f: F) -> Result<()>
-@@ -1272,7 +1331,10 @@ macro_rules! patterns {
+@@ -1272,7 +1336,10 @@ macro_rules! patterns {
                  old: &mut NodeWrapper,
              ) {
                  $(if self.$is_supported() && old.$is_supported() {
@@ -1088,7 +1104,7 @@ index f4a97e3..26fa8be 100644
                          let old_value = old.$getter();
                          let new_value = self.$getter();
                          if old_value != new_value {
-@@ -1326,7 +1388,10 @@ properties! {
+@@ -1326,7 +1393,10 @@ properties! {
      (UIA_PositionInSetPropertyId, position_in_set),
      (UIA_SizeOfSetPropertyId, size_of_set),
      (UIA_AriaPropertiesPropertyId, aria_properties),
@@ -1100,7 +1116,7 @@ index f4a97e3..26fa8be 100644
  }
  
  patterns! {
-@@ -1431,6 +1496,9 @@ patterns! {
+@@ -1431,6 +1501,9 @@ patterns! {
      )),
      (UIA_TextPatternId, ITextProvider, ITextProvider_Impl, is_text_pattern_supported, (), (
          fn GetSelection(&self) -> Result<*mut SAFEARRAY> {
@@ -1110,7 +1126,7 @@ index f4a97e3..26fa8be 100644
              self.resolve_for_text_pattern(|node| {
                  if let Some(range) = node.text_selection() {
                      let platform_range: ITextRangeProvider = PlatformTextRange::new(&self.context, range).into();
-@@ -1455,6 +1523,21 @@ patterns! {
+@@ -1455,6 +1528,21 @@ patterns! {
          },
  
          fn RangeFromPoint(&self, point: &UiaPoint) -> Result<ITextRangeProvider> {
@@ -1132,7 +1148,7 @@ index f4a97e3..26fa8be 100644
              self.resolve_with_context_for_text_pattern(|node, context| {
                  let client_top_left = context.client_top_left();
                  let point = Point::new(point.x - client_top_left.x, point.y - client_top_left.y);
-@@ -1466,6 +1549,9 @@ patterns! {
+@@ -1466,6 +1554,9 @@ patterns! {
          },
  
          fn DocumentRange(&self) -> Result<ITextRangeProvider> {
@@ -1142,7 +1158,7 @@ index f4a97e3..26fa8be 100644
              self.resolve_for_text_pattern(|node| {
                  let range = node.document_range();
                  Ok(PlatformTextRange::new(&self.context, range).into())
-@@ -1473,6 +1559,9 @@ patterns! {
+@@ -1473,6 +1564,9 @@ patterns! {
          },
  
          fn SupportedTextSelection(&self) -> Result<SupportedTextSelection> {
@@ -1152,7 +1168,7 @@ index f4a97e3..26fa8be 100644
              self.resolve_for_text_pattern(|node| {
                  if node.has_text_selection() {
                      Ok(SupportedTextSelection_Single)
-@@ -1482,6 +1571,36 @@ patterns! {
+@@ -1482,6 +1576,36 @@ patterns! {
              })
          }
      )),
@@ -1189,6 +1205,98 @@ index f4a97e3..26fa8be 100644
      (UIA_ExpandCollapsePatternId, IExpandCollapseProvider, IExpandCollapseProvider_Impl, is_expand_collapse_pattern_supported, (
          (UIA_ExpandCollapseExpandCollapseStatePropertyId, ExpandCollapseState, expand_collapse_state, ExpandCollapseState)
      ), (
+@@ -1537,3 +1661,91 @@ fn platform_node_impl_send_sync() {
+     fn assert_send_sync<T: Send + Sync>() {}
+     assert_send_sync::<PlatformNode>();
+ }
++
++#[test]
++fn item_size_of_set_overrides_container_without_leaking_onto_containers() {
++    use accesskit::{Node, TreeInfo, TreeUpdate};
++    use accesskit_consumer::Tree;
++
++    let mut root = Node::new(Role::Window);
++    root.set_children(vec![NodeId(1), NodeId(6), NodeId(8), NodeId(10)]);
++
++    let mut tree = Node::new(Role::Tree);
++    tree.set_author_id("tree");
++    tree.set_size_of_set(2);
++    tree.set_children(vec![NodeId(2), NodeId(3)]);
++
++    let mut level1 = Node::new(Role::TreeItem);
++    level1.set_author_id("level1");
++    level1.set_level(0);
++    level1.set_position_in_set(0);
++    level1.set_size_of_set(2);
++
++    let mut level2 = Node::new(Role::TreeItem);
++    level2.set_author_id("level2");
++    level2.set_level(1);
++    level2.set_position_in_set(2);
++    level2.set_size_of_set(3);
++
++    let mut listbox = Node::new(Role::ListBox);
++    listbox.set_author_id("listbox");
++    listbox.set_size_of_set(4);
++    listbox.set_children(vec![NodeId(7)]);
++
++    let mut option = Node::new(Role::ListBoxOption);
++    option.set_author_id("option");
++    option.set_position_in_set(1);
++
++    let mut treegrid = Node::new(Role::TreeGrid);
++    treegrid.set_author_id("treegrid");
++    treegrid.set_size_of_set(2);
++    treegrid.set_children(vec![NodeId(9)]);
++
++    let mut row = Node::new(Role::Row);
++    row.set_author_id("row");
++    row.set_level(1);
++    row.set_position_in_set(0);
++    row.set_size_of_set(5);
++
++    let mut group = Node::new(Role::Group);
++    group.set_author_id("group");
++    group.set_size_of_set(3);
++
++    let update = TreeUpdate {
++        nodes: vec![
++            (NodeId(0), root),
++            (NodeId(1), tree),
++            (NodeId(2), level1),
++            (NodeId(3), level2),
++            (NodeId(6), listbox),
++            (NodeId(7), option),
++            (NodeId(8), treegrid),
++            (NodeId(9), row),
++            (NodeId(10), group),
++        ],
++        tree: Some(TreeInfo::new(NodeId(0))),
++        tree_id: TreeId::ROOT,
++        focus: NodeId(0),
++    };
++    let t = Tree::new(update, false);
++    fn find<'a>(node: NodeRef<'a>, key: &str) -> Option<NodeRef<'a>> {
++        if node.author_id() == Some(key) {
++            return Some(node);
++        }
++        node.children().find_map(|c| find(c, key))
++    }
++    let size_of = |key: &str| {
++        let node = find(t.state().root(), key).unwrap();
++        let mut buf = Vec::new();
++        NodeWrapper { node: &node, string_buffer: &mut buf }.size_of_set()
++    };
++
++    assert_eq!(size_of("tree"), None, "tree container must not report its own children count");
++    assert_eq!(size_of("level1"), Some(2), "level-1 treeitem reads its own size");
++    assert_eq!(size_of("level2"), Some(3), "level-2 treeitem overrides the tree container's size");
++    assert_eq!(size_of("listbox"), None, "listbox container must not report its own children count");
++    assert_eq!(size_of("option"), Some(4), "unlevelled option falls back to container size");
++    assert_eq!(size_of("treegrid"), None, "treegrid container must not report its own children count");
++    assert_eq!(size_of("row"), Some(5), "levelled treegrid row reads its own size");
++    assert_eq!(size_of("group"), None, "group container must not report its own children count");
++}
 diff --git a/src/text.rs b/src/text.rs
 index 6b18382..c7dfc79 100644
 --- a/src/text.rs

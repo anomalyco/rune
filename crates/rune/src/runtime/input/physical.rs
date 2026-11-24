@@ -220,6 +220,7 @@ impl RuntimeCore {
     /// Focus moving off an element inside the window: its handler hears `FocusLost`, and
     /// modifier keys stay held.
     pub(in crate::runtime) fn physical_focus_lost(&mut self, app: &mut dyn AppDriver) -> bool {
+        self.kbd.disarm_direction_chord();
         let mut tx = Tx::default();
         let changed = self.offer_physical(app, &PhysicalInput::FocusLost, &mut tx, &mut None);
         self.latch_requests(app, &mut tx);

@@ -115,8 +115,10 @@ pub(crate) use input::field_menu;
 pub use input::help_look::HelpLook;
 #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(unused_imports))]
 pub(crate) use input::physical::Unhandled;
-pub(crate) use input::titlebar::WindowMenu;
+pub(crate) use input::titlebar::{DragHit, WindowMenu, drag_hit_at};
 pub use input::touch::TouchPhase;
+#[cfg_attr(not(target_arch = "wasm32"), allow(unused_imports))]
+pub(crate) use input::touch::{TouchHoldCommand, TouchHoldPolicy};
 #[cfg(target_os = "linux")]
 use input::primary_selection;
 use input::{
@@ -184,7 +186,7 @@ use anchor::{anchor_ancestors, anchor_index, anchor_index_live, step_up};
 pub use cx::{Cx, Env, Waker, commit_generation};
 pub(crate) use cx::caret_of;
 use cx::COMMITS;
-pub use elements::{ElementInfo, Pick, Picked, Pose, ResolvedTextStyle};
+pub use elements::{ElementInfo, MatchedHandover, Pick, Picked, Pose, ResolvedTextStyle};
 #[cfg(debug_assertions)]
 pub(crate) use layout_read::window_read_key;
 pub(crate) use turn::intersect;

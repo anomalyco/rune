@@ -103,6 +103,9 @@ class FakeNode {
 
     remove() {
         if (!this.parentElement) return;
+        if (globalThis.document?.activeElement && this.contains(globalThis.document.activeElement)) {
+            globalThis.document.activeElement = globalThis.document.body;
+        }
         const i = this.parentElement.children.indexOf(this);
         if (i >= 0) this.parentElement.children.splice(i, 1);
         this.parentElement = null;
@@ -122,6 +125,10 @@ class FakeNode {
         };
         walk(this);
         return out;
+    }
+
+    getBoundingClientRect() {
+        return { left: 0, top: 0, right: 160, bottom: 80, width: 160, height: 80 };
     }
 
     contains(node) {
@@ -184,6 +191,8 @@ function installDom() {
         value: () => ({ position: 'relative', direction: 'ltr' }),
         configurable: true,
     });
+    Object.defineProperty(globalThis, 'innerWidth', { value: 800, writable: true, configurable: true });
+    Object.defineProperty(globalThis, 'innerHeight', { value: 844, writable: true, configurable: true });
     return { doc, win, body };
 }
 
@@ -1851,4 +1860,255 @@ test('consumer demand triggers flush the mirror and timer helpers pass attempt a
     }
 
     bridge.destroy(h);
+});
+
+test('showMenu blocks activate while open and restores focus and selection to active field on close', () => {
+    const { doc, win, body, events, h } = setup({ coarse: true });
+    const spec = JSON.stringify({
+        items: [
+            { id: 'copy', title: 'Copy' },
+            { id: 'paste', title: 'Paste' },
+        ],
+    });
+
+    bridge.sync(h, 'editor', 'hello', 0, 5, 5, false);
+    bridge.activate(h);
+    assert.equal(doc.activeElement, h.textarea);
+
+    bridge.showMenu(h, spec, 20, 40, 160, false);
+    const menu = body.children.find(el => el.getAttribute('data-rune-menu') !== null);
+    assert.ok(menu, 'popup menu should be mounted');
+    assert.equal(doc.activeElement, menu);
+
+    // Chrome collapses an unfocused textarea's selection to 0.
+    h.textarea.selectionStart = 0;
+    h.textarea.selectionEnd = 0;
+    h.textarea.selectionDirection = 'none';
+
+    // A stray activate() while the menu is open (such as lifting a finger after a long press)
+    // must keep DOM focus in the menu.
+    bridge.activate(h);
+    assert.equal(doc.activeElement, menu);
+
+    // Viewport resize dismisses the menu and must return DOM focus + selection to h.textarea.
+    win.dispatchEvent({ type: 'resize' });
+    assert.equal(body.children.find(el => el.getAttribute('data-rune-menu') !== null), undefined);
+    assert.deepEqual(events, [{ kind: 'menu', id: null }]);
+    assert.equal(doc.activeElement, h.textarea);
+    assert.equal(h.textarea.inputMode, 'text');
+    assert.equal(h.textarea.selectionStart, 5);
+    assert.equal(h.textarea.selectionEnd, 5);
+    assert.equal(h.textarea.selectionDirection, 'forward');
+
+    // Picking a menu item also returns DOM focus + selection to h.textarea.
+    events.length = 0;
+    bridge.showMenu(h, spec, 20, 40, 160, false);
+    const menu2 = body.children.find(el => el.getAttribute('data-rune-menu') !== null);
+    assert.equal(doc.activeElement, menu2);
+    h.textarea.selectionStart = 0;
+    h.textarea.selectionEnd = 0;
+    menu2.children[0].dispatchEvent({ type: 'click', preventDefault() {} });
+    assert.deepEqual(events, [{ kind: 'menu', id: 'copy' }]);
+    assert.equal(doc.activeElement, h.textarea);
+    assert.equal(h.textarea.selectionStart, 5);
+    assert.equal(h.textarea.selectionEnd, 5);
+
+    // Secure field: dismissing the menu returns DOM focus to h.password.
+    events.length = 0;
+    bridge.sync(h, 'secret', '', 0, 0, 0, true);
+    bridge.activate(h);
+    assert.equal(doc.activeElement, h.password);
+    bridge.showMenu(h, spec, 20, 40, 160, false);
+    assert.notEqual(doc.activeElement, h.password);
+    doc.dispatchEvent({ type: 'keydown', key: 'Escape', preventDefault() {}, stopPropagation() {} });
+    assert.deepEqual(events, [{ kind: 'menu', id: null }]);
+    assert.equal(doc.activeElement, h.password);
+    assert.equal(h.password.inputMode, 'text');
+
+    bridge.destroy(h);
+});
+
+test('showMenu dismissal falls back to canvas only when no field is focused and respects page mode', () => {
+    const spec = JSON.stringify({ items: [{ id: 'a', title: 'Action' }] });
+    const escape = () => ({ type: 'keydown', key: 'Escape', preventDefault() {}, stopPropagation() {} });
+
+    // Standalone/app mode without a focused field: dismissal focuses the canvas.
+    {
+        const { doc, canvas, events, h } = setup();
+        bridge.showMenu(h, spec, 10, 10, 160, false);
+        assert.notEqual(doc.activeElement, canvas);
+        doc.dispatchEvent(escape());
+        assert.deepEqual(events, [{ kind: 'menu', id: null }]);
+        assert.equal(doc.activeElement, canvas);
+        bridge.destroy(h);
+    }
+
+    // Page mode without a focused field: dismissal must not focus the canvas.
+    {
+        const { doc, body, canvas, events, h } = setup({ page: true });
+        bridge.showMenu(h, spec, 10, 10, 160, false);
+        doc.dispatchEvent(escape());
+        assert.deepEqual(events, [{ kind: 'menu', id: null }]);
+        assert.notEqual(doc.activeElement, canvas);
+        assert.equal(doc.activeElement, body);
+        bridge.destroy(h);
+    }
+
+    // Page mode with a focused field: dismissal restores DOM focus and selection to h.textarea.
+    {
+        const { doc, events, h } = setup({ page: true });
+        bridge.sync(h, 'editor', 'hello', 0, 2, 5, false);
+        bridge.activate(h);
+        bridge.showMenu(h, spec, 10, 10, 160, false);
+        h.textarea.selectionStart = 0;
+        h.textarea.selectionEnd = 0;
+        doc.dispatchEvent(escape());
+        assert.deepEqual(events, [{ kind: 'menu', id: null }]);
+        assert.equal(doc.activeElement, h.textarea);
+        assert.equal(h.textarea.selectionStart, 2);
+        assert.equal(h.textarea.selectionEnd, 5);
+        bridge.destroy(h);
+    }
+});
+
+test('takeTouchTimestamp captures PointerEvent.timeStamp in FIFO order, expands coalesced moves, clamps and bounds to 64', () => {
+    const { win, canvas, h } = setup();
+    const origPerf = globalThis.performance;
+    let perfNow = 1000;
+    Object.defineProperty(globalThis, 'performance', {
+        value: { now: () => perfNow },
+        configurable: true,
+    });
+    try {
+        // Non-touch and non-canvas events are ignored.
+        win.dispatchEvent({ type: 'pointerdown', target: canvas, pointerType: 'mouse', pointerId: 1, timeStamp: 100 });
+        win.dispatchEvent({ type: 'pointerdown', target: {}, pointerType: 'touch', pointerId: 1, timeStamp: 100 });
+        assert.ok(Number.isNaN(bridge.takeTouchTimestamp(h, 1)));
+
+        // Coalesced pointermove expands in order; chorded button !== -1 is skipped.
+        win.dispatchEvent({ type: 'pointerdown', target: canvas, pointerType: 'touch', pointerId: 7, timeStamp: 200 });
+        win.dispatchEvent({
+            type: 'pointermove',
+            target: canvas,
+            pointerType: 'touch',
+            pointerId: 7,
+            button: -1,
+            timeStamp: 230,
+            getCoalescedEvents: () => [{ timeStamp: 210 }, { timeStamp: 220 }],
+        });
+        win.dispatchEvent({ type: 'pointermove', target: canvas, pointerType: 'touch', pointerId: 7, button: 0, timeStamp: 225 });
+        win.dispatchEvent({ type: 'pointerup', target: canvas, pointerType: 'touch', pointerId: 7, timeStamp: 1500 });
+        assert.equal(bridge.takeTouchTimestamp(h, 7), 200);
+        assert.equal(bridge.takeTouchTimestamp(h, 7), 210);
+        assert.equal(bridge.takeTouchTimestamp(h, 7), 220);
+        // Future timestamp (1500 > perfNow 1000) is clamped to performance.now().
+        assert.equal(bridge.takeTouchTimestamp(h, 7), 1000);
+        assert.ok(Number.isNaN(bridge.takeTouchTimestamp(h, 7)));
+
+        // Malformed / non-positive timestamps return NaN.
+        win.dispatchEvent({ type: 'pointerdown', target: canvas, pointerType: 'touch', pointerId: 9, timeStamp: 0 });
+        win.dispatchEvent({ type: 'pointerup', target: canvas, pointerType: 'touch', pointerId: 9, timeStamp: -5 });
+        assert.ok(Number.isNaN(bridge.takeTouchTimestamp(h, 9)));
+        assert.ok(Number.isNaN(bridge.takeTouchTimestamp(h, 9)));
+
+        // Bounded FIFO (max 64): pushing 70 drops the oldest 6.
+        for (let i = 1; i <= 70; i++) {
+            win.dispatchEvent({ type: 'pointermove', target: canvas, pointerType: 'touch', pointerId: 3, button: -1, timeStamp: i * 10 });
+        }
+        assert.equal(bridge.takeTouchTimestamp(h, 3), 70);
+    } finally {
+        Object.defineProperty(globalThis, 'performance', { value: origPerf, configurable: true });
+        bridge.destroy(h);
+    }
+});
+
+test('scheduleTouchHoldConfirm uses background postTask, re-yields up to 2 turns on isInputPending, and cancels cleanly', async () => {
+    const { events, h } = setup();
+    const origScheduler = globalThis.scheduler;
+    const origNav = globalThis.navigator;
+    const tasks = [];
+    let pendingChecks = 0;
+    let inputPendingCalls = 0;
+    Object.defineProperty(globalThis, 'scheduler', {
+        value: {
+            postTask(fn, opts) {
+                const entry = { fn, opts, aborted: false };
+                opts?.signal?.addEventListener?.('abort', () => { entry.aborted = true; });
+                tasks.push(entry);
+                return new Promise((resolve, reject) => {
+                    entry.run = () => {
+                        if (entry.aborted) { reject(new Error('aborted')); return; }
+                        fn();
+                        resolve();
+                    };
+                });
+            },
+        },
+        configurable: true,
+    });
+    Object.defineProperty(globalThis, 'navigator', {
+        value: {
+            ...origNav,
+            scheduling: {
+                isInputPending(opts) {
+                    assert.deepEqual(opts, { includeContinuous: true });
+                    inputPendingCalls += 1;
+                    return pendingChecks-- > 0;
+                },
+            },
+        },
+        configurable: true,
+    });
+    try {
+        // Re-yields at most 2 times when input stays pending, then confirms on turn 3.
+        pendingChecks = 5;
+        bridge.scheduleTouchHoldConfirm(h, 42);
+        assert.equal(tasks.length, 1);
+        assert.equal(tasks[0].opts.priority, 'background');
+        tasks[0].run();
+        assert.equal(events.length, 0);
+        assert.equal(tasks.length, 2);
+        tasks[1].run();
+        assert.equal(events.length, 0);
+        assert.equal(tasks.length, 3);
+        tasks[2].run();
+        assert.deepEqual(events, [{ kind: 'touch_hold_confirm', attempt: 42 }]);
+        assert.equal(inputPendingCalls, 2);
+
+        // Simulated 700 ms stall where queued pointerup drains and cancels confirmation before it runs.
+        events.length = 0;
+        tasks.length = 0;
+        pendingChecks = 0;
+        bridge.scheduleTouchHoldConfirm(h, 43);
+        assert.equal(tasks.length, 1);
+        bridge.cancelTouchHoldConfirm(h);
+        assert.equal(tasks[0].aborted, true);
+        tasks[0].run();
+        assert.deepEqual(events, []);
+    } finally {
+        Object.defineProperty(globalThis, 'scheduler', { value: origScheduler, configurable: true });
+        Object.defineProperty(globalThis, 'navigator', { value: origNav, configurable: true });
+        bridge.destroy(h);
+    }
+});
+
+test('scheduleTouchHoldConfirm falls back to setTimeout(0) when scheduler.postTask is unavailable and clears on destroy', async () => {
+    const { events, h } = setup();
+    const origScheduler = globalThis.scheduler;
+    Object.defineProperty(globalThis, 'scheduler', { value: undefined, configurable: true });
+    try {
+        bridge.scheduleTouchHoldConfirm(h, 7);
+        assert.equal(events.length, 0, 'must not confirm synchronously');
+        await new Promise(resolve => setTimeout(resolve, 15));
+        assert.deepEqual(events, [{ kind: 'touch_hold_confirm', attempt: 7 }]);
+
+        // destroy cancels any in-flight fallback timer.
+        events.length = 0;
+        bridge.scheduleTouchHoldConfirm(h, 8);
+        bridge.destroy(h);
+        await new Promise(resolve => setTimeout(resolve, 15));
+        assert.deepEqual(events, []);
+    } finally {
+        Object.defineProperty(globalThis, 'scheduler', { value: origScheduler, configurable: true });
+    }
 });

@@ -268,6 +268,8 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     pub fn elements(&self) -> Vec<ElementInfo> { self.core().elements() }
     #[inline(always)]
+    pub fn matched_handovers(&self) -> Vec<MatchedHandover> { self.core().matched_handovers() }
+    #[inline(always)]
     pub fn find(&self, key: &str) -> Option<(f32, f32)> { self.core().find(key) }
     #[inline(always)]
     pub fn presented(&self, key: &str) -> Option<([f32; 4], f32)> { self.core().presented(key) }
