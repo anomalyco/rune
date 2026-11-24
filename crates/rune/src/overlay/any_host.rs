@@ -37,7 +37,8 @@ impl OverlayCore {
             }
         }).flatten()).min();
         deadline.into_iter().chain(self.backoff.deadline().filter(|_| self.presence.drawing())).chain(self.presence.deadline())
-            .chain(self.hidden_pace.deadline().filter(|_| !self.presence.drawing())).min()
+            .chain(self.hidden_pace.deadline().filter(|_| !self.presence.drawing()))
+            .chain(self.retire.deadline()).min()
     }
 
     /// Answers what assistive clients asked of the overlay and sends its tree's changes. An

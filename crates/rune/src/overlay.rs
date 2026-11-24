@@ -65,6 +65,8 @@ mod presence;
 use presence::{Presence, Release};
 mod requests;
 use requests::{Requests, Update, Visibility};
+mod retire;
+use retire::Retire;
 #[path = "overlay/surface.rs"]
 mod surface;
 #[path = "overlay/xwayland.rs"]
@@ -430,6 +432,7 @@ pub(in crate::overlay) struct OverlayCore {
     renderer: Option<Renderer>,
     gpu: Option<Arc<Gpu>>,
     gpu_pool: Rc<RefCell<Weak<Gpu>>>,
+    retire: Retire,
     dark: bool,
     dirty: bool,
     idle: bool,
@@ -517,6 +520,7 @@ impl OverlayCore {
             renderer: None,
             gpu: None,
             gpu_pool: Rc::default(),
+            retire: Default::default(),
             dark: true,
             dirty: true,
             idle: true,

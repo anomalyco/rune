@@ -1,0 +1,1 @@
+- Overlay: hiding, parking, or dropping an overlay on a shared GPU device no longer submits an empty queue batch or blocks the UI thread with `PollType::wait_indefinitely()`; dropped images and renderer resources poll once with `PollType::Poll` and finish retiring on a later event-loop turn if GPU work is still in flight.

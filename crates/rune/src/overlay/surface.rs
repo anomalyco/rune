@@ -342,6 +342,14 @@ impl Drop for OverlayCore {
         *self.shared.native.lock().unwrap() = Default::default();
         self.set_availability(Availability::Unavailable);
         self.release();
+        // Drop the renderer before polling a shared device so finished work retires its
+        // textures and buffers now without waiting on the UI thread.
+        self.renderer.take();
+        let shared = self.gpu.take().filter(|gpu| Arc::strong_count(gpu) > 1)
+            .or_else(|| self.retire.take_gpu());
+        if let Some(gpu) = shared && !gpu.is_lost() {
+            rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
+        }
     }
 }
 
