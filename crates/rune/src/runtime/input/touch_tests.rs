@@ -274,9 +274,11 @@ fn touch_on_window_resize_emits_resize_action_and_clears_cleanly() {
     let mut rt = Runtime::new((), view, (200.0, 200.0), Env::default());
     rt.frame(0.0);
     rt.touch(1, TouchPhase::Started, 50.0, 20.0, 0.0);
-    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Resize(ResizeEdge::SouthEast)));
+    assert_eq!(rt.take_titlebar_action(), None);
+    assert_eq!(rt.take_resize_action(), Some(ResizeEdge::SouthEast));
     assert_eq!(rt.wake_deadline(), None, "resize touch does not arm long-press hold timer");
     rt.touch(1, TouchPhase::Moved, 90.0, 40.0, 0.02);
+    assert_eq!(rt.take_resize_action(), None);
     assert_eq!(rt.take_titlebar_action(), None);
     rt.touch(1, TouchPhase::Ended, 90.0, 40.0, 0.04);
     assert!(!rt.touching());

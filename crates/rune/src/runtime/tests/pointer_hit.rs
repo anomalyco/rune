@@ -877,18 +877,20 @@ fn window_resize_emits_action_sets_default_cursor_and_yields_to_controls() {
     let mut rt = Runtime::new(State::default(), view, (320.0, 200.0), Env::new(true, 1.0));
     rt.frame(0.0);
 
-    // All 8 edges emit TitlebarAction::Resize(edge) once and show the matching cursor.
+    // All 8 edges emit take_resize_action() once (leaving take_titlebar_action() empty) and show the matching cursor.
     for (i, (edge, cursor)) in edges.into_iter().enumerate() {
         let x = i as f32 * 40.0 + 20.0;
         rt.pointer_move(x, 20.0);
         assert_eq!(rt.cursor(), cursor, "default cursor for {edge:?}");
         rt.pointer_down(x, 20.0);
-        assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Resize(edge)));
-        assert_eq!(rt.take_titlebar_action(), None, "taken once");
+        assert_eq!(rt.take_titlebar_action(), None);
+        assert_eq!(rt.take_resize_action(), Some(edge));
+        assert_eq!(rt.take_resize_action(), None, "taken once");
         rt.pointer_up(x, 20.0);
         // Rapid second press stays Resize, never turns into DoubleClick.
         rt.pointer_down(x, 20.0);
-        assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Resize(edge)));
+        assert_eq!(rt.take_titlebar_action(), None);
+        assert_eq!(rt.take_resize_action(), Some(edge));
         rt.pointer_up(x, 20.0);
     }
 
@@ -896,6 +898,7 @@ fn window_resize_emits_action_sets_default_cursor_and_yields_to_controls() {
     rt.pointer_move(30.0, 60.0);
     assert_eq!(rt.cursor(), Cursor::Default);
     rt.pointer_down(30.0, 60.0);
+    assert_eq!(rt.take_resize_action(), None);
     assert_eq!(rt.take_titlebar_action(), None);
     rt.pointer_up(30.0, 60.0);
     rt.frame(0.016);
@@ -904,6 +907,7 @@ fn window_resize_emits_action_sets_default_cursor_and_yields_to_controls() {
     rt.pointer_move(90.0, 60.0);
     assert_eq!(rt.cursor(), Cursor::Default);
     rt.pointer_down(90.0, 60.0);
+    assert_eq!(rt.take_resize_action(), None);
     assert_eq!(rt.take_titlebar_action(), None);
     rt.pointer_up(90.0, 60.0);
 
@@ -911,26 +915,30 @@ fn window_resize_emits_action_sets_default_cursor_and_yields_to_controls() {
     rt.pointer_move(150.0, 60.0);
     assert_eq!(rt.cursor(), Cursor::Grab);
     rt.pointer_down(150.0, 60.0);
-    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Resize(ResizeEdge::SouthEast)));
+    assert_eq!(rt.take_titlebar_action(), None);
+    assert_eq!(rt.take_resize_action(), Some(ResizeEdge::SouthEast));
     rt.pointer_up(150.0, 60.0);
 
     rt.pointer_move(210.0, 60.0);
     assert_eq!(rt.cursor(), Cursor::Crosshair);
     rt.pointer_down(210.0, 60.0);
-    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Resize(ResizeEdge::NorthWest)));
+    assert_eq!(rt.take_titlebar_action(), None);
+    assert_eq!(rt.take_resize_action(), Some(ResizeEdge::NorthWest));
     rt.pointer_up(210.0, 60.0);
 
     // Bare area of parent resize row still resizes.
     rt.pointer_move(280.0, 60.0);
     assert_eq!(rt.cursor(), Cursor::ResizeEw);
     rt.pointer_down(280.0, 60.0);
-    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Resize(ResizeEdge::East)));
+    assert_eq!(rt.take_titlebar_action(), None);
+    assert_eq!(rt.take_resize_action(), Some(ResizeEdge::East));
     rt.pointer_up(280.0, 60.0);
 
     // Inert resize strip neither shows resize cursor nor resizes.
     rt.pointer_move(40.0, 100.0);
     assert_eq!(rt.cursor(), Cursor::Default);
     rt.pointer_down(40.0, 100.0);
+    assert_eq!(rt.take_resize_action(), None);
     assert_eq!(rt.take_titlebar_action(), None);
     rt.pointer_up(40.0, 100.0);
 
@@ -939,7 +947,8 @@ fn window_resize_emits_action_sets_default_cursor_and_yields_to_controls() {
     assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Drag));
     rt.pointer_up(40.0, 140.0);
     rt.pointer_down(20.0, 20.0);
-    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Resize(ResizeEdge::North)));
+    assert_eq!(rt.take_resize_action(), Some(ResizeEdge::North));
+    assert_eq!(rt.take_titlebar_action(), None);
     rt.pointer_up(20.0, 20.0);
     rt.pointer_down(40.0, 140.0);
     assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Drag), "resize broke the drag pair");
@@ -962,5 +971,6 @@ fn window_resize_emits_action_sets_default_cursor_and_yields_to_controls() {
     rt.pointer_move(200.0, 20.0);
     assert_eq!(rt.cursor(), Cursor::Default);
     rt.pointer_down(200.0, 20.0);
+    assert_eq!(rt.take_resize_action(), None);
     assert_eq!(rt.take_titlebar_action(), None);
 }

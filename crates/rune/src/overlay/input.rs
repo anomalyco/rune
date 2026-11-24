@@ -157,9 +157,10 @@ impl OverlayCore {
     /// layer-shell and XWayland overlays cannot be interactively dragged and ignore it.
     /// `DoubleClick` is ignored because overlays do not maximize or minimize.
     pub(super) fn take_titlebar_action(&mut self, app: &mut dyn OverlayApp) -> bool {
+        let _ = app.rt_mut().take_resize_action();
         match app.rt_mut().take_titlebar_action() {
             Some(crate::TitlebarAction::Drag) => self.begin_window_drag(app),
-            Some(crate::TitlebarAction::Resize(_)) | Some(crate::TitlebarAction::DoubleClick) | None => false,
+            Some(crate::TitlebarAction::DoubleClick) | None => false,
         }
     }
 

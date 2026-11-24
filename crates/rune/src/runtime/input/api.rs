@@ -321,6 +321,17 @@ impl<S: 'static> Runtime<S> {
     pub fn set_native_titlebar_band(&mut self, points: f32) { self.core_mut().set_native_titlebar_band(points); }
     #[inline(always)]
     pub fn take_titlebar_action(&mut self) -> Option<TitlebarAction> { self.core_mut().take_titlebar_action() }
+    /// A window resize edge requested by the press just delivered on an
+    /// [`El::window_resize`](crate::El::window_resize) region. The shell must act on it
+    /// before returning from that press event.
+    ///
+    /// ```ignore
+    /// if let Some(edge) = rt.take_resize_action() {
+    ///     let _ = window.drag_resize_window(edge.into());
+    /// }
+    /// ```
+    #[inline(always)]
+    pub fn take_resize_action(&mut self) -> Option<crate::ResizeEdge> { self.core_mut().take_resize_action() }
     #[inline(always)]
     pub fn set_chrome_insets(&mut self, insets: crate::ChromeInsets) { self.core_mut().set_chrome_insets(insets); }
     #[inline(always)]

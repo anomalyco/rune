@@ -490,7 +490,8 @@ fn window_resize_in_overlay_is_drained_without_starting_a_drag() {
     overlay.rt.frame(0.0);
     overlay.left_button(true, Some((50.0, 20.0)));
     overlay.left_button(false, Some((50.0, 20.0)));
-    assert_eq!(overlay.rt.take_titlebar_action(), None, "Resize action must be drained");
+    assert_eq!(overlay.rt.take_resize_action(), None, "Resize action must be drained");
+    assert_eq!(overlay.rt.take_titlebar_action(), None, "Titlebar action stays empty");
     assert_eq!(overlay.core.test_window_drags, 0, "overlays ignore window_resize");
 }
 

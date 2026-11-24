@@ -565,6 +565,9 @@ impl Host {
                 if let Some(action) = app.rt_mut().take_titlebar_action() {
                     l.titlebar_action(action);
                 }
+                if let Some(edge) = app.rt_mut().take_resize_action() {
+                    let _ = l.drag_resize_window(edge);
+                }
                 l.request_redraw();
             }
             WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
@@ -585,6 +588,9 @@ impl Host {
                             // AppKit needs the drag started inside this mouse-down.
                             if let Some(action) = app.rt_mut().take_titlebar_action() {
                                 l.titlebar_action(action);
+                            }
+                            if let Some(edge) = app.rt_mut().take_resize_action() {
+                                let _ = l.drag_resize_window(edge);
                             }
                         }
                         (ElementState::Released, false) => app.pointer_up(x, y),

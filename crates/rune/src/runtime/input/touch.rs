@@ -351,6 +351,13 @@ impl RuntimeCore {
         self.press_down(app, x, y, true);
         let now = self.now_clock();
         let policy = self.pointer.touch.policy;
+        if self.host.titlebar.resize.is_some() {
+            self.touch_scroll_end(scroll, 0.0);
+            let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Cancel);
+            let _ = self.apply_hold_effects(effects);
+            self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::WindowDragging });
+            return;
+        }
         match self.host.titlebar.action {
             Some(TitlebarAction::Drag) => {
                 // Hold the drag until the finger crosses `TOUCH_SLOP`, so taps, double-taps and
@@ -362,7 +369,7 @@ impl RuntimeCore {
                 self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::WindowDragPending });
                 return;
             }
-            Some(TitlebarAction::DoubleClick | TitlebarAction::Resize(_)) => {
+            Some(TitlebarAction::DoubleClick) => {
                 self.touch_scroll_end(scroll, 0.0);
                 let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Cancel);
                 let _ = self.apply_hold_effects(effects);
