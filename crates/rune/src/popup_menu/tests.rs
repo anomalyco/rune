@@ -279,3 +279,95 @@ fn a_resolved_session_hands_over_its_answer_and_pointer_once() {
     assert!(session.take_answer().is_none() && session.is_cancelled());
     assert!(session.cancel().is_none(), "a closed menu has nothing to stop");
 }
+
+#[test]
+fn entries_and_selected_id_expose_items_separators_submenus_and_metadata() {
+    let empty = PopupMenu::new();
+    assert!(empty.entries().is_empty());
+    assert_eq!(empty.selected_id(), None);
+
+    let shortcut: Shortcut = "mod+c".parse().unwrap();
+    let nested = PopupMenu::new().item(PopupItem::new("deep", "Deep"));
+    let menu = PopupMenu::new()
+        .items([PopupItem::new("copy", "Copy").checked(true).key_equivalent(shortcut.clone()).symbol("doc.on.doc")])
+        .separator()
+        .item(PopupItem::new("paste", "Paste").enabled(false))
+        .submenu("More", PopupMenu::new().item(PopupItem::new("share", "Share")).submenu("Nested", nested))
+        .submenu_enabled("Disabled", PopupMenu::new().item(PopupItem::new("hidden", "Hidden")), false)
+        .selected("copy");
+
+    assert_eq!(menu.selected_id(), Some("copy"));
+    assert_eq!(menu.entries().len(), 5);
+    match &menu.entries()[0] {
+        PopupEntry::Item(item) => {
+            assert_eq!(item.id(), "copy");
+            assert_eq!(item.title(), "Copy");
+            assert!(item.is_enabled());
+            assert!(item.is_checked());
+            assert_eq!(item.key_equivalent_shortcut(), Some(&shortcut));
+            assert_eq!(item.symbol_name(), Some("doc.on.doc"));
+        }
+        other => panic!("expected item at index 0, got {other:?}"),
+    }
+    assert_eq!(menu.entries()[1], PopupEntry::Separator);
+    match &menu.entries()[2] {
+        PopupEntry::Item(item) => {
+            assert_eq!(item.id(), "paste");
+            assert!(!item.is_enabled());
+            assert!(!item.is_checked());
+            assert_eq!(item.key_equivalent_shortcut(), None);
+            assert_eq!(item.symbol_name(), None);
+        }
+        other => panic!("expected item at index 2, got {other:?}"),
+    }
+    match &menu.entries()[3] {
+        PopupEntry::Submenu { title, menu: sub, enabled } => {
+            assert_eq!(title, "More");
+            assert!(*enabled);
+            assert_eq!(sub.entries().len(), 2);
+            assert!(matches!(&sub.entries()[0], PopupEntry::Item(i) if i.id() == "share"));
+            assert!(matches!(&sub.entries()[1], PopupEntry::Submenu { title, menu, enabled: true } if title == "Nested" && menu.entries().len() == 1));
+        }
+        other => panic!("expected enabled submenu at index 3, got {other:?}"),
+    }
+    match &menu.entries()[4] {
+        PopupEntry::Submenu { title, menu: sub, enabled } => {
+            assert_eq!(title, "Disabled");
+            assert!(!*enabled);
+            assert_eq!(sub.entries().len(), 1);
+        }
+        other => panic!("expected disabled submenu at index 4, got {other:?}"),
+    }
+}
+
+#[test]
+fn headless_runtime_can_inspect_open_popup_menu_entries_and_selected_id() {
+    let mut rt = runtime();
+    click(&mut rt, "theme");
+    let picker = rt.popup_menu().expect("picker menu open");
+    assert_eq!(picker.selected_id(), Some("system"));
+    let picker_items: Vec<(&str, &str, bool, bool)> = picker.entries().iter().filter_map(|e| match e {
+        PopupEntry::Item(i) => Some((i.id(), i.title(), i.is_enabled(), i.is_checked())),
+        _ => None,
+    }).collect();
+    assert_eq!(picker_items, [
+        ("system", "System", true, true),
+        ("light", "Light", true, false),
+        ("dark", "Dark", true, false),
+    ]);
+    rt.resolve_popup(None).unwrap();
+
+    rt.secondary_down(30.0, 70.0);
+    rt.secondary_up(30.0, 70.0);
+    rt.frame(0.0);
+    let ctx = rt.popup_menu().expect("context menu open");
+    assert_eq!(ctx.selected_id(), None);
+    assert_eq!(ctx.entries().len(), 4);
+    assert!(matches!(&ctx.entries()[0], PopupEntry::Item(i) if i.id() == "copy" && i.is_enabled()));
+    assert!(matches!(&ctx.entries()[1], PopupEntry::Separator));
+    assert!(matches!(&ctx.entries()[2], PopupEntry::Item(i) if i.id() == "paste" && !i.is_enabled()));
+    assert!(matches!(&ctx.entries()[3], PopupEntry::Submenu { title, menu, enabled: true }
+        if title == "More" && matches!(menu.entries(), [PopupEntry::Item(i)] if i.id() == "share")));
+    rt.resolve_popup(Some("copy")).unwrap();
+    assert!(rt.popup_menu().is_none());
+}

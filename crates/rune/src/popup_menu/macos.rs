@@ -15,7 +15,7 @@ use objc2_app_kit::{NSMenu, NSMenuItem};
 use objc2_foundation::{NSObject, NSPoint, NSString};
 use winit::window::Window;
 
-use super::{Entry, PopupMenu, Session, Show};
+use super::{PopupEntry, PopupMenu, Session, Show};
 use crate::runtime::Waker;
 
 pub(super) const SUPPORTED: bool = true;
@@ -102,9 +102,9 @@ pub(super) fn show(window: &Arc<Window>, show: Show, session: Rc<Session>, wake:
 fn collect_ids(menu: &PopupMenu, ids: &mut Vec<String>) {
     for entry in &menu.entries {
         match entry {
-            Entry::Item(item) => ids.push(item.id.clone()),
-            Entry::Submenu(_, menu, _) => collect_ids(menu, ids),
-            Entry::Separator => {}
+            PopupEntry::Item(item) => ids.push(item.id.clone()),
+            PopupEntry::Submenu { menu, .. } => collect_ids(menu, ids),
+            PopupEntry::Separator => {}
         }
     }
 }
@@ -121,7 +121,7 @@ fn build(mtm: MainThreadMarker, menu: &PopupMenu, target: &Target, tag: &mut isi
         crate::native_menu::set_layout_direction(&ns_menu);
         for entry in &menu.entries {
             match entry {
-                Entry::Item(item) => {
+                PopupEntry::Item(item) => {
                     let ns_item = NSMenuItem::initWithTitle_action_keyEquivalent(mtm.alloc(),
                         &NSString::from_str(&item.title), Some(sel!(runePopupPick:)), &NSString::from_str(""));
                     ns_item.setTarget(Some(object));
@@ -134,8 +134,8 @@ fn build(mtm: MainThreadMarker, menu: &PopupMenu, target: &Target, tag: &mut isi
                     if positioned == Some(item.id.as_str()) { *found = Some(ns_item.clone()); }
                     ns_menu.addItem(&ns_item);
                 }
-                Entry::Separator => ns_menu.addItem(&NSMenuItem::separatorItem(mtm)),
-                Entry::Submenu(title, menu, enabled) => {
+                PopupEntry::Separator => ns_menu.addItem(&NSMenuItem::separatorItem(mtm)),
+                PopupEntry::Submenu { title, menu, enabled } => {
                     let title = NSString::from_str(title);
                     let submenu = build(mtm, menu, target, tag, None, found);
                     submenu.setTitle(&title);

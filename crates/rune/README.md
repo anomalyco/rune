@@ -798,6 +798,7 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   launcher, while hidden). A window that isn't on screen (covered, occluded, hidden or on another Space) doesn't
   wait to draw: it runs at the first frame skipped for that, or a second after the window opens. Capture `app.handle()` and call `handle.update(|s, tx| ..)` there to start status
   items, HUDs, secondary windows, network and indexing; updates run on the UI thread even with no window showing.
+  Headless CLI runs (`--snap`, `--tree`, `--script`, ...) skip `on_ready` unless `--realtime` is passed, which runs it after the first frame; `App::headless_runtime` never runs it (seed test or scene state in `AppSpec::scenes`, `App::init` or `Runtime::update` instead).
   There is no state-level first-frame hook yet.
 - **A launcher can wait for readiness.** With `RUNE_READY_DIR` set, the process writes
   `$RUNE_READY_DIR/<bundle id>.<pid>` (the main bundle's identifier on macOS, else the executable's name) right
@@ -1899,7 +1900,10 @@ row().key("theme").child(text(theme_title(&s.theme)))
 - **Headless**: `--tree` has a `popupMenu` object (items, anchor, `selected`, `queued`) while a
   menu is open, and `--trace` notes `popup-menu:open`, `popup-menu:pick:{id}` and
   `popup-menu:cancel`. Scripts answer it with `{"type": "menu-pick", "id": "dark"}` or
-  `{"type": "menu-cancel"}`.
+  `{"type": "menu-cancel"}`. In Rust tests, `rt.popup_menu()` returns the open `PopupMenu`
+  with read-only `entries()` (`&[PopupEntry]`), `selected_id()`, and `PopupItem` getters
+  (`id`, `title`, `is_enabled`, `is_checked`, `key_equivalent_shortcut`, `symbol_name`), and
+  `rt.resolve_popup(Some("id"))` / `rt.resolve_popup(None)` answers or dismisses it.
 
 ## Multiple windows and overlays
 
@@ -2808,6 +2812,54 @@ $L --desktop examples/launcher/backdrop.png --script examples/launcher/scripts/d
   fields. Without `--trace` nothing changes. Capture on a display, not headless:
   `cargo run --profile perf -p rune --features tooling --example pacing -- --native --trace pacing.jsonl --frames 240`.
 
+### Testing an app headless
+
+A `cargo test` can drive an app's real `Runtime` directly without a window or a playground:
+
+```rust
+use rune::{App, AppSpec, Env, Key, KeyEvent, Mods, PopupEntry};
+
+let mut spec = AppSpec::new("My app", (800.0, 500.0), State::default, view);
+spec.on_key = Some(on_key);
+let mut rt = App::new(spec).headless_runtime((800.0, 500.0), Env::new(false, 1.0));
+rt.frame(0.0); // first frame builds the view and lays out elements
+
+// Click an element by key (or scoped key path such as "row-3/more"):
+let (x, y) = rt.find("search").unwrap();
+rt.pointer_down(x, y);
+rt.pointer_up(x, y);
+rt.frame(0.0);
+
+// Type into the focused field and send keys (unhandled keys route to spec.on_key):
+rt.key(KeyEvent { key: Key::Text("hello".into()), mods: Mods::default() });
+rt.key(KeyEvent { key: Key::Enter, mods: Mods::default() });
+rt.frame(0.0);
+
+// Read laid-out elements and the AccessKit accessibility tree:
+let label = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("status")).and_then(|e| e.text);
+let a11y = rt.accessibility_json();
+
+// Inspect and answer an open pop-up or context menu (from on_press_tx or secondary_down/up):
+if let Some(menu) = rt.popup_menu() {
+    let has_copy = menu.entries().iter().any(|e| matches!(e, PopupEntry::Item(i) if i.id() == "copy" && i.is_enabled()));
+    assert!(has_copy);
+    rt.resolve_popup(Some("copy")).unwrap();
+    rt.frame(0.0);
+}
+```
+
+- `App::new(spec).headless_runtime(size, env)` wires `spec.init` (or `App::init`), `spec.view`,
+  `spec.fonts`, `spec.families`, `spec.poll`, `spec.on_key`, `spec.setup` (with a no-op waker),
+  and `App` hooks (`on_focus`, `on_modifiers`, `on_visibility`, `on_ime`, `tab_visits_controls`).
+  It ignores command-line arguments and never runs `on_ready`; set up initial state in
+  `App::init` or call `rt.update(|s, tx| ..)` before framing.
+- Drive input with `pointer_move`, `pointer_down`/`pointer_up`, `secondary_down`/`secondary_up`,
+  `key`, `paste`, and `ime`, then step the logical clock with `rt.frame(dt)` (`0.0` for an
+  immediate commit, or `1.0 / 60.0` to advance animations and timers).
+- Inspect `rt.state`, `rt.elements()` (`ElementInfo`: `key`, `path`, `role`, `label`, `text`,
+  `rect`, `focused`, `exiting`, ...), `rt.accessibility_json()` / `rt.accessibility_tree()`,
+  and `rt.popup_menu()` (`PopupMenu::entries()`, `selected_id()`, `find()`).
+
 ## Playground
 
 `App::playground` is a storybook built into the window. ⌘⇧D (Ctrl+Shift+D off macOS) opens it;
@@ -2930,7 +2982,8 @@ App::new(spec).playground(
 ### Testing stories
 
 A unit test runs a story's triggers and steps headless, as `--playground NAME --variant V`
-would, and reads the stage:
+would, and reads the stage (for testing an app directly without the playground, see
+[Testing an app headless](#testing-an-app-headless)):
 
 ```rust
 let mut rt = App::new(spec).playground(playground()).headless_runtime((800.0, 500.0), Env::new(false, 1.0));
