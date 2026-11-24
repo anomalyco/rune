@@ -82,6 +82,20 @@ pub(crate) fn push_segment(path: &mut String, key: Option<&str>, index: usize) {
     }
 }
 
+/// Encodes a single user key into its canonical path segment (escaping ambiguous keys).
+#[doc(hidden)]
+pub fn path_segment(key: &str) -> String {
+    let mut seg = String::with_capacity(key.len() + if key_needs_escape(key) { 8 } else { 0 });
+    push_segment(&mut seg, Some(key), 0);
+    seg
+}
+
+/// Joins an encoded `parent` path with a keyed child segment using the runtime's exact path encoding.
+#[doc(hidden)]
+pub fn child_path(parent: &str, key: &str) -> String {
+    node_path(parent, Some(key), 0)
+}
+
 /// Build the owned path directly, without cloning a key or formatting an index into a temporary
 /// segment first. Measurement and flattening must use the same identity rule.
 pub(in crate::runtime) fn node_path(parent: &str, key: Option<&str>, index: usize) -> String {

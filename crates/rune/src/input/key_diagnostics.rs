@@ -203,8 +203,8 @@ mod tests {
         fn memo(key: &str, children: Vec<El>) -> El {
             let mut root = el().key(key);
             let duplicate_keys = memo_children_have_duplicates(&root, &children);
-            let children = std::rc::Rc::new(crate::memo::Shared { children, focused_input: false, duplicate_keys, has_virtual: false, reusable: false });
-            root.memo = Some(std::rc::Rc::new(crate::memo::Built { id: 0, reusable: false, region: false, root: el(), children }));
+            let children = std::rc::Rc::new(crate::memo::Shared { children, focused_input: false, duplicate_keys, has_virtual: false, reusable: false, has_path_bind: false });
+            root.memo = Some(std::rc::Rc::new(crate::memo::Built { id: 0, reusable: false, has_path_bind: false, region: false, root: el(), children }));
             root
         }
         let clean_memo = || memo("a", vec![el().key("x"), el().key("y").child(el().key("z"))]);

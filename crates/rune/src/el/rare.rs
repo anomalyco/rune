@@ -35,6 +35,8 @@ pub(crate) struct ElCold {
     /// `El::wheel_scrolls`: the viewport a wheel over this element scrolls, in place of what it
     /// starts on.
     pub(crate) wheel_scrolls: Option<Box<str>>,
+    /// `El::bind_path`: runs during flattening once this element's full tree path is known.
+    pub(crate) on_path: Option<Rc<dyn Fn(&str, &mut crate::el::PathBind)>>,
     pub(crate) sticky: Option<Box<Sticky>>,
     pub(crate) scroll_edges: ScrollEdges,
     pub(crate) growth: Option<Box<GrowthSpec>>,
@@ -88,6 +90,7 @@ impl Empty for ElCold {
         scroll: None,
         scroll_axes: ScrollAxes::Y,
         wheel_scrolls: None,
+        on_path: None,
         sticky: None,
         scroll_edges: ScrollEdges { fade: 0.0, fade_style: crate::el::FadeStyle::SMOOTH, margin: 0.0, anchor: false },
         growth: None,

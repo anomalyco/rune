@@ -470,7 +470,9 @@ Quis autem vel eum iure reprehenderit qui in ea voluptate velit esse quam.";
     // reaches its track at all.
     rt.pointer_move(bar[0] + bar[2] / 2.0, bar[1] + bar[3] / 2.0);
     for _ in 0..30 { rt.frame(1.0 / 60.0); }
-    assert!(bars(&rt).iter().all(|(_, o)| *o > 0.9), "the bars are up under the pointer: {:?}", bars(&rt));
+    let shown = bars(&rt);
+    assert!(shown.iter().any(|(r, o)| r[0] > 200.0 && *o > 0.9), "the right table's bar is up under the pointer: {shown:?}");
+    assert!(shown.iter().any(|(r, o)| r[0] < 200.0 && *o == 0.0), "the left table's bar stays hidden: {shown:?}");
     rt.wheel(bar[0] + bar[2] / 2.0, bar[1] + bar[3] / 2.0, -30.0);
     rt.frame(1.0 / 60.0);
     assert_eq!(right(), 30.0, "the wheel over the right pane's table bar scrolled its own pane");

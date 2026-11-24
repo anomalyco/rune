@@ -754,4 +754,86 @@ impl El {
         outer.vis.cold_mut().clip_to_content = true;
         (area, key, outer, self)
     }
+
+    /// Runs `f` during flattening once this element's full tree path is known, merging any
+    /// handlers and overlay children `f` adds into the flattened node. Multiple calls chain in
+    /// order. For components like `rune-kit`'s `ScrollBar` whose state and targets scope by tree
+    /// path even though elements build bottom-up before ancestors' keys attach.
+    #[doc(hidden)]
+    pub fn bind_path(mut self, f: impl Fn(&str, &mut PathBind) + 'static) -> Self {
+        let cold = self.cold_mut();
+        cold.on_path = Some(match cold.on_path.take() {
+            Some(prev) => Rc::new(move |path, bind| {
+                prev(path, bind);
+                f(path, bind);
+            }),
+            None => Rc::new(f),
+        });
+        self
+    }
+}
+
+/// What [`El::bind_path`] can attach once an element's resolved tree path is known: chained
+/// pointer, hover and scroll-offset handlers, and overlay children.
+#[doc(hidden)]
+#[derive(Default)]
+pub struct PathBind {
+    pub(crate) on_pointer_move: Option<Rc<dyn Fn(PointerEvent, &mut Tx)>>,
+    pub(crate) on_hover_change: Option<Rc<dyn Fn(bool, &mut Tx)>>,
+    pub(crate) on_scroll_offset: Option<ScrollOffsetFn>,
+    #[cfg(debug_assertions)]
+    pub(crate) pointer_move_site: Option<&'static std::panic::Location<'static>>,
+    #[cfg(debug_assertions)]
+    pub(crate) hover_change_site: Option<&'static std::panic::Location<'static>>,
+    pub(crate) children: Vec<El>,
+}
+
+impl PathBind {
+    #[track_caller]
+    pub fn on_pointer_move_any(&mut self, f: impl Fn(PointerEvent, &mut Tx) + 'static) -> &mut Self {
+        self.on_pointer_move = Some(match self.on_pointer_move.take() {
+            Some(prev) => Rc::new(move |p, tx| {
+                prev(p, tx);
+                let prev_live = std::mem::take(&mut tx.live_only);
+                f(p, tx);
+                tx.live_only &= prev_live;
+            }),
+            None => Rc::new(f),
+        });
+        #[cfg(debug_assertions)]
+        { self.pointer_move_site = Some(std::panic::Location::caller()); }
+        self
+    }
+
+    #[track_caller]
+    pub fn on_hover_change_any(&mut self, f: impl Fn(bool, &mut Tx) + 'static) -> &mut Self {
+        self.on_hover_change = Some(match self.on_hover_change.take() {
+            Some(prev) => Rc::new(move |inside, tx| {
+                prev(inside, tx);
+                let prev_live = std::mem::take(&mut tx.live_only);
+                f(inside, tx);
+                tx.live_only &= prev_live;
+            }),
+            None => Rc::new(f),
+        });
+        #[cfg(debug_assertions)]
+        { self.hover_change_site = Some(std::panic::Location::caller()); }
+        self
+    }
+
+    pub fn on_scroll_offset(&mut self, f: impl Fn(crate::ScrollPos) + 'static) -> &mut Self {
+        self.on_scroll_offset = Some(match self.on_scroll_offset.take() {
+            Some(prev) => Rc::new(move |at| {
+                prev(at);
+                f(at);
+            }),
+            None => Rc::new(f),
+        });
+        self
+    }
+
+    pub fn child(&mut self, child: El) -> &mut Self {
+        self.children.push(child);
+        self
+    }
 }

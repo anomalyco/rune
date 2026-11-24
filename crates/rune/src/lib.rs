@@ -98,6 +98,8 @@ pub use el::GrowthSpec;
 pub use el::{InlineIcon, InlineImage};
 pub use el::LiveRegion;
 pub use el::Outline;
+#[doc(hidden)]
+pub use el::PathBind;
 pub use el::Phase;
 pub use el::PillStyle;
 pub use el::PointerEvent;
@@ -332,7 +334,11 @@ pub use runtime::TextSelection;
 pub use runtime::TitlebarAction;
 pub use runtime::TouchPhase;
 pub use runtime::Waker;
+#[doc(hidden)]
+pub use runtime::child_path;
 pub use runtime::commit_generation;
+#[doc(hidden)]
+pub use runtime::path_segment;
 #[doc(hidden)]
 pub use runtime::scroll_watch_state;
 pub use shape::LineCap;

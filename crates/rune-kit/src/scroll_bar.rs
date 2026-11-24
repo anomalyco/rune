@@ -366,8 +366,9 @@ impl ScrollBarStyle {
 
 /// What one scroll bar keeps across rebuilds: where its viewport stands, its visibility state,
 /// where the pointer is, and the live rects and opacity that follow them. Kept per
-/// `(runtime_id, area)` so a rebuild hands the same live sources to the new view without
-/// disturbing in-flight pulses.
+/// `(runtime_id, area_path)` (the wrapper's full tree path) so a rebuild hands the same live
+/// sources to the new view without disturbing in-flight pulses, while two panes whose viewports
+/// share a local key keep independent bars.
 struct Bar {
     pos: Cell<ScrollPos>,
     state: Cell<BarState>,
@@ -399,12 +400,15 @@ thread_local! {
     static BARS: RefCell<HashMap<(u64, String), Rc<Bar>>> = RefCell::new(HashMap::new());
 }
 
-fn kept(area: &str) -> Rc<Bar> {
-    let id = (rune::current_runtime_id(), area.to_owned());
+fn kept(area_path: &str) -> Rc<Bar> {
+    let id = (rune::current_runtime_id(), area_path.to_owned());
     BARS.with(|bars| {
         let mut bars = bars.borrow_mut();
         if bars.len() >= KEPT && !bars.contains_key(&id) {
-            bars.clear();
+            bars.retain(|_, bar| Rc::strong_count(bar) > 1);
+            if bars.len() >= KEPT {
+                bars.clear();
+            }
         }
         bars.entry(id)
             .or_insert_with(|| {
@@ -788,18 +792,60 @@ impl ScrollBar for El {
     }
 
     fn scroll_bar_hover(self, viewport_key: &str) -> El {
-        let bar = kept(&format!("{viewport_key}-scroll-area"));
-        self.chain_hover_change_any(move |inside, tx| {
-            tx.live_only();
-            bar.note_now(tx.clock());
-            bar.hover_target(inside);
+        let area_seg = rune::path_segment(&format!("{viewport_key}-scroll-area"));
+        self.bind_path(move |scope, patch| {
+            let runtime_id = rune::current_runtime_id();
+            let scope = scope.to_owned();
+            let area_seg = area_seg.clone();
+            patch.on_hover_change_any(move |inside, tx| {
+                tx.live_only();
+                if let Some(bar) = bar_for_hover(runtime_id, &scope, &area_seg) {
+                    bar.note_now(tx.clock());
+                    bar.hover_target(inside);
+                }
+            });
         })
     }
 }
 
+/// Resolves the scroll bar whose wrapper ends with `area_seg` nearest `scope` in the tree:
+/// inside `scope` first, then walking up ancestors innermost-first (matching `El::wheel_scrolls`),
+/// preferring mounted bars (`Rc::strong_count > 1`) when more than one path is cached.
+fn bar_for_hover(runtime_id: u64, scope: &str, area_seg: &str) -> Option<Rc<Bar>> {
+    BARS.with(|bars| {
+        let bars = bars.borrow();
+        let mut cur = Some(scope);
+        while let Some(prefix) = cur {
+            let mut mounted: Option<(&str, &Rc<Bar>)> = None;
+            let mut any: Option<(&str, &Rc<Bar>)> = None;
+            for ((rid, path), bar) in bars.iter() {
+                if *rid != runtime_id || path.rsplit('/').next() != Some(area_seg) {
+                    continue;
+                }
+                let in_scope = path == prefix || path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('/'));
+                if !in_scope {
+                    continue;
+                }
+                let better = |best: Option<(&str, &Rc<Bar>)>| best.is_none_or(|(bp, _)| (path.len(), path.as_str()) < (bp.len(), bp));
+                if Rc::strong_count(bar) > 1 && better(mounted) {
+                    mounted = Some((path.as_str(), bar));
+                }
+                if better(any) {
+                    any = Some((path.as_str(), bar));
+                }
+            }
+            if let Some((_, bar)) = mounted.or(any) {
+                return Some(bar.clone());
+            }
+            cur = prefix.rsplit_once('/').map(|(parent, _)| parent);
+        }
+        None
+    })
+}
+
 pub(crate) fn wrap(style: ScrollBarStyle, viewport: El, site: &'static Location<'static>) -> El {
-    let (area, key, outer, viewport) = viewport.wrap_scroll_area((site.file(), site.line(), site.column()));
-    attach(style, &area, &key, outer, viewport)
+    let (_area, key, outer, viewport) = viewport.wrap_scroll_area((site.file(), site.line(), site.column()));
+    attach(style, &key, outer, viewport)
 }
 
 /// `scroll_bar(&k, "rows-area", "scroll", viewport)`: `viewport`, a vertical scroll viewport
@@ -808,46 +854,55 @@ pub(crate) fn wrap(style: ScrollBarStyle, viewport: El, site: &'static Location<
 /// (`.grow(1.0)` or `.shrink()` with `.min_h(0.0)`), or call [`ScrollBar::scroll_bar`] /
 /// [`Kit::scroll_bar`] directly on the sized viewport.
 pub fn scroll_bar(k: &Kit, area: &str, key: &str, viewport: El) -> El {
-    attach(ScrollBarStyle::from_kit(k), area, key, col().key(area), viewport.key(key))
+    attach(ScrollBarStyle::from_kit(k), key, col().key(area), viewport.key(key))
 }
 
-fn attach(style: ScrollBarStyle, area: &str, key: &str, outer: El, viewport: El) -> El {
+fn attach(style: ScrollBarStyle, key: &str, outer: El, viewport: El) -> El {
     let overlay = style.track.overlay || rune::system_scroll_bars().is_overlay(rune::system_scroller_overlay());
     let jumps = rune::system_scroller_jumps();
-    let bar = kept(area);
-    bar.restyle(style);
-    let target = format!("{area}/{key}");
-    let (watch, moved, left, drag, follows) = (bar.clone(), bar.clone(), bar.clone(), bar.clone(), target.clone());
-    let on_drag = move |d: &mut rune::Drag, tx: &mut rune::Tx| {
-        drag.note_now(tx.clock());
-        drag.drag(&target, jumps, d, tx);
-    };
-    let slot = el().key("thumb-slot").absolute(0.0, 0.0).live_rect(bar.slot.smooth(style.track.tint)).child(
-        el().key("thumb").absolute(0.0, 0.0).live_rect(bar.thumb.smooth(style.track.tint))
-            .radius(style.widest() / 2.0).live_fill(bar.fill.smooth(style.track.tint)),
-    );
-    // A wheel over the bar is the viewport's, the track standing beside it rather than in it, on
-    // either axis: a sideways wheel over a table's bar scrolls the table, and a vertical wheel
-    // over it chains on up from the table to the pane that holds it.
-    let track = el().key("scroll-bar").absolute(0.0, 0.0).live_rect(&bar.track)
-        .live_opacity(bar.opacity.smooth_with(style.track.enter).rest_with(style.track.leave)).a11y_hidden()
-        .wheel_scrolls(follows);
-    // The transparent area beyond a ScrollView/MenuScroll thumb belongs to the viewport. A
-    // press there must not capture a drag, swallow a row's click, page or start a repeat timer.
-    let track = if style.track.thumb_only { track.child(slot.on_drag_any(on_drag)) } else { track.on_drag_any(on_drag).child(slot) };
+    let key = key.to_owned();
+    let viewport = viewport.bind_path(move |viewport_path, patch| {
+        let area_path = viewport_path.rsplit_once('/').map_or("", |(p, _)| p);
+        let watch = kept(area_path);
+        patch.on_scroll_offset(move |at| watch.follow(at, overlay));
+    });
     outer
-        .on_pointer_move_any(move |p, tx| {
-            tx.live_only();
-            moved.note_now(tx.clock());
-            moved.pointer(p);
+        .bind_path(move |area_path, patch| {
+            let bar = kept(area_path);
+            bar.restyle(style);
+            let target = rune::child_path(area_path, &key);
+            let (moved, left, drag, follows) = (bar.clone(), bar.clone(), bar.clone(), target.clone());
+            let on_drag = move |d: &mut rune::Drag, tx: &mut rune::Tx| {
+                drag.note_now(tx.clock());
+                drag.drag(&target, jumps, d, tx);
+            };
+            let slot = el().key("thumb-slot").absolute(0.0, 0.0).live_rect(bar.slot.smooth(style.track.tint)).child(
+                el().key("thumb").absolute(0.0, 0.0).live_rect(bar.thumb.smooth(style.track.tint))
+                    .radius(style.widest() / 2.0).live_fill(bar.fill.smooth(style.track.tint)),
+            );
+            // A wheel over the bar is the viewport's, the track standing beside it rather than in it, on
+            // either axis: a sideways wheel over a table's bar scrolls the table, and a vertical wheel
+            // over it chains on up from the table to the pane that holds it.
+            let track = el().key("scroll-bar").absolute(0.0, 0.0).live_rect(&bar.track)
+                .live_opacity(bar.opacity.smooth_with(style.track.enter).rest_with(style.track.leave)).a11y_hidden()
+                .wheel_scrolls(follows);
+            // The transparent area beyond a ScrollView/MenuScroll thumb belongs to the viewport. A
+            // press there must not capture a drag, swallow a row's click, page or start a repeat timer.
+            let track = if style.track.thumb_only { track.child(slot.on_drag_any(on_drag)) } else { track.on_drag_any(on_drag).child(slot) };
+            patch
+                .on_pointer_move_any(move |p, tx| {
+                    tx.live_only();
+                    moved.note_now(tx.clock());
+                    moved.pointer(p);
+                })
+                .on_hover_change_any(move |inside, tx| {
+                    tx.live_only();
+                    left.note_now(tx.clock());
+                    left.area_hover(inside);
+                })
+                .child(track);
         })
-        .on_hover_change_any(move |inside, tx| {
-            tx.live_only();
-            left.note_now(tx.clock());
-            left.area_hover(inside);
-        })
-        .child(viewport.chain_scroll_offset(move |at| watch.follow(at, overlay)))
-        .child(track)
+        .child(viewport)
 }
 
 #[cfg(test)]

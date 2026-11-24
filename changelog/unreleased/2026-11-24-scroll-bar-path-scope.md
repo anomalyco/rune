@@ -1,0 +1,1 @@
+- `rune-kit` `ScrollBar`: scroll bar state, thumb drags, track paging and `scroll_bar_hover` now scope by each viewport's resolved tree path rather than its local key alone, so viewports keyed alike in different panes or tables each keep their own bar and drag their own viewport.
