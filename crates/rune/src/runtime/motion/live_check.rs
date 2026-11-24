@@ -220,11 +220,12 @@ impl NodePrint {
             }
         };
         type TextPart = (&'static str, fn(&TextSpec) -> u64, Option<fn(&TextSpec) -> String>);
-        let parts: [TextPart; 11] = [
+        let parts: [TextPart; 12] = [
             ("text", |t| key(|h| t.cold.live.is_none().then_some(&t.content).hash(h)), Some(snippet)),
             ("text colour", |t| key(|h| rgba(t.color).hash(h)), Some(|t| colour(t.color))),
             ("text style", |t| key(|h| bits(&[t.style.size, t.style.weight]).hash(h)), Some(|t| format!("{:.1}pt weight {}", t.style.size, t.style.weight))),
             ("text indent", |t| u64::from(if t.cold.text_indent == 0.0 { 0 } else { t.cold.text_indent.to_bits() }), Some(|t| format!("{:.1}pt", t.cold.text_indent))),
+            ("vertical align", |t| t.cold.align_y as u64, Some(|t| format!("{:?}", t.cold.align_y))),
             ("pills", |t| key(|h| for p in &t.cold.pills {
                 (
                     p.start,

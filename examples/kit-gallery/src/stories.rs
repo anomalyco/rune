@@ -49,6 +49,16 @@ macro_rules! stories {
                 s.nowrap_code = TextEdit::new(NOWRAP_CODE);
                 s.nowrap_code.focused = true;
             }
+            if $id == "rune-text--align-y-input" {
+                s.align_y_edits = [
+                    TextEdit::new("Vertically centred single-line text"),
+                    TextEdit::new(""),
+                    TextEdit::new("Bottom-aligned (Align::End)"),
+                    TextEdit::new("Default top-aligned (Align::Start)"),
+                ];
+                s.align_y_edits[0].focused = true;
+                s.align_y_edits[0].set_caret(10);
+            }
             if $id == "rune-textarea--composer" {
                 s.edits[8] = TextEdit::new("Draft a release note in a borderless composer container.");
                 s.edits[9] = TextEdit::new("feat(rune-kit): add plain, trailing, and scroll_bar builders to TextArea so long messages wrap clear of the trailing Commit button and scroll cleanly.");
@@ -291,6 +301,7 @@ stories! {
     "rune-text--truncate-middle" => text_truncate_middle,
     "rune-text--max-lines-elide" => text_max_lines_elide,
     "rune-text--nowrap-input" => text_nowrap_input,
+    "rune-text--align-y-input" => text_align_y_input,
     "rune-dialog--fit" => dialog_fit,
     "rune-dialog--close-disabled" => dialog_close_disabled,
     "rune-popup-list--composer" => popup_list_composer,
@@ -591,6 +602,43 @@ fn text_nowrap_input(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
                 )
                 .scroll_bar_styled(ScrollBarStyle::from_kit(k)),
         )
+}
+
+/// Tall 48 pt single-line `text_input` fields showing opt-in `El::align_y`: vertically centred
+/// text + caret (`Align::Center`), centred placeholder, bottom-aligned (`Align::End`), and the
+/// default top-aligned layout (`Align::Start`).
+fn text_align_y_input(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let c = &k.c;
+    let st = TextStyle::new(14.0, 400.0).lh(20.0);
+    let field = |key: &'static str, label: &'static str, edit: &TextEdit, placeholder: &'static str, align: rune::Align, idx: usize| {
+        let border = if edit.focused { c.border_strong } else { c.border_weak };
+        col()
+            .gap(4.0)
+            .child(caption(k, label))
+            .child(
+                rune::text_input(edit, st)
+                    .single_line()
+                    .key(key)
+                    .label(label)
+                    .w(340.0)
+                    .h(48.0)
+                    .px(12.0)
+                    .align_y(align)
+                    .radius(k.radius.md)
+                    .fill(c.surface_base)
+                    .border(1.0, border)
+                    .color(c.text_base)
+                    .placeholder(placeholder, c.text_faint)
+                    .caret(c.text_base, k.selection())
+                    .on_edit(rune::edit_access(move |s: &mut G| &mut s.align_y_edits[idx])),
+            )
+    };
+    col()
+        .gap(12.0)
+        .child(field("align-y-center", "48 pt single_line · align_y(Align::Center) (text + caret)", &s.align_y_edits[0], "Type here…", rune::Align::Center, 0))
+        .child(field("align-y-placeholder", "48 pt single_line · align_y(Align::Center) (placeholder)", &s.align_y_edits[1], "Search notes…", rune::Align::Center, 1))
+        .child(field("align-y-end", "48 pt single_line · align_y(Align::End)", &s.align_y_edits[2], "Bottom-aligned…", rune::Align::End, 2))
+        .child(field("align-y-start", "48 pt single_line · default (Align::Start)", &s.align_y_edits[3], "Top-aligned…", rune::Align::Start, 3))
 }
 
 fn scroll_bar_basic(_: &G, k: &Kit, _: &mut Vec<El>) -> El {

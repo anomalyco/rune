@@ -1636,6 +1636,13 @@ for an unwrapped multi-line field (HTML `<textarea wrap="off">` / CSS `white-spa
 that breaks only at explicit newlines, measures the natural width of its longest line, and
 scrolls both ways with the caret inside `.scroll_x()` or `.scroll_xy()`.
 
+When a `text_input` or `text` box is taller than its lines (for example a 48–56 pt single-line
+search bar), call `.align_y(Align::Center)` (or `Align::End`, or `.set_align_y(..)` in place)
+to align glyphs, placeholder, selection highlight, caret, IME candidate rect, inline links, pills,
+pointer hit-testing, `Cx::caret`, `Cx::field_selection_rects`, and accessibility text runs inside
+the content box (matching CSS Box Alignment `align-content` / HTML `<input>` vertical centring).
+Defaults to `Align::Start` (top of the content box).
+
 Use `TextEdit::new("").secure()` with `text_input(&edit, style).single_line()` for
 passwords, or mark the element `.single_line().secure()`; kit's `TextInput::secure()`
 passes it through. Each Unicode scalar displays as one bullet, with model-byte

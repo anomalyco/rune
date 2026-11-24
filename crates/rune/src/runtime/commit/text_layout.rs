@@ -72,11 +72,13 @@ pub(in crate::runtime) fn line_alignment(spec: &TextSpec) -> parley::Alignment {
 /// from their own offsets, so the rect hugs the text rather than the box.
 pub(in crate::runtime) fn text_extent(n: &Node, spec: &TextSpec, layout: TextFlow<'_>, r: [f32; 4], scale: f32) -> (MRect, [f32; 2]) {
     let (x0, x1) = (r[0] + n.inset[0], r[0] + r[2] - n.inset[2]);
+    let (y0, y1) = (r[1] + n.inset[1], r[1] + r[3] - n.inset[3]);
     let (lo, hi) = layout.extent().unwrap_or((0.0, layout.full_width()));
-    let origin = [text_x(spec, x0, x1, layout.full_width() / scale, layout.flow()), r[1] + n.inset[1]];
+    let th = text_height(spec, layout, scale) / scale;
+    let origin = [text_x(spec, x0, x1, layout.full_width() / scale, layout.flow()), text_y(spec, y0, y1, th)];
     let x = origin[0] + lo / scale;
     (MRect::new(x, origin[1], ((hi - lo) / scale).min(x1 - x).max(0.0),
-        (layout.spec_height(spec.style, scale, spec.exact_lines) / scale).min(r[3] - n.inset[1] - n.inset[3])), origin)
+        th.min((y1 - y0).max(0.0))), origin)
 }
 
 /// Where a `width`-wide text line starts between `x0` and `x1`. Wrapped text aligns each line
@@ -91,6 +93,25 @@ pub(in crate::runtime) fn text_x(spec: &TextSpec, x0: f32, x1: f32, width: f32, 
         (Align::Start, Flow::Ltr) | (Align::End, Flow::Rtl) => x0,
         (Align::Center, _) => x0 + (x1 - x0 - width) * 0.5,
         (Align::End, Flow::Ltr) | (Align::Start, Flow::Rtl) => x1 - width,
+    }
+}
+
+/// Laid-out height of `flow` in layout device px, matching [`compute_layout`]'s intrinsic height.
+pub(in crate::runtime) fn text_height(spec: &TextSpec, flow: TextFlow<'_>, scale: f32) -> f32 {
+    match flow {
+        TextFlow::Single(l) => clamped_height(l, spec, scale),
+        TextFlow::Paragraphs(_) => flow.spec_height(spec.style, scale, spec.exact_lines),
+    }
+}
+
+/// Where a `height`-tall text layout starts vertically between content edges `y0` and `y1`.
+/// Defaults to `y0` (`Align::Start`); clamps to `y0` when `height >= y1 - y0`.
+pub(in crate::runtime) fn text_y(spec: &TextSpec, y0: f32, y1: f32, height: f32) -> f32 {
+    let extra = (y1 - y0 - height).max(0.0);
+    match spec.cold.align_y {
+        Align::Start => y0,
+        Align::Center => y0 + extra * 0.5,
+        Align::End => y0 + extra,
     }
 }
 

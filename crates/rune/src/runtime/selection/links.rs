@@ -15,7 +15,8 @@ pub(in crate::runtime) struct LinkState {
 /// drawn `k` times its size.
 pub(crate) fn origin(n: &Node, spec: &TextSpec, flow: TextFlow<'_>, rect: [f32; 4], s: f32, k: f32) -> [f32; 2] {
     let x = text_x(spec, rect[0] + n.inset[0] * k, rect[2] - n.inset[2] * k, text_width(flow.full_width() * k) / s, flow.flow());
-    [x, rect[1] + n.inset[1] * k]
+    let y = text_y(spec, rect[1] + n.inset[1] * k, rect[3] - n.inset[3] * k, text_height(spec, flow, s) * k / s);
+    [x, y]
 }
 
 /// Link bytes `a..b` of node `n`'s text as bytes of its drawn layout, which truncation may

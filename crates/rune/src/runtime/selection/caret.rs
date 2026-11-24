@@ -232,12 +232,13 @@ impl RuntimeCore {
         let y = t[1] + self.stack_row_dy(nodes, i);
         let tw = text_width(layout.full_width()) / s;
         let (x0, x1) = (t[0] + n.inset[0], t[2] - n.inset[2]);
+        let (y0, y1) = (y + n.inset[1], y + (t[3] - t[1]) - n.inset[3]);
         let mut x = text_x(spec, x0, x1, tw, layout.flow());
         if inp.single_line && let Some(l) = laid.single() {
             let prev = self.edit.single_line_scroll(&n.path);
             x -= single_line_offset(prev, inp, &spec.content, l, s, (x1 - x0) * s) / s;
         }
-        [x, y + n.inset[1]]
+        [x, text_y(spec, y0, y1, text_height(spec, layout, s) / s)]
     }
 
     /// Node `i`'s caret line `[x, y, w, h]` in window points at its laid-out place, after
