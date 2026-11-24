@@ -2,7 +2,7 @@
 //! run in parallel.
 use std::sync::Once;
 
-use rune::text::{TextSystem, font_epoch, measure, with_families};
+use rune::text::{FontsGuard, TextSystem, font_epoch, measure, with_families, with_fonts};
 use rune::{Env, Runtime, TextStyle, col, text};
 
 const INTER: &[u8] = include_bytes!("../assets/Inter-Regular.ttf");
@@ -88,4 +88,17 @@ fn a_window_switch_in_a_guard_stays_on_the_thread() {
     assert_eq!(other.join().unwrap(), outside, "no other thread's did");
     drop(_g);
     assert_eq!(mono_width(), outside, "and it ended with the guard");
+}
+
+#[test]
+fn with_fonts_scopes_fonts_and_families_through_rune_text() {
+    process();
+    let outside = mono_width();
+    let epoch = font_epoch();
+    let guard: FontsGuard = with_fonts(&[INTER, PLEX], ("Inter", "IBM Plex Mono"));
+    assert_ne!(mono_width(), outside, "with_fonts applies its own fonts and families");
+    assert_ne!(font_epoch(), epoch);
+    drop(guard);
+    assert_eq!(mono_width(), outside);
+    assert_eq!(font_epoch(), epoch);
 }

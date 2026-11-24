@@ -164,6 +164,7 @@ pub use layout::underline::underline_edges;
 #[doc(hidden)]
 pub use layout::underline::underline_edges_with_end;
 pub use measure::FamiliesGuard;
+pub use measure::FontsGuard;
 pub use measure::TextInk;
 pub use measure::advance;
 #[doc(hidden)]
@@ -181,6 +182,7 @@ pub use measure::measure_with;
 #[doc(hidden)]
 pub use measure::primary_extents;
 pub use measure::with_families;
+pub use measure::with_fonts;
 pub use outline::Outline;
 #[doc(hidden)]
 pub use paragraphs::AsciiLine;
