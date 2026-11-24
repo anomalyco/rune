@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 mod pick;
+mod scroll_anchor_story;
 
 use std::time::Duration;
 
@@ -625,6 +626,7 @@ fn main() {
                     s.devices = vec!["Studio desk in the back office", "Travel laptop (borrowed for the conference)", "Kitchen tablet"];
                 })
                 .story(Story::new("Lists/Every device", every_device, devices).stage(Stage::Scroll))
+                .story(scroll_anchor_story::anchor_story())
                 .story(
                     Story::new("Layout/Display scale", scale_readout_init, scale_readout_view)
                         .trigger('z', "Cycle zoom", |s, _| {

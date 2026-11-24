@@ -946,11 +946,15 @@ Fast apps page (`site/src/FastApps.tsx`); `scripts/app-audit <repo>` greps for t
   shows the element; then read `window_layout_with` and only what it decides.
 - **Glide with `Tx::scroll_to_with(key, x, y, spring)`**, on Rune's clock, rather than an instant scroll stepped by a
   `wake_after` loop, which commits every frame.
-- **Keep the reading position with `El::scroll_anchor()`.** On a scroll viewport it holds the row at the top of
-  the view when a commit changes the content above it (rows inserted, grown or reflowed by a new width), like CSS
-  `overflow-anchor`. It holds only while the viewport is still, off its top and not following its bottom.
-  `virtual_rows` lists already keep their first visible row. For one commit, `Tx::keep_on_screen(key)` holds a
-  chosen element instead.
+- **Keep the reading position with `El::scroll_anchor()` and `El::no_scroll_anchor()`.** On a scroll viewport
+  `scroll_anchor()` holds the first eligible element at the top of the view when a commit changes content above it
+  (rows inserted, grown or reflowed by a new width), like CSS `overflow-anchor: auto`, descending into tall mounted
+  `virtual_rows` rows to hold a surviving visible descendant and falling back to row/estimate anchoring if the row
+  unmounts. It holds only while the viewport is still, off its top and not following its bottom. `virtual_rows`
+  lists keep their first visible row on their own; add `El::no_scroll_anchor()` (CSS `overflow-anchor: none`) to a
+  row (such as a top loading placeholder) to skip it in anchor selection, or to a `virtual_rows` container or scroll
+  viewport to disable automatic anchoring (for example, a search list that streams new hits in at offset 0). For one
+  commit, `Tx::keep_on_screen(key)` holds a chosen element instead.
 
 Debug builds name the source when one keeps committing through a scroll: `poll`, a handler with its element and
 where it was set, or the layout read that moved. Each warns once, on stderr, when it commits on 6 or more frames

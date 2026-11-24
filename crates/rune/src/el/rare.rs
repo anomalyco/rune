@@ -107,7 +107,7 @@ impl Empty for ElCold {
         wheel_scrolls: None,
         on_path: None,
         sticky: None,
-        scroll_edges: ScrollEdges { fade: 0.0, fade_style: crate::el::FadeStyle::SMOOTH, margin: 0.0, anchor: false },
+        scroll_edges: ScrollEdges { fade: 0.0, fade_style: crate::el::FadeStyle::SMOOTH, margin: 0.0, anchor: false, no_anchor: false },
         growth: None,
         virtual_estimate: None,
         virtual_rows: None,

@@ -108,7 +108,7 @@ impl Old {
 
 fn drive(requests: &mut Requests, input: Input) -> Placement {
     let anchor = |v: &str, p: &str, header: Option<&str>| Keep { path: p.into(), viewport: v.into(), was: 7.0, virtual_row: None,
-        hold: header.map(|h| Hold { path: h.into(), inset: 1.0 }) };
+        hold: header.map(|h| Hold { path: h.into(), inset: 1.0 }), fallbacks: Vec::new() };
     let effects = match input {
         CaptureKey { viewport, virtualized, header } => requests.step(Event::Arrive(Request::Capture(Keep { virtual_row:
             virtualized.then(|| ("list".into(), "row".into(), 3.0)), ..anchor(viewport, "item", header) }))),
@@ -192,7 +192,7 @@ fn every_keep_release_matches_the_old_conditions() {
 #[test]
 fn stop_drops_only_the_target_viewports_reveals_and_keeps_holds() {
     let mut reqs = Requests::default();
-    let anchor = |v: &str| Keep { path: "item".into(), viewport: v.into(), was: 7.0, virtual_row: None, hold: None };
+    let anchor = |v: &str| Keep { path: "item".into(), viewport: v.into(), was: 7.0, virtual_row: None, hold: None, fallbacks: Vec::new() };
     reqs.step(Event::Arrive(Request::Capture(anchor("a"))));
     reqs.step(Event::Arrive(Request::Capture(anchor("b"))));
     reqs.step(Event::Place { first: true, scope: None, key: "r1", viewport: "a", center: true, at_end: false, from: 0.0, to: 100.0 });

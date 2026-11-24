@@ -112,6 +112,7 @@ impl RuntimeCore {
                 was,
                 virtual_row: None,
                 hold: None,
+                fallbacks: Vec::new(),
             })));
         }
         // How far below the viewport's top the fold's top showed: its header rises that far.

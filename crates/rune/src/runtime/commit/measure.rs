@@ -85,6 +85,7 @@ impl RuntimeCore {
             memo: &mut self.commit.memo,
             next_id: &mut self.tree.next_id,
             scrolls: &mut self.scroll.scrolls,
+            scroll_requests: &self.scroll.requests,
             virtuals: &mut self.commit.virtuals,
             virtual_culled: &mut self.commit.virtual_culled,
             virtual_inputs: &mut self.commit.virtual_inputs,
@@ -119,6 +120,7 @@ impl Measurement<'_> {
             for n in nodes.iter().filter(|n| n.parent == Some(ci)) {
                 if let Some(key) = n.key.as_deref() {
                     v.set_height(key, n.local.h);
+                    v.set_no_anchor(key, n.scroll_edges.no_anchor);
                 }
             }
             let Some((si, scroll)) = nodes.iter().enumerate().find(|(_, n)| n.path == v.scroll_path) else { continue };
@@ -134,8 +136,9 @@ impl Measurement<'_> {
             let st = self.scrolls.get_mut(&scroll.id);
             let sticky = scroll_spec.stick_bottom;
             let held = (settle && sticky) || st.as_ref().map_or(sticky, |s| s.pinned());
+            let owned = self.scroll_requests.owns(&v.scroll_path);
             let offset = if let Some(st) = st {
-                if !held { st.shift_anchor(v.anchor_delta()); }
+                if !held && !owned { st.shift_anchor(v.anchor_delta()); }
                 st.offset as f32
             } else { 0.0 };
             // Rows that shrank or went leave the offset past the end until scrolling clamps it;
@@ -247,9 +250,9 @@ impl Measurement<'_> {
     }
 
     /// `bound` is the most `el` can be tall (see [`crate::el::virtual_list::height_bound`]); `scroll`
-    /// is the scroll viewport `el` is the content of, whether it sticks to the bottom, and its bound.
+    /// is the scroll viewport `el` is the content of.
     #[allow(clippy::too_many_arguments)]
-    fn window_tree(&mut self, el: &mut El, parent: &str, index: usize, scroll: Option<(&str, bool, f32, bool)>, tx: &Tx, force_all: bool, bound: f32, inert: bool, group: Option<&str>, parent_sx: bool, keep_windows: bool) {
+    fn window_tree(&mut self, el: &mut El, parent: &str, index: usize, scroll: Option<ScrollCtx<'_>>, tx: &Tx, force_all: bool, bound: f32, inert: bool, group: Option<&str>, parent_sx: bool, keep_windows: bool) {
         if !el.flags.has(ElFlags::HAS_VIRTUAL) {
             return;
         }
@@ -281,8 +284,8 @@ impl Measurement<'_> {
         // A virtual stack windows against the nearest scroll viewport around it, its rows' lists
         // included: a list in a row windows against the same viewport (`VirtualList::nested`).
         let scroll = match el.cold.scroll {
-            Some(s) => Some((path.as_str(), s.stick_bottom, bound, false)),
-            None => scroll.map(|(p, s, b, n)| (p, s, b, n || is_virtual)),
+            Some(s) => Some(ScrollCtx { path: path.as_str(), sticky: s.stick_bottom, bound, nested: false, no_anchor: el.cold.scroll_edges.no_anchor }),
+            None => scroll.map(|sc| ScrollCtx { nested: sc.nested || is_virtual, ..sc }),
         };
         let child_sx = el.cold.scroll.is_some() && el.cold.scroll_axes.x();
         let child_group = if el.flags.has(ElFlags::SELECTION_GROUP) { Some(path.as_str()) } else { group };
@@ -296,9 +299,9 @@ impl Measurement<'_> {
     /// Picks the rows virtual list `el` at `path` mounts, updating its `VirtualList`, the scroll
     /// offset its anchor keeps and the rows it culls. Reads `el` only: the caller applies the
     /// padding, the renamed keys and the rows.
-    fn window(&mut self, el: &El, path: &str, estimate: f32, scroll: Option<(&str, bool, f32, bool)>, tx: &Tx, force_all: bool) -> Window {
+    fn window(&mut self, el: &El, path: &str, estimate: f32, scroll: Option<ScrollCtx<'_>>, tx: &Tx, force_all: bool) -> Window {
         assert!(el.cold.growth.is_some(), "`.virtualize(..)` at {path:?} needs `.growth(GrowthSpec)` on the same element");
-        let (scroll_path, sticky, scroll_bound, nested) = scroll.expect("virtual stack must be inside a scroll viewport");
+        let ScrollCtx { path: scroll_path, sticky, bound: scroll_bound, nested, no_anchor: scroll_no_anchor } = scroll.expect("virtual stack must be inside a scroll viewport");
         let old_scroll = self.path_ids.get(scroll_path).and_then(|id| self.scrolls.get(id));
         let pinned = (tx.commit.lands() && sticky) || old_scroll.map_or(sticky, |s| s.pinned());
         let mut offset = old_scroll.map_or(0.0, |s| s.offset as f32);
@@ -325,6 +328,7 @@ impl Measurement<'_> {
         v.pad_bottom = padding(el_pad.bottom);
         v.set_gap(crate::el::virtual_list::gap_y(&el.style));
         v.nested = nested;
+        v.no_anchor = el.cold.scroll_edges.no_anchor || scroll_no_anchor;
         // The viewport's own pin moves its offset; the list windows where that leaves it.
         let held = pinned;
         let (list_offset, pinned) = v.locate(offset, held);
@@ -351,7 +355,7 @@ impl Measurement<'_> {
             .and_then(|rows| v.try_append_rows(path, rows.count, self.commits, (!pinned && !v.passed()).then_some(offset), |i| (rows.key)(state, i)));
         // Most commits keep the same rows; only a change pays for sets of every key.
         let anchor = if same {
-            if pinned || v.passed() { None } else { v.first_visible(offset, |_| true) }
+            if pinned || v.passed() || v.no_anchor { None } else { v.first_visible(offset, |_| true) }
         } else if let Some(anchor) = appended {
             anchor
         } else {
@@ -388,10 +392,13 @@ impl Measurement<'_> {
         // `anchor_delta` compensates the scroll offset for unmeasured rows above the viewport.
         v.set_estimate(estimate);
         v.anchor = anchor;
-        let delta = v.anchor_delta();
+        let owned = self.scroll_requests.owns(scroll_path);
+        let delta = if held || owned { 0.0 } else { v.anchor_delta() };
         offset = (offset + delta).max(0.0);
-        if let Some(st) = self.path_ids.get(scroll_path).and_then(|id| self.scrolls.get_mut(id)) {
-            if !held { st.shift_anchor(delta); }
+        if !held && !owned
+            && let Some(st) = self.path_ids.get(scroll_path).and_then(|id| self.scrolls.get_mut(id))
+        {
+            st.shift_anchor(delta);
         }
         // Rows new since the last commit spread over frames, unless this pass is a retry to
         // fill the viewport or a settle. A list's first showing is all new rows: it mounts
@@ -421,7 +428,7 @@ impl Measurement<'_> {
     /// and no focused or selected row built off screen. Its lists are windowed either way, once:
     /// when it can't stay, `window_tree` applies these windows to the expanded subtree.
     #[allow(clippy::too_many_arguments)]
-    fn keeps_windows(&mut self, el: &El, path: &str, scroll: Option<(&str, bool, f32, bool)>, tx: &Tx, force_all: bool, bound: f32) -> bool {
+    fn keeps_windows(&mut self, el: &El, path: &str, scroll: Option<ScrollCtx<'_>>, tx: &Tx, force_all: bool, bound: f32) -> bool {
         let Some(built) = el.memo_built() else { return false };
         if !built.region || !built.reusable || force_all || !matches!(self.pass, Pass::First) || !crate::memo::flattened(built.id) || !memo_reuse::same_root_el(el, built, false) {
             return false;
@@ -443,7 +450,7 @@ impl Measurement<'_> {
             let held = self.virtuals.get(&list_path).is_some_and(|v| {
                 v.mounted.is_some() && v.focused_row.is_none() && v.selection.pins.rows().is_empty() && v.row_reads.hold()
             });
-            let w = self.window(list_el, &list_path, estimate, list_scroll.as_ref().map(|(p, s, b, n)| (p.as_str(), *s, *b, *n)), tx, force_all);
+            let w = self.window(list_el, &list_path, estimate, list_scroll.as_ref().map(OwnedScrollCtx::as_ref), tx, force_all);
             let v = self.virtuals.get_mut(&list_path).expect("windowed");
             let same = held && w.same && v.mounted == Some(crate::el::virtual_list::Mounted::of(v));
             if same {
@@ -688,6 +695,10 @@ impl Measurement<'_> {
                     row
                 }).collect();
             });
+            for (i, row) in v.range.clone().zip(&el.children) {
+                v.set_row_no_anchor(i, row.cold.scroll_edges.no_anchor);
+            }
+            v.reanchor_if_excluded();
             v.row_reads = reads;
             // Rows a pass that doesn't commit built aren't the nodes a memo would keep.
             if !self.committing { v.mounted = None; }
@@ -706,6 +717,10 @@ impl Measurement<'_> {
                 .filter_map(|key| v.index_of(key))
                 .filter(|i| !v.range.contains(i))
                 .collect();
+            for (i, child) in el.children.iter().enumerate() {
+                v.set_row_no_anchor(i, child.cold.scroll_edges.no_anchor);
+            }
+            v.reanchor_if_excluded();
             // Dev installs the stored source before the children loop, releasing the old indexed
             // builder before the kept rows and copied texts it would overlap with.
             v.selection.pins.set_source(selectable::virtual_selection::Source::Stored);
@@ -761,7 +776,33 @@ impl RuntimeCore {
 /// The `virtual_rows` lists in memo placeholder `el`'s shared subtree at `path`, with the scroll
 /// viewport each windows against, as `window_tree` would find them. False when one can't be
 /// windowed without expanding: a list built from children, or a memo given extra children.
-fn windowed_lists<'e>(el: &'e El, path: &str, scroll: Option<(&str, bool, f32, bool)>, bound: f32, out: &mut Vec<(String, &'e El, Option<(String, bool, f32, bool)>)>) -> bool {
+#[derive(Clone, Copy)]
+struct ScrollCtx<'a> {
+    path: &'a str,
+    sticky: bool,
+    bound: f32,
+    nested: bool,
+    no_anchor: bool,
+}
+
+struct OwnedScrollCtx {
+    path: String,
+    sticky: bool,
+    bound: f32,
+    nested: bool,
+    no_anchor: bool,
+}
+
+impl OwnedScrollCtx {
+    fn from_ctx(c: ScrollCtx<'_>) -> Self {
+        Self { path: c.path.to_owned(), sticky: c.sticky, bound: c.bound, nested: c.nested, no_anchor: c.no_anchor }
+    }
+    fn as_ref(&self) -> ScrollCtx<'_> {
+        ScrollCtx { path: self.path.as_str(), sticky: self.sticky, bound: self.bound, nested: self.nested, no_anchor: self.no_anchor }
+    }
+}
+
+fn windowed_lists<'e>(el: &'e El, path: &str, scroll: Option<ScrollCtx<'_>>, bound: f32, out: &mut Vec<(String, &'e El, Option<OwnedScrollCtx>)>) -> bool {
     if !el.flags.has(ElFlags::HAS_VIRTUAL) {
         return true;
     }
@@ -776,12 +817,12 @@ fn windowed_lists<'e>(el: &'e El, path: &str, scroll: Option<(&str, bool, f32, b
         if el.cold.virtual_rows.is_none() {
             return false;
         }
-        out.push((path.to_owned(), el, scroll.map(|(p, s, b, n)| (p.to_owned(), s, b, n))));
+        out.push((path.to_owned(), el, scroll.map(OwnedScrollCtx::from_ctx)));
     }
     let bounds = crate::el::virtual_list::child_bounds(&el.style, el.cold.scroll.is_some(), bound, kids);
     let scroll = match el.cold.scroll {
-        Some(s) => Some((path, s.stick_bottom, bound, false)),
-        None => scroll.map(|(p, s, b, n)| (p, s, b, n || is_virtual)),
+        Some(s) => Some(ScrollCtx { path, sticky: s.stick_bottom, bound, nested: false, no_anchor: el.cold.scroll_edges.no_anchor }),
+        None => scroll.map(|sc| ScrollCtx { nested: sc.nested || is_virtual, ..sc }),
     };
     kids.iter().enumerate().filter(|(_, c)| c.flags.has(ElFlags::HAS_VIRTUAL)).all(|(i, child)| {
         windowed_lists(child, &node_path(path, child.key.as_deref(), i), scroll, bounds.of(child), out)

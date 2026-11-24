@@ -182,10 +182,11 @@ impl Measurement<'_> {
             let offset = old_scroll.map_or(0.0, |s| s.offset as f32);
             v.viewport = self.nodes[scroll_idx].local.h;
             let (mut offset, pinned) = v.locate(offset, held);
-            v.anchor = if pinned || v.passed() { None } else { v.first_visible(offset, |_| true) };
-            let delta = v.anchor_delta();
+            v.anchor = if pinned || v.passed() || v.no_anchor { None } else { v.first_visible(offset, |_| true) };
+            let owned = self.scroll_requests.owns(&v.scroll_path);
+            let delta = if held || owned { 0.0 } else { v.anchor_delta() };
             offset = (offset + delta).max(0.0);
-            if let Some(st) = self.scrolls.get_mut(&scroll_id) && !held {
+            if let Some(st) = self.scrolls.get_mut(&scroll_id) && !held && !owned {
                 st.shift_anchor(delta);
             }
             let shown = std::mem::take(&mut v.shown);
@@ -326,8 +327,10 @@ impl Measurement<'_> {
             let v = self.virtuals.get_mut(&plan.path).unwrap();
             plan.quiet = plan.range.clone().map(|i| v.mounts_quietly(i, self.commits)).collect();
             for (pos, row) in &mut plan.built_rows {
+                v.set_row_no_anchor(plan.range.start + *pos, row.cold.scroll_edges.no_anchor);
                 row.flags.set(crate::el::ElFlags::VIRTUAL_MOUNT, plan.quiet[*pos]);
             }
+            v.reanchor_if_excluded();
         }
 
         let mut on_spine = vec![false; self.nodes.len()];
