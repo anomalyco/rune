@@ -117,6 +117,8 @@ pub use input::help_look::HelpLook;
 pub(crate) use input::physical::Unhandled;
 pub(crate) use input::titlebar::{DragHit, WindowMenu, drag_hit_at};
 pub use input::touch::TouchPhase;
+#[cfg_attr(not(target_arch = "wasm32"), allow(unused_imports))]
+pub(crate) use input::touch::{TouchHoldCommand, TouchHoldPolicy};
 #[cfg(target_os = "linux")]
 use input::primary_selection;
 use input::{

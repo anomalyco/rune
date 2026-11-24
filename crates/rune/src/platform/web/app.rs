@@ -162,8 +162,12 @@ impl dyn WebApp + '_ {
         self.driver(|rt, app| crate::input::host_events::keyboard(rt, app, event, mods, None))
     }
 
-    pub(super) fn touch(&mut self, touch: &winit::event::Touch) {
-        self.driver(|rt, app| crate::window::touch_core(rt, app, touch));
+    pub(super) fn touch_at(&mut self, touch: &winit::event::Touch, time: f64) {
+        self.driver(|rt, app| crate::window::touch_core_at(rt, app, touch, time));
+    }
+
+    pub(super) fn confirm_touch_hold(&mut self, attempt: crate::machine::Attempt) -> bool {
+        self.driver(|rt, app| rt.confirm_touch_hold(app, attempt))
     }
 
     pub(super) fn web_focus_field(&mut self) -> bool {

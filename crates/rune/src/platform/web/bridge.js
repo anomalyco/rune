@@ -192,6 +192,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     const h = { canvas, textarea, password, a11y, a11yNodes: new Map(), field: textarea, key: '', base: 0, value: '', domValue: '', crlfs: null,
         selection: null, copyText: '', composing: false, composition: '', shift: false, modBits: 0, listeners: [], syncing: false, disposed: false,
         embedded, fitHeight, page, focused: false, presented: false, swapped: false, touchDown: false,
+        touchTimestamps: [], touchHoldConfirm: null,
         lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band };
     const send = event => {
         const message = JSON.stringify(event);
@@ -217,6 +218,25 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     for (const name of ['pointerdown', 'pointermove', 'pointerup', 'pointerover', 'pointerout', 'wheel', 'keydown']) {
         listen(window, name, event => { if (ownsTarget(event.target)) syncMods(event); }, { capture: true, passive: true });
     }
+    // Capture hardware PointerEvent.timeStamp before winit's canvas listeners drop it, so Rune
+    // gets real event times for pan velocity, fling hold, and long-press delay compensation
+    // without patching vendored winit.
+    const MAX_TOUCH_TIMESTAMPS = 64;
+    const recordTouchTimestamp = (isMove, event) => {
+        if (event.target !== canvas || event.pointerType !== 'touch') return;
+        // winit routes chorded pointermove (button !== -1) as a button press, not a touch move.
+        if (isMove && typeof event.button === 'number' && event.button !== -1) return;
+        const coalesced = isMove && typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : null;
+        const items = coalesced && coalesced.length > 0 ? coalesced : [event];
+        for (const item of items) {
+            h.touchTimestamps.push({ id: event.pointerId, ts: item.timeStamp });
+            if (h.touchTimestamps.length > MAX_TOUCH_TIMESTAMPS) h.touchTimestamps.shift();
+        }
+    };
+    listen(window, 'pointerdown', event => recordTouchTimestamp(false, event), { capture: true, passive: true });
+    listen(window, 'pointermove', event => recordTouchTimestamp(true, event), { capture: true, passive: true });
+    listen(window, 'pointerup', event => recordTouchTimestamp(false, event), { capture: true, passive: true });
+    listen(window, 'pointercancel', event => recordTouchTimestamp(false, event), { capture: true, passive: true });
     listen(window, 'keyup', event => {
         if (ownsTarget(event.target) && !(event.target === canvas && MOD_KEYS.includes(event.key))) syncMods(event);
     }, { capture: true, passive: true });
@@ -1262,6 +1282,65 @@ export function announceA11y(h, text, assertive) {
     requestAnimationFrame(() => { if (!h.disposed) el.textContent = text; });
 }
 
+// Pops the oldest captured PointerEvent.timeStamp (ms since timeOrigin) for touch pointer `id`,
+// clamped to performance.now(), or NaN when absent, non-finite, or non-positive.
+export function takeTouchTimestamp(h, id) {
+    const idx = h.touchTimestamps.findIndex(entry => entry.id === id);
+    if (idx < 0) return Number.NaN;
+    const [{ ts }] = h.touchTimestamps.splice(idx, 1);
+    if (typeof ts !== 'number' || !Number.isFinite(ts) || ts <= 0) return Number.NaN;
+    const now = performance.now();
+    return Number.isFinite(now) && now > 0 ? Math.min(ts, now) : ts;
+}
+
+export function performanceNow() {
+    return performance.now();
+}
+
+// Cancels any pending low-priority touch-hold confirmation turn.
+export function cancelTouchHoldConfirm(h) {
+    const pending = h.touchHoldConfirm;
+    if (!pending) return;
+    h.touchHoldConfirm = null;
+    pending.cancelled = true;
+    if (pending.controller) pending.controller.abort();
+    if (pending.timer) clearTimeout(pending.timer);
+}
+
+// Yields a low-priority macrotask (and re-yields up to 2 turns while input is pending) before
+// confirming a due touch hold so any already-queued pointerup or pointermove from a main-thread
+// stall drains first and cancels the hold.
+export function scheduleTouchHoldConfirm(h, attempt) {
+    cancelTouchHoldConfirm(h);
+    if (h.disposed) return;
+    const token = { cancelled: false, controller: null, timer: 0 };
+    h.touchHoldConfirm = token;
+    let yields = 0;
+    const run = () => {
+        token.controller = null;
+        token.timer = 0;
+        if (token.cancelled || h.disposed || h.touchHoldConfirm !== token) return;
+        if (yields < 2 && globalThis.navigator?.scheduling?.isInputPending?.({ includeContinuous: true })) {
+            yields += 1;
+            schedule();
+            return;
+        }
+        h.touchHoldConfirm = null;
+        h.send({ kind: 'touch_hold_confirm', attempt });
+    };
+    const schedule = () => {
+        if (typeof globalThis.scheduler?.postTask === 'function') {
+            const controller = typeof AbortController === 'function' ? new AbortController() : null;
+            token.controller = controller;
+            const opts = controller ? { priority: 'background', signal: controller.signal } : { priority: 'background' };
+            Promise.resolve(globalThis.scheduler.postTask(run, opts)).catch(() => {});
+        } else {
+            token.timer = setTimeout(run, 0);
+        }
+    };
+    schedule();
+}
+
 // Cancels any pending post-scroll settle timer or post-frame idle mirror flush.
 export function cancelA11y(h) {
     if (h.a11yTimer) {
@@ -1467,6 +1546,8 @@ export function destroy(h) {
     h.disposed = true;
     h.image = undefined;
     clearTimeout(h.staticTimer);
+    cancelTouchHoldConfirm(h);
+    h.touchTimestamps.length = 0;
     cancelA11y(h);
     for (const remove of h.listeners) remove();
     h.password.value = ''; h.textarea.value = ''; h.value = ''; h.domValue = ''; h.crlfs = null; h.copyText = ''; h.selection = null;

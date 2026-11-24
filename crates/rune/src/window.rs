@@ -621,16 +621,23 @@ fn gesture_phase(phase: TouchPhase) -> crate::GesturePhase {
 }
 
 /// Hands a winit touch (a finger, or a pen where the system reports it as one) to the runtime
-/// in the view's points, timed on a clock that starts with the first touch.
-pub(crate) fn touch_core(rt: &mut RuntimeCore, app: &mut dyn AppDriver, touch: &winit::event::Touch) {
+/// in the view's points at `time` (seconds on a steady clock; on Web, mapped onto the runtime
+/// clock from `PointerEvent.timeStamp`).
+pub(crate) fn touch_core_at(rt: &mut RuntimeCore, app: &mut dyn AppDriver, touch: &winit::event::Touch, time: f64) {
     let scale = rt.input_scale();
-    static START: std::sync::OnceLock<crate::time::Instant> = std::sync::OnceLock::new();
     let phase = match touch.phase {
         TouchPhase::Started => crate::TouchPhase::Started,
         TouchPhase::Moved => crate::TouchPhase::Moved,
         TouchPhase::Ended => crate::TouchPhase::Ended,
         TouchPhase::Cancelled => crate::TouchPhase::Cancelled,
     };
-    let time = START.get_or_init(crate::time::now).elapsed().as_secs_f64();
     rt.touch(app, touch.id, phase, touch.location.x as f32 / scale, touch.location.y as f32 / scale, time);
+}
+
+/// Hands a winit touch to the runtime, timed on a clock that starts with the first touch.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) fn touch_core(rt: &mut RuntimeCore, app: &mut dyn AppDriver, touch: &winit::event::Touch) {
+    static START: std::sync::OnceLock<crate::time::Instant> = std::sync::OnceLock::new();
+    let time = START.get_or_init(crate::time::now).elapsed().as_secs_f64();
+    touch_core_at(rt, app, touch, time);
 }

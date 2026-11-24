@@ -238,7 +238,8 @@ impl RuntimeCore {
         if catch_up > 0.0 { self.catch_up_motion(catch_up); }
         self.motion.keep_loops_on_clock(&self.scene, self.t, self.clock, self.time_scale, dt);
         let (polled, due) = self.frame.begin_frame_poll(self.clock);
-        self.frame.idle_frame_begins(self.animating, polled || due > 0, live_woke);
+        let due_touch = self.pointer.touch_hold_deadline().is_some_and(|d| d <= self.clock);
+        self.frame.idle_frame_begins(self.animating, polled || due > 0 || due_touch, live_woke);
         self.frame.drain_due_wakes(due);
         self.fire_hover_delays();
         self.fire_press_repeat();

@@ -388,8 +388,20 @@ pub(crate) fn start_web_runtime<S: 'static>(
         attach(&mut rt, playground, &spec, None, None, true);
     }
     rt.configure(runtime);
+    rt.core_mut().set_touch_hold_policy(crate::runtime::TouchHoldPolicy::ConfirmingTimer);
     rt.track_marks = compositor.is_some();
     (rt, shared, compositor, spec_fonts)
+}
+
+/// Maps a browser `PointerEvent.timeStamp` (milliseconds since `timeOrigin`) onto the runtime
+/// clock (`rt_now`, seconds since `wall_start`). Clamps future timestamps to `perf_now_ms`, and
+/// falls back to `rt_now` (delivery time) when either browser reading is malformed or non-positive.
+pub(crate) fn web_touch_event_time(rt_now: f64, event_ts_ms: f64, perf_now_ms: f64) -> f64 {
+    if !event_ts_ms.is_finite() || event_ts_ms <= 0.0 || !perf_now_ms.is_finite() || perf_now_ms <= 0.0 {
+        return rt_now;
+    }
+    let clamped = event_ts_ms.min(perf_now_ms);
+    rt_now - (perf_now_ms - clamped) / 1000.0
 }
 
 /// Whether a resize's frame waits in a queued microtask.

@@ -4,7 +4,7 @@ use super::*;
 impl RuntimeCore {
     /// Clock seconds now: the wall clock in a window (input arrives between frames), the
     /// virtual clock headless.
-    pub(in crate::runtime) fn now_clock(&self) -> f64 {
+    pub(crate) fn now_clock(&self) -> f64 {
         #[cfg(test)]
         if let Some(now) = self.frame.test_clock_now() { return now; }
         self.wall_start.map_or(self.clock, |t| t.elapsed().as_secs_f64())
@@ -163,12 +163,12 @@ impl RuntimeCore {
     }
 
     pub(in crate::runtime) fn logical_wake_deadline(&self) -> Option<f64> {
-        self.frame.next_wake_deadline().into_iter().chain(self.motion.loop_wake().map(|w| w.0)).min_by(f64::total_cmp)
+        self.poll_wake_deadline().into_iter().chain(self.motion.loop_wake().map(|w| w.0)).min_by(f64::total_cmp)
     }
 
-    /// The next due timer of `poll`'s, on `wake_deadline`'s clock.
+    /// The next due timer of `poll`'s (or an armed touch hold), on `wake_deadline`'s clock.
     pub(crate) fn poll_wake_deadline(&self) -> Option<f64> {
-        self.frame.next_wake_deadline()
+        self.frame.next_wake_deadline().into_iter().chain(self.pointer.touch_hold_deadline()).min_by(f64::total_cmp)
     }
 
     /// The next frame motion asks for at its own cadence (a loop's next step, a video's next
