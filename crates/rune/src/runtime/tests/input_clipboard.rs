@@ -688,3 +688,264 @@ fn el_line_home_end_syncs_to_model_and_preserves_model_setting() {
     rt.frame(0.0);
     assert_eq!(rt.state.model_owned.focus, 3);
 }
+
+#[test]
+fn on_input_copy_covers_keyboard_and_context_menu_respects_secure_empty_and_has_own_pills() {
+    use crate::ClipboardContent;
+    use crate::edit::{Key, KeyEvent, Mods, TextEdit};
+
+    struct State {
+        rich: TextEdit,
+        dest: TextEdit,
+        secret: TextEdit,
+        disabled: TextEdit,
+        inert: TextEdit,
+        custom: bool,
+        intercept_key: bool,
+        copies: Vec<bool>,
+        changes: u32,
+        pasted_own: Vec<bool>,
+        read_own: Vec<bool>,
+        window_own: Vec<bool>,
+    }
+
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let st = crate::TextStyle::new(14.0, 400.0);
+        col()
+            .size(320.0, 260.0)
+            .on_paste_content(|s: &mut State, content, _| s.window_own.push(content.has_own_pills()))
+            .child(
+                crate::text_input(&s.rich, st)
+                    .key("rich")
+                    .label("Rich composer")
+                    .size(300.0, 44.0)
+                    .on_edit(|s: &mut State| &mut s.rich)
+                    .on_input_change(|s: &mut State, _| s.changes += 1)
+                    .on_input_key(|s: &mut State, ev, tx| {
+                        if s.intercept_key && ev.edit_command() == Some('c') {
+                            tx.copy("from-key-hook");
+                            return true;
+                        }
+                        false
+                    })
+                    .on_input_copy(|s: &mut State, cut, _| {
+                        s.copies.push(cut);
+                        if !s.custom {
+                            return None;
+                        }
+                        let plain = format!("custom:{}", s.rich.selected());
+                        Some(ClipboardContent::new(plain).with_html(s.rich.selected_html()))
+                    }),
+            )
+            .child(
+                crate::text_input(&s.dest, st)
+                    .key("dest")
+                    .size(300.0, 44.0)
+                    .on_edit(|s: &mut State| &mut s.dest)
+                    .on_input_paste(|s: &mut State, content, _| {
+                        s.pasted_own.push(content.has_own_pills());
+                        false
+                    }),
+            )
+            .child(
+                crate::text_input(&s.secret, st)
+                    .key("secret")
+                    .secure()
+                    .size(300.0, 36.0)
+                    .on_edit(|s: &mut State| &mut s.secret)
+                    .on_input_copy(|s: &mut State, cut, _| {
+                        s.copies.push(cut);
+                        Some(ClipboardContent::new("LEAK"))
+                    }),
+            )
+            .child(
+                crate::text_input(&s.disabled, st)
+                    .key("disabled")
+                    .disabled(true)
+                    .size(300.0, 36.0)
+                    .on_edit(|s: &mut State| &mut s.disabled)
+                    .on_input_copy(|s: &mut State, cut, _| {
+                        s.copies.push(cut);
+                        Some(ClipboardContent::new("DISABLED"))
+                    }),
+            )
+            .child(
+                col()
+                    .inert()
+                    .child(
+                        crate::text_input(&s.inert, st)
+                            .key("inert")
+                            .size(300.0, 36.0)
+                            .on_edit(|s: &mut State| &mut s.inert)
+                            .on_input_copy(|s: &mut State, cut, _| {
+                                s.copies.push(cut);
+                                Some(ClipboardContent::new("INERT"))
+                            }),
+                    ),
+            )
+    }
+
+    let mut rich = TextEdit::new("Hi ").rich();
+    rich.insert_pill("tpl:sig", "@Sig");
+    rich.insert(" end");
+    rich.focused = true;
+    rich.set_selection(0, rich.text.len());
+    let mut secret = TextEdit::new("s3cr3t");
+    secret.set_selection(0, 6);
+    let mut disabled = TextEdit::new("nope");
+    disabled.set_selection(0, 4);
+    let mut inert = TextEdit::new("nope");
+    inert.set_selection(0, 4);
+
+    let board = crate::clipboard::memory();
+    let mut rt = Runtime::new(
+        State {
+            rich,
+            dest: TextEdit::new("").rich(),
+            secret,
+            disabled,
+            inert,
+            custom: true,
+            intercept_key: false,
+            copies: Vec::new(),
+            changes: 0,
+            pasted_own: Vec::new(),
+            read_own: Vec::new(),
+            window_own: Vec::new(),
+        },
+        view,
+        (320.0, 260.0),
+        Env::new(true, 1.0),
+    );
+    rt.use_clipboard(&board);
+    rt.frame(0.0);
+
+    // Accessibility tree keeps textbox role and label unchanged.
+    let a11y = rt.accessibility_json().to_string();
+    assert!(a11y.contains("Rich composer"), "a11y should keep textbox name: {a11y}");
+
+    let cmd = |c: char| KeyEvent { key: Key::Command(c), mods: Mods { cmd: true, ..Mods::default() } };
+
+    // 1. Keyboard Copy invokes on_input_copy(false) and writes custom ClipboardContent with own pills.
+    rt.key(cmd('c'));
+    rt.frame(0.0);
+    assert_eq!(rt.state.copies, [false]);
+    let copied = board.content().unwrap();
+    assert_eq!(copied.text(), "custom:Hi @Sig end");
+    assert!(copied.html().is_some_and(|h| h.contains(r#"<span data-pill="tpl:sig">@Sig</span>"#)));
+
+    // 2. has_own_pills() is true on paste into on_input_paste, read_clipboard, and root on_paste_content.
+    rt.update(|_, tx| tx.read_clipboard(|s: &mut State, content, _| s.read_own.push(content.has_own_pills())));
+    rt.frame(0.0);
+    rt.frame(0.0);
+    assert_eq!(rt.state.read_own, [true]);
+
+    rt.update(|s, _| { s.rich.focused = false; s.dest.focused = true; });
+    rt.frame(0.0);
+    rt.update(|_, tx| tx.request_paste());
+    rt.frame(0.0);
+    assert_eq!(rt.state.pasted_own, [true]);
+    assert_eq!(rt.state.dest.pills().map(|(r, id)| (r, id.to_owned())).collect::<Vec<_>>(), [(3..7, "tpl:sig".to_owned())]);
+
+    rt.update(|s, _| s.dest.focused = false);
+    rt.frame(0.0);
+    rt.update(|_, tx| tx.request_paste());
+    rt.frame(0.0);
+    assert_eq!(rt.state.window_own, [true]);
+
+    // External HTML with identical pill markup reports has_own_pills() == false.
+    board.set_content(ClipboardContent::new("custom:Hi @Sig end").with_html(copied.html().unwrap()));
+    rt.update(|s, _| { s.dest.clear(); s.dest.focused = true; });
+    rt.frame(0.0);
+    rt.update(|_, tx| tx.request_paste());
+    rt.frame(0.0);
+    assert_eq!(rt.state.pasted_own, [true, false]);
+    assert_eq!(rt.state.dest.pills().count(), 0);
+
+    // 3. Keyboard Cut invokes on_input_copy(true), deletes selection, fires on_input_change, and records undo.
+    rt.update(|s, _| { s.dest.focused = false; s.rich.focused = true; s.rich.set_selection(0, 7); });
+    rt.frame(0.0);
+    rt.key(cmd('x'));
+    rt.frame(0.0);
+    assert_eq!(rt.state.copies, [false, true]);
+    assert_eq!(rt.state.rich.text, " end");
+    assert_eq!(rt.state.changes, 1);
+    assert_eq!(board.content().unwrap().text(), "custom:Hi @Sig");
+    // Undo restores cut text and pill.
+    rt.key(cmd('z'));
+    rt.frame(0.0);
+    assert_eq!(rt.state.rich.text, "Hi @Sig end");
+    assert_eq!(rt.state.rich.pills().count(), 1);
+
+    // 4. Context-menu Copy and Cut invoke on_input_copy too.
+    rt.update(|s, _| s.rich.set_selection(0, 7));
+    rt.frame(0.0);
+    rt.key(KeyEvent::from(Key::ContextMenu));
+    rt.frame(0.0);
+    assert!(rt.popup_menu().is_some(), "ContextMenu opens field_menu");
+    rt.resolve_popup(Some("copy")).unwrap();
+    rt.frame(0.0);
+    assert_eq!(rt.state.copies, [false, true, false]);
+    assert_eq!(board.content().unwrap().text(), "custom:Hi @Sig");
+
+    rt.key(KeyEvent::from(Key::ContextMenu));
+    rt.frame(0.0);
+    rt.resolve_popup(Some("cut")).unwrap();
+    rt.frame(0.0);
+    assert_eq!(rt.state.copies, [false, true, false, true]);
+    assert_eq!(rt.state.rich.text, " end");
+    assert_eq!(board.content().unwrap().text(), "custom:Hi @Sig");
+
+    // 5. Returning None falls back to default plain + rich HTML copy on both keyboard and context menu.
+    rt.key(cmd('z'));
+    rt.frame(0.0);
+    rt.update(|s, _| { s.custom = false; s.rich.set_selection(0, 7); });
+    rt.frame(0.0);
+    rt.key(KeyEvent::from(Key::ContextMenu));
+    rt.frame(0.0);
+    rt.resolve_popup(Some("copy")).unwrap();
+    rt.frame(0.0);
+    let fallback = board.content().unwrap();
+    assert_eq!(fallback.text(), "Hi @Sig");
+    assert!(fallback.html().is_some_and(|h| h.contains(r#"<span data-pill="tpl:sig">@Sig</span>"#)));
+
+    // 6. Existing on_input_key still runs before on_input_copy.
+    let copies_before = rt.state.copies.len();
+    rt.update(|s, _| s.intercept_key = true);
+    rt.frame(0.0);
+    rt.key(cmd('c'));
+    rt.frame(0.0);
+    assert_eq!(rt.state.copies.len(), copies_before);
+    assert_eq!(board.content().unwrap().text(), "from-key-hook");
+
+    // 7. Empty selection skips on_input_copy and leaves clipboard unchanged.
+    rt.update(|s, _| { s.intercept_key = false; s.custom = true; s.rich.set_caret(0); });
+    rt.frame(0.0);
+    rt.key(cmd('c'));
+    rt.key(cmd('x'));
+    rt.frame(0.0);
+    assert_eq!(rt.state.copies.len(), copies_before);
+    assert_eq!(board.content().unwrap().text(), "from-key-hook");
+    assert_eq!(rt.state.rich.text, "Hi @Sig end");
+
+    // 8. Secure fields never invoke on_input_copy or write to the clipboard.
+    rt.update(|s, _| { s.rich.focused = false; s.secret.focused = true; s.secret.set_selection(0, 6); });
+    rt.frame(0.0);
+    rt.key(cmd('c'));
+    rt.key(cmd('x'));
+    rt.frame(0.0);
+    assert_eq!(rt.state.copies.len(), copies_before);
+    assert_eq!(board.content().unwrap().text(), "from-key-hook");
+    assert_eq!(rt.state.secret.text, "s3cr3t");
+
+    // 9. Disabled and inert fields cannot be focused by pointer and never invoke on_input_copy.
+    for key in ["disabled", "inert"] {
+        let (x, y) = rt.find(key).unwrap();
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+        rt.key(cmd('c'));
+        rt.frame(0.0);
+    }
+    assert_eq!(rt.state.copies.len(), copies_before);
+}

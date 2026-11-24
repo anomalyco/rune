@@ -558,3 +558,125 @@ fn text_area_forwards_pill_image_and_line_fills() {
             && (q.fill[2] - 0.5).abs() < 0.03
     }));
 }
+
+#[test]
+fn on_input_copy_and_pill_copy_text_forward_across_kit_fields() {
+    struct State {
+        ti: TextEdit,
+        ta: TextEdit,
+        tf: TextEdit,
+        dis_ti: TextEdit,
+        seen: Vec<(&'static str, bool)>,
+    }
+
+    fn with_mention() -> TextEdit {
+        let mut e = TextEdit::new("Hi ").rich();
+        e.insert_pill("url:1", "@Ada");
+        e.set_selection(0, e.text.len());
+        e
+    }
+
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let k = Kit::neutral(true);
+        col()
+            .gap(6.0)
+            .padding(8.0)
+            .child(
+                TextInput::new(&s.ti)
+                    .width(Some(240.0))
+                    .pill_copy_text(|id| (id == "url:1").then(|| "https://example.com/ada".into()))
+                    .on_edit(|s: &mut State| &mut s.ti)
+                    .on_input_copy(|s: &mut State, cut, _| {
+                        s.seen.push(("ti", cut));
+                        None
+                    })
+                    .build(&k)
+                    .key("ti"),
+            )
+            .child(
+                TextArea::new(&s.ta)
+                    .width(Some(240.0))
+                    .pill_copy_text(|id| (id == "url:1").then(|| "https://example.com/ada".into()))
+                    .on_edit(|s: &mut State| &mut s.ta)
+                    .on_input_copy(|s: &mut State, cut, _| {
+                        s.seen.push(("ta", cut));
+                        Some(ClipboardContent::new("ta-custom"))
+                    })
+                    .build(&k)
+                    .key("ta"),
+            )
+            .child(
+                TextField::new("Msg", &s.tf)
+                    .pill_copy_text(|id| (id == "url:1").then(|| "https://example.com/ada".into()))
+                    .on_edit(|s: &mut State| &mut s.tf)
+                    .on_input_copy(|s: &mut State, cut, _| {
+                        s.seen.push(("tf", cut));
+                        None
+                    })
+                    .build(&k)
+                    .key("tf"),
+            )
+            .child(
+                TextInput::new(&s.dis_ti)
+                    .width(Some(240.0))
+                    .disabled(true)
+                    .on_edit(|s: &mut State| &mut s.dis_ti)
+                    .on_input_copy(|s: &mut State, cut, _| {
+                        s.seen.push(("dis_ti", cut));
+                        Some(ClipboardContent::new("DISABLED"))
+                    })
+                    .build(&k)
+                    .key("dis_ti"),
+            )
+    }
+
+    let board = rune::clipboard::memory();
+    let mut rt = Runtime::new(
+        State {
+            ti: with_mention(),
+            ta: with_mention(),
+            tf: with_mention(),
+            dis_ti: with_mention(),
+            seen: Vec::new(),
+        },
+        view,
+        (300.0, 320.0),
+        Env::new(true, 1.0),
+    );
+    rt.use_clipboard(&board);
+    rt.frame(0.0);
+
+    let cmd_c = KeyEvent { key: Key::Command('c'), mods: Mods { cmd: true, ..Mods::default() } };
+
+    // TextInput: on_input_copy returns None -> falls back to pill_copy_text payload + HTML.
+    rt.update(|s, _| s.ti.focused = true);
+    rt.frame(0.0);
+    rt.key(cmd_c.clone());
+    rt.frame(0.0);
+    assert_eq!(board.content().unwrap().text(), "Hi https://example.com/ada");
+
+    // TextArea: on_input_copy returns Some(custom).
+    rt.update(|s, _| { s.ti.focused = false; s.ta.focused = true; });
+    rt.frame(0.0);
+    rt.key(cmd_c.clone());
+    rt.frame(0.0);
+    assert_eq!(board.content().unwrap().text(), "ta-custom");
+
+    // TextField: on_input_copy returns None -> falls back to pill_copy_text payload.
+    rt.update(|s, _| { s.ta.focused = false; s.tf.focused = true; });
+    rt.frame(0.0);
+    rt.key(cmd_c.clone());
+    rt.frame(0.0);
+    assert_eq!(board.content().unwrap().text(), "Hi https://example.com/ada");
+
+    // Disabled TextInput cannot focus or fire on_input_copy.
+    rt.update(|s, _| s.tf.focused = false);
+    rt.frame(0.0);
+    let (x, y) = rt.find("dis_ti").unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(0.0);
+    rt.key(cmd_c);
+    rt.frame(0.0);
+    assert_eq!(rt.state.seen, [("ti", false), ("ta", false), ("tf", false)]);
+}

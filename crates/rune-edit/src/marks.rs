@@ -618,4 +618,48 @@ impl TextEdit {
         self.record_change(before, EditKind::Other);
         true
     }
+
+    /// Return the current selection as plain text, replacing each wholly contained
+    /// [`Mark::Pill`](crate::Mark::Pill) with `pill_text(id)` when it returns `Some`, and keeping
+    /// the pill's display label otherwise.
+    ///
+    /// Returns an empty string when the selection is empty or the field is secure. A pill only
+    /// partially covered by the selection stays plain text, matching [`Self::selected_html`].
+    ///
+    /// ```
+    /// # use rune_edit::TextEdit;
+    /// let mut edit = TextEdit::new("See ").rich();
+    /// edit.insert_pill("https://example.com/1", "Doc 1");
+    /// edit.insert(" today");
+    /// edit.set_selection(0, edit.text.len());
+    /// let plain = edit.selected_with_pills(|id| Some(id.to_owned()));
+    /// assert_eq!(plain, "See https://example.com/1 today");
+    /// ```
+    pub fn selected_with_pills(&self, mut pill_text: impl FnMut(&str) -> Option<String>) -> String {
+        let (a, b) = self.range();
+        if a == b || self.secure {
+            return String::new();
+        }
+        let mut out = String::with_capacity(b - a);
+        let mut at = a;
+        for (r, id) in self.pills() {
+            if r.end <= a {
+                continue;
+            }
+            if r.start >= b {
+                break;
+            }
+            if r.start < at || r.end > b {
+                continue;
+            }
+            out.push_str(&self.text[at..r.start]);
+            match pill_text(id) {
+                Some(replacement) => out.push_str(&replacement),
+                None => out.push_str(&self.text[r.clone()]),
+            }
+            at = r.end;
+        }
+        out.push_str(&self.text[at..b]);
+        out
+    }
 }

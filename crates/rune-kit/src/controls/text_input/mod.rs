@@ -92,6 +92,11 @@ macro_rules! rich_forwarders {
             self.edits.visual(move |e| e.pill_colors(bg, fg));
             self
         }
+        /// See [`El::pill_copy_text`](rune::El::pill_copy_text).
+        pub fn pill_copy_text(mut self, f: impl Fn(&str) -> Option<String> + 'static) -> Self {
+            self.edits.visual(move |e| e.pill_copy_text(f));
+            self
+        }
     };
 }
 
@@ -114,6 +119,18 @@ macro_rules! field_hook_forwarders {
         /// ```
         pub fn on_input_paste<S: 'static>(mut self, f: impl Fn(&mut S, &rune::ClipboardContent, &mut Tx) -> bool + 'static) -> Self {
             self.edits.paste(f);
+            self
+        }
+        /// Intercept Copy and Cut on the focused inner editor (`El::on_input_copy`) across both
+        /// keyboard shortcuts and the context menu. Skipped when disabled.
+        /// ```ignore
+        #[doc = concat!($ctor, ".on_edit(|s: &mut App| &mut s.edit).on_input_copy(|s: &mut App, _cut, _| Some(rune::ClipboardContent::new(s.edit.selected()))).build(&k)")]
+        /// ```
+        pub fn on_input_copy<S: 'static>(
+            mut self,
+            f: impl Fn(&mut S, bool, &mut Tx) -> Option<rune::ClipboardContent> + 'static,
+        ) -> Self {
+            self.edits.copy(f);
             self
         }
     };
@@ -147,6 +164,9 @@ impl EditActs {
     }
     fn paste<S: 'static>(&mut self, f: impl Fn(&mut S, &rune::ClipboardContent, &mut Tx) -> bool + 'static) {
         self.handlers.push(Box::new(move |e: El| e.on_input_paste(f)));
+    }
+    fn copy<S: 'static>(&mut self, f: impl Fn(&mut S, bool, &mut Tx) -> Option<rune::ClipboardContent> + 'static) {
+        self.handlers.push(Box::new(move |e: El| e.on_input_copy(f)));
     }
     fn secondary_press<S: 'static>(&mut self, f: impl Fn(&mut S, rune::PointerPress, &mut Tx) + 'static) {
         self.handlers.push(Box::new(move |e: El| e.on_secondary_press(f)));

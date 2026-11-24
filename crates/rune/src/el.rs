@@ -154,6 +154,8 @@ pub(crate) type PillIconFn = Rc<dyn Fn(&str) -> Option<&'static crate::Icon>>;
 pub(crate) type PillImageFn = Rc<dyn Fn(&str) -> Option<crate::Pixels>>;
 /// A pill's look by its id; see [`El::pill_style`].
 pub(crate) type PillStyleFn = Rc<dyn Fn(&str) -> PillStyle>;
+/// A pill's plain-text copy payload by its id; see [`El::pill_copy_text`].
+pub(crate) type PillCopyTextFn = Rc<dyn Fn(&str) -> Option<String>>;
 pub(crate) type PillSecondaryFn = Rc<dyn Fn(crate::states::States<'_>, &str, PointerPress, &mut Tx) -> bool>;
 
 /// How one [`Mark::Pill`](crate::Mark::Pill) chip looks: any part left unset falls back to
@@ -222,6 +224,7 @@ impl PillStyle {
     }
 }
 pub(crate) type InputPasteFn = Rc<dyn Fn(crate::states::States<'_>, &crate::ClipboardContent, &mut Tx) -> bool>;
+pub(crate) type InputCopyFn = Rc<dyn Fn(crate::states::States<'_>, bool, &mut Tx) -> Option<crate::ClipboardContent>>;
 pub(crate) type PickFn = Box<dyn FnOnce(crate::states::States<'_>, Option<crate::Picked>, &mut Tx)>;
 pub(crate) type TextOffsetFn = Box<dyn FnOnce(crate::states::States<'_>, Option<usize>, &mut Tx)>;
 pub(crate) type ElementsReadFn = Box<dyn FnOnce(crate::states::States<'_>, &[crate::ElementInfo], &mut Tx)>;
