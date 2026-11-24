@@ -170,7 +170,7 @@ impl RuntimeCore {
             None if mods.cmd => {
                 let mut chars = name.chars();
                 match (chars.next(), chars.next()) {
-                    (Some(c), None) => {
+                    (Some(c), None) if !c.is_control() => {
                         let c = if !c.is_ascii() { code.and_then(crate::shortcuts::us_char).unwrap_or(c) } else { c };
                         crate::Key::Command(c.to_ascii_lowercase())
                     }
@@ -179,11 +179,12 @@ impl RuntimeCore {
             }
             None => return false,
         };
+        let base = crate::window::web_key_base_str(name, mods);
         let event_key = crate::KeyEvent { key, mods };
         let activate = event_key.key == crate::Key::Tab;
         let repeat = flag("repeat");
         if let Some(key) = code {
-            self.physical_with_fallback(app, crate::PhysicalInput::Key { key, mods, pressed: true, repeat }, Some(event_key));
+            self.physical_then(app, crate::PhysicalInput::Key { key, mods, pressed: true, repeat }, Some(event_key), base, None);
         } else if repeat {
             self.repeat_key(event_key);
         } else {

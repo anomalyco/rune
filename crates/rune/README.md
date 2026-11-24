@@ -338,8 +338,9 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   key with no physical origin: `Runtime::key`, or a script `"key"` without a `"code"`.
   `tx.key_base()` is the character the key types under the current layout with no modifiers
   (`Some('a')` for ⌥A, which types `å`), for bindings by letter that follow the layout, as
-  macOS's key bindings do; `None` where winit can't say (the web, iOS) and with no physical
-  origin. Headless hosts and embedders can deliver presses with both using `Runtime::key_with`
+  macOS's key bindings do; on the web it is derived from `KeyboardEvent.key` when unmodified
+  (or lowercased for shifted letters, `None` for Alt/Option, shifted punctuation and dead keys);
+  `None` on iOS and Android and with no physical origin. Headless hosts and embedders can deliver presses with both using `Runtime::key_with`
   or send full physical press/repeat/release events with `Runtime::physical_key_input`.
 
   `Mods::cmd` is the primary shortcut modifier, reported with its key: ⌘ on macOS (with

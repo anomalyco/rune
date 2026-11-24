@@ -627,8 +627,9 @@ impl Running {
             WindowEvent::KeyboardInput { event, .. }
                 if self.input.document && event.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Tab) => return false,
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
-                // Browsers expose no synchronous layout key_without_modifiers, so `Tx::key_base`
-                // stays `None` on web by design; physical US positions arrive in `physical_key`.
+                // Browsers expose no synchronous layout key_without_modifiers, so `key_base`
+                // derives `Tx::key_base` from `KeyboardEvent.key` when unmodified (or for shifted
+                // letters) while physical US positions arrive in `physical_key`.
                 if !self.app.keyboard(event, self.input.mods) { return false; }
                 immediate = true;
                 // Any key that puts Rune's focus in a field (Tab, or a shortcut such as the
