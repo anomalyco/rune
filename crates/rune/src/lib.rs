@@ -57,6 +57,7 @@ pub use a11y::AccessibilityLink;
 pub use accesskit;
 pub use app::App;
 pub use app::AppHandle;
+pub use app::CloseResponse;
 pub use clipboard::ClipboardContent;
 pub use clipboard::ClipboardImage;
 pub use clipboard::ClipboardWrite;

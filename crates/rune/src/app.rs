@@ -39,6 +39,31 @@ pub(crate) type OnWindow = Box<dyn FnMut(&crate::WindowHandle)>;
 /// and closes the native display connection.
 pub(crate) type OnDisplayClose = Box<dyn FnOnce()>;
 
+/// Decision returned by [`App::on_close_request`] and
+/// [`WindowSpec::on_close_request`](crate::WindowSpec::on_close_request) when a native window
+/// receives a close request (`WindowEvent::CloseRequested`).
+///
+/// ```no_run
+/// use rune::{App, AppSpec, CloseResponse, el};
+///
+/// let spec = AppSpec::new("Draft", (480.0, 320.0), || true, |_, _| el());
+/// App::new(spec)
+///     .on_close_request(|has_unsaved, _| {
+///         if *has_unsaved { CloseResponse::Defer } else { CloseResponse::Close }
+///     })
+///     .run();
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseResponse {
+    /// Proceed with closing the window as usual (running [`App::on_close`], and finishing or
+    /// hiding the window according to [`App::keep_running`]).
+    Close,
+    /// Keep the window open and commit any state or [`Tx`] changes made in the hook. Close the
+    /// window later with [`Tx::close_window`], [`AppHandle::close`], or
+    /// [`WindowHandle::close`](crate::WindowHandle::close).
+    Defer,
+}
+
 /// `App::turn_scope`'s hooks.
 pub(crate) struct TurnScope<S> {
     pub(crate) enter: fn(&mut S),
@@ -67,6 +92,7 @@ pub struct App<S: 'static> {
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) standard_menus: bool,
     pub(crate) keep_running: bool,
+    pub(crate) on_close_request: Option<fn(&mut S, &mut Tx) -> CloseResponse>,
     pub(crate) on_close: Option<fn(&mut S, &mut Tx)>,
     pub(crate) on_quit: Option<fn(&mut S, &mut Tx)>,
     pub(crate) turn_scope: Option<TurnScope<S>>,
@@ -132,6 +158,7 @@ impl<S: 'static> App<S> {
             accessory: false,
             standard_menus: false,
             keep_running: false,
+            on_close_request: None,
             on_close: None,
             on_quit: None,
             turn_scope: None,
@@ -580,6 +607,43 @@ impl<S: 'static> App<S> {
     /// asking. No effect on other platforms.
     pub fn standard_menus(mut self) -> Self {
         self.standard_menus = true;
+        self
+    }
+
+    /// Intercepts a native window-close request (`WindowEvent::CloseRequested`) before the
+    /// window hides, changes lifecycle or first-frame state, or runs [`App::on_close`].
+    ///
+    /// Runs inside a normal update transaction so the callback may update state or issue [`Tx`]
+    /// requests (for example showing an unsaved-changes confirmation dialog). Returning
+    /// [`CloseResponse::Defer`] keeps the window open, commits those changes, and requests a
+    /// redraw; close the window later with [`Tx::close_window`], [`AppHandle::close`], or
+    /// [`WindowHandle::close`](crate::WindowHandle::close). Returning [`CloseResponse::Close`]
+    /// proceeds with closing as usual (running [`App::on_close`]).
+    ///
+    /// Programmatic close (`Tx::close_window`, `AppHandle::close`, `WindowHandle::close`),
+    /// application quit/relaunch, teardown, and an already-exiting event loop bypass this hook
+    /// so an approved close completes without re-asking. Apps that do not register this hook
+    /// keep the existing close behaviour. Native windows only (ignored on headless and web).
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, CloseResponse, el};
+    ///
+    /// struct Draft { dirty: bool, confirm_close: bool }
+    ///
+    /// let spec = AppSpec::new("Draft", (480.0, 320.0), || Draft { dirty: true, confirm_close: false }, |_, _| el());
+    /// App::new(spec)
+    ///     .on_close_request(|draft, _| {
+    ///         if draft.dirty {
+    ///             draft.confirm_close = true;
+    ///             CloseResponse::Defer
+    ///         } else {
+    ///             CloseResponse::Close
+    ///         }
+    ///     })
+    ///     .run();
+    /// ```
+    pub fn on_close_request(mut self, f: fn(&mut S, &mut Tx) -> CloseResponse) -> Self {
+        self.on_close_request = Some(f);
         self
     }
 

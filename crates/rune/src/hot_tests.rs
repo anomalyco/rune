@@ -369,6 +369,7 @@ fn remaining_app_hooks_dispatch_through_patch_table_with_panic_fallback() {
         focus: Vec<bool>,
         mods: Vec<crate::Mods>,
         visibility: Vec<bool>,
+        close_requests: u32,
         closes: u32,
         quits: u32,
         rests: u32,
@@ -387,6 +388,7 @@ fn remaining_app_hooks_dispatch_through_patch_table_with_panic_fallback() {
         .on_focus(|s, f, _| { panics_once(); s.focus.push(f); })
         .on_modifiers(|s, m, _| { panics_once(); s.mods.push(m); })
         .on_visibility(|s, v, _| { panics_once(); s.visibility.push(v); })
+        .on_close_request(|s, _| { panics_once(); s.close_requests += 1; crate::CloseResponse::Defer })
         .on_close(|s, _| { panics_once(); s.closes += 1; })
         .on_quit(|s, _| { panics_once(); s.quits += 1; })
         .on_rest(|s, _| { panics_once(); s.rests += 1; true })
@@ -412,6 +414,10 @@ fn remaining_app_hooks_dispatch_through_patch_table_with_panic_fallback() {
     CALLS.set(0);
     win.rt.set_live_visible(false);
     assert_eq!((win.rt.state.visibility.as_slice(), CALLS.get()), (&[false][..], 2), "on_visibility");
+
+    CALLS.set(0);
+    assert_eq!(win.run_on_close_request(), Some(crate::CloseResponse::Defer));
+    assert_eq!((win.rt.state.close_requests, CALLS.get()), (1, 2), "on_close_request");
 
     CALLS.set(0);
     win.run_on_close();

@@ -291,7 +291,7 @@ impl Host {
                 if self.life.finished() || self.win.is_none() { return; }
             }
             WindowEvent::CloseRequested => {
-                self.close(event_loop);
+                self.close_requested(event_loop);
                 return;
             }
             WindowEvent::HoveredFile(path) => { self.files.file(path, false); return; }
