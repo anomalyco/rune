@@ -48,6 +48,30 @@ fn explicit_parse_from_still_parses_flags() {
 }
 
 #[test]
+fn settle_flag_requires_snap_or_tree() {
+    let snap = Args::parse_from(vec_s(&["--snap", "out.png", "--settle"]));
+    assert!(snap.settle && snap.headless());
+    let tree = Args::parse_from(vec_s(&["--tree", "out.json", "--settle"]));
+    assert!(tree.settle && tree.headless());
+    let both = Args::parse_from(vec_s(&["--snap", "out.png", "--tree", "out.json", "--settle"]));
+    assert!(both.settle);
+
+    let default = Args::parse_from(vec_s(&["--snap", "out.png"]));
+    assert!(!default.settle);
+
+    let alone = Args { settle: true, ..Args::defaults() };
+    assert_eq!(alone.validate(), Err("--settle needs --snap or --tree"));
+
+    let with_trace = Args { settle: true, trace: Some(PathBuf::from("t.jsonl")), ..Args::defaults() };
+    assert_eq!(with_trace.validate(), Err("--settle needs --snap or --tree"));
+
+    let raw = vec_s(&["--snap", "out.png", "--settle"]);
+    let (off, extra) = Args::parse_process_argv(raw.clone(), false);
+    assert!(!off.settle && !off.headless());
+    assert_eq!(extra, raw);
+}
+
+#[test]
 fn non_utf8_os_args_decode_lossily_without_panicking() {
     #[cfg(windows)]
     let invalid = {

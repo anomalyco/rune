@@ -24,6 +24,9 @@ use crate::tooling::{
 use super::app::{HeadlessApp, HeadlessRenderArgs};
 use super::report_traffic_light_overlaps;
 
+/// Bound on extra zero-dt layout-callback passes `--settle` runs at the capture frame.
+pub(in crate::tooling) const SETTLE_PASSES: usize = 3;
+
 /// A frame readback's destination and, when `--chrome` is active, the resolved macOS chrome on
 /// that frame so asynchronous readbacks paint the traffic lights that frame drew with.
 #[derive(Clone, Copy)]
@@ -168,9 +171,14 @@ impl<F: FnMut(FrameShot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
         // step's own refusal shows for those too, counted apart.
         let asked = (self.app.rt().loop_check_on() && self.k > 0 && s.frame_anim.is_none())
             .then(|| self.app.rt_mut().loop_step(step));
-        let animating = self.app.frame(step);
+        let mut animating = self.app.frame(step);
         if let Some(asked) = asked {
             s.loop_check.add(self.real_t, self.script_had_events, asked, self.app.rt_mut().loop_checked());
+        }
+        if s.args.settle && self.k == s.snap_frame {
+            if let (_, Some(settled)) = self.app.settle_layout_passes(SETTLE_PASSES) {
+                animating = settled;
+            }
         }
         StepInfo {
             runtime_animating: animating,
@@ -419,3 +427,6 @@ pub(in crate::tooling) fn step_window_frame(
 #[cfg(all(test, feature = "frame-profile"))]
 #[path = "frame_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "settle_tests.rs"]
+mod settle_tests;

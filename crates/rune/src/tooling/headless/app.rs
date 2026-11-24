@@ -50,6 +50,9 @@ impl dyn HeadlessApp + '_ {
 
     pub(super) fn content_height(&mut self) -> f32 { self.driver(|rt, app| rt.content_height(app)) }
     pub(super) fn frame(&mut self, dt: f64) -> bool { self.driver(|rt, app| rt.frame(app, dt)) }
+    pub(super) fn settle_layout_passes(&mut self, max_passes: usize) -> (usize, Option<bool>) {
+        self.driver(|rt, app| rt.settle_layout_passes(app, max_passes))
+    }
     pub(super) fn open_popup_headless(&mut self) { self.driver(|rt, app| rt.open_popup_headless(app)); }
     pub(super) fn resolve_popup(&mut self, picked: Option<&str>) -> Result<(), crate::PopupMenuError> {
         self.driver(|rt, app| rt.resolve_popup(app, picked))
