@@ -115,6 +115,11 @@ pub struct WinitState {
     /// Whether we have dispatched events to the user thus we want to
     /// send `AboutToWait` and normally wakeup the user.
     pub dispatched_events: bool,
+
+    /// Rune: when true, any successful Wayland display read marks `dispatched_events = true`
+    /// even when winit's own event sinks are empty, so foreign queues sharing the display
+    /// dispatch on that turn without background reader threads.
+    pub wake_on_wayland_read: bool,
 }
 
 impl WinitState {
@@ -205,6 +210,7 @@ impl WinitState {
             loop_handle,
             // Make it true by default.
             dispatched_events: true,
+            wake_on_wayland_read: false,
         })
     }
 

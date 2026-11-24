@@ -869,6 +869,19 @@ impl ActiveEventLoop {
         }
     }
 
+    /// Rune: opt into waking from `ControlFlow::Wait` on any Wayland display read; no-op on X11.
+    #[inline]
+    pub fn set_wake_on_wayland_read(&self, wake: bool) {
+        match *self {
+            #[cfg(wayland_platform)]
+            ActiveEventLoop::Wayland(ref evlp) => evlp.set_wake_on_wayland_read(wake),
+            #[cfg(x11_platform)]
+            ActiveEventLoop::X(_) => {
+                let _ = wake;
+            },
+        }
+    }
+
     pub fn create_custom_cursor(&self, cursor: CustomCursorSource) -> CustomCursor {
         x11_or_wayland!(match self; ActiveEventLoop(evlp) => evlp.create_custom_cursor(cursor))
     }

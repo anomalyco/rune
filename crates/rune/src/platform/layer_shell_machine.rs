@@ -659,8 +659,9 @@ pub(crate) mod repeat {
     }
 }
 
-/// Wayland layer-shell watch loop, kept cross-platform so its queue-draining, read-guard
-/// cancellation, wake gating and hangup/stop paths run tests on every host without a compositor.
+/// Wayland reader watch loop (used by `wayland_drop`), kept cross-platform so its
+/// queue-draining, read-guard cancellation, wake gating and hangup/stop paths run tests on every
+/// host without a compositor.
 pub(crate) mod watch_loop {
     /// Result of polling the Wayland display socket alongside the watch's stop signal.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]

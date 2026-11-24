@@ -37,6 +37,7 @@ pub mod spec;
 mod state;
 mod surface;
 pub(crate) mod titlebar;
+mod wayland_wake;
 #[cfg(target_os = "windows")]
 mod win32;
 /// `crate::warm_gpu_cache` on Windows (`win32::handover`).
@@ -130,6 +131,9 @@ pub(crate) enum WakeEvent {
     /// Wayland: native `wl_data_device` drop events or pipe reads are ready for `Host::flush_files`.
     #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
     FileDrop,
+    /// Wayland: a live layer surface already has events queued in libwayland from a mid-turn read;
+    /// wakes the immediate next turn so `about_to_wait` drains it without entering `ControlFlow::Poll`.
+    LayerPending,
 }
 
 /// What `Windows` needs of a host, whatever its state type: an app window or an overlay.
@@ -142,6 +146,11 @@ pub(crate) trait AnyHost {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent);
     /// Draws what has no redraw event (a layer surface); true while it needs more frames.
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) -> bool { false }
+    /// Whether this host owns a live Wayland layer-shell surface sharing winit's `wl_display`.
+    fn has_live_wayland_layer(&self) -> bool { false }
+    /// Whether this host has unread platform events already queued in memory (for example a
+    /// Wayland layer surface whose queue filled during a mid-turn read).
+    fn has_pending_platform_events(&self) -> bool { false }
     /// The turn ends: the next frame it wants is asked for, or a paint put off runs (`redraw`).
     fn turn_ends(&mut self, _event_loop: &ActiveEventLoop, _now: Instant) {}
     fn finished(&self) -> bool { false }
@@ -222,6 +231,8 @@ struct Windows {
     /// Fatal Wayland display error captured while `ActiveEventLoop` is still alive.
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     display_error: Option<String>,
+    /// Scheduling state for waking winit on Wayland display reads and draining mid-turn layer events.
+    wayland_wake: wayland_wake::State,
 }
 impl Windows {
     /// Starts the windows `crate::open_window` asked for this turn, in fresh slots, each like
@@ -279,6 +290,26 @@ impl Windows {
         }
         if should_exit {
             event_loop.exit();
+        }
+    }
+
+    fn apply_wayland_wake(
+        &self,
+        event_loop: &ActiveEventLoop,
+        effects: crate::machine::Effects<wayland_wake::Effect>,
+    ) {
+        for effect in effects {
+            match effect {
+                wayland_wake::Effect::SetWakeOnRead(on) => {
+                    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                    winit::platform::wayland::ActiveEventLoopExtWayland::set_wake_on_wayland_read(event_loop, on);
+                    #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+                    let _ = (event_loop, on);
+                }
+                wayland_wake::Effect::SendWake => {
+                    self.proxy.send_event(WakeEvent::LayerPending).ok();
+                }
+            }
         }
     }
 }
@@ -410,6 +441,10 @@ impl ApplicationHandler<WakeEvent> for Windows {
             }
             WakeEvent::Turn => { #[cfg(not(target_arch = "wasm32"))] self.turn(event_loop); return; }
             WakeEvent::FileDrop => return,
+            WakeEvent::LayerPending => {
+                let _ = wayland_wake::step(&mut self.wayland_wake, wayland_wake::Event::WakeReceived);
+                return;
+            }
         };
         if let Some(Some(host)) = self.hosts.get_mut(slot) {
             host.user_event(event_loop, event);
@@ -458,6 +493,8 @@ impl ApplicationHandler<WakeEvent> for Windows {
         // putting off behind another window's.
         let now = crate::time::now();
         for host in self.hosts.iter_mut().flatten() { host.turn_ends(event_loop, now); }
+        let effects = wayland_wake::about_to_wait(&mut self.wayland_wake, &self.hosts);
+        self.apply_wayland_wake(event_loop, effects);
         // Layer surfaces have no redraw events: keep turning while one animates (its vsync
         // paces the loop). Hosts whose only motion is an ambient loop sleep until its next step.
         let deadline = self.hosts.iter().flatten().filter_map(|host| host.wake_deadline()).min();
@@ -494,6 +531,8 @@ impl ApplicationHandler<WakeEvent> for Windows {
         if step == app_events::ExitStep::FastExit && let Some(last) = fast_hook {
             crate::quit::end_fast(last);
         }
+        let effects = wayland_wake::step(&mut self.wayland_wake, wayland_wake::Event::Exiting);
+        self.apply_wayland_wake(event_loop, effects);
         // Surfaces go while winit's display connection is still open (layer surfaces live on it).
         self.hosts.clear();
         crate::marks::mark("windows.dropped");
