@@ -1,0 +1,1 @@
+- Key chords: `Chord::parse` (and `FromStr` for `Chord` / `Keybind`) now parses chords with modifiers and a trailing `+` key such as `"ctrl++"`, `"ctrl+shift++"`, `"mod++"`, and `"ctrl+ +"` as documented, instead of rejecting modifiers after pre-setting the key to `ChordKey::Char('+')`.
