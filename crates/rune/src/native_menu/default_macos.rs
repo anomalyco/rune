@@ -117,7 +117,7 @@ unsafe fn relabel_app_items(menu: &NSMenu) {
             Some("hideOtherApplications:") => Label::HideOthers,
             Some("unhideAllApplications:") => Label::ShowAll,
             Some("terminate:") => Label::Quit(&name),
-            _ if !entry.isSeparatorItem() && entry.submenu().is_some() => Label::Services,
+            _ if entry.tag() == APP_ITEM && !entry.isSeparatorItem() && entry.submenu().is_some() => Label::Services,
             _ => continue,
         };
         entry.setTitle(&NSString::from_str(&crate::labels::label(label)));

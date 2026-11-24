@@ -178,10 +178,20 @@ handle.set_menu([
 ])?;
 ```
 
-Actions are `fn(&mut S, &mut Tx)` queued on the app thread. `set_menu` replaces all
-custom items for that App; an empty list removes them. It validates atomically and
-queues installation. `take_menu_errors()` reports deferred startup/installation
-errors. Replaced, disabled or removed items invalidate stale queued actions.
+Actions are `fn(&mut S, &mut Tx)` (`MenuItem::new`) or `Fn(&mut S, &mut Tx) + Send + Sync + 'static`
+closures (`MenuItem::with_action`) queued on the app thread, keeping `MenuItem<S>` `Clone`,
+`Send`, and `Sync` without requiring `S: Send + Sync`. `set_menu` replaces all custom items for
+that App; an empty list removes them. It validates atomically and queues installation.
+`take_menu_errors()` reports deferred startup/installation errors. Replaced, disabled or removed
+items invalidate stale queued actions.
+
+`MenuItem::submenu(title, items)` nests child items (action items, separators, or further
+submenus) to arbitrary depth, backed by `NSMenuItem.setSubmenu:` on macOS. Place a top-level
+submenu with `menu`, `dock`, or `after` like any item; children inside a submenu cannot set
+`menu` or `dock` or use `MenuItem::about`. Leaf ids must be unique across the whole menu tree,
+headless scripts fire nested leaves by id or unique title, and disabling any ancestor submenu
+prevents its descendants from firing.
+
 `MenuItem::about(title, action)` replaces the macOS app menu's standard About item
 (`orderFrontStandardAboutPanel:`) at index 0. At most one About replacement may appear
 in a snapshot, and it must stay in the app menu (cannot use `menu`, `dock`, `after`, or
@@ -189,8 +199,8 @@ in a snapshot, and it must stay in the app menu (cannot use `menu`, `dock`, `aft
 custom About item) restores AppKit's standard About item.
 
 `MenuItem::separator()` is a separator line (`NSMenuItem.separatorItem` on macOS), placed
-with `menu` or `dock` in list order like any item. It needs no id, takes no part in
-id/title lookup and can't be fired.
+with `menu`, `dock`, or inside a submenu in list order like any item. It needs no id, takes no
+part in id/title lookup and can't be fired.
 
 On macOS, one App owns the process-wide custom menus. Default Quit/Hide items and
 existing named-menu items are preserved; if a custom item claims `⌘Q`, the app menu's

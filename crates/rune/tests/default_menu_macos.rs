@@ -310,6 +310,24 @@ fn main() {
         default_macos::sync_standard(&app);
         assert_eq!(quit_item(&app_menu).keyEquivalent().to_string(), "q", "promoted Quit restores ⌘Q after clear");
         assert!(!about_item(&app_menu).isHidden(), "promoted standard About restores after clear");
+
+        // A key equivalent inside a nested submenu still yields standard ⌘W and restores it on removal,
+        // and relabeling leaves a custom submenu in the app menu untouched.
+        let nested_sub = NSMenu::new(mtm);
+        let nested_close = NSMenuItem::initWithTitle_action_keyEquivalent(mtm.alloc(), &NSString::from_str("Close Session"),
+            Some(sel!(runeMenuAction:)), &NSString::from_str("w"));
+        nested_sub.addItem(&nested_close);
+        let custom_sub_title = format!("Attach {name}");
+        let nested_top = NSMenuItem::new(mtm);
+        nested_top.setTitle(&NSString::from_str(&custom_sub_title));
+        nested_top.setSubmenu(Some(&nested_sub));
+        default_macos::adding(&app, || app_menu.insertItem_atIndex(&nested_top, 1));
+        assert_eq!(key_of(&root, "Window", "Close"), "", "nested submenu ⌘W wins over standard Close");
+        default_macos::relabel(&app);
+        assert_eq!(nested_top.title().to_string(), custom_sub_title, "relabel leaves custom app-menu submenu title intact");
+        app_menu.removeItem(&nested_top);
+        default_macos::sync_standard(&app);
+        assert_eq!(key_of(&root, "Window", "Close"), "w", "standard Close restores ⌘W after nested submenu removal");
         app.setMainMenu(None);
     }
     println!("PASS: default titles/selectors/keys, Services, idempotence, custom and empty menus preserved; standard Edit/Window items, nil targets, Mac menu order, custom equivalents win (including ⌘Q across promote), custom About hides/restores standard About, shared menus kept, no Quit until promoted");

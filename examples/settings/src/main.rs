@@ -410,6 +410,71 @@ fn speed_control(p: Paint, dark: bool, v: f32) -> El {
         )
 }
 
+fn accent_title(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+        None => String::new(),
+    }
+}
+
+fn native_menu_items() -> Vec<MenuItem<Settings>> {
+    let appearance_items = APPEARANCES.into_iter().map(|(appearance, name)| {
+        MenuItem::with_action(name, move |s: &mut Settings, tx| {
+            s.appearance = appearance;
+            tx.color_motion(motion::CALM);
+        })
+        .id(format!("appearance-{}", name.to_ascii_lowercase()))
+    });
+
+    let accent_items = tok::ACCENT_NAMES.iter().enumerate().map(|(index, &name)| {
+        MenuItem::with_action(accent_title(name), move |s: &mut Settings, _| {
+            s.accent = index;
+        })
+        .id(format!("accent-{name}"))
+    });
+
+    let speed_presets: [(&str, &str, f32); 3] = [
+        ("speed-slow", "0.5× (Slow)", 0.0),
+        ("speed-normal", "1.0× (Normal)", 0.5),
+        ("speed-fast", "2.0× (Fast)", 1.0),
+    ];
+    let speed_items = speed_presets.into_iter().map(|(id, title, value)| {
+        MenuItem::with_action(title, move |s: &mut Settings, _| {
+            s.speed = value;
+        })
+        .id(id)
+    });
+
+    let mut appearance_children: Vec<MenuItem<Settings>> = appearance_items.collect();
+    appearance_children.push(MenuItem::separator());
+    appearance_children.push(MenuItem::submenu("Accent Colour", accent_items).id("accent-submenu"));
+
+    vec![
+        MenuItem::about("About Settings", |s: &mut Settings, _| {
+            s.quit_confirm = false;
+            s.about_open = true;
+        })
+        .id("about"),
+        MenuItem::new("Close Settings…", |s: &mut Settings, tx| {
+            if s.quit_confirm {
+                tx.quit();
+            } else {
+                s.about_open = false;
+                s.quit_confirm = true;
+            }
+        })
+        .id("close-settings")
+        .key_equivalent("cmd+q".parse().expect("valid cmd+q shortcut")),
+        MenuItem::submenu("Appearance", appearance_children)
+            .id("appearance-submenu")
+            .menu("View"),
+        MenuItem::submenu("Animation Speed", speed_items)
+            .id("speed-submenu")
+            .menu("View"),
+    ]
+}
+
 fn main() {
     let spec = AppSpec::<Settings> {
         scenes: &[
@@ -429,25 +494,8 @@ fn main() {
         ],
         ..AppSpec::new("Settings", (620.0, 520.0), Settings::default, view)
     };
-    App::new(spec)
-        .menu_item(
-            MenuItem::about("About Settings", |s: &mut Settings, _| {
-                s.quit_confirm = false;
-                s.about_open = true;
-            })
-            .id("about"),
-        )
-        .menu_item(
-            MenuItem::new("Close Settings…", |s: &mut Settings, tx| {
-                if s.quit_confirm {
-                    tx.quit();
-                } else {
-                    s.about_open = false;
-                    s.quit_confirm = true;
-                }
-            })
-            .id("close-settings")
-            .key_equivalent("cmd+q".parse().expect("valid cmd+q shortcut")),
-        )
+    native_menu_items()
+        .into_iter()
+        .fold(App::new(spec), App::menu_item)
         .run();
 }
