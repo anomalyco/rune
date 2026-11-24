@@ -90,9 +90,10 @@ pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (
     let (width, height) = drawable_size(None, (width, height), adapter.limits().max_texture_dimension_2d);
     // The surface is asked what it can do once. A Vulkan driver answers each part of that with a
     // call of its own, and Mesa's Wayland surfaces answer each call by asking the compositor for
-    // its globals again and waiting for it twice (`wsi_wl_display_init`): asked three times here
-    // (`get_default_config`, this, the alpha mode), a window's swap chain waited for the
-    // compositor thirty times before it was made. What follows is `get_default_config`'s answer.
+    // its globals again and waiting for it twice (`wsi_wl_display_init`). Asked three times here
+    // (`get_default_config`, this, the alpha mode), a window's swap chain was made after 26
+    // such requests and 52 round trips; asked once, after 16 and 32. What follows is
+    // `get_default_config`'s answer.
     let caps = surface.get_capabilities(adapter);
     let mut config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
