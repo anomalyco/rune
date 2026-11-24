@@ -15,8 +15,9 @@ pub(super) trait Port {
     /// A finished poster load and the attempt it answers, keeping its frame for
     /// [`show_poster`](Self::show_poster).
     fn take_poster(&mut self) -> Option<(Attempt, Result<Meta, String>)>;
-    /// Puts the kept frame on the surface, if there is one and a surface to take it.
-    fn show_poster(&mut self, next_id: &mut dyn FnMut() -> u64) -> Result<(), String>;
+    /// Puts the kept frame on the surface, if there is one and a surface to take it. Returns
+    /// the shown picture's presentation timestamp when one was pushed.
+    fn show_poster(&mut self, next_id: &mut dyn FnMut() -> u64) -> Result<Option<f64>, String>;
     fn ask_poster(&mut self, at: f64, attempt: Attempt);
     /// Returns when the player was made.
     fn make_player(&mut self) -> Result<Instant, String>;
@@ -31,6 +32,9 @@ pub(super) trait Port {
     fn set_volume(&mut self, volume: f32);
     fn set_output_device(&mut self, uid: Option<&str>);
     fn seek_to(&mut self, at: f64, exact: bool);
+    /// Steps by `frames` video pictures when the native item supports it; returns `false` to fall
+    /// back to an exact `seek_to`.
+    fn step_by(&mut self, frames: i32) -> bool;
     fn set_rate(&mut self, rate: f32);
     fn restart(&mut self, rate: f32);
     /// The item time for this frame, and the new frame's item time if one reached the surface.
@@ -58,11 +62,13 @@ pub(super) fn carry(c: &mut Control, port: &mut impl Port, effects: Effects<Effe
         match effect {
             Effect::Placeholder => {}
             Effect::AskPoster(at, attempt) => port.ask_poster(at, attempt),
-            Effect::ShowPoster => {
-                if let Err(e) = port.show_poster(&mut || c.next_frame_id()) {
-                    c.fail(e);
+            Effect::ShowPoster => match port.show_poster(&mut || c.next_frame_id()) {
+                Ok(Some(shown)) => {
+                    step(c, Event::PosterShown { shown });
                 }
-            }
+                Ok(None) => {}
+                Err(e) => c.fail(e),
+            },
             Effect::MakePlayer => match port.make_player() {
                 Ok(created) => {
                     step(c, Event::PlayerMade { created });
@@ -76,6 +82,11 @@ pub(super) fn carry(c: &mut Control, port: &mut impl Port, effects: Effects<Effe
             Effect::SetVolume(volume) => port.set_volume(volume),
             Effect::SetOutputDevice => port.set_output_device(c.output_device.as_deref()),
             Effect::SeekTo { at, exact } => port.seek_to(at, exact),
+            Effect::StepBy { frames, fallback } => {
+                if !port.step_by(frames) {
+                    port.seek_to(fallback, true);
+                }
+            }
             Effect::SetRate(rate) => port.set_rate(rate),
             Effect::Restart(rate) => port.restart(rate),
         }

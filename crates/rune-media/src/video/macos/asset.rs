@@ -230,7 +230,7 @@ fn meta(asset: &AVURLAsset, kind: Kind) -> Result<Meta, String> {
         if unsafe { asset.tracksWithMediaType(audio) }.firstObject().is_none() {
             return Err("no playable audio track (unreachable, or a format AVFoundation can't read)".into());
         }
-        return Ok(Meta { duration: duration(), size: None, frame: 1.0 / 30.0, sound: true });
+        return Ok(Meta { duration: duration(), size: None, frame: None, sound: true });
     }
     // SAFETY: `AVMediaTypeVideo` is an immutable static AVFoundation string constant.
     let video = unsafe { AVMediaTypeVideo }.ok_or("AVMediaTypeVideo unavailable")?;
@@ -245,15 +245,33 @@ fn meta(asset: &AVURLAsset, kind: Kind) -> Result<Meta, String> {
     let t = unsafe { track.preferredTransform() };
     let w = (size.width * t.a + size.height * t.c).abs().round();
     let h = (size.width * t.b + size.height * t.d).abs().round();
-    // SAFETY: `track` is a live `AVAssetTrack` retained from `tracks.firstObject()`.
-    let min = seconds(unsafe { track.minFrameDuration() });
-    // SAFETY: `track` is a live `AVAssetTrack` retained from `tracks.firstObject()`.
-    let nominal = unsafe { track.nominalFrameRate() } as f64;
-    let frame = if min > 0.0 { min } else if nominal > 0.0 { 1.0 / nominal } else { 1.0 / 30.0 };
+    let frame = track_frame_duration(&track);
     if w < 1.0 || h < 1.0 {
         return Err("video track has no size".into());
     }
     Ok(Meta { duration: duration(), size: Some((w as u32, h as u32)), frame, sound: has_sound(asset) })
+}
+
+fn track_frame_duration(track: &objc2_av_foundation::AVAssetTrack) -> Option<f64> {
+    // SAFETY: `track` is a live `AVAssetTrack` retained from `tracksWithMediaType`.
+    let min = seconds(unsafe { track.minFrameDuration() });
+    if min.is_finite() && min > 0.0 {
+        return Some(min);
+    }
+    // SAFETY: `track` is a live `AVAssetTrack` retained from `tracksWithMediaType`.
+    let nominal = f64::from(unsafe { track.nominalFrameRate() });
+    (nominal.is_finite() && nominal > 0.0).then(|| 1.0 / nominal)
+}
+
+/// Nominal seconds per video frame from the first video track (`minFrameDuration`, else
+/// `1 / nominalFrameRate`), or `None` when the asset has no video track or no valid positive rate.
+#[allow(deprecated)] // As `meta`: the synchronous loader.
+pub(super) fn frame_duration(asset: &AVAsset) -> Option<f64> {
+    // SAFETY: `AVMediaTypeVideo` is an immutable static AVFoundation string constant.
+    let video = unsafe { AVMediaTypeVideo }?;
+    // SAFETY: `asset` is a live `AVAsset` and `video` is the static `AVMediaTypeVideo` constant.
+    let track = unsafe { asset.tracksWithMediaType(video) }.firstObject()?;
+    track_frame_duration(&track)
 }
 
 /// Whether the asset has a sound track. Blocks until its tracks load.
@@ -295,11 +313,15 @@ pub(super) fn generator(asset: &AVURLAsset, max: Option<f64>) -> Retained<AVAsse
 }
 
 #[allow(deprecated)] // copyCGImageAtTime is the synchronous form.
-pub(super) fn image(generator: &AVAssetImageGenerator, at: f64) -> Result<ByteFrame, String> {
-    // SAFETY: `generator` is a live `AVAssetImageGenerator` and null `actualTime` is permitted by AVFoundation.
-    let image = unsafe { generator.copyCGImageAtTime_actualTime_error(cm(at), std::ptr::null_mut()) }
+pub(super) fn image(generator: &AVAssetImageGenerator, at: f64) -> Result<(ByteFrame, f64), String> {
+    let mut actual = zero();
+    // SAFETY: `generator` is a live `AVAssetImageGenerator` and `&mut actual` is a valid writable `CMTime` out-pointer.
+    let image = unsafe { generator.copyCGImageAtTime_actualTime_error(cm(at), &mut actual) }
         .map_err(|e| e.localizedDescription().to_string())?;
-    bgra(&image)
+    // SAFETY: `CMTimeGetSeconds` accepts any `CMTime` value and returns non-finite for invalid times.
+    let s = unsafe { actual.seconds() };
+    let pts = if s.is_finite() { s.max(0.0) } else { at.max(0.0) };
+    Ok((bgra(&image)?, pts))
 }
 
 /// Draws a decoded image into sRGB BGRA bytes (opaque, so premultiplied equals straight).
@@ -334,7 +356,7 @@ pub(in crate::video) fn probe(native: &mut Native, source: &MediaSource, headers
     Ok(meta)
 }
 
-pub(in crate::video) fn decode(native: &mut Native, source: &MediaSource, headers: &[(String, String)], at: f64) -> Result<ByteFrame, String> {
+pub(in crate::video) fn decode(native: &mut Native, source: &MediaSource, headers: &[(String, String)], at: f64) -> Result<(ByteFrame, f64), String> {
     if native.generator.is_none() {
         let asset = asset(source, headers)?;
         native.generator = Some(generator(&asset, None));
@@ -350,5 +372,5 @@ pub(crate) fn test_frames(source: &MediaSource, at: f64) -> Result<(ByteFrame, B
     let raw = generator(&asset, None);
     // SAFETY: `raw` is a newly created, uniquely owned `AVAssetImageGenerator` not yet decoding.
     unsafe { raw.setAppliesPreferredTrackTransform(false) };
-    Ok((image(&generator(&asset, None), at)?, image(&raw, at)?, orient(&asset)))
+    Ok((image(&generator(&asset, None), at)?.0, image(&raw, at)?.0, orient(&asset)))
 }

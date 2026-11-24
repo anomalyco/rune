@@ -25,7 +25,7 @@ pub(super) fn open(source: &MediaSource, kind: Kind) -> Result<(Option<Still>, M
     unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok().ok();
     let lib = mf::library()?;
     let opened = mf::open(lib, &lib.resolve(&target)?, kind, Decode::Cpu, false)?;
-    let meta = Meta { duration: opened.duration, size: opened.picture.map(|p| p.natural), frame: opened.picture.map_or(1.0 / 30.0, |p| p.frame), sound: opened.has_sound };
+    let meta = Meta { duration: opened.duration, size: opened.picture.map(|p| p.natural), frame: opened.picture.and_then(|p| p.frame_duration), sound: opened.has_sound };
     let still = match (opened.video, opened.picture) {
         (Some(video), Some(picture)) => Some(Still { reader: opened.reader, video, picture, current: None, next: None }),
         _ => None,
@@ -34,9 +34,9 @@ pub(super) fn open(source: &MediaSource, kind: Kind) -> Result<(Option<Still>, M
 }
 
 impl Still {
-    /// The picture showing at clip second `at`.
-    pub(super) fn frame(&mut self, at: f64) -> Result<ByteFrame, String> {
-        let shows = |t: f64| t <= at + self.picture.frame * 0.5;
+    /// The picture showing at clip second `at` and its presentation timestamp.
+    pub(super) fn frame(&mut self, at: f64) -> Result<(ByteFrame, f64), String> {
+        let shows = |t: f64| t <= at + 1e-6;
         let reads_on = self.current.as_ref().is_some_and(|(t, _)| shows(*t) && at - t < 1.0);
         if !reads_on {
             mf::seek(&self.reader, at)?;
@@ -44,7 +44,7 @@ impl Still {
         }
         if let Some((t, _)) = &self.next {
             if !shows(*t) {
-                return self.current.as_ref().map(|(_, f)| copy(f)).ok_or_else(|| "no picture at that time".into());
+                return self.current.as_ref().map(|(t, f)| (copy(f), *t)).ok_or_else(|| "no picture at that time".into());
             }
             self.current = self.next.take();
         }
@@ -62,7 +62,7 @@ impl Still {
                 break;
             }
         }
-        self.current.as_ref().map(|(_, f)| copy(f)).ok_or_else(|| "no picture at that time".into())
+        self.current.as_ref().map(|(t, f)| (copy(f), *t)).ok_or_else(|| "no picture at that time".into())
     }
 }
 

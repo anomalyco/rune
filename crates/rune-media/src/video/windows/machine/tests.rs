@@ -168,3 +168,41 @@ fn a_synced_clock_with_a_different_rate_or_outside_playing_is_ignored() {
     assert_eq!(effects(&mut paused, Event::Synced { clock }), vec![]);
     assert_eq!(paused, Phase::Paused { at: 5.0 });
 }
+
+#[test]
+fn step_always_pauses_and_issues_exact_seek_across_every_phase() {
+    let now = rune_core::time::now();
+    // Playing -> stops clock, pauses (play: false), exact seek, is_seeking == true.
+    let (mut phase, _) = playing(2.0);
+    assert_eq!(effects(&mut phase, Event::Step { to: 2.0 + 1.0 / 30.0 }), vec![Effect::Clock(None), Effect::Seek { to: 2.0 + 1.0 / 30.0, exact: true }]);
+    assert_eq!(phase, Phase::Buffering { at: 2.0 + 1.0 / 30.0, play: false, seeking: true });
+    assert!(phase.is_seeking());
+    assert_eq!(effects(&mut phase, Event::Shown { pts: 2.0 + 1.0 / 30.0, target: now, lead: 0.0, rate: 1.0 }), vec![]);
+    assert_eq!(phase, Phase::Paused { at: 2.0 + 1.0 / 30.0 });
+    assert!(!phase.is_seeking());
+
+    // Paused and Ended -> Buffering { play: false, seeking: true } with exact seek.
+    for mut phase in [Phase::Paused { at: 5.0 }, Phase::Ended { at: 10.0 }] {
+        assert_eq!(effects(&mut phase, Event::Step { to: 4.5 }), vec![Effect::Seek { to: 4.5, exact: true }]);
+        assert_eq!(phase, Phase::Buffering { at: 4.5, play: false, seeking: true });
+        assert!(phase.is_seeking());
+    }
+
+    // Idle (parked) -> remembers exact seek and opens paused when drawn.
+    let mut idle = Phase::Idle { at: 3.0, seek: None };
+    assert_eq!(effects(&mut idle, Event::Step { to: 3.1 }), vec![Effect::Seek { to: 3.1, exact: true }]);
+    assert_eq!(idle, Phase::Idle { at: 3.1, seek: Some(SeekMode::Exact) });
+    assert!(idle.is_seeking());
+    assert_eq!(effects(&mut idle, Event::Open { play: false }), vec![Effect::Open { at: 3.1, exact: true }]);
+    assert_eq!(idle, Phase::Opening { at: 3.1, play: false, seeking: true });
+
+    // Opening (playing) -> flips to paused (play: false) and exact seek.
+    let mut opening = Phase::Opening { at: 1.0, play: true, seeking: false };
+    assert_eq!(effects(&mut opening, Event::Step { to: 1.1 }), vec![Effect::Seek { to: 1.1, exact: true }]);
+    assert_eq!(opening, Phase::Opening { at: 1.1, play: false, seeking: true });
+
+    // Failed -> no-op.
+    let mut failed = Phase::Failed;
+    assert_eq!(effects(&mut failed, Event::Step { to: 1.0 }), vec![]);
+    assert_eq!(failed, Phase::Failed);
+}

@@ -1,7 +1,7 @@
 use super::*;
 
 fn meta() -> Meta {
-    Meta { duration: 1.0, size: Some((64, 36)), frame: 0.25, sound: false }
+    Meta { duration: 1.0, size: Some((64, 36)), frame: Some(0.25), sound: false }
 }
 
 #[test]
@@ -15,6 +15,8 @@ fn new_videos_are_muted_paused_and_loading() {
     assert_eq!(v.output_device(), None);
     assert_eq!(v.time(), 0.0);
     assert_eq!(v.duration(), None);
+    assert_eq!(v.frame_duration(), None);
+    assert_eq!(v.presented_time(), None);
     assert_eq!(v.natural_size(), None);
     assert!(!v.is_audio());
     #[cfg(target_os = "macos")]
@@ -138,7 +140,7 @@ fn the_waker_hears_each_state_change_once() {
     }));
     a.shared.settle(false);
     assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 0, "nothing changed yet");
-    a.shared.ctl.lock().unwrap().open(Ok(Meta { duration: 2.0, size: None, frame: 1.0 / 30.0, sound: false }));
+    a.shared.ctl.lock().unwrap().open(Ok(Meta { duration: 2.0, size: None, frame: None, sound: false }));
     a.shared.settle(false);
     a.shared.settle(false);
     assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
@@ -168,10 +170,10 @@ fn a_waker_set_after_a_failure_hears_it_once() {
 fn a_seek_before_the_clip_opens_is_clamped_when_it_does() {
     let v = Video::file("missing.mp4");
     v.seek(30.0);
-    assert_eq!(v.shared.ctl.lock().unwrap().seek, Some(Seek::exact(30.0)), "no duration yet");
+    assert_eq!(v.shared.ctl.lock().unwrap().pending, Some(Pending::Seek(Seek::exact(30.0))), "no duration yet");
     v.shared.ctl.lock().unwrap().open(Ok(meta()));
     let c = v.shared.ctl.lock().unwrap();
-    assert_eq!((c.seek, c.time), (Some(Seek::exact(1.0)), 1.0));
+    assert_eq!((c.pending, c.time), (Some(Pending::Seek(Seek::exact(1.0))), 1.0));
 }
 
 #[test]
@@ -180,18 +182,18 @@ fn seek_fast_records_keyframe_seek_clamps_inputs_and_preserves_state() {
     let other = v.clone();
     // Before opening: records exact=false, clamps negative/non-finite to 0.
     v.seek_fast(-5.0);
-    assert_eq!(v.shared.ctl.lock().unwrap().seek, Some(Seek { at: 0.0, exact: false }));
+    assert_eq!(v.shared.ctl.lock().unwrap().pending, Some(Pending::Seek(Seek { at: 0.0, exact: false })));
     v.seek_fast(f64::NAN);
-    assert_eq!(v.shared.ctl.lock().unwrap().seek, Some(Seek { at: 0.0, exact: false }));
+    assert_eq!(v.shared.ctl.lock().unwrap().pending, Some(Pending::Seek(Seek { at: 0.0, exact: false })));
     v.seek_fast(f64::INFINITY);
-    assert_eq!(v.shared.ctl.lock().unwrap().seek, Some(Seek { at: 0.0, exact: false }));
+    assert_eq!(v.shared.ctl.lock().unwrap().pending, Some(Pending::Seek(Seek { at: 0.0, exact: false })));
     // Past duration before open: clamps when metadata arrives and keeps exact=false.
     other.seek_fast(30.0);
-    assert_eq!(v.shared.ctl.lock().unwrap().seek, Some(Seek { at: 30.0, exact: false }));
+    assert_eq!(v.shared.ctl.lock().unwrap().pending, Some(Pending::Seek(Seek { at: 30.0, exact: false })));
     v.shared.ctl.lock().unwrap().open(Ok(meta()));
     {
         let c = v.shared.ctl.lock().unwrap();
-        assert_eq!((c.seek, c.time), (Some(Seek { at: 1.0, exact: false }), 1.0));
+        assert_eq!((c.pending, c.time), (Some(Pending::Seek(Seek { at: 1.0, exact: false })), 1.0));
     }
     // Headless runs report is_seeking() == false.
     assert!(!v.is_seeking());
@@ -201,23 +203,117 @@ fn seek_fast_records_keyframe_seek_clamps_inputs_and_preserves_state() {
     v.play();
     v.seek_fast(0.5);
     assert_eq!(v.state(), PlayerState::Playing);
-    assert_eq!(v.shared.ctl.lock().unwrap().seek, Some(Seek { at: 0.5, exact: false }));
+    assert_eq!(v.shared.ctl.lock().unwrap().pending, Some(Pending::Seek(Seek { at: 0.5, exact: false })));
     assert!(!v.is_seeking());
 
     v.shared.ctl.lock().unwrap().run = Run::Ended;
     assert_eq!(v.state(), PlayerState::Ended);
     v.seek_fast(0.25);
     assert_eq!(v.state(), PlayerState::Ready);
-    assert_eq!(v.shared.ctl.lock().unwrap().seek, Some(Seek { at: 0.25, exact: false }));
+    assert_eq!(v.shared.ctl.lock().unwrap().pending, Some(Pending::Seek(Seek { at: 0.25, exact: false })));
 
     // A subsequent exact seek replaces the pending keyframe seek.
     v.seek(0.75);
-    assert_eq!(v.shared.ctl.lock().unwrap().seek, Some(Seek::exact(0.75)));
+    assert_eq!(v.shared.ctl.lock().unwrap().pending, Some(Pending::Seek(Seek::exact(0.75))));
 
     // Failed clips never report seeking.
     v.shared.ctl.lock().unwrap().fail("boom".into());
     v.seek_fast(0.5);
     assert!(!v.is_seeking());
+}
+
+#[test]
+fn frame_duration_and_presented_time_handle_unopened_unknown_audio_and_failure() {
+    let v = Video::file("missing.mp4");
+    assert_eq!(v.frame_duration(), None);
+    assert_eq!(v.presented_time(), None);
+
+    // Stream with unknown frame rate keeps None for frame_duration() while snapping internally.
+    let unknown = Meta { duration: 2.0, size: Some((64, 36)), frame: None, sound: false };
+    v.shared.ctl.lock().unwrap().open(Ok(unknown));
+    assert_eq!(v.frame_duration(), None);
+    assert_eq!(v.presented_time(), None);
+    assert!((unknown.frame_step() - DEFAULT_FRAME).abs() < 1e-12);
+
+    // Known positive rate is exposed as-is.
+    let known = Meta { duration: 1.0, size: Some((64, 36)), frame: Some(0.25), sound: false };
+    v.shared.ctl.lock().unwrap().open(Ok(known));
+    assert_eq!(v.frame_duration(), Some(0.25));
+
+    // Audio always returns None for both and ignores step().
+    let a = quiet_audio();
+    a.shared.ctl.lock().unwrap().open(Ok(Meta { duration: 2.0, size: None, frame: Some(0.25), sound: true }));
+    assert_eq!(a.frame_duration(), None);
+    assert_eq!(a.presented_time(), None);
+    a.play();
+    a.step(1);
+    assert!(a.is_playing(), "audio ignores Player::step");
+    assert_eq!(a.shared.ctl.lock().unwrap().pending, None);
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[test]
+fn headless_step_and_presented_time_walk_every_frame_of_real_mp4_and_clamp() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../rune/tests/fixtures/rgbw.mp4");
+    let v = Video::file(path);
+    let wake = rune_core::live::Wake::new(Arc::new(|| {}));
+    let pull = |clock: f64| v.shared.pull(v.surface(), Clock::Virtual(clock), &wake).active;
+
+    // Before first pull: unopened, no presented picture.
+    assert_eq!(v.frame_duration(), None);
+    assert_eq!(v.presented_time(), None);
+
+    // First pull opens and decodes frame 0 (PTS 0.0, 4 fps -> 0.25 s/frame).
+    assert!(!pull(0.0));
+    assert!((v.frame_duration().unwrap() - 0.25).abs() < 1e-3, "{:?}", v.frame_duration());
+    assert!(v.presented_time().unwrap().abs() < 1e-3, "{:?}", v.presented_time());
+    assert!(!v.is_seeking());
+
+    // Stepping backward at frame 0 stays on frame 0 without seeking.
+    v.step(-1);
+    assert!(!pull(0.0));
+    assert!(v.presented_time().unwrap().abs() < 1e-3, "{:?}", v.presented_time());
+
+    // Step forward through frames 1, 2, 3 and verify exact PTS at each step.
+    for expected in [0.25, 0.5, 0.75] {
+        v.step(1);
+        assert!(!v.is_playing());
+        assert!(!pull(0.0));
+        let pts = v.presented_time().expect("presented_time after step");
+        assert!((pts - expected).abs() < 1e-3, "got {pts}, want {expected}");
+    }
+
+    // Stepping forward past last frame clamps on frame 3 (0.75 s).
+    v.step(10);
+    assert!(!pull(0.0));
+    assert!((v.presented_time().unwrap() - 0.75).abs() < 1e-3, "{:?}", v.presented_time());
+
+    // Multi-frame backward step from frame 3 to frame 1 (0.25 s).
+    v.step(-2);
+    assert!(!pull(0.0));
+    assert!((v.presented_time().unwrap() - 0.25).abs() < 1e-3, "{:?}", v.presented_time());
+
+    // Seeking to the middle of frame 2 (0.6 s): time() reports 0.6 while presented_time() reports 0.5.
+    v.seek(0.6);
+    assert!(!pull(0.0));
+    assert!((v.time() - 0.6).abs() < 1e-6, "{}", v.time());
+    assert!((v.presented_time().unwrap() - 0.5).abs() < 1e-3, "{:?}", v.presented_time());
+
+    // Stepping while playing pauses playback and advances one frame to frame 3 (0.75 s).
+    v.play();
+    assert!(pull(0.0));
+    v.step(1);
+    assert!(!v.is_playing());
+    assert!(!pull(0.5), "paused after step requests no further frames");
+    assert!((v.presented_time().unwrap() - 0.75).abs() < 1e-3, "{:?}", v.presented_time());
+
+    // step(0) while playing pauses without moving off the current frame.
+    v.play();
+    assert!(pull(0.5));
+    v.step(0);
+    assert!(!v.is_playing());
+    assert!(!pull(0.6));
+    assert!((v.presented_time().unwrap() - 0.75).abs() < 1e-3, "{:?}", v.presented_time());
 }
 
 /// The parked list is process-wide: these tests take turns so each sees only its own clips.
@@ -398,7 +494,7 @@ fn playing_after_the_end_restarts_from_zero() {
     assert_eq!(v.state(), PlayerState::Ended);
     v.play();
     let c = v.shared.ctl.lock().unwrap();
-    assert_eq!(c.seek, Some(Seek::exact(0.0)));
+    assert_eq!(c.pending, Some(Pending::Seek(Seek::exact(0.0))));
     assert!(c.playing());
 }
 

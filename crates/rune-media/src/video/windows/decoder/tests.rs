@@ -258,7 +258,7 @@ fn land_at_the_duration() -> (Vec<f64>, u32, f64, f64) {
     let lib = mf::library().unwrap();
     let source = lib.resolve(&mf::Target::from_source(&MediaSource::File(path)).unwrap()).unwrap();
     let opened = mf::open(lib, &source, Kind::Video, Decode::Cpu, false).unwrap();
-    let (video, frame) = (opened.video.unwrap(), opened.picture.unwrap().frame);
+    let (video, frame) = (opened.video.unwrap(), opened.picture.unwrap().frame());
     let mut landing = Landing::at(opened.duration);
     mf::seek(&opened.reader, opened.duration).unwrap();
     let (mut kept, mut went_back) = (Vec::new(), 0);
@@ -435,7 +435,7 @@ fn a_real_clip_unmuted_mid_clip_reads_audio_at_playback_position_without_seeking
     let lib = mf::library().unwrap();
     let source = lib.resolve(&mf::Target::from_source(&MediaSource::File(path)).unwrap()).unwrap();
     let opened = mf::open(lib, &source, Kind::Video, Decode::Cpu, true).unwrap();
-    let (video, audio, frame) = (opened.video.unwrap(), opened.audio.unwrap(), opened.picture.unwrap().frame);
+    let (video, audio, frame) = (opened.video.unwrap(), opened.audio.unwrap(), opened.picture.unwrap().frame());
 
     // Play muted up to 3.0 s: audio stream stays selected and advances via muted_audio_target,
     // without queuing samples or opening WASAPI.
@@ -484,7 +484,7 @@ fn a_real_clip_keyframe_seek_lands_on_the_first_decoded_frame_without_skipping_f
     let lib = mf::library().unwrap();
     let source = lib.resolve(&mf::Target::from_source(&MediaSource::File(path)).unwrap()).unwrap();
     let opened = mf::open(lib, &source, Kind::Video, Decode::Cpu, false).unwrap();
-    let (video, frame) = (opened.video.unwrap(), opened.picture.unwrap().frame);
+    let (video, frame) = (opened.video.unwrap(), opened.picture.unwrap().frame());
 
     // Pick a target mid-clip where MF seeks back to an earlier keyframe.
     let target = (opened.duration * 0.5).min(1.5);

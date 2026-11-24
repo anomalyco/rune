@@ -66,8 +66,8 @@ pub(super) struct Av<'a> {
     mtm: Option<MainThreadMarker>,
     /// Video, during a pull: the surface and the presentation time its frame is for.
     target: Option<(&'a NativeSurface, Instant)>,
-    /// A finished poster load's frame.
-    poster: Option<ByteFrame>,
+    /// A finished poster load's frame and its actual presentation timestamp.
+    poster: Option<(ByteFrame, f64)>,
     /// A poster the turn asked for, started once the control lock is released.
     pub(super) asked: Option<(f64, Attempt)>,
 }
@@ -105,9 +105,9 @@ impl Port for Av<'_> {
         })))
     }
 
-    fn show_poster(&mut self, next_id: &mut dyn FnMut() -> u64) -> Result<(), String> {
-        let (Some(bytes), Some((surface, _))) = (self.poster.take(), self.target) else { return Ok(()) };
-        surface.push_bytes(bytes, next_id())
+    fn show_poster(&mut self, next_id: &mut dyn FnMut() -> u64) -> Result<Option<f64>, String> {
+        let (Some((bytes, pts)), Some((surface, _))) = (self.poster.take(), self.target) else { return Ok(None) };
+        surface.push_bytes(bytes, next_id()).map(|()| Some(pts))
     }
 
     fn ask_poster(&mut self, at: f64, attempt: Attempt) {
@@ -163,7 +163,8 @@ impl Port for Av<'_> {
         let size = (size.width >= 1.0 && size.height >= 1.0).then(|| (size.width.round() as u32, size.height.round() as u32));
         // SAFETY: `item` is a live `AVPlayerItem` accessed on the main thread.
         let asset = unsafe { item.asset() };
-        Meta { duration, size, frame: 1.0 / 30.0, sound: asset::has_sound(&asset) }
+        let frame = (self.shared.kind == Kind::Video).then(|| asset::frame_duration(&asset)).flatten();
+        Meta { duration, size, frame, sound: asset::has_sound(&asset) }
     }
 
     fn alive(&self) -> bool {
@@ -190,6 +191,21 @@ impl Port for Av<'_> {
         let tolerance = if exact { asset::zero() } else { asset::positive_infinity() };
         // SAFETY: `player` is a live `AVPlayer` accessed on the main thread with valid `CMTime` values.
         unsafe { self.objects().player.seekToTime_toleranceBefore_toleranceAfter(asset::cm(at), tolerance, tolerance) };
+    }
+
+    fn step_by(&mut self, frames: i32) -> bool {
+        if frames == 0 {
+            return true;
+        }
+        let item = &self.objects().item;
+        // SAFETY: `item` is a live `AVPlayerItem` accessed on the main thread under `shared.native`.
+        let can = unsafe { if frames > 0 { item.canStepForward() } else { item.canStepBackward() } };
+        if !can {
+            return false;
+        }
+        // SAFETY: `item` is a live `AVPlayerItem` accessed on the main thread and `canStep*` returned true.
+        unsafe { item.stepByCount(frames as isize) };
+        true
     }
 
     fn set_rate(&mut self, rate: f32) {

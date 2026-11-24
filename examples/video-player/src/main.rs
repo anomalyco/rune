@@ -5,14 +5,15 @@
 //! four-frame test clip. `-- --snap out.png --at 0.6` renders the frame at 0.6 s headless. Pass
 //! `--output-device <uid>` to route audio to a specific device UID on macOS.
 //!
-//! Keys: space plays or pauses, m mutes, v turns the volume to 0 and back, d toggles the chosen
-//! output device and system default, l loops, left and right seek 5 s, 0 goes to the start,
+//! Keys: space plays or pauses, left and right step one frame while paused (or seek 5 s while
+//! playing), comma and period step one frame back or forward, m mutes, v turns the volume to 0
+//! and back, d toggles the chosen output device and system default, l loops, 0 goes to the start,
 //! h hides the clip (it stops drawing, as when scrolled away) and shows it again.
 
 #![forbid(unsafe_code)]
 
 use rune::tok::{self, type_};
-use rune::{AppSpec, Cx, Drag, El, Key, KeyEvent, Phase, Player, PlayerState, SurfaceFit, Tx, Waker, col, el, text};
+use rune::{AppSpec, Cx, Drag, El, Key, KeyEvent, Phase, Player, PlayerState, SurfaceFit, Tx, Waker, col, el, row, text};
 use std::time::Duration;
 
 const WIDTH: f32 = 480.0;
@@ -27,6 +28,7 @@ struct Viewer {
     preferred_output: Option<String>,
     scrub_target: Option<f64>,
     last_time: f64,
+    last_presented: Option<f64>,
     last_seeking: bool,
 }
 
@@ -65,7 +67,7 @@ fn state() -> Viewer {
     if let Some(uid) = preferred_output.as_deref() {
         clip.set_output_device(Some(uid));
     }
-    Viewer { clip, hidden: false, preferred_output, scrub_target: None, last_time: 0.0, last_seeking: false }
+    Viewer { clip, hidden: false, preferred_output, scrub_target: None, last_time: 0.0, last_presented: None, last_seeking: false }
 }
 
 /// The clip calls the waker when it loads, ends or fails, so the label follows.
@@ -82,8 +84,10 @@ fn poll(s: &mut Viewer, _: f64, tx: &mut Tx) -> bool {
         tx.wake_after(Duration::from_millis(33));
     }
     let time = s.clip.time();
-    let changed = (time - s.last_time).abs() > 1e-3 || seeking != s.last_seeking;
+    let presented = s.clip.presented_time();
+    let changed = (time - s.last_time).abs() > 1e-3 || presented != s.last_presented || seeking != s.last_seeking;
     s.last_time = time;
+    s.last_presented = presented;
     s.last_seeking = seeking;
     changed
 }
@@ -105,6 +109,10 @@ fn on_key(s: &mut Viewer, event: &KeyEvent, _: &mut Tx) -> bool {
         Key::Text(t) if t == "l" => clip.set_looping(!clip.looping()),
         Key::Text(t) if t == "0" => clip.seek(0.0),
         Key::Text(t) if t == "h" => s.hidden = !s.hidden,
+        Key::Text(t) if t == "," && !clip.is_audio() => clip.step(-1),
+        Key::Text(t) if t == "." && !clip.is_audio() => clip.step(1),
+        Key::Left if !clip.is_playing() && !clip.is_audio() => clip.step(-1),
+        Key::Right if !clip.is_playing() && !clip.is_audio() => clip.step(1),
         Key::Left => clip.seek(clip.time() - 5.0),
         Key::Right => clip.seek(clip.time() + 5.0),
         _ => return false,
@@ -214,6 +222,38 @@ fn view(s: &Viewer, _: &mut Cx<Viewer>) -> El {
     root = root
         .child(scrub_bar(s, &t))
         .child(text(label).font(type_::BODY).color(t.text_secondary).on_press(toggle));
+    if !s.clip.is_audio() {
+        let mut readout = Vec::new();
+        if let Some(pts) = s.clip.presented_time() {
+            if let Some(fd) = s.clip.frame_duration() {
+                let index = (pts / fd + 1e-6).floor().max(0.0) as u64;
+                readout.push(format!("Frame {index} · {pts:.3} s"));
+            } else {
+                readout.push(format!("Shown {pts:.3} s"));
+            }
+        }
+        if let Some(fd) = s.clip.frame_duration() {
+            readout.push(format!("{:.2} fps ({:.1} ms)", 1.0 / fd, fd * 1000.0));
+        }
+        let step_btn = |key: &'static str, title: &'static str, a11y: &'static str, delta: i32| {
+            el().key(key)
+                .role("button")
+                .label(a11y)
+                .px(8.0)
+                .py(4.0)
+                .radius(6.0)
+                .fill(t.control_track)
+                .on_press(move |s: &mut Viewer| s.clip.step(delta))
+                .child(text(title).font(type_::LABEL).color(t.text))
+        };
+        let mut controls = row().gap(8.0).items_center()
+            .child(step_btn("step-back", "-1f", "Previous frame", -1))
+            .child(step_btn("step-forward", "+1f", "Next frame", 1));
+        if !readout.is_empty() {
+            controls = controls.child(text(readout.join(" · ")).font(type_::LABEL).color(t.text_secondary));
+        }
+        root = root.child(controls);
+    }
     if let Some(uid) = s.clip.output_device() {
         root = root.child(text(format!("Output: {uid}")).font(type_::LABEL).color(t.text_secondary));
     } else if s.preferred_output.is_some() {

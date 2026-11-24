@@ -19,8 +19,8 @@ struct Rig {
 fn rig() -> Rig {
     let player = Player::file("missing.mp4");
     let pipe = Pipe::new(Inbox::default());
-    let meta = Meta { duration: 10.0, size: Some((2, 2)), frame: FRAME, sound: false };
-    let picture = mf::Picture { coded: (2, 2), crop: (0, 0, 2, 2), natural: (2, 2), format: Format::Nv12Video, color: ColorInfo::default(), orient: Orient::UP, frame: FRAME };
+    let meta = Meta { duration: 10.0, size: Some((2, 2)), frame: Some(FRAME), sound: false };
+    let picture = mf::Picture { coded: (2, 2), crop: (0, 0, 2, 2), natural: (2, 2), format: Format::Nv12Video, color: ColorInfo::default(), orient: Orient::UP, frame_duration: Some(FRAME) };
     player.shared.ctl.lock().unwrap().open(Ok(meta));
     let mut native = player.shared.native.lock().unwrap();
     native.pipe = Some(pipe.clone());
@@ -592,4 +592,116 @@ fn seek_fast_while_playing_resumes_from_keyframe_and_stalls_do_not_report_seekin
     assert!(!rig.player.is_seeking());
     assert_eq!(rig.player.time(), 6.0);
     assert_eq!(rig.phase(), Phase::Playing { clock: Anchor { at: landed_at, pos: 6.0, rate: 1.0 } });
+}
+
+#[test]
+fn frame_duration_and_presented_time_track_surface_layer_seeking_and_loops() {
+    let rig = rig();
+    let start = rune_core::time::now();
+    assert_eq!(rig.player.frame_duration(), Some(FRAME));
+    assert_eq!(rig.player.presented_time(), None);
+
+    // Frame lands on surface at 2.0 s.
+    rig.plays_from_two(start);
+    assert_eq!(rig.player.presented_time(), Some(2.0));
+
+    // On DirectComposition layer: presented_time reads the newest layer frame directly.
+    assert!(rig.window_layers().showing);
+    rig.presents(4.9);
+    assert_eq!(rig.player.presented_time(), Some(4.9));
+
+    // Looping past duration (10.0 s): presented_time wraps to clip time.
+    rig.presents(12.5);
+    assert!((rig.player.presented_time().unwrap() - 2.5).abs() < 1e-9, "{:?}", rig.player.presented_time());
+
+    // Pause and seek: while seeking, presented_time preserves the picture still on screen while
+    // time() reflects the seek target.
+    rig.player.pause();
+    rig.reconcile();
+    rig.window_draws();
+    rig.decodes(2.5);
+    rig.show(start);
+    assert!((rig.player.presented_time().unwrap() - 2.5).abs() < 1e-9);
+
+    rig.player.seek(6.4);
+    rig.reconcile();
+    assert!(rig.player.is_seeking());
+    assert!((rig.player.time() - 6.4).abs() < 1e-9);
+    assert!((rig.player.presented_time().unwrap() - 2.5).abs() < 1e-9, "old picture stays on screen until seek lands");
+
+    rig.decodes(6.3);
+    rig.show(start);
+    assert!(!rig.player.is_seeking());
+    assert!((rig.player.presented_time().unwrap() - 6.3).abs() < 1e-9);
+
+    // Failure clears presented_time.
+    rig.player.shared.ctl.lock().unwrap().fail("lost".into());
+    rig.reconcile();
+    assert_eq!(rig.player.presented_time(), None);
+}
+
+#[test]
+fn step_pauses_seeks_to_neighbour_frame_and_clamps_without_seeking_on_windows() {
+    let rig = rig();
+    let start = rune_core::time::now();
+    rig.stand(Phase::Paused { at: 0.0 }, Some(0.0));
+    rig.player.shared.ctl.lock().unwrap().presented = Some(0.0);
+
+    // Already on frame 0: step(-1) stays put without seeking.
+    rig.player.step(-1);
+    assert!(!rig.player.is_seeking());
+    rig.reconcile();
+    assert_eq!(rig.asked().0, None);
+    assert!(!rig.player.is_seeking());
+
+    // Step +1 from frame 0 -> exact seek to frame 1 start (1/30 s).
+    rig.player.step(1);
+    assert!(rig.player.is_seeking());
+    rig.reconcile();
+    let ask = rig.asked().0.expect("exact seek issued for step(+1)");
+    assert!(ask.exact);
+    assert!((ask.to - FRAME).abs() < 1e-9, "got {}, want {FRAME}", ask.to);
+    assert_eq!(rig.phase(), Phase::Buffering { at: ask.to, play: false, seeking: true });
+
+    rig.decodes(FRAME);
+    rig.show(start);
+    assert!(!rig.player.is_seeking());
+    assert!((rig.player.presented_time().unwrap() - FRAME).abs() < 1e-9);
+    assert_eq!(rig.player.state(), PlayerState::Ready);
+
+    // Step +1 while playing on layer: stops playback, steps from layer's presented frame (5.0 s).
+    rig.plays_from_two(start);
+    assert!(rig.window_layers().showing);
+    rig.presents(5.0);
+    rig.player.step(1);
+    assert!(!rig.player.is_playing());
+    rig.reconcile();
+    assert!(rig.player.is_seeking());
+    let ask = rig.asked().0.expect("exact seek from layer frame");
+    assert!(ask.exact);
+    assert!((ask.to - (5.0 + FRAME)).abs() < 1e-6, "got {}, want {}", ask.to, 5.0 + FRAME);
+
+    // Leave the layer back to surface rendering (as the window does once paused/seeking), then
+    // land the last frame and confirm step(+1) clamps without issuing a seek.
+    rig.window_draws();
+    let last_pts = 299.0 * FRAME;
+    rig.decodes(last_pts);
+    rig.show(start);
+    assert!(!rig.player.is_seeking());
+    rig.pipe.lock().seek = None;
+    rig.player.step(1);
+    assert!(!rig.player.is_seeking());
+    rig.reconcile();
+    assert_eq!(rig.asked().0, None);
+
+    // Step -1 from Ended returns to Ready and steps to frame 298.
+    rig.edit(phases::Event::Play);
+    rig.stand(Phase::Ended { at: last_pts }, Some(last_pts));
+    rig.player.shared.ctl.lock().unwrap().run = phases::Run::Ended;
+    rig.player.step(-1);
+    assert_eq!(rig.player.state(), PlayerState::Ready);
+    rig.reconcile();
+    let ask = rig.asked().0.expect("step(-1) from Ended");
+    assert!(ask.exact);
+    assert!((ask.to - 298.0 * FRAME).abs() < 1e-6, "got {}, want {}", ask.to, 298.0 * FRAME);
 }

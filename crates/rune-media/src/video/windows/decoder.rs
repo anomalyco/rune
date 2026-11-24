@@ -398,7 +398,7 @@ impl Decoder {
         if job.start > 0.0 {
             mf::seek(&opened.reader, job.start)?;
         }
-        let meta = Meta { duration, size: picture.map(|p| p.natural), frame: picture.map_or(1.0 / 30.0, |p| p.frame), sound: opened.has_sound };
+        let meta = Meta { duration, size: picture.map(|p| p.natural), frame: picture.and_then(|p| p.frame_duration), sound: opened.has_sound };
         let facts = Facts { meta, picture, sound: opened.sound, hardware, gpu: ring.is_some() };
         let opened_us = us(t0);
         let steps = format!("Media Foundation at {t_mf}, D3D11 at {t_device}, source at {t_source}, reader at {t_reader}, ring at {opened_us}");
@@ -526,7 +526,7 @@ impl Decoder {
                             s.audio_end = audio_end;
                         }
                         if job.kind == Kind::Audio || self.output.is_some() {
-                            let video_end = last_video_pts.map(|pts| pts + self.facts.meta.frame);
+                            let video_end = last_video_pts.map(|pts| pts + self.facts.meta.frame_step());
                             end_due = drain_end(epoch, self.facts.meta.duration, video_end, active_audio_end);
                         }
                         drop(s);
@@ -543,7 +543,7 @@ impl Decoder {
                         let clock_pos = job.clock.get().map(|c| c.position(rune_core::time::now()));
                         let front = s.frames.front().map(|f| f.pts);
                         let layered = s.presented(generation).is_some_and(|p| front == Some(p));
-                        let target = muted_audio_target(clock_pos, front, self.facts.meta.frame, layered, self.video.is_some());
+                        let target = muted_audio_target(clock_pos, front, self.facts.meta.frame_step(), layered, self.video.is_some());
                         if let (Some(q), Some(t)) = (&self.audio_queue, target) {
                             q.discard_before(t);
                         }
@@ -598,7 +598,7 @@ impl Decoder {
                     let pts = epoch + read.time;
                     // A picture the layer would only show late is decoded and no more: not
                     // copied, not queued, not presented.
-                    let keep = landing.keeps(read.time, self.facts.meta.frame);
+                    let keep = landing.keeps(read.time, self.facts.meta.frame_step());
                     if keep {
                         if audio_skip_before.is_infinite() {
                             audio_skip_before = pts;
@@ -741,7 +741,7 @@ impl Decoder {
             }
         }
         let now = rune_core::time::now();
-        superseded(clock.position(now), pts, self.facts.meta.frame, self.presented_at.map(|at| now.saturating_duration_since(at)))
+        superseded(clock.position(now), pts, self.facts.meta.frame_step(), self.presented_at.map(|at| now.saturating_duration_since(at)))
     }
 
     /// Scales a picture into the clip's layer when the window has the layer up and the clock
