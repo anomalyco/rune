@@ -137,3 +137,88 @@ fn a_window_opened_after_a_switch_starts_in_the_new_families() {
     assert_eq!(widths(&second), fresh);
     assert_eq!(rune::text::measure("Hamburgefonstiv 0123", &[], STYLE, None).0, switched_width);
 }
+
+#[derive(Default)]
+struct InspectorState {
+    trunc_size: Option<[f32; 2]>,
+    trunc_cut: bool,
+    fade_size: Option<[f32; 2]>,
+    fade_cut: bool,
+}
+
+fn inspector_view(_: &InspectorState, _: &mut rune::Cx<InspectorState>) -> El {
+    col().gap(8.0).children([
+        row().w(90.0).child(text("Long label that truncates cleanly").key("sample-trunc").font(STYLE).truncate()),
+        row().w(90.0).child(text("Long label that fades cleanly").key("sample-fade").font(STYLE).truncate_fade()),
+        row().child(text("iiiiiiiiii 0123456789\niiiiiiiiii 0123456789").key("by-line").font(STYLE).by_line()),
+        row().key("inspect-btn").size(120.0, 28.0)
+            .on_press_tx(|_: &mut InspectorState, tx| {
+                tx.read_elements::<InspectorState>(|s, elements, _| {
+                    if let Some(e) = elements.iter().find(|e| e.key.as_deref() == Some("sample-trunc")) {
+                        s.trunc_size = e.text_size;
+                        s.trunc_cut = e.text_cut;
+                    }
+                    if let Some(e) = elements.iter().find(|e| e.key.as_deref() == Some("sample-fade")) {
+                        s.fade_size = e.text_size;
+                        s.fade_cut = e.text_cut;
+                    }
+                });
+            })
+            .child(text("Inspect").font(STYLE)),
+    ])
+}
+
+#[test]
+fn pre_commit_read_elements_stays_consistent_and_by_line_reshapes_after_font_switch() {
+    let _g = rune::text::with_families(LAUNCH.0, LAUNCH.1);
+    let mut peer = launch(LAUNCH);
+    let mut b = Runtime::with_text(
+        InspectorState::default(),
+        inspector_view,
+        (600.0, 400.0),
+        Env::new(true, 2.0),
+        TextSystem::new(&[INTER, PLEX], LAUNCH),
+    );
+    b.frame(0.0);
+    let by_line_w = |rt: &Runtime<InspectorState>| {
+        rt.elements().iter().find(|e| e.key.as_deref() == Some("by-line")).unwrap().target[2]
+    };
+    let before_by_line = by_line_w(&b);
+
+    // Queue a press that reads the presented frame via Tx::read_elements, then switch families in
+    // another runtime before b's next frame runs.
+    let (x, y) = b.find("inspect-btn").unwrap();
+    b.pointer_down(x, y);
+    b.pointer_up(x, y);
+    switch(&mut peer, "IBM Plex Mono", "Inter");
+
+    // b's frame follows the font switch at frame start, runs the press + read_elements against
+    // the presented tree, and then commits the new font.
+    b.frame(1.0 / 60.0);
+    assert!(b.state.trunc_size.is_some(), "pre-commit read_elements must keep presented text_size for truncated text");
+    assert!(b.state.trunc_cut, "pre-commit read_elements must keep presented text_cut for truncated text");
+    assert!(b.state.fade_size.is_some(), "pre-commit read_elements must keep presented text_size for truncate_fade text");
+    assert!(b.state.fade_cut, "pre-commit read_elements must keep presented text_cut for truncate_fade text");
+
+    // After the commit, by_line (ParagraphLayout) must have re-shaped in the new font.
+    let mut fresh = Runtime::with_text(
+        InspectorState::default(),
+        inspector_view,
+        (600.0, 400.0),
+        Env::new(true, 2.0),
+        TextSystem::new(&[INTER, PLEX], ("IBM Plex Mono", "Inter")),
+    );
+    fresh.frame(0.0);
+    let after_by_line = by_line_w(&b);
+    assert_eq!(after_by_line, by_line_w(&fresh), "by_line must re-shape to match fresh launch");
+    assert!((after_by_line - before_by_line).abs() > 10.0, "by_line width changed: {before_by_line} -> {after_by_line}");
+
+    // Latching a family switch via update_if must also keep presented elements consistent before the next frame.
+    assert!(b.update_if(|_, tx| {
+        tx.set_font_families(LAUNCH.0, LAUNCH.1);
+        false
+    }));
+    let pre = b.elements();
+    let fade = pre.iter().find(|e| e.key.as_deref() == Some("sample-fade")).unwrap();
+    assert!(fade.text_size.is_some() && fade.text_cut, "elements() before next frame must not see wiped text_layout");
+}

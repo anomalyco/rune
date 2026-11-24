@@ -363,3 +363,46 @@ fn rtl_blocks_and_pills_preserve_existing_deferral_limits() {
     let prop_tl = prop_ts.layout_text(&rich_input(&content, &[], style, true, TextDir::Auto), false, scale, max_w, Alignment::Start, None);
     assert!(!as_paragraphs(&prop_tl).waiting(), "proportional fallback in mono slot must not defer by_line");
 }
+
+#[test]
+fn layout_text_and_fill_paragraphs_ignore_prev_from_older_shaped_epoch() {
+    let style = TextStyle::new(14.0, 400.0);
+    let scale = 2.0;
+    let max_w = Some(600.0 * scale);
+    let sample = "iiiiiiiiii 0123456789\niiiiiiiiii 0123456789";
+
+    let mut ts = TextSystem::new_local(&[INTER, PLEX], ("Inter", "IBM Plex Mono"));
+    let old_tl = ts.layout_text(&rich_input(sample, &[], style, true, TextDir::Auto), false, scale, max_w, Alignment::Start, None);
+    let old_w = old_tl.view().full_width();
+
+    // Switching families drops shaped caches and advances shaped_epoch: passing the previous
+    // ParagraphLayout must re-shape in the new font instead of reusing old-font paragraphs.
+    assert!(ts.set_families("IBM Plex Mono", "Inter"));
+    let switched_tl = ts.layout_text(&rich_input(sample, &[], style, true, TextDir::Auto), false, scale, max_w, Alignment::Start, Some(&old_tl));
+    let mut fresh_ts = TextSystem::new_local(&[INTER, PLEX], ("IBM Plex Mono", "Inter"));
+    let fresh_tl = fresh_ts.layout_text(&rich_input(sample, &[], style, true, TextDir::Auto), false, scale, max_w, Alignment::Start, None);
+    assert!(
+        (switched_tl.view().full_width() - fresh_tl.view().full_width()).abs() < 0.01,
+        "switched layout must match fresh launch: {} vs {}",
+        switched_tl.view().full_width(),
+        fresh_tl.view().full_width(),
+    );
+    assert!(
+        (switched_tl.view().full_width() - old_w).abs() > 10.0,
+        "switched width must differ from old font: {old_w} -> {}",
+        switched_tl.view().full_width(),
+    );
+
+    // A deferred ParagraphLayout from an older shaped_epoch must not be filled with new-font lines.
+    let long: String = (0..200).map(|i| format!("line {i:03} plain\n")).collect();
+    let mono_style = TextStyle::new(13.0, 400.0).mono();
+    let mut lazy_ts = mono_text_system();
+    let lazy_tl = lazy_ts.layout_text(&rich_input(&long, &[], mono_style, true, TextDir::Auto), false, scale, Some(400.0 * scale), Alignment::Start, None);
+    let lazy_pl = as_paragraphs(&lazy_tl);
+    assert!(lazy_pl.waiting());
+    assert!(lazy_ts.set_families("IBM Plex Mono", "Inter"));
+    assert!(
+        lazy_ts.fill_paragraphs(lazy_pl, std::time::Duration::MAX, (0.0, f32::INFINITY), f32::INFINITY).is_none(),
+        "fill_paragraphs must ignore a ParagraphLayout from an older shaped_epoch",
+    );
+}

@@ -8,6 +8,7 @@ use rune::text::{TextSystem, font_epoch, measure};
 use rune::{App, AppSpec, Direction, El, Env, Family, Runtime, TextStyle, col, memo, row, text};
 
 const INTER: &[u8] = include_bytes!("../assets/Inter-Regular.ttf");
+const INTER_SEMIBOLD: &[u8] = include_bytes!("../assets/Inter-SemiBold.ttf");
 const PLEX: &[u8] = include_bytes!("../assets/IBMPlexMono-Regular.ttf");
 const GEIST_MONO: &[u8] = include_bytes!("../../../www/public/fonts/geist-mono.ttf");
 static ONLY_INTER: &[&[u8]] = &[INTER];
@@ -150,4 +151,42 @@ fn tx_and_runtime_add_font_register_invalidate_deduplicate_and_propagate() {
     new_win.frame(0.0);
     assert_eq!(width_of(&new_win, "sans"), want_sans);
     assert_eq!(width_of(&new_win, "named"), named_after);
+
+    // 5) Pre-commit Tx::read_elements keeps presented text_size/text_cut when a runtime font
+    //    arrives between frames (another window or thread calling add_font).
+    #[derive(Default)]
+    struct ReadState {
+        trunc_size: Option<[f32; 2]>,
+        trunc_cut: bool,
+    }
+    fn read_view(_: &ReadState, _: &mut rune::Cx<ReadState>) -> El {
+        col().gap(8.0).children([
+            row().w(90.0).child(text("Long label that truncates cleanly").key("sample-trunc").font(STYLE).truncate()),
+            row().key("inspect-btn").size(120.0, 28.0)
+                .on_press_tx(|_: &mut ReadState, tx| {
+                    tx.read_elements::<ReadState>(|s, elements, _| {
+                        if let Some(e) = elements.iter().find(|e| e.key.as_deref() == Some("sample-trunc")) {
+                            s.trunc_size = e.text_size;
+                            s.trunc_cut = e.text_cut;
+                        }
+                    });
+                })
+                .child(text("Inspect").font(STYLE)),
+        ])
+    }
+    let mut reader = Runtime::with_text(
+        ReadState::default(),
+        read_view,
+        (560.0, 320.0),
+        Env::new(true, 1.0),
+        TextSystem::new(&[INTER], ("Inter", "Inter")),
+    );
+    reader.frame(0.0);
+    let (x, y) = reader.find("inspect-btn").unwrap();
+    reader.pointer_down(x, y);
+    reader.pointer_up(x, y);
+    assert!(!rune::text::add_font(INTER_SEMIBOLD).is_empty());
+    reader.frame(1.0 / 60.0);
+    assert!(reader.state.trunc_size.is_some(), "Tx::read_elements must see presented text_size when a runtime font arrives");
+    assert!(reader.state.trunc_cut, "Tx::read_elements must see presented text_cut when a runtime font arrives");
 }
