@@ -129,7 +129,7 @@ unsafe fn collect_weight_axes(set: &IDWriteFontSet1, weights: &mut Vec<u16>) {
         let mut ranges = Vec::new();
         for index in 0..set.GetFontCount() {
             let mut actual = 0u32;
-            let _ = set.GetFontAxisRanges(index, &mut [], &mut actual);
+            set.GetFontAxisRanges(index, &mut [], &mut actual).ok();
             if actual == 0 || actual > 64 {
                 continue;
             }

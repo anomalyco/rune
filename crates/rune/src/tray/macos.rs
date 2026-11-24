@@ -578,7 +578,7 @@ impl Native {
         } else {
             crate::platform::main_queue::on_main(move || {
                 if let Some(mtm) = MainThreadMarker::new() {
-                    let _ = apply_icon(id, mtm);
+                    apply_icon(id, mtm).ok();
                 }
             });
             Ok(())

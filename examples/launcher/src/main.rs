@@ -70,7 +70,7 @@ impl Notes {
             self.cache = Some(cache);
         }
         if wait {
-            for icon in &self.icons { let _ = icon.wait(); }
+            for icon in &self.icons { icon.wait().ok(); }
         }
     }
 }
@@ -92,7 +92,7 @@ impl Launcher {
             self.cache = Some(cache);
         }
         if wait {
-            for icon in &self.icons { let _ = icon.wait(); }
+            for icon in &self.icons { icon.wait().ok(); }
         }
     }
 }

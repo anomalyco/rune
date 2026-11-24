@@ -442,7 +442,9 @@ fn run_macos(request: PathRequest) -> Result<(), OpenPathError> {
 
     // Hop to the main queue before calling AppKit's `NSWorkspace` (`activateFileViewerSelectingURLs:`
     // and `openURL:configuration:completionHandler:` require the main thread on recent macOS).
-    autoreleasepool(|_| unsafe {
+    autoreleasepool(|_| {
+        // SAFETY: dispatches an Objective-C block onto NSOperationQueue.mainQueue so NSWorkspace/NSURL calls run on the main thread.
+        unsafe {
         let block = block2::RcBlock::new(move || {
             autoreleasepool(|_| {
                 let url = build_macos_file_url(&path_str, is_dir);
@@ -485,6 +487,7 @@ fn run_macos(request: PathRequest) -> Result<(), OpenPathError> {
         });
         let main: Retained<AnyObject> = msg_send![class!(NSOperationQueue), mainQueue];
         let _: () = msg_send![&main, addOperationWithBlock: &*block];
+        }
     });
     Ok(())
 }

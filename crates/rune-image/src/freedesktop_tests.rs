@@ -11,7 +11,7 @@ impl TempDir {
     fn new(tag: &str) -> Self {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("rune-fd-{tag}-{}-{id}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::remove_dir_all(&dir).ok();
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir)
     }
@@ -25,7 +25,7 @@ impl TempDir {
 }
 
 impl Drop for TempDir {
-    fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    fn drop(&mut self) { std::fs::remove_dir_all(&self.0).ok(); }
 }
 
 fn solid_png(w: u32, h: u32, rgba: [u8; 4]) -> Vec<u8> {
