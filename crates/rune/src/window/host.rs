@@ -9,7 +9,7 @@ use winit::keyboard::ModifiersState;
 
 use super::file_drop::FileDrop;
 use super::handle::WindowHandle;
-use super::state::{Life, Rest};
+use super::state::{Life, ReopenState, Rest};
 use super::surface::Win;
 use super::{WakeEvent, sync_screen_origin_core};
 use crate::frame::clock::FrameClock;
@@ -97,8 +97,8 @@ pub(in crate::window) struct Host {
     pub(in crate::window) float_on_open: bool,
     /// `App::open_inactive`: the first open leaves focus where it is.
     pub(in crate::window) open_inactive: bool,
-    /// `App::maximized`, `App::full_screen`.
-    pub(in crate::window) open_as: crate::windows::OpenAs,
+    /// Opening mode (`App::maximized`, `App::full_screen`) and restored frame across recreation.
+    pub(in crate::window) reopen: ReopenState,
     pub(in crate::window) shared: Arc<crate::app::SharedCore>,
     pub(in crate::window) shortcuts: crate::shortcuts::Guard,
     pub(in crate::window) menus: crate::native_menu::MenuGuard,
@@ -450,7 +450,7 @@ impl Host {
             open_at_start,
             float_on_open,
             open_inactive,
-            open_as,
+            reopen: ReopenState::new(open_as),
             shared,
             shortcuts,
             menus,
@@ -496,6 +496,22 @@ impl Host {
         if sync_screen_origin_core(self.app.rt_mut(), &w.window) {
             w.request_redraw();
         }
+    }
+
+    /// Captures the live native window's state and restored bounds into `self.reopen` so a
+    /// window recreated after hide/release or Wayland unmapping opens the same way. Skips
+    /// hidden/unopened windows and unconfigured Wayland windows before their first frame.
+    pub(in crate::window) fn record_live_window_state(&mut self) {
+        let Some(w) = self.shown_win() else { return };
+        if self.wayland && !w.first_frame.notified() { return; }
+        let allow_position = self.placement.is_none() && !self.wayland;
+        let track_size = !self.app.rt().host.fit_height;
+        self.reopen.record_live(
+            w.live_state(self.wayland),
+            super::state::reopen::use_physical_size(self.wayland),
+            allow_position,
+            track_size,
+        );
     }
 
     /// Publishes what `AppHandle::is_visible` reports.

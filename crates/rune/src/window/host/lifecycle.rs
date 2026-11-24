@@ -82,6 +82,7 @@ impl Host {
     pub(in crate::window) fn set_position(&mut self, event_loop: &ActiveEventLoop, position: (i32, i32)) {
         self.placement = None;
         self.options.position = Some(position);
+        self.reopen.clear_position();
         if !is_wayland(event_loop) && let Some(w) = &self.win {
             w.window.set_outer_position(PhysicalPosition::new(position.0, position.1));
         }
@@ -528,6 +529,11 @@ impl Host {
         // then the window destroyed at once, with no hide before it. The quit runs after it and
         // the process ends without dropping the window.
         let ends = std::mem::take(&mut self.ends_app) && !self.keep_running && cfg!(target_os = "windows");
+        // Snapshot live state before hiding so X11 unmapping or Win32 SW_HIDE cannot clear
+        // maximized/full-screen state before `hide` destroys the window.
+        if self.keep_running {
+            self.record_live_window_state();
+        }
         // Off the screen first: the close looks done at once and `on_close` runs unseen.
         if !ends && let Some(w) = self.shown_win() { w.hide(); }
         crate::marks::mark("window.close.hidden");
@@ -561,7 +567,7 @@ impl Host {
             self.life.finish();
             return;
         }
-        self.hide(event_loop);
+        self.hide_window(event_loop, true);
     }
 
     /// Whether a close runs `on_close` (`Life::closes`).
@@ -574,6 +580,13 @@ impl Host {
     }
 
     pub(in crate::window) fn hide(&mut self, event_loop: &ActiveEventLoop) {
+        self.hide_window(event_loop, false);
+    }
+
+    fn hide_window(&mut self, event_loop: &ActiveEventLoop, already_hidden: bool) {
+        if !already_hidden {
+            self.record_live_window_state();
+        }
         self.rest_step(RestEvent::Unseen);
         self.stop_showing();
         self.wind_down();

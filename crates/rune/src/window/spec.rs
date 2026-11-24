@@ -949,7 +949,7 @@ pub struct WindowPlacement {
     pub display: Option<((i32, i32), (u32, u32))>,
 }
 
-/// How a window's first open shows it (`App::maximized`, `App::full_screen`).
+/// How a window opens or reopens (`App::maximized`, `App::full_screen`, and state captured before hiding).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum OpenAs {
     #[default]
