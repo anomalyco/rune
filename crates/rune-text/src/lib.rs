@@ -227,7 +227,7 @@ use fonts::platform_face;
 use fonts::fallback::Route;
 #[cfg(test)]
 use fonts::system_fonts::{CJK_FONT_FILES, system_font_files};
-use fonts::system_fonts::{LoadedFiles, family_list, load_installed, load_system_mono, named_list, names_system_mono, register_cjk_fallbacks};
+use fonts::system_fonts::{LoadedFiles, family_list, load_installed, load_system_mono, named_list, names_system_mono};
 use fonts::trak::{Trak, Traks, font_trak};
 use fonts::{fallback, families, system_fonts, system_weight};
 use icon::anim::AnimatedIcons;
@@ -415,7 +415,6 @@ impl TextSystem {
         #[cfg(target_arch = "wasm32")]
         platform_face::register(&mut collection);
         // No system font loads here: each comes the first time a text needs it (`load_fallbacks`).
-        let cjk = register_cjk_fallbacks(&mut collection, &registered, families);
         #[cfg(target_arch = "wasm32")]
         let families = if fonts.is_empty() { ("Inter", "IBM Plex Mono") } else { families };
         let (sans, mono) = families::slots(families.0, families.1);
@@ -425,12 +424,13 @@ impl TextSystem {
             sans,
             mono,
             slot_system_mono: [names_system_mono(families.0), names_system_mono(families.1)],
-            fallbacks: system_fonts::Fallbacks::new(list, cjk),
+            fallbacks: system_fonts::Fallbacks::new(list, &registered),
             atlas: Atlas::new(),
             ..Self::empty()
         };
         text.load_installed(families.0);
         text.load_installed(families.1);
+        text.sync_cjk_fallbacks();
         text.load_slot_fallbacks();
         text.follow_full_faces();
         text
