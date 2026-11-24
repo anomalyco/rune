@@ -1,0 +1,1 @@
+- `rune-kit`: added `ScrollBarStyle::always_visible`, `track_inset`, `track`, and `track_hover` builders so apps can keep any scroll bar preset visible whenever its content overflows, adjust track end inset independently of thumb width, and paint rest and hover trough fills.

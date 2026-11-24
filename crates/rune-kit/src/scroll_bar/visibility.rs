@@ -120,6 +120,7 @@ impl BarState {
 
     /// When an overlay's pulse ends, or `f64::INFINITY` while held, or `-1.0` when it isn't
     /// pulsing.
+    #[cfg(test)]
     pub(super) fn pulse_until(self) -> f64 {
         match self {
             Self::Overlay { phase: Phase::Pulsing { until }, .. } => until,
