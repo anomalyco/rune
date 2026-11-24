@@ -29,6 +29,7 @@ pub(super) trait Port {
     fn alive(&self) -> bool;
     fn set_muted(&mut self, muted: bool);
     fn set_volume(&mut self, volume: f32);
+    fn set_output_device(&mut self, uid: Option<&str>);
     fn seek_to(&mut self, at: f64);
     fn set_rate(&mut self, rate: f32);
     fn restart(&mut self, rate: f32);
@@ -73,6 +74,7 @@ pub(super) fn carry(c: &mut Control, port: &mut impl Port, effects: Effects<Effe
             Effect::ReadFacts => c.open(Ok(port.item_facts())),
             Effect::SetMuted(muted) => port.set_muted(muted),
             Effect::SetVolume(volume) => port.set_volume(volume),
+            Effect::SetOutputDevice => port.set_output_device(c.output_device.as_deref()),
             Effect::SeekTo(at) => port.seek_to(at),
             Effect::SetRate(rate) => port.set_rate(rate),
             Effect::Restart(rate) => port.restart(rate),

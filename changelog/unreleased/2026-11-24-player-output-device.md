@@ -1,0 +1,1 @@
+- Media playback: added `Player::set_output_device` and `Player::output_device` to route a player's audio to a chosen platform output device UID (`None` or empty follows the system output), wired to `AVPlayer.audioOutputDeviceUniqueID` on macOS and stored on the player state on other platforms.

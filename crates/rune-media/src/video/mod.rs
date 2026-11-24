@@ -399,6 +399,20 @@ impl Player {
             self.edit(|c| c.volume = volume.clamp(0.0, 1.0));
         }
     }
+    /// Routes sound to the platform audio output device UID (macOS: CoreAudio's
+    /// `kAudioDevicePropertyDeviceUID`, via `AVPlayer.audioOutputDeviceUniqueID`). `None`
+    /// (default) or an empty string follows the system output; other platforms record the UID.
+    /// ```no_run
+    /// let clip = rune_media::Player::audio("track.m4a");
+    /// clip.set_output_device(Some("BuiltInSpeakerDevice"));
+    /// ```
+    pub fn set_output_device(&self, uid: Option<&str>) {
+        let uid = uid.filter(|s| !s.is_empty());
+        if self.shared.ctl.lock().unwrap().output_device.as_deref() == uid {
+            return;
+        }
+        self.edit(|c| c.set_output_device(uid));
+    }
     /// Called, from any thread, when the state changes: loaded, ended, failed, or started
     /// again by a loop. Hand it the app's `setup` waker so `poll` sees an audio clip end
     /// without ticking. Nothing calls it for progress. If the state already changed (loaded, or
@@ -448,6 +462,14 @@ impl Player {
     }
     pub fn volume(&self) -> f32 {
         self.shared.ctl.lock().unwrap().volume
+    }
+    /// The audio output device UID last set, or `None` when following the system output.
+    /// ```no_run
+    /// let clip = rune_media::Player::audio("track.m4a");
+    /// assert_eq!(clip.output_device(), None);
+    /// ```
+    pub fn output_device(&self) -> Option<String> {
+        self.shared.ctl.lock().unwrap().output_device.clone()
     }
     /// The surface video frames land in: for frame observers and draw counts.
     pub fn surface(&self) -> &NativeSurface {
@@ -713,6 +735,8 @@ pub(crate) struct Control {
     pub looping: bool,
     pub muted: bool,
     pub volume: f32,
+    pub output_device: Option<String>,
+    pub(super) output_generation: u64,
     /// A seek not yet carried out, by a player, a poster, a decoder or the headless clock.
     seek: Option<f64>,
     // Reported by pulls and ticks.
@@ -741,6 +765,8 @@ impl Default for Control {
             looping: false,
             muted: true,
             volume: 1.0,
+            output_device: None,
+            output_generation: 0,
             seek: None,
             time: 0.0,
             duration: None,

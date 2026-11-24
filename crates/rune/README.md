@@ -2057,12 +2057,16 @@ tap.play();
 ```
 
 - **Controls and state**: `play` (from the start after `Ended`), `pause`, `seek` (clamped),
-  `set_rate`, `set_looping`, `set_muted`, `set_volume`; `state()` is `Loading`, `Ready`, `Playing`, `Ended`
+  `set_rate`, `set_looping`, `set_muted`, `set_volume`, `set_output_device` (`output_device`);
+  `state()` is `Loading`, `Ready`, `Playing`, `Ended`
   or `Failed(message)`, plus `time()`, `duration()`, `natural_size()` and `has_sound()`
   (whether the clip has a sound track it can play, as a page's controls grey their mute
   button without one; `None` until the clip's facts are read).
 - **Sound**: `Player::file`/`url`/`new` make videos, which start muted. `Player::audio` makes
-  an audio clip, which starts unmuted. `set_muted` changes either.
+  an audio clip, which starts unmuted. `set_muted` changes either. `set_output_device(Some(uid))`
+  routes audio to a chosen CoreAudio device UID on macOS (`AVPlayer.audioOutputDeviceUniqueID`),
+  and `set_output_device(None)` (or an empty string) follows the system output; other platforms
+  and headless runs record the UID without changing the system route.
 - **Request headers**: `Player::request(url).header("Authorization", token).audio()` (or
   `.video()`) opens a URL with HTTP headers on every request, for media behind
   authentication. Header values never appear in `Debug` output.

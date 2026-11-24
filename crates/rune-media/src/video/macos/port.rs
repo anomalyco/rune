@@ -180,6 +180,12 @@ impl Port for Av<'_> {
         unsafe { self.objects().player.setVolume(volume) };
     }
 
+    fn set_output_device(&mut self, uid: Option<&str>) {
+        let uid = uid.map(NSString::from_str);
+        // SAFETY: `player` is a live `AVPlayer` accessed on the main thread, and `uid` (when `Some`) is a live `NSString` copied by `AVPlayer`.
+        unsafe { self.objects().player.setAudioOutputDeviceUniqueID(uid.as_deref()) };
+    }
+
     fn seek_to(&mut self, at: f64) {
         // SAFETY: `player` is a live `AVPlayer` accessed on the main thread with valid `CMTime` values.
         unsafe { self.objects().player.seekToTime_toleranceBefore_toleranceAfter(asset::cm(at), asset::zero(), asset::zero()) };

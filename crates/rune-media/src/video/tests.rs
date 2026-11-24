@@ -11,6 +11,7 @@ fn new_videos_are_muted_paused_and_loading() {
     assert!(!v.looping());
     assert!(!v.is_playing());
     assert_eq!(v.rate(), 1.0);
+    assert_eq!(v.output_device(), None);
     assert_eq!(v.time(), 0.0);
     assert_eq!(v.duration(), None);
     assert_eq!(v.natural_size(), None);
@@ -33,7 +34,47 @@ fn audio_starts_unmuted_with_no_size() {
     let a = Player::audio("missing.m4a");
     assert!(a.is_audio());
     assert!(!a.muted(), "audio is audible by default");
+    assert_eq!(a.output_device(), None);
     assert_eq!(a.natural_size(), None);
+}
+
+#[test]
+fn output_device_defaults_to_none_and_round_trips_across_clones() {
+    let a = Player::audio("missing.m4a");
+    let clone = a.clone();
+    assert_eq!(a.output_device(), None);
+    assert_eq!(a.shared.ctl.lock().unwrap().output_generation, 0);
+
+    // Empty and unchanged None are no-ops.
+    a.set_output_device(None);
+    a.set_output_device(Some(""));
+    assert_eq!(a.output_device(), None);
+    assert_eq!(a.shared.ctl.lock().unwrap().output_generation, 0);
+
+    // Setting a UID updates all clones and bumps the generation once.
+    clone.set_output_device(Some("BuiltInSpeakerDevice"));
+    assert_eq!(a.output_device().as_deref(), Some("BuiltInSpeakerDevice"));
+    assert_eq!(clone.output_device().as_deref(), Some("BuiltInSpeakerDevice"));
+    assert_eq!(a.shared.ctl.lock().unwrap().output_generation, 1);
+
+    // Repeating the same UID is a no-op.
+    a.set_output_device(Some("BuiltInSpeakerDevice"));
+    assert_eq!(a.shared.ctl.lock().unwrap().output_generation, 1);
+
+    // Switching to a long / non-ASCII UID works cleanly.
+    let long_uid = format!("USB-DAC-🎧-{}", "x".repeat(512));
+    a.set_output_device(Some(&long_uid));
+    assert_eq!(clone.output_device().as_deref(), Some(long_uid.as_str()));
+    assert_eq!(a.shared.ctl.lock().unwrap().output_generation, 2);
+
+    // Empty string normalizes to system default (None).
+    a.set_output_device(Some(""));
+    assert_eq!(clone.output_device(), None);
+    assert_eq!(a.shared.ctl.lock().unwrap().output_generation, 3);
+
+    // Explicit None when already None is a no-op.
+    a.set_output_device(None);
+    assert_eq!(a.shared.ctl.lock().unwrap().output_generation, 3);
 }
 
 /// A clip's extension comes from the last segment of its path, never the host or query.

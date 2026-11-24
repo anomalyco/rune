@@ -42,10 +42,10 @@ pub(super) enum Stage {
     /// released player's frame stays on the surface.
     Bare,
     /// A player that can't play yet.
-    Loading { created: Instant, muted: bool, volume: f32 },
+    Loading { created: Instant, muted: bool, volume: f32, output: u64 },
     /// A player that can. `rate` was last applied to it (0 = paused); `shown` is the item time
     /// of the frame on the surface.
-    Ready { created: Instant, muted: bool, volume: f32, rate: f32, settle: Settle, shown: Option<f64> },
+    Ready { created: Instant, muted: bool, volume: f32, output: u64, rate: f32, settle: Settle, shown: Option<f64> },
 }
 
 impl Stage {
@@ -183,6 +183,7 @@ pub(super) enum Effect {
     ReadFacts,
     SetMuted(bool),
     SetVolume(f32),
+    SetOutputDevice,
     SeekTo(f64),
     /// 0 pauses.
     SetRate(f32),
@@ -284,7 +285,9 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
                 c.posters.next();
                 c.poster_at = None;
             }
-            c.stage = Stage::Loading { created, muted: false, volume: 1.0 };
+            // A fresh player starts on the system output; only a chosen device needs applying.
+            let output = if c.output_device.is_some() { c.output_generation.wrapping_sub(1) } else { c.output_generation };
+            c.stage = Stage::Loading { created, muted: false, volume: 1.0, output };
         }
         Event::Item { item, now } => return item_reports(c, item, now),
         Event::Reconcile { now } => return reconcile(c, now),
@@ -409,7 +412,7 @@ fn pull(c: &mut Control) -> Effects<Effect> {
 
 /// Fails the clip if its item failed or never loaded; marks it ready once it can play.
 fn item_reports(c: &mut Control, item: Item, now: Instant) -> Effects<Effect> {
-    let (Stage::Loading { created, muted, volume } | Stage::Ready { created, muted, volume, .. }) = c.stage else { return Effects::none() };
+    let (Stage::Loading { created, muted, volume, output } | Stage::Ready { created, muted, volume, output, .. }) = c.stage else { return Effects::none() };
     let failure = match &item {
         Item::Failed(error) => Some(error.clone()),
         Item::Loading if now.saturating_duration_since(created) > LOAD_PATIENCE => {
@@ -423,7 +426,7 @@ fn item_reports(c: &mut Control, item: Item, now: Instant) -> Effects<Effect> {
         return Effects::one(Effect::DropPlayer);
     }
     if item == Item::Ready && !c.stage.ready() {
-        c.stage = Stage::Ready { created, muted, volume, rate: 0.0, settle: Settle::Still, shown: None };
+        c.stage = Stage::Ready { created, muted, volume, output, rate: 0.0, settle: Settle::Still, shown: None };
         let mut effects = Effects::one(Effect::Orient);
         if !c.opened() {
             effects.push(Effect::ReadFacts);
@@ -433,8 +436,8 @@ fn item_reports(c: &mut Control, item: Item, now: Instant) -> Effects<Effect> {
     Effects::none()
 }
 
-/// Brings the player in line with the handle: mute, volume, seek, rate. Seeks wait for the item to be
-/// ready, which drops earlier ones.
+/// Brings the player in line with the handle: mute, volume, output device, seek, rate. Seeks wait
+/// for the item to be ready, which drops earlier ones.
 fn reconcile(c: &mut Control, now: Instant) -> Effects<Effect> {
     let mut effects = Effects::none();
     if let Stage::Loading { muted, .. } | Stage::Ready { muted, .. } = &mut c.stage
@@ -448,6 +451,12 @@ fn reconcile(c: &mut Control, now: Instant) -> Effects<Effect> {
     {
         *volume = c.volume;
         effects.push(Effect::SetVolume(c.volume));
+    }
+    if let Stage::Loading { output, .. } | Stage::Ready { output, .. } = &mut c.stage
+        && *output != c.output_generation
+    {
+        *output = c.output_generation;
+        effects.push(Effect::SetOutputDevice);
     }
     let playing = c.playing();
     if let Stage::Ready { rate, settle, shown, .. } = &mut c.stage {
@@ -529,6 +538,13 @@ impl Control {
     }
     pub(crate) fn advance_virtual(&mut self, now: f64) {
         step(self, Event::Clock(now));
+    }
+    pub(crate) fn set_output_device(&mut self, uid: Option<&str>) {
+        let uid = uid.filter(|s| !s.is_empty());
+        if self.output_device.as_deref() != uid {
+            self.output_device = uid.map(str::to_owned);
+            self.output_generation = self.output_generation.wrapping_add(1);
+        }
     }
     pub(crate) fn next_frame_id(&mut self) -> u64 {
         self.frame_id += 1;
