@@ -365,17 +365,20 @@ impl RuntimeCore {
         if let Some((mask, _)) = *rounded {
             *clip = intersect(*clip, mask);
         }
-        // `El::cutout_circle`: the subtree draws in a layer whose composite cuts the hole,
-        // after the clips from above, which it takes.
-        if !skip_paint && let Some(c) = n.vis.cutout {
+        // `El::cutout_circle` / `El::cutout_circles`: the subtree draws in one layer per hole
+        // whose composite cuts it. The outermost hole takes any clips from above; further holes
+        // nest inside it with `NO_CLIP`, intersecting their alpha masks.
+        if !skip_paint && !n.vis.cutouts.is_empty() {
             let k = sc * s;
-            let mut marker = Instance::begin_layer([r[0], r[1], w, h], *clip, Default::default());
-            marker.fade = crate::render::pack_fade(*fade, *fade_origin, *clip);
-            if let Some((_, radii)) = *rounded { marker.round_clip_corners(radii); }
-            marker.radii = [r[0] + c[0] * k, r[1] + c[1] * k, c[2] * k, c[3] * k];
-            layers.push((i, self.instances.len(), self.surfaces.len()));
-            self.instances.push(marker);
-            *clip = NO_CLIP; *fade = [0.0; 4]; *fade_origin = NO_CLIP; *rounded = None;
+            for &c in &n.vis.cutouts {
+                let mut marker = Instance::begin_layer([r[0], r[1], w, h], *clip, Default::default());
+                marker.fade = crate::render::pack_fade(*fade, *fade_origin, *clip);
+                if let Some((_, radii)) = *rounded { marker.round_clip_corners(radii); }
+                marker.radii = [r[0] + c[0] * k, r[1] + c[1] * k, c[2] * k, c[3] * k];
+                layers.push((i, self.instances.len(), self.surfaces.len()));
+                self.instances.push(marker);
+                *clip = NO_CLIP; *fade = [0.0; 4]; *fade_origin = NO_CLIP; *rounded = None;
+            }
         }
         // Live/truncated text adds a glyph-only rectangle below. Consume the inherited
         // rounded mask first so the text clip cannot move its corner centres, unless that

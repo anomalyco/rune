@@ -102,7 +102,7 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     edges (never bridge edges or diagonals), so translucent fills have no seams. No atlas, so a shape can
     change every frame (`examples/shapes`). SVG export emits `fill-rule="evenodd"` for `FillRule::EvenOdd`.
     Translucent strokes blend twice where segments overlap at a joint; fills do not overlap.
-  - Every instance has a soft-edge clip (`clip_soft`, `clip_fade`).
+  - Every instance has a soft-edge clip (`clip_soft`, `clip_fade`). Circular alpha cutouts (`El::cutout_circle` for one hole, `El::cutout_circles` for several intersected holes) isolate the element and its subtree into one layer per hole so backdrops show through without wrappers (`examples/shapes`).
   - Windows blend in sRGB-encoded space by default, as Core Animation, CoreText and CSS do.
     `.srgb_blend(false)` on `App`, `WindowSpec` or `ConfiguredOverlay` opts out into linear-light
     blending (colour premultiplied in linear light, drawn into an sRGB target). sRGB blending

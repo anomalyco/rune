@@ -356,3 +356,32 @@ fn cpu_gpu_effect_slot_with_mark_and_legacy_glyph_radii() {
     assert_eq!(inst.params[2], 0.0);
     check(&mut gpu, &glyph_scene, 2);
 }
+
+#[test]
+fn cpu_gpu_nested_cutout_circles_match_reference() {
+    let mut gpu = GpuRenderer::default();
+    let mut rt = rune::Runtime::new(
+        (),
+        |_: &(), _: &mut rune::Cx<()>| {
+            rune::el()
+                .size(96.0, 48.0)
+                .fill(rune::Color { r: 0.15, g: 0.3, b: 0.6, a: 1.0 })
+                .child(
+                    rune::el()
+                        .size(96.0, 48.0)
+                        .radius(10.0)
+                        .clip_rounded(10.0)
+                        .fill(rune::Color::WHITE)
+                        .cutout_circles([
+                            ([0.0, 24.0], 7.0, 8.0),
+                            ([48.0, 24.0], 6.0, 7.0),
+                            ([96.0, 24.0], 7.0, 8.0),
+                        ]),
+                )
+        },
+        (96.0, 48.0),
+        rune::Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    check(&mut gpu, &from_instances(96, 48, &rt.instances), 2);
+}

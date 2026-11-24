@@ -1,12 +1,13 @@
-//! Vector shapes: a filled waveform envelope, polylines, meters, a Bézier path, a concave
-//! polygon, compound fills with transparent holes under `FillRule::NonZero` and
-//! `FillRule::EvenOdd`, and SVG 2 path data (`Path::from_svg`, `Shape::fill_svg`,
-//! `Shape::fill_svg_with`, `Shape::stroke_svg`). `cargo run -p shapes -- --snap shapes.png`
-//! renders it headless; time animates the waveform, so `--at 1.5` shows another moment.
+//! Vector shapes and element cutouts: a filled waveform envelope, polylines, meters, a Bézier
+//! path, a concave polygon, compound fills with transparent holes under `FillRule::NonZero` and
+//! `FillRule::EvenOdd`, SVG 2 path data (`Path::from_svg`, `Shape::fill_svg`,
+//! `Shape::fill_svg_with`, `Shape::stroke_svg`), and multi-hole circular cutouts
+//! (`El::cutout_circles`). `cargo run -p shapes -- --snap shapes.png` renders it headless; time
+//! animates the waveform, so `--at 1.5` shows another moment.
 
 #![forbid(unsafe_code)]
 
-use rune::{AppSpec, Color, Cx, El, FillRule, LineCap, Path, Shape, Tx, canvas, col, memo, row, text};
+use rune::{AppSpec, Color, Cx, El, FillRule, LineCap, Path, Shape, Tx, canvas, col, el, memo, row, text};
 
 struct State {
     t: f32,
@@ -199,6 +200,32 @@ fn label(s: &str) -> El {
     text(s).color(INK)
 }
 
+/// A ticket card with two edge notches and a strip with four punched holes (`El::cutout_circles`)
+/// laid over a contrasting stripe so every circular cutout shows the backdrop through.
+fn cutout_cards() -> El {
+    let ticket = col()
+        .size(220.0, 88.0)
+        .radius(12.0)
+        .clip_rounded(12.0)
+        .fill(ACCENT)
+        .center()
+        .cutout_circles([
+            ([0.0, 44.0], 9.0, 10.0),
+            ([220.0, 44.0], 9.0, 10.0),
+        ])
+        .child(text("Ticket notches (2 holes)").color(INK));
+    let punched = col()
+        .size(220.0, 88.0)
+        .radius(12.0)
+        .clip_rounded(12.0)
+        .fill(WARM)
+        .cutout_circles((0..4).map(|i| ([35.0 + i as f32 * 50.0, 44.0], 9.0, 10.0)));
+    el()
+        .size(464.0, 88.0)
+        .child(el().absolute(0.0, 34.0).size(464.0, 20.0).fill(STRIPE))
+        .child(row().gap(24.0).child(ticket).child(punched))
+}
+
 fn view(s: &State, _: &mut Cx<State>) -> El {
     col()
         .key("root")
@@ -251,6 +278,12 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 .child(label("SVG 2 path data: fill_svg, fill_svg_with (EvenOdd arc ring), stroke_svg, Path::from_svg"))
                 .child(memo("svg_paths", (), || canvas(svg_paths()).size(680.0, 88.0))),
         )
+        .child(
+            col()
+                .gap(8.0)
+                .child(label("Circular cutouts (El::cutout_circles): ticket notches and four punched holes"))
+                .child(memo("cutouts", (), cutout_cards)),
+        )
 }
 
 fn poll(s: &mut State, t: f64, _: &mut Tx) -> bool {
@@ -259,5 +292,5 @@ fn poll(s: &mut State, t: f64, _: &mut Tx) -> bool {
 }
 
 fn main() {
-    rune::run(AppSpec { poll: Some(poll), ..AppSpec::new("Shapes", (820.0, 620.0), || State { t: 0.0 }, view) });
+    rune::run(AppSpec { poll: Some(poll), ..AppSpec::new("Shapes", (820.0, 740.0), || State { t: 0.0 }, view) });
 }

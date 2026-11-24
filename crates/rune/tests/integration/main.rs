@@ -15,6 +15,7 @@ mod canvas_input;
 mod caret;
 mod caret_follow;
 mod clip;
+mod cutout_circles;
 mod deco_api;
 mod dim_browser;
 mod drag_cancel;
