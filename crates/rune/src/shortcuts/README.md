@@ -161,6 +161,7 @@ input path; overlays and Wayland layer surfaces also forward physical input.
 
 ```rust,ignore
 let app = App::new(spec)
+    .menu_item(MenuItem::about("About My App", open_about).id("about"))
     .menu_item(MenuItem::new("Open Quick Panel", open_panel).id("quick")
         .key_equivalent("cmd+shift+space".parse()?))
     .menu_item(MenuItem::new("Preferences", preferences).menu("Tools"))
@@ -179,12 +180,21 @@ Actions are `fn(&mut S, &mut Tx)` queued on the app thread. `set_menu` replaces 
 custom items for that App; an empty list removes them. It validates atomically and
 queues installation. `take_menu_errors()` reports deferred startup/installation
 errors. Replaced, disabled or removed items invalidate stale queued actions.
+`MenuItem::about(title, action)` replaces the macOS app menu's standard About item
+(`orderFrontStandardAboutPanel:`) at index 0. At most one About replacement may appear
+in a snapshot, and it must stay in the app menu (cannot use `menu`, `dock`, `after`, or
+`alternate`). Clearing custom items (or handing the menu bar to another window without a
+custom About item) restores AppKit's standard About item.
+
 `MenuItem::separator()` is a separator line (`NSMenuItem.separatorItem` on macOS), placed
 with `menu` or `dock` in list order like any item. It needs no id, takes no part in
 id/title lookup and can't be fired.
 
 On macOS, one App owns the process-wide custom menus. Default Quit/Hide items and
-existing named-menu items are preserved. The Dock adapter adds an absent
+existing named-menu items are preserved; if a custom item claims `⌘Q`, the app menu's
+built-in `terminate:` Quit item yields `⌘Q` (staying in the menu without a shortcut,
+including after `set_dock_icon(true)` promotes an accessory app) and restores `⌘Q` once
+no custom item claims it. The Dock adapter adds an absent
 `applicationDockMenu:` selector to winit's existing delegate class, retaining the
 delegate and all existing methods. An existing non-Rune selector is an error; the
 Rune hook returns nil after teardown. Key equivalents are native menu equivalents,
@@ -214,8 +224,9 @@ window starts; an app that set its own menu bar is left alone. Rune never adds Q
 an accessory app that later shows its Dock icon gets winit's app menu (with Quit) as
 before. Items go into existing menus of the same title, an item whose action is
 already there is skipped, and custom `MenuItem`s keep working in either order. A
-custom item with a standard item's equivalent (Close Tab ⌘W) takes it: the standard
-item shows none until the custom one goes, whichever was set first. New custom menus
+custom item with a standard item's equivalent (Close Tab ⌘W) or the built-in app-menu
+Quit item's ⌘Q takes it: the built-in item shows none until the custom one goes,
+whichever was set first and across `set_dock_icon(true)` promotions. New custom menus
 take the Mac order: File before Edit, the app's other menus before Window, Help last.
 Clearing custom items keeps a menu the standard items share. An accessory app's menu
 bar is hidden, but AppKit still matches its key equivalents.

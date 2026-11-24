@@ -222,7 +222,95 @@ fn main() {
         }
         assert!(terminate(&root));
         assert_eq!(app.activationPolicy(), NSApplicationActivationPolicy::Accessory);
+
+        // Built-in Quit yields ⌘Q to a custom item (and restores it on removal), while other
+        // modifiers (⇧⌘Q, ⌥⌘Q) leave Quit's ⌘Q alone.
+        let quit_item = |menu: &NSMenu| (0..menu.numberOfItems()).filter_map(|i| menu.itemAtIndex(i))
+            .find(|i| i.action() == Some(sel!(terminate:))).unwrap();
+        let about_item = |menu: &NSMenu| (0..menu.numberOfItems()).filter_map(|i| menu.itemAtIndex(i))
+            .find(|i| i.action() == Some(sel!(orderFrontStandardAboutPanel:))).unwrap();
+        assert_eq!(quit_item(&app_menu).keyEquivalent().to_string(), "q");
+        let close_all_q = NSMenuItem::initWithTitle_action_keyEquivalent(mtm.alloc(), &NSString::from_str("Close Windows"),
+            Some(sel!(runeMenuAction:)), &NSString::from_str("q"));
+        default_macos::adding(&app, || app_menu.insertItem_atIndex(&close_all_q, 1));
+        assert_eq!(close_all_q.keyEquivalent().to_string(), "q", "custom ⌘Q keeps its key equivalent");
+        assert_eq!(quit_item(&app_menu).keyEquivalent().to_string(), "", "built-in Quit yields ⌘Q");
+        app_menu.removeItem(&close_all_q);
+        default_macos::sync_standard(&app);
+        assert_eq!(quit_item(&app_menu).keyEquivalent().to_string(), "q", "built-in Quit restores ⌘Q");
+        let shift_q = NSMenuItem::initWithTitle_action_keyEquivalent(mtm.alloc(), &NSString::from_str("Force Close"),
+            Some(sel!(runeMenuAction:)), &NSString::from_str("Q"));
+        default_macos::adding(&app, || app_menu.insertItem_atIndex(&shift_q, 1));
+        assert_eq!(quit_item(&app_menu).keyEquivalent().to_string(), "q", "⇧⌘Q does not steal ⌘Q from Quit");
+        app_menu.removeItem(&shift_q);
+        default_macos::sync_standard(&app);
+
+        // Winit's untagged (tag == 0) nil-target terminate: in the app menu yields and restores ⌘Q too.
+        app.setMainMenu(None);
+        let winit_root = NSMenu::new(mtm);
+        let winit_top = NSMenuItem::new(mtm);
+        let winit_app = NSMenu::new(mtm);
+        let winit_quit = NSMenuItem::initWithTitle_action_keyEquivalent(mtm.alloc(), &NSString::from_str("Quit test"),
+            Some(sel!(terminate:)), &NSString::from_str("q"));
+        winit_app.addItem(&winit_quit);
+        winit_top.setSubmenu(Some(&winit_app));
+        winit_root.addItem(&winit_top);
+        app.setMainMenu(Some(&winit_root));
+        let custom_q = NSMenuItem::initWithTitle_action_keyEquivalent(mtm.alloc(), &NSString::from_str("Close"),
+            Some(sel!(runeMenuAction:)), &NSString::from_str("q"));
+        default_macos::adding(&app, || winit_app.insertItem_atIndex(&custom_q, 0));
+        assert_eq!(custom_q.keyEquivalent().to_string(), "q");
+        assert_eq!(winit_quit.keyEquivalent().to_string(), "", "winit's untagged Quit yields ⌘Q");
+        winit_app.removeItem(&custom_q);
+        default_macos::sync_standard(&app);
+        assert_eq!(winit_quit.keyEquivalent().to_string(), "q", "winit's untagged Quit restores ⌘Q");
+
+        // Custom About (ABOUT_REPLACEMENT) hides the standard About item and restores it on clear.
+        app.setMainMenu(None);
+        let root = default_macos::ensure(&app);
+        let app_menu = root.itemAtIndex(0).unwrap().submenu().unwrap();
+        let std_about = about_item(&app_menu);
+        assert!(!std_about.isHidden());
+        let custom_about = NSMenuItem::initWithTitle_action_keyEquivalent(mtm.alloc(), &NSString::from_str("About Custom"),
+            Some(sel!(runeMenuAction:)), &NSString::from_str(""));
+        custom_about.setTag(default_macos::ABOUT_REPLACEMENT);
+        default_macos::adding(&app, || app_menu.insertItem_atIndex(&custom_about, 0));
+        assert!(std::ptr::eq(&*app_menu.itemAtIndex(0).unwrap(), &*custom_about), "custom About sits at index 0");
+        assert!(std_about.isHidden(), "standard About is hidden while custom About is installed");
+        // Relabel leaves the custom About title untouched.
+        default_macos::relabel(&app);
+        assert_eq!(custom_about.title().to_string(), "About Custom");
+        app_menu.removeItem(&custom_about);
+        default_macos::sync_standard(&app);
+        assert!(!std_about.isHidden(), "standard About is restored when custom About is cleared");
+
+        // Accessory app with custom About and custom ⌘Q preserves both across Dock-icon promotion.
+        app.setMainMenu(None);
+        default_macos::add_standard(&app);
+        let root = app.mainMenu().unwrap();
+        let app_menu = root.itemAtIndex(0).unwrap().submenu().unwrap();
+        let pre_about = NSMenuItem::initWithTitle_action_keyEquivalent(mtm.alloc(), &NSString::from_str("About Accessory"),
+            Some(sel!(runeMenuAction:)), &NSString::from_str(""));
+        pre_about.setTag(default_macos::ABOUT_REPLACEMENT);
+        let pre_q = NSMenuItem::initWithTitle_action_keyEquivalent(mtm.alloc(), &NSString::from_str("Close Window"),
+            Some(sel!(runeMenuAction:)), &NSString::from_str("q"));
+        default_macos::adding(&app, || {
+            app_menu.insertItem_atIndex(&pre_about, 0);
+            app_menu.insertItem_atIndex(&pre_q, 1);
+        });
+        for _ in 0..2 {
+            default_macos::promote(&app);
+            assert_eq!(pre_q.keyEquivalent().to_string(), "q", "custom ⌘Q survives Dock promotion");
+            assert_eq!(quit_item(&app_menu).keyEquivalent().to_string(), "", "promoted Quit yields ⌘Q");
+            assert!(about_item(&app_menu).isHidden(), "promoted standard About is hidden behind custom About");
+            assert!(std::ptr::eq(&*app_menu.itemAtIndex(0).unwrap(), &*pre_about));
+        }
+        app_menu.removeItem(&pre_about);
+        app_menu.removeItem(&pre_q);
+        default_macos::sync_standard(&app);
+        assert_eq!(quit_item(&app_menu).keyEquivalent().to_string(), "q", "promoted Quit restores ⌘Q after clear");
+        assert!(!about_item(&app_menu).isHidden(), "promoted standard About restores after clear");
         app.setMainMenu(None);
     }
-    println!("PASS: default titles/selectors/keys, Services, idempotence, custom and empty menus preserved; standard Edit/Window items, nil targets, Mac menu order, custom equivalents win, shared menus kept, no Quit until promoted");
+    println!("PASS: default titles/selectors/keys, Services, idempotence, custom and empty menus preserved; standard Edit/Window items, nil targets, Mac menu order, custom equivalents win (including ⌘Q across promote), custom About hides/restores standard About, shared menus kept, no Quit until promoted");
 }

@@ -15,6 +15,8 @@ thread_local! {
     /// The empty app menu of a menu bar `App::standard_menus` made, filled when the app
     /// first shows its Dock icon.
     static PENDING: RefCell<Option<Retained<NSMenu>>> = const { RefCell::new(None) };
+    /// The app menu's standard About item hidden while a `MenuItem::about` replaces it.
+    static HIDDEN_ABOUT: RefCell<Option<Retained<NSMenuItem>>> = const { RefCell::new(None) };
 }
 
 /// Preserve any existing menu, including an app-supplied empty menu. AppKit owns
@@ -27,6 +29,7 @@ pub(crate) fn ensure(app: &NSApplication) -> Retained<NSMenu> {
         let root = empty_root(app);
         let menu = PENDING.with(|p| p.borrow_mut().take()).expect("empty_root leaves its app menu");
         add_app_items(app, &menu);
+        sync_standard(app);
         root
     }
 }
@@ -38,6 +41,7 @@ pub(crate) fn promote(app: &NSApplication) {
     unsafe {
         if let Some(menu) = PENDING.with(|p| p.borrow_mut().take()) { add_app_items(app, &menu); }
     }
+    sync_standard(app);
 }
 
 /// Lays `menu` and its submenus out the way the app's language reads
@@ -88,7 +92,9 @@ unsafe fn add_app_items(app: &NSApplication, menu: &NSMenu) {
             hide_others,
             item(mtm, "", Some(sel!(unhideAllApplications:)), ""),
             NSMenuItem::separatorItem(mtm),
-            item(mtm, "", Some(sel!(terminate:)), "q"),
+            // Added without "q" so promoting an accessory app never disturbs an existing custom
+            // ⌘Q item; `sync_standard` assigns "q" when no other item claims ⌘Q.
+            item(mtm, "", Some(sel!(terminate:)), ""),
         ] {
             entry.setTag(APP_ITEM);
             menu.addItem(&entry);
@@ -194,6 +200,8 @@ const STANDARD: isize = 0x5255_4e45;
 const APP_ITEM: isize = 0x5255_4e46;
 /// Tags the Edit menu's system items `system_edit_items` makes.
 const SYSTEM: isize = 0x5255_4e47;
+/// Tags a custom `MenuItem::about` item replacing the app menu's standard About item.
+pub(crate) const ABOUT_REPLACEMENT: isize = 0x5255_4e48;
 
 /// The standard items, into menus of their titles (made if absent) in the menu bar, or in a
 /// new one whose empty app menu waits for `promote`. An action a menu already has is skipped.
@@ -317,44 +325,113 @@ pub(crate) fn adding<R>(app: &NSApplication, add: impl FnOnce() -> R) -> R {
     added
 }
 
-/// After the menu bar's items change: each standard item keeps its key equivalent unless
-/// another item in the menu bar has the same one, so an app's own item (Close Tab ⌘W) wins
-/// whichever was added first.
+/// Hides the app menu's standard About item while a `MenuItem::about` (`ABOUT_REPLACEMENT`)
+/// sits in the app menu, and restores the item Rune hid once that replacement leaves.
+fn sync_about(app: &NSApplication) {
+    let app_menu = app.mainMenu()
+        .filter(|root| root.numberOfItems() > 0)
+        .and_then(|root| root.itemAtIndex(0))
+        .and_then(|top| top.submenu());
+    let has_replacement = app_menu.as_ref().is_some_and(|menu| {
+        (0..menu.numberOfItems())
+            .filter_map(|i| menu.itemAtIndex(i))
+            .any(|i| i.tag() == ABOUT_REPLACEMENT)
+    });
+    if has_replacement {
+        let standard_about = app_menu.as_ref().and_then(|menu| {
+            (0..menu.numberOfItems())
+                .filter_map(|i| menu.itemAtIndex(i))
+                .find(|i| i.tag() != ABOUT_REPLACEMENT
+                    && i.target().is_none()
+                    && i.action() == Some(sel!(orderFrontStandardAboutPanel:)))
+        });
+        HIDDEN_ABOUT.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if let Some(found) = standard_about {
+                if slot.as_ref().is_some_and(|old| !std::ptr::eq(&**old, &*found)) {
+                    if let Some(old) = slot.take() { old.setHidden(false); }
+                }
+                if slot.is_none() && !found.isHidden() {
+                    found.setHidden(true);
+                    *slot = Some(found);
+                }
+            } else if let Some(old) = slot.take() {
+                old.setHidden(false);
+            }
+        });
+    } else {
+        HIDDEN_ABOUT.with(|slot| {
+            if let Some(hidden) = slot.borrow_mut().take() {
+                hidden.setHidden(false);
+            }
+        });
+    }
+}
+
+/// After the menu bar's items change: hides or restores the standard About item, keeps Edit's
+/// system items last, and restores each yieldable standard item's (and built-in Quit's) key
+/// equivalent unless another item in the menu bar claims it, so an app's own item (Close Tab
+/// ⌘W, custom ⌘Q) wins whichever was added first.
 pub(crate) fn sync_standard(app: &NSApplication) {
+    sync_about(app);
     if let Some(edit) = app.mainMenu().and_then(|root| (0..root.numberOfItems()).filter_map(|i| root.itemAtIndex(i)).find(|i| name(i) == "Edit")).and_then(|i| i.submenu()) {
         // SAFETY: main thread; moving retained items within their menu.
         unsafe { system_edit_last(&edit) };
     }
     let mut claimed = HashSet::new();
     // SAFETY: main thread; reading retained menus.
-    if let Some(root) = app.mainMenu() { unsafe { claims(&root, &mut claimed) }; }
+    if let Some(root) = app.mainMenu() {
+        unsafe {
+            for i in 0..root.numberOfItems() {
+                if let Some(sub) = root.itemAtIndex(i).and_then(|top| top.submenu()) {
+                    claims(&sub, i == 0, &mut claimed);
+                }
+            }
+        }
+    }
     set_standard_keys(app, |equivalent| !claimed.contains(equivalent));
 }
 
 fn set_standard_keys(app: &NSApplication, keep: impl Fn(&Equivalent) -> bool) {
     let Some(root) = app.mainMenu() else { return };
-    for menu in (0..root.numberOfItems()).filter_map(|i| root.itemAtIndex(i)?.submenu()) {
-        for entry in (0..menu.numberOfItems()).filter_map(|i| menu.itemAtIndex(i)).filter(|i| i.tag() == STANDARD) {
-            let Some(standard) = entry.action().and_then(|a| a.name().to_str().ok()).and_then(super::standard::by_action) else { continue };
-            let equivalent = standard.equivalent();
+    for (index, menu) in (0..root.numberOfItems()).filter_map(|i| root.itemAtIndex(i)?.submenu().map(|m| (i, m))) {
+        let in_app_menu = index == 0;
+        for entry in (0..menu.numberOfItems()).filter_map(|i| menu.itemAtIndex(i)) {
+            let action = entry.action();
+            let action_name = action.as_ref().and_then(|a| a.name().to_str().ok());
+            let Some(equivalent) = super::standard::yieldable_equivalent(
+                in_app_menu,
+                entry.tag() == STANDARD,
+                entry.target().is_some(),
+                action_name,
+            ) else { continue };
             entry.setKeyEquivalent(&NSString::from_str(if keep(&equivalent) { &equivalent.key } else { "" }));
         }
     }
 }
 
-/// The key equivalents of every item but the standard ones, submenus included.
-unsafe fn claims(menu: &NSMenu, out: &mut HashSet<Equivalent>) {
+/// The key equivalents of every item except the yieldable standard items and the app menu's
+/// built-in nil-target `terminate:` item, submenus included.
+unsafe fn claims(menu: &NSMenu, in_app_menu: bool, out: &mut HashSet<Equivalent>) {
     // SAFETY: as `sync_standard`.
     unsafe {
         for entry in (0..menu.numberOfItems()).filter_map(|i| menu.itemAtIndex(i)) {
-            if entry.tag() != STANDARD {
+            let action = entry.action();
+            let action_name = action.as_ref().and_then(|a| a.name().to_str().ok());
+            let yields = super::standard::yieldable_equivalent(
+                in_app_menu,
+                entry.tag() == STANDARD,
+                entry.target().is_some(),
+                action_name,
+            ).is_some();
+            if !yields {
                 let flags = entry.keyEquivalentModifierMask();
                 let has = |f| flags.contains(f);
                 out.extend(Equivalent::new(&entry.keyEquivalent().to_string(),
                     has(NSEventModifierFlags::Command), has(NSEventModifierFlags::Shift),
                     has(NSEventModifierFlags::Option), has(NSEventModifierFlags::Control)));
             }
-            if let Some(sub) = entry.submenu() { claims(&sub, out); }
+            if let Some(sub) = entry.submenu() { claims(&sub, false, out); }
         }
     }
 }

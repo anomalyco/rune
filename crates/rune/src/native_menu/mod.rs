@@ -43,6 +43,7 @@ struct Description {
     checked: bool,
     separator: bool,
     alternate: bool,
+    replaces_about: bool,
 }
 
 /// A custom native item. Defaults to the app menu (after its About item, in the order given),
@@ -55,7 +56,26 @@ impl<S> MenuItem<S> {
     pub fn new(title: impl Into<String>, action: fn(&mut S, &mut Tx)) -> Self {
         let title = title.into();
         Self { description: Description { id: title.clone(), title, location: Location::App, after: None,
-            equivalent: None, keys_first: false, enabled: true, checked: false, separator: false, alternate: false }, action }
+            equivalent: None, keys_first: false, enabled: true, checked: false, separator: false,
+            alternate: false, replaces_about: false }, action }
+    }
+    /// Replace the macOS app menu's standard About item (`orderFrontStandardAboutPanel:`)
+    /// with this item at the top of the app menu. Enabled and unchecked, with its title as id.
+    /// At most one About replacement may appear in a menu snapshot, and it must stay in the
+    /// app menu (cannot be moved with `menu` or `dock`, placed with `after`, or marked
+    /// `alternate`). Clearing custom items restores AppKit's standard About item. Elsewhere
+    /// it behaves like a normal item in headless menus.
+    ///
+    /// ```no_run
+    /// # use rune::{App, AppSpec, MenuItem, el};
+    /// # struct State { about: bool }
+    /// let app = App::new(AppSpec::new("Demo", (400.0, 300.0), || State { about: false }, |_, _| el()))
+    ///     .menu_item(MenuItem::about("About Demo", |s: &mut State, _| s.about = true));
+    /// ```
+    pub fn about(title: impl Into<String>, action: fn(&mut S, &mut Tx)) -> Self {
+        let mut item = Self::new(title, action);
+        item.description.replaces_about = true;
+        item
     }
     /// A separator line, placed with `menu` or `dock` like an item. It has no id or title,
     /// can't be fired, and needs no unique id.
@@ -224,8 +244,16 @@ impl<S> Hub<S> {
 
 fn validate(descriptions: &[Description]) -> Result<(), MenuError> {
     let mut ids = std::collections::HashSet::new();
+    let mut has_about = false;
     for d in descriptions {
         if matches!(&d.location, Location::Named(title) if title.trim().is_empty()) { return Err(MenuError::Invalid("empty menu title".into())); }
+        if d.replaces_about {
+            if d.location != Location::App { return Err(MenuError::Invalid("about item must be in the app menu".into())); }
+            if d.after.is_some() { return Err(MenuError::Invalid("about item cannot use after".into())); }
+            if d.alternate { return Err(MenuError::Invalid("about item cannot be an alternate".into())); }
+            if has_about { return Err(MenuError::Invalid("duplicate about item".into())); }
+            has_about = true;
+        }
         if d.separator { continue; }
         if d.id.trim().is_empty() || d.title.trim().is_empty() { return Err(MenuError::Invalid("empty id or title".into())); }
         if !ids.insert(&d.id) { return Err(MenuError::Invalid(format!("duplicate id {}", d.id))); }
@@ -634,6 +662,49 @@ mod tests {
         let item = item("quick").key_equivalent(shortcut.clone());
         assert_eq!(item.description.equivalent, Some(shortcut));
         assert!(!item.description.keys_first && item.keys_first().description.keys_first);
+    }
+
+    #[test]
+    fn about_item_validates_and_dispatches_headlessly() {
+        let about = |title: &str| MenuItem::about(title, |s: &mut Vec<u32>, _| s.push(7));
+        let app = app().menu_item(about("About Demo").id("about")).menu_item(item("quick"));
+        let _guard = MenuGuard::attach(&app.shared, true);
+        assert!(app.handle().take_menu_errors().is_empty());
+        {
+            let state = app.shared.menus.core.state.lock().unwrap();
+            assert!(state.descriptions[0].replaces_about);
+            assert_eq!(state.descriptions[0].location, Location::App);
+            assert!(!state.descriptions[1].replaces_about);
+        }
+        fire(&app.shared, "about").unwrap();
+        fire(&app.shared, "About Demo").unwrap();
+        let mut state = Vec::new();
+        drain(&app, &mut state);
+        assert_eq!(state, [7, 7]);
+
+        // Duplicate About, moved out of App menu, after, alternate, or empty title are rejected atomically.
+        for bad in [
+            vec![about("About One"), about("About Two")],
+            vec![about("About File").menu("File")],
+            vec![about("About Dock").dock()],
+            vec![about("About After").after("quick")],
+            vec![about("About Alt").alternate()],
+            vec![about("   ")],
+        ] {
+            assert!(matches!(app.handle().set_menu(bad), Err(MenuError::Invalid(_))));
+        }
+        assert_eq!(app.shared.menus.core.state.lock().unwrap().descriptions.len(), 2);
+
+        // Clearing removes the About item; setting a fresh About item works.
+        app.handle().set_menu([]).unwrap();
+        assert!(app.shared.menus.core.state.lock().unwrap().descriptions.is_empty());
+        app.handle().set_menu([about("About Again")]).unwrap();
+        assert_eq!(app.shared.menus.core.state.lock().unwrap().descriptions[0].id, "About Again");
+
+        // Invalid startup snapshot with duplicate About records MenuError::Invalid.
+        let invalid = self::app().menu_item(about("About One")).menu_item(about("About Two"));
+        let _guard = MenuGuard::attach(&invalid.shared, true);
+        assert!(matches!(invalid.handle().take_menu_errors().as_slice(), [MenuError::Invalid(_)]));
     }
 
     #[cfg(not(target_os = "macos"))]

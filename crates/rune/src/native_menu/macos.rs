@@ -152,12 +152,19 @@ impl Native {
             (d, item, Some(target))
         }).collect();
         self.clear();
+        // Ensure the default menu bar exists before `adding` releases yieldable keys (including
+        // built-in Quit's ⌘Q), so a custom item claiming ⌘Q never collides with `terminate:`.
+        if descriptions.iter().any(|d| d.location != Location::Dock) {
+            let _ = super::ensure_default_menu(&app);
+        }
         super::default_macos::adding(&app, || {
-            let mut app_index = 0;
+            let mut last_app_item: Option<Retained<NSMenuItem>> = None;
+            let mut custom_about = false;
             // Items placed so far by id, and the last one placed after each anchor.
             let mut placed: Vec<(&str, Retained<NSMenuItem>)> = Vec::new();
             let mut chained: Vec<(&str, Retained<NSMenuItem>)> = Vec::new();
             for (d, item, target) in prepared {
+                if d.replaces_about { item.setTag(super::default_macos::ABOUT_REPLACEMENT); }
                 let location = &d.location;
                 let menu = if *location == Location::Dock {
                     DOCK.with(|slot| slot.borrow_mut().get_or_insert_with(|| NSMenu::new(self.mtm)).clone())
@@ -180,17 +187,28 @@ impl Native {
                     }
                 };
                 let anchor = d.after.as_deref().and_then(|a| anchor_index(&menu, a, &placed, &chained).map(|i| (a, i)));
-                if let Some((a, index)) = anchor {
+                if d.replaces_about {
+                    menu.insertItem_atIndex(&item, 0);
+                    custom_about = true;
+                } else if let Some((a, index)) = anchor {
                     menu.insertItem_atIndex(&item, index + 1);
                     chained.retain(|(c, _)| *c != a);
                     chained.push((a, item.clone()));
                 } else if *location == Location::App {
-                    // App items follow the app menu's About item, where AppKit apps list Check
-                    // for Updates… and Settings…; an app menu without one takes them first.
-                    let first = (menu.numberOfItems() > 0).then(|| menu.itemAtIndex(0)).flatten();
-                    let about = first.and_then(|i| i.action()) == Some(sel!(orderFrontStandardAboutPanel:));
-                    menu.insertItem_atIndex(&item, app_index + isize::from(about));
-                    app_index += 1;
+                    // App items follow the app menu's About item (custom or standard), where
+                    // AppKit apps list Check for Updates… and Settings…; an app menu without
+                    // one takes them first.
+                    let index = last_app_item.as_ref()
+                        .map(|prev| menu.indexOfItem(prev))
+                        .filter(|&i| i >= 0)
+                        .map(|i| i + 1)
+                        .unwrap_or_else(|| {
+                            let first = (menu.numberOfItems() > 0).then(|| menu.itemAtIndex(0)).flatten();
+                            let about = custom_about || first.and_then(|i| i.action()) == Some(sel!(orderFrontStandardAboutPanel:));
+                            isize::from(about)
+                        });
+                    menu.insertItem_atIndex(&item, index);
+                    last_app_item = Some(item.clone());
                 } else {
                     menu.addItem(&item);
                 }

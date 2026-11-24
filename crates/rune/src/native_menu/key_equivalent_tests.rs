@@ -61,6 +61,19 @@ fn menu_keycaps_show_the_accelerator() {
     assert_eq!(caps("ctrl+left").last().unwrap(), "←");
 }
 
+#[test]
+fn cmd_q_shortcut_matches_builtin_terminate_yield_equivalent() {
+    let ke = KeyEquivalent::new(&"cmd+q".parse::<Shortcut>().unwrap());
+    let eq = super::standard::Equivalent::new(
+        &ke.key,
+        ke.mask & COMMAND != 0,
+        ke.mask & SHIFT != 0,
+        ke.mask & OPTION != 0,
+        ke.mask & CONTROL != 0,
+    );
+    assert_eq!(eq, super::standard::yieldable_equivalent(true, false, false, Some("terminate:")));
+}
+
 /// Dvorak's characters at QWERTY positions, by Carbon key code, under any modifiers.
 #[cfg(target_os = "macos")]
 fn dvorak(key: u32, _modifiers: u32) -> Option<String> {
