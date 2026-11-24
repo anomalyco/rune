@@ -2927,9 +2927,11 @@ app state and spring tracks stay in the runtime. Layout and colour edits use the
 retargeting as input changes. Handlers are recreated before queued input runs.
 Omit `--snap-on-patch` for a window on a development machine.
 
-Hot builds type-erase the host state behind thin typed adapters, so the runtime and
-shell compile once in the Rune library rather than in each changing executable.
-The explicit `HotFn` boundary still calls the app's typed view function. The headless
+`rune::run` and `App::run` share the same runtime and window host: `RuntimeCore` and
+`WindowApp` already type-erase the runtime and shell into the Rune library, so hot builds
+compile only the app's typed glue while keeping every `App` hook and option (`turn_scope`,
+`on_quit`, `on_reopen`, `on_focus`, `on_open_url`, handles, compositors and playgrounds).
+The `HotFn` boundary calls the app's typed view and callback function pointers. The headless
 PNG encoder uses its fastest lossless mode; normal snapshots keep their existing encoding.
 
 The launcher currently assumes the maintainers' remote build-worker setup: it runs
@@ -2976,7 +2978,7 @@ only the members it staged, so other members never need to build. If the app's w
 `[profile.rune-hot]`, the launcher passes one with `cargo --config`.
 
 The launcher sets `RUNE_HOT=1`, which turns live editing on like `--hot` without any
-argv plumbing. All entry points dispatch through the patch table: `App::run`/`try_run`,
+argv plumbing. All entry points dispatch through the patch table: `rune::run`, `App::run`/`try_run`,
 `run_windows`, `run_windows_with`, `run_windows_with_args` and `WindowSpec::from_app`.
 A process holds one devserver connection, and each patch reaches every window and overlay,
 hidden ones included: a hidden launcher rebuilds before it shows again.

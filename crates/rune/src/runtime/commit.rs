@@ -44,7 +44,7 @@ pub(crate) struct CommitState {
     last_commit_clock: f64,
     /// The last view's `Cx::foreground` and `Cx::focus_ring`, for rows built after it and the
     /// rings painted until the next.
-    pub(in crate::runtime) defaults: cx::ViewDefaults,
+    pub(crate) defaults: cx::ViewDefaults,
     reuse: relayout::Reuse,
     pub(in crate::runtime) layout: LayoutEngine,
     memo: crate::memo::MemoCache,

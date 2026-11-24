@@ -36,14 +36,11 @@ use event_log::log_event;
 
 #[inline(always)]
 pub(crate) fn handler_state<S: 'static>(state: &mut S) -> &mut dyn Any {
-    #[cfg(feature = "hot")]
-    if std::any::TypeId::of::<S>() == std::any::TypeId::of::<crate::hot::HostState>() {
-        return (state as &mut dyn Any).downcast_mut::<crate::hot::HostState>().unwrap().value.as_mut();
-    }
     state
 }
 
-/// Calls an app's `poll` or `on_key`. With `rune/hot` it goes through subsecond's jump table,
+/// Calls an app's runtime callback (`poll`, `on_key`, `on_focus`, `on_mods`,
+/// `on_visibility`, `on_ime`). With `rune/hot` it goes through subsecond's jump table,
 /// so a patched body runs instead of the pointer captured at startup, and a panicking patch
 /// falls back to that pointer.
 macro_rules! app_call {
@@ -58,10 +55,6 @@ macro_rules! app_call {
 
 #[inline(always)]
 pub(crate) fn handler_state_ref<S: 'static>(state: &S) -> &dyn Any {
-    #[cfg(feature = "hot")]
-    if std::any::TypeId::of::<S>() == std::any::TypeId::of::<crate::hot::HostState>() {
-        return (state as &dyn Any).downcast_ref::<crate::hot::HostState>().unwrap().value.as_ref();
-    }
     state
 }
 
