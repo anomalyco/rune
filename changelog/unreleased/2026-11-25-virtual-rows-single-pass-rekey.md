@@ -1,0 +1,1 @@
+- Virtual lists (`El::virtual_rows`, `El::virtualize`): deduplicating duplicate keys and building the row index now run in a single pass without a separate duplicate-check set or extra hash pass, initial loads skip empty-list probes, reorder and key-equality checks fuse into the rekey pass, and anchor lookup stops at the viewport end.

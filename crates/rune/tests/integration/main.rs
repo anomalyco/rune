@@ -104,4 +104,5 @@ mod text_case;
 mod theme_blend;
 mod tx_blur;
 mod virtual_rows_append;
+mod virtual_rows_rekey;
 mod window_panel_compat;

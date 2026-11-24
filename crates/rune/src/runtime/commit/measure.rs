@@ -355,35 +355,34 @@ impl Measurement<'_> {
         } else if let Some(anchor) = appended {
             anchor
         } else {
-            let mut keys: Vec<_> = match source {
+            let keys: Vec<_> = match source {
                 Some(rows) => (0..rows.count).map(|i| (rows.key)(state, i).into_owned()).collect(),
                 None => el.children.iter().map(|c| c.key.clone().expect("virtual rows require stable keys")).collect(),
             };
-            // Rows sharing a key would share a height and a node: rename the later ones, as
-            // the view's siblings are, so the list still lays out.
-            let renamed = crate::input::key_diagnostics::rename_duplicates(keys.iter_mut());
+            // A reorder keeps each row where it was drawn, by its offset or by sliding it
+            // (`row_reorder.rs`). Anchoring to the formerly first row as it changes slots
+            // would scroll the entire list a second time. Inserts/removals still preserve
+            // the reader's anchor, and so does a reorder that lands at once.
+            let anchor_offset = (!pinned && !v.passed()).then_some(offset);
+            let slides = !tx.commit.snaps() && !tx.commit.lands() && !tx.relayout && !self.reduced_motion;
+            let skip_anchor_on_reorder = anchor_offset.is_some() && keys.len() == v.keys.len()
+                && (slides || list.is_some_and(|list| self.nodes.iter().any(|n| n.vis.offset != [0.0; 2] && n.parent == Some(list))));
+            // Deduplicate and index in one pass so unique lists pay no extra duplicate set.
+            let (anchor, renamed) = v.set_keys_deduping(keys, self.commits, anchor_offset, skip_anchor_on_reorder);
             if !renamed.is_empty() {
                 let duplicates: Vec<_> = renamed.iter().map(|(_, key)| {
-                    let key = key.clone();
                     let message = format!("duplicate virtual row key {key:?} under {path:?}; give rows unique keys");
-                    crate::input::key_diagnostics::Duplicate { key, message }
+                    crate::input::key_diagnostics::Duplicate { key: key.clone(), message }
                 }).collect();
                 if source.is_none() {
-                    renamed_children = renamed.iter().map(|(i, _)| (*i, keys[*i].clone())).collect();
+                    renamed_children = renamed.iter().map(|(i, _)| (*i, v.keys[*i].clone())).collect();
                 }
                 match self.key_warnings.as_mut() {
                     Some(out) => out.extend(duplicates.into_iter().map(|d| d.message)),
                     None => crate::input::key_diagnostics::warn_once(&duplicates),
                 }
             }
-            // A reorder keeps each row where it was drawn, by its offset or by sliding it
-            // (`row_reorder.rs`). Anchoring to the formerly first row as it changes slots
-            // would scroll the entire list a second time. Inserts/removals still preserve
-            // the reader's anchor, and so does a reorder that lands at once.
-            let slides = !tx.commit.snaps() && !tx.commit.lands() && !tx.relayout && !self.reduced_motion;
-            let reorder = keys.len() == v.keys.len() && keys.iter().all(|key| v.has(key))
-                && (slides || list.is_some_and(|list| self.nodes.iter().any(|n| n.vis.offset != [0.0; 2] && n.parent == Some(list))));
-            v.set_keys(keys, self.commits, (!pinned && !reorder && !v.passed()).then_some(offset))
+            anchor
         };
         // Apply the new estimate after finding the anchor against the previous heights, so
         // `anchor_delta` compensates the scroll offset for unmeasured rows above the viewport.
