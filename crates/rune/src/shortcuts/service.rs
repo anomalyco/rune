@@ -1,4 +1,4 @@
-use super::{Shortcut, ShortcutError, ShortcutId, Sink, NativeBackend};
+use super::{NativeBackend, Shortcut, ShortcutDetails, ShortcutError, ShortcutId, Sink};
 #[cfg(test)]
 use super::Backend;
 use crate::{Tx, app::Shared, runtime::Waker};
@@ -16,7 +16,7 @@ mod machine;
 type Handler<S> = Arc<dyn Fn(&mut S, &mut Tx) + Send + Sync>;
 /// The host routing handed a registration to (0 until then), so a close clears only the hosts it ends.
 type Stamp = Arc<AtomicU64>;
-type Pending<S> = (Result<Shortcut, ShortcutError>, Handler<S>);
+type Pending<S> = (Result<Shortcut, ShortcutError>, ShortcutDetails, Handler<S>);
 #[cfg(not(target_os = "linux"))]
 type Job = Box<dyn FnOnce(&mut Engine) + Send>;
 #[cfg(target_os = "linux")]
@@ -165,14 +165,69 @@ struct Engine {
 }
 
 impl Engine {
+    #[cfg(test)]
     fn register(&mut self, id: ShortcutId, shortcut: Shortcut) -> Result<(), ShortcutError> {
+        self.register_with(id, shortcut, ShortcutDetails::default())
+    }
+
+    fn register_with(&mut self, id: ShortcutId, shortcut: Shortcut, details: ShortcutDetails) -> Result<(), ShortcutError> {
         // Another App in this process holds it; some backends (the portal) wouldn't refuse.
         let claimed = !matches!(self.bindings, Bindings::Virtual(_)) && NATIVE.lock().unwrap().iter().any(|(_, s, _)| s == &shortcut);
-        self.apply(BindEvent::Register { id, shortcut, claimed })
+        self.apply(BindEvent::Register { id, shortcut, claimed }, &details)
+    }
+
+    fn register_batch(&mut self, items: Vec<(ShortcutId, Shortcut, ShortcutDetails)>) -> Vec<Result<(), ShortcutError>> {
+        if items.is_empty() { return Vec::new(); }
+        if items.len() == 1 {
+            let (id, shortcut, details) = items.into_iter().next().unwrap();
+            return vec![self.register_with(id, shortcut, details)];
+        }
+        if matches!(self.bindings, Bindings::Virtual(_)) {
+            return items.into_iter().map(|(id, shortcut, details)| self.register_with(id, shortcut, details)).collect();
+        }
+        let mut results = vec![Ok(()); items.len()];
+        let mut to_bind: Vec<(usize, ShortcutId, Shortcut, ShortcutDetails)> = Vec::new();
+        {
+            let native_claims = NATIVE.lock().unwrap();
+            for (idx, (id, shortcut, details)) in items.into_iter().enumerate() {
+                let duplicate = native_claims.iter().any(|(_, s, _)| s == &shortcut)
+                    || self.bindings.find(&shortcut).is_some()
+                    || to_bind.iter().any(|(_, _, s, _)| s == &shortcut);
+                if duplicate {
+                    results[idx] = Err(ShortcutError::Conflict);
+                } else {
+                    to_bind.push((idx, id, shortcut, details));
+                }
+            }
+        }
+        if to_bind.is_empty() { return results; }
+        if matches!(self.bindings, Bindings::Disconnected) {
+            match (self.connect)(self.wayland, self.sink.clone()) {
+                Ok(native) => self.bindings = Bindings::Connected { native, registrations: HashMap::new() },
+                Err(error) => {
+                    for (idx, ..) in to_bind { results[idx] = Err(error.clone()); }
+                    return results;
+                }
+            }
+        }
+        let batch_items: Vec<(ShortcutId, Shortcut, ShortcutDetails)> =
+            to_bind.iter().map(|(_, id, s, d)| (*id, s.clone(), d.clone())).collect();
+        let outcomes = self.native().register_batch(&batch_items);
+        let empty = ShortcutDetails::default();
+        for ((idx, id, shortcut, _), outcome) in to_bind.into_iter().zip(outcomes) {
+            match outcome {
+                Ok(()) => { let _ = self.apply(BindEvent::Bound { id, shortcut }, &empty); }
+                Err(error) => results[idx] = Err(error),
+            }
+        }
+        if matches!(&self.bindings, Bindings::Connected { registrations, .. } if registrations.is_empty()) {
+            let _ = self.apply(BindEvent::Rejected(ShortcutError::Unsupported), &empty);
+        }
+        results
     }
 
     fn unregister(&mut self, id: ShortcutId) -> Result<(), ShortcutError> {
-        self.apply(BindEvent::Unregister(id))
+        self.apply(BindEvent::Unregister(id), &ShortcutDetails::default())
     }
 
     /// Who holds `shortcut`: this App, another App in this process, or the platform.
@@ -185,7 +240,7 @@ impl Engine {
     }
 
     fn release(&mut self) {
-        self.apply(BindEvent::Release).ok();
+        self.apply(BindEvent::Release, &ShortcutDetails::default()).ok();
     }
 
     fn native(&mut self) -> &mut NativeBackend {
@@ -194,21 +249,21 @@ impl Engine {
     }
 
     /// Steps the bindings and carries out what they ask for, answering with what came of it.
-    fn apply(&mut self, event: BindEvent<NativeBackend>) -> Result<(), ShortcutError> {
+    fn apply(&mut self, event: BindEvent<NativeBackend>, details: &ShortcutDetails) -> Result<(), ShortcutError> {
         let mut answer = Ok(());
         for effect in step_bindings(&mut self.bindings, event) {
             match effect {
                 BindEffect::Refuse(error) => answer = Err(error),
                 BindEffect::Connect { id, shortcut } => answer = match (self.connect)(self.wayland, self.sink.clone()) {
-                    Ok(native) => self.apply(BindEvent::Opened { native, id, shortcut }),
+                    Ok(native) => self.apply(BindEvent::Opened { native, id, shortcut }, details),
                     Err(error) => Err(error),
                 },
-                BindEffect::Bind { id, shortcut } => answer = match self.native().register(id, &shortcut) {
-                    Ok(()) => self.apply(BindEvent::Bound { id, shortcut }),
-                    Err(error) => self.apply(BindEvent::Rejected(error)),
+                BindEffect::Bind { id, shortcut } => answer = match self.native().register_with(id, &shortcut, details) {
+                    Ok(()) => self.apply(BindEvent::Bound { id, shortcut }, details),
+                    Err(error) => self.apply(BindEvent::Rejected(error), details),
                 },
                 BindEffect::Unbind(id) => answer = match self.native().unregister(id) {
-                    Ok(()) => self.apply(BindEvent::Unbound(id)),
+                    Ok(()) => self.apply(BindEvent::Unbound(id), details),
                     Err(error) => Err(error),
                 },
                 BindEffect::Claim { id, shortcut } => NATIVE.lock().unwrap().push((id, shortcut, self.title)),
@@ -236,19 +291,28 @@ impl Control {
 
     /// Runs a call, stamping it with the latest host while routing can't change.
     fn call_stamped<T: Send + 'static>(&self, stamp: Option<Stamp>, f: impl FnOnce(&mut Engine) -> Result<T, ShortcutError> + Send + 'static) -> Result<T, ShortcutError> {
+        let stamps: Vec<Stamp> = stamp.into_iter().collect();
+        self.call_stamped_many(&stamps, f)
+    }
+
+    /// Runs a call, stamping every registration in a batch with the latest host while routing can't change.
+    fn call_stamped_many<T: Send + 'static>(&self, stamps: &[Stamp], f: impl FnOnce(&mut Engine) -> Result<T, ShortcutError> + Send + 'static) -> Result<T, ShortcutError> {
         let slot = Arc::new(Mutex::new(None));
         let out = slot.clone();
-        self.call_erased(stamp, Box::new(move |engine| {
+        self.call_erased(stamps, Box::new(move |engine| {
             *out.lock().unwrap() = Some(f(engine));
         }))?;
         slot.lock().unwrap().take().unwrap_or(Err(ShortcutError::NotRunning))
     }
 
-    fn call_erased(&self, stamp: Option<Stamp>, run: Box<dyn FnOnce(&mut Engine) + Send>) -> Result<(), ShortcutError> {
+    fn call_erased(&self, stamps: &[Stamp], run: Box<dyn FnOnce(&mut Engine) + Send>) -> Result<(), ShortcutError> {
         let mut route = self.attachment.lock().unwrap();
         let call = AttachEvent::Call { from: std::thread::current().id(), shared: cfg!(target_os = "linux") };
         let effect = step_attachment(&mut route, call).into_iter().next();
-        if let Some(stamp) = stamp { stamp.store(self.hosts.load(Ordering::Relaxed), Ordering::Relaxed); }
+        if !stamps.is_empty() {
+            let host = self.hosts.load(Ordering::Relaxed);
+            for stamp in stamps { stamp.store(host, Ordering::Relaxed); }
+        }
         #[cfg(target_os = "linux")]
         {
             let Some(AttachEffect::Run { .. }) = effect else { return Err(ShortcutError::NotRunning) };
@@ -303,8 +367,16 @@ impl HubCore {
         Ok((id, Stamp::default()))
     }
 
-    fn commit_register(&self, id: ShortcutId, shortcut: Shortcut, stamp: Stamp) -> Result<(), ShortcutError> {
-        self.control.call_stamped(Some(stamp), move |engine| engine.register(id, shortcut))
+    fn commit_register(&self, id: ShortcutId, shortcut: Shortcut, details: ShortcutDetails, stamp: Stamp) -> Result<(), ShortcutError> {
+        self.control.call_stamped(Some(stamp), move |engine| engine.register_with(id, shortcut, details))
+    }
+
+    fn commit_register_batch(
+        &self,
+        items: Vec<(ShortcutId, Shortcut, ShortcutDetails)>,
+        stamps: &[Stamp],
+    ) -> Result<Vec<Result<(), ShortcutError>>, ShortcutError> {
+        self.control.call_stamped_many(stamps, move |engine| Ok(engine.register_batch(items)))
     }
 
     fn unregister_engine(&self, id: ShortcutId, remove: Box<dyn FnOnce() + Send>) -> Result<(), ShortcutError> {
@@ -344,14 +416,14 @@ impl HubCore {
 }
 
 impl<S: 'static> Hub<S> {
-    pub(super) fn pending(&self, shortcut: Result<Shortcut, ShortcutError>, handler: Handler<S>) {
-        self.pending.lock().unwrap().push((shortcut, handler));
+    pub(super) fn pending(&self, shortcut: Result<Shortcut, ShortcutError>, details: ShortcutDetails, handler: Handler<S>) {
+        self.pending.lock().unwrap().push((shortcut, details, handler));
     }
 
-    pub(super) fn register(&self, shortcut: Shortcut, handler: Handler<S>) -> Result<ShortcutId, ShortcutError> {
+    pub(super) fn register(&self, shortcut: Shortcut, details: ShortcutDetails, handler: Handler<S>) -> Result<ShortcutId, ShortcutError> {
         let (id, stamp) = self.core.prepare_register(&shortcut)?;
         self.handlers.lock().unwrap().insert(id, (stamp.clone(), handler));
-        if let Err(e) = self.core.commit_register(id, shortcut, stamp) {
+        if let Err(e) = self.core.commit_register(id, shortcut, details, stamp) {
             self.handlers.lock().unwrap().remove(&id);
             return Err(e);
         }
@@ -364,10 +436,47 @@ impl<S: 'static> Hub<S> {
     }
 
     fn register_pending(&self) {
-        for (shortcut, handler) in std::mem::take(&mut *self.pending.lock().unwrap()) {
-            if let Err(error) = shortcut.and_then(|s| self.register(s, handler)) {
-                self.core.record_error(error);
+        let pending = std::mem::take(&mut *self.pending.lock().unwrap());
+        if pending.is_empty() { return; }
+        let mut outcomes: Vec<Option<ShortcutError>> = vec![None; pending.len()];
+        let mut ready_indices = Vec::new();
+        let mut ready_ids = Vec::new();
+        let mut ready_items = Vec::new();
+        let mut ready_stamps = Vec::new();
+        for (idx, (shortcut, details, handler)) in pending.into_iter().enumerate() {
+            match shortcut.and_then(|s| self.core.prepare_register(&s).map(|(id, stamp)| (id, stamp, s))) {
+                Ok((id, stamp, s)) => {
+                    self.handlers.lock().unwrap().insert(id, (stamp.clone(), handler));
+                    ready_indices.push(idx);
+                    ready_ids.push(id);
+                    ready_items.push((id, s, details));
+                    ready_stamps.push(stamp);
+                }
+                Err(error) => outcomes[idx] = Some(error),
             }
+        }
+        if !ready_items.is_empty() {
+            match self.core.commit_register_batch(ready_items, &ready_stamps) {
+                Ok(results) => {
+                    let mut handlers = self.handlers.lock().unwrap();
+                    for ((idx, id), result) in ready_indices.into_iter().zip(ready_ids).zip(results) {
+                        if let Err(error) = result {
+                            handlers.remove(&id);
+                            outcomes[idx] = Some(error);
+                        }
+                    }
+                }
+                Err(error) => {
+                    let mut handlers = self.handlers.lock().unwrap();
+                    for (idx, id) in ready_indices.into_iter().zip(ready_ids) {
+                        handlers.remove(&id);
+                        outcomes[idx] = Some(error.clone());
+                    }
+                }
+            }
+        }
+        for error in outcomes.into_iter().flatten() {
+            self.core.record_error(error);
         }
     }
 }

@@ -19,6 +19,8 @@ mod x11;
 mod x11_repeat;
 #[cfg(all(target_os = "linux", feature = "dbus"))]
 mod wayland;
+#[cfg(any(all(target_os = "linux", feature = "dbus"), test))]
+mod wayland_session;
 
 pub use parse::Shortcut;
 pub(crate) use service::{Guard, Hub, HubCore};
@@ -57,9 +59,42 @@ impl std::fmt::Display for ShortcutError {
 }
 impl std::error::Error for ShortcutError {}
 
+/// Optional desktop metadata for a global shortcut (used by Wayland's GlobalShortcuts portal).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct ShortcutDetails {
+    pub(super) id: Option<String>,
+    pub(super) description: Option<String>,
+}
+
+impl ShortcutDetails {
+    pub(super) fn named(id: impl Into<String>, description: impl Into<String>) -> Self {
+        let trim = |s: String| {
+            let trimmed = s.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_owned())
+        };
+        Self { id: trim(id.into()), description: trim(description.into()) }
+    }
+
+    #[cfg(any(all(target_os = "linux", feature = "dbus"), test))]
+    pub(super) fn portal_id(&self, shortcut: &Shortcut) -> String {
+        self.id.clone().unwrap_or_else(|| shortcut.to_string())
+    }
+
+    #[cfg(any(all(target_os = "linux", feature = "dbus"), test))]
+    pub(super) fn portal_description(&self, shortcut: &Shortcut) -> String {
+        self.description.clone().unwrap_or_else(|| format!("Shortcut {shortcut}"))
+    }
+}
+
 type Sink = Arc<dyn Fn(ShortcutId, Option<String>) + Send + Sync>;
 trait Backend {
     fn register(&mut self, id: ShortcutId, shortcut: &Shortcut) -> Result<(), ShortcutError>;
+    fn register_with(&mut self, id: ShortcutId, shortcut: &Shortcut, _details: &ShortcutDetails) -> Result<(), ShortcutError> {
+        self.register(id, shortcut)
+    }
+    fn register_batch(&mut self, items: &[(ShortcutId, Shortcut, ShortcutDetails)]) -> Vec<Result<(), ShortcutError>> {
+        items.iter().map(|(id, shortcut, details)| self.register_with(*id, shortcut, details)).collect()
+    }
     fn unregister(&mut self, id: ShortcutId) -> Result<(), ShortcutError>;
 }
 
@@ -181,8 +216,29 @@ impl<S: 'static> crate::App<S> {
     /// Register when the app starts, on the same thread and state as its windows.
     /// Errors are reported once to stderr and retained by `AppHandle::take_shortcut_errors`.
     /// Headless scripts register virtually, without connecting to the desktop.
+    ///
+    /// On Wayland, all startup shortcuts bind together in one GlobalShortcuts portal session.
+    /// Each shortcut defaults to its canonical accelerator string as its portal id and
+    /// `"Shortcut <chord>"` as its description; use [`Self::global_shortcut_named`] to give it
+    /// a custom stable id and user-facing description.
     pub fn global_shortcut(self, accelerator: &str, handler: fn(&mut S, &mut crate::Tx)) -> Self {
-        self.shared.shortcuts.pending(accelerator.parse(), Arc::new(handler));
+        self.shared.shortcuts.pending(accelerator.parse(), ShortcutDetails::default(), Arc::new(handler));
+        self
+    }
+
+    /// Register a startup global shortcut with a stable desktop `id` and a user-facing
+    /// `description` shown in Wayland's GlobalShortcuts consent dialog and desktop Settings.
+    ///
+    /// A blank `id` falls back to the canonical accelerator string; a blank `description` falls
+    /// back to `"Shortcut <chord>"`. Other platforms ignore `id` and `description`.
+    pub fn global_shortcut_named(
+        self,
+        accelerator: &str,
+        id: impl Into<String>,
+        description: impl Into<String>,
+        handler: fn(&mut S, &mut crate::Tx),
+    ) -> Self {
+        self.shared.shortcuts.pending(accelerator.parse(), ShortcutDetails::named(id, description), Arc::new(handler));
         self
     }
 
@@ -202,7 +258,20 @@ impl<S: 'static> crate::AppHandle<S> {
     /// use a worker for Wayland consent dialogs to keep the UI responsive. Portal consent is
     /// bounded to two minutes and the user may choose a different trigger.
     pub fn register_shortcut(&self, shortcut: Shortcut, handler: impl Fn(&mut S, &mut crate::Tx) + Send + Sync + 'static) -> Result<ShortcutId, ShortcutError> {
-        self.shared.shortcuts.register(shortcut, Arc::new(handler))
+        self.shared.shortcuts.register(shortcut, ShortcutDetails::default(), Arc::new(handler))
+    }
+
+    /// Register a shortcut at runtime with a stable desktop `id` and user-facing `description`
+    /// for Wayland's GlobalShortcuts portal. A blank `id` falls back to the canonical chord and
+    /// a blank `description` falls back to `"Shortcut <chord>"`.
+    pub fn register_shortcut_named(
+        &self,
+        shortcut: Shortcut,
+        id: impl Into<String>,
+        description: impl Into<String>,
+        handler: impl Fn(&mut S, &mut crate::Tx) + Send + Sync + 'static,
+    ) -> Result<ShortcutId, ShortcutError> {
+        self.shared.shortcuts.register(shortcut, ShortcutDetails::named(id, description), Arc::new(handler))
     }
 
     /// Release a registration owned by this app. Already queued activations become no-ops.

@@ -77,9 +77,17 @@ even if other threads retain `AppHandle`s.
   unavailable or the `dbus` feature is off.
   The portal may ask for permission or let the user choose another trigger;
   `preferred_trigger` is a preference, not an exclusive-grab guarantee. Cancellation
-  is `PermissionDenied`, not `Conflict`. Each shortcut owns a portal session so
-  unregister also works with version 1. The activation token is available only
-  during its handler, through `Tx::activation_token()`.
+  is `PermissionDenied`, not `Conflict`. One portal session holds the app's
+  entire active set of shortcuts: startup `.global_shortcut` /
+  `.global_shortcut_named` calls bind together in a single `BindShortcuts` call so
+  GNOME and KDE prompt once and remember the set across launches. Each shortcut
+  defaults to its canonical accelerator string as its stable portal id (or the
+  explicit id and description from `global_shortcut_named` /
+  `register_shortcut_named`). Registering or unregistering a shortcut at runtime
+  closes the current portal session and opens a fresh session with the new full
+  set (or closes the session without rebinding when removing the last shortcut),
+  so register all startup shortcuts up front on Wayland. The activation token is
+  available only during its handler, through `Tx::activation_token()`.
 
 Registration is synchronous, including portal consent, with a two-minute bound.
 Register startup shortcuts before showing windows; use a worker thread for
