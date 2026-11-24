@@ -241,6 +241,22 @@ impl VideoLayers {
     /// Keeps the swap chain premultiplied (`hold`).
     pub(in crate::window) fn hold_premultiplied(&mut self, on: bool) { self.hold = on; }
 
+    /// Whether the window must draw and run [`Self::frame`] even when the UI and surface stamps
+    /// match what was last presented: a clip is still moving onto its layer, a swap-chain alpha
+    /// switch is queued, or a layered clip stopped running or showing and needs `unlayer`.
+    pub(in crate::window) fn needs_frame(&self) -> bool {
+        self.needs_frame_with(crate::video::layer_showing)
+    }
+
+    fn needs_frame_with(&self, showing: impl Fn(&Arc<crate::video::Shared>, (u32, u32)) -> bool) -> bool {
+        self.pending_alpha.is_some()
+            || self.entries.iter().any(|e| match e.phase {
+                Phase::Drawn => false,
+                Phase::Placing { .. } => true,
+                Phase::Layered { size, .. } => !showing(&e.video, size),
+            })
+    }
+
     /// The alpha the UI's swap chain should switch to before the next frame, once.
     pub(in crate::window) fn take_alpha(&mut self) -> Option<bool> {
         self.pending_alpha.take()

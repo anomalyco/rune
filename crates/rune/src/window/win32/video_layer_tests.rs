@@ -42,3 +42,45 @@ fn a_visual_that_cant_be_made_leaves_none_kept() {
     assert_eq!(made.err().as_deref(), Some("no surface"));
     assert!(removed.get() && kept.is_none());
 }
+
+fn test_entry(phase: Phase) -> Entry {
+    let player = crate::Player::file("missing.mp4");
+    let video = player.surface().video().expect("player surface carries video");
+    Entry {
+        key: player.surface().key(),
+        video,
+        phase,
+        last: None,
+        isolated: false,
+        visual: None,
+        logged: None,
+    }
+}
+
+#[test]
+fn needs_frame_flags_placing_pending_alpha_and_stopped_layered_clips() {
+    let mut layers = VideoLayers::default();
+    assert!(!layers.needs_frame(), "empty layers need no frame");
+
+    layers.pending_alpha = Some(true);
+    assert!(layers.needs_frame(), "pending swap-chain alpha change needs a frame");
+    layers.pending_alpha = None;
+
+    layers.entries.push(test_entry(Phase::Drawn));
+    assert!(!layers.needs_frame(), "a Drawn clip needs no extra layer frame");
+
+    layers.entries[0].phase = Phase::Placing { size: (640, 360) };
+    assert!(layers.needs_frame(), "a Placing clip must run VideoLayers::frame");
+
+    layers.entries[0].phase = Phase::Layered { size: (640, 360), at: (0, 0) };
+    assert!(
+        !layers.needs_frame_with(|_, size| size == (640, 360)),
+        "a Layered clip that is still running and showing at its size needs no frame"
+    );
+    assert!(
+        layers.needs_frame_with(|_, _| false),
+        "a Layered clip that stopped running or showing needs a frame to unlayer"
+    );
+    // The real Player::file handle is idle (not playing), so needs_frame() itself must return true.
+    assert!(layers.needs_frame(), "a layered clip that is no longer playing marks needs_frame");
+}

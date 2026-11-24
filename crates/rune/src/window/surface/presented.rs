@@ -22,6 +22,7 @@ pub(in crate::window) fn composed<S: 'static>(comp: Option<&dyn Compositor<S>>) 
 /// differently from the same instances.
 pub(crate) struct Presented {
     instances: Vec<crate::render::Instance>,
+    surfaces: Vec<crate::native_surface::SurfaceStamp>,
     clear: [f32; 4],
     size: (u32, u32),
     format: wgpu::TextureFormat,
@@ -64,10 +65,16 @@ impl Presented {
         let (clear, size, srgb, scale, transparent) = (rt.clear_color(), (config.width, config.height), rt.srgb_blend(), rt.env.scale, rt.transparent);
         let (atlas_rasterized, atlas_resets) = (rt.text.atlas.rasterized(), rt.text.atlas.resets());
         let p = this.get_or_insert_with(|| Self {
-            instances: Vec::new(), clear, size, format: config.format, srgb, scale, transparent, composed,
+            instances: Vec::new(), surfaces: Vec::new(), clear, size, format: config.format, srgb, scale, transparent, composed,
             atlas_rasterized, atlas_resets,
         });
-        if composed { p.instances.clear() } else { p.instances.clone_from(&rt.instances) }
+        p.surfaces.clear();
+        if composed {
+            p.instances.clear();
+        } else {
+            p.instances.clone_from(&rt.instances);
+            p.surfaces.extend(rt.surfaces.iter().map(crate::native_surface::SurfaceDraw::stamp));
+        }
         (p.clear, p.size, p.format, p.srgb, p.scale, p.transparent, p.composed, p.atlas_rasterized, p.atlas_resets) =
             (clear, size, config.format, srgb, scale, transparent, composed, atlas_rasterized, atlas_resets);
     }
@@ -88,9 +95,9 @@ impl Presented {
             && !super::pacing::timer_wants_frame_core(rt, next_tick) && self.same_core(rt, config)
     }
 
-    /// Whether `rt`'s built frame draws what this one did: the same instances into the same
-    /// surface, with no glyph or image upload waiting, and nothing drawn outside the instances
-    /// (a compositor, `SurfaceDraw` content, native materials).
+    /// Whether `rt`'s built frame draws what this one did: the same instances and
+    /// `SurfaceDraw` stamps into the same surface, with no glyph or image upload waiting, and
+    /// nothing drawn outside them (a compositor, native materials).
     #[cfg(test)]
     #[inline(always)]
     pub(in crate::window) fn same<S: 'static>(&self, rt: &Runtime<S>, config: &wgpu::SurfaceConfiguration) -> bool {
@@ -101,10 +108,16 @@ impl Presented {
         let atlas = &rt.text.atlas;
         !self.composed && self.size == (config.width, config.height) && self.format == config.format && self.srgb == rt.srgb_blend()
             && self.scale == rt.env.scale && self.clear == rt.clear_color() && self.transparent == rt.transparent
-            && rt.surfaces.is_empty() && rt.paint.materials().is_empty()
+            && rt.paint.materials().is_empty()
+            && self.surfaces.len() == rt.surfaces.len()
+            && self.surfaces.iter().zip(&rt.surfaces).all(|(shown, draw)| *shown == draw.stamp())
             && self.atlas_rasterized == atlas.rasterized() && self.atlas_resets == atlas.resets()
             && atlas.dirty.is_none() && atlas.pages.iter().all(|p| p.dirty.is_none()) && !atlas.has_pending_fills()
             && rt.images.pages.iter().all(|p| p.dirty.is_none())
             && bytemuck::cast_slice::<_, u8>(&self.instances) == bytemuck::cast_slice::<_, u8>(&rt.instances)
     }
 }
+
+#[cfg(test)]
+#[path = "presented_tests.rs"]
+mod tests;

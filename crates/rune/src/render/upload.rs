@@ -353,6 +353,13 @@ impl Renderer {
         self.surfaces_building = Some(crate::native_surface::SurfaceRenderer::build(device, self.format, Box::new(done)));
     }
 
+    /// Whether the native-surface pipeline is still compiling (`build_surfaces`), so the frame
+    /// skipped drawing surfaces and must not be recorded as a presented resting frame.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn surfaces_pending(&self) -> bool {
+        self.surfaces.is_none() && self.surfaces_building.is_some()
+    }
+
     /// Punches these native surfaces' places out of the window's pixels from the next
     /// `prepare_surfaces` on, for clips shown on their own layer underneath (Windows).
     #[cfg(target_os = "windows")]

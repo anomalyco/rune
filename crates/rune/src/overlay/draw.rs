@@ -421,8 +421,9 @@ impl FrameHost for OverlayFrame<'_> {
         let next_tick = None;
         self.core.idle = idle_after(self.app.rt(), info.animating, next_tick);
         self.core.runtime_idle = !self.prewarm && idle_after(self.app.rt(), info.runtime_animating, next_tick);
+        let surfaces_pending = self.core.renderer.as_ref().is_some_and(crate::render::Renderer::surfaces_pending);
         let rt = self.app.rt();
-        self.core.quiet.presented_frame(!self.prewarm && self.core.idle && !self.app.has_compositor(), |slot| {
+        self.core.quiet.presented_frame(!self.prewarm && self.core.idle && !self.app.has_compositor() && !surfaces_pending, |slot| {
             crate::window::Presented::record_core(slot, rt, &live.config, false);
         });
         if !self.prewarm { self.core.backoff.step(crate::window::BackoffEvent::Presented); }

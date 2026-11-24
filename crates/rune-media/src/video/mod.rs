@@ -83,6 +83,8 @@ pub(crate) struct Backend {
     #[cfg(target_os = "windows")]
     layer: fn(&Arc<Shared>, Option<(u32, u32)>) -> LayerStatus,
     #[cfg(target_os = "windows")]
+    layer_showing: fn(&Arc<Shared>, (u32, u32)) -> bool,
+    #[cfg(target_os = "windows")]
     unlayer: fn(&Arc<Shared>, &NativeSurface),
 }
 
@@ -95,6 +97,8 @@ static BACKEND: Backend = Backend {
     #[cfg(target_os = "windows")]
     layer: backend::layer,
     #[cfg(target_os = "windows")]
+    layer_showing: backend::layer_showing,
+    #[cfg(target_os = "windows")]
     unlayer: backend::unlayer,
 };
 
@@ -102,6 +106,12 @@ static BACKEND: Backend = Backend {
 #[cfg(target_os = "windows")]
 #[doc(hidden)]
 pub fn layer(shared: &Arc<Shared>, ask: Option<(u32, u32)>) -> LayerStatus { (shared.backend.layer)(shared, ask) }
+
+/// Windows: read-only check of whether shared's video is still running and showing on its
+/// compositor layer at `size`, without changing the decoder's ask or layer state.
+#[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub fn layer_showing(shared: &Arc<Shared>, size: (u32, u32)) -> bool { (shared.backend.layer_showing)(shared, size) }
 
 /// Windows: takes shared's video out of its compositor layer, back to surface.
 #[cfg(target_os = "windows")]

@@ -474,13 +474,14 @@ impl FrameHost for CpuWindowFrame<'_> {
         self.host.app.inspect_frame();
         let Some(l) = self.host.win.as_mut() else { return };
         let next_tick = l.next_tick(now).filter(|_| !self.hidden);
+        let surfaces_pending = self.host.gpu.as_ref().is_some_and(|(_, r)| r.surfaces_pending());
         self.host.idle = Presented::settle_core(
             &mut l.presented,
             self.host.app.rt(),
             &l.config,
             info.animating || FrameMove::moving(&self.host.frame_move),
             next_tick,
-            !self.hidden,
+            !self.hidden && !surfaces_pending,
             false,
         );
         // Motion's next frame comes at the display's next refresh: a CPU frame presents at once,

@@ -26,7 +26,16 @@ pub use pipeline::Building;
 pub use rune_image::place;
 pub use rune_image::place::SurfaceFit;
 use rune_core::time::Instant;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
+/// Monotonic revisions across all `NativeSurface` instances, so each new surface and each visible
+/// mutation gets a unique value without holding `Arc<Frame>` alive or risking pointer ABA reuse.
+static NEXT_REVISION: AtomicU64 = AtomicU64::new(1);
+
+fn next_revision() -> u64 {
+    NEXT_REVISION.fetch_add(1, Ordering::Relaxed)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Matrix {
@@ -140,9 +149,9 @@ pub struct FrameTiming {
     pub gpu_end_seconds: Option<f64>,
 }
 pub type FrameObserver = Arc<dyn Fn(FrameTiming) + Send + Sync>;
-#[derive(Default)]
 struct State {
     latest: Option<Arc<Frame>>,
+    revision: u64,
     waker: Option<rune_core::Waker>,
     observer: Option<FrameObserver>,
     timing: Option<FrameTiming>,
@@ -152,6 +161,23 @@ struct State {
     mirrored: bool,
     /// The player feeding this surface, pulled once per frame that draws it.
     video: Option<Arc<crate::video::Shared>>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            latest: None,
+            revision: next_revision(),
+            waker: None,
+            observer: None,
+            timing: None,
+            submitted: 0,
+            completed: 0,
+            error: None,
+            mirrored: false,
+            video: None,
+        }
+    }
 }
 /// Clones share a single bounded slot; pushing never queues frames behind the decoder.
 #[derive(Clone, Default)]
@@ -218,7 +244,11 @@ impl NativeSurface {
     pub fn clear(&self) {
         let (old, wake) = {
             let mut s = self.0.lock().unwrap();
-            (s.latest.take(), s.waker.clone())
+            let old = s.latest.take();
+            if old.is_some() {
+                s.revision = next_revision();
+            }
+            (old, s.waker.clone())
         };
         drop(old);
         if let Some(wake) = wake {
@@ -242,6 +272,7 @@ impl NativeSurface {
                 return;
             }
             s.mirrored = mirrored;
+            s.revision = next_revision();
             s.waker.clone()
         };
         if let Some(wake) = wake {
@@ -338,6 +369,7 @@ impl NativeSurface {
     fn replace(&self, frame: Frame) {
         let (old, wake) = {
             let mut s = self.0.lock().unwrap();
+            s.revision = next_revision();
             (s.latest.replace(Arc::new(frame)), s.waker.clone())
         };
         drop(old); // CoreVideo release never runs under the mailbox lock.
@@ -356,6 +388,12 @@ impl NativeSurface {
     #[doc(hidden)]
     pub fn key(&self) -> usize {
         Arc::as_ptr(&self.0) as usize
+    }
+    /// Monotonic revision of the picture this surface shows (its latest frame and mirror flag),
+    /// unique across surfaces and bumped whenever what draws changes.
+    #[doc(hidden)]
+    pub fn revision(&self) -> u64 {
+        self.0.lock().unwrap().revision
     }
     #[cfg(not(target_arch = "wasm32"))]
     fn report(&self, timing: FrameTiming) {
@@ -419,6 +457,39 @@ pub struct SurfaceDraw {
     /// Packed as `render::Instance::fade`.
     pub fade: [u32; 4],
     pub opacity: f32,
+}
+
+/// Snapshot of what one [`SurfaceDraw`] draws and where, used by windows to skip unchanged
+/// timer frames without keeping the drawn frame alive.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SurfaceStamp {
+    revision: u64,
+    place: place::SurfacePlace,
+    fit: SurfaceFit,
+    before_instance: u32,
+    rect: [u32; 4],
+    radii: [u32; 4],
+    clip: [u32; 4],
+    fade: [u32; 4],
+    opacity: u32,
+}
+
+impl SurfaceDraw {
+    #[doc(hidden)]
+    pub fn stamp(&self) -> SurfaceStamp {
+        SurfaceStamp {
+            revision: self.surface.revision(),
+            place: self.surface.place(),
+            fit: self.fit,
+            before_instance: self.before_instance,
+            rect: self.rect.map(f32::to_bits),
+            radii: self.radii.map(f32::to_bits),
+            clip: self.clip.map(f32::to_bits),
+            fade: self.fade,
+            opacity: self.opacity.to_bits(),
+        }
+    }
 }
 
 /// Independent scalar colour oracle: encoded YCbCr -> linear RGB.
@@ -543,5 +614,62 @@ mod tests {
         for x in [-0.5, -0.0, 0.0, 0.04044, 0.04045, 0.04046, 0.5, 1.0, 1.5] {
             assert_eq!(linear(x, Transfer::Srgb).to_bits(), reference(x).to_bits(), "float {x}");
         }
+    }
+    #[test]
+    fn revision_and_stamp_track_surface_mutations_without_holding_frames() {
+        let a = NativeSurface::new();
+        let b = NativeSurface::new();
+        assert_ne!(a.revision(), b.revision(), "distinct surfaces start with distinct revisions");
+        assert_eq!(a.revision(), a.clone().revision(), "clones share revision");
+
+        let r0 = a.revision();
+        a.clear();
+        assert_eq!(a.revision(), r0, "clearing an empty surface does not bump revision");
+        a.set_mirrored(false);
+        assert_eq!(a.revision(), r0, "redundant set_mirrored(false) does not bump revision");
+
+        a.push_bytes(synthetic(16, 16, 0), 1).unwrap();
+        let r1 = a.revision();
+        assert!(r1 > r0, "push_bytes bumps revision");
+
+        a.set_mirrored(true);
+        let r2 = a.revision();
+        assert!(r2 > r1, "set_mirrored(true) bumps revision");
+        a.set_mirrored(true);
+        assert_eq!(a.revision(), r2, "redundant set_mirrored(true) keeps revision");
+
+        a.clear();
+        let r3 = a.revision();
+        assert!(r3 > r2, "clear on a populated surface bumps revision");
+        a.clear();
+        assert_eq!(a.revision(), r3, "second clear while empty keeps revision");
+
+        a.push_bytes(synthetic(16, 16, 0), 1).unwrap();
+        let r4 = a.revision();
+        assert!(r4 > r3, "re-pushing gets a fresh monotonic revision");
+
+        let base = SurfaceDraw {
+            surface: a.clone(),
+            fit: SurfaceFit::Fit,
+            before_instance: 3,
+            rect: [0.0, 0.0, 100.0, 50.0],
+            radii: [0.0; 4],
+            clip: [0.0, 0.0, 100.0, 50.0],
+            fade: [0; 4],
+            opacity: 1.0,
+        };
+        let s0 = base.stamp();
+        assert_eq!(s0, base.stamp());
+
+        let mut neg_zero = base.clone();
+        neg_zero.rect[0] = -0.0;
+        assert_ne!(s0, neg_zero.stamp(), "stamp compares f32 fields bit-for-bit");
+
+        let mut placed = base.clone();
+        placed.surface = a.placed(place::SurfacePlace { anchor: [place::Align::Start; 2], unscaled: true });
+        assert_ne!(s0, placed.stamp(), "place change changes stamp");
+
+        a.push_bytes(synthetic(16, 16, 1), 2).unwrap();
+        assert_ne!(s0, base.stamp(), "push_bytes changes stamp");
     }
 }

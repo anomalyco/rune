@@ -441,6 +441,8 @@ impl FrameHost for WindowFrame<'_> {
 
     fn is_unchanged(&mut self, info: &StepInfo) -> bool {
         let (Some(l), Some((_, renderer))) = (self.host.win.as_ref(), self.host.gpu.as_ref()) else { return false };
+        #[cfg(target_os = "windows")]
+        if l.native.video_layers.needs_frame() { return false; }
         let now = self.state.now.unwrap_or_else(crate::time::now);
         #[cfg(target_os = "macos")]
         let next_tick = if self.state.deferred { l.native.pacing.as_ref().map(|p| p.tick_after(now)) } else { l.next_tick(now) };
@@ -675,7 +677,8 @@ impl FrameHost for WindowFrame<'_> {
         // A poll asking for the next frame (`wake_after(Duration::ZERO)`) keeps a running display
         // link going; without one its timer waits a frame in `wake_deadline`.
         let next_tick = l.next_tick(now).filter(|_| !self.state.hidden);
-        let rests = !self.state.hidden && !(self.host.trace.is_some() && self.host.args.frames.is_some());
+        let surfaces_pending = self.host.gpu.as_ref().is_some_and(|(_, r)| r.surfaces_pending());
+        let rests = !self.state.hidden && !surfaces_pending && !(self.host.trace.is_some() && self.host.args.frames.is_some());
         self.host.idle = Presented::settle_core(
             &mut l.presented,
             self.host.app.rt(),
