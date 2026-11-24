@@ -630,3 +630,39 @@ fn mappings_fail_once_the_device_is_lost() {
     map(&after, "after");
     assert_eq!(*heard.lock().unwrap(), ["lost", "before failed", "done", "after failed"]);
 }
+
+/// `Device::destroy` marks the native Metal device lost once with `DeviceLostReason::Destroyed`,
+/// fires the device-lost callback (including one registered after `destroy`), and fails buffer
+/// mappings as WebGPU specifies.
+#[test]
+fn destroying_a_device_loses_it_with_destroyed_reason_once_and_fails_mappings() {
+    let (device, _queue) = gpu();
+    let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let into = heard.clone();
+    device.set_device_lost_callback(move |reason, message| into.lock().unwrap().push((reason, message)));
+    device.destroy();
+    device.destroy();
+    assert_eq!(
+        *heard.lock().unwrap(),
+        [(wgpu::DeviceLostReason::Destroyed, "Device was destroyed.".to_owned())]
+    );
+
+    let late = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let into = late.clone();
+    device.set_device_lost_callback(move |reason, message| into.lock().unwrap().push((reason, message)));
+    assert_eq!(
+        *late.lock().unwrap(),
+        [(wgpu::DeviceLostReason::Destroyed, "Device was destroyed.".to_owned())]
+    );
+
+    let buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("after-destroy"),
+        size: 16,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mapped = Arc::new(std::sync::Mutex::new(None));
+    let out = mapped.clone();
+    buf.slice(..).map_async(wgpu::MapMode::Read, move |r| *out.lock().unwrap() = Some(r.is_ok()));
+    assert_eq!(*mapped.lock().unwrap(), Some(false), "mappings on a destroyed device must fail");
+}

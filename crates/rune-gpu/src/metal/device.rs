@@ -19,7 +19,7 @@ use super::encode::{Inert, MetalEncoder, Zeros, zero_shared_texture, zero_textur
 use super::layout::{BindGroup, BindGroupLayout, PipelineLayout};
 use super::resource::{Live, MetalBuffer, MetalSampler, MetalTexture};
 use super::shader::ShaderModule;
-use super::submit::{MetalQueue, State};
+use super::submit::{Callback, MetalQueue, State};
 use super::{Obj, info, send_sync};
 
 /// The device, its one queue, the event every command buffer signals on completion, and the
@@ -51,32 +51,48 @@ pub(crate) struct Shared {
 }
 send_sync!(Shared);
 
-/// The device's loss (`Device::set_device_lost_callback`). Metal reports one only through a
-/// command buffer's error (`submit::failed`).
-#[derive(Default)]
+/// The device's loss (`Device::set_device_lost_callback`), reported either through a failed
+/// command buffer (`submit::failed`) or an explicit `Device::destroy`.
 pub(super) struct Lost {
+    pub(super) reason: wgpu::DeviceLostReason,
     pub(super) message: Option<String>,
     pub(super) callback: Option<BoxDeviceLostCallback>,
 }
 
+impl Default for Lost {
+    fn default() -> Self {
+        Self { reason: wgpu::DeviceLostReason::Unknown, message: None, callback: None }
+    }
+}
+
 impl std::fmt::Debug for Lost {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Lost").field("message", &self.message).finish_non_exhaustive()
+        f.debug_struct("Lost").field("reason", &self.reason).field("message", &self.message).finish_non_exhaustive()
     }
 }
 
 impl Shared {
+    /// Marks the device lost once with `(reason, message)`, enqueues its device-lost callback
+    /// ahead of pending work-done and map callbacks, and dispatches them in order.
+    pub(super) fn mark_lost(&self, reason: wgpu::DeviceLostReason, message: String) {
+        {
+            let mut st = self.state.lock();
+            let mut lost = self.lost.lock();
+            if lost.message.is_some() { return }
+            lost.reason = reason;
+            lost.message = Some(message.clone());
+            if let Some(f) = lost.callback.take() {
+                st.callbacks.push_front((0, Callback::Lost(f, reason, message)));
+            }
+        }
+        self.dispatch();
+    }
+
     /// The device is lost, and its callback hears it once (a command buffer's failure does it
     /// under the state lock: `submit::Shared::pop_completed`).
     #[cfg(test)]
     pub(super) fn lose(&self, message: String) {
-        let callback = {
-            let mut lost = self.lost.lock();
-            if lost.message.is_some() { return }
-            lost.message = Some(message.clone());
-            lost.callback.take()
-        };
-        if let Some(f) = callback { f(wgpu::DeviceLostReason::Unknown, message) }
+        self.mark_lost(wgpu::DeviceLostReason::Unknown, message);
     }
 }
 
@@ -197,8 +213,9 @@ impl DeviceInterface for MetalDevice {
         let mut lost = self.shared.lost.lock();
         match lost.message.clone() {
             Some(message) => {
+                let reason = lost.reason;
                 drop(lost);
-                callback(wgpu::DeviceLostReason::Unknown, message);
+                callback(reason, message);
             }
             None => lost.callback = Some(callback),
         }
@@ -218,5 +235,7 @@ impl DeviceInterface for MetalDevice {
         counters
     }
     fn generate_allocator_report(&self) -> Option<wgpu::AllocatorReport> { None }
-    fn destroy(&self) {}
+    fn destroy(&self) {
+        self.shared.mark_lost(wgpu::DeviceLostReason::Destroyed, "Device was destroyed.".to_owned());
+    }
 }

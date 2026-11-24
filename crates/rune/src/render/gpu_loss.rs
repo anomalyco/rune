@@ -3,9 +3,8 @@
 //! `Device::set_device_lost_callback`; `Surface::configure`'s `DeviceLost` is dropped, so a lost
 //! device would otherwise surface as a panic on the surface's next drawable.
 //!
-//! The native Metal backend's `set_device_lost_callback` is a no-op
-//! (`gpu/metal/device.rs`), so there `is_lost` never becomes true: a Metal device reports its
-//! loss through the command buffer's error instead.
+//! The native Metal backend (`gpu/metal/device.rs`) reports both failed command buffers and
+//! `Device::destroy` through `set_device_lost_callback`, setting `is_lost`.
 
 use super::Gpu;
 #[cfg(not(target_arch = "wasm32"))]

@@ -82,11 +82,11 @@ const IN_FLIGHT: usize = 2;
 /// Emptied keep lists kept for the next encoders, so a steady frame allocates none.
 const SPARE_KEEPS: usize = 8;
 
-enum Callback {
+pub(super) enum Callback {
     Map(BufferMapCallback),
     Done(BoxSubmittedWorkDoneCallback),
     /// The device's loss, heard before the callbacks of what failed.
-    Lost(BoxDeviceLostCallback, String),
+    Lost(BoxDeviceLostCallback, wgpu::DeviceLostReason, String),
 }
 
 /// A committed command buffer and the resources it references without retaining.
@@ -115,7 +115,7 @@ pub(crate) struct State {
     held: Option<Held>,
     uploads: Option<Uploads>,
     retire: VecDeque<Pending>,
-    callbacks: VecDeque<(u64, Callback)>,
+    pub(super) callbacks: VecDeque<(u64, Callback)>,
     frames: VecDeque<u64>,
     pub(super) spare: Vec<Keep>,
 }
@@ -253,8 +253,11 @@ impl Shared {
         if let Some(message) = failed(&p.cb) {
             let mut lost = self.lost.lock();
             if lost.message.is_none() {
+                lost.reason = wgpu::DeviceLostReason::Unknown;
                 lost.message = Some(message.clone());
-                if let Some(f) = lost.callback.take() { st.callbacks.push_front((0, Callback::Lost(f, message))); }
+                if let Some(f) = lost.callback.take() {
+                    st.callbacks.push_front((0, Callback::Lost(f, wgpu::DeviceLostReason::Unknown, message)));
+                }
             }
         }
         st.retired = st.retired.max(p.value);
@@ -297,7 +300,7 @@ impl Shared {
     /// callback) running them leaves them to it, which runs what retires meanwhile too. On a lost
     /// device every one runs, as WebGPU's "lose the device" completes what waits on it: work-done
     /// callbacks as done, mappings failing (their data can't be right).
-    fn dispatch(&self) {
+    pub(super) fn dispatch(&self) {
         let Some(_turn) = self.dispatch.try_lock() else { return };
         loop {
             let (next, lost) = {
@@ -309,7 +312,7 @@ impl Shared {
             match next {
                 Some((_, Callback::Map(f))) => f(if lost { Err(wgpu::BufferAsyncError) } else { Ok(()) }),
                 Some((_, Callback::Done(f))) => f(),
-                Some((_, Callback::Lost(f, message))) => f(wgpu::DeviceLostReason::Unknown, message),
+                Some((_, Callback::Lost(f, reason, message))) => f(reason, message),
                 None => break,
             }
         }
