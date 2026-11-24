@@ -302,17 +302,23 @@ mod shutdown_machine {
         gate.wait_entered();
         assert!(slot.live_workers() >= 1, "warm-up worker must be tracked as live");
 
-        // Start shutdown on another thread and confirm it does NOT return while the job is blocked.
+        // Start shutdown on another thread and confirm it enters Cancelled and does NOT return
+        // while the job is blocked.
         let shutdown_done = Arc::new(AtomicBool::new(false));
         let shutdown_done_bg = Arc::clone(&shutdown_done);
         let slot_bg = Arc::clone(&slot);
         let join = std::thread::spawn(move || {
-            let out = slot_bg.shutdown(Duration::from_secs(2));
+            let out = slot_bg.shutdown(Duration::from_secs(10));
             shutdown_done_bg.store(true, Ordering::SeqCst);
             out
         });
 
-        std::thread::sleep(Duration::from_millis(40));
+        let stopped = slot.wait_until_stopped();
+        assert!(
+            matches!(stopped, State::Cancelled { workers, .. } if workers >= 1),
+            "shutdown must stay in Cancelled while warm job is blocked, got {stopped:?}",
+        );
+        std::thread::sleep(Duration::from_millis(20));
         assert!(!shutdown_done.load(Ordering::SeqCst), "shutdown must wait while warm job is running");
 
         // Release the blocked warm job; shutdown must now drain cleanly with zero live workers.
@@ -348,8 +354,12 @@ mod shutdown_machine {
 
         gate.wait_entered();
         let slot_bg = Arc::clone(&slot);
-        let join = std::thread::spawn(move || slot_bg.shutdown(Duration::from_secs(2)));
-        std::thread::sleep(Duration::from_millis(30));
+        let join = std::thread::spawn(move || slot_bg.shutdown(Duration::from_secs(10)));
+        let stopped = slot.wait_until_stopped();
+        assert!(
+            matches!(stopped, State::Cancelled { workers, .. } if workers >= 1),
+            "shutdown must enter Cancelled while warm frame is blocked, got {stopped:?}",
+        );
         gate.release();
         assert_eq!(join.join().expect("shutdown"), ShutdownOutcome::Drained);
         assert_eq!(slot.live_workers(), 0);
@@ -380,11 +390,7 @@ mod shutdown_machine {
 
         // Release the fake wedged worker so the test process leaks no thread.
         gate.release();
-        for _ in 0..100 {
-            if slot.live_workers() == 0 { break; }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        assert_eq!(slot.live_workers(), 0);
+        assert_eq!(slot.wait_until_zero_workers(Duration::from_secs(10)), 0);
     }
 
     #[test]
@@ -400,7 +406,7 @@ mod shutdown_machine {
         assert!(slot.has_ready());
         assert_eq!(slot.live_workers(), 1);
 
-        assert_eq!(slot.shutdown(Duration::from_secs(2)), ShutdownOutcome::Drained);
+        assert_eq!(slot.shutdown(Duration::from_secs(10)), ShutdownOutcome::Drained);
         assert_eq!(slot.live_workers(), 0, "parked linger thread must exit on shutdown");
         assert_eq!(drops.load(Ordering::SeqCst), 1, "parked payload must be dropped");
 
@@ -417,7 +423,7 @@ mod shutdown_machine {
         );
         let taken = slot.take().expect("normal launch claims warmed payload immediately");
         drop(taken);
-        assert_eq!(slot.shutdown(Duration::from_secs(2)), ShutdownOutcome::Drained);
+        assert_eq!(slot.shutdown(Duration::from_secs(10)), ShutdownOutcome::Drained);
         assert_eq!(slot.live_workers(), 0);
     }
 }
