@@ -1,5 +1,9 @@
-//! Rune's own `Table` scene showing `Table::row` (right-click context menu and custom selection
-//! accent), `Table::stick_bottom`, and `Table::cursor_outline`.
+//! Rune's own `Table` scenes:
+//! - `rune-table--options`: `Table::row` (right-click context menu and custom selection accent),
+//!   `Table::stick_bottom`, and `Table::cursor_outline`.
+//! - `rune-table--wide`: `Table::scroll_wide`, column visibility (`TableState::hide_column` /
+//!   `show_column`), `Table::on_header_secondary_press`, `Table::on_column_fit`, and
+//!   `TableColumn` getters.
 
 use std::borrow::Cow;
 
@@ -139,6 +143,183 @@ pub(super) fn options(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
         .child(
             col()
                 .key("table-frame")
+                .w_full()
+                .h(240.0)
+                .radius(k.radius.md)
+                .fill(c.bg_base)
+                .border(1.0, c.border_weak)
+                .clip_rounded(k.radius.md)
+                .child(table_with_menu),
+        )
+        .child(text(status).font(k.ty.small).color(c.text_muted))
+}
+
+fn wide_columns() -> Vec<TableColumn> {
+    vec![
+        TableColumn::new("id", "ID").width(64.0).align(Align::End).sortable(),
+        TableColumn::new("status", "Status").width(84.0).sortable(),
+        TableColumn::new("region", "Region").width(96.0).sortable(),
+        TableColumn::new("latency", "Latency").width(96.0).min(72.0).max(180.0).align(Align::End).sortable(),
+        TableColumn::new("bytes", "Bytes").width(104.0).min(72.0).max(180.0).align(Align::End).sortable(),
+        TableColumn::new("service", "Service").flex(1.0).min(150.0).sortable(),
+        TableColumn::new("endpoint", "Endpoint").flex(1.5).min(220.0),
+        TableColumn::new("trace", "Trace ID").flex(1.0).min(160.0),
+    ]
+}
+
+fn fit_width_for(col: &str) -> f32 {
+    match col {
+        "id" => 76.0,
+        "status" => 92.0,
+        "region" => 112.0,
+        "latency" => 108.0,
+        "bytes" => 116.0,
+        "service" => 176.0,
+        "endpoint" => 260.0,
+        _ => 188.0,
+    }
+}
+
+pub(super) fn wide(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
+    let c = &k.c;
+    let scroll_wide = !s.is("wide-no-scroll");
+    let cols = wide_columns();
+    let region_shown = !s.table.is_column_hidden("region");
+    let ok = c.success.fg;
+    let warn = c.warning.fg;
+
+    let mut t = Table::new(
+        |s: &G| &s.table,
+        |s: &mut G| &mut s.table,
+        |_: &G| 40,
+        |_: &G, i| Cow::Owned(format!("req-{i}")),
+    )
+    .name("Wide query results")
+    .scroll_wide(scroll_wide)
+    .zebra(true);
+    for col in &cols {
+        t = t.column(col.clone());
+    }
+    let table = t
+        .cell(move |_: &G, i, col| match col {
+            "id" => Cell::text(format!("{:04}", i + 1001)).mono().muted(),
+            "status" => match i % 6 {
+                4 => Cell::text("429 RATE").mono().color(warn),
+                _ => Cell::text("200 OK").mono().color(ok),
+            },
+            "region" => Cell::text(["us-east-1", "eu-west-1", "ap-south-1"][i % 3]).mono(),
+            "latency" => Cell::text(format!("{:.1} ms", 4.2 + (i % 19) as f32 * 3.7)).mono(),
+            "bytes" => Cell::text(format!("{} B", 512 + (i * 389) % 16_384)).mono(),
+            "service" => Cell::text(["gateway-edge", "query-planner", "index-shard", "auth-token"][i % 4]),
+            "endpoint" => Cell::text(format!("/v2/projects/{}/queries/run?limit=100", 10 + (i % 8))),
+            _ => Cell::text(format!("tr_{:08x}{:08x}", i * 2654435761, i + 97)).mono().muted(),
+        })
+        .on_header_secondary_press(|s: &mut G, col, press, _| {
+            s.table_menu = Some((col.to_owned(), press));
+        })
+        .on_column_fit(|s: &mut G, col, _| {
+            let w = fit_width_for(col);
+            s.table.set_column_width(col, w);
+            s.pick.insert("wide-last".into(), format!("Fitted {col} to {w:.0} pt"));
+        })
+        .build(s, k)
+        .grow(1.0)
+        .min_h(0.0);
+
+    let target_id = s.table_menu.as_ref().map(|(id, _)| id.clone()).unwrap_or_default();
+    let target_title = cols
+        .iter()
+        .find(|col| col.id() == target_id)
+        .map_or(target_id.as_str(), TableColumn::title)
+        .to_owned();
+    let fit_id = target_id.clone();
+    let reset_id = target_id.clone();
+    let hide_id = target_id.clone();
+    let mut menu = context_menu("table-header-menu", table, s.table_menu.as_ref().map(|(_, p)| *p))
+        .item(MenuItem::new(format!("Fit {target_title} to content")).on_select(move |s: &mut G| {
+            let w = fit_width_for(&fit_id);
+            s.table.set_column_width(fit_id.clone(), w);
+            s.pick.insert("wide-last".into(), format!("Fitted {fit_id} to {w:.0} pt"));
+            s.table_menu = None;
+        }))
+        .item(MenuItem::new(format!("Reset {target_title} width")).on_select(move |s: &mut G| {
+            s.table.reset_column_width(&reset_id);
+            s.pick.insert("wide-last".into(), format!("Reset {reset_id} width"));
+            s.table_menu = None;
+        }))
+        .item(MenuItem::new(format!("Hide {target_title}")).on_select(move |s: &mut G| {
+            s.table.hide_column(hide_id.clone());
+            s.pick.insert("wide-last".into(), format!("Hid {hide_id}"));
+            s.table_menu = None;
+        }))
+        .separator();
+    for col in &cols {
+        let cid = col.id().to_owned();
+        let title = col.title().to_owned();
+        let hidden = s.table.is_column_hidden(&cid);
+        let label = if hidden { format!("Show {title}") } else { format!("Hide {title}") };
+        menu = menu.item(MenuItem::new(label).on_select(move |s: &mut G| {
+            let now_hidden = !s.table.is_column_hidden(&cid);
+            s.table.set_column_hidden(cid.clone(), now_hidden);
+            s.pick.insert("wide-last".into(), format!("{} {cid}", if now_hidden { "Hid" } else { "Showed" }));
+            s.table_menu = None;
+        }));
+    }
+    let table_with_menu = menu.on_close(|s: &mut G| s.table_menu = None).build(k, layer);
+
+    let visible = cols.iter().filter(|col| !s.table.is_column_hidden(col.id())).count();
+    let hidden_count = cols.len() - visible;
+    let last = s.pick.get("wide-last").map(String::as_str);
+    let status = match last {
+        Some(msg) => format!("{visible}/{} columns visible ({hidden_count} hidden) · {msg}", cols.len()),
+        None => format!(
+            "{visible}/{} columns visible ({hidden_count} hidden) · right-click any header or double-click a column edge",
+            cols.len()
+        ),
+    };
+
+    col()
+        .key("table-wide")
+        .w(640.0)
+        .gap(10.0)
+        .child(
+            row()
+                .key("wide-controls")
+                .gap(14.0)
+                .center_y()
+                .child(
+                    Switch::new(scroll_wide)
+                        .label("Scroll wide")
+                        .on_toggle(|s: &mut G| s.flip("wide-no-scroll"))
+                        .build(k)
+                        .key("toggle-scroll-wide"),
+                )
+                .child(
+                    Switch::new(region_shown)
+                        .label("Show Region")
+                        .on_toggle(|s: &mut G| {
+                            let hide = !s.table.is_column_hidden("region");
+                            s.table.set_column_hidden("region", hide);
+                        })
+                        .build(k)
+                        .key("toggle-region"),
+                )
+                .child(
+                    Button::new("Reset columns")
+                        .on_press(|s: &mut G| {
+                            for col in wide_columns() {
+                                s.table.show_column(col.id());
+                                s.table.reset_column_width(col.id());
+                            }
+                            s.pick.insert("wide-last".into(), "Reset all columns".into());
+                        })
+                        .build(k)
+                        .key("reset-columns"),
+                ),
+        )
+        .child(
+            col()
+                .key("wide-frame")
                 .w_full()
                 .h(240.0)
                 .radius(k.radius.md)
