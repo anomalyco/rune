@@ -264,3 +264,31 @@ fn html_export_emits_fit_content_height_fraction_and_self_auto() {
     assert!(decls("fixed").contains(&("align-self", "flex-start".into())), "{:?}", decls("fixed"));
     assert!(!decls("reset").iter().any(|d| d.0 == "align-self"), "{:?}", decls("reset"));
 }
+
+#[test]
+fn exports_compound_shape_fill_rules_to_svg() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let ring = crate::Path::new()
+            .move_to([0.0, 0.0]).line_to([40.0, 0.0]).line_to([40.0, 40.0]).line_to([0.0, 40.0]).close()
+            .move_to([10.0, 10.0]).line_to([30.0, 10.0]).line_to([30.0, 30.0]).line_to([10.0, 30.0]).close();
+        let a = crate::Path::new()
+            .move_to([0.0, 0.0]).line_to([20.0, 0.0]).line_to([20.0, 20.0]).line_to([0.0, 20.0]).close();
+        let b = crate::Path::new()
+            .move_to([10.0, 10.0]).line_to([30.0, 10.0]).line_to([30.0, 30.0]).line_to([10.0, 30.0]).close();
+        let c = crate::Color::WHITE;
+        crate::col().key("root").w_full().role("main")
+            .child(crate::canvas(crate::Shape::new().fill_path(&ring, c)).key("nz").size(40.0, 40.0))
+            .child(crate::canvas(crate::Shape::new().fill_path_with(&ring, crate::FillRule::EvenOdd, c)).key("eo").size(40.0, 40.0))
+            .child(crate::canvas(crate::Shape::new().fill_path_with(&a, crate::FillRule::EvenOdd, c).fill_path_with(&b, crate::FillRule::EvenOdd, c)).key("two").size(40.0, 40.0))
+    }
+    let mut rt = Runtime::new((), view, (400.0, 300.0), Env::default());
+    rt.page_mode();
+    let nodes = taken(&mut rt, 400.0);
+    let nz = nodes.iter().find(|n| n.path.ends_with("nz")).expect("nz");
+    assert!(nz.inner.contains("<path fill=\"#ffffff\" d=\"M0,0L40,0L40,40L0,40ZM10,10L30,10L30,30L10,30Z\"/>"), "{}", nz.inner);
+    assert!(!nz.inner.contains("fill-rule"), "default nonzero omits fill-rule: {}", nz.inner);
+    let eo = nodes.iter().find(|n| n.path.ends_with("eo")).expect("eo");
+    assert!(eo.inner.contains("<path fill=\"#ffffff\" fill-rule=\"evenodd\" d=\"M0,0L40,0L40,40L0,40ZM10,10L30,10L30,30L10,30Z\"/>"), "{}", eo.inner);
+    let two = nodes.iter().find(|n| n.path.ends_with("two")).expect("two");
+    assert_eq!(two.inner.matches("<path ").count(), 2, "separate compound fills must not merge into one path: {}", two.inner);
+}

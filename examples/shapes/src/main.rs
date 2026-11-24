@@ -1,10 +1,11 @@
-//! Vector shapes: a filled waveform envelope, polylines, meters, a Bézier path and a concave
-//! polygon. `cargo run -p shapes -- --snap shapes.png` renders it headless; time animates the
-//! waveform, so `--at 1.5` shows another moment.
+//! Vector shapes: a filled waveform envelope, polylines, meters, a Bézier path, a concave
+//! polygon, and compound fills with transparent holes under `FillRule::NonZero` and
+//! `FillRule::EvenOdd`. `cargo run -p shapes -- --snap shapes.png` renders it headless; time
+//! animates the waveform, so `--at 1.5` shows another moment.
 
 #![forbid(unsafe_code)]
 
-use rune::{AppSpec, Color, Cx, El, LineCap, Path, Shape, Tx, canvas, col, memo, row, text};
+use rune::{AppSpec, Color, Cx, El, FillRule, LineCap, Path, Shape, Tx, canvas, col, memo, row, text};
 
 struct State {
     t: f32,
@@ -33,6 +34,12 @@ const WARM: Color = Color {
     g: 0.55,
     b: 0.3,
     a: 1.0,
+};
+const STRIPE: Color = Color {
+    r: 0.25,
+    g: 0.78,
+    b: 0.58,
+    a: 0.85,
 };
 
 fn level(t: f32, i: usize) -> f32 {
@@ -113,6 +120,57 @@ fn curves() -> Shape {
         .line([420.0, 10.0], [480.0, 86.0], 2.0, LineCap::Butt, INK)
 }
 
+/// Appends a circle polygon (`ccw = false` traces clockwise in y-down space).
+fn push_circle(mut path: Path, cx: f32, cy: f32, r: f32, steps: usize, reverse: bool) -> Path {
+    for i in 0..steps {
+        let k = if reverse { steps - i } else { i };
+        let a = (k % steps) as f32 * std::f32::consts::TAU / steps as f32;
+        let p = [cx + a.cos() * r, cy + a.sin() * r];
+        path = if i == 0 { path.move_to(p) } else { path.line_to(p) };
+    }
+    path.close()
+}
+
+/// A self-crossing 5-pointed star (pentagram).
+fn pentagram(cx: f32, cy: f32, r: f32) -> Path {
+    let order = [0usize, 2, 4, 1, 3];
+    let mut p = Path::new();
+    for (i, &k) in order.iter().enumerate() {
+        let a = k as f32 * std::f32::consts::TAU / 5.0 - std::f32::consts::FRAC_PI_2;
+        let pt = [cx + a.cos() * r, cy + a.sin() * r];
+        p = if i == 0 { p.move_to(pt) } else { p.line_to(pt) };
+    }
+    p.close()
+}
+
+/// Ring with a transparent hole, same-winding concentric frame under both rules, and a
+/// self-crossing pentagram rendered under `FillRule::NonZero` and `FillRule::EvenOdd` over a
+/// backdrop bar so transparent holes show through.
+fn compound_fills() -> Shape {
+    let ring = push_circle(push_circle(Path::new(), 56.0, 52.0, 44.0, 48, false), 56.0, 52.0, 22.0, 36, true);
+    let same_winding = |x: f32| {
+        Path::new()
+            .move_to([x, 10.0]).line_to([x + 84.0, 10.0]).line_to([x + 84.0, 94.0]).line_to([x, 94.0]).close()
+            .move_to([x + 22.0, 32.0]).line_to([x + 62.0, 32.0]).line_to([x + 62.0, 72.0]).line_to([x + 22.0, 72.0]).close()
+    };
+    let star_nz = pentagram(480.0, 54.0, 44.0);
+    let star_eo = pentagram(610.0, 54.0, 44.0);
+    let translucent_accent = Color { a: 0.65, ..ACCENT };
+    let translucent_warm = Color { a: 0.72, ..WARM };
+
+    Shape::new()
+        // Backdrop stripe that remains visible right through every transparent hole.
+        .fill(vec![[4.0, 44.0], [676.0, 44.0], [676.0, 60.0], [4.0, 60.0]], STRIPE)
+        // Translucent ring with opposite-winding hole (NonZero default, zero bridge seams).
+        .fill_path(&ring, translucent_accent)
+        // Same-winding concentric squares: solid under NonZero, hollow frame under EvenOdd.
+        .fill_path_with(&same_winding(148.0), FillRule::NonZero, translucent_accent)
+        .fill_path_with(&same_winding(276.0), FillRule::EvenOdd, translucent_accent)
+        // Self-crossing pentagram: solid center under NonZero, hollow pentagon under EvenOdd.
+        .fill_path_with(&star_nz, FillRule::NonZero, translucent_warm)
+        .fill_path_with(&star_eo, FillRule::EvenOdd, translucent_warm)
+}
+
 fn label(s: &str) -> El {
     text(s).color(INK)
 }
@@ -157,6 +215,12 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                         .child(memo("curves", (), || canvas(curves()).size(490.0, 96.0))),
                 ),
         )
+        .child(
+            col()
+                .gap(8.0)
+                .child(label("Compound fills: ring with hole, same-winding NonZero vs EvenOdd, crossing star NonZero vs EvenOdd"))
+                .child(memo("compound", (), || canvas(compound_fills()).size(680.0, 104.0))),
+        )
 }
 
 fn poll(s: &mut State, t: f64, _: &mut Tx) -> bool {
@@ -165,5 +229,5 @@ fn poll(s: &mut State, t: f64, _: &mut Tx) -> bool {
 }
 
 fn main() {
-    rune::run(AppSpec { poll: Some(poll), ..AppSpec::new("Shapes", (820.0, 360.0), || State { t: 0.0 }, view) });
+    rune::run(AppSpec { poll: Some(poll), ..AppSpec::new("Shapes", (820.0, 500.0), || State { t: 0.0 }, view) });
 }

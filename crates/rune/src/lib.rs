@@ -346,6 +346,7 @@ pub use runtime::commit_generation;
 pub use runtime::path_segment;
 #[doc(hidden)]
 pub use runtime::scroll_watch_state;
+pub use shape::FillRule;
 pub use shape::LineCap;
 pub use shape::Path;
 pub use shape::Shape;

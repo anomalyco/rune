@@ -1,13 +1,20 @@
-//! Vector shapes painted inside an element: strokes (polylines) and fills (simple polygons), in
-//! the element's own points with the origin at its top-left corner. For waveforms, meters,
-//! sparklines and other drawing that changes every frame.
+//! Vector shapes painted inside an element: strokes (polylines) and fills (simple or compound
+//! polygons with holes under a [`FillRule`]), in the element's own points with the origin at its
+//! top-left corner. For waveforms, meters, sparklines and other drawing that changes every frame.
 //!
 //! Shapes render in the uber-quad pass without the glyph atlas: a stroke is one capsule or box
-//! per segment (`KIND_SEGMENT`), a fill is ear-clipped into triangles (`KIND_TRIANGLE`) whose
-//! polygon-boundary edges are antialiased and whose interior edges are hard, so fills have no
-//! seams. Translucent strokes blend twice where neighbouring segments overlap at a joint; draw
-//! translucent areas as fills. An element's opacity doesn't: while it is between 0 and 1, a
-//! shape of more than one piece paints through a layer that takes it once.
+//! per segment (`KIND_SEGMENT`), a fill is triangulated into triangles (`KIND_TRIANGLE`) whose
+//! true contour-boundary edges are antialiased and whose interior and bridge edges are hard, so
+//! fills have no seams even when translucent. Translucent strokes blend twice where neighbouring
+//! segments overlap at a joint; draw translucent areas as fills. An element's opacity doesn't:
+//! while it is between 0 and 1, a shape of more than one piece paints through a layer that takes
+//! it once.
+
+mod planar;
+mod triangulate;
+
+#[doc(hidden)]
+pub use triangulate::{triangulate, triangulate_compound};
 
 use crate::color::Color;
 
@@ -18,6 +25,30 @@ pub enum LineCap {
     /// Half-discs past each end; also rounds every joint of a polyline.
     #[default]
     Round,
+}
+
+/// Determines which regions of a compound or self-intersecting [`Path`] are filled, following the
+/// SVG 2 / CSS `fill-rule` and HTML Canvas `CanvasFillRule` conventions.
+///
+/// ```
+/// use rune_core::Color;
+/// use rune_core::shape::{FillRule, Path, Shape};
+///
+/// let ring = Path::new()
+///     .move_to([0.0, 0.0]).line_to([40.0, 0.0]).line_to([40.0, 40.0]).line_to([0.0, 40.0]).close()
+///     .move_to([10.0, 10.0]).line_to([30.0, 10.0]).line_to([30.0, 30.0]).line_to([10.0, 30.0]).close();
+/// let shape = Shape::new().fill_path_with(&ring, FillRule::EvenOdd, Color::WHITE);
+/// assert!(!shape.is_empty());
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum FillRule {
+    /// A point is inside when its signed winding number across all contours is non-zero
+    /// (CSS/SVG `nonzero`, the default).
+    #[default]
+    NonZero,
+    /// A point is inside when a ray from the point crosses an odd number of contour edges
+    /// (CSS/SVG `evenodd`).
+    EvenOdd,
 }
 
 #[doc(hidden)]
@@ -32,6 +63,11 @@ pub enum Op {
     },
     Fill {
         points: Vec<[f32; 2]>,
+        color: Color,
+    },
+    FillCompound {
+        contours: Vec<Vec<[f32; 2]>>,
+        rule: FillRule,
         color: Color,
     },
 }
@@ -110,10 +146,38 @@ impl Shape {
         self
     }
 
-    /// Fills every subpath of `path` on its own (no holes between subpaths).
-    pub fn fill_path(mut self, path: &Path, color: Color) -> Shape {
-        for sub in &path.subpaths {
-            self = self.fill(sub.points.clone(), color);
+    /// Fills `path` under [`FillRule::NonZero`]. Equivalent to
+    /// `self.fill_path_with(path, FillRule::NonZero, color)`: single and disjoint subpaths behave
+    /// as simple fills, opposite-winding nested subpaths cut transparent holes, and overlapping
+    /// subpaths merge without double-blending.
+    pub fn fill_path(self, path: &Path, color: Color) -> Shape {
+        self.fill_path_with(path, FillRule::NonZero, color)
+    }
+
+    /// Fills all subpaths of `path` together as one compound region under `rule`
+    /// ([`FillRule::NonZero`] or [`FillRule::EvenOdd`]). Nested subpaths leave transparent holes
+    /// according to `rule`, and overlapping or self-intersecting contours resolve without
+    /// double-blending translucent fills.
+    ///
+    /// ```
+    /// use rune_core::Color;
+    /// use rune_core::shape::{FillRule, Path, Shape};
+    ///
+    /// let path = Path::new()
+    ///     .move_to([0.0, 0.0]).line_to([100.0, 0.0]).line_to([100.0, 100.0]).line_to([0.0, 100.0]).close()
+    ///     .move_to([25.0, 25.0]).line_to([75.0, 25.0]).line_to([75.0, 75.0]).line_to([25.0, 75.0]).close();
+    /// let shape = Shape::new().fill_path_with(&path, FillRule::EvenOdd, Color::WHITE);
+    /// assert!(!shape.is_empty());
+    /// ```
+    pub fn fill_path_with(mut self, path: &Path, rule: FillRule, color: Color) -> Shape {
+        let contours: Vec<Vec<[f32; 2]>> = path
+            .subpaths
+            .iter()
+            .filter(|sub| sub.points.len() >= 3)
+            .map(|sub| sub.points.clone())
+            .collect();
+        if !contours.is_empty() {
+            self.ops.push(Op::FillCompound { contours, rule, color });
         }
         self
     }
@@ -137,7 +201,7 @@ impl Shape {
     pub fn overlaps(&self) -> bool {
         let pieces = |op: &Op| match op {
             Op::Stroke { points, closed, .. } => if *closed { points.len() } else { points.len() - 1 },
-            Op::Fill { .. } => 1,
+            Op::Fill { .. } | Op::FillCompound { .. } => 1,
         };
         self.ops.iter().map(pieces).sum::<usize>() > 1
     }
@@ -190,16 +254,19 @@ impl Shape {
                     done += l;
                 }
                 Op::Fill { points, color } => {
-                    let a = if total <= 0.0 {
-                        t
-                    } else if done <= 0.0 {
-                        1.0
-                    } else {
-                        let ramp = DRAW_RAMP.min(done);
-                        ((at - (done - ramp)) / ramp).clamp(0.0, 1.0)
-                    };
+                    let a = fill_fade(total, done, at, t);
                     if a > 0.0 {
                         ops.push(Op::Fill { points: points.clone(), color: Color { a: color.a * a, ..*color } });
+                    }
+                }
+                Op::FillCompound { contours, rule, color } => {
+                    let a = fill_fade(total, done, at, t);
+                    if a > 0.0 {
+                        ops.push(Op::FillCompound {
+                            contours: contours.clone(),
+                            rule: *rule,
+                            color: Color { a: color.a * a, ..*color },
+                        });
                     }
                 }
             }
@@ -338,70 +405,15 @@ fn segments(length: f32) -> usize {
     ((length / TOLERANCE).sqrt() * 0.5).ceil().clamp(1.0, 256.0) as usize
 }
 
-/// Ear-clips a simple polygon. Each triangle is three vertex indices and a mask of which of its
-/// edges (a→b, b→c, c→a as bits 0, 1, 2) lie on the polygon's boundary.
-#[doc(hidden)]
-pub fn triangulate(points: &[[f32; 2]]) -> Vec<([usize; 3], u32)> {
-    let n = points.len();
-    if n < 3 {
-        return Vec::new();
+fn fill_fade(total: f32, done: f32, at: f32, t: f32) -> f32 {
+    if total <= 0.0 {
+        t
+    } else if done <= 0.0 {
+        1.0
+    } else {
+        let ramp = DRAW_RAMP.min(done);
+        ((at - (done - ramp)) / ramp).clamp(0.0, 1.0)
     }
-    let area: f32 = (0..n)
-        .map(|i| {
-            let (a, b) = (points[i], points[(i + 1) % n]);
-            a[0] * b[1] - b[0] * a[1]
-        })
-        .sum();
-    let ccw = area > 0.0;
-    let cross = |a: [f32; 2], b: [f32; 2], c: [f32; 2]| {
-        let v = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-        if ccw { v } else { -v }
-    };
-    let boundary = |i: usize, j: usize| (i + 1) % n == j || (j + 1) % n == i;
-    let mut ring: Vec<usize> = (0..n).collect();
-    let mut out = Vec::with_capacity(n - 2);
-    let mut misses = 0;
-    let mut i = 0;
-    while ring.len() > 3 {
-        let m = ring.len();
-        let (ia, ib, ic) = (ring[(i + m - 1) % m], ring[i % m], ring[(i + 1) % m]);
-        let (a, b, c) = (points[ia], points[ib], points[ic]);
-        let convex = cross(a, b, c) > 0.0;
-        let empty = convex
-            && ring.iter().all(|&k| {
-                k == ia || k == ib || k == ic || {
-                    let p = points[k];
-                    !(cross(a, b, p) >= 0.0 && cross(b, c, p) >= 0.0 && cross(c, a, p) >= 0.0)
-                }
-            });
-        // Degenerate (collinear) vertices are dropped once no ear is left.
-        if empty || (misses >= m && cross(a, b, c) == 0.0) {
-            if empty {
-                out.push(([ia, ib, ic], mask(boundary, ia, ib, ic)));
-            }
-            ring.remove(i % m);
-            misses = 0;
-            i %= ring.len();
-        } else {
-            misses += 1;
-            if misses > 2 * m {
-                // Not simple: fall back to a fan over what is left.
-                for k in 1..ring.len() - 1 {
-                    let (x, y, z) = (ring[0], ring[k], ring[k + 1]);
-                    out.push(([x, y, z], mask(boundary, x, y, z)));
-                }
-                return out;
-            }
-            i = (i + 1) % m;
-        }
-    }
-    let (a, b, c) = (ring[0], ring[1], ring[2]);
-    out.push(([a, b, c], mask(boundary, a, b, c)));
-    out
-}
-
-fn mask(boundary: impl Fn(usize, usize) -> bool, a: usize, b: usize, c: usize) -> u32 {
-    (boundary(a, b) as u32) | ((boundary(b, c) as u32) << 1) | ((boundary(c, a) as u32) << 2)
 }
 
 #[cfg(test)]

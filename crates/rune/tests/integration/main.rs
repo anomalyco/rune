@@ -91,6 +91,7 @@ mod selection_hidden;
 mod selection_rects_memo;
 mod selection_run;
 mod selection_toolbar;
+mod shape_compound;
 mod shape_fade;
 mod srgb_blend_runtime;
 mod stick_fit;

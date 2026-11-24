@@ -330,6 +330,21 @@ pub(super) fn svg(shape: &crate::Shape, size: (f32, f32)) -> String {
                 let d = &mut fill.get_or_insert_with(|| (*c, String::new())).1;
                 write!(d, "M{}Z", points(pts).replace(' ', "L")).ok();
             }
+            crate::shape::Op::FillCompound { contours, rule, color: c } => {
+                flush(&mut out, &mut fill);
+                let mut d = String::new();
+                for pts in contours {
+                    write!(d, "M{}Z", points(pts).replace(' ', "L")).ok();
+                }
+                if !d.is_empty() {
+                    let attr = if *rule == crate::shape::FillRule::EvenOdd {
+                        " fill-rule=\"evenodd\""
+                    } else {
+                        ""
+                    };
+                    write!(out, "<path fill=\"{}\"{attr} d=\"{d}\"/>", color(*c)).ok();
+                }
+            }
             crate::shape::Op::Stroke { points: pts, closed, width, cap, color: c } => {
                 flush(&mut out, &mut fill);
                 let el = if *closed { "polygon" } else { "polyline" };
