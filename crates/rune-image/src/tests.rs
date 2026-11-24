@@ -1,5 +1,5 @@
 use super::*;
-use crate::app_icon::freedesktop;
+use crate::freedesktop;
 
 #[test]
 fn mips_filter_linear_premultiplied_pixels_including_odd_edges() {

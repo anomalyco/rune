@@ -1,6 +1,9 @@
 //! A notes app with a ⌘Space launcher panel: three windows that `--desktop` records together.
 //! `cargo run -p launcher` opens the notes window; ⌘Space shows the launcher.
 //!
+//! Each row resolves a Linux freedesktop themed icon off-thread via `ImageCache::themed_icon`
+//! and draws a monogram fallback when `Image::is_not_found()` reports no matching icon.
+//!
 //! ```sh
 //! target/release/launcher --desktop examples/launcher/backdrop.png \
 //!   --script examples/launcher/scripts/demo.json --video demo.mp4 --keys --pointer
@@ -10,27 +13,66 @@
 
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use rune::tok::{self, type_};
 use rune::{
-    Align, AppHandle, AppSpec, App, Color, Cx, DisplayTarget, El, Key, KeyEvent, MacWindowOptions, OverlayPlacement,
-    ScreenEdge, TextEdit, Tx, WindowOptions, WindowSpec, col, el, row, spacer, text, text_input,
+    Align, App, AppHandle, AppSpec, Color, Cx, DisplayTarget, El, Image, ImageCache, Key, KeyEvent,
+    MacWindowOptions, OverlayPlacement, ScreenEdge, SurfaceFit, TextEdit, Tx, Waker, WindowOptions,
+    WindowSpec, col, el, row, spacer, text, text_input,
 };
 
 /// Recording with `--desktop`: there is no native chrome, so the app draws its own.
 static DESKTOP: AtomicBool = AtomicBool::new(false);
 
-const NOTES: [(&str, &str); 4] = [
-    ("Groceries", "Oat milk, lemons, basil, sourdough, two avocados."),
-    ("Trip to Lisbon", "Book the tram tour. Pastéis de nata first."),
-    ("Reading list", "The Design of Everyday Things. Thinking in Systems."),
-    ("Ideas", "A launcher that opens notes by typing their first letters."),
+struct NoteEntry {
+    title: &'static str,
+    body: &'static str,
+    icon_names: &'static [&'static str],
+}
+
+const NOTES: [NoteEntry; 4] = [
+    NoteEntry {
+        title: "Groceries",
+        body: "Oat milk, lemons, basil, sourdough, two avocados.",
+        icon_names: &["accessories-text-editor", "text-x-generic", "text-plain"],
+    },
+    NoteEntry {
+        title: "Trip to Lisbon",
+        body: "Book the tram tour. Pastéis de nata first.",
+        icon_names: &["applications-internet", "web-browser", "text-html"],
+    },
+    NoteEntry {
+        title: "Reading list",
+        body: "The Design of Everyday Things. Thinking in Systems.",
+        icon_names: &["accessories-dictionary", "x-office-document", "text-x-generic"],
+    },
+    NoteEntry {
+        title: "Ideas",
+        body: "A launcher that opens notes by typing their first letters.",
+        icon_names: &["dialog-information", "emblem-favorite", "text-x-generic"],
+    },
 ];
 
 struct Notes {
     selected: usize,
     focused: bool,
+    cache: Option<ImageCache>,
+    icons: Vec<Image>,
+}
+
+impl Notes {
+    fn load_icons(&mut self, waker: Waker, wait: bool) {
+        if self.cache.is_none() {
+            let cache = ImageCache::new(waker);
+            self.icons = NOTES.iter().map(|n| cache.themed_icon(n.icon_names, None, 18.0, 2.0)).collect();
+            self.cache = Some(cache);
+        }
+        if wait {
+            for icon in &self.icons { let _ = icon.wait(); }
+        }
+    }
 }
 
 struct Launcher {
@@ -38,11 +80,38 @@ struct Launcher {
     picked: usize,
     me: AppHandle<Launcher>,
     notes: AppHandle<Notes>,
+    cache: Option<ImageCache>,
+    icons: Vec<Image>,
+}
+
+impl Launcher {
+    fn load_icons(&mut self, waker: Waker, wait: bool) {
+        if self.cache.is_none() {
+            let cache = ImageCache::new(waker);
+            self.icons = NOTES.iter().map(|n| cache.themed_icon(n.icon_names, None, 18.0, 2.0)).collect();
+            self.cache = Some(cache);
+        }
+        if wait {
+            for icon in &self.icons { let _ = icon.wait(); }
+        }
+    }
 }
 
 fn matches(query: &str) -> Vec<usize> {
     let q = query.to_lowercase();
-    (0..NOTES.len()).filter(|&i| NOTES[i].0.to_lowercase().contains(&q)).collect()
+    (0..NOTES.len()).filter(|&i| NOTES[i].title.to_lowercase().contains(&q)).collect()
+}
+
+fn item_icon(icon: Option<&Image>, title: &str, on: bool, t: &tok::Theme) -> El {
+    if let Some(img) = icon.filter(|i| i.size().is_some()) {
+        return el().size(18.0, 18.0).pixels_fit(img.pixels(), SurfaceFit::Fit);
+    }
+    let initial = title.chars().next().unwrap_or('•').to_string();
+    let bg = if on { Color::WHITE.alpha(0.22) } else { t.control_off.alpha(0.75) };
+    let fg = if on { Color::WHITE } else { t.text_secondary };
+    let box_el = el().size(18.0, 18.0).radius(4.0).fill(bg).center()
+        .child(text(initial).font(type_::LABEL).color(fg));
+    if icon.is_some_and(Image::is_not_found) { box_el } else { box_el.opacity(0.6) }
 }
 
 fn notes_view(s: &Notes, _: &mut Cx<Notes>) -> El {
@@ -55,17 +124,18 @@ fn notes_view(s: &Notes, _: &mut Cx<Notes>) -> El {
         .child(spacer()).child(text("Notes").font(type_::TITLE).color(t.text_secondary)).child(spacer())
         .child(el().w(52.0));
     let mut list = col().key("list").w(170.0).h_full().px(8.0).gap(2.0);
-    for (i, (title, _)) in NOTES.iter().enumerate() {
+    for (i, entry) in NOTES.iter().enumerate() {
         let on = i == s.selected;
-        list = list.child(row().key(format!("note-{i}")).h(30.0).px(10.0).radius(6.0).center_y()
+        list = list.child(row().key(format!("note-{i}")).h(30.0).px(10.0).gap(8.0).radius(6.0).center_y()
             .fill(if on { accent.alpha(0.85) } else { Color::TRANSPARENT })
-            .child(text(*title).font(type_::BODY).color(if on { Color::WHITE } else { t.text }))
+            .child(item_icon(s.icons.get(i), entry.title, on, &t))
+            .child(text(entry.title).font(type_::BODY).color(if on { Color::WHITE } else { t.text }))
             .on_press(move |s: &mut Notes| s.selected = i));
     }
-    let (title, body) = NOTES[s.selected];
+    let entry = &NOTES[s.selected];
     let page = col().key("page").grow(1.0).h_full().padding(20.0).gap(10.0).fill(t.bg)
-        .child(text(title).font(type_::TITLE.lh(22.0)).color(t.text))
-        .child(text(body).font(type_::BODY.lh(20.0)).color(t.text_secondary))
+        .child(text(entry.title).font(type_::TITLE.lh(22.0)).color(t.text))
+        .child(text(entry.body).font(type_::BODY.lh(20.0)).color(t.text_secondary))
         .child(spacer())
         .child(text("⌘Space to search").font(type_::LABEL).color(t.text_secondary.alpha(0.7)));
     col().w_full().h_full().fill(t.card)
@@ -101,9 +171,10 @@ fn launcher_view(s: &Launcher, _: &mut Cx<Launcher>) -> El {
         let mut results = col().key("results").padding(6.0).gap(2.0);
         for (row_i, &i) in found.iter().enumerate() {
             let on = row_i == s.picked;
-            results = results.child(row().key(format!("result-{i}")).h(36.0).px(12.0).radius(8.0).center_y()
+            results = results.child(row().key(format!("result-{i}")).h(36.0).px(12.0).gap(10.0).radius(8.0).center_y()
                 .fill(if on { accent.alpha(0.85) } else { Color::TRANSPARENT })
-                .child(text(NOTES[i].0).font(type_::BODY).color(if on { Color::WHITE } else { t.text })));
+                .child(item_icon(s.icons.get(i), NOTES[i].title, on, &t))
+                .child(text(NOTES[i].title).font(type_::BODY).color(if on { Color::WHITE } else { t.text })));
         }
         panel = panel.child(el().h(1.0).w_full().fill(t.separator)).child(results);
     }
@@ -132,16 +203,31 @@ fn menu_bar_view(_: &(), _: &mut Cx<()>) -> El {
 fn main() {
     DESKTOP.store(std::env::args().any(|a| a == "--desktop"), Ordering::Relaxed);
     rune::run_windows(|displays| {
-        let notes = App::new(AppSpec::new("Notes", (520.0, 320.0), || Notes { selected: 0, focused: true }, notes_view))
+        let notes_spec = AppSpec::<Notes> {
+            setup: Some(|s, w| s.load_icons(w, false)),
+            scenes: &[("themed-icons", |s| s.load_icons(Arc::new(|| {}), true))],
+            ..AppSpec::new(
+                "Notes",
+                (520.0, 320.0),
+                || Notes { selected: 0, focused: true, cache: None, icons: Vec::new() },
+                notes_view,
+            )
+        };
+        let notes = App::new(notes_spec)
             .keep_running()
             .on_focus(|s, focused, _| s.focused = focused);
-        let launcher = App::new(AppSpec::new("Launcher", (560.0, 220.0), || unreachable!(), launcher_view)).windowless();
+        let launcher_spec = AppSpec::<Launcher> {
+            setup: Some(|s, w| s.load_icons(w, false)),
+            scenes: &[("themed-icons", |s| s.load_icons(Arc::new(|| {}), true))],
+            ..AppSpec::new("Launcher", (560.0, 220.0), || unreachable!(), launcher_view)
+        };
+        let launcher = App::new(launcher_spec).windowless();
         let (notes_handle, me) = (notes.handle(), launcher.handle());
         let launcher = launcher
             .init(move || {
                 let mut query = TextEdit::new("");
                 query.focused = true;
-                Launcher { query, picked: 0, me, notes: notes_handle }
+                Launcher { query, picked: 0, me, notes: notes_handle, cache: None, icons: Vec::new() }
             })
             .global_shortcut("cmd+space", |s, _| {
                 s.me.place(DisplayTarget::Primary, OverlayPlacement::Edge {
@@ -165,4 +251,25 @@ fn main() {
         }
         windows
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rune::{Env, Runtime};
+
+    #[test]
+    fn notes_view_renders_themed_icon_or_not_found_fallback_cleanly() {
+        let mut state = Notes { selected: 0, focused: true, cache: None, icons: Vec::new() };
+        state.load_icons(Arc::new(|| {}), true);
+        assert_eq!(state.icons.len(), NOTES.len());
+        for icon in &state.icons {
+            assert!(icon.is_ready());
+            assert!(icon.size().is_some() || icon.is_not_found());
+        }
+        let mut rt = Runtime::new(state, notes_view, (520.0, 320.0), Env { system_dark: true, scale: 2.0 });
+        rt.frame(0.0);
+        assert!(rt.find("note-0").is_some());
+        assert!(rt.find("note-3").is_some());
+    }
 }
