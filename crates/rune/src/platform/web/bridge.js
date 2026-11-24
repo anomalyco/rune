@@ -1066,6 +1066,7 @@ function ensureA11yNode(h, item, tag, key) {
             el.tabIndex = h.page ? 0 : -1;
             el.addEventListener('click', ev => {
                 ev.preventDefault();
+                if (el.getAttribute('aria-disabled') === 'true') return;
                 h.send({ kind: 'a11y_press', path: item.p });
             });
         }
@@ -1111,10 +1112,32 @@ function applyA11yItem(h, el, item, tag, origin) {
             el.setAttribute(name, value);
         }
     }
+    if (item.dis) {
+        if (el.getAttribute('aria-disabled') !== 'true') el.setAttribute('aria-disabled', 'true');
+    } else if (el.getAttribute('aria-disabled') !== null) {
+        el.removeAttribute('aria-disabled');
+    }
+    if (item.b) {
+        if (el.getAttribute('aria-busy') !== 'true') el.setAttribute('aria-busy', 'true');
+    } else if (el.getAttribute('aria-busy') !== null) {
+        el.removeAttribute('aria-busy');
+    }
+    if (item.x === true || item.x === false) {
+        const v = String(item.x);
+        if (el.getAttribute('aria-expanded') !== v) el.setAttribute('aria-expanded', v);
+    } else if (el.getAttribute('aria-expanded') !== null) {
+        el.removeAttribute('aria-expanded');
+    }
+    if (item.k !== 'heading') {
+        if (item.l) {
+            const v = String(item.l);
+            if (el.getAttribute('aria-level') !== v) el.setAttribute('aria-level', v);
+        } else if (el.getAttribute('aria-level') !== null) {
+            el.removeAttribute('aria-level');
+        }
+    }
     if (tag === 'button') {
-        if (item.x === true || item.x === false) el.setAttribute('aria-expanded', String(item.x));
-        else el.removeAttribute('aria-expanded');
-        // A control's role and states (a palette's option, a tab, a switch, a toggle button).
+        // A control's role and states (a palette's option, a tab, a switch, a toggle button, a range control).
         const states = [['role', item.o], ['aria-selected', item.se === undefined ? undefined : String(item.se)],
             ['aria-checked', item.c], ['aria-pressed', item.pr],
             ['aria-posinset', item.n ? String(item.n[0]) : undefined], ['aria-setsize', item.n ? String(item.n[1]) : undefined]];
@@ -1124,7 +1147,8 @@ function applyA11yItem(h, el, item, tag, origin) {
         }
     }
     const combobox = item.k === 'button' && item.o === 'combobox';
-    if (item.k === 'group' || item.k === 'image' || item.k === 'progressbar' || combobox) {
+    const rangeControl = item.k === 'button' && (item.o === 'slider' || item.o === 'spinbutton');
+    if (item.k === 'group' || item.k === 'image' || item.k === 'progressbar' || combobox || rangeControl) {
         if (item.t) {
             if (el.getAttribute('aria-label') !== item.t) el.setAttribute('aria-label', item.t);
         } else if (el.getAttribute('aria-label') !== null) {
@@ -1163,7 +1187,7 @@ function applyA11yItem(h, el, item, tag, origin) {
     syncScrollContent(el, item.k === 'group' ? item.sc : null);
     const container = item.k === 'group' || item.k === 'scroll_x';
     const noContent = container || item.k === 'image' || item.k === 'progressbar';
-    const content = combobox ? (item.v ?? '') : (item.t ?? '');
+    const content = combobox ? (item.v ?? '') : rangeControl ? '' : (item.t ?? '');
     const sig = noContent ? '' : item.u?.length ? JSON.stringify(item.u) : content;
     if (!noContent && el._sig !== sig) {
         el._sig = sig;
@@ -1290,7 +1314,16 @@ export function focusA11y(h, json) {
     if (f.x !== undefined) el.setAttribute('aria-expanded', String(f.x));
     if (f.n) { el.setAttribute('aria-posinset', String(f.n[0])); el.setAttribute('aria-setsize', String(f.n[1])); }
     if (f.l) el.setAttribute('aria-level', String(f.l));
-    if (f.v) {
+    if (f.dis) el.setAttribute('aria-disabled', 'true');
+    if (f.b) el.setAttribute('aria-busy', 'true');
+    if (f.rg) {
+        el.setAttribute('aria-valuemin', String(f.rg[0]));
+        el.setAttribute('aria-valuemax', String(f.rg[1]));
+        el.setAttribute('aria-valuenow', String(f.rg[2]));
+    }
+    if (f.vt) {
+        el.setAttribute('aria-valuetext', f.vt);
+    } else if (f.v) {
         if (RANGE_ROLES.has(f.o)) el.setAttribute('aria-valuetext', f.v);
         else el.textContent = f.v;
     }

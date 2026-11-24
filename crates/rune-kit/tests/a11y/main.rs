@@ -14,3 +14,4 @@ mod docs;
 mod overlays;
 mod shell;
 mod support;
+mod web_mirror;

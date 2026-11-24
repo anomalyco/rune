@@ -2251,3 +2251,135 @@ test('scheduleTouchHoldConfirm waits two animation frames before confirming so p
         bridge.destroy(h);
     }
 });
+
+test('syncA11y mirrors container roles, aria-disabled without HTML disabled, aria-busy, aria-level, and range controls', () => {
+    const { events, h } = setup();
+
+    bridge.syncA11y(h, JSON.stringify([
+        { k: 'group', g: 'div', p: '#0/menu', r: [0, 0, 180, 80], o: 'menu', t: 'Actions' },
+        { k: 'button', p: '#0/menu/open', r: [0, 0, 180, 28], o: 'menuitem', t: 'Open', a: 0 },
+        { k: 'button', p: '#0/menu/off', r: [0, 28, 180, 28], o: 'menuitem', t: 'Disabled item', dis: true, a: 0 },
+        { k: 'group', g: 'div', p: '#0/tree', r: [0, 90, 240, 80], o: 'tree', t: 'Files', b: true },
+        { k: 'button', p: '#0/tree/src', r: [0, 90, 240, 28], o: 'treeitem', t: 'src', x: true, b: true, l: 1, se: false, a: 3 },
+        { k: 'group', g: 'div', p: '#0/panel', r: [0, 180, 240, 60], o: 'tabpanel', t: 'Day' },
+        { k: 'button', p: '#0/panel/vol', r: [0, 184, 140, 24], o: 'slider', t: 'Volume', rg: [0, 100, 40], vt: '40%', a: 5 },
+        { k: 'button', p: '#0/panel/retries', r: [0, 212, 140, 24], o: 'spinbutton', t: 'Retries', rg: [1, 10, 3], vt: '3 retries', dis: true, a: 5 },
+    ]));
+
+    const menu = h.a11yNodes.get('div:#0/menu');
+    assert.equal(menu.getAttribute('role'), 'menu');
+    assert.equal(menu.getAttribute('aria-label'), 'Actions');
+    assert.equal(menu.children.length, 2);
+
+    const open = h.a11yNodes.get('button:#0/menu/open');
+    assert.equal(open.getAttribute('role'), 'menuitem');
+    assert.equal(open.getAttribute('aria-disabled'), null);
+    assert.equal(open.disabled, undefined);
+    open.dispatchEvent({ type: 'click', preventDefault() {} });
+    assert.deepEqual(events.pop(), { kind: 'a11y_press', path: '#0/menu/open' });
+
+    const off = h.a11yNodes.get('button:#0/menu/off');
+    assert.equal(off.getAttribute('role'), 'menuitem');
+    assert.equal(off.getAttribute('aria-disabled'), 'true');
+    assert.equal(off.disabled, undefined, 'disabled mirror controls stay discoverable without HTML disabled');
+    events.length = 0;
+    off.dispatchEvent({ type: 'click', preventDefault() {} });
+    assert.deepEqual(events, [], 'clicking an aria-disabled mirror button sends no a11y_press');
+
+    const tree = h.a11yNodes.get('div:#0/tree');
+    assert.equal(tree.getAttribute('role'), 'tree');
+    assert.equal(tree.getAttribute('aria-label'), 'Files');
+    assert.equal(tree.getAttribute('aria-busy'), 'true');
+
+    const src = h.a11yNodes.get('button:#0/tree/src');
+    assert.equal(src.getAttribute('role'), 'treeitem');
+    assert.equal(src.getAttribute('aria-expanded'), 'true');
+    assert.equal(src.getAttribute('aria-busy'), 'true');
+    assert.equal(src.getAttribute('aria-level'), '1');
+    assert.equal(src.getAttribute('aria-selected'), 'false');
+
+    const panel = h.a11yNodes.get('div:#0/panel');
+    assert.equal(panel.getAttribute('role'), 'tabpanel');
+    assert.equal(panel.getAttribute('aria-label'), 'Day');
+
+    const vol = h.a11yNodes.get('button:#0/panel/vol');
+    assert.equal(vol.getAttribute('role'), 'slider');
+    assert.equal(vol.getAttribute('aria-label'), 'Volume');
+    assert.equal(vol.getAttribute('aria-valuemin'), '0');
+    assert.equal(vol.getAttribute('aria-valuemax'), '100');
+    assert.equal(vol.getAttribute('aria-valuenow'), '40');
+    assert.equal(vol.getAttribute('aria-valuetext'), '40%');
+    assert.equal(vol.textContent, '');
+
+    const retries = h.a11yNodes.get('button:#0/panel/retries');
+    assert.equal(retries.getAttribute('role'), 'spinbutton');
+    assert.equal(retries.getAttribute('aria-label'), 'Retries');
+    assert.equal(retries.getAttribute('aria-valuemin'), '1');
+    assert.equal(retries.getAttribute('aria-valuemax'), '10');
+    assert.equal(retries.getAttribute('aria-valuenow'), '3');
+    assert.equal(retries.getAttribute('aria-valuetext'), '3 retries');
+    assert.equal(retries.getAttribute('aria-disabled'), 'true');
+    assert.equal(retries.textContent, '');
+
+    // Updating clears aria-disabled, aria-busy, aria-level, and range attributes cleanly in-place.
+    bridge.syncA11y(h, JSON.stringify([
+        { k: 'group', g: 'div', p: '#0/menu', r: [0, 0, 180, 80], o: 'menu', t: 'Actions' },
+        { k: 'button', p: '#0/menu/off', r: [0, 28, 180, 28], o: 'menuitem', t: 'Enabled item', a: 0 },
+        { k: 'group', g: 'div', p: '#0/tree', r: [0, 90, 240, 80], o: 'tree', t: 'Files' },
+        { k: 'button', p: '#0/tree/src', r: [0, 90, 240, 28], o: 'treeitem', t: 'src', x: false, se: true, a: 2 },
+        { k: 'group', g: 'div', p: '#0/panel', r: [0, 180, 240, 60], o: 'tabpanel', t: 'Day' },
+        { k: 'button', p: '#0/panel/vol', r: [0, 184, 140, 24], t: 'Mute', a: 4 },
+    ]));
+    assert.equal(h.a11yNodes.get('button:#0/menu/off'), off);
+    assert.equal(off.getAttribute('aria-disabled'), null);
+    assert.equal(tree.getAttribute('aria-busy'), null);
+    assert.equal(src.getAttribute('aria-busy'), null);
+    assert.equal(src.getAttribute('aria-level'), null);
+    assert.equal(vol.getAttribute('role'), null);
+    assert.equal(vol.getAttribute('aria-label'), null);
+    assert.equal(vol.getAttribute('aria-valuenow'), null);
+    assert.equal(vol.getAttribute('aria-valuetext'), null);
+    assert.equal(vol.textContent, 'Mute');
+
+    bridge.destroy(h);
+});
+
+test('focusA11y sets and clears aria-disabled, aria-busy, and numeric range attributes on the focus proxy', () => {
+    const { h } = setup();
+
+    bridge.focusA11y(h, JSON.stringify({ o: 'slider', t: 'Volume', rg: [0, 100, 65], v: '65%', dis: true, b: true }));
+    const first = h.focusProxies[h.focusTurn];
+    assert.equal(first.getAttribute('role'), 'slider');
+    assert.equal(first.getAttribute('aria-label'), 'Volume');
+    assert.equal(first.getAttribute('aria-valuemin'), '0');
+    assert.equal(first.getAttribute('aria-valuemax'), '100');
+    assert.equal(first.getAttribute('aria-valuenow'), '65');
+    assert.equal(first.getAttribute('aria-valuetext'), '65%');
+    assert.equal(first.getAttribute('aria-disabled'), 'true');
+    assert.equal(first.getAttribute('aria-busy'), 'true');
+    assert.equal(first.textContent, '');
+
+    bridge.focusA11y(h, JSON.stringify({ o: 'spinbutton', t: 'Retries', rg: [1, 10, 4], vt: '4 retries' }));
+    const second = h.focusProxies[h.focusTurn];
+    assert.equal(second.getAttribute('role'), 'spinbutton');
+    assert.equal(second.getAttribute('aria-valuemin'), '1');
+    assert.equal(second.getAttribute('aria-valuemax'), '10');
+    assert.equal(second.getAttribute('aria-valuenow'), '4');
+    assert.equal(second.getAttribute('aria-valuetext'), '4 retries');
+    assert.equal(second.getAttribute('aria-disabled'), null);
+    assert.equal(second.getAttribute('aria-busy'), null);
+
+    // Reusing the first proxy slot clears disabled, busy, and range attributes.
+    bridge.focusA11y(h, JSON.stringify({ o: 'button', t: 'Apply' }));
+    assert.equal(h.focusProxies[h.focusTurn], first);
+    assert.equal(first.getAttribute('role'), 'button');
+    assert.equal(first.getAttribute('aria-label'), 'Apply');
+    assert.equal(first.getAttribute('aria-disabled'), null);
+    assert.equal(first.getAttribute('aria-busy'), null);
+    assert.equal(first.getAttribute('aria-valuemin'), null);
+    assert.equal(first.getAttribute('aria-valuemax'), null);
+    assert.equal(first.getAttribute('aria-valuenow'), null);
+    assert.equal(first.getAttribute('aria-valuetext'), null);
+
+    bridge.destroy(h);
+});

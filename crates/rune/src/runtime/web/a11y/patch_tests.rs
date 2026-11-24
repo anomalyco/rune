@@ -262,6 +262,8 @@ fn make_item(kind: &'static str, path: &str, rect: [f32; 4]) -> A11yItem {
         live: None,
         range: None,
         value_text: String::new(),
+        disabled: false,
+        busy: false,
         scroll: None,
     }
 }

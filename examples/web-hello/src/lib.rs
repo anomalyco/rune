@@ -6,6 +6,8 @@
 use rune::{AppSpec, Cx, El, ScrollSpec, TextEdit, Tx, col, el, row, text, text_input};
 use rune::tok::{self, type_};
 #[cfg(target_arch = "wasm32")]
+mod a11y_proof;
+#[cfg(target_arch = "wasm32")]
 mod image_proof;
 #[cfg(target_arch = "wasm32")]
 mod input_proof;
@@ -44,9 +46,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         .placeholder("Message", t.text_secondary).color(t.text)
         .grow(1.0).h(48.0).padding(12.0).radius(12.0).fill(t.card)
         .on_edit(|s: &mut State| &mut s.draft).on_submit(send);
-    let send_button = el().key("send").h(48.0).px(16.0).center().radius(12.0).fill(t.control_off)
+    let send_button = el().key("send").role("button").disabled(state.draft.text.trim().is_empty())
+        .h(48.0).px(16.0).center().radius(12.0).fill(t.control_off)
         .child(text("Send").font(type_::LABEL).color(t.text)).on_press_tx(send);
-    let copy = el().key("copy").h(44.0).px(8.0).center()
+    let copy = el().key("copy").role("button").h(44.0).px(8.0).center()
         .child(text("Copy last").font(type_::LABEL).color(t.text_secondary)).on_press_tx(|s: &mut State, tx| {
             if let Some(message) = s.messages.last() { tx.copy(message.clone()); }
         });
@@ -54,7 +57,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     #[cfg(target_arch = "wasm32")]
     let title = title.on_press(|_: &mut State| { rune::web::open_url("https://www.rust-lang.org/").ok(); });
     col().w_full().h_full().pt(16.0 + top).pr(16.0 + right).pb(16.0 + bottom).pl(16.0 + left).gap(8.0).fill(t.bg)
-        .child(row().w_full().center_y().child(title).child(copy))
+        .child(row().key("header").role("toolbar").label("Conversation actions").w_full().center_y().child(title).child(copy))
         .child(col().key("messages").w_full().grow(1.0).shrink()
             .scroll(ScrollSpec { stick_bottom: true }).scroll_edge_fade(16.0).child(messages))
         .child(row().w_full().gap(8.0).child(composer).child(send_button))
@@ -78,6 +81,8 @@ extern "C" {
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(start))]
 pub fn start() {
+    #[cfg(target_arch = "wasm32")]
+    if a11y_proof::enabled() { a11y_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]
     if input_proof::enabled() { input_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]

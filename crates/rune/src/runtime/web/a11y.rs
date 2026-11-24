@@ -93,6 +93,10 @@ pub(crate) struct A11yItem {
     pub range: Option<[f64; 3]>,
     /// Human-readable value (`El::a11y_value` -> `aria-valuetext`).
     pub value_text: String,
+    /// Disabled state (`El::disabled` -> `aria-disabled="true"`).
+    pub disabled: bool,
+    /// Busy state (`El::busy` -> `aria-busy="true"`).
+    pub busy: bool,
     /// App-mode scroll viewport offset `[tx, ty]` in CSS pixels (`translate3d(-tx, -ty, 0)`).
     pub scroll: Option<[f32; 2]>,
 }
@@ -128,7 +132,7 @@ impl A11yItem {
     fn new(kind: &'static str, path: &str, rect: [f32; 4]) -> Self {
         A11yItem { kind, path: path.to_owned(), rect, font_size: 0.0, level: None, expanded: None, text: String::new(),
             runs: Vec::new(), tag: None, role: None, parent: None, id: None, href: None, font: None, selectable: false, description: String::new(), value: String::new(), pressed: None, selected: None, checked: None, set: None,
-            live: None, range: None, value_text: String::new(), scroll: None }
+            live: None, range: None, value_text: String::new(), disabled: false, busy: false, scroll: None }
     }
 
     fn to_json(&self) -> Value {
@@ -157,6 +161,8 @@ impl A11yItem {
             self.live,
             self.range,
             &self.value_text,
+            self.disabled,
+            self.busy,
             self.scroll,
         ))
     }
@@ -403,7 +409,7 @@ impl RuntimeCore {
                 continue;
             }
             if !self.allowed(j) || self.subtree_exiting(j) || n.vis.opacity <= 0.01
-                || (j > root && (n.a11y.hidden || n.handlers.on_press.is_some() || n.role == "button"))
+                || (j > root && (n.a11y.hidden || n.handlers.on_press.is_some() || n.role == "button" || roles::web_control_role(n.role).is_some()))
             {
                 j = if j > root { self.subtree_end(j).min(end) } else { j + 1 };
                 continue;
@@ -483,6 +489,7 @@ impl RuntimeCore {
                 last_flow_parent = None;
                 continue;
             }
+            let busy = n.a11y.more.as_deref().is_some_and(|m| m.busy);
             // A page hands every horizontal viewport to the DOM: iOS scrolls it natively, at the
             // compositor's rate, with axis locking, momentum and text selection.
             if self.host.page.is_some() && n.scroll_axes == crate::el::ScrollAxes::X {
@@ -490,6 +497,7 @@ impl RuntimeCore {
                 let shift = self.scroll.scrolls.get(&n.id).map_or(0.0, |st| st.x.shift());
                 let mut item = A11yItem::new("scroll_x", &n.path, rect);
                 item.tag = Some("div");
+                item.busy = busy;
                 item.parent = parent;
                 out.push(item);
                 open.push((end, out.len() - 1));
@@ -508,6 +516,7 @@ impl RuntimeCore {
             let in_control = i < control_end;
             let live = effective_live(n);
             let live_role = roles::default_live(n.role).and_then(|_| roles::container_aria(n.role));
+            let text_aria = (n.text.is_some() && end == i + 1).then(|| roles::container_aria(n.role)).flatten();
             let raw_href = n.a11y.more.as_ref().and_then(|m| m.href.as_deref());
             // A labelled `group` (a game's surface naming its keys, a set of controls) is a div
             // with the role and its label; an unlabelled one adds nothing a reader would say unless
@@ -515,7 +524,7 @@ impl RuntimeCore {
             let labelled_group = n.role == "group" && self.mirror_name(i).is_some();
             let live_group = n.role == "group" && n.text.is_none() && n.handlers.on_press.is_none()
                 && raw_href.is_none() && live.is_some();
-            let container_tag = (n.text.is_none() || live_role.is_none())
+            let container_tag = (n.text.is_none() || (live_role.is_none() && text_aria.is_none()))
                 .then(|| roles::container_tag(n.role))
                 .flatten()
                 .or((labelled_group || live_group).then_some("div"));
@@ -525,6 +534,10 @@ impl RuntimeCore {
                 item.tag = Some(container_tag.unwrap_or("div"));
                 item.role = roles::container_aria(n.role).or(labelled_group.then_some("group"));
                 item.live = live;
+                item.level = n.a11y.level;
+                item.expanded = n.a11y.expanded;
+                item.disabled = n.a11y.disabled;
+                item.busy = busy;
                 item.id = anchor_id(n.key.as_deref());
                 item.text = self.mirror_name(i).unwrap_or_default();
                 item.description = self.mirror_description(i);
@@ -551,6 +564,8 @@ impl RuntimeCore {
                     item.text = label;
                     item.href = Some(href);
                     item.id = anchor_id(n.key.as_deref());
+                    item.disabled = n.a11y.disabled;
+                    item.busy = busy;
                     push(&mut out, item);
                 }
                 i = end;
@@ -560,6 +575,7 @@ impl RuntimeCore {
             if !in_control && matches!(n.role, "image" | "img") && let Some(label) = self.mirror_name(i) {
                 let mut item = A11yItem::new("image", &n.path, rect);
                 item.text = label;
+                item.busy = busy;
                 push(&mut out, item);
                 i = end;
                 last_flow_parent = None;
@@ -572,7 +588,9 @@ impl RuntimeCore {
                 item.text = label;
                 item.description = self.mirror_description(i);
                 item.range = finite_range(n);
-                item.value_text = n.a11y.more.as_deref().and_then(|m| m.value.as_deref()).unwrap_or_default().to_owned();
+                item.value_text = self.mirror_value(i).unwrap_or_default().to_owned();
+                item.disabled = n.a11y.disabled;
+                item.busy = busy;
                 push(&mut out, item);
                 i = end;
                 last_flow_parent = None;
@@ -583,23 +601,43 @@ impl RuntimeCore {
                 && !n.a11y.disabled
                 && self.a11y_role(i).is_some_and(roles::composite_item)
                 && self.a11y_action_ancestor(i).is_some();
+            let range_or_combo = matches!(control_role, Some("combobox" | "slider" | "spinbutton"));
+            let stateful_control = control_role.is_some()
+                && (n.a11y.disabled
+                    || self.takes_focus(n)
+                    || n.a11y.checked.is_some()
+                    || n.focus.selected
+                    || n.a11y.expanded.is_some());
             let button_like = raw_href.is_none()
                 && n.handlers.on_a11y_action.is_none()
-                && (n.role == "button" || n.role == "combobox" || n.handlers.on_press.is_some() || delegated_control)
+                && (n.role == "button" || range_or_combo || stateful_control || n.handlers.on_press.is_some() || delegated_control)
                 && n.window_drag != crate::el::WindowDrag::Drag;
             // Only collapse a pressable container into one button when it doesn't wrap an entire
             // multi-block section with independent buttons inside, unless it has an explicit
-            // control role (such as a closable tab, whose close button mirrors as a sibling).
-            let nested_press = (i + 1..end).any(|j| self.tree.nodes[j].handlers.on_press.is_some() || self.tree.nodes[j].role == "button");
+            // control role (such as a closable tab or treeitem with row actions, whose child
+            // controls mirror as siblings).
+            let nested_press = (i + 1..end).any(|j| {
+                self.tree.nodes[j].handlers.on_press.is_some()
+                    || self.tree.nodes[j].role == "button"
+                    || roles::web_control_role(self.tree.nodes[j].role).is_some()
+            });
             if button_like && (!nested_press || control_role.is_some()) && rect[2] > 0.0 && rect[3] > 0.0 {
                 let label = self.mirror_name(i).unwrap_or_else(|| self.descendant_label(i, end));
                 let value = self.mirror_value(i).unwrap_or_default().to_owned();
                 if !label.is_empty() || !value.is_empty() {
                     let mut item = A11yItem::new("button", &n.path, rect);
+                    item.level = n.a11y.level;
                     item.expanded = n.a11y.expanded;
                     item.text = label;
                     item.description = self.mirror_description(i);
-                    item.value = value;
+                    item.disabled = n.a11y.disabled;
+                    item.busy = busy;
+                    if matches!(control_role, Some("slider" | "spinbutton")) {
+                        item.range = finite_range(n);
+                        item.value_text = value;
+                    } else {
+                        item.value = value;
+                    }
                     if let Some(role) = control_role {
                         item.role = Some(role);
                         if self.a11y_role(i).is_some_and(roles::selectable_item) { item.selected = Some(n.focus.selected); }
@@ -632,7 +670,7 @@ impl RuntimeCore {
                 let selectable = spec.selectable || selects.get(i).copied().unwrap_or(false);
                 if !runs.is_empty() || is_live_text {
                     let is_heading = n.role == "heading";
-                    let plain_text = !is_heading && !is_live_text;
+                    let plain_text = !is_heading && !is_live_text && text_aria.is_none() && !busy;
                     // Flowed word-by-word paragraphs (`pr_chips::flow`) put sibling words (or 1-word
                     // wrapper rows) inside one flex-wrap line row: merge consecutive inline text runs
                     // sharing that flow container so screen readers and Find-in-page see whole sentences.
@@ -648,7 +686,7 @@ impl RuntimeCore {
                         }
                     });
                     if plain_text && flow_group.is_some() && flow_group == last_flow_parent
-                        && let Some(prev) = out.last_mut().filter(|it| it.kind == "text" && it.role.is_none() && it.live.is_none())
+                        && let Some(prev) = out.last_mut().filter(|it| it.kind == "text" && it.role.is_none() && it.live.is_none() && !it.busy)
                     {
                         merge_flow(prev, rect, runs);
                         i += 1;
@@ -658,7 +696,7 @@ impl RuntimeCore {
                     if plain_text && flow_group.is_none()
                         && let Some(prev) = inline.filter(|l| l.item + 1 == out.len() && l.parent == n.parent)
                         && let Some(gap) = prev.gap(n.target, spec.style, selectable)
-                        && let Some(item) = out.last_mut().filter(|it| it.kind == "text" && it.role.is_none() && it.live.is_none())
+                        && let Some(item) = out.last_mut().filter(|it| it.kind == "text" && it.role.is_none() && it.live.is_none() && !it.busy)
                     {
                         join_inline(item, text_rect, runs, gap > spec.style.size * 0.15);
                         inline = Some(Inline { right: n.target[2], ..prev });
@@ -675,8 +713,9 @@ impl RuntimeCore {
                     let mut item = A11yItem::new(if is_heading { "heading" } else { "text" }, &n.path, rect);
                     item.font_size = round1(spec.style.size * zoom);
                     item.level = is_heading.then(|| n.a11y.level.unwrap_or(2).clamp(1, 6));
-                    item.role = if is_heading { None } else { live_role };
+                    item.role = if is_heading { None } else { live_role.or(text_aria) };
                     item.live = live;
+                    item.busy = busy;
                     item.text = plain;
                     item.runs = rich_runs;
                     item.id = if is_heading { anchor_id(n.key.as_deref()) } else { None };
@@ -712,6 +751,7 @@ impl RuntimeCore {
                 item.font_size = round1(16.0 * zoom);
                 item.level = Some(n.a11y.level.unwrap_or(2).clamp(1, 6));
                 item.live = live;
+                item.busy = busy;
                 item.text = lbl;
                 item.id = anchor_id(n.key.as_deref());
                 push(&mut out, item);
@@ -973,6 +1013,11 @@ impl RuntimeCore {
         if let Some(open) = n.a11y.expanded { o.insert("x".into(), json!(open)); }
         if let Some((pos, size)) = n.a11y.more.as_ref().and_then(|m| m.set) { o.insert("n".into(), json!([pos, size])); }
         if let Some(level) = n.a11y.level { o.insert("l".into(), json!(level)); }
+        if n.a11y.disabled || n.inert { o.insert("dis".into(), json!(true)); }
+        if n.a11y.more.as_deref().is_some_and(|m| m.busy) { o.insert("b".into(), json!(true)); }
+        let in_secure = std::iter::successors(Some(i), |&j| self.tree.nodes[j].parent)
+            .any(|j| self.tree.nodes[j].is_secure());
+        if !in_secure && let Some(rg) = finite_range(n) { o.insert("rg".into(), json!(rg)); }
         if let Some(value) = self.mirror_value(i) { o.insert("v".into(), json!(value)); }
         Value::Object(o)
     }
@@ -983,6 +1028,7 @@ impl RuntimeCore {
         match event["kind"].as_str() {
             Some("a11y_press") => {
                 let Some(i) = self.live(path) else { return false };
+                if self.tree.nodes[i].a11y.disabled || !self.allowed(i) { return false; }
                 if self.tree.nodes[i].handlers.on_press.is_some() {
                     self.frame.queue.push(Action::Press(path.to_owned(), crate::PointerButton::Primary, false));
                     true
@@ -993,7 +1039,7 @@ impl RuntimeCore {
             Some("a11y_link") => {
                 let Some(k) = event["link"].as_u64().and_then(|n| usize::try_from(n).ok()) else { return false };
                 let Some(i) = self.live(path) else { return false };
-                if self.tree.nodes[i].text.as_ref().is_none_or(|t| k >= t.cold.links.len()) { return false; }
+                if self.tree.nodes[i].a11y.disabled || !self.allowed(i) || self.tree.nodes[i].text.as_ref().is_none_or(|t| k >= t.cold.links.len()) { return false; }
                 self.frame.queue.push(Action::Link(path.to_owned(), k, crate::PointerButton::Primary));
                 true
             }
@@ -1088,3 +1134,6 @@ fn join_inline(prev: &mut A11yItem, rect: [f32; 4], mut runs: Vec<A11yRun>, gap:
 #[cfg(test)]
 #[path = "a11y_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "a11y/mirror_tests.rs"]
+mod mirror_tests;

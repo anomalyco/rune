@@ -59,6 +59,8 @@ pub(crate) struct SentItem {
     pub live: Option<&'static str>,
     pub range: Option<[f64; 3]>,
     pub value_text: String,
+    pub disabled: bool,
+    pub busy: bool,
     /// App-mode scroll viewport translation `[tx, ty]` in CSS pixels.
     pub scroll: Option<[f32; 2]>,
 }
@@ -94,6 +96,8 @@ impl SentItem {
             live: item.live,
             range: item.range,
             value_text: item.value_text.clone(),
+            disabled: item.disabled,
+            busy: item.busy,
             scroll: item.scroll.map(|[x, y]| [clean_zero(x), clean_zero(y)]),
         }
     }
@@ -124,6 +128,8 @@ impl SentItem {
             self.live,
             self.range,
             &self.value_text,
+            self.disabled,
+            self.busy,
             self.scroll,
         ))
     }
@@ -155,6 +161,8 @@ pub(super) fn item_json_fields(
     live: Option<&'static str>,
     range: Option<[f64; 3]>,
     value_text: &str,
+    disabled: bool,
+    busy: bool,
     scroll: Option<[f32; 2]>,
 ) -> serde_json::Map<String, Value> {
     let mut obj = serde_json::Map::new();
@@ -174,6 +182,8 @@ pub(super) fn item_json_fields(
     if let Some(lv) = live { obj.insert("lv".into(), json!(lv)); }
     if let Some([min, max, val]) = range { obj.insert("rg".into(), json!([min, max, val])); }
     if !value_text.is_empty() { obj.insert("vt".into(), json!(value_text)); }
+    if disabled { obj.insert("dis".into(), json!(true)); }
+    if busy { obj.insert("b".into(), json!(true)); }
     if let Some(g) = tag { obj.insert("g".into(), json!(g)); }
     if let Some(o) = role { obj.insert("o".into(), json!(o)); }
     if let Some(a) = parent { obj.insert("a".into(), json!(a)); }
