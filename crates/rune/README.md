@@ -2250,10 +2250,17 @@ col().w(cell_w).h(cell_h).center().gap(6.0)
 The ratio comes from the view (`Image::size`, `Player::natural_size`), so it works for a
 `video` or a box with children too. In a column with no bounded height, `max_h` sets the room.
 
-`cache.app_icon(path, size_pt)` rasterizes a platform icon on the same worker, keyed by path,
-size and scale: Finder's icon on macOS, an executable's or `.ico`'s first icon on Windows, and
-on Linux a `.desktop` entry's `Icon=` from the hicolor theme (closest size at or above, then
-scalable SVG) or `pixmaps`. Paths without an icon resolve to `Image::error`, so callers keep
+`cache.app_icon(path, size_pt)` (and `app_icon_scaled(path, size_pt, scale)`) rasterizes a
+platform icon on the same worker, keyed by path, size and scale: Finder's icon on macOS, an
+executable's or `.ico`'s first icon on Windows, and on Linux a `.desktop` entry's `Icon=`
+resolved through the Freedesktop Icon Theme Specification (current GTK/KDE desktop theme,
+`index.theme` metadata, breadth-first `Inherits` ending at `hicolor`, then `pixmaps`) or an
+image file directly. On Linux, `cache.themed_icon(names, theme, size_pt, scale)` (and
+`rune::image::themed_icon_rgba(names, theme, px, scale)`) looks up an ordered fallback list of
+icon names across all theme directories (`apps/`, `mimetypes/`, `places/`, etc.) using an explicit
+theme or the detected desktop theme (`None`), caching up to 64 parsed theme indices in a bounded
+LRU cache. Missing icons and missing files set `Image::is_not_found()` (while still populating
+`Image::error()`), keeping not-found apart from corrupt-file decode errors so callers can draw
 their own fallback. Keep the handle: the cache only shares live handles.
 
 ### NativeSurface video

@@ -11,6 +11,9 @@ use std::sync::mpsc;
 pub(crate) mod animated;
 mod app_icon;
 mod avif;
+mod freedesktop;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod freedesktop_tests;
 mod from_url;
 #[cfg(feature = "svg")]
 mod gzip;
@@ -28,6 +31,7 @@ mod svg;
 mod tests;
 
 pub use app_icon::app_icon_rgba;
+pub use freedesktop::themed_icon_rgba;
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub use from_url::font_file;
@@ -76,10 +80,23 @@ pub(crate) struct Decoded {
     /// Intrinsic logical dimensions in CSS pixels when distinct from mip 0 (SVG documents).
     pub intrinsic: Option<[f32; 2]>,
 }
+pub(crate) struct DecodeFailure {
+    pub error: ImageError,
+    pub not_found: bool,
+}
+impl DecodeFailure {
+    pub(crate) fn not_found(msg: impl Into<String>) -> Self {
+        Self { error: ImageError(msg.into()), not_found: true }
+    }
+}
+impl From<ImageError> for DecodeFailure {
+    fn from(error: ImageError) -> Self { Self { error, not_found: false } }
+}
+
 struct State {
     id: ImageId,
     pixels: Pixels,
-    decoded: OnceLock<Result<Arc<Decoded>, ImageError>>,
+    decoded: OnceLock<Result<Arc<Decoded>, DecodeFailure>>,
 }
 
 /// A cheap shared handle. Pending images paint nothing until their worker wakes the app.
@@ -134,7 +151,27 @@ impl Image {
         d.intrinsic.or_else(|| d.mips.first().map(|m| [m.width as f32, m.height as f32]))
     }
     pub fn is_ready(&self) -> bool { self.0.decoded.get().is_some() }
-    pub fn error(&self) -> Option<&ImageError> { self.0.decoded.get()?.as_ref().err() }
+    pub fn error(&self) -> Option<&ImageError> { self.0.decoded.get()?.as_ref().err().map(|f| &f.error) }
+    /// Returns `true` when this image finished resolving and failed specifically because the
+    /// requested icon or file was not found (as opposed to still pending, decoded, or failing
+    /// due to a corrupt file or decode error).
+    ///
+    /// # Example
+    /// ```
+    /// use std::sync::Arc;
+    /// use rune_image::ImageCache;
+    ///
+    /// let cache = ImageCache::new(Arc::new(|| {}));
+    /// let missing = cache.themed_icon(&["rune-nonexistent-icon"], Some("hicolor"), 24.0, 1.0);
+    /// assert!(missing.wait().is_err());
+    /// assert!(missing.is_not_found());
+    /// let corrupt = cache.load(b"not an image".as_slice());
+    /// assert!(corrupt.wait().is_err());
+    /// assert!(!corrupt.is_not_found());
+    /// ```
+    pub fn is_not_found(&self) -> bool {
+        self.0.decoded.get().is_some_and(|r| r.as_ref().err().is_some_and(|f| f.not_found))
+    }
     /// Wait for fixture assets before advancing a deterministic headless scene. Interactive
     /// apps use the cache's waker instead; decode still happens on the cache worker.
     pub fn wait(&self) -> Result<[u32; 2], &ImageError> {
@@ -142,16 +179,16 @@ impl Image {
         let decoded = self.0.decoded.get().expect("Image::wait cannot block on web; use is_ready and the cache waker");
         #[cfg(not(target_arch = "wasm32"))]
         let decoded = self.0.decoded.wait();
-        let mip = &decoded.as_ref()?.mips[0];
+        let mip = &decoded.as_ref().map_err(|f| &f.error)?.mips[0];
         Ok([mip.width, mip.height])
     }
     pub(crate) fn decoded(&self) -> Option<Result<&Decoded, &ImageError>> {
-        self.0.decoded.get().map(|r| r.as_ref().map(Arc::as_ref))
+        self.0.decoded.get().map(|r| r.as_ref().map(Arc::as_ref).map_err(|f| &f.error))
     }
     // Pixels are stored before `decoded` is published (so `Image::wait` and `is_ready` never see
     // empty pixels), and windows wake after `decoded` is set (so a woken frame sees `size`).
-    fn finish(&self, decoded: Result<Decoded, ImageError>) {
-        let decoded = decoded.map(Arc::new);
+    fn finish(&self, decoded: Result<Decoded, impl Into<DecodeFailure>>) {
+        let decoded = decoded.map(Arc::new).map_err(Into::into);
         let has_mips = if let Ok(mips) = &decoded {
             self.0.pixels.store_mips(mips.clone());
             true
@@ -168,7 +205,13 @@ enum Input {
     Encoded(Arc<[u8]>),
     EncodedScaled(Arc<[u8]>, u32),
     Rgba(u32, u32, Arc<[u8]>),
-    Icon(#[cfg_attr(target_arch = "wasm32", allow(dead_code))] std::path::PathBuf, #[cfg_attr(target_arch = "wasm32", allow(dead_code))] u32),
+    Icon(
+        #[cfg_attr(target_arch = "wasm32", allow(dead_code))] std::path::PathBuf,
+        #[cfg_attr(target_arch = "wasm32", allow(dead_code))] u32,
+        #[cfg_attr(target_arch = "wasm32", allow(dead_code))] u32,
+        #[cfg_attr(target_arch = "wasm32", allow(dead_code))] u32,
+    ),
+    ThemedIcon(Box<freedesktop::ThemedIconRequest>),
     Svg(Arc<[u8]>, u32),
     #[cfg(not(target_arch = "wasm32"))]
     File(std::path::PathBuf, u32),
@@ -182,32 +225,37 @@ enum Input {
 }
 
 impl Input {
-    fn decode(self) -> Result<Decoded, ImageError> {
+    fn decode(self) -> Result<Decoded, DecodeFailure> {
         match self {
-            Input::Encoded(bytes) => decode(&bytes),
-            Input::EncodedScaled(bytes, max_px) => decode_scaled(&bytes, max_px),
-            Input::Rgba(w, h, bytes) => mip_chain(w, h, &bytes),
+            Input::Encoded(bytes) => decode(&bytes).map_err(DecodeFailure::from),
+            Input::EncodedScaled(bytes, max_px) => decode_scaled(&bytes, max_px).map_err(DecodeFailure::from),
+            Input::Rgba(w, h, bytes) => mip_chain(w, h, &bytes).map_err(DecodeFailure::from),
             Input::Svg(bytes, px) => svg_rgba_with_size(&bytes, px)
-                .and_then(|(w, h, intrinsic, bytes)| mip_chain_with_intrinsic(w, h, &bytes, Some(intrinsic))),
+                .and_then(|(w, h, intrinsic, bytes)| mip_chain_with_intrinsic(w, h, &bytes, Some(intrinsic)))
+                .map_err(DecodeFailure::from),
             #[cfg(not(target_arch = "wasm32"))]
-            Input::Icon(path, px) => app_icon_rgba(&path, px).and_then(|(w, h, bytes)| mip_chain(w, h, &bytes)),
+            Input::Icon(path, nominal_px, scale, raster_px) => {
+                app_icon::app_icon_decoded(&path, nominal_px, scale, raster_px)
+            }
+            Input::ThemedIcon(req) => freedesktop::decode_themed_request(*req),
             #[cfg(not(target_arch = "wasm32"))]
             Input::File(path, px) => {
-                let bytes = read_regular_file(&path)?;
+                let bytes = read_regular_file_checked(&path)?;
                 if has_svg_extension(&path) || is_svg(&bytes) {
                     svg_rgba_with_size(&bytes, px)
                         .and_then(|(w, h, intrinsic, bytes)| mip_chain_with_intrinsic(w, h, &bytes, Some(intrinsic)))
+                        .map_err(DecodeFailure::from)
                 } else {
-                    decode(&bytes)
+                    decode(&bytes).map_err(DecodeFailure::from)
                 }
             }
             #[cfg(not(target_arch = "wasm32"))]
             Input::Url(url, px) => Input::File(from_url::file_path(&url)?, px).decode(),
             #[cfg(target_arch = "wasm32")]
-            Input::Icon(..) => Err(ImageError("filesystem images are unsupported on web".into())),
+            Input::Icon(..) => Err(DecodeFailure::from(ImageError("filesystem images are unsupported on web".into()))),
             // Fetched asynchronously by `ImageCache::request`.
             #[cfg(target_arch = "wasm32")]
-            Input::Url(url, _) => Err(ImageError(format!("{url}: fetched, not decoded"))),
+            Input::Url(url, _) => Err(DecodeFailure::from(ImageError(format!("{url}: fetched, not decoded")))),
             #[cfg(test)]
             Input::Panic => panic!("decoder bug"),
             #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -221,10 +269,10 @@ impl Input {
     /// `decode`, with a panic in a codec (a malformed file can still trip one) failing this
     /// image instead of unwinding the worker, which would leave it pending and fail every later one.
     #[cfg(not(target_arch = "wasm32"))]
-    fn decode_caught(self) -> Result<Decoded, ImageError> {
+    fn decode_caught(self) -> Result<Decoded, DecodeFailure> {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.decode())).unwrap_or_else(|panic| {
             let why = panic.downcast_ref::<&str>().copied().or_else(|| panic.downcast_ref::<String>().map(String::as_str));
-            Err(ImageError(format!("image decoder panicked: {}", why.unwrap_or("no message"))))
+            Err(DecodeFailure::from(ImageError(format!("image decoder panicked: {}", why.unwrap_or("no message")))))
         })
     }
 }
@@ -525,32 +573,6 @@ impl ImageCache {
         ticket
     }
 
-    /// The Finder icon for an app bundle or any file path, rasterized at 2× `size_pt`.
-    /// See [`ImageCache::app_icon_scaled`].
-    pub fn app_icon(&self, path: impl AsRef<std::path::Path>, size_pt: f32) -> Image {
-        self.app_icon_scaled(path, size_pt, 2.0)
-    }
-
-    /// The Finder icon for `path`, rasterized at `size_pt * scale` pixels square (pass the
-    /// window's display scale). Handles are shared by (path, size, scale) rather than by
-    /// content, so repeated calls never re-rasterize while a handle is alive. Lookup and
-    /// rasterization run on the cache worker like any decode, so this is safe to call from a view.
-    /// Missing paths still get the system's generic document icon on macOS. Windows reads an
-    /// executable's or icon file's first icon; Linux reads a `.desktop` entry's `Icon=` from the
-    /// hicolor theme or pixmaps (PNG or SVG), or an image file itself. Paths without an icon
-    /// resolve to an error, so callers can draw their own fallback.
-    pub fn app_icon_scaled(&self, path: impl AsRef<std::path::Path>, size_pt: f32, scale: f32) -> Image {
-        let path = path.as_ref().to_path_buf();
-        let px = icon_pixels(size_pt, scale);
-        let mut hash = blake3::Hasher::new();
-        hash.update(b"rune-app-icon\0");
-        hash.update(path.as_os_str().as_encoded_bytes());
-        hash.update(&[0]);
-        hash.update(&size_pt.to_bits().to_le_bytes());
-        hash.update(&scale.to_bits().to_le_bytes());
-        self.request(*hash.finalize().as_bytes(), Input::Icon(path, px))
-    }
-
     fn request(&self, id: ImageId, input: Input) -> Image {
         self.request_set(id, input, None)
     }
@@ -581,7 +603,7 @@ impl ImageCache {
         }
         #[cfg(not(target_arch = "wasm32"))]
         if !decode_later(Job { target: JobTarget::Image(image.clone()), input, waker: self.waker.clone() }) {
-            image.0.decoded.set(Err(ImageError("image worker stopped".into()))).ok();
+            image.0.decoded.set(Err(DecodeFailure::from(ImageError("image worker stopped".into())))).ok();
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -596,17 +618,17 @@ impl ImageCache {
                         if !wanted(&weak) { return; }
                         let fetched = from_url::fetch(&url).await;
                         if !wanted(&weak) { return; }
-                        match fetched { Ok(fetched) => from_url::land_in_slices(&url, fetched, px, None).await, Err(e) => Err(e) }
+                        match fetched { Ok(fetched) => from_url::land_in_slices(&url, fetched, px, None).await, Err(e) => Err(e) }.map_err(DecodeFailure::from)
                     }
                     Input::Encoded(bytes) if browser_decodes(&bytes) => {
                         let decoded = from_url::decode_in_browser(&bytes).await;
                         if !wanted(&weak) { return; }
-                        match decoded { Ok(fetched) => from_url::land_in_slices("image", fetched, 0, None).await, Err(e) => Err(e) }
+                        match decoded { Ok(fetched) => from_url::land_in_slices("image", fetched, 0, None).await, Err(e) => Err(e) }.map_err(DecodeFailure::from)
                     }
                     Input::EncodedScaled(bytes, max_px) if browser_decodes(&bytes) => {
                         let decoded = from_url::decode_in_browser(&bytes).await;
                         if !wanted(&weak) { return; }
-                        match decoded { Ok(fetched) => from_url::land_in_slices("image", fetched, max_px, Some(max_px)).await, Err(e) => Err(e) }
+                        match decoded { Ok(fetched) => from_url::land_in_slices("image", fetched, max_px, Some(max_px)).await, Err(e) => Err(e) }.map_err(DecodeFailure::from)
                     }
                     input => input.decode(),
                 };
@@ -656,26 +678,26 @@ fn is_svg(bytes: &[u8]) -> bool {
 /// device files before and after opening so a special file cannot block or exhaust memory.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn read_regular_file(path: &std::path::Path) -> Result<Vec<u8>, ImageError> {
+    read_regular_file_checked(path).map_err(|f| f.error)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_regular_file_checked(path: &std::path::Path) -> Result<Vec<u8>, DecodeFailure> {
     use std::io::Read;
-    let err = |e: std::io::Error| ImageError(format!("{}: {e}", path.display()));
+    let err = |e: std::io::Error| {
+        let msg = format!("{}: {e}", path.display());
+        if e.kind() == std::io::ErrorKind::NotFound { DecodeFailure::not_found(msg) } else { DecodeFailure::from(ImageError(msg)) }
+    };
     let meta = std::fs::metadata(path).map_err(err)?;
-    if !meta.is_file() {
-        return Err(ImageError(format!("{}: not a regular file", path.display())));
-    }
-    if meta.len() > MAX_ALLOC {
-        return Err(ImageError(format!("{}: file is too large", path.display())));
-    }
+    if !meta.is_file() { return Err(DecodeFailure::from(ImageError(format!("{}: not a regular file", path.display())))); }
+    if meta.len() > MAX_ALLOC { return Err(DecodeFailure::from(ImageError(format!("{}: file is too large", path.display())))); }
     let file = std::fs::File::open(path).map_err(err)?;
     let handle_meta = file.metadata().map_err(err)?;
-    if !handle_meta.is_file() {
-        return Err(ImageError(format!("{}: not a regular file", path.display())));
-    }
+    if !handle_meta.is_file() { return Err(DecodeFailure::from(ImageError(format!("{}: not a regular file", path.display())))); }
     let cap = handle_meta.len().min(MAX_ALLOC) as usize;
     let mut out = Vec::with_capacity(cap.min(64 * 1024));
     file.take(MAX_ALLOC + 1).read_to_end(&mut out).map_err(err)?;
-    if out.len() as u64 > MAX_ALLOC {
-        return Err(ImageError(format!("{}: file is too large", path.display())));
-    }
+    if out.len() as u64 > MAX_ALLOC { return Err(DecodeFailure::from(ImageError(format!("{}: file is too large", path.display())))); }
     Ok(out)
 }
 

@@ -2,7 +2,40 @@
 
 #![allow(unsafe_code)]
 
-use super::ImageError;
+use super::{Image, ImageCache, ImageError, Input};
+#[cfg(not(target_arch = "wasm32"))]
+use super::{DecodeFailure, Decoded, mip_chain};
+#[cfg(target_os = "linux")]
+use super::mip_chain_with_intrinsic;
+
+impl ImageCache {
+    /// The Finder icon for an app bundle or any file path, rasterized at 2× `size_pt`.
+    /// See [`ImageCache::app_icon_scaled`].
+    pub fn app_icon(&self, path: impl AsRef<std::path::Path>, size_pt: f32) -> Image {
+        self.app_icon_scaled(path, size_pt, 2.0)
+    }
+
+    /// The Finder icon for `path`, rasterized at `size_pt * scale` pixels square (pass the
+    /// window's display scale). Handles are shared by (path, size, scale) rather than by
+    /// content, so repeated calls never re-rasterize while a handle is alive. Lookup and
+    /// rasterization run on the cache worker like any decode, so this is safe to call from a view.
+    /// Missing paths still get the system's generic document icon on macOS. Windows reads an
+    /// executable's or icon file's first icon; Linux resolves a `.desktop` entry's `Icon=`
+    /// through the active freedesktop icon theme chain (`index.theme`, `Inherits`, `hicolor`,
+    /// then `pixmaps`), or decodes an image file directly. Missing icons resolve with
+    /// [`Image::is_not_found`] returning `true`, so callers can draw their own fallback.
+    pub fn app_icon_scaled(&self, path: impl AsRef<std::path::Path>, size_pt: f32, scale: f32) -> Image {
+        let path = path.as_ref().to_path_buf();
+        let (nominal_px, scale_int, raster_px) = super::freedesktop::themed_icon_dims(size_pt, scale);
+        let mut hash = blake3::Hasher::new();
+        hash.update(b"rune-app-icon\0");
+        hash.update(path.as_os_str().as_encoded_bytes());
+        hash.update(&[0]);
+        hash.update(&size_pt.to_bits().to_le_bytes());
+        hash.update(&scale.to_bits().to_le_bytes());
+        self.request(*hash.finalize().as_bytes(), Input::Icon(path, nominal_px, scale_int, raster_px))
+    }
+}
 
 #[cfg(target_os = "macos")]
 #[link(name = "AppKit", kind = "framework")]
@@ -17,28 +50,66 @@ unsafe extern "C" {}
 /// Neither needs the main thread: `NSWorkspace` is not main-actor isolated in the SDK, and
 /// AppKit allows drawing an `NSImage` into a bitmap context owned by a secondary thread.
 /// Windows: the file's first icon from `PrivateExtractIconsW` at `px` (at most 256).
-/// Linux: the closest theme size at or above `px`, or an SVG rasterized to fit `px`; a
-/// non-square pixmap keeps its aspect ratio.
+/// Linux: resolves a `.desktop` entry's `Icon=` through the active freedesktop icon theme
+/// chain (`index.theme`, `Inherits`, `hicolor`, then `pixmaps`), rasterizing PNG or SVG to
+/// fit `px`; a non-square pixmap keeps its aspect ratio.
 pub fn app_icon_rgba(path: &std::path::Path, px: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
     if px == 0 || px > 1024 { return Err(ImageError("app icon size must be 1..=1024 pixels".into())); }
     #[cfg(target_os = "macos")]
     { macos_icon(path, px) }
     #[cfg(target_os = "windows")]
-    { windows_icon(path, px) }
+    { windows_icon(path, px).map_err(|f| f.error) }
     #[cfg(target_os = "linux")]
-    { linux_icon(path, px) }
+    { linux_icon(path, px, 1, px).map(|(w, h, _, rgba)| (w, h, rgba)).map_err(|f| f.error) }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     { let _ = path; Err(ImageError("app_icon is unsupported on this platform".into())) }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn app_icon_decoded(
+    path: &std::path::Path,
+    nominal_px: u32,
+    scale: u32,
+    raster_px: u32,
+) -> Result<Decoded, DecodeFailure> {
+    if raster_px == 0 || raster_px > 1024 {
+        return Err(DecodeFailure::from(ImageError("app icon size must be 1..=1024 pixels".into())));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (nominal_px, scale);
+        let (w, h, bytes) = macos_icon(path, raster_px)?;
+        mip_chain(w, h, &bytes).map_err(DecodeFailure::from)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (nominal_px, scale);
+        let (w, h, bytes) = windows_icon(path, raster_px)?;
+        mip_chain(w, h, &bytes).map_err(DecodeFailure::from)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let (w, h, intrinsic, bytes) = linux_icon(path, nominal_px, scale, raster_px)?;
+        match intrinsic {
+            Some(size) => mip_chain_with_intrinsic(w, h, &bytes, Some(size)).map_err(DecodeFailure::from),
+            None => mip_chain(w, h, &bytes).map_err(DecodeFailure::from),
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = (path, nominal_px, scale);
+        Err(DecodeFailure::from(ImageError("app_icon is unsupported on this platform".into())))
+    }
+}
+
 #[cfg(target_os = "windows")]
-fn windows_icon(path: &std::path::Path, px: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
+fn windows_icon(path: &std::path::Path, px: u32) -> Result<(u32, u32, Vec<u8>), DecodeFailure> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Graphics::Gdi::{
         BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDIBits, GetObjectW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO, PrivateExtractIconsW};
-    let err = |what: &str| ImageError(format!("{what}: {}", path.display()));
+    let err = |what: &str| DecodeFailure::from(ImageError(format!("{what}: {}", path.display())));
     // PrivateExtractIconsW reads a fixed MAX_PATH buffer.
     let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
     if wide.len() > 260 { return Err(err("icon path is longer than MAX_PATH")); }
@@ -48,7 +119,9 @@ fn windows_icon(path: &std::path::Path, px: u32) -> Result<(u32, u32, Vec<u8>), 
     let mut icon: HICON = std::ptr::null_mut();
     // SAFETY: `buffer` is NUL-terminated within MAX_PATH and `&mut icon` holds the 1 requested handle.
     let extracted = unsafe { PrivateExtractIconsW(buffer.as_ptr(), 0, side, side, &mut icon, std::ptr::null_mut(), 1, 0) };
-    if extracted == 0 || extracted == u32::MAX || icon.is_null() { return Err(err("no icon")); }
+    if extracted == 0 || extracted == u32::MAX || icon.is_null() {
+        return Err(DecodeFailure::not_found(format!("no icon: {}", path.display())));
+    }
     // SAFETY: `ICONINFO` is a plain Win32 C struct whose all-zero representation is valid.
     let mut info: ICONINFO = unsafe { std::mem::zeroed() };
     // SAFETY: `icon` is a live `HICON` from `PrivateExtractIconsW` and `&mut info` is writable; any returned bitmaps are deleted below.
@@ -107,77 +180,21 @@ fn windows_icon(path: &std::path::Path, px: u32) -> Result<(u32, u32, Vec<u8>), 
 }
 
 #[cfg(target_os = "linux")]
-fn linux_icon(path: &std::path::Path, px: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
+fn linux_icon(
+    path: &std::path::Path,
+    nominal_px: u32,
+    scale: u32,
+    raster_px: u32,
+) -> Result<(u32, u32, Option<[f32; 2]>, Vec<u8>), DecodeFailure> {
     let file = if path.extension().is_some_and(|e| e == "desktop") {
-        freedesktop::icon_file(path, px, &freedesktop::data_dirs())
-            .ok_or_else(|| ImageError(format!("no icon for {}", path.display())))?
-    } else { path.to_path_buf() };
-    let bytes = std::fs::read(&file).map_err(|e| ImageError(format!("{}: {e}", file.display())))?;
-    if bytes.len() > 16 << 20 { return Err(ImageError(format!("{} is too large for an icon", file.display()))); }
-    if super::has_svg_extension(&file) { return super::svg_rgba(&bytes, px); }
-    let image = image::load_from_memory(&bytes).map_err(|e| ImageError(format!("{}: {e}", file.display())))?.into_rgba8();
-    if image.width() > 1024 || image.height() > 1024 { return Err(ImageError(format!("{} is too large for an icon", file.display()))); }
-    Ok((image.width(), image.height(), image.into_raw()))
-}
-
-/// Freedesktop icon lookup: a `.desktop` entry's `Icon=` as an absolute path, or by name in the
-/// hicolor theme (every size directory, `@2` included) and then `pixmaps`.
-#[cfg(any(target_os = "linux", test))]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-pub(crate) mod freedesktop {
-    use std::path::{Path, PathBuf};
-
-    pub(crate) fn data_dirs() -> Vec<PathBuf> {
-        let home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")));
-        let system = rune_core::env::var("XDG_DATA_DIRS").filter(|dirs| !dirs.is_empty())
-            .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
-        home.into_iter().chain(system.split(':').filter(|d| !d.is_empty()).map(PathBuf::from)).collect()
-    }
-
-    /// The `Icon=` key of the `[Desktop Entry]` group.
-    pub(crate) fn icon_name(entry: &str) -> Option<&str> {
-        let mut group = "";
-        for line in entry.lines().map(str::trim) {
-            if line.starts_with('[') { group = line; continue; }
-            if group != "[Desktop Entry]" { continue; }
-            if let Some((key, value)) = line.split_once('=') && key.trim() == "Icon" {
-                return Some(value.trim()).filter(|v| !v.is_empty());
-            }
-        }
-        None
-    }
-
-    pub(crate) fn icon_file(entry: &Path, px: u32, data_dirs: &[PathBuf]) -> Option<PathBuf> {
-        let text = std::fs::read_to_string(entry).ok()?;
-        let name = icon_name(&text)?;
-        if Path::new(name).is_absolute() { return Path::new(name).is_file().then(|| name.into()); }
-        let name = name.strip_suffix(".png").or_else(|| name.strip_suffix(".svg")).unwrap_or(name);
-        // (effective pixel size, path); scalable sorts as "any size".
-        let mut found: Vec<(Option<u32>, PathBuf)> = Vec::new();
-        for dir in data_dirs {
-            let Ok(sizes) = std::fs::read_dir(dir.join("icons/hicolor")) else { continue };
-            for size in sizes.flatten() {
-                let label = size.file_name().to_string_lossy().into_owned();
-                let effective = if label == "scalable" { None } else {
-                    let (dims, scale) = label.split_once('@').unwrap_or((&label, "1"));
-                    let size = dims.split_once('x').and_then(|(w, _)| w.parse::<u32>().ok());
-                    let Some(n) = size.zip(scale.parse::<u32>().ok()).map(|(w, s)| w * s.max(1)) else { continue };
-                    Some(n)
-                };
-                for ext in ["png", "svg"] {
-                    let file = size.path().join("apps").join(format!("{name}.{ext}"));
-                    if file.is_file() { found.push((effective, file)); }
-                }
-            }
-        }
-        // Smallest bitmap that covers `px`, else scalable, else the largest bitmap.
-        let covering = found.iter().filter(|(n, _)| n.is_some_and(|n| n >= px)).min_by_key(|(n, _)| *n);
-        let scalable = found.iter().find(|(n, _)| n.is_none());
-        let largest = found.iter().max_by_key(|(n, _)| *n);
-        if let Some((_, file)) = covering.or(scalable).or(largest) { return Some(file.clone()); }
-        data_dirs.iter().flat_map(|dir| ["png", "svg"].map(|ext| dir.join(format!("pixmaps/{name}.{ext}")))).find(|f| f.is_file())
-    }
+        let dirs = super::freedesktop::data_dirs();
+        let home = super::freedesktop::home_dir();
+        super::freedesktop::icon_file_scaled(path, nominal_px, scale, None, &dirs, home.as_deref())
+            .ok_or_else(|| DecodeFailure::not_found(format!("no icon for {}", path.display())))?
+    } else {
+        path.to_path_buf()
+    };
+    super::freedesktop::decode_icon_file(&file, raster_px)
 }
 
 #[cfg(target_os = "macos")]
