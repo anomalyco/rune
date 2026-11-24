@@ -251,7 +251,7 @@ browser cannot promise native clipboard-history exclusion or conditional timed c
 `rune::clipboard::revision()` returns `None` on the web because browsers expose no clipboard
 change counter.
 
-`rune::web::open_url` accepts HTTP(S) and mail links and opens a tab with `noopener,noreferrer`.
+`rune::web::open_url` accepts HTTP(S) and mail links and opens a tab with `noopener,noreferrer`. (`Tx::open_path` and `Tx::reveal_path` are desktop-only and return `OpenPathError::Unsupported` on web.)
 Call it from a user input handler. `Tx::open_url_same_tab` (or `rune::web::open_url_same_tab`)
 replaces the page instead, and takes links relative to the page (`/notes/42`). A single-page
 app routes those itself with `App::same_tab_router`: it gets the absolute URL of each link on

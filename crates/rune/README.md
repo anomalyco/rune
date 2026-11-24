@@ -1957,6 +1957,22 @@ Headless scripts drag and drop files at a point or an element's centre:
 drops them. `--trace` records `drop-hover:true:<path>`, `drop-hover:false:<path>` and
 `drop-files:<count>:<path>`.
 
+### Opening and revealing local paths (`open_path`, `reveal_path`)
+
+`Tx::open_url` accepts only `http:`, `https:` and `mailto:` links. For local files and folders on desktop platforms, use `Tx::open_path` (open in the system's default application) and `Tx::reveal_path` (select the item in Finder, Explorer or the Linux file manager):
+
+```rust
+.on_press_tx(|s: &mut App, tx: &mut Tx| {
+    if let Err(e) = tx.reveal_path(&s.export_path) {
+        s.error = Some(e.to_string());
+    }
+})
+```
+
+- Handlers check syntax only (`OpenPathError::Empty`, embedded NUL -> `OpenPathError::Invalid`, web/mobile -> `OpenPathError::Unsupported`) so the UI thread never calls `stat` during a frame.
+- Once the frame finishes, desktop hosts execute the request off the UI thread: `NSWorkspace` on macOS (`openURL:configuration:completionHandler:` / `activateFileViewerSelectingURLs:` after background path resolution), a background STA worker calling `ShellExecuteW` / `SHOpenFolderAndSelectItems` on Windows, and the shared portal worker on Linux (`org.freedesktop.portal.OpenURI.OpenFile` for open, `org.freedesktop.FileManager1.ShowItems` then `OpenURI.OpenDirectory` for reveal, falling back to `xdg-open`).
+- Headless runs and tests launch nothing and capture every request as `PathRequest { path, action: PathAction }` via `Runtime::take_path_requests()`. `examples/drop-files` shows Open and Reveal buttons for dropped files.
+
 ### Pop-up and context menus
 
 `tx.popup_menu(menu, anchor, on_pick)` opens a native menu once the handler's frame is done.

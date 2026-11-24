@@ -358,8 +358,10 @@ impl RuntimeCore {
             if split || (ran || self.commit.dirty || !tx.scroll_to.is_empty()) && routed {
                 if split {
                     let links = std::mem::take(&mut tx.open_urls);
+                    let paths = std::mem::take(&mut tx.open_paths);
                     self.latch_requests(app, &mut tx);
                     tx.open_urls = links;
+                    tx.open_paths = paths;
                 }
                 if ran || self.commit.dirty {
                     self.motion.capture_flights(&self.tree.nodes, &mut self.paint, &mut self.text, self.env.scale, self.viewport, self.t, &mut tx);
@@ -429,6 +431,7 @@ impl RuntimeCore {
         #[cfg(target_os = "linux")]
         self.note_primary_selection(app);
         let mut open_urls = std::mem::take(&mut tx.open_urls);
+        let mut open_paths = std::mem::take(&mut tx.open_paths);
         self.latch_requests(app, &mut tx);
         // A handler asked for a menu: the hover it takes ends in this commit, not a frame later.
         if self.release_pointer_for_popup() {
@@ -442,6 +445,7 @@ impl RuntimeCore {
                 if r { ran = true; why |= if queued.input { CommitWhy::INPUT } else { CommitWhy::DIRTY }; }
             }
             open_urls.extend(std::mem::take(&mut tx.open_urls));
+            open_paths.extend(std::mem::take(&mut tx.open_paths));
             self.latch_requests(app, &mut tx);
         }
         self.release_files();
@@ -548,6 +552,7 @@ impl RuntimeCore {
         }
         self.interaction_built();
         if !open_urls.is_empty() { self.open_urls(open_urls); }
+        if !open_paths.is_empty() { self.open_paths(open_paths); }
         self.animating
     }
 
@@ -590,8 +595,10 @@ impl RuntimeCore {
     /// commit applies it: the settle is spent here, so nothing is deferred or dropped.
     fn settle_before_input(&mut self, app: &mut dyn AppDriver, tx: &mut Tx, why: &mut u16) {
         let links = std::mem::take(&mut tx.open_urls);
+        let paths = std::mem::take(&mut tx.open_paths);
         self.latch_requests(app, tx);
         tx.open_urls = links;
+        tx.open_paths = paths;
         self.motion.capture_flights(&self.tree.nodes, &mut self.paint, &mut self.text, self.env.scale, self.viewport, self.t, tx);
         tx.settle();
         self.settled |= tx.commit.lands();

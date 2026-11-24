@@ -477,9 +477,12 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
     if let Some(s) = app.compositor_summary(&gpu.device) {
         eprintln!("{s}");
     }
-    // A headless run opens no links (`Tx::open_url`): say which its handlers asked for.
+    // A headless run opens no links (`Tx::open_url`) or local paths (`Tx::open_path`, `Tx::reveal_path`): say which its handlers asked for.
     for url in app.rt_mut().host.take_url_requests() {
         eprintln!("rune: open_url {url} (headless: not opened)");
+    }
+    for req in app.rt_mut().host.take_path_requests() {
+        eprintln!("rune: {} {} (headless: not opened)", req.action.verb(), req.path.display());
     }
     if !loop_checked { std::process::exit(3); }
     Ok(())
