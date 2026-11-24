@@ -35,13 +35,15 @@ fn named_keys_use_appkit_characters() {
     assert_eq!(equivalent("cmd+escape"), eq("\u{1b}", COMMAND));
     assert_eq!(equivalent("ctrl+tab"), eq("\t", CONTROL));
     assert_eq!(equivalent("cmd+space"), eq(" ", COMMAND));
+    assert_eq!(equivalent("printscreen"), eq("\u{f72e}", 0));
 }
 
 #[test]
 fn every_key_has_one_lowercase_character() {
     let names = ["a", "z", "0", "9", "minus", "equal", "comma", "period", "slash", "semicolon", "quote",
         "bracketleft", "bracketright", "backslash", "backquote", "f1", "f24", "escape", "enter", "space", "tab",
-        "backspace", "delete", "insert", "home", "end", "pageup", "pagedown", "left", "right", "up", "down"];
+        "backspace", "delete", "insert", "home", "end", "pageup", "pagedown", "left", "right", "up", "down",
+        "printscreen"];
     for name in names {
         let (key, _) = equivalent(&format!("cmd+{name}"));
         assert_eq!(key.chars().count(), 1, "{name}: {key:?}");

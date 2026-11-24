@@ -7,12 +7,22 @@ pub(super) const SHIFT: u8 = 4;
 pub(super) const SUPER: u8 = 8;
 const PRIMARY_NAME: u8 = 16;
 
-/// A validated, layout-independent accelerator. cmd/command/logo/meta/win are aliases for
-/// super; option/opt is alt; mod (primary) is super on macOS and ctrl elsewhere, as in a
-/// [`Chord`](crate::Chord), and is stored as that key; plus is the key that types "+" on a US
-/// layout (equal). Stored keys are physical US positions. Windows resolves these to virtual
-/// keys at registration; Wayland's portal may rebind the preferred trigger.
-/// Display uses ctrl+alt+shift+super order, lowercase keys and normalized aliases.
+/// A validated, layout-independent accelerator. `cmd`/`command`/`logo`/`meta`/`win` are aliases
+/// for `super`; `option`/`opt` is `alt`; `mod` (primary) is `super` on macOS and `ctrl`
+/// elsewhere, as in a [`Chord`](crate::Chord), and is stored as that key; `plus` is the key
+/// that types `+` on a US layout (`equal`); `print` and `prtsc` alias `printscreen` (supported
+/// on Windows and Linux; rejected on macOS with `InvalidAccelerator`). Stored keys are physical
+/// US positions. Windows resolves these to virtual keys at registration; Wayland's portal may
+/// rebind the preferred trigger. Display uses `ctrl+alt+shift+super` order, lowercase keys and
+/// normalized aliases.
+///
+/// ```
+/// use rune::Shortcut;
+///
+/// let capture: Shortcut = "print".parse().unwrap();
+/// assert_eq!(capture.to_string(), "printscreen");
+/// assert!(capture.require_modifier().is_ok());
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Shortcut {
     pub(super) mods: u8,
@@ -52,6 +62,7 @@ impl Shortcut {
                     "numpadenter" => "enter",
                     "spacebar" => "space",
                     "plus" => "equal",
+                    "print" => "printscreen",
                     s => crate::input::key_table::canonical_named_alias(s)
                         .or_else(|| crate::input::key_table::punctuation_name(s))
                         .or_else(|| s.strip_prefix("key").filter(|s| s.len() == 1 && s.as_bytes()[0].is_ascii_lowercase()))
@@ -81,7 +92,7 @@ impl Shortcut {
             "escape" => "Escape", "enter" => "Return", "tab" => "Tab", "backspace" => "BackSpace",
             "delete" => "Delete", "insert" => "Insert", "home" => "Home", "end" => "End", "pageup" => "Prior",
             "pagedown" => "Next", "left" => "Left", "right" => "Right", "up" => "Up", "down" => "Down",
-            "quote" => "apostrophe", "backquote" => "grave",
+            "printscreen" => "Print", "quote" => "apostrophe", "backquote" => "grave",
             k if k.starts_with('f') && k.len() > 1 => return k.to_uppercase(),
             k => k,
         }.into()
@@ -108,10 +119,31 @@ mod tests {
             ("super+SHIFT+ctrl+ALT+F24", "ctrl+alt+shift+super+f24"),
             (" ctrl + A ", "ctrl+a"), ("esc", "escape"), ("cmd+/", "super+slash"),
             ("KeyK", "k"), ("Digit7", "7"), ("BracketLeft", "bracketleft"), ("Semicolon", "semicolon"),
+            ("printscreen", "printscreen"), ("PrintScreen", "printscreen"), ("print", "printscreen"),
+            ("PRINT", "printscreen"), ("prtsc", "printscreen"), ("PrtSc", "printscreen"),
+            ("ctrl+printscreen", "ctrl+printscreen"), ("alt+print", "alt+printscreen"),
+            ("shift+prtsc", "shift+printscreen"), ("super+printscreen", "super+printscreen"),
         ] {
             let shortcut: Shortcut = input.parse().unwrap();
             assert_eq!(shortcut.to_string(), expected);
             assert_eq!(shortcut, expected.parse().unwrap());
+        }
+    }
+
+    #[test]
+    fn printscreen_emits_xkb_print_keysym_and_portal_triggers() {
+        for (accel, trigger) in [
+            ("printscreen", "Print"),
+            ("print", "Print"),
+            ("prtsc", "Print"),
+            ("ctrl+printscreen", "CTRL+Print"),
+            ("alt+printscreen", "ALT+Print"),
+            ("shift+print", "SHIFT+Print"),
+            ("super+prtsc", "LOGO+Print"),
+        ] {
+            let shortcut: Shortcut = accel.parse().unwrap();
+            assert_eq!(shortcut.keysym_name(), "Print", "{accel}");
+            assert_eq!(shortcut.portal_trigger(), trigger, "{accel}");
         }
     }
     #[test]

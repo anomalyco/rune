@@ -14,6 +14,7 @@ const KEYS: &[(PhysicalKeyCode, &str)] = {
         (F21,"f21"),(F22,"f22"),(F23,"f23"),(F24,"f24"),
         (Escape,"escape"),(Enter,"enter"),(Space,"space"),(Tab,"tab"),(Backspace,"backspace"),(Delete,"delete"),(Insert,"insert"),
         (Home,"home"),(End,"end"),(PageUp,"pageup"),(PageDown,"pagedown"),(ArrowLeft,"left"),(ArrowRight,"right"),(ArrowUp,"up"),(ArrowDown,"down"),
+        (PrintScreen,"printscreen"),
         (Minus,"minus"),(Equal,"equal"),(Comma,"comma"),(Period,"period"),(Slash,"slash"),(Semicolon,"semicolon"),(Quote,"quote"),
         (BracketLeft,"bracketleft"),(BracketRight,"bracketright"),(Backslash,"backslash"),(Backquote,"backquote"),
     ]
@@ -38,11 +39,19 @@ impl Shortcut {
     pub fn physical_key(&self) -> PhysicalKeyCode { self.key }
 
     /// Refuses a chord that would take its key from typing everywhere: no ⌘, ⌃ or ⌥ (Ctrl,
-    /// Alt or Super elsewhere) on a key other than F1–F24. Shift alone isn't enough. Global
-    /// registration applies it unless `App::allow_unmodified_shortcuts`.
+    /// Alt or Super elsewhere) on a key other than F1–F24 or Print Screen. Shift alone isn't
+    /// enough. Global registration applies it unless `App::allow_unmodified_shortcuts`.
+    ///
+    /// ```
+    /// use rune::Shortcut;
+    ///
+    /// assert!("printscreen".parse::<Shortcut>().unwrap().require_modifier().is_ok());
+    /// assert!("space".parse::<Shortcut>().unwrap().require_modifier().is_err());
+    /// ```
     pub fn require_modifier(&self) -> Result<(), ShortcutError> {
-        let function = self.key_name().strip_prefix('f').is_some_and(|n| !n.is_empty());
-        if function || self.mods & (CTRL | ALT | SUPER) != 0 { return Ok(()); }
+        let standalone = self.key == PhysicalKeyCode::PrintScreen
+            || self.key_name().strip_prefix('f').is_some_and(|n| !n.is_empty());
+        if standalone || self.mods & (CTRL | ALT | SUPER) != 0 { return Ok(()); }
         let names = if cfg!(target_os = "macos") { "⌘, ⌃ or ⌥" } else { "Ctrl, Alt or Super" };
         Err(ShortcutError::InvalidAccelerator(format!("{self} needs {names}")))
     }
@@ -132,6 +141,14 @@ mod tests {
             assert_eq!(shortcut.physical_key(), key);
         }
         assert!(Shortcut::from_physical_key(PhysicalKeyCode::ShiftLeft, crate::Mods::default()).is_err());
+        let bare = Shortcut::from_physical_key(PhysicalKeyCode::PrintScreen, crate::Mods::default()).unwrap();
+        assert_eq!(bare.to_string(), "printscreen");
+        assert!(bare.require_modifier().is_ok());
+        let shifted = Shortcut::from_physical_key(PhysicalKeyCode::PrintScreen, crate::Mods { shift: true, ..Default::default() }).unwrap();
+        assert_eq!(shifted.to_string(), "shift+printscreen");
+        assert!(shifted.require_modifier().is_ok());
+        assert!("space".parse::<Shortcut>().unwrap().require_modifier().is_err());
+        assert!("shift+a".parse::<Shortcut>().unwrap().require_modifier().is_err());
     }
 
     #[test]
@@ -141,6 +158,9 @@ mod tests {
         assert_eq!(key("ctrl+f5"), "F5");
         assert_eq!(key("ctrl+left"), "←");
         assert_eq!(key("ctrl+enter"), if cfg!(target_os = "macos") { "↩" } else { "Return" });
+        assert_eq!(key("printscreen"), "Print Screen");
+        assert_eq!(key("ctrl+printscreen"), "Print Screen");
+        assert_eq!("printscreen".parse::<Shortcut>().unwrap().menu_keycaps(), ["Print Screen"]);
         assert_eq!(crate::input::key_table::capital_keycap("k"), "K");
         assert_eq!(crate::input::key_table::capital_keycap("ß"), "ß");
         assert_eq!(crate::input::key_table::capital_keycap("ı"), "ı");

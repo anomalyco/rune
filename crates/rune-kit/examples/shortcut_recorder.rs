@@ -45,13 +45,20 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
 }
 fn main() {
     if std::env::args().any(|a| a == "--labels") {
-        for key in ["super+q", "ctrl+slash", "shift+space"] {
+        for key in ["super+q", "ctrl+slash", "shift+space", "printscreen", "ctrl+printscreen", "alt+printscreen"] {
             let shortcut: Shortcut = key.parse().unwrap();
             println!("{} {:?} {:?}", shortcut, shortcut.physical_key(), shortcut.keycaps());
         }
         return;
     }
-    let app = App::new(AppSpec::new("Shortcut recorder", (360.0, 180.0), State::default, view))
+    let spec = AppSpec::<State> {
+        scenes: &[
+            ("printscreen", |s| s.recorder = ShortcutRecorderState::new(Some("printscreen".parse().unwrap()))),
+            ("ctrl-printscreen", |s| s.recorder = ShortcutRecorderState::new(Some("ctrl+printscreen".parse().unwrap()))),
+        ],
+        ..AppSpec::new("Shortcut recorder", (360.0, 180.0), State::default, view)
+    };
+    let app = App::new(spec)
         .global_shortcut("ctrl+shift+space", |_, _| {});
     let handle = app.handle();
     let shared = handle.clone();

@@ -136,13 +136,27 @@ fn a_chord_without_a_modifier_is_refused_before_on_change_but_f_keys_pass() {
     }
     assert_eq!(rt.state.recorder.shortcut().unwrap().to_string(), "ctrl+k");
     physical(&mut rt, Code::F5, Mods::default(), true, false);
+    physical(&mut rt, Code::F5, Mods::default(), false, false);
     assert_eq!(rt.state.recorder.shortcut().unwrap().to_string(), "f5");
     assert_eq!(rt.state.changes, 1);
+    click(&mut rt, "shortcut");
+    physical(&mut rt, Code::PrintScreen, Mods::default(), true, false);
+    physical(&mut rt, Code::PrintScreen, Mods::default(), false, false);
+    assert_eq!(rt.state.recorder.shortcut().unwrap().to_string(), "printscreen");
+    assert_eq!(rt.state.recorder.keycaps(), ["Print Screen"]);
+    assert_eq!(rt.state.changes, 2);
+    assert!(rt.accessibility_json().to_string().contains(r#""Print Screen""#));
+    click(&mut rt, "shortcut");
+    physical(&mut rt, Code::PrintScreen, Mods { ctrl: true, ..Mods::default() }, true, false);
+    physical(&mut rt, Code::PrintScreen, Mods { ctrl: true, ..Mods::default() }, false, false);
+    assert_eq!(rt.state.recorder.shortcut().unwrap().to_string(), "ctrl+printscreen");
+    assert_eq!(rt.state.recorder.keycaps(), [if cfg!(target_os = "macos") { "⌃" } else { "Ctrl" }, "Print Screen"]);
+    assert_eq!(rt.state.changes, 3);
     rt.state.unmodified = true; rt.invalidate(); rt.frame(0.0);
     click(&mut rt, "shortcut");
     physical(&mut rt, Code::Space, Mods::default(), true, false);
     assert_eq!(rt.state.recorder.shortcut().unwrap().to_string(), "space");
-    assert_eq!(rt.state.changes, 2);
+    assert_eq!(rt.state.changes, 4);
 }
 
 #[test]

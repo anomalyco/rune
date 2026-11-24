@@ -79,15 +79,19 @@ impl Native {
     }
 }
 
+fn x11_keycode(shortcut: &Shortcut, min_keycode: u8, max_keycode: u8) -> Result<u8, ShortcutError> {
+    shortcut.physical_key().to_scancode().and_then(|c| u8::try_from(c + 8).ok())
+        .filter(|c| (min_keycode..=max_keycode).contains(c))
+        .ok_or_else(|| ShortcutError::InvalidAccelerator(shortcut.to_string()))
+}
+
 impl Backend for Native {
     fn register(&mut self, id: ShortcutId, shortcut: &Shortcut) -> Result<(), ShortcutError> {
         let conn = &self.connection;
         let setup = conn.setup();
         let mapping = conn.get_keyboard_mapping(setup.min_keycode, setup.max_keycode - setup.min_keycode + 1)
             .map_err(error)?.reply().map_err(reply_error)?;
-        let code = shortcut.physical_key().to_scancode().and_then(|c| u8::try_from(c + 8).ok())
-            .filter(|c| (setup.min_keycode..=setup.max_keycode).contains(c))
-            .ok_or_else(|| ShortcutError::InvalidAccelerator(shortcut.to_string()))?;
+        let code = x11_keycode(shortcut, setup.min_keycode, setup.max_keycode)?;
         let mut numcodes = Vec::new();
         for (index, syms) in mapping.keysyms.chunks(mapping.keysyms_per_keycode as usize).enumerate() {
             let code = setup.min_keycode + index as u8;
@@ -147,5 +151,15 @@ mod tests {
         let native = x11rb::x11_utils::X11Error { error_kind: ErrorKind::Access, error_code: 10,
             sequence: 1, bad_value: 0, minor_opcode: 0, major_opcode: 33, extension_name: None, request_name: None };
         assert_eq!(reply_error(ReplyError::X11Error(native)), ShortcutError::Conflict);
+    }
+
+    #[test]
+    fn printscreen_resolves_to_evdev_x11_keycode() {
+        for accel in ["printscreen", "print", "prtsc", "ctrl+printscreen", "alt+printscreen"] {
+            let shortcut: Shortcut = accel.parse().unwrap();
+            // Linux evdev KEY_SYSRQ (99) + X11 offset (8) = 107.
+            assert_eq!(x11_keycode(&shortcut, 8, 255), Ok(107), "{accel}");
+            assert!(matches!(x11_keycode(&shortcut, 8, 100), Err(ShortcutError::InvalidAccelerator(_))), "{accel}");
+        }
     }
 }

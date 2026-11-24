@@ -297,6 +297,9 @@ mod tests {
         k.chord(1.1, &"mod+space".parse().unwrap());
         let primary = if cfg!(target_os = "macos") { "⌘" } else { "⌃" };
         assert_eq!(labels(&mut k, 1.1), ["⎋".into(), "↩".into(), format!("{primary}␣")]);
+        k.chord(1.2, &"printscreen".parse().unwrap());
+        k.chord(1.3, &"ctrl+printscreen".parse().unwrap());
+        assert_eq!(labels(&mut k, 1.3), [format!("{primary}␣"), "PrtSc".into(), "⌃PrtSc".into()]);
     }
 
     #[test]

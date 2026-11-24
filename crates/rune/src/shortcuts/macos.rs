@@ -93,9 +93,13 @@ fn register_with_fallback<T>(
     Ok(handle)
 }
 
+fn carbon_keycode(shortcut: &Shortcut) -> Result<u32, ShortcutError> {
+    keycode(shortcut.key_name()).ok_or_else(|| ShortcutError::InvalidAccelerator(shortcut.to_string()))
+}
+
 impl Backend for Native {
     fn register(&mut self, id: ShortcutId, shortcut: &Shortcut) -> Result<(), ShortcutError> {
-        let code = keycode(shortcut.key_name()).ok_or_else(|| ShortcutError::InvalidAccelerator(shortcut.to_string()))?;
+        let code = carbon_keycode(shortcut)?;
         let mods = carbon_mods(shortcut);
         let hotkey = register_with_fallback(
             (code, mods),
@@ -390,6 +394,16 @@ mod tests {
             assert_eq!(got, Err(expected));
             assert_eq!(calls, vec![EXCLUSIVE, SHARED]);
             assert_eq!(symbolic_calls, 1);
+        }
+    }
+
+    #[test]
+    fn printscreen_is_rejected_with_invalid_accelerator() {
+        use super::*;
+        assert_eq!(keycode("printscreen"), None);
+        for accel in ["printscreen", "print", "prtsc", "ctrl+printscreen", "alt+printscreen"] {
+            let shortcut: Shortcut = accel.parse().unwrap();
+            assert_eq!(carbon_keycode(&shortcut), Err(ShortcutError::InvalidAccelerator(shortcut.to_string())), "{accel}");
         }
     }
 }

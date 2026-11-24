@@ -292,7 +292,7 @@ impl RecorderCore {
 /// returning an error keeps the old value and shows the refused chord with a message
 /// (`error_message` words it). An unchanged chord is a no-op unless the state was marked
 /// unregistered (`ShortcutRecorderState::mark_unregistered`). A chord without ⌘, ⌃ or ⌥ (Ctrl,
-/// Alt or Super elsewhere) other than F1–F24 is refused before `on_change` unless
+/// Alt or Super elsewhere) other than F1–F24 or Print Screen is refused before `on_change` unless
 /// `allow_unmodified`.
 pub struct ShortcutRecorder<S> {
     core: RecorderCore,
