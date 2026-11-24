@@ -220,7 +220,7 @@ impl Gpu {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn for_surface_setup_from<'w, T>(
+    pub(super) fn for_surface_setup_from<'w, T>(
         early: Option<(Gpu, Renderer)>,
         wanted: wgpu::Features,
         translucent: bool,
@@ -236,6 +236,7 @@ impl Gpu {
                 let surface = make_surface(&early.instance)
                     .map_err(|message| SurfaceSetupError { kind: Failure::SurfaceCreate, message })?;
                 if crate::render::translucency::serves(&early, &surface, wanted, translucent) {
+                    early.install_surface_error_policy();
                     match setup(&early, &surface, Some(renderer)) {
                         Ok(value) => {
                             Self::log_surface_gpu(&early);
