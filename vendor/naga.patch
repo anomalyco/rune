@@ -1,0 +1,157 @@
+diff --git a/src/back/pipeline_constants.rs b/src/back/pipeline_constants.rs
+--- a/src/back/pipeline_constants.rs
++++ b/src/back/pipeline_constants.rs
+@@ -3,7 +3,7 @@
+     string::{String, ToString},
+     vec::Vec,
+ };
+-use core::mem;
++use core::{mem, ops};
+ 
+ use hashbrown::HashSet;
+ use thiserror::Error;
+@@ -422,6 +422,16 @@
+     // handles in the new, local expression arena.
+     let mut adjusted_local_expressions = HandleVec::with_capacity(function.expressions.len());
+ 
++    // For each original local expression handle, the index range of new
++    // expressions appended to `function.expressions` while evaluating it.
++    // Because `expressions.drain()` visits handles in ascending order, the
++    // expressions newly created for an original `Statement::Emit(first..=last)`
++    // are the contiguous range `start(first)..end(last)`. An expression that
++    // constant-folds to an already-existing handle appends nothing (an empty
++    // range), so its `Emit` neither stretches backwards over earlier emits nor
++    // becomes inverted.
++    let mut new_expr_ranges = HandleVec::with_capacity(function.expressions.len());
++
+     let mut local_expression_kind_tracker = crate::proc::ExpressionKindTracker::new();
+ 
+     let mut expressions = function.expressions.take();
+@@ -436,26 +446,33 @@
+     let mut emitter = Emitter::default();
+     let mut block = Block::new();
+ 
+-    let mut evaluator = ConstantEvaluator::for_wgsl_function(
+-        module,
+-        &mut function.expressions,
+-        &mut local_expression_kind_tracker,
+-        layouter,
+-        &mut emitter,
+-        &mut block,
+-        false,
+-    );
+-
+     for (old_h, mut expr, span) in expressions.drain() {
+         if let Expression::Override(h) = expr {
+             expr = Expression::Constant(override_map[h]);
+         }
+         adjust_expr(&adjusted_local_expressions, &mut expr);
++        let start = function.expressions.len() as u32;
++        let mut evaluator = ConstantEvaluator::for_wgsl_function(
++            module,
++            &mut function.expressions,
++            &mut local_expression_kind_tracker,
++            layouter,
++            &mut emitter,
++            &mut block,
++            false,
++        );
+         let h = evaluator.try_eval_and_append(expr, span)?;
++        let end = function.expressions.len() as u32;
+         adjusted_local_expressions.insert(old_h, h);
++        new_expr_ranges.insert(old_h, start..end);
+     }
+ 
+-    adjust_block(&adjusted_local_expressions, &mut function.body);
++    adjust_block(
++        &adjusted_local_expressions,
++        &new_expr_ranges,
++        &function.expressions,
++        &mut function.body,
++    );
+ 
+     filter_emits_in_block(&mut function.body, &function.expressions);
+ 
+@@ -704,29 +721,41 @@
+ }
+ 
+ /// Replace every expression handle in `block` with its counterpart
+-/// given by `new_pos`.
+-fn adjust_block(new_pos: &HandleVec<Expression, Handle<Expression>>, block: &mut Block) {
++/// given by `new_pos`, remapping `Statement::Emit` ranges using the newly
++/// appended index spans in `new_ranges`.
++fn adjust_block(
++    new_pos: &HandleVec<Expression, Handle<Expression>>,
++    new_ranges: &HandleVec<Expression, ops::Range<u32>>,
++    expressions: &Arena<Expression>,
++    block: &mut Block,
++) {
+     for stmt in block.iter_mut() {
+-        adjust_stmt(new_pos, stmt);
++        adjust_stmt(new_pos, new_ranges, expressions, stmt);
+     }
+ }
+ 
+ /// Replace every expression handle in `stmt` with its counterpart
+-/// given by `new_pos`.
+-fn adjust_stmt(new_pos: &HandleVec<Expression, Handle<Expression>>, stmt: &mut Statement) {
++/// given by `new_pos`, remapping `Statement::Emit` ranges using the newly
++/// appended index spans in `new_ranges`.
++fn adjust_stmt(
++    new_pos: &HandleVec<Expression, Handle<Expression>>,
++    new_ranges: &HandleVec<Expression, ops::Range<u32>>,
++    expressions: &Arena<Expression>,
++    stmt: &mut Statement,
++) {
+     let adjust = |expr: &mut Handle<Expression>| {
+         *expr = new_pos[*expr];
+     };
+     match *stmt {
+         Statement::Emit(ref mut range) => {
+-            if let Some((mut first, mut last)) = range.first_and_last() {
+-                adjust(&mut first);
+-                adjust(&mut last);
+-                *range = Range::new_from_bounds(first, last);
++            if let Some((first, last)) = range.first_and_last() {
++                let start = new_ranges[first].start;
++                let end = new_ranges[last].end;
++                *range = Range::from_index_range(start..end, expressions);
+             }
+         }
+         Statement::Block(ref mut block) => {
+-            adjust_block(new_pos, block);
++            adjust_block(new_pos, new_ranges, expressions, block);
+         }
+         Statement::If {
+             ref mut condition,
+@@ -734,8 +763,8 @@
+             ref mut reject,
+         } => {
+             adjust(condition);
+-            adjust_block(new_pos, accept);
+-            adjust_block(new_pos, reject);
++            adjust_block(new_pos, new_ranges, expressions, accept);
++            adjust_block(new_pos, new_ranges, expressions, reject);
+         }
+         Statement::Switch {
+             ref mut selector,
+@@ -743,7 +772,7 @@
+         } => {
+             adjust(selector);
+             for case in cases.iter_mut() {
+-                adjust_block(new_pos, &mut case.body);
++                adjust_block(new_pos, new_ranges, expressions, &mut case.body);
+             }
+         }
+         Statement::Loop {
+@@ -751,8 +780,8 @@
+             ref mut continuing,
+             ref mut break_if,
+         } => {
+-            adjust_block(new_pos, body);
+-            adjust_block(new_pos, continuing);
++            adjust_block(new_pos, new_ranges, expressions, body);
++            adjust_block(new_pos, new_ranges, expressions, continuing);
+             if let Some(e) = break_if.as_mut() {
+                 adjust(e);
+             }
