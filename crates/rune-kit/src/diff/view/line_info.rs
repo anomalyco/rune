@@ -3,7 +3,7 @@
 
 use rune::{Anim, Cursor, El, Icon, Span, col, icon, rich, row, text};
 
-use super::View;
+use super::{DiffLabel, View};
 use crate::diff::state::{DiffState, EXPAND_STEP, Expand, GAP_H};
 
 // Pierre's separator glyphs (`diffs-icon-expand`, `diffs-icon-expand-all`). Its "up" button
@@ -52,17 +52,17 @@ impl View {
         let file = &st.files()[f];
         let hidden = st.hidden(f, gap).unwrap_or(0);
         let (first, last) = (gap == 0, gap == file.hunks.len());
-        // Pierre's words, which OpenCode Desktop shows untranslated.
-        let count = if hidden == 1 { "1 unmodified line".to_owned() } else { format!("{hidden} unmodified lines") };
+        // Pierre's words, which OpenCode Desktop shows untranslated by default.
+        let count = self.label(DiffLabel::UnmodifiedLines(hidden));
         let mut inner = row().key("inner").h(GAP_H).min_w(0.0);
         if hidden > 0 && file.expandable() {
             let steps: Vec<(Expand, &'static Icon, String)> = match (first, last) {
-                (true, _) => vec![(Expand::Up, &LINE_INFO_DOWN, format!("Show {} more lines above", hidden.min(EXPAND_STEP)))],
-                (_, true) => vec![(Expand::Down, &LINE_INFO_UP, format!("Show {} more lines below", hidden.min(EXPAND_STEP)))],
-                _ if hidden <= EXPAND_STEP => vec![(Expand::All, &LINE_INFO_ALL, format!("Show {hidden} hidden lines"))],
+                (true, _) => vec![(Expand::Up, &LINE_INFO_DOWN, self.label(DiffLabel::ShowMoreLinesAbove(hidden.min(EXPAND_STEP))))],
+                (_, true) => vec![(Expand::Down, &LINE_INFO_UP, self.label(DiffLabel::ShowMoreLinesBelow(hidden.min(EXPAND_STEP))))],
+                _ if hidden <= EXPAND_STEP => vec![(Expand::All, &LINE_INFO_ALL, self.label(DiffLabel::ShowHiddenLines(hidden)))],
                 _ => vec![
-                    (Expand::Down, &LINE_INFO_UP, format!("Show {EXPAND_STEP} more lines below")),
-                    (Expand::Up, &LINE_INFO_DOWN, format!("Show {EXPAND_STEP} more lines above")),
+                    (Expand::Down, &LINE_INFO_UP, self.label(DiffLabel::ShowMoreLinesBelow(EXPAND_STEP))),
+                    (Expand::Up, &LINE_INFO_DOWN, self.label(DiffLabel::ShowMoreLinesAbove(EXPAND_STEP))),
                 ],
             };
             let w = self.gutter_w(st, f) - LINE_INFO_GAP;

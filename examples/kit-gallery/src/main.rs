@@ -44,6 +44,9 @@ pub struct G {
     pub table: rune_kit::TableState,
     pub table_rows: usize,
     pub table_menu: Option<(String, rune::PointerPress)>,
+    /// The diff story's state and most recent comment anchor.
+    pub diff: rune_kit::diff::DiffState,
+    pub diff_comment: Option<rune_kit::diff::LineRange>,
     pub neutral: bool,
     pub palette: bool,
     /// `--reduced-motion`: the runtime's reduced-motion mode.
@@ -86,6 +89,8 @@ fn init() -> G {
         },
         table_rows: 16,
         table_menu: None,
+        diff: stories::sample_diff(),
+        diff_comment: None,
         neutral: rune::extra_args().iter().any(|a| a == "neutral"),
         palette: rune::extra_args().iter().any(|a| a == "palette"),
         reduced: rune::extra_args().iter().any(|a| a == "--reduced-motion"),

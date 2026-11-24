@@ -482,13 +482,21 @@ DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
   an app slot (`header_actions`). The header of the file in view sticks to the top.
 - **Annotations** are the app's widgets under a line, keyed by file, side and line, such as
   review comments. Rows grow to fit them.
-- **Line selection**: click a line number, Shift-click to extend, or drag down the numbers;
-  `on_select` gets the range. With `on_comment`, a "+" shows by the hovered line's number.
-  Cmd-C copies the selected lines of one side, without numbers or markers; a text selection
-  over the code copies the side it started on.
+- **Line selection and comments**: click a line number, Shift-click to extend, or drag down
+  the numbers; `on_select` gets the range. With `on_comment`, a "+" shows by the hovered
+  line's number on both sides by default; `comment_filter(|file, at| ...)` restricts which
+  files and lines show and invoke it (in unified mode, context lines try `Side::New` first
+  and fall back to `Side::Old`). Cmd-C copies the selected lines of one side, without numbers
+  or markers; a text selection over the code copies the side it started on.
+- **Localisation**: `DiffView::labels(|label: DiffLabel<'_>| -> Option<String>)` replaces
+  any visible or accessible string `DiffView` emits (the list name, line rows, `+` comment
+  button, fold summaries and expand buttons, file toggle/status/summary, no-newline marker
+  and empty/binary file notes), returning `None` (or a blank string) to keep the default
+  English text. Changing locale or labels invalidates memoised diff rows automatically. The
+  gallery's `rune-diff--localized` scene shows both `labels` and `comment_filter`.
 - **Keys**: call `diff.key(ev, tx)` from `on_key` for `j`/`k` (next/previous hunk), `]`/`[`
   (next/previous file) and Escape. Shift-click needs `App::modifier_keys`. Rows read as
-  "added line 12: ..." to accessibility.
+  "added line 12: ..." to accessibility by default.
 - **Beside a file tree**: `scroll_to_file(i, tx)` and `scroll_to_line` scroll to it, and
   `on_visible_file` reports the file at the top as the list scrolls.
 - **Long diffs** are a virtual list built by index, so a commit costs the rows in view, not
