@@ -7,7 +7,7 @@ use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
 
 use super::Host;
-use crate::render::{Gpu, Renderer, SurfaceSetupError};
+use crate::render::{Gpu, PresentationFallback, Renderer, SurfaceSetupError};
 #[cfg(target_os = "windows")]
 use crate::window::chrome;
 use crate::window::chrome::{frame_chrome, place_chrome, sync_chrome_core};
@@ -164,7 +164,7 @@ impl Host {
         // A window with a client-side frame keeps its pixels' alpha for the frame's corner arcs;
         // one under a compositor that draws the decorations itself keeps the surface it always had.
         let client_frame = self.client_frame(&window);
-        let make_surface = |instance: &wgpu::Instance| instance.create_surface(window.clone()).map_err(|e| e.to_string());
+        let make_surface = |instance: &wgpu::Instance, _| instance.create_surface(window.clone()).map_err(|e| e.to_string());
         let setup_surface = |gpu: &Gpu, surface: &wgpu::Surface<'_>| -> Result<_, SurfaceSetupError> {
             let initial = drawable_size(None, (phys.width, phys.height), max_surface_dim(Some(gpu)));
             let (mut config, translucent) = surface_config(surface, &gpu.adapter, initial, srgb_blend)
@@ -185,16 +185,18 @@ impl Host {
             Ok(config)
         };
         let mut prewarmed = None;
-        // A device that died while this window was closed draws nothing: release it and any
-        // compositor resources on it before making another (D3D12 keeps a removed device alive
-        // per adapter until every resource made on it is dropped).
-        if self.gpu.as_ref().is_some_and(|(gpu, _)| gpu.is_lost()) {
+        let (wanted_pres, pres_policy) = Gpu::dx12_presentation();
+        // A device that died while this window was closed, or uses a presentation mode that was
+        // since switched to plain HWND, draws nothing: release it and any compositor resources on
+        // it before making another (D3D12 keeps a removed device alive per adapter until every
+        // resource made on it is dropped).
+        if self.gpu.as_ref().is_some_and(|(gpu, _)| gpu.is_lost() || gpu.presentation() != wanted_pres) {
             self.gpu = None;
             self.app.release_compositor_gpu();
         }
         let (new_gpu, surface, configured) = match self.gpu.take() {
             Some((gpu, renderer)) => {
-                let surface = match make_surface(&gpu.instance) {
+                let surface = match make_surface(&gpu.instance, gpu.presentation()) {
                     Ok(surface) => surface,
                     Err(error) => {
                         drop((renderer, gpu));
@@ -208,35 +210,55 @@ impl Host {
                         (None, surface, configured)
                     }
                     Err(err) => {
-                        if err.kind == crate::gpu::fallback::Failure::DeviceLost {
-                            drop((surface, renderer, gpu));
-                            self.app.release_compositor_gpu();
-                            *self.gpu_pool.borrow_mut() = Weak::default();
-                            return Err(err.message);
+                        use crate::gpu::fallback::Action;
+                        match crate::gpu::fallback::decide_with_presentation(Gpu::env_fallback_policy(), gpu.presentation(), pres_policy, err.kind) {
+                            Action::Stop => {
+                                if err.kind == crate::gpu::fallback::Failure::DeviceLost {
+                                    drop((surface, renderer, gpu));
+                                    self.app.release_compositor_gpu();
+                                    *self.gpu_pool.borrow_mut() = Weak::default();
+                                } else {
+                                    self.gpu = Some((gpu, renderer));
+                                }
+                                return Err(err.message);
+                            }
+                            Action::SwitchToHwnd => {
+                                drop((surface, renderer, gpu));
+                                self.app.release_compositor_gpu();
+                                *self.gpu_pool.borrow_mut() = Weak::default();
+                                let _ = Gpu::switch_to_hwnd_instance(features, &err.message);
+                                let (gpu, surface, renderer, configured) = Gpu::for_surface_setup(
+                                    features, transparent, PresentationFallback::Allow, make_surface, setup_surface,
+                                ).map_err(|e| e.message)?;
+                                prewarmed = renderer;
+                                let gpu = Arc::new(gpu);
+                                *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
+                                crate::render::surface_gpu(&gpu);
+                                (Some(gpu), surface, configured)
+                            }
+                            Action::MoveOn => {
+                                let instance = gpu.instance.clone();
+                                let gpu_pres = gpu.presentation();
+                                let first_info = gpu.adapter.get_info();
+                                let excluded = Gpu::candidate_info(0, &gpu.adapter, Some(&surface));
+                                drop((surface, renderer, gpu));
+                                self.app.release_compositor_gpu();
+                                *self.gpu_pool.borrow_mut() = Weak::default();
+                                let (gpu, surface, configured) = Gpu::for_surface_setup_excluding(
+                                    instance, gpu_pres, PresentationFallback::Allow, excluded, first_info, err.message, features, transparent, make_surface, setup_surface,
+                                ).map_err(|e| e.message)?;
+                                let gpu = Arc::new(gpu);
+                                *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
+                                crate::render::surface_gpu(&gpu);
+                                (Some(gpu), surface, configured)
+                            }
                         }
-                        if crate::gpu::fallback::decide(Gpu::env_fallback_policy(), err.kind) == crate::gpu::fallback::Decision::Stop {
-                            self.gpu = Some((gpu, renderer));
-                            return Err(err.message);
-                        }
-                        let instance = gpu.instance.clone();
-                        let first_info = gpu.adapter.get_info();
-                        let excluded = Gpu::candidate_info(0, &gpu.adapter, Some(&surface));
-                        drop((surface, renderer, gpu));
-                        self.app.release_compositor_gpu();
-                        *self.gpu_pool.borrow_mut() = Weak::default();
-                        let (gpu, surface, configured) = Gpu::for_surface_setup_excluding(
-                            instance, excluded, first_info, err.message, features, transparent, make_surface, setup_surface,
-                        ).map_err(|e| e.message)?;
-                        let gpu = Arc::new(gpu);
-                        *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
-                        crate::render::surface_gpu(&gpu);
-                        (Some(gpu), surface, configured)
                     }
                 }
             }
             None => {
                 // A shared device that can't composite this window's translucent pixels gets its own.
-                let cached = self.gpu_pool.borrow().upgrade().filter(|gpu| !gpu.is_lost()).and_then(|gpu| {
+                let cached = self.gpu_pool.borrow().upgrade().filter(|gpu| !gpu.is_lost() && gpu.presentation() == wanted_pres).and_then(|gpu| {
                     let surface = gpu.instance.create_surface(window.clone()).ok()?;
                     crate::render::translucency::serves(&gpu, &surface, features, transparent).then_some((gpu, surface))
                 });
@@ -244,30 +266,48 @@ impl Host {
                     match setup_surface(&gpu, &surface) {
                         Ok(configured) => (gpu, surface, configured),
                         Err(err) => {
-                            if err.kind == crate::gpu::fallback::Failure::DeviceLost {
-                                *self.gpu_pool.borrow_mut() = Weak::default();
-                                return Err(err.message);
+                            use crate::gpu::fallback::Action;
+                            match crate::gpu::fallback::decide_with_presentation(Gpu::env_fallback_policy(), gpu.presentation(), pres_policy, err.kind) {
+                                Action::Stop => {
+                                    if err.kind == crate::gpu::fallback::Failure::DeviceLost {
+                                        *self.gpu_pool.borrow_mut() = Weak::default();
+                                    }
+                                    return Err(err.message);
+                                }
+                                Action::SwitchToHwnd => {
+                                    drop((surface, gpu));
+                                    *self.gpu_pool.borrow_mut() = Weak::default();
+                                    let _ = Gpu::switch_to_hwnd_instance(features, &err.message);
+                                    let (gpu, surface, renderer, configured) = Gpu::for_surface_setup(
+                                        features, transparent, PresentationFallback::Allow, make_surface, setup_surface,
+                                    ).map_err(|e| e.message)?;
+                                    prewarmed = renderer;
+                                    let gpu = Arc::new(gpu);
+                                    *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
+                                    crate::render::surface_gpu(&gpu);
+                                    (gpu, surface, configured)
+                                }
+                                Action::MoveOn => {
+                                    let instance = gpu.instance.clone();
+                                    let gpu_pres = gpu.presentation();
+                                    let first_info = gpu.adapter.get_info();
+                                    let excluded = Gpu::candidate_info(0, &gpu.adapter, Some(&surface));
+                                    drop((surface, gpu));
+                                    *self.gpu_pool.borrow_mut() = Weak::default();
+                                    let (gpu, surface, configured) = Gpu::for_surface_setup_excluding(
+                                        instance, gpu_pres, PresentationFallback::Allow, excluded, first_info, err.message, features, transparent, make_surface, setup_surface,
+                                    ).map_err(|e| e.message)?;
+                                    let gpu = Arc::new(gpu);
+                                    *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
+                                    crate::render::surface_gpu(&gpu);
+                                    (gpu, surface, configured)
+                                }
                             }
-                            if crate::gpu::fallback::decide(Gpu::env_fallback_policy(), err.kind) == crate::gpu::fallback::Decision::Stop {
-                                return Err(err.message);
-                            }
-                            let instance = gpu.instance.clone();
-                            let first_info = gpu.adapter.get_info();
-                            let excluded = Gpu::candidate_info(0, &gpu.adapter, Some(&surface));
-                            drop((surface, gpu));
-                            *self.gpu_pool.borrow_mut() = Weak::default();
-                            let (gpu, surface, configured) = Gpu::for_surface_setup_excluding(
-                                instance, excluded, first_info, err.message, features, transparent, make_surface, setup_surface,
-                            ).map_err(|e| e.message)?;
-                            let gpu = Arc::new(gpu);
-                            *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
-                            crate::render::surface_gpu(&gpu);
-                            (gpu, surface, configured)
                         }
                     }
                 } else {
                     let (gpu, surface, renderer, configured) = Gpu::for_surface_setup(
-                        features, transparent, make_surface, setup_surface,
+                        features, transparent, PresentationFallback::Allow, make_surface, setup_surface,
                     ).map_err(|e| e.message)?;
                     prewarmed = renderer;
                     let gpu = Arc::new(gpu);
@@ -541,12 +581,17 @@ impl Host {
         let (gpu, surface, prewarmed, config) = Gpu::for_surface_setup(
             features,
             transparent,
-            |instance| {
+            PresentationFallback::Allow,
+            |instance, presentation| {
                 #[cfg(target_os = "windows")]
-                if let Some(visual) = visual {
+                if presentation == crate::gpu::fallback::Presentation::DirectComposition
+                    && let Some(visual) = visual
+                {
                     // SAFETY: the window keeps the visual's `Handover` as long as it keeps this surface.
                     return unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual)) }.map_err(|e| e.to_string());
                 }
+                #[cfg(not(target_os = "windows"))]
+                let _ = presentation;
                 instance.create_surface(window.clone()).map_err(|e| e.to_string())
             },
             |gpu, surface| {
@@ -585,7 +630,11 @@ impl Host {
         #[cfg(target_os = "windows")]
         { w.native.slot.reset(); w.native.damage.reset(); }
         #[cfg(target_os = "windows")]
-        w.native.mode.rebind();
+        if gpu.presentation() == crate::gpu::fallback::Presentation::PlainHwnd {
+            w.native.mode = handover::SurfaceMode::Gpu;
+        } else {
+            w.native.mode.rebind();
+        }
         #[cfg(target_os = "macos")]
         {
             w.native.present = present;

@@ -70,7 +70,7 @@ use pass::{ActivePass, Backdrop};
 
 #[cfg(target_os = "windows")]
 pub(crate) use damaged::MAX_RECTS;
-pub(crate) use surface_setup::SurfaceSetupError;
+pub(crate) use surface_setup::{PresentationFallback, SurfaceSetupError};
 pub(crate) use device::choose_gpu_backend;
 pub(crate) use device::discard_prewarm;
 pub(crate) use instance::Globals;

@@ -751,7 +751,17 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   `builtin_native_ios.metallib` / `builtin_native_ios_sim.metallib` (including the uber shader),
   while iOS on wgpu compiles WGSL at launch. On Windows, DX12 loads precompiled DXBC uber shaders
   (`uber.vs.dxbc`, `uber.fs.dxbc`; set `RUNE_DISABLE_DXBC=1` to disable). `WGPU_ADAPTER_NAME`
-  and `WGPU_POWER_PREF` (`low`, `high` or `none`) override GPU adapter selection. After editing
+  and `WGPU_POWER_PREF` (`low`, `high` or `none`) override GPU adapter selection.
+  `WGPU_DX12_PRESENTATION_SYSTEM` (`visual` or `hwnd`) overrides the DX12 swap-chain presentation
+  system (setting `hwnd` also enables RenderDoc capture). By default Windows uses DirectComposition
+  (`DxgiFromVisual`); if DirectComposition is unavailable on the system (for example under Wine or
+  Proton, where `CreateSwapChainForComposition` returns `E_NOTIMPL`, or on Windows Server Core
+  without `dcomp.dll`), Rune falls back automatically to a plain HWND DXGI swap chain
+  (`DxgiFromHwnd`) on the same adapter. A window on the plain HWND fallback cannot composite
+  transparency (transparent windows degrade to opaque), cannot host DirectComposition video layers
+  (video falls back to UI-drawn playback), skips the seamless visual commit and NVIDIA G-SYNC
+  premultiplied VRR guard on CPU-to-GPU handover, and Windows overlays (`App::overlay`) fail
+  cleanly because they require DirectComposition. After editing
   `clip.wgsl` or `shader.wgsl`, run
   `cargo test -p rune --lib --features metal-backend precompiled_uber_metallib_is_fresh` on a Mac;
   if the MSL, flags or library hash changed, run `scripts/precompile-metal-shaders.sh` (needs

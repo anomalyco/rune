@@ -1,6 +1,6 @@
 //! GPU instance, adapter and device creation, prewarming, and allocation reporting.
 
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 #[cfg(all(test, target_os = "macos"))]
 use super::{Renderer, gpu_events};
@@ -17,7 +17,16 @@ pub struct Gpu {
     pub(super) lost: Arc<AtomicBool>,
     /// D3D12 removes a device before wgpu hears of it (`Gpu::is_lost`).
     pub(super) removal: rune_gpu::health::Removal,
+    /// Explicit DX12 presentation path this GPU's `wgpu::Instance` uses (`DirectComposition` by
+    /// default; `PlainHwnd` under Wine/Proton fallback or `WGPU_DX12_PRESENTATION_SYSTEM=hwnd`).
+    pub(super) presentation: crate::gpu::fallback::Presentation,
 }
+
+/// Latched process-wide once DirectComposition is observed to be unavailable on this system
+/// (`CreateSwapChainForComposition: E_NOTIMPL` or missing `dcomp.dll` /
+/// `DCompositionCreateDevice2` / `CreateTargetForHwnd` on a live device). Never set on real
+/// Windows when DirectComposition works or fails transiently (OOM, device loss).
+static DCOMP_UNAVAILABLE: AtomicBool = AtomicBool::new(false);
 
 /// The most views and buffers a device binds at once (`Limits::max_non_sampler_bindings`).
 /// D3D12 sizes its shader-visible heap from it and can't grow it: each layer target holds about
@@ -123,7 +132,7 @@ impl Gpu {
                             }
                         }
                     }
-                    Effect::FinishOk { .. } => unreachable!("returned on Ok above"),
+                    Effect::FinishOk { .. } | Effect::SwitchToHwnd => unreachable!("unexpected fallback effect in try_picked"),
                     Effect::FinishErr(error) => return Err(error),
                 }
             }
@@ -143,6 +152,47 @@ impl Gpu {
         { crate::gpu::pick::env_policy() }
         #[cfg(target_arch = "wasm32")]
         { crate::gpu::fallback::Policy::Pinned }
+    }
+
+    /// Whether this GPU's `wgpu::Instance` uses DirectComposition or a plain HWND swap chain.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn presentation(&self) -> crate::gpu::fallback::Presentation {
+        self.presentation
+    }
+
+    /// Whether this process has observed that DirectComposition is unavailable on this system.
+    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    pub(crate) fn dcomp_unavailable() -> bool {
+        DCOMP_UNAVAILABLE.load(Ordering::Acquire)
+    }
+
+    /// Latches that DirectComposition is unavailable on this system so subsequent Windows
+    /// instances and windows start directly on `Dx12SwapchainKind::DxgiFromHwnd`.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn mark_dcomp_unavailable() {
+        DCOMP_UNAVAILABLE.store(true, Ordering::Release);
+    }
+
+    /// Active DX12 presentation path and policy, honouring `WGPU_DX12_PRESENTATION_SYSTEM` and
+    /// the process-wide `DCOMP_UNAVAILABLE` latch.
+    pub(crate) fn dx12_presentation() -> (
+        crate::gpu::fallback::Presentation,
+        crate::gpu::fallback::PresentationPolicy,
+    ) {
+        #[cfg(target_os = "windows")]
+        {
+            crate::gpu::fallback::initial_presentation(
+                wgpu::Dx12SwapchainKind::from_env(),
+                Self::dcomp_unavailable(),
+            )
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            (
+                crate::gpu::fallback::Presentation::DirectComposition,
+                crate::gpu::fallback::PresentationPolicy::Pinned,
+            )
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -235,6 +285,25 @@ impl Gpu {
         if crate::gpu::backend::wgpu_for(wanted) { Self::wgpu_instance() } else { Self::instance() }
     }
 
+    /// `instance_for` for an explicit DX12 `presentation` path on Windows (DirectComposition or
+    /// plain HWND fallback); identical to `instance_for` on other platforms.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn instance_for_presentation(
+        wanted: wgpu::Features,
+        presentation: crate::gpu::fallback::Presentation,
+    ) -> wgpu::Instance {
+        #[cfg(target_os = "windows")]
+        {
+            let _ = wanted;
+            Self::wgpu_instance_for_presentation(presentation)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = presentation;
+            Self::instance_for(wanted)
+        }
+    }
+
     /// wgpu's own backends, whatever `RUNE_GPU_BACKEND` says: DX12 alone on Windows. It's the
     /// backend that composites transparent surfaces, and a Vulkan instance loads every GPU's Vulkan
     /// driver, where a broken one (Intel's, on a hybrid laptop) crashed the process before its first
@@ -242,8 +311,15 @@ impl Gpu {
     /// adapter, from the same instance.
     #[cfg(target_os = "windows")]
     fn wgpu_instance() -> wgpu::Instance {
+        Self::wgpu_instance_for_presentation(Self::dx12_presentation().0)
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(super) fn wgpu_instance_for_presentation(
+        presentation: crate::gpu::fallback::Presentation,
+    ) -> wgpu::Instance {
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
-        let instance = Self::wgpu_instance_on(wgpu::Backends::DX12);
+        let instance = Self::wgpu_instance_on(wgpu::Backends::DX12, presentation.dx12_swapchain_kind());
         crate::marks::mark("gpu.instance");
         instance
     }
@@ -252,19 +328,23 @@ impl Gpu {
     #[cfg(not(target_os = "windows"))]
     fn wgpu_instance() -> wgpu::Instance {
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
-        Self::wgpu_instance_on(wgpu::Backends::all())
+        Self::wgpu_instance_on(wgpu::Backends::all(), wgpu::Dx12SwapchainKind::DxgiFromVisual)
     }
 
-    /// One instance per set of backends for the whole process: a new one per device was a new
-    /// DXGI factory and adapter list each time a window or overlay made a device (hex#1268).
-    fn wgpu_instance_on(backends: wgpu::Backends) -> wgpu::Instance {
+    /// One instance per (backends, DX12 swapchain kind) for the whole process: a new one per device
+    /// was a new DXGI factory and adapter list each time a window or overlay made a device
+    /// (hex#1268), while keying by `Dx12SwapchainKind` keeps DirectComposition and plain HWND
+    /// fallback instances distinct.
+    fn wgpu_instance_on(backends: wgpu::Backends, dx12_swapchain: wgpu::Dx12SwapchainKind) -> wgpu::Instance {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            static MADE: std::sync::Mutex<Vec<(wgpu::Backends, wgpu::Instance)>> = std::sync::Mutex::new(Vec::new());
+            static MADE: std::sync::Mutex<Vec<(wgpu::Backends, wgpu::Dx12SwapchainKind, wgpu::Instance)>> = std::sync::Mutex::new(Vec::new());
             let mut made = MADE.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some((_, instance)) = made.iter().find(|(made, _)| *made == backends) { return instance.clone(); }
-            let instance = Self::new_wgpu_instance(backends);
-            made.push((backends, instance.clone()));
+            if let Some((_, _, instance)) = made.iter().find(|(b, k, _)| *b == backends && *k == dx12_swapchain) {
+                return instance.clone();
+            }
+            let instance = Self::new_wgpu_instance(backends, dx12_swapchain);
+            made.push((backends, dx12_swapchain, instance.clone()));
             instance
         }
         #[cfg(target_arch = "wasm32")]
@@ -272,36 +352,43 @@ impl Gpu {
             // With `wgpu/webgl`, wgpu's wasm handles are single-threaded (`!Send + !Sync`), so
             // keep the per-backend instance cache in thread-local storage.
             thread_local! {
-                static MADE: std::cell::RefCell<Vec<(wgpu::Backends, wgpu::Instance)>> = const { std::cell::RefCell::new(Vec::new()) };
+                static MADE: std::cell::RefCell<Vec<(wgpu::Backends, wgpu::Dx12SwapchainKind, wgpu::Instance)>> = const { std::cell::RefCell::new(Vec::new()) };
             }
             MADE.with(|made| {
                 let mut made = made.borrow_mut();
-                if let Some((_, instance)) = made.iter().find(|(made, _)| *made == backends) { return instance.clone(); }
-                let instance = Self::new_wgpu_instance(backends);
-                made.push((backends, instance.clone()));
+                if let Some((_, _, instance)) = made.iter().find(|(b, k, _)| *b == backends && *k == dx12_swapchain) {
+                    return instance.clone();
+                }
+                let instance = Self::new_wgpu_instance(backends, dx12_swapchain);
+                made.push((backends, dx12_swapchain, instance.clone()));
                 instance
             })
         }
     }
 
-    fn new_wgpu_instance(backends: wgpu::Backends) -> wgpu::Instance {
+    fn new_wgpu_instance(backends: wgpu::Backends, dx12_swapchain: wgpu::Dx12SwapchainKind) -> wgpu::Instance {
         #[cfg(target_os = "linux")]
         {
             Self::select_wgpu_instance(
-                |allow_noncompliant| wgpu::Instance::new(Self::instance_descriptor(backends, allow_noncompliant)),
+                |allow_noncompliant| wgpu::Instance::new(Self::instance_descriptor(backends, allow_noncompliant, dx12_swapchain)),
                 |instance| !pollster::block_on(instance.enumerate_adapters(backends)).is_empty(),
             )
         }
         #[cfg(not(target_os = "linux"))]
         {
-            wgpu::Instance::new(Self::instance_descriptor(backends, false))
+            wgpu::Instance::new(Self::instance_descriptor(backends, false, dx12_swapchain))
         }
     }
 
-    /// Builds a `wgpu::InstanceDescriptor` for `backends`. When `allow_noncompliant` is true,
-    /// `ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER` is set so Vulkan drivers reporting conformance
-    /// version `0.0.0.0` (such as Mesa Honeykrisp/Aurora on Apple silicon Linux) are enumerated.
-    fn instance_descriptor(backends: wgpu::Backends, allow_noncompliant: bool) -> wgpu::InstanceDescriptor {
+    /// Builds a `wgpu::InstanceDescriptor` for `backends` and `dx12_swapchain`. When
+    /// `allow_noncompliant` is true, `ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER` is set so Vulkan
+    /// drivers reporting conformance version `0.0.0.0` (such as Mesa Honeykrisp/Aurora on Apple
+    /// silicon Linux) are enumerated.
+    fn instance_descriptor(
+        backends: wgpu::Backends,
+        allow_noncompliant: bool,
+        dx12_swapchain: wgpu::Dx12SwapchainKind,
+    ) -> wgpu::InstanceDescriptor {
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.backends = backends;
         descriptor.flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
@@ -309,7 +396,7 @@ impl Gpu {
             descriptor.flags.insert(wgpu::InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER);
         }
         // An HWND's DXGI swapchain is opaque only; DirectComposition composites alpha on every GPU.
-        descriptor.backend_options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromVisual;
+        descriptor.backend_options.dx12.presentation_system = dx12_swapchain;
         // A window waits for room in its swap chain itself, in the loop rather than in
         // `acquire` (`window::slot`).
         descriptor.backend_options.dx12.latency_waitable_object = wgpu::Dx12UseFrameLatencyWaitableObject::DontWait;
