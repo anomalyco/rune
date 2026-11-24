@@ -760,6 +760,10 @@ fn flatten_node<E: FlattenEl>(
     } else {
         Vec::new()
     };
+    let in_flow = {
+        let st = style.as_ref();
+        !matches!(st.position(), Position::Absolute | Position::Fixed) && st.display() != Display::None
+    };
     let cold = if E::cold_is_empty(&cold) && trace_namespace.is_none() && pixel_aspect.is_none() && aspect_fit.is_none() {
         crate::cold::Cold::default()
     } else {
@@ -782,6 +786,8 @@ fn flatten_node<E: FlattenEl>(
         window_drag: flags.window_drag(),
         ime_cursor: flags.has(ElFlags::IME_CURSOR),
         ime_option_as_alt: option_as_alt,
+        in_flow,
+        collapsing: false,
         moved_stub: false,
         epoch: crate::runtime::paint_keep::next_epoch(),
     });

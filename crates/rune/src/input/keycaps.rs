@@ -327,6 +327,36 @@ mod tests {
         assert_eq!((parse_theme("auto"), parse_theme("light"), parse_theme("dark"), parse_theme("blue")),
             (Some(None), Some(Some(false)), Some(Some(true)), None));
     }
+
+    #[cfg(any(debug_assertions, feature = "keys-overlay"))]
+    #[test]
+    fn leaving_cap_collapses_its_slot_without_overlapping_the_next_cap() {
+        let mut ov = Overlay::new((400.0, 300.0), 1.0, Some(Corner::BottomLeft), Some(true), false);
+        ov.key(0.0, &KeyEvent { key: Key::Escape, mods: Mods::default() });
+        ov.key(0.1, &KeyEvent { key: Key::Enter, mods: Mods::default() });
+        ov.key(0.2, &KeyEvent { key: Key::Tab, mods: Mods::default() });
+        let mut t = 0.2;
+        for _ in 0..45 {
+            t += 1.0 / 60.0;
+            ov.frame(t, 1.0 / 60.0, true);
+        }
+        let init_h = ov.rt.presented("cap-0").expect("cap-0 visible").0[3];
+        assert!(init_h > 20.0);
+        // A fourth cap pushes cap-0 out while cap-1 and cap-2 remain.
+        ov.key(t, &KeyEvent { key: Key::Down, mods: Mods::default() });
+        let mut saw_shrunk = false;
+        for f in 0..30 {
+            t += 1.0 / 60.0;
+            let rt = ov.frame(t, 1.0 / 60.0, true);
+            let Some((c0, _)) = rt.presented("cap-0") else { break };
+            let (c1, _) = rt.presented("cap-1").expect("cap-1 remains");
+            assert!(c0[1] + c0[3] <= c1[1] + 0.5, "f={f}: leaving cap-0 {:?} overlapped cap-1 {:?}", c0, c1);
+            if c0[3] < init_h * 0.7 {
+                saw_shrunk = true;
+            }
+        }
+        assert!(saw_shrunk, "leaving keycap should collapse its height as it exits");
+    }
 }
 
 /// Without `keys-overlay` in a release build: no overlay can exist, so its runtime isn't linked.

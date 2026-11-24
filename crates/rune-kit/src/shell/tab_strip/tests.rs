@@ -195,3 +195,73 @@ fn tab_width_handles_inverted_and_nan_bounds_without_panicking() {
         }
     }
 }
+
+#[test]
+fn closing_tab_collapses_its_slot_without_overlapping_neighbours() {
+    struct S {
+        tabs: Vec<&'static str>,
+        orientation: TabOrientation,
+    }
+    fn view(s: &S, _: &mut rune::Cx<S>) -> El {
+        let k = Kit::neutral(true);
+        let items = s.tabs.iter().map(|id| TabItem::new(*id, format!("Tab {id}")));
+        let strip = TabStrip::<S>::new("strip", s.orientation)
+            .tabs(items)
+            .viewport_width(Some(600.0))
+            .build(&k);
+        col().size(600.0, 300.0).child(strip)
+    }
+
+    for orientation in [TabOrientation::Horizontal, TabOrientation::Vertical] {
+        let mut rt = rune::Runtime::new(
+            S { tabs: vec!["a", "b", "c"], orientation },
+            view,
+            (600.0, 300.0),
+            rune::Env::new(true, 1.0),
+        );
+        for _ in 0..40 {
+            rt.frame(1.0 / 60.0);
+        }
+        let axis = usize::from(orientation == TabOrientation::Vertical);
+        let init_len = rt.presented("t-b").expect("tab b present").0[2 + axis];
+        assert!(init_len > 20.0);
+
+        rt.update(|s, _| s.tabs.retain(|id| *id != "b"));
+        let mut saw_shrunk = false;
+        for f in 0..30 {
+            rt.frame(1.0 / 60.0);
+            let Some((b, _)) = rt.presented("t-b") else { break };
+            let (a, _) = rt.presented("t-a").expect("tab a present");
+            let (c, _) = rt.presented("t-c").expect("tab c present");
+            assert!(a[axis] + a[2 + axis] <= b[axis] + 0.5, "{orientation:?} f={f}: tab a {:?} overlapped closing tab b {:?}", a, b);
+            assert!(b[axis] + b[2 + axis] <= c[axis] + 0.5, "{orientation:?} f={f}: closing tab b {:?} overlapped tab c {:?}", b, c);
+            if b[2 + axis] < init_len * 0.7 {
+                saw_shrunk = true;
+            }
+        }
+        assert!(saw_shrunk, "{orientation:?}: closing tab should collapse along strip main axis");
+        for _ in 0..90 {
+            if !rt.frame(1.0 / 60.0) {
+                break;
+            }
+        }
+        assert!(rt.presented("t-b").is_none(), "{orientation:?}: closed tab unmounts");
+        assert!(!rt.frame(1.0 / 60.0), "{orientation:?}: idle after tab close");
+    }
+
+    // Verify closing a tab in TabStrip passes rune::motion_gate with zero findings.
+    let rt = rune::Runtime::new(
+        S { tabs: vec!["a", "b", "c"], orientation: TabOrientation::Horizontal },
+        view,
+        (600.0, 120.0),
+        rune::Env::new(true, 1.0),
+    );
+    let mut run = rune::motion_gate::Run::new(rt, 120.0);
+    run.idle(0.6);
+    run.step_n(4);
+    run.act("close tab b", |rt| rt.update(|s, _| s.tabs.retain(|id| *id != "b")));
+    run.play(1.2);
+    run.quiet();
+    run.step_n(4);
+    rune::motion_gate::gate_rows(vec![("tab-strip/close".to_owned(), Box::new(move || run.rec) as rune::motion_gate::Job)], &[]);
+}

@@ -155,6 +155,10 @@ pub(crate) struct Node {
     pub(super) ime_cursor: bool,
     /// `El::ime_option_as_alt`.
     pub(super) ime_option_as_alt: bool,
+    /// Participates in its parent's normal flow (`position != Absolute && display != None`).
+    pub(super) in_flow: bool,
+    /// Exiting in-flow child whose main-axis slot is collapsing analytically (`hold_layout`).
+    pub(super) collapsing: bool,
     /// Placeholder left in `self.nodes` after `try_reuse_memo` moves a node into the new pass.
     pub(super) moved_stub: bool,
     /// A new one each time it's built from its element; a node a region keeps keeps it
@@ -228,6 +232,8 @@ impl Node {
             window_drag: crate::el::WindowDrag::None,
             ime_cursor: false,
             ime_option_as_alt: false,
+            in_flow: old.in_flow,
+            collapsing: false,
             moved_stub: true,
             epoch: 0,
         }

@@ -271,7 +271,10 @@ impl Transition {
         self.removal.small_scale = true;
         self
     }
-    /// Keep the exiting node in flow (its slot collapses as it leaves) instead of popping it out.
+    /// Keep an exiting in-flow child of a non-wrapping flex container in flow: its main-axis slot
+    /// collapses analytically to the seam between its surviving siblings instead of popping out.
+    /// Out-of-flow elements, wrapping flex containers, grid containers, growth stacks and Reduce
+    /// Motion fall back to the default `pop_layout` behaviour.
     pub fn hold_layout(mut self) -> Transition {
         self.pop_layout = false;
         self

@@ -531,7 +531,8 @@ impl RuntimeCore {
         } else {
             let mut pruned = Vec::new();
             exits::retire_removed_nodes(
-                &mut self.tree.node_index, &mut self.scene, &self.motion.flying, &mut self.text, self.env.scale,
+                &mut self.tree.node_index, &mut self.scene, &taffy, &self.commit.virtuals, &self.motion.flying,
+                &mut self.text, self.env.scale, self.reduced_motion,
                 &mut nodes, &mut old_nodes, present_len, tx, instant, &drew_nothing, &exit_parents, &mut scratch, &mut pruned,
             );
             for old in &pruned { self.hover_pruned(old); }

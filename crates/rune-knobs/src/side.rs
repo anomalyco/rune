@@ -43,7 +43,7 @@ pub fn side<S: 'static>(page: El, k: &Knobs, groups: &'static [Group], st: Style
     // Its removal holds it through the slide out.
     let slide = k.slide();
     let panel = k.open.then(|| {
-        let out = Transition::identity().hold_layout().springs(SpringPair::new(slide, Spring::new(slide.duration * 1.4, 0.0)));
+        let out = Transition::identity().springs(SpringPair::new(slide, Spring::new(slide.duration * 1.4, 0.0)));
         panel(k, groups, st, lens, w).transition(out)
     });
     let edge = el()
