@@ -179,6 +179,7 @@ impl Client {
     /// attaching it to the runtime (so `latch_requests` leaves requests queued until `flush_core`).
     #[cfg(test)]
     pub(crate) fn use_memory(&mut self, clipboard: &MemoryClipboard) { self.memory = Some(clipboard.clone()); }
+    #[cfg(test)]
     pub(crate) fn read_core(&self, rt: &crate::runtime::RuntimeCore) {
         let purpose = Purpose::paste(rt, rt.paste_target());
         let mem = rt.edit.clipboard();

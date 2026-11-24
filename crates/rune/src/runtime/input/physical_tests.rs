@@ -136,15 +136,16 @@ fn paste_is_swallowed_without_text_and_target_survives_a_later_queued_click() {
     rt.frame(0.0);
     let first = rt.edit.paste_request.take().unwrap();
     assert!(first.is_some());
-    assert_eq!((rt.state.keys, rt.state.app_keys), (0, 1));
+    assert_eq!((rt.state.keys, rt.state.app_keys), (1, 1));
     // Image-only clipboard sends no reply. An empty text reply also never falls
     // through to either key handler.
     rt.paste_result(first.clone(), crate::ClipboardContent::new(""));
     rt.frame(0.0);
-    assert_eq!((rt.state.keys, rt.state.app_keys), (0, 1));
+    assert_eq!((rt.state.keys, rt.state.app_keys), (1, 1));
     key(&mut rt, PhysicalKeyCode::KeyV, Key::Command('v'));
     click(&mut rt, "second");
     rt.frame(0.0);
+    assert_eq!((rt.state.keys, rt.state.app_keys), (2, 1));
     let target = rt.edit.paste_request.take().unwrap();
     assert_eq!(target, first, "target captured before the next click, not at worker flush");
     assert_ne!(target, rt.paste_target());
@@ -448,4 +449,118 @@ fn physical_paste_uses_app_handler_without_a_focused_editor() {
     rt.paste_result(target, crate::ClipboardContent::new("app"));
     rt.frame(0.0);
     assert_eq!(rt.state, "app");
+}
+
+#[test]
+fn focused_input_on_key_intercepts_paste_and_edit_chords_before_editor() {
+    #[derive(Default)]
+    struct S {
+        edit: TextEdit,
+        consume: bool,
+        seen: Vec<(Key, Option<PhysicalKeyCode>)>,
+        app_keys: usize,
+        root_pasted: Vec<String>,
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        col().size(300.0, 200.0)
+            .on_paste(|s: &mut S, text, _| s.root_pasted.push(text.to_owned()))
+            .child(text_input(&s.edit, TextStyle::new(14.0, 400.0)).key("field").label("Field").size(200.0, 40.0)
+                .on_edit(|s: &mut S| &mut s.edit)
+                .on_input_key(|s: &mut S, ev, tx| {
+                    s.seen.push((ev.key.clone(), tx.physical_key()));
+                    if s.consume {
+                        if ev.key == Key::Command('v') { s.edit.insert("[handled]"); }
+                        true
+                    } else {
+                        false
+                    }
+                }))
+    }
+    let primary = Mods { cmd: true, ctrl: !cfg!(target_os = "macos"), logo: cfg!(target_os = "macos"), ..Mods::default() };
+    let primary_shift = Mods { shift: true, ..primary };
+    let send = |rt: &mut Runtime<S>, physical: PhysicalKeyCode, c: char, mods: Mods| {
+        rt.physical_with_fallback(
+            PhysicalInput::Key { key: physical, mods, pressed: true, repeat: false },
+            Some(KeyEvent { key: Key::Command(c), mods }),
+        );
+        rt.frame(0.0);
+    };
+
+    let mut rt = Runtime::new(S { consume: true, ..S::default() }, view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.on_key = Some(|s, _, _| { s.app_keys += 1; s.consume });
+    rt.frame(0.0);
+
+    // Without focus, app.on_key sees Command('v') before root on_paste.
+    send(&mut rt, PhysicalKeyCode::KeyV, 'v', primary);
+    assert!(rt.edit.paste_request.is_none(), "app.on_key consuming Command('v') must not request paste");
+    assert_eq!(rt.state.app_keys, 1);
+    rt.state.consume = false;
+    send(&mut rt, PhysicalKeyCode::KeyV, 'v', primary);
+    assert_eq!(rt.edit.paste_request.take(), Some(None), "declined Command('v') falls through to root on_paste");
+    assert_eq!(rt.state.app_keys, 2);
+
+    // Focus the field, type text, then verify on_input_key intercepts paste and every edit chord.
+    click(&mut rt, "field");
+    rt.frame(0.0);
+    rt.key(KeyEvent { key: Key::Text("ab".into()), mods: Mods::default() });
+    rt.frame(0.0);
+    assert_eq!(rt.state.edit.text, "ab");
+    rt.state.consume = true;
+    rt.state.seen.clear();
+    let app_before = rt.state.app_keys;
+
+    send(&mut rt, PhysicalKeyCode::KeyV, 'v', primary);
+    assert!(rt.edit.paste_request.is_none(), "consumed Command('v') must not request clipboard paste");
+    assert_eq!(rt.state.edit.text, "ab[handled]");
+    assert_eq!(rt.state.seen.last(), Some(&(Key::Command('v'), Some(PhysicalKeyCode::KeyV))));
+
+    // Select all, copy, cut, undo, redo are all intercepted when on_input_key returns true.
+    let before_text = rt.state.edit.text.clone();
+    let before_sel = (rt.state.edit.anchor, rt.state.edit.focus);
+    send(&mut rt, PhysicalKeyCode::KeyA, 'a', primary);
+    assert_eq!((rt.state.edit.anchor, rt.state.edit.focus), before_sel);
+    send(&mut rt, PhysicalKeyCode::KeyC, 'c', primary);
+    assert!(rt.copy_request.is_none());
+    send(&mut rt, PhysicalKeyCode::KeyX, 'x', primary);
+    assert!(rt.copy_request.is_none());
+    assert_eq!(rt.state.edit.text, before_text);
+    send(&mut rt, PhysicalKeyCode::KeyZ, 'z', primary);
+    assert_eq!(rt.state.edit.text, before_text);
+    send(&mut rt, PhysicalKeyCode::KeyZ, 'z', primary_shift);
+    assert_eq!(rt.state.edit.text, before_text);
+    if !cfg!(target_os = "macos") {
+        send(&mut rt, PhysicalKeyCode::KeyY, 'y', primary);
+        assert_eq!(rt.state.edit.text, before_text);
+    }
+    assert_eq!(rt.state.app_keys, app_before, "consumed field chords must not reach app.on_key");
+
+    // When on_input_key returns false, every edit chord proceeds to the editor and never falls through to app.on_key.
+    rt.state.consume = false;
+    rt.state.seen.clear();
+    send(&mut rt, PhysicalKeyCode::KeyV, 'v', primary);
+    assert_eq!(rt.state.seen.last(), Some(&(Key::Command('v'), Some(PhysicalKeyCode::KeyV))));
+    let target = rt.edit.paste_request.take().expect("declined Command('v') requests paste");
+    assert!(target.is_some());
+    rt.paste_result(target, crate::ClipboardContent::new("clipboard"));
+    rt.frame(0.0);
+    assert_eq!(rt.state.edit.text, "ab[handled]clipboard");
+
+    send(&mut rt, PhysicalKeyCode::KeyA, 'a', primary);
+    assert_eq!(rt.state.edit.selected(), "ab[handled]clipboard");
+    send(&mut rt, PhysicalKeyCode::KeyC, 'c', primary);
+    assert_eq!(rt.copy_request.take().unwrap().content().text(), "ab[handled]clipboard");
+    send(&mut rt, PhysicalKeyCode::KeyX, 'x', primary);
+    assert_eq!(rt.copy_request.take().unwrap().content().text(), "ab[handled]clipboard");
+    assert_eq!(rt.state.edit.text, "");
+    send(&mut rt, PhysicalKeyCode::KeyZ, 'z', primary);
+    assert_eq!(rt.state.edit.text, "ab[handled]clipboard");
+    send(&mut rt, PhysicalKeyCode::KeyZ, 'z', primary_shift);
+    assert_eq!(rt.state.edit.text, "");
+    if !cfg!(target_os = "macos") {
+        send(&mut rt, PhysicalKeyCode::KeyZ, 'z', primary);
+        assert_eq!(rt.state.edit.text, "ab[handled]clipboard");
+        send(&mut rt, PhysicalKeyCode::KeyY, 'y', primary);
+        assert_eq!(rt.state.edit.text, "");
+    }
+    assert_eq!(rt.state.app_keys, app_before, "editor-handled chords must not reach app.on_key");
 }

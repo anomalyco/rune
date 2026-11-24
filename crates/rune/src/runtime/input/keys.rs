@@ -52,6 +52,12 @@ impl RuntimeCore {
             }
         }
         if self.focus_key(app, ev, shown, one) { return true; }
+        if ev.edit_command() == Some('v') && let Some(target) = self.paste_target() {
+            // Capture the target in event order, before another queued click can
+            // change focus. An empty/image clipboard still consumes the command.
+            self.edit.paste_request = Some(Some(target));
+            return true;
+        }
         let input_handles = match &ev.key {
             crate::edit::Key::Function(_) | crate::edit::Key::ContextMenu | crate::edit::Key::Tab | crate::edit::Key::PageUp | crate::edit::Key::PageDown
             | crate::edit::Key::Insert | crate::edit::Key::PrintScreen | crate::edit::Key::ScrollLock | crate::edit::Key::Pause => false,
@@ -89,6 +95,10 @@ impl RuntimeCore {
             return true;
         }
         one.physical_key = None;
+        if ev.edit_command() == Some('v') && self.app_paste_handler().is_some() {
+            self.edit.paste_request = Some(None);
+            return true;
+        }
         // Selected text takes the Cmd+A and Cmd+C nothing else took, as AppKit's responder chain
         // gives a key equivalent to the menu bar before the text view: an app's shortcut wins.
         if !repeat && self.selection_key(app, ev, one) { return true; }
@@ -352,6 +362,7 @@ impl RuntimeCore {
     pub(in crate::runtime) fn app_paste_handler(&self) -> Option<crate::el::PasteFn> {
         self.tree.nodes.get(self.active_modal().unwrap_or_else(|| self.app_root()))?.handlers.on_paste.clone()
     }
+    #[cfg(test)]
     pub(crate) fn accepts_paste(&self) -> bool {
         self.paste_target().is_some() || self.app_paste_handler().is_some()
     }

@@ -161,12 +161,11 @@ impl dyn WindowApp + '_ {
 
     pub(in crate::window) fn keyboard(
         &mut self,
-        clipboard: &crate::clipboard::Client,
         event: &winit::event::KeyEvent,
         mods: winit::keyboard::ModifiersState,
         unhandled: Option<crate::runtime::Unhandled>,
     ) -> bool {
-        self.driver(|rt, app| crate::input::host_events::keyboard(rt, app, clipboard, event, mods, unhandled))
+        self.driver(|rt, app| crate::input::host_events::keyboard(rt, app, event, mods, unhandled))
     }
 
     #[cfg(target_os = "macos")]

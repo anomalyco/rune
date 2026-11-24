@@ -1,0 +1,1 @@
+- Native paste (`Ctrl+V` / `Cmd+V`) now runs the focused field's `on_input_key` (`TextArea::on_key` / `TextInput::on_key`) and, without a focused editor, key handlers before requesting a clipboard paste, matching cut, copy, undo, redo and select-all.

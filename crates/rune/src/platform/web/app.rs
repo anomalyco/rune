@@ -156,11 +156,10 @@ impl dyn WebApp + '_ {
 
     pub(super) fn keyboard(
         &mut self,
-        clipboard: &crate::clipboard::Client,
         event: &winit::event::KeyEvent,
         mods: winit::keyboard::ModifiersState,
     ) -> bool {
-        self.driver(|rt, app| crate::input::host_events::keyboard(rt, app, clipboard, event, mods, None))
+        self.driver(|rt, app| crate::input::host_events::keyboard(rt, app, event, mods, None))
     }
 
     pub(super) fn touch(&mut self, touch: &winit::event::Touch) {

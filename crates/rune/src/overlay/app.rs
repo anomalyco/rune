@@ -136,11 +136,10 @@ impl dyn OverlayApp + '_ {
 
     pub(super) fn keyboard(
         &mut self,
-        clipboard: &crate::clipboard::Client,
         event: &winit::event::KeyEvent,
         mods: winit::keyboard::ModifiersState,
     ) -> bool {
-        self.driver(|rt, app| crate::input::host_events::keyboard(rt, app, clipboard, event, mods, None))
+        self.driver(|rt, app| crate::input::host_events::keyboard(rt, app, event, mods, None))
     }
 
     #[cfg(any(target_os = "macos", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
