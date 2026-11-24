@@ -99,10 +99,32 @@ impl El {
     /// `version`, so layout skips calling `key` for every row to find out. A list of tens of
     /// thousands of rows then commits in time independent of its length. Change `version`
     /// whenever rows are reordered, replaced or any row's key changes while the row count stays
-    /// the same (a change in `count` is always detected without a bump); with a stale version on
-    /// an in-place change the rows keep their old keys.
+    /// the same (a change in `count` is always detected without a bump; add
+    /// [`El::virtual_rows_append_only`] when a growing count only appends at the end); with a
+    /// stale version on an in-place change the rows keep their old keys.
     pub fn virtual_rows_version(mut self, version: impl std::hash::Hash) -> Self {
         self.cold_mut().virtual_rows_version = Some(crate::memo::hash_of(&version));
+        self
+    }
+
+    /// Promises [`El::virtual_rows`] that when `count` grows (and [`El::virtual_rows_version`],
+    /// if set, is unchanged), the existing rows keep their keys in order and the extra rows are
+    /// appended at the end. Layout then reads only the new keys and updates row bookkeeping in
+    /// time proportional to the appended rows rather than the full list.
+    ///
+    /// A shrinking list or a changed [`El::virtual_rows_version`] still takes the full rekey
+    /// path, so a growing list can combine `virtual_rows_append_only()` with a version bump
+    /// whenever it filters, sorts or resets.
+    ///
+    /// If the promise is broken (an existing row's key changes alongside an append without a
+    /// version bump), start, midpoint and end checks (plus mounted rows in debug builds) detect
+    /// the mismatch and fall back to the full rekey path; debug builds warn once per list when
+    /// a broken prefix or stale mounted row is seen.
+    #[cfg_attr(debug_assertions, track_caller)]
+    pub fn virtual_rows_append_only(mut self) -> Self {
+        self.cold_mut().virtual_rows_append_only = true;
+        #[cfg(debug_assertions)]
+        { self.cold_mut().virtual_append_source = Some(std::panic::Location::caller()); }
         self
     }
 
@@ -161,3 +183,7 @@ impl RowSource {
 #[cfg(test)]
 #[path = "virtual_rows_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "virtual_rows_append_tests.rs"]
+mod append_tests;

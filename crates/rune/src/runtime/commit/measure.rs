@@ -330,17 +330,25 @@ impl Measurement<'_> {
             assert!(el.children.is_empty(), "`.virtual_rows(..)` at {path:?} builds its own rows; it takes no children");
         }
         v.indexed = source.is_some();
+        #[cfg(debug_assertions)]
+        { v.append_source = el.cold.virtual_append_source; }
         let version = el.cold.virtual_rows_version.filter(|_| source.is_some());
+        let prev_version = v.keys_version;
         let same = match source {
             Some(rows) => rows.count == v.keys.len()
-                && (self.state_unchanged || (version.is_some() && version == v.keys_version) || (0..rows.count).all(|i| (rows.key)(state, i) == v.keys[i])),
+                && (self.state_unchanged || (version.is_some() && version == prev_version) || (0..rows.count).all(|i| (rows.key)(state, i) == v.keys[i])),
             None => v.same_keys(el.children.iter().map(|c| c.key.as_deref())),
         };
         v.keys_version = version;
         let mut renamed_children = Vec::new();
+        let appended = source
+            .filter(|_| el.cold.virtual_rows_append_only && version == prev_version)
+            .and_then(|rows| v.try_append_rows(path, rows.count, self.commits, (!pinned && !v.passed()).then_some(offset), |i| (rows.key)(state, i)));
         // Most commits keep the same rows; only a change pays for sets of every key.
         let anchor = if same {
             if pinned || v.passed() { None } else { v.first_visible(offset, |_| true) }
+        } else if let Some(anchor) = appended {
+            anchor
         } else {
             let mut keys: Vec<_> = match source {
                 Some(rows) => (0..rows.count).map(|i| (rows.key)(state, i).into_owned()).collect(),
@@ -626,6 +634,10 @@ impl Measurement<'_> {
             }
             // What the rows read, so a memo holding the list can keep them while it holds.
             let ((), reads) = crate::memo::recording(|| {
+                #[cfg(debug_assertions)]
+                if v.append_only_fast {
+                    for i in v.range.clone() { v.check_append_row_key(path, i, self.commits, |i| (rows.key)(state, i)); }
+                }
                 let quiet: Vec<bool> = v.range.clone().map(|i| v.mounts_quietly(i, self.commits)).collect();
                 let key_warnings = &mut *self.key_warnings;
                 let keys = &v.keys;

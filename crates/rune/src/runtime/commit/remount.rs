@@ -297,6 +297,8 @@ impl Measurement<'_> {
             for (pos, row_i) in plan.range.clone().enumerate() {
                 let key = &v.keys[row_i];
                 if !plan.mounted_rows.contains_key(key) {
+                    #[cfg(debug_assertions)]
+                    v.check_append_row_key(&plan.path, row_i, self.commits, |i| (plan.rows.key)(state, i));
                     let row = build_indexed_row(&plan.rows, state, &plan.path, key, row_i, self.key_warnings);
                     if row.flags.has(crate::el::ElFlags::HAS_VIRTUAL) {
                         nested_virtual = true;
