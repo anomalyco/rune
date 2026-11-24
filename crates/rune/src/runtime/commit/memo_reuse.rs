@@ -312,6 +312,7 @@ fn same_handlers(
         return true;
     }
     let crate::el::Handlers {
+        on_a11y_action,
         on_paste,
         on_window_focus,
         on_spellcheck,
@@ -352,6 +353,7 @@ fn same_handlers(
     } = &**b;
     a.modal.is_none()
         && modal.is_none()
+        && opt_rc_eq(&a.on_a11y_action, on_a11y_action)
         && match (&a.on_paste, on_paste) {
             (None, None) => true,
             (Some(pa), Some(pb)) => pa.rich == pb.rich && Rc::ptr_eq(&pa.call, &pb.call),

@@ -578,14 +578,19 @@ impl RuntimeCore {
                 last_flow_parent = None;
                 continue;
             }
+            let control_role = roles::web_control_role(n.role);
+            let delegated_control = control_role.is_some()
+                && !n.a11y.disabled
+                && self.a11y_role(i).is_some_and(roles::composite_item)
+                && self.a11y_action_ancestor(i).is_some();
             let button_like = raw_href.is_none()
-                && (n.role == "button" || n.role == "combobox" || n.handlers.on_press.is_some())
+                && n.handlers.on_a11y_action.is_none()
+                && (n.role == "button" || n.role == "combobox" || n.handlers.on_press.is_some() || delegated_control)
                 && n.window_drag != crate::el::WindowDrag::Drag;
             // Only collapse a pressable container into one button when it doesn't wrap an entire
             // multi-block section with independent buttons inside, unless it has an explicit
             // control role (such as a closable tab, whose close button mirrors as a sibling).
             let nested_press = (i + 1..end).any(|j| self.tree.nodes[j].handlers.on_press.is_some() || self.tree.nodes[j].role == "button");
-            let control_role = roles::web_control_role(n.role);
             if button_like && (!nested_press || control_role.is_some()) && rect[2] > 0.0 && rect[3] > 0.0 {
                 let label = self.mirror_name(i).unwrap_or_else(|| self.descendant_label(i, end));
                 let value = self.mirror_value(i).unwrap_or_default().to_owned();
@@ -978,9 +983,12 @@ impl RuntimeCore {
         match event["kind"].as_str() {
             Some("a11y_press") => {
                 let Some(i) = self.live(path) else { return false };
-                if self.tree.nodes[i].handlers.on_press.is_none() { return false; }
-                self.frame.queue.push(Action::Press(path.to_owned(), crate::PointerButton::Primary, false));
-                true
+                if self.tree.nodes[i].handlers.on_press.is_some() {
+                    self.frame.queue.push(Action::Press(path.to_owned(), crate::PointerButton::Primary, false));
+                    true
+                } else {
+                    self.queue_a11y_delegate(i, accesskit::Action::Click)
+                }
             }
             Some("a11y_link") => {
                 let Some(k) = event["link"].as_u64().and_then(|n| usize::try_from(n).ok()) else { return false };

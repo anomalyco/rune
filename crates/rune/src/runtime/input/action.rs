@@ -161,6 +161,7 @@ pub(in crate::runtime) fn live_only_handler(action: &Action) -> Option<&'static 
         Action::Gesture(_, gesture_dispatch::Gesture::Magnify(_)) => "on_magnify",
         Action::Gesture(_, gesture_dispatch::Gesture::Rotate(_)) => "on_rotate",
         Action::Gesture(_, gesture_dispatch::Gesture::SmartMagnify(..)) => "on_smart_magnify",
+        Action::A11y(_, crate::a11y::actions::A11yAct::Delegate { .. }) => "on_a11y_action",
         _ => return None,
     })
 }

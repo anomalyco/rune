@@ -303,6 +303,43 @@ impl El {
         self.cold_mut().a11y.more().shortcut = Some(keys.into());
         self
     }
+    /// Handle assistive-technology actions ([`accesskit::Action`]) sent to descendants that do
+    /// not handle them directly.
+    ///
+    /// Use this on a composite container (`"listbox"`, `"tree"`, `"grid"`, `"table"`, `"menu"`,
+    /// `"tablist"`) that owns pointer and keyboard input instead of placing [`El::on_press`] on
+    /// every row. While this container is enabled and reachable, actionable descendant items with
+    /// composite-item roles (`"option"`, `"treeitem"`, `"row"`, `"cell"`, `"gridcell"`, `"tab"`,
+    /// `"menuitem"`, `"menuitemcheckbox"`, `"menuitemradio"`) advertise `Action::Click` in the
+    /// accessibility tree and web mirror; decorative and non-item descendants do not.
+    ///
+    /// When an unhandled element action arrives on an enabled descendant, Rune walks live,
+    /// enabled ancestors innermost-first and calls `f` with the target element's key (or its path
+    /// when unkeyed) and the requested action. Return `true` to consume the action, or `false` to
+    /// let an enclosing `on_a11y_action` handle it.
+    ///
+    /// ```
+    /// # use rune::{accesskit::Action, col, el, text};
+    /// # struct State { selected: String }
+    /// col().key("list").role("listbox").label("Files")
+    ///     .on_a11y_action(|s: &mut State, key, action, _| {
+    ///         if action == Action::Click {
+    ///             s.selected = key.to_owned();
+    ///             return true;
+    ///         }
+    ///         false
+    ///     })
+    ///     .child(el().key("o1").role("option").label("README.md").child(text("README.md")));
+    /// ```
+    pub fn on_a11y_action<S: 'static>(
+        mut self,
+        f: impl Fn(&mut S, &str, accesskit::Action, &mut crate::el::Tx) -> bool + 'static,
+    ) -> Self {
+        self.handlers.on_a11y_action = Some(std::rc::Rc::new(move |s, key, action, tx| {
+            f(crate::states::downcast::<S>(s), key, action, tx)
+        }));
+        self
+    }
 }
 
 impl El {

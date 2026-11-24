@@ -229,6 +229,7 @@ pub(crate) enum WindowDrag {
     NoDrag,
 }
 
+pub(crate) type A11yActionFn = Rc<dyn Fn(crate::states::States<'_>, &str, accesskit::Action, &mut Tx) -> bool>;
 pub(crate) type PressFn = Rc<dyn Fn(crate::states::States<'_>, &mut Tx)>;
 pub(crate) type InputKeyFn = Rc<dyn Fn(crate::states::States<'_>, &crate::KeyEvent, &mut Tx) -> bool>;
 pub(crate) type SetValueFn = Rc<dyn Fn(crate::states::States<'_>, f64, &mut Tx)>;
