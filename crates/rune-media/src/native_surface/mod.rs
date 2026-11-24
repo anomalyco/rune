@@ -17,6 +17,8 @@ pub mod macos;
 #[cfg(target_os = "windows")]
 mod dxbc;
 mod pipeline;
+#[cfg(test)]
+mod transfer_tests;
 #[cfg(target_os = "windows")]
 pub mod windows;
 pub use pipeline::SurfaceRenderer;

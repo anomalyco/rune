@@ -13,7 +13,7 @@ struct Uniforms {
     radii: [f32; 4],
     clip: [f32; 4],
     fade: [u32; 4],
-    // format (0 BGRA, 1 video NV12, 2 full NV12), matrix (0 601, 1 709), transfer, alpha
+    // format (0 BGRA, 1 video NV12, 2 full NV12), matrix (0 601, 1 709), transfer (0 sRGB->lin, 1 BT.709->lin, 2 sRGB pass-through, 3 BT.709->sRGB), alpha
     color: [f32; 4],
     // Exact mapping flag, source dimensions, horizontal mirror flag.
     sampling: [f32; 4],
@@ -102,7 +102,12 @@ impl SurfaceRenderer {
                         Format::Nv12Full => 2.0,
                     },
                     if f.color.matrix == Matrix::Bt709 { 1.0 } else { 0.0 },
-                    if self.srgb_blend { 2.0 } else if f.color.transfer == Transfer::Srgb { 0.0 } else { 1.0 },
+                    match (self.srgb_blend, f.color.transfer) {
+                        (false, Transfer::Srgb) => 0.0,
+                        (false, Transfer::Bt709) => 1.0,
+                        (true, Transfer::Srgb) => 2.0,
+                        (true, Transfer::Bt709) => 3.0,
+                    },
                     d.opacity,
                 ],
                 sampling: [if exact { 1.0 } else { 0.0 }, f.size[0] as f32, f.size[1] as f32, if mirrored { 1.0 } else { 0.0 }],
