@@ -244,6 +244,72 @@ fn upload_replay(u: &mut Upload, play: &mut Play<'_, Upload>) {
     });
 }
 
+/// The "Layout/Fit & fractions" story: `w_fit`, `h_fit`, `self_auto`, and `h_frac`.
+struct LayoutDemo {
+    align: usize,
+    split: f32,
+}
+
+fn layout_demo_init() -> LayoutDemo {
+    LayoutDemo { align: 0, split: 0.4 }
+}
+
+fn layout_demo_view(s: &LayoutDemo, cx: &mut Cx<LayoutDemo>) -> El {
+    let t = tok::theme(cx.system_dark());
+    let accent = tok::accent(0, cx.system_dark());
+    let accent2 = tok::accent(4, cx.system_dark());
+    let pill = |key: &str, label: &str, bg: Color| {
+        row().key(key.to_owned()).w_fit().h(28.0).px(12.0).center_y().radius(14.0).fill(bg)
+            .child(text(label).font(type_::LABEL).color(Color::WHITE))
+    };
+    let align_label = match s.align % 4 {
+        0 => "col() · default stretch",
+        1 => "col().items_center()",
+        2 => "col().items_end()",
+        _ => "row().center_y()",
+    };
+    let fit_box = match s.align % 4 {
+        0 => col().w_full().gap(8.0)
+            .child(row().h(28.0).px(12.0).center_y().radius(radius::SM).fill(t.control_track)
+                .child(text("Default child (stretches)").font(type_::LABEL).color(t.text_secondary)))
+            .child(pill("fit-pill", "w_fit() pill hugs content", accent))
+            .child(row().h(28.0).px(12.0).center_y().radius(radius::SM).fill(t.control_track).self_start().self_auto()
+                .child(text("self_start().self_auto() restores stretch").font(type_::LABEL).color(t.text))),
+        1 => col().w_full().items_center().gap(8.0)
+            .child(pill("fit-pill", "w_fit() centred by col", accent))
+            .child(pill("auto-pill", "self_start().self_auto() centred", accent2).self_start().self_auto()),
+        2 => col().w_full().items_end().gap(8.0)
+            .child(pill("fit-pill", "w_fit() aligned end", accent))
+            .child(pill("auto-pill", "self_start().self_auto() aligned end", accent2).self_start().self_auto()),
+        _ => row().w_full().h(72.0).center_y().gap(8.0)
+            .child(pill("fit-pill", "w_fit() centred in row", accent))
+            .child(col().h_fit().px(10.0).py(6.0).radius(radius::SM).fill(t.control_track)
+                .child(text("h_fit() chip").font(type_::LABEL).color(t.text))),
+    };
+    let top_pct = (s.split * 100.0).round() as u32;
+    let bot_pct = 100 - top_pct;
+    let frac_box = row().w_full().h(140.0).gap(12.0)
+        .child(col().grow(1.0).h_full().radius(radius::MD).fill(t.card).outline(1.0, 0.0, t.card_border).padding(6.0)
+            .child(row().w_full().h_frac(s.split).px(10.0).center_y().radius(radius::SM).fill(accent)
+                .child(text(format!("h_frac({:.2}) · {top_pct}%", s.split)).font(type_::LABEL).color(Color::WHITE)))
+            .child(row().w_full().h_frac(1.0 - s.split).px(10.0).center_y().radius(radius::SM).fill(t.control_track)
+                .child(text(format!("h_frac({:.2}) · {bot_pct}%", 1.0 - s.split)).font(type_::LABEL).color(t.text))))
+        .child(row().w(140.0).h_full().padding(8.0).gap(6.0).radius(radius::MD).fill(t.card).outline(1.0, 0.0, t.card_border)
+            .child(el().w(8.0).radius(4.0).fill(t.control_track))
+            .child(col().h_fit().px(8.0).py(6.0).radius(radius::SM).fill(accent2)
+                .child(text("h_fit()").font(type_::LABEL).color(Color::WHITE))));
+
+    col().w_full().h_full().center().padding(20.0).child(
+        col().w(420.0).gap(16.0)
+            .child(col().w_full().gap(6.0)
+                .child(text(format!("w_fit / self_auto — {align_label}")).font(type_::LABEL).color(t.text_secondary))
+                .child(col().w_full().padding(12.0).radius(radius::MD).fill(t.card).outline(1.0, 0.0, t.card_border).child(fit_box)))
+            .child(col().w_full().gap(6.0)
+                .child(text("h_frac split & h_fit in stretching row").font(type_::LABEL).color(t.text_secondary))
+                .child(frac_box)),
+    )
+}
+
 fn main() {
     let spec = AppSpec { scenes: SCENES, ..AppSpec::new("Preferences", (640.0, 420.0), init, view) };
     App::new(spec)
@@ -285,6 +351,16 @@ fn main() {
                 .story(Story::new("Controls/Rows/Two devices", device_rows(&["Studio desk", "Travel laptop"]), devices))
                 .story(Story::new("Controls/Rows/One device", device_rows(&["Studio desk"]), devices))
                 .story(Story::new("Controls/Rows/Long names", device_rows(&["Studio desk in the back office", "Travel laptop (borrowed for the conference)"]), devices))
+                .story(
+                    Story::new("Layout/Fit & fractions", layout_demo_init, layout_demo_view)
+                        .trigger('a', "Cycle alignment", |s, _| s.align = (s.align + 1) % 4)
+                        .trigger('s', "Cycle split", |s, _| {
+                            s.split = if s.split < 0.3 { 0.4 } else if s.split < 0.55 { 0.65 } else { 0.25 };
+                        })
+                        .variant("40 / 60 · stretch", |_| {})
+                        .variant("25 / 75 · centred col", |s| { s.align = 1; s.split = 0.25; })
+                        .variant("65 / 35 · row center_y", |s| { s.align = 3; s.split = 0.65; }),
+                )
                 .group_order(&["Controls"])
                 .start_folded(true)
                 .sizes(&[("Compact", (420.0, 300.0)), ("Wide", (900.0, 560.0))]),

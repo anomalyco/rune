@@ -242,3 +242,25 @@ fn html_export_omits_secure_fields_labels_and_containers() {
         }
     }
 }
+
+#[test]
+fn html_export_emits_fit_content_height_fraction_and_self_auto() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        crate::col().key("root").w_full().h(200.0).role("main")
+            .child(crate::row().key("pill").w_fit().child(crate::text("Badge")))
+            .child(crate::col().key("chip").h_fit().child(crate::text("Chip")))
+            .child(crate::el().key("frac").h_frac(0.4))
+            .child(crate::el().key("fixed").size(20.0, 20.0).self_start())
+            .child(crate::el().key("reset").size(20.0, 20.0).self_start().self_auto())
+    }
+    let mut rt = Runtime::new((), view, (400.0, 200.0), Env::default());
+    rt.page_mode();
+    let nodes = taken(&mut rt, 400.0);
+    let decls = |key: &str| nodes.iter().find(|n| n.path.ends_with(key)).expect(key).decls.clone();
+    assert!(decls("pill").contains(&("width", "fit-content".into())), "{:?}", decls("pill"));
+    assert!(!decls("pill").iter().any(|d| d.0 == "align-self"), "{:?}", decls("pill"));
+    assert!(decls("chip").contains(&("height", "fit-content".into())), "{:?}", decls("chip"));
+    assert!(decls("frac").contains(&("height", "40%".into())), "{:?}", decls("frac"));
+    assert!(decls("fixed").contains(&("align-self", "flex-start".into())), "{:?}", decls("fixed"));
+    assert!(!decls("reset").iter().any(|d| d.0 == "align-self"), "{:?}", decls("reset"));
+}

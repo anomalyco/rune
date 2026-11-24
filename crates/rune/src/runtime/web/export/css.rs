@@ -19,12 +19,13 @@ fn px(v: f32) -> String {
     if v == 0.0 { "0".into() } else { format!("{}px", num(v)) }
 }
 
-/// A length, percentage or `auto`; `None` for what CSS can't take as is (calc, fr).
+/// A length, percentage, `auto` or `fit-content`; `None` for what CSS can't take as is (calc, fr).
 fn len(raw: CompactLength) -> Option<String> {
     match raw.tag() {
         CompactLength::LENGTH_TAG => Some(px(raw.value())),
         CompactLength::PERCENT_TAG => Some(format!("{}%", num(raw.value() * 100.0))),
         CompactLength::AUTO_TAG => Some("auto".into()),
+        CompactLength::FIT_CONTENT_KEYWORD_TAG => Some("fit-content".into()),
         _ => None,
     }
 }
