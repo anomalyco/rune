@@ -7,13 +7,52 @@ use std::rc::Rc;
 use crate::states::downcast;
 use crate::{El, Tx};
 
+/// What moved a scroll viewport's offset in the frame reported to [`El::on_scroll_offset`].
+///
+/// When more than one cause moves a viewport in the same frame, the highest-priority source wins:
+/// [`Direct`](Self::Direct) > [`Momentum`](Self::Momentum) > [`EdgeReturn`](Self::EdgeReturn) >
+/// [`Programmatic`](Self::Programmatic) > [`None`](Self::None).
+///
+/// ```
+/// use rune::{El, ScrollPos, ScrollSource, ScrollSpec, col};
+///
+/// let _list: El = col()
+///     .scroll(ScrollSpec::default())
+///     .on_scroll_offset(|pos: ScrollPos| {
+///         if pos.source == ScrollSource::Direct && pos.offset[1] < -40.0 {
+///             // Deliberate pull past the top edge, not elastic edge return after release.
+///         }
+///     });
+/// ```
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScrollSource {
+    /// No scroll motion occurred this frame (for example, initial layout, resize, or a rebuilt handler).
+    #[default]
+    None,
+    /// Direct user input: touch drag, wheel or trackpad scroll, wheel notch ease, scroll keys,
+    /// middle-click autoscroll, selection edge-scroll, or scroll-bar drag.
+    Direct,
+    /// Post-release momentum coasting inside `[0, max]`, including trackpad momentum phases and
+    /// touch or programmatic flings.
+    Momentum,
+    /// Elastic rubber-band spring returning from overscroll outside `[0, max]` back to the nearest
+    /// boundary after a touch release.
+    EdgeReturn,
+    /// App- or layout-driven motion: `Tx::scroll_*` requests (instant jumps, glides, reveals,
+    /// paging), `stick_bottom` following content growth, `El::scroll_anchor` / `Tx::keep_on_screen`
+    /// compensation, and caret follow.
+    Programmatic,
+}
+
 /// Where a scroll viewport is scrolled to, for [`El::on_scroll_offset`]: `offset` points from
 /// the top-left of its content, `[x, y]`, out of the `max` it can scroll on each axis, in a
 /// viewport `viewport` points wide and tall. `drawn` is the size the frame draws the viewport
 /// at: `viewport` at rest, and where its size has got to while a layout spring resizes it, so
 /// the handler hears every frame of that. `direction` is the way the viewport runs
 /// ([`El::dir`]), `Ltr` or `Rtl`: a right-to-left one starts at its right edge, and its scroll bar
-/// sits on its left, as a browser puts a `dir="rtl"` box's.
+/// sits on its left, as a browser puts a `dir="rtl"` box's. `source` identifies what moved
+/// `offset` this frame ([`ScrollSource`]).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ScrollPos {
@@ -22,6 +61,7 @@ pub struct ScrollPos {
     pub viewport: [f32; 2],
     pub drawn: [f32; 2],
     pub direction: crate::Direction,
+    pub source: ScrollSource,
 }
 
 impl El {

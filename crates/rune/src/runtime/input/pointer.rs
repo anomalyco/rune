@@ -675,11 +675,12 @@ impl RuntimeCore {
     /// deltas keeps to the viewport it began on (`WheelLock::vertical_run`), even at its end.
     pub fn wheel(&mut self, x: f32, y: f32, dy: f32) {
         let phased = self.scroll.wheel_phased();
-        self.wheel_from(x, y, dy, crate::Mods::default(), phased, crate::runtime::gesture_dispatch::WheelStart::Unknown);
+        let momentum = self.scroll.wheel_momentum();
+        self.wheel_from(x, y, dy, crate::Mods::default(), phased, momentum, crate::runtime::gesture_dispatch::WheelStart::Unknown);
     }
 
     /// [`Self::wheel`], with where its chain starts when the caller already found it.
-    pub(in crate::runtime) fn wheel_from(&mut self, x: f32, y: f32, dy: f32, mods: crate::Mods, phased: bool, start: crate::runtime::gesture_dispatch::WheelStart) {
+    pub(in crate::runtime) fn wheel_from(&mut self, x: f32, y: f32, dy: f32, mods: crate::Mods, phased: bool, momentum: bool, start: crate::runtime::gesture_dispatch::WheelStart) {
         self.release_hover_hold();
         self.drop_scroll_holds();
         self.dismiss_help();
@@ -690,9 +691,12 @@ impl RuntimeCore {
         let before = st.offset;
         st.offset = (st.offset - f64::from(dy)).clamp(0.0, st.max);
         st.moved();
+        let moved = st.offset != before;
+        if moved {
+            st.note_source(if momentum { crate::ScrollSource::Momentum } else { crate::ScrollSource::Direct });
+        }
         st.land(stick);
         log_event!(self, "wheel {dy:.1}");
-        let moved = st.offset != before;
         if moved { self.pointer.scroll_cancels_press(&self.tree.nodes, id); }
         self.scroll.ran_wheel_vertical(id, now, x, y, dy, mods, phased, moved, held);
     }
@@ -720,7 +724,7 @@ impl RuntimeCore {
     /// it began on, as `Self::wheel`'s deltas do. With reduced motion, it jumps.
     pub(in crate::runtime) fn wheel_notch(&mut self, x: f32, y: f32, dy: f32, mods: crate::Mods, phased: bool, start: crate::runtime::gesture_dispatch::WheelStart) {
         if !self.wheel_glides() {
-            self.wheel_from(x, y, dy, mods, phased, start);
+            self.wheel_from(x, y, dy, mods, phased, false, start);
             return;
         }
         self.release_hover_hold();

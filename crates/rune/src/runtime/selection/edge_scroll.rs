@@ -347,7 +347,10 @@ impl RuntimeCore {
         st.offset = (st.offset + by).clamp(0.0, st.max);
         st.moved();
         st.land(false);
-        if st.offset != before { self.pointer.scroll_cancels_press(&self.tree.nodes, id); }
+        if st.offset != before {
+            st.note_source(crate::ScrollSource::Direct);
+            self.pointer.scroll_cancels_press(&self.tree.nodes, id);
+        }
     }
 
     /// Where height `y` is against the edges of the vertical viewport around the selection a

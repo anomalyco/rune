@@ -13,7 +13,7 @@
 #![forbid(unsafe_code)]
 
 use rune::tok::{self, type_};
-use rune::{AppSpec, Cx, El, ScrollSpec, TextStyle, col, el, oklch, oklcha, row, text};
+use rune::{AppSpec, Color, Cx, El, Live, LiveText, ScrollPos, ScrollSource, ScrollSpec, TextStyle, Tx, col, el, oklch, oklcha, row, text};
 
 const BAR: f32 = 60.0;
 const TABS: [&str; 4] = ["Inbox", "Today", "Later", "Done"];
@@ -26,10 +26,44 @@ enum Look {
     Plain,
 }
 
-#[derive(Default)]
 struct State {
     tab: usize,
     look: Look,
+    source_label: LiveText,
+    source_fill: Live<Color>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            tab: 0,
+            look: Look::Soft,
+            source_label: LiveText::new("Idle"),
+            source_fill: Live::new(source_color(ScrollSource::None, true)),
+        }
+    }
+}
+
+fn source_label(source: ScrollSource) -> &'static str {
+    match source {
+        ScrollSource::None => "Idle",
+        ScrollSource::Direct => "Direct",
+        ScrollSource::Momentum => "Momentum",
+        ScrollSource::EdgeReturn => "Edge return",
+        ScrollSource::Programmatic => "Programmatic",
+        _ => "Scroll",
+    }
+}
+
+fn source_color(source: ScrollSource, dark: bool) -> Color {
+    match source {
+        ScrollSource::None => if dark { oklcha(0.24, 0.006, 260.0, 0.9) } else { oklcha(0.94, 0.004, 260.0, 0.92) },
+        ScrollSource::Direct => oklch(if dark { 0.56 } else { 0.58 }, 0.16, 250.0),
+        ScrollSource::Momentum => oklch(if dark { 0.58 } else { 0.6 }, 0.15, 165.0),
+        ScrollSource::EdgeReturn => oklch(if dark { 0.64 } else { 0.66 }, 0.17, 65.0),
+        ScrollSource::Programmatic => oklch(if dark { 0.56 } else { 0.58 }, 0.16, 300.0),
+        _ => if dark { oklcha(0.24, 0.006, 260.0, 0.9) } else { oklcha(0.94, 0.004, 260.0, 0.92) },
+    }
 }
 
 fn list_row(i: usize, dark: bool) -> El {
@@ -46,7 +80,10 @@ fn tab(i: usize, s: &State, dark: bool) -> El {
     let t = tok::theme(dark);
     let on = s.tab == i;
     col().key(TABS[i]).role("button").label(TABS[i]).hit().grow(1.0).h_full().center().gap(4.0)
-        .on_press(move |s: &mut State| s.tab = i)
+        .on_press_tx(move |s: &mut State, tx: &mut Tx| {
+            s.tab = i;
+            tx.scroll_to("list", 0.0, i as f32 * 520.0);
+        })
         .child(el().size(22.0, 4.0).radius(2.0).fill(if on { tok::accent(0, dark) } else { t.control_off }))
         .child(text(TABS[i]).font(TextStyle::new(11.0, if on { 650.0 } else { 500.0 }))
             .color(if on { t.text } else { t.text_secondary }))
@@ -56,7 +93,23 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
     let dark = cx.system_dark();
     let t = tok::theme(dark);
     let rows = col().w_full().pb(BAR).children((0..60).map(|i| list_row(i, dark)));
-    let list = col().key("list").w_full().h_full().scroll(ScrollSpec { stick_bottom: false }).child(rows);
+    let label_live = s.source_label.clone();
+    let fill_live = s.source_fill.clone();
+    let list = col().key("list").w_full().h_full().scroll(ScrollSpec { stick_bottom: false })
+        .on_scroll_offset(move |pos: ScrollPos| {
+            label_live.set(format!("{} · {:.0}", source_label(pos.source), pos.offset[1]));
+            fill_live.set(source_color(pos.source, dark));
+        })
+        .child(rows);
+    let badge = row().key("source-badge").pin(None, Some(10.0), Some(12.0), None)
+        .px(10.0).py(5.0).radius(12.0).border(1.0, t.separator)
+        .live_fill(&s.source_fill)
+        .child(
+            text("Idle · 0").key("source-badge-text").w(118.0).truncate()
+                .font(TextStyle::new(11.0, 600.0).features("'tnum' 1"))
+                .color(if dark { Color::WHITE } else { t.text })
+                .live_text(&s.source_label),
+        );
     let (sigma, alpha) = match s.look {
         Look::Soft => (8.0, if dark { 0.4 } else { 0.45 }),
         Look::Strong => (20.0, if dark { 0.55 } else { 0.6 }),
@@ -68,7 +121,7 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
         .backdrop_blur(sigma).fill(tint)
         .child(hairline)
         .child(row().w_full().grow(1.0).children((0..TABS.len()).map(|i| tab(i, s, dark))));
-    el().w_full().h_full().fill(t.bg).child(list).child(bar)
+    el().w_full().h_full().fill(t.bg).child(list).child(badge).child(bar)
 }
 
 fn main() {
@@ -81,7 +134,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rune::{Env, Runtime, render::KIND_BACKDROP_BLUR};
+    use rune::{Env, Runtime, TouchPhase, render::KIND_BACKDROP_BLUR};
 
     #[test]
     fn the_bar_blurs_and_a_tab_takes_a_tap() {
@@ -93,5 +146,30 @@ mod tests {
         rt.pointer_up(x, y);
         rt.frame(1.0 / 60.0);
         assert_eq!(rt.state.tab, 2);
+        assert!(rt.state.source_label.get().starts_with("Programmatic"), "tab glide updates badge: {}", rt.state.source_label.get());
+    }
+
+    #[test]
+    fn source_badge_tracks_direct_edge_return_and_momentum() {
+        let mut rt = Runtime::new(State::default(), view, (390.0, 640.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        assert!(rt.state.source_label.get().starts_with("Idle"), "initial badge: {}", rt.state.source_label.get());
+
+        // Overscroll pull down -> Direct, then release -> Edge return.
+        rt.touch(1, TouchPhase::Started, 180.0, 120.0, 0.0);
+        for i in 1..=4 {
+            rt.touch(1, TouchPhase::Moved, 180.0, 120.0 + 30.0 * i as f32, f64::from(i) * 0.016);
+            rt.frame(0.016);
+        }
+        assert!(rt.state.source_label.get().starts_with("Direct"), "drag badge: {}", rt.state.source_label.get());
+        rt.touch(1, TouchPhase::Ended, 180.0, 240.0, 0.080);
+        rt.frame(0.016);
+        assert!(rt.state.source_label.get().starts_with("Edge return"), "rebound badge: {}", rt.state.source_label.get());
+
+        // Settle, then fling downward -> Momentum.
+        for _ in 0..80 { rt.frame(0.016); }
+        rt.fling(180.0, 200.0, -800.0);
+        rt.frame(0.016);
+        assert!(rt.state.source_label.get().starts_with("Momentum"), "fling badge: {}", rt.state.source_label.get());
     }
 }

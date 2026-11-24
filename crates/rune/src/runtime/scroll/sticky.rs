@@ -348,7 +348,9 @@ impl RuntimeCore {
                 st.moved();
                 let to = (laid - f64::from(k.was)).clamp(0.0, st.max);
                 if pass > 0 && (to - st.offset).abs() < 0.5 { continue; }
+                let before = st.offset;
                 st.offset = to;
+                if (st.offset - before).abs() > 1e-6 { st.note_source(crate::ScrollSource::Programmatic); }
                 st.keep_land(stick);
                 moved = true;
             }
@@ -378,6 +380,7 @@ impl RuntimeCore {
             st.offset = to;
             st.keep_land(stick && delta >= 0.0);
             st.moved();
+            st.note_source(crate::ScrollSource::Programmatic);
             moved = true;
         }
         for r in self.scroll.requests.reveals() {
@@ -420,6 +423,7 @@ impl RuntimeCore {
             st.offset = to;
             st.keep_land(stick && !growing);
             st.moved();
+            st.note_source(crate::ScrollSource::Programmatic);
             moved = true;
         }
         // Once the content end prevents holding the anchor, let stick-bottom own the
