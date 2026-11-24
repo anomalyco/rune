@@ -1,8 +1,64 @@
 //! System configuration.
 use std::process::Command;
+use std::sync::mpsc::{channel, Receiver};
+use std::sync::{Mutex, OnceLock};
+
+type ButtonLayout = Option<(String, String)>;
+
+/// The two reads started before a window exists, each on a thread of its own. The first frame
+/// takes their answers; a later frame reads again, as it always did.
+struct Early {
+    dark: Mutex<Option<Receiver<bool>>>,
+    button_layout: Mutex<Option<Receiver<ButtonLayout>>>,
+}
+
+static EARLY: OnceLock<Early> = OnceLock::new();
+
+/// Starts the reads a frame's first drawing needs (the colour scheme and the button layout: a
+/// `dbus-send` process each, with 100 ms for the portal's reply) on threads of their own, once per
+/// process. Call it when a client-side frame is certain and before the window's first configure:
+/// the frame is made in that configure, on the event loop's thread, which otherwise starts both
+/// processes one after the other and waits for each.
+pub fn read_system_config_early() {
+    EARLY.get_or_init(|| Early {
+        dark: Mutex::new(start(read_prefer_dark)),
+        button_layout: Mutex::new(start(read_button_layout_config)),
+    });
+}
+
+/// Runs `read` on a thread of its own. `None` when the thread could not be made.
+pub(crate) fn start<T: Send + 'static>(read: fn() -> T) -> Option<Receiver<T>> {
+    let (tx, rx) = channel();
+    std::thread::Builder::new()
+        .name("sctk-adwaita-config".into())
+        .spawn(move || {
+            let _ = tx.send(read());
+        })
+        .ok()?;
+    Some(rx)
+}
+
+/// The answer of a read started early, waited for if it is still running. Once: the next call
+/// gets `None` and reads the system as it is then.
+pub(crate) fn take<T>(slot: &Mutex<Option<Receiver<T>>>) -> Option<T> {
+    let rx = slot.lock().ok()?.take()?;
+    rx.recv().ok()
+}
 
 /// Query system to see if dark theming should be preferred.
 pub(crate) fn prefer_dark() -> bool {
+    EARLY.get().and_then(|early| take(&early.dark)).unwrap_or_else(read_prefer_dark)
+}
+
+/// Query system configuration for buttons layout.
+pub(crate) fn get_button_layout_config() -> ButtonLayout {
+    EARLY
+        .get()
+        .and_then(|early| take(&early.button_layout))
+        .unwrap_or_else(read_button_layout_config)
+}
+
+fn read_prefer_dark() -> bool {
     // outputs something like: `variant       variant          uint32 1`
     let stdout = Command::new("dbus-send")
         .arg("--reply-timeout=100")
@@ -23,10 +79,9 @@ pub(crate) fn prefer_dark() -> bool {
     matches!(stdout, Some(s) if s.trim().ends_with("uint32 1"))
 }
 
-/// Query system configuration for buttons layout.
 /// Should be updated to use standard xdg-desktop-portal specs once available
 /// https://github.com/flatpak/xdg-desktop-portal/pull/996
-pub(crate) fn get_button_layout_config() -> Option<(String, String)> {
+fn read_button_layout_config() -> ButtonLayout {
     let config_string = Command::new("dbus-send")
         .arg("--reply-timeout=100")
         .arg("--print-reply=literal")

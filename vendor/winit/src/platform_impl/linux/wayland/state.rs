@@ -123,6 +123,19 @@ impl WinitState {
         queue_handle: &QueueHandle<Self>,
         loop_handle: LoopHandle<'static, WinitState>,
     ) -> Result<Self, OsError> {
+        // A compositor without the decoration protocol answers a decorated window's first
+        // configure with a client-side frame, and that frame reads the system's colour scheme and
+        // button layout through two `dbus-send` processes, 100 ms of reply timeout each. Started
+        // here, on threads of their own, they are done (or well on their way) when the configure
+        // asks, instead of running one after the other on this thread before the first frame.
+        #[cfg(feature = "sctk-adwaita")]
+        if !globals
+            .contents()
+            .with_list(|list| list.iter().any(|global| global.interface == "zxdg_decoration_manager_v1"))
+        {
+            sctk_adwaita::read_system_config_early();
+        }
+
         let registry_state = RegistryState::new(globals);
         let compositor_state =
             CompositorState::bind(globals, queue_handle).map_err(WaylandError::Bind)?;
