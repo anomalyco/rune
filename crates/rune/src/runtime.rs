@@ -209,6 +209,8 @@ mod line_clamp_tests;
 #[cfg(test)]
 mod aspect_fit_tests;
 #[cfg(test)]
+mod aspect_ratio_tests;
+#[cfg(test)]
 mod anchor_fit_tests;
 #[cfg(test)]
 mod drop_tests;
