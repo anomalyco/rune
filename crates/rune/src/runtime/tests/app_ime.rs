@@ -300,6 +300,18 @@ fn empty_commit_without_composition_keeps_scroll_and_double_click_while_ending_o
     assert_eq!(rt.state.field.text, text, "empty commit inserts no text");
 }
 
+#[test]
+fn app_composition_wipes_preedit_on_drop() {
+    use crate::tooling::test_alloc::{ReleaseCheck, watch_release};
+    let comp = crate::runtime::input::app_ime::AppComposition::Composing("ime-secret-preedit".to_owned());
+    let (ptr, len) = match &comp {
+        crate::runtime::input::app_ime::AppComposition::Composing(s) => (s.as_ptr(), s.len()),
+        _ => unreachable!(),
+    };
+    let (_, check) = watch_release(ptr, len, || drop(comp));
+    assert_eq!(check, ReleaseCheck::Zeroed, "AppComposition::drop must wipe preedit buffer");
+}
+
 /// A double-click's word as selected: on Windows with the space after it (`selectable::with_trailing_space`).
 fn w(word: &str) -> String {
     if cfg!(target_os = "windows") { format!("{word} ") } else { word.to_owned() }

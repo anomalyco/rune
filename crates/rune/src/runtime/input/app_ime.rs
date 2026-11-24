@@ -1,7 +1,5 @@
 //! Input method events for an editor the app draws itself: `App::on_ime` hears them while an
 //! `El::ime_cursor` caret has the input method and no text field has focus.
-use zeroize::Zeroize;
-
 use super::*;
 
 /// What the app's editor was last told the input method shows.
@@ -47,15 +45,25 @@ impl AppComposition {
     }
 
     pub(in crate::runtime) fn take_composing(&mut self) -> Option<String> {
-        match std::mem::take(self) {
-            AppComposition::Composing(text) => Some(text),
+        match self {
+            AppComposition::Composing(text) => {
+                let out = std::mem::take(text);
+                *self = AppComposition::Idle;
+                Some(out)
+            }
             AppComposition::Idle => None,
         }
     }
 
     fn replace(&mut self, next: AppComposition) {
-        if let AppComposition::Composing(old) = self { old.zeroize(); }
+        if let AppComposition::Composing(old) = self { crate::el::wipe_string(old); }
         *self = next;
+    }
+}
+
+impl Drop for AppComposition {
+    fn drop(&mut self) {
+        if let AppComposition::Composing(old) = self { crate::el::wipe_string(old); }
     }
 }
 

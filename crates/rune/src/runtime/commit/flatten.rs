@@ -180,16 +180,10 @@ fn prepare_text(
     }
     if let Some(t) = text && t.redacted {
         // Rich links carry URLs and can expose them through hover, copy and tree children.
-        use zeroize::Zeroize;
         let t: &mut TextSpec = t;
         t.selectable = false;
         if let Some(cold) = t.cold.get_mut_if_some() {
-            for link in &mut cold.links {
-                link.id.zeroize();
-                if let Some(label) = &mut link.label { label.zeroize(); }
-                if let Some(help) = &mut link.help { help.zeroize(); }
-            }
-            cold.links.clear();
+            crate::el::wipe_links(&mut cold.links);
             cold.rings.clear();
             cold.advance_in = None;
             cold.live = None;

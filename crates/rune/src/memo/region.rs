@@ -90,7 +90,10 @@ pub fn region_warnings() -> Vec<String> {
 #[cfg(debug_assertions)]
 fn print_el(el: &El, parent: &str, out: &mut Vec<String>) {
     let path = format!("{parent}/{}", el.key.as_deref().unwrap_or("#"));
-    let text = el.text.as_ref().map(|t| format!("{:?} {:?} {}/{} {} spans", t.content, t.color, t.style.size, t.style.weight, t.spans.len()));
+    let text = el.text.as_ref().map(|t| {
+        let content = if t.redacted { "[redacted]" } else { t.content.as_str() };
+        format!("{content:?} {:?} {}/{} {} spans", t.color, t.style.size, t.style.weight, t.spans.len())
+    });
     out.push(format!("{path} {} {:?} {:?} {:?}", el.role_name(), el.style, el.vis, text));
     for child in el.all_children() {
         print_el(child, &path, out);
