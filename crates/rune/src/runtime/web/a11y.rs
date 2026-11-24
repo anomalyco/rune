@@ -13,6 +13,15 @@ use crate::a11y::roles;
 pub(crate) mod patch;
 pub(crate) mod schedule;
 
+/// Per-frame scroll/commit snapshot used to detect whether scroll or virtual-window movement
+/// happened on the current frame rather than comparing against the last flushed mirror.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FrameStamp {
+    commits: u64,
+    non_virtual_commits: u64,
+    scroll_digest: u64,
+}
+
 #[derive(Default)]
 pub(crate) struct A11yMirror {
     commits: u64,
@@ -20,6 +29,8 @@ pub(crate) struct A11yMirror {
     viewport: (u32, u32),
     zoom: u32,
     scroll_digest: u64,
+    /// Scroll/commit stamp observed on the previous frame (`web_a11y_frame_event`).
+    last_frame: Option<FrameStamp>,
     /// Whether motion ran at the last build, and when (clock seconds) it was.
     moving: bool,
     built_at: f64,
@@ -32,12 +43,6 @@ pub(crate) struct A11yMirror {
     focus_json: String,
 }
 
-impl A11yMirror {
-    #[inline]
-    pub(crate) fn non_virtual_commits(&self) -> u64 {
-        self.non_virtual_commits
-    }
-}
 
 /// While motion runs (a sheet sliding in, a panel opening), how often the mirror follows what's
 /// drawn. Its boxes are the drawn ones, so a build at the commit alone keeps a sliding element
@@ -315,6 +320,9 @@ fn text_runs(path: &str, spec: &crate::el::TextSpec) -> Vec<A11yRun> {
 }
 
 impl RuntimeCore {
+    #[cfg(test)]
+    pub(super) fn scroll_digest_for_test(&self) -> u64 { self.scroll_digest() }
+
     fn scroll_digest(&self) -> u64 {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         // A page hands horizontal scrolling to the DOM, whose container scrolls its own children:
@@ -765,14 +773,77 @@ impl RuntimeCore {
         mirror.commits != self.commit.commits || mirror.viewport != vp || mirror.zoom != zoom || mirror.scroll_digest != sd || follow
     }
 
-    /// Whether only scrolling or a `CommitWhy::VIRTUAL` window shift dirtied the mirror since it
-    /// was last built (no non-virtual commit, no viewport/zoom change).
-    pub(crate) fn web_a11y_virtual_only_scroll(&self, mirror: &A11yMirror) -> bool {
-        mirror.built
-            && mirror.non_virtual_commits == self.commit.non_virtual_commits
-            && mirror.viewport == self.mirror_viewport()
-            && mirror.zoom == self.zoom().to_bits()
-            && (mirror.scroll_digest != self.scroll_digest() || mirror.commits != self.commit.commits)
+    /// Whether any scroll viewport has ongoing scroll motion right now (active touch scroll,
+    /// pending direct scroll, momentum coast, glide, or wheel ease). Unlike [`Self::scrolling`],
+    /// this does not stay true from the one-step `hand.scrolling` latch after a scroll finishes
+    /// and no later frame steps it.
+    pub(crate) fn web_a11y_scroll_active(&self) -> bool {
+        self.pointer.touch_scroll().is_some()
+            || self.scroll.scrolls.values().any(|st| {
+                st.direct()
+                    || st.coast().abs() > 1.0
+                    || st.glide().is_some()
+                    || st.mode.wheel().is_some()
+                    || st.x.coast().abs() > 1.0
+                    || st.x.carried()
+            })
+    }
+
+    /// Builds the [`schedule::ScheduleEvent::Frame`] input for the web host and tests alike.
+    ///
+    /// Reports whether scroll motion is active or scroll / `CommitWhy::VIRTUAL` movement occurred
+    /// on *this* frame (compared against the previous frame's stamp), not how stale the unflushed
+    /// mirror is.
+    pub(crate) fn web_a11y_frame_event(
+        &self,
+        mirror: &mut A11yMirror,
+        now: crate::time::Instant,
+        document: bool,
+    ) -> schedule::ScheduleEvent {
+        let dirty = self.web_a11y_needs_sync(mirror);
+        let cur = FrameStamp {
+            commits: self.commit.commits,
+            non_virtual_commits: self.commit.non_virtual_commits,
+            scroll_digest: self.scroll_digest(),
+        };
+        let prev = mirror.last_frame.replace(cur);
+        let frame_scroll_moved = prev.is_some_and(|p| {
+            p.scroll_digest != cur.scroll_digest
+                || (p.commits != cur.commits && p.non_virtual_commits == cur.non_virtual_commits)
+        });
+        schedule::ScheduleEvent::Frame {
+            now,
+            document,
+            dirty,
+            scrolling: self.web_a11y_scroll_active() || frame_scroll_moved,
+            non_virtual_commit: cur.non_virtual_commits != mirror.non_virtual_commits,
+        }
+    }
+
+    /// Builds the [`schedule::ScheduleEvent::SettleDue`] input for the web host and tests alike.
+    pub(crate) fn web_a11y_settle_event(
+        &self,
+        attempt: crate::machine::Attempt,
+        now: crate::time::Instant,
+    ) -> schedule::ScheduleEvent {
+        schedule::ScheduleEvent::SettleDue {
+            attempt,
+            now,
+            scrolling: self.web_a11y_scroll_active(),
+        }
+    }
+
+    /// Builds the [`schedule::ScheduleEvent::IdleDue`] input for the web host and tests alike.
+    pub(crate) fn web_a11y_idle_event(
+        &self,
+        attempt: crate::machine::Attempt,
+        now: crate::time::Instant,
+    ) -> schedule::ScheduleEvent {
+        schedule::ScheduleEvent::IdleDue {
+            attempt,
+            now,
+            scrolling: self.web_a11y_scroll_active(),
+        }
     }
 
     /// Builds and diffs the mirror against what was previously sent, returning a compact
@@ -781,13 +852,19 @@ impl RuntimeCore {
         if !self.web_a11y_needs_sync(mirror) {
             return None;
         }
+        let sd = self.scroll_digest();
         mirror.moving = self.animating;
         mirror.built_at = self.clock;
         mirror.commits = self.commit.commits;
         mirror.non_virtual_commits = self.commit.non_virtual_commits;
         mirror.viewport = self.mirror_viewport();
         mirror.zoom = self.zoom().to_bits();
-        mirror.scroll_digest = self.scroll_digest();
+        mirror.scroll_digest = sd;
+        mirror.last_frame = Some(FrameStamp {
+            commits: self.commit.commits,
+            non_virtual_commits: self.commit.non_virtual_commits,
+            scroll_digest: sd,
+        });
         mirror.built = true;
         let items = self.web_a11y_items();
         let patch = mirror.patch.diff(&items)?;

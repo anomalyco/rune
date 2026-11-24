@@ -467,7 +467,7 @@ impl PointerState {
         &mut self.touch.scroll
     }
 
-    #[cfg(test)]
+    #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
     #[inline]
     pub(in crate::runtime) fn touch_scroll(&self) -> Option<crate::runtime::scroll_touch::TouchScroll> {
         self.touch.scroll

@@ -148,9 +148,10 @@ fn virtual_scroll_shift_keeps_staying_rows_unmutated_and_non_virtual_commits_sta
         initial_non_virtual,
         "CommitWhy::VIRTUAL must not increment non_virtual_commits",
     );
+    let ev = rt.core().web_a11y_frame_event(&mut mirror, crate::time::Instant::now(), false);
     assert!(
-        rt.core().web_a11y_virtual_only_scroll(&mirror),
-        "virtual scroll shift classifies as scroll-only",
+        matches!(ev, crate::runtime::web_a11y::schedule::ScheduleEvent::Frame { dirty: true, scrolling: true, non_virtual_commit: false, .. }),
+        "virtual scroll shift frame must report per-frame scroll movement: {ev:?}",
     );
 
     // Flush once scrolling settles: staying rows must not be re-upserted.

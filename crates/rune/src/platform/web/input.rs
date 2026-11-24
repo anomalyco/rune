@@ -187,16 +187,12 @@ impl Running {
         }
         // Defer mirror builds while scrolling and flush off rAF in app mode; document mode keeps
         // synchronous first-frame and commit updates with incremental patches.
-        let dirty = rt.web_a11y_needs_sync(&self.input.a11y);
-        let scrolling = rt.scrolling() || rt.web_a11y_virtual_only_scroll(&self.input.a11y);
-        let non_virtual_commit = rt.commit.non_virtual_commits != self.input.a11y.non_virtual_commits();
-        self.run_a11y_schedule(crate::runtime::web_a11y::schedule::ScheduleEvent::Frame {
-            now: crate::time::Instant::now(),
-            document: self.input.document,
-            dirty,
-            scrolling,
-            non_virtual_commit,
-        });
+        let event = rt.web_a11y_frame_event(
+            &mut self.input.a11y,
+            crate::time::Instant::now(),
+            self.input.document,
+        );
+        self.run_a11y_schedule(event);
         let rt = self.app.rt();
         // An app's focus, for a reader: the browser's focus stays on the canvas or its text field.
         if !self.input.document && let Some(focus) = rt.web_a11y_focus(&mut self.input.a11y) {
@@ -301,22 +297,14 @@ impl Running {
         match event["kind"].as_str() {
             Some("a11y_settle") => {
                 let attempt = crate::machine::Attempt(event["attempt"].as_u64().unwrap_or(0) as u32);
-                let scrolling = self.app.rt().scrolling();
-                self.run_a11y_schedule(crate::runtime::web_a11y::schedule::ScheduleEvent::SettleDue {
-                    attempt,
-                    now: crate::time::Instant::now(),
-                    scrolling,
-                });
+                let event = self.app.rt().web_a11y_settle_event(attempt, crate::time::Instant::now());
+                self.run_a11y_schedule(event);
                 return false;
             }
             Some("a11y_idle") => {
                 let attempt = crate::machine::Attempt(event["attempt"].as_u64().unwrap_or(0) as u32);
-                let scrolling = self.app.rt().scrolling();
-                self.run_a11y_schedule(crate::runtime::web_a11y::schedule::ScheduleEvent::IdleDue {
-                    attempt,
-                    now: crate::time::Instant::now(),
-                    scrolling,
-                });
+                let event = self.app.rt().web_a11y_idle_event(attempt, crate::time::Instant::now());
+                self.run_a11y_schedule(event);
                 return false;
             }
             Some("a11y_flush") => {
