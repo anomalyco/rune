@@ -2,17 +2,17 @@
 
 use super::macos::smoothing::ApplePipeline;
 
-/// How glyphs are rasterised and placed: CoreGraphics' glyph pipeline, with or without font
-/// smoothing's dilation. Set app-wide with `App::font_smoothing`, or at run time with
-/// `Tx::set_font_smoothing`, which redraws with glyphs rasterised for the new mode.
+/// How glyphs are rasterised and placed: CoreGraphics' glyph pipeline (`On`, `Off`), DirectWrite
+/// (`DirectWrite`, `ClearType`), or GPU outline rendering (`Windfoil`, `WindfoilChromium`, `Slug`,
+/// `HintedGpu`, `Hinted`, `WindfoilRgb`). Set app-wide with `App::font_smoothing`, or at run time
+/// with `Tx::set_font_smoothing`, which redraws with glyphs rasterised for the new mode.
 ///
 /// The default is [`FontSmoothing::On`] on macOS and in a Mac's browser, and
-/// [`FontSmoothing::WindfoilChromium`] everywhere else (Windows, Linux, the web); every mode can be
-/// chosen on every OS. `On` and `Off` work on any OS (they are arithmetic on outlines, not calls
-/// into CoreText). Either way the pipeline
-/// floors pens to CoreGraphics' subpixel steps (`quantisation_steps`), flattens curves and
-/// hints small sizes as CoreGraphics does, and draws coverage as is. Windows blend in
-/// sRGB-encoded space, as CoreGraphics does, unless the app sets `App::srgb_blend`.
+/// [`FontSmoothing::WindfoilChromium`] everywhere else (Windows, Linux, iOS, the web); every mode
+/// can be chosen on every OS. `On` and `Off` work on any OS (they are arithmetic on outlines, not
+/// calls into CoreText): both floor pens to CoreGraphics' subpixel steps (`quantisation_steps`),
+/// flatten curves and hint small sizes as CoreGraphics does. Windows blend in sRGB-encoded space,
+/// as CoreGraphics does, unless the app sets `App::srgb_blend`.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FontSmoothing {
@@ -310,7 +310,7 @@ pub(crate) fn windows_gamma() -> bool {
 /// With smoothing off on Linux, Windows and the web it stands in for the text gamma a browser's
 /// grayscale antialiasing applies there: light text on a dark page draws heavier and dark text on
 /// a light one a little lighter than coverage blended as is, keyed by the text's luminance. On macOS and iOS coverage
-/// is drawn as is in every mode: CoreText with smoothing off, and Safari and Chrome with
+/// is drawn as is for `On` and `Off` (Chromium-weight outline modes keep Chromium's gamma on every OS): CoreText with smoothing off, and Safari and Chrome with
 /// `-webkit-font-smoothing: antialiased`, apply no text gamma (measured on macOS 15.3 with
 /// Chrome 156: the same ink as CoreText, where the gamma drew light-on-dark text up to 24%
 /// heavier). With smoothing on, CoreText's dilation does that job, and with DirectWrite on

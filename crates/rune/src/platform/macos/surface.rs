@@ -73,7 +73,8 @@ fn top_left_gravity(contents_flipped: bool) -> &'static objc2::runtime::AnyObjec
 /// ease when a window crosses between displays of different scales, without touching `delegate`
 /// (which `layer_occluded` and wgpu's occlusion check walk to find the hosting `NSView`). Tagging
 /// sRGB matches AppKit's own drawing so wide-gamut displays don't oversaturate the contents;
-/// wgpu's reconfigures keep these layer properties.
+/// Rune's native Metal backend keeps the sRGB colorspace across reconfigures, whereas wgpu-hal's
+/// Metal configure resets colorspace to `nil` for `SurfaceColorSpace::Srgb`.
 pub(crate) fn pin_contents_top_left(surface: &wgpu::Surface) {
     use objc2::runtime::{AnyClass, AnyObject, Bool};
     use objc2_core_graphics::{CGColorSpace, kCGColorSpaceSRGB};
