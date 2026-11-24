@@ -10,6 +10,8 @@ use super::*;
 pub(in crate::runtime) struct Titlebar {
     /// What the press just delivered asks the shell to do, for `take_titlebar_action`.
     pub(in crate::runtime) action: Option<TitlebarAction>,
+    /// Window resize edge requested by the press just delivered, for `take_resize_action`.
+    pub(in crate::runtime) resize: Option<crate::ResizeEdge>,
     /// The press in flight (`step`).
     pub(in crate::runtime) press: TitlebarPress,
     /// Window points from the top that AppKit drags natively, over the content (0 elsewhere).
@@ -127,6 +129,8 @@ pub(in crate::runtime) enum Event {
 pub(in crate::runtime) enum Request {
     /// Move the window, or the titlebar's double-click action.
     Action(TitlebarAction),
+    /// Resize the window from this edge or corner.
+    Resize(crate::ResizeEdge),
     /// Open the window menu at the pointer.
     Menu,
 }
@@ -167,7 +171,7 @@ pub(in crate::runtime) fn step(state: &mut TitlebarPress, event: Event) -> Effec
         }
         Event::Resize { edge } => {
             *state = keep_secondary(state, None);
-            Effects::one(Request::Action(TitlebarAction::Resize(edge)))
+            Effects::one(Request::Resize(edge))
         }
         // AppKit drags the band itself and never sees the double click over the content.
         Event::Empty { now, point, interval, band } => {
@@ -219,7 +223,14 @@ impl Titlebar {
     fn act(&mut self, event: Event) {
         for request in step(&mut self.press, event) {
             match request {
-                Request::Action(action) => self.action = Some(action),
+                Request::Action(action) => {
+                    self.action = Some(action);
+                    self.resize = None;
+                }
+                Request::Resize(edge) => {
+                    self.resize = Some(edge);
+                    self.action = None;
+                }
                 Request::Menu => self.window_menu = Some(WindowMenu::Pointer),
             }
         }
@@ -238,6 +249,13 @@ impl RuntimeCore {
     /// must act on it before returning from that press event.
     pub fn take_titlebar_action(&mut self) -> Option<TitlebarAction> {
         self.host.titlebar.action.take()
+    }
+
+    /// A window resize edge requested by the press just delivered on an
+    /// [`El::window_resize`](crate::El::window_resize) region. The shell must act on it before
+    /// returning from that press event.
+    pub fn take_resize_action(&mut self) -> Option<crate::ResizeEdge> {
+        self.host.titlebar.resize.take()
     }
 
     /// What [`Cx::chrome_insets`] reports. Native windows set it from their controls on every

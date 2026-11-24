@@ -42,6 +42,4 @@ fn adopted_panel_titlebar_target_drags_panel_and_ignores_double_click() {
     assert_eq!(titlebar_target(TitlebarAction::Drag, false), TitlebarTarget::DragWindow);
     assert_eq!(titlebar_target(TitlebarAction::DoubleClick, true), TitlebarTarget::Ignore);
     assert_eq!(titlebar_target(TitlebarAction::DoubleClick, false), TitlebarTarget::DoubleClickWindow);
-    assert_eq!(titlebar_target(TitlebarAction::Resize(crate::ResizeEdge::SouthEast), true), TitlebarTarget::Ignore);
-    assert_eq!(titlebar_target(TitlebarAction::Resize(crate::ResizeEdge::SouthEast), false), TitlebarTarget::ResizeWindow(crate::ResizeEdge::SouthEast));
 }

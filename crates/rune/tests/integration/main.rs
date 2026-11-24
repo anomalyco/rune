@@ -103,6 +103,7 @@ mod sticky_showing;
 mod text_case;
 mod text_geometry;
 mod theme_blend;
+mod titlebar_action_compat;
 mod tx_blur;
 mod virtual_rows_append;
 mod virtual_rows_rekey;

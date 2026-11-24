@@ -1261,8 +1261,9 @@ rune::App::new(spec).fit_content_height().run();
   `Cursor::ResizeNwse`, `Cursor::ResizeNesw`) unless an explicit `.cursor(..)` overrides it, and
   interactive children, `.no_window_drag()`, inert subtrees and active modals block it.
   `Tx::drag_resize_window(edge)` starts the same resize from custom press or `on_drag` `Phase::Down`
-  handlers. Ignored on macOS, on the web, in overlays, and in headless runs (`examples/launcher`
-  adds 8-way edge and corner grips around its borderless launcher window).
+  handlers, and custom hosts read pending element resize presses with `Runtime::take_resize_action()`
+  (leaving `TitlebarAction` unchanged). Ignored on macOS, on the web, in overlays, and in headless
+  runs (`examples/launcher` adds 8-way edge and corner grips around its borderless launcher window).
 - **Hover groups**: `.hover_group()` (or any `.hover(color)`) tracks hover for a subtree, and
   `.hover_motion(enter, exit)` sets its curves (for example a delayed reveal). Descendants read the
   nearest group with `.group_opacity(rest, hovered)` and `.group_color(c)`. A group stays hovered

@@ -706,9 +706,9 @@ impl El {
     /// `Cursor::ResizeEw`, `Cursor::ResizeNwse`, or `Cursor::ResizeNesw`) unless an explicit
     /// [`El::cursor`] is set on it. Interactive children, [`El::no_window_drag`], inert
     /// subtrees, and active modals block the resize just as they block [`El::window_drag`].
-    /// Ignored on macOS, on the web, in overlays, and in headless runs (headless tests observe
-    /// `TitlebarAction::Resize(edge)` via
-    /// [`Runtime::take_titlebar_action`](crate::Runtime::take_titlebar_action)).
+    /// Ignored on macOS, on the web, in overlays, and in headless runs (custom hosts and
+    /// headless tests observe the edge via
+    /// [`Runtime::take_resize_action`](crate::Runtime::take_resize_action)).
     ///
     /// ```ignore
     /// el().pin(None, None, Some(0.0), Some(0.0))
