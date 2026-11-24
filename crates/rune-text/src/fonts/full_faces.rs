@@ -274,6 +274,7 @@ impl TextSystem {
 
     /// Registers each face in place of those with its family, width, style and weight.
     pub(super) fn swap_faces(&mut self, faces: &[Blob<u8>]) {
+        self.fallbacks.clear_color_family_cache();
         let collection = &mut self.font_cx.collection;
         for blob in faces {
             for (family, fonts) in collection.register_fonts(blob.clone(), None) {

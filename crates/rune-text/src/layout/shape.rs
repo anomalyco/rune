@@ -224,6 +224,17 @@ impl TextSystem {
             settings.extend(extra);
             settings
         };
+        let has_emoji_route = routes.iter().any(|(_, r)| *r == Route::Emoji);
+        let selected_emoji_sans = if has_emoji_route {
+            self.selected_color_family_names(style.family, false)
+        } else {
+            Vec::new()
+        };
+        let selected_emoji_mono = if has_emoji_route && has_mono_span {
+            self.selected_color_family_names(style.family, true)
+        } else {
+            Vec::new()
+        };
         let math = self.math.as_deref().unwrap_or(&[]);
         let emoji = self.emoji.as_slice();
         let system = self.system_mono.as_deref().unwrap_or_default();
@@ -249,22 +260,44 @@ impl TextSystem {
             }
         };
         let mono = if has_mono_span { with_symbols(self.mono.as_str(), mono_scripts) } else { Vec::new() };
-        // Routed clusters try their fallback first, then the run's own stack (mono spans included).
+        // Routed clusters try their preferred font(s) first, then the run's own stack (mono spans
+        // included). For `Route::Emoji`, any colour emoji family explicitly selected by the app
+        // precedes the system emoji fallback so monochrome text fonts still cannot steal emoji.
         // Each of the four {math, emoji} × {sans, mono} stacks is built at most once.
         let mut stacks: [Option<Vec<FontFamilyName<'_>>>; 4] = Default::default();
         let mut routed = Vec::new();
         for (range, route) in routes {
-            let fonts = match route { Route::Math => math, Route::Emoji => emoji };
-            if fonts.is_empty() {
-                continue;
-            }
             let mono_span = mono_spans.overlaps(range.clone());
-            let stack = 2 * (route == Route::Emoji) as usize + mono_span as usize;
-            stacks[stack].get_or_insert_with(|| {
-                let base = if mono_span { &mono } else { &sans };
-                fonts.iter().map(|name| FontFamilyName::named(name)).chain(base.iter().cloned()).collect()
-            });
-            routed.push((range, stack));
+            match route {
+                Route::Math => {
+                    if math.is_empty() {
+                        continue;
+                    }
+                    let stack = mono_span as usize;
+                    stacks[stack].get_or_insert_with(|| {
+                        let base = if mono_span { &mono } else { &sans };
+                        math.iter().map(|name| FontFamilyName::named(name)).chain(base.iter().cloned()).collect()
+                    });
+                    routed.push((range, stack));
+                }
+                Route::Emoji => {
+                    let selected = if mono_span { &selected_emoji_mono } else { &selected_emoji_sans };
+                    if selected.is_empty() && emoji.is_empty() {
+                        continue;
+                    }
+                    let stack = 2 + mono_span as usize;
+                    stacks[stack].get_or_insert_with(|| {
+                        let base = if mono_span { &mono } else { &sans };
+                        selected
+                            .iter()
+                            .map(|name| FontFamilyName::named(name.as_str()))
+                            .chain(emoji.iter().map(|name| FontFamilyName::named(name)))
+                            .chain(base.iter().cloned())
+                            .collect()
+                    });
+                    routed.push((range, stack));
+                }
+            }
         }
         let span_range = |s: &Span| (s.start as usize).min(text.len())..(s.end as usize).min(text.len());
         let given_map = SpanMap::new(spans.iter().zip(&span_spacing).filter_map(|(s, &v)| v.map(|v| (span_range(s), v))));

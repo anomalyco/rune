@@ -10,7 +10,8 @@ use crate::{TextSystem, family_list, fonts::fallback, named_list};
 #[cfg(any(windows, target_vendor = "apple"))]
 use super::SYMBOL_FAMILIES;
 use super::{
-    is_cjk, load_families, needs_no_font, platform, register_script_fallbacks, register_system_cjk,
+    is_cjk, load_families, needs_no_font, platform, reader_has_color_table,
+    register_script_fallbacks, register_system_cjk,
 };
 
 #[cfg(windows)]
@@ -113,6 +114,77 @@ fn faces_cover(faces: &[(Blob<u8>, CharmapIndex)], ch: char) -> bool {
 }
 
 impl TextSystem {
+    /// Whether family `id`'s default (or first) face carries a colour glyph table (`COLR`, `CBDT`
+    /// or `sbix`), cached per `FamilyId` and read through `source_cache`.
+    fn is_color_family(&mut self, id: FamilyId) -> bool {
+        if let Some(&cached) = self.fallbacks.color_families.get(&id) {
+            return cached;
+        }
+        let font = self
+            .font_cx
+            .collection
+            .family(id)
+            .and_then(|f| f.default_font().or_else(|| f.fonts().first()).cloned());
+        let is_color = font.is_some_and(|font| {
+            font.load(Some(&mut self.font_cx.source_cache)).is_some_and(|blob| {
+                reader_has_color_table(&mut std::io::Cursor::new(blob.as_ref()), Some(font.index()))
+            })
+        });
+        self.fallbacks.color_families.insert(id, is_color);
+        is_color
+    }
+
+    /// `FamilyId`s of colour fonts explicitly selected by name in the active stack for `family`
+    /// (or the mono-span stack when `mono_span` is true), in shaping order and excluding
+    /// `symbol_families`, `math`, and `mono_scripts`.
+    fn selected_color_family_ids(&mut self, family: rune_core::tok::Family, mono_span: bool) -> Vec<FamilyId> {
+        let mut candidates = Vec::new();
+        let system = self.system_mono.as_deref().unwrap_or_default();
+        let collection = &mut self.font_cx.collection;
+        let push_named_only = |collection: &mut Collection, list: Vec<FontFamilyName<'_>>, out: &mut Vec<FamilyId>| {
+            for entry in list {
+                if let FontFamilyName::Named(name) = entry
+                    && let Some(id) = collection.family_id(&name)
+                    && !out.contains(&id)
+                {
+                    out.push(id);
+                }
+            }
+        };
+        if mono_span {
+            push_named_only(collection, family_list(&self.mono, system, self.sans.as_str()), &mut candidates);
+        } else {
+            match family {
+                rune_core::tok::Family::Sans => {
+                    push_named_only(collection, family_list(&self.sans, system, self.sans.as_str()), &mut candidates);
+                }
+                rune_core::tok::Family::Mono | rune_core::tok::Family::SystemMono => {
+                    push_named_only(collection, family_list(&self.mono, system, self.sans.as_str()), &mut candidates);
+                }
+                rune_core::tok::Family::Named(list) => {
+                    push_named_only(collection, named_list(list), &mut candidates);
+                    push_named_only(collection, family_list(&self.sans, system, self.sans.as_str()), &mut candidates);
+                }
+            }
+        }
+        let mut color = Vec::new();
+        for id in candidates {
+            if self.is_color_family(id) {
+                color.push(id);
+            }
+        }
+        color
+    }
+
+    /// Family names of colour fonts explicitly selected by name in the active stack for `family`
+    /// (or the mono-span stack when `mono_span` is true), in shaping order.
+    pub(crate) fn selected_color_family_names(&mut self, family: rune_core::tok::Family, mono_span: bool) -> Vec<String> {
+        let ids = self.selected_color_family_ids(family, mono_span);
+        ids.into_iter()
+            .filter_map(|id| self.font_cx.collection.family_name(id).map(str::to_owned))
+            .collect()
+    }
+
     /// Active non-emoji `FamilyId`s in shaping order for `family` (or the mono-span stack when
     /// `mono_span` is true): primary families, optional `mono_scripts`, non-emoji
     /// `symbol_families`, and already-loaded `math`.
@@ -215,6 +287,8 @@ impl TextSystem {
         let mut mono_cov = (!mono_spans.is_empty() && !matches!(style.family, rune_core::tok::Family::Mono | rune_core::tok::Family::SystemMono))
             .then(|| FamilyCoverage::from_ids(self.active_family_ids(style.family, true), attributes));
         let mut cjk_own_cov: Option<FamilyCoverage> = None;
+        let mut selected_color_primary: Option<FamilyCoverage> = None;
+        let mut selected_color_mono: Option<FamilyCoverage> = None;
 
         let (mut math, mut emoji, mut scripts) = (false, false, Vec::new());
         let (mut cjk, mut cjk_more, mut missing): (Vec<char>, Vec<char>, Vec<char>) = (Vec::new(), Vec::new(), Vec::new());
@@ -260,8 +334,26 @@ impl TextSystem {
             }
             let route = routes.get(route_cursor).filter(|(r, _)| r.start <= idx).map(|(_, r)| *r);
             if route == Some(fallback::Route::Emoji) {
+                if needs_no_font(ch) {
+                    continue;
+                }
+                let in_mono = !mono_spans.is_empty() && mono_spans.get(idx).is_some();
+                let color_cov = if in_mono {
+                    selected_color_mono.get_or_insert_with(|| {
+                        let ids = self.selected_color_family_ids(style.family, true);
+                        FamilyCoverage::from_ids(ids, attributes)
+                    })
+                } else {
+                    selected_color_primary.get_or_insert_with(|| {
+                        let ids = self.selected_color_family_ids(style.family, false);
+                        FamilyCoverage::from_ids(ids, attributes)
+                    })
+                };
+                if color_cov.covers(&mut self.font_cx, ch) {
+                    continue;
+                }
                 emoji |= self.emoji.is_none() && !self.fallbacks.asked.contains(&'\u{FE0F}');
-                if !needs_no_font(ch) && !self.fallbacks.asked.contains(&ch) && !emoji_chars.contains(&ch) {
+                if !self.fallbacks.asked.contains(&ch) && !emoji_chars.contains(&ch) {
                     emoji_chars.push(ch);
                 }
                 continue;
