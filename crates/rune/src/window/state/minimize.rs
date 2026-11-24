@@ -43,6 +43,7 @@ pub(crate) enum MinimizeEffect {
 
 impl Minimize {
     /// Whether an ask waits at all, held or not.
+    #[cfg(test)]
     pub(crate) fn latched(self) -> bool { !matches!(self, Minimize::None) }
 
     /// What waits for a shell now, dev's `minimize_request`. An ask a hidden poll holds is out
@@ -71,12 +72,12 @@ pub(crate) fn step(state: &mut Minimize, event: MinimizeEvent) -> Effects<Minimi
         // A second poll in the turn would take the field again, and hold what it finds.
         (M::Held { field: true }, E::HeldForShow) => { *state = M::Held { field: false }; Effects::none() }
         (M::Held { field: false }, E::HeldForShow) => { *state = M::None; Effects::none() }
-        (M::Held { field }, E::Asked) => { *state = M::Held { field: true }; Effects::none() }
+        (M::Held { .. }, E::Asked) => { *state = M::Held { field: true }; Effects::none() }
         (M::Asked, E::Taken) => { *state = M::None; Effects::one(MinimizeEffect::Minimize) }
         (M::Held { field: true }, E::Taken) => { *state = M::Held { field: false }; Effects::one(MinimizeEffect::Minimize) }
         (M::Held { field: false }, E::Taken) => Effects::none(),
         (M::Held { .. }, E::Returned) => { *state = M::Asked; Effects::none() }
-        (M::Asked | M::None, E::Returned) => Effects::none(),
+        (M::Asked, E::Returned) => Effects::none(),
         (M::Asked, E::Lost) => { *state = M::None; Effects::none() }
         (M::Held { .. }, E::Lost) => { *state = M::Held { field: false }; Effects::none() }
     }

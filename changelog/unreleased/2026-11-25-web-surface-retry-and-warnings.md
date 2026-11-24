@@ -1,0 +1,1 @@
+- Web surface recovery & compiler warnings: wired `drain_configure_retry`, `can_draw`, and `on_presented` in the web runner so failed canvas surface configures actually retry with backoff and reset their failure counter after presenting; cleared remaining compiler warnings across `rune`, `rune-text`, and `examples/showreel`.

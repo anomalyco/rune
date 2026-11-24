@@ -347,15 +347,13 @@ pub(super) fn configure_surface(side: &GpuSide) {
 
 /// Runs a due configure retry if the surface is not suspended.
 pub(super) fn drain_configure_retry(side: &GpuSide, suspended: bool) {
-    if suspended { return; }
-    let Some(attempt) = side.retry_due.take() else { return };
+    let mut due = side.retry_due.take();
     let should_configure = {
         let mut h = side.health.borrow_mut();
         let (seq, state) = &mut *h;
-        state.step(seq, super::web_math::SurfaceHealthEvent::RetryDue(attempt))
-            .into_iter()
-            .any(|e| matches!(e, super::web_math::SurfaceHealthEffect::Configure))
+        state.drain_retry(seq, &mut due, suspended)
     };
+    side.retry_due.set(due);
     if should_configure {
         configure_surface(side);
     }
@@ -382,6 +380,9 @@ pub(super) fn on_resized(side: &GpuSide) -> bool {
 
 /// Acquires the next canvas texture, reconfiguring and retrying once on `Outdated`/`Lost`.
 pub(super) fn acquire_texture(side: &mut GpuSide) -> Result<wgpu::SurfaceTexture, crate::window::Missed> {
+    if !can_draw(side) {
+        return Err(crate::window::Missed::Occluded);
+    }
     use super::web_math::{WebAcquireAction, WebAcquireStatus, web_acquire_action};
     let mut retries = 1u8;
     loop {
@@ -521,6 +522,7 @@ pub(super) fn submit_gpu_frame(
     side.renderer.submit(&side.gpu.queue, prepared.encoder);
     before_present();
     side.gpu.queue.present(prepared.frame);
+    on_presented(side);
     prepared.copy
 }
 

@@ -132,6 +132,7 @@ impl LiveLane {
     }
 
     /// A source published on another thread.
+    #[cfg(test)]
     pub(crate) fn publish(&self) { self.wake.notify(); }
 
     pub(crate) fn subscribed(&mut self, sampled: bool) { self.apply(LiveEvent::Subscribe { sampled }); }

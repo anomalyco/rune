@@ -2,6 +2,7 @@
 //! each frame's queued fills, and the outline records they read, to `<dir>/fills-<n>.bin`;
 //! [`FillSet`] reads one back and fills, times or counts it. A measurement, not a fill.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use super::fill::{Fill, QueuedFill};

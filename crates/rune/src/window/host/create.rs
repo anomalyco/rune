@@ -23,9 +23,11 @@ use crate::window::surface::LaunchDrawables;
 use crate::window::surface::native;
 #[cfg(target_os = "windows")]
 use crate::window::surface::win;
+#[cfg(target_os = "windows")]
+use crate::window::surface::configure;
 use crate::window::surface::{
     Backoff, BackoffEvent, HiddenPace, LoopFrame, Native, Redraw, SurfaceRetries, SurfaceStep,
-    SURFACE_TRIES, TimerFrame, Win, configure, configure_checked, drawable_size, max_surface_dim,
+    SURFACE_TRIES, TimerFrame, Win, configure_checked, drawable_size, max_surface_dim,
     rebuild_renderer_core, surface_config,
 };
 #[cfg(target_os = "windows")]

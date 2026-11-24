@@ -975,3 +975,24 @@ fn surface_health_backs_off_ignores_stale_attempts_and_gives_up_until_resize() {
     health.step(&mut seq, SurfaceHealthEvent::Presented);
     assert_eq!(health, SurfaceHealth::Ready { failures: 0, active: None });
 }
+
+#[test]
+fn surface_health_drain_retry_respects_suspend_and_present_resets_failure_count() {
+    let (mut seq, mut health) = (crate::machine::Seq::default(), SurfaceHealth::default());
+    let first = seq.next();
+    health.step(&mut seq, SurfaceHealthEvent::Begin(first));
+    let effects: Vec<_> = health.step(&mut seq, SurfaceHealthEvent::Outcome { attempt: first, error: Some("oom".into()) }).into_iter().collect();
+    let [SurfaceHealthEffect::ReportFirst(_), SurfaceHealthEffect::ScheduleRetry { attempt: retry, .. }] = effects.as_slice() else { panic!("{effects:?}") };
+    let mut retry_due = Some(*retry);
+    assert!(!health.can_draw() && !health.drain_retry(&mut seq, &mut retry_due, true) && retry_due == Some(*retry));
+    assert!(health.drain_retry(&mut seq, &mut retry_due, false) && retry_due.is_none() && health.can_draw());
+    let second = seq.next();
+    health.step(&mut seq, SurfaceHealthEvent::Begin(second));
+    health.step(&mut seq, SurfaceHealthEvent::Outcome { attempt: second, error: None });
+    health.step(&mut seq, SurfaceHealthEvent::Presented);
+    assert_eq!(health, SurfaceHealth::Ready { failures: 0, active: None });
+    let third = seq.next();
+    health.step(&mut seq, SurfaceHealthEvent::Begin(third));
+    let later: Vec<_> = health.step(&mut seq, SurfaceHealthEvent::Outcome { attempt: third, error: Some("later".into()) }).into_iter().collect();
+    assert!(matches!(later.as_slice(), [SurfaceHealthEffect::ReportFirst(_), SurfaceHealthEffect::ScheduleRetry { delay, .. }] if *delay == std::time::Duration::from_millis(50)));
+}
