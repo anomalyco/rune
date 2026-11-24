@@ -102,7 +102,7 @@ impl RuntimeCore {
     /// moving layout holds hover this pass, for the `update_interaction` that follows.
     pub(in crate::runtime) fn refresh_hover(&mut self, x: f32, y: f32) -> bool {
         if self.pointer.hover_hold.released() && !self.layout_moving() { self.pointer.hover_hold.settled(); }
-        let hovered = self.primary_target(x, y);
+        let hovered = self.hover_target(x, y);
         let within = self.within_next();
         let held = self.decide_hold(hovered, within.as_ref(), None);
         self.pointer.hover_hold.set_held(held);
@@ -114,7 +114,7 @@ impl RuntimeCore {
     /// Queue `on_hover_change` for elements the pointer entered or left.
     pub(in crate::runtime) fn refresh_hover_within(&mut self) {
         let Some(within) = self.within_next() else { return };
-        let hovered = self.pointer.pos.filter(|_| self.pointer.hover_may_hold()).and_then(|(x, y)| self.primary_target(x, y));
+        let hovered = self.pointer.pos.filter(|_| self.pointer.hover_may_hold()).and_then(|(x, y)| self.hover_target(x, y));
         let held = self.decide_hold(hovered, Some(&within), None);
         self.pointer.hover_hold.set_held(held);
         self.apply_within(within.0, held);
@@ -358,7 +358,7 @@ impl RuntimeCore {
     /// is over.
     fn hover_flip(&self, i: usize, top: Option<usize>, captured: Option<&str>, alone: Option<usize>, shared: &[Rc<str>]) -> Option<Flip> {
         let n = &self.tree.nodes[i];
-        if !(n.vis.hover().a > 0.0 || n.vis_flags.hover_group()) || self.subtree_exiting(i) { return None; }
+        if !(n.vis.tracks_hover_paint() || n.vis_flags.hover_group()) || self.subtree_exiting(i) { return None; }
         let inside = self.pointer_hovers(i, top)
             || n.vis.hover_share.as_ref().is_some_and(|k| shared.contains(k))
             || (n.vis_flags.hover_group() && self.keyboard_within(i));
@@ -407,7 +407,7 @@ impl RuntimeCore {
         for i in 0..self.tree.nodes.len() {
             let n = &self.tree.nodes[i];
             let press_scale = n.handlers.get().and_then(|h| h.press_scale);
-            if n.vis.hover().a <= 0.0 && !n.vis_flags.hover_group() && !n.vis.tracks_press() && press_scale.is_none() { continue; }
+            if !n.vis.tracks_hover_paint() && !n.vis_flags.hover_group() && !n.vis.tracks_press() && press_scale.is_none() { continue; }
             if self.subtree_exiting(i) { continue; }
             if self.hover_flip(i, top, captured, alone, &shared).is_some_and(|f| f.changed) { return true; }
             if !n.vis.tracks_press() && press_scale.is_none() { continue; }
@@ -444,7 +444,7 @@ impl RuntimeCore {
         for i in 0..self.tree.nodes.len() {
             let n = &self.tree.nodes[i];
             let press_scale = n.handlers.get().and_then(|h| h.press_scale);
-            if n.vis.hover().a <= 0.0 && !n.vis_flags.hover_group() && !n.vis.tracks_press() && press_scale.is_none() { continue; }
+            if !n.vis.tracks_hover_paint() && !n.vis_flags.hover_group() && !n.vis.tracks_press() && press_scale.is_none() { continue; }
             if self.subtree_exiting(i) { continue; }
             match self.hover_flip(i, top, captured, alone, &shared) {
                 Some(f) if f.changed => flips.push(f),
@@ -488,7 +488,7 @@ impl RuntimeCore {
         }
         let held = held.unwrap_or_else(|| {
             let within = self.within_next();
-            let hovered = self.pointer.pos.filter(|_| self.pointer.hover_may_hold()).and_then(|(x, y)| self.primary_target(x, y));
+            let hovered = self.pointer.pos.filter(|_| self.pointer.hover_may_hold()).and_then(|(x, y)| self.hover_target(x, y));
             self.decide_hold(hovered, within.as_ref(), Some(&flips))
         });
         // A leave from an element turned inert lands now; the rest wait while layout holds hover.

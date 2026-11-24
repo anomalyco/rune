@@ -86,8 +86,28 @@ impl RuntimeCore {
         };
         // `El::focus_within_flat`: focus inside drops its own shadows and hover fill.
         let focus_flat = n.focus.flat_within && self.focus_within(i);
+        let hov_v = if !focus_flat && (n.vis.tracks_hover_paint() || self.scene.store().is_animating(n.id, P_HOVER_C)) {
+            self.scene.get(n.id, P_HOVER).unwrap_or(0.0).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let prs_v = if n.vis.tracks_press() || self.scene.store().is_animating(n.id, P_PRESS_C) {
+            self.scene.get(n.id, P_PRESS).unwrap_or(0.0).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let rest_fill = match n.material {
+            _ if native_material.is_some() => Color::TRANSPARENT,
+            Some(_) => self.color(n.id, P_FILL, crate::system_material::fallback_fill(n.vis.fill, self.env.system_dark)),
+            None => self.color(n.id, P_FILL, n.vis.fill),
+        };
+        let (resolved_fill, fill_replace_w) = if native_material.is_some() {
+            (Color::TRANSPARENT, 0.0)
+        } else {
+            paint_tracks::replace_color(rest_fill, if focus_flat { None } else { n.vis.hover_fill }, hov_v, n.vis.press_fill, prs_v)
+        };
         let casts = !n.vis.shadows.is_empty() && native_material.is_none() && blur_hole.is_none() && n.material.is_none();
-        let fill_a = if casts { self.color(n.id, P_FILL, n.vis.fill).a } else { 0.0 };
+        let fill_a = if casts { resolved_fill.a } else { 0.0 };
         let solid = casts && fill_a >= 1.0;
         // A box that paints itself solid hides the middle of its shadows (bands.rs). Dimmed
         // (`El::dim`), or filled with a translucent colour, it leaves that middle clear, as
@@ -119,39 +139,40 @@ impl RuntimeCore {
         if let Some(c) = n.focus.fill && self.focus_ring_visible(i) {
             overlay = over(premul(c, 1.0, srgb), overlay);
         }
-        if !focus_flat && (n.vis.hover().a > 0.0 || self.scene.store().is_animating(n.id, P_HOVER_C)) {
-            let hov_v = self.scene.get(n.id, P_HOVER).unwrap_or(0.0).clamp(0.0, 1.0);
-            if hov_v > 0.0 {
-                overlay = over(premul(self.color(n.id, P_HOVER_C, n.vis.hover()), hov_v, srgb), overlay);
-            }
+        if !focus_flat && (n.vis.hover().a > 0.0 || self.scene.store().is_animating(n.id, P_HOVER_C)) && hov_v > 0.0 {
+            overlay = over(premul(self.color(n.id, P_HOVER_C, n.vis.hover()), hov_v, srgb), overlay);
         }
-        if n.vis.press().a > 0.0 || self.scene.store().is_animating(n.id, P_PRESS_C) {
-            let prs_v = self.scene.get(n.id, P_PRESS).unwrap_or(0.0).clamp(0.0, 1.0);
-            if prs_v > 0.0 {
-                overlay = over(premul(self.color(n.id, P_PRESS_C, n.vis.press()), prs_v, srgb), overlay);
-            }
+        if (n.vis.press().a > 0.0 || self.scene.store().is_animating(n.id, P_PRESS_C)) && prs_v > 0.0 {
+            overlay = over(premul(self.color(n.id, P_PRESS_C, n.vis.press()), prs_v, srgb), overlay);
         }
         let layered = n.vis.gradient.is_some() || n.vis.radial.is_some() || n.vis.surface.is_some();
         let base_color = |c: Color| blend::flat_base(c, srgb, !layered && n.vis.border_width() == 0.0 && c.a * o < 1.0);
-        let base = match n.material {
-            _ if native_material.is_some() => [0.0; 4],
-            Some(_) => base_color(self.color(n.id, P_FILL, crate::system_material::fallback_fill(n.vis.fill, self.env.system_dark))),
-            None => base_color(self.color(n.id, P_FILL, n.vis.fill)),
-        };
+        let base = if native_material.is_some() { [0.0; 4] } else { base_color(resolved_fill) };
         let fill = if layered { base } else { over(overlay, base) }.map(|c| c * o);
         let bw = pixel_snap::line_width(n.vis.border_width() * s) * sc;
         let focus_border = n.focus.border.filter(|_| self.focus_ring_visible(i));
-        let border = if bw > 0.0 {
-            premul(focus_border.unwrap_or_else(|| self.color(n.id, P_BORDER, n.vis.border())), o, srgb)
-        } else { [0.0; 4] };
+        let hover_border = if focus_flat { None } else { n.vis.hover_border };
+        let press_border = n.vis.press_border;
+        let (resolved_border, border_replace_w) = if let Some(fb) = focus_border {
+            (fb, 1.0)
+        } else if bw > 0.0 {
+            paint_tracks::replace_color(self.color(n.id, P_BORDER, n.vis.border()), hover_border, hov_v, press_border, prs_v)
+        } else {
+            (Color::TRANSPARENT, 0.0)
+        };
+        let border = if bw > 0.0 { premul(resolved_border, o, srgb) } else { [0.0; 4] };
         // A gradient border draws as KIND_GRADIENT with a width: `border` top, `uv` bottom.
         // After a switch back to `border`, it stays a gradient until both stops meet.
         let store = self.scene.store();
         let springing = store.has(n.id, P_BORDER_BOTTOM)
             && (store.is_animating(n.id, P_BORDER_BOTTOM) || store.is_animating(n.id, P_BORDER));
         let border_bottom = (bw > 0.0 && focus_border.is_none() && (n.vis.border_bottom.is_some() || springing))
-            .then(|| premul(self.color(n.id, P_BORDER_BOTTOM, n.vis.border_bottom.unwrap_or(n.vis.border())), o, srgb))
-            .filter(|b| n.vis.border_bottom.is_some() || *b != border);
+            .then(|| {
+                let rest_bot = self.color(n.id, P_BORDER_BOTTOM, n.vis.border_bottom.unwrap_or(n.vis.border()));
+                let (resolved_bot, _) = paint_tracks::replace_color(rest_bot, hover_border, hov_v, press_border, prs_v);
+                premul(resolved_bot, o, srgb)
+            })
+            .filter(|b| (n.vis.border_bottom.is_some() && border_replace_w < 1.0) || *b != border);
         let (border_kind, border_uv) = border_bottom.map_or((KIND_RECT, [0.0; 4]), |b| (KIND_GRADIENT, b));
         let border_a = border[3].max(border_uv[3]);
         // A box with zero width or height has no area to fill or border; emitting it lets
@@ -204,8 +225,9 @@ impl RuntimeCore {
                     fade: crate::render::pack_fade(fade, clip, clip),
                 });
             }
+            let grad_keep = (1.0 - fill_replace_w).clamp(0.0, 1.0);
             let g = n.vis.gradient.as_deref().copied().unwrap_or_default();
-            let stop = |c| if flat { over(premul(c, 1.0, srgb), base).map(|v| v * o) } else { premul(c, o, srgb) };
+            let stop = |c| if flat { over(premul(c, grad_keep, srgb), base).map(|v| v * o) } else { premul(c, o * grad_keep, srgb) };
             let top = stop(self.color(n.id, P_GRADIENT[0], g[0]));
             let bottom = stop(self.color(n.id, P_GRADIENT[1], g[1]));
             if has_area && (top[3] > 0.0005 || bottom[3] > 0.0005) {
@@ -220,7 +242,7 @@ impl RuntimeCore {
                     fade: crate::render::pack_fade(fade, clip, clip),
                 });
             }
-            if has_area && let Some(rg) = &n.vis.radial {
+            if has_area && grad_keep > 0.0005 && let Some(rg) = &n.vis.radial {
                 let segs = rg.stops.len().saturating_sub(1);
                 let rmax = radii[0].max(radii[1]).max(radii[2]).max(radii[3]).min(w * 0.5).min(h * 0.5);
                 let pad = 1.0 + blur * s * 2.0;
@@ -229,8 +251,8 @@ impl RuntimeCore {
                     let c0 = if seg < P_RADIAL.len() { self.color(n.id, P_RADIAL[seg], c0) } else { c0 };
                     let c1 = rg.stops[seg + 1].1;
                     let c1 = if seg + 1 < P_RADIAL.len() { self.color(n.id, P_RADIAL[seg + 1], c1) } else { c1 };
-                    let c0 = premul(c0, o, srgb);
-                    let c1 = premul(c1, o, srgb);
+                    let c0 = premul(c0, o * grad_keep, srgb);
+                    let c1 = premul(c1, o * grad_keep, srgb);
                     if c0[3] <= 0.0005 && c1[3] <= 0.0005 {
                         continue;
                     }
@@ -333,6 +355,7 @@ impl RuntimeCore {
                     && !isolate && !in_cache && !skip_paint && loop_vis && base_opacity > 0.0
                     && pinh.paint_opacity > 0.0 && loop_value.is_some_and(|v| v > 0.0) && n.vis.layer_opacity == 1.0
                     && n.vis.paint_alpha == 1.0 && bw == 0.0 && overlay == [0.0; 4]
+                    && !n.vis.tracks_hover_paint() && !n.vis.tracks_press()
                     && self.instances.len() == primitive_start && n.text.is_none() && n.input.is_none()
                     && n.vis.shape.is_none() && n.vis.pixels.is_none() && n.vis.effect.is_none()
                     && n.vis.shadows.is_empty() && n.handlers.get().is_none() && n.focus.get().is_none()

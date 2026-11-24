@@ -191,7 +191,7 @@ impl RuntimeCore {
             let mut hit_own = own * group_factor(&self.scene, self.kbd.focus.keyboard(), self.kbd.focus.path(), n, 1.0);
             own *= group_factor(&self.scene, self.kbd.focus.keyboard(), self.kbd.focus.path(), n, pinh.group);
             let base_opacity = (own * pinh.opacity).clamp(0.0, 1.0);
-            let hover_owner = n.vis.hover().a > 0.0 || n.vis_flags.hover_group();
+            let hover_owner = n.vis.tracks_hover_paint() || n.vis_flags.hover_group();
             let group = if hover_owner {
                 self.scene.get(n.id, P_HOVER).unwrap_or(0.0).clamp(0.0, 1.0)
             } else {

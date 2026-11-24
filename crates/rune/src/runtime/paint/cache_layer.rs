@@ -220,7 +220,7 @@ impl RuntimeCore {
                 // Hover, press and link paint land without a commit (an instant track or a
                 // pointer move inside one text), so hash what this frame samples.
                 let links = n.text.as_ref().is_some_and(|t| !t.cold.links.is_empty());
-                if n.vis.hover().a > 0.0 || n.vis_flags.hover_group() || n.vis.tracks_press() || n.handlers.get().is_some_and(|h| h.press_scale.is_some()) || links {
+                if n.vis.tracks_hover_paint() || n.vis_flags.hover_group() || n.vis.tracks_press() || n.handlers.get().is_some_and(|h| h.press_scale.is_some()) || links {
                     let mut ph = rune_motion::Fx::default();
                     ph.write_u64(n.id.0);
                     for prop in [P_HOVER, P_PRESS, P_PRESS_SCALE] {

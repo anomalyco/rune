@@ -356,16 +356,21 @@ impl RuntimeCore {
         std::iter::successors(Some(target), |&p| self.tree.nodes[p].parent).any(|p| p == i)
     }
 
+    /// Whether node `i` is a live, allowed primary input target (selectable text included).
+    fn is_primary_target(&self, i: usize) -> bool {
+        let n = &self.tree.nodes[i];
+        // A secondary-only child must not obscure primary input or background blur.
+        !self.subtree_exiting(i) && self.allowed(i) && (n.has_primary_handler() || n.input.is_some() || n.role == "textbox"
+            || (n.role == "button" && n.vis_flags.hit()) || n.window_drag != crate::el::WindowDrag::None || n.focus.enabled || n.handlers.modal.is_some()
+            || self.is_selectable(i))
+    }
+
     /// The topmost element under (x, y) that takes primary input, selectable text included.
     pub(in crate::runtime) fn top_target(&self, x: f32, y: f32) -> Option<usize> {
         self.hit.find_hit(|id, r| {
             if !self.hit_contains(id, r, x, y) { return None; }
             let i = *self.tree.node_index.get(&id)?;
-            let n = &self.tree.nodes[i];
-            // A secondary-only child must not obscure primary input or background blur.
-            (!self.subtree_exiting(i) && self.allowed(i) && (n.has_primary_handler() || n.input.is_some() || n.role == "textbox"
-                || (n.role == "button" && n.vis_flags.hit()) || n.window_drag != crate::el::WindowDrag::None || n.focus.enabled || n.handlers.modal.is_some()
-                || self.is_selectable(i))).then_some(i)
+            self.is_primary_target(i).then_some(i)
         })
     }
 
@@ -394,18 +399,36 @@ impl RuntimeCore {
     /// nearest ancestor that handles them (a clickable or draggable row), unless the text has
     /// its own handlers or the point is on one of its links; selecting goes on beside that
     /// (`selectable_at`).
-    pub(in crate::runtime) fn primary_target(&self, x: f32, y: f32) -> Option<usize> {
-        let i = self.top_target(x, y)?;
+    fn resolve_selectable_target(&self, i: usize, x: f32, y: f32) -> usize {
         let n = &self.tree.nodes[i];
-        if !self.is_selectable(i) || n.has_primary_handler() || self.link_at(i, x, y).is_some() { return Some(i); }
+        if !self.is_selectable(i) || n.has_primary_handler() || self.link_at(i, x, y).is_some() { return i; }
         let handles = |n: &Node| n.has_primary_handler() || n.focus.enabled;
         let mut p = n.parent;
         while let Some(a) = p {
             if self.subtree_exiting(a) || !self.allowed(a) || self.tree.nodes[a].handlers.modal.is_some() { break; }
-            if handles(&self.tree.nodes[a]) { return Some(a); }
+            if handles(&self.tree.nodes[a]) { return a; }
             p = self.tree.nodes[a].parent;
         }
-        Some(i)
+        i
+    }
+
+    pub(in crate::runtime) fn primary_target(&self, x: f32, y: f32) -> Option<usize> {
+        let i = self.top_target(x, y)?;
+        Some(self.resolve_selectable_target(i, x, y))
+    }
+
+    /// The hovered primary target at `(x, y)` (for `on_hover` and `focus_highlight`), gated
+    /// against `top_hover_hit` to match CSS `:hover` occlusion: any overlying `.hit()` cover
+    /// blocks targets beneath it, while layers marked `El::hover_passes_below` let hover pass.
+    pub(in crate::runtime) fn hover_target(&self, x: f32, y: f32) -> Option<usize> {
+        let top = self.top_hover_hit(x, y)?;
+        let i = self.hit.find_hit(|id, r| {
+            if !self.hit_contains(id, r, x, y) { return None; }
+            let i = *self.tree.node_index.get(&id)?;
+            (!self.tree.nodes[i].focus.hover_below && self.is_primary_target(i)).then_some(i)
+        })?;
+        let h = self.resolve_selectable_target(i, x, y);
+        (self.node_holds(h, top) || self.node_holds(top, h)).then_some(h)
     }
 
     /// A focusable scroll region, which a press on plain content inside it focuses, as a web

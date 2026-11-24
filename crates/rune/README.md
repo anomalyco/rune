@@ -1266,9 +1266,15 @@ rune::App::new(spec).fit_content_height().run();
   clipping parent. `.hover_motion_within(enter, exit)` sets the default curves for every hover
   track below it without its own `.hover_motion` (the nearest ancestor wins), which reaches kit
   controls' inner elements; put it on the view root (`rune_kit::root` carries it to popup layers).
+  `.hover_fill(c)`, `.press_fill(c)`, `.hover_border(c)` and `.press_border(c)` replace the
+  element's fill or border colour in place while hovered or pressed (with press winning over hover,
+  `Color::TRANSPARENT` acting as a real override, active fill gradients fading out as replacement
+  weight rises, and existing `.hover`/`.press` overlays compositing over the resolved fill);
+  overlying `.hit()` elements block all pointer hover signals beneath them (including `on_hover`
+  and `focus_highlight`) unless marked `.hover_passes_below()`.
   `.press_motion(down, up)` sets the down and release curves for all press tracks on the element
-  (`press`, `press_color` and `press_scale`), leaving `INSTANT`/`SNAPPY` (highlight) and
-  `INSTANT`/`POP` (scale) as the defaults when unset.
+  (`press`, `press_fill`, `press_border`, `press_color` and `press_scale`), leaving
+  `INSTANT`/`SNAPPY` (highlight) and `INSTANT`/`POP` (scale) as the defaults when unset.
 - **Per-element motion overrides**: beside `offset_motion`, `opacity_motion`, `scale_motion`,
   `rotate_motion` and `blur_motion`, `.frame_motion(anim)` overrides this element's own layout
   curve (non-inherited, beating `Tx::motion` / `Tx::motion_curve` and skipping `lead` /

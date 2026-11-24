@@ -301,7 +301,7 @@ impl RuntimeCore {
                 if let Some(gi) = up(Some(i)).find(|&j| self.tree.nodes[j].vis.group_opacity.is_some()) {
                     let group = up(self.tree.nodes[gi].parent)
                         .map(|pi| &self.tree.nodes[pi])
-                        .find(|g| g.vis.hover().a > 0.0 || g.vis_flags.hover_group());
+                        .find(|g| g.vis.tracks_hover_paint() || g.vis_flags.hover_group());
                     if group.and_then(|g| g.hover_motion()).is_some_and(|(e, x)| [e, x].iter().any(|a| matches!(a.curve, rune_motion::Curve::Instant))) {
                         live_intent |= 4 | 16;
                     }

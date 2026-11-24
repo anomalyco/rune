@@ -296,8 +296,8 @@ pub(in crate::runtime) fn fades(looping: Option<rune_motion::LoopSpec>) -> bool 
 pub(in crate::runtime) fn own_paints(n: &Node) -> usize {
     let v = &n.vis;
     [
-        v.fill.a > 0.0,
-        v.border_width() > 0.0 && (v.border().a > 0.0 || v.border_bottom.is_some()),
+        v.fill.a > 0.0 || v.hover_fill.is_some_and(|c| c.a > 0.0) || v.press_fill.is_some_and(|c| c.a > 0.0),
+        v.border_width() > 0.0 && (v.border().a > 0.0 || v.border_bottom.is_some() || v.hover_border.is_some_and(|c| c.a > 0.0) || v.press_border.is_some_and(|c| c.a > 0.0)),
         v.gradient.is_some() || v.radial.is_some() || v.surface.is_some(),
         v.shape.is_some(),
         v.grid.is_some(),
