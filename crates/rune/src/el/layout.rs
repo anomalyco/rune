@@ -681,9 +681,9 @@ impl El {
         self.handlers.cursor = Some(cursor);
         self
     }
-    /// Pressing this element moves the window, as a title bar does, and a double press zooms or
-    /// minimises it as the system's titlebar setting says. Hit targets inside it (buttons,
-    /// fields) keep their presses.
+    /// Pressing this element moves the window (or a window-backed overlay; pair with `.hit()`
+    /// under `OverlayInput::Regions`), and on ordinary windows a double press zooms or minimises
+    /// it as the system's titlebar setting says. Hit targets inside it keep their presses.
     pub fn window_drag(mut self) -> Self {
         self.flags.set_window_drag(WindowDrag::Drag);
         self

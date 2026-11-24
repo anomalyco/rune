@@ -11,6 +11,73 @@ pub(super) fn should_recreate_layer(current_display: &DisplayTarget, requests: &
     is_layer && requests.display.as_ref().is_some_and(|display| display != current_display)
 }
 
+/// Who owns a window-backed overlay's screen position.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum PositionOwner {
+    /// Positioned by `OverlaySpec`, `OverlayOptions`, or `OverlayHandle` placement requests.
+    #[default]
+    Managed,
+    /// An asynchronous native window drag (Windows, X11) was started; if the OS moves the
+    /// window before release, the user owns its position.
+    Dragging,
+    /// The user moved the overlay by dragging a `.window_drag()` region; preserve its position
+    /// across shows, resizes, and pointer following until the app sends a new placement request.
+    User,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PositionEvent {
+    /// An asynchronous native window drag started (Windows, X11).
+    DragStarted,
+    /// A synchronous native window drag moved the window (macOS).
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+    DragMoved,
+    /// The OS reported `WindowEvent::Moved`.
+    WindowMoved,
+    /// A press ended without moving the window, or a non-drag press arrived.
+    LeftReleased,
+    /// The app explicitly asked to place or refollow the overlay.
+    PlacementRequested,
+    /// The native window was destroyed, so a recreated window must be placed fresh.
+    WindowReleased,
+}
+
+impl PositionOwner {
+    pub(super) fn is_managed(self) -> bool { self == Self::Managed }
+
+    pub(super) fn step(&mut self, event: PositionEvent) {
+        *self = match (*self, event) {
+            (Self::Managed, PositionEvent::DragStarted) => Self::Dragging,
+            (state, PositionEvent::DragStarted) => state,
+            (_, PositionEvent::DragMoved) => Self::User,
+            (Self::Dragging, PositionEvent::WindowMoved) => Self::User,
+            (state, PositionEvent::WindowMoved) => state,
+            (Self::Dragging, PositionEvent::LeftReleased) => Self::Managed,
+            (state, PositionEvent::LeftReleased) => state,
+            (_, PositionEvent::PlacementRequested | PositionEvent::WindowReleased) => Self::Managed,
+        };
+    }
+
+    /// Updates ownership for incoming handle `requests`; returns whether an explicit placement
+    /// request reclaimed a user-dragged or in-flight drag position so `sync` must re-place even
+    /// when target coordinates match `self.at`.
+    pub(super) fn apply_requests(&mut self, requests: &Requests) -> bool {
+        if requests.follow_pointer == Some(true) {
+            self.step(PositionEvent::PlacementRequested);
+        }
+        let explicit = requests.placement.is_some()
+            || requests.display.is_some()
+            || requests.edge.is_some()
+            || requests.margin.is_some()
+            || requests.align.is_some();
+        let reset = explicit && !self.is_managed();
+        if explicit || requests.refollow {
+            self.step(PositionEvent::PlacementRequested);
+        }
+        reset
+    }
+}
+
 /// An overlay has no window to ask: whatever a step requested of one is dropped.
 pub(super) fn drop_window_requests(rt: &mut RuntimeCore) {
     rt.shell_request = None;
@@ -85,6 +152,73 @@ impl OverlayCore {
         self.apply_cursor(rt);
     }
 
+    /// Consumes a window-drag or titlebar double-click request from the press or touch just
+    /// delivered. Window-backed overlays start the native move loop on `Drag`; Wayland
+    /// layer-shell and XWayland overlays cannot be interactively dragged and ignore it.
+    /// `DoubleClick` is ignored because overlays do not maximize or minimize.
+    pub(super) fn take_titlebar_action(&mut self, app: &mut dyn OverlayApp) -> bool {
+        match app.rt_mut().take_titlebar_action() {
+            Some(crate::TitlebarAction::Drag) => self.begin_window_drag(app),
+            Some(crate::TitlebarAction::DoubleClick) | None => false,
+        }
+    }
+
+    /// Starts the native window move loop for a window-backed overlay, clearing drag-out and
+    /// native pointer capture because the OS move loop consumes mouse-up.
+    fn begin_window_drag(&mut self, app: &mut dyn OverlayApp) -> bool {
+        app.rt_mut().disarm_drag_out();
+        #[cfg(test)]
+        if self.test_window_backing && self.surface.live().is_none() {
+            self.test_window_drags += 1;
+            self.position_owner.step(PositionEvent::DragStarted);
+            let rt = app.rt();
+            self.apply_input(rt);
+            self.apply_cursor(rt);
+            self.dirty = true;
+            return true;
+        }
+        #[allow(irrefutable_let_patterns)]
+        let Some(Backing::Window(window)) = self.surface.live().map(|l| &l.backing) else {
+            return false;
+        };
+        let window = window.clone();
+        self.start_native_window_drag(app, &window);
+        // The OS move loop consumes mouse-up, so release native pointer capture now rather than
+        // waiting for a missed-release grace or leaving input regions stuck captured.
+        #[cfg(target_os = "macos")]
+        if let Some(panel) = &self.panel { panel.pointer_released(); }
+        #[cfg(target_os = "windows")]
+        if let Some(native) = &self.native { native.pointer_released(); }
+        let rt = app.rt();
+        self.apply_input(rt);
+        self.apply_cursor(rt);
+        self.dirty = true;
+        true
+    }
+
+    fn start_native_window_drag(&mut self, app: &mut dyn OverlayApp, window: &Arc<Window>) {
+        #[cfg(target_os = "macos")]
+        if let Some(panel) = &self.panel {
+            if panel.drag_window() {
+                self.position_owner.step(PositionEvent::DragMoved);
+                self.sync_live_origin(app.rt_mut());
+                let scale = crate::window::backing_scale(window);
+                if let Some(live) = self.surface.live()
+                    && (scale - live.scale).abs() > f32::EPSILON
+                    && let Some(gpu) = self.gpu.clone()
+                {
+                    self.rescale(app, &gpu, scale);
+                }
+            }
+            return;
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = app;
+        if window.drag_window().is_ok() {
+            self.position_owner.step(PositionEvent::DragStarted);
+        }
+    }
+
     /// A left press or release, at the panel's click point when it has one.
     pub(super) fn left_button(&mut self, app: &mut dyn OverlayApp, pressed: bool, point: Option<(f32, f32)>) {
         if pressed {
@@ -92,11 +226,17 @@ impl OverlayCore {
             if let Some((x, y)) = app.rt().pointer() {
                 app.pointer_down(x, y);
                 app.rt_mut().physical_input(crate::PhysicalInput::Modifiers(crate::window::map_mods(self.mods)));
+                if !self.take_titlebar_action(app) {
+                    self.position_owner.step(PositionEvent::LeftReleased);
+                }
             }
-        } else if let Some((x, y)) = point.or(app.rt().pointer()) {
-            // `pointer_up` moves to the release point itself, after disarming a drag-out: a
-            // release never starts an OS drag.
-            app.pointer_up(x, y);
+        } else {
+            if let Some((x, y)) = point.or(app.rt().pointer()) {
+                // `pointer_up` moves to the release point itself, after disarming a drag-out: a
+                // release never starts an OS drag.
+                app.pointer_up(x, y);
+            }
+            self.position_owner.step(PositionEvent::LeftReleased);
         }
         self.dirty = true;
     }
@@ -445,6 +585,7 @@ impl OverlayCore {
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
             if let Some(x11) = &self.x11 { x11.set_follow_pointer(follow); }
         }
+        let reset_position = self.position_owner.apply_requests(&requests);
         let options_changed = requests.placement.is_some() || requests.display.is_some();
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         let recreate_layer = should_recreate_layer(
@@ -474,7 +615,7 @@ impl OverlayCore {
         let old_size = self.at.size;
         if let Some(size) = requests.size { self.canvas_size = size; }
         at.size = requests.size.unwrap_or(at.size);
-        if at != self.at || options_changed {
+        if at != self.at || options_changed || reset_position {
             self.at = at;
             self.resolve_size(event_loop);
             if self.at.size != old_size {

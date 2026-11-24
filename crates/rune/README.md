@@ -1166,10 +1166,13 @@ rune::App::new(spec).fit_content_height().run();
   existing exhaustive `AppSpec` literals source-compatible.
 - **Window drag regions** (`.window_drag()`): a press starts winit's `drag_window` and a
   double press zooms the window (macOS follows the user's `AppleActionOnDoubleClick` setting, so it
-  may minimise instead; elsewhere it toggles maximised). With `Chrome::drag_regions` on macOS, only
-  marked regions move a borderless or full-size-content window, so titlebar content stays clickable.
-  Rune subclasses only that window's content-view instance; ordinary titled windows and NSPanel
-  overlays retain their native behaviour.
+  may minimise instead; elsewhere it toggles maximised). Window-backed overlays also honour
+  `.window_drag()` and `.no_window_drag()` (calling `performWindowDragWithEvent:` on the macOS
+  `NSPanel` and `drag_window()` on Windows and X11; Wayland layer-shell ignores it), ignore
+  titlebar double-clicks, and keep the user's dragged position until an explicit placement request.
+  With `Chrome::drag_regions` on macOS, only marked regions move a borderless or full-size-content
+  window, so titlebar content stays clickable; Rune subclasses only that window's content-view
+  instance, leaving ordinary titled windows and NSPanel overlays with their native behaviour.
 - **Hover groups**: `.hover_group()` (or any `.hover(color)`) tracks hover for a subtree, and
   `.hover_motion(enter, exit)` sets its curves (for example a delayed reveal). Descendants read the
   nearest group with `.group_opacity(rest, hovered)` and `.group_color(c)`. A group stays hovered
@@ -2282,6 +2285,11 @@ of the primary display, centred or `inset` points from a side. Clicks pass throu
   `WS_EX_NOACTIVATE` and takes the foreground when Windows lets the process. XWayland can't.
 - Checked under headless sway (layer shell, and Xwayland for X11) and on macOS (panel level,
   bounds, hide and reshow). Windows builds are checked with `cargo xwin clippy` only.
+- `El::window_drag()` (and `El::no_window_drag()`) moves window-backed overlays (Windows, macOS
+  `NSPanel`, and X11) via the native OS move loop; pair it with `.hit()` under
+  `OverlayInput::Regions`. Titlebar double-clicks are ignored, and a user-dragged overlay keeps
+  its position across shows, resizes, and `follow_pointer` until the app sends a new placement
+  request. Wayland layer-shell overlays cannot be interactively dragged and ignore it.
 - `Tx::copy` works in overlays (a meeting capsule's Copy button).
 - Unsupported: hover in a non-key macOS panel (mouse-moved events go to the key window).
 

@@ -40,6 +40,13 @@ fn key(s: &mut State, event: &KeyEvent, _: &mut Tx) -> bool {
     if event.key == Key::Escape { hide_picker(s); return true; }
     false
 }
+fn drag_handle() -> El {
+    let dot = || el().size(3.0, 3.0).radius(1.5).fill(Color::WHITE.alpha(0.55));
+    row().key("drag-handle").label("Drag overlay").hit().window_drag().cursor(rune::Cursor::Grab)
+        .padding(8.0).gap(3.0).radius(14.0).center()
+        .child(col().gap(3.0).child(dot()).child(dot()).child(dot()))
+        .child(col().gap(3.0).child(dot()).child(dot()).child(dot()))
+}
 fn chip(label: &'static str, action: fn(&mut State)) -> El {
     el().key(label).hit().padding(10.0).radius(16.0).fill(BLUE.alpha(0.16))
         .child(text(label).color(Color::WHITE))
@@ -78,6 +85,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             .fill(DARK).child(text("Native hit region").color(Color::WHITE)));
     }
     let mut chips = row().key("pill").padding(8.0).gap(4.0).radius(28.0).fill(DARK)
+        .child(drag_handle())
         .child(chip("Area", show_picker)).child(chip("Window", show_picker))
         .child(chip("Screen", show_picker)).child(chip("iPhone", |s| s.expanded = !s.expanded));
     if s.expanded { chips = chips.child(chip("Route", |s| s.expanded = false)); }

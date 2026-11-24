@@ -20,7 +20,9 @@ of a blurred, rounded capsule; the separate headless regression covers fully off
 ## Interactive lab
 
 `cargo run -p overlay-lab` opens a transparent pill on the display under the pointer.
-Only its chips intercept clicks; the background and hover label pass through. iPhone/Paste
+Only its chips and leading drag grip (`.hit().window_drag()`) intercept clicks; dragging the grip
+moves the pill natively on window-backed overlays without snapping back until placement is changed,
+while the background and hover label pass through. iPhone/Paste
 change its contents inside a fixed maximum canvas. Area/Window/Screen open one picker per
 display. Drag selects an area; Escape closes all pickers on platforms with overlay keys.
 

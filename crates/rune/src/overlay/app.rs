@@ -419,6 +419,17 @@ impl<T: 'static> Overlay<T> {
     pub(super) fn hidden_input(&mut self) { with_app!(self, |core, app| core.hidden_input(&mut app)) }
     pub(super) fn apply_input(&mut self) { self.core.apply_input(self.rt.core()) }
     pub(super) fn left_button(&mut self, pressed: bool, point: Option<(f32, f32)>) { with_app!(self, |core, app| core.left_button(&mut app, pressed, point)) }
+    pub(super) fn touch_event(&mut self, touch: &winit::event::Touch) {
+        with_app!(self, |core, app| {
+            let app: &mut dyn OverlayApp = &mut app;
+            app.touch(touch);
+            core.take_titlebar_action(app);
+            if matches!(touch.phase, winit::event::TouchPhase::Ended | winit::event::TouchPhase::Cancelled) {
+                core.position_owner.step(super::input::PositionEvent::LeftReleased);
+            }
+            core.dirty = true;
+        })
+    }
     pub(super) fn drag_ends_due(&mut self) { with_app!(self, |core, app| core.drag_ends_due(&mut app)) }
     pub(super) fn missed(&mut self, missed: crate::window::Missed, paced: bool, stepped: bool) { with_app!(self, |core, app| core.missed(&mut app, missed, paced, stepped)) }
     #[cfg(test)]
