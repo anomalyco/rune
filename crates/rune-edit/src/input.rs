@@ -456,12 +456,13 @@ impl TextEdit {
         if self.secure || html_str.trim().is_empty() {
             return self.paste(plain);
         }
-        let mut frag = Self::from_html(html_str);
+        let mut frag = html::parse_html(html_str).rich();
         if !pills {
             frag.marks.retain(|m| !m.mark.is_pill());
         }
         // HTML with no formatting this field keeps (such as layout-only markup, or a code
-        // editor's copy when colour is disallowed) would collapse plain whitespace for nothing.
+        // editor's copy on a field that has not opted into colour) would collapse plain
+        // whitespace for nothing.
         let frag = self.keep_allowed(frag);
         let unformatted = frag.marks.is_empty() && frag.blocks.iter().all(|&b| b == Block::Paragraph);
         if !plain.is_empty() && (frag.text.is_empty() || unformatted) {

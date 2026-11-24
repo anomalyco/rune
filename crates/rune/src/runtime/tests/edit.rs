@@ -456,13 +456,17 @@ fn text_input_paints_color_marks_and_keeps_links_and_selection_on_top() {
             )
     }
 
+    // Default from_html drops pasted browser ink colour so dark-mode apps never get unreadable text.
+    let default_loaded = TextEdit::from_html(r#"<p><span style="color:rgb(0,0,0)">unchanged</span></p>"#);
+    assert!(default_loaded.marks().is_empty());
+
     // "red link plain" where "red " is underlined red, "link" is both red and a link, " plain" is default.
-    let mut rich = TextEdit::from_html(
+    let mut rich = TextEdit::from_html_with_color(
         r#"<p><span style="color:#ff0000"><u>red</u> <a href="https://example.com">link</a></span> plain</p>"#,
     );
     rich.focused = true;
     rich.set_selection(0, 3);
-    let plain = TextEdit::new("unchanged");
+    let plain = default_loaded;
     let mut rt = Runtime::new(App { rich, plain }, view, (320.0, 120.0), Env::new(true, 1.0));
     rt.frame(0.0);
 

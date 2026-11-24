@@ -37,15 +37,15 @@ impl TextEdit {
         let anchor_line = self.line_of_byte(self.anchor);
         if self.typing.at((self.anchor, self.focus)).is_none() || self.blocks.get(anchor_line) == Some(&Block::Code) {
             self.typing = Typing::Inherited;
-        } else if let (Some(bits), Typing::Armed { marks, .. }) = (self.allowed_marks, &mut self.typing) {
+        } else if let Typing::Armed { marks, .. } = &mut self.typing {
+            let bits = self.allowed_marks.unwrap_or(Self::DEFAULT_ALLOWED_MARKS);
             marks.retain(|m| bits & 1 << m.kind_order() != 0);
         }
     }
 
     pub(super) fn normalize_marks(&mut self) {
-        if let Some(bits) = self.allowed_marks {
-            self.marks.retain(|m| bits & 1 << m.mark.kind_order() != 0);
-        }
+        let bits = self.effective_allowed_marks();
+        self.marks.retain(|m| bits & 1 << m.mark.kind_order() != 0);
         if self.marks.is_empty() {
             return;
         }
@@ -294,7 +294,7 @@ impl TextEdit {
     ///
     /// ```
     /// use rune_edit::TextEdit;
-    /// let mut e = TextEdit::new("hello").rich();
+    /// let mut e = TextEdit::new("hello").rich().allow_color(true);
     /// e.set_selection(0, 5);
     /// e.set_color(Some("#D93025"));
     /// assert_eq!(e.active_color(), Some("#d93025"));
@@ -462,10 +462,12 @@ impl TextEdit {
     ///
     /// Accepts `#rgb` or `#rrggbb` in either case and stores lowercase `#rrggbb`. Passing `None`
     /// or an empty string removes any colour on the selection; any other invalid string is ignored.
+    /// Does nothing unless the field allows [`Mark::Color`] (see [`allow_color`](Self::allow_color)
+    /// and [`allow_marks`](Self::allow_marks)).
     ///
     /// ```
     /// use rune_edit::TextEdit;
-    /// let mut e = TextEdit::new("hello").rich();
+    /// let mut e = TextEdit::new("hello").rich().allow_color(true);
     /// e.set_selection(0, 5);
     /// e.set_color(Some("#f00"));
     /// assert_eq!(e.active_color(), Some("#ff0000"));

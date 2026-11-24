@@ -104,7 +104,8 @@ pub struct TextEdit {
     line_home_end: bool,
     /// Formatting keys and rich paste are on (see [`TextEdit::rich`]).
     rich: bool,
-    /// The mark kinds this field keeps, one bit per [`Mark::kind_order`]; `None` keeps all.
+    /// The mark kinds this field keeps, one bit per [`Mark::kind_order`]; `None` keeps
+    /// [`DEFAULT_ALLOWED_MARKS`] (every kind except [`Mark::Color`]).
     allowed_marks: Option<u16>,
     /// The block kinds this field keeps ([`Block::kind_bit`]); `None` keeps all.
     allowed_blocks: Option<u8>,
@@ -268,13 +269,46 @@ impl TextEdit {
         }
     }
 
+    /// The seven inline mark kinds allowed on a [`TextEdit`] by default (`Bold`, `Italic`,
+    /// `Underline`, `Strike`, `Code`, `Link`, and `Pill`), excluding [`Mark::Color`] so pasted
+    /// browser or editor ink colours never enter a rich field unless the app opts in.
+    pub(crate) const DEFAULT_ALLOWED_MARKS: u16 =
+        (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6);
+
+    pub(crate) fn effective_allowed_marks(&self) -> u16 {
+        self.allowed_marks.unwrap_or(Self::DEFAULT_ALLOWED_MARKS)
+    }
+
     /// Construct a [`TextEdit`] from plain text, inline [`MarkRange`]s, and per-line [`Block`]s.
     /// Caret starts at the end of `text`. Ranges are clamped to char boundaries and canonicalized,
     /// and `blocks` is padded or truncated to match the number of `\n`-separated lines in `text`.
+    /// Passing any [`Mark::Color`] in `marks` enables text colours on the returned field.
     pub fn from_parts(text: impl Into<String>, marks: Vec<MarkRange>, blocks: Vec<Block>) -> TextEdit {
         let mut edit = Self::new(text).rich();
+        if marks.iter().any(|m| matches!(m.mark, Mark::Color(_))) {
+            edit.allowed_marks = Some(Self::DEFAULT_ALLOWED_MARKS | (1 << Mark::Color(String::new()).kind_order()));
+        }
         edit.marks = marks;
         edit.blocks = blocks;
+        edit.clamp_list_levels();
+        edit.sync_invariants();
+        edit
+    }
+
+    /// Internal constructor for `html::parse_html` that keeps parsed [`Mark::Color`] marks until
+    /// [`from_html`](Self::from_html), [`from_html_with_color`](Self::from_html_with_color), or
+    /// [`paste_html`](Self::paste_html) applies the target field's allowed-mark mask.
+    pub(crate) fn from_parsed_html(
+        text: String,
+        marks: Vec<MarkRange>,
+        blocks: Vec<Block>,
+        soft_breaks: Vec<u32>,
+    ) -> TextEdit {
+        let mut edit = Self::new(text).rich();
+        edit.allowed_marks = Some(Self::DEFAULT_ALLOWED_MARKS | (1 << Mark::Color(String::new()).kind_order()));
+        edit.marks = marks;
+        edit.blocks = blocks;
+        edit.soft_breaks = soft_breaks;
         edit.clamp_list_levels();
         edit.sync_invariants();
         edit
@@ -338,8 +372,9 @@ impl TextEdit {
     /// Kinds match by [`Mark::same_kind`], so any [`Mark::Link`] allows links and any
     /// [`Mark::Color`] allows colours. The field never
     /// holds a disallowed mark: marks it already has, or that `set_marks` adds, are dropped.
-    /// Every kind is allowed by default, and [`Mark::Pill`] always is: pills are the app's own
-    /// tokens, not formatting.
+    /// Every kind except [`Mark::Color`] is allowed by default (opt into colour with
+    /// [`allow_color`](Self::allow_color) or by including `Mark::Color(String::new())` here), and
+    /// [`Mark::Pill`] always is: pills are the app's own tokens, not formatting.
     ///
     /// ```ignore
     /// TextEdit::new("").rich().allow_marks([Mark::Bold, Mark::Italic, Mark::Strike, Mark::Code, Mark::Link(String::new())])
@@ -347,6 +382,33 @@ impl TextEdit {
     pub fn allow_marks(mut self, marks: impl IntoIterator<Item = Mark>) -> Self {
         let pill = 1 << Mark::Pill(String::new()).kind_order();
         self.allowed_marks = Some(marks.into_iter().fold(pill, |bits, m| bits | 1 << m.kind_order()));
+        self.sync_invariants();
+        self
+    }
+
+    /// Allow or disallow [`Mark::Color`] inline text colours on this field.
+    ///
+    /// Off by default so rich fields do not import hard-coded browser or code-editor ink colours
+    /// on paste (for example black text into a dark theme). Turning it on keeps all currently
+    /// allowed mark kinds and adds [`Mark::Color`]; turning it off strips any existing colour
+    /// marks and pending colour style.
+    ///
+    /// ```
+    /// use rune_edit::{Mark, TextEdit};
+    /// let mut edit = TextEdit::new("hello").rich().allow_color(true);
+    /// assert!(edit.allows_mark(&Mark::Color(String::new())));
+    /// edit.set_selection(0, 5);
+    /// edit.set_color(Some("#D93025"));
+    /// assert_eq!(edit.active_color(), Some("#d93025"));
+    /// ```
+    pub fn allow_color(mut self, on: bool) -> Self {
+        let bits = self.allowed_marks.get_or_insert(Self::DEFAULT_ALLOWED_MARKS);
+        let color = 1 << Mark::Color(String::new()).kind_order();
+        if on {
+            *bits |= color;
+        } else {
+            *bits &= !color;
+        }
         self.sync_invariants();
         self
     }
@@ -361,11 +423,12 @@ impl TextEdit {
         self
     }
 
-    /// Whether this field keeps marks of `mark`'s kind (see [`allow_marks`](Self::allow_marks)),
-    /// to hide a formatting bar's button for one it doesn't (`Mark::Link(String::new())` checks
-    /// links).
+    /// Whether this field keeps marks of `mark`'s kind (see [`allow_marks`](Self::allow_marks)
+    /// and [`allow_color`](Self::allow_color)), to hide a formatting bar's button for one it
+    /// doesn't (`Mark::Link(String::new())` checks links; `Mark::Color(String::new())` checks
+    /// text colour).
     pub fn allows_mark(&self, mark: &Mark) -> bool {
-        self.allowed_marks.is_none_or(|bits| bits & 1 << mark.kind_order() != 0)
+        self.effective_allowed_marks() & (1 << mark.kind_order()) != 0
     }
 
     /// Whether this field keeps blocks of `block`'s kind (see [`allow_blocks`](Self::allow_blocks)).
@@ -404,12 +467,30 @@ impl TextEdit {
     }
 
     /// Parse an HTML fragment (`<b>`, `<strong>`, `<i>`, `<em>`, `<u>`, `<s>`, `<del>`, `<strike>`,
-    /// `<a href>`, `<code>`, `<font color>`, `<pre>`, `<ul>`, `<ol>`, `<li>`, `<blockquote>`,
-    /// `<p>`, `<div>`, `<br>`, and inline `style` for `font-weight`, `font-style`, `text-decoration`,
-    /// `color`) into a [`TextEdit`].
+    /// `<a href>`, `<code>`, `<pre>`, `<ul>`, `<ol>`, `<li>`, `<blockquote>`, `<p>`, `<div>`,
+    /// `<br>`, and inline `style` for `font-weight`, `font-style`, `text-decoration`) into a
+    /// [`TextEdit`].
     /// Unknown tags keep their text and strip the wrapper; `<script>` and `<style>` are dropped.
+    /// Text colours (`style="color:..."`, `<font color>`) are stripped by default; use
+    /// [`from_html_with_color`](Self::from_html_with_color) to load saved coloured HTML.
     pub fn from_html(html_str: &str) -> TextEdit {
-        html::parse_html(html_str).rich()
+        let mut edit = html::parse_html(html_str).rich();
+        edit.allowed_marks = None;
+        edit.sync_invariants();
+        edit
+    }
+
+    /// Like [`from_html`](Self::from_html), but opts the returned field into [`Mark::Color`]
+    /// (as if built with [`allow_color(true)`](Self::allow_color)) and keeps CSS `style="color:..."`
+    /// and `<font color>` text colours.
+    ///
+    /// ```
+    /// use rune_edit::TextEdit;
+    /// let edit = TextEdit::from_html_with_color(r#"<p><span style="color:#d93025">red</span></p>"#);
+    /// assert_eq!(edit.active_color(), Some("#d93025"));
+    /// ```
+    pub fn from_html_with_color(html_str: &str) -> TextEdit {
+        html::parse_html(html_str).rich().allow_color(true)
     }
 
     /// Serialize the entire document's text, inline marks, and paragraph blocks to safe HTML.

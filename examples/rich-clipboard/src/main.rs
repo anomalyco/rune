@@ -85,7 +85,7 @@ fn badge_pixels(bg: [u8; 4], fg: [u8; 4], stripe: [u8; 4]) -> Pixels {
 impl Default for State {
     fn default() -> Self {
         Self {
-            field: TextEdit::new("").rich(),
+            field: TextEdit::new("").rich().allow_color(true),
             notes: TextEdit::new(MARKDOWN_SAMPLE),
             gmail_logo: badge_pixels([234, 67, 53, 255], [255, 255, 255, 255], [251, 188, 5, 255]),
             github_logo: badge_pixels([36, 41, 47, 255], [255, 255, 255, 255], [139, 148, 158, 255]),
@@ -99,7 +99,7 @@ impl Default for State {
 
 impl State {
     fn decorations_scene(&mut self) {
-        let mut edit = TextEdit::new("Draft with ").rich();
+        let mut edit = TextEdit::new("Draft with ").rich().allow_color(true);
         edit.insert_pill("app:gmail", "@Gmail");
         edit.insert(" and ");
         edit.insert_pill("app:github", "@GitHub");
