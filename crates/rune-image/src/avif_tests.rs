@@ -1,4 +1,4 @@
-use super::{is_avif, limits::{ALPHA_AUX_URN, check as check_limits, too_large}};
+use super::{checked_rgba_bytes, checked_rgba_bytes_with, is_avif, limits::{ALPHA_AUX_URN, check as check_limits, too_large}};
 
 struct BitWriter {
     bytes: Vec<u8>,
@@ -358,6 +358,39 @@ fn rejects_inflated_box_size_and_extent_amplification() {
     assert_eq!(check_limits(&amplified), Err(too_large()));
 }
 
+#[test]
+fn checked_rgba_bytes_enforces_dimensions_allocation_and_overflow() {
+    for (w, h) in [
+        (0, 0),
+        (0, 16),
+        (16, 0),
+        (crate::MAX_SIDE as usize + 1, 1),
+        (1, crate::MAX_SIDE as usize + 1),
+        (16384, 16384),
+        (usize::MAX, 1),
+        (1, usize::MAX),
+        (usize::MAX, usize::MAX),
+    ] {
+        assert_eq!(checked_rgba_bytes(w, h), Err(too_large()), "{w}x{h} must fail");
+    }
+
+    assert_eq!(checked_rgba_bytes(1, 1), Ok((1, 1, 4)));
+    assert_eq!(checked_rgba_bytes(320, 240), Ok((320, 240, 320 * 240 * 4)));
+    assert_eq!(
+        checked_rgba_bytes(crate::MAX_SIDE as usize, crate::MAX_SIDE as usize),
+        Ok((crate::MAX_SIDE, crate::MAX_SIDE, crate::MAX_ALLOC as usize)),
+    );
+
+    // Byte-budget enforcement independent of MAX_SIDE.
+    assert_eq!(checked_rgba_bytes_with(64, 64, 128, 64 * 64 * 4), Ok((64, 64, 64 * 64 * 4)));
+    assert_eq!(checked_rgba_bytes_with(64, 64, 128, 64 * 64 * 4 - 1), Err(too_large()));
+    assert_eq!(checked_rgba_bytes_with(4096, 4096, crate::MAX_SIDE, 64 * 1024 * 1024 - 1), Err(too_large()));
+
+    // Checked multiplication overflow does not wrap.
+    assert_eq!(checked_rgba_bytes_with(u32::MAX as usize, u32::MAX as usize, u32::MAX, u64::MAX), Err(too_large()));
+    assert_eq!(checked_rgba_bytes_with(1usize << 31, 1usize << 31, u32::MAX, u64::MAX), Err(too_large()));
+}
+
 #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
 #[test]
 fn rgba_rejects_oversized_avif_before_decoding() {
@@ -368,4 +401,34 @@ fn rgba_rejects_oversized_avif_before_decoding() {
     assert_eq!(super::rgba(&spoofed_ispe), Err(too_large()));
     assert_eq!(super::super::decode(&oversized_ispe).err(), Some(too_large()));
     assert_eq!(super::super::decode(&spoofed_ispe).err(), Some(too_large()));
+}
+
+#[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+#[test]
+fn image_to_rgba_validates_budget_before_allocating_and_preallocates_exact_buffer() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../www/public/img/hello-320.avif");
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(check_limits(&bytes), Ok(()));
+
+    let decode_image = || avif_decode::Decoder::from_avif(&bytes).unwrap().to_image().unwrap();
+    let (w, h, pixels) = super::image_to_rgba(decode_image()).unwrap();
+    assert!(w > 0 && h > 0);
+    let expected_bytes = w as usize * h as usize * 4;
+    assert_eq!(pixels.len(), expected_bytes);
+    assert_eq!(pixels.capacity(), expected_bytes, "RGBA conversion buffer should pre-allocate exact capacity");
+
+    // Reject over-dimension and over-allocation budgets before allocating.
+    assert_eq!(super::image_to_rgba_with(decode_image(), w - 1, crate::MAX_ALLOC), Err(too_large()));
+    assert_eq!(
+        super::image_to_rgba_with(decode_image(), crate::MAX_SIDE, expected_bytes as u64 - 1),
+        Err(too_large()),
+    );
+
+    // End-to-end native AVIF decode matches.
+    let (rw, rh, rpixels) = super::rgba(&bytes).unwrap();
+    assert_eq!((rw, rh), (w, h));
+    assert_eq!(rpixels, pixels);
+    assert_eq!(rpixels.capacity(), expected_bytes);
+    let decoded = super::super::decode(&bytes).unwrap();
+    assert_eq!((decoded.mips[0].width, decoded.mips[0].height), (w, h));
 }
