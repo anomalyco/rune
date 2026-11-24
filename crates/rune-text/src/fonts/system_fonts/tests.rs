@@ -353,3 +353,202 @@ fn fontconfig_extracts_names_weights_and_monospace_from_collection_paths() {
     assert!(!inter.monospace(), "Inter should be classified as proportional");
     assert_eq!(inter.weights(), &[400, 500, 600]);
 }
+/// Returns `(family_name, glyph_id)` for every shaped glyph in `layout` plus the count of
+/// colour glyph quads emitted by `glyphs_for_layout`.
+fn glyph_signature(ts: &mut TextSystem, text: &str, spans: &[Span], style: TextStyle) -> (Vec<(String, u32)>, usize, f32) {
+    let layout = ts.layout_rich(text, spans, style, 2.0, None);
+    let mut glyphs = Vec::new();
+    for line in layout.lines() {
+        for item in line.items() {
+            let PositionedLayoutItem::GlyphRun(run) = item else { continue };
+            let font = run.run().font();
+            let family = FontRef::from_index(font.data.as_ref(), font.index as usize)
+                .and_then(|f| {
+                    let s = f.localized_strings();
+                    s.find_by_id(swash::StringId::Family, Some("en"))
+                        .or_else(|| s.find_by_id(swash::StringId::Family, None))
+                        .map(|n| n.to_string())
+                })
+                .unwrap_or_default();
+            for g in run.glyphs() {
+                glyphs.push((family.clone(), g.id));
+            }
+        }
+    }
+    let mut quads = Vec::new();
+    ts.glyphs_for_layout(&layout, 2.0, [0.0, 0.0], false, &mut quads);
+    let color_count = quads.iter().filter(|q| q.color != 0).count();
+    (glyphs, color_count, layout.full_width())
+}
+
+/// Active font coverage in `self.font_cx.collection` prevents system fallback and math font
+/// loading for punctuation already covered by the resolved font, both for bundled faces and
+/// when `fallbacks.own` is empty (collection-loaded or installed system fonts).
+#[test]
+fn covered_punctuation_skips_fallback_and_math_for_bundled_and_collection_fonts() {
+    let sample = "Item · next… threshold ≥ 95%";
+    let style = TextStyle::new(16.0, 400.0);
+
+    // 1. Default bundled Inter: '≥' (U+2265) is covered by Inter and must not load math or emoji.
+    let mut bundled = TextSystem::new_local(&[], ("Inter", "ui-monospace"));
+    let (bundled_glyphs, bundled_color, bundled_w) = glyph_signature(&mut bundled, sample, &[], style);
+    assert!(bundled_w > 0.0);
+    assert_eq!(bundled_color, 0);
+    assert!(bundled.fallbacks.asked.is_empty(), "bundled Inter must not query fallback: {:?}", bundled.fallbacks.asked);
+    assert!(bundled.math.is_none(), "covered '≥' must not load math fallback: {:?}", bundled.math);
+    assert!(bundled.emoji.is_none(), "punctuation must not load emoji fallback: {:?}", bundled.emoji);
+
+    // 2. Collection-loaded font with empty `own` (mirrors --no-default-features / installed / runtime fonts).
+    let mut col_ts = TextSystem::empty();
+    col_ts.font_cx.collection.load_fonts_from_paths([bundled_font("Inter-Regular.ttf")]);
+    col_ts.apply_families("Inter", "ui-monospace");
+    assert!(col_ts.emoji.is_none(), "resolved collection font must not load emoji at setup");
+    let (col_glyphs, col_color, col_w) = glyph_signature(&mut col_ts, sample, &[], style);
+    assert_eq!(col_glyphs, bundled_glyphs, "collection-loaded Inter must emit identical glyphs");
+    assert_eq!(col_color, 0);
+    assert_eq!(col_w, bundled_w, "collection-loaded Inter must keep exact layout width");
+    assert!(col_ts.fallbacks.asked.is_empty(), "covered punctuation must not enter asked: {:?}", col_ts.fallbacks.asked);
+    assert!(col_ts.math.is_none(), "covered '≥' must not load math fallback: {:?}", col_ts.math);
+    assert!(col_ts.emoji.is_none(), "covered punctuation must not load emoji fallback: {:?}", col_ts.emoji);
+}
+
+/// On macOS, an unresolved font slot loads only the system UI text family at startup (deferring
+/// Apple Color Emoji), covered punctuation in that font triggers no CoreText or math lookup,
+/// and emoji still register Apple Color Emoji on demand and emit colour glyphs.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_slot_fallback_defers_emoji_and_loads_on_demand() {
+    let style = TextStyle::new(16.0, 400.0);
+
+    // 1. Unresolved slot with empty `own`: system UI text loads, Apple Color Emoji does not.
+    let mut ts = TextSystem::new_local(&[b""], ("Rune Missing Family", "ui-monospace"));
+    assert!(ts.emoji.is_none(), "unresolved slot must defer Apple Color Emoji at startup");
+    assert!(!ts.symbol_families.iter().any(|f| f.contains("Emoji")), "emoji family loaded eagerly: {:?}", ts.symbol_families);
+    assert!(!ts.symbol_families.is_empty(), "unresolved slot must load system UI text fallback");
+
+    // First layout of covered punctuation avoids CoreText fallback, math, and emoji.
+    let sample = "Item · next… threshold ≥ 95%";
+    let (glyphs, color, width) = glyph_signature(&mut ts, sample, &[], style);
+    assert!(width > 0.0 && !glyphs.is_empty());
+    assert_eq!(color, 0);
+    assert!(ts.fallbacks.asked.is_empty(), "system UI font covers '·', '…', '≥': {:?}", ts.fallbacks.asked);
+    assert!(ts.math.is_none(), "covered '≥' must not load STIX Two Math: {:?}", ts.math);
+    assert!(ts.emoji.is_none(), "punctuation must not load Apple Color Emoji");
+
+    // 2. Installed system font with empty `own`: Helvetica covers '·', '…', '≥'.
+    let mut helv = TextSystem::new_local(&[b""], ("Helvetica", "ui-monospace"));
+    assert!(helv.emoji.is_none());
+    let (h_glyphs, _, h_width) = glyph_signature(&mut helv, sample, &[], style);
+    assert!(h_width > 0.0 && !h_glyphs.is_empty());
+    assert!(helv.fallbacks.asked.is_empty(), "Helvetica covers '·', '…', '≥': {:?}", helv.fallbacks.asked);
+    assert!(helv.math.is_none(), "Helvetica '≥' must not load STIX Two Math");
+    assert!(helv.emoji.is_none());
+
+    // 3. Default emoji presentation ("Launch 🚀") loads Apple Color Emoji on demand and draws in colour.
+    let mut rocket = TextSystem::new_local(&[b""], ("Rune Missing Family", "ui-monospace"));
+    assert!(rocket.emoji.is_none());
+    let (_, rocket_color, _) = glyph_signature(&mut rocket, "Launch 🚀", &[], style);
+    assert_eq!(rocket.emoji, Some("Apple Color Emoji"));
+    assert_eq!(rocket_color, 1, "default emoji presentation must draw in colour");
+
+    // 4. Explicit U+FE0F presentation ("Fly ✈️") loads Apple Color Emoji on demand without STIX Two Math.
+    let mut plane = TextSystem::new_local(&[b""], ("Rune Missing Family", "ui-monospace"));
+    assert!(plane.emoji.is_none());
+    let (_, plane_color, _) = glyph_signature(&mut plane, "Fly ✈️", &[], style);
+    assert_eq!(plane.emoji, Some("Apple Color Emoji"));
+    assert!(plane.math.is_none(), "U+FE0F emoji must not load STIX Two Math");
+    assert_eq!(plane_color, 1, "U+FE0F emoji must draw in colour");
+}
+
+/// Loading the colour emoji font before monochrome symbols must produce the exact same glyphs,
+/// fonts, and colour counts as loading monochrome symbols first.
+#[test]
+fn emoji_before_monochrome_symbols_keeps_identical_glyphs_and_fonts() {
+    let style = TextStyle::new(16.0, 400.0);
+    let samples = ["Launch 🚀", "Fly ✈️", "Check ✓", "Heart ❤", "Heart ❤️", "Copy ⌘K", "Text ☺\u{FE0E}"];
+
+    let mut emoji_first = TextSystem::new_local(&[], ("Inter", "ui-monospace"));
+    let _ = glyph_signature(&mut emoji_first, "Launch 🚀", &[], style);
+
+    let mut symbols_first = TextSystem::new_local(&[], ("Inter", "ui-monospace"));
+    let _ = glyph_signature(&mut symbols_first, "Copy ⌘K", &[], style);
+
+    for sample in samples {
+        let a = glyph_signature(&mut emoji_first, sample, &[], style);
+        let b = glyph_signature(&mut symbols_first, sample, &[], style);
+        assert_eq!(a, b, "order of emoji vs symbol loading changed rendering for {sample:?}");
+    }
+}
+
+/// Lazy/coverage-checked fallback must produce the exact same glyph IDs, font families, colour
+/// counts, and widths as an eagerly-loaded fallback stack across all text categories.
+#[test]
+fn lazy_fallback_matches_eager_fallback_glyphs_and_fonts() {
+    let style = TextStyle::new(16.0, 400.0);
+    let samples = [
+        "Item - next threshold >= 95%",
+        "Item · next… threshold ≥ 95%",
+        "Hello 世界 日本語 한국어",
+        "Launch 🚀",
+        "Fly ✈️",
+        "Heart ❤️",
+        "Heart ❤",
+        "Copy ⌘K",
+        "Let 𝐀𝐁𝐂 𝑥𝑦𝑧 ℝℂ",
+        "Missing \u{0378} end",
+    ];
+
+    let mut eager = TextSystem::new_local(&[], ("Inter", "ui-monospace"));
+    eager.load_symbol_fonts();
+    // Preload math too so eager has every fallback group loaded ahead of time.
+    let _ = eager.layout_rich("ℝ", &[], style, 2.0, None);
+
+    for sample in samples {
+        let mut fresh = TextSystem::new_local(&[], ("Inter", "ui-monospace"));
+        let got = glyph_signature(&mut fresh, sample, &[], style);
+        let want = glyph_signature(&mut eager, sample, &[], style);
+        assert_eq!(got, want, "fresh layout diverged from eager fallback for {sample:?}");
+    }
+}
+/// Characters inside a `Span { mono: true }` check coverage against the mono stack rather than
+/// the surrounding sans font, so a character sans covers and mono lacks still triggers fallback.
+#[test]
+fn mono_span_checks_mono_font_coverage_not_sans() {
+    const INTER: &[u8] = include_bytes!("../../../../rune/assets/Inter-Regular.ttf");
+    const PLEX: &[u8] = include_bytes!("../../../../rune/assets/IBMPlexMono-Regular.ttf");
+    let inter = FontRef::from_index(INTER, 0).expect("Inter");
+    let plex = FontRef::from_index(PLEX, 0).expect("IBM Plex Mono");
+    // Find a non-ASCII, non-emoji, non-CJK char covered by Inter but missing in IBM Plex Mono.
+    let ch = (0x00A1u32..=0x2BFF)
+        .filter_map(char::from_u32)
+        .find(|&c| {
+            !needs_no_font(c)
+                && !is_cjk(c)
+                && !fallback::SCRIPT_FONTS.iter().any(|s| s.covers(c))
+                && !fallback::is_emoji(c.encode_utf8(&mut [0; 4]))
+                && !fallback::is_math_alphanumeric(c)
+                && inter.charmap().map(c) != 0
+                && plex.charmap().map(c) == 0
+        })
+        .expect("Inter should cover at least one symbol IBM Plex Mono lacks");
+
+    let text = format!("a {ch} b");
+    let style = TextStyle::new(16.0, 400.0);
+
+    // Outside a mono span (sans = Inter): covered by Inter, no fallback asked.
+    let mut sans_ts = TextSystem::new_local(&[INTER, PLEX], ("Inter", "IBM Plex Mono"));
+    let _ = sans_ts.layout_rich(&text, &[], style, 2.0, None);
+    assert!(sans_ts.fallbacks.asked.is_empty(), "sans covers {ch:?}: {:?}", sans_ts.fallbacks.asked);
+    assert!(sans_ts.symbol_families.is_empty(), "sans must not load symbol families for {ch:?}");
+
+    // Inside a mono span (mono = IBM Plex Mono): mono lacks `ch`, so fallback runs and draws a real glyph.
+    let mut mono_ts = TextSystem::new_local(&[INTER, PLEX], ("Inter", "IBM Plex Mono"));
+    let span = [Span::new(2, 2 + ch.len_utf8()).mono()];
+    let _ = mono_ts.layout_rich(&text, &span, style, 2.0, None);
+    assert!(
+        !mono_ts.fallbacks.asked.is_empty() || !mono_ts.symbol_families.is_empty(),
+        "mono span lacking {ch:?} must trigger fallback even though sans covers it"
+    );
+}
+
+

@@ -157,9 +157,21 @@ impl TextSystem {
         } else {
             text
         };
+        let has_mono_span = spans.iter().any(|s| s.mono);
+        if self.needs_system_mono(style.family, has_mono_span) {
+            self.system_mono();
+        }
+        if let Family::Named(list) = style.family {
+            self.load_installed(list);
+        }
         let routes = fallback::routes(text);
         let language = language::of_text(text, self.language);
-        self.load_fallbacks(text, language);
+        let mono_spans = if has_mono_span && !text.is_ascii() {
+            SpanMap::new(spans.iter().filter(|s| s.mono).map(|s| (s.start as usize..s.end as usize, ())))
+        } else {
+            SpanMap::empty()
+        };
+        self.load_fallbacks(text, style, &mono_spans, &routes, language);
         // `trak` tracking at the point size (see `trak.rs`), on top of `style.tracking`. An
         // explicit optical size `o` picks the entry instead, as Core Text tracks `o`-point text
         // scaled to the set size; spans scale the lookup with their size. Each style range gets
@@ -197,7 +209,6 @@ impl TextSystem {
             .collect();
         // Each style range's predicted first font at its weight, drawn at its named instance.
         let base_axes = self.primary_axes(style.family, style.weight, style.italic);
-        let has_mono_span = spans.iter().any(|s| s.mono);
         // The strut inline code keeps inside (`inline_fit`).
         let strut = if mono_style || !has_mono_span { None } else { self.primary_extents(style.family, style.weight, style.italic) };
         let span_axes: Vec<Rc<[parley::FontVariation]>> = spans
@@ -212,12 +223,6 @@ impl TextSystem {
             settings.extend(extra);
             settings
         };
-        if self.needs_system_mono(style.family, has_mono_span) {
-            self.system_mono();
-        }
-        if let Family::Named(list) = style.family {
-            self.load_installed(list);
-        }
         let math = self.math.as_deref().unwrap_or(&[]);
         let emoji = self.emoji.as_slice();
         let system = self.system_mono.as_deref().unwrap_or_default();
@@ -245,11 +250,6 @@ impl TextSystem {
         let mono = if has_mono_span { with_symbols(self.mono.as_str(), mono_scripts) } else { Vec::new() };
         // Routed clusters try their fallback first, then the run's own stack (mono spans included).
         // Each of the four {math, emoji} × {sans, mono} stacks is built at most once.
-        let mono_spans = if routes.is_empty() {
-            SpanMap::empty()
-        } else {
-            SpanMap::new(spans.iter().filter(|s| s.mono).map(|s| (s.start as usize..s.end as usize, ())))
-        };
         let mut stacks: [Option<Vec<FontFamilyName<'_>>>; 4] = Default::default();
         let mut routed = Vec::new();
         for (range, route) in routes {

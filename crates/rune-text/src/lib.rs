@@ -435,7 +435,7 @@ impl TextSystem {
             sans,
             mono,
             slot_system_mono: [names_system_mono(families.0), names_system_mono(families.1)],
-            fallbacks: system_fonts::Fallbacks::new(list, &registered),
+            fallbacks: system_fonts::Fallbacks::new(&registered),
             atlas: Atlas::new(),
             ..Self::empty()
         };
