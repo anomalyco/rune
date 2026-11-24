@@ -1,7 +1,8 @@
 //! Copy and paste formatted text, inspect the clipboard revision counter, position a floating
-//! formatting bar over `Cx::field_selection_rects`, and hit-test byte offsets with
-//! `Tx::text_offset_at`.
-//! `cargo run -p rich-clipboard` (or `-- --scene selected --tree`).
+//! formatting bar over `Cx::field_selection_rects`, hit-test byte offsets with
+//! `Tx::text_offset_at`, style mention pills with leading `Pixels` logos/rings/radii, and draw
+//! display-only plain-text `LineFill` code blocks and quotes.
+//! `cargo run -p rich-clipboard` (or `-- --scene selected --tree` / `-- --scene decorations --snap target/rich-clipboard.png`).
 //!
 //! Paste into the field from a browser, Notes, TextEdit or Pages: the field still pastes the
 //! plain text, and the panel below shows which forms arrived and the start of the sanitised
@@ -18,7 +19,7 @@
 use rune::clipboard;
 use rune::color::hex;
 use rune::tok::{self, radius, space, type_};
-use rune::{AppSpec, ClipboardContent, Cx, El, Mark, Phase, TextEdit, Tx, col, el, row, text, text_input};
+use rune::{AppSpec, ClipboardContent, Color, Cx, El, LineFill, Mark, Phase, PillStyle, Pixels, TextEdit, Tx, col, el, row, text, text_input};
 
 const SAMPLE_TEXT: &str = "Click here or right-click the field to hit-test a UTF-8 byte offset.";
 
@@ -29,8 +30,20 @@ const SWATCHES: &[(&str, &str, &str)] = &[
     ("color-blue", "Blue text colour", "#3b82f6"),
 ];
 
+const MARKDOWN_SAMPLE: &str = concat!(
+    "Plain Markdown notes (display-only LineFill):\n",
+    "```rust\n",
+    "let pills = PillStyle::new().ring(border, 1.0).radius(999.0);\n",
+    "let fill = LineFill::new(start, end).bg(code_bg);\n",
+    "```\n",
+    "> Quotes draw a left vertical bar across wrapped lines without changing TextEdit.",
+);
+
 struct State {
     field: TextEdit,
+    notes: TextEdit,
+    gmail_logo: Pixels,
+    github_logo: Pixels,
     /// Whether the field marks misspelled words and shows suggestions in its menu.
     spellcheck: bool,
     /// How the last paste or read arrived, and what it held.
@@ -41,15 +54,113 @@ struct State {
     hit: Option<(&'static str, usize)>,
 }
 
+fn badge_pixels(bg: [u8; 4], fg: [u8; 4], stripe: [u8; 4]) -> Pixels {
+    let (w, h) = (16usize, 16usize);
+    let mut data = vec![0u8; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let dx = x as f32 - 7.5;
+            let dy = y as f32 - 7.5;
+            let r2 = dx * dx + dy * dy;
+            let px = if r2 > 58.0 {
+                [0, 0, 0, 0]
+            } else if (x == 4 || x == 11) && (4..=11).contains(&y) {
+                fg
+            } else if y == 5 && (5..=10).contains(&x) {
+                stripe
+            } else if y == 7 && (6..=9).contains(&x) {
+                fg
+            } else {
+                bg
+            };
+            let i = (y * w + x) * 4;
+            data[i..i + 4].copy_from_slice(&px);
+        }
+    }
+    let pixels = Pixels::new();
+    pixels.set(w as u32, h as u32, data);
+    pixels
+}
+
 impl Default for State {
     fn default() -> Self {
         Self {
             field: TextEdit::new("").rich(),
+            notes: TextEdit::new(MARKDOWN_SAMPLE),
+            gmail_logo: badge_pixels([234, 67, 53, 255], [255, 255, 255, 255], [251, 188, 5, 255]),
+            github_logo: badge_pixels([36, 41, 47, 255], [255, 255, 255, 255], [139, 148, 158, 255]),
             spellcheck: true,
             last: None,
             revision: clipboard::revision(),
             hit: None,
         }
+    }
+}
+
+impl State {
+    fn decorations_scene(&mut self) {
+        let mut edit = TextEdit::new("Draft with ").rich();
+        edit.insert_pill("app:gmail", "@Gmail");
+        edit.insert(" and ");
+        edit.insert_pill("app:github", "@GitHub");
+        edit.insert(" capsule chips.");
+        self.field = edit;
+    }
+}
+
+/// Find fenced code-block and `>`-quote byte ranges in plain Markdown text for `El::line_fills`.
+fn markdown_line_fills(src: &str, code_bg: Color, quote_bar: Color) -> Vec<LineFill> {
+    let mut fills = Vec::new();
+    let mut offset = 0usize;
+    let mut fence_start: Option<usize> = None;
+    let mut quote_run: Option<(usize, usize)> = None;
+    for raw in src.split_inclusive('\n') {
+        let line_start = offset;
+        let line_end = offset + raw.len();
+        offset = line_end;
+        let trimmed = raw.trim_start();
+        if trimmed.starts_with("```") {
+            if let Some((qs, qe)) = quote_run.take() {
+                fills.push(LineFill::new(qs, qe).left_bar(2.5, quote_bar));
+            }
+            if let Some(start) = fence_start.take() {
+                fills.push(LineFill::new(start, line_end).bg(code_bg).radius(6.0));
+            } else {
+                fence_start = Some(line_start);
+            }
+        } else if fence_start.is_none() && trimmed.starts_with('>') {
+            match &mut quote_run {
+                Some((_, end)) => *end = line_end,
+                None => quote_run = Some((line_start, line_end)),
+            }
+        } else if fence_start.is_none()
+            && let Some((qs, qe)) = quote_run.take()
+        {
+            fills.push(LineFill::new(qs, qe).left_bar(2.5, quote_bar));
+        }
+    }
+    if let Some(start) = fence_start {
+        fills.push(LineFill::new(start, src.len()).bg(code_bg).radius(6.0));
+    }
+    if let Some((qs, qe)) = quote_run {
+        fills.push(LineFill::new(qs, qe).left_bar(2.5, quote_bar));
+    }
+    fills
+}
+
+fn service_pill_style(id: &str) -> PillStyle {
+    match id {
+        "app:gmail" => PillStyle::new()
+            .bg(Color { r: 0.92, g: 0.26, b: 0.21, a: 0.16 })
+            .fg(Color { r: 1.0, g: 0.72, b: 0.69, a: 1.0 })
+            .ring(Color { r: 0.92, g: 0.26, b: 0.21, a: 0.65 }, 1.0)
+            .radius(999.0),
+        "app:github" => PillStyle::new()
+            .bg(Color { r: 0.55, g: 0.62, b: 0.72, a: 0.16 })
+            .fg(Color { r: 0.88, g: 0.92, b: 0.98, a: 1.0 })
+            .ring(Color { r: 0.55, g: 0.62, b: 0.72, a: 0.65 }, 1.0)
+            .radius(999.0),
+        _ => PillStyle::new().radius(6.0),
     }
 }
 
@@ -161,11 +272,25 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
     for &(key, label, code) in SWATCHES {
         toolbar = toolbar.child(swatch_button(key, label, code, active_color == Some(code)));
     }
-    toolbar = toolbar.child(button("color-clear", "Reset colour", |s, _| s.field.set_color(None)));
+    toolbar = toolbar
+        .child(button("color-clear", "Reset colour", |s, _| s.field.set_color(None)))
+        .child(button("mention-gmail", "@Gmail", |s, _| {
+            s.field.undo_group(|e| { e.insert_pill("app:gmail", "@Gmail"); e.insert(" "); });
+        }))
+        .child(button("mention-github", "@GitHub", |s, _| {
+            s.field.undo_group(|e| { e.insert_pill("app:github", "@GitHub"); e.insert(" "); });
+        }));
 
-    let field = text_input(&s.field, type_::BODY).key("field").label("Rich text editor").w_full().min_h(80.0).padding(space::S2)
+    let (gmail, github) = (s.gmail_logo.clone(), s.github_logo.clone());
+    let field = text_input(&s.field, type_::BODY).key("field").label("Rich text editor").w_full().min_h(68.0).padding(space::S2)
         .radius(radius::MD).fill(t.card).border(1.0, t.card_border).color(t.text)
         .spellcheck(s.spellcheck)
+        .pill_style(service_pill_style)
+        .pill_image(move |id| match id {
+            "app:gmail" => Some(gmail.clone()),
+            "app:github" => Some(github.clone()),
+            _ => None,
+        })
         .on_edit(|s: &mut State| &mut s.field)
         // Look at every form, then let the editor paste the text as usual.
         .on_input_paste(|s: &mut State, content, _| { seen(s, "Pasted", content); false })
@@ -174,6 +299,7 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
                 s.hit = at.map(|o| ("field", o));
             });
         });
+
     let sample_line = text(SAMPLE_TEXT).key("sample").font(type_::BODY).color(t.text_secondary).w_full().wrap()
         .on_drag(|_: &mut State, d, tx| {
             if d.phase == Phase::Down {
@@ -188,12 +314,33 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
                 s.hit = at.map(|o| ("sample", o));
             });
         });
+
+    let code_bg = Color { r: 0.25, g: 0.45, b: 0.85, a: 0.14 };
+    let quote_bar = Color { r: 0.88, g: 0.62, b: 0.24, a: 0.85 };
+    let note_fills = markdown_line_fills(&s.notes.text, code_bg, quote_bar);
+    let notes_field = text_input(&s.notes, type_::BODY).key("markdown-field").w_full().min_h(116.0).padding(space::S2)
+        .radius(radius::MD).fill(t.card).border(1.0, t.card_border).color(t.text)
+        .line_fills(note_fills)
+        .on_edit(|s: &mut State| &mut s.notes);
+
+    let static_caption = "Static chips: @Gmail and @GitHub";
+    let g0 = static_caption.find("@Gmail").unwrap();
+    let h0 = static_caption.find("@GitHub").unwrap();
+    let static_pills = text(static_caption)
+        .key("static-pills")
+        .font(type_::LABEL)
+        .color(t.text_secondary)
+        .pill_with_image(g0..g0 + "@Gmail".len(), service_pill_style("app:gmail"), s.gmail_logo.clone())
+        .pill_with_image(h0..h0 + "@GitHub".len(), service_pill_style("app:github"), s.github_logo.clone());
+
     let html_out = s.field.to_html();
     let mut root = col().w_full().h_full().padding(space::S6).gap(space::S3).fill(t.bg)
         .on_spellcheck(s.spellcheck, |s: &mut State, on, _| s.spellcheck = on)
         .on_spellcheck_languages(|_: &mut State, _, _| {})
         .child(toolbar)
         .child(field)
+        .child(static_pills)
+        .child(notes_field)
         .child(sample_line)
         .child(text(hit_status(s)).key("hit-offset").font(type_::LABEL).color(t.text_secondary))
         .child(row().gap(space::S2)
@@ -212,12 +359,15 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
 
 fn main() {
     rune::run(AppSpec::<State> {
-        scenes: &[("selected", |s| {
-            s.field = TextEdit::new("Rune copies bold, italic and coloured text.").rich();
-            s.field.focused = true;
-            s.field.set_selection(12, 24);
-        })],
-        ..AppSpec::new("Rich Clipboard", (560.0, 480.0), State::default, view)
+        scenes: &[
+            ("selected", |s| {
+                s.field = TextEdit::new("Rune copies bold, italic and coloured text.").rich();
+                s.field.focused = true;
+                s.field.set_selection(12, 24);
+            }),
+            ("decorations", State::decorations_scene),
+        ],
+        ..AppSpec::new("Rich Clipboard", (560.0, 620.0), State::default, view)
     });
 }
 
@@ -230,7 +380,7 @@ mod tests {
     fn a_rich_paste_shows_its_forms_and_the_field_keeps_the_text() {
         let board = clipboard::memory();
         assert_eq!(board.revision(), 0);
-        let mut rt = Runtime::new(State::default(), view, (560.0, 480.0), Env::new(true, 2.0));
+        let mut rt = Runtime::new(State::default(), view, (560.0, 620.0), Env::new(true, 2.0));
         rt.use_clipboard(&board);
         rt.frame(0.0);
         assert!(rt.find("revision").is_some());
@@ -273,7 +423,7 @@ mod tests {
 
     #[test]
     fn floating_selection_bar_and_byte_offset_hit_test() {
-        let mut rt = Runtime::new(State::default(), view, (560.0, 480.0), Env::new(true, 2.0));
+        let mut rt = Runtime::new(State::default(), view, (560.0, 620.0), Env::new(true, 2.0));
         rt.frame(0.0);
         assert!(rt.find("selection-bar").is_none(), "hidden without a selection");
 
@@ -312,5 +462,17 @@ mod tests {
         let (target, offset) = rt.state.hit.expect("sample click should hit-test offset");
         assert_eq!(target, "sample");
         assert!(SAMPLE_TEXT.is_char_boundary(offset));
+    }
+
+    #[test]
+    fn decorations_scene_renders_pill_logos_rings_and_markdown_line_fills() {
+        let mut s = State::default();
+        s.decorations_scene();
+        let mut rt = Runtime::new(s, view, (560.0, 620.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        assert!(rt.find("markdown-field").is_some());
+        assert!(rt.find("static-pills").is_some());
+        let fills = markdown_line_fills(&rt.state.notes.text, Color::WHITE, Color::WHITE);
+        assert_eq!(fills.len(), 2, "markdown sample produces one code block fill and one quote bar");
     }
 }

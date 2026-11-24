@@ -57,7 +57,7 @@ fn pill_chips_keep_room_and_never_overlap_at_wraps() {
         .enumerate()
         .map(|(k, label)| {
             let start = content.find(label).unwrap() as u32;
-            PillChip { start, end: start + label.len() as u32, icon: (k == 1).then_some(&DOT), bg: None, fg: None, bare: None }
+            PillChip { start, end: start + label.len() as u32, icon: (k == 1).then_some(&DOT), image: None, bg: None, fg: None, ring: None, radius: None, bare: None }
         })
         .collect();
     let scale = 2.0;
@@ -141,7 +141,7 @@ fn a_pill_wider_than_its_line_wraps_inside_it() {
     let label = "@Migrate config loader to the new schema";
     let content = format!("as in {label} did");
     let start = content.find(label).unwrap() as u32;
-    let pills = [PillChip { start, end: start + label.len() as u32, icon: None, bg: None, fg: None, bare: None }];
+    let pills = [PillChip { start, end: start + label.len() as u32, icon: None, image: None, bg: None, fg: None, ring: None, radius: None, bare: None }];
     let scale = 2.0;
     for width in (90..=200).step_by(7) {
         let max = width as f32 * scale;
@@ -420,4 +420,161 @@ fn single_frame_exceeding_one_page_places_every_glyph_across_overflow_pages() {
         let mid = ((ay + px / 2) * ATLAS_SIZE + ax + px / 2) as usize;
         assert_eq!(buf[mid], 255, "glyph at {px}px on page {page} must retain its coverage");
     }
+}
+
+#[test]
+fn pill_chips_apply_custom_radius_clamping_ring_and_leading_images() {
+    static FALLBACK: Icon = Icon { name: "fallback", view: 24.0, body: "<circle cx=\"12\" cy=\"12\" r=\"8\"/>" };
+    let logo = rune_image::pixels::Pixels::new();
+    logo.set(16, 16, vec![255; 16 * 16 * 4]);
+    let ring_color = Color { r: 0.2, g: 0.5, b: 0.9, a: 0.8 };
+    let mut text = TextSystem::default();
+    let style = TextStyle::new(14.0, 400.0);
+    let scale = 2.0;
+
+    // Single-line: default radius (5pt), negative radius (0pt), capsule radius (clamped to h/2),
+    // scaled ring width, and leading Pixels image taking precedence over icon and reserving room.
+    let content = "ping @default @sharp @capsule @logo here";
+    let find = |s: &str| {
+        let a = content.find(s).unwrap() as u32;
+        (a, a + s.len() as u32)
+    };
+    let (d0, d1) = find("@default");
+    let (s0, s1) = find("@sharp");
+    let (c0, c1) = find("@capsule");
+    let (l0, l1) = find("@logo");
+    let pills = [
+        PillChip { start: d0, end: d1, icon: None, image: None, bg: None, fg: None, ring: None, radius: None, bare: None },
+        PillChip { start: s0, end: s1, icon: None, image: None, bg: None, fg: None, ring: Some((ring_color, 0.0)), radius: Some(-3.0), bare: None },
+        PillChip { start: c0, end: c1, icon: None, image: None, bg: None, fg: None, ring: Some((ring_color, 1.5)), radius: Some(999.0), bare: None },
+        PillChip { start: l0, end: l1, icon: Some(&FALLBACK), image: Some(logo.clone()), bg: None, fg: None, ring: Some((ring_color, 1.0)), radius: Some(8.0), bare: None },
+    ];
+    let bare = text.layout_blocks(content, &[], &[], &[], style, scale, None, Alignment::Start);
+    let layout = text.layout_blocks(content, &[], &[], &pills, style, scale, None, Alignment::Start);
+    let pm = PillMetrics::new(14.0);
+    let expected_room = (3.0 * pm.lead(false) + pm.lead(true) + 4.0 * pm.trail()) * scale;
+    assert!((layout.full_width() - bare.full_width() - expected_room).abs() < 4.5, "leading image reserves icon room");
+
+    let (mut chips, mut icons, mut images) = (Vec::new(), Vec::new(), Vec::new());
+    pill_chips_with_images(&layout, &pills, 14.0, scale, [0.0, 0.0], Color::BLACK, &mut chips, &mut icons, &mut images);
+    assert_eq!(chips.len(), 4);
+    assert_eq!(icons.len(), 0, "leading image takes precedence over monochrome icon");
+    assert_eq!(images.len(), 1);
+
+    assert!((chips[0].deco.radius - 10.0).abs() < 0.01);
+    assert_eq!(chips[0].ring, None);
+    assert_eq!(chips[1].deco.radius, 0.0);
+    assert_eq!(chips[1].ring, None);
+    let expected_cap = chips[2].deco.rect[2].min(chips[2].deco.rect[3]) * 0.5;
+    assert!((chips[2].deco.radius - expected_cap).abs() < 0.01);
+    assert_eq!(chips[2].ring, Some((ring_color, 3.0)));
+    assert_eq!(chips[3].ring, Some((ring_color, 2.0)));
+    let (_, px, at) = &images[0];
+    let chip3 = chips[3].deco.rect;
+    assert!(at[0] >= chip3[0] && at[0] + *px <= chip3[0] + chip3[2] + 0.5, "logo {at:?} ({px}px) inside chip {chip3:?}");
+
+    // Wrapped long pill carries both custom radius and ring onto every wrapped segment.
+    let long_label = "@Migrate config loader to the new schema";
+    let wrapped_text = format!("hi {long_label} end");
+    let ws = wrapped_text.find(long_label).unwrap() as u32;
+    let wpills = [PillChip {
+        start: ws,
+        end: ws + long_label.len() as u32,
+        icon: None,
+        image: Some(logo.clone()),
+        bg: None,
+        fg: None,
+        ring: Some((ring_color, 1.0)),
+        radius: Some(999.0),
+        bare: None,
+    }];
+    let wlayout = text.layout_blocks(&wrapped_text, &[], &[], &wpills, style, scale, Some(150.0 * scale), Alignment::Start);
+    let (mut wchips, mut wicons, mut wimages) = (Vec::new(), Vec::new(), Vec::new());
+    pill_chips_with_images(&wlayout, &wpills, 14.0, scale, [0.0, 0.0], Color::BLACK, &mut wchips, &mut wicons, &mut wimages);
+    assert!(wchips.len() >= 2, "long pill wraps across lines");
+    assert_eq!(wimages.len(), 1, "leading image draws only on the first segment");
+    for seg in &wchips {
+        let cap = seg.deco.rect[2].min(seg.deco.rect[3]) * 0.5;
+        assert!((seg.deco.radius - cap).abs() < 0.01, "wrapped segment keeps clamped radius");
+        assert_eq!(seg.ring, Some((ring_color, 2.0)), "wrapped segment keeps scaled ring");
+    }
+
+    // RTL pill puts leading image on the chip's right (start) side.
+    let rtl_text = "שלום דוד היום";
+    let rs = rtl_text.find("דוד").unwrap() as u32;
+    let rpills = [PillChip {
+        start: rs,
+        end: rs + "דוד".len() as u32,
+        icon: None,
+        image: Some(logo),
+        bg: None,
+        fg: None,
+        ring: Some((ring_color, 1.0)),
+        radius: Some(999.0),
+        bare: None,
+    }];
+    let rlayout = text.layout_blocks(rtl_text, &[], &[], &rpills, style, scale, None, Alignment::Start);
+    let (mut rchips, mut ricons, mut rimages) = (Vec::new(), Vec::new(), Vec::new());
+    pill_chips_with_images(&rlayout, &rpills, 14.0, scale, [0.0, 0.0], Color::BLACK, &mut rchips, &mut ricons, &mut rimages);
+    assert_eq!(rchips.len(), 1);
+    assert_eq!(rimages.len(), 1);
+    let rc = rchips[0].deco.rect;
+    let (_, rpx, rat) = &rimages[0];
+    assert!(rat[0] >= rc[0] && rat[0] + *rpx <= rc[0] + rc[2] + 0.5, "RTL logo inside chip");
+    assert!(rat[0] + *rpx * 0.5 > rc[0] + rc[2] * 0.5, "RTL logo sits on the right (start) half of the chip: {rat:?} in {rc:?}");
+}
+
+#[test]
+fn text_flow_line_span_covers_single_wrapped_multiline_and_blank_lines() {
+    let mut text = TextSystem::default();
+    let style = TextStyle::new(14.0, 400.0).lh(20.0);
+    let scale = 2.0;
+    let line_px = style.line_px() * scale;
+
+    let wrapped = "alpha beta gamma delta epsilon zeta";
+    let single = text.layout_blocks(wrapped, &[], &[], &[], style, scale, Some(90.0 * scale), Alignment::Start);
+    assert!(single.len() >= 3);
+    let flow = TextFlow::Single(&single);
+    assert_eq!(flow.line_span(5, 5, line_px), None, "empty range returns None");
+    assert_eq!(flow.line_span(10, 5, line_px), None, "inverted range returns None");
+    let first_r = single.get(0).unwrap().text_range();
+    let last_r = single.get(single.len() - 1).unwrap().text_range();
+    let (t0, b0) = flow.line_span(first_r.start, first_r.end, line_px).unwrap();
+    let (t_all, b_all) = flow.line_span(0, wrapped.len(), line_px).unwrap();
+    assert!((t_all - t0).abs() < 0.5);
+    assert!(b_all > b0 + line_px * 0.5, "multi-line span grows vertically: {b0} -> {b_all}");
+    let (tl, bl) = flow.line_span(last_r.start, last_r.end, line_px).unwrap();
+    assert!(tl >= b0 - 0.5 && (bl - b_all).abs() < 0.5);
+
+    let doc = "intro\n```\nlet a = 1;\n\nlet b = 2;\n```\noutro";
+    let input = TextInput {
+        content: doc,
+        spans: &[],
+        blocks: &[],
+        pills: &[],
+        style,
+        shape_key: None,
+        wrap_anywhere: false,
+        pretty: false,
+        redacted: false,
+        by_line: false,
+        by_paragraph: true,
+        dir: TextDir::Plaintext(None),
+    };
+    let tl = text.layout_text(&input, true, scale, Some(300.0 * scale), Alignment::Start, None);
+    let pflow = tl.view();
+    let code_start = doc.find("```").unwrap();
+    let code_end = doc.rfind("```").unwrap() + 3;
+    let intro_span = pflow.line_span(0, 5, line_px).unwrap();
+    let intro_with_nl = pflow.line_span(0, 6, line_px).unwrap();
+    assert_eq!(intro_span, intro_with_nl, "trailing newline stays on the same line");
+    let code_span = pflow.line_span(code_start, code_end, line_px).unwrap();
+    let outro_start = doc.find("outro").unwrap();
+    let outro_span = pflow.line_span(outro_start, doc.len(), line_px).unwrap();
+    assert!(code_span.0 >= intro_span.1 - 0.5);
+    assert!(outro_span.0 >= code_span.1 - 0.5);
+    assert!((code_span.1 - code_span.0) >= 4.5 * line_px, "code block height: {:?}", code_span);
+    let blank_at = doc.find("\n\n").unwrap() + 1;
+    let blank_span = pflow.line_span(blank_at, blank_at + 1, line_px).unwrap();
+    assert!(blank_span.0 > code_span.0 && blank_span.1 < code_span.1);
 }

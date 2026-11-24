@@ -95,7 +95,7 @@ impl TextSystem {
                 let (lead, trail) = match (&p.bare, replace) {
                     (_, Some(r)) => (r.width, 0.0),
                     (Some(b), None) => (b.size + b.gap, 0.0),
-                    (None, None) => (pm.lead(p.icon.is_some()), pm.trail()),
+                    (None, None) => (pm.lead(p.has_lead_visual()), pm.trail()),
                 };
                 let stands = replace.map(|r| (((r.ascent + r.descent) * scale).round(), (r.ascent * scale).round()));
                 (i, r, (lead * scale).round() as u32, (trail * scale).round() as u32, stands)

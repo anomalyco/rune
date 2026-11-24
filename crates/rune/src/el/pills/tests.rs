@@ -332,4 +332,112 @@ mod live {
         assert_eq!(placed_rgba(&rt), Some(green), "cached: advances to frame 1");
         assert!(rt.wake_deadline().is_some(), "cached: keeps arming wakes");
     }
+
+    #[test]
+    fn pill_style_stays_copy_and_const_and_paints_ring_radius_and_logo() {
+        const BORDER: crate::Color = crate::Color { r: 0.2, g: 0.5, b: 0.9, a: 1.0 };
+        const BG: crate::Color = crate::Color { r: 0.2, g: 0.5, b: 0.9, a: 0.15 };
+        const FG: crate::Color = crate::Color { r: 0.1, g: 0.3, b: 0.8, a: 1.0 };
+        const CAPSULE: PillStyle = PillStyle::new().bg(BG).fg(FG).ring(BORDER, 1.0).radius(999.0);
+        fn assert_copy<T: Copy>(_: T) {}
+        assert_copy(CAPSULE);
+        let copy_a = CAPSULE;
+        let copy_b = copy_a;
+        assert_eq!(copy_b.ring, Some((BORDER, 1.0)));
+        assert_eq!(copy_b.radius, Some(999.0));
+        assert_eq!(PillStyle::new().ring(BORDER, 0.0).ring, None);
+        assert_eq!(PillStyle::new().ring(BORDER, -1.0).ring, None);
+        assert_eq!(PillStyle::new().ring(BORDER, f32::NAN).ring, None);
+        assert_eq!(PillStyle::new().radius(-4.0).radius, Some(0.0));
+        assert_eq!(PillStyle::new().radius(f32::NAN).radius, Some(0.0));
+        assert_eq!(PillStyle::new().radius(0.0).radius, Some(0.0));
+
+        let logo = super::image(16, 16);
+        let static_el = text("open @Gmail today").pill_with_image(5..11, CAPSULE, logo.clone());
+        let chips = &static_el.text.as_ref().unwrap().cold.pills;
+        assert_eq!(chips.len(), 1);
+        assert_eq!(chips[0].ring, Some((BORDER, 1.0)));
+        assert_eq!(chips[0].radius, Some(999.0));
+        assert!(chips[0].image.is_some());
+        assert!(chips[0].icon.is_none());
+
+        let ignored_on_field = crate::el::text_input(&crate::TextEdit::new("open @Gmail"), TextStyle::new(14.0, 400.0))
+            .pill_with_image(5..11, CAPSULE, logo.clone());
+        assert!(ignored_on_field.text.as_ref().unwrap().cold.pills.is_empty());
+
+        struct FieldState {
+            edit: crate::TextEdit,
+            logo: crate::Pixels,
+            use_style: bool,
+        }
+        let mut edit = crate::TextEdit::new("send via ").rich();
+        edit.insert_pill("app:gmail", "@Gmail");
+        edit.insert(" now");
+        let view = |s: &FieldState, _: &mut Cx<FieldState>| {
+            let mut field = crate::el::text_input(&s.edit, TextStyle::new(14.0, 400.0).lh(20.0))
+                .key("field")
+                .w(320.0)
+                .h(40.0);
+            if s.use_style {
+                let px = s.logo.clone();
+                field = field
+                    .pill_style(|_| CAPSULE)
+                    .pill_image(move |id| (id == "app:gmail").then(|| px.clone()));
+            }
+            col().key("root").padding(8.0).child(field)
+        };
+        let mut rt_plain = Runtime::new(
+            FieldState { edit: edit.clone(), logo: logo.clone(), use_style: false },
+            view,
+            (360.0, 80.0),
+            Env::new(true, 1.0),
+        );
+        rt_plain.frame(0.0);
+        let a11y_plain = rt_plain.accessibility_tree();
+
+        let mut rt = Runtime::new(
+            FieldState { edit, logo: logo.clone(), use_style: true },
+            view,
+            (360.0, 80.0),
+            Env::new(true, 1.0),
+        );
+        rt.frame(0.0);
+        let a11y_styled = rt.accessibility_tree();
+
+        let field_value = |tree: &accesskit::TreeUpdate| {
+            tree.nodes.iter().find(|(_, n)| n.role() == accesskit::Role::MultilineTextInput || n.role() == accesskit::Role::TextInput)
+                .and_then(|(_, n)| n.value().map(str::to_owned))
+        };
+        assert_eq!(field_value(&a11y_styled), field_value(&a11y_plain));
+
+        let ringed = rt.instances.iter().find(|q| q.params[1] == crate::render::KIND_RECT && q.params[0] > 0.5 && q.border[3] > 0.5)
+            .expect("pill with PillStyle::ring emits a bordered rect instance");
+        assert!((ringed.params[0] - 1.0).abs() < 0.01);
+        assert!((ringed.radii[0] - ringed.rect[3] * 0.5).abs() < 0.5, "capsule radius clamped to half height: {:?}", ringed);
+
+        let img = rt.instances.iter().find(|q| q.params[1] == crate::render::KIND_IMAGE).expect("pill_image emits a KIND_IMAGE instance");
+        assert!(
+            img.rect[0] >= ringed.rect[0] - 0.5
+                && img.rect[0] + img.rect[2] <= ringed.rect[0] + ringed.rect[2] + 0.5
+                && img.rect[1] >= ringed.rect[1] - 0.5
+                && img.rect[1] + img.rect[3] <= ringed.rect[1] + ringed.rect[3] + 0.5,
+            "logo {:?} sits inside pill chip {:?}", img.rect, ringed.rect
+        );
+
+        let mut rt_static = Runtime::new(
+            logo,
+            |px: &crate::Pixels, _: &mut Cx<crate::Pixels>| {
+                col().key("root").padding(8.0).child(
+                    text("open @Gmail now")
+                        .font(TextStyle::new(14.0, 400.0).lh(20.0))
+                        .pill_with_image(5..11, CAPSULE, px.clone()),
+                )
+            },
+            (320.0, 60.0),
+            Env::new(true, 1.0),
+        );
+        rt_static.frame(0.0);
+        assert!(rt_static.instances.iter().any(|q| q.params[1] == crate::render::KIND_RECT && q.params[0] > 0.5 && q.border[3] > 0.5));
+        assert!(rt_static.instances.iter().any(|q| q.params[1] == crate::render::KIND_IMAGE));
+    }
 }

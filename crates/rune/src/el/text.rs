@@ -57,6 +57,7 @@ impl El {
                 cold.uncopied.clear();
                 cold.strikes.clear();
                 cold.highlights.clear();
+                cold.line_fills.clear();
                 cold.pills.clear();
                 cold.rings.clear();
                 cold.blocks.clear();
@@ -175,6 +176,39 @@ impl El {
         }
         self
     }
+    /// A display-only full-width line fill and/or left vertical bar ([`LineFill`]) painted under
+    /// every visual line intersected by its UTF-8 byte range (see [`El::line_fills`]).
+    pub fn line_fill(self, fill: LineFill) -> Self {
+        self.line_fills([fill])
+    }
+    /// Display-only full-width line fills and left bars ([`LineFill`]) painted under text across
+    /// the field's full width without mutating [`TextEdit`] or undo history (for fenced code
+    /// blocks, block quotes, and similar plain-text decorations). Calling this more than once
+    /// appends to earlier fills. On a [`text_input`], byte offsets are relative to `edit.text`
+    /// and shift automatically across any active IME preedit, as [`El::decorations`] and
+    /// [`El::strikes`] do.
+    ///
+    /// ```ignore
+    /// text_input(&s.edit, body)
+    ///     .line_fills([LineFill::new(code_start, code_end).bg(code_bg)])
+    ///     .line_fills([LineFill::new(quote_start, quote_end).left_bar(2.0, quote_bar)])
+    /// ```
+    pub fn line_fills(mut self, fills: impl IntoIterator<Item = LineFill>) -> Self {
+        if let Some(inp) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
+            let before = inp.line_fills.len();
+            inp.line_fills.extend(fills.into_iter().filter(LineFill::is_visible));
+            if inp.line_fills.len() != before {
+                self.sync_input_rich();
+            }
+        } else if let Some(t) = &mut self.text {
+            for f in fills {
+                if f.is_visible() {
+                    t.cold.line_fills.push(f);
+                }
+            }
+        }
+        self
+    }
     /// Set the visual palette for rich inline marks (`code`, `link`) and paragraph blocks
     /// (`quote`, `code block`, list markers) on a [`text_input`].
     pub fn rich_style(mut self, style: crate::edit::RichStyle) -> Self {
@@ -210,6 +244,26 @@ impl El {
     pub fn pill_icon(mut self, icon: impl Fn(&str) -> Option<&'static crate::Icon> + 'static) -> Self {
         if let Some(inp) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
             inp.pill_icon = Some(Rc::new(icon));
+            self.sync_input_pills();
+            self.sync_input_rich();
+        }
+        self
+    }
+    /// A leading full-colour [`Pixels`](crate::Pixels) image (such as a service logo or avatar)
+    /// for each [`Mark::Pill`](crate::Mark::Pill) chip in a [`text_input`], by the pill's id
+    /// (`None`: no image). Drawn in the leading icon's slot and room, scaled to fit while keeping
+    /// its aspect ratio, without tinting. When `Some`, it takes precedence over
+    /// [`PillStyle::icon`] and [`El::pill_icon`].
+    ///
+    /// ```ignore
+    /// text_input(&s.draft, body).pill_image({
+    ///     let logos = s.logos.clone();
+    ///     move |id| logos.get(id).cloned()
+    /// })
+    /// ```
+    pub fn pill_image(mut self, image: impl Fn(&str) -> Option<crate::Pixels> + 'static) -> Self {
+        if let Some(inp) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
+            inp.pill_image = Some(Rc::new(image));
             self.sync_input_pills();
             self.sync_input_rich();
         }
@@ -258,18 +312,28 @@ impl El {
             .into_iter()
             .map(|(start, end, id)| {
                 let st = inp.pill_style.as_ref().map(|f| f(id)).unwrap_or_default();
-                let icon = st.icon.or_else(|| inp.pill_icon.as_ref().and_then(|f| f(id)));
-                crate::text::PillChip { start, end, icon, bg: st.bg, fg: st.fg, bare: None }
+                let image = inp.pill_image.as_ref().and_then(|f| f(id));
+                let icon = if image.is_some() {
+                    None
+                } else {
+                    st.icon.or_else(|| inp.pill_icon.as_ref().and_then(|f| f(id)))
+                };
+                crate::text::PillChip { start, end, icon, image, bg: st.bg, fg: st.fg, ring: st.ring, radius: st.radius, bare: None }
             })
             .collect();
     }
     pub(crate) fn sync_input_rich(&mut self) {
         let (Some(inp), Some(t)) = (&self.cold.input, &mut self.text) else { return };
         t.cold.rich_style = Some(inp.rich_style);
-        if inp.edit.is_plain() && inp.decorations.is_empty() && inp.decoration_strikes.is_empty() {
+        if inp.edit.is_plain()
+            && inp.decorations.is_empty()
+            && inp.decoration_strikes.is_empty()
+            && inp.line_fills.is_empty()
+        {
             // A plain field lays out and draws exactly as before rich editing existed.
             t.spans.clear();
             t.cold.strikes.clear();
+            t.cold.line_fills.clear();
             t.cold.blocks.clear();
             t.cold.soft_breaks.clear();
             t.cold.pills.clear();
@@ -300,8 +364,21 @@ impl El {
                 s.underline = Some(s.color.unwrap_or(t.color));
             }
         }
+        let mut line_fills = Vec::with_capacity(inp.line_fills.len());
+        for &fill in &inp.line_fills {
+            if !fill.is_visible() {
+                continue;
+            }
+            let mapped = inp.edit.map_range_to_display(fill.start as usize, fill.end as usize);
+            if let (Some(&(ds, _)), Some(&(_, de))) = (mapped.first(), mapped.last())
+                && ds < de
+            {
+                line_fills.push(LineFill { start: ds, end: de, ..fill });
+            }
+        }
         t.spans = flat;
         t.cold.strikes = strikes;
+        t.cold.line_fills = line_fills;
         t.cold.blocks = blocks;
         t.cold.soft_breaks = inp.edit.soft_breaks().to_vec();
         // Replace links generated from `Mark::Link` while keeping any explicit `.link(...)` calls.

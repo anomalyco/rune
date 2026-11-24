@@ -190,6 +190,66 @@ pub(in crate::runtime) fn emit_block_decorations(
     }
 }
 
+/// Full-width line background fills and left bars ([`El::line_fills`]) under glyphs.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::runtime) fn emit_line_fills(
+    instances: &mut Vec<Instance>,
+    fills: &[crate::el::LineFill],
+    spec: &TextSpec,
+    layout: TextFlow<'_>,
+    origin: [f32; 2],
+    (x0, x1): (f32, f32),
+    s: f32,
+    tk: f32,
+    glide: [f32; 2],
+    o: f32,
+    srgb: bool,
+    clip: [f32; 4],
+    fade: [f32; 4],
+) {
+    let box_w = (x1 - x0).max(layout.full_width() * tk);
+    if box_w <= 0.0 || fills.is_empty() {
+        return;
+    }
+    let line_px = spec.style.line_px() * s;
+    for &fill in fills {
+        if !fill.is_visible() {
+            continue;
+        }
+        let Some((t0, b0)) = layout.line_span(fill.start as usize, fill.end as usize, line_px) else {
+            continue;
+        };
+        let top = origin[1] + t0 * tk;
+        let bot = origin[1] + b0 * tk;
+        let height = bot - top;
+        if height <= 0.0 || top + glide[1] >= clip[3] || bot + glide[1] <= clip[1] {
+            continue;
+        }
+        if let Some(bg) = fill.bg {
+            let radius = (fill.radius * s * tk).min(box_w.min(height) * 0.5);
+            instances.push(rect_inst(
+                [x0 + glide[0], top + glide[1], box_w, height],
+                premul(bg, o, srgb),
+                radius,
+                clip,
+                fade,
+            ));
+        }
+        if let Some((width, color)) = fill.left_bar {
+            let bar_w = if tk == 1.0 { (width * s).round().max(1.0) } else { (width * s * tk).max(1.0 * tk) };
+            let inset_y = (if tk == 1.0 { (2.0 * s).round() } else { 2.0 * s * tk }).min(height * 0.25);
+            let bar_h = (height - 2.0 * inset_y).max(1.0).min(height);
+            instances.push(rect_inst(
+                [x0 + glide[0], top + inset_y + glide[1], bar_w, bar_h],
+                premul(color, o, srgb),
+                bar_w * 0.5,
+                clip,
+                fade,
+            ));
+        }
+    }
+}
+
 /// Pixel caret and logical-point IME area use the same shaped cursor geometry.
 pub(in crate::runtime) fn input_caret(n: &Node, r: [f32; 4], scale: f32, s: f32, gliding: bool, scrolls: &mut HashMap<String, f32>) -> Option<([f32; 4], [f32; 4])> {
     let (spec, laid, input) = (n.text.as_ref()?, n.text_layout.as_ref()?, n.input.as_ref()?);

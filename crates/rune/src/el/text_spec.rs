@@ -109,6 +109,8 @@ pub(crate) struct TextCold {
     pub(crate) strikes: Vec<(u32, u32, Option<Color>)>,
     /// Paint-only highlight byte ranges of `content`.
     pub(crate) highlights: Vec<crate::text::TextHighlight>,
+    /// Display-only full-width line fills and left bars over `content` (see [`El::line_fills`](crate::El::line_fills)).
+    pub(crate) line_fills: Vec<LineFill>,
     /// Per-paragraph [`Block`](crate::Block) attributes for `content`.
     pub(crate) blocks: Vec<crate::edit::Block>,
     /// Line indices (`> 0`) created by `Shift+Return` (`<br>`).
@@ -140,6 +142,7 @@ impl Empty for TextCold {
         span_radius: crate::text::SPAN_RADIUS,
         strikes: Vec::new(),
         highlights: Vec::new(),
+        line_fills: Vec::new(),
         blocks: Vec::new(),
         soft_breaks: Vec::new(),
         pills: Vec::new(),
@@ -367,6 +370,7 @@ impl TextSpec {
             wipe_links(&mut cold.links);
             cold.rings.clear();
             cold.strikes.clear();
+            cold.line_fills.clear();
             cold.blocks.clear();
             cold.soft_breaks.clear();
             cold.pills.clear();
@@ -421,9 +425,76 @@ impl TextSpec {
             for h in &mut cold.highlights {
                 (h.start, h.end) = (source.shown(h.start, false), source.shown(h.end, true));
             }
+            for f in &mut cold.line_fills {
+                (f.start, f.end) = (source.shown(f.start, false), source.shown(f.end, true));
+            }
         }
         self.content = shown;
         self.source = Some(Box::new(source));
+    }
+}
+
+/// A display-only full-width line background fill and/or left vertical bar over the visual lines
+/// intersecting UTF-8 bytes `start..end` of a [`text_input`](crate::text_input) or
+/// [`text`](crate::text) element (for fenced code blocks, block quotes, diff hunks, and similar
+/// line-level decorations).
+///
+/// Attach with [`El::line_fill`](crate::El::line_fill) or [`El::line_fills`](crate::El::line_fills).
+/// Drawn under the text across the full field width without altering [`TextEdit`](crate::TextEdit),
+/// undo history, selection, or line wrapping.
+///
+/// ```
+/// use rune::{Color, LineFill};
+///
+/// let code = LineFill::new(0, 24).bg(Color { r: 1.0, g: 1.0, b: 1.0, a: 0.06 });
+/// let quote = LineFill::new(25, 60).left_bar(2.0, Color { r: 0.6, g: 0.6, b: 0.6, a: 0.8 });
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LineFill {
+    pub(crate) start: u32,
+    pub(crate) end: u32,
+    pub(crate) bg: Option<Color>,
+    pub(crate) left_bar: Option<(f32, Color)>,
+    pub(crate) radius: f32,
+}
+
+impl LineFill {
+    /// A line decoration covering every visual line intersected by UTF-8 bytes `start..end`.
+    ///
+    /// The default corner radius for [`Self::bg`] is `6.0` points, matching rich `Block::Code`.
+    pub const fn new(start: usize, end: usize) -> Self {
+        let s = if start > u32::MAX as usize { u32::MAX } else { start as u32 };
+        let e = if end > u32::MAX as usize { u32::MAX } else { end as u32 };
+        Self { start: s, end: e, bg: None, left_bar: None, radius: 6.0 }
+    }
+
+    /// Full-width rounded background fill behind the covered lines.
+    pub const fn bg(mut self, color: Color) -> Self {
+        self.bg = Some(color);
+        self
+    }
+
+    /// Vertical bar `width` points wide along the left edge of the covered lines (ignored when
+    /// `width` is not finite and positive).
+    pub const fn left_bar(mut self, width: f32, color: Color) -> Self {
+        self.left_bar = if width > 0.0 && width.is_finite() { Some((width, color)) } else { None };
+        self
+    }
+
+    /// Corner radius in points for [`Self::bg`] (`6.0` by default). Non-finite or negative
+    /// values become `0.0`.
+    pub const fn radius(mut self, radius: f32) -> Self {
+        self.radius = if radius.is_finite() && radius > 0.0 { radius } else { 0.0 };
+        self
+    }
+
+    /// The UTF-8 byte range this line fill covers.
+    pub const fn range(&self) -> std::ops::Range<usize> {
+        self.start as usize..self.end as usize
+    }
+
+    pub(crate) const fn is_visible(&self) -> bool {
+        self.start < self.end && (self.bg.is_some() || self.left_bar.is_some())
     }
 }
 

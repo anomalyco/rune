@@ -36,8 +36,59 @@ impl El {
                 continue;
             }
             let at = t.cold.pills.partition_point(|p| p.start < start);
-            t.cold.pills.insert(at, PillChip { start, end, icon: st.icon, bg: st.bg, fg: st.fg, bare: None });
+            t.cold.pills.insert(at, PillChip {
+                start,
+                end,
+                icon: st.icon,
+                image: None,
+                bg: st.bg,
+                fg: st.fg,
+                ring: st.ring,
+                radius: st.radius,
+                bare: None,
+            });
         }
+        t.spans = with_pill_colors(&t.spans, &t.cold.pills);
+        self
+    }
+
+    /// [`El::pill`] with a leading full-colour [`Pixels`](crate::Pixels) image (such as a
+    /// service logo or avatar) drawn in the leading icon's slot and room, scaled to fit without
+    /// tinting. Takes precedence over `style.icon(..)`. On a field this does nothing: attach
+    /// [`El::pill_image`] instead.
+    ///
+    /// ```ignore
+    /// text("open @Gmail now").pill_with_image(
+    ///     5..11,
+    ///     PillStyle::new().bg(chip).ring(border, 1.0).radius(999.0),
+    ///     gmail_logo,
+    /// )
+    /// ```
+    pub fn pill_with_image(mut self, range: Range<usize>, style: PillStyle, image: crate::Pixels) -> Self {
+        if self.cold.input.is_some() {
+            return self;
+        }
+        let Some(t) = &mut self.text else { return self };
+        let ok = range.start < range.end
+            && t.content.is_char_boundary(range.start)
+            && t.content.is_char_boundary(range.end)
+            && range.end <= t.content.len();
+        let (start, end) = (range.start as u32, range.end as u32);
+        if !ok || t.cold.pills.iter().any(|p| p.start < end && start < p.end) {
+            return self;
+        }
+        let at = t.cold.pills.partition_point(|p| p.start < start);
+        t.cold.pills.insert(at, PillChip {
+            start,
+            end,
+            icon: None,
+            image: Some(image),
+            bg: style.bg,
+            fg: style.fg,
+            ring: style.ring,
+            radius: style.radius,
+            bare: None,
+        });
         t.spans = with_pill_colors(&t.spans, &t.cold.pills);
         self
     }
@@ -70,7 +121,7 @@ impl El {
         let at = t.cold.pills.partition_point(|p| p.start < start);
         let InlineIcon { icon, image, size, gap, radius, color } = icon;
         let bare = Some(Box::new(BareIcon { size, gap, radius, image, replace: None }));
-        t.cold.pills.insert(at, PillChip { start, end, icon, bg: None, fg: color, bare });
+        t.cold.pills.insert(at, PillChip { start, end, icon, image: None, bg: None, fg: color, ring: None, radius: None, bare });
         self
     }
 
@@ -104,7 +155,7 @@ impl El {
         let InlineImage { pixels, width, ascent, descent, bleed } = image;
         let replace = Some(Replace { width, ascent, descent, bleed });
         let bare = Some(Box::new(BareIcon { size: 0.0, gap: 0.0, radius: 0.0, image: Some(pixels), replace }));
-        t.cold.pills.insert(at, PillChip { start, end, icon: None, bg: None, fg: None, bare });
+        t.cold.pills.insert(at, PillChip { start, end, icon: None, image: None, bg: None, fg: None, ring: None, radius: None, bare });
         self
     }
 }

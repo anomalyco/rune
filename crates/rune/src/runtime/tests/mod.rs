@@ -17,6 +17,7 @@ mod input_clipboard;
 mod layout_hover;
 mod layout_reads;
 mod layout_rows;
+mod line_fills;
 mod loop_sleep;
 mod matched_scroll;
 mod matched_zoom;

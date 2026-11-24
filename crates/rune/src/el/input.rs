@@ -26,8 +26,11 @@ pub struct InputSpec {
     pub(crate) decorations: Vec<Span>,
     /// [`El::strike`] ranges over `edit.text`, mapped onto the drawn text with the spans.
     pub(crate) decoration_strikes: Vec<(u32, u32, Option<Color>)>,
+    /// [`El::line_fills`] ranges over `edit.text`, mapped onto the drawn text with the spans.
+    pub(crate) line_fills: Vec<LineFill>,
     pub(crate) rich_style: crate::edit::RichStyle,
     pub(crate) pill_icon: Option<PillIconFn>,
+    pub(crate) pill_image: Option<PillImageFn>,
     pub(crate) pill_style: Option<PillStyleFn>,
     pub(crate) on_pill_secondary: Option<PillSecondaryFn>,
     pub(crate) access: Option<EditFn>,
@@ -90,8 +93,10 @@ pub fn text_input(edit: &TextEdit, style: TextStyle) -> El {
         revealed_override: None,
         decorations: Vec::new(),
         decoration_strikes: Vec::new(),
+        line_fills: Vec::new(),
         rich_style: crate::edit::RichStyle::default(),
         pill_icon: None,
+        pill_image: None,
         pill_style: None,
         on_pill_secondary: None,
         access: None,

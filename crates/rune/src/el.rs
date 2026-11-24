@@ -78,6 +78,7 @@ pub(crate) use scroll::{AtBottomFn, ScrollAxes, ScrollEdges, VisibleRowsFn};
 pub use selection_style::SelectionStyle;
 pub(crate) use sticky::{Sticky, StickyEdge};
 pub(crate) use text_spec::{Elide, TextDir, TextDirEvent, step_text_dir, wipe_links, wipe_string};
+pub use text_spec::LineFill;
 pub use text_spec::TextSpec;
 pub(crate) use tx::{Commit, FocusAsk, MotionSource, SelectRequest, TraceCalls};
 pub use tx::{Shell, Tx};
@@ -149,23 +150,31 @@ pub(crate) struct PasteFn {
 }
 /// A pill's leading icon by its id; see [`El::pill_icon`].
 pub(crate) type PillIconFn = Rc<dyn Fn(&str) -> Option<&'static crate::Icon>>;
+/// A pill's leading full-colour image by its id; see [`El::pill_image`].
+pub(crate) type PillImageFn = Rc<dyn Fn(&str) -> Option<crate::Pixels>>;
 /// A pill's look by its id; see [`El::pill_style`].
 pub(crate) type PillStyleFn = Rc<dyn Fn(&str) -> PillStyle>;
 pub(crate) type PillSecondaryFn = Rc<dyn Fn(crate::states::States<'_>, &str, PointerPress, &mut Tx) -> bool>;
 
 /// How one [`Mark::Pill`](crate::Mark::Pill) chip looks: any part left unset falls back to
 /// [`El::pill_colors`] and [`El::pill_icon`], then the field's defaults. Build one with
-/// `PillStyle::default().bg(..).icon(..)`.
+/// `PillStyle::new().bg(..).ring(..).radius(..)`.
+///
+/// For a full-colour leading logo ([`Pixels`](crate::Pixels)) without giving up `Copy` or
+/// `const` construction on `PillStyle`, attach [`El::pill_image`] on a `text_input` or
+/// [`El::pill_with_image`] on static text.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PillStyle {
     pub(crate) bg: Option<Color>,
     pub(crate) fg: Option<Color>,
     pub(crate) icon: Option<&'static crate::Icon>,
+    pub(crate) ring: Option<(Color, f32)>,
+    pub(crate) radius: Option<f32>,
 }
 
 impl PillStyle {
     pub const fn new() -> Self {
-        Self { bg: None, fg: None, icon: None }
+        Self { bg: None, fg: None, icon: None, ring: None, radius: None }
     }
     /// The chip's colour.
     pub const fn bg(mut self, bg: Color) -> Self {
@@ -180,6 +189,35 @@ impl PillStyle {
     /// The leading icon, in the label's colour.
     pub const fn icon(mut self, icon: &'static crate::Icon) -> Self {
         self.icon = Some(icon);
+        self
+    }
+    /// An inset `color` border ring `width` points wide around the chip (ignored when `width`
+    /// is not finite and positive), matching [`LinkPaint::ring`](crate::text::LinkPaint::ring)
+    /// and [`TextHighlight::ring`](crate::text::TextHighlight::ring).
+    ///
+    /// ```
+    /// use rune::{Color, PillStyle};
+    ///
+    /// const MENTION: PillStyle = PillStyle::new()
+    ///     .bg(Color { r: 0.2, g: 0.4, b: 0.9, a: 0.15 })
+    ///     .ring(Color { r: 0.2, g: 0.4, b: 0.9, a: 0.6 }, 1.0)
+    ///     .radius(999.0);
+    /// ```
+    pub const fn ring(mut self, color: Color, width: f32) -> Self {
+        self.ring = if width > 0.0 && width.is_finite() { Some((color, width)) } else { None };
+        self
+    }
+    /// Corner radius of the chip in points (default `5.0`), clamped to half the chip's height
+    /// at paint time as CSS `border-radius` does. Non-finite or negative values become `0.0`.
+    /// Pass a large value such as `999.0` for a full capsule shape.
+    ///
+    /// ```
+    /// use rune::PillStyle;
+    ///
+    /// const CAPSULE: PillStyle = PillStyle::new().radius(999.0);
+    /// ```
+    pub const fn radius(mut self, points: f32) -> Self {
+        self.radius = Some(if points.is_finite() && points > 0.0 { points } else { 0.0 });
         self
     }
 }

@@ -334,7 +334,7 @@ fn rtl_blocks_and_pills_preserve_existing_deferral_limits() {
     assert!(!as_paragraphs(&blk_tl).waiting(), "non-Paragraph blocks must not defer");
 
     // Pills disable deferral.
-    let pills = [PillChip { start: 0, end: 4, icon: None, bg: None, fg: None, bare: None }];
+    let pills = [PillChip { start: 0, end: 4, icon: None, image: None, bg: None, fg: None, ring: None, radius: None, bare: None }];
     let mut with_pill = rich_input(&content, &spans, style, true, TextDir::Auto);
     with_pill.pills = &pills;
     let pill_tl = ts.layout_text(&with_pill, false, scale, max_w, Alignment::Start, None);

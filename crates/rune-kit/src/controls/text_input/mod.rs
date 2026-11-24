@@ -61,9 +61,25 @@ macro_rules! rich_forwarders {
             self.edits.visual(move |e| e.rich_style(style));
             self
         }
+        /// See [`El::line_fill`](rune::El::line_fill).
+        pub fn line_fill(mut self, fill: rune::LineFill) -> Self {
+            self.edits.visual(move |e| e.line_fill(fill));
+            self
+        }
+        /// See [`El::line_fills`](rune::El::line_fills).
+        pub fn line_fills(mut self, fills: impl IntoIterator<Item = rune::LineFill>) -> Self {
+            let fills: Vec<rune::LineFill> = fills.into_iter().collect();
+            self.edits.visual(move |e| e.line_fills(fills));
+            self
+        }
         /// See [`El::pill_icon`](rune::El::pill_icon).
         pub fn pill_icon(mut self, icon: impl Fn(&str) -> Option<&'static Icon> + 'static) -> Self {
             self.edits.visual(move |e| e.pill_icon(icon));
+            self
+        }
+        /// See [`El::pill_image`](rune::El::pill_image).
+        pub fn pill_image(mut self, image: impl Fn(&str) -> Option<rune::Pixels> + 'static) -> Self {
+            self.edits.visual(move |e| e.pill_image(image));
             self
         }
         /// See [`El::pill_style`](rune::El::pill_style).

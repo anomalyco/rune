@@ -137,6 +137,8 @@ pub use layout::pill_chips::bare_icons;
 #[doc(hidden)]
 pub use layout::pill_chips::pill_chips;
 #[doc(hidden)]
+pub use layout::pill_chips::pill_chips_with_images;
+#[doc(hidden)]
 pub use layout::pretty::pretty_wrap;
 pub use layout::pretty::set_pretty_wrap;
 pub use layout::rich::RichLayoutOptions;

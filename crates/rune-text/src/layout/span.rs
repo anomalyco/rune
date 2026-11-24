@@ -117,9 +117,25 @@ pub struct PillChip {
     pub start: u32,
     pub end: u32,
     pub icon: Option<&'static Icon>,
+    pub image: Option<rune_image::pixels::Pixels>,
     pub bg: Option<Color>,
     pub fg: Option<Color>,
+    pub ring: Option<(Color, f32)>,
+    pub radius: Option<f32>,
     pub bare: Option<Box<BareIcon>>,
+}
+
+impl PillChip {
+    /// Whether this chip or inline icon holds a Pixels image.
+    #[doc(hidden)]
+    pub fn has_image(&self) -> bool {
+        self.image.is_some() || self.bare.as_ref().is_some_and(|b| b.image.is_some())
+    }
+
+    /// Whether a non-bare chip reserves leading room for an icon or image.
+    pub(crate) fn has_lead_visual(&self) -> bool {
+        self.icon.is_some() || self.image.is_some()
+    }
 }
 
 /// An inline icon's room and look in points (see `InlineIcon`).
