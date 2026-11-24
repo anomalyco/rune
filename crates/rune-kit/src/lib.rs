@@ -72,6 +72,7 @@ pub use controls::segmented::SegmentedControl;
 pub use controls::shortcut_recorder::ShortcutRecorder;
 pub use controls::shortcut_recorder::ShortcutRecorderState;
 pub use controls::shortcut_recorder::shortcut_error_message;
+pub use controls::slider::Slider;
 pub use controls::switch::Switch;
 pub use controls::text_input::TextArea;
 pub use controls::text_input::TextField;

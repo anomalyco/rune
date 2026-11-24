@@ -171,3 +171,26 @@ fn a_sideways_wheel_over_a_bar_scrolls_the_viewport_it_follows() {
         assert_eq!(along.scroll.scrolls[&id].x.offset, 40.0, "the sideways wheel over the table's own bar scrolled the table");
     }
 }
+
+#[test]
+fn drag_direction_follows_inherited_layout_direction() {
+    fn view(_: &Vec<crate::Direction>, _: &mut crate::Cx<Vec<crate::Direction>>) -> El {
+        col().size(200.0, 100.0)
+            .child(el().key("ltr").size(200.0, 40.0).on_drag(|s: &mut Vec<crate::Direction>, d, _| s.push(d.direction())))
+            .child(col().dir(crate::Direction::Rtl).size(200.0, 40.0)
+                .child(el().key("rtl").size(200.0, 40.0).on_drag(|s: &mut Vec<crate::Direction>, d, _| s.push(d.direction()))))
+    }
+    let mut rt = Runtime::new(Vec::new(), view, (200.0, 100.0), Env::default());
+    rt.frame(0.0);
+    rt.pointer_down(100.0, 20.0);
+    rt.pointer_move(120.0, 20.0);
+    rt.pointer_up(120.0, 20.0);
+    rt.frame(0.0);
+    assert_eq!(rt.state, vec![crate::Direction::Ltr; 3]);
+    rt.state.clear();
+    rt.pointer_down(100.0, 60.0);
+    rt.pointer_move(80.0, 60.0);
+    rt.pointer_up(80.0, 60.0);
+    rt.frame(0.0);
+    assert_eq!(rt.state, vec![crate::Direction::Rtl; 3]);
+}

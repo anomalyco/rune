@@ -6,7 +6,7 @@ use rune::tok::{self, Theme, motion, radius, space, type_};
 #[cfg(feature = "frame-profile")]
 #[global_allocator]
 static ALLOC: procwatch::alloc::Counting = procwatch::alloc::Counting::system();
-use rune::{Align, App, AppSpec, Color, Cx, Drag, El, MenuItem, Phase, Spring, col, el, row, text};
+use rune::{Align, App, AppSpec, Color, Cx, El, MenuItem, Spring, col, el, row, text};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Appearance {
@@ -153,7 +153,7 @@ fn view(s: &Settings, cx: &mut Cx<Settings>) -> El {
                     "motion",
                     "Motion",
                     [
-                        setting_row(p, "speed", "Animation speed", None, speed_control(p, s.speed)),
+                        setting_row(p, "speed", "Animation speed", None, speed_control(p, dark, s.speed)),
                         toggle_row(p, "reduce", "Reduce motion", s.reduce_motion, |s| {
                             s.reduce_motion = !s.reduce_motion
                         }),
@@ -381,69 +381,23 @@ fn swatches(p: Paint, current: usize, dark: bool) -> El {
     r
 }
 
-fn speed_control(p: Paint, v: f32) -> El {
-    let (w, h, k, bar) = (180.0, 22.0, 18.0, 4.0);
-    let travel = w - k;
-    let to_value = move |x: f32| ((x - k / 2.0) / travel).clamp(0.0, 1.0);
+fn speed_control(p: Paint, dark: bool, v: f32) -> El {
+    let mut k = rune_kit::Kit::neutral(dark);
+    k.c.bg_accent = p.accent;
+    k.c.border_focus = p.accent;
     row()
         .key("speed-control")
         .gap(space::S3)
         .center_y()
         .child(
-            el().key("slider")
-                .role("slider")
+            rune_kit::Slider::new("slider", v)
+                .range(0.0..=1.0)
                 .label("Animation speed")
-                // The slider's position, in twentieths; it reads as the speed it gives.
-                .range_value(f64::from(v), 0.0, 1.0)
-                .range_step(0.05)
-                .a11y_value(format!("{:.2}×", speed_of(v)))
-                .on_step(|s: &mut Settings, steps, _| s.speed = (s.speed + steps as f32 * 0.05).clamp(0.0, 1.0))
-                .on_set_value(|s: &mut Settings, value, _| s.speed = (value as f32).clamp(0.0, 1.0))
-                .size(w, h)
-                .motion(motion::SNAPPY)
-                .on_drag(move |s: &mut Settings, d: &mut Drag, tx| match d.phase {
-                    Phase::Down => {
-                        d.data = s.speed;
-                        let knob = k / 2.0 + v * travel;
-                        if (d.x - knob).abs() > k / 2.0 + 2.0 {
-                            // Clicked the track: the knob animates there.
-                            s.speed = to_value(d.x);
-                        }
-                    }
-                    Phase::Move => {
-                        let knob = k / 2.0 + d.data * travel;
-                        let grab = if (d.start_x - knob).abs() <= k / 2.0 + 2.0 { d.start_x - knob } else { 0.0 };
-                        s.speed = to_value(d.x - grab);
-                        tx.instant();
-                    }
-                    Phase::Up => { if d.cancelled() { s.speed = d.data; } }
-                })
-                .child(
-                    el().key("track")
-                        .size(w, bar)
-                        .absolute(0.0, (h - bar) / 2.0)
-                        .radius(bar / 2.0)
-                        .fill(p.t.control_off)
-                        .a11y_hidden(),
-                )
-                .child(
-                    el().key("fill")
-                        .size(k / 2.0 + v * travel, bar)
-                        .absolute(0.0, (h - bar) / 2.0)
-                        .radius(bar / 2.0)
-                        .fill(p.accent)
-                        .a11y_hidden(),
-                )
-                .child(
-                    el().key("knob")
-                        .size(k, k)
-                        .absolute(v * travel, (h - k) / 2.0)
-                        .radius(k / 2.0)
-                        .fill(p.t.knob)
-                        .shadow(1.0, 3.0, p.t.knob_shadow)
-                        .shadow(0.0, 0.5, p.t.edge)
-                        .a11y_hidden(),
-                ),
+                .hide_label()
+                .value_text(format!("{:.2}×", speed_of(v)))
+                .width(180.0)
+                .on_change(|s: &mut Settings, v, _| s.speed = v)
+                .build(&k),
         )
         .child(
             text(format!("{:.2}×", speed_of(v)))

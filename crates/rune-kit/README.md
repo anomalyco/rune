@@ -163,7 +163,7 @@ selectable text so a selected command line looks like a selected field:
 `text(cmd).selectable(true).selection_color(k.selection())`. `rune-text--selectable-help` in the
 gallery shows both, with an icon button explained by `.help`.
 
-Button (10 variants × 5 `ControlSize` sizes × 5 states), IconButton, Switch (compact, standard), Checkbox,
+Button (10 variants × 5 `ControlSize` sizes × 5 states), IconButton, Switch (compact, standard), Slider (5 `ControlSize` sizes, continuous or stepped, drag/keyboard/Escape cancel), Checkbox,
 RadioGroup/RadioItem, TextInput, TextArea, TextField (older), Field, Select (inline and field
 triggers, grouped), Dialog, Popover, Menu (compact and standard, checkbox/radio items, submenus,
 context menus via `.at(x, y)`), Tooltip (compact, standard, large), HoverCard, Toast and
@@ -215,7 +215,7 @@ assistive technology runs through the same handlers as pointer and keys.
   `Combobox::search_label` names its internal search field, `Dialog::close_label` names its
   header close button, and `Dialog::close_disabled` keeps that button visibly disabled while
   blocking button press, Escape and outside clicks.
-- **Values**: a select or combobox reads its chosen option, progress its percentage, a pane's
+- **Values**: a slider reads its numeric range, step, and optional `value_text` (taking `Increment`, `Decrement`, and `SetValue`), a select or combobox reads its chosen option, progress its percentage, a pane's
   grip its width (increment and decrement resize it), a shortcut recorder its keys.
 - **States**: checked (checkbox, switch, radio, segment, checked menu item, task), expanded or
   collapsed (accordion, collapsible, menu and popover triggers given `.expanded`, select,
