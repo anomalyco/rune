@@ -1094,11 +1094,14 @@ close/recreation. On Wayland, use `activate(token)` for authorized focus; tokenl
 also restores them. On macOS, no-focus show uses `orderFrontRegardless`, rather than winit's
 `makeKeyAndOrderFront`. Window-manager focus policy still applies. `WindowHandle`
 also provides show/hide/focus, placement and topmost control on the event thread.
-`rune::Tray` provides a system tray icon and menu on Windows (`Shell_NotifyIcon`) and
-Linux (StatusNotifierItem / `dbusmenu`, with the default `dbus` feature). On macOS (and
-other platforms), `Tray::new` returns `Err(TrayError::Unsupported)` because macOS status
-items are not implemented yet, so a macOS app still owns its status item while Rune
-supplies the window lifetime and handles.
+`rune::Tray` provides a system tray icon and flat menu on macOS (`NSStatusBar` /
+`NSStatusItem`), Windows (`Shell_NotifyIcon`), and Linux (StatusNotifierItem / `dbusmenu`,
+with the default `dbus` feature). On macOS, `Tray::new` runs on the main thread (and works
+while every window is hidden, including in an accessory app), sizes the icon in points to
+`NSStatusBar.thickness` preserving aspect ratio, and honours `TrayIcon::template(true)` so
+AppKit tints the glyph for light and dark menu bars; primary click sends
+`TrayEvent::Activate`, and secondary click or Control-click opens the menu. `set_menu`,
+`set_tooltip`, and dropping `Tray` may run from any thread.
 `RunOptions::accessory` applies the macOS process policy before the event loop is
 created: no Dock icon/default menu and no activation at launch. Other platforms
 ignore it; `run_windows` keeps its regular-launch default.

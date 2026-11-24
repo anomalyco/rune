@@ -7,18 +7,27 @@
 //! cargo run -p background -- --open  # start with the window
 //! cargo run -p background -- --release-gpu  # closing also drops the GPU device
 //! cargo run -p background -- --accessory    # macOS: no Dock icon until `dock on`
+//! cargo run -p background -- --accessory --tray  # menu-bar tray icon (macOS template image) + menu
 //! # `hud show|hide|top|bottom|recording|transcribing|status` drives a recording-HUD overlay;
-//! # `capsule show|hide|left|wide|status` a clickable corner capsule
+//! # `capsule show|hide|left|wide|status` a clickable corner capsule;
+//! # `tray tooltip <text>` updates the tray tooltip while running
 //! cargo run -p background -- --snap /tmp/background.png
 //! ```
 
 #![forbid(unsafe_code)]
 
 use std::io::BufRead;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 use rune::tok::{self, radius, space, type_};
-use rune::{App, Cx, El, Key, KeyEvent, TextEdit, Tx, col, el, row, text, text_input};
+use rune::{
+    App, Cx, El, Key, KeyEvent, TextEdit, Tray, TrayEvent, TrayIcon, TrayItem, TraySpec, Tx, col,
+    el, row, text, text_input,
+};
 
 struct Background {
     ticks: u64,
@@ -206,7 +215,45 @@ fn main() {
             hud_ticker.update(|h, _| h.seconds += 1);
         }
     });
+    let tray_slot: Arc<Mutex<Option<Tray>>> = Arc::new(Mutex::new(None));
+    let headless = std::env::args().any(|a| matches!(a.as_str(), "--snap" | "--tree" | "--script" | "--list-scenes" | "--list-windows" | "--trace" | "--strip" | "--video" | "--html" | "--desktop"));
+    if std::env::args().any(|a| a == "--tray") && !headless {
+        let tray_app = app.handle();
+        let tray_hud = overlay.clone();
+        let hud_visible = Arc::new(AtomicBool::new(false));
+        let tray_for_cb = tray_slot.clone();
+        let spec = TraySpec::new("dev.rune.background", "Rune Background", tray_icon())
+            .tooltip("Rune Background — click to open")
+            .menu(tray_menu(false));
+        match Tray::new(spec, move |event| match event {
+            TrayEvent::Activate { token } => {
+                if let Some(token) = token {
+                    tray_app.activate(token);
+                } else {
+                    tray_app.open();
+                }
+            }
+            TrayEvent::Menu(id) => match id.as_str() {
+                "open" => tray_app.open(),
+                "hud" => {
+                    let next = !hud_visible.fetch_xor(true, Ordering::Relaxed);
+                    if next { tray_hud.show(); } else { tray_hud.hide(); }
+                    if let Ok(guard) = tray_for_cb.lock() && let Some(tray) = guard.as_ref() {
+                        tray.set_menu(tray_menu(next));
+                        tray.set_tooltip(if next { "Rune Background — HUD visible" } else { "Rune Background — click to open" });
+                    }
+                }
+                "quit" => tray_app.quit(),
+                _ => {}
+            },
+            _ => {}
+        }) {
+            Ok(tray) => { *tray_slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(tray); }
+            Err(err) => eprintln!("background: tray unavailable: {err}"),
+        }
+    }
     let commands = app.handle();
+    let tray_cmd = tray_slot.clone();
     std::thread::spawn(move || {
         for line in std::io::stdin().lock().lines() {
             let Ok(line) = line else { break };
@@ -238,12 +285,49 @@ fn main() {
                 (Some("capsule"), Some("left")) => capsule.set_align(rune::Align::Start, 12.0),
                 (Some("capsule"), Some("wide")) => capsule.resize((320.0, 48.0)),
                 (Some("capsule"), Some("status")) => eprintln!("background: capsule {:?}", capsule.availability()),
+                (Some("tray"), Some("tooltip")) => {
+                    let tip: Vec<&str> = words.collect();
+                    if let Ok(guard) = tray_cmd.lock() && let Some(tray) = guard.as_ref() {
+                        tray.set_tooltip(tip.join(" "));
+                    }
+                }
                 (Some(other), _) => {
-                    eprintln!("background: unknown command {other:?} (open | show | hide | focus | position X Y | activate TOKEN | close | dock on|off | hud show|hide|top|bottom|recording|transcribing|status | capsule show|hide|left|wide|status | quit)")
+                    eprintln!("background: unknown command {other:?} (open | show | hide | focus | position X Y | activate TOKEN | close | dock on|off | hud show|hide|top|bottom|recording|transcribing|status | capsule show|hide|left|wide|status | tray tooltip TEXT | quit)")
                 }
                 (None, _) => {}
             }
         }
     });
     app.run();
+    drop(tray_slot.lock().unwrap_or_else(|e| e.into_inner()).take());
+}
+
+/// A 44×44 (2× for 22 pt) ring-and-dot glyph marked as a macOS template image so macOS tints it
+/// for light and dark menu bars.
+fn tray_icon() -> TrayIcon {
+    const SIZE: u32 = 44;
+    let center = (SIZE as f32 - 1.0) * 0.5;
+    let mut pixels = vec![0u8; (SIZE * SIZE * 4) as usize];
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let dx = x as f32 - center;
+            let dy = y as f32 - center;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let ring = (1.5 - (dist - 12.5).abs()).clamp(0.0, 1.0);
+            let dot = (4.5 - dist).clamp(0.0, 1.0);
+            let alpha = (ring.max(dot) * 255.0).round() as u8;
+            let idx = ((y * SIZE + x) * 4) as usize;
+            pixels[idx..idx + 4].copy_from_slice(&[240, 240, 240, alpha]);
+        }
+    }
+    TrayIcon::rgba(SIZE, SIZE, pixels).template(true)
+}
+
+fn tray_menu(hud_visible: bool) -> Vec<TrayItem> {
+    vec![
+        TrayItem::action("open", "Open Window"),
+        TrayItem::action("hud", if hud_visible { "Hide HUD" } else { "Show HUD" }),
+        TrayItem::Separator,
+        TrayItem::action("quit", "Quit"),
+    ]
 }
