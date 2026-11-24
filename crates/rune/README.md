@@ -1579,6 +1579,11 @@ starts a new countdown.
 let the runtime clear it when another field takes focus; do not force it on every view rebuild.
 A handler drops focus with `Tx::blur()` (Enter in an inspector field handing keys back to
 the window, say); the field's `focused` turns false through its `on_edit` accessor.
+`.on_input_selection(|s, tx| ..)` runs in the same turn before the view rebuilds whenever
+runtime input (arrow keys, `Home`/`End`, `Shift` navigation, `Cmd/Ctrl+A`, clicks,
+double/triple clicks, drags, edge autoscroll, field-menu caret moves, assistive-technology
+selection actions, or edits, after `on_input_change`) changes `(edit.anchor, edit.focus)`;
+no-op moves and direct app-side mutations to `TextEdit` do not fire it.
 A field the view builds only once it can read a rect (`Cx::layout`, on the commit's re-run)
 still takes the focus it asks for in that commit.
 
@@ -1773,7 +1778,12 @@ newline on `Shift+Return` and pastes plain text. The mark and block methods work
   (`.pill_style(|id| PillStyle::new().bg(..).fg(..).icon(..).ring(color, width).radius(points))`,
   `.pill_image(|id| ...)` for a full-colour `Pixels` logo in the leading slot, or `.pill_colors(bg, fg)`
   and `.pill_icon(|id| ...)`), and a chip never splits across lines (static text supports the same
-  `PillStyle` via `.pill(range, style)`, `.pills(..)` and `.pill_with_image(range, style, pixels)`). Copy (both keyboard and context menu) writes the label as
+  `PillStyle` via `.pill(range, style)`, `.pills(..)` and `.pill_with_image(range, style, pixels)`).
+  `.on_pill_press(|s, id, press, tx| -> bool)` intercepts a primary click on a pill chip before
+  caret placement (return `true` to consume without moving the caret or starting a drag, or
+  `false` to fall through; `Shift+click` bypasses it to extend selection, and hovering a pill
+  shows `Cursor::Pointer`), paired with `.on_pill_secondary(|s, id, press, tx| -> bool)` for
+  secondary clicks. Copy (both keyboard and context menu) writes the label as
   plain text by default — or each pill's payload when `.pill_copy_text(|id| -> Option<String>)`
   is set (using `edit.selected_with_pills(..)`, falling back to the label on `None`) — and
   `<span data-pill="id">label</span>` as HTML for rich fields; pasting that into a rich field

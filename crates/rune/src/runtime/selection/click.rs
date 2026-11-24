@@ -11,7 +11,7 @@ use super::*;
 
 #[derive(Clone, Copy, Debug)]
 enum Step {
-    Down { clicks: u8, shift: bool },
+    Down { clicks: u8, shift: bool, check_pill: bool },
     Drag,
     Cancelled,
 }
@@ -172,9 +172,29 @@ impl RuntimeCore {
         a != b
     }
 
+    /// Whether text field node `i` shows `Cursor::Pointer` at window point `(x, y)` (over an
+    /// `on_link` link or an `on_pill_press` pill chip when not dragging a selection).
+    pub(in crate::runtime) fn input_pointer_cursor(&self, i: usize, x: f32, y: f32) -> bool {
+        let Some(inp) = self.tree.nodes[i].input.as_deref() else { return false };
+        let input_link = self.tree.nodes[i].text.as_ref().is_some_and(|t| t.cold.on_link.is_some())
+            && (!self.edit.input_click.captured()
+                || self.pointer.press_held().is_some_and(|h| !h.moved && h.link.is_some()))
+            && self.link_at(i, x, y).is_some();
+        if input_link {
+            return true;
+        }
+        inp.on_pill_press.is_some()
+            && !self.tree.nodes[i].a11y.disabled
+            && !self.kbd.held_mods.shift
+            && (self.edit.input_click.dragging_path().is_none()
+                || self.pointer.press_held().is_some_and(|h| !h.moved))
+            && self.input_pill_at(i, x, y).is_some()
+    }
+
     /// A press at (x, y) on text field `ji`, down at `down_at`; `second` when it's the second
-    /// of a double press; `link` when the press landed on a link in `ji`'s own text.
-    pub(in crate::runtime) fn input_down(&mut self, ji: usize, x: f32, y: f32, down_at: f64, second: bool, link: Option<usize>) {
+    /// of a double press; `link` when the press landed on a link in `ji`'s own text; `direct`
+    /// when the press landed directly on `ji` rather than an outer `role="textbox"` wrapper.
+    pub(in crate::runtime) fn input_down(&mut self, ji: usize, (x, y): (f32, f32), down_at: f64, second: bool, link: Option<usize>, direct: bool) {
         let now = self.now_clock();
         let shift = self.kbd.held_mods.shift;
         // Its text drew scaled or rotated with its box: map the press back to the rest layout.
@@ -189,8 +209,9 @@ impl RuntimeCore {
             self.edit.input_click.presses.press(&path, now, (x, y), self.double_click_interval).min(3) as u8
         };
         let link = link.filter(|_| !shift && clicks == 1);
+        let check_pill = direct && !shift;
         self.edit.input_click.capture = Capture::Held { dragging: Some(path.clone()) };
-        self.edit.input_click.steps.push_back((path.clone(), Step::Down { clicks, shift }));
+        self.edit.input_click.steps.push_back((path.clone(), Step::Down { clicks, shift, check_pill }));
         self.frame.queue.push(Action::Focus(path.clone(), x, y));
         let d = Drag {
             phase: Phase::Down,
@@ -220,7 +241,7 @@ impl RuntimeCore {
     pub(in crate::runtime) fn place_caret(&mut self, ji: usize, x: f32, y: f32) {
         let path = self.tree.nodes[ji].path.clone();
         self.edit.input_click.presses.clear();
-        self.edit.input_click.steps.push_back((path.clone(), Step::Down { clicks: 1, shift: false }));
+        self.edit.input_click.steps.push_back((path.clone(), Step::Down { clicks: 1, shift: false, check_pill: false }));
         self.frame.queue.push(Action::Focus(path, x, y));
     }
 
@@ -244,7 +265,7 @@ impl RuntimeCore {
         let step = if self.edit.input_click.steps.front().is_some_and(|(p, _)| *p == path) {
             self.edit.input_click.steps.pop_front().unwrap().1
         } else {
-            Step::Down { clicks: 1, shift: false }
+            Step::Down { clicks: 1, shift: false, check_pill: false }
         };
         if matches!(step, Step::Cancelled) {
             return false;
@@ -256,6 +277,19 @@ impl RuntimeCore {
             self.edit.drop_input_drag();
             return false;
         };
+        if let Step::Down { shift: false, check_pill: true, .. } = step
+            && self.allowed(i)
+            && !self.tree.nodes[i].a11y.disabled
+            && let Some(f) = self.tree.nodes[i].input.as_deref().and_then(|inp| inp.on_pill_press.clone())
+            && let Some(pill_id) = self.input_pill_at(i, x, y)
+            && f(app.states(), &pill_id, crate::PointerPress { x, y }, one)
+        {
+            log_event!(self, "pill press {path}");
+            self.edit.input_click.presses.clear();
+            self.edit.drop_input_drag();
+            return true;
+        }
+        let selection_change = self.tree.nodes[i].input.as_ref().and_then(|inp| inp.selection_change.clone());
         let Some(access) = self.tree.nodes[i].input.as_ref().and_then(|inp| inp.access.clone()) else {
             self.edit.drop_input_drag();
             return false;
@@ -265,43 +299,50 @@ impl RuntimeCore {
         let point = self.input_text_point(i, x, y);
         let s = self.env.scale;
         match step {
-            Step::Down { clicks, shift } => {
+            Step::Down { clicks, shift, .. } => {
                 self.set_focus(app, Some(path), false);
                 // A press mid-composition writes it into the text first, as a browser's field
                 // does, then puts the caret where it landed: the layout it hits already shows
                 // the composition in place.
                 self.finish_field_composition(app, one);
-                let e = access(app.states());
-                e.set_single_line(single);
-                e.break_history_group();
-                e.clear_typing_style();
-                if e.preedit().is_some() {
-                    self.edit.clear_input_click();
-                    one.commit = one.commit.instant();
-                    return true;
-                }
-                if let (Some(l), Some([tx, ty])) = (layout, point) {
-                    let h = hit(e, l.view(), tx, ty, s, single);
-                    if shift {
-                        let anchor = e.anchor;
-                        self.edit.input_click.unit = Unit::Char;
-                        self.edit.input_click.origin = (anchor, anchor);
-                        e.set_selection(anchor, h.caret);
-                    } else {
-                        let unit = match clicks {
-                            1 => Unit::Char,
-                            2 => Unit::Word,
-                            _ => Unit::Paragraph,
-                        };
-                        let origin = unit_at(e, h, unit);
-                        // Not after a pill: it is a word of its own.
-                        let origin = if unit == Unit::Word && e.pills().all(|(r, _)| (r.start, r.end) != origin) { super::selectable::with_trailing_space(&e.text, origin) } else { origin };
-                        self.edit.input_click.unit = unit;
-                        self.edit.input_click.origin = origin;
-                        e.set_selection(origin.0, origin.1);
-                        // A caret put down where two runs meet stays on the side pressed.
-                        if origin == (h.caret, h.caret) { e.affinity = h.side; }
+                let changed_sel = {
+                    let e = access(app.states());
+                    e.set_single_line(single);
+                    e.break_history_group();
+                    e.clear_typing_style();
+                    if e.preedit().is_some() {
+                        self.edit.clear_input_click();
+                        one.commit = one.commit.instant();
+                        return true;
                     }
+                    let before = (e.anchor, e.focus);
+                    if let (Some(l), Some([tx, ty])) = (layout, point) {
+                        let h = hit(e, l.view(), tx, ty, s, single);
+                        if shift {
+                            let anchor = e.anchor;
+                            self.edit.input_click.unit = Unit::Char;
+                            self.edit.input_click.origin = (anchor, anchor);
+                            e.set_selection(anchor, h.caret);
+                        } else {
+                            let unit = match clicks {
+                                1 => Unit::Char,
+                                2 => Unit::Word,
+                                _ => Unit::Paragraph,
+                            };
+                            let origin = unit_at(e, h, unit);
+                            // Not after a pill: it is a word of its own.
+                            let origin = if unit == Unit::Word && e.pills().all(|(r, _)| (r.start, r.end) != origin) { super::selectable::with_trailing_space(&e.text, origin) } else { origin };
+                            self.edit.input_click.unit = unit;
+                            self.edit.input_click.origin = origin;
+                            e.set_selection(origin.0, origin.1);
+                            // A caret put down where two runs meet stays on the side pressed.
+                            if origin == (h.caret, h.caret) { e.affinity = h.side; }
+                        }
+                    }
+                    (e.anchor, e.focus) != before
+                };
+                if changed_sel && let Some(selection_change) = selection_change {
+                    selection_change(app.states(), one);
                 }
                 one.commit = one.commit.instant();
                 true
@@ -311,22 +352,28 @@ impl RuntimeCore {
                     self.edit.drop_input_drag();
                     return false;
                 }
-                let e = access(app.states());
-                e.set_single_line(single);
-                if e.preedit().is_some() {
-                    self.edit.clear_input_click();
-                    return false;
+                let changed_sel = {
+                    let e = access(app.states());
+                    e.set_single_line(single);
+                    if e.preedit().is_some() {
+                        self.edit.clear_input_click();
+                        return false;
+                    }
+                    let (Some(l), Some([tx, ty])) = (layout, point) else { return false };
+                    let h = hit(e, l.view(), tx, ty, s, single);
+                    let at = unit_at(e, h, self.edit.input_click.unit);
+                    let (anchor, focus) = extend(self.edit.input_click.origin, at);
+                    let before = (e.anchor, e.focus);
+                    e.set_selection(anchor, focus);
+                    if (e.anchor, e.focus) == before {
+                        return false;
+                    }
+                    e.break_history_group();
+                    true
+                };
+                if changed_sel && let Some(selection_change) = selection_change {
+                    selection_change(app.states(), one);
                 }
-                let (Some(l), Some([tx, ty])) = (layout, point) else { return false };
-                let h = hit(e, l.view(), tx, ty, s, single);
-                let at = unit_at(e, h, self.edit.input_click.unit);
-                let (anchor, focus) = extend(self.edit.input_click.origin, at);
-                let before = (e.anchor, e.focus);
-                e.set_selection(anchor, focus);
-                if (e.anchor, e.focus) == before {
-                    return false;
-                }
-                e.break_history_group();
                 one.commit = one.commit.instant();
                 true
             }

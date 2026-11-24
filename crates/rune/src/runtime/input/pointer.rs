@@ -347,7 +347,7 @@ impl RuntimeCore {
             first.path == n.path && press_run::follows(first.at, first.point, now, (x, y), self.double_click_interval)
         });
         if let Some(ji) = self.textbox_input(ti) {
-            self.input_down(ji, x, y, now, second, link.filter(|_| ji == ti));
+            self.input_down(ji, (x, y), now, second, link.filter(|_| ji == ti), ji == ti);
             return;
         }
         // Clicking a link leaves focus where it is (a composer keeps typing). Selectable text
@@ -578,12 +578,7 @@ impl RuntimeCore {
             return crate::el::Cursor::Default;
         };
         if self.tree.nodes[i].handlers.cursor.is_none() && (self.tree.nodes[i].input.is_some() || self.tree.nodes[i].role == "textbox") {
-            let input_link = self.tree.nodes[i].input.is_some()
-                && self.tree.nodes[i].text.as_ref().is_some_and(|t| t.cold.on_link.is_some())
-                && (!self.edit.input_click.captured()
-                    || self.pointer.press.held().is_some_and(|h| !h.moved && h.link.is_some()))
-                && self.link_at(i, x, y).is_some();
-            return if input_link { crate::el::Cursor::Pointer } else { crate::el::Cursor::Text };
+            return if self.input_pointer_cursor(i, x, y) { crate::el::Cursor::Pointer } else { crate::el::Cursor::Text };
         }
         if self.is_selectable(i) && !self.edit.selectable.phase.dragging() && self.link_at(i, x, y).is_some() {
             return crate::el::Cursor::Pointer;

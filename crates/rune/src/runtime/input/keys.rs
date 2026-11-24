@@ -308,11 +308,12 @@ impl RuntimeCore {
         tx: &mut Tx,
     ) -> bool {
         let Some(path) = self.kbd.focus.owned() else { return false };
-        let Some((access, submit, change, animate_layout, single_line, secure, revealed_override, line_home_end_override)) =
+        let Some((access, submit, change, selection_change, animate_layout, single_line, secure, revealed_override, line_home_end_override)) =
             self.focused_input().map(|i| (
                 i.access.clone(),
                 i.submit.clone(),
                 i.change.clone(),
+                i.selection_change.clone(),
                 i.animate_layout,
                 i.single_line,
                 i.edit.is_secure(),
@@ -332,6 +333,10 @@ impl RuntimeCore {
             if let Some(line_home_end) = line_home_end_override { edit.set_line_home_end(line_home_end); }
         }
         let before = change.as_ref().map(|_| zeroize::Zeroizing::new(access(app.states()).text.clone()));
+        let before_sel = selection_change.as_ref().map(|_| {
+            let e = access(app.states());
+            (e.anchor, e.focus)
+        });
         let mut out = f(app.states(), &access, tx);
         // Submit and Escape's blur act once per press; held keys still type, move and delete.
         if tx.key_repeat { out.submit = false; out.blur = false; }
@@ -343,6 +348,15 @@ impl RuntimeCore {
         {
             change(app.states(), tx);
             access(app.states()).mark_edited();
+        }
+        if let Some(selection_change) = selection_change {
+            let after_sel = {
+                let e = access(app.states());
+                (e.anchor, e.focus)
+            };
+            if before_sel != Some(after_sel) {
+                selection_change(app.states(), tx);
+            }
         }
         if let Some(c) = out.copy {
             tx.copy(c);

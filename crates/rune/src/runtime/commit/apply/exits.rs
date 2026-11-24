@@ -341,6 +341,9 @@ pub(super) fn retire_removed_nodes(
             input.access = None;
             input.key = None;
             input.change = None;
+            input.selection_change = None;
+            input.on_pill_press = None;
+            input.on_pill_secondary = None;
             input.edit.focused = false;
             input.edit.cancel_composition();
             input.edit.conceal();

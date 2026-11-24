@@ -133,6 +133,43 @@ macro_rules! field_hook_forwarders {
             self.edits.copy(f);
             self
         }
+        /// Called after the inner editor's caret or selection moves from keys, clicks, drags, or
+        /// edits ([`El::on_input_selection`](rune::El::on_input_selection)), in the same turn
+        /// before the view rebuilds. Skipped when disabled.
+        /// ```ignore
+        #[doc = concat!($ctor, ".on_edit(|s: &mut App| &mut s.edit).on_input_selection(|s: &mut App, _| s.sel = (s.edit.anchor, s.edit.focus)).build(&k)")]
+        /// ```
+        pub fn on_input_selection<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
+            self.edits.selection(f);
+            self
+        }
+        /// Primary press (left-click or tap) on a [`Mark::Pill`](rune::Mark::Pill) chip inside
+        /// the inner editor ([`El::on_pill_press`](rune::El::on_pill_press)): return `true` to
+        /// consume before caret placement, or `false` to fall through. Skipped when disabled.
+        /// ```ignore
+        #[doc = concat!($ctor, ".on_edit(|s: &mut App| &mut s.edit).on_pill_press(|s: &mut App, id, _, _| { s.picked = Some(id.to_owned()); true }).build(&k)")]
+        /// ```
+        pub fn on_pill_press<S: 'static>(
+            mut self,
+            f: impl Fn(&mut S, &str, rune::PointerPress, &mut Tx) -> bool + 'static,
+        ) -> Self {
+            self.edits.pill_press(f);
+            self
+        }
+        /// Secondary press (right-click or macOS control-click) on a
+        /// [`Mark::Pill`](rune::Mark::Pill) chip inside the inner editor
+        /// ([`El::on_pill_secondary`](rune::El::on_pill_secondary)): return `true` to consume or
+        /// `false` to fall through to the field menu. Skipped when disabled.
+        /// ```ignore
+        #[doc = concat!($ctor, ".on_edit(|s: &mut App| &mut s.edit).on_pill_secondary(|s: &mut App, id, p, _| { s.menu = Some((id.to_owned(), p)); true }).build(&k)")]
+        /// ```
+        pub fn on_pill_secondary<S: 'static>(
+            mut self,
+            f: impl Fn(&mut S, &str, rune::PointerPress, &mut Tx) -> bool + 'static,
+        ) -> Self {
+            self.edits.pill_secondary(f);
+            self
+        }
     };
 }
 
@@ -162,11 +199,20 @@ impl EditActs {
     fn change<S: 'static>(&mut self, f: impl Fn(&mut S, &mut Tx) + 'static) {
         self.handlers.push(Box::new(move |e: El| e.on_input_change(f)));
     }
+    fn selection<S: 'static>(&mut self, f: impl Fn(&mut S, &mut Tx) + 'static) {
+        self.handlers.push(Box::new(move |e: El| e.on_input_selection(f)));
+    }
     fn paste<S: 'static>(&mut self, f: impl Fn(&mut S, &rune::ClipboardContent, &mut Tx) -> bool + 'static) {
         self.handlers.push(Box::new(move |e: El| e.on_input_paste(f)));
     }
     fn copy<S: 'static>(&mut self, f: impl Fn(&mut S, bool, &mut Tx) -> Option<rune::ClipboardContent> + 'static) {
         self.handlers.push(Box::new(move |e: El| e.on_input_copy(f)));
+    }
+    fn pill_press<S: 'static>(&mut self, f: impl Fn(&mut S, &str, rune::PointerPress, &mut Tx) -> bool + 'static) {
+        self.handlers.push(Box::new(move |e: El| e.on_pill_press(f)));
+    }
+    fn pill_secondary<S: 'static>(&mut self, f: impl Fn(&mut S, &str, rune::PointerPress, &mut Tx) -> bool + 'static) {
+        self.handlers.push(Box::new(move |e: El| e.on_pill_secondary(f)));
     }
     fn secondary_press<S: 'static>(&mut self, f: impl Fn(&mut S, rune::PointerPress, &mut Tx) + 'static) {
         self.handlers.push(Box::new(move |e: El| e.on_secondary_press(f)));

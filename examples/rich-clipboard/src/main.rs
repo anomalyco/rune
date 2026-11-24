@@ -1,7 +1,8 @@
 //! Copy and paste formatted text, inspect the clipboard revision counter, position a floating
 //! formatting bar over `Cx::field_selection_rects`, hit-test byte offsets with
-//! `Tx::text_offset_at`, style mention pills with leading `Pixels` logos/rings/radii, and draw
-//! display-only plain-text `LineFill` code blocks and quotes.
+//! `Tx::text_offset_at`, style and inspect mention pills (`El::on_pill_press`) with leading
+//! `Pixels` logos/rings/radii, track live caret and selection moves (`El::on_input_selection`),
+//! and draw display-only plain-text `LineFill` code blocks and quotes.
 //! `cargo run -p rich-clipboard` (or `-- --scene selected --tree` / `-- --scene decorations --snap target/rich-clipboard.png`).
 //!
 //! Paste into the field from a browser, Notes, TextEdit or Pages: the field still pastes the
@@ -54,6 +55,11 @@ struct State {
     hit: Option<(&'static str, usize)>,
     /// Last Copy/Cut observed by `El::on_input_copy`: `(cut, plain_payload)`.
     last_copy: Option<(bool, String)>,
+    /// Last mention pill inspected via `El::on_pill_press`: `(id, [x, y])`.
+    inspected_pill: Option<(String, [f32; 2])>,
+    /// Live `(anchor, focus)` and event count updated in the same frame by `El::on_input_selection`.
+    selection_readout: (usize, usize),
+    selection_events: usize,
 }
 
 fn badge_pixels(bg: [u8; 4], fg: [u8; 4], stripe: [u8; 4]) -> Pixels {
@@ -96,6 +102,9 @@ impl Default for State {
             revision: clipboard::revision(),
             hit: None,
             last_copy: None,
+            inspected_pill: None,
+            selection_readout: (0, 0),
+            selection_events: 0,
         }
     }
 }
@@ -232,6 +241,25 @@ fn copy_status(last_copy: &Option<(bool, String)>) -> String {
     }
 }
 
+fn pill_status(inspected: &Option<(String, [f32; 2])>) -> String {
+    match inspected {
+        Some((id, [x, y])) => match service_pill_payload(id) {
+            Some(url) => format!("Inspected pill {id} ({url}) at ({x:.0}, {y:.0})"),
+            None => format!("Inspected pill {id} at ({x:.0}, {y:.0})"),
+        },
+        None => "Click a @Gmail or @GitHub pill to inspect it via on_pill_press (Shift+click extends selection).".into(),
+    }
+}
+
+fn selection_status((anchor, focus): (usize, usize), moves: usize) -> String {
+    if anchor == focus {
+        format!("Selection: caret at byte {focus} ({moves} moves)")
+    } else {
+        let (a, b) = (anchor.min(focus), anchor.max(focus));
+        format!("Selection: bytes {a}..{b} (anchor {anchor}, focus {focus}, {moves} moves)")
+    }
+}
+
 fn button(key: &'static str, label: &str, f: impl Fn(&mut State, &mut Tx) + 'static) -> El {
     let t = tok::theme(true);
     row().key(key).role("button").padding(space::S2).radius(radius::MD).fill(t.card).border(1.0, t.card_border)
@@ -323,6 +351,14 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
         })
         .pill_copy_text(service_pill_payload)
         .on_edit(|s: &mut State| &mut s.field)
+        .on_pill_press(|s: &mut State, id, press, _| {
+            s.inspected_pill = Some((id.to_owned(), [press.x, press.y]));
+            true
+        })
+        .on_input_selection(|s: &mut State, _| {
+            s.selection_readout = (s.field.anchor, s.field.focus);
+            s.selection_events += 1;
+        })
         // Observe Copy/Cut (keyboard or context menu) and fall back to pill_copy_text + rich HTML.
         .on_input_copy(|s: &mut State, cut, _| {
             let plain = s.field.selected_with_pills(service_pill_payload);
@@ -436,6 +472,8 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
             .child(button("read", "Read clipboard", |_, tx| tx.read_clipboard(|s: &mut State, content, _| seen(s, "Read", content))))
             .child(button("check-revision", "Check revision", |s, _| s.revision = clipboard::revision())))
         .child(text(revision_status(s.revision)).key("revision").font(type_::LABEL).color(t.text_secondary))
+        .child(text(pill_status(&s.inspected_pill)).key("pill-status").font(type_::LABEL).color(t.text_secondary).w_full())
+        .child(text(selection_status(s.selection_readout, s.selection_events)).key("selection-status").font(type_::LABEL).color(t.text_secondary).w_full())
         .child(text(copy_status(&s.last_copy)).key("copy-status").font(type_::LABEL).color(t.text_secondary).w_full())
         .child(text(head).key("summary").font(type_::BODY).color(t.text_secondary))
         .child(text(preview).key("preview").font(type_::LABEL).color(t.text_secondary).w_full())
@@ -604,5 +642,44 @@ mod tests {
             rt.state.field.pills().map(|(_, id)| id).collect::<Vec<_>>(),
             ["app:gmail", "app:github"]
         );
+    }
+
+    #[test]
+    fn pill_press_inspects_mention_and_input_selection_updates_readout() {
+        let mut s = State::default();
+        s.decorations_scene();
+        s.field.set_caret(0);
+        let mut rt = Runtime::new(s, view, (560.0, 680.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        assert!(rt.find("pill-status").is_some());
+        assert!(rt.find("selection-status").is_some());
+
+        // Focus field and arrow right: on_input_selection updates readout in the same frame.
+        rt.update(|s, _| s.field.focused = true);
+        rt.frame(1.0 / 60.0);
+        rt.key(rune::KeyEvent::from(rune::Key::Right));
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.state.selection_readout, (1, 1));
+        assert_eq!(rt.state.selection_events, 1);
+
+        // Scan across the first line of the field to locate the @Gmail pill (Cursor::Pointer).
+        let fr = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("field")).unwrap().rect;
+        let py = fr[1] + 16.0;
+        let mut pill_pt = None;
+        for step in 0..80 {
+            let px = fr[0] + 8.0 + step as f32 * 4.0;
+            rt.pointer_move(px, py);
+            if rt.cursor() == rune::Cursor::Pointer {
+                pill_pt = Some((px, py));
+                break;
+            }
+        }
+        let (px, py) = pill_pt.expect("expected Cursor::Pointer over @Gmail pill");
+        let sel_before = (rt.state.field.anchor, rt.state.field.focus);
+        rt.pointer_down(px, py);
+        rt.pointer_up(px, py);
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.state.inspected_pill.as_ref().map(|(id, _)| id.as_str()), Some("app:gmail"));
+        assert_eq!((rt.state.field.anchor, rt.state.field.focus), sel_before, "consuming pill press keeps caret still");
     }
 }
