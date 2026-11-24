@@ -1,0 +1,1 @@
+- Layout: add `El::w_fit` / `set_w_fit` and `El::h_fit` / `set_h_fit` (`width`/`height: fit-content`), `El::self_auto` / `set_self_auto` (`align-self: auto`), and `El::h_frac` / `set_h_frac` (`height: <percent>`, the height twin of `El::w_frac`), with matching `fit-content` export in static HTML/CSS.

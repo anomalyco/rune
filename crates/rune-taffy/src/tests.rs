@@ -67,6 +67,7 @@ fn compact_style_round_trips_all_length_variants() {
         Dimension::percent(0.375),
         Dimension::min_content(),
         Dimension::max_content(),
+        Dimension::fit_content(),
         Dimension::fit_content_px(120.0),
         Dimension::fit_content_percent(0.8),
     ];

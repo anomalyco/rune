@@ -89,6 +89,31 @@ impl El {
         self.style.set_width(percent(f));
         self
     }
+    /// Fit width to content without stretching across a column (CSS `width: fit-content`).
+    ///
+    /// Keeps `align-self` at `auto`, so a control hugs its content inside a stretching `col()`
+    /// while still deferring to a parent's cross-axis alignment (such as `col().items_center()`
+    /// or `row().center_y()`).
+    ///
+    /// ```ignore
+    /// row().w_fit().px(12.0).child(text("Badge"))
+    /// ```
+    #[inline]
+    pub fn w_fit(mut self) -> Self {
+        self.set_w_fit();
+        self
+    }
+    /// [`El::w_fit`] in place.
+    ///
+    /// ```ignore
+    /// let mut e = row();
+    /// e.set_w_fit();
+    /// ```
+    #[inline]
+    pub fn set_w_fit(&mut self) -> &mut Self {
+        self.style.set_width(Dimension::fit_content());
+        self
+    }
     #[inline]
     pub fn h_full(mut self) -> Self {
         self.set_h_full();
@@ -98,6 +123,51 @@ impl El {
     #[inline]
     pub fn set_h_full(&mut self) -> &mut Self {
         self.style.set_height(percent(1.0));
+        self
+    }
+    /// Height as a fraction of the parent's (CSS `height: 40%` is `.h_frac(0.4)`).
+    ///
+    /// ```ignore
+    /// col().h(200.0).child(el().h_frac(0.4))
+    /// ```
+    #[inline]
+    pub fn h_frac(mut self, f: f32) -> Self {
+        self.set_h_frac(f);
+        self
+    }
+    /// [`El::h_frac`] in place.
+    ///
+    /// ```ignore
+    /// let mut e = el();
+    /// e.set_h_frac(0.4);
+    /// ```
+    #[inline]
+    pub fn set_h_frac(&mut self, f: f32) -> &mut Self {
+        self.style.set_height(percent(f));
+        self
+    }
+    /// Fit height to content without stretching across a row (CSS `height: fit-content`).
+    ///
+    /// Keeps `align-self` at `auto`, so a child hugs its content height inside a stretching
+    /// `row()` while still deferring to a parent's cross-axis alignment (such as `row().center_y()`).
+    ///
+    /// ```ignore
+    /// col().h_fit().py(6.0).child(text("Badge"))
+    /// ```
+    #[inline]
+    pub fn h_fit(mut self) -> Self {
+        self.set_h_fit();
+        self
+    }
+    /// [`El::h_fit`] in place.
+    ///
+    /// ```ignore
+    /// let mut e = col();
+    /// e.set_h_fit();
+    /// ```
+    #[inline]
+    pub fn set_h_fit(&mut self) -> &mut Self {
+        self.style.set_height(Dimension::fit_content());
         self
     }
     /// Take a `g` share of the free space along the parent's main axis (CSS `flex: g 1 0`).
@@ -370,6 +440,27 @@ impl El {
     #[inline]
     pub fn set_self_stretch(&mut self) -> &mut Self {
         self.style.set_align_self(Some(AlignSelf::STRETCH));
+        self
+    }
+    /// Reset this element's cross-axis alignment to defer to the parent's `align-items`
+    /// (CSS `align-self: auto`).
+    ///
+    /// ```ignore
+    /// control.self_start().self_auto()
+    /// ```
+    #[inline]
+    pub fn self_auto(mut self) -> Self {
+        self.set_self_auto();
+        self
+    }
+    /// [`El::self_auto`] in place.
+    ///
+    /// ```ignore
+    /// control.set_self_auto();
+    /// ```
+    #[inline]
+    pub fn set_self_auto(&mut self) -> &mut Self {
+        self.style.set_align_self(None);
         self
     }
     /// Pack children at the start of the main axis (CSS `justify-content: flex-start`).
