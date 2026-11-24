@@ -262,9 +262,7 @@ impl RuntimeCore {
         one.key_repeat = false;
         let app_first = self.kbd.focus.path().is_none();
         if app_first && app.has_on_key() && Tx::took(app.on_key(ev, one), one) { return true; }
-        if let Some(f) = self.focused_input().and_then(|input| input.key.clone())
-            && Tx::took(f(app.states(), ev, one), one)
-        {
+        if self.run_input_key(app, ev, one) {
             return true;
         }
         if !app_first && app.has_on_key() && Tx::took(app.on_key(ev, one), one) {

@@ -272,3 +272,132 @@ fn follow_caret_leaves_the_scroll_margin_clear_until_the_content_ends() {
         assert!(low <= bottom + 0.5, "up {step}: caret bottom {low} inside {bottom}");
     }
 }
+
+#[test]
+fn on_input_key_edit_and_caret_move_follow_caret_while_noop_leaves_scroll() {
+    struct S {
+        edit: TextEdit,
+        noops: usize,
+    }
+    let mut edit = TextEdit::new((0..40).map(|l| format!("line {l}")).collect::<Vec<_>>().join("\n"));
+    edit.focused = true;
+    let mut rt = Runtime::new(S { edit, noops: 0 }, |s: &S, _: &mut Cx<S>| {
+        col().w_full().h_full().child(
+            col().key("viewport").w_full().h(160.0).scroll(ScrollSpec { stick_bottom: false })
+                .child(
+                    text_input(&s.edit, TextStyle::new(13.0, 400.0).lh(20.0))
+                        .key("field")
+                        .w_full()
+                        .on_edit(|s: &mut S| &mut s.edit)
+                        .on_input_key(|s: &mut S, ev, _| match &ev.key {
+                            Key::Enter => {
+                                let _ = s.edit.insert("\n");
+                                true
+                            }
+                            Key::Command('k') => {
+                                s.edit.set_caret(0);
+                                true
+                            }
+                            Key::Escape | Key::Command('p') => {
+                                s.noops += 1;
+                                true
+                            }
+                            _ => false,
+                        }),
+                ),
+        )
+    }, (300.0, 400.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+
+    let rects = |rt: &Runtime<S>| {
+        let els = rt.elements();
+        let viewport = els.iter().find(|e| e.key.as_deref() == Some("viewport")).unwrap().rect;
+        let caret = els.iter().find(|e| e.key.as_deref() == Some("field")).unwrap().caret.unwrap();
+        (viewport[1], viewport[1] + viewport[3], caret[1], caret[1] + caret[3])
+    };
+    let scroll_y = |rt: &Runtime<S>| rt.scroll.scrolls.values().next().unwrap().offset;
+    let assert_in_view = |rt: &Runtime<S>, step: &str| {
+        let (top, bottom, high, low) = rects(rt);
+        assert!(
+            high >= top - 0.5 && low <= bottom + 0.5,
+            "{step}: caret [{high}, {low}] outside viewport [{top}, {bottom}]"
+        );
+    };
+
+    // Put the caret in view at the bottom via an editor-handled edit, then press Return twice
+    // through on_input_key: each inserted line break must keep the caret in view.
+    rt.key(KeyEvent { key: Key::Text("!".into()), mods: Mods::default() });
+    rt.frame(1.0 / 120.0);
+    assert_in_view(&rt, "initial editor edit");
+    for step in 0..2 {
+        rt.key(KeyEvent { key: Key::Enter, mods: Mods::default() });
+        rt.frame(1.0 / 120.0);
+        assert_in_view(&rt, &format!("on_input_key Return {step}"));
+    }
+
+    // Wheel to the top so the caret at the end is off screen (Chrome textarea reference), then
+    // insert via on_input_key: the caret scrolls back into view.
+    rt.wheel(150.0, 80.0, 2000.0);
+    rt.frame(1.0 / 120.0);
+    let (_, bottom, high, _) = rects(&rt);
+    assert!(high > bottom, "caret should be below the viewport after wheeling up");
+    rt.key(KeyEvent { key: Key::Enter, mods: Mods::default() });
+    rt.frame(1.0 / 120.0);
+    assert_in_view(&rt, "on_input_key insert while caret off screen");
+
+    // Move the caret only (without changing text) via on_input_key: viewport follows to line 0.
+    rt.key(KeyEvent { key: Key::Command('k'), mods: Mods { cmd: true, ..Mods::default() } });
+    rt.frame(1.0 / 120.0);
+    assert_in_view(&rt, "on_input_key caret-only move");
+    assert!(scroll_y(&rt) < 1.0, "viewport scrolled to top for caret at 0: {}", scroll_y(&rt));
+
+    // Wheel away from the caret at line 0, then consume Escape and a shortcut that change
+    // nothing: scroll must stay put.
+    rt.wheel(150.0, 80.0, -400.0);
+    rt.frame(1.0 / 120.0);
+    let scrolled = scroll_y(&rt);
+    assert!(scrolled > 100.0, "viewport should be scrolled away from line 0: {scrolled}");
+    let (top, _, _, low) = rects(&rt);
+    assert!(low < top, "caret at line 0 should be above viewport");
+
+    rt.key(KeyEvent { key: Key::Escape, mods: Mods::default() });
+    rt.frame(1.0 / 120.0);
+    assert_eq!(rt.state.noops, 1);
+    assert_eq!(scroll_y(&rt), scrolled, "consuming Escape without edits must not move scroll");
+
+    rt.key(KeyEvent { key: Key::Command('p'), mods: Mods { cmd: true, ..Mods::default() } });
+    rt.frame(1.0 / 120.0);
+    assert_eq!(rt.state.noops, 2);
+    assert_eq!(scroll_y(&rt), scrolled, "consuming a shortcut without edits must not move scroll");
+}
+
+#[test]
+fn on_input_key_removing_field_does_not_panic() {
+    struct S { renaming: Option<TextEdit> }
+    let mut edit = TextEdit::new("draft");
+    edit.focused = true;
+    let mut rt = Runtime::new(S { renaming: Some(edit) }, |s: &S, _: &mut Cx<S>| {
+        let mut root = col().w_full().h_full();
+        if let Some(edit) = &s.renaming {
+            root = root.child(
+                text_input(edit, TextStyle::new(13.0, 400.0))
+                    .key("rename")
+                    .on_edit(|s: &mut S| s.renaming.as_mut().unwrap())
+                    .on_input_key(|s: &mut S, ev, _| {
+                        if ev.key == Key::Escape {
+                            s.renaming = None;
+                            return true;
+                        }
+                        false
+                    }),
+            );
+        }
+        root
+    }, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    assert!(rt.has_focus());
+    rt.key(KeyEvent { key: Key::Escape, mods: Mods::default() });
+    rt.frame(1.0 / 120.0);
+    assert!(rt.state.renaming.is_none());
+    assert!(!rt.has_focus());
+}

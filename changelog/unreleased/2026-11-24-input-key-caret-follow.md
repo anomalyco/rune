@@ -1,0 +1,1 @@
+- Text fields whose `El::on_input_key` handler consumes a key and changes the field's text or caret now scroll the caret into view after the commit, matching editor-handled edits, while handlers that consume a key without modifying the field leave the scroll position alone.
