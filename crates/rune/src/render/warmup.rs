@@ -341,11 +341,12 @@ pub fn warm_gpu_with(features: wgpu::Features, prepare: impl FnOnce(&wgpu::Devic
     let _ = (features, prepare);
 }
 
-/// `warm_gpu` for a window that opened on the CPU: `done` runs on a thread once the device and
-/// renderer wait for the window's surface, or none could be made (`window::linux::handover`).
+/// `warm_gpu` for a window that opened on the CPU: on a thread, once the device and renderer
+/// wait for the window's surface, `frame` draws with them, then `done` runs; with no device,
+/// only `done` (`window::linux::handover`).
 #[cfg(target_os = "linux")]
-pub(crate) fn warm_gpu_then(features: wgpu::Features, done: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
-    super::prewarm::warm_then(features, done)
+pub(crate) fn warm_gpu_then(features: wgpu::Features, frame: impl FnOnce(&super::Gpu, &mut Renderer) + Send + 'static, done: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
+    super::prewarm::warm_then(features, frame, done)
 }
 
 /// Whether `warm_gpu_then` left a device for the window's surface (or another surface's lives).
