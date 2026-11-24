@@ -123,6 +123,19 @@ impl ActionQueue {
     pub(in crate::runtime) fn retain(&mut self, mut keep: impl FnMut(&Action) -> bool) { self.0.retain(|q| keep(&q.action)); }
     pub(in crate::runtime) fn remove(&mut self, index: usize) -> Action { self.0.remove(index).action }
     pub(in crate::runtime) fn split_off(&mut self, at: usize) -> Vec<Queued> { self.0.split_off(at) }
+
+    /// Records a same-frame middle-button release on the latest pending `Gesture::Button` so
+    /// deferred autoscroll fallback sees the release point if every `on_button` handler declines.
+    pub(in crate::runtime) fn note_middle_button_up(&mut self, x: f32, y: f32) {
+        for q in self.0.iter_mut().rev() {
+            if let Action::Gesture(_, gesture_dispatch::Gesture::Button { button: crate::PointerButton::Middle, released, .. }) = &mut q.action
+                && released.is_none()
+            {
+                *released = Some((x, y));
+                return;
+            }
+        }
+    }
 }
 
 impl Extend<Action> for ActionQueue {
@@ -172,6 +185,7 @@ pub(in crate::runtime) fn live_only_handler(action: &Action) -> Option<&'static 
         Action::Gesture(_, gesture_dispatch::Gesture::Magnify(_)) => "on_magnify",
         Action::Gesture(_, gesture_dispatch::Gesture::Rotate(_)) => "on_rotate",
         Action::Gesture(_, gesture_dispatch::Gesture::SmartMagnify(..)) => "on_smart_magnify",
+        Action::Gesture(_, gesture_dispatch::Gesture::Button { .. }) => "on_button",
         Action::A11y(_, crate::a11y::actions::A11yAct::Delegate { .. }) => "on_a11y_action",
         _ => return None,
     })

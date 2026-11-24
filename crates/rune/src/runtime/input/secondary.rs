@@ -192,16 +192,64 @@ impl RuntimeCore {
             return;
         }
         self.tint_down(x, y, crate::PointerButton::Secondary);
+        let secondary_drag = self.secondary_drag_down(x, y);
         let path = self.secondary_target(x, y).map(str::to_owned);
         let i = path.as_ref().and_then(|p| self.tree.nodes.iter().position(|n| n.path == *p));
         self.pointer.set_secondary(match path {
             Some(path) => capture::Secondary::Held { path, link: i.and_then(|i| self.secondary_link_at(i, x, y)), left: false },
             None => capture::Secondary::Up,
         });
-        self.secondary_region_down(x, y, self.pointer.secondary_held());
+        self.secondary_region_down(x, y, self.pointer.secondary_held() || secondary_drag);
         if let Some(control) = i.and_then(|i| self.secondary_focus_control(i)) {
             self.frame.queue.push(Action::FocusControl(control));
         }
+    }
+
+    /// Starts a secondary-button drag when no press is already held and an allowed, non-exiting
+    /// ancestor under (x, y) opted into `PointerButton::Secondary` via [`El::pointer_buttons`]
+    /// and has `on_drag`.
+    fn secondary_drag_down(&mut self, x: f32, y: f32) -> bool {
+        if self.pointer.press.is_held() { return false; }
+        let hit = self.hit.top_hit(|id, r| self.hit_contains(id, r, x, y))
+            .and_then(|id| self.tree.node_index.get(&id).copied());
+        let Some(di) = std::iter::successors(hit, |&i| self.tree.nodes[i].parent)
+            .take_while(|&i| !self.subtree_exiting(i) && self.allowed(i))
+            .find(|&i| self.drags_with(i, crate::PointerButton::Secondary))
+        else {
+            return false;
+        };
+        let n = &self.tree.nodes[di];
+        let r = n.target;
+        let [lx, ly] = self.to_local(di, x, y);
+        let d = Drag {
+            phase: Phase::Down,
+            x: lx,
+            y: ly,
+            w: r[2] - r[0],
+            h: r[3] - r[1],
+            start_x: lx,
+            start_y: ly,
+            dx: 0.0,
+            dy: 0.0,
+            data: 0.0,
+            clicks: 1,
+            cancelled: false,
+            rtl: n.flow == crate::el::Flow::Rtl,
+            window: [x, y],
+            screen: self.screen_at(x, y),
+        };
+        let path = n.path.clone();
+        let drag_handler = n.handlers.on_drag.clone();
+        if drag_handler.is_some() {
+            self.frame.queue.push(Action::Drag(path.clone(), d, crate::PointerButton::Secondary));
+        }
+        self.pointer.clear_press_clicks();
+        let now = self.now_clock();
+        self.pointer.press.hold(
+            capture::Held::new(path, d, crate::PointerButton::Secondary, (x, y), now, false, None)
+                .drag_handler(drag_handler),
+        );
+        true
     }
 
     /// A middle or secondary press at (x, y), with no primary press held: what a primary press
@@ -217,6 +265,9 @@ impl RuntimeCore {
     /// a text field, `"text"` on selectable text alone, `""` on nothing of Rune's.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn secondary_claim(&self) -> &'static str {
+        if self.pointer.press.held().is_some_and(|h| h.button == crate::PointerButton::Secondary) {
+            return "app";
+        }
         let (path, link) = match self.pointer.secondary() {
             capture::Secondary::Dismissed => return "app",
             capture::Secondary::Held { path, link, .. } => (path, link),
@@ -257,6 +308,13 @@ impl RuntimeCore {
     }
 
     pub(crate) fn secondary_up(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
+        let mut drag_left = false;
+        let dragged = if self.pointer.press.held().is_some_and(|h| h.button == crate::PointerButton::Secondary) {
+            drag_left = self.pointer.press.held().is_some_and(|h| h.left);
+            self.release(app, x, y)
+        } else {
+            false
+        };
         self.pointer.pos = Some((x, y));
         self.pointer.release_tint(crate::PointerButton::Secondary);
         if self.pointer.autoscroll_release(crate::PointerButton::Secondary) { return; }
@@ -271,11 +329,12 @@ impl RuntimeCore {
                 } else if self.repost_allowed(&modal, outer.as_deref()) {
                     self.queue_secondary_repost(app, down, (x, y));
                 }
-                self.leave_after_release(left);
+                self.leave_after_release(left || drag_left);
                 return;
             }
         };
-        if let Some(path) = path
+        if !dragged
+            && let Some(path) = path
             && self.secondary_target(x, y) == Some(path.as_str())
         {
             let i = self.tree.nodes.iter().position(|n| n.path == path);
@@ -289,7 +348,7 @@ impl RuntimeCore {
                 _ => {}
             }
         }
-        self.leave_after_release(left);
+        self.leave_after_release(left || drag_left);
     }
 
     /// Resolves a reposted secondary click (`down` -> `up`) on the live, post-dismiss tree.

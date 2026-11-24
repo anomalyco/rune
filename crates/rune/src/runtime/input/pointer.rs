@@ -176,6 +176,7 @@ impl RuntimeCore {
         };
         let screen = self.screen_at(x, y);
         let Some(held) = self.drop_press() else { return false };
+        if held.button == crate::PointerButton::Secondary { self.pointer.clear_secondary(); }
         let d = Drag { phase: Phase::Up, x: lx, y: ly, dx, dy, cancelled: true, window: [x, y], screen, ..held.drag };
         self.pointer.push_drag_gone(held.path.clone(), handler);
         self.frame.queue.push(Action::Drag(held.path, d, held.button));
@@ -472,11 +473,12 @@ impl RuntimeCore {
     pub(in crate::runtime) fn release_capture(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
         // Hosts release at the last position they saw, which a leave doesn't move.
         let left = self.pointer.press.held().is_some_and(|h| h.left);
-        self.release(app, x, y);
+        let _ = self.release(app, x, y);
         self.leave_after_release(left);
     }
 
-    pub(in crate::runtime) fn release(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
+    /// Releases the held press at (x, y), returning whether the press travelled past `CLICK_SLOP`.
+    pub(in crate::runtime) fn release(&mut self, app: &dyn ViewDriver, x: f32, y: f32) -> bool {
         // A release never starts a drag-out: the system session needs the button held.
         if let Some(held) = self.pointer.press.held_mut() { held.drag_out = None; }
         let moved = self.pointer.pos != Some((x, y));
@@ -491,13 +493,13 @@ impl RuntimeCore {
         self.pointer.end_press_repeat();
         let now = self.now_clock();
         let interval = self.double_click_interval;
-        let Some(h) = self.pointer.press.held() else { return };
+        let Some(h) = self.pointer.press.held() else { return false };
         // Only clicks pair: a press that dragged or was held past the interval is neither half.
         let first = (!input_capture && !h.second && h.inside() && !h.moved && now - h.down_at <= interval
             && h.button == crate::PointerButton::Primary
             && self.live_index(&h.path).is_some_and(|i| self.tree.nodes[i].handlers.on_double_press.is_some()))
             .then(|| capture::FirstClick { path: h.path.clone(), at: h.down_at, point: h.at });
-        let Some(held) = self.pointer.press.release(first) else { return };
+        let Some(held) = self.pointer.press.release(first) else { return false };
         let inside = held.inside();
         let capture::Held { path, drag: d, button, at, down_at, moved, second: double, left, link, pressed_on_down, drag_handler, .. } = *held;
         if !left { self.refresh_hover_within(); }
@@ -511,15 +513,21 @@ impl RuntimeCore {
             {
                 self.link_up(&path, k, x, y, button);
             }
-            return;
+            return moved;
         }
-        let Some(i) = self.live_index(&path) else { return };
+        let Some(i) = self.live_index(&path) else { return moved };
         let n = &self.tree.nodes[i];
         // A button the element didn't opt in to is the middle button's click on a link or on
-        // `on_middle_press`: neither its `on_press` nor its `on_drag` hears it.
+        // `on_middle_press`: neither its `on_press` nor its `on_drag` hears it. Secondary
+        // clicks go to `on_secondary_press`, never `on_press`.
         let opted = self.takes_button(i, button);
-        let (has_drag, has_press, has_double) = (drag_handler.is_some() && self.drags_with(i, button), opted && n.handlers.on_press.is_some(), n.handlers.on_double_press.is_some());
-        let middle_press = !opted && link.is_none() && n.handlers.on_middle_press.is_some();
+        let secondary = button == crate::PointerButton::Secondary;
+        let (has_drag, has_press, has_double) = (
+            drag_handler.is_some() && self.drags_with(i, button),
+            !secondary && opted && n.handlers.on_press.is_some(),
+            n.handlers.on_double_press.is_some(),
+        );
+        let middle_press = button == crate::PointerButton::Middle && !opted && link.is_none() && n.handlers.on_middle_press.is_some();
         if has_drag {
             let (dx, dy) = (x - at.0, y - at.1);
             let [lx, ly] = self.to_local(i, x, y);
@@ -540,6 +548,7 @@ impl RuntimeCore {
         if double_press {
             self.frame.queue.push(Action::DoublePress(path, point));
         }
+        moved
     }
 
     pub fn pointer_leave(&mut self) {
