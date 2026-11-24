@@ -105,3 +105,11 @@ fn the_gpu_driving_the_primary_display_is_picked() {
     let cant_present = [(adapters[0].0.clone(), false), adapters[1].clone()];
     assert_eq!(by_display(&[(0x10de, 0x2c05)], &cant_present), None);
 }
+
+#[test]
+fn adapter_name_pins_fallback_policy() {
+    use crate::fallback::Policy;
+    assert_eq!(super::policy_for_adapter_name(None), Policy::Automatic);
+    assert_eq!(super::policy_for_adapter_name(Some("AMD Radeon(TM) Graphics")), Policy::Pinned);
+    assert_eq!(super::policy_for_adapter_name(Some("Microsoft Basic Render Driver")), Policy::Pinned);
+}

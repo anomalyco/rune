@@ -78,8 +78,11 @@ enum LostPresent {
 /// Window-neutral accounting when `gpu.is_lost()` is already true after `submit_and_present`:
 /// invalidates the surface and cached presentation, marks the host idle, reports a skipped frame,
 /// and either arms a bounded backoff retry or reports `GiveUp` once `SurfaceRetries` is exhausted.
+#[allow(clippy::too_many_arguments)]
 fn apply_lost_present_core(
     surface_retries: &SurfaceRetries,
+    policy: crate::gpu::fallback::Policy,
+    software_available: bool,
     surface_ok: &mut bool,
     presented: &mut Option<Presented>,
     backoff: &mut Backoff,
@@ -91,7 +94,7 @@ fn apply_lost_present_core(
     *presented = None;
     *idle = true;
     reports.skipped();
-    match surface_retries.loss_retry(now) {
+    match surface_retries.loss_retry(now, policy, software_available) {
         Some(at) => {
             let _ = backoff.step(BackoffEvent::At(at));
             LostPresent::Retry
@@ -648,6 +651,8 @@ impl FrameHost for WindowFrame<'_> {
                 self.host.meter.set_pacing(l.pacing_state(false));
                 apply_lost_present_core(
                     &l.surface_retries,
+                    crate::render::Gpu::env_fallback_policy(),
+                    crate::gpu::fallback::software_fallback_available(),
                     &mut l.surface_ok,
                     &mut l.presented,
                     &mut l.backoff,

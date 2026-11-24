@@ -386,6 +386,28 @@ fn exhausting_every_real_adapter_returns_first_error() {
     assert!(err.message.starts_with("refused #1 on "), "got: {}", err.message);
 }
 
+/// Offscreen software fallback picks `DeviceType::Cpu` (WARP on Windows) and builds a live
+/// device without falling back to any hardware adapter.
+#[cfg(target_os = "windows")]
+#[test]
+fn software_fallback_picks_cpu_adapter_offscreen() {
+    let instance = Gpu::instance();
+    let (gpu, (), value) = Gpu::try_software_setup_on(
+        instance,
+        (),
+        wgpu::Features::empty(),
+        |_| None,
+        |gpu, _| {
+            assert_eq!(gpu.adapter.get_info().device_type, wgpu::DeviceType::Cpu);
+            assert!(!gpu.is_lost());
+            Ok(7u32)
+        },
+    )
+    .expect("Windows DX12 must expose WARP for software fallback");
+    assert_eq!(value, 7);
+    assert_eq!(gpu.adapter.get_info().device_type, wgpu::DeviceType::Cpu);
+}
+
 #[test]
 fn configure_error_classification_separates_oom_from_refusal_and_dcomp_unavailable() {
     use crate::window::{ConfigureErrorKind, classify_scope_error};

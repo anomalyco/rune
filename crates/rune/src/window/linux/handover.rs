@@ -108,8 +108,10 @@ impl Host {
         crate::marks::mark("gpu.window.ready");
         // X11: the server has every CPU frame before the driver's connection presents one.
         cpu.frames.settle();
-        if let Err(error) = self.reattach() { return self.fail_gpu(error, tries); }
+        if let Err(error) = self.reattach(crate::gpu::fallback::GpuMode::Hardware) { return self.fail_gpu(error.message, tries); }
+        let on_software = self.gpu.as_ref().is_some_and(|(gpu, _)| gpu.adapter.get_info().device_type == wgpu::DeviceType::Cpu);
         let Some(w) = self.win.as_mut() else { return };
+        if on_software { w.surface_retries.note_software(); }
         let SurfaceMode::Cpu { cpu, .. } = std::mem::take(&mut w.native.mode) else { unreachable!("checked above") };
         w.native.mode = SurfaceMode::Handing { cpu };
         crate::marks::mark("gpu.window.attached");
@@ -135,6 +137,7 @@ impl Host {
         // Whatever the try made of a surface and device goes; the display kept the CPU's frame.
         w.surface = None;
         self.gpu = None;
+        self.app.release_compositor_gpu();
         w.request_redraw();
     }
 

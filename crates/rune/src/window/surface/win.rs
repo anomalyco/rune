@@ -20,53 +20,113 @@ pub(in crate::window) const READY_FALLBACK: Duration = Duration::from_secs(1);
 /// What a frame does about a surface that can't draw (`Host::replace_lost_surface`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::window) enum SurfaceStep {
-    /// Try a replacement now.
-    Replace,
-    /// `SURFACE_TRIES` replacements in a row and no frame presented between them: give the
-    /// window up.
+    /// Try a replacement in `mode`. `switched_to_software` is true on the single transition
+    /// from hardware to software so the caller logs it once.
+    Replace {
+        mode: crate::gpu::fallback::GpuMode,
+        switched_to_software: bool,
+    },
+    /// The active fallback chain is exhausted (or pinned/unavailable): give the window up.
     GiveUp,
 }
 
-/// How many replacements in a row a window may make before it gives the window up, and how long
-/// it waits between ones that failed (`Host::replace_lost_surface`). Every replacement counts,
-/// whether or not it worked: only a frame that presents starts the count over (`Host::draw`).
+/// Repeated device-loss accounting and fallback mode for one window (`Host::replace_lost_surface`),
+/// backed directly by `rune_gpu::fallback::LossState`: 3 losses per mode with 1 forgiven per
+/// 5 minutes, hardware -> software -> give up (unless pinned or no software adapter exists).
+/// A single healthy frame does not reset the count.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::window) struct SurfaceRetries {
-    replacements: u8,
+    state: crate::gpu::fallback::LossState,
 }
 
-/// Replacements in a row without a presented frame before the window gives up.
-pub(in crate::window) const SURFACE_TRIES: u8 = 3;
+/// Losses in one mode within the forgiveness window before falling back or giving up.
+pub(in crate::window) const SURFACE_TRIES: u8 = crate::gpu::fallback::LOSS_LIMIT;
 /// The first wait between replacements; each one after waits a further `SURFACE_BACKOFF`.
 pub(in crate::window) const SURFACE_BACKOFF: Duration = Duration::from_millis(100);
 
 impl SurfaceRetries {
-    /// Counts this replacement and says whether it may happen. One that worked counts too: a
-    /// surface replaced and lost again before its frame presents has still used it up.
-    pub(in crate::window) fn attempt(&mut self) -> SurfaceStep {
-        if self.replacements >= SURFACE_TRIES { return SurfaceStep::GiveUp; }
-        self.replacements = self.replacements.saturating_add(1);
-        SurfaceStep::Replace
+    /// Starts with zero recorded losses in `mode`.
+    pub(in crate::window) const fn for_mode(mode: crate::gpu::fallback::GpuMode) -> Self {
+        Self { state: crate::gpu::fallback::LossState::for_mode(mode) }
     }
 
-    /// When to try again after a replacement that failed at `now`, or None when that was the
-    /// last one `attempt` allows.
-    pub(in crate::window) fn retry(&self, now: Instant) -> Option<Instant> {
-        (self.replacements < SURFACE_TRIES).then(|| now + SURFACE_BACKOFF * u32::from(self.replacements))
+    /// Records a loss at `now` and returns whether to replace (and in which mode) or give up.
+    pub(in crate::window) fn attempt(
+        &mut self,
+        now: Instant,
+        policy: crate::gpu::fallback::Policy,
+        software_available: bool,
+    ) -> SurfaceStep {
+        let effect = crate::gpu::fallback::step_loss(
+            &mut self.state,
+            crate::gpu::fallback::LossEvent::Replace { now, policy, software_available },
+        )
+        .into_iter()
+        .next();
+        match effect {
+            Some(crate::gpu::fallback::LossEffect::Replace { mode, switched_to_software }) => {
+                SurfaceStep::Replace { mode, switched_to_software }
+            }
+            Some(crate::gpu::fallback::LossEffect::GiveUp) | None => SurfaceStep::GiveUp,
+        }
+    }
+
+    /// When to try again after a replacement that failed at `now`, or None if the next loss
+    /// would exhaust the fallback chain.
+    pub(in crate::window) fn retry(
+        &self,
+        now: Instant,
+        policy: crate::gpu::fallback::Policy,
+        software_available: bool,
+    ) -> Option<Instant> {
+        self.state.next_backoff(now, policy, software_available, SURFACE_BACKOFF)
     }
 
     /// When to retry after a frame whose device was lost during submission or presentation, or
-    /// None once all `SURFACE_TRIES` replacements have been spent without a healthy frame. A
-    /// first loss on a steady-state surface (`replacements == 0`) waits one `SURFACE_BACKOFF`.
-    pub(in crate::window) fn loss_retry(&self, now: Instant) -> Option<Instant> {
-        (self.replacements < SURFACE_TRIES).then(|| now + SURFACE_BACKOFF * u32::from(self.replacements.max(1)))
+    /// None if the next loss at `now` exhausts the fallback chain.
+    pub(in crate::window) fn loss_retry(
+        &self,
+        now: Instant,
+        policy: crate::gpu::fallback::Policy,
+        software_available: bool,
+    ) -> Option<Instant> {
+        self.state.next_backoff(now, policy, software_available, SURFACE_BACKOFF)
     }
 
-    /// A frame presented: the next loss starts its replacements over.
-    pub(in crate::window) fn worked(&mut self) { self.replacements = 0; }
+    /// Records that a replacement attempt failed at `now` (counts a failed hardware->software
+    /// switch as software loss 1).
+    pub(in crate::window) fn note_replace_failed(&mut self, now: Instant) {
+        let _ = crate::gpu::fallback::step_loss(
+            &mut self.state,
+            crate::gpu::fallback::LossEvent::ReplaceFailed { now },
+        );
+    }
+
+    /// Records that the window is now running on a software adapter (`DeviceType::Cpu`).
+    pub(in crate::window) fn note_software(&mut self) {
+        let _ = crate::gpu::fallback::step_loss(
+            &mut self.state,
+            crate::gpu::fallback::LossEvent::OnSoftware,
+        );
+    }
+
+    /// Records that software fallback found no usable software adapter on this host.
+    pub(in crate::window) fn note_no_software(&mut self) {
+        let _ = crate::gpu::fallback::step_loss(
+            &mut self.state,
+            crate::gpu::fallback::LossEvent::NoSoftwareAdapter,
+        );
+    }
 
     #[cfg(test)]
-    pub(in crate::window) fn failures(&self) -> u8 { self.replacements }
+    pub(in crate::window) fn failures(&self, now: Instant) -> u8 {
+        self.state.effective_losses(now)
+    }
+
+    #[cfg(test)]
+    pub(in crate::window) fn mode(&self) -> Option<crate::gpu::fallback::GpuMode> {
+        self.state.mode()
+    }
 }
 
 /// The open window. Fields drop in order: what's native to the OS, then the surface before its

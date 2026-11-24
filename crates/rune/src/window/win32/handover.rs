@@ -244,6 +244,9 @@ impl Host {
         w.surface = Some(surface);
         w.config = config;
         w.surface_ok = true;
+        if gpu.adapter.get_info().device_type == wgpu::DeviceType::Cpu {
+            w.surface_retries.note_software();
+        }
         // The window changed size while the GPU was made.
         if size.width > 0 && size.height > 0 { w.resize_surface(Some(&*gpu), size); }
         self.gpu = Some((gpu, renderer));
