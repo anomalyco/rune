@@ -18,7 +18,7 @@ use super::{hunspell, tags_match};
 
 /// Dictionary discovery, parsing and checking run on the `rune-spell` worker thread so the UI
 /// thread never touches the filesystem during frames.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(all(target_os = "linux", feature = "hunspell")), allow(dead_code))]
 pub(super) const OFF_THREAD: bool = true;
 
 /// Upper bound on discovered dictionary entries cached from search directories.
@@ -81,7 +81,7 @@ pub(crate) struct LinuxBackend {
 }
 
 impl LinuxBackend {
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(all(target_os = "linux", feature = "hunspell")), allow(dead_code))]
     fn system() -> Self {
         Self {
             dirs: Box::new(|| search_dirs_from(rune_core::env::var_os)),
@@ -239,52 +239,52 @@ impl LinuxBackend {
     }
 }
 
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(all(target_os = "linux", feature = "hunspell")), allow(dead_code))]
 fn backend() -> &'static LinuxBackend {
     static BACKEND: OnceLock<LinuxBackend> = OnceLock::new();
     BACKEND.get_or_init(LinuxBackend::system)
 }
 
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(all(target_os = "linux", feature = "hunspell")), allow(dead_code))]
 pub(super) fn misspelled(text: &str) -> Vec<(usize, usize)> {
     let generation = super::generation();
     let active = super::languages();
     backend().misspelled(generation, &active, text, super::generation)
 }
 
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(all(target_os = "linux", feature = "hunspell")), allow(dead_code))]
 pub(super) fn suggest(word: &str) -> Vec<String> {
     let generation = super::generation();
     let active = super::languages();
     backend().suggest(generation, &active, word, super::generation)
 }
 
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(all(target_os = "linux", feature = "hunspell")), allow(dead_code))]
 pub(super) fn learn(word: &str) {
     backend().learn(word);
 }
 
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(all(target_os = "linux", feature = "hunspell")), allow(dead_code))]
 pub(super) fn available() -> Vec<String> {
     backend().available()
 }
 
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(all(target_os = "linux", feature = "hunspell")), allow(dead_code))]
 pub(super) fn preferred() -> Vec<String> {
     backend().preferred()
 }
 
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(all(target_os = "linux", feature = "hunspell")), allow(dead_code))]
 pub(super) fn english_name(tag: &str) -> String {
     tag.to_owned()
 }
 
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(all(target_os = "linux", feature = "hunspell")), allow(dead_code))]
 pub(super) fn name_in(_: &str, _: &str) -> Option<String> {
     None
 }
 
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(all(target_os = "linux", feature = "hunspell")), allow(dead_code))]
 pub(super) fn sort_in<T>(_: &mut [(String, T)], _: &str) -> bool {
     false
 }

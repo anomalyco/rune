@@ -266,7 +266,7 @@ fn linux_backend_handles_missing_and_corrupt_dictionaries_gracefully() {
     assert_eq!(mixed.loaded_tags(), vec!["de-DE"]);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "hunspell"))]
 #[test]
 fn linux_platform_dispatches_off_thread() {
     assert!(super::platform::OFF_THREAD);
@@ -274,6 +274,17 @@ fn linux_platform_dispatches_off_thread() {
     let _ = super::available_languages();
     let _ = super::languages();
     let _ = super::misspelled("hello world", None);
+}
+
+#[cfg(all(target_os = "linux", not(feature = "hunspell")))]
+#[test]
+fn linux_no_default_features_falls_back_to_noop() {
+    assert!(!super::platform::OFF_THREAD);
+    assert!(super::available_languages().is_empty());
+    assert!(super::languages().is_empty());
+    assert!(super::misspelled("helo wrld", None).is_empty());
+    assert!(super::suggest("helo").is_empty());
+    super::learn("helo");
 }
 
 #[test]
@@ -301,4 +312,37 @@ fn discover_in_follows_symlinks_like_distro_hunspell_dirs() {
     let active = vec!["en-CA".to_owned()];
     assert!(backend.misspelled(1, &active, "hello world", || 1).is_empty());
     assert_eq!(backend.misspelled(1, &active, "helo", || 1), vec![(0, 4)]);
+}
+
+#[test]
+fn manifest_gates_spellbook_behind_hunspell_feature() {
+    let spell_manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+        .expect("read crates/rune-spell/Cargo.toml");
+    assert!(
+        spell_manifest.contains("default = [\"hunspell\"]"),
+        "rune-spell must enable hunspell by default"
+    );
+    assert!(
+        spell_manifest.contains("hunspell = [\"dep:spellbook\", \"dep:unicode-segmentation\"]"),
+        "rune-spell hunspell feature must gate optional spellbook and unicode-segmentation"
+    );
+    assert!(
+        spell_manifest.contains("spellbook = { version = \"0.4\", optional = true }"),
+        "rune-spell spellbook target dependency must be optional"
+    );
+
+    let rune_manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../rune/Cargo.toml"))
+        .expect("read crates/rune/Cargo.toml");
+    assert!(
+        rune_manifest.contains("hunspell = [\"rune-spell/hunspell\"]"),
+        "rune must forward hunspell feature to rune-spell/hunspell"
+    );
+    assert!(
+        rune_manifest.contains("rune-spell = { workspace = true, default-features = false }"),
+        "rune must disable rune-spell default features so --no-default-features omits spellbook on Linux"
+    );
+    assert!(
+        rune_manifest.contains("rune-spell = { workspace = true, features = [\"hunspell\"] }"),
+        "rune must keep rune-spell/hunspell enabled on wasm32 even under default-features = false"
+    );
 }

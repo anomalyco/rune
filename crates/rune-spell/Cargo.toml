@@ -5,6 +5,12 @@ edition.workspace = true
 license.workspace = true
 description = "Platform spell checking for Rune: Windows ISpellChecker, macOS NSSpellChecker, Linux and web Hunspell via spellbook."
 
+[features]
+default = ["hunspell"]
+# Pure-Rust Hunspell spellchecking via `spellbook` (MPL-2.0) and `unicode-segmentation` on Linux
+# and `wasm32`. Off, Linux and `wasm32` fall back to a no-op backend without compiling `spellbook`.
+hunspell = ["dep:spellbook", "dep:unicode-segmentation"]
+
 [dependencies]
 rune-core = { workspace = true }
 rustc-hash = { workspace = true }
@@ -18,8 +24,8 @@ windows = { workspace = true, features = ["Win32_Foundation", "Win32_Globalizati
 windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
 
 [target.'cfg(any(target_os = "linux", target_arch = "wasm32"))'.dependencies]
-spellbook = "0.4"
-unicode-segmentation = { workspace = true }
+spellbook = { version = "0.4", optional = true }
+unicode-segmentation = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true }
