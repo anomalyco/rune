@@ -135,10 +135,18 @@ impl El {
         }
         self
     }
-    /// On a virtualized stack, reveal its selected row when the selected key changes,
-    /// even while another control owns keyboard focus. Frames dispatching `on_hover`
-    /// do not scroll, so hover-driven selection does not move the row under the pointer.
-    /// Off by default; useful for suggestions controlled by an outside text field.
+    /// On an [`El::virtualize`] stack with eager child rows, reveal its [`El::focus_selected`]
+    /// child row when the selected key changes, even while another control owns keyboard focus.
+    /// Frames dispatching `on_hover` do not scroll, so hover-driven selection does not move the
+    /// row under the pointer. Off by default; useful for short lists such as suggestions
+    /// controlled by an outside text field.
+    ///
+    /// Only inspects eager child rows of [`El::virtualize`]: on an [`El::virtual_rows`] list it
+    /// does nothing (debug builds warn once per list). For [`El::virtual_rows`], reveal rows from
+    /// selection-moving handlers via [`Tx::scroll_into_view`](crate::Tx::scroll_into_view) or
+    /// [`Tx::scroll_into_view_in`](crate::Tx::scroll_into_view_in) (or
+    /// [`Tx::scroll_center`](crate::Tx::scroll_center) /
+    /// [`Tx::scroll_key_to`](crate::Tx::scroll_key_to)).
     pub fn reveal_selected(mut self, enabled: bool) -> Self {
         if enabled || !self.cold.focus.is_empty() {
             self.cold_mut().focus.reveal_selected = enabled;

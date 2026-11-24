@@ -620,6 +620,10 @@ impl Measurement<'_> {
         // holding a resource doesn't keep it through building its replacement.
         v.selection.stored.clear();
         if let Some(rows) = source {
+            #[cfg(debug_assertions)]
+            if el.cold.focus.reveal_selected {
+                crate::tooling::perf_warn::reveal_selected_on_virtual_rows(path, el.cold.virtual_source);
+            }
             // What the rows read, so a memo holding the list can keep them while it holds.
             let ((), reads) = crate::memo::recording(|| {
                 let quiet: Vec<bool> = v.range.clone().map(|i| v.mounts_quietly(i, self.commits)).collect();

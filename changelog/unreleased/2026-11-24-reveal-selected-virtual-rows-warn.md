@@ -1,0 +1,1 @@
+- `El::virtual_rows`: debug builds now warn once per list when `.reveal_selected(true)` is set on an index-built virtual list, directing callers to `Tx::scroll_into_view` / `Tx::scroll_into_view_in`, and docs on `El::virtual_rows` and `El::reveal_selected` clarify that `reveal_selected` applies only to eager child rows of `El::virtualize`.

@@ -47,12 +47,18 @@ impl El {
     /// jump or a prepended page doesn't lay out three viewports of text at once.
     /// Both closures get the window's state, so they capture nothing borrowed.
     ///
-    /// Everything `virtualize` does holds: rows keep their measured heights by key while the key
-    /// stays, unvisited rows use the estimate, inserting or prepending rows keeps the reader's
-    /// row in place, and `Tx::scroll_into_view` reaches any row by key. A row's key is
-    /// `key(s, i)`, whatever key its element had. The same element needs `.growth(GrowthSpec)`
-    /// and must be inside a `.scroll(..)` viewport (see [`El::virtualize`]), and holds no other
-    /// children.
+    /// Everything `virtualize` does holds except [`El::reveal_selected`]: rows keep their measured
+    /// heights by key while the key stays, unvisited rows use the estimate, inserting or
+    /// prepending rows keeps the reader's row in place, and
+    /// [`Tx::scroll_into_view`](crate::Tx::scroll_into_view) reaches any row by key.
+    /// [`El::reveal_selected`] only inspects eager child rows of [`El::virtualize`] and does
+    /// nothing here (debug builds warn once per list); reveal rows from selection-moving handlers
+    /// via [`Tx::scroll_into_view`](crate::Tx::scroll_into_view) or
+    /// [`Tx::scroll_into_view_in`](crate::Tx::scroll_into_view_in) (or
+    /// [`Tx::scroll_center`](crate::Tx::scroll_center) /
+    /// [`Tx::scroll_key_to`](crate::Tx::scroll_key_to)). A row's key is `key(s, i)`, whatever
+    /// key its element had. The same element needs `.growth(GrowthSpec)` and must be inside a
+    /// `.scroll(..)` viewport (see [`El::virtualize`]), and holds no other children.
     ///
     /// A row outside the window isn't built, so it has no elements at all: the inspector,
     /// `Runtime::elements`, accessibility, Tab order, text selection and matched elements see the
@@ -77,6 +83,7 @@ impl El {
     ///         }),
     /// )
     /// ```
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn virtual_rows<S: 'static>(
         mut self,
         count: usize,

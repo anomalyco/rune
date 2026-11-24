@@ -2,8 +2,8 @@
 //! every row to mount a few, a callback that blocks the main thread, a `poll` that says it
 //! changed what shows when nothing did, a window that keeps drawing while idle, a slow first
 //! frame, something that commits the view on most frames of a scroll, an app stepping its own
-//! scroll glide, and (a mistake rather than slowness) a `memo` whose root already had another
-//! key. Each warns once per site, on stderr; `RUNE_PERF_WARN=0` silences them. Release builds
+//! scroll glide, and (mistakes rather than slowness) a `memo` whose root already had another
+//! key or `reveal_selected` on a `virtual_rows` list. Each warns once per site, on stderr; `RUNE_PERF_WARN=0` silences them. Release builds
 //! contain none of it. `budget` is the exception: an opt-in line per slow commit, in any build.
 
 pub(crate) mod budget;
@@ -164,6 +164,18 @@ pub(crate) fn overbuilt(path: &str, site: Option<&std::panic::Location>, built: 
     warn_once(format!("overbuild {path}"), || format!(
         "virtualized list {path:?}{site} built {built} rows to mount {mounted}: build only the \
          mounted rows with `.virtual_rows(count, estimated_row_height, key, build)`"
+    ));
+}
+
+/// A `virtual_rows` list at `path`, set up at `site`, set `.reveal_selected(true)`, which
+/// only inspects eager child rows of `El::virtualize`.
+#[cfg(debug_assertions)]
+pub(crate) fn reveal_selected_on_virtual_rows(path: &str, site: Option<&std::panic::Location>) {
+    let site = site.map_or_else(String::new, |s| format!(" (.virtual_rows at {s})"));
+    warn_once(format!("reveal_selected_virtual_rows {path}"), || format!(
+        "virtual_rows list {path:?}{site} has `.reveal_selected(true)`, which only inspects eager \
+         child rows of `El::virtualize` and does nothing here: call `Tx::scroll_into_view` or \
+         `Tx::scroll_into_view_in` from the handler that moves selection"
     ));
 }
 
