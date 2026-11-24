@@ -64,6 +64,7 @@ pub(crate) struct SentItem {
     /// App-mode scroll viewport translation `[tx, ty]` in CSS pixels.
     pub scroll: Option<[f32; 2]>,
     pub aria: MirrorAria,
+    pub dir: Option<&'static str>,
 }
 
 impl SentItem {
@@ -101,6 +102,7 @@ impl SentItem {
             busy: item.busy,
             scroll: item.scroll.map(|[x, y]| [clean_zero(x), clean_zero(y)]),
             aria: item.aria.clone(),
+            dir: item.dir,
         }
     }
 
@@ -134,6 +136,7 @@ impl SentItem {
             self.busy,
             self.scroll,
             &self.aria,
+            self.dir,
         ))
     }
 }
@@ -168,6 +171,7 @@ pub(super) fn item_json_fields(
     busy: bool,
     scroll: Option<[f32; 2]>,
     aria: &MirrorAria,
+    dir: Option<&'static str>,
 ) -> serde_json::Map<String, Value> {
     let mut obj = serde_json::Map::new();
     obj.insert("k".into(), json!(kind));
@@ -206,6 +210,9 @@ pub(super) fn item_json_fields(
     if let Some(or) = aria.orientation { obj.insert("or".into(), json!(or)); }
     if let Some(ct) = aria.controls.as_deref() { obj.insert("ct".into(), json!(ct)); }
     if let Some(ow) = aria.owns.as_deref() { obj.insert("ow".into(), json!(ow)); }
+    if let Some(dir) = dir {
+        obj.insert("dir".into(), json!(dir));
+    }
     if !runs.is_empty() {
         let out: Vec<Value> = runs.iter().map(|r| {
             let mut ro = serde_json::Map::new();
@@ -227,12 +234,35 @@ pub(crate) struct PatchState {
     sent: HashMap<String, SentItem>,
     /// Child key lists per parent key (`""` for the mirror root, `"{tag}:{path}"` for containers).
     orders: HashMap<String, Vec<String>>,
+    root_dir: Option<&'static str>,
+    root_lang: Option<String>,
 }
 
 impl PatchState {
     /// Diffs `items` against the previously sent state and updates the cache.
     /// Returns `None` when nothing changed, or a patch object `{ "p": 1, "d"?, "u"?, "o"? }`.
+    #[cfg(test)]
     pub(crate) fn diff(&mut self, items: &[A11yItem]) -> Option<Value> {
+        self.diff_inner(items, None, None)
+    }
+
+    /// Diffs `items` together with the mirror root's `dir` (`"ltr"` or `"rtl"`) and optional
+    /// BCP 47 `lang` tag (`""` emitted when a previously set `lang` is cleared).
+    pub(crate) fn diff_with_root(
+        &mut self,
+        items: &[A11yItem],
+        root_dir: &'static str,
+        root_lang: Option<&str>,
+    ) -> Option<Value> {
+        self.diff_inner(items, Some(root_dir), Some(root_lang))
+    }
+
+    fn diff_inner(
+        &mut self,
+        items: &[A11yItem],
+        next_root_dir: Option<&'static str>,
+        next_root_lang: Option<Option<&str>>,
+    ) -> Option<Value> {
         let keys: Vec<String> = items.iter().map(item_key).collect();
         let mut new_sent: HashMap<String, SentItem> = HashMap::default();
         new_sent.reserve(items.len());
@@ -280,11 +310,28 @@ impl PatchState {
         self.sent = new_sent;
         self.orders = new_orders;
 
-        if removed.is_empty() && upserts.is_empty() && changed_orders.is_empty() {
+        let dir_changed = next_root_dir.is_some_and(|dir| self.root_dir != Some(dir));
+        if let Some(dir) = next_root_dir {
+            self.root_dir = Some(dir);
+        }
+        let lang_changed = next_root_lang.is_some_and(|lang| self.root_lang.as_deref() != lang);
+        if let Some(lang) = next_root_lang
+            && self.root_lang.as_deref() != lang
+        {
+            self.root_lang = lang.map(str::to_owned);
+        }
+
+        if removed.is_empty() && upserts.is_empty() && changed_orders.is_empty() && !dir_changed && !lang_changed {
             return None;
         }
         let mut patch = serde_json::Map::new();
         patch.insert("p".into(), json!(1));
+        if dir_changed && let Some(dir) = next_root_dir {
+            patch.insert("dir".into(), json!(dir));
+        }
+        if lang_changed && let Some(lang) = next_root_lang {
+            patch.insert("lang".into(), json!(lang.unwrap_or("")));
+        }
         if !removed.is_empty() {
             patch.insert("d".into(), json!(removed));
         }

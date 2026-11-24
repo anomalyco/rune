@@ -464,6 +464,7 @@ fn plain_controls_omit_disabled_busy_and_range_keys() {
         assert_eq!(item.get("b"), None);
         assert_eq!(item.get("rg"), None);
         assert_eq!(item.get("vt"), None);
+        assert_eq!(item.get("dir"), None);
     }
 }
 
@@ -589,4 +590,160 @@ fn live_text_updates_web_a11y_patch_snapshot_focus_and_schedule_without_commit()
         .find(|v| v["p"].as_str().is_some_and(|p| p.ends_with("/clock")))
         .unwrap_or_else(|| panic!("missing coalesced clock upsert: {coalesced}"));
     assert_eq!(coalesced_clock["t"], json!("00:03"));
+}
+
+#[test]
+fn align_name_uses_logical_start_center_and_end() {
+    use crate::runtime::web_a11y::align_name;
+    assert_eq!(align_name(crate::Align::Start), "start");
+    assert_eq!(align_name(crate::Align::Center), "center");
+    assert_eq!(align_name(crate::Align::End), "end");
+}
+
+#[test]
+fn rtl_root_emits_dir_only_on_flips_and_logical_text_alignment() {
+    use crate::{Align, Direction};
+
+    fn view(rtl_root: &bool, _: &mut Cx<bool>) -> El {
+        let dir = if *rtl_root { Direction::Rtl } else { Direction::Ltr };
+        col()
+            .dir(dir)
+            .size(360.0, 260.0)
+            .child(text("مرحبا بالعالم").key("rtl-start").align(Align::Start))
+            .child(text("نهاية").key("rtl-end").align(Align::End))
+            // Unmirrored intermediate container flips direction: its text child must still
+            // emit explicit dir relative to the mirror root.
+            .child(
+                col()
+                    .dir(Direction::Ltr)
+                    .child(text("README.md").key("ltr-island").align(Align::Start)),
+            )
+            // Mirrored container flips to LTR; its LTR child inherits, while its inner RTL
+            // child flips back to rtl.
+            .child(
+                row()
+                    .key("ltr-bar")
+                    .role("toolbar")
+                    .label("Commands")
+                    .dir(Direction::Ltr)
+                    .size(200.0, 32.0)
+                    .child(
+                        el()
+                            .key("run-btn")
+                            .role("button")
+                            .label("Run")
+                            .size(60.0, 28.0)
+                            .on_press(|_: &mut bool| {}),
+                    )
+                    .child(text("إرسال").key("inner-rtl").dir(Direction::Rtl)),
+            )
+            // Direction::Auto resolves from the first strong character.
+            .child(text("Hello auto").key("auto-ltr").dir(Direction::Auto))
+    }
+
+    let mut rt = Runtime::new(true, view, (360.0, 260.0), Env::new(false, 1.0));
+    rt.frame(0.0);
+
+    let mut mirror = A11yMirror::default();
+    let first: Value = serde_json::from_str(
+        rt.core().web_a11y_patch(&mut mirror).expect("initial RTL patch"),
+    ).unwrap();
+    assert_eq!(first["dir"], "rtl");
+    assert_eq!(first.get("lang"), None, "lang must be omitted when no language is set");
+    assert!(rt.core().web_a11y_patch(&mut mirror).is_none(), "idle frame emits no patch");
+
+    let items = items_json(&rt);
+    let rtl_start = find_key(&items, "rtl-start");
+    assert_eq!(rtl_start.get("dir"), None, "inherited RTL text omits redundant dir");
+    assert_eq!(rtl_start["f"][5], "start");
+    let rtl_end = find_key(&items, "rtl-end");
+    assert_eq!(rtl_end.get("dir"), None);
+    assert_eq!(rtl_end["f"][5], "end");
+    let ltr_island = find_key(&items, "ltr-island");
+    assert_eq!(ltr_island["dir"], "ltr", "text inside unmirrored LTR wrapper flips from RTL root");
+    let ltr_bar = find_key(&items, "ltr-bar");
+    assert_eq!(ltr_bar["dir"], "ltr");
+    let run_btn = find_key(&items, "run-btn");
+    assert_eq!(run_btn.get("dir"), None, "LTR button inside LTR toolbar inherits dir");
+    let inner_rtl = find_key(&items, "inner-rtl");
+    assert_eq!(inner_rtl["dir"], "rtl", "RTL text inside LTR toolbar flips back to rtl");
+    let auto_ltr = find_key(&items, "auto-ltr");
+    assert_eq!(auto_ltr["dir"], "ltr", "Direction::Auto Latin text flips from RTL root");
+
+    // Flipping the root back to LTR updates root dir and clears redundant child dir attributes.
+    rt.update(|rtl, _| *rtl = false);
+    rt.frame(0.0);
+    let flipped: Value = serde_json::from_str(
+        rt.core().web_a11y_patch(&mut mirror).expect("LTR flip patch"),
+    ).unwrap();
+    assert_eq!(flipped["dir"], "ltr");
+    let items_ltr = items_json(&rt);
+    assert_eq!(find_key(&items_ltr, "ltr-island").get("dir"), None);
+    assert_eq!(find_key(&items_ltr, "ltr-bar").get("dir"), None);
+    assert_eq!(find_key(&items_ltr, "inner-rtl")["dir"], "rtl");
+}
+
+#[test]
+fn root_lang_tracks_active_text_system_language_and_clears_cleanly() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        col().size(240.0, 80.0).child(text("مرحبا").key("hello"))
+    }
+
+    let mut rt = Runtime::new((), view, (240.0, 80.0), Env::new(false, 1.0));
+    rt.frame(0.0);
+    let mut mirror = A11yMirror::default();
+
+    let initial: Value = serde_json::from_str(
+        rt.core().web_a11y_patch(&mut mirror).expect("initial patch"),
+    ).unwrap();
+    assert_eq!(initial["dir"], "ltr");
+    assert_eq!(initial.get("lang"), None);
+    assert!(rt.core().web_a11y_patch(&mut mirror).is_none());
+
+    // Setting language on the text system triggers a compact root-only lang patch.
+    let ar = parley::fontique::Language::parse("ar-EG").ok();
+    rt.core_mut().text.set_language(ar);
+    let set_ar: Value = serde_json::from_str(
+        rt.core().web_a11y_patch(&mut mirror).expect("lang set patch"),
+    ).unwrap();
+    assert_eq!(set_ar["lang"], "ar-EG");
+    assert_eq!(set_ar.get("dir"), None, "unchanged root dir is omitted");
+    assert_eq!(set_ar.get("u"), None, "unchanged items are omitted");
+    assert!(rt.core().web_a11y_patch(&mut mirror).is_none(), "repeated read emits nothing");
+
+    // Changing language emits only the new BCP 47 tag.
+    let he = parley::fontique::Language::parse("he-IL").ok();
+    rt.core_mut().text.set_language(he);
+    let set_he: Value = serde_json::from_str(
+        rt.core().web_a11y_patch(&mut mirror).expect("lang change patch"),
+    ).unwrap();
+    assert_eq!(set_he["lang"], "he-IL");
+
+    // Clearing language emits empty string so bridge.js removes the lang attribute.
+    rt.core_mut().text.set_language(None);
+    let cleared: Value = serde_json::from_str(
+        rt.core().web_a11y_patch(&mut mirror).expect("lang clear patch"),
+    ).unwrap();
+    assert_eq!(cleared["lang"], "");
+    assert!(rt.core().web_a11y_patch(&mut mirror).is_none());
+}
+
+#[test]
+fn inline_text_runs_do_not_merge_across_direction_flips() {
+    use crate::Direction;
+
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        row()
+            .size(300.0, 40.0)
+            .child(text("Open ").key("a").dir(Direction::Ltr))
+            .child(text("مرحبا").key("b").dir(Direction::Rtl))
+    }
+
+    let mut rt = Runtime::new((), view, (300.0, 40.0), Env::new(false, 1.0));
+    rt.frame(0.0);
+    let items = items_json(&rt);
+    let a = find_key(&items, "a");
+    let b = find_key(&items, "b");
+    assert_eq!(a.get("dir"), None);
+    assert_eq!(b["dir"], "rtl");
 }

@@ -1560,6 +1560,15 @@ thread, falling back once off the UI thread to KDE's duration factor or GNOME's
 false; tests can call `rt.set_system_reduced_motion(value)` and inspect
 `rt.system_reduced_motion()`.
 
+`cx.system_languages()` returns the user's preferred BCP 47 language tags in
+preference order and `cx.locale()` returns the primary tag (`Option<&str>`). Both
+query the platform lazily on first call (`GetUserPreferredUILanguages` on Windows,
+`NSLocale.preferredLanguages` on macOS/iOS, `navigator.languages` on web with
+`languagechange` updates, and POSIX `LANGUAGE`/`LC_ALL`/`LC_MESSAGES`/`LANG`
+elsewhere), doing no work before the first frame. Tests and hosts can override the
+list with `rt.set_languages(["ar-EG", "en-US"])`, which re-runs the view and its
+memos when the normalized list changes.
+
 A root `.on_window_focus(|state: &mut State, focused, tx| ...)` receives native
 activation/deactivation in order. It applies to regular windows and interactive
 overlays, independently of text-field focus. Headless tests inject the same events
@@ -2986,7 +2995,7 @@ feature (`crates/rune/src/a11y/`).
   `tree`, `treegrid`, `tabpanel`, `toolbar`, `grid`, `table`, `tablist`, `radiogroup`,
   `listbox`, `dialog`, `form`, `search`, live regions), controls (including disabled controls
   with `aria-disabled="true"`, `aria-busy="true"`, and `progressbar`/`slider`/`spinbutton`
-  range attributes), and app keyboard focus via `aria-activedescendant`. See `WEB.md`.
+  range attributes), HTML `dir` (`"rtl"`/`"ltr"` on `[data-rune-a11y]` and on elements whose resolved direction flips from their mirror parent) and `lang` (from `rune::text::set_language`) with logical `text-align: start`/`end`, and app keyboard focus via `aria-activedescendant`. See `WEB.md`.
 - **Tools**: `--tree` writes the tree under `"accessibility"` (role, key, name, value, states,
   actions, bounds in window points), `Runtime::accessibility_json` returns it to tests, and
   `Runtime::accessibility_tree` returns AccessKit's whole `TreeUpdate`, and

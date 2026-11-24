@@ -152,7 +152,7 @@ fn a_page_mirrors_landmarks_ids_links_and_images_in_document_coordinates() {
     assert_eq!(items[4].rect[1], 400.0, "rects are in the document, whatever the scroll");
 
     let font = items[3].font.as_ref().expect("text in a page carries its font");
-    assert_eq!((font.family.as_str(), font.align), ("sans", "left"));
+    assert_eq!((font.family.as_str(), font.align), ("sans", "start"));
     assert!(items[3].selectable);
     assert!(items[2].selectable, "a page's plain text selects without asking");
     assert_eq!(items[3].rect[0], 4.0, "selectable text sits at its text box, inside the padding");

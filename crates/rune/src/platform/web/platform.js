@@ -85,6 +85,14 @@ export function resolveUrl(url, base) {
     return new URL(url, base).href;
 }
 
+// Browser preferred languages as BCP 47 tags, most preferred first (`Cx::system_languages`).
+export function preferredLanguages() {
+    const nav = globalThis.navigator;
+    if (!nav) return [];
+    const raw = nav.languages?.length ? [...nav.languages] : (nav.language ? [nav.language] : []);
+    return raw.filter(tag => typeof tag === 'string' && tag.trim().length > 0);
+}
+
 export function viewport(canvas, callback, embedded) {
     const probe = document.createElement('div');
     probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';
@@ -136,6 +144,7 @@ export function viewport(canvas, callback, embedded) {
         callback(JSON.stringify({ kind: 'contrast', colors }));
     };
     const focus = () => callback(JSON.stringify({ kind: 'focus', focused: document.hasFocus() }));
+    const languageChange = () => callback(JSON.stringify({ kind: 'languages', languages: preferredLanguages() }));
     const visibility = () => callback(JSON.stringify({ kind: 'visibility', visible: !document.hidden, focused: document.hasFocus() }));
     let dprMedia = null;
     const watchDpr = () => {
@@ -162,6 +171,7 @@ export function viewport(canvas, callback, embedded) {
     forced.addEventListener('change', contrast);
     window.addEventListener('focus', focus);
     window.addEventListener('blur', focus);
+    window.addEventListener('languagechange', languageChange);
     document.addEventListener('visibilitychange', visibility);
     // Mount is called while Rust is installing the shell; enter it only after installation.
     queueMicrotask(() => { update(); reduced(); pointer(); contrast(); focus(); visibility(); });
@@ -177,6 +187,7 @@ export function viewport(canvas, callback, embedded) {
         forced.removeEventListener('change', contrast);
         window.removeEventListener('focus', focus);
         window.removeEventListener('blur', focus);
+        window.removeEventListener('languagechange', languageChange);
         document.removeEventListener('visibilitychange', visibility);
         probe.remove();
         largest.remove();

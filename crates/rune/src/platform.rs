@@ -15,6 +15,7 @@ pub(crate) mod embed_frame;
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) mod gl_links;
 pub(crate) mod ime;
+pub(crate) mod languages;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 pub(crate) mod layer_shell;
 #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]

@@ -29,4 +29,6 @@ extern "C" {
     #[wasm_bindgen(js_name = nextIdle)]
     pub(crate) fn next_idle(timeout: u32) -> js_sys::Promise;
     pub(super) fn viewport(canvas: &web_sys::HtmlCanvasElement, callback: &js_sys::Function, embedded: bool) -> js_sys::Function;
+    #[wasm_bindgen(js_name = preferredLanguages)]
+    pub(crate) fn preferred_languages() -> js_sys::Array;
 }

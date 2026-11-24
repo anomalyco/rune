@@ -204,3 +204,47 @@ test('viewport leaves unrelated sibling canvases and embedded canvases untouched
     assert.equal(cpu.style.height, '100%');
     disposeEmbedded();
 });
+
+test('preferredLanguages reads navigator.languages with navigator.language fallback and languagechange forwards updates', async () => {
+    const origNav = globalThis.navigator;
+    try {
+        Object.defineProperty(globalThis, 'navigator', {
+            value: { languages: ['ar-EG', '  ', 'en-US'], language: 'en-US' },
+            configurable: true,
+        });
+        assert.deepEqual(platform.preferredLanguages(), ['ar-EG', 'en-US']);
+
+        Object.defineProperty(globalThis, 'navigator', {
+            value: { languages: [], language: 'he-IL' },
+            configurable: true,
+        });
+        assert.deepEqual(platform.preferredLanguages(), ['he-IL']);
+
+        Object.defineProperty(globalThis, 'navigator', { value: undefined, configurable: true });
+        assert.deepEqual(platform.preferredLanguages(), []);
+
+        // viewport does not eagerly emit languages on mount, only when languagechange fires.
+        Object.defineProperty(globalThis, 'navigator', {
+            value: { languages: ['fr-FR', 'en-US'], language: 'fr-FR' },
+            configurable: true,
+        });
+        const { doc, win, body } = installDom();
+        const canvas = doc.createElement('canvas');
+        body.append(canvas);
+        const events = [];
+        const dispose = platform.viewport(canvas, msg => events.push(JSON.parse(msg)), false);
+        await Promise.resolve();
+        assert.equal(events.some(e => e.kind === 'languages'), false, 'mount must not eagerly query languages');
+
+        win.dispatchEvent({ type: 'languagechange' });
+        assert.deepEqual(events.filter(e => e.kind === 'languages'), [{ kind: 'languages', languages: ['fr-FR', 'en-US'] }]);
+
+        // After dispose, languagechange stops firing.
+        events.length = 0;
+        dispose();
+        win.dispatchEvent({ type: 'languagechange' });
+        assert.equal(events.length, 0);
+    } finally {
+        Object.defineProperty(globalThis, 'navigator', { value: origNav, configurable: true });
+    }
+});

@@ -358,6 +358,12 @@ impl Running {
                 self.resize_surface(window, size, scale);
             }
             Some("motion") => self.app.rt_mut().set_system_reduced_motion(event["reduced"].as_bool().unwrap_or(false)),
+            Some("languages") => {
+                let langs = event["languages"].as_array().map(|list| {
+                    list.iter().filter_map(|v| v.as_str()).map(str::to_owned).collect::<Vec<_>>()
+                }).unwrap_or_default();
+                self.app.rt_mut().set_languages(langs);
+            }
             // The primary pointer can or can't hover (a mouse or a touch screen), read by views
             // through `Cx::hover_none`.
             Some("primary_pointer") => {

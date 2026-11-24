@@ -237,6 +237,8 @@ mod selection_api_tests;
 #[cfg(test)]
 mod anchored_grow_tests;
 #[cfg(test)]
+mod languages_tests;
+#[cfg(test)]
 mod layout_seed_tests;
 #[cfg(test)]
 mod pixel_snap_tests;

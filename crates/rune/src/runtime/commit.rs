@@ -405,6 +405,8 @@ pub(super) struct Measurement<'a> {
     pub(super) system_contrast: Option<crate::SystemContrast>,
     pub(super) system_increased_contrast: bool,
     pub(super) system_scroll_bars: crate::platform::scroll_bars::SystemScrollBars,
+    pub(super) system_languages: Option<Rc<[String]>>,
+    pub(super) languages_gen: u64,
     pub(super) reduced_motion: bool,
     pub(super) time_scale: f32,
     /// The window's zoom, then the one the view asked for (`Cx::zoom`) once it returns.

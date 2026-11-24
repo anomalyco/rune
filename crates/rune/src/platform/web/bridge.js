@@ -1128,6 +1128,11 @@ function applyA11yItem(h, el, item, tag, origin) {
     } else if (el.getAttribute('aria-busy') !== null) {
         el.removeAttribute('aria-busy');
     }
+    if (item.dir) {
+        if (el.getAttribute('dir') !== item.dir) el.setAttribute('dir', item.dir);
+    } else if (item.k !== 'scroll_x' && el.getAttribute('dir') !== null) {
+        el.removeAttribute('dir');
+    }
     if (item.x === true || item.x === false) {
         const v = String(item.x);
         if (el.getAttribute('aria-expanded') !== v) el.setAttribute('aria-expanded', v);
@@ -1209,6 +1214,20 @@ function applyA11yItem(h, el, item, tag, origin) {
 }
 
 function syncA11yPatch(h, patch) {
+    if (patch.dir !== undefined) {
+        if (patch.dir) {
+            if (h.a11y.getAttribute('dir') !== patch.dir) h.a11y.setAttribute('dir', patch.dir);
+        } else if (h.a11y.getAttribute('dir') !== null) {
+            h.a11y.removeAttribute('dir');
+        }
+    }
+    if (patch.lang !== undefined) {
+        if (patch.lang) {
+            if (h.a11y.getAttribute('lang') !== patch.lang) h.a11y.setAttribute('lang', patch.lang);
+        } else if (h.a11y.getAttribute('lang') !== null) {
+            h.a11y.removeAttribute('lang');
+        }
+    }
     if (patch.d) {
         for (const key of patch.d) {
             const el = h.a11yNodes.get(key);
