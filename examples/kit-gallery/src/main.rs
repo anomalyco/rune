@@ -35,6 +35,9 @@ pub struct G {
     pub combo: rune_kit::ComboboxState,
     /// The file tree story's files.
     pub files: rune_kit::TreeModel<rune_kit::FileNode<()>>,
+    /// The split-view story's sidebar and inspector panes.
+    pub split_sidebar: rune_kit::PaneState,
+    pub split_inspector: rune_kit::PaneState,
     pub neutral: bool,
     pub palette: bool,
     /// `--reduced-motion`: the runtime's reduced-motion mode.
@@ -67,6 +70,8 @@ fn init() -> G {
         edits: Default::default(),
         combo: Default::default(),
         files: files(),
+        split_sidebar: rune_kit::PaneState::new(180.0).range(120.0, 280.0),
+        split_inspector: rune_kit::PaneState::new(170.0).range(120.0, 260.0),
         neutral: rune::extra_args().iter().any(|a| a == "neutral"),
         palette: rune::extra_args().iter().any(|a| a == "palette"),
         reduced: rune::extra_args().iter().any(|a| a == "--reduced-motion"),
