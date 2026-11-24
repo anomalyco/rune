@@ -254,3 +254,244 @@ fn clear_drops_pages_slots_and_replaces_cleanly() {
     assert_eq!(placed.page, 0);
     assert_eq!(atlas.pages[0].dirty, Some((0, 4)));
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn pixels_set_does_not_wait_for_atlas_copy_and_copy_stays_consistent() {
+    use std::sync::atomic::AtomicUsize;
+
+    let px = Pixels::new();
+    let (w, h) = (16u32, 8u32);
+    let first_pixel = [10u8, 20, 30, 255];
+    let second_pixel = [90u8, 80, 70, 255];
+    px.set(w, h, first_pixel.repeat((w * h) as usize));
+
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let wakes_counter = wakes.clone();
+    let wake = rune_core::live::Wake::new(Arc::new(move || {
+        wakes_counter.fetch_add(1, Ordering::SeqCst);
+    }));
+    let _sub = px.source.subscribe(&wake);
+
+    let (mid_tx, mid_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let producer_px = px.clone();
+    let producer = std::thread::spawn(move || {
+        if mid_rx.recv().is_err() {
+            return;
+        }
+        producer_px.set(w, h, second_pixel.repeat((w * h) as usize));
+        let _ = done_tx.send(());
+    });
+
+    let mut atlas = ImageAtlas::default();
+    let placed = atlas.place_at_with_copy_hook(&px, [w as f32, h as f32], None, |line| {
+        if line == (h as usize) / 2 - 1 {
+            // Confirm the frame lock is already released before handing off to the producer;
+            // if the copy still holds the lock, fail immediately instead of deadlocking.
+            drop(px.frame.try_lock().expect("atlas copy held pixels.frame lock; a producer's Pixels::set would block behind it"));
+            mid_tx.send(()).unwrap();
+            done_rx.recv().unwrap();
+        }
+    }).unwrap().0;
+    drop(mid_tx);
+    producer.join().unwrap();
+
+    assert!(wakes.load(Ordering::SeqCst) >= 1, "concurrent Pixels::set must wake subscribers");
+
+    let page = &mut atlas.pages[placed.page];
+    assert_eq!(page.dirty.take(), Some((placed.rect[1], placed.rect[1] + h)));
+    let stride = (page.width * 4) as usize;
+    let first_row = first_pixel.repeat(w as usize);
+    for line in 0..h as usize {
+        let start = (placed.rect[1] as usize + line) * stride + placed.rect[0] as usize * 4;
+        assert_eq!(&page.data[start..start + (w as usize * 4)], first_row.as_slice(), "row {line} must match the snapshotted first frame");
+    }
+
+    let next = atlas.place(&px, [w as f32, h as f32]).unwrap();
+    assert_eq!(next, placed, "same-size streaming frame reuses its atlas slot");
+    let page = &mut atlas.pages[next.page];
+    assert_eq!(page.dirty.take(), Some((next.rect[1], next.rect[1] + h)));
+    let second_row = second_pixel.repeat(w as usize);
+    for line in 0..h as usize {
+        let start = (next.rect[1] as usize + line) * stride + next.rect[0] as usize * 4;
+        assert_eq!(&page.data[start..start + (w as usize * 4)], second_row.as_slice(), "row {line} must match the frame set mid-copy");
+    }
+
+    assert_eq!(atlas.place(&px, [w as f32, h as f32]), Some(next));
+    assert_eq!(atlas.pages[next.page].dirty, None);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn pixels_set_resize_during_copy_finishes_old_frame_and_next_place_resizes() {
+    let assert_rect_filled = |atlas: &ImageAtlas, placed: Placed, pixel: [u8; 4]| {
+        let [x, y, w, h] = placed.rect;
+        let page = &atlas.pages[placed.page];
+        let stride = (page.width * 4) as usize;
+        let expected_row = pixel.repeat(w as usize);
+        for line in 0..h as usize {
+            let start = (y as usize + line) * stride + x as usize * 4;
+            assert_eq!(&page.data[start..start + w as usize * 4], expected_row.as_slice(), "row {line}");
+        }
+    };
+
+    let px = Pixels::new();
+    let mut atlas = ImageAtlas::default();
+    let cases = [
+        ((8u32, 4u32), [1u8, 2, 3, 255], (16u32, 6u32), [4u8, 5, 6, 255]),
+        ((16u32, 6u32), [4u8, 5, 6, 255], (IMAGE_ATLAS_SIZE + 1, 2u32), [7u8, 8, 9, 255]),
+    ];
+
+    px.set(cases[0].0.0, cases[0].0.1, cases[0].1.repeat((cases[0].0.0 * cases[0].0.1) as usize));
+    for ((old_w, old_h), old_px, (new_w, new_h), new_px) in cases {
+        let (mid_tx, mid_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let producer_px = px.clone();
+        let producer = std::thread::spawn(move || {
+            if mid_rx.recv().is_err() { return; }
+            producer_px.set(new_w, new_h, new_px.repeat((new_w * new_h) as usize));
+            let _ = done_tx.send(());
+        });
+
+        let placed = atlas.place_at_with_copy_hook(&px, [old_w as f32, old_h as f32], None, |line| {
+            if line == (old_h as usize) / 2 - 1 {
+                mid_tx.send(()).unwrap();
+                done_rx.recv().unwrap();
+            }
+        }).unwrap().0;
+        drop(mid_tx);
+        producer.join().unwrap();
+
+        assert_eq!((placed.rect[2], placed.rect[3]), (old_w, old_h));
+        assert_rect_filled(&atlas, placed, old_px);
+        atlas.pages[placed.page].dirty = None;
+
+        // Next placement sees the resized frame and copies it completely.
+        let resized = atlas.place(&px, [new_w as f32, new_h as f32]).unwrap();
+        assert_eq!((resized.rect[2], resized.rect[3]), (new_w, new_h));
+        assert_eq!(atlas.pages[resized.page].dirty.take(), Some((resized.rect[1], resized.rect[1] + new_h)));
+        assert_rect_filled(&atlas, resized, new_px);
+        // Set a fresh generation at the same size so the second iteration also enters the copy loop.
+        px.set(new_w, new_h, new_px.repeat((new_w * new_h) as usize));
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn pixels_concurrent_sets_during_copy_stay_bounded_to_one_extra_frame() {
+    let px = Pixels::new();
+    let (w, h) = (8u32, 4u32);
+    px.set(w, h, [10u8, 0, 0, 255].repeat((w * h) as usize));
+    let w1 = px.rgba_weak().unwrap();
+    assert_eq!(w1.strong_count(), 1);
+
+    let (mid_tx, mid_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let producer_px = px.clone();
+    let w1_producer = w1.clone();
+    let producer = std::thread::spawn(move || {
+        if mid_rx.recv().is_err() { return; }
+        // While place_at is copying frame 1, frame 1 is held by both Frame and place_at.
+        assert_eq!(w1_producer.strong_count(), 2);
+
+        producer_px.set(w, h, [20u8, 0, 0, 255].repeat((w * h) as usize));
+        let w2 = producer_px.rgba_weak().unwrap();
+        // Frame replaced frame 1 with frame 2: only the in-flight copy keeps frame 1 alive (peak = 2 frames).
+        assert_eq!(w1_producer.strong_count(), 1);
+        assert_eq!(w2.strong_count(), 1);
+
+        // Further sets while frame 1 is still copying drop uncopied intermediates immediately.
+        producer_px.set(w, h, [30u8, 0, 0, 255].repeat((w * h) as usize));
+        let w3 = producer_px.rgba_weak().unwrap();
+        assert_eq!(w2.strong_count(), 0, "superseded uncopied frame 2 must be freed immediately");
+        assert_eq!(w1_producer.strong_count(), 1);
+        assert_eq!(w3.strong_count(), 1);
+
+        producer_px.set(w, h, [40u8, 0, 0, 255].repeat((w * h) as usize));
+        let w4 = producer_px.rgba_weak().unwrap();
+        assert_eq!(w3.strong_count(), 0, "superseded uncopied frame 3 must be freed immediately");
+        assert_eq!(w1_producer.strong_count(), 1);
+        assert_eq!(w4.strong_count(), 1);
+
+        let _ = done_tx.send(());
+    });
+
+    let mut atlas = ImageAtlas::default();
+    let placed = atlas.place_at_with_copy_hook(&px, [w as f32, h as f32], None, |line| {
+        if line == 1 {
+            mid_tx.send(()).unwrap();
+            done_rx.recv().unwrap();
+        }
+    }).unwrap().0;
+    drop(mid_tx);
+    producer.join().unwrap();
+
+    // Once place_at returns, the in-flight snapshot drops immediately; only frame 4 stays live.
+    assert_eq!(w1.strong_count(), 0, "in-flight snapshot must drop when place_at returns");
+    let w4 = px.rgba_weak().unwrap();
+    assert_eq!(w4.strong_count(), 1);
+
+    // Next placement copies frame 4 and retains no Arc reference to it.
+    let next = atlas.place(&px, [w as f32, h as f32]).unwrap();
+    assert_eq!(next, placed);
+    assert_eq!(w4.strong_count(), 1, "atlas must not retain a reference to the frame buffer");
+    let page = &atlas.pages[next.page];
+    let offset = (next.rect[1] as usize * page.width as usize + next.rect[0] as usize) * 4;
+    assert_eq!(&page.data[offset..offset + 4], &[40, 0, 0, 255]);
+
+    // Clearing releases the final frame buffer.
+    px.set(0, 0, Vec::new());
+    assert_eq!(w4.strong_count(), 0);
+    assert!(px.rgba_weak().is_none());
+}
+
+#[test]
+fn pixels_rgba_returns_snapshot_and_empty_for_mips() {
+    let px = Pixels::new();
+    assert!(px.rgba().is_empty());
+    px.set(2, 1, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    assert_eq!(px.rgba(), vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    px.set(0, 0, Vec::new());
+    assert!(px.rgba().is_empty());
+    let decoded = Arc::new(crate::mip_chain(2, 1, &[200, 30, 30, 255, 200, 30, 30, 255]).unwrap());
+    px.store_mips(decoded);
+    assert!(px.rgba().is_empty(), "decoded mips report empty raw rgba");
+    assert_eq!(px.size(), (2, 1));
+}
+
+#[test]
+#[ignore = "manual lock-hold measurement; reports timings, not a timing threshold"]
+fn pixels_place_lock_hold_time_1080x2400() {
+    let (w, h) = (1080u32, 2400u32);
+    let stream = Pixels::new();
+    stream.set(w, h, vec![1; (w * h * 4) as usize]);
+    let mut atlas = ImageAtlas::default();
+    let t0 = rune_core::time::now();
+    assert!(atlas.place(&stream, [w as f32, h as f32]).is_some());
+    let first_total_us = t0.elapsed().as_secs_f64() * 1e6;
+    let first_lock_us = atlas.last_lock_hold.as_secs_f64() * 1e6;
+    atlas.end_frame();
+
+    let mut steady_total = Vec::with_capacity(21);
+    let mut steady_lock = Vec::with_capacity(21);
+    let mut unchanged_lock = Vec::with_capacity(21);
+    let frames: Vec<Vec<u8>> = (0..21u8).map(|i| vec![i; (w * h * 4) as usize]).collect();
+    for frame in frames {
+        stream.set(w, h, frame);
+        let t = rune_core::time::now();
+        assert!(atlas.place(&stream, [w as f32, h as f32]).is_some());
+        steady_total.push(t.elapsed().as_secs_f64() * 1e6);
+        steady_lock.push(atlas.last_lock_hold.as_secs_f64() * 1e6);
+        assert!(atlas.place(&stream, [w as f32, h as f32]).is_some());
+        unchanged_lock.push(atlas.last_lock_hold.as_secs_f64() * 1e6);
+        atlas.end_frame();
+    }
+    steady_total.sort_by(f64::total_cmp);
+    steady_lock.sort_by(f64::total_cmp);
+    unchanged_lock.sort_by(f64::total_cmp);
+    eprintln!(
+        "1080x2400 place: first total={first_total_us:.1} us lock={first_lock_us:.1} us; steady median total={:.1} us lock={:.1} us; unchanged median lock={:.1} us",
+        steady_total[10], steady_lock[10], unchanged_lock[10]
+    );
+}
