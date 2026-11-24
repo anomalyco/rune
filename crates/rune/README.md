@@ -275,8 +275,13 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
 - **Focus and modals**: `.focusable(true)`, `.tab_index(n)` (positive overrides, 0 document order,
   negative pointer-only), `.focus_group()` for arrow-key roving (Up/Down only, plus type-select,
   for roles `menu`, `listbox`, `list` and `tree`; Left/Right too for other groups such as
-  segments and tabs; `list`, `tree` and `grid` stop at their ends while menus and segments wrap), `.focus_follows()` to press each item it
-  reaches, `.focus_selected(on)` for a group's initial Tab stop, `.focus_ring(width, offset,
+  segments and tabs; `list`, `tree` and `grid` stop at their ends while menus and segments wrap;
+  when a focusable group container itself holds focus, Down/Home/PageUp enter the first item,
+  Up/End/PageDown enter the last item, and typeahead jumps directly to the first matching item),
+  `.focus_follows()` to press each item it
+  reaches, `.focus_selected(on)` for a group's initial Tab stop, `.press_on_return()` to let an
+  individual focused control activate on Return without enabling `Cx::web_focus`,
+  `.focus_ring(width, offset,
   color)` for keyboard-only rings, and `.focus_highlight(color)` for a menu row's shared pointer
   and keyboard highlight. Enter/Space
   activates non-text controls. `.modal(click_outside, close)` traps Tab, handles Escape, makes the
@@ -292,10 +297,11 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   4. The focused field's `on_input_key`.
   5. Focus navigation: Escape dismisses the open modal, Tab and Shift-Tab move focus, a
      focused slider's arrows and Page Up and Down step it (`on_step`) and Home and End take it
-     to its ends (`on_step_limit`), arrows, Home, End and type-select move inside a
-     `focus_group`, Space or Up and Down open a focused popup button (role `combobox`), Space
-     presses the focused control, and Return presses a focused row or link. Past Tab, keys
-     with Shift do none of this (typed capitals still type-select); they go on.
+     to its ends (`on_step_limit`), arrows, Home, End, Page Up/Down and type-select move inside
+     (or enter from a focused container of) a `focus_group`, Space, `Alt+Down`, or Up and Down
+     open a focused popup button (role `combobox`), Space presses the focused control, and Return
+     presses a focused `press_on_return()` control, row or link. Past Tab, keys with Shift do
+     none of this (typed capitals still type-select); they go on.
   6. The focused text field's editor.
   7. The window's `on_key` again, now with `tx.focused()` naming the focused element (or link), for keys
      the focused control passed on.
@@ -317,6 +323,7 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   | Nothing, a button, checkbox, switch, radio, segment, popup button or slider | The default button, else `on_key` |
   | A text field with `on_submit` | `on_submit` (in a multi-line field Shift- or Option-Return types a newline) |
   | A text field without `on_submit` | The default button |
+  | A focused control with `press_on_return()` (and `on_press`) | Presses the control |
   | A row of a `menu`, `listbox`, `list`, `tree` or `grid` group, or a `focus_highlight` row | Presses the row |
   | A link in text | Opens the link |
 

@@ -352,3 +352,34 @@ pub(super) fn select_with_field(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
             .build(k),
     )
 }
+
+/// A closed `Select` opted into `step_closed(true)`: Up and Down step through options without
+/// opening the popup, while Alt+Down, Space and clicking still open it.
+pub(super) fn select_step_closed(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
+    const THEMES: [&str; 3] = ["System", "Light", "Dark"];
+    let current = s.picked("step-closed", "Light");
+    let select = Select::new("step-closed", &THEMES)
+        .label("Theme")
+        .placeholder("Choose theme")
+        .appearance(SelectAppearance::Field)
+        .width(200.0)
+        .current(Some(current))
+        .open(is_open(s, "step-closed"))
+        .step_closed(true)
+        .on_toggle(toggle("step-closed"))
+        .on_close(close)
+        .on_choose(|s: &mut G, v: &str, _: &mut Tx| {
+            s.pick.insert("step-closed".into(), v.to_owned());
+            s.open = None;
+        })
+        .build(k, layer);
+    col()
+        .gap(10.0)
+        .items_start()
+        .child(select)
+        .child(
+            text(format!("Selected: {current} — Up/Down steps while closed; Alt+Down or Space opens."))
+                .font(k.ty.small)
+                .color(k.c.text_muted),
+        )
+}

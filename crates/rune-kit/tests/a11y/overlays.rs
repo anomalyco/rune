@@ -589,3 +589,40 @@ fn popover_and_select_tx_callbacks_fire_from_assistive_actions() {
     assert!(rt.state.select_open && rt.state.toggles == 1);
     assert!(find(&rt.accessibility_json(), "fruit-content").is_some());
 }
+
+#[test]
+fn step_closed_select_updates_a11y_value_and_web_mirror_while_collapsed() {
+    fn view(s: &App, _: &mut Cx<App>) -> El {
+        let mut layer = Vec::new();
+        let sel = Select::new("fruit", &FRUIT)
+            .label("Fruit")
+            .current(s.chosen.as_deref())
+            .open(s.open)
+            .step_closed(true)
+            .on_toggle(toggle)
+            .on_close(close)
+            .on_choose(|s: &mut App, v: &str, _| s.chosen = Some(v.to_owned()))
+            .build(&kit(), &mut layer);
+        root(col().child(sel), layer)
+    }
+    let mut rt = mount(App { chosen: Some("Pear".into()), ..App::default() }, view);
+    rt.key(rune::KeyEvent { key: rune::Key::Tab, mods: rune::Mods::default() });
+    rt.frame(0.0);
+    rt.key(rune::KeyEvent { key: rune::Key::Down, mods: rune::Mods::default() });
+    rt.frame(0.0);
+
+    // AccessKit tree: still collapsed, focused on trigger, value updated to Plum.
+    let tree = rt.accessibility_json();
+    let field = node(&tree, "fruit-trigger");
+    assert_eq!((said(field), field["value"].as_str()), (("combo-box", "Fruit"), Some("Plum")));
+    assert!(has(field, "collapsed") && has(field, "focused"));
+    assert!(find(&tree, "fruit-content").is_none());
+
+    // Web mirror reflects the updated value while staying collapsed.
+    let items: Vec<serde_json::Value> = serde_json::from_str(&rt.a11y_json()).unwrap();
+    let combo = items.iter().find(|v| v["t"] == "Fruit").expect("select mirrored");
+    assert_eq!(
+        (combo.get("o"), combo.get("x"), combo.get("v")),
+        (Some(&serde_json::json!("combobox")), Some(&serde_json::json!(false)), Some(&serde_json::json!("Plum")))
+    );
+}

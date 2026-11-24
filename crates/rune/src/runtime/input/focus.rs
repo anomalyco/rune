@@ -206,12 +206,16 @@ impl focus_machine::KeyboardState {
 
     /// Type-select: the typed prefix picks the first item whose label starts with it. A
     /// repeated letter cycles the items starting with it. The prefix resets after a pause.
-    pub(super) fn type_select(&mut self, nodes: &[Node], items: &[usize], pos: usize, typed: &str, now: f64) -> Option<usize> {
+    /// When `pos` is `None` (focus is on the group container itself), search starts at index 0.
+    pub(super) fn type_select(&mut self, nodes: &[Node], items: &[usize], pos: Option<usize>, typed: &str, now: f64) -> Option<usize> {
         let buffer = self.type_select_typed(typed, now).to_owned();
         let label = |j: usize| nodes[items[j]].label.as_deref().unwrap_or("").to_lowercase();
         let first = buffer.chars().next()?;
         let cycle = buffer.chars().all(|c| c == first);
-        let order = (0..items.len()).map(|k| if cycle { (pos + 1 + k) % items.len() } else { k });
+        let order = (0..items.len()).map(|k| match pos {
+            Some(p) if cycle => (p + 1 + k) % items.len(),
+            _ => k,
+        });
         let prefix = if cycle { first.to_string() } else { buffer.clone() };
         order.into_iter().find(|&j| label(j).starts_with(&prefix))
     }
@@ -262,11 +266,13 @@ impl RuntimeCore {
         self.allowed(i) && !self.subtree_exiting(i) && node_shown(&self.tree.nodes, i)
     }
     /// Whether Return goes to focused element `i` rather than the default button: a focused
-    /// link, a `focus_highlight` row, or an item of a menu, list, tree or grid group.
-    /// Under `Cx::web_focus` a focused button presses on Return too, as an HTML one does.
+    /// link, a `focus_highlight` row, an element opted in with [`El::press_on_return`], or an
+    /// item of a menu, list, tree or grid group. Under `Cx::web_focus` a focused button presses
+    /// on Return too, as an HTML one does.
     fn takes_return(&self, i: usize) -> bool {
-        self.edit.link_focused(&self.tree.nodes[i]) || self.tree.nodes[i].focus.highlight.is_some()
-            || (self.commit.defaults.web_focus && self.tree.nodes[i].handlers.on_press.is_some() && self.takes_focus(&self.tree.nodes[i]))
+        let n = &self.tree.nodes[i];
+        self.edit.link_focused(n) || n.focus.highlight.is_some()
+            || ((n.focus.press_on_return || self.commit.defaults.web_focus) && n.handlers.on_press.is_some() && self.takes_focus(n))
             || self.focus_group(i).is_some_and(|g| LIST_ROLES.contains(&self.tree.nodes[g].role) || VERTICAL_ROLES.contains(&self.tree.nodes[g].role))
     }
     /// Return with no modifiers presses the window's default button (`El::default_button`)
@@ -782,6 +788,17 @@ impl RuntimeCore {
     }
     /// `shown`: the focus highlight was visible before this key arrived.
     pub(in crate::runtime) fn focus_key(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, shown: bool, tx: &mut Tx) -> bool {
+        // WAI-ARIA Select-Only Combobox: Alt+Down opens a focused combobox popup.
+        if ev.mods.alt && !(ev.mods.cmd || ev.mods.ctrl || ev.mods.logo || ev.mods.shift) && ev.key == Key::Down {
+            let Some(i) = self.focused_index().filter(|&i| self.can_focus(i)) else { return false; };
+            if self.tree.nodes[i].role == "combobox" && self.tree.nodes[i].input.is_none() {
+                if tx.key_repeat { return true; }
+                self.kbd.focus.step(focus_machine::FocusEvent::Navigated);
+                if let Some(f) = self.tree.nodes[i].handlers.on_press.clone() { f(app.states(), tx); }
+                return true;
+            }
+            return false;
+        }
         if ev.mods.cmd || ev.mods.ctrl || ev.mods.alt || ev.mods.logo { return false; }
         // Activations (dismiss, press, open) fire once per press. Their repeats are consumed so
         // they reach nothing else; navigation below keeps repeating.
@@ -852,42 +869,53 @@ impl RuntimeCore {
             }
         }
         // A focused field inside a list row (an inline rename) keeps its letters and arrows.
-        if self.tree.nodes[i].input.is_none() && let Some(g) = self.focus_group(i) {
-            let vertical = VERTICAL_ROLES.contains(&self.tree.nodes[g].role);
-            // A right-to-left row's first item is at its right: Left goes on to the next.
-            let (back, ahead) = if self.tree.nodes[g].flow == crate::el::Flow::Rtl { (Key::Right, Key::Left) } else { (Key::Left, Key::Right) };
-            let backward = matches!(ev.key, Key::Up) || (!vertical && ev.key == back);
-            let forward = matches!(ev.key, Key::Down) || (!vertical && ev.key == ahead);
+        // When a focusable `focus_group` container holds focus itself, navigation and typeahead
+        // enter its items directly (WAI-ARIA Menu and Listbox container focus).
+        if self.tree.nodes[i].input.is_none()
+            && let Some(g) = self.focus_group(i).or_else(|| self.tree.nodes[i].focus.group.then_some(i))
+        {
             let items: Vec<_> = (0..self.tree.nodes.len()).filter(|&j| self.can_focus(j) && self.focus_group(j) == Some(g)).collect();
-            let pos = items.iter().position(|&j| j == i).unwrap();
-            let page = matches!(ev.key, Key::PageUp | Key::PageDown) && PAGED_ROLES.contains(&self.tree.nodes[g].role);
-            let next = if backward || forward || page || matches!(ev.key, Key::Home | Key::End) {
-                self.kbd.reset_type_select();
-                Some(match ev.key {
-                    Key::Home => 0, Key::End => items.len() - 1,
-                    Key::PageUp | Key::PageDown => self.page_item(&items, pos, ev.key == Key::PageDown),
-                    // A highlight the user cannot see yet appears where it is (a popup's checked
-                    // item, else the first) before arrows move it; Up from nothing is the last.
-                    _ if self.tree.nodes[i].focus.highlight.is_some() && !shown =>
-                        if backward && !self.tree.nodes[i].focus.selected { items.len() - 1 } else { pos },
-                    _ if CLAMPED_ROLES.contains(&self.tree.nodes[g].role) =>
-                        if backward { pos.saturating_sub(1) } else { (pos + 1).min(items.len() - 1) },
-                    _ if backward => (pos + items.len() - 1) % items.len(),
-                    _ => (pos + 1) % items.len(),
-                })
-            } else if let Key::Text(t) = &ev.key && TYPE_SELECT_ROLES.contains(&self.tree.nodes[g].role) && !t.trim().is_empty() {
-                let now = self.now_clock();
-                self.kbd.type_select(&self.tree.nodes, &items, pos, t, now)
-            } else { None };
-            if let Some(next) = next {
-                let n = &self.tree.nodes[items[next]];
-                let follows = n.role == "radio" || n.role == "tab" || self.tree.nodes[g].focus.follows;
-                let action = follows.then(|| n.handlers.on_press.clone()).flatten();
-                let path = n.path.clone();
-                self.set_focus(app, Some(path.clone()), true);
-                tx.scroll_to.push(crate::runtime::ScrollReveal::into_view(None, path));
-                if let Some(f) = action { f(app.states(), tx); }
-                return true;
+            if !items.is_empty() {
+                let vertical = VERTICAL_ROLES.contains(&self.tree.nodes[g].role);
+                // A right-to-left row's first item is at its right: Left goes on to the next.
+                let (back, ahead) = if self.tree.nodes[g].flow == crate::el::Flow::Rtl { (Key::Right, Key::Left) } else { (Key::Left, Key::Right) };
+                let backward = matches!(ev.key, Key::Up) || (!vertical && ev.key == back);
+                let forward = matches!(ev.key, Key::Down) || (!vertical && ev.key == ahead);
+                let pos = items.iter().position(|&j| j == i);
+                let page = matches!(ev.key, Key::PageUp | Key::PageDown) && PAGED_ROLES.contains(&self.tree.nodes[g].role);
+                let next = if backward || forward || page || matches!(ev.key, Key::Home | Key::End) {
+                    self.kbd.reset_type_select();
+                    Some(match (pos, &ev.key) {
+                        (_, Key::Home) => 0,
+                        (_, Key::End) => items.len() - 1,
+                        (None, Key::PageUp) => 0,
+                        (None, Key::PageDown) => items.len() - 1,
+                        (None, _) if forward => 0,
+                        (None, _) => items.len() - 1,
+                        (Some(pos), Key::PageUp | Key::PageDown) => self.page_item(&items, pos, ev.key == Key::PageDown),
+                        // A highlight the user cannot see yet appears where it is (a popup's checked
+                        // item, else the first) before arrows move it; Up from nothing is the last.
+                        (Some(pos), _) if self.tree.nodes[i].focus.highlight.is_some() && !shown =>
+                            if backward && !self.tree.nodes[i].focus.selected { items.len() - 1 } else { pos },
+                        (Some(pos), _) if CLAMPED_ROLES.contains(&self.tree.nodes[g].role) =>
+                            if backward { pos.saturating_sub(1) } else { (pos + 1).min(items.len() - 1) },
+                        (Some(pos), _) if backward => (pos + items.len() - 1) % items.len(),
+                        (Some(pos), _) => (pos + 1) % items.len(),
+                    })
+                } else if let Key::Text(t) = &ev.key && TYPE_SELECT_ROLES.contains(&self.tree.nodes[g].role) && !t.trim().is_empty() {
+                    let now = self.now_clock();
+                    self.kbd.type_select(&self.tree.nodes, &items, pos, t, now)
+                } else { None };
+                if let Some(next) = next {
+                    let n = &self.tree.nodes[items[next]];
+                    let follows = n.role == "radio" || n.role == "tab" || self.tree.nodes[g].focus.follows;
+                    let action = follows.then(|| n.handlers.on_press.clone()).flatten();
+                    let path = n.path.clone();
+                    self.set_focus(app, Some(path.clone()), true);
+                    tx.scroll_to.push(crate::runtime::ScrollReveal::into_view(None, path));
+                    if let Some(f) = action { f(app.states(), tx); }
+                    return true;
+                }
             }
         } else if self.tree.nodes[i].role == "combobox" && self.tree.nodes[i].input.is_none() && matches!(ev.key, Key::Up | Key::Down) {
             // A popup button opens on its arrows as well as Space (NSPopUpButton).
@@ -957,3 +985,7 @@ fn rescue(lost_tab_stop: bool, at: usize, scopes: &[(usize, usize)], item: &dyn 
 #[cfg(test)]
 #[path = "focus_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "focus_key_tests.rs"]
+mod key_tests;
