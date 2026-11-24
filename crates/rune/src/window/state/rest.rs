@@ -22,15 +22,15 @@ use std::time::Duration;
 use crate::machine::Effects;
 use crate::time::Instant;
 
-/// How long a window draws nothing before it gives back what its screen doesn't use.
-pub(in crate::window) const REST_AFTER: Duration = Duration::from_secs(10);
+/// How long a window or overlay draws nothing before it gives back what its screen doesn't use.
+pub(crate) const REST_AFTER: Duration = Duration::from_secs(10);
 /// The same while the system says memory is low.
-pub(in crate::window) const PRESSED_AFTER: Duration = Duration::from_secs(1);
+pub(crate) const PRESSED_AFTER: Duration = Duration::from_secs(1);
 
 /// What the renderer may hold that a rest gives back.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(in crate::window) enum Rest {
-    /// Nothing: nothing drawn since the window opened, or since it went out of sight.
+pub(crate) enum Rest {
+    /// Nothing: nothing drawn since the surface opened, or since it went out of sight.
     #[default]
     Rested,
     /// Drew; gives back what the screen doesn't use at `due`, unless it draws again first.
@@ -39,9 +39,9 @@ pub(in crate::window) enum Rest {
     Idle,
 }
 
-/// What happened to the window.
+/// What happened to the window or overlay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::window) enum RestEvent {
+pub(crate) enum RestEvent {
     /// A frame reached the screen at `now`; `low` is the system saying memory is low.
     Drew { now: Instant, low: bool },
     /// Hidden, minimised, or covered whole.
@@ -50,9 +50,9 @@ pub(in crate::window) enum RestEvent {
     Woke { now: Instant },
 }
 
-/// What a transition asks for (`Host::give_back`).
+/// What a transition asks for (`Host::give_back` / `OverlayCore::give_back`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::window) enum RestEffect {
+pub(crate) enum RestEffect {
     /// What the screen on show doesn't use.
     GiveBackUnused,
     /// Everything the renderer keeps between frames.
@@ -61,7 +61,7 @@ pub(in crate::window) enum RestEffect {
 
 impl Rest {
     /// When the loop must wake to give back.
-    pub(in crate::window) fn deadline(self) -> Option<Instant> {
+    pub(crate) fn deadline(self) -> Option<Instant> {
         match self {
             Rest::Drawing { due } => Some(due),
             Rest::Rested | Rest::Idle => None,
@@ -71,7 +71,7 @@ impl Rest {
 
 /// The one transition. A drawn frame sets the deadline afresh; the deadline passing gives back
 /// what the screen doesn't use, once; going out of sight gives back everything, once.
-pub(in crate::window) fn step(state: &mut Rest, event: RestEvent) -> Effects<RestEffect> {
+pub(crate) fn step(state: &mut Rest, event: RestEvent) -> Effects<RestEffect> {
     use RestEvent as E;
     match (*state, event) {
         (_, E::Drew { now, low }) => {
@@ -87,7 +87,7 @@ pub(in crate::window) fn step(state: &mut Rest, event: RestEvent) -> Effects<Res
 /// Whether the system says memory is low (Windows' low-memory resource notification).
 #[cfg(target_os = "windows")]
 #[allow(unsafe_code)]
-pub(in crate::window) fn low_memory() -> bool {
+pub(crate) fn low_memory() -> bool {
     use windows_sys::Win32::System::Memory::{CreateMemoryResourceNotification, LowMemoryResourceNotification, QueryMemoryResourceNotification};
     static EVENT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     // SAFETY: the notification handle is made once and never closed; the query writes one BOOL.
@@ -98,4 +98,4 @@ pub(in crate::window) fn low_memory() -> bool {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub(in crate::window) fn low_memory() -> bool { false }
+pub(crate) fn low_memory() -> bool { false }

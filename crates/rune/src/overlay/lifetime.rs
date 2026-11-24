@@ -202,6 +202,56 @@ impl OverlayCore {
         app.set_live_visible(false);
         self.backoff_step(crate::window::BackoffEvent::Lapsed);
         self.quiet.step(frame::QuietEvent::Forget);
+        if self.release == Release::Now {
+            self.rest = crate::window::Rest::Rested;
+        } else {
+            self.rest_step(app, crate::window::RestEvent::Unseen, crate::time::now());
+        }
+    }
+
+    /// Records a visible frame reaching the screen so unused pools are given back once the
+    /// overlay rests.
+    pub(super) fn note_presented(&mut self, now: Instant) {
+        self.note_presented_with(now, crate::window::rest::low_memory());
+    }
+
+    pub(super) fn note_presented_with(&mut self, now: Instant, low: bool) {
+        let _ = crate::window::rest::step(&mut self.rest, crate::window::RestEvent::Drew { now, low });
+    }
+
+    pub(super) fn rest_step(&mut self, app: &mut dyn OverlayApp, event: crate::window::RestEvent, now: Instant) {
+        for effect in crate::window::rest::step(&mut self.rest, event) {
+            match effect {
+                crate::window::RestEffect::GiveBackUnused => self.give_back(app, false, now),
+                crate::window::RestEffect::GiveBackAll => self.give_back(app, true, now),
+            }
+        }
+    }
+
+    fn give_back(&mut self, app: &mut dyn OverlayApp, all: bool, now: Instant) {
+        {
+            let rt = app.rt_mut();
+            rt.text.rest();
+            rt.images.rest();
+            if let Some(rewind) = rt.motion.rewind() { rewind.rest(); }
+        }
+        let gpu = self.gpu.clone();
+        if let (Some(gpu), Some(renderer)) = (gpu, &mut self.renderer) {
+            // Poll once (non-blocking) at idle rest only if recyclable oversized chunks are in
+            // flight so their completed buffers return before `give_back(false)` trims them;
+            // ordinary overlays skip polling to avoid the 4-9 ms Iris Xe post-poll penalty.
+            if !all && renderer.has_oversized_uploads_in_flight() {
+                rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
+            }
+            renderer.give_back(all, &mut app.rt_mut().text.atlas.resident_caches);
+            if all {
+                // Non-blocking retirement on shared devices: poll once so completed submissions
+                // retire and hand back staging chunks before trimming, and schedule deferred
+                // retries instead of blocking with `wait_indefinitely()` while work is in flight.
+                self.retire.retire_now(&gpu, now);
+                renderer.trim_uploads();
+            }
+        }
     }
 
     /// Input stops, and the native window hides over `fade`. A fading window stays up while
@@ -414,6 +464,7 @@ impl OverlayCore {
     /// screen-sized panels that join every Space empty Mission Control's Space thumbnails.
     /// There the window goes too, and the next show makes a new one.
     pub(super) fn park(&mut self) {
+        self.rest = crate::window::Rest::Rested;
         if let Some(live) = self.surface.live() {
             if !matches!(live.backing, Backing::Window(_)) { return; }
             #[cfg(any(target_os = "windows", target_os = "macos"))]

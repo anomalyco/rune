@@ -333,6 +333,12 @@ impl Renderer {
         self.uploads.has_oversized_in_flight()
     }
 
+    /// Test-only: number of spare layer targets currently parked for reuse.
+    #[cfg(test)]
+    pub(crate) fn spare_layers(&self) -> usize {
+        self.layers.spare.len()
+    }
+
     pub(super) fn sync_resident_caches(&self, out: &mut std::collections::HashMap<u64, u64>) {
         if !out.is_empty() {
             out.clear();

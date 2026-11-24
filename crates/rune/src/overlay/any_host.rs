@@ -62,6 +62,7 @@ impl OverlayCore {
         }).flatten()).min();
         deadline.into_iter().chain(self.backoff.deadline().filter(|_| self.presence.drawing())).chain(self.presence.deadline())
             .chain(self.hidden_pace.deadline().filter(|_| !self.presence.drawing()))
+            .chain(self.rest.deadline())
             .chain(self.retire.deadline()).min()
     }
 

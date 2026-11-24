@@ -403,6 +403,7 @@ impl<T: 'static> Overlay<T> {
     #[cfg(target_os = "macos")]
     pub(super) fn advance_at(&mut self, now: Instant) { with_app!(self, |core, app| core.advance_at(&mut app, now)) }
     pub(super) fn wake_due(&mut self, now: Instant) { with_app!(self, |core, app| core.wake_due(&mut app, now)) }
+    pub(super) fn note_presented_with(&mut self, now: Instant, low: bool) { self.core.note_presented_with(now, low) }
     pub(super) fn hide(&mut self) { with_app!(self, |core, app| core.hide(&mut app)) }
     pub(super) fn drop_hidden_images(&mut self) { with_app!(self, |core, app| core.drop_hidden_images(&mut app)) }
     pub(super) fn hide_fading(&mut self, fade: Duration) { with_app!(self, |core, app| core.hide_fading(&mut app, fade)) }
