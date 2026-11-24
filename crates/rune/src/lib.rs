@@ -100,6 +100,7 @@ pub use el::HasPopup;
 pub use el::{InlineIcon, InlineImage};
 pub use el::LineFill;
 pub use el::LiveRegion;
+pub use el::OptionAsAlt;
 pub use el::Orientation;
 pub use el::Outline;
 #[doc(hidden)]

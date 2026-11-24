@@ -20,7 +20,7 @@
 use rune::clipboard;
 use rune::color::hex;
 use rune::tok::{self, radius, space, type_};
-use rune::{AppSpec, ClipboardContent, Color, Cx, El, LineFill, Mark, Phase, PillStyle, Pixels, Span, SpanBox, TextEdit, Tx, col, el, rich, row, text, text_input};
+use rune::{AppSpec, ClipboardContent, Color, Cx, El, LineFill, Mark, OptionAsAlt, Phase, PillStyle, Pixels, Span, SpanBox, TextEdit, Tx, col, el, rich, row, text, text_input};
 
 const SAMPLE_TEXT: &str = "Click here or right-click the field to hit-test a UTF-8 byte offset.";
 
@@ -60,6 +60,10 @@ struct State {
     /// Live `(anchor, focus)` and event count updated in the same frame by `El::on_input_selection`.
     selection_readout: (usize, usize),
     selection_events: usize,
+    /// macOS Option-as-Alt mode applied to the custom `El::ime_cursor` caret when active.
+    option_as_alt: OptionAsAlt,
+    /// Whether the custom `El::ime_cursor` caret is active instead of the text fields.
+    custom_caret: bool,
 }
 
 fn badge_pixels(bg: [u8; 4], fg: [u8; 4], stripe: [u8; 4]) -> Pixels {
@@ -105,6 +109,8 @@ impl Default for State {
             inspected_pill: None,
             selection_readout: (0, 0),
             selection_events: 0,
+            option_as_alt: OptionAsAlt::None,
+            custom_caret: false,
         }
     }
 }
@@ -128,6 +134,13 @@ impl State {
         edit.focused = true;
         edit.set_selection(0, edit.text.len());
         self.field = edit;
+    }
+
+    fn ime_option_as_alt_scene(&mut self) {
+        self.field.focused = false;
+        self.notes.focused = false;
+        self.custom_caret = true;
+        self.option_as_alt = OptionAsAlt::Left;
     }
 }
 
@@ -258,6 +271,37 @@ fn selection_status((anchor, focus): (usize, usize), moves: usize) -> String {
         let (a, b) = (anchor.min(focus), anchor.max(focus));
         format!("Selection: bytes {a}..{b} (anchor {anchor}, focus {focus}, {moves} moves)")
     }
+}
+
+fn option_as_alt_label(mode: OptionAsAlt) -> &'static str {
+    match mode {
+        OptionAsAlt::None => "Off",
+        OptionAsAlt::Left => "Left",
+        OptionAsAlt::Right => "Right",
+        OptionAsAlt::Both => "Both",
+    }
+}
+
+fn option_radio(key: &'static str, mode: OptionAsAlt, active: bool) -> El {
+    let t = tok::theme(true);
+    row()
+        .key(key)
+        .role("radio")
+        .label(format!("Option as Alt: {}", option_as_alt_label(mode)))
+        .checked(active)
+        .focusable(true)
+        .press_on_return()
+        .padding(space::S2)
+        .radius(radius::MD)
+        .fill(t.card)
+        .border(if active { 2.0 } else { 1.0 }, if active { t.text } else { t.card_border })
+        .child(text(option_as_alt_label(mode)).font(type_::LABEL).color(t.text))
+        .on_press(move |s: &mut State| {
+            s.field.focused = false;
+            s.notes.focused = false;
+            s.custom_caret = true;
+            s.option_as_alt = mode;
+        })
 }
 
 fn button(key: &'static str, label: &str, f: impl Fn(&mut State, &mut Tx) + 'static) -> El {
@@ -471,6 +515,31 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
             .child(button("copy", "Copy formatted", |_, tx| tx.copy_rich(sample())))
             .child(button("read", "Read clipboard", |_, tx| tx.read_clipboard(|s: &mut State, content, _| seen(s, "Read", content))))
             .child(button("check-revision", "Check revision", |s, _| s.revision = clipboard::revision())))
+        .child(
+            row()
+                .key("option-as-alt-row")
+                .gap(space::S2)
+                .center_y()
+                .child(text("macOS Option-as-Alt:").font(type_::LABEL).color(t.text_secondary))
+                .child(
+                    row()
+                        .key("option-as-alt-group")
+                        .role("radiogroup")
+                        .label("macOS Option-as-Alt")
+                        .gap(space::S1)
+                        .child(option_radio("opt-none", OptionAsAlt::None, s.option_as_alt == OptionAsAlt::None))
+                        .child(option_radio("opt-left", OptionAsAlt::Left, s.option_as_alt == OptionAsAlt::Left))
+                        .child(option_radio("opt-right", OptionAsAlt::Right, s.option_as_alt == OptionAsAlt::Right))
+                        .child(option_radio("opt-both", OptionAsAlt::Both, s.option_as_alt == OptionAsAlt::Both)),
+                )
+                .children(s.custom_caret.then(|| {
+                    el().key("custom-ime-caret")
+                        .size(2.0, 16.0)
+                        .fill(t.text)
+                        .ime_cursor()
+                        .ime_option_as_alt_mode(s.option_as_alt)
+                })),
+        )
         .child(text(revision_status(s.revision)).key("revision").font(type_::LABEL).color(t.text_secondary))
         .child(text(pill_status(&s.inspected_pill)).key("pill-status").font(type_::LABEL).color(t.text_secondary).w_full())
         .child(text(selection_status(s.selection_readout, s.selection_events)).key("selection-status").font(type_::LABEL).color(t.text_secondary).w_full())
@@ -494,6 +563,7 @@ fn main() {
             }),
             ("decorations", State::decorations_scene),
             ("pill-copy", State::pill_copy_scene),
+            ("ime-option-as-alt", State::ime_option_as_alt_scene),
         ],
         ..AppSpec::new("Rich Clipboard", (560.0, 620.0), State::default, view)
     });
@@ -681,5 +751,34 @@ mod tests {
         rt.frame(1.0 / 60.0);
         assert_eq!(rt.state.inspected_pill.as_ref().map(|(id, _)| id.as_str()), Some("app:gmail"));
         assert_eq!((rt.state.field.anchor, rt.state.field.focus), sel_before, "consuming pill press keeps caret still");
+    }
+
+    #[test]
+    fn ime_option_as_alt_scene_selects_option_keys_and_mounts_caret() {
+        let mut s = State::default();
+        s.ime_option_as_alt_scene();
+        let mut rt = Runtime::new(s, view, (560.0, 680.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        assert!(rt.find("custom-ime-caret").is_some());
+        assert!(rt.ime_area.is_some());
+        assert_eq!(rt.state.option_as_alt, OptionAsAlt::Left);
+
+        let tree = rt.accessibility_json().to_string();
+        assert!(tree.contains("macOS Option-as-Alt"));
+        assert!(tree.contains("Option as Alt: Left"));
+
+        for (key, expected) in [
+            ("opt-right", OptionAsAlt::Right),
+            ("opt-both", OptionAsAlt::Both),
+            ("opt-none", OptionAsAlt::None),
+            ("opt-left", OptionAsAlt::Left),
+        ] {
+            let (x, y) = rt.find(key).unwrap();
+            rt.pointer_down(x, y);
+            rt.pointer_up(x, y);
+            rt.frame(0.0);
+            assert_eq!(rt.state.option_as_alt, expected);
+            assert!(rt.state.custom_caret);
+        }
     }
 }

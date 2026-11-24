@@ -735,9 +735,32 @@ impl El {
     /// its character) instead of the character the layout makes with Option, and the input method
     /// composes nothing for it (winit's `OptionAsAlt::Both`): a terminal's Option-as-Meta. It
     /// changes nothing elsewhere, nor while `on` is false.
-    pub fn ime_option_as_alt(mut self, on: bool) -> Self {
-        if on || !self.cold.is_empty() {
-            self.cold_mut().option_as_alt = on;
+    ///
+    /// To treat only the left or only the right Option key as Alt while leaving the other free for
+    /// layout characters, use [`Self::ime_option_as_alt_mode`].
+    pub fn ime_option_as_alt(self, on: bool) -> Self {
+        self.ime_option_as_alt_mode(crate::OptionAsAlt::from(on))
+    }
+    /// With [`Self::ime_cursor`]: on macOS, choose which Option key acts as Alt while this caret
+    /// has the input method (winit's `OptionAsAlt`: `None`, `OnlyLeft`, `OnlyRight`, `Both`).
+    ///
+    /// Any key pressed with a selected Option key arrives as the key it is on with `mods.alt`
+    /// (`Tx::key_base` its character) instead of the character the keyboard layout composes, and
+    /// the input method composes nothing for it. An unselected Option key keeps composing the
+    /// layout's characters (for example, right Option on a German layout still types `[` and `@`
+    /// while [`OptionAsAlt::Left`](crate::OptionAsAlt::Left) is active). Ignored off macOS,
+    /// ignored while `mode` is [`OptionAsAlt::None`](crate::OptionAsAlt::None), and reset to
+    /// `None` whenever a text field or another caret takes the input method.
+    ///
+    /// ```
+    /// use rune::{OptionAsAlt, el};
+    ///
+    /// let caret = el().ime_cursor().ime_option_as_alt_mode(OptionAsAlt::Left);
+    /// # let _ = caret;
+    /// ```
+    pub fn ime_option_as_alt_mode(mut self, mode: crate::OptionAsAlt) -> Self {
+        if mode != crate::OptionAsAlt::None || !self.cold.is_empty() {
+            self.cold_mut().option_as_alt = mode;
         }
         self
     }

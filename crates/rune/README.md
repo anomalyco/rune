@@ -1657,8 +1657,12 @@ turns its input method on and places the candidate window at the caret. `Ime::Pr
 the composition and its cursor range (draw it, don't insert it; empty ends it), `Ime::Commit`
 the text to insert, and `Ime::Enabled` and `Disabled` the input method turning on and off.
 Typing arrives once: a plain character is a key (`Key::Text` in `on_key`), and `Ime::Commit`
-carries only what an input method composed (dead keys, CJK, the emoji picker, dictation). A
-focused field takes the events instead, and a focused secure field keeps the input method off.
+carries only what an input method composed (dead keys, CJK, the emoji picker, dictation). On
+macOS, add `.ime_option_as_alt_mode(OptionAsAlt::Left)` (or `Right`, `Both`, `None`; or
+`.ime_option_as_alt(true)` for `Both`) beside `.ime_cursor()` to treat only the chosen Option
+key(s) as Alt while leaving the unselected Option key free to compose layout characters (such as
+`[` or `@` on a German layout). A focused field takes the events instead (and resets Option-as-Alt
+to `OptionAsAlt::None`), and a focused secure field keeps the input method off.
 Model buffers and history wipe on drop; secure edits wipe replaced allocations.
 Use `replace_text(..)` or `clear()` for programmatic replacement. Direct assignment
 to the public `text: String` field bypasses replacement wiping.
