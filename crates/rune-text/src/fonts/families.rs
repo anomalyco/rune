@@ -111,10 +111,11 @@ impl TextSystem {
         self.glyph_cache.clear();
     }
 
-    /// Whether families were chosen since this text system last followed them.
+    /// Whether families were chosen or runtime faces arrived since this text system last
+    /// followed them.
     #[doc(hidden)]
     pub fn families_behind(&self) -> bool {
-        CHOSEN.with_borrow(|(n, _)| *n != self.chosen)
+        CHOSEN.with_borrow(|(n, _)| *n != self.chosen) || self.full_faces_behind()
     }
 
     /// Takes up the families chosen since it last looked; true when that changed its slots.

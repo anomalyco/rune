@@ -14,7 +14,7 @@
 use std::time::Duration;
 
 use rune::tok::{self, Theme, motion, radius, type_};
-use rune::{Align, App, AppSpec, Color, Cx, El, OverlaySpec, Play, Playground, ScreenEdge, Stage, Story, Tx, col, el, row, text};
+use rune::{Align, App, AppSpec, Color, Cx, El, Family, OverlaySpec, Play, Playground, ScreenEdge, Stage, Story, TextStyle, Tx, col, el, row, text};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -287,6 +287,51 @@ fn scale_readout_view(s: &ScaleReadout, cx: &mut Cx<ScaleReadout>) -> El {
         )
 }
 
+const RUNTIME_FONT: &[u8] = include_bytes!("../../../crates/rune/assets/IBMPlexMono-Regular.ttf");
+const RUNTIME_SAMPLE: &str = "Hamburgefonstiv 0123456789";
+
+/// The "Text/Runtime font" story: registers bundled font bytes at runtime via `Tx::add_font`.
+#[derive(Default)]
+struct RuntimeFont {
+    families: Vec<String>,
+    active: bool,
+}
+
+fn runtime_font_view(s: &RuntimeFont, cx: &mut Cx<RuntimeFont>) -> El {
+    let t = tok::theme(cx.system_dark());
+    let sample_style = TextStyle::new(18.0, 400.0).family(if s.active { Family::Named("IBM Plex Mono") } else { Family::Sans });
+    let (sample_w, _) = rune::text::measure(RUNTIME_SAMPLE, &[], sample_style, None);
+    let status = if s.families.is_empty() {
+        "Not registered yet — sample uses Inter".to_owned()
+    } else {
+        format!("Registered: {} · width {:.1} pt", s.families.join(", "), sample_w)
+    };
+    col().w_full().h_full().center().gap(14.0).padding(24.0)
+        .child(
+            col().key("sample-card").w(360.0).padding(16.0).gap(8.0).radius(radius::MD).fill(t.card).outline(1.0, 0.0, t.card_border)
+                .child(row().child(text(RUNTIME_SAMPLE).key("sample-text").font(sample_style).color(t.text)))
+                .child(text(status).key("sample-status").font(type_::LABEL).color(t.text_secondary)),
+        )
+        .child(
+            row().gap(8.0)
+                .child(
+                    row().key("register-font").h(28.0).px(12.0).center().radius(radius::SM).fill(t.control_track).hover(t.hover)
+                        .child(text("Register font bytes").font(type_::LABEL).color(t.text))
+                        .role("button").label("Register font bytes").focusable(true)
+                        .on_press_tx(|s: &mut RuntimeFont, tx: &mut Tx| {
+                            s.families = tx.add_font(RUNTIME_FONT);
+                            s.active = !s.families.is_empty();
+                        }),
+                )
+                .child(
+                    row().key("use-inter").h(28.0).px(12.0).center().radius(radius::SM).fill(t.control_track).hover(t.hover)
+                        .child(text("Use Inter").font(type_::LABEL).color(t.text))
+                        .role("button").label("Use Inter").focusable(true)
+                        .on_press(|s: &mut RuntimeFont| s.active = false),
+                ),
+        )
+}
+
 /// R on the upload: start over, then pause part way and pick up again, on the logical clock.
 fn upload_replay(u: &mut Upload, play: &mut Play<'_, Upload>) {
     u.running = true;
@@ -425,9 +470,54 @@ fn main() {
                         .variant("25 / 75 · centred col", |s| { s.align = 1; s.split = 0.25; })
                         .variant("65 / 35 · row center_y", |s| { s.align = 3; s.split = 0.65; }),
                 )
+                .story(
+                    Story::new("Text/Runtime font", RuntimeFont::default, runtime_font_view)
+                        .trigger('l', "Register font bytes", |s, play| {
+                            s.families = rune::text::add_font(RUNTIME_FONT);
+                            s.active = !s.families.is_empty();
+                            play.wake_after(Duration::ZERO);
+                        })
+                        .trigger('r', "Use Inter", |s, _| s.active = false)
+                        .variant("Before load", |_| {})
+                        .variant("Loaded", |s| {
+                            s.families = rune::text::add_font(RUNTIME_FONT);
+                            s.active = !s.families.is_empty();
+                        }),
+                )
                 .group_order(&["Controls"])
                 .start_folded(true)
                 .sizes(&[("Compact", (420.0, 300.0)), ("Wide", (900.0, 560.0))]),
         )
         .run();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rune::{Env, Runtime};
+
+    #[test]
+    fn runtime_font_story_registers_font_bytes_and_updates_sample_width() {
+        let mut rt = Runtime::new(RuntimeFont::default(), runtime_font_view, (520.0, 300.0), Env::new(true, 2.0));
+        rt.frame(0.0);
+        let width_of = |rt: &Runtime<RuntimeFont>, key: &str| {
+            rt.elements().iter().find(|e| e.key.as_deref() == Some(key)).unwrap().target[2]
+        };
+        let before_w = width_of(&rt, "sample-text");
+        assert!(rt.state.families.is_empty());
+
+        let tree = rt.accessibility_json();
+        let tree_text = tree.to_string();
+        assert!(tree_text.contains("Register font bytes"), "button has accessible label");
+
+        let (x, y) = rt.find("register-font").unwrap();
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(1.0 / 60.0);
+
+        assert_eq!(rt.state.families, vec!["IBM Plex Mono"]);
+        assert!(rt.state.active);
+        let after_w = width_of(&rt, "sample-text");
+        assert!((after_w - before_w).abs() > 5.0, "sample text width updated: {before_w} -> {after_w}");
+    }
 }

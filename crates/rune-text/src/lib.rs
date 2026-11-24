@@ -73,9 +73,9 @@ pub use fonts::fallback::is_pictographic;
 pub use fonts::families::choose_families;
 #[doc(hidden)]
 pub use fonts::families::resolved_family_of;
-#[cfg(target_arch = "wasm32")]
 #[doc(hidden)]
 pub use fonts::full_faces;
+pub use fonts::full_faces::add_font;
 pub use fonts::language::set_language;
 #[doc(hidden)]
 pub use icon::Facing;
@@ -428,11 +428,11 @@ impl TextSystem {
             atlas: Atlas::new(),
             ..Self::empty()
         };
+        text.follow_full_faces();
         text.load_installed(families.0);
         text.load_installed(families.1);
         text.sync_cjk_fallbacks();
         text.load_slot_fallbacks();
-        text.follow_full_faces();
         text
     }
 

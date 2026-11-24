@@ -2,10 +2,13 @@ use std::sync::Arc;
 
 use parley::PositionedLayoutItem;
 use parley::fontique::Blob;
+use rune_core::tok::Family;
 
+use super::{MAX_FONT_BYTES, Registry};
 use crate::*;
 
 const PLEX: &[u8] = include_bytes!("../../../rune/assets/IBMPlexMono-Regular.ttf");
+const GEIST: &[u8] = include_bytes!("../../../../www/public/fonts/geist.ttf");
 const FULL: [&[u8]; 3] = [
     include_bytes!("../../../rune/assets/web/Inter-Regular.ttf"),
     include_bytes!("../../../rune/assets/web/Inter-Medium.ttf"),
@@ -69,4 +72,82 @@ fn swapping_in_the_full_faces_sets_what_the_cut_lacked() {
     ts.drop_shaped();
     assert_eq!(shaped(&mut ts, &texts), want);
     assert_eq!(shaped(&mut ts, &FIRST_TEXTS), first);
+}
+
+#[test]
+fn registry_rejects_empty_oversized_and_invalid_bytes() {
+    assert_eq!(MAX_FONT_BYTES, 64 * 1024 * 1024);
+    let mut reg = Registry::default();
+
+    assert_eq!(reg.add_with_limit(Arc::from(&[][..]), MAX_FONT_BYTES), (Vec::new(), false));
+    assert_eq!(reg.add_with_limit(Arc::from(&b"not a valid font file"[..]), MAX_FONT_BYTES), (Vec::new(), false));
+    // Rejects a valid font that exceeds the byte limit by 1 byte, and accepts at the exact limit.
+    assert_eq!(reg.add_with_limit(Arc::from(PLEX), PLEX.len() - 1), (Vec::new(), false));
+    assert_eq!(reg.faces.len(), 0);
+
+    let (families, added) = reg.add_with_limit(Arc::from(PLEX), PLEX.len());
+    assert_eq!(families, vec!["IBM Plex Mono"]);
+    assert!(added);
+    assert_eq!(reg.faces.len(), 1);
+}
+
+#[test]
+fn registry_registers_static_and_variable_fonts_and_deduplicates_by_content() {
+    let mut reg = Registry::default();
+    let (first, added_first) = reg.add_with_limit(Arc::from(PLEX.to_vec()), MAX_FONT_BYTES);
+    assert_eq!(first, vec!["IBM Plex Mono"]);
+    assert!(added_first);
+
+    // Identical bytes in a distinct allocation return the same family names without duplicating.
+    let (dup, added_dup) = reg.add_with_limit(Arc::from(PLEX.to_vec()), MAX_FONT_BYTES);
+    assert_eq!(dup, first);
+    assert!(!added_dup);
+    assert_eq!(reg.faces.len(), 1);
+
+    // Variable font registers cleanly alongside static faces.
+    let (var_families, added_var) = reg.add_with_limit(Arc::from(GEIST), MAX_FONT_BYTES);
+    assert_eq!(var_families, vec!["Geist"]);
+    assert!(added_var);
+    assert_eq!(reg.faces.len(), 2);
+}
+
+#[test]
+fn registry_batch_deduplicates_and_skips_invalid_faces() {
+    let mut reg = Registry::default();
+    let (names, added) = reg.add_batch_with_limit(
+        vec![Vec::new(), b"bad".to_vec(), PLEX.to_vec(), PLEX.to_vec(), GEIST.to_vec()],
+        MAX_FONT_BYTES,
+    );
+    assert_eq!(names, vec!["IBM Plex Mono", "Geist"]);
+    assert_eq!(added, 2);
+    assert_eq!(reg.faces.len(), 2);
+
+    let (again, added_again) = reg.add_batch_with_limit(vec![PLEX.to_vec(), GEIST.to_vec()], MAX_FONT_BYTES);
+    assert_eq!(again, vec!["IBM Plex Mono", "Geist"]);
+    assert_eq!(added_again, 0);
+    assert_eq!(reg.faces.len(), 2);
+}
+
+#[test]
+fn swap_faces_resolves_named_family_and_keeps_rtl_text_shaping() {
+    let mut ts = TextSystem::new(&[FULL[0]], ("Inter", "Inter"));
+    let style = TextStyle::new(14.0, 400.0).family(Family::Named("IBM Plex Mono"));
+    assert_eq!(ts.resolved_family(Family::Named("IBM Plex Mono")).as_deref(), Some("Inter"));
+    let before_w = ts.layout_rich("iiiiiiiiii", &[], style, 1.0, None).full_width();
+
+    ts.swap_faces(&[Blob::new(Arc::new(PLEX))]);
+    ts.drop_shaped();
+    assert_eq!(ts.resolved_family(Family::Named("IBM Plex Mono")).as_deref(), Some("IBM Plex Mono"));
+    let after_w = ts.layout_rich("iiiiiiiiii", &[], style, 1.0, None).full_width();
+    assert!((after_w - before_w).abs() > 10.0, "expected IBM Plex Mono width change: {before_w} -> {after_w}");
+
+    let rtl_layout = ts.layout_rich_with(
+        "مرحبا hello 123",
+        &[],
+        style,
+        1.0,
+        Some(180.0),
+        RichLayoutOptions::new().direction(Direction::Rtl),
+    );
+    assert!(rtl_layout.width() > 0.0);
 }

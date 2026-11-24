@@ -1334,6 +1334,16 @@ too. A cache of measured sizes outside Rune should key on `rune::text::font_epoc
 that isn't installed falls back as it would at launch, and asking for the families the slots
 already hold costs nothing.
 
+`rune::text::add_font(bytes)`, `tx.add_font(bytes)`, and `rt.add_font(bytes)` register font
+bytes (TTF, OTF, TTC, or variable fonts) into the process-wide font collection while the app
+runs, returning the registered family names in registration order so they can be selected with
+`set_font_families` or `Family::Named`. Read files off the UI thread and pass their bytes
+(`Vec<u8>`, `&[u8]`, `Box<[u8]>`, or `Arc<[u8]>`). Empty, unrecognised, and >64 MiB blobs
+are ignored and return an empty list; duplicate bytes are deduplicated by content hash and
+return their family names without re-registering or triggering a relayout. Every window,
+overlay, and `rune::text::measure` picks up newly added faces, and `rune::text::font_epoch()`
+advances so external measurement caches invalidate.
+
 Optical sizing defaults to each run's point size, including rich spans with a
 different size. An explicit `opsz` variation wins over the default; `.optical_size`
 wins over both. `.optical_sizing(OpticalSize::FontDefault)` restores Parley's old

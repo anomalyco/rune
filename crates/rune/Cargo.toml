@@ -258,6 +258,9 @@ name = "alloc"
 name = "extra_args"
 
 [[test]]
+name = "add_font"
+
+[[test]]
 name = "measure_scope"
 
 [[test]]
