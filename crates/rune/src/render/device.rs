@@ -494,6 +494,18 @@ impl Gpu {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn pick_software_adapter(
+        instance: &wgpu::Instance,
+        surface: Option<&wgpu::Surface<'_>>,
+    ) -> Result<wgpu::Adapter, super::SurfaceSetupError> {
+        let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
+        crate::native_surface::release_removed_device();
+        let pick = crate::gpu::pick::pick_software(instance, surface)
+            .map_err(|message| super::SurfaceSetupError::unsupported(message))?;
+        Ok(pick.adapter)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn create_device_serialized(adapter: &wgpu::Adapter, wanted: wgpu::Features) -> Result<(wgpu::Device, wgpu::Queue), String> {
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
         Self::device_on(adapter, wanted)

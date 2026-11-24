@@ -1,6 +1,9 @@
+use std::time::Duration;
+
 use super::{
-    Action, Candidate, Decision, Effect, Event, Failure, Policy, Presentation, PresentationPolicy,
-    State, decide, decide_with_presentation, initial_presentation, order_fallbacks, step,
+    Action, Candidate, Decision, Effect, Event, FORGIVE_LOSS, Failure, GpuMode, LOSS_LIMIT,
+    LossEffect, LossEvent, LossState, Policy, Presentation, PresentationPolicy, State, decide,
+    decide_with_presentation, initial_presentation, order_fallbacks, step, step_loss,
 };
 use rune_core::machine::Effects;
 
@@ -37,23 +40,25 @@ fn decide_table_covers_every_policy_and_failure() {
     use Policy::*;
 
     let cases = [
-        // Automatic selection: persistent adapter/surface incompatibilities move on.
+        // Automatic selection: persistent adapter/surface incompatibilities and repeated losses move on.
         (Automatic, DeviceCreate, MoveOn),
         (Automatic, SurfaceUnsupported, MoveOn),
         (Automatic, SurfaceRefused, MoveOn),
-        // Automatic selection: system-wide DComp absence, transient failures, and native surface
-        // creation errors do not move on to another adapter.
+        (Automatic, RepeatedDeviceLost, MoveOn),
+        // Automatic selection: system-wide DComp absence, single transient failures, and native
+        // surface creation errors do not move on to another adapter.
         (Automatic, DirectCompositionUnavailable, Stop),
         (Automatic, OutOfMemory, Stop),
         (Automatic, DeviceLost, Stop),
         (Automatic, SurfaceCreate, Stop),
-        // User- or app-named adapter: never replaced on any failure.
+        // User- or app-named adapter: never replaced on any failure, repeated loss included.
         (Pinned, DeviceCreate, Stop),
         (Pinned, SurfaceUnsupported, Stop),
         (Pinned, SurfaceRefused, Stop),
         (Pinned, DirectCompositionUnavailable, Stop),
         (Pinned, OutOfMemory, Stop),
         (Pinned, DeviceLost, Stop),
+        (Pinned, RepeatedDeviceLost, Stop),
         (Pinned, SurfaceCreate, Stop),
     ];
 
@@ -270,6 +275,7 @@ fn decide_with_presentation_table_covers_all_combinations() {
         DeviceCreate,
         SurfaceUnsupported,
         SurfaceRefused,
+        RepeatedDeviceLost,
         DirectCompositionUnavailable,
         OutOfMemory,
         DeviceLost,
@@ -288,7 +294,10 @@ fn decide_with_presentation_table_covers_all_combinations() {
                                 Stop
                             }
                         },
-                        DeviceCreate | SurfaceUnsupported | SurfaceRefused => match policy {
+                        DeviceCreate
+                        | SurfaceUnsupported
+                        | SurfaceRefused
+                        | RepeatedDeviceLost => match policy {
                             Policy::Automatic => MoveOn,
                             Policy::Pinned => Stop,
                         },
@@ -304,7 +313,7 @@ fn decide_with_presentation_table_covers_all_combinations() {
             }
         }
     }
-    assert_eq!(checked, 56);
+    assert_eq!(checked, 64);
 }
 
 #[test]
@@ -342,6 +351,128 @@ fn dcomp_unavailable_switches_immediately_to_hwnd_without_enumerating_adapters()
             Effects::one(Effect::FinishOk { fell_back: false }),
         );
         assert_eq!(state, State::Done);
+    }
+}
+
+#[test]
+fn repeated_losses_within_forgive_window_fall_back_to_software_then_give_up() {
+    let mut now = rune_core::time::now();
+    let mut state = LossState::default();
+    assert_eq!(state, LossState::Clean { mode: GpuMode::Hardware });
+    assert_eq!(state.effective_losses(now), 0);
+
+    // 3 hardware losses 10 s apart: attempts 1-2 stay on Hardware, attempt 3 switches to Software.
+    assert_eq!(
+        step_loss(&mut state, LossEvent::Replace { now, policy: Policy::Automatic, software_available: true }),
+        Effects::one(LossEffect::Replace { mode: GpuMode::Hardware, switched_to_software: false }),
+    );
+    assert_eq!(state.effective_losses(now), 1);
+
+    now += Duration::from_secs(10);
+    assert_eq!(
+        step_loss(&mut state, LossEvent::Replace { now, policy: Policy::Automatic, software_available: true }),
+        Effects::one(LossEffect::Replace { mode: GpuMode::Hardware, switched_to_software: false }),
+    );
+    assert_eq!(state.effective_losses(now), 2);
+
+    now += Duration::from_secs(10);
+    assert_eq!(
+        step_loss(&mut state, LossEvent::Replace { now, policy: Policy::Automatic, software_available: true }),
+        Effects::one(LossEffect::Replace { mode: GpuMode::Software, switched_to_software: true }),
+    );
+    assert_eq!(state, LossState::Clean { mode: GpuMode::Software });
+    assert_eq!(state.effective_losses(now), 0);
+
+    // 3 software losses 10 s apart: attempts 1-2 stay on Software, attempt 3 gives up.
+    for expected_losses in 1..LOSS_LIMIT {
+        now += Duration::from_secs(10);
+        assert_eq!(
+            step_loss(&mut state, LossEvent::Replace { now, policy: Policy::Automatic, software_available: true }),
+            Effects::one(LossEffect::Replace { mode: GpuMode::Software, switched_to_software: false }),
+        );
+        assert_eq!(state.effective_losses(now), expected_losses);
+    }
+
+    now += Duration::from_secs(10);
+    assert_eq!(
+        step_loss(&mut state, LossEvent::Replace { now, policy: Policy::Automatic, software_available: true }),
+        Effects::one(LossEffect::GiveUp),
+    );
+    assert_eq!(state, LossState::GivenUp);
+    assert_eq!(
+        step_loss(&mut state, LossEvent::Replace { now, policy: Policy::Automatic, software_available: true }),
+        Effects::one(LossEffect::GiveUp),
+    );
+}
+
+#[test]
+fn loss_forgiven_after_five_minutes_stays_on_hardware() {
+    let mut now = rune_core::time::now();
+    let mut state = LossState::default();
+
+    // Loss 1 at t = 0 -> count = 1.
+    assert_eq!(
+        step_loss(&mut state, LossEvent::Replace { now, policy: Policy::Automatic, software_available: true }),
+        Effects::one(LossEffect::Replace { mode: GpuMode::Hardware, switched_to_software: false }),
+    );
+    assert_eq!(state.effective_losses(now), 1);
+
+    // 4m59s later: not yet forgiven -> count = 2.
+    now += FORGIVE_LOSS - Duration::from_secs(1);
+    assert_eq!(state.effective_losses(now), 1);
+    assert_eq!(
+        step_loss(&mut state, LossEvent::Replace { now, policy: Policy::Automatic, software_available: true }),
+        Effects::one(LossEffect::Replace { mode: GpuMode::Hardware, switched_to_software: false }),
+    );
+    assert_eq!(state.effective_losses(now), 2);
+
+    // Exactly 5 minutes later: 1 loss forgiven (2 - 1 = 1), so next loss brings count to 2 (stays Hardware).
+    now += FORGIVE_LOSS;
+    assert_eq!(state.effective_losses(now), 1);
+    assert_eq!(
+        step_loss(&mut state, LossEvent::Replace { now, policy: Policy::Automatic, software_available: true }),
+        Effects::one(LossEffect::Replace { mode: GpuMode::Hardware, switched_to_software: false }),
+    );
+    assert_eq!(state.effective_losses(now), 2);
+    assert_eq!(state.mode(), Some(GpuMode::Hardware));
+
+    // 10 minutes later: both losses forgiven (2 - 2 = 0), so next loss brings count back to 1.
+    now += FORGIVE_LOSS * 2;
+    assert_eq!(state.effective_losses(now), 0);
+    assert_eq!(
+        step_loss(&mut state, LossEvent::Replace { now, policy: Policy::Automatic, software_available: true }),
+        Effects::one(LossEffect::Replace { mode: GpuMode::Hardware, switched_to_software: false }),
+    );
+    assert_eq!(state.effective_losses(now), 1);
+    assert_eq!(state.mode(), Some(GpuMode::Hardware));
+}
+
+#[test]
+fn pinned_or_unavailable_software_gives_up_instead_of_switching() {
+    for (policy, software_available) in [
+        (Policy::Pinned, true),
+        (Policy::Pinned, false),
+        (Policy::Automatic, false),
+    ] {
+        let mut now = rune_core::time::now();
+        let mut state = LossState::default();
+        assert_eq!(
+            step_loss(&mut state, LossEvent::Replace { now, policy, software_available }),
+            Effects::one(LossEffect::Replace { mode: GpuMode::Hardware, switched_to_software: false }),
+        );
+        now += Duration::from_secs(10);
+        assert_eq!(
+            step_loss(&mut state, LossEvent::Replace { now, policy, software_available }),
+            Effects::one(LossEffect::Replace { mode: GpuMode::Hardware, switched_to_software: false }),
+        );
+        assert_eq!(state.next_backoff(now, policy, software_available, Duration::from_millis(100)), None);
+        now += Duration::from_secs(10);
+        assert_eq!(
+            step_loss(&mut state, LossEvent::Replace { now, policy, software_available }),
+            Effects::one(LossEffect::GiveUp),
+            "policy={policy:?}, software_available={software_available}",
+        );
+        assert_eq!(state, LossState::GivenUp);
     }
 }
 
@@ -459,4 +590,32 @@ fn dcomp_unavailable_mid_adapter_fallback_switches_to_hwnd() {
         Effects::one(Effect::SwitchToHwnd),
     );
     assert_eq!(state.presentation(), Some(Presentation::PlainHwnd));
+}
+
+#[test]
+fn on_software_no_software_adapter_and_replace_failed_transitions() {
+    let mut now = rune_core::time::now();
+
+    let mut state = LossState::default();
+    assert_eq!(step_loss(&mut state, LossEvent::OnSoftware), Effects::none());
+    assert_eq!(state, LossState::Clean { mode: GpuMode::Software });
+    for _ in 0..2 {
+        assert_eq!(
+            step_loss(&mut state, LossEvent::Replace { now, policy: Policy::Automatic, software_available: true }),
+            Effects::one(LossEffect::Replace { mode: GpuMode::Software, switched_to_software: false }),
+        );
+        now += Duration::from_secs(5);
+    }
+    assert_eq!(
+        step_loss(&mut state, LossEvent::Replace { now, policy: Policy::Automatic, software_available: true }),
+        Effects::one(LossEffect::GiveUp),
+    );
+
+    let mut switched = LossState::for_mode(GpuMode::Software);
+    assert_eq!(step_loss(&mut switched, LossEvent::ReplaceFailed { now }), Effects::none());
+    assert_eq!(switched.effective_losses(now), 1);
+
+    let mut missing = LossState::for_mode(GpuMode::Software);
+    assert_eq!(step_loss(&mut missing, LossEvent::NoSoftwareAdapter), Effects::none());
+    assert_eq!(missing, LossState::GivenUp);
 }

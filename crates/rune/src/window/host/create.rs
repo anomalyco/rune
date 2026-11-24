@@ -408,6 +408,11 @@ impl Host {
         };
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let native = Native::default();
+        let initial_mode = if self.gpu.as_ref().is_some_and(|(gpu, _)| gpu.adapter.get_info().device_type == wgpu::DeviceType::Cpu) {
+            crate::gpu::fallback::GpuMode::Software
+        } else {
+            crate::gpu::fallback::GpuMode::Hardware
+        };
         self.win = Some(Win {
             a11y,
             native,
@@ -415,7 +420,7 @@ impl Host {
             surface: Some(surface),
             config,
             surface_ok: true,
-            surface_retries: SurfaceRetries::default(),
+            surface_retries: SurfaceRetries::for_mode(initial_mode),
             window,
             backoff: Backoff::default(),
             hidden_pace: HiddenPace::default(),
@@ -545,8 +550,8 @@ impl Host {
     /// The next frame draws with what this makes; `replace_lost_surface` gives the window up if
     /// this keeps failing.
     #[allow(unsafe_code)]
-    pub(in crate::window) fn reattach(&mut self) -> Result<(), String> {
-        let Some(w) = self.win.as_mut() else { return Err("there is no window to draw into".into()) };
+    pub(in crate::window) fn reattach(&mut self, mode: crate::gpu::fallback::GpuMode) -> Result<(), ReattachError> {
+        let Some(w) = self.win.as_mut() else { return Err(ReattachError::other("there is no window to draw into")) };
         let window = w.window.clone();
         // The old surface goes before the device that made it and before the new surface is
         // made: a DX12 surface takes the window's one DirectComposition target
@@ -578,34 +583,52 @@ impl Host {
         let prev = self.win.as_ref().map(|w| (w.config.width, w.config.height));
         let srgb_blend = self.app.rt().srgb_blend();
         let client_frame = self.client_frame(&window);
-        let (gpu, surface, prewarmed, config) = Gpu::for_surface_setup(
-            features,
-            transparent,
-            PresentationFallback::Allow,
-            |instance, presentation| {
-                #[cfg(target_os = "windows")]
-                if presentation == crate::gpu::fallback::Presentation::DirectComposition
-                    && let Some(visual) = visual
-                {
-                    // SAFETY: the window keeps the visual's `Handover` as long as it keeps this surface.
-                    return unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual)) }.map_err(|e| e.to_string());
-                }
-                #[cfg(not(target_os = "windows"))]
-                let _ = presentation;
-                instance.create_surface(window.clone()).map_err(|e| e.to_string())
-            },
-            |gpu, surface| {
-                let size = drawable_size(prev, (raw_size.width, raw_size.height), max_surface_dim(Some(gpu)));
-                let (mut config, translucent) = surface_config(surface, &gpu.adapter, size, srgb_blend)
-                    .ok_or_else(|| SurfaceSetupError::unsupported("the GPU adapter can't present to this window"))?;
-                if transparent || client_frame {
-                    config.alpha_mode = alpha_mode(transparent, client_frame, translucent);
-                }
-                configure_checked(surface, gpu, &config)
-                    .map_err(|error| SurfaceSetupError::from_configure("the new GPU surface refused its configuration", error))?;
-                Ok(config)
-            },
-        ).map_err(|e| e.message)?;
+        let make_surface = |instance: &wgpu::Instance, presentation: crate::gpu::fallback::Presentation| {
+            #[cfg(target_os = "windows")]
+            if presentation == crate::gpu::fallback::Presentation::DirectComposition
+                && let Some(visual) = visual
+            {
+                // SAFETY: the window keeps the visual's `Handover` as long as it keeps this surface.
+                return unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual)) }.map_err(|e| e.to_string());
+            }
+            #[cfg(not(target_os = "windows"))]
+            let _ = presentation;
+            instance.create_surface(window.clone()).map_err(|e| e.to_string())
+        };
+        let setup_surface = |gpu: &Gpu, surface: &wgpu::Surface<'_>| {
+            let size = drawable_size(prev, (raw_size.width, raw_size.height), max_surface_dim(Some(gpu)));
+            let (mut config, translucent) = surface_config(surface, &gpu.adapter, size, srgb_blend)
+                .ok_or_else(|| SurfaceSetupError::unsupported("the GPU adapter can't present to this window"))?;
+            if transparent || client_frame {
+                config.alpha_mode = alpha_mode(transparent, client_frame, translucent);
+            }
+            configure_checked(surface, gpu, &config)
+                .map_err(|error| SurfaceSetupError::from_configure("the new GPU surface refused its configuration", error))?;
+            Ok(config)
+        };
+        let (gpu, surface, prewarmed, config) = match mode {
+            crate::gpu::fallback::GpuMode::Hardware => Gpu::for_surface_setup(
+                features,
+                transparent,
+                PresentationFallback::Allow,
+                make_surface,
+                setup_surface,
+            )
+            .map_err(|e| ReattachError::other(e.message))?,
+            crate::gpu::fallback::GpuMode::Software => {
+                let (gpu, surface, config) = Gpu::for_surface_setup_software(
+                    features,
+                    PresentationFallback::Allow,
+                    make_surface,
+                    setup_surface,
+                )
+                .map_err(|e| ReattachError {
+                    no_software: e.kind == crate::gpu::fallback::Failure::SurfaceUnsupported,
+                    message: e.message,
+                })?;
+                (gpu, surface, None, config)
+            }
+        };
         let gpu = Arc::new(gpu);
         // A surface that fell back to opaque draws an opaque window, as the first one did.
         self.app.rt_mut().transparent = transparent && config.alpha_mode != wgpu::CompositeAlphaMode::Opaque;
@@ -622,7 +645,7 @@ impl Host {
         let present = self.win.as_ref()
             .and_then(|w| w.native.present_log.clone())
             .and_then(|log| crate::frame::present_time::metal::LayerHook::attach(&surface, log));
-        let Some(w) = self.win.as_mut() else { return Err("the window closed while it made a new surface".into()) };
+        let Some(w) = self.win.as_mut() else { return Err(ReattachError::other("the window closed while it made a new surface")) };
         w.surface = Some(surface);
         w.config = config;
         w.surface_ok = true;
@@ -688,11 +711,12 @@ impl Host {
     }
 
     /// Replaces the window's surface and device when either can't draw a frame: a device that is
-    /// gone, or a surface whose last configuration failed (`Win::surface_ok`). Every replacement
-    /// counts against `SURFACE_TRIES` (`SurfaceRetries`), whether it worked or not: only a frame
-    /// that presents starts the count over (`Host::draw`), so a surface replaced and lost again
-    /// before it presents still ends in the window being given up. A failed replacement waits a
-    /// backoff before the next try.
+    /// gone, or a surface whose last configuration failed (`Win::surface_ok`). Follows Chromium's
+    /// repeated-loss policy via `SurfaceRetries` (`rune_gpu::fallback::LossState`): up to
+    /// `SURFACE_TRIES` (3) losses per mode with one forgiven per 5 minutes (a single healthy frame
+    /// does not reset the count), switching an automatic pick from hardware to software (WARP /
+    /// `DeviceType::Cpu`) before giving up after 3 software losses. A pinned adapter
+    /// (`WGPU_ADAPTER_NAME`) or a platform without a software adapter gives up immediately.
     ///
     /// Giving the window up leaves it hidden (`Life::Hidden`, as `hide` does), gives back its
     /// device and surface, and records why (`AppHandle::window_error`); opening it again makes a
@@ -702,26 +726,53 @@ impl Host {
         let surface_missing = self.win.as_ref().is_some_and(|w| !w.surface_ok || w.surface.is_none());
         if !lost && !surface_missing { return true; }
         let now = crate::time::now();
-        let Some(step) = self.win.as_mut().map(|w| w.surface_retries.attempt()) else { return false };
-        if step == SurfaceStep::GiveUp {
-            return self.give_up_surface(format!("the window's GPU surface was replaced {SURFACE_TRIES} times without a frame reaching the screen"));
-        }
-        match self.reattach() {
+        let policy = Gpu::env_fallback_policy();
+        let software_available = crate::gpu::fallback::software_fallback_available();
+        let Some(step) = self.win.as_mut().map(|w| w.surface_retries.attempt(now, policy, software_available)) else { return false };
+        let mode = match step {
+            SurfaceStep::Replace { mode, switched_to_software } => {
+                if switched_to_software {
+                    eprintln!(
+                        "rune: the GPU device was lost {SURFACE_TRIES} times within {} minutes; falling back to the software adapter",
+                        crate::gpu::fallback::FORGIVE_LOSS.as_secs() / 60,
+                    );
+                }
+                mode
+            }
+            SurfaceStep::GiveUp => {
+                return self.give_up_surface(format!("the window's GPU surface was lost {SURFACE_TRIES} times; giving up"));
+            }
+        };
+        match self.reattach(mode) {
             Ok(()) => {
-                if let Some(w) = self.win.as_mut() { w.backoff_step(BackoffEvent::Lapsed); }
+                let on_software = self.gpu.as_ref().is_some_and(|(gpu, _)| gpu.adapter.get_info().device_type == wgpu::DeviceType::Cpu);
+                if let Some(w) = self.win.as_mut() {
+                    w.backoff_step(BackoffEvent::Lapsed);
+                    if on_software { w.surface_retries.note_software(); }
+                }
                 true
             }
-            Err(error) => match self.win.as_ref().and_then(|w| w.surface_retries.retry(now)) {
-                Some(at) => {
-                    eprintln!("rune: could not replace the window's GPU surface, trying again: {error}");
-                    if let Some(w) = self.win.as_mut() {
-                        w.surface_ok = false;
-                        w.backoff_step(BackoffEvent::At(at));
-                    }
-                    false
+            Err(err) => {
+                if err.no_software {
+                    if let Some(w) = self.win.as_mut() { w.surface_retries.note_no_software(); }
+                    return self.give_up_surface(format!(
+                        "the window's GPU surface was lost {SURFACE_TRIES} times and no software adapter is available: {}",
+                        err.message
+                    ));
                 }
-                None => self.give_up_surface(format!("the window's GPU surface could not be replaced: {error}")),
-            },
+                if let Some(w) = self.win.as_mut() { w.surface_retries.note_replace_failed(now); }
+                match self.win.as_ref().and_then(|w| w.surface_retries.retry(now, policy, software_available)) {
+                    Some(at) => {
+                        eprintln!("rune: could not replace the window's GPU surface, trying again: {}", err.message);
+                        if let Some(w) = self.win.as_mut() {
+                            w.surface_ok = false;
+                            w.backoff_step(BackoffEvent::At(at));
+                        }
+                        false
+                    }
+                    None => self.give_up_surface(format!("the window's GPU surface could not be replaced: {}", err.message)),
+                }
+            }
         }
     }
 
@@ -763,6 +814,17 @@ pub(crate) fn alpha_mode(
     match supports {
         Some(wgpu::CompositeAlphaMode::PreMultiplied) => wgpu::CompositeAlphaMode::PreMultiplied,
         _ => wgpu::CompositeAlphaMode::Opaque,
+    }
+}
+
+pub(in crate::window) struct ReattachError {
+    pub(in crate::window) message: String,
+    no_software: bool,
+}
+
+impl ReattachError {
+    fn other(message: impl Into<String>) -> Self {
+        Self { message: message.into(), no_software: false }
     }
 }
 

@@ -31,11 +31,25 @@
 //! - Explicit `WGPU_DX12_PRESENTATION_SYSTEM=visual` or `hwnd` pins the presentation mode
 //!   (`PresentationPolicy::Pinned`), as do surfaces that require DirectComposition (overlays).
 //!
+//! Repeated device loss over time (matching Chromium's `GpuProcessHost::IncrementCrashCount`
+//! and `GpuDataManagerImplPrivate::FallBackToNextGpuModeDueToCrash` in
+//! `content/browser/gpu/gpu_process_host.cc` and `gpu_data_manager_impl_private.cc`):
+//! - A single `Failure::DeviceLost` keeps the active hardware GPU.
+//! - After [`LOSS_LIMIT`] (3) losses in one mode within the [`FORGIVE_LOSS`] (5-minute) decay
+//!   window (one loss forgiven per 5 minutes elapsed since the previous loss; a single healthy
+//!   frame does not reset the count), [`Failure::RepeatedDeviceLost`] moves an automatic pick
+//!   from [`GpuMode::Hardware`] to [`GpuMode::Software`] with zero losses, or stops if the
+//!   adapter is [`Policy::Pinned`], no software adapter is available, or software mode also hits
+//!   [`LOSS_LIMIT`] losses.
+//!
 //! Extension points:
 //! - A later failure reason (such as a rejected last-resort shader) adds a variant to
 //!   [`Failure`] and one arm to [`decide`].
 
+use std::time::Duration;
+
 use rune_core::machine::Effects;
+use rune_core::time::Instant;
 
 /// Whether the chain may replace the first adapter with another.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,8 +126,10 @@ pub enum Failure {
     DirectCompositionUnavailable,
     /// Transient out-of-memory error (`wgpu::Error::OutOfMemory`).
     OutOfMemory,
-    /// The device was lost or removed (driver reset, TDR, Modern Standby).
+    /// A single device loss or removal (driver reset, TDR, Modern Standby).
     DeviceLost,
+    /// The active GPU mode reached [`LOSS_LIMIT`] device losses within [`FORGIVE_LOSS`].
+    RepeatedDeviceLost,
     /// Creating the native `wgpu::Surface` from the window handle failed.
     SurfaceCreate,
 }
@@ -140,9 +156,10 @@ pub const fn decide(policy: Policy, failure: Failure) -> Decision {
     match policy {
         Policy::Pinned => Decision::Stop,
         Policy::Automatic => match failure {
-            Failure::DeviceCreate | Failure::SurfaceUnsupported | Failure::SurfaceRefused => {
-                Decision::MoveOn
-            }
+            Failure::DeviceCreate
+            | Failure::SurfaceUnsupported
+            | Failure::SurfaceRefused
+            | Failure::RepeatedDeviceLost => Decision::MoveOn,
             Failure::DirectCompositionUnavailable
             | Failure::OutOfMemory
             | Failure::DeviceLost
@@ -506,6 +523,190 @@ pub fn step(state: &mut State, event: Event) -> Effects<Effect> {
             *state = other;
             Effects::none()
         }
+    }
+}
+
+/// Losses in one GPU mode before falling back to the next mode (or giving up), matching
+/// Chromium's `GpuProcessHost::GetFallbackCrashLimit()` on desktop.
+pub const LOSS_LIMIT: u8 = 3;
+
+/// Forgive one recorded loss per 5 minutes elapsed since the previous loss in the same mode,
+/// matching Chromium's `kForgiveGpuCrashMinutes = 5` (`content/browser/gpu/gpu_process_host.cc`).
+pub const FORGIVE_LOSS: Duration = Duration::from_secs(5 * 60);
+
+/// Whether this target platform can have a software adapter fallback (WARP on Windows,
+/// llvmpipe/lavapipe on Linux; Metal on macOS exposes no software adapter).
+pub const fn software_fallback_available() -> bool {
+    !cfg!(target_os = "macos")
+}
+
+/// Which tier of the adapter fallback stack the window is currently drawing on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GpuMode {
+    #[default]
+    Hardware,
+    Software,
+}
+
+/// Explicit state machine for repeated device-loss accounting across [`GpuMode`]s.
+///
+/// Only a mode with at least one recorded loss carries a count and timestamp:
+/// - `Clean { mode }`: zero losses recorded in `mode` (initial state and right after switching
+///   from `Hardware` to `Software`).
+/// - `Counting { mode, losses, last_loss }`: `1 <= losses < LOSS_LIMIT` recent losses in `mode`,
+///   with `last_loss` used for [`FORGIVE_LOSS`] time decay.
+/// - `GivenUp`: the fallback stack is exhausted (or pinned/unavailable).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LossState {
+    Clean {
+        mode: GpuMode,
+    },
+    Counting {
+        mode: GpuMode,
+        losses: u8,
+        last_loss: Instant,
+    },
+    GivenUp,
+}
+
+impl Default for LossState {
+    fn default() -> Self {
+        Self::Clean { mode: GpuMode::Hardware }
+    }
+}
+
+impl LossState {
+    /// Starts with zero recorded losses in `mode`.
+    pub const fn for_mode(mode: GpuMode) -> Self {
+        Self::Clean { mode }
+    }
+
+    /// Current GPU mode, or `None` once given up.
+    pub const fn mode(self) -> Option<GpuMode> {
+        match self {
+            Self::Clean { mode } | Self::Counting { mode, .. } => Some(mode),
+            Self::GivenUp => None,
+        }
+    }
+
+    /// Effective recorded losses in the active mode at `now` after forgiving one loss per
+    /// [`FORGIVE_LOSS`] elapsed since `last_loss`.
+    pub fn effective_losses(self, now: Instant) -> u8 {
+        match self {
+            Self::Clean { .. } => 0,
+            Self::Counting { losses, last_loss, .. } => {
+                let elapsed = now.saturating_duration_since(last_loss);
+                let forgiven = (elapsed.as_secs() / FORGIVE_LOSS.as_secs()).min(u64::from(losses)) as u8;
+                losses.saturating_sub(forgiven)
+            }
+            Self::GivenUp => LOSS_LIMIT,
+        }
+    }
+
+    /// Next retry deadline from `now` (increasing with consecutive losses in the current mode),
+    /// or `None` if the next loss at `now` would exhaust the fallback stack and give up.
+    pub fn next_backoff(
+        self,
+        now: Instant,
+        policy: Policy,
+        software_available: bool,
+        base: Duration,
+    ) -> Option<Instant> {
+        match self {
+            Self::GivenUp => None,
+            Self::Clean { .. } => Some(now + base),
+            Self::Counting { mode, .. } => {
+                let remaining = self.effective_losses(now);
+                let can_fallback = mode == GpuMode::Hardware
+                    && software_available
+                    && decide(policy, Failure::RepeatedDeviceLost) == Decision::MoveOn;
+                if remaining.saturating_add(1) >= LOSS_LIMIT && !can_fallback {
+                    return None;
+                }
+                Some(now + base * u32::from(remaining.max(1)))
+            }
+        }
+    }
+}
+
+/// Inputs to [`step_loss`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LossEvent {
+    /// The window needs a replacement device/surface at `now` under `policy`.
+    Replace {
+        now: Instant,
+        policy: Policy,
+        software_available: bool,
+    },
+    /// The replacement attempt itself failed at `now`. When the chain just entered
+    /// `Clean { mode: Software }`, counts that failed switch as the first software loss so it
+    /// does not grant a free extra try.
+    ReplaceFailed {
+        now: Instant,
+    },
+    /// The window is now drawing on a software adapter (`DeviceType::Cpu`), e.g. after an
+    /// initial or `SurfaceRefused` fallback landed on software.
+    OnSoftware,
+    /// Software fallback found no usable software adapter on this host.
+    NoSoftwareAdapter,
+}
+
+/// Actions the caller carries out for a transition of [`step_loss`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LossEffect {
+    /// Recreate the device and surface in `mode`; `switched_to_software` is true on the single
+    /// transition from `Hardware` to `Software` so the caller logs it once.
+    Replace {
+        mode: GpuMode,
+        switched_to_software: bool,
+    },
+    /// The fallback stack is exhausted (or pinned/unavailable): give the window up.
+    GiveUp,
+}
+
+/// Advances the repeated-device-loss state machine by one `event`.
+pub fn step_loss(state: &mut LossState, event: LossEvent) -> Effects<LossEffect> {
+    match (*state, event) {
+        (LossState::GivenUp, LossEvent::Replace { .. }) => Effects::one(LossEffect::GiveUp),
+        (
+            LossState::Clean { mode } | LossState::Counting { mode, .. },
+            LossEvent::Replace { now, policy, software_available },
+        ) => {
+            let count = state.effective_losses(now).saturating_add(1);
+            if count < LOSS_LIMIT {
+                *state = LossState::Counting { mode, losses: count, last_loss: now };
+                Effects::one(LossEffect::Replace { mode, switched_to_software: false })
+            } else if mode == GpuMode::Hardware
+                && software_available
+                && decide(policy, Failure::RepeatedDeviceLost) == Decision::MoveOn
+            {
+                *state = LossState::Clean { mode: GpuMode::Software };
+                Effects::one(LossEffect::Replace {
+                    mode: GpuMode::Software,
+                    switched_to_software: true,
+                })
+            } else {
+                *state = LossState::GivenUp;
+                Effects::one(LossEffect::GiveUp)
+            }
+        }
+        (LossState::Clean { mode: GpuMode::Software }, LossEvent::ReplaceFailed { now }) => {
+            *state = LossState::Counting { mode: GpuMode::Software, losses: 1, last_loss: now };
+            Effects::none()
+        }
+        (
+            LossState::Clean { mode: GpuMode::Hardware }
+            | LossState::Counting { mode: GpuMode::Hardware, .. },
+            LossEvent::OnSoftware,
+        ) => {
+            *state = LossState::Clean { mode: GpuMode::Software };
+            Effects::none()
+        }
+        (_, LossEvent::NoSoftwareAdapter) => {
+            *state = LossState::GivenUp;
+            Effects::none()
+        }
+        _ => Effects::none(),
     }
 }
 
