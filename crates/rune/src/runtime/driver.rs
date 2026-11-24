@@ -181,7 +181,7 @@ impl<S: 'static> AppDriver for AppRefMut<'_, S> {
 
     fn on_focus(&mut self, focused: bool, tx: &mut Tx) {
         if let Some(f) = self.hooks.on_focus {
-            f(self.state, focused, tx);
+            app_call!(f, self.state, focused, tx);
         }
     }
 
@@ -196,7 +196,7 @@ impl<S: 'static> AppDriver for AppRefMut<'_, S> {
             None => Some(&mut *self.state),
         };
         let Some(state) = state else { return false };
-        f(state, mods, tx);
+        app_call!(f, state, mods, tx);
         true
     }
 
@@ -206,7 +206,7 @@ impl<S: 'static> AppDriver for AppRefMut<'_, S> {
 
     fn on_visibility(&mut self, visible: bool, tx: &mut Tx) {
         if let Some(f) = self.hooks.on_visibility {
-            f(self.state, visible, tx);
+            app_call!(f, self.state, visible, tx);
         }
     }
 

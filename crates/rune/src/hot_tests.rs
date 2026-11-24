@@ -1,12 +1,10 @@
 use super::*;
-use crate::{Key, TextEdit, col, el, text_input};
+use crate::{Cx, El, Key, KeyEvent, TextEdit, col, el, text_input};
 
 struct State { pressed: bool, hovered: bool, secondary: bool, changed: bool, keyed: bool, edit: TextEdit }
 
-fn runtime<S: Default + 'static>(view: fn(&S, &mut Cx<S>) -> El) -> crate::Runtime<HostState> {
-    let spec = AppSpec::new("test", (300.0, 200.0), S::default, view);
-    let host = HostState { value: Box::new((spec.init)()), spec: Box::new(spec), view: view_adapter::<S>, poll: poll_adapter::<S>, setup: setup_adapter::<S>, key: key_adapter::<S> };
-    crate::Runtime::new(host, |s, cx| (s.view)(s, cx), (300.0, 200.0), Env::new(true, 1.0))
+fn runtime<S: Default + 'static>(view: fn(&S, &mut Cx<S>) -> El) -> crate::Runtime<S> {
+    crate::Runtime::new(S::default(), view, (300.0, 200.0), Env::new(true, 1.0))
 }
 
 #[test]
@@ -109,17 +107,12 @@ fn panicking_poll_and_on_key_patches_fall_back_to_the_startup_callbacks() {
     rt.poll = Some(|s, _, _| { panics_once(); *s += 10; true });
     rt.frame(0.0);
     assert_eq!((rt.state, CALLS.get()), (11, 2));
-    // Through the type-erased host as well: its adapters dispatch through the table too.
+    rt.poll = None;
     CALLS.set(0);
-    fn view(_: &usize, _: &mut Cx<usize>) -> El { el().size(10.0, 10.0) }
-    let mut host = runtime::<usize>(view);
-    let spec = host.state.spec.downcast_mut::<AppSpec<usize>>().unwrap();
-    spec.on_key = Some(|s, _, _| { panics_once(); *s += 1; true });
-    host.on_key = Some(|s: &mut HostState, key, tx| (s.key)(s, key, tx));
-    host.frame(0.0);
-    host.key(KeyEvent { key: Key::Function(5), mods: Default::default() });
-    host.frame(0.0);
-    assert_eq!((*host.state.value.downcast_ref::<usize>().unwrap(), CALLS.get()), (1, 2));
+    rt.hooks.on_ime = Some(|s, _, _| { panics_once(); *s += 100; true });
+    rt.ime(crate::Ime::Commit("x".into()));
+    rt.frame(0.0);
+    assert_eq!((rt.state, CALLS.get()), (111, 2));
 }
 
 #[test]
@@ -169,34 +162,28 @@ fn snap_on_patch_is_a_headless_window_tool() {
 
 #[test]
 fn panicking_patch_falls_back_without_losing_state_or_context() {
-    fn original(s: &usize, _: &mut Cx<usize>) -> El {
-        el().key(format!("count-{s}")).on_press(|s: &mut usize| *s += 1)
+    CALLS.set(0);
+    fn view(s: &usize, cx: &mut Cx<usize>) -> El {
+        if !originals_only() && CALLS.get() == 0 {
+            CALLS.set(1);
+            cx.time_scale(0.125);
+            panic!("broken patched view");
+        }
+        CALLS.set(CALLS.get() + 1);
+        let key = if !originals_only() && *s >= 8 { format!("recovered-{s}") } else { format!("count-{s}") };
+        el().key(key).on_press(|s: &mut usize| *s += 1)
     }
-    let mut rt = runtime(original);
-    *rt.state.value.downcast_mut::<usize>().unwrap() = 7;
-    let address = rt.state.value.as_ref() as *const dyn Any as *const ();
-    rt.state.view = |host, cx| {
-        let state = host.value.downcast_ref::<usize>().unwrap();
-        let original = host.spec.downcast_ref::<AppSpec<usize>>().unwrap().view;
-        view_or_original(original, state, cx, |_, typed| {
-            typed.time_scale(0.125);
-            panic!("broken patched view")
-        })
-    };
+    let mut rt = runtime(view);
+    rt.state = 7;
+    let address = &rt.state as *const usize;
     rt.frame(0.0);
     assert!(rt.find("count-7").is_some());
     assert_eq!(rt.time_scale, 1.0, "failed view's context writes must be discarded");
     control_input(&mut rt, &json!({"tap": "count-7"}));
     rt.frame(0.0);
-    assert!(rt.find("count-8").is_some(), "original handlers still operate on retained state");
-    assert_eq!(rt.state.value.as_ref() as *const dyn Any as *const (), address);
+    assert_eq!(rt.state, 8, "original handlers still operate on retained state");
+    assert_eq!(&rt.state as *const usize, address);
     // A later healthy patch is still attempted rather than latching the failure.
-    rt.state.view = |host, cx| {
-        let state = host.value.downcast_ref::<usize>().unwrap();
-        view_or_original(original, state, cx, |s, _| el().key(format!("recovered-{s}")))
-    };
-    rt.update(|_, _| {});
-    rt.frame(0.0);
     assert!(rt.find("recovered-8").is_some());
 }
 
@@ -213,14 +200,14 @@ fn invalid_control_input_is_skipped_and_later_requests_still_work() {
         control_input(&mut rt, &command);
         rt.frame(0.0);
     }
-    assert_eq!(*rt.state.value.downcast_ref::<usize>().unwrap(), 0);
+    assert_eq!(rt.state, 0);
     control_input(&mut rt, &json!({"tap": "button", "scroll": [10, 10, 20]}));
     rt.frame(0.0);
-    assert_eq!(*rt.state.value.downcast_ref::<usize>().unwrap(), 1);
+    assert_eq!(rt.state, 1);
 }
 
 #[test]
-fn erased_host_routes_focus_physical_links_and_window_callbacks() {
+fn typed_runtime_routes_focus_physical_links_and_window_callbacks() {
     #[derive(Default)]
     struct Events { presses: usize, physical: usize, dismisses: usize, links: Vec<String>, paste: String, focused: bool, moved: bool, layout: Option<[f32; 4]> }
     fn view(_: &Events, _: &mut Cx<Events>) -> El {
@@ -254,7 +241,7 @@ fn erased_host_routes_focus_physical_links_and_window_callbacks() {
     rt.key(KeyEvent { key: Key::Enter, mods: Default::default() });
     rt.key(KeyEvent { key: Key::Escape, mods: Default::default() });
     rt.frame(0.0);
-    let s = rt.state.value.downcast_ref::<Events>().unwrap();
+    let s = &rt.state;
     assert_eq!((s.presses, s.physical, s.dismisses), (1, 1, 1));
     assert_eq!(s.links, ["docs"]);
     assert_eq!(s.paste, "window paste");
@@ -263,7 +250,7 @@ fn erased_host_routes_focus_physical_links_and_window_callbacks() {
 }
 
 #[test]
-fn erased_host_preserves_context_reads_and_host_motion_preference() {
+fn typed_runtime_preserves_context_reads_and_host_motion_preference() {
     #[derive(Default)]
     struct Reads { edit: TextEdit, seen: std::cell::RefCell<(bool, Option<[f32; 4]>, Option<[f32; 4]>)> }
     fn view(s: &Reads, cx: &mut Cx<Reads>) -> El {
@@ -280,7 +267,7 @@ fn erased_host_preserves_context_reads_and_host_motion_preference() {
     rt.paste("caret");
     rt.frame(0.0);
     rt.frame(0.0);
-    let s = rt.state.value.downcast_ref::<Reads>().unwrap();
+    let s = &rt.state;
     let (reduced, layout, caret) = *s.seen.borrow();
     assert!(reduced);
     assert_eq!(layout.unwrap()[2..], [180.0, 30.0]);
@@ -289,7 +276,7 @@ fn erased_host_preserves_context_reads_and_host_motion_preference() {
 }
 
 #[test]
-fn erased_host_routes_handlers_and_context_to_the_typed_state() {
+fn typed_runtime_routes_handlers_and_context_to_the_typed_state() {
     fn view(s: &State, cx: &mut Cx<State>) -> El {
         cx.time_scale(0.75);
         col().child(el().key("button").size(80.0, 30.0).on_press(|s: &mut State| s.pressed = true)
@@ -300,9 +287,12 @@ fn erased_host_routes_handlers_and_context_to_the_typed_state() {
                 .on_input_key(|s: &mut State, _, _| { s.keyed = true; false })
                 .on_edit(|s: &mut State| &mut s.edit).on_submit(|s: &mut State, tx| { tx.copy(s.edit.text.clone()); }))
     }
-    let spec = AppSpec::new("test", (200.0, 150.0), || State { pressed: false, hovered: false, secondary: false, changed: false, keyed: false, edit: TextEdit::new("") }, view);
-    let host = HostState { value: Box::new((spec.init)()), spec: Box::new(spec), view: view_adapter::<State>, poll: poll_adapter::<State>, setup: setup_adapter::<State>, key: key_adapter::<State> };
-    let mut rt = crate::Runtime::new(host, |s, cx| (s.view)(s, cx), (200.0, 150.0), Env { system_dark: true, scale: 1.0 });
+    let mut rt = crate::Runtime::new(
+        State { pressed: false, hovered: false, secondary: false, changed: false, keyed: false, edit: TextEdit::new("") },
+        view,
+        (200.0, 150.0),
+        Env { system_dark: true, scale: 1.0 },
+    );
     rt.frame(0.0);
     assert_eq!(rt.time_scale, 0.75);
     let (x, y) = rt.find("button").unwrap();
@@ -320,10 +310,160 @@ fn erased_host_routes_handlers_and_context_to_the_typed_state() {
     rt.frame(0.0);
     rt.key(KeyEvent { key: Key::Enter, mods: Default::default() });
     rt.frame(0.0);
-    let s = rt.state.value.downcast_ref::<State>().unwrap();
+    let s = &rt.state;
     assert!(s.pressed);
     assert!(s.hovered);
     assert!(s.secondary && s.changed && s.keyed);
     assert_eq!(s.edit.text, "state kept");
     assert_eq!(rt.copy_request.as_deref(), Some("state kept"));
+}
+
+#[test]
+fn typed_window_app_with_turn_scope_connects_hot_session_wakes_rebuilds_and_falls_back() {
+    use crate::window::{TypedWindowApp, WindowApp};
+    #[derive(Default)]
+    struct Scoped { enters: u32, leaves: u32 }
+    thread_local! { static BUILDS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
+    fn view(_: &Scoped, _: &mut crate::Cx<Scoped>) -> crate::El {
+        crate::memo("scoped", 0u8, || { BUILDS.set(BUILDS.get() + 1); el().size(20.0, 20.0) })
+    }
+    fn enter(s: &mut Scoped) { panics_once(); s.enters += 1; }
+    fn leave(s: &mut Scoped) { panics_once(); s.leaves += 1; }
+
+    enable_for_tests();
+    let woken = Arc::new(AtomicU64::new(0));
+    let w = woken.clone();
+    let waker: Waker = Arc::new(move || { w.fetch_add(1, Ordering::Relaxed); });
+    let app = crate::App::new(AppSpec::new("scoped", (80.0, 60.0), Scoped::default, view))
+        .turn_scope(enter, leave);
+    let mut win = TypedWindowApp::from_app(app, waker);
+    let hub: &'static Hub = Box::leak(Box::default());
+    win.rt.frame.hot_mut().expect("App::turn_scope connects a hot::Session").move_to(hub);
+    BUILDS.set(0);
+    win.rt.frame(0.0);
+    assert_eq!(BUILDS.get(), 1);
+    win.rt.update(|_, _| {});
+    win.rt.frame(0.0);
+    assert_eq!(BUILDS.get(), 1, "unchanged memo is reused");
+    hub.patched();
+    assert_eq!(woken.load(Ordering::Relaxed), 1, "patch wakes the window");
+    assert!(win.rt.patch_pending() && win.rt.needs_commit());
+    win.rt.frame(0.0);
+    assert_eq!(BUILDS.get(), 2, "patch clears memos and rebuilds the view");
+    assert!(!win.rt.patch_pending());
+
+    CALLS.set(0);
+    assert!(win.enter_turn());
+    assert_eq!((win.rt.state.enters, CALLS.get()), (1, 2), "panicking patched enter falls back to startup enter");
+    CALLS.set(0);
+    win.leave_turn();
+    assert_eq!((win.rt.state.leaves, CALLS.get()), (1, 2), "panicking patched leave falls back to startup leave");
+}
+
+#[test]
+fn remaining_app_hooks_dispatch_through_patch_table_with_panic_fallback() {
+    use crate::open_url::incoming::{Glue, Inbox};
+    use crate::window::{TypedWindowApp, WindowApp};
+    #[derive(Default)]
+    struct Seen {
+        focus: Vec<bool>,
+        mods: Vec<crate::Mods>,
+        visibility: Vec<bool>,
+        closes: u32,
+        quits: u32,
+        rests: u32,
+        reopens: Vec<bool>,
+        urls: Vec<String>,
+    }
+    struct FakeGlue;
+    impl Glue for FakeGlue {
+        fn handled_elsewhere(&self) -> bool { false }
+        fn install(&self) -> bool { true }
+        fn remove(&self) {}
+    }
+
+    let spec = AppSpec::new("hooks", (80.0, 60.0), Seen::default, |_: &Seen, _: &mut crate::Cx<Seen>| el().size(20.0, 20.0));
+    let app = crate::App::new(spec)
+        .on_focus(|s, f, _| { panics_once(); s.focus.push(f); })
+        .on_modifiers(|s, m, _| { panics_once(); s.mods.push(m); })
+        .on_visibility(|s, v, _| { panics_once(); s.visibility.push(v); })
+        .on_close(|s, _| { panics_once(); s.closes += 1; })
+        .on_quit(|s, _| { panics_once(); s.quits += 1; })
+        .on_rest(|s, _| { panics_once(); s.rests += 1; true })
+        .on_reopen(|s, vis, _| { panics_once(); s.reopens.push(vis); true })
+        .on_open_url(|s, url, _| { panics_once(); s.urls.push(url.to_owned()); });
+
+    let inbox: &'static Inbox = Box::leak(Box::new(Inbox::new()));
+    let _listening = inbox.listen(&app, &FakeGlue).expect("on_open_url listens");
+    let mut win = TypedWindowApp::from_app(app, Arc::new(|| {}));
+    win.rt.frame(0.0);
+
+    CALLS.set(0);
+    win.rt.window_focus(true);
+    win.rt.frame(0.0);
+    assert_eq!((win.rt.state.focus.as_slice(), CALLS.get()), (&[true][..], 2), "on_focus");
+
+    CALLS.set(0);
+    let alt = crate::Mods { alt: true, ..crate::Mods::default() };
+    win.rt.physical_observation(crate::PhysicalInput::Modifiers(alt));
+    win.rt.frame(0.0);
+    assert_eq!((win.rt.state.mods.as_slice(), CALLS.get()), (&[alt][..], 2), "on_modifiers");
+
+    CALLS.set(0);
+    win.rt.set_live_visible(false);
+    assert_eq!((win.rt.state.visibility.as_slice(), CALLS.get()), (&[false][..], 2), "on_visibility");
+
+    CALLS.set(0);
+    win.run_on_close();
+    assert_eq!((win.rt.state.closes, CALLS.get()), (1, 2), "on_close");
+
+    CALLS.set(0);
+    assert!(win.run_on_quit());
+    assert_eq!((win.rt.state.quits, CALLS.get()), (1, 2), "on_quit");
+
+    CALLS.set(0);
+    win.run_on_rest();
+    assert_eq!((win.rt.state.rests, CALLS.get()), (1, 2), "on_rest");
+
+    CALLS.set(0);
+    let handled = win.queue_on_reopen(true).expect("on_reopen queued");
+    for f in win.shared.take_updates() { win.rt.update_if(f); }
+    assert!(handled.load(Ordering::Relaxed));
+    assert_eq!((win.rt.state.reopens.as_slice(), CALLS.get()), (&[true][..], 2), "on_reopen");
+
+    CALLS.set(0);
+    inbox.receive("myapp://open?id=1".into());
+    for f in win.shared.take_updates() { win.rt.update_if(f); }
+    assert_eq!((win.rt.state.urls.as_slice(), CALLS.get()), (&["myapp://open?id=1".to_owned()][..], 2), "on_open_url");
+}
+
+#[test]
+fn cx_defaults_survive_hot_builds_and_discard_panicked_writes() {
+    let fg = crate::Color { r: 0.1, g: 0.7, b: 0.4, a: 1.0 };
+    let ring = crate::Color { r: 0.0, g: 0.6, b: 1.0, a: 1.0 };
+    let look = crate::HelpLook::system(false);
+    fn view(_: &u8, cx: &mut crate::Cx<u8>) -> crate::El {
+        if !originals_only() && CALLS.get() == 0 {
+            CALLS.set(1);
+            cx.foreground(crate::Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 });
+            cx.time_scale(0.125);
+            panic!("broken patched view");
+        }
+        CALLS.set(CALLS.get() + 1);
+        cx.foreground(crate::Color { r: 0.1, g: 0.7, b: 0.4, a: 1.0 });
+        cx.focus_ring(2.0, 1.0, crate::Color { r: 0.0, g: 0.6, b: 1.0, a: 1.0 });
+        cx.help_look(crate::HelpLook::system(false));
+        cx.force_focus_rings();
+        cx.web_focus();
+        el().size(40.0, 20.0)
+    }
+    CALLS.set(0);
+    let mut rt = runtime::<u8>(view);
+    rt.frame(0.0);
+    assert_eq!(rt.time_scale, 1.0, "panicked view's time_scale is discarded");
+    assert_eq!(rt.commit.defaults.foreground, Some(fg), "cx.foreground survives hot builds");
+    assert_eq!(rt.commit.defaults.focus_ring, Some(crate::el::Outline { width: 2.0, offset: 1.0, color: ring }), "cx.focus_ring survives hot builds");
+    assert_eq!(rt.commit.defaults.help, Some(look), "cx.help_look survives hot builds");
+    assert!(rt.commit.defaults.force_focus_rings, "cx.force_focus_rings survives hot builds");
+    assert!(rt.commit.defaults.web_focus, "cx.web_focus survives hot builds");
 }

@@ -76,6 +76,8 @@ use host::Host;
 use chrome::uses_drag_regions;
 #[cfg(test)]
 use host::setup_waker;
+#[cfg(all(test, feature = "hot"))]
+pub(crate) use host::app::{TypedWindowApp, WindowApp};
 #[cfg(test)]
 use state::{WakeFacts, WakeWork};
 #[cfg(all(test, target_os = "macos"))]

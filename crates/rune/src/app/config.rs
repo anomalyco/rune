@@ -43,36 +43,6 @@ impl<S: 'static> Default for RuntimeConfig<S> {
     }
 }
 
-#[cfg(feature = "hot")]
-impl<S: 'static> RuntimeConfig<S> {
-    /// Copies the state-independent settings onto a `RuntimeConfig` for another state type
-    /// (hot-reload's type-erased `HostState`).
-    pub(crate) fn retype_settings<T: 'static>(self) -> RuntimeConfig<T> {
-        let Self {
-            on_focus: _,
-            on_mods: _,
-            on_visibility: _,
-            on_ime: _,
-            modifier_keys,
-            tab_visits_controls,
-            srgb_blend,
-            font_smoothing,
-            dev_stats,
-        } = self;
-        RuntimeConfig {
-            on_focus: None,
-            on_mods: None,
-            on_visibility: None,
-            on_ime: None,
-            modifier_keys,
-            tab_visits_controls,
-            srgb_blend,
-            font_smoothing,
-            dev_stats,
-        }
-    }
-}
-
 impl crate::runtime::RuntimeCore {
     pub(crate) fn configure_core(
         &mut self,

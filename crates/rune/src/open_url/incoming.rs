@@ -94,7 +94,14 @@ impl Inbox {
     pub(crate) fn listen<S: 'static>(&'static self, app: &App<S>, glue: &dyn Glue) -> Option<Listening> {
         let hook = app.on_open_url?;
         let handle: AppHandle<S> = app.handle();
-        self.listen_sink(glue, Arc::new(move |url: String| handle.update(move |s, tx| hook(s, &url, tx))))
+        self.listen_sink(glue, Arc::new(move |url: String| {
+            handle.update(move |s, tx| {
+                #[cfg(feature = "hot")]
+                crate::hot::patched_or_original!("on_open_url", hook, s, url.as_str(), tx);
+                #[cfg(not(feature = "hot"))]
+                hook(s, &url, tx);
+            });
+        }))
     }
 
     fn listen_sink(&'static self, glue: &dyn Glue, sink: Sink) -> Option<Listening> {

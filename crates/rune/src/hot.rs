@@ -1,8 +1,8 @@
 //! Desktop development only. Use `scripts/rune-dev`: it validates edits before dx sees them.
 //! Long-lived state belongs to Runtime, never to tip-crate statics or cached view trait objects.
 
+use std::any::Any;
 use std::path::Path;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, AtomicU64, Ordering}};
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -10,24 +10,9 @@ use serde_json::{Value, json};
 
 use crate::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
 use crate::runtime::{AppDriver, Env, RuntimeCore, Waker};
-use crate::tooling::{AppSpec, Args, initial_state, runtime_for, tree_json_core};
-use crate::{Cx, El, KeyEvent, Tx};
-use std::any::Any;
-
-// The hot tip crate owns only these thin typed adapters. Runtime<HostState>, layout,
-// shell and headless loop are instantiated in the stable rune library, not recompiled per app edit.
-// Any's vtable supplies type_id/drop only; no patchable behavior is cached in it.
-pub(crate) struct HostState {
-    pub(crate) value: Box<dyn Any>,
-    spec: Box<dyn Any>,
-    view: fn(&HostState, &mut Cx<HostState>) -> El,
-    poll: fn(&mut HostState, f64, &mut Tx) -> bool,
-    setup: fn(&mut HostState, Waker),
-    key: fn(&mut HostState, &KeyEvent, &mut Tx) -> bool,
-}
+use crate::tooling::{AppSpec, Args, runtime_for, tree_json_core};
 
 thread_local! {
-    static INITIAL: std::cell::RefCell<Option<HostState>> = const { std::cell::RefCell::new(None) };
     static ORIGINAL_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -47,32 +32,6 @@ pub(crate) fn originals_only() -> bool {
     ORIGINAL_ONLY.get()
 }
 
-fn view_adapter<S: 'static>(host: &HostState, cx: &mut Cx<HostState>) -> El {
-    let spec = host.spec.downcast_ref::<AppSpec<S>>().unwrap();
-    let state = host.value.downcast_ref::<S>().unwrap();
-    view_or_original(spec.view, state, cx, |state, typed| subsecond::HotFn::current(spec.view).call((state, typed)))
-}
-
-fn view_or_original<S>(original: fn(&S, &mut Cx<S>) -> El, state: &S, cx: &mut Cx<HostState>, patched: impl FnOnce(&S, &mut Cx<S>) -> El) -> El {
-    let mut typed = cx.retype();
-    if ORIGINAL_ONLY.get() {
-        let tree = original(state, &mut typed);
-        cx.settings_from(typed);
-        return tree;
-    }
-    let tree = match catch_unwind(AssertUnwindSafe(|| patched(state, &mut typed))) {
-        Ok(tree) => tree,
-        Err(_) => {
-            eprintln!("rune-hot: view panicked; rendering the original view");
-            // Discard context writes from the failed view and bypass the patch table.
-            typed = cx.retype();
-            original(state, &mut typed)
-        }
-    };
-    cx.settings_from(typed);
-    tree
-}
-
 /// Calls `f` through the patch table; if the patched code panics, calls the startup `f` once
 /// instead, as a panicking view renders the original. Side effects of the panicked call stay.
 macro_rules! patched_or_original {
@@ -89,66 +48,9 @@ macro_rules! patched_or_original {
 }
 pub(crate) use patched_or_original;
 
-fn poll_adapter<S: 'static>(host: &mut HostState, t: f64, tx: &mut Tx) -> bool {
-    let spec = host.spec.downcast_ref::<AppSpec<S>>().unwrap();
-    let Some(f) = spec.poll else { return false };
-    patched_or_original!("poll", f, host.value.downcast_mut::<S>().unwrap(), t, &mut *tx)
-}
-
-fn setup_adapter<S: 'static>(host: &mut HostState, waker: Waker) {
-    let spec = host.spec.downcast_ref::<AppSpec<S>>().unwrap();
-    if let Some(f) = spec.setup { f(host.value.downcast_mut::<S>().unwrap(), waker); }
-}
-
-fn key_adapter<S: 'static>(host: &mut HostState, key: &KeyEvent, tx: &mut Tx) -> bool {
-    let spec = host.spec.downcast_ref::<AppSpec<S>>().unwrap();
-    let Some(f) = spec.on_key else { return false };
-    patched_or_original!("on_key", f, host.value.downcast_mut::<S>().unwrap(), key, &mut *tx)
-}
-
-pub(crate) fn run<S: 'static>(spec: AppSpec<S>, args: Args) {
-    run_app(crate::App::new(spec), args);
-}
-
-pub(crate) fn run_app<S: 'static>(app: crate::App<S>, mut args: Args) {
-    if args.list_scenes {
-        for (name, _) in app.spec.scenes { println!("{name}"); }
-        return;
-    }
-    let frame = (app.chrome, app.titlebar);
-    let scene = args.scene.take();
-    let (spec, state, _, runtime) = app.into_parts(scene.as_deref());
-    let value = Box::new(state);
-    let shell = AppSpec {
-        title: spec.title, size: spec.size, min_size: spec.min_size, fonts: spec.fonts, families: spec.families,
-        scenes: &[], init: || INITIAL.with(|s| s.borrow_mut().take().expect("hot initial state")),
-        view: |s: &HostState, cx| (s.view)(s, cx),
-        poll: Some(|s: &mut HostState, t, tx| (s.poll)(s, t, tx)),
-        setup: Some(|s: &mut HostState, wake| (s.setup)(s, wake)),
-        on_key: Some(|s: &mut HostState, key, tx| (s.key)(s, key, tx)),
-    };
-    let state = HostState { value, spec: Box::new(spec), view: view_adapter::<S>, poll: poll_adapter::<S>, setup: setup_adapter::<S>, key: key_adapter::<S> };
-    run_host(shell, state, args, runtime.retype_settings(), frame);
-}
-
-#[inline(never)]
-fn run_host(spec: AppSpec<HostState>, state: HostState, args: Args, runtime: crate::app::RuntimeConfig<HostState>, frame: (crate::Chrome, Option<crate::Titlebar>)) {
-    INITIAL.with(|slot| { assert!(slot.borrow().is_none()); *slot.borrow_mut() = Some(state); });
-    if args.snap_on_patch.is_some() {
-        let state = initial_state(&spec, args.scene.as_deref());
-        return headless(&spec, state, args, runtime);
-    }
-    let mut app = crate::App::new(spec);
-    app.runtime = runtime;
-    // The window's frame is the app's, as without hot reload.
-    (app.chrome, app.titlebar) = frame;
-    if args.headless() { crate::tooling::headless(app, args); }
-    else if let Err(error) = crate::window::run(app, args) { panic!("{error}"); }
-}
-
-/// `--snap-on-patch` for a window from `run_windows*`, `WindowSpec::from_app` or `App::window`:
-/// the same typed `Runtime<S>` a native window builds, so its view, poll and on_key patch the
-/// way they do on screen.
+/// `--snap-on-patch` for a window from `rune::run`, `App::run`, `run_windows*`,
+/// `WindowSpec::from_app` or `App::window`: the same typed `Runtime<S>` a native window
+/// builds, so its view and callbacks patch the way they do on screen.
 pub(crate) fn snap_window<S: 'static>(app: crate::App<S>, args: Args) {
     let (spec, state, _, runtime) = app.into_parts(args.scene.as_deref());
     headless(&spec, state, args, runtime);

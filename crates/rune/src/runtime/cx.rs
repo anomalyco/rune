@@ -95,17 +95,6 @@ impl CxCore {
         self.chrome = crate::ChromeInsets::default();
     }
 
-    #[cfg(feature = "hot")]
-    pub(crate) fn settings_from(&mut self, other: CxCore) {
-        self.reduced_motion = other.reduced_motion;
-        self.time_scale = other.time_scale;
-        self.zoom = other.zoom;
-        self.caption_color = other.caption_color;
-        self.titlebar = other.titlebar;
-        self.caret_read = other.caret_read;
-        self.layout_reads = other.layout_reads;
-    }
-
     pub(crate) fn env(&self) -> Env { self.env }
     pub(crate) fn system_dark(&self) -> bool { self.env.system_dark }
     pub(crate) fn titlebar_inset(&self) -> f32 { self.titlebar_inset }
@@ -190,12 +179,6 @@ impl<S> Cx<S> {
     #[inline(always)]
     pub(crate) fn clear_chrome(&mut self) {
         self.core.clear_chrome();
-    }
-
-    #[cfg(feature = "hot")]
-    #[inline(always)]
-    pub(crate) fn settings_from<T>(&mut self, other: Cx<T>) {
-        self.core.settings_from(other.core);
     }
 
     #[inline(always)]

@@ -211,9 +211,6 @@ use trace::r2;
 /// Opens the app's window and quits when it closes (`App` for other lifetimes), or renders
 /// headless for the tooling arguments.
 pub fn run<S: 'static>(spec: AppSpec<S>) {
-    #[cfg(feature = "hot")]
-    crate::hot::run(spec, Args::parse());
-    #[cfg(not(feature = "hot"))]
     crate::app::App::new(spec).run();
 }
 
