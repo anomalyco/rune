@@ -428,7 +428,9 @@ source each time, and earlier blocks stay mounted.
 - **```` ```diff ````** (or `patch`) fences tint `+` and `-` lines edge to edge, and dim `@@`
   and file header lines. Set colours with `MarkdownStyle::diff` and `diff_hunk`. Line text
   keeps the body colour unless `diff_text(added, removed)` or `diff_text_tint(0.5)` (toward the
-  theme's green and red) colours it.
+  theme's green and red) colours it. Wrap diff cards with `Markdown::diff_frame(|card, d| ...)`
+  (`DiffFrame` gives 0-based `index`, raw patch `source`, and streaming `open` state) without
+  affecting `Markdown::code_frame` or `CodeFrame::index`.
 - **```` ```mermaid ````** (feature `mermaid`, backed by `rune-mermaid`) draws 17 Mermaid
   diagram types natively (flowcharts, sequence, state, class, ER, gantt, pie, mindmap, timeline,
   user journey, git graph, quadrant, XY chart, sankey, block, requirement and C4), with no JS or
@@ -453,12 +455,15 @@ source each time, and earlier blocks stay mounted.
   `paragraph_margin`, `heading_margin(level, top, bottom)` and `image_margin` override vertical
   block spacing while preserving CSS margin collapsing and list-item rules; and
   `code_block_radius(radius)` overrides the 6 pt corner radius on fenced code and diff cards.
+  `Markdown::wrap_anywhere(true)` enables CSS `overflow-wrap: anywhere` on paragraphs, headings,
+  lists, block quotes, table cells, diff lines, and non-`scroll_wide` code fences so long unbroken
+  tokens wrap inside narrow columns instead of overflowing (`false` by default).
 
 `Tooltip::label(..).render(&TooltipStyle::neutral(dark), &mut layer)` builds a tooltip without
 a kit. `TooltipStyle::max_width(w)` caps its width; `label`, `text` and a `.wrap()` text `child` wrap at it. The
 app owns `open`, so the hover delay is a `wake_after` in its hover handler; `El::help(text)` is
 the delayed, self-dismissing system tooltip when the look needn't match. The gallery's `rune-markdown--walkthrough`, `rune-markdown--diagrams`,
-`rune-markdown--table-styles`, `rune-markdown--code` and `rune-markdown--styled` scenes show every feature.
+`rune-markdown--table-styles`, `rune-markdown--code`, `rune-markdown--styled` and `rune-markdown--wrap-and-frames` scenes show every feature.
 
 ## Diff
 

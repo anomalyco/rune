@@ -741,3 +741,49 @@ fn next_drawn_line(src: &str, from: usize) -> usize {
     }
     if src[at..].split_inclusive('\n').all(quiet) { src.len() } else { at }
 }
+
+/// Narrow column comparing default overflow vs `wrap_anywhere(true)` and custom `diff_frame` headers.
+const WRAP_SAMPLE: &str = concat!(
+    "### LongTokenHeading_0123456789abcdef0123456789abcdef\n\n",
+    "Token: https://example.org/artifacts/sha256_9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\n\n",
+    "```rust\nlet digest = \"sha256_9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\";\n```\n\n",
+    "| Key | Digest |\n|---|---|\n| sha | 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 |\n",
+);
+
+const DIFF_FRAME_SAMPLE: &str = concat!(
+    "```diff\n@@ -1,2 +1,2 @@\n-let wrap = false;\n+let wrap = true;\n```\n\n",
+    "```rust\nlet view = Markdown::new(src).wrap_anywhere(true).build(&kit);\n```\n\n",
+    "```patch\n-old_name()\n+new_name()\n```\n",
+);
+
+pub(super) fn markdown_wrap_and_frames(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let c = &k.c;
+    let style = MarkdownStyle::from_kit(k).table_min_column(80.0);
+    let panel = |label: &str, wrap: bool| {
+        col().w(240.0).gap(6.0)
+            .child(caption(k, label))
+            .child(col().w_full().padding(10.0).radius(k.radius.md).fill(c.layer_01).border(1.0, c.border_weak).clip_soft(k.radius.md)
+                .child(Markdown::new(WRAP_SAMPLE).style(style.clone()).wrap_anywhere(wrap).build(k)))
+    };
+    let (hdr_font, weak, kit) = (k.ty.small_medium, c.text_weak, k.clone());
+    let framed = Markdown::new(DIFF_FRAME_SAMPLE)
+        .code_frame(move |card, cf| {
+            let lang = cf.language.unwrap_or("text");
+            col().key(format!("code-{}", cf.index)).w_full().gap(4.0)
+                .child(text(format!("Code #{} ({lang})", cf.index + 1)).font(hdr_font).color(weak))
+                .child(card)
+        })
+        .diff_frame(move |card, df| {
+            let patch = df.source.to_owned();
+            let lines = df.source.lines().count();
+            let hdr = row().w_full().center_y().justify_between()
+                .child(text(format!("Diff #{} · {lines} lines", df.index + 1)).font(kit.ty.small_medium).color(kit.c.text_base))
+                .child(Button::new("Copy patch").variant(ButtonVariant::Ghost).control_size(ControlSize::Small)
+                    .on_press_tx(move |_: &mut G, tx: &mut Tx| tx.copy(&patch)).build(&kit).key(format!("copy-diff-{}", df.index)));
+            col().key(format!("diff-{}", df.index)).w_full().gap(4.0).child(hdr).child(card)
+        })
+        .build(k);
+    col().w(500.0).gap(16.0)
+        .child(row().gap(16.0).child(panel("Default (clips overflow)", false)).child(panel("wrap_anywhere(true)", true)))
+        .child(col().w_full().gap(6.0).child(caption(k, "Custom diff_frame + independent code_frame")).child(framed))
+}

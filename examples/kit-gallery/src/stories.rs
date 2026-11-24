@@ -26,7 +26,7 @@ use display::{accordion_basic, accordion_multiple, accordion_single, badge_accen
 use inputs::{field_direct_child, field_invalid, field_text_input, field_textarea, select_disabled, select_grouped, select_invalid, select_playground, select_states, select_with_field, text_input_appearances, text_input_controlled, text_input_copy, text_input_playground, text_input_states, text_input_with_field, textarea_controlled, textarea_playground, textarea_states, textarea_with_field};
 use markdown::{
     markdown_basic, markdown_code, markdown_diagrams, markdown_lenient, markdown_mermaid_charts, markdown_mermaid_data, markdown_mermaid_flows, markdown_mermaid_git, markdown_mermaid_hover, markdown_mermaid_maps, markdown_mermaid_plan, markdown_mermaid_plan_zoomed, markdown_mermaid_shapes, markdown_mermaid_streaming, markdown_mermaid_systems, markdown_stream_tail, markdown_streaming, markdown_styled, markdown_table_styles,
-    markdown_walkthrough,
+    markdown_walkthrough, markdown_wrap_and_frames,
 };
 use overlays::{hover_card_basic, hover_card_placements, menu_appearances, menu_basic, menu_checkbox, menu_radio, menu_rich, menu_submenu, overlays_tx_callbacks, popover_basic, popover_controlled, toast_all, tooltip_help_arrow, tooltip_keybind, tooltip_path, tooltip_simple, tooltip_title_description};
 
@@ -235,6 +235,7 @@ stories! {
     "rune-markdown--table-styles" => markdown_table_styles,
     "rune-markdown--code" => markdown_code,
     "rune-markdown--styled" => markdown_styled,
+    "rune-markdown--wrap-and-frames" => markdown_wrap_and_frames,
     "rune-text--selectable-help" => text_selectable_help,
     "rune-text--truncate-middle" => text_truncate_middle,
     "rune-dialog--fit" => dialog_fit,

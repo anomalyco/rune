@@ -167,6 +167,7 @@ type TaskWire = Rc<dyn Fn(El, Rc<str>, usize, bool) -> El>;
 #[cfg(feature = "mermaid")]
 type FrameWire = Rc<dyn Fn(El, &DiagramFrame<'_>) -> El>;
 type CodeFrameFn = Rc<dyn Fn(El, &CodeFrame<'_>) -> El>;
+type DiffFrameFn = Rc<dyn Fn(El, &DiffFrame<'_>) -> El>;
 type CodeWrapFn = Rc<dyn Fn(usize, &str) -> bool>;
 pub(super) struct CodeWire {
     pub(super) frame: Option<CodeFrameFn>,
@@ -220,6 +221,24 @@ impl CodeFrame<'_> {
     }
 }
 
+/// A diff block [`Markdown::diff_frame`] is wrapping.
+///
+/// ```ignore
+/// Markdown::new(src).diff_frame(|card, d| {
+///     col().key(format!("diff-{}", d.index)).child(copy_button(d.source)).child(card)
+/// })
+/// ```
+#[non_exhaustive]
+pub struct DiffFrame<'a> {
+    /// Its place among the document's `diff` / `patch` fences, counted from 0. A stream only
+    /// adds blocks after it, so this stays put while the reply arrives.
+    pub index: usize,
+    /// The raw patch text inside the fence.
+    pub source: &'a str,
+    /// The fence is still arriving (its closing fence has not arrived yet).
+    pub open: bool,
+}
+
 /// A diagram [`Markdown::diagram_frame`] is wrapping.
 #[cfg(feature = "mermaid")]
 #[non_exhaustive]
@@ -255,11 +274,13 @@ pub struct Markdown {
     copy_source: bool,
     scroll_wide: bool,
     wrap_code: bool,
+    wrap_anywhere: bool,
     tentative: Option<rune::Direction>,
     highlighter: Highlighter,
     #[cfg(feature = "mermaid")]
     diagram_frame: Option<FrameWire>,
     code_frame: Option<CodeFrameFn>,
+    diff_frame: Option<DiffFrameFn>,
     code_wrap: Option<CodeWrapFn>,
     quote_frame: Option<QuoteWire>,
     link_favicon: Option<link_icon::FaviconWire>,
@@ -275,9 +296,9 @@ thread_local! {
 impl Markdown {
     pub fn new(src: impl Into<String>) -> Markdown {
         Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: -1.0, streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_help: None, link_ring: None, code_link: None,
-            on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, wrap_code: false, tentative: None, highlighter: Highlighter::builtin(),
+            on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, wrap_code: false, wrap_anywhere: false, tentative: None, highlighter: Highlighter::builtin(),
             #[cfg(feature = "mermaid")]
-            diagram_frame: None, code_frame: None, code_wrap: None, quote_frame: None, link_favicon: None, images: None, on_image: None }
+            diagram_frame: None, code_frame: None, diff_frame: None, code_wrap: None, quote_frame: None, link_favicon: None, images: None, on_image: None }
     }
     /// Highlight UTF-8 byte ranges of the Markdown source string (see [`find`]).
     ///
@@ -414,6 +435,19 @@ impl Markdown {
         self
     }
 
+    /// Breaks overly long unbroken tokens (URLs, hashes, file paths) inside a word when the
+    /// token alone would overflow its line (CSS `overflow-wrap: anywhere`), while normal words
+    /// still break at spaces (`false` by default). Applies to paragraphs, headings, lists,
+    /// block quotes, table cells, diff fences, and code fences when [`Self::scroll_wide`] is off.
+    ///
+    /// ```ignore
+    /// let view = Markdown::new(src).wrap_anywhere(true).build(&kit);
+    /// ```
+    pub fn wrap_anywhere(mut self, on: bool) -> Self {
+        self.wrap_anywhere = on;
+        self
+    }
+
     /// Draws `f(card, frame)` in place of each diagram's card, so an app can put its own
     /// controls on it (a button that opens it larger) or key it. Fences that draw as their
     /// source, or nothing yet while streaming, don't come here.
@@ -429,13 +463,25 @@ impl Markdown {
 
     /// Draws `f(card, frame)` in place of each code block's card, so an app can put its own
     /// controls on it (a Copy button). Diagrams that draw as their source and diff fences don't
-    /// come here.
+    /// come here (see [`Self::diff_frame`]).
     ///
     /// ```ignore
     /// Markdown::new(src).code_frame(|card, c| col().key(format!("code-{}", c.index)).child(card).child(copy_button(c.source)))
     /// ```
     pub fn code_frame(mut self, f: impl Fn(El, &CodeFrame<'_>) -> El + 'static) -> Self {
         self.code_frame = Some(Rc::new(f));
+        self
+    }
+
+    /// Draws `f(card, frame)` in place of each ```` ```diff ```` (or `patch`) fence's card, so an
+    /// app can put its own controls on it (a Copy patch button) or add a header. Ordinary code
+    /// fences still go to [`Self::code_frame`].
+    ///
+    /// ```ignore
+    /// Markdown::new(src).diff_frame(|card, d| col().key(format!("diff-{}", d.index)).child(copy_button(d.source)).child(card))
+    /// ```
+    pub fn diff_frame(mut self, f: impl Fn(El, &DiffFrame<'_>) -> El + 'static) -> Self {
+        self.diff_frame = Some(Rc::new(f));
         self
     }
 
@@ -512,6 +558,7 @@ impl Markdown {
             && !(self.selectable && self.copy_source)
             && self.highlighter.is_builtin()
             && self.code_frame.is_none()
+            && self.diff_frame.is_none()
             && self.code_wrap.is_none()
             && self.quote_frame.is_none()
             && self.link_favicon.is_none()
@@ -531,6 +578,7 @@ impl Markdown {
                 self.selectable,
                 self.scroll_wide,
                 self.wrap_code,
+                self.wrap_anywhere,
                 self.tentative,
             ));
             return rune::memo::cached(h, || self.render_uncached(style));
@@ -559,11 +607,11 @@ impl Markdown {
         let code_frame = (self.code_frame.is_some() || self.code_wrap.is_some() || self.wrap_code)
             .then(|| CodeWire { frame: self.code_frame, wrap: self.code_wrap, wrap_default: self.wrap_code });
         let r = Renderer { s: style.clone(), highlights: self.highlights, reveal: self.reveal, streaming: self.streaming, on_link: self.on_link, on_link_secondary: self.on_link_secondary, link_look: self.link_look, link_help: self.link_help, link_ring: self.link_ring, code_link: self.code_link,
-            on_task: self.on_task, tasks_read_only: self.tasks_read_only, selectable: self.selectable, scroll_wide: self.scroll_wide, tentative: self.tentative,
-            highlighter: self.highlighter, sources, next_source: Cell::new(0), tasks, next_task: Cell::new(0),
+            on_task: self.on_task, tasks_read_only: self.tasks_read_only, selectable: self.selectable, scroll_wide: self.scroll_wide, wrap_anywhere: self.wrap_anywhere, tentative: self.tentative,
+            highlighter: self.highlighter, sources, next_source: Cell::new(0), next_diff: Cell::new(0), tasks, next_task: Cell::new(0),
             current_block_key: RefCell::new("b0".into()),
             #[cfg(feature = "mermaid")]
-            diagram_frame: self.diagram_frame, code_frame, quote_frame: self.quote_frame, link_favicon: self.link_favicon, images: self.images, on_image: self.on_image, flow: Cell::default() };
+            diagram_frame: self.diagram_frame, code_frame, diff_frame: self.diff_frame, quote_frame: self.quote_frame, link_favicon: self.link_favicon, images: self.images, on_image: self.on_image, flow: Cell::default() };
         // The document reads the way its first words do; until any arrive, the way it was asked.
         let root = memo::with_renderer(&r, || {
             bidi::directed(r.blocks_with_dirs(&blocks, Some(&meta), &maps, &keys, true, &dirs), root_dir).selection_group(self.selectable)
@@ -579,3 +627,5 @@ impl Markdown {
 mod style_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod wrap_diff_tests;

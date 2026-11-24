@@ -92,6 +92,8 @@ pub use markdown::CodeFrame;
 #[cfg(feature = "mermaid")]
 pub use markdown::DiagramFrame;
 #[cfg(feature = "markdown")]
+pub use markdown::DiffFrame;
+#[cfg(feature = "markdown")]
 pub use markdown::Highlight;
 #[cfg(feature = "markdown")]
 pub use markdown::ImageFrame;

@@ -57,6 +57,7 @@ impl SpanMap {
 pub(in crate::markdown) enum BlockMap {
     Inline(SpanMap),
     Code(SpanMap),
+    Diff { open: bool, map: SpanMap },
     DeepTail { lines: usize, map: SpanMap },
     List(Vec<Vec<BlockMap>>),
     Quote(Vec<BlockMap>),
@@ -71,7 +72,7 @@ impl BlockMap {
             return self;
         }
         match &mut self {
-            BlockMap::Inline(m) | BlockMap::Code(m) | BlockMap::DeepTail { map: m, .. } => m.shift_src(offset),
+            BlockMap::Inline(m) | BlockMap::Code(m) | BlockMap::Diff { map: m, .. } | BlockMap::DeepTail { map: m, .. } => m.shift_src(offset),
             BlockMap::List(items) => {
                 for item in items {
                     for b in item {

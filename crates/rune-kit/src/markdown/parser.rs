@@ -224,7 +224,7 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                             // `rust,ignore` and `ts title="a.ts"` name their language first.
                             let word = info.split(|c: char| c.is_whitespace() || c == ',').next().unwrap_or("");
                             match word.to_ascii_lowercase().as_str() {
-                                "diff" | "patch" => Fence::Diff,
+                                "diff" | "patch" => Fence::Diff(fence_closed(&src[range])),
                                 "mermaid" => Fence::Mermaid(fence_closed(&src[range])),
                                 _ => Fence::Plain((!word.is_empty()).then(|| word.into()), fence_closed(&src[range])),
                             }

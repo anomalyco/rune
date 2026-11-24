@@ -130,7 +130,7 @@ fn each_text<'a>(
                 let _ = (sources, n);
                 f(code, m);
             }
-            (Block::Diff(code), BlockMap::Code(m)) => f(code, m),
+            (Block::Diff(code), BlockMap::Diff { map: m, .. } | BlockMap::Code(m)) => f(code, m),
             (Block::Mermaid(code), BlockMap::Code(m)) => {
                 *next_source += 1;
                 #[cfg(feature = "mermaid")]

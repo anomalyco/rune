@@ -57,6 +57,7 @@ pub(super) const HAS_OPEN_TABLE: u8 = 1 << 4;
 pub(super) const HAS_INLINE_CODE: u8 = 1 << 5;
 /// Inline math: like display math, its block builds every time, asking the math cache.
 pub(super) const HAS_MATH: u8 = 1 << 6;
+pub(super) const HAS_DIFF: u8 = 1 << 7;
 
 #[derive(Clone)]
 pub(super) struct PreRow {
@@ -243,7 +244,7 @@ pub(super) fn precompute_block(root_b: &Block, root_map: Option<&BlockMap>) -> R
                         (Block::Para(inl), _) => { 1u8.hash(&mut h); scan_inline(inl, &mut h, &mut flags, &mut links); }
                         (Block::Heading(level, inl), _) => { (2u8, *level).hash(&mut h); scan_inline(inl, &mut h, &mut flags, &mut links); }
                         (Block::Code(code), _) => { flags |= HAS_CODE; src_n = 1; (3u8, code).hash(&mut h); }
-                        (Block::Diff(src), _) => (4u8, src).hash(&mut h),
+                        (Block::Diff(src), map_opt) => { flags |= HAS_DIFF; let open = matches!(map_opt, Some(BlockMap::Diff { open: true, .. })); (4u8, open, src).hash(&mut h); }
                         (Block::Mermaid(src), _) => { flags |= HAS_MERMAID; src_n = 1; (5u8, src).hash(&mut h); }
                         (Block::Rule, _) => 6u8.hash(&mut h),
                         (Block::Image { src, alt, title }, _) => { flags |= HAS_IMAGE; (7u8, src, alt, title).hash(&mut h); }
@@ -300,16 +301,16 @@ pub(super) fn with_renderer<R>(r: &Renderer, f: impl FnOnce() -> R) -> R {
 /// to compile here until it is either hashed in the base or guarded per block/link below.
 fn compute_base(r: &Renderer) -> (u64, u64) {
     let Renderer {
-        s, highlights, reveal, streaming, tasks_read_only, selectable, scroll_wide, on_link, on_link_secondary,
+        s, highlights, reveal, streaming, tasks_read_only, selectable, scroll_wide, wrap_anywhere, on_link, on_link_secondary,
         link_look: _, link_help: _, link_ring: _, link_favicon: _, code_link: _,
-        highlighter: _, sources: _, next_source: _, tasks: _, next_task: _, on_task: _,
+        highlighter: _, sources: _, next_source: _, next_diff: _, tasks: _, next_task: _, on_task: _,
         #[cfg(feature = "mermaid")]
         diagram_frame: _,
-        code_frame: _, quote_frame: _, images: _, on_image: _,
+        code_frame: _, diff_frame: _, quote_frame: _, images: _, on_image: _,
         tentative: _, current_block_key: _, flow: _,
     } = r;
     let mut h = PairHasher::new();
-    (s, highlights, reveal.to_bits(), streaming, tasks_read_only, selectable, scroll_wide,
+    (s, highlights, reveal.to_bits(), streaming, tasks_read_only, selectable, scroll_wide, wrap_anywhere,
         on_link.as_ref().map(|w| w.1), on_link_secondary.as_ref().map(|w| w.1)).hash(&mut h);
     h.finish128()
 }
@@ -382,6 +383,7 @@ fn hash_block_map(root: &BlockMap, h: &mut impl Hasher) {
                     }
                 }
                 BlockMap::DeepTail { lines, map } => { (6u8, *lines).hash(h); hash_span_map(map, h); }
+                BlockMap::Diff { open, map } => { (7u8, *open).hash(h); hash_span_map(map, h); }
                 BlockMap::None => 0u8.hash(h),
             },
         }
@@ -405,6 +407,7 @@ impl Renderer {
         }
         if flags & HAS_IMAGE != 0 && (self.images.is_some() || self.on_image.is_some()) { return false; }
         if flags & HAS_QUOTE != 0 && self.quote_frame.is_some() { return false; }
+        if flags & HAS_DIFF != 0 && self.diff_frame.is_some() { return false; }
         if flags & HAS_OPEN_TABLE != 0 && self.streaming { return false; }
         true
     }
@@ -457,7 +460,7 @@ impl Renderer {
                     (Block::Para(inl), _) => { 1u8.hash(h); if !self.hash_inline_direct(inl, h) { return false; } }
                     (Block::Heading(level, inl), _) => { (2u8, *level).hash(h); if !self.hash_inline_direct(inl, h) { return false; } }
                     (Block::Code(code), _) => { if !self.can_memo_flags(HAS_CODE) { return false; } (3u8, self.wrap_code_default(), code).hash(h); }
-                    (Block::Diff(src), _) => (4u8, src).hash(h),
+                    (Block::Diff(src), map_opt) => { if !self.can_memo_flags(HAS_DIFF) { return false; } let open = matches!(map_opt, Some(BlockMap::Diff { open: true, .. })); (4u8, open, src).hash(h); }
                     (Block::Mermaid(src), _) => { if !self.can_memo_flags(HAS_MERMAID) { return false; } (5u8, src).hash(h); }
                     (Block::Rule, _) => 6u8.hash(h),
                     (Block::Image { src, alt, title }, _) => { if !self.can_memo_flags(HAS_IMAGE) { return false; } (7u8, src, alt, title).hash(h); }
@@ -575,6 +578,14 @@ impl Renderer {
             Some(s) => (1u8, &s.lang, s.len, s.coloured, s.open).hash(&mut h),
             None => 0u8.hash(&mut h),
         }
+        if !self.highlights.is_empty() && let Some(m) = map { hash_span_map(m, &mut h); }
+        Some(h.finish128())
+    }
+
+    pub(super) fn settled_diff_card_digest(&self, src: &str, open: bool, map: Option<&SpanMap>) -> Option<(u64, u64)> {
+        if open { return None; }
+        let mut h = PairHasher::new();
+        (6u8, self.base_hash(), src).hash(&mut h);
         if !self.highlights.is_empty() && let Some(m) = map { hash_span_map(m, &mut h); }
         Some(h.finish128())
     }

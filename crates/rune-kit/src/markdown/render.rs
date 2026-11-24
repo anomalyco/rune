@@ -26,12 +26,16 @@ pub(super) struct Renderer {
     pub(super) selectable: bool,
     /// `Markdown::scroll_wide`.
     pub(super) scroll_wide: bool,
+    /// `Markdown::wrap_anywhere`.
+    pub(super) wrap_anywhere: bool,
     /// `Markdown::dir_tentative`.
     pub(super) tentative: Option<rune::Direction>,
     pub(super) highlighter: Highlighter,
     pub(super) sources: Rc<[Source]>,
     /// The next of `sources`, advanced at each [`Block::Code`] in document order.
     pub(super) next_source: Cell<usize>,
+    /// The next diff fence index, advanced at each [`Block::Diff`] in document order.
+    pub(super) next_diff: Cell<usize>,
     pub(super) tasks: Rc<[Option<(bool, usize)>]>,
     /// The next of `tasks`, advanced at each list item in document order.
     pub(super) next_task: Cell<usize>,
@@ -41,6 +45,8 @@ pub(super) struct Renderer {
     pub(super) diagram_frame: Option<FrameWire>,
     /// `Markdown::code_frame`.
     pub(super) code_frame: Option<CodeWire>,
+    /// `Markdown::diff_frame`.
+    pub(super) diff_frame: Option<DiffFrameFn>,
     /// `Markdown::quote_frame`.
     pub(super) quote_frame: Option<QuoteWire>,
     /// `Markdown::link_favicon`.
