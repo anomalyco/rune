@@ -69,6 +69,8 @@ pub(crate) use surface::{
 #[cfg(all(test, target_os = "linux"))]
 use surface::acquire;
 #[cfg(target_os = "windows")]
+pub(crate) use win32::poll_pace;
+#[cfg(target_os = "windows")]
 pub(crate) use win32::slot;
 
 use host::Host;

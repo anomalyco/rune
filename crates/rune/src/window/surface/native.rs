@@ -86,6 +86,8 @@ pub(in crate::window) struct Native {
     pub(in crate::window) look: crate::window::win32::look::Look,
     /// Whether its swap chain can take the next frame (`slot`).
     pub(in crate::window) slot: crate::window::win32::slot::Slot,
+    /// Paces sub-frame `poll` wakes onto the display's vblank grid (`poll_pace`).
+    pub(in crate::window) poll_pace: crate::window::win32::poll_pace::PollPace,
     /// What its last frames changed, so the next redraws only that (`damage`).
     pub(in crate::window) damage: crate::window::win32::damage::Damage,
     /// Whether the CPU renderer or the GPU draws its frames (`cpu_frame`).

@@ -352,7 +352,7 @@ impl OverlayCore {
         self.presence_due(app, now);
         // Paced to a frame interval: a hidden or covered overlay's poll that keeps asking for
         // the next frame runs once a frame, however often other events turn the loop.
-        let deadline = frame::timer_deadline(app.rt(), self.awaiting_layer_frame());
+        let deadline = self.poll_deadline(app.rt());
         if deadline.is_some_and(|deadline| deadline <= now) {
             // Backing off, the frame waits for the retry and would leave the timer due.
             if !self.frameless() && !self.backing_off(now) {

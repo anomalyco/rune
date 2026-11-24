@@ -237,6 +237,12 @@ impl Host {
             w.timer_frame.no_longer_quiet();
             w.loop_frame.touched();
         }
+        #[cfg(target_os = "windows")]
+        if matches!(event, WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. })
+            && let Some(w) = &mut self.win
+        {
+            let _ = w.native.poll_pace.step(crate::window::poll_pace::PollPaceEvent::DisplayChanged);
+        }
         #[cfg(target_os = "macos")]
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } | WindowEvent::Occluded(_))
             && let Some(w) = &mut self.win && let Some(pacing) = &mut w.native.pacing {

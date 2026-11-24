@@ -31,18 +31,29 @@ pub(crate) fn timer_deadline<S>(rt: &Runtime<S>) -> Option<Instant> {
     timer_deadline_core(rt.core())
 }
 
+/// The runtime's next poll wake and when `poll` last ran, both on the host's wall clock.
+pub(crate) fn poll_wake_wall_core(rt: &RuntimeCore) -> Option<(Option<Instant>, Instant)> {
+    let wall = |t: f64| rt.wall_start?.checked_add(Duration::try_from_secs_f64(t).ok()?);
+    let due = rt.poll_wake_deadline().and_then(wall)?;
+    Some((wall(rt.polled_at()), due))
+}
+
+/// The runtime's next motion-owned wake (loop step, video frame), on the host's wall clock.
+pub(crate) fn motion_wake_wall_core(rt: &RuntimeCore) -> Option<Instant> {
+    let wall = |t: f64| rt.wall_start?.checked_add(Duration::try_from_secs_f64(t).ok()?);
+    rt.motion_wake_deadline().and_then(wall)
+}
+
 /// Like [`timer_deadline_core`], omitting `motion_wake_deadline` so ambient visual loops pause
 /// while a Wayland layer surface awaits its `wl_surface.frame` callback, while app timers
 /// (`Tx::wake_after`) still fire on schedule.
 pub(crate) fn poll_timer_deadline_core(rt: &RuntimeCore) -> Option<Instant> {
-    let wall = |t: f64| rt.wall_start?.checked_add(Duration::try_from_secs_f64(t).ok()?);
-    let polled = wall(rt.polled_at());
-    rt.poll_wake_deadline().and_then(wall).map(|due| polled.map_or(due, |polled| due.max(polled + TIMER_FRAME)))
+    let (polled, due) = poll_wake_wall_core(rt)?;
+    Some(polled.map_or(due, |polled| due.max(polled + TIMER_FRAME)))
 }
 
 pub(crate) fn timer_deadline_core(rt: &RuntimeCore) -> Option<Instant> {
-    let wall = |t: f64| rt.wall_start?.checked_add(Duration::try_from_secs_f64(t).ok()?);
-    poll_timer_deadline_core(rt).into_iter().chain(rt.motion_wake_deadline().and_then(wall)).min()
+    poll_timer_deadline_core(rt).into_iter().chain(motion_wake_wall_core(rt)).min()
 }
 
 /// Paces the frame a hidden host keeps ready to show (a launcher's cached pixels, a retained

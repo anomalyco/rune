@@ -44,7 +44,7 @@ impl AnyHost for Host {
         let win = self.win.as_ref();
         // A frame waiting for room in the swap chain comes when there is (`slot`): its timers
         // would turn the loop at once until then.
-        let runtime = timer_deadline_core(self.app.rt()).filter(|_| !win.is_some_and(|w| w.paced() || w.waits_for_slot()));
+        let runtime = self.poll_deadline().filter(|_| !win.is_some_and(|w| w.paced() || w.waits_for_slot()));
         // A due timer whose frame is still on its way takes the frame's bound instead
         // (`TimerFrame`), so the loop sleeps rather than waking at once for a frame that can't
         // come.
@@ -121,6 +121,40 @@ impl Host {
                 self.paint(event_loop);
             }
         }
+        #[cfg(target_os = "windows")]
+        self.sync_poll_pace(now);
+    }
+
+    /// Windows: whether the window is shown, uncovered, not minimized and not waiting on a
+    /// swap-chain slot, so poll-driven frames pace to the display's vblank grid.
+    #[cfg(target_os = "windows")]
+    fn poll_pace_active(&self) -> bool {
+        self.shown_win().is_some_and(|w| self.life.uncovered() && !w.minimized() && !w.waits_for_slot())
+    }
+
+    /// Windows: syncs the window's poll pacer with the runtime's current poll wake before the
+    /// loop sleeps.
+    #[cfg(target_os = "windows")]
+    fn sync_poll_pace(&mut self, now: Instant) {
+        let active = self.poll_pace_active();
+        let rt = self.app.rt();
+        let Some(w) = self.win.as_mut() else { return };
+        let window = &w.window;
+        w.native.poll_pace.sync_with(rt, now, active, |previous| {
+            let mhz = window.current_monitor().and_then(|m| m.refresh_rate_millihertz());
+            crate::platform::win32::vsync_grid(now, mhz, previous)
+        });
+    }
+
+    /// The runtime's next timer as the loop waits for it and checks it on wake. On Windows, a
+    /// shown uncovered window's sub-frame poll wake snaps to the display's vblank grid
+    /// (`poll_pace`) instead of the 60 Hz `TIMER_FRAME` floor.
+    fn poll_deadline(&self) -> Option<Instant> {
+        #[cfg(target_os = "windows")]
+        if let Some(w) = &self.win {
+            return w.native.poll_pace.deadline_for(self.app.rt(), self.poll_pace_active());
+        }
+        timer_deadline_core(self.app.rt())
     }
 
     /// Runs `f` inside the app's turn scope, entered once however deep the turn's calls go.
@@ -230,7 +264,7 @@ impl Host {
             self.look();
         }
         if matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll)
-            && timer_deadline_core(self.app.rt()).is_some_and(|deadline| deadline <= crate::time::now())
+            && self.poll_deadline().is_some_and(|deadline| deadline <= crate::time::now())
             && !self.win.as_ref().is_some_and(Win::waits_for_slot)
         {
             let hidden = self.shown_win().is_none();

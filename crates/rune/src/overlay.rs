@@ -386,6 +386,9 @@ struct Live {
     /// (`window::slot`). Before the surface so an outstanding wait goes first.
     #[cfg(target_os = "windows")]
     slot: Slot,
+    /// Paces sub-frame `poll` wakes onto the display's vblank grid (`window::poll_pace`).
+    #[cfg(target_os = "windows")]
+    poll_pace: crate::window::poll_pace::PollPace,
     alpha: Option<crate::render::surface_alpha::AlphaSurface>,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
