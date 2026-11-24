@@ -701,7 +701,8 @@ impl TextSystem {
         // and after it keep their keys (`reuse_keys`), so a keystroke or recolour costs no full scan.
         let layout_spans: Vec<Span> = span::layout_spans(spec.spans).cloned().collect();
         let layout_disjoint = layout_spans.len() <= 1 || layout_spans.windows(2).all(|w| w[0].start < w[0].end && w[0].end <= w[1].start);
-        let plain = layout_spans.is_empty() && spec.pills.is_empty() && spec.blocks.iter().all(|&b| b == Block::Paragraph);
+        let no_pills_or_blocks = spec.pills.is_empty() && spec.blocks.iter().all(|&b| b == Block::Paragraph);
+        let plain = layout_spans.is_empty() && no_pills_or_blocks;
         let disjoint_spans = spec.spans.len() <= 1 || spec.spans.windows(2).all(|w| w[0].start < w[0].end && w[0].end <= w[1].start);
         let forced = spec.paragraphs_flow();
         let start_flow = forced.unwrap_or(spec.plaintext_flow());
@@ -715,7 +716,7 @@ impl TextSystem {
         // A min-content measure of a text whose lines wait keys an edit's lines into runs too,
         // however few: none of them is shown, and its run held them as one record.
         let measuring = prev.is_some_and(|p| p.waiting()) && max_width.is_some_and(|m| m < style.line_px() * scale);
-        let can_defer = plain && (!spec.by_line || (matches!(style.family, Family::Mono | Family::SystemMono)
+        let can_defer = no_pills_or_blocks && (!spec.by_line || (matches!(style.family, Family::Mono | Family::SystemMono)
             && align == Alignment::Start && start_flow == Flow::Ltr && forced != Some(Flow::Rtl)));
         let ascii = (can_defer && (measuring || edited > LAZY_MIN * 8 && count_newlines(&bytes[at..at + edited]) > LAZY_MIN))
             .then(|| self.ascii_line(style, scale, spec.wrap_anywhere)).flatten()
@@ -750,7 +751,7 @@ impl TextSystem {
             let kept = if k < before { Some(&old[k]) } else if k >= n - after { Some(&old[old.len() - (n - k)]) } else { None };
             match kept {
                 Some(o) if !o.shaped && rebreak => {
-                    let m = match &ascii { Some(m) => Some(m.clone()), None => self.ascii_line(style, scale, spec.wrap_anywhere) };
+                    let m = can_defer.then(|| ascii.clone().or_else(|| self.ascii_line(style, scale, spec.wrap_anywhere).filter(|a| !spec.by_line || a.fixed_pitch))).flatten();
                     let mut again = Vec::new();
                     let from = items.last().map_or(start_flow, |(f, _)| f.2);
                     key_paragraphs(spec, &layout_spans, style_key, layout_disjoint, f.0, f.1, from, forced, m.as_deref().map(|m| Runs { ascii: m, max_width, edit: false, eager: (eager_s, eager_e) }), &mut self.line_scan, &mut again);
@@ -770,7 +771,7 @@ impl TextSystem {
             let blocks: &[Block] = if block == Block::Paragraph { &[] } else { std::slice::from_ref(&block) };
             // A waiting record kept at the same width stays as it was; a run found here waits.
             let wait = match (kept, run) {
-                (Some(o), _) if !o.shaped => ascii.clone().or_else(|| self.ascii_line(style, scale, spec.wrap_anywhere).filter(|a| !spec.by_line || a.fixed_pitch))
+                (Some(o), _) if !o.shaped && can_defer => ascii.clone().or_else(|| self.ascii_line(style, scale, spec.wrap_anywhere).filter(|a| !spec.by_line || a.fixed_pitch))
                     .map(|m| (m.height, o.height, o.widths[0], o.lines, o.layout.clone(), o.run)),
                 (None, Some((height, w, lines))) => ascii.clone().or_else(|| self.ascii_line(style, scale, spec.wrap_anywhere).filter(|a| !spec.by_line || a.fixed_pitch))
                     .map(|m| (m.height, height, w, lines, m.empty.clone(), true)),

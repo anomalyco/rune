@@ -67,6 +67,11 @@ pub(super) fn key_paragraphs(spec: &TextInput<'_>, layout_spans: &[Span], style_
             found.push((a, b, flow, h.finish(), Box::default(), Some((height, w, n))));
         }
     };
+    let mut span_cursor = if disjoint_spans && !layout_spans.is_empty() {
+        layout_spans.partition_point(|s| (s.end as usize) <= a)
+    } else {
+        0
+    };
     let mut start = a;
     for j in 0.. {
         let (raw, known) = match &cache {
@@ -85,12 +90,22 @@ pub(super) fn key_paragraphs(spec: &TextInput<'_>, layout_spans: &[Span], style_
         if let Some(r) = runs {
             // A measure of the narrowest width is never shown: none of its lines needs shaping.
             let near = r.edit && !r.ascii.narrow(r.max_width) && (j < r.eager.0 || j + r.eager.1 >= lines);
+            let has_span = if layout_spans.is_empty() {
+                false
+            } else if disjoint_spans {
+                while span_cursor < layout_spans.len() && (layout_spans[span_cursor].end as usize) <= a {
+                    span_cursor += 1;
+                }
+                layout_spans.get(span_cursor).is_some_and(|s| (s.start as usize) < b && a < s.end as usize)
+            } else {
+                layout_spans.iter().any(|s| (s.start as usize) < b && a < s.end as usize)
+            };
             let floor = run.map_or(0.0, |r| r.3);
             let printable = known.map(|f| f & PRINTABLE != 0);
             // Printable ASCII: its letters are its only strong characters, all left to right.
             let letter = || known.map_or_else(|| words.bytes().any(|b| b.is_ascii_alphabetic()), |f| f & LETTER != 0);
             let flow = forced.or_else(|| letter().then_some(Flow::Ltr)).unwrap_or(last_flow);
-            let fits = if near || words.is_empty() || printable == Some(false) || (spec.by_line && flow == Flow::Rtl) {
+            let fits = if near || has_span || words.is_empty() || printable == Some(false) || (spec.by_line && flow == Flow::Rtl) {
                 None
             } else if r.ascii.narrow(r.max_width) {
                 r.ascii.narrowest(words, floor)

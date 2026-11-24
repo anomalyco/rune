@@ -6,8 +6,9 @@ use rune_text::paragraph_ranges as paragraphs;
 impl El {
     /// Lays out each newline-ended line as its own [`Layout`](crate::text::Layout), reusing
     /// unchanged lines across commits (shaping only changed lines; per-commit keying still hashes
-    /// each line when spans are present, and long plain/colour-only ASCII interiors wait as runs)
-    /// while staying one selectable text element in its own direction.
+    /// each line when spans are present, and long plain/colour-only ASCII interiors wait as runs
+    /// even when other lines carry layout spans) while staying one selectable text element in its
+    /// own direction.
     ///
     /// Silently falls back to a single layout when the text does not wrap, is truncated or
     /// line-clamped, is live (`El::live` / `El::advance_in`), is redacted, or is a shared-run
