@@ -90,7 +90,7 @@ pub(in crate::window) struct Host {
     /// Its place among the windows receiving links (`App::on_open_url`).
     pub(in crate::window) _open_urls: Option<crate::open_url::incoming::Listening>,
     pub(in crate::window) release_gpu: bool,
-    pub(in crate::window) prewarm_effects: bool,
+    pub(in crate::window) prewarm_effects: crate::PrewarmEffects,
     pub(in crate::window) open_at_start: bool,
     /// `App::float_on_open`: each window maps at a fixed size, then takes its own limits.
     #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
@@ -216,7 +216,7 @@ struct HostInit {
     args: Args,
     keep_running: bool,
     release_gpu: bool,
-    prewarm_effects: bool,
+    prewarm_effects: crate::PrewarmEffects,
     open_at_start: bool,
     fit_height: bool,
     float_on_open: bool,

@@ -106,6 +106,7 @@ pub use device::Gpu;
 pub use device::prewarm_gpu;
 pub use device::prewarm_gpu_on;
 pub use device::set_gpu_memory_policy;
+pub use effect_warm::PrewarmEffects;
 #[doc(hidden)]
 pub use fill::FillDrift;
 pub use first_use::make_layer_blur;

@@ -1,15 +1,22 @@
-//! Post-first-frame background warming of optional effect GPU pipelines.
+//! Background warming of the optional effect GPU pipelines an app names ([`PrewarmEffects`]).
 //!
 //! Isolated layers (`Rgba16Float` uber target and composites), `Blend::PlusLighter`, Gaussian
 //! layer blur, and backdrop blur are otherwise compiled synchronously on the first frame that uses
-//! them, causing a multi-millisecond hitch on the UI thread. After the first frame completes on
-//! native targets, `EffectWarm` compiles any still-unbuilt effect pipelines once on a background
-//! worker thread from cloned `wgpu` handles inside error scopes, then holds them aside until
-//! first use.
+//! them, a hitch of many frames on the UI thread while the driver compiles. On native targets,
+//! once a renderer's first frame is done and its window rests, `EffectWarm` compiles the named,
+//! still-unbuilt effect pipelines on one low-priority worker thread from cloned `wgpu` handles
+//! inside error scopes, and hands each one over as soon as it is built, held aside until first
+//! use. A frame that needs an effect earlier takes it if built, builds it itself if the worker
+//! has not begun it (the worker then skips it), and waits for the rest of the build if the
+//! worker is in the middle of it (`pace`): no pipeline is compiled twice.
 //!
 //! Holding the warmed `Rgba16Float` uber pipeline inside `EffectWarm` (rather than inserting
 //! `Rgba16Float` into `Renderer::extra` ahead of time) ensures glass-only frames never allocate
 //! an extra window-sized `Rgba16Float` backdrop texture.
+
+#[cfg(not(target_arch = "wasm32"))]
+mod pace;
+mod set;
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,6 +27,8 @@ use std::thread::JoinHandle;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::machine::Effects;
+
+pub use set::PrewarmEffects;
 
 use super::{Renderer, backdrop_blur, breaker};
 #[cfg(not(target_arch = "wasm32"))]
@@ -35,9 +44,13 @@ pub(super) struct WarmedIsolation {
     pub(super) composites: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
 }
 
-/// Pipelines produced by one background warming pass, held aside until first use.
+/// Pipelines the background worker has handed over so far, held aside until first use. The
+/// worker sends one of these per effect; the renderer merges them as they arrive.
 #[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
 pub(super) struct WarmedEffects {
+    /// Effects the worker has answered for, built or failed.
+    pub(super) reported: PrewarmEffects,
     pub(super) isolation: Option<Result<WarmedIsolation, String>>,
     pub(super) plus_lighter: Option<Result<(wgpu::RenderPipeline, wgpu::RenderPipeline), String>>,
     pub(super) layer_blur: Option<Result<layer_blur::Pipeline, String>>,
@@ -54,6 +67,35 @@ impl WarmedEffects {
             && self.layer_blur.is_none()
             && self.backdrop_blur.is_none()
     }
+
+    /// Takes in what the worker handed over for one more effect.
+    fn merge(&mut self, part: WarmedEffects) {
+        self.reported |= part.reported;
+        if part.isolation.is_some() { self.isolation = part.isolation; }
+        if part.plus_lighter.is_some() { self.plus_lighter = part.plus_lighter; }
+        if part.layer_blur.is_some() { self.layer_blur = part.layer_blur; }
+        if part.backdrop_blur.is_some() { self.backdrop_blur = part.backdrop_blur; }
+        #[cfg(test)]
+        if part.refused.is_some() { self.refused = part.refused; }
+    }
+
+    /// Drops what the renderer built itself meanwhile.
+    fn prune(&mut self, built: PrewarmEffects) {
+        if built.contains(PrewarmEffects::ISOLATION) { self.isolation = None; }
+        if built.contains(PrewarmEffects::PLUS_LIGHTER) { self.plus_lighter = None; }
+        if built.contains(PrewarmEffects::LAYER_BLUR) { self.layer_blur = None; }
+        if built.contains(PrewarmEffects::BACKDROP_BLUR) { self.backdrop_blur = None; }
+    }
+}
+
+/// The effect a breaker feature's pipelines belong to.
+#[cfg(not(target_arch = "wasm32"))]
+fn effect_of(feature: breaker::Feature) -> PrewarmEffects {
+    match feature {
+        breaker::Feature::Isolation => PrewarmEffects::ISOLATION,
+        breaker::Feature::PlusLighter => PrewarmEffects::PLUS_LIGHTER,
+        breaker::Feature::LayerBlur => PrewarmEffects::LAYER_BLUR,
+    }
 }
 
 /// Explicit lifecycle state of post-first-frame effect pipeline warming.
@@ -64,7 +106,8 @@ pub(super) enum State<W = WarmedEffects, H = JoinHandle<()>> {
     /// Classic -> Windfoil shader swap).
     #[default]
     Idle,
-    /// One background worker is compiling unbuilt effect pipelines for the current shader.
+    /// One background worker waits for the window to rest, then compiles the named, unbuilt
+    /// effect pipelines for the current shader, handing each over as it is built.
     Warming {
         cancel: Arc<AtomicBool>,
         receiver: mpsc::Receiver<W>,
@@ -89,7 +132,7 @@ pub(super) enum Event<W = WarmedEffects, H = JoinHandle<()>> {
     },
     /// Spawning the background worker failed.
     SpawnFailed,
-    /// The background worker sent its result (or disconnected without sending).
+    /// The background worker ended: everything it handed over (or nothing).
     WorkerFinished(Option<W>),
     /// Every item in `State::Ready` has been harvested or pruned.
     AllConsumed,
@@ -174,23 +217,6 @@ pub(super) fn step<W, H>(state: &mut State<W, H>, event: Event<W, H>) -> Effects
     }
 }
 
-/// Which effect pipeline groups still need warming when the worker starts.
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Clone, Copy)]
-struct WarmPlan {
-    isolation: bool,
-    plus_lighter: bool,
-    layer_blur: bool,
-    backdrop_blur: bool,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl WarmPlan {
-    fn any(self) -> bool {
-        self.isolation || self.plus_lighter || self.layer_blur || self.backdrop_blur
-    }
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 struct WarmJob {
     device: wgpu::Device,
@@ -199,14 +225,20 @@ struct WarmJob {
     shader: dxbc::Shaders,
     format: wgpu::TextureFormat,
     vertex_entry: &'static str,
-    plan: WarmPlan,
+    /// The named effects still unbuilt when the worker starts.
+    plan: PrewarmEffects,
     cancel: Arc<AtomicBool>,
+    link: Arc<pace::Link>,
+    /// How long the window must rest before the worker compiles, and the longest it waits.
+    rest: (std::time::Duration, std::time::Duration),
     sender: mpsc::Sender<WarmedEffects>,
     timing: Arc<Mutex<Option<(f64, f64)>>>,
     #[cfg(test)]
     refuse: Option<breaker::Feature>,
     #[cfg(test)]
     on_step: Option<Arc<dyn Fn() + Send + Sync>>,
+    #[cfg(test)]
+    on_build: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 /// Owner of background effect-pipeline warming on [`Renderer`].
@@ -215,29 +247,47 @@ struct WarmJob {
 /// the renderer or holds GPU handles across shutdown.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) struct EffectWarm {
-    enabled: bool,
+    /// The effects the app named (`Renderer::set_prewarm_effects`).
+    wanted: PrewarmEffects,
     state: State,
+    /// `State::Warming` only: what the worker has handed over so far.
+    partial: WarmedEffects,
+    /// `State::Warming` only: what the frames and that worker share.
+    link: Option<Arc<pace::Link>>,
+    /// How long the window must rest before a worker compiles, and the longest it waits
+    /// (`pace::QUIET`, `pace::LIMIT`; tests start with no wait).
+    pub(super) rest: (std::time::Duration, std::time::Duration),
     /// Finished or cancelled workers kept so `Drop` joins every spawned thread without blocking
     /// the UI thread during rendering or shader swaps.
     draining: Vec<JoinHandle<()>>,
-    /// Last worker run's `(wall_ms, cpu_ms)`, read by hidden perf benchmarks.
+    /// Last worker run's `(wall_ms, cpu_ms)` of compiling (the rest before it left out), read by
+    /// hidden perf benchmarks.
     timing: Arc<Mutex<Option<(f64, f64)>>>,
-    /// Test-only hook invoked on the worker before each build step (for deterministic fallback
-    /// and cancellation tests).
+    /// Test-only hook invoked on the worker before each build step, while a frame can still
+    /// claim the effect (for deterministic fallback and cancellation tests).
     #[cfg(test)]
     pub(super) on_step: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Test-only hook invoked on the worker once it has begun an effect, before it builds it
+    /// (for a frame that meets the worker mid-build).
+    #[cfg(test)]
+    pub(super) on_build: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Default for EffectWarm {
     fn default() -> Self {
         Self {
-            enabled: false,
+            wanted: PrewarmEffects::NONE,
             state: State::default(),
+            partial: WarmedEffects::default(),
+            link: None,
+            rest: (if cfg!(test) { std::time::Duration::ZERO } else { pace::QUIET }, pace::LIMIT),
             draining: Vec::new(),
             timing: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             on_step: None,
+            #[cfg(test)]
+            on_build: None,
         }
     }
 }
@@ -248,6 +298,9 @@ impl Drop for EffectWarm {
         for effect in step(&mut self.state, Event::Shutdown) {
             match effect {
                 Effect::JoinNow(thread) | Effect::Drain(thread) => {
+                    // A worker still waiting for the window to rest ends at once; one inside the
+                    // driver ends after the pipeline it is compiling.
+                    thread.thread().unpark();
                     thread.join().ok();
                 }
                 Effect::SpawnWorker => {}
@@ -279,23 +332,32 @@ impl EffectWarm {
         for effect in effects {
             match effect {
                 Effect::SpawnWorker => spawn = true,
-                Effect::Drain(thread) => self.draining.push(thread),
+                Effect::Drain(thread) => {
+                    // Wakes a cancelled worker that still waits for the window to rest.
+                    thread.thread().unpark();
+                    self.draining.push(thread);
+                }
                 Effect::JoinNow(thread) => {
+                    thread.thread().unpark();
                     thread.join().ok();
                 }
             }
+        }
+        if !matches!(self.state, State::Warming { .. }) {
+            self.partial = WarmedEffects::default();
+            self.link = None;
         }
         self.reap_finished();
         spawn
     }
 
-    pub(super) fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = enabled;
-        if !enabled {
-            // Cancel any in-flight worker and drop unharvested pipelines without blocking the UI thread.
-            let effects = step(&mut self.state, Event::ShaderChanged);
-            self.apply_effects(effects);
-        }
+    pub(super) fn set_wanted(&mut self, wanted: PrewarmEffects) {
+        if self.wanted == wanted { return; }
+        self.wanted = wanted;
+        // Cancel any in-flight worker and drop unharvested pipelines without blocking the UI
+        // thread; the next finished frame plans again from the new set.
+        let effects = step(&mut self.state, Event::ShaderChanged);
+        self.apply_effects(effects);
     }
 
     pub(super) fn shader_changed(&mut self) {
@@ -303,31 +365,58 @@ impl EffectWarm {
         self.apply_effects(effects);
     }
 
-    /// Polls any in-flight worker non-blockingly and transitions `Warming -> Ready` when done.
-    fn poll(&mut self) {
-        self.reap_finished();
-        let arrived = match &self.state {
-            State::Warming { receiver, .. } => match receiver.try_recv() {
-                Ok(warmed) => Some(Some(warmed)),
-                Err(mpsc::TryRecvError::Disconnected) => Some(None),
-                Err(mpsc::TryRecvError::Empty) => None,
-            },
-            _ => None,
-        };
-        if let Some(result) = arrived {
-            let effects = step(&mut self.state, Event::WorkerFinished(result));
-            self.apply_effects(effects);
-            if matches!(&self.state, State::Ready(w) if w.is_empty()) {
-                let _ = step(&mut self.state, Event::AllConsumed);
-            }
-        }
+    /// The worker ended: everything it handed over becomes `Ready`.
+    fn worker_ended(&mut self) {
+        let warmed = std::mem::take(&mut self.partial);
+        let effects = step(&mut self.state, Event::WorkerFinished(Some(warmed)));
+        self.apply_effects(effects);
+        self.finish_if_empty();
     }
 
-    fn ready_mut(&mut self) -> Option<&mut WarmedEffects> {
+    /// Takes in, without blocking, what an in-flight worker has handed over, and transitions
+    /// `Warming -> Ready` once it has ended.
+    fn poll(&mut self) {
+        self.reap_finished();
+        let State::Warming { receiver, .. } = &self.state else { return };
+        let ended = loop {
+            match receiver.try_recv() {
+                Ok(part) => self.partial.merge(part),
+                Err(mpsc::TryRecvError::Empty) => break false,
+                Err(mpsc::TryRecvError::Disconnected) => break true,
+            }
+        };
+        if ended { self.worker_ended(); }
+    }
+
+    /// The warmed pipelines a frame that needs `effect` now may take it from, if the worker
+    /// built it or is building it. `None` leaves the frame to build it itself: the worker never
+    /// planned it, or had not begun it and now skips it.
+    ///
+    /// Blocks only while the worker is in the middle of `effect`, for the rest of that build
+    /// and with the frame's priority lent to the worker, since building it a second time here
+    /// would take at least as long.
+    fn warmed_for(&mut self, effect: PrewarmEffects) -> Option<&mut WarmedEffects> {
         self.poll();
+        if let State::Warming { receiver, thread, .. } = &self.state
+            && !self.partial.reported.contains(effect)
+        {
+            if !self.link.as_ref().is_some_and(|link| link.begun_or_claim(effect)) { return None; }
+            let ended = {
+                let _lift = pace::lift(thread);
+                loop {
+                    match receiver.recv() {
+                        Ok(part) => self.partial.merge(part),
+                        Err(_) => break true,
+                    }
+                    if self.partial.reported.contains(effect) { break false; }
+                }
+            };
+            if ended { self.worker_ended(); }
+        }
         match &mut self.state {
+            State::Warming { .. } => Some(&mut self.partial),
             State::Ready(warmed) => Some(warmed),
-            _ => None,
+            State::Idle | State::Consumed => None,
         }
     }
 
@@ -359,19 +448,13 @@ impl EffectWarm {
 
     /// Blocks until an in-flight worker finishes (tests and hidden perf benchmarks only).
     pub(super) fn wait(&mut self) {
-        let arrived = match &self.state {
-            State::Warming { receiver, .. } => Some(receiver.recv().ok()),
-            _ => None,
-        };
-        if let Some(result) = arrived {
-            let effects = step(&mut self.state, Event::WorkerFinished(result));
-            self.apply_effects(effects);
-            if matches!(&self.state, State::Ready(w) if w.is_empty()) {
-                let _ = step(&mut self.state, Event::AllConsumed);
-            }
-            for handle in self.draining.drain(..) {
-                handle.join().ok();
-            }
+        let State::Warming { receiver, .. } = &self.state else { return };
+        while let Ok(part) = receiver.recv() {
+            self.partial.merge(part);
+        }
+        self.worker_ended();
+        for handle in self.draining.drain(..) {
+            handle.join().ok();
         }
     }
 }
@@ -379,13 +462,13 @@ impl EffectWarm {
 #[cfg(target_arch = "wasm32")]
 #[derive(Default)]
 pub(super) struct EffectWarm {
-    enabled: bool,
+    wanted: PrewarmEffects,
 }
 
 #[cfg(target_arch = "wasm32")]
 impl EffectWarm {
-    pub(super) fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = enabled;
+    pub(super) fn set_wanted(&mut self, wanted: PrewarmEffects) {
+        self.wanted = wanted;
     }
 
     pub(super) fn shader_changed(&mut self) {}
@@ -480,16 +563,21 @@ fn build_backdrop_blur(
     device: &wgpu::Device,
     bind_layout: &wgpu::BindGroupLayout,
     format: wgpu::TextureFormat,
+    cancelled: &dyn Fn() -> bool,
 ) -> Option<backdrop_blur::WarmedBackdropBlur> {
+    // A cancelled worker stops between the build's steps, so that a renderer that drops waits
+    // for one of them at most; what it built so far is dropped with it.
     checked_build(device, || {
         let mut blur = backdrop_blur::WarmedBackdropBlur::new(device, bind_layout);
+        if cancelled() { return None; }
         blur.ensure_composite(device, format);
-        if format != layers::FORMAT {
+        if format != layers::FORMAT && !cancelled() {
             blur.ensure_composite(device, layers::FORMAT);
         }
-        blur
+        Some(blur)
     })
     .ok()
+    .flatten()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -503,61 +591,63 @@ fn run_worker(job: WarmJob) {
         vertex_entry,
         plan,
         cancel,
+        link,
+        rest,
         sender,
         timing,
         #[cfg(test)]
         refuse,
         #[cfg(test)]
         on_step,
+        #[cfg(test)]
+        on_build,
     } = job;
+    let cancelled = || cancel.load(Ordering::Acquire);
+    pace::lower();
+    // Nothing is compiled while the window still draws: the launch's frames and whatever the
+    // app loads behind them come first.
+    if !pace::rest(&link, &cancel, rest.0, rest.1) { return; }
     let wall_start = crate::time::now();
     let cpu_start = crate::frame::host_clock::thread_cpu();
-    let cancelled = || cancel.load(Ordering::Acquire);
-    let mut out = WarmedEffects {
-        isolation: None,
-        plus_lighter: None,
-        layer_blur: None,
-        backdrop_blur: None,
-        #[cfg(test)]
-        refused: refuse,
-    };
 
-    if plan.isolation && !cancelled() {
+    for effect in [PrewarmEffects::ISOLATION, PrewarmEffects::PLUS_LIGHTER, PrewarmEffects::LAYER_BLUR, PrewarmEffects::BACKDROP_BLUR] {
+        if !plan.contains(effect) { continue; }
+        if cancelled() { break; }
+        // A frame that waited for the effect before lent this thread its priority (`pace::lift`).
+        pace::lower();
         #[cfg(test)]
         if let Some(hook) = &on_step { hook(); }
-        if !cancelled() {
-            out.isolation = Some(build_isolation(
+        if cancelled() { break; }
+        // A frame that needed the effect first builds it itself.
+        if !link.start(effect) { continue; }
+        #[cfg(test)]
+        if let Some(hook) = &on_build { hook(); }
+        let mut part = WarmedEffects {
+            reported: effect,
+            #[cfg(test)]
+            refused: refuse,
+            ..WarmedEffects::default()
+        };
+        if effect == PrewarmEffects::ISOLATION {
+            part.isolation = Some(build_isolation(
                 &device, &layout, &shader, format, vertex_entry,
                 #[cfg(test)] refuse,
             ));
-        }
-    }
-    if plan.plus_lighter && !cancelled() {
-        #[cfg(test)]
-        if let Some(hook) = &on_step { hook(); }
-        if !cancelled() {
-            out.plus_lighter = Some(build_plus_lighter(
+        } else if effect == PrewarmEffects::PLUS_LIGHTER {
+            part.plus_lighter = Some(build_plus_lighter(
                 &device, &layout, &shader, vertex_entry,
                 #[cfg(test)] refuse,
             ));
-        }
-    }
-    if plan.layer_blur && !cancelled() {
-        #[cfg(test)]
-        if let Some(hook) = &on_step { hook(); }
-        if !cancelled() {
-            out.layer_blur = Some(build_layer_blur(
+        } else if effect == PrewarmEffects::LAYER_BLUR {
+            part.layer_blur = Some(build_layer_blur(
                 &device,
                 #[cfg(test)] refuse,
             ));
+        } else {
+            part.backdrop_blur = build_backdrop_blur(&device, &bind_layout, format, &cancelled);
         }
-    }
-    if plan.backdrop_blur && !cancelled() {
-        #[cfg(test)]
-        if let Some(hook) = &on_step { hook(); }
-        if !cancelled() {
-            out.backdrop_blur = build_backdrop_blur(&device, &bind_layout, format);
-        }
+        // Handed over at once: a frame that waits for this effect waits no longer than its build.
+        if cancelled() || sender.send(part).is_err() { break; }
     }
     let wall_ms = wall_start.elapsed().as_secs_f64() * 1e3;
     let cpu_ms = cpu_start
@@ -566,33 +656,27 @@ fn run_worker(job: WarmJob) {
         .and_then(crate::frame::host_clock::cpu_ns)
         .map_or(0.0, |ns| ns / 1e6);
     *timing.lock().unwrap_or_else(|e| e.into_inner()) = Some((wall_ms, cpu_ms));
-    if !cancelled() {
-        sender.send(out).ok();
-    }
 }
 
 impl Renderer {
-    /// Starts compiling unbuilt effect pipelines (isolated layers, `Blend::PlusLighter`,
-    /// layer blur, and backdrop blur) on a background worker thread.
+    /// Starts the background worker that compiles the named, still-unbuilt effect pipelines
+    /// ([`PrewarmEffects`]) once the window rests.
     ///
     /// Called only after the first frame finishes so startup latency is untouched; subsequent
     /// calls are an O(1) no-op until a `Classic -> Windfoil` shader swap resets the state machine.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn warm_effects(&mut self, device: &wgpu::Device) {
-        if !self.effect_warm.enabled {
+        let wanted = self.effect_warm.wanted;
+        if wanted.is_empty() {
             return;
         }
-        let plan = WarmPlan {
-            isolation: matches!(self.breakers.health(breaker::Feature::Isolation), breaker::Health::Untried),
-            plus_lighter: matches!(self.breakers.health(breaker::Feature::PlusLighter), breaker::Health::Untried),
-            layer_blur: matches!(self.breakers.health(breaker::Feature::LayerBlur), breaker::Health::Untried),
-            backdrop_blur: self.backdrop_blur.is_none(),
-        };
-        let effects = step(&mut self.effect_warm.state, Event::FirstFrameFinished { has_work: plan.any() });
+        let plan = wanted.without(self.built_effects());
+        let effects = step(&mut self.effect_warm.state, Event::FirstFrameFinished { has_work: !plan.is_empty() });
         if !self.effect_warm.apply_effects(effects) {
             return;
         }
         let cancel = Arc::new(AtomicBool::new(false));
+        let link = Arc::new(pace::Link::default());
         let (sender, receiver) = mpsc::channel();
         let job = WarmJob {
             device: device.clone(),
@@ -603,27 +687,20 @@ impl Renderer {
             vertex_entry: self.vertex_entry,
             plan,
             cancel: cancel.clone(),
+            link: link.clone(),
+            rest: self.effect_warm.rest,
             sender,
             timing: self.effect_warm.timing.clone(),
             #[cfg(test)]
             refuse: self.breakers.refuse,
             #[cfg(test)]
             on_step: self.effect_warm.on_step.clone(),
+            #[cfg(test)]
+            on_build: self.effect_warm.on_build.clone(),
         };
         let spawned = std::thread::Builder::new()
             .name("rune-effect-warm".into())
             .spawn(move || {
-                // Below normal on Windows, matching `variant::start_pinned`, so background
-                // pipeline compilation never competes with UI frames or input on busy machines.
-                #[cfg(target_os = "windows")]
-                #[allow(unsafe_code)]
-                // SAFETY: `GetCurrentThread` returns the calling thread's pseudo-handle.
-                unsafe {
-                    windows_sys::Win32::System::Threading::SetThreadPriority(
-                        windows_sys::Win32::System::Threading::GetCurrentThread(),
-                        windows_sys::Win32::System::Threading::THREAD_PRIORITY_BELOW_NORMAL,
-                    );
-                }
                 #[cfg(target_vendor = "apple")]
                 objc2::rc::autoreleasepool(|_| run_worker(job));
                 #[cfg(not(target_vendor = "apple"))]
@@ -635,29 +712,37 @@ impl Renderer {
         };
         let effects = step(&mut self.effect_warm.state, next);
         self.effect_warm.apply_effects(effects);
+        if matches!(self.effect_warm.state, State::Warming { .. }) {
+            self.effect_warm.link = Some(link);
+        }
     }
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn warm_effects(&mut self, _device: &wgpu::Device) {}
 
-    /// Non-blockingly polls background effect warming, drops any warmed pipelines whose feature
-    /// was already compiled synchronously while the worker ran, and reaps finished worker handles.
+    /// The effects whose pipelines this renderer has built (or tried to), by any path.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn built_effects(&self) -> PrewarmEffects {
+        let mut built = PrewarmEffects::NONE;
+        for feature in [breaker::Feature::Isolation, breaker::Feature::PlusLighter, breaker::Feature::LayerBlur] {
+            if !matches!(self.breakers.health(feature), breaker::Health::Untried) { built |= effect_of(feature); }
+        }
+        if self.backdrop_blur.is_some() { built |= PrewarmEffects::BACKDROP_BLUR; }
+        built
+    }
+
+    /// Called once per prepared frame: tells an in-flight worker the window still draws,
+    /// non-blockingly takes in what it has handed over, drops any warmed pipelines whose feature
+    /// was already compiled synchronously, and reaps finished worker handles.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn poll_effect_warm(&mut self) {
+        if let Some(link) = &self.effect_warm.link { link.frame(); }
         self.effect_warm.poll();
-        if let State::Ready(warmed) = &mut self.effect_warm.state {
-            if !matches!(self.breakers.health(breaker::Feature::Isolation), breaker::Health::Untried) {
-                warmed.isolation = None;
-            }
-            if !matches!(self.breakers.health(breaker::Feature::PlusLighter), breaker::Health::Untried) {
-                warmed.plus_lighter = None;
-            }
-            if !matches!(self.breakers.health(breaker::Feature::LayerBlur), breaker::Health::Untried) {
-                warmed.layer_blur = None;
-            }
-            if self.backdrop_blur.is_some() {
-                warmed.backdrop_blur = None;
-            }
+        let built = self.built_effects();
+        match &mut self.effect_warm.state {
+            State::Warming { .. } => self.effect_warm.partial.prune(built),
+            State::Ready(warmed) => warmed.prune(built),
+            State::Idle | State::Consumed => {}
         }
         self.effect_warm.finish_if_empty();
     }
@@ -665,8 +750,9 @@ impl Renderer {
     #[cfg(target_arch = "wasm32")]
     pub(super) fn poll_effect_warm(&mut self) {}
 
-    /// Non-blockingly harvests a warmed feature pipeline for `breaker`, returning its error-scope
-    /// verdict if ready, or `None` to fall back to synchronous compilation.
+    /// Harvests a warmed feature pipeline for `breaker`, returning its error-scope verdict if the
+    /// worker built it (waiting for the rest of a build it is in the middle of,
+    /// `EffectWarm::warmed_for`), or `None` to fall back to synchronous compilation.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn harvest_warmed_feature(
         &mut self,
@@ -675,7 +761,7 @@ impl Renderer {
     ) -> Option<breaker::Verdict> {
         #[cfg(test)]
         let refuse = self.breakers.refuse;
-        let warmed = self.effect_warm.ready_mut()?;
+        let warmed = self.effect_warm.warmed_for(effect_of(feature))?;
         // If a test enabled refusal for this feature after the worker already built a valid
         // pipeline, drop the stale warmed entry so synchronous build exercises refusal.
         #[cfg(test)]
@@ -747,10 +833,11 @@ impl Renderer {
         None
     }
 
-    /// Non-blockingly harvests pre-compiled `BackdropBlur` pipelines if ready.
+    /// Harvests pre-compiled `BackdropBlur` pipelines if the worker built them (waiting for the
+    /// rest of a build it is in the middle of, `EffectWarm::warmed_for`).
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn harvest_warmed_backdrop_blur(&mut self) -> Option<backdrop_blur::WarmedBackdropBlur> {
-        let warmed = self.effect_warm.ready_mut()?;
+        let warmed = self.effect_warm.warmed_for(PrewarmEffects::BACKDROP_BLUR)?;
         let blur = warmed.backdrop_blur.take();
         self.effect_warm.finish_if_empty();
         blur
@@ -766,34 +853,38 @@ impl Renderer {
         self.effect_warm.wait();
     }
 
-    /// Opts this renderer in (or out) of post-first-frame background warming for optional effect
-    /// GPU pipelines: isolated layers (`Rgba16Float`), `Blend::PlusLighter`, Gaussian layer blur,
-    /// and `El::backdrop_blur`.
+    /// Names the optional effect GPU pipelines this renderer compiles in the background before
+    /// their first use ([`PrewarmEffects`]): isolated layers (`Rgba16Float`),
+    /// `Blend::PlusLighter`, Gaussian layer blur, and `El::backdrop_blur`. `true` names all four.
     ///
-    /// Defaults to `false` so renderers that never blur or isolate pay no background compilation
-    /// CPU, driver memory, or `Renderer::drop` worker-join latency. On native targets, setting
-    /// `true` compiles any unbuilt effect pipelines once on a low-priority worker thread after the
-    /// first frame completes (excluding one-shot `render_runtime_to_offscreen` calls). Ignored on
-    /// `wasm32`, which always compiles lazily on first use.
+    /// Defaults to none, so a renderer pays no background compilation CPU, driver memory, or
+    /// worker thread for effects it never draws. On native targets, the named pipelines that
+    /// are still unbuilt compile once on a low-priority worker thread after the first frame
+    /// completes and the window has drawn no frame for 300 ms (5 s at most; one-shot
+    /// `render_runtime_to_offscreen` calls never start it). A frame that draws a named effect
+    /// before the worker began it compiles it itself, once; a frame that meets the worker in the
+    /// middle of it waits for the rest of that compile. Ignored on `wasm32`, which always
+    /// compiles lazily on first use.
     ///
     /// # Example
     ///
     /// ```no_run
+    /// use rune::PrewarmEffects;
     /// use rune::render::{Gpu, OFFSCREEN_FORMAT, Renderer};
     ///
     /// let gpu = Gpu::headless();
     /// let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
-    /// renderer.set_prewarm_effects(true);
-    /// assert!(renderer.prewarm_effects());
+    /// renderer.set_prewarm_effects(PrewarmEffects::BACKDROP_BLUR);
+    /// assert_eq!(renderer.prewarm_effects(), PrewarmEffects::BACKDROP_BLUR);
     /// ```
-    pub fn set_prewarm_effects(&mut self, enabled: bool) {
-        self.effect_warm.set_enabled(enabled);
+    pub fn set_prewarm_effects(&mut self, effects: impl Into<PrewarmEffects>) {
+        self.effect_warm.set_wanted(effects.into());
     }
 
-    /// Whether post-first-frame background effect-pipeline warming is enabled on this renderer
-    /// ([`Self::set_prewarm_effects`]); defaults to `false`.
-    pub fn prewarm_effects(&self) -> bool {
-        self.effect_warm.enabled
+    /// The effects this renderer compiles ahead of their first use
+    /// ([`Self::set_prewarm_effects`]); none by default.
+    pub fn prewarm_effects(&self) -> PrewarmEffects {
+        self.effect_warm.wanted
     }
 
     /// Hidden benchmark hook: triggers post-first-frame effect warming explicitly.

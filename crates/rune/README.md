@@ -860,21 +860,27 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   ignored by Rune's native Metal backend, wgpu's Metal backend, and browser backends (WebGPU/WebGL2).
   In `Manual`, `block_size` bounds suballocator block sizes rather than texture or buffer sizes:
   larger resources still succeed via dedicated allocations.
-- **Opt-in post-first-frame effect pipeline warming (`App::prewarm_effects(true)`,
-  `Renderer::set_prewarm_effects(true)`).** Off by default so apps that never blur or isolate pay
-  no background compilation CPU, driver memory, or `Renderer::drop` worker-join latency, and
-  one-shot `Renderer::render_runtime_to_offscreen` renders never trigger warming. When opted in
-  on native targets (Windows, macOS, Linux, iOS), after a window's or overlay's first frame
-  finishes presenting it spawns one background worker thread (`THREAD_PRIORITY_BELOW_NORMAL` on
-  Windows) from cloned `wgpu` handles to compile and error-scope-check any still-unbuilt optional
-  effect pipelines: isolated layers (`Rgba16Float` uber target and composites),
-  `Blend::PlusLighter`, Gaussian layer blur, and backdrop blur (`El::backdrop_blur`). Identical
-  `"vs"` layer compositing and `PlusLighter` pipelines are always cloned instead of recompiled.
-  Warmed pipelines stay held aside until first use (never inserting `Rgba16Float` into extra
-  target formats up front, so glass-only frames allocate zero `Rgba16Float` backdrop textures),
-  fall back synchronously without blocking while in flight, re-warm after a `Classic -> Windfoil`
-  shader swap, and cancel and drain cleanly when the renderer drops. Browser builds (`wasm32`)
-  always compile lazily on first use.
+- **Opt-in effect pipeline warming, per effect (`App::prewarm_effects(PrewarmEffects::BACKDROP_BLUR)`,
+  `WindowSpec::prewarm_effects`, `Renderer::set_prewarm_effects`).** Off by default, so apps pay
+  no background compilation CPU, driver memory, or worker thread for effects they never draw, and
+  one-shot `Renderer::render_runtime_to_offscreen` renders never trigger warming. Name the effects
+  the app draws (`PrewarmEffects::ISOLATION`, `PLUS_LIGHTER`, `LAYER_BLUR`, `BACKDROP_BLUR`;
+  `true` names all four) and, on native targets (Windows, macOS, Linux, iOS), the named pipelines
+  that are still unbuilt compile once on one background worker thread from cloned `wgpu` handles
+  inside error scopes, so the first frame that draws one does not stall while the driver compiles.
+  The worker keeps out of the way: it compiles only after a window's or overlay's first frame has
+  presented and the window has then drawn no frame for 300 ms (5 s at most for a window that never
+  rests), at `THREAD_PRIORITY_BELOW_NORMAL` on Windows and the utility QoS class on Apple systems,
+  and a renderer that drops wakes a resting worker at once and waits for at most the one pipeline
+  a compiling worker is in. Each effect is handed over as soon as it is built and held aside until
+  first use (never inserting `Rgba16Float` into extra target formats up front, so glass-only
+  frames allocate zero `Rgba16Float` backdrop textures). A frame that draws a named effect
+  sooner never compiles it twice: it takes it if built, compiles it itself if the worker has not
+  begun it (the worker then skips it), and waits for the rest of the compile, with its own
+  priority lent to the worker, if the worker is in the middle of it. Identical `"vs"` layer
+  compositing and `PlusLighter` pipelines are always cloned instead of recompiled, and warming
+  starts again after a `Classic -> Windfoil` shader swap. Browser builds (`wasm32`) always
+  compile lazily on first use.
 - **The first frame draws during window creation** on macOS for visible windows (not launcher windows or panels).
   The first view build and layout run inside creation, right after the window-created callbacks, so keep the initial
   state, `view` and `on_window` cheap.

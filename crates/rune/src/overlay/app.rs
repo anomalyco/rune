@@ -300,8 +300,8 @@ impl OverlayHost {
         }
     }
 
-    pub(crate) fn set_prewarm_effects(&mut self, enabled: bool) {
-        self.core.prewarm_effects = enabled;
+    pub(crate) fn set_prewarm_effects(&mut self, effects: crate::PrewarmEffects) {
+        self.core.prewarm_effects = effects;
     }
 }
 

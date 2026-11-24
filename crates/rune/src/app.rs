@@ -58,7 +58,7 @@ pub struct App<S: 'static> {
     argv: Option<Vec<String>>,
     pub(crate) open: bool,
     pub(crate) release_gpu: bool,
-    pub(crate) prewarm_effects: bool,
+    pub(crate) prewarm_effects: crate::PrewarmEffects,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) accessory: bool,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -124,7 +124,7 @@ impl<S: 'static> App<S> {
             argv: None,
             open: true,
             release_gpu: false,
-            prewarm_effects: false,
+            prewarm_effects: crate::PrewarmEffects::NONE,
             accessory: false,
             standard_menus: false,
             keep_running: false,
@@ -483,28 +483,31 @@ impl<S: 'static> App<S> {
         self
     }
 
-    /// Opts this app's windows and overlays in (or out) of post-first-frame background warming for
-    /// optional effect GPU pipelines: isolated layers (`Rgba16Float`), `Blend::PlusLighter`,
-    /// Gaussian layer blur, and `El::backdrop_blur`.
+    /// Names the optional effect GPU pipelines this app's windows and overlays compile in the
+    /// background before their first use ([`PrewarmEffects`](crate::PrewarmEffects)): isolated
+    /// layers (`Rgba16Float`), `Blend::PlusLighter`, Gaussian layer blur, and
+    /// `El::backdrop_blur`. `true` names all four.
     ///
-    /// Defaults to `false` so apps that never blur or isolate pay no background pipeline-compile
-    /// CPU, driver memory, or `Renderer::drop` worker-join latency. Set `true` for animated UIs
-    /// that want the first blur, isolated layer, or `PlusLighter` frame to avoid a synchronous
-    /// pipeline compilation hitch. Ignored on `wasm32`.
+    /// Defaults to none, so an app pays no background pipeline-compile CPU, driver memory, or
+    /// worker thread for effects it never draws. Name the effects the app does draw so that
+    /// the first frame that shows one (a frosted button fading in mid-scroll) does not stall
+    /// while the driver compiles its pipelines: they compile on a low-priority thread once
+    /// the window has drawn its first frames and rests, and a frame that needs one sooner
+    /// compiles it as before, once. Ignored on `wasm32`.
     ///
     /// # Example
     ///
     /// ```no_run
-    /// use rune::{App, AppSpec, el};
+    /// use rune::{App, AppSpec, PrewarmEffects, el};
     ///
     /// App::new(AppSpec::new("Frosted", (640.0, 480.0), || (), |_, _| el()))
-    ///     .prewarm_effects(true)
+    ///     .prewarm_effects(PrewarmEffects::BACKDROP_BLUR)
     ///     .run();
     /// ```
-    pub fn prewarm_effects(mut self, enabled: bool) -> Self {
-        self.prewarm_effects = enabled;
+    pub fn prewarm_effects(mut self, effects: impl Into<crate::PrewarmEffects>) -> Self {
+        self.prewarm_effects = effects.into();
         for overlay in &mut self.overlays {
-            overlay.set_prewarm_effects(enabled);
+            overlay.set_prewarm_effects(self.prewarm_effects);
         }
         self
     }

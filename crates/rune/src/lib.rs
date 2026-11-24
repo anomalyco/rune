@@ -274,6 +274,7 @@ pub use recorder::Recorder;
 pub use recorder::RecorderState;
 pub use recorder::Recording;
 pub use render::MAX_BACKDROP_BLURS;
+pub use render::PrewarmEffects;
 pub use render::gpu_events::GpuEvent;
 pub use render::gpu_events::on_gpu;
 pub use render::prewarm_gpu;
