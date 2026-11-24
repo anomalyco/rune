@@ -43,6 +43,7 @@ pub(crate) struct CommitState {
     /// go once it applies.
     memo_since: u64,
     /// The clock at the last commit.
+    #[cfg(debug_assertions)]
     last_commit_clock: f64,
     /// The last view's `Cx::foreground` and `Cx::focus_ring`, for rows built after it and the
     /// rings painted until the next.
@@ -110,6 +111,7 @@ impl CommitState {
             drawn_fired: HashMap::default(),
             visible_fired: HashMap::default(),
             feedback: Default::default(),
+            #[cfg(debug_assertions)]
             last_commit_clock: f64::NEG_INFINITY,
         }
     }
@@ -166,6 +168,7 @@ impl CommitState {
         self.commit_gen = generation;
     }
 
+    #[cfg(debug_assertions)]
     #[inline]
     pub(in crate::runtime) fn last_commit_clock(&self) -> f64 {
         self.last_commit_clock
@@ -435,7 +438,8 @@ impl RuntimeCore {
         self.apply_playground(app);
         let _history = crate::memo::snapshot::enter();
         COMMITS.set(COMMITS.get() + 1);
-        self.commit.last_commit_clock = self.clock;
+        #[cfg(debug_assertions)]
+        { self.commit.last_commit_clock = self.clock; }
         self.commit.memo_since = self.commit.memo.next_pass();
         for r in self.scroll.requests.reveals() {
             if r.at_end && let Some(&id) = self.tree.path_ids.get(&r.viewport)

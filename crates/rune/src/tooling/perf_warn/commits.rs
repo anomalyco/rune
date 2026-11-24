@@ -75,19 +75,15 @@ impl CommitMeter {
     }
 
     /// Handler `name` on the element at `path`, set at `at`, asked for a commit.
-    #[inline(always)]
-    #[cfg_attr(not(debug_assertions), allow(unused_variables))]
+    #[cfg(debug_assertions)]
     pub(crate) fn handler(&mut self, name: &'static str, path: Option<&str>, at: Option<&'static std::panic::Location<'static>>) {
-        #[cfg(debug_assertions)]
-        {
-            let site = match (at, path) {
-                (Some(at), _) => format!("{name} {at}"),
-                (None, Some(path)) => super::handler_site(name, path),
-                (None, None) => name.to_owned(),
-            };
-            if let (Some(at), Some(path), "on_hover" | "on_hover_change") = (at, path, name) { self.hover_row(name, at, path); }
-            self.meter.sources.push(Source { site, cause: Cause::Handler(name), subject: path.map(str::to_owned), at });
-        }
+        let site = match (at, path) {
+            (Some(at), _) => format!("{name} {at}"),
+            (None, Some(path)) => super::handler_site(name, path),
+            (None, None) => name.to_owned(),
+        };
+        if let (Some(at), Some(path), "on_hover" | "on_hover_change") = (at, path, name) { self.hover_row(name, at, path); }
+        self.meter.sources.push(Source { site, cause: Cause::Handler(name), subject: path.map(str::to_owned), at });
     }
 
     #[cfg(debug_assertions)]
@@ -127,37 +123,33 @@ impl CommitMeter {
     /// The frame's commits are done. `scrolling`: a hand, momentum or a glide moves a viewport;
     /// `committed`: the frame ran the view; `instant`: the viewport an instant scroll this frame
     /// asked to move, if any.
-    #[inline(always)]
-    #[cfg_attr(not(debug_assertions), allow(unused_variables))]
+    #[cfg(debug_assertions)]
     pub(crate) fn frame_ends(&mut self, scrolling: bool, committed: bool, instant: Option<&str>) {
-        #[cfg(debug_assertions)]
-        {
-            let m = &mut self.meter;
-            let sources = std::mem::take(&mut m.sources);
-            match instant.filter(|_| committed) {
-                Some(key) => {
-                    m.instant += 1;
-                    if m.instant == INSTANT_FRAMES { super::warn_once(format!("instant scroll {key}"), || instant_message(key)); }
-                }
-                None => m.instant = 0,
+        let m = &mut self.meter;
+        let sources = std::mem::take(&mut m.sources);
+        match instant.filter(|_| committed) {
+            Some(key) => {
+                m.instant += 1;
+                if m.instant == INSTANT_FRAMES { super::warn_once(format!("instant scroll {key}"), || instant_message(key)); }
             }
-            if !scrolling {
-                m.frames = 0;
-                m.counts.clear();
-                return;
-            }
-            m.frames += 1;
-            if !committed { return; }
-            let mut seen: Vec<&str> = Vec::new();
-            for s in &sources {
-                if seen.contains(&s.site.as_str()) { continue; }
-                seen.push(&s.site);
-                let count = m.counts.entry(s.site.clone()).or_default();
-                *count += 1;
-                if *count >= COMMITS && *count * SHARE >= m.frames {
-                    let (count, frames) = (*count, m.frames);
-                    super::warn_once(format!("scroll commit {}", s.site), || message(s, count, frames));
-                }
+            None => m.instant = 0,
+        }
+        if !scrolling {
+            m.frames = 0;
+            m.counts.clear();
+            return;
+        }
+        m.frames += 1;
+        if !committed { return; }
+        let mut seen: Vec<&str> = Vec::new();
+        for s in &sources {
+            if seen.contains(&s.site.as_str()) { continue; }
+            seen.push(&s.site);
+            let count = m.counts.entry(s.site.clone()).or_default();
+            *count += 1;
+            if *count >= COMMITS && *count * SHARE >= m.frames {
+                let (count, frames) = (*count, m.frames);
+                super::warn_once(format!("scroll commit {}", s.site), || message(s, count, frames));
             }
         }
     }
