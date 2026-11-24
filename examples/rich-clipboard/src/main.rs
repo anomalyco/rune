@@ -25,6 +25,8 @@ const SWATCHES: &[(&str, &str, &str)] = &[
 
 struct State {
     field: TextEdit,
+    /// Whether the field marks misspelled words and shows suggestions in its menu.
+    spellcheck: bool,
     /// How the last paste or read arrived, and what it held.
     last: Option<(&'static str, ClipboardContent)>,
     /// Last observed OS clipboard revision counter (`None` where unsupported).
@@ -33,7 +35,7 @@ struct State {
 
 impl Default for State {
     fn default() -> Self {
-        Self { field: TextEdit::new("").rich(), last: None, revision: clipboard::revision() }
+        Self { field: TextEdit::new("").rich(), spellcheck: true, last: None, revision: clipboard::revision() }
     }
 }
 
@@ -104,11 +106,14 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
 
     let field = text_input(&s.field, type_::BODY).key("field").w_full().min_h(80.0).padding(space::S2)
         .radius(radius::MD).fill(t.card).border(1.0, t.card_border).color(t.text)
+        .spellcheck(s.spellcheck)
         .on_edit(|s: &mut State| &mut s.field)
         // Look at every form, then let the editor paste the text as usual.
         .on_input_paste(|s: &mut State, content, _| { seen(s, "Pasted", content); false });
     let html_out = s.field.to_html();
     col().w_full().h_full().padding(space::S6).gap(space::S3).fill(t.bg)
+        .on_spellcheck(s.spellcheck, |s: &mut State, on, _| s.spellcheck = on)
+        .on_spellcheck_languages(|_: &mut State, _, _| {})
         .child(toolbar)
         .child(field)
         .child(row().gap(space::S2)

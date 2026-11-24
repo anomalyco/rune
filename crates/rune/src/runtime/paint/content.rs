@@ -434,11 +434,11 @@ impl RuntimeCore {
                 }
                 // Misspelled words (`El::spellcheck`), but the one the caret is typing.
                 if inp.spellcheck && !e.is_secure() && e.preedit().is_none() && !departing {
-                    // Windows and the web check word by word, so the paragraphs shown are checked
-                    // alone: a 20,000-line draft hashes and walks only what's on screen. macOS
-                    // finds each text's language from the whole of it.
+                    // Windows, Linux and the web check word by word, so the paragraphs shown are
+                    // checked alone: a 20,000-line draft hashes and walks only what's on screen.
+                    // macOS finds each text's language from the whole of it.
                     let (from, to) = (shown_a.min(e.text.len()), shown_b.min(e.text.len()));
-                    let found = if cfg!(any(target_os = "windows", target_arch = "wasm32")) && (from > 0 || to < e.text.len()) && e.text.is_char_boundary(from) && e.text.is_char_boundary(to) {
+                    let found = if cfg!(any(target_os = "windows", target_os = "linux", target_arch = "wasm32")) && (from > 0 || to < e.text.len()) && e.text.is_char_boundary(from) && e.text.is_char_boundary(to) {
                         std::rc::Rc::new(crate::spell::misspelled(&e.text[from..to], Some(self.frame.live.waker())).iter().map(|&(a, b)| (a + from, b + from)).collect::<Vec<_>>())
                     } else {
                         crate::spell::misspelled(&e.text, Some(self.frame.live.waker()))

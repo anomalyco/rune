@@ -1642,6 +1642,26 @@ newline on `Shift+Return` and pastes plain text. The mark and block methods work
   allows colours, any `Block::Bullet` level allows bullets); `Block::Paragraph` is always allowed.
   `edit.allows_mark(&mark)` and `allows_block(block)` tell a formatting bar which buttons to show.
 
+#### Spellcheck
+
+`El::spellcheck(true)` (and `rune_kit::TextInput::spellcheck`, `TextArea::spellcheck`) marks
+misspelled words in non-secure text fields with a red wavy underline (dots on macOS) once the
+caret leaves the word or typing pauses for a second, and adds suggestions and Learn Spelling to
+the field's right-click / Menu-key menu. Pair it with `El::on_spellcheck` and
+`El::on_spellcheck_languages` on an ancestor to expose the Spellcheck toggle and dictionary
+submenu in the field menu.
+
+- **Windows**: uses the system `ISpellChecker` API off the UI thread.
+- **macOS**: uses AppKit's `NSSpellChecker`, which detects each text's language automatically.
+- **Linux**: uses installed system Hunspell dictionaries (`<tag>.aff` and `<tag>.dic`) via
+  `spellbook` off the UI thread. Dictionaries are discovered in priority order from `DICPATH`,
+  `$XDG_DATA_HOME/hunspell` (or `~/.local/share/hunspell`), `$XDG_DATA_DIRS/*/hunspell`,
+  `/usr/local/share/hunspell`, `/usr/share/hunspell`, `/usr/share/myspell/dicts`, and
+  `/usr/share/myspell`, with default languages resolved from POSIX locale variables
+  (`LANGUAGE`, `LC_ALL`, `LC_MESSAGES`, `LANG`) plus `en-US` fallback.
+- **Web**: checks with Hunspell dictionaries fetched on first use via
+  `rune::spell::set_web_dictionaries`.
+
 ### Selectable text
 
 `text(..).selectable(true)` lets people select and copy read-only text, as SwiftUI's
