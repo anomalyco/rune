@@ -20,17 +20,17 @@ Slint.
 | Layer | Pick | Instead of |
 |---|---|---|
 | Language | Rust (2024), thin `objc2`/Swift shims on Apple | Zig, C++, Swift, Mojo |
-| GPU | wgpu on every platform first (one backend ships Mac, Windows, Linux and web); a raw Metal backend later only where a measured need shows up (live-resize sync, IOSurface video), via wgpu-hal escape hatches first | Raw Metal first, Vulkan/D3D12 by hand |
-| Renderer | One instanced "uber-quad" SDF pass + glyph atlas + Slug for big/animated text and icons + `vello_gpu` sparse strips for complex vectors; soft-edge masks in-shader on every clip | Full compute Vello, Skia, MSAA path textures |
+| GPU | Rune's native Metal backend (`metal-backend`) is built and default on macOS (plugged into wgpu's custom backend API); wgpu runs on Windows, Linux, web and by default on iOS | Vulkan/D3D12 by hand |
+| Renderer | One instanced "uber-quad" SDF pass + glyph atlas + GPU outline rendering (Windfoil and opt-in Slug) for scale-animating text (curve-drawn icons and `vello_gpu` sparse strips are Target); soft-edge masks in-shader inline on every instance | Full compute Vello, Skia, MSAA path textures |
 | Look | Unbranded core with a token-driven theming system (semantic tokens, themes with light/dark, runtime switching, codegen); the same look on every platform. OpenCode's theme (from `@opencode/ui`) is the first theme and the main example, kept outside the core | A theme baked into the framework; per-OS native look; Liquid Glass as the base (it's an optional Apple extra) |
-| Text | Parley + HarfRust + skrifa + fontique, GPUI-style two-tier line cache, kitlangton/gpui glyph dilation | CoreText-only, cosmic-text |
-| Text editing / IME | Zed's `sum_tree` + rope; each platform's own text protocol, implemented directly (`NSTextInputClient`, `UITextInput`, …) | winit's IME, a hidden native text field |
+| Text | Parley + HarfRust + skrifa + fontique, GPUI-style two-tier line cache; default `FontSmoothing::On` (CoreGraphics pipeline port) on macOS/Mac browsers and `WindfoilChromium` (GPU outline masks) elsewhere | CoreText-only, cosmic-text |
+| Text editing / IME | Target: Zed's `sum_tree` + rope and direct platform text protocols (`NSTextInputClient`, `UITextInput`, …); today `TextEdit` stores a plain `String`, desktop IME arrives through winit and the web uses a sliding-window hidden `<textarea>` | winit's IME, a hidden native text field |
 | Layout | Taffy (flex, grid, block) on Rune's own node arena, plus a sum-tree height index for huge lists | Own layout engine, SwiftUI-style proposals |
 | State | Keyed retained tree rebuilt from plain view functions; typed models; reads subscribe; handlers queued with `&mut` | Signals, GPUI entities, immediate mode |
-| Animation | Render thread owns the presented tree; every property is an analytic spring track (duration + bounce, SwiftUI's formula) that retargets with velocity | Animating through view re-renders on the main thread |
+| Animation | Target: render thread owns the presented tree; today one main thread runs commit, layout, motion sampling, paint and present each frame (only a plain macOS overlay frame on wgpu presents from a worker), while every property is an analytic spring track (duration + bounce, SwiftUI's formula) that retargets with velocity | Animating through view re-renders on the main thread |
 | Accessibility | AccessKit, and the same tree is the agent inspector's tree | Own a11y bridges |
 | Shells | winit to start (the prototype runs on it); own thin shells per platform (borrowing from Zed's Apache-2.0 `gpui_macos`/`gpui_windows`/`gpui_linux`/`gpui_ios`/`gpui_web`) as soon as text input lands, because winit's IME is incomplete | winit forever, SDL3 |
-| Hot reload | Tokens and live literals with no rebuild (≤ 100 ms), subsecond hot-patching for structural Rust edits on Mac (~1 s measured, goal 300 ms), **split-process dev mode** for the iPhone (renderer on the phone, app code on the Mac) | A view DSL interpreter, code loading on the device |
+| Hot reload | Target: tokens and live literals with no rebuild (≤ 100 ms), subsecond hot-patching on Mac (goal 300 ms), **split-process dev mode** for iPhone; today Layer 3 ships via the opt-in `hot` feature (~8 s median for Settings; ~1 s in the minimal S1 spike) | A view DSL interpreter, code loading on the device |
 | Platform order | macOS + Windows + Linux together (one wgpu backend) → web (docs site, demos) → iOS → Android | |
 
 **Top three risks:** text input and text quality (IME on three desktops, then iOS `UITextInput`), matching
@@ -122,7 +122,10 @@ Kit's fork) under its Apache-2.0 licence.
         inspector socket (dev + test builds): tree, rects, a11y, source locations, springs, timings, traces, input injection
 ```
 
-The one boundary that matters is the **command channel between the app side and the render thread**. It carries
+Target: the one boundary that matters is the **command channel between the app side and the render thread**. Today
+one thread runs commit, layout, motion sampling, paint and present each frame (only a plain macOS overlay frame on wgpu
+presents from a worker), while native image decoding, `rune::Latest` and `rune::task` run on background threads (see
+[`ARCHITECTURE.md`](ARCHITECTURE.md)). When split, the channel carries
 tree diffs, target layout rects, shaped text runs and spring targets one way, and hits, gesture results, settles and
 presented-frame ids the other. Three things fall out of making it a real, serializable protocol:
 
@@ -145,33 +148,33 @@ on Apple and weak everywhere else; C++ gives up safety and agent reliability for
 yet ([04 §1](research/04-language-gpu-renderer.md)). Swift is used only for thin host pieces Apple exposes no other
 way (SwiftUI-only glass morphing, the `RuneView` representable).
 
-### 4.2 GPU API: wgpu everywhere, raw Metal on Apple only where measured
+### 4.2 GPU API: native Metal on macOS, wgpu elsewhere
 
-wgpu runs on every platform, since the desktop trio ships together. Zed's own move from blade to wgpu in 2026 is
-the evidence that it's good enough ([04 §2](research/04-language-gpu-renderer.md),
-[01](research/01-gpui-zed-warp.md)). A raw Metal (`objc2-metal`) backend behind a thin internal trait is a later
-optimization, added only where measurements show wgpu falls short: precompiled `.metallib` (no shader compile at
-launch), `IOSurface` zero-copy video, framebuffer fetch for cheap group opacity on Apple silicon, and exact control
-of `CAMetalLayer` presentation (`presentsWithTransaction`, drawable count). Rejected: hand-written Vulkan/D3D12 (Zed
-just deleted theirs).
+Rune's native Metal backend (`metal-backend`, `objc2-metal` plugged into wgpu's custom backend API) is built and
+default on macOS; wgpu runs on Windows, Linux, web and by default on iOS (iOS can opt into `GpuBackend::Metal`).
+Precompiled shaders ship as `uber*.metallib` and `builtin_native*.metallib` on macOS and iOS native Metal and as
+DXBC on Windows (iOS on wgpu compiles WGSL at launch). Native Metal also backs `IOSurface` zero-copy video and direct
+`CAMetalLayer` presentation control. Rejected: hand-written Vulkan/D3D12 (Zed just deleted theirs; see
+[04 §2](research/04-language-gpu-renderer.md), [01](research/01-gpui-zed-warp.md)).
 
 ### 4.3 Renderer
 
-A typical frame is one render pass. Six primitives, all instanced, all clipped by a GPU clip table that gives
-rounded clips **and soft gradient edges per side for free**, so "no hard edges" costs nothing extra
-([04 §3](research/04-language-gpu-renderer.md)):
+A typical frame is one render pass. Each instanced primitive carries its own rounded clip rect and per-side soft
+gradient fade inline on the 128-byte instance (a shared GPU clip table is Target), so "no hard edges" costs nothing
+extra ([04 §3](research/04-language-gpu-renderer.md)):
 
-| Primitive | Does |
-|---|---|
-| `UberQuad` | rounded/squircle rects, borders, analytic Gaussian shadows (inner/outer), Oklab gradients with dithering, surface material |
-| `AtlasSprite` | body text from a greyscale glyph atlas, images, emoji |
-| `Slug` | big, rotating or scaling text and icons straight from Bézier curves (patent dedicated to the public domain on 2026-03-17; reference shaders MIT/Apache) |
-| `SparseStrips` | complex vector art via `vello_gpu` (Linebender moved compute Vello to `research/` in 2026) |
-| `Backdrop` | in-app blur/saturate of what's already drawn (dual Kawase, scissored), with Scrawl's peak-alpha boost for legible blurred text |
-| `NativeSurface` | zero-copy video and camera frames |
+| Primitive | Does | Status |
+|---|---|---|
+| `UberQuad` | rounded/squircle rects, borders, analytic Gaussian shadows (inner/outer), Oklab gradients (up to 16 stops; first 8 spring) with dithering, surface material | Built |
+| `AtlasSprite` | body text from a greyscale glyph atlas, images, emoji | Built |
+| `Slug` / GPU outlines | GPU outline rendering (Windfoil and opt-in Slug) for scale-animating text in outline-drawn modes; curve-drawn icons remain Target (Slug patent dedicated to the public domain on 2026-03-17; reference shaders MIT/Apache) | Partial |
+| `SparseStrips` | complex vector art via `vello_gpu` (Linebender moved compute Vello to `research/` in 2026) | Target |
+| `Backdrop` | in-app blur/saturate of what's already drawn (`El::backdrop_blur`) | Built |
+| `NativeSurface` | macOS `IOSurface`, Windows D3D shared textures (one GPU copy into a Rune texture), Linux dmabuf (one GPU copy); web draws no native surfaces | Built (desktop) |
 
 Plus: offscreen layers only when needed (group opacity with blur, cached complex subtrees), dirty-rect scissoring
-for idle-ish frames, linear-light blending, Display P3, and dithering on every gradient and shadow (Kit's GPUI fork (`kitlangton/gpui`)
+for idle-ish frames, sRGB blending by default (`App::srgb_blend(false)` opts into linear-light blending), Display P3
+(Target), and dithering on every gradient and shadow (Kit's GPUI fork (`kitlangton/gpui`)
 fixes, now partly upstream).
 
 **Frame pacing and latency.** `CADisplayLink` with `preferredFrameRateRange` up to 120 while anything animates, zero
@@ -202,19 +205,22 @@ measures whether a glass underlay can track a Rune-animated shape at 120 Hz with
 - **Layout:** Parley for bidi, line breaking, rich text and inline boxes, wrapped in GPUI's two-tier cache (shaped
   runs separate from wrap points), so resizing a container never re-shapes text
   ([05](research/05-text-ime-a11y-layout.md)). Overflow is a soft fade mask by default, never an ellipsis.
-- **Rasterizing:** greyscale atlas, 4× horizontal subpixel positioning, and the kitlangton/gpui luminance glyph dilation
-  that fixed "thin text" by matching macOS font smoothing. Text under a scale animation switches to Slug outlines so
-  springs never re-rasterize glyphs every frame.
+- **Rasterizing:** default `FontSmoothing` is `On` (CoreGraphics pipeline port with ppem-dependent subpixel steps
+  and dilation) on macOS and in Mac browsers, and `WindfoilChromium` (GPU-filled outline masks, quarter-pixel pens,
+  Skia text gamma, hinted small CJK and gasp-hinted faces) elsewhere; `Off`, `DirectWrite`, `Windfoil`, `Slug`,
+  `HintedGpu`, `Hinted`, `WindfoilRgb` and `ClearType` are opt-in. Text under a scale animation draws from GPU
+  outlines in outline-drawn modes so springs never re-rasterize glyphs every frame.
 - **Quality bar:** a side-by-side diff against CoreText on the same strings (spike S5). If Rune text doesn't match
   native on a Retina Mac, nothing else matters.
 
 ### 4.6 Text editing and IME
 
-Zed's `sum_tree` and rope for storage (O(log n) UTF-8↔UTF-16 offsets, large files). Each platform's real protocol,
-implemented directly: `NSTextInputClient` (with `doCommandBySelector:` for Kit's key bindings), `UITextInput` plus
-`UITextInteraction` on iOS (selection handles, loupe, autocorrect, dictation, marked text), `InputConnection` on
-Android, TSF on Windows, `text-input-v3` on Wayland, and a sliding-window hidden `<textarea>` on the web (Zed's
-`gpui_web` approach) with `EditContext` where available. This is the single riskiest area; Flutter's iOS text shim is
+Today `TextEdit` stores a plain `String`, desktop IME arrives through winit, and the web uses a sliding-window
+hidden `<textarea>` (Zed's `gpui_web` approach). Target: Zed's `sum_tree` and rope for storage (O(log n)
+UTF-8↔UTF-16 offsets, large files) and direct platform protocols — `NSTextInputClient` (with `doCommandBySelector:`
+for Kit's key bindings), `UITextInput` plus `UITextInteraction` on iOS (selection handles, loupe, autocorrect,
+dictation, marked text), `InputConnection` on Android, TSF on Windows, `text-input-v3` on Wayland, and
+`EditContext` on the web where available. This is the single riskiest area; Flutter's iOS text shim is
 3,400 lines and still feels off ([03](research/03-flutter-apple-rive-figma.md)).
 
 ### 4.7 Layout
@@ -278,24 +284,25 @@ fine for tools, wrong for feel).
 
 ## 5. Hot reload
 
-Goal: edit to pixels in under 300 ms with state kept, on the Mac and on a connected iPhone. Today that's reachable
-for tokens, literals and shaders; structural Rust edits measure about a second.
+Target: edit to pixels in under 300 ms for tokens, literals and shaders with state kept, on the Mac and on a
+connected iPhone; today Layer 3 ships via the opt-in `hot` feature (~8 s median for Settings, ~1 s in the minimal S1
+spike).
 
 Code loading on a physical iPhone is a dead end for now. Subsecond explicitly excludes physical iOS devices; JIT and
 loading code signed after install aren't available without a debugger; InjectionNext's device support has an
 unresolved 2026 failure report; Kit's HotReloadKit is simulator- and Mac-only for the same reasons
 ([07](research/07-hot-reload.md)). So Rune layers it:
 
-Views stay plain Rust; there is no separate view language.
+Core views stay plain Rust; optional `rune-luau` hosts sandboxed, hot-reloading Luau scripts beside them.
 
-| Layer | What changes | How | Target (edit → presented frame) |
-|---|---|---|---|
-| 0. Tokens and knobs | colours, spacing, type, springs, any `Tunable` | token file watched; render thread re-resolves live, in-flight springs retarget | ≤ 50 ms Mac, ≤ 100 ms iPhone |
-| 1. Live literals | any edit that only changes literals in view code (a number, colour, string, spring, enum variant) | Xcode-Previews-style: in dev builds a macro gives each literal in a view function a `file:line:col` id; the watcher re-parses the saved file and, if only literals changed, pushes the new values down the token channel. No compile. | ≤ 100 ms Mac and iPhone |
-| 2. Shaders | Metal/WGSL | rebuild the one pipeline at runtime in dev | ≤ 150 ms |
-| 3. Rust on the Mac | structural edits: view functions, handlers, layout, logic | subsecond hot-patching through `dx` (the same path upstream GPUI now uses); models live outside patched code, so state stays | **measured ~1 s** (989 ms median, S1); goal ≤ 300 ms |
-| 4. Rust on the iPhone | the same edits | **split-process dev mode** (below) | layer 3 + one USB round trip *(spike S4)* |
-| 5. Everything else | struct layout changes, new deps | full rebuild; models restored from a snapshot keyed by id, incompatible ones reset | ≤ 2 s Mac incremental (1.85 s measured for a tiny crate); device install as fast as Xcode allows |
+| Layer | What changes | How | Target (edit → presented frame) | Status |
+|---|---|---|---|---|
+| 0. Tokens and knobs | colours, spacing, type, springs, any `Tunable` | token file watched; render thread re-resolves live, in-flight springs retarget | ≤ 50 ms Mac, ≤ 100 ms iPhone | Target |
+| 1. Live literals | any edit that only changes literals in view code (a number, colour, string, spring, enum variant) | Xcode-Previews-style: in dev builds a macro gives each literal in a view function a `file:line:col` id; the watcher re-parses the saved file and, if only literals changed, pushes the new values down the token channel. No compile. | ≤ 100 ms Mac and iPhone | Target |
+| 2. Shaders | Metal/WGSL | rebuild the one pipeline at runtime in dev | ≤ 150 ms | Target |
+| 3. Rust on the Mac | structural edits: view functions, handlers, layout, logic | subsecond hot-patching through `dx` (the same path upstream GPUI now uses); models live outside patched code, so state stays | **measured ~1 s** (989 ms median, S1), ~8 s median for Settings; goal ≤ 300 ms | Built |
+| 4. Rust on the iPhone | the same edits | **split-process dev mode** (below) | layer 3 + one USB round trip *(spike S4)* | Target |
+| 5. Everything else | struct layout changes, new deps | full rebuild; models restored from a snapshot keyed by id, incompatible ones reset | ≤ 2 s Mac incremental (1.85 s measured for a tiny crate); device install as fast as Xcode allows | Target |
 
 **What spike S1 found** ([08](research/08-spike-hot-patch.md)). Subsecond 0.7.10 hot-patches a plain Rust binary
 with no Dioxus UI, keeping main-owned state across ten edits: 989 ms median, 1,150 ms p95 from save to new output
@@ -384,16 +391,16 @@ with external recorders becomes part of the runtime, because Rune owns every pre
 
 **Other guarantees, in rough order of how soon:**
 
-| Guarantee | How it's checked |
-|---|---|
-| **Instant first frame.** The first frame is rendered at build time (per appearance and common window size) and shown the moment the process starts; the live tree takes over invisibly once ready. Target: pixels in ≤ 50 ms from process start on a cold launch. | Launch timestamps in CI; a golden diff between the pre-rendered and the first live frame must be zero (no visible handoff). |
-| **No dropped frames by budget.** Each scene's cost (instances, glyphs, layout nodes, shaping, allocations) is counted exactly; CI fails if a scene exceeds the 8.33 ms budget model for the reference device. | Exact counters, bisectable; wall-clock confirmation on reserved hardware. |
-| **Zero cost at rest.** No ticks, no GPU submissions, no wake-ups once settled. | Counters over a 10 s idle sample. |
-| **Real contrast.** Text contrast is checked against the actual composited pixels behind each glyph (after blur and glass), in every theme. | Per-scene accessibility pass. |
-| **No clipped text, any locale or size.** Every scene is fuzzed across window sizes, text scale, long German, RTL, CJK, light/dark; fails on overflow, overlap, hard clips, tap targets < 44 pt, off-spine alignment (layout-linter rules). | Scene fuzzing in CI. |
-| **Every pixel traces to code.** Any pixel → node → `file:line` → commit; screenshot diffs explain themselves. | Inspector query; PR visual diffs. |
-| **Bug reports are replays.** Sessions record inputs and timing (KB, not video) and replay to identical pixels; Scrawl attaches one. | Replay determinism test on every change. |
-| **Same pixels on every platform** for the canonical lane, from a CPU reference renderer that the GPU path is diffed against. | Differential renderer tests. |
+| Guarantee | How it's checked | Status |
+|---|---|---|
+| **Instant first frame.** The first frame is rendered at build time (per appearance and common window size) and shown the moment the process starts; the live tree takes over invisibly once ready. Target: pixels in ≤ 50 ms from process start on a cold launch. | Launch timestamps in CI; a golden diff between the pre-rendered and the first live frame must be zero (no visible handoff). | Target |
+| **No dropped frames by budget.** Each scene's cost (instances, glyphs, layout nodes, shaping, allocations) is counted exactly; CI fails if a scene exceeds the 8.33 ms budget model for the reference device. | Exact counters, bisectable; wall-clock confirmation on reserved hardware. | Target |
+| **Zero cost at rest.** No ticks, no GPU submissions, no wake-ups once settled. | Counters over a 10 s idle sample. | Built |
+| **Real contrast.** Text contrast is checked against the actual composited pixels behind each glyph (after blur and glass), in every theme. | Per-scene accessibility pass. | Target |
+| **No clipped text, any locale or size.** Every scene is fuzzed across window sizes, text scale, long German, RTL, CJK, light/dark; fails on overflow, overlap, hard clips, tap targets < 44 pt, off-spine alignment (layout-linter rules). | Scene fuzzing in CI. | Target |
+| **Every pixel traces to code.** Any pixel → node → `file:line` → commit; screenshot diffs explain themselves. | Inspector query; PR visual diffs. | Target |
+| **Bug reports are replays.** Sessions record inputs and timing (KB, not video) and replay to identical pixels; Scrawl attaches one. | Replay determinism test on every change. | Target |
+| **Same pixels on every platform** for the canonical lane, from a CPU reference renderer that the GPU path is diffed against. | Differential renderer tests (`crates/rune-ref`, run locally and on scheduled macOS CI). | Partial |
 
 ## 6c. Research round 2: tricks to use
 
@@ -423,8 +430,10 @@ were recalled rather than re-read; each note marks which. Cite-check before rely
 - **App-level record/replay** (inputs, clock, RNG, a state hash per frame, periodic keyframes for seeking); `rr`
   doesn't run on macOS ([14]). The command channel becomes a byte SPSC ring that doubles as the replay log
   ([17](research/17-research-perf-architecture.md)).
-- **Exact CI gates:** instruction counts (gungraun) and allocation counts on Linux, shuttle for the app↔render
-  thread handoff, Miri on every PR ([14]).
+- **Exact CI gates (Target):** instruction counts (gungraun) and allocation counts on Linux, shuttle for the app↔render
+  thread handoff, Miri on every PR ([14]). Today CI runs `scripts/file-size.sh` on PRs and pushes (`file-size.yml`),
+  Rune's test suite on macOS on a 6-hour schedule and manual dispatch (`macos-tests.yml`), and the `site` and `www`
+  builds.
 - **Pixel provenance:** the CPU renderer also writes a node-id buffer, so pixel diffs blame a node and its
   `file:line`; a semantic diff (tree, rects, springs) runs before the pixel diff ([14]).
 - **Per-node dirty classes** (Unreal Slate's model) with early cutoff: one measured case went 34 ms → 0.35 ms for
@@ -432,9 +441,10 @@ were recalled rather than re-read; each note marks which. Cite-check before rely
 - **Blur and shadows:** Jimenez-style pyramid backdrop blur with a fractional radius (an animated radius never
   steps), capped radius with upscale; closed-form blurred rounded rects and shadows; Oklab with deterministic dither
   ([12]).
-- **Startup:** precompiled shaders / Metal binary archive and parallel init so device, fonts and pipelines stay off
-  the first-frame path; the first-frame layer of §6b with a bit-identical handoff gate; order-file/PGO layout trained
-  on replayed command streams ([13], [17]).
+- **Startup:** precompiled shaders ship today (`uber*.metallib` and `builtin_native*.metallib` on macOS and iOS
+  native Metal, DXBC on Windows; iOS on wgpu compiles WGSL at launch) alongside `prewarm_gpu`; Metal binary archives,
+  the pre-rendered first-frame layer of §6b with a bit-identical handoff gate, and order-file/PGO layout trained on
+  replayed command streams remain Target ([13], [17]).
 - **Compile speed:** no debug info for dependencies (22–30% faster clean builds in one measured project); skip
   Cranelift on Apple for now (unwinding/ABI gaps) ([17]).
 - **Agents:** one component catalog generated from the Rust definitions (schema, `llms.txt`, validator, prompt),
@@ -468,8 +478,9 @@ everywhere.
 **Skip:** GPU-driven indirect draws and partial present for now ([12]); synthetic motion blur at 120 Hz (maybe for
 flings only) ([15]); process snapshot/restore for GPU state ([13]).
 
-**Open:** whether wgpu exposes enough Metal present control and framebuffer fetch, or the Apple shell must own
-`CAMetalLayer` and a raw Metal backend sooner ([12], [13]).
+**Resolved / Open:** Rune's native Metal backend (`metal-backend`) now owns `CAMetalLayer` and Metal presentation by
+default on macOS (wgpu remains default on Windows, Linux, web and iOS); framebuffer fetch for group opacity remains
+open ([12], [13]).
 
 ## 7. The design language
 
@@ -500,8 +511,10 @@ Rune ships a design system, not just primitives:
 ## 8. Performance targets
 
 Reference devices get pinned before any number becomes a gate (a 120 Hz Apple-silicon Mac and a ProMotion iPhone,
-never a developer's desk display). CI runs deterministic correctness on every change and performance on reserved hardware
-([09 §C](research/09-agent-native-and-perf-targets.md)).
+never a developer's desk display). Target: CI runs deterministic correctness on every change and performance on
+reserved hardware ([09 §C](research/09-agent-native-and-perf-targets.md)); today CI runs `scripts/file-size.sh` on
+PRs and pushes (`file-size.yml`), Rune's test suite on macOS on a 6-hour schedule and manual dispatch
+(`macos-tests.yml`), and the `site` and `www` builds.
 
 | Metric | Target |
 |---|---|
@@ -611,7 +624,9 @@ verification harness already in place.
 ## 13. Web target status
 
 The first experimental M5 target is implemented: winit 0.30 owns a single canvas, rAF and
-ResizeObserver; GPU initialization is asynchronous, and a sliding textarea supplies text
-services. It runs on the main thread without SharedArrayBuffer. See [WEB.md](WEB.md) and
-`examples/web-hello`. Real-device Safari keyboard verification, accessibility mirroring,
-WebGL fallback and EditContext remain follow-up work.
+ResizeObserver; GPU initialization is asynchronous, a sliding textarea supplies text
+services, a semantic DOM accessibility mirror exposes landmarks, headings, links, buttons and
+live regions (full AccessKit parity is #118), and an opt-in WebGL2 fallback (`webgl` feature)
+covers browsers without WebGPU. It runs on the main thread without SharedArrayBuffer. See
+[WEB.md](WEB.md) and `examples/web-hello`. Real-device Safari keyboard verification and
+EditContext remain follow-up work.
