@@ -29,6 +29,8 @@ pub(crate) use pacing::{
     HiddenPace, Missed, TimerFrame, TIMER_FRAME, acquire, acquire_checked,
     poll_timer_deadline_core, timer_deadline_core, timer_wants_frame_core,
 };
+#[cfg(target_os = "windows")]
+pub(crate) use pacing::{motion_wake_wall_core, poll_wake_wall_core};
 #[cfg(test)]
 pub(crate) use pacing::{
     HIDDEN_REFRESH, OCCLUDED_MAX, OCCLUDED_RETRY, TIMEOUT_RETRY, TIMER_FRAME_STALL, timer_deadline,

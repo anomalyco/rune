@@ -13,11 +13,35 @@ impl OverlayCore {
         false
     }
 
+    #[cfg(target_os = "windows")]
+    fn poll_pace_active(&self) -> bool {
+        self.presence.shown() && !self.frameless() && !self.waits_for_slot()
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(super) fn sync_poll_pace(&mut self, rt: &RuntimeCore, now: Instant) {
+        let active = self.poll_pace_active();
+        let Some(live) = self.surface.live_mut() else { return };
+        let window = live.backing.window().cloned();
+        live.poll_pace.sync_with(rt, now, active, |previous| {
+            let mhz = window.as_ref().and_then(|w| w.current_monitor()).and_then(|m| m.refresh_rate_millihertz());
+            crate::platform::win32::vsync_grid(now, mhz, previous)
+        });
+    }
+
+    pub(super) fn poll_deadline(&self, rt: &RuntimeCore) -> Option<Instant> {
+        #[cfg(target_os = "windows")]
+        if let Some(live) = self.surface.live() {
+            return live.poll_pace.deadline_for(rt, self.poll_pace_active());
+        }
+        frame::timer_deadline(rt, self.awaiting_layer_frame())
+    }
+
     pub(super) fn wake_deadline(&self, rt: &RuntimeCore) -> Option<Instant> {
         // A running display link consumes due runtime timers. Keep the independent
         // pointer deadline, but do not spin on an overdue animation timer. Without one (hidden,
         // covered, faded out or unpaced), a timer due sooner than a frame waits a frame.
-        let deadline = frame::timer_deadline(rt, self.awaiting_layer_frame());
+        let deadline = self.poll_deadline(rt);
         // A frame waiting for room in the swap chain comes when there is (`slot`): its timers
         // would turn the loop at once until then.
         let deadline = deadline.filter(|_| !self.waits_for_slot());
@@ -104,6 +128,11 @@ impl AnyHost for OverlayHost {
         self.core.wake_deadline(self.app.rt())
     }
 
+    #[cfg(target_os = "windows")]
+    fn turn_ends(&mut self, _event_loop: &ActiveEventLoop, now: Instant) {
+        self.core.sync_poll_pace(self.app.rt(), now);
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         self.core.sync(&mut *self.app, event_loop);
     }
@@ -143,6 +172,12 @@ impl AnyHost for OverlayHost {
         let core = &mut self.core;
         let app = &mut *self.app;
         if !matches!(event, WindowEvent::RedrawRequested) { core.meter.waited(); }
+        #[cfg(target_os = "windows")]
+        if matches!(event, WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. })
+            && let Some(live) = core.surface.live_mut()
+        {
+            let _ = live.poll_pace.step(crate::window::poll_pace::PollPaceEvent::DisplayChanged);
+        }
         #[cfg(target_os = "macos")]
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. } | WindowEvent::Occluded(_))
             && let Some(live) = core.surface.live_mut() && let Some(pacing) = &mut live.pacing {

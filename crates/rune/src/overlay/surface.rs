@@ -346,6 +346,8 @@ impl OverlayCore {
             // A new swap chain holds none of ours, and its waitable object is its own.
             #[cfg(target_os = "windows")]
             slot: Slot::default(),
+            #[cfg(target_os = "windows")]
+            poll_pace: crate::window::poll_pace::PollPace::default(),
             a11y, alpha, surface, config, backing, scale,
         })
     }
