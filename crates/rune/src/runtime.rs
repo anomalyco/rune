@@ -188,7 +188,7 @@ pub(crate) use cx::caret_of;
 use cx::COMMITS;
 pub use elements::{ElementInfo, MatchedHandover, Pick, Picked, Pose, ResolvedTextStyle};
 #[cfg(debug_assertions)]
-pub(crate) use layout_read::window_read_key;
+pub(crate) use layout_read::{anchor_read_key, window_read_key};
 pub(crate) use turn::intersect;
 use turn::{Turn, compose_turn, open_turned_layer, screen_clip_of};
 pub(crate) use types::{AnimSource, Node};

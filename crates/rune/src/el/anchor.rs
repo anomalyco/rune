@@ -43,7 +43,9 @@ impl El {
     /// scale.
     pub fn anchored(mut self, key: impl Into<String>, side: Side, align: Align, gap: f32) -> Self {
         self.style.set_position_absolute();
-        self.cold_mut().above = Some(Anchor { key: key.into(), side, align, gap, fit: false, unscaled: false, round: false });
+        let cold = self.cold_mut();
+        cold.above = Some(Anchor { key: key.into(), side, align, gap, fit: false, unscaled: false, round: false });
+        cold.above_boundary = None;
         self
     }
     /// [`El::anchored`], sized to the window as Floating UI's `size` middleware sizes a
@@ -76,6 +78,24 @@ impl El {
         }
         self
     }
+    /// Confine this [`El::anchored`] or [`El::anchored_fit`] overlay to flip, align-flip, clamp
+    /// and fit inside the element keyed `boundary_key` (intersected with the window) instead of
+    /// the full window viewport, following Floating UI's `boundary` option. Falls back to the
+    /// window when no element with `boundary_key` is mounted. Call it after `anchored` or
+    /// `anchored_fit`.
+    ///
+    /// ```no_run
+    /// use rune::{Align, Side, col};
+    /// let card = col().key("card").w(240.0).h(120.0)
+    ///     .anchored("row-1", Side::Right, Align::Start, 6.0)
+    ///     .anchored_in("list-pane");
+    /// ```
+    pub fn anchored_in(mut self, boundary_key: impl Into<String>) -> Self {
+        if self.cold.get().is_some_and(|c| c.above.is_some()) {
+            self.cold_mut().above_boundary = Some(boundary_key.into());
+        }
+        self
+    }
 }
 
 /// Where an overlay of `size` (width, height) goes next to `trigger` (x0, y0, x1, y1) in a
@@ -90,7 +110,21 @@ impl El {
 /// assert_eq!(r, [20.0, 166.0, 120.0, 246.0]);
 /// ```
 pub fn anchor_rect(trigger: [f32; 4], size: (f32, f32), side: Side, align: Align, gap: f32, window: (f32, f32)) -> [f32; 4] {
+    anchor_rect_in(trigger, size, side, align, gap, [0.0, 0.0, window.0, window.1])
+}
+
+/// Like [`anchor_rect`], bounded inside `bounds` (`[x0, y0, x1, y1]`) instead of the full window,
+/// matching [`El::anchored_in`].
+///
+/// ```
+/// use rune::{Align, Side, anchor_rect_in};
+/// // A 256 x 80 card beside a trigger near the right edge of a [100, 0, 500, 600] pane
+/// // flips to the left side inside the pane instead of spilling into an adjacent drawer.
+/// let r = anchor_rect_in([380.0, 100.0, 480.0, 130.0], (256.0, 80.0), Side::Right, Align::Start, 4.0, [100.0, 0.0, 500.0, 600.0]);
+/// assert_eq!(r, [120.0, 100.0, 376.0, 180.0]);
+/// ```
+pub fn anchor_rect_in(trigger: [f32; 4], size: (f32, f32), side: Side, align: Align, gap: f32, bounds: [f32; 4]) -> [f32; 4] {
     let a = Anchor { key: String::new(), side, align, gap, fit: false, unscaled: false, round: false };
-    let (x, y) = crate::runtime::anchor_position(&a, trigger, size, window);
+    let (x, y, _, _) = crate::runtime::anchor_position(&a, trigger, size, bounds);
     [x, y, x + size.0, y + size.1]
 }

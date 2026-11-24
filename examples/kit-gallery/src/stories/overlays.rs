@@ -34,6 +34,85 @@ pub(super) fn popover_controlled(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
     )
 }
 
+/// A popover card clamped inside a list pane via `El::anchored_in` beside an adjacent drawer,
+/// displaying its resolved `anchor_placement` as the trigger moves across the pane.
+pub(super) fn popover_bounded(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
+    let open = is_open(s, "popover-bounded");
+    let at_left = s.is("bounded-left");
+    let resolved = rune::memo::anchor_placement("bounded-card");
+    let placement_label = match resolved {
+        Some((side, align)) => format!("Resolved: {side:?} / {align:?}"),
+        None => "Resolved: closed".to_owned(),
+    };
+    if open {
+        let card = popover::raised(
+            k,
+            col()
+                .w(180.0)
+                .padding(12.0)
+                .gap(4.0)
+                .child(text("Row details").font(k.ty.ui_medium).color(k.c.text_strong))
+                .child(text("Authored: Right / Start").font(k.ty.small).color(k.c.text_weak))
+                .child(text(placement_label.clone()).key("bounded-placement").font(k.ty.small_medium).color(k.c.text_base)),
+            k.radius.md,
+        )
+        .key("bounded-card")
+        .anchored("bounded-trigger", rune::Side::Right, rune::Align::Start, 6.0)
+        .anchored_in("bounded-list-pane");
+        layer.push(card);
+    }
+    let trigger = Button::new("Inspect row")
+        .variant(ButtonVariant::Outline)
+        .control_size(ControlSize::Small)
+        .expanded(open)
+        .on_press(toggle("popover-bounded"))
+        .build(k)
+        .key("bounded-trigger");
+    let trigger_row = if at_left {
+        row().w_full().child(trigger)
+    } else {
+        row().w_full().justify_end().child(trigger)
+    };
+    let list_pane = col()
+        .key("bounded-list-pane")
+        .w(380.0)
+        .h(220.0)
+        .padding(12.0)
+        .gap(12.0)
+        .radius(k.radius.md)
+        .fill(k.c.layer_01)
+        .border(1.0, k.c.border_weak)
+        .child(
+            row()
+                .w_full()
+                .center_y()
+                .justify_between()
+                .child(text("List pane (boundary)").font(k.ty.ui_medium).color(k.c.text_strong))
+                .child(
+                    Button::new(if at_left { "Move trigger right" } else { "Move trigger left" })
+                        .variant(ButtonVariant::Ghost)
+                        .control_size(ControlSize::Small)
+                        .on_press(flip("bounded-left"))
+                        .build(k)
+                        .key("bounded-move"),
+                ),
+        )
+        .child(trigger_row)
+        .child(text(placement_label).font(k.ty.small).color(k.c.text_weak));
+    let drawer_pane = col()
+        .key("bounded-drawer-pane")
+        .w(240.0)
+        .h(220.0)
+        .padding(12.0)
+        .gap(6.0)
+        .radius(k.radius.md)
+        .fill(k.c.surface_base)
+        .border(1.0, k.c.border_weak)
+        .child(text("Inspector drawer").font(k.ty.ui_medium).color(k.c.text_strong))
+        .child(text("The anchored card stays inside the list pane and flips left instead of covering this drawer.").font(k.ty.small).color(k.c.text_weak).wrap());
+    row().gap(8.0).child(list_pane).child(drawer_pane)
+}
+
 fn menu_button(k: &Kit, label: &str, key: &'static str, open: bool) -> El {
     Button::new(label).expanded(open).on_press(toggle(key)).build(k)
 }

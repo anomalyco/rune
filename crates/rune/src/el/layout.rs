@@ -836,10 +836,10 @@ impl El {
         let mut outer = col().key(area.clone());
         outer.style = self.style.take_box_placement();
         if let Some(c) = self.cold.get_mut_if_some() {
-            let (fit, above, transition) = (std::mem::replace(&mut c.aspect_fit, 0.0), c.above.take(), c.transition.take());
-            if fit > 0.0 || above.is_some() || transition.is_some() {
+            let (fit, above, above_boundary, transition) = (std::mem::replace(&mut c.aspect_fit, 0.0), c.above.take(), c.above_boundary.take(), c.transition.take());
+            if fit > 0.0 || above.is_some() || above_boundary.is_some() || transition.is_some() {
                 let o = outer.cold_mut();
-                (o.aspect_fit, o.above, o.transition) = (fit, above, transition);
+                (o.aspect_fit, o.above, o.above_boundary, o.transition) = (fit, above, above_boundary, transition);
             }
         }
         outer.vis.cold_mut().clip_to_content = true;

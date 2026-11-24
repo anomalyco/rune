@@ -79,7 +79,7 @@ pub(in crate::runtime) fn anchored_target(nodes: &[Node], scrolls: &HashMap<Node
     anchored_target_inner(nodes, scrolls, j, viewport, 0)
 }
 
-fn anchored_target_inner(nodes: &[Node], scrolls: &HashMap<NodeId, ScrollState>, j: usize, viewport: (f32, f32), depth: usize) -> [f32; 4] {
+pub(in crate::runtime) fn anchored_target_inner(nodes: &[Node], scrolls: &HashMap<NodeId, ScrollState>, j: usize, viewport: (f32, f32), depth: usize) -> [f32; 4] {
     let mut t = nodes[j].target;
     for [ox, oy] in scroll_offsets(scrolls, nodes, j) {
         t[0] -= ox;
@@ -94,8 +94,10 @@ fn anchored_target_inner(nodes: &[Node], scrolls: &HashMap<NodeId, ScrollState>,
         && let Some(k) = super::anchor_index(nodes, anc, a)
     {
         let at = anchored_target_inner(nodes, scrolls, k, viewport, depth + 1);
+        let b = crate::runtime::anchor::boundary_index(nodes, anc);
+        let bounds = crate::runtime::anchor::anchor_bounds_depth(nodes, scrolls, b, viewport, depth + 1);
         let (w, h) = (nodes[anc].target[2] - nodes[anc].target[0], nodes[anc].target[3] - nodes[anc].target[1]);
-        let (ax, ay) = super::anchor_position(a, at, (w, h), viewport);
+        let (ax, ay, _, _) = super::anchor_position(a, at, (w, h), bounds);
         dx += ax - nodes[anc].target[0];
         dy += ay - nodes[anc].target[1];
     }

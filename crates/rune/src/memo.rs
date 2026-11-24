@@ -26,7 +26,7 @@
 //!   `version`. For a text field that's the
 //!   `TextEdit` itself, which hashes its text, selection, composition and focus.
 //! - **`Cx` reads.** `Cx::layout`, `Cx::layout_with`, `Cx::layout_size`, `Cx::window_layout`,
-//!   `Cx::window_layout_with` and `Cx::caret` called inside the closure are recorded with
+//!   `Cx::window_layout_with`, `Cx::anchor_placement` and `Cx::caret` called inside the closure are recorded with
 //!   what they returned. A reuse counts them as read
 //!   again, so the view still re-runs when they move, and builds again when one returns
 //!   something else. They needn't be in `version`.
@@ -53,7 +53,7 @@ use std::rc::Rc;
 
 use crate::El;
 use crate::runtime::HashMap;
-use crate::runtime::layout_read::{LayoutRects, SELECTION, note_read};
+use crate::runtime::layout_read::{LayoutRects, SELECTION, anchor_key, note_read};
 
 mod built;
 mod reads;
@@ -68,6 +68,7 @@ pub(crate) use built::Shared;
 pub(crate) use built::has_focused_input;
 pub(crate) use reads::Reads;
 pub(crate) use reads::Replayed;
+pub(crate) use reads::read_anchor_placement;
 pub(crate) use reads::read_caret;
 pub(crate) use reads::read_layout;
 pub(crate) use reads::read_layout_with;
@@ -75,6 +76,7 @@ pub(crate) use reads::read_selection;
 pub(crate) use reads::recording;
 use reads::{Read, Seen, dedup_states};
 
+pub use reads::anchor_placement;
 pub use reads::layout;
 pub use reads::layout_size;
 pub use reads::layout_with;
@@ -443,6 +445,7 @@ fn memo_inner(key: String, version: u64, region: bool, build: &mut dyn FnMut() -
                         Read::Caret(..) => s.replayed.caret = true,
                         Read::Layout(k, _) => note_read(&mut s.replayed.layout, k, None),
                         Read::LayoutWith(k, same, _) => note_read(&mut s.replayed.layout, k, Some(same.clone())),
+                        Read::AnchorPlacement(k, _) => note_read(&mut s.replayed.layout, &anchor_key(k), None),
                         Read::Selection(_) => note_read(&mut s.replayed.layout, SELECTION, None),
                         Read::State(..) => {}
                     }
@@ -534,6 +537,7 @@ fn report_miss(key: &str, same_version: bool, reads: &[Read], seen: &Seen) {
         Read::State(id, v) => format!("state {id} v{v}"),
         Read::Layout(k, _) | Read::LayoutWith(k, _, _) => format!("layout {k}"),
         Read::Caret(k, _) => format!("caret {k}"),
+        Read::AnchorPlacement(k, _) => format!("anchor_placement {k}"),
         Read::Selection(_) => "selection".into(),
     };
     eprintln!("rune-miss {key} {why}");
@@ -595,6 +599,7 @@ fn cached_inner((h1, h2): (u64, u64), build: &mut dyn FnMut() -> El) -> El {
                     Read::Caret(..) => s.replayed.caret = true,
                     Read::Layout(k, _) => note_read(&mut s.replayed.layout, k, None),
                     Read::LayoutWith(k, same, _) => note_read(&mut s.replayed.layout, k, Some(same.clone())),
+                    Read::AnchorPlacement(k, _) => note_read(&mut s.replayed.layout, &anchor_key(k), None),
                     Read::Selection(_) => note_read(&mut s.replayed.layout, SELECTION, None),
                     Read::State(..) => {}
                 }

@@ -28,7 +28,7 @@ use markdown::{
     markdown_basic, markdown_code, markdown_diagrams, markdown_lenient, markdown_mermaid_charts, markdown_mermaid_data, markdown_mermaid_flows, markdown_mermaid_git, markdown_mermaid_hover, markdown_mermaid_maps, markdown_mermaid_plan, markdown_mermaid_plan_zoomed, markdown_mermaid_shapes, markdown_mermaid_streaming, markdown_mermaid_systems, markdown_stream_tail, markdown_streaming, markdown_styled, markdown_table_styles,
     markdown_walkthrough,
 };
-use overlays::{focus_keyboard, hover_card_basic, hover_card_placements, menu_appearances, menu_basic, menu_checkbox, menu_radio, menu_rich, menu_submenu, overlays_tx_callbacks, popover_basic, popover_controlled, toast_all, tooltip_help_arrow, tooltip_keybind, tooltip_path, tooltip_simple, tooltip_title_description};
+use overlays::{focus_keyboard, hover_card_basic, hover_card_placements, menu_appearances, menu_basic, menu_checkbox, menu_radio, menu_rich, menu_submenu, overlays_tx_callbacks, popover_basic, popover_bounded, popover_controlled, toast_all, tooltip_help_arrow, tooltip_keybind, tooltip_path, tooltip_simple, tooltip_title_description};
 
 type Story = fn(&G, &Kit, &mut Vec<El>) -> El;
 
@@ -80,6 +80,7 @@ const OPENED: &[(&str, &str)] = &[
     ("rune-select--states", "select"),
     ("components-popover--basic", "popover"),
     ("components-popover--controlled", "popover"),
+    ("rune-popover--bounded", "popover-bounded"),
     ("components-hover-card--basic", "card"),
     ("rune-hover-card--placements", "hc-right-end"),
     ("rune-overlays--tx-callbacks", "tx-popover"),
@@ -160,6 +161,7 @@ stories! {
     "rune-select--step-closed" => select_step_closed,
     "components-popover--basic" => popover_basic,
     "components-popover--controlled" => popover_controlled,
+    "rune-popover--bounded" => popover_bounded,
     "ui-menu--basic" => menu_basic,
     "ui-menu--appearances" => menu_appearances,
     "ui-menu--rich" => menu_rich,
