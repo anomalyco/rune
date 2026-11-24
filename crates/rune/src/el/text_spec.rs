@@ -35,7 +35,7 @@ pub struct TextSpec {
     pub wrap: bool,
     /// One line, cut with an ellipsis when wider than the element.
     pub truncate: bool,
-    /// Which part `truncate` cuts (see [`El::truncate_middle`](crate::El::truncate_middle)).
+    /// Which part `truncate` or `max_lines` cuts (see [`El::elide_middle`](crate::El::elide_middle)).
     pub(crate) elide: Elide,
     /// Fade the overflowing trailing edge rather than replacing text with an ellipsis.
     pub truncate_fade: bool,
@@ -427,14 +427,14 @@ impl TextSpec {
     }
 }
 
-/// The part of an overflowing `truncate`d text the ellipsis replaces.
+/// The part of an overflowing `truncate`d or `max_lines`-clamped text the ellipsis replaces.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Elide {
-    /// [`El::truncate`](crate::El::truncate): keeps the start.
+    /// [`El::truncate`](crate::El::truncate) and default [`El::max_lines`](crate::El::max_lines): keeps the start.
     #[default]
     End,
-    /// [`El::truncate_middle`](crate::El::truncate_middle): keeps the start and the end.
+    /// [`El::truncate_middle`](crate::El::truncate_middle) and [`El::elide_middle`](crate::El::elide_middle): keeps the start and the end.
     Middle,
-    /// [`El::truncate_head`](crate::El::truncate_head): keeps the end.
+    /// [`El::truncate_head`](crate::El::truncate_head) and [`El::elide_head`](crate::El::elide_head): keeps the end.
     Head,
 }
