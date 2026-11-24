@@ -589,6 +589,8 @@ mod tests {
         assert_eq!(container_tag("listitem"), Some("li"));
         assert_eq!(container_tag("dialog"), Some("div"));
         assert_eq!(container_aria("dialog"), Some("dialog"));
+        assert_eq!(container_tag("menu"), Some("div"));
+        assert_eq!(container_aria("menu"), Some("menu"));
         assert_eq!(container_tag("tablist"), Some("div"));
         assert_eq!(container_aria("tablist"), Some("tablist"));
         assert_eq!(container_tag("radiogroup"), Some("div"));

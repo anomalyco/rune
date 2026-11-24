@@ -626,3 +626,163 @@ fn step_closed_select_updates_a11y_value_and_web_mirror_while_collapsed() {
         (Some(&serde_json::json!("combobox")), Some(&serde_json::json!(false)), Some(&serde_json::json!("Plum")))
     );
 }
+
+#[test]
+fn menu_label_and_item_a11y_label_reach_accessibility_tree_and_web_mirror() {
+    struct Local {
+        menu_label: Option<String>,
+        item_a11y: Option<String>,
+        sub_open: bool,
+    }
+    fn view(s: &Local, _: &mut Cx<Local>) -> El {
+        let k = kit();
+        let mut layer = Vec::new();
+        let mut path_item = MenuItem::new("…/menu.rs")
+            .key("menu-rs")
+            .on_select(|_: &mut Local| {});
+        if let Some(l) = &s.item_a11y {
+            path_item = path_item.a11y_label(l.clone());
+        }
+        let sub_item = MenuItem::new("Export…")
+            .key("export")
+            .a11y_label("Export document")
+            .submenu(
+                vec![MenuEntry::item(MenuItem::new("PDF").key("export-pdf").on_select(|_: &mut Local| {}))],
+                s.sub_open,
+            )
+            .submenu_placement(Placement::LeftStart)
+            .submenu_min_width(0.0)
+            .on_select(|_: &mut Local| {});
+        let mut m = Menu::new("file")
+            .trigger(Button::new("File").build(&k).key("file-btn"))
+            .item(path_item)
+            .item(sub_item)
+            .item(MenuItem::new("Disabled").key("off").a11y_label("Disabled full action").disabled(true))
+            .open(true);
+        if let Some(l) = &s.menu_label {
+            m = m.label(l.clone());
+        }
+        let trigger = m.build(&k, &mut layer);
+        root(col().padding(40.0).child(trigger), layer)
+    }
+
+    let mount_local = |menu_label: Option<&str>, item_a11y: Option<&str>, sub_open: bool| {
+        let mut rt = rune::Runtime::new(
+            Local {
+                menu_label: menu_label.map(str::to_owned),
+                item_a11y: item_a11y.map(str::to_owned),
+                sub_open,
+            },
+            view,
+            (720.0, 480.0),
+            rune::Env::new(false, 1.0),
+        );
+        rt.frame(0.0);
+        rt.settle_all();
+        rt.frame(1.0 / 60.0);
+        rt
+    };
+
+    // Menu::label, MenuItem::a11y_label, and submenu menu name reach AccessKit and web mirror.
+    let rt = mount_local(Some("File actions"), Some("crates/rune-kit/src/overlays/menu.rs"), true);
+    let tree = rt.accessibility_json();
+    assert_eq!(said(node(&tree, "file-menu")), ("menu", "File actions"));
+    let item = node(&tree, "menu-rs");
+    assert_eq!(said(item), ("menu-item", "crates/rune-kit/src/overlays/menu.rs"));
+    assert!(item["children"].is_null(), "drawn elided text is not read twice");
+    let off = node(&tree, "off");
+    assert_eq!(said(off), ("menu-item", "Disabled full action"));
+    assert!(has(off, "disabled"));
+    assert_eq!(said(node(&tree, "export-sub-menu")), ("menu", "Export document"));
+    assert_eq!(said(node(&tree, "export-pdf")), ("menu-item", "PDF"));
+
+    let mirror: Vec<serde_json::Value> = serde_json::from_str(&rt.a11y_json()).unwrap();
+    assert!(
+        mirror.iter().any(|v| v["o"] == "menu" && v["t"] == "File actions"),
+        "Menu::label reaches web mirror: {mirror:?}",
+    );
+    assert!(
+        mirror.iter().any(|v| v["o"] == "menu" && v["t"] == "Export document"),
+        "submenu menu label reaches web mirror: {mirror:?}",
+    );
+    assert!(
+        mirror.iter().any(|v| v["o"] == "menuitem" && v["t"] == "crates/rune-kit/src/overlays/menu.rs"),
+        "MenuItem::a11y_label reaches web mirror: {mirror:?}",
+    );
+    assert!(
+        !mirror.iter().any(|v| v["t"] == "…/menu.rs"),
+        "drawn truncated text does not echo in web mirror: {mirror:?}",
+    );
+
+    // RTL labels are preserved verbatim in both trees.
+    let rt_rtl = mount_local(Some("إجراءات الملف"), Some("حفظ المستند"), false);
+    let tree_rtl = rt_rtl.accessibility_json();
+    assert_eq!(said(node(&tree_rtl, "file-menu")), ("menu", "إجراءات الملف"));
+    assert_eq!(said(node(&tree_rtl, "menu-rs")), ("menu-item", "حفظ المستند"));
+    let mirror_rtl: Vec<serde_json::Value> = serde_json::from_str(&rt_rtl.a11y_json()).unwrap();
+    assert!(mirror_rtl.iter().any(|v| v["o"] == "menu" && v["t"] == "إجراءات الملف"));
+    assert!(mirror_rtl.iter().any(|v| v["o"] == "menuitem" && v["t"] == "حفظ المستند"));
+
+    // Blank menu label stays unnamed and blank item a11y_label falls back to drawn text.
+    let rt_blank = mount_local(Some("   "), Some("   "), false);
+    let tree_blank = rt_blank.accessibility_json();
+    assert_eq!(said(node(&tree_blank, "file-menu")), ("menu", ""));
+    assert_eq!(said(node(&tree_blank, "menu-rs")), ("menu-item", "…/menu.rs"));
+}
+
+#[test]
+fn popup_item_label_with_and_build_list_reach_accessibility_tree_and_web_mirror() {
+    fn view(_: &App, _: &mut Cx<App>) -> El {
+        let k = kit();
+        let rich = rune::row()
+            .child(text("/rev").font(k.ty.ui_medium))
+            .child(text("iew").font(k.ty.ui_compact));
+        let rtl = rune::row()
+            .child(text("بحث").font(k.ty.ui_medium))
+            .child(text(" الملفات").font(k.ty.ui_compact));
+        let list = PopupList::<App>::new("completions", "")
+            .label("Command completions")
+            .items([
+                PopupItem::new("review", "/review").label_with(rich).description("Review branch"),
+                PopupItem::new("rtl", "بحث الملفات").label_with(rtl),
+                PopupItem::new("off", "/locked").label_with(text("/locked")).disabled(true),
+            ])
+            .active(Some(0))
+            .on_choose(|s: &mut App, _, _| s.presses += 1)
+            .build_list(&k);
+        col().w(300.0).padding(8.0).child(list)
+    }
+
+    let rt = mount(App::default(), view);
+    let tree = rt.accessibility_json();
+    let listbox = node(&tree, "viewport");
+    assert_eq!(said(listbox), ("list-box", "Command completions"));
+    let review = node(&tree, "completions-option-review");
+    assert_eq!((said(review), review["description"].as_str()), (("list-box-option", "/review"), Some("Review branch")));
+    assert!(review["children"].is_null(), "label_with spans stay hidden so option is not read twice");
+    assert!(has(review, "selected"));
+    let rtl = node(&tree, "completions-option-rtl");
+    assert_eq!(said(rtl), ("list-box-option", "بحث الملفات"));
+    assert!(rtl["children"].is_null());
+    let off = node(&tree, "completions-option-off");
+    assert_eq!(said(off), ("list-box-option", "/locked"));
+    assert!(has(off, "disabled"));
+
+    let mirror: Vec<serde_json::Value> = serde_json::from_str(&rt.a11y_json()).unwrap();
+    assert!(
+        mirror.iter().any(|v| v["o"] == "listbox" && v["t"] == "Command completions"),
+        "standalone build_list listbox reaches web mirror: {mirror:?}",
+    );
+    assert!(
+        mirror.iter().any(|v| v["o"] == "option" && v["t"] == "/review" && v["se"] == true),
+        "rich option reaches web mirror with plain label: {mirror:?}",
+    );
+    assert!(
+        mirror.iter().any(|v| v["o"] == "option" && v["t"] == "بحث الملفات"),
+        "RTL rich option reaches web mirror: {mirror:?}",
+    );
+    assert!(
+        !mirror.iter().any(|v| v["t"] == "/rev" || v["t"] == "iew"),
+        "split label_with spans do not echo in web mirror: {mirror:?}",
+    );
+}

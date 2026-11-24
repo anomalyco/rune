@@ -15,6 +15,7 @@ use crate::{ComboboxOption, Kit};
 pub struct PopupItem {
     id: String,
     label: String,
+    label_el: Option<El>,
     description: Option<String>,
     leading: Option<El>,
     trailing: Option<El>,
@@ -26,11 +27,27 @@ impl PopupItem {
         Self {
             id: id.into(),
             label: label.into(),
+            label_el: None,
             description: None,
             leading: None,
             trailing: None,
             disabled: false,
         }
+    }
+    /// Custom element drawn in place of the plain label text (such as highlighted match spans).
+    /// The plain `label` passed to [`Self::new`] remains the option's accessible name, and the
+    /// custom element is hidden from the accessibility tree so it is not read twice.
+    ///
+    /// ```
+    /// use rune::{row, text};
+    /// use rune_kit::PopupItem;
+    ///
+    /// let _item = PopupItem::new("review", "/review")
+    ///     .label_with(row().child(text("/rev")).child(text("iew")));
+    /// ```
+    pub fn label_with(mut self, el: El) -> Self {
+        self.label_el = Some(el);
+        self
     }
     /// Secondary muted text shown after the label on the same row.
     pub fn description(mut self, text: impl Into<String>) -> Self {
@@ -189,11 +206,19 @@ impl PopupListCore {
                 item = item.child(leading.clone());
             }
             if let Some(desc) = option.description.as_deref().filter(|d| !d.is_empty()) {
+                let label = match &option.label_el {
+                    Some(el) => el.clone().shrink().a11y_hidden(),
+                    None => text(&option.label).font(k.ty.ui_compact).color(k.c.text_base).shrink().truncate().a11y_hidden(),
+                };
                 item = item
-                    .child(text(&option.label).font(k.ty.ui_compact).color(k.c.text_base).shrink().truncate().a11y_hidden())
+                    .child(label)
                     .child(text(desc).key("description").font(k.ty.ui_compact).color(k.c.text_weak).grow(1.0).shrink().truncate().a11y_hidden());
             } else {
-                item = item.child(text(&option.label).font(k.ty.ui_compact).color(k.c.text_base).grow(1.0).shrink().truncate().a11y_hidden());
+                let label = match &option.label_el {
+                    Some(el) => el.clone().grow(1.0).shrink().a11y_hidden(),
+                    None => text(&option.label).font(k.ty.ui_compact).color(k.c.text_base).grow(1.0).shrink().truncate().a11y_hidden(),
+                };
+                item = item.child(label);
             }
             if let Some(trailing) = &option.trailing {
                 item = item.child(trailing.clone());
@@ -325,6 +350,26 @@ impl<S: 'static> PopupList<S> {
     pub fn on_active(mut self, f: impl Fn(&mut S, usize) + 'static) -> Self { self.handlers.on_active = Some(Rc::new(f)); self }
     pub fn on_choose(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self { self.handlers.on_choose = Some(Rc::new(f)); self }
     pub fn on_close(mut self, f: impl Fn(&mut S) + 'static) -> Self { self.handlers.on_close = Some(Rc::new(f)); self }
+
+    /// Builds the scrollable listbox element without anchoring it into an overlay layer, so an
+    /// app can embed the list inside its own popover or panel (pass `""` for `anchor` when
+    /// unused). Respects [`Self::animate_filtering`] and does not check [`Self::open`].
+    ///
+    /// ```
+    /// use rune_kit::{Kit, PopupItem, PopupList};
+    ///
+    /// struct App;
+    /// let k = Kit::neutral(true);
+    /// let _el = PopupList::<App>::new("completions", "")
+    ///     .label("Completions")
+    ///     .items([PopupItem::new("open", "Open")])
+    ///     .build_list(&k);
+    /// ```
+    pub fn build_list(self, k: &Kit) -> El {
+        let instant = !self.core.animate_filtering;
+        let list = self.core.build_list(k, &self.handlers);
+        if instant { list.instant_changes() } else { list }
+    }
 
     pub fn build(self, k: &Kit, layer: &mut Vec<El>) {
         self.core.build(k, layer, &self.handlers);
