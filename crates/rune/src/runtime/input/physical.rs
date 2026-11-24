@@ -175,28 +175,21 @@ impl RuntimeCore {
                 ran
             }
             Some(Fallback { key, base, unhandled }) => {
-                if key.edit_command() == Some('v') && self.accepts_paste() {
-                    // Capture the target in event order, before another queued click can
-                    // change focus. An empty/image clipboard still consumes the command.
-                    self.edit.paste_request = Some(self.paste_target());
-                    false
-                } else {
-                    let mut one = Tx { physical_key: code, key_base: base, ..self.transaction(app) };
-                    let ran = self.route_key(app, &key, repeat, &mut one);
-                    // A held key repeats a menu item, as AppKit's own equivalents do, but closes once.
-                    let unhandled = unhandled.filter(|u| !ran && (!repeat || matches!(u, Unhandled::Menu(_))));
-                    let fell = unhandled.is_some();
-                    match unhandled {
-                        Some(Unhandled::Close) => one.close_window(),
-                        Some(Unhandled::Minimize) => one.minimize(),
-                        Some(Unhandled::Menu(run)) => run(),
-                        Some(Unhandled::WindowMenu) => self.request_window_menu(),
-                        None => {}
-                    }
-                    fold_live(&mut live, ran || fell, &one);
-                    merge(tx, one);
-                    ran || fell
+                let mut one = Tx { physical_key: code, key_base: base, ..self.transaction(app) };
+                let ran = self.route_key(app, &key, repeat, &mut one);
+                // A held key repeats a menu item, as AppKit's own equivalents do, but closes once.
+                let unhandled = unhandled.filter(|u| !ran && (!repeat || matches!(u, Unhandled::Menu(_))));
+                let fell = unhandled.is_some();
+                match unhandled {
+                    Some(Unhandled::Close) => one.close_window(),
+                    Some(Unhandled::Minimize) => one.minimize(),
+                    Some(Unhandled::Menu(run)) => run(),
+                    Some(Unhandled::WindowMenu) => self.request_window_menu(),
+                    None => {}
                 }
+                fold_live(&mut live, ran || fell, &one);
+                merge(tx, one);
+                ran || fell
             }
             None => false,
         };

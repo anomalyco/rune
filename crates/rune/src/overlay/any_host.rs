@@ -264,7 +264,7 @@ impl AnyHost for OverlayHost {
                     host_events::ime(app.rt_mut(), window, &mut core.ime, winit::event::Ime::Commit(text));
                     core.dirty = true;
                 } else {
-                    core.dirty |= app.keyboard(&core.clipboard, &event, core.mods);
+                    core.dirty |= app.keyboard(&event, core.mods);
                 }
             }
             WindowEvent::Ime(ime) if core.options.keys == KeyPolicy::OnDemand => {

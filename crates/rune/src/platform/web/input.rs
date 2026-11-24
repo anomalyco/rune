@@ -548,7 +548,7 @@ impl Running {
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
                 // Browsers expose no synchronous layout key_without_modifiers, so `Tx::key_base`
                 // stays `None` on web by design; physical US positions arrive in `physical_key`.
-                if !self.app.keyboard(&self.clipboard, event, self.input.mods) { return false; }
+                if !self.app.keyboard(event, self.input.mods) { return false; }
                 immediate = true;
                 // Any key that puts Rune's focus in a field (Tab, or a shortcut such as the
                 // prompt's) hands the page's own field the browser's focus, so a screen reader is

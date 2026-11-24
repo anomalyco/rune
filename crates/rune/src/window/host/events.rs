@@ -465,7 +465,7 @@ impl Host {
                     logical.as_ref().filter(|ev| ev.is_window_menu_chord() && chrome::has_window_menu(&l.window))
                         .map(|_| crate::runtime::Unhandled::WindowMenu)
                 });
-                if app.keyboard(&self.clipboard, &event, self.mods, unhandled) {
+                if app.keyboard(&event, self.mods, unhandled) {
                     l.request_redraw();
                 }
             }

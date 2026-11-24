@@ -163,6 +163,7 @@ impl<S: 'static> Runtime<S> {
     pub fn paste(&mut self, text: impl Into<String>) { self.core_mut().paste(text.into()); }
     #[inline(always)]
     pub fn paste_content(&mut self, content: crate::ClipboardContent) { self.core_mut().paste_content(content); }
+    #[cfg(test)]
     #[inline(always)]
     pub(crate) fn accepts_paste(&self) -> bool { self.core().accepts_paste() }
     #[cfg(test)]

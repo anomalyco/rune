@@ -701,3 +701,100 @@ fn secure_text_area_replaces_pristine_secret_on_first_edit() {
     rt.frame(0.0);
     assert_eq!(rt.state.text, "replacement-line-1\nreplacement-line-2\nreplacement-line-3");
 }
+
+#[test]
+fn text_area_on_key_intercepts_paste_and_edit_chords_before_editor() {
+    use rune::{Key, KeyEvent, Mods};
+    struct State {
+        edit: TextEdit,
+        consume: bool,
+        seen: Vec<Key>,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let k = Kit::neutral(false);
+        col().padding(12.0).child(
+            TextArea::new(&s.edit)
+                .label("Area")
+                .on_edit(|s: &mut State| &mut s.edit)
+                .on_key(|s: &mut State, key, _| {
+                    s.seen.push(key.key.clone());
+                    if s.consume {
+                        if matches!(key.key, Key::Command('v')) {
+                            s.edit.insert("[handled]");
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .build(&k)
+                .key("area"),
+        )
+    }
+
+    let clipboard = rune::clipboard::memory();
+    clipboard.set_text("clipboard");
+    let mut rt = Runtime::new(
+        State { edit: TextEdit::new(""), consume: true, seen: Vec::new() },
+        view,
+        (320.0, 200.0),
+        Env::new(false, 1.0),
+    );
+    rt.use_clipboard(&clipboard);
+    rt.frame(0.0);
+
+    let area = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("area")).unwrap();
+    rt.pointer_down(area.rect[0] + 16.0, area.rect[1] + 16.0);
+    rt.pointer_up(area.rect[0] + 16.0, area.rect[1] + 16.0);
+    rt.frame(0.0);
+
+    let primary = Mods { cmd: true, ctrl: !cfg!(target_os = "macos"), logo: cfg!(target_os = "macos"), ..Mods::default() };
+    let primary_shift = Mods { shift: true, ..primary };
+    let press = |rt: &mut Runtime<State>, key: Key, mods: Mods| {
+        rt.key(KeyEvent { key, mods });
+        rt.frame(0.0);
+        rt.frame(0.0);
+    };
+
+    // Consuming Command('v') in TextArea::on_key prevents clipboard paste.
+    press(&mut rt, Key::Command('v'), primary);
+    assert_eq!(rt.state.edit.text, "[handled]");
+
+    // Consuming select-all, copy, cut, undo, redo prevents editor handling.
+    let sel_before = (rt.state.edit.anchor, rt.state.edit.focus);
+    press(&mut rt, Key::Command('a'), primary);
+    assert_eq!((rt.state.edit.anchor, rt.state.edit.focus), sel_before);
+    press(&mut rt, Key::Command('c'), primary);
+    assert_eq!(clipboard.text().as_deref().map(String::as_str), Some("clipboard"));
+    press(&mut rt, Key::Command('x'), primary);
+    assert_eq!(rt.state.edit.text, "[handled]");
+    press(&mut rt, Key::Command('z'), primary);
+    assert_eq!(rt.state.edit.text, "[handled]");
+    press(&mut rt, Key::Command('z'), primary_shift);
+    assert_eq!(rt.state.edit.text, "[handled]");
+    if !cfg!(target_os = "macos") {
+        press(&mut rt, Key::Command('y'), primary);
+        assert_eq!(rt.state.edit.text, "[handled]");
+    }
+
+    // Declining in TextArea::on_key lets paste, select-all, copy, cut, undo and redo run normally.
+    rt.state.consume = false;
+    press(&mut rt, Key::Command('v'), primary);
+    assert_eq!(rt.state.edit.text, "[handled]clipboard");
+    press(&mut rt, Key::Command('a'), primary);
+    assert_eq!(rt.state.edit.selected(), "[handled]clipboard");
+    press(&mut rt, Key::Command('c'), primary);
+    assert_eq!(clipboard.text().as_deref().map(String::as_str), Some("[handled]clipboard"));
+    press(&mut rt, Key::Command('x'), primary);
+    assert_eq!(rt.state.edit.text, "");
+    press(&mut rt, Key::Command('z'), primary);
+    assert_eq!(rt.state.edit.text, "[handled]clipboard");
+    press(&mut rt, Key::Command('z'), primary_shift);
+    assert_eq!(rt.state.edit.text, "");
+    if !cfg!(target_os = "macos") {
+        press(&mut rt, Key::Command('z'), primary);
+        assert_eq!(rt.state.edit.text, "[handled]clipboard");
+        press(&mut rt, Key::Command('y'), primary);
+        assert_eq!(rt.state.edit.text, "");
+    }
+}

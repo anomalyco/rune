@@ -224,12 +224,11 @@ pub(crate) fn sync_modifiers(
     modifiers(rt, app, mods, next)
 }
 
-/// Translates a host-neutral key input into runtime physical/logical key calls, including
-/// clipboard paste read on non-physical fallback keys. Returns whether a redraw is needed.
+/// Translates a host-neutral key input into runtime physical/logical key calls. Returns whether a
+/// redraw is needed.
 pub(crate) fn keyboard_core(
     rt: &mut RuntimeCore,
     app: &mut dyn AppDriver,
-    clipboard: &crate::clipboard::Client,
     input: KeyInput,
 ) -> bool {
     if let Some(key) = input.physical {
@@ -244,9 +243,7 @@ pub(crate) fn keyboard_core(
         if !input.pressed {
             rt.key_up(app, ev)
         } else {
-            if ev.edit_command() == Some('v') && rt.accepts_paste() {
-                clipboard.read_core(rt);
-            } else if input.repeat {
+            if input.repeat {
                 rt.repeat_key(ev);
             } else {
                 rt.key(ev);
@@ -258,13 +255,11 @@ pub(crate) fn keyboard_core(
     }
 }
 
-/// Translates a non-synthetic winit `KeyboardInput` into runtime physical/logical key calls,
-/// including clipboard paste read on non-physical fallback keys. Returns whether a redraw is
-/// needed.
+/// Translates a non-synthetic winit `KeyboardInput` into runtime physical/logical key calls.
+/// Returns whether a redraw is needed.
 pub(crate) fn keyboard(
     rt: &mut RuntimeCore,
     app: &mut dyn AppDriver,
-    clipboard: &crate::clipboard::Client,
     event: &winit::event::KeyEvent,
     mods: ModifiersState,
     unhandled: Option<Unhandled>,
@@ -279,7 +274,6 @@ pub(crate) fn keyboard(
     keyboard_core(
         rt,
         app,
-        clipboard,
         KeyInput {
             physical,
             logical,

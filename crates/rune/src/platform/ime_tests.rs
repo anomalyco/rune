@@ -129,7 +129,6 @@ fn direct_commit_inserts_fullwidth_punctuation_into_focused_text_input() {
     rt.on_key = Some(|s, ev, _| { s.keys.push(ev.key.clone()); false });
     rt.frame(0.0);
 
-    let clipboard = crate::clipboard::Client::default();
     let mut dc = DirectCommit::new();
 
     // Simulate macOS Pinyin typing ',', '.', '?' without marked text: insertText: provides
@@ -146,7 +145,7 @@ fn direct_commit_inserts_fullwidth_punctuation_into_focused_text_input() {
             ime_core(rt.core_mut(), None, Ime::Commit(text));
         } else {
             let (core, mut app) = rt.split_mut();
-            keyboard_core(core, &mut app, &clipboard, KeyInput {
+            keyboard_core(core, &mut app, KeyInput {
                 physical: Some(phys),
                 logical: Some(KeyEvent { key: Key::Text(ascii.into()), mods: Mods::default() }),
                 base: ascii.chars().next(),
@@ -161,7 +160,7 @@ fn direct_commit_inserts_fullwidth_punctuation_into_focused_text_input() {
         // Matching keyUp arrives after keyDown:.
         {
             let (core, mut app) = rt.split_mut();
-            keyboard_core(core, &mut app, &clipboard, KeyInput {
+            keyboard_core(core, &mut app, KeyInput {
                 physical: Some(phys),
                 logical: Some(KeyEvent { key: Key::Text(ascii.into()), mods: Mods::default() }),
                 base: ascii.chars().next(),
@@ -181,7 +180,7 @@ fn direct_commit_inserts_fullwidth_punctuation_into_focused_text_input() {
     assert_eq!(dc.take(1), None);
     {
         let (core, mut app) = rt.split_mut();
-        keyboard_core(core, &mut app, &clipboard, KeyInput {
+        keyboard_core(core, &mut app, KeyInput {
             physical: Some(PhysicalKeyCode::KeyA),
             logical: Some(KeyEvent { key: Key::Text("a".into()), mods: Mods::default() }),
             base: Some('a'),
@@ -195,7 +194,7 @@ fn direct_commit_inserts_fullwidth_punctuation_into_focused_text_input() {
     rt.frame(0.0);
     {
         let (core, mut app) = rt.split_mut();
-        keyboard_core(core, &mut app, &clipboard, KeyInput {
+        keyboard_core(core, &mut app, KeyInput {
             physical: Some(PhysicalKeyCode::KeyA),
             logical: Some(KeyEvent { key: Key::Text("a".into()), mods: Mods::default() }),
             base: Some('a'),
@@ -216,7 +215,7 @@ fn direct_commit_inserts_fullwidth_punctuation_into_focused_text_input() {
     {
         let cmd_mods = Mods { cmd: true, ..Mods::default() };
         let (core, mut app) = rt.split_mut();
-        keyboard_core(core, &mut app, &clipboard, KeyInput {
+        keyboard_core(core, &mut app, KeyInput {
             physical: Some(PhysicalKeyCode::KeyK),
             logical: Some(KeyEvent { key: Key::Command('k'), mods: cmd_mods }),
             base: Some('k'),
