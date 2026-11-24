@@ -743,6 +743,30 @@ fn a_live_only_event_while_hovering_scrolling_or_selecting_builds_nothing_new() 
     }
 }
 
+#[test]
+fn parsed_empty_file_shows_empty_file_note() {
+    let patch = concat!(
+        "diff --git a/empty.txt b/empty.txt\n",
+        "new file mode 100644\n",
+        "index 0000000..e69de29\n",
+        "diff --git a/gone.txt b/gone.txt\n",
+        "deleted file mode 100644\n",
+        "index e69de29..0000000\n",
+        "diff --git a/run.sh b/run.sh\n",
+        "old mode 100644\n",
+        "new mode 100755\n",
+    );
+    let rt = runtime(DiffState::new(parse(patch)), (800.0, 600.0));
+    let note_label = |key: &str| {
+        let e = find(&rt, key);
+        assert_eq!(e.role, "note");
+        e.label.unwrap_or_default()
+    };
+    assert_eq!(note_label("df0.note"), "Empty file", "new empty file from patch");
+    assert_eq!(note_label("df1.note"), "Empty file", "deleted empty file from patch");
+    assert_eq!(note_label("df2.note"), "File mode changed", "mode-only change from patch");
+}
+
 /// `cargo test -p rune-kit --profile perf --test integration diff::diff_50k_time -- --ignored --nocapture`
 #[test]
 #[ignore]

@@ -1,0 +1,1 @@
+- `DiffView`: show "Empty file" instead of "File mode changed" for parsed patches of newly added or deleted empty files whose `new file mode` or `deleted file mode` leaves one mode unset.
