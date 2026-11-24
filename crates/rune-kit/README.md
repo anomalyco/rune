@@ -192,6 +192,15 @@ and `always_visible()` to keep a bar visible whenever content overflows regardle
 system scroll bar preference. The gallery's `rune-scroll-bar--basic`, `rune-scroll-bar--grow`
 and `rune-scroll-bar--styled` scenes show them.
 
+`Placement` covers all 12 Floating UI placements (`Top`/`Bottom`/`Left`/`Right` plus `*Start`
+and `*End`). `HoverCard` accepts `.gutter(f32)` (default 4 pt), `.min_width(f32)` (default 200),
+`.max_width(f32)` (default 320), `.width(f32)` (fixed width overriding min/max), `.on_hover` /
+`.on_hover_tx` on the open card surface (including descendants, so moving onto the card keeps it
+open), and `.role` / `.label` for accessibility (see `rune-hover-card--placements` in the
+gallery). `scrim_tx`, `Popover::on_close_tx`, `Select::on_toggle_tx`, and `Select::on_close_tx`
+pass `&mut Tx` to overlay toggle and close callbacks so focus, scroll or announcements run in the
+same commit (see `rune-overlays--tx-callbacks`).
+
 ### Accessibility
 
 Every component reports what a screen reader needs through Rune's accessibility tree (Rune's
@@ -200,8 +209,9 @@ assistive technology runs through the same handlers as pointer and keys.
 
 - **Names**: a control's label, else the text it shows. Give every `IconButton` a `.label` (or
   a `.help`, which names it when unlabelled). `Select`, `Combobox`, `SegmentedControl`,
-  `TextInput`, `TextArea`, `ShortcutRecorder`, `ProgressCircle` and `Popover` take `.label` for
-  the name when no visible label says it; a text field falls back to its placeholder.
+  `TextInput`, `TextArea`, `ShortcutRecorder`, `ProgressCircle`, `Popover` and `HoverCard` take
+  `.label` (and `HoverCard` also `.role`) for the name when no visible label says it; a text
+  field falls back to its placeholder.
   `Combobox::search_label` names its internal search field, `Dialog::close_label` names its
   header close button, and `Dialog::close_disabled` keeps that button visibly disabled while
   blocking button press, Escape and outside clicks.

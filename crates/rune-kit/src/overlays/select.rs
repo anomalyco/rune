@@ -8,7 +8,7 @@
 
 use rune::{El, Icon, TextStyle, Tx, col, el, icon, row, text};
 
-use super::overlay::{Modal, Placement, content_key, dismissal, push_anchored_modal, scrim_key, trigger_key};
+use super::overlay::{Modal, Placement, content_key, dismissal, dismissal_tx, push_anchored_modal, scrim_key, trigger_key};
 use super::popover::fit_scroll_bar;
 use crate::{Kit, State, over};
 
@@ -134,9 +134,43 @@ impl Select {
         self.toggle = Some(Box::new(move |e: El| e.on_press(f)));
         self
     }
+    /// [`Self::on_toggle`] whose callback receives the change's [`Tx`], so opening or closing
+    /// can focus, scroll, or announce in the same commit.
+    ///
+    /// ```
+    /// use rune::Tx;
+    /// use rune_kit::Select;
+    ///
+    /// struct App { open: bool }
+    /// let _select = Select::new("fruit", &["Apple", "Pear"]).on_toggle_tx(|s: &mut App, tx: &mut Tx| {
+    ///     s.open = !s.open;
+    ///     tx.instant();
+    /// });
+    /// ```
+    pub fn on_toggle_tx<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
+        self.toggle = Some(Box::new(move |e: El| e.on_press_tx(f)));
+        self
+    }
     /// Presses outside and Escape close the listbox. While open it holds keyboard focus.
     pub fn on_close<S: 'static>(mut self, f: impl Fn(&mut S) + 'static) -> Self {
         self.dismiss = Some(dismissal(scrim_key(&self.key), f));
+        self
+    }
+    /// [`Self::on_close`] whose callback receives the change's [`Tx`], so closing on an outside
+    /// press or Escape can focus, scroll, or announce in the same commit.
+    ///
+    /// ```
+    /// use rune::Tx;
+    /// use rune_kit::Select;
+    ///
+    /// struct App { open: bool }
+    /// let _select = Select::new("fruit", &["Apple", "Pear"]).on_close_tx(|s: &mut App, tx: &mut Tx| {
+    ///     s.open = false;
+    ///     tx.focus("after", true);
+    /// });
+    /// ```
+    pub fn on_close_tx<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
+        self.dismiss = Some(dismissal_tx(scrim_key(&self.key), f));
         self
     }
     /// Choosing an option: `f(state, option)`.

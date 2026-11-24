@@ -20,6 +20,22 @@ fn flips_left_near_the_right_edge() {
 }
 
 #[test]
+fn left_start_left_end_and_right_end_align_and_flip() {
+    let trigger = [180.0, 120.0, 220.0, 150.0];
+    assert_eq!(anchor_rect(trigger, (80.0, 50.0), Placement::LeftStart, 4.0, WIN), [96.0, 120.0, 176.0, 170.0]);
+    assert_eq!(anchor_rect(trigger, (80.0, 50.0), Placement::LeftEnd, 4.0, WIN), [96.0, 100.0, 176.0, 150.0]);
+    assert_eq!(anchor_rect(trigger, (80.0, 50.0), Placement::RightEnd, 4.0, WIN), [224.0, 100.0, 304.0, 150.0]);
+
+    // Near the left edge, LeftStart flips right while keeping top alignment.
+    let flipped = anchor_rect([20.0, 120.0, 60.0, 150.0], (80.0, 50.0), Placement::LeftStart, 4.0, WIN);
+    assert_eq!(flipped, [64.0, 120.0, 144.0, 170.0]);
+
+    // Near the top edge, RightEnd flips vertical alignment to Start so it stays inside the window.
+    let flipped_y = anchor_rect([40.0, 12.0, 80.0, 32.0], (80.0, 50.0), Placement::RightEnd, 4.0, WIN);
+    assert_eq!(flipped_y, [84.0, 12.0, 164.0, 62.0]);
+}
+
+#[test]
 fn clamps_inside_the_window() {
     // End-aligned under a trigger at the left edge would hang off the left; it flips to start.
     let r = anchor_rect([10.0, 20.0, 30.0, 40.0], (100.0, 40.0), Placement::BottomEnd, 4.0, WIN);
