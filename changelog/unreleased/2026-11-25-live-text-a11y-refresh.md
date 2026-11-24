@@ -1,0 +1,1 @@
+- Accessibility (`LiveText`): in-place `LiveText` updates now advance a generation counter in `latch_live` read by the native AccessKit stamp and the web accessibility mirror (`web_a11y_needs_sync`, `web_a11y_patch`, `web_a11y`, and `web_a11y_focus`), refreshing updated text, live regions, and content-named controls without a view rebuild or idle-frame work.

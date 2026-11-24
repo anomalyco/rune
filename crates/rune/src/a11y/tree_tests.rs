@@ -581,3 +581,97 @@ fn flat_tree_levelled_items_carry_their_own_level_set_size_and_stay_flat() {
     assert_eq!(mirror.by_key("grow").unwrap().1.size_of_set(), Some(4));
     assert_eq!(mirror.by_key("apple").unwrap().1.size_of_set(), Some(5));
 }
+
+#[test]
+fn live_text_updates_a11y_tree_without_commit_and_only_announces_live_regions() {
+    struct State {
+        clock: crate::LiveText,
+        status: crate::LiveText,
+        count: crate::LiveText,
+        cased: crate::LiveText,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        col().size(400.0, 300.0)
+            .child(text("00:00").key("clock").live_text(&s.clock))
+            .child(
+                col().key("live-box").live_region(LiveRegion::Polite).size(300.0, 30.0)
+                    .child(text("idle").key("status").live_text(&s.status)),
+            )
+            .child(
+                row().key("tab").role("tab").focusable(true).size(120.0, 30.0)
+                    .on_press(|_: &mut State| {})
+                    .child(text("0").key("count").live_text(&s.count)),
+            )
+            .child(text("abc").key("cased").text_case(crate::TextCase::Uppercase).live_text(&s.cased))
+    }
+
+    let clock = crate::LiveText::new("00:00");
+    let status = crate::LiveText::new("idle");
+    let count = crate::LiveText::new("0");
+    let cased = crate::LiveText::new("abc");
+    let mut rt = Runtime::new(
+        State { clock: clock.clone(), status: status.clone(), count: count.clone(), cased: cased.clone() },
+        view,
+        (400.0, 300.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+
+    let mut link = AccessibilityLink::new();
+    link.activate();
+    let mut mirror = AdapterMirror::default();
+    mirror.init(link.service(&mut rt, "Window").expect("initial tree"));
+    assert_eq!(mirror.by_key("clock").unwrap().1.value(), Some("00:00"));
+    assert_eq!(mirror.by_key("status").unwrap().1.value(), Some("idle"));
+    assert_eq!(mirror.by_key("tab").unwrap().1.label(), Some("0"));
+    assert_eq!(mirror.by_key("cased").unwrap().1.value(), Some("abc"));
+
+    let commits = rt.stats.commits;
+
+    // A plain LiveText changing every frame refreshes the tree without a commit and never announces.
+    for tick in 1..=5 {
+        let next = format!("00:0{tick}");
+        clock.set(next.as_str());
+        rt.frame(tick as f64 / 60.0);
+        assert_eq!(rt.stats.commits, commits, "LiveText::set must not commit");
+        let update = link.service(&mut rt, "Window").expect("LiveText update must refresh a11y tree");
+        assert!(!rt.core().a11y_changes().structure && !rt.core().a11y_changes().moved);
+        let heard = mirror.apply(update);
+        assert!(heard.is_empty(), "plain LiveText must not announce: {heard:?}");
+        assert_eq!(mirror.by_key("clock").unwrap().1.value(), Some(next.as_str()));
+    }
+
+    // Idle frame and equal LiveText::set produce no update.
+    rt.frame(6.0 / 60.0);
+    assert!(link.service(&mut rt, "Window").is_none(), "idle frame after LiveText must return None");
+    assert!(!clock.set("00:05"));
+    rt.frame(7.0 / 60.0);
+    assert!(link.service(&mut rt, "Window").is_none(), "equal LiveText::set must return None");
+
+    // LiveText inside a LiveRegion::Polite container refreshes and announces once.
+    status.set("working for 12s");
+    rt.frame(8.0 / 60.0);
+    assert_eq!(rt.stats.commits, commits, "live-region LiveText must not commit");
+    let update = link.service(&mut rt, "Window").expect("live-region LiveText must emit update");
+    let heard = mirror.apply(update);
+    assert_eq!(heard, vec![("working for 12s".into(), Live::Polite)]);
+    assert_eq!(mirror.by_key("status").unwrap().1.value(), Some("working for 12s"));
+    rt.frame(9.0 / 60.0);
+    assert!(link.service(&mut rt, "Window").is_none(), "idle frame after live-region update returns None");
+
+    // A control named from a child LiveText refreshes its label without a commit.
+    count.set("42");
+    rt.frame(10.0 / 60.0);
+    assert_eq!(rt.stats.commits, commits);
+    let update = link.service(&mut rt, "Window").expect("tab label LiveText must emit update");
+    assert!(mirror.apply(update).is_empty());
+    assert_eq!(mirror.by_key("tab").unwrap().1.label(), Some("42"));
+
+    // Changing only source casing under TextCase::Uppercase still updates source_text in the tree.
+    cased.set("ABC");
+    rt.frame(11.0 / 60.0);
+    assert_eq!(rt.stats.commits, commits);
+    let update = link.service(&mut rt, "Window").expect("cased LiveText must emit update");
+    assert!(mirror.apply(update).is_empty());
+    assert_eq!(mirror.by_key("cased").unwrap().1.value(), Some("ABC"));
+}

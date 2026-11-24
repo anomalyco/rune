@@ -26,6 +26,7 @@ struct FrameStamp {
 pub(crate) struct A11yMirror {
     commits: u64,
     non_virtual_commits: u64,
+    live_text_gen: u64,
     viewport: (u32, u32),
     zoom: u32,
     scroll_digest: u64,
@@ -38,8 +39,8 @@ pub(crate) struct A11yMirror {
     json: String,
     patch: patch::PatchState,
     patch_json: String,
-    /// The focus proxy last sent (`web_a11y_focus`), and the commit and focus it was read at.
-    focus_at: (u64, String, Option<usize>),
+    /// The focus proxy last sent (`web_a11y_focus`), and the commit, live-text generation and focus it was read at.
+    focus_at: (u64, u64, String, Option<usize>),
     focus_json: String,
 }
 
@@ -850,8 +851,8 @@ impl RuntimeCore {
         (self.viewport.0.to_bits(), if self.host.page.is_some() { 0 } else { self.viewport.1.to_bits() })
     }
 
-    /// Cheap O(1) stamp check: true when the mirror has not been built yet or commits, viewport,
-    /// zoom, scroll offsets, or motion moved since the last build.
+    /// Cheap O(1) stamp check: true when the mirror has not been built yet or commits, live text,
+    /// viewport, zoom, scroll offsets, or motion moved since the last build.
     pub(crate) fn web_a11y_needs_sync(&self, mirror: &A11yMirror) -> bool {
         if !mirror.built { return true; }
         let vp = self.mirror_viewport();
@@ -859,7 +860,12 @@ impl RuntimeCore {
         let sd = self.scroll_digest();
         let moving = self.animating;
         let follow = moving != mirror.moving || (moving && self.clock - mirror.built_at >= MOVING_EVERY);
-        mirror.commits != self.commit.commits || mirror.viewport != vp || mirror.zoom != zoom || mirror.scroll_digest != sd || follow
+        mirror.commits != self.commit.commits
+            || mirror.live_text_gen != self.frame.live_text_gen
+            || mirror.viewport != vp
+            || mirror.zoom != zoom
+            || mirror.scroll_digest != sd
+            || follow
     }
 
     /// Whether any scroll viewport has ongoing scroll motion right now (active touch scroll,
@@ -946,6 +952,7 @@ impl RuntimeCore {
         mirror.built_at = self.clock;
         mirror.commits = self.commit.commits;
         mirror.non_virtual_commits = self.commit.non_virtual_commits;
+        mirror.live_text_gen = self.frame.live_text_gen;
         mirror.viewport = self.mirror_viewport();
         mirror.zoom = self.zoom().to_bits();
         mirror.scroll_digest = sd;
@@ -970,13 +977,14 @@ impl RuntimeCore {
         // Motion moves drawn boxes without a commit: follow it while it runs, and once more where it stops.
         let moving = self.animating;
         let follow = moving != mirror.moving || (moving && self.clock - mirror.built_at >= MOVING_EVERY);
-        if mirror.commits == self.commit.commits && mirror.viewport == vp && mirror.zoom == zoom && mirror.scroll_digest == sd && !follow && !mirror.json.is_empty() {
+        if mirror.commits == self.commit.commits && mirror.live_text_gen == self.frame.live_text_gen && mirror.viewport == vp && mirror.zoom == zoom && mirror.scroll_digest == sd && !follow && !mirror.json.is_empty() {
             return None;
         }
         mirror.moving = moving;
         mirror.built_at = self.clock;
         mirror.commits = self.commit.commits;
         mirror.non_virtual_commits = self.commit.non_virtual_commits;
+        mirror.live_text_gen = self.frame.live_text_gen;
         mirror.viewport = vp;
         mirror.zoom = zoom;
         mirror.scroll_digest = sd;
@@ -996,7 +1004,7 @@ impl RuntimeCore {
     /// element's ARIA role, name, description and states; empty when nothing has focus. `None`
     /// when unchanged since the last call.
     pub(crate) fn web_a11y_focus<'a>(&self, mirror: &'a mut A11yMirror) -> Option<&'a str> {
-        let at = (self.commit.commits, self.kbd.focus.path().unwrap_or_default().to_owned(), self.link_focus());
+        let at = (self.commit.commits, self.frame.live_text_gen, self.kbd.focus.path().unwrap_or_default().to_owned(), self.link_focus());
         if mirror.focus_at == at { return None; }
         mirror.focus_at = at;
         // A field naming a highlighted row (`El::active_descendant`, the palette's): the row is

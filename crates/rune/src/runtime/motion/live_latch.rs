@@ -265,8 +265,10 @@ impl timer_wake::FrameState {
     ) -> bool {
         if !self.live.latch_begin(pending, !self.live_subscriptions.is_empty()) { return false; }
         let mut active = false;
+        let mut text_changed = false;
         for node in nodes {
             let mut layout_text_in_place = false;
+            let mut node_text_changed = false;
             if let Some(spec) = &mut node.text
                 && let Some(live) = &spec.cold.live
             {
@@ -274,12 +276,16 @@ impl timer_wake::FrameState {
                 if let Some(live_text) = live.read(seen) && spec.source_text() != &*live_text {
                     spec.replace_content(live_text.to_string());
                     spec.apply_case();
+                    node_text_changed = true;
                     if !spec.wrap && !spec.truncate && spec.max_lines == 0 {
                         node.text_layout = Some(TextLayout::Single(text.layout_live(&spec.content, spec.style, scale)));
                     } else {
                         layout_text_in_place = true;
                     }
                 }
+            }
+            if node_text_changed && !node.is_secure() && scene.contains(node.id) {
+                text_changed = true;
             }
             if layout_text_in_place {
                 super::super::commit::relayout::lay_out_live_text_in_place(text, node, scale);
@@ -398,6 +404,9 @@ impl timer_wake::FrameState {
                     }
                 }
             }
+        }
+        if text_changed {
+            self.live_text_gen = self.live_text_gen.wrapping_add(1);
         }
         self.live.latch_end(active)
     }

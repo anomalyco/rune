@@ -466,3 +466,127 @@ fn plain_controls_omit_disabled_busy_and_range_keys() {
         assert_eq!(item.get("vt"), None);
     }
 }
+
+#[test]
+fn live_text_updates_web_a11y_patch_snapshot_focus_and_schedule_without_commit() {
+    struct State {
+        clock: crate::LiveText,
+        status: crate::LiveText,
+        count: crate::LiveText,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        col().size(320.0, 200.0)
+            .child(text("00:00").key("clock").live_text(&s.clock))
+            .child(
+                col().key("live-box").live_region(crate::LiveRegion::Polite).size(240.0, 30.0)
+                    .child(text("idle").key("status").live_text(&s.status)),
+            )
+            .child(
+                row().key("btn").role("button").focusable(true).size(120.0, 30.0)
+                    .on_press(|_: &mut State| {})
+                    .child(text("0").key("count").live_text(&s.count)),
+            )
+    }
+
+    let clock = crate::LiveText::new("00:00");
+    let status = crate::LiveText::new("idle");
+    let count = crate::LiveText::new("0");
+    let mut rt = Runtime::new(
+        State { clock: clock.clone(), status: status.clone(), count: count.clone() },
+        view,
+        (320.0, 200.0),
+        Env::new(false, 1.0),
+    );
+    rt.update(|_, tx| tx.focus("btn", true));
+    rt.frame(0.0);
+
+    let mut patch_mirror = A11yMirror::default();
+    let mut snap_mirror = A11yMirror::default();
+    let _ = rt.core().web_a11y_patch(&mut patch_mirror).expect("initial patch");
+    let _ = rt.core().web_a11y(&mut snap_mirror).expect("initial snapshot");
+    let f0: Value = serde_json::from_str(rt.core().web_a11y_focus(&mut patch_mirror).expect("initial focus")).unwrap();
+    assert_eq!(f0["t"], json!("0"));
+    assert!(rt.core().web_a11y_patch(&mut patch_mirror).is_none());
+    assert!(rt.core().web_a11y(&mut snap_mirror).is_none());
+    assert!(rt.core().web_a11y_focus(&mut patch_mirror).is_none());
+
+    let commits = rt.stats.commits;
+
+    // Updating plain LiveText marks the mirror dirty and emits a compact patch without a commit.
+    clock.set("00:01");
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.stats.commits, commits, "LiveText::set must not commit");
+    let ev = rt.core().web_a11y_frame_event(&mut patch_mirror, crate::time::now(), false);
+    assert!(
+        matches!(ev, crate::runtime::web_a11y::schedule::ScheduleEvent::Frame { dirty: true, scrolling: false, .. }),
+        "expected dirty frame event after LiveText change, got {ev:?}",
+    );
+    let patch: Value = serde_json::from_str(rt.core().web_a11y_patch(&mut patch_mirror).expect("clock patch")).unwrap();
+    let upserts = patch["u"].as_array().expect("upserts");
+    let clock_upsert = upserts.iter().find(|v| v["p"].as_str().is_some_and(|p| p.ends_with("/clock")))
+        .unwrap_or_else(|| panic!("missing clock upsert: {patch}"));
+    assert_eq!(clock_upsert["t"], json!("00:01"));
+    assert_eq!(clock_upsert.get("lv"), None, "plain LiveText must carry no aria-live");
+
+    let snap: Vec<Value> = serde_json::from_str(rt.core().web_a11y(&mut snap_mirror).expect("clock snapshot")).unwrap();
+    assert_eq!(find_key(&snap, "clock")["t"], json!("00:01"));
+    assert!(rt.core().web_a11y_focus(&mut patch_mirror).is_none(), "unrelated LiveText must not re-emit focus proxy");
+
+    // Idle frame emits nothing.
+    rt.frame(2.0 / 60.0);
+    assert!(rt.core().web_a11y_patch(&mut patch_mirror).is_none());
+    assert!(rt.core().web_a11y(&mut snap_mirror).is_none());
+    let idle_ev = rt.core().web_a11y_frame_event(&mut patch_mirror, crate::time::now(), false);
+    assert!(
+        matches!(idle_ev, crate::runtime::web_a11y::schedule::ScheduleEvent::Frame { dirty: false, .. }),
+        "idle frame must not be dirty: {idle_ev:?}",
+    );
+
+    // LiveText inside a LiveRegion::Polite container patches in place.
+    status.set("working for 12s");
+    rt.frame(3.0 / 60.0);
+    assert_eq!(rt.stats.commits, commits);
+    let patch: Value = serde_json::from_str(rt.core().web_a11y_patch(&mut patch_mirror).expect("status patch")).unwrap();
+    let upserts = patch["u"].as_array().expect("status upserts");
+    let status_upsert = upserts.iter().find(|v| v["p"].as_str().is_some_and(|p| p.ends_with("/status")))
+        .unwrap_or_else(|| panic!("missing status upsert: {patch}"));
+    assert_eq!(status_upsert["t"], json!("working for 12s"));
+
+    // Focused button whose label comes from a child LiveText updates both the mirror and focus proxy.
+    count.set("42");
+    rt.frame(4.0 / 60.0);
+    assert_eq!(rt.stats.commits, commits);
+    let patch: Value = serde_json::from_str(rt.core().web_a11y_patch(&mut patch_mirror).expect("btn patch")).unwrap();
+    let upserts = patch["u"].as_array().expect("btn upserts");
+    let btn_upsert = upserts.iter().find(|v| v["p"].as_str().is_some_and(|p| p.ends_with("/btn")))
+        .unwrap_or_else(|| panic!("missing btn upsert: {patch}"));
+    assert_eq!(btn_upsert["t"], json!("42"));
+    let f1: Value = serde_json::from_str(rt.core().web_a11y_focus(&mut patch_mirror).expect("focus proxy update")).unwrap();
+    assert_eq!(f1["t"], json!("42"));
+
+    // Per-frame LiveText ticks in app mode coalesce into one off-rAF idle flush without timer churn.
+    let mut seq = crate::machine::Seq::default();
+    let mut sched = crate::runtime::web_a11y::schedule::ScheduleState::default();
+    let t0 = crate::time::now();
+    clock.set("00:02");
+    rt.frame(5.0 / 60.0);
+    let ev1 = rt.core().web_a11y_frame_event(&mut patch_mirror, t0, false);
+    let eff1: Vec<_> = crate::runtime::web_a11y::schedule::step(&mut seq, &mut sched, ev1).into_iter().collect();
+    assert_eq!(eff1.len(), 1);
+    let crate::runtime::web_a11y::schedule::ScheduleEffect::ScheduleIdle { attempt, .. } = eff1[0] else {
+        panic!("expected ScheduleIdle, got {eff1:?}");
+    };
+    clock.set("00:03");
+    rt.frame(6.0 / 60.0);
+    let ev2 = rt.core().web_a11y_frame_event(&mut patch_mirror, t0 + std::time::Duration::from_millis(16), false);
+    let eff2: Vec<_> = crate::runtime::web_a11y::schedule::step(&mut seq, &mut sched, ev2).into_iter().collect();
+    assert!(eff2.is_empty(), "subsequent LiveText ticks while IdlePending must coalesce: {eff2:?}");
+    let idle_ev = rt.core().web_a11y_idle_event(attempt, t0 + std::time::Duration::from_millis(20));
+    let eff3: Vec<_> = crate::runtime::web_a11y::schedule::step(&mut seq, &mut sched, idle_ev).into_iter().collect();
+    assert_eq!(eff3, vec![crate::runtime::web_a11y::schedule::ScheduleEffect::FlushNow]);
+    let coalesced: Value = serde_json::from_str(rt.core().web_a11y_patch(&mut patch_mirror).expect("coalesced patch")).unwrap();
+    let coalesced_clock = coalesced["u"].as_array().unwrap().iter()
+        .find(|v| v["p"].as_str().is_some_and(|p| p.ends_with("/clock")))
+        .unwrap_or_else(|| panic!("missing coalesced clock upsert: {coalesced}"));
+    assert_eq!(coalesced_clock["t"], json!("00:03"));
+}
