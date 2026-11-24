@@ -13,12 +13,14 @@ use objc2_foundation::NSRange;
 use objc2_foundation::NSString;
 #[cfg(debug_assertions)]
 use objc2_metal::MTLResource;
-use objc2_metal::{MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLDevice, MTLEvent, MTLOrigin, MTLRegion, MTLResourceOptions, MTLSize, MTLTexture};
+use objc2_metal::{MTLBlitCommandEncoder, MTLBuffer, MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLDevice, MTLEvent, MTLLoadAction, MTLOrigin, MTLRegion, MTLRenderPassDescriptor, MTLResourceOptions, MTLSize, MTLStoreAction, MTLTexture};
+use rune_core::machine::Effects;
 use objc2::rc::autoreleasepool;
 use objc2::runtime::ProtocolObject;
 use parking_lot::Mutex;
 use wgpu::custom::*;
 
+use crate::lazy_init::{Effect, Event, SubresourceRange};
 use super::compute::MetalComputePass;
 use super::pass::MetalPass;
 use super::query::QuerySet;
@@ -142,6 +144,8 @@ impl Rec {
     fn keep(&mut self, items: impl IntoIterator<Item = Arc<dyn Any + Send + Sync>>) { self.keep.extend(items); }
 
     pub(super) fn shared(&self) -> &Shared { &self.shared }
+
+    pub(super) fn shared_arc(&self) -> Arc<Shared> { self.shared.clone() }
 }
 
 impl Drop for Rec {
@@ -356,6 +360,50 @@ pub(super) fn replace_texture(
     }
 }
 
+/// Whether a 2D copy at `(at, size)` covers every texel of mip `mip` of `texture`.
+pub(super) fn is_full_mip(texture: &TextureRaw, mip: u32, at: wgpu::Origin3d, size: wgpu::Extent3d) -> bool {
+    let w = (texture.raw.width() >> mip).max(1) as u32;
+    let h = (texture.raw.height() >> mip).max(1) as u32;
+    at.x == 0 && at.y == 0 && size.width >= w && size.height >= h
+}
+
+fn copy_range(mip: u32, at: wgpu::Origin3d, size: wgpu::Extent3d) -> SubresourceRange {
+    SubresourceRange { base_mip: mip, mips: 1, base_layer: at.z, layers: size.depth_or_array_layers }
+}
+
+/// Clears one `(mip, layer)` of a Private color-renderable texture to zero via a clear-only
+/// render pass, opening no blit encoder.
+pub(super) fn clear_subresource(cb: &ProtocolObject<dyn MTLCommandBuffer>, texture: &TextureRaw, mip: u32, layer: u32) {
+    let d = MTLRenderPassDescriptor::new();
+    // SAFETY: color attachment 0 always exists on a newly created render pass descriptor.
+    let color = unsafe { d.colorAttachments().objectAtIndexedSubscript(0) };
+    color.setTexture(Some(&texture.raw));
+    // SAFETY: `mip` and `layer` are within `texture`'s subresource bounds.
+    unsafe {
+        color.setLevel(mip as usize);
+        color.setSlice(layer as usize);
+    }
+    color.setLoadAction(MTLLoadAction::Clear);
+    color.setClearColor(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0 });
+    color.setStoreAction(MTLStoreAction::Store);
+    let pass = autoreleasepool(|_| cb.renderCommandEncoderWithDescriptor(&d)).expect("a Metal clear render encoder");
+    #[cfg(debug_assertions)]
+    pass.setLabel(Some(&NSString::from_str("rune metal lazy clear")));
+    pass.endEncoding();
+}
+
+/// Executes any lazy-clear effects for `texture` directly on `rec.pass_buffer()` before a copy.
+fn clear_on_encoder(rec: &mut Rec, texture: &Arc<TextureRaw>, effects: Effects<Effect>) {
+    if effects.is_empty() { return }
+    let cb = rec.pass_buffer();
+    for effect in effects {
+        if let Effect::ClearSubresource(sub) = effect {
+            clear_subresource(cb, texture, sub.mip, sub.layer);
+        }
+    }
+    rec.keep.push(texture.clone());
+}
+
 pub(super) fn buffer_to_texture(blit: &ProtocolObject<dyn MTLBlitCommandEncoder>, buffer: &ProtocolObject<dyn MTLBuffer>,
     layout: wgpu::TexelCopyBufferLayout, texture: &TextureRaw, mip: u32, at: wgpu::Origin3d, size: wgpu::Extent3d) {
     let (row, image) = strides(texture.format, layout, size);
@@ -407,6 +455,15 @@ impl CommandEncoderInterface for MetalEncoder {
         let mut rec = self.rec.lock();
         rec.cb();
         let (src, dst) = (source.buffer.as_custom::<MetalBuffer>().expect("a Metal buffer").raw(), texture(&destination));
+        if let Some(lazy) = &dst.lazy_init && lazy.has_uninit() {
+            let range = copy_range(destination.mip_level, destination.origin, size);
+            let event = if is_full_mip(&dst, destination.mip_level, destination.origin, size) {
+                Event::WriteFull(range)
+            } else {
+                Event::WritePartial(range)
+            };
+            clear_on_encoder(&mut rec, &dst, lazy.step(event));
+        }
         buffer_to_texture(rec.blit(), &src.raw, source.layout, &dst, destination.mip_level, destination.origin, size);
         rec.drawable |= dst.drawable;
         if let Some(uses) = &dst.uses { rec.keep.use_texture(uses); }
@@ -416,6 +473,10 @@ impl CommandEncoderInterface for MetalEncoder {
         if size.width == 0 || size.height == 0 || size.depth_or_array_layers == 0 { return }
         let (src, dst) = (texture(&source), destination.buffer.as_custom::<MetalBuffer>().expect("a Metal buffer").store.gpu_write());
         let mut rec = self.rec.lock();
+        if let Some(lazy) = &src.lazy_init && lazy.has_uninit() {
+            let effects = lazy.step(Event::Read(copy_range(source.mip_level, source.origin, size)));
+            clear_on_encoder(&mut rec, &src, effects);
+        }
         texture_to_buffer(rec.blit(), &src, source.mip_level, source.origin, &dst.raw, destination.layout, size);
         if let Some(uses) = &src.uses { rec.keep.use_texture(uses); }
         rec.keep([src as _, dst as _]);
@@ -424,6 +485,19 @@ impl CommandEncoderInterface for MetalEncoder {
         if size.width == 0 || size.height == 0 || size.depth_or_array_layers == 0 { return }
         let (src, dst) = (texture(&source), texture(&destination));
         let mut rec = self.rec.lock();
+        if let Some(lazy) = &src.lazy_init && lazy.has_uninit() {
+            let effects = lazy.step(Event::Read(copy_range(source.mip_level, source.origin, size)));
+            clear_on_encoder(&mut rec, &src, effects);
+        }
+        if let Some(lazy) = &dst.lazy_init && lazy.has_uninit() {
+            let range = copy_range(destination.mip_level, destination.origin, size);
+            let event = if is_full_mip(&dst, destination.mip_level, destination.origin, size) {
+                Event::WriteFull(range)
+            } else {
+                Event::WritePartial(range)
+            };
+            clear_on_encoder(&mut rec, &dst, lazy.step(event));
+        }
         let blit = rec.blit();
         for ((from_slice, from_z, depth, _), (to_slice, to_z, _, _)) in layers(&src, source.origin, size).zip(layers(&dst, destination.origin, size)) {
             // SAFETY: wgpu validated both regions.

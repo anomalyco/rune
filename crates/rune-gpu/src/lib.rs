@@ -8,6 +8,8 @@ pub mod backend;
 pub mod configure;
 pub mod fallback;
 pub mod health;
+#[cfg(any(test, all(target_vendor = "apple", feature = "metal-backend")))]
+mod lazy_init;
 #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
 pub mod metal;
 #[cfg(all(test, not(target_arch = "wasm32")))]

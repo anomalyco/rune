@@ -11,7 +11,8 @@ use objc2_metal::{MTLSamplerState, MTLTexture};
 use wgpu::custom::*;
 use wgpu::naga::{self, back::msl};
 
-use super::resource::{Live, MetalBuffer, MetalSampler, MetalView};
+use crate::lazy_init::SubresourceRange;
+use super::resource::{Live, MetalBuffer, MetalSampler, MetalView, TextureRaw};
 use super::store::Store;
 use super::{Obj, send_sync};
 
@@ -70,6 +71,8 @@ pub(crate) struct GroupRaw {
     pub(super) sizes: Vec<(u32, u32)>,
     /// In-flight usage counters of shared textures bound by this group.
     pub(super) texture_uses: Vec<Arc<AtomicUsize>>,
+    /// Lazy-cleared Private render-target views bound by this group (empty for Classic/image groups).
+    pub(super) lazy_views: Vec<(Arc<TextureRaw>, SubresourceRange)>,
     /// Owners of the textures it binds that this backend didn't make.
     #[allow(dead_code, reason = "held, never read")]
     owners: Vec<super::Owner>,
@@ -207,6 +210,11 @@ impl BindGroup {
                         binds.textures.push((slot.texture.unwrap(), view.raw.clone()));
                         if let Some(uses) = &view.uses && !group.texture_uses.iter().any(|u| Arc::ptr_eq(u, uses)) {
                             group.texture_uses.push(uses.clone());
+                        }
+                        if let Some(tex) = &view.texture
+                            && !group.lazy_views.iter().any(|(t, r)| Arc::ptr_eq(t, tex) && *r == view.range)
+                        {
+                            group.lazy_views.push((tex.clone(), view.range));
                         }
                         group.owners.extend(view.owner.clone());
                     }

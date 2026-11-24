@@ -17,8 +17,11 @@ use objc2::runtime::ProtocolObject;
 use parking_lot::MutexGuard;
 use wgpu::custom::*;
 
-use super::encode::{MetalCommandBuffer, buffer_to_texture, replace_texture};
-use super::resource::{BufferRaw, MetalBuffer, MetalTexture};
+use rune_core::machine::Effects;
+
+use crate::lazy_init::{Effect, Event, SubresourceRange};
+use super::encode::{MetalCommandBuffer, buffer_to_texture, clear_subresource, is_full_mip, replace_texture};
+use super::resource::{BufferRaw, MetalBuffer, MetalTexture, TextureRaw};
 use super::surface::MetalOutput;
 use super::{Obj, Shared};
 
@@ -113,11 +116,19 @@ pub(crate) struct State {
     /// A frame's command buffer waiting for its drawable's present. While one is held it is the
     /// last assigned value, and every other commit commits it first.
     held: Option<Held>,
+    clears: Option<Clears>,
     uploads: Option<Uploads>,
     retire: VecDeque<Pending>,
     pub(super) callbacks: VecDeque<(u64, Callback)>,
     frames: VecDeque<u64>,
     pub(super) spare: Vec<Keep>,
+}
+
+/// Lazy render-pass clears queued since the last submit, committed before `uploads` and any
+/// submitted command buffers, with no blit encoder.
+struct Clears {
+    cb: Obj<dyn MTLCommandBuffer>,
+    keep: Keep,
 }
 
 /// Writes staged since the last submit, committed ahead of it.
@@ -194,12 +205,39 @@ impl Shared {
         self.flush_held(&mut st);
     }
 
+    fn commit_clears(&self, st: &mut State) {
+        let Some(Clears { cb, keep }) = st.clears.take() else { return };
+        st.last += 1;
+        let value = st.last;
+        self.commit_pending(st, value, cb, keep, None);
+    }
+
     fn commit_uploads(&self, st: &mut State) {
         let Some(Uploads { blit, cb, keep }) = st.uploads.take() else { return };
         blit.endEncoding();
         st.last += 1;
         let value = st.last;
         self.commit_pending(st, value, cb, keep, None);
+    }
+
+    /// Encodes lazy clear-only render passes into the pre-submit clears command buffer.
+    pub(super) fn clear_effects(&self, texture: &Arc<TextureRaw>, effects: Effects<Effect>) {
+        if effects.is_empty() { return }
+        let mut st = self.lock();
+        let State { clears, spare, .. } = &mut *st;
+        let clears = clears.get_or_insert_with(|| {
+            let cb = self.command_buffer();
+            #[cfg(debug_assertions)]
+            cb.setLabel(Some(&NSString::from_str("rune metal lazy clears")));
+            let keep = spare.pop().unwrap_or_else(|| Keep::with_capacity(8));
+            Clears { cb, keep }
+        });
+        for effect in effects {
+            if let Effect::ClearSubresource(sub) = effect {
+                clear_subresource(&clears.cb, texture, sub.mip, sub.layer);
+            }
+        }
+        clears.keep.push(texture.clone());
     }
 
     /// Encodes a staged write into the blit buffer the next submit commits first.
@@ -383,6 +421,7 @@ impl Shared {
         {
             let mut st = self.lock();
             self.flush_held(&mut st);
+            self.commit_clears(&mut st);
             self.commit_uploads(&mut st);
             st.last += 1;
             let value = st.last;
@@ -414,6 +453,7 @@ impl Drop for Shared {
         {
             let mut st = self.lock();
             self.flush_held(&mut st);
+            self.commit_clears(&mut st);
             self.commit_uploads(&mut st);
         }
         loop {
@@ -467,6 +507,20 @@ impl QueueInterface for MetalQueue {
             replace_texture(&texture, dst.mip_level, dst.origin, data, layout, size);
             return;
         }
+        if let Some(lazy) = &texture.lazy_init && lazy.has_uninit() {
+            let range = SubresourceRange {
+                base_mip: dst.mip_level,
+                mips: 1,
+                base_layer: dst.origin.z,
+                layers: size.depth_or_array_layers,
+            };
+            let event = if is_full_mip(&texture, dst.mip_level, dst.origin, size) {
+                Event::WriteFull(range)
+            } else {
+                Event::WritePartial(range)
+            };
+            self.0.clear_effects(&texture, lazy.step(event));
+        }
         let staging = Arc::new(BufferRaw::with_bytes(&self.0, data, Some("rune metal write_texture")));
         let uses = texture.uses.clone();
         self.0.upload(
@@ -479,6 +533,7 @@ impl QueueInterface for MetalQueue {
         let last = {
             let mut st = self.0.lock();
             self.0.flush_held(&mut st);
+            self.0.commit_clears(&mut st);
             self.0.commit_uploads(&mut st);
             for buffer in command_buffers {
                 let Some(recorded) = buffer.as_custom::<MetalCommandBuffer>().and_then(MetalCommandBuffer::take) else { continue };
