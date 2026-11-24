@@ -11,8 +11,7 @@ use super::stepping::FrameMove;
 use super::{Host, WindowApp};
 use crate::app::Shared;
 use crate::input::host_events;
-use crate::runtime::TitlebarAction;
-use crate::window::chrome::{self, sync_chrome_core, titlebar_double_click};
+use crate::window::chrome::{self, sync_chrome_core};
 #[cfg(target_os = "macos")]
 use crate::window::chrome::mac;
 use crate::window::file_drop::{FileDrop, FileStep};
@@ -418,7 +417,7 @@ impl Host {
                         (size.width, size.height),
                         f64::from(app.rt().window_scale()),
                         scale_factor,
-                        l.window.is_maximized(),
+                        l.is_maximized(),
                         l.window.fullscreen().is_some(),
                     );
                     winit::dpi::PhysicalSize::new(width, height)
@@ -557,12 +556,8 @@ impl Host {
                     app.rt_mut().set_native_titlebar_band(mac::native_titlebar_band(&l.window));
                 }
                 app.touch(&touch);
-                match app.rt_mut().take_titlebar_action() {
-                    Some(TitlebarAction::Drag) => {
-                        l.drag_window();
-                    }
-                    Some(TitlebarAction::DoubleClick) => titlebar_double_click(&l.window),
-                    None => {}
+                if let Some(action) = app.rt_mut().take_titlebar_action() {
+                    l.titlebar_action(action);
                 }
                 l.request_redraw();
             }
@@ -582,12 +577,8 @@ impl Host {
                             crate::marks::input_handled(false);
                             app.rt_mut().physical_input(crate::PhysicalInput::Modifiers(map_mods(self.mods)));
                             // AppKit needs the drag started inside this mouse-down.
-                            match app.rt_mut().take_titlebar_action() {
-                                Some(TitlebarAction::Drag) => {
-                                    l.drag_window();
-                                }
-                                Some(TitlebarAction::DoubleClick) => titlebar_double_click(&l.window),
-                                None => {}
+                            if let Some(action) = app.rt_mut().take_titlebar_action() {
+                                l.titlebar_action(action);
                             }
                         }
                         (ElementState::Released, false) => app.pointer_up(x, y),

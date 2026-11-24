@@ -96,7 +96,15 @@ impl WindowHandle {
         let window = self.window().ok()?;
         let (outer, inner) = (window.outer_position().ok()?, window.inner_position().ok()?);
         let size = window.inner_size();
-        let (maximized, minimized, full_screen) = (window.is_maximized(), window.is_minimized().unwrap_or(false), window.fullscreen().is_some());
+        #[cfg(target_os = "macos")]
+        let panel = crate::platform::macos::is_panel(&window);
+        #[cfg(not(target_os = "macos"))]
+        let panel = false;
+        let (maximized, minimized, full_screen) = if panel {
+            (false, false, false)
+        } else {
+            (window.is_maximized(), window.is_minimized().unwrap_or(false), window.fullscreen().is_some())
+        };
         #[cfg(target_os = "windows")]
         let restore = ((maximized || minimized) && !full_screen).then(|| crate::platform::win32::restore_frame(&window)).flatten();
         #[cfg(not(target_os = "windows"))]

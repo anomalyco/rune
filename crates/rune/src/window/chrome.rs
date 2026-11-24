@@ -16,6 +16,8 @@ pub(in crate::window) mod float_on_open;
 #[cfg(target_os = "macos")]
 pub(in crate::window) mod mac;
 pub(in crate::window) mod platform_sync;
+#[cfg(test)]
+mod tests;
 
 pub(in crate::window) use platform_sync::sync_platform_core;
 
@@ -109,8 +111,30 @@ fn caption(w: &Win, titlebar: Option<crate::Titlebar>) -> Option<crate::titlebar
     { let _ = (w, titlebar); None }
 }
 
+/// Which native target carries out a titlebar action. Adopted macOS panels drag the `NSPanel`
+/// directly and ignore `DoubleClick` so no titlebar action can reach winit's hidden source
+/// `NSWindow`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::window) enum TitlebarTarget {
+    DragPanel,
+    DragWindow,
+    DoubleClickWindow,
+    Ignore,
+}
+
+/// Selects the native target for a titlebar action based on whether the window is backed by an
+/// adopted macOS `NSPanel`.
+pub(in crate::window) fn titlebar_target(action: crate::runtime::TitlebarAction, panel: bool) -> TitlebarTarget {
+    match (action, panel) {
+        (crate::runtime::TitlebarAction::Drag, true) => TitlebarTarget::DragPanel,
+        (crate::runtime::TitlebarAction::Drag, false) => TitlebarTarget::DragWindow,
+        (crate::runtime::TitlebarAction::DoubleClick, true) => TitlebarTarget::Ignore,
+        (crate::runtime::TitlebarAction::DoubleClick, false) => TitlebarTarget::DoubleClickWindow,
+    }
+}
+
 /// A double click on a titlebar: AppKit's action on macOS, else maximize or restore, as the
-/// maximize button would.
+/// maximize button would. Adopted macOS panels ignore it.
 pub(in crate::window) fn titlebar_double_click(window: &Window) {
     #[cfg(target_os = "macos")]
     mac::titlebar_double_click(window);
@@ -119,8 +143,10 @@ pub(in crate::window) fn titlebar_double_click(window: &Window) {
 }
 
 /// Maximizes the window, or restores it when it is maximized. A window without a maximize
-/// button (one that isn't resizable) only restores.
+/// button (one that isn't resizable) only restores. Adopted macOS panels ignore it.
 pub(in crate::window) fn toggle_maximized(window: &Window) {
+    #[cfg(target_os = "macos")]
+    if crate::platform::macos::is_panel(window) { return; }
     let maximized = window.is_maximized();
     if maximized || window.enabled_buttons().contains(winit::window::WindowButtons::MAXIMIZE) {
         window.set_maximized(!maximized);
@@ -135,8 +161,11 @@ pub(in crate::window) fn open_as(window: &Window, open_as: crate::windows::OpenA
     if open_as.full_screens() { window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None))); }
 }
 
-/// Takes the window full screen, borderless over its display, or brings it back.
+/// Takes the window full screen, borderless over its display, or brings it back. Adopted
+/// macOS panels ignore it.
 pub(in crate::window) fn toggle_full_screen(window: &Window) {
+    #[cfg(target_os = "macos")]
+    if crate::platform::macos::is_panel(window) { return; }
     let full = window.fullscreen().is_some();
     window.set_fullscreen((!full).then_some(winit::window::Fullscreen::Borderless(None)));
 }

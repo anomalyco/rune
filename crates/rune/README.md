@@ -1204,7 +1204,8 @@ rune::App::new(spec).fit_content_height().run();
   `performWindowDragWithEvent:` on the adopted `NSPanel` for macOS `MacWindowOptions::nonactivating_panel`
   and `WindowOptions::launcher_panel` windows) and a double press zooms the window (macOS follows
   the user's `AppleActionOnDoubleClick` setting, so it may minimise instead; elsewhere it toggles
-  maximised). Window-backed overlays also honour
+  maximised; macOS non-activating panels ignore titlebar double-clicks, maximize, and full screen).
+  Window-backed overlays also honour
   `.window_drag()` and `.no_window_drag()` (calling `performWindowDragWithEvent:` on the macOS
   `NSPanel` and `drag_window()` on Windows and X11; Wayland layer-shell ignores it), ignore
   titlebar double-clicks, and keep the user's dragged position until an explicit placement request.

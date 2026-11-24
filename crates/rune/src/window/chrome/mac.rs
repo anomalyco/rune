@@ -4,11 +4,11 @@
 #![allow(unsafe_code)]
 
 use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
-use objc2::{msg_send, sel, ClassType};
-use objc2_app_kit::{NSEvent, NSPanel, NSWindowButton, NSWindowStyleMask};
+use objc2::{msg_send, sel};
+use objc2_app_kit::{NSEvent, NSWindowButton, NSWindowStyleMask};
 use objc2_foundation::{NSString, NSUserDefaults};
 use winit::window::Window;
-use crate::platform::macos::{content_view, has_subclass, kvo_observed, ns_window};
+use crate::platform::macos::{content_view, has_subclass, is_panel, is_panel_object, kvo_observed, ns_window};
 
 #[cfg(test)]
 #[path = "mac_tests.rs"]
@@ -24,12 +24,11 @@ unsafe extern "C" fn cannot_move_window(_: &AnyObject, _: Sel) -> Bool {
 pub fn own_window_dragging(window: &Window) {
     let Some(view) = content_view(window) else { return };
     let Some(win) = view.window() else { return };
-    // SAFETY: `win` is a live `NSWindow` on the main thread; `isKindOfClass:` takes a `Class` and returns `BOOL`.
-    let panel: Bool = unsafe { msg_send![&*win, isKindOfClass: NSPanel::class()] };
+    let panel = is_panel_object(&win);
     let full_size = win.styleMask().contains(NSWindowStyleMask::FullSizeContentView);
     let borderless = !win.styleMask().contains(NSWindowStyleMask::Titled);
     let chrome = crate::Chrome { full_size_content: full_size, drag_regions: true, ..crate::Chrome::DEFAULT };
-    if !super::uses_drag_regions(chrome, borderless, panel.as_bool()) { return; }
+    if !super::uses_drag_regions(chrome, borderless, panel) { return; }
     // SAFETY: `view` is a live winit content view on the main thread, as `scope_drag_regions` requires.
     unsafe { scope_drag_regions(&view) };
 }
@@ -141,6 +140,7 @@ pub fn titlebar_inset(window: &Window) -> f32 {
 /// view: a full-size-content titlebar the app didn't take over with drag regions. 0 in full
 /// screen and for standard titled, borderless and drag-region windows.
 pub fn native_titlebar_band(window: &Window) -> f32 {
+    if is_panel(window) { return 0.0; }
     let Some(win) = ns_window(window) else { return 0.0 };
     let mask = win.styleMask();
     if !mask.contains(NSWindowStyleMask::Titled | NSWindowStyleMask::FullSizeContentView) || mask.contains(NSWindowStyleMask::FullScreen) {
@@ -155,12 +155,32 @@ pub fn double_click_interval() -> f64 {
     NSEvent::doubleClickInterval()
 }
 
+/// Resolved macOS titlebar double-click action.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DoubleClickAction {
+    Minimize,
+    Zoom,
+    None,
+}
+
+/// Maps macOS's `AppleActionOnDoubleClick` default for `window`. Adopted `NSPanel`s always
+/// return `None` so neither `miniaturize:` nor `zoom:` (nor winit's borderless `setStyleMask:` /
+/// `setFrame:display:` fallback) can reach winit's hidden source `NSWindow`.
+pub(crate) fn double_click_action(setting: Option<&str>, panel: bool) -> DoubleClickAction {
+    if panel { return DoubleClickAction::None; }
+    match setting {
+        Some("Minimize") => DoubleClickAction::Minimize,
+        Some("None") => DoubleClickAction::None,
+        _ => DoubleClickAction::Zoom,
+    }
+}
+
 /// System Settings › Desktop & Dock › "Double-click a window's title bar to".
 pub fn titlebar_double_click(window: &Window) {
     let action = NSUserDefaults::standardUserDefaults().stringForKey(&NSString::from_str("AppleActionOnDoubleClick"));
-    match action.map(|s| s.to_string()).as_deref() {
-        Some("Minimize") => window.set_minimized(true),
-        Some("None") => {}
-        _ => window.set_maximized(!window.is_maximized()),
+    match double_click_action(action.map(|s| s.to_string()).as_deref(), is_panel(window)) {
+        DoubleClickAction::Minimize => window.set_minimized(true),
+        DoubleClickAction::Zoom => window.set_maximized(!window.is_maximized()),
+        DoubleClickAction::None => {}
     }
 }

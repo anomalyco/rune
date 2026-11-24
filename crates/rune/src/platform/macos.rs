@@ -119,6 +119,20 @@ pub(crate) fn ns_window(window: &winit::window::Window) -> Option<Retained<NSWin
     content_view(window)?.window()
 }
 
+/// Whether `window` is an `NSPanel` instance (an overlay or an ordinary window adopted by
+/// `Panel::adopt_window`).
+#[allow(unsafe_code)]
+pub(crate) fn is_panel_object(window: &objc2::runtime::AnyObject) -> bool {
+    // SAFETY: `window` is a live ObjC instance; `isKindOfClass:` takes a `Class` and returns `BOOL`.
+    let panel: objc2::runtime::Bool = unsafe { msg_send![window, isKindOfClass: NSPanel::class()] };
+    panel.as_bool()
+}
+
+/// Whether `window`'s content view currently lives in an `NSPanel`.
+pub(crate) fn is_panel(window: &winit::window::Window) -> bool {
+    ns_window(window).is_some_and(|w| is_panel_object(&w))
+}
+
 /// Whether key-value observing (or another runtime subclass that hides itself from `-class`)
 /// sits on `object`. Placing a Rune per-instance subclass above KVO's crashes Foundation when
 /// an observer is removed.
