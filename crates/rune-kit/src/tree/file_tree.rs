@@ -121,7 +121,7 @@ impl FileTree {
                     path = join(&path, &n);
                     d = inner;
                 }
-                model.insert(parent, path.clone(), FileNode { name, path: path.clone(), dir: true, data: None });
+                model.insert_branch(parent, path.clone(), FileNode { name, path: path.clone(), dir: true, data: None });
                 emit(model, compact, Some(&path), &path, d);
             }
             for (name, data) in dir.files {

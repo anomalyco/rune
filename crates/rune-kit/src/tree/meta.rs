@@ -13,6 +13,7 @@ struct NodeMeta {
     parent: Option<usize>,
     children: Vec<usize>,
     depth: u32,
+    branch: bool,
     open: bool,
     selected: bool,
 }
@@ -102,7 +103,7 @@ impl TreeMeta {
         *self.visible.get_mut() = None;
     }
 
-    pub(super) fn insert(&mut self, parent: Option<&str>, id: String) -> bool {
+    pub(super) fn insert(&mut self, parent: Option<&str>, id: String, branch: bool) -> bool {
         if self.index.contains_key(&id) {
             return false;
         }
@@ -120,7 +121,7 @@ impl TreeMeta {
             None => self.roots.push(i),
         }
         self.index.insert(id.clone(), i);
-        self.nodes.push(NodeMeta { id, parent, children: Vec::new(), depth, open: false, selected: false });
+        self.nodes.push(NodeMeta { id, parent, children: Vec::new(), depth, branch, open: false, selected: false });
         if let Some(f) = &mut self.filter {
             f.shown.push(Shown::Hidden);
             f.closed.push(false);
@@ -165,6 +166,17 @@ impl TreeMeta {
     pub(super) fn has_children(&self, id: &str) -> bool {
         self.index.get(id).is_some_and(|&i| !self.nodes[i].children.is_empty())
     }
+    pub(super) fn set_branch(&mut self, id: &str, branch: bool) {
+        if let Some(&i) = self.index.get(id) {
+            self.nodes[i].branch = branch;
+        }
+    }
+    pub(super) fn is_branch(&self, id: &str) -> bool {
+        self.index.get(id).is_some_and(|&i| self.nodes[i].branch || !self.nodes[i].children.is_empty())
+    }
+    pub(super) fn id_of(&self, i: usize) -> &str {
+        &self.nodes[i].id
+    }
     pub(super) fn depth(&self, id: &str) -> Option<u32> {
         self.index.get(id).map(|&i| self.nodes[i].depth)
     }
@@ -191,7 +203,7 @@ impl TreeMeta {
         self.index.get(id).is_some_and(|&i| self.open(i))
     }
 
-    fn open(&self, i: usize) -> bool {
+    pub(super) fn open(&self, i: usize) -> bool {
         match &self.filter {
             Some(f) => !f.closed[i],
             None => self.nodes[i].open,
@@ -241,7 +253,7 @@ impl TreeMeta {
     }
     pub(super) fn expand_all(&mut self) {
         for i in 0..self.nodes.len() {
-            if !self.nodes[i].children.is_empty() {
+            if self.nodes[i].branch || !self.nodes[i].children.is_empty() {
                 self.set_open(i, true);
             }
         }
@@ -353,11 +365,13 @@ impl TreeMeta {
         true
     }
 
-    pub(super) fn click_row(&mut self, id: &str, openable: bool, mods: rune::Mods) {
+    pub(super) fn click_row(&mut self, id: &str, openable: bool, mods: rune::Mods) -> Option<bool> {
         let plain = self.click(id, mods);
         if openable && plain {
             self.toggle(id);
+            return Some(self.is_expanded(id));
         }
+        None
     }
 
     pub(super) fn reveal(&mut self, id: &str, tx: &mut Tx) -> bool {
@@ -442,9 +456,17 @@ impl TreeMeta {
         self.filter.as_ref().is_none_or(|f| f.shown[i] != Shown::Hidden)
     }
 
-    /// Whether `i` has children the filter shows.
-    fn openable(&self, i: usize) -> bool {
+    fn has_shown_child(&self, i: usize) -> bool {
         self.nodes[i].children.iter().any(|&c| self.shown(c))
+    }
+
+    /// Whether `i` shows as a branch: under a filter, folders with at least one shown child;
+    /// otherwise, nodes marked as branches or having children.
+    fn openable(&self, i: usize) -> bool {
+        match &self.filter {
+            Some(_) => self.has_shown_child(i),
+            None => self.nodes[i].branch || !self.nodes[i].children.is_empty(),
+        }
     }
 
     pub(super) fn visible_len(&self) -> usize {
@@ -528,6 +550,9 @@ impl TreeMeta {
                 }
                 if !self.open(i) {
                     self.set_open(i, true);
+                    return TreeKey::Handled;
+                }
+                if !self.has_shown_child(i) {
                     return TreeKey::Handled;
                 }
                 Some((r + 1).min(len - 1))

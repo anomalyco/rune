@@ -67,6 +67,10 @@ macro_rules! stories {
             if $id == "rune-image--decode" {
                 s.images.enter(true);
             }
+            if $id == "rune-tree--lazy-branches" {
+                s.lazy_files = crate::lazy_files();
+                s.lazy_loaded.clear();
+            }
             s.tree_menu = None;
             s.tree_action = None;
             s.menu_at = None;
@@ -274,6 +278,7 @@ stories! {
     "rune-tree-icon--catalog" => icons::tree_icon_catalog,
     "rune-tree--files" => icons::file_tree,
     "rune-tree--scroll-menu" => icons::file_tree_scroll_menu,
+    "rune-tree--lazy-branches" => icons::file_tree_lazy_branches,
     "rune-split-view--flat-main" => split_view::flat_main,
     "rune-table--options" => table::options,
     "rune-table--wide" => table::wide,

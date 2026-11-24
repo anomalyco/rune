@@ -151,3 +151,80 @@ fn a_tree_with_on_menu_and_scroll_bar_exposes_row_context_menu_and_hides_the_bar
     let plain_tree = plain.accessibility_json();
     assert!(!can(node(&plain_tree, "README.md"), "context-menu"));
 }
+
+fn lazy_branch_files() -> rune_kit::TreeModel<FileNode<(u32, u32)>> {
+    let mut m = TreeModel::new().key("files");
+    m.insert_branch(None, "unloaded", FileNode { name: "unloaded".into(), path: "unloaded".into(), dir: true, data: None });
+    m.insert_branch(None, "empty", FileNode { name: "empty".into(), path: "empty".into(), dir: true, data: None });
+    m.insert(None, "README.md", FileNode { name: "README.md".into(), path: "README.md".into(), dir: false, data: Some((0, 0)) });
+    m
+}
+
+fn lazy_branch_tree(s: &App, _: &mut Cx<App>) -> El {
+    let k = kit();
+    col().h(400.0).child(
+        Tree::new(|s: &App| &s.files, |s: &mut App| &mut s.files, FileNode::label)
+            .name("Files")
+            .row(|n, r| TreeItem::file(n, r))
+            .on_toggle(|s: &mut App, id, open, _| {
+                s.presses += 1;
+                s.chosen = Some(format!("{id}:{open}"));
+                if open && id == "unloaded" && !s.files.has_children("unloaded") {
+                    s.files.insert(
+                        Some("unloaded"),
+                        "unloaded/mod.rs",
+                        FileNode { name: "mod.rs".into(), path: "unloaded/mod.rs".into(), dir: false, data: Some((0, 0)) },
+                    );
+                }
+            })
+            .build(s, &k)
+            .h(400.0),
+    )
+}
+
+#[test]
+fn unloaded_and_empty_branches_expose_expanded_state_and_actions() {
+    let mut rt = mount(App { files: lazy_branch_files(), ..App::default() }, lazy_branch_tree);
+    let tree = rt.accessibility_json();
+    let unloaded = node(&tree, "unloaded");
+    assert_eq!(said(unloaded), ("tree-item", "unloaded"));
+    assert!(has(unloaded, "collapsed") && can(unloaded, "expand") && !can(unloaded, "collapse"));
+    let empty = node(&tree, "empty");
+    assert_eq!(said(empty), ("tree-item", "empty"));
+    assert!(has(empty, "collapsed") && can(empty, "expand") && !can(empty, "collapse"));
+    let readme = node(&tree, "README.md");
+    assert!(!has(readme, "collapsed") && !has(readme, "expanded") && !can(readme, "expand") && !can(readme, "collapse"));
+    no_echo(&tree);
+
+    // Assistive Expand on an unloaded branch fires on_toggle(..., true) and mounts lazy children.
+    assert!(act(&mut rt, "unloaded", Action::Expand));
+    assert_eq!(rt.state.chosen.as_deref(), Some("unloaded:true"));
+    let tree = rt.accessibility_json();
+    let unloaded = node(&tree, "unloaded");
+    assert!(has(unloaded, "expanded") && can(unloaded, "collapse") && !can(unloaded, "expand"));
+    let child = node(&tree, "unloaded/mod.rs");
+    assert_eq!((said(child), child["level"].as_u64()), (("tree-item", "mod.rs"), Some(2)));
+
+    // Assistive Expand and Collapse on a genuinely empty branch keep expanded/collapsed state and fire on_toggle.
+    assert!(act(&mut rt, "empty", Action::Expand));
+    assert_eq!(rt.state.chosen.as_deref(), Some("empty:true"));
+    let tree = rt.accessibility_json();
+    let empty = node(&tree, "empty");
+    assert!(has(empty, "expanded") && can(empty, "collapse"));
+
+    // Web accessibility mirror reflects expanded state on empty and loaded branches, and omits it on leaves.
+    let mirror: Vec<serde_json::Value> = serde_json::from_str(&rt.a11y_json()).unwrap();
+    let web_row = |name: &str| mirror.iter().find(|e| e["o"] == "treeitem" && e["t"] == name).unwrap_or_else(|| panic!("web mirror missing {name:?}: {mirror:?}"));
+    assert_eq!(web_row("unloaded")["x"], serde_json::json!(true));
+    assert_eq!(web_row("empty")["x"], serde_json::json!(true));
+    assert!(web_row("README.md").get("x").is_none());
+
+    assert!(act(&mut rt, "empty", Action::Collapse));
+    assert_eq!(rt.state.chosen.as_deref(), Some("empty:false"));
+    let tree = rt.accessibility_json();
+    let empty = node(&tree, "empty");
+    assert!(has(empty, "collapsed") && can(empty, "expand"));
+    let mirror: Vec<serde_json::Value> = serde_json::from_str(&rt.a11y_json()).unwrap();
+    let web_empty = mirror.iter().find(|e| e["o"] == "treeitem" && e["t"] == "empty").unwrap();
+    assert_eq!(web_empty["x"], serde_json::json!(false));
+}

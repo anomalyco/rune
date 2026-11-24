@@ -309,6 +309,7 @@ impl TreeStyle {
 
 type RowFn<T> = Rc<dyn for<'a> Fn(&T, &TreeRow<'a>) -> TreeItem>;
 type IdFn<S> = Rc<dyn Fn(&mut S, &str, &mut Tx)>;
+type ToggleFn<S> = Rc<dyn Fn(&mut S, &str, bool, &mut Tx)>;
 type MenuFn<S> = Rc<dyn Fn(&mut S, &str, PointerPress, &mut Tx)>;
 
 trait TreeBind {
@@ -324,16 +325,18 @@ struct TreeHandlers<S, T> {
     row: Option<RowFn<T>>,
     on_select: Option<IdFn<S>>,
     on_open: Option<IdFn<S>>,
+    on_toggle: Option<ToggleFn<S>>,
     on_menu: Option<MenuFn<S>>,
 }
 
 impl<S: 'static, T: 'static> TreeBind for TreeHandlers<S, T> {
     fn bind_virtual_rows(&self, rows: El, count: usize, style: TreeStyle, kit: Rc<Kit>) -> El {
         let (get, get_mut, label) = (self.get, self.get_mut, self.label);
-        let (row_fn, sel, open, menu) = (
+        let (row_fn, sel, open, toggle, menu) = (
             self.row.clone(),
             self.on_select.clone(),
             self.on_open.clone(),
+            self.on_toggle.clone(),
             self.on_menu.clone(),
         );
         let build_row = move |s: &S, i: usize| -> El {
@@ -348,10 +351,11 @@ impl<S: 'static, T: 'static> TreeBind for TreeHandlers<S, T> {
             let mut e = item.build(&kit, &r, &style).key(r.id);
             // A click selects the row (Shift extends and Cmd toggles, in a multi-select tree);
             // on a folder it also opens or closes it, as a file tree's does.
-            let (pick, sel) = (id.clone(), sel.clone());
+            let (pick, sel, toggle) = (id.clone(), sel.clone(), toggle.clone());
             e = e.on_press_tx(move |s: &mut S, tx: &mut Tx| {
-                get_mut(s).meta.click_row(&pick, openable, tx.mods());
+                let toggled = get_mut(s).meta.click_row(&pick, openable, tx.mods());
                 if let Some(f) = &sel { f(s, &pick, tx); }
+                if let (Some(f), Some(open)) = (&toggle, toggled) { f(s, &pick, open, tx); }
             });
             if !openable && let Some(f) = open.clone() {
                 let target = id.clone();
@@ -381,17 +385,23 @@ impl<S: 'static, T: 'static> TreeBind for TreeHandlers<S, T> {
 
     fn bind_root_key(&self, root: El, rtl: bool) -> El {
         let (get_mut, label) = (self.get_mut, self.label);
-        let (on_select, on_open) = (self.on_select.clone(), self.on_open.clone());
+        let (on_select, on_open, on_toggle) = (self.on_select.clone(), self.on_open.clone(), self.on_toggle.clone());
         root.on_key(move |s: &mut S, ev: &KeyEvent, tx: &mut Tx| {
             let m = get_mut(s);
             m.set_right_to_left(rtl);
             let before = m.meta.cursor;
+            let before_open = before.map(|c| m.meta.open(c));
             let out = m.handle_key(ev, label, tx);
             let moved = (before != m.meta.cursor).then(|| m.cursor().map(str::to_owned)).flatten();
+            let toggled = before.and_then(|c| {
+                let now = m.meta.open(c);
+                (before_open != Some(now)).then(|| (m.meta.id_of(c).to_owned(), now))
+            });
             match out {
                 TreeKey::Ignored => false,
                 TreeKey::Handled => {
                     if let (Some(f), Some(id)) = (&on_select, moved) { f(s, &id, tx); }
+                    if let (Some(f), Some((id, open))) = (&on_toggle, toggled) { f(s, &id, open, tx); }
                     true
                 }
                 TreeKey::Open(id) => {
@@ -465,7 +475,7 @@ impl<S: 'static, T: 'static> Tree<S, T> {
     pub fn new(get: fn(&S) -> &TreeModel<T>, get_mut: fn(&mut S) -> &mut TreeModel<T>, label: fn(&T) -> &str) -> Self {
         Tree {
             core: TreeCore { style: None, name: None, rtl: false, scroll_bar: TreeScrollBar::None },
-            handlers: TreeHandlers { get, get_mut, label, row: None, on_select: None, on_open: None, on_menu: None },
+            handlers: TreeHandlers { get, get_mut, label, row: None, on_select: None, on_open: None, on_toggle: None, on_menu: None },
         }
     }
     /// What each row shows; by default its label alone.
@@ -478,9 +488,26 @@ impl<S: 'static, T: 'static> Tree<S, T> {
         self.handlers.on_select = Some(Rc::new(f));
         self
     }
-    /// A row without children was double-clicked, or Return or Space pressed on it.
+    /// A leaf row was double-clicked, or Return or Space pressed on it.
     pub fn on_open(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {
         self.handlers.on_open = Some(Rc::new(f));
+        self
+    }
+    /// A branch was opened (`open == true`) or closed (`open == false`) by click, keyboard, or an
+    /// assistive `Expand` / `Collapse` action, after the model's expanded state has updated. Use
+    /// this to lazily insert children under a branch added with [`TreeModel::insert_branch`].
+    ///
+    /// ```ignore
+    /// Tree::new(|s: &App| &s.files, |s: &mut App| &mut s.files, FileNode::label)
+    ///     .on_toggle(|s: &mut App, id, open, _| {
+    ///         if open && !s.files.has_children(id) {
+    ///             s.load_dir(id);
+    ///         }
+    ///     })
+    ///     .build(s, &kit)
+    /// ```
+    pub fn on_toggle(mut self, f: impl Fn(&mut S, &str, bool, &mut Tx) + 'static) -> Self {
+        self.handlers.on_toggle = Some(Rc::new(f));
         self
     }
     /// A row's context menu was asked for: a secondary press on it, the Menu key or Shift+F10

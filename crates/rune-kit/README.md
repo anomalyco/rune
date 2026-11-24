@@ -362,7 +362,7 @@ folder or open a file (`on_open`), typing a name jumps to it, and `on_menu` hand
 context menu from a secondary press, the Menu key, Shift+F10 or an assistive `ShowContextMenu`
 action. `scroll_bar(true)` (or `scroll_bar_styled(style)`) attaches a kit scroll bar to the
 tree's viewport following `rune::system_scroll_bars()`; `rune-tree--scroll-menu` in the gallery
-shows both. `multi_select(true)` adds
+shows both. `TreeModel::insert_branch`, `set_branch` and `is_branch` mark unloaded or empty folders as expandable branches, and `Tree::on_toggle(|s, id, open, tx| ..)` fires on click, keyboard or assistive expand/collapse for lazy loading (`rune-tree--lazy-branches` in the gallery shows both unloaded and empty folders). `multi_select(true)` adds
 Shift and Cmd. `filter(|n| ..)` keeps the folders that lead to a match open. `reveal(id, tx)`
 opens, selects and scrolls to a row, so a tree can follow an editor or a diff. Rows report
 `treeitem` with their level, open state and selection. 50,000 files scroll at 0.4 ms a frame

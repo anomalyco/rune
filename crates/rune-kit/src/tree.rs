@@ -47,7 +47,7 @@ pub enum TreeKey {
     Ignored,
     /// It moved the cursor, the selection or a folder.
     Handled,
-    /// Return or Space on a row without children: the app opens this id.
+    /// Return or Space on a leaf row: the app opens this id.
     Open(String),
 }
 
@@ -94,7 +94,27 @@ impl<T> TreeModel<T> {
     /// Adds `id` under `parent` (`None` for the top level), after its siblings. Returns false
     /// and adds nothing when `id` is already in the tree or `parent` isn't.
     pub fn insert(&mut self, parent: Option<&str>, id: impl Into<String>, data: T) -> bool {
-        if !self.meta.insert(parent, id.into()) {
+        if !self.meta.insert(parent, id.into(), false) {
+            return false;
+        }
+        self.data.push(data);
+        true
+    }
+
+    /// Adds `id` under `parent` (`None` for the top level) as a branch, even when it has no
+    /// children yet (an unloaded or empty folder). Returns false and adds nothing when `id` is
+    /// already in the tree or `parent` isn't.
+    ///
+    /// ```
+    /// use rune_kit::TreeModel;
+    ///
+    /// let mut tree = TreeModel::new();
+    /// assert!(tree.insert_branch(None, "src", "src"));
+    /// assert!(tree.is_branch("src"));
+    /// assert_eq!(tree.row(0).unwrap().1.expanded, Some(false));
+    /// ```
+    pub fn insert_branch(&mut self, parent: Option<&str>, id: impl Into<String>, data: T) -> bool {
+        if !self.meta.insert(parent, id.into(), true) {
             return false;
         }
         self.data.push(data);
@@ -116,6 +136,31 @@ impl<T> TreeModel<T> {
     /// `id`'s children in order, or the top-level nodes for `None`.
     pub fn children(&self, id: Option<&str>) -> impl Iterator<Item = &str> { self.meta.children(id) }
     pub fn has_children(&self, id: &str) -> bool { self.meta.has_children(id) }
+    /// Marks `id` as a branch (`true`) or leaf (`false`) when it has no children. A node with
+    /// children remains a branch even if `branch` is `false`.
+    ///
+    /// ```
+    /// use rune_kit::TreeModel;
+    ///
+    /// let mut tree = TreeModel::new();
+    /// tree.insert(None, "empty", "empty");
+    /// tree.set_branch("empty", true);
+    /// assert!(tree.is_branch("empty"));
+    /// ```
+    pub fn set_branch(&mut self, id: &str, branch: bool) { self.meta.set_branch(id, branch); }
+    /// Whether `id` is a branch: marked as one with [`Self::insert_branch`] or
+    /// [`Self::set_branch`], or having children.
+    ///
+    /// ```
+    /// use rune_kit::TreeModel;
+    ///
+    /// let mut tree = TreeModel::new();
+    /// tree.insert_branch(None, "dir", "dir");
+    /// tree.insert(None, "file", "file");
+    /// assert!(tree.is_branch("dir"));
+    /// assert!(!tree.is_branch("file"));
+    /// ```
+    pub fn is_branch(&self, id: &str) -> bool { self.meta.is_branch(id) }
     /// 0 at the top level.
     pub fn depth(&self, id: &str) -> Option<u32> { self.meta.depth(id) }
     /// The data of `id` and everything under it, depth first.
@@ -206,7 +251,8 @@ pub struct TreeRow<'a> {
     pub id: &'a str,
     /// 0 at the top level.
     pub depth: u32,
-    /// `Some(open)` for a row with children (shown ones, under a filter), `None` for a leaf.
+    /// `Some(open)` for a branch (a node marked as a branch or with children; under a filter,
+    /// one with shown children), `None` for a leaf.
     pub expanded: Option<bool>,
     pub selected: bool,
     /// The keyboard cursor is on it.

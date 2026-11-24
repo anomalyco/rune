@@ -44,6 +44,9 @@ pub struct G {
     pub files: rune_kit::TreeModel<rune_kit::FileNode<()>>,
     /// The scrollable tree story's files.
     pub scroll_files: rune_kit::TreeModel<rune_kit::FileNode<()>>,
+    /// The lazy-branches tree story's files and loaded folder ids.
+    pub lazy_files: rune_kit::TreeModel<rune_kit::FileNode<()>>,
+    pub lazy_loaded: HashSet<String>,
     /// Open tree context menu: (story key, row id, anchor point).
     pub tree_menu: Option<(&'static str, String, rune::PointerPress)>,
     /// Last context-menu action picked in the tree story.
@@ -104,6 +107,8 @@ fn init() -> G {
         reorder: Default::default(),
         files: files(),
         scroll_files: scroll_files(),
+        lazy_files: lazy_files(),
+        lazy_loaded: HashSet::new(),
         tree_menu: None,
         tree_action: None,
         split_sidebar: rune_kit::PaneState::new(180.0).range(120.0, 280.0),
@@ -157,6 +162,22 @@ fn scroll_files() -> rune_kit::TreeModel<rune_kit::FileNode<()>> {
     let mut m = rune_kit::FileTree::new().key("scroll-files").build(paths.map(|p| (p, ())));
     m.expand_all();
     m.select("crates/rune-kit/src/tree/view.rs");
+    m
+}
+
+/// A file tree with unloaded and empty folder branches for `rune-tree--lazy-branches`.
+pub(crate) fn lazy_files() -> rune_kit::TreeModel<rune_kit::FileNode<()>> {
+    use rune_kit::{FileNode, TreeModel};
+    let dir = |name: &str, path: &str| FileNode { name: name.into(), path: path.into(), dir: true, data: None };
+    let file = |name: &str, path: &str| FileNode { name: name.into(), path: path.into(), dir: false, data: Some(()) };
+    let mut m = TreeModel::new().key("lazy-files");
+    m.insert_branch(None, "remote", dir("remote", "remote"));
+    m.insert_branch(None, "empty", dir("empty", "empty"));
+    m.insert_branch(None, "src", dir("src", "src"));
+    m.insert(Some("src"), "src/main.rs", file("main.rs", "src/main.rs"));
+    m.insert(None, "README.md", file("README.md", "README.md"));
+    m.set_expanded("src", true);
+    m.select("remote");
     m
 }
 
