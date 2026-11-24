@@ -1053,10 +1053,11 @@ For an app's own perf log, with nothing changed about how its windows draw:
   moment the window took it from winit elsewhere. Events that pile up between frames keep their own times. It is
   `None` in timers, polls, updates and layout callbacks. The gap from it to the next `Drawn` frame's `at()` is the
   app's input-to-encode latency.
-- **`App::on_frame_drawn(|rt: &Runtime<S>| ..)`** runs after each `Drawn` frame with the runtime as it presented
-  that frame, so an app can watch its own motion in real use (`rt.elements()`, `rt.state`). **`rune::last_input()`**
-  is when the thread last took an input event from the platform, stamped at dispatch: input later than the previous
-  frame landed in this one.
+- **`App::on_frame_drawn(|rt: &Runtime<S>| ..)`** runs on the UI thread after each `Drawn` frame (on desktop
+  windows and in the web runner, and not on unchanged or skipped frames) with the runtime as it presented that frame,
+  so an app can watch its own motion or wait for presented frames (`rt.elements()`, `rt.state`).
+  **`rune::last_input()`** is when the thread last took an input event from the platform, stamped at dispatch: input
+  later than the previous frame landed in this one.
 
 ### Compact tray-controlled windows
 

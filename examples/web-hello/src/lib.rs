@@ -60,11 +60,32 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         .child(row().w_full().gap(8.0).child(composer).child(send_button))
 }
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = "
+export function recordFrameDrawn(messages, elements) {
+    const prev = window.__runeFramesDrawn;
+    window.__runeFramesDrawn = {
+        count: (prev ? prev.count : 0) + 1,
+        messages,
+        elements,
+    };
+}
+")]
+extern "C" {
+    #[wasm_bindgen(js_name = recordFrameDrawn)]
+    fn record_frame_drawn(messages: usize, elements: usize);
+}
+
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(start))]
 pub fn start() {
     #[cfg(target_arch = "wasm32")]
     if input_proof::enabled() { input_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]
     if image_proof::enabled() { image_proof::run(); return; }
-    rune::run(AppSpec::new("Messages", (390.0, 760.0), State::default, view));
+    let app = rune::App::new(AppSpec::new("Messages", (390.0, 760.0), State::default, view));
+    #[cfg(target_arch = "wasm32")]
+    let app = app.on_frame_drawn(|rt| {
+        record_frame_drawn(rt.state.messages.len(), rt.elements().len());
+    });
+    app.run();
 }

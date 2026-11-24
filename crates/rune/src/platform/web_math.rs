@@ -362,8 +362,9 @@ pub(crate) fn scroll_x_to_dom(
     }
 }
 
-/// Builds the web host's `Runtime` and splits off its shared state, compositor and fonts.
-/// Kept out of `platform/web/app.rs` so web startup configuration runs in native unit tests.
+/// Builds the web host's `Runtime` and splits off its shared state, compositor, frame-drawn
+/// hook and fonts. Kept out of `platform/web/app.rs` so web startup configuration runs in
+/// native unit tests.
 pub(crate) fn start_web_runtime<S: 'static>(
     mut app: crate::App<S>,
     viewport: (f32, f32),
@@ -374,9 +375,11 @@ pub(crate) fn start_web_runtime<S: 'static>(
     crate::Runtime<S>,
     std::sync::Arc<crate::app::Shared<S>>,
     Option<Box<dyn crate::compose::Compositor<S>>>,
+    Option<crate::frame::encoded::OnFrameDrawn<S>>,
     &'static [&'static [u8]],
 ) {
     let compositor = app.compositor.take();
+    let on_frame_drawn = app.on_frame_drawn.take();
     let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
     let spec_fonts = app.spec.fonts;
     let (spec, state, shared, runtime) = app.into_parts(None);
@@ -390,7 +393,7 @@ pub(crate) fn start_web_runtime<S: 'static>(
     rt.configure(runtime);
     rt.core_mut().set_touch_hold_policy(crate::runtime::TouchHoldPolicy::ConfirmingTimer);
     rt.track_marks = compositor.is_some();
-    (rt, shared, compositor, spec_fonts)
+    (rt, shared, compositor, on_frame_drawn, spec_fonts)
 }
 
 /// Chooses the web touch hold policy from whether the browser dispatches live touch

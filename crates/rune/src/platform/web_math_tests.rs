@@ -271,7 +271,7 @@ fn web_runtime_tracks_marks_only_when_compositor_is_attached() {
     };
 
     let spec_with = AppSpec::new("web-marks-on", (120.0, 80.0), || (), view);
-    let (mut rt_with, _, comp_with, _) = start_web_runtime(
+    let (mut rt_with, _, comp_with, _, _) = start_web_runtime(
         App::new(spec_with).compositor(NoopCompositor),
         (120.0, 80.0),
         Env::default(),
@@ -292,7 +292,7 @@ fn web_runtime_tracks_marks_only_when_compositor_is_attached() {
     assert_eq!(effect_marks, [42]);
 
     let spec_without = AppSpec::new("web-marks-off", (120.0, 80.0), || (), view);
-    let (mut rt_without, _, comp_without, _) = start_web_runtime(
+    let (mut rt_without, _, comp_without, _, _) = start_web_runtime(
         App::new(spec_without),
         (120.0, 80.0),
         Env::default(),
@@ -322,7 +322,7 @@ fn web_runtime_routes_live_wakes_separately_from_app_wakes() {
             el().size(120.0, 80.0).child(el().size(10.0, 10.0).live_offset(offset))
         },
     );
-    let (mut rt, _, _, _) = start_web_runtime(
+    let (mut rt, _, _, _, _) = start_web_runtime(
         App::new(spec),
         (120.0, 80.0),
         Env::default(),
