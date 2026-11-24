@@ -36,6 +36,7 @@ pub fn sources() -> Sources {
     Sources::new()
         .with("init.luau", include_str!("../scripts/panel/init.luau"))
         .with("rows.luau", include_str!("../scripts/panel/rows.luau"))
+        .with("showcase.luau", include_str!("../scripts/panel/showcase.luau"))
 }
 
 fn init() -> State {
@@ -72,7 +73,14 @@ fn poll(s: &mut State, now: f64, tx: &mut Tx) -> bool {
 }
 
 pub fn spec() -> AppSpec<State> {
-    AppSpec { setup: Some(setup), poll: Some(poll), ..AppSpec::new("Luau panel", (720.0, 640.0), init, view) }
+    AppSpec {
+        setup: Some(setup),
+        poll: Some(poll),
+        scenes: &[("props", |s| {
+            s.script.query("setTab", [rune_luau::Data::from("props")]).ok();
+        })],
+        ..AppSpec::new("Luau panel", (720.0, 640.0), init, view)
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(start))]
@@ -86,3 +94,7 @@ pub fn start() {
 pub fn luau_bench() -> String {
     bench::run(bench::Scale::Web).json()
 }
+
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;

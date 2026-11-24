@@ -36,3 +36,18 @@ fn a_listed_prop_on_an_app_defined_node_is_not_unknown() {
     let logged = render_probe(r#"{ text = "a", key = "probe" }"#);
     assert!(!logged.iter().any(|(l, m)| *l == LogLevel::Error || m.contains("unknown prop")), "got {logged:?}");
 }
+
+#[test]
+fn new_standard_props_are_listed_and_accepted_on_host_nodes() {
+    let names: Vec<&str> = crate::prop_names().collect();
+    for expected in [
+        "maxLines", "matched", "matchedCrop", "pressScale", "scale", "rotate",
+        "origin", "offset", "outline", "outlineWidth", "raise", "cols", "aspect",
+    ] {
+        assert!(names.contains(&expected), "prop_names() missing {expected}");
+    }
+    let logged = render_probe(
+        r#"{ text = "a", key = "probe", w = "50%", h = "40%", matched = "m1", matchedCrop = true, pressScale = 0.96, scale = 1.0, rotate = 15, origin = { x = 0.5, y = 0.5 }, offset = { x = 2, y = -2 }, outline = "indicator", outlineWidth = 2, raise = true, clip = 8, cols = 2, aspect = 1.5, role = "progressbar" }"#,
+    );
+    assert!(!logged.iter().any(|(l, m)| *l == LogLevel::Error || m.contains("unknown prop")), "got {logged:?}");
+}

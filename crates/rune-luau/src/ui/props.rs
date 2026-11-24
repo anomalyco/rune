@@ -15,6 +15,8 @@ use std::rc::Rc;
 use mlua::ffi;
 use rune::{Align, Color, El, ScrollSpec, TextStyle};
 
+use super::values::{Size, finite, non_neg, non_neg_int, numbers, parse_size, pos_int, positive, role, xy_pair};
+pub(crate) use super::values::{Value, format_num, name, push_num, read};
 use super::{Attach, Callback, Env};
 
 macro_rules! atoms {
@@ -114,9 +116,26 @@ atoms! {
     HelpOpen = "helpOpen",
     FadeOut = "fadeOut",
     Dir = "dir",
+    MaxLines = "maxLines",
+    Matched = "matched",
+    MatchedCrop = "matchedCrop",
+    PressScale = "pressScale",
+    Scale = "scale",
+    Rotate = "rotate",
+    Origin = "origin",
+    Offset = "offset",
+    Outline = "outline",
+    OutlineWidth = "outlineWidth",
+    Raise = "raise",
+    Cols = "cols",
+    Aspect = "aspect",
 }
 
 /// Every prop name the built-in nodes read.
+///
+/// ```
+/// assert!(rune_luau::prop_names().any(|name| name == "maxLines"));
+/// ```
 pub fn prop_names() -> impl Iterator<Item = &'static str> {
     NAMES.iter().map(|(n, _)| *n)
 }
@@ -133,36 +152,6 @@ pub(crate) unsafe extern "C-unwind" fn useratom(_: *mut ffi::lua_State, s: *cons
     // SAFETY: Luau passes the new string's bytes and length.
     let bytes = unsafe { std::slice::from_raw_parts(s.cast::<u8>(), len) };
     by_name(bytes).map_or(-1, |a| a as i16)
-}
-
-/// A prop value on the stack. Strings borrow the Lua string, which the table keeps alive.
-#[derive(Clone, Copy)]
-pub(crate) enum Value<'a> {
-    Nil,
-    Bool(bool),
-    Num(f64),
-    Str(&'a str),
-    Func,
-    Other(&'static str),
-}
-
-/// Reads stack slot `idx`.
-pub(crate) unsafe fn read<'a>(state: *mut ffi::lua_State, idx: c_int) -> Value<'a> {
-    // SAFETY: the caller passes a valid slot; strings stay alive while their table is on the stack.
-    unsafe {
-        match ffi::lua_type(state, idx) {
-            ffi::LUA_TNIL => Value::Nil,
-            ffi::LUA_TBOOLEAN => Value::Bool(ffi::lua_toboolean(state, idx) != 0),
-            ffi::LUA_TNUMBER => Value::Num(ffi::lua_tonumberx(state, idx, std::ptr::null_mut())),
-            ffi::LUA_TSTRING => {
-                let mut len = 0;
-                let p = ffi::lua_tolstring(state, idx, &mut len);
-                Value::Str(std::str::from_utf8(std::slice::from_raw_parts(p.cast::<u8>(), len)).unwrap_or(""))
-            }
-            ffi::LUA_TFUNCTION => Value::Func,
-            t => Value::Other(CStr::from_ptr(ffi::lua_typename(state, t)).to_str().unwrap_or("value")),
-        }
-    }
 }
 
 /// The key at stack slot `idx` as an atom, or its text when it isn't a prop name.
@@ -182,11 +171,13 @@ pub(crate) unsafe fn key_atom<'a>(state: *mut ffi::lua_State, idx: c_int) -> Res
     }
 }
 
-/// A size prop: points, or the parent's whole side.
-#[derive(Clone, Copy)]
-pub(crate) enum Size {
-    Points(f32),
-    Full,
+/// `clip`: soft rectangular clip (`clip = true`) or rounded clip (`clip = radius`).
+#[derive(Clone, Copy, Default)]
+enum Clip {
+    #[default]
+    None,
+    Soft,
+    Rounded(f32),
 }
 
 /// Padding sides a prop set on its own (`pt`, `px`, ...), which `pad` leaves alone.
@@ -220,9 +211,14 @@ pub(crate) struct Props {
     fade_out: bool,
     single_line: bool,
     wrap: bool,
+    max_lines: Option<usize>,
+    matched_crop: bool,
     selectable: bool,
     text_align: Option<Align>,
     border: (Option<f32>, Option<Color>),
+    outline: (Option<f32>, Option<Color>),
+    raise: bool,
+    clip: Clip,
     pub(crate) scroll: Option<(bool, bool)>,
     stick_bottom: bool,
     /// A prop whose effect depends on more than its value and the colours (`shadow`): the node
@@ -251,9 +247,14 @@ impl Props {
             fade_out: false,
             single_line: false,
             wrap: false,
+            max_lines: None,
+            matched_crop: false,
             selectable: false,
             text_align: None,
             border: (None, None),
+            outline: (None, None),
+            raise: false,
+            clip: Clip::None,
             scroll: None,
             stick_bottom: false,
             uncacheable: false,
@@ -329,6 +330,9 @@ impl Props {
             if self.wrap {
                 e.set_wrap();
             }
+            if let Some(lines) = self.max_lines {
+                with(e, |e| e.max_lines(lines));
+            }
             if self.selectable {
                 e.set_selectable(true);
             }
@@ -338,9 +342,24 @@ impl Props {
         } else if let Some(c) = self.color {
             e.set_color(c);
         }
+        if self.matched_crop {
+            with(e, El::matched_crop);
+        }
         if self.border != (None, None) {
             let c = self.border.1.unwrap_or_else(|| env.color("separator").unwrap_or(Color::TRANSPARENT));
             e.set_border(self.border.0.unwrap_or(1.0), c);
+        }
+        if self.outline != (None, None) {
+            let c = self.outline.1.unwrap_or_else(|| env.color("separator").unwrap_or(Color::TRANSPARENT));
+            with(e, |e| e.outline(self.outline.0.unwrap_or(1.0), 0.0, c));
+        }
+        if self.raise {
+            with(e, El::raise);
+        }
+        match self.clip {
+            Clip::None => {}
+            Clip::Soft => _ = e.set_clip_soft(0.0),
+            Clip::Rounded(r) => with(e, |e| e.clip_rounded(r)),
         }
         match self.scroll {
             Some((true, true)) => e.set_scroll_xy(),
@@ -371,11 +390,6 @@ impl Props {
             other => Err(format!("{name} must be a color token or ui.hex(...), got {}", self::name(other))),
         };
         let string = |v| as_str(atom, v);
-        let size = |v: Value<'_>| match v {
-            Value::Num(n) => Ok(Size::Points(n as f32)),
-            Value::Str("full") => Ok(Size::Full),
-            other => Err(format!("{name} must be a number or \"full\", got {}", self::name(other))),
-        };
         match atom {
             Atom::Key => {
                 self.key = Some(match v {
@@ -384,15 +398,17 @@ impl Props {
                 })
             }
             Atom::W => {
-                match size(v)? {
+                match parse_size(name, v)? {
                     Size::Points(n) => e.set_w(n),
                     Size::Full => e.set_w_full(),
+                    Size::Frac(f) => e.set_w_frac(f),
                 };
             }
             Atom::H => {
-                match size(v)? {
+                match parse_size(name, v)? {
                     Size::Points(n) => e.set_h(n),
                     Size::Full => e.set_h_full(),
+                    Size::Frac(f) => e.set_h_frac(f),
                 };
             }
             Atom::MinW => _ = e.set_min_w(num(v)?),
@@ -488,9 +504,13 @@ impl Props {
             Atom::BorderWidth => self.border.0 = Some(num(v)?),
             Atom::Radius => _ = e.set_radius(num(v)?),
             Atom::Clip => {
-                if flag(v)? {
-                    e.set_clip_soft(0.0);
-                }
+                self.clip = match v {
+                    Value::Bool(true) => Clip::Soft,
+                    Value::Bool(false) | Value::Nil => Clip::None,
+                    Value::Num(n) if n.is_finite() && n >= 0.0 => Clip::Rounded(n as f32),
+                    Value::Num(n) => return Err(format!("clip radius must be a non-negative finite number, got {n}")),
+                    other => return Err(format!("clip must be a boolean or number, got {}", self::name(other))),
+                };
             }
             Atom::ScrollY | Atom::ScrollX => {
                 if flag(v)? {
@@ -578,8 +598,37 @@ impl Props {
                 };
                 with(e, |e| e.dir(dir));
             }
+            Atom::MaxLines => self.max_lines = Some(non_neg_int(name, v)?),
+            Atom::Matched => {
+                let s = string(v)?;
+                if s.is_empty() {
+                    return Err("matched must be a non-empty string".into());
+                }
+                with(e, |e| e.matched(s));
+            }
+            Atom::MatchedCrop => self.matched_crop = flag(v)?,
+            Atom::PressScale => {
+                let n = positive(name, v)?;
+                with(e, |e| e.press_scale(n));
+            }
+            Atom::Scale => {
+                let n = non_neg(name, v)?;
+                with(e, |e| e.scale(n));
+            }
+            Atom::Rotate => {
+                let deg = finite(name, v)?;
+                with(e, |e| e.rotate(deg.to_radians()));
+            }
+            Atom::Outline => self.outline.1 = Some(color(v)?),
+            Atom::OutlineWidth => self.outline.0 = Some(non_neg(name, v)?),
+            Atom::Raise => self.raise = flag(v)?,
+            Atom::Cols => {
+                let n = pos_int(name, v)?;
+                with(e, |e| e.equal_columns(n));
+            }
+            Atom::Aspect => _ = e.set_aspect_ratio(positive(name, v)?),
             // Tables, read off the stack by `decode_at`.
-            Atom::Corners | Atom::Pin => return Err(format!("{name} must be a table, got {}", self::name(v))),
+            Atom::Corners | Atom::Pin | Atom::Origin | Atom::Offset => return Err(format!("{name} must be a table, got {}", self::name(v))),
             Atom::LineHeight => self.text = self.text.lh(num(v)?),
             Atom::Tracking => self.text = self.text.tracking(num(v)?),
             Atom::Mono => {
@@ -617,12 +666,12 @@ impl Props {
     }
 
     /// Decodes the prop whose value is at stack slot `idx` onto `e`, reading the table-valued
-    /// ones (`corners`, `pin`) off the stack.
+    /// ones (`corners`, `pin`, `origin`, `offset`) off the stack.
     pub(crate) unsafe fn decode_at(&mut self, e: &mut El, state: *mut ffi::lua_State, atom: Atom, idx: c_int, env: &Env, is_text: bool) -> Result<(), String> {
         // SAFETY: the caller passes a valid slot.
         let v = unsafe { read(state, idx) };
         match (atom, v) {
-            (Atom::Corners | Atom::Pin, Value::Nil) => Ok(()),
+            (Atom::Corners | Atom::Pin | Atom::Origin | Atom::Offset, Value::Nil) => Ok(()),
             (Atom::Corners, Value::Other("table")) => {
                 // SAFETY: slot `idx` holds a table.
                 let r = unsafe { numbers::<4>(state, idx, &[]) };
@@ -633,6 +682,18 @@ impl Props {
                 // SAFETY: slot `idx` holds a table.
                 let [l, t, r, b] = unsafe { numbers::<4>(state, idx, &["left", "top", "right", "bottom"]) };
                 e.set_pin(l, t, r, b);
+                Ok(())
+            }
+            (Atom::Origin, Value::Other("table")) => {
+                // SAFETY: slot `idx` holds a table.
+                let [x, y] = unsafe { xy_pair(state, idx, "origin", [0.5, 0.5]) }?;
+                with(e, |e| e.origin(x, y));
+                Ok(())
+            }
+            (Atom::Offset, Value::Other("table")) => {
+                // SAFETY: slot `idx` holds a table.
+                let [x, y] = unsafe { xy_pair(state, idx, "offset", [0.0, 0.0]) }?;
+                with(e, |e| e.offset(x, y));
                 Ok(())
             }
             _ => self.decode(e, atom, v, env, is_text),
@@ -647,29 +708,6 @@ fn with(e: &mut El, f: impl FnOnce(El) -> El) {
     *e = f(taken);
 }
 
-/// `N` numbers from the table at `idx`: by name when `names` are given, else items `1..=N`.
-unsafe fn numbers<const N: usize>(state: *mut ffi::lua_State, idx: c_int, names: &[&str]) -> [Option<f32>; N] {
-    let mut out = [None; N];
-    // SAFETY: `idx` is a table; each lookup pushes one value, popped right after.
-    unsafe {
-        let idx = ffi::lua_absindex(state, idx);
-        for (i, slot) in out.iter_mut().enumerate() {
-            let kind = match names.get(i) {
-                Some(name) => {
-                    ffi::lua_pushlstring(state, name.as_ptr().cast(), name.len());
-                    ffi::lua_rawget(state, idx)
-                }
-                None => ffi::lua_rawgeti(state, idx, i as ffi::lua_Integer + 1),
-            };
-            if kind == ffi::LUA_TNUMBER {
-                *slot = Some(ffi::lua_tonumberx(state, -1, std::ptr::null_mut()) as f32);
-            }
-            ffi::lua_settop(state, -2);
-        }
-    }
-    out
-}
-
 fn as_str(atom: Atom, v: Value<'_>) -> Result<&str, String> {
     match v {
         Value::Str(s) => Ok(s),
@@ -677,48 +715,6 @@ fn as_str(atom: Atom, v: Value<'_>) -> Result<&str, String> {
     }
 }
 
-fn role(s: &str) -> Option<&'static str> {
-    Some(match s {
-        "none" => "none",
-        "group" => "group",
-        "region" => "region",
-        "button" => "button",
-        "link" => "link",
-        "switch" => "switch",
-        "checkbox" => "checkbox",
-        "radio" => "radio",
-        "tab" => "tab",
-        "list" => "list",
-        "listitem" => "listitem",
-        "heading" => "heading",
-        "img" => "img",
-        "status" => "status",
-        "timer" => "timer",
-        "alert" => "alert",
-        _ => return None,
-    })
-}
-
-pub(crate) fn name(v: Value<'_>) -> &'static str {
-    match v {
-        Value::Nil => "nil",
-        Value::Bool(_) => "boolean",
-        Value::Num(_) => "number",
-        Value::Str(_) => "string",
-        Value::Func => "function",
-        Value::Other(t) => t,
-    }
-}
-
-/// A number as Luau prints it: `3`, not `3.0`.
-pub(crate) fn format_num(n: f64) -> String {
-    let mut s = String::new();
-    push_num(&mut s, n);
-    s
-}
-
-/// [`format_num`] onto the end of `out`.
-pub(crate) fn push_num(out: &mut String, n: f64) {
-    use std::fmt::Write;
-    if n.fract() == 0.0 && n.abs() < 1e15 { write!(out, "{}", n as i64).ok(); } else { write!(out, "{n}").ok(); }
-}
+#[cfg(test)]
+#[path = "props_tests.rs"]
+mod tests;

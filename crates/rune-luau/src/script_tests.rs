@@ -126,3 +126,113 @@ return {
     assert_eq!(done.get("second").as_i64(), Some(1), "second task.wait(0.2) resumes after +0.25 s");
     assert_eq!(done.get("delayed").as_i64(), Some(1), "task.delay(0.2) resumes after +0.25 s");
 }
+
+
+
+/// The eight added WAI-ARIA 1.2 roles map onto Rune's AccessKit roles and unknown roles still fail.
+#[test]
+fn extended_aria_roles_reach_accessibility_tree_and_unknown_role_errors() {
+    let src = r#"
+local ui = require("@rune/ui")
+return {
+    render = function()
+        return ui.col({ w = 300, h = 400 }, {
+            ui.box({ key = "r_slider", role = "slider", label = "Volume", w = 100, h = 20 }),
+            ui.box({ key = "r_spin", role = "spinbutton", label = "Count", w = 100, h = 20 }),
+            ui.box({ key = "r_textbox", role = "textbox", label = "Notes", w = 100, h = 20 }),
+            ui.box({ key = "r_progress", role = "progressbar", label = "Loading", w = 100, h = 20 }),
+            ui.box({ key = "r_dialog", role = "dialog", label = "Confirm", w = 100, h = 20 }),
+            ui.box({ key = "r_tablist", role = "tablist", label = "Sections", w = 100, h = 20 }),
+            ui.box({ key = "r_combobox", role = "combobox", label = "Country", w = 100, h = 20 }),
+            ui.box({ key = "r_tooltip", role = "tooltip", label = "Hint", w = 100, h = 20 }),
+        })
+    end,
+}
+"#;
+    let script = Script::new("roles", Sources::single(src));
+    assert!(script.error().is_none(), "start: {:?}", script.error());
+    let mut rt = Runtime::new(script, |s: &Script, cx: &mut Cx<Script>| s.view(cx), (320.0, 420.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    assert!(rt.state.log().is_empty(), "unexpected logs: {:?}", rt.state.log());
+
+    let elements = rt.elements();
+    let tree = rt.accessibility_json();
+    // `textbox` without a native text-input wraps a keyed box as a `group` in AccessKit while
+    // preserving the Rune element's `"textbox"` role.
+    let expected = [
+        ("r_slider", "slider", "slider"),
+        ("r_spin", "spinbutton", "spin-button"),
+        ("r_textbox", "textbox", "group"),
+        ("r_progress", "progressbar", "progress-indicator"),
+        ("r_dialog", "dialog", "dialog"),
+        ("r_tablist", "tablist", "tab-list"),
+        ("r_combobox", "combobox", "combo-box"),
+        ("r_tooltip", "tooltip", "tooltip"),
+    ];
+    let role_in_a11y = |key: &str| -> Option<&str> {
+        let mut stack = vec![&tree];
+        while let Some(node) = stack.pop() {
+            if node.get("key").and_then(|k| k.as_str()) == Some(key) {
+                return node.get("role").and_then(|r| r.as_str());
+            }
+            if let Some(children) = node.get("children").and_then(|c| c.as_array()) {
+                stack.extend(children);
+            }
+        }
+        None
+    };
+    for (key, rune_role, a11y_role) in expected {
+        let el = elements.iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("missing element {key}"));
+        assert_eq!(el.role, rune_role, "element {key} Rune role");
+        assert_eq!(role_in_a11y(key), Some(a11y_role), "a11y role for {key} in {tree}");
+    }
+
+    let bad = Script::new(
+        "bad_role",
+        Sources::single(r#"local ui = require("@rune/ui") return { render = function() return ui.box({ role = "widget" }) end }"#),
+    );
+    let _ = bad.render_uncached::<()>("render", true);
+    assert!(
+        bad.log().iter().any(|l| l.message.contains("unknown role widget")),
+        "unknown role must log an error, got {:?}",
+        bad.log()
+    );
+}
+
+/// `matched` inside `view:Memo` still records and animates shared-element flights.
+#[test]
+fn matched_animates_inside_view_memo() {
+    let src = r#"
+local ui = require("@rune/ui")
+local side = 0
+return {
+    render = function(view)
+        return ui.col({ w = 300, h = 120, gap = 8 }, {
+            ui.row({ key = "swap", w = 80, h = 24, onPress = function() side = 1 - side end }, { "Swap" }),
+            view:Memo("pair", side, function()
+                local pill = ui.box({ key = "pill", matched = "memo-pill", w = 50, h = 30, fill = "indicator" })
+                return ui.row({ w = 300, h = 40, justify = "between" }, {
+                    ui.box({ key = "left", w = 60, h = 40 }, { side == 0 and pill }),
+                    ui.box({ key = "right", w = 60, h = 40 }, { side == 1 and pill }),
+                })
+            end),
+        })
+    end,
+}
+"#;
+    let script = Script::new("memo_matched", Sources::single(src));
+    let mut rt = Runtime::new(script, |s: &Script, cx: &mut Cx<Script>| s.view(cx), (320.0, 140.0), Env::new(true, 1.0));
+    rt.poll = Some(|s, now, tx| s.poll(now, tx));
+    rt.frame(0.0);
+    let start_x = rt.presented("pill").expect("pill start").0[0];
+    let dest_x = rt.presented("right").expect("right slot").0[0];
+
+    let (bx, by) = rt.find("swap").expect("swap");
+    rt.pointer_down(bx, by);
+    rt.pointer_up(bx, by);
+    rt.frame(0.016);
+    assert!(!rt.matched_handovers().is_empty(), "matched inside view:Memo should record handover");
+    rt.frame(0.05);
+    let mid_x = rt.presented("pill").expect("pill mid").0[0];
+    assert!(mid_x > start_x + 1.0 && mid_x < dest_x - 1.0, "matched inside view:Memo should fly: {start_x} -> {mid_x} -> {dest_x}");
+}
