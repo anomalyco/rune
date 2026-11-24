@@ -492,7 +492,10 @@ fn lazy_fallback_matches_eager_fallback_glyphs_and_fonts() {
         "Launch 🚀",
         "Fly ✈️",
         "Heart ❤️",
+        "Flag 🏳\u{FE0F}\u{200D}🌈 Dev 👩🏽\u{200D}💻",
+        "Brazil 🇧🇷",
         "Heart ❤",
+        "Smile ☺\u{FE0E}",
         "Copy ⌘K",
         "Let 𝐀𝐁𝐂 𝑥𝑦𝑧 ℝℂ",
         "Missing \u{0378} end",
@@ -550,5 +553,295 @@ fn mono_span_checks_mono_font_coverage_not_sans() {
         "mono span lacking {ch:?} must trigger fallback even though sans covers it"
     );
 }
+/// Builds a minimal valid SFNT font based on bundled IBM Plex Mono with a custom family `name`,
+/// a Format 12 `cmap` mapping `codepoints` to nonzero glyph IDs `1..=N`, and an optional `COLR`
+/// table record so colour-font detection recognises it.
+fn make_test_font(family: &str, codepoints: &[char], is_color: bool) -> Vec<u8> {
+    const BASE: &[u8] = include_bytes!("../../../../rune/assets/IBMPlexMono-Regular.ttf");
+    let num = u16::from_be_bytes([BASE[4], BASE[5]]) as usize;
+    let mut tables: Vec<([u8; 4], Vec<u8>)> = Vec::with_capacity(num + 1);
+    for rec in BASE[12..12 + num * 16].chunks_exact(16) {
+        let tag: [u8; 4] = rec[0..4].try_into().unwrap();
+        let off = u32::from_be_bytes(rec[8..12].try_into().unwrap()) as usize;
+        let len = u32::from_be_bytes(rec[12..16].try_into().unwrap()) as usize;
+        tables.push((tag, BASE[off..off + len].to_vec()));
+    }
+
+    // Format 12 cmap (platform 3, encoding 10) covering sorted unique codepoints.
+    let mut cps: Vec<u32> = codepoints.iter().map(|&c| c as u32).collect();
+    cps.sort_unstable();
+    cps.dedup();
+    let sub_len = (16 + 12 * cps.len()) as u32;
+    let mut cmap = Vec::with_capacity(12 + sub_len as usize);
+    cmap.extend_from_slice(&0u16.to_be_bytes()); // version
+    cmap.extend_from_slice(&1u16.to_be_bytes()); // numTables
+    cmap.extend_from_slice(&3u16.to_be_bytes()); // platformID (Windows)
+    cmap.extend_from_slice(&10u16.to_be_bytes()); // encodingID (Unicode full)
+    cmap.extend_from_slice(&12u32.to_be_bytes()); // subtableOffset
+    cmap.extend_from_slice(&12u16.to_be_bytes()); // format 12
+    cmap.extend_from_slice(&0u16.to_be_bytes()); // reserved
+    cmap.extend_from_slice(&sub_len.to_be_bytes()); // length
+    cmap.extend_from_slice(&0u32.to_be_bytes()); // language
+    cmap.extend_from_slice(&(cps.len() as u32).to_be_bytes()); // numGroups
+    for (i, cp) in cps.into_iter().enumerate() {
+        cmap.extend_from_slice(&cp.to_be_bytes()); // startCharCode
+        cmap.extend_from_slice(&cp.to_be_bytes()); // endCharCode
+        cmap.extend_from_slice(&((i as u32) + 1).to_be_bytes()); // startGlyphID
+    }
+
+    // Minimal Format 0 name table (UTF-16BE, Windows en-US) for family / full / PS / typographic names.
+    let ps = family.replace(' ', "");
+    let entries: [(u16, &str); 5] = [
+        (1, family),
+        (2, "Regular"),
+        (4, family),
+        (6, &ps),
+        (16, family),
+    ];
+    let mut str_data = Vec::new();
+    let mut records = Vec::new();
+    for (name_id, val) in entries {
+        let offset = str_data.len() as u16;
+        for u in val.encode_utf16() {
+            str_data.extend_from_slice(&u.to_be_bytes());
+        }
+        let len = (str_data.len() as u16) - offset;
+        records.push((name_id, len, offset));
+    }
+    let storage_off = (6 + records.len() * 12) as u16;
+    let mut name = Vec::with_capacity(storage_off as usize + str_data.len());
+    name.extend_from_slice(&0u16.to_be_bytes()); // version
+    name.extend_from_slice(&(records.len() as u16).to_be_bytes()); // count
+    name.extend_from_slice(&storage_off.to_be_bytes()); // stringOffset
+    for (name_id, len, offset) in records {
+        name.extend_from_slice(&3u16.to_be_bytes()); // platformID (Windows)
+        name.extend_from_slice(&1u16.to_be_bytes()); // encodingID (Unicode BMP)
+        name.extend_from_slice(&0x0409u16.to_be_bytes()); // languageID (en-US)
+        name.extend_from_slice(&name_id.to_be_bytes());
+        name.extend_from_slice(&len.to_be_bytes());
+        name.extend_from_slice(&offset.to_be_bytes());
+    }
+    name.extend_from_slice(&str_data);
+
+    tables.retain(|(tag, _)| !matches!(tag, b"cmap" | b"name" | b"COLR"));
+    tables.push((*b"cmap", cmap));
+    tables.push((*b"name", name));
+    if is_color {
+        tables.push((*b"COLR", vec![0u8; 14]));
+    }
+    tables.sort_by_key(|(tag, _)| *tag);
+
+    let count = tables.len() as u16;
+    let mut entry_sel = 0u16;
+    while (1u16 << (entry_sel + 1)) <= count {
+        entry_sel += 1;
+    }
+    let search_range = (1u16 << entry_sel) * 16;
+    let range_shift = count * 16 - search_range;
+
+    let mut out = Vec::new();
+    out.extend_from_slice(&[0, 1, 0, 0]);
+    out.extend_from_slice(&count.to_be_bytes());
+    out.extend_from_slice(&search_range.to_be_bytes());
+    out.extend_from_slice(&entry_sel.to_be_bytes());
+    out.extend_from_slice(&range_shift.to_be_bytes());
+
+    let mut offset = 12 + tables.len() * 16;
+    for (tag, data) in &tables {
+        out.extend_from_slice(tag);
+        out.extend_from_slice(&0u32.to_be_bytes()); // checksum (ignored by font parsers here)
+        out.extend_from_slice(&(offset as u32).to_be_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        offset += (data.len() + 3) & !3;
+    }
+    for (_, data) in tables {
+        out.extend_from_slice(&data);
+        while out.len() % 4 != 0 {
+            out.push(0);
+        }
+    }
+    out
+}
+
+/// Registers synthetic font bytes into `ts.font_cx.collection`, returning its `FamilyId`.
+fn register_test_font(ts: &mut TextSystem, bytes: Vec<u8>) -> FamilyId {
+    let blob = parley::fontique::Blob::new(std::sync::Arc::new(bytes));
+    let added = ts.font_cx.collection.register_fonts(blob, None);
+    assert_eq!(added.len(), 1, "synthetic font must register one family");
+    added[0].0
+}
+
+/// Colour emoji fonts explicitly selected by name in `families` or `Family::Named` must precede
+/// the system emoji font for default-presentation emoji, `U+FE0F` sequences, regional indicator
+/// flags, and ZWJ sequences, while uncovered emoji still fall back to `ts.emoji` and plain text
+/// symbols stay on the text font.
+#[test]
+fn selected_color_emoji_precedes_system_emoji_in_families_and_named() {
+    let app_emoji = make_test_font(
+        "App Emoji",
+        &['\u{2764}', '\u{1F680}', '\u{1F1E7}', '\u{1F1F7}', '\u{1F3F3}', '\u{1F308}'],
+        true,
+    );
+    let sys_emoji = make_test_font(
+        "Sys Emoji",
+        &['\u{2764}', '\u{1F680}', '\u{1F1E7}', '\u{1F1F7}', '\u{1F3F3}', '\u{1F308}', '\u{1F389}'],
+        true,
+    );
+    let style = TextStyle::new(16.0, 400.0);
+
+    let setup = |sans: &str, mono: &str| {
+        let mut ts = TextSystem::new_local(&[], ("Inter", "ui-monospace"));
+        register_test_font(&mut ts, app_emoji.clone());
+        register_test_font(&mut ts, sys_emoji.clone());
+        ts.apply_families(sans, mono);
+        ts.emoji = Some("Sys Emoji");
+        ts.push_symbol_family("Sys Emoji", true);
+        ts.fallbacks.asked.insert('\u{FE0F}');
+        ts
+    };
+
+    // 1. Selected in sans slot CSS list: ("Inter, \"App Emoji\"", "ui-monospace").
+    let mut ts = setup("Inter, \"App Emoji\"", "ui-monospace");
+    for (sample, label) in [
+        ("Launch 🚀", "default presentation"),
+        ("Heart ❤️", "explicit U+FE0F"),
+        ("Brazil 🇧🇷", "regional indicator flag"),
+        ("Flag 🏳\u{FE0F}\u{200D}🌈", "ZWJ sequence"),
+    ] {
+        let (glyphs, _, _) = glyph_signature(&mut ts, sample, &[], style);
+        assert!(
+            glyphs.iter().any(|(fam, gid)| fam == "App Emoji" && *gid != 0),
+            "{label} ({sample:?}) must shape with App Emoji: {glyphs:?}"
+        );
+        assert!(
+            !glyphs.iter().any(|(fam, _)| fam == "Sys Emoji"),
+            "{label} ({sample:?}) must not be overridden by Sys Emoji: {glyphs:?}"
+        );
+    }
+    // Uncovered emoji still falls back to Sys Emoji.
+    let (party, _, _) = glyph_signature(&mut ts, "Party 🎉", &[], style);
+    assert!(party.iter().any(|(fam, gid)| fam == "Sys Emoji" && *gid != 0), "uncovered emoji must fall back to Sys Emoji: {party:?}");
+    // Plain text heart without U+FE0F stays on monochrome Inter.
+    let (plain_heart, _, _) = glyph_signature(&mut ts, "Heart ❤", &[], style);
+    assert!(plain_heart.iter().all(|(fam, gid)| fam == "Inter" && *gid != 0), "plain heart must stay on Inter: {plain_heart:?}");
+
+    // 2. Selected via Family::Named("App Emoji") while sans slot is plain "Inter".
+    let mut named_ts = setup("Inter", "ui-monospace");
+    let named_style = style.family(Family::Named("App Emoji"));
+    for sample in ["Launch 🚀", "Heart ❤️", "Brazil 🇧🇷"] {
+        let (glyphs, _, _) = glyph_signature(&mut named_ts, sample, &[], named_style);
+        assert!(glyphs.iter().any(|(fam, gid)| fam == "App Emoji" && *gid != 0), "Family::Named must use App Emoji for {sample:?}: {glyphs:?}");
+        assert!(!glyphs.iter().any(|(fam, _)| fam == "Sys Emoji"), "Family::Named must precede Sys Emoji for {sample:?}: {glyphs:?}");
+    }
+    let (named_party, _, _) = glyph_signature(&mut named_ts, "Party 🎉", &[], named_style);
+    assert!(named_party.iter().any(|(fam, gid)| fam == "Sys Emoji" && *gid != 0), "Family::Named uncovered emoji must fall back to Sys Emoji: {named_party:?}");
+
+    // 3. Selected in mono slot for both Family::Mono and inline mono spans.
+    let mut mono_ts = setup("Inter", "ui-monospace, \"App Emoji\"");
+    let (mono_glyphs, _, _) = glyph_signature(&mut mono_ts, "Launch 🚀", &[], style.mono());
+    assert!(mono_glyphs.iter().any(|(fam, gid)| fam == "App Emoji" && *gid != 0), "Family::Mono must use selected App Emoji: {mono_glyphs:?}");
+    assert!(!mono_glyphs.iter().any(|(fam, _)| fam == "Sys Emoji"), "Family::Mono must precede Sys Emoji: {mono_glyphs:?}");
+    let text = "a 🚀 b";
+    let span = [Span::new(0, text.len()).mono()];
+    let (span_glyphs, _, _) = glyph_signature(&mut mono_ts, text, &span, style);
+    assert!(span_glyphs.iter().any(|(fam, gid)| fam == "App Emoji" && *gid != 0), "mono span must use selected App Emoji: {span_glyphs:?}");
+    assert!(!span_glyphs.iter().any(|(fam, _)| fam == "Sys Emoji"), "mono span must precede Sys Emoji: {span_glyphs:?}");
+
+    // 4. Runtime face arrival (`swap_faces`) + `apply_families` follows the same precedence and
+    // invalidates any cached monochrome classification when a colour face replaces a monochrome one.
+    let mono_slot = make_test_font("Swapped Emoji", &['\u{1F680}', '\u{1F1E7}', '\u{1F1F7}'], false);
+    let color_slot = make_test_font("Swapped Emoji", &['\u{1F680}', '\u{1F1E7}', '\u{1F1F7}'], true);
+    let mut rt_ts = TextSystem::new_local(&[], ("Inter", "ui-monospace"));
+    register_test_font(&mut rt_ts, mono_slot);
+    register_test_font(&mut rt_ts, sys_emoji);
+    rt_ts.apply_families("Inter, \"Swapped Emoji\"", "ui-monospace");
+    rt_ts.emoji = Some("Sys Emoji");
+    rt_ts.push_symbol_family("Sys Emoji", true);
+    rt_ts.fallbacks.asked.insert('\u{FE0F}');
+    // Initially monochrome: Sys Emoji wins and caches false for Swapped Emoji.
+    let (before_swap, _, _) = glyph_signature(&mut rt_ts, "Launch 🚀", &[], style);
+    assert!(before_swap.iter().any(|(fam, gid)| fam == "Sys Emoji" && *gid != 0), "monochrome Swapped Emoji must not win before swap: {before_swap:?}");
+    // Swap in the colour face for the same family: cache invalidates and Swapped Emoji now wins.
+    rt_ts.swap_faces(&[parley::fontique::Blob::new(std::sync::Arc::new(color_slot))]);
+    rt_ts.drop_shaped();
+    for sample in ["Launch 🚀", "Brazil 🇧🇷"] {
+        let (glyphs, _, _) = glyph_signature(&mut rt_ts, sample, &[], style);
+        assert!(glyphs.iter().any(|(fam, gid)| fam == "Swapped Emoji" && *gid != 0), "swapped colour face must win for {sample:?}: {glyphs:?}");
+        assert!(!glyphs.iter().any(|(fam, _)| fam == "Sys Emoji"), "swapped colour face must precede Sys Emoji for {sample:?}: {glyphs:?}");
+    }
+}
+
+/// A colour emoji font that is only registered (not selected by name in the active stack) must
+/// not be promoted ahead of the system emoji font.
+#[test]
+fn unselected_registered_color_font_does_not_precede_system_emoji() {
+    let app_emoji = make_test_font("App Emoji", &['\u{2764}', '\u{1F680}', '\u{1F1E7}', '\u{1F1F7}'], true);
+    let sys_emoji = make_test_font("Sys Emoji", &['\u{2764}', '\u{1F680}', '\u{1F1E7}', '\u{1F1F7}'], true);
+    let style = TextStyle::new(16.0, 400.0);
+
+    let mut ts = TextSystem::new_local(&[], ("Inter", "ui-monospace"));
+    let id = register_test_font(&mut ts, app_emoji);
+    ts.fallbacks.own_families.push(id);
+    ts.sync_cjk_fallbacks();
+    register_test_font(&mut ts, sys_emoji);
+    ts.emoji = Some("Sys Emoji");
+    ts.push_symbol_family("Sys Emoji", true);
+    ts.fallbacks.asked.insert('\u{FE0F}');
+
+    for sample in ["Launch 🚀", "Heart ❤️", "Brazil 🇧🇷"] {
+        let (glyphs, _, _) = glyph_signature(&mut ts, sample, &[], style);
+        assert!(glyphs.iter().any(|(fam, gid)| fam == "Sys Emoji" && *gid != 0), "unselected color font must not override Sys Emoji for {sample:?}: {glyphs:?}");
+        assert!(!glyphs.iter().any(|(fam, _)| fam == "App Emoji"), "unselected App Emoji must not be promoted for {sample:?}: {glyphs:?}");
+    }
+}
+
+/// When a selected colour emoji font covers every emoji in the text, `load_fallbacks` must not
+/// load the system emoji font, and monochrome primary fonts (Inter) must still not steal `❤️`.
+#[test]
+fn selected_color_emoji_skips_loading_system_emoji_when_covered() {
+    let app_emoji = make_test_font("App Emoji", &['\u{2764}', '\u{1F680}', '\u{1F1E7}', '\u{1F1F7}'], true);
+    let style = TextStyle::new(16.0, 400.0);
+
+    let mut ts = TextSystem::new_local(&[], ("Inter", "ui-monospace"));
+    register_test_font(&mut ts, app_emoji);
+    ts.apply_families("Inter, \"App Emoji\"", "ui-monospace");
+    assert!(ts.emoji.is_none(), "system emoji must not load at setup");
+
+    for sample in ["Launch 🚀", "Heart ❤️", "Brazil 🇧🇷"] {
+        let (glyphs, _, _) = glyph_signature(&mut ts, sample, &[], style);
+        assert!(ts.emoji.is_none(), "covered {sample:?} must not load system emoji: {:?}", ts.emoji);
+        assert!(ts.fallbacks.asked.is_empty(), "covered {sample:?} must not query fallback: {:?}", ts.fallbacks.asked);
+        assert!(glyphs.iter().any(|(fam, gid)| fam == "App Emoji" && *gid != 0), "{sample:?} must shape with App Emoji (not monochrome Inter): {glyphs:?}");
+    }
+
+    // An emoji App Emoji lacks still triggers system emoji loading on demand.
+    let _ = glyph_signature(&mut ts, "Party 🎉", &[], style);
+    assert!(ts.fallbacks.asked.contains(&'\u{FE0F}'), "uncovered emoji must trigger system emoji lookup");
+}
+
+/// A monochrome font explicitly selected by name must never be promoted ahead of the emoji font
+/// for `Route::Emoji` graphemes.
+#[test]
+fn monochrome_selected_font_cannot_steal_emoji() {
+    let mono_extra = make_test_font("Mono Extra", &['\u{2764}', '\u{1F680}'], false);
+    let sys_emoji = make_test_font("Sys Emoji", &['\u{2764}', '\u{1F680}'], true);
+    let style = TextStyle::new(16.0, 400.0);
+
+    let mut ts = TextSystem::new_local(&[], ("Inter", "ui-monospace"));
+    register_test_font(&mut ts, mono_extra);
+    register_test_font(&mut ts, sys_emoji);
+    ts.apply_families("Inter, \"Mono Extra\"", "ui-monospace");
+    ts.emoji = Some("Sys Emoji");
+    ts.push_symbol_family("Sys Emoji", true);
+    ts.fallbacks.asked.insert('\u{FE0F}');
+
+    for sample in ["Launch 🚀", "Heart ❤️"] {
+        let (glyphs, _, _) = glyph_signature(&mut ts, sample, &[], style);
+        assert!(glyphs.iter().any(|(fam, gid)| fam == "Sys Emoji" && *gid != 0), "monochrome font must not steal {sample:?} from Sys Emoji: {glyphs:?}");
+        assert!(!glyphs.iter().any(|(fam, _)| fam == "Mono Extra"), "monochrome Mono Extra must not take {sample:?}: {glyphs:?}");
+    }
+}
+
+
 
 

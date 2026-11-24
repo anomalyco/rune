@@ -225,6 +225,8 @@ pub(crate) struct Fallbacks {
     /// Segoe UI Symbol is loaded, for symbols with a text form (Windows).
     #[cfg_attr(not(windows), allow(dead_code))]
     text_symbols: bool,
+    /// Cached colour-table check (`COLR`, `CBDT` or `sbix`) per registered `FamilyId`.
+    color_families: HashMap<FamilyId, bool>,
 }
 
 impl Fallbacks {
@@ -236,6 +238,10 @@ impl Fallbacks {
             }
         }
         Fallbacks { own_families, ..Default::default() }
+    }
+
+    pub(crate) fn clear_color_family_cache(&mut self) {
+        self.color_families.clear();
     }
 }
 
