@@ -1,0 +1,1 @@
+- `rune-kit` `SidebarPeek`: a peek configured with `Spring::NONE` now stays instant under reduced motion instead of gaining a 0.15 s fade (keeping `SidebarPeek::reduced_motion_fade` as an explicit override), and `SidebarPeek::reduced_motion_fade(0.0)` now snaps both the peek content and its floating surface.
