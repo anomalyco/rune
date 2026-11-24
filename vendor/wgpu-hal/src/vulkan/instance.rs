@@ -230,7 +230,14 @@ impl super::Instance {
         flags: wgt::InstanceFlags,
     ) -> Result<Vec<&'static CStr>, crate::InstanceError> {
         let instance_extensions = Self::enumerate_instance_extension_properties(entry, None)?;
+        Ok(Self::filter_desired_extensions(&instance_extensions, flags))
+    }
 
+    /// Rune: intersects wgpu-hal's desired instance extensions with `instance_extensions`.
+    fn filter_desired_extensions(
+        instance_extensions: &[vk::ExtensionProperties],
+        flags: wgt::InstanceFlags,
+    ) -> Vec<&'static CStr> {
         // Check our extensions against the available extensions
         let mut extensions: Vec<&'static CStr> = Vec::new();
 
@@ -298,7 +305,7 @@ impl super::Instance {
                 false
             }
         });
-        Ok(extensions)
+        extensions
     }
 
     /// # Safety
@@ -325,6 +332,38 @@ impl super::Instance {
         memory_budget_thresholds: wgt::MemoryBudgetThresholds,
         has_nv_optimus: bool,
         drop_callback: Option<crate::DropCallback>,
+    ) -> Result<Self, crate::InstanceError> {
+        unsafe {
+            Self::from_raw_with_direct_drivers(
+                entry,
+                raw_instance,
+                instance_api_version,
+                android_sdk_version,
+                debug_utils_create_info,
+                extensions,
+                flags,
+                memory_budget_thresholds,
+                has_nv_optimus,
+                drop_callback,
+                #[cfg(target_os = "linux")]
+                Vec::new(),
+            )
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn from_raw_with_direct_drivers(
+        entry: ash::Entry,
+        raw_instance: ash::Instance,
+        instance_api_version: u32,
+        android_sdk_version: u32,
+        debug_utils_create_info: Option<super::DebugUtilsCreateInfo>,
+        extensions: Vec<&'static CStr>,
+        flags: wgt::InstanceFlags,
+        memory_budget_thresholds: wgt::MemoryBudgetThresholds,
+        has_nv_optimus: bool,
+        drop_callback: Option<crate::DropCallback>,
+        #[cfg(target_os = "linux")] direct_drivers: Vec<libloading::Library>,
     ) -> Result<Self, crate::InstanceError> {
         log::debug!("Instance version: 0x{instance_api_version:x}");
 
@@ -380,6 +419,8 @@ impl super::Instance {
                 has_nv_optimus,
                 instance_api_version,
                 android_sdk_version,
+                #[cfg(target_os = "linux")]
+                _direct_drivers: direct_drivers,
             }),
         })
     }
@@ -625,6 +666,30 @@ impl super::Instance {
                 },
             );
 
+        #[cfg(target_os = "linux")]
+        let direct_drivers = if callback.is_none()
+            && !desc.flags.intersects(
+                wgt::InstanceFlags::DEBUG
+                    | wgt::InstanceFlags::VALIDATION
+                    | wgt::InstanceFlags::GPU_BASED_VALIDATION,
+            ) {
+            match direct_drivers::active_paths() {
+                Some(paths) if !paths.is_empty() => Some(unsafe { direct_drivers::load(&paths) }?),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        #[cfg(target_os = "linux")]
+        let mut extensions = if let Some(loaded) = direct_drivers.as_ref() {
+            let mut exts = Self::filter_desired_extensions(&loaded.extensions, desc.flags);
+            exts.push(vk::LUNARG_DIRECT_DRIVER_LOADING_NAME);
+            exts
+        } else {
+            Self::desired_extensions(&entry, instance_api_version, desc.flags)?
+        };
+        #[cfg(not(target_os = "linux"))]
         let mut extensions = Self::desired_extensions(&entry, instance_api_version, desc.flags)?;
         let mut create_info = vk::InstanceCreateInfo::default();
 
@@ -830,6 +895,17 @@ impl super::Instance {
                 create_info = create_info.push_next(&mut validation_features);
             }
 
+            #[cfg(target_os = "linux")]
+            let mut direct_driver_list = direct_drivers.as_ref().map(|loaded| {
+                vk::DirectDriverLoadingListLUNARG::default()
+                    .mode(vk::DirectDriverLoadingModeLUNARG::EXCLUSIVE)
+                    .drivers(&loaded.infos)
+            });
+            #[cfg(target_os = "linux")]
+            if let Some(direct_driver_list) = direct_driver_list.as_mut() {
+                create_info = create_info.push_next(direct_driver_list);
+            }
+
             unsafe {
                 profiling::scope!("vkCreateInstance");
                 entry.create_instance(&create_info, None)
@@ -842,8 +918,13 @@ impl super::Instance {
             })?
         };
 
+        #[cfg(target_os = "linux")]
+        let direct_driver_libs = direct_drivers
+            .map(|loaded| loaded.libraries)
+            .unwrap_or_default();
+
         unsafe {
-            Self::from_raw(
+            Self::from_raw_with_direct_drivers(
                 entry,
                 vk_instance,
                 instance_api_version,
@@ -854,6 +935,8 @@ impl super::Instance {
                 desc.memory_budget_thresholds,
                 has_nv_optimus,
                 None,
+                #[cfg(target_os = "linux")]
+                direct_driver_libs,
             )
         }
     }
@@ -1047,5 +1130,192 @@ impl crate::Surface for super::Surface {
                 .discard_texture(texture)
                 .unwrap()
         };
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl super::Instance {
+    /// Rune: scopes `VK_LUNARG_direct_driver_loading` (exclusive mode) to `paths` for any
+    /// Vulkan instance created on the current thread during `f`, restoring any previous list on
+    /// return or unwind.
+    pub fn with_direct_drivers<R>(paths: Vec<std::path::PathBuf>, f: impl FnOnce() -> R) -> R {
+        direct_drivers::with(paths, f)
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod direct_drivers {
+    use alloc::{string::String, vec, vec::Vec};
+    use core::{cell::RefCell, ffi::c_char, ptr};
+    use std::path::PathBuf;
+
+    use ash::vk;
+
+    const MAX_DRIVER_EXTENSIONS: u32 = 4096;
+
+    std::thread_local! {
+        static PATHS: RefCell<Option<Vec<PathBuf>>> = const { RefCell::new(None) };
+    }
+
+    struct Guard(Option<Vec<PathBuf>>);
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let prev = self.0.take();
+            PATHS.with(|cell| {
+                *cell.borrow_mut() = prev;
+            });
+        }
+    }
+
+    pub(super) fn with<R>(paths: Vec<PathBuf>, f: impl FnOnce() -> R) -> R {
+        let prev = PATHS.with(|cell| cell.borrow_mut().replace(paths));
+        let _guard = Guard(prev);
+        f()
+    }
+
+    pub(super) fn active_paths() -> Option<Vec<PathBuf>> {
+        PATHS.with(|cell| cell.borrow().clone())
+    }
+
+    pub(super) struct LoadedDirectDrivers {
+        pub(super) libraries: Vec<libloading::Library>,
+        pub(super) infos: Vec<vk::DirectDriverLoadingInfoLUNARG<'static>>,
+        pub(super) extensions: Vec<vk::ExtensionProperties>,
+    }
+
+    /// Loads each candidate ICD library with `dlopen`, resolves `vk_icdGetInstanceProcAddr`,
+    /// verifies the ICD interface v7 entry points required by Vulkan-Loader's
+    /// `loader_add_direct_driver`, and queries each driver's instance extensions directly
+    /// without calling the loader's `vkEnumerateInstanceExtensionProperties(NULL, ...)` (which
+    /// would trigger `loader_preload_icds` and `dlopen` every installed system ICD).
+    pub(super) unsafe fn load(
+        paths: &[PathBuf],
+    ) -> Result<LoadedDirectDrivers, crate::InstanceError> {
+        let mut libraries = Vec::new();
+        let mut infos = Vec::new();
+        let mut extensions = Vec::new();
+
+        for path in paths {
+            let lib = match unsafe { libloading::Library::new(path) } {
+                Ok(lib) => lib,
+                Err(err) => {
+                    log::debug!("direct driver load failed for {}: {err}", path.display());
+                    continue;
+                }
+            };
+            let get_proc: unsafe extern "system" fn(
+                vk::Instance,
+                *const c_char,
+            ) -> vk::PFN_vkVoidFunction = match unsafe {
+                lib.get::<unsafe extern "system" fn(
+                    vk::Instance,
+                    *const c_char,
+                ) -> vk::PFN_vkVoidFunction>(b"vk_icdGetInstanceProcAddr\0")
+            } {
+                Ok(sym) => *sym,
+                Err(err) => {
+                    log::debug!(
+                        "direct driver {} lacks vk_icdGetInstanceProcAddr: {err}",
+                        path.display()
+                    );
+                    continue;
+                }
+            };
+
+            let has_negotiate = unsafe {
+                get_proc(
+                    vk::Instance::null(),
+                    c"vk_icdNegotiateLoaderICDInterfaceVersion".as_ptr(),
+                )
+            }
+            .is_some();
+            let has_create =
+                unsafe { get_proc(vk::Instance::null(), c"vkCreateInstance".as_ptr()) }.is_some();
+            let enum_ext_raw = unsafe {
+                get_proc(
+                    vk::Instance::null(),
+                    c"vkEnumerateInstanceExtensionProperties".as_ptr(),
+                )
+            };
+            let (true, true, Some(enum_ext_fn)) = (has_negotiate, has_create, enum_ext_raw) else {
+                log::debug!(
+                    "direct driver {} lacks ICD interface v7 entry points",
+                    path.display()
+                );
+                continue;
+            };
+
+            let enum_ext: vk::PFN_vkEnumerateInstanceExtensionProperties =
+                unsafe { core::mem::transmute(enum_ext_fn) };
+
+            let mut count = 0u32;
+            let res = unsafe { enum_ext(ptr::null(), &mut count, ptr::null_mut()) };
+            if res != vk::Result::SUCCESS || count > MAX_DRIVER_EXTENSIONS {
+                log::debug!(
+                    "direct driver {} vkEnumerateInstanceExtensionProperties count failed: {res:?} ({count})",
+                    path.display()
+                );
+                continue;
+            }
+            let mut driver_exts = if count > 0 {
+                let mut buf = vec![vk::ExtensionProperties::default(); count as usize];
+                let res = unsafe { enum_ext(ptr::null(), &mut count, buf.as_mut_ptr()) };
+                if res != vk::Result::SUCCESS && res != vk::Result::INCOMPLETE {
+                    log::debug!(
+                        "direct driver {} vkEnumerateInstanceExtensionProperties read failed: {res:?}",
+                        path.display()
+                    );
+                    continue;
+                }
+                buf.truncate(count as usize);
+                buf
+            } else {
+                Vec::new()
+            };
+
+            extensions.append(&mut driver_exts);
+            infos.push(
+                vk::DirectDriverLoadingInfoLUNARG::default()
+                    .pfn_get_instance_proc_addr(Some(get_proc)),
+            );
+            libraries.push(lib);
+        }
+
+        if infos.is_empty() {
+            return Err(crate::InstanceError::new(String::from(
+                "no direct Vulkan driver loaded with ICD interface v7",
+            )));
+        }
+
+        Ok(LoadedDirectDrivers {
+            libraries,
+            infos,
+            extensions,
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn direct_drivers_scope_restores_on_return_and_unwind() {
+            assert_eq!(active_paths(), None);
+            let outer = vec![PathBuf::from("/usr/lib64/libvulkan_intel.so")];
+            let inner = vec![PathBuf::from("/usr/lib64/libvulkan_radeon.so")];
+            with(outer.clone(), || {
+                assert_eq!(active_paths(), Some(outer.clone()));
+                let panicked = std::panic::catch_unwind(|| {
+                    with(inner.clone(), || {
+                        assert_eq!(active_paths(), Some(inner.clone()));
+                        panic!("unwind guard check");
+                    });
+                });
+                assert!(panicked.is_err());
+                assert_eq!(active_paths(), Some(outer.clone()));
+            });
+            assert_eq!(active_paths(), None);
+        }
     }
 }

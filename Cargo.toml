@@ -106,7 +106,7 @@ exclude = ["tools/rune-dev-guard", "tools/ratex-math-wasm", "tools/ratex-math-wa
 # its worker threads (`DrainTracker`; hardware adapters pay zero marker cost, while skipping
 # `ExecuteCommandLists` and `allocator.Reset()` once removed on every adapter), and DirectComposition
 # unavailability detection (`Surface::dcomp_unavailable` when `CreateSwapChainForComposition` returns
-# `E_NOTIMPL` or `dcomp.dll` / `DCompositionCreateDevice2` / `CreateTargetForHwnd` fails). Re-made by
+# `E_NOTIMPL` or `dcomp.dll` / `DCompositionCreateDevice2` / `CreateTargetForHwnd` fails), and Linux `vulkan::Instance::with_direct_drivers` (`VK_LUNARG_direct_driver_loading` exclusive mode). Re-made by
 # `scripts/vendor-wgpu-hal.sh <version>` when wgpu is bumped. An app that builds Rune patches it too:
 # a dependency's `[patch]` doesn't apply to the workspace that depends on it.
 [patch.crates-io]

@@ -177,6 +177,12 @@ pub struct InstanceShared {
     /// It is associated with a `VkInstance` and its children,
     /// except for a `VkPhysicalDevice` and its children.
     instance_api_version: u32,
+    /// Rune: ICD libraries opened for `VK_LUNARG_direct_driver_loading`. Stored before
+    /// `drop_guard` (and dropped after `InstanceShared::drop` runs `vkDestroyInstance`) so
+    /// every ICD stays mapped until the `VkInstance` and every object holding
+    /// `Arc<InstanceShared>` have been destroyed.
+    #[cfg(target_os = "linux")]
+    _direct_drivers: Vec<libloading::Library>,
 
     // The `drop_guard` field must be the last field of this struct so it is dropped last.
     // Do not add new fields after it.
@@ -196,6 +202,8 @@ impl fmt::Debug for InstanceShared {
             has_nv_optimus,
             android_sdk_version,
             instance_api_version,
+            #[cfg(target_os = "linux")]
+            _direct_drivers: _,
             drop_guard: _,
         } = self;
         f.debug_struct("InstanceShared")
