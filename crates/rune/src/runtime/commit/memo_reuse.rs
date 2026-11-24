@@ -219,7 +219,7 @@ fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
     let crate::el::ElCold {
         focus, looping, trace_name, trace_namespace, role, label, live, above, motion, opacity_motion, lead,
         animated_changes, option_as_alt, transition, matched, scroll, scroll_axes, sticky, scroll_edges, growth, virtual_estimate, virtual_rows,
-        virtual_rows_version, glide, input, time_scale, help, help_cut, help_side, help_open, material, aspect_fit, list_disc, a11y, wheel_scrolls,
+        virtual_rows_version, glide, input, time_scale, help, help_cut, help_side, help_open, material, aspect_fit, list_disc, a11y, wheel_scrolls, on_path,
         expanded_memo: _,
         #[cfg(debug_assertions)]
         scroll_source: _,
@@ -263,6 +263,7 @@ fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
         && a.aspect_fit == *aspect_fit
         && a.a11y == *a11y
         && a.wheel_scrolls == *wheel_scrolls
+        && opt_rc_eq(&a.on_path, on_path)
 }
 
 fn same_gestures(
@@ -536,6 +537,9 @@ pub(in crate::runtime) fn try_reuse_memo(
 
     let old_root_path = old_slice[0].path.as_str();
     let same_path = path_matches(old_root_path, parent_path, el.key.as_deref(), index);
+    if !same_path && built.has_path_bind {
+        return None;
+    }
     let new_start = nodes.len();
     let moved = same_path && ctx.committing;
     let root_taffy = old_slice[0].taffy;

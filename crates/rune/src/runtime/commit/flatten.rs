@@ -331,6 +331,56 @@ fn take_cold_input(cold: &mut crate::cold::Cold<crate::el::ElCold>) -> Option<Bo
     cold.get_mut_if_some().and_then(|c| c.input.take())
 }
 
+#[cold]
+#[inline(never)]
+fn merge_path_handlers(
+    dst: &mut crate::cold::Cold<crate::el::Handlers>,
+    patch: &mut crate::el::PathBind,
+) {
+    if let Some(next) = patch.on_pointer_move.take() {
+        let h: &mut crate::el::Handlers = &mut *dst;
+        h.on_pointer_move = Some(match h.on_pointer_move.take() {
+            Some(prev) => Rc::new(move |st, p, tx| {
+                prev(st, p, tx);
+                let prev_live = std::mem::take(&mut tx.live_only);
+                next(p, tx);
+                tx.live_only &= prev_live;
+            }),
+            None => Rc::new(move |_, p, tx| next(p, tx)),
+        });
+        #[cfg(debug_assertions)]
+        if h.sites.pointer_move.is_none() {
+            h.sites.pointer_move = patch.pointer_move_site;
+        }
+    }
+    if let Some(next) = patch.on_hover_change.take() {
+        let h: &mut crate::el::Handlers = &mut *dst;
+        h.on_hover_change = Some(match h.on_hover_change.take() {
+            Some(prev) => Rc::new(move |st, inside, tx| {
+                prev(st, inside, tx);
+                let prev_live = std::mem::take(&mut tx.live_only);
+                next(inside, tx);
+                tx.live_only &= prev_live;
+            }),
+            None => Rc::new(move |_, inside, tx| next(inside, tx)),
+        });
+        #[cfg(debug_assertions)]
+        if h.sites.hover_change.is_none() {
+            h.sites.hover_change = patch.hover_change_site;
+        }
+    }
+    if let Some(next) = patch.on_scroll_offset.take() {
+        let h: &mut crate::el::Handlers = &mut *dst;
+        h.on_scroll_offset = Some(match h.on_scroll_offset.take() {
+            Some(prev) => Rc::new(move |at| {
+                prev(at);
+                next(at);
+            }),
+            None => next,
+        });
+    }
+}
+
 mod sealed {
     pub trait Sealed {}
     impl Sealed for super::El {}
@@ -695,7 +745,21 @@ fn flatten_node<E: FlattenEl>(
     let option_as_alt = el_r.cold.option_as_alt;
     let virtual_list = el_r.cold.virtual_estimate.is_some();
     let focus = el_r.cold.focus.clone();
-    let (key, handlers, text, vis, cold, style, children) = el.finish(s);
+    let on_path = el_r.cold.get().and_then(|c| c.on_path.clone());
+    let child_count = if on_path.is_some() {
+        el_r.memo.as_ref().map_or(0, |b| b.children.children.len()) + el_r.children.len()
+    } else {
+        0
+    };
+    let (key, mut handlers, text, vis, cold, style, children) = el.finish(s);
+    let extra_children = if let Some(bind) = on_path {
+        let mut patch = crate::el::PathBind::default();
+        bind(&path, &mut patch);
+        merge_path_handlers(&mut handlers, &mut patch);
+        patch.children
+    } else {
+        Vec::new()
+    };
     let cold = if E::cold_is_empty(&cold) && trace_namespace.is_none() && pixel_aspect.is_none() && aspect_fit.is_none() {
         crate::cold::Cold::default()
     } else {
@@ -728,7 +792,12 @@ fn flatten_node<E: FlattenEl>(
     let row = matches!(style.as_ref().flex_direction(), FlexDirection::Row | FlexDirection::RowReverse);
     let child_mark = taffy.begin_children();
     let env = ChildEnv { me, motion, in_row: child_in_row, row, sx: child_sx };
-    let children_dirty = E::flatten_children(children, env, path_buf, taffy, nodes, scale, memo_ctx);
+    let mut children_dirty = E::flatten_children(children, env, path_buf, taffy, nodes, scale, memo_ctx);
+    for (k, extra) in extra_children.into_iter().enumerate() {
+        let (kid, kid_dirty) = flatten_owned(extra, Some(env.me), path_buf, child_count + k, env.motion, env.in_row, env.row, env.sx, taffy, nodes, scale, memo_ctx);
+        taffy.push_child(kid);
+        children_dirty |= kid_dirty;
+    }
     path_buf.truncate(prev_len);
     let (slot, dirty) = taffy.sync_node(id.0, me as u32, style.into_owned(), measure, secure_measure, child_mark, children_dirty);
     nodes[me].taffy = slot;

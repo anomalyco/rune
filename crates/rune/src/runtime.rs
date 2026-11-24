@@ -158,6 +158,8 @@ use paint::soft_edges::{in_fade, inherit_fade};
 pub(crate) use scroll::offset::{ScrollAnchor, ScrollRequest};
 pub(crate) use scroll::reveal::ScrollReveal;
 #[doc(hidden)]
+pub use commit::path::{child_path, path_segment};
+#[doc(hidden)]
 pub use scroll::watch::scroll_watch_state;
 #[cfg(not(target_os = "windows"))]
 pub(crate) use scroll::x::LINE_POINTS;
