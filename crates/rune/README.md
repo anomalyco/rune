@@ -312,8 +312,8 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
      element itself, outermost first (DOM capture-phase `keydown` / WPF `PreviewKeyDown`),
      including while a text field has focus; stops at an active modal or inert boundary, never
      runs on key-up, and does not make a container focusable or a Tab stop.
-  3. `El::on_key` handlers on the focused element and its allowed ancestors, innermost first
-     (skipped while a text field has focus).
+  3. `El::on_key` and state-independent `El::on_key_any` handlers on the focused element and
+     its allowed ancestors, innermost first (skipped while a text field has focus).
   4. Return, with no modifiers, presses the window's (or open modal's) `default_button()`
      unless the focused element takes Return (see the table below).
   5. Nothing focused: the window's `on_key`, with `tx.focused()` `None`.
@@ -645,7 +645,7 @@ top-left, which is what popups and context menus anchor to.
 | `on_pointer_move_local`, `on_secondary_press_local` | `PointerEvent::x`, `y` | local |
 | | `PointerEvent::window_x`, `window_y`, `window()` | window |
 | `on_pointer_move`, `on_secondary_press` | `PointerPress::x`, `y` | window |
-| `on_layout`, `on_layout_tx` | `[x, y, w, h]`, as laid out, after scrolling (before live values) | window |
+| `on_layout`, `on_layout_tx`, `on_layout_any` | `[x, y, w, h]`, as laid out, after scrolling (before live values) | window |
 | `on_drawn_layout`, `on_drawn_layout_tx` | `[x, y, w, h]`, as drawn | window |
 | `on_screen_layout` | `[x, y, w, h]` | primary display |
 | `Cx::layout`, `layout_with`, `layout_size`, `memo::layout` (view reads) | `[x, y, w, h]`, as laid out, every scroll viewport at its origin, so a scroll doesn't re-run the view | window |
@@ -654,17 +654,20 @@ top-left, which is what popups and context menus anchor to.
 | `context_menu`, `PopupAnchor::from(PointerPress)` | the anchor they take | window |
 
 `on_press`, `on_double_press`, `on_hover`, `on_hover_change`, `on_focus_change`,
-`on_focus_within_change`, `on_mount`, `on_drop_files` and `on_drop_hover` give no point; a tooltip (`El::help`) anchors itself to the element as drawn.
+`on_focus_within_change`, `on_visible`, `on_visible_any`, `on_mount`, `on_drop_files` and `on_drop_hover` give no point; a tooltip (`El::help`) anchors itself to the element as drawn.
 `on_pointer_move` and `on_secondary_press` stay in window points, as apps written against
 them expect. `El::on_mount(|s, tx| ..)` runs once when an element mounts into the tree, in the
-same frame before drawing (unlike `on_visible` and `on_layout`, which run after paint): state
+same frame before drawing (unlike `on_visible`/`on_visible_any` and `on_layout`/`on_layout_any`, which run after paint): state
 changes it makes commit in that frame with no one-frame lag, chained mounts run up to 4 rounds per
 frame, rebuilds/moves/resizes do not re-fire it, and unmounting (instant or mid-exit) followed by
 remounting fires it again; call `Tx::live_only` to skip the follow-up commit when only updating
-`Live` values or scheduling wakes. `on_layout`, `on_layout_tx`, `on_drawn_layout`, and
+`Live` values or scheduling wakes. `on_layout`, `on_layout_tx`, `on_layout_any`, `on_drawn_layout`, and
 `on_drawn_layout_tx` also re-fire once when the display scale changes (even when the logical
 point rect is unchanged), and `Tx::scale()` reports the current display scale (device pixels per
-view point, including `Cx::zoom`) in any handler or `poll`.
+view point, including `Cx::zoom`) in any handler or `poll`. State-independent `_any` builders
+(`on_drag_any`, `on_pointer_move_any`, `on_hover_change_any`, `on_focus_change_any`,
+`on_focus_within_change_any`, `on_layout_any`, `on_visible_any`, and `on_key_any`) omit the
+app state type parameter so reusable components can mount under any host state.
 
 ### App lifetime (`app.rs`, for apps that outlive their window)
 

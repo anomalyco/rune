@@ -1,0 +1,1 @@
+- Handlers: added state-independent `El::on_layout_any`, `El::on_visible_any`, and `El::on_key_any` builders (matching `on_drag_any`, `on_pointer_move_any`, `on_hover_change_any`, `on_focus_change_any`, and `on_focus_within_change_any`) so reusable components can handle layout, visibility, and focused key events with `&mut Tx` without naming the app state type.

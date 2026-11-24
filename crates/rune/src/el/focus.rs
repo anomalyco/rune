@@ -122,6 +122,31 @@ impl El {
         self.cold_mut().focus.key = Some(Rc::new(move |s, key, tx| f(downcast::<S>(s), key, tx)));
         self
     }
+    /// [`El::on_key`] for a component that doesn't read the app's state, so it works in any app.
+    ///
+    /// Runs while this element or a descendant has focus (skipped while a text field has focus),
+    /// innermost first, before focus navigation, the default button and the window's `on_key`.
+    /// Return `true` to consume the key, or `false` to let ancestor handlers and focus
+    /// navigation handle it. With `focusable(true)`, a click anywhere inside it focuses it, just
+    /// as [`El::on_key`] does.
+    ///
+    /// ```
+    /// use rune::{El, Key, KeyEvent, Live, Tx, el};
+    ///
+    /// let step = Live::new(0.0_f32);
+    /// let s = step.clone();
+    /// let _control: El = el()
+    ///     .focusable(true)
+    ///     .on_key_any(move |ev: &KeyEvent, tx: &mut Tx| match ev.key {
+    ///         Key::Right => { s.set((s.get() + 1.0).min(3.0)); tx.live_only(); true }
+    ///         Key::Left => { s.set((s.get() - 1.0).max(0.0)); tx.live_only(); true }
+    ///         _ => false,
+    ///     });
+    /// ```
+    pub fn on_key_any(mut self, f: impl Fn(&crate::KeyEvent, &mut Tx) -> bool + 'static) -> Self {
+        self.cold_mut().focus.key = Some(Rc::new(move |_, key, tx| f(key, tx)));
+        self
+    }
     /// Preview key-down events while this element, or a control inside it (including a focused
     /// text field), has focus: `f` runs outermost first from the root down to the focused element
     /// (DOM capture-phase `keydown` / WPF `PreviewKeyDown`), after the IME composition guard

@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+mod any_handlers;
 mod mount;
 mod pick;
 mod scroll_anchor_story;
@@ -682,6 +683,14 @@ fn main() {
                     Story::new("Controls/Focus card", FocusCard::default, focus_card_view)
                         .variant("Resting", |_| {})
                         .variant("Card focused", |s| { s.card_a_focused = true; s.group_within = true; s.focus_visible = true; }),
+                )
+                .story(
+                    Story::new("Controls/State-independent handlers", any_handlers::AnyHandlersDemo::default, any_handlers::view)
+                        .trigger('w', "Toggle strip width", |s, _| s.wide = !s.wide)
+                        .trigger('s', "Toggle offscreen spacer", |s, _| s.top_spacer = !s.top_spacer)
+                        .variant("Visible & compact", |_| {})
+                        .variant("Wide strip", |s| s.wide = true)
+                        .variant("Offscreen", |s| s.top_spacer = true),
                 )
                 .story(Story::new("Controls/Rows/Two devices", device_rows(&["Studio desk", "Travel laptop"]), devices))
                 .story(Story::new("Controls/Rows/One device", device_rows(&["Studio desk"]), devices))
