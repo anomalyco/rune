@@ -500,6 +500,9 @@ impl OverlayCore {
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     fn surface_input(&mut self, app: &mut dyn OverlayApp, input: crate::platform::layer_shell::Input) {
         use crate::platform::layer_shell::Input;
+        let _input = (!matches!(input, Input::Focus(_))
+            && !(matches!(input, Input::Ime(_)) && self.options.keys != KeyPolicy::OnDemand))
+            .then(crate::input::time::arrived_now);
         match input {
             Input::Move(x, y) => {
                 let zoom = app.rt().zoom();
