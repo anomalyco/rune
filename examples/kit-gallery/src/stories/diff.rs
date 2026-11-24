@@ -1,8 +1,10 @@
-//! Rune's own `DiffView` scene showing `DiffView::labels` (via `DiffLabel`) and
-//! `DiffView::comment_filter`.
+//! Rune's own `DiffView` scenes showing `DiffView::labels` (`DiffLabel`),
+//! `DiffView::comment_filter`, `DiffView::file_header`, `DiffView::syntax_theme`, and
+//! edge-whitespace-ignoring `DiffOptions`.
 
-use rune::{El, col, row, text};
-use rune_kit::diff::{DiffLabel, DiffMode, DiffState, DiffView, FileDiff, FileStatus, FoldRow, LineKind, Side, parse};
+use rune::{Color, Cursor, El, col, icon, row, text};
+use rune_kit::diff::{DiffLabel, DiffMode, DiffOptions, DiffState, DiffView, FileDiff, FileStatus, FoldRow, LineKind, Side, parse};
+use rune_kit::syntax::{Syntax, SyntaxTheme};
 use rune_kit::{Kit, Switch};
 
 use crate::G;
@@ -140,6 +142,161 @@ pub(super) fn localized(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
         .gap(10.0)
         .child(controls)
         .child(text(note).font(k.ty.small).color(c.text_muted).key("diff-status"))
+        .child(
+            col()
+                .w_full()
+                .grow(1.0)
+                .min_h(0.0)
+                .border(1.0, c.border_weak)
+                .clip_soft(0.0)
+                .child(view.build(s, k)),
+        )
+}
+
+fn custom_files(ignore_edge_ws: bool) -> Vec<FileDiff> {
+    let opts = DiffOptions::new().ignore_edge_whitespace(ignore_edge_ws);
+    let old_rs = "pub fn greet(name: &str) -> String {\n   let prefix = \"Hello\";\n  let target = name.trim();\n    format!(\"{prefix}, {target}!\")\n}\n";
+    let new_rs = "pub fn greet(name: &str) -> String {\n\tlet prefix = \"Hello\";\n  let target = name.trim().to_owned();\n\tformat!(\"{prefix}, {target}!\")\n}\n";
+    let old_cfg = "   host = \"localhost\"\n   port = 8080\n   retries = 3\n";
+    let new_cfg = "\thost = \"localhost\"\n   port = 9090\n\tretries = 3\n";
+    vec![
+        FileDiff::from_texts_with("src/greet.rs", old_rs, new_rs, opts),
+        FileDiff::from_texts_with("config/server.toml", old_cfg, new_cfg, opts),
+    ]
+}
+
+pub(crate) fn custom_diff() -> DiffState {
+    let mut st = DiffState::new(custom_files(true));
+    st.set_mode(DiffMode::Split);
+    st
+}
+
+pub(super) fn custom(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let c = &k.c;
+    let custom_header = !s.is("diff-default-header");
+    let custom_syntax = !s.is("diff-default-syntax");
+    let ignore_edge_ws = !s.is("diff-exact-ws");
+    let split = s.diff_custom.mode() == DiffMode::Split;
+
+    let mut view = DiffView::new(|s: &G| &s.diff_custom, |s: &mut G| &mut s.diff_custom).key("diff-custom");
+    if custom_header {
+        let muted = c.text_muted;
+        let base = c.text_base;
+        let faint = c.text_faint;
+        let add_fg = c.success.fg;
+        let del_fg = c.danger.fg;
+        let hover = k.alpha(c.text_base, if k.dark { 0.06 } else { 0.035 });
+        let ui_med = k.ty.ui_medium;
+        let small = k.ty.small;
+        let tri_down = k.glyph.triangle_down;
+        let tri_right = k.glyph.triangle_right;
+        view = view.file_header(move |s: &G, f, collapsed| {
+            let file = &s.diff_custom.files()[f];
+            let full = file.path();
+            let (dir, name) = match full.rsplit_once('/') {
+                Some((d, n)) => (format!("{d}/"), n.to_owned()),
+                None => (String::new(), full.to_owned()),
+            };
+            let status = match file.status {
+                FileStatus::Added => "added",
+                FileStatus::Deleted => "deleted",
+                FileStatus::Renamed => "renamed",
+                FileStatus::Copied => "copied",
+                FileStatus::Modified => "modified",
+            };
+            let (adds, dels) = (file.additions(), file.deletions());
+            let mut bar = row()
+                .key(format!("custom-hdr-{f}"))
+                .w_full()
+                .h_full()
+                .px(10.0)
+                .gap(8.0)
+                .items_center()
+                .hover(hover)
+                .cursor(Cursor::Pointer)
+                .role("button")
+                .label(if collapsed { format!("Expand {full}") } else { format!("Collapse {full}") })
+                .expanded(!collapsed)
+                .on_press(move |s: &mut G| s.diff_custom.set_collapsed(f, !collapsed))
+                .child(icon(if collapsed { tri_right } else { tri_down }, 14.0).color(muted));
+            if !dir.is_empty() {
+                bar = bar.child(text(dir).font(ui_med).color(muted));
+            }
+            bar = bar
+                .child(text(name).font(ui_med).color(base))
+                .child(text(status).font(small).color(faint))
+                .child(row().grow(1.0).a11y_hidden());
+            if adds > 0 {
+                bar = bar.child(text(format!("+{adds}")).font(small).color(add_fg));
+            }
+            if dels > 0 {
+                bar = bar.child(text(format!("−{dels}")).font(small).color(del_fg));
+            }
+            bar
+        });
+    }
+    if custom_syntax {
+        let theme = SyntaxTheme::from_kit(k)
+            .with(Syntax::Keyword, Color { r: 0.86, g: 0.28, b: 0.62, a: 1.0 })
+            .with(Syntax::String, Color { r: 0.18, g: 0.72, b: 0.48, a: 1.0 })
+            .with(Syntax::Function, Color { r: 0.24, g: 0.56, b: 0.94, a: 1.0 })
+            .with(Syntax::Number, Color { r: 0.92, g: 0.58, b: 0.18, a: 1.0 });
+        view = view.syntax_theme(theme);
+    }
+
+    let controls = row()
+        .gap(16.0)
+        .center_y()
+        .flex_wrap()
+        .child(
+            Switch::new(custom_header)
+                .label("Custom header")
+                .on_toggle(|s: &mut G| s.flip("diff-default-header"))
+                .build(k)
+                .key("toggle-header"),
+        )
+        .child(
+            Switch::new(custom_syntax)
+                .label("Custom syntax")
+                .on_toggle(|s: &mut G| s.flip("diff-default-syntax"))
+                .build(k)
+                .key("toggle-syntax"),
+        )
+        .child(
+            Switch::new(ignore_edge_ws)
+                .label("Ignore edge ws")
+                .on_toggle(|s: &mut G| {
+                    s.flip("diff-exact-ws");
+                    let ignore = !s.is("diff-exact-ws");
+                    s.diff_custom.set_files(custom_files(ignore));
+                })
+                .build(k)
+                .key("toggle-ws"),
+        )
+        .child(
+            Switch::new(split)
+                .label("Split")
+                .on_toggle(|s: &mut G| {
+                    let next = if s.diff_custom.mode() == DiffMode::Split { DiffMode::Unified } else { DiffMode::Split };
+                    s.diff_custom.set_mode(next);
+                })
+                .build(k)
+                .key("toggle-split"),
+        );
+
+    let hint = if ignore_edge_ws {
+        "Spaces vs tab indentation on unchanged lines stays context while each split side keeps its original text"
+    } else {
+        "Exact whitespace comparison marks space-vs-tab indentation lines as changed"
+    };
+
+    col()
+        .key("diff-custom-story")
+        .w(672.0)
+        .h(420.0)
+        .gap(10.0)
+        .child(controls)
+        .child(text(hint).font(k.ty.small).color(c.text_muted).key("diff-custom-status"))
         .child(
             col()
                 .w_full()

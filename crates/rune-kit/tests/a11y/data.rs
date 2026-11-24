@@ -5,7 +5,7 @@ use std::borrow::Cow;
 
 use rune::accesskit::Action;
 use rune::{Align, Cx, El, Key, col, text};
-use rune_kit::diff::{DiffLabel, DiffMode, DiffState, DiffView, FileDiff, FoldRow, LineKind, Side};
+use rune_kit::diff::{DiffLabel, DiffMode, DiffOptions, DiffState, DiffView, FileDiff, FoldRow, LineKind, Side};
 use rune_kit::*;
 
 use crate::support::*;
@@ -277,4 +277,52 @@ fn diff_labels_support_rtl_and_fall_back_on_blank_strings() {
     assert_eq!(with_role(&tree, "heading")[0]["name"], "rtl.txt, 1 added, 1 removed");
     assert!(!named(&tree, "Comment on this line").is_empty());
     assert!(with_role(&tree, "button").iter().all(|b| b["name"].as_str().is_some_and(|n| !n.trim().is_empty())));
+}
+
+fn custom_header_diff(s: &App, _: &mut Cx<App>) -> El {
+    let k = kit();
+    let view = DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff).file_header(|s: &App, f, collapsed| {
+        let path = s.diff.files()[f].path().to_owned();
+        rune::row()
+            .key("custom-toggle")
+            .w_full()
+            .h_full()
+            .role("button")
+            .label(if collapsed { format!("Expand {path}") } else { format!("Collapse {path}") })
+            .expanded(!collapsed)
+            .on_press(move |s: &mut App| s.diff.set_collapsed(f, !collapsed))
+            .child(text(path))
+    });
+    col().w_full().h(400.0).child(view.build(s, &k))
+}
+
+#[test]
+fn custom_file_header_and_edge_whitespace_diff_reach_the_accessibility_tree() {
+    let file = FileDiff::from_texts_with(
+        "src/app.rs",
+        "   keep\n  old\n",
+        "\tkeep\n  new\n",
+        DiffOptions::new().ignore_edge_whitespace(true),
+    );
+    let mut state = DiffState::new(vec![file]);
+    state.set_mode(DiffMode::Split);
+    let mut rt = mount(App { diff: state, ..App::default() }, custom_header_diff);
+    for _ in 0..20 {
+        rt.frame(1.0 / 60.0);
+    }
+    let tree = rt.accessibility_json();
+    assert_eq!(with_role(&tree, "heading")[0]["name"], "src/app.rs, 1 added, 1 removed");
+    let toggle = named(&tree, "Collapse src/app.rs")[0];
+    assert!(has(toggle, "expanded") && can(toggle, "collapse"));
+    // Split context row exposes each side's original text in its accessible name.
+    let items = with_role(&tree, "list-item");
+    assert!(items.iter().any(|n| n["name"] == "unchanged line 1:    keep"));
+    assert!(items.iter().any(|n| n["name"] == "unchanged line 1: \tkeep"));
+    // Assistive click on the custom header collapses the file.
+    assert!(rt.accessibility_action("custom-toggle", Action::Click, None));
+    settle(&mut rt);
+    let tree = rt.accessibility_json();
+    let collapsed = named(&tree, "Expand src/app.rs")[0];
+    assert!(has(collapsed, "collapsed"));
+    assert!(with_role(&tree, "list-item").is_empty());
 }

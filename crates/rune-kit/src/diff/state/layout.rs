@@ -21,6 +21,9 @@ impl DiffState {
     /// Line `n` of `side` of file `f`, from its whole text, its hunks or an unchanged range.
     pub(crate) fn side_line(&self, f: usize, side: Side, n: u32) -> Option<&str> {
         let file = self.files.get(f)?;
+        if let Some(text) = file.side_text_line(side, n) {
+            return Some(text);
+        }
         let hunks = &file.hunks;
         let line_in = |h: usize| -> Option<&str> {
             let hunk = hunks.get(h)?;

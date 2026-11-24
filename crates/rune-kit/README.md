@@ -473,7 +473,10 @@ the delayed, self-dismissing system tooltip when the look needn't match. The gal
 `rune_kit::diff` shows code changes for review. `diff::parse(patch)` reads `git diff` output
 (several files, renames with similarity, mode changes, binary files, `\ No newline at end of
 file`, quoted paths) and `FileDiff::from_texts(path, old, new)` diffs two texts (Myers, line
-by line, three lines of context; `from_texts_with_context` keeps another count). Changed lines
+by line, three lines of context; `from_texts_with_context` keeps another count, and
+`from_texts_with` / `between_with` take `DiffOptions` for context count and
+`ignore_edge_whitespace(true)`, which ignores leading/trailing ASCII spaces and tabs while
+preserving each side's original text for split rendering, selection and copying). Changed lines
 that pair up get word-level changes. The app keeps a `DiffState` in
 its state and draws it with `DiffView`:
 
@@ -493,12 +496,15 @@ DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
   with `set_wrap(true)`; split always wraps.
 - **Colours** come from the kit's palette: added and removed lines take a tint of the success
   and danger colours, word changes a stronger one, with a bar at the edge. Syntax colours sit
-  under them (`rune_kit::syntax`, swappable with `set_highlighter`). Tabs line up at
-  four-column stops and copy as tabs.
+  under them (`rune_kit::syntax`, swappable with `set_highlighter` and customisable with
+  `DiffView::syntax_theme`). Tabs line up at four-column stops and copy as tabs.
 - **Unchanged ranges** between hunks fold into a row that opens 20 lines up, 20 down, or all
   (`expand`). A parsed patch has no whole files, so only diffs built from two texts have folds that open.
 - **Files** have a header with the path, a rename arrow, +/− counts, a collapse chevron and
-  an app slot (`header_actions`). The header of the file in view sticks to the top.
+  an app slot (`header_actions`), or a custom header via `DiffView::file_header(|s, file, collapsed| ...)`
+  that keeps the 44-point row, heading label, horizontal pinning and sticky top overlay
+  (collapse files via `DiffState::set_collapsed`; see `rune-diff--custom` in `kit-gallery`).
+  The header of the file in view sticks to the top.
 - **Annotations** are the app's widgets under a line, keyed by file, side and line, such as
   review comments. Rows grow to fit them.
 - **Line selection and comments**: click a line number, Shift-click to extend, or drag down
