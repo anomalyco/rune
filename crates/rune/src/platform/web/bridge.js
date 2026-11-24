@@ -1337,38 +1337,43 @@ export function performanceNow() {
     return performance.now();
 }
 
-// Cancels any pending low-priority touch-hold confirmation turn.
+// Cancels any pending touch-hold confirmation frames or trailing macrotask.
 export function cancelTouchHoldConfirm(h) {
     const pending = h.touchHoldConfirm;
     if (!pending) return;
     h.touchHoldConfirm = null;
     pending.cancelled = true;
+    if (pending.raf && typeof globalThis.cancelAnimationFrame === 'function') globalThis.cancelAnimationFrame(pending.raf);
     if (pending.controller) pending.controller.abort();
     if (pending.timer) clearTimeout(pending.timer);
 }
 
-// Yields a low-priority macrotask (and re-yields up to 2 turns while input is pending) before
-// confirming a due touch hold so any already-queued pointerup or pointermove from a main-thread
-// stall drains first and cancels the hold.
+// Waits two animation frames and a trailing low-priority macrotask (re-yielding up to 2 turns if
+// input is pending) before confirming a due touch hold. After a main-thread stall, the first rAF
+// commits any overdue frame from the stall (flushing compositor/browser acks), the second rAF
+// runs on a fresh post-stall BeginMainFrame after rAF-aligned touchmove and discrete pointerup
+// delivery, and the trailing task lets any remaining input drain (~33 ms on 60 Hz, ~17 ms on
+// 120 Hz for an unstalled hold).
 export function scheduleTouchHoldConfirm(h, attempt) {
     cancelTouchHoldConfirm(h);
     if (h.disposed) return;
-    const token = { cancelled: false, controller: null, timer: 0 };
+    const token = { cancelled: false, raf: 0, controller: null, timer: 0 };
     h.touchHoldConfirm = token;
     let yields = 0;
+    const isCancelled = () => token.cancelled || h.disposed || h.touchHoldConfirm !== token;
     const run = () => {
         token.controller = null;
         token.timer = 0;
-        if (token.cancelled || h.disposed || h.touchHoldConfirm !== token) return;
+        if (isCancelled()) return;
         if (yields < 2 && globalThis.navigator?.scheduling?.isInputPending?.({ includeContinuous: true })) {
             yields += 1;
-            schedule();
+            scheduleTask();
             return;
         }
         h.touchHoldConfirm = null;
         h.send({ kind: 'touch_hold_confirm', attempt });
     };
-    const schedule = () => {
+    const scheduleTask = () => {
         if (typeof globalThis.scheduler?.postTask === 'function') {
             const controller = typeof AbortController === 'function' ? new AbortController() : null;
             token.controller = controller;
@@ -1378,7 +1383,19 @@ export function scheduleTouchHoldConfirm(h, attempt) {
             token.timer = setTimeout(run, 0);
         }
     };
-    schedule();
+    if (typeof globalThis.requestAnimationFrame === 'function') {
+        token.raf = globalThis.requestAnimationFrame(() => {
+            token.raf = 0;
+            if (isCancelled()) return;
+            token.raf = globalThis.requestAnimationFrame(() => {
+                token.raf = 0;
+                if (isCancelled()) return;
+                scheduleTask();
+            });
+        });
+    } else {
+        scheduleTask();
+    }
 }
 
 // Cancels any pending post-scroll settle timer or post-frame idle mirror flush.
