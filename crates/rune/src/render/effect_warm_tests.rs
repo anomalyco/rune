@@ -122,9 +122,58 @@ fn state_machine_walks_idle_warming_ready_consumed_and_handles_shader_swap_and_s
 }
 
 #[test]
+fn app_and_window_spec_prewarm_effects_default_false_and_opt_in() {
+    let spec = || crate::AppSpec::new("Test", (320.0, 240.0), || (), |_, _| crate::el());
+    let app_default = crate::App::new(spec());
+    assert!(!app_default.prewarm_effects, "App::prewarm_effects must default to false");
+
+    let app_on = crate::App::new(spec()).prewarm_effects(true);
+    assert!(app_on.prewarm_effects, "App::prewarm_effects(true) opts in");
+
+    let win_default = crate::WindowSpec::new("secondary", spec());
+    assert!(!win_default.app.prewarm_effects, "WindowSpec::prewarm_effects must default to false");
+
+    let win_on = crate::WindowSpec::new("secondary", spec()).prewarm_effects(true);
+    assert!(win_on.app.prewarm_effects, "WindowSpec::prewarm_effects(true) opts in");
+}
+
+#[test]
+fn effect_warm_is_disabled_by_default_and_one_shot_offscreen_never_warms() {
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    assert!(!renderer.prewarm_effects(), "Renderer::prewarm_effects must default to false");
+    assert!(renderer.effect_warm.is_idle());
+
+    let target = Offscreen::new(&gpu.device, 32, 16);
+    let mut atlas = crate::text::TextSystem::default().atlas;
+    let plain = [rect([0.0, 0.0, 32.0, 16.0], [0.2, 0.4, 0.8, 1.0])];
+    // Even across multiple frames and an explicit warm_effects call, default-off stays Idle.
+    let _ = render_offscreen(&gpu, &mut renderer, &target, &mut atlas, &plain);
+    renderer.warm_effects(&gpu.device);
+    let _ = render_offscreen(&gpu, &mut renderer, &target, &mut atlas, &plain);
+    assert!(renderer.effect_warm.is_idle(), "default-off renderer must never start background warming");
+
+    // One-shot render_runtime_to_offscreen must not trigger background warming even when opted in.
+    renderer.set_prewarm_effects(true);
+    assert!(renderer.prewarm_effects());
+    let mut rt = crate::Runtime::new(
+        (),
+        |_, _| crate::el().w_full().h_full().fill(crate::Color::WHITE),
+        (32.0, 16.0),
+        crate::Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    let mut oneshot = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    oneshot.set_prewarm_effects(true);
+    oneshot.render_runtime_to_offscreen(&gpu.device, &gpu.queue, &target, &mut rt);
+    assert!(oneshot.effect_warm.is_idle(), "one-shot render_runtime_to_offscreen must not spawn background warming");
+}
+
+#[test]
 fn first_frame_starts_no_effect_compilation_before_completion() {
     let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    renderer.set_prewarm_effects(true);
     assert!(renderer.effect_warm.is_idle(), "new renderer must not start effect warming");
 
     let mut atlas = crate::text::TextSystem::default().atlas;
@@ -136,25 +185,25 @@ fn first_frame_starts_no_effect_compilation_before_completion() {
     assert!(renderer.layers.additive.is_none());
     assert!(renderer.layers.blur.is_none());
 
-    // Completing the first frame via offscreen helper starts warming.
+    // After frame 1 finishes, post-first-frame warm_effects starts warming when opted in.
     let target = Offscreen::new(&gpu.device, 32, 16);
-    let mut rt = crate::Runtime::new(
-        (),
-        |_, _| crate::el().w_full().h_full().fill(crate::Color::WHITE),
-        (32.0, 16.0),
-        crate::Env::new(true, 1.0),
-    );
-    rt.frame(0.0);
-    renderer.render_runtime_to_offscreen(&gpu.device, &gpu.queue, &target, &mut rt);
-    assert!(!renderer.effect_warm.is_idle(), "effect warming starts after first frame completes");
+    let _ = render_offscreen(&gpu, &mut renderer, &target, &mut atlas, &plain);
+    renderer.warm_effects(&gpu.device);
+    assert!(!renderer.effect_warm.is_idle(), "effect warming starts after first frame completes when opted in");
     renderer.wait_effect_warm();
     assert!(renderer.effect_warm.is_ready(), "warmed effect pipelines are held aside until first use");
+
+    // Opting back out discards unharvested warmed pipelines and returns to Idle.
+    renderer.set_prewarm_effects(false);
+    assert!(!renderer.prewarm_effects());
+    assert!(renderer.effect_warm.is_idle());
 }
 
 #[test]
 fn first_effect_frames_reuse_warmed_pipelines_without_synchronous_compilation() {
     let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    renderer.set_prewarm_effects(true);
     let target = Offscreen::new(&gpu.device, 64, 48);
     let mut atlas = crate::text::TextSystem::default().atlas;
 
@@ -233,6 +282,7 @@ fn first_effect_frames_reuse_warmed_pipelines_without_synchronous_compilation() 
 fn glass_only_effect_backdrop_frame_allocates_zero_rgba16float_backdrops() {
     let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    renderer.set_prewarm_effects(true);
     let mut atlas = crate::text::TextSystem::default().atlas;
     let target = Offscreen::new(&gpu.device, 32, 32);
 
@@ -285,6 +335,7 @@ fn add_layer_format_and_plus_lighter_clone_when_vertex_entry_is_vs() {
 fn synchronous_fallback_works_while_worker_is_in_flight() {
     let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    renderer.set_prewarm_effects(true);
     let target = Offscreen::new(&gpu.device, 32, 16);
     let mut atlas = crate::text::TextSystem::default().atlas;
 
@@ -344,6 +395,7 @@ fn breaker_refusal_on_background_worker_drops_invalid_pipelines() {
         (breaker::Feature::LayerBlur, LayerSpec { blur: 4.0, ..Default::default() }),
     ] {
         let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+        renderer.set_prewarm_effects(true);
         renderer.breakers.refuse = Some(feature);
         let mut atlas = crate::text::TextSystem::default().atlas;
 
@@ -374,6 +426,7 @@ fn breaker_refusal_on_background_worker_drops_invalid_pipelines() {
 fn classic_to_windfoil_swap_invalidates_stale_warmed_pipelines_and_rewarms() {
     let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new_classic(&gpu.device, OFFSCREEN_FORMAT);
+    renderer.set_prewarm_effects(true);
     let target = Offscreen::new(&gpu.device, 64, 48);
     let mut atlas = crate::text::TextSystem::default().atlas;
 
@@ -416,6 +469,7 @@ fn classic_to_windfoil_swap_invalidates_stale_warmed_pipelines_and_rewarms() {
 fn renderer_drop_cancels_and_drains_worker_cleanly() {
     let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    renderer.set_prewarm_effects(true);
     let target = Offscreen::new(&gpu.device, 32, 16);
     let mut atlas = crate::text::TextSystem::default().atlas;
 
@@ -468,6 +522,7 @@ fn springs_renderer_warms_distinct_vs_layer_composites() {
         opacity: crate::gpu::springs::Track::constant(1.0),
     };
     let mut renderer = Renderer::with_springs(&gpu.device, OFFSCREEN_FORMAT, &[node], &[0, 0, 0]);
+    renderer.set_prewarm_effects(true);
     let target = Offscreen::new(&gpu.device, 32, 16);
     let mut atlas = crate::text::TextSystem::default().atlas;
 

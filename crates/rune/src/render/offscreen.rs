@@ -115,7 +115,6 @@ impl super::Renderer {
         self.draw(&mut encoder, &target.view, rt.clear_color());
         target.copy(&mut encoder);
         self.submit(queue, encoder);
-        self.warm_effects(device);
     }
 }
 

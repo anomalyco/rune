@@ -299,6 +299,10 @@ impl OverlayHost {
             self.app.rt_mut().set_font_smoothing(mode);
         }
     }
+
+    pub(crate) fn set_prewarm_effects(&mut self, enabled: bool) {
+        self.core.prewarm_effects = enabled;
+    }
 }
 
 /// Thin typed wrapper used only by unit tests so tests can inspect `rt.state`, `compositor`, and

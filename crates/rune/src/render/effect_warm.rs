@@ -14,7 +14,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread::JoinHandle;
 
@@ -202,6 +202,7 @@ struct WarmJob {
     plan: WarmPlan,
     cancel: Arc<AtomicBool>,
     sender: mpsc::Sender<WarmedEffects>,
+    timing: Arc<Mutex<Option<(f64, f64)>>>,
     #[cfg(test)]
     refuse: Option<breaker::Feature>,
     #[cfg(test)]
@@ -213,16 +214,32 @@ struct WarmJob {
 /// Drains any active or cancelled worker threads on [`Drop`] so no background thread outlives
 /// the renderer or holds GPU handles across shutdown.
 #[cfg(not(target_arch = "wasm32"))]
-#[derive(Default)]
 pub(super) struct EffectWarm {
+    enabled: bool,
     state: State,
     /// Finished or cancelled workers kept so `Drop` joins every spawned thread without blocking
     /// the UI thread during rendering or shader swaps.
     draining: Vec<JoinHandle<()>>,
+    /// Last worker run's `(wall_ms, cpu_ms)`, read by hidden perf benchmarks.
+    timing: Arc<Mutex<Option<(f64, f64)>>>,
     /// Test-only hook invoked on the worker before each build step (for deterministic fallback
     /// and cancellation tests).
     #[cfg(test)]
     pub(super) on_step: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for EffectWarm {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            state: State::default(),
+            draining: Vec::new(),
+            timing: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            on_step: None,
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -270,6 +287,15 @@ impl EffectWarm {
         }
         self.reap_finished();
         spawn
+    }
+
+    pub(super) fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+        if !enabled {
+            // Cancel any in-flight worker and drop unharvested pipelines without blocking the UI thread.
+            let effects = step(&mut self.state, Event::ShaderChanged);
+            self.apply_effects(effects);
+        }
     }
 
     pub(super) fn shader_changed(&mut self) {
@@ -331,8 +357,7 @@ impl EffectWarm {
         matches!(self.state, State::Consumed)
     }
 
-    /// Test-only: blocks until an in-flight worker finishes so GPU counter tests are deterministic.
-    #[cfg(test)]
+    /// Blocks until an in-flight worker finishes (tests and hidden perf benchmarks only).
     pub(super) fn wait(&mut self) {
         let arrived = match &self.state {
             State::Warming { receiver, .. } => Some(receiver.recv().ok()),
@@ -353,10 +378,16 @@ impl EffectWarm {
 
 #[cfg(target_arch = "wasm32")]
 #[derive(Default)]
-pub(super) struct EffectWarm;
+pub(super) struct EffectWarm {
+    enabled: bool,
+}
 
 #[cfg(target_arch = "wasm32")]
 impl EffectWarm {
+    pub(super) fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
     pub(super) fn shader_changed(&mut self) {}
 }
 
@@ -473,11 +504,14 @@ fn run_worker(job: WarmJob) {
         plan,
         cancel,
         sender,
+        timing,
         #[cfg(test)]
         refuse,
         #[cfg(test)]
         on_step,
     } = job;
+    let wall_start = crate::time::now();
+    let cpu_start = crate::frame::host_clock::thread_cpu();
     let cancelled = || cancel.load(Ordering::Acquire);
     let mut out = WarmedEffects {
         isolation: None,
@@ -525,6 +559,13 @@ fn run_worker(job: WarmJob) {
             out.backdrop_blur = build_backdrop_blur(&device, &bind_layout, format);
         }
     }
+    let wall_ms = wall_start.elapsed().as_secs_f64() * 1e3;
+    let cpu_ms = cpu_start
+        .zip(crate::frame::host_clock::thread_cpu())
+        .and_then(|(a, b)| b.checked_sub(a))
+        .and_then(crate::frame::host_clock::cpu_ns)
+        .map_or(0.0, |ns| ns / 1e6);
+    *timing.lock().unwrap_or_else(|e| e.into_inner()) = Some((wall_ms, cpu_ms));
     if !cancelled() {
         sender.send(out).ok();
     }
@@ -538,6 +579,9 @@ impl Renderer {
     /// calls are an O(1) no-op until a `Classic -> Windfoil` shader swap resets the state machine.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn warm_effects(&mut self, device: &wgpu::Device) {
+        if !self.effect_warm.enabled {
+            return;
+        }
         let plan = WarmPlan {
             isolation: matches!(self.breakers.health(breaker::Feature::Isolation), breaker::Health::Untried),
             plus_lighter: matches!(self.breakers.health(breaker::Feature::PlusLighter), breaker::Health::Untried),
@@ -560,6 +604,7 @@ impl Renderer {
             plan,
             cancel: cancel.clone(),
             sender,
+            timing: self.effect_warm.timing.clone(),
             #[cfg(test)]
             refuse: self.breakers.refuse,
             #[cfg(test)]
@@ -568,6 +613,17 @@ impl Renderer {
         let spawned = std::thread::Builder::new()
             .name("rune-effect-warm".into())
             .spawn(move || {
+                // Below normal on Windows, matching `variant::start_pinned`, so background
+                // pipeline compilation never competes with UI frames or input on busy machines.
+                #[cfg(target_os = "windows")]
+                #[allow(unsafe_code)]
+                // SAFETY: `GetCurrentThread` returns the calling thread's pseudo-handle.
+                unsafe {
+                    windows_sys::Win32::System::Threading::SetThreadPriority(
+                        windows_sys::Win32::System::Threading::GetCurrentThread(),
+                        windows_sys::Win32::System::Threading::THREAD_PRIORITY_BELOW_NORMAL,
+                    );
+                }
                 #[cfg(target_vendor = "apple")]
                 objc2::rc::autoreleasepool(|_| run_worker(job));
                 #[cfg(not(target_vendor = "apple"))]
@@ -708,6 +764,72 @@ impl Renderer {
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn wait_effect_warm(&mut self) {
         self.effect_warm.wait();
+    }
+
+    /// Opts this renderer in (or out) of post-first-frame background warming for optional effect
+    /// GPU pipelines: isolated layers (`Rgba16Float`), `Blend::PlusLighter`, Gaussian layer blur,
+    /// and `El::backdrop_blur`.
+    ///
+    /// Defaults to `false` so renderers that never blur or isolate pay no background compilation
+    /// CPU, driver memory, or `Renderer::drop` worker-join latency. On native targets, setting
+    /// `true` compiles any unbuilt effect pipelines once on a low-priority worker thread after the
+    /// first frame completes (excluding one-shot `render_runtime_to_offscreen` calls). Ignored on
+    /// `wasm32`, which always compiles lazily on first use.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rune::render::{Gpu, OFFSCREEN_FORMAT, Renderer};
+    ///
+    /// let gpu = Gpu::headless();
+    /// let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    /// renderer.set_prewarm_effects(true);
+    /// assert!(renderer.prewarm_effects());
+    /// ```
+    pub fn set_prewarm_effects(&mut self, enabled: bool) {
+        self.effect_warm.set_enabled(enabled);
+    }
+
+    /// Whether post-first-frame background effect-pipeline warming is enabled on this renderer
+    /// ([`Self::set_prewarm_effects`]); defaults to `false`.
+    pub fn prewarm_effects(&self) -> bool {
+        self.effect_warm.enabled
+    }
+
+    /// Hidden benchmark hook: triggers post-first-frame effect warming explicitly.
+    #[doc(hidden)]
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn bench_trigger_effect_warm(&mut self, device: &wgpu::Device) {
+        self.warm_effects(device);
+    }
+
+    /// Hidden benchmark hook: waits for any in-flight effect warming worker to finish.
+    #[doc(hidden)]
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn bench_wait_effect_warm(&mut self) {
+        self.effect_warm.wait();
+    }
+
+    /// Hidden benchmark hook: waits for any in-flight pinned-pipeline worker to finish.
+    #[doc(hidden)]
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn bench_wait_pinned(&mut self) {
+        self.wait_pinned();
+    }
+
+    /// Hidden benchmark hook: returns a shared handle holding the worker's `(wall_ms, cpu_ms)`.
+    #[doc(hidden)]
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn bench_effect_warm_timing(&self) -> Arc<Mutex<Option<(f64, f64)>>> {
+        self.effect_warm.timing.clone()
+    }
+
+    /// Hidden benchmark hook: calibrates the Windows thread-cycle clock before measuring worker CPU.
+    #[doc(hidden)]
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn bench_calibrate_cpu_clock() {
+        #[cfg(windows)]
+        let _ = crate::frame::host_clock::cycles_per_ns_waiting();
     }
 }
 

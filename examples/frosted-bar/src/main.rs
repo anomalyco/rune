@@ -15,7 +15,7 @@
 #![forbid(unsafe_code)]
 
 use rune::tok::{self, type_};
-use rune::{AppSpec, Color, Cx, El, Key, KeyEvent, Live, LiveText, ScrollPos, ScrollSource, ScrollSpec, TextStyle, Tx, col, el, oklch, oklcha, row, text};
+use rune::{App, AppSpec, Color, Cx, El, Key, KeyEvent, Live, LiveText, ScrollPos, ScrollSource, ScrollSpec, TextStyle, Tx, col, el, oklch, oklcha, row, text};
 
 const BAR: f32 = 60.0;
 const TABS: [&str; 4] = ["Inbox", "Today", "Later", "Done"];
@@ -141,11 +141,13 @@ fn on_key(s: &mut State, ev: &KeyEvent, _: &mut Tx) -> bool {
 }
 
 fn main() {
-    rune::run(AppSpec::<State> {
+    App::new(AppSpec::<State> {
         scenes: &[("strong", |s| s.look = Look::Strong), ("plain", |s| s.look = Look::Plain)],
         on_key: Some(on_key),
         ..AppSpec::new("Frosted bar", (390.0, 640.0), State::default, view)
-    });
+    })
+    .prewarm_effects(true)
+    .run();
 }
 
 #[cfg(test)]

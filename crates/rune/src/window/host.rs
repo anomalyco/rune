@@ -90,6 +90,7 @@ pub(in crate::window) struct Host {
     /// Its place among the windows receiving links (`App::on_open_url`).
     pub(in crate::window) _open_urls: Option<crate::open_url::incoming::Listening>,
     pub(in crate::window) release_gpu: bool,
+    pub(in crate::window) prewarm_effects: bool,
     pub(in crate::window) open_at_start: bool,
     /// `App::float_on_open`: each window maps at a fixed size, then takes its own limits.
     #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
@@ -215,6 +216,7 @@ struct HostInit {
     args: Args,
     keep_running: bool,
     release_gpu: bool,
+    prewarm_effects: bool,
     open_at_start: bool,
     fit_height: bool,
     float_on_open: bool,
@@ -252,8 +254,8 @@ impl Host {
         let windows_window = std::mem::take(&mut app.windows_window);
         let exclude_from_capture = app.exclude_from_capture;
         let color_scheme = app.color_scheme;
-        let (open, keep_running, release_gpu, fit_height, float_on_open) = (
-            app.open, app.keep_running, app.release_gpu, app.fit_content_height, app.float_on_open,
+        let (open, keep_running, release_gpu, prewarm_effects, fit_height, float_on_open) = (
+            app.open, app.keep_running, app.release_gpu, app.prewarm_effects, app.fit_content_height, app.float_on_open,
         );
         let (open_inactive, open_as, chrome, titlebar) = (app.open_inactive, app.open_as, app.chrome, app.titlebar);
         let (on_close, on_rest, on_reopen, on_quit, turn_scope) = (app.on_close, app.on_rest, app.on_reopen, app.on_quit, app.turn_scope);
@@ -296,6 +298,7 @@ impl Host {
             args,
             keep_running,
             release_gpu,
+            prewarm_effects,
             open_at_start: open,
             fit_height,
             float_on_open,
@@ -337,6 +340,7 @@ impl Host {
             mut args,
             keep_running,
             release_gpu,
+            prewarm_effects,
             open_at_start,
             fit_height,
             float_on_open,
@@ -435,6 +439,7 @@ impl Host {
             turn: any_host::Turn::Between,
             _open_urls: open_urls,
             release_gpu,
+            prewarm_effects,
             open_at_start,
             float_on_open,
             open_inactive,
