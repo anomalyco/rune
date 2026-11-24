@@ -576,4 +576,6 @@ impl Markdown {
 }
 
 #[cfg(test)]
+mod style_tests;
+#[cfg(test)]
 mod tests;

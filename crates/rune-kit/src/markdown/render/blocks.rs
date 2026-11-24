@@ -19,7 +19,7 @@ enum RenderFrame<'a> {
         after_heading: bool,
         last_dir: Option<rune::Direction>,
         col: El,
-        pending: Option<(String, f32, bool, Option<rune::Direction>)>,
+        pending: Option<(String, f32, bool, bool, Option<rune::Direction>)>,
     },
     Quote {
         quote_block: &'a Block,
@@ -166,8 +166,9 @@ impl Renderer {
             match top_frame {
                 RenderFrame::Blocks { blocks, pre, maps, names, top_level, in_item, open_tail, allow_memo, idx, prev_mb, after_heading, last_dir, col: cur_col, pending } => {
                     if let Some(child_el) = ret.take() {
-                        let (key, top, prose, own) = pending.take().unwrap();
+                        let (key, top, prose, cap_prose, own) = pending.take().unwrap();
                         let drawn = if prose { bidi::directed(child_el, own.or(*last_dir)) } else { child_el };
+                        let drawn = cap_prose_width(drawn, self.s.prose_width.filter(|_| cap_prose));
                         if own.is_some() { *last_dir = own; }
                         *cur_col = std::mem::replace(cur_col, el()).child(drawn.key(key).mt(top));
                         continue;
@@ -201,6 +202,7 @@ impl Renderer {
                         if i > 0 { self.flow.set(Flow { lead: None, ..self.flow.get() }); }
                         let own = dirs.of(b);
                         let prose = !matches!(b, Block::Code(_) | Block::Diff(_) | Block::Mermaid(_) | Block::Image { .. } | Block::Rule);
+                        let cap_prose = *top_level && is_prose_block(b);
                         let dir = prose.then(|| own.or(*last_dir)).flatten();
                         let map = maps_slice.get(i).unwrap_or(EMPTY);
                         let pb = pre_slice.and_then(|ps| ps.get(i)).map(Rc::as_ref);
@@ -210,7 +212,7 @@ impl Renderer {
                         if can_memo_here {
                             let (src_at, src_n) = (self.next_source.get(), pb.map_or_else(|| memo::source_count(b), |p| p.src_n as usize));
                             let (task_at, task_n) = (self.next_task.get(), pb.map_or_else(|| memo::task_count(b), |p| p.task_n as usize));
-                            if let Some(digest) = self.settled_block_digest(b, pb, map, &key, top, dir, (src_at, src_n), (task_at, task_n)) {
+                            if let Some(digest) = self.settled_block_digest(b, pb, map, &key, top, dir, cap_prose, (src_at, src_n), (task_at, task_n)) {
                                 let key_c = key.clone();
                                 let cached_el = rune::memo::cached(digest, || {
                                     memo::note_block_build();
@@ -221,7 +223,7 @@ impl Renderer {
                                     debug_assert_eq!(self.next_source.get(), src_at + src_n);
                                     debug_assert_eq!(self.next_task.get(), task_at + task_n);
                                     let drawn = if prose { bidi::directed(child_el, dir) } else { child_el };
-                                    drawn.key(key_c).mt(top)
+                                    cap_prose_width(drawn, self.s.prose_width.filter(|_| cap_prose)).key(key_c).mt(top)
                                 });
                                 self.next_source.set(src_at + src_n);
                                 self.next_task.set(task_at + task_n);
@@ -233,7 +235,7 @@ impl Renderer {
                         let am = *allow_memo;
                         match b {
                             Block::Quote(inner) => {
-                                *pending = Some((key, top, prose, own));
+                                *pending = Some((key, top, prose, cap_prose, own));
                                 let inner_maps = match map { BlockMap::Quote(m) => m.as_slice(), _ => &[][..] };
                                 let q = self.s.quote;
                                 let saved = self.flow.get();
@@ -245,7 +247,7 @@ impl Renderer {
                                 break;
                             }
                             Block::List { start, items } => {
-                                *pending = Some((key, top, prose, own));
+                                *pending = Some((key, top, prose, cap_prose, own));
                                 let item_maps = match map { BlockMap::List(m) => m.as_slice(), _ => &[][..] };
                                 let saved = self.flow.get();
                                 let indent = match self.s.list_nested {
@@ -260,6 +262,7 @@ impl Renderer {
                             _ => {
                                 let child_el = self.leaf_block(b, pb, map);
                                 let drawn = if prose { bidi::directed(child_el, dir) } else { child_el };
+                                let drawn = cap_prose_width(drawn, self.s.prose_width.filter(|_| cap_prose));
                                 if own.is_some() { *last_dir = own; }
                                 *cur_col = std::mem::replace(cur_col, el()).child(drawn.key(key).mt(top));
                             }
@@ -535,6 +538,17 @@ impl Renderer {
             Block::Rule => el().w_full().h(0.5).fill(s.rule),
             Block::List { .. } | Block::Quote(_) => unreachable!(),
         }
+    }
+}
+
+fn is_prose_block(b: &Block) -> bool {
+    matches!(b, Block::Para(_) | Block::Heading(..) | Block::List { .. } | Block::Quote(_))
+}
+
+fn cap_prose_width(el: El, width: Option<f32>) -> El {
+    match width {
+        Some(w) => el.max_w(w),
+        None => el,
     }
 }
 

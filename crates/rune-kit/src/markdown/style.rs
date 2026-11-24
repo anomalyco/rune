@@ -15,6 +15,8 @@ pub struct MarkdownStyle {
     pub(super) accent: Color,
     pub(super) link_underline: Color,
     pub(super) code_bg: Color,
+    /// Inline code's text colour (the surrounding text's colour by default).
+    pub(super) inline_code_text: Option<Color>,
     pub(super) code_block_fill: Color,
     pub(super) code_block_border: Color,
     pub(super) quote_rule: Color,
@@ -39,6 +41,7 @@ pub struct MarkdownStyle {
     pub(super) inline_code_weight: f32,
     pub(super) inline_code_pad: f32,
     pub(super) code_block_pad: [f32; 2],
+    pub(super) code_block_radius: f32,
     pub(super) list_indent: f32,
     pub(super) list_gap: f32,
     pub(super) strong_weight: f32,
@@ -60,6 +63,10 @@ pub struct MarkdownStyle {
     /// Header cell padding (x, y) when it differs from the body's.
     pub(super) table_head_pad: Option<[f32; 2]>,
     pub(super) table_full_width: bool,
+    /// Space above and below paragraphs, headings (levels 1 to 3, then 4+) and images.
+    pub(super) paragraph_margin: [f32; 2],
+    pub(super) heading_margin: [[f32; 2]; 4],
+    pub(super) image_margin: [f32; 2],
     /// Space above and below a table (collapsed with its neighbours' like CSS margins).
     pub(super) table_margin: [f32; 2],
     /// Space above and below a code block, a diff and a diagram (collapsed like `table_margin`).
@@ -68,6 +75,8 @@ pub struct MarkdownStyle {
     pub(super) table_bar: Option<[Color; 2]>,
     /// The text column's width, when the app knows it (see [`MarkdownStyle::text_width`]).
     pub(super) text_width: Option<f32>,
+    /// Maximum width of top-level prose blocks (see [`MarkdownStyle::prose_width`]).
+    pub(super) prose_width: Option<f32>,
     /// How far a wide code block's sides fade while it scrolls sideways.
     pub(super) wide_fade: f32,
     /// Rasterisation scale for display math fences (`math` feature, 2.0 by default).
@@ -176,6 +185,7 @@ impl MarkdownStyle {
             accent: c.text_accent,
             link_underline: k.alpha(c.text_accent, 0.4),
             code_bg: k.alpha(c.text_base, 0.08),
+            inline_code_text: None,
             code_block_fill: c.layer_01,
             code_block_border: c.border_muted,
             quote_rule: c.layer_03,
@@ -195,6 +205,7 @@ impl MarkdownStyle {
             inline_code_weight: 400.0,
             inline_code_pad: 3.5,
             code_block_pad: [12.0, 12.0],
+            code_block_radius: 6.0,
             list_indent: 32.0,
             list_gap: 4.0,
             strong_weight: 670.0,
@@ -213,10 +224,14 @@ impl MarkdownStyle {
             table_body: None,
             table_head_pad: None,
             table_full_width: false,
+            paragraph_margin: [0.0, 12.0],
+            heading_margin: [[28.0, 12.0], [24.0, 10.0], [20.0, 8.0], [20.0, 8.0]],
+            image_margin: [24.0, 24.0],
             table_margin: [12.0, 16.0],
             code_margin: [12.0, 24.0],
             table_bar: None,
             text_width: None,
+            prose_width: None,
             wide_fade: 12.0,
             math_scale: 2.0,
             link_icon: None,
@@ -298,6 +313,18 @@ impl MarkdownStyle {
         self.code_bg = c;
         self
     }
+    /// Inline code's text colour (the surrounding text's colour by default); code spans inside
+    /// links and [`Markdown::code_link`] spans keep their link colour.
+    ///
+    /// ```no_run
+    /// # use rune_kit::{Kit, MarkdownStyle};
+    /// # let k = Kit::neutral(false);
+    /// let _s = MarkdownStyle::from_kit(&k).inline_code_bg(k.c.text_accent.alpha(0.12)).inline_code_text(k.c.text_accent);
+    /// ```
+    pub fn inline_code_text(mut self, c: Color) -> Self {
+        self.inline_code_text = Some(c);
+        self
+    }
     pub fn code_block(mut self, fill: Color, border: Color) -> Self {
         self.code_block_fill = fill;
         self.code_block_border = border;
@@ -306,6 +333,16 @@ impl MarkdownStyle {
     /// Room (x, y) inside a code block's frame; 12 by 12 by default.
     pub fn code_block_padding(mut self, x: f32, y: f32) -> Self {
         self.code_block_pad = [x, y];
+        self
+    }
+    /// Corner radius in points of fenced code and diff cards (6 by default; 0 for square corners).
+    ///
+    /// ```no_run
+    /// # use rune_kit::MarkdownStyle;
+    /// let _s = MarkdownStyle::neutral(false).code_block_radius(0.0);
+    /// ```
+    pub fn code_block_radius(mut self, radius: f32) -> Self {
+        self.code_block_radius = super::table::pts(radius);
         self
     }
     /// The column a list's markers sit centred in (32 by default), and the gap between its
@@ -425,6 +462,18 @@ impl MarkdownStyle {
         self.text_width = (points.is_finite() && points > 0.0).then_some(points);
         self
     }
+    /// Caps top-level prose blocks (paragraphs, headings, lists and quotes) at `points` wide while
+    /// code blocks, diffs, diagrams, tables, images and rules keep the full column. Non-finite or
+    /// non-positive values clear the cap (off by default).
+    ///
+    /// ```no_run
+    /// # use rune_kit::MarkdownStyle;
+    /// let _s = MarkdownStyle::neutral(false).prose_width(480.0);
+    /// ```
+    pub fn prose_width(mut self, points: f32) -> Self {
+        self.prose_width = (points.is_finite() && points > 0.0).then_some(points);
+        self
+    }
     /// How far the sides of a code block that scrolls sideways ([`Markdown::scroll_wide`]) fade
     /// out, in points: 12 by default, 0 for a hard edge as a web page's `overflow: auto` clips.
     pub fn wide_fade(mut self, points: f32) -> Self {
@@ -435,6 +484,44 @@ impl MarkdownStyle {
     /// the window's device scale factor for 1:1 physical pixels on 1x, 1.5x and HiDPI screens.
     pub fn math_scale(mut self, scale: f32) -> Self {
         self.math_scale = if scale.is_finite() { scale.clamp(1.0, 3.0) } else { 2.0 };
+        self
+    }
+    /// The space above and below a paragraph (0 and 12 points by default), collapsed with a
+    /// neighbour's margin. List-item paragraphs keep their own spacing.
+    ///
+    /// ```no_run
+    /// # use rune_kit::MarkdownStyle;
+    /// let _s = MarkdownStyle::neutral(false).paragraph_margin(0.0, 8.0);
+    /// ```
+    pub fn paragraph_margin(mut self, top: f32, bottom: f32) -> Self {
+        self.paragraph_margin = [super::table::pts(top), super::table::pts(bottom)];
+        self
+    }
+    /// The space above and below heading `level` (1 to 4; level 5 and deeper share 4). Defaults
+    /// are (28, 12), (24, 10), and (20, 8) for 3+; level 3 sets 4 too, matching [`Self::heading_font`].
+    ///
+    /// ```no_run
+    /// # use rune_kit::MarkdownStyle;
+    /// let _s = MarkdownStyle::neutral(false).heading_margin(1, 16.0, 8.0);
+    /// ```
+    pub fn heading_margin(mut self, level: u8, top: f32, bottom: f32) -> Self {
+        let i = (level.clamp(1, 4) - 1) as usize;
+        let pair = [super::table::pts(top), super::table::pts(bottom)];
+        self.heading_margin[i] = pair;
+        if i == 2 {
+            self.heading_margin[3] = pair;
+        }
+        self
+    }
+    /// The space above and below a block image (24 and 24 points by default), collapsed with a
+    /// neighbour's margin.
+    ///
+    /// ```no_run
+    /// # use rune_kit::MarkdownStyle;
+    /// let _s = MarkdownStyle::neutral(false).image_margin(12.0, 12.0);
+    /// ```
+    pub fn image_margin(mut self, top: f32, bottom: f32) -> Self {
+        self.image_margin = [super::table::pts(top), super::table::pts(bottom)];
         self
     }
     /// The space above and below a code block, a diff and a diagram (12 and 24 points by
@@ -586,6 +673,7 @@ impl std::hash::Hash for MarkdownStyle {
             accent,
             link_underline,
             code_bg,
+            inline_code_text,
             code_block_fill,
             code_block_border,
             quote_rule,
@@ -605,6 +693,7 @@ impl std::hash::Hash for MarkdownStyle {
             inline_code_weight,
             inline_code_pad,
             code_block_pad,
+            code_block_radius,
             list_indent,
             list_gap,
             strong_weight,
@@ -623,10 +712,14 @@ impl std::hash::Hash for MarkdownStyle {
             ref table_body,
             table_head_pad,
             table_full_width,
+            paragraph_margin,
+            heading_margin,
+            image_margin,
             table_margin,
             code_margin,
             table_bar,
             text_width,
+            prose_width,
             wide_fade,
             math_scale,
             link_icon,
@@ -649,15 +742,15 @@ impl std::hash::Hash for MarkdownStyle {
             diagram,
         } = *self;
         (text, muted, accent, link_underline, code_bg, code_block_fill, code_block_border, quote_rule, rule).hash(state);
-        (body, headings, code_block, (code_text, plain_code_text), shell, link_hover, list_outside, list_nested.map(|n| n.map(f32_bits)), table_align).hash(state);
+        (body, headings, code_block, (code_text, plain_code_text, inline_code_text), shell, link_hover, list_outside, list_nested.map(|n| n.map(f32_bits)), table_align).hash(state);
         (f32_bits(quote.width), f32_bits(quote.pad), quote.text).hash(state);
-        [inline_code_scale, inline_code_weight, inline_code_pad, code_block_pad[0], code_block_pad[1], list_indent, list_gap, strong_weight, table_min_column]
+        [inline_code_scale, inline_code_weight, inline_code_pad, code_block_pad[0], code_block_pad[1], code_block_radius, list_indent, list_gap, strong_weight, table_min_column]
             .map(f32_bits)
             .hash(state);
         (table_outline, table_rule, table_head_fill, table_head_text, table_head_rule, table_head_weight.map(f32_bits), table_tabular, table_font).hash(state);
-        ([f32_bits(table_pad[0]), f32_bits(table_pad[1])], table_flush_left, table_head_pad.map(|p| p.map(f32_bits)), table_full_width, table_margin.map(f32_bits), code_margin.map(f32_bits)).hash(state);
+        ([f32_bits(table_pad[0]), f32_bits(table_pad[1])], table_flush_left, table_head_pad.map(|p| p.map(f32_bits)), table_full_width, paragraph_margin.map(f32_bits), heading_margin.map(|m| m.map(f32_bits)), image_margin.map(f32_bits), table_margin.map(f32_bits), code_margin.map(f32_bits)).hash(state);
         table_frame.map(|TableFrame { fill, ring, pad }| (fill, ring, f32_bits(pad))).hash(state);
-        (table_bar, text_width.map(f32_bits), f32_bits(wide_fade), f32_bits(math_scale), link_icon.map(|l| l.map(f32_bits))).hash(state);
+        (table_bar, text_width.map(f32_bits), prose_width.map(f32_bits), f32_bits(wide_fade), f32_bits(math_scale), link_icon.map(|l| l.map(f32_bits))).hash(state);
         match table_body {
             None => 0u8.hash(state),
             Some(TableBody { fill, radius, shadows }) => {

@@ -74,6 +74,7 @@ impl Renderer {
                     // Code inside a link reads as part of the link's label: it inherits the link's
                     // colour, underline and hover with no code-pill background or padding.
                     if in_link.is_none() {
+                        sp.color = s.inline_code_text;
                         sp = sp.bg(s.code_bg, s.inline_code_pad);
                     }
                     code.push(sp);

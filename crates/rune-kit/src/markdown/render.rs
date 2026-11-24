@@ -145,16 +145,17 @@ fn block_key(i: usize, keys: &[String], used: &mut Vec<String>) -> String {
 /// (margin-top, margin-bottom) per block, collapsed like CSS margins.
 pub(super) fn margins(b: &Block, s: &MarkdownStyle) -> (f32, f32) {
     match b {
-        Block::Para(_) => (0.0, 12.0),
-        Block::Heading(1, _) => (28.0, 12.0),
-        Block::Heading(2, _) => (24.0, 10.0),
-        Block::Heading(..) => (20.0, 8.0),
+        Block::Para(_) => (s.paragraph_margin[0], s.paragraph_margin[1]),
+        Block::Heading(level, _) => {
+            let [top, bottom] = s.heading_margin[usize::from((*level).clamp(1, 4) - 1)];
+            (top, bottom)
+        }
         Block::Code { .. } | Block::Diff(_) | Block::Mermaid(_) => (s.code_margin[0], s.code_margin[1]),
         Block::List { .. } => (8.0, 12.0),
         Block::Quote(_) => (16.0, 16.0),
         Block::Rule => (32.0, 32.0),
         Block::Table(_) => (s.table_margin[0], s.table_margin[1]),
-        Block::Image { .. } => (24.0, 24.0),
+        Block::Image { .. } => (s.image_margin[0], s.image_margin[1]),
     }
 }
 

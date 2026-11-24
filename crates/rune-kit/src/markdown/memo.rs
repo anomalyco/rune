@@ -495,14 +495,14 @@ impl Renderer {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn settled_block_digest(
         &self, b: &Block, pre: Option<&PreBlock>, map: &BlockMap, key: &str, top: f32,
-        dir: Option<rune::Direction>, (src_at, src_n): (usize, usize), (task_at, task_n): (usize, usize),
+        dir: Option<rune::Direction>, cap_prose: bool, (src_at, src_n): (usize, usize), (task_at, task_n): (usize, usize),
     ) -> Option<(u64, u64)> {
         let srcs = self.sources.get(src_at..src_at + src_n)?;
         if srcs.iter().any(|s| s.open) { return None; }
         let tasks = self.tasks.get(task_at..task_at + task_n)?;
         if self.on_task.is_some() && !self.tasks_read_only && tasks.iter().any(Option::is_some) { return None; }
         let mut h = PairHasher::new();
-        (1u8, self.base_hash(), key, top.to_bits(), dir).hash(&mut h);
+        (1u8, self.base_hash(), key, top.to_bits(), dir, cap_prose).hash(&mut h);
         match pre.filter(|p| self.code_link.is_none() || p.flags & HAS_INLINE_CODE == 0) {
             Some(p) => {
                 if !self.can_memo_flags(p.flags) || !self.can_memo_links(!p.links.is_empty()) { return None; }

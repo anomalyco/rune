@@ -301,7 +301,7 @@ impl Renderer {
         let body = self.with_reveal(body).copy_breaks(2, 2);
         // `.highlights`' `border: 0.5px` takes its device pixel each side, inside which the padding sits.
         // Code reads left to right in any document, as `markdown.css` isolates it.
-        let frame = col().role("code").dir(rune::Direction::Ltr).w_full().radius(6.0).fill(fill).border(0.5, border).border_layout();
+        let frame = col().role("code").dir(rune::Direction::Ltr).w_full().radius(s.code_block_radius).fill(fill).border(0.5, border).border_layout();
         if self.scroll_wide {
             // Keep `frame -> scroll -> pad -> body` in both states so toggling wrap keeps `body`'s
             // `NodeId` (preventing word-reveal replay and selection loss), while leaving the
@@ -340,7 +340,7 @@ impl Renderer {
     pub(in crate::markdown) fn diff(&self, src: &str, map: Option<&SpanMap>) -> El {
         let s = &self.s;
         let all_hl = self.text_highlights_for(src, map);
-        let mut c = col().role("code").dir(rune::Direction::Ltr).w_full().py(s.code_block_pad[1]).radius(6.0).fill(s.code_block_fill).border(0.5, s.code_block_border).border_layout();
+        let mut c = col().role("code").dir(rune::Direction::Ltr).w_full().py(s.code_block_pad[1]).radius(s.code_block_radius).fill(s.code_block_fill).border(0.5, s.code_block_border).border_layout();
         let mut line_start = 0usize;
         let last = src.split('\n').count() - 1;
         for (n, line) in src.split('\n').enumerate() {
@@ -431,7 +431,7 @@ impl Renderer {
             .gap(4.0)
             .px(10.0)
             .py(8.0)
-            .radius(6.0)
+            .radius(s.code_block_radius)
             .fill(s.code_block_fill)
             .border(0.5, s.code_block_border)
             .border_layout()
