@@ -38,14 +38,19 @@ fn format_run_error(error: winit::error::EventLoopError, display_error: Option<&
     }
 }
 
-/// Resolves `try_run`'s result once `event_loop.run_app` returns, surfacing a startup window
-/// creation error when the loop exited cleanly because no initial window could be created.
+/// Resolves `try_run`'s result once `event_loop.run_app` returns: re-raises a panic caught at
+/// the macOS callback boundary first, then surfaces a loop error or a startup window creation
+/// error when no initial window could be created.
 #[cfg(any(test, not(target_arch = "wasm32")))]
 pub(crate) fn finish_run(
     result: Result<(), winit::error::EventLoopError>,
     display_error: Option<&str>,
     startup_error: Option<String>,
+    panic: Option<super::panic_trap::PanicPayload>,
 ) -> Result<(), String> {
+    if let Some(panic) = panic {
+        std::panic::resume_unwind(panic);
+    }
     match (result, startup_error) {
         (Err(error), _) => Err(format_run_error(error, display_error)),
         (Ok(()), Some(error)) => Err(error),
@@ -147,6 +152,8 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     let mut windows = Windows {
         factory: Some(factory), args, proxy, hosts: Vec::new(), gpu: Rc::default(),
         any_shown: false, startup_error: None,
+        #[cfg(target_os = "macos")]
+        panic: super::panic_trap::PanicTrap::default(),
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         display_error: None,
         wayland_wake: super::wayland_wake::State::default(),
@@ -165,11 +172,15 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
     let display_error: Option<String> = None;
     let startup_error = windows.startup_error.take();
+    #[cfg(target_os = "macos")]
+    let panic = windows.panic.take();
+    #[cfg(not(target_os = "macos"))]
+    let panic = None;
     // An orderly exit: the windows and their renderers go here. `RUNE_LOOP_CHECK=2` found a
     // differing picture: the process ends with 3, as a fast exit does (`quit::end_process`).
     drop(windows);
-    if crate::render::loop_pixel_check_failed() { std::process::exit(3); }
-    finish_run(result, display_error.as_deref(), startup_error)
+    if panic.is_none() && crate::render::loop_pixel_check_failed() { std::process::exit(3); }
+    finish_run(result, display_error.as_deref(), startup_error, panic)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -240,9 +251,9 @@ fn run_exit_failure_reports_captured_display_error() {
 
 #[test]
 fn finish_run_returns_startup_window_error_when_the_loop_exits_cleanly() {
-    assert_eq!(finish_run(Ok(()), None, None), Ok(()));
+    assert_eq!(finish_run(Ok(()), None, None, None), Ok(()));
     assert_eq!(
-        finish_run(Ok(()), None, Some("could not create the window main: no GPU adapter".into())),
+        finish_run(Ok(()), None, Some("could not create the window main: no GPU adapter".into()), None),
         Err("could not create the window main: no GPU adapter".into()),
     );
     assert_eq!(
@@ -250,7 +261,21 @@ fn finish_run_returns_startup_window_error_when_the_loop_exits_cleanly() {
             Err(winit::error::EventLoopError::ExitFailure(71)),
             Some("Protocol error 2 on object wl_surface@7"),
             Some("could not create the window main: no GPU adapter".into()),
+            None,
         ),
         Err("run: the display connection failed: Protocol error 2 on object wl_surface@7".into()),
     );
+}
+
+#[test]
+fn finish_run_resumes_a_captured_panic_ahead_of_exit_status_and_startup_errors() {
+    let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = finish_run(
+            Err(winit::error::EventLoopError::ExitFailure(71)),
+            Some("Protocol error 2"),
+            Some("startup error".into()),
+            Some(Box::new("original callback panic")),
+        );
+    })).expect_err("captured panic must unwind out of finish_run");
+    assert_eq!(err.downcast_ref::<&str>(), Some(&"original callback panic"));
 }

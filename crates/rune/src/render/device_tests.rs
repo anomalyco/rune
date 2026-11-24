@@ -311,7 +311,7 @@ fn exhausting_every_real_adapter_returns_first_error() {
     let mut life = Life::Unopened;
     assert!(life.fail_create(false, false), "first window failure ends try_run");
     let startup_error = format!("could not create the window main: {hinted}");
-    assert_eq!(finish_run(Ok(()), None, Some(startup_error.clone())), Err(startup_error));
+    assert_eq!(finish_run(Ok(()), None, Some(startup_error.clone()), None), Err(startup_error));
 }
 
 #[test]
@@ -536,7 +536,7 @@ fn exhausting_every_adapter_on_rejected_shader_reaches_window_error_and_try_run(
     let mut life = Life::Unopened;
     assert!(life.fail_create(false, false), "first window failure ends try_run");
     let startup_error = format!("could not create the window main: {}", err.message);
-    let run_result = finish_run(Ok(()), None, Some(startup_error.clone()));
+    let run_result = finish_run(Ok(()), None, Some(startup_error.clone()), None);
     assert_eq!(run_result, Err(startup_error));
 }
 

@@ -139,6 +139,13 @@ impl AnyHost for OverlayHost {
 
     fn vanish(&mut self) { self.core.hide(&mut *self.app); }
 
+    #[cfg(target_os = "macos")]
+    fn stop_pacing(&mut self) {
+        if let Some(pacing) = self.core.surface.live_mut().and_then(|l| l.pacing.as_mut()) {
+            pacing.stop();
+        }
+    }
+
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
         self.core.meter.waited();
         #[cfg(target_os = "windows")]

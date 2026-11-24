@@ -85,6 +85,10 @@ impl AnyHost for Host {
         if let Some(w) = self.shown_win() { w.hide(); }
     }
     fn cancel_menus(&mut self) { self.in_turn(Self::cancel_menus_in_turn) }
+    #[cfg(target_os = "macos")]
+    fn stop_pacing(&mut self) {
+        if let Some(w) = &mut self.win { w.stop_pacing(); }
+    }
     fn reopen_hook(&mut self, event_loop: &ActiveEventLoop, has_visible_windows: bool) -> bool {
         self.in_turn(|h| h.reopen_hook_in_turn(event_loop, has_visible_windows))
     }
