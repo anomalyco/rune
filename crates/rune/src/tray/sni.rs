@@ -1,7 +1,7 @@
 //! StatusNotifierItem (`org.kde.StatusNotifierItem`) with a `com.canonical.dbusmenu` menu, on
 //! its own session-bus connection and thread. The watcher is asked to show the item, again
 //! whenever a new watcher takes the name (a bar that starts later or restarts).
-use super::{DBUSMENU_ROOT as ROOT, DbusMenu, DbusMenuValue, Handler, TrayError, TrayEvent, TrayItem, TraySpec};
+use super::{DBUSMENU_ROOT as ROOT, DbusMenu, DbusMenuValue, Handler, TrayError, TrayEvent, TrayIcon, TrayItem, TraySpec};
 use crate::platform::portal;
 use async_channel::{Sender, unbounded};
 use futures_lite::{FutureExt, StreamExt};
@@ -25,15 +25,28 @@ type Layout = (i32, HashMap<String, OwnedValue>, Vec<OwnedValue>);
 struct Model { id: String, title: String, tooltip: String, icon_name: String, pixmaps: Pixmaps, menu: DbusMenu, token: Option<String> }
 type Shared = Arc<Mutex<Model>>;
 
-enum Command { Menu(Vec<TrayItem>), Tooltip(String) }
+enum Command {
+    Menu(Vec<TrayItem>),
+    Tooltip(String),
+    Icon(Pixmaps),
+    IconName(String),
+    Title(String),
+}
 pub(super) struct Native { commands: Option<Sender<Command>>, worker: Option<JoinHandle<()>> }
 
 fn backend(e: impl std::fmt::Display) -> TrayError { TrayError::Backend(e.to_string()) }
 
 /// ARGB32 in network byte order, as the spec's `IconPixmap` wants.
-fn pixmaps(spec: &TraySpec) -> Pixmaps {
-    let argb = spec.icon.rgba.chunks_exact(4).flat_map(|p| [p[3], p[0], p[1], p[2]]).collect();
-    vec![(spec.icon.width as i32, spec.icon.height as i32, argb)]
+fn pixmaps_from_icon(icon: &TrayIcon) -> Result<Pixmaps, TrayError> {
+    if icon.width == 0 || icon.height == 0 {
+        return Ok(Vec::new());
+    }
+    let width = i32::try_from(icon.width)
+        .map_err(|_| TrayError::Backend("tray icon width overflow".into()))?;
+    let height = i32::try_from(icon.height)
+        .map_err(|_| TrayError::Backend("tray icon height overflow".into()))?;
+    let argb = icon.rgba.chunks_exact(4).flat_map(|p| [p[3], p[0], p[1], p[2]]).collect();
+    Ok(vec![(width, height, argb)])
 }
 
 fn properties(menu: &DbusMenu, id: i32) -> HashMap<String, OwnedValue> {
@@ -41,6 +54,7 @@ fn properties(menu: &DbusMenu, id: i32) -> HashMap<String, OwnedValue> {
         DbusMenuValue::StaticStr(s) => OwnedValue::from(Str::from_static(s)),
         DbusMenuValue::Str(s) => OwnedValue::from(Str::from(s)),
         DbusMenuValue::Bool(b) => OwnedValue::from(b),
+        DbusMenuValue::Int(i) => OwnedValue::from(i),
     })).collect()
 }
 fn layout(menu: &DbusMenu, id: i32) -> Layout {
@@ -87,6 +101,10 @@ impl Item {
     fn item_is_menu(&self) -> bool { false }
     #[zbus(property)]
     fn menu(&self) -> OwnedObjectPath { OwnedObjectPath::try_from(MENU_PATH).expect("MENU_PATH is an object path") }
+    #[zbus(signal)]
+    async fn new_icon(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
+    #[zbus(signal)]
+    async fn new_title(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
     #[zbus(signal)]
     async fn new_tool_tip(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
 }
@@ -148,7 +166,8 @@ async fn register(conn: &Connection) {
 
 impl Native {
     pub(super) fn new(spec: TraySpec, on_event: Handler) -> Result<Self, TrayError> {
-        let model = Arc::new(Mutex::new(Model { pixmaps: pixmaps(&spec), id: spec.id, title: spec.title, tooltip: spec.tooltip,
+        let pixmaps = pixmaps_from_icon(&spec.icon)?;
+        let model = Arc::new(Mutex::new(Model { pixmaps, id: spec.id, title: spec.title, tooltip: spec.tooltip,
             icon_name: spec.icon_name, menu: DbusMenu::new(spec.menu), token: None }));
         let (commands, receiver) = unbounded();
         let (ready, result) = mpsc::sync_channel(1);
@@ -186,6 +205,18 @@ impl Native {
                             model.lock().unwrap().tooltip = tooltip;
                             if let Ok(emitter) = SignalEmitter::new(&conn, ITEM_PATH) { Item::new_tool_tip(&emitter).await.ok(); }
                         }
+                        Wake::Command(Some(Command::Icon(pixmaps))) => {
+                            model.lock().unwrap().pixmaps = pixmaps;
+                            if let Ok(emitter) = SignalEmitter::new(&conn, ITEM_PATH) { Item::new_icon(&emitter).await.ok(); }
+                        }
+                        Wake::Command(Some(Command::IconName(name))) => {
+                            model.lock().unwrap().icon_name = name;
+                            if let Ok(emitter) = SignalEmitter::new(&conn, ITEM_PATH) { Item::new_icon(&emitter).await.ok(); }
+                        }
+                        Wake::Command(Some(Command::Title(title))) => {
+                            model.lock().unwrap().title = title;
+                            if let Ok(emitter) = SignalEmitter::new(&conn, ITEM_PATH) { Item::new_title(&emitter).await.ok(); }
+                        }
                         Wake::Command(None) | Wake::Owner(None) => break,
                         Wake::Owner(Some(changed)) => {
                             let owner = changed.body().deserialize::<(String, String, String)>().map(|(_, _, new)| new);
@@ -209,6 +240,18 @@ impl Native {
     pub(super) fn set_tooltip(&self, tooltip: String) {
         if let Some(c) = &self.commands { c.try_send(Command::Tooltip(tooltip)).ok(); }
     }
+    pub(super) fn set_icon(&self, icon: TrayIcon) -> Result<(), TrayError> {
+        let pixmaps = pixmaps_from_icon(&icon)?;
+        if let Some(c) = &self.commands { c.try_send(Command::Icon(pixmaps)).ok(); }
+        Ok(())
+    }
+    pub(super) fn set_icon_name(&self, name: String) {
+        if let Some(c) = &self.commands { c.try_send(Command::IconName(name)).ok(); }
+    }
+    pub(super) fn set_title(&self, title: String) {
+        if let Some(c) = &self.commands { c.try_send(Command::Title(title)).ok(); }
+    }
+    pub(super) fn rect(&self) -> Option<[i32; 4]> { None }
 }
 
 impl Drop for Native {
@@ -259,7 +302,7 @@ mod tests {
     fn menu_updates_preserve_item_ids_and_dispatch_clicks_by_assigned_id() {
         let spec = TraySpec::new("t", "T", super::super::TrayIcon::rgba(1, 1, vec![1, 2, 3, 4]))
             .menu(vec![TrayItem::action("show", "Show"), TrayItem::Separator, TrayItem::action("quit", "Quit")]);
-        let pixmaps = pixmaps(&spec);
+        let pixmaps = pixmaps_from_icon(&spec.icon).unwrap();
         let model = Arc::new(Mutex::new(Model {
             id: spec.id, title: spec.title, tooltip: spec.tooltip, icon_name: spec.icon_name,
             pixmaps, menu: DbusMenu::new(spec.menu), token: None,
@@ -296,13 +339,15 @@ mod tests {
 
     #[test]
     fn the_icon_is_argb_in_network_order() {
-        let spec = TraySpec::new("t", "T", super::super::TrayIcon::rgba(1, 1, vec![1, 2, 3, 4]));
-        assert_eq!(pixmaps(&spec), vec![(1, 1, vec![4, 1, 2, 3])]);
+        let icon = TrayIcon::rgba(1, 1, vec![1, 2, 3, 4]);
+        assert_eq!(pixmaps_from_icon(&icon).unwrap(), vec![(1, 1, vec![4, 1, 2, 3])]);
+        assert_eq!(pixmaps_from_icon(&TrayIcon::rgba(0, 0, Vec::new())).unwrap(), Vec::new());
+        assert!(matches!(pixmaps_from_icon(&TrayIcon::rgba(u32::MAX, 1, Vec::new())), Err(TrayError::Backend(_))));
     }
 
     fn item(icon_name: &str) -> Item {
-        let spec = TraySpec::new("t", "T", super::super::TrayIcon::rgba(1, 1, vec![1, 2, 3, 4])).icon_name(icon_name);
-        let pixmaps = pixmaps(&spec);
+        let spec = TraySpec::new("t", "T", TrayIcon::rgba(1, 1, vec![1, 2, 3, 4])).icon_name(icon_name);
+        let pixmaps = pixmaps_from_icon(&spec.icon).unwrap();
         let model = Model { id: spec.id, title: spec.title, tooltip: spec.tooltip, icon_name: spec.icon_name,
             pixmaps, menu: DbusMenu::new(spec.menu), token: None };
         Item { model: Arc::new(Mutex::new(model)), on_event: Arc::new(|_| {}) }
@@ -313,5 +358,70 @@ mod tests {
         assert_eq!(item("").icon_name(), "");
         assert_eq!(item("my-app-symbolic").icon_name(), "my-app-symbolic");
         assert_eq!(item("my-app-symbolic").icon_pixmap(), vec![(1, 1, vec![4, 1, 2, 3])]);
+    }
+
+    #[test]
+    fn item_serves_live_icon_icon_name_and_title_updates() {
+        let it = item("");
+        assert_eq!(it.title(), "T");
+        assert_eq!(it.icon_name(), "");
+        assert_eq!(it.icon_pixmap(), vec![(1, 1, vec![4, 1, 2, 3])]);
+
+        {
+            let mut m = it.model.lock().unwrap();
+            m.pixmaps = pixmaps_from_icon(&TrayIcon::rgba(1, 1, vec![10, 20, 30, 255])).unwrap();
+            m.icon_name = "alert-symbolic".into();
+            m.title = "42%".into();
+        }
+        assert_eq!(it.icon_pixmap(), vec![(1, 1, vec![255, 10, 20, 30])]);
+        assert_eq!(it.icon_name(), "alert-symbolic");
+        assert_eq!(it.title(), "42%");
+
+        {
+            let mut m = it.model.lock().unwrap();
+            m.icon_name.clear();
+            m.title.clear();
+        }
+        assert_eq!(it.icon_name(), "");
+        assert_eq!(it.title(), "");
+    }
+
+    #[test]
+    fn check_items_emit_toggle_properties_and_dispatch_clicks() {
+        let spec = TraySpec::new("t", "T", TrayIcon::rgba(1, 1, vec![1, 2, 3, 4])).menu(vec![
+            TrayItem::check("hud", "Show_HUD", false),
+            TrayItem::check("locked", "Locked", true).enabled(false),
+        ]);
+        let pixmaps = pixmaps_from_icon(&spec.icon).unwrap();
+        let model = Arc::new(Mutex::new(Model {
+            id: spec.id, title: spec.title, tooltip: spec.tooltip, icon_name: spec.icon_name,
+            pixmaps, menu: DbusMenu::new(spec.menu), token: None,
+        }));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let seen = events.clone();
+        let dbus_menu = Menu { model: model.clone(), on_event: Arc::new(move |e| seen.lock().unwrap().push(e)) };
+
+        let group = dbus_menu.get_group_properties(Vec::new(), Vec::new());
+        assert_eq!(group.len(), 2);
+        let (hud_id, hud_props) = &group[0];
+        let (locked_id, locked_props) = &group[1];
+        assert_eq!(<&str>::try_from(hud_props.get("toggle-type").unwrap()).ok(), Some("checkmark"));
+        assert_eq!(i32::try_from(hud_props.get("toggle-state").unwrap()).ok(), Some(0));
+        assert_eq!(bool::try_from(hud_props.get("enabled").unwrap()).ok(), Some(true));
+        assert_eq!(<&str>::try_from(hud_props.get("label").unwrap()).ok(), Some("Show__HUD"));
+        assert_eq!(<&str>::try_from(locked_props.get("toggle-type").unwrap()).ok(), Some("checkmark"));
+        assert_eq!(i32::try_from(locked_props.get("toggle-state").unwrap()).ok(), Some(1));
+        assert_eq!(bool::try_from(locked_props.get("enabled").unwrap()).ok(), Some(false));
+
+        dbus_menu.clicked(*hud_id, "clicked");
+        dbus_menu.clicked(*locked_id, "clicked");
+        assert_eq!(*events.lock().unwrap(), vec![TrayEvent::Menu("hud".into())]);
+
+        model.lock().unwrap().menu.update(vec![
+            TrayItem::check("hud", "Show_HUD", true),
+            TrayItem::check("locked", "Locked", true).enabled(false),
+        ]);
+        let toggled = dbus_menu.get_property(*hud_id, "toggle-state".into()).unwrap();
+        assert_eq!(i32::try_from(&toggled).ok(), Some(1));
     }
 }

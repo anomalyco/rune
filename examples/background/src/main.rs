@@ -10,7 +10,7 @@
 //! cargo run -p background -- --accessory --tray  # menu-bar tray icon (macOS template image) + menu
 //! # `hud show|hide|top|bottom|recording|transcribing|status` drives a recording-HUD overlay;
 //! # `capsule show|hide|left|wide|status` a clickable corner capsule;
-//! # `tray tooltip <text>` updates the tray tooltip while running
+//! # `tray tooltip <text> | title [text] | icon normal|alert | icon-name [name] | rect` drives live tray updates
 //! cargo run -p background -- --snap /tmp/background.png
 //! ```
 
@@ -216,17 +216,23 @@ fn main() {
         }
     });
     let tray_slot: Arc<Mutex<Option<Tray>>> = Arc::new(Mutex::new(None));
+    let hud_visible = Arc::new(AtomicBool::new(false));
+    let alert_on = Arc::new(AtomicBool::new(false));
     let headless = std::env::args().any(|a| matches!(a.as_str(), "--snap" | "--tree" | "--script" | "--list-scenes" | "--list-windows" | "--trace" | "--strip" | "--video" | "--html" | "--desktop"));
     if std::env::args().any(|a| a == "--tray") && !headless {
         let tray_app = app.handle();
         let tray_hud = overlay.clone();
-        let hud_visible = Arc::new(AtomicBool::new(false));
+        let hud_for_cb = hud_visible.clone();
+        let alert_for_cb = alert_on.clone();
         let tray_for_cb = tray_slot.clone();
-        let spec = TraySpec::new("dev.rune.background", "Rune Background", tray_icon())
+        let spec = TraySpec::new("dev.rune.background", "Rune Background", tray_icon(false))
             .tooltip("Rune Background — click to open")
-            .menu(tray_menu(false));
+            .menu(tray_menu(false, false));
         match Tray::new(spec, move |event| match event {
             TrayEvent::Activate { token } => {
+                if let Ok(guard) = tray_for_cb.lock() && let Some(tray) = guard.as_ref() {
+                    eprintln!("background: tray activate rect {:?}", tray.rect());
+                }
                 if let Some(token) = token {
                     tray_app.activate(token);
                 } else {
@@ -236,11 +242,23 @@ fn main() {
             TrayEvent::Menu(id) => match id.as_str() {
                 "open" => tray_app.open(),
                 "hud" => {
-                    let next = !hud_visible.fetch_xor(true, Ordering::Relaxed);
+                    let next = !hud_for_cb.fetch_xor(true, Ordering::Relaxed);
                     if next { tray_hud.show(); } else { tray_hud.hide(); }
+                    let alert = alert_for_cb.load(Ordering::Relaxed);
                     if let Ok(guard) = tray_for_cb.lock() && let Some(tray) = guard.as_ref() {
-                        tray.set_menu(tray_menu(next));
+                        tray.set_menu(tray_menu(next, alert));
                         tray.set_tooltip(if next { "Rune Background — HUD visible" } else { "Rune Background — click to open" });
+                    }
+                }
+                "alert" => {
+                    let next = !alert_for_cb.fetch_xor(true, Ordering::Relaxed);
+                    let hud = hud_for_cb.load(Ordering::Relaxed);
+                    if let Ok(guard) = tray_for_cb.lock() && let Some(tray) = guard.as_ref() {
+                        if let Err(err) = tray.set_icon(tray_icon(next)) {
+                            eprintln!("background: set_icon failed: {err}");
+                        }
+                        tray.set_title(if next { "ALERT" } else { "" });
+                        tray.set_menu(tray_menu(hud, next));
                     }
                 }
                 "quit" => tray_app.quit(),
@@ -254,6 +272,8 @@ fn main() {
     }
     let commands = app.handle();
     let tray_cmd = tray_slot.clone();
+    let hud_cmd = hud_visible.clone();
+    let alert_cmd = alert_on.clone();
     std::thread::spawn(move || {
         for line in std::io::stdin().lock().lines() {
             let Ok(line) = line else { break };
@@ -291,8 +311,36 @@ fn main() {
                         tray.set_tooltip(tip.join(" "));
                     }
                 }
+                (Some("tray"), Some("title")) => {
+                    let title: Vec<&str> = words.collect();
+                    if let Ok(guard) = tray_cmd.lock() && let Some(tray) = guard.as_ref() {
+                        tray.set_title(title.join(" "));
+                    }
+                }
+                (Some("tray"), Some("icon")) => {
+                    let alert = words.next() == Some("alert");
+                    alert_cmd.store(alert, Ordering::Relaxed);
+                    let hud = hud_cmd.load(Ordering::Relaxed);
+                    if let Ok(guard) = tray_cmd.lock() && let Some(tray) = guard.as_ref() {
+                        if let Err(err) = tray.set_icon(tray_icon(alert)) {
+                            eprintln!("background: set_icon failed: {err}");
+                        }
+                        tray.set_menu(tray_menu(hud, alert));
+                    }
+                }
+                (Some("tray"), Some("icon-name")) => {
+                    let name: Vec<&str> = words.collect();
+                    if let Ok(guard) = tray_cmd.lock() && let Some(tray) = guard.as_ref() {
+                        tray.set_icon_name(name.join(" "));
+                    }
+                }
+                (Some("tray"), Some("rect")) => {
+                    if let Ok(guard) = tray_cmd.lock() && let Some(tray) = guard.as_ref() {
+                        eprintln!("background: tray rect {:?}", tray.rect());
+                    }
+                }
                 (Some(other), _) => {
-                    eprintln!("background: unknown command {other:?} (open | show | hide | focus | position X Y | activate TOKEN | close | dock on|off | hud show|hide|top|bottom|recording|transcribing|status | capsule show|hide|left|wide|status | tray tooltip TEXT | quit)")
+                    eprintln!("background: unknown command {other:?} (open | show | hide | focus | position X Y | activate TOKEN | close | dock on|off | hud show|hide|top|bottom|recording|transcribing|status | capsule show|hide|left|wide|status | tray tooltip|title|icon|icon-name|rect | quit)")
                 }
                 (None, _) => {}
             }
@@ -302,11 +350,12 @@ fn main() {
     drop(tray_slot.lock().unwrap_or_else(|e| e.into_inner()).take());
 }
 
-/// A 44×44 (2× for 22 pt) ring-and-dot glyph marked as a macOS template image so macOS tints it
-/// for light and dark menu bars.
-fn tray_icon() -> TrayIcon {
+/// A 44×44 (2× for 22 pt) ring-and-dot glyph. Normal mode uses a macOS template image so macOS
+/// tints it for light and dark menu bars; alert mode uses a coloured non-template glyph.
+fn tray_icon(alert: bool) -> TrayIcon {
     const SIZE: u32 = 44;
     let center = (SIZE as f32 - 1.0) * 0.5;
+    let rgb = if alert { [235, 87, 68] } else { [240, 240, 240] };
     let mut pixels = vec![0u8; (SIZE * SIZE * 4) as usize];
     for y in 0..SIZE {
         for x in 0..SIZE {
@@ -317,16 +366,17 @@ fn tray_icon() -> TrayIcon {
             let dot = (4.5 - dist).clamp(0.0, 1.0);
             let alpha = (ring.max(dot) * 255.0).round() as u8;
             let idx = ((y * SIZE + x) * 4) as usize;
-            pixels[idx..idx + 4].copy_from_slice(&[240, 240, 240, alpha]);
+            pixels[idx..idx + 4].copy_from_slice(&[rgb[0], rgb[1], rgb[2], alpha]);
         }
     }
-    TrayIcon::rgba(SIZE, SIZE, pixels).template(true)
+    TrayIcon::rgba(SIZE, SIZE, pixels).template(!alert)
 }
 
-fn tray_menu(hud_visible: bool) -> Vec<TrayItem> {
+fn tray_menu(hud_visible: bool, alert: bool) -> Vec<TrayItem> {
     vec![
         TrayItem::action("open", "Open Window"),
-        TrayItem::action("hud", if hud_visible { "Hide HUD" } else { "Show HUD" }),
+        TrayItem::check("hud", "Show HUD", hud_visible),
+        TrayItem::check("alert", "Alert icon", alert),
         TrayItem::Separator,
         TrayItem::action("quit", "Quit"),
     ]
