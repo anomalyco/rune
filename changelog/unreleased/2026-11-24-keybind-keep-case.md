@@ -1,0 +1,1 @@
+- `rune-kit`: `Keybind::keep_case()` preserves each keycap's authored letter case instead of upper-casing single-character keys, while leaving the default upper-casing behaviour unchanged.

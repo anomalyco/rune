@@ -249,6 +249,31 @@ pub(super) fn keybind_symbols(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     c
 }
 
+/// Single-character keycaps upper-cased by default vs authored case kept with `keep_case()`.
+pub(super) fn keybind_keep_case(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let line = |name: &str, v: KeybindVariant, keep: bool| {
+        let cap = |keys: &[&str]| {
+            let kb = Keybind::new(keys).variant(v);
+            if keep { kb.keep_case().build(k) } else { kb.build(k) }
+        };
+        row()
+            .gap(16.0)
+            .center_y()
+            .child(text(name).w(96.0).font(TextStyle::new(11.0, 440.0).lh(16.0)).color(k.c.text_faint))
+            .child(cap(&["g"]))
+            .child(cap(&["g", "g"]))
+            .child(cap(&["G"]))
+            .child(cap(&["Shift", "g"]))
+            .child(cap(&["Shift", "G"]))
+    };
+    col()
+        .gap(12.0)
+        .child(line("Default", KeybindVariant::Neutral, false))
+        .child(line("keep_case", KeybindVariant::Neutral, true))
+        .child(line("Ghost", KeybindVariant::Ghost, false))
+        .child(line("Ghost keep_case", KeybindVariant::Ghost, true))
+}
+
 pub(super) fn spinner_basic(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     row().child(Spinner::new().build(k))
 }
