@@ -28,6 +28,7 @@ mod segmented;
 mod select_keyboard;
 mod shell;
 mod shell_desktop;
+mod shell_split;
 mod shortcut_recorder;
 mod switch_snap;
 mod table;

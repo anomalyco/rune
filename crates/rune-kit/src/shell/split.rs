@@ -44,9 +44,14 @@ pub struct SidebarToggle {
     in_header: bool,
     unread: bool,
     shortcut: Option<&'static str>,
+    show_label: Option<&'static str>,
+    hide_label: Option<&'static str>,
 }
 
 const DEFAULT_TOGGLE_SHORTCUT: &str = if cfg!(target_os = "macos") { "⇧⌘B" } else { "Ctrl+Shift+B" };
+const DEFAULT_SHOW_SIDEBAR: &str = "Show sidebar";
+const DEFAULT_HIDE_SIDEBAR: &str = "Hide sidebar";
+const DEFAULT_FRAME_INSET: f32 = 8.0;
 
 impl SidebarToggle {
     /// A 24 point button 8 points past the traffic lights (12 from the window's edge when there
@@ -60,6 +65,8 @@ impl SidebarToggle {
             in_header: false,
             unread: false,
             shortcut: Some(DEFAULT_TOGGLE_SHORTCUT),
+            show_label: None,
+            hide_label: None,
         }
     }
     /// The button's size: 16, 20, 24, 28 or 36 points.
@@ -99,6 +106,18 @@ impl SidebarToggle {
     /// `"Ctrl+Shift+B"` elsewhere by default; pass `""` to omit).
     pub fn shortcut(mut self, shortcut: &'static str) -> Self {
         self.shortcut = (!shortcut.is_empty()).then_some(shortcut);
+        self
+    }
+    /// Accessible name and tooltip text for the toggle button when the sidebar is closed
+    /// (`show`) and open (`hide`), replacing `"Show sidebar"` and `"Hide sidebar"`. Empty or
+    /// blank strings keep the default for that state.
+    ///
+    /// ```ignore
+    /// SidebarToggle::new().labels("显示侧边栏", "隐藏侧边栏")
+    /// ```
+    pub fn labels(mut self, show: &'static str, hide: &'static str) -> Self {
+        self.show_label = (!show.trim().is_empty()).then_some(show);
+        self.hide_label = (!hide.trim().is_empty()).then_some(hide);
         self
     }
 
@@ -145,7 +164,8 @@ pub struct SplitView {
     inset: f32,
     show_toggle: bool,
     toggle: SidebarToggle,
-    frame: f32,
+    frame: Option<f32>,
+    flat: bool,
     in_panel: bool,
     padding: [f32; 2],
     motion: PaneMotion,
@@ -163,7 +183,8 @@ impl SplitView {
             inset: 0.0,
             show_toggle: true,
             toggle: SidebarToggle::new(),
-            frame: 8.0,
+            frame: None,
+            flat: false,
             in_panel: false,
             padding: [0.0; 2],
             motion: PaneMotion::new(),
@@ -204,9 +225,25 @@ impl SplitView {
         self
     }
     /// The window background showing around the main pane where no pane borders it (default
-    /// 8 points).
+    /// 8 points, or 0 points when [`Self::flat_main`] is enabled).
     pub fn frame_inset(mut self, points: f32) -> Self {
-        self.frame = points.max(0.0);
+        self.frame = Some(points.max(0.0));
+        self
+    }
+    /// Draws the main pane flat instead of as a rounded, bordered card: omits its corner
+    /// radius and rounded clip, defaults [`Self::frame_inset`] to `0.0` unless set explicitly,
+    /// and draws 1-point hairlines only on edges meeting an open pane or an outer toolbar band
+    /// (`left` for an open sidebar, `right` for an open inspector, `top` when a toolbar sits
+    /// above the pane). Default `false`.
+    ///
+    /// ```ignore
+    /// SplitView::new(main)
+    ///     .sidebar(&s.sidebar, |s: &mut App| &mut s.sidebar, sidebar)
+    ///     .flat_main(true)
+    ///     .build(&kit)
+    /// ```
+    pub fn flat_main(mut self, on: bool) -> Self {
+        self.flat = on;
         self
     }
     /// Puts the toolbar inside the main pane, at its top, and insets the pane from the window's
@@ -247,7 +284,8 @@ impl SplitView {
         let c = &k.c;
         let t = self.toggle;
         let side = t.side();
-        let top = if self.in_panel { self.frame } else { 0.0 };
+        let frame = self.frame.unwrap_or(if self.flat { 0.0 } else { DEFAULT_FRAME_INSET });
+        let top = if self.in_panel { frame } else { 0.0 };
         let sidebar_state = self.sidebar.as_ref().map(|p| p.state);
         let sidebar_open = sidebar_state.is_some_and(|s| s.is_open());
         let inspector_state = self.inspector.as_ref().map(|p| p.state);
@@ -272,7 +310,11 @@ impl SplitView {
             }
             let hover = p.hover.take();
             if let Some(tg) = p.toggle.take().filter(|_| toggle) {
-                let label = if open { "Hide sidebar" } else { "Show sidebar" };
+                let label = if open {
+                    t.hide_label.unwrap_or(DEFAULT_HIDE_SIDEBAR)
+                } else {
+                    t.show_label.unwrap_or(DEFAULT_SHOW_SIDEBAR)
+                };
                 let mut button = IconButton::new(&super::SIDEBAR)
                     .variant(IconButtonVariant::GhostMuted)
                     .control_size(t.size)
@@ -314,7 +356,7 @@ impl SplitView {
                     pane_hold = Some(Box::new(move |e: El| h(e, Duration::ZERO, pk.grace, PeekHover::Hold(PaneState::PEEK_PANE))) as Apply);
                 } else if !open && !s.is_resizing() {
                     let below = pk.below.unwrap_or(top + TOOLBAR_HEIGHT);
-                    let edge = el().key("sidebar-peek-edge").pin(Some(0.0), Some(below), None, Some(0.0)).w(self.frame + pk.edge);
+                    let edge = el().key("sidebar-peek-edge").pin(Some(0.0), Some(below), None, Some(0.0)).w(frame + pk.edge);
                     zones.push(h(edge.transition(instant), pk.edge_delay, Duration::ZERO, PeekHover::Open(0)));
                 }
             }
@@ -341,29 +383,40 @@ impl SplitView {
             let content = Contents { pad: self.padding, slide: peek.is_some(), peek, band: Some(band), hold: pane_hold };
             dock(&d, "sidebar-pane", p, true, content)
         });
+        let has_toolbar = self.toolbar.is_some();
         let toolbar = self
             .toolbar
             .unwrap_or_default()
-            .padding(if sidebar_open { 12.0 } else if self.in_panel { (past_toggle - self.frame).max(12.0) } else { past_toggle })
+            .padding(if sidebar_open { 12.0 } else if self.in_panel { (past_toggle - frame).max(12.0) } else { past_toggle })
             .build(k)
             .motion(spring);
         let (toolbar, above) = if self.in_panel { (Some(toolbar), None) } else { (None, Some(toolbar)) };
-        let card = col()
+        let mut card = col()
             .key("main-pane")
             .role("main")
             .grow(1.0)
             .min_w(0.0)
             .min_h(0.0)
-            .ml(if sidebar_open { 0.0 } else { self.frame })
-            .mr(if inspector_open { 0.0 } else { self.frame })
-            .mb(self.frame)
+            .ml(if sidebar_open { 0.0 } else { frame })
+            .mr(if inspector_open { 0.0 } else { frame })
+            .mb(frame)
             .fill(c.bg_base)
-            .radius(k.radius.lg)
-            .border(1.0, c.border_muted)
-            .clip_rounded(k.radius.lg)
             .motion(spring)
             .children(toolbar)
             .child(self.main.grow(1.0).min_h(0.0));
+        if self.flat {
+            let sides = [
+                if !self.in_panel && has_toolbar { 1.0 } else { 0.0 },
+                if inspector_open { 1.0 } else { 0.0 },
+                0.0,
+                if sidebar_open { 1.0 } else { 0.0 },
+            ];
+            if sides.iter().any(|&w| w > 0.0) {
+                card = card.border_sides(sides, c.border_muted);
+            }
+        } else {
+            card = card.radius(k.radius.lg).border(1.0, c.border_muted).clip_rounded(k.radius.lg);
+        }
         let mut below = row().key("main-row").w_full().grow(1.0).min_h(0.0).motion(spring).child(card);
         if let Some(mut p) = self.inspector {
             if let Some(c) = p.clear.take() {
@@ -372,7 +425,7 @@ impl SplitView {
             let content = Contents { pad: [0.0; 2], slide: false, peek: None, band: None, hold: None };
             below = below.child(dock(&d, "inspector-pane", p, false, content));
         }
-        let strip = self.in_panel.then(|| el().key("titlebar-strip").w_full().h(self.frame).window_drag());
+        let strip = self.in_panel.then(|| el().key("titlebar-strip").w_full().h(frame).window_drag());
         let main = col().key("main-column").grow(1.0).min_w(0.0).h_full().motion(spring).children(above).children(strip).child(below);
         let mut split = row().key("split").w_full().h_full().motion(spring);
         if let Some(s) = sidebar {
@@ -398,7 +451,8 @@ pub struct Page {
     toolbar: Toolbar,
     inset: f32,
     toggle: SidebarToggle,
-    frame: f32,
+    frame: Option<f32>,
+    flat: bool,
     in_panel: bool,
 }
 
@@ -409,7 +463,8 @@ impl Page {
             toolbar: Toolbar::new(),
             inset: 0.0,
             toggle: SidebarToggle::new(),
-            frame: 8.0,
+            frame: None,
+            flat: false,
             in_panel: false,
         }
     }
@@ -449,10 +504,20 @@ impl Page {
         self.toggle = self.toggle.past_lights(past_lights).edge(edge);
         self
     }
-    /// The window background showing around the content pane (default 8 points, matching
-    /// [`SplitView::frame_inset`]).
+    /// The window background showing around the content pane (default 8 points, or 0 points
+    /// when [`Self::flat_main`] is enabled, matching [`SplitView::frame_inset`]).
     pub fn frame_inset(mut self, points: f32) -> Self {
-        self.frame = points.max(0.0);
+        self.frame = Some(points.max(0.0));
+        self
+    }
+    /// Draws the content pane flat instead of as a rounded card, matching
+    /// [`SplitView::flat_main`].
+    ///
+    /// ```ignore
+    /// Page::new(body).title("Settings").flat_main(true).build(&kit)
+    /// ```
+    pub fn flat_main(mut self, on: bool) -> Self {
+        self.flat = on;
         self
     }
     /// Puts the toolbar inside the framed content pane at its top, matching
@@ -467,8 +532,11 @@ impl Page {
             .toolbar(self.toolbar)
             .titlebar_inset(self.inset)
             .sidebar_toggle(self.toggle)
-            .frame_inset(self.frame)
+            .flat_main(self.flat)
             .hide_sidebar_toggle();
+        if let Some(frame) = self.frame {
+            split = split.frame_inset(frame);
+        }
         if self.in_panel {
             split = split.toolbar_in_panel();
         }

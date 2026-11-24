@@ -2,7 +2,7 @@
 
 use rune::accesskit::{Action, ActionData};
 use rune::{Cx, El, Key, col};
-use rune_kit::shell::{Page, PaneState, RowStatus, Sidebar, SidebarRow, SidebarSection, SplitView, Toolbar};
+use rune_kit::shell::{Page, PaneState, RowStatus, Sidebar, SidebarRow, SidebarSection, SidebarToggle, SplitView, Toolbar};
 use rune_kit::*;
 
 use crate::support::*;
@@ -101,4 +101,36 @@ fn a_page_names_its_toolbar() {
     assert_eq!(said(node(&tree, "main-pane")).0, "main");
     assert!(!named(&tree, "Back").is_empty());
     golden("page", &tree);
+}
+
+fn flat_localized_shell(s: &App, _: &mut Cx<App>) -> El {
+    let k = kit();
+    let sidebar = Sidebar::new().label("Navigation").build(&k);
+    SplitView::new(col().key("body").child(Button::new("Run").build(&k)))
+        .sidebar(&s.sidebar, |s: &mut App| &mut s.sidebar, sidebar)
+        .sidebar_toggle(SidebarToggle::new().labels("显示侧边栏", "隐藏侧边栏"))
+        .toolbar(Toolbar::new().title("Project"))
+        .flat_main(true)
+        .build(&k)
+}
+
+#[test]
+fn localized_sidebar_toggle_and_flat_main_expose_accessible_names_and_roles() {
+    let mut rt = mount(App { sidebar: PaneState::new(240.0).range(180.0, 420.0), ..App::default() }, flat_localized_shell);
+    let tree = rt.accessibility_json();
+    assert_eq!(said(node(&tree, "main-pane")).0, "main");
+    let toggle = node(&tree, "sidebar-toggle");
+    assert_eq!(said(toggle), ("button", "隐藏侧边栏"));
+    assert_eq!(toggle["description"].as_str(), Some("隐藏侧边栏"));
+    assert!(has(toggle, "expanded") && can(toggle, "collapse"));
+    no_echo(&tree);
+
+    assert!(act(&mut rt, "sidebar-toggle", Action::Collapse));
+    assert!(!rt.state.sidebar.is_open());
+    let tree = rt.accessibility_json();
+    let toggle = node(&tree, "sidebar-toggle");
+    assert_eq!(said(toggle), ("button", "显示侧边栏"));
+    assert_eq!(toggle["description"].as_str(), Some("显示侧边栏"));
+    assert!(has(toggle, "collapsed") && can(toggle, "expand"));
+    no_echo(&tree);
 }

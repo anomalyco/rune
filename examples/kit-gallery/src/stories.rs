@@ -14,6 +14,7 @@ mod icons;
 mod inputs;
 mod markdown;
 mod overlays;
+mod split_view;
 
 use controls::{button_all_states, button_icon, button_playground, button_sizes, button_variants, checkbox_basic, checkbox_custom_icon, checkbox_hidden_label, checkbox_states, icon_button_all_states, icon_button_playground, icon_button_sizes, icon_button_variants, radio_basic, radio_controlled, radio_states, switch_appearances, switch_basic, switch_hidden_label, switch_sizes, switch_states, switch_web};
 use display::{accordion_basic, accordion_multiple, accordion_single, badge_accent, badge_appearances, badge_basic, badge_high_contrast, badge_subtle, card_error, card_info, card_normal, card_success, card_warning, collapsible_basic, collapsible_ghost, keybind_all, keybind_multiple, keybind_playground, keybind_symbols, keybind_variants, list_active_icon, list_basic, list_divider, list_empty, list_grouped, list_no_search, list_with_add, loader_basic, loader_sizes, progress_basic, progress_indeterminate, progress_no_label, rolling_text_basic, scroll_view_thumb, segmented_basic, segmented_controlled, spinner_basic, spinner_sizes};
@@ -36,6 +37,10 @@ macro_rules! stories {
             if $id == "rune-popup-list--composer" {
                 s.edits[7] = TextEdit::new("/");
                 s.edits[7].focused = true;
+            }
+            if $id == "rune-split-view--flat-main" {
+                s.split_sidebar.set_open(true);
+                s.split_inspector.set_open(true);
             }
             s.open = OPENED.iter().find(|(id, _)| *id == $id).map(|(_, k)| (*k).to_owned());
         }),)*];
@@ -215,6 +220,7 @@ stories! {
     "rune-file-icon--catalog" => icons::file_icon_catalog,
     "rune-tree-icon--catalog" => icons::tree_icon_catalog,
     "rune-tree--files" => icons::file_tree,
+    "rune-split-view--flat-main" => split_view::flat_main,
 }
 
 fn popup_list_composer(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {

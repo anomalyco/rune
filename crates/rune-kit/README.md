@@ -271,7 +271,13 @@ SidebarRow::new(&x.title).height(45.0).avatar(avatar(x)).subtitle(&x.project)
   a click inside docks it. Under Reduce Motion it fades in place.
 - `SidebarToggle::in_header` puts the toggle at the end of the sidebar's title row while it is
   open; it travels past the traffic lights on the sidebar's spring as it closes. `unread`
-  marks it with a dot while closed.
+  marks it with a dot while closed. `SidebarToggle::labels(show, hide)` replaces the default
+  `"Show sidebar"` / `"Hide sidebar"` accessible name and tooltip text for localized apps.
+- `SplitView::flat_main(true)` (and `Page::flat_main(true)`) draws the main pane flat instead
+  of as a rounded, bordered card: it drops the corner radius and rounded clip, defaults
+  `frame_inset` to `0.0` unless set explicitly, and draws 1-point hairlines only on edges that
+  meet an open sidebar, open inspector or outer toolbar band (`rune-split-view--flat-main` in
+  the gallery).
 - `SidebarRow::reorder` lifts the row above its neighbours and follows the pointer; they step
   aside on springs, a drop calls the app's move, and Escape or losing focus puts it back. It
   works in `virtual_rows` lists too.
