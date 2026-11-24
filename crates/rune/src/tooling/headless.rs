@@ -465,6 +465,15 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
         q(&mut sorted, 1.0),
         app.rt().instances.len()
     );
+    // The tail, on a line of its own so that readers of the line above keep working: p99 over every frame, and how many
+    // frames after the first (which holds the first layout and the pipelines) cost more CPU than one frame's time.
+    let budget_ms = 1000.0 / fps as f64;
+    eprintln!(
+        "rune: frame cpu p99 {:.3} ms, over budget {} of {} frames after the first ({budget_ms:.2} ms a frame at {fps} fps)",
+        q(&mut sorted, 0.99),
+        steady.iter().filter(|ms| **ms > budget_ms).count(),
+        steady.len()
+    );
     let (a50, a95) = (q(&mut state.anim_ms, 0.5), q(&mut state.anim_ms, 0.95));
     let (r50, r95) = (q(&mut state.rest_ms, 0.5), q(&mut state.rest_ms, 0.95));
     eprintln!(
