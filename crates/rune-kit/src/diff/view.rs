@@ -169,6 +169,14 @@ impl<S: 'static> DiffBind for DiffHandlers<S> {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+enum DiffScrollBar {
+    #[default]
+    None,
+    Kit,
+    Styled(ScrollBarStyle),
+}
+
 /// Draws the [`DiffState`] an app keeps in its state: give it the state's accessors and build
 /// it in the view. It fills the height it's given and scrolls; Cmd-C, `j`/`k` and `]`/`[` work
 /// once the app routes keys to [`DiffState::key`].
@@ -180,14 +188,6 @@ impl<S: 'static> DiffBind for DiffHandlers<S> {
 ///     .on_visible_file(|s: &mut App, f| s.tree.reveal(f))
 ///     .build(s, &k)
 /// ```
-#[derive(Clone, Copy, Default)]
-enum DiffScrollBar {
-    #[default]
-    None,
-    Kit,
-    Styled(ScrollBarStyle),
-}
-
 pub struct DiffView<S> {
     key: String,
     fold_row: FoldRow,
