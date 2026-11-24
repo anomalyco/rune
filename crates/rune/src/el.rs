@@ -50,7 +50,7 @@ pub(crate) mod virtual_rows;
 mod visual;
 mod visuals;
 
-pub use a11y::LiveRegion;
+pub use a11y::{HasPopup, LiveRegion, Orientation};
 pub(crate) use a11y::{A11y, Checked};
 pub use anchor::{Anchor, Side, anchor_rect, anchor_rect_in};
 pub(crate) use crate::clipboard::tx::{ClipboardRead, ReadFn};

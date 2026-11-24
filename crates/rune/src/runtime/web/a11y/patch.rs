@@ -8,7 +8,7 @@
 
 use serde_json::{Value, json};
 
-use super::{A11yFont, A11yItem, A11yRun, round1};
+use super::{A11yFont, A11yItem, A11yRun, MirrorAria, round1};
 use crate::runtime::HashMap;
 
 #[inline]
@@ -63,6 +63,7 @@ pub(crate) struct SentItem {
     pub busy: bool,
     /// App-mode scroll viewport translation `[tx, ty]` in CSS pixels.
     pub scroll: Option<[f32; 2]>,
+    pub aria: MirrorAria,
 }
 
 impl SentItem {
@@ -99,6 +100,7 @@ impl SentItem {
             disabled: item.disabled,
             busy: item.busy,
             scroll: item.scroll.map(|[x, y]| [clean_zero(x), clean_zero(y)]),
+            aria: item.aria.clone(),
         }
     }
 
@@ -131,6 +133,7 @@ impl SentItem {
             self.disabled,
             self.busy,
             self.scroll,
+            &self.aria,
         ))
     }
 }
@@ -164,6 +167,7 @@ pub(super) fn item_json_fields(
     disabled: bool,
     busy: bool,
     scroll: Option<[f32; 2]>,
+    aria: &MirrorAria,
 ) -> serde_json::Map<String, Value> {
     let mut obj = serde_json::Map::new();
     obj.insert("k".into(), json!(kind));
@@ -196,6 +200,12 @@ pub(super) fn item_json_fields(
     if let Some([sx, sy]) = scroll {
         obj.insert("sc".into(), json!([clean_zero(sx), clean_zero(sy)]));
     }
+    if aria.multiselectable { obj.insert("ms".into(), json!(true)); }
+    if aria.required { obj.insert("rq".into(), json!(true)); }
+    if let Some(hp) = aria.has_popup { obj.insert("hp".into(), json!(hp)); }
+    if let Some(or) = aria.orientation { obj.insert("or".into(), json!(or)); }
+    if let Some(ct) = aria.controls.as_deref() { obj.insert("ct".into(), json!(ct)); }
+    if let Some(ow) = aria.owns.as_deref() { obj.insert("ow".into(), json!(ow)); }
     if !runs.is_empty() {
         let out: Vec<Value> = runs.iter().map(|r| {
             let mut ro = serde_json::Map::new();

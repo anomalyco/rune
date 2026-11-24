@@ -62,14 +62,20 @@ impl RuntimeCore {
         let path = n.path.clone();
         let link = sub_link(sub);
         let handlers = n.handlers.get();
-        let pressable = handlers.is_some_and(|h| h.on_press.is_some());
-        let secondary = handlers.is_some_and(|h| h.on_secondary_press.is_some());
-        let (input, editable) = (n.input.is_some(), n.input.as_ref().is_some_and(|i| i.access.is_some()));
-        let (expanded, steps, sets_value, scrolls) = (n.a11y.expanded, n.focus.step.is_some(), n.focus.set_value.is_some(), n.scroll.is_some());
+        let enabled = !n.a11y.disabled;
+        let pressable = enabled && handlers.is_some_and(|h| h.on_press.is_some());
+        let secondary = enabled && handlers.is_some_and(|h| h.on_secondary_press.is_some());
+        let (input, editable) = (enabled && n.input.is_some(), enabled && n.input.as_ref().is_some_and(|i| i.access.is_some()));
+        let (expanded, steps, sets_value, scrolls) = (
+            n.a11y.expanded,
+            enabled && n.focus.step.is_some(),
+            enabled && n.focus.set_value.is_some(),
+            enabled && n.scroll.is_some(),
+        );
         let focusable = self.can_focus(i);
         match (request.action, link) {
-            (Ak::Click, Some(k)) => self.queue_a11y_link(path, k),
-            (Ak::ShowContextMenu, Some(k)) => {
+            (Ak::Click, Some(k)) if enabled => self.queue_a11y_link(path, k),
+            (Ak::ShowContextMenu, Some(k)) if enabled => {
                 let Some((_, r)) = self.link_boxes_for(i, k, self.drawn_box(i)).into_iter().next() else { return false };
                 let ev = self.pointer_event(i, r[0], r[3]);
                 self.queue_a11y_link_secondary(path, k, ev);
