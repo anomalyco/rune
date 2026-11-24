@@ -53,6 +53,18 @@ fn record_scheme(slot: &AtomicU8, scheme: u32) -> bool {
     slot.swap(next, Ordering::Relaxed) != next
 }
 
+/// A run's first frame takes the scheme the last run saw (`last`), unless the portal has answered
+/// already: its answer is newer than any run's. Returns whether the seed was stored.
+fn seed_scheme(slot: &AtomicU8, dark: bool) -> bool {
+    slot.compare_exchange(UNKNOWN, if dark { DARK } else { LIGHT }, Ordering::Relaxed, Ordering::Relaxed).is_ok()
+}
+
+/// The last run's reduced motion, where the fallback's answer goes: a portal's motion key, when
+/// one answers, decides instead, and the fallback read replaces it when none does.
+fn seed_reduced_motion(slot: &AtomicU8, reduced: bool) {
+    update_motion(slot, |bits| if has_portal_motion(bits) || !reduced { bits } else { bits | FALLBACK_REDUCED_ON });
+}
+
 /// Whether at least one Settings portal reduced-motion key has answered.
 fn has_portal_motion(bits: u8) -> bool {
     bits & (PORTAL_REDUCED_KNOWN | PORTAL_ANIM_KNOWN) != 0
@@ -112,14 +124,15 @@ fn record_fallback_reduced_motion(slot: &AtomicU8, reduced: bool) -> bool {
 #[cfg(all(target_os = "linux", feature = "dbus"))]
 mod dbus {
     use futures_lite::StreamExt;
-    use std::{sync::{Arc, Mutex, OnceLock, Weak, atomic::{AtomicU8, Ordering}, mpsc}, time::{Duration, Instant}};
+    use std::{sync::{Arc, Mutex, OnceLock, Weak, atomic::{AtomicBool, AtomicU8, Ordering}, mpsc}, time::{Duration, Instant}};
     use winit::window::Window;
     use zbus::{Connection, Proxy, zvariant::{OwnedValue, Value}};
 
     use super::{
         UNKNOWN, has_portal_motion, record_enable_animations, record_fallback_reduced_motion,
-        record_reduced_motion, record_scheme, resolved_reduced_motion, stored_dark,
+        record_reduced_motion, record_scheme, resolved_reduced_motion, seed_reduced_motion, seed_scheme, stored_dark,
     };
+    use crate::platform::preferences::Appearance;
     use crate::platform::portal::{self, DEST, PATH};
 
     const INTERFACE: &str = "org.freedesktop.portal.Settings";
@@ -142,6 +155,32 @@ mod dbus {
     /// it and waits for what is left of `FIRST_ANSWER`; an ask meanwhile waits behind it.
     static FIRST: Mutex<Option<(mpsc::Receiver<()>, Instant)>> = Mutex::new(None);
 
+    /// The app gave what its last run saw (`last`): no ask waits for the portal.
+    static SEEDED: AtomicBool = AtomicBool::new(false);
+    /// `last`'s keeper, and the appearance it was last given (or the last run's own).
+    #[allow(clippy::type_complexity)]
+    static KEEP: Mutex<Option<(Box<dyn FnMut(Appearance) + Send>, Option<Appearance>)>> = Mutex::new(None);
+
+    /// `rune::last_appearance`: `last` is what the first frame draws with until the portal
+    /// answers, and `keep` gets every answer that differs from what it last had, on the worker.
+    pub(crate) fn last(last: Option<Appearance>, keep: Box<dyn FnMut(Appearance) + Send>) {
+        *KEEP.lock().unwrap_or_else(|e| e.into_inner()) = Some((keep, last));
+        let Some(last) = last else { return };
+        if let Some(dark) = last.dark { seed_scheme(&SCHEME, dark); }
+        seed_reduced_motion(&MOTION, last.reduced_motion);
+        SEEDED.store(true, Ordering::Relaxed);
+    }
+
+    /// Gives the keeper the appearance as it stands, when it isn't what the keeper last had.
+    fn keep_now() {
+        let now = Appearance { dark: stored_dark(SCHEME.load(Ordering::Relaxed)), reduced_motion: resolved_reduced_motion(MOTION.load(Ordering::Relaxed)) };
+        let mut keeper = KEEP.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((keep, had)) = keeper.as_mut() && *had != Some(now) {
+            keep(now);
+            *had = Some(now);
+        }
+    }
+
     /// Starts the worker, if it isn't started, without waiting for it. An event loop calls this
     /// before it is built: the worker's connection, its reads and its fallback (which loads
     /// GSettings) then run beside the app's setup, not in the first window's creation.
@@ -150,12 +189,14 @@ mod dbus {
     }
 
     /// The first ask: waits for the worker's first answer, until `FIRST_ANSWER` after it started.
+    /// With the last run's appearance to draw with (`last`) it doesn't wait: the answer, when it
+    /// differs, redraws the windows.
     fn first_answer() {
         WATCH.get_or_init(start);
         let mut first = FIRST.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((answer, started)) = first.take() {
-            answer.recv_timeout(FIRST_ANSWER.saturating_sub(started.elapsed())).ok();
-        }
+        let Some((answer, started)) = first.take() else { return };
+        if SEEDED.load(Ordering::Relaxed) { return; }
+        answer.recv_timeout(FIRST_ANSWER.saturating_sub(started.elapsed())).ok();
     }
     static WINDOWS: Mutex<Vec<Weak<Window>>> = Mutex::new(Vec::new());
 
@@ -273,6 +314,7 @@ mod dbus {
         if !has_portal_motion(MOTION.load(Ordering::Relaxed)) {
             store_fallback_reduced_motion(crate::platform::preferences::read_reduced_motion_fallback());
         }
+        keep_now();
         ready.send(()).ok();
         let Some((_conn, mut changes)) = setup else { return };
         while let Some(message) = changes.next().await {
@@ -283,14 +325,15 @@ mod dbus {
                 (APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY) => store_scheme(&value),
                 (APPEARANCE_NAMESPACE, REDUCED_MOTION_KEY) => store_reduced_motion(&value),
                 (GNOME_INTERFACE_NAMESPACE, ENABLE_ANIMATIONS_KEY) => store_enable_animations(&value),
-                _ => {}
+                _ => continue,
             }
+            keep_now();
         }
     }
 }
 
 #[cfg(all(target_os = "linux", feature = "dbus"))]
-pub(crate) use dbus::{begin, dark, follow, reduced_motion};
+pub(crate) use dbus::{begin, dark, follow, last, reduced_motion};
 
 #[cfg(test)]
 #[path = "portal_appearance_tests.rs"]

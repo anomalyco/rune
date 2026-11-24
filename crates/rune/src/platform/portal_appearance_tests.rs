@@ -116,3 +116,48 @@ fn reads_enable_animations_however_deeply_the_portal_wraps_it() {
     assert_eq!(dbus::bool_value(&Value::Value(Box::new(Value::Value(Box::new(Value::Bool(false)))))), Some(false));
     assert_eq!(dbus::bool_value(&Value::U32(0)), None);
 }
+
+#[test]
+fn the_last_runs_scheme_stands_until_the_portal_answers_and_redraws_only_when_it_differs() {
+    let slot = AtomicU8::new(UNKNOWN);
+    assert!(seed_scheme(&slot, false));
+    assert_eq!(stored_dark(slot.load(Ordering::Relaxed)), Some(false));
+    // The portal agrees: nothing changed, no window redraws.
+    assert!(!record_scheme(&slot, 2));
+    // The desktop went dark while the app was closed: the answer replaces the seed, and redraws.
+    let slot = AtomicU8::new(UNKNOWN);
+    seed_scheme(&slot, false);
+    assert!(record_scheme(&slot, 1));
+    assert_eq!(stored_dark(slot.load(Ordering::Relaxed)), Some(true));
+}
+
+#[test]
+fn a_portal_answer_is_never_replaced_by_the_last_runs_scheme() {
+    let slot = AtomicU8::new(UNKNOWN);
+    record_scheme(&slot, 1);
+    assert!(!seed_scheme(&slot, false));
+    assert_eq!(stored_dark(slot.load(Ordering::Relaxed)), Some(true));
+}
+
+#[test]
+fn the_last_runs_reduced_motion_stands_until_a_portal_key_or_the_fallback_answers() {
+    let slot = AtomicU8::new(0);
+    seed_reduced_motion(&slot, true);
+    assert!(resolved_reduced_motion(slot.load(Ordering::Relaxed)));
+    // The portal's key says motion is fine now: it decides, and the change is reported.
+    assert!(record_reduced_motion(&slot, 0));
+    assert!(!resolved_reduced_motion(slot.load(Ordering::Relaxed)));
+    // No portal key answers: the fallback's read replaces the seed.
+    let slot = AtomicU8::new(0);
+    seed_reduced_motion(&slot, true);
+    assert!(record_fallback_reduced_motion(&slot, false));
+    assert!(!resolved_reduced_motion(slot.load(Ordering::Relaxed)));
+    // A seed of "not reduced" stores nothing, and never clears what a portal key said.
+    let slot = AtomicU8::new(0);
+    record_enable_animations(&slot, false);
+    seed_reduced_motion(&slot, false);
+    seed_reduced_motion(&slot, true);
+    assert!(resolved_reduced_motion(slot.load(Ordering::Relaxed)));
+    assert!(record_enable_animations(&slot, true));
+    assert!(!resolved_reduced_motion(slot.load(Ordering::Relaxed)));
+}
