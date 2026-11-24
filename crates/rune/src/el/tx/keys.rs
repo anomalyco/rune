@@ -25,10 +25,12 @@ impl Tx {
     /// no modifiers held: `'a'` for ⌥A (which arrives as `Key::Text("å")` on a US Mac layout)
     /// and ⇧A, and `'a'` for AZERTY's A key, which sits where QWERTY's Q does. A binding by
     /// letter, as macOS's `DefaultKeyBinding.dict` binds ⌥-letters, matches this rather than
-    /// [`Tx::physical_key`], which names where the key sits (`KeyQ` there). `None` off
-    /// macOS, Windows and Linux, for a key that types no single character (arrows, Return),
-    /// for a key with no physical origin (`Runtime::key`, a script's `"key"` without a
-    /// `"code"`) and outside key handlers.
+    /// [`Tx::physical_key`], which names where the key sits (`KeyQ` there). On the web,
+    /// derived from `KeyboardEvent.key` when unmodified (or lowercased for shifted letters, so
+    /// non-ASCII chords like Ctrl+Ö report `Some('ö')`) and `None` for shifted punctuation,
+    /// Alt/Option combinations and dead keys. `None` on iOS and Android, for a key that types no
+    /// single character (arrows, Return), for a key with no physical origin (`Runtime::key`, a
+    /// script's `"key"` without a `"code"`) and outside key handlers.
     pub fn key_base(&self) -> Option<char> { self.key_base }
 
     /// The modifier keys held as this handler runs, so a click can tell Shift-click (extend a

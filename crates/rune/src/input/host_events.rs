@@ -339,7 +339,7 @@ pub(crate) fn keyboard(
         KeyInput {
             physical,
             logical,
-            base: key_base(event),
+            base: key_base(event, mods),
             mods: map_mods(mods),
             pressed,
             repeat: event.repeat,

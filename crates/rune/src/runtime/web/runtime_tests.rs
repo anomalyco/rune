@@ -202,18 +202,26 @@ fn web_key_delivers_unmodified_function_key_to_focused_input() {
 
 #[test]
 fn web_key_keeps_cmd_space_as_text_and_normalizes_non_ascii_chords() {
-    type Seen = Vec<(crate::Key, Option<crate::PhysicalKeyCode>)>;
+    type Seen = Vec<(crate::Key, Option<crate::PhysicalKeyCode>, Option<char>)>;
     fn view(_: &Seen, _: &mut Cx<Seen>) -> El { crate::el() }
     let mut rt = Runtime::new(Seen::new(), view, (100.0, 100.0), Env::default());
-    rt.on_key = Some(|s, ev, tx| { s.push((ev.key.clone(), tx.physical_key())); true });
+    rt.on_key = Some(|s, ev, tx| { s.push((ev.key.clone(), tx.physical_key(), tx.key_base())); true });
     rt.frame(0.0);
     rt.web_key(&json!({"kind":"key", "key":" ", "code":"Space", "ctrl":true}));
     rt.frame(0.0);
     rt.web_key(&json!({"kind":"key", "key":"м", "code":"KeyV", "ctrl":true}));
     rt.frame(0.0);
+    rt.web_key(&json!({"kind":"key", "key":"ö", "code":"Semicolon", "ctrl":true}));
+    rt.frame(0.0);
+    rt.web_key(&json!({"kind":"key", "key":"+", "code":"Equal", "ctrl":true, "shift":true}));
+    rt.frame(0.0);
+    rt.web_key(&json!({"kind":"key", "key":"Dead", "code":"Equal", "ctrl":true}));
+    rt.frame(0.0);
     assert_eq!(rt.state, [
-        (crate::Key::Text(" ".into()), Some(crate::PhysicalKeyCode::Space)),
-        (crate::Key::Command('v'), Some(crate::PhysicalKeyCode::KeyV)),
+        (crate::Key::Text(" ".into()), Some(crate::PhysicalKeyCode::Space), Some(' ')),
+        (crate::Key::Command('v'), Some(crate::PhysicalKeyCode::KeyV), Some('м')),
+        (crate::Key::Command(';'), Some(crate::PhysicalKeyCode::Semicolon), Some('ö')),
+        (crate::Key::Command('+'), Some(crate::PhysicalKeyCode::Equal), None),
     ]);
 }
 

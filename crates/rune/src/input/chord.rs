@@ -338,7 +338,7 @@ fn typed(key: &Key) -> Option<char> {
 }
 
 /// `c` lowercased when that is one character.
-pub(super) fn lower(c: char) -> char {
+pub(crate) fn lower(c: char) -> char {
     let mut l = c.to_lowercase();
     match (l.next(), l.next()) { (Some(l), None) => l, _ => c }
 }

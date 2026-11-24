@@ -7,20 +7,36 @@ pub(crate) fn map_mods(m: ModifiersState) -> Mods {
     crate::input::key_table::mods_from_keys(m.shift_key(), m.control_key(), m.alt_key(), m.super_key())
 }
 
+#[cfg(test)]
 pub(crate) fn map_key(key: &WKey, m: ModifiersState) -> Option<KeyEvent> {
-    let mods = map_mods(m);
+    map_key_with_mods(cfg!(target_os = "windows"), key, map_mods(m))
+}
+
+fn map_key_with_mods(windows: bool, key: &WKey, mods: Mods) -> Option<KeyEvent> {
     let key = match key {
         WKey::Named(n) => crate::input::key_table::key_from_winit(*n)?,
         // Windows treats Left Ctrl + Left Alt as AltGr: a character typed with both is text
         // ("@" on a German layout's Q), not a chord. A chord that types nothing comes through
         // `map_key_event`'s fallback instead.
-        WKey::Character(c) if mods.cmd && c != " " && c.chars().count() == 1 && !(cfg!(target_os = "windows") && mods.ctrl && mods.alt) => {
+        WKey::Character(c) if mods.cmd && c != " " && c.chars().count() == 1 && !(windows && mods.ctrl && mods.alt) => {
             Key::Command(c.chars().next()?.to_ascii_lowercase())
         }
         WKey::Character(c) => Key::Text(c.to_string()),
         _ => return None,
     };
     Some(KeyEvent { key, mods })
+}
+
+/// Rewrites a non-ASCII command chord (`Ctrl+М`, `Ctrl+Ö`) to the US character at `physical`,
+/// matching Windows, Linux and web shortcut conventions.
+fn remap_non_ascii_command(ev: &mut KeyEvent, physical: PhysicalKey) {
+    if let Key::Command(c) = ev.key
+        && !c.is_ascii()
+        && let winit::keyboard::PhysicalKey::Code(code) = physical
+        && let Some(us) = crate::shortcuts::us_char(code)
+    {
+        ev.key = Key::Command(us);
+    }
 }
 
 /// `map_key` for a window's key event. Windows names no logical key for a chord whose
@@ -33,13 +49,8 @@ pub(crate) fn map_key(key: &WKey, m: ModifiersState) -> Option<KeyEvent> {
 pub(crate) fn map_key_event(event: &winit::event::KeyEvent, m: ModifiersState) -> Option<KeyEvent> {
     let mut ev = map_parts(cfg!(target_os = "windows"), event.physical_key, &event.logical_key, typed_text(event), m)
         .or_else(|| unidentified(event, m))?;
-    if !cfg!(target_os = "macos")
-        && let Key::Command(c) = ev.key
-        && !c.is_ascii()
-        && let winit::keyboard::PhysicalKey::Code(code) = event.physical_key
-        && let Some(us) = crate::shortcuts::us_char(code)
-    {
-        ev.key = Key::Command(us);
+    if !cfg!(target_os = "macos") {
+        remap_non_ascii_command(&mut ev, event.physical_key);
     }
     Some(ev)
 }
@@ -53,7 +64,7 @@ fn unidentified(event: &winit::event::KeyEvent, m: ModifiersState) -> Option<Key
         return Some(KeyEvent { key: Key::Pause, mods });
     }
     if !(mods.cmd || mods.ctrl) { return None; }
-    let c = key_base(event).filter(|c| !c.is_control() && *c != ' ')?;
+    let c = key_base(event, m).filter(|c| !c.is_control() && *c != ' ')?;
     let key = if mods.cmd { Key::Command(c.to_ascii_lowercase()) } else { Key::Text(c.to_string()) };
     Some(KeyEvent { key, mods })
 }
@@ -102,6 +113,10 @@ fn typed_text(event: &winit::event::KeyEvent) -> Option<&str> {
 ///   NBSP U+00A0 for Option+Space on macOS), keep the typed text instead of the named key's
 ///   default character.
 fn map_parts(windows: bool, physical: PhysicalKey, logical: &WKey, text: Option<&str>, m: ModifiersState) -> Option<KeyEvent> {
+    map_parts_with_mods(windows, physical, logical, text, map_mods(m), m.super_key())
+}
+
+fn map_parts_with_mods(windows: bool, physical: PhysicalKey, logical: &WKey, text: Option<&str>, mods: Mods, super_key: bool) -> Option<KeyEvent> {
     let text = text.filter(|t| !t.is_empty() && !t.chars().any(char::is_control));
     if windows
         && physical == NO_KEY
@@ -111,14 +126,14 @@ fn map_parts(windows: bool, physical: PhysicalKey, logical: &WKey, text: Option<
         return Some(KeyEvent { key: Key::Text(text.to_owned()), mods: Mods::default() });
     }
     if matches!(logical, WKey::Dead(_))
-        && !m.super_key()
+        && !super_key
         && let Some(text) = text
     {
-        let ev = KeyEvent { key: Key::Text(text.to_owned()), mods: map_mods(m) };
+        let ev = KeyEvent { key: Key::Text(text.to_owned()), mods };
         return (!ev.is_command_chord()).then_some(ev);
     }
-    let mut ev = map_key(logical, m)?;
-    if !m.super_key()
+    let mut ev = map_key_with_mods(windows, logical, mods)?;
+    if !super_key
         && !ev.is_command_chord()
         && let Some(text) = text
         && let Key::Text(t) = &mut ev.key
@@ -132,9 +147,10 @@ fn map_parts(windows: bool, physical: PhysicalKey, logical: &WKey, text: Option<
 
 /// The character `event`'s key types under the current layout with no modifiers, for
 /// `Tx::key_base`.
-pub(crate) fn key_base(event: &winit::event::KeyEvent) -> Option<char> {
+pub(crate) fn key_base(event: &winit::event::KeyEvent, m: ModifiersState) -> Option<char> {
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
+        let _ = m;
         use winit::keyboard::NamedKey;
         use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
         match event.key_without_modifiers() {
@@ -143,8 +159,81 @@ pub(crate) fn key_base(event: &winit::event::KeyEvent) -> Option<char> {
             _ => None,
         }
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    { let _ = event; None }
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_key_base(&event.logical_key, map_mods(m))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux", target_arch = "wasm32")))]
+    {
+        let _ = (event, m);
+        None
+    }
+}
+
+/// Derives `Tx::key_base()` from a browser `KeyboardEvent.key` (`WKey`) and its held modifiers.
+///
+/// Browsers expose no synchronous `key_without_modifiers`:
+/// - `Space` always maps to `' '` (a composed Space such as macOS Option+Space arrives as
+///   `"\u{00a0}"`, not `NamedKey::Space`).
+/// - With Alt/Option/AltGr held, `key` may be a composed character (`"å"`, `"@"`, `"€"`), so
+///   return `None`.
+/// - Without Alt, an unshifted single non-control character is the key's unmodified character,
+///   lowercased so CapsLock still yields `'a'` / `'ö'` while unshifted punctuation stays intact.
+/// - With Shift (and no Alt), only a single alphabetic character is accepted and lowercased
+///   (`'A'` -> `'a'`, `'Ö'` -> `'ö'`, `'М'` -> `'м'`), leaving shifted punctuation and digits
+///   (`'+'` from `Shift+=`, `'{'` from `Shift+[`, `'/'` from German `Shift+7`, `'¿'` from
+///   Spanish `Shift+¡`) as `None` so `Chord::matches_tx` never mistakes them for unmodified keys.
+/// - Dead keys, named keys, control characters, and multi-character strings return `None`.
+#[cfg(any(test, target_arch = "wasm32"))]
+pub(crate) fn web_key_base(logical: &WKey, mods: Mods) -> Option<char> {
+    match logical {
+        WKey::Named(winit::keyboard::NamedKey::Space) => Some(' '),
+        WKey::Character(s) => web_char_base(s, mods),
+        _ => None,
+    }
+}
+
+/// Same rule as [`web_key_base`] for a raw DOM `KeyboardEvent.key` string (`bridge.js` -> `web_key`).
+#[cfg(any(test, target_arch = "wasm32"))]
+pub(crate) fn web_key_base_str(name: &str, mods: Mods) -> Option<char> {
+    if name == " " {
+        return Some(' ');
+    }
+    web_char_base(name, mods)
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+fn web_char_base(s: &str, mods: Mods) -> Option<char> {
+    if mods.alt {
+        return None;
+    }
+    let mut chars = s.chars();
+    let c = chars.next().filter(|_| chars.next().is_none())?;
+    if c.is_control() {
+        return None;
+    }
+    if mods.shift && !c.is_alphabetic() {
+        return None;
+    }
+    Some(crate::input::chord::lower(c))
+}
+
+#[cfg(test)]
+pub(super) fn map_web_winit_key(
+    physical: PhysicalKey,
+    logical: &WKey,
+    text: Option<&str>,
+    shift: bool,
+    ctrl: bool,
+    alt: bool,
+    meta: bool,
+) -> (Option<KeyEvent>, Option<char>) {
+    let mods = crate::input::key_table::web_mods(shift, ctrl, alt, meta);
+    let mut ev = map_parts_with_mods(false, physical, logical, text, mods, meta);
+    if let Some(ev) = &mut ev {
+        remap_non_ascii_command(ev, physical);
+    }
+    (ev, web_key_base(logical, mods))
 }
 
 #[cfg(test)]

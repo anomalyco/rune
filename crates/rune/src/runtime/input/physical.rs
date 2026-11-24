@@ -90,7 +90,7 @@ impl RuntimeCore {
         self.physical_then(app, event, Some(key), base, None);
     }
     /// Return whether the native host needs to request a frame for this event.
-    #[cfg_attr(any(target_os = "windows", target_os = "ios", target_os = "android"), allow(dead_code))]
+    #[cfg_attr(any(target_os = "windows", target_os = "ios", target_os = "android", target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn physical_with_fallback(&mut self, app: &mut dyn AppDriver, event: PhysicalInput, key: Option<KeyEvent>) -> bool {
         self.physical_then(app, event, key, None, None)
     }
