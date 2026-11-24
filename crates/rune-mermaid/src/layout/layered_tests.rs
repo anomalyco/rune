@@ -103,3 +103,38 @@ fn clusters_stay_contiguous_and_contain_their_members() {
     let c2 = p.centers[2];
     assert!(c2[0] + 30.0 <= b[0] || c2[0] - 30.0 >= b[2], "a non-member sits outside: {c2:?} {b:?}");
 }
+
+#[test]
+fn fenwick_crossings_matches_pairwise_on_dense_layer_with_parallel_edges() {
+    // 10 nodes on rank 0, 10 nodes on rank 1, 64 edges (above the 32-edge Fenwick threshold),
+    // including duplicate/parallel edges and shared endpoints.
+    let mut nodes: Vec<LNode> = (0..20)
+        .map(|i| LNode {
+            kind: Kind::Real(i),
+            rank: usize::from(i >= 10),
+            size: [10.0, 10.0],
+            cluster: None,
+            preds: Vec::new(),
+            succs: Vec::new(),
+        })
+        .collect();
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    for i in 0..64 {
+        let u = (i * 3 + 1) % 10;
+        let v = (i * 7 + 2) % 10;
+        nodes[u].succs.push(10 + v);
+        nodes[10 + v].preds.push(u);
+        pairs.push((u, v));
+    }
+    let layers = vec![(0..10).collect::<Vec<_>>(), (10..20).collect::<Vec<_>>()];
+    let mut naive = 0usize;
+    for (i, a) in pairs.iter().enumerate() {
+        for b in &pairs[i + 1..] {
+            if (a.0 < b.0 && a.1 > b.1) || (a.0 > b.0 && a.1 < b.1) {
+                naive += 1;
+            }
+        }
+    }
+    assert!(naive > 0);
+    assert_eq!(crate::layout::order::crossings(&layers, &nodes), naive);
+}

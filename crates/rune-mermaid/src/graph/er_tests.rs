@@ -1,4 +1,5 @@
 use super::*;
+use crate::MAX_ITEMS;
 
 fn er(src: &str) -> ErDiagram {
     match crate::parse(src).map(|p| p.diagram) {

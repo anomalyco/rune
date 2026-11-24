@@ -1,4 +1,5 @@
 use super::*;
+use crate::MAX_ITEMS;
 
 fn mindmap(src: &str) -> Mindmap {
     match crate::parse(src).map(|p| p.diagram) {

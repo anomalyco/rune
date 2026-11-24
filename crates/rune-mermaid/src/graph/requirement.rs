@@ -9,7 +9,7 @@ use rune::Color;
 use crate::canvas::Scene;
 use crate::layout::draw::{Dir, DrawNode, Edge, Head, Line, class_box, draw_layered};
 use crate::layout::layered::Spacing;
-use crate::{DiagramStyle, EdgeStyle, Hover, MAX_ITEMS, NodeStyle, StyleSheet, clean_quoted, parse_style_props, word};
+use crate::{DiagramStyle, EdgeStyle, Hover, NodeStyle, StyleSheet, clean_quoted, parse_style_props, word};
 
 #[derive(Debug)]
 pub(crate) struct Req {
@@ -40,7 +40,7 @@ const KINDS: [(&str, &str); 7] = [
 
 const RELATIONS: [&str; 7] = ["contains", "copies", "derives", "satisfies", "verifies", "refines", "traces"];
 
-pub(crate) fn parse(body: &[&str]) -> Option<Requirements> {
+pub(crate) fn parse(body: &[&str], max_items: usize) -> Option<Requirements> {
     let mut d = Requirements { dir: Dir::Down, nodes: Vec::new(), edges: Vec::new() };
     let mut ids: HashMap<String, usize> = HashMap::new();
     let mut styles = StyleSheet::default();
@@ -103,7 +103,7 @@ pub(crate) fn parse(body: &[&str]) -> Option<Requirements> {
                 on_cluster: [None; 2],
             });
         }
-        if d.nodes.len() + d.edges.len() > MAX_ITEMS {
+        if d.nodes.len() + d.edges.len() > max_items {
             return None;
         }
     }

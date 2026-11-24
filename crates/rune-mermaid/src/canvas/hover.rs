@@ -131,11 +131,22 @@ impl Canvas {
                 spots.push(Spot { key: format!("{edge}.t"), rect: rect([g[0], g[1]], [g[2], g[3]]), lit: shape.clone(), labels: labels.clone() });
             }
         }
+        let mut by_node: Vec<Vec<usize>> = vec![Vec::new(); self.regions.len()];
+        for (ti, t) in self.traces.iter().enumerate() {
+            if let Some(list) = by_node.get_mut(t.ends.0) {
+                list.push(ti);
+            }
+            if t.ends.1 != t.ends.0
+                && let Some(list) = by_node.get_mut(t.ends.1)
+            {
+                list.push(ti);
+            }
+        }
         for v in (0..self.regions.len()).filter(|&v| drawn(v)) {
-            let mine: Vec<&Trace> = self.traces.iter().filter(|t| t.ends.0 == v || t.ends.1 == v).collect();
-            if mine.is_empty() {
+            if by_node[v].is_empty() {
                 continue;
             }
+            let mine: Vec<&Trace> = by_node[v].iter().map(|&ti| &self.traces[ti]).collect();
             let mut shape = mine.iter().flat_map(|t| &t.ops).fold(Shape::new(), &paint);
             if reach == Hover::Neighbours {
                 let mut near: Vec<usize> = mine.iter().flat_map(|t| [t.ends.0, t.ends.1]).filter(|&u| drawn(u)).collect();

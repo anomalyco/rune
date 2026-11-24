@@ -1,4 +1,5 @@
 use super::*;
+use crate::MAX_ITEMS;
 
 fn sankey(src: &str) -> Sankey {
     match crate::parse(src).map(|p| p.diagram) {

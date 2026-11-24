@@ -7,7 +7,7 @@ use rune::{Align, Color, TextStyle};
 use super::{bold, hue, ink, s_curve, soft, solid, strong};
 use crate::canvas::shape::{self, NodeShape};
 use crate::canvas::{Canvas, Measured, Scene, measure_wrap, over_color, rounded_rect};
-use crate::{DiagramStyle, MAX_DEPTH, MAX_ITEMS, clean_quoted};
+use crate::{DiagramStyle, MAX_DEPTH, clean_quoted};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Look {
@@ -34,7 +34,7 @@ pub(crate) struct Mindmap {
     pub nodes: Vec<Node>,
 }
 
-pub(crate) fn parse(body: &[&str], indents: &[usize]) -> Option<Mindmap> {
+pub(crate) fn parse(body: &[&str], indents: &[usize], max_items: usize) -> Option<Mindmap> {
     let mut nodes: Vec<Node> = Vec::new();
     let mut stack: Vec<(usize, usize)> = Vec::new();
     for (i, line) in body.iter().enumerate() {
@@ -43,7 +43,7 @@ pub(crate) fn parse(body: &[&str], indents: &[usize]) -> Option<Mindmap> {
             continue;
         }
         let Some((text, look)) = node(l) else { continue };
-        if nodes.len() >= MAX_ITEMS {
+        if nodes.len() >= max_items {
             return None;
         }
         let indent = indents.get(i).copied().unwrap_or(0);

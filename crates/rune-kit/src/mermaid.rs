@@ -22,7 +22,7 @@ use rune::El;
 
 use crate::markdown::{DiagramPaint, MarkdownStyle};
 
-pub use rune_mermaid::{DiagramStyle, Drawing, Hover, may_draw, supported};
+pub use rune_mermaid::{DiagramStyle, Drawing, Hover, may_draw, supported, supported_with};
 pub use rune_mermaid::DrawingModel;
 
 /// Prepare the drawn label runs for a viewer that searches and highlights a diagram.
@@ -102,7 +102,7 @@ fn kind(src: &str) -> &'static str {
 
 /// `paint` as `rune_mermaid`'s style.
 fn style(paint: &DiagramPaint) -> DiagramStyle {
-    let mut s = DiagramStyle::neutral(false).min_scale(paint.min_scale);
+    let mut s = DiagramStyle::neutral(false).min_scale(paint.min_scale).max_items(paint.max_items);
     s.text = paint.text;
     s.muted = paint.muted;
     s.surface = paint.surface;

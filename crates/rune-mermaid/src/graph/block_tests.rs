@@ -1,4 +1,5 @@
 use super::*;
+use crate::MAX_ITEMS;
 
 fn blocks(src: &str) -> BlockDiagram {
     match crate::parse(src).map(|p| p.diagram) {

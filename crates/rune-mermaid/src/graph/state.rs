@@ -10,7 +10,7 @@ use crate::canvas::{Measured, Scene, measure_balanced};
 use crate::layout::draw::{ClusterSpec, Dir, DrawNode, Edge, Head, Line, NodeShape, layered_canvas, node_size};
 use crate::layout::layered::Spacing;
 use crate::{
-    DiagramStyle, EdgeStyle, Hover, MAX_DEPTH, MAX_ITEMS, NodeStyle, StyleSheet, clean_quoted, statements,
+    DiagramStyle, EdgeStyle, Hover, MAX_DEPTH, NodeStyle, StyleSheet, clean_quoted, statements,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,7 +50,7 @@ pub(crate) struct StateDiagram {
     pub composites: Vec<Composite>,
 }
 
-pub(crate) fn parse(header: &str, body: &[&str]) -> Option<StateDiagram> {
+pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<StateDiagram> {
     let mut p = Parser {
         d: StateDiagram { title: None, dir: Dir::Down, states: Vec::new(), edges: Vec::new(), composites: Vec::new() },
         ids: HashMap::new(),
@@ -59,6 +59,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<StateDiagram> {
         mode: Mode::Reading,
         pseudo_seq: 0,
         styles: StyleSheet::default(),
+        max_items,
         over: false,
     };
     let mut reader = Reader::default();
@@ -87,7 +88,8 @@ struct Parser {
     mode: Mode,
     pseudo_seq: usize,
     styles: StyleSheet,
-    /// Set once the source goes past [`MAX_ITEMS`] or [`MAX_DEPTH`].
+    max_items: usize,
+    /// Set once the source goes past `max_items` or [`MAX_DEPTH`].
     over: bool,
 }
 
@@ -126,7 +128,7 @@ impl Lenient for Parser {
 
 impl Parser {
     fn budget(&mut self) -> Option<()> {
-        self.over |= self.d.states.len() + self.d.edges.len() + self.d.composites.len() >= MAX_ITEMS;
+        self.over |= self.d.states.len() + self.d.edges.len() + self.d.composites.len() >= self.max_items;
         (!self.over).then_some(())
     }
 

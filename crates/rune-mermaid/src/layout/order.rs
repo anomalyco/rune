@@ -2,6 +2,8 @@
 //! barycentre sweeps that keep subgraphs contiguous, consistent sibling cluster order across
 //! layers, and order preservation while a diagram streams in.
 
+use std::collections::HashMap;
+
 use super::layered::LNode;
 use super::steady::Memo;
 
@@ -114,12 +116,18 @@ fn grouped_order(layer: &[usize], keys: &[f32], chains: &[&[usize]]) -> Vec<usiz
 fn grouped(layer: &[usize], keys: &[f32], chains: &[&[usize]], rank: Option<&[f32]>) -> Vec<usize> {
     type Items = Vec<(usize, f32)>;
     fn go(items: Items, depth: usize, chains: &[&[usize]], rank: Option<&[f32]>) -> Items {
-        let mut groups: Vec<(Option<usize>, Items)> = Vec::new();
+        let mut groups: Vec<(Option<usize>, Items)> = Vec::with_capacity(items.len());
+        let mut index: HashMap<usize, usize> = HashMap::new();
         for it in items {
-            let c = chains[it.0].get(depth).copied();
-            match groups.iter_mut().find(|g| c.is_some() && g.0 == c) {
-                Some(g) => g.1.push(it),
-                None => groups.push((c, vec![it])),
+            if let Some(c) = chains[it.0].get(depth).copied() {
+                if let Some(&gi) = index.get(&c) {
+                    groups[gi].1.push(it);
+                } else {
+                    index.insert(c, groups.len());
+                    groups.push((Some(c), vec![it]));
+                }
+            } else {
+                groups.push((None, vec![it]));
             }
         }
         let mut keyed: Vec<(f32, Option<usize>, Items)> = groups
@@ -153,36 +161,50 @@ fn align_clusters(layers: &mut [Vec<usize>], chains: &[&[usize]], parents: &[Opt
     if k < 2 {
         return;
     }
-    // lead[a][b]: layers where a comes before b, less those where it comes after.
-    let mut lead = vec![vec![0i32; k]; k];
+    // Sparse lead[(a, b)] for a < b: layers where a precedes b minus those where b precedes a.
+    let mut lead: HashMap<(usize, usize), i32> = HashMap::new();
     let mut mean = vec![(0.0f32, 0usize); k];
+    let mut present = vec![false; k];
+    let mut seen_layer: Vec<usize> = Vec::new();
     for layer in layers.iter() {
-        let mut first: Vec<Option<usize>> = vec![None; k];
+        let denom = layer.len().max(1) as f32;
         for (i, &v) in layer.iter().enumerate() {
             for &c in chains[v] {
-                first[c].get_or_insert(i);
-                mean[c].0 += i as f32 / layer.len().max(1) as f32;
+                if !present[c] {
+                    present[c] = true;
+                    seen_layer.push(c);
+                }
+                mean[c].0 += i as f32 / denom;
                 mean[c].1 += 1;
             }
         }
-        for a in 0..k {
-            for b in 0..k {
-                if let (Some(ia), Some(ib)) = (first[a], first[b])
-                    && ia < ib
-                    && parents[a] == parents[b]
-                {
-                    lead[a][b] += 1;
-                    lead[b][a] -= 1;
+        for (idx, &a) in seen_layer.iter().enumerate() {
+            let pa = parents[a];
+            for &b in &seen_layer[idx + 1..] {
+                if parents[b] == pa {
+                    let (key, delta) = if a < b { ((a, b), 1) } else { ((b, a), -1) };
+                    *lead.entry(key).or_insert(0) += delta;
                 }
             }
+        }
+        for &c in &seen_layer {
+            present[c] = false;
+        }
+        seen_layer.clear();
+    }
+    let mut behind = vec![0i32; k];
+    for (&(a, b), &v) in &lead {
+        if v > 0 {
+            behind[a] -= 1;
+            behind[b] += 1;
+        } else if v < 0 {
+            behind[a] += 1;
+            behind[b] -= 1;
         }
     }
     // Siblings that come after more of the others sort later; where layers tie, mean place decides.
     let rank: Vec<f32> = (0..k)
-        .map(|c| {
-            let behind = (0..k).filter(|&b| lead[c][b] < 0).count() as f32 - (0..k).filter(|&b| lead[c][b] > 0).count() as f32;
-            behind + 0.5 * mean[c].0 / mean[c].1.max(1) as f32
-        })
+        .map(|c| behind[c] as f32 + 0.5 * mean[c].0 / mean[c].1.max(1) as f32)
         .collect();
     for layer in layers.iter_mut() {
         let keys: Vec<f32> = (0..layer.len()).map(|i| i as f32).collect();
@@ -190,21 +212,46 @@ fn align_clusters(layers: &mut [Vec<usize>], chains: &[&[usize]], parents: &[Opt
     }
 }
 
-fn crossings(layers: &[Vec<usize>], nodes: &[LNode]) -> usize {
+pub(super) fn crossings(layers: &[Vec<usize>], nodes: &[LNode]) -> usize {
     let pos = positions(layers, nodes.len());
     let mut total = 0;
+    let mut edges: Vec<(usize, usize)> = Vec::new();
+    let mut bit: Vec<usize> = Vec::new();
     for layer in layers {
-        let mut edges: Vec<(usize, usize)> = Vec::new();
+        edges.clear();
         for &v in layer {
             for &w in &nodes[v].succs {
                 edges.push((pos[v], pos[w]));
             }
         }
-        for (i, a) in edges.iter().enumerate() {
-            for b in &edges[i + 1..] {
-                if (a.0 < b.0 && a.1 > b.1) || (a.0 > b.0 && a.1 < b.1) {
-                    total += 1;
+        if edges.len() <= 32 {
+            for (i, a) in edges.iter().enumerate() {
+                for b in &edges[i + 1..] {
+                    if (a.0 < b.0 && a.1 > b.1) || (a.0 > b.0 && a.1 < b.1) {
+                        total += 1;
+                    }
                 }
+            }
+            continue;
+        }
+        // Barth-Junger-Mutzel inversion count over (u, v) sorted ascending: edges with the same u
+        // appear in non-decreasing v order, so they never count as crossing each other.
+        edges.sort_unstable();
+        let m = edges.iter().map(|e| e.1).max().unwrap_or(0) + 1;
+        bit.clear();
+        bit.resize(m + 1, 0);
+        for (seen, &(_, y)) in edges.iter().enumerate() {
+            let mut le = 0usize;
+            let mut idx = y + 1;
+            while idx > 0 {
+                le += bit[idx];
+                idx &= idx - 1;
+            }
+            total += seen - le;
+            let mut idx = y + 1;
+            while idx <= m {
+                bit[idx] += 1;
+                idx += idx.isolate_lowest_one();
             }
         }
     }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::MAX_ITEMS;
 
 fn git(src: &str) -> GitGraph {
     match crate::parse(src).map(|p| p.diagram) {

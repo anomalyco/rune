@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use rune::Color;
 
 pub(crate) use draw::draw;
-use crate::{MAX_DEPTH, MAX_ITEMS, clean, clean_quoted, parse_color_spec};
+use crate::{MAX_DEPTH, clean, clean_quoted, parse_color_spec};
 
 #[derive(Debug)]
 pub(crate) struct Participant {
@@ -91,7 +91,7 @@ pub(crate) struct Sequence {
     pub autonumber: bool,
 }
 
-pub(crate) fn parse(_header: &str, body: &[&str]) -> Option<Sequence> {
+pub(crate) fn parse(_header: &str, body: &[&str], max_items: usize) -> Option<Sequence> {
     let mut p = Parser {
         s: Sequence { title: None, participants: Vec::new(), boxes: Vec::new(), events: Vec::new(), autonumber: false },
         ids: HashMap::new(),
@@ -107,7 +107,7 @@ pub(crate) fn parse(_header: &str, body: &[&str]) -> Option<Sequence> {
             p.s.events.truncate(events);
             p.ids.retain(|_, &mut i| i < people);
         }
-        if p.s.participants.len() > 40 || p.s.events.len() > MAX_ITEMS || p.depth > MAX_DEPTH {
+        if p.s.participants.len() > 40 || p.s.events.len() > max_items || p.depth > MAX_DEPTH {
             return None;
         }
     }

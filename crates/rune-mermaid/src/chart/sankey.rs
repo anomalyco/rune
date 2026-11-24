@@ -8,7 +8,7 @@ use rune::Align;
 use super::pie::number;
 use super::{hue, s_curve, small, solid};
 use crate::canvas::{Canvas, Scene, measure, room};
-use crate::{DiagramStyle, MAX_ITEMS, clean};
+use crate::{DiagramStyle, clean};
 
 #[derive(Debug, Default)]
 pub(crate) struct Sankey {
@@ -17,7 +17,7 @@ pub(crate) struct Sankey {
     pub links: Vec<(usize, usize, f32)>,
 }
 
-pub(crate) fn parse(body: &[&str]) -> Option<Sankey> {
+pub(crate) fn parse(body: &[&str], max_items: usize) -> Option<Sankey> {
     let mut s = Sankey::default();
     let mut ids: HashMap<String, usize> = HashMap::new();
     for &l in body {
@@ -37,7 +37,7 @@ pub(crate) fn parse(body: &[&str]) -> Option<Sankey> {
         };
         let (from, to) = (node(a), node(b));
         s.links.push((from, to, v));
-        if s.nodes.len() + s.links.len() > MAX_ITEMS {
+        if s.nodes.len() + s.links.len() > max_items {
             return None;
         }
     }

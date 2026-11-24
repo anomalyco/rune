@@ -6,7 +6,7 @@ use rune::Align;
 use super::pie::number;
 use super::{axis_x, hue, small, solid};
 use crate::canvas::{Canvas, Measured, Scene, ellipse, measure, measure_wrap, room};
-use crate::{DiagramStyle, MAX_ITEMS, clean_quoted, word};
+use crate::{DiagramStyle, clean_quoted, word};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {
@@ -34,7 +34,7 @@ pub(crate) struct XyChart {
     pub series: Vec<Series>,
 }
 
-pub(crate) fn parse(header: &str, body: &[&str]) -> Option<XyChart> {
+pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<XyChart> {
     let mut x = XyChart { horizontal: header.trim() == "horizontal", ..XyChart::default() };
     let mut items = 0;
     for &l in body {
@@ -54,7 +54,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<XyChart> {
             items += values.len();
             x.series.push(Series { kind, name: clean_quoted(&rest[..open]), values });
         }
-        if items > MAX_ITEMS {
+        if items > max_items {
             return None;
         }
     }

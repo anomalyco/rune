@@ -11,7 +11,7 @@ use crate::canvas::shape as shapes;
 use crate::canvas::{Canvas, Measured, Scene, measure_wrap, rounded_rect, unit};
 use crate::layout::connector::{connector, inset, label_box};
 use crate::layout::draw::{Edge, NodeShape, boundary, node_size};
-use crate::{Cur, DiagramStyle, EdgeStyle, MAX_DEPTH, MAX_ITEMS, NodeStyle, StyleSheet, clean_quoted, statements, word};
+use crate::{Cur, DiagramStyle, EdgeStyle, MAX_DEPTH, NodeStyle, StyleSheet, clean_quoted, statements, word};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Point {
@@ -64,16 +64,18 @@ struct Parser {
     ids: HashMap<String, usize>,
     stack: Vec<usize>,
     styles: StyleSheet,
+    max_items: usize,
     over: bool,
 }
 
-pub(crate) fn parse(body: &[&str]) -> Option<BlockDiagram> {
+pub(crate) fn parse(body: &[&str], max_items: usize) -> Option<BlockDiagram> {
     let root = Block { id: String::new(), label: String::new(), shape: NodeShape::Rect, span: 1, kind: Kind::Group { columns: None, children: Vec::new() }, style: NodeStyle::default() };
     let mut p = Parser {
         d: BlockDiagram { blocks: vec![root], edges: Vec::new() },
         ids: HashMap::new(),
         stack: vec![0],
         styles: StyleSheet::default(),
+        max_items,
         over: false,
     };
     for &line in body {
@@ -93,7 +95,7 @@ pub(crate) fn parse(body: &[&str]) -> Option<BlockDiagram> {
 
 impl Parser {
     fn budget(&mut self) -> Option<()> {
-        self.over |= self.d.blocks.len() + self.d.edges.len() >= MAX_ITEMS;
+        self.over |= self.d.blocks.len() + self.d.edges.len() >= self.max_items;
         (!self.over).then_some(())
     }
 
