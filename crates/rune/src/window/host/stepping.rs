@@ -262,6 +262,7 @@ impl Host {
     pub(in crate::window) fn place(&mut self, event_loop: &ActiveEventLoop, request: crate::windows::PlaceRequest) {
         self.options.position = None;
         self.placement = Some(request);
+        self.reopen.clear_position();
         self.apply_placement(event_loop);
     }
 
@@ -324,6 +325,8 @@ impl Host {
         if let Some(size) = request.size {
             self.geometry.size = size;
             self.args.size = None;
+            self.options.physical_size = None;
+            self.reopen.clear_size();
         }
         if let Some(edge) = request.resize_drag
             && self.win.as_ref().is_some_and(|w| w.drag_resize_window(edge))

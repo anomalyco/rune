@@ -6,6 +6,8 @@
 //! cargo run -p background            # stdin: open | show | hide | focus | activate TOKEN | close | status | quit
 //! cargo run -p background -- --open  # start with the window
 //! cargo run -p background -- --release-gpu  # closing also drops the GPU device
+//! cargo run -p background -- --open --release-gpu --tray --maximized  # start maximized, close to tray, reopen
+//! cargo run -p background -- --open --release-gpu --tray --full-screen
 //! cargo run -p background -- --accessory    # macOS: no Dock icon until `dock on`
 //! cargo run -p background -- --accessory --tray  # menu-bar tray icon (macOS template image) + menu
 //! # `hud show|hide|top|bottom|recording|transcribing|status` drives a recording-HUD overlay;
@@ -224,6 +226,12 @@ fn main() {
     }
     if std::env::args().any(|a| a == "--release-gpu") {
         app = app.release_gpu_when_closed();
+    }
+    if std::env::args().any(|a| a == "--maximized") {
+        app = app.maximized(true);
+    }
+    if std::env::args().any(|a| a == "--full-screen") {
+        app = app.full_screen(true);
     }
     // `--hud-large` covers most of the screen, to check that clicks pass through it.
     let size = if std::env::args().any(|a| a == "--hud-large") { (1200.0, 700.0) } else { (240.0, 44.0) };

@@ -509,6 +509,61 @@ impl Win {
         !self.is_panel() && self.window.fullscreen().is_some()
     }
 
+    /// Snapshot of the live native window's state and bounds for recreating it the same way
+    /// after hide/release or Wayland unmapping. Adopted macOS panels ignore maximize, minimize,
+    /// and full screen.
+    pub(in crate::window) fn live_state(&self, wayland: bool) -> crate::window::state::LiveWindowState {
+        let panel = self.is_panel();
+        let (maximized, full_screen, minimized) = if panel {
+            (false, false, false)
+        } else {
+            (self.is_maximized(), self.is_full_screen(), self.is_minimized_native())
+        };
+        let inner = self.window.inner_size();
+        let scale = self.window.scale_factor();
+        let (logical_size, physical_size) = if inner.width > 0 && inner.height > 0 && scale > 0.0 && scale.is_finite() {
+            (
+                Some((inner.width as f32 / scale as f32, inner.height as f32 / scale as f32)),
+                Some((inner.width, inner.height)),
+            )
+        } else {
+            (None, None)
+        };
+        let position = if wayland {
+            None
+        } else if let Ok(pos) = self.window.outer_position() {
+            #[cfg(target_os = "macos")]
+            let pos = if scale > 0.0 && scale.is_finite() {
+                winit::dpi::Position::Logical(winit::dpi::LogicalPosition::new(
+                    f64::from(pos.x) / scale,
+                    f64::from(pos.y) / scale,
+                ))
+            } else {
+                winit::dpi::Position::Physical(pos)
+            };
+            #[cfg(not(target_os = "macos"))]
+            let pos = winit::dpi::Position::Physical(pos);
+            Some(pos)
+        } else {
+            None
+        };
+        #[cfg(target_os = "windows")]
+        let restore_frame = ((maximized || minimized) && !full_screen)
+            .then(|| crate::platform::win32::restore_frame(&self.window))
+            .flatten();
+        #[cfg(not(target_os = "windows"))]
+        let restore_frame = None;
+        crate::window::state::LiveWindowState {
+            maximized,
+            full_screen,
+            minimized,
+            logical_size,
+            physical_size,
+            position,
+            restore_frame,
+        }
+    }
+
     /// Carries out a titlebar action (`Drag` or `DoubleClick`) on the window's live native
     /// target. Adopted macOS panels drag the `NSPanel` directly and ignore `DoubleClick` so
     /// neither `miniaturize:` nor `zoom:` (nor winit's borderless `setStyleMask:` / frame

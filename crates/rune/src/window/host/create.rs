@@ -16,7 +16,7 @@ use crate::window::chrome::float_on_open;
 #[cfg(target_os = "macos")]
 use crate::window::chrome::{mac, uses_drag_regions};
 use crate::window::handle::native_window_number;
-use crate::window::state::FirstFrame;
+use crate::window::state::{FirstFrame, apply_create_plan};
 #[cfg(target_os = "macos")]
 use crate::window::surface::LaunchDrawables;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -58,6 +58,11 @@ impl Host {
         ).with_active(focus);
         #[cfg(target_os = "macos")]
         if self.macos_window.nonactivating_panel { attrs = attrs.with_visible(false).with_active(false); }
+        let panel = cfg!(target_os = "macos") && self.macos_window.nonactivating_panel;
+        let plan = self.reopen.create_plan(self.options.resizable, panel);
+        #[cfg(target_os = "windows")]
+        let open_as = plan.open_as;
+        attrs = apply_create_plan(attrs, plan, cfg!(target_os = "windows"));
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         {
             if let Some(id) = crate::tooling::app_id() {
@@ -68,16 +73,6 @@ impl Host {
             if let Some(token) = token {
                 let token = winit::window::ActivationToken::from_raw(token);
                 attrs = winit::platform::startup_notify::WindowAttributesExtStartupNotify::with_activation_token(attrs, token);
-            }
-        }
-        let open_as = if !self.shown && self.options.resizable { self.open_as } else { crate::windows::OpenAs::Normal };
-        // Windows maximizes it once cloaked: maximizing shows a window.
-        #[cfg(not(target_os = "windows"))]
-        {
-            let panel = cfg!(target_os = "macos") && self.macos_window.nonactivating_panel;
-            if !panel {
-                attrs = attrs.with_maximized(open_as.maximizes());
-                if open_as.full_screens() { attrs = attrs.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None))); }
             }
         }
         let chrome = frame_chrome(self.chrome, self.titlebar, self.app.rt().titlebar_set());
@@ -803,6 +798,7 @@ impl Host {
     /// surface go. An app sees `window_error` and can `open` the window again.
     pub(in crate::window) fn give_up_surface(&mut self, reason: String) -> bool {
         eprintln!("rune: {reason}");
+        self.record_live_window_state();
         self.stop_showing();
         self.wind_down();
         self.release();

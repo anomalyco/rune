@@ -330,8 +330,19 @@ impl Host {
         // from it (Windows promotes touches) would press a second time.
         if matches!(event, WindowEvent::CursorMoved { .. } | WindowEvent::CursorLeft { .. } | WindowEvent::MouseInput { .. })
             && (app.rt().touching() || host_events::touch_promoted()) { return; }
+        let record_reopen = |reopen: &mut crate::window::state::ReopenState, w: &Win, fit_height: bool| {
+            if self.life.shown() {
+                reopen.record_live(
+                    w.live_state(self.wayland),
+                    crate::window::state::reopen::use_physical_size(self.wayland),
+                    self.placement.is_none() && !self.wayland,
+                    !fit_height,
+                );
+            }
+        };
         match event {
             WindowEvent::Moved(_) => {
+                record_reopen(&mut self.reopen, l, app.rt().host.fit_height);
                 // winit queues `ScaleFactorChanged` in `kCFRunLoopDefaultMode`, which waits
                 // until a window drag ends; resize the surface and draw synchronously inside the
                 // current Core Animation transaction when a drag crosses displays so the new
@@ -361,6 +372,7 @@ impl Host {
             }
             WindowEvent::Resized(size) => {
                 sync_chrome_core(app.rt_mut(), l, chrome, titlebar);
+                record_reopen(&mut self.reopen, l, app.rt().host.fit_height);
                 let was_live = app.rt().live_visible();
                 let now_live = self.life.uncovered() && size.width > 0 && size.height > 0 && !l.minimized();
                 app.set_live_visible(now_live);
@@ -701,8 +713,11 @@ impl Host {
             }
         }
         #[cfg(target_os = "macos")]
-        if let Some(l) = self.win.as_ref().filter(|l| l.native.full_screen.take()) {
-            sync_chrome_core(self.app.rt_mut(), l, self.chrome, self.titlebar);
+        if self.win.as_ref().is_some_and(|l| l.native.full_screen.take()) {
+            if let Some(l) = self.win.as_ref() {
+                sync_chrome_core(self.app.rt_mut(), l, self.chrome, self.titlebar);
+            }
+            self.record_live_window_state();
         }
         // A `DisplayTick` that already drew and settled the queued work leaves a stale
         // `RedrawRequested` in winit's queue. Skip it while resting with nothing changed so it
