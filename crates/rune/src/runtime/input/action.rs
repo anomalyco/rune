@@ -33,6 +33,9 @@ pub(in crate::runtime) enum Action {
     /// `El::on_link_secondary`: the text, its link and the press.
     LinkSecondary(String, usize, PointerEvent),
     SecondaryPress(String, PointerEvent),
+    /// A same-frame outside secondary press that dismissed a menu modal on Windows and waits for
+    /// the dismissal to commit and rebuild hit-testing before resolving what lies under it.
+    SecondaryRepost { modal: String, outer: Option<String>, down: (f32, f32), up: (f32, f32) },
     Drag(String, Drag, crate::PointerButton),
     /// A held press's drag hearing the pointer again (`Tx::drag_repeat_after`).
     DragRepeat(String, Drag, crate::PointerButton),
@@ -180,6 +183,7 @@ fn handler_name(action: &Action) -> &'static str {
         Action::Physical(..) => "on_key",
         Action::FocusControl(_) | Action::HoverFocus(_) | Action::Focus(..) | Action::Blur => "a focus change",
         Action::Dismiss(_) => "a modal's dismiss",
+        Action::SecondaryRepost { .. } => "a modal's secondary repost",
         Action::AtBottom(..) => "on_at_bottom",
         Action::FarFromBottom(..) => "on_far_from_bottom",
         Action::VisibleRows(..) => "on_visible_rows",
@@ -458,6 +462,9 @@ impl RuntimeCore {
                 f(app.states(), point, &mut one);
                 true
             }
+            Action::SecondaryRepost { modal, outer, down, up } => {
+                self.run_secondary_repost(app, &modal, outer.as_deref(), down, up, &mut one)
+            }
             Action::Drag(path, mut d, button) | Action::DragRepeat(path, mut d, button) => {
                 let gone = (d.phase == Phase::Up && d.cancelled).then(|| self.pointer.take_drag_gone(&path)).flatten();
                 let Some(f) = gone.or_else(|| self.node(&path).and_then(|n| n.handlers.on_drag.clone())) else { return false };
@@ -588,7 +595,7 @@ fn reads_text_layout(action: &Action) -> bool {
             Key::Modifier { .. } => false,
             _ => true,
         },
-        Action::Press(..) | Action::DoublePress(..) | Action::MiddlePress(..) | Action::SecondaryPress(..) | Action::Drag(..) | Action::DragStart(..) => true,
+        Action::Press(..) | Action::DoublePress(..) | Action::MiddlePress(..) | Action::SecondaryPress(..) | Action::SecondaryRepost { .. } | Action::Drag(..) | Action::DragStart(..) => true,
         _ => false,
     }
 }

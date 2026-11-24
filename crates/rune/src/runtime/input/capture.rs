@@ -170,6 +170,13 @@ pub(crate) enum Secondary {
     #[default]
     Up,
     Held { path: String, link: Option<usize>, left: bool },
+    /// An outside secondary press dismissed (or was swallowed by) an active modal; release does
+    /// nothing, and on web `secondary_claim()` returns `"app"` so the browser's own context menu
+    /// stays closed.
+    Dismissed,
+    /// On Windows, an outside secondary press dismissed a `click_outside` menu modal and will
+    /// repost to what lies under it once the dismissal commits and rebuilds hit-testing.
+    DismissRepost { modal: String, outer: Option<String>, down: (f32, f32), left: bool },
 }
 
 /// The middle or secondary button held where the primary isn't: the element it shows pressed
@@ -201,11 +208,15 @@ impl Secondary {
     pub(crate) fn path(&self) -> Option<&str> {
         match self {
             Self::Held { path, .. } => Some(path),
-            Self::Up => None,
+            Self::Up | Self::Dismissed | Self::DismissRepost { .. } => None,
         }
     }
 
     pub(crate) fn is_held(&self) -> bool { matches!(self, Self::Held { .. }) }
+
+    pub(crate) fn is_captured(&self) -> bool {
+        matches!(self, Self::Held { .. } | Self::DismissRepost { .. })
+    }
 }
 
 /// Pointer position, button capture, hover/tooltip tracking, touch, autoscroll, file drops and OS
@@ -298,7 +309,7 @@ impl PointerState {
     /// waits for the release.
     #[inline]
     pub(in crate::runtime) fn captured(&self) -> bool {
-        self.press.is_held() || self.secondary.is_held() || self.tint.path().is_some()
+        self.press.is_held() || self.secondary.is_captured() || self.tint.path().is_some()
     }
 
     #[inline]
@@ -319,7 +330,10 @@ impl PointerState {
     #[inline]
     pub(super) fn set_left(&mut self, out: bool) {
         if let Some(held) = self.press.held_mut() { held.left = out; }
-        if let Secondary::Held { left, .. } = &mut self.secondary { *left = out; }
+        match &mut self.secondary {
+            Secondary::Held { left, .. } | Secondary::DismissRepost { left, .. } => *left = out,
+            Secondary::Up | Secondary::Dismissed => {}
+        }
     }
 
     /// The host moved its window by `(dx, dy)` points under a still pointer.
@@ -327,6 +341,7 @@ impl PointerState {
     pub(in crate::runtime) fn window_moved(&mut self, dx: f32, dy: f32) {
         if let Some((x, y)) = self.pos { self.pos = Some((x - dx, y - dy)); }
         if let Some(held) = self.press.held_mut() { held.at = (held.at.0 - dx, held.at.1 - dy); }
+        if let Secondary::DismissRepost { down, .. } = &mut self.secondary { *down = (down.0 - dx, down.1 - dy); }
     }
 
     /// The button is up, so the held press can no longer start a drag-out; it stays a press.
