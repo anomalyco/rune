@@ -31,6 +31,7 @@ members = [
     "examples/launch-floor",
     "examples/web-hello",
     "examples/web-showcase",
+    "examples/fetch",
     "www/app",
     "examples/todo",
     "examples/settings",

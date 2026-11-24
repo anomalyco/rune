@@ -1,0 +1,1 @@
+- Docs and examples: documented web HTTP `fetch` patterns (`spawn_local` + `AppHandle::update` for all browsers and JSPI fibers with `rune::task::start_runners` / `wait` / `can_wait`) in `WEB.md`, updated the web `Latest` description in `crates/rune/README.md`, and added `examples/fetch`.

@@ -885,7 +885,10 @@ true
   back. `request`, `request_opt` and `cancel` forget the key.
 - **Debounce** (optional) waits for that long without a newer request before starting one.
 - **No thread per request.** Up to four shared workers, started on demand, exit after ten idle
-  seconds. On the web the work runs on the main thread from `spawn_local`, after the debounce.
+  seconds. On the web, `Latest` waits out the debounce in `spawn_local` and then hands the work to
+  `rune::task::spawn`, where it runs on four JSPI fibers after `rune::task::start_runners()` (and
+  can suspend on promises with `rune::task::wait`), or on main-thread 8 ms timer slices without
+  runners (see [`WEB.md`](../../WEB.md#http-requests-fetch)).
 - **Cancel** drops pending and running requests; dropping the `Latest` cancels it. State outlives a
   closed window, so call `cancel` from `App::on_close` to stop requests on close.
 
