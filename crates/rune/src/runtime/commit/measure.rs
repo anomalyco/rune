@@ -2,11 +2,16 @@ use super::*;
 use crate::el::ElFlags;
 
 pub(in crate::runtime) fn collect_virtual_inputs(el: &El, parent: &str, index: usize, inert: bool, inputs: &mut HashMap<String, Box<InputSpec>>) {
+    collect_virtual_inputs_in(el, parent, index, inert, false, inputs);
+}
+
+fn collect_virtual_inputs_in(el: &El, parent: &str, index: usize, inert: bool, read_only: bool, inputs: &mut HashMap<String, Box<InputSpec>>) {
     // Most offscreen rows hold no focused field; find that out before building any paths.
     if !crate::memo::has_focused_input(el) {
         return;
     }
     let inert = inert || el.flags.has(ElFlags::INERT);
+    let read_only = read_only || el.cold.a11y.more.as_ref().is_some_and(|m| m.read_only);
     let input = el.cold.input.as_ref().filter(|i| i.edit.focused && i.access.is_some());
     // A memo's shared children are skipped whole when none is a focused field.
     let skip = el.memo_children().filter(|m| !m.focused_input).map_or(0, |m| m.children.len());
@@ -17,10 +22,11 @@ pub(in crate::runtime) fn collect_virtual_inputs(el: &El, parent: &str, index: u
     if let Some(input) = input {
         let mut input = input.clone();
         if inert { input.edit.focused = false; }
+        if read_only { input.read_only = true; }
         inputs.insert(path.clone(), input);
     }
     for (i, child) in el.all_children().enumerate().skip(skip) {
-        collect_virtual_inputs(child, &path, i, inert, inputs);
+        collect_virtual_inputs_in(child, &path, i, inert, read_only, inputs);
     }
 }
 

@@ -294,7 +294,7 @@ impl RuntimeCore {
         let Some(i) = self.live(path) else { return false };
         let n = &self.tree.nodes[i];
         let (Some(input), Some((x, y)), Some(layout)) = (n.input.as_deref(), self.pointer.pos, n.text_layout.as_ref()) else { return false };
-        if !input.spellcheck || input.edit.is_secure() { return false; }
+        if !input.spellcheck || input.edit.is_secure() || self.is_node_read_only(i) { return false; }
         let Some([tx, ty]) = self.input_text_point(i, x, y) else { return false };
         let caret = super::input_click::hit(&input.edit, layout.view(), tx, ty, self.env.scale, input.single_line).caret;
         crate::spell::misspelled_at(&input.edit.text, caret).is_some()

@@ -140,6 +140,7 @@ impl RuntimeCore {
             || !tx.open_urls.is_empty() || !tx.open_paths.is_empty() || !tx.file_dialogs.is_empty() || !tx.popups.is_empty() || tx.field_menu_resolution.is_some() || tx.clear_secret {
             return None;
         }
+        if self.focused_input_read_only() { return None; }
         let access = self.focused_input()?.access.clone()?;
         let key = self.kbd.focus.path()?;
         Some(mirror.update(key, Some(access(app.states()))))
@@ -147,11 +148,11 @@ impl RuntimeCore {
     /// Whether Rune currently has keyboard focus on an editable text input (plain or secure),
     /// matching the condition under which [`Self::web_context`] populates `mirror.key`.
     pub(crate) fn web_has_editable_focus(&self) -> bool {
-        self.focused_input().is_some_and(|i| i.access.is_some())
+        !self.focused_input_read_only() && self.focused_input().is_some_and(|i| i.access.is_some())
     }
 
     pub(crate) fn web_context(&self, mirror: &mut Mirror) -> bool {
-        match self.focused_input().filter(|i| i.access.is_some()) {
+        match self.focused_input().filter(|i| i.access.is_some() && !self.focused_input_read_only()) {
             Some(input) => mirror.update(self.kbd.focus.path().unwrap_or_default(), Some(&input.edit)),
             None => mirror.update("", None),
         }
@@ -195,7 +196,7 @@ impl RuntimeCore {
 
     pub(crate) fn web_secure(&mut self, key: &str, text: String) {
         let event = crate::KeyEvent { key: crate::Key::Text(text), mods: crate::Mods::default() };
-        if self.kbd.focus.path() == Some(key) && self.has_secure_focus() {
+        if self.kbd.focus.path() == Some(key) && self.has_secure_focus() && !self.focused_input_read_only() {
             self.key(event);
         }
     }
@@ -205,7 +206,7 @@ impl RuntimeCore {
     /// event logs, traces or DOM mirrors.
     pub(crate) fn web_secure_replace(&mut self, app: &mut dyn AppDriver, key: &str, text: String) {
         let text = zeroize::Zeroizing::new(text);
-        if self.kbd.focus.path() != Some(key) || !self.has_secure_focus() { return; }
+        if self.kbd.focus.path() != Some(key) || !self.has_secure_focus() || self.focused_input_read_only() { return; }
         let mut tx = self.transaction(app);
         let changed = self.with_focused(app, |edit| {
             let len = edit.text.len();
@@ -221,7 +222,7 @@ impl RuntimeCore {
         // the DOM even if the edit is rejected or `on_input_change` reverts or clears the text.
         if event["kind"] == "edit" { mirror.invalidate(); }
         let Some(key) = event["key"].as_str() else { return };
-        if self.kbd.focus.path() != Some(key) || self.has_secure_focus() { return; }
+        if self.kbd.focus.path() != Some(key) || self.has_secure_focus() || self.focused_input_read_only() { return; }
         let number = |key: &str| event[key].as_u64().and_then(|n| usize::try_from(n).ok());
         let Some(base) = number("base") else { return };
         let Some(expected) = event["expected"].as_str() else { return };

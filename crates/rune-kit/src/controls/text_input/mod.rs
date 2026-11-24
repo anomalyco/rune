@@ -307,6 +307,7 @@ pub struct TextInput {
     copy: bool,
     clear: bool,
     invalid: bool,
+    read_only: bool,
     active: Option<String>,
     state: State,
     edits: EditActs,
@@ -378,6 +379,7 @@ impl TextInput {
             copy: false,
             clear: false,
             invalid: false,
+            read_only: false,
             active: None,
             state: State::Rest,
             edits: EditActs::default(),
@@ -465,6 +467,18 @@ impl TextInput {
         self.invalid = i;
         self
     }
+    /// Make the field read-only ([`El::read_only`](rune::El::read_only)): keeps focus, caret,
+    /// keyboard and pointer navigation/selection, and Copy while refusing typing, Cut, Paste,
+    /// Undo/Redo, IME, and spellcheck edits. Pair with [`Self::on_edit`] so the runtime can
+    /// move the caret and selection in your [`TextEdit`].
+    ///
+    /// ```ignore
+    /// TextInput::new(&s.endpoint).read_only(true).on_edit(|s: &mut App| &mut s.endpoint).build(&k)
+    /// ```
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
     /// The suggestion this field's arrow keys highlight, by its key (`aria-activedescendant`):
     /// focus stays in the field and a screen reader reads the highlighted row.
     pub fn active_descendant(mut self, key: Option<impl Into<String>>) -> Self {
@@ -516,7 +530,9 @@ impl TextInput {
             .rich_style(kit_rich_style(k))
             .placeholder(self.placeholder.clone(), hint)
             .caret(ink, k.selection());
-        let mut field = name_field(field, self.label.as_deref(), &self.placeholder, self.description.as_deref(), disabled).invalid(self.invalid);
+        let mut field = name_field(field, self.label.as_deref(), &self.placeholder, self.description.as_deref(), disabled)
+            .invalid(self.invalid)
+            .read_only(self.read_only);
         if let Some(key) = self.active.clone() {
             field = field.active_descendant(key);
         }

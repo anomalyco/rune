@@ -113,7 +113,7 @@ impl RuntimeCore {
                     self.edit.input_scroll.get(&n.path).map(|v| v.to_bits()).hash(&mut h);
                 }
             }
-            (e.focused, &input.placeholder, input.single_line, input.access.is_some()).hash(&mut h);
+            (e.focused, &input.placeholder, input.single_line, input.access.is_some(), self.is_node_read_only(i)).hash(&mut h);
         }
         let handlers = n.handlers.get();
         (handlers.is_some_and(|h| h.on_press.is_some()), handlers.is_some_and(|h| h.on_secondary_press.is_some()),
@@ -334,9 +334,11 @@ impl RuntimeCore {
             if n.focus.set_value.is_some() && more.and_then(|m| m.range).is_none_or(|r| r.usable_bounds().is_some()) {
                 node.add_action(Ak::SetValue);
             }
-            if input.is_some_and(|i| i.access.is_some()) {
-                node.add_action(Ak::SetValue);
-                node.add_action(Ak::ReplaceSelectedText);
+            if input.is_some_and(|inp| inp.access.is_some()) {
+                if !self.is_node_read_only(i) {
+                    node.add_action(Ak::SetValue);
+                    node.add_action(Ak::ReplaceSelectedText);
+                }
                 if !secure { node.add_action(Ak::SetTextSelection); }
             }
             if scroll.is_some() {

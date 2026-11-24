@@ -251,6 +251,6 @@ impl RuntimeCore {
     pub(super) fn a11y_input(&self, i: usize, input: &crate::el::InputSpec, node: &mut AkNode) {
         if !input.placeholder.is_empty() { node.set_placeholder(input.placeholder.as_str()); }
         if !self.tree.nodes[i].is_secure() { node.set_value(input.edit.text.as_str()); }
-        if input.access.is_none() { node.set_read_only(); }
+        if input.access.is_none() || self.is_node_read_only(i) { node.set_read_only(); }
     }
 }

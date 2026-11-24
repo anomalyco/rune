@@ -49,6 +49,8 @@ pub struct InputSpec {
     pub(crate) spellcheck: bool,
     /// [`El::reveal_caret_on_focus`]: scroll enclosing viewports to the caret when this field gains focus.
     pub(crate) reveal_caret_on_focus: bool,
+    /// `El::read_only`: mirrors read-only state onto offscreen virtual inputs.
+    pub(crate) read_only: bool,
     /// [`El::selection_style`]: the selection's highlight and ink, by window focus, over `selection`.
     pub(crate) selection_style: Option<SelectionStyle>,
 }
@@ -121,6 +123,7 @@ pub fn text_input(edit: &TextEdit, style: TextStyle) -> El {
         copy: None,
         spellcheck: false,
         reveal_caret_on_focus: false,
+        read_only: false,
         selection_style: None,
     }));
     e.sync_input_pills();

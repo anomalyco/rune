@@ -26,6 +26,7 @@ pub struct TextArea {
     trailing: Option<El>,
     scroll_bar: AreaScrollBar,
     invalid: bool,
+    read_only: bool,
     state: State,
     edits: EditActs,
 }
@@ -100,6 +101,7 @@ impl TextArea {
             trailing: None,
             scroll_bar: AreaScrollBar::None,
             invalid: false,
+            read_only: false,
             state: State::Rest,
             edits: EditActs::default(),
         }
@@ -251,6 +253,18 @@ impl TextArea {
         self.invalid = i;
         self
     }
+    /// Make the field read-only ([`El::read_only`](rune::El::read_only)): keeps focus, caret,
+    /// keyboard and pointer navigation/selection, and Copy while refusing typing, Cut, Paste,
+    /// Undo/Redo, IME, and spellcheck edits. Pair with [`Self::on_edit`] so the runtime can
+    /// move the caret and selection in your [`TextEdit`].
+    ///
+    /// ```ignore
+    /// TextArea::new(&s.preview).read_only(true).on_edit(|s: &mut App| &mut s.preview).build(&k)
+    /// ```
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
     pub fn state(mut self, s: State) -> Self {
         self.state = s;
         self
@@ -295,7 +309,8 @@ impl TextArea {
             .placeholder(self.placeholder.clone(), hint)
             .caret(ink, k.selection());
         let field = name_field(field, self.label.as_deref(), &self.placeholder, self.description.as_deref(), disabled)
-            .invalid(self.invalid);
+            .invalid(self.invalid)
+            .read_only(self.read_only);
         let field = self.edits.apply(field, disabled);
         let line = style.line_px();
         let bar_style = match self.scroll_bar {

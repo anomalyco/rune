@@ -63,6 +63,66 @@ pub(super) fn text_input_with_field(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
         )
 }
 
+/// Read-only `TextInput` and `TextArea` (`read_only(true)`): focusable with visible caret,
+/// keyboard navigation (arrows, Shift+arrows, Home/End, word steps), pointer selection, and Copy,
+/// while refusing edits, Cut, Paste, Undo/Redo, and IME.
+pub(super) fn text_input_read_only(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let status = s
+        .pick
+        .get("ro-status")
+        .map_or("Arrows, Shift+arrows, Home/End, Cmd/Ctrl+A and Cmd/Ctrl+C work; typing, Cut and Paste are blocked.", String::as_str);
+    let report = |name: &'static str, idx: usize| {
+        move |s: &mut G, _: &mut Tx| {
+            let e = &s.read_only_edits[idx];
+            let (a, b) = e.range();
+            let msg = if a == b {
+                format!("{name}: caret at byte {a}")
+            } else {
+                format!("{name}: selected {a}..{b} ({:?})", e.selected())
+            };
+            s.pick.insert("ro-status".into(), msg);
+        }
+    };
+    grid(16.0, 360.0)
+        .child(
+            Field::new()
+                .label("Read-only TextInput")
+                .control(
+                    TextInput::new(&s.read_only_edits[0])
+                        .label("Endpoint URL")
+                        .read_only(true)
+                        .copy_button()
+                        .width(None)
+                        .on_edit(|s: &mut G| &mut s.read_only_edits[0])
+                        .on_input_selection(report("TextInput", 0))
+                        .on_action(|s: &mut G, tx: &mut Tx| {
+                            tx.copy(s.read_only_edits[0].text.clone());
+                            s.pick.insert("ro-status".into(), "Copied full endpoint URL".into());
+                        })
+                        .build(k)
+                        .key("ro-input"),
+                )
+                .build(k),
+        )
+        .child(
+            Field::new()
+                .label("Read-only TextArea")
+                .control(
+                    TextArea::new(&s.read_only_edits[1])
+                        .label("Source preview")
+                        .read_only(true)
+                        .rows(4)
+                        .width(None)
+                        .on_edit(|s: &mut G| &mut s.read_only_edits[1])
+                        .on_input_selection(report("TextArea", 1))
+                        .build(k)
+                        .key("ro-area"),
+                )
+                .build(k),
+        )
+        .child(text(status).key("ro-status").font(k.ty.small).color(k.c.text_muted).wrap())
+}
+
 pub(super) fn text_input_states(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     grid(20.0, 280.0)
         .child(TextInput::new(&edit("")).placeholder("Default").build(k))

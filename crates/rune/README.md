@@ -1701,6 +1701,15 @@ snapshots and retains at most 128 edits / 1 MiB of text (oversized edits drop hi
 Call `TextEdit::clear()` after submission to clear history while retaining focus;
 call `break_history_group()` when setting a selection from custom pointer handling.
 
+Call `.read_only(true)` on a bound `text_input` (with `.on_edit(..)`) for a read-only field
+matching HTML's `<input readonly>` / `<textarea readonly>`: it stays focusable with a visible
+caret, pointer and keyboard navigation (arrows, `Home`/`End`, word and line steps, `Shift`
+selection), `Cmd/Ctrl+A`, `Cmd/Ctrl+C`, and AccessKit `Focus`/`Click`/`SetTextSelection`,
+while refusing typing, `Backspace`/`Delete`, `Enter`, `Cut`, `Paste` (including `Shift+Insert`
+and Linux middle-click), `Undo`/`Redo`, rich formatting chords, IME composition, spellcheck
+suggestions/underlines, and AccessKit `SetValue`/`ReplaceSelectedText`. Its context menu keeps
+Copy and Select All enabled while disabling Cut and Paste and omitting spellcheck entries.
+
 Multi-line `text_input` wraps by default. Call `.nowrap()` (or `.set_nowrap()` in place)
 for an unwrapped multi-line field (HTML `<textarea wrap="off">` / CSS `white-space: pre`)
 that breaks only at explicit newlines, measures the natural width of its longest line, and

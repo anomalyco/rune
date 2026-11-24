@@ -68,6 +68,17 @@ impl TextEdit {
     /// [`Self::key`] with the field's layout as it draws it, one paragraph's or a by-paragraph field's.
     #[doc(hidden)]
     pub fn key_in(&mut self, ev: &KeyEvent, layout: Option<TextFlow<'_>>) -> EditOutcome {
+        self.key_inner(ev, layout, false)
+    }
+
+    /// [`Self::key_in`] for a read-only field: keeps caret navigation, `Shift` selection,
+    /// `Cmd/Ctrl+A`, `Cmd/Ctrl+C`, and `Escape` blur while refusing every mutating key.
+    #[doc(hidden)]
+    pub fn key_in_read_only(&mut self, ev: &KeyEvent, layout: Option<TextFlow<'_>>) -> EditOutcome {
+        self.key_inner(ev, layout, true)
+    }
+
+    fn key_inner(&mut self, ev: &KeyEvent, layout: Option<TextFlow<'_>>, read_only: bool) -> EditOutcome {
         let mut out = EditOutcome::default();
         if matches!(ev.key, Key::Modifier { .. }) { return out; }
         // Any key but Up and Down lets the column go.
@@ -84,7 +95,10 @@ impl TextEdit {
             let (key, line) = match c {
                 'a' => (Key::Left, true), 'e' => (Key::Right, true), 'b' => (Key::Left, false),
                 'f' => (Key::Right, false), 'p' => (Key::Up, false), 'n' => (Key::Down, false),
-                'd' => (Key::Delete, false), 'h' => (Key::Backspace, false),
+                'd' if !read_only => (Key::Delete, false),
+                'h' if !read_only => (Key::Backspace, false),
+                'd' | 'h' => return out,
+                _ if read_only => return out,
                 _ => {
                     // Ctrl-K deletes to the end of the line, or the line break at its end.
                     self.break_history_group();
@@ -100,7 +114,7 @@ impl TextEdit {
                 }
             };
             self.column = column;
-            return self.key_in(&KeyEvent { key, mods: Mods { shift: m.shift, cmd: line, ..Mods::default() } }, layout);
+            return self.key_inner(&KeyEvent { key, mods: Mods { shift: m.shift, cmd: line, ..Mods::default() } }, layout, read_only);
         }
         if ev.is_command_chord() || ev.is_window_menu_chord() { return out; }
         // Typing, deleting and line breaks join the open undo step (`history::step`); any other key closes it.
@@ -110,6 +124,7 @@ impl TextEdit {
         let word = m.alt || (m.ctrl && !cfg!(target_os = "macos"));
         let line = m.cmd && (cfg!(target_os = "macos") || !m.ctrl);
         match &ev.key {
+            Key::Text(_) if read_only => {}
             Key::Text(s) => {
                 if s.chars().any(|c| !c.is_control() || (!self.is_single_line() && matches!(c, '\n' | '\r' | '\t'))) {
                     let s = self.sanitize(s);
@@ -118,6 +133,7 @@ impl TextEdit {
             }
             // A composition's Return and Escape are the input method's.
             Key::Enter | Key::Escape if self.preedit().is_some() => {}
+            Key::Enter if read_only => {}
             Key::Enter => {
                 if self.is_single_line() {
                     out.submit = true;
@@ -170,6 +186,7 @@ impl TextEdit {
                     }
                 }
             }
+            Key::Tab if read_only => {}
             Key::Tab => {
                 if !m.cmd && !m.alt && !m.ctrl && !self.secure && !self.is_single_line() {
                     if self.active_block() == Block::Code && !m.shift {
@@ -183,6 +200,7 @@ impl TextEdit {
             }
             Key::PageUp | Key::PageDown => {}
             Key::Escape => out.blur = true,
+            Key::Backspace if read_only => {}
             Key::Backspace => {
                 let (a, b) = self.range();
                 if a != b || (self.is_hidden_multiline() && self.is_pristine()) {
@@ -223,6 +241,7 @@ impl TextEdit {
                     }
                 }
             }
+            Key::Delete if read_only => {}
             Key::Delete => {
                 let (a, b) = self.range();
                 if a != b || (self.is_hidden_multiline() && self.is_pristine()) {
@@ -237,8 +256,8 @@ impl TextEdit {
                 let i = if line { self.line_edge(layout, false) } else if word { self.prev_word(self.focus) } else { prev_char(&self.text, self.focus) };
                 self.move_h((i, parley::Affinity::Downstream), m.shift, false, layout);
             }
-            Key::Right if !m.shift && !m.cmd && !m.alt && !m.ctrl && self.at_end_of_trailing_block() => self.leave_trailing_block(),
-            Key::Down if !m.shift && !m.cmd && !m.alt && !m.ctrl && self.at_end_of_trailing_block() => self.leave_trailing_block(),
+            Key::Right if !read_only && !m.shift && !m.cmd && !m.alt && !m.ctrl && self.at_end_of_trailing_block() => self.leave_trailing_block(),
+            Key::Down if !read_only && !m.shift && !m.cmd && !m.alt && !m.ctrl && self.at_end_of_trailing_block() => self.leave_trailing_block(),
             Key::Right if !line && let Some(to) = self.visual_step(layout, true, word) => self.move_h(to, m.shift, true, layout),
             Key::Right => {
                 let i = if line { self.line_edge(layout, true) } else if word { self.next_word(self.focus) } else { next_char(&self.text, self.focus) };
@@ -285,21 +304,21 @@ impl TextEdit {
             }
             // Only the plain chord: with another modifier it's the app's (Ctrl+Alt+Z).
             Key::Command(_) => match ev.edit_command() {
-                Some('z') if m.shift => self.redo(),
-                Some('z') => self.undo(),
-                Some('y') if !cfg!(target_os = "macos") => self.redo(),
+                Some('z') if !read_only && m.shift => self.redo(),
+                Some('z') if !read_only => self.undo(),
+                Some('y') if !read_only && !cfg!(target_os = "macos") => self.redo(),
                 Some('a') => {
                     self.anchor = 0;
                     self.focus = self.text.len();
                     self.typing = Typing::Inherited;
                 }
-                Some('b' | 'i' | 'u') => {
+                Some('b' | 'i' | 'u') if !read_only => {
                     if let Some(mark) = self.format_chord(ev) {
                         self.toggle_mark(mark);
                     }
                 }
                 Some('c') if !self.secure => out.copy = Some(self.selected().to_owned()),
-                Some('x') if !self.secure => {
+                Some('x') if !read_only && !self.secure => {
                     out.copy = Some(self.selected().to_owned());
                     self.insert("");
                 }
