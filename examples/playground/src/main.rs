@@ -11,6 +11,8 @@
 
 #![forbid(unsafe_code)]
 
+mod pick;
+
 use std::time::Duration;
 
 use rune::tok::{self, Theme, motion, radius, type_};
@@ -619,6 +621,15 @@ fn main() {
                         })
                         .variant("Idle", |_| {})
                         .variant("Inspected", |s| s.pending_inspect = true),
+                )
+                .story(
+                    Story::new("Layout/Pointer pick", pick::PointerPick::default, pick::view)
+                        .poll(pick::poll)
+                        .trigger('m', "Cycle pick mode", |s, _| s.mode = s.mode.next())
+                        .variant("Interactive (row)", |s| *s = pick::PointerPick::with_probe(pick::PickMode::Interactive, "pick-row-1"))
+                        .variant("All (passive layer)", |s| *s = pick::PointerPick::with_probe(pick::PickMode::All, "pick-row-1"))
+                        .variant("Drop target", |s| *s = pick::PointerPick::with_probe(pick::PickMode::DropTargets, "pick-drop-zone"))
+                        .variant("Tilted (local coords)", |s| *s = pick::PointerPick::with_probe(pick::PickMode::Interactive, "pick-rotated")),
                 )
                 .group_order(&["Controls"])
                 .start_folded(true)

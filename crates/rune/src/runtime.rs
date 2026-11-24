@@ -84,6 +84,7 @@ mod node_index;
 use node_index::NodeIndex;
 mod paint;
 mod paint_probe;
+mod pick;
 mod playground;
 mod scroll;
 mod selection;
@@ -188,7 +189,8 @@ use anchor::{anchor_ancestors, anchor_index, anchor_index_live, step_up};
 pub use cx::{Cx, Env, Waker, commit_generation};
 pub(crate) use cx::caret_of;
 use cx::COMMITS;
-pub use elements::{ElementInfo, MatchedHandover, Pick, Picked, Pose, ResolvedTextStyle};
+pub use elements::{ElementInfo, MatchedHandover, Pose, ResolvedTextStyle};
+pub use pick::{Pick, Picked};
 #[cfg(debug_assertions)]
 pub(crate) use layout_read::{anchor_read_key, window_read_key};
 pub(crate) use turn::intersect;
