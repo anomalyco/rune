@@ -303,6 +303,16 @@ impl RuntimeCore {
         })
     }
 
+    /// [`Self::top_hit`] for hover: a layer that hover passes through (`El::hover_passes_below`)
+    /// doesn't count, so what lies under it hovers as with no layer there.
+    pub(in crate::runtime) fn top_hover_hit(&self, x: f32, y: f32) -> Option<usize> {
+        self.hit.find_hit(|id, r| {
+            if !self.hit_contains(id, r, x, y) { return None; }
+            let i = *self.tree.node_index.get(&id)?;
+            (!self.subtree_exiting(i) && self.allowed(i) && !self.tree.nodes[i].focus.hover_below).then_some(i)
+        })
+    }
+
     /// Whether `(x, y)` lies inside active modal `i` or its live modal scope: either a live,
     /// allowed hit target contains `(x, y)`, or `(x, y)` falls inside the geometry of a live,
     /// authored-visible modal member (covering frame 0 of a default opacity entrance fade when

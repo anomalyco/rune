@@ -41,6 +41,8 @@ pub(crate) struct FocusSpec {
     pub return_to: Option<String>,
     /// [`crate::El::press_focuses_below`].
     pub below: bool,
+    /// [`crate::El::hover_passes_below`].
+    pub hover_below: bool,
     /// `on_set_value`: a range control's absolute value from assistive technology.
     pub set_value: Option<SetValueFn>,
     /// `on_step`: a slider's arrow and page keys.
@@ -76,6 +78,7 @@ impl crate::cold::Empty for FocusSpec {
         follows: false,
         return_to: None,
         below: false,
+        hover_below: false,
         set_value: None,
         step: None,
         step_limit: None,
@@ -239,6 +242,14 @@ impl El {
     /// outside a menu focuses the `tabIndex` scroller it lands on, else nothing.
     pub fn press_focuses_below(mut self) -> Self {
         self.cold_mut().focus.below = true;
+        self
+    }
+    /// Hover passes through this layer to what lies under it (the dismiss layer under a menu
+    /// that isn't modal): the layer still takes its presses, and the elements under the pointer
+    /// keep their hover styles, hover groups and `on_hover_change`, as a web page's elements
+    /// keep `:hover` beside an open context menu, which puts nothing over them.
+    pub fn hover_passes_below(mut self) -> Self {
+        self.cold_mut().focus.hover_below = true;
         self
     }
     /// The control a [`El::modal`] focuses when it opens, as HTML's `autofocus` attribute in a

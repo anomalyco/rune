@@ -277,3 +277,63 @@ fn covering_interactive_sibling_blocks_hover_while_interactive_ancestor_allows_h
     rt.frame(1.0 / 120.0);
     assert_eq!((lit(&rt, "row-0"), lit(&rt, "peer-0"), lit(&rt, "row-1"), lit(&rt, "peer-1")), (0.0, 0.0, 1.0, 1.0));
 }
+
+#[test]
+fn hover_passes_below_a_layer_that_asks_for_it_while_the_layer_keeps_its_press() {
+    #[derive(Default)]
+    struct S {
+        passes: bool,
+        pressed: u32,
+        changes: Vec<bool>,
+    }
+    // A tab that shows its close button on hover, a window-sized dismiss layer over it, and a
+    // menu over part of the tab: a context menu open on the tab.
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let tab = col().key("tab").size(100.0, 30.0).hover_group().hover(Color::WHITE.alpha(0.1))
+            .hover_motion(Anim::INSTANT, Anim::INSTANT)
+            .on_hover_change(|s: &mut S, inside, _| s.changes.push(inside))
+            .on_press(|_: &mut S| {})
+            .child(el().key("close").size(10.0, 10.0).fill(Color::WHITE).group_opacity(0.0, 1.0));
+        let layer = el().key("layer").absolute(0.0, 0.0).w_full().h_full().on_press(|s: &mut S| s.pressed += 1);
+        let menu = el().key("menu").absolute(60.0, 10.0).size(60.0, 60.0).fill(Color::WHITE).on_press(|_: &mut S| {});
+        col().w_full().h_full()
+            .child(tab)
+            .child(if s.passes { layer.hover_passes_below() } else { layer })
+            .child(menu)
+    }
+    let lit = |rt: &Runtime<S>, key: &str| {
+        let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some(key)).unwrap().id;
+        rt.scene.store().target(id, P_HOVER).unwrap_or(0.0)
+    };
+    let alpha = |rt: &Runtime<S>, key: &str| {
+        rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap().opacity
+    };
+
+    for passes in [false, true] {
+        let mut rt = Runtime::new(S { passes, ..S::default() }, view, (300.0, 120.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let want = if passes { 1.0 } else { 0.0 };
+
+        // Over the tab, under the layer alone: the tab hovers only when the layer lets hover through.
+        rt.pointer_move(20.0, 15.0);
+        rt.frame(1.0 / 120.0);
+        rt.frame(1.0 / 120.0);
+        assert_eq!(lit(&rt, "tab"), want, "passes={passes}: the tab under the layer");
+        assert_eq!(alpha(&rt, "close"), want, "passes={passes}: the tab's hover-only close button");
+        assert_eq!(rt.state.changes, if passes { vec![true] } else { vec![] }, "passes={passes}: on_hover_change");
+
+        // Over the menu, which lies over the tab: the menu is the topmost hit either way.
+        rt.pointer_move(80.0, 20.0);
+        rt.frame(1.0 / 120.0);
+        rt.frame(1.0 / 120.0);
+        assert_eq!(lit(&rt, "tab"), 0.0, "passes={passes}: the menu over the tab blocks its hover");
+
+        // The layer still takes the press that dismisses the menu.
+        rt.pointer_move(20.0, 15.0);
+        rt.frame(1.0 / 120.0);
+        rt.pointer_down(20.0, 15.0);
+        rt.pointer_up(20.0, 15.0);
+        rt.frame(1.0 / 120.0);
+        assert_eq!(rt.state.pressed, 1, "passes={passes}: the layer's press");
+    }
+}
