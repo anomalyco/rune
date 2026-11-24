@@ -36,7 +36,7 @@ fn render_gpu_bgra(gpu: &Gpu, instances: &[Instance], size: (u32, u32), clear: [
 }
 
 #[test]
-fn backdrop_blur_cap_matches_gpu() {
+fn many_backdrop_blurs_match_gpu() {
     let (w, h) = (256u32, 64u32);
     let clear = Color { r: 0.05, g: 0.08, b: 0.12, a: 1.0 }.premul_srgb(1.0);
     let mut instances = Vec::new();
@@ -49,8 +49,9 @@ fn backdrop_blur_cap_matches_gpu() {
         };
         instances.push(rect([x as f32, 0.0, 8.0, h as f32], color, NO_CLIP));
     }
-    // Emit MAX_BACKDROP_BLURS + 2 backdrop blurs; the GPU caps at MAX_BACKDROP_BLURS.
-    for k in 0..(MAX_BACKDROP_BLURS + 2) {
+    // Emit more than MAX_BACKDROP_BLURS backdrop blurs; both CPU boot and GPU blur every one.
+    let count = MAX_BACKDROP_BLURS + 2;
+    for k in 0..count {
         let x = 4.0 + k as f32 * 40.0;
         instances.push(Instance {
             rect: [x, 8.0, 32.0, 48.0],
@@ -70,7 +71,7 @@ fn backdrop_blur_cap_matches_gpu() {
     let half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
     let scene = Scene::new(&instances, &atlas, &images, (w, h), clear).srgb_blend(true).half_rounding(half);
     let bins = Bins::of(&scene);
-    assert_eq!(bins.blurs.len(), MAX_BACKDROP_BLURS, "CPU boot must cap backdrop blurs at MAX_BACKDROP_BLURS");
+    assert_eq!(bins.blurs.len(), count, "CPU boot must blur every backdrop blur record");
 
     let mut cpu_px = vec![0u8; (w * h * 4) as usize];
     paint(&scene, &mut Target::new(&mut cpu_px, w, h), 1).expect("CPU paints backdrop blurs");

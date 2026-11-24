@@ -1,0 +1,1 @@
+- `El::backdrop_blur`: frames now grow the blur uniform buffer past `MAX_BACKDROP_BLURS` (4) so every blurred element in a frame blurs (matching CSS `backdrop-filter` in Chrome), and `end_layer` no longer folds a lone `Kind::BackdropBlur` out of a fading ancestor's layer so an ancestor with opacity below 1 always acts as a Backdrop Root.

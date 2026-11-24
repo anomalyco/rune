@@ -77,7 +77,6 @@ impl RuntimeCore {
         let now = self.t;
         let vp = [0.0, 0.0, self.viewport.0 * s, self.viewport.1 * s];
         let mut glyph_count = 0usize;
-        let mut backdrop_blurs = 0usize;
         let mut ambient: Option<f32> = None;
         // Retain scope capacity across frames. Records preserve absolute instance indices
         // for images, video insertions, retained springs and compositor list ranges.
@@ -509,7 +508,6 @@ impl RuntimeCore {
                 &mut fade_origin,
                 &mut rounded,
                 &mut isolate,
-                &mut backdrop_blurs,
                 &mut layers,
                 &mut active_cache,
             );

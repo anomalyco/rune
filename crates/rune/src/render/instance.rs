@@ -750,8 +750,12 @@ pub(crate) fn end_layer(instances: &mut Vec<Instance>, surfaces: &mut [crate::na
         surfaces[surface_start].clip == NO_CLIP && surfaces[surface_start].fade == [0; 4]
     } else { true };
     let transfer_clip = scope.fade[3] == 0 && unmasked;
-    // A lone effect slot keeps a faded scope: the compositor's paint can't take the opacity.
-    let faded_effect = primitives == 1 && instances[start + 1].kind() == Some(Kind::Effect) && scope.fill[3] != 1.0;
+    // A lone effect slot or backdrop blur keeps a faded scope: an effect compositor can't take
+    // the opacity, and an ancestor with opacity < 1 is a backdrop root whose blur sees only that
+    // layer, as in CSS Filter Effects 2.
+    let faded_effect = primitives == 1
+        && matches!(instances[start + 1].kind(), Some(Kind::Effect | Kind::BackdropBlur))
+        && scope.fill[3] != 1.0;
     // A layer's `radii` hold its hole (`El::cutout_circle`), which only its composite can cut.
     if !faded_effect && primitives + videos <= 1 && (primitives + videos == 0 || (scope.border[1] == 0.0 && scope.radii == [0.0; 4])) && scope.params[0] == 0.0 && scope.params[2] == 0.0 && scope.params[3] == 0.0
         && (transfer_clip || (scope.clip == NO_CLIP && scope.fade == [0; 4])) {

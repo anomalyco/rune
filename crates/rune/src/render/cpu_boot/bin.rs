@@ -8,7 +8,7 @@ use super::Scene;
 use super::shade::{Clip, has_sides, sides_inner};
 use crate::render::instance::shader_consts;
 use crate::render::layers::is_scissor_clip;
-use crate::render::{Instance, Kind, MAX_BACKDROP_BLURS, NO_CLIP, corner_extent};
+use crate::render::{Instance, Kind, NO_CLIP, corner_extent};
 
 pub(super) const TILE_W: u32 = 64;
 /// `Bins::within` for an instance that draws straight into the window.
@@ -189,7 +189,7 @@ impl Bins {
         }
         let mut blurs = Vec::new();
         let mut quiet = vec![false; tiles];
-        for (n, i) in scene.instances.iter().enumerate().filter(|(_, i)| i.kind() == Some(Kind::BackdropBlur)).take(MAX_BACKDROP_BLURS) {
+        for (n, i) in scene.instances.iter().enumerate().filter(|(_, i)| i.kind() == Some(Kind::BackdropBlur)) {
             bounds[n] = super::backdrop::bounds(i, (w, h));
             let Some(rec) = super::backdrop::plan(i, (w, h)) else { continue };
             for t in region_tiles(rec.region, cols, rows) { quiet[t] = true; }
