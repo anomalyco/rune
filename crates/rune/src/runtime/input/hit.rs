@@ -303,6 +303,35 @@ impl RuntimeCore {
         })
     }
 
+    /// Whether `(x, y)` lies inside active modal `i` or its live modal scope: either a live,
+    /// allowed hit target contains `(x, y)`, or `(x, y)` falls inside the geometry of a live,
+    /// authored-visible modal member (covering frame 0 of a default opacity entrance fade when
+    /// `register_node_hits` has not yet registered the modal's hits).
+    pub(in crate::runtime) fn point_in_modal(&self, i: usize, x: f32, y: f32) -> bool {
+        if self.top_hit(x, y).is_some_and(|t| self.allowed(t)) {
+            return true;
+        }
+        (0..self.tree.nodes.len()).any(|j| {
+            self.allowed(j)
+                && !self.subtree_exiting(j)
+                && (j == i || self.tree.nodes[j].above.is_some()
+                    || self.tree.nodes[j].handlers.get().is_some_and(crate::el::Handlers::takes_hit)
+                    || self.tree.nodes[j].focus.get().is_some_and(|f| f.enabled))
+                && self.authored_opaque(j)
+                && self.node_contains(j, x, y)
+        })
+    }
+
+    /// Whether node `j` and every ancestor have authored `El::opacity` above the hit threshold
+    /// (independent of presence entrance fades).
+    fn authored_opaque(&self, mut j: usize) -> bool {
+        loop {
+            if self.tree.nodes[j].vis.opacity <= 0.001 { return false; }
+            let Some(p) = self.tree.nodes[j].parent else { return true };
+            j = p;
+        }
+    }
+
     /// Whether node `i` is `target` or an ancestor of it.
     pub(in crate::runtime) fn node_holds(&self, i: usize, target: usize) -> bool {
         std::iter::successors(Some(target), |&p| self.tree.nodes[p].parent).any(|p| p == i)

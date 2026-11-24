@@ -625,3 +625,52 @@ fn windows_menu_secondary_repost_guards_refuse_new_modal_inert_and_inside_non_bu
     rt.frame(0.016);
     assert!(rt.state.menu_open && rt.state.dismisses == 0 && rt.state.parent_hits == 0);
 }
+
+#[test]
+fn entering_modal_at_zero_opacity_does_not_dismiss_on_inside_primary_or_secondary_press() {
+    use crate::runtime::input::secondary::SecondaryPlatform::{Linux, MacOs, Web, Windows};
+
+    #[derive(Default)]
+    struct S { open: bool, dismisses: usize, bg_secondary: usize }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let mut root = col().key("root").w_full().h_full()
+            .on_secondary_press(|s: &mut S, _, _| s.bg_secondary += 1)
+            .child(button("opener").on_press(|s: &mut S| s.open = true));
+        if s.open {
+            root = root.child(
+                col().key("modal").absolute(100.0, 0.0).size(100.0, 120.0)
+                    .modal(true, |s: &mut S| { s.open = false; s.dismisses += 1; })
+                    .child(button("one")),
+            );
+        }
+        root
+    }
+
+    for platform in [Windows, MacOs, Linux, Web] {
+        let mut rt = Runtime::new(S::default(), view, (300.0, 300.0), Env::new(true, 2.0));
+        rt.frame(0.0);
+        rt.update(|s, _| s.open = true);
+        // dt = 0.0 keeps the newly mounted modal at entrance opacity 0.0 (not yet in hit_tests).
+        rt.frame(0.0);
+        let (x, y) = rt.find("one").unwrap();
+
+        rt.core_mut().secondary_down_for(x, y, platform);
+        rt.secondary_up(x, y);
+        rt.frame(0.0);
+        assert!(rt.state.open, "inside secondary press on frame 0 must not dismiss entering modal ({platform:?})");
+        assert_eq!((rt.state.dismisses, rt.state.bg_secondary), (0, 0));
+
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+        assert!(rt.state.open, "inside primary press on frame 0 must not dismiss entering modal ({platform:?})");
+        assert_eq!(rt.state.dismisses, 0);
+
+        // An actual outside press on frame 0 still dismisses the modal.
+        rt.core_mut().secondary_down_for(5.0, 280.0, platform);
+        rt.secondary_up(5.0, 280.0);
+        rt.frame(0.0);
+        assert!(!rt.state.open, "outside secondary press on frame 0 still dismisses ({platform:?})");
+        assert_eq!((rt.state.dismisses, rt.state.bg_secondary), (1, 0));
+    }
+}

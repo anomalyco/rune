@@ -129,7 +129,7 @@ impl RuntimeCore {
         self.kbd.focus.step(focus_machine::FocusEvent::Pointed);
         self.dismiss_help();
         if let Some(i) = self.active_modal()
-            && self.top_hit(x, y).is_none_or(|t| !self.allowed(t))
+            && !self.point_in_modal(i, x, y)
         {
             self.pointer.clear_tint();
             let can_dismiss_outside = self.tree.nodes[i].handlers.modal.as_ref()

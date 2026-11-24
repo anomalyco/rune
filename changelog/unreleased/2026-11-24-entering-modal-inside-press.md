@@ -1,0 +1,1 @@
+- Input: primary and secondary presses inside a newly mounted modal on frame 0 of its entrance fade (when `effective_opacity` is still 0 and hit-testing has not registered the modal's hits yet) no longer misclassify the press as an outside click and dismiss the modal.
