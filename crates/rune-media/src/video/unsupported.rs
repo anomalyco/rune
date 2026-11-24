@@ -22,7 +22,7 @@ pub(super) fn probe(_: &mut Native, _: &MediaSource, _: &[(String, String)], kin
     Err(unsupported(kind))
 }
 
-pub(super) fn decode(_: &mut Native, _: &MediaSource, _: &[(String, String)], _: f64) -> Result<ByteFrame, String> {
+pub(super) fn decode(_: &mut Native, _: &MediaSource, _: &[(String, String)], _: f64) -> Result<(ByteFrame, f64), String> {
     Err(unsupported(Kind::Video))
 }
 
@@ -34,6 +34,10 @@ pub(super) fn preload(_: &Arc<Shared>) {}
 
 pub(super) fn is_seeking(_: &Shared) -> bool {
     false
+}
+
+pub(super) fn presented_time(_: &Shared) -> Option<f64> {
+    None
 }
 
 pub(super) fn live_time(_: &Shared, _: bool) -> Option<f64> {

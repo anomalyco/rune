@@ -1,0 +1,1 @@
+- Media playback: added `Player::frame_duration`, `Player::presented_time`, and `Player::step(frames)` for nominal video frame timing, inspecting the shown picture's presentation timestamp separately from `Player::time`, and clamped frame-by-frame stepping (using `AVPlayerItem::stepByCount` on macOS when supported and exact seeks elsewhere).

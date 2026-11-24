@@ -170,8 +170,15 @@ pub(super) struct Picture {
     pub format: Format,
     pub color: ColorInfo,
     pub orient: Orient,
-    /// Seconds per frame, from the stream's nominal rate.
-    pub frame: f64,
+    /// Nominal seconds per frame from `MF_MT_FRAME_RATE`, when the stream reports a positive rate.
+    pub frame_duration: Option<f64>,
+}
+
+impl Picture {
+    /// Nominal seconds per frame, falling back to 30 fps for internal scheduling when unknown.
+    pub(super) fn frame(&self) -> f64 {
+        self.frame_duration.unwrap_or(super::super::DEFAULT_FRAME)
+    }
 }
 
 /// The first audio stream's samples: 32-bit float, interleaved.
@@ -334,7 +341,7 @@ unsafe fn picture(t: &IMFMediaType) -> Result<Picture, String> {
             format: if full { Format::Nv12Full } else { Format::Nv12Video },
             color: ColorInfo { matrix, transfer: Transfer::Bt709 },
             orient,
-            frame: rate.map_or(1.0 / 30.0, |(n, d)| d / n),
+            frame_duration: rate.map(|(n, d)| d / n),
         })
     }
 }

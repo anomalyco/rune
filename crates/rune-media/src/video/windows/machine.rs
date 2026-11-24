@@ -100,6 +100,8 @@ pub(super) enum Event {
     /// Hold the picture on screen, at `at`.
     Pause { at: f64 },
     Seek { to: f64, exact: bool },
+    /// Pause and perform an exact seek to a neighbouring video frame.
+    Step { to: f64 },
     Rate { target: Instant, rate: f64 },
     /// Playing, with no picture due and the decoder behind: hold the clock at `at`.
     Stalled { at: f64 },
@@ -201,6 +203,26 @@ pub(super) fn step(phase: &mut Phase, event: Event) -> Effects<Effect> {
         (P::Paused { .. } | P::Ended { .. }, Event::Seek { to, exact }) => {
             *phase = P::Buffering { at: to, play: false, seeking: true };
             Effects::one(Effect::Seek { to, exact })
+        }
+        (P::Idle { .. }, Event::Step { to }) => {
+            *phase = P::Idle { at: to, seek: Some(SeekMode::Exact) };
+            Effects::one(Effect::Seek { to, exact: true })
+        }
+        (P::Opening { .. }, Event::Step { to }) => {
+            *phase = P::Opening { at: to, play: false, seeking: true };
+            Effects::one(Effect::Seek { to, exact: true })
+        }
+        (P::Buffering { .. }, Event::Step { to }) => {
+            *phase = P::Buffering { at: to, play: false, seeking: true };
+            Effects::one(Effect::Seek { to, exact: true })
+        }
+        (P::Playing { .. }, Event::Step { to }) => {
+            *phase = P::Buffering { at: to, play: false, seeking: true };
+            Effects::two(Effect::Clock(None), Effect::Seek { to, exact: true })
+        }
+        (P::Paused { .. } | P::Ended { .. }, Event::Step { to }) => {
+            *phase = P::Buffering { at: to, play: false, seeking: true };
+            Effects::one(Effect::Seek { to, exact: true })
         }
         (P::Playing { clock }, Event::Rate { target, rate }) => {
             let clock = Anchor { at: target, pos: clock.position(target), rate };

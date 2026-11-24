@@ -157,6 +157,10 @@ struct Fake {
     log: Vec<Cmd>,
     output_devices: Vec<Option<String>>,
     seeks: Vec<(f64, bool)>,
+    steps: Vec<i32>,
+    can_step_forward: bool,
+    can_step_backward: bool,
+    poster_pts: f64,
 }
 
 impl Port for Fake {
@@ -173,20 +177,20 @@ impl Port for Fake {
             return Some((attempt, Err("load failed".into())));
         }
         self.kept = Some(done);
-        Some((attempt, Ok(Meta { duration: 1.0, size: Some((64, 36)), frame: 0.25, sound: false })))
+        Some((attempt, Ok(Meta { duration: 1.0, size: Some((64, 36)), frame: Some(0.25), sound: false })))
     }
-    fn show_poster(&mut self, next_id: &mut dyn FnMut() -> u64) -> Result<(), String> {
+    fn show_poster(&mut self, next_id: &mut dyn FnMut() -> u64) -> Result<Option<f64>, String> {
         match (self.kept.take(), self.surface) {
             (Some(Done::Frame), true) => {
                 let id = next_id();
                 self.log.push(Cmd::Poster(id));
-                Ok(())
+                Ok(Some(self.poster_pts))
             }
             (Some(Done::FrameFails), true) => {
                 next_id();
                 Err("poster push failed".into())
             }
-            _ => Ok(()),
+            _ => Ok(None),
         }
     }
     fn ask_poster(&mut self, at: f64, attempt: Attempt) {
@@ -220,7 +224,7 @@ impl Port for Fake {
         self.log.push(Cmd::Orient);
     }
     fn item_facts(&self) -> Meta {
-        Meta { duration: 2.0, size: Some((32, 18)), frame: 1.0 / 30.0, sound: false }
+        Meta { duration: 2.0, size: Some((32, 18)), frame: Some(1.0 / 30.0), sound: false }
     }
     fn alive(&self) -> bool {
         self.player
@@ -235,6 +239,13 @@ impl Port for Fake {
     fn seek_to(&mut self, at: f64, exact: bool) {
         self.log.push(Cmd::Seek(at));
         self.seeks.push((at, exact));
+    }
+    fn step_by(&mut self, frames: i32) -> bool {
+        let can = if frames > 0 { self.can_step_forward } else if frames < 0 { self.can_step_backward } else { true };
+        if can {
+            self.steps.push(frames);
+        }
+        can
     }
     fn set_rate(&mut self, rate: f32) {
         self.log.push(Cmd::Rate(rate));
@@ -277,7 +288,7 @@ impl New {
         let kind = if audio { Kind::Audio } else { Kind::Video };
         Self {
             c: Control { muted: !audio, kind, ..Control::default() },
-            fake: Fake { script: Script::READY, checked: false, surface: !audio, done: None, kept: None, asked: Attempt::default(), pending: Vec::new(), player: false, now, log: Vec::new(), output_devices: Vec::new(), seeks: Vec::new() },
+            fake: Fake { script: Script::READY, checked: false, surface: !audio, done: None, kept: None, asked: Attempt::default(), pending: Vec::new(), player: false, now, log: Vec::new(), output_devices: Vec::new(), seeks: Vec::new(), steps: Vec::new(), can_step_forward: true, can_step_backward: true, poster_pts: 0.0 },
         }
     }
 
@@ -352,7 +363,7 @@ impl New {
             Sym::Rate(r) => self.send(Event::Rate(r)),
             Sym::Looping(l) => self.c.looping = l,
             Sym::Muted(m) => self.c.muted = m,
-            Sym::Open => self.c.open(Ok(Meta { duration: 1.0, size: Some((64, 36)), frame: 0.25, sound: false })),
+            Sym::Open => self.c.open(Ok(Meta { duration: 1.0, size: Some((64, 36)), frame: Some(0.25), sound: false })),
             Sym::OpenFails => self.c.open(Err("open failed".into())),
             Sym::Fail => self.c.fail("failed".into()),
             Sym::Clock(t) => self.c.advance_virtual(t),
@@ -387,7 +398,7 @@ impl New {
             drawn: matches!(c.run, Run::Failed { drawn: true, .. }),
             anchor: if let Run::Playing { anchor } = c.run { anchor } else { None },
             rate: c.rate,
-            seek: c.seek.map(|s| s.at),
+            seek: match c.pending { Some(Pending::Seek(s)) => Some(s.at), _ => None },
             time: c.time,
             duration: c.duration,
             size: c.size,
@@ -546,6 +557,9 @@ fn a_loading_player_times_out_like_the_old_flags() {
 
 #[path = "phases_poster_tests.rs"]
 mod poster;
+
+#[path = "phases_step_tests.rs"]
+mod step_tests;
 
 #[test]
 fn the_newest_seek_replaces_an_earlier_one() {

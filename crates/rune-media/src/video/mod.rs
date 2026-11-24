@@ -66,6 +66,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
+/// Fallback seconds per frame for internal snapping when a stream reports no positive rate.
+pub(crate) const DEFAULT_FRAME: f64 = 1.0 / 30.0;
+
 /// A playing clip whose next picture is due sooner than this (seconds) draws every refresh;
 /// later, the window sleeps until then.
 #[doc(hidden)]
@@ -76,7 +79,7 @@ pub const WAKE_MIN: f64 = 0.002;
 /// stream, Media Foundation): a window links this module's code whether or not it ever draws video.
 pub(crate) struct Backend {
     probe: fn(&mut backend::Native, &MediaSource, &[(String, String)], Kind) -> Result<Meta, String>,
-    decode: fn(&mut backend::Native, &MediaSource, &[(String, String)], f64) -> Result<ByteFrame, String>,
+    decode: fn(&mut backend::Native, &MediaSource, &[(String, String)], f64) -> Result<(ByteFrame, f64), String>,
     drive: fn(&Arc<Shared>),
     pull: fn(&Arc<Shared>, &NativeSurface, Instant) -> bool,
     due: fn(&Shared) -> Option<Instant>,
@@ -396,6 +399,29 @@ impl Player {
     pub fn seek_fast(&self, seconds: f64) {
         self.send(Event::Seek { to: seconds, exact: false });
     }
+    /// Pause playback and step by `frames` video pictures (positive moves forward, negative moves
+    /// backward), clamped to the clip's first and last frames.
+    ///
+    /// Stepping by `0` pauses without seeking. Stepping past either end keeps the current boundary
+    /// frame without starting a seek. No-op for [`Player::audio`] and failed clips.
+    ///
+    /// While the target picture is being decoded, [`is_seeking`](Self::is_seeking) returns `true`
+    /// and [`presented_time`](Self::presented_time) continues to report the picture still on screen
+    /// until the new one lands. On macOS, a ready `AVPlayer` uses `AVPlayerItem.step(byCount:)`
+    /// when the item supports it and falls back to an exact seek otherwise; Windows and headless
+    /// runs perform an exact seek to the neighbouring frame.
+    ///
+    /// ```no_run
+    /// let clip = rune_media::Player::file("capture.mp4");
+    /// clip.step(1);
+    /// clip.step(-1);
+    /// ```
+    pub fn step(&self, frames: i32) {
+        if self.shared.kind == Kind::Audio {
+            return;
+        }
+        self.send(Event::Step(frames));
+    }
     /// Playback speed while playing; 1 is normal. Negative and non-finite rates are ignored.
     pub fn set_rate(&self, rate: f32) {
         if rate.is_finite() && rate > 0.0 {
@@ -446,8 +472,8 @@ impl Player {
     pub fn is_playing(&self) -> bool {
         self.shared.ctl.lock().unwrap().playing()
     }
-    /// Whether a [`seek`](Self::seek) or [`seek_fast`](Self::seek_fast) is still waiting for its
-    /// picture (or position, for audio) to land.
+    /// Whether a [`seek`](Self::seek), [`seek_fast`](Self::seek_fast) or [`step`](Self::step) is
+    /// still waiting for its picture (or position, for audio) to land.
     ///
     /// Returns `false` once the target picture has been shown, if the clip has failed, and in
     /// headless runs or on unsupported backends.
@@ -471,9 +497,44 @@ impl Player {
         };
         backend::live_time(&self.shared, live).unwrap_or(time)
     }
+    /// Media presentation timestamp (in seconds) of the video picture currently shown on
+    /// [`surface`](Self::surface) (or the platform video layer).
+    ///
+    /// Distinct from [`time`](Self::time): while a seek or [`step`](Self::step) is in flight,
+    /// `presented_time` continues to report the previous picture's timestamp, and once paused on
+    /// a landed frame it reports that frame's own timestamp rather than the requested seek target.
+    /// Returns `None` before any picture has landed, for [`Player::audio`], on failed clips, and
+    /// on unsupported backends.
+    ///
+    /// ```no_run
+    /// let clip = rune_media::Player::file("capture.mp4");
+    /// if let (Some(pts), Some(fd)) = (clip.presented_time(), clip.frame_duration()) {
+    ///     let _frame = (pts / fd).round() as u64;
+    /// }
+    /// ```
+    pub fn presented_time(&self) -> Option<f64> {
+        backend::presented_time(&self.shared)
+    }
     /// Length in seconds, once loaded.
     pub fn duration(&self) -> Option<f64> {
         self.read().duration
+    }
+    /// Nominal duration of one video frame in seconds, once loaded.
+    ///
+    /// Returns `None` before the clip loads, for [`Player::audio`], on unsupported backends, or
+    /// when the video stream reports no valid positive frame rate.
+    ///
+    /// ```no_run
+    /// let clip = rune_media::Player::file("capture.mp4");
+    /// if let Some(fd) = clip.frame_duration() {
+    ///     let _fps = 1.0 / fd;
+    /// }
+    /// ```
+    pub fn frame_duration(&self) -> Option<f64> {
+        if self.shared.kind == Kind::Audio {
+            return None;
+        }
+        self.shared.ctl.lock().unwrap().meta.and_then(|m| m.frame).filter(|f| f.is_finite() && *f > 0.0)
     }
     /// Display size in pixels (rotation applied), once a video loads. None for audio.
     /// Whether the clip has a sound track it can play (a page's media controls grey the mute
@@ -607,8 +668,9 @@ pub(crate) struct Meta {
     pub duration: f64,
     /// None for audio.
     pub size: Option<(u32, u32)>,
-    /// Seconds per frame, for snapping virtual time to whole frames.
-    pub frame: f64,
+    /// Nominal seconds per frame when the video stream reports a positive rate; `None` for audio
+    /// or streams without a reported rate.
+    pub frame: Option<f64>,
     /// The clip has a sound track the player can play.
     pub sound: bool,
 }
@@ -738,8 +800,9 @@ impl Shared {
             let mut c = self.ctl.lock().unwrap();
             c.shown = Some(frame);
             let id = c.next_frame_id();
-            if let Err(e) = decoded.and_then(|bytes| surface.push_bytes(bytes, id)) {
-                c.fail(e);
+            match decoded.and_then(|(bytes, pts)| surface.push_bytes(bytes, id).map(|()| pts)) {
+                Ok(pts) => c.presented = Some(c.clamp_time(pts)),
+                Err(e) => c.fail(e),
             }
         }
         self.ctl.lock().unwrap().playing()
@@ -747,15 +810,40 @@ impl Shared {
 }
 
 impl Meta {
+    /// Nominal seconds per frame, falling back to 30 fps for internal snapping when unknown.
+    pub(crate) fn frame_step(&self) -> f64 {
+        self.frame.filter(|f| f.is_finite() && *f > 0.0).unwrap_or(DEFAULT_FRAME)
+    }
     pub(crate) fn frames(&self) -> i64 {
-        ((self.duration / self.frame).round() as i64).max(1)
+        ((self.duration / self.frame_step()).round() as i64).max(1)
     }
     pub(crate) fn frame_index(&self, t: f64) -> i64 {
-        ((t / self.frame + 1e-6).floor() as i64).clamp(0, self.frames() - 1)
+        let t = if t.is_finite() { t.max(0.0) } else { 0.0 };
+        ((t / self.frame_step() + 1e-6).floor() as i64).clamp(0, self.frames() - 1)
     }
     /// The middle of frame `i`, so decoders never land on a neighbour's boundary.
     pub(crate) fn frame_time(&self, i: i64) -> f64 {
-        ((i as f64 + 0.5) * self.frame).min(self.duration)
+        ((i as f64 + 0.5) * self.frame_step()).min(self.duration)
+    }
+    /// The start timestamp of frame `i`, centred in Windows `Landing::keeps`'s window.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn frame_start(&self, i: i64) -> f64 {
+        (i as f64 * self.frame_step()).min(self.duration)
+    }
+    /// Target frame index and clamped step delta from `base`, or `None` when `frames == 0` or
+    /// already at the clamped clip end.
+    pub(crate) fn step_from(&self, base: f64, frames: i32) -> Option<(i64, i32)> {
+        if frames == 0 {
+            return None;
+        }
+        let cur = self.frame_index(base);
+        let last = self.frames() - 1;
+        let next = cur.saturating_add(i64::from(frames)).clamp(0, last);
+        if next == cur {
+            return None;
+        }
+        let delta = (next - cur).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+        Some((next, delta))
     }
 }
 
@@ -772,6 +860,14 @@ impl Seek {
     }
 }
 
+/// A position change recorded on the handle, waiting to be carried out.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Pending {
+    Seek(Seek),
+    /// Step by `frames` video pictures (non-zero), pausing playback.
+    Step(i32),
+}
+
 /// A clip's state, stepped by [`phases::step`].
 #[derive(Clone, Debug)]
 pub(crate) struct Control {
@@ -783,10 +879,15 @@ pub(crate) struct Control {
     pub volume: f32,
     pub output_device: Option<String>,
     pub(super) output_generation: u64,
-    /// A seek not yet carried out, by a player, a poster, a decoder or the headless clock.
-    seek: Option<Seek>,
+    /// A seek or frame step not yet carried out, by a player, a poster, a decoder or the headless
+    /// clock.
+    pending: Option<Pending>,
     // Reported by pulls and ticks.
     pub time: f64,
+    /// Media presentation timestamp of the video picture currently on the surface (posters,
+    /// player frames, parked frames, headless frames). `None` before any picture lands, for audio,
+    /// or after failure.
+    pub(super) presented: Option<f64>,
     pub duration: Option<f64>,
     pub size: Option<(u32, u32)>,
     pub meta: Option<Meta>,
@@ -815,8 +916,9 @@ impl Default for Control {
             volume: 1.0,
             output_device: None,
             output_generation: 0,
-            seek: None,
+            pending: None,
             time: 0.0,
+            presented: None,
             duration: None,
             size: None,
             meta: None,

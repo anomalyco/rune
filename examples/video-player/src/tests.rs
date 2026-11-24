@@ -4,7 +4,7 @@ use rune::accesskit::{Action, ActionData, Role};
 #[test]
 fn scrub_bar_exposes_slider_a11y_and_seeks_on_drag_and_a11y_action() {
     let clip = Player::file(concat!(env!("CARGO_MANIFEST_DIR"), "/../../crates/rune/tests/fixtures/rgbw.mp4"));
-    let viewer = Viewer { clip: clip.clone(), hidden: false, preferred_output: None, scrub_target: None, last_time: 0.0, last_seeking: false };
+    let viewer = Viewer { clip: clip.clone(), hidden: false, preferred_output: None, scrub_target: None, last_time: 0.0, last_presented: None, last_seeking: false };
     let mut rt = rune::Runtime::new(viewer, view, (520.0, 360.0), rune::Env::new(true, 1.0));
     rt.frame(0.0);
     // Run one more frame so the clip's duration from opening reflects in the slider's range.
@@ -36,5 +36,58 @@ fn scrub_bar_exposes_slider_a11y_and_seeks_on_drag_and_a11y_action() {
         assert!(rt.accessibility_action("scrub", Action::SetValue, Some(ActionData::NumericValue(0.4))));
         rt.frame(0.0);
         assert!((clip.time() - 0.4).abs() < 1e-6, "{}", clip.time());
+    }
+}
+
+#[test]
+fn frame_step_buttons_keys_and_readout_work_and_stay_accessible() {
+    let clip = Player::file(concat!(env!("CARGO_MANIFEST_DIR"), "/../../crates/rune/tests/fixtures/rgbw.mp4"));
+    let viewer = Viewer { clip: clip.clone(), hidden: false, preferred_output: None, scrub_target: None, last_time: 0.0, last_presented: None, last_seeking: false };
+    let mut rt = rune::Runtime::new(viewer, view, (520.0, 360.0), rune::Env::new(true, 1.0));
+    rt.poll = Some(poll);
+    rt.frame(0.0);
+    rt.frame(0.0);
+
+    let tree = rt.accessibility_tree();
+    let labels: Vec<_> = tree.nodes.iter().filter(|(_, n)| n.role() == Role::Button).filter_map(|(_, n)| n.label()).collect();
+    assert!(labels.contains(&"Previous frame"), "missing Previous frame button: {labels:?}");
+    assert!(labels.contains(&"Next frame"), "missing Next frame button: {labels:?}");
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        assert!((clip.frame_duration().unwrap() - 0.25).abs() < 1e-3, "{:?}", clip.frame_duration());
+        assert!(clip.presented_time().unwrap().abs() < 1e-3, "{:?}", clip.presented_time());
+
+        // Assistive technology Click on "Next frame" steps from frame 0 to frame 1.
+        assert!(rt.accessibility_action("step-forward", Action::Click, None));
+        rt.frame(0.0);
+        assert!((clip.presented_time().unwrap() - 0.25).abs() < 1e-3, "{:?}", clip.presented_time());
+        // Once the scrub bar settles, the idle paused window requests no frames.
+        rt.frame(1.0);
+        assert!(!rt.frame(1.1), "idle paused window requests no frames after stepping");
+
+        // Readout shows frame index, presented timestamp, and fps in the accessibility tree.
+        let tree = rt.accessibility_tree();
+        let has_readout = tree.nodes.iter().any(|(_, n)| {
+            n.role() == Role::Label && n.value().is_some_and(|v| v.contains("Frame 1") && v.contains("4.00 fps"))
+        });
+        assert!(has_readout, "frame readout missing from accessibility tree");
+
+        // Right arrow while paused steps forward to frame 2; Left steps back to frame 1.
+        let mut tx = Tx::default();
+        let right = KeyEvent { key: Key::Right, mods: rune::Mods::default() };
+        let left = KeyEvent { key: Key::Left, mods: rune::Mods::default() };
+        assert!(on_key(&mut rt.state, &right, &mut tx));
+        rt.frame(0.0);
+        assert!((clip.presented_time().unwrap() - 0.5).abs() < 1e-3, "{:?}", clip.presented_time());
+
+        assert!(on_key(&mut rt.state, &left, &mut tx));
+        rt.frame(0.0);
+        assert!((clip.presented_time().unwrap() - 0.25).abs() < 1e-3, "{:?}", clip.presented_time());
+
+        // Assistive technology Click on "Previous frame" steps back to frame 0.
+        assert!(rt.accessibility_action("step-back", Action::Click, None));
+        rt.frame(0.0);
+        assert!(clip.presented_time().unwrap().abs() < 1e-3, "{:?}", clip.presented_time());
     }
 }

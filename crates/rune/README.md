@@ -2488,12 +2488,17 @@ tap.play();
 - **Controls and state**: `play` (from the start after `Ended`), `pause`, `seek` (clamped),
   `seek_fast` (keyframe-only scrub preview: keeps the first keyframe returned by Media Foundation
   on Windows and reports its timestamp via `time()`, uses `kCMTimePositiveInfinity` tolerances on
-  macOS `AVPlayer`, and acts like `seek` headless or elsewhere), `set_rate`, `set_looping`,
+  macOS `AVPlayer`, and acts like `seek` headless or elsewhere), `step(frames)` (pauses and steps
+  by `frames` video pictures, clamped at both ends; uses `AVPlayerItem::stepByCount` on macOS when
+  supported and falls back to an exact seek elsewhere; no-op for audio), `set_rate`, `set_looping`,
   `set_muted`, `set_volume`, `set_output_device` (`output_device`); `state()` is `Loading`,
   `Ready`, `Playing`, `Ended` or `Failed(message)`, plus `is_playing()`, `is_seeking()` (true
-  while a `seek` or `seek_fast` waits for its picture or audio position to land; `false`
-  headless or on unsupported backends), `time()`, `duration()`, `natural_size()` and
-  `has_sound()`
+  while a `seek`, `seek_fast` or `step` waits for its picture or audio position to land; `false`
+  headless or on unsupported backends), `time()`, `presented_time()` (the presentation timestamp
+  of the video picture currently shown on screen, distinct from `time()` while seeking or paused;
+  `None` before a picture lands or for audio), `duration()`, `frame_duration()` (nominal seconds
+  per video frame once loaded; `None` for audio or streams without a reported rate),
+  `natural_size()` and `has_sound()`
   (whether the clip has a sound track it can play, as a page's controls grey their mute
   button without one; `None` until the clip's facts are read).
 - **Sound**: `Player::file`/`url`/`new` make videos, which start muted. `Player::audio` makes

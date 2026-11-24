@@ -159,7 +159,7 @@ impl Layer {
     /// to each present's next buffer).
     fn processor(&self) -> Result<(ID3D11VideoProcessorEnumerator, ID3D11VideoProcessor, ID3D11VideoProcessorOutputView), String> {
         let (x, y, w, h) = self.picture.crop;
-        let rate = DXGI_RATIONAL { Numerator: (1.0 / self.picture.frame.max(1e-3)).round() as u32, Denominator: 1 };
+        let rate = DXGI_RATIONAL { Numerator: (1.0 / self.picture.frame().max(1e-3)).round() as u32, Denominator: 1 };
         let desc = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
             InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
             InputFrameRate: rate,

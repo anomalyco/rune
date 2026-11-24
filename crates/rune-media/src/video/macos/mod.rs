@@ -57,8 +57,9 @@ unsafe impl Send for Native {}
 pub(super) struct Posters {
     want: Option<(f64, Attempt)>,
     busy: bool,
-    /// The asking attempt, and a video poster and its facts, or (no frame) an audio clip's facts.
-    pub(super) done: Option<(Attempt, Result<(Option<ByteFrame>, Meta), String>)>,
+    /// The asking attempt, and a video poster (with its actual PTS) and facts, or (no frame) an
+    /// audio clip's facts.
+    pub(super) done: Option<(Attempt, Result<(Option<(ByteFrame, f64)>, Meta), String>)>,
 }
 
 pub(super) struct Player {
@@ -263,6 +264,17 @@ pub(super) fn is_seeking(shared: &Shared) -> bool {
         return false;
     }
     shared.ctl.lock().unwrap().is_seeking()
+}
+
+pub(super) fn presented_time(shared: &Shared) -> Option<f64> {
+    if shared.kind == Kind::Audio {
+        return None;
+    }
+    let c = shared.ctl.lock().unwrap();
+    if c.failed() {
+        return None;
+    }
+    c.presented
 }
 
 /// Audio, on the main thread: what a live player (`Control::live`) reports now, while it plays.

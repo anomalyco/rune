@@ -4,7 +4,7 @@
 //! the poster worker and the native player all report to [`step`], and what it asks for comes
 //! back as [`Effect`]s, carried out by `turn` or the caller.
 
-use super::{Control, Kind, Meta, PlayerState, Seek};
+use super::{Control, DEFAULT_FRAME, Kind, Meta, Pending, PlayerState, Seek};
 use rune_core::machine::{Attempt, Effects};
 use rune_core::time::Instant;
 use std::time::Duration;
@@ -133,6 +133,8 @@ pub(super) enum Event {
     Play,
     Pause,
     Seek { to: f64, exact: bool },
+    /// Pause and step by `frames` video pictures, clamped at the clip's ends.
+    Step(i32),
     Rate(f32),
     // The clip's facts, or why there are none.
     Open(Result<Meta, String>),
@@ -148,6 +150,8 @@ pub(super) enum Event {
     /// The poster worker finished the request made under `attempt`: the clip's facts, or why it
     /// couldn't open.
     PosterDone { attempt: Attempt, result: Result<Meta, String> },
+    /// A poster frame reached the surface, at this presentation timestamp.
+    PosterShown { shown: f64 },
     /// A pull or tick reached a clip that hasn't failed, on the main thread.
     Pull,
     PlayerMade { created: Instant },
@@ -185,6 +189,8 @@ pub(super) enum Effect {
     SetVolume(f32),
     SetOutputDevice,
     SeekTo { at: f64, exact: bool },
+    /// Step by `frames` on the native item when supported, else fall back to an exact seek to `fallback`.
+    StepBy { frames: i32, fallback: f64 },
     /// 0 pauses.
     SetRate(f32),
     /// Back to zero at this rate, for a loop.
@@ -198,10 +204,15 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
             match c.run {
                 Run::Failed { .. } => return Effects::none(),
                 Run::Ended => {
-                    c.seek = Some(Seek::exact(0.0));
+                    c.pending = Some(Pending::Seek(Seek::exact(0.0)));
                     c.time = 0.0;
                 }
-                Run::Paused | Run::Playing { .. } => {}
+                Run::Paused | Run::Playing { .. } => {
+                    // Playing overrides any unapplied paused step.
+                    if matches!(c.pending, Some(Pending::Step(_))) {
+                        c.pending = None;
+                    }
+                }
             }
             c.run = Run::Playing { anchor: None };
         }
@@ -213,12 +224,55 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
         Event::Seek { to: seconds, exact } => {
             let seconds = if seconds.is_finite() { seconds.max(0.0) } else { 0.0 };
             let seconds = c.duration.map_or(seconds, |d| seconds.min(d));
-            c.seek = Some(Seek { at: seconds, exact });
+            c.pending = Some(Pending::Seek(Seek { at: seconds, exact }));
             c.time = seconds;
             match c.run {
                 Run::Ended => c.run = Run::Paused,
                 Run::Playing { .. } => c.run = Run::Playing { anchor: None },
                 Run::Paused | Run::Failed { .. } => {}
+            }
+        }
+        Event::Step(frames) => {
+            if c.kind == Kind::Audio || c.failed() {
+                return Effects::none();
+            }
+            let was_playing = c.playing();
+            if matches!(c.run, Run::Playing { .. } | Run::Ended) {
+                c.run = Run::Paused;
+            }
+            if frames == 0 {
+                return Effects::none();
+            }
+            match c.pending {
+                Some(Pending::Step(prev)) => {
+                    let total = prev.saturating_add(frames);
+                    c.pending = (total != 0).then_some(Pending::Step(total));
+                }
+                Some(Pending::Seek(seek)) => {
+                    if let Some(meta) = c.meta {
+                        if let Some((next, _)) = meta.step_from(seek.at, frames) {
+                            let at = meta.frame_time(next);
+                            c.pending = Some(Pending::Seek(Seek::exact(at)));
+                            c.time = at;
+                        }
+                    } else {
+                        let at = (seek.at + f64::from(frames) * DEFAULT_FRAME).max(0.0);
+                        c.pending = Some(Pending::Seek(Seek::exact(at)));
+                        c.time = at;
+                    }
+                }
+                None => {
+                    // When already paused on a known shown frame and not seeking, stepping past
+                    // a clip end is an immediate no-op (never enters is_seeking).
+                    if !was_playing
+                        && !c.is_seeking_stage()
+                        && let (Some(meta), Some(shown)) = (c.meta, c.presented)
+                        && meta.step_from(shown, frames).is_none()
+                    {
+                        return Effects::none();
+                    }
+                    c.pending = Some(Pending::Step(frames));
+                }
             }
         }
         Event::Rate(rate) => {
@@ -276,11 +330,16 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
                 Err(_) => {}
             }
         }
+        Event::PosterShown { shown: at } => {
+            if c.kind == Kind::Video && !c.failed() {
+                c.presented = Some(c.clamp_time(at));
+            }
+        }
         Event::Pull => return pull(c),
         Event::PlayerMade { created } => {
             // A fresh player starts at the handle's position.
-            if c.time > 0.0 && c.seek.is_none() {
-                c.seek = Some(Seek::exact(c.time));
+            if c.time > 0.0 && c.pending.is_none() {
+                c.pending = Some(Pending::Seek(Seek::exact(c.time)));
             }
             // Posters still in flight are for a surface the player now owns. Audio's load has
             // no surface to lose, so its answer always counts.
@@ -299,6 +358,9 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
             if let Stage::Ready { shown, settle, .. } = &mut c.stage {
                 *shown = Some(at);
                 settle.framed();
+            }
+            if c.kind == Kind::Video && !c.failed() {
+                c.presented = Some(c.clamp_time(at));
             }
         }
         Event::Follow { current, stopped, frame_time, now } => return follow(c, current, stopped, frame_time, now),
@@ -330,7 +392,16 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
 /// // differs from dev: dev had no fence, and failed the clip on the old answer.
 fn overtaken(c: &Control) -> bool {
     let clamp = |t: f64| c.duration.map_or(t, |d| t.min(d));
-    c.poster_at.is_some_and(|asked| c.seek.is_some_and(|target| clamp(target.at) != clamp(asked)))
+    c.poster_at.is_some_and(|asked| match c.pending {
+        Some(Pending::Seek(target)) => clamp(target.at) != clamp(asked),
+        Some(Pending::Step(frames)) => {
+            c.meta.is_none_or(|meta| {
+                meta.step_from(c.presented.unwrap_or(c.time), frames)
+                    .is_some_and(|(next, _)| next != meta.frame_index(asked))
+            })
+        }
+        None => false,
+    })
 }
 
 fn opened(c: &mut Control, meta: Meta) {
@@ -338,7 +409,13 @@ fn opened(c: &mut Control, meta: Meta) {
     c.duration = Some(meta.duration);
     c.size = meta.size;
     c.time = c.time.min(meta.duration);
-    c.seek = c.seek.map(|s| Seek { at: s.at.min(meta.duration), ..s });
+    c.pending = match c.pending {
+        Some(Pending::Seek(s)) => Some(Pending::Seek(Seek { at: s.at.min(meta.duration), ..s })),
+        Some(Pending::Step(frames)) => {
+            meta.step_from(c.presented.unwrap_or(c.time), frames).map(|_| Pending::Step(frames))
+        }
+        None => None,
+    };
     c.generation += 1;
 }
 
@@ -346,6 +423,7 @@ fn failed(c: &mut Control, error: String) {
     if !c.failed() {
         c.run = Run::Failed { error, drawn: false };
         c.poster_seeking = None;
+        c.presented = None;
         c.generation += 1;
     }
 }
@@ -354,11 +432,20 @@ fn failed(c: &mut Control, error: String) {
 /// `seek` or a rate change.
 fn advance(c: &mut Control, now: f64) {
     let Some(meta) = c.meta else { return };
-    if let Some(seek) = c.seek.take() {
-        c.time = seek.at.min(meta.duration);
-        if let Run::Playing { anchor } = &mut c.run {
-            *anchor = None;
+    match c.pending.take() {
+        Some(Pending::Seek(seek)) => {
+            c.time = seek.at.min(meta.duration);
+            if let Run::Playing { anchor } = &mut c.run {
+                *anchor = None;
+            }
         }
+        Some(Pending::Step(frames)) => {
+            let base = c.presented.unwrap_or(c.time);
+            if let Some((next, _)) = meta.step_from(base, frames) {
+                c.time = meta.frame_time(next);
+            }
+        }
+        None => {}
     }
     let Run::Playing { anchor } = &mut c.run else { return };
     // A clock behind the anchor (another runtime on this thread) restarts from here.
@@ -398,10 +485,33 @@ fn pull(c: &mut Control) -> Effects<Effect> {
     }
     if !c.playing() {
         if c.kind == Kind::Video {
-            if let Some(seek) = c.seek.take() {
-                let effects = ask_poster(c, seek.at);
-                c.poster_seeking = Some(c.posters.current());
-                return effects;
+            match c.pending.take() {
+                Some(Pending::Seek(seek)) => {
+                    let effects = ask_poster(c, seek.at);
+                    c.poster_seeking = Some(c.posters.current());
+                    return effects;
+                }
+                Some(Pending::Step(frames)) => {
+                    if let Some(meta) = c.meta {
+                        let base = if c.poster_seeking.is_some() { c.time } else { c.presented.unwrap_or(c.time) };
+                        if let Some((next, _)) = meta.step_from(base, frames) {
+                            let target = meta.frame_time(next);
+                            c.time = target;
+                            let effects = ask_poster(c, target);
+                            c.poster_seeking = Some(c.posters.current());
+                            return effects;
+                        }
+                    } else {
+                        c.pending = Some(Pending::Step(frames));
+                        if c.stage == Stage::Unasked {
+                            let effects = ask_poster(c, c.time);
+                            c.poster_seeking = Some(c.posters.current());
+                            return effects;
+                        }
+                        return Effects::none();
+                    }
+                }
+                None => {}
             }
             if c.stage == Stage::Unasked {
                 return ask_poster(c, c.time);
@@ -470,11 +580,39 @@ fn reconcile(c: &mut Control, now: Instant) -> Effects<Effect> {
     }
     let playing = c.playing();
     if let Stage::Ready { rate, settle, shown, .. } = &mut c.stage {
-        if let Some(seek) = c.seek.take() {
-            effects.push(Effect::SeekTo { at: seek.at, exact: seek.exact });
-            // A paused seek within the frame on screen brings no new frame to wait for.
-            let same_frame = !playing && c.meta.zip(*shown).is_some_and(|(m, shown)| m.frame_index(shown) == m.frame_index(seek.at));
-            settle.seek(seek.at, same_frame, now);
+        match c.pending.take() {
+            Some(Pending::Seek(seek)) => {
+                effects.push(Effect::SeekTo { at: seek.at, exact: seek.exact });
+                // A paused seek within the frame on screen brings no new frame to wait for.
+                let same_frame = !playing && c.meta.zip(*shown).is_some_and(|(m, shown)| m.frame_index(shown) == m.frame_index(seek.at));
+                settle.seek(seek.at, same_frame, now);
+            }
+            Some(Pending::Step(frames)) => {
+                if *rate != 0.0 {
+                    *rate = 0.0;
+                    effects.push(Effect::SetRate(0.0));
+                }
+                let was_pending = settle.pending();
+                let base = if was_pending { c.time } else { (*shown).or(c.presented).unwrap_or(c.time) };
+                if let Some(meta) = c.meta {
+                    if let Some((next, delta)) = meta.step_from(base, frames) {
+                        let target = meta.frame_time(next);
+                        c.time = target;
+                        if !was_pending && shown.is_some() {
+                            effects.push(Effect::StepBy { frames: delta, fallback: target });
+                        } else {
+                            effects.push(Effect::SeekTo { at: target, exact: true });
+                        }
+                        settle.seek(target, false, now);
+                    }
+                } else {
+                    let target = (base + f64::from(frames) * DEFAULT_FRAME).max(0.0);
+                    c.time = target;
+                    effects.push(Effect::SeekTo { at: target, exact: true });
+                    settle.seek(target, false, now);
+                }
+            }
+            None => {}
         }
         let want = if playing { c.rate } else { 0.0 };
         if *rate != want {
@@ -561,15 +699,23 @@ impl Control {
         self.frame_id
     }
 
-    /// Whether a seek is still waiting to be carried out or for its picture (or position, for
-    /// audio) to land.
+    pub(super) fn clamp_time(&self, t: f64) -> f64 {
+        let t = if t.is_finite() { t.max(0.0) } else { 0.0 };
+        self.duration.filter(|d| *d > 0.0).map_or(t, |d| t.min(d))
+    }
+
+    pub(super) fn is_seeking_stage(&self) -> bool {
+        self.poster_seeking.is_some()
+            || matches!(self.stage, Stage::Ready { settle, .. } if settle.waiting())
+    }
+
+    /// Whether a seek or step is still waiting to be carried out or for its picture (or position,
+    /// for audio) to land.
     pub(super) fn is_seeking(&self) -> bool {
         if self.failed() {
             return false;
         }
-        self.seek.is_some()
-            || self.poster_seeking.is_some()
-            || matches!(self.stage, Stage::Ready { settle, .. } if settle.waiting())
+        self.pending.is_some() || self.is_seeking_stage()
     }
 
     /// Whether the player's own position is the one to read: it runs, and no seek is under way.

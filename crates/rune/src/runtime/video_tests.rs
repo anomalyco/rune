@@ -85,6 +85,41 @@ fn seek_fast_and_is_seeking_work_through_rune_reexport_and_keep_idle_paused_wind
     }
 }
 
+#[test]
+fn frame_duration_presented_time_and_step_work_through_rune_reexport() {
+    let v = Video::file(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/rgbw.mp4"));
+    assert_eq!(v.frame_duration(), None);
+    assert_eq!(v.presented_time(), None);
+    let mut rt = crate::Runtime::new(v.clone(), view, (32.0, 18.0), crate::Env::new(true, 2.0));
+    rt.frame(0.0);
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        assert!((v.frame_duration().unwrap() - 0.25).abs() < 1e-3, "{:?}", v.frame_duration());
+        assert!(v.presented_time().unwrap().abs() < 1e-3, "{:?}", v.presented_time());
+        v.step(1);
+        assert!(!rt.frame(0.0), "a stepped paused clip requests no further frames");
+        assert!((v.presented_time().unwrap() - 0.25).abs() < 1e-3, "{:?}", v.presented_time());
+        v.step(1);
+        assert!(!rt.frame(0.0));
+        assert!((v.presented_time().unwrap() - 0.5).abs() < 1e-3, "{:?}", v.presented_time());
+        v.step(-1);
+        assert!(!rt.frame(0.0));
+        assert!((v.presented_time().unwrap() - 0.25).abs() < 1e-3, "{:?}", v.presented_time());
+        // Seek to frame 2's centre (0.6 s): time() reports 0.6 while presented_time() reports 0.5.
+        v.seek(0.6);
+        assert!(!rt.frame(0.0));
+        assert!((v.time() - 0.6).abs() < 1e-6, "{}", v.time());
+        assert!((v.presented_time().unwrap() - 0.5).abs() < 1e-3, "{:?}", v.presented_time());
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        assert_eq!(v.frame_duration(), None);
+        assert_eq!(v.presented_time(), None);
+        v.step(1);
+        assert!(!v.is_seeking());
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod headless {
     use super::*;
