@@ -638,9 +638,9 @@ app.run();
   `windowless()` (such as tray apps or apps that retry) log the error, keep running windowless,
   and retry on the next `open` / `show` (`Gpu::try_new`).
 - `run` prints the error to stderr and exits 1 (panics on wasm32) when the event loop can't
-  start: no Wayland or X11 display, or a Mac no one is logged in to (over ssh or in CI).
-  `App::try_run`, `try_run_windows_with` and `try_run_windows_with_args` return that error
-  instead.
+  start (no Wayland or X11 display, or a Mac no one is logged in to over ssh or in CI) or loses
+  its display connection, bypassing fast exit so `App::try_run`, `try_run_windows_with` and
+  `try_run_windows_with_args` return that error instead. Normal quits keep fast exit.
 - `App::on_window(|w: &WindowHandle| ..)` runs on the UI thread after every native creation, for
   icons or native styles through `WindowHandle::with_raw_handle`.
 - `AppSpec::min_size` sets the smallest window (None keeps 420×400).

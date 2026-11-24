@@ -111,10 +111,12 @@ static ORDERLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 /// durable write, a trace) and the process ends at once. Windows, GPU devices, threads and memory
 /// aren't dropped: the OS takes them back, which on Windows skips tens to hundreds of milliseconds
 /// of destructors and graphics-driver `DllMain` detach, and a window is gone the moment its quit
-/// is done. Every app ends this way unless it calls [`orderly_exit`]; `fast_exit` only adds
-/// `last`. Nothing after the event loop returns runs, so whatever the app does there belongs in
-/// `last` or its quit hooks. Set it once, before the app runs; a later call does nothing. On the
-/// web the page's own lifetime applies instead.
+/// is done. Every normal quit ends this way unless the app calls [`orderly_exit`]; `fast_exit`
+/// only adds `last`. Startup window creation failures and lost display connections bypass fast
+/// exit so `try_run` returns the error and `run` prints it to stderr and exits 1. Nothing after
+/// a normal event loop exit runs, so whatever the app does there belongs in `last` or its quit
+/// hooks. Set it once, before the app runs; a later call does nothing. On the web the page's own
+/// lifetime applies instead.
 pub fn fast_exit(last: fn()) {
     FAST_EXIT.set(last).ok();
 }

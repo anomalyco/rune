@@ -68,6 +68,61 @@ pub(super) fn cleanup_hosts(
     no_main
 }
 
+/// What `Windows::exiting` does once the event loop starts shutting down.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ExitStep {
+    /// Normal fast exit: hooks ran, menus cancelled; call `crate::quit::end_fast` now.
+    FastExit,
+    /// Orderly teardown (an app that called `orderly_exit`, or an error exit that must return to
+    /// `finish_run`): clear hosts, shut down clipboard, and relaunch when `relaunch` is true.
+    Orderly { relaunch: bool },
+}
+
+/// Whether `Windows::exiting` is ending because of an error rather than a normal quit:
+/// - a startup window creation failure (`has_startup_error`),
+/// - a fatal Wayland display error captured from the connection (`has_display_error`), or
+/// - winit ending the event loop on its own (`loop_exiting && !quitting`, such as an X11 or
+///   Wayland `ExitFailure` where Rune never started a quit).
+pub(super) fn is_error_exit(
+    has_startup_error: bool,
+    has_display_error: bool,
+    loop_exiting: bool,
+    quitting: bool,
+) -> bool {
+    has_startup_error || has_display_error || (loop_exiting && !quitting)
+}
+
+/// Runs the host-level steps of `Windows::exiting` and decides whether the process ends through
+/// fast exit or returns from the event loop for orderly teardown / error reporting.
+pub(super) fn exiting_hosts(
+    hosts: &mut [Option<Box<dyn AnyHost>>],
+    has_startup_error: bool,
+    has_display_error: bool,
+    loop_exiting: bool,
+    quitting: bool,
+    fast_exit: bool,
+    mut send: impl FnMut(crate::quit::Event) -> Vec<crate::quit::Effect>,
+) -> ExitStep {
+    let error_exit = is_error_exit(has_startup_error, has_display_error, loop_exiting, quitting);
+    if !error_exit {
+        // Every quit ends here, so the windows still open run `App::on_quit` first, unless the
+        // quit's hooks already ran (a Windows logoff, the last window closing).
+        let _ = quit_hosts(hosts, false, true, loop_exiting, &mut send);
+        // Rune didn't ask to exit, so the OS is ending the app: macOS Quit, Cmd-Q, the Dock's
+        // Quit, logout. Windows close as their close button would, before the clipboard stops.
+        if !loop_exiting {
+            for host in hosts.iter_mut().flatten() { host.terminate(); }
+        }
+    }
+    for host in hosts.iter_mut().flatten() { host.cancel_menus(); }
+    if !error_exit && fast_exit {
+        return ExitStep::FastExit;
+    }
+    let relaunch = !error_exit
+        && send(crate::quit::Event::Exited).contains(&crate::quit::Effect::Relaunch);
+    ExitStep::Orderly { relaunch }
+}
+
 impl Windows {
     /// The app starts to quit (`crate::quit`): every open window (and any window whose close this
     /// turn ended the app) runs `App::on_quit`, once per quit. A session ending now (`ending`)
