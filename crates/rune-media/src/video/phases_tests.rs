@@ -155,6 +155,7 @@ struct Fake {
     player: bool,
     now: Instant,
     log: Vec<Cmd>,
+    output_devices: Vec<Option<String>>,
 }
 
 impl Port for Fake {
@@ -227,6 +228,9 @@ impl Port for Fake {
         self.log.push(Cmd::Muted(muted));
     }
     fn set_volume(&mut self, _: f32) {}
+    fn set_output_device(&mut self, uid: Option<&str>) {
+        self.output_devices.push(uid.map(str::to_owned));
+    }
     fn seek_to(&mut self, at: f64) {
         self.log.push(Cmd::Seek(at));
     }
@@ -271,7 +275,7 @@ impl New {
         let kind = if audio { Kind::Audio } else { Kind::Video };
         Self {
             c: Control { muted: !audio, kind, ..Control::default() },
-            fake: Fake { script: Script::READY, checked: false, surface: !audio, done: None, kept: None, asked: Attempt::default(), pending: Vec::new(), player: false, now, log: Vec::new() },
+            fake: Fake { script: Script::READY, checked: false, surface: !audio, done: None, kept: None, asked: Attempt::default(), pending: Vec::new(), player: false, now, log: Vec::new(), output_devices: Vec::new() },
         }
     }
 
@@ -597,4 +601,87 @@ fn a_seek_that_never_lands_expires() {
     s.seek(1.0, true, now);
     s.expire(now + Duration::from_secs(60));
     assert_eq!(s, Settle::Holding { to: 1.0 });
+}
+
+#[test]
+fn output_device_default_emits_nothing() {
+    let now = rune_core::time::now();
+    let mut new = New::new(true, now);
+    new.run(Open);
+    new.run(Play);
+    new.run(Pull(Script::LOADING));
+    new.run(Pull(Script::READY));
+    new.run(Pause);
+    new.run(Park);
+    new.run(Play);
+    new.run(Pull(Script::READY));
+    assert!(new.fake.output_devices.is_empty(), "default output never calls set_output_device");
+}
+
+#[test]
+fn output_device_applies_on_change_skips_unchanged_and_resets_to_none() {
+    let now = rune_core::time::now();
+    let mut new = New::new(true, now);
+    new.run(Open);
+    new.c.set_output_device(Some("USB-DAC"));
+    new.run(Play);
+    // Applied as soon as the player is made, even while still Loading.
+    new.run(Pull(Script::LOADING));
+    assert_eq!(new.fake.output_devices, [Some("USB-DAC".into())]);
+    // Preserved across Loading -> Ready without re-emitting.
+    new.run(Pull(Script::READY));
+    assert_eq!(new.fake.output_devices, [Some("USB-DAC".into())]);
+    // Re-setting the same UID emits nothing.
+    new.c.set_output_device(Some("USB-DAC"));
+    new.run(Apply);
+    assert_eq!(new.fake.output_devices, [Some("USB-DAC".into())]);
+    // Switching devices emits once with the new UID.
+    new.c.set_output_device(Some("BuiltInSpeakerDevice"));
+    new.run(Apply);
+    assert_eq!(new.fake.output_devices, [Some("USB-DAC".into()), Some("BuiltInSpeakerDevice".into())]);
+    // Resetting to None emits once with None; empty/None again emits nothing.
+    new.c.set_output_device(None);
+    new.run(Apply);
+    new.c.set_output_device(Some(""));
+    new.run(Apply);
+    assert_eq!(new.fake.output_devices, [Some("USB-DAC".into()), Some("BuiltInSpeakerDevice".into()), None]);
+}
+
+#[test]
+fn output_device_reapplies_after_player_drop_and_recreate() {
+    let now = rune_core::time::now();
+    let mut new = New::new(false, now);
+    new.run(Open);
+    new.c.set_output_device(Some("USB-DAC"));
+    new.run(Play);
+    new.run(Pull(Script::READY));
+    assert_eq!(new.fake.output_devices, [Some("USB-DAC".into())]);
+
+    // Parking drops the native player; resuming creates a fresh one and re-applies the UID.
+    new.run(Pause);
+    new.run(Park);
+    new.run(Play);
+    new.run(Pull(Script::READY));
+    assert_eq!(new.fake.output_devices, [Some("USB-DAC".into()), Some("USB-DAC".into())]);
+
+    // After resetting to system output, recreating a parked player does not re-emit None.
+    new.c.set_output_device(None);
+    new.run(Apply);
+    assert_eq!(new.fake.output_devices, [Some("USB-DAC".into()), Some("USB-DAC".into()), None]);
+    new.run(Pause);
+    new.run(Park);
+    new.run(Play);
+    new.run(Pull(Script::READY));
+    assert_eq!(new.fake.output_devices, [Some("USB-DAC".into()), Some("USB-DAC".into()), None]);
+}
+
+#[test]
+fn output_device_reapplies_when_generation_wraps_to_zero() {
+    let now = rune_core::time::now();
+    let mut c = Control { kind: Kind::Audio, muted: false, output_generation: u64::MAX, ..Control::default() };
+    c.set_output_device(Some("USB-DAC"));
+    assert_eq!(c.output_generation, 0);
+    step(&mut c, Event::PlayerMade { created: now });
+    let effects = step(&mut c, Event::Reconcile { now });
+    assert!(effects.into_iter().any(|e| e == Effect::SetOutputDevice));
 }

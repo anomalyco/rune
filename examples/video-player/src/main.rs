@@ -1,9 +1,11 @@
 //! Play a movie or audio file, or a URL. `cargo run -p video-player -- clip.mov` opens a video
 //! looping and muted; tap to pause or resume. An audio file (mp3, m4a, wav) shows a progress
 //! bar and waits for a tap, since audio is audible. With no argument it plays the four-frame
-//! test clip. `-- --snap out.png --at 0.6` renders the frame at 0.6 s headless.
+//! test clip. `-- --snap out.png --at 0.6` renders the frame at 0.6 s headless. Pass
+//! `--output-device <uid>` to route audio to a specific device UID on macOS.
 //!
-//! Keys: space plays or pauses, m mutes, v turns the volume to 0 and back, l loops, left and right seek 5 s, 0 goes to the start,
+//! Keys: space plays or pauses, m mutes, v turns the volume to 0 and back, d toggles the chosen
+//! output device and system default, l loops, left and right seek 5 s, 0 goes to the start,
 //! h hides the clip (it stops drawing, as when scrolled away) and shows it again.
 
 #![forbid(unsafe_code)]
@@ -18,21 +20,45 @@ const AUDIO: &[&str] = &["mp3", "m4a", "aac", "wav", "aif", "aiff", "flac", "ogg
 struct Viewer {
     clip: Player,
     hidden: bool,
+    preferred_output: Option<String>,
+}
+
+fn parse_args(args: &[String]) -> (Option<String>, Option<String>) {
+    let (mut source, mut output_device) = (None, None);
+    let mut i = 0;
+    while i < args.len() {
+        if let Some(uid) = args[i].strip_prefix("--output-device=") {
+            output_device = (!uid.is_empty()).then(|| uid.to_string());
+        } else if args[i] == "--output-device" {
+            if let Some(uid) = args.get(i + 1) {
+                output_device = (!uid.is_empty()).then(|| uid.clone());
+                i += 1;
+            }
+        } else if source.is_none() {
+            source = Some(args[i].clone());
+        }
+        i += 1;
+    }
+    (source, output_device)
 }
 
 fn state() -> Viewer {
-    let source = rune::extra_args()
-        .first()
-        .cloned()
+    let (source, preferred_output) = parse_args(rune::extra_args());
+    let source = source
         .unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/../../crates/rune/tests/fixtures/rgbw.mp4").into());
     let ext = source.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()).unwrap_or_default();
-    if AUDIO.contains(&ext.as_str()) {
-        return Viewer { clip: Player::audio(source), hidden: false };
+    let clip = if AUDIO.contains(&ext.as_str()) {
+        Player::audio(source)
+    } else {
+        let clip = Player::new(source.into());
+        clip.set_looping(true);
+        clip.play();
+        clip
+    };
+    if let Some(uid) = preferred_output.as_deref() {
+        clip.set_output_device(Some(uid));
     }
-    let clip = Player::new(source.into());
-    clip.set_looping(true);
-    clip.play();
-    Viewer { clip, hidden: false }
+    Viewer { clip, hidden: false, preferred_output }
 }
 
 /// The clip calls the waker when it loads, ends or fails, so the label follows.
@@ -58,6 +84,10 @@ fn on_key(s: &mut Viewer, event: &KeyEvent, _: &mut Tx) -> bool {
         Key::Text(t) if t == " " => toggle(s),
         Key::Text(t) if t == "m" => clip.set_muted(!clip.muted()),
         Key::Text(t) if t == "v" => clip.set_volume(if clip.volume() > 0.0 { 0.0 } else { 1.0 }),
+        Key::Text(t) if t == "d" => {
+            let next = if clip.output_device().is_some() { None } else { s.preferred_output.as_deref() };
+            clip.set_output_device(next);
+        }
         Key::Text(t) if t == "l" => clip.set_looping(!clip.looping()),
         Key::Text(t) if t == "0" => clip.seek(0.0),
         Key::Text(t) if t == "h" => s.hidden = !s.hidden,
@@ -92,7 +122,21 @@ fn view(s: &Viewer, _: &mut Cx<Viewer>) -> El {
         let frame = el().key("video").w(WIDTH).h(WIDTH * h as f32 / w as f32).radius(10.0);
         if s.hidden { frame } else { frame.video(&s.clip, SurfaceFit::Fit) }
     };
-    col().w_full().h_full().center().gap(12.0).fill(t.bg).on_press(toggle).child(media).child(text(label).font(type_::BODY).color(t.text_secondary))
+    let mut root = col()
+        .w_full()
+        .h_full()
+        .center()
+        .gap(12.0)
+        .fill(t.bg)
+        .on_press(toggle)
+        .child(media)
+        .child(text(label).font(type_::BODY).color(t.text_secondary));
+    if let Some(uid) = s.clip.output_device() {
+        root = root.child(text(format!("Output: {uid}")).font(type_::LABEL).color(t.text_secondary));
+    } else if s.preferred_output.is_some() {
+        root = root.child(text("Output: system default").font(type_::LABEL).color(t.text_secondary));
+    }
+    root
 }
 
 fn main() {
