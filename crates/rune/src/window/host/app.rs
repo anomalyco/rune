@@ -48,6 +48,7 @@ pub(crate) trait WindowApp {
     fn compositor_animating(&self) -> bool;
     fn compositor_draws_own(&self) -> bool;
     fn render_compositor(&mut self, args: CompositorFrame<'_>) -> bool;
+    fn release_compositor_gpu(&mut self);
     fn inspect_frame(&mut self);
     fn text_idle_owed(&self) -> bool;
     fn text_idle_turn(&mut self) -> bool;
@@ -362,6 +363,12 @@ impl<S: 'static> WindowApp for TypedWindowApp<S> {
         };
         c.render(&mut f);
         c.animating()
+    }
+
+    fn release_compositor_gpu(&mut self) {
+        if let Some(c) = self.comp.as_mut() {
+            c.release_gpu();
+        }
     }
 
     fn inspect_frame(&mut self) {

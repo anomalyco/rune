@@ -368,6 +368,7 @@ impl Host {
         w.native.slot.reset();
         w.surface = None;
         self.gpu = None;
+        self.app.release_compositor_gpu();
         w.request_redraw();
     }
 

@@ -209,6 +209,7 @@ impl OverlayCore {
         if self.gpu.as_ref().is_some_and(|gpu| gpu.is_lost()) {
             self.gpu = None;
             self.renderer = None;
+            app.release_compositor_gpu();
         }
         // The overlay's own device was already the best for its surface, translucent or not; a
         // device shared from another overlay must composite this one's translucent pixels.
@@ -252,6 +253,7 @@ impl OverlayCore {
                         if err.kind == crate::gpu::fallback::Failure::DeviceLost {
                             self.gpu = None;
                             self.renderer = None;
+                            app.release_compositor_gpu();
                             *self.gpu_pool.borrow_mut() = Weak::default();
                         }
                         self.fail(err.message);
@@ -263,6 +265,7 @@ impl OverlayCore {
                     drop((surface, gpu));
                     self.gpu = None;
                     self.renderer = None;
+                    app.release_compositor_gpu();
                     *self.gpu_pool.borrow_mut() = Weak::default();
                     let (gpu, surface, configured) = match Gpu::for_surface_setup_excluding(
                         instance, excluded, first_info, err.message, features, true, make_surface, setup_surface,
@@ -281,6 +284,11 @@ impl OverlayCore {
                 }
             },
             None => {
+                if self.gpu.is_some() {
+                    self.gpu = None;
+                    self.renderer = None;
+                    app.release_compositor_gpu();
+                }
                 let made = Gpu::for_surface_setup(features, true, make_surface, setup_surface);
                 let (gpu, surface, renderer, configured) = match made {
                     Ok(made) => made,

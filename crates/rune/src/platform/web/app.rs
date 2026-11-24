@@ -89,6 +89,7 @@ pub(super) trait WebApp {
     fn compositor_animating(&self) -> bool;
     fn compositor_draws_own(&self) -> bool;
     fn render_compositor(&mut self, args: CompositorFrame<'_>) -> bool;
+    fn release_compositor_gpu(&mut self);
     fn paste_event(&mut self, clipboard: &crate::clipboard::Client, content: crate::ClipboardContent, image: Option<&JsValue>);
 }
 
@@ -301,6 +302,12 @@ impl<S: 'static> WebApp for TypedWebApp<S> {
         };
         c.render(&mut f);
         c.animating()
+    }
+
+    fn release_compositor_gpu(&mut self) {
+        if let Some(c) = self.compositor.as_mut() {
+            c.release_gpu();
+        }
     }
 
     fn paste_event(&mut self, clipboard: &crate::clipboard::Client, content: crate::ClipboardContent, image: Option<&JsValue>) {

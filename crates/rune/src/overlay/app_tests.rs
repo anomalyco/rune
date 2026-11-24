@@ -116,3 +116,25 @@ fn overlay_font_smoothing_builder_overrides_app() {
     assert_eq!(app.overlays[0].font_smoothing(), default);
     assert_eq!(app.overlays[1].font_smoothing(), FontSmoothing::Off);
 }
+
+#[test]
+fn overlay_app_forwards_release_compositor_gpu() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingComp(Arc<AtomicUsize>);
+    impl Compositor<()> for CountingComp {
+        fn render(&mut self, f: &mut Frame<'_, ()>) { f.draw_ui(); }
+        fn release_gpu(&mut self) { self.0.fetch_add(1, Ordering::Relaxed); }
+    }
+
+    fn view(_: &(), _: &mut Cx<()>) -> El { col().size(120.0, 80.0) }
+    let app = AppSpec::new("overlay-release-gpu", (120.0, 80.0), || (), view);
+    let releases = Arc::new(AtomicUsize::new(0));
+    let spec = OverlaySpec::new("overlay-release-gpu", app.size, view)
+        .options(Default::default())
+        .compositor(CountingComp(releases.clone()));
+    let (mut host, _) = OverlayHost::new(spec, (), &app, FontSmoothing::default());
+    host.app.release_compositor_gpu();
+    assert_eq!(releases.load(Ordering::Relaxed), 1);
+}

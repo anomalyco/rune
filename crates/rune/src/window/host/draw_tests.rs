@@ -603,3 +603,44 @@ fn wheel_scroll_settles_into_coasting_with_zero_idle_draws_and_drops_stale_redra
     assert_eq!(draws, 2, "coasting and expiry must draw nothing");
     assert_eq!(presents, 2, "coasting and expiry must present nothing");
 }
+
+#[test]
+fn window_app_forwards_release_compositor_gpu() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use crate::compose::{Compositor, Frame};
+    use crate::window::host::app::{TypedWindowApp, WindowApp};
+
+    struct DefaultComp;
+    impl Compositor<()> for DefaultComp {
+        fn render(&mut self, f: &mut Frame<'_, ()>) { f.draw_ui(); }
+    }
+
+    struct CountingComp(Arc<AtomicUsize>);
+    impl Compositor<()> for CountingComp {
+        fn render(&mut self, f: &mut Frame<'_, ()>) { f.draw_ui(); }
+        fn release_gpu(&mut self) { self.0.fetch_add(1, Ordering::Relaxed); }
+    }
+
+    fn view(_: &(), _: &mut crate::Cx<()>) -> crate::El { crate::col().size(100.0, 100.0) }
+
+    // Default body compiles and is a no-op.
+    let mut default_comp = DefaultComp;
+    default_comp.release_gpu();
+
+    let releases = Arc::new(AtomicUsize::new(0));
+    let mut app: Box<dyn WindowApp> = Box::new(TypedWindowApp {
+        rt: crate::runtime::Runtime::new((), view, (100.0, 100.0), crate::Env::default()),
+        shared: Arc::new(crate::app::Shared::default()),
+        comp: Some(Box::new(CountingComp(releases.clone()))),
+        on_frame_drawn: None,
+        on_close: None,
+        on_rest: None,
+        on_quit: None,
+        on_reopen: None,
+        turn_scope: None,
+        keep_layout: None,
+        kept_layout: None,
+    });
+    app.release_compositor_gpu();
+    assert_eq!(releases.load(Ordering::Relaxed), 1);
+}

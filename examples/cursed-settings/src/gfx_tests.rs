@@ -78,3 +78,35 @@ fn cursed_gfx_rebuilds_resources_and_hdr_format_when_device_key_changes() {
     assert!(errors.is_empty(), "uncaptured GPU errors: {errors:?}");
     assert!(!gpu2.is_lost());
 }
+
+#[test]
+fn cursed_gfx_release_gpu_drops_resources_and_rebuilds_cleanly() {
+    let size = (320, 200);
+    let mut cursed = Cursed::new();
+    cursed.page = Page::Appearance;
+    cursed.p.appearance = 1;
+    let mut rt = Runtime::new(cursed, ui::view, (size.0 as f32, size.1 as f32), Env::default());
+    rt.track_marks = true;
+
+    let mut gfx = Gfx::default();
+    let gpu1 = Gpu::headless();
+    let mut ui1 = Renderer::new(&gpu1.device, OFFSCREEN_FORMAT);
+    ui1.attach_text(&mut rt.text.atlas);
+    let off1 = Offscreen::new(&gpu1.device, size.0, size.1);
+    draw_on(&mut gfx, &mut rt, &gpu1, &mut ui1, &off1, 0.0);
+    assert!(gfx.res.is_some());
+
+    drop((off1, ui1, gpu1));
+    gfx.release_gpu();
+    assert!(gfx.res.is_none(), "release_gpu must drop cursed-settings Gfx::res");
+
+    let gpu2 = Gpu::headless();
+    let mut ui2 = Renderer::new(&gpu2.device, OFFSCREEN_FORMAT);
+    rt.text.atlas.invalidate();
+    rt.images.invalidate();
+    ui2.attach_text(&mut rt.text.atlas);
+    let off2 = Offscreen::new(&gpu2.device, size.0, size.1);
+    draw_on(&mut gfx, &mut rt, &gpu2, &mut ui2, &off2, 1.0 / 60.0);
+    assert_eq!(gfx.res.as_ref().unwrap().device_key, ui2.device_key());
+    assert!(!gpu2.is_lost());
+}

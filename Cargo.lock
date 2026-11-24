@@ -2176,11 +2176,13 @@ name = "lab"
 version = "0.0.1"
 dependencies = [
  "bytemuck",
+ "pollster",
  "rune",
  "rune-fx",
  "rune-light",
  "rune-motion",
  "wgpu",
+ "windows",
 ]
 
 [[package]]

@@ -148,6 +148,10 @@ impl Compositor<State> for Gfx {
         true
     }
 
+    fn release_gpu(&mut self) {
+        self.fx = None;
+    }
+
     fn render(&mut self, f: &mut Frame<'_, State>) {
         let (device, queue, size) = (f.device, f.queue, f.size);
         let t = f.rt.t as f32;

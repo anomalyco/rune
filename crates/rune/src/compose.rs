@@ -42,11 +42,22 @@ pub trait Compositor<S: 'static>: 'static {
 
     /// Draws the frame into `f.target`. Runs after `Runtime::frame` built the instances, in the
     /// window and headless alike. Nothing has been recorded yet; `El::pixels` images are uploaded.
-    /// `f.device` can change between frames (an overlay shown again on another GPU): keep
-    /// resources made on it with `f.device_key()`, and make them again when it changes. Never
-    /// compare `wgpu::Device`s for this: wgpu compares them by id, and every Rune GPU has its
-    /// own instance, whose first device has the same id as the last one's (hex#982).
+    /// `f.device` can change between frames (an overlay shown again on another GPU, or a lost
+    /// device recreated after [`Compositor::release_gpu`]): keep resources made on it with
+    /// `f.device_key()`, and make them again when it changes. Never compare `wgpu::Device`s for
+    /// this: wgpu compares them by id, and every Rune GPU has its own instance, whose first device
+    /// has the same id as the last one's (hex#982).
     fn render(&mut self, f: &mut Frame<'_, S>);
+
+    /// Drops GPU resources owned by the compositor (textures, buffers, pipelines, bind groups,
+    /// effect/light renderers) right after Rune drops its `wgpu::Device` and before recreating a
+    /// replacement device.
+    ///
+    /// On Windows D3D12, a removed `ID3D12Device` stays the adapter's sole process-wide device
+    /// while any resource made on it remains alive, causing `D3D12CreateDevice` on that adapter
+    /// to fail until those resources are dropped. The default does nothing so existing compositors
+    /// keep building without changes.
+    fn release_gpu(&mut self) {}
 
     /// True while something the compositor draws moves on its own: the window keeps its display
     /// link running. False lets it go idle (no frames at rest) and rest: a due `wake_after`
