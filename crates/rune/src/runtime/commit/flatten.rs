@@ -241,6 +241,7 @@ fn prepare_text(
         ^ ((t.max_lines as u64) << 2)
         ^ (u64::from(input.is_some_and(|i| i.edit.is_revealed()) || t.cold.secure_revealed) << 3)
         ^ (u64::from(t.wrap_anywhere) << 4) ^ (u64::from(t.greedy) << 5) ^ (u64::from(t.by_line) << 6)
+        ^ ((t.elide as u64) << 7)
         ^ t.cold.advance_in.as_ref().map_or(0, |(run, at)| run.hash.rotate_left(3) ^ (*at as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)));
     // Secure leaves remeasure without retaining a content-derived dictionary oracle.
     let secure_measure = text.as_ref().is_some_and(|t| t.redacted);

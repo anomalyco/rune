@@ -321,6 +321,34 @@ impl El {
         }
         self
     }
+    /// Keep text unwrapped so lines break only at explicit newlines (`\n`), matching HTML's
+    /// `<textarea wrap="off">` and CSS's `white-space: pre`.
+    ///
+    /// On a multi-line [`text_input`], this clears wrapping without enabling [`El::single_line`]:
+    /// the field keeps newlines, Up/Down navigation and multi-line editing while measuring the
+    /// natural width of its longest line. Place it inside an [`El::scroll_x`] or [`El::scroll_xy`]
+    /// viewport so long lines scroll sideways and keep the caret in view.
+    ///
+    /// ```no_run
+    /// # use rune::{TextEdit, TextStyle, col, text_input};
+    /// let code = TextEdit::new("let long_line = 1;\nlet next = 2;");
+    /// let editor = col().size(320.0, 160.0).scroll_xy()
+    ///     .child(text_input(&code, TextStyle::new(13.0, 400.0).mono()).nowrap());
+    /// ```
+    #[inline]
+    pub fn nowrap(mut self) -> Self {
+        self.set_nowrap();
+        self
+    }
+    /// [`El::nowrap`] in place.
+    #[inline]
+    pub fn set_nowrap(&mut self) -> &mut Self {
+        if let Some(t) = &mut self.text {
+            t.wrap = false;
+            t.wrap_anywhere = false;
+        }
+        self
+    }
     /// Wrap text at the element's width, breaking inside a word only when the word alone would
     /// overflow the line (`overflow-wrap: anywhere`) while breaking normal words at spaces, and
     /// lowering the text's min-content width. Does not change flex shrinking; use
@@ -400,10 +428,12 @@ impl El {
         self.style.set_min_width(length(0.0));
     }
     /// Wrapped text that stops after `lines` lines, "…" ending the last when more would follow,
-    /// as CSS's `line-clamp`. The element measures at most `lines` lines tall. The cut falls
-    /// between graphemes and refits when the element resizes; spans and links keep their
-    /// looks up to it, and copying and the accessibility text keep the whole string. 0 shows
-    /// every line. A [`text_input`] ignores it; use [`auto_grow`] there.
+    /// as CSS's `line-clamp`. Combine with [`El::elide_middle`] or [`El::elide_head`] in either
+    /// order to keep the trailing text (for example a file extension) across multiple lines.
+    /// The element measures at most `lines` lines tall. The cut falls between graphemes and
+    /// refits when the element resizes; spans and links keep their looks across the visible parts,
+    /// and copying and the accessibility text keep the whole string. 0 shows every line. A
+    /// [`text_input`] ignores it; use [`auto_grow`] there.
     pub fn max_lines(mut self, lines: usize) -> Self {
         if self.cold.input.is_some() { return self; }
         if let Some(t) = &mut self.text {
@@ -411,6 +441,50 @@ impl El {
             t.max_lines = lines;
             t.truncate = false;
             t.truncate_fade = false;
+        }
+        self
+    }
+    /// Put the ellipsis in the middle ("…" replaces the middle, keeping both ends) without
+    /// changing wrapping or [`El::max_lines`], matching AppKit's `NSLineBreakByTruncatingMiddle`
+    /// with `maximumNumberOfLines` and Pango's `PANGO_ELLIPSIZE_MIDDLE`.
+    ///
+    /// Combine with [`El::max_lines`] in either order (`.max_lines(2).elide_middle()` or
+    /// `.elide_middle().max_lines(2)`). For single-line middle truncation, see
+    /// [`El::truncate_middle`]. A [`text_input`] ignores it.
+    ///
+    /// ```no_run
+    /// # use rune::text;
+    /// let label = text("Quarterly report final revised version two of the budget.xlsx")
+    ///     .w(120.0)
+    ///     .max_lines(2)
+    ///     .elide_middle();
+    /// ```
+    pub fn elide_middle(mut self) -> Self {
+        if self.cold.input.is_some() { return self; }
+        if let Some(t) = &mut self.text {
+            t.elide = Elide::Middle;
+        }
+        self
+    }
+    /// Put the ellipsis at the start ("…" replaces the head, keeping the end) without changing
+    /// wrapping or [`El::max_lines`], matching AppKit's `NSLineBreakByTruncatingHead` with
+    /// `maximumNumberOfLines` and Pango's `PANGO_ELLIPSIZE_START`.
+    ///
+    /// Combine with [`El::max_lines`] in either order (`.max_lines(2).elide_head()` or
+    /// `.elide_head().max_lines(2)`). For single-line head truncation, see [`El::truncate_head`].
+    /// A [`text_input`] ignores it.
+    ///
+    /// ```no_run
+    /// # use rune::text;
+    /// let path = text("~/Projects/rune/crates/rune-kit/src/components/appearance_panel.rs")
+    ///     .w(140.0)
+    ///     .max_lines(2)
+    ///     .elide_head();
+    /// ```
+    pub fn elide_head(mut self) -> Self {
+        if self.cold.input.is_some() { return self; }
+        if let Some(t) = &mut self.text {
+            t.elide = Elide::Head;
         }
         self
     }

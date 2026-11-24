@@ -401,3 +401,206 @@ fn on_input_key_removing_field_does_not_panic() {
     assert!(rt.state.renaming.is_none());
     assert!(!rt.has_focus());
 }
+
+fn mono_style() -> TextStyle { TextStyle::new(13.0, 400.0).lh(20.0).mono() }
+
+#[test]
+fn nowrap_multiline_text_input_keeps_lines_unwrapped_at_natural_width_and_edits() {
+    let long = "let unwrapped_identifier = calculate_something_very_wide_past_the_viewport_edge(alpha, beta, gamma);";
+    let mut edit = TextEdit::new(format!("{long}\nsecond line\nthird line"));
+    edit.focused = true;
+    edit.set_caret(0);
+
+    // Default text_input still wraps; nowrap() / set_nowrap() clear wrap without single_line; wrap() restores it.
+    let default_el = text_input(&edit, mono_style());
+    assert!(default_el.wraps() && !default_el.cold.input.as_ref().unwrap().single_line);
+    let mut in_place = text_input(&edit, mono_style());
+    in_place.set_nowrap();
+    assert!(!in_place.wraps() && !in_place.cold.input.as_ref().unwrap().single_line);
+    assert!(in_place.wrap().wraps());
+
+    let mut rt = Runtime::new(edit, |e: &TextEdit, _: &mut Cx<TextEdit>| {
+        col().w_full().h_full().child(
+            col().key("viewport").size(200.0, 100.0).scroll_xy().child(
+                text_input(e, mono_style())
+                    .key("field")
+                    .label("Code editor")
+                    .nowrap()
+                    .on_edit(|s: &mut TextEdit| s)
+                    .on_submit(|s: &mut TextEdit, _| { let _ = s.insert("\n"); }),
+            ),
+        )
+    }, (240.0, 140.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+
+    let field_node = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("field")).unwrap();
+    assert!(!field_node.input.as_ref().unwrap().single_line, "nowrap keeps multiline mode");
+    assert!(!field_node.text.as_ref().unwrap().wrap, "nowrap turns off wrapping");
+    let layout = field_node.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap();
+    assert_eq!(layout.len(), 3, "three logical lines stay unwrapped");
+    let field_el = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("field")).unwrap();
+    assert!(field_el.rect[2] > 400.0, "natural width exceeds 200 pt viewport: {}", field_el.rect[2]);
+    assert!((field_el.rect[3] - 60.0).abs() < 1.0, "three 20 pt lines tall: {}", field_el.rect[3]);
+
+    // Accessibility exposes MultilineTextInput (not single-line TextInput).
+    let tree = rt.accessibility_tree();
+    let ak = &tree.nodes.iter().find(|(_, n)| n.author_id() == Some("field")).expect("a11y field").1;
+    assert_eq!(ak.role(), accesskit::Role::MultilineTextInput);
+
+    // Down moves to line 2, Enter inserts a newline via on_submit, Up returns to line 2.
+    rt.key(KeyEvent { key: Key::Down, mods: Mods::default() });
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.focus, long.len() + 1, "Down lands at start of line 2");
+    rt.key(KeyEvent { key: Key::Enter, mods: Mods::default() });
+    rt.frame(2.0 / 60.0);
+    assert_eq!(rt.state.text.matches('\n').count(), 3, "Return inserts a newline");
+    rt.key(KeyEvent { key: Key::Up, mods: Mods::default() });
+    rt.frame(3.0 / 60.0);
+    assert_eq!(rt.state.focus, long.len() + 1, "Up moves back to the previous line");
+}
+
+#[test]
+fn nowrap_multiline_text_input_scrolls_horizontally_and_vertically_with_follow_caret() {
+    let lines: Vec<String> = (0..10)
+        .map(|i| format!("line_{i:02}_abcdefghijklmnopqrstuvwxyz_0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ_end"))
+        .collect();
+    let mut edit = TextEdit::new(lines.join("\n"));
+    edit.focused = true;
+    edit.set_caret(0);
+
+    let mut rt = Runtime::new(edit, |e: &TextEdit, _: &mut Cx<TextEdit>| {
+        col().w_full().h_full().child(
+            col().key("viewport").size(200.0, 80.0).scroll_xy().scroll_margin(8.0).child(
+                text_input(e, mono_style()).key("field").label("Code").nowrap().px(8.0).on_edit(|s: &mut TextEdit| s),
+            ),
+        )
+    }, (240.0, 120.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+
+    let scroll_state = |rt: &Runtime<TextEdit>| {
+        let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("viewport")).unwrap().id;
+        let st = &rt.scroll.scrolls[&id];
+        (st.x.offset, st.x.max, st.offset, st.max)
+    };
+    let (sx0, sx_max, sy0, sy_max) = scroll_state(&rt);
+    assert_eq!((sx0, sy0), (0.0, 0.0));
+    assert!(sx_max > 250.0 && sy_max > 100.0, "both axes scroll: max=({sx_max}, {sy_max})");
+
+    // Move caret to end of line 0: horizontal follow_caret scrolls right to keep caret visible.
+    rt.key(KeyEvent { key: Key::End, mods: Mods::default() });
+    rt.frame(1.0 / 60.0);
+    let (sx1, _, _, _) = scroll_state(&rt);
+    assert!(sx1 > 200.0, "End scrolls viewport horizontally: {sx1}");
+    let els = rt.elements();
+    let vp = els.iter().find(|e| e.key.as_deref() == Some("viewport")).unwrap().rect;
+    let caret = els.iter().find(|e| e.key.as_deref() == Some("field")).unwrap().caret.unwrap();
+    assert!(caret[0] >= vp[0] - 1.0 && caret[0] + caret[2] <= vp[0] + vp[2] + 2.0, "caret {caret:?} inside viewport {vp:?}");
+
+    // Typing past the end advances horizontal scroll further.
+    for ch in ["_", "m", "o", "r", "e", "_", "t", "e", "x", "t"] {
+        rt.key(KeyEvent { key: Key::Text(ch.into()), mods: Mods::default() });
+        rt.frame(1.0 / 60.0);
+    }
+    let (sx2, _, _, _) = scroll_state(&rt);
+    assert!(sx2 > sx1, "typing at end extends horizontal scroll: {sx1} -> {sx2}");
+    let els = rt.elements();
+    let caret = els.iter().find(|e| e.key.as_deref() == Some("field")).unwrap().caret.unwrap();
+    assert!(caret[0] >= vp[0] - 1.0 && caret[0] + caret[2] <= vp[0] + vp[2] + 2.0, "caret {caret:?} inside viewport {vp:?}");
+
+    // Home scrolls back to x = 0.
+    rt.key(KeyEvent { key: Key::Home, mods: Mods::default() });
+    rt.frame(1.0 / 60.0);
+    assert_eq!(scroll_state(&rt).0, 0.0, "Home scrolls back to left edge");
+
+    // Stepping Down scrolls vertically too.
+    for _ in 0..7 {
+        rt.key(KeyEvent { key: Key::Down, mods: Mods::default() });
+        rt.frame(1.0 / 60.0);
+    }
+    assert!(scroll_state(&rt).2 > 40.0, "Down arrows scroll vertically: {}", scroll_state(&rt).2);
+
+    // Settled idle frame does not recommit or ask for frames.
+    let commits = rt.stats.commits;
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.stats.commits, commits);
+    assert!(!rt.animating);
+}
+
+#[test]
+fn nowrap_multiline_text_input_hit_tests_clicks_past_initial_viewport_width() {
+    let line0 = "0123456789".repeat(8);
+    let line1 = "abcdefghij".repeat(8);
+    let text = format!("{line0}\n{line1}");
+    let mut rt = Runtime::new(TextEdit::new(&text), |e: &TextEdit, _: &mut Cx<TextEdit>| {
+        col().w_full().h_full().child(
+            col().key("viewport").size(200.0, 80.0).scroll_xy().child(
+                text_input(e, mono_style()).key("field").nowrap().on_edit(|s: &mut TextEdit| s),
+            ),
+        )
+    }, (240.0, 120.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+
+    // Scroll right by 300 pt so bytes past the initial 200 pt viewport sit inside the viewport.
+    rt.update(|_, tx| tx.scroll_to_instant("viewport", 300.0, 0.0));
+    rt.frame(1.0 / 60.0);
+
+    // Click inside the viewport on line 1 (y = 30 pt -> second 20 pt line) at x = 120 pt (420 pt into line 1).
+    rt.pointer_move(120.0, 30.0);
+    rt.pointer_down(120.0, 30.0);
+    rt.pointer_up(120.0, 30.0);
+    rt.frame(2.0 / 60.0);
+
+    assert!(rt.state.focused);
+    let line1_start = line0.len() + 1;
+    assert!(rt.state.focus > line1_start + 40 && rt.state.focus <= text.len(),
+        "click at scrolled x=120 (content x=420) lands deep in line 1, got byte {} (line1 starts at {})",
+        rt.state.focus, line1_start);
+}
+
+#[test]
+fn nowrap_multiline_text_input_edges_empty_disabled_inert_and_rtl() {
+    fn sans_style() -> TextStyle { TextStyle::new(13.0, 400.0).lh(20.0) }
+    struct State {
+        empty: TextEdit,
+        disabled: TextEdit,
+        inert: TextEdit,
+        rtl: TextEdit,
+    }
+    let init = State {
+        empty: TextEdit::new(""),
+        disabled: TextEdit::new("locked line"),
+        inert: TextEdit::new("inert line"),
+        rtl: TextEdit::new("שלום עולם שורה ראשונה ארוכה מאוד שלא אמורה להישבר בכלל\nשורה שנייה"),
+    };
+    let mut rt = Runtime::new(init, |s: &State, _: &mut Cx<State>| {
+        col().w_full().h_full().gap(4.0)
+            .child(col().key("vp-empty").size(180.0, 40.0).scroll_xy()
+                .child(text_input(&s.empty, sans_style()).key("empty").label("Empty").nowrap().on_edit(|s: &mut State| &mut s.empty)))
+            .child(col().key("vp-dis").size(180.0, 40.0).scroll_xy()
+                .child(text_input(&s.disabled, sans_style()).key("disabled").label("Disabled").nowrap().disabled(true)))
+            .child(col().key("vp-inert").size(180.0, 40.0).scroll_xy().inert()
+                .child(text_input(&s.inert, sans_style()).key("inert").label("Inert").nowrap().on_edit(|s: &mut State| &mut s.inert)))
+            .child(col().key("vp-rtl").dir(crate::Direction::Rtl).size(180.0, 60.0).scroll_xy()
+                .child(text_input(&s.rtl, sans_style()).key("rtl").label("RTL").nowrap().on_edit(|s: &mut State| &mut s.rtl)))
+    }, (220.0, 220.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+
+    let els = rt.elements();
+    let empty_el = els.iter().find(|e| e.key.as_deref() == Some("empty")).unwrap();
+    assert!((empty_el.rect[2] - 180.0).abs() < 1.0, "empty field fills viewport min-width: {:?}", empty_el.rect);
+    let rtl_node = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("rtl")).unwrap();
+    assert_eq!(rtl_node.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap().len(), 2, "RTL nowrap keeps 2 logical lines");
+
+    // Clicking disabled or inert nowrap fields does not focus or edit them.
+    for key in ["disabled", "inert"] {
+        let r = els.iter().find(|e| e.key.as_deref() == Some(key)).unwrap().rect;
+        rt.pointer_move(r[0] + 10.0, r[1] + 10.0);
+        rt.pointer_down(r[0] + 10.0, r[1] + 10.0);
+        rt.pointer_up(r[0] + 10.0, r[1] + 10.0);
+        rt.frame(0.1);
+        rt.key(KeyEvent { key: Key::Text("x".into()), mods: Mods::default() });
+        rt.frame(0.2);
+    }
+    assert!(!rt.state.disabled.focused && rt.state.disabled.text == "locked line");
+    assert!(!rt.state.inert.focused && rt.state.inert.text == "inert line");
+}

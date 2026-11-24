@@ -44,6 +44,10 @@ macro_rules! stories {
                 s.edits[7] = TextEdit::new("/");
                 s.edits[7].focused = true;
             }
+            if $id == "rune-text--nowrap-input" {
+                s.nowrap_code = TextEdit::new(NOWRAP_CODE);
+                s.nowrap_code.focused = true;
+            }
             if $id == "rune-split-view--flat-main" {
                 s.split_sidebar.set_open(true);
                 s.split_inspector.set_open(true);
@@ -249,6 +253,8 @@ stories! {
     "rune-markdown--styled" => markdown_styled,
     "rune-text--selectable-help" => text_selectable_help,
     "rune-text--truncate-middle" => text_truncate_middle,
+    "rune-text--max-lines-elide" => text_max_lines_elide,
+    "rune-text--nowrap-input" => text_nowrap_input,
     "rune-dialog--fit" => dialog_fit,
     "rune-dialog--close-disabled" => dialog_close_disabled,
     "rune-popup-list--composer" => popup_list_composer,
@@ -472,6 +478,78 @@ fn text_truncate_middle(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
         .child(path(160.0, El::truncate_middle, "Middle"))
         .child(path(240.0, El::truncate, "End"))
         .child(path(240.0, El::truncate_head, "Head"))
+}
+
+const LONG_FILENAME: &str = "Quarterly report final revised version two of the budget.xlsx";
+
+/// Two-line filename cards comparing `max_lines(2).elide_middle()`, `max_lines(2).elide_head()`,
+/// and default end elision: middle elision keeps both the opening words and the `.xlsx` suffix.
+fn text_max_lines_elide(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let c = &k.c;
+    let card = |title: &str, label: &str, w: f32, build: fn(El) -> El| {
+        col()
+            .w(w)
+            .padding(10.0)
+            .gap(6.0)
+            .radius(k.radius.md)
+            .fill(c.surface_base)
+            .border(1.0, c.border_weak)
+            .child(text(title).font(k.ty.caption()).color(c.text_weak))
+            .child(
+                build(text(label).font(k.ty.ui).color(c.text_base))
+                    .selectable(true)
+                    .selection_color(k.selection()),
+            )
+    };
+    row()
+        .gap(12.0)
+        .flex_wrap()
+        .child(card("2 lines · elide_middle", LONG_FILENAME, 160.0, |e| e.max_lines(2).elide_middle()))
+        .child(card("2 lines · elide_head", LONG_PATH, 180.0, |e| e.wrap_anywhere().max_lines(2).elide_head()))
+        .child(card("2 lines · default (end)", LONG_FILENAME, 160.0, |e| e.max_lines(2)))
+}
+
+pub(crate) const NOWRAP_CODE: &str = concat!(
+    "pub fn render_file_entry(name: &str, max_width: f32, elide_middle: bool) -> El {\n",
+    "    let label = text(name).w(max_width).max_lines(2);\n",
+    "    if elide_middle { label.elide_middle() } else { label }\n",
+    "}\n",
+    "// Long unwrapped line that extends past the viewport width so scroll_xy scrolls sideways under the caret.\n",
+    "fn main() { println!(\"hello from an unwrapped multiline text_input\"); }",
+);
+
+/// An unwrapped multi-line code `text_input` (`El::nowrap`) inside a `scroll_xy` viewport:
+/// long lines keep their natural width and scroll sideways as the caret moves.
+fn text_nowrap_input(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let c = &k.c;
+    let border = if s.nowrap_code.focused { c.border_strong } else { c.border_weak };
+    col()
+        .gap(6.0)
+        .child(caption(k, "Unwrapped multi-line text_input (.nowrap() inside .scroll_xy())"))
+        .child(
+            col()
+                .key("nowrap-viewport")
+                .w(340.0)
+                .h(140.0)
+                .radius(k.radius.md)
+                .fill(c.surface_base)
+                .border(1.0, border)
+                .scroll_xy()
+                .child(
+                    rune::text_input(&s.nowrap_code, k.ty.mono)
+                        .key("nowrap-code")
+                        .label("Code editor")
+                        .nowrap()
+                        .padding(10.0)
+                        .color(c.text_base)
+                        .caret(c.text_base, k.selection())
+                        .on_edit(|s: &mut G| &mut s.nowrap_code)
+                        .on_submit(|s: &mut G, _| {
+                            let _ = s.nowrap_code.insert("\n");
+                        }),
+                )
+                .scroll_bar_styled(ScrollBarStyle::from_kit(k)),
+        )
 }
 
 fn scroll_bar_basic(_: &G, k: &Kit, _: &mut Vec<El>) -> El {

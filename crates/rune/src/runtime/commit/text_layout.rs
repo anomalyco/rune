@@ -432,56 +432,25 @@ pub(in crate::runtime) fn last_line_width(l: &Layout<Ink>, lines: usize) -> f32 
     l.lines().take(lines).last().map_or(0.0, |line| line.metrics().advance - line.metrics().hanging_advance)
 }
 
-/// `spec`'s content wrapped at `max_w` device px and cut after `spec.max_lines` lines, "…"
-/// ending the last with as many whole graphemes before it as fit within `max_w`, a word that
-/// wraps or overflows included. None when `full` (the uncut layout) already fits.
-/// Whitespace and line breaks before the ellipsis are dropped.
-pub(in crate::runtime) fn clamped(text: &mut TextSystem, spec: &TextSpec, scale: f32, max_w: f32, full: &Layout<Ink>) -> Option<(Rc<Layout<Ink>>, Elision)> {
-    use unicode_segmentation::UnicodeSegmentation;
-    let lines = spec.max_lines;
-    if lines == 0 || full.len() <= lines && last_line_width(full, lines) <= max_w + 0.5 {
-        return None;
-    }
-    let align = line_alignment(spec);
-    let keys = spec_elide_keys(spec, scale, 1, lines, max_w, align);
-    if let Some((_, key)) = keys
-        && let Some(hit) = text.get_elision(key)
-    {
-        return Some((hit.layout, Elision { head: hit.head, tail: hit.tail }));
-    }
-    let content = spec.content.as_str();
-    // The cut falls in the last shown line or the next, whose first word may fill the last.
-    let start = full.lines().nth(lines.min(full.len()).max(1) - 1)?.text_range().start.min(content.len());
-    let end = full.lines().nth(lines).map_or(content.len(), |l| l.text_range().end.min(content.len()));
-    let bounds: Vec<usize> = content[start..end].grapheme_indices(true).map(|(i, _)| start + i).chain([end]).collect();
-    let blank = |g: usize| content[bounds[g]..bounds[g + 1]].chars().all(char::is_whitespace);
-    let cut = |mut k: usize| {
-        while k > 0 && blank(k - 1) { k -= 1; }
-        let head = if k == 0 { content[..start].trim_end().len() } else { bounds[k] };
-        Elision { head, tail: content.len() }
-    };
-    let mut str_buf = if spec.redacted { String::new() } else { String::with_capacity(end + Elision::ELLIPSIS.len()) };
-    let mut span_buf = Vec::new();
-    let input = spec.as_text_input(scale, false);
-    let mut make = |text: &mut TextSystem, e: Elision| {
-        e.spans_into(&spec.spans, &mut span_buf);
-        if spec.redacted {
-            let s = zeroize::Zeroizing::new([&content[..e.head], Elision::ELLIPSIS].concat());
-            text.layout_cut(&input, &s, &span_buf, scale, Some(max_w), align, false)
-        } else {
-            str_buf.clear();
-            str_buf.push_str(&content[..e.head]);
-            str_buf.push_str(Elision::ELLIPSIS);
-            if spec.cold.live.is_some() {
-                text.layout_cut_live(&input, &str_buf, &span_buf, scale, Some(max_w), align)
-            } else {
-                text.layout_cut(&input, &str_buf, &span_buf, scale, Some(max_w), align, true)
-            }
-        }
-    };
-    let fits = |l: &Layout<Ink>| l.len() <= lines && last_line_width(l, lines) <= max_w + 0.5;
-    let (mut lo, mut hi) = (0usize, bounds.len() - 1);
-    let mut best: Option<(usize, Rc<Layout<Ink>>, Elision)> = None;
+fn all_lines_fit(l: &Layout<Ink>, lines: usize, max_w: f32) -> bool {
+    l.len() <= lines
+        && l.lines().all(|line| line.metrics().advance - line.metrics().hanging_advance <= max_w + 0.5)
+}
+
+fn search_elision<C, M, F>(
+    text: &mut TextSystem,
+    mut lo: usize,
+    mut hi: usize,
+    mut best: Option<(usize, Rc<Layout<Ink>>, Elision)>,
+    cut: &C,
+    make: &mut M,
+    fits: &F,
+) -> (usize, Option<(usize, Rc<Layout<Ink>>, Elision)>)
+where
+    C: Fn(usize) -> Elision,
+    M: FnMut(&mut TextSystem, Elision) -> Rc<Layout<Ink>>,
+    F: Fn(&Layout<Ink>) -> bool,
+{
     while lo < hi {
         let mid = (lo + hi).div_ceil(2);
         let e = cut(mid);
@@ -493,11 +462,131 @@ pub(in crate::runtime) fn clamped(text: &mut TextSystem, spec: &TextSpec, scale:
             hi = mid - 1;
         }
     }
-    let (layout, e) = match best {
-        Some((k, l, e)) if k == lo => (l, e),
-        _ => {
-            let e = cut(lo);
-            (make(text, e), e)
+    (lo, best)
+}
+
+/// `spec`'s content wrapped at `max_w` device px and cut to at most `spec.max_lines` lines,
+/// placing "…" at the end, middle or start as `spec.elide` asks, with as many whole graphemes
+/// as fit within `max_w`, a word that wraps or overflows included. None when `full` (the uncut
+/// layout) already fits. Whitespace and line breaks beside the ellipsis are dropped.
+pub(in crate::runtime) fn clamped(text: &mut TextSystem, spec: &TextSpec, scale: f32, max_w: f32, full: &Layout<Ink>) -> Option<(Rc<Layout<Ink>>, Elision)> {
+    use unicode_segmentation::UnicodeSegmentation;
+    let lines = spec.max_lines;
+    let end_mode = spec.elide == crate::el::Elide::End;
+    if lines == 0
+        || if end_mode {
+            full.len() <= lines && last_line_width(full, lines) <= max_w + 0.5
+        } else {
+            all_lines_fit(full, lines, max_w)
+        }
+    {
+        return None;
+    }
+    let align = line_alignment(spec);
+    let keys = spec_elide_keys(spec, scale, 1 + spec.elide as u8, lines, max_w, align);
+    if let Some((_, key)) = keys
+        && let Some(hit) = text.get_elision(key)
+    {
+        return Some((hit.layout, Elision { head: hit.head, tail: hit.tail }));
+    }
+    let content = spec.content.as_str();
+    let mut str_buf = if spec.redacted { String::new() } else { String::with_capacity(content.len() + Elision::ELLIPSIS.len()) };
+    let mut span_buf = Vec::new();
+    let input = spec.as_text_input(scale, false);
+    let mut make = |text: &mut TextSystem, e: Elision| {
+        e.spans_into(&spec.spans, &mut span_buf);
+        if spec.redacted {
+            let s = zeroize::Zeroizing::new([&content[..e.head], Elision::ELLIPSIS, &content[e.tail..]].concat());
+            text.layout_cut(&input, &s, &span_buf, scale, Some(max_w), align, false)
+        } else {
+            str_buf.clear();
+            str_buf.push_str(&content[..e.head]);
+            str_buf.push_str(Elision::ELLIPSIS);
+            str_buf.push_str(&content[e.tail..]);
+            if spec.cold.live.is_some() {
+                text.layout_cut_live(&input, &str_buf, &span_buf, scale, Some(max_w), align)
+            } else {
+                text.layout_cut(&input, &str_buf, &span_buf, scale, Some(max_w), align, true)
+            }
+        }
+    };
+    let (layout, e) = if end_mode {
+        // The cut falls in the last shown line or the next, whose first word may fill the last.
+        let start = full.lines().nth(lines.min(full.len()).max(1) - 1)?.text_range().start.min(content.len());
+        let end = full.lines().nth(lines).map_or(content.len(), |l| l.text_range().end.min(content.len()));
+        let bounds: Vec<usize> = content[start..end].grapheme_indices(true).map(|(i, _)| start + i).chain([end]).collect();
+        let blank = |g: usize| content[bounds[g]..bounds[g + 1]].chars().all(char::is_whitespace);
+        let cut = |mut k: usize| {
+            while k > 0 && blank(k - 1) { k -= 1; }
+            let head = if k == 0 { content[..start].trim_end().len() } else { bounds[k] };
+            Elision { head, tail: content.len() }
+        };
+        let fits = |l: &Layout<Ink>| l.len() <= lines && last_line_width(l, lines) <= max_w + 0.5;
+        let (lo, best) = search_elision(text, 0, bounds.len() - 1, None, &cut, &mut make, &fits);
+        match best {
+            Some((k, l, e)) if k == lo => (l, e),
+            _ => {
+                let e = cut(lo);
+                (make(text, e), e)
+            }
+        }
+    } else {
+        let bounds: Vec<usize> = content.grapheme_indices(true).map(|(i, _)| i).chain([content.len()]).collect();
+        let n = bounds.len() - 1;
+        let blank = |g: usize| content[bounds[g]..bounds[g + 1]].chars().all(char::is_whitespace);
+        let cut = |k: usize| {
+            let (mut head, tail_keep) = match spec.elide {
+                crate::el::Elide::Middle => (k - k / 2, k / 2),
+                crate::el::Elide::Head => (0, k),
+                crate::el::Elide::End => unreachable!(),
+            };
+            let mut tail = n - tail_keep;
+            while head > 0 && blank(head - 1) { head -= 1; }
+            while tail < n && blank(tail) { tail += 1; }
+            Elision { head: bounds[head], tail: bounds[tail] }
+        };
+        let fits = |l: &Layout<Ink>| all_lines_fit(l, lines, max_w);
+        let hi_max = n.saturating_sub(1);
+        let (mut lo, mut best) = search_elision(text, 0, hi_max, None, &cut, &mut make, &fits);
+        // Joining head + "…" + tail before reaching a whitespace break can form one unbreakable
+        // chunk that overflows `max_w` even though a slightly larger `k` past that break wraps
+        // cleanly across `lines` lines. Probe just past the first/last whitespace when stuck
+        // below `lines` lines.
+        if lines > 1 && best.as_ref().is_none_or(|(_, l, _)| l.len() < lines) {
+            let mut probes = [0usize; 2];
+            let mut probe_len = 0usize;
+            if spec.elide == crate::el::Elide::Middle
+                && let Some(ws) = (1..n).find(|&g| blank(g) && !blank(g - 1))
+            {
+                let k_h = (ws + 2).saturating_mul(2).saturating_sub(1);
+                if k_h > lo && k_h <= hi_max {
+                    probes[probe_len] = k_h;
+                    probe_len += 1;
+                }
+            }
+            if let Some(ws) = (0..n.saturating_sub(1)).rev().find(|&g| blank(g) && !blank(g + 1)) {
+                let tail_need = (n - ws) + 1;
+                let k_t = if spec.elide == crate::el::Elide::Middle { tail_need.saturating_mul(2) } else { tail_need };
+                if k_t > lo && k_t <= hi_max {
+                    probes[probe_len] = k_t;
+                    probe_len += 1;
+                }
+            }
+            for &k_c in &probes[..probe_len] {
+                if k_c <= lo { continue; }
+                let e = cut(k_c);
+                let l = make(text, e);
+                if fits(&l) {
+                    (lo, best) = search_elision(text, k_c, hi_max, Some((k_c, l, e)), &cut, &mut make, &fits);
+                }
+            }
+        }
+        match best {
+            Some((k, l, e)) if k == lo => (l, e),
+            _ => {
+                let e = cut(lo);
+                (make(text, e), e)
+            }
         }
     };
     if let Some((shape, key)) = keys {

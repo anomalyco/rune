@@ -1388,10 +1388,13 @@ middle (AppKit's `NSLineBreakByTruncatingMiddle`), for paths and file names;
 selecting, copying and `--tree` keep the whole string.
 
 `.max_lines(n)` wraps and stops after `n` lines, "…" ending the last when more would
-follow (CSS `line-clamp`). The element measures at most `n` lines tall; the cut falls
-between graphemes (inside a word too wide for the box too), spans and links keep their
-looks up to it, and copying and the accessibility text keep the whole string. Text fields
-ignore it.
+follow (CSS `line-clamp`). Combine with `.elide_middle()` (AppKit's
+`NSLineBreakByTruncatingMiddle` with `maximumNumberOfLines`) or `.elide_head()` in
+either order (`.max_lines(2).elide_middle()` or `.elide_middle().max_lines(2)`) to keep
+the trailing text—such as a file extension—across multiple lines. The element measures at
+most `n` lines tall; the cut falls between graphemes (inside a word too wide for the box
+too), spans and links keep their looks across the visible parts, and copying and the
+accessibility text keep the whole string. Text fields ignore it.
 
 Native hosts populate `cx.system_reduced_motion()` at creation and refresh it on
 window focus changes. Rune uses it by default; `cx.reduced_motion(value)` overrides
@@ -1470,6 +1473,11 @@ Undo restores selection direction as well as text. History shares storage with v
 snapshots and retains at most 128 edits / 1 MiB of text (oversized edits drop history).
 Call `TextEdit::clear()` after submission to clear history while retaining focus;
 call `break_history_group()` when setting a selection from custom pointer handling.
+
+Multi-line `text_input` wraps by default. Call `.nowrap()` (or `.set_nowrap()` in place)
+for an unwrapped multi-line field (HTML `<textarea wrap="off">` / CSS `white-space: pre`)
+that breaks only at explicit newlines, measures the natural width of its longest line, and
+scrolls both ways with the caret inside `.scroll_x()` or `.scroll_xy()`.
 
 Use `TextEdit::new("").secure()` with `text_input(&edit, style).single_line()` for
 passwords, or mark the element `.single_line().secure()`; kit's `TextInput::secure()`

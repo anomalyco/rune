@@ -36,6 +36,7 @@ pub struct G {
     /// Context menu anchor from a story's `on_secondary_press`.
     pub menu_at: Option<rune::PointerPress>,
     pub edits: [TextEdit; 8],
+    pub nowrap_code: TextEdit,
     pub combo: rune_kit::ComboboxState,
     /// The sidebar reorder story's state.
     pub reorder: stories::sidebar::ReorderDemo,
@@ -96,6 +97,7 @@ fn init() -> G {
         open: None,
         menu_at: None,
         edits: Default::default(),
+        nowrap_code: TextEdit::new(stories::NOWRAP_CODE),
         combo: Default::default(),
         reorder: Default::default(),
         files: files(),
