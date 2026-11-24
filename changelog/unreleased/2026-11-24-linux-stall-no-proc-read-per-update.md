@@ -1,0 +1,1 @@
+- Linux debug builds: `perf_warn::Stall` no longer reads `/proc/thread-self/schedstat` on every `Runtime::update`, `poll`, and input handler, eliminating per-update `/proc` file I/O and heap allocations; callbacks past `STALL_MS` now check `runq::overloaded()` on the cold path, matching macOS.

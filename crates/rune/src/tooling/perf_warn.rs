@@ -209,7 +209,7 @@ pub(crate) fn memo_key_replaced(id: &str, existing: &str, site: &std::panic::Loc
 
 #[cfg(debug_assertions)]
 enum Stamp {
-    Real(Instant, crate::frame::profile::ThreadCpuMark, Option<f64>),
+    Real(Instant, crate::frame::profile::ThreadCpuMark),
     #[cfg(test)]
     Fake(FakeSample),
 }
@@ -234,7 +234,7 @@ impl Stall {
                 // Record the raw cycle/nanosecond mark rather than converted milliseconds: on
                 // Windows the cycle rate is unknown for the first 20 ms, and a mark taken then
                 // still converts at the end once the rate is known.
-                crate::frame::profile::thread_cpu_mark().map(|mark| Stamp::Real(crate::time::now(), mark, runq::wait_ms()))
+                crate::frame::profile::thread_cpu_mark().map(|mark| Stamp::Real(crate::time::now(), mark))
             } else {
                 None
             },
@@ -248,11 +248,11 @@ impl Stall {
     pub(crate) fn end(self, what: impl FnOnce() -> (String, String)) {
         #[cfg(debug_assertions)]
         match self.start {
-            Some(Stamp::Real(wall, mark, wait)) => {
+            Some(Stamp::Real(wall, mark)) => {
                 let wall = wall.elapsed().as_secs_f64() * 1000.0;
                 if wall > STALL_MS {
                     let mut what = Some(what);
-                    end_slow(wall, mark, wait, &mut || what.take().expect("stall description runs once")());
+                    end_slow(wall, mark, &mut || what.take().expect("stall description runs once")());
                 }
             }
             #[cfg(test)]
@@ -271,10 +271,10 @@ impl Stall {
         let _ = name;
         #[cfg(debug_assertions)]
         match self.start {
-            Some(Stamp::Real(wall, mark, wait)) => {
+            Some(Stamp::Real(wall, mark)) => {
                 let wall = wall.elapsed().as_secs_f64() * 1000.0;
                 if wall > STALL_MS {
-                    end_slow(wall, mark, wait, &mut || {
+                    end_slow(wall, mark, &mut || {
                         (name.to_owned(), if name.contains(' ') { name.to_owned() } else { format!("`{name}`") })
                     });
                 }
@@ -304,10 +304,9 @@ fn end_fake(before: FakeSample, what: &mut dyn FnMut() -> (String, String)) {
 #[cfg(debug_assertions)]
 #[cold]
 #[inline(never)]
-fn end_slow(wall: f64, mark: crate::frame::profile::ThreadCpuMark, wait: Option<f64>, what: &mut dyn FnMut() -> (String, String)) {
+fn end_slow(wall: f64, mark: crate::frame::profile::ThreadCpuMark, what: &mut dyn FnMut() -> (String, String)) {
     let cpu = crate::frame::profile::thread_cpu_since(mark).map(|ns| ns / 1e6);
-    let waited = wait.and_then(|start| runq::wait_ms().map(|now| now - start));
-    end_slow_measured(wall, cpu, waited, waited.is_none() && runq::overloaded(), what);
+    end_slow_measured(wall, cpu, None, runq::overloaded(), what);
 }
 
 #[cfg(debug_assertions)]
