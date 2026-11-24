@@ -5,7 +5,7 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::WindowId;
 
-use super::{cleanup_hosts, quit_hosts};
+use super::{ExitStep, cleanup_hosts, exiting_hosts, is_error_exit, quit_hosts};
 use crate::clipboard::MemoryClipboard;
 use crate::quit::{Effect, Event, State as QuitState, step as quit_step};
 use crate::runtime::{Env, Runtime};
@@ -45,6 +45,7 @@ struct TestHost {
     events: Rc<RefCell<Vec<String>>>,
     name: &'static str,
     redraw_asked: Rc<RefCell<u32>>,
+    menus_cancelled: Rc<RefCell<u32>>,
 }
 
 impl TestHost {
@@ -76,6 +77,7 @@ impl TestHost {
             events,
             name,
             redraw_asked: Rc::new(RefCell::new(0)),
+            menus_cancelled: Rc::new(RefCell::new(0)),
         }
     }
 
@@ -112,6 +114,10 @@ impl AnyHost for TestHost {
         if !self.life.closes(self.keep_running, true) { return; }
         self.life.finish();
         self.app.run_on_close();
+    }
+
+    fn cancel_menus(&mut self) {
+        *self.menus_cancelled.borrow_mut() += 1;
     }
 }
 
@@ -201,4 +207,77 @@ fn closing_the_last_main_window_runs_on_quit_in_it_and_in_open_secondary_windows
     );
     assert_eq!(*secondary_redraws.borrow(), 1, "shown secondary window still reports redraw eligibility");
     assert!(hosts.iter().all(Option::is_none), "orderly exit drops all finished hosts afterwards");
+}
+
+#[test]
+fn lost_display_and_unrequested_loop_exit_bypass_fast_exit_like_startup_error() {
+    // Normal quits stay fast: app-requested quit (loop_exiting && quitting), or OS-initiated
+    // quit on macOS (!loop_exiting, whether or not the delegate hook set quitting).
+    assert!(!is_error_exit(false, false, true, true), "normal Rune quit is not an error exit");
+    assert!(!is_error_exit(false, false, false, true), "macOS Cmd-Q is not an error exit");
+    assert!(!is_error_exit(false, false, false, false), "macOS OS quit without delegate hook is not an error exit");
+
+    // Error exits: startup failure, captured Wayland display error, or unrequested loop exit
+    // (such as X11/Wayland ExitFailure where Rune never started a quit).
+    assert!(is_error_exit(true, false, true, false), "startup window failure is an error exit");
+    assert!(is_error_exit(false, true, true, false), "lost Wayland display is an error exit");
+    assert!(is_error_exit(false, true, true, true), "display error racing a quit still bypasses fast exit");
+    assert!(is_error_exit(false, false, true, false), "unrequested loop exit (X11/Wayland ExitFailure) is an error exit");
+
+    // Wayland display error under default fast_exit: skips on_quit, terminate, fast_exit and
+    // relaunch so event_loop.run_app returns Err to finish_run (exit 1 in run / Err in try_run).
+    for (label, has_startup_error, has_display_error, quitting) in [
+        ("startup_error", true, false, false),
+        ("wayland_display_error", false, true, false),
+        ("x11_or_opaque_exit_failure", false, false, false),
+    ] {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mem = crate::clipboard::memory();
+        let host = TestHost::new("main", true, events.clone(), &mem, None);
+        let menus_cancelled = host.menus_cancelled.clone();
+        let mut hosts: Vec<Option<Box<dyn AnyHost>>> = vec![Some(Box::new(host))];
+        let mut quit_state = QuitState::Running;
+
+        let step = exiting_hosts(
+            &mut hosts,
+            has_startup_error,
+            has_display_error,
+            true,
+            quitting,
+            true,
+            step_quit(&mut quit_state),
+        );
+        assert_eq!(step, ExitStep::Orderly { relaunch: false }, "{label} must bypass fast exit");
+        assert!(events.borrow().is_empty(), "{label} must not vanish or run quit/close hooks: {:?}", *events.borrow());
+        assert_eq!(*menus_cancelled.borrow(), 1, "{label} still cancels tracking menus");
+        assert_eq!(quit_state, QuitState::Running, "{label} leaves quit state untouched");
+    }
+
+    // Normal quit under default fast_exit stays fast and runs on_quit.
+    {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mem = crate::clipboard::memory();
+        let host = TestHost::new("main", true, events.clone(), &mem, None);
+        let menus_cancelled = host.menus_cancelled.clone();
+        let mut hosts: Vec<Option<Box<dyn AnyHost>>> = vec![Some(Box::new(host))];
+        let mut quit_state = QuitState::Quitting(crate::quit::Hooks::Owed, crate::quit::After::Exit);
+
+        let step = exiting_hosts(&mut hosts, false, false, true, true, true, step_quit(&mut quit_state));
+        assert_eq!(step, ExitStep::FastExit, "normal quit keeps fast exit");
+        assert_eq!(*events.borrow(), vec!["main:vanish", "main:on_quit"]);
+        assert_eq!(*menus_cancelled.borrow(), 1);
+    }
+
+    // Normal orderly quit with relaunch still relaunches.
+    {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mem = crate::clipboard::memory();
+        let host = TestHost::new("main", true, events.clone(), &mem, None);
+        let mut hosts: Vec<Option<Box<dyn AnyHost>>> = vec![Some(Box::new(host))];
+        let mut quit_state = QuitState::Quitting(crate::quit::Hooks::Owed, crate::quit::After::Relaunch);
+
+        let step = exiting_hosts(&mut hosts, false, false, true, true, false, step_quit(&mut quit_state));
+        assert_eq!(step, ExitStep::Orderly { relaunch: true });
+        assert_eq!(*events.borrow(), vec!["main:vanish", "main:on_quit"]);
+    }
 }

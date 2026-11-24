@@ -391,9 +391,7 @@ impl Host {
         // While the window still shows its last frames.
         if let Some(trace) = &mut self.trace { trace.settle_presents(crate::frame::present_time::SETTLE); }
         if let Some(after) = self.app.rt_mut().shell_request.take().and_then(Shell::after) {
-            if after == crate::quit::After::Relaunch {
-                let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after });
-            }
+            let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after });
             self.app.popup_cancel(&mut self.popup);
             self.app.file_dialog_cancel(&mut self.file_dialog);
             event_loop.exit();

@@ -618,7 +618,8 @@ impl<S: 'static> App<S> {
     /// Runs until the app quits. Agent-tooling arguments (`--snap`, `--tree`, ...) render
     /// headless instead: the window requests are ignored there, and updates apply each frame.
     /// Prints the error to stderr and exits 1 when the app can't start (no display, or the first
-    /// window can't be created; panics on wasm32); `try_run` returns it. See `keep_running`.
+    /// window can't be created) or loses its display connection (panics on wasm32); `try_run`
+    /// returns it. See `keep_running`.
     pub fn run(self) {
         crate::tooling::started(self.try_run());
     }

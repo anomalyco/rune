@@ -463,28 +463,32 @@ impl ApplicationHandler<WakeEvent> for Windows {
         {
             self.display_error = crate::platform::layer_shell::display_error(display.as_raw());
         }
-        if self.startup_error.is_none() {
-            // Every quit ends here, so the windows still open run `App::on_quit` first, unless the
-            // quit's hooks already ran (a Windows logoff, the last window closing).
-            self.quit(event_loop, false, true);
-            // Rune didn't ask to exit, so the OS is ending the app: macOS Quit, Cmd-Q, the Dock's
-            // Quit, logout. Windows close as their close button would, before the clipboard stops.
-            if !event_loop.exiting() {
-                for host in self.hosts.iter_mut().flatten() { host.terminate(); }
-            }
-        }
-        for host in self.hosts.iter_mut().flatten() { host.cancel_menus(); }
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        let has_display_error = self.display_error.is_some();
+        #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+        let has_display_error = false;
         #[cfg(not(target_arch = "wasm32"))]
-        if self.startup_error.is_none() && let Some(last) = crate::quit::fast_exit_hook() {
+        let fast_hook = crate::quit::fast_exit_hook();
+        #[cfg(target_arch = "wasm32")]
+        let fast_hook: Option<fn()> = None;
+        let step = app_events::exiting_hosts(
+            &mut self.hosts,
+            self.startup_error.is_some(),
+            has_display_error,
+            event_loop.exiting(),
+            crate::quit::quitting(),
+            fast_hook.is_some(),
+            crate::quit::send,
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        if step == app_events::ExitStep::FastExit && let Some(last) = fast_hook {
             crate::quit::end_fast(last);
         }
         // Surfaces go while winit's display connection is still open (layer surfaces live on it).
         self.hosts.clear();
         crate::marks::mark("windows.dropped");
         crate::clipboard::shutdown();
-        if self.startup_error.is_none()
-            && crate::quit::send(crate::quit::Event::Exited).contains(&crate::quit::Effect::Relaunch)
-        {
+        if matches!(step, app_events::ExitStep::Orderly { relaunch: true }) {
             crate::relaunch::spawn();
         }
         #[cfg(any(target_os = "windows", target_os = "linux"))]
