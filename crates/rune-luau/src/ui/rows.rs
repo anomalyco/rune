@@ -72,6 +72,9 @@ pub(crate) unsafe extern "C-unwind" fn ui_virtual_list(state: *mut ffi::lua_Stat
                         (Ok(Atom::RenderRow), Value::Func) => render = Some(frame.env.reference(state, -1)),
                         (Ok(Atom::RowKey), Value::Func) => row_key = Some(frame.env.reference(state, -1)),
                         (Ok(Atom::OnVisibleRows), Value::Func) => visible = Some(frame.env.reference(state, -1)),
+                        (Ok(Atom::OnScroll), Value::Func) => p.on_scroll = Some(frame.env.reference(state, -1)),
+                        (Ok(Atom::OnScroll), Value::Nil) => {}
+                        (Ok(Atom::OnScroll), other) => return Err(format!("onScroll must be a function, got {}", props::name(other))),
                         (Ok(Atom::Gap), Value::Num(n)) => gap = n as f32,
                         (Ok(Atom::ScrollY), Value::Bool(b)) => own = b,
                         (Ok(Atom::Key), Value::Str(s)) => key = Some(s.to_owned()),
@@ -105,8 +108,8 @@ pub(crate) unsafe extern "C-unwind" fn ui_virtual_list(state: *mut ffi::lua_Stat
                 if own {
                     p.scroll = Some((false, true));
                 }
+                p.key = Some(key);
                 p.finish(&mut list, env, false, None, frame.attach);
-                list.set_key(key);
                 let el = (frame.attach.rows)(list, spec);
                 let handle = frame.put(el)?;
                 ffi::lua_pushlightuserdata(state, handle);
@@ -170,7 +173,7 @@ pub(crate) fn attach<S: 'static>(list: El, spec: Spec) -> El {
     if let Some(cb) = spec.visible {
         stack = stack.on_visible_rows(move |s: &mut S, range| {
             let Some(script) = cb.script.upgrade() else { return false };
-            let event = Event { kind: "visible-rows", key: None, mods: None, rows: Some((range.start + 1, range.end)), entered: None, fields: Rc::new([]) };
+            let event = Event { kind: "visible-rows", key: None, mods: None, rows: Some((range.start + 1, range.end)), entered: None, scroll: None, fields: Rc::new([]) };
             script.around_write(s, None, |tx| script.handle(&cb, event, tx));
             true
         });

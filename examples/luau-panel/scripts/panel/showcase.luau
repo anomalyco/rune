@@ -15,7 +15,17 @@ local SAMPLE_TEXT = "Shared-element flights, line clamping, equal-column grids, 
 
 local PILLS = { "Alpha", "Bravo", "Charlie" }
 
-local function render(activePill: number, cardSlot: number, onPill: (number) -> (), onSwap: () -> ())
+local function render(
+	activePill: number,
+	cardSlot: number,
+	reducedMotion: boolean,
+	scrollY: number,
+	scrollMaxY: number,
+	scrollFy: number,
+	onPill: (number) -> (),
+	onSwap: () -> (),
+	onScroll: (any) -> ()
+)
 	local tabChildren = table.create(#PILLS)
 	for i, label in PILLS do
 		local selected = i == activePill
@@ -130,6 +140,54 @@ local function render(activePill: number, cardSlot: number, onPill: (number) -> 
 			ui.row({ w = "full", gap = 8 }, {
 				ui.box({ key = "role-slider", role = "slider", label = "Gain", w = "75%", h = 10, radius = 5, fill = "control-off" }),
 				ui.text("75%", { size = 11, mono = true, color = "text-secondary" }),
+			}),
+		}),
+
+		-- 4. Coalesced `onScroll` indicator and `view.reducedMotion` readout
+		ui.col(CARD, { key = "card-scroll-motion", w = "full" }, {
+			ui.row({ w = "full", align = "center", justify = "between", gap = 8 }, {
+				ui.text("onScroll & view.reducedMotion", { size = 12, weight = "semibold" }),
+				ui.row({ gap = 8, align = "center" }, {
+					ui.box({
+						key = "reduced-motion-readout",
+						role = "status",
+						label = if reducedMotion then "reducedMotion on" else "reducedMotion off",
+						px = 8,
+						py = 2,
+						radius = 4,
+						fill = "control-off",
+					}, {
+						ui.text(if reducedMotion then "reducedMotion: on" else "reducedMotion: off", { size = 11, mono = true }),
+					}),
+					ui.text(
+						`{math.round(scrollY)} / {math.round(scrollMaxY)} · {math.round(scrollFy * 100)}%`,
+						{ key = "scroll-readout", role = "status", size = 11, mono = true, tabular = true, color = "text-secondary" }
+					),
+				}),
+			}),
+			ui.box({ key = "scroll-progress", w = "full", h = 6, radius = 3, fill = "bg", role = "progressbar", label = "Scroll progress" }, {
+				ui.box({ w = `{math.round(scrollFy * 100)}%`, h = "100%", radius = 3, fill = ui.hex("#009fff") }),
+			}),
+			ui.col({
+				key = "scroll-demo",
+				label = "Scrollable demo list",
+				w = "full",
+				h = 96,
+				pad = 6,
+				gap = 4,
+				radius = 6,
+				fill = "bg",
+				scrollY = true,
+				onScroll = onScroll,
+			}, {
+				ui.text("Scroll line 1 — coalesced onScroll delivers x, y, maxX, maxY, fy", { size = 11, color = "text-secondary" }),
+				ui.text("Scroll line 2 — unchanged re-renders never re-fire", { size = 11, color = "text-secondary" }),
+				ui.text("Scroll line 3 — multiple moves before poll keep newest offset", { size = 11, color = "text-secondary" }),
+				ui.text("Scroll line 4 — fy clamps to [0, 1] and is 0 when maxY == 0", { size = 11, color = "text-secondary" }),
+				ui.text("Scroll line 5 — watch the progress bar and readout above", { size = 11, color = "text-secondary" }),
+				ui.text("Scroll line 6 — works on ui.col, ui.row, ui.box, and ui.virtualList", { size = 11, color = "text-secondary" }),
+				ui.text("Scroll line 7 — view.reducedMotion follows system or cx override", { size = 11, color = "text-secondary" }),
+				ui.text("Scroll line 8 — bottom of scrollable demo list", { size = 11, color = "text-secondary" }),
 			}),
 		}),
 	})

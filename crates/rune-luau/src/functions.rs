@@ -127,10 +127,12 @@ impl Inner {
             return card(&err.message);
         }
         let Some(vm) = self.vm() else { return card("the script isn't running") };
-        let env = self.env(&vm, dark);
+        let reduced_motion = self.reduced_motion.get();
+        let env = self.env(&vm, dark, reduced_motion);
         let built = with_frame(attach, env.clone(), || {
             self.timed(&vm, |vm| {
                 vm.view.raw_set("dark", dark)?;
+                vm.view.raw_set("reducedMotion", reduced_motion)?;
                 let mut args = args.into_lua_multi(&vm.lua)?;
                 args.push_front(Value::Table(vm.view.clone()));
                 take_root(f.call::<Value>(args)?)

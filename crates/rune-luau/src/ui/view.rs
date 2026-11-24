@@ -1,5 +1,5 @@
 //! The `view` a render function receives: `view:Memo(key, version, build)` and
-//! `view:Handler(fn)`, plus `view.dark`; and `ui.each(items, key, version, build)`, a memo per
+//! `view:Handler(fn)`, plus `view.dark` and `view.reducedMotion`; and `ui.each(items, key, version, build)`, a memo per
 //! item of a list.
 //!
 //! `Memo` is a C function: it hashes `version` straight off the stack (a number's bits, a

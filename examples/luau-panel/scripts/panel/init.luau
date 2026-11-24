@@ -15,6 +15,9 @@ local state = {
 	tab = "list",
 	pill = 1,
 	cardSlot = 0,
+	scrollY = 0,
+	scrollMaxY = 0,
+	scrollFy = 0,
 }
 
 local items = rows.items(1000)
@@ -103,13 +106,27 @@ end
 local function render(view)
 	local body
 	if state.tab == "props" then
-		body = showcase.render(state.pill, state.cardSlot, function(i: number)
-			state.pill = i
-			changed(false)
-		end, function()
-			state.cardSlot = 1 - state.cardSlot
-			changed(false)
-		end)
+		body = showcase.render(
+			state.pill,
+			state.cardSlot,
+			view.reducedMotion,
+			state.scrollY,
+			state.scrollMaxY,
+			state.scrollFy,
+			function(i: number)
+				state.pill = i
+				changed(false)
+			end,
+			function()
+				state.cardSlot = 1 - state.cardSlot
+				changed(false)
+			end,
+			function(e)
+				state.scrollY = e.y
+				state.scrollMaxY = e.maxY
+				state.scrollFy = e.fy
+			end
+		)
 	else
 		body = ui.virtualList({
 			key = "items",

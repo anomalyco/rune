@@ -187,6 +187,7 @@ impl Base {
             view.raw_set("Handler", lua.create_c_function(view_handler)?)?;
         }
         view.raw_set("dark", false)?;
+        view.raw_set("reducedMotion", false)?;
 
         let signals = Rc::new(RefCell::new(FxHashMap::default()));
         if let Some(host) = setup.host {

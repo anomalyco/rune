@@ -41,6 +41,7 @@ mod functions;
 mod options;
 mod require;
 mod script;
+mod scroll;
 mod sources;
 mod task;
 mod ui;

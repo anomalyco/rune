@@ -184,6 +184,20 @@ impl NodeArgs {
         self.env.dark
     }
 
+    /// Whether the render is under reduced motion ([`rune::Cx::is_reduced_motion`]).
+    ///
+    /// ```
+    /// use rune_luau::HostNode;
+    ///
+    /// let _node = HostNode::new("badge", |args| {
+    ///     let label = if args.reduced_motion() { "Still" } else { "Animated" };
+    ///     Ok(rune::text(label))
+    /// });
+    /// ```
+    pub fn reduced_motion(&self) -> bool {
+        self.env.reduced_motion
+    }
+
     /// The script function in prop `name`.
     pub fn handler(&self, name: &str) -> Option<Handler> {
         match self.get(name) {
@@ -294,7 +308,7 @@ unsafe fn build_from(state: *mut ffi::lua_State, el: El, tables: [c_int; 2], arg
                     let unknown = |name: &str| !own && node.known.as_ref().is_some_and(|known| !known(name));
                     match props::key_atom(state, -2) {
                         // The build attaches the handlers it takes; one it didn't read is unknown.
-                        Ok(Atom::OnPress | Atom::OnHover | Atom::OnMiddlePress) => {
+                        Ok(Atom::OnPress | Atom::OnHover | Atom::OnMiddlePress | Atom::OnScroll) => {
                             if let Some(k) = key
                                 && unknown(k)
                             {
