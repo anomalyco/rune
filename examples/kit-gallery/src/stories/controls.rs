@@ -59,6 +59,80 @@ pub(super) fn button_shortcuts(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
         )
 }
 
+/// Focus options on buttons: `El::keyboard_focus_only()` (runs `on_press` on click without
+/// taking focus, while Tab still visits it) and `El::focus_ring_radius(f32)` (explicit outer
+/// focus-ring corner radius independent of the control's own radius).
+pub(super) fn button_focus(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let last = s.picked("btn-focus", "None");
+    let kbd_only = col()
+        .gap(8.0)
+        .items_start()
+        .child(text("El::keyboard_focus_only()").font(k.ty.ui_medium).color(k.c.text_base))
+        .child(
+            row()
+                .gap(8.0)
+                .child(
+                    Button::new("Toolbar action")
+                        .variant(ButtonVariant::Contrast)
+                        .on_press(|s: &mut G| { s.pick.insert("btn-focus".into(), "Toolbar action".into()); })
+                        .build(k)
+                        .key("kbd-only-btn")
+                        .keyboard_focus_only(),
+                )
+                .child(
+                    Button::new("Normal button")
+                        .variant(ButtonVariant::Outline)
+                        .on_press(|s: &mut G| { s.pick.insert("btn-focus".into(), "Normal button".into()); })
+                        .build(k)
+                        .key("normal-focus-btn"),
+                ),
+        )
+        .child(
+            text(format!("Last pressed: {last} — click Toolbar action without taking focus; Tab visits both."))
+                .font(k.ty.small)
+                .color(k.c.text_muted),
+        );
+    let ring_radii = col()
+        .gap(8.0)
+        .items_start()
+        .child(text("El::focus_ring_radius(f32)").font(k.ty.ui_medium).color(k.c.text_base))
+        .child(
+            row()
+                .gap(12.0)
+                .child(
+                    Button::new("Pill ring")
+                        .variant(ButtonVariant::Contrast)
+                        .build(k)
+                        .key("pill-ring-btn")
+                        .radius(999.0)
+                        .focus_ring_radius(999.0),
+                )
+                .child(
+                    Button::new("4pt box, 8pt ring")
+                        .variant(ButtonVariant::Outline)
+                        .build(k)
+                        .key("row-ring-btn")
+                        .radius(4.0)
+                        .focus_ring(2.0, 2.0, k.c.border_focus)
+                        .focus_ring_radius(8.0),
+                )
+                .child(
+                    Button::new("Square ring (0pt)")
+                        .variant(ButtonVariant::Outline)
+                        .build(k)
+                        .key("square-ring-btn")
+                        .radius(6.0)
+                        .focus_ring_radius(0.0),
+                ),
+        )
+        .child(
+            text("Tab through these buttons to compare pill, 8pt and square focus rings.")
+                .font(k.ty.small)
+                .color(k.c.text_muted),
+        );
+    col().gap(20.0).items_start().child(kbd_only).child(ring_radii)
+}
+
 pub(super) fn button_all_states(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     use ButtonVariant::*;
     let variants = [

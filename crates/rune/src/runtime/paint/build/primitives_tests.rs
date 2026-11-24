@@ -141,3 +141,100 @@ fn zero_area_images_emit_nothing_and_paint_nothing() {
     let Some(gpu_px) = render_gpu(&mut rt, 120, 120) else { return };
     assert_eq!(all_same_pixel(&gpu_px), None, "GPU drew a non-background pixel");
 }
+
+#[test]
+fn focus_ring_radius_overrides_explicit_default_and_within_rings_without_touching_outline() {
+    use crate::render::KIND_RECT;
+
+    #[derive(Clone, Copy)]
+    enum Case {
+        ExplicitRounded,
+        ExplicitSquareBox,
+        DefaultZeroRing,
+        NegativeClamps,
+        NanClamps,
+        InfClamps,
+        PillHuge,
+        ContinuousPositive,
+        ContinuousZero,
+        ExplicitUnset,
+        DefaultUnset,
+        WithinCustom,
+        WithinUnset,
+        OutlineUnaffected,
+    }
+
+    let run = |case: Case, scale: f32| -> Vec<[f32; 4]> {
+        fn view(&c: &Case, _: &mut Cx<Case>) -> El {
+            let blue = hex("#009FFF").unwrap();
+            let red = hex("#FF3B30").unwrap();
+            let target = match c {
+                    Case::ExplicitRounded => el().key("t").size(80.0, 28.0).radius(4.0).fill(crate::Color::WHITE)
+                        .focusable(true).focus_ring(2.0, 2.0, blue).focus_ring_radius(8.0),
+                    Case::ExplicitSquareBox => el().key("t").size(80.0, 28.0).radius(0.0).fill(crate::Color::WHITE)
+                        .focusable(true).focus_ring(2.0, 1.0, blue).focus_ring_radius(8.0),
+                    Case::DefaultZeroRing => el().key("t").size(80.0, 28.0).radius(6.0).fill(crate::Color::WHITE)
+                        .focusable(true).focus_ring_radius(0.0),
+                    Case::NegativeClamps => el().key("t").size(80.0, 28.0).radius(6.0).fill(crate::Color::WHITE)
+                        .focusable(true).focus_ring(2.0, 1.0, blue).focus_ring_radius(-5.0),
+                    Case::NanClamps => el().key("t").size(80.0, 28.0).radius(6.0).fill(crate::Color::WHITE)
+                        .focusable(true).focus_ring(2.0, 1.0, blue).focus_ring_radius(f32::NAN),
+                    Case::InfClamps => el().key("t").size(80.0, 28.0).radius(6.0).fill(crate::Color::WHITE)
+                        .focusable(true).focus_ring(2.0, 1.0, blue).focus_ring_radius(f32::INFINITY),
+                    Case::PillHuge => el().key("t").size(80.0, 28.0).radius(4.0).fill(crate::Color::WHITE)
+                        .focusable(true).focus_ring(2.0, 1.0, blue).focus_ring_radius(999.0),
+                    Case::ContinuousPositive => el().key("t").size(80.0, 28.0).radius(4.0).continuous_corners().fill(crate::Color::WHITE)
+                        .focusable(true).focus_ring(2.0, 1.0, blue).focus_ring_radius(8.0),
+                    Case::ContinuousZero => el().key("t").size(80.0, 28.0).radius(4.0).continuous_corners().fill(crate::Color::WHITE)
+                        .focusable(true).focus_ring(2.0, 1.0, blue).focus_ring_radius(0.0),
+                    Case::ExplicitUnset => el().key("t").size(80.0, 28.0).radius(4.0).fill(crate::Color::WHITE)
+                        .focusable(true).focus_ring(2.0, 2.0, blue),
+                    Case::DefaultUnset => el().key("t").size(80.0, 28.0).radius(4.0).fill(crate::Color::WHITE)
+                        .focusable(true),
+                    Case::WithinCustom => col().key("wrap").size(100.0, 40.0).radius(4.0).fill(crate::Color::WHITE)
+                        .focus_within_ring(2.0, 1.0, blue).focus_ring_radius(10.0)
+                        .child(el().key("t").size(40.0, 20.0).focusable(true).no_focus_ring()),
+                    Case::WithinUnset => col().key("wrap").size(100.0, 40.0).radius(4.0).fill(crate::Color::WHITE)
+                        .focus_within_ring(2.0, 1.0, blue)
+                        .child(el().key("t").size(40.0, 20.0).focusable(true).no_focus_ring()),
+                    Case::OutlineUnaffected => el().key("t").size(80.0, 28.0).radius(4.0).fill(crate::Color::WHITE)
+                        .outline(2.0, 1.0, red).focus_ring_radius(12.0),
+                };
+            col().padding(20.0).items_start().child(target)
+        }
+        let mut rt = Runtime::new(
+            case,
+            view,
+            (200.0, 120.0),
+            Env::new(true, scale),
+        );
+        rt.frame(0.0);
+        if !matches!(case, Case::OutlineUnaffected) {
+            rt.update(|_, tx| tx.focus("t", true));
+            rt.frame(0.0);
+        }
+        rt.instances
+            .iter()
+            .filter(|i| i.fill == [0.0; 4] && i.border[3] > 0.0 && i.params[1] == KIND_RECT)
+            .map(|i| i.radii)
+            .collect()
+    };
+
+    for scale in [1.0f32, 2.0] {
+        assert_eq!(run(Case::ExplicitRounded, scale), vec![[8.0 * scale; 4]], "explicit ring on rounded box at scale {scale}");
+        assert_eq!(run(Case::ExplicitSquareBox, scale), vec![[8.0 * scale; 4]], "explicit ring on 0-radius box at scale {scale}");
+        assert_eq!(run(Case::DefaultZeroRing, scale), vec![[0.0; 4]], "default ring forced square at scale {scale}");
+        assert_eq!(run(Case::NegativeClamps, scale), vec![[0.0; 4]], "negative radius clamps to 0 at scale {scale}");
+        assert_eq!(run(Case::NanClamps, scale), vec![[0.0; 4]], "NaN radius clamps to 0 at scale {scale}");
+        assert_eq!(run(Case::InfClamps, scale), vec![[0.0; 4]], "Inf radius clamps to 0 at scale {scale}");
+        assert_eq!(run(Case::PillHuge, scale), vec![[999.0 * scale; 4]], "pill radius at scale {scale}");
+        assert_eq!(run(Case::ContinuousPositive, scale), vec![[-8.0 * scale; 4]], "continuous corners sign at scale {scale}");
+        assert_eq!(run(Case::ContinuousZero, scale), vec![[0.0; 4]], "continuous zero stays +0 at scale {scale}");
+        // Unset ring_radius keeps the concentric formula: element radius + (offset + width).
+        assert_eq!(run(Case::ExplicitUnset, scale), vec![[8.0 * scale; 4]], "unset explicit ring concentric at scale {scale}");
+        assert_eq!(run(Case::DefaultUnset, scale), vec![[7.0 * scale; 4]], "unset default ring concentric (4 + 3) at scale {scale}");
+        assert_eq!(run(Case::WithinCustom, scale), vec![[10.0 * scale; 4]], "focus_within_ring custom radius at scale {scale}");
+        assert_eq!(run(Case::WithinUnset, scale), vec![[7.0 * scale; 4]], "focus_within_ring unset concentric (4 + 3) at scale {scale}");
+        assert_eq!(run(Case::OutlineUnaffected, scale), vec![[7.0 * scale; 4]], "El::outline ignores focus_ring_radius at scale {scale}");
+    }
+}

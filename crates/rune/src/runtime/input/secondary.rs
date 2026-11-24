@@ -137,7 +137,8 @@ impl RuntimeCore {
     /// does, so focus is back on it when its menu closes.
     fn secondary_focus_control(&self, i: usize) -> Option<String> {
         if !self.commit.defaults.web_focus { return None; }
-        let c = std::iter::successors(Some(i), |&j| self.tree.nodes[j].parent).find(|&j| self.can_focus(j))?;
+        let c = std::iter::successors(Some(i), |&j| self.tree.nodes[j].parent)
+            .find(|&j| self.can_focus(j) && !self.tree.nodes[j].focus.keyboard_only)?;
         self.tree.nodes[c].input.is_none().then(|| self.tree.nodes[c].path.clone())
     }
 

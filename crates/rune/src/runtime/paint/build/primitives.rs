@@ -375,10 +375,17 @@ impl RuntimeCore {
             let c = if focus_ring.is_some() { ol.color } else { self.color(n.id, P_OUTLINE, ol.color) };
             let ow = pixel_snap::line_width(ol.width * s) * sc;
             let g = pixel_snap::line_width(ol.offset * s) * sc + ow;
+            let ring_radii = match (focus_ring.is_some(), n.focus.ring_radius) {
+                (true, Some(rr)) => {
+                    let rr = rr * s * sc;
+                    [if n.vis_flags.continuous_corners() && rr > 0.0 { -rr } else { rr }; 4]
+                }
+                _ => radii.map(|v| if v != 0.0 { v + g.copysign(v) } else { 0.0 }),
+            };
             if c.a > 0.0 && ol.width > 0.0 {
                 self.instances.push(Instance {
                     rect: [r[0] - g, r[1] - g, w + 2.0 * g, h + 2.0 * g],
-                    radii: radii.map(|v| if v != 0.0 { v + g.copysign(v) } else { 0.0 }),
+                    radii: ring_radii,
                     fill: [0.0; 4],
                     border: premul(c, o, srgb),
                     params: [ow, KIND_RECT, 0.0, 1.0],
