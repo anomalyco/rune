@@ -88,9 +88,29 @@ fn a_chord_without_a_modifier_is_refused_unless_it_is_a_function_key() {
     for bare in ["space", "enter", "a", "shift+a", "shift+tab"] {
         assert!(matches!(handle.register_shortcut(bare.parse().unwrap(), |_, _| {}), Err(ShortcutError::InvalidAccelerator(_))), "{bare}");
     }
-    for allowed in ["f5", "f24", "shift+f1", "ctrl+space", "alt+a", "super+enter"] {
+    for allowed in ["f5", "f24", "shift+f1", "printscreen", "shift+printscreen", "ctrl+printscreen", "alt+printscreen", "ctrl+space", "alt+a", "super+enter"] {
         assert!(handle.register_shortcut(allowed.parse().unwrap(), |_, _| {}).is_ok(), "{allowed}");
     }
+    // PrintScreen aliases normalize to the same chord and conflict with the existing bare registration.
+    assert_eq!(handle.register_shortcut("print".parse().unwrap(), |_, _| {}), Err(ShortcutError::Conflict));
+    assert_eq!(handle.register_shortcut("prtsc".parse().unwrap(), |_, _| {}), Err(ShortcutError::Conflict));
+    drop(guard);
+
+    let app = App::new(AppSpec::new("capture", (10.0, 10.0), || 0u32, |_: &u32, _| el()))
+        .global_shortcut("printscreen", |s, _| *s += 1)
+        .global_shortcut("ctrl+print", |s, _| *s += 10)
+        .global_shortcut("alt+prtsc", |s, _| *s += 100);
+    let handle = app.handle();
+    let guard = Guard::attach(&app.shared, Arc::new(|| {}), true, false);
+    assert!(handle.take_shortcut_errors().is_empty());
+    for chord in ["print", "ctrl+printscreen", "alt+printscreen"] {
+        app.shared.shortcuts.fire(&chord.parse().unwrap()).unwrap();
+    }
+    let mut state = 0u32;
+    let receiving = guard.receiving();
+    for f in app.shared.take().updates { f(&mut state, &mut Tx::default()); }
+    drop(receiving);
+    assert_eq!(state, 111);
     drop(guard);
 
     let app = App::new(AppSpec::new("bare", (10.0, 10.0), || (), |_, _| el())).global_shortcut("space", |_, _| {})

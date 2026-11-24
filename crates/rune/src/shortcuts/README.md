@@ -41,9 +41,9 @@ grabs, Windows, X11 and the portal name nobody, so it returns None. Headless run
 answer only for their own virtual registrations. `ShortcutError::Conflict` itself is
 unchanged.
 
-A chord needs ⌘, ⌃ or ⌥ (Ctrl, Alt or Super elsewhere), or an F1–F24 key, because a
-global Space or ⇧A would take that key from typing in every app. Both the builder and
-`register_shortcut` refuse one without them with `InvalidAccelerator`
+A chord needs ⌘, ⌃ or ⌥ (Ctrl, Alt or Super elsewhere), or an F1–F24 or Print Screen
+key, because a global Space or ⇧A would take that key from typing in every app. Both the
+builder and `register_shortcut` refuse one without them with `InvalidAccelerator`
 (`shortcut.require_modifier()` checks it), unless the App opts in with
 `.allow_unmodified_shortcuts()`.
 
@@ -57,15 +57,17 @@ even if other threads retain `AppHandle`s.
 ## Desktop behavior
 
 - macOS: Carbon `RegisterEventHotKey`, no Accessibility permission. Command is
-  the Super modifier. Hardware key positions follow the US layout; F21–F24 have
-  no Carbon key code and return `InvalidAccelerator`. Registrations ask for
+  the Super modifier. Hardware key positions follow the US layout; F21–F24 and
+  Print Screen have no Carbon key code and return `InvalidAccelerator`. Registrations ask for
   `kEventHotKeyExclusive` first so another app's exclusive hold returns
   `Conflict`; when Carbon returns `-9878` (`eventHotKeyExistsErr`) for a chord
   that `CopySymbolicHotKeys` lists only as disabled (such as Spotlight's ⌘Space
   after turning it off in System Settings), Rune retries once without the
   exclusive flag.
 - Windows: `RegisterHotKey` on a message-only window owned by the event thread.
-  Repeat is disabled. Windows-reserved combinations may fail registration.
+  Repeat is disabled. Print Screen resolves directly to `VK_SNAPSHOT`.
+  Windows-reserved combinations (or Print Screen when Windows' own screen
+  capture tool claims it) may fail registration with `Conflict`.
 - X11: checked passive grabs on every root, including CapsLock/NumLock variants.
   A failed variant rolls back the registration. Autorepeat is filtered, so a held
   chord fires once, as on macOS and Windows. Keys use the current keymap's
@@ -132,7 +134,7 @@ launch): then recording it again retries it through the callback. The
 default message names the chord ("⌃J is already in use."); `.error_message(|error,
 chord| ...)` rewords it, falling back on `rune_kit::shortcut_error_message`, and
 `ShortcutRecorderState::refused()` reads the chord. A chord without a modifier (other
-than F1–F24) is refused before the callback with "Add ⌘, ⌃ or ⌥." unless
+than F1–F24 or Print Screen) is refused before the callback with "Add ⌘, ⌃ or ⌥." unless
 `.allow_unmodified()`.
 Click or keyboard activation starts recording, held modifiers preview immediately,
 Escape cancels, Backspace clears, and focus loss or disabling cancels recording.

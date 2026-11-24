@@ -53,6 +53,13 @@ fn startup_batch_binds_all_shortcuts_in_one_session_with_stable_ids() {
     assert_eq!(blank.portal_id, "ctrl+alt+k");
     assert_eq!(blank.description, "Shortcut ctrl+alt+k");
 
+    let prt = item(40, "printscreen");
+    let ctrl_prt = item(41, "ctrl+printscreen");
+    let alt_prt = item(42, "alt+printscreen");
+    assert_eq!((prt.portal_id.as_str(), prt.preferred_trigger.as_str()), ("printscreen", "Print"));
+    assert_eq!((ctrl_prt.portal_id.as_str(), ctrl_prt.preferred_trigger.as_str()), ("ctrl+printscreen", "CTRL+Print"));
+    assert_eq!((alt_prt.portal_id.as_str(), alt_prt.preferred_trigger.as_str()), ("alt+printscreen", "ALT+Print"));
+
     let effects = run(&mut seq, &mut state, Event::Register { items: vec![a.clone(), b.clone()], reply: 1 });
     assert_eq!(effects, vec![Effect::Bind { attempt: Attempt(1), shortcuts: vec![a.clone(), b.clone()] }]);
 
