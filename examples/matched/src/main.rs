@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 use rune::tok::{self, type_};
-use rune::{AppSpec, Color, Curve, Cx, Easing, El, ImageCache, Key, KeyEvent, Pixels, SurfaceFit, TextStyle, Transition, Tx, Waker, col, el, row, text};
+use rune::{AppSpec, Color, Curve, Cx, Easing, El, ImageCache, Key, KeyEvent, LiveRegion, MotionIntent, Pixels, SurfaceFit, TextStyle, Transition, Tx, Waker, col, el, row, text};
 
 struct State {
     picked: usize,
@@ -19,6 +19,10 @@ struct State {
     timed: bool,
     pictures: [Pixels; 4],
     mips_mode: bool,
+    in_place_mode: bool,
+    segment: usize,
+    toast: Option<u32>,
+    toast_seq: u32,
     cache: Option<ImageCache>,
     streamed: Pixels,
     mipmapped: Pixels,
@@ -117,6 +121,10 @@ fn init() -> State {
         timed: false,
         pictures: std::array::from_fn(picture),
         mips_mode: false,
+        in_place_mode: false,
+        segment: 0,
+        toast: None,
+        toast_seq: 0,
         cache: None,
         streamed: Pixels::new(),
         mipmapped: Pixels::new(),
@@ -199,9 +207,167 @@ fn mips_view(s: &State, theme: &tok::Theme) -> El {
             .child(mips_card("ImageCache::rgba_into (mipmapped)", &mip_info, &s.mipmapped, theme)))
 }
 
+const SEGMENTS: [&str; 3] = ["Overview", "Details", "Activity"];
+
+fn toggle_toast(s: &mut State, tx: &mut Tx) {
+    tx.instant();
+    if s.toast.is_some() {
+        s.toast = None;
+    } else {
+        s.toast_seq += 1;
+        s.toast = Some(s.toast_seq);
+    }
+}
+
+fn in_place_view(s: &State, theme: &tok::Theme) -> El {
+    let accent = tok::accent(0, true);
+    let mut bg_row = row().key("seg-bg").absolute(4.0, 4.0).size(352.0, 32.0);
+    for k in 0..SEGMENTS.len() {
+        let mut slot = el().key(format!("seg-slot-{k}")).grow(1.0).h_full();
+        if s.segment == k {
+            let mut pill = el()
+                .key(format!("seg-pill-{k}"))
+                .matched("seg-pill")
+                .matched_in_place()
+                .w_full()
+                .h_full()
+                .radius(7.0)
+                .fill(accent);
+            if s.timed {
+                pill = pill.matched_motion(Curve::tween(0.22, Easing::EASE_IN_OUT));
+            }
+            slot = slot.child(pill);
+        }
+        bg_row = bg_row.child(slot);
+    }
+
+    let mut label_row = row().key("seg-labels").absolute(4.0, 4.0).size(352.0, 32.0);
+    for (k, name) in SEGMENTS.iter().enumerate() {
+        let active = s.segment == k;
+        label_row = label_row.child(
+            el().key(format!("seg-btn-{k}"))
+                .grow(1.0)
+                .h_full()
+                .center()
+                .role("tab")
+                .label(*name)
+                .checked(active)
+                .position_in_set(k + 1, SEGMENTS.len())
+                .on_press(move |s: &mut State| s.segment = k)
+                .child(text(*name).font(type_::LABEL).color(if active { Color::WHITE } else { theme.text_secondary })),
+        );
+    }
+
+    let segmented = el()
+        .key("seg-track")
+        .size(360.0, 40.0)
+        .radius(10.0)
+        .clip_rounded(10.0)
+        .fill(theme.control_off)
+        .role("tablist")
+        .label("View mode")
+        .child(bg_row)
+        .child(label_row);
+
+    let seg_card = col()
+        .key("seg-card")
+        .w_full()
+        .padding(18.0)
+        .gap(12.0)
+        .radius(16.0)
+        .fill(theme.card)
+        .border(1.0, theme.card_border)
+        .child(text("In-place matched flight (El::matched_in_place)").font(TextStyle::new(16.0, 600.0)).color(theme.text))
+        .child(text("The selection pill flies in its destination's paint order behind all segment labels, staying inside the rounded clip.").font(type_::LABEL).color(theme.text_secondary))
+        .child(segmented);
+
+    let toast_btn = el()
+        .key("toast-btn")
+        .px(12.0)
+        .py(6.0)
+        .radius(8.0)
+        .fill(theme.control_off)
+        .border(1.0, theme.card_border)
+        .role("button")
+        .label("Toggle toast")
+        .on_press_tx(toggle_toast)
+        .child(text("Toggle toast (Space)").font(type_::LABEL).color(theme.text));
+
+    let instant_bar = row()
+        .key("instant-counter")
+        .gap(10.0)
+        .items_center()
+        .child(
+            el().key("instant-bar-track")
+                .w(44.0)
+                .h(6.0)
+                .radius(3.0)
+                .fill(theme.control_off)
+                .child(
+                    el().key("instant-bar")
+                        .w((((s.toast_seq % 4) + 1) as f32) * 11.0)
+                        .h(6.0)
+                        .radius(3.0)
+                        .fill(accent)
+                        .motion_intent(MotionIntent::STEP),
+                ),
+        )
+        .child(
+            text(format!("Instant commits: {}", s.toast_seq))
+                .key("instant-count")
+                .w(140.0)
+                .font(type_::LABEL)
+                .color(theme.text_secondary)
+                .motion_intent(MotionIntent::CUT),
+        );
+
+    let mut toast_slot = row().key("toast-slot").w_full().h(42.0).items_center();
+    if let Some(n) = s.toast {
+        toast_slot = toast_slot.child(
+            el().key(format!("instant-toast-{n}"))
+                .px(14.0)
+                .py(10.0)
+                .radius(10.0)
+                .fill(accent.alpha(0.18))
+                .border(1.0, accent.alpha(0.45))
+                .role("status")
+                .live_region(LiveRegion::Polite)
+                .motion_intent(MotionIntent::CUT)
+                .transition(
+                    Transition::scale(0.95)
+                        .combined(Transition::offset(0.0, 6.0))
+                        .combined(Transition::opacity()),
+                )
+                .enter_in_instant()
+                .child(text(format!("Toast #{n} entered during Tx::instant()")).font(type_::LABEL).color(theme.text)),
+        );
+    }
+
+    let toast_card = col()
+        .key("toast-card")
+        .w_full()
+        .padding(18.0)
+        .gap(12.0)
+        .radius(16.0)
+        .fill(theme.card)
+        .border(1.0, theme.card_border)
+        .child(text("Entrance in an instant commit (El::enter_in_instant)").font(TextStyle::new(16.0, 600.0)).color(theme.text))
+        .child(text("Clicking commits with Tx::instant(): the bar snaps and dismissal unmounts at once, while the new toast still plays its entrance.").font(type_::LABEL).color(theme.text_secondary))
+        .child(row().gap(14.0).items_center().child(toast_btn).child(instant_bar))
+        .child(toast_slot);
+
+    col().key("in-place-stage").w_full().grow(1.0).gap(16.0).child(seg_card).child(toast_card)
+}
+
 fn view(s: &State, _: &mut Cx<State>) -> El {
     let theme = tok::theme(true);
-    let hint_text = if s.mips_mode { "r next frame    m back to grid" } else { "1–4 pick    ↩ zoom    esc back    t curves    m mips" };
+    let hint_text = if s.mips_mode {
+        "r next frame    m back to grid"
+    } else if s.in_place_mode {
+        "1–3 segment    space toast (Tx::instant)    t curves    i back to grid"
+    } else {
+        "1–4 pick    ↩ zoom    esc back    t curves    i in-place    m mips"
+    };
     let hint = text(hint_text).font(type_::LABEL).color(theme.text_secondary);
     let mut bar = el().key("pick-bar").w((s.picked as f32 + 1.0) * 24.0).h(4.0).radius(2.0).fill(tok::accent(0, true));
     if s.timed {
@@ -226,6 +392,8 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         .child(row().gap(12.0).center_y().child(pick_track).child(mode));
     let stage = if s.mips_mode {
         mips_view(s, &theme)
+    } else if s.in_place_mode {
+        in_place_view(s, &theme)
     } else {
         let stage = col().key("stage").w_full().grow(1.0);
         if s.zoomed {
@@ -247,16 +415,23 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
     col().w_full().h_full().padding(24.0).gap(14.0).fill(theme.bg).child(header).child(stage)
 }
 
-fn on_key(s: &mut State, e: &KeyEvent, _: &mut Tx) -> bool {
+fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
     match &e.key {
         Key::Text(t) if t.eq_ignore_ascii_case("m") => {
-            if s.mips_mode { s.mips_mode = false; } else { s.enter_mips(false); }
+            if s.mips_mode { s.mips_mode = false; } else { s.in_place_mode = false; s.enter_mips(false); }
+        }
+        Key::Text(t) if t.eq_ignore_ascii_case("i") => {
+            s.in_place_mode = !s.in_place_mode;
+            if s.in_place_mode { s.mips_mode = false; }
         }
         Key::Text(t) if s.mips_mode && t.eq_ignore_ascii_case("r") => s.step_stream(false),
-        Key::Text(t) if !s.mips_mode && !s.zoomed && let Some(n @ 1..=4) = t.parse::<usize>().ok() => s.picked = n - 1,
+        Key::Text(t) if s.in_place_mode && let Some(n @ 1..=3) = t.parse::<usize>().ok() => s.segment = n - 1,
+        Key::Text(t) if s.in_place_mode && t == " " => toggle_toast(s, tx),
+        Key::Text(t) if !s.mips_mode && !s.in_place_mode && !s.zoomed && let Some(n @ 1..=4) = t.parse::<usize>().ok() => s.picked = n - 1,
         Key::Text(t) if !s.mips_mode && t.eq_ignore_ascii_case("t") => s.timed = !s.timed,
-        Key::Enter if !s.mips_mode => s.zoomed = true,
+        Key::Enter if !s.mips_mode && !s.in_place_mode => s.zoomed = true,
         Key::Escape if s.mips_mode => s.mips_mode = false,
+        Key::Escape if s.in_place_mode => s.in_place_mode = false,
         Key::Escape => s.zoomed = false,
         _ => return false,
     }
@@ -270,6 +445,7 @@ fn main() {
             ("grid", |_| {}),
             ("one", |s| s.zoomed = true),
             ("timed", |s| s.timed = true),
+            ("in-place", |s| { s.in_place_mode = true; s.mips_mode = false; }),
             ("mips", |s| s.enter_mips(true)),
         ],
         on_key: Some(on_key),
@@ -332,5 +508,28 @@ mod tests {
         rt.frame(0.20);
         let landed = rt.presented("tile-2").unwrap().0;
         assert!(landed[2] > 600.0 && landed[3] > 350.0, "landed width: {landed:?}");
+    }
+
+    #[test]
+    fn in_place_scene_slides_pill_behind_labels_and_enters_toast_in_instant() {
+        let mut st = init();
+        st.in_place_mode = true;
+        let mut rt = Runtime::new(st, view, (720.0, 480.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let start = rt.presented("seg-pill-0").unwrap().0;
+
+        rt.update(|s, _| s.segment = 2);
+        rt.frame(0.0);
+        rt.frame(0.06);
+        let mid = rt.presented("seg-pill-2").unwrap().0;
+        assert!(mid[0] > start[0] + 10.0, "pill is sliding: {start:?} -> {mid:?}");
+
+        // Toggle toast via Tx::instant(): counter bar snaps, toast enters smoothly.
+        rt.update(toggle_toast);
+        rt.frame(1.0 / 120.0);
+        let bar = rt.presented("instant-bar").unwrap().0;
+        assert!((bar[2] - 22.0).abs() < 0.5, "counter bar snapped in Tx::instant: {bar:?}");
+        let toast_op = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("instant-toast-1")).unwrap().opacity;
+        assert!(toast_op < 0.5, "toast with enter_in_instant fades in during Tx::instant: {toast_op}");
     }
 }

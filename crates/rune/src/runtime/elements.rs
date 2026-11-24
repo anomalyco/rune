@@ -309,12 +309,18 @@ impl RuntimeCore {
                 // Offsets are in points inside the scroll viewport; `rect` is in the window, after
                 // every scale and turn above. Below a lift (a flight or launch drawn over the
                 // window), the scales holding still above it carry them, unturned.
-                let mut lifted = None;
+                let mut lifted: Option<(f32, u32)> = None;
                 let mut j = i;
                 let mut steps = 0usize;
                 loop {
                     let to_window = |at: Option<usize>, v: [f32; 2]| match lifted {
-                        Some(k) => v.map(|c| c * k),
+                        Some((k, turn)) => {
+                            let [x, y] = v.map(|c| c * k);
+                            match turn.checked_sub(1).and_then(|t| self.paint.turn_scratch.get(t as usize)) {
+                                Some(t) => [t.mat[0] * x + t.mat[1] * y, t.mat[2] * x + t.mat[3] * y],
+                                None => [x, y],
+                            }
+                        }
                         None => at.map_or(v, |at| self.content_to_window(at, v)),
                     };
                     if j != i && let Some(st) = self.scroll.scrolls.get(&self.tree.nodes[j].id) {
@@ -332,7 +338,10 @@ impl RuntimeCore {
                     }
                     if lifted.is_none() && self.motion.flying.iter().any(|f| f.0 == id) {
                         let is_launch = self.motion.launches().launched(id);
-                        lifted = Some(parent.and_then(|p| self.paint.inh_scratch.get(p)).map_or(1.0, |h| if is_launch { h.still.0 } else { h.held.0 }));
+                        let in_place = self.tree.nodes[j].vis.flight_in_place && !is_launch;
+                        lifted = Some(parent.and_then(|p| self.paint.inh_scratch.get(p)).map_or((1.0, 0), |h| {
+                            (if is_launch { h.still.0 } else { h.held.0 }, if in_place { h.turn } else { 0 })
+                        }));
                     }
                     steps += 1;
                     if steps >= self.tree.nodes.len() { break; }

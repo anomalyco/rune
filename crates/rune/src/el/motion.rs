@@ -257,6 +257,27 @@ impl El {
         self.cold_mut().transition_motion = Some(Box::new((enter.into(), exit.into())));
         self
     }
+    /// Play this element's entrance [`transition`](Self::transition) even in a
+    /// [`Tx::instant`](crate::Tx::instant) commit, while its layout still snaps immediately and
+    /// removals in an instant commit still unmount at once.
+    ///
+    /// First frames, [`Tx::settle`](crate::Tx::settle), concealing commits, unprompted commits,
+    /// ancestor [`instant_changes`](Self::instant_changes), virtual-list remounts and off-screen
+    /// mounts still land immediately; Reduce Motion applies to the entrance transition as usual.
+    ///
+    /// ```
+    /// use rune::{Transition, el};
+    ///
+    /// let dialog = el()
+    ///     .key("dialog")
+    ///     .transition(Transition::scale(0.95).combined(Transition::opacity()))
+    ///     .enter_in_instant();
+    /// # let _ = dialog;
+    /// ```
+    pub fn enter_in_instant(mut self) -> Self {
+        self.cold_mut().enter_in_instant = true;
+        self
+    }
     /// Shared-element motion (SwiftUI `matchedGeometryEffect`, Motion `layoutId`). When an
     /// element with `id` leaves the tree in the same commit that another with `id` mounts
     /// somewhere else, the new one starts exactly where the old one was seen, with its
@@ -304,6 +325,29 @@ impl El {
     /// would otherwise scale up or slide off its leading edge.
     pub fn matched_crop(mut self) -> Self {
         self.vis.cold_mut().flight_crop = true;
+        self
+    }
+    /// Keep this [`matched`](Self::matched) element in its destination's paint order and
+    /// ancestor compositing layers (clips, rounded clips, opacity, blur and turns) while it
+    /// flies, instead of lifting it above the whole window.
+    ///
+    /// Matches SwiftUI `matchedGeometryEffect` hierarchy z-order: a sliding segmented-control
+    /// selection pill stays behind labels painted after it in the same container, and hit
+    /// testing follows the same order. Under Reduce Motion nothing is matched, as with
+    /// [`matched`](Self::matched).
+    ///
+    /// ```
+    /// use rune::{Color, el};
+    ///
+    /// let pill = el()
+    ///     .key("seg-pill")
+    ///     .matched("seg-pill")
+    ///     .matched_in_place()
+    ///     .fill(Color::WHITE);
+    /// # let _ = pill;
+    /// ```
+    pub fn matched_in_place(mut self) -> Self {
+        self.vis.cold_mut().flight_in_place = true;
         self
     }
     /// When an animated commit changes this element's width (a side panel springing open

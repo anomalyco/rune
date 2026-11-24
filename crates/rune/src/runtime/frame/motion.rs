@@ -160,6 +160,7 @@ impl RuntimeCore {
         paint.update_layer_paint_order(
             tree,
             &motion.flying,
+            |id| motion.launches().launched(id),
             |i| {
                 (scroll.requests.has_keeps() && scroll.requests.keeps().any(|k| k.hold.as_ref().is_some_and(|h| h.path == tree.nodes[i].path)))
                     || tree.nodes[i].sticky.as_ref().and_then(|s| s.edge).is_some()

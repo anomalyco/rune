@@ -214,8 +214,15 @@ impl RuntimeCore {
             let row_like = nodes[i].in_row == RowLayout::Snaps || nodes[i].parent.is_some_and(|p| nodes[p].growth.is_some());
             // An `El::instant_changes` element lands its changes, and those of what it holds;
             // its own entrance and exit, and colours, stay with the commit, as do the entrances of
-            // an `El::animated_changes` subtree inside it.
-            let enters_at_once = cut || (nodes[i].parent.is_some_and(|p| nodes[p].instant_changes) && nodes[i].instant_changes);
+            // an `El::animated_changes` subtree inside it. `El::enter_in_instant` lets a new
+            // element's entrance play during a `Tx::instant` commit while layout and exits still
+            // snap, and first frames, `Tx::settle`, concealing and unprompted commits still land.
+            let cut_for_enter = if nodes[i].enter_in_instant {
+                first || concealing || tx.commit.lands() || tx.unprompted
+            } else {
+                cut
+            };
+            let enters_at_once = cut_for_enter || (nodes[i].parent.is_some_and(|p| nodes[p].instant_changes) && nodes[i].instant_changes);
             let lands = instant || nodes[i].instant_changes;
             let layout_instant = lands || row_like || tx.relayout || is_virtual
                 || (!self.tree.aspect_snap.is_empty() && self.tree.aspect_snap.contains(&id));

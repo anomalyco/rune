@@ -1,0 +1,10 @@
+{
+  "events": [
+    { "t": 0.25, "type": "tap", "key": "seg-btn-2", "hold": 0.08, "expect": "smooth", "element": "seg-pill-2" },
+    { "t": 1.00, "type": "tap", "key": "seg-btn-1", "hold": 0.08, "expect": "smooth", "element": "seg-pill-1" },
+    { "t": 1.75, "type": "tap", "key": "seg-btn-0", "hold": 0.08, "expect": "smooth", "element": "seg-pill-0" },
+    { "t": 2.40, "type": "tap", "key": "toast-btn", "hold": 0.08, "expect": "smooth", "element": "instant-toast-1" },
+    { "t": 3.10, "type": "tap", "key": "toast-btn", "hold": 0.08, "expect": "instant", "scope": "instant-toast-1" },
+    { "t": 3.30, "type": "tap", "key": "toast-btn", "hold": 0.08, "expect": "smooth", "element": "instant-toast-2" }
+  ]
+}

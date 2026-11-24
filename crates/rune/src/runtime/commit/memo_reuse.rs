@@ -163,7 +163,7 @@ fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> boo
         clip, clip_radius, clip_corners, cutout, icon, icon_inked, icon_one_color, gradient, radial, outline, shape,
         grid, pixels, pixels_fit, effect, backdrop_blur, hover_motion, hover_within, press_motion,
         group_opacity, group_color, hover_alone, hover_share, icon_turn, cache_key, offset_motion, scale_motion,
-        origin, rotate_motion, child_exit, enter_delay, motion_intent, instant_motion, clip_to_content, flight_crop,
+        origin, rotate_motion, child_exit, enter_delay, motion_intent, instant_motion, clip_to_content, flight_crop, flight_in_place,
         hold_landing, row_face, press_color, hover_fill, press_fill, hover_border, press_border, paint_contain, motion_snaps, hairline, offset, paint_alpha, layer_opacity, blur, rotate, mark, mirror_rtl, paint_order,
     } = b;
     (match (&a.surface, surface) {
@@ -208,6 +208,7 @@ fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> boo
         && a.motion_intent == *motion_intent && a.instant_motion == *instant_motion
         && a.clip_to_content == *clip_to_content
         && a.flight_crop == *flight_crop
+        && a.flight_in_place == *flight_in_place
         && a.row_face == *row_face && a.hold_landing == *hold_landing && a.press_color == *press_color
         && a.hover_fill == *hover_fill && a.press_fill == *press_fill && a.hover_border == *hover_border && a.press_border == *press_border
         && a.paint_contain == *paint_contain && a.motion_snaps == *motion_snaps && a.hairline == *hairline
@@ -225,7 +226,7 @@ pub(in crate::runtime) fn same_visual(a: &Visual, b: &Visual) -> bool {
 fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
     let crate::el::ElCold {
         focus, looping, loop_times, trace_name, trace_namespace, role, label, live, above, above_boundary, motion, frame_motion, opacity_motion, lead,
-        animated_changes, option_as_alt, window_resize, transition, transition_motion, matched, matched_motion, scroll, scroll_axes, sticky, scroll_edges, growth, virtual_estimate, virtual_rows,
+        animated_changes, option_as_alt, window_resize, transition, transition_motion, enter_in_instant, matched, matched_motion, scroll, scroll_axes, sticky, scroll_edges, growth, virtual_estimate, virtual_rows,
         virtual_rows_version, virtual_rows_append_only, glide, input, time_scale, help, help_cut, help_side, help_open, material, aspect_fit, list_disc, a11y, wheel_scrolls, on_path,
         expanded_memo: _,
         #[cfg(debug_assertions)]
@@ -255,6 +256,7 @@ fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
         && a.window_resize == *window_resize
         && opt_box_eq(&a.transition, transition)
         && opt_box_eq(&a.transition_motion, transition_motion)
+        && a.enter_in_instant == *enter_in_instant
         && a.matched == *matched
         && opt_box_eq(&a.matched_motion, matched_motion)
         && a.scroll == *scroll
