@@ -242,10 +242,13 @@ fn headless_core(
     sleep: std::sync::mpsc::Receiver<()>,
 ) {
     if let Some(bars) = args.scroll_bars { core.set_system_scroll_bars(bars); }
-    let gpu = Gpu::new(Gpu::instance(), None);
     let srgb_blend = core.srgb_blend();
     let target_format = if srgb_blend { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT };
-    let mut renderer = Renderer::new(&gpu.device, target_format);
+    let (gpu, mut renderer) = Gpu::for_headless_setup(wgpu::Features::empty(), |gpu| {
+        Renderer::try_new_classified(&gpu.device, target_format)
+            .map_err(crate::render::SurfaceSetupError::from_shader)
+    })
+    .unwrap_or_else(|e| panic!("{}", e.message));
     renderer.set_srgb_blend(srgb_blend);
     let (w, h) = ((size.0 * scale).round() as u32, (size.1 * scale).round() as u32);
     let mut target = Offscreen::with_format(&gpu.device, w, h, target_format);

@@ -505,7 +505,12 @@ impl Host {
     /// `run` / `try_run` ends with it; otherwise logs it and leaves the app windowless so a later
     /// open can retry.
     pub(in crate::window) fn create(&mut self, event_loop: &ActiveEventLoop, token: Option<String>, focus: bool) {
-        match self.try_create(event_loop, token, focus) {
+        let result = self.try_create(event_loop, token, focus);
+        self.finish_create(result);
+    }
+
+    pub(crate) fn finish_create(&mut self, result: Result<(), String>) {
+        match result {
             Ok(()) => self.shared.set_window_error(None),
             Err(error) => {
                 let key = self.native_handle.key();

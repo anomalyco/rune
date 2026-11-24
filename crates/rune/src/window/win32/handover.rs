@@ -517,7 +517,7 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
             }
         },
     };
-    let (gpu, surface, renderer, config) = Gpu::for_surface_setup(
+    let (gpu, surface, (config, mut renderer)) = Gpu::for_surface_setup(
         features,
         false,
         PresentationFallback::Allow,
@@ -538,16 +538,23 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
                 create_hwnd_surface(instance, hwnd)
             }
         },
-        |gpu, surface| {
+        |gpu, surface, prewarmed| {
             let size = drawable_size(None, size, max_surface_dim(Some(gpu)));
             let (config, _) = surface_config(surface, &gpu.adapter, size, srgb)
                 .ok_or_else(|| SurfaceSetupError::unsupported("the GPU can't present to this window"))?;
             configure_checked(surface, gpu, &config).map_err(|error| SurfaceSetupError::from_configure("", error))?;
-            Ok(config)
+            let target_format = if srgb { config.format.remove_srgb_suffix() } else { config.format };
+            let renderer = match prewarmed {
+                Some(mut renderer) => {
+                    renderer.try_set_format(&gpu.device, target_format).map_err(SurfaceSetupError::from_shader)?;
+                    renderer
+                }
+                None => Renderer::try_new_classified(&gpu.device, target_format).map_err(SurfaceSetupError::from_shader)?,
+            };
+            Ok((config, renderer))
         },
     ).map_err(|e| e.message)?;
     let target_format = if srgb { config.format.remove_srgb_suffix() } else { config.format };
-    let mut renderer = renderer.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));
     let instances = std::mem::take(&mut *latest.lock().unwrap_or_else(|e| e.into_inner()));
     warm_frame(&gpu, &mut renderer, target_format, srgb, (config.width, config.height), &instances);
     crate::marks::mark("gpu.window.warmed");

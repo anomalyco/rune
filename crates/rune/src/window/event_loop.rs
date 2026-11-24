@@ -41,7 +41,7 @@ fn format_run_error(error: winit::error::EventLoopError, display_error: Option<&
 /// Resolves `try_run`'s result once `event_loop.run_app` returns, surfacing a startup window
 /// creation error when the loop exited cleanly because no initial window could be created.
 #[cfg(any(test, not(target_arch = "wasm32")))]
-fn finish_run(
+pub(crate) fn finish_run(
     result: Result<(), winit::error::EventLoopError>,
     display_error: Option<&str>,
     startup_error: Option<String>,

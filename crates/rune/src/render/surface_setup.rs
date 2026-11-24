@@ -65,6 +65,10 @@ impl SurfaceSetupError {
         };
         Self { kind: error.kind.into(), message }
     }
+
+    pub(crate) fn from_shader(error: super::ShaderError) -> Self {
+        Self { kind: error.kind.into(), message: error.message }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -86,7 +90,9 @@ impl Gpu {
     }
 
     /// Picks (or takes a prewarmed) GPU, creates a surface via `make_surface`, and runs `setup`
-    /// (typically building a `SurfaceConfiguration` and calling `configure_checked`).
+    /// (typically configuring the surface and building or retargeting the `Renderer`). When a
+    /// prewarmed GPU is available, its already-compiled `Renderer` is handed to `setup` so a
+    /// matching format does no extra shader work.
     ///
     /// Launch speed: when the prewarmed GPU or first picked adapter succeeds, no other adapters
     /// are enumerated, `make_surface` is called once, and no fallback instance is created.
@@ -99,8 +105,8 @@ impl Gpu {
             &wgpu::Instance,
             crate::gpu::fallback::Presentation,
         ) -> Result<wgpu::Surface<'w>, String>,
-        setup: impl FnMut(&Gpu, &wgpu::Surface<'w>) -> Result<T, SurfaceSetupError>,
-    ) -> Result<(Gpu, wgpu::Surface<'w>, Option<Renderer>, T), SurfaceSetupError> {
+        setup: impl FnMut(&Gpu, &wgpu::Surface<'w>, Option<Renderer>) -> Result<T, SurfaceSetupError>,
+    ) -> Result<(Gpu, wgpu::Surface<'w>, T), SurfaceSetupError> {
         Self::for_surface_setup_from(
             prewarm::take(),
             wanted,
@@ -109,6 +115,32 @@ impl Gpu {
             make_surface,
             setup,
         )
+    }
+
+    /// Picks a headless GPU and runs `setup` (typically building a `Renderer`), walking remaining
+    /// adapters (other hardware first, software/WARP last) when `setup` fails with a
+    /// fallback-eligible failure such as `Failure::ShaderRejected`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn for_headless_setup<T>(
+        wanted: wgpu::Features,
+        mut setup: impl FnMut(&Gpu) -> Result<T, SurfaceSetupError>,
+    ) -> Result<(Gpu, T), SurfaceSetupError> {
+        use crate::gpu::fallback::{Presentation, PresentationPolicy};
+        let instance = Self::instance_for(wanted);
+        let (gpu, (), value) = Self::try_setup_on(
+            instance,
+            (),
+            None,
+            Presentation::DirectComposition,
+            PresentationPolicy::Pinned,
+            wanted,
+            false,
+            |_, _| Ok(()),
+            |_| unreachable!("headless setup never switches presentation"),
+            |_| None,
+            |gpu, _| setup(gpu),
+        )?;
+        Ok((gpu, value))
     }
 
     /// Enters the fallback chain directly after an already-open or pooled GPU failed `setup` with
@@ -121,6 +153,7 @@ impl Gpu {
         presentation_fallback: PresentationFallback,
         excluded: crate::gpu::fallback::Candidate,
         first_info: wgpu::AdapterInfo,
+        first_kind: crate::gpu::fallback::Failure,
         first_error: String,
         wanted: wgpu::Features,
         translucent: bool,
@@ -137,6 +170,7 @@ impl Gpu {
             instance,
             presentation,
             state,
+            first_kind,
             None,
             vec![excluded],
             first_info,
@@ -185,8 +219,8 @@ impl Gpu {
             &wgpu::Instance,
             crate::gpu::fallback::Presentation,
         ) -> Result<wgpu::Surface<'w>, String>,
-        mut setup: impl FnMut(&Gpu, &wgpu::Surface<'w>) -> Result<T, SurfaceSetupError>,
-    ) -> Result<(Gpu, wgpu::Surface<'w>, Option<Renderer>, T), SurfaceSetupError> {
+        mut setup: impl FnMut(&Gpu, &wgpu::Surface<'w>, Option<Renderer>) -> Result<T, SurfaceSetupError>,
+    ) -> Result<(Gpu, wgpu::Surface<'w>, T), SurfaceSetupError> {
         use crate::gpu::fallback::{self, Action, Failure, Presentation, PresentationPolicy, State};
         let (initial_pres, pres_policy) = presentation_fallback.resolve();
         let early = early.filter(|(gpu, _)| {
@@ -200,10 +234,10 @@ impl Gpu {
                 let surface = make_surface(&early.instance, early_pres)
                     .map_err(|message| SurfaceSetupError { kind: Failure::SurfaceCreate, message })?;
                 if crate::render::translucency::serves(&early, &surface, wanted, translucent) {
-                    match setup(&early, &surface) {
+                    match setup(&early, &surface, Some(renderer)) {
                         Ok(value) => {
                             Self::log_surface_gpu(&early);
-                            return Ok((early, surface, Some(renderer), value));
+                            return Ok((early, surface, value));
                         }
                         Err(err) => match fallback::decide_with_presentation(
                             crate::gpu::pick::env_policy(),
@@ -212,11 +246,11 @@ impl Gpu {
                             err.kind,
                         ) {
                             Action::Stop => {
-                                drop((surface, renderer, early));
+                                drop((surface, early));
                                 return Err(err);
                             }
                             Action::SwitchToHwnd => {
-                                drop((surface, renderer, early));
+                                drop((surface, early));
                                 gpu_events::starting();
                                 let hwnd_instance = Self::switch_to_hwnd_instance(wanted, &err.message);
                                 let surface = make_surface(&hwnd_instance, Presentation::PlainHwnd)
@@ -230,12 +264,14 @@ impl Gpu {
                                 let first_info = early.adapter.get_info();
                                 let first_candidate = Self::candidate_info(0, &early.adapter, Some(&surface));
                                 let instance = early.instance.clone();
-                                drop((surface, renderer, early));
+                                drop((surface, early));
                                 gpu_events::starting();
+                                let mut fresh_setup = |gpu: &Gpu, surface: &wgpu::Surface<'w>| setup(gpu, surface, None);
                                 let outcome = Self::run_fallback_chain(
                                     instance,
                                     early_pres,
                                     State::need_fallbacks_with_presentation(err.message, early_pres, pres_policy),
+                                    err.kind,
                                     None,
                                     vec![first_candidate],
                                     first_info,
@@ -244,13 +280,13 @@ impl Gpu {
                                     translucent,
                                     &mut make_surface,
                                     |s| Some(s),
-                                    &mut setup,
+                                    &mut fresh_setup,
                                 );
                                 match outcome {
                                     ChainOutcome::Done(result) => {
                                         let (gpu, surface, value) = result?;
                                         Self::log_surface_gpu(&gpu);
-                                        return Ok((gpu, surface, None, value));
+                                        return Ok((gpu, surface, value));
                                     }
                                     ChainOutcome::SwitchToHwnd(reason) => {
                                         let hwnd_instance = Self::switch_to_hwnd_instance(wanted, &reason);
@@ -290,10 +326,10 @@ impl Gpu {
             make_surface,
             |reason| Self::switch_to_hwnd_instance(wanted, reason),
             |s| Some(s),
-            setup,
+            |gpu, surface| setup(gpu, surface, None),
         )?;
         Self::log_surface_gpu(&gpu);
-        Ok((gpu, surface, None, value))
+        Ok((gpu, surface, value))
     }
 
     /// Runs the first adapter pick + `setup`, and on a `MoveOn` or `SwitchToHwnd` failure walks
@@ -374,6 +410,7 @@ impl Gpu {
                         instance,
                         presentation,
                         state,
+                        fail_kind,
                         kept_surface,
                         vec![first_candidate],
                         first_info,
@@ -409,6 +446,7 @@ impl Gpu {
         instance: wgpu::Instance,
         presentation: crate::gpu::fallback::Presentation,
         mut state: crate::gpu::fallback::State,
+        first_kind: crate::gpu::fallback::Failure,
         mut pending_surface: Option<S>,
         tried: Vec<crate::gpu::fallback::Candidate>,
         first_info: wgpu::AdapterInfo,
@@ -450,7 +488,7 @@ impl Gpu {
         );
         pending_surface = Some(surface);
         let mut event = Event::Candidates(ordered);
-        let mut last_kind = Failure::SurfaceRefused;
+        let mut last_kind = first_kind;
         let mut last_error = String::new();
         loop {
             let mut next_event = None;
@@ -489,8 +527,9 @@ impl Gpu {
                                         let first_error = state.first_error().unwrap_or("").to_owned();
                                         let _ = fallback::step(&mut state, Event::Succeeded);
                                         let info = gpu.adapter.get_info();
+                                        let what = if draws_surfaces { "this surface" } else { "offscreen" };
                                         eprintln!(
-                                            "rune: {} ({:?}) could not draw this surface ({first_error}); falling back to {} ({:?}, {:?})",
+                                            "rune: {} ({:?}) could not draw {what} ({first_error}); falling back to {} ({:?}, {:?})",
                                             first_info.name, first_info.backend, info.name, info.backend, info.device_type
                                         );
                                         crate::native_surface::note_device(&gpu.device, draws_surfaces);
@@ -551,8 +590,20 @@ impl Gpu {
             &wgpu::Instance,
             crate::gpu::fallback::Presentation,
         ) -> Result<wgpu::Surface<'w>, String>,
-        _: impl FnMut(&Gpu, &wgpu::Surface<'w>) -> Result<T, SurfaceSetupError>,
-    ) -> Result<(Gpu, wgpu::Surface<'w>, Option<Renderer>, T), SurfaceSetupError> {
+        _: impl FnMut(&Gpu, &wgpu::Surface<'w>, Option<Renderer>) -> Result<T, SurfaceSetupError>,
+    ) -> Result<(Gpu, wgpu::Surface<'w>, T), SurfaceSetupError> {
+        Err(SurfaceSetupError {
+            kind: rune_gpu::fallback::Failure::DeviceCreate,
+            message: "synchronous GPU initialization is unsupported on web; use App::run".into(),
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[allow(dead_code)]
+    pub(crate) fn for_headless_setup<T>(
+        _: wgpu::Features,
+        _: impl FnMut(&Gpu) -> Result<T, SurfaceSetupError>,
+    ) -> Result<(Gpu, T), SurfaceSetupError> {
         Err(SurfaceSetupError {
             kind: rune_gpu::fallback::Failure::DeviceCreate,
             message: "synchronous GPU initialization is unsupported on web; use App::run".into(),
@@ -568,6 +619,7 @@ impl Gpu {
         _: PresentationFallback,
         _: crate::gpu::fallback::Candidate,
         _: wgpu::AdapterInfo,
+        _: crate::gpu::fallback::Failure,
         message: String,
         _: wgpu::Features,
         _: bool,

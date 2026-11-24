@@ -272,3 +272,46 @@ fn every_wgsl_shader_compiles_to_a_metal_library() {
     assert_eq!(files.len(), 29, "a WGSL file was added or removed: update this test");
     assert!(failures.is_empty(), "failed: {failures:?}");
 }
+
+#[test]
+fn error_scope_captures_invalid_wgsl_shader_and_pipeline_without_panicking() {
+    let instance = super::instance();
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+        .expect("a Metal adapter");
+    let (device, _queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        .expect("a Metal device");
+
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("broken"),
+        source: wgpu::ShaderSource::Wgsl("@vertex fn vs() -> @builtin(position) vec4<f32> { return missing_symbol; }".into()),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[],
+        immediate_size: 0,
+    });
+    let _pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("broken pipeline"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: None,
+        multiview_mask: None,
+        cache: None,
+    });
+    let internal_err = pollster::block_on(internal.pop());
+    let validation_err = pollster::block_on(validation.pop());
+    assert!(
+        validation_err.is_some() || internal_err.is_some(),
+        "an invalid shader or pipeline must be captured by the Metal error scope instead of panicking or succeeding silently"
+    );
+}

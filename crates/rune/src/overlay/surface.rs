@@ -220,7 +220,7 @@ impl OverlayCore {
         let (w, h) = ((self.at.size.0 * scale).round() as u32, (self.at.size.1 * scale).round() as u32);
         let srgb_blend = app.rt().srgb_blend();
         let make_surface = |instance: &wgpu::Instance, _| make(instance).ok_or_else(|| "could not create its GPU surface".to_owned());
-        let setup_surface = |gpu: &Gpu, surface: &wgpu::Surface<'_>| -> Result<_, crate::render::SurfaceSetupError> {
+        let setup_surface = |gpu: &Gpu, surface: &wgpu::Surface<'_>, existing: Option<Renderer>| -> Result<_, crate::render::SurfaceSetupError> {
             let (mut config, translucent) = crate::window::surface_config(surface, &gpu.adapter, (w, h), srgb_blend)
                 .ok_or_else(|| crate::render::SurfaceSetupError::unsupported("the GPU adapter can't present to this overlay"))?;
             let info = gpu.adapter.get_info();
@@ -242,54 +242,68 @@ impl OverlayCore {
             let prefix = format!("could not configure its GPU surface on {:?} {}", info.backend, info.name);
             crate::window::configure_checked(surface, gpu, &config)
                 .map_err(|error| crate::render::SurfaceSetupError::from_configure(&prefix, error))?;
-            Ok((config, translucent.is_none()))
+            let target_format = if srgb_blend { config.format.remove_srgb_suffix() } else { config.format };
+            let renderer = match existing {
+                Some(mut renderer) => {
+                    renderer.try_set_format(&gpu.device, target_format).map_err(crate::render::SurfaceSetupError::from_shader)?;
+                    renderer
+                }
+                None => Renderer::try_new_classified(&gpu.device, target_format).map_err(crate::render::SurfaceSetupError::from_shader)?,
+            };
+            Ok((config, translucent.is_none(), renderer))
         };
-        let mut prewarmed = None;
-        let (surface, (config, opaque_fallback)) = match reused {
-            Some((gpu, surface)) => match setup_surface(&gpu, &surface) {
-                Ok(configured) => { self.gpu = Some(gpu); (surface, configured) }
-                Err(err) => {
-                    if crate::gpu::fallback::decide_with_presentation(
-                        Gpu::env_fallback_policy(),
-                        gpu.presentation(),
-                        crate::gpu::fallback::PresentationPolicy::Pinned,
-                        err.kind,
-                    ) != crate::gpu::fallback::Action::MoveOn
-                    {
-                        if err.kind == crate::gpu::fallback::Failure::DeviceLost {
-                            self.gpu = None;
-                            self.renderer = None;
-                            app.release_compositor_gpu();
-                            *self.gpu_pool.borrow_mut() = Weak::default();
-                        }
-                        self.fail(err.message);
-                        return None;
-                    }
-                    let instance = gpu.instance.clone();
-                    let gpu_pres = gpu.presentation();
-                    let first_info = gpu.adapter.get_info();
-                    let excluded = Gpu::candidate_info(0, &gpu.adapter, Some(&surface));
-                    drop((surface, gpu));
-                    self.gpu = None;
-                    self.renderer = None;
-                    app.release_compositor_gpu();
-                    *self.gpu_pool.borrow_mut() = Weak::default();
-                    let (gpu, surface, configured) = match Gpu::for_surface_setup_excluding(
-                        instance, gpu_pres, crate::render::PresentationFallback::Forbid, excluded, first_info, err.message, features, true, make_surface, setup_surface,
-                    ) {
-                        Ok(made) => made,
-                        Err(err) => {
+        let (surface, (config, opaque_fallback, mut renderer), reused_renderer) = match reused {
+            Some((gpu, surface)) => {
+                let own_renderer = self.gpu.as_ref().is_some_and(|own| Arc::ptr_eq(own, &gpu))
+                    .then(|| self.renderer.take())
+                    .flatten();
+                let had_own = own_renderer.is_some();
+                match setup_surface(&gpu, &surface, own_renderer) {
+                    Ok(configured) => { self.gpu = Some(gpu); (surface, configured, had_own) }
+                    Err(err) => {
+                        if crate::gpu::fallback::decide_with_presentation(
+                            Gpu::env_fallback_policy(),
+                            gpu.presentation(),
+                            crate::gpu::fallback::PresentationPolicy::Pinned,
+                            err.kind,
+                        ) != crate::gpu::fallback::Action::MoveOn
+                        {
+                            if err.kind == crate::gpu::fallback::Failure::DeviceLost {
+                                self.gpu = None;
+                                self.renderer = None;
+                                app.release_compositor_gpu();
+                                *self.gpu_pool.borrow_mut() = Weak::default();
+                            }
                             self.fail(err.message);
                             return None;
                         }
-                    };
-                    let gpu = Arc::new(gpu);
-                    *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
-                    crate::render::surface_gpu(&gpu);
-                    self.gpu = Some(gpu);
-                    (surface, configured)
+                        let instance = gpu.instance.clone();
+                        let gpu_pres = gpu.presentation();
+                        let first_info = gpu.adapter.get_info();
+                        let excluded = Gpu::candidate_info(0, &gpu.adapter, Some(&surface));
+                        drop((surface, gpu));
+                        self.gpu = None;
+                        self.renderer = None;
+                        app.release_compositor_gpu();
+                        *self.gpu_pool.borrow_mut() = Weak::default();
+                        let (gpu, surface, configured) = match Gpu::for_surface_setup_excluding(
+                            instance, gpu_pres, crate::render::PresentationFallback::Forbid, excluded, first_info, err.kind, err.message, features, true, make_surface,
+                            |gpu, surface| setup_surface(gpu, surface, None),
+                        ) {
+                            Ok(made) => made,
+                            Err(err) => {
+                                self.fail(err.message);
+                                return None;
+                            }
+                        };
+                        let gpu = Arc::new(gpu);
+                        *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
+                        crate::render::surface_gpu(&gpu);
+                        self.gpu = Some(gpu);
+                        (surface, configured, false)
+                    }
                 }
-            },
+            }
             None => {
                 if self.gpu.is_some() {
                     self.gpu = None;
@@ -303,21 +317,20 @@ impl OverlayCore {
                     make_surface,
                     setup_surface,
                 );
-                let (gpu, surface, renderer, configured) = match made {
+                let (gpu, surface, configured) = match made {
                     Ok(made) => made,
                     Err(err) => {
                         self.fail(err.message);
                         return None;
                     }
                 };
-                prewarmed = renderer;
-                // The old renderer's buffers live on the old device; a new one is made below.
+                // The old renderer's buffers live on the old device; a new one was built above.
                 self.renderer = None;
                 let gpu = Arc::new(gpu);
                 *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
                 crate::render::surface_gpu(&gpu);
                 self.gpu = Some(gpu);
-                (surface, configured)
+                (surface, configured, false)
             }
         };
         let gpu = self.gpu.clone()?;
@@ -330,12 +343,9 @@ impl OverlayCore {
         #[cfg(target_os = "macos")]
         crate::platform::macos::pin_contents_top_left(&surface);
         let target_format = if rt.srgb_blend() { config.format.remove_srgb_suffix() } else { config.format };
-        if let Some(renderer) = &mut self.renderer {
-            crate::window::rebuild_renderer_core(&gpu.device, renderer, target_format, rt);
-        } else {
-            let mut renderer = prewarmed.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));
-            crate::window::rebuild_renderer_core(&gpu.device, &mut renderer, target_format, rt);
-            self.renderer = Some(renderer);
+        crate::window::rebuild_renderer_core(&gpu.device, &mut renderer, target_format, rt);
+        self.renderer = Some(renderer);
+        if !reused_renderer {
             rt.text.atlas.invalidate();
             rt.images.invalidate();
         }

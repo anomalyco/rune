@@ -48,8 +48,23 @@ pub(crate) struct Shared {
     /// Held while one thread runs the callbacks retired work owes, so they run in order: a
     /// loss's before the work-done callbacks of what failed (`submit::Shared::retire`).
     pub(super) dispatch: Mutex<()>,
+    /// Active `Device::push_error_scope` stack for capturing shader and pipeline errors.
+    pub(super) scopes: Mutex<ErrorScopes>,
 }
 send_sync!(Shared);
+
+/// Active wgpu error scopes pushed on this device, innermost at the back.
+#[derive(Default)]
+pub(super) struct ErrorScopes {
+    next: u32,
+    stack: Vec<(u32, wgpu::ErrorFilter, Option<wgpu::Error>)>,
+}
+
+impl std::fmt::Debug for ErrorScopes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ErrorScopes").field("depth", &self.stack.len()).finish()
+    }
+}
 
 /// The device's loss (`Device::set_device_lost_callback`), reported either through a failed
 /// command buffer (`submit::failed`) or an explicit `Device::destroy`.
@@ -72,6 +87,24 @@ impl std::fmt::Debug for Lost {
 }
 
 impl Shared {
+    /// Records an error of `filter` into the innermost matching error scope, returning `true`
+    /// when a scope captured it and `false` when no matching scope is active.
+    pub(super) fn capture_error(&self, filter: wgpu::ErrorFilter, message: String) -> bool {
+        let mut scopes = self.scopes.lock();
+        let Some((_, _, slot)) = scopes.stack.iter_mut().rev().find(|(_, kind, _)| *kind == filter) else {
+            return false;
+        };
+        if slot.is_none() {
+            let source = Box::new(std::io::Error::other(message.clone()));
+            *slot = Some(match filter {
+                wgpu::ErrorFilter::Validation => wgpu::Error::Validation { source, description: message },
+                wgpu::ErrorFilter::OutOfMemory => wgpu::Error::OutOfMemory { source },
+                wgpu::ErrorFilter::Internal => wgpu::Error::Internal { source, description: message },
+            });
+        }
+        true
+    }
+
     /// Marks the device lost once with `(reason, message)`, enqueues its device-lost callback
     /// ahead of pending work-done and map callbacks, and dispatches them in order.
     pub(super) fn mark_lost(&self, reason: wgpu::DeviceLostReason, message: String) {
@@ -124,6 +157,7 @@ pub(super) fn new(device: Obj<dyn MTLDevice>, desc: &wgpu::DeviceDescriptor<'_>)
         builtin: OnceLock::new(),
         lost: Mutex::new(Lost::default()),
         dispatch: Mutex::new(()),
+        scopes: Mutex::new(ErrorScopes::default()),
         device,
     });
     let device = MetalDevice { shared: shared.clone(), features: desc.required_features, limits: desc.required_limits.clone() };
@@ -154,7 +188,7 @@ impl DeviceInterface for MetalDevice {
     fn limits(&self) -> wgpu::Limits { self.limits.clone() }
     fn adapter_info(&self) -> wgpu::AdapterInfo { info(&self.shared.device) }
     fn create_shader_module(&self, desc: wgpu::ShaderModuleDescriptor<'_>, checks: wgpu::ShaderRuntimeChecks) -> DispatchShaderModule {
-        DispatchShaderModule::custom(ShaderModule::new(desc, checks))
+        DispatchShaderModule::custom(ShaderModule::new(&self.shared, desc, checks))
     }
     unsafe fn create_shader_module_passthrough(&self, desc: &wgpu::ShaderModuleDescriptorPassthrough<'_>) -> DispatchShaderModule {
         DispatchShaderModule::custom(ShaderModule::passthrough(&self.shared, desc))
@@ -221,9 +255,20 @@ impl DeviceInterface for MetalDevice {
         }
     }
     fn on_uncaptured_error(&self, _: Arc<dyn wgpu::UncapturedErrorHandler>) {}
-    // The backend validates nothing, so a scope never catches an error.
-    fn push_error_scope(&self, _: wgpu::ErrorFilter) -> u32 { 0 }
-    fn pop_error_scope(&self, _: u32) -> Pin<Box<dyn PopErrorScopeFuture>> { Box::pin(ready(None)) }
+    fn push_error_scope(&self, filter: wgpu::ErrorFilter) -> u32 {
+        let mut scopes = self.shared.scopes.lock();
+        scopes.next = scopes.next.wrapping_add(1);
+        let id = scopes.next;
+        scopes.stack.push((id, filter, None));
+        id
+    }
+    fn pop_error_scope(&self, index: u32) -> Pin<Box<dyn PopErrorScopeFuture>> {
+        let error = {
+            let mut scopes = self.shared.scopes.lock();
+            scopes.stack.iter().rposition(|(id, _, _)| *id == index).and_then(|pos| scopes.stack.remove(pos).2)
+        };
+        Box::pin(ready(error))
+    }
     unsafe fn start_graphics_debugger_capture(&self) {}
     unsafe fn stop_graphics_debugger_capture(&self) {}
     fn poll(&self, poll: wgpu::wgt::PollType<u64>) -> Result<wgpu::PollStatus, wgpu::PollError> { self.shared.poll(poll) }

@@ -206,18 +206,29 @@ fn wgsl_shader(device: &wgpu::Device, wgsl: &str) -> wgpu::ShaderModule {
 pub(super) fn uber_shader_and_pipeline(
     device: &wgpu::Device,
     mut make_pipeline: impl FnMut(&super::dxbc::Shaders) -> wgpu::RenderPipeline,
-) -> (super::dxbc::Shaders, wgpu::RenderPipeline) {
+) -> Result<(super::dxbc::Shaders, wgpu::RenderPipeline), super::shader_check::ShaderError> {
+    #[cfg(test)]
+    let refuse_classic = super::shader_check::refuse_classic();
+    #[cfg(all(not(test), target_os = "macos"))]
+    let refuse_classic = false;
     #[cfg(target_os = "macos")]
-    if metallib_enabled()
+    if !refuse_classic
+        && metallib_enabled()
         && let Some((shader, pipeline)) = try_uber_metallib(device, uber_metallib(device), UBER_WGSL_BLAKE3, |shader| make_pipeline(&super::dxbc::Shaders::one(shader.clone())))
     {
         METALLIB_LOADS.with(|n| n.set(n.get() + 1));
-        return (super::dxbc::Shaders::one(shader), pipeline);
+        return Ok((super::dxbc::Shaders::one(shader), pipeline));
     }
+    #[cfg(test)]
+    let wgsl = if refuse_classic { super::shader_check::INVALID_WGSL } else { uber_wgsl() };
+    #[cfg(not(test))]
+    let wgsl = uber_wgsl();
     // Windows ships bytecode for Windfoil alone (render/dxbc.rs): Classic compiles its WGSL there.
-    let shaders = super::dxbc::Shaders::one(wgsl_shader(device, uber_wgsl()));
-    let pipeline = make_pipeline(&shaders);
-    (shaders, pipeline)
+    super::shader_check::checked_sync(device, || {
+        let shaders = super::dxbc::Shaders::one(wgsl_shader(device, wgsl));
+        let pipeline = make_pipeline(&shaders);
+        (shaders, pipeline)
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -276,6 +287,7 @@ fn try_uber_metallib<T>(
         return None;
     }
     let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let memory_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
     let internal_scope = device.push_error_scope(wgpu::ErrorFilter::Internal);
     // SAFETY: only our embedded macOS library is accepted, never caller-provided shader code.
     // Its validated Naga MSL retains bounds checks and loop bounding; the ABI fingerprint above
@@ -302,18 +314,23 @@ fn try_uber_metallib<T>(
             ..Default::default()
         })
     };
-    // Rune's backend reports no errors to scopes, so check it loaded and has both functions.
+    // Rune's backend keeps passthrough library load status on the module, so check it has both functions.
     #[cfg(feature = "metal-backend")]
     if native(device) && !crate::gpu::metal::module_ready(&shader) {
-        let _ = (pollster::block_on(internal_scope.pop()), pollster::block_on(validation_scope.pop()));
+        let _ = (
+            pollster::block_on(internal_scope.pop()),
+            pollster::block_on(memory_scope.pop()),
+            pollster::block_on(validation_scope.pop()),
+        );
         return None;
     }
     // Metal may load the library but reject an entry point or its AIR at pipeline creation.
-    // Keep both scopes active through that operation, before retaining the shader for later use.
+    // Keep all scopes active through that operation, before retaining the shader for later use.
     let pipeline = make_pipeline(&shader);
     let internal_err = pollster::block_on(internal_scope.pop());
+    let memory_err = pollster::block_on(memory_scope.pop());
     let validation_err = pollster::block_on(validation_scope.pop());
-    if internal_err.is_some() || validation_err.is_some() {
+    if internal_err.is_some() || memory_err.is_some() || validation_err.is_some() {
         return None;
     }
     Some((shader, pipeline))

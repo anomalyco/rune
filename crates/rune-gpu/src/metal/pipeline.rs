@@ -31,7 +31,8 @@ pub(crate) struct RenderPipeline {
 
 #[derive(Debug)]
 pub(crate) struct PipelineRaw {
-    pub(super) state: Obj<dyn MTLRenderPipelineState>,
+    /// `None` when pipeline creation failed inside an active wgpu error scope.
+    pub(super) state: Option<Obj<dyn MTLRenderPipelineState>>,
     pub(super) layout: Arc<LayoutRaw>,
     pub(super) primitive: MTLPrimitiveType,
     pub(super) cull: MTLCullMode,
@@ -178,41 +179,57 @@ pub(super) fn create(shared: &Shared, desc: &wgpu::RenderPipelineDescriptor<'_>)
     let d = MTLRenderPipelineDescriptor::new();
     #[cfg(debug_assertions)]
     if let Some(label) = desc.label { d.setLabel(Some(&NSString::from_str(label))); }
-    let vertex = Stage { module: desc.vertex.module, entry: desc.vertex.entry_point, constants: desc.vertex.compilation_options.constants,
-        kind: naga::ShaderStage::Vertex };
-    let vs = compile(shared, &vertex, &layout.stages[0], points).unwrap_or_else(|e| panic!("{label}: {e}"));
-    d.setVertexFunction(Some(&vs.function));
-    let mut sized = [vs.sized, Vec::new()];
-    if let Some(fragment) = &desc.fragment {
-        let stage = Stage { module: fragment.module, entry: fragment.entry_point, constants: fragment.compilation_options.constants,
-            kind: naga::ShaderStage::Fragment };
-        let fs = compile(shared, &stage, &layout.stages[1], points).unwrap_or_else(|e| panic!("{label}: {e}"));
-        d.setFragmentFunction(Some(&fs.function));
-        sized[1] = fs.sized;
-        if fragment.targets.len() > 4 { super::unsupported!("more than four color targets") }
-        for (i, target) in fragment.targets.iter().enumerate() {
-            // SAFETY: at most four attachments, checked above.
-            let attachment = unsafe { d.colorAttachments().objectAtIndexedSubscript(i) };
-            let Some(target) = target else { attachment.setPixelFormat(MTLPixelFormat::Invalid); continue };
-            attachment.setPixelFormat(pixel_format(target.format));
-            attachment.setWriteMask(write_mask(target.write_mask));
-            if let Some(blend) = target.blend {
-                attachment.setBlendingEnabled(true);
-                attachment.setRgbBlendOperation(blend_operation(blend.color.operation));
-                attachment.setSourceRGBBlendFactor(blend_factor(blend.color.src_factor));
-                attachment.setDestinationRGBBlendFactor(blend_factor(blend.color.dst_factor));
-                attachment.setAlphaBlendOperation(blend_operation(blend.alpha.operation));
-                attachment.setSourceAlphaBlendFactor(blend_factor(blend.alpha.src_factor));
-                attachment.setDestinationAlphaBlendFactor(blend_factor(blend.alpha.dst_factor));
+    let built = (|| -> Result<(Obj<dyn MTLRenderPipelineState>, [Vec<naga::ResourceBinding>; 2]), String> {
+        let vertex = Stage { module: desc.vertex.module, entry: desc.vertex.entry_point, constants: desc.vertex.compilation_options.constants,
+            kind: naga::ShaderStage::Vertex };
+        let vs = compile(shared, &vertex, &layout.stages[0], points)?;
+        d.setVertexFunction(Some(&vs.function));
+        let mut sized = [vs.sized, Vec::new()];
+        if let Some(fragment) = &desc.fragment {
+            let stage = Stage { module: fragment.module, entry: fragment.entry_point, constants: fragment.compilation_options.constants,
+                kind: naga::ShaderStage::Fragment };
+            let fs = compile(shared, &stage, &layout.stages[1], points)?;
+            d.setFragmentFunction(Some(&fs.function));
+            sized[1] = fs.sized;
+            if fragment.targets.len() > 4 { super::unsupported!("more than four color targets") }
+            for (i, target) in fragment.targets.iter().enumerate() {
+                // SAFETY: at most four attachments, checked above.
+                let attachment = unsafe { d.colorAttachments().objectAtIndexedSubscript(i) };
+                let Some(target) = target else { attachment.setPixelFormat(MTLPixelFormat::Invalid); continue };
+                attachment.setPixelFormat(pixel_format(target.format));
+                attachment.setWriteMask(write_mask(target.write_mask));
+                if let Some(blend) = target.blend {
+                    attachment.setBlendingEnabled(true);
+                    attachment.setRgbBlendOperation(blend_operation(blend.color.operation));
+                    attachment.setSourceRGBBlendFactor(blend_factor(blend.color.src_factor));
+                    attachment.setDestinationRGBBlendFactor(blend_factor(blend.color.dst_factor));
+                    attachment.setAlphaBlendOperation(blend_operation(blend.alpha.operation));
+                    attachment.setSourceAlphaBlendFactor(blend_factor(blend.alpha.src_factor));
+                    attachment.setDestinationAlphaBlendFactor(blend_factor(blend.alpha.dst_factor));
+                }
             }
         }
-    }
-    d.setVertexDescriptor(vertex_descriptor(desc.vertex.buffers).as_deref());
-    // SAFETY: the class matches the primitive type every draw with this pipeline uses.
-    unsafe { d.setInputPrimitiveTopology(class) };
-    d.setRasterSampleCount(desc.multisample.count as usize);
-    d.setAlphaToCoverageEnabled(desc.multisample.alpha_to_coverage_enabled);
-    let state = shared.device.newRenderPipelineStateWithDescriptor_error(&d).unwrap_or_else(|e| panic!("{label}: {}", e.localizedDescription()));
+        d.setVertexDescriptor(vertex_descriptor(desc.vertex.buffers).as_deref());
+        // SAFETY: the class matches the primitive type every draw with this pipeline uses.
+        unsafe { d.setInputPrimitiveTopology(class) };
+        d.setRasterSampleCount(desc.multisample.count as usize);
+        d.setAlphaToCoverageEnabled(desc.multisample.alpha_to_coverage_enabled);
+        let state = shared.device.newRenderPipelineStateWithDescriptor_error(&d)
+            .map_err(|e| e.localizedDescription().to_string())?;
+        Ok((state, sized))
+    })();
+    let (state, sized) = match built {
+        Ok((state, sized)) => (Some(state), sized),
+        Err(error) => {
+            let msg = format!("{label}: {error}");
+            if !shared.capture_error(wgpu::ErrorFilter::Internal, msg.clone())
+                && !shared.capture_error(wgpu::ErrorFilter::Validation, msg.clone())
+            {
+                panic!("{msg}");
+            }
+            (None, [Vec::new(), Vec::new()])
+        }
+    };
     let raw = PipelineRaw {
         state,
         layout,

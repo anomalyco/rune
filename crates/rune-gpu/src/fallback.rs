@@ -110,6 +110,8 @@ pub enum Failure {
     /// returned `E_NOTIMPL`, or `dcomp.dll` / `DCompositionCreateDevice2` / `CreateTargetForHwnd`
     /// failed on a live device).
     DirectCompositionUnavailable,
+    /// The adapter's driver rejected Rune's last-resort (Classic) uber shader or pipeline.
+    ShaderRejected,
     /// Transient out-of-memory error (`wgpu::Error::OutOfMemory`).
     OutOfMemory,
     /// The device was lost or removed (driver reset, TDR, Modern Standby).
@@ -140,9 +142,10 @@ pub const fn decide(policy: Policy, failure: Failure) -> Decision {
     match policy {
         Policy::Pinned => Decision::Stop,
         Policy::Automatic => match failure {
-            Failure::DeviceCreate | Failure::SurfaceUnsupported | Failure::SurfaceRefused => {
-                Decision::MoveOn
-            }
+            Failure::DeviceCreate
+            | Failure::SurfaceUnsupported
+            | Failure::SurfaceRefused
+            | Failure::ShaderRejected => Decision::MoveOn,
             Failure::DirectCompositionUnavailable
             | Failure::OutOfMemory
             | Failure::DeviceLost

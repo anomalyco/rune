@@ -255,6 +255,7 @@ fn pipeline_linkage_failure_retries_wgsl_without_uncaptured_error() {
             Renderer::pipeline(&gpu.device, &renderer.layout, shader, OFFSCREEN_FORMAT,
                 entry, Blend::SourceOver)
         })
+        .expect("WGSL fallback succeeds")
     });
     assert_eq!(attempts, 2, "a loaded library can still fail at pipeline creation");
     assert_eq!(METALLIB_LOADS.with(std::cell::Cell::get), before,
