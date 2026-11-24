@@ -81,6 +81,8 @@ pub(crate) use instance::unpack_u64_f32;
 pub(crate) use instance::word;
 pub(crate) use warmup::park_gpu;
 pub(crate) use warmup::surface_gpu;
+#[cfg(target_os = "linux")]
+pub(crate) use warmup::warm_gpu_then;
 
 pub use backdrop_blur::MAX_BACKDROP_BLURS;
 pub use device::Gpu;

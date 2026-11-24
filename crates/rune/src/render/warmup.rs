@@ -321,6 +321,13 @@ pub fn warm_gpu_with(features: wgpu::Features, prepare: impl FnOnce(&wgpu::Devic
     let _ = (features, prepare);
 }
 
+/// `warm_gpu` for a window that opened on the CPU: `done` runs on a thread once the device and
+/// renderer wait for the window's surface, or none could be made (`window::linux::handover`).
+#[cfg(target_os = "linux")]
+pub(crate) fn warm_gpu_then(features: wgpu::Features, done: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
+    super::prewarm::warm_then(features, done)
+}
+
 /// Makes what a window's GPU frames start from (the device, the renderer's pipelines for a
 /// window's swap chain, the pipelines pinned to one kind each) in a process that shows nothing,
 /// and returns once the driver has compiled them. Direct3D keeps what the driver compiled, and

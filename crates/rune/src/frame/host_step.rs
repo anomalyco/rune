@@ -28,7 +28,7 @@ pub(crate) enum Outcome {
     /// Rendering could not prepare its target (e.g. a CPU-boot frame needs the GPU or lacked a
     /// buffer, or the web host rejected unsupported native surfaces) and deferred to the host's
     /// recovery path.
-    #[cfg(any(test, target_os = "windows", target_arch = "wasm32"))]
+    #[cfg(any(test, target_os = "windows", target_os = "linux", target_arch = "wasm32"))]
     Aborted,
     /// A frame was drawn, submitted/presented, recorded on the clock and interaction tracker, and
     /// settled.
@@ -106,7 +106,7 @@ pub(crate) enum PostStepCheck {
 #[derive(Debug)]
 pub(crate) enum RenderPrep<P> {
     Ready(P),
-    #[cfg(any(test, target_os = "windows", target_arch = "wasm32"))]
+    #[cfg(any(test, target_os = "windows", target_os = "linux", target_arch = "wasm32"))]
     Abort,
 }
 
@@ -177,7 +177,7 @@ pub(crate) enum Event {
     ReacquireMissed(Missed),
     Synced,
     Prepared,
-    #[cfg(any(test, target_os = "windows", target_arch = "wasm32"))]
+    #[cfg(any(test, target_os = "windows", target_os = "linux", target_arch = "wasm32"))]
     PrepareAborted,
     Rendered,
     Presented,
@@ -305,7 +305,7 @@ pub(crate) fn step(phase: &mut Phase, event: Event) -> Effects<Effect> {
             *phase = Phase::Rendering;
             Effects::one(Effect::Render)
         }
-        #[cfg(any(test, target_os = "windows", target_arch = "wasm32"))]
+        #[cfg(any(test, target_os = "windows", target_os = "linux", target_arch = "wasm32"))]
         (Phase::Preparing, Event::PrepareAborted) => {
             *phase = Phase::Done(Outcome::Aborted);
             Effects::none()
@@ -549,7 +549,7 @@ pub(crate) fn run<H: FrameHost>(host: &mut H) -> Outcome {
             let Effects::One(Effect::Render) = step(&mut phase, Event::Prepared) else { unreachable!() };
             prepared
         }
-        #[cfg(any(test, target_os = "windows", target_arch = "wasm32"))]
+        #[cfg(any(test, target_os = "windows", target_os = "linux", target_arch = "wasm32"))]
         RenderPrep::Abort => {
             let Effects::None = step(&mut phase, Event::PrepareAborted) else { unreachable!() };
             return phase.outcome();

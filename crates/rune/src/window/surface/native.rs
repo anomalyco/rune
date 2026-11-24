@@ -73,6 +73,9 @@ mod tests;
 #[derive(Default)]
 pub(in crate::window) struct Native {
     pub(in crate::window) activator: Option<crate::platform::activation::Activator>,
+    /// Whether the CPU renderer or the GPU draws its frames (`linux::cpu_frame`).
+    #[cfg(target_os = "linux")]
+    pub(in crate::window) mode: crate::window::linux::handover::SurfaceMode,
 }
 
 #[cfg(target_os = "windows")]

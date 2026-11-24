@@ -147,6 +147,15 @@ impl Host {
         }
         #[cfg(target_os = "windows")]
         if cpu_first { return self.open_on_cpu(event_loop, window, a11y, a11y_start, frame, cloak, focus, open_as, built); }
+        // Linux: its first frame on the CPU renderer too, sent before any GPU is made
+        // (`linux::cpu_frame`); a display that takes no CPU frames gives the window back.
+        #[cfg(target_os = "linux")]
+        let (window, a11y) = if visible && crate::window::linux::cpu_frame::opens_on_cpu(self) {
+            match self.open_on_cpu(event_loop, window, a11y, built) {
+                Ok(()) => return Ok(()),
+                Err(back) => back,
+            }
+        } else { (window, a11y) };
         let mut prewarmed = None;
         crate::marks::mark("gpu.begin");
         // A device that died while this window was closed draws nothing: make another.
@@ -592,7 +601,7 @@ impl Host {
     /// that releases its GPU when closed: it leaves the screen as `hide` leaves it, stops input
     /// and hides the native window (`stop_showing`, `wind_down`), then the window, device and
     /// surface go. An app sees `window_error` and can `open` the window again.
-    fn give_up_surface(&mut self, reason: String) -> bool {
+    pub(in crate::window) fn give_up_surface(&mut self, reason: String) -> bool {
         eprintln!("rune: {reason}");
         self.stop_showing();
         self.wind_down();

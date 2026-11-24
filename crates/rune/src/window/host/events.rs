@@ -173,9 +173,9 @@ impl Host {
             }
             #[cfg(not(target_os = "windows"))]
             WakeEvent::FrameSlot(_) => {}
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
             WakeEvent::GpuReady(_) => self.gpu_ready(),
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(not(any(target_os = "windows", target_os = "linux")))]
             WakeEvent::GpuReady(_) => {}
             WakeEvent::Reopen | WakeEvent::Turn | WakeEvent::Quit(_) => {}
         }

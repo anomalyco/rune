@@ -2,6 +2,8 @@ pub(crate) mod accent;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 pub(crate) mod activation;
 pub(crate) mod app_icon;
+#[cfg(target_os = "linux")]
+pub(crate) mod cpu_frames;
 #[cfg(target_os = "macos")]
 pub(crate) mod display_link;
 #[cfg(target_vendor = "apple")]

@@ -37,6 +37,8 @@ pub mod spec;
 mod state;
 mod surface;
 pub(crate) mod titlebar;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "windows")]
 mod win32;
 /// `crate::warm_gpu_cache` on Windows (`win32::handover`).
@@ -121,7 +123,7 @@ pub(crate) enum WakeEvent {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Turn,
     /// Windows: the GPU a CPU-drawn window was waiting for is made, or failed (`cpu_frame`).
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
     GpuReady(usize),
 }
 

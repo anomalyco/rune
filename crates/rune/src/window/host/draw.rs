@@ -181,6 +181,9 @@ impl Host {
             self.hand_over_if_done();
             if self.win.as_ref().is_some_and(|w| w.native.mode.cpu_draws()) { return self.draw_cpu(resizing); }
         }
+        // Linux: so does one there (`linux::cpu_frame`).
+        #[cfg(target_os = "linux")]
+        if self.win.as_ref().is_some_and(|w| w.native.mode.cpu_draws()) { return self.draw_cpu(resizing); }
         let mut frame = WindowFrame { host: self, resizing, state: FrameState::default() };
         host_step::run(&mut frame);
     }
