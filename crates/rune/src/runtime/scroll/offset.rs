@@ -132,7 +132,9 @@ impl RuntimeCore {
                 })
         };
         // `"row/mark"`: element or highlight `mark` anywhere inside the element keyed `row`.
-        let target = found(None, key).or_else(|| key.split_once('/').and_then(|(row, mark)| found(Some(row), mark)));
+        let target = found(None, key).or_else(|| {
+            key.rmatch_indices('/').find_map(|(at, _)| found(Some(&key[..at]), &key[at + 1..]))
+        });
         if let Some((i, y)) = target {
             let v = std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent).find(|&p| self.tree.nodes[p].scroll.is_some() && self.tree.nodes[p].scroll_axes.y())?;
             let raw = f64::from(y - self.tree.nodes[v].target[1] - at).max(0.0);
@@ -145,14 +147,15 @@ impl RuntimeCore {
             };
             return Some((v, to));
         }
-        self.tree.nodes.iter().find_map(|n| {
-            let list = self.commit.virtuals.get(&n.path)?;
-            // A row that isn't mounted stands where the estimates put it; the jump mounts it and
-            // `scroll_to_offsets` places `mark` once it has.
-            let index = list.index_of(key).or_else(|| list.index_of(key.split_once('/')?.0))?;
-            let v = *self.tree.node_index.get(self.tree.path_ids.get(&list.scroll_path)?)?;
-            Some((v, f64::from(list.top + list.pad_top + list.prefix(index) - at).max(0.0)))
-        })
+        // A row that isn't mounted stands where the estimates put it; the jump mounts it and
+        // `scroll_to_offsets` places the row or `mark` once it has.
+        let (list, index) = self.resolve_virtual_row(None, key)?;
+        let v = *self.tree.node_index.get(self.tree.path_ids.get(&list.scroll_path)?)?;
+        let mid = match mode {
+            ScrollAnchor::CenterSnapped => list.height(&list.keys[index]) * 0.5,
+            _ => 0.0,
+        };
+        Some((v, f64::from(list.top + list.pad_top + list.prefix(index) + mid - at).max(0.0)))
     }
 
     /// The viewport keyed (or pathed) `key`, or the nearest one around it, that scrolls

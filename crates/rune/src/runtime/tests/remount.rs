@@ -600,3 +600,188 @@ fn scroll_requests_on_variable_height_virtual_list_land_exact_without_running_vi
     assert_eq!(rt.state.views.get() - v0, 0, "scroll_to_bottom_instant must not run view");
     assert_eq!(offset(&rt), offset(&full), "scroll_to_bottom_instant lands at the exact measured bottom");
 }
+
+#[derive(Default)]
+struct ScopedListsState {
+    views: Cell<u32>,
+}
+
+fn two_scoped_virtual_lists() -> Runtime<ScopedListsState> {
+    fn pane(pane_key: &'static str, scroll_key: &'static str, list_key: &'static str) -> El {
+        col().key(pane_key).size(200.0, 200.0).child(
+            col().key(scroll_key).size(200.0, 200.0).scroll(ScrollSpec { stick_bottom: false }).child(
+                col().key(list_key).w_full().growth(GrowthSpec::default()).virtual_rows(
+                    1_000,
+                    40.0,
+                    |_: &ScopedListsState, i| Cow::Owned(format!("row-{i}")),
+                    |_: &ScopedListsState, _| {
+                        col().w_full().h(40.0).children([
+                            el().w_full().h(20.0),
+                            el().key("mark").w_full().h(10.0),
+                            el().w_full().h(10.0),
+                        ])
+                    },
+                ),
+            ),
+        )
+    }
+    fn view(s: &ScopedListsState, _: &mut Cx<ScopedListsState>) -> El {
+        s.views.set(s.views.get() + 1);
+        row().w_full().h_full().children([
+            pane("pane-a", "scroll-a", "list-a"),
+            pane("pane-b", "scroll-b", "list-b"),
+        ])
+    }
+    let mut rt = Runtime::new(ScopedListsState::default(), view, (400.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    while rt.frame(0.016) {}
+    rt
+}
+
+fn scroll_offset_of(rt: &Runtime<ScopedListsState>, key: &str) -> f64 {
+    let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some(key)).expect(key).id;
+    rt.scroll.scrolls[&id].offset
+}
+
+fn element_with_suffix(rt: &Runtime<ScopedListsState>, suffix: &str) -> Option<crate::ElementInfo> {
+    rt.elements().into_iter().find(|e| e.path.ends_with(suffix))
+}
+
+#[test]
+fn scroll_key_to_scoped_unmounted_virtual_row_mounts_target_list_without_running_view() {
+    #[cfg(debug_assertions)]
+    let _ = crate::tooling::perf_warn::take_log();
+    let mut rt = two_scoped_virtual_lists();
+    let (c0, v0) = (rt.stats.commits, rt.state.views.get());
+    rt.update_if(|_, tx| { tx.scroll_key_to("list-b/row-500", 40.0); false });
+    rt.frame(0.016);
+    assert_eq!(rt.stats.commits - c0, 1, "scroll_key_to must remount once");
+    assert_eq!(rt.state.views.get() - v0, 0, "scroll_key_to must not run view");
+    assert_eq!(scroll_offset_of(&rt, "scroll-a"), 0.0, "list-a must stay at top");
+    assert!(element_with_suffix(&rt, "list-a/row-500").is_none());
+    let row = element_with_suffix(&rt, "list-b/row-500").expect("list-b/row-500 mounted");
+    assert!((row.rect[1] - 40.0).abs() < 0.01, "row-500 anchored at y=40: {:?}", row.rect);
+
+    let (c1, v1) = (rt.stats.commits, rt.state.views.get());
+    rt.update_if(|_, tx| { tx.scroll_key_to("list-b/row-750/mark", 40.0); false });
+    rt.frame(0.016);
+    assert_eq!(rt.stats.commits - c1, 1, "scroll_key_to scope/row/mark must remount once");
+    assert_eq!(rt.state.views.get() - v1, 0, "scroll_key_to scope/row/mark must not run view");
+    let mark = element_with_suffix(&rt, "list-b/row-750/mark").expect("list-b/row-750/mark mounted");
+    assert!((mark.rect[1] - 40.0).abs() < 0.01, "mark anchored at y=40: {:?}", mark.rect);
+    assert_eq!(scroll_offset_of(&rt, "scroll-a"), 0.0, "list-a still at top");
+
+    // Settle remaining overscan fill, then verify non-matching scoped keys stay quiet no-ops.
+    while rt.frame(0.016) {}
+    let (c2, v2, off_b) = (rt.stats.commits, rt.state.views.get(), scroll_offset_of(&rt, "scroll-b"));
+    rt.update_if(|_, tx| {
+        tx.scroll_key_to("list-b/missing", 40.0);
+        tx.scroll_key_to("missing/row-500", 40.0);
+        false
+    });
+    rt.frame(0.016);
+    assert_eq!((rt.stats.commits - c2, rt.state.views.get() - v2), (0, 0));
+    assert_eq!(scroll_offset_of(&rt, "scroll-b"), off_b);
+    #[cfg(debug_assertions)]
+    assert!(
+        !crate::tooling::perf_warn::take_log().iter().any(|l| l.contains("an instant scroll")),
+        "scoped scroll_key_to must not trip instant-scroll perf warning"
+    );
+}
+
+#[test]
+fn scroll_key_center_at_scoped_unmounted_virtual_row_mounts_target_list_without_running_view() {
+    #[cfg(debug_assertions)]
+    let _ = crate::tooling::perf_warn::take_log();
+    let mut rt = two_scoped_virtual_lists();
+    let (c0, v0) = (rt.stats.commits, rt.state.views.get());
+    rt.update_if(|_, tx| { tx.scroll_key_center_at("list-b/row-500", 100.0); false });
+    rt.frame(0.016);
+    assert_eq!(rt.stats.commits - c0, 1, "scroll_key_center_at must remount once");
+    assert_eq!(rt.state.views.get() - v0, 0, "scroll_key_center_at must not run view");
+    assert_eq!(scroll_offset_of(&rt, "scroll-a"), 0.0, "list-a must stay at top");
+    let row = element_with_suffix(&rt, "list-b/row-500").expect("list-b/row-500 mounted");
+    let mid = row.rect[1] + row.rect[3] * 0.5;
+    assert!((mid - 100.0).abs() < 0.5, "row-500 midpoint at y=100: {:?}", row.rect);
+
+    let (c1, v1) = (rt.stats.commits, rt.state.views.get());
+    rt.update_if(|_, tx| { tx.scroll_key_center_at("list-b/row-750/mark", 100.0); false });
+    rt.frame(0.016);
+    assert_eq!(rt.stats.commits - c1, 1, "scroll_key_center_at scope/row/mark must remount once");
+    assert_eq!(rt.state.views.get() - v1, 0, "scroll_key_center_at scope/row/mark must not run view");
+    let mark = element_with_suffix(&rt, "list-b/row-750/mark").expect("list-b/row-750/mark mounted");
+    let mark_mid = mark.rect[1] + mark.rect[3] * 0.5;
+    assert!((mark_mid - 100.0).abs() < 0.5, "mark midpoint at y=100: {:?}", mark.rect);
+    assert_eq!(scroll_offset_of(&rt, "scroll-a"), 0.0);
+    #[cfg(debug_assertions)]
+    assert!(
+        !crate::tooling::perf_warn::take_log().iter().any(|l| l.contains("an instant scroll")),
+        "scoped scroll_key_center_at must not trip instant-scroll perf warning"
+    );
+}
+
+#[test]
+fn scroll_into_view_scoped_unmounted_virtual_row_mark_mounts_target_list_without_running_view() {
+    let mut rt = two_scoped_virtual_lists();
+    let (c0, v0) = (rt.stats.commits, rt.state.views.get());
+    rt.update_if(|_, tx| { tx.scroll_into_view("list-b/row-500/mark"); false });
+    rt.frame(0.016);
+    assert_eq!(rt.stats.commits - c0, 1, "scroll_into_view must remount once");
+    assert_eq!(rt.state.views.get() - v0, 0, "scroll_into_view must not run view");
+    assert_eq!(scroll_offset_of(&rt, "scroll-a"), 0.0, "list-a must stay at top");
+    let mark = element_with_suffix(&rt, "list-b/row-500/mark").expect("list-b/row-500/mark mounted");
+    assert!(mark.rect[1] >= -0.01 && mark.rect[1] + mark.rect[3] <= 200.01, "mark visible: {:?}", mark.rect);
+}
+
+#[test]
+fn scroll_into_view_in_scoped_unmounted_virtual_row_mark_mounts_target_list_without_running_view() {
+    let mut rt = two_scoped_virtual_lists();
+    let (c0, v0) = (rt.stats.commits, rt.state.views.get());
+    rt.update_if(|_, tx| { tx.scroll_into_view_in("pane-b", "list-b/row-500/mark"); false });
+    rt.frame(0.016);
+    assert_eq!(rt.stats.commits - c0, 1, "scroll_into_view_in must remount once");
+    assert_eq!(rt.state.views.get() - v0, 0, "scroll_into_view_in must not run view");
+    assert_eq!(scroll_offset_of(&rt, "scroll-a"), 0.0, "list-a must stay at top");
+    let mark = element_with_suffix(&rt, "list-b/row-500/mark").expect("list-b/row-500/mark mounted");
+    assert!(mark.rect[1] >= -0.01 && mark.rect[1] + mark.rect[3] <= 200.01, "mark visible: {:?}", mark.rect);
+}
+
+#[test]
+fn scroll_center_scoped_unmounted_virtual_row_mark_mounts_target_list_without_running_view() {
+    let mut rt = two_scoped_virtual_lists();
+    let v0 = rt.state.views.get();
+    rt.update_if(|_, tx| { tx.scroll_center("list-b/row-500/mark"); false });
+    for _ in 0..600 { if !rt.frame(1.0 / 60.0) { break; } }
+    assert_eq!(rt.state.views.get() - v0, 0, "scroll_center must not run view");
+    assert_eq!(scroll_offset_of(&rt, "scroll-a"), 0.0, "list-a must stay at top");
+    let mark = element_with_suffix(&rt, "list-b/row-500/mark").expect("list-b/row-500/mark mounted");
+    let mid = mark.rect[1] + mark.rect[3] * 0.5;
+    assert!((mid - 100.0).abs() < 1.0, "mark centred in 200pt viewport: {:?}", mark.rect);
+}
+
+#[test]
+fn scroll_center_in_scoped_unmounted_virtual_row_mark_mounts_target_list_without_running_view() {
+    let mut rt = two_scoped_virtual_lists();
+    let v0 = rt.state.views.get();
+    rt.update_if(|_, tx| { tx.scroll_center_in("pane-b", "list-b/row-500/mark"); false });
+    for _ in 0..600 { if !rt.frame(1.0 / 60.0) { break; } }
+    assert_eq!(rt.state.views.get() - v0, 0, "scroll_center_in must not run view");
+    assert_eq!(scroll_offset_of(&rt, "scroll-a"), 0.0, "list-a must stay at top");
+    let mark = element_with_suffix(&rt, "list-b/row-500/mark").expect("list-b/row-500/mark mounted");
+    let mid = mark.rect[1] + mark.rect[3] * 0.5;
+    assert!((mid - 100.0).abs() < 1.0, "mark centred in 200pt viewport: {:?}", mark.rect);
+}
+
+#[test]
+fn scroll_center_in_instant_scoped_unmounted_virtual_row_mark_mounts_target_list_without_running_view() {
+    let mut rt = two_scoped_virtual_lists();
+    let (c0, v0) = (rt.stats.commits, rt.state.views.get());
+    rt.update_if(|_, tx| { tx.scroll_center_in_instant("pane-b", "list-b/row-500/mark"); false });
+    rt.frame(0.016);
+    assert_eq!(rt.stats.commits - c0, 1, "scroll_center_in_instant must remount once");
+    assert_eq!(rt.state.views.get() - v0, 0, "scroll_center_in_instant must not run view");
+    assert_eq!(scroll_offset_of(&rt, "scroll-a"), 0.0, "list-a must stay at top");
+    let mark = element_with_suffix(&rt, "list-b/row-500/mark").expect("list-b/row-500/mark mounted");
+    let mid = mark.rect[1] + mark.rect[3] * 0.5;
+    assert!((mid - 100.0).abs() < 1.0, "mark centred in 200pt viewport: {:?}", mark.rect);
+}

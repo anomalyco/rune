@@ -1,0 +1,1 @@
+- Virtual scroll requests: `Tx::scroll_key_to` and `Tx::scroll_key_center_at` now resolve scoped key paths (such as `"scope/row"` and `"scope/row/mark"`, including keys with escaped `/` segments) against unmounted `virtual_rows` entries through the same lookup `Tx::scroll_into_view` and `Tx::scroll_center` use, and reveal requests now resolve `"scope/row/mark"` as well.
