@@ -202,7 +202,7 @@ impl Measurement<'_> {
             let sticky = || self.nodes.iter().find(|n| n.path == v.scroll_path).and_then(|n| n.scroll).is_some_and(|s| s.stick_bottom);
             let held = scroll.map_or_else(sticky, |s| s.pinned());
             let (offset, pinned) = v.locate(scroll.map_or(0.0, |s| s.offset as f32), held);
-            v.anchor = if pinned || v.passed() { None } else { v.first_visible(offset.min(v.max_offset()), |_| true) };
+            v.anchor = if pinned || v.passed() || v.no_anchor { None } else { v.first_visible(offset.min(v.max_offset()), |_| true) };
         }
     }
 

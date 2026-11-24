@@ -82,7 +82,7 @@ impl crate::cold::Empty for NodeCold {
         above: None, above_boundary: None, resolved_anchor: None,
         scroll: None,
         scroll_axes: crate::el::ScrollAxes::Y,
-        scroll_edges: crate::el::ScrollEdges { fade: 0.0, fade_style: crate::el::FadeStyle::SMOOTH, margin: 0.0, anchor: false },
+        scroll_edges: crate::el::ScrollEdges { fade: 0.0, fade_style: crate::el::FadeStyle::SMOOTH, margin: 0.0, anchor: false, no_anchor: false },
         wheel_scrolls: None,
         sticky: None,
         growth: None,

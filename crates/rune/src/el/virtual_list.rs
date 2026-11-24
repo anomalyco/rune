@@ -19,6 +19,9 @@ pub(crate) struct VirtualList {
     places: Places,
     /// Each row's measured height, once it has been laid out, in `keys` order.
     measured: Vec<Option<f32>>,
+    /// Rows excluded from scroll anchoring (`El::no_scroll_anchor`), in `keys` order; stays empty
+    /// (zero allocations) until a row opts out.
+    row_no_anchor: Vec<bool>,
     /// The commit each row in `keys` first appeared in.
     born: Vec<u64>,
     /// `keys` changed since the frame began ([`VirtualList::frame_begins`]).
@@ -71,7 +74,10 @@ pub(crate) struct VirtualList {
     pub pad_top: f32,
     pub pad_bottom: f32,
     gap: f32,
+    /// `El::no_scroll_anchor` on the virtual list or its scroll viewport: disables anchoring.
+    pub no_anchor: bool,
     pub anchor: Option<(String, f32)>,
+    anchor_offset: Option<f32>,
     /// The `El::virtual_rows_version` that `keys` came with.
     pub keys_version: Option<u64>,
     /// The visible row range last sent to `El::on_visible_rows`.
@@ -265,47 +271,60 @@ impl VirtualList {
         if self.keys.is_empty() {
             let (places, renamed) = Places::from_keys_deduping(&mut keys);
             if n > 0 { self.keys_fresh = true; self.held = false; }
-            self.finish_rekey(keys, places, vec![None; n], vec![commit; n], vec![self.estimate; n]);
+            self.finish_rekey(keys, places, vec![None; n], Vec::new(), vec![commit; n], vec![self.estimate; n]);
             return (None, renamed);
         }
         let mut places = Places::with_capacity(n);
-        let (mut born, mut heights, mut measured) = (Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n));
+        let track_no_anchor = !self.row_no_anchor.is_empty();
+        let (mut born, mut heights, mut measured, mut row_no_anchor) = (
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            if track_no_anchor { Vec::with_capacity(n) } else { Vec::new() },
+        );
         let (mut all_existed, mut same_order, mut any_stayed) = (n == self.keys.len(), n == self.keys.len(), false);
         let mut dups = Vec::new();
         for (idx, key) in keys.iter().enumerate() {
             let hash = Places::hash(key);
             if !places.insert_or_dup(&keys, key, hash, idx) { dups.push(idx); continue; }
             if !dups.is_empty() { continue; }
-            self.carry_row(idx, self.places.get_hashed(&self.keys, key, hash), commit, &mut born, &mut heights, &mut measured, &mut all_existed, &mut same_order, &mut any_stayed);
+            self.carry_row(idx, self.places.get_hashed(&self.keys, key, hash), commit, &mut born, &mut heights, &mut measured, track_no_anchor.then_some(&mut row_no_anchor), &mut all_existed, &mut same_order, &mut any_stayed);
         }
         let renamed = if dups.is_empty() {
             Vec::new()
         } else {
             let renamed = places.finish_deduping(&mut keys, &dups, Places::hash);
-            born.clear(); heights.clear(); measured.clear();
+            born.clear(); heights.clear(); measured.clear(); row_no_anchor.clear();
             all_existed = n == self.keys.len(); same_order = all_existed; any_stayed = false;
             for (idx, key) in keys.iter().enumerate() {
-                self.carry_row(idx, self.index_of(key), commit, &mut born, &mut heights, &mut measured, &mut all_existed, &mut same_order, &mut any_stayed);
+                self.carry_row(idx, self.index_of(key), commit, &mut born, &mut heights, &mut measured, track_no_anchor.then_some(&mut row_no_anchor), &mut all_existed, &mut same_order, &mut any_stayed);
             }
             renamed
         };
+        if !row_no_anchor.iter().any(|&v| v) {
+            row_no_anchor = Vec::new();
+        }
         let effective_offset = (!(skip_anchor_on_reorder && all_existed)).then_some(offset).flatten();
         // A change that keeps none of the rows in view (a filter) leaves nothing to hold.
-        let anchor = if any_stayed {
+        let anchor = if any_stayed && !self.no_anchor {
             effective_offset.and_then(|o| self.first_visible_in_viewport(o, |k| places.get(&keys, k).is_some()))
         } else { None };
         if !same_order {
             self.keys_fresh = true;
-            self.held = if effective_offset.is_some() { anchor.is_some() } else { any_stayed };
+            self.held = if let Some(o) = effective_offset {
+                anchor.is_some() || (any_stayed && self.any_visible_in_viewport(o, |k| places.get(&keys, k).is_some()))
+            } else {
+                any_stayed
+            };
         }
-        self.finish_rekey(keys, places, measured, born, heights);
+        self.finish_rekey(keys, places, measured, row_no_anchor, born, heights);
         (anchor, renamed)
     }
 
     #[allow(clippy::too_many_arguments)]
     fn carry_row(
         &self, idx: usize, old: Option<usize>, commit: u64,
-        born: &mut Vec<u64>, heights: &mut Vec<f32>, measured: &mut Vec<Option<f32>>,
+        born: &mut Vec<u64>, heights: &mut Vec<f32>, measured: &mut Vec<Option<f32>>, row_no_anchor: Option<&mut Vec<bool>>,
         all_existed: &mut bool, same_order: &mut bool, any_stayed: &mut bool,
     ) {
         match old {
@@ -313,16 +332,18 @@ impl VirtualList {
                 *any_stayed = true; *same_order &= i == idx;
                 let height = self.measured[i];
                 born.push(self.born[i]); heights.push(height.unwrap_or(self.estimate)); measured.push(height);
+                if let Some(flags) = row_no_anchor { flags.push(self.is_row_no_anchor(i)); }
             }
             None => {
                 *all_existed = false; *same_order = false;
                 born.push(commit); heights.push(self.estimate); measured.push(None);
+                if let Some(flags) = row_no_anchor { flags.push(false); }
             }
         }
     }
 
-    fn finish_rekey(&mut self, keys: Vec<String>, places: Places, measured: Vec<Option<f32>>, born: Vec<u64>, heights: Vec<f32>) {
-        self.places = places; self.measured = measured; self.born = born;
+    fn finish_rekey(&mut self, keys: Vec<String>, places: Places, measured: Vec<Option<f32>>, row_no_anchor: Vec<bool>, born: Vec<u64>, heights: Vec<f32>) {
+        self.places = places; self.measured = measured; self.row_no_anchor = row_no_anchor; self.born = born;
         self.keys = keys; self.row_heights = heights;
         self.sums_stale.set(true); self.reported_visible = None;
         #[cfg(debug_assertions)]
@@ -422,12 +443,15 @@ impl VirtualList {
         let anchor = offset
             .and_then(|o| self.first_visible(o, |_| true))
             .filter(|(_, top)| offset.is_some_and(|o| *top < o + self.viewport));
+        let held = offset.is_none_or(|o| anchor.is_some() || self.any_visible_in_viewport(o, |_| true));
         let sums_fresh =
             !self.sums_stale.get() && self.sums.borrow().len() == self.row_heights.len() + 1;
         let added = new.len();
+        let track_no_anchor = !self.row_no_anchor.is_empty();
         self.places.reserve(added);
         self.keys.reserve(added);
         self.measured.reserve(added);
+        if track_no_anchor { self.row_no_anchor.reserve(added); }
         self.born.reserve(added);
         self.row_heights.reserve(added);
         if sums_fresh {
@@ -446,11 +470,12 @@ impl VirtualList {
             self.places.insert(&self.keys, &key, index);
             self.keys.push(key);
             self.measured.push(None);
+            if track_no_anchor { self.row_no_anchor.push(false); }
             self.born.push(commit);
             self.row_heights.push(self.estimate);
         }
         self.keys_fresh = true;
-        self.held = offset.map_or(true, |_| anchor.is_some());
+        self.held = held;
         self.reported_visible = None;
         #[cfg(debug_assertions)]
         { self.append_only_fast = true; }
@@ -534,6 +559,37 @@ impl VirtualList {
         }
     }
 
+    #[inline]
+    fn is_row_no_anchor(&self, index: usize) -> bool {
+        self.row_no_anchor.get(index).copied().unwrap_or(false)
+    }
+
+    pub fn set_row_no_anchor(&mut self, index: usize, excluded: bool) {
+        if index >= self.keys.len() { return; }
+        if excluded {
+            if self.row_no_anchor.len() < self.keys.len() {
+                self.row_no_anchor.resize(self.keys.len(), false);
+            }
+            self.row_no_anchor[index] = true;
+        } else if let Some(slot) = self.row_no_anchor.get_mut(index) {
+            *slot = false;
+        }
+    }
+
+    pub fn set_no_anchor(&mut self, key: &str, excluded: bool) {
+        if let Some(i) = self.index_of(key) { self.set_row_no_anchor(i, excluded); }
+    }
+
+    /// Re-picks `anchor` against pre-layout heights if the row chosen by `select`/`hold`
+    /// turned out to carry `El::no_scroll_anchor` once built.
+    pub fn reanchor_if_excluded(&mut self) {
+        let Some((key, _)) = &self.anchor else { return };
+        let excluded = self.no_anchor || self.index_of(key).is_some_and(|i| self.is_row_no_anchor(i));
+        if excluded {
+            self.anchor = if self.no_anchor { None } else { self.anchor_offset.and_then(|o| self.anchor_at(o)) };
+        }
+    }
+
     fn sums(&self) -> Ref<'_, Vec<f32>> {
         if self.sums_stale.replace(false) || self.sums.borrow().len() != self.row_heights.len() + 1 {
             let mut sums = self.sums.borrow_mut();
@@ -558,24 +614,36 @@ impl VirtualList {
         if end == 0 { 0.0 } else { self.sums()[end] - self.gap }
     }
 
-    /// The first row still visible at `offset`, among those `keep` accepts, and its top.
+    /// The first anchor-eligible row still visible at `offset`, among those `keep` accepts, and its top.
     pub fn first_visible(&self, offset: f32, keep: impl Fn(&str) -> bool) -> Option<(String, f32)> {
+        if self.no_anchor { return None; }
         let sums = self.sums();
         let first = sums[1..].partition_point(|&s| self.pad_top + s - self.gap <= offset);
         (first..self.keys.len())
-            .find(|&i| keep(&self.keys[i]))
+            .find(|&i| !self.is_row_no_anchor(i) && keep(&self.keys[i]))
             .map(|i| (self.keys[i].clone(), self.pad_top + sums[i]))
     }
 
     /// Like `first_visible`, stopping once rows start at or past `offset + self.viewport`.
     fn first_visible_in_viewport(&self, offset: f32, keep: impl Fn(&str) -> bool) -> Option<(String, f32)> {
+        if self.no_anchor { return None; }
         let sums = self.sums();
         let first = sums[1..].partition_point(|&s| self.pad_top + s - self.gap <= offset);
         let limit = offset + self.viewport;
         (first..self.keys.len())
             .take_while(|&i| self.pad_top + sums[i] < limit)
-            .find(|&i| keep(&self.keys[i]))
+            .find(|&i| !self.is_row_no_anchor(i) && keep(&self.keys[i]))
             .map(|i| (self.keys[i].clone(), self.pad_top + sums[i]))
+    }
+
+    /// Whether any visible row in the viewport satisfies `keep`, regardless of `no_anchor`.
+    fn any_visible_in_viewport(&self, offset: f32, keep: impl Fn(&str) -> bool) -> bool {
+        let sums = self.sums();
+        let first = sums[1..].partition_point(|&s| self.pad_top + s - self.gap <= offset);
+        let limit = offset + self.viewport;
+        (first..self.keys.len())
+            .take_while(|&i| self.pad_top + sums[i] < limit)
+            .any(|i| keep(&self.keys[i]))
     }
 
     /// The furthest the rows can scroll: their extent less the viewport.
@@ -643,7 +711,9 @@ impl VirtualList {
         (start, end) = (lo, hi);
         // A row still at its estimate grows or shrinks once measured; anchoring to it would move
         // the measured rows below, such as the reader's row under a page that just landed.
-        self.anchor = if pinned || self.passed { None } else { self.anchor_at(offset) };
+        let disable = pinned || self.passed || self.no_anchor;
+        self.anchor_offset = (!disable).then_some(offset);
+        self.anchor = if disable { None } else { self.anchor_at(offset) };
         if pinned { start = start.min(end.saturating_sub(PINNED_ROWS)); }
         end = end.max(start);
         self.place(start..end);
@@ -653,7 +723,9 @@ impl VirtualList {
     /// [`select`](Self::select) does, and re-derives the space above and below them.
     pub fn hold(&mut self, offset: f32, pinned: bool) {
         let offset = if pinned { self.max_offset() } else { offset.min(self.max_offset()) };
-        self.anchor = if pinned || self.passed { None } else { self.anchor_at(offset) };
+        let disable = pinned || self.passed || self.no_anchor;
+        self.anchor_offset = (!disable).then_some(offset);
+        self.anchor = if disable { None } else { self.anchor_at(offset) };
         let len = self.keys.len();
         self.place(self.range.start.min(len)..self.range.end.min(len));
     }
@@ -667,9 +739,10 @@ impl VirtualList {
     }
 
     fn anchor_at(&self, offset: f32) -> Option<(String, f32)> {
+        if self.no_anchor { return None; }
         let range = self.visible_range(offset, false);
         let sums = self.sums();
-        range.into_iter().find(|&i| self.measured[i].is_some())
+        range.into_iter().find(|&i| !self.is_row_no_anchor(i) && self.measured[i].is_some())
             .map(|i| (self.keys[i].clone(), self.pad_top + sums[i]))
             .or_else(|| self.first_visible(offset, |_| true))
     }
@@ -901,5 +974,39 @@ mod tests {
             assert_eq!(fast.index_of(&k), Some(i));
             assert_eq!(fast.height(&k), full.height(&k));
         }
+    }
+
+    #[test]
+    fn no_anchor_rows_are_preserved_across_rekey_and_skipped_for_anchoring() {
+        let mut v = VirtualList { viewport: 100.0, ..Default::default() };
+        v.set_estimate(20.0);
+        v.set_keys(vec!["loading".into(), "m0".into(), "m1".into(), "m2".into()], 0, None);
+        v.set_no_anchor("loading", true);
+        v.set_height("loading", 20.0);
+        v.set_height("m0", 20.0);
+        // Skipping "loading" anchors to "m0" at offset 0.
+        assert_eq!(v.first_visible(0.0, |_| true), Some(("m0".into(), 20.0)));
+        v.select(0.0, false, None);
+        assert_eq!(v.anchor, Some(("m0".into(), 20.0)));
+        // Prepending rows beneath "loading" anchors to "m0" and preserves "loading"'s opt-out.
+        let anchor = v.set_keys(
+            vec!["loading".into(), "old0".into(), "old1".into(), "m0".into(), "m1".into(), "m2".into()],
+            1,
+            Some(0.0),
+        );
+        assert_eq!(anchor, Some(("m0".into(), 20.0)));
+        v.anchor = anchor;
+        assert_eq!(v.anchor_delta(), 40.0);
+        assert_eq!(v.first_visible(0.0, |_| true), Some(("old0".into(), 20.0)));
+        // List-level no_anchor disables anchoring without falsely marking replaced_view.
+        v.no_anchor = true;
+        assert_eq!(v.first_visible(0.0, |_| true), None);
+        let anchor = v.set_keys(
+            vec!["new0".into(), "loading".into(), "old0".into(), "old1".into(), "m0".into(), "m1".into(), "m2".into()],
+            2,
+            Some(0.0),
+        );
+        assert_eq!(anchor, None);
+        assert!(!v.replaced_view(), "visible rows survived even with list-level no_anchor");
     }
 }

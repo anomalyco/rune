@@ -59,6 +59,7 @@ impl RuntimeCore {
         let (mut nodes, mut spare_nodes, mut layout) = (Vec::new(), Vec::new(), LayoutEngine::new());
         let (mut node_index, mut path_ids, mut memo) = (NodeIndex::default(), HashMap::default(), crate::memo::MemoCache::default());
         let (mut next_id, mut scrolls, mut virtuals) = (0u64, HashMap::default(), HashMap::default());
+        let scroll_requests = scroll::requests::Requests::default();
         let (mut virtual_culled, mut virtual_inputs, mut stats, mut key_warnings) = (HashSet::default(), HashMap::default(), FrameStats::default(), None);
         let m = Measurement {
             app,
@@ -94,6 +95,7 @@ impl RuntimeCore {
             memo: &mut memo,
             next_id: &mut next_id,
             scrolls: &mut scrolls,
+            scroll_requests: &scroll_requests,
             virtuals: &mut virtuals,
             virtual_culled: &mut virtual_culled,
             virtual_inputs: &mut virtual_inputs,

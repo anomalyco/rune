@@ -14,7 +14,17 @@ pub(in crate::runtime) const UNBOUNDED: [f32; 8] = [f32::NEG_INFINITY, f32::INFI
 /// Points of shift over which `El::stuck_shadow` fades in.
 pub(in crate::runtime) const SHADOW_RAMP: f32 = 8.0;
 
-/// One `Tx::keep_on_screen` anchor captured before a commit.
+/// One fallback anchor target for `El::scroll_anchor` when the primary anchor node is removed
+/// or begins exiting during the commit.
+#[derive(Clone)]
+pub(in crate::runtime) struct KeepCandidate {
+    pub path: String,
+    pub was: f32,
+    /// When the element lives inside a virtual row: `(virtual_list_path, row_key, y_in_row)`.
+    pub virtual_row: Option<(String, String, f32)>,
+}
+
+/// One `Tx::keep_on_screen` or `El::scroll_anchor` anchor captured before a commit.
 #[derive(Clone)]
 pub(in crate::runtime) struct Keep {
     pub path: String,
@@ -24,6 +34,8 @@ pub(in crate::runtime) struct Keep {
     pub virtual_row: Option<(String, String, f32)>,
     /// The element, or the header it's in, was stuck to the top: it stays there for the commit.
     pub hold: Option<Hold>,
+    /// Ordered fallback candidates from `El::scroll_anchor` when `path` is removed by the commit.
+    pub fallbacks: Vec<KeepCandidate>,
 }
 
 /// A header stuck to the top when a `Tx::keep_on_screen` commit started. Until the motion
@@ -211,38 +223,59 @@ impl RuntimeCore {
         vertical_viewport(&self.tree.nodes, i)
     }
 
-    /// Records where each `Tx::keep_on_screen` element showed on the last frame, before the
-    /// commit moves it.
+    pub(super) fn keep_virtual_row(&self, i: usize, s: usize) -> Option<(String, String, f32)> {
+        std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent)
+            .take_while(|&p| p != s)
+            .find_map(|r| {
+                let c = self.tree.nodes[r].parent?;
+                self.commit.virtuals.contains_key(&self.tree.nodes[c].path).then(|| (
+                    self.tree.nodes[c].path.clone(),
+                    self.tree.nodes[r].key.clone().unwrap_or_default(),
+                    self.tree.nodes[i].target[1] - self.tree.nodes[r].target[1],
+                ))
+            })
+    }
+
+    pub(super) fn build_keep_candidate(&self, i: usize, s: usize) -> KeepCandidate {
+        KeepCandidate {
+            path: self.tree.nodes[i].path.clone(),
+            was: keep_y(&self.paint.drawn, &self.paint.drawn_scale, i, s),
+            virtual_row: self.keep_virtual_row(i, s),
+        }
+    }
+
+    pub(super) fn build_keep(&self, i: usize, s: usize, fallbacks: Vec<KeepCandidate>) -> Keep {
+        let hold = self.scroll.stuck_header(&self.tree.nodes, self.tree.has_sticky, i, s).map(|h| Hold {
+            path: self.tree.nodes[h].path.clone(),
+            inset: keep_y(&self.paint.drawn, &self.paint.drawn_scale, h, s),
+        });
+        Keep {
+            path: self.tree.nodes[i].path.clone(),
+            viewport: self.tree.nodes[s].path.clone(),
+            was: keep_y(&self.paint.drawn, &self.paint.drawn_scale, i, s),
+            virtual_row: self.keep_virtual_row(i, s),
+            hold,
+            fallbacks,
+        }
+    }
+
+    /// Records where each `El::scroll_anchor` and `Tx::keep_on_screen` element showed on the
+    /// last frame, before the commit moves it. Explicit `Tx::keep_on_screen` entries arrive
+    /// after `El::scroll_anchor` captures and replace them on the same viewport.
     pub(in crate::runtime) fn capture_keeps(&mut self, tx: &mut Tx) {
-        self.anchor_keeps(tx);
+        // The last frame's rects describe these nodes only until a commit replaces them.
+        if !self.tree.built || self.paint.drawn.len() != self.tree.nodes.len() {
+            tx.keep_on_screen.clear();
+            return;
+        }
+        self.capture_anchor_keeps();
         if tx.keep_on_screen.is_empty() { return; }
         let keys = std::mem::take(&mut tx.keep_on_screen);
-        // The last frame's rects describe these nodes only until a commit replaces them.
-        if !self.tree.built || self.paint.drawn.len() != self.tree.nodes.len() { return; }
         for key in keys {
             let Some(i) = self.live_named(None, &key) else { continue };
             let Some(s) = self.viewport_of(i) else { continue };
-            let hold = self.scroll.stuck_header(&self.tree.nodes, self.tree.has_sticky, i, s).map(|h| Hold {
-                path: self.tree.nodes[h].path.clone(),
-                inset: keep_y(&self.paint.drawn, &self.paint.drawn_scale, h, s),
-            });
-            let virtual_row = std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent)
-                .take_while(|&p| p != s)
-                .find_map(|r| {
-                    let c = self.tree.nodes[r].parent?;
-                    self.commit.virtuals.contains_key(&self.tree.nodes[c].path).then(|| (
-                        self.tree.nodes[c].path.clone(),
-                        self.tree.nodes[r].key.clone().unwrap_or_default(),
-                        self.tree.nodes[i].target[1] - self.tree.nodes[r].target[1],
-                    ))
-                });
-            self.scroll.requests.step(requests::Event::Arrive(requests::Request::Capture(Keep {
-                path: self.tree.nodes[i].path.clone(),
-                viewport: self.tree.nodes[s].path.clone(),
-                was: keep_y(&self.paint.drawn, &self.paint.drawn_scale, i, s),
-                virtual_row,
-                hold,
-            })));
+            let keep = self.build_keep(i, s, Vec::new());
+            self.scroll.requests.step(requests::Event::Arrive(requests::Request::Capture(keep)));
         }
     }
 
@@ -325,10 +358,18 @@ impl RuntimeCore {
             self.step_scroll(0.0);
             keeps = self.scroll.requests.take_keeps();
             let mut moved = false;
-            for k in &keeps {
+            for k in &mut keeps {
                 let Some(s) = self.tree.nodes.iter().position(|n| n.path == k.viewport && n.scroll.is_some() && n.scroll_axes.y()) else { continue };
-                let laid = if let Some(i) = self.tree.nodes.iter().position(|n| n.path == k.path) {
-                    if self.viewport_of(i) != Some(s) { continue; }
+                let mounted = self.live_in_viewport(&k.path, s).or_else(|| {
+                    let pos = k.fallbacks.iter().position(|fb| self.live_in_viewport(&fb.path, s).is_some())?;
+                    let fb = k.fallbacks[pos].clone();
+                    k.path = fb.path;
+                    k.was = fb.was;
+                    k.virtual_row = fb.virtual_row;
+                    k.fallbacks.clear();
+                    self.live_in_viewport(&k.path, s)
+                });
+                let laid = if mounted.is_some() {
                     if self.scroll_stack(s).and_then(|c| self.motion.stacks.get(&self.tree.nodes[c].id)).is_some_and(|st| st.growing)
                         && let Some(st) = self.scroll.scrolls.get_mut(&self.tree.nodes[s].id)
                     {
@@ -336,11 +377,8 @@ impl RuntimeCore {
                     }
                     // Mounted anchors follow drawn geometry after the motion step.
                     continue;
-                } else if let Some((v_path, row_key, in_row)) = &k.virtual_row
-                    && let Some(v) = self.commit.virtuals.get(v_path)
-                    && let Some(idx) = v.index_of(row_key)
-                {
-                    f64::from(v.top + v.pad_top + v.prefix(idx) + *in_row)
+                } else if let Some(laid) = self.keep_virtual_laid(k) {
+                    laid
                 } else {
                     continue;
                 };
@@ -360,6 +398,31 @@ impl RuntimeCore {
             self.commit_virtual_scroll(app, &Tx::default());
         }
         self.scroll.requests.restore_keeps(keeps);
+    }
+
+    fn live_in_viewport(&self, path: &str, s: usize) -> Option<usize> {
+        self.tree.nodes.iter().enumerate()
+            .position(|(i, n)| n.path == path && !self.subtree_exiting(i))
+            .filter(|&i| self.viewport_of(i) == Some(s))
+    }
+
+    fn keep_virtual_laid(&self, k: &mut Keep) -> Option<f64> {
+        let lookup = |vr: &Option<(String, String, f32)>| {
+            let (v_path, row_key, in_row) = vr.as_ref()?;
+            let v = self.commit.virtuals.get(v_path)?;
+            let idx = v.index_of(row_key)?;
+            Some(f64::from(v.top + v.pad_top + v.prefix(idx) + *in_row))
+        };
+        if let Some(laid) = lookup(&k.virtual_row) {
+            return Some(laid);
+        }
+        let (pos, laid) = k.fallbacks.iter().enumerate().find_map(|(i, fb)| Some((i, lookup(&fb.virtual_row)?)))?;
+        let fb = k.fallbacks[pos].clone();
+        k.path = fb.path;
+        k.was = fb.was;
+        k.virtual_row = fb.virtual_row;
+        k.fallbacks.clear();
+        Some(laid)
     }
 
     /// Compensate this frame's drawn displacement, in viewport coordinates. Sticky

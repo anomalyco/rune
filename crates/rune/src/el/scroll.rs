@@ -142,14 +142,43 @@ impl El {
     }
     /// On a vertical scroll viewport, keep the row at the top of the view where it is when a
     /// commit changes the content above it (rows inserted, removed, grown or reflowed by a new
-    /// width), as CSS `overflow-anchor: auto` does in a browser. The row is the first child
-    /// drawn in the view, or within a child that starts above the view, the first of its
-    /// children, and so on down. It holds only while the viewport is still and scrolled off
-    /// its top, and not following its bottom (`stick_bottom`): at the very top new content
-    /// above shows. A [`Tx::keep_on_screen`] in the same commit wins, and so does a scroll.
-    /// [`El::virtual_rows`] lists already keep their first visible row this way.
+    /// width), as CSS `overflow-anchor: auto` does in a browser. The anchor is the first
+    /// eligible child drawn in the view, or within a child that starts above the view (including
+    /// a tall mounted [`El::virtual_rows`] row), its first surviving visible descendant, and so
+    /// on down. Elements marked [`El::no_scroll_anchor`] and their subtrees are skipped. It
+    /// holds only while the viewport is still and scrolled off its top, and not following its
+    /// bottom (`stick_bottom`): at the very top new content above shows. A
+    /// [`Tx::keep_on_screen`] in the same commit wins, and so does a scroll. Whole-row
+    /// [`El::virtual_rows`] lists keep their first visible row on their own unless opted out
+    /// with [`El::no_scroll_anchor`].
     pub fn scroll_anchor(mut self) -> Self {
-        self.cold_mut().scroll_edges.anchor = true;
+        let edges = &mut self.cold_mut().scroll_edges;
+        edges.anchor = true;
+        edges.no_anchor = false;
+        self
+    }
+    /// Opts this element out of scroll anchoring, like CSS `overflow-anchor: none`.
+    ///
+    /// - On a row or descendant inside an [`El::scroll_anchor`] viewport or a virtual list
+    ///   ([`El::virtual_rows`] / [`El::virtualize`]), excludes this element and its subtree from
+    ///   anchor selection (for example, a top loading placeholder so prepending older rows
+    ///   anchors to the first real row beneath it).
+    /// - On a [`El::virtual_rows`] / [`El::virtualize`] container or its scroll viewport,
+    ///   disables automatic scroll anchoring for that list (for example, a live search list that
+    ///   streams new hits in at the top at offset 0).
+    ///
+    /// ```
+    /// # use rune::{GrowthSpec, ScrollSpec, col, el};
+    /// let loading = el().key("loading").h(32.0).no_scroll_anchor();
+    /// let list = col().scroll(ScrollSpec::default()).child(
+    ///     col().growth(GrowthSpec::default()).no_scroll_anchor().virtualize(32.0).child(loading),
+    /// );
+    /// # let _ = list;
+    /// ```
+    pub fn no_scroll_anchor(mut self) -> Self {
+        let edges = &mut self.cold_mut().scroll_edges;
+        edges.anchor = false;
+        edges.no_anchor = true;
         self
     }
     /// A wheel over this element turns the scroll viewport keyed `key` (or the nearest one
@@ -366,8 +395,8 @@ impl ScrollSpec {
     }
 }
 
-/// A scroll viewport's content-aware edges: `El::scroll_edge_fade`, `El::scroll_margin` and
-/// `El::scroll_anchor`.
+/// A scroll viewport's content-aware edges: `El::scroll_edge_fade`, `El::scroll_margin`,
+/// `El::scroll_anchor` and `El::no_scroll_anchor`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct ScrollEdges {
     /// Fade width (points) for the top and bottom edges; 0 for none.
@@ -378,6 +407,9 @@ pub(crate) struct ScrollEdges {
     pub(crate) margin: f32,
     /// The viewport keeps its top row where it is when content above it changes.
     pub(crate) anchor: bool,
+    /// Excludes this element and its subtree from anchor selection, or disables automatic scroll
+    /// anchoring on a scroll viewport or virtual list (`El::no_scroll_anchor`).
+    pub(crate) no_anchor: bool,
 }
 
 /// The axes a scroll viewport moves on: `El::scroll` (vertical), `El::scroll_x`, `El::scroll_xy`.
