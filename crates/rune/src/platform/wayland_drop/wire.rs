@@ -24,8 +24,8 @@ use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, Dispatch, DispatchError, EventQueue, Proxy, QueueHandle, WEnum};
 
 use super::machine::{
-    self, Effect, Event, MAX_URI_LIST_BYTES, OfferId, OfferSet, ReadOutcome, ReadPhase, State,
-    SurfaceId, URI_LIST_MIME, WindowMap, WindowToken,
+    self, Effect, Event, MAX_URI_LIST_BYTES, OfferId, OfferSet, ReadOutcome, ReadPhase,
+    SelectedAction, State, SurfaceId, URI_LIST_MIME, WindowMap, WindowToken,
 };
 use super::pipe::{CancelToken, StopSignal, make_pipe, read_fd_bounded};
 use crate::machine::{Attempt, Seq};
@@ -597,11 +597,14 @@ impl Dispatch<WlDataOffer, ()> for QueueState {
                 }
             }
             wl_data_offer::Event::Action { dnd_action } => {
-                let has_action = matches!(dnd_action, WEnum::Value(a) if a != DndAction::None && !a.is_empty());
+                let action = match dnd_action {
+                    WEnum::Value(a) => SelectedAction::from_wayland_mask(a.bits()),
+                    WEnum::Unknown(_) => SelectedAction::None,
+                };
                 if let Some(seat_dev) = state.seats.get_mut(&seat_name) {
-                    seat_dev.pending.set_action(offer_id, has_action);
+                    seat_dev.pending.set_action(offer_id, action);
                 }
-                state.step_seat(seat_name, Event::OfferAction { offer: offer_id, has_action });
+                state.step_seat(seat_name, Event::OfferAction { offer: offer_id, action });
             }
             wl_data_offer::Event::SourceActions { .. } | _ => {}
         }

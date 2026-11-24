@@ -1,0 +1,1 @@
+- Wayland: native file drops no longer send `wl_data_offer.finish()` when the compositor selects `DndAction::Ask` (or `Move`/`None`) under `wl_data_offer` v3+, preventing a fatal `invalid_finish` protocol error.
