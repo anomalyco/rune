@@ -43,19 +43,20 @@ fn parses_each_block_type() {
     assert!(matches!(&b[7], Block::Code(c) if c == "fn main() {}"));
 }
 
-/// Code that ends a line drops all of its closing padding, its isolate's end too, so the line
-/// is the start of the same line with more after the code (as a stream needs) and copies clean.
+/// Closed inline code that ends a block keeps its balanced closing pad and isolate end
+/// (`\u{2069}\u{202f}\u{202f}`) so blocks count the chip's inline-end padding as Chrome does,
+/// while trailing whitespace after the code span is still trimmed.
 #[test]
-fn code_ending_a_line_leaves_no_isolate_end() {
-    let b = parse("Run `cargo test`\n\n- item `two`\n\n| `c` |\n|---|\n| `d ` |\n");
+fn code_ending_a_line_keeps_its_closing_pad() {
+    let b = parse("Run `cargo test`   \n\n- item `two`\n\n| `c` |\n|---|\n| `d ` |\n");
     let Block::Para(p) = &b[0] else { panic!("{b:?}") };
-    assert_eq!(p.text, "Run \u{202f}\u{202f}\u{2066}cargo test");
-    assert_eq!(p.spans.iter().map(|s| s.2).collect::<Vec<_>>(), [Style::CodePad, Style::Code]);
+    assert_eq!(p.text, "Run \u{202f}\u{202f}\u{2066}cargo test\u{2069}\u{202f}\u{202f}");
+    assert_eq!(p.spans.iter().map(|s| s.2).collect::<Vec<_>>(), [Style::CodePad, Style::Code, Style::CodePad]);
     let Block::List { items, .. } = &b[1] else { panic!("{b:?}") };
-    assert!(matches!(&items[0][0], Block::Para(i) if i.text == "item \u{202f}\u{202f}\u{2066}two"), "{items:?}");
+    assert!(matches!(&items[0][0], Block::Para(i) if i.text == "item \u{202f}\u{202f}\u{2066}two\u{2069}\u{202f}\u{202f}"), "{items:?}");
     let Block::Table(t) = &b[2] else { panic!("{b:?}") };
-    assert_eq!(t.head[0].text, "\u{202f}\u{202f}\u{2066}c");
-    assert_eq!(t.rows[0][0].text, "\u{202f}\u{202f}\u{2066}d", "the code's own trailing space goes too, as before");
+    assert_eq!(t.head[0].text, "\u{202f}\u{202f}\u{2066}c\u{2069}\u{202f}\u{202f}");
+    assert_eq!(t.rows[0][0].text, "\u{202f}\u{202f}\u{2066}d \u{2069}\u{202f}\u{202f}");
 }
 
 #[test]
@@ -136,7 +137,7 @@ fn every_streaming_prefix_parses_like_before() {
             h = h.wrapping_mul(0x100_0000_01b3);
         }
     }
-    assert_eq!(h, 16_905_672_743_507_968_518, "golden hash");
+    assert_eq!(h, 18_288_571_286_417_985_968, "golden hash");
 }
 
 #[test]

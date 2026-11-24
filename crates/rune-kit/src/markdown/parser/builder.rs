@@ -349,15 +349,18 @@ impl Builder {
     }
 }
 
-/// `inl`'s text without its trailing whitespace and, when inline code ends it, the rest of that
-/// code's padding: the line's end closes the isolate, so text that ends in code is a prefix of
-/// the same text with more after the code, as a stream needs.
+/// `inl`'s text without trailing whitespace, keeping a closed inline code span's closing
+/// `CodePad` (`CLOSE` or `LINK_CLOSE`) so blocks ending in inline code count the chip's
+/// inline-end padding in width, wrapping and alignment, as Chromium does for `padding-inline-end`.
+/// Streaming code spans that are still open drop their closing pad in `stream::drop_closing_pad`.
 fn trimmed_len(inl: &Inline) -> usize {
     let text = inl.text.trim_end();
-    match text.strip_suffix('\u{2069}') {
-        Some(rest) if inl.spans.iter().any(|s| s.2 == Style::CodePad && s.0 == rest.len()) => rest.trim_end().len(),
-        _ => text.len(),
+    if let Some(rest) = text.strip_suffix('\u{2069}')
+        && let Some(pad) = inl.spans.iter().rev().find(|s| s.2 == Style::CodePad && s.0 == rest.len())
+    {
+        return pad.1;
     }
+    text.len()
 }
 
 fn code_block(text: String, fence: &Fence) -> Block {
