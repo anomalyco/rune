@@ -91,7 +91,7 @@ default-members = [
     "crates/rune-taffy",
     "themes/opencode",
 ]
-exclude = ["tools/rune-dev-guard", "tools/ratex-math-wasm", "tools/ratex-math-wasm/pack", "vendor/accesskit_atspi_common", "vendor/accesskit_macos", "vendor/accesskit_windows", "vendor/naga", "vendor/parley_engine", "vendor/sctk-adwaita", "vendor/tiny-skia-path", "vendor/wgpu-hal", "vendor/winit"]
+exclude = ["tools/rune-dev-guard", "tools/ratex-math-wasm", "tools/ratex-math-wasm/pack", "vendor/accesskit_atspi_common", "vendor/accesskit_macos", "vendor/accesskit_windows", "vendor/harfrust", "vendor/naga", "vendor/parley_engine", "vendor/sctk-adwaita", "vendor/tiny-skia-path", "vendor/wgpu-hal", "vendor/winit"]
 
 # wgpu-hal as published plus `vendor/wgpu-hal.patch`: `dx12::Instance::expose_adapter` (a `wgpu::Adapter` for the
 # one adapter Rune picks through DXGI, with no device made on the others, `crates/rune-gpu/src/pick.rs`), FXC loaded on
@@ -148,6 +148,13 @@ sctk-adwaita = { path = "vendor/sctk-adwaita" }
 # a text's shaping, layouts identical). Re-made by `scripts/vendor-parley-engine.sh <version>` when parley is bumped; apps that build
 # Rune patch it too.
 parley_engine = { path = "vendor/parley_engine" }
+# harfrust as published plus `vendor/harfrust.patch`: `DEFAULT_SHAPER` is a `static`, so the planner,
+# which tells it apart by its address, keeps it for a `morx` font's Common-script runs instead of
+# planning them with `DUMBER_SHAPER`, which never zeroes a mark's advance. Apple Color Emoji's
+# two-glyph sequences (a couple with a heart, a handshake in two skin tones) then take one advance,
+# as HarfBuzz and Core Text give them, not two. Re-made by `scripts/vendor-harfrust.sh <version>`
+# when parley's harfrust is bumped; apps that build Rune patch it too.
+harfrust = { path = "vendor/harfrust" }
 # accesskit_windows as published plus `vendor/accesskit_windows.patch`: headings and landmarks reach
 # UI Automation (HeadingLevel, LandmarkType, LocalizedLandmarkType), which Narrator's and NVDA's
 # heading and landmark navigation read; a field past Rune's 64 KiB text-run limit keeps its text

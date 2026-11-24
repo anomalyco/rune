@@ -129,10 +129,10 @@ pub fn ink(text: &str, style: TextStyle) -> Option<TextInk> {
                 let mut x = run.offset();
                 for g in run.glyphs() {
                     let (pen_x, pen_y) = (x + g.x, face.baseline + g.y);
-                    let image = Render::new(&[Source::ColorOutline(0), Source::ColorBitmap(StrikeWith::BestFit), Source::Outline])
-                        .format(Format::Alpha)
-                        .offset(Vector::new(pen_x.fract(), 0.0))
-                        .render(&mut scaler, g.id as u16);
+                    let mut render = Render::new(&[Source::ColorOutline(0), Source::ColorBitmap(StrikeWith::BestFit), Source::Outline]);
+                    render.format(Format::Alpha).offset(Vector::new(pen_x.fract(), 0.0));
+                    let flipped = if scaler.has_color_bitmaps() { crate::raster::sbix::render_flipped(&render, &mut scaler, font, g.id as u16, face.size) } else { None };
+                    let image = flipped.or_else(|| render.render(&mut scaler, g.id as u16));
                     if let Some(image) = image {
                         let stride = if image.content == Content::Color { 4 } else { 1 };
                         let at = image.placement;

@@ -246,7 +246,7 @@ impl TextSystem {
                     .build();
                 // COLR v1 first (Windows 11's emoji, COLR v1 Noto Color Emoji), then swash's COLR v0 and bitmaps.
                 let v1 = if scaler.has_color_outlines() { crate::raster::colr::rasterize(font.data.as_ref(), font.index, glyph, font_size, coords) } else { None };
-                if let Some((pixels, at)) = v1.or_else(|| rasterize_color(&mut scaler, glyph as u16)) {
+                if let Some((pixels, at)) = v1.or_else(|| crate::raster::color::rasterize_color(&mut scaler, font_ref, glyph as u16, font_size)) {
                     out.push(self.add_color_glyph(color_key, face, pixels, at).quad(gx, gy, glide, ink, byte));
                     return Placed::Other;
                 }

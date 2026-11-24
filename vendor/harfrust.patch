@@ -1,0 +1,14 @@
+diff --git a/src/hb/ot_shaper.rs b/src/hb/ot_shaper.rs
+--- a/src/hb/ot_shaper.rs
++++ b/src/hb/ot_shaper.rs
+@@ -40,7 +40,9 @@ pub type DecomposeFn =
+ pub type ComposeFn =
+     fn(&hb_ot_shape_normalize_context_t, Codepoint, Codepoint) -> Option<Codepoint>;
+ 
+-pub const DEFAULT_SHAPER: hb_ot_shaper_t = hb_ot_shaper_t {
++// A `static`, not a `const`: the planner tells this shaper apart by its address (`ptr::eq` in
++// `hb_ot_shape_planner_t::new`), and each use of a `const` may be a copy at an address of its own.
++pub static DEFAULT_SHAPER: hb_ot_shaper_t = hb_ot_shaper_t {
+     collect_features: None,
+     override_features: None,
+     create_data: None,
