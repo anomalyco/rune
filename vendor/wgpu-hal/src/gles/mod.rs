@@ -113,11 +113,17 @@ use self::wgl::AdapterContext;
 #[cfg(windows)]
 pub use self::wgl::{Instance, Surface};
 
-use alloc::{boxed::Box, string::String, string::ToString as _, sync::Arc, vec::Vec};
+use alloc::{
+    boxed::Box,
+    string::String,
+    string::ToString as _,
+    sync::{Arc, Weak},
+    vec::Vec,
+};
 use core::{
     fmt,
     ops::Range,
-    sync::atomic::{AtomicU32, AtomicU8},
+    sync::atomic::{AtomicBool, AtomicU32, AtomicU8},
 };
 use parking_lot::Mutex;
 
@@ -249,6 +255,9 @@ bitflags::bitflags! {
         /// `GL_ARB_shader_image_load_store`; GLES needs `GL_NV_image_formats`
         /// (which itself depends on `GL_EXT_texture_norm16`).
         const TEXTURE_FORMAT_NORM16_STORAGE = 1 << 20;
+        /// Supports asynchronous shader compilation and program linking status
+        /// via `KHR_parallel_shader_compile` / `ARB_parallel_shader_compile`.
+        const PARALLEL_SHADER_COMPILE = 1 << 21;
     }
 }
 
@@ -295,6 +304,8 @@ struct AdapterShared {
     shading_language_version: naga::back::glsl::Version,
     next_shader_id: AtomicU32,
     program_cache: Mutex<ProgramCache>,
+    defer_program_links: AtomicBool,
+    deferred_links: Mutex<Vec<Weak<PipelineInner>>>,
     es: bool,
 
     /// Result of `gl.get_parameter_i32(glow::MAX_SAMPLES)`.
@@ -315,6 +326,8 @@ impl fmt::Debug for AdapterShared {
             shading_language_version,
             next_shader_id,
             program_cache: _,
+            defer_program_links,
+            deferred_links: _,
             es,
             max_msaa_samples,
         } = self;
@@ -326,6 +339,7 @@ impl fmt::Debug for AdapterShared {
             .field("options", options)
             .field("shading_language_version", shading_language_version)
             .field("next_shader_id", next_shader_id)
+            .field("defer_program_links", defer_program_links)
             .field("es", es)
             .field("max_msaa_samples", max_msaa_samples)
             .finish_non_exhaustive()
@@ -737,13 +751,54 @@ unsafe impl Send for ImmediateDesc {}
 /// sampler (in this layout) that the texture is used with.
 type SamplerBindMap = [Option<u8>; MAX_TEXTURE_SLOTS];
 
+/// Outcome of one non-blocking poll of deferred GLES shader program links.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DeferredLinkStatus {
+    /// Live programs still compiling or linking in the GL driver.
+    pub pending: usize,
+    /// Programs finalized during this poll (succeeded or failed).
+    pub finalized: usize,
+    /// First compile or link error observed while finalizing completed programs.
+    pub error: Option<String>,
+    /// True when the GL context was lost (e.g. WebGL2 `isContextLost()`), abandoning
+    /// any remaining deferred links without blocking.
+    pub context_lost: bool,
+}
+
+struct PendingProgramLink {
+    attached_shaders:
+        ArrayVec<(naga::ShaderStage, glow::Shader), { crate::MAX_CONCURRENT_SHADER_STAGES }>,
+    has_stages: wgt::ShaderStages,
+    name_binding_map: FastHashMap<String, (BindingRegister, u8)>,
+    immediates_items:
+        ArrayVec<Vec<naga::back::glsl::ImmediateItem>, { crate::MAX_CONCURRENT_SHADER_STAGES }>,
+}
+
+impl fmt::Debug for PendingProgramLink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PendingProgramLink")
+            .field("attached_shaders", &self.attached_shaders.len())
+            .field("has_stages", &self.has_stages)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug)]
+enum ProgramLinkState {
+    Pending(PendingProgramLink),
+    Ready {
+        first_instance_location: Option<glow::UniformLocation>,
+        immediates_descs: ArrayVec<ImmediateDesc, MAX_IMMEDIATES_COMMANDS>,
+    },
+    Failed(String),
+}
+
 #[derive(Debug)]
 struct PipelineInner {
     program: glow::Program,
     sampler_map: SamplerBindMap,
-    first_instance_location: Option<glow::UniformLocation>,
-    immediates_descs: ArrayVec<ImmediateDesc, MAX_IMMEDIATES_COMMANDS>,
     clip_distance_count: u32,
+    link_state: Mutex<ProgramLinkState>,
 }
 
 #[cfg(send_sync)]
@@ -1125,6 +1180,7 @@ unsafe impl Send for CommandBuffer {}
 // inside the encoder and stays there until `reset_all`.
 
 pub struct CommandEncoder {
+    shared: Arc<AdapterShared>,
     cmd_buffer: CommandBuffer,
     state: command::State,
     private_caps: PrivateCapabilities,
