@@ -204,7 +204,7 @@ impl FromStr for Chord {
             if parts == [""] { parts.clear(); }
         }
         let mut mods = 0;
-        let mut key = plus.then_some(ChordKey::Char('+'));
+        let mut key = None;
         for part in parts {
             let part = part.to_lowercase();
             if let Some(m) = modifier_named(&part) {
@@ -212,10 +212,11 @@ impl FromStr for Chord {
                 mods |= m.bit();
                 continue;
             }
-            if key.is_some() { return Err(invalid()); }
+            if key.is_some() || plus { return Err(invalid()); }
             key = Some(key_named(&part).ok_or_else(invalid)?);
         }
-        let chord = Self::new(key.ok_or_else(invalid)?);
+        let key = if plus { ChordKey::Char('+') } else { key.ok_or_else(invalid)? };
+        let chord = Self::new(key);
         Ok(Self { mods: mods | chord.mods, key: chord.key })
     }
 }
@@ -348,3 +349,7 @@ fn us_unshifted(c: char) -> Option<char> {
     let (shifted, plain) = ("~!@#$%^&*()_+{}|:\"<>?", "`1234567890-=[]\\;',./");
     shifted.chars().position(|s| s == c).and_then(|i| plain.chars().nth(i))
 }
+
+#[cfg(test)]
+#[path = "chord_tests.rs"]
+mod tests;
