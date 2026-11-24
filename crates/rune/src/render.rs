@@ -74,7 +74,9 @@ use pass::{ActivePass, Backdrop};
 #[cfg(target_os = "windows")]
 pub(crate) use damaged::MAX_RECTS;
 pub(crate) use shader_check::ShaderError;
-pub(crate) use surface_setup::{PresentationFallback, SurfaceSetupError};
+pub(crate) use surface_setup::{SurfaceSetupError, format_window_setup_error};
+#[cfg(target_os = "windows")]
+pub(crate) use surface_setup::with_wine_hwnd_hint;
 pub(crate) use device::choose_gpu_backend;
 pub(crate) use device::discard_prewarm;
 pub(crate) use instance::Globals;

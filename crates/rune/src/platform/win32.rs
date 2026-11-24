@@ -41,6 +41,23 @@ pub(crate) use frame::request_inner_size;
 pub(crate) use frame::window_menu;
 pub(crate) use placement::restore_frame;
 
+/// Whether this process is running under Wine or Proton (`ntdll.dll` exports `wine_get_version`).
+/// Called only on DirectComposition error paths to add a hint — never at launch.
+#[allow(unsafe_code)]
+pub(crate) fn running_under_wine() -> bool {
+    use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+    const NTDLL: [u16; 10] = [
+        b'n' as u16, b't' as u16, b'd' as u16, b'l' as u16, b'l' as u16,
+        b'.' as u16, b'd' as u16, b'l' as u16, b'l' as u16, 0,
+    ];
+    // SAFETY: `ntdll.dll` is already loaded in every Windows/Wine process; `GetModuleHandleW`
+    // does not load any DLL and `GetProcAddress` only inspects its export table.
+    unsafe {
+        let ntdll = GetModuleHandleW(NTDLL.as_ptr());
+        !ntdll.is_null() && GetProcAddress(ntdll, c"wine_get_version".as_ptr().cast()).is_some()
+    }
+}
+
 /// Loads a Windows system DLL from System32 only, never from the application directory or CWD.
 /// Rejects names containing path separators or drive prefixes.
 #[allow(unsafe_code)]
