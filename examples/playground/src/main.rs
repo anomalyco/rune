@@ -14,7 +14,7 @@
 use std::time::Duration;
 
 use rune::tok::{self, Theme, motion, radius, type_};
-use rune::{Align, App, AppSpec, Color, Cx, El, Family, OverlaySpec, Play, Playground, ScreenEdge, Stage, Story, TextStyle, Tx, col, el, row, text};
+use rune::{Align, App, AppSpec, Color, Cx, El, ElementInfo, Family, OverlaySpec, Play, Playground, ScreenEdge, ScrollSpec, Stage, Story, TextStyle, Tx, col, el, row, text};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -409,6 +409,132 @@ fn layout_demo_view(s: &LayoutDemo, cx: &mut Cx<LayoutDemo>) -> El {
     )
 }
 
+/// One sampled element captured by `Tx::read_elements` in the "Layout/Element inspector" story.
+#[derive(Clone)]
+struct InspectedRow {
+    key: String,
+    fill: Color,
+    border: Option<Color>,
+    detail: String,
+}
+
+/// The "Layout/Element inspector" story: inspects the presented frame via `Tx::read_elements`
+/// and highlights sample elements' fills, borders, descriptions, text metrics, and clips.
+#[derive(Default)]
+struct ElementInspector {
+    total: usize,
+    bordered: usize,
+    clipped: usize,
+    highlight: bool,
+    pending_inspect: bool,
+    rows: Vec<InspectedRow>,
+}
+
+fn inspector_poll(s: &mut ElementInspector, _t: f64, tx: &mut Tx) -> bool {
+    if std::mem::take(&mut s.pending_inspect) {
+        tx.read_elements::<ElementInspector>(|s, elements, _| s.capture(elements));
+    }
+    false
+}
+
+const INSPECT_KEYS: [&str; 4] = ["sample-pill", "sample-card", "sample-trunc", "sample-scroll"];
+
+impl ElementInspector {
+    fn capture(&mut self, elements: &[ElementInfo]) {
+        self.total = elements.len();
+        self.bordered = elements.iter().filter(|e| e.border_color.is_some()).count();
+        self.clipped = elements.iter().filter(|e| e.clips).count();
+        self.highlight = true;
+        self.rows = INSPECT_KEYS.iter().filter_map(|&key| {
+            let e = elements.iter().find(|e| e.key.as_deref() == Some(key))?;
+            let mut parts = Vec::new();
+            if let Some(b) = e.border_color { parts.push(format!("border {}", b.hex())); }
+            if let Some(d) = &e.description { parts.push(format!("desc '{d}'")); }
+            if let Some([w, h]) = e.text_size {
+                parts.push(format!("text {w:.0}×{h:.0}{}", if e.text_cut { " (cut)" } else { "" }));
+            }
+            if e.inset != [0.0; 4] { parts.push(format!("inset {:?}", e.inset.map(|v| v.round() as i32))); }
+            if e.clips { parts.push(format!("clips axes={:?}", e.scroll_axes)); }
+            Some(InspectedRow {
+                key: key.to_owned(),
+                fill: e.fill,
+                border: e.border_color,
+                detail: if parts.is_empty() { format!("fill {}", e.fill.hex()) } else { parts.join(" · ") },
+            })
+        }).collect();
+    }
+}
+
+fn inspector_view(s: &ElementInspector, cx: &mut Cx<ElementInspector>) -> El {
+    let t = tok::theme(cx.system_dark());
+    let accent = tok::accent(0, cx.system_dark());
+    let green = tok::accent(4, cx.system_dark());
+    let hi = |el: El| if s.highlight { el.outline(1.0, 2.0, accent) } else { el };
+
+    let samples = row().w_full().gap(10.0).center_y()
+        .child(hi(
+            row().key("sample-pill").h(32.0).px(12.0).center().radius(16.0).fill(accent)
+                .role("button").label("Deploy").description("Deploys the active build").focusable(true)
+                .child(text("Deploy").font(type_::LABEL).color(Color::WHITE)),
+        ))
+        .child(hi(
+            col().key("sample-card").size(104.0, 44.0).padding(8.0).center().radius(radius::SM)
+                .fill(t.card).border(1.5, green).border_layout()
+                .child(text("Bordered").font(type_::LABEL).color(t.text)),
+        ))
+        .child(hi(
+            row().key("sample-trunc-wrap").w(96.0).h(32.0).px(8.0).center_y().radius(radius::SM).fill(t.card)
+                .child(text("Long label that truncates cleanly").key("sample-trunc").font(type_::LABEL).color(t.text).truncate()),
+        ))
+        .child(hi(
+            col().key("sample-scroll").size(96.0, 44.0).padding(6.0).gap(4.0).radius(radius::SM)
+                .fill(t.card).scroll(ScrollSpec::default())
+                .child(text("Row 1").font(type_::LABEL).color(t.text))
+                .child(text("Row 2").font(type_::LABEL).color(t.text_secondary))
+                .child(text("Row 3").font(type_::LABEL).color(t.text_secondary)),
+        ));
+
+    let summary = if s.rows.is_empty() {
+        "Press Inspect frame to snapshot ElementInfo via Tx::read_elements".to_owned()
+    } else {
+        format!("{} elements · {} bordered · {} clipping", s.total, s.bordered, s.clipped)
+    };
+
+    let swatch = |c: Color| el().size(12.0, 12.0).radius(3.0).fill(c).border(1.0, t.card_border);
+    let report = col().w_full().padding(12.0).gap(6.0).radius(radius::MD).fill(t.card).outline(1.0, 0.0, t.card_border)
+        .child(text(summary).key("inspect-summary").font(type_::LABEL).color(t.text_secondary))
+        .children(s.rows.iter().map(|r| {
+            row().w_full().gap(8.0).center_y()
+                .child(swatch(r.fill))
+                .children(r.border.map(swatch))
+                .child(text(r.key.clone()).font(type_::LABEL).color(t.text))
+                .child(text(r.detail.clone()).font(type_::LABEL).color(t.text_secondary).truncate())
+        }));
+
+    col().w_full().h_full().center().padding(20.0).child(
+        col().w(480.0).gap(14.0)
+            .child(samples)
+            .child(
+                row().gap(8.0)
+                    .child(
+                        row().key("inspect-btn").h(28.0).px(12.0).center().radius(radius::SM).fill(t.control_track).hover(t.hover)
+                            .role("button").label("Inspect frame").description("Reads presented ElementInfo list").focusable(true)
+                            .child(text("Inspect frame").font(type_::LABEL).color(t.text))
+                            .on_press_tx(|_: &mut ElementInspector, tx: &mut Tx| {
+                                tx.read_elements::<ElementInspector>(|s, elements, _| s.capture(elements));
+                            }),
+                    )
+                    .child(
+                        row().key("clear-inspect").h(28.0).px(12.0).center().radius(radius::SM).fill(t.control_track).hover(t.hover)
+                            .role("button").label("Clear").focusable(true)
+                            .child(text("Clear").font(type_::LABEL).color(t.text))
+                            .on_press(|s: &mut ElementInspector| *s = ElementInspector::default()),
+                    ),
+            )
+            .child(report),
+    )
+}
+
 fn main() {
     let spec = AppSpec { scenes: SCENES, ..AppSpec::new("Preferences", (640.0, 420.0), init, view) };
     App::new(spec)
@@ -484,6 +610,16 @@ fn main() {
                             s.active = !s.families.is_empty();
                         }),
                 )
+                .story(
+                    Story::new("Layout/Element inspector", ElementInspector::default, inspector_view)
+                        .poll(inspector_poll)
+                        .trigger('i', "Inspect frame", |s, play| {
+                            s.pending_inspect = true;
+                            play.wake_after(Duration::ZERO);
+                        })
+                        .variant("Idle", |_| {})
+                        .variant("Inspected", |s| s.pending_inspect = true),
+                )
                 .group_order(&["Controls"])
                 .start_folded(true)
                 .sizes(&[("Compact", (420.0, 300.0)), ("Wide", (900.0, 560.0))]),
@@ -519,5 +655,30 @@ mod tests {
         assert!(rt.state.active);
         let after_w = width_of(&rt, "sample-text");
         assert!((after_w - before_w).abs() > 5.0, "sample text width updated: {before_w} -> {after_w}");
+    }
+
+    #[test]
+    fn element_inspector_story_reads_presented_elements_via_tx() {
+        let mut rt = Runtime::new(ElementInspector::default(), inspector_view, (560.0, 320.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        assert!(rt.state.rows.is_empty());
+        assert_eq!(rt.presented_focus_key(), None);
+
+        let (x, y) = rt.find("inspect-btn").unwrap();
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+
+        assert_eq!(rt.presented_focus_key(), Some("inspect-btn"));
+        assert!(rt.state.highlight);
+        assert!(rt.state.bordered >= 1, "bordered card should be counted");
+        assert!(rt.state.clipped >= 1, "scroll box should be counted");
+        assert_eq!(rt.state.rows.len(), INSPECT_KEYS.len());
+        let card = rt.state.rows.iter().find(|r| r.key == "sample-card").unwrap();
+        assert!(card.border.is_some());
+        let pill = rt.state.rows.iter().find(|r| r.key == "sample-pill").unwrap();
+        assert!(pill.detail.contains("Deploys the active build"));
+        let trunc = rt.state.rows.iter().find(|r| r.key == "sample-trunc").unwrap();
+        assert!(trunc.detail.contains("(cut)"));
     }
 }

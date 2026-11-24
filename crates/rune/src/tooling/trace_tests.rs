@@ -359,3 +359,27 @@ fn tree_json_emits_material_fallback_only_when_exceeding_cap() {
     let fifth = raised_els.iter().find(|e| e["key"].as_str() == Some("mat-4")).unwrap();
     assert!(fifth.get("materialFallback").is_none(), "mat-4 within raised cap must omit materialFallback: {fifth}");
 }
+
+#[test]
+fn tree_json_emits_description_and_border_color_when_present() {
+    const ACCENT: crate::Color = crate::Color { r: 0.2, g: 0.4, b: 0.8, a: 1.0 };
+    let view = |_: &(), _: &mut Cx<()>| {
+        crate::col().key("root").size(240.0, 120.0)
+            .child(crate::el().key("plain").size(40.0, 20.0))
+            .child(crate::el().key("described").size(40.0, 20.0).description("2 running").help("Tooltip"))
+            .child(crate::el().key("empty-desc").size(40.0, 20.0).description(""))
+            .child(crate::el().key("bordered").size(40.0, 20.0).border(1.5, ACCENT))
+    };
+    let mut rt = Runtime::new((), view, (240.0, 120.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let tree = tree_json(&rt, 0.0);
+    let tree_els = tree["elements"].as_array().unwrap();
+    let find_json = |key: &str| tree_els.iter().find(|e| e["key"].as_str() == Some(key)).unwrap();
+
+    assert!(find_json("plain").get("description").is_none());
+    assert!(find_json("plain").get("borderColor").is_none());
+    assert_eq!(find_json("described")["description"], serde_json::json!("2 running"));
+    assert_eq!(find_json("described")["help"], serde_json::json!("Tooltip"));
+    assert!(find_json("empty-desc").get("description").is_none(), "empty description must omit JSON field");
+    assert_eq!(find_json("bordered")["borderColor"], serde_json::json!(ACCENT.hex()));
+}

@@ -6,6 +6,7 @@ use rune_motion::{Anim, Spring};
 
 use crate::el::*;
 
+mod elements;
 mod keys;
 mod pick;
 mod press;

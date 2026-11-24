@@ -376,6 +376,9 @@ pub(crate) fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> V
             if let Some(t) = &e.text {
                 v["text"] = t.clone().into();
             }
+            if let Some(c) = e.border_color {
+                v["borderColor"] = c.hex().into();
+            }
             if let Some(c) = e.text_color {
                 v["color"] = c.hex().into();
             }
@@ -394,6 +397,9 @@ pub(crate) fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> V
             }
             if let Some(h) = &e.help {
                 v["help"] = h.clone().into();
+            }
+            if let Some(d) = &e.description {
+                v["description"] = d.clone().into();
             }
             if let Some(s) = &e.selected {
                 v["selected"] = s.clone().into();
