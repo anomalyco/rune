@@ -1172,9 +1172,11 @@ rune::App::new(spec).fit_content_height().run();
 - **`AppSpec::new(title, size, init, view)`** fills every other field with its default; literals
   that set a few more end with `..AppSpec::new(..)`. Window chrome lives on the builders, keeping
   existing exhaustive `AppSpec` literals source-compatible.
-- **Window drag regions** (`.window_drag()`): a press starts winit's `drag_window` and a
-  double press zooms the window (macOS follows the user's `AppleActionOnDoubleClick` setting, so it
-  may minimise instead; elsewhere it toggles maximised). Window-backed overlays also honour
+- **Window drag regions** (`.window_drag()`): a press starts winit's `drag_window` (or
+  `performWindowDragWithEvent:` on the adopted `NSPanel` for macOS `MacWindowOptions::nonactivating_panel`
+  and `WindowOptions::launcher_panel` windows) and a double press zooms the window (macOS follows
+  the user's `AppleActionOnDoubleClick` setting, so it may minimise instead; elsewhere it toggles
+  maximised). Window-backed overlays also honour
   `.window_drag()` and `.no_window_drag()` (calling `performWindowDragWithEvent:` on the macOS
   `NSPanel` and `drag_window()` on Windows and X11; Wayland layer-shell ignores it), ignore
   titlebar double-clicks, and keep the user's dragged position until an explicit placement request.

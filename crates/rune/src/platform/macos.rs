@@ -186,6 +186,7 @@ pub(crate) struct Panel {
     /// overlay can still draw its exit.
     presence: Rc<Cell<Presence>>,
     wake: Option<crate::Waker>,
+    ordinary: bool,
     panel: objc2::rc::Retained<objc2_app_kit::NSPanel>,
     window: objc2::rc::Retained<objc2_app_kit::NSWindow>,
     view: objc2::rc::Retained<objc2_app_kit::NSView>,
@@ -276,7 +277,7 @@ impl Panel {
             return None;
         }
         panel.setDelegate(ns_window.delegate().as_deref());
-        Some(Panel { bridge, monitors: RefCell::new(None), pointer, options: options.clone(), follow_pointer: Cell::new(options.follow_pointer), presence, wake, panel, window: ns_window, view })
+        Some(Panel { bridge, monitors: RefCell::new(None), pointer, options: options.clone(), follow_pointer: Cell::new(options.follow_pointer), presence, wake, ordinary, panel, window: ns_window, view })
     }
 
     /// On the primary screen (the one with the menu bar), in AppKit's bottom-left coordinates.
@@ -302,7 +303,9 @@ impl Panel {
     }
 
     /// Starts an interactive AppKit window drag on this panel from the current mouse-down event.
-    /// winit's `Window::drag_window` targets the hidden source `NSWindow`, not this panel.
+    /// Shared by overlay panels (whose hidden source `NSWindow` does not bridge geometry, so the
+    /// source frame is synced here) and ordinary adopted panels (`Panel::adopt_window`, whose
+    /// `panel_bridge` already forwards `frame` and `performWindowDragWithEvent:` to this panel).
     /// Returns whether the panel's frame moved during the drag.
     pub fn drag_window(&self) -> bool {
         let Some(mtm) = MainThreadMarker::new() else { return false };
@@ -311,7 +314,7 @@ impl Panel {
         self.panel.performWindowDragWithEvent(&event);
         let after = self.panel.frame();
         if after != before {
-            self.window.setFrame_display(after, false);
+            if !self.ordinary { self.window.setFrame_display(after, false); }
             true
         } else {
             false
