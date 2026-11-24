@@ -55,6 +55,12 @@ extern "C" {
     fn schedule_touch_hold_confirm(handle: &JsValue, attempt: u32);
     #[wasm_bindgen(js_name = cancelTouchHoldConfirm)]
     fn cancel_touch_hold_confirm(handle: &JsValue);
+    #[wasm_bindgen(js_name = supportsLiveTouchContextMenu)]
+    fn supports_live_touch_context_menu() -> bool;
+}
+
+pub(super) fn live_touch_context_menu() -> bool {
+    supports_live_touch_context_menu()
 }
 
 /// How the canvas sits in the page.
@@ -320,6 +326,16 @@ impl Running {
             Some("touch_hold_confirm") => {
                 let attempt = crate::machine::Attempt(event["attempt"].as_u64().unwrap_or(0) as u32);
                 if !self.app.confirm_touch_hold(attempt) { return false; }
+                self.full_redraw = true;
+                self.app.frame(0.0);
+                self.apply_frame_requests(window);
+                self.clipboard.flush_core(self.app.rt_mut());
+                self.sync_input(false);
+                return true;
+            }
+            Some("touch_hold") => {
+                let id = event["id"].as_u64().unwrap_or(0);
+                if !self.app.host_touch_hold(id) { return false; }
                 self.full_redraw = true;
                 self.app.frame(0.0);
                 self.apply_frame_requests(window);

@@ -383,6 +383,7 @@ impl Browser {
         };
         if started_webgl { self.ensure_webgl_watch(); }
         let cursor = crate::cursor::os::OsCursor::new();
+        app.rt_mut().set_touch_hold_policy(web_math::web_touch_hold_policy(input::live_touch_context_menu()));
         let input = input::Bridge::new(&window.canvas().unwrap(), Rc::downgrade(&self.running), window.clone(),
             input::Mode { embedded: self.embedded, fit_height, document });
         *self.running.borrow_mut() = Some(Running { draw, app, shared: self.shared.clone(), input, clipboard,

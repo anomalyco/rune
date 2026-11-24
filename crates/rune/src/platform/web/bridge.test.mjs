@@ -2112,3 +2112,57 @@ test('scheduleTouchHoldConfirm falls back to setTimeout(0) when scheduler.postTa
         Object.defineProperty(globalThis, 'scheduler', { value: origScheduler, configurable: true });
     }
 });
+
+test('supportsLiveTouchContextMenu classifies Android/Linux/ChromeOS vs Windows/iOS/iPadOS/macOS', () => {
+    const cases = [
+        [{ userAgentData: { platform: 'Android' }, platform: 'Linux armv8l', userAgent: 'Mozilla/5.0 (Linux; Android 15)' }, true],
+        [{ userAgentData: { platform: 'Chrome OS' }, platform: 'Linux x86_64', userAgent: 'Mozilla/5.0 (X11; CrOS x86_64)' }, true],
+        [{ userAgentData: { platform: 'Linux' }, platform: 'Linux x86_64', userAgent: 'Mozilla/5.0 (X11; Linux x86_64)' }, true],
+        [{ platform: 'Linux armv8l', userAgent: 'Mozilla/5.0 (Android 14; Mobile; rv:130.0)' }, true],
+        // Windows Chrome defers touch contextmenu until finger lift -> false.
+        [{ userAgentData: { platform: 'Windows' }, platform: 'Win32', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }, false],
+        // Spoofed Android UA on Windows Chrome where userAgentData still reports Windows -> false.
+        [{ userAgentData: { platform: 'Windows' }, platform: 'Linux armv8l', userAgent: 'Mozilla/5.0 (Linux; Android 14)' }, false],
+        // iOS / iPadOS (including iPadOS desktop mode MacIntel + maxTouchPoints > 1) -> false.
+        [{ platform: 'iPhone', userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)', maxTouchPoints: 5 }, false],
+        [{ platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', maxTouchPoints: 5 }, false],
+        // macOS -> false.
+        [{ userAgentData: { platform: 'macOS' }, platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', maxTouchPoints: 0 }, false],
+        // Missing / empty navigator -> false.
+        [null, false],
+        [{}, false],
+    ];
+    for (const [nav, want] of cases) {
+        assert.equal(bridge.supportsLiveTouchContextMenu(nav), want, JSON.stringify(nav));
+    }
+});
+
+test('document contextmenu forwards touch_hold only while a canvas touch is active and leaves mouse right-click alone', () => {
+    const { doc, win, canvas, events, h } = setup();
+    try {
+        // Stray contextmenu with no active touch on canvas sends no touch_hold.
+        let prevented = false;
+        doc.dispatchEvent({ type: 'contextmenu', target: canvas, pointerType: 'touch', pointerId: 5, button: 0, preventDefault() { prevented = true; } });
+        assert.equal(prevented, true);
+        assert.deepEqual(events, []);
+
+        // Active touch on canvas: contextmenu prevents default and forwards touch_hold with pointerId.
+        win.dispatchEvent({ type: 'pointerdown', target: canvas, pointerType: 'touch', pointerId: 11, timeStamp: 100 });
+        prevented = false;
+        doc.dispatchEvent({ type: 'contextmenu', target: canvas, pointerType: 'touch', pointerId: 11, button: -1, preventDefault() { prevented = true; } });
+        assert.equal(prevented, true);
+        assert.deepEqual(events, [{ kind: 'touch_hold', id: 11 }]);
+
+        // Mouse right-click contextmenu while touch is active is NOT treated as touch_hold.
+        events.length = 0;
+        doc.dispatchEvent({ type: 'contextmenu', target: canvas, pointerType: 'mouse', pointerId: 1, button: 2, preventDefault() {} });
+        assert.deepEqual(events, []);
+
+        // After pointerup clears activeTouchId, a deferred post-lift contextmenu sends no touch_hold.
+        win.dispatchEvent({ type: 'pointerup', target: canvas, pointerType: 'touch', pointerId: 11, timeStamp: 900 });
+        doc.dispatchEvent({ type: 'contextmenu', target: canvas, pointerType: 'touch', pointerId: 11, button: 0, preventDefault() {} });
+        assert.deepEqual(events, []);
+    } finally {
+        bridge.destroy(h);
+    }
+});

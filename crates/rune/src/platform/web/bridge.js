@@ -2,6 +2,27 @@
 const MAC = /Mac|iP/.test(navigator.platform);
 const coarse = () => matchMedia('(pointer: coarse)').matches;
 export function isMac() { return MAC; }
+
+// Detects platforms whose browser dispatches touch `contextmenu` while the finger is still down
+// (Android, ChromeOS, Linux). Excludes Windows (Chrome defers touch contextmenu until finger lift
+// via context_menu_on_mouse_up), iOS/iPadOS (WebKit never fires touch contextmenu, including
+// iPadOS desktop mode where platform is MacIntel with maxTouchPoints > 1), and macOS.
+export function supportsLiveTouchContextMenu(nav = globalThis.navigator) {
+    if (!nav) return false;
+    const uad = (nav.userAgentData?.platform ?? '').toLowerCase();
+    const plat = (nav.platform ?? '').toLowerCase();
+    const ua = (nav.userAgent ?? '').toLowerCase();
+    const maxTouch = typeof nav.maxTouchPoints === 'number' ? nav.maxTouchPoints : 0;
+
+    if (uad.includes('win') || uad.includes('mac') || uad.includes('ios')) return false;
+    if (plat.includes('win') || plat.includes('mac') || /iphone|ipad|ipod/.test(plat)) return false;
+    if (/windows|iphone|ipad|ipod|macintosh|mac os x/.test(ua)) return false;
+    if (plat === 'macintel' && maxTouch > 1) return false;
+
+    if (uad.includes('android') || uad.includes('chrome os') || uad.includes('chromeos') || uad.includes('linux')) return true;
+    if (plat.includes('linux') || plat.includes('android')) return true;
+    return /android|cros|linux/.test(ua);
+}
 const high = n => n >= 0xd800 && n <= 0xdbff;
 const low = n => n >= 0xdc00 && n <= 0xdfff;
 function boundary(text, at, forward) {
@@ -192,7 +213,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     const h = { canvas, textarea, password, a11y, a11yNodes: new Map(), field: textarea, key: '', base: 0, value: '', domValue: '', crlfs: null,
         selection: null, copyText: '', composing: false, composition: '', shift: false, modBits: 0, listeners: [], syncing: false, disposed: false,
         embedded, fitHeight, page, focused: false, presented: false, swapped: false, touchDown: false,
-        touchTimestamps: [], touchHoldConfirm: null,
+        touchTimestamps: [], touchHoldConfirm: null, activeTouchId: null,
         lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band };
     const send = event => {
         const message = JSON.stringify(event);
@@ -233,10 +254,19 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             if (h.touchTimestamps.length > MAX_TOUCH_TIMESTAMPS) h.touchTimestamps.shift();
         }
     };
-    listen(window, 'pointerdown', event => recordTouchTimestamp(false, event), { capture: true, passive: true });
+    listen(window, 'pointerdown', event => {
+        if (event.target === canvas && event.pointerType === 'touch' && h.activeTouchId === null) {
+            h.activeTouchId = event.pointerId;
+        }
+        recordTouchTimestamp(false, event);
+    }, { capture: true, passive: true });
     listen(window, 'pointermove', event => recordTouchTimestamp(true, event), { capture: true, passive: true });
-    listen(window, 'pointerup', event => recordTouchTimestamp(false, event), { capture: true, passive: true });
-    listen(window, 'pointercancel', event => recordTouchTimestamp(false, event), { capture: true, passive: true });
+    const clearActiveTouch = event => {
+        if (event.pointerType === 'touch' && event.pointerId === h.activeTouchId) h.activeTouchId = null;
+        recordTouchTimestamp(false, event);
+    };
+    listen(window, 'pointerup', clearActiveTouch, { capture: true, passive: true });
+    listen(window, 'pointercancel', clearActiveTouch, { capture: true, passive: true });
     listen(window, 'keyup', event => {
         if (ownsTarget(event.target) && !(event.target === canvas && MOD_KEYS.includes(event.key))) syncMods(event);
     }, { capture: true, passive: true });
@@ -245,8 +275,8 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     listen(window, 'keyup', event => {
         if (event.target === canvas && MOD_KEYS.includes(event.key)) syncMods(event);
     }, { passive: true });
-    listen(window, 'blur', () => { h.modBits = 0; });
-    listen(document, 'visibilitychange', () => { if (document.hidden) h.modBits = 0; });
+    listen(window, 'blur', () => { h.modBits = 0; h.activeTouchId = null; });
+    listen(document, 'visibilitychange', () => { if (document.hidden) { h.modBits = 0; h.activeTouchId = null; } });
     function changed(preedit = false) {
         const backward = textarea.selectionDirection === 'backward';
         const edit = replacement(h.domValue, textarea.value, preedit ? h.composition : '', textarea.selectionEnd);
@@ -492,6 +522,16 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     if (MAC) listen(canvas, 'pointerdown', armAt);
     else listen(window, 'pointerup', armAt, { capture: true });
     listen(document, 'contextmenu', event => {
+        const touchOrigin = event.target === canvas
+            && h.activeTouchId !== null
+            && event.button !== 2
+            && (event.pointerType === 'touch' || event.pointerType === undefined || event.pointerType === '');
+        if (touchOrigin) {
+            event.preventDefault();
+            const id = typeof event.pointerId === 'number' && event.pointerId > 0 ? event.pointerId : h.activeTouchId;
+            send({ kind: 'touch_hold', id });
+            return;
+        }
         if (h.menu === 'rune' || event.target === canvas) event.preventDefault();
         if (h.menu === 'rune') h.menu = '';
     }, { capture: true });
@@ -1548,6 +1588,7 @@ export function destroy(h) {
     clearTimeout(h.staticTimer);
     cancelTouchHoldConfirm(h);
     h.touchTimestamps.length = 0;
+    h.activeTouchId = null;
     cancelA11y(h);
     for (const remove of h.listeners) remove();
     h.password.value = ''; h.textarea.value = ''; h.value = ''; h.domValue = ''; h.crlfs = null; h.copyText = ''; h.selection = null;
