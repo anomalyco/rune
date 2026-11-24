@@ -597,3 +597,34 @@ fn rounded_clip_clips_ordinary_primitive_corners() {
     assert_eq!(corner, &[0, 0, 0, 255], "rounded clip must cut the corner");
     assert_eq!(center, &[255, 255, 255, 255], "centre stays filled");
 }
+
+#[test]
+fn nested_layer_holes_cut_every_circle_and_keep_outside_opaque() {
+    let mut scene = generate::scene(&[]);
+    scene.width = 64;
+    scene.height = 32;
+    scene.clear = [0.0, 0.0, 0.0, 0.0];
+
+    let holes = [
+        [16.0, 16.0, 4.0, 5.0],
+        [48.0, 16.0, 4.0, 5.0],
+    ];
+    let mut outer = layer(8.0, 0.0);
+    outer.rect = [0.0, 0.0, 64.0, 32.0];
+    outer.radii = holes[0];
+    let mut inner = layer(8.0, 0.0);
+    inner.rect = [0.0, 0.0, 64.0, 32.0];
+    inner.radii = holes[1];
+    let mut fill = plain_prim(0.0);
+    fill.node = 2;
+    fill.rect = [0.0, 0.0, 64.0, 32.0];
+    fill.fill = [1.0, 1.0, 1.0, 1.0];
+
+    scene.primitives = vec![outer, inner, fill, layer(9.0, 0.0), layer(9.0, 0.0)];
+    let frame = render(&scene);
+    let px = |x: usize, y: usize| &frame.rgba[(y * 64 + x) * 4..(y * 64 + x) * 4 + 4];
+    assert_eq!(px(16, 16), &[0, 0, 0, 0], "first hole centre is clear");
+    assert_eq!(px(48, 16), &[0, 0, 0, 0], "second hole centre is clear");
+    assert_eq!(px(32, 16), &[255, 255, 255, 255], "midpoint between holes stays opaque");
+    assert_eq!(px(4, 4), &[255, 255, 255, 255], "corner outside both holes stays opaque");
+}

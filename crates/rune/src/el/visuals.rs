@@ -545,9 +545,43 @@ impl El {
     /// radii cut an anti-aliased edge. Room for a badge over an avatar's corner:
     /// `.cutout_circle([16.0, 0.0], 4.0, 5.0)` under a 6 point dot at the corner. The subtree
     /// draws in an isolated layer, whose composite cuts the hole; hit testing ignores it.
+    /// Replaces any circular cutouts already on this element; use [`Self::cutout_circles`] to
+    /// punch several holes.
     pub fn cutout_circle(mut self, center: [f32; 2], inner: f32, outer: f32) -> Self {
         let inner = inner.max(0.0);
-        self.vis.cold_mut().cutout = Some([center[0], center[1], inner, outer.max(inner)]);
+        let cutouts = &mut self.vis.cold_mut().cutouts;
+        cutouts.clear();
+        cutouts.push([center[0], center[1], inner, outer.max(inner)]);
+        self
+    }
+    /// Punch several round holes through this element and everything it and its descendants draw,
+    /// intersecting their alpha masks as CSS `mask-image` layers with `mask-composite: intersect`
+    /// do. Each `(center, inner, outer)` tuple follows [`Self::cutout_circle`]; non-finite
+    /// entries are skipped. Calling this more than once appends to earlier cutouts on this
+    /// element (including one set by [`Self::cutout_circle`]); each additional hole adds one
+    /// nested isolated layer pass. Hit testing ignores cutouts.
+    ///
+    /// ```no_run
+    /// # use rune::{Color, el};
+    /// let ticket = el().size(200.0, 80.0).fill(Color::WHITE).cutout_circles([
+    ///     ([0.0, 40.0], 7.0, 8.0),
+    ///     ([200.0, 40.0], 7.0, 8.0),
+    /// ]);
+    /// ```
+    pub fn cutout_circles(mut self, circles: impl IntoIterator<Item = ([f32; 2], f32, f32)>) -> Self {
+        let mut iter = circles
+            .into_iter()
+            .filter(|&(c, inner, outer)| {
+                c[0].is_finite() && c[1].is_finite() && inner.is_finite() && outer.is_finite()
+            })
+            .peekable();
+        if iter.peek().is_some() {
+            let cutouts = &mut self.vis.cold_mut().cutouts;
+            for (center, inner, outer) in iter {
+                let inner = inner.max(0.0);
+                cutouts.push([center[0], center[1], inner, outer.max(inner)]);
+            }
+        }
         self
     }
     /// Soft clip with a fade width per side (left, top, right, bottom).
