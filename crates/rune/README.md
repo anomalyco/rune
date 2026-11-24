@@ -88,11 +88,14 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     Sketch / Figma shadow blur specify `r ≈ σ`, so pass `blur = 2.0 * r` to match a `CALayer` shadow
     radius (whereas `.blur(sigma)` takes `σ` directly).
   - Vector shapes (`crates/rune-core/src/shape.rs`): `El::shape(Shape)` and `canvas(shape)` paint strokes (polylines,
-    round or butt caps, open or closed) and fills (simple polygons, ear-clipped) in the element's own
+    round or butt caps, open or closed) and fills (simple polygons via `Shape::fill`, or compound paths with
+    transparent holes, nested islands, and self-intersections via `Shape::fill_path` and
+    `Shape::fill_path_with(path, FillRule::NonZero | FillRule::EvenOdd, color)`) in the element's own
     points, or in a `view_box` stretched to the element's size; `Path` flattens quadratic and cubic
     Béziers. Strokes are one analytic capsule/box per
-    segment (`KIND_SEGMENT`); fills are triangles (`KIND_TRIANGLE`) antialiased only on polygon
-    edges, so they have no seams. No atlas, so a shape can change every frame (`examples/shapes`).
+    segment (`KIND_SEGMENT`); fills are triangles (`KIND_TRIANGLE`) antialiased only on true contour
+    edges (never bridge edges or diagonals), so translucent fills have no seams. No atlas, so a shape can
+    change every frame (`examples/shapes`). SVG export emits `fill-rule="evenodd"` for `FillRule::EvenOdd`.
     Translucent strokes blend twice where segments overlap at a joint; fills do not overlap.
   - Every instance has a soft-edge clip (`clip_soft`, `clip_fade`).
   - Windows blend in sRGB-encoded space by default, as Core Animation, CoreText and CSS do.
