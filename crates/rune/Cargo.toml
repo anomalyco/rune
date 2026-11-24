@@ -207,6 +207,8 @@ blake3 = { workspace = true }
 [dev-dependencies]
 # The HLSL wgpu generates, for the precompiled uber shader (`render/dxbc_tests.rs`).
 log = "0.4"
+# WebGL2 GLSL ES 3.00 shader translation check (`render/webgl_shader_tests.rs`).
+naga = { version = "~30.0.1", default-features = false, features = ["wgsl-in", "glsl-out"] }
 # Experimental swash oracle in `examples/text_quality.rs`.
 swash = { workspace = true }
 

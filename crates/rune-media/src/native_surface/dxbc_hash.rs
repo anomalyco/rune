@@ -1,2 +1,2 @@
 // Written by `cargo run -p rune --example regen_dxbc` on Windows.
-pub(super) const VIDEO_DXBC_WGSL_BLAKE3: &str = "6122677fedbcee60f0f92ba6c46cadc3e766cf40e7132bd50451451b625d6718";
+pub(super) const VIDEO_DXBC_WGSL_BLAKE3: &str = "962bc7f52646fe65ea62c0bfcf84feaaa67fe679c350c538db27fdb75edc85ee";

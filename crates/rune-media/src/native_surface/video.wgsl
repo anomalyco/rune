@@ -71,16 +71,17 @@ fn unpack_clip_radii(w: u32) -> vec4<f32> {
         f32((w >> 21u) & 0x7fu),
     ) * (step * sgn);
 }
+fn unpack_f16(h: u32) -> f32 {
+    let sign = (h & 0x8000u) << 16u;
+    let exp = (h >> 10u) & 0x1Fu;
+    let mant = h & 0x03FFu;
+    let sub = sign | bitcast<u32>(f32(mant) * (1.0 / 16777216.0));
+    let norm = sign | ((exp + 112u) << 23u) | (mant << 13u);
+    let inf_nan = sign | 0x7F800000u | (mant << 13u) | select(0u, 0x00400000u, mant != 0u);
+    return bitcast<f32>(select(select(norm, inf_nan, exp == 31u), sub, exp == 0u));
+}
 fn unpack_f16x2(packed: u32) -> vec2<f32> {
-    let h = vec2<u32>(packed & 0xFFFFu, packed >> 16u);
-    let sign = (h & vec2<u32>(0x8000u)) << vec2<u32>(16u);
-    let exp = (h >> vec2<u32>(10u)) & vec2<u32>(0x1Fu);
-    let mant = h & vec2<u32>(0x03FFu);
-    let sub = sign | bitcast<vec2<u32>>(vec2<f32>(mant) * (1.0 / 16777216.0));
-    let norm = sign | ((exp + vec2<u32>(112u)) << vec2<u32>(23u)) | (mant << vec2<u32>(13u));
-    let inf_nan = sign | vec2<u32>(0x7F800000u) | (mant << vec2<u32>(13u)) | select(vec2<u32>(0u), vec2<u32>(0x00400000u), mant != vec2<u32>(0u));
-    let bits = select(select(norm, inf_nan, exp == vec2<u32>(31u)), sub, exp == vec2<u32>(0u));
-    return bitcast<vec2<f32>>(bits);
+    return vec2<f32>(unpack_f16(packed & 0xFFFFu), unpack_f16(packed >> 16u));
 }
 fn ramp(d: f32, width: f32) -> f32 {
     if width == 0.0 { return clamp(d + 0.5, 0.0, 1.0); }
