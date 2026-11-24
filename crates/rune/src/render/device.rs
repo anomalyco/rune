@@ -368,9 +368,11 @@ impl Gpu {
     }
 
     /// A real GPU when available, or wgpu's noop backend on a GPU-less host when both
-    /// `RUNE_ALLOW_NO_GPU=1` and `test-gpu-noop` are active (for tests checking non-pixel
-    /// invariants). Skips when `RUNE_ALLOW_NO_GPU=1` is set without `test-gpu-noop`; panics
-    /// without `RUNE_ALLOW_NO_GPU=1`.
+    /// `RUNE_ALLOW_NO_GPU=1` and `test-gpu-noop` are active. Use only for CPU-side renderer,
+    /// planner, or pool bookkeeping tests whose assertions never depend on backend validation,
+    /// shader compilation, submission timing, or rendered pixels; use `test_headless` or
+    /// `test_headless_wgpu` otherwise. Skips when `RUNE_ALLOW_NO_GPU=1` is set without
+    /// `test-gpu-noop`; panics without `RUNE_ALLOW_NO_GPU=1`.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn test_headless_or_noop() -> Option<Gpu> {
         match Self::try_new(Self::instance(), None) {

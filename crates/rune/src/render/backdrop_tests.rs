@@ -77,7 +77,7 @@ fn split_resets_the_hook_viewport_and_scissor_for_later_primitives() {
 
 #[test]
 fn backdrop_slot_degrades_when_the_target_cannot_be_copied() {
-    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
+    let Some(gpu) = Gpu::test_headless() else { return };
     let (device, queue) = (&gpu.device, &gpu.queue);
     let mut renderer = Renderer::new(device, OFFSCREEN_FORMAT);
     let mut text = crate::text::TextSystem::new(&[], ("Inter", "Inter"));

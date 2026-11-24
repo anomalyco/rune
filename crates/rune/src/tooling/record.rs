@@ -468,7 +468,7 @@ mod tests {
     fn in_flight_paces_gpu_submissions_before_exceeding_depth() {
         use std::sync::atomic::AtomicUsize;
 
-        let Some(gpu) = crate::render::Gpu::test_headless_or_noop() else { return };
+        let Some(gpu) = crate::render::Gpu::test_headless() else { return };
         let target = Offscreen::new(&gpu.device, 32, 32);
         let mut ring = InFlight::new(DEPTH);
         let completed = Arc::new(AtomicUsize::new(0));
