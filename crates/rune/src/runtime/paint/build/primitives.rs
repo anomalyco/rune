@@ -140,13 +140,16 @@ impl RuntimeCore {
         };
         let fill = if layered { base } else { over(overlay, base) }.map(|c| c * o);
         let bw = pixel_snap::line_width(n.vis.border_width() * s) * sc;
-        let border = if bw > 0.0 { premul(self.color(n.id, P_BORDER, n.vis.border()), o, srgb) } else { [0.0; 4] };
+        let focus_border = n.focus.border.filter(|_| self.focus_ring_visible(i));
+        let border = if bw > 0.0 {
+            premul(focus_border.unwrap_or_else(|| self.color(n.id, P_BORDER, n.vis.border())), o, srgb)
+        } else { [0.0; 4] };
         // A gradient border draws as KIND_GRADIENT with a width: `border` top, `uv` bottom.
         // After a switch back to `border`, it stays a gradient until both stops meet.
         let store = self.scene.store();
         let springing = store.has(n.id, P_BORDER_BOTTOM)
             && (store.is_animating(n.id, P_BORDER_BOTTOM) || store.is_animating(n.id, P_BORDER));
-        let border_bottom = (bw > 0.0 && (n.vis.border_bottom.is_some() || springing))
+        let border_bottom = (bw > 0.0 && focus_border.is_none() && (n.vis.border_bottom.is_some() || springing))
             .then(|| premul(self.color(n.id, P_BORDER_BOTTOM, n.vis.border_bottom.unwrap_or(n.vis.border())), o, srgb))
             .filter(|b| n.vis.border_bottom.is_some() || *b != border);
         let (border_kind, border_uv) = border_bottom.map_or((KIND_RECT, [0.0; 4]), |b| (KIND_GRADIENT, b));

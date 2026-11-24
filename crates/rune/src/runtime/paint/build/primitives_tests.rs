@@ -238,3 +238,129 @@ fn focus_ring_radius_overrides_explicit_default_and_within_rings_without_touchin
         assert_eq!(run(Case::OutlineUnaffected, scale), vec![[7.0 * scale; 4]], "El::outline ignores focus_ring_radius at scale {scale}");
     }
 }
+
+#[test]
+fn focus_border_replaces_border_colour_only_while_focus_visible() {
+    use crate::render::{KIND_DASHED, KIND_GRADIENT, KIND_RECT};
+
+    let rest = hex("#666666").unwrap();
+    let focus_col = hex("#009FFF").unwrap();
+    let outline_col = hex("#FF3B30").unwrap();
+
+    #[derive(Clone, Copy)]
+    enum Case {
+        Solid,
+        Dashed,
+        PerSide,
+        Gradient,
+        TransparentRest,
+        ZeroWidth,
+        VisualChild,
+        ForceRings,
+        OutlineUnaffected,
+    }
+
+    let make = |case: Case| -> Runtime<Case> {
+        fn view(&c: &Case, cx: &mut Cx<Case>) -> El {
+            let rest = hex("#666666").unwrap();
+            let focus_col = hex("#009FFF").unwrap();
+            let grad_bottom = hex("#333333").unwrap();
+            let outline_col = hex("#FF3B30").unwrap();
+            if matches!(c, Case::ForceRings) { cx.force_focus_rings(); }
+            let target = match c {
+                Case::Solid | Case::ForceRings => el().key("t").size(80.0, 28.0).fill(crate::Color::WHITE)
+                    .border(1.0, rest).focusable(true).no_focus_ring().focus_border(focus_col),
+                Case::Dashed => el().key("t").size(80.0, 28.0).fill(crate::Color::WHITE)
+                    .border(1.0, rest).border_dash(4.0, 2.0).focusable(true).no_focus_ring().focus_border(focus_col),
+                Case::PerSide => el().key("t").size(80.0, 28.0).fill(crate::Color::WHITE)
+                    .border_sides([1.0, 0.0, 2.0, 0.0], rest).focusable(true).no_focus_ring().focus_border(focus_col),
+                Case::Gradient => el().key("t").size(80.0, 28.0).fill(crate::Color::WHITE)
+                    .border_gradient(1.0, rest, grad_bottom).focusable(true).no_focus_ring().focus_border(focus_col),
+                Case::TransparentRest => el().key("t").size(80.0, 28.0).fill(crate::Color::WHITE)
+                    .border(1.0, crate::Color::TRANSPARENT).focusable(true).no_focus_ring().focus_border(focus_col),
+                Case::ZeroWidth => el().key("t").size(80.0, 28.0).fill(crate::Color::WHITE)
+                    .focusable(true).no_focus_ring().focus_border(focus_col),
+                Case::VisualChild => col().key("t").size(80.0, 28.0).focusable(true).no_focus_ring()
+                    .child(el().key("inner").size(80.0, 28.0).fill(crate::Color::WHITE).border(1.0, rest).focus_border(focus_col)),
+                Case::OutlineUnaffected => el().key("t").size(80.0, 28.0).fill(crate::Color::WHITE)
+                    .border(1.0, rest).outline(2.0, 1.0, outline_col).focusable(true).no_focus_ring().focus_border(focus_col),
+            };
+            col().padding(20.0).items_start().child(target)
+        }
+        let mut rt = Runtime::new(case, view, (200.0, 120.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        rt
+    };
+
+    let approx = |got: [f32; 4], want: crate::Color| {
+        let p = want.premul(1.0);
+        got.iter().zip(p).all(|(a, b)| (a - b).abs() < 0.01)
+    };
+
+    // 1. Solid border: resting -> rest, pointer focus -> rest, keyboard focus -> focus_col.
+    let mut rt = make(Case::Solid);
+    let solid_border = |rt: &Runtime<Case>| rt.instances.iter().find(|i| i.params[0] > 0.0 && i.params[1] == KIND_RECT).unwrap().border;
+    assert!(approx(solid_border(&rt), rest), "resting border stays rest colour");
+
+    rt.update(|_, tx| tx.focus("t", false));
+    rt.frame(0.0);
+    assert!(approx(solid_border(&rt), rest), "pointer focus does not apply focus_border");
+
+    rt.update(|_, tx| tx.focus("t", true));
+    rt.frame(0.0);
+    assert!(approx(solid_border(&rt), focus_col), "keyboard focus replaces border with focus_border");
+
+    // 2. Dashed border uses focus_border while keyboard-focused.
+    let mut rt = make(Case::Dashed);
+    rt.update(|_, tx| tx.focus("t", true));
+    rt.frame(0.0);
+    let dashed = rt.instances.iter().find(|i| i.params[1] == KIND_DASHED).unwrap();
+    assert!(approx(dashed.fill, focus_col) && approx(dashed.border, focus_col));
+
+    // 3. Per-side border keeps side widths and replaces colour.
+    let mut rt = make(Case::PerSide);
+    rt.update(|_, tx| tx.focus("t", true));
+    rt.frame(0.0);
+    let side = rt.instances.iter().find(|i| i.params[0] > 0.0 && i.params[1] == KIND_RECT).unwrap();
+    assert!(approx(side.border, focus_col));
+    assert_eq!(side.uv, [1.0, 0.0, 2.0, 0.0]);
+
+    // 4. Gradient border switches to solid focus_border when keyboard-focused, restores gradient on blur.
+    let mut rt = make(Case::Gradient);
+    assert!(rt.instances.iter().any(|i| i.params[0] > 0.0 && i.params[1] == KIND_GRADIENT));
+    rt.update(|_, tx| tx.focus("t", true));
+    rt.frame(0.0);
+    assert!(!rt.instances.iter().any(|i| i.params[0] > 0.0 && i.params[1] == KIND_GRADIENT));
+    assert!(approx(solid_border(&rt), focus_col));
+
+    // 5. Transparent resting border becomes visible with focus_border on keyboard focus.
+    let mut rt = make(Case::TransparentRest);
+    assert!(rt.instances.iter().all(|i| i.border[3] == 0.0));
+    rt.update(|_, tx| tx.focus("t", true));
+    rt.frame(0.0);
+    assert!(approx(solid_border(&rt), focus_col));
+
+    // 6. Zero border width draws no border even when keyboard-focused.
+    let mut rt = make(Case::ZeroWidth);
+    rt.update(|_, tx| tx.focus("t", true));
+    rt.frame(0.0);
+    assert!(rt.instances.iter().all(|i| i.params[0] == 0.0));
+
+    // 7. Visual child of focused control picks up focus_border.
+    let mut rt = make(Case::VisualChild);
+    rt.update(|_, tx| tx.focus("t", true));
+    rt.frame(0.0);
+    assert!(approx(solid_border(&rt), focus_col));
+
+    // 8. Cx::force_focus_rings shows focus_border without focus.
+    let rt = make(Case::ForceRings);
+    assert!(approx(solid_border(&rt), focus_col));
+
+    // 9. El::outline keeps its own colour while border takes focus_border.
+    let mut rt = make(Case::OutlineUnaffected);
+    rt.update(|_, tx| tx.focus("t", true));
+    rt.frame(0.0);
+    let rects: Vec<_> = rt.instances.iter().filter(|i| i.params[0] > 0.0 && i.params[1] == KIND_RECT).collect();
+    assert!(rects.iter().any(|i| approx(i.border, focus_col)), "border took focus_border");
+    assert!(rects.iter().any(|i| approx(i.border, outline_col)), "outline kept its own colour");
+}

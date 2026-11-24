@@ -535,6 +535,77 @@ fn inspector_view(s: &ElementInspector, cx: &mut Cx<ElementInspector>) -> El {
     )
 }
 
+/// The "Controls/Focus card" story: focusable cards styled via `El::on_focus_change`,
+/// `El::on_focus_within_change`, `El::focus_border`, `Tx::focus_within`, and `Tx::focus_visible`.
+#[derive(Default)]
+struct FocusCard {
+    card_a_focused: bool,
+    card_b_focused: bool,
+    group_within: bool,
+    focus_visible: bool,
+    last_within_group: bool,
+    transitions: usize,
+}
+
+fn focus_card_view(s: &FocusCard, cx: &mut Cx<FocusCard>) -> El {
+    let t = tok::theme(cx.system_dark());
+    let accent = tok::accent(0, cx.system_dark());
+    let card = |key: &'static str, title: &'static str, subtitle: &'static str, focused: bool, is_a: bool| {
+        col().key(key).w(170.0).padding(12.0).gap(4.0).radius(radius::MD)
+            .fill(if focused { t.control_track } else { t.card })
+            .border(1.5, t.card_border)
+            .focus_border(accent)
+            .no_focus_ring()
+            .focusable(true)
+            .role("button")
+            .label(title)
+            .on_focus_change(move |s: &mut FocusCard, on, tx: &mut Tx| {
+                if is_a { s.card_a_focused = on; } else { s.card_b_focused = on; }
+                s.focus_visible = on && tx.focus_visible();
+                s.last_within_group = tx.focus_within("focus-group");
+                s.transitions += 1;
+            })
+            .child(text(title).font(type_::BODY).color(t.text))
+            .child(text(subtitle).font(type_::LABEL).color(t.text_secondary))
+            .child(text(if focused {
+                if s.focus_visible { "Keyboard focus" } else { "Pointer focus" }
+            } else {
+                "Idle"
+            }).font(type_::LABEL).color(if focused { accent } else { t.text_secondary }))
+    };
+    let status = format!(
+        "group within: {} · focus_visible: {} · transitions: {}",
+        s.group_within, s.focus_visible, s.transitions
+    );
+    col().w_full().h_full().center().padding(20.0).gap(12.0)
+        .child(
+            col().key("focus-group").padding(14.0).gap(10.0).radius(radius::LG)
+                .fill(t.bg)
+                .border(1.0, if s.group_within { accent } else { t.card_border })
+                .on_focus_within_change(|s: &mut FocusCard, within, tx: &mut Tx| {
+                    s.group_within = within;
+                    s.last_within_group = tx.focus_within("focus-group");
+                })
+                .child(text(if s.group_within { "Card group · focus within" } else { "Card group · click or Tab to focus" })
+                    .key("group-header").font(type_::LABEL).color(if s.group_within { accent } else { t.text_secondary }))
+                .child(
+                    row().gap(10.0)
+                        .child(card("card-a", "Primary card", "Tab shows accent border", s.card_a_focused, true))
+                        .child(card("card-b", "Secondary card", "Click keeps rest border", s.card_b_focused, false)),
+                ),
+        )
+        .child(
+            row().gap(10.0).center_y()
+                .child(
+                    row().key("blur-btn").h(26.0).px(10.0).center().radius(radius::SM).fill(t.control_track).hover(t.hover)
+                        .role("button").label("Blur").focusable(true)
+                        .on_press_tx(|_: &mut FocusCard, tx: &mut Tx| tx.blur())
+                        .child(text("Blur").font(type_::LABEL).color(t.text)),
+                )
+                .child(text(status).key("focus-status").font(type_::LABEL).color(t.text_secondary)),
+        )
+}
+
 fn main() {
     let spec = AppSpec { scenes: SCENES, ..AppSpec::new("Preferences", (640.0, 420.0), init, view) };
     App::new(spec)
@@ -583,6 +654,11 @@ fn main() {
                         .variant("Dimmed", |s| s.dimmed = true),
                 )
                 .story(Story::new("Controls/Switches/Long label", || Switch { on: false, dimmed: false, label: "Only sync over Wi-Fi when on battery" }, switch_story))
+                .story(
+                    Story::new("Controls/Focus card", FocusCard::default, focus_card_view)
+                        .variant("Resting", |_| {})
+                        .variant("Card focused", |s| { s.card_a_focused = true; s.group_within = true; s.focus_visible = true; }),
+                )
                 .story(Story::new("Controls/Rows/Two devices", device_rows(&["Studio desk", "Travel laptop"]), devices))
                 .story(Story::new("Controls/Rows/One device", device_rows(&["Studio desk"]), devices))
                 .story(Story::new("Controls/Rows/Long names", device_rows(&["Studio desk in the back office", "Travel laptop (borrowed for the conference)"]), devices))
@@ -680,5 +756,36 @@ mod tests {
         assert!(pill.detail.contains("Deploys the active build"));
         let trunc = rt.state.rows.iter().find(|r| r.key == "sample-trunc").unwrap();
         assert!(trunc.detail.contains("(cut)"));
+    }
+
+    #[test]
+    fn focus_card_story_tracks_focus_change_within_and_modality() {
+        use rune::{Key, KeyEvent, Mods};
+
+        let mut rt = Runtime::new(FocusCard::default(), focus_card_view, (460.0, 260.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        assert!(!rt.state.card_a_focused && !rt.state.group_within && rt.state.transitions == 0);
+
+        let tree = rt.accessibility_json().to_string();
+        assert!(tree.contains("Primary card") && tree.contains("Secondary card"));
+
+        // Tab focuses card-a with keyboard focus-visible modality.
+        rt.key(KeyEvent { key: Key::Tab, mods: Mods::default() });
+        rt.frame(1.0 / 60.0);
+        assert!(rt.state.card_a_focused && rt.state.group_within && rt.state.focus_visible && rt.state.last_within_group);
+
+        // Clicking card-b moves focus with pointer modality (focus_visible == false) while group_within stays true.
+        let (bx, by) = rt.find("card-b").unwrap();
+        rt.pointer_down(bx, by);
+        rt.pointer_up(bx, by);
+        rt.frame(1.0 / 60.0);
+        assert!(!rt.state.card_a_focused && rt.state.card_b_focused && rt.state.group_within && !rt.state.focus_visible);
+
+        // Clicking Blur drops focus and clears group_within.
+        let (rx, ry) = rt.find("blur-btn").unwrap();
+        rt.pointer_down(rx, ry);
+        rt.pointer_up(rx, ry);
+        rt.frame(1.0 / 60.0);
+        assert!(!rt.state.card_b_focused && !rt.state.group_within);
     }
 }

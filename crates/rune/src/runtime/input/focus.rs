@@ -414,7 +414,77 @@ impl RuntimeCore {
             .unwrap_or(crate::el::Outline { width: 3.0, offset: 0.0, color: self.host.system_accent.focus(self.env.system_dark) })
     }
     pub(crate) fn set_focus(&mut self, app: &mut dyn AppDriver, path: Option<String>, keyboard: bool) -> bool {
-        self.set_focus_entry(app, path, keyboard, false, false)
+        let (changed, cb_changed) = self.set_focus_notifying(app, path, keyboard);
+        changed || cb_changed
+    }
+    pub(in crate::runtime) fn set_focus_notifying(&mut self, app: &mut dyn AppDriver, path: Option<String>, keyboard: bool) -> (bool, bool) {
+        let old_path = self.kbd.focus.owned();
+        let moved = old_path.as_deref() != path.as_deref();
+        let changed = self.set_focus_entry(app, path, keyboard, false, false);
+        let mut cb_changed = false;
+        if moved && let Some((dirty, mut cb_tx)) = self.notify_focus_change(app, old_path.as_deref(), None) {
+            cb_changed = dirty;
+            if dirty { self.commit.dirty = true; }
+            self.finish_focus_tx(app, &mut cb_tx);
+        }
+        (changed, cb_changed)
+    }
+    fn finish_focus_tx(&mut self, app: &mut dyn AppDriver, cb_tx: &mut Tx) {
+        let wakes = std::mem::take(&mut cb_tx.wakes);
+        self.latch_requests(app, cb_tx);
+        if !wakes.is_empty() { self.schedule_wakes(wakes); }
+        merge(&mut self.frame.pending, std::mem::take(cb_tx));
+    }
+    /// Delivers `El::on_focus_change` and `El::on_focus_within_change` for a transition from
+    /// `old_path` to the current `self.kbd.focus.path()`, leaves before enters, innermost first.
+    fn notify_focus_change(&mut self, app: &mut dyn AppDriver, old_path: Option<&str>, old_nodes: Option<&[Node]>) -> Option<(bool, Tx)> {
+        let new_path = self.kbd.focus.owned();
+        let new_ref = new_path.as_deref();
+        let calls: Vec<(crate::el::WindowFocusFn, bool)> = {
+            let find = |path: &str, within: bool, allow_old: bool| -> Option<crate::el::WindowFocusFn> {
+                let pick = |n: &Node| {
+                    let h = n.handlers.get()?;
+                    if within { h.on_focus_within_change.clone() } else { h.on_focus_change.clone() }
+                };
+                self.tree.nodes.iter().enumerate()
+                    .find(|&(i, n)| n.path == path && (allow_old || old_nodes.is_some() || !self.subtree_exiting(i)))
+                    .and_then(|(_, n)| pick(n))
+                    .or_else(|| allow_old.then(|| old_nodes?.iter().find(|n| !n.is_moved_stub() && n.path == path).and_then(pick)).flatten())
+            };
+            let mut out = Vec::new();
+            if let Some(old) = old_path {
+                if let Some(f) = find(old, false, true) { out.push((f, false)); }
+                for anc in ancestor_paths(old) {
+                    if new_ref.is_some_and(|n| path_holds(anc, n)) { break; }
+                    if let Some(f) = find(anc, true, true) { out.push((f, false)); }
+                }
+            }
+            if let Some(new) = new_ref {
+                if let Some(f) = find(new, false, false) { out.push((f, true)); }
+                for anc in ancestor_paths(new) {
+                    if old_path.is_some_and(|o| path_holds(anc, o)) { break; }
+                    if let Some(f) = find(anc, true, false) { out.push((f, true)); }
+                }
+            }
+            out
+        };
+        if calls.is_empty() { return None; }
+        let mut out = Tx::default();
+        let mut dirty = false;
+        for (f, focused) in calls {
+            let mut one = self.transaction(app);
+            f(app.states(), focused, &mut one);
+            if std::mem::take(&mut one.live_only) {
+                one.commit = Commit::Animate;
+                one.motion = None;
+                one.follow_edge = false;
+                one.color_motion = None;
+            } else {
+                dirty = true;
+            }
+            merge(&mut out, one);
+        }
+        Some((dirty, out))
     }
     fn set_focus_entry(&mut self, app: &mut dyn AppDriver, path: Option<String>, keyboard: bool, keep_entry: bool, sync_all: bool) -> bool {
         self.edit.on_input_focus_change(path.as_deref());
@@ -593,9 +663,11 @@ impl RuntimeCore {
         let keyboard = explicit.map_or_else(|| self.kbd.focus.keyboard(), |(_, _, ring, _)| *ring);
         self.kbd.set_focus_returned(matches!(explicit, Some((_, _, _, crate::el::FocusAsk::Return))));
         if asked.is_none() && let Some(owed) = waits { self.kbd.focus_owed = Some(owed); }
+        let old_path = self.kbd.focus.owned();
+        let moved = old_path.as_deref() != next.as_deref();
         std::mem::swap(&mut self.tree.nodes, nodes);
         self.nodes_replaced();
-        let changed = self.set_focus_entry(app, next, keyboard, keep_entry, true);
+        let mut changed = self.set_focus_entry(app, next, keyboard, keep_entry, true);
         if let Some(link) = target_link {
             match link {
                 Some(k) => self.edit.set_link_focus(k),
@@ -607,8 +679,13 @@ impl RuntimeCore {
         {
             self.edit.enter_links(&self.tree.nodes[i], false);
         }
+        let cb = if moved { self.notify_focus_change(app, old_path.as_deref(), Some(nodes)) } else { None };
         std::mem::swap(&mut self.tree.nodes, nodes);
         self.nodes_replaced();
+        if let Some((dirty, mut cb_tx)) = cb {
+            changed |= dirty;
+            self.finish_focus_tx(app, &mut cb_tx);
+        }
         if blurred && self.kbd.focus.path().is_none() {
             // An explicit blur is not the temporary pointer-down blur of a scrim, and nothing
             // hands focus on from it: only a control the user blurred and then left does.
@@ -957,15 +1034,34 @@ impl RuntimeCore {
 
     /// In a group whose selection follows focus, focus follows selection too: when the app
     /// selects another item (a shortcut, say), focus in that group moves to it.
-    pub(in crate::runtime) fn sync_follows(&mut self, app: &mut dyn AppDriver) {
-        let Some(i) = self.focused_index() else { return };
-        if self.tree.nodes[i].input.is_some() || self.tree.nodes[i].focus.selected { return; }
-        let Some(g) = self.focus_group(i).filter(|&g| self.tree.nodes[g].focus.follows) else { return };
+    pub(in crate::runtime) fn sync_follows(&mut self, app: &mut dyn AppDriver) -> bool {
+        let Some(i) = self.focused_index() else { return false };
+        if self.tree.nodes[i].input.is_some() || self.tree.nodes[i].focus.selected { return false; }
+        let Some(g) = self.focus_group(i).filter(|&g| self.tree.nodes[g].focus.follows) else { return false };
         let Some(j) = (0..self.tree.nodes.len())
-            .find(|&j| self.tree.nodes[j].focus.selected && self.focus_group(j) == Some(g) && self.can_focus(j)) else { return };
+            .find(|&j| self.tree.nodes[j].focus.selected && self.focus_group(j) == Some(g) && self.can_focus(j)) else { return false };
         let path = self.tree.nodes[j].path.clone();
-        self.set_focus(app, Some(path), self.kbd.focus.keyboard());
+        self.set_focus_notifying(app, Some(path), self.kbd.focus.keyboard()).1
     }
+}
+
+/// `descendant` is `ancestor` or inside it along `/`-separated path segments.
+fn path_holds(ancestor: &str, descendant: &str) -> bool {
+    !ancestor.is_empty()
+        && descendant.strip_prefix(ancestor).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+/// Yields `path` and each of its `/`-separated ancestor paths, innermost to outermost.
+fn ancestor_paths(mut path: &str) -> impl Iterator<Item = &str> {
+    std::iter::from_fn(move || {
+        if path.is_empty() { return None; }
+        let cur = path;
+        path = match path.rfind('/') {
+            Some(slash) => &path[..slash],
+            None => "",
+        };
+        Some(cur)
+    })
 }
 
 /// The rescue's pick for [`RuntimeCore::focus_fallback`] and [`RuntimeCore::fallback_in_new`]:
@@ -989,3 +1085,7 @@ mod tests;
 #[cfg(test)]
 #[path = "focus_key_tests.rs"]
 mod key_tests;
+
+#[cfg(test)]
+#[path = "focus_change_tests.rs"]
+mod change_tests;

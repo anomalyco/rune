@@ -32,7 +32,10 @@ impl RuntimeCore {
                 * std::iter::successors(Some(i), |&j| self.tree.nodes[j].parent).map(|j| self.tree.nodes[j].vis.layer_opacity).product::<f32>();
             let mut colors = [Color::TRANSPARENT; 6];
             colors[C_FILL] = fill.alpha(fill.a * k);
-            if v.border_width() > 0.0 { colors[C_BORDER] = self.color(n.id, P_BORDER, v.border()).alpha_times(k); }
+            if v.border_width() > 0.0 {
+                let bc = n.focus.border.filter(|_| self.focus_ring_visible(i)).unwrap_or_else(|| self.color(n.id, P_BORDER, v.border()));
+                colors[C_BORDER] = bc.alpha_times(k);
+            }
             // As it paints: a hovered group's `El::group_color` mixes in.
             let group = self.paint.inh_scratch.get(i).map_or(0.0, |h| h.group);
             if let Some(c) = paint_tracks::text_color(n) { colors[C_TEXT] = paint_tracks::group_tint(n, self.color(n.id, P_TEXT, c), group).alpha_times(k); }

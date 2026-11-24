@@ -64,4 +64,43 @@ impl Tx {
     pub fn focused(&self) -> Option<&str> {
         self.focused.as_deref()
     }
+
+    /// Whether focus is on an element matching `key` or anywhere inside it (CSS `:focus-within`),
+    /// as this event arrived (or after the transition inside [`El::on_focus_change`](crate::El::on_focus_change)
+    /// and [`El::on_focus_within_change`](crate::El::on_focus_within_change)).
+    ///
+    /// `key` takes the same key or `/`-separated key path that [`Cx::layout`](crate::Cx::layout)
+    /// resolves (skipping unkeyed `#n` ancestors): `"popover"` matches any focused control inside
+    /// `"popover"` including unkeyed descendants, while `"popover/close"` distinguishes a `"close"`
+    /// button inside `"popover"` from one inside `"page"`. Returns `false` when nothing has focus
+    /// or `key` is empty.
+    ///
+    /// ```
+    /// use rune::Tx;
+    ///
+    /// fn close_if_outside(tx: &Tx) -> bool {
+    ///     !tx.focus_within("popover")
+    /// }
+    /// assert!(close_if_outside(&Tx::default()));
+    /// ```
+    pub fn focus_within(&self, key: &str) -> bool {
+        if key.is_empty() { return false; }
+        let Some(path) = self.focused_path.as_deref() else { return false };
+        if let Some(link) = self.focused_link.as_deref()
+            && crate::flight::selects_under(key, path, link)
+        {
+            return true;
+        }
+        let mut cur = path;
+        loop {
+            let own = cur.rsplit_once('/').map_or(cur, |(_, s)| s);
+            if let Some(decoded) = crate::runtime::element_path::decode_key_segment(own)
+                && crate::flight::selects(key, cur, Some(decoded.as_ref()))
+            {
+                return true;
+            }
+            let Some((above, _)) = cur.rsplit_once('/') else { return false };
+            cur = above;
+        }
+    }
 }
