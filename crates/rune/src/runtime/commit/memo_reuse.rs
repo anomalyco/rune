@@ -334,6 +334,8 @@ fn same_handlers(
         on_middle_press,
         on_hover,
         on_hover_change,
+        on_focus_change,
+        on_focus_within_change,
         hover_delay,
         on_pointer_move,
         gestures,
@@ -382,6 +384,8 @@ fn same_handlers(
         && opt_rc_eq(&a.on_middle_press, on_middle_press)
         && opt_rc_eq(&a.on_hover, on_hover)
         && opt_rc_eq(&a.on_hover_change, on_hover_change)
+        && opt_rc_eq(&a.on_focus_change, on_focus_change)
+        && opt_rc_eq(&a.on_focus_within_change, on_focus_within_change)
         && a.hover_delay == *hover_delay
         && opt_rc_eq(&a.on_pointer_move, on_pointer_move)
         && same_gestures(&a.gestures, gestures)

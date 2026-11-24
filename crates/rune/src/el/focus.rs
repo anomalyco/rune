@@ -43,6 +43,8 @@ pub(crate) struct FocusSpec {
     pub highlight: Option<Color>,
     /// `focus_fill`: painted over the element while it shows keyboard focus.
     pub fill: Option<Color>,
+    /// `focus_border`: replaces the element's border colour while it shows keyboard focus.
+    pub border: Option<Color>,
     pub follows: bool,
     pub return_to: Option<String>,
     /// [`crate::El::press_focuses_below`].
@@ -84,6 +86,7 @@ impl crate::cold::Empty for FocusSpec {
         press_on_return: false,
         highlight: None,
         fill: None,
+        border: None,
         follows: false,
         return_to: None,
         below: false,
@@ -217,6 +220,103 @@ impl El {
     /// focus by its fill alone also sets [`El::no_focus_ring`].
     pub fn focus_fill(mut self, color: Color) -> Self {
         self.cold_mut().focus.fill = Some(color);
+        self
+    }
+    /// Border colour painted in place of [`El::border`]'s colour while this element shows
+    /// keyboard focus, as CSS `:focus-visible { border-color }` does: a switch, checkbox, radio
+    /// or button whose stroke changes on keyboard focus without changing on a pointer click.
+    ///
+    /// Requires a non-zero border width from [`El::border`], [`El::border_sides`],
+    /// [`El::border_dash`], or [`El::border_gradient`]; when border width is `0.0`, this draws
+    /// nothing. Also applies to a visual child of a focused control, as [`El::focus_fill`] and
+    /// [`El::focus_ring`] do.
+    ///
+    /// ```
+    /// use rune::{Color, El, el};
+    ///
+    /// let _card: El = el()
+    ///     .size(160.0, 40.0)
+    ///     .border(1.0, Color { r: 0.5, g: 0.5, b: 0.5, a: 1.0 })
+    ///     .focusable(true)
+    ///     .focus_border(Color { r: 0.0, g: 0.62, b: 1.0, a: 1.0 });
+    /// ```
+    pub fn focus_border(mut self, color: Color) -> Self {
+        self.cold_mut().focus.border = Some(color);
+        self
+    }
+    /// Called with `true` when this element gains actual focus and `false` when it loses focus,
+    /// across keyboard navigation, pointer clicks, assistive technology, programmatic
+    /// [`Tx::focus`](crate::Tx::focus)/[`Tx::blur`](crate::Tx::blur), text-field blur, modal
+    /// autofocus/return, and removal or disabling while focused.
+    ///
+    /// Initial unfocused mounts fire nothing. Does not make the element focusable or a pointer
+    /// hit target. Actual focus is kept separate from `:focus-visible`: read
+    /// [`Tx::focus_visible`](crate::Tx::focus_visible) inside the callback to distinguish keyboard
+    /// focus from pointer focus.
+    ///
+    /// ```
+    /// use rune::{El, Tx, el};
+    ///
+    /// struct App { focused: bool, keyboard: bool }
+    /// let _card: El = el()
+    ///     .focusable(true)
+    ///     .on_focus_change(|s: &mut App, focused, tx: &mut Tx| {
+    ///         s.focused = focused;
+    ///         s.keyboard = focused && tx.focus_visible();
+    ///     });
+    /// ```
+    pub fn on_focus_change<S: 'static>(mut self, f: impl Fn(&mut S, bool, &mut Tx) + 'static) -> Self {
+        self.handlers.on_focus_change = Some(Rc::new(move |s, focused, tx| f(downcast::<S>(s), focused, tx)));
+        self
+    }
+    /// [`El::on_focus_change`] for a component that doesn't read the app's state.
+    ///
+    /// ```
+    /// use rune::{El, Tx, el};
+    ///
+    /// let _card: El = el()
+    ///     .focusable(true)
+    ///     .on_focus_change_any(|focused, tx: &mut Tx| {
+    ///         if focused { tx.live_only(); }
+    ///     });
+    /// ```
+    pub fn on_focus_change_any(mut self, f: impl Fn(bool, &mut Tx) + 'static) -> Self {
+        self.handlers.on_focus_change = Some(Rc::new(move |_, focused, tx| f(focused, tx)));
+        self
+    }
+    /// Called with `true` when focus enters this element or any descendant and `false` when focus
+    /// leaves the subtree (DOM `focusin`/`focusout` / CSS `:focus-within`), across keyboard,
+    /// pointer, assistive technology, programmatic moves, text-field blur, modal autofocus/return,
+    /// and removal of the focused subtree.
+    ///
+    /// Moving focus between descendants of this element fires nothing. Initial unfocused mounts
+    /// fire nothing. Does not make the element focusable or a pointer hit target.
+    ///
+    /// ```
+    /// use rune::{El, Tx, col, el};
+    ///
+    /// struct App { active: bool }
+    /// let _pane: El = col()
+    ///     .on_focus_within_change(|s: &mut App, within, _tx: &mut Tx| s.active = within)
+    ///     .child(el().focusable(true));
+    /// ```
+    pub fn on_focus_within_change<S: 'static>(mut self, f: impl Fn(&mut S, bool, &mut Tx) + 'static) -> Self {
+        self.handlers.on_focus_within_change = Some(Rc::new(move |s, within, tx| f(downcast::<S>(s), within, tx)));
+        self
+    }
+    /// [`El::on_focus_within_change`] for a component that doesn't read the app's state.
+    ///
+    /// ```
+    /// use rune::{El, Tx, col, el};
+    ///
+    /// let _pane: El = col()
+    ///     .on_focus_within_change_any(|within, tx: &mut Tx| {
+    ///         if !within { tx.live_only(); }
+    ///     })
+    ///     .child(el().focusable(true));
+    /// ```
+    pub fn on_focus_within_change_any(mut self, f: impl Fn(bool, &mut Tx) + 'static) -> Self {
+        self.handlers.on_focus_within_change = Some(Rc::new(move |_, within, tx| f(within, tx)));
         self
     }
     /// The window's default button, which Return presses (AppKit's `keyEquivalent = "\r"`).

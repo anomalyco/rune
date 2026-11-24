@@ -147,8 +147,9 @@ impl RuntimeCore {
 
     /// Feeds the modal focus machine what this commit shows: modals that went (innermost first),
     /// a modal that opened, and focus that left the top modal.
-    pub(in crate::runtime) fn sync_modals(&mut self, app: &mut dyn AppDriver) {
+    pub(in crate::runtime) fn sync_modals(&mut self, app: &mut dyn AppDriver) -> bool {
         let returned = self.kbd.take_focus_returned();
+        let mut cb_dirty = false;
         // When one or more top modals unmount and a new modal mounts in the same commit,
         // `modal_scope` already belongs to the replacement modal, so running `Return` against
         // `can_focus` would reject the original opener behind it. Carry the outermost removed
@@ -174,11 +175,11 @@ impl RuntimeCore {
                     } else {
                         Opened::Dialog
                     };
-                    self.modal_step(app, ModalEvent::Replaced { removed, path, restore, opened });
+                    cb_dirty |= self.modal_step(app, ModalEvent::Replaced { removed, path, restore, opened });
                     if !self.focused_index().is_some_and(|j| self.allowed(j)) {
-                        self.modal_step(app, ModalEvent::FocusOutside);
+                        cb_dirty |= self.modal_step(app, ModalEvent::FocusOutside);
                     }
-                    return;
+                    return cb_dirty;
                 }
             }
         }
@@ -186,9 +187,9 @@ impl RuntimeCore {
         while let Some(top) = self.kbd.modal_top().map(str::to_owned).filter(|p| self.node(p).is_none()) {
             let inside = |f: &str| f.strip_prefix(top.as_str()).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
             let kept = self.kbd.focus.path().is_some_and(|f| !inside(f) && self.node_index(f).is_some_and(|i| self.can_focus(i)));
-            self.modal_step(app, ModalEvent::TopRemoved { kept });
+            cb_dirty |= self.modal_step(app, ModalEvent::TopRemoved { kept });
         }
-        let Some(i) = self.active_modal() else { return };
+        let Some(i) = self.active_modal() else { return cb_dirty };
         let path = self.tree.nodes[i].path.clone();
         // A field in the modal that asked for focus took it earlier in this commit, or a closing
         // menu handed focus back to its trigger as its pick opened this modal (`Tx::return_focus`,
@@ -198,14 +199,16 @@ impl RuntimeCore {
         let restore = if inside || returned { self.kbd.focus_before_commit.clone() } else { self.kbd.focus.owned() };
         let is_menu = self.is_menu_or_listbox_modal(i);
         let opened = if is_menu && !self.kbd.focus.keyboard() { Opened::PointerMenu } else { Opened::Dialog };
-        self.modal_step(app, ModalEvent::Opened { path, restore, opened });
+        cb_dirty |= self.modal_step(app, ModalEvent::Opened { path, restore, opened });
         if !self.focused_index().is_some_and(|j| self.allowed(j)) {
-            self.modal_step(app, ModalEvent::FocusOutside);
+            cb_dirty |= self.modal_step(app, ModalEvent::FocusOutside);
         }
+        cb_dirty
     }
 
-    fn modal_step(&mut self, app: &mut dyn AppDriver, event: ModalEvent) {
+    fn modal_step(&mut self, app: &mut dyn AppDriver, event: ModalEvent) -> bool {
         let effects = self.kbd.step_modal(event);
+        let mut cb_dirty = false;
         for effect in effects {
             match effect {
                 ModalEffect::CancelGestures => {
@@ -215,15 +218,16 @@ impl RuntimeCore {
                 }
                 ModalEffect::FocusInitial => {
                     if let Some(target) = self.modal_initial_focus() {
-                        self.set_focus(app, Some(target), self.kbd.focus.keyboard());
+                        cb_dirty |= self.set_focus_notifying(app, Some(target), self.kbd.focus.keyboard()).1;
                     }
                 }
                 ModalEffect::Return { restore, ring } => {
                     let restore = restore.filter(|p| self.node_index(p).is_some_and(|i| self.can_focus(i)));
-                    self.set_focus(app, restore, ring && self.kbd.focus.keyboard());
+                    cb_dirty |= self.set_focus_notifying(app, restore, ring && self.kbd.focus.keyboard()).1;
                 }
             }
         }
+        cb_dirty
     }
 
     /// What the top modal focuses: its `El::autofocus` control, else under `Cx::web_focus` its

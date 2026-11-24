@@ -95,6 +95,7 @@ fn can_take_old_path(old: &Node, path_buf: &str) -> bool {
         && old.path == path_buf
         && old.input.is_none()
         && old.focus.get().is_none_or(|f| f.return_to.is_none())
+        && old.handlers.get().is_none_or(|h| h.on_focus_change.is_none() && h.on_focus_within_change.is_none())
 }
 
 #[inline]

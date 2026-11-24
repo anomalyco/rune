@@ -24,6 +24,10 @@ pub(crate) struct Handlers {
     pub on_middle_press: Option<PressFn>,
     pub on_hover: Option<PressFn>,
     pub on_hover_change: Option<WindowFocusFn>,
+    /// `El::on_focus_change`: this element gained (`true`) or lost (`false`) focus.
+    pub on_focus_change: Option<WindowFocusFn>,
+    /// `El::on_focus_within_change`: focus entered (`true`) or left (`false`) this element or a descendant.
+    pub on_focus_within_change: Option<WindowFocusFn>,
     /// Seconds the pointer must stay inside, then outside, before `on_hover_change` hears it.
     pub hover_delay: [f32; 2],
     pub on_pointer_move: Option<PointerFn>,
@@ -117,6 +121,8 @@ impl Empty for Handlers {
         on_middle_press: None,
         on_hover: None,
         on_hover_change: None,
+        on_focus_change: None,
+        on_focus_within_change: None,
         hover_delay: [0.0; 2],
         on_pointer_move: None,
         gestures: None,

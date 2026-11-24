@@ -31,6 +31,10 @@ pub struct Tx {
     pub(crate) physical_key: Option<crate::PhysicalKeyCode>,
     pub(crate) key_base: Option<char>,
     pub(crate) focused: Option<String>,
+    /// Full tree path of the focused element, for [`Tx::focus_within`].
+    pub(crate) focused_path: Option<String>,
+    /// Focused inline link id (when focus sits on a [`Link`](crate::Link)), for [`Tx::focus_within`].
+    pub(crate) focused_link: Option<String>,
     /// What this change does with motion ([`Tx::instant`], [`Tx::animated`], [`Tx::settle`]).
     pub(crate) commit: Commit,
     /// The motion this change's layout moves on ([`Tx::motion`], [`Tx::motion_curve`]).
@@ -600,7 +604,8 @@ impl Tx {
         !self.window_hidden
     }
 
-    /// Whether keyboard focus was showing its ring (`:focus-visible`) as this event arrived:
+    /// Whether keyboard focus was showing its ring (`:focus-visible`) as this event arrived
+    /// (or after the transition inside [`El::on_focus_change`] and [`El::on_focus_within_change`]):
     /// the keyboard, not the pointer, has been driving. A menu that opens with it returns focus
     /// to its trigger with the ring.
     pub fn focus_visible(&self) -> bool {

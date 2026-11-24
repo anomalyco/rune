@@ -458,17 +458,33 @@ impl RuntimeCore {
         self.kbd.focus_before_commit = self.kbd.focus.owned();
         // Settle layout reads first so a field that mounts once a rect is known is in `nodes`.
         measured = self.settle_layout_reads(app, measured, tx);
-        if self.sync_requested_focus(app, &mut measured.nodes) {
+        for _ in 0..4 {
+            if !self.sync_requested_focus(app, &mut measured.nodes) { break; }
             self.discard_measured(measured);
             measured = self.measure(app, tx);
             measured = self.settle_layout_reads(app, measured, tx);
+            if self.kbd.focus_request.is_none() { break; }
         }
         if measured.caret_read && self.caret_moved(Some(&measured.nodes)) {
             self.discard_measured(measured);
             measured = self.measure(app, tx);
             measured = self.settle_layout_reads(app, measured, tx);
         }
-        self.apply(app, measured, tx);
+        let mut focus_follow_up = self.apply(app, measured, tx);
+        for _ in 0..2 {
+            if !focus_follow_up { break; }
+            let follow_tx = Tx { commit: Commit::Instant, ..Tx::default() };
+            let mut next_measured = self.measure_commit(app, &follow_tx);
+            next_measured = self.settle_layout_reads(app, next_measured, &follow_tx);
+            for _ in 0..4 {
+                if !self.sync_requested_focus(app, &mut next_measured.nodes) { break; }
+                self.discard_measured(next_measured);
+                next_measured = self.measure(app, &follow_tx);
+                next_measured = self.settle_layout_reads(app, next_measured, &follow_tx);
+                if self.kbd.focus_request.is_none() { break; }
+            }
+            focus_follow_up = self.apply(app, next_measured, &follow_tx);
+        }
         self.resolve_caret_follow();
         self.scene.keep_flights(false);
         self.commit.memo.keep_since(self.commit.memo_since);

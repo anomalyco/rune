@@ -287,7 +287,12 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   assistive technology while pointer clicks run `on_press` without taking focus,
   `.focus_ring(width, offset,
   color)` for keyboard-only rings, `.focus_ring_radius(r)` for an explicit outer focus-ring
-  corner radius independent of the element's own radius, and `.focus_highlight(color)` for a menu row's shared pointer
+  corner radius independent of the element's own radius, `.focus_fill(color)` and
+  `.focus_border(color)` for keyboard-only fill and border colour overrides,
+  `.on_focus_change(|s, focused, tx| ..)` and `.on_focus_within_change(|s, within, tx| ..)`
+  (plus `_any` forms) for actual focus and subtree-focus transitions without turning an element
+  into a pointer hit target (read `tx.focus_visible()` and `tx.focus_within(selector)` to
+  distinguish keyboard modality and scoped subtrees), and `.focus_highlight(color)` for a menu row's shared pointer
   and keyboard highlight. Enter/Space
   activates non-text controls. `.modal(click_outside, close)` traps Tab, handles Escape, makes the
   background inert and restores the opener. Nested modals restore in stack order. Inspector tree
@@ -624,8 +629,8 @@ top-left, which is what popups and context menus anchor to.
 | `Cx::anchor_placement`, `memo::anchor_placement` | resolved `(Side, Align)` of an anchored overlay after RTL mirroring and flipping; re-runs only when the resolved placement changes | physical side/align |
 | `context_menu`, `PopupAnchor::from(PointerPress)` | the anchor they take | window |
 
-`on_press`, `on_double_press`, `on_hover`, `on_hover_change`, `on_drop_files` and
-`on_drop_hover` give no point; a tooltip (`El::help`) anchors itself to the element as drawn.
+`on_press`, `on_double_press`, `on_hover`, `on_hover_change`, `on_focus_change`,
+`on_focus_within_change`, `on_drop_files` and `on_drop_hover` give no point; a tooltip (`El::help`) anchors itself to the element as drawn.
 `on_pointer_move` and `on_secondary_press` stay in window points, as apps written against
 them expect. `on_layout`, `on_layout_tx`, `on_drawn_layout`, and `on_drawn_layout_tx` also
 re-fire once when the display scale changes (even when the logical point rect is unchanged), and

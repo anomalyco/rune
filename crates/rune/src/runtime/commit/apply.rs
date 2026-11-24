@@ -7,7 +7,9 @@ mod growth;
 
 impl RuntimeCore {
     /// The mutation phase cannot accept an El or an unfinished measurement pass.
-    pub(in crate::runtime) fn apply(&mut self, app: &mut dyn AppDriver, measured: Measured, tx: &Tx) {
+    /// Returns whether `sync_modals` or `sync_follows` ran a focus-change callback that dirtied
+    /// state (or latched a follow-up focus request), so `commit` can reflect it in the same frame.
+    pub(in crate::runtime) fn apply(&mut self, app: &mut dyn AppDriver, measured: Measured, tx: &Tx) -> bool {
         let _apply_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Apply);
         let Measured { layout: mut taffy, mut nodes, reduced_motion, time_scale, defaults, titlebar, caret_read, memo_flattened, memo_reused, taken_paths, .. } = measured;
         let rebound_press = self.rebound_press_path(&nodes);
@@ -588,9 +590,9 @@ impl RuntimeCore {
         self.tree.built = false;
         self.subscribe_live();
         if let Some(path) = rebound_press { self.pointer.rebind_press_path(&path); }
-        self.sync_modals(app);
+        let modal_cb = self.sync_modals(app);
         self.sync_held_drag();
-        self.sync_follows(app);
+        let follows_cb = self.sync_follows(app);
         self.motion.sync_loops(&self.tree.nodes, &self.scene, self.t, self.clock, self.time_scale, time_scaled, any_loop, tx.commit.lands() || self.reduced_motion);
         taffy.compact_if_sparse(|me, slot| self.tree.nodes[me as usize].taffy = slot);
         self.commit.layout = taffy;
@@ -604,6 +606,7 @@ impl RuntimeCore {
         self.commit.settle = false;
         // After the commit: a new height changes the insets, which the next frame's view reads.
         self.set_titlebar(titlebar);
+        modal_cb || follows_cb || self.kbd.focus_request.is_some()
     }
 
     /// Sets `prop` to `to` when `quiet`, or animates it from `identity` when its target changed.
