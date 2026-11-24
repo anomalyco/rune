@@ -156,6 +156,46 @@ pub(crate) fn mouse_button_core(
     action
 }
 
+/// When a web input event should activate the browser's editing proxy (`bridge.js::activate`)
+/// after its immediate frame commits.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WebActivate {
+    /// Leave DOM focus alone.
+    Never,
+    /// Activate the editing proxy (or the canvas outside document mode when no field is focused).
+    Always,
+    /// Activate only when the committed frame has an editable text field focused, so a mouse
+    /// release handler that calls `Tx::focus` moves DOM focus to the proxy without disturbing
+    /// DOM focus on ordinary releases.
+    IfFieldFocused,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl WebActivate {
+    /// Resolves whether `sync_input` should call `activate()` for the post-frame runtime state.
+    pub(crate) fn should_activate(self, rt: &RuntimeCore) -> bool {
+        match self {
+            Self::Never => false,
+            Self::Always => true,
+            Self::IfFieldFocused => rt.web_has_editable_focus(),
+        }
+    }
+}
+
+/// Returns how a web mouse button action should activate DOM focus after its immediate frame.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn web_mouse_activate(action: ButtonAction) -> WebActivate {
+    match action {
+        ButtonAction::PrimaryDown => WebActivate::Always,
+        ButtonAction::PrimaryUp => WebActivate::IfFieldFocused,
+        ButtonAction::SecondaryDown
+        | ButtonAction::SecondaryUp
+        | ButtonAction::OtherDown(_)
+        | ButtonAction::OtherUp(_) => WebActivate::Never,
+    }
+}
+
 /// Maps a winit touch/gesture phase to Rune's `GesturePhase`.
 pub(crate) fn gesture_phase(phase: TouchPhase) -> crate::GesturePhase {
     match phase {

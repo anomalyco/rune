@@ -457,7 +457,7 @@ impl Running {
 
     pub(super) fn window_input(&mut self, event: &WindowEvent, window: &Arc<Window>) -> bool {
         let scale = window.scale_factor() as f32;
-        let mut activate = false;
+        let mut activate = crate::input::host_events::WebActivate::Never;
         let mut immediate = false;
         match event {
             WindowEvent::ModifiersChanged(mods) => {
@@ -491,9 +491,9 @@ impl Running {
                     },
                     &mut self.input.control_click,
                 );
+                activate = crate::input::host_events::web_mouse_activate(action);
                 match action {
                     crate::input::host_events::ButtonAction::PrimaryDown => {
-                        activate = true;
                         // A press into a text field: the field takes focus now (a key may follow
                         // before the next frame, and a phone's keyboard opens only inside the
                         // press); the frame waits for the display's.
@@ -553,7 +553,11 @@ impl Running {
                 // Any key that puts Rune's focus in a field (Tab, or a shortcut such as the
                 // prompt's) hands the page's own field the browser's focus, so a screen reader is
                 // in a real text field with its text, not on the canvas's stand-in for it.
-                activate = event.state == ElementState::Pressed;
+                activate = if event.state == ElementState::Pressed {
+                    crate::input::host_events::WebActivate::Always
+                } else {
+                    crate::input::host_events::WebActivate::Never
+                };
             }
             // On a canvas as tall as its content the browser takes vertical pans and cancels the
             // touch; taps and horizontal drags stay Rune's.
@@ -563,7 +567,11 @@ impl Running {
                 // returns. In a page only a tap that left something focused needs it; anything else
                 // would focus the canvas and drop the reader's selection.
                 if matches!(touch.phase, TouchPhase::Ended) {
-                    activate = !self.input.document || self.app.rt().has_focus();
+                    activate = if !self.input.document || self.app.rt().has_focus() {
+                        crate::input::host_events::WebActivate::Always
+                    } else {
+                        crate::input::host_events::WebActivate::Never
+                    };
                     immediate = true;
                 }
             }
@@ -575,7 +583,8 @@ impl Running {
             self.app.frame(0.0);
             self.apply_frame_requests(window);
             self.clipboard.flush_core(self.app.rt_mut());
-            self.sync_input(activate);
+            let focus = activate.should_activate(self.app.rt());
+            self.sync_input(focus);
             let rt = self.app.rt();
             self.cursor.apply(window, rt.cursor(), rt.pointer().is_some());
         }

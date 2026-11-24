@@ -144,6 +144,12 @@ impl RuntimeCore {
         let key = self.kbd.focus.path()?;
         Some(mirror.update(key, Some(access(app.states()))))
     }
+    /// Whether Rune currently has keyboard focus on an editable text input (plain or secure),
+    /// matching the condition under which [`Self::web_context`] populates `mirror.key`.
+    pub(crate) fn web_has_editable_focus(&self) -> bool {
+        self.focused_input().is_some_and(|i| i.access.is_some())
+    }
+
     pub(crate) fn web_context(&self, mirror: &mut Mirror) -> bool {
         match self.focused_input().filter(|i| i.access.is_some()) {
             Some(input) => mirror.update(self.kbd.focus.path().unwrap_or_default(), Some(&input.edit)),

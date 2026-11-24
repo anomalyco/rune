@@ -725,3 +725,109 @@ fn ime_sync_skips_unchanged_area_for_app_ime_cursor() {
     rt.frame(0.0);
     assert_eq!(ime_sync_step(rt.core_mut(), &mut ime, true).cursor_area, None);
 }
+
+#[test]
+fn web_primary_up_activates_only_when_release_focuses_an_editable_field() {
+    #[derive(Default)]
+    struct S {
+        edit: crate::TextEdit,
+        secret: crate::TextEdit,
+        clicks: u32,
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        crate::col().size(240.0, 240.0)
+            .child(crate::text("Recall").key("recall").size(100.0, 32.0).on_press_tx(|s: &mut S, tx| {
+                s.edit.replace_text("Recalled text");
+                s.edit.set_caret(s.edit.text.len());
+                tx.focus("editor", false);
+            }))
+            .child(crate::text("Secret").key("focus_secret").size(100.0, 32.0).on_press_tx(|_: &mut S, tx| {
+                tx.focus("secret", false);
+            }))
+            .child(crate::text("Control").key("focus_btn").size(100.0, 32.0).on_press_tx(|_: &mut S, tx| {
+                tx.focus("other", false);
+            }))
+            .child(crate::text("Count").key("plain").size(100.0, 32.0).on_press(|s: &mut S| {
+                s.clicks += 1;
+            }))
+            .child(el().key("other").size(100.0, 24.0).focusable(true))
+            .child(crate::text_input(&s.edit, crate::TextStyle::new(14.0, 400.0))
+                .key("editor").label("Editor").size(200.0, 32.0).on_edit(|s: &mut S| &mut s.edit))
+            .child(crate::text_input(&s.secret, crate::TextStyle::new(14.0, 400.0))
+                .key("secret").label("Secret").secure().size(200.0, 32.0).on_edit(|s: &mut S| &mut s.secret))
+    }
+    let mut rt = Runtime::new(S::default(), view, (240.0, 240.0), Env::default());
+    rt.frame(0.0);
+    let mut mirror = crate::runtime::web_runtime::Mirror::default();
+    let mut control_click = false;
+
+    let click_release = |rt: &mut Runtime<S>, control_click: &mut bool, mirror: &mut crate::runtime::web_runtime::Mirror, key: &str| {
+        let (x, y) = rt.find(key).unwrap();
+        let down = {
+            let (core, mut app) = rt.split_mut();
+            mouse_button_core(core, &mut app, MouseButtonInput {
+                x,
+                y,
+                button: crate::PointerButton::Primary,
+                pressed: true,
+                mods: crate::Mods::default(),
+                ctrl_click_is_secondary: false,
+                queue_mods_on_primary_down: false,
+            }, control_click)
+        };
+        assert_eq!(down, ButtonAction::PrimaryDown);
+        assert!(web_mouse_activate(down).should_activate(rt.core()));
+        rt.frame(0.0);
+        rt.core().web_context(mirror);
+
+        let up = {
+            let (core, mut app) = rt.split_mut();
+            mouse_button_core(core, &mut app, MouseButtonInput {
+                x,
+                y,
+                button: crate::PointerButton::Primary,
+                pressed: false,
+                mods: crate::Mods::default(),
+                ctrl_click_is_secondary: false,
+                queue_mods_on_primary_down: false,
+            }, control_click)
+        };
+        assert_eq!(up, ButtonAction::PrimaryUp);
+        assert!(rt.core().web_release_needs_frame());
+        rt.frame(0.0);
+        rt.core().web_context(mirror);
+        web_mouse_activate(up).should_activate(rt.core())
+    };
+
+    // Release handler focusing a plain editor must activate the DOM editing proxy with synced text and caret.
+    assert!(click_release(&mut rt, &mut control_click, &mut mirror, "recall"));
+    assert!(!mirror.key.is_empty());
+    assert_eq!(mirror.text, "Recalled text");
+    assert_eq!((mirror.anchor, mirror.focus), (13, 13));
+    assert!(!mirror.secure);
+
+    // Ordinary release handler that does not focus an editor must leave DOM focus alone.
+    assert!(!click_release(&mut rt, &mut control_click, &mut mirror, "plain"));
+    assert_eq!(rt.state.clicks, 1);
+    assert!(mirror.key.is_empty());
+
+    // Release handler focusing a non-input control must not activate the editing proxy.
+    assert!(!click_release(&mut rt, &mut control_click, &mut mirror, "focus_btn"));
+    assert!(rt.has_focus());
+    assert!(mirror.key.is_empty());
+
+    // Release handler focusing a secure field must activate its password proxy too.
+    assert!(click_release(&mut rt, &mut control_click, &mut mirror, "focus_secret"));
+    assert!(!mirror.key.is_empty());
+    assert!(mirror.secure);
+
+    // Non-primary mouse actions never activate even while an editor is focused.
+    for action in [
+        ButtonAction::SecondaryDown,
+        ButtonAction::SecondaryUp,
+        ButtonAction::OtherDown(crate::PointerButton::Middle),
+        ButtonAction::OtherUp(crate::PointerButton::Middle),
+    ] {
+        assert!(!web_mouse_activate(action).should_activate(rt.core()));
+    }
+}
