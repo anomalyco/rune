@@ -276,15 +276,15 @@ fn a_frame_is_one_command_buffer_and_writes_land() {
     let (device, queue) = gpu();
     let target = texture(&device, wgpu::TextureFormat::Bgra8UnormSrgb, (64, 64), wgpu::TextureUsages::RENDER_ATTACHMENT);
     queue.submit([]);
-    assert_eq!(last(&device), 1, "a new texture's zeroing commits on the next submit");
+    assert_eq!(last(&device), 0, "a lazy-cleared render target queues no eager zeroing upload");
     let empty = device.create_command_encoder(&Default::default());
     queue.submit([empty.finish()]);
-    assert_eq!(last(&device), 1, "an empty encoder commits nothing");
+    assert_eq!(last(&device), 0, "an empty encoder commits nothing");
     let view = target.create_view(&Default::default());
     let mut encoder = device.create_command_encoder(&Default::default());
     drop(clear(&mut encoder, &view));
     queue.submit([encoder.finish()]);
-    assert_eq!(last(&device), 2);
+    assert_eq!(last(&device), 1);
     let staged = buffer(&device, 16, wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST);
     queue.write_buffer(&staged, 4, &[1, 2, 3, 4]);
     queue.submit([]);
@@ -375,33 +375,29 @@ fn resources_stay_alive_until_command_buffer_completes() {
     let index = queue.submit([recorded]);
 
     let pending = sh.pending_cbs();
-    assert_eq!(pending.len(), 2, "upload and render command buffers are both tracked");
-    let (upload_cb, (render_val, render_cb)) = (pending[0].1.clone(), (pending[1].0, pending[1].1.clone()));
-    assert!(tex_weak.strong_count() > 0, "upload CB keeps the texture alive while gated");
+    assert_eq!(pending.len(), 1, "lazy-cleared render target tracks only the render command buffer");
+    let (render_val, render_cb) = (pending[0].0, pending[0].1.clone());
+    assert!(tex_weak.strong_count() > 0, "render CB keeps the texture alive while gated");
     assert!(view_weak.strong_count() > 0, "render CB keeps the view alive while gated");
 
     gate.setSignaledValue(1);
     // Spin through the window where the GPU event has signaled `render_val` before Metal marks the
-    // command buffers completed: neither resource may drop before its command buffer completes.
+    // command buffer completed: neither resource may drop before the command buffer completes.
     while sh.event.signaledValue() < render_val {
         std::hint::spin_loop();
     }
     for _ in 0..256 {
         sh.retire();
-        if tex_weak.strong_count() == 0 {
-            assert!(completed(&upload_cb), "texture dropped before upload CB reached Completed ({:?})", upload_cb.status());
-        }
-        if view_weak.strong_count() == 0 {
-            assert!(completed(&render_cb), "view dropped before render CB reached Completed ({:?})", render_cb.status());
+        if tex_weak.strong_count() == 0 || view_weak.strong_count() == 0 {
+            assert!(completed(&render_cb), "resource dropped before render CB reached Completed ({:?})", render_cb.status());
             break;
         }
         std::hint::spin_loop();
     }
     device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None }).unwrap();
-    assert!(completed(&upload_cb), "poll(Wait) left upload CB uncompleted: {:?}", upload_cb.status());
     assert!(completed(&render_cb), "poll(Wait) left render CB uncompleted: {:?}", render_cb.status());
-    assert_eq!(tex_weak.strong_count(), 0, "upload texture retired once upload CB completed");
-    assert_eq!(view_weak.strong_count(), 0, "render view retired once render CB completed");
+    assert_eq!(tex_weak.strong_count(), 0, "texture retired once render CB completed");
+    assert_eq!(view_weak.strong_count(), 0, "view retired once render CB completed");
     wait.waitUntilCompleted();
 }
 

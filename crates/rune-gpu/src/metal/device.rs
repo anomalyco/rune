@@ -184,7 +184,7 @@ impl DeviceInterface for MetalDevice {
         let raw = texture.raw.clone();
         if raw.is_shared() {
             zero_shared_texture(&raw);
-        } else {
+        } else if !raw.is_lazy() {
             let zeros = self.shared.zeros.get_or_init(|| Zeros::new(&self.shared));
             self.shared.upload(|blit| zero_texture(blit, zeros, &raw), [raw.clone() as _], None);
         }

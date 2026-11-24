@@ -442,3 +442,425 @@ fn inflight_shared_texture_stress_loop_never_writes_in_place_while_gpu_reads() {
         stats.direct,
     );
 }
+
+fn make_layered_texture(
+    device: &wgpu::Device,
+    (width, height): (u32, u32),
+    mips: u32,
+    layers: u32,
+    usage: wgpu::TextureUsages,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("lazy clear test"),
+        size: wgpu::Extent3d { width, height, depth_or_array_layers: layers },
+        mip_level_count: mips,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage,
+        view_formats: &[],
+    })
+}
+
+fn read_subresource(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    tex: &wgpu::Texture,
+    mip: u32,
+    layer: u32,
+) -> Vec<u8> {
+    let w = (tex.width() >> mip).max(1);
+    let h = (tex.height() >> mip).max(1);
+    let row = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("subresource readback"),
+        size: u64::from(row) * u64::from(h),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: tex,
+            mip_level: mip,
+            origin: wgpu::Origin3d { x: 0, y: 0, z: layer },
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buf,
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) },
+        },
+        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+    );
+    queue.submit([encoder.finish()]);
+    let slice = buf.slice(..);
+    slice.map_async(wgpu::MapMode::Read, |_| {});
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    let mapped = slice.get_mapped_range().unwrap();
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h as usize {
+        let start = y * row as usize;
+        out.extend_from_slice(&mapped[start..start + (w * 4) as usize]);
+    }
+    drop(mapped);
+    buf.unmap();
+    out
+}
+
+/// Allocates, clears to bright magenta, submits, and drops a texture of `(w, h)` so any
+/// subsequent recycled Metal allocation without lazy clearing would likely show non-zero bytes.
+fn pollute_gpu_memory(device: &wgpu::Device, queue: &wgpu::Queue, (w, h): (u32, u32)) {
+    use wgpu::TextureUsages as U;
+    let junk = make_texture(device, (w, h), U::RENDER_ATTACHMENT | U::TEXTURE_BINDING | U::COPY_SRC);
+    let view = junk.create_view(&Default::default());
+    let mut enc = device.create_command_encoder(&Default::default());
+    {
+        let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color { r: 1.0, g: 0.0, b: 1.0, a: 1.0 }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+    }
+    queue.submit([enc.finish()]);
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+}
+
+#[test]
+fn private_render_target_skips_eager_zero_blit_and_texture_binding_only_uses_shared() {
+    use wgpu::TextureUsages as U;
+    let (device, queue) = gpu();
+
+    let rt = make_texture(&device, (64, 64), U::RENDER_ATTACHMENT | U::TEXTURE_BINDING | U::COPY_SRC);
+    let rt_raw = &rt.as_custom::<MetalTexture>().unwrap().raw;
+    assert_eq!(rt_raw.raw.storageMode(), MTLStorageMode::Private, "render target stays Private");
+    assert!(rt_raw.is_lazy(), "2D color Private RENDER_ATTACHMENT uses lazy render-pass clearing");
+    assert!(rt_raw.lazy_init.as_ref().unwrap().has_uninit());
+
+    queue.submit([]);
+    assert_eq!(last(&device), 0, "creating Private RENDER_ATTACHMENT queues no eager zero_texture upload");
+
+    if apple_silicon(&device) {
+        // TEXTURE_BINDING-only dummy (no COPY_DST, like backdrop_blur's 1x1 stand-in) uses Shared
+        // + CPU zeroing with uses: None.
+        let dummy = make_texture(&device, (1, 1), U::TEXTURE_BINDING);
+        let dummy_raw = &dummy.as_custom::<MetalTexture>().unwrap().raw;
+        assert_eq!(dummy_raw.raw.storageMode(), MTLStorageMode::Shared, "TEXTURE_BINDING-only uses Shared on Apple Silicon");
+        assert!(dummy_raw.uses.is_none(), "read-only Shared texture tracks no in-flight uses");
+        assert!(!dummy_raw.is_lazy());
+        queue.submit([]);
+        assert_eq!(last(&device), 0, "TEXTURE_BINDING-only Shared texture queues no blit");
+
+        let harness = SamplerHarness::new(&device);
+        let group = harness.bind(&device, &dummy);
+        let target = make_texture(&device, (8, 8), U::RENDER_ATTACHMENT | U::COPY_SRC);
+        let view = target.create_view(&Default::default());
+        let mut enc = device.create_command_encoder(&Default::default());
+        harness.draw_into(&mut enc, &view, &group, true, None, 1);
+        queue.submit([enc.finish()]);
+        let px = read_texture(&device, &queue, &target);
+        assert!(px.iter().all(|&b| b == 0), "CPU-zeroed TEXTURE_BINDING-only dummy samples as zeros");
+    }
+}
+
+#[test]
+#[allow(unsafe_code)]
+fn lazy_clear_render_pass_load_and_store_ops() {
+    use wgpu::TextureUsages as U;
+    let (device, queue) = gpu();
+    pollute_gpu_memory(&device, &queue, (32, 32));
+
+    // 1. LoadOp::Load on uninitialized texture promotes to Clear(0,0,0,0), then subsequent
+    // LoadOp::Load after a Store preserves the stored color.
+    let t_load = make_texture(&device, (32, 32), U::RENDER_ATTACHMENT | U::COPY_SRC);
+    let v_load = t_load.create_view(&Default::default());
+    let mut enc = device.create_command_encoder(&Default::default());
+    {
+        let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &v_load,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            })],
+            ..Default::default()
+        });
+    }
+    queue.submit([enc.finish()]);
+    assert!(read_texture(&device, &queue, &t_load).iter().all(|&b| b == 0), "uninitialized LoadOp::Load clears to zero");
+    assert!(!t_load.as_custom::<MetalTexture>().unwrap().raw.lazy_init.as_ref().unwrap().has_uninit());
+
+    // Store solid RED, then open another LoadOp::Load pass: RED must survive.
+    let mut enc = device.create_command_encoder(&Default::default());
+    {
+        let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &v_load,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+    }
+    {
+        let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &v_load,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            })],
+            ..Default::default()
+        });
+    }
+    queue.submit([enc.finish()]);
+    let px = read_texture(&device, &queue, &t_load);
+    assert_eq!(&px[0..4], &[255, 0, 0, 255], "initialized LoadOp::Load must not re-clear");
+
+    // 2. LoadOp::DontCare on uninitialized texture promotes to Clear(0,0,0,0).
+    let t_dc = make_texture(&device, (32, 32), U::RENDER_ATTACHMENT | U::COPY_SRC);
+    let v_dc = t_dc.create_view(&Default::default());
+    let mut enc = device.create_command_encoder(&Default::default());
+    {
+        let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &v_dc,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::DontCare(unsafe { wgpu::LoadOpDontCare::enabled() }), store: wgpu::StoreOp::Store },
+            })],
+            ..Default::default()
+        });
+    }
+    queue.submit([enc.finish()]);
+    assert!(read_texture(&device, &queue, &t_dc).iter().all(|&b| b == 0), "uninitialized LoadOp::DontCare clears to zero");
+
+    // 3. StoreOp::Discard leaves an uninitialized texture uninitialized, so a later LoadOp::Load
+    // still promotes to Clear(0,0,0,0).
+    let t_disc = make_texture(&device, (32, 32), U::RENDER_ATTACHMENT | U::COPY_SRC);
+    let v_disc = t_disc.create_view(&Default::default());
+    let mut enc = device.create_command_encoder(&Default::default());
+    {
+        let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &v_disc,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 }),
+                    store: wgpu::StoreOp::Discard,
+                },
+            })],
+            ..Default::default()
+        });
+    }
+    assert!(t_disc.as_custom::<MetalTexture>().unwrap().raw.lazy_init.as_ref().unwrap().has_uninit(), "Discard keeps subresource uninitialized");
+    queue.submit([enc.finish()]);
+    let mut enc = device.create_command_encoder(&Default::default());
+    {
+        let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &v_disc,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            })],
+            ..Default::default()
+        });
+    }
+    queue.submit([enc.finish()]);
+    assert!(read_texture(&device, &queue, &t_disc).iter().all(|&b| b == 0), "after Discard, LoadOp::Load clears to zero");
+}
+
+#[test]
+fn lazy_clear_before_sample_compute_copy_and_partial_write() {
+    use wgpu::TextureUsages as U;
+    let (device, queue) = gpu();
+    pollute_gpu_memory(&device, &queue, (32, 32));
+    let harness = SamplerHarness::new(&device);
+
+    // 1. Sampling an uninitialized Private RENDER_ATTACHMENT in a render pass (set_bind_group).
+    let uninit_tex = make_texture(&device, (32, 32), U::RENDER_ATTACHMENT | U::TEXTURE_BINDING);
+    let target = make_texture(&device, (32, 32), U::RENDER_ATTACHMENT | U::COPY_SRC);
+    let target_view = target.create_view(&Default::default());
+    let group = harness.bind(&device, &uninit_tex);
+    let mut enc = device.create_command_encoder(&Default::default());
+    harness.draw_into(&mut enc, &target_view, &group, true, None, 1);
+    queue.submit([enc.finish()]);
+    assert!(read_texture(&device, &queue, &target).iter().all(|&b| b == 0), "sampling uninitialized render target reads zeros");
+
+    // 2. Reading an uninitialized Private RENDER_ATTACHMENT in a compute pass (set_bind_group).
+    let comp_tex = make_texture(&device, (16, 16), U::RENDER_ATTACHMENT | U::TEXTURE_BINDING);
+    let comp_view = comp_tex.create_view(&Default::default());
+    let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("compute out"),
+        size: 16,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    });
+    let read_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("compute readback"),
+        size: 16,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let cs = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("read tex"),
+        source: wgpu::ShaderSource::Wgsl(r#"
+            @group(0) @binding(0) var t: texture_2d<f32>;
+            @group(0) @binding(1) var<storage, read_write> out: vec4<f32>;
+            @compute @workgroup_size(1) fn main() {
+                out = textureLoad(t, vec2<i32>(7, 9), 0);
+            }
+        "#.into()),
+    });
+    let cp = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("read tex"),
+        layout: None,
+        module: &cs,
+        entry_point: Some("main"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let cbg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &cp.get_bind_group_layout(0),
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&comp_view) },
+            wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
+        ],
+    });
+    let mut enc = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = enc.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&cp);
+        pass.set_bind_group(0, &cbg, &[]);
+        pass.dispatch_workgroups(1, 1, 1);
+    }
+    enc.copy_buffer_to_buffer(&out_buf, 0, &read_buf, 0, 16);
+    queue.submit([enc.finish()]);
+    let slice = read_buf.slice(..);
+    slice.map_async(wgpu::MapMode::Read, |_| {});
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    let floats: [f32; 4] = *bytemuck::from_bytes(&slice.get_mapped_range().unwrap());
+    read_buf.unmap();
+    assert_eq!(floats, [0.0; 4], "compute textureLoad on uninitialized render target reads zeros");
+
+    // 3. copy_texture_to_texture: uninitialized src, and partial dst.
+    let copy_src = make_texture(&device, (32, 32), U::RENDER_ATTACHMENT | U::COPY_SRC);
+    let copy_dst = make_texture(&device, (32, 32), U::RENDER_ATTACHMENT | U::COPY_DST | U::COPY_SRC);
+    let mut enc = device.create_command_encoder(&Default::default());
+    enc.copy_texture_to_texture(copy_src.as_image_copy(), copy_dst.as_image_copy(), copy_src.size());
+    queue.submit([enc.finish()]);
+    assert!(read_texture(&device, &queue, &copy_dst).iter().all(|&b| b == 0), "copy_texture_to_texture from uninitialized src reads zeros");
+
+    let red_src = make_texture(&device, (4, 4), U::RENDER_ATTACHMENT | U::COPY_SRC);
+    let red_view = red_src.create_view(&Default::default());
+    let partial_dst = make_texture(&device, (32, 32), U::RENDER_ATTACHMENT | U::COPY_DST | U::COPY_SRC);
+    let mut enc = device.create_command_encoder(&Default::default());
+    {
+        let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &red_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 }), store: wgpu::StoreOp::Store },
+            })],
+            ..Default::default()
+        });
+    }
+    enc.copy_texture_to_texture(red_src.as_image_copy(), partial_dst.as_image_copy(), red_src.size());
+    queue.submit([enc.finish()]);
+    let px = read_texture(&device, &queue, &partial_dst);
+    assert_eq!(&px[0..4], &[255, 0, 0, 255], "partial copy_texture_to_texture wrote patch");
+    assert_eq!(&px[(16 * 32 + 16) * 4..(16 * 32 + 16) * 4 + 4], &[0, 0, 0, 0], "outside partial patch reads zero");
+
+    // 4. copy_buffer_to_texture (partial dst) and queue.write_texture (partial dst).
+    let partial_buf_dst = make_texture(&device, (32, 32), U::RENDER_ATTACHMENT | U::COPY_DST | U::COPY_SRC);
+    let green_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("green patch"),
+        size: 256 * 4,
+        usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut padded = vec![0u8; 256 * 4];
+    for y in 0..4 {
+        for x in 0..4 {
+            padded[y * 256 + x * 4..y * 256 + x * 4 + 4].copy_from_slice(&[0, 255, 0, 255]);
+        }
+    }
+    queue.write_buffer(&green_buf, 0, &padded);
+    let mut enc = device.create_command_encoder(&Default::default());
+    enc.copy_buffer_to_texture(
+        wgpu::TexelCopyBufferInfo {
+            buffer: &green_buf,
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256), rows_per_image: Some(4) },
+        },
+        partial_buf_dst.as_image_copy(),
+        wgpu::Extent3d { width: 4, height: 4, depth_or_array_layers: 1 },
+    );
+    queue.submit([enc.finish()]);
+    let px = read_texture(&device, &queue, &partial_buf_dst);
+    assert_eq!(&px[0..4], &[0, 255, 0, 255], "partial copy_buffer_to_texture wrote patch");
+    assert_eq!(&px[(20 * 32 + 20) * 4..(20 * 32 + 20) * 4 + 4], &[0, 0, 0, 0], "outside partial buffer copy reads zero");
+
+    let partial_q_dst = make_texture(&device, (32, 32), U::RENDER_ATTACHMENT | U::COPY_DST | U::COPY_SRC);
+    let yellow = fill_rgba(4, 4, [255, 255, 0, 255]);
+    queue.write_texture(
+        partial_q_dst.as_image_copy(),
+        &yellow,
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(16), rows_per_image: None },
+        wgpu::Extent3d { width: 4, height: 4, depth_or_array_layers: 1 },
+    );
+    queue.submit([]);
+    let px = read_texture(&device, &queue, &partial_q_dst);
+    assert_eq!(&px[0..4], &[255, 255, 0, 255], "partial queue.write_texture wrote patch");
+    assert_eq!(&px[(24 * 32 + 24) * 4..(24 * 32 + 24) * 4 + 4], &[0, 0, 0, 0], "outside partial write_texture reads zero");
+
+    // 5. Multi-mip, multi-layer isolation: drawing into (mip=0, layer=0) leaves (mip=1, layer=0)
+    // and (mip=0, layer=1) uninitialized so reading them clears them to zero without clobbering (0,0).
+    let layered = make_layered_texture(&device, (32, 32), 2, 2, U::RENDER_ATTACHMENT | U::TEXTURE_BINDING | U::COPY_SRC);
+    let m0l0 = layered.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2),
+        base_mip_level: 0, mip_level_count: Some(1),
+        base_array_layer: 0, array_layer_count: Some(1),
+        ..Default::default()
+    });
+    let mut enc = device.create_command_encoder(&Default::default());
+    {
+        let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &m0l0,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 1.0, a: 1.0 }), store: wgpu::StoreOp::Store },
+            })],
+            ..Default::default()
+        });
+    }
+    queue.submit([enc.finish()]);
+    assert!(layered.as_custom::<MetalTexture>().unwrap().raw.lazy_init.as_ref().unwrap().has_uninit());
+    assert!(read_subresource(&device, &queue, &layered, 1, 0).iter().all(|&b| b == 0), "(mip=1, layer=0) reads zero");
+    assert!(read_subresource(&device, &queue, &layered, 0, 1).iter().all(|&b| b == 0), "(mip=0, layer=1) reads zero");
+    let blue = read_subresource(&device, &queue, &layered, 0, 0);
+    assert_eq!(&blue[0..4], &[0, 0, 255, 255], "(mip=0, layer=0) kept its rendered blue");
+}

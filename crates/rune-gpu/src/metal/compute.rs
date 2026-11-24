@@ -16,6 +16,7 @@ use parking_lot::Mutex;
 use wgpu::custom::*;
 use wgpu::naga;
 
+use crate::lazy_init::Event;
 use super::derive::{self, Use};
 use super::encode::Rec;
 use super::layout::{COMPUTE, GroupRaw, LayoutRaw, PipelineLayout};
@@ -214,6 +215,15 @@ impl ComputePassInterface for MetalComputePass {
         let group = &group.as_custom::<super::layout::BindGroup>().expect("a Metal bind group").raw;
         if let Some((bound, bound_offsets)) = &self.groups[index]
             && Arc::ptr_eq(bound, group) && bound_offsets[..] == *offsets { return }
+        for (tex, range) in &group.lazy_views {
+            if let Some(lazy) = &tex.lazy_init && lazy.has_uninit() {
+                let effects = lazy.step(Event::Read(*range));
+                if !effects.is_empty() {
+                    let shared = self.rec.lock().shared_arc();
+                    shared.clear_effects(tex, effects);
+                }
+            }
+        }
         self.keep.push(group.clone());
         for uses in &group.texture_uses { self.keep.use_texture(uses); }
         self.groups[index] = Some((group.clone(), offsets.to_vec()));

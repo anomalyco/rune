@@ -1,0 +1,1 @@
+- macOS (Metal): Private 2D color render-target textures (isolated layers, layer blurs, backdrop pyramids, offscreen targets) now clear lazily via render-pass load actions or clear-only passes instead of queueing an eager `zero_texture` blit on creation, and read-only `TEXTURE_BINDING` textures on Apple Silicon use CPU-zeroed `MTLStorageMode::Shared`.
