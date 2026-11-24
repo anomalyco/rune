@@ -43,8 +43,19 @@ impl Host {
         let size = self.args.size.unwrap_or(self.geometry.size);
         let launcher = self.launcher();
         let visible = !launcher && (self.started || self.options.visible);
+        let effective_theme = crate::window::window_theme_for_platform(
+            self.color_scheme,
+            crate::window::app_color_scheme(),
+            cfg!(target_os = "macos"),
+        );
         #[allow(unused_mut)]
-        let mut attrs = self.options.attributes(self.app.rt().host.window_title.current().unwrap_or(self.geometry.title), size, self.geometry.min_size, visible).with_active(focus);
+        let mut attrs = self.options.attributes_with_theme(
+            self.app.rt().host.window_title.current().unwrap_or(self.geometry.title),
+            size,
+            self.geometry.min_size,
+            visible,
+            effective_theme,
+        ).with_active(focus);
         #[cfg(target_os = "macos")]
         if self.macos_window.nonactivating_panel { attrs = attrs.with_visible(false).with_active(false); }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -83,6 +94,7 @@ impl Host {
         #[cfg(target_os = "windows")]
         let attrs = self.windows_window.apply_attributes(crate::platform::app_icon::with_icon(winit::platform::windows::WindowAttributesExtWindows::with_drag_and_drop(attrs.with_visible(false).with_active(false), false)));
         let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
+        self.applied_theme = effective_theme;
         crate::marks::mark("window.native");
         // Before first show or CPU paint so no capture sees a frame and no taskbar button flashes.
         #[cfg(target_os = "windows")]
@@ -131,7 +143,11 @@ impl Host {
             Some(crate::platform::macos::Panel::adopt_window(&window, size, &mac_opts).ok_or("could not create nonactivating panel")?)
         } else { None };
         #[cfg(target_os = "macos")]
-        if panel.is_none() {
+        if let Some(panel) = &panel {
+            if self.color_scheme != crate::ColorScheme::System {
+                panel.set_color_scheme(self.color_scheme);
+            }
+        } else {
             crate::platform::macos::configure_window(&window, &mac_opts);
         }
         #[cfg(target_os = "macos")]

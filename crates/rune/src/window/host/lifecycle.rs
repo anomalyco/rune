@@ -82,6 +82,41 @@ impl Host {
         let _ = w;
     }
 
+    pub(in crate::window) fn set_color_scheme(&mut self, scheme: crate::ColorScheme) {
+        self.color_scheme = scheme;
+        self.apply_window_color_scheme();
+    }
+
+    pub(in crate::window) fn apply_window_color_scheme(&mut self) {
+        let target = crate::window::window_theme_for_platform(
+            self.color_scheme,
+            crate::window::app_color_scheme(),
+            cfg!(target_os = "macos"),
+        );
+        let Some(w) = &self.win else { return };
+        let color_scheme = self.color_scheme;
+        crate::window::sync_window_theme(&mut self.applied_theme, target, |theme| {
+            w.window.set_theme(theme);
+            #[cfg(target_os = "macos")]
+            if let Some(panel) = &w.native.panel {
+                panel.set_color_scheme(color_scheme);
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = color_scheme;
+        });
+    }
+
+    pub(in crate::window) fn set_app_color_scheme(&mut self, scheme: crate::ColorScheme) {
+        crate::window::set_app_color_scheme_state(scheme);
+        #[cfg(target_os = "macos")]
+        crate::platform::macos::appearance::set_app_appearance(scheme);
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.apply_window_color_scheme();
+            self.native_handle.send(|_| crate::window::WakeEvent::AppColorScheme);
+        }
+    }
+
     pub(in crate::window) fn show(&mut self, event_loop: &ActiveEventLoop) {
         if self.launcher() { self.reveal_launcher(event_loop); return; }
         self.reveal(event_loop, Reveal::Show, None);
@@ -253,6 +288,9 @@ impl Host {
         if let Some(visible) = requests.dock {
             crate::platform::macos::set_dock_icon(visible);
         }
+        if let Some(scheme) = requests.color_scheme {
+            self.set_app_color_scheme(scheme);
+        }
         let shows = matches!(requests.window, Some(WindowRequest::Show | WindowRequest::Open(_)));
         let polled = wake && !quiet && self.poll_hidden(event_loop, shows);
         if let Some(position) = requests.position { self.set_position(event_loop, position); }
@@ -340,6 +378,7 @@ impl Host {
     /// opens the pop-up menu it asked for, if the window is still there to open it over.
     pub(in crate::window) fn shell(&mut self, event_loop: &ActiveEventLoop) {
         self.show_title();
+        self.apply_tx_color_scheme();
         if self.app.rt_mut().take_toggle_maximized() && let Some(w) = self.shown_win() {
             w.toggle_maximized();
             #[cfg(target_os = "windows")]

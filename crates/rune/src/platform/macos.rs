@@ -367,6 +367,11 @@ impl Panel {
     /// The panel's AppKit window level (`NSWindow.Level`), changeable while shown.
     pub fn set_level(&self, level: isize) { self.panel.setLevel(level); }
 
+    /// Applies `scheme` to this panel's `NSWindow.appearance`.
+    pub fn set_color_scheme(&self, scheme: crate::ColorScheme) {
+        crate::platform::macos::appearance::set_window_appearance(&self.panel, scheme);
+    }
+
     /// The moved view, for a new wgpu surface (winit's window handle would look for the view
     /// in winit's window, where it no longer is).
     pub fn raw_handles(&self) -> (winit::raw_window_handle::RawDisplayHandle, winit::raw_window_handle::RawWindowHandle) {

@@ -408,3 +408,28 @@ fn a_hidden_timer_polls_without_building_the_view() {
         assert_eq!(rt.stats.commits, commits + 1, "the frame that shows it builds once");
     }
 }
+
+#[test]
+fn app_handle_set_color_scheme_coalesces_wakes_and_takes_independently() {
+    let app = App::new(spec());
+    let handle = app.handle();
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let w = wakes.clone();
+    app.shared.connect(Arc::new(move || { w.fetch_add(1, Ordering::Relaxed); }));
+    let before = wakes.load(Ordering::Relaxed);
+
+    handle.set_color_scheme(crate::ColorScheme::Light);
+    handle.set_color_scheme(crate::ColorScheme::Dark);
+    assert_eq!(wakes.load(Ordering::Relaxed), before + 2);
+    assert_eq!(app.shared.take().color_scheme, Some(crate::ColorScheme::Dark));
+    assert_eq!(app.shared.take().color_scheme, None);
+
+    // Startup take_color_scheme consumes only color_scheme and keeps other queued requests.
+    handle.set_color_scheme(crate::ColorScheme::System);
+    handle.set_position((12, 34));
+    assert_eq!(app.shared.core.take_color_scheme(), Some(crate::ColorScheme::System));
+    assert_eq!(app.shared.core.take_color_scheme(), None);
+    let rest = app.shared.take();
+    assert_eq!(rest.color_scheme, None);
+    assert_eq!(rest.position, Some((12, 34)));
+}

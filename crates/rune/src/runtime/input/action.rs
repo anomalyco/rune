@@ -241,6 +241,7 @@ pub(crate) fn merge(tx: &mut Tx, one: Tx) {
     tx.toggle_full_screen |= one.toggle_full_screen;
     tx.keys.extend(one.keys);
     if one.title.is_some() { tx.title = one.title; }
+    if one.color_scheme.is_some() { tx.color_scheme = one.color_scheme; }
     if one.announce.is_some() { tx.announce = one.announce; }
     tx.playground.extend(one.playground);
     tx.open_urls.extend(one.open_urls);

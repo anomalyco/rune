@@ -31,4 +31,12 @@ impl Host {
     pub(in crate::window) fn show_title(&mut self) {
         if let Some(title) = self.app.rt_mut().host.window_title.take_change() && let Some(w) = &self.win { w.window.set_title(title); }
     }
+
+    /// `Tx::set_color_scheme`: applies a per-window color scheme set since the shell last
+    /// checked, retaining it on `Host` across native window recreation.
+    pub(in crate::window) fn apply_tx_color_scheme(&mut self) {
+        if let Some(scheme) = self.app.rt_mut().host.window_color_scheme.take() {
+            self.set_color_scheme(scheme);
+        }
+    }
 }

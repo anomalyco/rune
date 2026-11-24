@@ -33,3 +33,35 @@ fn a_hold_lasts_the_frame_that_asked_and_ends_when_the_host_takes_it() {
     assert!(!fit.frame_holds());
     assert!(!fit.take_held());
 }
+
+#[test]
+fn tx_set_color_scheme_latches_last_wins_without_forcing_redundant_redraw() {
+    let mut rt = Runtime::new((), |_: &(), _: &mut Cx<()>| crate::el(), (200.0, 100.0), Env::default());
+    rt.frame(0.0);
+    assert_eq!(rt.host.window_color_scheme, None);
+
+    // update_if returning false latches the color scheme without marking the view stale.
+    assert!(!rt.update_if(|_, tx| {
+        tx.set_color_scheme(crate::ColorScheme::Light);
+        tx.set_color_scheme(crate::ColorScheme::Dark);
+        false
+    }));
+    assert!(!rt.stale());
+    assert_eq!(rt.host.window_color_scheme.take(), Some(crate::ColorScheme::Dark));
+    assert_eq!(rt.host.window_color_scheme, None);
+
+    // Switching back to System latches cleanly.
+    rt.update(|_, tx| tx.set_color_scheme(crate::ColorScheme::System));
+    assert_eq!(rt.host.window_color_scheme.take(), Some(crate::ColorScheme::System));
+
+    // Merging two Tx values keeps the later color_scheme override.
+    let mut base = Tx::default();
+    base.set_color_scheme(crate::ColorScheme::Light);
+    let mut later = Tx::default();
+    later.set_color_scheme(crate::ColorScheme::Dark);
+    crate::runtime::input::action::merge(&mut base, later);
+    assert_eq!(base.color_scheme, Some(crate::ColorScheme::Dark));
+    // Merging a Tx without a color_scheme keeps the earlier one.
+    crate::runtime::input::action::merge(&mut base, Tx::default());
+    assert_eq!(base.color_scheme, Some(crate::ColorScheme::Dark));
+}

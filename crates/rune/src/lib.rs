@@ -414,6 +414,7 @@ pub use video::MediaSource;
 pub use video::Player;
 pub use video::PlayerState;
 pub use video::Video;
+pub use window::ColorScheme;
 pub use window::WindowHandle;
 pub use window::spec as windows;
 pub use windows::AnyWindowSpec;

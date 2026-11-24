@@ -28,6 +28,7 @@ use crate::tooling::Chrome;
 
 mod app_events;
 mod chrome;
+mod color_scheme;
 mod event_loop;
 mod file_drop;
 mod handle;
@@ -49,6 +50,8 @@ mod win32;
 #[cfg(target_os = "windows")]
 pub(crate) fn warm_gpu_cache() -> Result<(), String> { win32::handover::warm_gpu_cache() }
 
+pub use color_scheme::ColorScheme;
+pub(crate) use color_scheme::{app_color_scheme, set_app_color_scheme_state, sync_window_theme, window_theme_for_platform};
 pub use handle::WindowHandle;
 #[cfg(not(target_arch = "wasm32"))]
 pub use event_loop::run;
@@ -115,6 +118,11 @@ pub(crate) enum WakeEvent {
     DisplayTick(usize),
     App(usize), Live(usize), Window(usize, WindowRequest), Focus(usize),
     Position(usize, (i32, i32)), Level(usize, bool), ExcludeFromCapture(usize, bool),
+    ColorScheme(usize, crate::ColorScheme),
+    /// App-wide color scheme changed (`AppHandle::set_color_scheme`): every host syncs with
+    /// `app_color_scheme()`.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    AppColorScheme,
     Place(usize, crate::windows::PlaceRequest),
     Frame(usize, crate::window::frame::FrameRequest),
     /// Windows: the window's or an overlay's swap chain can take the frame it waits for (`slot`).
@@ -196,6 +204,9 @@ pub(crate) trait AnyHost {
     fn apply_pending(&mut self, _event_loop: &ActiveEventLoop) {}
     /// Shows, restores and activates it as the default reopen.
     fn reopen(&mut self, _event_loop: &ActiveEventLoop) {}
+    /// Syncs this host's native window theme with the current process-wide `app_color_scheme()`.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    fn apply_app_color_scheme(&mut self) {}
 }
 
 /// Collects startup creation errors from finished hosts and returns whether any loop-keeping host
@@ -479,7 +490,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
             let _handling = crate::quit::handling();
             let slot = match &event {
                 WakeEvent::DisplayTick(i) | WakeEvent::App(i) | WakeEvent::Live(i) | WakeEvent::Window(i, _) | WakeEvent::Focus(i)
-                    | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::ExcludeFromCapture(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
+                    | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::ExcludeFromCapture(i, _) | WakeEvent::ColorScheme(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
                     | WakeEvent::A11y(i) | WakeEvent::FrameSlot(i) | WakeEvent::GpuReady(i) => *i,
                 WakeEvent::Reopen => {
                     this.reopen(event_loop);
@@ -494,6 +505,12 @@ impl ApplicationHandler<WakeEvent> for Windows {
                 }
                 WakeEvent::Turn => { #[cfg(not(target_arch = "wasm32"))] this.turn(event_loop); return; }
                 WakeEvent::FileDrop => return,
+                WakeEvent::AppColorScheme => {
+                    for host in this.hosts.iter_mut().flatten() {
+                        host.apply_app_color_scheme();
+                    }
+                    return;
+                }
                 WakeEvent::LayerPending => {
                     let _ = wayland_wake::step(&mut this.wayland_wake, wayland_wake::Event::WakeReceived);
                     return;

@@ -92,6 +92,7 @@ pub struct Tx {
     /// `Tx::drag_paths`.
     pub(crate) drag_paths: Option<Rc<[std::path::PathBuf]>>,
     pub(crate) title: Option<String>,
+    pub(crate) color_scheme: Option<crate::ColorScheme>,
     /// `Tx::announce`: what a screen reader says after this handler.
     pub(crate) announce: Option<(String, crate::LiveRegion)>,
     pub(crate) open_urls: Vec<crate::open_url::Link>,
@@ -469,6 +470,26 @@ impl Tx {
     /// opened again. Headless `--tree` output shows it as `"title"`. An overlay has no title.
     pub fn set_title(&mut self, title: impl Into<String>) {
         self.title = Some(title.into());
+    }
+
+    /// Override this window's native light or dark chrome after this handler, retained across
+    /// native window recreation.
+    ///
+    /// On Windows this updates the native titlebar (`DWMWA_USE_IMMERSIVE_DARK_MODE`), on macOS
+    /// `NSWindow.appearance`, on Wayland client-side decorations, and on X11 `_GTK_THEME_VARIANT`.
+    /// Passing [`ColorScheme::System`](crate::ColorScheme::System) clears the per-window override
+    /// so the window inherits any app-wide override set via
+    /// [`AppHandle::set_color_scheme`](crate::AppHandle::set_color_scheme) or the operating
+    /// system's appearance. Ignored on overlays, web, and headless.
+    ///
+    /// ```no_run
+    /// use rune::{ColorScheme, El, el};
+    ///
+    /// let button: El = el().on_press_tx(|_: &mut (), tx| tx.set_color_scheme(ColorScheme::Dark));
+    /// let _ = button;
+    /// ```
+    pub fn set_color_scheme(&mut self, scheme: crate::ColorScheme) {
+        self.color_scheme = Some(scheme);
     }
 
     /// Have a screen reader say `text` after this handler, without moving focus: a reply that

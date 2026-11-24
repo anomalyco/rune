@@ -29,6 +29,10 @@ impl Host {
         }
         // Updates queued before launch (the link that launched the app) show in the first frame.
         self.app.drain_startup(&self.shortcuts, &mut self.menus);
+        self.apply_tx_color_scheme();
+        if let Some(scheme) = self.shared.take_color_scheme() {
+            self.set_app_color_scheme(scheme);
+        }
         if self.launcher() {
             self.create(event_loop, None, false);
             if !self.life.finished() && self.open_at_start && self.options.visible { self.reveal_launcher(event_loop); }
@@ -168,6 +172,7 @@ impl Host {
             WakeEvent::Place(_, place) => self.place(event_loop, place),
             WakeEvent::Level(_, on) => self.set_always_on_top(event_loop, on),
             WakeEvent::ExcludeFromCapture(_, exclude) => self.set_exclude_from_capture(exclude),
+            WakeEvent::ColorScheme(_, scheme) => self.set_color_scheme(scheme),
             WakeEvent::Frame(_, mut request) => {
                 let rt = self.app.rt_mut();
                 request.spring = (request.animate && !rt.reduced_motion).then_some(crate::tok::motion::DEFAULT);
@@ -191,7 +196,7 @@ impl Host {
             WakeEvent::GpuReady(_) => self.gpu_ready(),
             #[cfg(not(any(target_os = "windows", target_os = "linux")))]
             WakeEvent::GpuReady(_) => {}
-            WakeEvent::Reopen | WakeEvent::Turn | WakeEvent::Quit(_) | WakeEvent::FileDrop | WakeEvent::LayerPending => {}
+            WakeEvent::Reopen | WakeEvent::Turn | WakeEvent::Quit(_) | WakeEvent::FileDrop | WakeEvent::LayerPending | WakeEvent::AppColorScheme => {}
         }
     }
 
