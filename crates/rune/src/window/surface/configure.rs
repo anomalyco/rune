@@ -8,6 +8,7 @@ use crate::render::Gpu;
 pub(crate) enum ConfigureErrorKind {
     DeviceLost,
     OutOfMemory,
+    DirectCompositionUnavailable,
     Refused,
 }
 
@@ -16,6 +17,9 @@ impl From<ConfigureErrorKind> for rune_gpu::fallback::Failure {
         match kind {
             ConfigureErrorKind::DeviceLost => Self::DeviceLost,
             ConfigureErrorKind::OutOfMemory => Self::OutOfMemory,
+            ConfigureErrorKind::DirectCompositionUnavailable => {
+                Self::DirectCompositionUnavailable
+            }
             ConfigureErrorKind::Refused => Self::SurfaceRefused,
         }
     }
@@ -29,11 +33,12 @@ pub(crate) struct ConfigureError {
 }
 
 /// Classifies the first captured wgpu error scope result, prioritizing out-of-memory over
-/// internal/validation refusals.
+/// DirectComposition unavailability and generic internal/validation refusals.
 pub(crate) fn classify_scope_error(
     memory: Option<wgpu::Error>,
     internal: Option<wgpu::Error>,
     validation: Option<wgpu::Error>,
+    dcomp_unavailable: bool,
 ) -> Option<(ConfigureErrorKind, wgpu::Error)> {
     if let Some(error) = memory {
         return Some((ConfigureErrorKind::OutOfMemory, error));
@@ -41,7 +46,14 @@ pub(crate) fn classify_scope_error(
     if let Some(error) = internal.or(validation) {
         let kind = match error {
             wgpu::Error::OutOfMemory { .. } => ConfigureErrorKind::OutOfMemory,
-            wgpu::Error::Internal { .. } | wgpu::Error::Validation { .. } => ConfigureErrorKind::Refused,
+            wgpu::Error::Internal { .. } | wgpu::Error::Validation { .. }
+                if dcomp_unavailable =>
+            {
+                ConfigureErrorKind::DirectCompositionUnavailable
+            }
+            wgpu::Error::Internal { .. } | wgpu::Error::Validation { .. } => {
+                ConfigureErrorKind::Refused
+            }
         };
         return Some((kind, error));
     }
@@ -77,12 +89,27 @@ pub(crate) fn configure_checked(surface: &wgpu::Surface, gpu: &Gpu, config: &wgp
     if gpu.is_lost() {
         return Err(ConfigureError { kind: ConfigureErrorKind::DeviceLost, message: lost_device(config) });
     }
-    match classify_scope_error(memory, internal, validation) {
+    let has_error = memory.is_some() || internal.is_some() || validation.is_some();
+    #[cfg(target_os = "windows")]
+    #[allow(unsafe_code)]
+    let dcomp_unavailable = has_error
+        && unsafe { surface.as_hal::<wgpu::hal::api::Dx12>() }
+            .is_some_and(|hal| hal.dcomp_unavailable());
+    #[cfg(not(target_os = "windows"))]
+    let dcomp_unavailable = { let _ = has_error; false };
+    match classify_scope_error(memory, internal, validation, dcomp_unavailable) {
         None => { configured(surface); Ok(()) }
-        Some((kind, error)) => Err(ConfigureError {
-            kind,
-            message: format_error(&error.to_string(), config.width, config.height, config.format, config.alpha_mode, config.present_mode),
-        }),
+        Some((kind, error)) => {
+            let text = if kind == ConfigureErrorKind::DirectCompositionUnavailable {
+                format!("{error}: DirectComposition unavailable")
+            } else {
+                error.to_string()
+            };
+            Err(ConfigureError {
+                kind,
+                message: format_error(&text, config.width, config.height, config.format, config.alpha_mode, config.present_mode),
+            })
+        }
     }
 }
 
@@ -152,7 +179,7 @@ pub(crate) fn configure_checked(surface: &wgpu::Surface, gpu: &Gpu, config: &wgp
     let memory = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
     let internal = gpu.device.push_error_scope(wgpu::ErrorFilter::Internal);
     surface.configure(&gpu.device, config);
-    match classify_scope_error(poll_scope_now(memory.pop()), poll_scope_now(internal.pop()), poll_scope_now(validation.pop())) {
+    match classify_scope_error(poll_scope_now(memory.pop()), poll_scope_now(internal.pop()), poll_scope_now(validation.pop()), false) {
         None => Ok(()),
         Some((kind, error)) => Err(ConfigureError {
             kind,

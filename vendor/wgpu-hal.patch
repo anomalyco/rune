@@ -32,7 +32,7 @@ index 621eea4..fd5a64e 100644
          })
      }
 diff --git a/src/dx12/command.rs b/src/dx12/command.rs
-index 9e90e26..762d922 100644
+index 9e90e26..f293992 100644
 --- a/src/dx12/command.rs
 +++ b/src/dx12/command.rs
 @@ -389,22 +389,22 @@ impl crate::CommandEncoder for super::CommandEncoder {
@@ -117,6 +117,69 @@ index 9e90e26..762d922 100644
          }
          if let Err(e) = unsafe { self.allocator.Reset() } {
              log::error!("ID3D12CommandAllocator::Reset() failed with {e}");
+@@ -1399,7 +1415,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
+             .special_constants
+             .as_ref()
+             .and_then(|sc| sc.indirect_cmd_signatures.as_ref())
+-            .unwrap_or_else(|| &self.shared.cmd_signatures)
++            .unwrap_or_else(|| self.shared.cmd_signatures.get(&self.device))
+             .draw;
+         unsafe {
+             self.list.as_ref().unwrap().ExecuteIndirect(
+@@ -1438,7 +1454,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
+             .special_constants
+             .as_ref()
+             .and_then(|sc| sc.indirect_cmd_signatures.as_ref())
+-            .unwrap_or_else(|| &self.shared.cmd_signatures)
++            .unwrap_or_else(|| self.shared.cmd_signatures.get(&self.device))
+             .draw_indexed;
+         unsafe {
+             self.list.as_ref().unwrap().ExecuteIndirect(
+@@ -1460,7 +1476,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
+         self.prepare_dispatch([0; 3]);
+         let cmd_list6: Direct3D12::ID3D12GraphicsCommandList6 =
+             self.list.as_ref().unwrap().cast().unwrap();
+-        let Some(cmd_signature) = &self.shared.cmd_signatures.draw_mesh else {
++        let Some(cmd_signature) = &self.shared.cmd_signatures.get(&self.device).draw_mesh else {
+             panic!("Feature `MESH_SHADING` not enabled");
+         };
+         unsafe {
+@@ -1478,7 +1494,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
+         unsafe { self.prepare_draw(0, 0) };
+         unsafe {
+             self.list.as_ref().unwrap().ExecuteIndirect(
+-                &self.shared.cmd_signatures.draw,
++                &self.shared.cmd_signatures.get(&self.device).draw,
+                 max_count,
+                 &buffer.resource,
+                 offset,
+@@ -1498,7 +1514,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
+         unsafe { self.prepare_draw(0, 0) };
+         unsafe {
+             self.list.as_ref().unwrap().ExecuteIndirect(
+-                &self.shared.cmd_signatures.draw_indexed,
++                &self.shared.cmd_signatures.get(&self.device).draw_indexed,
+                 max_count,
+                 &buffer.resource,
+                 offset,
+@@ -1518,7 +1534,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
+         self.prepare_dispatch([0; 3]);
+         let cmd_list6: Direct3D12::ID3D12GraphicsCommandList6 =
+             self.list.as_ref().unwrap().cast().unwrap();
+-        let Some(ref command_signature) = self.shared.cmd_signatures.draw_mesh else {
++        let Some(ref command_signature) = self.shared.cmd_signatures.get(&self.device).draw_mesh else {
+             panic!("Feature `MESH_SHADING` not enabled");
+         };
+         unsafe {
+@@ -1598,7 +1614,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
+             .special_constants
+             .as_ref()
+             .and_then(|sc| sc.indirect_cmd_signatures.as_ref())
+-            .unwrap_or_else(|| &self.shared.cmd_signatures)
++            .unwrap_or_else(|| self.shared.cmd_signatures.get(&self.device))
+             .dispatch;
+         unsafe {
+             self.list.as_ref().unwrap().ExecuteIndirect(
 diff --git a/src/dx12/dcomp.rs b/src/dx12/dcomp.rs
 index 46ef3da..035f9bd 100644
 --- a/src/dx12/dcomp.rs
@@ -185,18 +248,76 @@ index f57ba46..475a9e3 100644
  }
  
 diff --git a/src/dx12/device.rs b/src/dx12/device.rs
-index 63fb313..aa74ea5 100644
+index 63fb313..de341fb 100644
 --- a/src/dx12/device.rs
 +++ b/src/dx12/device.rs
-@@ -136,6 +136,7 @@ impl super::Device {
-             None
-         };
+@@ -118,59 +118,15 @@ impl super::Device {
+         // maximum number of CBV/SRV/UAV descriptors in heap for Tier 1
+         let capacity_views = limits.max_non_sampler_bindings as u64;
  
+-        let draw_mesh = if features
+-            .features_wgpu
+-            .contains(wgt::FeaturesWGPU::EXPERIMENTAL_MESH_SHADER)
+-        {
+-            Some(Self::create_command_signature(
+-                &raw,
+-                None,
+-                size_of::<wgt::DispatchIndirectArgs>(),
+-                &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
+-                    Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH,
+-                    ..Default::default()
+-                }],
+-                0,
+-            )?)
+-        } else {
+-            None
+-        };
+-
 +        let drain = Arc::new(super::DrainTracker::new(&adapter, &raw));
          let shared = super::DeviceShared {
              adapter,
              zero_buffer,
-@@ -179,6 +180,7 @@ impl super::Device {
+-            cmd_signatures: super::CommandSignatures {
+-                draw: Self::create_command_signature(
+-                    &raw,
+-                    None,
+-                    size_of::<wgt::DrawIndirectArgs>(),
+-                    &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
+-                        Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DRAW,
+-                        ..Default::default()
+-                    }],
+-                    0,
+-                )?,
+-                draw_indexed: Self::create_command_signature(
+-                    &raw,
+-                    None,
+-                    size_of::<wgt::DrawIndexedIndirectArgs>(),
+-                    &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
+-                        Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED,
+-                        ..Default::default()
+-                    }],
+-                    0,
+-                )?,
+-                draw_mesh,
+-                dispatch: Self::create_command_signature(
+-                    &raw,
+-                    None,
+-                    size_of::<wgt::DispatchIndirectArgs>(),
+-                    &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
+-                        Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH,
+-                        ..Default::default()
+-                    }],
+-                    0,
+-                )?,
++            cmd_signatures: super::LazyCommandSignatures {
++                mesh: features
++                    .features_wgpu
++                    .contains(wgt::FeaturesWGPU::EXPERIMENTAL_MESH_SHADER),
++                made: std::sync::OnceLock::new(),
+             },
+             heap_views: descriptor::GeneralHeap::new(
+                 &raw,
+@@ -179,6 +135,7 @@ impl super::Device {
              )?,
              sampler_heap: super::sampler::SamplerHeap::new(&raw, &private_caps)?,
              private_caps,
@@ -204,7 +325,69 @@ index 63fb313..aa74ea5 100644
          };
  
          let mut rtv_pool =
-@@ -256,23 +258,71 @@ impl super::Device {
+@@ -232,6 +189,61 @@ impl super::Device {
+         })
+     }
+ 
++    /// Rune: the device's own indirect command signatures (`LazyCommandSignatures`), which
++    /// `Device::new` made with the device.
++    pub(super) fn create_command_signatures(
++        raw: &Direct3D12::ID3D12Device,
++        mesh: bool,
++    ) -> Result<super::CommandSignatures, crate::DeviceError> {
++        let draw_mesh = if mesh {
++            Some(Self::create_command_signature(
++                raw,
++                None,
++                size_of::<wgt::DispatchIndirectArgs>(),
++                &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
++                    Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH,
++                    ..Default::default()
++                }],
++                0,
++            )?)
++        } else {
++            None
++        };
++        Ok(super::CommandSignatures {
++            draw: Self::create_command_signature(
++                raw,
++                None,
++                size_of::<wgt::DrawIndirectArgs>(),
++                &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
++                    Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DRAW,
++                    ..Default::default()
++                }],
++                0,
++            )?,
++            draw_indexed: Self::create_command_signature(
++                raw,
++                None,
++                size_of::<wgt::DrawIndexedIndirectArgs>(),
++                &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
++                    Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED,
++                    ..Default::default()
++                }],
++                0,
++            )?,
++            draw_mesh,
++            dispatch: Self::create_command_signature(
++                raw,
++                None,
++                size_of::<wgt::DispatchIndirectArgs>(),
++                &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
++                    Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH,
++                    ..Default::default()
++                }],
++                0,
++            )?,
++        })
++    }
++
+     fn create_command_signature(
+         raw: &Direct3D12::ID3D12Device,
+         root_signature: Option<&Direct3D12::ID3D12RootSignature>,
+@@ -256,23 +268,71 @@ impl super::Device {
          signature.ok_or(crate::DeviceError::Unexpected)
      }
  
@@ -282,7 +465,7 @@ index 63fb313..aa74ea5 100644
          Ok(())
      }
  
-@@ -826,6 +876,7 @@ impl crate::Device for super::Device {
+@@ -826,6 +886,7 @@ impl crate::Device for super::Device {
              intermediate_copy_bufs: Vec::new(),
              null_rtv_handle: self.null_rtv_handle,
              list: None,
@@ -290,7 +473,7 @@ index 63fb313..aa74ea5 100644
              free_lists: Vec::new(),
              pass: super::PassState::new(),
              temp: super::Temp::default(),
-@@ -2346,7 +2397,7 @@ impl crate::Device for super::Device {
+@@ -2346,7 +2407,7 @@ impl crate::Device for super::Device {
  
          self.counters.fences.add(1);
  
@@ -299,7 +482,7 @@ index 63fb313..aa74ea5 100644
      }
      unsafe fn destroy_fence(&self, _fence: super::Fence) {
          self.counters.fences.sub(1);
-@@ -2356,7 +2407,7 @@ impl crate::Device for super::Device {
+@@ -2356,7 +2417,7 @@ impl crate::Device for super::Device {
          &self,
          fence: &super::Fence,
      ) -> Result<crate::FenceValue, crate::DeviceError> {
@@ -308,7 +491,7 @@ index 63fb313..aa74ea5 100644
      }
      unsafe fn wait(
          &self,
-@@ -2367,7 +2418,8 @@ impl crate::Device for super::Device {
+@@ -2367,7 +2428,8 @@ impl crate::Device for super::Device {
          let timeout = timeout.unwrap_or(Duration::MAX);
  
          // We first check if the fence has already reached the value we're waiting for.
@@ -318,7 +501,7 @@ index 63fb313..aa74ea5 100644
          if fence_value >= value {
              return Ok(true);
          }
-@@ -2408,17 +2460,23 @@ impl crate::Device for super::Device {
+@@ -2408,17 +2470,23 @@ impl crate::Device for super::Device {
  
              log::trace!("Waiting for fence value {value} for {remaining_wait_duration:?}");
  
@@ -346,7 +529,7 @@ index 63fb313..aa74ea5 100644
                  Foundation::WAIT_TIMEOUT => {
                      log::trace!("Wait timed out!");
                      break Ok(false);
-@@ -2429,7 +2487,10 @@ impl crate::Device for super::Device {
+@@ -2429,7 +2497,10 @@ impl crate::Device for super::Device {
                  }
              };
  
@@ -359,10 +542,18 @@ index 63fb313..aa74ea5 100644
  
              if fence_value >= value {
 diff --git a/src/dx12/instance.rs b/src/dx12/instance.rs
-index fdb63bc..5f64a80 100644
+index fdb63bc..86ff414 100644
 --- a/src/dx12/instance.rs
 +++ b/src/dx12/instance.rs
-@@ -187,3 +187,37 @@ impl crate::Instance for super::Instance {
+@@ -155,6 +155,7 @@ impl crate::Instance for super::Instance {
+                     swap_chain: RwLock::new(None),
+                     options: self.options.clone(),
+                     hdr_source: Some(auxil::dxgi::hdr::DxgiHdrSource::new(handle)),
++                    dcomp_unavailable: core::sync::atomic::AtomicBool::new(false),
+                 })
+             }
+             _ => Err(crate::InstanceError::new(format!(
+@@ -187,3 +188,37 @@ impl crate::Instance for super::Instance {
              .collect()
      }
  }
@@ -401,7 +592,7 @@ index fdb63bc..5f64a80 100644
 +    }
 +}
 diff --git a/src/dx12/mod.rs b/src/dx12/mod.rs
-index 285d635..2fb4210 100644
+index 285d635..6b46b06 100644
 --- a/src/dx12/mod.rs
 +++ b/src/dx12/mod.rs
 @@ -92,7 +92,7 @@ mod suballocation;
@@ -454,7 +645,31 @@ index 285d635..2fb4210 100644
      }
  
      /// Will error with crate::DeviceError::Unexpected if DXGI 1.3 is not available.
-@@ -615,6 +631,8 @@ struct SwapChain {
+@@ -559,6 +575,7 @@ impl Instance {
+             swap_chain: RwLock::new(None),
+             options: self.options.clone(),
+             hdr_source: None,
++            dcomp_unavailable: core::sync::atomic::AtomicBool::new(false),
+         }
+     }
+ 
+@@ -578,6 +595,7 @@ impl Instance {
+             swap_chain: RwLock::new(None),
+             options: self.options.clone(),
+             hdr_source: None,
++            dcomp_unavailable: core::sync::atomic::AtomicBool::new(false),
+         }
+     }
+ 
+@@ -596,6 +614,7 @@ impl Instance {
+             swap_chain: RwLock::new(None),
+             options: self.options.clone(),
+             hdr_source: None,
++            dcomp_unavailable: core::sync::atomic::AtomicBool::new(false),
+         }
+     }
+ }
+@@ -615,6 +634,8 @@ struct SwapChain {
      present_mode: wgt::PresentMode,
      format: wgt::TextureFormat,
      size: wgt::Extent3d,
@@ -463,7 +678,18 @@ index 285d635..2fb4210 100644
  }
  
  enum SurfaceTarget {
-@@ -651,6 +669,15 @@ impl Surface {
+@@ -641,6 +662,10 @@ pub struct Surface {
+     /// HDR-info source for HWND-backed targets; `None` for composition /
+     /// SwapChainPanel / surface-handle targets, which have no monitor identity.
+     hdr_source: Option<auxil::dxgi::hdr::DxgiHdrSource>,
++    /// Rune: set when DirectComposition is unavailable (`CreateSwapChainForComposition` returned
++    /// `E_NOTIMPL`, or `dcomp.dll` / `DCompositionCreateDevice2` / `CreateTargetForHwnd` failed)
++    /// because `wgpu-core` collapses `SurfaceError::Other` to `InvalidSurface`.
++    dcomp_unavailable: core::sync::atomic::AtomicBool,
+ }
+ 
+ unsafe impl Send for Surface {}
+@@ -651,6 +676,23 @@ impl Surface {
          Some(self.swap_chain.read().as_ref()?.raw.clone())
      }
  
@@ -476,10 +702,18 @@ index 285d635..2fb4210 100644
 +        }
 +    }
 +
++    /// Rune: whether the last `configure` failed because DirectComposition is unavailable on this
++    /// system (`CreateSwapChainForComposition` returned `E_NOTIMPL`, or `dcomp.dll` /
++    /// `DCompositionCreateDevice2` / `CreateTargetForHwnd` failed).
++    pub fn dcomp_unavailable(&self) -> bool {
++        self.dcomp_unavailable
++            .load(core::sync::atomic::Ordering::Acquire)
++    }
++
      /// Returns the waitable handle associated with this swap chain, if any.
      /// Handle is only valid while the swap chain is alive.
      pub unsafe fn waitable_handle(&self) -> Option<Foundation::HANDLE> {
-@@ -741,6 +768,279 @@ struct Idler {
+@@ -741,6 +783,279 @@ struct Idler {
      fence: Direct3D12::ID3D12Fence,
  }
  
@@ -759,7 +993,34 @@ index 285d635..2fb4210 100644
  #[derive(Debug, Clone)]
  struct CommandSignatures {
      draw: Direct3D12::ID3D12CommandSignature,
-@@ -756,6 +1056,7 @@ struct DeviceShared {
+@@ -749,13 +1064,33 @@ struct CommandSignatures {
+     dispatch: Direct3D12::ID3D12CommandSignature,
+ }
+ 
++/// Rune: the device's own indirect command signatures, made at the first indirect draw or
++/// dispatch instead of with the device. A driver that has not seen one takes tens of
++/// milliseconds for each `CreateCommandSignature` (Intel Iris Xe: 28, 15 and 13 ms of a
++/// window's first device), and an app that never draws indirectly needs none.
++struct LazyCommandSignatures {
++    /// Whether the device draws mesh shaders (`EXPERIMENTAL_MESH_SHADER`), so has a `draw_mesh`.
++    mesh: bool,
++    made: std::sync::OnceLock<CommandSignatures>,
++}
++
++impl LazyCommandSignatures {
++    fn get(&self, device: &Direct3D12::ID3D12Device) -> &CommandSignatures {
++        self.made.get_or_init(|| {
++            Device::create_command_signatures(device, self.mesh)
++                .expect("creating the device's indirect command signatures")
++        })
++    }
++}
++
+ struct DeviceShared {
+     adapter: DxgiAdapter,
+     zero_buffer: Direct3D12::ID3D12Resource,
+-    cmd_signatures: CommandSignatures,
++    cmd_signatures: LazyCommandSignatures,
      heap_views: descriptor::GeneralHeap,
      sampler_heap: sampler::SamplerHeap,
      private_caps: PrivateCapabilities,
@@ -767,7 +1028,7 @@ index 285d635..2fb4210 100644
  }
  
  unsafe impl Send for DeviceShared {}
-@@ -810,6 +1111,7 @@ pub struct Queue {
+@@ -810,6 +1145,7 @@ pub struct Queue {
      idle_fence_value: AtomicU64,
      pending_waits: Mutex<Vec<(Direct3D12::ID3D12Fence, u64)>>,
      pending_signals: Mutex<Vec<(Direct3D12::ID3D12Fence, u64)>>,
@@ -775,7 +1036,7 @@ index 285d635..2fb4210 100644
  }
  
  impl Queue {
-@@ -992,7 +1294,11 @@ pub struct CommandEncoder {
+@@ -992,7 +1328,11 @@ pub struct CommandEncoder {
  
      null_rtv_handle: descriptor::Handle,
      list: Option<Direct3D12::ID3D12GraphicsCommandList>,
@@ -788,7 +1049,7 @@ index 285d635..2fb4210 100644
      pass: PassState,
      temp: Temp,
  
-@@ -1018,6 +1324,8 @@ impl fmt::Debug for CommandEncoder {
+@@ -1018,6 +1358,8 @@ impl fmt::Debug for CommandEncoder {
  #[derive(Debug)]
  pub struct CommandBuffer {
      raw: Direct3D12::ID3D12GraphicsCommandList,
@@ -797,7 +1058,7 @@ index 285d635..2fb4210 100644
  }
  
  impl crate::DynCommandBuffer for CommandBuffer {}
-@@ -1209,6 +1517,8 @@ unsafe impl Sync for QuerySet {}
+@@ -1209,6 +1551,8 @@ unsafe impl Sync for QuerySet {}
  #[derive(Debug)]
  pub struct Fence {
      raw: Direct3D12::ID3D12Fence,
@@ -806,7 +1067,16 @@ index 285d635..2fb4210 100644
  }
  
  impl crate::DynFence for Fence {}
-@@ -1535,7 +1845,9 @@ impl crate::Surface for Surface {
+@@ -1474,6 +1818,8 @@ impl crate::Surface for Surface {
+         device: &Device,
+         config: &crate::SurfaceConfiguration,
+     ) -> Result<(), crate::SurfaceError> {
++        self.dcomp_unavailable
++            .store(false, core::sync::atomic::Ordering::Release);
+         let mut flags = Dxgi::DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+         // We always set ALLOW_TEARING on the swapchain no matter
+         // what kind of swapchain we want because ResizeBuffers
+@@ -1535,7 +1881,9 @@ impl crate::Surface for Surface {
                      BufferUsage: Dxgi::DXGI_USAGE_RENDER_TARGET_OUTPUT,
                      BufferCount: swap_chain_buffer,
                      Scaling: Dxgi::DXGI_SCALING_STRETCH,
@@ -817,7 +1087,55 @@ index 285d635..2fb4210 100644
                      Flags: flags.0 as u32,
                  };
                  let swap_chain1 = match self.target {
-@@ -1702,6 +2014,7 @@ impl crate::Surface for Surface {
+@@ -1583,7 +1931,21 @@ impl crate::Surface for Surface {
+ 
+                 let swap_chain1 = swap_chain1.map_err(|err| {
+                     log::error!("SwapChain creation error: {err}");
+-                    crate::SurfaceError::Other("swapchain creation")
++                    // Rune: distinguish unimplemented DirectComposition (Wine/Proton) from
++                    // transient OOM or device loss so Rune can fall back to an HWND swap chain.
++                    if matches!(
++                        self.target,
++                        SurfaceTarget::Visual(_)
++                            | SurfaceTarget::VisualFromWndHandle { .. }
++                            | SurfaceTarget::SwapChainPanel(_)
++                    ) && err.code() == Foundation::E_NOTIMPL
++                    {
++                        self.dcomp_unavailable
++                            .store(true, core::sync::atomic::Ordering::Release);
++                        crate::SurfaceError::Other("CreateSwapChainForComposition: E_NOTIMPL")
++                    } else {
++                        crate::SurfaceError::Other("swapchain creation")
++                    }
+                 })?;
+ 
+                 match &self.target {
+@@ -1594,7 +1956,23 @@ impl crate::Surface for Surface {
+                     } => {
+                         let mut dcomp_state = dcomp_state.lock();
+                         let dcomp_state =
+-                            unsafe { dcomp_state.get_or_init(&device.dcomp_lib, handle) }?;
++                            unsafe { dcomp_state.get_or_init(&device.dcomp_lib, handle) }
++                                .map_err(|err| {
++                                    if matches!(
++                                        err,
++                                        crate::SurfaceError::Other(
++                                            "Error loading dcomp.dll"
++                                                | "DirectComposition::DCompositionCreateDevice2"
++                                                | "IDCompositionDevice::CreateTargetForHwnd"
++                                        ) | crate::SurfaceError::Device(
++                                            crate::DeviceError::Unexpected
++                                        )
++                                    ) {
++                                        self.dcomp_unavailable
++                                            .store(true, core::sync::atomic::Ordering::Release);
++                                    }
++                                    err
++                                })?;
+                         // Set the new swap chain as the content for the backing visual
+                         // and commit the changes to the composition visual tree.
+                         {
+@@ -1702,6 +2080,7 @@ impl crate::Surface for Surface {
              present_mode: config.present_mode,
              format: config.format,
              size: config.extent,
@@ -825,7 +1143,7 @@ index 285d635..2fb4210 100644
          });
  
          Ok(())
-@@ -1768,6 +2081,14 @@ impl crate::Surface for Surface {
+@@ -1768,6 +2147,14 @@ impl crate::Surface for Surface {
      }
  }
  
@@ -840,7 +1158,7 @@ index 285d635..2fb4210 100644
  impl crate::Queue for Queue {
      type A = Api;
  
-@@ -1777,6 +2098,18 @@ impl crate::Queue for Queue {
+@@ -1777,6 +2164,18 @@ impl crate::Queue for Queue {
          _surface_textures: &[&Texture],
          (signal_fence, signal_value): (&Fence, crate::FenceValue),
      ) -> Result<(), crate::DeviceError> {
@@ -859,7 +1177,7 @@ index 285d635..2fb4210 100644
          let mut temp_lists = self.temp_lists.lock();
          temp_lists.clear();
          for cmd_buf in command_buffers {
-@@ -1790,25 +2123,48 @@ impl crate::Queue for Queue {
+@@ -1790,25 +2189,48 @@ impl crate::Queue for Queue {
          {
              let mut waits = self.pending_waits.lock();
              for (fence, value) in waits.drain(..) {
@@ -913,7 +1231,7 @@ index 285d635..2fb4210 100644
              }
          }
  
-@@ -1838,9 +2194,22 @@ impl crate::Queue for Queue {
+@@ -1838,9 +2260,22 @@ impl crate::Queue for Queue {
          };
  
          profiling::scope!("IDXGISwapchain3::Present");
@@ -939,7 +1257,7 @@ index 285d635..2fb4210 100644
  
          Ok(())
      }
-@@ -1851,18 +2220,51 @@ impl crate::Queue for Queue {
+@@ -1851,18 +2286,51 @@ impl crate::Queue for Queue {
      }
  
      unsafe fn wait_for_idle(&self) -> Result<(), crate::DeviceError> {

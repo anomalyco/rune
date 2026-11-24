@@ -15,10 +15,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::cpu_frame::{Cpu, Shown};
-use crate::platform::win32::dcomp_handover::Handover;
+use crate::gpu::fallback::{Action, Failure, Presentation, PresentationPolicy, decide_with_presentation};
+use crate::platform::win32::dcomp_handover::{Handover, HandoverError};
 use crate::platform::win32::dib::{Dib, free_later};
 use crate::render::cpu_boot::HalfRounding;
-use crate::render::{Gpu, Renderer, SurfaceSetupError};
+use crate::render::{Gpu, PresentationFallback, Renderer, SurfaceSetupError};
 use crate::time::Instant;
 use crate::window::WakeEvent;
 use crate::window::host::{CompositorFrame, Host};
@@ -90,13 +91,14 @@ const RETRY_AFTER: Duration = Duration::from_secs(30);
 /// Tries in all before the window stays on the CPU.
 const TRIES: u8 = 3;
 
-/// What the GPU thread makes for a window.
+/// What the GPU thread makes for a window. `handover` is `Some` on DirectComposition and
+/// `None` on the plain HWND swap-chain fallback (`DxgiFromHwnd`, opaque only).
 pub(in crate::window) struct Prepared {
     gpu: Gpu,
     renderer: Renderer,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
-    handover: Handover,
+    handover: Option<Handover>,
 }
 
 // SAFETY: wgpu's objects are `Send`; a new `Renderer` has no native surface renderer (the one
@@ -213,9 +215,27 @@ impl Host {
         crate::render::surface_gpu(&gpu);
         let size = w.window.inner_size();
         let SurfaceMode::Cpu { mut cpu, .. } = std::mem::replace(&mut w.native.mode, SurfaceMode::Gpu) else { unreachable!() };
-        cpu.half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
-        w.native.video_layers.hold_premultiplied(vrr_guard(gpu.adapter.get_info().vendor));
-        w.native.mode = SurfaceMode::HandingOver { cpu, handover, done: None, readback: None, since: crate::time::now(), nudged: None, tries, paused: false };
+        match handover {
+            Some(handover) => {
+                cpu.half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
+                w.native.video_layers.hold_premultiplied(vrr_guard(gpu.adapter.get_info().vendor));
+                w.native.mode = SurfaceMode::HandingOver { cpu, handover, done: None, readback: None, since: crate::time::now(), nudged: None, tries, paused: false };
+            }
+            None => {
+                // Plain HWND swap chain (`DxgiFromHwnd`): no DirectComposition visual to commit
+                // seamlessly, so free the CPU DIB, skip the premultiplied video-layer VRR hold,
+                // and transition straight to `SurfaceMode::Gpu`.
+                if let Some(dib) = cpu.into_dib() {
+                    free_later(dib);
+                }
+                if w.native.cloak.held() {
+                    w.native.cloak.lift(&w.window);
+                    crate::marks::mark("window.shown");
+                }
+                w.presented = None;
+                crate::marks::mark("gpu.window.handed");
+            }
+        }
         w.native.slot.reset();
         w.native.damage.reset();
         // D3D12's idle-priority threads compile the first frame's shaders: on a busy machine they
@@ -438,18 +458,86 @@ fn raise_priority(thread: &std::thread::JoinHandle<()>) {
 
 static FIRST_GPU: AtomicBool = AtomicBool::new(false);
 
+/// Pure policy choice when `Handover::new` fails: whether to latch DirectComposition as
+/// unavailable and continue with a plain HWND swap chain, or stop and report the error.
+fn handover_fallback_action(
+    adapter_policy: crate::gpu::fallback::Policy,
+    presentation_policy: PresentationPolicy,
+    error: &HandoverError,
+) -> Action {
+    match error {
+        HandoverError::Unavailable(_) => decide_with_presentation(
+            adapter_policy,
+            Presentation::DirectComposition,
+            presentation_policy,
+            Failure::DirectCompositionUnavailable,
+        ),
+        HandoverError::Other(_) => Action::Stop,
+    }
+}
+
+/// Creates a plain HWND `wgpu::Surface` from a raw Win32 `hwnd` on a `DxgiFromHwnd` instance.
+#[allow(unsafe_code)]
+fn create_hwnd_surface(instance: &wgpu::Instance, hwnd: isize) -> Result<wgpu::Surface<'static>, String> {
+    let hwnd = std::num::NonZeroIsize::new(hwnd).ok_or_else(|| "window handle is null".to_owned())?;
+    let raw_window_handle = winit::raw_window_handle::RawWindowHandle::Win32(
+        winit::raw_window_handle::Win32WindowHandle::new(hwnd),
+    );
+    let raw_display_handle = winit::raw_window_handle::RawDisplayHandle::Windows(
+        winit::raw_window_handle::WindowsDisplayHandle::new(),
+    );
+    // SAFETY: `hwnd` is a live window of this process, and `Win` drops its `wgpu::Surface` before
+    // dropping the native `winit::window::Window`.
+    unsafe {
+        instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+            raw_display_handle: Some(raw_display_handle),
+            raw_window_handle,
+        })
+    }
+    .map_err(|e| e.to_string())
+}
+
 /// On the GPU thread: the device (the one `warm_gpu` made, if it did), the renderer, the
-/// uncommitted visual and a swap chain on it, configured for `size`.
+/// uncommitted DirectComposition visual (when DirectComposition is active) and a swap chain
+/// configured for `size`.
 #[allow(unsafe_code)]
 fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, latest: &Mutex<Vec<crate::render::Instance>>) -> Result<Prepared, String> {
-    let handover = Handover::new(hwnd)?;
-    let visual = handover.visual();
-    // SAFETY: the visual stays alive while the surface does: the surface takes its own reference
-    // to it, and the window keeps the `Handover` as long as it keeps the surface.
+    let (initial_pres, pres_policy) = Gpu::dx12_presentation();
+    let mut handover = match initial_pres {
+        Presentation::PlainHwnd => None,
+        Presentation::DirectComposition => match Handover::new(hwnd) {
+            Ok(handover) => Some(handover),
+            Err(error) => {
+                if handover_fallback_action(Gpu::env_fallback_policy(), pres_policy, &error) == Action::SwitchToHwnd {
+                    let _ = Gpu::switch_to_hwnd_instance(features, &error.into_message());
+                    None
+                } else {
+                    return Err(error.into_message());
+                }
+            }
+        },
+    };
     let (gpu, surface, renderer, config) = Gpu::for_surface_setup(
         features,
         false,
-        |instance| unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual)) }.map_err(|e| e.to_string()),
+        PresentationFallback::Allow,
+        |instance, presentation| match presentation {
+            Presentation::DirectComposition => {
+                let visual = handover
+                    .as_ref()
+                    .ok_or_else(|| "DirectComposition handover visual is missing".to_owned())?
+                    .visual();
+                // SAFETY: the visual stays alive while the surface does: the surface takes its own
+                // reference to it, and the window keeps the `Handover` as long as it keeps the surface.
+                unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual)) }
+                    .map_err(|e| e.to_string())
+            }
+            Presentation::PlainHwnd => {
+                // Release any DirectComposition target on `hwnd` before binding an HWND swap chain.
+                drop(handover.take());
+                create_hwnd_surface(instance, hwnd)
+            }
+        },
         |gpu, surface| {
             let size = drawable_size(None, size, max_surface_dim(Some(gpu)));
             let (config, _) = surface_config(surface, &gpu.adapter, size, srgb)
