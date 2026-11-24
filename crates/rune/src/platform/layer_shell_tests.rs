@@ -663,3 +663,15 @@ fn drop_destroys_all_proxies_and_drains_queued_events_so_event_queue_does_not_le
     }
     Ok(())
 }
+
+#[test]
+fn layer_shell_maps_diagonal_and_bidirectional_resize_cursors() {
+    use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
+    use crate::el::Cursor;
+    assert_eq!(super::shape(Cursor::ResizeColumn), Shape::ColResize);
+    assert_eq!(super::shape(Cursor::ResizeRow), Shape::RowResize);
+    assert_eq!(super::shape(Cursor::ResizeEw), Shape::EwResize);
+    assert_eq!(super::shape(Cursor::ResizeNs), Shape::NsResize);
+    assert_eq!(super::shape(Cursor::ResizeNwse), Shape::NwseResize);
+    assert_eq!(super::shape(Cursor::ResizeNesw), Shape::NeswResize);
+}

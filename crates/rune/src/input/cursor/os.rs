@@ -214,6 +214,10 @@ fn icon(c: Cursor) -> CursorIcon {
         Cursor::Move => CursorIcon::Move,
         Cursor::ResizeColumn => CursorIcon::ColResize,
         Cursor::ResizeRow => CursorIcon::RowResize,
+        Cursor::ResizeEw => CursorIcon::EwResize,
+        Cursor::ResizeNs => CursorIcon::NsResize,
+        Cursor::ResizeNwse => CursorIcon::NwseResize,
+        Cursor::ResizeNesw => CursorIcon::NeswResize,
         Cursor::Crosshair => CursorIcon::Crosshair,
         Cursor::Cell => CursorIcon::Cell,
         Cursor::ZoomIn => CursorIcon::ZoomIn,
@@ -266,6 +270,10 @@ mod tests {
             (Cursor::NotAllowed, MacCursor::NotAllowed),
             (Cursor::ResizeColumn, MacCursor::ResizeLeftRight),
             (Cursor::ResizeRow, MacCursor::ResizeUpDown),
+            (Cursor::ResizeEw, MacCursor::ResizeEw),
+            (Cursor::ResizeNs, MacCursor::ResizeNs),
+            (Cursor::ResizeNwse, MacCursor::ResizeNwse),
+            (Cursor::ResizeNesw, MacCursor::ResizeNesw),
             (Cursor::Crosshair, MacCursor::Crosshair),
             (Cursor::ZoomIn, MacCursor::ZoomIn),
             (Cursor::ZoomOut, MacCursor::ZoomOut),
@@ -277,5 +285,79 @@ mod tests {
         for (cursor, expected) in pairs {
             assert_eq!(mac_cursor(cursor), expected);
         }
+    }
+
+    #[test]
+    fn resize_cursors_map_to_winit_and_css_names() {
+        let pairs = [
+            (Cursor::ResizeColumn, CursorIcon::ColResize, "col-resize"),
+            (Cursor::ResizeRow, CursorIcon::RowResize, "row-resize"),
+            (Cursor::ResizeEw, CursorIcon::EwResize, "ew-resize"),
+            (Cursor::ResizeNs, CursorIcon::NsResize, "ns-resize"),
+            (Cursor::ResizeNwse, CursorIcon::NwseResize, "nwse-resize"),
+            (Cursor::ResizeNesw, CursorIcon::NeswResize, "nesw-resize"),
+        ];
+        for (cursor, expected_icon, expected_css) in pairs {
+            let mapped = icon(cursor);
+            assert_eq!(mapped, expected_icon);
+            assert_eq!(mapped.name(), expected_css);
+        }
+    }
+
+    #[test]
+    fn resize_cursors_resolve_inherit_hold_during_drag_and_respect_inert() {
+        use crate::{Cx, El, Env, Runtime, col, el};
+
+        fn view(_: &(), _: &mut Cx<()>) -> El {
+            col().size(200.0, 200.0)
+                .child(el().key("ew").size(200.0, 30.0).hit().cursor(Cursor::ResizeEw)
+                    .child(el().key("ew-child").size(100.0, 30.0)))
+                .child(el().key("ns").size(200.0, 30.0).hit().cursor(Cursor::ResizeNs))
+                .child(el().key("nwse").size(200.0, 30.0).cursor(Cursor::ResizeNwse)
+                    .on_press(|_: &mut ()| {}))
+                .child(el().key("nesw").size(200.0, 30.0).hit().cursor(Cursor::ResizeNesw))
+                .child(el().key("inert-handle").size(200.0, 30.0).hit().inert().cursor(Cursor::ResizeNwse))
+                .child(el().key("plain").size(200.0, 50.0))
+        }
+
+        let mut rt = Runtime::new((), view, (200.0, 200.0), Env::new(false, 1.0));
+        rt.frame(0.0);
+
+        // Inherited by child inside a resize handle.
+        rt.pointer_move(50.0, 15.0);
+        assert_eq!(rt.cursor(), Cursor::ResizeEw, "child inherits parent ResizeEw");
+        rt.pointer_move(150.0, 15.0);
+        assert_eq!(rt.cursor(), Cursor::ResizeEw);
+
+        // Vertical and diagonal handles.
+        rt.pointer_move(100.0, 45.0);
+        assert_eq!(rt.cursor(), Cursor::ResizeNs);
+        rt.pointer_move(100.0, 75.0);
+        assert_eq!(rt.cursor(), Cursor::ResizeNwse);
+        rt.pointer_move(100.0, 105.0);
+        assert_eq!(rt.cursor(), Cursor::ResizeNesw);
+
+        // Inert handle does not claim a cursor.
+        rt.pointer_move(100.0, 135.0);
+        assert_eq!(rt.cursor(), Cursor::Default, "inert resize handle must not set cursor");
+
+        // Plain element without a cursor stays Default.
+        rt.pointer_move(100.0, 175.0);
+        assert_eq!(rt.cursor(), Cursor::Default);
+
+        // Held press/drag keeps the handle's resize cursor even outside its bounds.
+        rt.pointer_move(100.0, 75.0);
+        assert_eq!(rt.cursor(), Cursor::ResizeNwse);
+        rt.pointer_down(100.0, 75.0);
+        rt.pointer_move(100.0, 175.0);
+        assert_eq!(rt.cursor(), Cursor::ResizeNwse, "held press keeps ResizeNwse");
+        rt.pointer_up(100.0, 175.0);
+        assert_eq!(rt.cursor(), Cursor::Default, "release over plain area returns Default");
+
+        // Leaving the viewport clears back to Default.
+        rt.pointer_move(100.0, 105.0);
+        assert_eq!(rt.cursor(), Cursor::ResizeNesw);
+        rt.pointer_leave();
+        assert_eq!(rt.cursor(), Cursor::Default);
     }
 }
