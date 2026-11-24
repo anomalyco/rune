@@ -549,7 +549,7 @@ impl RuntimeCore {
             let n = &self.tree.nodes[i];
             // Native input readiness follows focus, not entrance opacity. An input
             // mounting at opacity zero still needs its IME area in this frame.
-            let input_caret = n.input.as_ref().filter(|input| input.edit.focused && self.can_focus(i))
+            let input_caret = n.input.as_ref().filter(|input| input.edit.focused && self.can_focus(i) && !self.node_disabled(i))
                 .filter(|_| !self.motion.flights().iter().any(|f| n.key.as_deref() == Some(&f.source_key)
                     && f.alphas(f.destination, now, self.reduced_motion).0 > 0.0))
                 .and_then(|_| input_caret(n, r, sc, s, gliding, &mut self.edit.input_scroll));

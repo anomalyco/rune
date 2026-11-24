@@ -192,7 +192,14 @@ impl RuntimeCore {
     /// Offer `ev` to the focused text field's `El::on_input_key` handler. If it consumes the key
     /// and changes the field's text or caret, keep the caret in view after the commit, as an
     /// editor-handled edit does.
+    /// Whether the currently focused element (if mounted) is marked disabled (`El::disabled`
+    /// or `El::aria_disabled`) on itself or any ancestor.
+    pub(in crate::runtime) fn focused_input_disabled(&self) -> bool {
+        self.focused_index().is_some_and(|i| self.node_disabled(i))
+    }
+
     pub(in crate::runtime) fn run_input_key(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, one: &mut Tx) -> bool {
+        if self.focused_input_disabled() { return false; }
         let Some((f, access)) = self.focused_input().and_then(|input| Some((input.key.clone()?, input.access.clone()))) else {
             return false;
         };
@@ -332,6 +339,7 @@ impl RuntimeCore {
         f: &mut dyn FnMut(crate::states::States<'_>, &crate::el::EditFn, &mut Tx) -> EditOutcome,
         tx: &mut Tx,
     ) -> bool {
+        if self.focused_input_disabled() { return false; }
         let Some(path) = self.kbd.focus.owned() else { return false };
         let Some((access, submit, change, selection_change, animate_layout, single_line, secure, revealed_override, line_home_end_override)) =
             self.focused_input().map(|i| (
@@ -550,7 +558,7 @@ impl RuntimeCore {
         self.paste_target().is_some() || self.app_paste_handler().is_some()
     }
     pub(crate) fn paste_target(&self) -> Option<String> {
-        if self.focused_input_read_only() { return None; }
+        if self.focused_input_read_only() || self.focused_input_disabled() { return None; }
         self.focused_input().filter(|i| i.access.is_some()).and(self.kbd.focus.owned())
     }
     /// What the paste target hears: every form, images too, for a field with
@@ -578,7 +586,7 @@ impl RuntimeCore {
 
     /// The focused field's text around its selection, for the platform's input method.
     pub(crate) fn ime_text(&self) -> Option<crate::edit::ImeText> {
-        if self.focused_input_read_only() { return None; }
+        if self.focused_input_read_only() || self.focused_input_disabled() { return None; }
         self.focused_input().and_then(|i| i.edit.ime_text())
     }
 

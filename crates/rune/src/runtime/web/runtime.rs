@@ -140,7 +140,7 @@ impl RuntimeCore {
             || !tx.open_urls.is_empty() || !tx.open_paths.is_empty() || !tx.file_dialogs.is_empty() || !tx.popups.is_empty() || tx.field_menu_resolution.is_some() || tx.clear_secret {
             return None;
         }
-        if self.focused_input_read_only() { return None; }
+        if self.focused_input_read_only() || self.focused_input_disabled() { return None; }
         let access = self.focused_input()?.access.clone()?;
         let key = self.kbd.focus.path()?;
         Some(mirror.update(key, Some(access(app.states()))))
@@ -148,11 +148,13 @@ impl RuntimeCore {
     /// Whether Rune currently has keyboard focus on an editable text input (plain or secure),
     /// matching the condition under which [`Self::web_context`] populates `mirror.key`.
     pub(crate) fn web_has_editable_focus(&self) -> bool {
-        !self.focused_input_read_only() && self.focused_input().is_some_and(|i| i.access.is_some())
+        !self.focused_input_read_only()
+            && !self.focused_input_disabled()
+            && self.focused_input().is_some_and(|i| i.access.is_some())
     }
 
     pub(crate) fn web_context(&self, mirror: &mut Mirror) -> bool {
-        match self.focused_input().filter(|i| i.access.is_some() && !self.focused_input_read_only()) {
+        match self.focused_input().filter(|i| i.access.is_some() && !self.focused_input_read_only() && !self.focused_input_disabled()) {
             Some(input) => mirror.update(self.kbd.focus.path().unwrap_or_default(), Some(&input.edit)),
             None => mirror.update("", None),
         }

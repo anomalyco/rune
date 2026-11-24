@@ -628,3 +628,297 @@ fn keyboard_focus_only_stays_reachable_by_tab_modal_and_a11y() {
     rt.frame(0.0);
     assert_eq!(focused_key(&rt).as_deref(), Some("modal-auto"), "modal autofocus picks keyboard_focus_only");
 }
+
+#[test]
+fn disabled_text_inputs_cannot_take_focus_edit_or_show_text_cursor() {
+    use accesskit::{Action as Ak, ActionRequest, TreeId};
+    use crate::{Cursor, TextEdit, TextStyle, text_input};
+
+    struct State {
+        first: TextEdit,
+        disabled: TextEdit,
+        disabled_explicit: TextEdit,
+        in_disabled_anc: TextEdit,
+        aria: TextEdit,
+        read_only: TextEdit,
+        group_dis: TextEdit,
+        dynamic: TextEdit,
+        dynamic_off: bool,
+        modal_open: bool,
+        modal_dis: TextEdit,
+        opener_dis: bool,
+        changes: Vec<&'static str>,
+        pastes: Vec<&'static str>,
+        submits: Vec<&'static str>,
+        keys_heard: Vec<&'static str>,
+    }
+
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let st = TextStyle::new(14.0, 400.0);
+        let mut root = col()
+            .size(320.0, 460.0)
+            .gap(4.0)
+            .child(
+                text_input(&s.first, st)
+                    .key("first")
+                    .label("First")
+                    .size(200.0, 26.0)
+                    .disabled(s.opener_dis)
+                    .on_edit(|s: &mut State| &mut s.first),
+            )
+            .child(
+                text_input(&s.disabled, st)
+                    .key("disabled-field")
+                    .label("Disabled")
+                    .size(200.0, 26.0)
+                    .disabled(true)
+                    .on_edit(|s: &mut State| &mut s.disabled)
+                    .on_input_change(|s: &mut State, _| s.changes.push("disabled"))
+                    .on_input_paste(|s: &mut State, _, _| { s.pastes.push("disabled"); true })
+                    .on_submit(|s: &mut State, _| s.submits.push("disabled")),
+            )
+            .child(
+                text_input(&s.disabled_explicit, st)
+                    .key("disabled-explicit")
+                    .label("Disabled explicit")
+                    .size(200.0, 26.0)
+                    .disabled(true)
+                    .cursor(Cursor::NotAllowed)
+                    .on_edit(|s: &mut State| &mut s.disabled_explicit),
+            )
+            .child(
+                col()
+                    .key("disabled-anc")
+                    .disabled(true)
+                    .size(200.0, 26.0)
+                    .child(
+                        text_input(&s.in_disabled_anc, st)
+                            .key("under-disabled-anc")
+                            .label("Under disabled ancestor")
+                            .size(200.0, 26.0)
+                            .on_edit(|s: &mut State| &mut s.in_disabled_anc)
+                            .on_input_change(|s: &mut State, _| s.changes.push("anc")),
+                    ),
+            )
+            .child(
+                text_input(&s.aria, st)
+                    .key("aria-field")
+                    .label("Aria disabled")
+                    .size(200.0, 26.0)
+                    .aria_disabled(true)
+                    .on_edit(|s: &mut State| &mut s.aria)
+                    .on_input_key(|s: &mut State, _, _| { s.keys_heard.push("aria"); false })
+                    .on_input_change(|s: &mut State, _| s.changes.push("aria"))
+                    .on_input_paste(|s: &mut State, _, _| { s.pastes.push("aria"); true })
+                    .on_submit(|s: &mut State, _| s.submits.push("aria")),
+            )
+            .child(
+                text_input(&s.read_only, st)
+                    .key("read-only-field")
+                    .label("Read only")
+                    .size(200.0, 26.0)
+                    .read_only(true)
+                    .on_edit(|s: &mut State| &mut s.read_only),
+            )
+            .child(
+                row()
+                    .key("grp")
+                    .role("toolbar")
+                    .focus_group()
+                    .size(220.0, 26.0)
+                    .child(el().key("grp-a").role("button").label("A").size(60.0, 26.0).focusable(true))
+                    .child(
+                        text_input(&s.group_dis, st)
+                            .key("grp-dis-input")
+                            .label("Group disabled")
+                            .size(80.0, 26.0)
+                            .disabled(true)
+                            .on_edit(|s: &mut State| &mut s.group_dis),
+                    )
+                    .child(el().key("grp-b").role("button").label("B").size(60.0, 26.0).focusable(true)),
+            )
+            .child(
+                text_input(&s.dynamic, st)
+                    .key("dynamic")
+                    .label("Dynamic")
+                    .size(200.0, 26.0)
+                    .disabled(s.dynamic_off)
+                    .on_edit(|s: &mut State| &mut s.dynamic),
+            )
+            .child(el().key("after").role("button").label("After").size(100.0, 26.0).focusable(true));
+        if s.modal_open {
+            root = root.child(
+                col()
+                    .key("dlg")
+                    .role("dialog")
+                    .absolute(0.0, 0.0)
+                    .size(240.0, 120.0)
+                    .modal(true, |s: &mut State| s.modal_open = false)
+                    .child(
+                        text_input(&s.modal_dis, st)
+                            .key("modal-dis-auto")
+                            .label("Modal disabled")
+                            .size(200.0, 26.0)
+                            .disabled(true)
+                            .autofocus()
+                            .on_edit(|s: &mut State| &mut s.modal_dis),
+                    )
+                    .child(el().key("modal-ok").role("button").label("OK").size(80.0, 26.0).focusable(true)),
+            );
+        }
+        root
+    }
+
+    let mut rt = Runtime::new(
+        State {
+            first: TextEdit::new("one"),
+            disabled: TextEdit::new("locked"),
+            disabled_explicit: TextEdit::new("explicit"),
+            in_disabled_anc: TextEdit::new("anc"),
+            aria: TextEdit::new("pending"),
+            read_only: TextEdit::new("ro"),
+            group_dis: TextEdit::new("gd"),
+            dynamic: TextEdit::new("dyn"),
+            dynamic_off: false,
+            modal_open: false,
+            modal_dis: TextEdit::new("md"),
+            opener_dis: false,
+            changes: Vec::new(),
+            pastes: Vec::new(),
+            submits: Vec::new(),
+            keys_heard: Vec::new(),
+        },
+        view,
+        (320.0, 460.0),
+        Env::new(true, 1.0),
+    );
+    let board = crate::clipboard::memory();
+    board.set_text("PASTE");
+    rt.use_clipboard(&board);
+    rt.frame(0.0);
+
+    let cursor_of = |rt: &mut Runtime<State>, key: &str| {
+        let (x, y) = rt.find(key).unwrap_or_else(|| panic!("missing {key}"));
+        rt.pointer_move(x, y);
+        rt.cursor()
+    };
+
+    // 1. Primary click, Tx::focus, edit.focused = true, and AccessKit Focus cannot focus disabled or ancestor-disabled inputs,
+    //    and typed characters, delete, paste, and submit must never reach their handlers.
+    for key in ["disabled-field", "under-disabled-anc"] {
+        click_key(&mut rt, key);
+        let focused_after_click = focused_key(&rt);
+        rt.key(KeyEvent::from(Key::Text("Z".into())));
+        rt.frame(0.0);
+        assert_eq!(rt.state.disabled.text, "locked", "typing mutated disabled field (focused={focused_after_click:?})");
+        assert_eq!(rt.state.in_disabled_anc.text, "anc", "typing mutated field under disabled ancestor (focused={focused_after_click:?})");
+        rt.key(KeyEvent::from(Key::Backspace));
+        rt.key(KeyEvent::from(Key::Delete));
+        rt.paste("PASTE");
+        rt.key(KeyEvent::from(Key::Enter));
+        rt.frame(0.0);
+        assert_eq!(rt.state.disabled.text, "locked");
+        assert_eq!(rt.state.in_disabled_anc.text, "anc");
+        assert!(rt.state.changes.is_empty() && rt.state.pastes.is_empty() && rt.state.submits.is_empty());
+        assert_ne!(focused_after_click.as_deref(), Some(key), "click must not focus {key}");
+
+        rt.update(move |_, tx| tx.focus(key, true));
+        rt.frame(0.0);
+        assert_ne!(focused_key(&rt).as_deref(), Some(key), "Tx::focus must not focus {key}");
+
+        let ak_tree = rt.accessibility_tree();
+        let (id, node) = ak_tree.nodes.iter().find(|(_, n)| n.author_id() == Some(key)).unwrap();
+        assert!(!node.supports_action(Ak::Focus), "{key} must not advertise AccessKit Focus");
+        assert!(!rt.a11y_action(&ActionRequest { action: Ak::Focus, target_tree: TreeId::ROOT, target_node: *id, data: None }));
+        rt.frame(0.0);
+        assert_ne!(focused_key(&rt).as_deref(), Some(key), "AccessKit Focus must not focus {key}");
+    }
+    rt.update(|s, _| s.disabled.focused = true);
+    rt.frame(0.0);
+    assert_ne!(focused_key(&rt).as_deref(), Some("disabled-field"), "edit.focused = true must not focus disabled input");
+    assert!(!rt.state.disabled.focused, "sync clears edit.focused on disabled input");
+    assert_eq!(rt.state.disabled.text, "locked");
+    assert_eq!(rt.state.in_disabled_anc.text, "anc");
+    assert!(rt.state.changes.is_empty() && rt.state.pastes.is_empty() && rt.state.submits.is_empty());
+
+    // 3. Tab and Shift+Tab skip all disabled inputs, keep aria_disabled and read_only in Tab order.
+    let mut visited = Vec::new();
+    for _ in 0..8 {
+        rt.key(KeyEvent::from(Key::Tab));
+        rt.frame(0.0);
+        let k = focused_key(&rt).unwrap_or_default();
+        if visited.first() == Some(&k) { break; }
+        visited.push(k);
+    }
+    assert_eq!(visited, ["first", "aria-field", "read-only-field", "grp-a", "dynamic", "after"]);
+    // Shift+Tab walks the exact reverse order, skipping disabled inputs too.
+    rt.key(KeyEvent { key: Key::Tab, mods: Mods { shift: true, ..Mods::default() } });
+    rt.frame(0.0);
+    assert_eq!(focused_key(&rt).as_deref(), Some("after"), "Shift+Tab wraps from first to after, skipping disabled inputs");
+
+    // 4. Focus-group arrows skip disabled text_input inside the group.
+    rt.update(|_, tx| tx.focus("grp-a", true));
+    rt.frame(0.0);
+    rt.key(KeyEvent::from(Key::Right));
+    rt.frame(0.0);
+    assert_eq!(focused_key(&rt).as_deref(), Some("grp-b"), "focus group arrow skips disabled input");
+
+    // 5. aria_disabled input stays focusable (Tab, Tx::focus, AccessKit Focus, web focus proxy) but rejects all edits/paste/delete/submit.
+    rt.update(|_, tx| tx.focus("aria-field", true));
+    rt.frame(0.0);
+    assert_eq!(focused_key(&rt).as_deref(), Some("aria-field"), "aria_disabled field stays focusable");
+    assert!(!rt.core().web_has_editable_focus(), "aria_disabled field must not activate web DOM editor");
+    let mut mirror = crate::runtime::web_a11y::A11yMirror::default();
+    let focus_json = rt.core().web_a11y_focus(&mut mirror).expect("web focus proxy for aria_disabled");
+    assert!(focus_json.contains(r#""dis":true"#), "focus proxy reports aria-disabled: {focus_json}");
+
+    rt.key(KeyEvent::from(Key::Text("X".into())));
+    rt.key(KeyEvent::from(Key::Backspace));
+    rt.key(KeyEvent::from(Key::Delete));
+    rt.key(KeyEvent::from(Key::Enter));
+    rt.paste("NOPE");
+    rt.key(KeyEvent { key: Key::Command('v'), mods: Mods { cmd: true, ..Mods::default() } });
+    rt.frame(0.0);
+    rt.frame(0.0);
+    assert_eq!(rt.state.aria.text, "pending", "aria_disabled input must not accept edits, delete, or paste");
+    assert!(rt.state.changes.is_empty() && rt.state.pastes.is_empty() && rt.state.submits.is_empty() && rt.state.keys_heard.is_empty());
+
+    // 6. Disabling an already focused text_input blurs it, clears edit.focused, and hands focus to the next stop.
+    rt.update(|_, tx| tx.focus("dynamic", true));
+    rt.frame(0.0);
+    assert_eq!(focused_key(&rt).as_deref(), Some("dynamic"));
+    assert!(rt.state.dynamic.focused);
+    rt.update(|s, _| s.dynamic_off = true);
+    rt.frame(0.0);
+    assert_eq!(focused_key(&rt).as_deref(), Some("after"), "disabling focused input rescues focus");
+    assert!(!rt.state.dynamic.focused, "disabled input clears edit.focused");
+
+    // 7. Modal autofocus skips disabled input, and closing a modal does not restore focus to an opener disabled while open.
+    rt.update(|_, tx| tx.focus("first", true));
+    rt.frame(0.0);
+    assert_eq!(focused_key(&rt).as_deref(), Some("first"));
+    rt.update(|s, _| s.modal_open = true);
+    rt.frame(0.0);
+    assert_eq!(focused_key(&rt).as_deref(), Some("modal-ok"), "modal autofocus skips disabled text_input");
+    rt.update(|s, _| {
+        s.opener_dis = true;
+        s.modal_open = false;
+    });
+    rt.frame(0.0);
+    assert_ne!(focused_key(&rt).as_deref(), Some("first"), "modal close must not restore focus to disabled input");
+    assert!(!rt.state.first.focused);
+
+    // 8. read_only input stays focusable on click.
+    click_key(&mut rt, "read-only-field");
+    assert_eq!(focused_key(&rt).as_deref(), Some("read-only-field"), "read_only input remains focusable");
+
+    // 9. Cursor: disabled, ancestor-disabled, and aria_disabled show Default; explicit cursor and enabled/read_only keep theirs.
+    rt.update(|s, _| s.opener_dis = false);
+    rt.frame(0.0);
+    assert_eq!(cursor_of(&mut rt, "first"), Cursor::Text);
+    assert_eq!(cursor_of(&mut rt, "read-only-field"), Cursor::Text, "read_only keeps text cursor");
+    assert_eq!(cursor_of(&mut rt, "disabled-field"), Cursor::Default, "disabled text_input must not show text cursor");
+    assert_eq!(cursor_of(&mut rt, "under-disabled-anc"), Cursor::Default, "text_input under disabled ancestor must not show text cursor");
+    assert_eq!(cursor_of(&mut rt, "aria-field"), Cursor::Default, "aria_disabled text_input shows default cursor");
+    assert_eq!(cursor_of(&mut rt, "disabled-explicit"), Cursor::NotAllowed, "explicit cursor on disabled text_input still wins");
+}

@@ -373,7 +373,8 @@ impl RuntimeCore {
             }
         }
         let (preserve_focus, keeps) = (self.press_keeps_focus(ti), self.press_keeps_selection(ti));
-        let takes_focus = !n.focus.keyboard_only
+        let takes_focus = !focus::ancestor_disabled(&self.tree.nodes, ti)
+            && !n.focus.keyboard_only
             && ((n.focus.enabled && !n.focus.preserve_on_press.focus) || (self.takes_focus(n) && !preserve_focus));
         let keyed = (!takes_focus && !self.is_selectable(ti) && !preserve_focus).then(|| std::iter::successors(n.parent, |&p| self.tree.nodes[p].parent)
             .take_while(|&p| self.allowed(p))
@@ -596,7 +597,10 @@ impl RuntimeCore {
         let Some(mut i) = target else {
             return crate::el::Cursor::Default;
         };
-        if self.tree.nodes[i].handlers.cursor.is_none() && (self.tree.nodes[i].input.is_some() || self.tree.nodes[i].role == "textbox") {
+        if self.tree.nodes[i].handlers.cursor.is_none()
+            && (self.tree.nodes[i].input.is_some() || self.tree.nodes[i].role == "textbox")
+            && !self.disabled_textbox(i)
+        {
             return if self.input_pointer_cursor(i, x, y) { crate::el::Cursor::Pointer } else { crate::el::Cursor::Text };
         }
         if self.is_selectable(i) && !self.edit.selectable.phase.dragging() && self.link_at(i, x, y).is_some() {
@@ -612,7 +616,7 @@ impl RuntimeCore {
                 return c;
             }
             if let Some(pc) = self.commit.defaults.press_cursor {
-                if self.tree.nodes[i].a11y.disabled {
+                if self.tree.nodes[i].a11y.disabled || self.disabled_textbox(i) {
                     return crate::el::Cursor::Default;
                 }
                 if self.tree.nodes[i].handlers.on_press.is_some()
@@ -624,6 +628,23 @@ impl RuntimeCore {
             let Some(parent) = self.tree.nodes[i].parent else { return crate::el::Cursor::Default };
             i = parent;
         }
+    }
+
+    /// Whether node `i` is a disabled text input (itself or via a disabled ancestor), or a
+    /// `role("textbox")` wrapper whose descendant text inputs are all disabled.
+    fn disabled_textbox(&self, i: usize) -> bool {
+        if self.node_disabled(i) { return true; }
+        let n = &self.tree.nodes[i];
+        if n.input.is_some() || n.role != "textbox" { return false; }
+        let mut any = false;
+        for j in (i + 1)..self.tree.nodes.len() {
+            if !self.node_holds(i, j) { break; }
+            if self.tree.nodes[j].input.is_some() {
+                any = true;
+                if !self.node_disabled(j) { return false; }
+            }
+        }
+        any
     }
 
     /// Whether node `i` is a live, reachable scroll viewport on the horizontal or vertical axis.

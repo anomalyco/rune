@@ -277,9 +277,17 @@ impl RuntimeCore {
             self.edit.drop_input_drag();
             return false;
         };
+        if self.node_disabled(i) {
+            self.edit.drop_input_drag();
+            if matches!(step, Step::Down { .. }) && self.can_focus(i) {
+                self.set_focus(app, Some(path), false);
+                one.commit = one.commit.instant();
+                return true;
+            }
+            return false;
+        }
         if let Step::Down { shift: false, check_pill: true, .. } = step
             && self.allowed(i)
-            && !self.tree.nodes[i].a11y.disabled
             && let Some(f) = self.tree.nodes[i].input.as_deref().and_then(|inp| inp.on_pill_press.clone())
             && let Some(pill_id) = self.input_pill_at(i, x, y)
             && f(app.states(), &pill_id, crate::PointerPress { x, y }, one)

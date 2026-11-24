@@ -33,6 +33,13 @@ fn node_visible(nodes: &[Node], i: usize) -> bool {
         && std::iter::successors(n.parent, |&p| nodes[p].parent).all(|p| !nodes[p].inert && nodes[p].vis.opacity > 0.0)
 }
 
+/// Whether any ancestor of node `i` in `nodes` is hard-disabled (`El::disabled`, which sets
+/// both `a11y.disabled` and `focus.opt_out`; `El::aria_disabled` leaves `focus.opt_out` false).
+pub(super) fn ancestor_disabled(nodes: &[Node], i: usize) -> bool {
+    std::iter::successors(nodes[i].parent, |&p| nodes[p].parent)
+        .any(|p| nodes[p].a11y.disabled && nodes[p].focus.opt_out)
+}
+
 /// Whether node `i` in `nodes` has a non-zero laid-out box.
 fn node_sized(nodes: &[Node], i: usize) -> bool {
     nodes[i].local.w > 0.0 && nodes[i].local.h > 0.0
@@ -255,17 +262,22 @@ impl RuntimeCore {
     pub(crate) fn takes_focus(&self, n: &Node) -> bool {
         n.focus.enabled || (self.commit.defaults.web_focus && !n.focus.opt_out && n.handlers.on_press.is_some() && PRESSABLE_ROLES.contains(&n.role))
     }
-    /// Whether `n` can take keyboard focus itself or is an editable text field.
-    fn can_take_focus(&self, n: &Node) -> bool {
-        self.takes_focus(n) || n.input.as_ref().is_some_and(|s| s.access.is_some())
+    /// Whether node `i` in `nodes` can take keyboard focus itself or is an editable text field
+    /// that has not opted out (`El::disabled`, `El::focusable(false)`) and is not inside a
+    /// hard-disabled ancestor (`El::disabled`).
+    fn can_take_focus_in(&self, nodes: &[Node], i: usize) -> bool {
+        if ancestor_disabled(nodes, i) { return false; }
+        let n = &nodes[i];
+        self.takes_focus(n)
+            || (!n.focus.opt_out && n.input.as_ref().is_some_and(|s| s.access.is_some()))
     }
     pub(crate) fn can_focus(&self, i: usize) -> bool {
-        self.can_take_focus(&self.tree.nodes[i]) && self.reachable(i)
+        self.can_take_focus_in(&self.tree.nodes, i) && self.reachable(i)
     }
     /// Whether `i` can take focus once any modal covering it closes (same as [`Self::can_focus`]
     /// without the active modal's membership check).
     pub(super) fn can_focus_unblocked(&self, i: usize) -> bool {
-        self.can_take_focus(&self.tree.nodes[i]) && !self.tree.nodes[i].inert && !self.subtree_exiting(i) && node_shown(&self.tree.nodes, i)
+        self.can_take_focus_in(&self.tree.nodes, i) && !self.tree.nodes[i].inert && !self.subtree_exiting(i) && node_shown(&self.tree.nodes, i)
     }
     /// Shown, sized, not exiting and not behind a modal.
     pub(super) fn reachable(&self, i: usize) -> bool {
@@ -594,7 +606,7 @@ impl RuntimeCore {
         };
         let link_target = |key: &str| {
             (0..nodes.len()).find_map(|j| {
-                if !shown(j) || nodes[j].input.is_some() || !self.can_take_focus(&nodes[j]) { return None; }
+                if !shown(j) || nodes[j].input.is_some() || !self.can_take_focus_in(nodes, j) { return None; }
                 let k = nodes[j].text.as_ref()?.cold.links.iter().position(|l| l.id == key)?;
                 Some((j, k))
             })
@@ -618,7 +630,7 @@ impl RuntimeCore {
             if !within(focused, scope) { return None; }
             let by_key = nodes.iter().find(|n| n.key.as_deref() == Some(key)).and_then(|anchor| {
                 let candidates = (0..nodes.len()).filter(|&j| within(&nodes[j].path, &anchor.path) && shown(j)
-                    && self.can_take_focus(&nodes[j]));
+                    && self.can_take_focus_in(nodes, j));
                 candidates.clone().find(|&j| nodes[j].focus.selected)
                     .or_else(|| candidates.into_iter().next())
                     .map(|j| (j, first_link(j)))
@@ -632,14 +644,14 @@ impl RuntimeCore {
             let by_key = (0..nodes.len()).find(|&j| nodes[j].key.as_deref() == Some(key.as_str()) && shown(j))
                 .and_then(|anchor| {
                     (anchor..nodes.len()).take_while(|&j| within(&nodes[j].path, &nodes[anchor].path))
-                        .find(|&j| shown(j) && self.can_take_focus(&nodes[j]))
+                        .find(|&j| shown(j) && self.can_take_focus_in(nodes, j))
                         .map(|j| (j, first_link(j)))
                 });
             let (j, link) = by_key.or_else(|| link_target(key.as_str()).map(|(j, k)| (j, Some(k))))?;
             Some((nodes[j].path.clone(), link, ring, ask))
         });
         let input_focused = self.kbd.focus.path().is_some_and(|p| {
-            nodes.iter().any(|n| n.path == p && !n.inert && n.input.as_ref().is_some_and(|i| i.edit.focused))
+            nodes.iter().enumerate().any(|(j, n)| n.path == p && !n.inert && !n.focus.opt_out && !ancestor_disabled(nodes, j) && n.input.as_ref().is_some_and(|i| i.edit.focused))
                 || self.commit.virtual_inputs.get(p).is_some_and(|i| i.edit.focused)
         });
         let was_focused = |edit: &crate::edit::TextEdit, path: &str| {
@@ -651,9 +663,9 @@ impl RuntimeCore {
             .filter(|(_, i)| i.edit.focused)
             .map(|(p, i)| (p.as_str(), &i.edit));
         // A newly requested text field wins; a focused control otherwise retains focus. Nothing
-        // inside an `El::inert` subtree takes or keeps it.
+        // inside an `El::inert` subtree or disabled by `El::disabled` takes or keeps it.
         let requested = (0..nodes.len())
-            .filter(|&j| shown(j) && nodes[j].input.as_ref().is_some_and(|i| i.edit.focused))
+            .filter(|&j| shown(j) && !nodes[j].focus.opt_out && !ancestor_disabled(nodes, j) && nodes[j].input.as_ref().is_some_and(|i| i.edit.focused))
             .map(|j| (nodes[j].path.as_str(), &nodes[j].input.as_ref().unwrap().edit));
         // Hash iteration must not decide between simultaneous offscreen requests. Select
         // only the winning path rather than allocating and sorting every focused field.
@@ -666,7 +678,8 @@ impl RuntimeCore {
             .or_else(|| asked.as_ref().map(|(p, ..)| p.clone()))
             .or_else(|| restore.as_ref().map(|(p, _)| p.clone()))
             .or_else(|| (!blurred).then(|| self.kbd.focus.owned().filter(|p| (0..nodes.len()).any(|j| &nodes[j].path == p && shown(j)
-                && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.edit.focused)))
+                && !ancestor_disabled(nodes, j)
+                && (self.takes_focus(&nodes[j]) || (!nodes[j].focus.opt_out && nodes[j].input.as_ref().is_some_and(|i| i.edit.focused))))
                 || self.commit.virtual_inputs.get(p).is_some_and(|i| i.edit.focused))).flatten())
             .or_else(|| (!blurred).then(|| requested.into_iter().next().or_else(|| virtual_req().min_by_key(|&(p, _)| p)).map(|(p, _)| p.to_owned())).flatten())
             .or_else(|| (!blurred).then(|| self.focus_fallback(nodes)).flatten());
@@ -749,7 +762,7 @@ impl RuntimeCore {
             // rebuilt replacement took it over: a control rebuilt disabled (Send as its prompt
             // sends) still has to hand focus on, which `fallback_in_new` does from the new tree.
             let old = self.tree.nodes.get(*self.tree.node_index.get(self.tree.path_ids.get(gone)?)?)?;
-            let disabled_here = nodes.iter().any(|n| n.path == gone && !self.can_take_focus(n));
+            let disabled_here = nodes.iter().enumerate().any(|(j, n)| n.path == gone && !self.can_take_focus_in(nodes, j));
             if !old.is_moved_stub() && !disabled_here { return None; }
             return self.fallback_in_new(gone, nodes);
         };
@@ -757,7 +770,7 @@ impl RuntimeCore {
         // commit hid it: nothing takes its keyboard. One that can't hold focus any more (disabled
         // while focused, as a Send button is while its prompt sends) hands it on as if it had left,
         // as OpenCode Desktop's focus rescue does (opencode#64909); focus never falls to the window.
-        if nodes.iter().any(|n| n.path == gone && self.can_take_focus(n)) { return None; }
+        if nodes.iter().enumerate().any(|(j, n)| n.path == gone && self.can_take_focus_in(nodes, j)) { return None; }
         if self.kbd.focus.path().is_none() && self.tree.nodes[at].input.is_none() { return None; }
         if self.active_modal().is_some() && self.modal_member(at) { return None; }
         let new: rustc_hash::FxHashMap<&str, usize> = nodes.iter().enumerate().map(|(j, n)| (n.path.as_str(), j)).collect();
@@ -774,7 +787,7 @@ impl RuntimeCore {
         let unlaid = |j: usize| nodes[j].local.w <= 0.0 && nodes[j].local.h <= 0.0;
         let survivor = |i: usize| at_new(i)
             .filter(|&j| (node_shown(nodes, j) || (unlaid(j) && node_sized(&self.tree.nodes, i) && node_visible(nodes, j)))
-                && self.can_take_focus(&nodes[j]));
+                && self.can_take_focus_in(nodes, j));
         let within = |j: usize, s: usize| {
             // Compare in the new tree where both ends are in it; a node that left keeps its old
             // path, so the scan still reaches the siblings after it.
@@ -814,9 +827,9 @@ impl RuntimeCore {
     /// container.
     fn fallback_in_new(&self, gone: &str, nodes: &[Node]) -> Option<String> {
         if self.active_modal().is_some() { return None; }
-        let can = |j: usize| node_shown(nodes, j) && self.can_take_focus(&nodes[j]);
+        let can = |j: usize| node_shown(nodes, j) && self.can_take_focus_in(nodes, j);
         if let Some(at) = nodes.iter().position(|n| n.path == gone) {
-            if self.can_take_focus(&nodes[at]) { return None; }
+            if self.can_take_focus_in(nodes, at) { return None; }
             let mut scopes = Vec::new();
             let mut p = gone;
             while let Some(k) = p.rfind('/') {
