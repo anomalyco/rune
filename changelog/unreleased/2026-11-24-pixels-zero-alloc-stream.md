@@ -1,0 +1,1 @@
+- Streaming `Pixels`: `Pixels::set` now reuses the existing `Arc<Vec<u8>>` holder in place via `Arc::get_mut` when no atlas copy holds a clone of it, restoring zero heap allocations per steady-state streamed frame while still copying outside the frame lock and bounding concurrent memory to one extra frame.
