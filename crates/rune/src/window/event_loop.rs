@@ -58,6 +58,49 @@ pub(crate) fn finish_run(
     }
 }
 
+/// How `run_configured` finishes after `shutdown_prewarm()`.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ExitAction {
+    /// All warm-up workers exited cleanly (or a caught callback panic must unwind): drop
+    /// windows and return from `run_configured` normally.
+    Return,
+    /// A warm-up worker stayed blocked inside a driver call past the shutdown bound: end the
+    /// process without running window or libc exit destructors underneath it.
+    EndProcess { code: i32, message: String },
+}
+
+/// Pure exit decision combining warm-up shutdown outcome, run result, and pixel-check status.
+#[cfg(not(target_arch = "wasm32"))]
+fn exit_action(
+    warm: crate::render::ShutdownOutcome,
+    has_panic: bool,
+    run_error: Option<&str>,
+    pixel_check_failed: bool,
+) -> ExitAction {
+    if has_panic {
+        return ExitAction::Return;
+    }
+    match warm {
+        crate::render::ShutdownOutcome::Drained => ExitAction::Return,
+        crate::render::ShutdownOutcome::TimedOut { remaining } => {
+            let note = format!(
+                "rune: {remaining} GPU warm-up thread(s) did not finish before exit; ending process without destructors"
+            );
+            match run_error {
+                Some(error) => ExitAction::EndProcess {
+                    code: 1,
+                    message: format!("rune: {error}\n{note}"),
+                },
+                None => ExitAction::EndProcess {
+                    code: if pixel_check_failed { 3 } else { 0 },
+                    message: note,
+                },
+            }
+        }
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 fn run_configured(_: Factory, _: Args, _: bool) -> Result<(), String> {
     Err("native window factories are unsupported on web; use App::run for one canvas".into())
@@ -68,6 +111,7 @@ fn run_configured(_: Factory, _: Args, _: bool) -> Result<(), String> {
 fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), String> {
     let _ = accessory;
     // A relaunch goes on once the app it restarts has exited.
+    crate::render::reopen_prewarm();
     crate::relaunch::wait_for_previous();
     crate::tooling::perf_warn::launch::run_starts();
     crate::platform::ready_signal::run_starts();
@@ -115,10 +159,10 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     // window waits for the answer, and by then has it (`portal_appearance::begin`).
     #[cfg(all(target_os = "linux", feature = "dbus"))]
     crate::platform::portal_appearance::begin();
-    let event_loop = builder.build().inspect_err(|_| crate::render::discard_prewarm()).map_err(event_loop_error)?;
+    let event_loop = builder.build().inspect_err(|_| { let _ = crate::render::shutdown_prewarm(); }).map_err(event_loop_error)?;
     #[cfg(target_os = "macos")]
     if !beside.session() {
-        crate::render::discard_prewarm();
+        let _ = crate::render::shutdown_prewarm();
         return Err("event loop: no window server session (no one is logged in to this Mac)".into());
     }
     crate::marks::mark("loop.built");
@@ -164,7 +208,7 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     crate::marks::mark("loop.exited");
     // The windows' interaction timing queued its last rollups as they closed.
     crate::tooling::interaction::flush();
-    crate::render::discard_prewarm();
+    let warm_shutdown = crate::render::shutdown_prewarm();
     crate::clipboard::shutdown(); // Also cover an event-loop error before `exiting`.
     crate::platform::ready_signal::clear();
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -176,11 +220,29 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     let panic = windows.panic.take();
     #[cfg(not(target_os = "macos"))]
     let panic = None;
-    // An orderly exit: the windows and their renderers go here. `RUNE_LOOP_CHECK=2` found a
-    // differing picture: the process ends with 3, as a fast exit does (`quit::end_process`).
-    drop(windows);
-    if panic.is_none() && crate::render::loop_pixel_check_failed() { std::process::exit(3); }
-    finish_run(result, display_error.as_deref(), startup_error, panic)
+    let pixel_check_failed = crate::render::loop_pixel_check_failed();
+    let run_error = match (&result, startup_error.as_deref()) {
+        (Err(winit::error::EventLoopError::ExitFailure(_)), _) if display_error.is_some() => {
+            Some(format!("run: the display connection failed: {}", display_error.as_deref().unwrap_or("")))
+        }
+        (Err(error), _) => Some(format!("run: {error}")),
+        (Ok(()), Some(error)) => Some(error.to_owned()),
+        (Ok(()), None) => None,
+    };
+    match exit_action(warm_shutdown, panic.is_some(), run_error.as_deref(), pixel_check_failed) {
+        ExitAction::Return => {
+            // An orderly exit: the windows and their renderers go here. `RUNE_LOOP_CHECK=2` found a
+            // differing picture: the process ends with 3, as a fast exit does (`quit::end_process`).
+            drop(windows);
+            if panic.is_none() && pixel_check_failed { std::process::exit(3); }
+            finish_run(result, display_error.as_deref(), startup_error, panic)
+        }
+        ExitAction::EndProcess { code, message } => {
+            eprintln!("{message}");
+            std::mem::forget(windows);
+            crate::quit::end_process_with_code(code)
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -278,4 +340,36 @@ fn finish_run_resumes_a_captured_panic_ahead_of_exit_status_and_startup_errors()
         );
     })).expect_err("captured panic must unwind out of finish_run");
     assert_eq!(err.downcast_ref::<&str>(), Some(&"original callback panic"));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn exit_action_returns_when_drained_and_ends_process_without_destructors_on_timeout() {
+    use crate::render::ShutdownOutcome;
+
+    assert_eq!(exit_action(ShutdownOutcome::Drained, false, None, false), ExitAction::Return);
+    assert_eq!(exit_action(ShutdownOutcome::Drained, false, Some("err"), false), ExitAction::Return);
+    assert_eq!(exit_action(ShutdownOutcome::TimedOut { remaining: 1 }, true, None, false), ExitAction::Return);
+
+    assert_eq!(
+        exit_action(ShutdownOutcome::TimedOut { remaining: 1 }, false, None, false),
+        ExitAction::EndProcess {
+            code: 0,
+            message: "rune: 1 GPU warm-up thread(s) did not finish before exit; ending process without destructors".into(),
+        },
+    );
+    assert_eq!(
+        exit_action(ShutdownOutcome::TimedOut { remaining: 2 }, false, None, true),
+        ExitAction::EndProcess {
+            code: 3,
+            message: "rune: 2 GPU warm-up thread(s) did not finish before exit; ending process without destructors".into(),
+        },
+    );
+    assert_eq!(
+        exit_action(ShutdownOutcome::TimedOut { remaining: 1 }, false, Some("run: display failed"), false),
+        ExitAction::EndProcess {
+            code: 1,
+            message: "rune: run: display failed\nrune: 1 GPU warm-up thread(s) did not finish before exit; ending process without destructors".into(),
+        },
+    );
 }

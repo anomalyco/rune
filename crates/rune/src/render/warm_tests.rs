@@ -57,3 +57,367 @@ mod warm_renderer {
         }
     }
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+mod shutdown_machine {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::time::Duration;
+
+    use crate::render::warm_machine::{
+        Clock, Effect, Event, ShutdownOutcome, State, SystemClock, WarmSlot, step,
+    };
+    use crate::time::Instant;
+
+    struct FakeClock(Mutex<Instant>);
+    impl FakeClock {
+        fn new(at: Instant) -> Self { Self(Mutex::new(at)) }
+        fn advance(&self, by: Duration) { *self.0.lock().unwrap() += by; }
+    }
+    impl Clock for FakeClock {
+        fn now(&self) -> Instant { *self.0.lock().unwrap() }
+    }
+
+    #[test]
+    fn state_machine_table_covers_all_five_states_with_injected_clock() {
+        let t0 = crate::time::now();
+        let t1 = t0 + Duration::from_secs(1);
+        let t2 = t0 + Duration::from_secs(2);
+        let t30 = t0 + Duration::from_secs(30);
+        let t40 = t0 + Duration::from_secs(40);
+
+        let cases: [(&str, State, Event, State, Vec<Effect>); 19] = [
+            (
+                "not started -> running on start",
+                State::NotStarted { draining: 0 },
+                Event::Start { until: t30 },
+                State::Running { until: t30, workers: 1 },
+                vec![Effect::SpawnWorker],
+            ),
+            (
+                "running extends linger deadline without respawning",
+                State::Running { until: t30, workers: 1 },
+                Event::Start { until: t40 },
+                State::Running { until: t40, workers: 1 },
+                vec![],
+            ),
+            (
+                "build finished ok before deadline -> parked",
+                State::Running { until: t30, workers: 1 },
+                Event::BuildFinished { ok: true, now: t1 },
+                State::Parked { until: t30, workers: 1 },
+                vec![Effect::StorePayload, Effect::NotifyWaiters],
+            ),
+            (
+                "build finished after discard expiry -> drops payload",
+                State::Running { until: t1, workers: 1 },
+                Event::BuildFinished { ok: true, now: t2 },
+                State::NotStarted { draining: 1 },
+                vec![Effect::DropPayload, Effect::NotifyWaiters],
+            ),
+            (
+                "parked -> running during warm frame",
+                State::Parked { until: t30, workers: 2 },
+                Event::BeginWarmFrame,
+                State::Running { until: t30, workers: 2 },
+                vec![Effect::TakePayload, Effect::NotifyWaiters],
+            ),
+            (
+                "finish warm frame ok -> re-parks and notifies done",
+                State::Running { until: t30, workers: 1 },
+                Event::FinishWarmFrame { ok: true, now: t1 },
+                State::Parked { until: t30, workers: 1 },
+                vec![Effect::StorePayload, Effect::NotifyWaiters, Effect::NotifyDone],
+            ),
+            (
+                "finish warm frame while cancelled -> drops payload and skips done",
+                State::Cancelled { deadline: t2, workers: 1 },
+                Event::FinishWarmFrame { ok: true, now: t1 },
+                State::Cancelled { deadline: t2, workers: 1 },
+                vec![Effect::DropPayload],
+            ),
+            (
+                "take from parked claims payload",
+                State::Parked { until: t30, workers: 1 },
+                Event::Take,
+                State::NotStarted { draining: 1 },
+                vec![Effect::TakePayload, Effect::NotifyWaiters],
+            ),
+            (
+                "parked tick past deadline expires and drops payload",
+                State::Parked { until: t30, workers: 1 },
+                Event::Tick { now: t30 },
+                State::NotStarted { draining: 1 },
+                vec![Effect::DropPayload, Effect::NotifyWaiters],
+            ),
+            (
+                "shutdown when idle with zero workers -> done immediately",
+                State::NotStarted { draining: 0 },
+                Event::Shutdown { deadline: t2 },
+                State::Done { timed_out_workers: 0 },
+                vec![Effect::NotifyWaiters],
+            ),
+            (
+                "shutdown when idle with draining worker -> cancelled",
+                State::NotStarted { draining: 1 },
+                Event::Shutdown { deadline: t2 },
+                State::Cancelled { deadline: t2, workers: 1 },
+                vec![Effect::NotifyWaiters],
+            ),
+            (
+                "shutdown while running -> cancelled waiting on workers",
+                State::Running { until: t30, workers: 2 },
+                Event::Shutdown { deadline: t2 },
+                State::Cancelled { deadline: t2, workers: 2 },
+                vec![Effect::NotifyWaiters],
+            ),
+            (
+                "shutdown while parked -> drops payload and cancels worker",
+                State::Parked { until: t30, workers: 1 },
+                Event::Shutdown { deadline: t2 },
+                State::Cancelled { deadline: t2, workers: 1 },
+                vec![Effect::DropPayload, Effect::NotifyWaiters],
+            ),
+            (
+                "worker exit in cancelled decrements count",
+                State::Cancelled { deadline: t2, workers: 2 },
+                Event::WorkerExited,
+                State::Cancelled { deadline: t2, workers: 1 },
+                vec![],
+            ),
+            (
+                "last worker exit in cancelled -> done drained",
+                State::Cancelled { deadline: t2, workers: 1 },
+                Event::WorkerExited,
+                State::Done { timed_out_workers: 0 },
+                vec![Effect::NotifyWaiters],
+            ),
+            (
+                "shutdown bound expires with wedged worker -> done timed out",
+                State::Cancelled { deadline: t2, workers: 1 },
+                Event::Tick { now: t2 },
+                State::Done { timed_out_workers: 1 },
+                vec![Effect::NotifyWaiters],
+            ),
+            (
+                "start rejected while cancelled",
+                State::Cancelled { deadline: t2, workers: 1 },
+                Event::Start { until: t30 },
+                State::Cancelled { deadline: t2, workers: 1 },
+                vec![],
+            ),
+            (
+                "attach worker rejected while done",
+                State::Done { timed_out_workers: 0 },
+                Event::AttachWorker,
+                State::Done { timed_out_workers: 0 },
+                vec![],
+            ),
+            (
+                "reopen cleanly drained slot -> not started",
+                State::Done { timed_out_workers: 0 },
+                Event::Reopen,
+                State::NotStarted { draining: 0 },
+                vec![],
+            ),
+        ];
+
+        for (name, initial, event, expected_state, expected_fx) in cases {
+            let mut state = initial;
+            let fx: Vec<Effect> = step(&mut state, event).into_iter().collect();
+            assert_eq!(state, expected_state, "state mismatch in case: {name}");
+            assert_eq!(fx, expected_fx, "effects mismatch in case: {name}");
+        }
+
+        // Verify FakeClock drives WarmSlot::discard / shutdown with zero wall-clock wait.
+        let clock = Arc::new(FakeClock::new(t0));
+        struct SharedClock(Arc<FakeClock>);
+        impl Clock for SharedClock {
+            fn now(&self) -> Instant { self.0.now() }
+        }
+        let slot = WarmSlot::<u32, SharedClock>::new(SharedClock(Arc::clone(&clock)));
+        assert_eq!(slot.shutdown(Duration::from_secs(2)), ShutdownOutcome::Drained);
+        assert_eq!(slot.state(), State::Done { timed_out_workers: 0 });
+        clock.advance(Duration::from_secs(5));
+        slot.reopen();
+        assert_eq!(slot.state(), State::NotStarted { draining: 0 });
+    }
+
+    struct Gate {
+        state: Mutex<(bool, bool)>, // (entered, released)
+        cv: Condvar,
+    }
+    impl Gate {
+        fn new() -> Arc<Self> {
+            Arc::new(Self { state: Mutex::new((false, false)), cv: Condvar::new() })
+        }
+        fn enter_and_wait(&self) {
+            let mut s = self.state.lock().unwrap();
+            s.0 = true;
+            self.cv.notify_all();
+            while !s.1 {
+                s = self.cv.wait(s).unwrap();
+            }
+        }
+        fn wait_entered(&self) {
+            let mut s = self.state.lock().unwrap();
+            while !s.0 {
+                s = self.cv.wait(s).unwrap();
+            }
+        }
+        fn release(&self) {
+            let mut s = self.state.lock().unwrap();
+            s.1 = true;
+            self.cv.notify_all();
+        }
+    }
+
+    #[test]
+    fn shutdown_waits_for_blocking_warm_job_skips_callbacks_and_leaves_zero_threads() {
+        let slot = Arc::new(WarmSlot::<u32, SystemClock>::new(SystemClock));
+        let gate = Gate::new();
+        let gate_worker = Arc::clone(&gate);
+        let frame_called = Arc::new(AtomicBool::new(false));
+        let done_called = Arc::new(AtomicBool::new(false));
+        let frame_flag = Arc::clone(&frame_called);
+        let done_flag = Arc::clone(&done_called);
+
+        WarmSlot::warm_then(
+            Arc::clone(&slot),
+            Duration::from_secs(30),
+            move || {
+                gate_worker.enter_and_wait();
+                Some(42u32)
+            },
+            move |v| {
+                frame_flag.store(true, Ordering::SeqCst);
+                Some(v)
+            },
+            move || {
+                done_flag.store(true, Ordering::SeqCst);
+            },
+        )
+        .expect("spawn warm_then");
+
+        gate.wait_entered();
+        assert!(slot.live_workers() >= 1, "warm-up worker must be tracked as live");
+
+        // Start shutdown on another thread and confirm it does NOT return while the job is blocked.
+        let shutdown_done = Arc::new(AtomicBool::new(false));
+        let shutdown_done_bg = Arc::clone(&shutdown_done);
+        let slot_bg = Arc::clone(&slot);
+        let join = std::thread::spawn(move || {
+            let out = slot_bg.shutdown(Duration::from_secs(2));
+            shutdown_done_bg.store(true, Ordering::SeqCst);
+            out
+        });
+
+        std::thread::sleep(Duration::from_millis(40));
+        assert!(!shutdown_done.load(Ordering::SeqCst), "shutdown must wait while warm job is running");
+
+        // Release the blocked warm job; shutdown must now drain cleanly with zero live workers.
+        gate.release();
+        let outcome = join.join().expect("shutdown thread");
+        assert_eq!(outcome, ShutdownOutcome::Drained);
+        assert_eq!(slot.live_workers(), 0, "no warm-up thread may outlive drained shutdown");
+        assert!(!frame_called.load(Ordering::SeqCst), "cancelled warm_then must skip frame callback");
+        assert!(!done_called.load(Ordering::SeqCst), "cancelled warm_then must skip done callback");
+    }
+
+    #[test]
+    fn shutdown_cancelling_during_warm_frame_skips_done_and_waits_for_exit() {
+        let slot = Arc::new(WarmSlot::<u32, SystemClock>::new(SystemClock));
+        let gate = Gate::new();
+        let gate_frame = Arc::clone(&gate);
+        let done_called = Arc::new(AtomicBool::new(false));
+        let done_flag = Arc::clone(&done_called);
+
+        WarmSlot::warm_then(
+            Arc::clone(&slot),
+            Duration::from_secs(30),
+            || Some(7u32),
+            move |v| {
+                gate_frame.enter_and_wait();
+                Some(v + 1)
+            },
+            move || {
+                done_flag.store(true, Ordering::SeqCst);
+            },
+        )
+        .expect("spawn warm_then");
+
+        gate.wait_entered();
+        let slot_bg = Arc::clone(&slot);
+        let join = std::thread::spawn(move || slot_bg.shutdown(Duration::from_secs(2)));
+        std::thread::sleep(Duration::from_millis(30));
+        gate.release();
+        assert_eq!(join.join().expect("shutdown"), ShutdownOutcome::Drained);
+        assert_eq!(slot.live_workers(), 0);
+        assert!(!done_called.load(Ordering::SeqCst), "done must not run after cancellation during frame");
+    }
+
+    #[test]
+    fn shutdown_bounds_wait_when_driver_call_never_returns() {
+        let slot = Arc::new(WarmSlot::<u32, SystemClock>::new(SystemClock));
+        let gate = Gate::new();
+        let gate_worker = Arc::clone(&gate);
+
+        WarmSlot::start_warm(
+            Arc::clone(&slot),
+            Duration::from_secs(30),
+            move || {
+                gate_worker.enter_and_wait();
+                Some(1u32)
+            },
+            None,
+        );
+
+        gate.wait_entered();
+        let started = std::time::Instant::now();
+        let outcome = slot.shutdown(Duration::from_millis(60));
+        assert!(started.elapsed() >= Duration::from_millis(50), "must wait up to the bound");
+        assert_eq!(outcome, ShutdownOutcome::TimedOut { remaining: 1 });
+
+        // Release the fake wedged worker so the test process leaks no thread.
+        gate.release();
+        for _ in 0..100 {
+            if slot.live_workers() == 0 { break; }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(slot.live_workers(), 0);
+    }
+
+    #[test]
+    fn shutdown_drains_parked_linger_thread_and_drops_payload_and_normal_launch_works() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        struct Tracked(Arc<AtomicUsize>);
+        impl Drop for Tracked {
+            fn drop(&mut self) { self.0.fetch_add(1, Ordering::SeqCst); }
+        }
+
+        let slot = Arc::new(WarmSlot::<Tracked, SystemClock>::new(SystemClock));
+        slot.park(Arc::clone(&slot), Tracked(Arc::clone(&drops)), Duration::from_secs(300));
+        assert!(slot.has_ready());
+        assert_eq!(slot.live_workers(), 1);
+
+        assert_eq!(slot.shutdown(Duration::from_secs(2)), ShutdownOutcome::Drained);
+        assert_eq!(slot.live_workers(), 0, "parked linger thread must exit on shutdown");
+        assert_eq!(drops.load(Ordering::SeqCst), 1, "parked payload must be dropped");
+
+        // Re-opening after a clean drain allows a subsequent launch cycle.
+        slot.reopen();
+        WarmSlot::start_warm(
+            Arc::clone(&slot),
+            Duration::from_secs(30),
+            {
+                let drops = Arc::clone(&drops);
+                move || Some(Tracked(drops))
+            },
+            None,
+        );
+        let taken = slot.take().expect("normal launch claims warmed payload immediately");
+        drop(taken);
+        assert_eq!(slot.shutdown(Duration::from_secs(2)), ShutdownOutcome::Drained);
+        assert_eq!(slot.live_workers(), 0);
+    }
+}

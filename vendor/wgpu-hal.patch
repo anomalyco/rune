@@ -2313,7 +2313,7 @@ index e227590..21c4fec 100644
 +    }
 +}
 diff --git a/src/vulkan/instance.rs b/src/vulkan/instance.rs
-index 1775875..2eca1a9 100644
+index 1775875..cec4173 100644
 --- a/src/vulkan/instance.rs
 +++ b/src/vulkan/instance.rs
 @@ -230,7 +230,14 @@ impl super::Instance {
@@ -2461,7 +2461,7 @@ index 1775875..2eca1a9 100644
              )
          }
      }
-@@ -1049,3 +1132,190 @@ impl crate::Surface for super::Surface {
+@@ -1049,3 +1132,199 @@ impl crate::Surface for super::Surface {
          };
      }
  }
@@ -2530,8 +2530,17 @@ index 1775875..2eca1a9 100644
 +        let mut extensions = Vec::new();
 +
 +        for path in paths {
-+            let lib = match unsafe { libloading::Library::new(path) } {
-+                Ok(lib) => lib,
++            // Match Vulkan-Loader's `RTLD_LAZY | RTLD_LOCAL` and add `RTLD_NODELETE` so
++            // `dlclose` never unmaps a driver (such as NVIDIA's GLX/Vulkan ICD) or runs
++            // its `.fini_array` destructors while the loader or another thread could still
++            // call into it.
++            let lib = match unsafe {
++                libloading::os::unix::Library::open(
++                    Some(path),
++                    libc::RTLD_LAZY | libc::RTLD_LOCAL | libc::RTLD_NODELETE,
++                )
++            } {
++                Ok(lib) => libloading::Library::from(lib),
 +                Err(err) => {
 +                    log::debug!("direct driver load failed for {}: {err}", path.display());
 +                    continue;
@@ -2653,28 +2662,29 @@ index 1775875..2eca1a9 100644
 +    }
 +}
 diff --git a/src/vulkan/mod.rs b/src/vulkan/mod.rs
-index 51e7414..31d4dd6 100644
+index 51e7414..b41baca 100644
 --- a/src/vulkan/mod.rs
 +++ b/src/vulkan/mod.rs
-@@ -177,6 +177,12 @@ pub struct InstanceShared {
-     /// It is associated with a `VkInstance` and its children,
-     /// except for a `VkPhysicalDevice` and its children.
-     instance_api_version: u32,
-+    /// Rune: ICD libraries opened for `VK_LUNARG_direct_driver_loading`. Stored before
-+    /// `drop_guard` (and dropped after `InstanceShared::drop` runs `vkDestroyInstance`) so
-+    /// every ICD stays mapped until the `VkInstance` and every object holding
-+    /// `Arc<InstanceShared>` have been destroyed.
+@@ -167,6 +167,13 @@ pub struct InstanceShared {
+     memory_budget_thresholds: wgt::MemoryBudgetThresholds,
+     debug_utils: Option<DebugUtils>,
+     get_physical_device_properties: Option<khr::get_physical_device_properties2::Instance>,
++    /// Rune: ICD libraries opened with `RTLD_NODELETE` for `VK_LUNARG_direct_driver_loading`.
++    /// `InstanceShared::drop` destroys `raw` (`vkDestroyInstance`) before any field drops;
++    /// declaring `_direct_drivers` before `entry` then releases our handle while `libvulkan.so`
++    /// is still open, and `RTLD_NODELETE` prevents `dlclose` from unmapping driver code or
++    /// running `.fini_array` destructors while the loader or another thread could still use it.
 +    #[cfg(target_os = "linux")]
 +    _direct_drivers: Vec<libloading::Library>,
- 
-     // The `drop_guard` field must be the last field of this struct so it is dropped last.
-     // Do not add new fields after it.
-@@ -196,6 +202,8 @@ impl fmt::Debug for InstanceShared {
-             has_nv_optimus,
-             android_sdk_version,
-             instance_api_version,
+     entry: ash::Entry,
+     has_nv_optimus: bool,
+     android_sdk_version: u32,
+@@ -192,6 +199,8 @@ impl fmt::Debug for InstanceShared {
+             memory_budget_thresholds,
+             debug_utils: _,
+             get_physical_device_properties: _,
 +            #[cfg(target_os = "linux")]
 +            _direct_drivers: _,
-             drop_guard: _,
-         } = self;
-         f.debug_struct("InstanceShared")
+             entry: _,
+             has_nv_optimus,
+             android_sdk_version,

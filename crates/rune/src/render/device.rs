@@ -690,6 +690,19 @@ pub(crate) fn discard_prewarm() {
     prewarm::discard();
 }
 
+/// Cancels any in-flight GPU warm-up and waits up to `SHUTDOWN_TIMEOUT` for its worker
+/// threads to exit before process teardown.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn shutdown_prewarm() -> super::warm_machine::ShutdownOutcome {
+    prewarm::shutdown(super::warm_machine::SHUTDOWN_TIMEOUT)
+}
+
+/// Re-opens a cleanly drained warm-up slot when a new event loop starts in the same process.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn reopen_prewarm() {
+    prewarm::reopen();
+}
+
 /// With `alloc-sites` (a measuring build), every heap dump also lists what the device holds by kind
 /// (`textures <count> <bytes>`, `buffers <count> <bytes>`, views, bind groups, pipelines, command
 /// encoders, shader modules, memory allocations) and its suballocator's allocations by label.

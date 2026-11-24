@@ -1197,8 +1197,17 @@ mod direct_drivers {
         let mut extensions = Vec::new();
 
         for path in paths {
-            let lib = match unsafe { libloading::Library::new(path) } {
-                Ok(lib) => lib,
+            // Match Vulkan-Loader's `RTLD_LAZY | RTLD_LOCAL` and add `RTLD_NODELETE` so
+            // `dlclose` never unmaps a driver (such as NVIDIA's GLX/Vulkan ICD) or runs
+            // its `.fini_array` destructors while the loader or another thread could still
+            // call into it.
+            let lib = match unsafe {
+                libloading::os::unix::Library::open(
+                    Some(path),
+                    libc::RTLD_LAZY | libc::RTLD_LOCAL | libc::RTLD_NODELETE,
+                )
+            } {
+                Ok(lib) => libloading::Library::from(lib),
                 Err(err) => {
                     log::debug!("direct driver load failed for {}: {err}", path.display());
                     continue;

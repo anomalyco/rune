@@ -453,8 +453,9 @@ fn direct_adapters_match_checks_pci_and_non_pci_socs() {
 ///    dropping the `Instance` handle keeps the `VkInstance` and loaded ICD libraries alive.
 /// 2. When the final `Arc<InstanceShared>` drops, `InstanceShared::drop` runs
 ///    `vkDestroyInstance` BEFORE any struct field drops.
-/// 3. Struct fields then drop in declaration order: `entry` (`libvulkan.so.1`), then
-///    `_direct_drivers` (`dlclose` on each ICD), then `drop_guard` last.
+/// 3. Struct fields then drop in declaration order: `_direct_drivers` (releasing handles opened
+///    with `RTLD_NODELETE` while `libvulkan.so.1` is still open), then `entry` (`libvulkan.so.1`),
+///    then `drop_guard` last.
 #[test]
 fn direct_driver_libraries_outlive_instance_and_child_objects_without_gpu() {
     let events: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
@@ -472,8 +473,8 @@ fn direct_driver_libraries_outlive_instance_and_child_objects_without_gpu() {
     // Mirrors wgpu_hal::vulkan::InstanceShared field order and Drop implementation.
     struct SharedModel {
         events: Arc<Mutex<Vec<&'static str>>>,
-        _entry: Token,
         _direct_drivers: Vec<Token>,
+        _entry: Token,
         drop_guard: Option<Token>,
     }
     impl Drop for SharedModel {
@@ -497,11 +498,11 @@ fn direct_driver_libraries_outlive_instance_and_child_objects_without_gpu() {
 
     let shared = Arc::new(SharedModel {
         events: Arc::clone(&events),
-        _entry: Token { label: "dlclose(libvulkan.so.1)", events: Arc::clone(&events) },
         _direct_drivers: vec![
-            Token { label: "dlclose(libvulkan_intel.so)", events: Arc::clone(&events) },
-            Token { label: "dlclose(libvulkan_intel_hasvk.so)", events: Arc::clone(&events) },
+            Token { label: "release_nodelete(libvulkan_intel.so)", events: Arc::clone(&events) },
+            Token { label: "release_nodelete(libvulkan_intel_hasvk.so)", events: Arc::clone(&events) },
         ],
+        _entry: Token { label: "dlclose(libvulkan.so.1)", events: Arc::clone(&events) },
         drop_guard: None,
     });
 
@@ -545,9 +546,9 @@ fn direct_driver_libraries_outlive_instance_and_child_objects_without_gpu() {
             "drop(Adapter)",
             "drop(Device)",
             "vkDestroyInstance",
+            "release_nodelete(libvulkan_intel.so)",
+            "release_nodelete(libvulkan_intel_hasvk.so)",
             "dlclose(libvulkan.so.1)",
-            "dlclose(libvulkan_intel.so)",
-            "dlclose(libvulkan_intel_hasvk.so)",
         ]
     );
 }
