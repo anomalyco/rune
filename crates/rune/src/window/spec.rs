@@ -176,7 +176,7 @@ impl WindowOptions {
         if let Some((x, y)) = self.position { attrs = attrs.with_position(PhysicalPosition::new(x, y)); }
         if let Some((w, h)) = self.physical_size { attrs = attrs.with_inner_size(PhysicalSize::new(w, h)); }
         #[cfg(target_os = "windows")]
-        if self.transparent && needs_no_redirection_bitmap(true, crate::render::Gpu::dx12_presentation().0) {
+        if self.transparent && needs_no_redirection_bitmap(true, crate::render::Gpu::dx12_swapchain_kind()) {
             use winit::platform::windows::WindowAttributesExtWindows;
             // DirectComposition draws transparent windows (`Gpu::instance`); without a redirection
             // bitmap nothing beneath the swapchain paints opaque pixels behind translucent ones.
@@ -188,13 +188,13 @@ impl WindowOptions {
 }
 
 /// Whether a Windows window should set `WS_EX_NOREDIRECTIONBITMAP`: only when the window is
-/// transparent and DirectComposition is active.
+/// transparent and DirectComposition (`DxgiFromVisual`) is active.
 #[cfg(any(target_os = "windows", test))]
 pub(crate) const fn needs_no_redirection_bitmap(
     transparent: bool,
-    presentation: crate::gpu::fallback::Presentation,
+    swapchain: wgpu::Dx12SwapchainKind,
 ) -> bool {
-    transparent && matches!(presentation, crate::gpu::fallback::Presentation::DirectComposition)
+    transparent && matches!(swapchain, wgpu::Dx12SwapchainKind::DxgiFromVisual)
 }
 
 /// AppKit properties for an ordinary window, reapplied on native recreation.

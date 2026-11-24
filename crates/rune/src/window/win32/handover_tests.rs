@@ -1,4 +1,4 @@
-use super::{handover_fallback_action, warm_frame};
+use super::warm_frame;
 use crate::render::{Gpu, Instance, KIND_RECT, NO_CLIP, Renderer};
 
 fn rect_instance() -> Instance {
@@ -37,30 +37,4 @@ fn warm_frame_rebuilds_renderer_for_target_format() {
         assert_eq!(renderer.format(), target);
         assert_eq!(renderer.srgb_blend(), srgb);
     }
-}
-
-#[test]
-fn handover_error_fallback_only_switches_when_dcomp_unavailable_and_not_pinned() {
-    use crate::gpu::fallback::{Action, Policy, PresentationPolicy};
-    use crate::platform::win32::dcomp_handover::HandoverError;
-
-    let unavailable = HandoverError::Unavailable("dcomp.dll did not load".into());
-    let other = HandoverError::Other("DCompositionCreateDevice2: E_OUTOFMEMORY".into());
-
-    assert_eq!(
-        handover_fallback_action(Policy::Automatic, PresentationPolicy::Automatic, &unavailable),
-        Action::SwitchToHwnd,
-    );
-    assert_eq!(
-        handover_fallback_action(Policy::Pinned, PresentationPolicy::Automatic, &unavailable),
-        Action::SwitchToHwnd,
-    );
-    assert_eq!(
-        handover_fallback_action(Policy::Automatic, PresentationPolicy::Pinned, &unavailable),
-        Action::Stop,
-    );
-    assert_eq!(
-        handover_fallback_action(Policy::Automatic, PresentationPolicy::Automatic, &other),
-        Action::Stop,
-    );
 }

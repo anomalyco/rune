@@ -219,7 +219,7 @@ impl OverlayCore {
         let reused = pooled.and_then(|(gpu, translucent)| make(&gpu.instance).filter(|s| crate::render::translucency::serves(&gpu, s, features, translucent)).map(|s| (gpu, s)));
         let (w, h) = ((self.at.size.0 * scale).round() as u32, (self.at.size.1 * scale).round() as u32);
         let srgb_blend = app.rt().srgb_blend();
-        let make_surface = |instance: &wgpu::Instance, _| make(instance).ok_or_else(|| "could not create its GPU surface".to_owned());
+        let make_surface = |instance: &wgpu::Instance| make(instance).ok_or_else(|| "could not create its GPU surface".to_owned());
         let setup_surface = |gpu: &Gpu, surface: &wgpu::Surface<'_>, existing: Option<Renderer>| -> Result<_, crate::render::SurfaceSetupError> {
             let (mut config, translucent) = crate::window::surface_config(surface, &gpu.adapter, (w, h), srgb_blend)
                 .ok_or_else(|| crate::render::SurfaceSetupError::unsupported("the GPU adapter can't present to this overlay"))?;
@@ -261,12 +261,8 @@ impl OverlayCore {
                 match setup_surface(&gpu, &surface, own_renderer) {
                     Ok(configured) => { self.gpu = Some(gpu); (surface, configured, had_own) }
                     Err(err) => {
-                        if crate::gpu::fallback::decide_with_presentation(
-                            Gpu::env_fallback_policy(),
-                            gpu.presentation(),
-                            crate::gpu::fallback::PresentationPolicy::Pinned,
-                            err.kind,
-                        ) != crate::gpu::fallback::Action::MoveOn
+                        if crate::gpu::fallback::decide(Gpu::env_fallback_policy(), err.kind)
+                            != crate::gpu::fallback::Decision::MoveOn
                         {
                             if err.kind == crate::gpu::fallback::Failure::DeviceLost {
                                 self.gpu = None;
@@ -278,7 +274,6 @@ impl OverlayCore {
                             return None;
                         }
                         let instance = gpu.instance.clone();
-                        let gpu_pres = gpu.presentation();
                         let first_info = gpu.adapter.get_info();
                         let excluded = Gpu::candidate_info(0, &gpu.adapter, Some(&surface));
                         drop((surface, gpu));
@@ -287,7 +282,7 @@ impl OverlayCore {
                         app.release_compositor_gpu();
                         *self.gpu_pool.borrow_mut() = Weak::default();
                         let (gpu, surface, configured) = match Gpu::for_surface_setup_excluding(
-                            instance, gpu_pres, crate::render::PresentationFallback::Forbid, excluded, first_info, err.kind, err.message, features, true, make_surface,
+                            instance, excluded, first_info, err.kind, err.message, features, true, make_surface,
                             |gpu, surface| setup_surface(gpu, surface, None),
                         ) {
                             Ok(made) => made,
@@ -313,7 +308,6 @@ impl OverlayCore {
                 let made = Gpu::for_surface_setup(
                     features,
                     true,
-                    crate::render::PresentationFallback::Forbid,
                     make_surface,
                     setup_surface,
                 );

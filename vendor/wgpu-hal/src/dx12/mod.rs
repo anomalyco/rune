@@ -575,7 +575,6 @@ impl Instance {
             swap_chain: RwLock::new(None),
             options: self.options.clone(),
             hdr_source: None,
-            dcomp_unavailable: core::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -595,7 +594,6 @@ impl Instance {
             swap_chain: RwLock::new(None),
             options: self.options.clone(),
             hdr_source: None,
-            dcomp_unavailable: core::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -614,7 +612,6 @@ impl Instance {
             swap_chain: RwLock::new(None),
             options: self.options.clone(),
             hdr_source: None,
-            dcomp_unavailable: core::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -662,10 +659,6 @@ pub struct Surface {
     /// HDR-info source for HWND-backed targets; `None` for composition /
     /// SwapChainPanel / surface-handle targets, which have no monitor identity.
     hdr_source: Option<auxil::dxgi::hdr::DxgiHdrSource>,
-    /// Rune: set when DirectComposition is unavailable (`CreateSwapChainForComposition` returned
-    /// `E_NOTIMPL`, or `dcomp.dll` / `DCompositionCreateDevice2` / `CreateTargetForHwnd` failed)
-    /// because `wgpu-core` collapses `SurfaceError::Other` to `InvalidSurface`.
-    dcomp_unavailable: core::sync::atomic::AtomicBool,
 }
 
 unsafe impl Send for Surface {}
@@ -683,14 +676,6 @@ impl Surface {
             sc.dirty.clear();
             sc.dirty.extend_from_slice(rects);
         }
-    }
-
-    /// Rune: whether the last `configure` failed because DirectComposition is unavailable on this
-    /// system (`CreateSwapChainForComposition` returned `E_NOTIMPL`, or `dcomp.dll` /
-    /// `DCompositionCreateDevice2` / `CreateTargetForHwnd` failed).
-    pub fn dcomp_unavailable(&self) -> bool {
-        self.dcomp_unavailable
-            .load(core::sync::atomic::Ordering::Acquire)
     }
 
     /// Returns the waitable handle associated with this swap chain, if any.
@@ -1818,8 +1803,6 @@ impl crate::Surface for Surface {
         device: &Device,
         config: &crate::SurfaceConfiguration,
     ) -> Result<(), crate::SurfaceError> {
-        self.dcomp_unavailable
-            .store(false, core::sync::atomic::Ordering::Release);
         let mut flags = Dxgi::DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
         // We always set ALLOW_TEARING on the swapchain no matter
         // what kind of swapchain we want because ResizeBuffers
@@ -1931,21 +1914,7 @@ impl crate::Surface for Surface {
 
                 let swap_chain1 = swap_chain1.map_err(|err| {
                     log::error!("SwapChain creation error: {err}");
-                    // Rune: distinguish unimplemented DirectComposition (Wine/Proton) from
-                    // transient OOM or device loss so Rune can fall back to an HWND swap chain.
-                    if matches!(
-                        self.target,
-                        SurfaceTarget::Visual(_)
-                            | SurfaceTarget::VisualFromWndHandle { .. }
-                            | SurfaceTarget::SwapChainPanel(_)
-                    ) && err.code() == Foundation::E_NOTIMPL
-                    {
-                        self.dcomp_unavailable
-                            .store(true, core::sync::atomic::Ordering::Release);
-                        crate::SurfaceError::Other("CreateSwapChainForComposition: E_NOTIMPL")
-                    } else {
-                        crate::SurfaceError::Other("swapchain creation")
-                    }
+                    crate::SurfaceError::Other("swapchain creation")
                 })?;
 
                 match &self.target {
@@ -1956,23 +1925,7 @@ impl crate::Surface for Surface {
                     } => {
                         let mut dcomp_state = dcomp_state.lock();
                         let dcomp_state =
-                            unsafe { dcomp_state.get_or_init(&device.dcomp_lib, handle) }
-                                .map_err(|err| {
-                                    if matches!(
-                                        err,
-                                        crate::SurfaceError::Other(
-                                            "Error loading dcomp.dll"
-                                                | "DirectComposition::DCompositionCreateDevice2"
-                                                | "IDCompositionDevice::CreateTargetForHwnd"
-                                        ) | crate::SurfaceError::Device(
-                                            crate::DeviceError::Unexpected
-                                        )
-                                    ) {
-                                        self.dcomp_unavailable
-                                            .store(true, core::sync::atomic::Ordering::Release);
-                                    }
-                                    err
-                                })?;
+                            unsafe { dcomp_state.get_or_init(&device.dcomp_lib, handle) }?;
                         // Set the new swap chain as the content for the backing visual
                         // and commit the changes to the composition visual tree.
                         {

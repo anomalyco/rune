@@ -2,16 +2,12 @@ use super::Gpu;
 
 #[test]
 fn default_instance_descriptor_hides_noncompliant_adapters() {
-    let desc = Gpu::instance_descriptor(
-        wgpu::Backends::all(),
-        false,
-        wgpu::Dx12SwapchainKind::DxgiFromVisual,
-    );
+    let desc = Gpu::instance_descriptor(wgpu::Backends::all(), false);
     assert!(!desc.flags.contains(wgpu::InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER));
     assert!(!desc.flags.contains(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL));
     assert_eq!(
         desc.backend_options.dx12.presentation_system,
-        wgpu::Dx12SwapchainKind::DxgiFromVisual,
+        Gpu::dx12_swapchain_kind(),
     );
     assert!(matches!(
         desc.backend_options.dx12.latency_waitable_object,
@@ -22,58 +18,71 @@ fn default_instance_descriptor_hides_noncompliant_adapters() {
 
 #[test]
 fn fallback_instance_descriptor_allows_noncompliant_adapters() {
-    let desc = Gpu::instance_descriptor(
-        wgpu::Backends::all(),
-        true,
-        wgpu::Dx12SwapchainKind::DxgiFromVisual,
-    );
+    let desc = Gpu::instance_descriptor(wgpu::Backends::all(), true);
     assert!(desc.flags.contains(wgpu::InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER));
     assert!(!desc.flags.contains(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL));
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn instance_descriptor_sets_requested_dx12_swapchain_kind() {
-    let visual = Gpu::instance_descriptor(
-        wgpu::Backends::DX12,
-        false,
-        wgpu::Dx12SwapchainKind::DxgiFromVisual,
-    );
-    let hwnd = Gpu::instance_descriptor(
-        wgpu::Backends::DX12,
-        false,
-        wgpu::Dx12SwapchainKind::DxgiFromHwnd,
-    );
-    assert_eq!(
-        visual.backend_options.dx12.presentation_system,
-        wgpu::Dx12SwapchainKind::DxgiFromVisual,
-    );
-    assert_eq!(
-        hwnd.backend_options.dx12.presentation_system,
-        wgpu::Dx12SwapchainKind::DxgiFromHwnd,
-    );
+#[ignore]
+fn dx12_presentation_system_env_child() {
+    let expected = match std::env::var("RUNE_TEST_EXPECT_SWAPCHAIN").as_deref() {
+        Ok("hwnd") => wgpu::Dx12SwapchainKind::DxgiFromHwnd,
+        Ok("visual") => wgpu::Dx12SwapchainKind::DxgiFromVisual,
+        other => panic!("unexpected RUNE_TEST_EXPECT_SWAPCHAIN: {other:?}"),
+    };
+    assert_eq!(Gpu::dx12_swapchain_kind(), expected);
+    let desc = Gpu::instance_descriptor(wgpu::Backends::DX12, false);
+    assert_eq!(desc.backend_options.dx12.presentation_system, expected);
     assert!(matches!(
-        hwnd.backend_options.dx12.latency_waitable_object,
+        desc.backend_options.dx12.latency_waitable_object,
         wgpu::Dx12UseFrameLatencyWaitableObject::DontWait,
     ));
-    assert!(matches!(hwnd.backend_options.dx12.shader_compiler, wgpu::Dx12Compiler::Fxc));
+    assert!(matches!(desc.backend_options.dx12.shader_compiler, wgpu::Dx12Compiler::Fxc));
+    #[cfg(target_os = "windows")]
+    {
+        let instance = Gpu::instance();
+        let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::DX12));
+        assert!(!adapters.is_empty(), "DX12 instance ({expected:?}) must enumerate adapters offscreen");
+    }
 }
 
-#[cfg(target_os = "windows")]
+/// Verifies wgpu's `WGPU_DX12_PRESENTATION_SYSTEM` override (`Dx12SwapchainKind::with_env`) in
+/// isolated child processes so parallel tests never race on environment variables: unset defaults
+/// to DirectComposition (`DxgiFromVisual`), `hwnd` selects a plain HWND swap chain
+/// (`DxgiFromHwnd`) and enumerates DX12 adapters offscreen on Windows, and `visual` selects
+/// DirectComposition explicitly.
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn dx12_instance_cache_builds_both_visual_and_hwnd_instances_offscreen() {
-    use crate::gpu::fallback::Presentation;
-
-    let visual_a = Gpu::wgpu_instance_for_presentation(Presentation::DirectComposition);
-    let visual_b = Gpu::wgpu_instance_for_presentation(Presentation::DirectComposition);
-    let hwnd_a = Gpu::wgpu_instance_for_presentation(Presentation::PlainHwnd);
-    let hwnd_b = Gpu::wgpu_instance_for_presentation(Presentation::PlainHwnd);
-
-    // Both presentation kinds enumerate DX12 adapters cleanly offscreen without opening a window.
-    let visual_adapters = pollster::block_on(visual_a.enumerate_adapters(wgpu::Backends::DX12));
-    let hwnd_adapters = pollster::block_on(hwnd_a.enumerate_adapters(wgpu::Backends::DX12));
-    assert!(!visual_adapters.is_empty(), "DX12 DirectComposition instance must see adapters");
-    assert!(!hwnd_adapters.is_empty(), "DX12 PlainHwnd instance must see adapters");
-    let _ = (visual_b, hwnd_b);
+fn dx12_presentation_system_env_override_selects_hwnd_or_visual() {
+    let exe = std::env::current_exe().expect("test binary path");
+    for (env_value, expected) in [(None, "visual"), (Some("hwnd"), "hwnd"), (Some("visual"), "visual")] {
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.args([
+            "--exact",
+            "render::device::tests::dx12_presentation_system_env_child",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("RUNE_TEST_EXPECT_SWAPCHAIN", expected);
+        match env_value {
+            Some(val) => {
+                cmd.env("WGPU_DX12_PRESENTATION_SYSTEM", val);
+            }
+            None => {
+                cmd.env_remove("WGPU_DX12_PRESENTATION_SYSTEM");
+            }
+        }
+        let output = cmd.output().expect("spawn child test");
+        assert!(
+            output.status.success(),
+            "env={env_value:?} expected={expected} failed: status={:?}\nstdout={}\nstderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
 }
 
 #[test]
@@ -119,12 +128,12 @@ fn select_wgpu_instance_keeps_compliant_when_neither_has_adapters() {
 }
 
 /// Real offscreen multi-adapter fallback test (no native window): refusing every hardware
-/// adapter with `SurfaceRefused` walks remaining hardware adapters before WARP (`DeviceType::Cpu`),
-/// drops/recreates the surface between attempts, and NEVER switches to PlainHwnd.
+/// adapter with `SurfaceRefused` walks remaining hardware adapters before WARP (`DeviceType::Cpu`)
+/// and drops/recreates the surface between attempts.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn surface_refused_falls_back_across_real_adapters_hardware_before_software() {
-    use crate::gpu::fallback::{Failure, Policy, Presentation, PresentationPolicy};
+    use crate::gpu::fallback::{Failure, Policy};
     use super::super::SurfaceSetupError;
 
     let instance = Gpu::instance();
@@ -136,23 +145,15 @@ fn surface_refused_falls_back_across_real_adapters_hardware_before_software() {
 
     let mut tried = Vec::new();
     let mut surfaces_made = 0usize;
-    let mut hwnd_switches = 0usize;
     let res = Gpu::try_setup_on(
         instance,
         (),
         Some(Policy::Automatic),
-        Presentation::DirectComposition,
-        PresentationPolicy::Automatic,
         wgpu::Features::empty(),
         false,
-        |_, pres| {
-            assert_eq!(pres, Presentation::DirectComposition);
+        |_| {
             surfaces_made += 1;
             Ok(())
-        },
-        |_| {
-            hwnd_switches += 1;
-            Gpu::instance()
         },
         |_| None,
         |gpu, _| {
@@ -174,8 +175,6 @@ fn surface_refused_falls_back_across_real_adapters_hardware_before_software() {
         },
     );
     let (gpu, (), ()) = res.expect("fallback chain must reach a working adapter");
-    assert_eq!(hwnd_switches, 0, "generic SurfaceRefused must never switch to PlainHwnd");
-    assert_eq!(gpu.presentation(), Presentation::DirectComposition);
     assert!(tried.len() >= 2, "expected at least one fallback attempt, tried: {tried:?}");
     assert!(surfaces_made >= 1, "a fresh surface must be created after a refused configuration");
     if has_cpu {
@@ -186,150 +185,66 @@ fn surface_refused_falls_back_across_real_adapters_hardware_before_software() {
     }
 }
 
-/// Real offscreen test (no native window): when DirectComposition is unavailable
-/// (`Failure::DirectCompositionUnavailable`), the chain switches immediately to
-/// `Presentation::PlainHwnd` and retries on the SAME first adapter without walking remaining
-/// adapters or WARP first.
-#[cfg(not(target_arch = "wasm32"))]
-#[test]
-fn dcomp_unavailable_switches_to_hwnd_on_same_first_adapter_without_walking_adapters() {
-    use crate::gpu::fallback::{Failure, Policy, Presentation, PresentationPolicy};
-    use super::super::SurfaceSetupError;
-
-    let visual_instance = Gpu::instance_for_presentation(
-        wgpu::Features::empty(),
-        Presentation::DirectComposition,
-    );
-    let hwnd_instance = Gpu::instance_for_presentation(
-        wgpu::Features::empty(),
-        Presentation::PlainHwnd,
-    );
-
-    let mut attempts = Vec::new();
-    let mut surfaces_made = Vec::new();
-    let mut hwnd_switches = 0usize;
-    let res = Gpu::try_setup_on(
-        visual_instance,
-        (),
-        Some(Policy::Automatic),
-        Presentation::DirectComposition,
-        PresentationPolicy::Automatic,
-        wgpu::Features::empty(),
-        false,
-        |_, pres| {
-            surfaces_made.push(pres);
-            Ok(())
-        },
-        |reason| {
-            assert!(reason.contains("E_NOTIMPL"), "reason={reason}");
-            hwnd_switches += 1;
-            hwnd_instance.clone()
-        },
-        |_| None,
-        |gpu, _| {
-            let info = gpu.adapter.get_info();
-            attempts.push((gpu.presentation(), info.name.clone(), info.device_type));
-            if gpu.presentation() == Presentation::DirectComposition {
-                return Err(SurfaceSetupError {
-                    kind: Failure::DirectCompositionUnavailable,
-                    message: "CreateSwapChainForComposition: E_NOTIMPL".into(),
-                });
-            }
-            Ok(99u32)
-        },
-    );
-    let (gpu, (), value) = res.expect("PlainHwnd retry must succeed on the same first adapter");
-    assert_eq!(value, 99);
-    assert_eq!(hwnd_switches, 1);
-    assert_eq!(surfaces_made, vec![Presentation::PlainHwnd]);
-    assert_eq!(gpu.presentation(), Presentation::PlainHwnd);
-    assert_eq!(
-        attempts.len(),
-        2,
-        "must try first adapter on DComp then immediately retry on PlainHwnd without walking other adapters: {attempts:?}"
-    );
-    assert_eq!(attempts[0].0, Presentation::DirectComposition);
-    assert_eq!(attempts[1].0, Presentation::PlainHwnd);
-    assert_eq!(attempts[0].1, attempts[1].1, "must keep the same first hardware adapter");
-    assert_eq!(attempts[0].2, attempts[1].2);
-}
-
-/// Launch-speed guarantee on real Windows: when the first adapter succeeds on DirectComposition,
-/// no fallback adapters are tried, `make_surface` is never called a second time, `switch_to_hwnd`
-/// is never called, and `DCOMP_UNAVAILABLE` stays false.
+/// Launch-speed guarantee on real Windows: when the first adapter succeeds, no fallback adapters
+/// are tried, `make_surface` is never called a second time, and the default swap-chain kind stays
+/// DirectComposition (`DxgiFromVisual`).
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn happy_path_first_adapter_does_no_fallback_work() {
-    use crate::gpu::fallback::{Policy, Presentation, PresentationPolicy};
+    use crate::gpu::fallback::Policy;
 
     let instance = Gpu::instance();
     let mut tried = 0usize;
     let mut extra_surfaces = 0usize;
-    let mut hwnd_switches = 0usize;
     let res = Gpu::try_setup_on(
         instance,
         (),
         Some(Policy::Automatic),
-        Presentation::DirectComposition,
-        PresentationPolicy::Automatic,
         wgpu::Features::empty(),
         false,
-        |_, _| {
+        |_| {
             extra_surfaces += 1;
             Ok(())
         },
-        |_| {
-            hwnd_switches += 1;
-            Gpu::instance()
-        },
         |_| None,
-        |gpu, _| {
-            assert_eq!(gpu.presentation(), Presentation::DirectComposition);
+        |_, _| {
             tried += 1;
             Ok(42u32)
         },
     );
-    let (gpu, (), value) = res.expect("first adapter succeeds");
+    let (_gpu, (), value) = res.expect("first adapter succeeds");
     assert_eq!(value, 42);
-    assert_eq!(gpu.presentation(), Presentation::DirectComposition);
     assert_eq!(tried, 1);
     assert_eq!(extra_surfaces, 0);
-    assert_eq!(hwnd_switches, 0);
-    assert!(!Gpu::dcomp_unavailable());
+    if std::env::var_os("WGPU_DX12_PRESENTATION_SYSTEM").is_none() {
+        assert_eq!(Gpu::dx12_swapchain_kind(), wgpu::Dx12SwapchainKind::DxgiFromVisual);
+    }
 }
 
-/// Transient OOM, device loss, pinned (named) adapters, and pinned presentation
-/// (`WGPU_DX12_PRESENTATION_SYSTEM=visual` or overlays) never switch to another adapter or HWND.
+/// Transient OOM, device loss, and pinned (named) adapter failures never switch to another
+/// adapter.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn transient_and_pinned_failures_do_not_switch_real_adapters() {
-    use crate::gpu::fallback::{Failure, Policy, Presentation, PresentationPolicy};
+    use crate::gpu::fallback::{Failure, Policy};
     use super::super::SurfaceSetupError;
 
-    for (policy, pres_policy, kind) in [
-        (Policy::Automatic, PresentationPolicy::Automatic, Failure::OutOfMemory),
-        (Policy::Automatic, PresentationPolicy::Automatic, Failure::DeviceLost),
-        (Policy::Pinned, PresentationPolicy::Automatic, Failure::SurfaceRefused),
-        (Policy::Automatic, PresentationPolicy::Pinned, Failure::DirectCompositionUnavailable),
+    for (policy, kind) in [
+        (Policy::Automatic, Failure::OutOfMemory),
+        (Policy::Automatic, Failure::DeviceLost),
+        (Policy::Pinned, Failure::SurfaceRefused),
     ] {
         let mut tried = 0usize;
         let mut extra_surfaces = 0usize;
-        let mut hwnd_switches = 0usize;
         let err = Gpu::try_setup_on(
             Gpu::instance(),
             (),
             Some(policy),
-            Presentation::DirectComposition,
-            pres_policy,
             wgpu::Features::empty(),
             false,
-            |_, _| {
+            |_| {
                 extra_surfaces += 1;
                 Ok(())
-            },
-            |_| {
-                hwnd_switches += 1;
-                Gpu::instance()
             },
             |_| None,
             |_, _| {
@@ -339,37 +254,32 @@ fn transient_and_pinned_failures_do_not_switch_real_adapters() {
         )
         .err()
         .expect("must stop with error");
-        assert_eq!(err.kind, kind, "policy={policy:?}, pres_policy={pres_policy:?}, kind={kind:?}");
+        assert_eq!(err.kind, kind, "policy={policy:?}, kind={kind:?}");
         assert_eq!(err.message, "stop here");
         assert_eq!(tried, 1, "must not try a second adapter for policy={policy:?}, kind={kind:?}");
         assert_eq!(extra_surfaces, 0);
-        assert_eq!(hwnd_switches, 0);
     }
 }
 
-/// When every adapter refuses configuration, the chain returns the first error so `Host::create`
-/// hands it to `Life::fail_create` / `run()` (PR #1762).
+/// When every adapter refuses configuration (such as missing DirectComposition without the explicit
+/// switch), the chain walks every adapter, preserves `Failure::SurfaceRefused` and the first
+/// error, and `Host::create` hands it (with the Wine hint when under Wine) to `Life::fail_create`
+/// / `run()` (PR #1762) with no blank window and no panic.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn exhausting_every_real_adapter_returns_first_error() {
-    use crate::gpu::fallback::{Failure, Policy, Presentation, PresentationPolicy};
-    use super::super::SurfaceSetupError;
+    use crate::gpu::fallback::{Failure, Policy};
+    use crate::window::{Life, finish_run};
+    use super::super::{SurfaceSetupError, surface_setup::append_wine_hwnd_hint};
 
     let mut tried = 0usize;
-    let mut hwnd_switches = 0usize;
     let err = Gpu::try_setup_on(
         Gpu::instance(),
         (),
         Some(Policy::Automatic),
-        Presentation::DirectComposition,
-        PresentationPolicy::Automatic,
         wgpu::Features::empty(),
         false,
-        |_, _| Ok(()),
-        |_| {
-            hwnd_switches += 1;
-            Gpu::instance()
-        },
+        |_| Ok(()),
         |_| None,
         |gpu, _| {
             tried += 1;
@@ -382,8 +292,43 @@ fn exhausting_every_real_adapter_returns_first_error() {
     .err()
     .expect("all adapters refused");
     assert!(tried >= 1);
-    assert_eq!(hwnd_switches, 0);
+    assert_eq!(err.kind, Failure::SurfaceRefused);
     assert!(err.message.starts_with("refused #1 on "), "got: {}", err.message);
+
+    // Mirror the error reaching AppHandle::window_error and App::try_run under Wine.
+    let hinted = append_wine_hwnd_hint(err.message.clone(), wgpu::Dx12SwapchainKind::DxgiFromVisual, true);
+    assert!(hinted.contains("WGPU_DX12_PRESENTATION_SYSTEM=hwnd"), "got: {hinted}");
+    let app = crate::App::new(crate::AppSpec::new("test", (40.0, 30.0), || (), |_, _| crate::el()));
+    let handle = app.handle();
+    let (_, _, shared, _) = app.into_parts(None);
+    shared.core.set_window_error(Some(hinted.clone()));
+    assert_eq!(handle.window_error().as_deref(), Some(hinted.as_str()));
+
+    let mut life = Life::Unopened;
+    assert!(life.fail_create(false, false), "first window failure ends try_run");
+    let startup_error = format!("could not create the window main: {hinted}");
+    assert_eq!(finish_run(Ok(()), None, Some(startup_error.clone())), Err(startup_error));
+}
+
+#[test]
+fn wine_hwnd_hint_only_appended_for_visual_under_wine() {
+    use super::super::surface_setup::append_wine_hwnd_hint;
+    use wgpu::Dx12SwapchainKind::{DxgiFromHwnd, DxgiFromVisual};
+
+    let base = "the window's GPU surface refused its configuration: Invalid surface";
+    let hinted = append_wine_hwnd_hint(base.into(), DxgiFromVisual, true);
+    assert!(hinted.starts_with(base));
+    assert!(hinted.contains("WGPU_DX12_PRESENTATION_SYSTEM=hwnd"), "got: {hinted}");
+
+    assert_eq!(append_wine_hwnd_hint(base.into(), DxgiFromVisual, false), base);
+    assert_eq!(append_wine_hwnd_hint(base.into(), DxgiFromHwnd, true), base);
+    assert_eq!(append_wine_hwnd_hint(base.into(), DxgiFromHwnd, false), base);
+
+    #[cfg(target_os = "windows")]
+    assert!(
+        !crate::platform::win32::running_under_wine(),
+        "real Windows ntdll.dll must not report wine_get_version"
+    );
 }
 
 /// Offscreen software fallback picks `DeviceType::Cpu` (WARP on Windows) and builds a live
@@ -409,7 +354,7 @@ fn software_fallback_picks_cpu_adapter_offscreen() {
 }
 
 #[test]
-fn configure_error_classification_separates_oom_from_refusal_and_dcomp_unavailable() {
+fn configure_error_classification_separates_oom_from_refusal() {
     use crate::window::{ConfigureErrorKind, classify_scope_error};
 
     let mk_oom = || wgpu::Error::OutOfMemory { source: Box::new(std::io::Error::other("oom")) };
@@ -422,49 +367,33 @@ fn configure_error_classification_separates_oom_from_refusal_and_dcomp_unavailab
         description: "Invalid surface".into(),
     };
 
-    assert_eq!(classify_scope_error(None, None, None, false).map(|(k, _)| k), None);
-    assert_eq!(classify_scope_error(None, None, None, true).map(|(k, _)| k), None);
-    // OutOfMemory always wins, even if a HAL flag were set.
+    assert_eq!(classify_scope_error(None, None, None).map(|(k, _)| k), None);
     assert_eq!(
-        classify_scope_error(Some(mk_oom()), Some(mk_internal()), None, true).map(|(k, _)| k),
+        classify_scope_error(Some(mk_oom()), Some(mk_internal()), None).map(|(k, _)| k),
         Some(ConfigureErrorKind::OutOfMemory),
     );
-    // Without dcomp_unavailable, internal and validation errors stay Refused.
     assert_eq!(
-        classify_scope_error(None, Some(mk_internal()), Some(mk_validation()), false).map(|(k, _)| k),
+        classify_scope_error(None, Some(mk_internal()), Some(mk_validation())).map(|(k, _)| k),
         Some(ConfigureErrorKind::Refused),
     );
     assert_eq!(
-        classify_scope_error(None, None, Some(mk_validation()), false).map(|(k, _)| k),
+        classify_scope_error(None, None, Some(mk_validation())).map(|(k, _)| k),
         Some(ConfigureErrorKind::Refused),
-    );
-    // With dcomp_unavailable, wgpu-core's InvalidSurface validation error classifies as DirectCompositionUnavailable.
-    assert_eq!(
-        classify_scope_error(None, None, Some(mk_validation()), true).map(|(k, _)| k),
-        Some(ConfigureErrorKind::DirectCompositionUnavailable),
-    );
-    assert_eq!(
-        classify_scope_error(None, Some(mk_internal()), None, true).map(|(k, _)| k),
-        Some(ConfigureErrorKind::DirectCompositionUnavailable),
     );
     assert_eq!(rune_gpu::fallback::Failure::from(ConfigureErrorKind::DeviceLost), rune_gpu::fallback::Failure::DeviceLost);
     assert_eq!(rune_gpu::fallback::Failure::from(ConfigureErrorKind::OutOfMemory), rune_gpu::fallback::Failure::OutOfMemory);
-    assert_eq!(
-        rune_gpu::fallback::Failure::from(ConfigureErrorKind::DirectCompositionUnavailable),
-        rune_gpu::fallback::Failure::DirectCompositionUnavailable,
-    );
     assert_eq!(rune_gpu::fallback::Failure::from(ConfigureErrorKind::Refused), rune_gpu::fallback::Failure::SurfaceRefused);
 }
 
 #[test]
-fn window_redirection_bitmap_omitted_on_plain_hwnd_fallback() {
-    use crate::gpu::fallback::Presentation;
+fn window_redirection_bitmap_omitted_on_plain_hwnd_swapchain() {
     use crate::window::spec::needs_no_redirection_bitmap;
+    use wgpu::Dx12SwapchainKind::{DxgiFromHwnd, DxgiFromVisual};
 
-    assert!(needs_no_redirection_bitmap(true, Presentation::DirectComposition));
-    assert!(!needs_no_redirection_bitmap(true, Presentation::PlainHwnd));
-    assert!(!needs_no_redirection_bitmap(false, Presentation::DirectComposition));
-    assert!(!needs_no_redirection_bitmap(false, Presentation::PlainHwnd));
+    assert!(needs_no_redirection_bitmap(true, DxgiFromVisual));
+    assert!(!needs_no_redirection_bitmap(true, DxgiFromHwnd));
+    assert!(!needs_no_redirection_bitmap(false, DxgiFromVisual));
+    assert!(!needs_no_redirection_bitmap(false, DxgiFromHwnd));
 }
 
 /// Real offscreen multi-adapter fallback test: when the first hardware adapter(s) reject Rune's
@@ -473,7 +402,7 @@ fn window_redirection_bitmap_omitted_on_plain_hwnd_fallback() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn rejected_classic_shader_falls_back_across_real_adapters_hardware_before_software() {
-    use crate::gpu::fallback::{Policy, Presentation, PresentationPolicy};
+    use crate::gpu::fallback::Policy;
     use super::super::{OFFSCREEN_FORMAT, Renderer, SurfaceSetupError, shader_check};
 
     let instance = Gpu::instance();
@@ -489,15 +418,12 @@ fn rejected_classic_shader_falls_back_across_real_adapters_hardware_before_softw
         instance,
         (),
         Some(Policy::Automatic),
-        Presentation::DirectComposition,
-        PresentationPolicy::Automatic,
         wgpu::Features::empty(),
         false,
-        |_, _| {
+        |_| {
             surfaces_made += 1;
             Ok(())
         },
-        |_| unreachable!("shader rejection must not switch DX12 presentation"),
         |_| None,
         |gpu, _| {
             let info = gpu.adapter.get_info();
@@ -529,7 +455,7 @@ fn rejected_classic_shader_falls_back_across_real_adapters_hardware_before_softw
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn pinned_adapter_rejected_shader_is_not_replaced() {
-    use crate::gpu::fallback::{Failure, Policy, Presentation, PresentationPolicy};
+    use crate::gpu::fallback::{Failure, Policy};
     use super::super::{OFFSCREEN_FORMAT, Renderer, SurfaceSetupError, shader_check};
 
     let mut tried = 0usize;
@@ -538,15 +464,12 @@ fn pinned_adapter_rejected_shader_is_not_replaced() {
         Gpu::instance(),
         (),
         Some(Policy::Pinned),
-        Presentation::DirectComposition,
-        PresentationPolicy::Automatic,
         wgpu::Features::empty(),
         false,
-        |_, _| {
+        |_| {
             extra_surfaces += 1;
             Ok(())
         },
-        |_| unreachable!("pinned shader rejection must not switch DX12 presentation"),
         |_| None,
         |gpu, _| {
             tried += 1;
@@ -569,7 +492,7 @@ fn pinned_adapter_rejected_shader_is_not_replaced() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn exhausting_every_adapter_on_rejected_shader_reaches_window_error_and_try_run() {
-    use crate::gpu::fallback::{Failure, Policy, Presentation, PresentationPolicy};
+    use crate::gpu::fallback::{Failure, Policy};
     use crate::window::{Life, finish_run};
     use super::super::{OFFSCREEN_FORMAT, Renderer, SurfaceSetupError, shader_check};
 
@@ -578,12 +501,9 @@ fn exhausting_every_adapter_on_rejected_shader_reaches_window_error_and_try_run(
         Gpu::instance(),
         (),
         Some(Policy::Automatic),
-        Presentation::DirectComposition,
-        PresentationPolicy::Automatic,
         wgpu::Features::empty(),
         false,
-        |_, _| Ok(()),
-        |_| unreachable!("shader rejection must not switch DX12 presentation"),
+        |_| Ok(()),
         |_| None,
         |gpu, _| {
             tried += 1;
@@ -653,14 +573,12 @@ fn headless_run_exits_nonzero_when_every_adapter_rejects_classic_shader() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !output.status.success() && output.status.code() == Some(2),
-        "headless run must exit non-zero (die = 2) on rejected shader, got {:?}, stderr:
-{stderr}",
+        "headless run must exit non-zero (die = 2) on rejected shader, got {:?}, stderr:\n{stderr}",
         output.status.code(),
     );
     assert!(
         stderr.contains("rejected Rune's shader"),
-        "expected shader error on stderr, got:
-{stderr}",
+        "expected shader error on stderr, got:\n{stderr}",
     );
     assert!(!snap.exists(), "failed headless run must not write a snap image");
 }
@@ -671,7 +589,7 @@ fn headless_run_exits_nonzero_when_every_adapter_rejects_classic_shader() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn direct_driver_pick_failure_widens_once_to_unlimited_instance() {
-    use crate::gpu::fallback::{Policy, Presentation, PresentationPolicy};
+    use crate::gpu::fallback::Policy;
 
     let mut empty_desc = wgpu::InstanceDescriptor::new_without_display_handle();
     empty_desc.backends = wgpu::Backends::empty();
@@ -684,15 +602,12 @@ fn direct_driver_pick_failure_widens_once_to_unlimited_instance() {
         restricted,
         (),
         Some(Policy::Automatic),
-        Presentation::DirectComposition,
-        PresentationPolicy::Pinned,
         wgpu::Features::empty(),
         false,
-        |_, _| {
+        |_| {
             surfaces_made += 1;
             Ok(())
         },
-        |_| Gpu::instance(),
         |_| {
             widen_calls += 1;
             Some(unlimited.clone())
@@ -712,7 +627,7 @@ fn direct_driver_pick_failure_widens_once_to_unlimited_instance() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn direct_driver_surface_refused_widens_once_and_never_widens_on_stop_or_happy_path() {
-    use crate::gpu::fallback::{Failure, Policy, Presentation, PresentationPolicy};
+    use crate::gpu::fallback::{Failure, Policy};
     use super::super::SurfaceSetupError;
 
     // 1. Exhausting adapters with SurfaceRefused triggers widen_instance exactly once and
@@ -723,15 +638,12 @@ fn direct_driver_surface_refused_widens_once_and_never_widens_on_stop_or_happy_p
         Gpu::instance(),
         (),
         Some(Policy::Automatic),
-        Presentation::DirectComposition,
-        PresentationPolicy::Pinned,
         wgpu::Features::empty(),
         false,
-        |_, _| {
+        |_| {
             surfaces_made += 1;
             Ok(())
         },
-        |_| Gpu::instance(),
         |reason| {
             assert!(reason.starts_with("refused #1"), "got reason={reason}");
             widen_calls += 1;
@@ -757,12 +669,9 @@ fn direct_driver_surface_refused_widens_once_and_never_widens_on_stop_or_happy_p
         Gpu::instance(),
         (),
         Some(Policy::Automatic),
-        Presentation::DirectComposition,
-        PresentationPolicy::Pinned,
         wgpu::Features::empty(),
         false,
-        |_, _| Ok(()),
-        |_| Gpu::instance(),
+        |_| Ok(()),
         |_| {
             happy_widens += 1;
             Some(Gpu::instance())
@@ -783,12 +692,9 @@ fn direct_driver_surface_refused_widens_once_and_never_widens_on_stop_or_happy_p
             Gpu::instance(),
             (),
             Some(policy),
-            Presentation::DirectComposition,
-            PresentationPolicy::Pinned,
             wgpu::Features::empty(),
             false,
-            |_, _| Ok(()),
-            |_| Gpu::instance(),
+            |_| Ok(()),
             |_| {
                 stop_widens += 1;
                 Some(Gpu::instance())

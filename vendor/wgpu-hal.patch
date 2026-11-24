@@ -542,18 +542,10 @@ index 63fb313..de341fb 100644
  
              if fence_value >= value {
 diff --git a/src/dx12/instance.rs b/src/dx12/instance.rs
-index fdb63bc..86ff414 100644
+index fdb63bc..5f64a80 100644
 --- a/src/dx12/instance.rs
 +++ b/src/dx12/instance.rs
-@@ -155,6 +155,7 @@ impl crate::Instance for super::Instance {
-                     swap_chain: RwLock::new(None),
-                     options: self.options.clone(),
-                     hdr_source: Some(auxil::dxgi::hdr::DxgiHdrSource::new(handle)),
-+                    dcomp_unavailable: core::sync::atomic::AtomicBool::new(false),
-                 })
-             }
-             _ => Err(crate::InstanceError::new(format!(
-@@ -187,3 +188,37 @@ impl crate::Instance for super::Instance {
+@@ -187,3 +187,37 @@ impl crate::Instance for super::Instance {
              .collect()
      }
  }
@@ -592,7 +584,7 @@ index fdb63bc..86ff414 100644
 +    }
 +}
 diff --git a/src/dx12/mod.rs b/src/dx12/mod.rs
-index 285d635..6b46b06 100644
+index 285d635..398264c 100644
 --- a/src/dx12/mod.rs
 +++ b/src/dx12/mod.rs
 @@ -92,7 +92,7 @@ mod suballocation;
@@ -645,31 +637,7 @@ index 285d635..6b46b06 100644
      }
  
      /// Will error with crate::DeviceError::Unexpected if DXGI 1.3 is not available.
-@@ -559,6 +575,7 @@ impl Instance {
-             swap_chain: RwLock::new(None),
-             options: self.options.clone(),
-             hdr_source: None,
-+            dcomp_unavailable: core::sync::atomic::AtomicBool::new(false),
-         }
-     }
- 
-@@ -578,6 +595,7 @@ impl Instance {
-             swap_chain: RwLock::new(None),
-             options: self.options.clone(),
-             hdr_source: None,
-+            dcomp_unavailable: core::sync::atomic::AtomicBool::new(false),
-         }
-     }
- 
-@@ -596,6 +614,7 @@ impl Instance {
-             swap_chain: RwLock::new(None),
-             options: self.options.clone(),
-             hdr_source: None,
-+            dcomp_unavailable: core::sync::atomic::AtomicBool::new(false),
-         }
-     }
- }
-@@ -615,6 +634,8 @@ struct SwapChain {
+@@ -615,6 +631,8 @@ struct SwapChain {
      present_mode: wgt::PresentMode,
      format: wgt::TextureFormat,
      size: wgt::Extent3d,
@@ -678,18 +646,7 @@ index 285d635..6b46b06 100644
  }
  
  enum SurfaceTarget {
-@@ -641,6 +662,10 @@ pub struct Surface {
-     /// HDR-info source for HWND-backed targets; `None` for composition /
-     /// SwapChainPanel / surface-handle targets, which have no monitor identity.
-     hdr_source: Option<auxil::dxgi::hdr::DxgiHdrSource>,
-+    /// Rune: set when DirectComposition is unavailable (`CreateSwapChainForComposition` returned
-+    /// `E_NOTIMPL`, or `dcomp.dll` / `DCompositionCreateDevice2` / `CreateTargetForHwnd` failed)
-+    /// because `wgpu-core` collapses `SurfaceError::Other` to `InvalidSurface`.
-+    dcomp_unavailable: core::sync::atomic::AtomicBool,
- }
- 
- unsafe impl Send for Surface {}
-@@ -651,6 +676,23 @@ impl Surface {
+@@ -651,6 +669,15 @@ impl Surface {
          Some(self.swap_chain.read().as_ref()?.raw.clone())
      }
  
@@ -702,18 +659,10 @@ index 285d635..6b46b06 100644
 +        }
 +    }
 +
-+    /// Rune: whether the last `configure` failed because DirectComposition is unavailable on this
-+    /// system (`CreateSwapChainForComposition` returned `E_NOTIMPL`, or `dcomp.dll` /
-+    /// `DCompositionCreateDevice2` / `CreateTargetForHwnd` failed).
-+    pub fn dcomp_unavailable(&self) -> bool {
-+        self.dcomp_unavailable
-+            .load(core::sync::atomic::Ordering::Acquire)
-+    }
-+
      /// Returns the waitable handle associated with this swap chain, if any.
      /// Handle is only valid while the swap chain is alive.
      pub unsafe fn waitable_handle(&self) -> Option<Foundation::HANDLE> {
-@@ -741,6 +783,279 @@ struct Idler {
+@@ -741,6 +768,279 @@ struct Idler {
      fence: Direct3D12::ID3D12Fence,
  }
  
@@ -993,7 +942,7 @@ index 285d635..6b46b06 100644
  #[derive(Debug, Clone)]
  struct CommandSignatures {
      draw: Direct3D12::ID3D12CommandSignature,
-@@ -749,13 +1064,33 @@ struct CommandSignatures {
+@@ -749,13 +1049,33 @@ struct CommandSignatures {
      dispatch: Direct3D12::ID3D12CommandSignature,
  }
  
@@ -1028,7 +977,7 @@ index 285d635..6b46b06 100644
  }
  
  unsafe impl Send for DeviceShared {}
-@@ -810,6 +1145,7 @@ pub struct Queue {
+@@ -810,6 +1130,7 @@ pub struct Queue {
      idle_fence_value: AtomicU64,
      pending_waits: Mutex<Vec<(Direct3D12::ID3D12Fence, u64)>>,
      pending_signals: Mutex<Vec<(Direct3D12::ID3D12Fence, u64)>>,
@@ -1036,7 +985,7 @@ index 285d635..6b46b06 100644
  }
  
  impl Queue {
-@@ -992,7 +1328,11 @@ pub struct CommandEncoder {
+@@ -992,7 +1313,11 @@ pub struct CommandEncoder {
  
      null_rtv_handle: descriptor::Handle,
      list: Option<Direct3D12::ID3D12GraphicsCommandList>,
@@ -1049,7 +998,7 @@ index 285d635..6b46b06 100644
      pass: PassState,
      temp: Temp,
  
-@@ -1018,6 +1358,8 @@ impl fmt::Debug for CommandEncoder {
+@@ -1018,6 +1343,8 @@ impl fmt::Debug for CommandEncoder {
  #[derive(Debug)]
  pub struct CommandBuffer {
      raw: Direct3D12::ID3D12GraphicsCommandList,
@@ -1058,7 +1007,7 @@ index 285d635..6b46b06 100644
  }
  
  impl crate::DynCommandBuffer for CommandBuffer {}
-@@ -1209,6 +1551,8 @@ unsafe impl Sync for QuerySet {}
+@@ -1209,6 +1536,8 @@ unsafe impl Sync for QuerySet {}
  #[derive(Debug)]
  pub struct Fence {
      raw: Direct3D12::ID3D12Fence,
@@ -1067,16 +1016,7 @@ index 285d635..6b46b06 100644
  }
  
  impl crate::DynFence for Fence {}
-@@ -1474,6 +1818,8 @@ impl crate::Surface for Surface {
-         device: &Device,
-         config: &crate::SurfaceConfiguration,
-     ) -> Result<(), crate::SurfaceError> {
-+        self.dcomp_unavailable
-+            .store(false, core::sync::atomic::Ordering::Release);
-         let mut flags = Dxgi::DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
-         // We always set ALLOW_TEARING on the swapchain no matter
-         // what kind of swapchain we want because ResizeBuffers
-@@ -1535,7 +1881,9 @@ impl crate::Surface for Surface {
+@@ -1535,7 +1864,9 @@ impl crate::Surface for Surface {
                      BufferUsage: Dxgi::DXGI_USAGE_RENDER_TARGET_OUTPUT,
                      BufferCount: swap_chain_buffer,
                      Scaling: Dxgi::DXGI_SCALING_STRETCH,
@@ -1087,55 +1027,7 @@ index 285d635..6b46b06 100644
                      Flags: flags.0 as u32,
                  };
                  let swap_chain1 = match self.target {
-@@ -1583,7 +1931,21 @@ impl crate::Surface for Surface {
- 
-                 let swap_chain1 = swap_chain1.map_err(|err| {
-                     log::error!("SwapChain creation error: {err}");
--                    crate::SurfaceError::Other("swapchain creation")
-+                    // Rune: distinguish unimplemented DirectComposition (Wine/Proton) from
-+                    // transient OOM or device loss so Rune can fall back to an HWND swap chain.
-+                    if matches!(
-+                        self.target,
-+                        SurfaceTarget::Visual(_)
-+                            | SurfaceTarget::VisualFromWndHandle { .. }
-+                            | SurfaceTarget::SwapChainPanel(_)
-+                    ) && err.code() == Foundation::E_NOTIMPL
-+                    {
-+                        self.dcomp_unavailable
-+                            .store(true, core::sync::atomic::Ordering::Release);
-+                        crate::SurfaceError::Other("CreateSwapChainForComposition: E_NOTIMPL")
-+                    } else {
-+                        crate::SurfaceError::Other("swapchain creation")
-+                    }
-                 })?;
- 
-                 match &self.target {
-@@ -1594,7 +1956,23 @@ impl crate::Surface for Surface {
-                     } => {
-                         let mut dcomp_state = dcomp_state.lock();
-                         let dcomp_state =
--                            unsafe { dcomp_state.get_or_init(&device.dcomp_lib, handle) }?;
-+                            unsafe { dcomp_state.get_or_init(&device.dcomp_lib, handle) }
-+                                .map_err(|err| {
-+                                    if matches!(
-+                                        err,
-+                                        crate::SurfaceError::Other(
-+                                            "Error loading dcomp.dll"
-+                                                | "DirectComposition::DCompositionCreateDevice2"
-+                                                | "IDCompositionDevice::CreateTargetForHwnd"
-+                                        ) | crate::SurfaceError::Device(
-+                                            crate::DeviceError::Unexpected
-+                                        )
-+                                    ) {
-+                                        self.dcomp_unavailable
-+                                            .store(true, core::sync::atomic::Ordering::Release);
-+                                    }
-+                                    err
-+                                })?;
-                         // Set the new swap chain as the content for the backing visual
-                         // and commit the changes to the composition visual tree.
-                         {
-@@ -1702,6 +2080,7 @@ impl crate::Surface for Surface {
+@@ -1702,6 +2033,7 @@ impl crate::Surface for Surface {
              present_mode: config.present_mode,
              format: config.format,
              size: config.extent,
@@ -1143,7 +1035,7 @@ index 285d635..6b46b06 100644
          });
  
          Ok(())
-@@ -1768,6 +2147,14 @@ impl crate::Surface for Surface {
+@@ -1768,6 +2100,14 @@ impl crate::Surface for Surface {
      }
  }
  
@@ -1158,7 +1050,7 @@ index 285d635..6b46b06 100644
  impl crate::Queue for Queue {
      type A = Api;
  
-@@ -1777,6 +2164,18 @@ impl crate::Queue for Queue {
+@@ -1777,6 +2117,18 @@ impl crate::Queue for Queue {
          _surface_textures: &[&Texture],
          (signal_fence, signal_value): (&Fence, crate::FenceValue),
      ) -> Result<(), crate::DeviceError> {
@@ -1177,7 +1069,7 @@ index 285d635..6b46b06 100644
          let mut temp_lists = self.temp_lists.lock();
          temp_lists.clear();
          for cmd_buf in command_buffers {
-@@ -1790,25 +2189,48 @@ impl crate::Queue for Queue {
+@@ -1790,25 +2142,48 @@ impl crate::Queue for Queue {
          {
              let mut waits = self.pending_waits.lock();
              for (fence, value) in waits.drain(..) {
@@ -1231,7 +1123,7 @@ index 285d635..6b46b06 100644
              }
          }
  
-@@ -1838,9 +2260,22 @@ impl crate::Queue for Queue {
+@@ -1838,9 +2213,22 @@ impl crate::Queue for Queue {
          };
  
          profiling::scope!("IDXGISwapchain3::Present");
@@ -1257,7 +1149,7 @@ index 285d635..6b46b06 100644
  
          Ok(())
      }
-@@ -1851,18 +2286,51 @@ impl crate::Queue for Queue {
+@@ -1851,18 +2239,51 @@ impl crate::Queue for Queue {
      }
  
      unsafe fn wait_for_idle(&self) -> Result<(), crate::DeviceError> {
@@ -1722,7 +1614,7 @@ index e227590..21c4fec 100644
 +    }
 +}
 diff --git a/src/vulkan/instance.rs b/src/vulkan/instance.rs
-index 17758758..2eca1a92 100644
+index 1775875..2eca1a9 100644
 --- a/src/vulkan/instance.rs
 +++ b/src/vulkan/instance.rs
 @@ -230,7 +230,14 @@ impl super::Instance {
@@ -2062,7 +1954,7 @@ index 17758758..2eca1a92 100644
 +    }
 +}
 diff --git a/src/vulkan/mod.rs b/src/vulkan/mod.rs
-index 51e7414b..31d4dd60 100644
+index 51e7414..31d4dd6 100644
 --- a/src/vulkan/mod.rs
 +++ b/src/vulkan/mod.rs
 @@ -177,6 +177,12 @@ pub struct InstanceShared {

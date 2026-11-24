@@ -27,55 +27,18 @@ pub(crate) struct Handover {
 // made on the GPU thread and then used only by the window's thread.
 unsafe impl Send for Handover {}
 
-/// Why creating a DirectComposition handover target failed.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum HandoverError {
-    /// DirectComposition itself is unavailable on this system (missing `dcomp.dll` or
-    /// `DCompositionCreateDevice2`, or `E_NOTIMPL` / `E_NOINTERFACE` from
-    /// `DCompositionCreateDevice2` or `CreateTargetForHwnd`).
-    Unavailable(String),
-    /// Any other failure (transient OOM, invalid or already-composed HWND, etc.).
-    Other(String),
-}
-
-impl HandoverError {
-    fn from_win32(call: &str, err: &windows::core::Error) -> Self {
-        let message = format!("{call}: {err}");
-        if is_dcomp_unavailable_hresult(err.code()) {
-            Self::Unavailable(message)
-        } else {
-            Self::Other(message)
-        }
-    }
-
-    pub(crate) fn into_message(self) -> String {
-        match self {
-            Self::Unavailable(msg) | Self::Other(msg) => msg,
-        }
-    }
-}
-
-/// Whether `code` from `DCompositionCreateDevice2` or `CreateTargetForHwnd` indicates that
-/// DirectComposition is unimplemented on this system rather than a transient error.
-pub(super) fn is_dcomp_unavailable_hresult(code: HRESULT) -> bool {
-    use windows::Win32::Foundation::{E_NOINTERFACE, E_NOTIMPL};
-    code == E_NOTIMPL || code == E_NOINTERFACE
-}
-
 impl Handover {
     /// A device, a target for `hwnd` below its child windows, and a root visual holding the UI's,
     /// uncommitted.
-    pub(crate) fn new(hwnd: isize) -> Result<Handover, HandoverError> {
+    pub(crate) fn new(hwnd: isize) -> Result<Handover, String> {
         let device = create_device()?;
         // SAFETY: COM calls on objects made here, for a window of this process.
         unsafe {
-            let target = device
-                .CreateTargetForHwnd(windows::Win32::Foundation::HWND(hwnd as *mut _), false)
-                .map_err(|e| HandoverError::from_win32("CreateTargetForHwnd", &e))?;
-            let root = device.CreateVisual().map_err(|e| HandoverError::Other(format!("CreateVisual: {e}")))?;
-            let visual = device.CreateVisual().map_err(|e| HandoverError::Other(format!("CreateVisual: {e}")))?;
-            root.AddVisual(&visual, true, None).map_err(|e| HandoverError::Other(format!("AddVisual: {e}")))?;
-            target.SetRoot(&root).map_err(|e| HandoverError::Other(format!("SetRoot: {e}")))?;
+            let target = device.CreateTargetForHwnd(windows::Win32::Foundation::HWND(hwnd as *mut _), false).map_err(|e| format!("CreateTargetForHwnd: {e}"))?;
+            let root = device.CreateVisual().map_err(|e| format!("CreateVisual: {e}"))?;
+            let visual = device.CreateVisual().map_err(|e| format!("CreateVisual: {e}"))?;
+            root.AddVisual(&visual, true, None).map_err(|e| format!("AddVisual: {e}"))?;
+            target.SetRoot(&root).map_err(|e| format!("SetRoot: {e}"))?;
             Ok(Handover { device, _target: target, root, visual })
         }
     }
@@ -125,21 +88,19 @@ fn load_dll(name: &str) -> windows_sys::Win32::Foundation::HMODULE {
 }
 
 /// `DCompositionCreateDevice2(NULL, ...)`, from `dcomp.dll` loaded now rather than imported.
-fn create_device() -> Result<IDCompositionDevice, HandoverError> {
+fn create_device() -> Result<IDCompositionDevice, String> {
     type Create = unsafe extern "system" fn(*mut std::ffi::c_void, *const GUID, *mut *mut std::ffi::c_void) -> HRESULT;
     // SAFETY: a system DLL by name; the entry point has the signature dcomp.h declares, and the
     // pointer it writes is an owned reference to the interface asked for.
     unsafe {
         let lib = load_dll("dcomp.dll");
-        if lib.is_null() { return Err(HandoverError::Unavailable("dcomp.dll did not load".into())); }
+        if lib.is_null() { return Err("dcomp.dll did not load".into()); }
         let Some(create) = windows_sys::Win32::System::LibraryLoader::GetProcAddress(lib, c"DCompositionCreateDevice2".as_ptr().cast()) else {
-            return Err(HandoverError::Unavailable("dcomp.dll has no DCompositionCreateDevice2".into()));
+            return Err("dcomp.dll has no DCompositionCreateDevice2".into());
         };
         let create: Create = std::mem::transmute(create);
         let mut raw = std::ptr::null_mut();
-        create(std::ptr::null_mut(), &IDCompositionDevice::IID, &mut raw)
-            .ok()
-            .map_err(|e| HandoverError::from_win32("DCompositionCreateDevice2", &e))?;
+        create(std::ptr::null_mut(), &IDCompositionDevice::IID, &mut raw).ok().map_err(|e| format!("DCompositionCreateDevice2: {e}"))?;
         Ok(IDCompositionDevice::from_raw(raw))
     }
 }
