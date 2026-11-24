@@ -58,7 +58,7 @@ impl El {
     /// [`El::scroll_x`] in place.
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn set_scroll_x(&mut self) -> &mut Self {
-        self.viewport(ScrollSpec { stick_bottom: false }, ScrollAxes::X, taffy::Overflow::Scroll, taffy::Overflow::Hidden);
+        self.viewport(ScrollSpec::default(), ScrollAxes::X, taffy::Overflow::Scroll, taffy::Overflow::Hidden);
         self
     }
     /// A viewport that scrolls both ways over its children (a wide timeline, a large
@@ -76,7 +76,7 @@ impl El {
     /// [`El::scroll_xy`] in place.
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn set_scroll_xy(&mut self) -> &mut Self {
-        let spec = self.cold.scroll.unwrap_or(ScrollSpec { stick_bottom: false });
+        let spec = self.cold.scroll.unwrap_or_default();
         self.viewport(spec, ScrollAxes::Both, taffy::Overflow::Scroll, taffy::Overflow::Scroll);
         self
     }
@@ -332,7 +332,17 @@ impl ScrollFade {
 }
 
 /// A vertical scroll viewport.
-#[derive(Clone, Copy, Debug, PartialEq)]
+///
+/// Use [`ScrollSpec::default`] for a plain vertical scroll view and [`ScrollSpec::stick_bottom`]
+/// for a chat or log transcript that follows its bottom:
+///
+/// ```
+/// # use rune::{ScrollSpec, col};
+/// let list = col().scroll(ScrollSpec::default());
+/// let log = col().scroll(ScrollSpec::stick_bottom());
+/// # let _ = (list, log);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ScrollSpec {
     /// Follow the end: while scrolled to the bottom, growth keeps the bottom in view, and a new
     /// viewport opens at the bottom on its first frame. When the content is a growth stack, room
@@ -340,6 +350,20 @@ pub struct ScrollSpec {
     /// row and closes on the stack's spring once its rows stop growing, so a send only moves
     /// the rows up.
     pub stick_bottom: bool,
+}
+
+impl ScrollSpec {
+    /// A vertical scroll viewport that follows its content's bottom, for chat and log
+    /// transcripts (`ScrollSpec { stick_bottom: true }`).
+    ///
+    /// ```
+    /// # use rune::{ScrollSpec, col};
+    /// let transcript = col().scroll(ScrollSpec::stick_bottom());
+    /// # let _ = transcript;
+    /// ```
+    pub const fn stick_bottom() -> Self {
+        Self { stick_bottom: true }
+    }
 }
 
 /// A scroll viewport's content-aware edges: `El::scroll_edge_fade`, `El::scroll_margin` and
@@ -374,3 +398,7 @@ impl ScrollAxes {
 
 pub(crate) type AtBottomFn = Rc<dyn Fn(crate::states::States<'_>, bool) -> bool>;
 pub(crate) type VisibleRowsFn = Rc<dyn Fn(crate::states::States<'_>, std::ops::Range<usize>) -> bool>;
+
+#[cfg(test)]
+#[path = "scroll_tests.rs"]
+mod tests;

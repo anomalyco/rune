@@ -161,6 +161,20 @@ impl Tx {
     pub fn scroll_key_center_at(&mut self, key: impl Into<String>, center_y: f32) {
         self.scroll_offsets.push(crate::runtime::ScrollRequest { key: key.into(), x: None, y: Some(center_y), glide: None, anchor: crate::runtime::ScrollAnchor::CenterSnapped });
     }
+    /// Stop any running glide, momentum or wheel ease on both axes of the scroll viewport keyed
+    /// `key` (or the nearest one containing it), holding it at its current offset, and drop any
+    /// pending reveal ([`Tx::scroll_into_view`] or [`Tx::scroll_center`]) targeting it. A
+    /// `stick_bottom` viewport already pinned to its end stays pinned. Another scroll request
+    /// made in the same transaction runs after it from rest.
+    ///
+    /// ```
+    /// # let mut tx = rune::Tx::default();
+    /// // Freeze a running glide or fling where it currently sits.
+    /// tx.stop_scroll("list");
+    /// ```
+    pub fn stop_scroll(&mut self, key: impl Into<String>) {
+        self.scroll_stops.push(key.into());
+    }
     /// Keep the element keyed `key` (or at that path) where it shows on screen across the
     /// commit this handler causes, by moving the nearest vertical scroll viewport around it. A
     /// stuck [`El::sticky_top`] header that collapses its section stays under the pointer

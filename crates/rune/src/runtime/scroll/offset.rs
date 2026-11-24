@@ -28,6 +28,24 @@ pub(crate) struct ScrollRequest {
 }
 
 impl RuntimeCore {
+    /// `Tx::stop_scroll`: halts any running glide, momentum or wheel ease on both axes of the
+    /// viewport keyed (or pathed) by each key, or the nearest scroll viewport containing it, and
+    /// drops any pending reveal targeting that viewport. A pinned `stick_bottom` viewport stays
+    /// pinned.
+    pub(in crate::runtime) fn stop_scrolls(&mut self, keys: Vec<String>) {
+        for key in keys {
+            let Some(i) = self.scroll_viewport_on(&key, true, true) else { continue };
+            let id = self.tree.nodes[i].id;
+            if let Some(st) = self.scroll.scrolls.get_mut(&id) {
+                st.halt();
+                st.spring = None;
+                st.x.motion = XMotion::Rest;
+            }
+            let viewport = self.tree.nodes[i].path.as_str();
+            self.scroll.requests.step(requests::Event::Stop { viewport });
+        }
+    }
+
     /// Each request moves the viewport keyed (or pathed) by its key, or the nearest one around
     /// it that scrolls an axis it asks for, clamped to its content. Axes the viewport doesn't
     /// scroll are left alone.
@@ -360,3 +378,7 @@ impl RuntimeCore {
         self.scroll.step_nudges(self.clock)
     }
 }
+
+#[cfg(test)]
+#[path = "offset_tests.rs"]
+mod tests;

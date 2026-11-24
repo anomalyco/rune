@@ -1,0 +1,1 @@
+- Scroll ergonomics: `ScrollSpec` now derives `Default` (`stick_bottom: false`) and adds `const fn ScrollSpec::stick_bottom()` (keeping `pub stick_bottom: bool` unchanged), and `Tx::stop_scroll(key)` halts any running glide, momentum or wheel ease on both axes of the matching viewport at its current offset while dropping pending reveals targeting it.

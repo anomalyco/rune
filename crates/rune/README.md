@@ -177,7 +177,7 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   `secondary-down`, `secondary-up`, and `secondary-click`.
 - **Naming elements**: `Cx::layout`, `Tx::fly_text` and the `Tx` scroll requests
   (`scroll_into_view`, `scroll_to_bottom`, `scroll_page`, `scroll_to`, `scroll_to_with`,
-  `scroll_to_instant`, `scroll_to_x`, `scroll_to_y`) take a key, which
+  `scroll_to_instant`, `scroll_to_x`, `scroll_to_y`, `stop_scroll`) take a key, which
   matches the first element with it in tree order, or a key path such as `"inspector/label"`
   whose leading keys are the element's nearest keyed ancestors. Keys are one namespace, and
   rune-kit keys its parts (`label`, `value`, `icon`, `control`, …), so scope an app's own keys
@@ -373,8 +373,10 @@ policy changes are applied in the same mutation phase.
   (the default) and re-solved over `over` in one that blends in linear light, following the mode
   of the window building the view (`theme::blends_srgb`, `theme::for_blend`, `Theme::alpha`). An app's own theme lives
   in the app; core ships only the format.
-- **Scrolling** (`.scroll(ScrollSpec { stick_bottom })`): a runtime-owned fractional offset, wheel 1:1,
-  fling decay, and follow-the-end. A new viewport opens at its end on its first frame.
+- **Scrolling** (`.scroll(ScrollSpec::default())`, `.scroll(ScrollSpec::stick_bottom())`, or
+  `ScrollSpec { stick_bottom }`): a runtime-owned fractional offset, wheel 1:1,
+  fling decay, and follow-the-end. A new `stick_bottom` viewport opens at its end on its first
+  frame.
 - **Virtual rows** (`.virtualize(estimated_row_height)` or lazy
   `.virtual_rows(count, estimate, key, build)` on a growth stack inside a scroll viewport at any
   depth): only an overscanned window has Taffy, shaped text and scene nodes. Rows need unique
@@ -425,8 +427,10 @@ policy changes are applied in the same mutation phase.
   Windows, Linux and the web; macOS turns the delta itself. `tx.scroll_into_view(key)` scrolls both
   axes, `.scroll_edge_fade(w)` fades the left and right edges, `tx.scroll_to(key, x, y)` glides a
   viewport to an offset (clamped, rechecked as virtual rows measure, taken over by the wheel),
-  `tx.scroll_to_with(key, x, y, spring)` glides there on the app's spring, and
-  `scroll_to_instant`, `scroll_to_x` and `scroll_to_y` jump there. A request sent mid-glide keeps
+  `tx.scroll_to_with(key, x, y, spring)` glides there on the app's spring,
+  `scroll_to_instant`, `scroll_to_x` and `scroll_to_y` jump there, and `tx.stop_scroll(key)`
+  halts any running glide, momentum or wheel ease on both axes at its current offset and drops
+  pending reveals for that viewport. A request sent mid-glide keeps
   its speed, so key repeat moving a selection a row at a time scrolls as one motion. A still
   pointer's hover holds while an app steps its own glide with `scroll_to_instant` each frame,
   and resolves once after. Left and Right arrows don't scroll a viewport (text fields own them), and

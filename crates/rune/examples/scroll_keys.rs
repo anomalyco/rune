@@ -30,15 +30,30 @@ fn card(s: &Board, k: usize) -> El {
         .child(text(format!("Card {k:03}")).font(TextStyle::new(13.0, 500.0)).color(Color::WHITE))
 }
 
+fn bar_button(key: &'static str, label: &'static str, on_press: impl Fn(&mut Board, &mut Tx) + 'static) -> El {
+    row().key(key).role("button").label(label).focusable(true).hit()
+        .h(26.0).px(10.0).items_center().radius(6.0)
+        .fill(oklch(0.28, 0.015, 250.0)).hover(Color::WHITE.alpha(0.08))
+        .on_press_tx(on_press)
+        .child(text(label).font(TextStyle::new(12.0, 500.0)).color(Color::WHITE))
+}
+
 fn view(s: &Board, _: &mut Cx<Board>) -> El {
     let cards = col().key("cards").w_full().padding(PAD).gap(GAP).children((0..CARDS).map(|k| card(s, k)));
+    let bar = row().key("bar").w_full().h(40.0).px(14.0).gap(8.0).items_center()
+        .child(text("↑ ↓ to move · Esc stop").font(TextStyle::new(12.0, 500.0)).color(oklch(0.7, 0.01, 250.0)).grow(1.0))
+        .child(bar_button("to-end", "Glide to end", |_, tx| tx.scroll_to_bottom("board")))
+        .child(bar_button("stop", "Stop", |_, tx| tx.stop_scroll("board")));
     col().w_full().h_full().fill(oklch(0.18, 0.01, 250.0))
-        .child(row().key("bar").w_full().h(40.0).px(14.0).items_center()
-            .child(text("↑ ↓ to move").font(TextStyle::new(12.0, 500.0)).color(oklch(0.7, 0.01, 250.0))))
-        .child(col().key("board").w_full().h(VIEW).scroll(ScrollSpec { stick_bottom: false }).child(cards))
+        .child(bar)
+        .child(col().key("board").w_full().h(VIEW).scroll(ScrollSpec::default()).child(cards))
 }
 
 fn on_key(s: &mut Board, e: &KeyEvent, tx: &mut Tx) -> bool {
+    if e.key == Key::Escape {
+        tx.stop_scroll("board");
+        return true;
+    }
     s.selected = match e.key {
         Key::Down => (s.selected + 1).min(CARDS - 1),
         Key::Up => s.selected.saturating_sub(1),
