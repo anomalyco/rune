@@ -11,22 +11,14 @@ use std::time::Duration;
 use crate::machine::{Attempt, Effects, Seq};
 use crate::window::FileStep;
 
-/// Standard MIME type for file-list drags on Wayland and XDG desktops.
 pub(crate) const URI_LIST_MIME: &str = "text/uri-list";
-
-/// Hard upper bound on a single `text/uri-list` transfer (1 MiB) so a runaway peer cannot OOM
-/// the app.
+/// Hard upper bound on a single `text/uri-list` transfer (1 MiB).
 pub(crate) const MAX_URI_LIST_BYTES: usize = 1024 * 1024;
-
-/// How long an eager enter-time pipe read waits before treating the source as deferring writes
-/// until `wl_data_device.drop`.
+/// Eager enter-read timeout before treating the source as deferring writes until `drop`.
 pub(crate) const ENTER_READ_TIMEOUT: Duration = Duration::from_millis(500);
-
-/// How long a post-drop fallback pipe read waits before giving up on a silent peer.
+/// Post-drop fallback pipe-read timeout before giving up on a silent peer.
 pub(crate) const DROP_READ_TIMEOUT: Duration = Duration::from_millis(2_000);
-
-/// Maximum number of unclaimed `wl_data_offer` proxies retained between `data_offer` and
-/// `enter`/`selection` so an anomalous compositor cannot grow the table without bound.
+/// Cap on unclaimed `wl_data_offer` proxies retained between `data_offer` and `enter`/`selection`.
 pub(crate) const MAX_PENDING_OFFERS: usize = 16;
 
 /// Wayland wire object ID of a `wl_data_offer`.
@@ -68,13 +60,61 @@ pub(crate) enum ReadOutcome {
     Error,
 }
 
+/// Bit values of `wl_data_device_manager.dnd_action` from the Wayland core protocol.
+pub(crate) const DND_ACTION_NONE: u32 = 0;
+pub(crate) const DND_ACTION_COPY: u32 = 1;
+pub(crate) const DND_ACTION_MOVE: u32 = 2;
+pub(crate) const DND_ACTION_ASK: u32 = 4;
+
+/// Selected drag-and-drop action reported by `wl_data_offer.action` (protocol v3+).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum SelectedAction {
+    /// No action received yet, `none` (`0`), or an unknown/multi-bit mask.
+    #[default]
+    None,
+    /// Concrete `copy` action.
+    Copy,
+    /// Concrete `move` action (never requested by Rune's copy-only drop target).
+    Move,
+    /// Non-final `ask` action; calling `wl_data_offer.finish` while `Ask` is selected raises a
+    /// fatal `invalid_finish` protocol error under `wl_data_offer` v3+.
+    Ask,
+}
+
+impl SelectedAction {
+    /// Decodes a `wl_data_offer.action` wire bitmask. Per spec only a single action bit or `0`
+    /// is valid; combined or unknown bits map to `None`.
+    pub(crate) fn from_wayland_mask(bits: u32) -> Self {
+        match bits {
+            DND_ACTION_COPY => Self::Copy,
+            DND_ACTION_MOVE => Self::Move,
+            DND_ACTION_ASK => Self::Ask,
+            _ => Self::None,
+        }
+    }
+
+    /// Whether the Wayland v3+ protocol considers this a concrete final action (as opposed to
+    /// `None` or `Ask`, which cannot be finished without raising `invalid_finish`).
+    #[cfg(test)]
+    pub(crate) fn is_final_action(self) -> bool {
+        matches!(self, Self::Copy | Self::Move)
+    }
+
+    /// Whether this copy-only drop target may complete the drop and send `wl_data_offer.finish`.
+    /// Only `Copy` is accepted: `None` and `Ask` are fatal under v3+, and finishing `Move`
+    /// would tell a file manager to delete the source file.
+    pub(crate) fn allows_copy_finish(self) -> bool {
+        matches!(self, Self::Copy)
+    }
+}
+
 /// Metadata collected for a `wl_data_offer` between `wl_data_device.data_offer` and `enter`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct OfferInfo {
     pub(crate) id: OfferId,
     pub(crate) version: u32,
     pub(crate) has_uri_list: bool,
-    pub(crate) action_selected: bool,
+    pub(crate) selected_action: SelectedAction,
 }
 
 /// Bounded queue of `wl_data_offer` objects announced by `wl_data_device.data_offer` that have
@@ -93,7 +133,7 @@ impl OfferSet {
             id,
             version,
             has_uri_list: false,
-            action_selected: false,
+            selected_action: SelectedAction::None,
         });
         evicted
     }
@@ -108,9 +148,9 @@ impl OfferSet {
     }
 
     /// Records a `wl_data_offer.action` update on a pending offer.
-    pub(crate) fn set_action(&mut self, id: OfferId, has_action: bool) {
+    pub(crate) fn set_action(&mut self, id: OfferId, action: SelectedAction) {
         if let Some(entry) = self.pending.iter_mut().find(|o| o.id == id) {
-            entry.action_selected = has_action;
+            entry.selected_action = action;
         }
     }
 
@@ -140,7 +180,7 @@ pub(crate) enum State {
         offer: OfferId,
         serial: u32,
         version: u32,
-        action_selected: bool,
+        selected_action: SelectedAction,
         surface: SurfaceId,
         token: WindowToken,
         pos: (f32, f32),
@@ -151,7 +191,7 @@ pub(crate) enum State {
     Deferred {
         offer: OfferId,
         version: u32,
-        action_selected: bool,
+        selected_action: SelectedAction,
         surface: SurfaceId,
         token: WindowToken,
         pos: (f32, f32),
@@ -160,7 +200,7 @@ pub(crate) enum State {
     Hovering {
         offer: OfferId,
         version: u32,
-        action_selected: bool,
+        selected_action: SelectedAction,
         surface: SurfaceId,
         token: WindowToken,
         pos: (f32, f32),
@@ -171,7 +211,7 @@ pub(crate) enum State {
     Dropping {
         offer: OfferId,
         version: u32,
-        action_selected: bool,
+        selected_action: SelectedAction,
         surface: SurfaceId,
         token: WindowToken,
         pos: (f32, f32),
@@ -199,8 +239,8 @@ pub(crate) enum Event {
     Leave,
     /// `wl_data_device.drop`.
     Drop,
-    /// `wl_data_offer.action` reported whether a non-`None` DnD action is currently selected.
-    OfferAction { offer: OfferId, has_action: bool },
+    /// `wl_data_offer.action` reported the currently selected DnD action (v3+).
+    OfferAction { offer: OfferId, action: SelectedAction },
     /// Background pipe worker finished reading for `attempt`.
     ReadComplete { attempt: Attempt, outcome: ReadOutcome },
     /// A registered window's `DropTarget` was dropped.
@@ -221,6 +261,14 @@ pub(crate) enum Effect {
     DestroyOffer(OfferId),
     Flush,
     EnqueueStep { surface: SurfaceId, token: WindowToken, step: FileStep },
+}
+
+fn can_deliver_drop(version: u32, action: SelectedAction) -> bool {
+    version < 3 || action.allows_copy_finish()
+}
+
+fn should_finish(version: u32, action: SelectedAction) -> bool {
+    version >= 3 && action.allows_copy_finish()
 }
 
 fn reject_offer(effects: &mut Effects<Effect>, offer: OfferId, serial: u32, version: u32) {
@@ -279,7 +327,7 @@ pub(crate) fn step(seq: &mut Seq, state: &mut State, event: Event) -> Effects<Ef
                 offer: info.id,
                 serial,
                 version: info.version,
-                action_selected: info.action_selected,
+                selected_action: info.selected_action,
                 surface,
                 token,
                 pos: (x, y),
@@ -315,24 +363,35 @@ pub(crate) fn step(seq: &mut Seq, state: &mut State, event: Event) -> Effects<Ef
         Event::Drop => match std::mem::take(state) {
             State::Idle => Effects::none(),
             State::Rejected { offer } => Effects::two(Effect::DestroyOffer(offer), Effect::Flush),
-            State::Hovering { offer, version, action_selected, surface, token, pos, paths } => {
-                let mut effects = Effects::one(Effect::EnqueueStep {
-                    surface,
-                    token,
-                    step: FileStep::Drop(paths, Some(pos)),
-                });
-                if version >= 3 && action_selected {
-                    effects.push(Effect::FinishOffer(offer));
+            State::Hovering { offer, version, selected_action, surface, token, pos, paths } => {
+                let mut effects = Effects::none();
+                if can_deliver_drop(version, selected_action) {
+                    effects.push(Effect::EnqueueStep {
+                        surface,
+                        token,
+                        step: FileStep::Drop(paths, Some(pos)),
+                    });
+                    if should_finish(version, selected_action) {
+                        effects.push(Effect::FinishOffer(offer));
+                    }
+                } else {
+                    // Dismiss unnegotiated / Ask / Move drops on v3+ without finish() and clear hover.
+                    effects.push(Effect::EnqueueStep { surface, token, step: FileStep::Leave });
                 }
                 effects.push(Effect::DestroyOffer(offer));
                 effects.push(Effect::Flush);
                 effects
             }
-            State::Fetching { offer, version, action_selected, surface, token, pos, attempt, .. } => {
+            State::Fetching { offer, version, selected_action, surface, token, pos, attempt, .. } => {
+                if !can_deliver_drop(version, selected_action) {
+                    let mut effects = Effects::two(Effect::CancelRead(attempt), Effect::DestroyOffer(offer));
+                    effects.push(Effect::Flush);
+                    return effects;
+                }
                 *state = State::Dropping {
                     offer,
                     version,
-                    action_selected,
+                    selected_action,
                     surface,
                     token,
                     pos,
@@ -341,12 +400,15 @@ pub(crate) fn step(seq: &mut Seq, state: &mut State, event: Event) -> Effects<Ef
                 };
                 Effects::none()
             }
-            State::Deferred { offer, version, action_selected, surface, token, pos } => {
+            State::Deferred { offer, version, selected_action, surface, token, pos } => {
+                if !can_deliver_drop(version, selected_action) {
+                    return Effects::two(Effect::DestroyOffer(offer), Effect::Flush);
+                }
                 let attempt = seq.next();
                 *state = State::Dropping {
                     offer,
                     version,
-                    action_selected,
+                    selected_action,
                     surface,
                     token,
                     pos,
@@ -363,15 +425,15 @@ pub(crate) fn step(seq: &mut Seq, state: &mut State, event: Event) -> Effects<Ef
                 Effects::none()
             }
         },
-        Event::OfferAction { offer, has_action } => {
+        Event::OfferAction { offer, action } => {
             match state {
-                State::Fetching { offer: id, action_selected, .. }
-                | State::Deferred { offer: id, action_selected, .. }
-                | State::Hovering { offer: id, action_selected, .. }
-                | State::Dropping { offer: id, action_selected, .. }
+                State::Fetching { offer: id, selected_action, .. }
+                | State::Deferred { offer: id, selected_action, .. }
+                | State::Hovering { offer: id, selected_action, .. }
+                | State::Dropping { offer: id, selected_action, .. }
                     if *id == offer =>
                 {
-                    *action_selected = has_action;
+                    *selected_action = action;
                 }
                 _ => {}
             }
@@ -382,7 +444,7 @@ pub(crate) fn step(seq: &mut Seq, state: &mut State, event: Event) -> Effects<Ef
                 offer,
                 serial,
                 version,
-                action_selected,
+                selected_action,
                 surface,
                 token,
                 pos,
@@ -394,7 +456,7 @@ pub(crate) fn step(seq: &mut Seq, state: &mut State, event: Event) -> Effects<Ef
                         *state = State::Hovering {
                             offer,
                             version,
-                            action_selected,
+                            selected_action,
                             surface,
                             token,
                             pos,
@@ -419,14 +481,14 @@ pub(crate) fn step(seq: &mut Seq, state: &mut State, event: Event) -> Effects<Ef
                     effects
                 }
                 ReadOutcome::Bytes(_) | ReadOutcome::TimedOut | ReadOutcome::Error => {
-                    *state = State::Deferred { offer, version, action_selected, surface, token, pos };
+                    *state = State::Deferred { offer, version, selected_action, surface, token, pos };
                     Effects::none()
                 }
             },
             State::Dropping {
                 offer,
                 version,
-                action_selected,
+                selected_action,
                 surface,
                 token,
                 pos,
@@ -436,13 +498,13 @@ pub(crate) fn step(seq: &mut Seq, state: &mut State, event: Event) -> Effects<Ef
                 ReadOutcome::Bytes(bytes) if !bytes.is_empty() => {
                     let paths = parse_uri_list(&bytes);
                     let mut effects = Effects::none();
-                    if !paths.is_empty() {
+                    if !paths.is_empty() && can_deliver_drop(version, selected_action) {
                         effects.push(Effect::EnqueueStep {
                             surface,
                             token,
                             step: FileStep::Drop(paths, Some(pos)),
                         });
-                        if version >= 3 && action_selected {
+                        if should_finish(version, selected_action) {
                             effects.push(Effect::FinishOffer(offer));
                         }
                     }
@@ -451,13 +513,13 @@ pub(crate) fn step(seq: &mut Seq, state: &mut State, event: Event) -> Effects<Ef
                     effects
                 }
                 ReadOutcome::Bytes(_) | ReadOutcome::TimedOut | ReadOutcome::Error
-                    if fallback_available =>
+                    if fallback_available && can_deliver_drop(version, selected_action) =>
                 {
                     let next_attempt = seq.next();
                     *state = State::Dropping {
                         offer,
                         version,
-                        action_selected,
+                        selected_action,
                         surface,
                         token,
                         pos,

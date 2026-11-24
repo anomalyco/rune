@@ -2,20 +2,20 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use super::machine::{
-    self, DROP_READ_TIMEOUT, ENTER_READ_TIMEOUT, Effect, Event, MAX_PENDING_OFFERS,
-    MAX_URI_LIST_BYTES, OfferInfo, OfferSet, ReadOutcome, ReadPhase, State, WindowMap,
-    parse_uri_list, pipe_read,
+    self, DND_ACTION_ASK, DND_ACTION_COPY, DND_ACTION_MOVE, DND_ACTION_NONE, DROP_READ_TIMEOUT,
+    ENTER_READ_TIMEOUT, Effect, Event, MAX_PENDING_OFFERS, MAX_URI_LIST_BYTES, OfferInfo,
+    OfferSet, ReadOutcome, ReadPhase, SelectedAction, State, WindowMap, parse_uri_list, pipe_read,
 };
 use crate::machine::{Attempt, Seq};
 use crate::time::Instant;
 use crate::window::FileStep;
 
 fn uri_offer(id: u32, version: u32) -> OfferInfo {
-    OfferInfo { id, version, has_uri_list: true, action_selected: false }
+    OfferInfo { id, version, has_uri_list: true, selected_action: SelectedAction::None }
 }
 
 fn non_uri_offer(id: u32, version: u32) -> OfferInfo {
-    OfferInfo { id, version, has_uri_list: false, action_selected: false }
+    OfferInfo { id, version, has_uri_list: false, selected_action: SelectedAction::None }
 }
 
 fn step_vec(seq: &mut Seq, state: &mut State, event: Event) -> Vec<Effect> {
@@ -72,7 +72,7 @@ fn enter_motion_drop_delivers_latest_position_and_finishes_v3_offer() {
         offer: Some(uri_offer(50, 3)),
     });
     // Action arrives asynchronously after set_actions.
-    assert!(step_vec(&mut seq, &mut state, Event::OfferAction { offer: 50, has_action: true }).is_empty());
+    assert!(step_vec(&mut seq, &mut state, Event::OfferAction { offer: 50, action: SelectedAction::Copy }).is_empty());
     // Motion during fetch updates the point without emitting Move before Enter.
     assert!(step_vec(&mut seq, &mut state, Event::Motion { x: 30.0, y: 40.0 }).is_empty());
 
@@ -111,31 +111,133 @@ fn enter_motion_drop_delivers_latest_position_and_finishes_v3_offer() {
 }
 
 #[test]
-fn drop_on_v3_without_selected_action_skips_finish() {
+fn ask_action_on_drop_never_sends_finish_and_dismisses_cleanly() {
+    // Reporter's case (#1857): compositor selects DndAction::Ask under wl_data_offer v3.
+    // Calling finish() while Ask is active is a fatal invalid_finish protocol error.
+    let ask = SelectedAction::from_wayland_mask(DND_ACTION_ASK);
+    assert_eq!(ask, SelectedAction::Ask);
+    assert!(!ask.is_final_action());
+    assert!(!ask.allows_copy_finish());
+
+    // Hovering + Ask -> Drop must clear hover (Leave) and destroy without FinishOffer.
     let mut seq = Seq::default();
     let mut state = State::Idle;
     let _ = step_vec(&mut seq, &mut state, Event::Enter {
-        serial: 1,
-        surface: 10,
-        target: Some(1),
-        x: 1.0,
-        y: 2.0,
-        offer: Some(uri_offer(51, 3)),
+        serial: 1, surface: 10, target: Some(1), x: 1.0, y: 2.0, offer: Some(uri_offer(51, 3)),
     });
+    let _ = step_vec(&mut seq, &mut state, Event::OfferAction { offer: 51, action: ask });
     let _ = step_vec(&mut seq, &mut state, Event::ReadComplete {
-        attempt: Attempt(1),
-        outcome: ReadOutcome::Bytes(b"file:///tmp/a.txt\n".to_vec()),
+        attempt: Attempt(1), outcome: ReadOutcome::Bytes(b"file:///tmp/a.txt\n".to_vec()),
     });
     let effects = step_vec(&mut seq, &mut state, Event::Drop);
     assert_eq!(effects, vec![
-        Effect::EnqueueStep {
-            surface: 10,
-            token: 1,
-            step: FileStep::Drop(vec![PathBuf::from("/tmp/a.txt")], Some((1.0, 2.0))),
-        },
+        Effect::EnqueueStep { surface: 10, token: 1, step: FileStep::Leave },
         Effect::DestroyOffer(51),
         Effect::Flush,
     ]);
+    assert_eq!(state, State::Idle);
+
+    // Fetching + Ask -> Drop cancels in-flight read and destroys without FinishOffer.
+    let _ = step_vec(&mut seq, &mut state, Event::Enter {
+        serial: 2, surface: 10, target: Some(1), x: 1.0, y: 2.0, offer: Some(uri_offer(52, 3)),
+    });
+    let _ = step_vec(&mut seq, &mut state, Event::OfferAction { offer: 52, action: ask });
+    let attempt = seq.current();
+    assert_eq!(step_vec(&mut seq, &mut state, Event::Drop), vec![
+        Effect::CancelRead(attempt),
+        Effect::DestroyOffer(52),
+        Effect::Flush,
+    ]);
+    assert_eq!(state, State::Idle);
+
+    // Deferred + Ask -> Drop destroys immediately without a fallback read or FinishOffer.
+    let _ = step_vec(&mut seq, &mut state, Event::Enter {
+        serial: 3, surface: 10, target: Some(1), x: 1.0, y: 2.0, offer: Some(uri_offer(53, 3)),
+    });
+    let _ = step_vec(&mut seq, &mut state, Event::OfferAction { offer: 53, action: ask });
+    let attempt = seq.current();
+    assert!(step_vec(&mut seq, &mut state, Event::ReadComplete {
+        attempt, outcome: ReadOutcome::TimedOut,
+    }).is_empty());
+    assert_eq!(step_vec(&mut seq, &mut state, Event::Drop), vec![
+        Effect::DestroyOffer(53),
+        Effect::Flush,
+    ]);
+    assert_eq!(state, State::Idle);
+}
+
+#[test]
+fn protocol_version_and_action_matrix_table() {
+    // Mask decoding and protocol-vs-copy-only finish predicates.
+    for (mask, expected, is_final, copy_ok) in [
+        (DND_ACTION_NONE, SelectedAction::None, false, false),
+        (DND_ACTION_COPY, SelectedAction::Copy, true, true),
+        (DND_ACTION_MOVE, SelectedAction::Move, true, false),
+        (DND_ACTION_ASK, SelectedAction::Ask, false, false),
+        (DND_ACTION_COPY | DND_ACTION_MOVE, SelectedAction::None, false, false),
+        (DND_ACTION_COPY | DND_ACTION_ASK, SelectedAction::None, false, false),
+        (0xff, SelectedAction::None, false, false),
+    ] {
+        let action = SelectedAction::from_wayland_mask(mask);
+        assert_eq!(action, expected, "mask {mask:#x}");
+        assert_eq!(action.is_final_action(), is_final, "is_final {mask:#x}");
+        assert_eq!(action.allows_copy_finish(), copy_ok, "allows_copy_finish {mask:#x}");
+    }
+
+    // Protocol version x action x mid-drag action change between last motion and drop.
+    let cases: &[(u32, Option<SelectedAction>, Option<SelectedAction>, bool, bool)] = &[
+        // (version, initial_action, after_motion_action, expect_drop, expect_finish)
+        (1, None, None, true, false),
+        (2, None, None, true, false),
+        (3, None, None, false, false),
+        (3, Some(SelectedAction::None), None, false, false),
+        (3, Some(SelectedAction::Copy), None, true, true),
+        (3, Some(SelectedAction::Move), None, false, false),
+        (3, Some(SelectedAction::Ask), None, false, false),
+        (4, Some(SelectedAction::Copy), None, true, true),
+        (4, Some(SelectedAction::Ask), None, false, false),
+        // Action changes between last motion and drop:
+        (3, Some(SelectedAction::Copy), Some(SelectedAction::Ask), false, false),
+        (3, Some(SelectedAction::Copy), Some(SelectedAction::Move), false, false),
+        (3, Some(SelectedAction::Copy), Some(SelectedAction::None), false, false),
+        (3, Some(SelectedAction::Ask), Some(SelectedAction::Copy), true, true),
+        (3, Some(SelectedAction::None), Some(SelectedAction::Copy), true, true),
+    ];
+    for (idx, &(version, first, after_motion, expect_drop, expect_finish)) in cases.iter().enumerate() {
+        let mut seq = Seq::default();
+        let mut state = State::Idle;
+        let offer = 200 + idx as u32;
+        let enter_eff = step_vec(&mut seq, &mut state, Event::Enter {
+            serial: 1, surface: 10, target: Some(1), x: 5.0, y: 6.0, offer: Some(uri_offer(offer, version)),
+        });
+        assert_eq!(enter_eff.iter().any(|e| matches!(e, Effect::SetActions { copy: true, .. })), version >= 3);
+        if let Some(action) = first {
+            assert!(step_vec(&mut seq, &mut state, Event::OfferAction { offer, action }).is_empty());
+        }
+        let _ = step_vec(&mut seq, &mut state, Event::ReadComplete {
+            attempt: Attempt(1), outcome: ReadOutcome::Bytes(b"file:///tmp/t.txt\n".to_vec()),
+        });
+        let _ = step_vec(&mut seq, &mut state, Event::Motion { x: 22.0, y: 33.0 });
+        if let Some(action) = after_motion {
+            assert!(step_vec(&mut seq, &mut state, Event::OfferAction { offer, action }).is_empty());
+        }
+        let effects = step_vec(&mut seq, &mut state, Event::Drop);
+        let mut expected = Vec::new();
+        if expect_drop {
+            expected.push(Effect::EnqueueStep {
+                surface: 10, token: 1, step: FileStep::Drop(vec![PathBuf::from("/tmp/t.txt")], Some((22.0, 33.0))),
+            });
+        } else {
+            expected.push(Effect::EnqueueStep { surface: 10, token: 1, step: FileStep::Leave });
+        }
+        if expect_finish {
+            expected.push(Effect::FinishOffer(offer));
+        }
+        expected.push(Effect::DestroyOffer(offer));
+        expected.push(Effect::Flush);
+        assert_eq!(effects, expected, "case #{idx}: v{version} {first:?} -> {after_motion:?}");
+        assert_eq!(state, State::Idle);
+    }
 }
 
 #[test]
@@ -150,7 +252,7 @@ fn leave_while_hovering_emits_leave_and_destroys_without_finish() {
         y: 10.0,
         offer: Some(uri_offer(60, 3)),
     });
-    let _ = step_vec(&mut seq, &mut state, Event::OfferAction { offer: 60, has_action: true });
+    let _ = step_vec(&mut seq, &mut state, Event::OfferAction { offer: 60, action: SelectedAction::Copy });
     let _ = step_vec(&mut seq, &mut state, Event::ReadComplete {
         attempt: Attempt(1),
         outcome: ReadOutcome::Bytes(b"file:///tmp/doc.pdf\n".to_vec()),
@@ -253,7 +355,7 @@ fn drop_while_fetching_waits_ignores_post_drop_leave_and_delivers() {
         y: 25.0,
         offer: Some(uri_offer(80, 3)),
     });
-    let _ = step_vec(&mut seq, &mut state, Event::OfferAction { offer: 80, has_action: true });
+    let _ = step_vec(&mut seq, &mut state, Event::OfferAction { offer: 80, action: SelectedAction::Copy });
     let _ = step_vec(&mut seq, &mut state, Event::Motion { x: 88.0, y: 99.0 });
 
     assert!(step_vec(&mut seq, &mut state, Event::Drop).is_empty());
@@ -290,7 +392,7 @@ fn drop_while_fetching_runs_one_fallback_receive_then_gives_up_on_second_timeout
         y: 20.0,
         offer: Some(uri_offer(81, 3)),
     });
-    let _ = step_vec(&mut seq, &mut state, Event::OfferAction { offer: 81, has_action: true });
+    let _ = step_vec(&mut seq, &mut state, Event::OfferAction { offer: 81, action: SelectedAction::Copy });
     assert!(step_vec(&mut seq, &mut state, Event::Drop).is_empty());
 
     // Enter-read timed out: triggers one post-drop fallback receive.
@@ -324,7 +426,7 @@ fn deferred_source_runs_post_drop_fallback_and_delivers() {
         y: 5.0,
         offer: Some(uri_offer(82, 3)),
     });
-    let _ = step_vec(&mut seq, &mut state, Event::OfferAction { offer: 82, has_action: true });
+    let _ = step_vec(&mut seq, &mut state, Event::OfferAction { offer: 82, action: SelectedAction::Copy });
 
     // Source deferred writing on enter (0 bytes / timeout).
     assert!(step_vec(&mut seq, &mut state, Event::ReadComplete {
@@ -487,8 +589,8 @@ fn offer_set_bounds_pending_offers() {
     }
     assert_eq!(set.insert(999, 3), Some(1));
     set.add_mime(999, "text/uri-list");
-    set.set_action(999, true);
-    assert_eq!(set.take(999), Some(OfferInfo { id: 999, version: 3, has_uri_list: true, action_selected: true }));
+    set.set_action(999, SelectedAction::Copy);
+    assert_eq!(set.take(999), Some(OfferInfo { id: 999, version: 3, has_uri_list: true, selected_action: SelectedAction::Copy }));
     assert_eq!(set.drain_ids().len(), MAX_PENDING_OFFERS - 1);
     assert!(set.drain_ids().is_empty());
     assert_eq!(ReadPhase::Enter.timeout(), ENTER_READ_TIMEOUT);
@@ -751,7 +853,7 @@ fn wayland_file_steps_drive_nested_targets_drop_move_and_drop_point() {
         y: 70.0,
         offer: Some(uri_offer(1, 3)),
     });
-    let _ = step_vec(&mut seq, &mut state, Event::OfferAction { offer: 1, has_action: true });
+    let _ = step_vec(&mut seq, &mut state, Event::OfferAction { offer: 1, action: SelectedAction::Copy });
     apply(&mut windows, step_vec(&mut seq, &mut state, Event::ReadComplete {
         attempt: Attempt(1),
         outcome: ReadOutcome::Bytes(b"file:///tmp/nested%20file.txt\r\n".to_vec()),
@@ -784,7 +886,8 @@ mod unix_pipe_tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use super::super::machine::ReadOutcome;
+    use wayland_client::protocol::wl_data_device_manager::DndAction;
+    use super::super::machine::{ReadOutcome, SelectedAction};
     use super::super::pipe::{CancelToken, read_fd_bounded};
 
     fn nonblocking_pair() -> (OwnedFd, UnixStream) {
@@ -837,5 +940,15 @@ mod unix_pipe_tests {
         handle.join().unwrap();
         assert_eq!(out, None);
         assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn wayland_dnd_action_bits_match_selected_action() {
+        assert_eq!(SelectedAction::from_wayland_mask(DndAction::None.bits()), SelectedAction::None);
+        assert_eq!(SelectedAction::from_wayland_mask(DndAction::Copy.bits()), SelectedAction::Copy);
+        assert_eq!(SelectedAction::from_wayland_mask(DndAction::Move.bits()), SelectedAction::Move);
+        assert_eq!(SelectedAction::from_wayland_mask(DndAction::Ask.bits()), SelectedAction::Ask);
+        assert_eq!(SelectedAction::from_wayland_mask((DndAction::Copy | DndAction::Move).bits()), SelectedAction::None);
+        assert_eq!(SelectedAction::from_wayland_mask((DndAction::Copy | DndAction::Ask).bits()), SelectedAction::None);
     }
 }
