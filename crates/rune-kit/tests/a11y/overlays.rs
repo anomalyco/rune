@@ -51,6 +51,85 @@ fn a_dialog_is_modal_named_and_described() {
 }
 
 #[test]
+fn dialog_close_label_and_close_disabled_reach_accessibility_tree_and_web_mirror() {
+    #[derive(Default)]
+    struct Local { open: bool, saving: bool, label: Option<String>, closes: usize }
+
+    fn view(s: &Local, _: &mut Cx<Local>) -> El {
+        let k = kit();
+        let mut layer = Vec::new();
+        let mut dlg = Dialog::new("save", "Confirmer")
+            .description("Enregistrement en cours.")
+            .open(s.open)
+            .close_disabled(s.saving)
+            .on_close(|s: &mut Local| { s.closes += 1; s.open = false; })
+            .fit()
+            .child(Button::new("Basculer").on_press(|s: &mut Local| s.saving = !s.saving).build(&k).key("toggle-saving"));
+        if let Some(label) = &s.label {
+            dlg = dlg.close_label(label.clone());
+        }
+        dlg.build(&k, &mut layer);
+        root(col().child(Button::new("Ouvrir").on_press(|s: &mut Local| s.open = true).build(&k).key("open")), layer)
+    }
+
+    let mount_local = |state: Local| {
+        let mut rt = rune::Runtime::new(state, view, (720.0, 720.0), rune::Env::new(false, 1.0));
+        rt.frame(0.0);
+        rt.settle_all();
+        rt.frame(1.0 / 60.0);
+        rt.frame(1.0 / 60.0);
+        rt
+    };
+
+    // Custom French close_label reaches AccessKit and the web DOM mirror, and still dismisses.
+    let mut rt = mount_local(Local { open: true, saving: false, label: Some("Fermer".into()), closes: 0 });
+    let tree = rt.accessibility_json();
+    assert_eq!(said(node(&tree, "close")), ("button", "Fermer"));
+    assert!(!has(node(&tree, "close"), "disabled"));
+    assert!(can(node(&tree, "close"), "click"));
+    let mirror: Vec<serde_json::Value> = serde_json::from_str(&rt.a11y_json()).unwrap();
+    assert!(mirror.iter().any(|v| v["k"] == "button" && v["t"] == "Fermer"), "custom close_label reaches web mirror: {mirror:?}");
+    assert!(rt.accessibility_action("close", Action::Click, None));
+    rt.frame(0.0);
+    assert!(!rt.state.open && rt.state.closes == 1);
+
+    // RTL close_label is preserved verbatim in both trees.
+    let rt_rtl = mount_local(Local { open: true, saving: false, label: Some("إغلاق".into()), closes: 0 });
+    assert_eq!(said(node(&rt_rtl.accessibility_json(), "close")), ("button", "إغلاق"));
+    let mirror_rtl: Vec<serde_json::Value> = serde_json::from_str(&rt_rtl.a11y_json()).unwrap();
+    assert!(mirror_rtl.iter().any(|v| v["k"] == "button" && v["t"] == "إغلاق"));
+
+    // Empty and whitespace-only close_label fall back to "Close" so the button is never unnamed.
+    for blank in ["", "   "] {
+        let rt_blank = mount_local(Local { open: true, saving: false, label: Some(blank.into()), closes: 0 });
+        assert_eq!(said(node(&rt_blank.accessibility_json(), "close")), ("button", "Close"));
+    }
+
+    // close_disabled(true) keeps the close button present and labelled, marks it disabled with
+    // no actions, rejects assistive Click and Escape, and leaves body controls usable.
+    let mut rt = mount_local(Local { open: true, saving: true, label: Some("Fermer".into()), closes: 0 });
+    let tree = rt.accessibility_json();
+    let close_btn = node(&tree, "close");
+    assert_eq!(said(close_btn), ("button", "Fermer"));
+    assert!(has(close_btn, "disabled"), "close button reports disabled: {close_btn}");
+    assert!(!can(close_btn, "click") && !can(close_btn, "focus"), "disabled close button has no actions: {close_btn}");
+    assert!(has(node(&tree, "save-dialog"), "modal"));
+    assert!(!rt.accessibility_action("close", Action::Click, None));
+    rt.frame(0.0);
+    assert!(rt.state.open && rt.state.closes == 0);
+    rt.key(rune::KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
+    rt.frame(0.0);
+    assert!(rt.state.open && rt.state.closes == 0, "Escape does not dismiss while close_disabled");
+    assert!(rt.accessibility_action("toggle-saving", Action::Click, None));
+    rt.frame(0.0);
+    assert!(!rt.state.saving);
+    assert!(!has(node(&rt.accessibility_json(), "close"), "disabled"));
+    rt.key(rune::KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
+    rt.frame(0.0);
+    assert!(!rt.state.open && rt.state.closes == 1, "re-enabling dismissal restores Escape");
+}
+
+#[test]
 fn a_dialog_without_on_close_is_modal_and_omits_close_button() {
     fn view(s: &App, _: &mut Cx<App>) -> El {
         let k = kit();
@@ -274,6 +353,75 @@ fn a_combobox_reads_its_choice_search_and_results() {
     assert_eq!(node(node(&tree, "search"), "input")["activeDescendant"], "model-option-smart", "focus stays in the search field");
     press_key(&mut rt, Key::Enter);
     assert_eq!((rt.state.chosen.as_deref(), rt.state.combo.is_open()), (Some("smart"), false));
+}
+
+#[test]
+fn combobox_search_label_overrides_default_and_handles_edges() {
+    struct Local {
+        combo: ComboboxState,
+        outer_label: Option<String>,
+        search_placeholder: Option<String>,
+        search_label: Option<String>,
+    }
+
+    fn view(s: &Local, _: &mut Cx<Local>) -> El {
+        let k = kit();
+        let mut layer = Vec::new();
+        let options = [
+            ComboboxOption::new("fast", "Rapide"),
+            ComboboxOption::new("smart", "Précis"),
+        ];
+        let mut picker = Combobox::new("models", &s.combo, &options, |s: &mut Local| &mut s.combo);
+        if let Some(label) = &s.outer_label { picker = picker.label(label.clone()); }
+        if let Some(ph) = &s.search_placeholder { picker = picker.search_placeholder(ph.clone()); }
+        if let Some(sl) = &s.search_label { picker = picker.search_label(sl.clone()); }
+        let trigger = picker.build(&k, &mut layer);
+        root(col().child(trigger), layer)
+    }
+
+    let open_tree = |outer_label: Option<&str>, search_placeholder: Option<&str>, search_label: Option<&str>| {
+        let mut combo = ComboboxState::default();
+        combo.step(ComboboxEvent::Toggle { current: None });
+        let mut rt = rune::Runtime::new(
+            Local {
+                combo,
+                outer_label: outer_label.map(str::to_owned),
+                search_placeholder: search_placeholder.map(str::to_owned),
+                search_label: search_label.map(str::to_owned),
+            },
+            view,
+            (720.0, 720.0),
+            rune::Env::new(false, 1.0),
+        );
+        rt.frame(0.0);
+        rt.settle_all();
+        rt.frame(1.0 / 60.0);
+        rt.accessibility_json()
+    };
+
+    // Custom French search_label replaces the English "Search <label>" prefix independently of
+    // outer label and search_placeholder.
+    let tree = open_tree(Some("Modèle : Fixture"), Some("Rechercher des modèles..."), Some("Rechercher des modèles"));
+    let search = node(node(&tree, "search"), "input");
+    assert_eq!(said(search), ("text-input", "Rechercher des modèles"));
+    assert_eq!(search["placeholder"].as_str(), Some("Rechercher des modèles..."));
+    assert_eq!(said(node(&tree, "models-value-trigger")), ("combo-box", "Modèle : Fixture"));
+
+    // RTL search_label is preserved verbatim.
+    let tree_rtl = open_tree(Some("النموذج"), Some("ابحث..."), Some("البحث عن النماذج"));
+    assert_eq!(said(node(node(&tree_rtl, "search"), "input")), ("text-input", "البحث عن النماذج"));
+
+    // Blank search_label falls back to the existing default ("Search <label>" or "Search").
+    for blank in ["", "   "] {
+        let with_outer = open_tree(Some("Model"), None, Some(blank));
+        assert_eq!(said(node(node(&with_outer, "search"), "input")), ("text-input", "Search Model"));
+        let without_outer = open_tree(None, None, Some(blank));
+        assert_eq!(said(node(node(&without_outer, "search"), "input")), ("text-input", "Search"));
+    }
+
+    // Unset search_label without outer label or placeholder keeps the exact "Search" fallback.
+    let bare = open_tree(None, None, None);
+    assert_eq!(said(node(node(&bare, "search"), "input")), ("text-input", "Search"));
 }
 
 fn toasts(_: &App, _: &mut Cx<App>) -> El {

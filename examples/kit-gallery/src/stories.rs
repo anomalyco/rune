@@ -47,6 +47,7 @@ macro_rules! stories {
 const OPENED: &[(&str, &str)] = &[
     ("ui-dialog--basic", "dialog"),
     ("rune-dialog--fit", "dialog-fit"),
+    ("rune-dialog--close-disabled", "dialog-close-disabled"),
     ("rune-popup-list--composer", "popup-list"),
     ("ui-menu--basic", "menu"),
     ("ui-menu--rich", "menu"),
@@ -86,6 +87,7 @@ fn flip(key: &'static str) -> impl Fn(&mut G) {
 stories! {
     "rune-combobox--searchable" => combobox::searchable,
     "rune-combobox--animated-filter" => combobox::animated_filter,
+    "rune-combobox--localized" => combobox::localized,
     "ui-dialog--basic" => dialog_basic,
     "motion-focus-modal" => motion_focus_modal,
     "motion-stagger-list" => motion_stagger_list,
@@ -205,6 +207,7 @@ stories! {
     "rune-text--selectable-help" => text_selectable_help,
     "rune-text--truncate-middle" => text_truncate_middle,
     "rune-dialog--fit" => dialog_fit,
+    "rune-dialog--close-disabled" => dialog_close_disabled,
     "rune-popup-list--composer" => popup_list_composer,
     "rune-scroll-bar--basic" => scroll_bar_basic,
     "rune-scroll-bar--grow" => scroll_bar_grow,
@@ -275,6 +278,24 @@ fn dialog_fit(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
     Dialog::new("dialog-fit", "Delete item?").description("This cannot be undone.").width(400.0).fit()
         .open(is_open(s, "dialog-fit")).on_close(close).child(actions).build(k, layer);
     Button::new("Open confirmation").on_press(toggle("dialog-fit")).build(k).key("opener")
+}
+
+fn dialog_close_disabled(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
+    let saving = !s.is("dialog-close-enabled");
+    let label = if saving { "Autoriser la fermeture" } else { "Bloquer la fermeture" };
+    let actions = row().w_full().padding(16.0).gap(8.0).justify_end()
+        .child(Button::new(label).variant(ButtonVariant::Ghost).on_press(flip("dialog-close-enabled")).build(k).key("toggle-close"))
+        .child(Button::new("Fermer").disabled(saving).on_press(close).build(k).key("confirm"));
+    Dialog::new("dialog-close-disabled", "Enregistrer les modifications")
+        .description(if saving { "Patientez pendant l'enregistrement." } else { "Enregistrement terminé." })
+        .width(400.0).fit()
+        .open(is_open(s, "dialog-close-disabled"))
+        .close_label("Fermer")
+        .close_disabled(saving)
+        .on_close(close)
+        .child(actions)
+        .build(k, layer);
+    Button::new("Ouvrir le dialogue").on_press(toggle("dialog-close-disabled")).build(k).key("opener")
 }
 
 fn motion_focus_modal(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {

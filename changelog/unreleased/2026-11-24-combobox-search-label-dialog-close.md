@@ -1,0 +1,1 @@
+- `rune-kit`: added `Combobox::search_label` to customise the internal search input's accessible name, `Dialog::close_label` to customise the header close button's accessible name, and `Dialog::close_disabled` to keep the close button visible in its disabled state while blocking button press, Escape and outside clicks.

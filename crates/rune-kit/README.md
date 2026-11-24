@@ -91,9 +91,11 @@ height instead. `PopupList`, the list it shares with `@`-mention and `/`-command
 takes the same switch, so rows an app's commit changes land at once even when the field it
 follows animates its layout. The contract follows OpenCode's
 `components/list` and `use-filtered-list`; Rune's fuzzy ranking
-is its own, not bit-identical to fuzzysort. `rune-combobox--searchable` is its 200-row gallery
-scene, and `rune-combobox--animated-filter` the same with the crossfade; there is no matching
-combobox Storybook story to diff.
+is its own, not bit-identical to fuzzysort. `.search_label(..)` sets the internal search
+input's accessible name independently of the outer label. `rune-combobox--searchable` is its
+200-row gallery scene, `rune-combobox--animated-filter` the same with the crossfade, and
+`rune-combobox--localized` shows localised labels; there is no matching combobox Storybook story
+to diff.
 
 `TextInput::on_key` intercepts a focused field's keys before editing; `on_change` runs after
 text changes and receives a `Tx`, for filtering and exact debounce wakes. `TextInput`, `TextArea`
@@ -184,6 +186,9 @@ assistive technology runs through the same handlers as pointer and keys.
   a `.help`, which names it when unlabelled). `Select`, `Combobox`, `SegmentedControl`,
   `TextInput`, `TextArea`, `ShortcutRecorder`, `ProgressCircle` and `Popover` take `.label` for
   the name when no visible label says it; a text field falls back to its placeholder.
+  `Combobox::search_label` names its internal search field, `Dialog::close_label` names its
+  header close button, and `Dialog::close_disabled` keeps that button visibly disabled while
+  blocking button press, Escape and outside clicks.
 - **Values**: a select or combobox reads its chosen option, progress its percentage, a pane's
   grip its width (increment and decrement resize it), a shortcut recorder its keys.
 - **States**: checked (checkbox, switch, radio, segment, checked menu item, task), expanded or

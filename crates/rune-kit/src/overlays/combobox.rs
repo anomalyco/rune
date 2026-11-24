@@ -255,6 +255,7 @@ struct ComboboxCore {
     current: Option<String>,
     placeholder: String,
     search_placeholder: String,
+    search_label: Option<String>,
     empty: String,
     width: f32,
     max_height: f32,
@@ -274,6 +275,7 @@ impl ComboboxCore {
             current: None,
             placeholder: String::new(),
             search_placeholder: "Search".into(),
+            search_label: None,
             empty: "No results".into(),
             width: 280.0,
             max_height: 192.0,
@@ -309,8 +311,11 @@ impl ComboboxCore {
         let page = page_size(self.max_height, 28.0);
         // The search field sits borderless over a divider: the open popover is its frame, and the
         // caret shows its focus.
+        let search_label = self.search_label
+            .filter(|l| !l.trim().is_empty())
+            .unwrap_or_else(|| if name.is_empty() { "Search".to_owned() } else { format!("Search {name}") });
         let mut field = TextInput::new(&self.state.search).plain().leading_icon(k.glyph.search).height(36.0)
-            .width(None).placeholder(self.search_placeholder).label(if name.is_empty() { "Search".to_owned() } else { format!("Search {name}") })
+            .width(None).placeholder(self.search_placeholder).label(search_label)
             .active_descendant(active.map(|i| format!("{}-option-{}", self.key, self.options[i].id)));
         // Without it, an edit's commit is instant: the filtered rows and the height land with the text.
         if self.animate_filtering { field = field.animate_edit_layout(); }
@@ -358,6 +363,18 @@ impl<S: 'static> Combobox<S> {
     pub fn current(mut self, id: Option<&str>) -> Self { self.core.current = id.map(str::to_owned); self }
     pub fn placeholder(mut self, text: impl Into<String>) -> Self { self.core.placeholder = text.into(); self }
     pub fn search_placeholder(mut self, text: impl Into<String>) -> Self { self.core.search_placeholder = text.into(); self }
+    /// The accessible name for the popover's search input (the web's `aria-label`), for
+    /// localisation or a more specific prompt than the default `"Search"` / `"Search <label>"`.
+    /// Accessibility-only (not drawn); blank values fall back to the default.
+    ///
+    /// ```ignore
+    /// Combobox::new("models", &s.combo, &options, |s: &mut App| &mut s.combo)
+    ///     .label("Modèle")
+    ///     .search_placeholder("Rechercher des modèles…")
+    ///     .search_label("Rechercher des modèles")
+    ///     .build(&kit, &mut layer);
+    /// ```
+    pub fn search_label(mut self, text: impl Into<String>) -> Self { self.core.search_label = Some(text.into()); self }
     pub fn empty_message(mut self, text: impl Into<String>) -> Self { self.core.empty = text.into(); self }
     /// The popover's width, 280 by default; the trigger keeps its own.
     pub fn width(mut self, width: f32) -> Self { self.core.width = width; self }
