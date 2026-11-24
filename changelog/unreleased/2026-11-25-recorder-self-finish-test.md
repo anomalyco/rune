@@ -1,0 +1,1 @@
+- Tests (`rune-media` `recorder::tests`): check channel disconnection instead of asserting `elapsed() < 1 s` in `finishing_on_the_recorder_thread_doesnt_wait_on_itself`, removing a wall-clock assumption while still failing immediately if `macos::finish` sends `Command::Stop` or hangs.

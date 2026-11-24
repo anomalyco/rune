@@ -365,20 +365,24 @@ fn a_second_stop_while_the_device_finishes_changes_nothing() {
 }
 
 /// Dropping the last handle on the recorder thread itself (the last handle went while it
-/// reported) returns at once instead of waiting on itself.
+/// reported) disconnects its session at once instead of sending `Command::Stop` and waiting on
+/// itself.
 #[cfg(target_os = "macos")]
 #[test]
 fn finishing_on_the_recorder_thread_doesnt_wait_on_itself() {
     let (session, commands) = macos::idle_session();
-    let begun = rune_core::time::now();
-    std::thread::spawn(move || {
+    let handle = std::thread::spawn(move || {
         macos::mark_recorder_thread();
         macos::finish(session);
-    })
-    .join()
-    .unwrap();
-    assert!(begun.elapsed() < std::time::Duration::from_secs(1));
-    assert!(commands.try_recv().is_err(), "nothing was asked of the thread");
+    });
+    match commands.recv_timeout(std::time::Duration::from_secs(30)) {
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {}
+        Ok(_) => panic!("finish on the recorder thread must not send a stop command to itself"),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("finish on the recorder thread hung instead of disconnecting its session");
+        }
+    }
+    handle.join().unwrap();
 }
 
 #[test]
