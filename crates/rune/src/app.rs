@@ -35,6 +35,9 @@ pub(crate) use web::with_font;
 pub(crate) type Update<S> = Box<dyn FnOnce(&mut S, &mut Tx) -> bool + Send>;
 /// `App::on_window`'s hook, run after each native window creation.
 pub(crate) type OnWindow = Box<dyn FnMut(&crate::WindowHandle)>;
+/// `App::on_display_close`'s hook, run once on the UI thread before the event loop drops windows
+/// and closes the native display connection.
+pub(crate) type OnDisplayClose = Box<dyn FnOnce()>;
 
 /// `App::turn_scope`'s hooks.
 pub(crate) struct TurnScope<S> {
@@ -75,6 +78,7 @@ pub struct App<S: 'static> {
     pub(crate) windows: Vec<crate::AnyWindowSpec>,
     pub(crate) on_window: Option<OnWindow>,
     pub(crate) on_ready: Option<OnWindow>,
+    pub(crate) on_display_close: Option<OnDisplayClose>,
     pub(crate) on_frame_encoded: Option<crate::frame::encoded::OnFrameEncoded>,
     pub(crate) on_frame_drawn: Option<crate::frame::encoded::OnFrameDrawn<S>>,
     /// `App::layout_seed`'s seed and keeper; only desktop windows use them.
@@ -139,6 +143,7 @@ impl<S: 'static> App<S> {
             windows: Vec::new(),
             on_window: None,
             on_ready: None,
+            on_display_close: None,
             on_frame_encoded: None,
             on_frame_drawn: None,
             layout_seed: None,
@@ -675,6 +680,34 @@ impl<S: 'static> App<S> {
     /// the first frame. May queue a show through the supplied handle.
     pub fn on_ready(mut self, f: impl FnMut(&crate::WindowHandle) + 'static) -> Self {
         self.on_ready = Some(Box::new(f));
+        self
+    }
+
+    /// Runs once on the UI thread immediately before the event loop drops windows and tears down
+    /// the native display connection, after any `on_close` and `on_quit` hooks have run.
+    ///
+    /// Pair this with [`WindowHandle::with_raw_display_handle`](crate::WindowHandle::with_raw_display_handle)
+    /// to destroy foreign protocol proxies or event queues bound on winit's display (such as
+    /// Wayland objects created via `Backend::from_foreign_display`) before the display closes.
+    /// Runs on normal quits, OS-initiated termination, fast exit, and display or startup error
+    /// exits; closing one window while another window or `keep_running` keeps the event loop
+    /// alive does not run it until the loop itself exits. Native windows only (ignored on
+    /// headless and web).
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, el};
+    ///
+    /// App::new(AppSpec::new("Display", (320.0, 200.0), || (), |_, _| el()))
+    ///     .on_window(|window| {
+    ///         let _ = window.with_raw_display_handle(|d| format!("{:?}", d.as_raw()));
+    ///     })
+    ///     .on_display_close(|| {
+    ///         // Destroy foreign display proxies before the event loop closes the display.
+    ///     })
+    ///     .run();
+    /// ```
+    pub fn on_display_close(mut self, f: impl FnOnce() + 'static) -> Self {
+        self.on_display_close = Some(Box::new(f));
         self
     }
 

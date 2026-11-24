@@ -1,0 +1,1 @@
+- Window and display handles: added `WindowHandle::with_raw_display_handle` beside `with_raw_handle` to borrow winit's `DisplayHandle` via `HasDisplayHandle`, and added `App::on_display_close` (also forwarded on `WindowSpec::on_display_close`), invoked once on the UI thread immediately before the event loop drops windows and tears down the native display connection.

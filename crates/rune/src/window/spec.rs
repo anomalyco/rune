@@ -818,6 +818,17 @@ impl<S: 'static> WindowSpec<S> {
         on_window(f: impl FnMut(&crate::WindowHandle) + 'static);
         /// Called on the event thread after the first frame is ready, once per native creation.
         on_ready(f: impl FnMut(&crate::WindowHandle) + 'static);
+        /// Runs once on the UI thread immediately before the event loop drops windows and closes
+        /// the native display connection, like [`App::on_display_close`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("main", AppSpec::new("Display", (320.0, 200.0), || (), |_, _| el()))
+        ///     .on_display_close(|| {});
+        /// let _ = spec;
+        /// ```
+        on_display_close(f: impl FnOnce() + 'static);
         /// Reports each of this window's frames, like `App::on_frame_encoded`. A spec made with
         /// `WindowSpec::from_app` keeps its app's hook unless this replaces it; windows `App::window`
         /// adds have their own.

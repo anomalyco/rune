@@ -433,3 +433,21 @@ fn app_handle_set_color_scheme_coalesces_wakes_and_takes_independently() {
     assert_eq!(rest.color_scheme, None);
     assert_eq!(rest.position, Some((12, 34)));
 }
+
+#[test]
+fn on_display_close_stores_once_hook_and_replaces_previous() {
+    let ran = Arc::new(AtomicUsize::new(0));
+    let first_ran = ran.clone();
+    let second_ran = ran.clone();
+    let owned = String::from("foreign-proxy");
+    let mut app = App::new(spec())
+        .on_display_close(move || { first_ran.fetch_add(1, Ordering::Relaxed); })
+        .on_display_close(move || {
+            drop(owned);
+            second_ran.fetch_add(10, Ordering::Relaxed);
+        });
+    let hook = app.on_display_close.take().expect("hook registered");
+    assert!(app.on_display_close.is_none());
+    hook();
+    assert_eq!(ran.load(Ordering::Relaxed), 10);
+}

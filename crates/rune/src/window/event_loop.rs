@@ -201,6 +201,7 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         display_error: None,
         wayland_wake: super::wayland_wake::State::default(),
+        on_display_close: Vec::new(),
     };
     crate::open_url::incoming::prepare();
     crate::marks::mark("loop.run");

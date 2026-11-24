@@ -206,7 +206,15 @@ fn main() {
     .on_close(on_close)
     .on_window(|window| {
         let native = window.with_raw_handle(|handle| format!("{:?}", handle.as_raw())).unwrap_or_default();
-        eprintln!("background: native window {}", native.split('(').next().unwrap_or_default());
+        let display = window.with_raw_display_handle(|handle| format!("{:?}", handle.as_raw())).unwrap_or_default();
+        eprintln!(
+            "background: native window {} on {}",
+            native.split('(').next().unwrap_or_default(),
+            display.split('(').next().unwrap_or_default(),
+        );
+    })
+    .on_display_close(|| {
+        eprintln!("background: display closing");
     });
     if !std::env::args().any(|a| a == "--open") {
         app = app.windowless();

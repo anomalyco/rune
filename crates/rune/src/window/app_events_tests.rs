@@ -5,7 +5,7 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::WindowId;
 
-use super::{ExitStep, cleanup_hosts, exiting_hosts, is_error_exit, quit_hosts};
+use super::{ExitFlags, ExitStep, cleanup_hosts, exiting_hosts, is_error_exit, quit_hosts, run_display_close};
 use crate::clipboard::MemoryClipboard;
 use crate::quit::{Effect, Event, State as QuitState, step as quit_step};
 use crate::runtime::{Env, Runtime};
@@ -46,6 +46,15 @@ struct TestHost {
     name: &'static str,
     redraw_asked: Rc<RefCell<u32>>,
     menus_cancelled: Rc<RefCell<u32>>,
+    log_drop: bool,
+}
+
+impl Drop for TestHost {
+    fn drop(&mut self) {
+        if self.log_drop {
+            self.events.borrow_mut().push(format!("{}:drop", self.name));
+        }
+    }
 }
 
 impl TestHost {
@@ -78,7 +87,13 @@ impl TestHost {
             name,
             redraw_asked: Rc::new(RefCell::new(0)),
             menus_cancelled: Rc::new(RefCell::new(0)),
+            log_drop: false,
         }
+    }
+
+    fn with_drop_log(mut self) -> Self {
+        self.log_drop = true;
+        self
     }
 
     /// Simulates `Host::close` on a window without `keep_running`: `on_close`, then `Life::Finished`.
@@ -140,7 +155,7 @@ fn closing_the_only_window_runs_on_close_then_on_quit_once_for_orderly_and_fast_
         let mut hosts: Vec<Option<Box<dyn AnyHost>>> = vec![Some(Box::new(host))];
         let mut quit_state = QuitState::Running;
 
-        let should_exit = cleanup_hosts(&mut hosts, true, fast_exit, step_quit(&mut quit_state));
+        let should_exit = cleanup_hosts(&mut hosts, &mut Vec::new(), true, false, fast_exit, step_quit(&mut quit_state));
         assert!(should_exit, "closing the last main window exits the loop (fast_exit={fast_exit})");
         assert_eq!(
             *events.borrow(),
@@ -172,13 +187,13 @@ fn closing_an_earlier_window_does_not_run_its_on_quit_when_the_last_window_close
     first.close();
     let mut hosts: Vec<Option<Box<dyn AnyHost>>> = vec![Some(Box::new(first)), Some(Box::new(second))];
     let mut quit_state = QuitState::Running;
-    assert!(!cleanup_hosts(&mut hosts, true, true, step_quit(&mut quit_state)));
+    assert!(!cleanup_hosts(&mut hosts, &mut Vec::new(), true, false, true, step_quit(&mut quit_state)));
     assert!(hosts[0].is_none(), "a closed window drops while another main window keeps running");
     assert_eq!(*events.borrow(), vec!["first:on_close"]);
 
     // Turn 2: second (last) window closes.
     hosts[1].as_mut().unwrap().terminate();
-    assert!(cleanup_hosts(&mut hosts, true, true, step_quit(&mut quit_state)));
+    assert!(cleanup_hosts(&mut hosts, &mut Vec::new(), true, false, true, step_quit(&mut quit_state)));
     assert_eq!(*events.borrow(), vec!["first:on_close", "second:on_close", "second:on_quit"]);
 }
 
@@ -194,7 +209,7 @@ fn closing_the_last_main_window_runs_on_quit_in_it_and_in_open_secondary_windows
     let mut hosts: Vec<Option<Box<dyn AnyHost>>> = vec![Some(Box::new(main)), Some(Box::new(secondary))];
     let mut quit_state = QuitState::Running;
 
-    assert!(cleanup_hosts(&mut hosts, true, false, step_quit(&mut quit_state)));
+    assert!(cleanup_hosts(&mut hosts, &mut Vec::new(), true, false, false, step_quit(&mut quit_state)));
     assert_eq!(
         *events.borrow(),
         vec![
@@ -240,11 +255,8 @@ fn lost_display_and_unrequested_loop_exit_bypass_fast_exit_like_startup_error() 
 
         let step = exiting_hosts(
             &mut hosts,
-            has_startup_error,
-            has_display_error,
-            true,
-            quitting,
-            true,
+            &mut Vec::new(),
+            ExitFlags { has_startup_error, has_display_error, loop_exiting: true, quitting, fast_exit: true },
             step_quit(&mut quit_state),
         );
         assert_eq!(step, ExitStep::Orderly { relaunch: false }, "{label} must bypass fast exit");
@@ -262,7 +274,12 @@ fn lost_display_and_unrequested_loop_exit_bypass_fast_exit_like_startup_error() 
         let mut hosts: Vec<Option<Box<dyn AnyHost>>> = vec![Some(Box::new(host))];
         let mut quit_state = QuitState::Quitting(crate::quit::Hooks::Owed, crate::quit::After::Exit);
 
-        let step = exiting_hosts(&mut hosts, false, false, true, true, true, step_quit(&mut quit_state));
+        let step = exiting_hosts(
+            &mut hosts,
+            &mut Vec::new(),
+            ExitFlags { has_startup_error: false, has_display_error: false, loop_exiting: true, quitting: true, fast_exit: true },
+            step_quit(&mut quit_state),
+        );
         assert_eq!(step, ExitStep::FastExit, "normal quit keeps fast exit");
         assert_eq!(*events.borrow(), vec!["main:vanish", "main:on_quit"]);
         assert_eq!(*menus_cancelled.borrow(), 1);
@@ -276,8 +293,180 @@ fn lost_display_and_unrequested_loop_exit_bypass_fast_exit_like_startup_error() 
         let mut hosts: Vec<Option<Box<dyn AnyHost>>> = vec![Some(Box::new(host))];
         let mut quit_state = QuitState::Quitting(crate::quit::Hooks::Owed, crate::quit::After::Relaunch);
 
-        let step = exiting_hosts(&mut hosts, false, false, true, true, false, step_quit(&mut quit_state));
+        let step = exiting_hosts(
+            &mut hosts,
+            &mut Vec::new(),
+            ExitFlags { has_startup_error: false, has_display_error: false, loop_exiting: true, quitting: true, fast_exit: false },
+            step_quit(&mut quit_state),
+        );
         assert_eq!(step, ExitStep::Orderly { relaunch: true });
         assert_eq!(*events.borrow(), vec!["main:vanish", "main:on_quit"]);
+    }
+}
+
+fn log_display_close(events: &Rc<RefCell<Vec<String>>>, label: &'static str) -> crate::app::OnDisplayClose {
+    let events = events.clone();
+    Box::new(move || events.borrow_mut().push(format!("{label}:on_display_close")))
+}
+
+#[test]
+fn on_display_close_runs_once_after_quit_and_before_hosts_drop_when_last_window_closes() {
+    for fast_exit in [false, true] {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mem = crate::clipboard::memory();
+        let mut host = TestHost::new("main", true, events.clone(), &mem, None).with_drop_log();
+        host.close();
+        let mut hosts: Vec<Option<Box<dyn AnyHost>>> = vec![Some(Box::new(host))];
+        let mut display_close = vec![log_display_close(&events, "main")];
+        let mut quit_state = QuitState::Running;
+
+        assert!(cleanup_hosts(&mut hosts, &mut display_close, true, false, fast_exit, step_quit(&mut quit_state)));
+        let expected = if fast_exit {
+            vec!["main:on_close", "main:on_quit", "main:on_display_close"]
+        } else {
+            vec!["main:on_close", "main:on_quit", "main:on_display_close", "main:drop"]
+        };
+        assert_eq!(*events.borrow(), expected, "fast_exit={fast_exit}");
+        assert!(display_close.is_empty(), "hooks drain on first run");
+
+        // Subsequent exiting_hosts must not invoke on_display_close a second time.
+        let _ = exiting_hosts(
+            &mut hosts,
+            &mut display_close,
+            ExitFlags { has_startup_error: false, has_display_error: false, loop_exiting: true, quitting: true, fast_exit },
+            step_quit(&mut quit_state),
+        );
+        assert_eq!(*events.borrow(), expected, "exiting does not repeat on_display_close (fast_exit={fast_exit})");
+    }
+}
+
+#[test]
+fn on_display_close_waits_until_last_window_closes_and_runs_earlier_window_hooks_in_order() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let mem = crate::clipboard::memory();
+    let mut first = TestHost::new("first", true, events.clone(), &mem, None).with_drop_log();
+    let second = TestHost::new("second", true, events.clone(), &mem, None).with_drop_log();
+
+    first.close();
+    let mut hosts: Vec<Option<Box<dyn AnyHost>>> = vec![Some(Box::new(first)), Some(Box::new(second))];
+    let mut display_close = vec![
+        log_display_close(&events, "first"),
+        log_display_close(&events, "second"),
+    ];
+    let mut quit_state = QuitState::Running;
+
+    // Closing the first window leaves the display open: no display-close hook runs yet.
+    assert!(!cleanup_hosts(&mut hosts, &mut display_close, true, false, false, step_quit(&mut quit_state)));
+    assert_eq!(*events.borrow(), vec!["first:on_close", "first:drop"]);
+    assert_eq!(display_close.len(), 2);
+
+    // Closing the second (last) window runs both hooks in registration order before dropping it.
+    hosts[1].as_mut().unwrap().terminate();
+    assert!(cleanup_hosts(&mut hosts, &mut display_close, true, false, false, step_quit(&mut quit_state)));
+    assert_eq!(
+        *events.borrow(),
+        vec![
+            "first:on_close",
+            "first:drop",
+            "second:on_close",
+            "second:on_quit",
+            "first:on_display_close",
+            "second:on_display_close",
+            "second:drop",
+        ],
+    );
+    assert!(display_close.is_empty());
+}
+
+#[test]
+fn on_display_close_runs_once_in_exiting_hosts_for_app_quit_os_quit_and_error_exits() {
+    // App-requested quit (orderly and fast exit): on_quit runs before on_display_close,
+    // and hosts stay alive until exiting_hosts returns.
+    for fast_exit in [false, true] {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mem = crate::clipboard::memory();
+        let host = TestHost::new("main", true, events.clone(), &mem, None).with_drop_log();
+        let mut hosts: Vec<Option<Box<dyn AnyHost>>> = vec![Some(Box::new(host))];
+        let mut display_close = vec![log_display_close(&events, "main")];
+        let mut quit_state = QuitState::Quitting(crate::quit::Hooks::Owed, crate::quit::After::Exit);
+
+        let step = exiting_hosts(
+            &mut hosts,
+            &mut display_close,
+            ExitFlags { has_startup_error: false, has_display_error: false, loop_exiting: true, quitting: true, fast_exit },
+            step_quit(&mut quit_state),
+        );
+        assert_eq!(step, if fast_exit { ExitStep::FastExit } else { ExitStep::Orderly { relaunch: false } });
+        assert_eq!(*events.borrow(), vec!["main:vanish", "main:on_quit", "main:on_display_close"]);
+        assert!(hosts[0].is_some(), "hosts stay alive until after on_display_close");
+        run_display_close(&mut display_close);
+        assert_eq!(*events.borrow(), vec!["main:vanish", "main:on_quit", "main:on_display_close"]);
+    }
+
+    // OS-initiated quit (loop_exiting = false): on_quit, on_close, then on_display_close.
+    {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mem = crate::clipboard::memory();
+        let host = TestHost::new("main", true, events.clone(), &mem, None).with_drop_log();
+        let mut hosts: Vec<Option<Box<dyn AnyHost>>> = vec![Some(Box::new(host))];
+        let mut display_close = vec![log_display_close(&events, "main")];
+        let mut quit_state = QuitState::Running;
+
+        let step = exiting_hosts(
+            &mut hosts,
+            &mut display_close,
+            ExitFlags { has_startup_error: false, has_display_error: false, loop_exiting: false, quitting: false, fast_exit: false },
+            step_quit(&mut quit_state),
+        );
+        assert_eq!(step, ExitStep::Orderly { relaunch: false });
+        assert_eq!(*events.borrow(), vec!["main:vanish", "main:on_quit", "main:on_close", "main:on_display_close"]);
+    }
+
+    // Error exits skip on_quit/terminate/fast-exit but still run on_display_close before teardown.
+    for (label, has_startup_error, has_display_error) in [
+        ("startup_error", true, false),
+        ("wayland_display_error", false, true),
+        ("unrequested_loop_exit", false, false),
+    ] {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mem = crate::clipboard::memory();
+        let host = TestHost::new("main", true, events.clone(), &mem, None).with_drop_log();
+        let mut hosts: Vec<Option<Box<dyn AnyHost>>> = vec![Some(Box::new(host))];
+        let mut display_close = vec![log_display_close(&events, "main")];
+        let mut quit_state = QuitState::Running;
+
+        let step = exiting_hosts(
+            &mut hosts,
+            &mut display_close,
+            ExitFlags { has_startup_error, has_display_error, loop_exiting: true, quitting: false, fast_exit: true },
+            step_quit(&mut quit_state),
+        );
+        assert_eq!(step, ExitStep::Orderly { relaunch: false }, "{label}");
+        assert_eq!(*events.borrow(), vec!["main:on_display_close"], "{label}");
+        assert!(hosts[0].is_some(), "{label}: host drops after on_display_close");
+    }
+
+    // When event_loop.exiting() is already true during cleanup_hosts, on_display_close waits
+    // for exiting_hosts so on_quit runs first.
+    {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mem = crate::clipboard::memory();
+        let mut host = TestHost::new("main", true, events.clone(), &mem, None);
+        host.close();
+        let mut hosts: Vec<Option<Box<dyn AnyHost>>> = vec![Some(Box::new(host))];
+        let mut display_close = vec![log_display_close(&events, "main")];
+        let mut quit_state = QuitState::Quitting(crate::quit::Hooks::Owed, crate::quit::After::Exit);
+
+        assert!(cleanup_hosts(&mut hosts, &mut display_close, false, true, true, step_quit(&mut quit_state)));
+        assert_eq!(*events.borrow(), vec!["main:on_close"]);
+        assert_eq!(display_close.len(), 1, "deferred until exiting_hosts runs on_quit");
+        let step = exiting_hosts(
+            &mut hosts,
+            &mut display_close,
+            ExitFlags { has_startup_error: false, has_display_error: false, loop_exiting: true, quitting: true, fast_exit: true },
+            step_quit(&mut quit_state),
+        );
+        assert_eq!(step, ExitStep::FastExit);
+        assert_eq!(*events.borrow(), vec!["main:on_close", "main:on_quit", "main:on_display_close"]);
     }
 }
