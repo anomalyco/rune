@@ -606,3 +606,70 @@ fn always_visible_track_inset_and_track_fill_work_in_rtl_and_horizontal() {
     assert_eq!(bar.opacity, 1.0);
     assert_eq!(bar.fill, TROUGH);
 }
+
+#[test]
+fn scroll_bar_drag_and_track_page_report_direct_while_tx_scroll_reports_programmatic() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let seen: Rc<RefCell<Vec<ScrollPos>>> = Rc::new(RefCell::new(Vec::new()));
+    let view = |seen: &Rc<RefCell<Vec<ScrollPos>>>, _: &mut rune::Cx<Rc<RefCell<Vec<ScrollPos>>>>| {
+        let k = Kit::neutral(true);
+        let style = ScrollBarStyle::from_kit(&k).always_visible();
+        let log = seen.clone();
+        col().size(200.0, 100.0).child(
+            col()
+                .key("scroll")
+                .w_full()
+                .h(100.0)
+                .scroll(rune::ScrollSpec { stick_bottom: false })
+                .on_scroll_offset(move |pos: ScrollPos| log.borrow_mut().push(pos))
+                .child(col().children((0..40).map(|i| el().key(format!("r{i}")).w_full().h(20.0))))
+                .scroll_bar_styled(style),
+        )
+    };
+
+    let mut rt = rune::Runtime::new(seen.clone(), view, (200.0, 100.0), rune::Env::new(true, 1.0));
+    frames(&mut rt, 2);
+    seen.borrow_mut().clear();
+
+    // Drag the thumb down: must report ScrollSource::Direct.
+    let thumb = rect(&rt, "thumb");
+    let x = thumb[0] + thumb[2] * 0.5;
+    let y0 = thumb[1] + thumb[3] * 0.5;
+    rt.pointer_down(x, y0);
+    rt.pointer_move(x, y0 + 30.0);
+    frames(&mut rt, 2);
+    rt.pointer_up(x, y0 + 30.0);
+    frames(&mut rt, 2);
+    assert!(
+        seen.borrow().iter().any(|p| p.offset[1] > 1.0 && p.source == rune::ScrollSource::Direct),
+        "thumb drag should report Direct: {:?}",
+        seen.borrow()
+    );
+    seen.borrow_mut().clear();
+
+    // Click the track below the thumb to page: must report ScrollSource::Direct.
+    let bar = rect(&rt, "scroll-bar");
+    let bx = bar[0] + bar[2] * 0.5;
+    let by = bar[1] + bar[3] - 4.0;
+    rt.pointer_down(bx, by);
+    frames(&mut rt, 2);
+    rt.pointer_up(bx, by);
+    frames(&mut rt, 2);
+    assert!(
+        seen.borrow().iter().any(|p| p.source == rune::ScrollSource::Direct),
+        "track page click should report Direct: {:?}",
+        seen.borrow()
+    );
+    seen.borrow_mut().clear();
+
+    // Programmatic instant jump on the same viewport: must report ScrollSource::Programmatic.
+    rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, 0.0));
+    frames(&mut rt, 2);
+    assert!(
+        seen.borrow().iter().any(|p| p.offset[1] == 0.0 && p.source == rune::ScrollSource::Programmatic),
+        "Tx::scroll_to_instant should report Programmatic: {:?}",
+        seen.borrow()
+    );
+}

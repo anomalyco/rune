@@ -404,7 +404,11 @@ policy changes are applied in the same mutation phase.
 - **Scrolling** (`.scroll(ScrollSpec::default())`, `.scroll(ScrollSpec::stick_bottom())`, or
   `ScrollSpec { stick_bottom }`): a runtime-owned fractional offset, wheel 1:1,
   fling decay, and follow-the-end. A new `stick_bottom` viewport opens at its end on its first
-  frame.
+  frame. `.on_scroll_offset(|pos: ScrollPos|)` reports each frame's offset, bounds, viewport,
+  drawn size, direction, and `pos.source: ScrollSource` (`Direct`, `Momentum`, `EdgeReturn`,
+  `Programmatic`, or `None`) so observers can tell active touch drags and deliberate reversals
+  from post-release elastic edge return, momentum coast, or programmatic scrolls without extra
+  idle wakes.
 - **Virtual rows** (`.virtualize(estimated_row_height)` or lazy
   `.virtual_rows(count, estimate, key, build)` on a growth stack inside a scroll viewport at any
   depth): only an overscanned window has Taffy, shaped text and scene nodes. Rows need unique

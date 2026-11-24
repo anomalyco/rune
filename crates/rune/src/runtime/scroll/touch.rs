@@ -227,12 +227,15 @@ impl RuntimeCore {
                     let Some(st) = self.scroll.scrolls.get_mut(&id) else { continue };
                     let toward = if horizontal { st.x.toward(f64::from(d)) } else { -f64::from(d) };
                     let (offset, max) = st.axis(horizontal);
+                    let before = *offset;
                     let to = origin + toward;
                     let edge = to.clamp(0.0, max);
                     let over = to - edge;
                     *offset = edge + over * 0.55 / (1.0 + over.abs() * 0.55 / 300.0);
+                    let moved = (*offset - before).abs() > 1e-6;
                     if !horizontal { st.mode = st.mode.to_rest(); }
                     st.moved();
+                    if moved { st.note_source(crate::ScrollSource::Direct); }
                     self.pointer.scroll_cancels_press(&self.tree.nodes, id);
                 }
                 TouchEffect::Hold { id, horizontal, overflow } => {
@@ -246,18 +249,22 @@ impl RuntimeCore {
                         let Some(st) = self.scroll.scrolls.get_mut(&id) else { continue };
                         if horizontal { st.x.max = overflow.max(0.0); } else { st.max = overflow.max(0.0); }
                         let mut v = if horizontal { st.x.coast() } else { st.coast() };
-                        let _ = mode::step(&mut st.mode, ModeEvent::Coast { moving: v.abs() > 1.0 });
+                        let v0 = v;
                         let (offset, max) = st.axis(horizontal);
+                        let before = *offset;
                         let edge = offset.clamp(0.0, max);
-                        if *offset != edge {
+                        let source = if *offset != edge {
                             (*offset, v) = rebound(*offset, v, edge, dt);
                             if (*offset - edge).abs() < 0.1 && v.abs() < 1.0 { *offset = edge; v = 0.0; }
+                            if dt > 0.0 || (*offset - before).abs() > 1e-6 { crate::ScrollSource::EdgeReturn } else { crate::ScrollSource::None }
                         } else {
                             let decay = (-SCROLL_DECAY * dt).exp();
                             *offset += f64::from(v * (1.0 - decay) / SCROLL_DECAY);
                             v *= decay;
-                        }
+                            if (*offset - before).abs() > 1e-6 { crate::ScrollSource::Momentum } else { crate::ScrollSource::None }
+                        };
                         let moving = v.abs() > 1.0 || *offset < 0.0 || *offset > max;
+                        let _ = mode::step(&mut st.mode, ModeEvent::Coast { moving: v0.abs() > 1.0, source });
                         if horizontal { st.x.set_coast(v); } else if v != 0.0 { st.mode = st.mode.to_momentum(v); } else { st.halt(); }
                         moving
                     };

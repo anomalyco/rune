@@ -86,7 +86,7 @@ impl Bar {
                 self.hold();
                 self.widen();
                 if let BarPress::Pages { toward } = press {
-                    tx.scroll_page(target, toward);
+                    tx.scroll_bar_page(target, toward);
                     tx.drag_repeat_after(PAGE_DELAY);
                     return;
                 }
@@ -110,7 +110,7 @@ impl Bar {
                 if tx.drag_repeat() {
                     tx.drag_repeat_after(PAGE_EVERY);
                     if (toward < 0 && y < top) || (toward > 0 && y > top + h) {
-                        tx.scroll_page(target, toward);
+                        tx.scroll_bar_page(target, toward);
                     }
                 }
                 return;
@@ -118,9 +118,9 @@ impl Bar {
         };
         let to = offset_along(at, len, y - grab, t.min_thumb, a, t.pixels);
         if t.x {
-            tx.scroll_to_instant(target, to, at.offset[1]);
+            tx.scroll_bar_to(target, to, at.offset[1]);
         } else {
-            tx.scroll_to_instant(target, at.offset[0], to);
+            tx.scroll_bar_to(target, at.offset[0], to);
         }
     }
 }

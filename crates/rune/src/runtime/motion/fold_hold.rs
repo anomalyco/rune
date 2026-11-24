@@ -37,7 +37,9 @@ impl RuntimeCore {
             .find(|&p| nodes[p].scroll.is_some() && nodes[p].scroll_axes.y()) else { return };
         let Some(st) = self.scroll.scrolls.get_mut(&nodes[s].id) else { return };
         let cut = f64::from(cut);
+        let before = st.offset;
         st.offset = (st.offset - cut).max(0.0);
+        if (st.offset - before).abs() > 1e-6 { st.note_source(crate::ScrollSource::Programmatic); }
         st.max = (st.max - cut).max(0.0);
         if let ScrollMode::Glide { to: GlideTo::Offset(to) | GlideTo::ShrunkEnd(to), .. } = &mut st.mode { *to = (*to - cut).max(0.0); }
     }

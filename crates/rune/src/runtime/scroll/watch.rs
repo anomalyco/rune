@@ -38,9 +38,12 @@ impl RuntimeCore {
                 [near(p.rect.w, viewport[0]), near(p.rect.h, viewport[1])]
             });
             let direction = match n.flow { crate::el::Flow::Ltr => crate::Direction::Ltr, crate::el::Flow::Rtl => crate::Direction::Rtl };
+            let (by_hand, source) = match scroll_mode::step(&mut st.mode, ModeEvent::Take).into_iter().next() {
+                Some(scroll_mode::Effect::Tell { by_hand, source }) => (by_hand, source),
+                None => (false, crate::ScrollSource::None),
+            };
             let at = crate::ScrollPos { offset: [st.x.offset as f32, st.offset as f32 + st.slack.height()], max: [st.x.max as f32, st.max as f32],
-                viewport, drawn, direction };
-            let by_hand = !scroll_mode::step(&mut st.mode, ModeEvent::Take).is_empty();
+                viewport, drawn, direction, source };
             for effect in step(&mut st.watch, Event::Seen { at, handler: Some(f), by_hand }) {
                 let Effect::Tell { at, scrolled } = effect;
                 calls.push((f.clone(), at, scrolled));
@@ -78,13 +81,24 @@ pub(in crate::runtime) enum Effect {
     Tell { at: crate::ScrollPos, scrolled: bool },
 }
 
+/// Whether two scroll observations have the same viewport geometry, ignoring `source`, so
+/// settling `source` back to `ScrollSource::None` on an idle frame never triggers an extra wake
+/// or callback.
+fn same_geometry(a: crate::ScrollPos, b: crate::ScrollPos) -> bool {
+    a.offset == b.offset
+        && a.max == b.max
+        && a.viewport == b.viewport
+        && a.drawn == b.drawn
+        && a.direction == b.direction
+}
+
 /// Calls the handler when where the viewport stands changed, or when it is a new one that has
 /// not heard it: the effect says what to tell it.
 pub(in crate::runtime) fn step(watch: &mut Watch, event: Event<'_>) -> Effects<Effect> {
     let Event::Seen { at, handler, by_hand } = event;
     let Some(f) = handler else { return Effects::none() };
-    let prev = watch.told.replace(at);
-    let changed = prev != Some(at);
+    let prev = watch.told;
+    let changed = !prev.is_some_and(|old| same_geometry(old, at));
     let new_handler = !watch.handler.as_ref().is_some_and(|by| std::ptr::addr_eq(by.as_ptr(), std::rc::Rc::as_ptr(f)));
     if new_handler {
         watch.handler = Some(std::rc::Rc::downgrade(f));
@@ -92,6 +106,7 @@ pub(in crate::runtime) fn step(watch: &mut Watch, event: Event<'_>) -> Effects<E
     if !changed && !new_handler {
         return Effects::none();
     }
+    watch.told = Some(at);
     let scrolled = by_hand && prev.is_some_and(|old| {
         (old.offset[0] - at.offset[0]).abs() > 0.01 || (old.offset[1] - at.offset[1]).abs() > 0.01
     });

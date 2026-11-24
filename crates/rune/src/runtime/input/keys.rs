@@ -192,17 +192,24 @@ impl RuntimeCore {
     /// lands on its end follows it again.
     #[inline]
     pub(in crate::runtime) fn page_to(&mut self, i: usize, to: impl FnOnce(f64, f64, f64) -> f64) -> bool {
-        let mut to = Some(to);
-        self.page_to_dyn(i, &mut |offset, max, page| to.take().expect("page_to runs once")(offset, max, page))
+        self.page_to_with(i, crate::ScrollSource::Direct, to)
     }
 
-    fn page_to_dyn(&mut self, i: usize, to: &mut dyn FnMut(f64, f64, f64) -> f64) -> bool {
+    #[inline]
+    pub(in crate::runtime) fn page_to_with(&mut self, i: usize, source: crate::ScrollSource, to: impl FnOnce(f64, f64, f64) -> f64) -> bool {
+        let mut to = Some(to);
+        self.page_to_dyn(i, source, &mut |offset, max, page| to.take().expect("page_to runs once")(offset, max, page))
+    }
+
+    fn page_to_dyn(&mut self, i: usize, source: crate::ScrollSource, to: &mut dyn FnMut(f64, f64, f64) -> f64) -> bool {
         self.release_hover_hold();
         self.drop_scroll_holds();
         let (id, page, stick) = (self.tree.nodes[i].id, f64::from(self.tree.nodes[i].local.h * 0.9), self.tree.nodes[i].scroll.is_some_and(|s| s.stick_bottom));
         let Some(st) = self.scroll.scrolls.get_mut(&id) else { return false };
+        let before = st.offset;
         st.offset = to(st.offset, st.max, page).clamp(0.0, st.max);
         st.moved();
+        if (st.offset - before).abs() > 1e-6 { st.note_source(source); }
         st.land(stick);
         true
     }
