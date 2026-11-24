@@ -21,6 +21,22 @@ impl RuntimeCore {
         self.paint.srgb_blend()
     }
 
+    /// Set the maximum number of native `El::system_material` views this runtime admits per frame
+    /// (default [`crate::MAX_NATIVE_MATERIALS`], clamped to 64), as
+    /// [`App::max_native_materials`](crate::App::max_native_materials) does for a window. Visible
+    /// material elements past this limit draw their fallback fill and report
+    /// [`ElementInfo::material_fallback`](crate::ElementInfo::material_fallback).
+    pub fn set_max_native_materials(&mut self, max: usize) {
+        if self.paint.set_max_native_materials(max) {
+            self.commit.dirty = true;
+        }
+    }
+
+    /// Maximum number of native `El::system_material` views this runtime admits per frame.
+    pub fn max_native_materials(&self) -> usize {
+        self.paint.max_native_materials()
+    }
+
     pub fn fade_stops(&self) -> [f32; 2] {
         self.tree.fade_stops
     }

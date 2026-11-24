@@ -13,18 +13,70 @@ use crate::Color;
 use rune_motion::NodeId;
 
 /// A backdrop material the system composites behind a window.
+///
+/// ```no_run
+/// use rune::{El, SystemMaterial, el};
+///
+/// fn sidebar(content: El) -> El {
+///     el().w(240.0).h_full().system_material(SystemMaterial::Sidebar).child(content)
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum SystemMaterial {
     /// Liquid Glass (`NSGlassEffectView`, regular style) on macOS 26 and later; the popover
     /// material on earlier macOS.
     Glass,
-    /// The popover vibrancy material (`NSVisualEffectView`, `.popover`, behind window).
+    /// The popover vibrancy material (`NSVisualEffectView`, `.popover`, behind window, always
+    /// active).
     Popover,
+    /// The sidebar vibrancy material (`NSVisualEffectView`, `.sidebar`, behind window,
+    /// following the window's active state: vibrant while active and flat when inactive,
+    /// matching Finder and Mail sidebars). Kept as `.sidebar` in legacy mode and before
+    /// macOS 26.
+    Sidebar,
 }
 
-/// Native material views per window. Elements past this many draw their fallback instead.
+/// Default native material views per window. Elements past the window's limit draw their
+/// fallback instead; raise or lower the per-window cap (up to 64) with
+/// [`App::max_native_materials`](crate::App::max_native_materials).
 pub const MAX_NATIVE_MATERIALS: usize = 4;
+
+/// Hard upper bound on per-window native material views so a large configured limit cannot
+/// exhaust AppKit backdrop surfaces.
+pub(crate) const MAX_NATIVE_MATERIALS_CAP: usize = 64;
+
+/// Clamp a configured per-window native material cap to the internal ceiling.
+pub(crate) fn clamp_max_native_materials(max: usize) -> usize {
+    max.min(MAX_NATIVE_MATERIALS_CAP)
+}
+
+/// AppKit `NSVisualEffectView` `(material, blendingMode, state)` for non-Glass materials:
+/// - `Sidebar`: `NSVisualEffectMaterialSidebar` (7), `BehindWindow` (0),
+///   `FollowsWindowActiveState` (0).
+/// - `Popover` (and any non-Glass fallback): `NSVisualEffectMaterialPopover` (6),
+///   `BehindWindow` (0), `Active` (1).
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+pub(crate) fn visual_effect_config(material: SystemMaterial) -> (isize, isize, isize) {
+    match material {
+        SystemMaterial::Sidebar => (7, 0, 0),
+        _ => (6, 0, 1),
+    }
+}
+
+/// One-time stderr notice when visible `El::system_material` elements exceed the per-window cap.
+pub(crate) fn fallback_notice(fallen: usize, total: usize, limit: usize) -> String {
+    let first = limit + 1;
+    if fallen == 1 {
+        format!(
+            "rune: native system material {first} of {total} exceeded limit {limit} and fell back to its fill (raise with App::max_native_materials)"
+        )
+    } else {
+        format!(
+            "rune: {fallen} of {total} native system materials ({first}..={total}) exceeded limit {limit} and fell back to their fill (raise with App::max_native_materials)"
+        )
+    }
+}
 
 /// One material element as built this frame, in physical pixels like the instances.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -161,5 +213,16 @@ impl Mode {
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn from_env() -> Mode {
         Mode::parse(rune_core::env::var("RUNE_SYSTEM_MATERIAL").as_deref())
+    }
+
+    /// Resolves which native material backs `material` given whether `NSGlassEffectView` is
+    /// available: `Glass` falls back to `Popover` before macOS 26 and in legacy mode, while
+    /// `Popover` and `Sidebar` stay as requested.
+    #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+    pub(crate) fn resolve_with(self, material: SystemMaterial, has_glass: bool) -> SystemMaterial {
+        match material {
+            SystemMaterial::Glass if self == Mode::Legacy || !has_glass => SystemMaterial::Popover,
+            other => other,
+        }
     }
 }

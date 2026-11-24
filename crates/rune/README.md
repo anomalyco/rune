@@ -2481,13 +2481,19 @@ col().radius(28.0).shadow(18.0, 44.0, black.alpha(0.35))
 
 The platform blurs whatever is behind the window under the element's rounded rect. On macOS in
 a transparent window, `Glass` is Liquid Glass (`NSGlassEffectView`) on macOS 26 and later and the
-popover material before; `Popover` is `NSVisualEffectView`'s popover material, behind window.
-Each is a native view under the Metal layer that takes no clicks, with its frame, corner radius
-and opacity set in the same Core Animation transaction as the frame's drawable. So the material
-keeps up with springs, Rune's shadow and the content drawn on it. Native views take one corner
-radius, the largest corner clamped to half the shorter side. They sit under everything the
-window draws and ignore ancestor clips, and a window gets at most `MAX_NATIVE_MATERIALS`; later
-elements draw the fallback.
+popover material before; `Popover` is `NSVisualEffectView`'s popover material (behind window,
+always active); and `Sidebar` is `NSVisualEffectView`'s sidebar material (behind window,
+following the window's active state: vibrant while active and flat when inactive, matching Finder
+and Mail sidebars, kept as `.sidebar` in legacy mode and before macOS 26). Each is a native view
+under the Metal layer that takes no clicks, with its frame, corner radius and opacity set in the
+same Core Animation transaction as the frame's drawable. So the material keeps up with springs,
+Rune's shadow and the content drawn on it. Native views take one corner radius, the largest corner
+clamped to half the shorter side. They sit under everything the window draws and ignore ancestor
+clips. A window gets at most `App::max_native_materials` (also on `WindowSpec` and
+`ConfiguredOverlay`, and `Runtime::set_max_native_materials`; default `MAX_NATIVE_MATERIALS` = 4,
+clamped to 64). Visible material elements past the limit draw their fallback instead, report
+`ElementInfo::material_fallback = true`, emit `"materialFallback": true` in `--tree` JSON, and
+log a one-time notice to stderr when native materials are active.
 
 Rune draws the shadow, so make the window larger than the card and turn the system shadow off
 with `MacWindowOptions::default().shadow(false)`, or the window gets a second, rectangular
@@ -3212,7 +3218,7 @@ one-second target.
 ## Differences from PLAN.md
 
 - On macOS, Rune's native Metal backend (`metal-backend`, enabled by default and plugged into wgpu's `custom` backend) is the default; wgpu (Metal/D3D12/Vulkan/WebGPU) runs on other platforms or when opted out (`App::gpu_backend(GpuBackend::Wgpu)` or `RUNE_GPU_BACKEND=wgpu`).
-- winit hosts native windows instead of a custom shell everywhere (edge overlays move winit's view into non-activating panels on macOS, layer-shell on Wayland, or tool windows on Windows). macOS system material underlays (`SystemMaterial::Glass` / `Popover`) are implemented via `NSGlassEffectView` / `NSVisualEffectView`, synchronized with Core Animation transactions.
+- winit hosts native windows instead of a custom shell everywhere (edge overlays move winit's view into non-activating panels on macOS, layer-shell on Wayland, or tool windows on Windows). macOS system material underlays (`SystemMaterial::Glass` / `Popover` / `Sidebar`) are implemented via `NSGlassEffectView` / `NSVisualEffectView`, synchronized with Core Animation transactions.
 - Animation is evaluated on the UI/main thread at frame time, not on a separate render thread (see [`ARCHITECTURE.md`](../../ARCHITECTURE.md)). View functions still never run for animation: views produce targets, and tracks animate between them.
 - One instanced uber-quad pipeline (with `Classic`, `Windfoil`, and `Lcd` shader variants, plus companion passes for layer blur, backdrop blur, and native video surfaces) replaces separate quad and text pipelines.
 - AccessKit accessibility (UI Automation on Windows, NSAccessibility on macOS, AT-SPI on Linux, plus a DOM mirror on web) and vertical, horizontal, and two-axis scrolling (`scroll`, `scroll_x`, `scroll_xy`) are implemented. There is still no live inspector socket; the headless CLI flags (`--tree`, `--snap`, `--trace`, `--script`) stand in.

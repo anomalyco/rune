@@ -312,6 +312,10 @@ impl<S: 'static> WindowSpec<S> {
         srgb_blend(enabled: bool);
         /// This window's font smoothing (`App::font_smoothing`).
         font_smoothing(mode: crate::FontSmoothing);
+        /// Maximum number of native `El::system_material` views this window may host at once
+        /// (default [`crate::MAX_NATIVE_MATERIALS`], clamped to 64), like
+        /// [`App::max_native_materials`].
+        max_native_materials(max: usize);
         /// Size this window's height to its content, like `App::fit_content_height`.
         fit_content_height();
         /// Ask a tiling window manager to float this window when it opens, like `App::float_on_open`.

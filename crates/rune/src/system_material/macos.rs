@@ -10,7 +10,7 @@
 
 #![allow(unsafe_code)]
 
-use super::{assign, MaterialDraw, Mode, PresentFlag, SystemMaterial, MAX_NATIVE_MATERIALS};
+use super::{assign, visual_effect_config, MaterialDraw, Mode, PresentFlag, SystemMaterial, MAX_NATIVE_MATERIALS_CAP};
 use rune_motion::NodeId;
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2::rc::Retained;
@@ -38,11 +38,11 @@ fn rect(x: f64, y: f64, w: f64, h: f64) -> CGRect {
     CGRect { origin: CGPoint { x, y }, size: CGSize { width: w, height: h } }
 }
 
-struct Slot {
-    view: Retained<AnyObject>,
-    material: SystemMaterial,
+pub(super) struct Slot {
+    pub(super) view: Retained<AnyObject>,
+    pub(super) material: SystemMaterial,
     /// `NSGlassEffectView`, which rounds itself; the effect views round their layer.
-    glass: bool,
+    pub(super) glass: bool,
     /// The element it showed last, which keeps it while it stays mounted.
     owner: Option<NodeId>,
     /// Frame, corner radius and curve last set, and the alpha (`None` once hidden).
@@ -158,7 +158,7 @@ impl Materials {
     }
 
     fn sync(&mut self, draws: &[MaterialDraw], scale: f32) {
-        let draws = &draws[..draws.len().min(MAX_NATIVE_MATERIALS)];
+        let draws = &draws[..draws.len().min(MAX_NATIVE_MATERIALS_CAP)];
         if draws.is_empty() && self.slots.iter().all(|s| s.shown.is_none()) { return; }
         let Some(host) = self.host() else { return };
         let mode = self.mode;
@@ -311,17 +311,14 @@ pub(super) fn unwatch_live_end(token: &AnyObject) {
 
 impl Mode {
     /// The material actually shown: `Glass` falls back to the popover effect view before
-    /// macOS 26 and in legacy mode.
-    fn resolve(self, material: SystemMaterial) -> SystemMaterial {
-        match material {
-            SystemMaterial::Glass if self == Mode::Legacy || AnyClass::get(c"NSGlassEffectView").is_none() => SystemMaterial::Popover,
-            other => other,
-        }
+    /// macOS 26 and in legacy mode; `Popover` and `Sidebar` stay as requested.
+    pub(super) fn resolve(self, material: SystemMaterial) -> SystemMaterial {
+        self.resolve_with(material, AnyClass::get(c"NSGlassEffectView").is_some())
     }
 }
 
 /// A transparent material view in `host`.
-fn make_view(material: SystemMaterial, host: &AnyObject) -> Option<Slot> {
+pub(super) fn make_view(material: SystemMaterial, host: &AnyObject) -> Option<Slot> {
     let glass = material == SystemMaterial::Glass;
     let class = AnyClass::get(if glass { c"NSGlassEffectView" } else { c"NSVisualEffectView" })?;
     // SAFETY: AppKit initializers and setters on the main thread; the view is retained by its slot.
@@ -334,10 +331,10 @@ fn make_view(material: SystemMaterial, host: &AnyObject) -> Option<Slot> {
             // NSGlassEffectViewStyleRegular.
             let _: () = msg_send![&*view, setStyle: 0isize];
         } else {
-            // NSVisualEffectMaterialPopover, behind window, always active.
-            let _: () = msg_send![&*view, setMaterial: 6isize];
-            let _: () = msg_send![&*view, setBlendingMode: 0isize];
-            let _: () = msg_send![&*view, setState: 1isize];
+            let (ve_material, blending, state) = visual_effect_config(material);
+            let _: () = msg_send![&*view, setMaterial: ve_material];
+            let _: () = msg_send![&*view, setBlendingMode: blending];
+            let _: () = msg_send![&*view, setState: state];
             let layer: *mut AnyObject = msg_send![&*view, layer];
             if let Some(layer) = layer.as_ref() { let _: () = msg_send![layer, setMasksToBounds: true]; }
         }

@@ -93,6 +93,11 @@ pub struct ElementInfo {
     /// where scrolling put it this frame, in points: down for a stuck header, up for a stuck
     /// footer, right for a stuck left element, 0 when it isn't stuck. `rect` already includes it.
     pub stuck: f32,
+    /// True when this visible [`El::system_material`](crate::El::system_material) element
+    /// exceeded the window's native material cap ([`App::max_native_materials`](crate::App::max_native_materials),
+    /// default [`MAX_NATIVE_MATERIALS`](crate::MAX_NATIVE_MATERIALS)) on the last frame and drew
+    /// its fallback fill instead.
+    pub material_fallback: bool,
 }
 
 /// One `El::matched` handover completed on the last frame: `from` left the tree at `from_rect`
@@ -420,6 +425,7 @@ impl RuntimeCore {
                     expanded: n.a11y.expanded,
                     item_selected: n.focus.selected,
                     stuck: self.scroll.stuck.get(i).copied().unwrap_or(0.0),
+                    material_fallback: self.paint.material_fallback(n.id),
                     virtual_extent: self.commit.virtuals.contains_key(&n.path) && n.vis.fill.a == 0.0
                         && n.vis.border_width() == 0.0 && n.vis.shadows.is_empty() && n.text.is_none() && n.vis.icon.is_none(),
                 })
@@ -442,7 +448,7 @@ impl RuntimeCore {
                 visible: [r.x.max(c[0]), r.y.max(c[1]), (r.edges()[2].min(c[2]) - r.x.max(c[0])).max(0.0),
                     (r.edges()[3].min(c[3]) - r.y.max(c[1])).max(0.0)],
                 revealing: true, in_growing_row: false, scrolling: false, scrolled: [0.0; 2], virtual_extent: false, live_intent: 0, caret: None, edit_range: None, drag_out: false,
-                help: None, selected: None, level: None, expanded: None, item_selected: false, stuck: 0.0,
+                help: None, selected: None, level: None, expanded: None, item_selected: false, stuck: 0.0, material_fallback: false,
             });
         }
         self.link_elements(&mut elements);
