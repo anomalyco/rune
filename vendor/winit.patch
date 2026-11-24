@@ -1633,3 +1633,212 @@ index 13ef99c26..27b73b6a4 100644
          let registry_state = RegistryState::new(globals);
          let compositor_state =
              CompositorState::bind(globals, queue_handle).map_err(WaylandError::Bind)?;
+diff --git a/src/platform_impl/linux/wayland/seat/touch/mod.rs b/src/platform_impl/linux/wayland/seat/touch/mod.rs
+index 124504fee..86dc8b4e8 100644
+--- a/src/platform_impl/linux/wayland/seat/touch/mod.rs
++++ b/src/platform_impl/linux/wayland/seat/touch/mod.rs
+@@ -21,15 +21,15 @@ impl TouchHandler for WinitState {
+         _: &Connection,
+         _: &QueueHandle<Self>,
+         touch: &WlTouch,
+-        _: u32,
++        serial: u32,
+         _: u32,
+         surface: WlSurface,
+         id: i32,
+         position: (f64, f64),
+     ) {
+         let window_id = wayland::make_wid(&surface);
+-        let scale_factor = match self.windows.get_mut().get(&window_id) {
+-            Some(window) => window.lock().unwrap().scale_factor(),
++        let window = match self.windows.get_mut().get(&window_id) {
++            Some(window) => window.clone(),
+             None => return,
+         };
+ 
+@@ -41,6 +41,12 @@ impl TouchHandler for WinitState {
+             },
+         };
+ 
++        let scale_factor = {
++            let mut window = window.lock().unwrap();
++            window.touch_down(id, touch.seat().clone(), serial);
++            window.scale_factor()
++        };
++
+         // Update the state of the point.
+         let location = LogicalPosition::<f64>::from(position);
+         seat_state.touch_map.insert(id, TouchPoint { surface, location });
+@@ -84,7 +90,11 @@ impl TouchHandler for WinitState {
+ 
+         let window_id = wayland::make_wid(&touch_point.surface);
+         let scale_factor = match self.windows.get_mut().get(&window_id) {
+-            Some(window) => window.lock().unwrap().scale_factor(),
++            Some(window) => {
++                let mut window = window.lock().unwrap();
++                window.touch_up(id, touch.seat());
++                window.scale_factor()
++            },
+             None => return,
+         };
+ 
+@@ -159,7 +169,11 @@ impl TouchHandler for WinitState {
+         for (id, touch_point) in seat_state.touch_map.drain() {
+             let window_id = wayland::make_wid(&touch_point.surface);
+             let scale_factor = match self.windows.get_mut().get(&window_id) {
+-                Some(window) => window.lock().unwrap().scale_factor(),
++                Some(window) => {
++                    let mut window = window.lock().unwrap();
++                    window.touch_up(id, touch.seat());
++                    window.scale_factor()
++                },
+                 None => return,
+             };
+ 
+diff --git a/src/platform_impl/linux/wayland/window/state.rs b/src/platform_impl/linux/wayland/window/state.rs
+index 9cd83c4a3..077451053 100644
+--- a/src/platform_impl/linux/wayland/window/state.rs
++++ b/src/platform_impl/linux/wayland/window/state.rs
+@@ -69,6 +69,9 @@ pub struct WindowState {
+     /// The pointers observed on the window.
+     pub pointers: Vec<Weak<ThemedPointer<WinitPointerData>>>,
+ 
++    /// Rune: active touches on the window, for interactive move/resize/menu serials.
++    active_touches: ActiveTouches<WlSeat>,
++
+     selected_cursor: SelectedCursor,
+ 
+     /// Whether the cursor is visible.
+@@ -206,6 +209,7 @@ impl WindowState {
+             resize_increments: None,
+             pointer_constraints,
+             pointers: Default::default(),
++            active_touches: ActiveTouches::default(),
+             queue_handle: queue_handle.clone(),
+             resizable: true,
+             scale_factor: 1.,
+@@ -234,6 +238,28 @@ impl WindowState {
+         })
+     }
+ 
++    /// Rune: record an active touch down on this window.
++    pub fn touch_down(&mut self, id: i32, seat: WlSeat, serial: u32) {
++        self.active_touches.down(id, seat, serial);
++    }
++
++    /// Rune: clear a touch point that ended or was cancelled on this window.
++    pub fn touch_up(&mut self, id: i32, seat: &WlSeat) {
++        self.active_touches.up(id, seat);
++    }
++
++    /// Rune: run an interactive xdg-shell request using the active touch's `(seat, serial)`,
++    /// falling back to the observed pointers' latest button serial when no touch is down.
++    fn with_interactive_serial(&self, mut callback: impl FnMut(&WlSeat, u32)) {
++        if let Some((seat, serial)) = self.active_touches.latest() {
++            callback(seat, serial);
++            return;
++        }
++        self.apply_on_pointer(|_, data| {
++            callback(data.seat(), data.latest_button_serial());
++        });
++    }
++
+     /// Get the current state of the frame callback.
+     pub fn frame_callback_state(&self) -> FrameCallbackState {
+         self.frame_callback_state
+@@ -435,11 +461,7 @@ impl WindowState {
+     /// Start interacting drag resize.
+     pub fn drag_resize_window(&self, direction: ResizeDirection) -> Result<(), ExternalError> {
+         let xdg_toplevel = self.window.xdg_toplevel();
+-
+-        // TODO(kchibisov) handle touch serials.
+-        self.apply_on_pointer(|_, data| {
+-            let serial = data.latest_button_serial();
+-            let seat = data.seat();
++        self.with_interactive_serial(|seat, serial| {
+             xdg_toplevel.resize(seat, serial, direction.into());
+         });
+ 
+@@ -449,10 +471,7 @@ impl WindowState {
+     /// Start the window drag.
+     pub fn drag_window(&self) -> Result<(), ExternalError> {
+         let xdg_toplevel = self.window.xdg_toplevel();
+-        // TODO(kchibisov) handle touch serials.
+-        self.apply_on_pointer(|_, data| {
+-            let serial = data.latest_button_serial();
+-            let seat = data.seat();
++        self.with_interactive_serial(|seat, serial| {
+             xdg_toplevel._move(seat, serial);
+         });
+ 
+@@ -982,10 +1001,7 @@ impl WindowState {
+     }
+ 
+     pub fn show_window_menu(&self, position: LogicalPosition<u32>) {
+-        // TODO(kchibisov) handle touch serials.
+-        self.apply_on_pointer(|_, data| {
+-            let serial = data.latest_button_serial();
+-            let seat = data.seat();
++        self.with_interactive_serial(|seat, serial| {
+             self.window.show_window_menu(seat, serial, position.into());
+         });
+     }
+@@ -1268,3 +1284,58 @@ fn into_sctk_adwaita_config(theme: Option<Theme>) -> sctk_adwaita::FrameConfig {
+         None => sctk_adwaita::FrameConfig::auto(),
+     }
+ }
++
++/// Rune: active touches on a window `(id, seat, down_serial)` in arrival order.
++#[derive(Debug)]
++struct ActiveTouches<S> {
++    points: Vec<(i32, S, u32)>,
++}
++
++impl<S> Default for ActiveTouches<S> {
++    fn default() -> Self {
++        Self { points: Vec::new() }
++    }
++}
++
++impl<S: PartialEq> ActiveTouches<S> {
++    fn down(&mut self, id: i32, seat: S, serial: u32) {
++        self.points.retain(|(i, s, _)| !(*i == id && *s == seat));
++        self.points.push((id, seat, serial));
++    }
++
++    fn up(&mut self, id: i32, seat: &S) {
++        self.points.retain(|(i, s, _)| !(*i == id && s == seat));
++    }
++
++    fn latest(&self) -> Option<(&S, u32)> {
++        self.points.last().map(|(_, seat, serial)| (seat, *serial))
++    }
++}
++
++#[cfg(test)]
++mod touch_serial_tests {
++    use super::ActiveTouches;
++
++    #[test]
++    fn active_touch_serial_tracks_down_up_and_multitouch() {
++        let mut touches = ActiveTouches::default();
++        assert_eq!(touches.latest(), None);
++
++        touches.down(0, "seat0", 41);
++        assert_eq!(touches.latest(), Some((&"seat0", 41)));
++
++        // Second finger down becomes latest; lifting it restores the first finger's serial.
++        touches.down(1, "seat0", 42);
++        assert_eq!(touches.latest(), Some((&"seat0", 42)));
++        touches.up(1, &"seat0");
++        assert_eq!(touches.latest(), Some((&"seat0", 41)));
++
++        // Duplicate id on the same seat updates its serial without duplicating entries.
++        touches.down(0, "seat0", 43);
++        assert_eq!(touches.latest(), Some((&"seat0", 43)));
++
++        // Lifting the last finger returns None so callers fall back to pointer serials.
++        touches.up(0, &"seat0");
++        assert_eq!(touches.latest(), None);
++    }
++}

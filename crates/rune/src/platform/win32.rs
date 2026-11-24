@@ -34,6 +34,8 @@ pub(crate) use cloak::Cloak;
 pub(crate) use dpi_drag::follow_suggested_rect;
 pub(crate) use dpi_drag::in_size_move;
 pub(crate) use frame::CustomFrame;
+pub(crate) use frame::DragHitSync;
+pub(crate) use frame::DragRegions;
 pub(crate) use frame::has_window_menu;
 pub(crate) use frame::request_inner_size;
 pub(crate) use frame::window_menu;

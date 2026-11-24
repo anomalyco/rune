@@ -101,3 +101,165 @@ fn a_finger_past_the_slop_picks_one_mode_with_only_its_own_data() {
     rt.touch(2, TouchPhase::Moved, 60.0, 20.0, 1.01);
     assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| f.mode), Some(Mode::Drag), "on an element that drags it holds no viewport");
 }
+
+#[derive(Default)]
+struct BarState {
+    button_taps: usize,
+    no_drag_taps: usize,
+    modal_open: bool,
+    note: crate::TextEdit,
+}
+
+fn bar_view(s: &BarState, _: &mut Cx<BarState>) -> El {
+    let titlebar = crate::row().key("titlebar").size(440.0, 44.0).window_drag()
+        .child(el().key("btn").size(60.0, 44.0).on_press(|s: &mut BarState| s.button_taps += 1))
+        .child(el().key("nodrag").size(60.0, 44.0).no_window_drag().on_press(|s: &mut BarState| s.no_drag_taps += 1))
+        .child(crate::text_input(&s.note, crate::TextStyle::new(14.0, 400.0)).key("field").label("Field").size(80.0, 32.0).on_edit(|s: &mut BarState| &mut s.note));
+    let modal = s.modal_open.then(|| {
+        el().key("sheet").size(120.0, 80.0).modal(true, |s: &mut BarState| s.modal_open = false)
+    });
+    col().size(440.0, 200.0).child(titlebar).children(modal)
+}
+
+fn bar_rig() -> Runtime<BarState> {
+    let mut rt = Runtime::new(BarState::default(), bar_view, (440.0, 200.0), Env::default());
+    rt.frame.set_test_clock(crate::ManualClock::new(60.0));
+    rt.double_click_interval = 0.3;
+    rt.frame(0.0);
+    rt
+}
+
+#[test]
+fn a_tap_on_a_window_drag_region_within_slop_emits_no_drag_and_second_tap_double_clicks() {
+    let mut rt = bar_rig();
+    // First tap on bare titlebar (x=250, y=20): within TOUCH_SLOP (8 pt).
+    rt.touch(1, TouchPhase::Started, 250.0, 20.0, 0.0);
+    assert_eq!(rt.take_titlebar_action(), None, "touch down must hold Drag until movement passes TOUCH_SLOP");
+    rt.touch(1, TouchPhase::Moved, 254.0, 23.0, 0.02);
+    assert_eq!(rt.take_titlebar_action(), None, "movement within slop (5 pt <= 8 pt) must not drag");
+    rt.touch(1, TouchPhase::Ended, 254.0, 23.0, 0.05);
+    assert_eq!(rt.take_titlebar_action(), None);
+    assert_eq!(rt.pointer(), None);
+    assert!(!rt.touching());
+
+    // Second tap within double-click interval and click slop emits DoubleClick once.
+    rt.frame.test_clock_mut().unwrap().seek(0.15);
+    rt.touch(2, TouchPhase::Started, 251.0, 20.0, 0.15);
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::DoubleClick));
+    rt.touch(2, TouchPhase::Moved, 270.0, 20.0, 0.17);
+    assert_eq!(rt.take_titlebar_action(), None, "moving after DoubleClick must not also emit Drag");
+    rt.touch(2, TouchPhase::Ended, 270.0, 20.0, 0.20);
+    assert_eq!(rt.take_titlebar_action(), None);
+    assert_eq!(rt.pointer(), None);
+    assert!(!rt.touching());
+}
+
+#[test]
+fn a_touch_drag_past_slop_on_a_window_drag_region_emits_drag_once_and_resets_cleanly() {
+    let mut rt = bar_rig();
+    rt.touch(1, TouchPhase::Started, 250.0, 20.0, 0.0);
+    assert_eq!(rt.take_titlebar_action(), None);
+    assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| f.mode), Some(Mode::WindowDragPending));
+    // 10 pt move crosses TOUCH_SLOP (8 pt) and emits Drag once.
+    rt.touch(1, TouchPhase::Moved, 260.0, 20.0, 0.02);
+    assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| f.mode), Some(Mode::WindowDragging));
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Drag));
+    // Further moves emit nothing.
+    rt.touch(1, TouchPhase::Moved, 280.0, 30.0, 0.04);
+    assert_eq!(rt.take_titlebar_action(), None);
+    rt.touch(1, TouchPhase::Ended, 280.0, 30.0, 0.06);
+    assert_eq!(rt.take_titlebar_action(), None);
+    assert_eq!(rt.pointer(), None);
+    assert!(!rt.touching());
+    // A tap right after a completed drag must not pair with the drag as a DoubleClick.
+    rt.frame.test_clock_mut().unwrap().seek(0.1);
+    rt.touch(2, TouchPhase::Started, 250.0, 20.0, 0.1);
+    assert_eq!(rt.take_titlebar_action(), None);
+    rt.touch(2, TouchPhase::Ended, 250.0, 20.0, 0.12);
+}
+
+#[test]
+fn a_cancelled_touch_on_a_window_drag_region_clears_state_and_double_tap_pair() {
+    let mut rt = bar_rig();
+    rt.touch(1, TouchPhase::Started, 250.0, 20.0, 0.0);
+    assert_eq!(rt.take_titlebar_action(), None);
+    rt.touch(1, TouchPhase::Cancelled, 250.0, 20.0, 0.02);
+    assert_eq!(rt.take_titlebar_action(), None);
+    assert_eq!(rt.pointer(), None);
+    assert!(!rt.touching());
+    // Cancelled touch must not pair with a subsequent tap.
+    rt.frame.test_clock_mut().unwrap().seek(0.1);
+    rt.touch(2, TouchPhase::Started, 250.0, 20.0, 0.1);
+    assert_eq!(rt.take_titlebar_action(), None);
+    rt.touch(2, TouchPhase::Moved, 265.0, 20.0, 0.12);
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Drag));
+    rt.touch(2, TouchPhase::Cancelled, 265.0, 20.0, 0.14);
+    assert_eq!(rt.pointer(), None);
+    assert!(!rt.touching());
+}
+
+#[test]
+fn a_long_press_on_a_window_drag_region_opens_the_window_menu_and_never_drags() {
+    let mut rt = Runtime::new(BarState::default(), bar_view, (440.0, 200.0), Env::default());
+    rt.frame.set_test_clock(crate::ManualClock::new(60.0));
+    rt.double_click_interval = 0.3;
+    rt.core_mut().set_caption(Some(crate::titlebar::Caption::new(44.0)));
+    rt.frame(0.0);
+    rt.touch(1, TouchPhase::Started, 250.0, 20.0, 0.0);
+    let target = rt.core().primary_target(250.0, 20.0).map(|i| rt.tree.nodes[i].path.clone());
+    assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| (f.mode, f.hold_due)), Some((Mode::WindowDragPending, LONG_PRESS)), "target={target:?}");
+    assert_eq!(rt.take_titlebar_action(), None);
+    assert_eq!(rt.take_window_menu(), None);
+    // Advance past LONG_PRESS (0.5 s) using the injected clock.
+    rt.frame.test_clock_mut().unwrap().seek(0.55);
+    rt.frame(0.55);
+    assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| f.mode), Some(Mode::Menu), "clock={}", rt.core().clock);
+    assert_eq!(rt.take_window_menu(), Some(WindowMenu::Pointer));
+    // Moving after the menu opened must not emit Drag.
+    rt.touch(1, TouchPhase::Moved, 280.0, 20.0, 0.6);
+    assert_eq!(rt.take_titlebar_action(), None);
+    rt.touch(1, TouchPhase::Ended, 280.0, 20.0, 0.65);
+    assert_eq!(rt.pointer(), None);
+    assert!(!rt.touching());
+}
+
+#[test]
+fn interactive_children_and_no_window_drag_inside_titlebar_stay_interactive() {
+    let mut rt = bar_rig();
+    // Button inside .window_drag().
+    rt.touch(1, TouchPhase::Started, 30.0, 20.0, 0.0);
+    assert_eq!(rt.take_titlebar_action(), None);
+    rt.touch(1, TouchPhase::Ended, 30.0, 20.0, 0.02);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.button_taps, 1);
+    assert_eq!(rt.take_titlebar_action(), None);
+
+    // .no_window_drag() element inside .window_drag().
+    rt.touch(2, TouchPhase::Started, 90.0, 20.0, 0.1);
+    rt.touch(2, TouchPhase::Moved, 110.0, 20.0, 0.12);
+    assert_eq!(rt.take_titlebar_action(), None);
+    rt.touch(2, TouchPhase::Ended, 110.0, 20.0, 0.14);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.take_titlebar_action(), None);
+
+    // Text input inside .window_drag().
+    rt.touch(3, TouchPhase::Started, 150.0, 20.0, 0.2);
+    rt.touch(3, TouchPhase::Ended, 150.0, 20.0, 0.22);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.note.focused, "tapping a text field inside .window_drag() focuses it");
+    assert_eq!(rt.take_titlebar_action(), None);
+}
+
+#[test]
+fn an_active_modal_blocks_touch_window_drag() {
+    let mut rt = bar_rig();
+    rt.update(|s, _| s.modal_open = true);
+    rt.frame(1.0 / 60.0);
+    rt.touch(1, TouchPhase::Started, 250.0, 20.0, 0.0);
+    assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| f.mode), Some(Mode::Pending { scroll: None }));
+    rt.touch(1, TouchPhase::Moved, 270.0, 20.0, 0.02);
+    assert_eq!(rt.take_titlebar_action(), None);
+    rt.touch(1, TouchPhase::Ended, 270.0, 20.0, 0.04);
+    rt.frame(1.0 / 60.0);
+    assert!(!rt.state.modal_open, "touch outside modal still dismisses it");
+}

@@ -27,7 +27,7 @@
 
 #![allow(unsafe_code)]
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::OnceLock;
 
@@ -38,10 +38,11 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture
 use windows_sys::Win32::UI::Shell::{ABE_BOTTOM, ABE_LEFT, ABE_RIGHT, ABE_TOP, ABM_GETAUTOHIDEBAREX, APPBARDATA, DefSubclassProc, RemoveWindowSubclass, SHAppBarMessage, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use crate::runtime::WindowMenu;
+use crate::runtime::{DragHit, WindowMenu, drag_hit_at};
 use crate::titlebar::{Caption, CaptionButton, CaptionState};
 
 const SUBCLASS: usize = 0x5255_4e46;
+const DRAG_SUBCLASS: usize = 0x5255_4e44;
 /// `WM_MOUSEMOVE`'s flag for the (logical) left button held.
 const MK_LBUTTON: WPARAM = 0x0001;
 
@@ -57,13 +58,21 @@ struct State {
     /// Windows' rect for the new scale while `WM_DPICHANGED` runs: winit's own `SetWindowPos`
     /// lands on it (`WM_WINDOWPOSCHANGING`), so the window moves and resizes once.
     dpi_rect: Cell<Option<RECT>>,
+    /// Committed bare `.window_drag()` hit-test region (top-to-bottom, window points), updated on
+    /// layout commit so `WM_NCHITTEST` answers `HTCAPTION` for native touch and mouse dragging.
+    drag_hits: RefCell<Vec<DragHit>>,
 }
 
 impl CustomFrame {
     /// Takes the title bar off `window`, keeping its client size.
     pub(crate) fn install(window: &winit::window::Window, height: f32) -> Option<Self> {
         let hwnd = super::hwnd(window)?;
-        let state = Rc::new(State { height: Cell::new(height), caption: Cell::new(CaptionState::Idle), dpi_rect: Cell::new(None) });
+        let state = Rc::new(State {
+            height: Cell::new(height),
+            caption: Cell::new(CaptionState::Idle),
+            dpi_rect: Cell::new(None),
+            drag_hits: RefCell::new(Vec::new()),
+        });
         let data = Rc::into_raw(state.clone());
         // SAFETY: `data` stays alive until WM_NCDESTROY, where the subclass that reads it goes.
         if unsafe { SetWindowSubclass(hwnd, Some(subclass), SUBCLASS, data as usize) } == 0 {
@@ -96,6 +105,104 @@ impl CustomFrame {
     /// A new titlebar height (`Cx::titlebar_height`): the buttons and the band they hit-test.
     pub(crate) fn set_height(&self, height: f32) {
         self.state.height.set(height);
+    }
+
+    /// Publishes the committed bare `.window_drag()` hit-test region (window points).
+    pub(crate) fn set_drag_hits(&self, hits: Vec<DragHit>) {
+        let mut slot = self.state.drag_hits.borrow_mut();
+        if *slot != hits { *slot = hits; }
+    }
+}
+
+/// Last layout-commit basis synced into Win32's `WM_NCHITTEST` drag-region list, so idle and
+/// non-committing frames do zero work.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DragHitSync {
+    synced: bool,
+    commits: u64,
+    zoom_bits: u32,
+    fullscreen: bool,
+    animating: bool,
+}
+
+impl DragHitSync {
+    /// Returns true only when layout committed, zoom or fullscreen changed, or motion is active
+    /// (including the first settled frame after motion ends).
+    pub(crate) fn needs_update(&mut self, commits: u64, zoom: f32, fullscreen: bool, animating: bool) -> bool {
+        let zoom_bits = zoom.to_bits();
+        let due = !self.synced
+            || self.commits != commits
+            || self.zoom_bits != zoom_bits
+            || self.fullscreen != fullscreen
+            || self.animating
+            || animating;
+        if due {
+            *self = Self { synced: true, commits, zoom_bits, fullscreen, animating };
+        }
+        due
+    }
+}
+
+/// Lightweight `WM_NCHITTEST` subclass for windows without [`CustomFrame`] (such as borderless
+/// windows) that contain `.window_drag()` regions. Installed lazily on the first non-empty drag
+/// region and removed automatically on `WM_NCDESTROY`.
+pub(crate) struct DragRegions {
+    hits: Rc<RefCell<Vec<DragHit>>>,
+}
+
+impl DragRegions {
+    /// Installs the hit-test subclass on `window` with `hits`.
+    pub(crate) fn install(window: &winit::window::Window, hits: Vec<DragHit>) -> Option<Self> {
+        let hwnd = super::hwnd(window)?;
+        let hits = Rc::new(RefCell::new(hits));
+        let data = Rc::into_raw(hits.clone());
+        // SAFETY: `data` stays alive until `WM_NCDESTROY`, where the subclass that reads it goes.
+        if unsafe { SetWindowSubclass(hwnd, Some(drag_subclass), DRAG_SUBCLASS, data as usize) } == 0 {
+            // SAFETY: never handed to Windows.
+            drop(unsafe { Rc::from_raw(data) });
+            return None;
+        }
+        Some(Self { hits })
+    }
+
+    /// Updates the committed bare `.window_drag()` hit-test region (window points).
+    pub(crate) fn set(&self, hits: Vec<DragHit>) {
+        let mut slot = self.hits.borrow_mut();
+        if *slot != hits { *slot = hits; }
+    }
+}
+
+unsafe extern "system" fn drag_subclass(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM, _: usize, data: usize) -> LRESULT {
+    let ptr = data as *const RefCell<Vec<DragHit>>;
+    if message == WM_NCDESTROY {
+        // SAFETY: removes this subclass; if it was still installed, reclaims the ref `install` gave it.
+        unsafe {
+            if RemoveWindowSubclass(hwnd, Some(drag_subclass), DRAG_SUBCLASS) != 0 {
+                drop(Rc::from_raw(ptr));
+            }
+            return DefSubclassProc(hwnd, message, wparam, lparam);
+        }
+    }
+    // SAFETY: `ptr` is the live `Rc<RefCell<Vec<DragHit>>>` owned by the subclass until `WM_NCDESTROY`.
+    let hits: Rc<RefCell<Vec<DragHit>>> = unsafe {
+        Rc::increment_strong_count(ptr);
+        Rc::from_raw(ptr)
+    };
+    // SAFETY: reads the message's documented parameters on a live window this thread owns.
+    unsafe {
+        match message {
+            WM_NCHITTEST => {
+                let hit = DefSubclassProc(hwnd, message, wparam, lparam);
+                if hit != HTCLIENT as LRESULT { return hit; }
+                let mut point = client_point(lparam);
+                ScreenToClient(hwnd, &mut point);
+                return drag_hit_code(GetDpiForWindow(hwnd), point, &hits.borrow()) as LRESULT;
+            }
+            // Borderless windows do not open a blocking system menu from `DefWindowProc`.
+            WM_NCRBUTTONUP if wparam == HTCAPTION as WPARAM => return 0,
+            _ => {}
+        }
+        DefSubclassProc(hwnd, message, wparam, lparam)
     }
 }
 
@@ -316,6 +423,13 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
                 return 0;
             }
             WM_NCRBUTTONDOWN | WM_NCRBUTTONUP | WM_NCRBUTTONDBLCLK if own_caption_button(state, hwnd, wparam, lparam).is_some() => return 0,
+            // A right-click or touch long-press on `HTCAPTION` opens the window menu through
+            // `track_window_menu`, keeping Rune's event-loop turns and RTL layout active.
+            WM_NCRBUTTONUP if wparam == HTCAPTION as WPARAM => {
+                let p = client_point(lparam);
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| track_window_menu(hwnd, p.x, p.y))).ok();
+                return 0;
+            }
             // The default would repaint a title bar this window doesn't have.
             WM_NCACTIVATE => return DefSubclassProc(hwnd, message, wparam, -1),
             WM_GETMINMAXINFO => {
@@ -442,12 +556,12 @@ fn hit_window(state: &State, hwnd: HWND, mut point: POINT) -> HitWindow {
 }
 
 /// What a point (screen pixels) in the client area hits: the top resize edge, an enabled
-/// caption button, or the client.
+/// caption button, a bare `.window_drag()` region, or the client.
 fn hit_test(state: &State, hwnd: HWND, point: POINT) -> u32 {
-    client_hit(&hit_window(state, hwnd, point))
+    client_hit(&hit_window(state, hwnd, point), &state.drag_hits.borrow())
 }
 
-fn client_hit(w: &HitWindow) -> u32 {
+fn client_hit(w: &HitWindow, drag_hits: &[DragHit]) -> u32 {
     let p = w.point;
     if !w.zoomed && w.resizable && p.y >= 0 && p.y < w.edge {
         return if p.x < w.edge { HTTOPLEFT } else if p.x >= w.width - w.edge { HTTOPRIGHT } else { HTTOP };
@@ -456,8 +570,17 @@ fn client_hit(w: &HitWindow) -> u32 {
         Some(CaptionButton::Minimize) => HTMINBUTTON,
         Some(CaptionButton::Maximize) => HTMAXBUTTON,
         Some(CaptionButton::Close) => HTCLOSE,
-        None => HTCLIENT,
+        None if in_caption_strip(&w.caption, w.width, w.dpi, p) => HTCLIENT,
+        None => drag_hit_code(w.dpi, p, drag_hits),
     }
+}
+
+/// `HTCAPTION` when client pixel `point` at `dpi` lands on a bare `.window_drag()` region in
+/// `drag_hits`, else `HTCLIENT`.
+fn drag_hit_code(dpi: u32, point: POINT, drag_hits: &[DragHit]) -> u32 {
+    if dpi == 0 || drag_hits.is_empty() { return HTCLIENT; }
+    let scale = dpi as f32 / 96.0;
+    if drag_hit_at(drag_hits, point.x as f32 / scale, point.y as f32 / scale) { HTCAPTION } else { HTCLIENT }
 }
 
 /// The drawn button a non-client mouse message (`hit`, at `lparam`'s screen point) is for: only
@@ -469,13 +592,22 @@ fn own_caption_button(state: &State, hwnd: HWND, hit: WPARAM, lparam: LPARAM) ->
 }
 
 fn owned_button(w: &HitWindow, hit: WPARAM) -> Option<CaptionButton> {
-    caption_button(hit).filter(|_| client_hit(w) == hit as u32)
+    caption_button(hit).filter(|_| client_hit(w, &[]) == hit as u32)
 }
 
 fn button_at(caption: &Caption, width: i32, dpi: u32, point: POINT) -> Option<CaptionButton> {
     if dpi == 0 { return None; }
     let scale = dpi as f32 / 96.0;
     caption.hit(width as f32 / scale, scale, (point.x as f32 / scale, point.y as f32 / scale))
+}
+
+/// Whether `point` (client pixels) falls inside any drawn caption button slot, enabled or dimmed.
+fn in_caption_strip(caption: &Caption, width: i32, dpi: u32, point: POINT) -> bool {
+    if dpi == 0 { return false; }
+    let scale = dpi as f32 / 96.0;
+    let (x, y) = (point.x as f32 / scale, point.y as f32 / scale);
+    caption.rects(width as f32 / scale, scale)
+        .any(|(_, [rx, ry, rw, rh])| x >= rx && x < rx + rw && y >= ry && y < ry + rh)
 }
 
 /// The enabled caption button under a point in client pixels.
