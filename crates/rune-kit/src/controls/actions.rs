@@ -168,7 +168,7 @@ enum Label {
 }
 
 /// An accelerator as a menu shows it, the same key on every layout; any other text as given.
-fn format_shortcut(s: &str) -> String {
+pub(crate) fn format_shortcut(s: &str) -> String {
     let s = s.trim();
     if let Ok(sc) = s.parse::<rune::Shortcut>() {
         sc.menu_keycaps().join(if cfg!(target_os = "macos") { "" } else { "+" })
@@ -177,7 +177,7 @@ fn format_shortcut(s: &str) -> String {
     }
 }
 
-fn compose_help(help: Option<&str>, label: Option<&str>, shortcut: Option<&str>) -> Option<String> {
+pub(crate) fn compose_help(help: Option<&str>, label: Option<&str>, shortcut: Option<&str>) -> Option<String> {
     let sc = shortcut.map(format_shortcut).filter(|s| !s.is_empty());
     match (help, label, sc) {
         (Some(h), _, Some(s)) if !h.is_empty() => Some(format!("{h}  {s}")),

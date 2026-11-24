@@ -556,3 +556,146 @@ fn a_shortcut_recorder_reads_its_name_keys_and_recording() {
     assert_eq!(show["value"], "Press shortcut");
     assert!(show["description"].as_str().is_some_and(|d| d.contains("Escape")));
 }
+
+#[test]
+fn segmented_control_tabs_icons_descriptions_and_controls() {
+    use rune::{Direction, el, text};
+
+    fn tabs(s: &App, _: &mut Cx<App>) -> El {
+        let k = kit();
+        let sel = s.picked.unwrap_or(0);
+        col()
+            .gap(8.0)
+            .child(
+                SegmentedControl::new(&["General", "Network", "Security"], Some(sel))
+                    .label("Settings sections")
+                    .icons(&[Some(k.glyph.search), Some(k.glyph.copy), Some(k.glyph.lock)])
+                    .trailing(1, el().size(6.0, 6.0).radius(3.0).fill(k.c.danger.fg).a11y_hidden())
+                    .help(0, "General")
+                    .shortcut(0, "cmd+1")
+                    .help(1, "Network status")
+                    .shortcut(1, "F2")
+                    .description(1, "2 connection errors")
+                    .help(2, "Locked by policy")
+                    .segment_state(2, State::Disabled)
+                    .controls(0, "settings-panel")
+                    .controls(1, "settings-panel")
+                    .controls(2, "settings-panel")
+                    .as_tabs()
+                    .on_pick(|s: &mut App, i, _| s.picked = Some(i))
+                    .build(&k)
+                    .key("sections"),
+            )
+            .child(
+                col()
+                    .key("settings-panel")
+                    .role("tabpanel")
+                    .label("Settings detail")
+                    .child(text(format!("Panel {sel}"))),
+            )
+            .child(
+                SegmentedControl::new(&["", "Notes"], Some(0))
+                    .label("Quick switcher")
+                    .icons(&[Some(k.glyph.search), Some(k.glyph.copy)])
+                    .help(0, "Search")
+                    .shortcut(0, "F3")
+                    .help(1, "Show inline notes")
+                    .build(&k)
+                    .key("quick"),
+            )
+            .child(
+                rune::row()
+                    .dir(Direction::Rtl)
+                    .child(
+                        SegmentedControl::new(&["الأول", "الثاني"], Some(sel.min(1)))
+                            .label("تبويبات")
+                            .as_tabs()
+                            .on_pick(|s: &mut App, i, _| s.picked = Some(i))
+                            .build(&k)
+                            .key("rtl-tabs"),
+                    ),
+            )
+    }
+
+    let mut rt = mount(App { picked: Some(0), ..App::default() }, tabs);
+    let tree = rt.accessibility_json();
+
+    // Root switches to tab-list with horizontal orientation and setSize.
+    let sections = node(&tree, "sections");
+    assert_eq!(said(sections), ("tab-list", "Settings sections"));
+    assert_eq!(sections["orientation"], "horizontal");
+    assert_eq!(sections["setSize"], 3);
+
+    let cmd1 = if cfg!(target_os = "macos") { "⌘1" } else { "Super+1" };
+    let tab0 = node(sections, "segment0");
+    assert_eq!(said(tab0), ("tab", "General"));
+    assert!(has(tab0, "selected") && !has(tab0, "checked") && !has(tab0, "unchecked"), "tab uses selected: {tab0}");
+    assert_eq!(tab0["position"], 1);
+    assert_eq!(tab0["shortcut"], cmd1);
+    assert!(tab0["description"].is_null(), "help matching label does not echo as description: {tab0}");
+    assert_eq!(tab0["controls"], serde_json::json!(["settings-panel"]));
+    assert!(can(tab0, "click") && can(tab0, "focus"));
+
+    let tab1 = node(sections, "segment1");
+    assert_eq!(said(tab1), ("tab", "Network"));
+    assert!(!has(tab1, "selected") && !has(tab1, "checked"));
+    assert_eq!(tab1["position"], 2);
+    assert_eq!(tab1["shortcut"], "F2");
+    assert_eq!(tab1["description"], "2 connection errors", "explicit description overrides tooltip text");
+    assert_eq!(tab1["controls"], serde_json::json!(["settings-panel"]));
+
+    let tab2 = node(sections, "segment2");
+    assert_eq!(said(tab2), ("tab", "Security"));
+    assert!(has(tab2, "disabled") && actions(tab2).is_empty());
+    assert_eq!(tab2["description"], "Locked by policy");
+    assert_eq!(tab2["controls"], serde_json::json!(["settings-panel"]));
+
+    // Icon-only segment uses help as its accessible name without echoing it as description;
+    // labelled segment whose help differs from its label uses help as description.
+    let quick = node(&tree, "quick");
+    assert_eq!(said(quick), ("radio-group", "Quick switcher"));
+    assert!(quick["orientation"].is_null(), "radiogroup leaves orientation unset");
+    let q0 = node(quick, "segment0");
+    assert_eq!(said(q0), ("radio-button", "Search"));
+    assert!(q0["description"].is_null(), "help naming an icon-only segment is not echoed: {q0}");
+    assert_eq!(q0["shortcut"], "F3");
+    let q1 = node(quick, "segment1");
+    assert_eq!(said(q1), ("radio-button", "Notes"));
+    assert_eq!(q1["description"], "Show inline notes");
+
+    assert!(with_role(&tree, "image").is_empty(), "decorative segment icons stay out of the tree");
+    no_echo(&tree);
+
+    // Web accessibility mirror exposes tablist orientation, tab roles, aria-selected, description, and controls.
+    let mirror: Vec<serde_json::Value> = serde_json::from_str(&rt.a11y_json()).unwrap();
+    let m_list = mirror.iter().find(|v| v["o"] == "tablist" && v["t"] == "Settings sections").expect("mirrored tablist");
+    assert_eq!(m_list["or"], "horizontal");
+    let m_tab0 = mirror.iter().find(|v| v["o"] == "tab" && v["t"] == "General").expect("mirrored tab0");
+    assert_eq!(m_tab0["se"], true);
+    assert_eq!(m_tab0["ct"], "settings-panel");
+    let m_tab1 = mirror.iter().find(|v| v["o"] == "tab" && v["t"] == "Network").expect("mirrored tab1");
+    assert_eq!(m_tab1["se"], false);
+    assert_eq!(m_tab1["d"], "2 connection errors");
+    assert_eq!(m_tab1["ct"], "settings-panel");
+    let m_tab2 = mirror.iter().find(|v| v["o"] == "tab" && v["t"] == "Security").expect("mirrored tab2");
+    assert_eq!(m_tab2["dis"], true);
+    let m_icon_only = mirror.iter().find(|v| v["o"] == "radio" && v["t"] == "Search").expect("mirrored icon-only radio");
+    assert!(m_icon_only["d"].is_null(), "icon-only radio does not echo help in web mirror: {m_icon_only}");
+
+    // Keyboard and assistive navigation in tab mode: arrows move selection and skip disabled tabs.
+    assert!(act(&mut rt, "sections/segment0", Action::Focus) || act(&mut rt, "segment0", Action::Focus));
+    press_key(&mut rt, Key::Right);
+    assert_eq!(rt.state.picked, Some(1));
+    assert!(has(node(node(&rt.accessibility_json(), "sections"), "segment1"), "selected"));
+    press_key(&mut rt, Key::Right);
+    assert_eq!(rt.state.picked, Some(0), "Right skips disabled tab and wraps to first");
+    assert!(!act(&mut rt, "segment2", Action::Click), "disabled tab rejects assistive click");
+    tap(&mut rt, "segment1");
+    assert_eq!(rt.state.picked, Some(1));
+
+    // RTL tablist: Left moves forward from first tab to second tab.
+    rt.update(|s, tx| { s.picked = Some(0); tx.focus("rtl-tabs", true); });
+    settle(&mut rt);
+    press_key(&mut rt, Key::Left);
+    assert_eq!(rt.state.picked, Some(1), "RTL tablist moves forward on Left arrow");
+}
