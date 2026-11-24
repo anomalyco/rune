@@ -19,6 +19,9 @@ pub(in crate::runtime) const P_OUTLINE: Prop<Color> = Prop::custom(77, PropClass
 pub(in crate::runtime) const P_BORDER_BOTTOM: Prop<Color> = Prop::custom(78, PropClass::Color);
 /// `El::press_scale`'s presented factor, multiplied into the element's own scale.
 pub(in crate::runtime) const P_PRESS_SCALE: Prop<f32> = Prop::custom(79, PropClass::Scale);
+/// `El::press_offset`'s presented horizontal and vertical shift in points.
+pub(in crate::runtime) const P_PRESS_OX: Prop<f32> = Prop::custom(96, PropClass::Spatial);
+pub(in crate::runtime) const P_PRESS_OY: Prop<f32> = Prop::custom(97, PropClass::Spatial);
 pub(in crate::runtime) const P_RADIAL: [Prop<Color>; 8] = [
     Prop::custom(80, PropClass::Color),
     Prop::custom(81, PropClass::Color),
@@ -52,6 +55,8 @@ pub(in crate::runtime) fn prop_name(id: u16) -> &'static str {
         90..=93 => "shadow",
         94 => "group-rest",
         95 => "trim",
+        96 => "press-offset-x",
+        97 => "press-offset-y",
         _ => "custom",
     }
 }

@@ -15,13 +15,14 @@ fn plays_out(t: &Track) -> bool {
     t.frames.windows(2).any(|w| w[0].1.phase == 1.0 && w[1].1.phase == 1.0)
 }
 
-/// Its phase wraps, or steps on to the capture's last frame, and it never played out.
+/// Its phase wraps (periodic or multi-iteration finite loop), or steps on to the capture's
+/// last frame without playing out.
 fn periodic_phase(t: &Track, n: usize) -> bool {
     let ph: Vec<(usize, f32)> = t.frames.iter().filter(|f| !f.1.phase.is_nan()).map(|f| (f.0, f.1.phase)).collect();
     let steps = || ph.windows(2).filter(|w| w[1].0 == w[0].0 + 1);
     let wraps = steps().any(|w| w[1].1 < w[0].1 - 0.5);
     let to_end = ph.last().is_some_and(|l| l.0 + 1 == n) && steps().last().is_some_and(|w| w[1].1 != w[0].1);
-    (wraps || to_end) && !plays_out(t)
+    wraps || (to_end && !plays_out(t))
 }
 
 /// Every track that loops, with everything inside one.

@@ -219,3 +219,120 @@ fn clock_pause_scale_step_and_seek_match_reference() {
     clock.seek(0.45);
     assert!((t.sample(clock.now(), false) - core::f32::consts::PI).abs() < 1e-6);
 }
+#[test]
+fn repeating_sequence_wraps_holds_first_pose_reduced_cools_and_retimes_smoothly() {
+    const BEATS: &[Beat] = &[
+        Beat::new(0.0).opacity(0.4).scale(0.8),
+        Beat::new(0.5).opacity(1.0).scale(1.0).easing(Easing::LINEAR),
+        Beat::new(1.0).opacity(0.4).scale(0.8).easing(Easing::LINEAR),
+    ];
+    const FAST: &[Beat] = &[
+        Beat::new(0.0).opacity(0.4).scale(0.8),
+        Beat::new(0.25).opacity(1.0).scale(1.0).easing(Easing::LINEAR),
+        Beat::new(0.5).opacity(0.4).scale(0.8).easing(Easing::LINEAR),
+    ];
+    let spec = LoopSpec::sequence(Sequence::new(BEATS).delay(0.2).repeating());
+    let mut t = LoopTrack::new(spec, 1.0);
+    assert!(!t.is_finite());
+    assert_eq!(t.pending_start(1.0), Some(1.2));
+    assert!(!t.active(1.1));
+    assert!(t.active(1.2));
+    // Wraps across multiple periods.
+    let p1 = t.pose(1.45, false).unwrap();
+    let p2 = t.pose(2.45, false).unwrap();
+    assert!((p1.opacity - 0.7).abs() < 1e-5 && (p1.scale - 0.9).abs() < 1e-5);
+    assert!((p2.opacity - p1.opacity).abs() < 1e-5 && (p2.scale - p1.scale).abs() < 1e-5);
+    assert!(t.active(5.0), "repeating sequence stays active past its period");
+    // Reduced motion holds the calm first pose.
+    let red = t.pose(1.45, true).unwrap();
+    assert_eq!((red.opacity, red.scale), (0.4, 0.8));
+    assert_eq!(t.sample(1.45, true), 0.4);
+    // finish() leaves periodic loops alone; advance() moves their rhythm.
+    t.finish();
+    assert!(t.active(1.45));
+    t.advance(0.25);
+    let peak = t.pose(1.45, false).unwrap();
+    assert!((peak.opacity - 1.0).abs() < 1e-5 && (peak.scale - 1.0).abs() < 1e-5);
+    // Retiming preserves presented phase.
+    let before = t.phase(1.6);
+    t.retime(LoopSpec::sequence(Sequence::new(FAST).repeating()), 1.6);
+    assert!((t.phase(1.6) - before).abs() < 1e-9);
+    // Cooling via enabled(false) eases opacity and scale smoothly toward neutral (1.0, 1.0).
+    let at_cool = t.pose(2.0, false).unwrap();
+    t.enabled(false, 2.0);
+    assert_eq!(t.pose(2.0, false).unwrap(), at_cool);
+    assert!(t.active(2.01), "cooling keeps settle frames");
+    assert!(!t.active(10.0), "settled cooled track stops asking for frames");
+    let rested = t.pose(10.0, false).unwrap();
+    assert!((rested.opacity - 1.0).abs() < 1e-5 && (rested.scale - 1.0).abs() < 1e-5);
+}
+#[test]
+fn finite_slide_plays_n_periods_and_rests_at_end_pose() {
+    let linear = LoopSpec::slide(0.5, [0.0, 0.0], [2.0, 0.0]).easing(Easing::LINEAR);
+    // n = 0 rests immediately at `to` with no active frames and no pending wake.
+    let zero = LoopTrack::with_times(LoopSpec { delay: 0.2, ..linear }, 0, 1.0);
+    assert!(zero.is_finite());
+    assert_eq!(zero.times(), Some(0));
+    assert!(!zero.active(1.0));
+    assert_eq!(zero.pending_start(1.0), None);
+    assert_eq!(zero.phase(1.0), 1.0);
+    assert_eq!(zero.offset(1.0, false), Some([2.0, 0.0]));
+    assert_eq!(zero.offset(1.0, true), Some([2.0, 0.0]));
+
+    // n = 1 with delay waits, sweeps once, and rests at `to`.
+    let delayed = LoopSpec { delay: 0.1, ..linear };
+    let once = LoopTrack::with_times(delayed, 1, 2.0);
+    assert_eq!(once.pending_start(2.0), Some(2.1));
+    assert!(!once.active(2.05));
+    assert_eq!(once.offset(2.05, false), Some([0.0, 0.0]));
+    assert!(once.active(2.1));
+    assert!((once.offset(2.35, false).unwrap()[0] - 1.0).abs() < 1e-5);
+    assert!(once.active(2.59));
+    assert!(!once.active(2.6), "inactive once total duration elapses");
+    assert_eq!(once.phase(2.6), 1.0);
+    assert_eq!(once.offset(2.6, false), Some([2.0, 0.0]));
+    assert_eq!(once.offset(2.2, true), Some([2.0, 0.0]), "reduced motion lands at end pose");
+    // advance() leaves finite slides alone; finish() lands them early.
+    let mut early = LoopTrack::with_times(linear, 2, 0.0);
+    early.advance(0.4);
+    assert_eq!(early.phase(0.25), 0.5);
+    early.finish();
+    assert!(!early.active(0.25));
+    assert_eq!(early.offset(0.25, false), Some([2.0, 0.0]));
+
+    // n = 2 wraps after the first period and rests at `to` after the second.
+    let twice = LoopTrack::with_times(linear, 2, 0.0);
+    assert!((twice.offset(0.25, false).unwrap()[0] - 1.0).abs() < 1e-5);
+    assert!(twice.active(0.5));
+    assert_eq!(twice.phase(0.5), 0.0, "wraps at period 1");
+    assert!((twice.offset(0.75, false).unwrap()[0] - 1.0).abs() < 1e-5);
+    assert!(!twice.active(1.0), "stops after 2 periods");
+    assert_eq!(twice.phase(1.0), 1.0);
+    assert_eq!(twice.offset(1.0, false), Some([2.0, 0.0]));
+
+    // Default eased slide works identically and retime_with_times restarts on change.
+    let eased = LoopSpec::slide(0.5, [-1.0, 0.0], [3.0, 0.0]);
+    let mut track = LoopTrack::with_times(eased, 1, 0.0);
+    assert!((track.offset(0.25, false).unwrap()[0] - 1.0).abs() < 1e-5);
+    assert!(!track.active(0.5));
+    assert_eq!(track.offset(0.5, false), Some([3.0, 0.0]));
+    // Unchanged (spec, times) is a no-op.
+    track.retime_with_times(eased, Some(1), 1.0);
+    assert!(!track.active(1.0));
+    // Changing times restarts from now.
+    track.retime_with_times(eased, Some(2), 1.0);
+    assert!(track.active(1.25));
+    assert!(!track.active(2.0));
+    // Switching back to infinite resumes periodic wrapping.
+    track.retime_with_times(eased, None, 2.0);
+    assert!(!track.is_finite());
+    assert_eq!(track.times(), None);
+    assert!(track.active(10.0));
+
+    // Non-slide loop kinds ignore `times`.
+    let spin = LoopTrack::with_times(LoopSpec::rotation(1.0), 2, 0.0);
+    assert!(!spin.is_finite());
+    assert_eq!(spin.times(), None);
+    assert!(spin.active(10.0));
+    let _ = once.offset(3.0, false);
+}

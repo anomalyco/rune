@@ -422,9 +422,13 @@ impl MotionState {
             for n in nodes {
                 let t = if time_scaled { scene.store().node_time(n.id) } else { t };
                 if let Some(&spec) = n.looping.as_deref() {
+                    let times = n.cold.get().and_then(|c| c.loop_times);
                     let start = self.loop_start(scene, n.id, t);
-                    let track = self.loops.entry(n.id).and_modify(|l| { l.retime(spec, t); l.enabled(true, t); })
-                        .or_insert_with(|| rune_motion::LoopTrack::new(spec, start));
+                    let track = self.loops.entry(n.id).and_modify(|l| { l.retime_with_times(spec, times, t); l.enabled(true, t); })
+                        .or_insert_with(|| match times {
+                            Some(count) => rune_motion::LoopTrack::with_times(spec, count, start),
+                            None => rune_motion::LoopTrack::new(spec, start),
+                        });
                     if land_loops { track.finish(); }
                 } else if let Some(l) = self.loops.get_mut(&n.id) {
                     l.enabled(false, t);

@@ -145,7 +145,7 @@ impl RuntimeCore {
             }
             let loop_phase = self.motion.loops.get(&node.id).map_or(f32::NAN, |l| {
                 flags |= MotionElement::LOOP;
-                if self.reduced_motion && !matches!(node.looping.as_ref().map(|s| s.kind), Some(rune_motion::LoopKind::Sequence(_))) { 0.0 }
+                if self.reduced_motion && !l.is_finite() { 0.0 }
                 else { l.phase(self.scene.store().node_time(node.id)) as f32 }
             });
             let inh = self.paint.inh_scratch.get(i);

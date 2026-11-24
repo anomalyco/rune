@@ -335,9 +335,11 @@ impl El {
         self.cold_mut().trace_namespace = Some((class, host));
         self
     }
-    /// A finite opacity/scale sequence on the shared render clock. The final pose holds;
-    /// reduced motion and explicit settle land it immediately. A new key replays it; dropping
-    /// the loop and putting it back carries on from where it was.
+    /// An opacity/scale keyframe sequence on the shared render clock: one-shot by default
+    /// (holding its final pose, landing immediately under Reduce Motion or explicit settle; a new
+    /// key replays it), or looping continuously with
+    /// [`Sequence::repeating`](rune_motion::Sequence::repeating) (holding its calm first pose
+    /// under Reduce Motion and cooling smoothly on removal).
     pub fn sequence(self, frames: rune_motion::Sequence) -> Self {
         self.looping(rune_motion::LoopSpec::sequence(frames))
     }
@@ -345,6 +347,33 @@ impl El {
     /// A renderer-owned periodic or finite presentation track, on the shared clock.
     pub fn looping(mut self, spec: rune_motion::LoopSpec) -> Self {
         self.cold_mut().looping = Some(Box::new(spec));
+        self
+    }
+
+    /// Play a slide loop ([`LoopSpec::slide`](rune_motion::LoopSpec::slide)) `times` periods and
+    /// then rest at its end pose (`to`) instead of repeating forever, matching CSS
+    /// `animation-iteration-count` with `animation-fill-mode: forwards`.
+    ///
+    /// Under Reduce Motion, a finite slide lands immediately at its end pose rather than holding
+    /// its midpoint; `0` rests immediately at `to` with no active frames. Use a new element
+    /// [`key`](Self::key) to replay it. Only slide loops take a count; other loop kinds ignore it
+    /// (matching [`LoopSpec::easing`](rune_motion::LoopSpec::easing)). May be called before or
+    /// after [`Self::looping`].
+    ///
+    /// ```
+    /// use rune::{Easing, LoopSpec, el};
+    ///
+    /// let sweep = el()
+    ///     .key("shimmer-1")
+    ///     .looping(LoopSpec {
+    ///         delay: 0.08,
+    ///         ..LoopSpec::slide(0.55, [-1.0, 0.0], [2.0, 0.0]).easing(Easing::LINEAR)
+    ///     })
+    ///     .loop_times(1);
+    /// # let _ = sweep;
+    /// ```
+    pub fn loop_times(mut self, times: u32) -> Self {
+        self.cold_mut().loop_times = Some(times);
         self
     }
 }

@@ -154,6 +154,7 @@ pub(in crate::runtime) fn inh_key(p: &Inh) -> u64 {
     bits(&mut h, &p.held.1);
     bits(&mut h, &p.held.2);
     bits(&mut h, &[p.scale_target]);
+    bits(&mut h, &p.press_off_by);
     (p.held_moving, p.scale_tracked, p.in_cache, p.skip_paint, p.anchor_hidden, p.turn).hash(&mut h);
     p.snap.hash_bits(&mut h);
     h.finish()

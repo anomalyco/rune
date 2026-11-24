@@ -332,6 +332,7 @@ impl paint_state::PaintState {
             let n = &nodes[j];
             let store = scene.store();
             let time = store.node_time(n.id) + (t - now_t) * f64::from(store.node_time_scale(n.id));
+            if !motion.loop_active(n.id, time) { return None; }
             let [x, y] = motion.loop_offset(n.id, time, reduced_motion)?;
             Some([x * n.local.w, y * n.local.h])
         };

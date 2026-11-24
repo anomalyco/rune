@@ -258,7 +258,7 @@ impl RuntimeCore {
         }
         let store = self.scene.store();
         let animating = |id: NodeId| store.is_animating(id, prop::FRAME) || store.is_animating(id, prop::TRAVEL)
-            || store.is_animating(id, prop::PRESENCE) || store.is_animating(id, prop::OFFSET) || store.is_animating(id, prop::SCALE) || store.is_animating(id, P_PRESS_SCALE)
+            || store.is_animating(id, prop::PRESENCE) || store.is_animating(id, prop::OFFSET) || store.is_animating(id, prop::SCALE) || store.is_animating(id, P_PRESS_SCALE) || store.is_animating(id, P_PRESS_OX) || store.is_animating(id, P_PRESS_OY)
             || store.is_animating(id, P_SCALE) || store.is_animating(id, prop::ROTATION) || paint_pose_springing(store, id)
             || (!self.reduced_motion && self.motion.loop_active(id, store.node_time(id)));
         let sel_ranges = self.selection_ranges();
@@ -364,7 +364,7 @@ impl RuntimeCore {
                     trace_name: n.trace_name,
                     trace_namespace: n.trace_namespace,
                     loop_phase: self.motion.loop_track(n.id).map(|l| {
-                        if self.reduced_motion && !matches!(n.looping.as_ref().map(|s| s.kind), Some(rune_motion::LoopKind::Sequence(_))) { 0.0 }
+                        if self.reduced_motion && !l.is_finite() { 0.0 }
                         else { l.phase(self.scene.store().node_time(n.id)) }
                     }),
                     focusable: self.can_focus(i),

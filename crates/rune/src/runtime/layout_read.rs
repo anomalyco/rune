@@ -744,7 +744,7 @@ impl RuntimeCore {
             || anchor_ancestors(&self.tree.nodes, i).any(|p| {
                 let id = self.tree.nodes[p].id;
                 store.is_animating(id, prop::FRAME) || store.is_animating(id, prop::TRAVEL) || store.is_animating(id, prop::PRESENCE)
-                    || store.is_animating(id, prop::OFFSET) || store.is_animating(id, prop::SCALE) || store.is_animating(id, P_PRESS_SCALE)
+                    || store.is_animating(id, prop::OFFSET) || store.is_animating(id, prop::SCALE) || store.is_animating(id, P_PRESS_SCALE) || store.is_animating(id, P_PRESS_OX) || store.is_animating(id, P_PRESS_OY)
                     || store.is_animating(id, P_SCALE) || store.is_animating(id, prop::ROTATION)
                     || self.motion.grows.get(&id).is_some_and(|g| g.moving())
                     || self.motion.stacks.get(&id).is_some_and(|s| s.moving)

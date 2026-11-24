@@ -24,6 +24,7 @@ pub(crate) struct NodeCold {
     pub(super) run_layout: Option<Rc<crate::text::RunLayout>>,
     pub(super) live_text_seen: Option<u128>,
     pub(super) looping: Option<Box<rune_motion::LoopSpec>>,
+    pub(super) loop_times: Option<u32>,
     pub(super) frame_motion: Option<Box<rune_motion::Anim>>,
     pub(super) opacity_motion: Option<Box<rune_motion::Anim>>,
     pub(super) lead: Option<(Spring, Spring)>,
@@ -72,6 +73,7 @@ impl crate::cold::Empty for NodeCold {
         run_layout: None,
         live_text_seen: None,
         looping: None,
+        loop_times: None,
         frame_motion: None,
         opacity_motion: None,
         lead: None,
@@ -365,6 +367,8 @@ pub(super) struct Inh {
     /// Ancestors' `El::rotate` layers, composed, as an index into `turn_scratch` plus one
     /// (0: none): where this subtree's device pixels land. An index keeps `Inh` small.
     pub(super) turn: u32,
+    /// Accumulated `(current - target)` residual of any animating `El::press_offset` here or above (points).
+    pub(super) press_off_by: [f32; 2],
     pub(super) snap: pixel_snap::Inherit,
 }
 
@@ -403,7 +407,7 @@ impl Default for Inh {
             scale: 1.0, anchor: [0.0; 2], anchor_to: [0.0; 2], blur: 0.0, dy: 0.0, dx: 0.0, cover: [0.0; 2], outer: None, mark: 0, group: 0.0, pressed: 0.0, press_to: None,
             hit_opacity: 1.0, group_rect: [f32::NEG_INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::INFINITY],
             scale_motion: ScaleMotion::Still, still: (1.0, [0.0; 2], [0.0; 2]), held: (1.0, [0.0; 2], [0.0; 2]), held_moving: false, scale_target: 1.0, scale_tracked: false, in_cache: false, skip_paint: false, anchor_hidden: false, turn: 0,
-            snap: Default::default() }
+            press_off_by: [0.0; 2], snap: Default::default() }
     }
 }
 

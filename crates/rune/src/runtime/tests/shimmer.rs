@@ -346,3 +346,59 @@ fn a_shimmer_on_a_sleeping_host_keeps_its_bright_copy_on_the_label() {
     }
     assert!(bad.is_empty(), "the bright copy drifts off the label on a sleeping host (zoom, gap, stopped at, px): {bad:?}");
 }
+#[test]
+fn finite_slide_shimmer_plays_n_times_rests_idle_replays_on_key_and_respects_reduced_motion() {
+    struct S { key: u32, times: u32, reduced: bool }
+    fn view(s: &S, cx: &mut Cx<S>) -> El {
+        cx.reduced_motion(s.reduced);
+        let spec = rune_motion::LoopSpec::slide(0.5, [-1.0, 0.0], [3.0, 0.0]).easing(rune_motion::Easing::LINEAR);
+        let bar = el().key(format!("bar-{}", s.key)).w(25.0).h(8.0).fill(Color::WHITE)
+            .looping(spec).loop_times(s.times);
+        let spin = el().key("spin").size(12.0, 12.0).fill(Color::WHITE)
+            .looping(rune_motion::LoopSpec::rotation(1.0)).loop_times(1);
+        col().size(120.0, 40.0).child(el().size(100.0, 8.0).clip_soft(0.0).child(bar))
+            .children((s.key == 99).then_some(spin))
+    }
+    let bar = |rt: &Runtime<S>, key: u32| {
+        let k = format!("bar-{key}");
+        rt.elements().into_iter().find(|e| e.key.as_deref() == Some(k.as_str())).unwrap()
+    };
+
+    // 1. times = 2 sweeps twice (1.0 s total), then rests at `to` (x = 75.0) and goes idle.
+    let mut rt = Runtime::new(S { key: 0, times: 2, reduced: false }, view, (120.0, 40.0), Env::new(true, 1.0));
+    assert!(rt.frame(0.0));
+    assert!((bar(&rt, 0).rect[0] - (-25.0)).abs() < 0.05);
+    assert!(rt.frame(0.25));
+    assert!((bar(&rt, 0).rect[0] - 25.0).abs() < 0.05, "midpoint of sweep 1");
+    assert!(rt.frame(0.25));
+    assert!((bar(&rt, 0).rect[0] - (-25.0)).abs() < 0.05, "wraps into sweep 2");
+    assert!(rt.frame(0.25));
+    assert!((bar(&rt, 0).rect[0] - 25.0).abs() < 0.05, "midpoint of sweep 2");
+    assert!(!rt.frame(0.25), "finishes after 2 periods and stops asking for frames");
+    assert_eq!(rt.wake_deadline(), None);
+    assert!((bar(&rt, 0).rect[0] - 75.0).abs() < 0.05, "rests at end pose `to`");
+    assert_eq!(bar(&rt, 0).loop_phase, Some(1.0));
+
+    // 2. A new key replays the finite slide from the start.
+    rt.update(|s, _| s.key = 1);
+    assert!(rt.frame(0.0));
+    assert!((bar(&rt, 1).rect[0] - (-25.0)).abs() < 0.05, "replays on new key");
+
+    // 3. times = 0 rests immediately at `to` with zero active frames.
+    let mut zero = Runtime::new(S { key: 0, times: 0, reduced: false }, view, (120.0, 40.0), Env::new(true, 1.0));
+    assert!(!zero.frame(0.0));
+    assert_eq!(zero.wake_deadline(), None);
+    assert!((bar(&zero, 0).rect[0] - 75.0).abs() < 0.05);
+
+    // 4. Reduce Motion lands immediately at `to` with phase 1.0 and sleeps.
+    let mut reduced = Runtime::new(S { key: 0, times: 2, reduced: true }, view, (120.0, 40.0), Env::new(true, 1.0));
+    assert!(!reduced.frame(0.0));
+    assert_eq!(reduced.wake_deadline(), None);
+    assert!((bar(&reduced, 0).rect[0] - 75.0).abs() < 0.05);
+    assert_eq!(bar(&reduced, 0).loop_phase, Some(1.0));
+
+    // 5. Non-slide loops ignore `.loop_times(n)`.
+    let mut spin = Runtime::new(S { key: 99, times: 0, reduced: false }, view, (120.0, 40.0), Env::new(true, 1.0));
+    assert!(spin.frame(0.0));
+    assert!(spin.frame(5.0), "rotation ignores loop_times and stays active");
+}

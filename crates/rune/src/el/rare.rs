@@ -14,6 +14,7 @@ use crate::el::{A11y, Anchor, FocusSpec, GrowthSpec, InputSpec, ScrollAxes, Scro
 pub(crate) struct ElCold {
     pub(crate) focus: Cold<FocusSpec>,
     pub(crate) looping: Option<Box<rune_motion::LoopSpec>>,
+    pub(crate) loop_times: Option<u32>,
     pub(crate) trace_name: Option<&'static str>,
     pub(crate) trace_namespace: Option<(&'static str, &'static str)>,
     /// A role outside `RoleTag`'s table, read when the tag is `RoleTag::CUSTOM`.
@@ -84,6 +85,7 @@ impl Empty for ElCold {
     const EMPTY: &'static Self = &ElCold {
         focus: Cold::NONE,
         looping: None,
+        loop_times: None,
         trace_name: None,
         trace_namespace: None,
         role: "group",
