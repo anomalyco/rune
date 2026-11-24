@@ -26,12 +26,23 @@ pub fn max_side() -> u32 {
 /// Rows a shelf page starts with (`ImagePage::new`).
 const IMAGE_PAGE_START_ROWS: u32 = 128;
 
+/// Backing bytes for one frame. Shared through `Arc` so `ImageAtlas::place_at` copies outside
+/// the frame lock without blocking `Pixels::set`. Peak memory for a streaming `Pixels` is at
+/// most two RGBA buffers: the current frame in `Frame` plus one in-flight snapshot held on
+/// `place_at`'s stack when `set` runs concurrently (any further `set` drops the uncopied
+/// intermediate frame immediately, and the snapshot drops before `place_at` returns).
+#[derive(Clone)]
+enum FrameData {
+    Empty,
+    Rgba(Arc<Vec<u8>>),
+    Mips(Arc<crate::Decoded>),
+}
+
 struct Frame {
     width: u32,
     height: u32,
-    rgba: Vec<u8>,
     generation: u64,
-    mips: Option<Arc<crate::Decoded>>,
+    data: FrameData,
 }
 
 /// A replaceable RGBA image, shared between the producer and the view. Clone it freely.
@@ -54,8 +65,11 @@ pub struct Pixels {
 
 impl std::fmt::Debug for Pixels {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let frame = self.frame.lock().unwrap();
-        write!(f, "Pixels({}, {}x{}, gen {})", self.id, frame.width, frame.height, frame.generation)
+        let (width, height, generation) = {
+            let frame = self.frame.lock().unwrap();
+            (frame.width, frame.height, frame.generation)
+        };
+        write!(f, "Pixels({}, {}x{}, gen {})", self.id, width, height, generation)
     }
 }
 
@@ -70,7 +84,7 @@ impl Pixels {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         Pixels {
             id: NEXT.fetch_add(1, Ordering::Relaxed),
-            frame: Arc::new(Mutex::new(Frame { width: 0, height: 0, rgba: Vec::new(), generation: 0, mips: None })),
+            frame: Arc::new(Mutex::new(Frame { width: 0, height: 0, generation: 0, data: FrameData::Empty })),
             source: rune_core::live::Source::new(0),
             url: None,
             srcset: None,
@@ -108,14 +122,15 @@ impl Pixels {
     /// frame reuses its atlas slot.
     pub fn set(&self, width: u32, height: u32, rgba: Vec<u8>) {
         assert_eq!(Some(rgba.len()), (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(4)), "rgba must hold width * height pixels");
-        {
+        let data = if rgba.is_empty() { FrameData::Empty } else { FrameData::Rgba(Arc::new(rgba)) };
+        let replaced = {
             let mut frame = self.frame.lock().unwrap();
             frame.width = width;
             frame.height = height;
-            frame.rgba = rgba;
             frame.generation += 1;
-            frame.mips = None;
-        }
+            std::mem::replace(&mut frame.data, data)
+        };
+        drop(replaced);
         self.source.notify();
     }
 
@@ -123,12 +138,15 @@ impl Pixels {
     /// `decoded` before waking windows (`Image::wait` and `is_ready` see the pixels, and woken
     /// windows see `is_ready` and `size`).
     pub(crate) fn store_mips(&self, mips: Arc<crate::Decoded>) {
-        let mut frame = self.frame.lock().unwrap();
-        frame.width = mips.mips[0].width;
-        frame.height = mips.mips[0].height;
-        frame.rgba.clear();
-        frame.mips = Some(mips);
-        frame.generation += 1;
+        let (width, height) = (mips.mips[0].width, mips.mips[0].height);
+        let replaced = {
+            let mut frame = self.frame.lock().unwrap();
+            frame.width = width;
+            frame.height = height;
+            frame.generation += 1;
+            std::mem::replace(&mut frame.data, FrameData::Mips(mips))
+        };
+        drop(replaced);
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -145,13 +163,26 @@ impl Pixels {
     /// The image's RGBA bytes as [`Pixels::set`] gave them (empty for a decoded image's mips).
     #[doc(hidden)]
     pub fn rgba(&self) -> Vec<u8> {
-        self.frame.lock().unwrap().rgba.clone()
+        let data = self.frame.lock().unwrap().data.clone();
+        match data {
+            FrameData::Rgba(rgba) => (*rgba).clone(),
+            FrameData::Empty | FrameData::Mips(_) => Vec::new(),
+        }
     }
 
     /// Holds the frame lock until dropped, so tests can pause a concurrent pixel update.
     #[cfg(test)]
     pub(crate) fn hold_frame(&self) -> impl Drop + '_ {
         self.frame.lock().unwrap()
+    }
+
+    /// Weak handle to the current streaming RGBA buffer, so tests can verify reference counts.
+    #[cfg(test)]
+    fn rgba_weak(&self) -> Option<std::sync::Weak<Vec<u8>>> {
+        match &self.frame.lock().unwrap().data {
+            FrameData::Rgba(rgba) => Some(Arc::downgrade(rgba)),
+            FrameData::Empty | FrameData::Mips(_) => None,
+        }
     }
 }
 
@@ -279,6 +310,9 @@ pub struct ImageAtlas {
     #[cfg(debug_assertions)]
     #[doc(hidden)]
     pub copies: u64,
+    /// How long the last `place_at` call held `pixels.frame`.
+    #[cfg(test)]
+    last_lock_hold: std::time::Duration,
 }
 
 impl ImageAtlas {
@@ -294,38 +328,62 @@ impl ImageAtlas {
     /// an animation's first frame.
     #[doc(hidden)]
     pub fn place_at(&mut self, pixels: &Pixels, drawn: [f32; 2], now: Option<f64>) -> Option<(Placed, Option<f64>)> {
-        let frame = pixels.frame.lock().unwrap();
-        let (mut w, mut h) = (frame.width, frame.height);
-        if w == 0 || h == 0 || w > crate::MAX_SIDE || h > crate::MAX_SIDE {
-            return None;
-        }
+        self.place_at_with_copy_hook(pixels, drawn, now, |_| {})
+    }
+
+    fn place_at_with_copy_hook(
+        &mut self,
+        pixels: &Pixels,
+        drawn: [f32; 2],
+        now: Option<f64>,
+        mut on_copy_row: impl FnMut(usize),
+    ) -> Option<(Placed, Option<f64>)> {
+        #[cfg(test)]
+        let lock_start = rune_core::time::now();
+        let (frame_w, frame_h, generation, data) = {
+            let frame = pixels.frame.lock().unwrap();
+            if frame.width == 0 || frame.height == 0 || frame.width > crate::MAX_SIDE || frame.height > crate::MAX_SIDE {
+                #[cfg(test)]
+                { self.last_lock_hold = lock_start.elapsed(); }
+                return None;
+            }
+            (frame.width, frame.height, frame.generation, frame.data.clone())
+        };
+        #[cfg(test)]
+        { self.last_lock_hold = lock_start.elapsed(); }
+        let (mut w, mut h) = (frame_w, frame_h);
         let mut level = 0;
         let mut shown = 0;
         let mut next = None;
-        let bytes = if let Some(decoded) = &frame.mips {
-            let mips = match (&decoded.motion, now) {
-                (Some(motion), Some(now)) => {
-                    let start = *self.starts.entry(pixels.id).or_insert(now);
-                    let (i, change) = motion.at(now - start);
-                    (shown, next) = (i, change.map(|t| start + t));
-                    motion.frame(&decoded.mips, i)
+        let premultiplied = matches!(data, FrameData::Mips(_));
+        let bytes: &[u8] = match &data {
+            FrameData::Mips(decoded) => {
+                let mips = match (&decoded.motion, now) {
+                    (Some(motion), Some(now)) => {
+                        let start = *self.starts.entry(pixels.id).or_insert(now);
+                        let (i, change) = motion.at(now - start);
+                        (shown, next) = (i, change.map(|t| start + t));
+                        motion.frame(&decoded.mips, i)
+                    }
+                    _ => &decoded.mips[..],
+                };
+                // Choose the smallest prefiltered level that still covers both device-pixel axes.
+                // No mip construction or resampling happens on the render thread.
+                while let Some(next) = mips.get(level + 1) {
+                    if (next.width as f32) < drawn[0].clamp(1.0, frame_w as f32)
+                        || (next.height as f32) < drawn[1].clamp(1.0, frame_h as f32) { break; }
+                    level += 1;
                 }
-                _ => &decoded.mips[..],
-            };
-            // Choose the smallest prefiltered level that still covers both device-pixel axes.
-            // No mip construction or resampling happens on the render thread.
-            while let Some(next) = mips.get(level + 1) {
-                if (next.width as f32) < drawn[0].clamp(1.0, frame.width as f32)
-                    || (next.height as f32) < drawn[1].clamp(1.0, frame.height as f32) { break; }
-                level += 1;
+                // A level past the GPU's largest texture can't go up: draw from the largest that fits.
+                let limit = max_side();
+                while mips[level].width.max(mips[level].height) > limit && level + 1 < mips.len() { level += 1; }
+                let mip = &mips[level];
+                (w, h) = (mip.width, mip.height);
+                &mip.pixels
             }
-            // A level past the GPU's largest texture can't go up: draw from the largest that fits.
-            let limit = max_side();
-            while mips[level].width.max(mips[level].height) > limit && level + 1 < mips.len() { level += 1; }
-            let mip = &mips[level];
-            (w, h) = (mip.width, mip.height);
-            &mip.pixels
-        } else { &frame.rgba };
+            FrameData::Rgba(rgba) => rgba,
+            FrameData::Empty => return None,
+        };
         if w > max_side() || h > max_side() { return None; }
         let key = (pixels.id, level);
         if self.slots.get(&key).is_some_and(|s| s.w != w || s.h != h) {
@@ -337,8 +395,8 @@ impl ImageAtlas {
         }
         let slot = self.slots.get_mut(&key).unwrap();
         self.pages[slot.page].touched = true;
-        if slot.generation != frame.generation || slot.frame != shown {
-            slot.generation = frame.generation;
+        if slot.generation != generation || slot.frame != shown {
+            slot.generation = generation;
             slot.frame = shown;
             #[cfg(debug_assertions)]
             { self.copies += 1; }
@@ -348,11 +406,12 @@ impl ImageAtlas {
                 let dst = (slot.y as usize + line) * row + slot.x as usize * 4;
                 let src = line * w as usize * 4;
                 page.data[dst..dst + w as usize * 4].copy_from_slice(&bytes[src..src + w as usize * 4]);
+                on_copy_row(line);
             }
             let (y0, y1) = (slot.y, slot.y + h);
             page.dirty = Some(page.dirty.map_or((y0, y1), |(a, b)| (a.min(y0), b.max(y1))));
         }
-        Some((Placed { rect: [slot.x, slot.y, w, h], page: slot.page, premultiplied: frame.mips.is_some() }, next))
+        Some((Placed { rect: [slot.x, slot.y, w, h], page: slot.page, premultiplied }, next))
     }
 
     /// Whether the atlas currently holds a slot for `pixels` at mip `level`.
