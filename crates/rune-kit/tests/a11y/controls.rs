@@ -452,6 +452,84 @@ fn kit_fields_attach_description_to_their_inner_editor_node() {
     }
 }
 
+#[test]
+fn textarea_plain_trailing_and_scroll_bar_accessibility() {
+    fn view(s: &App, _: &mut Cx<App>) -> El {
+        let k = kit();
+        col()
+            .gap(8.0)
+            .child(
+                TextArea::new(&s.edit)
+                    .label("Composer")
+                    .description("Shift+Enter for a newline")
+                    .plain()
+                    .auto_grow(1, 3)
+                    .scroll_bar(true)
+                    .trailing(
+                        Button::new("Send")
+                            .control_size(ControlSize::Small)
+                            .on_press(|s: &mut App| s.presses += 1)
+                            .build(&k)
+                            .key("send"),
+                    )
+                    .on_edit(|s: &mut App| &mut s.edit)
+                    .build(&k)
+                    .key("composer"),
+            )
+            .child(
+                TextArea::new(&s.edit)
+                    .label("Invalid plain")
+                    .plain()
+                    .invalid(true)
+                    .build(&k)
+                    .key("invalid-plain"),
+            )
+            .child(
+                TextArea::new(&s.edit)
+                    .label("Disabled plain")
+                    .plain()
+                    .disabled(true)
+                    .build(&k)
+                    .key("disabled-plain"),
+            )
+    }
+
+    let mut rt = mount(App::default(), view);
+    let tree = rt.accessibility_json();
+
+    let composer = node(&tree, "composer");
+    let input = node(composer, "input");
+    assert_eq!(said(input), ("multiline-text-input", "Composer"));
+    assert_eq!(input["description"], "Shift+Enter for a newline");
+    assert!(can(input, "focus") && can(input, "set-value"));
+    let send = node(composer, "send");
+    assert_eq!(said(send), ("button", "Send"));
+    assert!(can(send, "click") && can(send, "focus"));
+    assert!(with_role(&tree, "scroll-bar").is_empty(), "decorative scroll bar stays hidden from a11y");
+
+    let invalid = node(node(&tree, "invalid-plain"), "input");
+    assert!(has(invalid, "invalid"), "invalid plain TextArea reports invalid state: {invalid}");
+    let disabled = node(node(&tree, "disabled-plain"), "input");
+    assert!(has(disabled, "disabled") && !can(disabled, "set-value"));
+
+    // Web accessibility mirror exposes the trailing Send button and omits the decorative scroll bar.
+    let mirror: Vec<serde_json::Value> = serde_json::from_str(&rt.a11y_json()).unwrap();
+    assert!(
+        mirror.iter().any(|v| v["t"] == "Send" && v["k"] == "button"),
+        "web mirror exposes trailing Send button: {mirror:?}"
+    );
+    assert!(
+        !mirror.iter().any(|v| v["p"].as_str().is_some_and(|p| p.contains("scroll-bar"))),
+        "web mirror omits decorative scroll bar: {mirror:?}"
+    );
+
+    // Assistive click activates the trailing Send button independently of the editor.
+    assert!(act(&mut rt, "send", Action::Click));
+    assert_eq!(rt.state.presses, 1);
+    assert!(act(&mut rt, "send", Action::Focus));
+    assert_eq!(focused(&rt.accessibility_json()).as_deref(), Some("send"));
+}
+
 fn recorder(s: &App, _: &mut Cx<App>) -> El {
     let k = kit();
     col()

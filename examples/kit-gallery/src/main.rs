@@ -35,7 +35,7 @@ pub struct G {
     pub open: Option<String>,
     /// Context menu anchor from a story's `on_secondary_press`.
     pub menu_at: Option<rune::PointerPress>,
-    pub edits: [TextEdit; 8],
+    pub edits: [TextEdit; 11],
     pub nowrap_code: TextEdit,
     pub combo: rune_kit::ComboboxState,
     /// The sidebar reorder story's state.

@@ -102,7 +102,13 @@ input's accessible name independently of the outer label. `rune-combobox--search
 to diff.
 
 `TextInput::on_key` intercepts a focused field's keys before editing; `on_change` runs after
-text changes and receives a `Tx`, for filtering and exact debounce wakes. `TextInput`, `TextArea`
+text changes and receives a `Tx`, for filtering and exact debounce wakes. `TextArea` also
+supports `.plain()` (omitting box chrome so a custom composer container can draw its own while
+keeping padding, forced-colors focus outline, invalid red ink and disabled dimming),
+`.trailing(el)` (reserving bottom-end width beside the wrapping/scrolling viewport while keeping
+the accessory independently focusable), and `.scroll_bar(bool)` / `.scroll_bar_styled(style)`
+(attaching a kit scroll bar to its internal `auto_grow` or `max_height` scroll viewport; see
+`rune-textarea--composer` in `kit-gallery`). `TextInput`, `TextArea`
 and `TextField` forward `on_secondary_press` (replacing the default field context menu) and
 `on_input_paste` (intercepting pastes before plain-text insertion, skipped when disabled), as well
 as `on_submit` and accessible `description`. They also accept `.decorations(spans)` (or `.spans(spans)`) and `.rich_style(style)` for

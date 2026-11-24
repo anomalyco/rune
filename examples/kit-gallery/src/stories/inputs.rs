@@ -113,6 +113,108 @@ pub(super) fn textarea_states(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
         .child(TextArea::new(&edit("")).placeholder("Disabled with value").disabled(true).build(k))
 }
 
+/// `TextArea::plain()`, `TextArea::trailing(El)`, and `TextArea::scroll_bar(bool)` /
+/// `TextArea::scroll_bar_styled(ScrollBarStyle)`: a borderless chat composer inside a custom
+/// container, a commit box with a trailing button beside an auto-growing viewport, and a capped
+/// field with a styled scroll bar.
+pub(super) fn textarea_composer(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let status = s
+        .pick
+        .get("composer-status")
+        .map_or("Try typing, scrolling the viewports, or tabbing to Send / Commit.", String::as_str);
+    let styled_bar = ScrollBarStyle::from_kit(k)
+        .always_visible()
+        .thumb(k.c.text_accent)
+        .thumb_hover(k.c.border_focus)
+        .track(k.c.layer_02);
+    grid(16.0, 340.0)
+        .child(
+            col()
+                .key("plain-composer")
+                .role("textbox")
+                .w_full()
+                .fill(k.c.layer_01)
+                .border(1.0, k.c.border_base)
+                .radius(k.radius.lg)
+                .child(
+                    TextArea::new(&s.edits[8])
+                        .label("Message")
+                        .placeholder("Ask anything…")
+                        .plain()
+                        .width(None)
+                        .auto_grow(1, 4)
+                        .scroll_bar(true)
+                        .on_edit(|s: &mut G| &mut s.edits[8])
+                        .build(k)
+                        .key("composer-plain"),
+                )
+                .child(
+                    row()
+                        .w_full()
+                        .px(8.0)
+                        .pb(8.0)
+                        .gap(8.0)
+                        .center_y()
+                        .child(Badge::new("Plain composer").build(k))
+                        .child(el().grow(1.0))
+                        .child(
+                            Button::new("Send")
+                                .control_size(ControlSize::Small)
+                                .variant(ButtonVariant::Contrast)
+                                .on_press(|s: &mut G| {
+                                    let len = s.edits[8].text.len();
+                                    s.pick.insert("composer-status".into(), format!("Sent plain draft ({len} bytes)"));
+                                })
+                                .build(k)
+                                .key("composer-send"),
+                        ),
+                ),
+        )
+        .child(
+            Field::new()
+                .label("Trailing action")
+                .control(
+                    TextArea::new(&s.edits[9])
+                        .label("Commit message")
+                        .placeholder("Commit message…")
+                        .width(None)
+                        .auto_grow(1, 3)
+                        .scroll_bar(true)
+                        .trailing(
+                            Button::new("Commit")
+                                .control_size(ControlSize::Small)
+                                .variant(ButtonVariant::Submit)
+                                .on_press(|s: &mut G| {
+                                    let len = s.edits[9].text.len();
+                                    s.pick.insert("composer-status".into(), format!("Committed ({len} bytes)"));
+                                })
+                                .build(k)
+                                .key("composer-commit"),
+                        )
+                        .on_edit(|s: &mut G| &mut s.edits[9])
+                        .build(k)
+                        .key("composer-trailing"),
+                )
+                .build(k),
+        )
+        .child(
+            Field::new()
+                .label("Styled scroll bar")
+                .control(
+                    TextArea::new(&s.edits[10])
+                        .label("Release notes")
+                        .width(None)
+                        .max_height(88.0)
+                        .scroll_bar_styled(styled_bar)
+                        .on_edit(|s: &mut G| &mut s.edits[10])
+                        .build(k)
+                        .key("composer-styled"),
+                )
+                .build(k),
+        )
+        .child(text(status).key("composer-status").font(k.ty.small).color(k.c.text_muted).wrap())
+}
+
 pub(super) fn field_text_input(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     grid(0.0, 280.0).child(
         Field::new()

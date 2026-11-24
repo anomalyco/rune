@@ -38,6 +38,7 @@ mod shortcut_recorder;
 mod switch_snap;
 mod table;
 mod table_columns;
+mod text_area_chrome;
 mod text_area_grow;
 mod text_input_hooks;
 mod text_input_press;
