@@ -6,7 +6,8 @@ use std::path::PathBuf;
 
 use super::*;
 #[cfg(test)]
-use crate::file_dialog::FileDialogResult;
+#[cfg(test)]
+use crate::file_dialog::DialogOutcome;
 use crate::file_dialog::{FileDialogError, FileDialogKind, FileDialogOptions};
 #[cfg(any(test, target_arch = "wasm32"))]
 use crate::popup_menu::Show;
@@ -372,18 +373,37 @@ impl<S: 'static> Runtime<S> {
 
     #[inline(always)]
     pub fn file_dialog(&self) -> Option<(FileDialogKind, &FileDialogOptions)> { self.core().file_dialog() }
+    /// True when the pending file dialog allows selecting multiple files ([`Tx::open_files`]).
+    ///
+    /// ```ignore
+    /// assert!(rt.file_dialog_multiple());
+    /// ```
+    #[inline(always)]
+    pub fn file_dialog_multiple(&self) -> bool { self.core().file_dialog_multiple() }
     #[inline(always)]
     pub fn resolve_file_dialog(&mut self, path: Option<PathBuf>) -> Result<(), FileDialogError> {
         self.core_mut().resolve_file_dialog(path)
     }
+    /// Answers the open file dialog as if the user chose `paths`, or cancelled with `None`.
+    /// For a single-file dialog, the first path (if any) is delivered. Its callback runs on
+    /// the next frame. For tests and headless drivers; native dialogs answer themselves.
+    ///
+    /// ```ignore
+    /// rt.resolve_file_dialog_files(Some(vec!["/a.csv".into(), "/b.csv".into()])).unwrap();
+    /// rt.frame(1.0 / 60.0);
+    /// ```
+    #[inline(always)]
+    pub fn resolve_file_dialog_files(&mut self, paths: Option<Vec<PathBuf>>) -> Result<(), FileDialogError> {
+        self.core_mut().resolve_file_dialog_files(paths)
+    }
     #[cfg(test)]
     #[inline(always)]
-    pub(crate) fn take_file_dialog(&mut self) -> Option<(u64, FileDialogKind, FileDialogOptions)> {
+    pub(crate) fn take_file_dialog(&mut self) -> Option<(u64, FileDialogKind, bool, FileDialogOptions)> {
         self.core_mut().take_file_dialog()
     }
     #[cfg(test)]
     #[inline(always)]
-    pub(crate) fn answer_file_dialog(&mut self, id: u64, result: FileDialogResult) {
+    pub(crate) fn answer_file_dialog(&mut self, id: u64, result: DialogOutcome) {
         self.core_mut().answer_file_dialog(id, result);
     }
     #[inline(always)]

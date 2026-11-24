@@ -460,6 +460,11 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
                     let i = open.or(desk.focus.key()).unwrap_or(selected);
                     desk.members[i].resolve_file_dialog(path.clone()).unwrap_or_else(|e| die(&format!("script file dialog: {e}")));
                 }
+                Kind::FileDialogFiles(paths) => {
+                    let open = desk.focus.key().into_iter().chain(desk.z.iter().rev().copied()).find(|&i| desk.members[i].file_dialog_open());
+                    let i = open.or(desk.focus.key()).unwrap_or(selected);
+                    desk.members[i].resolve_file_dialog_files(Some(paths.clone())).unwrap_or_else(|e| die(&format!("script file dialog: {e}")));
+                }
                 // While another app is active, as after a click on the backdrop, keys go to it.
                 Kind::Key(..) | Kind::KeyUp(_) | Kind::Physical(_) | Kind::PhysicalKey(..) | Kind::Paste(_) | Kind::Ime(_) => {
                     if let Some(i) = desk.focus.focused() { desk.members[i].input(&e.kind, (x, y)); }

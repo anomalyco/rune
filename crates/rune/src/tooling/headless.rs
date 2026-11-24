@@ -382,6 +382,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
                 Kind::Menu(item) => menus.fire(item).unwrap_or_else(|e| die(&format!("script menu: {e}"))),
                 Kind::PopupMenu(picked) => app.resolve_popup(picked.as_deref()).unwrap_or_else(|e| die(&format!("script pop-up menu: {e}"))),
                 Kind::FileDialog(path) => app.rt_mut().resolve_file_dialog(path.clone()).unwrap_or_else(|e| die(&format!("script file dialog: {e}"))),
+                Kind::FileDialogFiles(paths) => app.rt_mut().resolve_file_dialog_files(Some(paths.clone())).unwrap_or_else(|e| die(&format!("script file dialog: {e}"))),
                 &Kind::Resize(dw, dh) => eased_input::step_resize(app.rt_mut(), &mut resize_from, (dw, dh), scale),
                 kind => {
                     if kind.is_down() { last_down = (x, y); }

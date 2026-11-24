@@ -106,6 +106,7 @@ impl Member for Fake {
     fn resolve_popup(&mut self, _: Option<&str>) -> Result<(), crate::PopupMenuError> { Ok(()) }
     fn file_dialog_open(&self) -> bool { false }
     fn resolve_file_dialog(&mut self, _: Option<std::path::PathBuf>) -> Result<(), crate::FileDialogError> { Ok(()) }
+    fn resolve_file_dialog_files(&mut self, _: Option<Vec<std::path::PathBuf>>) -> Result<(), crate::FileDialogError> { Ok(()) }
     fn render(&mut self, _: &Gpu, _: &Slot, _: (u32, u32), _: f64, _: f64, _: Instant) {}
     fn flush_interaction(&mut self) {}
     fn backdrop_dark(&self) -> Option<bool> { None }

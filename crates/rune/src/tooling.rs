@@ -395,6 +395,8 @@ pub(crate) enum Kind {
     PopupMenu(Option<String>),
     /// Answers the open file dialog: the chosen path, or `None` to cancel it.
     FileDialog(Option<PathBuf>),
+    /// Answers the open file dialog with multiple chosen paths (`{"type": "file-dialog", "paths": [...]}`).
+    FileDialogFiles(Vec<PathBuf>),
     Physical(crate::PhysicalInput),
     /// A registered global shortcut, delivered only to its handler.
     Shortcut(crate::Shortcut),
@@ -480,7 +482,7 @@ pub(crate) fn script_input(
         Kind::KeyUp(k) => { core.key_up(app, k.clone()); }
         Kind::PhysicalKey(event, k, base) => core.physical_key_input(app, *event, k.clone(), *base),
         Kind::Mark(_) | Kind::Reopen | Kind::OpenUrl(_) | Kind::Menu(_) | Kind::PopupMenu(_)
-        | Kind::FileDialog(_) | Kind::Shortcut(_) | Kind::Resize(..) => return false,
+        | Kind::FileDialog(_) | Kind::FileDialogFiles(_) | Kind::Shortcut(_) | Kind::Resize(..) => return false,
     }
     true
 }
@@ -577,6 +579,7 @@ impl Ev {
             Kind::Menu(item) => ScriptEvent::Menu(item.clone()),
             Kind::PopupMenu(picked) => ScriptEvent::PopupMenu(picked.clone()),
             Kind::FileDialog(path) => ScriptEvent::FileDialog(path.clone()),
+            Kind::FileDialogFiles(paths) => ScriptEvent::FileDialogFiles(paths.clone()),
             Kind::Physical(input) => ScriptEvent::Physical(*input),
             Kind::Shortcut(chord) => ScriptEvent::Shortcut(chord.clone()),
             Kind::Move => pointer(PointerAction::Move),

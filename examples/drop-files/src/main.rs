@@ -1,13 +1,16 @@
-//! Drop files into a Rune window from Finder, Explorer or a file manager. `cargo run -p
+//! Drop files into a Rune window from Finder, Explorer or a file manager, or pick several
+//! files at once with the native multi-file Open dialog (`Tx::open_files`). `cargo run -p
 //! drop-files`. The pictures zone takes images only; the folder zone uses `El::accepts_drag`
 //! to refuse drops when read-only or carrying more than two files; the anything zone takes any
 //! file; the strip around all three follows the drag passively with `El::on_drop_hover_within`,
 //! `El::on_drop_move_within`, and `Tx::drag_paths`; a drop anywhere else lands on the window.
-//! Each drop prints `drop <target> <files>` and shows Open and Reveal buttons for each dropped
-//! path (`Tx::open_path`, `Tx::reveal_path`).
+//! Each drop prints `drop <target> <files>`, each multi-file pick prints `open-files <files>`,
+//! and each path shows Open and Reveal buttons (`Tx::open_path`, `Tx::reveal_path`).
 //!
 //! Headless, with the highlight held before each drop:
 //! `cargo run -p drop-files -- --script examples/drop-files/scripts/drop.json --frames 120 --every 8 --cols 5 --strip strip.png`
+//! Headless multi-file Open dialog:
+//! `cargo run -p drop-files -- --script examples/drop-files/scripts/open-files.json --frames 30 --tree tree.json`
 //! Or inspect the dropped-file controls directly: `cargo run -p drop-files -- --snap drop-files.png --scene dropped`
 
 #![forbid(unsafe_code)]
@@ -15,7 +18,7 @@
 use std::path::{Path, PathBuf};
 
 use rune::tok::{self, radius, space, type_};
-use rune::{AppSpec, Color, Cursor, Cx, El, PathAction, col, el, row, text};
+use rune::{AppSpec, Color, Cursor, Cx, El, FileDialogOptions, PathAction, Tx, col, el, row, text};
 
 const REJECT_RED: Color = Color { r: 0.92, g: 0.34, b: 0.34, a: 1.0 };
 
@@ -37,6 +40,8 @@ struct State {
     rejected_msg: Option<String>,
     /// Feedback from the last Open or Reveal button press.
     action_status: Option<String>,
+    /// Feedback from a cancelled or failed multi-file dialog.
+    dialog_note: Option<String>,
 }
 
 fn display_name(path: &Path) -> String {
@@ -53,9 +58,18 @@ fn dropped(s: &mut State, target: &'static str, files: &[PathBuf]) {
     s.last = Some((target, files.to_vec()));
     s.rejected_msg = None;
     s.action_status = None;
+    s.dialog_note = None;
 }
 
-fn trigger_path(s: &mut State, tx: &mut rune::Tx, path: &Path, action: PathAction) {
+fn picked(s: &mut State, files: Vec<PathBuf>) {
+    println!("open-files {}", names(&files));
+    s.last = Some(("dialog", files));
+    s.rejected_msg = None;
+    s.action_status = None;
+    s.dialog_note = None;
+}
+
+fn trigger_path(s: &mut State, tx: &mut Tx, path: &Path, action: PathAction) {
     let name = display_name(path);
     let (verb, result) = match action {
         PathAction::Open => ("Opened", tx.open_path(path)),
@@ -107,10 +121,14 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
     let accent = cx.accent();
     let status = if let Some(msg) = &s.rejected_msg {
         msg.clone()
+    } else if let Some(note) = &s.dialog_note {
+        note.clone()
+    } else if let Some(("dialog", files)) = &s.last {
+        format!("Opened {} files: {}", files.len(), names(files))
     } else if let Some((target, files)) = &s.last {
         format!("Dropped on {target}: {}", names(files))
     } else {
-        "Drag files from another app onto a zone".into()
+        "Drag files from another app onto a zone, or open several files".into()
     };
     let preview = if s.dragging.is_empty() {
         "Drag preview: idle".into()
@@ -161,11 +179,24 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
         .child(text(toggle_label).font(type_::LABEL).color(t.text))
         .on_press(|s: &mut State| s.read_only = !s.read_only);
 
+    let open_files = el().key("open-files").role("button").label("Open multiple files").focusable(true)
+        .px(space::S3).py(space::S2).radius(radius::MD)
+        .fill(t.card).border(1.0, t.card_border).hover(t.hover).press(t.press).cursor(Cursor::Pointer)
+        .child(text("Open multiple files").font(type_::LABEL).color(t.text))
+        .on_press_tx(|_: &mut State, tx: &mut Tx| {
+            let options = FileDialogOptions { title: "Open files".into(), ..Default::default() };
+            tx.open_files(options, |s: &mut State, result, _| match result {
+                Ok(Some(files)) => picked(s, files),
+                Ok(None) => s.dialog_note = Some("Open dialog cancelled".into()),
+                Err(e) => s.dialog_note = Some(format!("Dialog error: {e}")),
+            });
+        });
+
     let mut root = col().w_full().h_full().center().gap(space::S3).padding(space::S3).fill(t.bg)
-        .child(toggle)
+        .child(row().gap(space::S2).child(toggle).child(open_files))
         .child(strip)
         .child(text(preview).key("preview").font(type_::LABEL).color(if s.strip_over { accent } else { t.text_secondary }))
-        .child(text(status).key("status").font(type_::BODY).color(t.text_secondary));
+        .child(text(status).key("status").role("status").font(type_::BODY).color(t.text_secondary));
     if let Some((_, files)) = &s.last {
         let mut list = col().key("dropped-list").gap(space::S1);
         for (i, path) in files.iter().take(3).enumerate() {
@@ -191,7 +222,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rune::{Env, PathRequest, Runtime};
+    use rune::{Env, FileDialogKind, Key, KeyEvent, Mods, PathRequest, Runtime};
 
     fn run() -> Runtime<State> {
         let mut rt = Runtime::new(State::default(), view, (680.0, 420.0), Env { system_dark: true, scale: 2.0 });
@@ -291,5 +322,39 @@ mod tests {
                 PathRequest { path: PathBuf::from("/example/report.pdf"), action: PathAction::Reveal },
             ],
         );
+    }
+
+    #[test]
+    fn open_multiple_files_button_opens_multi_select_dialog_and_handles_pick_and_cancel() {
+        let mut rt = run();
+        let tree = rt.accessibility_tree();
+        let (_, btn) = tree.nodes.iter().find(|(_, n)| n.author_id() == Some("open-files")).expect("open-files in a11y tree");
+        assert_eq!(btn.role(), rune::accesskit::Role::Button);
+        assert_eq!(btn.label(), Some("Open multiple files"));
+
+        // Keyboard activation (Tab past read-only switch, then Space) opens the multi-file dialog.
+        rt.key(KeyEvent { key: Key::Tab, mods: Mods::default() });
+        rt.frame(1.0 / 60.0);
+        rt.key(KeyEvent { key: Key::Tab, mods: Mods::default() });
+        rt.frame(2.0 / 60.0);
+        rt.key(KeyEvent { key: Key::Text(" ".into()), mods: Mods::default() });
+        rt.frame(3.0 / 60.0);
+        assert_eq!(rt.file_dialog().map(|(k, o)| (k, o.title.as_str())), Some((FileDialogKind::Open, "Open files")));
+        assert!(rt.file_dialog_multiple());
+        rt.resolve_file_dialog_files(None).unwrap();
+        rt.frame(4.0 / 60.0);
+        assert_eq!(rt.state.dialog_note.as_deref(), Some("Open dialog cancelled"));
+
+        let (x, y) = rt.find("open-files").unwrap();
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(5.0 / 60.0);
+        assert!(rt.file_dialog_multiple());
+
+        let files = vec![PathBuf::from("/tmp/a.csv"), PathBuf::from("/tmp/b.csv")];
+        rt.resolve_file_dialog_files(Some(files.clone())).unwrap();
+        rt.frame(6.0 / 60.0);
+        assert_eq!(rt.state.last, Some(("dialog", files)));
+        assert_eq!(rt.state.dialog_note, None);
     }
 }

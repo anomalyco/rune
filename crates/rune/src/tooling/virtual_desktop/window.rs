@@ -73,6 +73,7 @@ pub(crate) trait Member {
     fn resolve_popup(&mut self, picked: Option<&str>) -> Result<(), crate::PopupMenuError>;
     fn file_dialog_open(&self) -> bool;
     fn resolve_file_dialog(&mut self, path: Option<std::path::PathBuf>) -> Result<(), crate::FileDialogError>;
+    fn resolve_file_dialog_files(&mut self, paths: Option<Vec<std::path::PathBuf>>) -> Result<(), crate::FileDialogError>;
     /// Draws its frame into `slot`, `px` device pixels.
     fn render(&mut self, gpu: &Gpu, slot: &Slot, px: (u32, u32), dt: f64, update_ms: f64, frame_start: Instant);
     fn flush_interaction(&mut self);
@@ -607,6 +608,7 @@ impl Member for Window {
     fn resolve_popup(&mut self, picked: Option<&str>) -> Result<(), crate::PopupMenuError> { self.app.resolve_popup(picked) }
     fn file_dialog_open(&self) -> bool { self.app.rt().file_dialog().is_some() }
     fn resolve_file_dialog(&mut self, path: Option<std::path::PathBuf>) -> Result<(), crate::FileDialogError> { self.app.rt_mut().resolve_file_dialog(path) }
+    fn resolve_file_dialog_files(&mut self, paths: Option<Vec<std::path::PathBuf>>) -> Result<(), crate::FileDialogError> { self.app.rt_mut().resolve_file_dialog_files(paths) }
 
     fn render(&mut self, gpu: &Gpu, slot: &Slot, px: (u32, u32), dt: f64, update_ms: f64, frame_start: Instant) {
         let mut frame = DesktopFrame {
