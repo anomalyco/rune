@@ -1,6 +1,6 @@
 # Rune
 
-A native GPU-rendered Rust UI framework for macOS, Windows, Linux and the web, with its own renderer, text, layout and springs.
+A native GPU-rendered Rust UI framework for macOS, Windows, Linux, iOS and the web, with its own renderer, text, layout and springs.
 
 Every app can run headless, so an agent can render to PNG, dump the element tree and drive it with scripted input.
 

@@ -10,7 +10,7 @@ export function ArchitectureDiagram() {
           <p className="arch-kicker">Main thread</p>
           <h3>App side</h3>
           <ul>
-            <li>Models: typed state, keyed by stable ids</li>
+            <li>App state: one plain Rust struct outside any view (keyed Model&lt;T&gt; stores are Target)</li>
             <li>View functions → keyed tree → diff</li>
             <li>Taffy layout at the target state</li>
             <li>Parley shaping and line cache</li>
@@ -20,7 +20,7 @@ export function ArchitectureDiagram() {
         </section>
 
         <div className="arch-channel" data-area="channel">
-          <p className="arch-channel-label">Command channel</p>
+          <p className="arch-channel-label">Command channel (Target)</p>
           <div className="arch-flow" data-dir="fwd">
             <span className="arch-arrow" aria-hidden="true" />
             <span className="arch-flow-text">tree diffs, target rects, text runs, spring targets</span>
@@ -32,8 +32,8 @@ export function ArchitectureDiagram() {
         </div>
 
         <section className="arch-box" data-area="render">
-          <p className="arch-kicker">Paced by the display</p>
-          <h3>Render thread</h3>
+          <p className="arch-kicker">Target · paced by the display</p>
+          <h3>Render thread (Target)</h3>
           <ul>
             <li>Presented tree: what's on screen now</li>
             <li>Spring tracks that retarget with velocity</li>
@@ -41,10 +41,10 @@ export function ArchitectureDiagram() {
             <li>Scroll physics, drags applied 1:1</li>
           </ul>
           <div className="arch-inner">
-            <p className="arch-inner-title">Renderer · wgpu</p>
+            <p className="arch-inner-title">Renderer · native Metal (macOS) / wgpu</p>
             <ul>
-              <li>One instanced pass: rects, shadows, glyphs, vectors</li>
-              <li>Soft-edge clip on every instance</li>
+              <li>Instanced uber-quad pass: rects, shadows, glyphs, vectors</li>
+              <li>Soft-edge clip inline on every instance</li>
             </ul>
           </div>
         </section>
@@ -58,13 +58,14 @@ export function ArchitectureDiagram() {
           <div data-optional>
             <p className="arch-kicker">Apple, optional</p>
             <h3>Native layers</h3>
-            <p className="arch-line">System glass and video behind Rune's layer, masked by the render thread each frame</p>
+            <p className="arch-line">System glass and video behind Rune's layer, masked in sync with the frame</p>
           </div>
         </section>
       </div>
       <figcaption id="arch-caption">
-        The app side states targets and the render thread animates toward them. Everything that crosses between them
-        goes through the command channel.
+        Target architecture: the app side states targets and a render thread animates toward them over a command channel.
+        Today one main thread runs every frame step (only plain macOS wgpu overlays present on a worker), while still
+        skipping view, layout and diff while animating.
       </figcaption>
     </figure>
   )
@@ -83,7 +84,7 @@ const onChange: Step[] = [
 ]
 const everyFrameAfter: Step[] = [
   { name: "Springs", does: "Every track is sampled at the frame's time; scroll and reveals step too.", at: "rune-motion" },
-  { name: "Draw", does: "Rects, shadows and glyphs become instances in one wgpu pipeline.", at: "render.rs" },
+  { name: "Draw", does: "Rects, shadows and glyphs become instances in the uber-quad pipeline (native Metal on macOS, wgpu elsewhere).", at: "render.rs" },
 ]
 
 function Steps({ steps, from }: { steps: Step[]; from: number }) {
@@ -132,7 +133,7 @@ export function ThreadDiagram() {
               <li>Input and handlers</li>
               <li>View, Taffy and Parley, on a change</li>
               <li>Springs: the Runtime's Scene, sampled each frame</li>
-              <li>wgpu encode and present</li>
+              <li>Native Metal (macOS) or wgpu encode and present</li>
             </ul>
           </div>
           <div className="dg-feeds">
@@ -163,7 +164,7 @@ export function ThreadDiagram() {
             <h3>Render thread, paced by the display</h3>
             <ul>
               <li>Owns the springs, scroll and drags</li>
-              <li>wgpu encode and present</li>
+              <li>Native Metal (macOS) or wgpu encode and present</li>
             </ul>
           </div>
         </section>
@@ -286,7 +287,7 @@ export function TestDiagram() {
           </li>
           <li className="dg-box dg-small">
             <h3><code>--snap</code>, <code>--frames</code></h3>
-            <p>Offscreen wgpu to PNG, compared byte for byte with pinned images</p>
+            <p>Offscreen native Metal (macOS) or wgpu to PNG, compared byte for byte with pinned images</p>
           </li>
           <li className="dg-box dg-small">
             <h3><code>--trace</code></h3>
@@ -338,7 +339,7 @@ export function PipelineDiagram() {
         { name: <code>view()</code>, does: <>Returns a keyed <code>El</code> tree: what should be on screen</> },
         { name: "Layout", does: "Taffy places every node at its target; Parley shapes the text" },
         { name: "Springs", does: "Each moved rect, colour or opacity animates from where it is now" },
-        { name: "GPU", does: "Rects, shadows and glyphs as instances, usually one wgpu draw call" },
+        { name: "GPU", does: "Rects, shadows and glyphs as instances in one pass (draw call per atlas-page batch or kind run, on native Metal on macOS and wgpu elsewhere)" },
       ]}
       back="A tap runs a handler, the state changes, and the view runs again"
       caption={

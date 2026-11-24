@@ -88,7 +88,7 @@ pub fn start() {
 
 From your app's workspace, run `path/to/rune/scripts/web-build.sh your-package`. The script
 selects one cdylib, or one binary if there is no cdylib. `--example NAME` selects a Cargo
-example. Disable Rune's `dev`, `hot` and `native-file-dialog` features on wasm. Move native
+example. Disable Rune's `hot` and `native-file-dialog` features on wasm. Move native
 filesystem, process and thread dependencies behind target conditions in your app too.
 Use `rune::time::Instant` for deadlines passed to Rune; it is `std::time::Instant` on native.
 
@@ -200,7 +200,7 @@ so the browser decodes it and draws it at its size in points on any display.
 
 ## Fonts and browser input
 
-Web includes Inter Regular and IBM Plex Mono Regular (the `embedded-fonts` feature). There is
+Web includes subsetted Inter Regular, Medium and SemiBold plus IBM Plex Mono Regular (the `embedded-fonts` feature). There is
 no system-font discovery. `App::font_url("fonts/brand.ttf")` fetches a TrueType or OpenType
 font (not WOFF2) alongside GPU setup, before the first frame, and adds it to `AppSpec::fonts`;
 on native it reads the same path from disk. Point the page's `@font-face` at the same file so the
@@ -327,8 +327,9 @@ all browsers should skip `#[wasm_bindgen(jspi)]` and `start_runners()` and use t
 
 ## Scope and verification
 
-This target needs WebGPU. It has no WebGL fallback (a page made with `--html` stays readable
-without it), overlays,
+By default this target needs WebGPU; enable the opt-in `webgl` feature to fall back to WebGL2
+when WebGPU is unavailable (a page made with `--html` stays readable without either). It has no
+overlays,
 extra windows, native menus, drag-out, native audio/video, built-in HTTP client (see
 [HTTP requests (fetch)](#http-requests-fetch)) or hot patching.
 Native configuration types remain source-compatible, but their desktop host paths are not
@@ -359,5 +360,4 @@ dictation, autocorrect or Safari WebGPU test; those still need device verificati
 The shell follows PLAN's winit-first approach, retaining winit 0.30's rAF and ResizeObserver
 implementation. Unlike research/11's proposed custom shell, it adds a document-aware
 textarea beside winit rather than replacing winit. This also defers PLAN's proposed switch
-to an owned shell when text input lands. WebGL fallback and EditContext from that research
-remain later work.
+to an owned shell when text input lands. EditContext from that research remains later work.
