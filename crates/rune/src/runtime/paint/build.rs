@@ -593,7 +593,12 @@ impl RuntimeCore {
                     crate::render::pack_fade(fade, fade_origin, instance.clip)
                 };
             }
-            self.clip_text_instances(i, first_instance, (r, r_exact), sc, clip, fade, fade_origin);
+            let text_clip = if self.tree.nodes[i].collapsing && self.tree.nodes[i].vis.clip.is_none() && self.tree.nodes[i].scroll.is_none() {
+                intersect(clip, r)
+            } else {
+                clip
+            };
+            self.clip_text_instances(i, first_instance, (r, r_exact), sc, text_clip, fade, fade_origin);
             let n = &self.tree.nodes[i];
             if let Some((_, radii)) = rounded {
                 for instance in &mut self.instances[primitive_start..] {
@@ -620,6 +625,8 @@ impl RuntimeCore {
                 inherit_fade(&mut fade, &mut fade_origin, origin, own);
                 let root_inh = self.root_inh();
                 self.paint.note_slide(&self.tree.nodes, &self.motion, &self.scene, self.instances.len(), s, self.viewport, self.reduced_motion, root_inh, i, outer, rect_pt, rs, (if unscaled { 1.0 } else { sc }, sc));
+            } else if n.collapsing {
+                clip = intersect(r, clip);
             }
             let n = &self.tree.nodes[i];
             let mask = self.paint.row_mask[i];

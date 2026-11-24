@@ -77,7 +77,7 @@ impl paint_state::PaintState {
         // Matched flights paint last (see `update_layer_paint_order`).
         ((flying || tree.has_sticky || tree.has_raise || tree.has_paint_order || !self.lifted_anchors.is_empty()) && !self.layer_paint_order.is_empty()) || self.layer_paint_order.windows(2).any(|pair| {
             let n = &tree.nodes[pair[0]];
-            tree.nodes[pair[1]].parent == Some(pair[0]) && ((tree.has_dissolve && self.dissolve_scratch[pair[0]]) || n.vis_flags.cache() || n.vis.clip_radius.is_some() || n.vis.group_opacity.is_some() || n.group_fade
+            tree.nodes[pair[1]].parent == Some(pair[0]) && ((tree.has_dissolve && self.dissolve_scratch[pair[0]]) || n.vis_flags.cache() || n.vis.clip_radius.is_some() || n.vis.group_opacity.is_some() || n.group_fade || n.collapsing
                 || n.vis.layer_opacity < 1.0 || fades(n.looping.as_deref().copied())
                 || scene.presented(n.id).is_some_and(|p| (p.opacity > 0.0 && p.opacity < 1.0) || p.blur > 0.0 || p.transform.rotate.abs() > 1e-6))
         })
@@ -385,7 +385,8 @@ impl RuntimeCore {
         });
         *isolate |= open_cache || (rounded.is_some() && (n.text.as_ref().is_some_and(|t| (t.truncate_fade || t.cold.live.is_some()) && !glyphs_clear)
             || n.input.as_ref().is_some_and(|i| i.single_line)
-            || self.truncate_clip(i, (r, r_exact), sc, *clip).is_some()));
+            || self.truncate_clip(i, (r, r_exact), sc, *clip).is_some()
+            || (n.collapsing && n.vis.clip.is_none() && n.scroll.is_none())));
         // A soft clip fades each primitive on its own, so where one paints over another (an
         // image over its placeholder fill, a label over its bubble) the one beneath shows
         // through the fade, and the stack brightens or darkens towards the edge. A stack that

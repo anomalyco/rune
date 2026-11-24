@@ -383,6 +383,11 @@ impl RuntimeCore {
                 });
             }
         }
+        let content_clip = if n.collapsing && n.vis.clip.is_none() && n.scroll.is_none() {
+            intersect(clip, r)
+        } else {
+            clip
+        };
         self.paint_content(
             i,
             paint_content::LeafBox {
@@ -404,7 +409,7 @@ impl RuntimeCore {
                 sc,
                 o,
                 draw,
-                clip,
+                clip: content_clip,
                 fade,
                 group: pinh.group,
                 pressed,
@@ -415,8 +420,8 @@ impl RuntimeCore {
                 rest: pinh.still.0,
                 gliding,
                 caret,
-                shown: if !turned && !pinh.in_cache { [clip[1].max(vp[1] - m), clip[3].min(vp[3] + m)] } else { [clip[1], clip[3]] },
-                shown_x: if !turned && !pinh.in_cache { [clip[0].max(vp[0] - m), clip[2].min(vp[2] + m)] } else { [clip[0], clip[2]] },
+                shown: if !turned && !pinh.in_cache { [content_clip[1].max(vp[1] - m), content_clip[3].min(vp[3] + m)] } else { [content_clip[1], content_clip[3]] },
+                shown_x: if !turned && !pinh.in_cache { [content_clip[0].max(vp[0] - m), content_clip[2].min(vp[2] + m)] } else { [content_clip[0], content_clip[2]] },
             },
             sel_ranges,
             mark_ranges,

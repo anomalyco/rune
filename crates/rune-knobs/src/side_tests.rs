@@ -262,3 +262,32 @@ fn moving_the_pointer_takes_the_highlight_from_the_keyboard() {
     press(&mut rt, rune::Key::Down);
     assert!(rt.state.knobs.kbd, "a key lights the keyboard's row again");
 }
+
+#[test]
+fn closing_panel_keeps_its_full_width_while_side_box_slides_shut() {
+    let mut s = T { knobs: Knobs::default() };
+    s.knobs.show();
+    let mut rt = Runtime::new(s, view, (1000.0, 700.0), Env::new(true, 1.0));
+    settle(&mut rt);
+    let open_w = rt.presented("knobs-panel").expect("panel open").0[2];
+    assert!((open_w - crate::SIDE_W).abs() < 0.5);
+
+    rt.state.knobs.close();
+    rt.invalidate();
+    let mut saw_sliding = false;
+    for f in 0..20 {
+        rt.frame(1.0 / 60.0);
+        let (side_box, _) = rt.presented("knobs-side").expect("knobs-side");
+        if let Some((panel, _)) = rt.presented("knobs-panel") {
+            // knobs-panel is absolute-positioned inside knobs-side: it keeps its full width
+            // while knobs-side clips and slides shut.
+            assert!((panel[2] - crate::SIDE_W).abs() < 0.5, "f={f}: knobs-panel width changed to {}", panel[2]);
+            if side_box[2] < crate::SIDE_W - 10.0 && side_box[2] > 10.0 {
+                saw_sliding = true;
+            }
+        }
+    }
+    assert!(saw_sliding, "knobs-side should slide shut smoothly");
+    settle(&mut rt);
+    assert!(rt.presented("knobs-panel").is_none(), "knobs-panel unmounts after close");
+}

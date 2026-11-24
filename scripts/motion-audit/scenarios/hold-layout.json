@@ -1,0 +1,8 @@
+{
+  "events": [
+    { "t": 0.3, "type": "tap", "key": "v-b", "expect": "leaves", "element": "v-b" },
+    { "t": 1.2, "type": "tap", "key": "h-b" },
+    { "t": 1.4, "type": "tap", "key": "restore" },
+    { "t": 2.3, "type": "tap", "key": "h-a", "expect": "leaves", "element": "h-a" }
+  ]
+}
