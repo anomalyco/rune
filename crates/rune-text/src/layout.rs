@@ -1,5 +1,6 @@
 //! Text shaping, line breaking, caching, spans, decorations, cursors and runs.
 
+pub(crate) mod box_decos;
 pub(crate) mod cache;
 pub(crate) mod case;
 pub(crate) mod cursor;

@@ -43,6 +43,7 @@ mod selection_phase;
 mod selection_phase_virtual;
 mod settle_input;
 mod shimmer;
+mod span_box_overline;
 mod springs;
 mod stream_overflow;
 mod stream_pace;

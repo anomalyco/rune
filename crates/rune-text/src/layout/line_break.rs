@@ -74,13 +74,14 @@ fn break_lines_with_blocks_at(
     y_frac: f64,
 ) {
     let pills = layout.inline_boxes().filter(|b| b.id & PILL_BOX != 0).count() / 2;
+    let span_boxes = layout.inline_boxes().filter(|b| b.id & SPAN_BOX != 0).count();
     // `(para_idx, line_in_para)` and the room it gets instead: less to break before a chip, or
     // more to keep a chip with its label. Paragraphs break independently at `\n`, so one pass
-    // can adjust the first misplaced pill in every paragraph at once.
+    // can adjust the first misplaced pill or span-box spacer in every paragraph at once.
     let mut lines_meta = Vec::new();
-    for _ in 0..=2 * pills {
+    for _ in 0..=2 * (pills + span_boxes) {
         break_lines_capped(layout, blocks, font_size, scale, max_width, &caps, &mut lines_meta, y_frac);
-        if max_width.is_none() || pills == 0 || !collect_misplaced_pills(layout, &lines_meta, &mut caps) {
+        if max_width.is_none() || (pills == 0 && span_boxes == 0) || !collect_misplaced_pills(layout, &lines_meta, &mut caps) {
             return;
         }
     }
@@ -155,12 +156,10 @@ fn collect_misplaced_pills(
             PositionedLayoutItem::InlineBox(b) if b.id & PILL_BOX != 0 => Some(b),
             _ => None,
         }));
-        if boxes.is_empty() {
-            continue;
-        }
         let m = line.metrics();
         // Device px from the start of the line's content, as the breaker counts.
         let at = |x: f32| x - m.inline_min_coord - m.offset;
+        let mut adjusted = false;
         for (k, lead) in boxes.iter().enumerate().filter(|(_, b)| b.id & 1 == 0) {
             let trail = boxes.iter().find(|b| b.id == lead.id | 1);
             if trail.is_some_and(|t| at(t.x) + t.width <= room + 0.5) {
@@ -195,7 +194,53 @@ fn collect_misplaced_pills(
                 if !caps.contains(&cap) {
                     caps.push(cap);
                     skip_para = Some(key.0);
+                    adjusted = true;
                     break;
+                }
+            }
+        }
+        if adjusted {
+            continue;
+        }
+        // Keep a padded `SpanBox`'s leading spacer with its first word and its trailing spacer
+        // with its last word while still allowing multi-word span boxes to wrap inside.
+        let lr = line.text_range();
+        let orphaned_lead = line.items().find_map(|it| match it {
+            PositionedLayoutItem::InlineBox(b) if b.id & SPAN_BOX != 0 && b.id & 1 == 0 => {
+                let ib = layout.inline_boxes().find(|ib| ib.id == b.id)?;
+                (ib.index >= lr.end && at(b.x) >= 0.5).then(|| at(b.x) + b.width * 0.5)
+            }
+            _ => None,
+        });
+        if let Some(w) = orphaned_lead {
+            let cap = (key, w);
+            if !caps.contains(&cap) {
+                caps.push(cap);
+                skip_para = Some(key.0);
+                continue;
+            }
+        }
+        if let Some(next) = layout.get(li + 1) {
+            let nm = next.metrics();
+            let nr = next.text_range();
+            let orphaned_trail = next.items().find_map(|it| match it {
+                PositionedLayoutItem::InlineBox(b) if b.id & SPAN_BOX != 0 && b.id & 1 == 1 => {
+                    let ib = layout.inline_boxes().find(|ib| ib.id == b.id)?;
+                    let x = b.x - nm.inline_min_coord - nm.offset;
+                    (x < 0.5 && ib.index <= nr.start).then_some((x, b.width))
+                }
+                _ => None,
+            });
+            if let Some((x, tw)) = orphaned_trail {
+                let shrink = (m.advance - 1.0).max(1.0);
+                let cap = if m.advance > 1.5 && !caps.contains(&(key, shrink)) {
+                    (key, shrink)
+                } else {
+                    (key, m.advance + x + tw + 1.0)
+                };
+                if !caps.contains(&cap) {
+                    caps.push(cap);
+                    skip_para = Some(key.0);
                 }
             }
         }

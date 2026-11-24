@@ -399,9 +399,12 @@ policy changes are applied in the same mutation phase.
 ![session](../../demo/opencode/session-bottom.png)
 
 - **Rich text** (`rich(text, spans)`): per-range weight, colour, family, background and underline
-  (`Span`), wrapping with absolute line height and letter spacing, `.truncate()` with an ellipsis, and
-  inline-code backgrounds that merge where they touch. `.align(..)` and `Node` insets keep text inside
-  padding and borders.
+  (`Span`), wrapping with absolute line height and letter spacing, `.truncate()` with an ellipsis,
+  inline-code backgrounds that merge where they touch, padded inline boxes (`SpanBox`, `El::span_box`
+  / `El::span_boxes`) with layout-affecting horizontal padding, per-corner radii `[tl, tr, br, bl]`
+  and inset borders for adjacent chips, and byte-range overlines (`El::overline` / `El::overlines`)
+  that split across wrapped lines and coexist with underline and strikethrough. `.align(..)` and
+  `Node` insets keep text inside padding and borders.
 - **Fonts as data**: `AppSpec::fonts` embeds faces and `AppSpec::families = (ui, mono)` names them.
   `TextStyle` picks a `Family`.
 - **Icons** (`icon(&Icon, size)`): SVG icon bodies (as in `@opencode/ui`'s catalog) rasterised into
@@ -1739,7 +1742,7 @@ newline on `Shift+Return` and pastes plain text. The mark and block methods work
       edit.replace_with_pill(at..caret, "file:src/main.rs", "main.rs");
   }
   ```
-- **Per-frame decorations** (`.spans(spans)` / `.decorations(spans)`, `.strike(..)` / `.strikes(..)`,
+- **Per-frame decorations** (`.spans(spans)` / `.decorations(spans)`, `.strike(..)` / `.strikes(..)`, `.overline(..)` / `.overlines(..)`,
   and `.line_fill(fill)` / `.line_fills(fills)` on `text_input`, `TextInput` and `TextArea`): paint
   caller-supplied `rune::Span`s (such as `SyntaxTheme::from_kit(&k).spans(&ranges, offset)` from
   `rune_kit::syntax::highlight`) and full-width `rune::LineFill` line backgrounds / left bars (for

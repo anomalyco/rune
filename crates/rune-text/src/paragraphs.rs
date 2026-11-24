@@ -229,6 +229,17 @@ impl<'a> Piece<'a> {
         }).collect())
     }
 
+    /// Overline byte ranges over its words, on its shaped text.
+    pub fn overlines<'s>(&self, overlines: &'s [(u32, u32, Option<Color>)]) -> Cow<'s, [(u32, u32, Option<Color>)]> {
+        self.strikes(overlines)
+    }
+
+    /// [`SpanBoxRun`]s meeting its words, clipped to its paragraph on its shaped text.
+    pub fn span_boxes<'s>(&self, span_boxes: &'s [SpanBoxRun]) -> Cow<'s, [SpanBoxRun]> {
+        if self.whole || span_boxes.is_empty() { return Cow::Borrowed(span_boxes); }
+        Cow::Owned(span_boxes_in(span_boxes, self.start, self.end, self.isolates).collect())
+    }
+
     /// Content bytes `a..b` on its shaped text, when they meet its words.
     pub fn clip(&self, a: usize, b: usize) -> Option<(usize, usize)> {
         if self.whole { return (a < b).then_some((a, b)); }
@@ -285,6 +296,29 @@ pub(super) fn pills_in<'s>(pills: &'s [PillChip], a: usize, b: usize, isolates: 
 
 pub(super) fn inside(p: &PillChip, a: usize, b: usize) -> bool {
     a <= p.start as usize && p.end as usize <= b && p.start < p.end
+}
+
+/// `span_boxes` meeting content bytes `a..b`, clipped to them and moved onto the shaped text.
+pub(super) fn span_boxes_in<'s>(span_boxes: &'s [SpanBoxRun], a: usize, b: usize, isolates: &'s [(u32, u32)]) -> impl Iterator<Item = SpanBoxRun> + 's {
+    span_boxes.iter().filter(move |sb| (sb.start as usize) < b && a < sb.end as usize && sb.start < sb.end).map(move |sb| {
+        let clip_start = (sb.start as usize) < a;
+        let clip_end = (sb.end as usize) > b;
+        let start = shaped(isolates, (sb.start as usize).max(a) - a) as u32;
+        let end = shaped(isolates, (sb.end as usize).min(b) - a) as u32;
+        let mut style = sb.style;
+        if clip_start || clip_end {
+            let pl = if clip_start { 0.0 } else { style.pad_left() };
+            let pr = if clip_end { 0.0 } else { style.pad_right() };
+            let c = style.corner_radii();
+            style = style.pad_x(pl, pr).corners([
+                if clip_start { 0.0 } else { c[0] },
+                if clip_end { 0.0 } else { c[1] },
+                if clip_end { 0.0 } else { c[2] },
+                if clip_start { 0.0 } else { c[3] },
+            ]);
+        }
+        SpanBoxRun { start, end, style }
+    })
 }
 
 /// A run of paragraphs to draw, or a whole layout.
@@ -713,10 +747,10 @@ impl TextSystem {
         }
         let forced = spec.paragraphs_flow();
         // One paragraph and no pills, as most drafts are: one layout in its own direction.
-        if !spec.by_line && spec.pills.is_empty() && !spec.content.contains('\n') {
+        if !spec.by_line && spec.pills.is_empty() && spec.span_boxes.is_empty() && !spec.content.contains('\n') {
             let base = forced.or_else(|| flow_of(spec.content, &[])).unwrap_or(spec.plaintext_flow()).base();
             let shape = spec.shape_key.map(|k| hash::directed(k, base));
-            return TextLayout::Single(self.layout_keyed(shape, spec.content, spec.spans, spec.blocks, &[], spec.style, scale, max_width, align, spec.wrap_anywhere, false, Keep::Cached, base));
+            return TextLayout::Single(self.layout_keyed(shape, spec.content, spec.spans, spec.blocks, &[], &[], spec.style, scale, max_width, align, spec.wrap_anywhere, false, Keep::Cached, base));
         }
         let whole = spec.shape_key.unwrap_or_else(|| spec.fresh_shape_key(scale));
         // Lines with no strong character take the element's flow, so it keys the whole too.
@@ -769,7 +803,7 @@ impl TextSystem {
         // and after it keep their keys (`reuse_keys`), so a keystroke or recolour costs no full scan.
         let layout_spans: Vec<Span> = span::layout_spans(spec.spans).cloned().collect();
         let layout_disjoint = layout_spans.len() <= 1 || layout_spans.windows(2).all(|w| w[0].start < w[0].end && w[0].end <= w[1].start);
-        let no_pills_or_blocks = spec.pills.is_empty() && spec.blocks.iter().all(|&b| b == Block::Paragraph);
+        let no_pills_or_blocks = spec.pills.is_empty() && spec.span_boxes.is_empty() && spec.blocks.iter().all(|&b| b == Block::Paragraph);
         let plain = layout_spans.is_empty() && no_pills_or_blocks;
         let disjoint_spans = spec.spans.len() <= 1 || spec.spans.windows(2).all(|w| w[0].start < w[0].end && w[0].end <= w[1].start);
         let forced = spec.paragraphs_flow();
@@ -874,7 +908,8 @@ impl TextSystem {
                     let text: Cow<str> = if isolates.is_empty() { Cow::Borrowed(words) } else { Cow::Owned(with_isolates(words, &isolates)) };
                     let spans: Vec<Span> = spans_in(&layout_spans, a, b, &isolates, layout_disjoint).collect();
                     let pills: Vec<PillChip> = pills_in(spec.pills, a, b, &isolates).collect();
-                    self.layout_keyed(Some(key), &text, &spans, blocks, &pills, style, scale, max_width, align, spec.wrap_anywhere, pretty, Keep::Owned, flow.base())
+                    let span_boxes: Vec<SpanBoxRun> = span_boxes_in(spec.span_boxes, a, b, &isolates).collect();
+                    self.layout_keyed(Some(key), &text, &spans, blocks, &pills, &span_boxes, style, scale, max_width, align, spec.wrap_anywhere, pretty, Keep::Owned, flow.base())
                 }
             };
             // A paragraph kept as it was keeps its measures too: touching 2,000 layouts to read

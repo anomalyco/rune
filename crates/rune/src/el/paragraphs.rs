@@ -105,6 +105,24 @@ fn paragraph(t: &TextSpec, k: usize, (a, b): (usize, usize), last: bool, e: &mut
         cold.uncopied = t.cold.uncopied.iter().filter_map(|&(s, e)| clip(s, e)).collect();
         cold.rings = t.cold.rings.iter().filter_map(|&(s, e, c, w)| clip(s, e).map(|(s, e)| (s, e, c, w))).collect();
         cold.strikes = t.cold.strikes.iter().filter_map(|&(s, e, c)| clip(s, e).map(|(s, e)| (s, e, c))).collect();
+        cold.overlines = t.cold.overlines.iter().filter_map(|&(s, e, c)| clip(s, e).map(|(s, e)| (s, e, c))).collect();
+        cold.span_boxes = t.cold.span_boxes.iter().filter_map(|b| {
+            let (start, end) = clip(b.start, b.end)?;
+            let (cs, ce) = (b.start < a32, b.end > b32);
+            let mut style = b.style;
+            if cs || ce {
+                let c = style.corner_radii();
+                style = style
+                    .pad_x(if cs { 0.0 } else { style.pad_left() }, if ce { 0.0 } else { style.pad_right() })
+                    .corners([
+                        if cs { 0.0 } else { c[0] },
+                        if ce { 0.0 } else { c[1] },
+                        if ce { 0.0 } else { c[2] },
+                        if cs { 0.0 } else { c[3] },
+                    ]);
+            }
+            Some(crate::text::SpanBoxRun { start, end, style })
+        }).collect();
         cold.highlights = t.cold.highlights.iter().filter_map(|h| clip(h.start, h.end).map(|(start, end)| crate::text::TextHighlight { start, end, ..h.clone() })).collect();
         cold.line_fills = t.cold.line_fills.iter().filter_map(|f| clip(f.start, f.end).map(|(start, end)| crate::el::LineFill { start, end, ..*f })).collect();
         // A chip lies inside one line; one across a newline has no paragraph to sit in.

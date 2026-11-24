@@ -187,6 +187,19 @@ impl Elision {
         }).collect()
     }
 
+    /// `overlines` moved onto the drawn string.
+    pub(in crate::runtime) fn overlines(self, overlines: &[(u32, u32, Option<Color>)]) -> Vec<(u32, u32, Option<Color>)> {
+        self.strikes(overlines)
+    }
+
+    /// `span_boxes` moved onto the drawn string.
+    pub(in crate::runtime) fn span_boxes(self, boxes: &[crate::text::SpanBoxRun]) -> Vec<crate::text::SpanBoxRun> {
+        boxes.iter().filter_map(|&b| {
+            let (start, end) = self.mark(b.start as usize, b.end as usize, false);
+            (start < end).then_some(crate::text::SpanBoxRun { start: start as u32, end: end as u32, style: b.style })
+        }).collect()
+    }
+
     /// `highlights` moved onto the drawn string.
     pub(in crate::runtime) fn highlights(self, highlights: &[crate::text::TextHighlight]) -> Vec<crate::text::TextHighlight> {
         highlights.iter().filter_map(|h| {

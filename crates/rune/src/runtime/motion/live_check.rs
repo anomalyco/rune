@@ -220,7 +220,7 @@ impl NodePrint {
             }
         };
         type TextPart = (&'static str, fn(&TextSpec) -> u64, Option<fn(&TextSpec) -> String>);
-        let parts: [TextPart; 8] = [
+        let parts: [TextPart; 10] = [
             ("text", |t| key(|h| t.cold.live.is_none().then_some(&t.content).hash(h)), Some(snippet)),
             ("text colour", |t| key(|h| rgba(t.color).hash(h)), Some(|t| colour(t.color))),
             ("text style", |t| key(|h| bits(&[t.style.size, t.style.weight]).hash(h)), Some(|t| format!("{:.1}pt weight {}", t.style.size, t.style.weight))),
@@ -239,6 +239,18 @@ impl NodePrint {
             }), None),
             ("rings", |t| key(|h| for &(a, b, c, w) in &t.cold.rings { (a, b, c, w.to_bits()).hash(h) }), None),
             ("strikes", |t| key(|h| t.cold.strikes.hash(h)), None),
+            ("overlines", |t| key(|h| t.cold.overlines.hash(h)), None),
+            ("span boxes", |t| key(|h| for b in &t.cold.span_boxes {
+                (
+                    b.start,
+                    b.end,
+                    b.style.bg_color(),
+                    b.style.pad_left().to_bits(),
+                    b.style.pad_right().to_bits(),
+                    b.style.corner_radii().map(f32::to_bits),
+                    b.style.border_ring().map(|(c, w)| (c, w.to_bits())),
+                ).hash(h);
+            }), None),
             ("highlights", |t| key(|h| for hl in &t.cold.highlights {
                 (hl.start, hl.end, hl.bg, hl.fg, hl.pad.to_bits(), &hl.key, hl.ring.map(|(c, w)| (c, w.to_bits()))).hash(h)
             }), None),

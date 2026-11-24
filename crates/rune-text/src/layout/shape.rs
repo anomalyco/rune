@@ -11,7 +11,7 @@ use crate::fonts::fallback::{self, Route};
 use crate::fonts::{language, system_weight};
 use crate::raster::synthetic_bold;
 use crate::{
-    Entry, HIDDEN_SIZE, Ink, Keep, PILL_BOX, PillChip, PillMetrics, Span, TextSystem, Trak, family_list, font_trak, mono_tab_stops,
+    Entry, HIDDEN_SIZE, Ink, Keep, PILL_BOX, PillChip, PillMetrics, SPAN_BOX, Span, SpanBoxRun, TextSystem, Trak, family_list, font_trak, mono_tab_stops,
     named_list, shape_key,
 };
 use rune_core::tok::{Family, OpticalSize, TextStyle};
@@ -55,6 +55,7 @@ impl TextSystem {
         spans: &[Span],
         blocks: &[crate::Block],
         pills: &[PillChip],
+        span_boxes: &[SpanBoxRun],
         style: TextStyle,
         scale: f32,
         max_width: Option<f32>,
@@ -71,7 +72,7 @@ impl TextSystem {
         // Shaping depends on the text, spans, style, scale, overflow-wrap and pills; line
         // breaking adds the width, alignment and block indents. A layout cached at one width
         // is re-broken at another rather than shaped again.
-        let shape_key = shape.unwrap_or_else(|| hash::directed(shape_key(text, spans, style, scale, wrap_anywhere, pills), base));
+        let shape_key = shape.unwrap_or_else(|| hash::directed(hash::mix_span_boxes(shape_key(text, spans, style, scale, wrap_anywhere, pills), span_boxes), base));
         // Pretty wrapping breaks only wrapped proportional text again.
         let pretty = pretty && max_width.is_some() && !matches!(style.family, Family::Mono | Family::SystemMono);
         let key = hash::break_key(shape_key, max_width, align, has_indented_blocks.then_some(blocks)) ^ if pretty { 0x7072_6574_7479_0001 } else { 0 };
@@ -104,7 +105,21 @@ impl TextSystem {
                 !r.is_empty() && text.is_char_boundary(r.start) && text.is_char_boundary(r.end) && !text.as_bytes()[r.clone()].contains(&b'\n')
             })
             .collect();
-        let indented = has_indented_blocks || !pills.is_empty();
+        let padded_boxes: Vec<(usize, std::ops::Range<usize>, u32, u32)> = span_boxes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, sb)| {
+                let lead = (sb.style.pad_left() * scale).round() as u32;
+                let trail = (sb.style.pad_right() * scale).round() as u32;
+                if lead == 0 && trail == 0 {
+                    return None;
+                }
+                let r = (sb.start as usize).min(text.len())..(sb.end as usize).min(text.len());
+                (!r.is_empty() && text.is_char_boundary(r.start) && text.is_char_boundary(r.end))
+                    .then_some((i, r, lead, trail))
+            })
+            .collect();
+        let indented = has_indented_blocks || !pills.is_empty() || !padded_boxes.is_empty();
         let break_lines = |layout: &mut Layout<Ink>| line_break::break_new(layout, text, blocks, indented, style.size, scale, max_width, pretty);
         if cache
             && let Some(prev) = self.shapes.get(&shape_key).copied()
@@ -384,6 +399,24 @@ impl TextSystem {
                         width: width as f32,
                         height,
                         baseline,
+                        vertical_align: parley::VerticalAlign::BASELINE,
+                    });
+                }
+            }
+            // Horizontal spacers for padded `SpanBox` ranges reserve room in the line
+            // without changing UTF-8 byte offsets.
+            for (i, r, lead, trail) in &padded_boxes {
+                for (side, index, width) in [(0, r.start, *lead), (1, r.end, *trail)] {
+                    if width == 0 {
+                        continue;
+                    }
+                    b.push_inline_box(parley::InlineBox {
+                        id: SPAN_BOX | (*i as u64) << 1 | side,
+                        kind: parley::InlineBoxKind::InFlow,
+                        index,
+                        width: width as f32,
+                        height: 0.0,
+                        baseline: None,
                         vertical_align: parley::VerticalAlign::BASELINE,
                     });
                 }

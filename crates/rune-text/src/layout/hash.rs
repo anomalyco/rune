@@ -3,7 +3,7 @@
 //! measuring and re-breaking a long paragraph doesn't rehash its bytes.
 use std::hash::{Hash, Hasher};
 
-use crate::{PillChip, Span};
+use crate::{PillChip, Span, SpanBoxRun};
 use rune_core::tok::{OpticalSize, TextStyle};
 
 /// A fast, non-cryptographic hasher: bytes go through `rustc_hash`'s string hash and each word
@@ -62,6 +62,23 @@ pub fn shape_key(text: &str, spans: &[Span], style: TextStyle, scale: f32, wrap_
     for p in pills {
         let replace = |r: &crate::Replace| [r.width, r.ascent, r.descent].map(f32::to_bits);
         (p.start, p.end, p.has_lead_visual(), p.bare.as_ref().map(|b| (b.size.to_bits(), b.gap.to_bits(), b.replace.as_ref().map(replace)))).hash(&mut h);
+    }
+    h.finish()
+}
+
+/// Mixes layout-affecting [`SpanBoxRun`] horizontal padding into a [`shape_key`]. Returns `key`
+/// unchanged when no box adds horizontal padding, keeping plain text keys identical.
+#[doc(hidden)]
+pub fn mix_span_boxes(key: u64, span_boxes: &[SpanBoxRun]) -> u64 {
+    if !span_boxes.iter().any(|b| b.style.has_padding()) {
+        return key;
+    }
+    let mut h = KeyHasher::default();
+    (key, 0x7370_616e_626f_7801u64).hash(&mut h);
+    for b in span_boxes {
+        if b.style.has_padding() {
+            (b.start, b.end, b.style.pad_left().to_bits(), b.style.pad_right().to_bits()).hash(&mut h);
+        }
     }
     h.finish()
 }

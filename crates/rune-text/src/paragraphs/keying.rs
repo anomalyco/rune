@@ -141,6 +141,11 @@ pub(super) fn key_paragraphs(spec: &TextInput<'_>, layout_spans: &[Span], style_
         for p in pills_in(spec.pills, a, b, &isolates) {
             (p.start, p.end, p.icon.is_some(), p.bare.as_ref().map(|b| (b.size.to_bits(), b.gap.to_bits()))).hash(&mut h);
         }
+        for sb in span_boxes_in(spec.span_boxes, a, b, &isolates) {
+            if sb.style.has_padding() {
+                (sb.start, sb.end, sb.style.pad_left().to_bits(), sb.style.pad_right().to_bits()).hash(&mut h);
+            }
+        }
         found.push((a, b, flow, h.finish(), isolates, None));
     }
     close(&mut run, found);

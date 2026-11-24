@@ -279,7 +279,7 @@ pub fn cursor_from_point(layout: &Layout<Ink>, x: f32, y: f32) -> parley::editin
     let r = line.text_range();
     for item in line.items() {
         if let PositionedLayoutItem::InlineBox(b) = item
-            && b.id & PILL_BOX != 0
+            && b.id & (PILL_BOX | SPAN_BOX) != 0
             && x >= b.x
             && x <= b.x + b.width
             && let Some(ib) = layout.inline_boxes().find(|ib| ib.id == b.id)

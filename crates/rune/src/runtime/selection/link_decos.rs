@@ -102,7 +102,7 @@ impl LinkFx {
                         out[idx].color = c;
                     } else {
                         let idx = out.len();
-                        out.push(PaintedDeco { deco: Deco { rect: [x0, y, w, s.max(1.0)], color: c, radius: 0.0 }, ring: None, byte: 0 });
+                        out.push(PaintedDeco { deco: Deco { rect: [x0, y, w, s.max(1.0)], color: c, radius: 0.0 }, ring: None, corners: None, byte: 0 });
                         if let Some(index) = ul_index.as_mut() {
                             index.insert(idx, &out[idx]);
                         }
@@ -274,7 +274,7 @@ fn apply_bg_matches(
         return None;
     }
     let idx = out.len();
-    out.push(PaintedDeco { deco: Deco { rect, color: p.bg.unwrap_or(Color::TRANSPARENT), radius: 4.0 * s }, ring, byte });
+    out.push(PaintedDeco { deco: Deco { rect, color: p.bg.unwrap_or(Color::TRANSPARENT), radius: 4.0 * s }, ring, corners: None, byte });
     Some(idx)
 }
 

@@ -492,6 +492,7 @@ fn reference_link_decos(
                     out.push(PaintedDeco {
                         deco: Deco { rect, color: p.bg.unwrap_or(Color::TRANSPARENT), radius: 4.0 * s },
                         ring,
+                        corners: None,
                         byte: b.saturating_sub(1),
                     });
                 }
@@ -511,6 +512,7 @@ fn reference_link_decos(
                     out.push(PaintedDeco {
                         deco: Deco { rect: [x0, y, w, s.max(1.0)], color: c, radius: 0.0 },
                         ring: None,
+                        corners: None,
                         byte: 0,
                     });
                 }
@@ -524,7 +526,7 @@ fn deco_snapshot(out: &[PaintedDeco]) -> Vec<([f32; 4], Color, f32, Option<(Colo
 }
 
 fn clone_decos(out: &[PaintedDeco]) -> Vec<PaintedDeco> {
-    out.iter().map(|d| PaintedDeco { deco: d.deco, ring: d.ring, byte: d.byte }).collect()
+    out.iter().map(|d| PaintedDeco { deco: d.deco, ring: d.ring, corners: d.corners, byte: d.byte }).collect()
 }
 
 #[test]
