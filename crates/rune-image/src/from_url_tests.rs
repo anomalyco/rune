@@ -18,7 +18,25 @@ fn fetched_svg_rasterizes_at_the_requested_size() {
     const SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8"><rect width="16" height="8" fill="#fff"/></svg>"##;
     let decoded = land("mark.svg", Fetched::Svg(SVG.to_vec()), 48).unwrap();
     assert_eq!((decoded.mips[0].width, decoded.mips[0].height), (48, 24));
+    assert_eq!(decoded.intrinsic, Some([16.0, 8.0]));
     assert!(land("bad.svg", Fetched::Svg(b"<svg".to_vec()), 48).err().unwrap().0.starts_with("bad.svg: "));
+}
+
+#[test]
+fn land_scaled_downsamples_fetched_rasters_only_when_requested_and_never_upscales() {
+    let full = vec![200u8; 128 * 64 * 4];
+    let unscaled = land_scaled("photo.webp", Fetched::Rgba(128, 64, full.clone()), 16, None).unwrap();
+    assert_eq!((unscaled.mips[0].width, unscaled.mips[0].height), (128, 64));
+
+    let scaled = land_scaled("photo.webp", Fetched::Rgba(128, 64, full), 32, Some(32)).unwrap();
+    assert_eq!((scaled.mips[0].width, scaled.mips[0].height), (32, 16));
+    assert_eq!(scaled.intrinsic, None);
+
+    let small = land_scaled("dot.webp", Fetched::Rgba(16, 8, vec![255; 16 * 8 * 4]), 64, Some(64)).unwrap();
+    assert_eq!((small.mips[0].width, small.mips[0].height), (16, 8), "never upscales");
+
+    let bad = land_scaled("short.webp", Fetched::Rgba(4, 4, vec![0; 4]), 2, Some(2)).err().unwrap();
+    assert!(bad.0.starts_with("short.webp: "), "{bad}");
 }
 
 #[test]

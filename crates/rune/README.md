@@ -2104,18 +2104,23 @@ For static assets, construct an `ImageCache` once with the app's setup waker:
 ```rust,ignore
 let cache = rune::ImageCache::new(waker);
 let icon = cache.load(png_bytes); // PNG (APNG), JPEG, GIF, WebP, BMP, ICO, AVIF (with `avif`), PNG-backed ICNS, or SVG
+let thumb = cache.load_scaled(avatar_bytes, 32.0, env.scale); // downsampled to fit 32 pt at display scale, first frame only
 // Keep `icon` in app state; pending images paint nothing, completion wakes the app.
 el().size(32.0, 32.0).pixels(icon.pixels())
 ```
 
 The cache deduplicates by content and decodes on a shared pool of up to 4 worker threads on native
-(or the browser's codecs / main-thread tasks on web). `cache.rgba(w, h, bytes)` accepts
-straight-alpha sRGB pixels, and `cache.rgba_into(&pixels, w, h, bytes)` builds linear-light
+(or the browser's codecs / main-thread tasks on web). `cache.load_scaled(bytes, size_pt, scale)`
+decodes rasters at their target device-pixel size (preserving aspect ratio, never upscaling, and
+taking only frame 0 of animated GIF/WebP/APNG so thumbnails and notification icons never wake idle
+frames) and rasterizes SVGs to that size, keyed by `(bytes, max_px)`. `cache.rgba(w, h, bytes)`
+accepts straight-alpha sRGB pixels, and `cache.rgba_into(&pixels, w, h, bytes)` builds linear-light
 mipmaps off the main thread directly into an existing `Pixels` handle using latest-wins
 ordering against newer `Pixels::set`, `Pixels::replace`, or `rgba_into` calls. Static images get area-filtered, linear-premultiplied mip levels
 on those workers; rendering chooses a precomputed level from the drawn device-pixel size.
-`Image::{size,is_ready,error}` inspect completion; `Image::wait` is for deterministic headless
-fixtures. Dropping all image and pixel handles releases decoded storage. Legacy ICNS codecs
+`Image::{size,intrinsic_size,is_ready,error}` inspect completion (`intrinsic_size` returns an SVG's
+CSS-pixel `width`/`height`/`viewBox` dimensions independently of its raster resolution, and mip 0's
+dimensions as `[f32; 2]` for rasters); `Image::wait` is for deterministic headless fixtures. Dropping all image and pixel handles releases decoded storage. Legacy ICNS codecs
 are not decoded; provide decoded RGBA for those. A JPEG (or any format whose decoder reads
 EXIF) is turned upright by its EXIF orientation, so a phone photo's `size()` is the size it
 shows at. A codec that panics on a malformed file fails that image (`Image::error`) and the

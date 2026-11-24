@@ -2,7 +2,7 @@
 //! own codecs (`createImageBitmap`, so WebP and AVIF too) off the main thread, and the straight
 //! RGBA lands through the same mip path as `ImageCache::rgba`. On native a URL without a scheme
 //! is a path and a `file:` URL names one; both load like `ImageCache::file`.
-use super::{Decoded, Image, ImageCache, ImageError, Input, icon_pixels, mip_chain, svg_rgba};
+use super::{Decoded, Image, ImageCache, ImageError, Input, icon_pixels, maybe_downsample_rgba, mip_chain, mip_chain_with_intrinsic, svg_rgba_with_size};
 #[cfg(any(test, target_arch = "wasm32"))]
 use super::MAX_SIDE;
 #[cfg(target_arch = "wasm32")]
@@ -81,29 +81,51 @@ pub(super) enum Fetched {
 /// The mips for a fetched image, or why not, naming the URL.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn land(url: &str, fetched: Fetched, px: u32) -> Result<Decoded, ImageError> {
+    land_scaled(url, fetched, px, None)
+}
+
+/// Like [`land`], optionally downsampling raster pixels to fit `max_raster_px` before building
+/// mips (used by [`ImageCache::load_scaled`] on web).
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn land_scaled(url: &str, fetched: Fetched, px: u32, max_raster_px: Option<u32>) -> Result<Decoded, ImageError> {
     match fetched {
-        Fetched::Rgba(w, h, bytes) => mip_chain(w, h, &bytes),
-        Fetched::Svg(bytes) => svg_rgba(&bytes, px).and_then(|(w, h, bytes)| mip_chain(w, h, &bytes)),
+        Fetched::Rgba(w, h, bytes) => maybe_downsample_rgba(w, h, bytes, max_raster_px)
+            .and_then(|(w, h, bytes)| mip_chain(w, h, &bytes)),
+        Fetched::Svg(bytes) => svg_rgba_with_size(&bytes, px)
+            .and_then(|(w, h, intrinsic, bytes)| mip_chain_with_intrinsic(w, h, &bytes, Some(intrinsic))),
     }
     .map_err(|e| ImageError(format!("{url}: {e}")))
 }
 
-/// [`land`] on the browser's main thread, where frames draw too: the mips are built a slice at
-/// a time with a task between slices, so no slice holds a frame or input up for long.
+/// [`land_scaled`] on the browser's main thread, where frames draw too: the mips are built a
+/// slice at a time with a task between slices, so no slice holds a frame or input up for long.
 #[cfg(target_arch = "wasm32")]
-pub(super) async fn land_in_slices(url: &str, fetched: Fetched, px: u32) -> Result<Decoded, ImageError> {
+pub(super) async fn land_in_slices(
+    url: &str,
+    fetched: Fetched,
+    px: u32,
+    max_raster_px: Option<u32>,
+) -> Result<Decoded, ImageError> {
     /// About a few milliseconds of mip work on a phone.
     const SLICE: usize = 1 << 15;
     let named = |e: ImageError| ImageError(format!("{url}: {e}"));
-    let (w, h, bytes) = match fetched {
-        Fetched::Rgba(w, h, bytes) => (w, h, bytes),
-        Fetched::Svg(bytes) => svg_rgba(&bytes, px).map_err(named)?,
+    let (w, h, intrinsic, bytes) = match fetched {
+        Fetched::Rgba(w, h, bytes) => {
+            let (w, h, bytes) = maybe_downsample_rgba(w, h, bytes, max_raster_px).map_err(named)?;
+            (w, h, None, bytes)
+        }
+        Fetched::Svg(bytes) => {
+            let (w, h, intrinsic, bytes) = svg_rgba_with_size(&bytes, px).map_err(named)?;
+            (w, h, Some(intrinsic), bytes)
+        }
     };
     let mut steps = super::mips::MipSteps::new(w, h, &bytes).map_err(named)?;
     while !steps.step(SLICE) {
         wasm_bindgen_futures::JsFuture::from(next_task()).await.ok();
     }
-    Ok(steps.finish())
+    let mut decoded = steps.finish();
+    decoded.intrinsic = intrinsic;
+    Ok(decoded)
 }
 
 /// Builds linear-light mips for straight-alpha `bytes` in main-thread slices, stopping early and

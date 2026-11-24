@@ -40,7 +40,10 @@ pub use svg::svg_rgba_cover;
 
 #[cfg(test)]
 use mips::byte;
+use mips::maybe_downsample_rgba;
 use mips::mip_chain;
+use mips::mip_chain_with_intrinsic;
+use svg::svg_rgba_with_size;
 
 /// Largest image side Rune decodes or accepts on native and web: 8192 pixels, so 8-bit RGBA
 /// stays within [`MAX_ALLOC`] before mips.
@@ -70,6 +73,8 @@ pub(crate) struct Decoded {
     pub mips: Vec<Mip>,
     /// An animation's other frames and timing.
     pub motion: Option<Box<animated::Motion>>,
+    /// Intrinsic logical dimensions in CSS pixels when distinct from mip 0 (SVG documents).
+    pub intrinsic: Option<[f32; 2]>,
 }
 struct State {
     id: ImageId,
@@ -99,6 +104,34 @@ impl Image {
     pub fn size(&self) -> Option<[u32; 2]> {
         let mip = self.decoded()?.ok()?.mips.first()?;
         Some([mip.width, mip.height])
+    }
+    /// Intrinsic logical dimensions in CSS pixels `[width, height]`, independent of the decoded
+    /// raster resolution.
+    ///
+    /// For SVG and SVGZ images, this returns the document's resolved `width`/`height`/`viewBox`
+    /// size from the SVG tree (preserving non-integer values and unaffected by default 2×
+    /// supersampling, the 4096 px raster cap, or a custom [`ImageCache::svg`] /
+    /// [`ImageCache::load_scaled`] target size), matching HTML `naturalWidth` / `naturalHeight`.
+    /// For raster images, this returns mip 0's decoded dimensions as `[f32; 2]`. Returns `None`
+    /// while the image is still decoding or if decoding failed.
+    ///
+    /// # Example
+    /// ```
+    /// # #[cfg(feature = "svg")]
+    /// # {
+    /// use std::sync::Arc;
+    /// use rune_image::ImageCache;
+    ///
+    /// let cache = ImageCache::new(Arc::new(|| {}));
+    /// let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8"><rect width="16" height="8" fill="#000"/></svg>"##;
+    /// let image = cache.load(&svg[..]);
+    /// assert_eq!(image.wait(), Ok([32, 16]));
+    /// assert_eq!(image.intrinsic_size(), Some([16.0, 8.0]));
+    /// # }
+    /// ```
+    pub fn intrinsic_size(&self) -> Option<[f32; 2]> {
+        let d = self.decoded()?.ok()?;
+        d.intrinsic.or_else(|| d.mips.first().map(|m| [m.width as f32, m.height as f32]))
     }
     pub fn is_ready(&self) -> bool { self.0.decoded.get().is_some() }
     pub fn error(&self) -> Option<&ImageError> { self.0.decoded.get()?.as_ref().err() }
@@ -133,6 +166,7 @@ impl Image {
 
 enum Input {
     Encoded(Arc<[u8]>),
+    EncodedScaled(Arc<[u8]>, u32),
     Rgba(u32, u32, Arc<[u8]>),
     Icon(#[cfg_attr(target_arch = "wasm32", allow(dead_code))] std::path::PathBuf, #[cfg_attr(target_arch = "wasm32", allow(dead_code))] u32),
     Svg(Arc<[u8]>, u32),
@@ -151,15 +185,18 @@ impl Input {
     fn decode(self) -> Result<Decoded, ImageError> {
         match self {
             Input::Encoded(bytes) => decode(&bytes),
+            Input::EncodedScaled(bytes, max_px) => decode_scaled(&bytes, max_px),
             Input::Rgba(w, h, bytes) => mip_chain(w, h, &bytes),
-            Input::Svg(bytes, px) => svg_rgba(&bytes, px).and_then(|(w, h, bytes)| mip_chain(w, h, &bytes)),
+            Input::Svg(bytes, px) => svg_rgba_with_size(&bytes, px)
+                .and_then(|(w, h, intrinsic, bytes)| mip_chain_with_intrinsic(w, h, &bytes, Some(intrinsic))),
             #[cfg(not(target_arch = "wasm32"))]
             Input::Icon(path, px) => app_icon_rgba(&path, px).and_then(|(w, h, bytes)| mip_chain(w, h, &bytes)),
             #[cfg(not(target_arch = "wasm32"))]
             Input::File(path, px) => {
                 let bytes = read_regular_file(&path)?;
                 if has_svg_extension(&path) || is_svg(&bytes) {
-                    svg_rgba(&bytes, px).and_then(|(w, h, bytes)| mip_chain(w, h, &bytes))
+                    svg_rgba_with_size(&bytes, px)
+                        .and_then(|(w, h, intrinsic, bytes)| mip_chain_with_intrinsic(w, h, &bytes, Some(intrinsic)))
                 } else {
                     decode(&bytes)
                 }
@@ -304,6 +341,44 @@ impl ImageCache {
         hash.update(&bytes);
         let id = *hash.finalize().as_bytes();
         self.request(id, Input::Encoded(bytes))
+    }
+
+    /// Like [`ImageCache::load`], but downsamples raster images to fit `size_pt` points square at
+    /// `scale` device pixels per point (pass the window's `Env::scale`), keeping the aspect ratio
+    /// and decoding only the first frame of animations, before building mipmaps.
+    ///
+    /// Rasters whose longest side is already at or below the target device pixel size are never
+    /// upscaled. SVGs and SVGZs rasterize directly to the target pixel size (up to 4096 px) while
+    /// preserving their document dimensions on [`Image::intrinsic_size`]. Handles are
+    /// content-addressed by `(bytes, max_px)` where `max_px = (size_pt * scale).ceil().clamp(1, 8192)`
+    /// (non-finite inputs clamp to 1 px).
+    ///
+    /// Use this for thumbnails, avatars, tray icons, and notification images drawn smaller than
+    /// their source files so the cache and atlas store only the pixels needed and animated images
+    /// stay still without waking idle frames.
+    ///
+    /// # Example
+    /// ```
+    /// # #[cfg(feature = "svg")]
+    /// # {
+    /// use std::sync::Arc;
+    /// use rune_image::ImageCache;
+    ///
+    /// let cache = ImageCache::new(Arc::new(|| {}));
+    /// let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8"><rect width="16" height="8" fill="#000"/></svg>"##;
+    /// let thumb = cache.load_scaled(&svg[..], 32.0, 2.0);
+    /// assert_eq!(thumb.wait(), Ok([64, 32]));
+    /// assert_eq!(thumb.intrinsic_size(), Some([16.0, 8.0]));
+    /// # }
+    /// ```
+    pub fn load_scaled(&self, bytes: impl Into<Arc<[u8]>>, size_pt: f32, scale: f32) -> Image {
+        let bytes = bytes.into();
+        let max_px = scaled_pixels(size_pt, scale);
+        let mut hash = blake3::Hasher::new();
+        hash.update(b"rune-encoded-scaled\0");
+        hash.update(&max_px.to_le_bytes());
+        hash.update(&bytes);
+        self.request(*hash.finalize().as_bytes(), Input::EncodedScaled(bytes, max_px))
     }
 
     /// SVG or SVGZ bytes rasterized to fit `size_pt` points square at `scale` device pixels per
@@ -521,12 +596,17 @@ impl ImageCache {
                         if !wanted(&weak) { return; }
                         let fetched = from_url::fetch(&url).await;
                         if !wanted(&weak) { return; }
-                        match fetched { Ok(fetched) => from_url::land_in_slices(&url, fetched, px).await, Err(e) => Err(e) }
+                        match fetched { Ok(fetched) => from_url::land_in_slices(&url, fetched, px, None).await, Err(e) => Err(e) }
                     }
                     Input::Encoded(bytes) if browser_decodes(&bytes) => {
                         let decoded = from_url::decode_in_browser(&bytes).await;
                         if !wanted(&weak) { return; }
-                        match decoded { Ok(fetched) => from_url::land_in_slices("image", fetched, 0).await, Err(e) => Err(e) }
+                        match decoded { Ok(fetched) => from_url::land_in_slices("image", fetched, 0, None).await, Err(e) => Err(e) }
+                    }
+                    Input::EncodedScaled(bytes, max_px) if browser_decodes(&bytes) => {
+                        let decoded = from_url::decode_in_browser(&bytes).await;
+                        if !wanted(&weak) { return; }
+                        match decoded { Ok(fetched) => from_url::land_in_slices("image", fetched, max_px, Some(max_px)).await, Err(e) => Err(e) }
                     }
                     input => input.decode(),
                 };
@@ -553,6 +633,11 @@ fn wanted(state: &std::sync::Weak<State>) -> bool { state.strong_count() > 0 }
 fn icon_pixels(size_pt: f32, scale: f32) -> u32 {
     let px = (size_pt * scale).ceil();
     if px.is_finite() { px.clamp(1.0, 1024.0) as u32 } else { 1 }
+}
+
+fn scaled_pixels(size_pt: f32, scale: f32) -> u32 {
+    let px = (size_pt * scale).ceil();
+    if px.is_finite() { px.clamp(1.0, MAX_SIDE as f32) as u32 } else { 1 }
 }
 
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -596,8 +681,8 @@ pub(crate) fn read_regular_file(path: &std::path::Path) -> Result<Vec<u8>, Image
 
 fn decode(bytes: &[u8]) -> Result<Decoded, ImageError> {
     if is_svg(bytes) {
-        let (w, h, rgba) = svg_rgba(bytes, 0)?;
-        return mip_chain(w, h, &rgba);
+        let (w, h, intrinsic, rgba) = svg_rgba_with_size(bytes, 0)?;
+        return mip_chain_with_intrinsic(w, h, &rgba, Some(intrinsic));
     }
     if avif::is_avif(bytes) {
         let (w, h, rgba) = avif::rgba(bytes)?;
@@ -605,6 +690,26 @@ fn decode(bytes: &[u8]) -> Result<Decoded, ImageError> {
     }
     let bytes = if bytes.starts_with(b"icns") { icns_png(bytes)? } else { bytes };
     if let Some(animation) = animated::decode(bytes) { return animation; }
+    let (w, h, rgba) = decode_still_raster(bytes)?;
+    mip_chain(w, h, &rgba)
+}
+
+fn decode_scaled(bytes: &[u8], max_px: u32) -> Result<Decoded, ImageError> {
+    if is_svg(bytes) {
+        let (w, h, intrinsic, rgba) = svg_rgba_with_size(bytes, max_px)?;
+        return mip_chain_with_intrinsic(w, h, &rgba, Some(intrinsic));
+    }
+    let (w, h, rgba) = if avif::is_avif(bytes) {
+        avif::rgba(bytes)?
+    } else {
+        let bytes = if bytes.starts_with(b"icns") { icns_png(bytes)? } else { bytes };
+        decode_still_raster(bytes)?
+    };
+    let (w, h, rgba) = maybe_downsample_rgba(w, h, rgba, Some(max_px))?;
+    mip_chain(w, h, &rgba)
+}
+
+fn decode_still_raster(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageError> {
     use image::ImageDecoder;
     let error = |e: image::ImageError| ImageError(e.to_string());
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
@@ -623,7 +728,7 @@ fn decode(bytes: &[u8]) -> Result<Decoded, ImageError> {
     let mut image = image::DynamicImage::from_decoder(decoder).map_err(error)?;
     image.apply_orientation(orientation);
     let image = image.into_rgba8();
-    mip_chain(image.width(), image.height(), image.as_raw())
+    Ok((image.width(), image.height(), image.into_raw()))
 }
 
 /// A PNG decoded to 8-bit RGBA by the PNG decoder alone. `image::load_from_memory_with_format`

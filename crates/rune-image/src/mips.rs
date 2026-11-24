@@ -3,9 +3,120 @@
 use super::{Decoded, ImageError, Mip};
 
 pub(super) fn mip_chain(width: u32, height: u32, bytes: &[u8]) -> Result<Decoded, ImageError> {
+    mip_chain_with_intrinsic(width, height, bytes, None)
+}
+
+pub(super) fn mip_chain_with_intrinsic(
+    width: u32,
+    height: u32,
+    bytes: &[u8],
+    intrinsic: Option<[f32; 2]>,
+) -> Result<Decoded, ImageError> {
     let mut steps = MipSteps::new(width, height, bytes)?;
     while !steps.step(usize::MAX) {}
-    Ok(steps.finish())
+    let mut decoded = steps.finish();
+    decoded.intrinsic = intrinsic;
+    Ok(decoded)
+}
+
+/// Target dimensions fitting `(w, h)` inside `max_px` square while preserving aspect ratio.
+/// Never upscales and never rounds either side below 1.
+pub(super) fn scaled_dimensions(w: u32, h: u32, max_px: u32) -> (u32, u32) {
+    let longest = w.max(h);
+    if max_px == 0 || longest <= max_px {
+        return (w, h);
+    }
+    if w >= h {
+        let nh = ((f64::from(h) * f64::from(max_px)) / f64::from(w)).round().clamp(1.0, f64::from(max_px)) as u32;
+        (max_px, nh)
+    } else {
+        let nw = ((f64::from(w) * f64::from(max_px)) / f64::from(h)).round().clamp(1.0, f64::from(max_px)) as u32;
+        (nw, max_px)
+    }
+}
+
+/// Validates straight-alpha RGBA8 `bytes` and, when `max_px` is `Some` and smaller than the
+/// longest side, downsamples them in linear-premultiplied light to fit `max_px`.
+pub(super) fn maybe_downsample_rgba(
+    w: u32,
+    h: u32,
+    bytes: Vec<u8>,
+    max_px: Option<u32>,
+) -> Result<(u32, u32, Vec<u8>), ImageError> {
+    if w == 0 || h == 0 || w > super::MAX_SIDE || h > super::MAX_SIDE
+        || bytes.len() != w as usize * h as usize * 4
+    {
+        return Err(ImageError("RGBA image dimensions or byte length are invalid".into()));
+    }
+    let Some(max_px) = max_px else { return Ok((w, h, bytes)); };
+    let (nw, nh) = scaled_dimensions(w, h, max_px);
+    if (nw, nh) == (w, h) {
+        return Ok((w, h, bytes));
+    }
+    Ok((nw, nh, downsample_rgba(w, h, &bytes, nw, nh)))
+}
+
+/// Area-resamples straight-alpha sRGB RGBA8 `(w × h)` down to `(nw × nh)` in linear-premultiplied
+/// light, returning straight-alpha sRGB RGBA8.
+fn downsample_rgba(w: u32, h: u32, src: &[u8], nw: u32, nh: u32) -> Vec<u8> {
+    let srgb = &*SRGB;
+    let src = src.as_chunks::<4>().0;
+    let mut out = Vec::with_capacity(nw as usize * nh as usize * 4);
+    let mut row_sum = vec![[0.0f32; 4]; nw as usize];
+    let wf = w as f32;
+    let hf = h as f32;
+    let nwf = nw as f32;
+    let nhf = nh as f32;
+    let w_usize = w as usize;
+    for y in 0..nh {
+        row_sum.fill([0.0; 4]);
+        let y0 = (y as f32 * hf / nhf).min(hf);
+        let y1 = ((y + 1) as f32 * hf / nhf).min(hf);
+        let sy_start = y0.floor() as u32;
+        let sy_end = (y1.ceil() as u32).min(h);
+        for sy in sy_start..sy_end {
+            let wy = (((sy + 1) as f32).min(y1) - (sy as f32).max(y0)).max(0.0);
+            if wy == 0.0 { continue; }
+            let src_row = &src[sy as usize * w_usize..(sy as usize + 1) * w_usize];
+            for x in 0..nw {
+                let x0 = (x as f32 * wf / nwf).min(wf);
+                let x1 = ((x + 1) as f32 * wf / nwf).min(wf);
+                let sx_start = x0.floor() as u32;
+                let sx_end = (x1.ceil() as u32).min(w);
+                let acc = &mut row_sum[x as usize];
+                for sx in sx_start..sx_end {
+                    let wx = (((sx + 1) as f32).min(x1) - (sx as f32).max(x0)).max(0.0);
+                    let weight = wx * wy;
+                    let p = &src_row[sx as usize];
+                    let a = p[3] as f32 / 255.0;
+                    let aw = a * weight;
+                    acc[0] += srgb.decode[p[0] as usize] * aw;
+                    acc[1] += srgb.decode[p[1] as usize] * aw;
+                    acc[2] += srgb.decode[p[2] as usize] * aw;
+                    acc[3] += aw;
+                }
+            }
+        }
+        let y_span = (y1 - y0).max(f32::EPSILON);
+        for (x, sum) in row_sum.iter().enumerate() {
+            let x0 = (x as f32 * wf / nwf).min(wf);
+            let x1 = ((x + 1) as f32 * wf / nwf).min(wf);
+            let area = (x1 - x0).max(f32::EPSILON) * y_span;
+            let a = byte(sum[3] / area);
+            if a == 0 || sum[3] <= 0.0 {
+                out.extend_from_slice(&[0, 0, 0, 0]);
+            } else {
+                let inv_a = 1.0 / sum[3];
+                out.extend_from_slice(&[
+                    srgb.encode(sum[0] * inv_a, 255),
+                    srgb.encode(sum[1] * inv_a, 255),
+                    srgb.encode(sum[2] * inv_a, 255),
+                    a,
+                ]);
+            }
+        }
+    }
+    out
 }
 
 /// A mip chain under construction: mip 0 at once, then the smaller levels a slice of rows
@@ -69,7 +180,7 @@ impl<'a> MipSteps<'a> {
         }
     }
 
-    pub(super) fn finish(self) -> Decoded { Decoded { mips: self.mips, motion: None } }
+    pub(super) fn finish(self) -> Decoded { Decoded { mips: self.mips, motion: None, intrinsic: None } }
 }
 
 /// Rows `rows` of `w`×`h` RGBA8 `src` halved by area, appended to `out`, summing `linear`

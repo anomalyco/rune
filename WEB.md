@@ -192,8 +192,12 @@ let avatar = cache.url(&user.avatar_url, 32.0, env.scale);  // size and scale ma
 ```
 
 SVG (by `Content-Type` or a `.svg`/`.svgz` path) rasterizes with Rune's renderer at the size
-asked for. Images over 8192 pixels a side are refused before their pixels are read, and a
-failed request or a cross-origin image without CORS headers resolves to `Image::error`.
+asked for while preserving the document's CSS-pixel dimensions on `Image::intrinsic_size`.
+`ImageCache::load_scaled(bytes, size_pt, scale)` downsamples decoded rasters to fit `size_pt × scale`
+pixels (without upscaling, first frame only) before building mips in main-thread slices, and
+rasterizes SVGs directly at that size. Images over 8192 pixels a side are refused before their
+pixels are read, and a failed request or a cross-origin image without CORS headers resolves to
+`Image::error`.
 
 System `Cursor` variants map to their CSS `cursor` keywords (including `ew-resize`,
 `ns-resize`, `nwse-resize`, and `nesw-resize`). `Cursor::Image` sets the canvas's CSS

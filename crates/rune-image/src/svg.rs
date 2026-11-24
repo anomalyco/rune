@@ -606,9 +606,10 @@ mod imp {
             .collect()
     }
 
-    pub(super) fn svg_rgba(bytes: &[u8], px: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
+    pub(super) fn svg_rgba_with_size(bytes: &[u8], px: u32) -> Result<(u32, u32, [f32; 2], Vec<u8>), ImageError> {
         let tree = svg_tree(bytes)?;
         let size = tree.size();
+        let intrinsic = [size.width(), size.height()];
         let px = if px == 0 {
             (size.width().max(size.height()) * 2.0).ceil().clamp(1.0, MAX_SVG_SIDE as f32) as u32
         } else {
@@ -623,7 +624,12 @@ mod imp {
         check_tree_budget(&tree, t, w, h)?;
         let mut pixmap = tiny_skia::Pixmap::new(w, h).ok_or_else(|| ImageError("empty SVG".into()))?;
         resvg::render(&tree, t, &mut pixmap.as_mut());
-        Ok((w, h, demultiply_rgba(&pixmap)))
+        Ok((w, h, intrinsic, demultiply_rgba(&pixmap)))
+    }
+
+    pub(super) fn svg_rgba(bytes: &[u8], px: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
+        let (w, h, _, rgba) = svg_rgba_with_size(bytes, px)?;
+        Ok((w, h, rgba))
     }
 
     pub(super) fn svg_rgba_cover(bytes: &[u8], px: u32) -> Result<Vec<u8>, ImageError> {
@@ -659,6 +665,18 @@ pub fn svg_rgba(bytes: &[u8], px: u32) -> Result<(u32, u32, Vec<u8>), ImageError
 #[cfg(not(feature = "svg"))]
 #[doc(hidden)]
 pub fn svg_rgba(_: &[u8], _: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
+    Err(ImageError("SVG images need rune's `svg` feature".into()))
+}
+
+/// Like [`svg_rgba`], also returning the SVG document's resolved intrinsic CSS-pixel dimensions
+/// `[width, height]` from `usvg::Tree::size`.
+#[cfg(feature = "svg")]
+pub(crate) fn svg_rgba_with_size(bytes: &[u8], px: u32) -> Result<(u32, u32, [f32; 2], Vec<u8>), ImageError> {
+    imp::svg_rgba_with_size(bytes, px)
+}
+
+#[cfg(not(feature = "svg"))]
+pub(crate) fn svg_rgba_with_size(_: &[u8], _: u32) -> Result<(u32, u32, [f32; 2], Vec<u8>), ImageError> {
     Err(ImageError("SVG images need rune's `svg` feature".into()))
 }
 
