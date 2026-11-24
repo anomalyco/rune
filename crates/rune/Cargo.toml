@@ -261,6 +261,9 @@ name = "extra_args"
 name = "add_font"
 
 [[test]]
+name = "installed_families"
+
+[[test]]
 name = "measure_scope"
 
 [[test]]
