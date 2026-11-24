@@ -257,13 +257,15 @@ pub(in crate::runtime) fn input_caret(n: &Node, r: [f32; 4], scale: f32, s: f32,
     let e = &input.edit;
     let ins = n.inset.map(|v| v * scale * s);
     let (x0, x1) = (r[0] + ins[0], r[2] - ins[2]);
+    let (y0, y1) = (r[1] + ins[1], r[3] - ins[3]);
     // The text scales with its box, so the caret does too.
     let mut x = text_x(spec, x0, x1, text_width(layout.full_width() * scale), layout.flow());
+    let y = text_y(spec, y0, y1, text_height(spec, layout, s) * scale);
     if input.single_line && let Some(l) = laid.single() {
         x -= single_line_scroll(scrolls, &n.path, input, &spec.content, l, s, (x1 - x0) / scale.max(1e-4)) * scale;
     }
     let bb = layout.caret(caret_index(e, &spec.content), e.affinity, 1.5 * s);
-    let (cx, cy) = (x + bb.x0 as f32 * scale, r[1] + ins[1] + bb.y0 as f32 * scale);
+    let (cx, cy) = (x + bb.x0 as f32 * scale, y + bb.y0 as f32 * scale);
     let h = (if bb.y1 > bb.y0 { (bb.y1 - bb.y0) as f32 } else { spec.style.line_px() * s }) * scale;
     let (caret_x, caret_w) = if (scale - 1.0).abs() <= 1e-5 {
         let gx = if gliding { pixel_snap::text_glide(r[0]) } else { 0.0 };
@@ -277,7 +279,7 @@ pub(in crate::runtime) fn input_caret(n: &Node, r: [f32; 4], scale: f32, s: f32,
         (Some((ta, tb)), at) => {
             let len = spec.content.len();
             let (a, b) = (layout.caret((at + ta).min(len), e.affinity, 0.0), layout.caret((at + tb).min(len), e.affinity, 0.0));
-            let (ax, ay) = (x + a.x0 as f32 * scale, r[1] + ins[1] + a.y0 as f32 * scale);
+            let (ax, ay) = (x + a.x0 as f32 * scale, y + a.y0 as f32 * scale);
             let w = if (b.y0 - a.y0).abs() < 0.5 && b.x0 > a.x0 { (b.x0 - a.x0) as f32 * scale } else { 2.0 * scale * s };
             [ax / s, ay / s, w / s, h / s]
         }

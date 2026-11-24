@@ -107,6 +107,8 @@ pub(crate) struct TextCold {
     pub(crate) span_radius: f32,
     /// First-line indentation in points (negative for hanging indent); see [`El::text_indent`](crate::El::text_indent).
     pub(crate) text_indent: f32,
+    /// Vertical alignment of laid-out text inside a taller content box; see [`El::align_y`](crate::El::align_y).
+    pub(crate) align_y: Align,
     /// Strikethrough byte ranges `(start, end, color)` of `content`.
     pub(crate) strikes: Vec<(u32, u32, Option<Color>)>,
     /// Overline byte ranges `(start, end, color)` of `content`.
@@ -147,6 +149,7 @@ impl Empty for TextCold {
         rings: Vec::new(),
         span_radius: crate::text::SPAN_RADIUS,
         text_indent: 0.0,
+        align_y: Align::Start,
         strikes: Vec::new(),
         overlines: Vec::new(),
         span_boxes: Vec::new(),

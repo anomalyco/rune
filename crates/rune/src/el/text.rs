@@ -996,6 +996,39 @@ impl El {
         }
         self
     }
+    /// Vertically aligns a text element's or [`text_input`](crate::text_input)'s laid-out lines
+    /// inside its content box when the box is taller than the text, as CSS Box Alignment
+    /// `align-content` does (`Align::Center` matches HTML `<input type="text">` vertical
+    /// centring). Defaults to [`Align::Start`] (top of the content box).
+    ///
+    /// Moves glyphs, placeholder, selection highlight, caret, IME candidate area, inline links,
+    /// pills, pointer hit-testing, [`Runtime::text_offset_at`](crate::Runtime::text_offset_at),
+    /// [`Cx::caret`](crate::Cx::caret), [`Cx::field_selection_rects`](crate::Cx::field_selection_rects),
+    /// and accessibility text-run bounds together. Auto-height fields and boxes no taller than the
+    /// text receive zero vertical shift.
+    ///
+    /// ```no_run
+    /// # use rune::{Align, TextEdit, TextStyle, text_input};
+    /// let edit = TextEdit::new("Search");
+    /// let field = text_input(&edit, TextStyle::new(14.0, 400.0).lh(20.0))
+    ///     .single_line()
+    ///     .h(56.0)
+    ///     .px(12.0)
+    ///     .align_y(Align::Center);
+    /// ```
+    #[inline]
+    pub fn align_y(mut self, a: Align) -> Self {
+        self.set_align_y(a);
+        self
+    }
+    /// [`El::align_y`] in place.
+    #[inline]
+    pub fn set_align_y(&mut self, a: Align) -> &mut Self {
+        if let Some(t) = &mut self.text && t.cold.align_y != a {
+            t.cold.align_y = a;
+        }
+        self
+    }
     /// Draw this text in capitals or lower case without changing its string, like SwiftUI's
     /// `textCase`: `text("Text channels").text_case(TextCase::Uppercase)` draws "TEXT CHANNELS".
     /// The dev tree, tools and link labels keep the authored text, and [`Span`] and [`Link`]

@@ -50,6 +50,7 @@ mod span_box_overline;
 mod springs;
 mod stream_overflow;
 mod stream_pace;
+mod text_align_y;
 mod text_glide;
 mod text_indent;
 mod text_keys;

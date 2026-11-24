@@ -288,7 +288,11 @@ impl RuntimeCore {
                 zr
             };
             let (x0, x1) = (zr[0] + ins[0], zr[2] - ins[2]);
-            let mut origin = [text_x(spec, x0, x1, text_width(flow.full_width() * tk), flow.flow()), zr[1] + ins[1]];
+            let (y0, y1) = (zr[1] + ins[1], zr[3] - ins[3]);
+            let mut origin = [
+                text_x(spec, x0, x1, text_width(flow.full_width() * tk), flow.flow()),
+                text_y(spec, y0, y1, text_height(spec, flow, s) * tk),
+            ];
             // A gliding box's glyphs and decorations lay out from its nearest whole pixel (plus its rest's
             // fraction, above) and move the rest. Within a 64th of a pixel they don't move, but still lay
             // out from that pixel, as at rest.
@@ -379,7 +383,8 @@ impl RuntimeCore {
                         crate::el::TextDir::Fixed(f) if !own => Some(f),
                         _ => None,
                     });
-                    let pl = self.text.layout_rich_with(&inp.placeholder, &[], inp.placeholder_style.unwrap_or(spec.style), s, wrap, options);
+                    let pl_style = inp.placeholder_style.unwrap_or(spec.style);
+                    let pl = self.text.layout_rich_with(&inp.placeholder, &[], pl_style, s, wrap, options);
                     let pl_flow = crate::el::Flow::of_layout(&pl);
                     let start = if own && pl_flow != n.flow { rest_origin[0] + ins[2] - ins[0] } else { rest_origin[0] };
                     // Right to left it ends at the field's start edge, its right.
@@ -394,7 +399,8 @@ impl RuntimeCore {
                     } else {
                         clip
                     };
-                    let pl_origin = [pl_x, rest_origin[1]];
+                    let pl_h = crate::text::spec_height(&pl, pl_style, s, spec.exact_lines) * tk;
+                    let pl_origin = [pl_x, text_y(spec, y0 - off[1], y1 - off[1], pl_h)];
                     let pl_r_origin = if scale_motion == ScaleMotion::Still { pl_origin } else { [0.0, 0.0] };
                     self.paint.glyph_scratch.clear();
                     self.text.set_glyph_inks(inp.placeholder_color, &[]);

@@ -37,6 +37,7 @@ pub struct G {
     pub menu_at: Option<rune::PointerPress>,
     pub edits: [TextEdit; 12],
     pub nowrap_code: TextEdit,
+    pub align_y_edits: [TextEdit; 4],
     pub key_preview_edit: TextEdit,
     pub combo: rune_kit::ComboboxState,
     /// The sidebar reorder story's state.
@@ -105,6 +106,12 @@ fn init() -> G {
         menu_at: None,
         edits: Default::default(),
         nowrap_code: TextEdit::new(stories::NOWRAP_CODE),
+        align_y_edits: [
+            TextEdit::new("Vertically centred single-line text"),
+            TextEdit::new(""),
+            TextEdit::new("Bottom-aligned (Align::End)"),
+            TextEdit::new("Default top-aligned (Align::Start)"),
+        ],
         key_preview_edit: TextEdit::new(""),
         combo: Default::default(),
         reorder: Default::default(),

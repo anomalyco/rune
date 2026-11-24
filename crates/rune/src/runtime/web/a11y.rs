@@ -711,7 +711,13 @@ impl RuntimeCore {
                         i += 1;
                         continue;
                     }
-                    let text_rect = inset_rect(rect, n.inset.map(|v| v * zoom));
+                    let mut text_rect = inset_rect(rect, n.inset.map(|v| v * zoom));
+                    if spec.cold.align_y != Align::Start && let Some(laid) = n.text_layout.as_ref() {
+                        let th = text_height(spec, laid.view(), self.env.scale) * zoom / self.env.scale;
+                        let ty = text_y(spec, text_rect[1], text_rect[1] + text_rect[3], th);
+                        text_rect[1] = round1(ty);
+                        text_rect[3] = round1(th.min(text_rect[3]).max(0.0));
+                    }
                     if plain_text && flow_group.is_none()
                         && let Some(prev) = inline.filter(|l| l.item + 1 == out.len() && l.parent == n.parent)
                         && let Some(gap) = prev.gap(n.target, spec.style, selectable)

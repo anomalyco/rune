@@ -250,6 +250,11 @@ pub(super) fn text(spec: &TextSpec, d: &mut Decls) {
         crate::el::Align::End => d.push(("text-align", "right".into())),
     }
     if spec.justify { d.push(("text-align", "justify".into())); }
+    match spec.cold.align_y {
+        crate::el::Align::Start => {}
+        crate::el::Align::Center => d.push(("align-content", "center".into())),
+        crate::el::Align::End => d.push(("align-content", "end".into())),
+    }
     if spec.cold.text_indent != 0.0 { d.push(("text-indent", px(spec.cold.text_indent))); }
     if spec.truncate {
         d.push(("white-space", "pre".into()));
