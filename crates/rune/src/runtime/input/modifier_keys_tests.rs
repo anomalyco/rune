@@ -277,3 +277,94 @@ fn windows_altgr_clearing_control_and_alt_is_no_release() {
         assert_eq!(sent(keys.apply(&key(Code::ControlLeft, false, ctrl), false, true)), [(Modifier::ControlLeft, false)]);
     }
 }
+
+#[test]
+fn ctrl_shift_direction_chord_requires_windows_rtl_layout_and_disarms_on_other_keys_or_blur() {
+    let ctrl = Mods { ctrl: true, cmd: !cfg!(target_os = "macos"), ..Mods::default() };
+    let ctrl_shift = Mods { shift: true, ..ctrl };
+    let ctrl_alt = Mods { alt: true, ..ctrl };
+    let ctrl_alt_shift = Mods { shift: true, ..ctrl_alt };
+
+    // Without an RTL keyboard layout installed, Ctrl+Shift never forces direction or redraws.
+    let mut rt = runtime(false);
+    rt.kbd.modifier_keys.rtl_layout_override = Some(false);
+    click(&mut rt, "field");
+    modifier(&mut rt, Code::ControlLeft, true, Mods::default());
+    modifier(&mut rt, Code::ShiftRight, true, ctrl);
+    assert!(!modifier(&mut rt, Code::ShiftRight, false, ctrl_shift), "no RTL layout: no redraw on release");
+    modifier(&mut rt, Code::ControlLeft, false, ctrl);
+    assert_eq!(rt.state.edit.forced_dir(), None);
+
+    // With an RTL keyboard layout installed: fires on Windows only, and clear_dir restores natural.
+    rt.kbd.modifier_keys.rtl_layout_override = Some(true);
+    modifier(&mut rt, Code::ControlLeft, true, Mods::default());
+    modifier(&mut rt, Code::ShiftRight, true, ctrl);
+    // Repeat on held Shift does not disarm the chord.
+    rt.physical_with_fallback(PhysicalInput::Key { key: Code::ShiftRight, mods: ctrl_shift, pressed: true, repeat: true }, None);
+    rt.frame(0.0);
+    let redraw = modifier(&mut rt, Code::ShiftRight, false, ctrl_shift);
+    modifier(&mut rt, Code::ControlLeft, false, ctrl);
+    if cfg!(target_os = "windows") {
+        assert!(redraw);
+        assert_eq!(rt.state.edit.forced_dir(), Some(crate::el::Flow::Rtl));
+        // Ctrl+Left Shift forces LTR on Ctrl release too.
+        modifier(&mut rt, Code::ControlLeft, true, Mods::default());
+        modifier(&mut rt, Code::ShiftLeft, true, ctrl);
+        modifier(&mut rt, Code::ControlLeft, false, ctrl_shift);
+        modifier(&mut rt, Code::ShiftLeft, false, SHIFT);
+        assert_eq!(rt.state.edit.forced_dir(), Some(crate::el::Flow::Ltr));
+        // App can clear forced direction back to natural.
+        rt.state.edit.clear_dir();
+        assert_eq!(rt.state.edit.forced_dir(), None);
+    } else {
+        assert!(!redraw);
+        assert_eq!(rt.state.edit.forced_dir(), None, "non-Windows platforms have no Ctrl+Shift direction chord");
+    }
+
+    // Alt held before or during Ctrl+Shift disarms it.
+    modifier(&mut rt, Code::AltLeft, true, Mods::default());
+    modifier(&mut rt, Code::ControlLeft, true, ALT);
+    modifier(&mut rt, Code::ShiftRight, true, ctrl_alt);
+    modifier(&mut rt, Code::ShiftRight, false, ctrl_alt_shift);
+    modifier(&mut rt, Code::ControlLeft, false, ctrl_alt);
+    modifier(&mut rt, Code::AltLeft, false, ALT);
+    assert_eq!(rt.state.edit.forced_dir(), None, "Alt held before Ctrl+Shift must disarm");
+
+    modifier(&mut rt, Code::ControlLeft, true, Mods::default());
+    modifier(&mut rt, Code::AltLeft, true, ctrl);
+    modifier(&mut rt, Code::ShiftRight, true, ctrl_alt);
+    modifier(&mut rt, Code::ShiftRight, false, ctrl_alt_shift);
+    modifier(&mut rt, Code::AltLeft, false, ctrl_alt);
+    modifier(&mut rt, Code::ControlLeft, false, ctrl);
+    assert_eq!(rt.state.edit.forced_dir(), None, "Alt pressed during Ctrl+Shift must disarm");
+
+    // Any non-modifier key between press and release disarms it.
+    modifier(&mut rt, Code::ControlLeft, true, Mods::default());
+    modifier(&mut rt, Code::ShiftRight, true, ctrl);
+    rt.physical_with_fallback(
+        PhysicalInput::Key { key: Code::KeyP, mods: ctrl_shift, pressed: true, repeat: false },
+        Some(KeyEvent { key: Key::Command('p'), mods: ctrl_shift }),
+    );
+    rt.frame(0.0);
+    modifier(&mut rt, Code::ShiftRight, false, ctrl_shift);
+    modifier(&mut rt, Code::ControlLeft, false, ctrl);
+    assert_eq!(rt.state.edit.forced_dir(), None, "Ctrl+Shift+P must disarm");
+
+    // FocusLost disarms a pending chord.
+    modifier(&mut rt, Code::ControlLeft, true, Mods::default());
+    modifier(&mut rt, Code::ShiftRight, true, ctrl);
+    rt.physical_input(PhysicalInput::FocusLost);
+    rt.frame(0.0);
+    modifier(&mut rt, Code::ShiftRight, false, ctrl_shift);
+    modifier(&mut rt, Code::ControlLeft, false, ctrl);
+    assert_eq!(rt.state.edit.forced_dir(), None, "FocusLost must disarm a pending chord");
+
+    // Moving focus to another element while armed disarms the chord.
+    modifier(&mut rt, Code::ControlLeft, true, Mods::default());
+    modifier(&mut rt, Code::ShiftRight, true, ctrl);
+    click(&mut rt, "recorder");
+    click(&mut rt, "field");
+    modifier(&mut rt, Code::ShiftRight, false, ctrl_shift);
+    modifier(&mut rt, Code::ControlLeft, false, ctrl);
+    assert_eq!(rt.state.edit.forced_dir(), None, "focus move must disarm a pending chord");
+}

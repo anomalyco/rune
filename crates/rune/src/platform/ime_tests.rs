@@ -233,3 +233,15 @@ fn direct_commit_inserts_fullwidth_punctuation_into_focused_text_input() {
     assert_eq!(rt.state.keys, [Key::Command('k')]);
     assert_eq!(rt.state.ups, [Key::Text("a".into())], "only non-IME key releases reach on_key_up");
 }
+
+#[test]
+fn rtl_primary_lang_ids_match_windows_rtl_layouts() {
+    use super::is_rtl_primary_lang_id;
+    // Primary language IDs extracted via PRIMARYLANGID(LOWORD(hkl)) = (hkl as u16) & 0x03ff.
+    for hkl in [0x0401u16, 0x0801, 0x040d, 0x0420, 0x0429, 0x045a, 0x0480] {
+        assert!(is_rtl_primary_lang_id(hkl & 0x03ff), "expected RTL for HKL {hkl:#06x}");
+    }
+    for hkl in [0x0000u16, 0x0409, 0x0809, 0x0407, 0x0419, 0x0422, 0x0411, 0x0804] {
+        assert!(!is_rtl_primary_lang_id(hkl & 0x03ff), "expected LTR for HKL {hkl:#06x}");
+    }
+}
