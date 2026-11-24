@@ -150,6 +150,10 @@ impl Host {
             // A tooltip control's initial delay is the double-click time.
             rt.help_delay = rt.double_click_interval;
         }
+        #[cfg(target_os = "linux")]
+        {
+            self.app.rt_mut().double_click_interval = crate::platform::preferences::double_click_interval();
+        }
         #[cfg(target_os = "windows")]
         if cpu_first { return self.open_on_cpu(event_loop, window, a11y, a11y_start, frame, cloak, focus, open_as, built); }
         // Linux: its first frame on the CPU renderer too, sent before any GPU is made

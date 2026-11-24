@@ -1,16 +1,18 @@
-//! The desktop's light/dark and reduced-motion preferences on Linux, from the XDG desktop portal
-//! (`org.freedesktop.portal.Settings`: `org.freedesktop.appearance` `color-scheme` and
-//! `reduced-motion`, plus `org.gnome.desktop.interface` `enable-animations` for portals such as
-//! `xdg-desktop-portal-gtk` and older GNOME that expose animations there). winit reports no theme
+//! The desktop's light/dark, reduced-motion and double-click preferences on Linux, from the XDG
+//! desktop portal (`org.freedesktop.portal.Settings`: `org.freedesktop.appearance` `color-scheme`
+//! and `reduced-motion`, `org.gnome.desktop.interface` `enable-animations` for portals such as
+//! `xdg-desktop-portal-gtk` and older GNOME that expose animations there, and
+//! `org.gnome.desktop.peripherals.mouse` `double-click` in milliseconds). winit reports no theme
 //! on Wayland unless the app set one, so hosts ask here before falling back to dark. One worker
 //! thread, started when the event loop is made (`begin`), so that a portal that is up has
 //! answered before the first window asks, reads the settings once and follows `SettingChanged`,
-//! falling back once on that worker
-//! to `kdeglobals` or GSettings when the portal answers neither motion key; any change asks every
-//! window to redraw, which rereads the cached atomics without touching disk or D-Bus on the UI
-//! thread.
+//! falling back once on that worker to `kdeglobals` or GSettings when the portal does not answer
+//! motion or double-click keys; any change asks every window to redraw, which rereads the cached
+//! atomics without touching disk or D-Bus on the UI thread.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
+
+use crate::platform::preferences::{DEFAULT_DOUBLE_CLICK_MS, clamp_double_click_ms};
 
 /// Stored state: `UNKNOWN` before the portal answers (or when none is reachable); once the
 /// portal answers, `1` (prefer dark) stores `DARK`, while `0` (no preference), `2` (prefer light)
@@ -121,16 +123,69 @@ fn record_fallback_reduced_motion(slot: &AtomicU8, reduced: bool) -> bool {
     })
 }
 
+/// Stored double-click interval in an `AtomicU32`:
+/// - `0` (`DOUBLE_CLICK_UNKNOWN`) when neither the portal nor fallback has answered
+/// - lower 31 bits: clamped interval in milliseconds (`50..=5000`)
+/// - top bit (`PORTAL_DOUBLE_CLICK_BIT`): set once the Settings portal has answered, so the
+///   one-shot fallback cannot overwrite an authoritative portal value
+const DOUBLE_CLICK_UNKNOWN: u32 = 0;
+const PORTAL_DOUBLE_CLICK_BIT: u32 = 1 << 31;
+const DOUBLE_CLICK_MS_MASK: u32 = !PORTAL_DOUBLE_CLICK_BIT;
+
+/// Whether the Settings portal has answered `org.gnome.desktop.peripherals.mouse` `double-click`.
+fn has_portal_double_click(stored: u32) -> bool {
+    stored & PORTAL_DOUBLE_CLICK_BIT != 0
+}
+
+/// Decodes the stored double-click interval into seconds, or `None` when unanswered.
+fn stored_double_click_secs(stored: u32) -> Option<f64> {
+    let ms = stored & DOUBLE_CLICK_MS_MASK;
+    (ms > 0).then(|| f64::from(ms) / 1000.0)
+}
+
+/// Effective double-click interval in milliseconds (treating unanswered as the 500 ms default).
+fn effective_double_click_ms(stored: u32) -> u32 {
+    let ms = stored & DOUBLE_CLICK_MS_MASK;
+    if ms > 0 { ms } else { DEFAULT_DOUBLE_CLICK_MS }
+}
+
+/// Records a portal `double-click` interval (milliseconds, clamped to `50..=5000`). Returns
+/// whether the effective interval changed.
+fn record_double_click(slot: &AtomicU32, ms: u32) -> bool {
+    let Some(clamped) = clamp_double_click_ms(ms) else { return false };
+    let next = clamped | PORTAL_DOUBLE_CLICK_BIT;
+    let prev = slot.swap(next, Ordering::Relaxed);
+    effective_double_click_ms(prev) != clamped
+}
+
+/// Records the one-shot fallback `double-click` interval (read off the UI thread when the portal
+/// did not answer the key). Does not overwrite a portal answer. Returns whether the effective
+/// interval changed.
+fn record_fallback_double_click(slot: &AtomicU32, ms: u32) -> bool {
+    let Some(clamped) = clamp_double_click_ms(ms) else { return false };
+    let mut prev = slot.load(Ordering::Relaxed);
+    loop {
+        if has_portal_double_click(prev) { return false; }
+        match slot.compare_exchange_weak(prev, clamped, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return effective_double_click_ms(prev) != clamped,
+            Err(actual) => prev = actual,
+        }
+    }
+}
+
 #[cfg(all(target_os = "linux", feature = "dbus"))]
 mod dbus {
     use futures_lite::StreamExt;
-    use std::{sync::{Arc, Mutex, OnceLock, Weak, atomic::{AtomicBool, AtomicU8, Ordering}, mpsc}, time::{Duration, Instant}};
+    use std::{sync::{Arc, Mutex, OnceLock, Weak, atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering}, mpsc}, time::{Duration, Instant}};
     use winit::window::Window;
     use zbus::{Connection, Proxy, zvariant::{OwnedValue, Value}};
 
     use super::{
-        UNKNOWN, has_portal_motion, record_enable_animations, record_fallback_reduced_motion,
-        record_reduced_motion, record_scheme, resolved_reduced_motion, seed_reduced_motion, seed_scheme, stored_dark,
+        DOUBLE_CLICK_UNKNOWN, UNKNOWN, has_portal_double_click, has_portal_motion,
+        record_double_click, record_enable_animations, record_fallback_double_click,
+        record_fallback_reduced_motion, record_reduced_motion, record_scheme,
+        resolved_reduced_motion, seed_reduced_motion, seed_scheme, stored_dark,
+        stored_double_click_secs,
     };
     use crate::platform::preferences::Appearance;
     use crate::platform::portal::{self, DEST, PATH};
@@ -141,6 +196,8 @@ mod dbus {
     const REDUCED_MOTION_KEY: &str = "reduced-motion";
     const GNOME_INTERFACE_NAMESPACE: &str = "org.gnome.desktop.interface";
     const ENABLE_ANIMATIONS_KEY: &str = "enable-animations";
+    const MOUSE_NAMESPACE: &str = "org.gnome.desktop.peripherals.mouse";
+    const DOUBLE_CLICK_KEY: &str = "double-click";
     /// How long the portal has for its first answer, from when the worker starts, before the
     /// first window stops waiting for it (as sctk-adwaita waits for its frame's); a slower answer
     /// redraws the windows when it arrives.
@@ -150,6 +207,7 @@ mod dbus {
 
     static SCHEME: AtomicU8 = AtomicU8::new(UNKNOWN);
     static MOTION: AtomicU8 = AtomicU8::new(0);
+    static DOUBLE_CLICK: AtomicU32 = AtomicU32::new(DOUBLE_CLICK_UNKNOWN);
     static WATCH: OnceLock<()> = OnceLock::new();
     /// The worker's first answer on its way, and when the worker started: the first ask takes
     /// it and waits for what is left of `FIRST_ANSWER`; an ask meanwhile waits behind it.
@@ -214,8 +272,16 @@ mod dbus {
         resolved_reduced_motion(MOTION.load(Ordering::Relaxed))
     }
 
+    /// The desktop's configured double-click interval in seconds, cached from the Settings portal
+    /// (`org.gnome.desktop.peripherals.mouse` `double-click`) or a one-shot off-UI-thread
+    /// fallback when the portal does not answer that key, or `None` when neither answered.
+    pub(crate) fn double_click_interval() -> Option<f64> {
+        first_answer();
+        stored_double_click_secs(DOUBLE_CLICK.load(Ordering::Relaxed))
+    }
+
     /// Redraws `window` whenever a watched portal preference changes; its redraw rereads
-    /// [`dark`] and [`reduced_motion`].
+    /// [`dark`], [`reduced_motion`] and [`double_click_interval`].
     pub(crate) fn follow(window: &Arc<Window>) {
         let mut windows = WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
         windows.retain(|w| w.strong_count() > 0);
@@ -237,6 +303,18 @@ mod dbus {
         match value {
             Value::Bool(b) => Some(*b),
             Value::Value(inner) => bool_value(inner),
+            _ => None,
+        }
+    }
+
+    /// Unwraps a positive millisecond portal value (`org.gnome.desktop.peripherals.mouse`
+    /// `double-click`, exposed as `i32` by GSettings portals or `u32`). Returns `None` for
+    /// non-positive or non-integer values.
+    pub(super) fn millis_value(value: &Value<'_>) -> Option<u32> {
+        match value {
+            Value::I32(ms) => u32::try_from(*ms).ok().filter(|&ms| ms > 0),
+            Value::U32(ms) => (*ms > 0).then_some(*ms),
+            Value::Value(inner) => millis_value(inner),
             _ => None,
         }
     }
@@ -264,6 +342,15 @@ mod dbus {
 
     fn store_fallback_reduced_motion(reduced: bool) {
         if record_fallback_reduced_motion(&MOTION, reduced) { redraw_windows(); }
+    }
+
+    fn store_double_click(value: &Value<'_>) {
+        let Some(ms) = millis_value(value) else { return };
+        if record_double_click(&DOUBLE_CLICK, ms) { redraw_windows(); }
+    }
+
+    fn store_fallback_double_click(ms: u32) {
+        if record_fallback_double_click(&DOUBLE_CLICK, ms) { redraw_windows(); }
     }
 
     fn start() {
@@ -299,10 +386,13 @@ mod dbus {
                 if let Ok(v) = &reduced_res { store_reduced_motion(v); }
                 let anim_res = read_setting(&portal, GNOME_INTERFACE_NAMESPACE, ENABLE_ANIMATIONS_KEY).await;
                 if let Ok(v) = &anim_res { store_enable_animations(v); }
-                let read_ok = scheme_res.is_ok() || reduced_res.is_ok() || anim_res.is_ok();
+                let dbl_res = read_setting(&portal, MOUSE_NAMESPACE, DOUBLE_CLICK_KEY).await;
+                if let Ok(v) = &dbl_res { store_double_click(v); }
+                let read_ok = scheme_res.is_ok() || reduced_res.is_ok() || anim_res.is_ok() || dbl_res.is_ok();
                 let unavailable = matches!(scheme_res, Err(true))
                     && matches!(reduced_res, Err(true))
-                    && matches!(anim_res, Err(true));
+                    && matches!(anim_res, Err(true))
+                    && matches!(dbl_res, Err(true));
                 (read_ok, unavailable)
             };
             if !portal::should_watch_settings(read_ok, unavailable) {
@@ -313,6 +403,11 @@ mod dbus {
         }).await.flatten();
         if !has_portal_motion(MOTION.load(Ordering::Relaxed)) {
             store_fallback_reduced_motion(crate::platform::preferences::read_reduced_motion_fallback());
+        }
+        if !has_portal_double_click(DOUBLE_CLICK.load(Ordering::Relaxed))
+            && let Some(ms) = crate::platform::preferences::read_double_click_fallback()
+        {
+            store_fallback_double_click(ms);
         }
         keep_now();
         ready.send(()).ok();
@@ -325,6 +420,10 @@ mod dbus {
                 (APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY) => store_scheme(&value),
                 (APPEARANCE_NAMESPACE, REDUCED_MOTION_KEY) => store_reduced_motion(&value),
                 (GNOME_INTERFACE_NAMESPACE, ENABLE_ANIMATIONS_KEY) => store_enable_animations(&value),
+                (MOUSE_NAMESPACE, DOUBLE_CLICK_KEY) => {
+                    store_double_click(&value);
+                    continue;
+                }
                 _ => continue,
             }
             keep_now();
@@ -333,7 +432,7 @@ mod dbus {
 }
 
 #[cfg(all(target_os = "linux", feature = "dbus"))]
-pub(crate) use dbus::{begin, dark, follow, last, reduced_motion};
+pub(crate) use dbus::{begin, dark, double_click_interval, follow, last, reduced_motion};
 
 #[cfg(test)]
 #[path = "portal_appearance_tests.rs"]

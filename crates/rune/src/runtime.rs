@@ -357,8 +357,10 @@ runtime_core_fields! {
 
     /// Per-frame hit-test lists built in paint order.
     hit: hit::HitState,
-    /// Two presses closer than this (seconds) are a double press: the system setting on macOS
-    /// and Windows, 0.5 elsewhere and headless.
+    /// Two presses closer than this (seconds) are a double press: the system setting on macOS,
+    /// Windows and Linux (XDG Settings portal `org.gnome.desktop.peripherals.mouse`
+    /// `double-click`, falling back to GSettings or `kdeglobals` `DoubleClickInterval`), 0.5
+    /// elsewhere and headless.
     pub double_click_interval: f64,
 
     /// Paint scratch buffers, reuse record, layer caches, text quads and paint outputs.

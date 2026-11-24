@@ -9,7 +9,11 @@ impl OverlayCore {
         // Hidden, it missed the redraws a new accent or portal preference asks for.
         app.rt_mut().set_system_dark(crate::platform::preferences::dark().unwrap_or(self.dark));
         #[cfg(target_os = "linux")]
-        app.rt_mut().set_system_reduced_motion(crate::platform::preferences::reduced_motion());
+        {
+            let rt = app.rt_mut();
+            rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
+            rt.double_click_interval = crate::platform::preferences::double_click_interval();
+        }
         self.accent_changed(app.rt_mut(), crate::system_accent());
         self.scroll_bars_changed(app.rt_mut(), crate::platform::scroll_bars::current());
         // Shown again mid fade-out: the window is still up with current pixels, and its motion

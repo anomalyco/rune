@@ -205,7 +205,9 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   selects on the first click and opens on the second, as in AppKit; there's no delay to wait
   out a possible second click. A third press starts a new pair, and a press anywhere else breaks
   one. Only clicks pair: a press that travels more than 4 pt, or is held past the interval, is
-  neither half of one. The interval is the system setting on macOS and Windows and 0.5 s
+  neither half of one. The interval is the system setting on macOS, Windows and Linux (the XDG
+  Settings portal's `org.gnome.desktop.peripherals.mouse` `double-click`, falling back off the
+  UI thread to GSettings or `kdeglobals` `DoubleClickInterval`, clamped to 50–5000 ms), and 0.5 s
   elsewhere. Headless runs use the virtual clock, so a script's `double-click` (or two `click`s inside 0.5 s) is
   deterministic. Pointer only: the keyboard runs `on_press` (Space, and Return on a row).
 - **Click count in a drag**: `Drag::clicks` says which click of a run an `on_drag` press is, on

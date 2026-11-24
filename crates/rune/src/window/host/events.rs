@@ -682,14 +682,17 @@ impl Host {
         if let Some(l) = &self.win { l.redraw_step(RedrawEvent::Paint); }
         #[cfg(target_os = "macos")]
         let satisfied = self.win.as_ref().is_some_and(Win::take_redraw_on_paint);
-        // A new accent, scroller style, light/dark or reduced-motion preference asks every window
-        // to redraw.
+        // A new accent, scroller style, light/dark, reduced-motion or double-click preference asks
+        // every window to redraw.
         {
             let rt = self.app.rt_mut();
             rt.set_system_accent(crate::system_accent());
             rt.set_system_scroll_bars_state(crate::platform::scroll_bars::current().with_override(self.args.scroll_bars));
             #[cfg(target_os = "linux")]
-            rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
+            {
+                rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
+                rt.double_click_interval = crate::platform::preferences::double_click_interval();
+            }
             if self.args.theme.is_none() && let Some(dark) = self.win.as_ref().and_then(|l| crate::platform::preferences::desktop_dark(&l.window)) {
                 rt.set_system_dark(dark);
             }
