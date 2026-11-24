@@ -6,7 +6,7 @@ use rune::tok::{self, Theme, motion, radius, space, type_};
 #[cfg(feature = "frame-profile")]
 #[global_allocator]
 static ALLOC: procwatch::alloc::Counting = procwatch::alloc::Counting::system();
-use rune::{Align, App, AppSpec, Color, Cx, El, MenuItem, Spring, col, el, row, text};
+use rune::{Align, App, AppSpec, Color, Cx, El, MenuItem, ScrollSpec, Spring, col, el, row, text};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Appearance {
@@ -14,6 +14,8 @@ enum Appearance {
     Light,
     Dark,
 }
+
+const DEFAULT_FONT_ID: &str = "__default__";
 
 struct Settings {
     appearance: Appearance,
@@ -24,6 +26,10 @@ struct Settings {
     /// Slider position 0..1; animation speed is 2^(2v − 1), so the middle is 1×.
     speed: f32,
     reduce_motion: bool,
+    sans_font: Option<String>,
+    mono_font: Option<String>,
+    sans_picker: rune_kit::ComboboxState,
+    mono_picker: rune_kit::ComboboxState,
     about_open: bool,
     quit_confirm: bool,
 }
@@ -38,9 +44,28 @@ impl Default for Settings {
             sounds: false,
             speed: 0.5,
             reduce_motion: false,
+            sans_font: None,
+            mono_font: None,
+            sans_picker: rune_kit::ComboboxState::default(),
+            mono_picker: rune_kit::ComboboxState::default(),
             about_open: false,
             quit_confirm: false,
         }
+    }
+}
+
+impl Settings {
+    fn apply_fonts(&self, tx: &mut rune::Tx) {
+        let quote = |name: &str| format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""));
+        let sans = match &self.sans_font {
+            Some(name) => format!("{}, Inter", quote(name)),
+            None => "Inter".into(),
+        };
+        let mono = match &self.mono_font {
+            Some(name) => format!("{}, ui-monospace", quote(name)),
+            None => "ui-monospace".into(),
+        };
+        tx.set_font_families(sans, mono);
     }
 }
 
@@ -87,6 +112,31 @@ fn about_and_quit_confirm_sheets_open_and_dismiss_on_escape() {
     assert!(!rt.state.quit_confirm);
 }
 
+#[test]
+fn font_picker_lists_installed_families_and_updates_slot() {
+    let mut rt = rune::Runtime::new(Settings::default(), view, (620.0, 640.0), rune::Env::new(true, 1.0));
+    rt.frame(0.0);
+    assert!(!rt.state.mono_picker.is_open());
+
+    rt.update(|s, _| {
+        s.mono_picker.step(rune_kit::ComboboxEvent::Toggle { current: Some(DEFAULT_FONT_ID) });
+    });
+    rt.frame(0.0);
+    assert!(rt.state.mono_picker.is_open());
+
+    if let Some(mono) = rune::text::installed_families().iter().find(|f| f.monospace()) {
+        let name = mono.name().to_owned();
+        rt.update(|s, tx| {
+            s.mono_font = Some(name.clone());
+            s.mono_picker.close();
+            s.apply_fonts(tx);
+        });
+        rt.frame(0.0);
+        assert_eq!(rt.state.mono_font.as_deref(), Some(mono.name()));
+        assert!(!rt.state.mono_picker.is_open());
+    }
+}
+
 /// Everything a component needs to paint itself.
 #[derive(Clone, Copy)]
 struct Paint {
@@ -105,8 +155,42 @@ fn view(s: &Settings, cx: &mut Cx<Settings>) -> El {
     cx.time_scale(speed_of(s.speed));
     let p = Paint { t: tok::theme(dark), accent: tok::accent(s.accent, dark), hair: 1.0 / cx.env().scale };
     let t = p.t;
+    let mut k = rune_kit::Kit::neutral(dark);
+    k.c.bg_accent = p.accent;
+    k.c.border_focus = p.accent;
+    let mut overlays = Vec::new();
+    let sans_control = font_picker(
+        &k,
+        &mut overlays,
+        "sans-font",
+        "Interface font",
+        "Default (Inter)",
+        s.sans_font.as_deref(),
+        &s.sans_picker,
+        false,
+        |s| &mut s.sans_picker,
+        |s, chosen, tx| {
+            s.sans_font = (chosen != DEFAULT_FONT_ID).then(|| chosen.to_owned());
+            s.apply_fonts(tx);
+        },
+    );
+    let mono_control = font_picker(
+        &k,
+        &mut overlays,
+        "mono-font",
+        "Monospace font",
+        "Default (System)",
+        s.mono_font.as_deref(),
+        &s.mono_picker,
+        true,
+        |s| &mut s.mono_picker,
+        |s, chosen, tx| {
+            s.mono_font = (chosen != DEFAULT_FONT_ID).then(|| chosen.to_owned());
+            s.apply_fonts(tx);
+        },
+    );
 
-    col()
+    let window = col()
         .key("window")
         .role("window")
         .fill(t.bg)
@@ -122,6 +206,8 @@ fn view(s: &Settings, cx: &mut Cx<Settings>) -> El {
             col()
                 .key("content")
                 .grow(1.0)
+                .min_h(0.0)
+                .scroll(ScrollSpec::default())
                 .px(space::S6)
                 .pt(space::S1)
                 .pb(space::S6)
@@ -158,6 +244,15 @@ fn view(s: &Settings, cx: &mut Cx<Settings>) -> El {
                             s.reduce_motion = !s.reduce_motion
                         }),
                     ],
+                ))
+                .child(section(
+                    p,
+                    "fonts",
+                    "Fonts",
+                    [
+                        setting_row(p, "sans-font-row", "Interface font", None, sans_control),
+                        setting_row(p, "mono-font-row", "Monospace font", None, mono_control),
+                    ],
                 )),
         )
         .children(s.about_open.then(|| modal_sheet(
@@ -177,7 +272,56 @@ fn view(s: &Settings, cx: &mut Cx<Settings>) -> El {
                 .child(sheet_button(p, "quit-cancel", "Cancel", false, |s, _| s.quit_confirm = false))
                 .child(sheet_button(p, "quit-confirm", "Quit", true, |_, tx| tx.quit())),
             |s| s.quit_confirm = false,
-        )))
+        )));
+
+    rune_kit::root(window, overlays)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn font_picker(
+    k: &rune_kit::Kit,
+    overlays: &mut Vec<El>,
+    key: &'static str,
+    label: &'static str,
+    default_label: &'static str,
+    current: Option<&str>,
+    state: &rune_kit::ComboboxState,
+    mono_only: bool,
+    access: fn(&mut Settings) -> &mut rune_kit::ComboboxState,
+    choose: fn(&mut Settings, &str, &mut rune::Tx),
+) -> El {
+    let current_id = current.unwrap_or(DEFAULT_FONT_ID);
+    // Avoid enumerating system fonts during first-frame launch; query lazily once opened.
+    let options = if state.is_open() {
+        let mut opts = Vec::new();
+        opts.push(rune_kit::ComboboxOption::new(DEFAULT_FONT_ID, default_label));
+        for fam in rune::text::installed_families() {
+            if mono_only && !fam.monospace() {
+                continue;
+            }
+            let mut opt = rune_kit::ComboboxOption::new(fam.name(), fam.name());
+            let n = fam.weights().len();
+            let weights = if n == 1 { "1 weight".to_owned() } else { format!("{n} weights") };
+            opt.detail = if !mono_only && fam.monospace() {
+                format!("Mono · {weights}")
+            } else {
+                weights
+            };
+            opts.push(opt);
+        }
+        opts
+    } else {
+        vec![rune_kit::ComboboxOption::new(current_id, current.unwrap_or(default_label))]
+    };
+    rune_kit::Combobox::new(key, state, &options, access)
+        .label(label)
+        .current(Some(current_id))
+        .placeholder(default_label)
+        .search_placeholder("Search installed fonts…")
+        .width(220.0)
+        .placement(rune_kit::Placement::TopEnd)
+        .on_choose(choose)
+        .build(k, overlays)
 }
 
 fn modal_sheet(
@@ -489,10 +633,13 @@ fn main() {
             }),
             ("accent-pink", |s| s.accent = 2),
             ("slow", |s| s.speed = 0.0),
+            ("fonts", |s| {
+                s.mono_picker.step(rune_kit::ComboboxEvent::Toggle { current: Some(DEFAULT_FONT_ID) });
+            }),
             ("about", |s| s.about_open = true),
             ("quit-confirm", |s| s.quit_confirm = true),
         ],
-        ..AppSpec::new("Settings", (620.0, 520.0), Settings::default, view)
+        ..AppSpec::new("Settings", (620.0, 640.0), Settings::default, view)
     };
     native_menu_items()
         .into_iter()

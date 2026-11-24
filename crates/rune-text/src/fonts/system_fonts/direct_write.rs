@@ -59,6 +59,93 @@ pub(super) fn family_files(names: &[&str]) -> Vec<PathBuf> {
     })
 }
 
+/// Every installed font family in DirectWrite's system font collection, read from Windows' font
+/// cache without listing the Fonts folder or opening font files.
+pub(super) fn installed_families() -> Vec<super::installed::RawFamily> {
+    DW.with(|dw| {
+        let Some(dw) = dw else { return Vec::new() };
+        let mut out = Vec::new();
+        // SAFETY: `dw.collection` is a live `IDWriteFontCollection1` queried for read-only metadata.
+        unsafe {
+            let count = dw.collection.GetFontFamilyCount();
+            for i in 0..count {
+                let Ok(family) = dw.collection.GetFontFamily(i) else { continue };
+                let Some(name) = localized_family_name(&family) else { continue };
+                if name.is_empty() || name.starts_with('.') {
+                    continue;
+                }
+                let mut monospace = false;
+                let mut weights = Vec::new();
+                for j in 0..family.GetFontCount() {
+                    let Ok(font) = family.GetFont(j) else { continue };
+                    if font.GetSimulations() != DWRITE_FONT_SIMULATIONS_NONE {
+                        continue;
+                    }
+                    monospace |= font.IsMonospacedFont().as_bool();
+                    weights.push(super::installed::clamp_weight(font.GetWeight().0 as f32));
+                }
+                // Variable fonts: collect each face's `wght` axis range from the family's font set
+                // (Windows 10 1703+) without opening font files.
+                if let Ok(family2) = family.cast::<IDWriteFontFamily2>()
+                    && let Ok(set) = family2.GetFontSet()
+                {
+                    collect_weight_axes(&set, &mut weights);
+                }
+                if !weights.is_empty() {
+                    out.push(super::installed::RawFamily { name, monospace, weights });
+                }
+            }
+        }
+        out
+    })
+}
+
+/// Reads the preferred family name (`en-US` when present, else index 0) from `family`.
+unsafe fn localized_family_name(family: &IDWriteFontFamily1) -> Option<String> {
+    // SAFETY: `family` is a live `IDWriteFontFamily1`; the returned strings are read only.
+    unsafe {
+        let names = family.GetFamilyNames().ok()?;
+        if names.GetCount() == 0 {
+            return None;
+        }
+        let (mut index, mut exists) = (0u32, BOOL(0));
+        let index = if names.FindLocaleName(&HSTRING::from("en-US"), &mut index, &mut exists).is_ok() && exists.as_bool() {
+            index
+        } else {
+            0
+        };
+        let len = names.GetStringLength(index).ok()? as usize;
+        let mut buf = vec![0u16; len + 1];
+        names.GetString(index, &mut buf).ok()?;
+        Some(String::from_utf16_lossy(&buf[..len]))
+    }
+}
+
+/// Appends hundred-step weights for any variable `wght` axis in `set`, querying each face
+/// individually so static weights in the same family are never merged into a fake range.
+unsafe fn collect_weight_axes(set: &IDWriteFontSet1, weights: &mut Vec<u16>) {
+    // SAFETY: `set` is a live `IDWriteFontSet1`; axis buffers are sized from DirectWrite's count.
+    unsafe {
+        let mut ranges = Vec::new();
+        for index in 0..set.GetFontCount() {
+            let mut actual = 0u32;
+            let _ = set.GetFontAxisRanges(index, &mut [], &mut actual);
+            if actual == 0 || actual > 64 {
+                continue;
+            }
+            ranges.resize(actual as usize, DWRITE_FONT_AXIS_RANGE::default());
+            if set.GetFontAxisRanges(index, &mut ranges, &mut actual).is_err() {
+                continue;
+            }
+            for range in &ranges[..actual.min(ranges.len() as u32) as usize] {
+                if range.axisTag == DWRITE_FONT_AXIS_TAG_WEIGHT && range.maxValue > range.minValue {
+                    super::installed::push_weight_range(weights, range.minValue, range.maxValue);
+                }
+            }
+        }
+    }
+}
+
 /// The files of the fonts Windows falls back to for `chars` in `locale` (a BCP 47 tag; the
 /// user's locale when None), each file once: usually one per script. Chars no installed font
 /// covers add nothing.

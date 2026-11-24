@@ -1390,6 +1390,14 @@ too. A cache of measured sizes outside Rune should key on `rune::text::font_epoc
 that isn't installed falls back as it would at launch, and asking for the families the slots
 already hold costs nothing.
 
+`rune::text::installed_families() -> &'static [InstalledFamily]` lists every public font family
+installed on the system (sorted case-insensitively and deduplicated, omitting macOS `.`-prefixed
+private families), each exposing `name()`, `monospace()`, and sorted `weights()` in `100..=900`.
+It queries CoreText on Apple platforms, DirectWrite on Windows, and fontconfig on Linux/Unix
+without walking font directories, caches the result in a `OnceLock` on first call (zero launch
+cost), and returns `&[]` on web/Android. Pass any family's `name()` straight to
+`tx.set_font_families`, `AppSpec::families`, or `Family::Named`.
+
 `rune::text::add_font(bytes)`, `tx.add_font(bytes)`, and `rt.add_font(bytes)` register font
 bytes (TTF, OTF, TTC, or variable fonts) into the process-wide font collection while the app
 runs, returning the registered family names in registration order so they can be selected with

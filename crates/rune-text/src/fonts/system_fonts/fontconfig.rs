@@ -39,6 +39,47 @@ pub(super) fn family_files(names: &[&str]) -> Vec<PathBuf> {
     })
 }
 
+/// Every installed font family from fontconfig's system collection, without walking font folders.
+pub(super) fn installed_families() -> Vec<super::installed::RawFamily> {
+    with_system(installed_families_from_collection)
+}
+
+pub(super) fn installed_families_from_collection(system: &mut Collection) -> Vec<super::installed::RawFamily> {
+    let ids: Vec<FamilyId> = system.family_ids().collect();
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        let Some(family) = system.family(id) else { continue };
+        let name = family.name().to_owned();
+        if name.is_empty() || name.starts_with('.') {
+            continue;
+        }
+        let mut weights = Vec::new();
+        for font in family.fonts() {
+            weights.push(super::installed::clamp_weight(font.weight().value()));
+            if let Some(axis) = font.axes().iter().find(|a| a.tag.to_be_bytes() == *b"wght") {
+                super::installed::push_weight_range(&mut weights, axis.min, axis.max);
+            }
+        }
+        let monospace = family
+            .default_font()
+            .or_else(|| family.fonts().first())
+            .is_some_and(font_is_monospace);
+        out.push(super::installed::RawFamily { name, monospace, weights });
+    }
+    out
+}
+
+fn font_is_monospace(font: &parley::fontique::FontInfo) -> bool {
+    match &font.source().kind {
+        SourceKind::Memory(blob) => {
+            super::installed::reader_is_monospace(&mut std::io::Cursor::new(blob.as_ref()), font.index())
+        }
+        SourceKind::Path(path) => std::fs::File::open(path)
+            .ok()
+            .is_some_and(|mut f| super::installed::reader_is_monospace(&mut f, font.index())),
+    }
+}
+
 /// The family fontconfig resolves `monospace` to, and its files.
 pub(super) fn monospace() -> Option<(String, Vec<PathBuf>)> {
     with_system(|system| {
