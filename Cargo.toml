@@ -210,6 +210,7 @@ image = { version = "0.25", default-features = false }
 js-sys = "0.3"
 libc = "0.2"
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
+moxcms = "0.8"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false }
 objc2-core-foundation = { version = "0.3", default-features = false }

@@ -1,7 +1,8 @@
-//! Content-addressed image decoding, linear-light mip generation, dynamic pixel buffers
-//! (`pixels`), SVG and AVIF codecs, OS app icon rasterization and surface placement math. Decode
-//! and mip generation run off the UI thread on shared decoder workers, never in a view or a render
-//! frame. Apps normally reach this crate through `rune` (`rune::image`, `rune::Pixels`).
+//! Content-addressed image decoding, embedded RGB ICC-to-sRGB colour management, linear-light mip
+//! generation, dynamic pixel buffers (`pixels`), SVG and AVIF codecs, OS app icon rasterization
+//! and surface placement math. Decode, ICC conversion and mip generation run off the UI thread on
+//! shared decoder workers, never in a view or a render frame. Apps normally reach this crate
+//! through `rune` (`rune::image`, `rune::Pixels`).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -19,6 +20,9 @@ mod from_url;
 mod gzip;
 #[cfg_attr(not(any(test, target_arch = "wasm32", feature = "svg")), allow(dead_code))]
 mod header;
+mod icc;
+#[cfg(test)]
+mod icc_tests;
 #[cfg(test)]
 mod mip_tests;
 mod mips;
@@ -375,7 +379,11 @@ impl ImageCache {
 
     /// PNG (APNG animates), JPEG, GIF and WebP (both animate), BMP, ICO, AVIF (with the `avif`
     /// feature; its first frame), modern ICNS containing a PNG representation, or SVG (plain or
-    /// gzipped SVGZ, recognised by its content). An SVG rasterizes at twice its own size; use
+    /// gzipped SVGZ, recognised by its content). Embedded RGB ICC colour profiles (PNG/APNG
+    /// `iCCP`, JPEG `APP2`, WebP `ICCP`, GIF `ICCRGBG1`, and AVIF `colr` `prof`/`rICC`) are
+    /// converted to sRGB with relative colorimetric intent (preserving alpha and clipping
+    /// out-of-gamut colours) before mip generation; untagged, sRGB-equivalent, non-RGB, oversized,
+    /// or unreadable profiles leave pixels unchanged. An SVG rasterizes at twice its own size; use
     /// [`ImageCache::svg`] to rasterize it at the size it draws at. Legacy ICNS codecs return an
     /// explicit error; callers can provide platform-decoded RGBA instead. An animation decodes
     /// every frame on the worker, and plays only while an element draws it in a shown window.
@@ -747,20 +755,29 @@ fn decode_still_raster(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageError> 
     limits.reserve(decoder.total_bytes()).map_err(error)?;
     decoder.set_limits(limits).map_err(error)?;
     let orientation = decoder.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+    let icc = decoder.icc_profile().ok().flatten();
     let mut image = image::DynamicImage::from_decoder(decoder).map_err(error)?;
     image.apply_orientation(orientation);
     let image = image.into_rgba8();
-    Ok((image.width(), image.height(), image.into_raw()))
+    let (w, h) = (image.width(), image.height());
+    let mut raw = image.into_raw();
+    icc::convert_rgba_to_srgb(icc.as_deref(), &mut raw);
+    Ok((w, h, raw))
 }
 
 /// A PNG decoded to 8-bit RGBA by the PNG decoder alone. `image::load_from_memory_with_format`
 /// dispatches on the format at run time, which links every codec the crate is built with (JPEG,
 /// WebP, GIF, BMP, ICO) into an app that only ever reads PNGs from the clipboard or a cursor.
-/// The same decoder and limits as that call's PNG arm.
+/// The same decoder and limits as that call's PNG arm, with embedded RGB ICC profiles converted
+/// to sRGB.
 #[doc(hidden)]
 pub fn png_rgba8(bytes: &[u8]) -> image::ImageResult<image::RgbaImage> {
-    let decoder = image::codecs::png::PngDecoder::with_limits(std::io::Cursor::new(bytes), image::Limits::default())?;
-    Ok(image::DynamicImage::from_decoder(decoder)?.into_rgba8())
+    use image::ImageDecoder;
+    let mut decoder = image::codecs::png::PngDecoder::with_limits(std::io::Cursor::new(bytes), image::Limits::default())?;
+    let icc = decoder.icc_profile().ok().flatten();
+    let mut rgba = image::DynamicImage::from_decoder(decoder)?.into_rgba8();
+    icc::convert_rgba_to_srgb(icc.as_deref(), &mut rgba);
+    Ok(rgba)
 }
 
 fn icns_png(bytes: &[u8]) -> Result<&[u8], ImageError> {

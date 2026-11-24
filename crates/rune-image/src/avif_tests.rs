@@ -1,4 +1,4 @@
-use super::{checked_rgba_bytes, checked_rgba_bytes_with, is_avif, limits::{ALPHA_AUX_URN, check as check_limits, too_large}};
+use super::{checked_rgba_bytes, checked_rgba_bytes_with, is_avif, limits::{ALPHA_AUX_URN, check as check_limits, inspect, too_large}};
 
 struct BitWriter {
     bytes: Vec<u8>,
@@ -431,4 +431,209 @@ fn image_to_rgba_validates_budget_before_allocating_and_preallocates_exact_buffe
     assert_eq!(rpixels.capacity(), expected_bytes);
     let decoded = super::super::decode(&bytes).unwrap();
     assert_eq!((decoded.mips[0].width, decoded.mips[0].height), (w, h));
+}
+
+/// Builds a minimal AVIF container with arbitrary `colr` boxes associated to given item IDs.
+fn build_avif_with_colr(colr_entries: &[(u16, &[u8])]) -> Vec<u8> {
+    let ftyp = bmff_box(b"ftyp", b"avif\0\0\0\0mif1avif");
+    let pitm = full_box(b"pitm", 0, 0, &1u16.to_be_bytes());
+    let primary_av1 = seq_hdr_reduced(16, 16, false, false);
+
+    let mut infe1 = Vec::new();
+    infe1.extend_from_slice(&1u16.to_be_bytes());
+    infe1.extend_from_slice(&0u16.to_be_bytes());
+    infe1.extend_from_slice(b"av01");
+    infe1.push(0);
+    let mut iinf_body = Vec::new();
+    iinf_body.extend_from_slice(&1u16.to_be_bytes());
+    iinf_body.extend_from_slice(&full_box(b"infe", 2, 0, &infe1));
+    let iinf = full_box(b"iinf", 0, 0, &iinf_body);
+
+    let mut ipco_body = Vec::new();
+    let mut assocs: Vec<(u16, u8)> = Vec::new();
+    let mut ispe_d = Vec::new();
+    ispe_d.extend_from_slice(&16u32.to_be_bytes());
+    ispe_d.extend_from_slice(&16u32.to_be_bytes());
+    ipco_body.extend_from_slice(&full_box(b"ispe", 0, 0, &ispe_d));
+    assocs.push((1, 1));
+    let mut prop_idx = 1u8;
+    for &(item_id, colr_body) in colr_entries {
+        ipco_body.extend_from_slice(&bmff_box(b"colr", colr_body));
+        prop_idx += 1;
+        assocs.push((item_id, prop_idx));
+    }
+    let mut ipma_body = Vec::new();
+    ipma_body.extend_from_slice(&(assocs.len() as u32).to_be_bytes());
+    for (item_id, idx) in assocs {
+        ipma_body.extend_from_slice(&item_id.to_be_bytes());
+        ipma_body.push(1);
+        ipma_body.push(idx);
+    }
+    let mut iprp_body = bmff_box(b"ipco", &ipco_body);
+    iprp_body.extend_from_slice(&full_box(b"ipma", 0, 0, &ipma_body));
+    let iprp = bmff_box(b"iprp", &iprp_body);
+
+    let build_iloc = |offset: u32| {
+        let mut d = vec![0x44, 0x00];
+        d.extend_from_slice(&1u16.to_be_bytes());
+        d.extend_from_slice(&1u16.to_be_bytes());
+        d.extend_from_slice(&0u16.to_be_bytes());
+        d.extend_from_slice(&1u16.to_be_bytes());
+        d.extend_from_slice(&offset.to_be_bytes());
+        d.extend_from_slice(&(primary_av1.len() as u32).to_be_bytes());
+        full_box(b"iloc", 0, 0, &d)
+    };
+    let mdat = bmff_box(b"mdat", &primary_av1);
+    let placeholder_iloc = build_iloc(0);
+    let mut meta_body = [pitm, iinf, iprp, placeholder_iloc.clone()].concat();
+    let mdat_payload_offset = (ftyp.len() + 12 + meta_body.len() + 8) as u32;
+    meta_body.truncate(meta_body.len() - placeholder_iloc.len());
+    meta_body.extend_from_slice(&build_iloc(mdat_payload_offset));
+    let meta = full_box(b"meta", 0, 0, &meta_body);
+
+    [ftyp, meta, mdat].concat()
+}
+
+#[test]
+fn avif_inspect_extracts_primary_colr_prof_and_ricc_profiles() {
+    let sample_icc = b"sample-icc-payload";
+    let prof_body = [b"prof".as_slice(), sample_icc].concat();
+    let ricc_body = [b"rICC".as_slice(), sample_icc].concat();
+    let nclx_body = [b"nclx".as_slice(), &[0, 1, 0, 13, 0, 1, 0x80]].concat();
+
+    // Primary item with prof.
+    assert_eq!(inspect(&build_avif_with_colr(&[(1, &prof_body)])), Ok(Some(sample_icc.as_slice())));
+    // Primary item with rICC.
+    assert_eq!(inspect(&build_avif_with_colr(&[(1, &ricc_body)])), Ok(Some(sample_icc.as_slice())));
+    // nclx only returns None.
+    assert_eq!(inspect(&build_avif_with_colr(&[(1, &nclx_body)])), Ok(None));
+    // nclx alongside prof still returns prof.
+    assert_eq!(inspect(&build_avif_with_colr(&[(1, &nclx_body), (1, &prof_body)])), Ok(Some(sample_icc.as_slice())));
+    // colr on a non-primary item is ignored for the primary item.
+    assert_eq!(inspect(&build_avif_with_colr(&[(2, &prof_body)])), Ok(None));
+    // Empty or truncated colr box is ignored cleanly without failing validation.
+    assert_eq!(inspect(&build_avif_with_colr(&[(1, b"prof")])), Ok(None));
+    assert_eq!(inspect(&build_avif_with_colr(&[(1, b"pr")])), Ok(None));
+}
+
+#[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+fn inject_colr_into_hello_avif(orig: &[u8], fourcc: &[u8; 4], icc: &[u8]) -> Vec<u8> {
+    let u32_be = |b: &[u8]| u32::from_be_bytes(b.try_into().unwrap()) as usize;
+    let ftyp_len = u32_be(&orig[0..4]);
+    let meta_start = ftyp_len;
+    let meta_len = u32_be(&orig[meta_start..meta_start + 4]);
+    let mdat = &orig[meta_start + meta_len..];
+
+    let colr = bmff_box(b"colr", &[&fourcc[..], icc].concat());
+    let mut new_meta_children = Vec::new();
+    let mut iloc_pos_in_children = None;
+    let mut pos = meta_start + 12;
+    let meta_end = meta_start + meta_len;
+    while pos < meta_end {
+        let len = u32_be(&orig[pos..pos + 4]);
+        let kind = &orig[pos + 4..pos + 8];
+        let raw_box = &orig[pos..pos + len];
+        if kind == b"iloc" {
+            iloc_pos_in_children = Some(new_meta_children.len());
+            new_meta_children.extend_from_slice(raw_box);
+        } else if kind == b"iprp" {
+            let mut iprp_children = Vec::new();
+            let mut ipos = pos + 8;
+            let mut prop_count = 0u8;
+            while ipos < pos + len {
+                let ilen = u32_be(&orig[ipos..ipos + 4]);
+                let ikind = &orig[ipos + 4..ipos + 8];
+                if ikind == b"ipco" {
+                    let mut ppos = ipos + 8;
+                    while ppos < ipos + ilen {
+                        ppos += u32_be(&orig[ppos..ppos + 4]);
+                        prop_count += 1;
+                    }
+                    let mut ipco_body = orig[ipos + 8..ipos + ilen].to_vec();
+                    ipco_body.extend_from_slice(&colr);
+                    prop_count += 1;
+                    iprp_children.extend_from_slice(&bmff_box(b"ipco", &ipco_body));
+                } else if ikind == b"ipma" {
+                    // Version 0, flags 0: append prop_count to primary item 1's associations.
+                    let ipma_body = &orig[ipos + 12..ipos + ilen];
+                    let entry_count = u32_be(&ipma_body[0..4]);
+                    let mut out_ipma = ipma_body[0..4].to_vec();
+                    let mut epos = 4;
+                    for _ in 0..entry_count {
+                        let item_id = u16::from_be_bytes(ipma_body[epos..epos + 2].try_into().unwrap());
+                        let count = ipma_body[epos + 2];
+                        let assoc_slice = &ipma_body[epos + 3..epos + 3 + usize::from(count)];
+                        out_ipma.extend_from_slice(&item_id.to_be_bytes());
+                        if item_id == 1 {
+                            out_ipma.push(count + 1);
+                            out_ipma.extend_from_slice(assoc_slice);
+                            out_ipma.push(prop_count);
+                        } else {
+                            out_ipma.push(count);
+                            out_ipma.extend_from_slice(assoc_slice);
+                        }
+                        epos += 3 + usize::from(count);
+                    }
+                    iprp_children.extend_from_slice(&full_box(b"ipma", 0, 0, &out_ipma));
+                } else {
+                    iprp_children.extend_from_slice(&orig[ipos..ipos + ilen]);
+                }
+                ipos += ilen;
+            }
+            new_meta_children.extend_from_slice(&bmff_box(b"iprp", &iprp_children));
+        } else {
+            new_meta_children.extend_from_slice(raw_box);
+        }
+        pos += len;
+    }
+
+    // Shift iloc base_offsets by the exact delta in meta box size.
+    let delta = (12 + new_meta_children.len() - meta_len) as u32;
+    let iloc_off = iloc_pos_in_children.unwrap();
+    let iloc_len = u32_be(&new_meta_children[iloc_off..iloc_off + 4]);
+    let item_count = u16::from_be_bytes(new_meta_children[iloc_off + 14..iloc_off + 16].try_into().unwrap());
+    let mut cursor = iloc_off + 16;
+    for _ in 0..item_count {
+        // v0 with offset_size=4, length_size=4, base_offset_size=4:
+        // item_id(2), data_ref(2), base_offset(4), extent_count(2), extents(extent_count * 8).
+        let base_pos = cursor + 4;
+        let old_base = u32::from_be_bytes(new_meta_children[base_pos..base_pos + 4].try_into().unwrap());
+        new_meta_children[base_pos..base_pos + 4].copy_from_slice(&(old_base + delta).to_be_bytes());
+        let ext_count = u16::from_be_bytes(new_meta_children[cursor + 8..cursor + 10].try_into().unwrap()) as usize;
+        cursor += 10 + ext_count * 8;
+    }
+    assert_eq!(cursor, iloc_off + iloc_len);
+
+    let new_meta = full_box(b"meta", 0, 0, &new_meta_children);
+    [&orig[..ftyp_len], &new_meta, mdat].concat()
+}
+
+#[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+#[test]
+fn avif_rgba_converts_display_p3_colr_prof_and_ricc_and_falls_back_on_srgb_or_corrupt() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../www/public/img/hello-320.avif");
+    let untagged = std::fs::read(&path).unwrap();
+    let (w, h, base_pixels) = super::rgba(&untagged).unwrap();
+
+    let p3_icc = moxcms::ColorProfile::new_display_p3().encode().unwrap();
+    let mut expected = base_pixels.clone();
+    crate::icc::convert_rgba_to_srgb(Some(&p3_icc), &mut expected);
+    assert_ne!(expected, base_pixels, "hello-320.avif must have non-grey pixels that shift under Display P3");
+
+    for fourcc in [b"prof", b"rICC"] {
+        let tagged = inject_colr_into_hello_avif(&untagged, fourcc, &p3_icc);
+        assert_eq!(inspect(&tagged), Ok(Some(p3_icc.as_slice())));
+        let (tw, th, tpixels) = super::rgba(&tagged).unwrap();
+        assert_eq!((tw, th), (w, h));
+        assert_eq!(tpixels, expected, "AVIF colr {:?} must convert to sRGB", std::str::from_utf8(fourcc));
+    }
+
+    // sRGB-tagged AVIF stays byte-identical to untagged.
+    let srgb_icc = moxcms::ColorProfile::new_srgb().encode().unwrap();
+    let srgb_avif = inject_colr_into_hello_avif(&untagged, b"rICC", &srgb_icc);
+    assert_eq!(super::rgba(&srgb_avif).unwrap().2, base_pixels);
+
+    // Corrupt ICC profile in colr does not fail decode and leaves pixels unchanged.
+    let corrupt_avif = inject_colr_into_hello_avif(&untagged, b"prof", b"corrupt-icc-data");
+    assert_eq!(super::rgba(&corrupt_avif).unwrap().2, base_pixels);
 }

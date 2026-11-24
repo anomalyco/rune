@@ -6,7 +6,7 @@ use std::io::Cursor;
 
 use image::{AnimationDecoder, ImageDecoder};
 
-use super::{Decoded, ImageError, Mip, mip_chain};
+use super::{Decoded, ImageError, Mip, icc, mip_chain};
 
 /// Decoded pixels the frames of one animation may take, mips included; a larger one shows its
 /// first frame still.
@@ -69,33 +69,37 @@ pub(super) fn decode(bytes: &[u8]) -> Option<Result<Decoded, ImageError>> {
     let cursor = Cursor::new(bytes);
     // Each format's own loop count: a GIF's says how often it repeats after its first play, a
     // WebP's and an APNG's how often it plays (as browsers count them).
-    let (size, frames, plays) = match kind {
+    let (size, icc_profile, frames, plays) = match kind {
         #[cfg(not(target_arch = "wasm32"))]
         Kind::Gif => {
-            let decoder = image::codecs::gif::GifDecoder::new(cursor).ok()?;
+            let mut decoder = image::codecs::gif::GifDecoder::new(cursor).ok()?;
+            let icc_profile = decoder.icc_profile().ok().flatten();
             let plays = finite(decoder.loop_count()).map(|n| n.saturating_add(1));
-            (decoder.dimensions(), decoder.into_frames(), plays)
+            (decoder.dimensions(), icc_profile, decoder.into_frames(), plays)
         }
         #[cfg(not(target_arch = "wasm32"))]
         Kind::WebP => {
             let mut decoder = image::codecs::webp::WebPDecoder::new(cursor).ok()?;
             if !decoder.has_animation() { return None; }
+            let icc_profile = decoder.icc_profile().ok().flatten();
             // Browsers composite on transparency, whatever background the file names.
             decoder.set_background_color(image::Rgba([0, 0, 0, 0])).ok()?;
             let plays = finite(decoder.loop_count());
-            (decoder.dimensions(), decoder.into_frames(), plays)
+            (decoder.dimensions(), icc_profile, decoder.into_frames(), plays)
         }
         Kind::Png => {
-            let decoder = image::codecs::png::PngDecoder::new(cursor).ok()?;
+            let mut decoder = image::codecs::png::PngDecoder::new(cursor).ok()?;
             if !decoder.is_apng().ok()? { return None; }
             let size = decoder.dimensions();
+            let icc_profile = decoder.icc_profile().ok().flatten();
             let decoder = decoder.apng().ok()?;
             let plays = finite(decoder.loop_count());
-            (size, decoder.into_frames(), plays)
+            (size, icc_profile, decoder.into_frames(), plays)
         }
     };
     let (w, h) = size;
     if w == 0 || h == 0 || w > super::MAX_SIDE || h > super::MAX_SIDE { return Some(Err(ImageError("animation is too large".into()))); }
+    let transform = icc_profile.as_deref().and_then(icc::Transform::to_srgb);
     let per_frame = w as usize * h as usize * 16 / 3;
     let mut chains = Vec::new();
     let mut ends = Vec::new();
@@ -113,7 +117,10 @@ pub(super) fn decode(bytes: &[u8]) -> Option<Result<Decoded, ImageError>> {
         // Browsers show a frame of 10 ms or less for 100 ms: such files mean "as fast as you
         // can", which would otherwise spin.
         elapsed += if ms <= 10.0 { 0.1 } else { ms / 1000.0 };
-        let buffer = frame.into_buffer();
+        let mut buffer = frame.into_buffer();
+        if let Some(transform) = &transform {
+            transform.apply_rgba(&mut buffer);
+        }
         match mip_chain(buffer.width(), buffer.height(), buffer.as_raw()) {
             Ok(decoded) => chains.push(decoded.mips),
             Err(e) => return Some(Err(e)),
