@@ -1,8 +1,12 @@
 [
   {"t": 0.1, "drag_files": {"paths": ["photo.png", "notes.txt"], "key": "anything"}},
-  {"t": 0.3, "drag_files": {"paths": ["photo.png", "notes.txt"], "key": "pictures"}},
-  {"t": 0.5, "drop_files": {"paths": ["photo.png", "notes.txt"], "key": "pictures"}},
-  {"t": 0.7, "drop_files": {"paths": ["notes.txt"], "key": "pictures", "hover": 0.2}},
-  {"t": 1.1, "drag_files": {"paths": ["song.m4a"], "key": "anything"}},
-  {"t": 1.3, "drag_files": "leave"}
+  {"t": 0.3, "drag_files": {"paths": ["photo.png", "notes.txt"], "key": "folder"}},
+  {"t": 0.5, "drop_files": {"paths": ["photo.png", "notes.txt"], "key": "folder"}},
+  {"t": 0.7, "drag_files": {"paths": ["a.txt", "b.txt", "c.txt"], "key": "folder"}},
+  {"t": 0.9, "drop_files": {"paths": ["a.txt", "b.txt", "c.txt"], "key": "folder"}},
+  {"t": 1.1, "press": "read-only"},
+  {"t": 1.2, "drag_files": {"paths": ["photo.png"], "key": "folder"}},
+  {"t": 1.4, "drag_files": {"paths": ["photo.png", "notes.txt"], "key": "pictures"}},
+  {"t": 1.6, "drop_files": {"paths": ["photo.png", "notes.txt"], "key": "pictures"}},
+  {"t": 1.8, "drag_files": "leave"}
 ]

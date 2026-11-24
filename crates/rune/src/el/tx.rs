@@ -83,6 +83,8 @@ pub struct Tx {
     pub(crate) keys: Vec<crate::KeyEvent>,
     /// `Tx::drop_point`.
     pub(crate) drop_point: Option<PointerEvent>,
+    /// `Tx::drag_paths`.
+    pub(crate) drag_paths: Option<Rc<[std::path::PathBuf]>>,
     pub(crate) title: Option<String>,
     /// `Tx::announce`: what a screen reader says after this handler.
     pub(crate) announce: Option<(String, crate::LiveRegion)>,
