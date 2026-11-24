@@ -68,6 +68,14 @@ pub(crate) struct A11yMore {
     pub described_by: Option<Cow<'static, str>>,
     /// `El::busy`.
     pub busy: bool,
+    /// Total rows in a `table`, `grid` or `treegrid` (`El::row_count`).
+    pub row_count: Option<usize>,
+    /// Total columns in a `table`, `grid` or `treegrid` (`El::column_count`).
+    pub column_count: Option<usize>,
+    /// 1-based row index of a `row`, `cell`, `gridcell`, `columnheader` or `rowheader` (`El::row_index`).
+    pub row_index: Option<usize>,
+    /// 1-based column index of a `row`, `cell`, `gridcell`, `columnheader` or `rowheader` (`El::column_index`).
+    pub column_index: Option<usize>,
 }
 
 /// Accessibility state beyond role and label (`El::level`, `El::expanded`, `El::secure`, and
@@ -250,9 +258,36 @@ impl El {
     }
     /// This element's place in its set, 1-based, and the set's size (ARIA `aria-posinset` and
     /// `aria-setsize`): a row of a list that builds only some of its rows says where it is.
-    /// Rows of `virtual_rows` and `virtualize` lists get it without this.
+    /// Item rows of `virtual_rows` and `virtualize` lists get it without this; non-item rows
+    /// such as headings do not.
     pub fn position_in_set(mut self, position: usize, size: usize) -> Self {
         self.cold_mut().a11y.more().set = Some((position, size));
+        self
+    }
+    /// Total number of rows in a `table`, `grid` or `treegrid` (ARIA `aria-rowcount`), when
+    /// not all rows are mounted. Overrides the count a `virtual_rows` container derives from its
+    /// rows.
+    pub fn row_count(mut self, count: usize) -> Self {
+        self.cold_mut().a11y.more().row_count = Some(count);
+        self
+    }
+    /// Total number of columns in a `table`, `grid` or `treegrid` (ARIA `aria-colcount`), when
+    /// not all columns are mounted.
+    pub fn column_count(mut self, count: usize) -> Self {
+        self.cold_mut().a11y.more().column_count = Some(count);
+        self
+    }
+    /// This element's 1-based row index in a `table`, `grid` or `treegrid` (ARIA
+    /// `aria-rowindex`), on a `row`, `cell`, `gridcell`, `columnheader` or `rowheader`.
+    /// Rows directly under a `virtual_rows` `table` or `grid` get it without this.
+    pub fn row_index(mut self, index: usize) -> Self {
+        self.cold_mut().a11y.more().row_index = Some(index);
+        self
+    }
+    /// This element's 1-based column index in a `table`, `grid` or `treegrid` (ARIA
+    /// `aria-colindex`), on a `row`, `cell`, `gridcell`, `columnheader` or `rowheader`.
+    pub fn column_index(mut self, index: usize) -> Self {
+        self.cold_mut().a11y.more().column_index = Some(index);
         self
     }
     /// The keyboard shortcut that does what this control does, as the platform writes it

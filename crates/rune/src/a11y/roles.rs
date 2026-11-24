@@ -393,6 +393,53 @@ pub(crate) fn named_by_accesskit(role: Role) -> bool {
     ak_meta(role).named_by_accesskit
 }
 
+/// Container roles that own an ordered set of items (`size_of_set` / ARIA `aria-setsize`),
+/// matching Chromium's `ui::IsSetLike` plus `RowGroup` for treegrid row groups. Plain tables,
+/// grids and rows are excluded so cell properties never overwrite a row's set size.
+pub(crate) fn ordered_set(role: Role) -> bool {
+    matches!(
+        role,
+        Role::Group
+            | Role::List
+            | Role::ListBox
+            | Role::Menu
+            | Role::MenuBar
+            | Role::RadioGroup
+            | Role::RowGroup
+            | Role::TabList
+            | Role::Tree
+            | Role::TreeGrid
+    )
+}
+
+/// Whether `role` is an ordered-set item inside `container` (`position_in_set` / ARIA
+/// `aria-posinset`), matching WAI-ARIA 1.2 and Chromium's `AXNode::IsOrderedSetItem`.
+/// Non-item roles such as `Heading`, `Group`, `Splitter`, `GridCell` and `Cell` return
+/// `false`; `Row` is an item only inside an ordered-set container, not inside a plain `Grid`
+/// or `Table`.
+pub(crate) fn ordered_set_item_in(role: Role, container: Role) -> bool {
+    match role {
+        Role::Article
+        | Role::ListItem
+        | Role::ListBoxOption
+        | Role::MenuListOption
+        | Role::MenuItem
+        | Role::MenuItemCheckBox
+        | Role::MenuItemRadio
+        | Role::RadioButton
+        | Role::Tab
+        | Role::TreeItem => true,
+        Role::Row => ordered_set(container),
+        _ => false,
+    }
+}
+
+/// Tabular containers (`row_count` / `column_count`, ARIA `aria-rowcount` / `aria-colcount`),
+/// matching WAI-ARIA 1.2 and Chromium's `ui::IsTableLike`.
+pub(crate) fn table_container(role: Role) -> bool {
+    matches!(role, Role::Grid | Role::Table | Role::TreeGrid)
+}
+
 /// The ARIA role a browser's reader knows for an AccessKit role, for the web focus proxy.
 pub(crate) fn focus_role(role: Role) -> &'static str {
     ak_meta(role).focus_role

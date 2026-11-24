@@ -58,6 +58,10 @@ impl Tree<'_> {
         if let Some(l) = n.level() { v["level"] = (l + 1).into(); }
         if let Some(p) = n.position_in_set() { v["position"] = (p + 1).into(); }
         if let Some(s) = n.size_of_set() { v["setSize"] = s.into(); }
+        if let Some(r) = n.row_count() { v["rowCount"] = r.into(); }
+        if let Some(c) = n.column_count() { v["columnCount"] = c.into(); }
+        if let Some(r) = n.row_index() { v["rowIndex"] = (r + 1).into(); }
+        if let Some(c) = n.column_index() { v["columnIndex"] = (c + 1).into(); }
         if let Some(k) = n.keyboard_shortcut() { v["shortcut"] = k.into(); }
         if let Some(url) = n.url() { v["url"] = url.into(); }
         if let Some(a) = n.active_descendant().and_then(|a| self.nodes.get(&a.0)) {

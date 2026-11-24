@@ -356,3 +356,142 @@ fn activating_while_modal_open_does_not_announce_unchanged_background_on_close()
     assert_eq!(mirror.by_key("status").unwrap().1.live(), Some(Live::Off));
     assert!(heard.is_empty(), "unchanged status must stay quiet on close after mid-modal activation: {heard:?}");
 }
+
+fn find_json<'a>(v: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
+    if v["key"] == key { return Some(v); }
+    v["children"].as_array()?.iter().find_map(|c| find_json(c, key))
+}
+
+#[test]
+fn virtual_list_headings_take_no_position_and_options_set_list_size() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        col().size(300.0, 600.0).scroll(crate::ScrollSpec { stick_bottom: false }).child(
+            col().key("list").role("listbox").label("Files").growth(crate::GrowthSpec::default())
+                .virtual_rows(20, 24.0, |_: &(), i| format!("r{i}").into(), |_: &(), i| {
+                    if i == 0 || i == 11 {
+                        text(format!("Group {i}")).h(24.0).role("heading")
+                    } else {
+                        let pos = if i < 11 { i } else { i - 1 };
+                        text(format!("Item {i}")).h(24.0).role("option").position_in_set(pos, 18)
+                    }
+                }),
+        )
+    }
+    let mut rt = Runtime::new((), view, (300.0, 600.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.frame(0.016);
+    let tree = rt.accessibility_json();
+    let list = find_json(&tree, "list").unwrap();
+    assert_eq!(list["setSize"], 18, "explicit option set size excludes headings");
+    let h0 = find_json(&tree, "r0").unwrap();
+    assert_eq!(h0["role"], "heading");
+    assert!(h0["position"].is_null(), "heading in virtual_rows must take no position: {h0}");
+    let h11 = find_json(&tree, "r11").unwrap();
+    assert_eq!(h11["role"], "heading");
+    assert!(h11["position"].is_null(), "second heading in virtual_rows must take no position: {h11}");
+    let opt1 = find_json(&tree, "r1").unwrap();
+    assert_eq!(opt1["position"], 1);
+    let opt12 = find_json(&tree, "r12").unwrap();
+    assert_eq!(opt12["position"], 11);
+}
+
+#[test]
+fn item_set_size_never_overwrites_non_set_row_or_shallower_tree_level() {
+    fn grid_view(_: &(), _: &mut Cx<()>) -> El {
+        col().size(600.0, 300.0).scroll(crate::ScrollSpec { stick_bottom: false }).child(
+            col().key("grid").role("grid").label("Icons").growth(crate::GrowthSpec::default())
+                .virtual_rows(5, 30.0, |_: &(), i| format!("line{i}").into(), |_: &(), i| {
+                    row().h(30.0).role("row").children((0..4).map(move |c| {
+                        text(format!("tile {}", i * 4 + c))
+                            .key(format!("c{c}"))
+                            .role("gridcell")
+                            .position_in_set(i * 4 + c + 1, 20)
+                    }))
+                }),
+        )
+    }
+    let mut rt = Runtime::new((), grid_view, (600.0, 300.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.frame(0.016);
+    let tree = rt.accessibility_json();
+    let grid = find_json(&tree, "grid").unwrap();
+    assert!(grid["setSize"].is_null(), "grid uses rowCount, not setSize: {grid}");
+    assert_eq!(grid["rowCount"], 5);
+    let line0 = find_json(&tree, "line0").unwrap();
+    assert!(line0["setSize"].is_null(), "gridcell position_in_set must not overwrite row setSize: {line0}");
+    assert!(line0["position"].is_null(), "row in plain grid uses rowIndex, not position: {line0}");
+    assert_eq!(line0["rowIndex"], 1);
+
+    // A flat tree whose mounted slice ends on level-2 items keeps level 1's set size on the tree.
+    fn tree_view(_: &(), _: &mut Cx<()>) -> El {
+        const ROWS: [(&str, u32, usize, usize); 3] = [("fruits", 1, 1, 2), ("apple", 2, 1, 3), ("banana", 2, 2, 3)];
+        col().key("tree").role("tree").label("Food").children(ROWS.iter().map(|&(key, level, pos, size)| {
+            crate::el().key(key).role("treeitem").label(key).focusable(true).level(level).position_in_set(pos, size)
+                .size(140.0, 20.0).child(text(key))
+        }))
+    }
+    let mut rt = Runtime::new((), tree_view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let tree = rt.accessibility_json();
+    assert_eq!(find_json(&tree, "tree").unwrap()["setSize"], 2, "level-2 items must not overwrite level-1 setSize");
+}
+
+#[test]
+fn grid_counts_and_cell_indices_reach_accesskit_json_and_incremental_updates() {
+    struct GridState {
+        rows: usize,
+        cols: usize,
+        row_idx: usize,
+        col_idx: usize,
+    }
+    fn view(s: &GridState, _: &mut Cx<GridState>) -> El {
+        col().size(400.0, 200.0).child(
+            col().key("sheet").role("grid").label("Files")
+                .row_count(s.rows)
+                .column_count(s.cols)
+                .child(
+                    row().key("r50k").role("row").row_index(s.row_idx)
+                        .child(text("Size").key("col-c").role("gridcell").row_index(s.row_idx).column_index(s.col_idx)),
+                ),
+        )
+    }
+    let mut rt = Runtime::new(
+        GridState { rows: 100_000, cols: 5, row_idx: 50_000, col_idx: 3 },
+        view,
+        (400.0, 200.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    let mut link = AccessibilityLink::new();
+    link.activate();
+    let mut mirror = AdapterMirror::default();
+    mirror.init(link.service(&mut rt, "Window").expect("initial tree"));
+
+    let (_, sheet) = mirror.by_key("sheet").unwrap();
+    assert_eq!((sheet.row_count(), sheet.column_count()), (Some(100_000), Some(5)));
+    let (_, row_node) = mirror.by_key("r50k").unwrap();
+    assert_eq!(row_node.row_index(), Some(49_999), "AccessKit row_index is 0-based");
+    let (_, cell_node) = mirror.by_key("col-c").unwrap();
+    assert_eq!((cell_node.row_index(), cell_node.column_index()), (Some(49_999), Some(2)), "AccessKit indices are 0-based");
+
+    let json = rt.accessibility_json();
+    let sheet_j = find_json(&json, "sheet").unwrap();
+    assert_eq!((sheet_j["rowCount"].as_u64(), sheet_j["columnCount"].as_u64()), (Some(100_000), Some(5)));
+    let cell_j = find_json(&json, "col-c").unwrap();
+    assert_eq!((cell_j["rowIndex"].as_u64(), cell_j["columnIndex"].as_u64()), (Some(50_000), Some(3)), "JSON indices are 1-based");
+
+    // Mutating grid counts and indices updates the sent tree via fingerprint checks.
+    rt.update(|s, _| {
+        s.rows = 100_001;
+        s.cols = 6;
+        s.row_idx = 50_001;
+        s.col_idx = 4;
+    });
+    rt.frame(1.0 / 60.0);
+    let update = link.service(&mut rt, "Window").expect("grid attributes changed");
+    mirror.apply(update);
+    let (_, sheet) = mirror.by_key("sheet").unwrap();
+    assert_eq!((sheet.row_count(), sheet.column_count()), (Some(100_001), Some(6)));
+    let (_, cell_node) = mirror.by_key("col-c").unwrap();
+    assert_eq!((cell_node.row_index(), cell_node.column_index()), (Some(50_000), Some(3)));
+}
