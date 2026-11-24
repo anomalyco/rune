@@ -30,6 +30,8 @@ pub(crate) struct Handlers {
     pub on_focus_within_change: Option<WindowFocusFn>,
     /// Seconds the pointer must stay inside, then outside, before `on_hover_change` hears it.
     pub hover_delay: [f32; 2],
+    /// `El::hover_tracks_bounds`.
+    pub hover_tracks_bounds: bool,
     pub on_pointer_move: Option<PointerFn>,
     /// `on_wheel`, `on_magnify` and the other canvas handlers (`canvas_input.rs`).
     pub gestures: Option<Box<crate::input::canvas_input::CanvasInput>>,
@@ -127,6 +129,7 @@ impl Empty for Handlers {
         on_focus_change: None,
         on_focus_within_change: None,
         hover_delay: [0.0; 2],
+        hover_tracks_bounds: false,
         on_pointer_move: None,
         gestures: None,
         on_drag: None,

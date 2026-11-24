@@ -88,7 +88,7 @@ impl Held {
         Self { path, drag, button, at, down_at, hit: Hit::Inside, moved: false, second, drag_out, left: false, link: None, pressed_on_down: false, touch: false, drag_handler: None }
     }
 
-    pub(crate) fn inside(&self) -> bool { self.hit == Hit::Inside }
+    pub(crate) fn inside(&self) -> bool { self.hit == Hit::Inside && !self.left }
 
     /// Began on link `link` of its text.
     pub(crate) fn on_link(self, link: Option<usize>) -> Self { Self { link, ..self } }
@@ -325,6 +325,13 @@ impl PointerState {
 
     #[inline]
     pub(in crate::runtime) fn hold_press(&mut self, held: Held) { self.press.hold(held); }
+
+    /// Whether the pointer left the window while a press holds capture.
+    #[inline]
+    pub(in crate::runtime) fn left(&self) -> bool {
+        self.press.held().is_some_and(|h| h.left)
+            || matches!(self.secondary, Secondary::Held { left: true, .. } | Secondary::DismissRepost { left: true, .. })
+    }
 
     /// The pointer left the window (`true`) or came back (`false`) while a press holds it.
     #[inline]

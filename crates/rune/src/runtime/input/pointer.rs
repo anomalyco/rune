@@ -11,8 +11,9 @@ impl RuntimeCore {
     /// point the drag last saw has nothing new to report, and its instant transaction would
     /// cut short whatever the press started (a tapped slider's knob mid-spring).
     pub(in crate::runtime) fn move_pointer(&mut self, app: &dyn ViewDriver, x: f32, y: f32, drag_move: bool) {
+        let was_left = self.pointer.left();
         let moved = self.pointer.pos != Some((x, y));
-        if moved { self.pointer.hover_paused = false; self.release_hover_hold(); }
+        if moved || was_left { self.pointer.hover_paused = false; self.release_hover_hold(); }
         self.pointer.pos = Some((x, y));
         self.autoscroll_moved(x, y);
         if self.in_viewport(x, y) { self.pointer.set_left(false); }
@@ -50,7 +51,7 @@ impl RuntimeCore {
         // unscrolled layout rect, kept only for elements that were never drawn. Only the
         // pointer moving decides whether it's still inside: a button that springs out from
         // under a still pointer stays pressed, as AppKit only re-tracks on a drag.
-        if moved && self.pointer.press.held().is_some_and(|h| h.hit != capture::Hit::Cancelled) {
+        if (moved || was_left) && self.pointer.press.held().is_some_and(|h| h.hit != capture::Hit::Cancelled) {
             let inside = match self.hit.has_node_hit(id, |id, r| self.hit_contains(id, r, x, y)) {
                 Some(hit) => hit,
                 None if self.host.native_overlay => false,
@@ -73,7 +74,7 @@ impl RuntimeCore {
     /// hover-group or press tracks, hovered links, tooltips, text selection drags, OS drag-out,
     /// or a newly armed autoscroll or edge-scroll step).
     pub(crate) fn observe_pointer(&mut self, app: &dyn ViewDriver, x: f32, y: f32) -> bool {
-        if self.pointer.pos == Some((x, y)) { return false; }
+        if self.pointer.pos == Some((x, y)) && !self.pointer.left() { return false; }
         let queued = self.frame.queue.len();
         let capture_inside = self.pointer.press_inside();
         let prev_link = self.hovered_link();
@@ -414,7 +415,8 @@ impl RuntimeCore {
         }
         let on_down = !touch && n.handlers.press_on_down && n.handlers.on_press.is_some();
         if on_down {
-            self.frame.queue.push(Action::Press(path.clone(), crate::PointerButton::Primary, false));
+            let point = self.pointer_event(ti, x, y);
+            self.frame.queue.push(Action::Press(path.clone(), crate::PointerButton::Primary, false, Some(point)));
         }
         let mut held = capture::Held::new(path, d, crate::PointerButton::Primary, (x, y), now, second, drag_out).on_link(link).pressed_on_down(on_down).drag_handler(drag_handler);
         held.touch = touch;
@@ -478,7 +480,9 @@ impl RuntimeCore {
         // A release never starts a drag-out: the system session needs the button held.
         if let Some(held) = self.pointer.press.held_mut() { held.drag_out = None; }
         let moved = self.pointer.pos != Some((x, y));
-        self.move_pointer(app, x, y, moved);
+        if moved || !self.pointer.left() {
+            self.move_pointer(app, x, y, moved);
+        }
         // A drag that selected text is a selection, not a press.
         let selected = self.selected_by_drag();
         self.select_step(selectable::phase::Event::Release);
@@ -495,8 +499,8 @@ impl RuntimeCore {
             .then(|| capture::FirstClick { path: h.path.clone(), at: h.down_at, point: h.at });
         let Some(held) = self.pointer.press.release(first) else { return };
         let inside = held.inside();
-        let capture::Held { path, drag: d, button, at, down_at, moved, second: double, link, pressed_on_down, drag_handler, .. } = *held;
-        self.refresh_hover_within();
+        let capture::Held { path, drag: d, button, at, down_at, moved, second: double, left, link, pressed_on_down, drag_handler, .. } = *held;
+        if !left { self.refresh_hover_within(); }
         if moved { self.pointer.clear_press_clicks(); }
         if input_capture {
             if input_following
@@ -522,15 +526,19 @@ impl RuntimeCore {
             self.frame.queue.push(Action::Drag(path.clone(), Drag { phase: Phase::Up, x: lx, y: ly, dx, dy, window: [x, y], screen: self.screen_at(x, y), ..d }, button));
         }
         if let Some(k) = link.filter(|_| inside) { self.link_up(&path, k, x, y, button); }
-        if has_press && inside && !selected && !pressed_on_down && !(has_drag && moved) {
-            self.frame.queue.push(Action::Press(path.clone(), button, held.touch));
-        }
-        if middle_press && inside {
-            self.frame.queue.push(Action::MiddlePress(path.clone()));
-        }
+        let press = has_press && inside && !selected && !pressed_on_down && !(has_drag && moved);
+        let middle = middle_press && inside;
         let click = !moved && now - down_at <= interval;
-        if has_double && inside && click && button == crate::PointerButton::Primary && double {
-            self.frame.queue.push(Action::DoublePress(path));
+        let double_press = has_double && inside && click && button == crate::PointerButton::Primary && double;
+        let point = (press || middle || double_press).then(|| self.pointer_event(i, x, y));
+        if press {
+            self.frame.queue.push(Action::Press(path.clone(), button, held.touch, point));
+        }
+        if middle {
+            self.frame.queue.push(Action::MiddlePress(path.clone(), point));
+        }
+        if double_press {
+            self.frame.queue.push(Action::DoublePress(path, point));
         }
     }
 
@@ -542,6 +550,8 @@ impl RuntimeCore {
             self.refresh_hover_within();
         } else {
             self.pointer.set_left(true);
+            self.pointer.hovered = None;
+            self.refresh_hover_within();
         }
     }
 
@@ -591,6 +601,16 @@ impl RuntimeCore {
         loop {
             if let Some(c) = self.tree.nodes[i].handlers.cursor {
                 return c;
+            }
+            if let Some(pc) = self.commit.defaults.press_cursor {
+                if self.tree.nodes[i].a11y.disabled {
+                    return crate::el::Cursor::Default;
+                }
+                if self.tree.nodes[i].handlers.on_press.is_some()
+                    || self.tree.nodes[i].handlers.on_double_press.is_some()
+                {
+                    return pc;
+                }
             }
             let Some(parent) = self.tree.nodes[i].parent else { return crate::el::Cursor::Default };
             i = parent;

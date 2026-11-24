@@ -453,6 +453,7 @@ fn cx_defaults_survive_hot_builds_and_discard_panicked_writes() {
         cx.foreground(crate::Color { r: 0.1, g: 0.7, b: 0.4, a: 1.0 });
         cx.focus_ring(2.0, 1.0, crate::Color { r: 0.0, g: 0.6, b: 1.0, a: 1.0 });
         cx.help_look(crate::HelpLook::system(false));
+        cx.press_cursor(crate::el::Cursor::Pointer);
         cx.force_focus_rings();
         cx.web_focus();
         el().size(40.0, 20.0)
@@ -464,6 +465,7 @@ fn cx_defaults_survive_hot_builds_and_discard_panicked_writes() {
     assert_eq!(rt.commit.defaults.foreground, Some(fg), "cx.foreground survives hot builds");
     assert_eq!(rt.commit.defaults.focus_ring, Some(crate::el::Outline { width: 2.0, offset: 1.0, color: ring }), "cx.focus_ring survives hot builds");
     assert_eq!(rt.commit.defaults.help, Some(look), "cx.help_look survives hot builds");
+    assert_eq!(rt.commit.defaults.press_cursor, Some(crate::el::Cursor::Pointer), "cx.press_cursor survives hot builds");
     assert!(rt.commit.defaults.force_focus_rings, "cx.force_focus_rings survives hot builds");
     assert!(rt.commit.defaults.web_focus, "cx.web_focus survives hot builds");
 }

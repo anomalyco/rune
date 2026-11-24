@@ -10,6 +10,34 @@ impl Tx {
     /// activation or accessibility action returns false, including on touch-capable hosts.
     pub fn touch_tap(&self) -> bool { self.touch_tap }
 
+    /// In [`El::on_press_tx`](crate::El::on_press_tx),
+    /// [`El::on_background_press_tx`](crate::El::on_background_press_tx),
+    /// [`El::on_double_press_tx`](crate::El::on_double_press_tx), and
+    /// [`El::on_middle_press`](crate::El::on_middle_press): where the pointer (mouse or touch)
+    /// activated the element, in the element's own layout points (`x`, `y`, following scroll
+    /// and transforms) and in window points (`window_x`, `window_y`). `None` for keyboard
+    /// activation, assistive-technology Invoke, and outside press handlers.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, PointerEvent, Runtime, col, el};
+    /// # #[derive(Default)] struct S { last: Option<PointerEvent> }
+    /// # fn view(_: &S, _: &mut Cx<S>) -> El {
+    /// col().size(200.0, 100.0).child(
+    ///     el().key("btn").size(100.0, 40.0).on_press_tx(|s: &mut S, tx| {
+    ///         s.last = tx.press_point();
+    ///     }),
+    /// )
+    /// # }
+    /// # let mut rt = Runtime::new(S::default(), view, (200.0, 100.0), Env::new(true, 1.0));
+    /// # rt.frame(0.0);
+    /// # rt.pointer_down(30.0, 15.0);
+    /// # rt.pointer_up(30.0, 15.0);
+    /// # rt.frame(0.0);
+    /// # let p = rt.state.last.unwrap();
+    /// # assert_eq!((p.x, p.y, p.window_x, p.window_y), (30.0, 15.0, 30.0, 15.0));
+    /// ```
+    pub fn press_point(&self) -> Option<crate::PointerEvent> { self.press_point }
+
     /// From a drag handler: while this press stays held, send the handler the pointer again as
     /// a [`Phase::Move`](crate::Phase::Move) after `delay`, moved or not. [`Tx::drag_repeat`]
     /// tells that move from the hand's. Ask again from the repeat, with the repeat interval, to

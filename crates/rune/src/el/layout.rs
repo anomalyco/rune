@@ -844,6 +844,43 @@ impl El {
         self
     }
 
+    /// Track whether the pointer is still inside this element's hit bounds and inside the window
+    /// during a held press, rather than holding [`Self::on_hover_change`] active until release.
+    /// Moving a held press outside this element's clipped (and `press_scale`- /
+    /// `press_offset`-compensated) bounds, or receiving a host pointer-leave while captured,
+    /// fires `on_hover_change(false)` and retargets hover/press paint tracks off; moving back
+    /// inside before release fires `on_hover_change(true)` and restores them without ending
+    /// pointer capture or interrupting drags.
+    ///
+    /// Off by default so ancestors and drag containers keep Rune's drag-friendly retention.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Runtime, col, el};
+    /// # #[derive(Default)] struct S { inside: Vec<bool> }
+    /// # fn view(_: &S, _: &mut Cx<S>) -> El {
+    /// col().size(200.0, 100.0).child(
+    ///     el().key("btn").size(80.0, 40.0)
+    ///         .hover_tracks_bounds()
+    ///         .on_press(|_: &mut S| {})
+    ///         .on_hover_change(|s: &mut S, inside, _| s.inside.push(inside)),
+    /// )
+    /// # }
+    /// # let mut rt = Runtime::new(S::default(), view, (200.0, 100.0), Env::new(true, 1.0));
+    /// # rt.frame(0.0);
+    /// # rt.pointer_move(20.0, 20.0);
+    /// # rt.pointer_down(20.0, 20.0);
+    /// # rt.frame(0.0);
+    /// # rt.pointer_move(150.0, 20.0);
+    /// # rt.frame(0.0);
+    /// # rt.pointer_move(20.0, 20.0);
+    /// # rt.frame(0.0);
+    /// # assert_eq!(rt.state.inside, [true, false, true]);
+    /// ```
+    pub fn hover_tracks_bounds(mut self) -> Self {
+        self.handlers.hover_tracks_bounds = true;
+        self
+    }
+
     #[doc(hidden)]
     pub fn wrap_scroll_area(mut self, fallback_site: (&'static str, u32, u32)) -> (String, String, Self, Self) {
         let key = self.key.clone().unwrap_or_else(|| {
