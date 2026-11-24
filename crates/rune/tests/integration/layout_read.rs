@@ -584,3 +584,221 @@ fn a_memo_layout_read_inside_a_scrolled_viewport_commits_nothing_while_it_scroll
 fn frames_of<S: 'static>(rt: &mut Runtime<S>, n: usize) {
     for _ in 0..n { rt.frame(1.0 / 120.0); }
 }
+
+#[derive(Default)]
+struct ScaleApp {
+    layout: Vec<[f32; 4]>,
+    layout_tx: Vec<([f32; 4], f32)>,
+    drawn: Vec<[f32; 4]>,
+    drawn_tx: Vec<([f32; 4], f32)>,
+    screen: Vec<[f32; 4]>,
+    inert_tx: Vec<([f32; 4], f32)>,
+    press_scales: Vec<f32>,
+}
+
+fn scale_view(_: &ScaleApp, _: &mut Cx<ScaleApp>) -> El {
+    col().w_full().h_full()
+        .child(
+            el().key("image").size(100.0, 80.0)
+                .on_layout(|s: &mut ScaleApp, r| s.layout.push(r))
+                .on_screen_layout(|s: &mut ScaleApp, r| s.screen.push(r))
+                .on_drawn_layout(|s: &mut ScaleApp, r| s.drawn.push(r)),
+        )
+        .child(
+            el().key("surface").size(100.0, 80.0)
+                .on_layout_tx(|s: &mut ScaleApp, r, tx| s.layout_tx.push((r, tx.scale())))
+                .on_drawn_layout_tx(|s: &mut ScaleApp, r, tx| s.drawn_tx.push((r, tx.scale())))
+                .on_press_tx(|s: &mut ScaleApp, tx| s.press_scales.push(tx.scale())),
+        )
+        .child(
+            el().key("inert-surface").size(50.0, 40.0).inert()
+                .on_layout_tx(|s: &mut ScaleApp, r, tx| s.inert_tx.push((r, tx.scale()))),
+        )
+}
+
+#[test]
+fn display_scale_change_fires_layout_and_drawn_handlers_once_with_tx_scale() {
+    let mut rt = Runtime::new(ScaleApp::default(), scale_view, (300.0, 200.0), Env::new(true, 1.0));
+    frames_of(&mut rt, 4);
+    assert_eq!(rt.state.layout, [[0.0, 0.0, 100.0, 80.0]]);
+    assert_eq!(rt.state.layout_tx, [([0.0, 80.0, 100.0, 80.0], 1.0)]);
+    assert_eq!(rt.state.drawn, [[0.0, 0.0, 100.0, 80.0]]);
+    assert_eq!(rt.state.drawn_tx, [([0.0, 80.0, 100.0, 80.0], 1.0)]);
+    assert_eq!(rt.state.screen, [[0.0, 0.0, 100.0, 80.0]]);
+    assert_eq!(rt.state.inert_tx, [([0.0, 160.0, 50.0, 40.0], 1.0)]);
+
+    // Scale-only change (1.0 -> 2.0) with identical logical viewport size.
+    rt.set_viewport((300.0, 200.0), 2.0);
+    frames_of(&mut rt, 5);
+    assert_eq!(rt.state.layout.len(), 2, "on_layout fired once on scale change");
+    assert_eq!(rt.state.layout_tx, [([0.0, 80.0, 100.0, 80.0], 1.0), ([0.0, 80.0, 100.0, 80.0], 2.0)]);
+    assert_eq!(rt.state.drawn.len(), 2, "on_drawn_layout fired once on scale change");
+    assert_eq!(rt.state.drawn_tx, [([0.0, 80.0, 100.0, 80.0], 1.0), ([0.0, 80.0, 100.0, 80.0], 2.0)]);
+    assert_eq!(rt.state.inert_tx, [([0.0, 160.0, 50.0, 40.0], 1.0), ([0.0, 160.0, 50.0, 40.0], 2.0)]);
+    assert_eq!(rt.state.screen.len(), 1, "on_screen_layout reports screen points only, not scale");
+
+    // Idle window stays quiet: no extra fires, commits, pending actions, or animation frames.
+    let commits = rt.stats.commits;
+    assert!(!rt.has_pending_input());
+    assert!(!rt.frame(1.0 / 120.0));
+    frames_of(&mut rt, 5);
+    assert_eq!(rt.stats.commits, commits, "no extra commits at rest");
+    assert_eq!(rt.state.layout_tx.len(), 2);
+    assert_eq!(rt.state.drawn_tx.len(), 2);
+
+    // Repeating the same viewport & scale does nothing.
+    rt.set_viewport((300.0, 200.0), 2.0);
+    assert!(!rt.has_pending_input());
+    assert!(!rt.frame(1.0 / 120.0));
+    assert_eq!(rt.stats.commits, commits);
+    assert_eq!(rt.state.layout_tx.len(), 2);
+
+    // Non-integer and large scales propagate cleanly to handlers and update/press Tx.
+    for scale in [1.25_f32, 8.0_f32] {
+        rt.set_viewport((300.0, 200.0), scale);
+        frames_of(&mut rt, 4);
+        assert_eq!(rt.state.layout_tx.last(), Some(&([0.0, 80.0, 100.0, 80.0], scale)));
+        assert_eq!(rt.state.drawn_tx.last(), Some(&([0.0, 80.0, 100.0, 80.0], scale)));
+        let mut update_scale = 0.0;
+        rt.update_if(|_, tx| { update_scale = tx.scale(); false });
+        assert_eq!(update_scale, scale);
+    }
+
+    // Press handlers see the current scale on Tx too.
+    rt.pointer_down(10.0, 90.0);
+    rt.pointer_up(10.0, 90.0);
+    frames_of(&mut rt, 2);
+    assert_eq!(rt.state.press_scales, [8.0]);
+}
+
+#[test]
+fn display_scale_change_with_live_only_handler_causes_no_extra_view_commit() {
+    struct LiveScale {
+        views: Cell<u32>,
+        px_layout: rune::Live<[f32; 2]>,
+        px_drawn: rune::Live<[f32; 2]>,
+        layout_fires: usize,
+        drawn_fires: usize,
+    }
+    let init = LiveScale {
+        views: Cell::new(0),
+        px_layout: rune::Live::new([0.0, 0.0]),
+        px_drawn: rune::Live::new([0.0, 0.0]),
+        layout_fires: 0,
+        drawn_fires: 0,
+    };
+    fn view(s: &LiveScale, _: &mut Cx<LiveScale>) -> El {
+        s.views.set(s.views.get() + 1);
+        col().w_full().h_full().child(
+            el().key("canvas").size(100.0, 80.0)
+                .on_layout_tx(|s: &mut LiveScale, [_, _, w, h], tx| {
+                    s.px_layout.set([w * tx.scale(), h * tx.scale()]);
+                    s.layout_fires += 1;
+                    tx.live_only();
+                })
+                .on_drawn_layout_tx(|s: &mut LiveScale, [_, _, w, h], tx| {
+                    s.px_drawn.set([w * tx.scale(), h * tx.scale()]);
+                    s.drawn_fires += 1;
+                    tx.live_only();
+                }),
+        )
+    }
+    let mut rt = Runtime::new(init, view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.check_live_only(false);
+    frames_of(&mut rt, 4);
+    assert_eq!(rt.state.px_layout.get(), [100.0, 80.0]);
+    assert_eq!(rt.state.px_drawn.get(), [100.0, 80.0]);
+    let (commits0, views0) = (rt.stats.commits, rt.state.views.get());
+
+    rt.set_viewport((300.0, 200.0), 2.0);
+    frames_of(&mut rt, 5);
+    assert_eq!(rt.state.px_layout.get(), [200.0, 160.0]);
+    assert_eq!(rt.state.px_drawn.get(), [200.0, 160.0]);
+    assert_eq!((rt.state.layout_fires, rt.state.drawn_fires), (2, 2));
+    assert_eq!(rt.stats.commits, commits0 + 1, "only the single relayout commit runs");
+    assert_eq!(rt.state.views.get(), views0 + 1, "live_only handlers trigger no extra view run");
+    assert!(!rt.has_pending_input());
+    assert!(!rt.frame(1.0 / 120.0));
+}
+
+#[test]
+fn display_scale_change_reopens_quiet_layout_feedback() {
+    #[derive(Default)]
+    struct Quiet {
+        width: f32,
+        scales: Vec<f32>,
+    }
+    fn view(s: &Quiet, _: &mut Cx<Quiet>) -> El {
+        col().w_full().child(
+            el().key("bar").w(s.width.max(10.0)).h(10.0).on_layout_tx(|s: &mut Quiet, r, tx| {
+                s.scales.push(tx.scale());
+                s.width = r[2] + 10.0;
+            }),
+        )
+    }
+    let mut rt = Runtime::new(Quiet { width: 50.0, scales: Vec::new() }, view, (600.0, 400.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    frames_of(&mut rt, 40);
+    let settled = rt.state.scales.len();
+    assert!((2..=6).contains(&settled), "feedback went quiet: {:?}", rt.state.scales);
+
+    // Changing only display scale reopens feedback so the handler hears the new scale, then settles again.
+    rt.set_viewport((600.0, 400.0), 2.0);
+    frames_of(&mut rt, 40);
+    assert!(rt.state.scales.len() > settled, "reopened on scale change");
+    assert_eq!(rt.state.scales.last(), Some(&2.0));
+    let (count, commits) = (rt.state.scales.len(), rt.stats.commits);
+    frames_of(&mut rt, 20);
+    assert_eq!((rt.state.scales.len(), rt.stats.commits), (count, commits), "settled again");
+}
+
+#[test]
+fn ui_zoom_change_fires_layout_handlers_with_effective_scale() {
+    struct Zoomed {
+        zoom: f32,
+        layout_tx: Vec<([f32; 4], f32)>,
+        drawn_tx: Vec<([f32; 4], f32)>,
+    }
+    fn view(s: &Zoomed, cx: &mut Cx<Zoomed>) -> El {
+        cx.zoom(s.zoom);
+        col().w_full().h_full().child(
+            el().key("box").size(100.0, 80.0)
+                .on_layout_tx(|s: &mut Zoomed, r, tx| s.layout_tx.push((r, tx.scale())))
+                .on_drawn_layout_tx(|s: &mut Zoomed, r, tx| s.drawn_tx.push((r, tx.scale()))),
+        )
+    }
+    let mut rt = Runtime::new(Zoomed { zoom: 1.0, layout_tx: Vec::new(), drawn_tx: Vec::new() }, view, (400.0, 300.0), Env::new(true, 2.0));
+    frames_of(&mut rt, 4);
+    assert_eq!(rt.state.layout_tx, [([0.0, 0.0, 100.0, 80.0], 2.0)]);
+    assert_eq!(rt.state.drawn_tx, [([0.0, 0.0, 100.0, 80.0], 2.0)]);
+
+    rt.update(|s, _| s.zoom = 1.5);
+    let mut steps = 0;
+    while (rt.frame(1.0 / 60.0) || rt.has_pending_input()) && steps < 240 { steps += 1; }
+    assert!(steps < 240, "settled after zoom change");
+    assert_eq!(rt.state.layout_tx, [([0.0, 0.0, 100.0, 80.0], 2.0), ([0.0, 0.0, 100.0, 80.0], 3.0)]);
+    assert_eq!(rt.state.drawn_tx, [([0.0, 0.0, 100.0, 80.0], 2.0), ([0.0, 0.0, 100.0, 80.0], 3.0)]);
+    let commits = rt.stats.commits;
+    frames_of(&mut rt, 5);
+    assert_eq!(rt.stats.commits, commits);
+}
+
+#[test]
+fn coalesced_scale_changes_before_frame_fire_once_or_zero() {
+    let mut rt = Runtime::new(ScaleApp::default(), scale_view, (300.0, 200.0), Env::new(true, 1.0));
+    frames_of(&mut rt, 4);
+
+    // 1.0 -> 1.5 -> 2.0 before stepping frames fires once at 2.0.
+    rt.set_viewport((300.0, 200.0), 1.5);
+    rt.set_viewport((300.0, 200.0), 2.0);
+    frames_of(&mut rt, 5);
+    assert_eq!(rt.state.layout_tx, [([0.0, 80.0, 100.0, 80.0], 1.0), ([0.0, 80.0, 100.0, 80.0], 2.0)]);
+    assert_eq!(rt.state.drawn_tx, [([0.0, 80.0, 100.0, 80.0], 1.0), ([0.0, 80.0, 100.0, 80.0], 2.0)]);
+
+    // 2.0 -> 1.0 -> 2.0 before stepping frames leaves scale unchanged and fires 0 times.
+    rt.set_viewport((300.0, 200.0), 1.0);
+    rt.set_viewport((300.0, 200.0), 2.0);
+    frames_of(&mut rt, 5);
+    assert_eq!(rt.state.layout_tx.len(), 2);
+    assert_eq!(rt.state.drawn_tx.len(), 2);
+}

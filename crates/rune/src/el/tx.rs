@@ -127,6 +127,8 @@ pub struct Tx {
     pub(crate) evict_memos: Vec<String>,
     /// `Tx::clock`.
     pub(crate) clock: f64,
+    /// `Tx::scale` (0 when unset on `Tx::default()`, which reads as 1.0).
+    pub(crate) scale: f32,
 }
 
 /// Which asked for focus: [`Tx::focus`], [`Tx::focus_when_shown`], or [`Tx::return_focus`]
@@ -370,6 +372,20 @@ impl Tx {
     /// 0 for a `Tx` no runtime made.
     pub fn clock(&self) -> f64 {
         self.clock
+    }
+
+    /// The window's display scale in device pixels per view point (matching
+    /// [`Cx::env`](crate::Cx::env)`.scale`, including any [`Cx::zoom`](crate::Cx::zoom)) as
+    /// this handler or `poll` runs. `1.0` for a `Tx` no runtime made.
+    ///
+    /// ```ignore
+    /// .on_layout_tx(|s: &mut Viewer, [_, _, w, h], tx| {
+    ///     let scale = tx.scale();
+    ///     s.backing_px = [(w * scale).round() as u32, (h * scale).round() as u32];
+    /// })
+    /// ```
+    pub fn scale(&self) -> f32 {
+        if self.scale.is_finite() && self.scale > 0.0 { self.scale } else { 1.0 }
     }
 
     /// Wake the app's poll hook once the clock reaches `due` (seconds on [`Tx::clock`]), as

@@ -263,3 +263,17 @@ fn a_declined_handler_takes_back_only_live_only() {
     assert!(Tx::took(true, &mut tx));
     assert!(tx.live_only);
 }
+
+/// `Tx::scale` defaults to 1.0 when unset or non-positive/non-finite, and returns positive scales.
+#[test]
+fn default_tx_scale_is_one_and_invalid_values_fall_back_to_one() {
+    assert_eq!(Tx::default().scale(), 1.0);
+    for scale in [0.5_f32, 1.0, 1.25, 2.0, 3.0, 100.0] {
+        let tx = Tx { scale, ..Tx::default() };
+        assert_eq!(tx.scale(), scale);
+    }
+    for invalid in [0.0_f32, -0.0, -2.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let tx = Tx { scale: invalid, ..Tx::default() };
+        assert_eq!(tx.scale(), 1.0, "invalid scale {invalid:?} falls back to 1.0");
+    }
+}

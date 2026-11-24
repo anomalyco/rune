@@ -40,9 +40,13 @@ impl RuntimeCore {
             self.viewport = viewport;
             return false;
         }
-        let changed = viewport != self.viewport || scale != self.env.scale;
+        let scale_changed = scale != self.env.scale;
+        let changed = viewport != self.viewport || scale_changed;
         if changed {
-            if scale != self.env.scale { self.motion.clear_flights(); }
+            if scale_changed {
+                self.motion.clear_flights();
+                self.commit.step_feedback(layout_read::FeedbackEvent::Reopened);
+            }
             self.viewport = viewport;
             self.env.scale = scale;
             self.scene.set_pixel_scale(scale);

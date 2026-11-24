@@ -588,7 +588,10 @@ top-left, which is what popups and context menus anchor to.
 `on_press`, `on_double_press`, `on_hover`, `on_hover_change`, `on_drop_files` and
 `on_drop_hover` give no point; a tooltip (`El::help`) anchors itself to the element as drawn.
 `on_pointer_move` and `on_secondary_press` stay in window points, as apps written against
-them expect.
+them expect. `on_layout`, `on_layout_tx`, `on_drawn_layout`, and `on_drawn_layout_tx` also
+re-fire once when the display scale changes (even when the logical point rect is unchanged), and
+`Tx::scale()` reports the current display scale (device pixels per view point, including
+`Cx::zoom`) in any handler or `poll`.
 
 ### App lifetime (`app.rs`, for apps that outlive their window)
 
