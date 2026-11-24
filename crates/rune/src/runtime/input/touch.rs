@@ -5,6 +5,8 @@
 //! the press. A finger held still for [`LONG_PRESS`] is a secondary click there, as Chromium's
 //! long press sends `contextmenu`: the press it began lets go without a click and the menu opens
 //! under the finger, which then lifts on nothing. Further fingers are ignored while one is down.
+use crate::machine::{Attempt, Effects, Seq};
+
 use super::*;
 
 /// How far (points) a finger travels before its touch is a drag or a pan, not a tap.
@@ -25,11 +27,158 @@ pub enum TouchPhase {
     Cancelled,
 }
 
-/// What touches are doing: the finger that is down, and the viewport a touch holds or flung.
+/// How a touch hold timer turns into a secondary press.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) enum TouchHoldPolicy {
+    /// Fire the secondary press directly when `clock >= due` (native hosts and headless default).
+    #[default]
+    DirectTimer,
+    /// When `clock >= due`, wait one low-priority host turn (`TouchHoldCommand::Confirm`) so any
+    /// queued release or move drains before confirming the hold (web host).
+    ConfirmingTimer,
+}
+
+/// Host-side command emitted when a web touch hold enters or leaves confirmation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TouchHoldCommand {
+    /// Schedule a low-priority confirmation turn for `attempt`.
+    Confirm(Attempt),
+    /// Cancel any pending confirmation turn.
+    Cancel,
+}
+
+/// Long-press state for the active finger, stepped by [`step_hold`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(in crate::runtime) enum HoldState {
+    /// No hold timer is armed (no finger down, or the finger moved to drag/pan/window-drag).
+    #[default]
+    Idle,
+    /// Finger is still within `TOUCH_SLOP`; hold is due at `due` on the runtime clock.
+    Armed { attempt: Attempt, due: f64 },
+    /// Under `ConfirmingTimer`, `due` elapsed and the host is draining queued input on a
+    /// low-priority turn before confirming `attempt`.
+    Confirming { attempt: Attempt },
+    /// A long press fired for this finger.
+    Fired,
+}
+
+impl HoldState {
+    /// Next wake deadline on the runtime clock while a hold timer is armed; `None` otherwise.
+    #[inline]
+    pub(in crate::runtime) fn deadline(self) -> Option<f64> {
+        match self {
+            HoldState::Armed { due, .. } => Some(due),
+            HoldState::Idle | HoldState::Confirming { .. } | HoldState::Fired => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::runtime) enum HoldEvent {
+    /// A hold-eligible touch began at runtime clock `now` with event timestamp `event_time`.
+    Start { now: f64, event_time: f64, policy: TouchHoldPolicy },
+    /// A frame ticked at runtime clock `now`.
+    Tick { now: f64, policy: TouchHoldPolicy },
+    /// The host's low-priority confirmation turn ran for `attempt`.
+    Confirm { attempt: Attempt },
+    /// The finger moved past `TOUCH_SLOP`, lifted, or was cancelled.
+    Cancel,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::runtime) enum HoldEffect {
+    /// Schedule a wake at `due` on the runtime clock.
+    WakeAt(f64),
+    /// Ask the host to yield a low-priority turn and reply with `HoldEvent::Confirm { attempt }`.
+    ConfirmHold(Attempt),
+    /// Cancel any pending host confirmation turn.
+    CancelConfirm,
+    /// Fire the secondary press now.
+    Fire,
+}
+
+/// Computes the hold deadline on the runtime clock. Under `ConfirmingTimer`, subtracts
+/// `event_processing_delay = now - event_time` only when `0 < delay < LONG_PRESS`, matching
+/// Chromium's `TimeoutGestureHandler::Start` (`kCompensateGestureDetectorTimeouts` with
+/// `kCompensateGestureTimeoutsForLongDelayedSequences = false`): a malformed/future timestamp or
+/// a press delayed by `>= LONG_PRESS` arms a full `LONG_PRESS` instead of firing immediately.
+pub(in crate::runtime) fn compensated_hold_due(now: f64, event_time: f64, policy: TouchHoldPolicy) -> f64 {
+    if policy == TouchHoldPolicy::DirectTimer || !event_time.is_finite() {
+        return now + LONG_PRESS;
+    }
+    let delay = now - event_time;
+    if delay > 0.0 && delay < LONG_PRESS {
+        now + (LONG_PRESS - delay)
+    } else {
+        now + LONG_PRESS
+    }
+}
+
+/// Pure transition function for touch long-press recognition.
+pub(in crate::runtime) fn step_hold(seq: &mut Seq, state: &mut HoldState, event: HoldEvent) -> Effects<HoldEffect> {
+    match event {
+        HoldEvent::Start { now, event_time, policy } => {
+            let cancel = matches!(*state, HoldState::Confirming { .. });
+            let attempt = seq.next();
+            let due = compensated_hold_due(now, event_time, policy);
+            *state = HoldState::Armed { attempt, due };
+            if cancel {
+                Effects::two(HoldEffect::CancelConfirm, HoldEffect::WakeAt(due))
+            } else {
+                Effects::one(HoldEffect::WakeAt(due))
+            }
+        }
+        HoldEvent::Tick { now, policy } => match *state {
+            HoldState::Armed { attempt, due } if now >= due => match policy {
+                TouchHoldPolicy::DirectTimer => {
+                    *state = HoldState::Fired;
+                    Effects::one(HoldEffect::Fire)
+                }
+                TouchHoldPolicy::ConfirmingTimer => {
+                    *state = HoldState::Confirming { attempt };
+                    Effects::one(HoldEffect::ConfirmHold(attempt))
+                }
+            },
+            _ => Effects::none(),
+        },
+        HoldEvent::Confirm { attempt } => match *state {
+            HoldState::Confirming { attempt: expected } if expected == attempt => {
+                *state = HoldState::Fired;
+                Effects::one(HoldEffect::Fire)
+            }
+            _ => Effects::none(),
+        },
+        HoldEvent::Cancel => {
+            let cancel = matches!(*state, HoldState::Confirming { .. });
+            *state = HoldState::Idle;
+            if cancel {
+                Effects::one(HoldEffect::CancelConfirm)
+            } else {
+                Effects::none()
+            }
+        }
+    }
+}
+
+/// What touches are doing: the finger that is down, its hold state machine, and the viewport a
+/// touch holds or flung.
 #[derive(Default)]
 pub(in crate::runtime) struct Touch {
     pub(in crate::runtime) scroll: Option<scroll_touch::TouchScroll>,
     finger: Option<Finger>,
+    hold_seq: Seq,
+    hold: HoldState,
+    policy: TouchHoldPolicy,
+    hold_command: Option<TouchHoldCommand>,
+}
+
+impl Touch {
+    /// Next wake deadline on the runtime clock for an armed touch hold, or `None` when idle.
+    #[inline]
+    pub(in crate::runtime) fn hold_deadline(&self) -> Option<f64> {
+        self.hold.deadline()
+    }
 }
 
 struct Finger {
@@ -42,8 +191,6 @@ struct Finger {
     /// Points per second along the pan's axis.
     velocity: f32,
     mode: Mode,
-    /// When (`now_clock`), still pending, it becomes a long press.
-    hold_due: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,6 +223,10 @@ impl Mode {
     }
 
     fn horizontal(self) -> bool { matches!(self, Mode::Pan { horizontal: true, .. }) }
+
+    fn hold_eligible(self) -> bool {
+        matches!(self, Mode::Pending { .. } | Mode::WindowDragPending)
+    }
 }
 
 impl capture::PointerState {
@@ -84,11 +235,33 @@ impl capture::PointerState {
     pub(in crate::runtime) fn touching(&self) -> bool {
         self.touch.finger.is_some()
     }
+
+    /// Next wake deadline on the runtime clock for an armed touch hold, or `None` when idle.
+    #[inline]
+    pub(in crate::runtime) fn touch_hold_deadline(&self) -> Option<f64> {
+        self.touch.hold_deadline()
+    }
 }
 
 impl RuntimeCore {
-    /// One touch event at (x, y) in window points, `time` in seconds on any steady clock. A
-    /// host with touches calls this for every one; `id` tells fingers apart.
+    /// Configures how touch holds turn into secondary presses (the web host selects
+    /// `ConfirmingTimer`; native and headless keep `DirectTimer`).
+    #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+    #[inline]
+    pub(crate) fn set_touch_hold_policy(&mut self, policy: TouchHoldPolicy) {
+        self.pointer.touch.policy = policy;
+    }
+
+    /// Takes the latest host-side confirmation command produced by the touch hold state machine.
+    #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+    #[inline]
+    pub(crate) fn take_touch_hold_command(&mut self) -> Option<TouchHoldCommand> {
+        self.pointer.touch.hold_command.take()
+    }
+
+    /// One touch event at (x, y) in window points, `time` in seconds on any steady clock (on
+    /// Web, mapped onto the runtime clock from `PointerEvent.timeStamp`). A host with touches
+    /// calls this for every one; `id` tells fingers apart.
     pub(crate) fn touch(&mut self, app: &mut dyn AppDriver, id: u64, phase: TouchPhase, x: f32, y: f32, time: f64) {
         match phase {
             TouchPhase::Started => self.touch_down(app, id, x, y, time),
@@ -111,25 +284,55 @@ impl RuntimeCore {
         self.pointer.touch.finger.as_ref().is_some_and(|f| f.mode == Mode::Menu)
     }
 
+    fn apply_hold_effects(&mut self, effects: Effects<HoldEffect>) -> bool {
+        let mut fire = false;
+        for effect in effects {
+            match effect {
+                // `hold_deadline()` exposes `HoldState::Armed` directly to `wake_deadline()`,
+                // so cancelling or lifting a finger leaves no stale wake behind.
+                HoldEffect::WakeAt(_) => {}
+                HoldEffect::ConfirmHold(attempt) => {
+                    self.pointer.touch.hold_command = Some(TouchHoldCommand::Confirm(attempt));
+                }
+                HoldEffect::CancelConfirm => {
+                    self.pointer.touch.hold_command = Some(TouchHoldCommand::Cancel);
+                }
+                HoldEffect::Fire => fire = true,
+            }
+        }
+        fire
+    }
+
+    /// Cancels any armed hold timer or pending host confirmation without dropping an active
+    /// `Mode::Menu` touch whose finger is still down.
+    pub(in crate::runtime) fn cancel_touch_hold(&mut self) {
+        let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Cancel);
+        let _ = self.apply_hold_effects(effects);
+    }
+
     fn touch_down(&mut self, app: &mut dyn AppDriver, id: u64, x: f32, y: f32, time: f64) {
         if self.pointer.touch.finger.is_some() { return; }
         let scroll = self.touch_scroll_start(x, y);
         self.pointer_move(app, x, y);
         self.press_down(app, x, y, true);
+        let now = self.now_clock();
+        let policy = self.pointer.touch.policy;
         match self.host.titlebar.action {
             Some(TitlebarAction::Drag) => {
                 // Hold the drag until the finger crosses `TOUCH_SLOP`, so taps, double-taps and
                 // long-press window menus on bare `.window_drag()` regions still work.
                 self.host.titlebar.action = None;
                 self.touch_scroll_end(scroll, 0.0);
-                let hold_due = self.now_clock() + LONG_PRESS;
-                self.wake_at(hold_due);
-                self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::WindowDragPending, hold_due });
+                let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Start { now, event_time: time, policy });
+                let _ = self.apply_hold_effects(effects);
+                self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::WindowDragPending });
                 return;
             }
             Some(TitlebarAction::DoubleClick) => {
                 self.touch_scroll_end(scroll, 0.0);
-                self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::WindowDragging, hold_due: f64::INFINITY });
+                let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Cancel);
+                let _ = self.apply_hold_effects(effects);
+                self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::WindowDragging });
                 return;
             }
             None => {}
@@ -137,21 +340,25 @@ impl RuntimeCore {
         // `El::touch_drags_at_once`: a drag from the first move, and no long press to cut it.
         if self.press_drags_at_once() {
             self.touch_scroll_end(scroll, 0.0);
-            self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::Drag, hold_due: f64::INFINITY });
+            let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Cancel);
+            let _ = self.apply_hold_effects(effects);
+            self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::Drag });
             return;
         }
-        let hold_due = self.now_clock() + LONG_PRESS;
-        self.wake_at(hold_due);
-        self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::Pending { scroll }, hold_due });
+        let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Start { now, event_time: time, policy });
+        let _ = self.apply_hold_effects(effects);
+        self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::Pending { scroll } });
     }
 
     fn touch_move(&mut self, app: &dyn ViewDriver, id: u64, x: f32, y: f32, time: f64) {
         let Some(f) = self.pointer.touch.finger.as_ref().filter(|f| f.id == id) else { return };
         let (dx, dy) = (x - f.origin.0, y - f.origin.1);
+        let mut left_hold_slop = false;
         if f.mode == Mode::WindowDragPending && dx.hypot(dy) > TOUCH_SLOP {
             self.host.titlebar.clear();
             self.host.titlebar.action = Some(TitlebarAction::Drag);
             self.pointer.touch.finger.as_mut().unwrap().mode = Mode::WindowDragging;
+            left_hold_slop = true;
         } else if let Mode::Pending { scroll } = f.mode && dx.hypot(dy) > TOUCH_SLOP {
             let origin = f.origin;
             let (scroll, horizontal) = if self.press_drags() { (None, false) } else { self.touch_scroll_pan(origin.0, origin.1, dx.abs() > dy.abs(), scroll) };
@@ -159,6 +366,11 @@ impl RuntimeCore {
                 Some(scroll) => Mode::Pan { scroll, horizontal },
                 None => Mode::Drag,
             };
+            left_hold_slop = true;
+        }
+        if left_hold_slop {
+            let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Cancel);
+            let _ = self.apply_hold_effects(effects);
         }
         let f = self.pointer.touch.finger.as_mut().unwrap();
         let along = if f.mode.horizontal() { dx } else { dy };
@@ -174,6 +386,8 @@ impl RuntimeCore {
 
     fn touch_up(&mut self, app: &dyn ViewDriver, id: u64, x: f32, y: f32, time: f64, cancelled: bool) {
         let Some(f) = self.pointer.touch.finger.take_if(|f| f.id == id) else { return };
+        let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Cancel);
+        let _ = self.apply_hold_effects(effects);
         let pan = matches!(f.mode, Mode::Pan { .. });
         let velocity = if pan && !cancelled && time - f.at < FLING_HOLD { f.velocity } else { 0.0 };
         self.touch_scroll_end(f.mode.scroll(), velocity);
@@ -193,11 +407,42 @@ impl RuntimeCore {
         self.pointer_leave();
     }
 
-    /// A finger still within the slop when its long press is due: the press it began lets go
+    /// A finger still within the slop when its long press is due: under `DirectTimer` it fires
+    /// now; under `ConfirmingTimer` it enters `Confirming` and asks the host to confirm once
+    /// waiting input has drained.
+    pub(in crate::runtime) fn fire_touch_hold(&mut self, app: &dyn ViewDriver) {
+        if !self.pointer.touch.finger.as_ref().is_some_and(|f| f.mode.hold_eligible()) {
+            return;
+        }
+        let policy = self.pointer.touch.policy;
+        let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Tick { now: self.clock, policy });
+        if self.apply_hold_effects(effects) {
+            self.commit_touch_hold(app);
+        }
+    }
+
+    /// Completes a pending `ConfirmingTimer` hold after the host drained queued input; stale or
+    /// cancelled attempts do nothing and return `false`.
+    #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+    pub(crate) fn confirm_touch_hold(&mut self, app: &dyn ViewDriver, attempt: Attempt) -> bool {
+        if !self.pointer.touch.finger.as_ref().is_some_and(|f| f.mode.hold_eligible()) {
+            let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Cancel);
+            let _ = self.apply_hold_effects(effects);
+            return false;
+        }
+        let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Confirm { attempt });
+        if self.apply_hold_effects(effects) {
+            self.commit_touch_hold(app);
+            return true;
+        }
+        false
+    }
+
+    /// Turns the held press into a secondary click where it went down: the press it began lets go
     /// without a click (a drag it started hears a cancelled `Phase::Up`), and a secondary click
     /// lands where it went down.
-    pub(in crate::runtime) fn fire_touch_hold(&mut self, app: &dyn ViewDriver) {
-        let Some(f) = self.pointer.touch.finger.as_ref().filter(|f| matches!(f.mode, Mode::Pending { .. } | Mode::WindowDragPending) && self.clock >= f.hold_due) else { return };
+    fn commit_touch_hold(&mut self, app: &dyn ViewDriver) {
+        let Some(f) = self.pointer.touch.finger.as_ref().filter(|f| f.mode.hold_eligible()) else { return };
         let ((x, y), scroll, was_window_drag) = (f.origin, f.mode.scroll(), f.mode == Mode::WindowDragPending);
         self.touch_scroll_end(scroll, 0.0);
         if was_window_drag { self.host.titlebar.clear(); }

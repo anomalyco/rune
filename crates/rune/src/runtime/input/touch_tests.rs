@@ -207,7 +207,8 @@ fn a_long_press_on_a_window_drag_region_opens_the_window_menu_and_never_drags() 
     rt.frame(0.0);
     rt.touch(1, TouchPhase::Started, 250.0, 20.0, 0.0);
     let target = rt.core().primary_target(250.0, 20.0).map(|i| rt.tree.nodes[i].path.clone());
-    assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| (f.mode, f.hold_due)), Some((Mode::WindowDragPending, LONG_PRESS)), "target={target:?}");
+    assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| f.mode), Some(Mode::WindowDragPending), "target={target:?}");
+    assert_eq!(rt.pointer.touch.hold_deadline(), Some(LONG_PRESS));
     assert_eq!(rt.take_titlebar_action(), None);
     assert_eq!(rt.take_window_menu(), None);
     // Advance past LONG_PRESS (0.5 s) using the injected clock.
@@ -262,4 +263,211 @@ fn an_active_modal_blocks_touch_window_drag() {
     rt.touch(1, TouchPhase::Ended, 270.0, 20.0, 0.04);
     rt.frame(1.0 / 60.0);
     assert!(!rt.state.modal_open, "touch outside modal still dismisses it");
+}
+
+#[derive(Default)]
+struct HoldStateTest {
+    taps: usize,
+    secondary: usize,
+}
+
+fn hold_view(_: &HoldStateTest, _: &mut Cx<HoldStateTest>) -> El {
+    col().size(200.0, 300.0)
+        .child(el().key("btn").size(200.0, 60.0)
+            .on_press(|s: &mut HoldStateTest| s.taps += 1)
+            .on_secondary_press(|s: &mut HoldStateTest, _, _| s.secondary += 1))
+        .child(col().key("list").w_full().h(200.0).scroll(ScrollSpec { stick_bottom: false })
+            .children((0..30).map(|i| el().key(format!("row{i}")).w_full().h(40.0)
+                .on_press(|s: &mut HoldStateTest| s.taps += 1)
+                .on_secondary_press(|s: &mut HoldStateTest, _, _| s.secondary += 1))))
+}
+
+fn confirming_rig() -> Runtime<HoldStateTest> {
+    let mut rt = Runtime::new(HoldStateTest::default(), hold_view, (200.0, 300.0), Env::default());
+    rt.frame.set_test_clock(crate::ManualClock::new(60.0));
+    rt.core_mut().set_touch_hold_policy(TouchHoldPolicy::ConfirmingTimer);
+    rt.frame(0.0);
+    rt
+}
+
+#[test]
+fn a_completed_tap_leaves_no_hold_wake_deadline() {
+    let mut rt = rig();
+    assert_eq!(rt.wake_deadline(), None, "idle runtime starts with no wake scheduled");
+    rt.touch(1, TouchPhase::Started, 100.0, 70.0, 0.0);
+    assert_eq!(rt.wake_deadline(), Some(LONG_PRESS), "pending touch arms hold wake");
+    rt.touch(1, TouchPhase::Ended, 100.0, 70.0, 0.05);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.taps, [0]);
+    assert_eq!(rt.wake_deadline(), None, "lifting a finger must not leave a hold wake scheduled on an idle page");
+
+    // Panning past slop and cancelling a touch also leave no hold wake scheduled.
+    rt.touch(2, TouchPhase::Started, 100.0, 200.0, 0.1);
+    assert!(rt.wake_deadline().is_some());
+    rt.touch(2, TouchPhase::Moved, 100.0, 150.0, 0.12);
+    assert_eq!(rt.wake_deadline(), None, "crossing TOUCH_SLOP into pan clears hold wake");
+    rt.touch(2, TouchPhase::Cancelled, 100.0, 150.0, 0.14);
+    assert_eq!(rt.wake_deadline(), None, "cancelling a touch leaves no hold wake");
+}
+
+#[test]
+fn confirming_timer_does_not_instant_fire_on_700ms_delayed_press_and_tap_wins() {
+    let mut rt = confirming_rig();
+    // Both press (event_time = 0.0) and release (event_time = 0.08) arrive 700 ms late.
+    rt.frame.test_clock_mut().unwrap().seek(0.70);
+    rt.touch(1, TouchPhase::Started, 100.0, 30.0, 0.0);
+    // Chromium's kCompensateGestureTimeoutsForLongDelayedSequences=false: delay (0.70) >= LONG_PRESS
+    // arms a full 0.50 s from arrival (1.20), never firing immediately.
+    assert_eq!(rt.wake_deadline(), Some(0.70 + LONG_PRESS));
+    rt.frame(0.0);
+    assert_eq!(rt.core_mut().take_touch_hold_command(), None);
+    assert_eq!((rt.state.taps, rt.state.secondary), (0, 0));
+
+    rt.touch(1, TouchPhase::Ended, 100.0, 30.0, 0.08);
+    rt.frame(0.0);
+    assert_eq!((rt.state.taps, rt.state.secondary), (1, 0), "80 ms tap delivered 700 ms late must tap");
+    assert_eq!(rt.wake_deadline(), None, "no wake scheduled once finger lifts");
+}
+
+#[test]
+fn confirming_timer_drains_queued_release_or_move_after_700ms_stall_before_firing() {
+    let mut rt = confirming_rig();
+    // 1. Short 80 ms tap stalled 700 ms on the main thread: rAF wakes at 0.70 before pointerup.
+    rt.touch(1, TouchPhase::Started, 100.0, 30.0, 0.0);
+    assert_eq!(rt.wake_deadline(), Some(LONG_PRESS));
+
+    rt.frame.test_clock_mut().unwrap().seek(0.70);
+    rt.frame(0.70);
+    let confirm = rt.core_mut().take_touch_hold_command();
+    let Some(TouchHoldCommand::Confirm(attempt)) = confirm else {
+        panic!("expected ConfirmHold command, got {confirm:?}");
+    };
+    assert_eq!((rt.state.taps, rt.state.secondary), (0, 0), "must not fire secondary press inside rAF");
+    assert_eq!(rt.wake_deadline(), None, "Confirming state schedules no extra runtime wake");
+
+    // Queued pointerup (event_time = 0.08) drains ahead of the low-priority confirm macrotask.
+    rt.touch(1, TouchPhase::Ended, 100.0, 30.0, 0.08);
+    assert_eq!(rt.core_mut().take_touch_hold_command(), Some(TouchHoldCommand::Cancel));
+    rt.frame(0.0);
+    assert_eq!((rt.state.taps, rt.state.secondary), (1, 0), "draining release must commit a tap");
+    // Even if a stale confirm arrived later, it does nothing.
+    let fired = {
+        let (core, app) = rt.split_mut();
+        core.confirm_touch_hold(&app, attempt)
+    };
+    assert!(!fired);
+    assert_eq!((rt.state.taps, rt.state.secondary), (1, 0));
+    assert_eq!(rt.wake_deadline(), None);
+
+    // 2. Queued touch_move past slop drains ahead of confirmation and scrolls instead of opening menu.
+    rt.frame.test_clock_mut().unwrap().seek(1.0);
+    rt.touch(2, TouchPhase::Started, 100.0, 200.0, 1.0);
+    rt.frame.test_clock_mut().unwrap().seek(1.7);
+    rt.frame(0.7);
+    let Some(TouchHoldCommand::Confirm(move_attempt)) = rt.core_mut().take_touch_hold_command() else {
+        panic!("expected ConfirmHold for stalled swipe");
+    };
+    rt.touch(2, TouchPhase::Moved, 100.0, 140.0, 1.03);
+    assert_eq!(rt.core_mut().take_touch_hold_command(), Some(TouchHoldCommand::Cancel));
+    let fired = {
+        let (core, app) = rt.split_mut();
+        core.confirm_touch_hold(&app, move_attempt)
+    };
+    assert!(!fired);
+    rt.touch(2, TouchPhase::Ended, 100.0, 140.0, 1.06);
+    rt.frame(0.0);
+    assert_eq!(rt.state.secondary, 0, "stalled swipe must not trigger secondary press");
+    let list = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("list")).unwrap().id;
+    assert!(rt.scroll.scrolls[&list].offset >= 50.0, "stalled swipe must scroll the list");
+    assert_eq!(rt.wake_deadline(), None);
+}
+
+#[test]
+fn confirming_timer_fires_on_matching_attempt_and_ignores_stale_attempt() {
+    let mut rt = confirming_rig();
+    rt.touch(1, TouchPhase::Started, 100.0, 30.0, 0.0);
+    rt.frame.test_clock_mut().unwrap().seek(0.55);
+    rt.frame(0.55);
+    let Some(TouchHoldCommand::Confirm(attempt)) = rt.core_mut().take_touch_hold_command() else {
+        panic!("expected ConfirmHold");
+    };
+    // Stale attempt does nothing.
+    let stale = crate::machine::Attempt(attempt.0.wrapping_add(1));
+    let fired_stale = {
+        let (core, app) = rt.split_mut();
+        core.confirm_touch_hold(&app, stale)
+    };
+    assert!(!fired_stale);
+    assert_eq!(rt.state.secondary, 0);
+
+    // Matching attempt fires on_secondary_press once and enters Mode::Menu.
+    let fired = {
+        let (core, app) = rt.split_mut();
+        core.confirm_touch_hold(&app, attempt)
+    };
+    assert!(fired);
+    rt.frame(0.0);
+    assert_eq!((rt.state.taps, rt.state.secondary), (0, 1));
+    assert!(rt.core().touch_in_menu());
+    assert_eq!(rt.wake_deadline(), None);
+
+    // Duplicate confirm does nothing, and lifting the finger does not click.
+    let fired_again = {
+        let (core, app) = rt.split_mut();
+        core.confirm_touch_hold(&app, attempt)
+    };
+    assert!(!fired_again);
+    rt.touch(1, TouchPhase::Ended, 100.0, 30.0, 0.8);
+    rt.frame(0.0);
+    assert_eq!((rt.state.taps, rt.state.secondary), (0, 1));
+    assert_eq!(rt.wake_deadline(), None);
+}
+
+#[test]
+fn confirming_timer_compensates_positive_delay_below_long_press_only() {
+    // 200 ms delayed press: compensates to 0.20 + (0.50 - 0.20) = 0.50.
+    assert!((compensated_hold_due(0.20, 0.0, TouchHoldPolicy::ConfirmingTimer) - 0.50).abs() < 1e-9);
+    // 700 ms delayed press (>= LONG_PRESS): arms full 0.50 from arrival (1.20).
+    assert!((compensated_hold_due(0.70, 0.0, TouchHoldPolicy::ConfirmingTimer) - 1.20).abs() < 1e-9);
+    // Malformed future timestamp (negative delay) or NaN: arms full 0.50 from arrival.
+    assert!((compensated_hold_due(0.20, 0.80, TouchHoldPolicy::ConfirmingTimer) - 0.70).abs() < 1e-9);
+    assert!((compensated_hold_due(0.20, f64::NAN, TouchHoldPolicy::ConfirmingTimer) - 0.70).abs() < 1e-9);
+    // DirectTimer (native & headless default) always arms now + LONG_PRESS.
+    assert!((compensated_hold_due(0.20, 0.0, TouchHoldPolicy::DirectTimer) - 0.70).abs() < 1e-9);
+}
+
+#[test]
+fn pan_velocity_and_fling_hold_use_event_timestamps_when_release_arrives_late() {
+    let mut rt = rig();
+    // Swipe moves stamped at 0.00..0.05, release stamped at 0.08 (30 ms after last move) even if
+    // the runtime clock jumped 700 ms before the release was delivered.
+    rt.touch(1, TouchPhase::Started, 100.0, 200.0, 0.0);
+    for i in 1..=5 {
+        rt.touch(1, TouchPhase::Moved, 100.0, 200.0 - 20.0 * i as f32, i as f64 * 0.01);
+    }
+    rt.frame(0.70);
+    rt.touch(1, TouchPhase::Ended, 100.0, 100.0, 0.08);
+    let lifted = offset(&rt);
+    for _ in 0..30 { rt.frame(1.0 / 60.0); }
+    assert!(offset(&rt) > lifted + 50.0, "event timestamps keep fling alive despite late delivery: {} after {lifted}", offset(&rt));
+}
+
+#[test]
+fn web_touch_event_time_maps_timestamps_and_falls_back_on_malformed_values() {
+    use crate::platform::web_math::web_touch_event_time;
+    // Prompt press at perf=1000 ms (rt_now=0.50 s) -> 0.50 s.
+    let t_down = web_touch_event_time(0.50, 1000.0, 1000.0);
+    assert!((t_down - 0.50).abs() < 1e-9);
+    // Release stamped 80 ms later (1080 ms) delivered 700 ms late (perf=1700 ms, rt_now=1.20 s)
+    // keeps the exact 80 ms delta (0.58 s - 0.50 s).
+    let t_up = web_touch_event_time(1.20, 1080.0, 1700.0);
+    assert!((t_up - 0.58).abs() < 1e-9);
+    assert!(((t_up - t_down) - 0.08).abs() < 1e-9);
+    // Future timestamp is clamped to perf_now (no negative age).
+    assert!((web_touch_event_time(1.20, 1900.0, 1700.0) - 1.20).abs() < 1e-9);
+    // Malformed or non-positive timestamps fall back to rt_now (delivery time).
+    assert!((web_touch_event_time(1.20, f64::NAN, 1700.0) - 1.20).abs() < 1e-9);
+    assert!((web_touch_event_time(1.20, 0.0, 1700.0) - 1.20).abs() < 1e-9);
+    assert!((web_touch_event_time(1.20, -10.0, 1700.0) - 1.20).abs() < 1e-9);
+    assert!((web_touch_event_time(1.20, 1080.0, 0.0) - 1.20).abs() < 1e-9);
 }

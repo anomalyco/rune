@@ -1970,3 +1970,145 @@ test('showMenu dismissal falls back to canvas only when no field is focused and 
         bridge.destroy(h);
     }
 });
+
+test('takeTouchTimestamp captures PointerEvent.timeStamp in FIFO order, expands coalesced moves, clamps and bounds to 64', () => {
+    const { win, canvas, h } = setup();
+    const origPerf = globalThis.performance;
+    let perfNow = 1000;
+    Object.defineProperty(globalThis, 'performance', {
+        value: { now: () => perfNow },
+        configurable: true,
+    });
+    try {
+        // Non-touch and non-canvas events are ignored.
+        win.dispatchEvent({ type: 'pointerdown', target: canvas, pointerType: 'mouse', pointerId: 1, timeStamp: 100 });
+        win.dispatchEvent({ type: 'pointerdown', target: {}, pointerType: 'touch', pointerId: 1, timeStamp: 100 });
+        assert.ok(Number.isNaN(bridge.takeTouchTimestamp(h, 1)));
+
+        // Coalesced pointermove expands in order; chorded button !== -1 is skipped.
+        win.dispatchEvent({ type: 'pointerdown', target: canvas, pointerType: 'touch', pointerId: 7, timeStamp: 200 });
+        win.dispatchEvent({
+            type: 'pointermove',
+            target: canvas,
+            pointerType: 'touch',
+            pointerId: 7,
+            button: -1,
+            timeStamp: 230,
+            getCoalescedEvents: () => [{ timeStamp: 210 }, { timeStamp: 220 }],
+        });
+        win.dispatchEvent({ type: 'pointermove', target: canvas, pointerType: 'touch', pointerId: 7, button: 0, timeStamp: 225 });
+        win.dispatchEvent({ type: 'pointerup', target: canvas, pointerType: 'touch', pointerId: 7, timeStamp: 1500 });
+        assert.equal(bridge.takeTouchTimestamp(h, 7), 200);
+        assert.equal(bridge.takeTouchTimestamp(h, 7), 210);
+        assert.equal(bridge.takeTouchTimestamp(h, 7), 220);
+        // Future timestamp (1500 > perfNow 1000) is clamped to performance.now().
+        assert.equal(bridge.takeTouchTimestamp(h, 7), 1000);
+        assert.ok(Number.isNaN(bridge.takeTouchTimestamp(h, 7)));
+
+        // Malformed / non-positive timestamps return NaN.
+        win.dispatchEvent({ type: 'pointerdown', target: canvas, pointerType: 'touch', pointerId: 9, timeStamp: 0 });
+        win.dispatchEvent({ type: 'pointerup', target: canvas, pointerType: 'touch', pointerId: 9, timeStamp: -5 });
+        assert.ok(Number.isNaN(bridge.takeTouchTimestamp(h, 9)));
+        assert.ok(Number.isNaN(bridge.takeTouchTimestamp(h, 9)));
+
+        // Bounded FIFO (max 64): pushing 70 drops the oldest 6.
+        for (let i = 1; i <= 70; i++) {
+            win.dispatchEvent({ type: 'pointermove', target: canvas, pointerType: 'touch', pointerId: 3, button: -1, timeStamp: i * 10 });
+        }
+        assert.equal(bridge.takeTouchTimestamp(h, 3), 70);
+    } finally {
+        Object.defineProperty(globalThis, 'performance', { value: origPerf, configurable: true });
+        bridge.destroy(h);
+    }
+});
+
+test('scheduleTouchHoldConfirm uses background postTask, re-yields up to 2 turns on isInputPending, and cancels cleanly', async () => {
+    const { events, h } = setup();
+    const origScheduler = globalThis.scheduler;
+    const origNav = globalThis.navigator;
+    const tasks = [];
+    let pendingChecks = 0;
+    let inputPendingCalls = 0;
+    Object.defineProperty(globalThis, 'scheduler', {
+        value: {
+            postTask(fn, opts) {
+                const entry = { fn, opts, aborted: false };
+                opts?.signal?.addEventListener?.('abort', () => { entry.aborted = true; });
+                tasks.push(entry);
+                return new Promise((resolve, reject) => {
+                    entry.run = () => {
+                        if (entry.aborted) { reject(new Error('aborted')); return; }
+                        fn();
+                        resolve();
+                    };
+                });
+            },
+        },
+        configurable: true,
+    });
+    Object.defineProperty(globalThis, 'navigator', {
+        value: {
+            ...origNav,
+            scheduling: {
+                isInputPending(opts) {
+                    assert.deepEqual(opts, { includeContinuous: true });
+                    inputPendingCalls += 1;
+                    return pendingChecks-- > 0;
+                },
+            },
+        },
+        configurable: true,
+    });
+    try {
+        // Re-yields at most 2 times when input stays pending, then confirms on turn 3.
+        pendingChecks = 5;
+        bridge.scheduleTouchHoldConfirm(h, 42);
+        assert.equal(tasks.length, 1);
+        assert.equal(tasks[0].opts.priority, 'background');
+        tasks[0].run();
+        assert.equal(events.length, 0);
+        assert.equal(tasks.length, 2);
+        tasks[1].run();
+        assert.equal(events.length, 0);
+        assert.equal(tasks.length, 3);
+        tasks[2].run();
+        assert.deepEqual(events, [{ kind: 'touch_hold_confirm', attempt: 42 }]);
+        assert.equal(inputPendingCalls, 2);
+
+        // Simulated 700 ms stall where queued pointerup drains and cancels confirmation before it runs.
+        events.length = 0;
+        tasks.length = 0;
+        pendingChecks = 0;
+        bridge.scheduleTouchHoldConfirm(h, 43);
+        assert.equal(tasks.length, 1);
+        bridge.cancelTouchHoldConfirm(h);
+        assert.equal(tasks[0].aborted, true);
+        tasks[0].run();
+        assert.deepEqual(events, []);
+    } finally {
+        Object.defineProperty(globalThis, 'scheduler', { value: origScheduler, configurable: true });
+        Object.defineProperty(globalThis, 'navigator', { value: origNav, configurable: true });
+        bridge.destroy(h);
+    }
+});
+
+test('scheduleTouchHoldConfirm falls back to setTimeout(0) when scheduler.postTask is unavailable and clears on destroy', async () => {
+    const { events, h } = setup();
+    const origScheduler = globalThis.scheduler;
+    Object.defineProperty(globalThis, 'scheduler', { value: undefined, configurable: true });
+    try {
+        bridge.scheduleTouchHoldConfirm(h, 7);
+        assert.equal(events.length, 0, 'must not confirm synchronously');
+        await new Promise(resolve => setTimeout(resolve, 15));
+        assert.deepEqual(events, [{ kind: 'touch_hold_confirm', attempt: 7 }]);
+
+        // destroy cancels any in-flight fallback timer.
+        events.length = 0;
+        bridge.scheduleTouchHoldConfirm(h, 8);
+        bridge.destroy(h);
+        await new Promise(resolve => setTimeout(resolve, 15));
+        assert.deepEqual(events, []);
+    } finally {
+        Object.defineProperty(globalThis, 'scheduler', { value: origScheduler, configurable: true });
+    }
+});
