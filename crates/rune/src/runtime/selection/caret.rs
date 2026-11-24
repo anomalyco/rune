@@ -273,15 +273,20 @@ impl RuntimeCore {
             if delta == 0.0 { continue; }
             let stick = self.tree.nodes[v].scroll.is_some_and(|s| s.stick_bottom);
             let Some(st) = self.scroll.scrolls.get_mut(&self.tree.nodes[v].id) else { continue };
-            if horizontal {
+            let moved = if horizontal {
+                let before = st.x.offset;
                 st.x.offset = (st.x.offset + st.x.toward(-delta)).clamp(0.0, st.x.max);
                 st.x.motion = XMotion::Rest;
+                (st.x.offset - before).abs() > 1e-6
             } else {
+                let before = st.offset;
                 st.offset = (st.offset + delta).clamp(0.0, st.max);
                 st.land(stick);
                 scrolled = true;
-            }
+                (st.offset - before).abs() > 1e-6
+            };
             st.moved();
+            if moved { st.note_source(crate::ScrollSource::Programmatic); }
         }
         if scrolled && self.virtual_window_changed() {
             self.commit_virtual_scroll(app, &Tx::default());

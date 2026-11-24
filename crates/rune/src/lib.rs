@@ -124,6 +124,7 @@ pub use el::grid;
 pub use el::hairline;
 pub use el::icon;
 pub use el::layout_watch::ScrollPos;
+pub use el::layout_watch::ScrollSource;
 pub use el::motion::MotionIntent;
 pub use el::rich;
 pub use el::row;

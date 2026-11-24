@@ -66,7 +66,7 @@ pub struct Tx {
     /// Scroll viewports to send to their bottom: (key, animated).
     pub(crate) scroll_bottom: Vec<(String, bool)>,
     /// Scroll viewports to page: (key, pages).
-    pub(crate) scroll_pages: Vec<(String, i32)>,
+    pub(crate) scroll_pages: Vec<(String, i32, crate::ScrollSource)>,
     /// Scroll viewports to move to offsets (`Tx::scroll_to` and kin).
     pub(crate) scroll_offsets: Vec<crate::runtime::ScrollRequest>,
     /// Scroll viewports to halt where they stand (`Tx::stop_scroll`).

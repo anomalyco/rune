@@ -8,6 +8,7 @@ struct Dev {
     direct: bool,
     scrolling: bool,
     by_hand: bool,
+    source: crate::ScrollSource,
     shrink_cut: bool,
     laid: Option<f64>,
     mode: DevMode,
@@ -113,9 +114,11 @@ fn walk(acts: &[Act]) {
                 dev.by_hand = true;
             }
             Act::Coast(moving) => {
-                let _ = step(&mut st.mode, Event::Coast { moving: *moving });
+                let source = if *moving { crate::ScrollSource::Momentum } else { crate::ScrollSource::None };
+                let _ = step(&mut st.mode, Event::Coast { moving: *moving, source });
                 dev.scrolling = *moving;
                 dev.by_hand |= *moving;
+                dev.source = merge_source(dev.source, source);
                 dev.direct = false;
             }
             Act::Still => { let _ = step(&mut st.mode, Event::Still); dev.scrolling = false; }
@@ -129,7 +132,13 @@ fn walk(acts: &[Act]) {
             Act::Take => {
                 let effects: Vec<Effect> = step(&mut st.mode, Event::Take).into_iter().collect();
                 let was = std::mem::take(&mut dev.by_hand);
-                assert_eq!(effects, if was { vec![Effect::Tell] } else { vec![] }, "{acts:?}, event {i}: the take");
+                let src = std::mem::take(&mut dev.source);
+                let expected = if was || src != crate::ScrollSource::None {
+                    vec![Effect::Tell { by_hand: was, source: src }]
+                } else {
+                    vec![]
+                };
+                assert_eq!(effects, expected, "{acts:?}, event {i}: the take");
             }
             Act::Rest => { st.mode = st.mode.to_rest(); dev.write(DevMode::Rest); }
             Act::Halt => { st.halt(); dev.halt(); }
@@ -148,6 +157,7 @@ fn walk(acts: &[Act]) {
         assert_eq!(st.mode.hand().direct, dev.direct, "direct: {at}");
         assert_eq!(st.mode.hand().scrolling, dev.scrolling, "scrolling: {at}");
         assert_eq!(st.mode.hand().by_hand, dev.by_hand, "by_hand: {at}");
+        assert_eq!(st.mode.hand().source, dev.source, "source: {at}");
         assert_eq!(st.mode.hand().shrink_cut, dev.shrink_cut, "shrink_cut: {at}");
         assert_eq!(st.mode.hand().laid, dev.laid, "laid: {at}");
         assert_eq!(production_mode(st.mode), dev.mode, "mode: {at}");
@@ -210,7 +220,10 @@ fn a_hand_move_is_told_once_and_the_steps_keep_growing_it() {
     let _ = step(&mut mode, Event::Step { x_v: 0.0 });
     assert!(!mode.hand().scrolling, "the step moved nothing");
     assert!(mode.hand().by_hand, "the watcher still has to hear it");
-    assert_eq!(step(&mut mode, Event::Take).into_iter().collect::<Vec<_>>(), [Effect::Tell]);
+    assert_eq!(
+        step(&mut mode, Event::Take).into_iter().collect::<Vec<_>>(),
+        [Effect::Tell { by_hand: true, source: crate::ScrollSource::None }]
+    );
     assert_eq!(step(&mut mode, Event::Take).into_iter().collect::<Vec<_>>(), []);
 }
 
@@ -219,10 +232,51 @@ fn a_hand_move_is_told_once_and_the_steps_keep_growing_it() {
 fn a_motion_change_keeps_the_hands_latches() {
     let mut mode = ScrollMode::default();
     let _ = step(&mut mode, Event::Moved);
+    let _ = step(&mut mode, Event::Source(crate::ScrollSource::EdgeReturn));
     let _ = step(&mut mode, Event::Laid(Some(300.0)));
     for changed in [mode.to_glide(1.0, GlideTo::Offset(40.0)), mode.to_momentum(2.0), mode.to_pinned(), mode.to_rest()] {
-        assert!(changed.hand().direct && changed.hand().laid == Some(300.0), "{changed:?}");
+        assert!(changed.hand().direct && changed.hand().source == crate::ScrollSource::EdgeReturn && changed.hand().laid == Some(300.0), "{changed:?}");
         mode = changed;
     }
-    assert!(mode.hand().direct && mode.hand().laid == Some(300.0));
+    assert!(mode.hand().direct && mode.hand().source == crate::ScrollSource::EdgeReturn && mode.hand().laid == Some(300.0));
+}
+
+/// Multiple scroll causes in one frame collapse by priority:
+/// `Direct > Momentum > EdgeReturn > Programmatic > None`, and `Take` clears it back to `None`.
+#[test]
+fn scroll_source_priority_resolves_highest_and_take_clears_it() {
+    use crate::ScrollSource;
+
+    let mut mode = ScrollMode::default();
+    let _ = step(&mut mode, Event::Source(ScrollSource::Programmatic));
+    assert_eq!(mode.hand().source, ScrollSource::Programmatic);
+    let _ = step(&mut mode, Event::Source(ScrollSource::None));
+    assert_eq!(mode.hand().source, ScrollSource::Programmatic);
+    let _ = step(&mut mode, Event::Source(ScrollSource::EdgeReturn));
+    assert_eq!(mode.hand().source, ScrollSource::EdgeReturn);
+    let _ = step(&mut mode, Event::Source(ScrollSource::Programmatic));
+    assert_eq!(mode.hand().source, ScrollSource::EdgeReturn);
+    let _ = step(&mut mode, Event::Coast { moving: true, source: ScrollSource::Momentum });
+    assert_eq!(mode.hand().source, ScrollSource::Momentum);
+    let _ = step(&mut mode, Event::Coast { moving: false, source: ScrollSource::EdgeReturn });
+    assert_eq!(mode.hand().source, ScrollSource::Momentum);
+    let _ = step(&mut mode, Event::Source(ScrollSource::Direct));
+    assert_eq!(mode.hand().source, ScrollSource::Direct);
+    let _ = step(&mut mode, Event::Coast { moving: true, source: ScrollSource::Momentum });
+    assert_eq!(mode.hand().source, ScrollSource::Direct);
+
+    assert_eq!(
+        step(&mut mode, Event::Take).into_iter().collect::<Vec<_>>(),
+        [Effect::Tell { by_hand: true, source: ScrollSource::Direct }]
+    );
+    assert_eq!(mode.hand().source, ScrollSource::None);
+    assert_eq!(step(&mut mode, Event::Take).into_iter().collect::<Vec<_>>(), []);
+
+    // A pure Programmatic source reports without setting by_hand.
+    let _ = step(&mut mode, Event::Source(ScrollSource::Programmatic));
+    assert_eq!(
+        step(&mut mode, Event::Take).into_iter().collect::<Vec<_>>(),
+        [Effect::Tell { by_hand: false, source: ScrollSource::Programmatic }]
+    );
+    assert_eq!(step(&mut mode, Event::Take).into_iter().collect::<Vec<_>>(), []);
 }

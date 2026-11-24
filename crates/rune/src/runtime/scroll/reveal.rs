@@ -145,10 +145,12 @@ impl RuntimeCore {
             // A long trip cuts to a couple of viewports out first, as `Tx::scroll_to` does.
             let end = st.offset;
             let reach = scroll_bottom::GLIDE_REACH * viewport;
+            let before = st.offset;
             st.offset = start.clamp(end - reach, end + reach);
             st.mode = st.mode.to_glide(scroll_offset::retarget_v(crate::tok::motion::GLIDE, st.offset, v.unwrap_or(0.0), end), GlideTo::Offset(end));
             st.spring = None;
             st.moved();
+            if (st.offset - before).abs() > 1e-6 { st.note_source(crate::ScrollSource::Programmatic); }
             if self.virtual_window_changed() {
                 self.commit_virtual_scroll(app, &Tx { commit: Commit::Instant, ..Tx::default() });
             }
@@ -226,9 +228,11 @@ impl RuntimeCore {
         let Some(effect) = effects.into_iter().next() else { return (false, was) };
         match effect {
             requests::Effect::Move(to) => {
+                let before = scroll.offset;
                 scroll.offset = to;
                 scroll.mode = scroll.mode.to_rest();
                 scroll.moved();
+                if (scroll.offset - before).abs() > 1e-6 { scroll.note_source(crate::ScrollSource::Programmatic); }
             }
             requests::Effect::Rest => {
                 scroll.mode = scroll.mode.to_rest();

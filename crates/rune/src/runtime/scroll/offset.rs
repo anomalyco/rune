@@ -25,6 +25,7 @@ pub(crate) struct ScrollRequest {
     /// The spring it glides on, or None to jump.
     pub glide: Option<Spring>,
     pub anchor: ScrollAnchor,
+    pub source: crate::ScrollSource,
 }
 
 impl RuntimeCore {
@@ -60,7 +61,7 @@ impl RuntimeCore {
         for r in requests {
             if r.anchor != ScrollAnchor::None {
                 let Some((i, to)) = self.anchor_offset(&r.key, r.y.unwrap_or(0.0), r.anchor) else { continue };
-                jumps.push((self.tree.nodes[i].id, false, to));
+                jumps.push((self.tree.nodes[i].id, false, to, r.source));
                 anchors.push((jumps.len() - 1, r.key, r.y.unwrap_or(0.0), r.anchor));
                 if let Some(st) = self.scroll.scrolls.get_mut(&self.tree.nodes[i].id) { st.halt(); }
                 continue;
@@ -79,11 +80,13 @@ impl RuntimeCore {
                     // A long trip cuts to a couple of viewports out first, as a glide to the bottom does.
                     let reach = scroll_bottom::GLIDE_REACH * view_w;
                     let end = to.min(st.x.max);
+                    let before = st.x.offset;
                     st.x.offset = st.x.offset.clamp(end - reach, end + reach);
+                    if (st.x.offset - before).abs() > 1e-6 { st.note_source(r.source); }
                     st.x.motion = XMotion::Glide { v: retarget_v(spring, st.x.offset, v, end), aim: to };
                 } else {
                     st.x.motion = XMotion::Rest;
-                    jumps.push((id, true, to));
+                    jumps.push((id, true, to, r.source));
                 }
             }
             if let Some(y) = r.y.filter(|_| axes.y()) {
@@ -91,12 +94,14 @@ impl RuntimeCore {
                 if let Some(spring) = glide && (to.min(st.max) - st.offset).abs() > 0.5 {
                     let reach = scroll_bottom::GLIDE_REACH * view_h;
                     let end = to.min(st.max);
+                    let before = st.offset;
                     st.offset = st.offset.clamp(end - reach, end + reach);
+                    if (st.offset - before).abs() > 1e-6 { st.note_source(r.source); }
                     let v = retarget_v(spring, st.offset, st.glide().or_else(|| st.mode.wheel().map(|c| c.velocity() as f32)).unwrap_or(0.0), end);
                     st.mode = st.mode.to_glide(v, GlideTo::Offset(to));
                 } else {
                     st.halt();
-                    jumps.push((id, false, to));
+                    jumps.push((id, false, to, r.source));
                 }
             }
         }
@@ -298,6 +303,12 @@ impl ScrollState {
     /// A hand or an app put the offset where it is.
     pub(in crate::runtime) fn moved(&mut self) { let _ = mode::step(&mut self.mode, mode::Event::Moved); }
 
+    /// Records what caused the viewport's offset to move this frame, keeping the highest-priority
+    /// source.
+    pub(in crate::runtime) fn note_source(&mut self, source: crate::ScrollSource) {
+        let _ = mode::step(&mut self.mode, mode::Event::Source(source));
+    }
+
     /// The viewport was concealed: nothing moved it, whatever a hand did before.
     pub(in crate::runtime) fn still(&mut self) { let _ = mode::step(&mut self.mode, mode::Event::Still); }
 
@@ -314,7 +325,11 @@ impl ScrollState {
     /// changed height, carrying a running glide's target offset along with it.
     pub(in crate::runtime) fn shift_anchor(&mut self, delta: f32) {
         let delta = f64::from(delta);
+        let before = self.offset;
         self.offset = (self.offset + delta).max(0.0);
+        if (self.offset - before).abs() > 1e-6 {
+            self.note_source(crate::ScrollSource::Programmatic);
+        }
         if let ScrollMode::Glide { to: GlideTo::Offset(to) | GlideTo::ShrunkEnd(to), .. } = &mut self.mode {
             *to = (*to + delta).max(0.0);
         }
@@ -337,8 +352,8 @@ impl ScrollState {
 }
 
 impl requests::ScrollTables {
-    pub(super) fn apply_jumps(&mut self, nodes: &[Node], now: f64, jumps: &[(NodeId, bool, f64)]) {
-        for &(id, horizontal, to) in jumps {
+    pub(super) fn apply_jumps(&mut self, nodes: &[Node], now: f64, jumps: &[(NodeId, bool, f64, crate::ScrollSource)]) {
+        for &(id, horizontal, to, source) in jumps {
             let stick = nodes.iter().find(|n| n.id == id).and_then(|n| n.scroll).is_some_and(|s| s.stick_bottom);
             let Some(st) = self.scrolls.get_mut(&id) else { continue };
             st.moved();
@@ -351,7 +366,11 @@ impl requests::ScrollTables {
                 // request in the same transaction to glide from the new offset.
                 if st.glide().is_none() { st.land(stick); }
             }
-            if (if horizontal { st.x.offset } else { st.offset } - was).abs() > 1e-3 {
+            let moved = (if horizontal { st.x.offset } else { st.offset } - was).abs();
+            if moved > 1e-6 {
+                st.note_source(source);
+            }
+            if moved > 1e-3 {
                 // The arm's due is taken back from the state each frame (`step_nudges`), so a
                 // later arm in the same frame wins and nothing here has to keep it.
                 let _ = st.nudge.arm(now);

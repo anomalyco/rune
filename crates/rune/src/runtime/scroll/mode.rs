@@ -35,10 +35,29 @@ pub(in crate::runtime) struct Hand {
     /// A hand or an app's instant jump moved it since `El::on_scroll_offset` was last told,
     /// across the frame's steps; taken once at the frame's end.
     pub(in crate::runtime) by_hand: bool,
+    /// Highest-priority cause that moved this viewport since `El::on_scroll_offset` was last told,
+    /// across the frame's steps; taken once at the frame's end.
+    pub(in crate::runtime) source: crate::ScrollSource,
     /// A hand scrolled while the growth stack moved: no shrink glide until it settles.
     pub(in crate::runtime) shrink_cut: bool,
     /// The growth stack's layout end while its rows still move (see `ease_to_shrunk_end`).
     pub(in crate::runtime) laid: Option<f64>,
+}
+
+/// Priority rank for combining multiple scroll causes in the same frame:
+/// `Direct > Momentum > EdgeReturn > Programmatic > None`.
+fn source_rank(source: crate::ScrollSource) -> u8 {
+    match source {
+        crate::ScrollSource::None => 0,
+        crate::ScrollSource::Programmatic => 1,
+        crate::ScrollSource::EdgeReturn => 2,
+        crate::ScrollSource::Momentum => 3,
+        crate::ScrollSource::Direct => 4,
+    }
+}
+
+fn merge_source(current: crate::ScrollSource, next: crate::ScrollSource) -> crate::ScrollSource {
+    if source_rank(next) > source_rank(current) { next } else { current }
 }
 
 impl Default for ScrollMode {
@@ -150,10 +169,12 @@ impl ScrollMode {
 pub(in crate::runtime) enum Event {
     /// A hand or an app put the offset where it is.
     Moved,
+    /// Record what moved the viewport's offset this frame, keeping the highest-priority source.
+    Source(crate::ScrollSource),
     /// A touch holds the viewport (`El::scroll` under a finger).
     Hold,
-    /// A touch's coast moved it (`moving`) or came to rest.
-    Coast { moving: bool },
+    /// A touch's coast moved it (`moving`) or came to rest, with its motion `source`.
+    Coast { moving: bool, source: crate::ScrollSource },
     /// The viewport was concealed: nothing moved it, whatever a hand had done before.
     Still,
     /// A scroll step began: the growth stack is `moving`, so a hand's scroll cuts the shrink
@@ -164,7 +185,7 @@ pub(in crate::runtime) enum Event {
     Step { x_v: f32 },
     /// The growth stack's layout end this frame.
     Laid(Option<f64>),
-    /// `El::on_scroll_offset` asks for a hand move to report.
+    /// `El::on_scroll_offset` asks for the frame's hand move and scroll source to report.
     Take,
     /// The motion stops, unless the viewport follows its bottom.
     Halt,
@@ -176,25 +197,30 @@ pub(in crate::runtime) enum Event {
     Unpin,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::runtime) enum Effect {
-    /// `El::on_scroll_offset`'s handler hears of a hand move at the frame's end.
-    Tell,
+    /// `El::on_scroll_offset`'s handler hears of this frame's scroll at the frame's end.
+    Tell { by_hand: bool, source: crate::ScrollSource },
 }
 
 /// Folds `event` into `mode`, returning what the caller should carry out.
 pub(in crate::runtime) fn step(mode: &mut ScrollMode, event: Event) -> Effects<Effect> {
     match event {
         Event::Moved => mode.hand_mut().direct = true,
+        Event::Source(source) => {
+            let hand = mode.hand_mut();
+            hand.source = merge_source(hand.source, source);
+        }
         Event::Hold => {
             let hand = mode.hand_mut();
             hand.scrolling = true;
             hand.by_hand = true;
         }
-        Event::Coast { moving } => {
+        Event::Coast { moving, source } => {
             let hand = mode.hand_mut();
             hand.scrolling = moving;
             hand.by_hand |= moving;
+            hand.source = merge_source(hand.source, source);
             hand.direct = false;
         }
         Event::Still => mode.hand_mut().scrolling = false,
@@ -212,8 +238,11 @@ pub(in crate::runtime) fn step(mode: &mut ScrollMode, event: Event) -> Effects<E
         }
         Event::Laid(laid) => mode.hand_mut().laid = laid,
         Event::Take => {
-            return if std::mem::take(&mut mode.hand_mut().by_hand) {
-                Effects::one(Effect::Tell)
+            let hand = mode.hand_mut();
+            let by_hand = std::mem::take(&mut hand.by_hand);
+            let source = std::mem::take(&mut hand.source);
+            return if by_hand || source != crate::ScrollSource::None {
+                Effects::one(Effect::Tell { by_hand, source })
             } else {
                 Effects::none()
             };

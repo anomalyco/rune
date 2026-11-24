@@ -151,9 +151,11 @@ impl RuntimeCore {
             // A settled frame (a window showing or uncovering) lands at the end.
             if animated && !self.reduced_motion && !self.settled && st.max - start > 0.5 {
                 st.offset = start.max(st.max - GLIDE_REACH * view_h);
+                if (st.offset - start).abs() > 1e-6 { st.note_source(crate::ScrollSource::Programmatic); }
                 st.mode = st.mode.to_glide(glide.unwrap_or(0.0), GlideTo::Bottom);
                 st.spring = None;
             } else {
+                if (st.max - start).abs() > 1e-6 { st.note_source(crate::ScrollSource::Programmatic); }
                 st.offset = st.max;
                 if sticky { st.pin() } else { st.mode = st.mode.to_rest() }
             }
@@ -165,12 +167,12 @@ impl RuntimeCore {
     }
 
     /// `Tx::scroll_page`: each viewport moves by its requested pages.
-    pub(in crate::runtime) fn scroll_pages(&mut self, app: &mut dyn AppDriver, requests: Vec<(String, i32)>) {
+    pub(in crate::runtime) fn scroll_pages(&mut self, app: &mut dyn AppDriver, requests: Vec<(String, i32, crate::ScrollSource)>) {
         // This frame's commit may have changed the content: measure the extent first.
         self.step_scroll(0.0);
-        for (key, pages) in requests {
+        for (key, pages, source) in requests {
             let Some(i) = self.scroll_viewport(&key) else { continue };
-            self.page_to(i, |offset, _, page| offset + page * f64::from(pages));
+            self.page_to_with(i, source, |offset, _, page| offset + page * f64::from(pages));
         }
         if self.virtual_window_changed() {
             self.commit_virtual_scroll(app, &Tx::default());
@@ -296,8 +298,11 @@ impl RuntimeCore {
         s.edges = Some([top, bottom]);
         if s.follow && (top - target[1]).abs() < 0.01 && (bottom - target[3]).abs() < 0.01 { s.follow = false; }
         s.settle(growing, now, dt, &spec);
-        s.stepped = (s.track.h - h0).abs() > 1e-5;
-        s.moving()
+        let stepped = (s.track.h - h0).abs() > 1e-5;
+        s.stepped = stepped;
+        let moving = s.moving();
+        if stepped { st.note_source(crate::ScrollSource::Programmatic); }
+        moving
     }
 
     /// Queues `on_at_bottom` and `on_far_from_bottom` for viewports whose state changed this

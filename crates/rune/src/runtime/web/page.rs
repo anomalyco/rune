@@ -117,6 +117,7 @@ impl RuntimeCore {
         if (st.x.offset - offset).abs() < 0.01 { return false; }
         st.x.offset = offset;
         st.x.motion = XMotion::Rest;
+        st.note_source(crate::ScrollSource::Direct);
         true
     }
 

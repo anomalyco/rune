@@ -1,0 +1,1 @@
+- Scrolling: added `ScrollSource` (`None`, `Direct`, `Momentum`, `EdgeReturn`, `Programmatic`) and `ScrollPos::source` so `El::on_scroll_offset` observers can distinguish direct user drags, post-release momentum coast, elastic rubber-band edge return, and programmatic scrolls without extra callbacks on idle frames.

@@ -489,30 +489,40 @@ impl requests::ScrollTables {
         let mut moving = false;
         match st.x.motion {
             XMotion::Glide { v, aim } => {
+                let before = st.x.offset;
                 let mut glide = Some(v);
                 moving = scroll_offset::glide_axis(st.glide_spring(), &mut st.x.offset, &mut glide, aim.min(st.x.max), dt);
                 st.x.motion = glide.map_or(XMotion::Rest, |v| XMotion::Glide { v, aim });
+                if (st.x.offset - before).abs() > 1e-6 { st.note_source(crate::ScrollSource::Programmatic); }
             }
             XMotion::Momentum(v) if v.abs() > 1.0 => {
+                let before = st.x.offset;
                 let decay = (-SCROLL_DECAY * dt).exp();
                 st.x.offset += f64::from(v * (1.0 - decay) / SCROLL_DECAY);
                 let edge = st.x.offset <= 0.0 || st.x.offset >= st.x.max;
                 st.x.motion = if edge { XMotion::Rest } else { XMotion::Momentum(v * decay) };
+                if (st.x.offset - before).abs() > 1e-6 { st.note_source(crate::ScrollSource::Momentum); }
                 moving = true;
             }
             XMotion::Momentum(_) => st.x.motion = XMotion::Rest,
             XMotion::Wheel(mut curve) => {
+                let before = st.x.offset;
                 curve.follow(st.x.offset);
                 if curve.target() > st.x.max { curve.retarget(st.x.max, scale); }
                 if land_wheel { curve.advance(f64::INFINITY, false) } else { curve.advance(f64::from(dt), catch_up) }
                 st.x.offset = scroll_wheel::on_grid_or_end(curve.value(), st.x.max, scale);
                 curve.applied(st.x.offset);
                 st.moved();
+                if (st.x.offset - before).abs() > 1e-6 { st.note_source(crate::ScrollSource::Direct); }
                 if curve.done() { st.x.motion = XMotion::Rest; } else { st.x.motion = XMotion::Wheel(curve); moving = true; }
             }
             XMotion::Rest => {}
         }
-        st.x.offset = st.x.offset.clamp(0.0, st.x.max);
+        let clamped = st.x.offset.clamp(0.0, st.x.max);
+        if (clamped - st.x.offset).abs() > 1e-6 {
+            st.x.offset = clamped;
+            st.note_source(crate::ScrollSource::Programmatic);
+        }
         moving
     }
 }
@@ -563,12 +573,12 @@ impl RuntimeCore {
             }
         };
         if horizontal {
-            if dx != 0.0 { self.wheel_x(gesture, x, y, dx, ev.notch, start); }
+            if dx != 0.0 { self.wheel_x(gesture, x, y, dx, ev.notch, ev.momentum, start); }
         } else if dy != 0.0 {
             if ev.notch {
                 self.wheel_notch(x, y, dy, ev.mods, phased, start)
             } else {
-                self.wheel_from(x, y, dy, ev.mods, phased, start)
+                self.wheel_from(x, y, dy, ev.mods, phased, ev.momentum, start)
             }
         }
     }
@@ -599,7 +609,7 @@ impl RuntimeCore {
     /// Scrolls the horizontal viewport latched for `gesture` (or the innermost one at (x, y)) by
     /// `dx` points: 1:1, or for whole notches of a wheel eased there as the vertical axis does
     /// (`Self::wheel_notch`).
-    fn wheel_x(&mut self, gesture: Attempt, x: f32, y: f32, dx: f32, notch: bool, start: crate::runtime::gesture_dispatch::WheelStart) {
+    fn wheel_x(&mut self, gesture: Attempt, x: f32, y: f32, dx: f32, notch: bool, momentum: bool, start: crate::runtime::gesture_dispatch::WheelStart) {
         self.release_hover_hold();
         self.dismiss_help();
         let latched = match self.scroll.wheel_lock.owner_of(gesture) { Some(WheelOwner::Horizontal(id)) => Some(*id), _ => None }.filter(|id| {
@@ -630,7 +640,10 @@ impl RuntimeCore {
         st.x.motion = XMotion::Rest;
         st.moved();
         log_event!(self, "wheel-x {dx:.1}");
-        if st.x.offset != before { self.pointer.scroll_cancels_press(&self.tree.nodes, id); }
+        if st.x.offset != before {
+            st.note_source(if momentum { crate::ScrollSource::Momentum } else { crate::ScrollSource::Direct });
+            self.pointer.scroll_cancels_press(&self.tree.nodes, id);
+        }
     }
 
     /// Releases a scroll with velocity (vx, vy) in points per second (positive moves content
@@ -703,6 +716,7 @@ impl RuntimeCore {
         st.x.offset = offset;
         st.x.motion = XMotion::Rest;
         st.moved();
+        st.note_source(crate::ScrollSource::Programmatic);
     }
 }
 

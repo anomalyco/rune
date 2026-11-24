@@ -714,21 +714,30 @@ impl RuntimeCore {
             st.max = overflow.max(0.0);
             match st.mode {
                 ScrollMode::Pinned(_) if sp.stick_bottom => {
+                    let before = st.offset;
                     // A reader stuck on a shrinking stack's end doesn't rise with its rows' last fraction.
                     st.offset = laid.filter(|&end| st.offset <= end + 1e-6).map_or(st.max, |end| st.max.min(end));
+                    if (st.offset - before).abs() > 1e-6 { st.note_source(crate::ScrollSource::Programmatic); }
                 }
-                ScrollMode::Glide { .. } => moving |= scroll_bottom::glide(st, dt),
+                ScrollMode::Glide { .. } => {
+                    let before = st.offset;
+                    moving |= scroll_bottom::glide(st, dt);
+                    if (st.offset - before).abs() > 1e-6 { st.note_source(crate::ScrollSource::Programmatic); }
+                }
                 ScrollMode::Momentum { v, .. } if v.abs() > 1.0 => {
+                    let before = st.offset;
                     // Exact for exponential decay, so a long frame carries the same distance as
                     // the short frames it stands for.
                     let decay = (-SCROLL_DECAY * dt).exp();
                     st.offset += f64::from(v * (1.0 - decay) / SCROLL_DECAY);
                     let edge = st.offset <= 0.0 || st.offset >= st.max;
                     st.mode = if edge { st.mode.to_rest() } else { st.mode.to_momentum(v * decay) };
+                    if (st.offset - before).abs() > 1e-6 { st.note_source(crate::ScrollSource::Momentum); }
                     moving = true;
                 }
                 ScrollMode::Momentum { .. } => st.mode = st.mode.to_rest(),
                 ScrollMode::Wheel { mut curve, .. } => {
+                    let before = st.offset;
                     curve.follow(st.offset);
                     // An end that shrank under the ease takes its target with it; one that grew does
                     // too when the wheel was sent to the end of a viewport that follows its bottom
@@ -742,6 +751,7 @@ impl RuntimeCore {
                     curve.applied(st.offset);
                     // The hand moved it: the app hears a wheel's ease as the wheel.
                     st.moved();
+                    if (st.offset - before).abs() > 1e-6 { st.note_source(crate::ScrollSource::Direct); }
                     // An ease sent to a following viewport's end pins the frame it gets there, though
                     // the end growing under it restarts its segment every frame a reply grows.
                     let pins = sp.stick_bottom && curve.to_end() && st.offset == st.max;
@@ -749,7 +759,11 @@ impl RuntimeCore {
                 }
                 ScrollMode::Pinned(_) | ScrollMode::Rest(_) => {}
             }
-            st.offset = st.offset.clamp(0.0, st.max);
+            let clamped = st.offset.clamp(0.0, st.max);
+            if (clamped - st.offset).abs() > 1e-6 {
+                st.offset = clamped;
+                st.note_source(crate::ScrollSource::Programmatic);
+            }
             // Landed on a shrinking stack's new end: stick once its rows are within half a point
             // of it, not while they're still short of it. A glide that reaches the end hands it
             // to the pin.

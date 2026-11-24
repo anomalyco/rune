@@ -265,6 +265,7 @@ impl RuntimeCore {
             st.x.motion = XMotion::Rest;
             st.moved();
             if st.x.offset != before {
+                st.note_source(crate::ScrollSource::Direct);
                 moved = true;
                 self.pointer.scroll_cancels_press(&self.tree.nodes, id);
             }
@@ -277,6 +278,7 @@ impl RuntimeCore {
                 st.moved();
                 st.land(stick && by.1 >= 0.0);
                 if st.offset != before {
+                    st.note_source(crate::ScrollSource::Direct);
                     moved = true;
                     self.pointer.scroll_cancels_press(&self.tree.nodes, id);
                 }
