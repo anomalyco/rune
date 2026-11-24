@@ -282,8 +282,8 @@ impl El {
     /// Secondary release inside the captured element (right-click or macOS control-click), at a
     /// point in window points: a context menu's anchor. [`El::on_secondary_press_local`] gives
     /// the element's own points as well. The Menu key and Shift+F10 call it too, while this
-    /// element or one inside it is focused and no key handler took the key, at the focused
-    /// element's bottom-left.
+    /// element, one inside it, or a container naming it with [`El::active_descendant`] is
+    /// focused and no key handler took the key, at that element's bottom-left.
     pub fn on_secondary_press<S: 'static>(mut self, f: impl Fn(&mut S, PointerPress, &mut Tx) + 'static) -> Self {
         self.handlers.on_secondary_press = Some(Rc::new(move |s, p, tx| {
             f(downcast::<S>(s), p.window(), tx);

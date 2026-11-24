@@ -2,8 +2,8 @@
 //! file the tree has selected. `cargo run -p rune-kit --example tree` opens the window;
 //! `-- --big` loads 50,000 files instead. The stills in `demo/kit/tree-{dark,light}.png`:
 //! `-- --snap tree.png --theme dark --size 720x480 --scale 2`.
-use rune::{AppSpec, Cx, El, TextEdit, col, row, text};
-use rune_kit::{FileNode, FileTree, Kit, TextInput, Tree, TreeItem, TreeModel};
+use rune::{AppSpec, Cx, El, PointerPress, TextEdit, Tx, col, row, text};
+use rune_kit::{FileNode, FileTree, Kit, MenuItem, TextInput, Tree, TreeItem, TreeModel, context_menu, root};
 
 #[derive(Clone, Copy)]
 struct Change {
@@ -22,6 +22,8 @@ enum Status {
 struct State {
     files: TreeModel<FileNode<Change>>,
     query: TextEdit,
+    menu: Option<(String, PointerPress)>,
+    last_action: Option<String>,
 }
 
 const REPO: &[(&str, u32, u32, Status)] = &[
@@ -60,7 +62,7 @@ fn state() -> State {
         files.set_expanded("demo/kit", false);
         files.select("crates/rune-kit/src/tree.rs");
     }
-    State { files, query: TextEdit::new("") }
+    State { files, query: TextEdit::new(""), menu: None, last_action: None }
 }
 
 fn label(n: &FileNode<Change>) -> &str {
@@ -96,6 +98,8 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
                 None => item,
             }
         })
+        .scroll_bar(true)
+        .on_menu(|s: &mut State, id, p, _| s.menu = Some((id.to_owned(), p)))
         .build(s, &k)
         .grow(1.0)
         .min_h(0.0);
@@ -134,12 +138,34 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
         }
         None => col().child(text("Select a file").font(k.ty.ui).color(k.c.text_muted)),
     };
-    row()
+    let mut layer = Vec::new();
+    let target = s.menu.as_ref().map(|(id, _)| id.clone()).unwrap_or_default();
+    let copy_id = target.clone();
+    let select_id = target.clone();
+    let sidebar = context_menu("tree-menu", sidebar, s.menu.as_ref().map(|(_, p)| *p))
+        .item(MenuItem::new("Copy path").on_select_tx(move |s: &mut State, tx: &mut Tx| {
+            tx.copy(&copy_id);
+            s.last_action = Some(format!("Copied {copy_id}"));
+            s.menu = None;
+        }))
+        .item(MenuItem::new("Reveal in tree").on_select_tx(move |s: &mut State, tx: &mut Tx| {
+            s.files.reveal(&select_id, tx);
+            s.last_action = Some(format!("Revealed {select_id}"));
+            s.menu = None;
+        }))
+        .on_close(|s: &mut State| s.menu = None)
+        .build(&k, &mut layer);
+    let detail = match &s.last_action {
+        Some(action) => detail.child(text(action.clone()).font(k.ty.text_small).color(k.c.text_faint)),
+        None => detail,
+    };
+    let body = row()
         .w_full()
         .h_full()
         .fill(k.c.page)
         .child(sidebar)
-        .child(col().key("detail").grow(1.0).h_full().padding(20.0).child(detail))
+        .child(col().key("detail").grow(1.0).h_full().padding(20.0).child(detail));
+    root(body, layer)
 }
 
 fn main() {

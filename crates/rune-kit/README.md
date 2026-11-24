@@ -350,7 +350,11 @@ arrows. Selection fills, rules and type come from the kit, and they follow reduc
 builds it. Each row has an indent guide, a chevron that springs open, an icon, the label and
 trailing content (`changes`, `dot`, `badge` or any `trailing` element). Up and Down move,
 Right opens or steps in, Left closes or climbs, Home, End and Page Up and Down jump, Return and Space toggle a
-folder or open a file (`on_open`), and typing a name jumps to it. `multi_select(true)` adds
+folder or open a file (`on_open`), typing a name jumps to it, and `on_menu` handles a row's
+context menu from a secondary press, the Menu key, Shift+F10 or an assistive `ShowContextMenu`
+action. `scroll_bar(true)` (or `scroll_bar_styled(style)`) attaches a kit scroll bar to the
+tree's viewport following `rune::system_scroll_bars()`; `rune-tree--scroll-menu` in the gallery
+shows both. `multi_select(true)` adds
 Shift and Cmd. `filter(|n| ..)` keeps the folders that lead to a match open. `reveal(id, tx)`
 opens, selects and scrolls to a row, so a tree can follow an editor or a diff. Rows report
 `treeitem` with their level, open state and selection. 50,000 files scroll at 0.4 ms a frame

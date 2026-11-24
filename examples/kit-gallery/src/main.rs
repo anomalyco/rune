@@ -37,6 +37,12 @@ pub struct G {
     pub reorder: stories::sidebar::ReorderDemo,
     /// The file tree story's files.
     pub files: rune_kit::TreeModel<rune_kit::FileNode<()>>,
+    /// The scrollable tree story's files.
+    pub scroll_files: rune_kit::TreeModel<rune_kit::FileNode<()>>,
+    /// Open tree context menu: (story key, row id, anchor point).
+    pub tree_menu: Option<(&'static str, String, rune::PointerPress)>,
+    /// Last context-menu action picked in the tree story.
+    pub tree_action: Option<String>,
     /// The split-view story's sidebar and inspector panes.
     pub split_sidebar: rune_kit::PaneState,
     pub split_inspector: rune_kit::PaneState,
@@ -77,6 +83,9 @@ fn init() -> G {
         combo: Default::default(),
         reorder: Default::default(),
         files: files(),
+        scroll_files: scroll_files(),
+        tree_menu: None,
+        tree_action: None,
         split_sidebar: rune_kit::PaneState::new(180.0).range(120.0, 280.0),
         split_inspector: rune_kit::PaneState::new(170.0).range(120.0, 260.0),
         table: {
@@ -98,6 +107,32 @@ fn files() -> rune_kit::TreeModel<rune_kit::FileNode<()>> {
     let mut m = rune_kit::FileTree::new().compact_folders(false).build(paths.map(|p| (p, ())));
     m.expand_to("src/util/format.ts");
     m.select("src/util/format.ts");
+    m
+}
+
+/// A deeper checkout that overflows its viewport, for the scrollable tree and context-menu story.
+fn scroll_files() -> rune_kit::TreeModel<rune_kit::FileNode<()>> {
+    let paths = [
+        "crates/rune/src/el.rs",
+        "crates/rune/src/focus.rs",
+        "crates/rune/src/runtime.rs",
+        "crates/rune-kit/src/scroll_bar.rs",
+        "crates/rune-kit/src/tree.rs",
+        "crates/rune-kit/src/tree/meta.rs",
+        "crates/rune-kit/src/tree/view.rs",
+        "crates/rune-kit/src/overlays/menu.rs",
+        "crates/rune-kit/src/overlays/popover.rs",
+        "examples/kit-gallery/src/main.rs",
+        "examples/kit-gallery/src/stories.rs",
+        "themes/opencode/src/icons.rs",
+        "themes/opencode/src/tree_icons.rs",
+        "Cargo.toml",
+        "CHANGELOG.md",
+        "README.md",
+    ];
+    let mut m = rune_kit::FileTree::new().key("scroll-files").build(paths.map(|p| (p, ())));
+    m.expand_all();
+    m.select("crates/rune-kit/src/tree/view.rs");
     m
 }
 

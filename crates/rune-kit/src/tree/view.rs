@@ -2,9 +2,9 @@ use std::borrow::Cow;
 use std::f32::consts::FRAC_PI_2;
 use std::rc::Rc;
 
-use rune::{Color, El, GrowthSpec, Icon, KeyEvent, ScrollSpec, Span, TextStyle, Tx, col, el, icon, rich, row, text};
+use rune::{Color, El, GrowthSpec, Icon, KeyEvent, PointerPress, ScrollSpec, Span, TextStyle, Tx, col, el, icon, rich, row, text};
 
-use crate::Kit;
+use crate::{Kit, ScrollBarStyle};
 
 use super::{FileNode, TreeKey, TreeModel, TreeRow};
 
@@ -309,6 +309,7 @@ impl TreeStyle {
 
 type RowFn<T> = Rc<dyn for<'a> Fn(&T, &TreeRow<'a>) -> TreeItem>;
 type IdFn<S> = Rc<dyn Fn(&mut S, &str, &mut Tx)>;
+type MenuFn<S> = Rc<dyn Fn(&mut S, &str, PointerPress, &mut Tx)>;
 
 trait TreeBind {
     fn bind_virtual_rows(&self, rows: El, count: usize, style: TreeStyle, kit: Rc<Kit>) -> El;
@@ -323,12 +324,18 @@ struct TreeHandlers<S, T> {
     row: Option<RowFn<T>>,
     on_select: Option<IdFn<S>>,
     on_open: Option<IdFn<S>>,
+    on_menu: Option<MenuFn<S>>,
 }
 
 impl<S: 'static, T: 'static> TreeBind for TreeHandlers<S, T> {
     fn bind_virtual_rows(&self, rows: El, count: usize, style: TreeStyle, kit: Rc<Kit>) -> El {
         let (get, get_mut, label) = (self.get, self.get_mut, self.label);
-        let (row_fn, sel, open) = (self.row.clone(), self.on_select.clone(), self.on_open.clone());
+        let (row_fn, sel, open, menu) = (
+            self.row.clone(),
+            self.on_select.clone(),
+            self.on_open.clone(),
+            self.on_menu.clone(),
+        );
         let build_row = move |s: &S, i: usize| -> El {
             let m = get(s);
             let Some((data, r)) = m.row(i) else { return el() };
@@ -347,7 +354,11 @@ impl<S: 'static, T: 'static> TreeBind for TreeHandlers<S, T> {
                 if let Some(f) = &sel { f(s, &pick, tx); }
             });
             if !openable && let Some(f) = open.clone() {
-                e = e.on_double_press_tx(move |s: &mut S, tx: &mut Tx| f(s, &id, tx));
+                let target = id.clone();
+                e = e.on_double_press_tx(move |s: &mut S, tx: &mut Tx| f(s, &target, tx));
+            }
+            if let Some(f) = menu.clone() {
+                e = e.on_secondary_press(move |s: &mut S, p: PointerPress, tx: &mut Tx| f(s, &id, p, tx));
             }
             e
         };
@@ -392,10 +403,18 @@ impl<S: 'static, T: 'static> TreeBind for TreeHandlers<S, T> {
     }
 }
 
+#[derive(Clone, Copy)]
+enum TreeScrollBar {
+    None,
+    Kit,
+    Styled(ScrollBarStyle),
+}
+
 struct TreeCore {
     style: Option<TreeStyle>,
     name: Option<String>,
     rtl: bool,
+    scroll_bar: TreeScrollBar,
 }
 
 impl TreeCore {
@@ -414,6 +433,11 @@ impl TreeCore {
                 style.row_height,
             )
             .child(rows);
+        let viewport = match self.scroll_bar {
+            TreeScrollBar::None => viewport,
+            TreeScrollBar::Kit => crate::ScrollBar::scroll_bar_styled(viewport, ScrollBarStyle::from_kit(k)),
+            TreeScrollBar::Styled(bar) => crate::ScrollBar::scroll_bar_styled(viewport, bar),
+        };
         let mut root = col().key(tree_key).role("tree").focusable(true).w_full();
         if let Some(n) = self.name {
             root = root.label(n);
@@ -440,8 +464,8 @@ impl<S: 'static, T: 'static> Tree<S, T> {
     /// typing jumps by it).
     pub fn new(get: fn(&S) -> &TreeModel<T>, get_mut: fn(&mut S) -> &mut TreeModel<T>, label: fn(&T) -> &str) -> Self {
         Tree {
-            core: TreeCore { style: None, name: None, rtl: false },
-            handlers: TreeHandlers { get, get_mut, label, row: None, on_select: None, on_open: None },
+            core: TreeCore { style: None, name: None, rtl: false, scroll_bar: TreeScrollBar::None },
+            handlers: TreeHandlers { get, get_mut, label, row: None, on_select: None, on_open: None, on_menu: None },
         }
     }
     /// What each row shows; by default its label alone.
@@ -457,6 +481,43 @@ impl<S: 'static, T: 'static> Tree<S, T> {
     /// A row without children was double-clicked, or Return or Space pressed on it.
     pub fn on_open(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {
         self.handlers.on_open = Some(Rc::new(f));
+        self
+    }
+    /// A row's context menu was asked for: a secondary press on it, the Menu key or Shift+F10
+    /// on the cursor row, or an assistive `ShowContextMenu` action on it. `point` is in window
+    /// points; store it with the id and build a [`crate::context_menu`] there.
+    ///
+    /// ```ignore
+    /// Tree::new(|s: &App| &s.files, |s: &mut App| &mut s.files, FileNode::label)
+    ///     .on_menu(|s: &mut App, id, point, _| s.menu = Some((id.to_owned(), point)))
+    ///     .build(s, &kit)
+    /// ```
+    pub fn on_menu(mut self, f: impl Fn(&mut S, &str, PointerPress, &mut Tx) + 'static) -> Self {
+        self.handlers.on_menu = Some(Rc::new(f));
+        self
+    }
+    /// Draws a kit scroll bar on the tree's viewport using [`ScrollBarStyle::from_kit`] when
+    /// `on` is true, following [`rune::system_scroll_bars`]. Off by default.
+    ///
+    /// ```ignore
+    /// Tree::new(|s: &App| &s.files, |s: &mut App| &mut s.files, FileNode::label)
+    ///     .scroll_bar(true)
+    ///     .build(s, &kit)
+    /// ```
+    pub fn scroll_bar(mut self, on: bool) -> Self {
+        self.core.scroll_bar = if on { TreeScrollBar::Kit } else { TreeScrollBar::None };
+        self
+    }
+    /// Draws a scroll bar on the tree's viewport in `style`, following
+    /// [`rune::system_scroll_bars`].
+    ///
+    /// ```ignore
+    /// Tree::new(|s: &App| &s.files, |s: &mut App| &mut s.files, FileNode::label)
+    ///     .scroll_bar_styled(ScrollBarStyle::scroll_view(&kit))
+    ///     .build(s, &kit)
+    /// ```
+    pub fn scroll_bar_styled(mut self, style: ScrollBarStyle) -> Self {
+        self.core.scroll_bar = TreeScrollBar::Styled(style);
         self
     }
     pub fn style(mut self, s: TreeStyle) -> Self { self.core.style = Some(s); self }

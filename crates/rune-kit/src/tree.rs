@@ -16,6 +16,8 @@
 //! Tree::new(|s: &App| &s.files, |s: &mut App| &mut s.files, FileNode::label)
 //!     .row(|n, r| TreeItem::file(n, r).changes(n.data.as_ref().map_or((0, 0), |c| (c.added, c.removed))))
 //!     .on_select(|s: &mut App, id, _| s.diff.show(id))
+//!     .on_menu(|s: &mut App, id, point, _| s.menu = Some((id.to_owned(), point)))
+//!     .scroll_bar(true)
 //!     .build(s, &kit)
 //!     .h(480.0)
 //! // Following another view: open the folders above `path`, select it and scroll to it.

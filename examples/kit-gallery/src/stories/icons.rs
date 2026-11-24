@@ -105,14 +105,74 @@ pub(super) fn tree_icon_catalog(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
 
 /// Desktop's file tree: folders show only a chevron, files their type's icon, coloured on the
 /// selected row.
-pub(super) fn file_tree(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+pub(super) fn file_tree(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
     let dark = k.dark;
     let tree = Tree::new(|s: &G| &s.files, |s: &mut G| &mut s.files, FileNode::label)
         .row(move |n, r| tree_icons::item(&n.name, &n.path, n.dir, r.selected, dark))
         .style(tree_icons::style(k))
         .name("Files")
+        .scroll_bar(true)
+        .on_menu(|s: &mut G, id, p, _| s.tree_menu = Some(("files", id.to_owned(), p)))
         .build(s, k)
         .h(8.0 * 28.0 + 8.0);
+    let panel = col().w(240.0).fill(k.c.bg_base).pt(4.0).px(8.0).child(tree);
+    let menu = s.tree_menu.as_ref().filter(|(which, _, _)| *which == "files");
+    let target = menu.map(|(_, id, _)| id.clone()).unwrap_or_default();
+    let copy_id = target.clone();
+    let reveal_id = target.clone();
     // The tree's scroller: 4 points above the rows and 8 either side (`TREE_UNSAFE_CSS`).
-    col().w(240.0).fill(k.c.bg_base).pt(4.0).px(8.0).child(tree)
+    context_menu("tree-files-menu", panel, menu.map(|(_, _, p)| *p))
+        .item(MenuItem::new("Copy path").on_select_tx(move |s: &mut G, tx: &mut Tx| {
+            tx.copy(&copy_id);
+            s.tree_action = Some(format!("Copied {copy_id}"));
+            s.tree_menu = None;
+        }))
+        .item(MenuItem::new("Select row").on_select(move |s: &mut G| {
+            s.files.select(&reveal_id);
+            s.tree_action = Some(format!("Selected {reveal_id}"));
+            s.tree_menu = None;
+        }))
+        .on_close(|s: &mut G| s.tree_menu = None)
+        .build(k, layer)
+}
+
+/// A scrollable file tree with a kit scroll bar and a row context menu (right-click, Menu key
+/// or Shift+F10).
+pub(super) fn file_tree_scroll_menu(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
+    let dark = k.dark;
+    let tree = Tree::new(|s: &G| &s.scroll_files, |s: &mut G| &mut s.scroll_files, FileNode::label)
+        .row(move |n, r| tree_icons::item(&n.name, &n.path, n.dir, r.selected, dark))
+        .style(tree_icons::style(k))
+        .name("Project files")
+        .scroll_bar(true)
+        .on_menu(|s: &mut G, id, p, _| s.tree_menu = Some(("scroll", id.to_owned(), p)))
+        .build(s, k)
+        .h(8.0 * 28.0 + 8.0);
+    let menu = s.tree_menu.as_ref().filter(|(which, _, _)| *which == "scroll");
+    let target = menu.map(|(_, id, _)| id.clone()).unwrap_or_default();
+    let copy_id = target.clone();
+    let toggle_id = target.clone();
+    let is_folder = !target.is_empty() && s.scroll_files.has_children(&target);
+    let mut ctx = context_menu("tree-scroll-menu", col().w(260.0).fill(k.c.bg_base).pt(4.0).px(8.0).child(tree), menu.map(|(_, _, p)| *p))
+        .item(MenuItem::new("Copy path").on_select_tx(move |s: &mut G, tx: &mut Tx| {
+            tx.copy(&copy_id);
+            s.tree_action = Some(format!("Copied {copy_id}"));
+            s.tree_menu = None;
+        }));
+    if is_folder {
+        ctx = ctx.item(MenuItem::new("Toggle folder").on_select(move |s: &mut G| {
+            s.scroll_files.toggle(&toggle_id);
+            s.tree_action = Some(format!("Toggled {toggle_id}"));
+            s.tree_menu = None;
+        }));
+    } else {
+        ctx = ctx.item(MenuItem::new("Select row").on_select(move |s: &mut G| {
+            s.scroll_files.select(&toggle_id);
+            s.tree_action = Some(format!("Selected {toggle_id}"));
+            s.tree_menu = None;
+        }));
+    }
+    let panel = ctx.on_close(|s: &mut G| s.tree_menu = None).build(k, layer);
+    let status = s.tree_action.as_deref().unwrap_or("Right-click a row or press Shift+F10");
+    col().gap(8.0).child(panel).child(name(k, status))
 }
