@@ -220,6 +220,32 @@ pub(crate) fn contrast_preset() -> Option<SystemContrast> {
     }.map(|h| crate::color::hex(h).unwrap_or(crate::Color::BLACK));
     Some(SystemContrast { window, text, highlight, highlight_text, disabled, button: window, button_text: text, link })
 }
+/// The desktop's appearance as an app keeps it from one run to the next (`last_appearance`):
+/// light or dark (None: the desktop says neither), and whether it asks for reduced motion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Appearance {
+    pub dark: Option<bool>,
+    pub reduced_motion: bool,
+}
+
+/// Gives Rune the desktop's appearance as the app's last run saw it, before the first window:
+/// `last` is what `keep` was last given (None on a first run). Linux asks the XDG desktop portal
+/// for the appearance, over D-Bus, and a window's first frame can't wait for an answer that may
+/// take a tenth of a second (a portal that is starting) without the window coming that much
+/// later. With `last`, the first frame draws with it at once, and the portal's answer redraws
+/// the windows only when it differs (the desktop's setting changed while the app was closed).
+/// Without it, the first window waits for the portal as it did.
+///
+/// `keep` runs on a worker thread with each answer that isn't what it last had: save it where
+/// the app keeps its launch state. Windows and macOS report their appearance without a wait, so
+/// there this does nothing.
+pub fn last_appearance(last: Option<Appearance>, keep: impl FnMut(Appearance) + Send + 'static) {
+    #[cfg(all(target_os = "linux", feature = "dbus"))]
+    crate::platform::portal_appearance::last(last, Box::new(keep));
+    #[cfg(not(all(target_os = "linux", feature = "dbus")))]
+    let _ = (last, keep);
+}
+
 /// The desktop's light or dark preference where winit reports none (Linux: the XDG desktop
 /// portal's `color-scheme`). None leaves the host's own default.
 #[cfg(all(target_os = "linux", feature = "dbus"))]
