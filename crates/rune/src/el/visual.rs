@@ -102,6 +102,8 @@ pub struct VisualCold {
     pub(crate) clip_to_content: bool,
     /// `El::matched_crop`: a matched flight keeps the content at its own size, cropped.
     pub(crate) flight_crop: bool,
+    /// `El::matched_in_place`: a matched flight stays in its destination's paint order and layers.
+    pub(crate) flight_in_place: bool,
     /// `El::hold_landing_width`: an animated width change lands its contents and slides them.
     pub(crate) hold_landing: bool,
     pub(crate) row_face: Option<&'static str>,
@@ -185,6 +187,7 @@ impl Empty for VisualCold {
         instant_motion: false,
         clip_to_content: false,
         flight_crop: false,
+        flight_in_place: false,
         hold_landing: false,
         row_face: None,
         press_color: None,

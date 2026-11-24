@@ -35,6 +35,8 @@ pub(crate) struct ElCold {
     pub(crate) window_resize: Option<crate::ResizeEdge>,
     pub(crate) transition: Option<Box<Transition>>,
     pub(crate) transition_motion: Option<Box<(Anim, Anim)>>,
+    /// `El::enter_in_instant`: play this element's entrance transition in a `Tx::instant` commit.
+    pub(crate) enter_in_instant: bool,
     pub(crate) matched: Option<Rc<str>>,
     pub(crate) matched_motion: Option<Box<Anim>>,
     pub(crate) scroll: Option<ScrollSpec>,
@@ -102,6 +104,7 @@ impl Empty for ElCold {
         window_resize: None,
         transition: None,
         transition_motion: None,
+        enter_in_instant: false,
         matched: None,
         matched_motion: None,
         scroll: None,

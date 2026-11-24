@@ -427,7 +427,7 @@ impl tracks::MotionState {
             }
             self.flying.retain(|f| f.0 != to);
             self.flying.push((to, nodes[i].local));
-            self.launches.unclip(to, tx.unclipped_flights);
+            self.launches.unclip(to, tx.unclipped_flights && !nodes[i].vis.flight_in_place);
         }
     }
 

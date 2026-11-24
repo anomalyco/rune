@@ -30,6 +30,7 @@ pub(crate) struct NodeCold {
     pub(super) lead: Option<(Spring, Spring)>,
     pub(super) transition: Option<Box<Transition>>,
     pub(super) transition_motion: Option<Box<(rune_motion::Anim, rune_motion::Anim)>>,
+    pub(super) enter_in_instant: bool,
     /// `El::matched` id, with the element's own (not inherited) layout spring.
     pub(super) matched: Option<(Rc<str>, Option<Spring>)>,
     pub(super) matched_motion: Option<Box<rune_motion::Anim>>,
@@ -79,6 +80,7 @@ impl crate::cold::Empty for NodeCold {
         lead: None,
         transition: None,
         transition_motion: None,
+        enter_in_instant: false,
         matched: None,
         matched_motion: None,
         above: None, above_boundary: None, resolved_anchor: None,

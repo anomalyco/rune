@@ -60,7 +60,10 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   - Colours animate in premultiplied OKLab, and text colour leads its background (`0.5×` duration) so
     theme switches keep label contrast through the transition.
   - Nothing animates on the first frame.
-  - `Tx::instant()` applies a change with no animation (drag moves are instant by default).
+  - `Tx::instant()` applies a change with no animation (drag moves are instant by default). Opt an
+    element's entrance back in with `.enter_in_instant()` so its `El::transition` still plays while
+    layout and removals snap (first frame, `Tx::settle()`, concealing and unprompted commits still
+    land at once).
   - `El::instant_changes()` does the same for one subtree in any commit (a popup of search results),
     while the element's own entrance and exit and its colours keep their motion.
   - `Tx::color_motion(spring)` sets the spring for that change's colours (the theme switch uses calm).
@@ -1373,9 +1376,12 @@ if s.zoomed {
   uniformly to cover the moving frame (centred) and clipped to it, so a filled picture
   zooms without distorting and nothing re-lays out per frame. Text moves with its box but
   keeps its size, as under any scale, so a label doesn't pop at the swap.
-- **Above everything.** A flight paints after the rest of the window, outside its
-  ancestors' opacity, scale, blur and rounded clips, so an entering or exiting parent
-  (the grid's scale-and-fade above) never hides it.
+- **Above everything, or in place.** By default a flight paints after the rest of the
+  window, outside its ancestors' opacity, scale, blur and rounded clips, so an entering
+  or exiting parent (the grid's scale-and-fade above) never hides it. Add
+  `.matched_in_place()` to keep the flying element in its destination's paint order and
+  ancestor compositing layers instead (SwiftUI `matchedGeometryEffect` hierarchy z-order),
+  so a sliding segmented-control pill stays behind labels drawn after it.
 - **Clipping.** It keeps its destination's rectangular clips, a scroll viewport's
   included, and starts from where the source was seen after its own viewport's scroll.
 - **Interruptible.** Matching back mid-flight starts from the presented rect with its

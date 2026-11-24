@@ -201,6 +201,7 @@ impl RuntimeCore {
                     || self.scroll.scrolls.get(&n.id).is_some_and(|st| st.slack.height() > 0.0)
                     || self.motion.reveal_fading(n.id)
                     || self.subtree_exiting(i)
+                    || (!self.motion.flying.is_empty() && self.motion.flying.iter().any(|f| f.0 == n.id))
                     || (!self.motion.flights().is_empty() && self.motion.flights().iter().any(|f| f.departs(&n.path, n.key.as_deref()) || f.lands(&n.path, n.key.as_deref())))
                     || n.vis.effect.is_some()
                     // A publication or animation frame can replace texels without moving the

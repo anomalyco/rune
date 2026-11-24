@@ -328,8 +328,8 @@ pub(super) fn retire_removed_nodes(
                     collapse = Some(plan.local);
                 }
             }
-        } else if !tx.commit.lands() && flying.iter().any(|f| f.0 == old.id) {
-            // A flight paints outside its ancestors, so it can't fade with an exiting one.
+        } else if !tx.commit.lands() && !old.vis.flight_in_place && flying.iter().any(|f| f.0 == old.id) {
+            // A lifted flight paints outside its ancestors, so it can't fade with an exiting one.
             scene.remove(old.id);
         }
         old.parent = old_parent_id.and_then(|pid| node_index.get(&pid).copied());

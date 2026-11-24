@@ -107,8 +107,11 @@ impl RuntimeCore {
             }
             let node_id = self.tree.nodes[i].id;
             let node_parent = self.tree.nodes[i].parent;
-            // A flight paints outside every ancestor's layer, above the whole window.
-            let lift = flying && self.motion.flying.iter().any(|f| f.0 == node_id);
+            // A lifted flight paints outside every ancestor's layer, above the whole window.
+            // `El::matched_in_place` keeps the flight in its destination's paint order and layers.
+            let is_flight = flying && self.motion.flying.iter().any(|f| f.0 == node_id);
+            let flight_in_place = is_flight && self.tree.nodes[i].vis.flight_in_place && !self.motion.launches().launched(node_id);
+            let lift = is_flight && !flight_in_place;
             let raised = (self.tree.nodes[i].vis_flags.raise() || (tree_order && self.paint.is_lifted_anchor(i))) && !lift;
             if lift || raised {
                 self.paint.close_all_layers(&self.tree.nodes, &mut self.instances, &mut self.surfaces, &mut self.marks, self.track_marks, &mut self.text, self.commit.commit_gen(), &mut layers, &mut active_cache, &mut glyph_count);
@@ -180,8 +183,8 @@ impl RuntimeCore {
             if raised {
                 self.paint.reopen_raised_layers(&self.tree.nodes, &self.scene, &mut self.instances, self.surfaces.len(), node_parent, &mut pinh, &mut layers, s);
             }
-            let flight_dest = if lift {
-                self.motion.lift_flight_inh(&self.tree.nodes, &self.paint, &self.scene, self.commit.commit_gen(), node_id, node_parent, &mut pinh)
+            let flight_dest = if is_flight {
+                self.motion.flight_inh(&self.tree.nodes, &self.paint, &self.scene, self.commit.commit_gen(), node_id, node_parent, !flight_in_place, &mut pinh)
             } else {
                 None
             };
@@ -355,7 +358,7 @@ impl RuntimeCore {
             }
             // A matched flight scales its laid-out content uniformly to cover the moving rect,
             // centred: `k` and the centring offset in points. A launch flies at its own size.
-            let cover = if lift && n.local.w > 0.0 && n.local.h > 0.0 {
+            let cover = if is_flight && n.local.w > 0.0 && n.local.h > 0.0 {
                 pose::flight_cover(self.motion.launches(), node_id, n, rect_pt, sc)
             } else { None };
             let r_exact = rect_pt.map(snap_px);
@@ -408,7 +411,7 @@ impl RuntimeCore {
             // `El::rotate`: this subtree draws into a layer turned about its origin.
             // The layer takes the clips from above; the node's own clips apply inside, upright.
             let own_turn = p.transform.rotate;
-            let own_turn = (own_turn != 0.0 && own_turn.is_finite() && own_turn.abs() > 1e-6 && !lift).then_some(own_turn);
+            let own_turn = (own_turn != 0.0 && own_turn.is_finite() && own_turn.abs() > 1e-6 && !is_flight).then_some(own_turn);
             let turn_pivot = [centre_to[0] * s, centre_to[1] * s];
             let (node_turn, turn_index) = if pinh.turn == 0 && own_turn.is_none() {
                 (None, 0)
@@ -525,7 +528,7 @@ impl RuntimeCore {
                 paint_own,
                 visible,
                 dissolve,
-                lift,
+                is_flight,
                 own_turn,
                 node_turn.as_ref(),
                 next,
@@ -741,7 +744,7 @@ impl RuntimeCore {
             if self.tree.has_sticky {
                 self.fade_below_header(i, s);
             }
-            self.keep_painted(i, !self.paint.node_animated_icon && own_turn.is_none() && !opens_snap_layer && snap_layer == 0 && !in_cache && !skip_paint && cover.is_none() && !lift && !raised);
+            self.keep_painted(i, !self.paint.node_animated_icon && own_turn.is_none() && !opens_snap_layer && snap_layer == 0 && !in_cache && !skip_paint && cover.is_none() && !is_flight && !raised);
         }
         if !self.paint.icon_anim_mounts.is_empty() {
             self.paint.icon_anim_mounts.retain(|(id, _), _| self.tree.node_index.contains_key(id));

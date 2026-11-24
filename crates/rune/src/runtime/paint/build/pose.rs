@@ -230,7 +230,7 @@ impl RuntimeCore {
 impl crate::runtime::tracks::MotionState {
     #[inline(always)]
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn lift_flight_inh(
+    pub(super) fn flight_inh(
         &mut self,
         nodes: &[Node],
         paint: &paint_state::PaintState,
@@ -238,23 +238,20 @@ impl crate::runtime::tracks::MotionState {
         commit_gen: u64,
         node_id: NodeId,
         node_parent: Option<usize>,
+        lifted: bool,
         pinh: &mut Inh,
     ) -> Option<FlightDest> {
-        // Keep the destination's clips (consumed ones included) and offsets. Drop its
-        // ancestors' opacity, scale and blur: an entering parent's fade or scale would
-        // otherwise hide the flight or jump it off the rect it was seen at. Inside another
-        // flight, also drop that flight's cover offset and clip.
-        let [clip, fade, fade_origin] = if self.launches().flying(node_id) {
-            // A launch leaves where its clips don't reach.
-            [crate::render::NO_CLIP, [0.0; 4], pinh.fade_origin]
-        } else {
-            pinh.outer.unwrap_or_else(|| {
-                let clip = if pinh.turn != 0 { screen_clip_of(node_parent, &paint.inh_scratch, &paint.turn_scratch) } else { pinh.clip };
-                [clip, pinh.fade, pinh.fade_origin]
-            })
-        };
         let dxy = [pinh.dx - pinh.cover[0], pinh.dy - pinh.cover[1]];
-        if self.launches().launched(node_id) {
+        if lifted && self.launches().launched(node_id) {
+            let [clip, fade, fade_origin] = if self.launches().flying(node_id) {
+                // A launch leaves where its clips don't reach.
+                [crate::render::NO_CLIP, [0.0; 4], pinh.fade_origin]
+            } else {
+                pinh.outer.unwrap_or_else(|| {
+                    let clip = if pinh.turn != 0 { screen_clip_of(node_parent, &paint.inh_scratch, &paint.turn_scratch) } else { pinh.clip };
+                    [clip, pinh.fade, pinh.fade_origin]
+                })
+            };
             // Launches map their start through the still zoom at take-off and keep it throughout.
             let (scale, anchor, anchor_to) = pinh.still;
             *pinh = Inh { opacity: 1.0, paint_opacity: 1.0, hit_opacity: 1.0, clip, fade, fade_origin, paint_clip: clip, paint_fade: fade,
@@ -272,10 +269,31 @@ impl crate::runtime::tracks::MotionState {
         let k_t = (0.5 * (travel[0] + travel[1])).clamp(0.0, 1.0);
         let scale = 1.0 + (held.0 - 1.0) * k_t;
         let anc_off = ancestor_scene_offset(nodes, scene, node_parent);
-        *pinh = Inh { opacity: 1.0, paint_opacity: 1.0, hit_opacity: 1.0, clip, fade, fade_origin, paint_clip: clip, paint_fade: fade,
-            paint_fade_origin: fade_origin, rounded: None, scale, anchor: [0.0; 2], anchor_to: [0.0; 2], blur: 0.0,
-            dx: dxy[0], dy: dxy[1], cover: [0.0; 2], outer: None,
-            scale_motion: ScaleMotion::Still, scale_target: scale, scale_tracked: false, in_cache: false, skip_paint: false, turn: 0, press_off_by: [0.0; 2], snap: pixel_snap::Inherit { layer: 0, parent: None, ..pinh.snap }, ..*pinh };
+        if lifted {
+            // Keep the destination's clips (consumed ones included) and offsets. Drop its
+            // ancestors' opacity, scale and blur: an entering parent's fade or scale would
+            // otherwise hide the flight or jump it off the rect it was seen at. Inside another
+            // flight, also drop that flight's cover offset and clip.
+            let [clip, fade, fade_origin] = if self.launches().flying(node_id) {
+                [crate::render::NO_CLIP, [0.0; 4], pinh.fade_origin]
+            } else {
+                pinh.outer.unwrap_or_else(|| {
+                    let clip = if pinh.turn != 0 { screen_clip_of(node_parent, &paint.inh_scratch, &paint.turn_scratch) } else { pinh.clip };
+                    [clip, pinh.fade, pinh.fade_origin]
+                })
+            };
+            *pinh = Inh { opacity: 1.0, paint_opacity: 1.0, hit_opacity: 1.0, clip, fade, fade_origin, paint_clip: clip, paint_fade: fade,
+                paint_fade_origin: fade_origin, rounded: None, scale, anchor: [0.0; 2], anchor_to: [0.0; 2], blur: 0.0,
+                dx: dxy[0], dy: dxy[1], cover: [0.0; 2], outer: None,
+                scale_motion: ScaleMotion::Still, scale_target: scale, scale_tracked: false, in_cache: false, skip_paint: false, turn: 0, press_off_by: [0.0; 2], snap: pixel_snap::Inherit { layer: 0, parent: None, ..pinh.snap }, ..*pinh };
+        } else {
+            // In-place flight: stays inside its destination's open compositing layers, clips,
+            // rounded masks, opacity, blur and turns while blending from take-off to destination.
+            *pinh = Inh { scale, anchor: [0.0; 2], anchor_to: [0.0; 2],
+                dx: dxy[0], dy: dxy[1], cover: [0.0; 2], outer: None,
+                scale_motion: ScaleMotion::Still, scale_target: scale, scale_tracked: false,
+                press_off_by: [0.0; 2], snap: pixel_snap::Inherit { layer: 0, parent: None, ..pinh.snap }, ..*pinh };
+        }
         Some(FlightDest { held, dxy, anc_off, travel })
     }
 

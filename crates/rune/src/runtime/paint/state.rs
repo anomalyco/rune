@@ -339,6 +339,7 @@ impl PaintState {
         &mut self,
         tree: &types::TreeState,
         flying: &[(NodeId, MRect)],
+        is_launched: impl Fn(NodeId) -> bool,
         sticky_of: impl Fn(usize) -> bool,
         exiting: impl Fn(usize) -> bool,
     ) {
@@ -368,7 +369,11 @@ impl PaintState {
                 next[i] = first[parent]; first[parent] = i;
             }
         }
-        let mut lifted: Vec<usize> = flying.iter().filter_map(|(id, _)| tree.node_index.get(id).copied()).collect();
+        let mut lifted: Vec<usize> = flying
+            .iter()
+            .filter_map(|(id, _)| tree.node_index.get(id).copied())
+            .filter(|&i| !tree.nodes[i].vis.flight_in_place || is_launched(tree.nodes[i].id))
+            .collect();
         if tree.has_raise { lifted.extend((0..n).filter(|&i| tree.nodes[i].vis_flags.raise())); }
         lifted.sort_unstable();
         lifted.dedup();
