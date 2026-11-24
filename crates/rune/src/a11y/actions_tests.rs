@@ -769,7 +769,8 @@ fn delegated_a11y_action_mirrors_and_dispatches_on_web() {
     assert_eq!((opt.kind, opt.role, opt.selected), ("button", Some("option"), Some(true)));
     let tree_item = items.iter().find(|it| it.text == "src").expect("mirrored treeitem");
     assert_eq!((tree_item.kind, tree_item.role), ("button", Some("treeitem")));
-    assert!(!items.iter().any(|it| it.text == "Locked" && it.kind == "button"), "disabled option is not clickable");
+    let locked = items.iter().find(|it| it.text == "Locked").expect("mirrored disabled option");
+    assert_eq!((locked.kind, locked.role, locked.disabled), ("button", Some("option"), true));
     assert!(!items.iter().any(|it| it.text == "Caption" && it.kind == "button"), "decorative text is not a button");
 
     let opt_path = opt.path.clone();

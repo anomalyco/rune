@@ -145,14 +145,25 @@ momentum, the scroll bar, Page Down, Space, find-in-page, anchors and back/forwa
 browser's own. The canvas stays fixed to the viewport and draws the band the page is scrolled to;
 a scroll moves only that band and rebuilds nothing.
 
-Above the canvas Rune keeps a DOM mirror of the scene: landmarks (`role("main")`,
-`role("region")`, `role("navigation")`, `role("contentinfo")`), headings with their level,
-paragraphs, links and images, each at its element's place. Keys become element ids, so
+Above the canvas Rune keeps a DOM mirror of the scene: landmarks and semantic containers
+(`main`, `region`, `navigation`, `banner`, `contentinfo`, `complementary`, `article`,
+`figure`, `list`, `listitem`, `listbox`, `dialog`, `alertdialog`, `tablist`, `tabpanel`,
+`radiogroup`, `menu`, `menubar`, `tree`, `treegrid`, `toolbar`, `table`, `grid`,
+`rowgroup`, `row`, `cell`, `gridcell`, `columnheader`, `rowheader`, `form`, `search`,
+`status`, `alert`, `log`), headings with their level, paragraphs, links, images, and controls
+(buttons, `checkbox`, `switch`, `radio`, `tab`, `option`, `menuitem`, `menuitemcheckbox`,
+`menuitemradio`, `treeitem`, `combobox`, `progressbar`, `slider`, `spinbutton`), each at
+its element's place. States and values project to WAI-ARIA attributes (`aria-disabled` without
+HTML `disabled` so disabled controls stay discoverable, `aria-busy`, `aria-expanded`,
+`aria-selected`, `aria-checked`, `aria-pressed`, `aria-level`, `aria-posinset`/`aria-setsize`,
+`aria-live`, `aria-description`, and `aria-valuemin`/`aria-valuemax`/`aria-valuenow`/`aria-valuetext`),
+and in app mode keyboard focus mirrors onto the canvas's `aria-activedescendant` focus proxy
+with the same role, name, range, and states. Keys become element ids, so
 `#views` scrolls to the element keyed `views`. Its text is transparent but real, so the browser
 selects and copies it, and screen readers, crawlers and link previews read it. An element with
 `El::href(url)` is an `<a href>`: middle-click, Cmd-click and Copy Link work, and a plain click
-opens it in the same tab. Tab moves through the mirror's links and buttons; a press on one runs
-the element's handler. The page tints selections and focus rings with `--rune-selection` and
+opens it in the same tab. Tab moves through the mirror's links and buttons; a press on an enabled
+one runs the element's handler. The page tints selections and focus rings with `--rune-selection` and
 `--rune-focus`, and sets the mirror's fonts with `--rune-sans` and `--rune-mono`, so match them
 to the fonts the app draws with.
 

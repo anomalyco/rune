@@ -129,7 +129,7 @@ pub(crate) const ROLES: &[RoleSpec] = &[
     RoleSpec::new("icon", AkRole::Icon),
     RoleSpec::role("image", Role::Image),
     RoleSpec::new("textbox", AkRole::TextBoxWrapper).pointer(),
-    RoleSpec::role("slider", Role::Slider).warn_nameless().pointer(),
+    RoleSpec::role("slider", Role::Slider).warn_nameless().web_control().pointer(),
     RoleSpec::role("option", Role::ListBoxOption).warn_nameless().web_control().pointer(),
     RoleSpec::role("list", Role::List).container("ul"),
     RoleSpec::role("listbox", Role::ListBox).aria_container(),
@@ -144,19 +144,19 @@ pub(crate) const ROLES: &[RoleSpec] = &[
     RoleSpec::role("link", Role::Link).warn_nameless().pointer(),
     RoleSpec::role("menuitem", Role::MenuItem).warn_nameless().web_control().pointer(),
     RoleSpec::role("radio", Role::RadioButton).warn_nameless().web_control().pointer(),
-    RoleSpec::role("menu", Role::Menu),
+    RoleSpec::role("menu", Role::Menu).aria_container(),
     RoleSpec::role("status", Role::Status).live(LiveRegion::Polite).aria_container(),
-    RoleSpec::role("tree", Role::Tree),
+    RoleSpec::role("tree", Role::Tree).aria_container(),
     RoleSpec::role("main", Role::Main).container("main"),
     RoleSpec::role("row", Role::Row).aria_container(),
     RoleSpec::role("treeitem", Role::TreeItem).warn_nameless().web_control(),
     RoleSpec::role("checkbox", Role::CheckBox).warn_nameless().web_control().pointer(),
-    RoleSpec::role("toolbar", Role::Toolbar),
+    RoleSpec::role("toolbar", Role::Toolbar).aria_container(),
     RoleSpec::role("radiogroup", Role::RadioGroup).aria_container(),
     RoleSpec::role("progressbar", Role::ProgressIndicator),
     RoleSpec::role("note", Role::Note),
     RoleSpec::role("combobox", Role::ComboBox).warn_nameless().web_control().pointer(),
-    RoleSpec::role("gridcell", Role::GridCell),
+    RoleSpec::role("gridcell", Role::GridCell).aria_container(),
     RoleSpec::role("code", Role::Code),
     RoleSpec::role("columnheader", Role::ColumnHeader).aria_container(),
     RoleSpec::new("separator", AkRole::Separator),
@@ -164,7 +164,7 @@ pub(crate) const ROLES: &[RoleSpec] = &[
     RoleSpec::role("segment", Role::RadioButton).warn_nameless(),
     RoleSpec::role("window", Role::Window),
     RoleSpec::role("navigation", Role::Navigation).container("nav"),
-    RoleSpec::role("grid", Role::Grid),
+    RoleSpec::role("grid", Role::Grid).aria_container(),
     RoleSpec::new("none", AkRole::Omit),
     RoleSpec::role("img", Role::Image),
     RoleSpec::role("tooltip", Role::Tooltip),
@@ -172,19 +172,19 @@ pub(crate) const ROLES: &[RoleSpec] = &[
     RoleSpec::role("document", Role::Document),
     RoleSpec::role("figure", Role::Figure).container("figure"),
     RoleSpec::role("table", Role::Table).aria_container(),
-    RoleSpec::role("search", Role::Search),
+    RoleSpec::role("search", Role::Search).aria_container(),
     RoleSpec::new("searchbox", AkRole::TextBoxWrapper).pointer(),
     RoleSpec::role("complementary", Role::Complementary).container("aside"),
     RoleSpec::role("blockquote", Role::Blockquote),
     RoleSpec::role("menuitemcheckbox", Role::MenuItemCheckBox).warn_nameless().web_control().pointer(),
     RoleSpec::role("menuitemradio", Role::MenuItemRadio).warn_nameless().web_control().pointer(),
     RoleSpec::new("scrollbar", AkRole::Fallback).pointer(),
-    RoleSpec::role("spinbutton", Role::SpinButton).warn_nameless().pointer(),
-    RoleSpec::role("tabpanel", Role::TabPanel),
+    RoleSpec::role("spinbutton", Role::SpinButton).warn_nameless().web_control().pointer(),
+    RoleSpec::role("tabpanel", Role::TabPanel).aria_container(),
     RoleSpec::role("article", Role::Article).container("article"),
     RoleSpec::role("terminal", Role::Terminal),
     RoleSpec::role("banner", Role::Banner).container("header"),
-    RoleSpec::role("form", Role::Form),
+    RoleSpec::role("form", Role::Form).aria_container(),
     RoleSpec::role("contentinfo", Role::ContentInfo).container("footer"),
     RoleSpec::role("alertdialog", Role::AlertDialog).aria_container(),
     RoleSpec::role("log", Role::Log).live(LiveRegion::Polite).aria_container(),
@@ -197,11 +197,11 @@ pub(crate) const ROLES: &[RoleSpec] = &[
     RoleSpec::role("label", Role::Label),
     RoleSpec::role("paragraph", Role::Paragraph),
     RoleSpec::role("sidebar-list", Role::List),
-    RoleSpec::role("treegrid", Role::TreeGrid),
-    RoleSpec::role("rowgroup", Role::RowGroup),
+    RoleSpec::role("treegrid", Role::TreeGrid).aria_container(),
+    RoleSpec::role("rowgroup", Role::RowGroup).aria_container(),
     RoleSpec::role("cell", Role::Cell).aria_container(),
     RoleSpec::role("rowheader", Role::RowHeader).aria_container(),
-    RoleSpec::role("menubar", Role::MenuBar),
+    RoleSpec::role("menubar", Role::MenuBar).aria_container(),
     RoleSpec::role("timer", Role::Timer),
     RoleSpec::role("meter", Role::Meter),
     RoleSpec::new("sidebar-grip", AkRole::Separator),
@@ -600,9 +600,15 @@ mod tests {
         assert_eq!(container_tag("log"), Some("div"));
         assert_eq!(container_aria("log"), Some("log"));
         assert_eq!(container_aria("table"), Some("table"));
+        for role in ["menu", "menubar", "tree", "treegrid", "tabpanel", "toolbar", "grid", "gridcell", "rowgroup", "form", "search"] {
+            assert_eq!(container_tag(role), Some("div"), "expected div container_tag({role})");
+            assert_eq!(container_aria(role), Some(role), "expected container_aria({role})");
+        }
         assert_eq!(container_aria("main"), None);
         assert_eq!(web_control_role("option"), Some("option"));
         assert_eq!(web_control_role("combobox"), Some("combobox"));
+        assert_eq!(web_control_role("slider"), Some("slider"));
+        assert_eq!(web_control_role("spinbutton"), Some("spinbutton"));
         assert_eq!(web_control_role("button"), None);
         assert_eq!(default_live("status"), Some(LiveRegion::Polite));
         assert_eq!(default_live("log"), Some(LiveRegion::Polite));

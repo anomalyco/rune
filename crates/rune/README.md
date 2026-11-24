@@ -2737,6 +2737,11 @@ feature (`crates/rune/src/a11y/`).
   pointer input instead.
 - **Virtual lists** expose their mounted rows only; the list reports how many rows it has and
   each row its index.
+- **Web DOM mirror**: browser builds mirror landmarks, semantic containers (`menu`, `menubar`,
+  `tree`, `treegrid`, `tabpanel`, `toolbar`, `grid`, `table`, `tablist`, `radiogroup`,
+  `listbox`, `dialog`, `form`, `search`, live regions), controls (including disabled controls
+  with `aria-disabled="true"`, `aria-busy="true"`, and `progressbar`/`slider`/`spinbutton`
+  range attributes), and app keyboard focus via `aria-activedescendant`. See `WEB.md`.
 - **Tools**: `--tree` writes the tree under `"accessibility"` (role, key, name, value, states,
   actions, bounds in window points), `Runtime::accessibility_json` returns it to tests, and
   `Runtime::accessibility_tree` returns AccessKit's whole `TreeUpdate`, and
