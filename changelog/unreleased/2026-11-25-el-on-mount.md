@@ -1,0 +1,1 @@
+- Added `El::on_mount(|s, tx| ..)` to run a mount handler once per element mount in the same frame before drawing (with up to 4 chained follow-up commit rounds per frame, re-firing after instant or mid-exit remounts, and zero extra commits or idle wakes when unused).

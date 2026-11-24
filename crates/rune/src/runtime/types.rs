@@ -617,6 +617,7 @@ pub(crate) struct TreeState {
     /// Some picture sizes a side from its image's ratio (`pixel_aspect`).
     pub(in crate::runtime) has_pixel_aspect: bool,
     pub(in crate::runtime) has_drawn_layout: bool,
+    pub(in crate::runtime) has_mount: bool,
     pub(in crate::runtime) has_key_up: bool,
     pub(in crate::runtime) node_index: NodeIndex,
     /// The node ids the last build indexed its scratch by.
@@ -655,6 +656,7 @@ impl TreeState {
             has_cache: false,
             has_pixel_aspect: false,
             has_drawn_layout: false,
+            has_mount: false,
             has_key_up: false,
             built: false,
             has_playground: false,

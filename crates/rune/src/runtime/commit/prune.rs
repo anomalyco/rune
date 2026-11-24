@@ -24,8 +24,8 @@ impl RuntimeCore {
     /// Recomputes node-derived presence flags in a single pass over `self.nodes`.
     /// Returns whether any node has a loop spec.
     pub(in crate::runtime) fn refresh_node_flags(&mut self) -> bool {
-        let (mut dissolve, mut cache, mut pix, mut drawn_ly, mut key_up, mut sticky, mut raise, mut any_loop) =
-            (false, false, false, false, false, false, false, false);
+        let (mut dissolve, mut cache, mut pix, mut drawn_ly, mut mount, mut key_up, mut sticky, mut raise, mut any_loop) =
+            (false, false, false, false, false, false, false, false, false);
         let (mut ordered, mut above) = (false, false);
         let mut fade_stops: Option<[f32; 2]> = None;
         for n in &self.tree.nodes {
@@ -37,7 +37,10 @@ impl RuntimeCore {
                 above |= c.above.is_some();
                 any_loop |= c.looping.is_some();
             }
-            drawn_ly |= n.handlers.get().is_some_and(|h| h.on_drawn_layout.is_some() || h.on_visible.is_some() || h.drawn_rect.is_some());
+            if let Some(h) = n.handlers.get() {
+                drawn_ly |= h.on_drawn_layout.is_some() || h.on_visible.is_some() || h.drawn_rect.is_some();
+                mount |= h.on_mount.is_some();
+            }
             key_up |= n.focus.get().is_some_and(|f| f.key_up.is_some());
             raise |= n.vis_flags.raise();
             ordered |= n.vis.paint_order != 0;
@@ -53,6 +56,7 @@ impl RuntimeCore {
         self.tree.has_cache = cache;
         self.tree.has_pixel_aspect = pix;
         self.tree.has_drawn_layout = drawn_ly;
+        self.tree.has_mount = mount;
         self.tree.has_key_up = key_up;
         self.tree.has_sticky = self.holding() || sticky;
         self.tree.has_raise = raise;

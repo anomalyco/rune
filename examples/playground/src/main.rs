@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+mod mount;
 mod pick;
 mod scroll_anchor_story;
 
@@ -711,6 +712,18 @@ fn main() {
                         .variant("Inspected", |s| s.pending_inspect = true),
                 )
                 .story(
+                    Story::new("Lifecycle/On mount", mount::MountDemo::default, mount::view)
+                        .trigger('t', "Toggle tooltip", |s, _| {
+                            s.show_tip = !s.show_tip;
+                            if !s.show_tip {
+                                s.status.clear();
+                            }
+                        })
+                        .trigger('r', "Rebuild view", |s, _| s.rebuilds += 1)
+                        .variant("Hidden", |_| {})
+                        .variant("Shown", |s| *s = mount::MountDemo::shown()),
+                )
+                .story(
                     Story::new("Layout/Pointer pick", pick::PointerPick::default, pick::view)
                         .poll(pick::poll)
                         .trigger('m', "Cycle pick mode", |s, _| s.mode = s.mode.next())
@@ -810,5 +823,42 @@ mod tests {
         rt.pointer_up(rx, ry);
         rt.frame(1.0 / 60.0);
         assert!(!rt.state.card_b_focused && !rt.state.group_within);
+    }
+
+    #[test]
+    fn mount_story_reflects_on_mount_and_chained_badge_in_same_frame() {
+        let mut rt = Runtime::new(mount::MountDemo::default(), mount::view, (460.0, 260.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        assert_eq!((rt.state.mounts, rt.state.child_mounts), (0, 0));
+
+        // Clicking Show tooltip mounts the panel and chained badge in the very same frame.
+        let (tx, ty) = rt.find("toggle-tip").unwrap();
+        rt.pointer_down(tx, ty);
+        rt.pointer_up(tx, ty);
+        rt.frame(1.0 / 60.0);
+        assert_eq!((rt.state.mounts, rt.state.child_mounts), (1, 1));
+        let status = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("mount-tip-status")).and_then(|e| e.text);
+        assert_eq!(status.as_deref(), Some("Mounted (#1) in same frame"));
+        let badge = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("mount-chain-text")).and_then(|e| e.text);
+        assert_eq!(badge.as_deref(), Some("chain #1"));
+        assert!(rt.accessibility_json().to_string().contains("Mounted (#1) in same frame"));
+
+        // Rebuilding the view does not re-fire on_mount.
+        let (rx, ry) = rt.find("rebuild-tip").unwrap();
+        rt.pointer_down(rx, ry);
+        rt.pointer_up(rx, ry);
+        rt.frame(1.0 / 60.0);
+        assert_eq!((rt.state.rebuilds, rt.state.mounts, rt.state.child_mounts), (1, 1, 1));
+
+        // Hiding and showing again re-fires both (even while the exit transition is still running).
+        let (tx, ty) = rt.find("toggle-tip").unwrap();
+        rt.pointer_down(tx, ty);
+        rt.pointer_up(tx, ty);
+        rt.frame(1.0 / 60.0);
+        let (tx, ty) = rt.find("toggle-tip").unwrap();
+        rt.pointer_down(tx, ty);
+        rt.pointer_up(tx, ty);
+        rt.frame(1.0 / 60.0);
+        assert_eq!((rt.state.mounts, rt.state.child_mounts), (2, 2));
     }
 }

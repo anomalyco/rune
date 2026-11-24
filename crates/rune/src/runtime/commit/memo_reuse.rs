@@ -356,6 +356,7 @@ fn same_handlers(
         on_screen_layout,
         on_drawn_layout,
         on_visible,
+        on_mount,
         drawn_rect,
         on_scroll_offset,
         selection_copy,
@@ -410,6 +411,7 @@ fn same_handlers(
         && opt_rc_eq(&a.on_screen_layout, on_screen_layout)
         && opt_rc_eq(&a.on_drawn_layout, on_drawn_layout)
         && opt_rc_eq(&a.on_visible, on_visible)
+        && opt_rc_eq(&a.on_mount, on_mount)
         && match (&a.drawn_rect, drawn_rect) {
             (None, None) => true,
             (Some(la), Some(lb)) => std::sync::Arc::ptr_eq(&la.source, &lb.source),
