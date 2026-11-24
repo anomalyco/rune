@@ -377,3 +377,251 @@ fn modal_trap_blocks_background_ignores_escape_and_restores_focus() {
     assert!(!rt.state.open);
     assert_eq!(focused_element(&rt).map(|(k, _)| k), Some("opener".into()));
 }
+
+#[test]
+fn outside_secondary_policy_table_matches_chrome_per_os() {
+    use crate::runtime::input::secondary::{OutsideSecondary, SecondaryPlatform, outside_secondary_policy};
+    use OutsideSecondary::{DismissRepost, DismissSwallow, Swallow};
+    use SecondaryPlatform::{Linux, MacOs, Web, Windows};
+
+    let cases = [
+        // Non-dismissible modals (click_outside == false or modal_trap) swallow everywhere.
+        (Windows, false, false, Swallow),
+        (Windows, true, false, Swallow),
+        (MacOs, false, false, Swallow),
+        (MacOs, true, false, Swallow),
+        (Linux, false, false, Swallow),
+        (Linux, true, false, Swallow),
+        (Web, false, false, Swallow),
+        (Web, true, false, Swallow),
+        // Non-menu modals (dialogs, selects) dismiss and swallow everywhere.
+        (Windows, false, true, DismissSwallow),
+        (MacOs, false, true, DismissSwallow),
+        (Linux, false, true, DismissSwallow),
+        (Web, false, true, DismissSwallow),
+        // Menu modals dismiss and repost on Windows, and dismiss and swallow on macOS, Linux and web.
+        (Windows, true, true, DismissRepost),
+        (MacOs, true, true, DismissSwallow),
+        (Linux, true, true, DismissSwallow),
+        (Web, true, true, DismissSwallow),
+    ];
+    for (platform, is_menu, can_dismiss_outside, expected) in cases {
+        assert_eq!(
+            outside_secondary_policy(platform, is_menu, can_dismiss_outside),
+            expected,
+            "platform={platform:?} is_menu={is_menu} can_dismiss_outside={can_dismiss_outside}",
+        );
+    }
+}
+
+#[test]
+fn outside_secondary_press_runtime_repost_and_swallow_branches_all_platforms() {
+    use crate::runtime::input::secondary::SecondaryPlatform::{Linux, MacOs, Web, Windows};
+
+    #[derive(Clone, Copy, Debug)]
+    enum ModalKind { MenuSelf, MenuChild, Dialog, SelectListbox, MenuLocked, MenuTrap }
+    struct S { kind: ModalKind, open: bool, closes: usize, bg_hits: usize, bg_other_hits: usize }
+
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let mut root = col().w_full().h_full()
+            .child(el().key("bg").absolute(0.0, 0.0).size(120.0, 60.0)
+                .on_secondary_press(|s: &mut S, _, _| s.bg_hits += 1))
+            .child(el().key("bg-other").absolute(0.0, 80.0).size(120.0, 60.0)
+                .on_secondary_press(|s: &mut S, _, _| s.bg_other_hits += 1));
+        if s.open {
+            let m = col().key("modal").absolute(200.0, 0.0).size(140.0, 120.0);
+            let modal = match s.kind {
+                ModalKind::MenuSelf => m.role("menu").modal(true, |s: &mut S| { s.open = false; s.closes += 1; }),
+                ModalKind::MenuChild => m.modal(true, |s: &mut S| { s.open = false; s.closes += 1; })
+                    .child(col().key("inner-menu").role("menu").size(140.0, 120.0)),
+                ModalKind::Dialog => m.role("dialog").modal(true, |s: &mut S| { s.open = false; s.closes += 1; }),
+                ModalKind::SelectListbox => m.modal(true, |s: &mut S| { s.open = false; s.closes += 1; })
+                    .child(col().key("listbox").role("listbox").size(140.0, 120.0)),
+                ModalKind::MenuLocked => m.role("menu").modal(false, |s: &mut S| { s.open = false; s.closes += 1; }),
+                ModalKind::MenuTrap => m.role("menu").modal_trap(),
+            };
+            root = root.child(modal);
+        }
+        root
+    }
+
+    for platform in [Windows, MacOs, Linux, Web] {
+        for (kind, should_close, should_repost_on_win) in [
+            (ModalKind::MenuSelf, true, true),
+            (ModalKind::MenuChild, true, true),
+            (ModalKind::Dialog, true, false),
+            (ModalKind::SelectListbox, true, false),
+            (ModalKind::MenuLocked, false, false),
+            (ModalKind::MenuTrap, false, false),
+        ] {
+            let repost = platform == Windows && should_repost_on_win;
+            // Same-frame secondary down + up.
+            let mut rt = Runtime::new(
+                S { kind, open: true, closes: 0, bg_hits: 0, bg_other_hits: 0 },
+                view,
+                (400.0, 200.0),
+                Env::new(true, 1.0),
+            );
+            rt.frame(0.0);
+            rt.core_mut().secondary_down_for(20.0, 20.0, platform);
+            if !repost {
+                assert_eq!(rt.secondary_claim(), "app", "swallowed modal press suppresses browser context menu ({platform:?}, {kind:?})");
+            }
+            rt.secondary_up(20.0, 20.0);
+            rt.frame(0.016);
+            assert_eq!(rt.state.open, !should_close, "same-frame open ({platform:?}, {kind:?})");
+            assert_eq!(rt.state.closes, usize::from(should_close));
+            assert_eq!(rt.state.bg_hits, usize::from(repost), "same-frame repost ({platform:?}, {kind:?})");
+
+            // Cross-frame secondary down -> frame -> secondary up -> frame.
+            let mut rt = Runtime::new(
+                S { kind, open: true, closes: 0, bg_hits: 0, bg_other_hits: 0 },
+                view,
+                (400.0, 200.0),
+                Env::new(true, 1.0),
+            );
+            rt.frame(0.0);
+            rt.core_mut().secondary_down_for(20.0, 20.0, platform);
+            rt.frame(0.016);
+            assert_eq!(rt.state.open, !should_close, "cross-frame dismiss on down ({platform:?}, {kind:?})");
+            assert_eq!(rt.state.bg_hits, 0, "repost waits for release");
+            rt.secondary_up(20.0, 20.0);
+            rt.frame(0.016);
+            assert_eq!(rt.state.bg_hits, usize::from(repost), "cross-frame repost ({platform:?}, {kind:?})");
+        }
+    }
+
+    // Dragging off onto another target before release drops the Windows repost (both same-frame and cross-frame).
+    for cross_frame in [false, true] {
+        let mut rt = Runtime::new(
+            S { kind: ModalKind::MenuSelf, open: true, closes: 0, bg_hits: 0, bg_other_hits: 0 },
+            view,
+            (400.0, 200.0),
+            Env::new(true, 1.0),
+        );
+        rt.frame(0.0);
+        rt.core_mut().secondary_down_for(20.0, 20.0, Windows);
+        if cross_frame { rt.frame(0.016); }
+        rt.secondary_up(20.0, 100.0);
+        rt.frame(0.016);
+        assert!(!rt.state.open);
+        assert_eq!((rt.state.bg_hits, rt.state.bg_other_hits), (0, 0), "drag-off cancels repost (cross_frame={cross_frame})");
+    }
+}
+
+#[test]
+fn windows_menu_secondary_repost_guards_refuse_new_modal_inert_and_inside_non_bubbling() {
+    use crate::runtime::input::secondary::SecondaryPlatform::Windows;
+
+    #[derive(Clone, Copy)]
+    enum Mode { RefuseClose, OpenNewModal, InertTarget, NestedInDialog, InsideNonBubbling }
+    struct S {
+        mode: Mode,
+        outer_open: bool,
+        menu_open: bool,
+        new_modal: bool,
+        dismisses: usize,
+        bg_hits: usize,
+        inner_hits: usize,
+        parent_hits: usize,
+    }
+
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let mut bg = el().key("bg").absolute(0.0, 0.0).size(120.0, 80.0)
+            .on_secondary_press(|s: &mut S, _, _| s.bg_hits += 1);
+        if matches!(s.mode, Mode::InertTarget) {
+            bg = bg.inert();
+        }
+        let mut root = col().w_full().h_full().child(bg);
+        if matches!(s.mode, Mode::NestedInDialog) && s.outer_open {
+            root = root.child(
+                col().key("outer").absolute(150.0, 0.0).size(200.0, 200.0).role("dialog")
+                    .modal(false, |s: &mut S| s.outer_open = false)
+                    .child(el().key("inner").size(100.0, 60.0).on_secondary_press(|s: &mut S, _, _| s.inner_hits += 1)),
+            );
+        }
+        if s.menu_open {
+            let menu = col().key("menu").absolute(260.0, 120.0).size(120.0, 60.0).role("menu")
+                .modal(true, |s: &mut S| {
+                    s.dismisses += 1;
+                    match s.mode {
+                        Mode::RefuseClose => {}
+                        Mode::OpenNewModal => { s.menu_open = false; s.new_modal = true; }
+                        _ => s.menu_open = false,
+                    }
+                });
+            if matches!(s.mode, Mode::InsideNonBubbling) {
+                root = root.child(
+                    col().key("parent").absolute(0.0, 0.0).w_full().h_full()
+                        .on_secondary_press(|s: &mut S, _, _| s.parent_hits += 1)
+                        .child(menu),
+                );
+            } else {
+                root = root.child(menu);
+            }
+        }
+        if s.new_modal {
+            root = root.child(
+                col().key("confirm").absolute(0.0, 0.0).size(120.0, 80.0).role("dialog")
+                    .modal(true, |s: &mut S| s.new_modal = false)
+                    .on_secondary_press(|s: &mut S, _, _| s.inner_hits += 1),
+            );
+        }
+        root
+    }
+
+    let make = |mode| S { mode, outer_open: true, menu_open: true, new_modal: false, dismisses: 0, bg_hits: 0, inner_hits: 0, parent_hits: 0 };
+
+    // 1. Refusing to close drops the repost (both same-frame and cross-frame).
+    for cross in [false, true] {
+        let mut rt = Runtime::new(make(Mode::RefuseClose), view, (400.0, 220.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        rt.core_mut().secondary_down_for(20.0, 20.0, Windows);
+        if cross { rt.frame(0.016); }
+        rt.secondary_up(20.0, 20.0);
+        rt.frame(0.016);
+        assert!(rt.state.menu_open && rt.state.dismisses == 1 && rt.state.bg_hits == 0, "refuse close drops repost (cross={cross})");
+    }
+
+    // 2. Dismissing menu opens a new modal under the pointer: repost is dropped.
+    for cross in [false, true] {
+        let mut rt = Runtime::new(make(Mode::OpenNewModal), view, (400.0, 220.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        rt.core_mut().secondary_down_for(20.0, 20.0, Windows);
+        if cross { rt.frame(0.016); }
+        rt.secondary_up(20.0, 20.0);
+        rt.frame(0.016);
+        assert!(!rt.state.menu_open && rt.state.new_modal && rt.state.bg_hits == 0 && rt.state.inner_hits == 0, "new modal drops repost (cross={cross})");
+    }
+
+    // 3. Inert target behind menu does not receive the reposted secondary press.
+    let mut rt = Runtime::new(make(Mode::InertTarget), view, (400.0, 220.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.core_mut().secondary_down_for(20.0, 20.0, Windows);
+    rt.secondary_up(20.0, 20.0);
+    rt.frame(0.016);
+    assert!(!rt.state.menu_open && rt.state.bg_hits == 0);
+
+    // 4. Menu nested in outer modal: outside outer modal never pierces inert background; inside outer modal reposts.
+    let mut rt = Runtime::new(make(Mode::NestedInDialog), view, (400.0, 220.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.core_mut().secondary_down_for(20.0, 20.0, Windows);
+    rt.secondary_up(20.0, 20.0);
+    rt.frame(0.016);
+    assert!(!rt.state.menu_open && rt.state.outer_open && rt.state.bg_hits == 0);
+
+    rt.update(|s, _| s.menu_open = true);
+    rt.frame(0.016);
+    rt.core_mut().secondary_down_for(180.0, 20.0, Windows);
+    rt.secondary_up(180.0, 20.0);
+    rt.frame(0.016);
+    assert!(!rt.state.menu_open && rt.state.outer_open && rt.state.inner_hits == 1);
+
+    // 5. Right-clicking inside the menu does not dismiss it or bubble to an ancestor outside the modal.
+    let mut rt = Runtime::new(make(Mode::InsideNonBubbling), view, (400.0, 220.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.core_mut().secondary_down_for(300.0, 140.0, Windows);
+    rt.secondary_up(300.0, 140.0);
+    rt.frame(0.016);
+    assert!(rt.state.menu_open && rt.state.dismisses == 0 && rt.state.parent_hits == 0);
+}

@@ -76,7 +76,11 @@ fn anchor_with(motion: Spring, content: El, anchor: &str, placement: Placement, 
 
 /// A transparent full-window press target under an open overlay: pressing outside closes it.
 pub fn scrim<S: 'static>(key: impl Into<String>, close: impl Fn(&mut S) + 'static) -> El {
-    el().key(key).role("none").absolute(0.0, 0.0).w_full().h_full().on_press(close)
+    let close = Rc::new(close);
+    let secondary = close.clone();
+    el().key(key).role("none").absolute(0.0, 0.0).w_full().h_full()
+        .on_press(move |s: &mut S| close(s))
+        .on_secondary_press(move |s: &mut S, _, _| secondary(s))
 }
 
 /// Makes an open surface modal: it takes focus, Escape and outside presses dismiss it, and
