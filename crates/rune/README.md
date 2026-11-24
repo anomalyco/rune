@@ -304,24 +304,30 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   Global shortcuts and native menu key equivalents are handled before the window sees the key.
   1. Return and Escape while a field composes (IME preedit), or while `App::on_ime`'s editor
      does, go to the composition and no further.
-  2. Return, with no modifiers, presses the window's (or open modal's) `default_button()`
+  2. `El::on_key_preview` handlers on the focused element's allowed ancestors down to the focused
+     element itself, outermost first (DOM capture-phase `keydown` / WPF `PreviewKeyDown`),
+     including while a text field has focus; stops at an active modal or inert boundary, never
+     runs on key-up, and does not make a container focusable or a Tab stop.
+  3. `El::on_key` handlers on the focused element and its allowed ancestors, innermost first
+     (skipped while a text field has focus).
+  4. Return, with no modifiers, presses the window's (or open modal's) `default_button()`
      unless the focused element takes Return (see the table below).
-  3. Nothing focused: the window's `on_key`, with `tx.focused()` `None`.
-  4. The focused field's `on_input_key`.
-  5. Focus navigation: Escape dismisses the open modal, Tab and Shift-Tab move focus, a
+  5. Nothing focused: the window's `on_key`, with `tx.focused()` `None`.
+  6. The focused field's `on_input_key`.
+  7. Focus navigation: Escape dismisses the open modal, Tab and Shift-Tab move focus, a
      focused slider's arrows and Page Up and Down step it (`on_step`) and Home and End take it
      to its ends (`on_step_limit`), arrows, Home, End, Page Up/Down and type-select move inside
      (or enter from a focused container of) a `focus_group`, Space, `Alt+Down`, or Up and Down
      open a focused popup button (role `combobox`), Space presses the focused control, and Return
      presses a focused `press_on_return()` control, row or link. Past Tab, keys with Shift do
      none of this (typed capitals still type-select); they go on.
-  6. The focused text field's editor.
-  7. The window's `on_key` again, now with `tx.focused()` naming the focused element (or link), for keys
+  8. The focused text field's editor.
+  9. The window's `on_key` again, now with `tx.focused()` naming the focused element (or link), for keys
      the focused control passed on.
-  8. Selected text, for its copy keys (plain Cmd+A and Cmd+C): an app's `on_key` that takes
-     them wins, as a menu key equivalent wins over an AppKit text view. A focused text field
-     keeps its own at step 6.
-  9. Page Up, Page Down, Home and End scroll the nearest scroll view around the focused
+  10. Selected text, for its copy keys (plain Cmd+A and Cmd+C): an app's `on_key` that takes
+      them wins, as a menu key equivalent wins over an AppKit text view. A focused text field
+      keeps its own at step 8.
+  11. Page Up, Page Down, Home and End scroll the nearest scroll view around the focused
      element, else around the pointer, else the first in the tree, skipping any whose content
      fits: a chat's short composer passes them to the message list beside it. A view that
      overflows keeps them, even at the edge a key moves toward (where it does nothing), as an

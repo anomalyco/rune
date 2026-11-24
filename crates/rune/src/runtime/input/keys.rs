@@ -20,6 +20,7 @@ impl RuntimeCore {
         // Return and Escape that reach a field mid-composition belong to the input method: they
         // confirm or cancel it, and submit, blur and press nothing.
         if matches!(ev.key, crate::Key::Enter | crate::Key::Escape) && self.composing(app) { return true; }
+        if self.element_key_preview(app, ev, one) { return true; }
         if self.element_key(app, ev, one) { return true; }
         one.physical_key = None;
         if self.default_button_key(app, ev, one) { return true; }
@@ -320,6 +321,33 @@ impl RuntimeCore {
         self.node_index(path).map(|i| &self.tree.nodes[i])
     }
 
+    /// `El::on_key_preview` handlers on the focused element's allowed ancestors and the focused
+    /// element itself, outermost first (DOM capture-phase `keydown` / WPF `PreviewKeyDown`).
+    /// Runs for focused text fields too (including one scrolled out of a virtual list), stops at
+    /// an active modal or inert boundary, and never runs on key-up.
+    pub(in crate::runtime) fn element_key_preview(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, tx: &mut Tx) -> bool {
+        let i = match self.focused_index() {
+            Some(i) if self.can_focus(i) || (self.active_modal() == Some(i) && self.reachable(i)) => i,
+            None if self.focused_input().is_some() => {
+                let Some(path) = self.kbd.focus.path() else { return false };
+                let Some(anc) = std::iter::successors(path.rsplit_once('/').map(|(head, _)| head), |p| p.rsplit_once('/').map(|(head, _)| head))
+                    .find_map(|p| self.node_index(p))
+                else {
+                    return false;
+                };
+                if !self.reachable(anc) { return false; }
+                anc
+            }
+            _ => return false,
+        };
+        let mut handlers: Vec<_> = std::iter::successors(Some(i), |&j| self.tree.nodes[j].parent)
+            .take_while(|&j| self.allowed(j) && !self.subtree_exiting(j))
+            .filter_map(|j| self.tree.nodes[j].focus.key_preview.clone())
+            .collect();
+        handlers.reverse();
+        handlers.into_iter().any(|f| Tx::took(f(app.states(), ev, tx), tx))
+    }
+
     /// `El::on_key` handlers on the focused element and its ancestors, innermost first. A
     /// focused text field's keys stay its own.
     pub(in crate::runtime) fn element_key(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, tx: &mut Tx) -> bool {
@@ -450,3 +478,7 @@ impl RuntimeCore {
         self.kbd.has_focus()
     }
 }
+
+#[cfg(test)]
+#[path = "key_preview_tests.rs"]
+mod key_preview_tests;

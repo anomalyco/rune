@@ -61,6 +61,8 @@ pub(crate) struct FocusSpec {
     pub key_up: Option<InputKeyFn>,
     /// `El::on_key`: keys while this element or one inside it has focus.
     pub key: Option<InputKeyFn>,
+    /// `El::on_key_preview`: key-down preview while this element or one inside it has focus, outermost first.
+    pub key_preview: Option<InputKeyFn>,
 }
 
 impl crate::cold::Empty for FocusSpec {
@@ -96,6 +98,7 @@ impl crate::cold::Empty for FocusSpec {
         step_limit: None,
         key_up: None,
         key: None,
+        key_preview: None,
     };
 }
 
@@ -117,6 +120,34 @@ impl El {
     /// click anywhere inside it focuses it (an NSTableView).
     pub fn on_key<S: 'static>(mut self, f: impl Fn(&mut S, &crate::KeyEvent, &mut Tx) -> bool + 'static) -> Self {
         self.cold_mut().focus.key = Some(Rc::new(move |s, key, tx| f(downcast::<S>(s), key, tx)));
+        self
+    }
+    /// Preview key-down events while this element, or a control inside it (including a focused
+    /// text field), has focus: `f` runs outermost first from the root down to the focused element
+    /// (DOM capture-phase `keydown` / WPF `PreviewKeyDown`), after the IME composition guard
+    /// and before bubbling [`El::on_key`], default buttons, `on_input_key`, focus navigation
+    /// and text editing. Return `true` to consume the key so no inner preview or focused handler
+    /// sees it.
+    ///
+    /// Never runs on key-up, stops at an active modal or inert boundary so modals block previews
+    /// behind them, and does not make this element focusable, click-focusable or a Tab stop.
+    ///
+    /// ```
+    /// use rune::{El, Key, KeyEvent, Tx, col, el};
+    ///
+    /// struct App { tooltip_open: bool }
+    /// let _wrap: El = col()
+    ///     .on_key_preview(|s: &mut App, ev: &KeyEvent, tx: &mut Tx| {
+    ///         if ev.key == Key::Escape && !tx.key_repeat() && s.tooltip_open {
+    ///             s.tooltip_open = false;
+    ///             return true;
+    ///         }
+    ///         false
+    ///     })
+    ///     .child(el().focusable(true));
+    /// ```
+    pub fn on_key_preview<S: 'static>(mut self, f: impl Fn(&mut S, &crate::KeyEvent, &mut Tx) -> bool + 'static) -> Self {
+        self.cold_mut().focus.key_preview = Some(Rc::new(move |s, key, tx| f(downcast::<S>(s), key, tx)));
         self
     }
     /// Opt into keyboard and pointer focus. Disabled controls must set this false, which also

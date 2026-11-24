@@ -81,6 +81,13 @@ macro_rules! stories {
                 s.lazy_files = crate::lazy_files();
                 s.lazy_loaded.clear();
             }
+            if $id == "rune-focus--key-preview" {
+                s.key_preview_edit = TextEdit::new("");
+                s.key_preview_edit.focused = true;
+                s.on.insert("kp-tip".into());
+                s.on.insert("kp-list".into());
+                s.pick.remove("kp-log");
+            }
             s.tree_menu = None;
             s.tree_action = None;
             s.menu_at = None;
@@ -211,6 +218,7 @@ stories! {
     "rune-hover-card--placements" => hover_card_placements,
     "rune-overlays--tx-callbacks" => overlays_tx_callbacks,
     "rune-focus--keyboard" => focus_keyboard,
+    "rune-focus--key-preview" => combobox::key_preview,
     "ui-toast--all-examples" => toast_all,
     "components-card--normal" => card_normal,
     "components-card--error" => card_error,
