@@ -208,6 +208,8 @@ impl RuntimeCore {
         let mut ran = false;
         let mut why = if tx.polled_change && self.commit.dirty { CommitWhy::POLL } else { 0 };
         let commits0 = self.commit.commits;
+        #[cfg(debug_assertions)]
+        let view_commits0 = self.commit.view_commits();
         let shaped0 = self.text.shaped;
         self.settled = false;
         self.motion.clear_landing_holds();
@@ -457,7 +459,7 @@ impl RuntimeCore {
         #[cfg(debug_assertions)]
         {
             let scrolling = self.scrolling();
-            self.commit.watch_frame(commits0, scrolling, instant_scroll.as_deref());
+            self.commit.watch_frame(view_commits0, scrolling, instant_scroll.as_deref());
         }
         if let Some(request) = tx.select.take() {
             let from_change = std::mem::take(&mut tx.select_from_change);
