@@ -394,3 +394,301 @@ fn two_trees_with_scroll_bars_scroll_independently() {
     assert!(after[0][1] > before[0][1] + 20.0, "left tree scrolled");
     assert!((after[1][1] - before[1][1]).abs() < 0.5, "right tree stayed put: {:?} -> {:?}", before[1], after[1]);
 }
+
+// branches & on_toggle ---------------------------------------------------------------------
+
+#[test]
+fn insert_branch_set_branch_is_branch_and_expand_all_preserve_branch_semantics() {
+    let mut m: TreeModel<FileNode<()>> = TreeModel::new();
+    let dir = |id: &str| FileNode { name: id.into(), path: id.into(), dir: true, data: None };
+    let file = |name: &str, path: &str| FileNode { name: name.into(), path: path.into(), dir: false, data: Some(()) };
+
+    assert!(m.insert_branch(None, "unloaded", dir("unloaded")));
+    assert!(!m.insert_branch(None, "unloaded", dir("unloaded")), "duplicate id rejected");
+    assert!(!m.insert_branch(Some("missing"), "missing/sub", dir("sub")), "missing parent rejected");
+    assert!(m.insert_branch(None, "empty", dir("empty")));
+    assert!(m.insert(None, "promoted", dir("promoted")));
+    assert!(m.insert(None, "loaded", dir("loaded")));
+    assert!(m.insert(Some("loaded"), "loaded/file.txt", file("file.txt", "loaded/file.txt")));
+    assert!(m.insert(None, "leaf", file("leaf", "leaf")));
+
+    assert!(m.is_branch("unloaded") && !m.has_children("unloaded"));
+    assert!(m.is_branch("empty") && !m.has_children("empty"));
+    assert!(!m.is_branch("promoted"), "plain insert defaults branch=false");
+    assert!(m.is_branch("loaded") && m.has_children("loaded"), "node with children is a branch");
+    assert!(!m.is_branch("leaf"));
+    assert!(!m.is_branch("nope"));
+
+    // Promote and demote via set_branch; children keep a node a branch even if branch=false.
+    m.set_branch("promoted", true);
+    assert!(m.is_branch("promoted"));
+    assert_eq!(m.row(m.visible_row("promoted").unwrap()).unwrap().1.expanded, Some(false));
+    m.set_branch("promoted", false);
+    assert!(!m.is_branch("promoted"));
+    assert_eq!(m.row(m.visible_row("promoted").unwrap()).unwrap().1.expanded, None);
+    m.set_branch("loaded", false);
+    assert!(m.is_branch("loaded"), "a node with children remains a branch");
+    m.set_branch("nope", true);
+
+    // Every empty/unloaded branch reports Some(false/true) when expanded or collapsed.
+    for id in ["unloaded", "empty", "loaded"] {
+        assert_eq!(m.row(m.visible_row(id).unwrap()).unwrap().1.expanded, Some(false));
+        m.set_expanded(id, true);
+        assert!(m.is_expanded(id));
+        assert_eq!(m.row(m.visible_row(id).unwrap()).unwrap().1.expanded, Some(true));
+    }
+    assert_eq!(m.row(m.visible_row("leaf").unwrap()).unwrap().1.expanded, None);
+
+    // collapse_all and expand_all include empty branches, leaving leaves closed.
+    m.collapse_all();
+    assert!(!m.is_expanded("unloaded") && !m.is_expanded("empty") && !m.is_expanded("loaded"));
+    m.expand_all();
+    assert!(m.is_expanded("unloaded") && m.is_expanded("empty") && m.is_expanded("loaded"));
+    assert!(!m.is_expanded("leaf"));
+
+    // Under a filter, matching branches with no matching children show expanded: None; clearing restores branch state.
+    m.filter(|n| n.name == "empty");
+    assert_eq!(m.visible_len(), 1);
+    assert_eq!(m.row(0).unwrap().1.expanded, None);
+    m.clear_filter();
+    assert_eq!(m.row(m.visible_row("empty").unwrap()).unwrap().1.expanded, Some(true));
+
+    // FileTree marks dir: true nodes as branches.
+    let ft = FileTree::new().build([("src/lib.rs", ()), ("README.md", ())]);
+    assert!(ft.is_branch("src"));
+    assert!(!ft.is_branch("README.md"));
+}
+
+struct LazyApp {
+    files: TreeModel<FileNode<()>>,
+    toggles: Vec<(String, bool)>,
+    selected: Vec<String>,
+    opened: Vec<String>,
+    rtl: bool,
+    inert: bool,
+    lazy_load: bool,
+}
+
+fn lazy_dir(name: &str, path: &str) -> FileNode<()> {
+    FileNode { name: name.into(), path: path.into(), dir: true, data: None }
+}
+
+fn lazy_file(name: &str, path: &str) -> FileNode<()> {
+    FileNode { name: name.into(), path: path.into(), dir: false, data: Some(()) }
+}
+
+fn lazy_tree_model(multi: bool) -> TreeModel<FileNode<()>> {
+    let mut m = TreeModel::new().key("lazy").multi_select(multi);
+    m.insert_branch(None, "unloaded", lazy_dir("unloaded", "unloaded"));
+    m.insert_branch(None, "empty", lazy_dir("empty", "empty"));
+    m.insert_branch(None, "parent", lazy_dir("parent", "parent"));
+    m.insert_branch(Some("parent"), "parent/sub", lazy_dir("sub", "parent/sub"));
+    m.insert(None, "readme", lazy_file("README.md", "readme"));
+    m
+}
+
+fn lazy_view(s: &LazyApp, _: &mut Cx<LazyApp>) -> El {
+    let k = Kit::neutral(true);
+    let tree = Tree::new(|s: &LazyApp| &s.files, |s: &mut LazyApp| &mut s.files, FileNode::label)
+        .name("Files")
+        .right_to_left(s.rtl)
+        .row(|n, r| TreeItem::file(n, r))
+        .on_select(|s: &mut LazyApp, id, _| s.selected.push(id.to_owned()))
+        .on_open(|s: &mut LazyApp, id, _| s.opened.push(id.to_owned()))
+        .on_toggle(|s: &mut LazyApp, id, open, _| {
+            s.toggles.push((id.to_owned(), open));
+            if s.lazy_load && open && id == "unloaded" && !s.files.has_children("unloaded") {
+                s.files.insert(Some("unloaded"), "unloaded/child.rs", lazy_file("child.rs", "unloaded/child.rs"));
+            }
+        })
+        .build(s, &k)
+        .h(240.0);
+    col().size(300.0, 240.0).child(if s.inert { tree.inert() } else { tree })
+}
+
+fn lazy_rt(multi: bool, rtl: bool, inert: bool, lazy_load: bool) -> Runtime<LazyApp> {
+    let app = LazyApp {
+        files: lazy_tree_model(multi),
+        toggles: Vec::new(),
+        selected: Vec::new(),
+        opened: Vec::new(),
+        rtl,
+        inert,
+        lazy_load,
+    };
+    let mut rt = Runtime::new(app, lazy_view, (300.0, 240.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt
+}
+
+#[test]
+fn empty_and_unloaded_branches_keyboard_click_and_lazy_load() {
+    let mut rt = lazy_rt(false, false, false, true);
+    rt.key(KeyEvent { key: Key::Tab, mods: Mods::default() });
+    rt.frame(0.0);
+
+    // Down selects "unloaded" (closed branch).
+    rt.key(KeyEvent { key: Key::Down, mods: Mods::default() });
+    rt.frame(0.0);
+    assert_eq!(rt.state.files.cursor(), Some("unloaded"));
+    assert!(rt.state.toggles.is_empty());
+
+    // Right expands "unloaded" -> fires on_toggle("unloaded", true) -> lazily inserts child.rs; cursor stays.
+    rt.key(KeyEvent { key: Key::Right, mods: Mods::default() });
+    rt.frame(0.0);
+    assert!(rt.state.files.is_expanded("unloaded"));
+    assert_eq!(rt.state.files.cursor(), Some("unloaded"));
+    assert_eq!(rt.state.toggles, [("unloaded".into(), true)]);
+    assert!(rt.state.files.contains("unloaded/child.rs"));
+
+    // Right again steps into the lazily inserted child without firing on_toggle.
+    rt.key(KeyEvent { key: Key::Right, mods: Mods::default() });
+    rt.frame(0.0);
+    assert_eq!(rt.state.files.cursor(), Some("unloaded/child.rs"));
+    assert_eq!(rt.state.toggles.len(), 1);
+
+    // Move to "empty" (genuinely empty branch).
+    rt.key(KeyEvent { key: Key::Down, mods: Mods::default() });
+    rt.frame(0.0);
+    assert_eq!(rt.state.files.cursor(), Some("empty"));
+
+    // Right opens "empty" and fires on_toggle("empty", true).
+    rt.key(KeyEvent { key: Key::Right, mods: Mods::default() });
+    rt.frame(0.0);
+    assert!(rt.state.files.is_expanded("empty"));
+    assert_eq!(rt.state.files.cursor(), Some("empty"));
+    assert_eq!(rt.state.toggles.last(), Some(&("empty".into(), true)));
+
+    // Right again on an already-open empty branch stays on "empty" (does NOT jump to sibling "parent")
+    // and does NOT fire on_toggle again.
+    let before_toggles = rt.state.toggles.len();
+    rt.key(KeyEvent { key: Key::Right, mods: Mods::default() });
+    rt.frame(0.0);
+    assert_eq!(rt.state.files.cursor(), Some("empty"), "Right on open empty branch must not jump to sibling");
+    assert_eq!(rt.state.toggles.len(), before_toggles);
+
+    // Left on open empty branch closes it and fires on_toggle("empty", false).
+    rt.key(KeyEvent { key: Key::Left, mods: Mods::default() });
+    rt.frame(0.0);
+    assert!(!rt.state.files.is_expanded("empty"));
+    assert_eq!(rt.state.files.cursor(), Some("empty"));
+    assert_eq!(rt.state.toggles.last(), Some(&("empty".into(), false)));
+
+    // Enter and Space on empty branch toggle it and never call on_open.
+    rt.key(KeyEvent { key: Key::Enter, mods: Mods::default() });
+    rt.frame(0.0);
+    assert!(rt.state.files.is_expanded("empty"));
+    assert!(rt.state.opened.is_empty(), "Enter on empty branch must not call on_open");
+    assert_eq!(rt.state.toggles.last(), Some(&("empty".into(), true)));
+
+    rt.key(KeyEvent { key: Key::Text(" ".into()), mods: Mods::default() });
+    rt.frame(0.0);
+    assert!(!rt.state.files.is_expanded("empty"));
+    assert!(rt.state.opened.is_empty());
+    assert_eq!(rt.state.toggles.last(), Some(&("empty".into(), false)));
+
+    // Nested empty branch: Left closes when open, second Left climbs to parent.
+    rt.state.files.set_expanded("parent", true);
+    rt.state.files.select("parent/sub");
+    rt.frame(0.0);
+    rt.key(KeyEvent { key: Key::Right, mods: Mods::default() });
+    rt.frame(0.0);
+    assert!(rt.state.files.is_expanded("parent/sub"));
+    rt.key(KeyEvent { key: Key::Right, mods: Mods::default() });
+    rt.frame(0.0);
+    assert_eq!(rt.state.files.cursor(), Some("parent/sub"), "Right on nested open empty branch stays put");
+    rt.key(KeyEvent { key: Key::Left, mods: Mods::default() });
+    rt.frame(0.0);
+    assert!(!rt.state.files.is_expanded("parent/sub"));
+    assert_eq!(rt.state.files.cursor(), Some("parent/sub"));
+    rt.key(KeyEvent { key: Key::Left, mods: Mods::default() });
+    rt.frame(0.0);
+    assert_eq!(rt.state.files.cursor(), Some("parent"), "Left on closed nested empty branch climbs to parent");
+
+    // Plain click on empty branch toggles and fires on_toggle; double-click does not call on_open.
+    rt.state.toggles.clear();
+    let r = row_rect(&rt, "empty");
+    let (x, y) = (r[0] + 20.0, r[1] + r[3] * 0.5);
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(0.01);
+    assert!(rt.state.files.is_expanded("empty"));
+    assert_eq!(rt.state.toggles, [("empty".into(), true)]);
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(0.05);
+    assert!(!rt.state.files.is_expanded("empty"));
+    assert!(rt.state.opened.is_empty(), "double-click on empty branch must not call on_open");
+    assert_eq!(rt.state.toggles, [("empty".into(), true), ("empty".into(), false)]);
+
+    // Leaf still calls on_open on Enter and never fires on_toggle.
+    rt.state.toggles.clear();
+    rt.state.files.select("readme");
+    rt.frame(0.1);
+    rt.key(KeyEvent { key: Key::Enter, mods: Mods::default() });
+    rt.frame(0.1);
+    assert_eq!(rt.state.opened, ["readme"]);
+    assert!(rt.state.toggles.is_empty());
+
+    // Demoting an empty branch back to leaf restores leaf Enter -> on_open behaviour.
+    rt.state.files.set_branch("empty", false);
+    rt.state.files.select("empty");
+    rt.frame(0.1);
+    rt.key(KeyEvent { key: Key::Enter, mods: Mods::default() });
+    rt.frame(0.1);
+    assert_eq!(rt.state.opened, ["readme", "empty"]);
+    assert!(rt.state.toggles.is_empty());
+}
+
+#[test]
+fn empty_branches_respect_rtl_multi_select_mods_and_inert() {
+    // RTL: Left opens an empty branch, Left again stays on it, Right closes it.
+    let mut rt = lazy_rt(false, true, false, false);
+    rt.key(KeyEvent { key: Key::Tab, mods: Mods::default() });
+    rt.frame(0.0);
+    rt.key(KeyEvent { key: Key::Down, mods: Mods::default() });
+    rt.frame(0.0);
+    assert_eq!(rt.state.files.cursor(), Some("unloaded"));
+    rt.key(KeyEvent { key: Key::Left, mods: Mods::default() });
+    rt.frame(0.0);
+    assert!(rt.state.files.is_expanded("unloaded"));
+    assert_eq!(rt.state.toggles, [("unloaded".into(), true)]);
+    rt.key(KeyEvent { key: Key::Left, mods: Mods::default() });
+    rt.frame(0.0);
+    assert_eq!(rt.state.files.cursor(), Some("unloaded"), "RTL Left on open empty branch stays put");
+    rt.key(KeyEvent { key: Key::Right, mods: Mods::default() });
+    rt.frame(0.0);
+    assert!(!rt.state.files.is_expanded("unloaded"));
+    assert_eq!(rt.state.toggles, [("unloaded".into(), true), ("unloaded".into(), false)]);
+
+    // Multi-select: Shift-click and Cmd-click select without toggling or firing on_toggle.
+    let mut rt = lazy_rt(true, false, false, false);
+    rt.state.files.select("unloaded");
+    rt.frame(0.0);
+    let re = row_rect(&rt, "empty");
+    rt.physical_input(rune::PhysicalInput::Modifiers(Mods { shift: true, ..Mods::default() }));
+    rt.pointer_down(re[0] + 20.0, re[1] + re[3] * 0.5);
+    rt.pointer_up(re[0] + 20.0, re[1] + re[3] * 0.5);
+    rt.frame(0.0);
+    assert!(!rt.state.files.is_expanded("empty"), "Shift-click in multi-select does not toggle");
+    assert!(rt.state.toggles.is_empty());
+    rt.physical_input(rune::PhysicalInput::Modifiers(Mods { cmd: true, ..Mods::default() }));
+    rt.pointer_down(re[0] + 20.0, re[1] + re[3] * 0.5);
+    rt.pointer_up(re[0] + 20.0, re[1] + re[3] * 0.5);
+    rt.frame(0.0);
+    assert!(!rt.state.files.is_expanded("empty"), "Cmd-click in multi-select does not toggle");
+    assert!(rt.state.toggles.is_empty());
+
+    // Inert tree ignores clicks and keys on empty branches.
+    let mut rt = lazy_rt(false, false, true, false);
+    rt.state.files.select("empty");
+    rt.frame(0.0);
+    let re = row_rect(&rt, "empty");
+    rt.pointer_down(re[0] + 20.0, re[1] + re[3] * 0.5);
+    rt.pointer_up(re[0] + 20.0, re[1] + re[3] * 0.5);
+    rt.key(KeyEvent { key: Key::Right, mods: Mods::default() });
+    rt.key(KeyEvent { key: Key::Enter, mods: Mods::default() });
+    rt.frame(0.0);
+    assert!(!rt.state.files.is_expanded("empty"));
+    assert!(rt.state.toggles.is_empty());
+}

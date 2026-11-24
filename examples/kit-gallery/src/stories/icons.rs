@@ -176,3 +176,45 @@ pub(super) fn file_tree_scroll_menu(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
     let status = s.tree_action.as_deref().unwrap_or("Right-click a row or press Shift+F10");
     col().gap(8.0).child(panel).child(name(k, status))
 }
+
+/// A file tree with unloaded and empty folder branches that populate on expand via `on_toggle`.
+pub(super) fn file_tree_lazy_branches(s: &G, k: &Kit, _layer: &mut Vec<El>) -> El {
+    let loaded_remote = s.lazy_loaded.contains("remote");
+    let tree = Tree::new(|s: &G| &s.lazy_files, |s: &mut G| &mut s.lazy_files, FileNode::label)
+        .row(move |n, r| {
+            let item = TreeItem::file(n, r);
+            match n.path.as_str() {
+                "remote" if !loaded_remote => item.badge("unloaded"),
+                "empty" | "remote/empty-sub" => item.badge("empty"),
+                _ => item,
+            }
+        })
+        .name("Lazy branches")
+        .on_toggle(|s: &mut G, id, open, _| {
+            if open && id == "remote" && s.lazy_loaded.insert(id.to_owned()) {
+                s.lazy_files.insert(
+                    Some("remote"),
+                    "remote/api.ts",
+                    FileNode { name: "api.ts".into(), path: "remote/api.ts".into(), dir: false, data: Some(()) },
+                );
+                s.lazy_files.insert_branch(
+                    Some("remote"),
+                    "remote/empty-sub",
+                    FileNode { name: "empty-sub".into(), path: "remote/empty-sub".into(), dir: true, data: None },
+                );
+                s.lazy_files.insert(
+                    Some("remote"),
+                    "remote/schema.json",
+                    FileNode { name: "schema.json".into(), path: "remote/schema.json".into(), dir: false, data: Some(()) },
+                );
+                s.tree_action = Some("Expanded remote (loaded 3 entries)".into());
+            } else {
+                s.tree_action = Some(format!("{} {id}", if open { "Expanded" } else { "Collapsed" }));
+            }
+        })
+        .build(s, k)
+        .h(8.0 * 24.0 + 8.0);
+    let panel = col().w(260.0).fill(k.c.bg_base).pt(4.0).px(8.0).child(tree);
+    let status = s.tree_action.as_deref().unwrap_or("Expand 'remote' to lazy-load, or toggle 'empty'");
+    col().gap(8.0).child(panel).child(name(k, status))
+}
