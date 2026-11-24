@@ -1,0 +1,1 @@
+- Docs: restored `DiffView`'s rustdoc comment onto `pub struct DiffView<S>` after it was detached onto the private `DiffScrollBar` enum.
