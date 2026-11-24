@@ -254,40 +254,53 @@ impl RuntimeCore {
         Some([x + bb.x0 as f32 / s, y + bb.y0 as f32 / s, 1.5, h])
     }
 
-    /// After an edit, scrolls the focused field's nearest scroll viewport on each axis just far
-    /// enough to show the caret line, as a browser does for a textarea, leaving the viewport's
-    /// `El::scroll_margin` like CSS `scroll-padding`.
+    /// After an edit (or focus gain with `El::reveal_caret_on_focus(true)`), scrolls the focused
+    /// field's enclosing scroll viewports on each axis just far enough to show the caret line, as
+    /// a browser does for a textarea, leaving each viewport's `El::scroll_margin` like CSS
+    /// `scroll-padding`.
     pub(in crate::runtime) fn follow_caret(&mut self, app: &mut dyn AppDriver) {
+        if self.focused_index().is_none()
+            && let Some(path) = self.kbd.focus.owned().filter(|p| self.commit.virtual_inputs.contains_key(p))
+        {
+            self.reveal_row(app, &ScrollReveal::into_view(None, path), true);
+            self.step_scroll(0.0);
+        }
         let Some(i) = self.focused_index() else { return };
-        let Some(r) = self.caret_rect(&self.tree.nodes, i) else { return };
+        if self.caret_rect(&self.tree.nodes, i).is_none() { return; }
         let mut scrolled = false;
         for horizontal in [false, true] {
-            let Some(v) = std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent.filter(|_| self.tree.nodes[p].above.is_none()))
-                .skip(1)
-                .find(|&p| self.tree.nodes[p].scroll.is_some() && self.tree.nodes[p].scroll_axes.has(horizontal)) else { continue };
-            let a = usize::from(!horizontal);
-            let start = scroll_offsets(&self.scroll.scrolls, &self.tree.nodes, v).fold(self.tree.nodes[v].target[a], |p, o| p - o[a]);
-            let view = f64::from(self.tree.nodes[v].target[a + 2] - self.tree.nodes[v].target[a]);
-            let (at, len) = (f64::from(r[a] - start), f64::from(r[a + 2]));
-            let margin = f64::from(self.tree.nodes[v].scroll_edges.margin);
-            let delta = scroll_edge::reveal(0.0, at, len, view, margin);
-            if delta == 0.0 { continue; }
-            let stick = self.tree.nodes[v].scroll.is_some_and(|s| s.stick_bottom);
-            let Some(st) = self.scroll.scrolls.get_mut(&self.tree.nodes[v].id) else { continue };
-            let moved = if horizontal {
-                let before = st.x.offset;
-                st.x.offset = (st.x.offset + st.x.toward(-delta)).clamp(0.0, st.x.max);
-                st.x.motion = XMotion::Rest;
-                (st.x.offset - before).abs() > 1e-6
-            } else {
-                let before = st.offset;
-                st.offset = (st.offset + delta).clamp(0.0, st.max);
-                st.land(stick);
-                scrolled = true;
-                (st.offset - before).abs() > 1e-6
-            };
-            st.moved();
-            if moved { st.note_source(crate::ScrollSource::Programmatic); }
+            let mut cur = Some(i);
+            while let Some(v) = cur.and_then(|p| self.tree.nodes[p].parent.filter(|_| self.tree.nodes[p].above.is_none())) {
+                cur = Some(v);
+                if !(self.tree.nodes[v].scroll.is_some() && self.tree.nodes[v].scroll_axes.has(horizontal)) {
+                    continue;
+                }
+                let Some(r) = self.caret_rect(&self.tree.nodes, i) else { return };
+                let a = usize::from(!horizontal);
+                let start = scroll_offsets(&self.scroll.scrolls, &self.tree.nodes, v).fold(self.tree.nodes[v].target[a], |p, o| p - o[a]);
+                let view = f64::from(self.tree.nodes[v].target[a + 2] - self.tree.nodes[v].target[a]);
+                let (at, len) = (f64::from(r[a] - start), f64::from(r[a + 2]));
+                let margin = f64::from(self.tree.nodes[v].scroll_edges.margin);
+                let delta = scroll_edge::reveal(0.0, at, len, view, margin);
+                if delta == 0.0 { continue; }
+                let stick = self.tree.nodes[v].scroll.is_some_and(|s| s.stick_bottom);
+                let Some(st) = self.scroll.scrolls.get_mut(&self.tree.nodes[v].id) else { continue };
+                let moved = if horizontal {
+                    let before = st.x.offset;
+                    st.x.offset = (st.x.offset + st.x.toward(-delta)).clamp(0.0, st.x.max);
+                    st.x.motion = XMotion::Rest;
+                    (st.x.offset - before).abs() > 1e-6
+                } else {
+                    let before = st.offset;
+                    st.offset = (st.offset + delta).clamp(0.0, st.max);
+                    st.land(stick);
+                    let m = (st.offset - before).abs() > 1e-6;
+                    scrolled |= m;
+                    m
+                };
+                st.moved();
+                if moved { st.note_source(crate::ScrollSource::Programmatic); }
+            }
         }
         if scrolled && self.virtual_window_changed() {
             self.commit_virtual_scroll(app, &Tx::default());
@@ -321,3 +334,7 @@ impl RuntimeCore {
 #[cfg(test)]
 #[path = "caret_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "focus_caret_tests.rs"]
+mod focus_tests;

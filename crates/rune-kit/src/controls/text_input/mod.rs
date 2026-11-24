@@ -328,6 +328,20 @@ impl TextInput {
         self.edits.visual(move |e| e.spellcheck(on));
         self
     }
+    /// Scroll enclosing scroll viewports to bring this field's caret into view when it gains
+    /// focus ([`El::reveal_caret_on_focus`](rune::El::reveal_caret_on_focus)). Off by default
+    /// (`false`).
+    ///
+    /// ```ignore
+    /// TextInput::new(&s.name)
+    ///     .reveal_caret_on_focus(true)
+    ///     .on_edit(|s: &mut App| &mut s.name)
+    ///     .build(&k)
+    /// ```
+    pub fn reveal_caret_on_focus(mut self, on: bool) -> Self {
+        self.edits.visual(move |e| e.reveal_caret_on_focus(on));
+        self
+    }
     pub fn animate_edit_layout(mut self) -> Self {
         self.edits.handlers.push(Box::new(El::animate_edit_layout));
         self
