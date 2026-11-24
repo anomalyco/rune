@@ -296,3 +296,75 @@ fn menu_item_a11y_label_separates_accessible_name_from_drawn_text_and_drives_typ
     rt.frame(0.0);
     assert!(find(&rt, "panel").unwrap().focused, "typeahead finds item by a11y_label");
 }
+
+#[test]
+fn small_window_submenu_clamps_both_axes_scrolls_and_keeps_a11y() {
+    use rune::PointerPress;
+    use rune_kit::context_menu;
+
+    fn view(rows: &usize, _: &mut Cx<usize>) -> El {
+        let k = Kit::neutral(true);
+        let sub = (0..*rows)
+            .map(|i| MenuEntry::item(MenuItem::new(format!("Application {i} with a longer title"))))
+            .collect();
+        let mut layer = Vec::new();
+        let trigger = context_menu("ctx", el(), Some(PointerPress { x: 130.0, y: 60.0 }))
+            .item(MenuItem::new("Open"))
+            .item(MenuItem::new("Open With").submenu(sub, true))
+            .item(MenuItem::new("Copy"))
+            .build(&k, &mut layer);
+        root(col().w_full().h_full().fill(k.c.bg_base).child(trigger), layer)
+    }
+
+    // 8-row submenu in a 420x400 window stays inside [8..412, 8..392] without clipping right.
+    let mut short = Runtime::new(8usize, view, (420.0, 400.0), Env::new(true, 1.0));
+    short.frame(0.0);
+    short.frame(1.0 / 60.0);
+    let sub8 = find(&short, "ctx-item1-sub-menu").expect("8-row submenu");
+    assert!(
+        sub8.target[0] >= 8.0 && sub8.target[0] + sub8.target[2] <= 412.0 + 0.5,
+        "8-row submenu fits horizontally inside 420pt window: {:?}",
+        sub8.target,
+    );
+    assert!(
+        sub8.target[1] >= 8.0 && sub8.target[1] + sub8.target[3] <= 392.0 + 0.5,
+        "8-row submenu fits vertically inside 400pt window: {:?}",
+        sub8.target,
+    );
+
+    // 20-row submenu in a 420x400 window clamps height to 384pt, stays inside [8..412, 8..392], and scrolls.
+    let mut long = Runtime::new(20usize, view, (420.0, 400.0), Env::new(true, 1.0));
+    long.frame(0.0);
+    long.frame(1.0 / 60.0);
+    let sub20 = find(&long, "ctx-item1-sub-menu").expect("20-row submenu");
+    assert!(
+        sub20.target[0] >= 8.0 && sub20.target[0] + sub20.target[2] <= 412.0 + 0.5,
+        "20-row submenu fits horizontally inside 420pt window: {:?}",
+        sub20.target,
+    );
+    assert!(
+        sub20.target[1] >= 8.0 && sub20.target[1] + sub20.target[3] <= 392.0 + 0.5,
+        "20-row submenu fits vertically inside 400pt window: {:?}",
+        sub20.target,
+    );
+    assert!(sub20.target[3] <= 384.5, "20-row submenu clamps to viewport.h - 16: {:?}", sub20.target);
+
+    // Accessibility tree keeps menu role, accessible name, and expanded trigger state.
+    let a11y = long.accessibility_json().to_string();
+    assert!(a11y.contains("Open With"), "submenu keeps accessible name in a11y tree: {a11y}");
+    assert_eq!(sub20.role, "menu");
+    assert_eq!(sub20.label.as_deref(), Some("Open With"));
+
+    // Wheel over the 20-row submenu scrolls its rows upward.
+    let first_before = find(&long, "ctx-item1-sub-item0").expect("first submenu item").rect[1];
+    let (cx, cy) = (sub20.target[0] + sub20.target[2] * 0.5, sub20.target[1] + sub20.target[3] * 0.5);
+    long.wheel(cx, cy, -120.0);
+    for _ in 0..8 {
+        long.frame(1.0 / 60.0);
+    }
+    let first_after = find(&long, "ctx-item1-sub-item0").expect("first submenu item").rect[1];
+    assert!(
+        first_after < first_before - 10.0,
+        "20-row submenu scrolls vertically on wheel: before={first_before}, after={first_after}",
+    );
+}

@@ -804,6 +804,8 @@ impl<S: 'static> WindowSpec<S> {
         on_rest(f: fn(&mut S, &mut crate::Tx) -> bool);
         /// This window's editor's input method events, like `App::on_ime`.
         on_ime(f: fn(&mut S, &crate::Ime, &mut crate::Tx) -> bool);
+        /// Fallback handler for text-field menus when native pop-ups are unavailable, like `App::on_field_menu`.
+        on_field_menu(f: fn(&mut S, crate::FieldMenuRequest, &mut crate::Tx));
         /// Intercepts a native close request before hiding or closing this window, like
         /// [`App::on_close_request`].
         ///

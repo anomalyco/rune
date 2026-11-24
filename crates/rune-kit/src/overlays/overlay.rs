@@ -219,8 +219,8 @@ pub(crate) fn push_raised_anchored(
 
 /// `Popover::new("share").trigger(button).title("Share").open(s.open).build(&kit, &mut layer)`.
 ///
-/// Above or below its trigger it is at most as tall as the window leaves it, and its body
-/// shrinks: give a long body a scroll viewport (`.shrink().min_h(0.0)`) to scroll in.
+/// It stays inside the window on both axes when overflowing, and its body shrinks: give a long
+/// body a scroll viewport (`.shrink().min_h(0.0)`) to scroll in.
 pub struct Popover {
     key: String,
     trigger: Option<El>,

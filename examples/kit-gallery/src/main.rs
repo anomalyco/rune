@@ -38,6 +38,9 @@ pub struct G {
     pub edits: [TextEdit; 12],
     pub nowrap_code: TextEdit,
     pub key_preview_edit: TextEdit,
+    pub field_menu_edit: TextEdit,
+    pub field_menu: Option<rune::FieldMenuRequest>,
+    pub field_menu_last: Option<String>,
     pub combo: rune_kit::ComboboxState,
     /// The sidebar reorder story's state.
     pub reorder: stories::sidebar::ReorderDemo,
@@ -106,6 +109,9 @@ fn init() -> G {
         edits: Default::default(),
         nowrap_code: TextEdit::new(stories::NOWRAP_CODE),
         key_preview_edit: TextEdit::new(""),
+        field_menu_edit: TextEdit::new("Select text, right-click or press Shift+F10"),
+        field_menu: None,
+        field_menu_last: None,
         combo: Default::default(),
         reorder: Default::default(),
         files: files(),
@@ -229,12 +235,13 @@ fn view(s: &G, cx: &mut Cx<G>) -> El {
     }
     let mut overlays = Vec::new();
     let body = stories::render(s, k, &mut overlays);
+    stories::field_menu::mount_live_field_menu(s, k, &mut overlays);
     // Storybook's decorator: the page colour and 24 px of padding around the story.
     rune_kit::root(col().key("frame").fill(k.c.page).padding(24.0).child(body), overlays)
 }
 
 fn main() {
-    rune::run(AppSpec {
+    rune::App::new(AppSpec {
         scenes: stories::SCENES,
         setup: Some(|s, waker| s.images.set_waker(waker)),
         poll: Some(|s, _, _| {
@@ -246,7 +253,12 @@ fn main() {
         fonts: rune_theme_opencode::FONTS,
         families: rune_theme_opencode::FAMILIES,
         ..AppSpec::new("rune-kit gallery", (720.0, 480.0), init, view)
-    });
+    })
+    .on_field_menu(|s: &mut G, req, _| {
+        s.field_menu = Some(req);
+        s.on.remove("fm-preview");
+    })
+    .run();
 }
 
 #[cfg(test)]

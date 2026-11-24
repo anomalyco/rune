@@ -57,6 +57,11 @@ pub(crate) struct HostState {
     pub(crate) open_urls_natively: bool,
     /// Pop-up menus asked for (`Tx::popup_menu`) and not yet answered, oldest first.
     pub(in crate::runtime) popups: popup_dispatch::Popups,
+    /// Pending text-field menu delivered to `App::on_field_menu`, awaiting `Tx::resolve_field_menu`.
+    pub(in crate::runtime) field_menu_fallback: Option<Box<crate::runtime::field_menu::PendingFieldMenu>>,
+    /// Test-only seam forcing `App::on_field_menu` even where `popup_menu_supported()` is true.
+    #[cfg(test)]
+    pub(in crate::runtime) force_field_menu_fallback: bool,
     /// The file dialog asked for (`Tx::open_file`, `Tx::save_file`) and not yet answered.
     pub(in crate::runtime) file_dialog: crate::file_dialog::DialogState,
     /// File dialog callbacks, by id, until their answer runs.
@@ -105,6 +110,9 @@ impl HostState {
             path_requests: Vec::new(),
             open_urls_natively: false,
             popups: Default::default(),
+            field_menu_fallback: None,
+            #[cfg(test)]
+            force_field_menu_fallback: false,
             file_dialog: Default::default(),
             file_dialog_answers: Vec::new(),
             next_file_dialog: 0,

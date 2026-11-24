@@ -80,6 +80,9 @@ impl RuntimeCore {
 
     /// [`Self::latch_requests`] once the pick callbacks have run.
     fn latch_after_picks(&mut self, app: &mut dyn AppDriver, tx: &mut Tx) {
+        if let Some(picked) = tx.field_menu_resolution.take() {
+            self.resolve_field_menu_fallback(app, picked.as_deref(), tx);
+        }
         self.shell_request = self.shell_request.max(tx.shell.take());
         if tx.minimize_order.take().is_some() { self.minimize_step(crate::window::MinimizeEvent::Asked); }
         self.host.titlebar.toggle_maximized |= std::mem::take(&mut tx.toggle_maximized);

@@ -256,6 +256,7 @@ pub use playground::Playground;
 pub use playground::Stage;
 pub use playground::Step;
 pub use playground::Story;
+pub use popup_menu::FieldMenuRequest;
 pub use popup_menu::PopupAnchor;
 pub use popup_menu::PopupEntry;
 pub use popup_menu::PopupItem;

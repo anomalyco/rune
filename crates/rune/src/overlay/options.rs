@@ -174,6 +174,20 @@ pub struct OverlayCreated {
 
 impl<T: 'static> ConfiguredOverlay<T> {
     pub fn on_focus(mut self, f: fn(&mut T, bool, &mut crate::Tx)) -> Self { self.runtime.on_focus = Some(f); self }
+    /// Fallback handler for text-field menus when native pop-ups are unavailable, like
+    /// [`App::on_field_menu`](crate::App::on_field_menu).
+    ///
+    /// ```no_run
+    /// use rune::{FieldMenuRequest, OverlayOptions, OverlaySpec, Tx, el};
+    ///
+    /// let _overlay = OverlaySpec::new("quick", (320.0, 200.0), |_: &(), _| el())
+    ///     .options(OverlayOptions::default())
+    ///     .on_field_menu(|_: &mut (), _req: FieldMenuRequest, _tx: &mut Tx| {});
+    /// ```
+    pub fn on_field_menu(mut self, f: fn(&mut T, crate::FieldMenuRequest, &mut crate::Tx)) -> Self {
+        self.runtime.on_field_menu = Some(f);
+        self
+    }
     /// Composite this overlay's translucent fills, blurs, shadows, images, video and text in
     /// sRGB (gamma) space instead of linear light, matching CSS and Core Animation (on by
     /// default). With a `Compositor`, `Frame::srgb_blend` says which encoding its passes must

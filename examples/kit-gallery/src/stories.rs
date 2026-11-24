@@ -11,6 +11,7 @@ mod combobox;
 mod controls;
 mod diff;
 mod display;
+pub(crate) mod field_menu;
 
 pub(crate) use diff::{custom_diff, sample_diff, scroll_bars_diff};
 mod icons;
@@ -29,6 +30,7 @@ use markdown::{
     markdown_basic, markdown_code, markdown_diagrams, markdown_lenient, markdown_mermaid_charts, markdown_mermaid_data, markdown_mermaid_flows, markdown_mermaid_git, markdown_mermaid_hover, markdown_mermaid_maps, markdown_mermaid_plan, markdown_mermaid_plan_zoomed, markdown_mermaid_shapes, markdown_mermaid_streaming, markdown_mermaid_systems, markdown_stream_tail, markdown_streaming, markdown_styled, markdown_table_styles,
     markdown_walkthrough, markdown_wrap_and_frames,
 };
+use field_menu::{menu_field_menu_fallback, menu_submenu_small_window};
 use overlays::{focus_keyboard, hover_card_basic, hover_card_placements, menu_appearances, menu_basic, menu_checkbox, menu_radio, menu_rich, menu_submenu, menu_submenu_options, overlays_tx_callbacks, popover_basic, popover_bounded, popover_controlled, popover_wheel_outside, popup_list_rich_inline, toast_all, tooltip_help_arrow, tooltip_keybind, tooltip_path, tooltip_simple, tooltip_title_description};
 
 type Story = fn(&G, &Kit, &mut Vec<El>) -> El;
@@ -88,6 +90,12 @@ macro_rules! stories {
                 s.on.insert("kp-list".into());
                 s.pick.remove("kp-log");
             }
+            if $id == "rune-menu--field-menu-fallback" {
+                s.field_menu_edit = TextEdit::new("Select text, right-click or press Shift+F10");
+                s.field_menu_edit.set_selection(0, 11);
+                s.on.insert("fm-preview".into());
+            }
+            s.field_menu = None;
             s.tree_menu = None;
             s.tree_action = None;
             s.menu_at = None;
@@ -209,6 +217,8 @@ stories! {
     "ui-menu--with-radio" => menu_radio,
     "ui-menu--with-submenu" => menu_submenu,
     "rune-menu--submenu-options" => menu_submenu_options,
+    "rune-menu--submenu-small-window" => menu_submenu_small_window,
+    "rune-menu--field-menu-fallback" => menu_field_menu_fallback,
     "ui-tooltip--simple" => tooltip_simple,
     "ui-tooltip--with-keybind" => tooltip_keybind,
     "ui-tooltip--path" => tooltip_path,

@@ -242,6 +242,7 @@ pub(crate) fn merge(tx: &mut Tx, one: Tx) {
     tx.launches.extend(one.launches);
     tx.unclipped_flights |= one.unclipped_flights;
     tx.popups.extend(one.popups);
+    if one.field_menu_resolution.is_some() { tx.field_menu_resolution = one.field_menu_resolution; }
     tx.file_dialogs.extend(one.file_dialogs);
     if let Some(request) = one.window_frame { tx.window_frame = Some(tx.window_frame.unwrap_or_default().merge(request)); }
     if one.clear_secret && tx.copy.as_ref().is_some_and(crate::ClipboardWrite::is_secret) { tx.copy = None; }

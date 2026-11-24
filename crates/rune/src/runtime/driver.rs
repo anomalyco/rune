@@ -63,6 +63,8 @@ pub(crate) trait AppDriver: ViewDriver {
     fn on_visibility(&mut self, visible: bool, tx: &mut Tx);
     fn has_on_ime(&self) -> bool;
     fn on_ime(&mut self, ev: &Ime, tx: &mut Tx) -> bool;
+    fn has_on_field_menu(&self) -> bool;
+    fn on_field_menu(&mut self, req: crate::FieldMenuRequest, tx: &mut Tx);
     fn playground(&self) -> Option<&dyn PlaygroundDriver>;
     fn playground_mut(&mut self) -> Option<&mut dyn PlaygroundDriver>;
     fn playground_apply(&mut self, clock: f64) -> bool;
@@ -77,6 +79,7 @@ pub(crate) struct RuntimeHooks<S: 'static> {
     pub(crate) on_mods: Option<fn(&mut S, crate::Mods, &mut Tx)>,
     pub(crate) on_visibility: Option<fn(&mut S, bool, &mut Tx)>,
     pub(crate) on_ime: Option<fn(&mut S, &Ime, &mut Tx) -> bool>,
+    pub(crate) on_field_menu: Option<fn(&mut S, crate::FieldMenuRequest, &mut Tx)>,
     pub(crate) playground: Option<Box<crate::playground::Live<S>>>,
 }
 
@@ -88,6 +91,7 @@ impl<S: 'static> RuntimeHooks<S> {
             on_mods: None,
             on_visibility: None,
             on_ime: None,
+            on_field_menu: None,
             playground: None,
         }
     }
@@ -222,6 +226,16 @@ impl<S: 'static> AppDriver for AppRefMut<'_, S> {
             None => Some(&mut *self.state),
         };
         state.is_some_and(|state| Tx::took(app_call!(f, state, ev, tx), tx))
+    }
+
+    fn has_on_field_menu(&self) -> bool {
+        self.hooks.on_field_menu.is_some()
+    }
+
+    fn on_field_menu(&mut self, req: crate::FieldMenuRequest, tx: &mut Tx) {
+        if let Some(f) = self.hooks.on_field_menu {
+            app_call!(f, self.state, req, tx);
+        }
     }
 
     fn playground(&self) -> Option<&dyn PlaygroundDriver> {

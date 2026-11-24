@@ -103,6 +103,8 @@ pub struct Tx {
     pub(crate) open_paths: Vec<crate::open_path::PathRequest>,
     pub(crate) trace: Option<TraceCalls>,
     pub(crate) popups: Vec<crate::popup_menu::Call>,
+    /// `Tx::resolve_field_menu`: `Some(Some(id))` picks an item, `Some(None)` dismisses.
+    pub(crate) field_menu_resolution: Option<Option<String>>,
     pub(crate) file_dialogs: Vec<crate::file_dialog::Call>,
     pub(crate) window_frame: Option<crate::window::frame::FrameRequest>,
     /// The mouse button driving this press or drag (`Tx::button`).
@@ -361,7 +363,7 @@ impl Tx {
     /// or a text flight. A `wake_after` only schedules.
     pub(crate) fn frame_work(&self) -> bool {
         !self.pick_reads.is_empty() || !self.scroll_to.is_empty() || !self.scroll_bottom.is_empty() || !self.scroll_pages.is_empty() || !self.scroll_offsets.is_empty()
-            || !self.scroll_stops.is_empty() || !self.keep_on_screen.is_empty() || !self.text_flights.is_empty() || !self.launches.is_empty() || self.select.is_some()
+            || !self.scroll_stops.is_empty() || !self.keep_on_screen.is_empty() || !self.text_flights.is_empty() || !self.launches.is_empty() || self.select.is_some() || self.field_menu_resolution.is_some()
     }
 
     /// An app marker on the next frame, e.g. `tx.trace_event(format_args!("lab:{step:?}"))`.

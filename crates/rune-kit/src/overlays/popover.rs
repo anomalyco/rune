@@ -9,9 +9,11 @@ use rune_motion::{Effect, Spring, SpringPair, tokens};
 use crate::{Kit, Placement};
 
 /// Mounts `content` next to the element keyed `anchor_key`, `gap` points away, on the side
-/// and alignment of `placement`. It flips to the opposite side when it doesn't fit and is at
-/// most as tall as the window leaves it (a surface beside its anchor only flips). It appears
-/// at once and only fades on close. Push the result into the layer given to [`crate::root`].
+/// and alignment of `placement`. It flips to the opposite side when it doesn't fit and clamps
+/// to the room the window leaves it on both axes (via [`El::anchored_fit`](rune::El::anchored_fit))
+/// when it would otherwise overflow, so long menus and submenus shrink and scroll inside small
+/// windows. It appears at once and only fades on close. Push the result into the layer given to
+/// [`crate::root`].
 ///
 /// ```ignore
 /// let surface = popover::raised(&kit, col().child(rows), kit.radius.md);
@@ -33,13 +35,10 @@ pub fn anchored(k: &Kit, content: El, anchor_key: &str, placement: Placement, ga
         .token_motion(k.motion.overlay)
 }
 
-/// Above or below its anchor a dropdown fits the available height; beside it, it only flips.
+/// Anchors `content` with [`El::anchored_fit`](rune::El::anchored_fit) on all four sides so
+/// overflowing dropdowns and side-placed submenus shrink and scroll inside the window.
 pub(crate) fn fit(content: El, anchor: &str, side: Side, align: Align, gap: f32) -> El {
-    if matches!(side, Side::Top | Side::Bottom) {
-        content.anchored_fit(anchor, side, align, gap)
-    } else {
-        content.anchored(anchor, side, align, gap)
-    }
+    content.anchored_fit(anchor, side, align, gap)
 }
 
 /// The popover surface style: raised fill, half-strength border, `radius` corners and the

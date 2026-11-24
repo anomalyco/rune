@@ -238,7 +238,11 @@ surface; `MenuItem::key` assigns a stable key instead of positional `{menu_key}-
 inserting rows above keeps focus; `MenuItem::a11y_label` separates the accessible name (and
 typeahead / submenu name) from truncated drawn text; and `MenuItem::submenu_placement` (default
 `Placement::RightStart`) plus `MenuItem::submenu_min_width` (default `160.0`, `0.0` for
-content width) place and size submenus per item (see `rune-menu--submenu-options`).
+content width) place and size submenus per item (see `rune-menu--submenu-options`). Side-placed
+menus and submenus clamp on both axes via `El::anchored_fit` when they would overflow a small
+window so long submenus shrink and scroll inside the viewport (see
+`rune-menu--submenu-small-window`, and `rune-menu--field-menu-fallback` for rendering
+`App::on_field_menu` with `Menu`).
 
 ### Accessibility
 
