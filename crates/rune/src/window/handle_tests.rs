@@ -15,3 +15,15 @@ fn an_unbound_handle_queues_its_requests_for_the_host_or_a_headless_run() {
     handle.hide();
     assert!(matches!(handle.take_headless()[..], [WakeEvent::Window(0, WindowRequest::Hide)]));
 }
+
+#[test]
+fn handle_queues_exclude_from_capture_requests_in_order() {
+    let handle = WindowHandle::new("private");
+    handle.set_exclude_from_capture(true);
+    handle.set_exclude_from_capture(false);
+    let taken = handle.take_headless();
+    assert!(matches!(
+        taken[..],
+        [WakeEvent::ExcludeFromCapture(0, true), WakeEvent::ExcludeFromCapture(0, false)]
+    ));
+}

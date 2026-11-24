@@ -167,6 +167,7 @@ impl Host {
             WakeEvent::Position(_, position) => self.set_position(event_loop, position),
             WakeEvent::Place(_, place) => self.place(event_loop, place),
             WakeEvent::Level(_, on) => self.set_always_on_top(event_loop, on),
+            WakeEvent::ExcludeFromCapture(_, exclude) => self.set_exclude_from_capture(exclude),
             WakeEvent::Frame(_, mut request) => {
                 let rt = self.app.rt_mut();
                 request.spring = (request.animate && !rt.reduced_motion).then_some(crate::tok::motion::DEFAULT);

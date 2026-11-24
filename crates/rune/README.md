@@ -2071,7 +2071,22 @@ first frame after each show, resize or scale change (or a launcher's prewarm) re
 Opaque or bordered windows ignore the radius. To round a preset without losing what it set,
 amend its native options: `WindowOptions::launcher_panel().macos(|native| native.corner_radius(16.0))`.
 
+On Windows, `WindowOptions::windows(WindowsWindowOptions::default()...)` (or
+`ConfiguredWindowOptions::windows`, `App::windows_window`, `WindowSpec::windows_window`)
+sets Win32 window options without breaking `WindowOptions` literals: `.exclude_from_capture(bool)`
+(`SetWindowDisplayAffinity`), `.no_activate(bool)` (`WS_EX_NOACTIVATE` and skipping foreground
+activation on every reveal), `.tool_window(bool)` (`WS_EX_TOOLWINDOW`, clearing `WS_EX_APPWINDOW`),
+and `.undecorated_shadow(bool)` (winit's `with_undecorated_shadow` on borderless windows;
+system borders and rounded corners depend on the Windows version and window state). All are
+retained across native recreation and ignored on other platforms. For portable capture exclusion
+across Windows (`WDA_EXCLUDEFROMCAPTURE` / `WDA_NONE`) and macOS (`NSWindowSharingNone` /
+`NSWindowSharingReadOnly`), set `App::exclude_from_capture(bool)` or
+`WindowSpec::exclude_from_capture(bool)` (falling back to `WindowsWindowOptions` /
+`MacWindowOptions` when unset), and toggle it at runtime with
+`WindowHandle::set_exclude_from_capture(bool)`.
+
 `WindowSpec::on_created` receives a weak `WindowHandle`: toggle click-through,
+capture exclusion (`set_exclude_from_capture`),
 visibility and topmost status, close a window, borrow its raw-window-handle, or
 read its macOS `window_number()` (CGWindowID) for ScreenCaptureKit exclusion.
 By default closing a window releases its runtime; the last window closes the app. Input,

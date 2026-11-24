@@ -36,14 +36,20 @@ cargo run -p overlay-lab -- --scene pill --snap pill.png
 cargo run -p overlay-lab -- --scene expanded --snap expanded.png
 cargo run -p overlay-lab -- --scene work-area --snap work-area.png
 cargo run -p overlay-lab -- --scene picker --size 960x600 --snap picker.png
+cargo run -p overlay-lab -- --scene native-window --size 480x180 --snap native-window.png
 ```
 
 Set `OVERLAY_LAB_SECONDS=15` for a bounded desktop probe with panel-ID/capture-request
 logging. `OVERLAY_LAB_PICKER=1` opens the picker immediately. Run desktop probes in a GUI test
 Mac's logged-in session, at normal priority, not on a developer's desk display.
 `OVERLAY_LAB_UNDERLAY=1` runs a separate normal-window process that logs clicks, for
-cross-process pass-through/focus checks. `OVERLAY_LAB_INCLUDE_IN_CAPTURE=1` disables the
-capture request while grounding input coordinates; omit it for the exclusion check.
+cross-process pass-through/focus checks. `OVERLAY_LAB_NATIVE_WINDOW=1` (without
+`OVERLAY_LAB_UNDERLAY`) opens an ordinary borderless window demonstrating portable
+`WindowSpec::exclude_from_capture` with a live `WindowHandle::set_exclude_from_capture`
+toggle and `WindowsWindowOptions::undecorated_shadow` (set `OVERLAY_LAB_NO_ACTIVATE=1`
+and `OVERLAY_LAB_TOOL_WINDOW=1` for `WS_EX_NOACTIVATE` / `WS_EX_TOOLWINDOW`).
+`OVERLAY_LAB_INCLUDE_IN_CAPTURE=1` disables the capture request while grounding input
+coordinates; omit it for the exclusion check.
 
 Linux capture exclusion is unavailable. Wayland only observes pointer movement inside its
 input region, and the compositor chooses an output for UnderPointer. It cannot follow the

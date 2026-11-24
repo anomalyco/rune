@@ -29,6 +29,7 @@ mod pointer;
 pub(crate) use rune_text::segmenter;
 pub(crate) mod session_lock;
 pub(crate) mod taskbar;
+mod window_options;
 
 pub(crate) use cloak::Cloak;
 pub(crate) use dpi_drag::follow_suggested_rect;
@@ -40,6 +41,10 @@ pub(crate) use frame::has_window_menu;
 pub(crate) use frame::request_inner_size;
 pub(crate) use frame::window_menu;
 pub(crate) use placement::restore_frame;
+pub(crate) use window_options::{
+    apply_hwnd_styles, apply_window_styles, configure_window, set_exclude_from_capture,
+    set_hwnd_exclude_from_capture,
+};
 
 /// Whether this process is running under Wine or Proton (`ntdll.dll` exports `wine_get_version`).
 /// Called only on DirectComposition error paths to add a hint — never at launch.
@@ -369,8 +374,7 @@ impl OverlayWindow {
         let mode = options.input.resolved(interactive);
         overlay_styles(hwnd, mode, options.keys)?;
         let exclusion = if options.exclude_from_capture {
-            // SAFETY: `hwnd` is a live window owned by this thread; `WDA_EXCLUDEFROMCAPTURE` is a valid display affinity flag.
-            if unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) } != 0 { OverlaySupport::Requested } else { OverlaySupport::Failed }
+            if set_hwnd_exclude_from_capture(hwnd, true) { OverlaySupport::Requested } else { OverlaySupport::Failed }
         } else { OverlaySupport::Unknown };
         let input = Rc::new(Input { hwnd, regions: RefCell::default(), scale: Cell::new(window.scale_factor() as f32), clicks: RefCell::default(), captured: Cell::new(false), visible: Cell::new(false), input: Cell::new(mode), follow: Cell::new(options.follow_pointer), level: options.level, fading: Cell::new(false) });
         let data = Rc::into_raw(input.clone());
@@ -384,11 +388,8 @@ impl OverlayWindow {
         Ok(Self { input, observing: false, exclusion, watch: None, wake, keys: options.keys })
     }
     pub fn capture_exclusion(&self) -> OverlaySupport { self.exclusion }
-    #[allow(unsafe_code)]
     pub fn set_capture_exclusion(&mut self, exclude: bool) -> OverlaySupport {
-        let affinity = if exclude { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE };
-        // SAFETY: `self.input.hwnd` is a live window owned by this thread and `affinity` is a valid `WDA_*` constant.
-        let applied = unsafe { SetWindowDisplayAffinity(self.input.hwnd, affinity) } != 0;
+        let applied = set_hwnd_exclude_from_capture(self.input.hwnd, exclude);
         self.exclusion = match (exclude, applied) { (true, true) => OverlaySupport::Requested, (true, false) => OverlaySupport::Failed, (false, _) => OverlaySupport::Unknown };
         self.exclusion
     }

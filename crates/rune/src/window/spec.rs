@@ -157,7 +157,20 @@ impl WindowOptions {
     /// Optional AppKit settings without adding fields to existing WindowOptions literals.
     /// Ignored on other platforms.
     pub fn macos(self, native: MacWindowOptions) -> ConfiguredWindowOptions {
-        ConfiguredWindowOptions { options: self, native }
+        ConfiguredWindowOptions { options: self, native, windows: WindowsWindowOptions::default() }
+    }
+    /// Optional Win32 settings without adding fields to existing `WindowOptions` literals.
+    /// Ignored on other platforms.
+    ///
+    /// ```no_run
+    /// use rune::{WindowOptions, WindowsWindowOptions};
+    ///
+    /// let configured = WindowOptions { borderless: true, ..Default::default() }
+    ///     .windows(WindowsWindowOptions::default().undecorated_shadow(true));
+    /// let _ = configured;
+    /// ```
+    pub fn windows(self, windows: WindowsWindowOptions) -> ConfiguredWindowOptions {
+        ConfiguredWindowOptions { options: self, native: MacWindowOptions::default(), windows }
     }
     /// One transparent, borderless, topmost, click-through overlay covering this display.
     pub fn overlay(display: &Display) -> Self {
@@ -261,6 +274,129 @@ impl MacWindowOptions {
     pub fn corner_radius(mut self, radius: f32) -> Self { self.corner_radius = Some(radius.max(0.0)); self }
     /// Use a circular corner arc instead of the continuous curve for `corner_radius`.
     pub fn corner_curve_circular(mut self) -> Self { self.corner_curve_circular = true; self }
+
+    /// Returns a copy with portable `exclude_from_capture` taking precedence when set, falling
+    /// back to `self.exclude_from_capture` when unset.
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+    pub(crate) fn with_portable_exclude(&self, portable: Option<bool>) -> Self {
+        let mut next = self.clone();
+        if let Some(exclude) = portable {
+            next.exclude_from_capture = Some(exclude);
+        }
+        next
+    }
+}
+
+/// Win32 properties for an ordinary window, reapplied on native recreation and ignored on other
+/// platforms. Omitted properties keep winit's defaults.
+///
+/// ```no_run
+/// use rune::{App, AppSpec, WindowOptions, WindowsWindowOptions, el};
+///
+/// let options = WindowOptions { borderless: true, always_on_top: true, ..Default::default() }
+///     .windows(
+///         WindowsWindowOptions::default()
+///             .exclude_from_capture(true)
+///             .no_activate(true)
+///             .tool_window(true)
+///             .undecorated_shadow(true),
+///     );
+/// App::new(AppSpec::new("Panel", (320.0, 200.0), || (), |_, _| el()))
+///     .configured_options(options)
+///     .run();
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WindowsWindowOptions {
+    pub(crate) exclude_from_capture: Option<bool>,
+    pub(crate) no_activate: bool,
+    pub(crate) tool_window: bool,
+    pub(crate) undecorated_shadow: Option<bool>,
+}
+
+impl WindowsWindowOptions {
+    /// Requests `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` (`true`) or `WDA_NONE`
+    /// (`false`) before the window shows. Unset leaves Windows' default affinity unchanged.
+    /// Portable [`App::exclude_from_capture`] and
+    /// [`WindowHandle::set_exclude_from_capture`](crate::WindowHandle::set_exclude_from_capture)
+    /// override this when set. Capture exclusion is native best effort, not a security boundary.
+    ///
+    /// ```no_run
+    /// use rune::WindowsWindowOptions;
+    ///
+    /// let opts = WindowsWindowOptions::default().exclude_from_capture(true);
+    /// let _ = opts;
+    /// ```
+    pub fn exclude_from_capture(mut self, exclude: bool) -> Self {
+        self.exclude_from_capture = Some(exclude);
+        self
+    }
+
+    /// Sets `WS_EX_NOACTIVATE` on the window and skips foreground activation on every reveal
+    /// (create, show, and open), so clicking or showing the window does not take focus from
+    /// another app. Reapplied after style-changing window operations and across recreation.
+    ///
+    /// ```no_run
+    /// use rune::WindowsWindowOptions;
+    ///
+    /// let opts = WindowsWindowOptions::default().no_activate(true);
+    /// let _ = opts;
+    /// ```
+    pub fn no_activate(mut self, enabled: bool) -> Self {
+        self.no_activate = enabled;
+        self
+    }
+
+    /// Sets `WS_EX_TOOLWINDOW` (and clears `WS_EX_APPWINDOW`) so the window stays off the
+    /// taskbar and Alt-Tab switcher. Reapplied after style-changing window operations and across
+    /// recreation.
+    ///
+    /// ```no_run
+    /// use rune::WindowsWindowOptions;
+    ///
+    /// let opts = WindowsWindowOptions::default().tool_window(true);
+    /// let _ = opts;
+    /// ```
+    pub fn tool_window(mut self, enabled: bool) -> Self {
+        self.tool_window = enabled;
+        self
+    }
+
+    /// Requests the system drop shadow on a borderless (`WindowOptions { borderless: true, .. }`)
+    /// window via winit's `with_undecorated_shadow`. Omitted keeps winit's default (`false`).
+    /// Retained across native recreation and ignored on non-Windows platforms.
+    ///
+    /// Client-area sizing stays unchanged; visible system borders and rounded corners depend on
+    /// the Windows version and window state (for example maximized or snapped), and Windows may
+    /// show a thin 1px top border line when enabled.
+    ///
+    /// ```no_run
+    /// use rune::{WindowOptions, WindowsWindowOptions};
+    ///
+    /// let opts = WindowOptions { borderless: true, ..Default::default() }
+    ///     .windows(WindowsWindowOptions::default().undecorated_shadow(true));
+    /// let _ = opts;
+    /// ```
+    pub fn undecorated_shadow(mut self, enabled: bool) -> Self {
+        self.undecorated_shadow = Some(enabled);
+        self
+    }
+
+    /// Effective capture exclusion, with portable `exclude_from_capture` taking precedence over
+    /// `self.exclude_from_capture` when set.
+    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    pub(crate) fn effective_exclude_from_capture(&self, portable: Option<bool>) -> Option<bool> {
+        portable.or(self.exclude_from_capture)
+    }
+
+    /// Applies Windows creation-time winit attributes without changing defaults when unset.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn apply_attributes(&self, mut attrs: winit::window::WindowAttributes) -> winit::window::WindowAttributes {
+        if let Some(shadow) = self.undecorated_shadow {
+            use winit::platform::windows::WindowAttributesExtWindows;
+            attrs = attrs.with_undecorated_shadow(shadow);
+        }
+        attrs
+    }
 }
 
 /// Ordinary options plus native builders, accepted by WindowSpec::configured_options.
@@ -268,10 +404,13 @@ impl MacWindowOptions {
 pub struct ConfiguredWindowOptions {
     pub(crate) options: WindowOptions,
     pub(crate) native: MacWindowOptions,
+    pub(crate) windows: WindowsWindowOptions,
 }
 
 impl From<WindowOptions> for ConfiguredWindowOptions {
-    fn from(options: WindowOptions) -> Self { Self { options, native: MacWindowOptions::default() } }
+    fn from(options: WindowOptions) -> Self {
+        Self { options, native: MacWindowOptions::default(), windows: WindowsWindowOptions::default() }
+    }
 }
 
 impl ConfiguredWindowOptions {
@@ -280,6 +419,22 @@ impl ConfiguredWindowOptions {
     /// launcher. Ignored on other platforms.
     pub fn macos(mut self, amend: impl FnOnce(MacWindowOptions) -> MacWindowOptions) -> Self {
         self.native = amend(self.native);
+        self
+    }
+
+    /// Amends the Win32 settings in place, keeping what a preset or prior `.macos(...)` call
+    /// already set. Ignored on other platforms.
+    ///
+    /// ```no_run
+    /// use rune::{MacWindowOptions, WindowOptions};
+    ///
+    /// let opts = WindowOptions { borderless: true, ..Default::default() }
+    ///     .macos(MacWindowOptions::default().shadow(true))
+    ///     .windows(|win| win.undecorated_shadow(true).tool_window(true));
+    /// let _ = opts;
+    /// ```
+    pub fn windows(mut self, amend: impl FnOnce(WindowsWindowOptions) -> WindowsWindowOptions) -> Self {
+        self.windows = amend(self.windows);
         self
     }
 }
@@ -353,6 +508,26 @@ impl<S: 'static> WindowSpec<S> {
         maximized(maximized: bool);
         /// Open this window full screen, like `App::full_screen`.
         full_screen(full_screen: bool);
+        /// Win32 native window policy, like `App::windows_window`. Ignored on other platforms.
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, WindowSpec, WindowsWindowOptions, el};
+        ///
+        /// let spec = WindowSpec::new("panel", AppSpec::new("Panel", (300.0, 200.0), || (), |_, _| el()))
+        ///     .windows_window(WindowsWindowOptions::default().tool_window(true));
+        /// let _ = spec;
+        /// ```
+        windows_window(options: crate::WindowsWindowOptions);
+        /// Exclude this window from screen captures on Windows and macOS, like `App::exclude_from_capture`.
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("notes", AppSpec::new("Notes", (480.0, 360.0), || (), |_, _| el()))
+        ///     .exclude_from_capture(true);
+        /// let _ = spec;
+        /// ```
+        exclude_from_capture(exclude: bool);
         /// Send `Key::Modifier` presses and releases to this window, like `App::modifier_keys`.
         modifier_keys();
         /// Tab visits every focusable control in this window, like `App::tab_visits_controls`.
@@ -404,12 +579,14 @@ impl<S: 'static> WindowSpec<S> {
     pub fn options(mut self, options: WindowOptions) -> Self {
         self.options = options;
         self.app.macos_window = MacWindowOptions::default();
+        self.app.windows_window = WindowsWindowOptions::default();
         self
     }
     pub fn configured_options(mut self, options: ConfiguredWindowOptions) -> Self {
-        let ConfiguredWindowOptions { options, native } = options;
+        let ConfiguredWindowOptions { options, native, windows } = options;
         self.options = options;
         self.app.macos_window = native;
+        self.app.windows_window = windows;
         self
     }
     pub fn state(mut self, state: S) -> Self { self.app = self.app.init(move || state); self }

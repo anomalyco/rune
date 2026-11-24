@@ -180,6 +180,11 @@ fn set_sharing(window: &NSWindow, exclude: bool) {
     unsafe { let _: () = msg_send![window, setSharingType: if exclude { 0usize } else { 1usize }]; }
 }
 
+/// Sets or clears capture exclusion on an ordinary macOS window.
+pub(crate) fn set_exclude_from_capture(window: &winit::window::Window, exclude: bool) {
+    if let Some(window) = ns_window(window) { set_sharing(&window, exclude); }
+}
+
 /// Orders a window front without making it key or activating the app.
 pub(crate) fn show_without_focus(window: &winit::window::Window) {
     let Some(w) = ns_window(window) else { return };

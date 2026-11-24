@@ -84,6 +84,8 @@ pub struct App<S: 'static> {
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) same_tab_router: Option<Box<dyn Fn(&str) -> bool>>,
     pub(crate) macos_window: crate::MacWindowOptions,
+    pub(crate) windows_window: crate::WindowsWindowOptions,
+    pub(crate) exclude_from_capture: Option<bool>,
     pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<S>>>,
     pub(crate) window_options: crate::WindowOptions,
     pub(crate) canvas_id: Option<String>,
@@ -140,6 +142,8 @@ impl<S: 'static> App<S> {
             keep_layout: None,
             same_tab_router: None,
             macos_window: crate::MacWindowOptions::default(),
+            windows_window: crate::WindowsWindowOptions::default(),
+            exclude_from_capture: None,
             compositor: None,
             window_options: crate::WindowOptions::default(),
             canvas_id: None,
@@ -283,12 +287,48 @@ impl<S: 'static> App<S> {
     pub fn configured_options(mut self, options: crate::ConfiguredWindowOptions) -> Self {
         self.window_options = options.options;
         self.macos_window = options.native;
+        self.windows_window = options.windows;
         self
     }
 
     /// Native window policy, also retained by a single-window App.
     pub fn macos_window(mut self, options: crate::MacWindowOptions) -> Self {
         self.macos_window = options;
+        self
+    }
+
+    /// Win32 native window policy, retained across recreation and ignored on other platforms.
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, WindowsWindowOptions, el};
+    ///
+    /// App::new(AppSpec::new("Panel", (320.0, 200.0), || (), |_, _| el()))
+    ///     .windows_window(WindowsWindowOptions::default().no_activate(true).tool_window(true))
+    ///     .run();
+    /// ```
+    pub fn windows_window(mut self, options: crate::WindowsWindowOptions) -> Self {
+        self.windows_window = options;
+        self
+    }
+
+    /// Excludes this window from screen captures on Windows (`WDA_EXCLUDEFROMCAPTURE`) and macOS
+    /// (`NSWindowSharingNone`), applied before the window first shows and reapplied on native
+    /// recreation. `false` explicitly restores normal capture visibility. Ignored on Linux and web.
+    ///
+    /// When set, this takes precedence over `WindowsWindowOptions::exclude_from_capture` and
+    /// `MacWindowOptions::exclude_from_capture`; when unset, those platform options still apply.
+    /// Toggle at runtime with [`WindowHandle::set_exclude_from_capture`](crate::WindowHandle::set_exclude_from_capture).
+    /// Capture exclusion is native best effort, not a security boundary.
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, el};
+    ///
+    /// App::new(AppSpec::new("Private Notes", (480.0, 360.0), || (), |_, _| el()))
+    ///     .exclude_from_capture(true)
+    ///     .run();
+    /// ```
+    pub fn exclude_from_capture(mut self, exclude: bool) -> Self {
+        self.exclude_from_capture = Some(exclude);
         self
     }
 

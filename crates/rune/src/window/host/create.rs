@@ -77,9 +77,14 @@ impl Host {
         // (`Cloak`), so it never comes on screen empty. The show doesn't activate it: the cloak
         // does as it lifts, so the text services' start-up follows the frame.
         #[cfg(target_os = "windows")]
-        let attrs = crate::platform::app_icon::with_icon(winit::platform::windows::WindowAttributesExtWindows::with_drag_and_drop(attrs.with_visible(false).with_active(false), false));
+        let focus = focus && !self.no_activate();
+        #[cfg(target_os = "windows")]
+        let attrs = self.windows_window.apply_attributes(crate::platform::app_icon::with_icon(winit::platform::windows::WindowAttributesExtWindows::with_drag_and_drop(attrs.with_visible(false).with_active(false), false)));
         let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
         crate::marks::mark("window.native");
+        // Before first show or CPU paint so no capture sees a frame and no taskbar button flashes.
+        #[cfg(target_os = "windows")]
+        crate::platform::win32::configure_window(&window, &self.windows_window, self.exclude_from_capture);
         #[cfg(target_os = "windows")]
         crate::platform::win32::follow_suggested_rect(&window);
         #[cfg(target_os = "windows")]
@@ -96,10 +101,13 @@ impl Host {
         let cpu_first = visible && !launcher && cpu_frame::opens_on_cpu(self);
         #[cfg(target_os = "windows")]
         if visible && !cpu_first {
-            // Unfocused (`App::open_inactive`), it never activates.
+            // Unfocused (`App::open_inactive` or `WindowsWindowOptions::no_activate`), it never activates.
             cloak.hold(&window, crate::time::now() + win::READY_FALLBACK, focus);
             window.set_visible(true);
             chrome::open_as(&window, open_as);
+            if open_as != crate::windows::OpenAs::Normal {
+                crate::platform::win32::apply_window_styles(&window, &self.windows_window);
+            }
         }
         crate::marks::mark("window.framed");
         // First, before anything observes the view (macOS) or an assistive client asks. On Windows,
@@ -115,15 +123,23 @@ impl Host {
         #[cfg(target_os = "macos")]
         crate::native_menu::adopt_standard_view();
         #[cfg(target_os = "macos")]
-        let panel = if self.macos_window.nonactivating_panel {
-            Some(crate::platform::macos::Panel::adopt_window(&window, size, &self.macos_window).ok_or("could not create nonactivating panel")?)
+        let mac_opts = self.macos_window.with_portable_exclude(self.exclude_from_capture);
+        #[cfg(target_os = "macos")]
+        let panel = if mac_opts.nonactivating_panel {
+            Some(crate::platform::macos::Panel::adopt_window(&window, size, &mac_opts).ok_or("could not create nonactivating panel")?)
         } else { None };
         #[cfg(target_os = "macos")]
-        crate::platform::macos::configure_window(&window, &self.macos_window);
+        if panel.is_none() {
+            crate::platform::macos::configure_window(&window, &mac_opts);
+        }
         #[cfg(target_os = "macos")]
         let drop_target = crate::platform::macos::drop::install(&window);
-        if self.options.click_through && let Err(error) = window.set_cursor_hittest(false) {
-            eprintln!("click-through unavailable for {}: {error}", self.native_handle.key());
+        if self.options.click_through {
+            if let Err(error) = window.set_cursor_hittest(false) {
+                eprintln!("click-through unavailable for {}: {error}", self.native_handle.key());
+            }
+            #[cfg(target_os = "windows")]
+            crate::platform::win32::apply_window_styles(&window, &self.windows_window);
         }
         window.set_ime_allowed(false);
         self.ime.clear();

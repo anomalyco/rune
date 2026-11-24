@@ -10,6 +10,10 @@ pub(super) struct NativeWindow {
     pub(super) window: Mutex<Weak<Window>>,
     pub(super) number: AtomicU32,
     pub(super) ready: AtomicBool,
+    #[cfg(target_os = "windows")]
+    pub(super) no_activate: AtomicBool,
+    #[cfg(target_os = "windows")]
+    pub(super) tool_window: AtomicBool,
     /// What the host's meter last published.
     pub(super) stats: Arc<Mutex<SurfaceStats>>,
     pub(super) route: Mutex<Route>,
@@ -143,10 +147,42 @@ impl WindowHandle {
         let _ = on;
     }
     pub fn set_click_through(&self, click_through: bool) -> Result<(), String> {
-        self.window()?.set_cursor_hittest(!click_through).map_err(|e| e.to_string())
+        let window = self.window()?;
+        window.set_cursor_hittest(!click_through).map_err(|e| e.to_string())?;
+        #[cfg(target_os = "windows")]
+        if let Some(hwnd) = crate::platform::win32::hwnd(&window) {
+            crate::platform::win32::apply_hwnd_styles(
+                hwnd,
+                self.native.no_activate.load(Ordering::Acquire),
+                self.native.tool_window.load(Ordering::Acquire),
+            );
+        }
+        Ok(())
     }
     pub fn set_always_on_top(&self, on: bool) {
         self.send(move |slot| WakeEvent::Level(slot, on));
+    }
+    /// Sets whether this window is excluded from screen captures, retained across native
+    /// recreation and overriding any creation-time `exclude_from_capture` option.
+    ///
+    /// On Windows, calls `SetWindowDisplayAffinity` with `WDA_EXCLUDEFROMCAPTURE` (`true`) or
+    /// `WDA_NONE` (`false`). On macOS, sets `NSWindow.sharingType` to `NSWindowSharingNone`
+    /// (`true`) or `NSWindowSharingReadOnly` (`false`), or updates a nonactivating panel's
+    /// presence state (applied while shown). Ignored on Linux and web.
+    ///
+    /// Safe to call from any thread; requests made before the window starts apply once it does.
+    /// Capture exclusion is native best effort, not a security boundary; on macOS, capture
+    /// clients should also filter [`Self::window_number`].
+    ///
+    /// ```no_run
+    /// use rune::{AppSpec, WindowSpec, el};
+    ///
+    /// let spec = WindowSpec::new("notes", AppSpec::new("Notes", (480.0, 360.0), || (), |_, _| el()))
+    ///     .on_created(|handle| handle.set_exclude_from_capture(true));
+    /// let _ = spec;
+    /// ```
+    pub fn set_exclude_from_capture(&self, exclude: bool) {
+        self.send(move |slot| WakeEvent::ExcludeFromCapture(slot, exclude));
     }
     /// Physical desktop pixels; retained across recreation. Unsupported on Wayland.
     pub fn set_position(&self, position: (i32, i32)) {
