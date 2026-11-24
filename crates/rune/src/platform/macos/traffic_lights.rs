@@ -60,6 +60,22 @@ impl Drop for Spot {
     }
 }
 
+/// Hides or shows the window's standard traffic-light buttons (`Titlebar::controls`).
+/// When hiding, drops any stored placement spot so the `-layout` hook stops repositioning them.
+pub(crate) fn set_hidden(window: &Window, hidden: bool) {
+    let Some(win) = ns_window(window) else { return };
+    if hidden {
+        SPOTS.with(|s| s.borrow_mut().remove(&(Retained::as_ptr(&win) as usize)));
+    } else if win.styleMask().contains(NSWindowStyleMask::FullScreen) {
+        return;
+    }
+    for button in [NSWindowButton::CloseButton, NSWindowButton::MiniaturizeButton, NSWindowButton::ZoomButton] {
+        if let Some(view) = win.standardWindowButton(button) {
+            view.setHidden(hidden);
+        }
+    }
+}
+
 /// Electron's `trafficLightPosition`: the titlebar container grows to the buttons' height
 /// plus twice `y`, and the buttons sit `x, y` from the top-left at AppKit's own pitch.
 pub(crate) fn place(window: &Window, (x, y): (f32, f32)) {

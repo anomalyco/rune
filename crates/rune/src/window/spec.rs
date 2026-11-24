@@ -80,6 +80,13 @@ pub(crate) const DEFAULT_MIN_SIZE: (f32, f32) = (420.0, 400.0);
 #[derive(Clone, Debug)]
 pub struct WindowOptions {
     pub transparent: bool,
+    /// A bare window without OS decorations: for HUDs, launchers, overlays and tray pop-ups.
+    /// On Windows, borderless windows stay bare with no outer resize borders or edge hit-test
+    /// interception so exact display bounds and edge controls are preserved; apps that draw a
+    /// custom titlebar and want OS resize edges, Aero Snap, window menu and `Tx::minimize()`
+    /// should use [`App::titlebar`](crate::App::titlebar) (with
+    /// [`Titlebar::controls(false)`](crate::Titlebar::controls) when drawing their own caption
+    /// buttons).
     pub borderless: bool,
     /// Clicks, and so hover, pass to whatever is below.
     pub click_through: bool,
@@ -96,6 +103,9 @@ pub struct WindowOptions {
     pub max_size: Option<(f32, f32)>,
     /// Whether the user can resize the window. Programmatic sizing is unaffected. A window
     /// that isn't resizable doesn't maximize either: its maximize (zoom) button is disabled.
+    /// On Windows, `borderless: true` windows stay bare and do not add edge resize borders;
+    /// use [`App::titlebar`](crate::App::titlebar) (or `Titlebar::new(h).controls(false)`) for
+    /// a custom-titlebar window with OS edge resizing.
     pub resizable: bool,
 }
 
