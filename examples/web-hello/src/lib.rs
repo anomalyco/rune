@@ -8,6 +8,8 @@ use rune::tok::{self, type_};
 #[cfg(target_arch = "wasm32")]
 mod a11y_proof;
 #[cfg(target_arch = "wasm32")]
+mod aria_proof;
+#[cfg(target_arch = "wasm32")]
 mod image_proof;
 #[cfg(target_arch = "wasm32")]
 mod input_proof;
@@ -83,6 +85,8 @@ extern "C" {
 pub fn start() {
     #[cfg(target_arch = "wasm32")]
     if a11y_proof::enabled() { a11y_proof::run(); return; }
+    #[cfg(target_arch = "wasm32")]
+    if aria_proof::enabled() { aria_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]
     if input_proof::enabled() { input_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]

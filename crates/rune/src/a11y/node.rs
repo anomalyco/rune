@@ -60,9 +60,12 @@ impl RuntimeCore {
         if let Some(m) = n.a11y.more.as_deref() {
             (&m.description, &m.value, &m.set, &m.shortcut, m.invalid, m.read_only, m.sorted, m.busy,
                 m.row_count, m.column_count, m.row_index, m.column_index).hash(&mut h);
+            (m.multiselectable, m.required, m.has_popup, m.orientation).hash(&mut h);
             [m.labelled_by.as_deref(), m.described_by.as_deref()].map(|k| k.and_then(|k| self.a11y_keyed(i, k)).map(|j| self.a11y_words(j))).hash(&mut h);
             if let Some(r) = m.range { [r.value, r.min, r.max, r.step.unwrap_or(f64::NAN)].map(f64::to_bits).hash(&mut h); }
             self.a11y_active_descendant(i).map(|j| self.tree.nodes[j].id.0).hash(&mut h);
+            m.controls.as_deref().and_then(|k| self.a11y_related_target(i, k)).map(|j| self.tree.nodes[j].id.0).hash(&mut h);
+            m.owns.as_deref().and_then(|k| self.a11y_related_target(i, k)).map(|j| self.tree.nodes[j].id.0).hash(&mut h);
         }
         n.text_cut(self.env.scale).hash(&mut h);
         let secure = n.is_secure();
@@ -232,6 +235,29 @@ impl RuntimeCore {
             }
             if let Some(j) = self.a11y_active_descendant(i) { node.set_active_descendant(element_id(self.tree.nodes[j].id)); }
             if m.busy { node.set_busy(); }
+            if m.multiselectable { node.set_multiselectable(); }
+            if m.required { node.set_required(); }
+            if let Some(hp) = m.has_popup {
+                node.set_has_popup(match hp {
+                    crate::HasPopup::Menu => accesskit::HasPopup::Menu,
+                    crate::HasPopup::Listbox => accesskit::HasPopup::Listbox,
+                    crate::HasPopup::Tree => accesskit::HasPopup::Tree,
+                    crate::HasPopup::Grid => accesskit::HasPopup::Grid,
+                    crate::HasPopup::Dialog => accesskit::HasPopup::Dialog,
+                });
+            }
+            if let Some(o) = m.orientation {
+                node.set_orientation(match o {
+                    crate::Orientation::Horizontal => accesskit::Orientation::Horizontal,
+                    crate::Orientation::Vertical => accesskit::Orientation::Vertical,
+                });
+            }
+            if let Some(j) = m.controls.as_deref().and_then(|k| self.a11y_related_target(i, k)) {
+                node.set_controls(vec![element_id(self.tree.nodes[j].id)]);
+            }
+            if let Some(j) = m.owns.as_deref().and_then(|k| self.a11y_related_target(i, k)) {
+                node.set_owns(vec![element_id(self.tree.nodes[j].id)]);
+            }
         }
         if let Some(v) = more.and_then(|m| m.value.as_deref()) { node.set_value(v); }
         if let Some(r) = more.and_then(|m| m.range) {
@@ -285,10 +311,14 @@ impl RuntimeCore {
             }
         }
         node.set_bounds(rect(self.paint.drawn[i], shift));
+        // A disabled-but-focusable control (`El::aria_disabled`) can still take assistive focus
+        // while activation actions stay gated behind `actionable`.
+        if focusable && !n.inert && self.allowed(i) {
+            node.add_action(Ak::Focus);
+        }
         // What a pointer or keyboard user can do to it, routed to the same handlers.
         if actionable {
             if handlers.is_some_and(|h| h.on_press.is_some()) || input.is_some() || (w.delegated_a11y && roles::composite_item(role)) { node.add_action(Ak::Click); }
-            if focusable { node.add_action(Ak::Focus); }
             if handlers.is_some_and(|h| h.on_secondary_press.is_some()) { node.add_action(Ak::ShowContextMenu); }
             if n.a11y.expanded.is_some() && handlers.is_some_and(|h| h.on_press.is_some()) {
                 node.add_action(if n.a11y.expanded == Some(true) { Ak::Collapse } else { Ak::Expand });
@@ -330,6 +360,48 @@ impl RuntimeCore {
             .take_while(inside)
             .find(|&j| self.tree.nodes[j].named(key) && !self.subtree_exiting(j));
         own.or_else(|| self.live_named(None, key))
+    }
+
+    /// The live, accessible element node `i`'s `El::controls` or `El::owns` names: nearest
+    /// scope first (own subtree, then enclosing ancestors), falling back to root-attached
+    /// overlays and keyed paths via `live_named`. Never resolves to `i` itself or to a node
+    /// omitted from the accessibility tree.
+    pub(crate) fn a11y_related_target(&self, i: usize, key: &str) -> Option<usize> {
+        if key.is_empty() { return None; }
+        let usable = |j: usize| j != i && !self.subtree_exiting(j) && self.a11y_in_tree(j);
+        let mut scope = Some(i);
+        while let Some(s) = scope {
+            let inside = |j: &usize| std::iter::successors(self.tree.nodes[*j].parent, |&p| self.tree.nodes[p].parent).any(|p| p == s);
+            if let Some(j) = (s + 1..self.tree.nodes.len())
+                .take_while(inside)
+                .find(|&j| self.tree.nodes[j].named(key) && usable(j))
+            {
+                return Some(j);
+            }
+            scope = self.tree.nodes[s].parent;
+        }
+        self.live_named(None, key).filter(|&j| usable(j))
+    }
+
+    /// Whether node `j` appears in the accessibility tree (not hidden, exiting, unmounted,
+    /// transparent, inside a secure ancestor, occluded by a modal, or role-omitted).
+    fn a11y_in_tree(&self, j: usize) -> bool {
+        let n = &self.tree.nodes[j];
+        if n.is_moved_stub() || n.a11y.hidden || n.vis.opacity <= 0.01 || self.is_exiting(n.id) || !self.scene.contains(n.id) {
+            return false;
+        }
+        let mut p = n.parent;
+        while let Some(a) = p {
+            let an = &self.tree.nodes[a];
+            if an.is_moved_stub() || an.a11y.hidden || an.vis.opacity <= 0.01 || an.is_secure() || self.is_exiting(an.id) || !self.scene.contains(an.id) {
+                return false;
+            }
+            p = an.parent;
+        }
+        if self.active_modal().is_some() && !self.modal_member(j) {
+            return false;
+        }
+        self.a11y_role(j).is_some()
     }
 
     /// Debug builds: warns once per site about a control a screen reader would say only by its

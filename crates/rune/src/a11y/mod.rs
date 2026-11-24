@@ -14,6 +14,8 @@ use crate::runtime::Runtime;
 pub(crate) mod actions;
 #[cfg(test)]
 mod actions_tests;
+#[cfg(test)]
+mod aria_tests;
 pub(crate) mod dump;
 #[cfg(test)]
 mod dump_tests;

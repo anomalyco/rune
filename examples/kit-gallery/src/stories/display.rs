@@ -463,3 +463,186 @@ pub(super) fn list_delegated_a11y(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
                 .color(k.c.text_weak),
         )
 }
+/// Accessibility story exercising `El::aria_disabled` (focusable unavailable button vs truly
+/// disabled), a horizontal `tablist` with `El::orientation` and `El::controls`, and a popup
+/// trigger with `El::has_popup`, `El::controls`, `El::owns`, `El::multiselectable`, and
+/// `El::required`.
+pub(super) fn a11y_aria_properties(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    const TABS: [(&str, &str, &str); 3] = [
+        ("tab-overview", "Overview", "aria_disabled keeps a pending button in the Tab order while reading as disabled."),
+        ("tab-relations", "Relations", "controls and owns resolve nearest scope first, falling back to root overlays."),
+        ("tab-lists", "Lists", "multiselectable, required, has_popup and orientation reach AccessKit and web."),
+    ];
+    const FRUITS: [(&str, &str); 3] = [
+        ("fruit-apple", "Apple"),
+        ("fruit-banana", "Banana"),
+        ("fruit-cherry", "Cherry"),
+    ];
+    let pending = !s.is("aria-ready");
+    let active_tab = s.picked("aria-tab", "tab-overview");
+    let panel_copy = TABS.iter().find(|(id, _, _)| *id == active_tab).map_or(TABS[0].2, |(_, _, body)| *body);
+    let popup_open = !s.is("aria-popup-closed");
+
+    let mut pending_btn = row()
+        .key("aria-pending-save")
+        .role("button")
+        .h(32.0)
+        .px(12.0)
+        .center_y()
+        .radius(k.radius.sm)
+        .fill(if pending { k.c.surface_base } else { k.c.layer_02 })
+        .border(1.0, k.c.border_weak)
+        .focusable(true)
+        .aria_disabled(pending)
+        .child(
+            text(if pending { "Saving…" } else { "Save" })
+                .font(k.ty.ui_medium)
+                .color(if pending { k.c.text_muted } else { k.c.text_strong }),
+        );
+    if !pending {
+        pending_btn = pending_btn.on_press(|s: &mut G| s.flip("aria-ready"));
+    }
+
+    let tabs = TABS.iter().map(|&(id, label, _)| {
+        let selected = active_tab == id;
+        row()
+            .key(id)
+            .role("tab")
+            .h(28.0)
+            .px(10.0)
+            .center_y()
+            .radius(k.radius.sm)
+            .fill(if selected { k.c.layer_02 } else { rune::Color::TRANSPARENT })
+            .focusable(true)
+            .focus_selected(selected)
+            .controls("aria-tabpanel")
+            .on_press(move |s: &mut G| { s.pick.insert("aria-tab".into(), id.into()); })
+            .child(text(label).font(k.ty.ui_compact).color(if selected { k.c.text_strong } else { k.c.text_weak }))
+    });
+
+    let mut root = col()
+        .w(360.0)
+        .gap(12.0)
+        .child(
+            col().gap(6.0)
+                .child(text("Pending vs disabled buttons").font(k.ty.small_medium).color(k.c.text_weak))
+                .child(
+                    row().gap(8.0).center_y()
+                        .child(pending_btn)
+                        .child(
+                            Button::new(if pending { "Finish save" } else { "Start save" })
+                                .variant(ButtonVariant::Ghost)
+                                .on_press(|s: &mut G| s.flip("aria-ready"))
+                                .build(k)
+                                .key("aria-toggle-pending"),
+                        )
+                        .child(
+                            Button::new("Disabled")
+                                .disabled(true)
+                                .build(k)
+                                .key("aria-hard-disabled"),
+                        ),
+                ),
+        )
+        .child(
+            col().gap(6.0)
+                .child(
+                    row()
+                        .key("aria-tablist")
+                        .role("tablist")
+                        .label("ARIA details")
+                        .orientation(rune::Orientation::Horizontal)
+                        .focus_group()
+                        .gap(4.0)
+                        .padding(3.0)
+                        .radius(k.radius.md)
+                        .fill(k.c.bg_base)
+                        .border(1.0, k.c.border_weak)
+                        .children(tabs),
+                )
+                .child(
+                    col()
+                        .key("aria-tabpanel")
+                        .role("tabpanel")
+                        .label("ARIA detail panel")
+                        .w_full()
+                        .padding(10.0)
+                        .radius(k.radius.md)
+                        .fill(k.c.layer_01)
+                        .border(1.0, k.c.border_weak)
+                        .child(text(panel_copy).font(k.ty.small).color(k.c.text_base).wrap()),
+                ),
+        )
+        .child(
+            row()
+                .key("aria-popup-owner")
+                .role("group")
+                .label("Fruit picker")
+                .owns("aria-popup-list")
+                .gap(8.0)
+                .center_y()
+                .child(
+                    row()
+                        .key("aria-popup-trigger")
+                        .role("button")
+                        .h(32.0)
+                        .px(12.0)
+                        .center_y()
+                        .radius(k.radius.sm)
+                        .fill(k.c.surface_base)
+                        .border(1.0, k.c.border_weak)
+                        .focusable(true)
+                        .expanded(popup_open)
+                        .has_popup(rune::HasPopup::Listbox)
+                        .controls("aria-popup-list")
+                        .on_press(|s: &mut G| s.flip("aria-popup-closed"))
+                        .child(text(if popup_open { "Hide fruit list" } else { "Show fruit list" }).font(k.ty.ui_compact).color(k.c.text_base)),
+                ),
+        );
+
+    if popup_open {
+        let rows = FRUITS.iter().map(|&(id, label)| {
+            let selected = s.is(id) || (id == "fruit-apple" && !s.is("aria-fruit-touched"));
+            row()
+                .key(id)
+                .role("option")
+                .label(label)
+                .h(28.0)
+                .w_full()
+                .px(10.0)
+                .center_y()
+                .radius(k.radius.sm)
+                .fill(if selected { k.c.layer_02 } else { rune::Color::TRANSPARENT })
+                .focusable(true)
+                .focus_selected(selected)
+                .on_press(move |s: &mut G| {
+                    if !s.is("aria-fruit-touched") {
+                        s.on.insert("aria-fruit-touched".into());
+                        s.on.insert("fruit-apple".into());
+                    }
+                    s.flip(id);
+                })
+                .child(text(if selected { format!("✓ {label}") } else { label.to_owned() }).font(k.ty.ui_compact).color(k.c.text_base))
+        });
+        root = root.child(
+            col()
+                .key("aria-popup-list")
+                .role("listbox")
+                .label("Fruits")
+                .multiselectable(true)
+                .required(true)
+                .orientation(rune::Orientation::Vertical)
+                .focus_group()
+                .w_full()
+                .padding(4.0)
+                .gap(2.0)
+                .radius(k.radius.md)
+                .fill(k.c.bg_base)
+                .border(1.0, k.c.border_weak)
+                .children(rows),
+        );
+    }
+
+    root
+}
+

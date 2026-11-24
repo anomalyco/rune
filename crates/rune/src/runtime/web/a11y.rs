@@ -99,6 +99,20 @@ pub(crate) struct A11yItem {
     pub busy: bool,
     /// App-mode scroll viewport offset `[tx, ty]` in CSS pixels (`translate3d(-tx, -ty, 0)`).
     pub scroll: Option<[f32; 2]>,
+    /// Extra WAI-ARIA states and relations (`aria-haspopup`, `aria-orientation`,
+    /// `aria-multiselectable`, `aria-required`, `aria-controls`, `aria-owns`).
+    pub aria: MirrorAria,
+}
+
+/// Extra WAI-ARIA states and relations mirrored onto a web DOM item.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct MirrorAria {
+    pub multiselectable: bool,
+    pub required: bool,
+    pub has_popup: Option<&'static str>,
+    pub orientation: Option<&'static str>,
+    pub controls: Option<String>,
+    pub owns: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -132,7 +146,7 @@ impl A11yItem {
     fn new(kind: &'static str, path: &str, rect: [f32; 4]) -> Self {
         A11yItem { kind, path: path.to_owned(), rect, font_size: 0.0, level: None, expanded: None, text: String::new(),
             runs: Vec::new(), tag: None, role: None, parent: None, id: None, href: None, font: None, selectable: false, description: String::new(), value: String::new(), pressed: None, selected: None, checked: None, set: None,
-            live: None, range: None, value_text: String::new(), disabled: false, busy: false, scroll: None }
+            live: None, range: None, value_text: String::new(), disabled: false, busy: false, scroll: None, aria: MirrorAria::default() }
     }
 
     fn to_json(&self) -> Value {
@@ -164,6 +178,7 @@ impl A11yItem {
             self.disabled,
             self.busy,
             self.scroll,
+            &self.aria,
         ))
     }
 }
@@ -541,6 +556,7 @@ impl RuntimeCore {
                 item.id = anchor_id(n.key.as_deref());
                 item.text = self.mirror_name(i).unwrap_or_default();
                 item.description = self.mirror_description(i);
+                item.aria = self.mirror_aria(i);
                 if app_scroll {
                     let [sx, sy] = self.scroll.scrolls.get(&n.id).map_or([0.0, 0.0], |st| {
                         self.content_to_window(i, [st.drawn_x, st.drawn.y()])
@@ -566,6 +582,7 @@ impl RuntimeCore {
                     item.id = anchor_id(n.key.as_deref());
                     item.disabled = n.a11y.disabled;
                     item.busy = busy;
+                    item.aria = self.mirror_aria(i);
                     push(&mut out, item);
                 }
                 i = end;
@@ -591,6 +608,7 @@ impl RuntimeCore {
                 item.value_text = self.mirror_value(i).unwrap_or_default().to_owned();
                 item.disabled = n.a11y.disabled;
                 item.busy = busy;
+                item.aria = self.mirror_aria(i);
                 push(&mut out, item);
                 i = end;
                 last_flow_parent = None;
@@ -638,6 +656,7 @@ impl RuntimeCore {
                     } else {
                         item.value = value;
                     }
+                    item.aria = self.mirror_aria(i);
                     if let Some(role) = control_role {
                         item.role = Some(role);
                         if self.a11y_role(i).is_some_and(roles::selectable_item) { item.selected = Some(n.focus.selected); }
@@ -789,6 +808,25 @@ impl RuntimeCore {
             return None;
         }
         self.tree.nodes[i].a11y.more.as_ref().and_then(|m| m.value.as_deref()).filter(|s| !s.is_empty())
+    }
+
+    fn mirror_related_id(&self, i: usize, key: Option<&str>) -> Option<String> {
+        let j = self.a11y_related_target(i, key?)?;
+        anchor_id(self.tree.nodes[j].key.as_deref())
+    }
+
+    fn mirror_aria(&self, i: usize) -> MirrorAria {
+        let n = &self.tree.nodes[i];
+        let mut aria = MirrorAria::default();
+        if let Some(m) = n.a11y.more.as_deref() {
+            aria.multiselectable = m.multiselectable;
+            aria.required = m.required;
+            aria.has_popup = m.has_popup.map(crate::HasPopup::as_aria);
+            aria.orientation = m.orientation.map(crate::Orientation::as_aria);
+            aria.controls = self.mirror_related_id(i, m.controls.as_deref());
+            aria.owns = self.mirror_related_id(i, m.owns.as_deref());
+        }
+        aria
     }
 
     /// The page's horizontal scroll viewports: their paths and how far each is scrolled right.
@@ -1019,6 +1057,13 @@ impl RuntimeCore {
             .any(|j| self.tree.nodes[j].is_secure());
         if !in_secure && let Some(rg) = finite_range(n) { o.insert("rg".into(), json!(rg)); }
         if let Some(value) = self.mirror_value(i) { o.insert("v".into(), json!(value)); }
+        let aria = self.mirror_aria(i);
+        if aria.multiselectable { o.insert("ms".into(), json!(true)); }
+        if aria.required { o.insert("rq".into(), json!(true)); }
+        if let Some(hp) = aria.has_popup { o.insert("hp".into(), json!(hp)); }
+        if let Some(or) = aria.orientation { o.insert("or".into(), json!(or)); }
+        if let Some(ct) = aria.controls.as_deref() { o.insert("ct".into(), json!(ct)); }
+        if let Some(ow) = aria.owns.as_deref() { o.insert("ow".into(), json!(ow)); }
         Value::Object(o)
     }
 

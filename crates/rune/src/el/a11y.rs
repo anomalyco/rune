@@ -18,6 +18,66 @@ pub enum LiveRegion {
     Assertive,
 }
 
+/// The kind of interactive popup an element opens ([`El::has_popup`]), as ARIA's `aria-haspopup`.
+///
+/// ```
+/// # use rune::{HasPopup, el, text};
+/// let trigger = el()
+///     .key("fruit-btn")
+///     .role("button")
+///     .has_popup(HasPopup::Listbox)
+///     .child(text("Fruit"));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum HasPopup {
+    /// Opens a menu (`aria-haspopup="menu"`).
+    Menu,
+    /// Opens a listbox (`aria-haspopup="listbox"`).
+    Listbox,
+    /// Opens a tree (`aria-haspopup="tree"`).
+    Tree,
+    /// Opens a grid (`aria-haspopup="grid"`).
+    Grid,
+    /// Opens a dialog (`aria-haspopup="dialog"`).
+    Dialog,
+}
+
+impl HasPopup {
+    pub(crate) fn as_aria(self) -> &'static str {
+        match self {
+            Self::Menu => "menu",
+            Self::Listbox => "listbox",
+            Self::Tree => "tree",
+            Self::Grid => "grid",
+            Self::Dialog => "dialog",
+        }
+    }
+}
+
+/// The layout axis of a composite widget, toolbar, scrollbar, or separator ([`El::orientation`]),
+/// as ARIA's `aria-orientation`.
+///
+/// ```
+/// # use rune::{Orientation, row};
+/// let tabs = row().key("tabs").role("tablist").orientation(Orientation::Horizontal);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Orientation {
+    /// Items run horizontally (`aria-orientation="horizontal"`).
+    Horizontal,
+    /// Items run vertically (`aria-orientation="vertical"`).
+    Vertical,
+}
+
+impl Orientation {
+    pub(crate) fn as_aria(self) -> &'static str {
+        match self {
+            Self::Horizontal => "horizontal",
+            Self::Vertical => "vertical",
+        }
+    }
+}
+
 /// A checkbox's, switch's or toggle button's state for accessibility ([`El::checked`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Checked {
@@ -82,6 +142,18 @@ pub(crate) struct A11yMore {
     pub row_index: Option<usize>,
     /// 1-based column index of a `row`, `cell`, `gridcell`, `columnheader` or `rowheader` (`El::column_index`).
     pub column_index: Option<usize>,
+    /// Whether a `listbox`, `tree`, `grid` or `tablist` allows multiple selected items (`El::multiselectable`).
+    pub multiselectable: bool,
+    /// Whether user input or selection is required (`El::required`).
+    pub required: bool,
+    /// Kind of interactive popup triggered by this element (`El::has_popup`).
+    pub has_popup: Option<HasPopup>,
+    /// Layout axis of a composite widget, toolbar, scrollbar or separator (`El::orientation`).
+    pub orientation: Option<Orientation>,
+    /// `El::controls`'s key (ARIA `aria-controls`).
+    pub controls: Option<String>,
+    /// `El::owns`'s key (ARIA `aria-owns`).
+    pub owns: Option<String>,
 }
 
 /// Accessibility state beyond role and label (`El::level`, `El::expanded`, `El::secure`, and
@@ -232,13 +304,138 @@ impl El {
         self
     }
     /// A control that can't be used now: assistive technology reads it as dimmed. It also
-    /// stops it taking focus; leave its press handler off as well.
+    /// stops it taking focus; leave its press handler off as well. Use [`El::aria_disabled`]
+    /// when the element should announce unavailable state while keeping its focusability intact.
     pub fn disabled(mut self, disabled: bool) -> Self {
         if disabled || !self.cold.is_empty() {
             let cold = self.cold_mut();
             cold.a11y.disabled = disabled;
             if disabled { let f = &mut *cold.focus; f.enabled = false; f.opt_out = true; }
         }
+        self
+    }
+    /// Mark this element unavailable to assistive technology (ARIA `aria-disabled`) without
+    /// altering its keyboard focusability.
+    ///
+    /// Unlike [`El::disabled`], calling `aria_disabled(true)` leaves [`El::focusable`],
+    /// `Cx::web_focus`, and an earlier [`El::disabled`] untouched, so a pending or unavailable
+    /// control can remain in the Tab order and accept assistive focus while activation actions
+    /// stay suppressed (WAI-ARIA Authoring Practices: *Focusability of Disabled Controls*).
+    /// Leave its press handler off as well.
+    ///
+    /// ```
+    /// # use rune::{el, text};
+    /// let pending = el()
+    ///     .key("save")
+    ///     .role("button")
+    ///     .focusable(true)
+    ///     .aria_disabled(true)
+    ///     .child(text("Saving…"));
+    /// ```
+    pub fn aria_disabled(mut self, disabled: bool) -> Self {
+        if disabled || !self.cold.is_empty() {
+            self.cold_mut().a11y.disabled = disabled;
+        }
+        self
+    }
+    /// Whether users may select more than one item in a `listbox`, `tree`, `grid`, or
+    /// `tablist` (ARIA `aria-multiselectable`).
+    ///
+    /// ```
+    /// # use rune::{col, el, text};
+    /// let list = col()
+    ///     .key("fruits")
+    ///     .role("listbox")
+    ///     .multiselectable(true)
+    ///     .child(el().key("apple").role("option").child(text("Apple")));
+    /// ```
+    pub fn multiselectable(mut self, on: bool) -> Self {
+        if on || self.cold.a11y.more.is_some() {
+            self.cold_mut().a11y.more().multiselectable = on;
+        }
+        self
+    }
+    /// Whether user input or selection is required on this control before submitting (ARIA
+    /// `aria-required`).
+    ///
+    /// ```
+    /// # use rune::{el, text};
+    /// let picker = el().key("country").role("combobox").required(true).child(text("Country"));
+    /// ```
+    pub fn required(mut self, on: bool) -> Self {
+        if on || self.cold.a11y.more.is_some() {
+            self.cold_mut().a11y.more().required = on;
+        }
+        self
+    }
+    /// The kind of interactive popup this element triggers (ARIA `aria-haspopup`).
+    ///
+    /// ```
+    /// # use rune::{HasPopup, el, text};
+    /// let trigger = el()
+    ///     .key("actions")
+    ///     .role("button")
+    ///     .has_popup(HasPopup::Menu)
+    ///     .child(text("Actions"));
+    /// ```
+    pub fn has_popup(mut self, kind: HasPopup) -> Self {
+        self.cold_mut().a11y.more().has_popup = Some(kind);
+        self
+    }
+    /// The layout orientation of a composite control, toolbar, scrollbar, or separator (ARIA
+    /// `aria-orientation`).
+    ///
+    /// ```
+    /// # use rune::{Orientation, row};
+    /// let bar = row().key("tabs").role("tablist").orientation(Orientation::Horizontal);
+    /// ```
+    pub fn orientation(mut self, orientation: Orientation) -> Self {
+        self.cold_mut().a11y.more().orientation = Some(orientation);
+        self
+    }
+    /// The element whose contents or presence this element controls (ARIA `aria-controls`),
+    /// such as a tab naming its panel or a popup trigger naming its menu or listbox. `key`
+    /// resolves nearest-scope-first (own subtree, then enclosing ancestors) with fallback to
+    /// root-attached overlays and keyed paths; an empty key names none and costs nothing.
+    ///
+    /// ```
+    /// # use rune::{HasPopup, el, text};
+    /// let trigger = el()
+    ///     .key("trigger")
+    ///     .role("button")
+    ///     .has_popup(HasPopup::Listbox)
+    ///     .controls("fruit-list")
+    ///     .child(text("Fruit"));
+    /// ```
+    pub fn controls(mut self, key: impl Into<String>) -> Self {
+        let key = key.into();
+        if key.is_empty() {
+            if let Some(more) = self.cold.a11y.more.as_ref() && more.controls.is_some() {
+                self.cold_mut().a11y.more().controls = None;
+            }
+            return self;
+        }
+        self.cold_mut().a11y.more().controls = Some(key);
+        self
+    }
+    /// An element logically owned by this element even when not a tree descendant (ARIA
+    /// `aria-owns`), such as a listbox or combobox whose popup options sit in a root-attached
+    /// overlay. `key` resolves nearest-scope-first with fallback to root-attached overlays and
+    /// keyed paths; an empty key names none and costs nothing.
+    ///
+    /// ```
+    /// # use rune::{col, el};
+    /// let combo = col().key("combo").role("combobox").owns("combo-popup").child(el());
+    /// ```
+    pub fn owns(mut self, key: impl Into<String>) -> Self {
+        let key = key.into();
+        if key.is_empty() {
+            if let Some(more) = self.cold.a11y.more.as_ref() && more.owns.is_some() {
+                self.cold_mut().a11y.more().owns = None;
+            }
+            return self;
+        }
+        self.cold_mut().a11y.more().owns = Some(key);
         self
     }
     /// Leave this element and everything inside it out of the accessibility tree: decoration,

@@ -1104,6 +1104,12 @@ function applyA11yItem(h, el, item, tag, origin) {
         ['aria-valuemax', item.rg ? String(item.rg[1]) : undefined],
         ['aria-valuenow', item.rg ? String(item.rg[2]) : undefined],
         ['aria-valuetext', item.vt],
+        ['aria-multiselectable', item.ms ? 'true' : undefined],
+        ['aria-required', item.rq ? 'true' : undefined],
+        ['aria-haspopup', item.hp],
+        ['aria-orientation', item.or],
+        ['aria-controls', item.ct],
+        ['aria-owns', item.ow],
     ];
     for (const [name, value] of rangeAttrs) {
         if (value === undefined) {
@@ -1316,6 +1322,12 @@ export function focusA11y(h, json) {
     if (f.l) el.setAttribute('aria-level', String(f.l));
     if (f.dis) el.setAttribute('aria-disabled', 'true');
     if (f.b) el.setAttribute('aria-busy', 'true');
+    if (f.ms) el.setAttribute('aria-multiselectable', 'true');
+    if (f.rq) el.setAttribute('aria-required', 'true');
+    if (f.hp) el.setAttribute('aria-haspopup', f.hp);
+    if (f.or) el.setAttribute('aria-orientation', f.or);
+    if (f.ct) el.setAttribute('aria-controls', f.ct);
+    if (f.ow) el.setAttribute('aria-owns', f.ow);
     if (f.rg) {
         el.setAttribute('aria-valuemin', String(f.rg[0]));
         el.setAttribute('aria-valuemax', String(f.rg[1]));
