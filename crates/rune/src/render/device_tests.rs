@@ -664,3 +664,141 @@ fn headless_run_exits_nonzero_when_every_adapter_rejects_classic_shader() {
     );
     assert!(!snap.exists(), "failed headless run must not write a snap image");
 }
+
+/// Simulates a Linux direct-driver instance whose single driver cannot serve a surface: when
+/// `pick_first_adapter` finds no usable adapter on the restricted instance, the fallback chain
+/// widens once to the unlimited instance, recreates the surface, and succeeds.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn direct_driver_pick_failure_widens_once_to_unlimited_instance() {
+    use crate::gpu::fallback::{Policy, Presentation, PresentationPolicy};
+
+    let mut empty_desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    empty_desc.backends = wgpu::Backends::empty();
+    let restricted = wgpu::Instance::new(empty_desc);
+    let unlimited = Gpu::instance();
+
+    let mut widen_calls = 0usize;
+    let mut surfaces_made = 0usize;
+    let res = Gpu::try_setup_on_with_widen(
+        restricted,
+        (),
+        Some(Policy::Automatic),
+        Presentation::DirectComposition,
+        PresentationPolicy::Pinned,
+        wgpu::Features::empty(),
+        false,
+        |_, _| {
+            surfaces_made += 1;
+            Ok(())
+        },
+        |_| Gpu::instance(),
+        |_| {
+            widen_calls += 1;
+            Some(unlimited.clone())
+        },
+        |_| None,
+        |_, _| Ok(7u32),
+    );
+    let (_gpu, (), value) = res.expect("widening to unlimited instance must recover");
+    assert_eq!(value, 7);
+    assert_eq!(widen_calls, 1, "widening runs at most once");
+    assert_eq!(surfaces_made, 1, "surface is recreated on the widened instance");
+}
+
+/// When all adapters on a direct-driver instance refuse configuration with `SurfaceRefused`,
+/// the fallback chain widens once to the unlimited instance (skipping already-tried adapters),
+/// and never loops or widens on transient (`OutOfMemory`/`DeviceLost`) or `Pinned` failures.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn direct_driver_surface_refused_widens_once_and_never_widens_on_stop_or_happy_path() {
+    use crate::gpu::fallback::{Failure, Policy, Presentation, PresentationPolicy};
+    use super::super::SurfaceSetupError;
+
+    // 1. Exhausting adapters with SurfaceRefused triggers widen_instance exactly once and
+    // preserves the first error if the widened instance has no untried adapters left.
+    let mut widen_calls = 0usize;
+    let mut surfaces_made = 0usize;
+    let err = Gpu::try_setup_on_with_widen(
+        Gpu::instance(),
+        (),
+        Some(Policy::Automatic),
+        Presentation::DirectComposition,
+        PresentationPolicy::Pinned,
+        wgpu::Features::empty(),
+        false,
+        |_, _| {
+            surfaces_made += 1;
+            Ok(())
+        },
+        |_| Gpu::instance(),
+        |reason| {
+            assert!(reason.starts_with("refused #1"), "got reason={reason}");
+            widen_calls += 1;
+            Some(Gpu::instance())
+        },
+        |_| None,
+        |gpu, _| {
+            Err::<(), _>(SurfaceSetupError {
+                kind: Failure::SurfaceRefused,
+                message: format!("refused #1 on {}", gpu.adapter.get_info().name),
+            })
+        },
+    )
+    .err()
+    .expect("all adapters refused");
+    assert_eq!(widen_calls, 1, "must widen once when direct instance exhausts candidates");
+    assert!(surfaces_made >= 2, "must recreate surface on widened instance");
+    assert!(err.message.starts_with("refused #1 on "), "got: {}", err.message);
+
+    // 2. Happy path, OOM, DeviceLost, and Pinned never call widen_instance.
+    let mut happy_widens = 0usize;
+    let ok = Gpu::try_setup_on_with_widen(
+        Gpu::instance(),
+        (),
+        Some(Policy::Automatic),
+        Presentation::DirectComposition,
+        PresentationPolicy::Pinned,
+        wgpu::Features::empty(),
+        false,
+        |_, _| Ok(()),
+        |_| Gpu::instance(),
+        |_| {
+            happy_widens += 1;
+            Some(Gpu::instance())
+        },
+        |_| None,
+        |_, _| Ok(1u32),
+    );
+    assert!(ok.is_ok());
+    assert_eq!(happy_widens, 0, "happy path must never widen");
+
+    for (policy, kind) in [
+        (Policy::Automatic, Failure::OutOfMemory),
+        (Policy::Automatic, Failure::DeviceLost),
+        (Policy::Pinned, Failure::SurfaceRefused),
+    ] {
+        let mut stop_widens = 0usize;
+        let err = Gpu::try_setup_on_with_widen(
+            Gpu::instance(),
+            (),
+            Some(policy),
+            Presentation::DirectComposition,
+            PresentationPolicy::Pinned,
+            wgpu::Features::empty(),
+            false,
+            |_, _| Ok(()),
+            |_| Gpu::instance(),
+            |_| {
+                stop_widens += 1;
+                Some(Gpu::instance())
+            },
+            |_| None,
+            |_, _| Err::<(), _>(SurfaceSetupError { kind, message: "stop".into() }),
+        )
+        .err()
+        .expect("must stop");
+        assert_eq!(err.kind, kind);
+        assert_eq!(stop_widens, 0, "must not widen on policy={policy:?} kind={kind:?}");
+    }
+}

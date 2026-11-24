@@ -28,6 +28,10 @@ pub struct Gpu {
 /// Windows when DirectComposition works or fails transiently (OOM, device loss).
 static DCOMP_UNAVAILABLE: AtomicBool = AtomicBool::new(false);
 
+/// Latched process-wide once a Linux direct-driver Vulkan instance fails to serve a device or
+/// surface and Rune widens to an unlimited instance with all installed drivers.
+static DIRECT_VULKAN_BYPASSED: AtomicBool = AtomicBool::new(false);
+
 /// The most views and buffers a device binds at once (`Limits::max_non_sampler_bindings`).
 /// D3D12 sizes its shader-visible heap from it and can't grow it: each layer target holds about
 /// five of these, so 4,096 ran out at 1,024 layers in one frame.
@@ -66,8 +70,8 @@ impl Gpu {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn try_picked(instance: wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, wanted: wgpu::Features, translucent: bool, presented: bool) -> Result<Gpu, String> {
-        use crate::gpu::fallback::{self, Candidate, Effect, Event, Failure, State};
+    fn try_picked(mut instance: wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, wanted: wgpu::Features, translucent: bool, presented: bool) -> Result<Gpu, String> {
+        use crate::gpu::fallback::{self, Candidate, Effect, Event, Failure, Policy, State};
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
         // D3D12 keeps one device per adapter in a process: while a removed one is still held, a
         // new device on that adapter is the removed one again.
@@ -83,7 +87,7 @@ impl Gpu {
         };
         let draws_surfaces = surface.is_some() || presented;
         let first_info = adapter.get_info();
-        let first_candidate = Self::candidate_info(0, &adapter, surface);
+        let mut tried = vec![Self::candidate_info(0, &adapter, surface)];
         let mut state = State::first(policy);
         let mut event = match Self::device_on(&adapter, wanted) {
             Ok((device, queue)) => {
@@ -94,19 +98,21 @@ impl Gpu {
             Err(error) => Event::Failed { kind: Failure::DeviceCreate, error },
         };
         let mut adapters: Vec<wgpu::Adapter> = Vec::new();
+        let mut candidates: Vec<Candidate> = Vec::new();
+        let mut widened = false;
         loop {
             let mut next_event = None;
             for effect in fallback::step(&mut state, event) {
                 match effect {
                     Effect::EnumerateFallbacks => {
                         adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
-                        let candidates: Vec<Candidate> = adapters
+                        candidates = adapters
                             .iter()
                             .enumerate()
                             .map(|(i, other)| Self::candidate_info(i, other, surface))
                             .collect();
                         let ordered = fallback::order_fallbacks(
-                            std::slice::from_ref(&first_candidate),
+                            &tried,
                             &candidates,
                             &crate::gpu::pick::display_devices(),
                             compositor.as_deref(),
@@ -128,12 +134,48 @@ impl Gpu {
                                 return Ok(Gpu::made(instance, other.clone(), device, queue, draws_surfaces));
                             }
                             Err(error) => {
+                                tried.push(candidates[index].clone());
                                 next_event = Some(Event::Failed { kind: Failure::DeviceCreate, error });
                             }
                         }
                     }
                     Effect::FinishOk { .. } | Effect::SwitchToHwnd => unreachable!("unexpected fallback effect in try_picked"),
-                    Effect::FinishErr(error) => return Err(error),
+                    Effect::FinishErr(error) => {
+                        if surface.is_none()
+                            && !widened
+                            && policy == Policy::Automatic
+                            && Self::is_direct_driver_instance(&instance)
+                        {
+                            widened = true;
+                            Self::mark_direct_vulkan_bypassed();
+                            eprintln!(
+                                "rune: direct Vulkan driver made no device ({error}); retrying with all installed Vulkan drivers"
+                            );
+                            // Already holding `GPU_INIT`; build/fetch the unlimited instance directly.
+                            instance = Self::wgpu_instance_on(
+                                wgpu::Backends::all(),
+                                wgpu::Dx12SwapchainKind::DxgiFromVisual,
+                                true,
+                            );
+                            adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
+                            candidates = adapters
+                                .iter()
+                                .enumerate()
+                                .map(|(i, other)| Self::candidate_info(i, other, surface))
+                                .collect();
+                            let ordered = fallback::order_fallbacks(
+                                &tried,
+                                &candidates,
+                                &crate::gpu::pick::display_devices(),
+                                compositor.as_deref(),
+                                translucent,
+                            );
+                            state = State::need_fallbacks(error);
+                            next_event = Some(Event::Candidates(ordered));
+                            continue;
+                        }
+                        return Err(error);
+                    }
                 }
             }
             event = next_event.expect("fallback state machine must emit an effect");
@@ -171,6 +213,35 @@ impl Gpu {
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn mark_dcomp_unavailable() {
         DCOMP_UNAVAILABLE.store(true, Ordering::Release);
+    }
+
+    /// Whether this process has fallen back from direct Linux Vulkan driver loading to an
+    /// unlimited instance with all installed drivers.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) fn direct_vulkan_bypassed() -> bool {
+        DIRECT_VULKAN_BYPASSED.load(Ordering::Acquire)
+    }
+
+    /// Latches that subsequent Linux Vulkan instances should load all installed drivers instead
+    /// of restricting to the compositor's driver via `VK_LUNARG_direct_driver_loading`.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn mark_direct_vulkan_bypassed() {
+        DIRECT_VULKAN_BYPASSED.store(true, Ordering::Release);
+    }
+
+    /// Whether `instance` was created with `VK_LUNARG_direct_driver_loading` (single-driver
+    /// exclusive mode on Linux).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn is_direct_driver_instance(instance: &wgpu::Instance) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            super::vulkan_icd::is_direct_driver_instance(instance)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = instance;
+            false
+        }
     }
 
     /// Active DX12 presentation path and policy, honouring `WGPU_DX12_PRESENTATION_SYSTEM` and
@@ -319,7 +390,7 @@ impl Gpu {
         presentation: crate::gpu::fallback::Presentation,
     ) -> wgpu::Instance {
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
-        let instance = Self::wgpu_instance_on(wgpu::Backends::DX12, presentation.dx12_swapchain_kind());
+        let instance = Self::wgpu_instance_on(wgpu::Backends::DX12, presentation.dx12_swapchain_kind(), false);
         crate::marks::mark("gpu.instance");
         instance
     }
@@ -328,27 +399,52 @@ impl Gpu {
     #[cfg(not(target_os = "windows"))]
     fn wgpu_instance() -> wgpu::Instance {
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
-        Self::wgpu_instance_on(wgpu::Backends::all(), wgpu::Dx12SwapchainKind::DxgiFromVisual)
+        let unlimited = Self::direct_vulkan_bypassed();
+        Self::wgpu_instance_on(wgpu::Backends::all(), wgpu::Dx12SwapchainKind::DxgiFromVisual, unlimited)
     }
 
-    /// One instance per (backends, DX12 swapchain kind) for the whole process: a new one per device
-    /// was a new DXGI factory and adapter list each time a window or overlay made a device
-    /// (hex#1268), while keying by `Dx12SwapchainKind` keeps DirectComposition and plain HWND
-    /// fallback instances distinct.
-    fn wgpu_instance_on(backends: wgpu::Backends, dx12_swapchain: wgpu::Dx12SwapchainKind) -> wgpu::Instance {
+    /// An unlimited wgpu instance with every installed Vulkan driver loaded (used when a Linux
+    /// direct-driver instance cannot serve a device or surface and the fallback chain needs to
+    /// walk remaining drivers). Identical to `wgpu_instance` on non-Linux platforms.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn wgpu_instance_unlimited() -> wgpu::Instance {
+        #[cfg(target_os = "linux")]
+        {
+            let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
+            Self::wgpu_instance_on(wgpu::Backends::all(), wgpu::Dx12SwapchainKind::DxgiFromVisual, true)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Self::wgpu_instance()
+        }
+    }
+
+    /// One instance per (backends, DX12 swapchain kind, direct-vs-unlimited scope) for the whole
+    /// process: a new one per device was a new DXGI factory and adapter list each time a window or
+    /// overlay made a device (hex#1268), while keying by `Dx12SwapchainKind` keeps
+    /// DirectComposition and plain HWND fallback instances distinct, and `unlimited_vulkan` keeps
+    /// a Linux direct-driver instance separate from the all-drivers fallback instance.
+    fn wgpu_instance_on(
+        backends: wgpu::Backends,
+        dx12_swapchain: wgpu::Dx12SwapchainKind,
+        unlimited_vulkan: bool,
+    ) -> wgpu::Instance {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            static MADE: std::sync::Mutex<Vec<(wgpu::Backends, wgpu::Dx12SwapchainKind, wgpu::Instance)>> = std::sync::Mutex::new(Vec::new());
+            static MADE: std::sync::Mutex<Vec<(wgpu::Backends, wgpu::Dx12SwapchainKind, bool, wgpu::Instance)>> = std::sync::Mutex::new(Vec::new());
             let mut made = MADE.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some((_, _, instance)) = made.iter().find(|(b, k, _)| *b == backends && *k == dx12_swapchain) {
+            if let Some((_, _, _, instance)) = made.iter().find(|(b, k, is_direct, _)| {
+                *b == backends && *k == dx12_swapchain && (!unlimited_vulkan || !*is_direct)
+            }) {
                 return instance.clone();
             }
-            let instance = Self::new_wgpu_instance(backends, dx12_swapchain);
-            made.push((backends, dx12_swapchain, instance.clone()));
+            let (instance, is_direct) = Self::new_wgpu_instance(backends, dx12_swapchain, unlimited_vulkan);
+            made.push((backends, dx12_swapchain, is_direct, instance.clone()));
             instance
         }
         #[cfg(target_arch = "wasm32")]
         {
+            let _ = unlimited_vulkan;
             // With `wgpu/webgl`, wgpu's wasm handles are single-threaded (`!Send + !Sync`), so
             // keep the per-backend instance cache in thread-local storage.
             thread_local! {
@@ -359,24 +455,42 @@ impl Gpu {
                 if let Some((_, _, instance)) = made.iter().find(|(b, k, _)| *b == backends && *k == dx12_swapchain) {
                     return instance.clone();
                 }
-                let instance = Self::new_wgpu_instance(backends, dx12_swapchain);
+                let (instance, _) = Self::new_wgpu_instance(backends, dx12_swapchain, false);
                 made.push((backends, dx12_swapchain, instance.clone()));
                 instance
             })
         }
     }
 
-    fn new_wgpu_instance(backends: wgpu::Backends, dx12_swapchain: wgpu::Dx12SwapchainKind) -> wgpu::Instance {
+    fn new_wgpu_instance(
+        backends: wgpu::Backends,
+        dx12_swapchain: wgpu::Dx12SwapchainKind,
+        unlimited_vulkan: bool,
+    ) -> (wgpu::Instance, bool) {
         #[cfg(target_os = "linux")]
         {
-            Self::select_wgpu_instance(
-                |allow_noncompliant| wgpu::Instance::new(Self::instance_descriptor(backends, allow_noncompliant, dx12_swapchain)),
-                |instance| !pollster::block_on(instance.enumerate_adapters(backends)).is_empty(),
+            super::vulkan_icd::create_linux_instance(
+                backends,
+                unlimited_vulkan || Self::direct_vulkan_bypassed(),
+                |allow_noncompliant| Self::instance_descriptor(backends, allow_noncompliant, dx12_swapchain),
+                || {
+                    Self::select_wgpu_instance(
+                        |allow_noncompliant| {
+                            wgpu::Instance::new(Self::instance_descriptor(
+                                backends,
+                                allow_noncompliant,
+                                dx12_swapchain,
+                            ))
+                        },
+                        |instance| !pollster::block_on(instance.enumerate_adapters(backends)).is_empty(),
+                    )
+                },
             )
         }
         #[cfg(not(target_os = "linux"))]
         {
-            wgpu::Instance::new(Self::instance_descriptor(backends, false, dx12_swapchain))
+            let _ = unlimited_vulkan;
+            (wgpu::Instance::new(Self::instance_descriptor(backends, false, dx12_swapchain)), false)
         }
     }
 

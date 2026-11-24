@@ -488,20 +488,48 @@ fn gpu_log() -> bool {
     rune_core::env::var_os("RUNE_GPU_LOG").is_some_and(|v| v != "0")
 }
 
-/// The compositor's main device as a PCI address, asked once per process.
+/// The Wayland compositor's DRM main device, queried once per process from
+/// `zwp_linux_dmabuf_v1` and sysfs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompositorDevice {
+    /// PCI address (`/sys/dev/char/<maj>:<min>/device`), lowercased; `None` on non-PCI SoCs.
+    pub pci: Option<String>,
+    /// Kernel driver name (file name of `/sys/dev/char/<maj>:<min>/device/driver`), e.g.
+    /// `"i915"`, `"xe"`, `"amdgpu"`, `"nvidia"`, `"msm"`, `"panthor"`.
+    pub driver: Option<String>,
+}
+
+/// The compositor's main DRM device (PCI address and kernel driver), asked once per process.
 #[cfg(target_os = "linux")]
-pub fn compositor_pci() -> Option<String> {
-    static PCI: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    PCI.get_or_init(|| {
-        let (major, minor) = dev_numbers(&dmabuf::main_device()?)?;
-        pci_address(&std::fs::read_link(format!("/sys/dev/char/{major}:{minor}/device")).ok()?)
-    })
-    .clone()
+pub fn compositor_device() -> Option<CompositorDevice> {
+    static DEVICE: std::sync::OnceLock<Option<CompositorDevice>> = std::sync::OnceLock::new();
+    DEVICE
+        .get_or_init(|| {
+            let (major, minor) = dev_numbers(&dmabuf::main_device()?)?;
+            let pci = std::fs::read_link(format!("/sys/dev/char/{major}:{minor}/device"))
+                .ok()
+                .and_then(|link| pci_address(&link));
+            let driver = std::fs::read_link(format!("/sys/dev/char/{major}:{minor}/device/driver"))
+                .ok()
+                .and_then(|link| driver_name(&link));
+            (pci.is_some() || driver.is_some()).then_some(CompositorDevice { pci, driver })
+        })
+        .clone()
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn compositor_pci() -> Option<String> {
+pub fn compositor_device() -> Option<CompositorDevice> {
     None
+}
+
+/// The compositor's main device as a PCI address, asked once per process.
+pub fn compositor_pci() -> Option<String> {
+    compositor_device().and_then(|device| device.pci)
+}
+
+/// The kernel driver name of the compositor's main device, asked once per process.
+pub fn compositor_driver() -> Option<String> {
+    compositor_device().and_then(|device| device.driver)
 }
 
 /// A `dev_t` sent as native-endian bytes, split into major and minor numbers (glibc's and the
@@ -528,6 +556,14 @@ fn pci_address(link: &std::path::Path) -> Option<String> {
     let (device, function) = rest.split_once('.')?;
     let hex = |s: &str, len: usize| s.len() == len && s.bytes().all(|b| b.is_ascii_hexdigit());
     (hex(domain, 4) && hex(bus, 2) && hex(device, 2) && hex(function, 1)).then_some(name)
+}
+
+/// The kernel driver name a DRM node's `device/driver` link points at
+/// (`../../../../bus/pci/drivers/i915` -> `"i915"`).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn driver_name(link: &std::path::Path) -> Option<String> {
+    let name = link.file_name()?.to_str()?;
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 #[cfg(target_os = "linux")]

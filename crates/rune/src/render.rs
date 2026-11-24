@@ -38,6 +38,8 @@ mod surface_setup;
 mod uber_wgsl;
 mod upload;
 mod variant;
+#[cfg(any(target_os = "linux", all(test, not(target_arch = "wasm32"))))]
+mod vulkan_icd;
 mod warmup;
 #[cfg(target_os = "macos")]
 mod windfoil_metallib;
