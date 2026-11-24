@@ -36,7 +36,9 @@ impl MenuEntry {
 }
 
 pub struct MenuItem {
+    key: Option<String>,
     label: String,
+    a11y_label: Option<String>,
     icon: Option<&'static Icon>,
     lead: Option<El>,
     shortcut: Option<String>,
@@ -46,6 +48,8 @@ pub struct MenuItem {
     /// Checkbox and radio items: whether the indicator shows.
     checked: Option<bool>,
     sub: Option<(Vec<MenuEntry>, bool)>,
+    sub_placement: Placement,
+    sub_min_width: f32,
     state: State,
     acts: Acts,
 }
@@ -53,7 +57,9 @@ pub struct MenuItem {
 impl MenuItem {
     pub fn new(label: impl Into<String>) -> MenuItem {
         MenuItem {
+            key: None,
             label: label.into(),
+            a11y_label: None,
             icon: None,
             lead: None,
             shortcut: None,
@@ -62,9 +68,40 @@ impl MenuItem {
             danger: false,
             checked: None,
             sub: None,
+            sub_placement: Placement::RightStart,
+            sub_min_width: 160.0,
             state: State::Rest,
             acts: Acts::default(),
         }
+    }
+    /// Explicit element key for this item row instead of the default positional
+    /// `{menu_key}-item{i}`, so inserting or removing rows above it preserves focus and its
+    /// submenu anchors to `k`. Blank values fall back to the positional key.
+    ///
+    /// ```
+    /// use rune_kit::MenuItem;
+    ///
+    /// let _item = MenuItem::new("Save").key("save");
+    /// ```
+    pub fn key(mut self, k: impl Into<String>) -> Self {
+        let k = k.into();
+        self.key = (!k.trim().is_empty()).then_some(k);
+        self
+    }
+    /// Accessible name for this item (ARIA `aria-label`) distinct from the drawn text passed to
+    /// [`Self::new`], for example when the visible label is truncated or abbreviated. Also used
+    /// for menu typeahead and as the default accessible name of an open submenu. Blank values
+    /// fall back to the drawn label.
+    ///
+    /// ```
+    /// use rune_kit::MenuItem;
+    ///
+    /// let _item = MenuItem::new("…/menu.rs").a11y_label("crates/rune-kit/src/overlays/menu.rs");
+    /// ```
+    pub fn a11y_label(mut self, l: impl Into<String>) -> Self {
+        let l = l.into();
+        self.a11y_label = (!l.trim().is_empty()).then_some(l);
+        self
     }
     /// A 14 point icon before the label.
     pub fn icon(mut self, i: &'static Icon) -> Self {
@@ -99,9 +136,39 @@ impl MenuItem {
         self.checked = Some(on);
         self
     }
-    /// A submenu trigger; `open` shows its entries to the right.
+    /// A submenu trigger; `open` shows its entries at [`Self::submenu_placement`] (right-start
+    /// by default).
     pub fn submenu(mut self, entries: Vec<MenuEntry>, open: bool) -> Self {
         self.sub = Some((entries, open));
+        self
+    }
+    /// Where an open submenu anchors relative to this item row (default
+    /// [`Placement::RightStart`]). For example, [`Placement::LeftStart`] places the submenu's
+    /// right edge against the item row's left edge.
+    ///
+    /// ```
+    /// use rune_kit::{MenuEntry, MenuItem, Placement};
+    ///
+    /// let _item = MenuItem::new("HTTP version")
+    ///     .submenu(vec![MenuEntry::item(MenuItem::new("HTTP/2"))], true)
+    ///     .submenu_placement(Placement::LeftStart);
+    /// ```
+    pub fn submenu_placement(mut self, placement: Placement) -> Self {
+        self.sub_placement = placement;
+        self
+    }
+    /// Minimum width of an open submenu in points (default `160.0`). Pass `0.0` to let the
+    /// submenu size to its content. Negative or non-finite values clamp to `0.0`.
+    ///
+    /// ```
+    /// use rune_kit::{MenuEntry, MenuItem};
+    ///
+    /// let _item = MenuItem::new("HTTP version")
+    ///     .submenu(vec![MenuEntry::item(MenuItem::new("HTTP/2"))], true)
+    ///     .submenu_min_width(0.0);
+    /// ```
+    pub fn submenu_min_width(mut self, width: f32) -> Self {
+        self.sub_min_width = width;
         self
     }
     /// `Hover` paints the highlighted (keyboard-focused) row.
@@ -124,7 +191,9 @@ impl MenuItem {
         self
     }
 
-    fn build(self, k: &Kit, standard: bool, key: String, layer: &mut Vec<El>) -> El {
+    fn build(self, k: &Kit, standard: bool, fallback_key: String, layer: &mut Vec<El>) -> El {
+        let key = self.key.unwrap_or(fallback_key);
+        let a11y_name = self.a11y_label.unwrap_or_else(|| self.label.clone());
         let c = &k.c;
         let disabled = self.state == State::Disabled;
         let highlighted = self.state == State::Hover || self.sub.as_ref().is_some_and(|s| s.1);
@@ -150,7 +219,7 @@ impl MenuItem {
                 c.icon_base
             }));
         }
-        let label = text(self.label.clone()).key("label").font(font).color(ink).truncate();
+        let label = text(self.label).key("label").font(font).color(ink).truncate();
         content = match &self.description {
             Some(d) => {
                 let (font, ink) = if standard { (k.ty.text_xsmall, c.text_weak) } else { (k.ty.small, c.text_faint) };
@@ -165,7 +234,7 @@ impl MenuItem {
         let mut e = row()
             .key(key.clone())
             .role(if self.checked.is_some() { "menuitemcheckbox" } else { "menuitem" })
-            .label(self.label)
+            .label(a11y_name.clone())
             .radius(if standard { k.radius.sm } else { 4.0 })
             .gap(8.0)
             .center_y();
@@ -227,10 +296,12 @@ impl MenuItem {
                 c.text_faint
             }));
             if open {
-                let sub = Menu { key: format!("{key}-sub"), entries, standard, min_width: 160.0, ..Menu::new("") };
+                let min_width = if self.sub_min_width.is_finite() { self.sub_min_width.max(0.0) } else { 0.0 };
+                let label = (!a11y_name.trim().is_empty()).then_some(a11y_name);
+                let sub = Menu { key: format!("{key}-sub"), label, entries, standard, min_width, ..Menu::new("") };
                 let mut deeper = Vec::new();
                 let surface = sub.surface(k, &mut deeper);
-                layer.push(anchored(k, surface, &key, Placement::RightStart, 0.0));
+                layer.push(anchored(k, surface, &key, self.sub_placement, 0.0));
                 layer.extend(deeper);
             }
         }
@@ -243,6 +314,7 @@ impl MenuItem {
 /// A dropdown menu: `Menu::new("file").trigger(button).item(..).open(s.open).build(&kit, &mut layer)`.
 pub struct Menu {
     key: String,
+    label: Option<String>,
     trigger: Option<El>,
     entries: Vec<MenuEntry>,
     open: bool,
@@ -260,6 +332,7 @@ impl Menu {
     pub fn new(key: impl Into<String>) -> Menu {
         Menu {
             key: key.into(),
+            label: None,
             trigger: None,
             entries: Vec::new(),
             open: false,
@@ -271,6 +344,19 @@ impl Menu {
             context: false,
             dismiss: None,
         }
+    }
+    /// Accessible name for the open menu (`role="menu"`, ARIA `aria-label`), matching
+    /// [`PopupList::label`](crate::PopupList::label). Blank values leave the menu unnamed.
+    ///
+    /// ```
+    /// use rune_kit::Menu;
+    ///
+    /// let _menu = Menu::new("file").label("File actions");
+    /// ```
+    pub fn label(mut self, l: impl Into<String>) -> Self {
+        let l = l.into();
+        self.label = (!l.trim().is_empty()).then_some(l);
+        self
     }
     pub fn trigger(mut self, t: El) -> Self {
         self.trigger = Some(t);
@@ -324,7 +410,10 @@ impl Menu {
     fn surface(self, k: &Kit, layer: &mut Vec<El>) -> El {
         let c = &k.c;
         let standard = self.standard;
-        let frame = col().key(format!("{}-menu", self.key)).role("menu").focus_group().min_w(self.min_width).items_stretch();
+        let mut frame = col().key(format!("{}-menu", self.key)).role("menu").focus_group().min_w(self.min_width).items_stretch();
+        if let Some(label) = self.label {
+            frame = frame.label(label);
+        }
         let frame = if standard {
             k.elevate(frame.radius(k.radius.md).fill(c.surface_raised).border(1.0, k.alpha(c.std_border, 0.5)), &k.elevation.md)
         } else {

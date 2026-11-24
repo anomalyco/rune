@@ -241,6 +241,111 @@ pub(super) fn menu_submenu(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
     )
 }
 
+/// Menu with `Menu::label`, explicit `MenuItem::key`, distinct `MenuItem::a11y_label`, and a
+/// compact `Placement::LeftStart` submenu (`submenu_min_width(0.0)`) near the trailing edge.
+pub(super) fn menu_submenu_options(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
+    let open = is_open(s, "menu");
+    let http = s.picked("http-version", "HTTP/2").to_owned();
+    let pick_http = |v: &'static str| {
+        move |s: &mut G| {
+            s.pick.insert("http-version".into(), v.into());
+        }
+    };
+    let versions = vec![
+        MenuEntry::item(MenuItem::new("HTTP/1.1").key("http-1").checked(http == "HTTP/1.1").on_select(pick_http("HTTP/1.1"))),
+        MenuEntry::item(MenuItem::new("HTTP/2").key("http-2").checked(http == "HTTP/2").on_select(pick_http("HTTP/2"))),
+        MenuEntry::item(MenuItem::new("HTTP/3").key("http-3").checked(http == "HTTP/3").on_select(pick_http("HTTP/3"))),
+    ];
+    let mut menu = Menu::new("menu")
+        .label("HTTP settings")
+        .trigger(menu_button(k, "HTTP settings", "menu", open))
+        .placement(Placement::BottomEnd)
+        .open(open)
+        .on_close(close);
+    if s.is("prepend-row") {
+        menu = menu.item(MenuItem::new("Inserted above").key("inserted").on_select(flip("prepend-row")));
+    }
+    menu = menu
+        .item(
+            MenuItem::new("…/overlays/menu.rs")
+                .key("menu-rs")
+                .a11y_label("crates/rune-kit/src/overlays/menu.rs")
+                .on_select(close),
+        )
+        .item(
+            MenuItem::new("HTTP version")
+                .key("http-version")
+                .shortcut(http)
+                .submenu(versions, !s.is("sub-closed"))
+                .submenu_placement(Placement::LeftStart)
+                .submenu_min_width(0.0)
+                .on_select(flip("sub-closed")),
+        )
+        .separator()
+        .item(MenuItem::new("Reload").key("reload").shortcut("⌘ R").on_select(close));
+    row()
+        .w(520.0)
+        .gap(12.0)
+        .center_y()
+        .child(
+            Button::new(if s.is("prepend-row") { "Remove top item" } else { "Insert item above" })
+                .variant(ButtonVariant::Outline)
+                .on_press(flip("prepend-row"))
+                .build(k)
+                .key("toggle-prepend"),
+        )
+        .child(el().grow(1.0))
+        .child(menu.build(k, layer))
+}
+
+/// Standalone `PopupList::build_list` embedded inside a custom panel, with rich
+/// `PopupItem::label_with` match-highlighted labels that keep plain accessible names.
+pub(super) fn popup_list_rich_inline(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let entries = [
+        ("review", "/review", "/rev", "iew", "Review branch changes", "⏎", false),
+        ("rename", "/rename", "/re", "name", "Rename current symbol", "F2", false),
+        ("revert", "/revert", "/rev", "ert", "Revert staged hunks", "", true),
+    ];
+    let active = s.pick.get("rich-inline-active").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
+    let chosen = s.picked("rich-inline-chosen", "None");
+    let items = entries.into_iter().map(|(id, full, hit, rest, desc, hint, disabled)| {
+        let rich = row()
+            .center_y()
+            .child(text(hit).font(k.ty.ui_medium).color(k.c.text_accent))
+            .child(text(rest).font(k.ty.ui_compact).color(k.c.text_base));
+        let mut item = PopupItem::new(id, full)
+            .label_with(rich)
+            .description(desc)
+            .disabled(disabled);
+        if !hint.is_empty() {
+            item = item.trailing(text(hint).font(k.ty.small_medium).color(k.c.text_faint));
+        }
+        item
+    });
+    let list = PopupList::new("rich-inline", "")
+        .label("Matched commands")
+        .max_height(160.0)
+        .items(items)
+        .active(Some(active))
+        .on_active(|s: &mut G, i| { s.pick.insert("rich-inline-active".into(), i.to_string()); })
+        .on_choose(|s: &mut G, id, _| { s.pick.insert("rich-inline-chosen".into(), format!("/{id}")); })
+        .build_list(k);
+    col()
+        .gap(8.0)
+        .items_start()
+        .child(
+            col()
+                .key("custom-card")
+                .w(340.0)
+                .padding(6.0)
+                .radius(k.radius.md)
+                .fill(k.c.surface_raised)
+                .border(1.0, k.c.border_weak)
+                .child(list),
+        )
+        .child(text(format!("Chosen: {chosen}")).font(k.ty.small).color(k.c.text_muted))
+}
+
 /// The tooltip stories' frame: 80 points of padding, centred.
 fn tip_frame(e: El) -> El {
     row().w_full().padding(80.0).center().child(e)

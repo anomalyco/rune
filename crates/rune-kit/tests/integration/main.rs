@@ -20,6 +20,7 @@ mod keybind;
 mod list_keyboard;
 mod menu_description;
 mod menu_open;
+mod menu_submenu_keys;
 mod palette_seed_compat;
 mod popover_focus;
 mod popup_list;

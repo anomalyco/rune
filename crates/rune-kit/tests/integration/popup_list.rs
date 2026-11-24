@@ -310,3 +310,185 @@ fn ordinary_listbox_selection_does_not_reveal_and_press_still_blurs() {
     rt.pointer_down(x, y); rt.pointer_up(x, y); rt.frame(0.0);
     assert!(!rt.state.composer.focused, "ordinary listbox presses still blur the field");
 }
+
+#[test]
+fn popup_item_label_with_draws_custom_element_and_keeps_plain_a11y_label() {
+    #[derive(Default)]
+    struct RichState {
+        composer: TextEdit,
+        active: Option<usize>,
+        chosen: Vec<String>,
+    }
+
+    fn rich_view(s: &RichState, _: &mut Cx<RichState>) -> El {
+        let k = Kit::neutral(true);
+        let mut layer = Vec::new();
+        let field = TextInput::new(&s.composer)
+            .placeholder("Filter…")
+            .on_edit(|s: &mut RichState| &mut s.composer)
+            .build(&k)
+            .key("composer");
+        let match_row = |key: &'static str, head: &'static str, tail: &'static str| {
+            rune::row()
+                .key(key)
+                .center_y()
+                .child(text(head).font(k.ty.ui_medium).color(k.c.text_accent))
+                .child(text(tail).font(k.ty.ui_compact).color(k.c.text_base))
+        };
+        let items = [
+            PopupItem::new("review", "/review")
+                .label_with(match_row("rich-review", "/rev", "iew"))
+                .description("Review branch changes")
+                .trailing(text("⏎").key("trail-review").font(k.ty.small_medium).color(k.c.text_faint)),
+            PopupItem::new("compact", "/compact")
+                .label_with(match_row("rich-compact", "/com", "pact"))
+                .trailing(text("⌘K").key("trail-compact").font(k.ty.small_medium).color(k.c.text_faint)),
+            PopupItem::new("locked", "/locked")
+                .label_with(match_row("rich-locked", "/loc", "ked"))
+                .disabled(true),
+        ];
+        PopupList::new("rich", "composer")
+            .open(true)
+            .width(300.0)
+            .items(items)
+            .active(s.active)
+            .label("Rich commands")
+            .on_active(|s: &mut RichState, i| s.active = Some(i))
+            .on_choose(|s: &mut RichState, id, _| s.chosen.push(id.to_owned()))
+            .build(&k, &mut layer);
+        root(col().padding(16.0).child(field), layer)
+    }
+
+    let mut composer = TextEdit::new("");
+    composer.focused = true;
+    let mut rt = Runtime::new(
+        RichState { composer, active: Some(0), chosen: Vec::new() },
+        rich_view,
+        (480.0, 420.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    for _ in 0..30 {
+        rt.frame(1.0 / 60.0);
+    }
+
+    let find = |rt: &Runtime<RichState>, key: &str| rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key));
+    let opt0 = find(&rt, "rich-option-review").expect("rich option with description");
+    assert_eq!(opt0.label.as_deref(), Some("/review"), "plain label stays on ElementInfo::label");
+    let custom0 = find(&rt, "rich-review").expect("custom label_with element mounts");
+    assert!(custom0.target[2] > 0.0 && custom0.target[3] > 0.0);
+
+    // Without description, label_with grows so trailing stays near the right edge.
+    let opt1 = find(&rt, "rich-option-compact").expect("rich option without description");
+    assert_eq!(opt1.label.as_deref(), Some("/compact"));
+    let custom1 = find(&rt, "rich-compact").expect("custom label_with element mounts");
+    let trail1 = find(&rt, "trail-compact").expect("trailing hint");
+    assert!(
+        custom1.target[0] + custom1.target[2] <= trail1.target[0] + 0.5,
+        "rich label {:?} does not overlap trailing {:?}",
+        custom1.target,
+        trail1.target,
+    );
+    assert!(
+        trail1.target[0] > opt1.target[0] + opt1.target[2] * 0.5,
+        "trailing {:?} stays near right edge of {:?}",
+        trail1.target,
+        opt1.target,
+    );
+
+    // Clicking disabled rich item does nothing; clicking enabled rich item fires on_choose and keeps focus.
+    let (dx, dy) = rt.find("rich-option-locked").unwrap();
+    rt.pointer_down(dx, dy);
+    rt.pointer_up(dx, dy);
+    rt.frame(0.0);
+    assert!(rt.state.chosen.is_empty());
+    assert!(rt.state.composer.focused);
+
+    let (x, y) = rt.find("rich-option-compact").unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(0.0);
+    assert_eq!(rt.state.chosen, ["compact"]);
+    assert!(rt.state.composer.focused);
+}
+
+#[test]
+fn popup_list_build_list_mounts_standalone_listbox_with_handlers_and_empty_state() {
+    #[derive(Default)]
+    struct InlineState {
+        composer: TextEdit,
+        count: usize,
+        active: Option<usize>,
+        hovered: Vec<usize>,
+        chosen: Vec<String>,
+    }
+
+    fn inline_view(s: &InlineState, _: &mut Cx<InlineState>) -> El {
+        let k = Kit::neutral(true);
+        let field = TextInput::new(&s.composer)
+            .placeholder("Type…")
+            .on_edit(|s: &mut InlineState| &mut s.composer)
+            .build(&k)
+            .key("composer");
+        let items = (0..s.count).map(|i| {
+            PopupItem::new(format!("id-{i}"), format!("Item {i}")).disabled(i == 1)
+        });
+        let list = PopupList::new("inline", "")
+            // build_list does not gate on open(false); caller owns visibility.
+            .open(false)
+            .label("Inline completions")
+            .max_height(140.0)
+            .empty_message("Nothing matches")
+            .items(items)
+            .active(s.active)
+            .on_active(|s: &mut InlineState, i| {
+                s.active = Some(i);
+                s.hovered.push(i);
+            })
+            .on_choose(|s: &mut InlineState, id, _| s.chosen.push(id.to_owned()))
+            .build_list(&k);
+        let panel = col().key("custom-panel").w(280.0).padding(4.0).child(list);
+        col().padding(16.0).gap(8.0).child(field).child(panel)
+    }
+
+    let mut composer = TextEdit::new("");
+    composer.focused = true;
+    let mut rt = Runtime::new(
+        InlineState { composer, count: 3, active: Some(0), hovered: Vec::new(), chosen: Vec::new() },
+        inline_view,
+        (480.0, 400.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+
+    let find = |rt: &Runtime<InlineState>, key: &str| rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key));
+    let listbox = find(&rt, "viewport").expect("standalone listbox viewport");
+    assert_eq!(listbox.role, "listbox");
+    assert_eq!(listbox.label.as_deref(), Some("Inline completions"));
+    assert!(find(&rt, "inline-content").is_none(), "build_list mounts no anchored popover wrapper");
+
+    // Hover and click work on enabled items; disabled item is ignored; composer keeps focus.
+    let (x2, y2) = rt.find("inline-option-id-2").unwrap();
+    rt.pointer_move(x2, y2);
+    rt.frame(0.0);
+    assert_eq!(rt.state.hovered, [2]);
+    assert_eq!(rt.state.active, Some(2));
+    rt.pointer_down(x2, y2);
+    rt.pointer_up(x2, y2);
+    rt.frame(0.0);
+    assert_eq!(rt.state.chosen, ["id-2"]);
+    assert!(rt.state.composer.focused, "pressing standalone list preserves focus in outside input");
+
+    let (x1, y1) = rt.find("inline-option-id-1").unwrap();
+    rt.pointer_down(x1, y1);
+    rt.pointer_up(x1, y1);
+    rt.frame(0.0);
+    assert_eq!(rt.state.chosen, ["id-2"], "disabled option does not fire on_choose");
+
+    // Filtering down to 0 items lands immediately (default animate_filtering = false) with empty state.
+    rt.update(|s, _| s.count = 0);
+    rt.frame(1.0 / 60.0);
+    let empty = find(&rt, "empty").expect("empty state element");
+    assert_eq!(empty.opacity, 1.0);
+    assert!((empty.rect[3] - 28.0).abs() < 0.5);
+}

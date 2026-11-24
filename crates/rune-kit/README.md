@@ -89,7 +89,11 @@ selection keys during IME composition. Escape closes it. A keystroke's rows and 
 height land in its frame; `.animate_filtering(true)` crossfades the rows and springs the
 height instead. `PopupList`, the list it shares with `@`-mention and `/`-command popovers,
 takes the same switch, so rows an app's commit changes land at once even when the field it
-follows animates its layout. The contract follows OpenCode's
+follows animates its layout. `PopupItem::label_with(El)` draws custom inline label content (such as match-highlighted
+spans) while keeping the plain string passed to `PopupItem::new` as the option's accessible
+name, and `PopupList::build_list(&k)` returns the scrollable listbox element without anchoring
+it into an overlay layer so an app can embed it inside its own popover or panel (see
+`rune-popup-list--rich-inline` in the gallery). The contract follows OpenCode's
 `components/list` and `use-filtered-list`; Rune's fuzzy ranking
 is its own, not bit-identical to fuzzysort. `.search_label(..)` sets the internal search
 input's accessible name independently of the outer label. `rune-combobox--searchable` is its
@@ -207,7 +211,12 @@ same commit (see `rune-overlays--tx-callbacks`). `Select::step_closed(true)` opt
 `Select` into stepping through choices with Up and Down via `on_choose` without opening the
 popup, clamping at the ends while `Alt+Down`, Space and clicking still open it (see
 `rune-select--step-closed`, and `rune-focus--keyboard` for `El::press_on_return()` and
-entering a `focus_group` from a focused container).
+entering a `focus_group` from a focused container). `Menu::label` names the open `role="menu"`
+surface; `MenuItem::key` assigns a stable key instead of positional `{menu_key}-item{i}` so
+inserting rows above keeps focus; `MenuItem::a11y_label` separates the accessible name (and
+typeahead / submenu name) from truncated drawn text; and `MenuItem::submenu_placement` (default
+`Placement::RightStart`) plus `MenuItem::submenu_min_width` (default `160.0`, `0.0` for
+content width) place and size submenus per item (see `rune-menu--submenu-options`).
 
 ### Accessibility
 
@@ -217,9 +226,11 @@ assistive technology runs through the same handlers as pointer and keys.
 
 - **Names**: a control's label, else the text it shows. Give every `IconButton` a `.label` (or
   a `.help`, which names it when unlabelled). `Select`, `Combobox`, `SegmentedControl`,
-  `TextInput`, `TextArea`, `ShortcutRecorder`, `ProgressCircle`, `Popover` and `HoverCard` take
-  `.label` (and `HoverCard` also `.role`) for the name when no visible label says it; a text
-  field falls back to its placeholder.
+  `TextInput`, `TextArea`, `ShortcutRecorder`, `ProgressCircle`, `Menu`, `Popover`,
+  `PopupList` and `HoverCard` take `.label` (and `HoverCard` also `.role`) for the name when
+  no visible label says it; `MenuItem::a11y_label` overrides an item's accessible name while
+  keeping its drawn text, `PopupItem::label_with` keeps the plain string as the option's
+  accessible name, and a text field falls back to its placeholder.
   `Combobox::search_label` names its internal search field, `Dialog::close_label` names its
   header close button, and `Dialog::close_disabled` keeps that button visibly disabled while
   blocking button press, Escape and outside clicks.

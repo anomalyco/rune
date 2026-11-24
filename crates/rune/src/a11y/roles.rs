@@ -144,7 +144,7 @@ pub(crate) const ROLES: &[RoleSpec] = &[
     RoleSpec::role("link", Role::Link).warn_nameless().pointer(),
     RoleSpec::role("menuitem", Role::MenuItem).warn_nameless().web_control().pointer(),
     RoleSpec::role("radio", Role::RadioButton).warn_nameless().web_control().pointer(),
-    RoleSpec::role("menu", Role::Menu),
+    RoleSpec::role("menu", Role::Menu).aria_container(),
     RoleSpec::role("status", Role::Status).live(LiveRegion::Polite).aria_container(),
     RoleSpec::role("tree", Role::Tree),
     RoleSpec::role("main", Role::Main).container("main"),
@@ -589,6 +589,8 @@ mod tests {
         assert_eq!(container_tag("listitem"), Some("li"));
         assert_eq!(container_tag("dialog"), Some("div"));
         assert_eq!(container_aria("dialog"), Some("dialog"));
+        assert_eq!(container_tag("menu"), Some("div"));
+        assert_eq!(container_aria("menu"), Some("menu"));
         assert_eq!(container_tag("tablist"), Some("div"));
         assert_eq!(container_aria("tablist"), Some("tablist"));
         assert_eq!(container_tag("radiogroup"), Some("div"));
