@@ -1486,10 +1486,17 @@ to hand a web view as is. RTF is passed through untouched.
 | Linux (X11, Wayland data-control) | text and `text/html`; no RTF | `text/html`, else text | `image/png` through arboard, decoded and encoded again |
 | Web | `text/plain` and `text/html` through the async Clipboard API; no RTF | `text/html` from the paste event or `navigator.clipboard.read()`, else text | `image/png` from the paste event's files or `navigator.clipboard.read()` |
 
+`rune::clipboard::revision()` returns the OS clipboard's change counter as `Option<u64>`
+without opening or reading the clipboard's contents and without starting background work:
+`Some(n)` on macOS (`NSPasteboard.changeCount`) and Windows (`GetClipboardSequenceNumber`),
+and `None` on Linux, web, iOS and Android. Compare readings with `!=` rather than ordering, as
+the Windows sequence number is a 32-bit counter that can wrap.
+
 On macOS the RTF conversion uses `NSAttributedString` on the worker; AppKit's RTF reader and
 HTML writer don't need the main thread. In tests, `clipboard::memory()` keeps every form:
 `set_content(ClipboardContent::new("Hi").with_html("<b>Hi</b>"))` stands in for another app's
-copy and `content()` shows what Rune wrote. `Runtime::paste_content` and the script step
+copy, `content()` shows what Rune wrote, and `revision()` returns its monotonic `u64` change
+counter. `Runtime::paste_content` and the script step
 `{"paste": {"text": "Hi", "html": "<b>Hi</b>", "rtf": "…", "png": "shot.png"}}` (or
 `{"paste": "Hi"}`; `png` is a file path) paste
 several forms through the same routing, sanitised as a real paste is.

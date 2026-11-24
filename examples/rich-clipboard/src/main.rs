@@ -1,21 +1,32 @@
-//! Copy and paste formatted text. `cargo run -p rich-clipboard`.
+//! Copy and paste formatted text, and inspect the clipboard revision counter.
+//! `cargo run -p rich-clipboard`.
 //!
 //! Paste into the field from a browser, Notes, TextEdit or Pages: the field still pastes the
 //! plain text, and the panel below shows which forms arrived and the start of the sanitised
 //! HTML (on macOS, RTF-only sources arrive converted to HTML). Each paste also prints its
 //! HTML. "Copy formatted" puts plain text, HTML and RTF on the clipboard: paste it into
 //! TextEdit or Mail and it keeps its bold and italic. "Read clipboard" looks without pasting.
+//! "Check revision" reads `rune::clipboard::revision()` without opening the clipboard's
+//! contents (available on macOS and Windows; unavailable on Linux and web).
 
 #![forbid(unsafe_code)]
 
+use rune::clipboard;
 use rune::tok::{self, radius, space, type_};
 use rune::{AppSpec, ClipboardContent, Cx, El, TextEdit, Tx, col, row, text, text_input};
 
-#[derive(Default)]
 struct State {
     field: TextEdit,
     /// How the last paste or read arrived, and what it held.
     last: Option<(&'static str, ClipboardContent)>,
+    /// Last observed OS clipboard revision counter (`None` where unsupported).
+    revision: Option<u64>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self { field: TextEdit::default(), last: None, revision: clipboard::revision() }
+    }
 }
 
 fn sample() -> ClipboardContent {
@@ -28,6 +39,14 @@ fn seen(s: &mut State, how: &'static str, content: &ClipboardContent) {
     println!("{how}: text {} bytes, html {:?} bytes, rtf {:?} bytes", content.text().len(), content.html().map(str::len), content.rtf().map(str::len));
     if let Some(html) = content.html() { println!("{html}"); }
     s.last = Some((how, content.clone()));
+    s.revision = clipboard::revision();
+}
+
+fn revision_status(revision: Option<u64>) -> String {
+    match revision {
+        Some(n) => format!("Clipboard revision: {n}"),
+        None => "Clipboard revision: unavailable".into(),
+    }
 }
 
 fn summary(last: &Option<(&'static str, ClipboardContent)>) -> (String, String) {
@@ -57,7 +76,9 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         .child(field)
         .child(row().gap(space::S2)
             .child(button("copy", "Copy formatted", |_, tx| tx.copy_rich(sample())))
-            .child(button("read", "Read clipboard", |_, tx| tx.read_clipboard(|s: &mut State, content, _| seen(s, "Read", content)))))
+            .child(button("read", "Read clipboard", |_, tx| tx.read_clipboard(|s: &mut State, content, _| seen(s, "Read", content))))
+            .child(button("check-revision", "Check revision", |s, _| s.revision = clipboard::revision())))
+        .child(text(revision_status(s.revision)).key("revision").font(type_::LABEL).color(t.text_secondary))
         .child(text(head).key("summary").font(type_::BODY).color(t.text_secondary))
         .child(text(preview).key("preview").font(type_::LABEL).color(t.text_secondary).w_full())
 }
@@ -69,17 +90,20 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rune::{Env, Runtime, clipboard};
+    use rune::{Env, Runtime};
 
     #[test]
     fn a_rich_paste_shows_its_forms_and_the_field_keeps_the_text() {
         let board = clipboard::memory();
+        assert_eq!(board.revision(), 0);
         let mut rt = Runtime::new(State::default(), view, (560.0, 420.0), Env::new(true, 2.0));
         rt.use_clipboard(&board);
         rt.frame(0.0);
+        assert!(rt.find("revision").is_some());
         rt.update(|s, _| s.field.focused = true);
         rt.frame(0.0);
         board.set_content(ClipboardContent::new("Hi").with_html("<b>Hi</b><img src=x onerror=alert(1)>"));
+        assert_eq!(board.revision(), 1);
         rt.update(|_, tx| tx.request_paste());
         rt.frame(0.0);
         assert_eq!(rt.state.field.text, "Hi");
@@ -91,5 +115,14 @@ mod tests {
         rt.pointer_up(x, y);
         rt.frame(0.0);
         assert_eq!(board.content(), Some(sample()));
+        assert_eq!(board.revision(), 2);
+
+        let (x, y) = rt.find("check-revision").unwrap();
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+        assert_eq!(rt.state.revision, clipboard::revision());
+        assert_eq!(revision_status(Some(7)), "Clipboard revision: 7");
+        assert_eq!(revision_status(None), "Clipboard revision: unavailable");
     }
 }

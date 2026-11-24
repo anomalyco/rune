@@ -1,0 +1,1 @@
+- Clipboard: exposed `rune::clipboard::revision() -> Option<u64>` (lock-free `NSPasteboard.changeCount` on macOS and `GetClipboardSequenceNumber` on Windows, `None` on Linux, web, iOS and Android) and `MemoryClipboard::revision(&self) -> u64` for headless tests so apps can detect clipboard changes without reading contents or running a framework polling timer.

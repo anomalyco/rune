@@ -246,6 +246,8 @@ shortcuts and Tab keep working. Continuous pointer movement and wheel events wai
 handler: permission and transient-activation rules still apply. Native Paste events work
 without an asynchronous clipboard read. Secret-copy requests report failure because the
 browser cannot promise native clipboard-history exclusion or conditional timed clearing.
+`rune::clipboard::revision()` returns `None` on the web because browsers expose no clipboard
+change counter.
 
 `rune::web::open_url` accepts HTTP(S) and mail links and opens a tab with `noopener,noreferrer`.
 Call it from a user input handler. `Tx::open_url_same_tab` (or `rune::web::open_url_same_tab`)

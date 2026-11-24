@@ -25,6 +25,8 @@ impl Client {
 }
 
 static WORKER: OnceLock<Worker> = OnceLock::new();
+#[cfg(test)]
+pub(super) fn worker_started() -> bool { WORKER.get().is_some() }
 pub(super) struct Worker {
     pub(super) sender: mpsc::Sender<Request>,
     join: Mutex<Option<(std::thread::JoinHandle<()>, mpsc::Receiver<()>)>>,
@@ -177,15 +179,14 @@ fn write_text(cb: &mut arboard::Clipboard, copy: &ClipboardWrite) -> Result<(), 
     cb.set_text(text)
 }
 
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
 #[allow(unsafe_code)]
-fn revision() -> Option<u64> {
+pub(super) fn revision() -> Option<u64> {
     #[cfg(target_os = "macos")]
     { return Some(objc2_app_kit::NSPasteboard::generalPasteboard().changeCount() as u64); }
     #[cfg(target_os = "windows")]
     // SAFETY: `GetClipboardSequenceNumber` takes no pointers and is safe to call from any thread.
     { return Some(unsafe { windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber() } as u64); }
-    // Linux's portable clipboard API has no generation counter; compare the current text.
+    // Linux, iOS and Android have no portable generation counter; compare the current text.
     #[allow(unreachable_code)]
     None
 }
