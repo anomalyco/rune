@@ -118,3 +118,36 @@ fn a_file_tree_reads_level_open_state_and_selection() {
     press_key(&mut rt, Key::Enter);
     assert_eq!(rt.state.chosen.as_deref(), Some("README.md"));
 }
+
+fn file_tree_with_menu_and_bar(s: &App, _: &mut Cx<App>) -> El {
+    let k = kit();
+    col().h(400.0).child(
+        Tree::new(|s: &App| &s.files, |s: &mut App| &mut s.files, FileNode::label)
+            .name("Files")
+            .row(|n, r| TreeItem::file(n, r))
+            .on_menu(|s: &mut App, id, _, _| s.chosen = Some(id.to_owned()))
+            .scroll_bar(true)
+            .build(s, &k)
+            .h(400.0),
+    )
+}
+
+#[test]
+fn a_tree_with_on_menu_and_scroll_bar_exposes_row_context_menu_and_hides_the_bar() {
+    let mut rt = mount(App { files: files(), ..App::default() }, file_tree_with_menu_and_bar);
+    let tree = rt.accessibility_json();
+    let outline = node(&tree, "files");
+    assert!(!can(outline, "context-menu"), "tree container itself does not advertise a row menu");
+    let readme = node(&tree, "README.md");
+    assert!(can(readme, "context-menu"), "rows with on_menu advertise ShowContextMenu: {readme}");
+    assert!(find(&tree, "scroll-bar").is_none() && find(&tree, "thumb").is_none(), "scroll bar stays out of the accessibility tree");
+    no_echo(&tree);
+
+    assert!(act(&mut rt, "README.md", Action::ShowContextMenu));
+    assert_eq!(rt.state.chosen.as_deref(), Some("README.md"));
+
+    // Without on_menu, rows do not advertise ShowContextMenu.
+    let plain = mount(App { files: files(), ..App::default() }, file_tree);
+    let plain_tree = plain.accessibility_json();
+    assert!(!can(node(&plain_tree, "README.md"), "context-menu"));
+}

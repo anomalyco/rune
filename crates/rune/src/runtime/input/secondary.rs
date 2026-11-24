@@ -330,9 +330,10 @@ impl RuntimeCore {
     }
 
     /// The Menu key, or Shift+F10, that nothing before it took: the focused element's context
-    /// menu. That is its focused link's `on_link_secondary`, else its own or its nearest
-    /// ancestor's `on_secondary_press`, at the bottom-left of the focused link or element, where
-    /// a menu opens below it as AppKit's and Windows' keyboard menus do.
+    /// menu. That is its focused link's `on_link_secondary`, else its active descendant's
+    /// `on_secondary_press` when mounted (a tree or list keeping focus on its container), else
+    /// its own or its nearest ancestor's `on_secondary_press`, at the bottom-left of that
+    /// element, where a menu opens below it as AppKit's and Windows' keyboard menus do.
     pub(in crate::runtime) fn context_menu_key(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, tx: &mut Tx) -> bool {
         let m = ev.mods;
         let plain = !m.cmd && !m.ctrl && !m.alt && !m.logo;
@@ -343,7 +344,27 @@ impl RuntimeCore {
         };
         let Some(focused) = self.focused_index().filter(|&i| menu_key && self.can_focus(i)) else { return false };
         if self.focused_link_menu(app, focused, tx) { return true; }
-        let [x, _, _, y] = self.drawn_box(focused);
+        let [fx0, fy0, fx1, fy1] = self.drawn_box(focused);
+        if let Some(active) = self.a11y_active_descendant(focused) {
+            let inside = std::iter::successors(self.tree.nodes[active].parent, |&p| self.tree.nodes[p].parent).any(|p| p == focused);
+            if (inside || self.tree.nodes[focused].input.is_some())
+                && self.allowed(active)
+                && let Some(f) = self.tree.nodes[active].handlers.on_secondary_press.clone()
+            {
+                let drawn = self.paint.drawn.get(active).is_some_and(|d| d[2] > 0.0 || d[3] > 0.0);
+                let [mut x, _, _, mut y] = self.drawn_box(if drawn { active } else { focused });
+                if inside && drawn {
+                    x = x.clamp(fx0, fx1);
+                    y = y.clamp(fy0, fy1);
+                }
+                let path = self.tree.nodes[active].path.clone();
+                let point = self.pointer_event(active, x, y);
+                log_event!(self, "secondary press {path}");
+                f(app.states(), point, tx);
+                return true;
+            }
+        }
+        let (x, y) = (fx0, fy1);
         let n = &self.tree.nodes[focused];
         if n.handlers.on_secondary_press.is_none() && n.input.as_ref().is_some_and(|i| i.access.is_some()) {
             return self.field_menu(app, n.path.clone(), (x, y), None, tx);

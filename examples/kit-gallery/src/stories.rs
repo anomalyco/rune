@@ -54,6 +54,8 @@ macro_rules! stories {
                 s.table_rows = 16;
                 s.table_menu = None;
             }
+            s.tree_menu = None;
+            s.tree_action = None;
             s.open = OPENED.iter().find(|(id, _)| *id == $id).map(|(_, k)| (*k).to_owned());
         }),)*];
     };
@@ -245,6 +247,7 @@ stories! {
     "rune-file-icon--catalog" => icons::file_icon_catalog,
     "rune-tree-icon--catalog" => icons::tree_icon_catalog,
     "rune-tree--files" => icons::file_tree,
+    "rune-tree--scroll-menu" => icons::file_tree_scroll_menu,
     "rune-split-view--flat-main" => split_view::flat_main,
     "rune-table--options" => table::options,
     "rune-diff--localized" => diff::localized,
