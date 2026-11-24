@@ -1,0 +1,1 @@
+- A surface is asked for its capabilities once when its configuration is chosen (`surface_config`), not three times. On Mesa's Wayland surfaces each asking costs the compositor five requests for its globals and ten round trips: a window's swap chain is made after 16 requests and 32 round trips where it took 26 and 52.
