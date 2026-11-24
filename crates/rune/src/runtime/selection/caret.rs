@@ -215,12 +215,17 @@ impl RuntimeCore {
         dy
     }
 
-    /// Node `i`'s caret line `[x, y, w, h]` in window points at its laid-out place, after
-    /// scrolling and sticky shifts, if it is a focused text field.
-    pub(in crate::runtime) fn caret_rect(&self, nodes: &[Node], i: usize) -> Option<[f32; 4]> {
+    /// Text origin `[x, y]` in window points for focused text field `i` at its laid-out place,
+    /// after scrolling, sticky shifts, growth stack deltas and single-line horizontal scroll.
+    pub(in crate::runtime) fn field_text_origin(
+        &self,
+        nodes: &[Node],
+        i: usize,
+        inp: &crate::el::InputSpec,
+        spec: &crate::el::TextSpec,
+        laid: &crate::text::TextLayout,
+    ) -> [f32; 2] {
         let n = &nodes[i];
-        let (inp, spec, laid) = (n.input.as_ref()?, n.text.as_ref()?, n.text_layout.as_ref()?);
-        if !inp.edit.focused { return None; }
         let layout = laid.view();
         let s = self.env.scale;
         let t = sticky::anchored_target(nodes, &self.scroll.scrolls, i, self.viewport);
@@ -232,9 +237,20 @@ impl RuntimeCore {
             let prev = self.edit.single_line_scroll(&n.path);
             x -= single_line_offset(prev, inp, &spec.content, l, s, (x1 - x0) * s) / s;
         }
-        let bb = layout.caret(caret_index(&inp.edit, &spec.content), inp.edit.affinity, 1.5 * s);
+        [x, y + n.inset[1]]
+    }
+
+    /// Node `i`'s caret line `[x, y, w, h]` in window points at its laid-out place, after
+    /// scrolling and sticky shifts, if it is a focused text field.
+    pub(in crate::runtime) fn caret_rect(&self, nodes: &[Node], i: usize) -> Option<[f32; 4]> {
+        let n = &nodes[i];
+        let (inp, spec, laid) = (n.input.as_ref()?, n.text.as_ref()?, n.text_layout.as_ref()?);
+        if !inp.edit.focused { return None; }
+        let [x, y] = self.field_text_origin(nodes, i, inp, spec, laid);
+        let s = self.env.scale;
+        let bb = laid.view().caret(caret_index(&inp.edit, &spec.content), inp.edit.affinity, 1.5 * s);
         let h = if bb.y1 > bb.y0 { (bb.y1 - bb.y0) as f32 / s } else { spec.style.line_px() };
-        Some([x + bb.x0 as f32 / s, y + n.inset[1] + bb.y0 as f32 / s, 1.5, h])
+        Some([x + bb.x0 as f32 / s, y + bb.y0 as f32 / s, 1.5, h])
     }
 
     /// After an edit, scrolls the focused field's nearest scroll viewport on each axis just far

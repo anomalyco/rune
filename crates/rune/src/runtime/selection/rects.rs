@@ -8,11 +8,62 @@ use super::*;
 /// The layout-read key `Cx::selection_rects` reads under.
 pub(crate) const SELECTION: &str = "\u{1}selection";
 
+/// The prefix of a `Cx::field_selection_rects` layout-read key, which no element key starts with.
+const FIELD_SELECTION: &str = "\u{1}field_selection:";
+
+/// The layout-read key `Cx::field_selection_rects(key)` is noted under.
+pub(crate) fn field_selection_key(key: &str) -> String {
+    format!("{FIELD_SELECTION}{key}")
+}
+
+/// The field key a `Cx::field_selection_rects` read key stands for, or `None` for other reads.
+pub(crate) fn field_selection_read_key(key: &str) -> Option<&str> {
+    key.strip_prefix(FIELD_SELECTION)
+}
+
+/// The focused non-secure text field's path and selection line boxes, when any view read
+/// `Cx::field_selection_rects`.
+pub(crate) type FieldSelection = Option<(Rc<str>, Rc<[[f32; 4]]>)>;
+
+/// Whether focused field path `path` matches `key`, mirroring [`Cx::caret`] (the field's own
+/// key or an ancestor's key) plus key paths such as `"composer/input"`.
+pub(crate) fn field_path_matches(path: &str, key: &str) -> bool {
+    if key.is_empty() { return false; }
+    path == key
+        || path.split('/').any(|seg| element_path::segment_matches_key(seg, key))
+        || (key.contains('/') && element_path::keyed_suffix_matches(path, key))
+}
+
+/// The selection line boxes of `sel` when its focused field matches `key`, else empty.
+pub(crate) fn field_selection_of<'a>(sel: &'a FieldSelection, key: &str) -> &'a [[f32; 4]] {
+    match sel {
+        Some((path, boxes)) if field_path_matches(path, key) => boxes,
+        _ => &[],
+    }
+}
+
 impl cx::CxCore {
     pub(crate) fn selection_rects(&self) -> Vec<[f32; 4]> {
         layout_read::note_read(&mut self.layout_reads.borrow_mut(), SELECTION, None);
         crate::memo::read_selection(&self.layout.selection);
         self.layout.selection.to_vec()
+    }
+
+    #[track_caller]
+    pub(crate) fn field_selection_rects(&self, key: &str) -> Vec<[f32; 4]> {
+        let read_key = field_selection_key(key);
+        layout_read::note_read_at(
+            &mut self.layout_reads.borrow_mut(),
+            &read_key,
+            None,
+            Some(std::panic::Location::caller()),
+        );
+        let boxes = match &self.layout.field_selection {
+            Some((path, boxes)) if field_path_matches(path, key) => boxes.clone(),
+            _ => Rc::default(),
+        };
+        crate::memo::read_field_selection(key, &boxes);
+        boxes.to_vec()
     }
 }
 
@@ -34,6 +85,40 @@ impl<S> Cx<S> {
     #[inline(always)]
     pub fn selection_rects(&self) -> Vec<[f32; 4]> {
         self.core.selection_rects()
+    }
+
+    /// The focused text field's selection line boxes, `[x, y, w, h]` each in window points after
+    /// scrolling (including a single-line field's horizontal scroll), in reading order, when that
+    /// field is keyed `key`, sits inside an element keyed `key`, or matches key path `key`.
+    ///
+    /// Empty (and allocating nothing) when the field is unfocused, has only a caret, is composing
+    /// an IME preedit, or is secure. Like [`Cx::selection_rects`] and [`Cx::caret`], boxes are
+    /// unclipped layout points (an ancestor's [`El::scale`](crate::El::scale) isn't applied).
+    ///
+    /// A view that reads it re-runs when a box appears, goes, or moves by more than half a point:
+    /// in the same commit when layout or an edit moved it, and the next frame when scrolling
+    /// moved it. A `memo` that reads it is rebuilt when the boxes move.
+    ///
+    /// ```
+    /// use rune::{Cx, El, Env, Runtime, TextEdit, TextStyle, col, text_input};
+    ///
+    /// fn view(edit: &TextEdit, cx: &mut Cx<TextEdit>) -> El {
+    ///     let _boxes = cx.field_selection_rects("composer");
+    ///     col().size(240.0, 80.0).child(
+    ///         text_input(edit, TextStyle::new(14.0, 400.0)).key("composer").w_full(),
+    ///     )
+    /// }
+    ///
+    /// let mut edit = TextEdit::new("hello world");
+    /// edit.focused = true;
+    /// edit.set_selection(0, 5);
+    /// let mut rt = Runtime::new(edit, view, (240.0, 80.0), Env::new(true, 1.0));
+    /// rt.frame(0.0);
+    /// ```
+    #[track_caller]
+    #[inline(always)]
+    pub fn field_selection_rects(&self, key: &str) -> Vec<[f32; 4]> {
+        self.core.field_selection_rects(key)
     }
 }
 
@@ -88,10 +173,59 @@ impl RuntimeCore {
         }
     }
 
+    /// The focused non-secure text field's path and selection line boxes in `nodes`.
+    pub(super) fn field_selection_boxes_in(&self, nodes: &[Node]) -> FieldSelection {
+        let live_tree = std::ptr::eq(nodes, self.tree.nodes.as_slice());
+        let i = nodes.iter().enumerate().position(|(i, n)| {
+            (!live_tree || !self.subtree_exiting(i))
+                && n.input.as_ref().is_some_and(|inp| inp.edit.focused)
+        })?;
+        let boxes = self.field_selection_boxes_of(nodes, i);
+        if boxes.is_empty() { return None; }
+        Some((Rc::from(nodes[i].path.as_str()), boxes.into()))
+    }
+
+    /// Selection line boxes of focused non-secure text field `i` in `nodes`.
+    fn field_selection_boxes_of(&self, nodes: &[Node], i: usize) -> Vec<[f32; 4]> {
+        let n = &nodes[i];
+        if n.is_secure() { return Vec::new(); }
+        let (Some(inp), Some(spec), Some(laid)) = (n.input.as_ref(), n.text.as_ref(), n.text_layout.as_ref()) else {
+            return Vec::new();
+        };
+        if !inp.edit.focused || inp.edit.preedit().is_some() { return Vec::new(); }
+        let (a, b) = inp.edit.range();
+        if a == b { return Vec::new(); }
+        let (da, db) = inp.edit.display_selection_range(a, b);
+        if da >= db { return Vec::new(); }
+        let [ox, oy] = self.field_text_origin(nodes, i, inp, spec, laid);
+        let flow = laid.view();
+        let s = self.env.scale;
+        let mut out = Vec::new();
+        for (bb, _) in flow.range_boxes(da, db, true) {
+            out.push([
+                ox + bb.x0 as f32 / s,
+                oy + bb.y0 as f32 / s,
+                (bb.x1 - bb.x0) as f32 / s,
+                (bb.y1 - bb.y0) as f32 / s,
+            ]);
+        }
+        out
+    }
+
     /// Once a frame: the selection moved since the view last read it (a drag, a click, code,
     /// scrolling). That isn't layout feedback, so the view re-runs as for a state change.
     pub(super) fn selection_read_moved(&self) -> bool {
         let seen = &self.commit.layout_seen.rects;
         seen.contains_key(SELECTION) && boxes_moved(&seen.selection, &self.selection_boxes())
+    }
+
+    /// Once a frame (or after scroll requests): a watched field selection moved since the view
+    /// last read it. That isn't layout feedback, so the view re-runs as for a state change.
+    pub(in crate::runtime) fn field_selection_read_moved(&self) -> bool {
+        let seen = &self.commit.layout_seen;
+        let mut keys = seen.reads.iter().filter_map(|r| field_selection_read_key(&r.key)).peekable();
+        if keys.peek().is_none() { return false; }
+        let now = self.field_selection_boxes_in(&self.tree.nodes);
+        keys.any(|k| boxes_moved(field_selection_of(&seen.rects.field_selection, k), field_selection_of(&now, k)))
     }
 }

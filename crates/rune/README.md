@@ -517,7 +517,12 @@ policy changes are applied in the same mutation phase.
   system clipboard.
 - **Text input** (`text_input(&edit, style)`, `edit.rs`): caret, selection, word and line motion,
   select all, copy, cut and paste, undo, and IME preedit through winit (see [Text fields](#text-fields)). `.on_edit(..)` binds the `TextEdit` in app
-  state and `.on_submit(..)` runs on Enter.
+  state and `.on_submit(..)` runs on Enter. Views can read the focused field's caret rect with
+  `Cx::caret(key)` and its selection line rects with `Cx::field_selection_rects(key)` (tracked
+  through layout reads and `memo`, empty when unfocused, caret-only, composing, or secure).
+  Handlers and headless callers can map a window point to a UTF-8 byte offset in any non-secure
+  text or text field with `Tx::text_offset_at(key, x, y, f)` and
+  `Runtime::text_offset_at(key, x, y)`.
 - **App hooks**: `AppSpec::setup` (once, with a `Waker` for background threads), `poll(state, clock,
   tx)` before every frame, `on_key`, and `extra_args()` for the app's own flags, ready before
   `run` (to choose the file a window opens).

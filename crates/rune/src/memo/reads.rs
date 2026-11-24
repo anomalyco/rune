@@ -3,7 +3,10 @@
 
 use std::rc::Rc;
 
-use crate::runtime::layout_read::{LayoutRects, SELECTION, Same, anchor_key, boxes_moved, moved, note_read, seen_placement, seen_rect, size, window_key};
+use crate::runtime::layout_read::{
+    LayoutRects, SELECTION, Same, anchor_key, boxes_moved, field_selection_key,
+    field_selection_of, moved, note_read, seen_placement, seen_rect, size, window_key,
+};
 
 use super::SCOPES;
 
@@ -18,6 +21,8 @@ pub(super) enum Read {
     AnchorPlacement(String, Option<(crate::Side, crate::Align)>),
     /// A `Cx::selection_rects` read, and the boxes it returned.
     Selection(Rc<[[f32; 4]]>),
+    /// A `Cx::field_selection_rects` read: the key, and the boxes it returned.
+    FieldSelection(String, Rc<[[f32; 4]]>),
     /// A [`Tracked`](crate::Tracked) cell read, at its version then.
     State(u32, u64),
 }
@@ -29,6 +34,7 @@ impl PartialEq for Read {
             (Read::LayoutWith(a, f, x), Read::LayoutWith(b, g, y)) => a == b && f.is(g) && x == y,
             (Read::AnchorPlacement(a, x), Read::AnchorPlacement(b, y)) => a == b && x == y,
             (Read::Selection(a), Read::Selection(b)) => a == b,
+            (Read::FieldSelection(a, x), Read::FieldSelection(b, y)) => a == b && x == y,
             (Read::State(a, x), Read::State(b, y)) => a == b && x == y,
             _ => false,
         }
@@ -49,6 +55,7 @@ impl Seen {
             Read::LayoutWith(key, same, rect) => !same.moved(*rect, seen_rect(&self.layout, key)),
             Read::AnchorPlacement(key, p) => seen_placement(&self.layout, key) == *p,
             Read::Selection(boxes) => !boxes_moved(boxes, &self.layout.selection),
+            Read::FieldSelection(key, boxes) => !boxes_moved(boxes, field_selection_of(&self.layout.field_selection, key)),
             Read::State(id, version) => crate::tracked::version(*id) == *version,
         }
     }
@@ -84,6 +91,11 @@ pub(crate) fn read_layout(key: &str, rect: Option<[f32; 4]>) {
 /// Records a `Cx::selection_rects` read for the memo building, if any.
 pub(crate) fn read_selection(boxes: &Rc<[[f32; 4]]>) {
     record(|| Read::Selection(boxes.clone()));
+}
+
+/// Records a `Cx::field_selection_rects` read for the memo building, if any.
+pub(crate) fn read_field_selection(key: &str, boxes: &Rc<[[f32; 4]]>) {
+    record(|| Read::FieldSelection(key.to_owned(), boxes.clone()));
 }
 
 /// Records a `Cx::layout_with` read for the memo building, if any.
@@ -207,6 +219,7 @@ impl Reads {
                     Read::LayoutWith(k, same, _) => note_read(&mut s.replayed.layout, k, Some(same.clone())),
                     Read::AnchorPlacement(k, _) => note_read(&mut s.replayed.layout, &anchor_key(k), None),
                     Read::Selection(_) => note_read(&mut s.replayed.layout, SELECTION, None),
+                    Read::FieldSelection(k, _) => note_read(&mut s.replayed.layout, &field_selection_key(k), None),
                     Read::State(..) => {}
                 }
             }

@@ -33,7 +33,10 @@ use super::key_index::{self, KeyIndex};
 
 #[path = "selection/rects.rs"]
 mod selection_rects;
-pub(crate) use selection_rects::{SELECTION, SelectedRange, boxes_moved};
+pub(crate) use selection_rects::{
+    FieldSelection, SELECTION, SelectedRange, boxes_moved, field_selection_key,
+    field_selection_of, field_selection_read_key,
+};
 
 /// Extra measurements one commit may take while a read moves.
 pub(super) const PASSES: usize = 2;
@@ -177,12 +180,14 @@ pub(crate) fn note_read_at(reads: &mut LayoutReads, key: &str, same: Option<Same
 }
 
 /// What each key a view read resolved to, as last given to the view, resolved anchor placements
-/// ([`Cx::anchor_placement`]), and the selection's line boxes when it read them ([`SELECTION`]).
+/// ([`Cx::anchor_placement`]), and the selection's line boxes when it read them ([`SELECTION`]
+/// and [`Cx::field_selection_rects`]).
 #[derive(Clone, Default)]
 pub(crate) struct LayoutRects {
     rects: HashMap<String, Option<[f32; 4]>>,
     pub(crate) placements: HashMap<String, Option<(crate::Side, crate::Align)>>,
     pub(crate) selection: Rc<[[f32; 4]]>,
+    pub(crate) field_selection: FieldSelection,
 }
 
 impl std::ops::Deref for LayoutRects {
@@ -456,7 +461,7 @@ impl RuntimeCore {
     }
 
     fn layout_of(&self, nodes: &[Node], index: Option<&KeyIndex>, key: &str) -> Option<[f32; 4]> {
-        if key == SELECTION || key.starts_with(ANCHOR) { return None; }
+        if key == SELECTION || key.starts_with(ANCHOR) || field_selection_read_key(key).is_some() { return None; }
         let (key, scrolled) = key.strip_prefix(WINDOW).map_or((key, false), |key| (key, true));
         let first = match index {
             Some(index) => index.first(nodes, key),
@@ -521,11 +526,15 @@ impl RuntimeCore {
             Some((nodes, ranges)) => self.selection_boxes_in(nodes, ranges),
             None => self.selection_boxes(),
         });
+        let field_boxes = reads.iter().any(|r| field_selection_read_key(&r.key).is_some())
+            .then(|| self.field_selection_boxes_in(nodes));
         // The first commit's layout, checking rects the last launch read (`layout_seed`).
         let seed = self.seed_unchecked();
         let rects = &mut self.commit.layout_seen.rects;
         let moved = reads.iter().enumerate().position(|(idx, r)| {
-            if let Some(k) = r.key.strip_prefix(ANCHOR) {
+            if field_selection_read_key(&r.key).is_some() {
+                false
+            } else if let Some(k) = r.key.strip_prefix(ANCHOR) {
                 let p = now_placements.as_ref().and_then(|v| v[idx]);
                 seen_placement(rects, k) != p
             } else {
@@ -533,10 +542,17 @@ impl RuntimeCore {
                 rects.get(&r.key).is_none_or(|old| r.moved(*old, rect))
             }
         });
-        let changed = moved.is_some() || boxes.as_ref().is_some_and(|b| boxes_moved(&rects.selection, b));
+        let field_moved = field_boxes.as_ref().is_some_and(|now_fs| {
+            reads.iter().filter_map(|r| field_selection_read_key(&r.key)).any(|k| {
+                boxes_moved(field_selection_of(&rects.field_selection, k), field_selection_of(now_fs, k))
+            })
+        });
+        let changed = moved.is_some()
+            || boxes.as_ref().is_some_and(|b| boxes_moved(&rects.selection, b))
+            || field_moved;
         if seed && moved.is_some() {
             for (r, rect) in reads.iter().zip(&now) {
-                if r.key.starts_with(ANCHOR) { continue; }
+                if r.key.starts_with(ANCHOR) || field_selection_read_key(&r.key).is_some() { continue; }
                 let seeded = rects.get(&r.key).copied();
                 if seeded.is_none_or(|old| r.moved(old, *rect)) { super::layout_seed::log_moved(&r.key, seeded, *rect); }
             }
@@ -546,7 +562,9 @@ impl RuntimeCore {
         if !nodes_given && let Some(k) = moved { self.commit.watch.meter.read(&reads[k].key, reads[k].at); }
         if changed || force {
             if let Some(b) = boxes { rects.selection = b.into(); }
+            if let Some(fs) = field_boxes { rects.field_selection = fs; }
             for (idx, (r, rect)) in reads.iter().zip(now).enumerate() {
+                if field_selection_read_key(&r.key).is_some() { continue; }
                 if let Some(k) = r.key.strip_prefix(ANCHOR) {
                     let p = now_placements.as_ref().and_then(|v| v[idx]);
                     match rects.placements.get_mut(k) {
@@ -569,19 +587,25 @@ impl RuntimeCore {
     /// Before a commit runs the view: what it is given for each key it read becomes the
     /// current rect, since it re-runs anyway.
     pub(super) fn refresh_layout_seen(&mut self) {
+        let has_field_sel = self.commit.layout_seen.reads.iter().any(|r| field_selection_read_key(&r.key).is_some());
         let len = self.commit.layout_seen.rects.len() + self.commit.layout_seen.rects.placements.len();
-        if len == 0 { return; }
-        self.tree.prepare_key_index(self.commit.commit_gen(), len);
-        let index = self.tree.key_index_for(&self.tree.nodes, self.commit.commit_gen());
-        let now: Vec<_> = self.commit.layout_seen.rects.keys().map(|k| self.layout_of(&self.tree.nodes, index, k)).collect();
-        for (seen, rect) in self.commit.layout_seen.rects.values_mut().zip(now) { *seen = rect; }
-        if !self.commit.layout_seen.rects.placements.is_empty() {
-            let now_p: Vec<_> = self.commit.layout_seen.rects.placements.keys()
-                .map(|k| self.anchor_placement_of(&self.tree.nodes, index, k, true))
-                .collect();
-            for (seen, p) in self.commit.layout_seen.rects.placements.values_mut().zip(now_p) { *seen = p; }
+        if len == 0 && !has_field_sel { return; }
+        if len > 0 {
+            self.tree.prepare_key_index(self.commit.commit_gen(), len);
+            let index = self.tree.key_index_for(&self.tree.nodes, self.commit.commit_gen());
+            let now: Vec<_> = self.commit.layout_seen.rects.keys().map(|k| self.layout_of(&self.tree.nodes, index, k)).collect();
+            for (seen, rect) in self.commit.layout_seen.rects.values_mut().zip(now) { *seen = rect; }
+            if !self.commit.layout_seen.rects.placements.is_empty() {
+                let now_p: Vec<_> = self.commit.layout_seen.rects.placements.keys()
+                    .map(|k| self.anchor_placement_of(&self.tree.nodes, index, k, true))
+                    .collect();
+                for (seen, p) in self.commit.layout_seen.rects.placements.values_mut().zip(now_p) { *seen = p; }
+            }
+            if self.commit.layout_seen.rects.contains_key(SELECTION) { self.commit.layout_seen.rects.selection = self.selection_boxes().into(); }
         }
-        if self.commit.layout_seen.rects.contains_key(SELECTION) { self.commit.layout_seen.rects.selection = self.selection_boxes().into(); }
+        if has_field_sel {
+            self.commit.layout_seen.rects.field_selection = self.field_selection_boxes_in(&self.tree.nodes);
+        }
     }
 
     /// Once a frame: whether a layout read moved, so the view re-runs. Scrolling reopens
@@ -589,7 +613,7 @@ impl RuntimeCore {
     pub(super) fn layout_reads_moved(&mut self) -> bool {
         if self.commit.layout_seen.is_empty() { return false; }
         if self.scrolling() { self.commit.step_feedback(FeedbackEvent::Reopened); }
-        if self.selection_read_moved() { self.commit.dirty = true; }
+        if self.selection_read_moved() || self.field_selection_read_moved() { self.commit.dirty = true; }
         self.layout_feedback_open() && self.layout_moved(None, None, false)
     }
 
@@ -616,6 +640,7 @@ impl RuntimeCore {
         rects.retain(|k, _| reads.iter().any(|r| r.key == *k));
         rects.placements.retain(|k, _| reads.iter().any(|r| r.key.strip_prefix(ANCHOR) == Some(k.as_str())));
         if !rects.contains_key(SELECTION) { rects.selection = Rc::default(); }
+        if !reads.iter().any(|r| field_selection_read_key(&r.key).is_some()) { rects.field_selection = None; }
         measured
     }
 

@@ -503,8 +503,10 @@ impl RuntimeCore {
         if defer_shift && self.commit.commits == commits_before_scroll && self.virtual_window_changed() {
             self.commit_virtual_scroll(app, &Tx::default());
         }
-        // Those scrolls moved the caret after the commit a view placed from it saw.
-        if self.edit.caret_watch && self.caret_moved(None) { self.commit(app, &Tx { commit: Commit::Instant, ..Tx::default() }); }
+        // Those scrolls moved the caret or field selection after the commit a view placed from it saw.
+        if (self.edit.caret_watch && self.caret_moved(None)) || self.field_selection_read_moved() {
+            self.commit(app, &Tx { commit: Commit::Instant, ..Tx::default() });
+        }
         self.deliver_visible_rows(app, &tx, commits0, pointer_hover);
         #[cfg(debug_assertions)]
         {

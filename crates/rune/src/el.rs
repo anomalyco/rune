@@ -185,20 +185,31 @@ impl PillStyle {
 }
 pub(crate) type InputPasteFn = Rc<dyn Fn(crate::states::States<'_>, &crate::ClipboardContent, &mut Tx) -> bool>;
 pub(crate) type PickFn = Box<dyn FnOnce(crate::states::States<'_>, Option<crate::Picked>, &mut Tx)>;
+pub(crate) type TextOffsetFn = Box<dyn FnOnce(crate::states::States<'_>, Option<usize>, &mut Tx)>;
 
 #[derive(Clone)]
-pub(crate) struct PickRead {
-    pub within: Option<String>,
-    pub x: f32,
-    pub y: f32,
-    pub pick: crate::Pick,
-    pub(crate) f: Rc<std::cell::Cell<Option<PickFn>>>,
-}
-impl PickRead {
-    pub fn take(&self) -> Option<PickFn> { self.f.take() }
+pub(crate) enum PickRead {
+    Element {
+        within: Option<String>,
+        x: f32,
+        y: f32,
+        pick: crate::Pick,
+        f: Rc<std::cell::Cell<Option<PickFn>>>,
+    },
+    TextOffset {
+        key: String,
+        x: f32,
+        y: f32,
+        f: Rc<std::cell::Cell<Option<TextOffsetFn>>>,
+    },
 }
 impl std::fmt::Debug for PickRead {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("PickRead") }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Element { .. } => f.write_str("PickRead::Element"),
+            Self::TextOffset { .. } => f.write_str("PickRead::TextOffset"),
+        }
+    }
 }
 
 /// What an `El::selection_copy` element copies for a selection inside it.
