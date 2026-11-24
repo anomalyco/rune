@@ -102,6 +102,9 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     A runtime the app draws itself (`Runtime::with_text`, a headless snapshot) opts in with
     `Runtime::set_srgb_blend(true)`, then draws with `Renderer::set_srgb_blend(true)` into a
     non-sRGB target cleared to `clear_color()`; hover and press tints follow the mode.
+    `Renderer::render_runtime_to_offscreen(device, queue, target, rt)` runs the full offscreen
+    pass (`upload_images`, `prepare_surfaces`, fade stops, UI prepare, `draw`, `Offscreen::copy`,
+    and `submit`) for CPU readback through `Offscreen::read`.
     A handler switches a running window with `Tx::set_srgb_blend(bool)`: the frame that switches
     reconfigures the surface and rebuilds the renderer once (the web canvas keeps its format and
     changes its view).
