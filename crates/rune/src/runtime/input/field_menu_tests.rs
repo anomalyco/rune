@@ -241,3 +241,221 @@ fn configured_overlay_wires_on_field_menu() {
         .on_field_menu(|_: &mut (), _: FieldMenuRequest, _: &mut Tx| {});
     assert!(overlay.runtime.on_field_menu.is_some());
 }
+
+#[test]
+fn disabled_and_aria_disabled_text_inputs_with_on_edit_are_not_secondary_targets() {
+    struct Case {
+        disabled_edit: TextEdit,
+        disabled_custom: TextEdit,
+        disabled_in_ancestor: TextEdit,
+        ancestor_disabled: TextEdit,
+        aria_edit: TextEdit,
+        aria_custom: TextEdit,
+        read_only_edit: TextEdit,
+        disabled_pill: TextEdit,
+        requests: Vec<FieldMenuRequest>,
+        field_secondary: Vec<&'static str>,
+        ancestor_secondary: Vec<&'static str>,
+        pill_secondary: usize,
+    }
+
+    impl Default for Case {
+        fn default() -> Self {
+            let mut disabled_pill = TextEdit::new("").rich();
+            disabled_pill.insert_pill("p1", "@Alex");
+            disabled_pill.insert(" note");
+            Self {
+                disabled_edit: TextEdit::new("locked"),
+                disabled_custom: TextEdit::new("locked custom"),
+                disabled_in_ancestor: TextEdit::new("in ancestor"),
+                ancestor_disabled: TextEdit::new("under disabled"),
+                aria_edit: TextEdit::new("pending"),
+                aria_custom: TextEdit::new("pending custom"),
+                read_only_edit: TextEdit::new("read only"),
+                disabled_pill,
+                requests: Vec::new(),
+                field_secondary: Vec::new(),
+                ancestor_secondary: Vec::new(),
+                pill_secondary: 0,
+            }
+        }
+    }
+
+    fn case_view(s: &Case, _: &mut Cx<Case>) -> El {
+        let st = TextStyle::new(14.0, 400.0);
+        col()
+            .size(320.0, 320.0)
+            .gap(4.0)
+            .child(
+                text_input(&s.disabled_edit, st)
+                    .key("disabled-editable")
+                    .label("Disabled editable")
+                    .disabled(true)
+                    .on_edit(|s: &mut Case| &mut s.disabled_edit)
+                    .size(200.0, 28.0),
+            )
+            .child(
+                text_input(&s.disabled_custom, st)
+                    .key("disabled-custom")
+                    .label("Disabled custom")
+                    .disabled(true)
+                    .on_edit(|s: &mut Case| &mut s.disabled_custom)
+                    .on_secondary_press(|s: &mut Case, _, _| s.field_secondary.push("disabled-custom"))
+                    .size(200.0, 28.0),
+            )
+            .child(
+                col()
+                    .key("enabled-ancestor")
+                    .size(200.0, 28.0)
+                    .on_secondary_press(|s: &mut Case, _, _| s.ancestor_secondary.push("enabled-ancestor"))
+                    .child(
+                        text_input(&s.disabled_in_ancestor, st)
+                            .key("disabled-in-ancestor")
+                            .label("Disabled in ancestor")
+                            .disabled(true)
+                            .on_edit(|s: &mut Case| &mut s.disabled_in_ancestor)
+                            .on_secondary_press(|s: &mut Case, _, _| s.field_secondary.push("disabled-in-ancestor"))
+                            .size(200.0, 28.0),
+                    ),
+            )
+            .child(
+                col()
+                    .key("disabled-ancestor")
+                    .disabled(true)
+                    .size(200.0, 28.0)
+                    .child(
+                        text_input(&s.ancestor_disabled, st)
+                            .key("under-disabled-ancestor")
+                            .label("Under disabled ancestor")
+                            .on_edit(|s: &mut Case| &mut s.ancestor_disabled)
+                            .size(200.0, 28.0),
+                    ),
+            )
+            .child(
+                text_input(&s.aria_edit, st)
+                    .key("aria-disabled")
+                    .label("Aria disabled")
+                    .aria_disabled(true)
+                    .on_edit(|s: &mut Case| &mut s.aria_edit)
+                    .size(200.0, 28.0),
+            )
+            .child(
+                col()
+                    .key("aria-ancestor")
+                    .size(200.0, 28.0)
+                    .on_secondary_press(|s: &mut Case, _, _| s.ancestor_secondary.push("aria-ancestor"))
+                    .child(
+                        text_input(&s.aria_custom, st)
+                            .key("aria-disabled-custom")
+                            .label("Aria disabled custom")
+                            .aria_disabled(true)
+                            .on_edit(|s: &mut Case| &mut s.aria_custom)
+                            .on_secondary_press(|s: &mut Case, _, _| s.field_secondary.push("aria-disabled-custom"))
+                            .size(200.0, 28.0),
+                    ),
+            )
+            .child(
+                text_input(&s.read_only_edit, st)
+                    .key("read-only-editable")
+                    .label("Read only")
+                    .read_only(true)
+                    .on_edit(|s: &mut Case| &mut s.read_only_edit)
+                    .size(200.0, 28.0),
+            )
+            .child(
+                text_input(&s.disabled_pill, st)
+                    .key("disabled-pill")
+                    .label("Disabled pill")
+                    .disabled(true)
+                    .on_edit(|s: &mut Case| &mut s.disabled_pill)
+                    .on_pill_secondary(|s: &mut Case, _, _, _| {
+                        s.pill_secondary += 1;
+                        true
+                    })
+                    .size(200.0, 28.0),
+            )
+    }
+
+    let spec = AppSpec::new("disabled-secondary", (320.0, 320.0), Case::default, case_view);
+    let mut rt = App::new(spec)
+        .on_field_menu(|s: &mut Case, req: FieldMenuRequest, _| s.requests.push(req))
+        .headless_runtime((320.0, 320.0), Env::new(true, 1.0));
+    rt.core_mut().host.force_field_menu_fallback = true;
+    rt.frame(0.0);
+
+    let rclick = |rt: &mut Runtime<Case>, x: f32, y: f32| {
+        rt.secondary_down(x, y);
+        let claim = rt.core().secondary_claim();
+        rt.secondary_up(x, y);
+        rt.frame(0.0);
+        claim
+    };
+
+    // 1. Standalone disabled, ancestor-disabled, and aria_disabled inputs with on_edit are not targeted.
+    for key in ["disabled-editable", "disabled-custom", "under-disabled-ancestor", "aria-disabled"] {
+        let (x, y) = rt.find(key).expect(key);
+        assert_eq!(rt.core().secondary_target(x, y), None, "{key} must not be a secondary target");
+        let claim = rclick(&mut rt, x, y);
+        assert_eq!(claim, "", "{key} must not claim browser context menu");
+        assert!(rt.popup_menu().is_none(), "{key} must not queue native field menu");
+    }
+    assert!(rt.state.requests.is_empty(), "disabled/aria_disabled inputs must not fire on_field_menu");
+    assert!(rt.state.field_secondary.is_empty(), "disabled/aria_disabled inputs must not fire on_secondary_press");
+    assert!(!rt.state.disabled_edit.focused, "secondary press on disabled input must not focus it");
+
+    // 2. Touch long-press on a disabled input with on_edit does not open a field menu.
+    let (dx, dy) = rt.find("disabled-editable").unwrap();
+    rt.touch(1, crate::TouchPhase::Started, dx, dy, 0.0);
+    rt.frame(0.6);
+    rt.touch(1, crate::TouchPhase::Ended, dx, dy, 0.6);
+    rt.frame(0.0);
+    assert!(rt.state.requests.is_empty() && rt.popup_menu().is_none(), "touch long-press on disabled input opens no menu");
+
+    // 3. Disabled and aria_disabled inputs inside an enabled ancestor fall through to the ancestor.
+    for (field_key, expected_ancestor) in [
+        ("disabled-in-ancestor", "enabled-ancestor"),
+        ("aria-disabled-custom", "aria-ancestor"),
+    ] {
+        let (x, y) = rt.find(field_key).expect(field_key);
+        let target = rt.core().secondary_target(x, y).expect("ancestor target");
+        assert!(target.ends_with(expected_ancestor), "{field_key} should fall through to {expected_ancestor}, got {target}");
+        let claim = rclick(&mut rt, x, y);
+        assert_eq!(claim, "app");
+        assert_eq!(rt.state.ancestor_secondary.last(), Some(&expected_ancestor));
+    }
+    assert!(rt.state.field_secondary.is_empty(), "disabled child on_secondary_press must not fire");
+    assert!(rt.state.requests.is_empty(), "disabled child must not fire on_field_menu");
+
+    // 4. Disabled input with a pill never fires on_pill_secondary.
+    let pill_rect = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("disabled-pill")).unwrap().rect;
+    let _ = rclick(&mut rt, pill_rect[0] + 12.0, pill_rect[1] + 10.0);
+    assert_eq!(rt.state.pill_secondary, 0);
+    assert!(rt.state.requests.is_empty());
+
+    // 5. Focused aria_disabled inputs suppress ContextMenu and Shift+F10 (falling through to an enabled ancestor).
+    rt.update(|s, _| s.aria_edit.focused = true);
+    rt.frame(0.0);
+    rt.key(KeyEvent::from(Key::ContextMenu));
+    rt.key(KeyEvent { key: Key::Function(10), mods: Mods { shift: true, ..Mods::default() } });
+    rt.frame(0.0);
+    assert!(rt.state.requests.is_empty() && rt.popup_menu().is_none(), "ContextMenu/Shift+F10 on aria_disabled opens no field menu");
+
+    let anc_before = rt.state.ancestor_secondary.len();
+    rt.update(|s, _| {
+        s.aria_edit.focused = false;
+        s.aria_custom.focused = true;
+    });
+    rt.frame(0.0);
+    rt.key(KeyEvent::from(Key::ContextMenu));
+    rt.frame(0.0);
+    assert!(rt.state.field_secondary.is_empty(), "ContextMenu on aria_disabled must not run its own on_secondary_press");
+    assert_eq!(rt.state.ancestor_secondary.len(), anc_before + 1, "ContextMenu on aria_disabled falls through to enabled ancestor");
+    assert_eq!(rt.state.ancestor_secondary.last(), Some(&"aria-ancestor"));
+
+    // 6. A read-only input is not disabled and remains a secondary target.
+    let (rx, ry) = rt.find("read-only-editable").unwrap();
+    assert!(
+        rt.core().secondary_target(rx, ry).is_some_and(|p| p.ends_with("read-only-editable")),
+        "read_only input must stay distinct from disabled"
+    );
+}

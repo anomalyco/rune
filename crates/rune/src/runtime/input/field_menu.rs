@@ -41,6 +41,7 @@ impl RuntimeCore {
 
     pub(in crate::runtime) fn field_menu(&mut self, app: &mut dyn AppDriver, path: String, at: (f32, f32), hit_at: Option<(f32, f32)>, one: &mut Tx) -> bool {
         let Some(i) = self.live(&path) else { return false };
+        if self.node_disabled(i) { return false; }
         let field_key = self.tree.nodes[i].key.clone();
         let Some(input) = self.tree.nodes[i].input.as_deref() else { return false };
         if let (Some(f), Some((hx, hy))) = (input.on_pill_secondary.clone(), hit_at)
