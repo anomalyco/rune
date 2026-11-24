@@ -17,6 +17,7 @@ use crate::ElementInfo;
 
 mod commits;
 mod evidence;
+mod handovers;
 mod kicks;
 mod loops;
 pub mod paint;
@@ -26,6 +27,7 @@ mod regions;
 mod series;
 
 pub use evidence::{dump, sheet};
+pub use handovers::Handover;
 use paint::Paint;
 
 /// One finding kind, its threshold and what it means. The checker reads its numbers from here.
@@ -39,6 +41,7 @@ pub const RULES: &[Rule] = &[
     Rule { kind: "pop-in", threshold: 0.5, means: "mounts at or above this opacity, at full size, with no fade, growth or scale (and no ancestor transitioning)" },
     Rule { kind: "pop-out", threshold: 0.5, means: "unmounts at or above this opacity: it vanished instead of leaving" },
     Rule { kind: "cut-exit", threshold: 0.05, means: "unmounts above this opacity, below pop-out's: a fade cut short" },
+    Rule { kind: "bad-handover", threshold: 2.0, means: "a recorded matched handover whose target was not born on the same frame, within this many pt of the source's last drawn rect, or at its opacity" },
     Rule { kind: "jump", threshold: 2.0, means: "an edge moves at least this many pt in one frame between still frames, where it shows (its visible part, or what it holds that shows, moves with it, or it brings what it holds into view with no input)" },
     Rule { kind: "offset-jump", threshold: 2.0, means: "a jump of a scroll's content: every row in it moved by the same delta in one frame" },
     Rule { kind: "appear-then-jump", threshold: 2.0, means: "mounts, then moves at least this many pt on its next frame" },
@@ -174,6 +177,8 @@ pub struct Recording {
     /// Per frame: the box (x y w h, points) of the tooltip Rune drew for `El::help`, which
     /// shows and hides at once after a rest, as AppKit's does.
     pub tips: Vec<Option<[f32; 4]>>,
+    /// `El::matched` handovers recorded during the run.
+    pub handovers: Vec<Handover>,
 }
 
 impl Recording {
@@ -384,11 +389,13 @@ pub fn check(rec: &Recording) -> Vec<Finding> {
             true
         }).collect()
     };
+    let paired = handovers::check(rec, &mut out);
     let mut left: HashMap<usize, Vec<(usize, Snap)>> = HashMap::new(); // frame → (track, last state) of pop-outs
     let mut ks: Vec<&usize> = deaths.keys().collect();
     ks.sort();
     for &k in ks {
         for i in outermost(&deaths[&k]) {
+            if paired.deaths.contains(&(k, i)) { continue; }
             let Some(last) = tr[i].at(k - 1).copied() else { continue };
             if !seen(&last, size) || area(&last.vis) < 16.0 || loops.contains(&i) || last.flags & VIRTUAL != 0 {
                 continue;
@@ -416,6 +423,7 @@ pub fn check(rec: &Recording) -> Vec<Finding> {
     ks.sort();
     for &k in ks {
         for i in outermost(&births[&k]) {
+            if paired.births.contains(&(k, i)) { continue; }
             let t = &tr[i];
             let Some(first) = t.at(k).copied() else { continue };
             if first.op < rule("pop-in") || !seen(&first, size) || area(&on_window(&first.vis, size)) < 16.0 || first.flags & (GROWING | VIRTUAL) != 0 || loops.contains(&i) {

@@ -11,6 +11,8 @@ looks wrong:
   never-settles    still animating at the end of the run, long after the last input
   pop-in/pop-out   mounted or unmounted at full opacity with no transition
   cut-exit         unmounted partway through its fade (nothing leaves above opacity 0)
+  bad-handover     a recorded matched handover whose target was not born on the same frame,
+                   within 2 pt of the source's last drawn rect, or at its opacity
   jump             a rect edge moves far in one frame between still frames (no interpolation)
   step             one frame of a smooth motion moves much more than its neighbours
   sibling-jump     a jump in a sibling of something that just mounted or unmounted
@@ -45,6 +47,8 @@ from collections import defaultdict
 VISIBLE_OPACITY = 0.01
 POP_OPACITY = 0.5
 JUMP_PT = 12.0
+HANDOVER_RECT_PT = 2.0
+HANDOVER_OPACITY = 0.05
 # Frames at rest a motion segment bridges (see the segments in `analyze`).
 SEG_GAP = 2
 # A one-frame speed dip worth reporting: at least this many points a frame, and this share of
@@ -199,6 +203,7 @@ def analyze(path, script=None):
     inputs = []  # (frame, event)
     births = defaultdict(list)  # frame -> ids
     deaths = defaultdict(list)  # frame -> (id, last state)
+    handovers = []  # (frame, from_id, to_id, from_rect, to_rect)
     scrolled = defaultdict(set)  # frame -> containers (by path) of elements a scroll moved
     cpu = []
     changed_by_frame = []
@@ -248,6 +253,8 @@ def analyze(path, script=None):
                 e = els[id]
                 e.scrolled = (0.0, 0.0)
                 deaths[k].append((id, e.rect, e.op, seen(e, W, H) and not e.flags & BLANK))
+        for h in fr.get("handover", []):
+            handovers.append((k, h.get("from"), h.get("to"), h.get("from_rect"), h.get("to_rect")))
         for id in alive:
             e = els[id]
             vp = visible_part(e, W, H)
@@ -396,6 +403,77 @@ def analyze(path, script=None):
                              detail=f"still animating ({'+'.join(q.get('why', []))}) {((n - 1 - last_input) * dt_ms / 1000):.1f}s after the last input; "
                                     + ("busiest tracks: " + "; ".join(f"{short(nm)} {p} ×{c}" for (nm, p), c in top) if top else "no store tracks")))
 
+    at_frame = {}
+
+    def at(e, k):
+        if e is None:
+            return None
+        if e.id not in at_frame:
+            at_frame[e.id] = {st[0]: st for st in e.hist}
+        return at_frame[e.id].get(k)
+
+    # matched handovers: source dies on frame k as target mounts on frame k at the same rect and opacity
+    paired_deaths = set()
+    paired_births = set()
+    for k, from_id, to_id, _from_rect, _to_rect in handovers:
+        if k <= 0:
+            continue
+        fe = els.get(from_id) if from_id is not None else None
+        te = els.get(to_id) if to_id is not None else None
+        from_name = fe.name if fe is not None else f"#{from_id}"
+        to_name = short(te.name) if te is not None else f"#{to_id}"
+        src = at(fe, k - 1)
+        if src is None:
+            findings.append(dict(kind="bad-handover", element=from_name, frames=1, longest=1, at=str(k),
+                                 detail=f"matched handover to {to_name}: source was not mounted on frame {k - 1}"))
+            continue
+        if at(fe, k) is not None:
+            findings.append(dict(kind="bad-handover", element=from_name, frames=1, longest=1, at=str(k),
+                                 detail=f"matched handover to {to_name}: source did not unmount on frame {k}"))
+            continue
+        if te is None:
+            findings.append(dict(kind="bad-handover", element=from_name, frames=1, longest=1, at=str(k),
+                                 detail=f"matched handover to {to_name}: target never mounted"))
+            continue
+        if at(te, k - 1) is not None:
+            findings.append(dict(kind="bad-handover", element=from_name, frames=1, longest=1, at=str(k),
+                                 detail=f"matched handover to {to_name}: target was already mounted before frame {k}"))
+            continue
+        dst = at(te, k)
+        if dst is None:
+            late = next((st[0] for st in te.hist if st[0] > k), None)
+            detail = (f"matched handover to {to_name}: target arrived {late - k} frame(s) late (frame {late} instead of {k})"
+                      if late is not None else f"matched handover to {to_name}: target did not mount on frame {k}")
+            findings.append(dict(kind="bad-handover", element=from_name, frames=1, longest=1, at=str(k), detail=detail))
+            continue
+        prev = at(fe, k - 2) if k >= 2 else None
+        vel = [src[a] - prev[a] for a in (1, 2, 3, 4)] if prev is not None else [0.0, 0.0, 0.0, 0.0]
+        if max(abs(v) for v in vel) <= 0.5:
+            vel = [0.0, 0.0, 0.0, 0.0]
+        exp = [src[a] + vel[a - 1] for a in (1, 2, 3, 4)]
+        nxt = at(te, k + 1)
+        worst = 0.0
+        for a in range(4):
+            err = dst[a + 1] - exp[a]
+            if abs(err) <= HANDOVER_RECT_PT:
+                continue
+            smooth_start = False
+            if nxt is not None:
+                next_step = (nxt[a + 1] - dst[a + 1]) - vel[a]
+                smooth_start = err * next_step > 0.0 and abs(err) <= 0.5 * abs(next_step) + 1.0 and abs(err) <= JUMP_PT
+            if not smooth_start:
+                worst = max(worst, abs(err))
+        if worst > 0.0:
+            findings.append(dict(kind="bad-handover", element=from_name, frames=1, longest=1, at=str(k),
+                                 detail=f"matched handover to {to_name}: target jumped {worst:.1f}pt from ({exp[0]:.0f},{exp[1]:.0f} {exp[2]:.0f}×{exp[3]:.0f}) to ({dst[1]:.0f},{dst[2]:.0f} {dst[3]:.0f}×{dst[4]:.0f})"))
+            continue
+        if abs(dst[5] - src[5]) > HANDOVER_OPACITY:
+            findings.append(dict(kind="bad-handover", element=from_name, frames=1, longest=1, at=str(k),
+                                 detail=f"matched handover to {to_name}: opacity jumped {src[5]:.2f} → {dst[5]:.2f}"))
+            continue
+        paired_deaths.add((k, from_id))
+        paired_births.add((k, to_id))
+
     # pops
     def top_level(ids, k=None, table=None):
         # By path too: a layout-only parent (an untraced stack) breaks the id chain.
@@ -409,7 +487,7 @@ def analyze(path, script=None):
     for k, ids in births.items():
         for id in top_level(ids, k, births):
             e = els[id]
-            if id in loops:
+            if id in loops or (k, id) in paired_births:
                 continue
             h = [x for x in e.hist if x[0] >= k][:3]
             if not h:
@@ -431,7 +509,7 @@ def analyze(path, script=None):
         tops = set(top_level([i for i, *_ in items]))
         for id, rect, op, was_seen in items:
             # Leaving as its viewport scrolls (rows a jump left behind) is the scroll too.
-            if id not in tops or not was_seen or els[id].name.rpartition("/")[0] in scrolled[k]:
+            if id not in tops or not was_seen or (k, id) in paired_deaths or els[id].name.rpartition("/")[0] in scrolled[k]:
                 continue
             # Nothing unmounts above opacity 0: a fade cut short is a smaller pop.
             findings.append(dict(kind="pop-out" if op >= POP_OPACITY else "cut-exit", element=els[id].name, frames=1, longest=1, at=str(k),
@@ -450,12 +528,6 @@ def analyze(path, script=None):
     kids = defaultdict(list)
     for e in els.values():
         kids[e.parent].append(e)
-    at_frame = {}
-
-    def at(e, k):
-        if e.id not in at_frame:
-            at_frame[e.id] = {st[0]: st for st in e.hist}
-        return at_frame[e.id].get(k)
 
     def carries(e, k, edge, step, entering):
         """Whether something `e` holds shows on frames k - 1 and k and moves there by `step` with

@@ -241,7 +241,7 @@ fn matched_flight_onto_zoomed_board_passes_motion_gate() {
                 .iter()
                 .filter(|f| {
                     f.element.contains("tile")
-                        && ["jump", "offset-jump", "appear-then-jump", "reversal", "overshoot", "never-settles", "jerk"]
+                        && ["pop-out", "pop-in", "cut-exit", "bad-handover", "jump", "offset-jump", "appear-then-jump", "reversal", "overshoot", "never-settles", "jerk"]
                             .contains(&f.kind)
                 })
                 .map(|f| f.to_string())
@@ -252,6 +252,38 @@ fn matched_flight_onto_zoomed_board_passes_motion_gate() {
             );
         }
     }
+}
+
+#[test]
+fn same_size_matched_flight_passes_motion_gate() {
+    fn view(moved: &bool, _: &mut Cx<bool>) -> El {
+        let tile = || el().key("tile").matched("tile").size(80.0, 40.0).radius(8.0).fill(Color::WHITE);
+        let mut root = el().key("root").size(400.0, 300.0);
+        let mut left = el().key("left").absolute(0.0, 0.0).size(400.0, 300.0);
+        let mut right = el().key("right").absolute(0.0, 0.0).size(400.0, 300.0);
+        if *moved {
+            right = right.child(tile().absolute(240.0, 140.0));
+        } else {
+            left = left.child(tile().absolute(40.0, 40.0));
+        }
+        root = root.child(left).child(right);
+        root
+    }
+    let mut run = crate::motion_gate::Run::new(
+        Runtime::new(false, view, (400.0, 300.0), Env::new(true, 1.0)),
+        120.0,
+    );
+    run.idle(0.3);
+    run.step();
+    run.act("move", |rt| rt.update(|m, _| *m = true));
+    run.play(1.2);
+    let bad: Vec<String> = run
+        .finish()
+        .iter()
+        .filter(|f| f.element.contains("tile"))
+        .map(|f| f.to_string())
+        .collect();
+    assert!(bad.is_empty(), "same-size matched flight had motion_gate findings: {bad:#?}");
 }
 
 #[test]

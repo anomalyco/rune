@@ -393,6 +393,17 @@ impl tracks::MotionState {
                     anim,
                 );
             }
+            for h in scene.take_handovers() {
+                let start = [h.start.x, h.start.y, h.start.w, h.start.h];
+                let from_rect = built.get(&h.from).and_then(|&k| paint.drawn.get(k).copied()).unwrap_or(start);
+                self.record_handover(tracks::RecordedHandover {
+                    from_path: tree.nodes[from_i].path.clone(),
+                    to_path: nodes[i].path.clone(),
+                    to_id: h.to,
+                    from_rect,
+                    start_rect: start,
+                });
+            }
             let live = |p: crate::live::Property| nodes[i].live.iter().any(|b| b.property == p);
             if fill != nodes[i].vis.fill && !live(crate::live::Property::Fill) {
                 scene.set(to, P_FILL, fill);
