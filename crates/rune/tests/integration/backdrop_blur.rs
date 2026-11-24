@@ -124,13 +124,36 @@ fn two_bars_each_blur_their_own_backdrop() {
 }
 
 #[test]
-fn bars_past_the_cap_draw_only_their_fill() {
-    let bars = (0..rune::MAX_BACKDROP_BLURS + 1).map(|i| Bar { rect: [i as f32 * 40.0, 30.0, 36.0, 60.0], ..BAR }).collect();
-    let (rt, px) = render(Scene { bars, blur: true }, 1.0);
-    assert_eq!(records(&rt), rune::MAX_BACKDROP_BLURS);
-    // Near the window edge the clamped taps lean towards the edge stripe.
-    assert!(spread(&px, 200, 60, 8, 28) <= 12, "the first bar blurs: {}", spread(&px, 200, 60, 8, 28));
-    assert!(spread(&px, 200, 60, 168, 188) > 200, "the last bar shows what is under it");
+fn more_than_four_bars_all_blur() {
+    let gpu = Gpu::headless();
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let target = Offscreen::new(&gpu.device, 200, 120);
+    let draw = |renderer: &mut Renderer, rt: &mut Runtime<Scene>| -> Vec<u8> {
+        renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (200, 120));
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        renderer.draw(&mut encoder, &target.view, [0.0, 0.0, 0.0, 1.0]);
+        target.copy(&mut encoder);
+        gpu.queue.submit([encoder.finish()]);
+        target.read(&gpu.device)
+    };
+    // Warm the renderer with two blurs first, then grow past MAX_BACKDROP_BLURS on the next frame
+    // (for example, a modal opening over four blurred controls).
+    let two = (0..2).map(|i| Bar { rect: [2.0 + i as f32 * 33.0, 30.0, 30.0, 60.0], blur: 6.0, ..BAR }).collect();
+    let mut rt = Runtime::new(Scene { bars: two, blur: true }, stripes, (200.0, 120.0), Env::new(false, 1.0));
+    rt.frame(0.0);
+    let _ = draw(&mut renderer, &mut rt);
+
+    let count = rune::MAX_BACKDROP_BLURS + 2;
+    let six = (0..count).map(|i| Bar { rect: [2.0 + i as f32 * 33.0, 30.0, 30.0, 60.0], blur: 6.0, ..BAR }).collect();
+    rt.update(|s, tx| { s.bars = six; tx.instant(); });
+    rt.frame(1.0 / 60.0);
+    assert_eq!(records(&rt), count);
+    let px = draw(&mut renderer, &mut rt);
+    for i in 0..count {
+        let x0 = (2 + i * 33 + 8) as u32;
+        let x1 = (2 + i * 33 + 22) as u32;
+        assert!(spread(&px, 200, 60, x0, x1) <= 12, "bar {i} blurs: {}", spread(&px, 200, 60, x0, x1));
+    }
 }
 
 #[test]
@@ -249,4 +272,87 @@ fn inside_a_layer_the_blur_reads_the_layer() {
     let px = pixels(&gpu, &mut rt, (200, 120));
     assert!(spread(&px, 200, 60, 60, 140) <= 3, "blurred inside: {}", spread(&px, 200, 60, 60, 140));
     assert!(spread(&px, 200, 10, 60, 140) > 60, "faded stripes outside");
+}
+
+/// Mounting and unmounting a frosted card directly (default enter/exit fade) blurs the window
+/// while its own layer fades in and out, matching Chrome's backdrop-filter + opacity rule.
+#[test]
+fn entering_and_exiting_element_blurs_while_fading() {
+    let gpu = Gpu::headless();
+    let view = |open: &bool, _: &mut Cx<bool>| -> El {
+        let stripes = row().size(200.0, 120.0).absolute(0.0, 0.0)
+            .children((0..50).map(|i| el().size(4.0, 120.0).fill(if i % 2 == 0 { Color::BLACK } else { Color::WHITE })));
+        let mut root = el().size(200.0, 120.0).child(stripes);
+        if *open {
+            root = root.child(
+                col().key("card").absolute(40.0, 30.0).size(120.0, 60.0).radius(12.0)
+                    .backdrop_blur(8.0)
+                    .fill(Color::WHITE.alpha(0.2))
+                    .child(el().size(10.0, 10.0).fill(Color::WHITE)),
+            );
+        }
+        root
+    };
+    let mut rt = Runtime::new(false, view, (200.0, 120.0), Env::new(false, 1.0));
+    rt.frame(0.0);
+
+    // Mount with default enter transition (Transition::opacity).
+    rt.update(|s, _| *s = true);
+    rt.frame(1.0 / 60.0);
+    // Advance into the middle of the enter fade where 0.1 < opacity < 0.9.
+    let mut saw_enter = false;
+    for _ in 0..30 {
+        rt.frame(1.0 / 60.0);
+        if let Some(alpha) = rt.instances.iter().find(|i| i.params[1] == KIND_BACKDROP_BLUR).map(|i| i.fill[3])
+            && (0.25..0.75).contains(&alpha)
+        {
+            let record = rt.instances.iter().position(|i| i.params[1] == KIND_BACKDROP_BLUR).unwrap();
+            let layer = rt.instances.iter().position(|i| i.params[1] == KIND_LAYER).expect("fading card opens a layer");
+            assert!(record < layer, "backdrop blur sits ahead of the card's own fading layer");
+            let px = pixels(&gpu, &mut rt, (200, 120));
+            let s = spread(&px, 200, 60, 60, 140);
+            assert!(s < 210, "entering fade blurs the stripes behind the card, got spread {s} at alpha {alpha}");
+            saw_enter = true;
+            break;
+        }
+    }
+    assert!(saw_enter, "should sample a mid-enter frame");
+
+    // Settle, then unmount and check mid-exit fade.
+    for _ in 0..120 { rt.frame(1.0 / 60.0); }
+    rt.update(|s, _| *s = false);
+    rt.frame(1.0 / 60.0);
+    let mut saw_exit = false;
+    for _ in 0..30 {
+        rt.frame(1.0 / 60.0);
+        if let Some(alpha) = rt.instances.iter().find(|i| i.params[1] == KIND_BACKDROP_BLUR).map(|i| i.fill[3])
+            && (0.25..0.75).contains(&alpha)
+        {
+            let px = pixels(&gpu, &mut rt, (200, 120));
+            let s = spread(&px, 200, 60, 60, 140);
+            assert!(s < 210, "exiting fade blurs the stripes behind the card, got spread {s} at alpha {alpha}");
+            saw_exit = true;
+            break;
+        }
+    }
+    assert!(saw_exit, "should sample a mid-exit frame");
+}
+
+/// An ancestor with opacity < 1 creates a Backdrop Root (as in CSS Filter Effects 2 / Chrome):
+/// a descendant backdrop blur sees only what that ancestor's layer has drawn, not the window behind it.
+#[test]
+fn fading_ancestor_scopes_blur_to_its_layer() {
+    let gpu = Gpu::headless();
+    let view = |_: &(), _: &mut Cx<()>| -> El {
+        let stripes = row().size(200.0, 120.0).absolute(0.0, 0.0)
+            .children((0..50).map(|i| el().size(4.0, 120.0).fill(if i % 2 == 0 { Color::BLACK } else { Color::WHITE })));
+        el().size(200.0, 120.0).child(stripes)
+            .child(el().absolute(0.0, 0.0).size(200.0, 120.0).opacity(0.5)
+                .child(el().absolute(40.0, 30.0).size(120.0, 60.0).backdrop_blur(8.0)))
+    };
+    let mut rt = Runtime::new((), view, (200.0, 120.0), Env::new(false, 1.0));
+    rt.frame(0.0);
+    let px = pixels(&gpu, &mut rt, (200, 120));
+    // Empty fading ancestor has nothing in its layer to blur, so the background stripes stay crisp.
+    assert!(spread(&px, 200, 60, 60, 140) > 200, "fading ancestor isolates backdrop from behind it");
 }

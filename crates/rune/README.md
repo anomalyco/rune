@@ -2461,13 +2461,15 @@ window's edges don't darken. Scrolling, springs and opacity behave as for any pa
 follows the element's presented rect, its opacity fades the blur, and its outer shadows leave the
 blurred interior clear. A still frame doesn't redraw.
 
-A frame blurs at most `MAX_BACKDROP_BLURS` (4) elements; later ones draw only their fill. So do
-blurs drawn into a target without `COPY_SRC`, or into a caller's own `wgpu::RenderPass` through
-`Renderer::draw_range`. The web backend asks the canvas for `COPY_SRC`. Inside an ancestor
-drawn as one layer (`El::group_opacity`, `El::blur`, `El::cache`, a rotation) the backdrop is
-what that layer has drawn so far, as in CSS. A frame without a blurred element runs the same
-passes as before and draws the same pixels. `examples/frosted-bar` scrolls a list under a
-frosted bottom bar.
+Every blurred element in a frame blurs, growing the blur uniform buffer past
+`MAX_BACKDROP_BLURS` (4) when needed, as in CSS `backdrop-filter`. Blurs drawn into a target
+without `COPY_SRC`, or into a caller's own `wgpu::RenderPass` through `Renderer::draw_range`,
+draw only their fill. The web backend asks the canvas for `COPY_SRC`. An element fading on its
+own still blurs what is behind it, while inside an ancestor drawn as one layer (opacity below 1,
+including a fading wrapper, `El::group_opacity`, `El::blur`, `El::cache`, or a rotation) the
+backdrop is what that layer has drawn so far, matching CSS's Backdrop Root. A frame without a
+blurred element runs the same passes as before and draws the same pixels. `examples/frosted-bar`
+scrolls a list under a frosted bottom bar.
 
 ## Accessibility
 
