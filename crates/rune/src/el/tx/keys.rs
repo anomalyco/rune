@@ -16,7 +16,9 @@ impl Tx {
     /// `Key::Command('&')` on a US layout and `Key::Command('/')` on a German one), so a shifted
     /// shortcut matches this instead: `tx.physical_key() == Some(PhysicalKeyCode::Digit7)`.
     /// `None` for a key with no physical origin (`Runtime::key`, a script's `"key"` without a
-    /// `"code"`) and outside key handlers.
+    /// `"code"`) and outside key handlers. Headless hosts and embedders can supply both with
+    /// [`Runtime::key_with`](crate::Runtime::key_with) or
+    /// [`Runtime::physical_key_input`](crate::Runtime::physical_key_input).
     pub fn physical_key(&self) -> Option<crate::PhysicalKeyCode> { self.physical_key }
 
     /// In a key handler, the character the key types under the current keyboard layout with

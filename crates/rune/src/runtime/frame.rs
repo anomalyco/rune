@@ -280,19 +280,29 @@ impl RuntimeCore {
         let ended: Vec<_> = self.pointer.drag_ends.borrow_mut().drain(..).collect();
         let queue = order_drag_ends(std::mem::take(&mut self.frame.queue), ended, &mut self.pointer.drags_open);
         let queue = self.hold_files(queue, ran || self.commit.dirty);
+        // Something besides a checked live-only event wants this frame's commit, so a change
+        // it makes isn't the live-only handler's.
+        #[cfg(debug_assertions)]
+        let mut ran_other = ran;
+        let mut drag_cancelled = self.flush_cancel_pointer(app, &mut tx, &mut ran, &mut why, #[cfg(debug_assertions)] &mut ran_other);
         // A host settle (an uncover, a restore, a shown window) lands the tree the frame began
         // with, before this frame's input runs. The input's own commit below then animates, so
         // a dialog the first press closes still plays its exit.
         if self.commit.is_settling() && queue.has_input_action() {
             self.settle_before_input(app, &mut tx, &mut why);
             ran = false;
+            #[cfg(debug_assertions)]
+            { ran_other = false; }
         }
-        // Something besides a checked live-only event wants this frame's commit, so a change
-        // it makes isn't the live-only handler's.
-        #[cfg(debug_assertions)]
-        let mut ran_other = ran;
         let mut pointer_hover = false;
         for Queued { action, at, input } in queue {
+            if drag_cancelled {
+                match &action {
+                    Action::Drag(_, d, _) | Action::DragRepeat(_, d, _) if d.phase != Phase::Down => continue,
+                    Action::Drag(_, d, _) if d.phase == Phase::Down => drag_cancelled = false,
+                    _ => {}
+                }
+            }
             if matches!(action, Action::Key { stage: false, .. } | Action::Physical(crate::PhysicalInput::Key { pressed: true, .. }, _)) { crate::marks::input_handled(true); }
             pointer_hover |= matches!(action, Action::Hover(_));
             // The user's own key or press takes over from a `Tx::focus_when_shown` still waiting.
@@ -373,6 +383,7 @@ impl RuntimeCore {
                 if r { why |= if input { CommitWhy::INPUT } else { CommitWhy::DIRTY }; }
             }
             self.run_pick_reads(app, &mut tx);
+            drag_cancelled |= self.flush_cancel_pointer(app, &mut tx, &mut ran, &mut why, #[cfg(debug_assertions)] &mut ran_other);
         }
         // Once a frame, however often a drag moved the selection, and in time for this commit.
         for action in self.selection_changes(app) {
@@ -382,6 +393,7 @@ impl RuntimeCore {
             #[cfg(debug_assertions)]
             { ran_other |= r && checks == self.frame.live_checks(); }
             if r { ran = true; why |= CommitWhy::DIRTY; }
+            self.flush_cancel_pointer(app, &mut tx, &mut ran, &mut why, #[cfg(debug_assertions)] &mut ran_other);
         }
         #[cfg(target_os = "linux")]
         self.note_primary_selection(app);
@@ -505,6 +517,40 @@ impl RuntimeCore {
         self.interaction_built();
         if !open_urls.is_empty() { self.open_urls(open_urls); }
         self.animating
+    }
+
+    /// Carries out a deferred `Tx::cancel_pointer` once its calling handler or poll has
+    /// returned: ends pointer capture/hover without re-entrancy and delivers the cancelled
+    /// `Phase::Up` drag and hover-leave actions in this same frame. Returns whether a held
+    /// drag was cancelled.
+    fn flush_cancel_pointer(
+        &mut self,
+        app: &mut dyn AppDriver,
+        tx: &mut Tx,
+        ran: &mut bool,
+        why: &mut u16,
+        #[cfg(debug_assertions)] ran_other: &mut bool,
+    ) -> bool {
+        if !std::mem::take(&mut tx.cancel_pointer) { return false; }
+        let had_drag = self.pointer.press_held().is_some_and(|h| h.drag_handler.is_some());
+        let start = self.frame.queue.len();
+        self.cancel_pointer();
+        let queued = self.frame.queue.split_off(start);
+        for q in queued {
+            let _input = crate::input::time::scope(q.at);
+            #[cfg(debug_assertions)]
+            let checks = self.frame.live_checks();
+            let r = self.run_action(app, q.action, tx);
+            #[cfg(debug_assertions)]
+            { *ran_other |= r && checks == self.frame.live_checks(); }
+            if r {
+                *ran = true;
+                *why |= if q.input { CommitWhy::INPUT } else { CommitWhy::DIRTY };
+            }
+            self.run_pick_reads(app, tx);
+        }
+        if std::mem::take(&mut tx.cancel_pointer) { self.cancel_pointer(); }
+        had_drag && !self.pointer.pressing()
     }
 
     /// Lands a host settle for the tree as it stands before this frame's input, then lets the

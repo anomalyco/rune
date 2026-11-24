@@ -35,8 +35,31 @@ impl<S: 'static> Runtime<S> {
     pub(crate) fn set_window_pixels(&mut self, pixels: Option<(i32, i32)>) { self.core_mut().set_window_pixels(pixels); }
     #[inline(always)]
     pub(crate) fn window_moved(&mut self, dx: f32, dy: f32) { self.core_mut().window_moved(dx, dy); }
+    /// Cancel any active pointer capture, drag or hover: ends a held drag with a cancelled
+    /// [`Phase::Up`](crate::Phase::Up) ([`Drag::cancelled`](crate::Drag::cancelled)), clears
+    /// press, secondary, tint, touch-hold, drag-out and autoscroll state, and leaves hover.
+    ///
+    /// ```
+    /// # use rune::{Cx, Drag, El, Env, Phase, Runtime, col, el};
+    /// # #[derive(Default)] struct S { phases: Vec<(Phase, bool)> }
+    /// # fn view(_: &S, _: &mut Cx<S>) -> El {
+    /// #     col().size(200.0, 100.0).child(
+    /// #         el().key("tile").size(100.0, 60.0)
+    /// #             .on_drag(|s: &mut S, d: &mut Drag, _| s.phases.push((d.phase, d.cancelled()))),
+    /// #     )
+    /// # }
+    /// let mut rt = Runtime::new(S::default(), view, (200.0, 100.0), Env::new(true, 1.0));
+    /// rt.frame(0.0);
+    /// let (x, y) = rt.find("tile").unwrap();
+    /// rt.pointer_down(x, y);
+    /// rt.pointer_move(x + 12.0, y);
+    /// rt.cancel_pointer();
+    /// rt.frame(0.0);
+    /// assert!(!rt.pressing());
+    /// assert_eq!(rt.state.phases.last(), Some(&(Phase::Up, true)));
+    /// ```
     #[inline(always)]
-    pub(crate) fn cancel_pointer(&mut self) { self.core_mut().cancel_pointer(); }
+    pub fn cancel_pointer(&mut self) { self.core_mut().cancel_pointer(); }
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     #[inline(always)]
     pub(crate) fn disarm_drag_out(&mut self) { self.core_mut().disarm_drag_out(); }
@@ -185,10 +208,60 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     pub fn modifier_keys(&self) -> bool { self.core().modifier_keys() }
 
+    /// Queue a key press carrying its physical key code ([`Tx::physical_key`](crate::Tx::physical_key))
+    /// and unmodified layout character ([`Tx::key_base`](crate::Tx::key_base)), as a window host
+    /// delivers a key press. Use [`Self::physical_key_input`] to also send auto-repeat or release
+    /// physical events.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Key, KeyEvent, Keybind, Mods, PhysicalKeyCode, Runtime, col};
+    /// # fn view(_: &bool, _: &mut Cx<bool>) -> El { col().size(100.0, 100.0) }
+    /// let mut rt = Runtime::new(false, view, (100.0, 100.0), Env::new(true, 1.0));
+    /// rt.on_key = Some(|matched, ev, tx| {
+    ///     *matched = Keybind::new("j").matches_tx(ev, tx);
+    ///     true
+    /// });
+    /// rt.frame(0.0);
+    /// rt.key_with(
+    ///     KeyEvent { key: Key::Text("о".into()), mods: Mods::default() },
+    ///     PhysicalKeyCode::KeyJ,
+    ///     Some('j'),
+    /// );
+    /// rt.frame(0.0);
+    /// assert!(rt.state);
+    /// ```
+    #[inline(always)]
+    pub fn key_with(&mut self, event: KeyEvent, physical: crate::PhysicalKeyCode, base: Option<char>) {
+        let input = PhysicalInput::Key { key: physical, mods: event.mods, pressed: true, repeat: false };
+        self.physical_key_input(input, event, base);
+    }
+
     #[inline(always)]
     pub fn physical_input(&mut self, event: PhysicalInput) { self.core_mut().physical_input(event); }
+
+    /// Queue a physical keyboard event paired with its logical [`KeyEvent`] and unmodified layout
+    /// character ([`Tx::key_base`](crate::Tx::key_base)), as a native host delivers presses,
+    /// repeats and releases. Focused [`El::on_physical_input`](crate::El::on_physical_input)
+    /// handlers see `event` first; if unconsumed, `key` routes to key handlers (or `on_key_up`
+    /// when `pressed` is false) with `tx.physical_key()` and `tx.key_base()` set.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Key, KeyEvent, Mods, PhysicalInput, PhysicalKeyCode, Runtime, col};
+    /// # fn view(_: &bool, _: &mut Cx<bool>) -> El { col().size(100.0, 100.0) }
+    /// let mut rt = Runtime::new(false, view, (100.0, 100.0), Env::new(true, 1.0));
+    /// rt.on_key = Some(|repeated, _, tx| { *repeated = tx.key_repeat(); true });
+    /// rt.frame(0.0);
+    /// let mods = Mods::default();
+    /// rt.physical_key_input(
+    ///     PhysicalInput::Key { key: PhysicalKeyCode::KeyJ, mods, pressed: true, repeat: true },
+    ///     KeyEvent { key: Key::Text("j".into()), mods },
+    ///     Some('j'),
+    /// );
+    /// rt.frame(0.0);
+    /// assert!(rt.state);
+    /// ```
     #[inline(always)]
-    pub(crate) fn physical_key_input(&mut self, event: PhysicalInput, key: KeyEvent, base: Option<char>) {
+    pub fn physical_key_input(&mut self, event: PhysicalInput, key: KeyEvent, base: Option<char>) {
         let (core, mut app) = self.split_mut();
         core.physical_key_input(&mut app, event, key, base);
     }

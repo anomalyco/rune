@@ -111,6 +111,7 @@ impl ActionQueue {
     pub(in crate::runtime) fn is_empty(&self) -> bool { self.0.is_empty() }
     pub(in crate::runtime) fn retain(&mut self, mut keep: impl FnMut(&Action) -> bool) { self.0.retain(|q| keep(&q.action)); }
     pub(in crate::runtime) fn remove(&mut self, index: usize) -> Action { self.0.remove(index).action }
+    pub(in crate::runtime) fn split_off(&mut self, at: usize) -> Vec<Queued> { self.0.split_off(at) }
 }
 
 impl Extend<Action> for ActionQueue {
@@ -245,6 +246,7 @@ pub(crate) fn merge(tx: &mut Tx, one: Tx) {
     if one.font_families.is_some() { tx.font_families = one.font_families; }
     if one.rewind.is_some() { tx.rewind = one.rewind; }
     tx.blur |= one.blur;
+    tx.cancel_pointer |= one.cancel_pointer;
     if one.focus_to.is_some() { tx.focus_to = one.focus_to; }
     if one.select.is_some() {
         tx.select = one.select;

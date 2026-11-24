@@ -170,6 +170,10 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   structural similarity and motion brightness variation at 1×/2×.
 - **Input**: hit-testing on presented rects, pointer capture, hover and press overlays, press on
   release inside the element, and drags with a per-gesture scratch value.
+  `Tx::cancel_pointer()` (deferred until after the calling handler finishes) and
+  `Runtime::cancel_pointer()` cancel an active pointer capture or drag cleanly—delivering a
+  cancelled `Phase::Up` (`Drag::cancelled()`), clearing press/secondary/tint/autoscroll state, and
+  leaving hover—for example when an app hands the pointer to a system drag.
   `.on_secondary_press(|s: &mut App, point, tx| ..)` receives window-point coordinates on
   right-click (also control-click on macOS), without invoking primary actions;
   `.on_secondary_press_local` gives the element's own points too (see
@@ -313,7 +317,8 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   `tx.key_base()` is the character the key types under the current layout with no modifiers
   (`Some('a')` for ⌥A, which types `å`), for bindings by letter that follow the layout, as
   macOS's key bindings do; `None` where winit can't say (the web, iOS) and with no physical
-  origin.
+  origin. Headless hosts and embedders can deliver presses with both using `Runtime::key_with`
+  or send full physical press/repeat/release events with `Runtime::physical_key_input`.
 
   `Mods::cmd` is the primary shortcut modifier, reported with its key: ⌘ on macOS (with
   `logo`), Ctrl elsewhere (with `ctrl`). So Ctrl+W on Windows is `{ cmd, ctrl }`, and a test

@@ -100,6 +100,8 @@ pub struct Tx {
     pub(crate) font_smoothing: Option<crate::text::FontSmoothing>,
     pub(crate) font_families: Option<(String, String)>,
     pub(crate) blur: bool,
+    /// `Tx::cancel_pointer`.
+    pub(crate) cancel_pointer: bool,
     /// `Tx::focus` and `Tx::return_focus`: the key, whether its ring shows, and which asked.
     pub(crate) focus_to: Option<(String, bool, FocusAsk)>,
     /// `Tx::focus_visible`.
