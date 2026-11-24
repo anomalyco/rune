@@ -98,6 +98,34 @@ impl El {
         { self.handlers.sites.layout = Some(std::panic::Location::caller()); }
         self
     }
+    /// [`El::on_layout_tx`] for a component that doesn't read the app's state, so it works in
+    /// any app.
+    ///
+    /// Receives the element's laid-out rect `[x, y, w, h]` in window points (after scrolling)
+    /// and a [`Tx`]. Re-fires on moves or resizes past half a point and on display-scale changes
+    /// (read [`Tx::scale`]). Call [`Tx::live_only`] when the handler only updates
+    /// [`Live`](crate::Live) values so scrolling runs no view.
+    ///
+    /// ```
+    /// use rune::{El, Live, Tx, el};
+    ///
+    /// let width = Live::new(0.0_f32);
+    /// let w = width.clone();
+    /// let _bar: El = el()
+    ///     .w_full()
+    ///     .h(24.0)
+    ///     .on_layout_any(move |[_, _, width, _], tx: &mut Tx| {
+    ///         w.set(width);
+    ///         tx.live_only();
+    ///     });
+    /// ```
+    #[track_caller]
+    pub fn on_layout_any(mut self, f: impl Fn([f32; 4], &mut Tx) + 'static) -> Self {
+        self.handlers.on_layout = Some(Rc::new(move |_, r, tx| f(r, tx)));
+        #[cfg(debug_assertions)]
+        { self.handlers.sites.layout = Some(std::panic::Location::caller()); }
+        self
+    }
     /// [`El::on_layout`] in global screen points: `[x, y, w, h]` from the top-left of the
     /// primary display, y down. That's the space of an overlay's
     /// [`OverlayPlacement::Rect`](crate::OverlayPlacement) on
@@ -156,6 +184,29 @@ impl El {
     /// reader reaches it, or to stop a loop nobody can see.
     pub fn on_visible<S: 'static>(mut self, f: impl Fn(&mut S, bool, &mut Tx) + 'static) -> Self {
         self.handlers.on_visible = Some(Rc::new(move |s, on, tx| f(downcast::<S>(s), on, tx)));
+        self
+    }
+    /// [`El::on_visible`] for a component that doesn't read the app's state, so it works in any
+    /// app.
+    ///
+    /// Receives `true` when the element comes on screen and `false` when it leaves, with a
+    /// [`Tx`]. Call [`Tx::live_only`] when the handler only updates [`Live`](crate::Live) values
+    /// or schedules wakes.
+    ///
+    /// ```
+    /// use rune::{El, Live, Tx, el};
+    ///
+    /// let visible = Live::new(0.0_f32);
+    /// let v = visible.clone();
+    /// let _indicator: El = el()
+    ///     .size(120.0, 24.0)
+    ///     .on_visible_any(move |on, tx: &mut Tx| {
+    ///         v.set(if on { 1.0 } else { 0.0 });
+    ///         tx.live_only();
+    ///     });
+    /// ```
+    pub fn on_visible_any(mut self, f: impl Fn(bool, &mut Tx) + 'static) -> Self {
+        self.handlers.on_visible = Some(Rc::new(move |_, on, tx| f(on, tx)));
         self
     }
     /// Called once when this element mounts into the tree, in the same frame before drawing, so
