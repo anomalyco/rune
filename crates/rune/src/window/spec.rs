@@ -831,6 +831,17 @@ impl<S: 'static> WindowSpec<S> {
         on_reopen(f: fn(&mut S, bool, &mut crate::Tx) -> bool);
         /// Receives links opened with the app, like `App::on_open_url`.
         on_open_url(f: fn(&mut S, &str, &mut crate::Tx));
+        /// Receives files opened with the app, like [`App::on_open_files`].
+        ///
+        /// ```no_run
+        /// use std::path::PathBuf;
+        /// use rune::{AppSpec, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("viewer", AppSpec::new("Viewer", (640.0, 420.0), Vec::<PathBuf>::new, |_, _| el()))
+        ///     .on_open_files(|opened, paths, _| opened.extend(paths.iter().cloned()));
+        /// let _ = spec;
+        /// ```
+        on_open_files(f: fn(&mut S, &[std::path::PathBuf], &mut crate::Tx));
         /// Runs on the UI thread each time the native window is created, like `App::on_window`.
         on_window(f: impl FnMut(&crate::WindowHandle) + 'static);
         /// Called on the event thread after the first frame is ready, once per native creation.

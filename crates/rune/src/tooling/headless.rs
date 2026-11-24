@@ -161,7 +161,7 @@ fn try_headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, 
     let (chrome, titlebar, fit_height) = (app.chrome, app.titlebar, app.fit_content_height);
     let app_options = app.window_options.clone();
     let comp = app.compositor.take();
-    let (on_reopen, on_open_url) = (app.on_reopen, app.on_open_url);
+    let (on_reopen, on_open_url, on_open_files) = (app.on_reopen, app.on_open_url, app.on_open_files);
     let on_ready = app.on_ready.take();
     let on_frame_encoded = app.on_frame_encoded.take();
     let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
@@ -179,7 +179,7 @@ fn try_headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, 
         min_size: spec.min_size, on_ready, on_frame_encoded,
         shared_core: shared.core.clone(), shortcuts_core: shared.shortcuts.core.clone(), shortcuts, menus,
     };
-    let mut typed = TypedHeadlessApp { rt, shared, comp, on_reopen, on_open_url };
+    let mut typed = TypedHeadlessApp { rt, shared, comp, on_reopen, on_open_url, on_open_files };
     run_headless(prep, config, &mut typed)
 }
 
@@ -378,6 +378,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
                 // The one window always shows here.
                 Kind::Reopen => app.run_reopen(),
                 Kind::OpenUrl(url) => app.run_open_url(url),
+                Kind::OpenFiles(paths) => app.run_open_files(paths),
                 Kind::Shortcut(shortcut) => shortcuts_core.fire(shortcut).unwrap_or_else(|e| die(&format!("script shortcut: {e}"))),
                 Kind::Menu(item) => menus.fire(item).unwrap_or_else(|e| die(&format!("script menu: {e}"))),
                 Kind::PopupMenu(picked) => app.resolve_popup(picked.as_deref()).unwrap_or_else(|e| die(&format!("script pop-up menu: {e}"))),

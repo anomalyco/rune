@@ -375,6 +375,7 @@ fn remaining_app_hooks_dispatch_through_patch_table_with_panic_fallback() {
         rests: u32,
         reopens: Vec<bool>,
         urls: Vec<String>,
+        files: Vec<Vec<std::path::PathBuf>>,
     }
     struct FakeGlue;
     impl Glue for FakeGlue {
@@ -393,10 +394,13 @@ fn remaining_app_hooks_dispatch_through_patch_table_with_panic_fallback() {
         .on_quit(|s, _| { panics_once(); s.quits += 1; })
         .on_rest(|s, _| { panics_once(); s.rests += 1; true })
         .on_reopen(|s, vis, _| { panics_once(); s.reopens.push(vis); true })
-        .on_open_url(|s, url, _| { panics_once(); s.urls.push(url.to_owned()); });
+        .on_open_url(|s, url, _| { panics_once(); s.urls.push(url.to_owned()); })
+        .on_open_files(|s, paths, _| { panics_once(); s.files.push(paths.to_vec()); });
 
     let inbox: &'static Inbox = Box::leak(Box::new(Inbox::new()));
     let _listening = inbox.listen(&app, &FakeGlue).expect("on_open_url listens");
+    let files_inbox: &'static Inbox<Vec<std::path::PathBuf>> = Box::leak(Box::new(Inbox::new()));
+    let _listening_files = files_inbox.listen_files(&app, &FakeGlue).expect("on_open_files listens");
     let mut win = TypedWindowApp::from_app(app, Arc::new(|| {}));
     win.rt.frame(0.0);
 
@@ -441,6 +445,11 @@ fn remaining_app_hooks_dispatch_through_patch_table_with_panic_fallback() {
     inbox.receive("myapp://open?id=1".into());
     for f in win.shared.take_updates() { win.rt.update_if(f); }
     assert_eq!((win.rt.state.urls.as_slice(), CALLS.get()), (&["myapp://open?id=1".to_owned()][..], 2), "on_open_url");
+
+    CALLS.set(0);
+    files_inbox.receive(vec![std::path::PathBuf::from("/doc.torrent")]);
+    for f in win.shared.take_updates() { win.rt.update_if(f); }
+    assert_eq!((win.rt.state.files.as_slice(), CALLS.get()), (&[vec![std::path::PathBuf::from("/doc.torrent")]][..], 2), "on_open_files");
 }
 
 #[test]

@@ -181,6 +181,7 @@ fn forwarded_window_spec_builders_and_map_app_configure_the_inner_app() {
         .turn_scope(|_| {}, |_| {})
         .on_reopen(|_, _, _| false)
         .on_open_url(|_, _, _| {})
+        .on_open_files(|_, _, _| {})
         .on_window(|_| {})
         .on_ready(|_| {})
         .on_display_close(|| {})
@@ -200,7 +201,7 @@ fn forwarded_window_spec_builders_and_map_app_configure_the_inner_app() {
     assert!(window.app.open_as.maximizes() && window.app.open_as.full_screens());
     assert!(window.app.release_gpu && window.app.keep_running);
     assert!(window.app.on_rest.is_some() && window.app.on_close_request.is_some() && window.app.on_close.is_some() && window.app.on_quit.is_some());
-    assert!(window.app.turn_scope.is_some() && window.app.on_reopen.is_some() && window.app.on_open_url.is_some());
+    assert!(window.app.turn_scope.is_some() && window.app.on_reopen.is_some() && window.app.on_open_url.is_some() && window.app.on_open_files.is_some());
     assert!(window.app.on_window.is_some() && window.app.on_ready.is_some() && window.app.on_display_close.is_some());
     assert!(window.app.on_frame_encoded.is_some() && window.app.on_frame_drawn.is_some());
     assert!(window.app.compositor.is_some());
