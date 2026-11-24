@@ -10,7 +10,9 @@
 //! quits the app that long after its report, as a person would, so the file is written.
 //! `LAUNCH_FLOOR=warm` opens nothing: it makes the GPU device and Rune's pipelines
 //! (`rune::warm_gpu_cache`) and exits, as a setup would run an installed app once, so a first
-//! launch finds the driver's compiled pipelines.
+//! launch finds the driver's compiled pipelines. `LAUNCH_FLOOR_LIVE=1` makes the shell's first
+//! sidebar row answer the pointer (it changes colour under it, and a press counts in the title), to
+//! see that a window takes input from its first frame on, whichever renderer draws it.
 //!
 //! A moment after the first frame it prints every `rune::marks` step as
 //! `launch-mark <name> <µs since the process started> at=<epoch ms>`, then one JSON line
@@ -41,6 +43,8 @@ static BOOT: OnceLock<(Instant, Duration, std::time::SystemTime)> = OnceLock::ne
 struct State {
     shell: bool,
     reads: bool,
+    /// Presses of the first sidebar row, with `LAUNCH_FLOOR_LIVE`.
+    presses: Option<u32>,
 }
 
 /// Runs of the view so far, and how many the first frame took.
@@ -58,7 +62,7 @@ fn reads_scene() -> bool {
 }
 
 fn init() -> State {
-    State { shell: shell_scene(), reads: reads_scene() }
+    State { shell: shell_scene(), reads: reads_scene(), presses: rune::env::var("LAUNCH_FLOOR_LIVE").map(|_| 0) }
 }
 
 fn view(s: &State, cx: &mut Cx<State>) -> El {
@@ -71,7 +75,7 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
         side: cx.layout_size("sidebar").map_or(0.0, |[w, _]| w),
         dock: cx.layout("composer").map_or(0.0, |r| r[1]),
     });
-    shell(t, read)
+    shell(t, read, s.presses)
 }
 
 /// What the `reads` scene's view read from layout.
@@ -87,9 +91,10 @@ fn bare(t: Theme) -> El {
         .child(el().key("rect").size(120.0, 40.0).fill(tok::accent(0, true)))
 }
 
-fn shell(t: Theme, read: Option<Read>) -> El {
-    let title = match &read {
-        Some(r) if r.wide => format!("Launch floor, sidebar {:.0}, composer at {:.0}", r.side, r.dock),
+fn shell(t: Theme, read: Option<Read>, presses: Option<u32>) -> El {
+    let title = match (&read, presses) {
+        (Some(r), _) if r.wide => format!("Launch floor, sidebar {:.0}, composer at {:.0}", r.side, r.dock),
+        (_, Some(presses)) => format!("Launch floor, pressed {presses} times"),
         _ => "Launch floor".to_owned(),
     };
     let titlebar = row().key("titlebar").w_full().h(TITLEBAR_H).px(16.0).gap(12.0).center_y()
@@ -98,13 +103,13 @@ fn shell(t: Theme, read: Option<Read>) -> El {
         .child(icon(&PLUS, 16.0).color(t.text_secondary));
     let mut sidebar = col().key("sidebar").w(280.0).h_full().padding(8.0).gap(2.0).fill(t.card);
     for (i, name) in SESSIONS.iter().enumerate() {
-        sidebar = sidebar.child(
-            row().key(format!("session-{i}")).h(32.0).px(8.0).gap(8.0).center_y().radius(radius::SM)
-                .fill(if i == 0 { t.hover } else { tok::theme(true).card })
-                .child(icon(&CHAT, 14.0).color(t.text_secondary))
-                .child(text(*name).font(type_::BODY).color(t.text).grow(1.0).truncate())
-                .child(text(format!("{}m", 3 + i * 7)).font(type_::LABEL).color(t.text_secondary)),
-        );
+        let session = row().key(format!("session-{i}")).h(32.0).px(8.0).gap(8.0).center_y().radius(radius::SM)
+            .fill(if i == 0 { t.hover } else { tok::theme(true).card })
+            .child(icon(&CHAT, 14.0).color(t.text_secondary))
+            .child(text(*name).font(type_::BODY).color(t.text).grow(1.0).truncate())
+            .child(text(format!("{}m", 3 + i * 7)).font(type_::LABEL).color(t.text_secondary));
+        let live = i == 0 && presses.is_some();
+        sidebar = sidebar.child(if live { session.hover(tok::accent(0, true)).on_press(|s: &mut State| s.presses = s.presses.map(|n| n + 1)) } else { session });
     }
     let mut timeline = col().key("timeline").grow(1.0).gap(12.0)
         .child(text("Where a launch's time goes").key("floor").font(type_::TITLE).color(t.text));

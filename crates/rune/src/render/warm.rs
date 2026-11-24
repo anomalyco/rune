@@ -92,6 +92,22 @@ pub(super) fn warm(features: wgpu::Features, prepare: Option<Box<dyn FnOnce(&wgp
     if spawned.is_err() { *lock(&SLOT.state) = State::Idle; }
 }
 
+/// `warm`, then `done`, on a thread of its own, once a device waits in the slot or none could be
+/// made: a window that opened on the CPU takes it from there (`window::linux::handover`), and
+/// `Gpu::for_surface` makes one itself when the slot is empty.
+#[cfg(target_os = "linux")]
+pub(super) fn warm_then(features: wgpu::Features, done: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
+    std::thread::Builder::new().name("rune-gpu-window".into()).spawn(move || {
+        warm(features, None);
+        let mut state = lock(&SLOT.state);
+        while matches!(*state, State::Making { .. }) {
+            state = SLOT.changed.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+        drop(state);
+        done();
+    }).map(drop)
+}
+
 /// Keeps what's ready for a surface to take, or lets it go once nothing asked for it by its
 /// time (which `warm` may push back).
 fn wait_for_surface(mut state: std::sync::MutexGuard<'_, State>) {

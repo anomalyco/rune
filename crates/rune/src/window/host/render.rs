@@ -350,7 +350,7 @@ pub(super) fn render_window_frame(
 #[allow(unsafe_code)]
 pub(super) fn submit_and_present_window(
     host: &mut Host,
-    prepared: PreparedWindowFrame,
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))] mut prepared: PreparedWindowFrame,
     looped: Option<&Vec<u32>>,
     profile: &mut FrameProfile,
     encoded: &mut Option<Instant>,
@@ -367,6 +367,8 @@ pub(super) fn submit_and_present_window(
     let (Some(l), Some((gpu, renderer))) = (host.win.as_mut(), host.gpu.as_mut()) else {
         return crate::time::now();
     };
+    #[cfg(target_os = "linux")]
+    let readback = crate::window::linux::handover::readback(l, gpu, &mut prepared.encoder, &prepared.frame);
     renderer.submit(&gpu.queue, prepared.encoder);
     profile.mark_submitted();
     crate::marks::mark_once(&FIRST_ENCODED, "frame.first.encoded");
@@ -386,6 +388,9 @@ pub(super) fn submit_and_present_window(
     }
     #[cfg(not(target_os = "macos"))]
     gpu.queue.present(prepared.frame);
+    // A window that opened on the CPU is the GPU's from this frame (`linux::handover`).
+    #[cfg(target_os = "linux")]
+    crate::window::linux::handover::handed(l, gpu, readback);
     #[cfg(target_os = "windows")]
     l.native.slot.presented();
     // A swap chain made again on a handed-over window's visual takes over now (`cpu_frame`).

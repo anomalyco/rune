@@ -52,9 +52,9 @@ impl AnyHost for Host {
         // come.
         let shown = self.shown_win();
         let runtime = shown.map_or(runtime, |w| w.timer_frame.wait(runtime, now));
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         let handover = win.and_then(|w| w.handover_deadline(now));
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
         let handover = None;
         #[cfg(target_os = "windows")]
         let covered_draw = win.and_then(|w| w.covered_draw.deadline());
@@ -222,7 +222,7 @@ impl Host {
         if self.window_script.is_some() { self.replay_window_script(crate::time::now()); }
         #[cfg(target_os = "windows")]
         if let Some(w) = &self.win { w.native.cloak.lift_if_due(&w.window, crate::time::now()); }
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         self.watch_handover(crate::time::now());
         #[cfg(target_os = "windows")]
         if let Some(w) = &mut self.win && w.covered_draw.due(crate::time::now()) {
@@ -339,6 +339,9 @@ impl Host {
         #[cfg(target_os = "windows")]
         return self.post_frame_turn();
         // Elsewhere `on_ready` ran with the first frame; a view asked to be prepared since runs now.
+        // Linux: a window that opened on the CPU starts its GPU in the first of these turns.
+        #[cfg(target_os = "linux")]
+        self.cpu_idle();
         #[cfg(not(target_os = "windows"))]
         { !crate::marks::counting() && self.app.text_idle_owed() && self.app.text_idle_turn() }
     }
