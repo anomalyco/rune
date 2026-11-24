@@ -10,7 +10,10 @@ impl El {
     /// windows and in headless renders, the fill (or a neutral tint without one) draws instead.
     /// Native materials sit under everything the window draws and ignore ancestor clips.
     /// `Glass` also turns on `continuous_corners`, the only curve `NSGlassEffectView` draws, so
-    /// the fill, clip and shadow hole match the glass; `Popover` follows `continuous_corners`.
+    /// the fill, clip and shadow hole match the glass; `Popover` and `Sidebar` follow
+    /// `continuous_corners`. A window hosts at most [`App::max_native_materials`](crate::App::max_native_materials)
+    /// native views (default [`MAX_NATIVE_MATERIALS`](crate::MAX_NATIVE_MATERIALS)); later visible
+    /// elements draw their fallback and report [`ElementInfo::material_fallback`](crate::ElementInfo::material_fallback).
     pub fn system_material(mut self, material: crate::SystemMaterial) -> Self {
         if material == crate::SystemMaterial::Glass { self.vis_flags.set(crate::el::VisualFlags::CONTINUOUS_CORNERS, true); }
         self.cold_mut().material = Some(material);

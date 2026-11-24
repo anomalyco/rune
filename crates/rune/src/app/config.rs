@@ -18,6 +18,7 @@ pub(crate) struct RuntimeConfig<S: 'static> {
     pub(crate) tab_visits_controls: bool,
     pub(crate) srgb_blend: bool,
     pub(crate) font_smoothing: crate::FontSmoothing,
+    pub(crate) max_native_materials: usize,
     pub(crate) dev_stats: Option<fn() -> String>,
 }
 
@@ -38,6 +39,7 @@ impl<S: 'static> Default for RuntimeConfig<S> {
             tab_visits_controls: false,
             srgb_blend: true,
             font_smoothing: crate::FontSmoothing::default(),
+            max_native_materials: crate::MAX_NATIVE_MATERIALS,
             dev_stats: None,
         }
     }
@@ -50,12 +52,14 @@ impl crate::runtime::RuntimeCore {
         tab_visits_controls: bool,
         srgb_blend: bool,
         font_smoothing: crate::FontSmoothing,
+        max_native_materials: usize,
         dev_stats: Option<fn() -> String>,
     ) {
         self.set_modifier_keys(modifier_keys);
         self.set_tab_visits_controls(tab_visits_controls);
         self.set_srgb_blend(srgb_blend);
         self.set_font_smoothing(font_smoothing);
+        self.set_max_native_materials(max_native_materials);
         self.host.set_app_stats(dev_stats);
     }
 }
@@ -72,13 +76,14 @@ impl<S: 'static> Runtime<S> {
             tab_visits_controls,
             srgb_blend,
             font_smoothing,
+            max_native_materials,
             dev_stats,
         } = config;
         self.hooks.on_focus = on_focus;
         self.hooks.on_mods = on_mods;
         self.hooks.on_visibility = on_visibility;
         self.hooks.on_ime = on_ime;
-        self.core_mut().configure_core(modifier_keys, tab_visits_controls, srgb_blend, font_smoothing, dev_stats);
+        self.core_mut().configure_core(modifier_keys, tab_visits_controls, srgb_blend, font_smoothing, max_native_materials, dev_stats);
     }
 }
 
@@ -109,6 +114,7 @@ mod tests {
             .tab_visits_controls(true)
             .srgb_blend(false)
             .font_smoothing(FontSmoothing::Off)
+            .max_native_materials(6)
             .dev_stats(stats)
     }
 
@@ -122,6 +128,7 @@ mod tests {
         assert!(rt.modifier_keys());
         assert!(!rt.srgb_blend());
         assert_eq!(rt.font_smoothing(), FontSmoothing::Off);
+        assert_eq!(rt.max_native_materials(), 6);
         assert_eq!(rt.host.app_stats.map(|f| f()).as_deref(), Some("ok"));
 
         // tab_visits_controls overrides full_keyboard_access(false) so Tab reaches a focusable control.
@@ -148,6 +155,7 @@ mod tests {
         assert!(cfg.srgb_blend);
         assert!(!cfg.modifier_keys && !cfg.tab_visits_controls);
         assert_eq!(cfg.font_smoothing, FontSmoothing::default());
+        assert_eq!(cfg.max_native_materials, crate::MAX_NATIVE_MATERIALS);
         assert!(cfg.on_focus.is_none() && cfg.on_mods.is_none() && cfg.on_visibility.is_none() && cfg.on_ime.is_none() && cfg.dev_stats.is_none());
     }
 }

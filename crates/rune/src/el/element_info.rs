@@ -48,6 +48,7 @@ impl Default for ElementInfo {
             expanded: None,
             item_selected: false,
             stuck: 0.0,
+            material_fallback: false,
         }
     }
 }

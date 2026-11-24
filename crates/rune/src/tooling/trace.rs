@@ -429,6 +429,9 @@ pub(crate) fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> V
             if e.drag_out {
                 v["dragOut"] = true.into();
             }
+            if e.material_fallback {
+                v["materialFallback"] = true.into();
+            }
             if let Some(c) = e.caret && !secure {
                 v["caret"] = c.map(r2).to_vec().into();
             }

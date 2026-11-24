@@ -346,3 +346,208 @@ fn srgb_blend_frost_over_a_native_material_reads_as_core_animation() {
     near(read(true, 1, [0.0; 4]), [158, 158, 158, 158]);
     near(read(true, 0, [0.0; 4]), [0, 0, 0, 0]);
 }
+
+#[test]
+fn sidebar_material_resolves_unchanged_and_uses_sidebar_visual_effect_config() {
+    assert_eq!(Mode::Synced.resolve_with(SystemMaterial::Sidebar, true), SystemMaterial::Sidebar);
+    assert_eq!(Mode::Synced.resolve_with(SystemMaterial::Sidebar, false), SystemMaterial::Sidebar);
+    assert_eq!(Mode::Legacy.resolve_with(SystemMaterial::Sidebar, true), SystemMaterial::Sidebar);
+    assert_eq!(Mode::Legacy.resolve_with(SystemMaterial::Sidebar, false), SystemMaterial::Sidebar);
+    assert_eq!(Mode::Legacy.resolve_with(SystemMaterial::Glass, true), SystemMaterial::Popover);
+    assert_eq!(Mode::Synced.resolve_with(SystemMaterial::Glass, false), SystemMaterial::Popover);
+    assert_eq!(Mode::Synced.resolve_with(SystemMaterial::Glass, true), SystemMaterial::Glass);
+    assert_eq!(Mode::Legacy.resolve_with(SystemMaterial::Popover, true), SystemMaterial::Popover);
+    // AppKit NSVisualEffectMaterialSidebar (7), BehindWindow (0), FollowsWindowActiveState (0).
+    assert_eq!(visual_effect_config(SystemMaterial::Sidebar), (7, 0, 0));
+    // AppKit NSVisualEffectMaterialPopover (6), BehindWindow (0), Active (1).
+    assert_eq!(visual_effect_config(SystemMaterial::Popover), (6, 0, 1));
+}
+
+#[test]
+fn sidebar_slot_assignment_keeps_sidebar_distinct_from_glass_and_popover() {
+    use SystemMaterial::{Glass, Popover, Sidebar};
+    let (a, b, c) = (NodeId(1), NodeId(2), NodeId(3));
+    assert_eq!(assign(&[(Glass, Some(a)), (Popover, Some(b))], &[(Sidebar, c), (Glass, a)]), [None, Some(0)]);
+    assert_eq!(assign(&[(Popover, None), (Sidebar, None)], &[(Sidebar, a), (Popover, b)]), [Some(1), Some(0)]);
+    assert_eq!(assign(&[(Sidebar, Some(a)), (Sidebar, Some(b))], &[(Sidebar, c), (Sidebar, a)]), [Some(1), Some(0)]);
+}
+
+#[test]
+fn sidebar_follows_continuous_corners_and_draws_fallback_when_non_native() {
+    fn view(_: &u8, _: &mut Cx<u8>) -> El {
+        el().size(200.0, 120.0)
+            .child(el().key("plain").absolute(10.0, 20.0).size(40.0, 40.0).radius(10.0).shadow(8.0, 24.0, SHADOW).system_material(SystemMaterial::Sidebar))
+            .child(el().key("continuous").absolute(60.0, 20.0).size(40.0, 40.0).radius(10.0).continuous_corners().system_material(SystemMaterial::Sidebar))
+    }
+    let headless = runtime(view, false);
+    assert_eq!(headless.paint.materials().len(), 2);
+    assert_eq!(headless.paint.materials()[0].material, SystemMaterial::Sidebar);
+    assert!(!headless.paint.materials()[0].continuous);
+    assert!(headless.paint.materials()[1].continuous);
+    let tint = fallback_fill(Color::TRANSPARENT, true).premul(1.0);
+    let fills = kind(&headless, KIND_RECT);
+    assert!(fills.iter().any(|q| q.rect == [20.0, 40.0, 80.0, 80.0] && q.fill == tint && q.radii[0] == 20.0));
+    assert!(fills.iter().any(|q| q.rect == [120.0, 40.0, 80.0, 80.0] && q.fill == tint && q.radii[0] == -20.0));
+
+    let native = runtime(view, true);
+    assert!(!native.instances.iter().any(|q| q.params[1] == KIND_RECT && q.rect == [20.0, 40.0, 80.0, 80.0] && q.fill[3] > 0.0));
+    let shadows = kind(&native, KIND_SHADOW);
+    assert_eq!(shadows.len(), 1);
+    assert_eq!(shadows[0].radii[3], 20.0, "plain Sidebar shadow hole stays circular");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_make_view_configures_sidebar_and_popover_effect_views() {
+    use objc2::{msg_send, rc::Retained, runtime::{AnyClass, AnyObject, Bool}};
+    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+    let ns_view = AnyClass::get(c"NSView").expect("AppKit NSView");
+    // SAFETY: creates an off-window NSView in memory without any NSWindow.
+    let host: Retained<AnyObject> = unsafe {
+        let alloc: *mut AnyObject = msg_send![ns_view, alloc];
+        let view: *mut AnyObject = msg_send![alloc, initWithFrame: CGRect { origin: CGPoint { x: 0.0, y: 0.0 }, size: CGSize { width: 200.0, height: 120.0 } }];
+        Retained::from_raw(view).expect("NSView init")
+    };
+    assert_eq!(Mode::Legacy.resolve(SystemMaterial::Sidebar), SystemMaterial::Sidebar);
+    assert_eq!(Mode::Legacy.resolve(SystemMaterial::Glass), SystemMaterial::Popover);
+    let sidebar = macos::make_view(SystemMaterial::Sidebar, &host).expect("sidebar slot");
+    let popover = macos::make_view(SystemMaterial::Popover, &host).expect("popover slot");
+    assert!(!sidebar.glass && sidebar.material == SystemMaterial::Sidebar);
+    assert!(!popover.glass && popover.material == SystemMaterial::Popover);
+    // SAFETY: reads AppKit NSVisualEffectView and CALayer properties on views owned by this test.
+    unsafe {
+        let s_mat: isize = msg_send![&*sidebar.view, material];
+        let s_blend: isize = msg_send![&*sidebar.view, blendingMode];
+        let s_state: isize = msg_send![&*sidebar.view, state];
+        let s_layer: *mut AnyObject = msg_send![&*sidebar.view, layer];
+        let s_masks: Bool = msg_send![s_layer.as_ref().expect("sidebar layer"), masksToBounds];
+        assert_eq!((s_mat, s_blend, s_state), (7, 0, 0), "Sidebar must use NSVisualEffectMaterialSidebar, BehindWindow, FollowsWindowActiveState");
+        assert!(s_masks.as_bool(), "Sidebar layer must mask to bounds");
+
+        let p_mat: isize = msg_send![&*popover.view, material];
+        let p_blend: isize = msg_send![&*popover.view, blendingMode];
+        let p_state: isize = msg_send![&*popover.view, state];
+        assert_eq!((p_mat, p_blend, p_state), (6, 0, 1), "Popover must keep NSVisualEffectMaterialPopover, BehindWindow, Active");
+
+        let _: () = msg_send![&*sidebar.view, removeFromSuperview];
+        let _: () = msg_send![&*popover.view, removeFromSuperview];
+    }
+}
+
+#[test]
+fn default_cap_reports_fallback_on_fifth_visible_material_and_warns_only_when_native() {
+    fn five(_: &u8, _: &mut Cx<u8>) -> El {
+        el().size(200.0, 120.0).children((0..MAX_NATIVE_MATERIALS + 1).map(|k| {
+            el().key(format!("card-{k}")).absolute(k as f32 * 30.0, 0.0).size(20.0, 20.0).fill(Color::WHITE).system_material(SystemMaterial::Glass)
+        }))
+    }
+    for native in [false, true] {
+        let rt = runtime(five, native);
+        assert_eq!(rt.max_native_materials(), MAX_NATIVE_MATERIALS);
+        assert_eq!(rt.paint.materials().len(), MAX_NATIVE_MATERIALS);
+        let els = rt.elements();
+        for k in 0..MAX_NATIVE_MATERIALS {
+            let info = els.iter().find(|e| e.key.as_deref() == Some(&format!("card-{k}"))).unwrap();
+            assert!(!info.material_fallback, "card-{k} fits inside cap (native={native})");
+        }
+        let fifth = els.iter().find(|e| e.key.as_deref() == Some("card-4")).unwrap();
+        assert!(fifth.material_fallback, "card-4 exceeds cap (native={native})");
+        assert_eq!(rt.paint.material_fallback_warned(), native, "stderr notice latches only when native_materials is active");
+    }
+}
+
+#[test]
+fn set_max_native_materials_raises_zeroes_and_clamps_cap() {
+    fn view(count: &usize, _: &mut Cx<usize>) -> El {
+        el().size(200.0, 120.0).children((0..*count).map(|k| {
+            let x = (k % 10) as f32 * 18.0;
+            let y = (k / 10) as f32 * 14.0;
+            el().key(format!("m-{k}")).absolute(x, y).size(12.0, 10.0).fill(Color::WHITE).system_material(SystemMaterial::Popover)
+        }))
+    }
+    let mut rt = Runtime::new(7usize, view, (200.0, 120.0), Env { scale: 1.0, system_dark: true });
+    rt.paint.set_native_materials(true);
+    rt.set_max_native_materials(6);
+    assert_eq!(rt.max_native_materials(), 6);
+    rt.frame(0.0);
+    assert_eq!(rt.paint.materials().len(), 6);
+    let els = rt.elements();
+    for k in 0..6 {
+        assert!(!els.iter().find(|e| e.key.as_deref() == Some(&format!("m-{k}"))).unwrap().material_fallback);
+    }
+    assert!(els.iter().find(|e| e.key.as_deref() == Some("m-6")).unwrap().material_fallback);
+    assert!(rt.paint.material_fallback_warned());
+
+    // Raising the cap clears fallback on m-6 and resets the one-time warning latch.
+    rt.set_max_native_materials(7);
+    assert!(!rt.paint.material_fallback_warned());
+    rt.frame(0.0);
+    assert_eq!(rt.paint.materials().len(), 7);
+    assert!(!rt.elements().iter().find(|e| e.key.as_deref() == Some("m-6")).unwrap().material_fallback);
+    assert!(!rt.paint.material_fallback_warned());
+
+    // Zero disables native material admission and marks every visible material element as fallen back.
+    rt.set_max_native_materials(0);
+    assert_eq!(rt.max_native_materials(), 0);
+    rt.frame(0.0);
+    assert!(rt.paint.materials().is_empty());
+    let els = rt.elements();
+    for k in 0..7 {
+        assert!(els.iter().find(|e| e.key.as_deref() == Some(&format!("m-{k}"))).unwrap().material_fallback);
+    }
+
+    // Huge cap clamps to MAX_NATIVE_MATERIALS_CAP (64); 65th visible element falls back.
+    rt.update(|count, _| *count = MAX_NATIVE_MATERIALS_CAP + 1);
+    rt.set_max_native_materials(usize::MAX);
+    assert_eq!(rt.max_native_materials(), MAX_NATIVE_MATERIALS_CAP);
+    rt.frame(1.0);
+    assert_eq!(rt.paint.materials().len(), MAX_NATIVE_MATERIALS_CAP);
+    let els = rt.elements();
+    assert!(!els.iter().find(|e| e.key.as_deref() == Some("m-63")).unwrap().material_fallback);
+    assert!(els.iter().find(|e| e.key.as_deref() == Some("m-64")).unwrap().material_fallback);
+}
+
+#[test]
+fn dimmed_out_materials_neither_consume_a_slot_nor_report_fallback() {
+    fn view(_: &u8, _: &mut Cx<u8>) -> El {
+        let card = |key: &str, x: f32| el().key(key).absolute(x, 0.0).size(16.0, 16.0).system_material(SystemMaterial::Sidebar);
+        el().size(200.0, 120.0)
+            .child(card("dim-before", 0.0).dim(0.0))
+            .children((0..MAX_NATIVE_MATERIALS).map(|k| card(&format!("vis-{k}"), (k + 1) as f32 * 20.0)))
+            .child(card("dim-after", 120.0).dim(0.0))
+    }
+    let rt = runtime(view, true);
+    assert_eq!(rt.paint.materials().len(), MAX_NATIVE_MATERIALS);
+    let els = rt.elements();
+    for key in ["dim-before", "vis-0", "vis-1", "vis-2", "vis-3", "dim-after"] {
+        let info = els.iter().find(|e| e.key.as_deref() == Some(key)).unwrap();
+        assert!(!info.material_fallback, "{key} must not report fallback");
+    }
+    assert!(!rt.paint.material_fallback_warned());
+}
+
+#[test]
+fn unmounting_a_material_clears_fallback_on_remaining_elements() {
+    fn view(count: &usize, _: &mut Cx<usize>) -> El {
+        el().size(200.0, 120.0).children((0..*count).map(|k| {
+            el().key(format!("c-{k}")).absolute(k as f32 * 24.0, 0.0).size(20.0, 20.0).system_material(SystemMaterial::Glass)
+        }))
+    }
+    let mut rt = Runtime::new(MAX_NATIVE_MATERIALS + 1, view, (200.0, 120.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    assert!(rt.elements().iter().find(|e| e.key.as_deref() == Some("c-4")).unwrap().material_fallback);
+    rt.update(|count, _| *count = MAX_NATIVE_MATERIALS);
+    rt.frame(0.0);
+    assert_eq!(rt.paint.materials().len(), MAX_NATIVE_MATERIALS);
+    for k in 0..MAX_NATIVE_MATERIALS {
+        assert!(!rt.elements().iter().find(|e| e.key.as_deref() == Some(&format!("c-{k}"))).unwrap().material_fallback);
+    }
+}
+
+#[test]
+fn fallback_notice_formats_single_and_multiple_overflows() {
+    let one = fallback_notice(1, 5, 4);
+    assert!(one.contains("5 of 5") && one.contains("limit 4") && one.contains("App::max_native_materials"), "{one}");
+    let many = fallback_notice(2, 6, 4);
+    assert!(many.contains("2 of 6") && many.contains("5..=6") && many.contains("limit 4"), "{many}");
+}

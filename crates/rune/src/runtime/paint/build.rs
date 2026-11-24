@@ -33,6 +33,7 @@ impl RuntimeCore {
         self.paint.icon_aprons.clear();
         self.surfaces.clear();
         self.paint.materials.clear();
+        self.paint.material_fallbacks.clear();
         self.hit.hits.clear();
         self.hit.wheel_hits.clear();
         self.clear_help_hits();
@@ -720,6 +721,15 @@ impl RuntimeCore {
         }
         self.keep_close(None, &mut layers, &mut active_cache, &mut glyph_count);
         self.keep_end();
+        if self.paint.native_materials
+            && !self.paint.material_fallbacks.is_empty()
+            && !self.paint.material_fallback_warned
+        {
+            self.paint.material_fallback_warned = true;
+            let fallen = self.paint.material_fallbacks.len();
+            let total = self.paint.materials.len() + fallen;
+            eprintln!("{}", crate::system_material::fallback_notice(fallen, total, self.paint.max_native_materials));
+        }
         self.paint.close_all_layers(&self.tree.nodes, &mut self.instances, &mut self.surfaces, &mut self.marks, self.track_marks, &mut self.text, self.commit.commit_gen(), &mut layers, &mut active_cache, &mut glyph_count);
         // A moving chip can enter a stationary pointer. Re-evaluate against this frame's
         // geometry without inventing pointer-move or drag events on animation frames. Tooltips

@@ -168,6 +168,26 @@ impl<S: 'static> App<S> {
         self
     }
 
+    /// Maximum number of native `El::system_material` views this window may host at once
+    /// (default [`crate::MAX_NATIVE_MATERIALS`], clamped to 64).
+    ///
+    /// Visible material elements past this limit draw their fallback fill (or neutral tint),
+    /// report [`ElementInfo::material_fallback`](crate::ElementInfo::material_fallback), emit
+    /// `"materialFallback": true` in `--tree` JSON, and log a one-time notice to stderr when
+    /// native materials are active. Passing `0` disables native material views for this window.
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, el};
+    ///
+    /// App::new(AppSpec::new("Notifications", (360.0, 520.0), || (), |_, _| el()))
+    ///     .max_native_materials(8)
+    ///     .run();
+    /// ```
+    pub fn max_native_materials(mut self, max: usize) -> Self {
+        self.runtime.max_native_materials = crate::system_material::clamp_max_native_materials(max);
+        self
+    }
+
     /// How this app's windows and overlays rasterise and place glyphs (see [`crate::FontSmoothing`]):
     /// `On` by default on macOS and in a Mac's browser, `WindfoilChromium` elsewhere.
     /// `ConfiguredOverlay::font_smoothing` overrides it per overlay, and

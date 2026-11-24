@@ -318,3 +318,44 @@ fn trace_records_matched_handover_with_ids_and_rects() {
     assert_eq!(hos[0]["from_rect"].as_array().unwrap().len(), 4);
     assert_eq!(hos[0]["to_rect"].as_array().unwrap().len(), 4);
 }
+
+#[test]
+fn tree_json_emits_material_fallback_only_when_exceeding_cap() {
+    let view = |_: &(), _: &mut Cx<()>| {
+        crate::el().key("root").size(240.0, 120.0)
+            .children((0..crate::MAX_NATIVE_MATERIALS + 1).map(|k| {
+                crate::el()
+                    .key(format!("mat-{k}"))
+                    .absolute(k as f32 * 30.0, 0.0)
+                    .size(24.0, 24.0)
+                    .system_material(if k == 0 { crate::SystemMaterial::Sidebar } else { crate::SystemMaterial::Glass })
+            }))
+            .child(
+                crate::el()
+                    .key("mat-dim")
+                    .absolute(180.0, 0.0)
+                    .size(24.0, 24.0)
+                    .dim(0.0)
+                    .system_material(crate::SystemMaterial::Popover),
+            )
+    };
+    let mut rt = Runtime::new((), view, (240.0, 120.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let tree = tree_json(&rt, 0.0);
+    let tree_els = tree["elements"].as_array().unwrap();
+    let find_json = |key: &str| tree_els.iter().find(|e| e["key"].as_str() == Some(key)).unwrap();
+    for k in 0..crate::MAX_NATIVE_MATERIALS {
+        let node = find_json(&format!("mat-{k}"));
+        assert!(node.get("materialFallback").is_none(), "mat-{k} within cap must omit materialFallback: {node}");
+    }
+    assert_eq!(find_json("mat-4")["materialFallback"], serde_json::json!(true));
+    assert!(find_json("mat-dim").get("materialFallback").is_none(), "dimmed material must omit materialFallback");
+
+    // Raising the cap clears materialFallback from --tree on the next frame.
+    rt.set_max_native_materials(6);
+    rt.frame(0.0);
+    let raised = tree_json(&rt, 0.0);
+    let raised_els = raised["elements"].as_array().unwrap();
+    let fifth = raised_els.iter().find(|e| e["key"].as_str() == Some("mat-4")).unwrap();
+    assert!(fifth.get("materialFallback").is_none(), "mat-4 within raised cap must omit materialFallback: {fifth}");
+}

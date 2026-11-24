@@ -14,7 +14,7 @@ pub(crate) struct PaintState {
     pub(super) quads_frame: u64,
     /// Opt-in gamma-space (sRGB) blending for translucent fills, shadows and blurs.
     pub(in crate::runtime) srgb_blend: bool,
-    /// The shell shows native views for the first `MAX_NATIVE_MATERIALS` of `materials`; their
+    /// The shell shows native views for the first `max_native_materials` of `materials`; their
     /// elements skip their fill and cut their shadows out of their interior.
     pub(super) native_materials: bool,
     /// A drawn video is playing or seeking: keep drawing frames.
@@ -83,6 +83,13 @@ pub(crate) struct PaintState {
     pub(super) text_quads: HashMap<(NodeId, crate::text::LayoutId), (crate::el::grid::DrawnRow, u64)>,
     /// `El::system_material` elements built this frame, in paint order.
     pub(super) materials: Vec<crate::system_material::MaterialDraw>,
+    /// Per-window cap on native `El::system_material` views (default `MAX_NATIVE_MATERIALS`,
+    /// clamped to `MAX_NATIVE_MATERIALS_CAP`).
+    pub(super) max_native_materials: usize,
+    /// Visible `El::system_material` nodes that exceeded `max_native_materials` this frame.
+    pub(super) material_fallbacks: Vec<NodeId>,
+    /// Whether this window already emitted its one-time stderr notice for native material fallback.
+    pub(super) material_fallback_warned: bool,
     /// Each node's place in the paint order, kept by the frame build while `Some` (the motion
     /// gate's `z-order`).
     pub(super) paint_rank: Option<Vec<u32>>,
@@ -140,6 +147,9 @@ impl PaintState {
             text_rows: HashMap::default(),
             text_quads: HashMap::default(),
             materials: Vec::new(),
+            max_native_materials: crate::MAX_NATIVE_MATERIALS,
+            material_fallbacks: Vec::new(),
+            material_fallback_warned: false,
             paint_rank: None,
             icon_aprons: Vec::new(),
             #[cfg(test)]
@@ -457,6 +467,33 @@ impl PaintState {
     #[inline]
     pub(crate) fn materials(&self) -> &[crate::system_material::MaterialDraw] {
         &self.materials
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn max_native_materials(&self) -> usize {
+        self.max_native_materials
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn set_max_native_materials(&mut self, max: usize) -> bool {
+        let clamped = crate::system_material::clamp_max_native_materials(max);
+        let changed = self.max_native_materials != clamped;
+        if changed {
+            self.max_native_materials = clamped;
+            self.material_fallback_warned = false;
+        }
+        changed
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn material_fallback(&self, id: NodeId) -> bool {
+        self.material_fallbacks.contains(&id)
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn material_fallback_warned(&self) -> bool {
+        self.material_fallback_warned
     }
 
     #[inline]

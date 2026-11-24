@@ -160,6 +160,7 @@ fn forwarded_window_spec_builders_and_map_app_configure_the_inner_app() {
     let window = WindowSpec::new("secondary", spec)
         .srgb_blend(false)
         .font_smoothing(crate::FontSmoothing::Off)
+        .max_native_materials(8)
         .fit_content_height()
         .float_on_open()
         .inactive()
@@ -187,6 +188,7 @@ fn forwarded_window_spec_builders_and_map_app_configure_the_inner_app() {
         .map_app(|app| app.keep_running());
     assert!(!window.app.runtime.srgb_blend);
     assert_eq!(window.app.runtime.font_smoothing, crate::FontSmoothing::Off);
+    assert_eq!(window.app.runtime.max_native_materials, 8);
     assert!(window.app.runtime.modifier_keys && window.app.runtime.tab_visits_controls);
     assert!(window.app.runtime.on_focus.is_some() && window.app.runtime.on_mods.is_some());
     assert!(window.app.runtime.on_visibility.is_some() && window.app.runtime.on_ime.is_some());
@@ -199,4 +201,19 @@ fn forwarded_window_spec_builders_and_map_app_configure_the_inner_app() {
     assert!(window.app.on_window.is_some() && window.app.on_ready.is_some());
     assert!(window.app.on_frame_encoded.is_some() && window.app.on_frame_drawn.is_some());
     assert!(window.app.compositor.is_some());
+
+    let clamped = WindowSpec::new("clamped", AppSpec::new("clamped", (100.0, 100.0), || (), |_, _| crate::el()))
+        .max_native_materials(usize::MAX);
+    assert_eq!(clamped.app.runtime.max_native_materials, 64);
+    let zero = WindowSpec::new("zero", AppSpec::new("zero", (100.0, 100.0), || (), |_, _| crate::el()))
+        .max_native_materials(0);
+    assert_eq!(zero.app.runtime.max_native_materials, 0);
+    let overlay = crate::OverlaySpec::new("notes", (300.0, 400.0), |_: &(), _| crate::el())
+        .options(crate::OverlayOptions::default())
+        .max_native_materials(10);
+    assert_eq!(overlay.runtime.max_native_materials, 10);
+    let overlay_clamped = crate::OverlaySpec::new("notes-max", (300.0, 400.0), |_: &(), _| crate::el())
+        .options(crate::OverlayOptions::default())
+        .max_native_materials(usize::MAX);
+    assert_eq!(overlay_clamped.runtime.max_native_materials, 64);
 }

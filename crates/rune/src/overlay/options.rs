@@ -173,6 +173,21 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// default). With a `Compositor`, `Frame::srgb_blend` says which encoding its passes must
     /// match.
     pub fn srgb_blend(mut self, enabled: bool) -> Self { self.runtime.srgb_blend = enabled; self }
+    /// Maximum number of native `El::system_material` views this overlay may host at once
+    /// (default [`crate::MAX_NATIVE_MATERIALS`], clamped to 64), like
+    /// [`App::max_native_materials`](crate::App::max_native_materials).
+    ///
+    /// ```no_run
+    /// use rune::{OverlayOptions, OverlaySpec, el};
+    ///
+    /// let overlay = OverlaySpec::new("notifications", (360.0, 520.0), |_: &(), _| el())
+    ///     .options(OverlayOptions::default())
+    ///     .max_native_materials(8);
+    /// ```
+    pub fn max_native_materials(mut self, max: usize) -> Self {
+        self.runtime.max_native_materials = crate::system_material::clamp_max_native_materials(max);
+        self
+    }
     /// How this overlay rasterises and places glyphs (see [`crate::FontSmoothing`]).
     /// Defaults to the app's `App::font_smoothing`; `Tx::set_font_smoothing` switches it
     /// while running.

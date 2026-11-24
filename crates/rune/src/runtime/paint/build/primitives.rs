@@ -61,16 +61,21 @@ impl RuntimeCore {
         let blur = 0.0;
         let k_px = sc * s;
         let native_material = match n.material {
-            // A dimmed-out element takes no native view: its fallback draws nothing.
-            Some(material) if self.paint.materials.len() < crate::MAX_NATIVE_MATERIALS
-                && effective_opacity * n.vis.paint_alpha > 0.001 => {
-                let radius = crate::system_material::clamp_radius(radii, w, h);
-                let continuous = n.vis_flags.continuous_corners();
-                self.paint.materials.push(crate::system_material::MaterialDraw {
-                    id: n.id, material, rect: [r[0], r[1], w, h], radius, continuous,
-                    opacity: effective_opacity * n.vis.paint_alpha,
-                });
-                self.paint.native_materials.then_some(if continuous { -radius } else { radius })
+            // A dimmed-out element takes no native view: its fallback draws nothing and does not
+            // count as a cap fallback.
+            Some(material) if effective_opacity * n.vis.paint_alpha > 0.001 => {
+                if self.paint.materials.len() < self.paint.max_native_materials {
+                    let radius = crate::system_material::clamp_radius(radii, w, h);
+                    let continuous = n.vis_flags.continuous_corners();
+                    self.paint.materials.push(crate::system_material::MaterialDraw {
+                        id: n.id, material, rect: [r[0], r[1], w, h], radius, continuous,
+                        opacity: effective_opacity * n.vis.paint_alpha,
+                    });
+                    self.paint.native_materials.then_some(if continuous { -radius } else { radius })
+                } else {
+                    self.paint.material_fallbacks.push(n.id);
+                    None
+                }
             }
             _ => None,
         };

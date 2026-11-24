@@ -252,6 +252,22 @@ impl<S: 'static> Runtime<S> {
     pub fn set_srgb_blend(&mut self, enabled: bool) { self.core_mut().set_srgb_blend(enabled); }
     #[inline(always)]
     pub fn srgb_blend(&self) -> bool { self.core().srgb_blend() }
+    /// Set the maximum number of native `El::system_material` views this runtime admits per frame
+    /// (default [`crate::MAX_NATIVE_MATERIALS`], clamped to 64), as
+    /// [`App::max_native_materials`](crate::App::max_native_materials) does for a window.
+    ///
+    /// ```
+    /// use rune::{Env, Runtime, el};
+    ///
+    /// let mut rt = Runtime::new((), |_: &(), _| el(), (200.0, 120.0), Env::default());
+    /// rt.set_max_native_materials(8);
+    /// assert_eq!(rt.max_native_materials(), 8);
+    /// ```
+    #[inline(always)]
+    pub fn set_max_native_materials(&mut self, max: usize) { self.core_mut().set_max_native_materials(max); }
+    /// Maximum number of native `El::system_material` views this runtime admits per frame.
+    #[inline(always)]
+    pub fn max_native_materials(&self) -> usize { self.core().max_native_materials() }
     #[inline(always)]
     pub fn fade_stops(&self) -> [f32; 2] { self.core().fade_stops() }
     #[inline(always)]
