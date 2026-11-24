@@ -42,6 +42,7 @@ pub struct G {
     pub field_menu_edit: TextEdit,
     pub field_menu: Option<rune::FieldMenuRequest>,
     pub field_menu_last: Option<String>,
+    pub focus_caret_edit: TextEdit,
     pub combo: rune_kit::ComboboxState,
     /// The sidebar reorder story's state.
     pub reorder: stories::sidebar::ReorderDemo,
@@ -119,6 +120,7 @@ fn init() -> G {
         field_menu_edit: TextEdit::new("Select text, right-click or press Shift+F10"),
         field_menu: None,
         field_menu_last: None,
+        focus_caret_edit: TextEdit::new(stories::focus_caret_sample()),
         combo: Default::default(),
         reorder: Default::default(),
         files: files(),

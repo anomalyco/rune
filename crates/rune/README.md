@@ -1643,6 +1643,12 @@ pointer hit-testing, `Cx::caret`, `Cx::field_selection_rects`, and accessibility
 the content box (matching CSS Box Alignment `align-content` / HTML `<input>` vertical centring).
 Defaults to `Align::Start` (top of the content box).
 
+Call `.reveal_caret_on_focus(true)` on a `text_input` (off by default) to scroll enclosing
+scroll viewports just far enough to show its caret when focus moves onto the field (via Tab,
+F6, `Tx::focus`, `TextEdit::focused`, modal focus, or assistive technology), respecting
+`El::scroll_margin`. Carets already inside the viewport move nothing, and wheel-scrolling away
+while the field keeps focus stays put.
+
 Use `TextEdit::new("").secure()` with `text_input(&edit, style).single_line()` for
 passwords, or mark the element `.single_line().secure()`; kit's `TextInput::secure()`
 passes it through. Each Unicode scalar displays as one bullet, with model-byte

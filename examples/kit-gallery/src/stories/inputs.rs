@@ -252,6 +252,65 @@ pub(super) fn textarea_code_keys(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
         .child(text(status).key("code-keys-status").font(k.ty.small).color(k.c.text_muted).wrap())
 }
 
+/// `TextArea::reveal_caret_on_focus(bool)` (`El::reveal_caret_on_focus`): tall scrolled
+/// multi-line editor whose offscreen caret scrolls into view when focused via Tab or `Tx::focus`.
+pub(super) fn textarea_focus_caret(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let reveal = !s.is("focus-caret-off");
+    let edit = &s.focus_caret_edit;
+    let mode = if reveal { "reveal_caret_on_focus(true)" } else { "reveal_caret_on_focus(false) (default)" };
+    let status = format!(
+        "Mode: {mode} · Caret byte: {} · Press Tab from the buttons or click Focus editor.",
+        edit.focus
+    );
+    grid(12.0, 360.0)
+        .child(
+            Checkbox::new(reveal)
+                .label("Reveal caret on focus")
+                .on_toggle(flip("focus-caret-off"))
+                .build(k)
+                .key("focus-caret-toggle"),
+        )
+        .child(
+            row()
+                .gap(8.0)
+                .child(
+                    Button::new("Scroll to top")
+                        .on_press_tx(|_: &mut G, tx: &mut Tx| {
+                            tx.blur();
+                            tx.scroll_to_y("focus-caret-area/scroll", 0.0);
+                        })
+                        .build(k)
+                        .key("focus-caret-reset"),
+                )
+                .child(
+                    Button::new("Focus editor")
+                        .on_press_tx(|_: &mut G, tx: &mut Tx| {
+                            tx.focus("focus-caret-area", true);
+                        })
+                        .build(k)
+                        .key("focus-caret-btn"),
+                ),
+        )
+        .child(
+            Field::new()
+                .label("Release log")
+                .control(
+                    TextArea::new(edit)
+                        .label("Release log")
+                        .description("Caret starts at line 30; Tab or Focus editor reveals it when enabled")
+                        .width(None)
+                        .max_height(140.0)
+                        .scroll_bar(true)
+                        .reveal_caret_on_focus(reveal)
+                        .on_edit(|s: &mut G| &mut s.focus_caret_edit)
+                        .build(k)
+                        .key("focus-caret-area"),
+                )
+                .build(k),
+        )
+        .child(text(status).key("focus-caret-status").font(k.ty.small).color(k.c.text_muted).wrap())
+}
+
 pub(super) fn field_text_input(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     grid(0.0, 280.0).child(
         Field::new()

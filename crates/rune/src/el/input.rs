@@ -47,6 +47,8 @@ pub struct InputSpec {
     pub(crate) copy: Option<InputCopyFn>,
     /// `El::spellcheck`: the platform's checker marks misspelled words.
     pub(crate) spellcheck: bool,
+    /// [`El::reveal_caret_on_focus`]: scroll enclosing viewports to the caret when this field gains focus.
+    pub(crate) reveal_caret_on_focus: bool,
     /// [`El::selection_style`]: the selection's highlight and ink, by window focus, over `selection`.
     pub(crate) selection_style: Option<SelectionStyle>,
 }
@@ -118,6 +120,7 @@ pub fn text_input(edit: &TextEdit, style: TextStyle) -> El {
         paste: None,
         copy: None,
         spellcheck: false,
+        reveal_caret_on_focus: false,
         selection_style: None,
     }));
     e.sync_input_pills();
@@ -229,6 +232,29 @@ impl El {
         if let Some(input) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
             input.edit.set_line_home_end(on);
             input.line_home_end_override = Some(on);
+        }
+        self
+    }
+    /// Scroll enclosing scroll viewports to bring this text field's caret into view when it gains
+    /// focus (via Tab, F6, [`Tx::focus`](crate::Tx::focus), `TextEdit::focused`, modal focus, a
+    /// click on a clipped line, or assistive technology), matching Chrome's focus scroll for
+    /// `<textarea>` and `<input>`.
+    ///
+    /// Off by default (`false`). A caret already inside the viewport moves nothing, and while the
+    /// field keeps focus, wheel scrolling away from the caret or empty IME events leave the scroll
+    /// position untouched. Respects [`El::scroll_margin`].
+    ///
+    /// ```no_run
+    /// # use rune::{ScrollSpec, TextEdit, TextStyle, col, text_input};
+    /// let edit = TextEdit::new("line 1\nline 2\nline 3");
+    /// let view = col()
+    ///     .h(80.0)
+    ///     .scroll(ScrollSpec::default())
+    ///     .child(text_input(&edit, TextStyle::new(13.0, 400.0)).reveal_caret_on_focus(true));
+    /// ```
+    pub fn reveal_caret_on_focus(mut self, on: bool) -> Self {
+        if let Some(input) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
+            input.reveal_caret_on_focus = on;
         }
         self
     }

@@ -40,6 +40,7 @@ mod switch_snap;
 mod table;
 mod table_columns;
 mod text_area_chrome;
+mod text_area_focus_caret;
 mod text_area_grow;
 mod text_area_keys;
 mod text_input_hooks;

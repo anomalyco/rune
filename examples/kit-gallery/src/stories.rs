@@ -25,7 +25,7 @@ mod table;
 
 use controls::{button_all_states, button_focus, button_icon, button_playground, button_shortcuts, button_sizes, button_variants, checkbox_basic, checkbox_custom_icon, checkbox_hidden_label, checkbox_states, icon_button_all_states, icon_button_playground, icon_button_sizes, icon_button_variants, radio_basic, radio_controlled, radio_states, slider_basic, slider_sizes, slider_states, switch_appearances, switch_basic, switch_hidden_label, switch_sizes, switch_states, switch_web};
 use display::{a11y_aria_properties, accordion_basic, accordion_multiple, accordion_single, badge_accent, badge_appearances, badge_basic, badge_high_contrast, badge_subtle, card_error, card_info, card_normal, card_success, card_warning, collapsible_basic, collapsible_ghost, keybind_all, keybind_keep_case, keybind_multiple, keybind_playground, keybind_symbols, keybind_variants, list_active_icon, list_basic, list_delegated_a11y, list_divider, list_empty, list_grouped, list_no_search, list_with_add, loader_basic, loader_sizes, progress_basic, progress_indeterminate, progress_no_label, rolling_text_basic, scroll_view_thumb, segmented_basic, segmented_controlled, segmented_rich, spinner_basic, spinner_sizes};
-use inputs::{field_direct_child, field_invalid, field_text_input, field_textarea, select_disabled, select_grouped, select_invalid, select_playground, select_states, select_step_closed, select_with_field, text_input_appearances, text_input_controlled, text_input_copy, text_input_hooks, text_input_playground, text_input_states, text_input_with_field, textarea_code_keys, textarea_composer, textarea_controlled, textarea_playground, textarea_states, textarea_with_field};
+use inputs::{field_direct_child, field_invalid, field_text_input, field_textarea, select_disabled, select_grouped, select_invalid, select_playground, select_states, select_step_closed, select_with_field, text_input_appearances, text_input_controlled, text_input_copy, text_input_hooks, text_input_playground, text_input_states, text_input_with_field, textarea_code_keys, textarea_composer, textarea_controlled, textarea_focus_caret, textarea_playground, textarea_states, textarea_with_field};
 use markdown::{
     markdown_basic, markdown_code, markdown_diagrams, markdown_lenient, markdown_mermaid_charts, markdown_mermaid_data, markdown_mermaid_flows, markdown_mermaid_git, markdown_mermaid_hover, markdown_mermaid_maps, markdown_mermaid_plan, markdown_mermaid_plan_zoomed, markdown_mermaid_shapes, markdown_mermaid_streaming, markdown_mermaid_systems, markdown_stream_tail, markdown_streaming, markdown_styled, markdown_table_styles,
     markdown_walkthrough, markdown_wrap_and_frames,
@@ -70,6 +70,9 @@ macro_rules! stories {
                 s.edits[11] = TextEdit::new("fn greet(name: &str) {\n    println!(\"hello, {name}\");\n}");
                 s.edits[11].set_caret(3);
                 s.edits[11].focused = true;
+            }
+            if $id == "rune-textarea--focus-caret" {
+                s.focus_caret_edit = TextEdit::new(focus_caret_sample());
             }
             if $id == "rune-split-view--flat-main" {
                 s.split_sidebar.set_open(true);
@@ -205,6 +208,7 @@ stories! {
     "ui-textarea--states" => textarea_states,
     "rune-textarea--composer" => textarea_composer,
     "rune-textarea--code-keys" => textarea_code_keys,
+    "rune-textarea--focus-caret" => textarea_focus_caret,
     "ui-field--text-input-example" => field_text_input,
     "ui-field--text-input-direct-child" => field_direct_child,
     "ui-field--textarea-example" => field_textarea,
@@ -569,6 +573,13 @@ fn text_max_lines_elide(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
         .child(card("2 lines · elide_middle", LONG_FILENAME, 160.0, |e| e.max_lines(2).elide_middle()))
         .child(card("2 lines · elide_head", LONG_PATH, 180.0, |e| e.wrap_anywhere().max_lines(2).elide_head()))
         .child(card("2 lines · default (end)", LONG_FILENAME, 160.0, |e| e.max_lines(2)))
+}
+
+pub(crate) fn focus_caret_sample() -> String {
+    (1..=30)
+        .map(|i| format!("Line {i:02}: multi-line entry with caret parked at the end."))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(crate) const NOWRAP_CODE: &str = concat!(

@@ -64,6 +64,21 @@ impl TextArea {
         self.edits.visual(move |e| e.line_home_end(on));
         self
     }
+    /// Scroll enclosing scroll viewports (including this field's internal [`Self::auto_grow`] or
+    /// [`Self::max_height`] viewport) to bring the caret into view when the field gains focus
+    /// ([`El::reveal_caret_on_focus`](rune::El::reveal_caret_on_focus)). Off by default (`false`).
+    ///
+    /// ```ignore
+    /// TextArea::new(&s.notes)
+    ///     .max_height(120.0)
+    ///     .reveal_caret_on_focus(true)
+    ///     .on_edit(|s: &mut App| &mut s.notes)
+    ///     .build(&k)
+    /// ```
+    pub fn reveal_caret_on_focus(mut self, on: bool) -> Self {
+        self.edits.visual(move |e| e.reveal_caret_on_focus(on));
+        self
+    }
     pub fn new(edit: &TextEdit) -> TextArea {
         TextArea {
             edit: edit.clone(),

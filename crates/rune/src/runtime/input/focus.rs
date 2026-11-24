@@ -524,9 +524,13 @@ impl RuntimeCore {
                         || input.revealed_override.is_some()
                         || input.line_home_end_override.is_some()))
         };
+        let mut reveal_caret = false;
         for n in &mut self.tree.nodes {
             if let Some(input) = &mut n.input {
                 let focused = next == Some(n.path.as_str());
+                if moved && focused && input.reveal_caret_on_focus {
+                    reveal_caret = true;
+                }
                 if needs_sync(n.path.as_str(), input, focused) {
                     changed |= sync_input_focus(input, app.states(), focused);
                 }
@@ -534,9 +538,15 @@ impl RuntimeCore {
         }
         for (p, input) in &mut self.commit.virtual_inputs {
             let focused = next == Some(p.as_str());
+            if moved && focused && input.reveal_caret_on_focus {
+                reveal_caret = true;
+            }
             if needs_sync(p.as_str(), input, focused) {
                 changed |= sync_input_focus(input, app.states(), focused);
             }
+        }
+        if reveal_caret {
+            self.edit.caret_follow = true;
         }
         let shown = (self.kbd.focus.keyboard(), self.kbd.focus.shown());
         for effect in self.kbd.focus.step(focus_machine::FocusEvent::Set { path, keyboard, keep_entry }) {
@@ -865,9 +875,13 @@ impl RuntimeCore {
         let (mark, first) = marks[next];
         let remembered = self.kbd.focus.scope_memory(&self.tree.nodes[mark].path)
             .and_then(|p| order.iter().copied().find(|&j| self.tree.nodes[j].path == p));
-        let path = self.tree.nodes[remembered.unwrap_or(first)].path.clone();
+        let target = remembered.unwrap_or(first);
+        let path = self.tree.nodes[target].path.clone();
+        let reveal_caret = self.tree.nodes[target].input.as_ref().is_some_and(|i| i.reveal_caret_on_focus);
         self.set_focus(app, Some(path.clone()), true);
-        tx.scroll_to.push(crate::runtime::ScrollReveal::into_view(None, path));
+        if !reveal_caret {
+            tx.scroll_to.push(crate::runtime::ScrollReveal::into_view(None, path));
+        }
         true
     }
     /// `shown`: the focus highlight was visible before this key arrived.
@@ -921,10 +935,14 @@ impl RuntimeCore {
                 (None, None) if ev.mods.shift => order.len() - 1,
                 (None, None) => 0,
             };
-            let path = self.tree.nodes[order[next]].path.clone();
+            let target = order[next];
+            let path = self.tree.nodes[target].path.clone();
+            let reveal_caret = self.tree.nodes[target].input.as_ref().is_some_and(|i| i.reveal_caret_on_focus);
             self.set_focus(app, Some(path.clone()), true);
-            tx.scroll_to.push(crate::runtime::ScrollReveal::into_view(None, path));
-            self.edit.enter_links(&self.tree.nodes[order[next]], ev.mods.shift);
+            if !reveal_caret {
+                tx.scroll_to.push(crate::runtime::ScrollReveal::into_view(None, path));
+            }
+            self.edit.enter_links(&self.tree.nodes[target], ev.mods.shift);
             return true;
         }
         let Some(i) = self.focused_index() else { return false; };
