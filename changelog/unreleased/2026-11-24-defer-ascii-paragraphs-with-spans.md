@@ -1,0 +1,1 @@
+- Text layout: `El::by_line` and by-paragraph layouts now keep deferring eligible plain ASCII paragraphs into waiting runs even when another paragraph in the same text carries a layout-affecting span (such as an underline, bold, italic, size, or background span); paragraphs overlapping a layout span still shape eagerly while surrounding span-free lines remain deferred.

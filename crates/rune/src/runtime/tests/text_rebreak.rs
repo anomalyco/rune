@@ -122,3 +122,97 @@ fn an_edit_shares_most_of_its_text_and_a_replacement_does_not() {
     assert!(!edited("Show", "Hide"));
     assert!(!edited("The first note", "Another one"));
 }
+
+/// Issue #1412: one layout span (an underline on the first line, or on an interior line) must not
+/// disable deferred shaping for the plain ASCII lines in a wrapped monospace `by_line` log.
+#[test]
+fn by_line_rich_log_with_underline_defers_offscreen_plain_lines() {
+    struct LogState {
+        content: String,
+        spans: Vec<crate::Span>,
+    }
+    fn log_view(s: &LogState, _: &mut Cx<LogState>) -> El {
+        col()
+            .key("viewport")
+            .size(320.0, 320.0)
+            .scroll(ScrollSpec { stick_bottom: false })
+            .child(
+                crate::rich(s.content.clone(), s.spans.clone())
+                    .key("log")
+                    .font(crate::TextStyle::new(13.0, 400.0).mono())
+                    .by_line()
+                    .wrap()
+                    .selectable(true)
+                    .w_full(),
+            )
+    }
+
+    let head = "A".repeat(1500);
+    let tail: String = (0..1000).map(|i| format!("line {i}\n")).collect();
+    let content = format!("{head}\n{tail}");
+    let head_spans = vec![crate::Span::new(0, head.len()).underline(crate::Color::BLACK)];
+
+    let target = "line 500";
+    let line500_start = content.find(target).unwrap();
+    let interior_spans = vec![crate::Span::new(line500_start, line500_start + target.len()).underline(crate::Color::BLACK)];
+
+    let env = Env::new(true, 2.0);
+    let mut plain = Runtime::new(LogState { content: content.clone(), spans: Vec::new() }, log_view, (320.0, 320.0), env);
+    let mut underlined = Runtime::new(LogState { content: content.clone(), spans: head_spans }, log_view, (320.0, 320.0), env);
+    let mut interior = Runtime::new(LogState { content: content.clone(), spans: interior_spans }, log_view, (320.0, 320.0), env);
+
+    plain.frame(0.0);
+    underlined.frame(0.0);
+    interior.frame(0.0);
+
+    let log_layout = |rt: &Runtime<LogState>| {
+        let n = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("log")).unwrap();
+        match n.text_layout.as_ref().unwrap() {
+            crate::text::TextLayout::Paragraphs(p) => p.clone(),
+            crate::text::TextLayout::Single(_) => panic!("expected ParagraphLayout"),
+        }
+    };
+
+    let plain_pl = log_layout(&plain);
+    let underlined_pl = log_layout(&underlined);
+    let interior_pl = log_layout(&interior);
+
+    assert!(plain_pl.waiting(), "unspanned baseline should leave off-screen plain lines waiting");
+    assert!(underlined_pl.waiting(), "underlined head must keep off-screen plain lines waiting");
+    assert!(interior_pl.waiting(), "underlined interior line must keep surrounding plain lines waiting");
+    assert_eq!(
+        underlined.stats.shaped, plain.stats.shaped,
+        "underlined head should not shape more paragraphs than the unspanned baseline",
+    );
+    assert!(
+        interior.stats.shaped <= plain.stats.shaped + 2,
+        "one underlined interior line should only shape itself eagerly: {} vs baseline {}",
+        interior.stats.shaped,
+        plain.stats.shaped,
+    );
+    assert!(underlined.stats.shaped < 200, "shaped count stays bounded: {}", underlined.stats.shaped);
+    let height_of = |pl: &Rc<crate::text::ParagraphLayout>| crate::text::TextFlow::Paragraphs(pl).height();
+    assert_eq!(height_of(&underlined_pl), height_of(&plain_pl), "total log height matches unspanned baseline");
+    assert_eq!(height_of(&interior_pl), height_of(&plain_pl), "interior-underlined log height matches baseline");
+
+    // Visual underline decoration quads are emitted for the underlined head (more quads than plain).
+    assert!(
+        underlined.instances.len() > plain.instances.len(),
+        "underlined head must still emit underline decoration quads",
+    );
+
+    // Accessibility tree builds cleanly over mixed shaped + waiting paragraphs.
+    let tree = underlined.accessibility_tree();
+    let text_runs = tree.nodes.iter().filter(|(_, n)| n.role() == accesskit::Role::TextRun).count();
+    assert!(text_runs >= 1000, "a11y tree exposes runs across shaped and waiting paragraphs (got {text_runs})");
+
+    // Once the visible margin fills, the idle window asks for no frames and shapes nothing.
+    for _ in 0..20 {
+        if !underlined.frame(1.0 / 60.0) {
+            break;
+        }
+    }
+    assert!(!underlined.frame(1.0 / 60.0), "idle window stops requesting frames");
+    assert_eq!(underlined.stats.shaped, 0, "idle frame shapes nothing");
+    assert!(log_layout(&underlined).waiting(), "far off-screen lines remain deferred while idle");
+}
