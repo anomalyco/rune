@@ -95,10 +95,10 @@ impl View {
             DiffLabel::BinaryFile
         } else if file.status == FileStatus::Renamed || file.status == FileStatus::Copied {
             DiffLabel::MovedWithoutChanges
-        } else if file.old_mode != file.new_mode {
-            DiffLabel::ModeChanged
         } else if file.status == FileStatus::Added || file.status == FileStatus::Deleted {
             DiffLabel::EmptyFile
+        } else if matches!((&file.old_mode, &file.new_mode), (Some(a), Some(b)) if a != b) {
+            DiffLabel::ModeChanged
         } else {
             DiffLabel::NoChanges
         };
