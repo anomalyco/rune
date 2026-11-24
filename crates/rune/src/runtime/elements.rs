@@ -2,6 +2,21 @@
 //! (`Runtime::element_at`, `contains`, `find`).
 use super::*;
 
+/// Resolved typography of a text element ([`ElementInfo::text_style`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedTextStyle {
+    /// The font family actually used after CSS family-list fallback (from the first visible
+    /// shaped run, or the first available family in the stack for empty or secure text).
+    pub family: Option<String>,
+    pub size: f32,
+    pub weight: f32,
+    /// Resolved line height in points ([`TextStyle::line_px`](crate::tok::TextStyle::line_px),
+    /// `1.25 * size` when auto).
+    pub line_height: f32,
+    pub tracking: f32,
+    pub italic: bool,
+}
+
 /// What tools see of one element.
 #[derive(Clone, Debug)]
 pub struct ElementInfo {
@@ -33,6 +48,8 @@ pub struct ElementInfo {
     pub radius: f32,
     pub fill: Color,
     pub text_color: Option<Color>,
+    /// Resolved typography for text, rich text and text input elements.
+    pub text_style: Option<ResolvedTextStyle>,
     pub hover: f32,
     pub press: f32,
     pub moving: bool,
@@ -333,6 +350,24 @@ impl RuntimeCore {
                     fill: self.color(n.id, P_FILL, n.vis.fill),
                     text_color: paint_tracks::text_color(n)
                         .map(|c| paint_tracks::group_tint(n, self.color(n.id, P_TEXT, c), self.paint.inh_scratch.get(i).map_or(0.0, |h| h.group))),
+                    text_style: n.text.as_deref().map(|spec| {
+                        let family = if secure {
+                            self.text.resolved_family(spec.style.family)
+                        } else {
+                            n.text_layout
+                                .as_ref()
+                                .and_then(crate::text::resolved_family_of)
+                                .or_else(|| self.text.resolved_family(spec.style.family))
+                        };
+                        ResolvedTextStyle {
+                            family,
+                            size: spec.style.size,
+                            weight: spec.style.weight,
+                            line_height: spec.style.line_px(),
+                            tracking: spec.style.tracking,
+                            italic: spec.style.italic,
+                        }
+                    }),
                     hover: if (n.focus.highlight.is_some() && self.highlight_visible(i)) || (n.focus.fill.is_some() && self.focus_ring_visible(i)) { 1.0 }
                         else { self.scene.get(n.id, P_HOVER).unwrap_or(0.0) },
                     press: self.scene.get(n.id, P_PRESS).unwrap_or(0.0),
@@ -373,7 +408,7 @@ impl RuntimeCore {
                 focusable: false, focused: false, focus_visible: false, inert: true, exiting: false,
                 key: Some(path.clone()), path, role: "text", label: None, text: None,
                 rect: [r.x, r.y, r.w, r.h], target: [t.x, t.y, t.w, t.h],
-                opacity: f.source_alpha, scale: 1.0, blur: 0.0, radius: 0.0, fill: Color::TRANSPARENT, text_color: None,
+                opacity: f.source_alpha, scale: 1.0, blur: 0.0, radius: 0.0, fill: Color::TRANSPARENT, text_color: None, text_style: None,
                 hover: 0.0, press: 0.0, moving: true, parent: None,
                 visible: [r.x.max(c[0]), r.y.max(c[1]), (r.edges()[2].min(c[2]) - r.x.max(c[0])).max(0.0),
                     (r.edges()[3].min(c[3]) - r.y.max(c[1])).max(0.0)],

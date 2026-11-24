@@ -2573,7 +2573,8 @@ $S --script examples/settings/scripts/keycaps.json --video keys.mov --keys --key
 $S --script examples/settings/scripts/demo.json --start 0.12 --frames 24 --every 3 --cols 4 \
    --strip strip.png --crop 370,74,214,36 --crop 530,305,60,30     # crops stacked per frame
 $S --tree tree.json [--at T]     # key, path, role, label, text, presented rect, target, opacity,
-                                 # fill/text colour, hover/press, moving
+                                 # radius, fill/text colour, textStyle (resolved family, size,
+                                 # weight, lineHeight, tracking, italic), hover/press, moving
 $S --trace run.jsonl             # motion-trace JSONL (the app trace format); keyed elements only
 $S --native --trace run.jsonl --frames 240  # native submission timestamps, then close the traced window
 L=target/release/launcher        # every window of a multi-window app, composited over a backdrop
