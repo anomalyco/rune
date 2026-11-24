@@ -1,8 +1,8 @@
 //! `NSStatusBar` / `NSStatusItem` on macOS. Primary clicks send `TrayEvent::Activate`;
 //! secondary clicks and Control-clicks open the flat `NSMenu`, whose picks send
-//! `TrayEvent::Menu`. `Tray::new` must run on the main thread; `set_menu`, `set_tooltip` and
-//! `Drop` may be called from any thread (AppKit calls dispatch to the main queue when off the
-//! main thread).
+//! `TrayEvent::Menu`. `Tray::new` must run on the main thread; `set_menu`, `set_tooltip`,
+//! `set_icon`, `set_icon_name`, `set_title`, `rect` and `Drop` may be called from any thread
+//! (AppKit calls dispatch to the main queue when off the main thread).
 
 #![allow(unsafe_code)]
 
@@ -23,22 +23,28 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSApplication, NSBitmapFormat, NSBitmapImageRep, NSColorSpace, NSDeviceRGBColorSpace, NSEvent,
-    NSEventMask, NSEventModifierFlags, NSEventType, NSImage, NSImageScaling, NSMenu, NSMenuItem,
-    NSStatusBar, NSStatusBarButton, NSStatusItem, NSVariableStatusItemLength,
+    NSApplication, NSBitmapFormat, NSBitmapImageRep, NSCellImagePosition, NSColorSpace,
+    NSDeviceRGBColorSpace, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSFont,
+    NSFontWeightRegular, NSImage, NSImageScaling, NSMenu, NSMenuItem, NSScreen, NSStatusBar,
+    NSStatusBarButton, NSStatusItem, NSVariableStatusItemLength,
 };
 use objc2_foundation::{NSObject, NSSize, NSString};
 
 use super::{
     Handler, MacClickAction, TrayError, TrayEvent, TrayIcon, TrayItem, TraySpec,
-    classify_mac_click, macos_icon_point_size, premultiply_rgba,
+    classify_mac_click, macos_icon_point_size, macos_screen_rect_to_physical, premultiply_rgba,
 };
 
 const DEFAULT_BAR_THICKNESS: f64 = 22.0;
 
 struct Model {
+    accessibility_label: String,
+    title: String,
     tooltip: String,
+    icon: TrayIcon,
+    thickness: f64,
     menu: Vec<TrayItem>,
+    rect: Option<[i32; 4]>,
 }
 
 /// Thin platform seam around `NSStatusBar` / `NSStatusItem` / `NSStatusBarButton`, so headless
@@ -46,7 +52,9 @@ struct Model {
 /// creating a visible item in the live macOS menu bar.
 trait StatusItemHost: 'static {
     fn set_image(&self, image: &NSImage);
+    fn set_title(&self, title: &str);
     fn set_tooltip(&self, tooltip: Option<&str>);
+    fn screen_rect(&self, mtm: MainThreadMarker) -> Option<[i32; 4]>;
     fn pop_up_menu(&self, menu: &NSMenu);
     fn remove(&self);
 }
@@ -70,6 +78,11 @@ impl SystemStatusItem {
             return Err(TrayError::Backend("NSStatusItem has no button".into()));
         };
         button.setImageScaling(NSImageScaling::ScaleProportionallyDown);
+        // Monospaced digits in the menu-bar font so live counters keep steady width.
+        let bar_font_size = NSFont::menuBarFontOfSize(0.0).pointSize();
+        // SAFETY: `NSFontWeightRegular` is an immutable AppKit font-weight constant.
+        let font = NSFont::monospacedDigitSystemFontOfSize_weight(bar_font_size, unsafe { NSFontWeightRegular });
+        button.setFont(Some(&font));
         // SAFETY: main-thread AppKit button; `target` is retained in `ITEMS` until `remove`
         // clears both target and action.
         unsafe {
@@ -86,9 +99,38 @@ impl StatusItemHost for SystemStatusItem {
         self.button.setImage(Some(image));
     }
 
+    fn set_title(&self, title: &str) {
+        if title.is_empty() {
+            self.button.setTitle(&NSString::from_str(""));
+            self.button.setImagePosition(NSCellImagePosition::ImageOnly);
+        } else {
+            self.button.setImagePosition(NSCellImagePosition::ImageLeading);
+            self.button.setTitle(&NSString::from_str(title));
+        }
+    }
+
     fn set_tooltip(&self, tooltip: Option<&str>) {
         let tip = tooltip.filter(|s| !s.is_empty()).map(NSString::from_str);
         self.button.setToolTip(tip.as_deref());
+    }
+
+    fn screen_rect(&self, mtm: MainThreadMarker) -> Option<[i32; 4]> {
+        if self.removed.get() {
+            return None;
+        }
+        let window = self.button.window()?;
+        let in_window = self.button.convertRect_toView(self.button.bounds(), None);
+        let rect = window.convertRectToScreen(in_window);
+        let primary_height = NSScreen::screens(mtm).iter().next()?.frame().size.height;
+        let scale = window.backingScaleFactor();
+        macos_screen_rect_to_physical(
+            rect.origin.x,
+            rect.origin.y,
+            rect.size.width,
+            rect.size.height,
+            primary_height,
+            scale,
+        )
     }
 
     fn pop_up_menu(&self, menu: &NSMenu) {
@@ -201,6 +243,7 @@ impl ButtonTarget {
         }
         match action {
             MacClickAction::Activate => {
+                let _ = refresh_rect(ivars.id, mtm);
                 dispatch_event(&ivars.on_event, TrayEvent::Activate { token: None });
             }
             MacClickAction::ShowMenu => {
@@ -248,9 +291,7 @@ fn non_empty(text: &str) -> Option<&str> {
     (!text.is_empty()).then_some(text)
 }
 
-/// Builds a premultiplied sRGB `NSBitmapImageRep` wrapped in an `NSImage` sized in points to
-/// `thickness` high while preserving the pixel buffer's aspect ratio.
-fn make_image(icon: &TrayIcon, thickness: f64, description: &str) -> Result<Retained<NSImage>, TrayError> {
+fn validate_icon_layout(icon: &TrayIcon, thickness: f64) -> Result<(f64, f64, isize, isize, isize), TrayError> {
     let Some((pt_w, pt_h)) = macos_icon_point_size(icon.width, icon.height, thickness) else {
         return Err(TrayError::Backend("tray icon dimensions must be non-zero".into()));
     };
@@ -267,6 +308,13 @@ fn make_image(icon: &TrayIcon, thickness: f64, description: &str) -> Result<Reta
     if expected != Some(icon.rgba.len()) {
         return Err(TrayError::Backend("tray icon size doesn't match its pixels".into()));
     }
+    Ok((pt_w, pt_h, w, h, row_bytes))
+}
+
+/// Builds a premultiplied sRGB `NSBitmapImageRep` wrapped in an `NSImage` sized in points to
+/// `thickness` high while preserving the pixel buffer's aspect ratio.
+fn make_image(icon: &TrayIcon, thickness: f64, description: &str) -> Result<Retained<NSImage>, TrayError> {
+    let (pt_w, pt_h, w, h, row_bytes) = validate_icon_layout(icon, thickness)?;
     objc2::rc::autoreleasepool(|_| {
         // SAFETY: null planes asks NSBitmapImageRep to allocate its own width × height × 4 buffer;
         // NSDeviceRGBColorSpace is an immutable AppKit constant.
@@ -323,7 +371,7 @@ fn build_menu(
     let entries: Vec<MenuEntry> = items
         .iter()
         .filter_map(|item| match item {
-            TrayItem::Action { id, enabled, .. } => {
+            TrayItem::Action { id, enabled, .. } | TrayItem::Check { id, enabled, .. } => {
                 Some(MenuEntry { id: id.clone(), enabled: *enabled })
             }
             TrayItem::Separator => None,
@@ -340,21 +388,13 @@ fn build_menu(
     for item in items {
         match item {
             TrayItem::Action { label, enabled, .. } => {
-                // SAFETY: main-thread NSMenuItem; `target` is kept alive in `ButtonTarget::last_menu`
-                // until replaced or removed, and `clear_menu_targets` clears it before release.
-                let ns_item = unsafe {
-                    NSMenuItem::initWithTitle_action_keyEquivalent(
-                        mtm.alloc(),
-                        &NSString::from_str(label),
-                        Some(sel!(runeTrayMenuPick:)),
-                        &NSString::from_str(""),
-                    )
-                };
-                // SAFETY: `target_obj` responds to `runeTrayMenuPick:`.
-                unsafe { ns_item.setTarget(Some(target_obj)) };
-                ns_item.setTag(tag);
+                let ns_item = make_menu_item(mtm, label, *enabled, None, target_obj, tag);
                 tag += 1;
-                ns_item.setEnabled(*enabled);
+                menu.addItem(&ns_item);
+            }
+            TrayItem::Check { label, enabled, checked, .. } => {
+                let ns_item = make_menu_item(mtm, label, *enabled, Some(*checked), target_obj, tag);
+                tag += 1;
                 menu.addItem(&ns_item);
             }
             TrayItem::Separator => {
@@ -363,6 +403,34 @@ fn build_menu(
         }
     }
     (menu, target)
+}
+
+fn make_menu_item(
+    mtm: MainThreadMarker,
+    label: &str,
+    enabled: bool,
+    checked: Option<bool>,
+    target_obj: &AnyObject,
+    tag: isize,
+) -> Retained<NSMenuItem> {
+    // SAFETY: main-thread NSMenuItem; `target` is kept alive in `ButtonTarget::last_menu`
+    // until replaced or removed, and `clear_menu_targets` clears it before release.
+    let ns_item = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            mtm.alloc(),
+            &NSString::from_str(label),
+            Some(sel!(runeTrayMenuPick:)),
+            &NSString::from_str(""),
+        )
+    };
+    // SAFETY: `target_obj` responds to `runeTrayMenuPick:`.
+    unsafe { ns_item.setTarget(Some(target_obj)) };
+    ns_item.setTag(tag);
+    ns_item.setEnabled(enabled);
+    if let Some(is_checked) = checked {
+        ns_item.setState(if is_checked { 1 } else { 0 });
+    }
+    ns_item
 }
 
 fn clear_menu_targets(menu: &NSMenu) {
@@ -394,6 +462,7 @@ fn alloc_button_target(
 }
 
 fn install_native(
+    mtm: MainThreadMarker,
     id: u64,
     model: Arc<Mutex<Model>>,
     target: Retained<ButtonTarget>,
@@ -403,19 +472,49 @@ fn install_native(
     host.set_image(image);
     let initial_tip = model.lock().unwrap_or_else(|e| e.into_inner()).tooltip.clone();
     host.set_tooltip(non_empty(&initial_tip));
+    model.lock().unwrap_or_else(|e| e.into_inner()).rect = host.screen_rect(mtm);
     ITEMS.with(|map| {
         map.borrow_mut().insert(id, LiveItem { host, target, model: model.clone() });
     });
     Native { id, model }
 }
 
-fn apply_tooltip(id: u64) {
-    let entry = ITEMS.with(|map| {
+fn live_entry(id: u64) -> Option<(Rc<dyn StatusItemHost>, Arc<Mutex<Model>>)> {
+    ITEMS.with(|map| {
         map.borrow().get(&id).map(|live| (live.host.clone(), live.model.clone()))
-    });
-    let Some((host, model)) = entry else { return };
+    })
+}
+
+fn apply_tooltip(id: u64) {
+    let Some((host, model)) = live_entry(id) else { return };
     let tip = model.lock().unwrap_or_else(|e| e.into_inner()).tooltip.clone();
     host.set_tooltip(non_empty(&tip));
+}
+
+fn apply_title(id: u64, mtm: MainThreadMarker) {
+    let Some((host, model)) = live_entry(id) else { return };
+    let title = model.lock().unwrap_or_else(|e| e.into_inner()).title.clone();
+    host.set_title(&title);
+    model.lock().unwrap_or_else(|e| e.into_inner()).rect = host.screen_rect(mtm);
+}
+
+fn apply_icon(id: u64, mtm: MainThreadMarker) -> Result<(), TrayError> {
+    let Some((host, model)) = live_entry(id) else { return Ok(()) };
+    let (icon, thickness, label) = {
+        let m = model.lock().unwrap_or_else(|e| e.into_inner());
+        (m.icon.clone(), m.thickness, m.accessibility_label.clone())
+    };
+    let image = make_image(&icon, thickness, &label)?;
+    host.set_image(&image);
+    model.lock().unwrap_or_else(|e| e.into_inner()).rect = host.screen_rect(mtm);
+    Ok(())
+}
+
+fn refresh_rect(id: u64, mtm: MainThreadMarker) -> Option<[i32; 4]> {
+    let (host, model) = live_entry(id)?;
+    let rect = host.screen_rect(mtm);
+    model.lock().unwrap_or_else(|e| e.into_inner()).rect = rect;
+    rect
 }
 
 fn remove_item(id: u64) {
@@ -438,12 +537,21 @@ impl Native {
         })?;
         let bar = NSStatusBar::systemStatusBar();
         let thickness = valid_thickness(bar.thickness());
-        let image = make_image(&spec.icon, thickness, accessibility_label(&spec))?;
+        let label = accessibility_label(&spec).to_owned();
+        let image = make_image(&spec.icon, thickness, &label)?;
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        let model = Arc::new(Mutex::new(Model { tooltip: spec.tooltip, menu: spec.menu }));
+        let model = Arc::new(Mutex::new(Model {
+            accessibility_label: label,
+            title: String::new(),
+            tooltip: spec.tooltip,
+            icon: spec.icon,
+            thickness,
+            menu: spec.menu,
+            rect: None,
+        }));
         let target = alloc_button_target(mtm, id, model.clone(), on_event);
         let host = Rc::new(SystemStatusItem::new(mtm, bar, &target)?);
-        Ok(install_native(id, model, target, host, &image))
+        Ok(install_native(mtm, id, model, target, host, &image))
     }
 
     pub(super) fn set_menu(&self, menu: Vec<TrayItem>) {
@@ -457,6 +565,54 @@ impl Native {
             apply_tooltip(id);
         } else {
             crate::platform::main_queue::on_main(move || apply_tooltip(id));
+        }
+    }
+
+    pub(super) fn set_icon(&self, icon: TrayIcon) -> Result<(), TrayError> {
+        let thickness = self.model.lock().unwrap_or_else(|e| e.into_inner()).thickness;
+        validate_icon_layout(&icon, thickness)?;
+        self.model.lock().unwrap_or_else(|e| e.into_inner()).icon = icon;
+        let id = self.id;
+        if let Some(mtm) = MainThreadMarker::new() {
+            apply_icon(id, mtm)
+        } else {
+            crate::platform::main_queue::on_main(move || {
+                if let Some(mtm) = MainThreadMarker::new() {
+                    let _ = apply_icon(id, mtm);
+                }
+            });
+            Ok(())
+        }
+    }
+
+    pub(super) fn set_icon_name(&self, _name: String) {}
+
+    pub(super) fn set_title(&self, title: String) {
+        self.model.lock().unwrap_or_else(|e| e.into_inner()).title = title;
+        let id = self.id;
+        if let Some(mtm) = MainThreadMarker::new() {
+            apply_title(id, mtm);
+        } else {
+            crate::platform::main_queue::on_main(move || {
+                if let Some(mtm) = MainThreadMarker::new() {
+                    apply_title(id, mtm);
+                }
+            });
+        }
+    }
+
+    pub(super) fn rect(&self) -> Option<[i32; 4]> {
+        let id = self.id;
+        if let Some(mtm) = MainThreadMarker::new() {
+            refresh_rect(id, mtm)
+        } else {
+            let cached = self.model.lock().unwrap_or_else(|e| e.into_inner()).rect;
+            crate::platform::main_queue::on_main(move || {
+                if let Some(mtm) = MainThreadMarker::new() {
+                    let _ = refresh_rect(id, mtm);
+                }
+            });
+            cached
         }
     }
 }

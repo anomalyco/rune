@@ -1127,7 +1127,11 @@ while every window is hidden, including in an accessory app), sizes the icon in 
 `NSStatusBar.thickness` preserving aspect ratio, and honours `TrayIcon::template(true)` so
 AppKit tints the glyph for light and dark menu bars; primary click sends
 `TrayEvent::Activate`, and secondary click or Control-click opens the menu. `set_menu`,
-`set_tooltip`, and dropping `Tray` may run from any thread.
+`set_tooltip`, `set_icon`, `set_icon_name` (Linux SNI `IconName`), `set_title` (macOS
+monospaced-digit menu-bar title beside the icon; Linux SNI `Title`), `rect` (physical
+desktop `[x, y, width, height]` on macOS and Windows; `None` on Linux SNI), and dropping
+`Tray` may run from any thread. `TrayItem::Check` (`TrayItem::check` / `TrayItem::checked`)
+adds toggleable checkmarked menu items across macOS, Windows, and Linux.
 `RunOptions::accessory` applies the macOS process policy before the event loop is
 created: no Dock icon/default menu and no activation at launch. Other platforms
 ignore it; `run_windows` keeps its regular-launch default.

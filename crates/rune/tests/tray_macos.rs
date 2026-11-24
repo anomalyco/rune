@@ -50,6 +50,13 @@ fn main() {
     ]);
     let tray = Tray::new(spec, |_| {}).expect("create macOS tray");
     tray.set_tooltip("Updated tooltip");
-    tray.set_menu(vec![TrayItem::action("quit", "Quit").enabled(false)]);
+    tray.set_title("42%");
+    tray.set_icon(TrayIcon::rgba(32, 32, vec![255, 64, 64, 255].repeat(32 * 32))).expect("update icon");
+    let _ = tray.rect();
+    tray.set_title("");
+    tray.set_menu(vec![
+        TrayItem::check("hud", "Show HUD", true),
+        TrayItem::action("quit", "Quit").enabled(false),
+    ]);
     drop(tray);
 }

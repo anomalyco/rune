@@ -4,7 +4,9 @@ use std::sync::atomic::AtomicUsize;
 
 struct FakeStatusItem {
     image: RefCell<Option<Retained<NSImage>>>,
+    titles: RefCell<Vec<String>>,
     tooltips: RefCell<Vec<Option<String>>>,
+    rect: Cell<Option<[i32; 4]>>,
     popped_menus: RefCell<Vec<Retained<NSMenu>>>,
     removed: Cell<bool>,
     on_pop_up: RefCell<Option<Box<dyn Fn(&NSMenu)>>>,
@@ -14,7 +16,9 @@ impl FakeStatusItem {
     fn new() -> Self {
         Self {
             image: RefCell::new(None),
+            titles: RefCell::new(Vec::new()),
             tooltips: RefCell::new(Vec::new()),
+            rect: Cell::new(Some([2400, 0, 56, 48])),
             popped_menus: RefCell::new(Vec::new()),
             removed: Cell::new(false),
             on_pop_up: RefCell::new(None),
@@ -27,8 +31,16 @@ impl StatusItemHost for FakeStatusItem {
         *self.image.borrow_mut() = Some(Retained::from(image));
     }
 
+    fn set_title(&self, title: &str) {
+        self.titles.borrow_mut().push(title.to_owned());
+    }
+
     fn set_tooltip(&self, tooltip: Option<&str>) {
         self.tooltips.borrow_mut().push(tooltip.map(str::to_owned));
+    }
+
+    fn screen_rect(&self, _mtm: MainThreadMarker) -> Option<[i32; 4]> {
+        if self.removed.get() { None } else { self.rect.get() }
     }
 
     fn pop_up_menu(&self, menu: &NSMenu) {
@@ -49,13 +61,23 @@ fn new_with_fake(
     thickness: f64,
     on_event: impl Fn(TrayEvent) + Send + Sync + 'static,
 ) -> Result<(Native, Rc<FakeStatusItem>, Retained<ButtonTarget>), TrayError> {
-    let image = make_image(&spec.icon, valid_thickness(thickness), accessibility_label(&spec))?;
+    let thickness = valid_thickness(thickness);
+    let label = accessibility_label(&spec).to_owned();
+    let image = make_image(&spec.icon, thickness, &label)?;
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    let model = Arc::new(Mutex::new(Model { tooltip: spec.tooltip, menu: spec.menu }));
+    let model = Arc::new(Mutex::new(Model {
+        accessibility_label: label,
+        title: String::new(),
+        tooltip: spec.tooltip,
+        icon: spec.icon,
+        thickness,
+        menu: spec.menu,
+        rect: None,
+    }));
     let target = alloc_button_target(mtm, id, model.clone(), Arc::new(on_event));
     let fake = Rc::new(FakeStatusItem::new());
     let host: Rc<dyn StatusItemHost> = fake.clone();
-    let native = install_native(id, model, target.clone(), host, &image);
+    let native = install_native(mtm, id, model, target.clone(), host, &image);
     Ok((native, fake, target))
 }
 
@@ -254,5 +276,94 @@ fn callback_panic_is_caught_and_reentrant_menu_click_is_ignored() {
     }));
     target.handle_click(mtm, MacClickAction::ShowMenu);
     assert_eq!(fake.popped_menus.borrow().len(), 1);
+    drop(native);
+}
+
+#[test]
+fn fake_host_set_icon_set_title_rect_and_check_menu_items() {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let events: Arc<Mutex<Vec<TrayEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = events.clone();
+    let spec = TraySpec::new(
+        "dev.rune.live",
+        "Live Status",
+        TrayIcon::rgba(32, 32, vec![255; 32 * 32 * 4]).template(true),
+    )
+    .menu(vec![
+        TrayItem::action("open", "Open"),
+        TrayItem::check("hud", "Show HUD", false),
+        TrayItem::check("alert", "Alert", true),
+        TrayItem::check("locked", "Locked", true).enabled(false),
+    ]);
+
+    let (native, fake, target) = new_with_fake(mtm, spec, 22.0, move |ev| {
+        sink.lock().unwrap().push(ev);
+    })
+    .unwrap();
+
+    // Initial rect comes from host; live updates reflect immediately on main thread.
+    assert_eq!(native.rect(), Some([2400, 0, 56, 48]));
+    fake.rect.set(Some([2320, 0, 92, 48]));
+    assert_eq!(native.rect(), Some([2320, 0, 92, 48]));
+
+    // set_title updates host and supports clearing back to empty.
+    assert!(fake.titles.borrow().is_empty(), "Tray::new keeps title text unset");
+    native.set_title("42%".into());
+    native.set_title(String::new());
+    assert_eq!(*fake.titles.borrow(), vec!["42%".to_owned(), String::new()]);
+
+    // set_icon_name is a clean no-op on macOS.
+    native.set_icon_name("ignored-symbolic".into());
+
+    // set_icon swaps the NSImage (updating size/template while preserving accessibility label).
+    let wide_alert = TrayIcon::rgba(48, 24, vec![255, 64, 64, 255].repeat(48 * 24));
+    native.set_icon(wide_alert).unwrap();
+    let img = fake.image.borrow().clone().expect("updated image");
+    assert_eq!(img.size(), NSSize::new(44.0, 22.0));
+    assert!(!img.isTemplate());
+    assert_eq!(img.accessibilityDescription().map(|s| s.to_string()), Some("Live Status".into()));
+
+    // Invalid icons are rejected without replacing the current NSImage.
+    assert!(matches!(native.set_icon(TrayIcon::rgba(0, 16, Vec::new())), Err(TrayError::Backend(_))));
+    assert!(matches!(native.set_icon(TrayIcon::rgba(4, 4, vec![0; 8])), Err(TrayError::Backend(_))));
+    assert_eq!(fake.image.borrow().as_ref().unwrap().size(), NSSize::new(44.0, 22.0));
+
+    // Check menu items set NSMenuItem.state (1 = on, 0 = off) and dispatch enabled clicks.
+    target.handle_click(mtm, MacClickAction::ShowMenu);
+    let menu = fake.popped_menus.borrow()[0].clone();
+    assert_eq!(menu.numberOfItems(), 4);
+    let open = menu.itemAtIndex(0).unwrap();
+    let hud = menu.itemAtIndex(1).unwrap();
+    let alert = menu.itemAtIndex(2).unwrap();
+    let locked = menu.itemAtIndex(3).unwrap();
+    assert_eq!(open.state(), 0);
+    assert_eq!(hud.state(), 0);
+    assert!(hud.isEnabled());
+    assert_eq!(alert.state(), 1);
+    assert!(alert.isEnabled());
+    assert_eq!(locked.state(), 1);
+    assert!(!locked.isEnabled());
+
+    // SAFETY: invoking target/action installed on the main-thread test menu items.
+    unsafe {
+        let hud_target = hud.target().unwrap();
+        let _: () = msg_send![&*hud_target, runeTrayMenuPick: &*hud];
+        let locked_target = locked.target().unwrap();
+        let _: () = msg_send![&*locked_target, runeTrayMenuPick: &*locked];
+    }
+    assert_eq!(*events.lock().unwrap(), vec![TrayEvent::Menu("hud".into())]);
+
+    // Flipping checked state via set_menu updates subsequent pop-ups.
+    native.set_menu(vec![TrayItem::check("hud", "Show HUD", true)]);
+    target.handle_click(mtm, MacClickAction::ShowMenu);
+    let next_menu = fake.popped_menus.borrow()[1].clone();
+    assert_eq!(next_menu.itemAtIndex(0).unwrap().state(), 1);
+
+    // Reading rect off the main thread returns the cached reading without blocking.
+    let native = Arc::new(native);
+    let for_thread = native.clone();
+    let off_main_rect = std::thread::spawn(move || for_thread.rect()).join().unwrap();
+    assert_eq!(off_main_rect, Some([2320, 0, 92, 48]));
+
     drop(native);
 }
