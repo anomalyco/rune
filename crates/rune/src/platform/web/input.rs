@@ -352,8 +352,14 @@ impl Running {
             }
             Some("sync") => self.input.mirror.invalidate(), // Composition's final sync was deferred by the DOM.
             Some("paste") => {
-                let mut content = crate::ClipboardContent::new(event["text"].as_str().unwrap_or_default());
-                if let Some(html) = event["html"].as_str().filter(|html| !html.is_empty()) { content = content.with_html(html); }
+                let text = match event["text"].take() {
+                    serde_json::Value::String(s) => s,
+                    _ => String::new(),
+                };
+                let mut content = crate::ClipboardContent::new(text);
+                if let serde_json::Value::String(html) = event["html"].take() && !html.is_empty() {
+                    content = content.with_html(html);
+                }
                 let image = (event["image"].as_bool() == Some(true)).then_some(&self.input.handle);
                 self.app.paste_event(&self.clipboard, content, image);
             }

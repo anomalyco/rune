@@ -381,6 +381,39 @@ fn cached_unkeyed_siblings_keep_index_paths_and_leave_no_key_warnings() {
     assert!(rt.commit.key_warnings().unwrap().is_empty());
 }
 
+#[cfg(debug_assertions)]
+#[test]
+fn region_debug_check_redacts_secure_text() {
+    struct State {
+        secret: &'static str,
+        tick: u32,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let _ = s.tick;
+        let secret = s.secret;
+        region("sec-region-redaction-test", move || {
+            text(secret).secure()
+        })
+    }
+    let mut rt = Runtime::new(
+        State { secret: "alpha-region-secret", tick: 0 },
+        view,
+        (200.0, 100.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    rt.update(|s, _| {
+        s.secret = "beta-region-secret";
+        s.tick += 1;
+    });
+    rt.frame(1.0 / 60.0);
+    let warnings = region_warnings();
+    assert!(
+        warnings.iter().all(|w| !w.contains("alpha-region-secret") && !w.contains("beta-region-secret")),
+        "region debug warnings leaked secure text: {warnings:?}"
+    );
+}
+
 /// `cargo test -p rune --profile perf --lib memo_build_time -- --ignored --nocapture`
 #[test]
 #[ignore]

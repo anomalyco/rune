@@ -118,13 +118,14 @@ fn map_parts(windows: bool, physical: PhysicalKey, logical: &WKey, text: Option<
         return (!ev.is_command_chord()).then_some(ev);
     }
     let mut ev = map_key(logical, m)?;
-    if let Key::Text(t) = &ev.key
-        && !m.super_key()
+    if !m.super_key()
         && !ev.is_command_chord()
         && let Some(text) = text
+        && let Key::Text(t) = &mut ev.key
         && text != t.as_str()
     {
-        ev.key = Key::Text(text.to_owned());
+        crate::el::wipe_string(t);
+        *t = text.to_owned();
     }
     Some(ev)
 }

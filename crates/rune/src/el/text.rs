@@ -35,10 +35,25 @@ impl El {
         if self.cold.input.is_none()
             && let Some(t) = &mut self.text
         {
-            t.content = content.into();
+            let redacted = t.redacted;
+            let content = content.into();
+            if redacted {
+                t.replace_content(content);
+                if let Some(mut src) = t.source.take() {
+                    text_spec::wipe_string(&mut src.text);
+                }
+            } else {
+                t.content = content;
+                t.shape = None;
+                t.source = None;
+            }
             t.spans.clear();
             if let Some(cold) = t.cold.get_mut_if_some() {
-                cold.links.clear();
+                if redacted {
+                    text_spec::wipe_links(&mut cold.links);
+                } else {
+                    cold.links.clear();
+                }
                 cold.uncopied.clear();
                 cold.strikes.clear();
                 cold.highlights.clear();
@@ -47,7 +62,6 @@ impl El {
                 cold.blocks.clear();
                 cold.soft_breaks.clear();
             }
-            t.source = None;
         }
         self
     }
@@ -758,3 +772,7 @@ impl El {
         self.radius(999.0).a11y_hidden()
     }
 }
+
+#[cfg(test)]
+#[path = "text_tests.rs"]
+mod tests;

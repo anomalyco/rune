@@ -227,13 +227,31 @@ impl std::fmt::Debug for TextSpec {
     }
 }
 
+/// Wipes `s` (its spare capacity included) and frees its allocation, matching `TextEdit`.
+pub(crate) fn wipe_string(s: &mut String) {
+    drop(crate::edit::Wiped(std::mem::take(s)));
+}
+
+/// Wipes every string owned by `links` and clears the list.
+pub(crate) fn wipe_links(links: &mut Vec<Link>) {
+    for link in links.iter_mut() {
+        wipe_string(&mut link.id);
+        if let Some(label) = &mut link.label {
+            wipe_string(label);
+        }
+        if let Some(help) = &mut link.help {
+            wipe_string(help);
+        }
+    }
+    links.clear();
+}
+
 impl Drop for TextSpec {
     fn drop(&mut self) {
         if self.redacted {
-            use zeroize::Zeroize;
-            self.content.zeroize();
+            wipe_string(&mut self.content);
             if let Some(src) = &mut self.source {
-                src.text.zeroize();
+                wipe_string(&mut src.text);
             }
         }
     }
@@ -288,10 +306,9 @@ impl TextSpec {
             && (self.by_line || matches!(self.dir, TextDir::Plaintext(_)) || self.content.contains('\n'))
     }
 
-    /// Zeroizes the shown string and shows `content` instead.
+    /// Zeroizes the shown string (spare capacity included) and shows `content` instead.
     pub(crate) fn replace_content(&mut self, content: String) {
-        use zeroize::Zeroize;
-        self.content.zeroize();
+        wipe_string(&mut self.content);
         self.content = content;
         self.shape = None;
     }
@@ -338,17 +355,16 @@ impl TextSpec {
         } else {
             crate::edit::MULTILINE_SECURE_MASK.to_owned()
         };
-        use zeroize::Zeroize;
-        self.content.zeroize();
+        wipe_string(&mut self.content);
         self.content = mask;
         if let Some(mut src) = self.source.take() {
-            src.text.zeroize();
+            wipe_string(&mut src.text);
         }
         self.case = None;
         self.spans.clear();
         if let Some(cold) = self.cold.get_mut_if_some() {
             cold.secure_revealed = false;
-            cold.links.clear();
+            wipe_links(&mut cold.links);
             cold.rings.clear();
             cold.strikes.clear();
             cold.blocks.clear();
