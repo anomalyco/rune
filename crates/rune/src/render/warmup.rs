@@ -2,7 +2,7 @@
 //! device.
 
 use super::{
-    BatchBind, Instance, Kind, Renderer, backdrop_blur, breaker, dxbc, fill, layers, pass::Backdrop,
+    BatchBind, Instance, Kind, Renderer, backdrop_blur, breaker, dxbc, effect_warm, fill, layers, pass::Backdrop,
     shader_check, upload, variant,
 };
 
@@ -14,6 +14,8 @@ use super::damaged;
 /// Prewarm and warm-up threads construct and transfer a `WarmRenderer` directly so `Send` is
 /// proved by the compiler without `unsafe`, then attach it via [`Renderer::from_warm`].
 pub(super) struct WarmRenderer {
+    pub(super) effect_warm: effect_warm::EffectWarm,
+    pub(super) first_frame_submitted: std::sync::atomic::AtomicBool,
     pub(super) surfaces_building: Option<crate::native_surface::Building>,
     pub(super) pipeline: wgpu::RenderPipeline,
     pub(super) format: wgpu::TextureFormat,
@@ -73,6 +75,8 @@ impl Renderer {
     /// Attaches a `WarmRenderer` as a `Renderer` with no native surface renderer.
     pub(super) fn from_warm(warm: WarmRenderer) -> Renderer {
         let WarmRenderer {
+            effect_warm,
+            first_frame_submitted,
             surfaces_building,
             pipeline,
             format,
@@ -121,6 +125,8 @@ impl Renderer {
             damage,
         } = warm;
         Renderer {
+            effect_warm,
+            first_frame_submitted,
             surfaces: None,
             fade_stops: [0.0; 2],
             surfaces_building,
@@ -199,6 +205,8 @@ impl Renderer {
             return None;
         }
         let Renderer {
+            effect_warm,
+            first_frame_submitted,
             surfaces: _,
             fade_stops: _,
             surfaces_building,
@@ -249,6 +257,8 @@ impl Renderer {
             damage,
         } = self;
         Some(WarmRenderer {
+            effect_warm,
+            first_frame_submitted,
             surfaces_building,
             pipeline,
             format,

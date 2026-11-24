@@ -133,7 +133,9 @@ fn composite_from_wgsl(device: &wgpu::Device, wgsl: &str) -> super::dxbc::Shader
     super::dxbc::Shaders::one(device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("backdrop blur composite"), source: wgpu::ShaderSource::Wgsl(wgsl.into()) }))
 }
 
-pub(super) struct BackdropBlur {
+/// Pre-compiled pipelines, layouts, shaders and sampler for [`BackdropBlur`], built off-thread
+/// without allocating any GPU textures, buffers or bind groups until the first blurred frame.
+pub(super) struct WarmedBackdropBlur {
     down: wgpu::RenderPipeline,
     up: wgpu::RenderPipeline,
     level_layout: wgpu::BindGroupLayout,
@@ -144,25 +146,9 @@ pub(super) struct BackdropBlur {
     composite_precompiled: bool,
     composites: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
     sampler: wgpu::Sampler,
-    dummy: wgpu::TextureView,
-    uniforms: wgpu::Buffer,
-    capacity: usize,
-    pyramid: Option<Pyramid>,
-    /// The down pass into level 0, reading the pooled backdrop of each format.
-    first: Vec<(wgpu::TextureFormat, wgpu::BindGroup)>,
-    records: Vec<Record>,
 }
 
-/// The up chain's start level `n` (1..=top) and the share of level `n` that gives `sigma`.
-pub(in crate::render) fn levels(sigma: f32, top: usize) -> (usize, f32) {
-    let top = top.clamp(1, SIGMAS.len() - 1);
-    let sigma = sigma.clamp(SIGMAS[0], SIGMAS[top]);
-    let n = (1..=top).find(|&n| sigma <= SIGMAS[n]).unwrap_or(top);
-    let (a, b) = (SIGMAS[n - 1], SIGMAS[n]);
-    (n, ((sigma * sigma - a * a) / (b * b - a * a)).clamp(0.0, 1.0))
-}
-
-impl BackdropBlur {
+impl WarmedBackdropBlur {
     pub(super) fn new(device: &wgpu::Device, uber: &wgpu::BindGroupLayout) -> Self {
         let texture = |binding| wgpu::BindGroupLayoutEntry {
             binding,
@@ -247,6 +233,102 @@ impl BackdropBlur {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        Self {
+            down, up, level_layout, result_layout, composite_layout, composite, composite_precompiled,
+            composites: Vec::new(), sampler,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn ensure_composite(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
+        ensure_composite_in(device, &self.composite_layout, &mut self.composite, &mut self.composite_precompiled, &mut self.composites, format);
+    }
+}
+
+fn ensure_composite_in(
+    device: &wgpu::Device,
+    composite_layout: &wgpu::PipelineLayout,
+    composite: &mut super::dxbc::Shaders,
+    composite_precompiled: &mut bool,
+    composites: &mut Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
+    format: wgpu::TextureFormat,
+) {
+    if composites.iter().any(|(f, _)| *f == format) { return; }
+    let make = |shaders: &super::dxbc::Shaders| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("backdrop blur composite"),
+        layout: Some(composite_layout),
+        vertex: wgpu::VertexState {
+            module: &shaders.vertex,
+            entry_point: Some("vs"),
+            compilation_options: Default::default(),
+            buffers: &[Some(metallib::uber_vertex_layout())],
+        },
+        primitive: metallib::uber_primitive(),
+        depth_stencil: None,
+        multisample: Default::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &shaders.fragment,
+            entry_point: Some("fs"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(super::blend_state(Blend::SourceOver)),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    #[cfg(target_os = "windows")]
+    if *composite_precompiled {
+        if let Some(pipeline) = super::dxbc::checked(device, "backdrop blur composite", "compiling WGSL", || make(composite)) {
+            composites.push((format, pipeline));
+            return;
+        }
+        *composite = composite_from_wgsl(device, &composite_wgsl());
+        *composite_precompiled = false;
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = composite_precompiled;
+    let pipeline = make(composite);
+    composites.push((format, pipeline));
+}
+
+pub(super) struct BackdropBlur {
+    down: wgpu::RenderPipeline,
+    up: wgpu::RenderPipeline,
+    level_layout: wgpu::BindGroupLayout,
+    result_layout: wgpu::BindGroupLayout,
+    composite_layout: wgpu::PipelineLayout,
+    /// The composite's stages: precompiled (`composite_precompiled`) or from WGSL.
+    composite: super::dxbc::Shaders,
+    composite_precompiled: bool,
+    composites: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
+    sampler: wgpu::Sampler,
+    dummy: wgpu::TextureView,
+    uniforms: wgpu::Buffer,
+    capacity: usize,
+    pyramid: Option<Pyramid>,
+    /// The down pass into level 0, reading the pooled backdrop of each format.
+    first: Vec<(wgpu::TextureFormat, wgpu::BindGroup)>,
+    records: Vec<Record>,
+}
+
+/// The up chain's start level `n` (1..=top) and the share of level `n` that gives `sigma`.
+pub(in crate::render) fn levels(sigma: f32, top: usize) -> (usize, f32) {
+    let top = top.clamp(1, SIGMAS.len() - 1);
+    let sigma = sigma.clamp(SIGMAS[0], SIGMAS[top]);
+    let n = (1..=top).find(|&n| sigma <= SIGMAS[n]).unwrap_or(top);
+    let (a, b) = (SIGMAS[n - 1], SIGMAS[n]);
+    (n, ((sigma * sigma - a * a) / (b * b - a * a)).clamp(0.0, 1.0))
+}
+
+impl BackdropBlur {
+    pub(super) fn from_warmed(device: &wgpu::Device, warmed: WarmedBackdropBlur) -> Self {
+        let WarmedBackdropBlur {
+            down, up, level_layout, result_layout, composite_layout, composite, composite_precompiled,
+            composites, sampler,
+        } = warmed;
         let dummy = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("backdrop blur stand-in"),
             size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
@@ -266,8 +348,12 @@ impl BackdropBlur {
         });
         BackdropBlur {
             down, up, level_layout, result_layout, composite_layout, composite, composite_precompiled,
-            composites: Vec::new(), sampler, dummy, uniforms, capacity, pyramid: None, first: Vec::new(), records: Vec::new(),
+            composites, sampler, dummy, uniforms, capacity, pyramid: None, first: Vec::new(), records: Vec::new(),
         }
+    }
+
+    pub(super) fn new(device: &wgpu::Device, uber: &wgpu::BindGroupLayout) -> Self {
+        Self::from_warmed(device, WarmedBackdropBlur::new(device, uber))
     }
 
     fn levels_binding(&self) -> wgpu::BindingResource<'_> {
@@ -308,43 +394,7 @@ impl BackdropBlur {
     }
 
     pub(super) fn ensure_composite(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
-        if self.composites.iter().any(|(f, _)| *f == format) { return; }
-        let make = |shaders: &super::dxbc::Shaders| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("backdrop blur composite"),
-            layout: Some(&self.composite_layout),
-            vertex: wgpu::VertexState {
-                module: &shaders.vertex,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: &[Some(metallib::uber_vertex_layout())],
-            },
-            primitive: metallib::uber_primitive(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shaders.fragment,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(super::blend_state(Blend::SourceOver)),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-        #[cfg(target_os = "windows")]
-        if self.composite_precompiled {
-            if let Some(pipeline) = super::dxbc::checked(device, "backdrop blur composite", "compiling WGSL", || make(&self.composite)) {
-                self.composites.push((format, pipeline));
-                return;
-            }
-            self.composite = composite_from_wgsl(device, &composite_wgsl());
-            self.composite_precompiled = false;
-        }
-        let pipeline = make(&self.composite);
-        self.composites.push((format, pipeline));
+        ensure_composite_in(device, &self.composite_layout, &mut self.composite, &mut self.composite_precompiled, &mut self.composites, format);
     }
 
     /// Grows the level uniform buffer when a frame holds more than `self.capacity` blur records,
@@ -460,7 +510,10 @@ impl Renderer {
         if !any || vw == 0 || vh == 0 { return; }
         let staging = self.uploads.staging(device, queue);
         if self.backdrop_blur.is_none() {
-            let mut blur = BackdropBlur::new(device, &self.bind_layout);
+            let mut blur = match self.harvest_warmed_backdrop_blur() {
+                Some(warmed) => BackdropBlur::from_warmed(device, warmed),
+                None => BackdropBlur::new(device, &self.bind_layout),
+            };
             for bd in &self.backdrops { blur.bind_backdrop(device, bd.format, &bd.view); }
             self.backdrop_blur = Some(blur);
         }

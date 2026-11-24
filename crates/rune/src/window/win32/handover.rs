@@ -335,7 +335,7 @@ impl Host {
     /// visual (DWM shows the GPU from its next composition) and leave the CPU behind; the CPU's
     /// buffer goes on a worker after counting the frame's drift.
     pub(in crate::window) fn hand_over_if_done(&mut self) {
-        let (Some(w), Some((gpu, _))) = (self.win.as_mut(), self.gpu.as_ref()) else { return };
+        let (Some(w), Some((gpu, renderer))) = (self.win.as_mut(), self.gpu.as_mut()) else { return };
         match &mut w.native.mode {
             SurfaceMode::HandingOver { done: Some((done, _)), tries, .. } => {
                 let tries = *tries;
@@ -346,6 +346,7 @@ impl Host {
                 if let Err(error) = committed { return self.fail_gpu(format!("the GPU couldn't take over the window: {error}"), tries); }
                 let SurfaceMode::HandingOver { cpu, handover, readback, .. } = std::mem::replace(&mut w.native.mode, SurfaceMode::Gpu) else { unreachable!() };
                 crate::marks::mark("gpu.window.handed");
+                renderer.warm_effects(&gpu.device);
                 crate::platform::win32::unidle_d3d_threads_soon();
                 // A first frame only the GPU could draw showed cloaked: it comes on screen now.
                 if w.native.cloak.held() {

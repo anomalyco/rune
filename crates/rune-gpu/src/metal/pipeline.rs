@@ -17,7 +17,7 @@ use wgpu::naga;
 
 use super::derive::{self, Use};
 use super::layout::{LayoutRaw, PipelineLayout};
-use super::resource::pixel_format;
+use super::resource::{Live, pixel_format};
 use super::shader::{Stage, compile};
 use super::{Obj, Shared, send_sync};
 
@@ -40,6 +40,7 @@ pub(crate) struct PipelineRaw {
     pub(super) fill: MTLTriangleFillMode,
     /// Per stage, the bindings whose lengths its sizes buffer holds.
     pub(super) sized: [Vec<naga::ResourceBinding>; 2],
+    _live: Option<Live>,
 }
 send_sync!(PipelineRaw);
 
@@ -230,6 +231,7 @@ pub(super) fn create(shared: &Shared, desc: &wgpu::RenderPipelineDescriptor<'_>)
             (None, [Vec::new(), Vec::new()])
         }
     };
+    let _live = state.is_some().then(|| Live::new(&shared.render_pipelines));
     let raw = PipelineRaw {
         state,
         layout,
@@ -248,6 +250,7 @@ pub(super) fn create(shared: &Shared, desc: &wgpu::RenderPipelineDescriptor<'_>)
             _ => MTLTriangleFillMode::Fill,
         },
         sized,
+        _live,
     };
     RenderPipeline { raw: Arc::new(raw) }
 }

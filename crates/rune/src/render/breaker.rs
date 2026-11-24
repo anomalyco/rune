@@ -159,6 +159,7 @@ impl Renderer {
     /// The uber shader changed: the features built from it are built again, and checked again,
     /// when a frame next needs them.
     pub(super) fn shader_changed(&mut self, device: &wgpu::Device) {
+        self.effect_warm.shader_changed();
         for feature in [Feature::Isolation, Feature::PlusLighter] { self.run_breaker(device, feature, Event::ShaderChanged); }
     }
 
@@ -168,7 +169,8 @@ impl Renderer {
         while let Some(effect) = queue.pop_front() {
             match effect {
                 Effect::Build => {
-                    let verdict = checked(device, || self.build_feature(device, feature));
+                    let verdict = self.harvest_warmed_feature(device, feature)
+                        .unwrap_or_else(|| checked(device, || self.build_feature(device, feature)));
                     queue.extend(self.breakers.step(feature, Event::Built(verdict)));
                 }
                 Effect::Drop => self.drop_feature(feature),
@@ -194,9 +196,13 @@ impl Renderer {
                 for format in formats { self.add_layer_format(device, format); }
             }
             Feature::PlusLighter => {
-                self.layers.additive = Some((
-                    Self::pipeline(device, &self.layout, &self.shader, format, self.vertex_entry, Blend::PlusLighter),
-                    Self::pipeline(device, &self.layout, &self.shader, format, "vs", Blend::PlusLighter)));
+                let primary = Self::pipeline(device, &self.layout, &self.shader, format, self.vertex_entry, Blend::PlusLighter);
+                let composite = if self.vertex_entry == "vs" {
+                    primary.clone()
+                } else {
+                    Self::pipeline(device, &self.layout, &self.shader, format, "vs", Blend::PlusLighter)
+                };
+                self.layers.additive = Some((primary, composite));
             }
             Feature::LayerBlur => self.layers.blur = Some(layer_blur::Pipeline::new(device, format)),
         }

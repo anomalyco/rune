@@ -33,9 +33,10 @@ pub(crate) struct Shared {
     pub(super) state: Mutex<State>,
     /// Buffers alive, for `Device::get_internal_counters`.
     pub(super) buffers: Arc<AtomicIsize>,
-    /// Bind groups and textures alive, likewise.
+    /// Bind groups, textures, and render pipelines alive, likewise.
     bind_groups: Arc<AtomicIsize>,
     textures: Arc<AtomicIsize>,
+    pub(super) render_pipelines: Arc<AtomicIsize>,
     /// Encoders that made a command buffer not yet submitted or dropped. While none has, every
     /// recorded command that reads a buffer's storage was submitted.
     pub(super) recording: AtomicUsize,
@@ -53,11 +54,13 @@ pub(crate) struct Shared {
 }
 send_sync!(Shared);
 
-/// Active wgpu error scopes pushed on this device, innermost at the back.
+/// Active wgpu error scopes pushed on this device, innermost at the back, scoped per thread
+/// (matching `wgpu-core`'s thread-local error scope stacks so background pipeline compilation
+/// cannot collide with UI-thread scopes).
 #[derive(Default)]
 pub(super) struct ErrorScopes {
     next: u32,
-    stack: Vec<(u32, wgpu::ErrorFilter, Option<wgpu::Error>)>,
+    stack: Vec<(u32, std::thread::ThreadId, wgpu::ErrorFilter, Option<wgpu::Error>)>,
 }
 
 impl std::fmt::Debug for ErrorScopes {
@@ -87,11 +90,12 @@ impl std::fmt::Debug for Lost {
 }
 
 impl Shared {
-    /// Records an error of `filter` into the innermost matching error scope, returning `true`
-    /// when a scope captured it and `false` when no matching scope is active.
+    /// Records an error of `filter` into the current thread's innermost matching error scope,
+    /// returning `true` when a scope captured it and `false` when no matching scope is active.
     pub(super) fn capture_error(&self, filter: wgpu::ErrorFilter, message: String) -> bool {
+        let tid = std::thread::current().id();
         let mut scopes = self.scopes.lock();
-        let Some((_, _, slot)) = scopes.stack.iter_mut().rev().find(|(_, kind, _)| *kind == filter) else {
+        let Some((_, _, _, slot)) = scopes.stack.iter_mut().rev().find(|(_, thread, kind, _)| *thread == tid && *kind == filter) else {
             return false;
         };
         if slot.is_none() {
@@ -152,6 +156,7 @@ pub(super) fn new(device: Obj<dyn MTLDevice>, desc: &wgpu::DeviceDescriptor<'_>)
         buffers: Arc::default(),
         bind_groups: Arc::default(),
         textures: Arc::default(),
+        render_pipelines: Arc::default(),
         recording: AtomicUsize::new(0),
         zeros: OnceLock::new(),
         builtin: OnceLock::new(),
@@ -259,13 +264,13 @@ impl DeviceInterface for MetalDevice {
         let mut scopes = self.shared.scopes.lock();
         scopes.next = scopes.next.wrapping_add(1);
         let id = scopes.next;
-        scopes.stack.push((id, filter, None));
+        scopes.stack.push((id, std::thread::current().id(), filter, None));
         id
     }
     fn pop_error_scope(&self, index: u32) -> Pin<Box<dyn PopErrorScopeFuture>> {
         let error = {
             let mut scopes = self.shared.scopes.lock();
-            scopes.stack.iter().rposition(|(id, _, _)| *id == index).and_then(|pos| scopes.stack.remove(pos).2)
+            scopes.stack.iter().rposition(|(id, _, _, _)| *id == index).and_then(|pos| scopes.stack.remove(pos).3)
         };
         Box::pin(ready(error))
     }
@@ -277,6 +282,7 @@ impl DeviceInterface for MetalDevice {
         counters.hal.buffers.set(self.shared.buffers.load(Ordering::Relaxed));
         counters.hal.bind_groups.set(self.shared.bind_groups.load(Ordering::Relaxed));
         counters.hal.textures.set(self.shared.textures.load(Ordering::Relaxed));
+        counters.hal.render_pipelines.set(self.shared.render_pipelines.load(Ordering::Relaxed));
         counters
     }
     fn generate_allocator_report(&self) -> Option<wgpu::AllocatorReport> { None }

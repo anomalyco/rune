@@ -259,6 +259,7 @@ impl Renderer {
         // The pinned pipelines (`variant::start_pinned`): asked for at the first prepare, taken once their thread has them.
         if self.pinned.is_none() && self.pinned_building.is_none() { self.start_pinned(device); }
         self.take_pinned();
+        self.poll_effect_warm();
         #[cfg(feature = "frame-profile")]
         super::report_pinned();
         let staging = self.uploads.staging(device, queue);
@@ -353,6 +354,9 @@ impl Renderer {
             }
         }
         self.prepare_backdrop_blur(device, queue, viewport);
+        if self.first_frame_submitted.load(Ordering::Acquire) {
+            self.warm_effects(device);
+        }
         #[cfg(all(feature = "alloc-sites", not(target_arch = "wasm32")))]
         self.report_pools();
     }
