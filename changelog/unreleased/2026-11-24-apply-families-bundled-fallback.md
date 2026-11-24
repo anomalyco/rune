@@ -1,0 +1,1 @@
+- Text: `TextSystem::set_families` (and `Tx::set_font_families` / `measure`) now re-register the app's bundled families as fallbacks when switching slots, matching `TextSystem::new`, so switching to a missing family on a host with no system fonts still measures and draws in a bundled font instead of collapsing to zero width.

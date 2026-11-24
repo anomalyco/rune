@@ -105,7 +105,9 @@ fn underlined_long_line_scans_items_once_and_matches_underline_edges() {
     let mut ts = TextSystem::default();
     let scale = 2.0;
     let origin = [12.5, 24.0];
-    let src = "A🦀".repeat(400);
+    // Alternating Latin and Greek scripts (both in bundled Inter) splits one span into many
+    // runs on every platform without depending on a system emoji font.
+    let src = "AΩ".repeat(400);
     let spans = [Span::new(0, src.len()).underline(Color::BLACK)];
     let layout = ts.layout_rich(&src, &spans, TextStyle::new(14.0, 400.0), scale, None);
     let line = layout.get(0).expect("single unwrapped line");
@@ -113,7 +115,7 @@ fn underlined_long_line_scans_items_once_and_matches_underline_edges() {
         .items()
         .filter(|item| matches!(item, PositionedLayoutItem::GlyphRun(_)))
         .count();
-    assert!(run_count >= 400, "alternating Latin and emoji should split into many runs (got {run_count})");
+    assert!(run_count >= 400, "alternating Latin and Greek should split into many runs (got {run_count})");
 
     let _ = super::super::underline::take_line_end_item_visits();
     let mut out = Vec::new();

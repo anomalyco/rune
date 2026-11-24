@@ -294,6 +294,7 @@ fn scripts_load_their_system_fonts_on_first_use() {
     ts.layout_rich("Hello, “café” — naïve…", &[], TextStyle::new(13.0, 400.0), 2.0, None);
     assert_eq!(ts.scripts, 0, "Latin text must not load script fallbacks");
     let samples = ["שלום עולם", "مرحبا بالعالم", "नमस्ते दुनिया", "ওহে বিশ্ব", "สวัสดีชาวโลก"];
+    let mut tested = 0usize;
     for (fonts, sample) in fallback::SCRIPT_FONTS.iter().zip(samples) {
         assert!(sample.chars().any(|ch| fonts.covers(ch)), "{sample} is not {:?}", fonts.script);
         if system_font_files(fonts.files).is_empty() {
@@ -302,8 +303,10 @@ fn scripts_load_their_system_fonts_on_first_use() {
         }
         let glyphs = faces(&mut ts, &format!("a {sample}"), &[], TextStyle::new(13.0, 400.0));
         assert!(glyphs.iter().all(|(_, id)| *id != 0), "tofu in {sample}: {glyphs:?}");
+        tested += 1;
+        assert_eq!(ts.scripts.count_ones() as usize, tested, "{:?} should mark its script bit on first use", fonts.script);
     }
-    assert_eq!(ts.scripts.count_ones() as usize, fallback::SCRIPT_FONTS.len());
+    assert_eq!(ts.scripts.count_ones() as usize, tested);
 }
 
 /// Fonts fontconfig knows outside the scanned directories (NixOS keeps them in its store) are

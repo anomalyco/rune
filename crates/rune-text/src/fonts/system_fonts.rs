@@ -167,21 +167,16 @@ pub(crate) const CJK_FONT_FILES: [&str; 30] = [
     "applegothic",
 ];
 
-/// Makes text in scripts the app's fonts don't cover render instead of drawing tofu: the
-/// families the app registered beyond its sans and mono (`AppSpec::fonts`), already in memory.
-/// The system's CJK fonts follow them the first time a text has CJK (`register_system_cjk`).
-pub(crate) fn register_cjk_fallbacks(collection: &mut Collection, registered: &[FamilyId], families: (&str, &str)) -> Vec<FamilyId> {
-    let primary = [collection.family_id(families.0), collection.family_id(families.1)];
-    let mut fallbacks: Vec<FamilyId> = Vec::new();
-    for id in registered {
-        if !primary.contains(&Some(*id)) && !fallbacks.contains(id) {
-            fallbacks.push(*id);
-        }
-    }
-    if !fallbacks.is_empty() {
-        super::language::register(collection, &fallbacks);
-    }
-    fallbacks
+/// Family IDs currently named by the sans and mono slots.
+fn primary_family_ids(collection: &mut Collection, sans: &str, mono: &str) -> Vec<FamilyId> {
+    css_or_named(sans)
+        .into_iter()
+        .chain(css_or_named(mono))
+        .filter_map(|f| match f {
+            FontFamilyName::Named(name) => collection.family_id(&name),
+            FontFamilyName::Generic(_) => None,
+        })
+        .collect()
 }
 
 /// The CJK fonts in `files` as fallbacks after the app's, memory-mapped, so a 20 MB CJK
@@ -206,6 +201,8 @@ fn register_system_cjk(collection: &mut Collection, loaded: &mut LoadedFiles, fi
 pub(crate) struct Fallbacks {
     /// The app's own font files, whose characters need no system font.
     own: Vec<&'static [u8]>,
+    /// The families registered from `own`, deduplicated in registration order.
+    own_families: Vec<FamilyId>,
     /// Characters already looked up (Windows: each asked of DirectWrite once).
     asked: std::collections::HashSet<char>,
     /// The locales the system's CJK fonts were looked up for (Windows), or whether they were
@@ -214,7 +211,9 @@ pub(crate) struct Fallbacks {
     /// The symbol families were loaded (elsewhere than Windows, where each comes on its own).
     #[cfg_attr(windows, allow(dead_code))]
     symbols: bool,
-    /// Every CJK fallback family, the app's then the system's in the order they loaded.
+    /// System CJK fallback families loaded on demand, in load order.
+    system_cjk: Vec<FamilyId>,
+    /// Every CJK fallback family currently registered, the app's non-primary then the system's.
     cjk_families: Vec<FamilyId>,
     /// Segoe UI Symbol is loaded, for symbols with a text form (Windows).
     #[cfg_attr(not(windows), allow(dead_code))]
@@ -222,8 +221,14 @@ pub(crate) struct Fallbacks {
 }
 
 impl Fallbacks {
-    pub(crate) fn new(own: &[&'static [u8]], cjk_families: Vec<FamilyId>) -> Self {
-        Fallbacks { own: own.to_vec(), cjk_families, ..Default::default() }
+    pub(crate) fn new(own: &[&'static [u8]], registered: &[FamilyId]) -> Self {
+        let mut own_families = Vec::new();
+        for &id in registered {
+            if !own_families.contains(&id) {
+                own_families.push(id);
+            }
+        }
+        Fallbacks { own: own.to_vec(), own_families, ..Default::default() }
     }
 }
 
@@ -319,7 +324,13 @@ impl TextSystem {
             let files = platform::fallback_family_files(&cjk, locale.as_deref());
             if !cjk_done { self.fallbacks.cjk.push(locale.clone()); }
             let families = (self.families.0.clone(), self.families.1.clone());
+            let prev = self.fallbacks.cjk_families.len();
             register_system_cjk(&mut self.font_cx.collection, &mut self.font_files, files, (&families.0, &families.1), &mut self.fallbacks.cjk_families);
+            for &id in &self.fallbacks.cjk_families[prev..] {
+                if !self.fallbacks.system_cjk.contains(&id) {
+                    self.fallbacks.system_cjk.push(id);
+                }
+            }
         }
         if emoji {
             self.fallbacks.asked.insert('\u{FE0F}');
@@ -395,6 +406,34 @@ impl TextSystem {
             .or_else(|| added.into_iter().next());
         if let Some(name) = emoji_id.and_then(|id| self.font_cx.collection.family_name(id)).map(intern) {
             self.push_symbol_family(name, true);
+        }
+    }
+
+    /// Registers the app's non-primary families (followed by any loaded system CJK families) as
+    /// fallbacks. When a slot still resolves to no family and no non-primary app family is
+    /// registered, includes the app's registered families so a host with no system fonts falls
+    /// back to a bundled font instead of measuring as zero. Run where the slots are set.
+    pub(crate) fn sync_cjk_fallbacks(&mut self) {
+        let collection = &mut self.font_cx.collection;
+        let primary = primary_family_ids(collection, &self.families.0, &self.families.1);
+        let mut next: Vec<FamilyId> = Vec::new();
+        for &id in self.fallbacks.own_families.iter().chain(&self.fallbacks.system_cjk) {
+            if !primary.contains(&id) && !next.contains(&id) {
+                next.push(id);
+            }
+        }
+        if (!slot_resolves(collection, &self.sans) || !slot_resolves(collection, &self.mono))
+            && !self.fallbacks.own_families.iter().any(|id| next.contains(id))
+        {
+            for &id in &self.fallbacks.own_families {
+                if !next.contains(&id) {
+                    next.push(id);
+                }
+            }
+        }
+        if next != self.fallbacks.cjk_families {
+            super::language::register(collection, &next);
+            self.fallbacks.cjk_families = next;
         }
     }
 

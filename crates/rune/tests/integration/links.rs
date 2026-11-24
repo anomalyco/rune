@@ -182,10 +182,14 @@ fn link_boxes_match_drawn_glyphs_beside_emoji_and_in_centred_lines() {
     let mut rt = Runtime::new(S { draft: TextEdit::new(""), opened: Vec::new() }, emoji_view, (500.0, 300.0), Env::new(true, 2.0));
     rt.frame(0.0);
     let s = 2.0;
+    let (_, initial_images) = drawn(&rt, link_ink());
+    let has_color_emoji = !initial_images.is_empty();
 
     // Each link's recoloured glyphs, drawn while hovered, sit inside its hit box, and each
-    // glyph's centre takes the pointer.
-    for (key, glyph_count) in [("user:kit", 4), ("party", 4), ("long", 13)] {
+    // glyph's centre takes the pointer. Without a colour emoji font, "🎉" in "🎉 docs" draws as
+    // a monochrome fallback glyph instead of a colour image, giving 5 glyphs instead of 4.
+    let party_glyphs = if has_color_emoji { 4 } else { 5 };
+    for (key, glyph_count) in [("user:kit", 4), ("party", party_glyphs), ("long", 13)] {
         let link = find(&rt, key);
         // Where a script aims: the centre of the link's first line box. The centre of a wrapped
         // link's union can sit on the edge between its lines, which hits neither.
