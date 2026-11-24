@@ -263,11 +263,74 @@ points (zero on native). Apply them inside a full-canvas background. The canvas 
 `visualViewport` when a software keyboard reduces the visible height. Keep the generated
 page's `viewport-fit=cover` meta tag and the textarea's 16 px font size.
 
+## HTTP requests (fetch)
+
+Rune ships no HTTP client of its own. On the web an app calls the browser's `fetch` API (through
+`web_sys` or a wasm HTTP crate) and delivers parsed results back onto the UI thread. Two patterns
+work today:
+
+### All browsers: `spawn_local` and `AppHandle::update`
+
+Works in every browser that runs WebGPU (no JSPI required). Take `App::handle()` before calling
+`app.run()`, pass clones into `App::init` (for user-triggered requests) and `App::on_ready` (to
+start an initial fetch after the first frame presents), run `fetch` in
+`wasm_bindgen_futures::spawn_local`, and write the parsed answer on the UI thread with
+`AppHandle::update` or `AppHandle::update_if`:
+
+```rust,ignore
+let app = App::new(spec);
+let handle = app.handle();
+let init_handle = handle.clone();
+let ready_handle = handle.clone();
+app.init(move || State::new(init_handle))
+    .on_ready(move |_| {
+        ready_handle.update(|s, tx| {
+            tx.instant();
+            start_fetch(s, true);
+        });
+    })
+    .run();
+```
+
+Track a request sequence number in state and return `false` from `AppHandle::update_if` when an
+older response finishes after a newer request, so stale answers are dropped without redrawing.
+Call `tx.instant()` when landing an answer that arrives right after launch so the first second
+stays still. On native, pair the same state and view with `rune::task::spawn` + `AppHandle::update`
+or with `rune::Latest` calling any blocking Rust HTTP crate. See `examples/fetch` for a complete
+cross-target example (`scripts/web-build.sh fetch --out target/web-fetch`).
+
+### JSPI fibers: `rune::task` and `Latest`
+
+To share synchronous `Latest` or `rune::task::spawn` request code between native and
+Chromium-family browsers with WebAssembly JS Promise Integration (137+, `wasm-bindgen` 0.2.129),
+export a `#[wasm_bindgen(jspi)]` entry point and call `rune::task::start_runners()` before
+`app.run()`:
+
+```rust,ignore
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(jspi)]
+pub fn start() {
+    rune::task::start_runners();
+    run_app();
+}
+```
+
+`start_runners()` spawns four JSPI fibers that run queued `rune::task::spawn` and `Latest` work
+in 8 ms slices. Inside task work, check `rune::task::can_wait()` before starting a request and
+suspend the current fiber on a `js_sys::Promise` with `rune::task::wait(&promise)`; frames, input
+and the other fibers continue while that fiber waits. Without calling `start_runners()` (when task
+work runs on main-thread 8 ms timer slices instead of fibers) or outside task work (such as in
+`view`, handlers or `poll`), `can_wait()` returns `false` and `wait` returns `None`. Because
+`#[wasm_bindgen(jspi)]` and `wait` require WebAssembly JSPI support in the browser, apps targeting
+all browsers should skip `#[wasm_bindgen(jspi)]` and `start_runners()` and use the `spawn_local` +
+`AppHandle::update` pattern above instead.
+
 ## Scope and verification
 
 This target needs WebGPU. It has no WebGL fallback (a page made with `--html` stays readable
 without it), overlays,
-extra windows, native menus, drag-out, native audio/video, networking layer or hot patching.
+extra windows, native menus, drag-out, native audio/video, built-in HTTP client (see
+[HTTP requests (fetch)](#http-requests-fetch)) or hot patching.
 Native configuration types remain source-compatible, but their desktop host paths are not
 used on wasm. Unsupported window requests warn in the console; Show/Open are ignored.
 The document title follows `AppSpec::title`, and hidden tabs report `is_visible() == false`.
