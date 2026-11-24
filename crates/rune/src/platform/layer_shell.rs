@@ -21,10 +21,12 @@ use wayland_client::protocol::{wl_output::{self, WlOutput}, wl_seat::{self, WlSe
 use wayland_client::{Connection, Dispatch, DispatchError, EventQueue, Proxy, QueueHandle};
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::{Shape, WpCursorShapeDeviceV1};
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1::WpCursorShapeManagerV1;
+use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_manager_v3::ZwpTextInputManagerV3;
+use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::ZwpTextInputV3;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1};
 
-use super::layer_shell_machine::{configure_wait, connection, exclusive_zone, frame_callback, keyboard, pointer, readiness, repeat, touch, watch_loop};
+use super::layer_shell_machine::{configure_wait, connection, exclusive_zone, frame_callback, keyboard, pointer, readiness, repeat, text_input as text_input_machine, touch, watch_loop};
 use crate::el::Align;
 use crate::overlay::{Placement, ScreenEdge};
 use crate::runtime::Waker;
@@ -32,6 +34,7 @@ use crate::{OverlayInput, OverlayOptions, OverlayPlacement};
 
 mod compose;
 mod dead;
+mod text_input;
 pub(crate) use dead::display_error;
 use dead::{classify_turn_error, format_wayland_error};
 
@@ -40,6 +43,7 @@ pub(crate) enum Input {
     Wheel(crate::input::host_events::WheelInput),
     Focus(bool), Key(crate::KeyEvent), KeyRepeat(crate::KeyEvent), KeyUp(crate::KeyEvent),
     Physical(crate::PhysicalInput, Option<crate::KeyEvent>),
+    Ime(crate::Ime),
 }
 
 /// Whether the pointer is over the surface: the serial of its enter, which setting a cursor
@@ -87,6 +91,9 @@ struct State {
     mod_state: Option<keyboard::ModState>,
     repeat_seq: crate::machine::Seq,
     repeat: repeat::State,
+    text_input_manager: Option<ZwpTextInputManagerV3>,
+    text_input: Option<ZwpTextInputV3>,
+    text_input_state: text_input_machine::State,
 }
 
 impl Dispatch<WlOutput, ()> for State {
@@ -927,7 +934,22 @@ impl LayerSurface {
         let layer = shell.get_layer_surface(&surface, output.as_ref(), Layer::Overlay, namespace.to_owned(), &qh, ());
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         let shapes = globals.bind::<WpCursorShapeManagerV1, _, _>(&qh, 1..=1, ()).ok();
-        let state = State { surface: Some(surface.clone()), want_pointer, want_keys, shapes, ..State::default() };
+        let text_input_manager = want_keys
+            .then(|| globals.bind::<ZwpTextInputManagerV3, _, _>(&qh, 1..=1, ()).ok())
+            .flatten();
+        let text_input = text_input_manager
+            .as_ref()
+            .zip(seat.as_ref())
+            .map(|(manager, seat)| manager.get_text_input(seat, &qh, ()));
+        let state = State {
+            surface: Some(surface.clone()),
+            want_pointer,
+            want_keys,
+            shapes,
+            text_input_manager,
+            text_input,
+            ..State::default()
+        };
         let mut this = LayerSurface { namespace: namespace.to_owned(), conn, globals: Some(globals), seat_global, regions: std::cell::RefCell::new(Some(Vec::new())), compositor, shell, output, seat, options: options.clone(), queue, state, layer, surface, display: display.display, watch: None };
         this.place(at);
         this.surface.commit();
@@ -1038,6 +1060,18 @@ impl LayerSurface {
         keyboard::supports_keys(self.options.keys, self.layer.version(), self.seat.is_some())
     }
 
+    pub fn has_keyboard_focus(&self) -> bool {
+        self.state.keyboard_focus.focused()
+    }
+
+    /// Synchronizes `zwp_text_input_v3` enablement and cursor rectangle with `step`.
+    pub fn sync_ime(&mut self, step: crate::input::host_events::ImeStep) -> Option<crate::Ime> {
+        if self.state.readiness.closed() { return None; }
+        let (sent, ime) = self.state.sync_text_input(step);
+        if sent { self.flush_checked(); }
+        ime
+    }
+
     /// Shows `want` while the pointer is over the surface, once per change. Without
     /// cursor-shape-v1 only `Cursor::Hidden` applies; others keep the cursor the pointer
     /// arrived with, such as a terminal's I-beam.
@@ -1115,6 +1149,9 @@ impl LayerSurface {
         self.state.step_repeat(repeat::Event::Stop);
         self.state.reset_compose();
         self.state.step_pointer(pointer::Event::Reset);
+        if !self.state.readiness.closed() && self.state.drain_text_input() {
+            self.flush_checked();
+        }
         self.state.input.clear();
         self.state.readiness.closed()
     }
@@ -1153,6 +1190,7 @@ impl LayerSurface {
             self.conn.backend().destroy_object(&cb.id()).ok();
         }
         self.state.step_repeat(repeat::Event::Stop);
+        self.state.reset_text_input_gone();
         self.state.input.clear();
         self.watch = None;
         if !was_closed {
@@ -1179,11 +1217,14 @@ impl Drop for LayerSurface {
         self.state.want_pointer = false;
         self.state.want_keys = false;
         self.state.surface = None;
+        self.state.reset_text_input_gone();
         // Drain pending events before destroying proxies so any queued `wl_keyboard.keymap` fd is
         // received and closed via `OwnedFd` rather than dropped open by libwayland.
         drain_event_queue(&mut self.queue, &mut self.state);
         let backend = self.conn.backend();
         if let Some((_, cb)) = self.state.frame_callback.take() { backend.destroy_object(&cb.id()).ok(); }
+        if let Some(ti) = self.state.text_input.take() { ti.destroy(); }
+        if let Some(tim) = self.state.text_input_manager.take() { tim.destroy(); }
         if let Some(shape) = self.state.shape.take() { shape.destroy(); }
         if let Some(shapes) = self.state.shapes.take() { shapes.destroy(); }
         if let Some(pointer) = self.state.pointer.take() {
