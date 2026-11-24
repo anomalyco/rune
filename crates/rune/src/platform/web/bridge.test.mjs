@@ -108,6 +108,22 @@ class FakeNode {
         this.parentElement = null;
     }
 
+    querySelectorAll(selector) {
+        const parts = selector.split(',').map(s => s.trim());
+        const out = [];
+        const walk = node => {
+            for (const child of node.children) {
+                if (parts.some(sel => {
+                    if (sel === 'a[target="_blank"]') return child.tagName === 'A' && child.target === '_blank';
+                    return child.tagName === sel.toUpperCase();
+                })) out.push(child);
+                walk(child);
+            }
+        };
+        walk(this);
+        return out;
+    }
+
     contains(node) {
         let cur = node;
         while (cur) {
@@ -176,12 +192,13 @@ const bridge = await import('./bridge.js');
 
 function setup({ embedded = false, fitHeight = false, page = false, coarse = false } = {}) {
     coarsePointer = coarse;
-    const { doc, body } = installDom();
+    const { doc, win, body } = installDom();
+    globalThis.innerWidth = 800;
     const canvas = doc.createElement('canvas');
     body.append(canvas);
     const events = [];
     const h = bridge.mount(canvas, msg => events.push(JSON.parse(msg)), embedded, fitHeight, page);
-    return { doc, body, canvas, events, h };
+    return { doc, win, body, canvas, events, h };
 }
 
 function insertAtCaret(textarea, text) {
@@ -1552,5 +1569,286 @@ test('coarse pointer release focusing a field via sync + activate restores input
     assert.equal(h.textarea.inputMode, 'text');
     assert.equal(h.textarea.selectionStart, 13);
     assert.equal(h.textarea.selectionEnd, 13);
+    bridge.destroy(h);
+});
+
+function snapshotDom(node) {
+    const attrs = [...node._attrs.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    return {
+        tag: node.tagName,
+        attrs,
+        cssText: node.style.cssText,
+        transform: node.style.transform ?? '',
+        text: node.children.length === 0 ? (node.textContent ?? '') : '',
+        children: node.children.map(snapshotDom),
+    };
+}
+
+function parseCssPx(css, prop) {
+    const m = new RegExp('(?:^|;)' + prop + ':(-?\\d+(?:\\.\\d+)?)px').exec(css);
+    return m ? Number(m[1]) : 0;
+}
+
+function parseTranslate3d(tr) {
+    if (!tr) return [0, 0];
+    const m = /translate3d\((-?\d+(?:\.\d+)?)px,\s*(-?\d+(?:\.\d+)?)px/.exec(tr);
+    return m ? [Number(m[1]), Number(m[2])] : [0, 0];
+}
+
+function collectScreenBounds(node, origin = [0, 0], out = []) {
+    const [tx, ty] = parseTranslate3d(node.style.transform);
+    const x = Math.round((origin[0] + parseCssPx(node.style.cssText, 'left') + tx) * 10) / 10;
+    const y = Math.round((origin[1] + parseCssPx(node.style.cssText, 'top') + ty) * 10) / 10;
+    const w = parseCssPx(node.style.cssText, 'width');
+    const h = parseCssPx(node.style.cssText, 'height');
+    if (node.getAttribute('data-rune-scroll-content') === null) {
+        out.push({ tag: node.tagName, text: node.children.length === 0 ? (node.textContent ?? '') : '', rect: [x, y, w, h] });
+    }
+    for (const child of node.children) {
+        if (child.tagName === '#TEXT' || child.tagName === 'STYLE') continue;
+        collectScreenBounds(child, [x, y], out);
+    }
+    return out;
+}
+
+function makePatcher() {
+    let sent = new Map();
+    let orders = new Map();
+    const TAGS = { heading: null, button: 'button', link: 'a', image: 'div', progressbar: 'div', text: 'p', scroll_x: 'div' };
+    const keyOf = item => {
+        const tag = item.k === 'group' ? (item.g || 'div') : item.k === 'heading' ? `h${item.l || 2}` : (TAGS[item.k] ?? 'p');
+        return `${tag}:${item.p}`;
+    };
+    const r1 = v => { const r = Math.round(v * 10) / 10; return r === 0 ? 0 : r; };
+    return items => {
+        const keys = items.map(keyOf);
+        const nextSent = new Map();
+        const nextOrders = new Map();
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            const key = keys[i];
+            const parentKey = item.a === undefined ? '' : keys[item.a];
+            const origin = item.a === undefined ? [0, 0] : items[item.a].r;
+            const rel = { ...item, r: [r1(item.r[0] - origin[0]), r1(item.r[1] - origin[1]), item.r[2], item.r[3]] };
+            delete rel.a;
+            nextSent.set(key, JSON.stringify(rel));
+            if (!nextOrders.has(parentKey)) nextOrders.set(parentKey, []);
+            nextOrders.get(parentKey).push(key);
+        }
+        const d = [...sent.keys()].filter(k => !nextSent.has(k));
+        const u = [];
+        for (const [k, raw] of nextSent) {
+            if (sent.get(k) !== raw) u.push(JSON.parse(raw));
+        }
+        const o = {};
+        for (const [pk, list] of nextOrders) {
+            const prev = orders.get(pk);
+            if (!prev || prev.length !== list.length || prev.some((v, idx) => v !== list[idx])) o[pk] = list;
+        }
+        sent = nextSent;
+        orders = nextOrders;
+        if (!d.length && !u.length && !Object.keys(o).length) return null;
+        const patch = { p: 1 };
+        if (d.length) patch.d = d;
+        if (u.length) patch.u = u;
+        if (Object.keys(o).length) patch.o = o;
+        return patch;
+    };
+}
+
+test('syncA11y incremental patches match full rebuild across virtual shifts, reparenting, tag changes, and sticky headers without mutating staying siblings', () => {
+    const { h } = setup();
+    const diff = makePatcher();
+
+    const compareWithFull = items => {
+        const patch = diff(items);
+        if (patch) bridge.syncA11y(h, JSON.stringify(patch));
+        const fresh = setup();
+        bridge.syncA11y(fresh.h, JSON.stringify(items));
+        assert.deepEqual(snapshotDom(h.a11y), snapshotDom(fresh.h.a11y));
+        assert.deepEqual(collectScreenBounds(h.a11y), collectScreenBounds(fresh.h.a11y));
+        bridge.destroy(fresh.h);
+        return patch;
+    };
+
+    // Step 1: initial virtual scroll pane with sticky header + 4 rows.
+    compareWithFull([
+        { k: 'group', g: 'div', p: '#0/pane', r: [0, 20, 300, 200], sc: [0, 0] },
+        { k: 'heading', l: 2, p: '#0/pane/sticky', r: [0, 20, 300, 28], t: 'Section', a: 0 },
+        { k: 'text', p: '#0/pane/r0', r: [0, 48, 300, 32], t: 'Row 0', a: 0 },
+        { k: 'text', p: '#0/pane/r1', r: [0, 80, 300, 32], t: 'Row 1', a: 0 },
+        { k: 'text', p: '#0/pane/r2', r: [0, 112, 300, 32], t: 'Row 2', a: 0 },
+        { k: 'text', p: '#0/pane/r3', r: [0, 144, 300, 32], t: 'Row 3', a: 0 },
+    ]);
+
+    // Spy on staying sibling r1 and r2 to prove zero mutations during scroll + virtual window shift.
+    const r1 = h.a11yNodes.get('p:#0/pane/r1');
+    const r2 = h.a11yNodes.get('p:#0/pane/r2');
+    let r1Writes = 0;
+    let r2Writes = 0;
+    let r1Css = r1.style.cssText;
+    let r2Css = r2.style.cssText;
+    Object.defineProperty(r1.style, 'cssText', { get() { return r1Css; }, set(v) { r1Writes++; r1Css = v; }, configurable: true });
+    Object.defineProperty(r2.style, 'cssText', { get() { return r2Css; }, set(v) { r2Writes++; r2Css = v; }, configurable: true });
+
+    // Step 2: scroll down 64px, cull r0, mount r4, counter-shift sticky header by +64px.
+    const scrollPatch = compareWithFull([
+        { k: 'group', g: 'div', p: '#0/pane', r: [0, 20, 300, 200], sc: [0, 64] },
+        { k: 'heading', l: 2, p: '#0/pane/sticky', r: [0, 84, 300, 28], t: 'Section', a: 0 },
+        { k: 'text', p: '#0/pane/r1', r: [0, 80, 300, 32], t: 'Row 1', a: 0 },
+        { k: 'text', p: '#0/pane/r2', r: [0, 112, 300, 32], t: 'Row 2', a: 0 },
+        { k: 'text', p: '#0/pane/r3', r: [0, 144, 300, 32], t: 'Row 3', a: 0 },
+        { k: 'text', p: '#0/pane/r4', r: [0, 176, 300, 32], t: 'Row 4', a: 0 },
+    ]);
+    assert.deepEqual(scrollPatch.d, ['p:#0/pane/r0']);
+    assert.equal(r1Writes, 0, 'staying row r1 must not rewrite cssText on scroll');
+    assert.equal(r2Writes, 0, 'staying row r2 must not rewrite cssText on scroll');
+    assert.equal(h.a11yNodes.get('div:#0/pane')._scrollContent.style.transform, 'translate3d(0px,-64px,0)');
+
+    // Check transformed screen bounds: sticky stays at y=20, r1 is at 80-64=16.
+    const bounds = collectScreenBounds(h.a11y);
+    assert.deepEqual(bounds.find(b => b.text === 'Section').rect, [0, 20, 300, 28]);
+    assert.deepEqual(bounds.find(b => b.text === 'Row 1').rect, [0, 16, 300, 32]);
+
+    // Step 3: reparent r2 out of pane into a new group, change sticky heading h2 -> h3,
+    // and change r3 from text to button at the same path.
+    compareWithFull([
+        { k: 'group', g: 'section', p: '#0/box', r: [10, 0, 280, 100], t: 'Pinned' },
+        { k: 'text', p: '#0/pane/r2', r: [14, 24, 260, 32], t: 'Row 2', a: 0 },
+        { k: 'group', g: 'div', p: '#0/pane', r: [0, 20, 300, 200], sc: [0, 64] },
+        { k: 'heading', l: 3, p: '#0/pane/sticky', r: [0, 84, 300, 28], t: 'Section', a: 2 },
+        { k: 'text', p: '#0/pane/r1', r: [0, 80, 300, 32], t: 'Row 1', a: 2 },
+        { k: 'button', p: '#0/pane/r3', r: [0, 144, 300, 32], t: 'Row 3 Action', a: 2 },
+        { k: 'text', p: '#0/pane/r4', r: [0, 176, 300, 32], t: 'Row 4', a: 2 },
+    ]);
+    assert.equal(r1Writes, 0, 'staying row r1 still unmutated when sibling reparents/morphs');
+
+    // Step 4: delete #0/box while reparenting r2 back to root, and toggle pane scroll wrapper off.
+    compareWithFull([
+        { k: 'text', p: '#0/pane/r2', r: [0, 0, 260, 32], t: 'Row 2' },
+        { k: 'group', g: 'div', p: '#0/pane', r: [0, 20, 300, 200] },
+        { k: 'text', p: '#0/pane/r1', r: [0, 80, 300, 32], t: 'Row 1', a: 1 },
+        { k: 'button', p: '#0/pane/r3', r: [0, 144, 300, 32], t: 'Row 3 Action', a: 1 },
+    ]);
+    assert.equal(h.a11yNodes.get('div:#0/pane')._scrollContent, null);
+
+    // Step 5: toggle pane scroll wrapper back on and reorder children.
+    compareWithFull([
+        { k: 'group', g: 'div', p: '#0/pane', r: [0, 20, 300, 200], sc: [12, 30] },
+        { k: 'button', p: '#0/pane/r3', r: [0, 144, 300, 32], t: 'Row 3 Action', a: 0 },
+        { k: 'text', p: '#0/pane/r1', r: [0, 80, 300, 32], t: 'Row 1', a: 0 },
+    ]);
+
+    // Step 6: 60 deterministic randomized transitions exercising virtual shifts, sticky headers,
+    // reparenting (including out of deleted parents), tag morphing, and scroll wrapper toggles.
+    let rng = 0x12345678;
+    const next = () => { rng = (Math.imul(rng, 1664525) + 1013904223) >>> 0; return rng; };
+    for (let step = 0; step < 60; step++) {
+        const items = [];
+        const hasBox = (next() % 2) === 0;
+        let boxIdx;
+        if (hasBox) {
+            boxIdx = items.length;
+            items.push({ k: 'group', g: (next() % 2) ? 'section' : 'div', p: '#0/box', r: [10, 10, 280, 60], t: 'Box' });
+        }
+        const paneIdx = items.length;
+        const paneScroll = (next() % 4) !== 0;
+        const sy = (next() % 30) * 16;
+        const pane = { k: 'group', g: 'div', p: '#0/pane', r: [0, 80, 320, 240] };
+        if (paneScroll) pane.sc = [(next() % 3) * 8, sy];
+        items.push(pane);
+        if ((next() % 3) !== 0) {
+            items.push({ k: 'heading', l: 1 + (next() % 3), p: '#0/pane/sticky', r: [0, 80 + (paneScroll ? sy : 0), 300, 24], t: `H${step % 3}`, a: paneIdx });
+        }
+        const start = next() % 6;
+        const len = next() % 6;
+        const rows = Array.from({ length: len }, (_, k) => start + k);
+        if (rows.length >= 2 && (next() % 2)) {
+            const a = next() % rows.length;
+            const b = next() % rows.length;
+            [rows[a], rows[b]] = [rows[b], rows[a]];
+        }
+        for (const r of rows) {
+            items.push({ k: 'text', p: `#0/pane/r${r}`, r: [8, 120 + r * 32, 300, 28], t: `R${r}-${(next() % 3) === 0 ? step : 0}`, a: paneIdx });
+        }
+        const morphParent = (next() % 3 === 0 && boxIdx !== undefined) ? boxIdx : (next() % 2 === 0 ? paneIdx : undefined);
+        const mode = next() % 4;
+        const morph = mode === 0
+            ? { k: 'button', p: '#0/morph', r: [12, 90, 100, 24], o: 'combobox', t: 'Preset', x: (next() % 2) === 0, v: `V${next() % 3}` }
+            : mode === 1
+                ? { k: 'text', p: '#0/morph', r: [12, 90, 100, 24], o: 'status', lv: 'polite', t: `S${step % 2}` }
+                : mode === 2
+                    ? { k: 'progressbar', p: '#0/morph', r: [12, 90, 100, 24], o: 'progressbar', t: 'Load', rg: [0, 1, 0.5], vt: '50%' }
+                    : { k: 'image', p: '#0/morph', r: [12, 90, 100, 24], t: 'Icon' };
+        if (morphParent !== undefined) morph.a = morphParent;
+        items.push(morph);
+        compareWithFull(items);
+    }
+
+    bridge.destroy(h);
+});
+
+test('consumer demand triggers flush the mirror and timer helpers pass attempt and cancel cleanly', () => {
+    const { win, canvas, events, h } = setup();
+
+    // focusin inside h.a11y flushes immediately.
+    h.a11y.dispatchEvent({ type: 'focusin' });
+    assert.deepEqual(events.pop(), { kind: 'a11y_flush' });
+
+    // beforeprint flushes immediately.
+    win.dispatchEvent({ type: 'beforeprint' });
+    assert.deepEqual(events.pop(), { kind: 'a11y_flush' });
+
+    // Ctrl+F / Cmd+F flushes immediately.
+    win.dispatchEvent({ type: 'keydown', key: 'f', ctrlKey: true, metaKey: false, altKey: false, target: canvas });
+    assert.deepEqual(events.pop(), { kind: 'a11y_flush' });
+    win.dispatchEvent({ type: 'keydown', key: 'F', ctrlKey: false, metaKey: true, altKey: false, target: canvas });
+    assert.deepEqual(events.pop(), { kind: 'a11y_flush' });
+
+    // Right-click armMenu flushes synchronously before secondary_browser.
+    events.length = 0;
+    win.dispatchEvent({ type: 'pointerup', button: 2, pointerType: 'mouse', target: canvas, clientX: 10, clientY: 10, shiftKey: false });
+    assert.deepEqual(events.filter(e => e.kind !== 'mods'), [{ kind: 'a11y_flush' }, { kind: 'secondary_browser' }]);
+    win.dispatchEvent({ type: 'pointerdown', button: 0, pointerType: 'mouse', target: canvas });
+
+    // scheduleA11y / scheduleA11yIdle / cancelA11y carry attempt and cancel cleanly.
+    const timers = [];
+    const origSetTimeout = globalThis.setTimeout;
+    const origClearTimeout = globalThis.clearTimeout;
+    const origRic = globalThis.requestIdleCallback;
+    const origCic = globalThis.cancelIdleCallback;
+    let nextId = 1;
+    const active = new Map();
+    globalThis.setTimeout = (fn, ms) => { const id = nextId++; active.set(id, { fn, ms }); timers.push({ kind: 'timeout', id, ms }); return id; };
+    globalThis.clearTimeout = id => { active.delete(id); };
+    globalThis.requestIdleCallback = (fn, opts) => { const id = nextId++; active.set(id, { fn, opts }); timers.push({ kind: 'idle', id, opts }); return id; };
+    globalThis.cancelIdleCallback = id => { active.delete(id); };
+    try {
+        events.length = 0;
+        bridge.scheduleA11y(h, 4, 150);
+        assert.equal(timers.at(-1).kind, 'timeout');
+        assert.equal(timers.at(-1).ms, 150);
+        const settleId = timers.at(-1).id;
+        active.get(settleId).fn();
+        assert.deepEqual(events.pop(), { kind: 'a11y_settle', attempt: 4 });
+
+        bridge.scheduleA11yIdle(h, 5, 100);
+        assert.equal(timers.at(-1).kind, 'idle');
+        assert.deepEqual(timers.at(-1).opts, { timeout: 100 });
+        const idleId = timers.at(-1).id;
+        bridge.cancelA11y(h);
+        assert.equal(active.has(idleId), false, 'cancelA11y cancels pending requestIdleCallback');
+
+        bridge.scheduleA11yIdle(h, 6, 100);
+        const idleId2 = timers.at(-1).id;
+        active.get(idleId2).fn();
+        assert.deepEqual(events.pop(), { kind: 'a11y_idle', attempt: 6 });
+    } finally {
+        globalThis.setTimeout = origSetTimeout;
+        globalThis.clearTimeout = origClearTimeout;
+        globalThis.requestIdleCallback = origRic;
+        globalThis.cancelIdleCallback = origCic;
+    }
+
     bridge.destroy(h);
 });

@@ -36,6 +36,8 @@ pub(crate) struct CommitState {
     /// Why this frame committed, as [`commit_why::CommitWhy`] bits, until the frame log takes them.
     commit_why: u16,
     pub(crate) commits: u64,
+    /// Commits whose cause was not purely `CommitWhy::VIRTUAL` (the initial commit counts).
+    pub(crate) non_virtual_commits: u64,
     commit_gen: u64,
     /// The memo pass the current commit's first view build was. Memos none of its builds used
     /// go once it applies.
@@ -85,6 +87,7 @@ impl CommitState {
             memo_since: 0,
             apply_scratch: Default::default(),
             commits: 0,
+            non_virtual_commits: 0,
             commit_gen: 0,
             dirty: true,
             relayout: false,

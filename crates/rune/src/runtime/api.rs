@@ -426,9 +426,9 @@ impl<S: 'static> Runtime<S> {
     #[cfg(target_arch = "wasm32")]
     #[inline(always)]
     pub(crate) fn page_scroll_x(&self) -> Vec<(String, f32)> { self.core().page_scroll_x() }
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    #[cfg(any(test, target_arch = "wasm32"))]
     #[inline(always)]
-    pub(crate) fn web_a11y_scrolled_only(&self, mirror: &web_a11y::A11yMirror) -> bool { self.core().web_a11y_scrolled_only(mirror) }
+    pub(crate) fn web_a11y_patch<'a>(&self, mirror: &'a mut web_a11y::A11yMirror) -> Option<&'a str> { self.core().web_a11y_patch(mirror) }
     #[cfg(any(test, target_arch = "wasm32"))]
     #[inline(always)]
     pub(crate) fn web_a11y<'a>(&self, mirror: &'a mut web_a11y::A11yMirror) -> Option<&'a str> { self.core().web_a11y(mirror) }

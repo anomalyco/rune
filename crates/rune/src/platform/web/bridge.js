@@ -434,6 +434,16 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         h.listeners.push(() => style.remove());
     }
     if (!page) {
+        // Flush any deferred scroll or pending idle mirror update immediately when assistive
+        // tech or a browser consumer asks: focus inside the mirror, print, or Find-in-page.
+        listen(a11y, 'focusin', () => send({ kind: 'a11y_flush' }));
+        listen(window, 'beforeprint', () => send({ kind: 'a11y_flush' }));
+        listen(window, 'keydown', event => {
+            const chord = (event.metaKey || event.ctrlKey) && !event.altKey && !event.getModifierState?.('AltGraph');
+            if (chord && event.key?.toLowerCase() === 'f' && (!embedded || ownsTarget(event.target))) {
+                send({ kind: 'a11y_flush' });
+            }
+        }, { capture: true, passive: true });
         // A web link takes the pointer while it's over it, as a page's would: the status bar
         // shows where it goes, and middle-click, Ctrl+click and its own menu open it.
         listen(canvas, 'pointermove', event => {
@@ -810,6 +820,8 @@ function armMenu(h, x, y, browser) {
         selection.addRange(range);
         return true;
     }
+    // Flush any deferred mirror update synchronously before hit-testing links/text for the menu.
+    if (!h.page) h.send({ kind: 'a11y_flush' });
     // A link, the text under the pointer, or the page itself (Back, Reload, Print, Inspect).
     const el = linkAt(h, x, y) ?? textAt(h, x, y) ?? h.a11y;
     h.armed = [el, el.style.pointerEvents];
@@ -923,10 +935,21 @@ function runs(h, el, item) {
     }
 }
 
+function round1(v) {
+    const r = Math.round(v * 10) / 10;
+    return r === 0 ? 0 : r;
+}
+
+function itemTag(item) {
+    return item.k === 'group' ? (item.g || 'div') : item.k === 'heading' ? `h${item.l || 2}` : TAGS[item.k] ?? 'p';
+}
+
 function itemStyle(h, item, origin) {
     const [x, y, w, bh] = item.r;
-    let css = `position:absolute;left:${x - origin[0]}px;top:${y - origin[1]}px;width:${w}px;height:${bh}px;margin:0;padding:0;border:0;background:transparent;color:transparent;`;
-    if (item.k === 'group') return css + 'overflow:visible;list-style:none;pointer-events:none;';
+    const left = round1(x - origin[0]);
+    const top = round1(y - origin[1]);
+    let css = `position:absolute;left:${left}px;top:${top}px;width:${w}px;height:${bh}px;margin:0;padding:0;border:0;background:transparent;color:transparent;`;
+    if (item.k === 'group') return css + (item.sc ? 'overflow:hidden;list-style:none;pointer-events:none;' : 'overflow:visible;list-style:none;pointer-events:none;');
     // A page's horizontal scroller: the browser scrolls it natively, so a flick inside a code
     // block scrolls the block at the compositor's rate while a vertical drag still scrolls the
     // page.
@@ -940,126 +963,219 @@ function itemStyle(h, item, origin) {
     return css + (item.e ? 'pointer-events:auto;user-select:text;-webkit-user-select:text;cursor:text;' : 'pointer-events:none;user-select:none;-webkit-user-select:none;');
 }
 
+// Wraps an app-mode scroll container's children in a translated content layer so scroll settle
+// updates one transform instead of rewriting `style.cssText` on every staying child.
+function syncScrollContent(el, sc) {
+    if (sc) {
+        let wrap = el._scrollContent;
+        if (!wrap) {
+            wrap = document.createElement('div');
+            wrap.setAttribute('role', 'none');
+            wrap.setAttribute('data-rune-scroll-content', '');
+            wrap.style.cssText = 'position:absolute;left:0;top:0;width:0;height:0;overflow:visible;pointer-events:none;';
+            while (el.firstElementChild) wrap.insertBefore(el.firstElementChild, null);
+            el.insertBefore(wrap, null);
+            el._scrollContent = wrap;
+        }
+        const sx = sc[0] ? -sc[0] : 0;
+        const sy = sc[1] ? -sc[1] : 0;
+        const tr = `translate3d(${sx}px,${sy}px,0)`;
+        if (wrap._tr !== tr) {
+            wrap._tr = tr;
+            wrap.style.transform = tr;
+        }
+    } else if (el._scrollContent) {
+        const wrap = el._scrollContent;
+        el._scrollContent = null;
+        while (wrap.firstElementChild) el.insertBefore(wrap.firstElementChild, wrap);
+        wrap.remove();
+    }
+}
+
+function contentParent(el) {
+    return el._scrollContent ?? el;
+}
+
+function ensureA11yNode(h, item, tag, key) {
+    let el = h.a11yNodes.get(key);
+    if (!el) {
+        el = document.createElement(tag);
+        if (tag === 'button') {
+            el.type = 'button';
+            el.tabIndex = h.page ? 0 : -1;
+            el.addEventListener('click', ev => {
+                ev.preventDefault();
+                h.send({ kind: 'a11y_press', path: item.p });
+            });
+        }
+        h.a11yNodes.set(key, el);
+    }
+    return el;
+}
+
+function applyA11yItem(h, el, item, tag, origin) {
+    // Writing `cssText` invalidates the node's style and its layout: only do it when the
+    // mirror's item actually moved or changed.
+    const css = itemStyle(h, item, origin);
+    if (el._css !== css) { el._css = css; el.style.cssText = css; }
+    if (item.i) el.id = item.i; else el.removeAttribute('id');
+    // `El::description` and `El::described_by`'s words: what a reader says after the name.
+    if (item.d) el.setAttribute('aria-description', item.d); else el.removeAttribute('aria-description');
+    // Role-carrying containers, live text (`status`, `alert`, `log`), images and progressbars.
+    if (item.k === 'image') {
+        if (el.getAttribute('role') !== 'img') el.setAttribute('role', 'img');
+    } else if (tag !== 'button') {
+        const role = item.o ?? (item.k === 'progressbar' ? 'progressbar' : null);
+        if (role === null) {
+            if (el.getAttribute('role') !== null) el.removeAttribute('role');
+        } else if (el.getAttribute('role') !== role) {
+            el.setAttribute('role', role);
+        }
+    }
+    if (item.lv === undefined) {
+        if (el.getAttribute('aria-live') !== null) el.removeAttribute('aria-live');
+    } else if (el.getAttribute('aria-live') !== item.lv) {
+        el.setAttribute('aria-live', item.lv);
+    }
+    const rangeAttrs = [
+        ['aria-valuemin', item.rg ? String(item.rg[0]) : undefined],
+        ['aria-valuemax', item.rg ? String(item.rg[1]) : undefined],
+        ['aria-valuenow', item.rg ? String(item.rg[2]) : undefined],
+        ['aria-valuetext', item.vt],
+    ];
+    for (const [name, value] of rangeAttrs) {
+        if (value === undefined) {
+            if (el.getAttribute(name) !== null) el.removeAttribute(name);
+        } else if (el.getAttribute(name) !== value) {
+            el.setAttribute(name, value);
+        }
+    }
+    if (tag === 'button') {
+        if (item.x === true || item.x === false) el.setAttribute('aria-expanded', String(item.x));
+        else el.removeAttribute('aria-expanded');
+        // A control's role and states (a palette's option, a tab, a switch, a toggle button).
+        const states = [['role', item.o], ['aria-selected', item.se === undefined ? undefined : String(item.se)],
+            ['aria-checked', item.c], ['aria-pressed', item.pr],
+            ['aria-posinset', item.n ? String(item.n[0]) : undefined], ['aria-setsize', item.n ? String(item.n[1]) : undefined]];
+        for (const [name, value] of states) {
+            if (value === undefined) el.removeAttribute(name);
+            else if (el.getAttribute(name) !== value) el.setAttribute(name, value);
+        }
+    }
+    const combobox = item.k === 'button' && item.o === 'combobox';
+    if (item.k === 'group' || item.k === 'image' || item.k === 'progressbar' || combobox) {
+        if (item.t) {
+            if (el.getAttribute('aria-label') !== item.t) el.setAttribute('aria-label', item.t);
+        } else if (el.getAttribute('aria-label') !== null) {
+            el.removeAttribute('aria-label');
+        }
+    } else if (item.k === 'button') {
+        if (el.getAttribute('aria-label') !== null) el.removeAttribute('aria-label');
+    } else if (item.k === 'link') {
+        const href = safeHref(item.h);
+        if (href) {
+            el.href = href;
+            if (!h.page && webLink(href)) { el.target = '_blank'; el.rel = 'noopener noreferrer'; }
+            else { el.removeAttribute('target'); el.removeAttribute('rel'); }
+        } else {
+            el.removeAttribute('href');
+            el.removeAttribute('target');
+            el.removeAttribute('rel');
+        }
+    }
+    if (item.k === 'scroll_x') {
+        if (el.getAttribute('data-rune-scroll-x') === null) el.setAttribute('data-rune-scroll-x', '');
+        if (!el._scrollXBound) {
+            el._scrollXBound = true;
+            // The browser scrolls this container itself; Rune draws the content where the
+            // container says it is.
+            el.addEventListener('scroll', () => {
+                const path = el._path;
+                if (path && !h.disposed) h.send({ kind: 'scroll_x', path, x: readScrollX(el) });
+            }, { passive: true });
+        }
+        if (el._path !== item.p) { el._path = item.p; h.scrollEls.set(item.p, el); }
+    } else {
+        if (el.getAttribute('data-rune-scroll-x') !== null) el.removeAttribute('data-rune-scroll-x');
+        if (el._path && h.scrollEls.get(el._path) === el) { h.scrollEls.delete(el._path); el._path = undefined; }
+    }
+    syncScrollContent(el, item.k === 'group' ? item.sc : null);
+    const container = item.k === 'group' || item.k === 'scroll_x';
+    const noContent = container || item.k === 'image' || item.k === 'progressbar';
+    const content = combobox ? (item.v ?? '') : (item.t ?? '');
+    const sig = noContent ? '' : item.u?.length ? JSON.stringify(item.u) : content;
+    if (!noContent && el._sig !== sig) {
+        el._sig = sig;
+        if (item.u?.length) {
+            el.replaceChildren();
+            runs(h, el, item);
+        } else {
+            if (el.firstElementChild) el.replaceChildren();
+            el.textContent = content;
+        }
+    }
+    return container;
+}
+
+function syncA11yPatch(h, patch) {
+    if (patch.d) {
+        for (const key of patch.d) {
+            const el = h.a11yNodes.get(key);
+            if (!el) continue;
+            if (el._path && h.scrollEls.get(el._path) === el) h.scrollEls.delete(el._path);
+            el.remove();
+            h.a11yNodes.delete(key);
+        }
+    }
+    if (patch.u) {
+        for (const item of patch.u) {
+            const tag = itemTag(item);
+            const key = `${tag}:${item.p}`;
+            const el = ensureA11yNode(h, item, tag, key);
+            applyA11yItem(h, el, item, tag, [0, 0]);
+        }
+    }
+    if (patch.o) {
+        for (const [parentKey, childKeys] of Object.entries(patch.o)) {
+            const host = parentKey === '' ? h.a11y : h.a11yNodes.get(parentKey);
+            if (!host) continue;
+            const container = parentKey === '' ? h.a11y : contentParent(host);
+            let cursor = parentKey === '' ? firstItem(container) : container.firstElementChild;
+            for (const childKey of childKeys) {
+                const childEl = h.a11yNodes.get(childKey);
+                if (!childEl) continue;
+                if (cursor !== childEl) container.insertBefore(childEl, cursor);
+                else cursor = cursor.nextElementSibling;
+            }
+        }
+    }
+}
+
 export function syncA11y(h, json) {
     if (h.disposed) return;
-    const items = JSON.parse(json);
+    const payload = JSON.parse(json);
+    if (payload && !Array.isArray(payload) && payload.p === 1) {
+        syncA11yPatch(h, payload);
+        return;
+    }
+    const items = payload;
     const seen = new Set();
     const els = [];
     const cursors = new Map([[h.a11y, firstItem(h.a11y)]]);
     for (const item of items) {
-        const tag = item.k === 'group' ? item.g : item.k === 'heading' ? `h${item.l || 2}` : TAGS[item.k] ?? 'p';
+        const tag = itemTag(item);
         const key = `${tag}:${item.p}`;
         seen.add(key);
-        let el = h.a11yNodes.get(key);
-        if (!el) {
-            el = document.createElement(tag);
-            if (tag === 'button') {
-                el.type = 'button';
-                el.tabIndex = h.page ? 0 : -1;
-                el.addEventListener('click', ev => {
-                    ev.preventDefault();
-                    h.send({ kind: 'a11y_press', path: item.p });
-                });
-            }
-            if (item.k === 'image') el.setAttribute('role', 'img');
-            if (item.k === 'scroll_x') {
-                el.setAttribute('data-rune-scroll-x', '');
-                // The browser scrolls this container itself; Rune draws the content where the
-                // container says it is.
-                el.addEventListener('scroll', () => {
-                    const path = el._path;
-                    if (path && !h.disposed) h.send({ kind: 'scroll_x', path, x: readScrollX(el) });
-                }, { passive: true });
-            }
-            h.a11yNodes.set(key, el);
-        }
+        const el = ensureA11yNode(h, item, tag, key);
         const parent = item.a === undefined ? null : items[item.a];
-        const parentEl = item.a === undefined ? h.a11y : els[item.a];
-        // Writing `cssText` invalidates the node's style and its layout: only do it when the
-        // mirror's item actually moved or changed, so one animating element never rewrites a whole
-        // page's worth of nodes mid-scroll.
-        const css = itemStyle(h, item, parent ? parent.r : [0, 0]);
-        if (el._css !== css) { el._css = css; el.style.cssText = css; }
-        if (item.i) el.id = item.i; else el.removeAttribute('id');
-        // `El::description` and `El::described_by`'s words: what a reader says after the name.
-        if (item.d) el.setAttribute('aria-description', item.d); else el.removeAttribute('aria-description');
-        // Role-carrying containers, live text (`status`, `alert`, `log`) and progressbars.
-        if (item.k !== 'image' && tag !== 'button') {
-            const role = item.o ?? (item.k === 'progressbar' ? 'progressbar' : null);
-            if (role === null) {
-                if (el.getAttribute('role') !== null) el.removeAttribute('role');
-            } else if (el.getAttribute('role') !== role) {
-                el.setAttribute('role', role);
-            }
-        }
-        if (item.lv === undefined) {
-            if (el.getAttribute('aria-live') !== null) el.removeAttribute('aria-live');
-        } else if (el.getAttribute('aria-live') !== item.lv) {
-            el.setAttribute('aria-live', item.lv);
-        }
-        const rangeAttrs = [
-            ['aria-valuemin', item.rg ? String(item.rg[0]) : undefined],
-            ['aria-valuemax', item.rg ? String(item.rg[1]) : undefined],
-            ['aria-valuenow', item.rg ? String(item.rg[2]) : undefined],
-            ['aria-valuetext', item.vt],
-        ];
-        for (const [name, value] of rangeAttrs) {
-            if (value === undefined) {
-                if (el.getAttribute(name) !== null) el.removeAttribute(name);
-            } else if (el.getAttribute(name) !== value) {
-                el.setAttribute(name, value);
-            }
-        }
-        if (tag === 'button') {
-            if (item.x === true || item.x === false) el.setAttribute('aria-expanded', String(item.x));
-            else el.removeAttribute('aria-expanded');
-            // A control's role and states (a palette's option, a tab, a switch, a toggle button).
-            const states = [['role', item.o], ['aria-selected', item.se === undefined ? undefined : String(item.se)],
-                ['aria-checked', item.c], ['aria-pressed', item.pr],
-                ['aria-posinset', item.n ? String(item.n[0]) : undefined], ['aria-setsize', item.n ? String(item.n[1]) : undefined]];
-            for (const [name, value] of states) {
-                if (value === undefined) el.removeAttribute(name);
-                else if (el.getAttribute(name) !== value) el.setAttribute(name, value);
-            }
-        }
-        const combobox = item.k === 'button' && item.o === 'combobox';
-        if (item.k === 'group' || item.k === 'image' || item.k === 'progressbar' || combobox) {
-            if (item.t) {
-                if (el.getAttribute('aria-label') !== item.t) el.setAttribute('aria-label', item.t);
-            } else if (el.getAttribute('aria-label') !== null) {
-                el.removeAttribute('aria-label');
-            }
-        } else if (item.k === 'button') {
-            if (el.getAttribute('aria-label') !== null) el.removeAttribute('aria-label');
-        } else if (item.k === 'link') {
-            const href = safeHref(item.h);
-            if (href) {
-                el.href = href;
-                if (!h.page && webLink(href)) { el.target = '_blank'; el.rel = 'noopener noreferrer'; }
-                else { el.removeAttribute('target'); el.removeAttribute('rel'); }
-            } else {
-                el.removeAttribute('href');
-                el.removeAttribute('target');
-                el.removeAttribute('rel');
-            }
-        }
-        const container = item.k === 'group' || item.k === 'scroll_x';
-        const noContent = container || item.k === 'image' || item.k === 'progressbar';
-        if (item.k === 'scroll_x' && el._path !== item.p) { el._path = item.p; h.scrollEls.set(item.p, el); }
-        const content = combobox ? (item.v ?? '') : (item.t ?? '');
-        const sig = noContent ? '' : item.u?.length ? JSON.stringify(item.u) : content;
-        if (!noContent && el._sig !== sig) {
-            el._sig = sig;
-            if (item.u?.length) {
-                el.replaceChildren();
-                runs(h, el, item);
-            } else {
-                if (el.firstElementChild) el.replaceChildren();
-                el.textContent = content;
-            }
-        }
+        const parentHost = item.a === undefined ? h.a11y : els[item.a];
+        const parentEl = item.a === undefined ? h.a11y : contentParent(parentHost);
+        const container = applyA11yItem(h, el, item, tag, parent ? parent.r : [0, 0]);
         els.push(el);
-        if (container && !cursors.has(el)) cursors.set(el, el.firstElementChild);
+        if (container) {
+            const target = contentParent(el);
+            if (!cursors.has(target)) cursors.set(target, target.firstElementChild);
+        }
         const cursor = cursors.get(parentEl) ?? null;
         if (cursor !== el) parentEl.insertBefore(el, cursor);
         else cursors.set(parentEl, cursor.nextElementSibling);
@@ -1145,16 +1261,41 @@ export function announceA11y(h, text, assertive) {
     requestAnimationFrame(() => { if (!h.disposed) el.textContent = text; });
 }
 
-// Rune skipped rebuilding the mirror while it scrolls: it asks again once the scroll has rested.
-// The mirror's first build, in the page's idle time (its first frame's input goes first).
-export function scheduleA11yIdle(h) {
-    const due = () => { if (!h.disposed) h.send({ kind: 'a11y_due' }); };
-    if (globalThis.requestIdleCallback) requestIdleCallback(due, { timeout: 100 }); else setTimeout(due, 0);
+// Cancels any pending post-scroll settle timer or post-frame idle mirror flush.
+export function cancelA11y(h) {
+    if (h.a11yTimer) {
+        clearTimeout(h.a11yTimer);
+        h.a11yTimer = 0;
+    }
+    if (h.a11yIdle) {
+        if (h.a11yIdle.kind === 'idle' && globalThis.cancelIdleCallback) cancelIdleCallback(h.a11yIdle.id);
+        else clearTimeout(h.a11yIdle.id);
+        h.a11yIdle = null;
+    }
 }
 
-export function scheduleA11y(h) {
-    clearTimeout(h.a11yTimer);
-    h.a11yTimer = setTimeout(() => { h.a11yTimer = 0; if (!h.disposed) h.send({ kind: 'a11y_due' }); }, 160);
+// Schedules a post-frame idle mirror flush off `rAF` (`requestIdleCallback` with bounded timeout,
+// falling back to `setTimeout(..., 0)`).
+export function scheduleA11yIdle(h, attempt = 0, timeoutMs = 100) {
+    cancelA11y(h);
+    const due = () => {
+        h.a11yIdle = null;
+        if (!h.disposed) h.send({ kind: 'a11y_idle', attempt });
+    };
+    if (globalThis.requestIdleCallback) {
+        h.a11yIdle = { kind: 'idle', id: requestIdleCallback(due, { timeout: timeoutMs }) };
+    } else {
+        h.a11yIdle = { kind: 'timeout', id: setTimeout(due, 0) };
+    }
+}
+
+// Arms or resets the post-scroll settle timer so mirror updates wait until scrolling rests.
+export function scheduleA11y(h, attempt = 0, delayMs = 150) {
+    cancelA11y(h);
+    h.a11yTimer = setTimeout(() => {
+        h.a11yTimer = 0;
+        if (!h.disposed) h.send({ kind: 'a11y_settle', attempt });
+    }, delayMs);
 }
 
 // A page's height and whether a Rune control has the keyboard (scroll keys are the page's
@@ -1323,7 +1464,7 @@ export function destroy(h) {
     h.disposed = true;
     h.image = undefined;
     clearTimeout(h.staticTimer);
-    clearTimeout(h.a11yTimer);
+    cancelA11y(h);
     for (const remove of h.listeners) remove();
     h.password.value = ''; h.textarea.value = ''; h.value = ''; h.domValue = ''; h.crlfs = null; h.copyText = ''; h.selection = null;
     h.a11yNodes.clear();

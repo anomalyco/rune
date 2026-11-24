@@ -70,6 +70,9 @@ impl RuntimeCore {
         // The first frame's own reads, for the next launch's first view (`layout_seed`).
         if first { self.commit.layout_first = self.layout_seed(); }
         self.commit.commits += 1;
+        if first || self.commit.watch.cause != CommitWhy::VIRTUAL {
+            self.commit.non_virtual_commits += 1;
+        }
         self.stats.commits = self.commit.commits;
         // Concealing is a security boundary: old geometry must not disclose the revealed
         // line count through a height spring, displaced siblings, or a lingering scroll glide.

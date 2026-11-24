@@ -10,19 +10,33 @@ use serde_json::{Value, json};
 use super::*;
 use crate::a11y::roles;
 
+pub(crate) mod patch;
+pub(crate) mod schedule;
+
 #[derive(Default)]
 pub(crate) struct A11yMirror {
     commits: u64,
+    non_virtual_commits: u64,
     viewport: (u32, u32),
     zoom: u32,
     scroll_digest: u64,
     /// Whether motion ran at the last build, and when (clock seconds) it was.
     moving: bool,
     built_at: f64,
+    built: bool,
     json: String,
+    patch: patch::PatchState,
+    patch_json: String,
     /// The focus proxy last sent (`web_a11y_focus`), and the commit and focus it was read at.
     focus_at: (u64, String, Option<usize>),
     focus_json: String,
+}
+
+impl A11yMirror {
+    #[inline]
+    pub(crate) fn non_virtual_commits(&self) -> u64 {
+        self.non_virtual_commits
+    }
 }
 
 /// While motion runs (a sheet sliding in, a panel opening), how often the mirror follows what's
@@ -74,6 +88,8 @@ pub(crate) struct A11yItem {
     pub range: Option<[f64; 3]>,
     /// Human-readable value (`El::a11y_value` -> `aria-valuetext`).
     pub value_text: String,
+    /// App-mode scroll viewport offset `[tx, ty]` in CSS pixels (`translate3d(-tx, -ty, 0)`).
+    pub scroll: Option<[f32; 2]>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -107,49 +123,37 @@ impl A11yItem {
     fn new(kind: &'static str, path: &str, rect: [f32; 4]) -> Self {
         A11yItem { kind, path: path.to_owned(), rect, font_size: 0.0, level: None, expanded: None, text: String::new(),
             runs: Vec::new(), tag: None, role: None, parent: None, id: None, href: None, font: None, selectable: false, description: String::new(), value: String::new(), pressed: None, selected: None, checked: None, set: None,
-            live: None, range: None, value_text: String::new() }
+            live: None, range: None, value_text: String::new(), scroll: None }
     }
 
     fn to_json(&self) -> Value {
-        let mut obj = serde_json::Map::new();
-        obj.insert("k".into(), json!(self.kind));
-        obj.insert("p".into(), json!(self.path));
-        obj.insert("r".into(), json!(self.rect));
-        if self.font_size != 0.0 { obj.insert("s".into(), json!(self.font_size)); }
-        if let Some(l) = self.level { obj.insert("l".into(), json!(l)); }
-        if let Some(x) = self.expanded { obj.insert("x".into(), json!(x)); }
-        if !self.text.is_empty() { obj.insert("t".into(), json!(self.text)); }
-        if !self.description.is_empty() { obj.insert("d".into(), json!(self.description)); }
-        if !self.value.is_empty() { obj.insert("v".into(), json!(self.value)); }
-        if let Some(pr) = self.pressed { obj.insert("pr".into(), json!(pr)); }
-        if let Some(s) = self.selected { obj.insert("se".into(), json!(s)); }
-        if let Some(c) = self.checked { obj.insert("c".into(), json!(c)); }
-        if let Some((pos, size)) = self.set { obj.insert("n".into(), json!([pos, size])); }
-        if let Some(lv) = self.live { obj.insert("lv".into(), json!(lv)); }
-        if let Some([min, max, val]) = self.range { obj.insert("rg".into(), json!([min, max, val])); }
-        if !self.value_text.is_empty() { obj.insert("vt".into(), json!(self.value_text)); }
-        if let Some(g) = self.tag { obj.insert("g".into(), json!(g)); }
-        if let Some(o) = self.role { obj.insert("o".into(), json!(o)); }
-        if let Some(a) = self.parent { obj.insert("a".into(), json!(a)); }
-        if let Some(id) = &self.id { obj.insert("i".into(), json!(id)); }
-        if let Some(h) = &self.href { obj.insert("h".into(), json!(h)); }
-        if let Some(f) = &self.font {
-            obj.insert("f".into(), json!([f.family, f.weight, f.line_height, f.tracking, f.italic, f.align]));
-        }
-        if self.selectable { obj.insert("e".into(), json!(true)); }
-        if !self.runs.is_empty() {
-            let runs: Vec<Value> = self.runs.iter().map(|r| {
-                let mut ro = serde_json::Map::new();
-                ro.insert("t".into(), json!(r.text));
-                if let Some(h) = &r.href { ro.insert("h".into(), json!(h)); }
-                if let Some(p) = &r.path { ro.insert("p".into(), json!(p)); }
-                if let Some(i) = r.link { ro.insert("i".into(), json!(i)); }
-                if let Some(d) = &r.description { ro.insert("d".into(), json!(d)); }
-                Value::Object(ro)
-            }).collect();
-            obj.insert("u".into(), Value::Array(runs));
-        }
-        Value::Object(obj)
+        Value::Object(patch::item_json_fields(
+            self.kind,
+            &self.path,
+            self.rect,
+            self.font_size,
+            self.level,
+            self.expanded,
+            &self.text,
+            &self.runs,
+            self.tag,
+            self.role,
+            self.parent,
+            self.id.as_deref(),
+            self.href.as_deref(),
+            self.font.as_ref(),
+            self.selectable,
+            &self.description,
+            &self.value,
+            self.pressed,
+            self.selected,
+            self.checked,
+            self.set,
+            self.live,
+            self.range,
+            &self.value_text,
+            self.scroll,
+        ))
     }
 }
 
@@ -236,7 +240,7 @@ fn finite_range(n: &Node) -> Option<[f64; 3]> {
     (r.min.is_finite() && r.max.is_finite() && r.value.is_finite()).then_some([r.min, r.max, r.value])
 }
 
-fn round1(v: f32) -> f32 { (v * 10.0).round() / 10.0 }
+pub(crate) fn round1(v: f32) -> f32 { (v * 10.0).round() / 10.0 }
 
 pub(crate) fn clean_slice(spec: &crate::el::TextSpec, a: usize, b: usize) -> String {
     let a = a.min(spec.content.len());
@@ -317,7 +321,13 @@ impl RuntimeCore {
         // its offset changes nothing in the mirror, and hashing it would rewrite the whole page's
         // items on every frame of a horizontal flick.
         let mut entries: Vec<_> = self.scroll.scrolls.iter()
-            .map(|(id, s)| (id.0, s.offset.to_bits(), if self.host.page.is_some() { 0 } else { s.x.offset.to_bits() }))
+            .map(|(id, s)| (
+                id.0,
+                s.offset.to_bits(),
+                s.drawn.y().to_bits(),
+                if self.host.page.is_some() { 0 } else { s.x.offset.to_bits() },
+                if self.host.page.is_some() { 0 } else { s.drawn_x.to_bits() },
+            ))
             .collect();
         entries.sort_unstable_by_key(|e| e.0);
         entries.hash(&mut h);
@@ -415,10 +425,10 @@ impl RuntimeCore {
     /// the browser scrolls itself, scaled by UI zoom (`Cx::zoom`). Both are added and scaled in
     /// `f64` and rounded once, so a fractional device-pixel scroll offset can't round the same
     /// document position two ways between frames.
-    fn mirror_rect(&self, i: usize, dx: f64) -> [f32; 4] {
+    fn mirror_rect(&self, i: usize, shift: [f64; 2]) -> [f32; 4] {
         let b = self.drawn_box(i);
         let z = f64::from(self.zoom());
-        let (dx, dy) = (dx, f64::from(self.page_offset()));
+        let (dx, dy) = (shift[0], shift[1] + f64::from(self.page_offset()));
         let (left, right) = ((f64::from(b[0]) + dx) * z, (f64::from(b[2]) + dx) * z);
         let (top, bottom) = ((f64::from(b[1]) + dy) * z, (f64::from(b[3]) + dy) * z);
         [round1(left as f32), round1(top as f32), round1((right - left).max(0.0) as f32), round1((bottom - top).max(0.0) as f32)]
@@ -433,9 +443,9 @@ impl RuntimeCore {
         let selects = self.page_text_selects();
         // Open containers: (end of their node subtree, their item index).
         let mut open: Vec<(usize, usize)> = Vec::new();
-        // Open horizontal scrollers and how far the browser has scrolled each, so their content
-        // mirrors where it sits inside them rather than where the scroll puts it.
-        let mut scrollers: Vec<(usize, f64)> = Vec::new();
+        // Open scrollers and their drawn scroll shift [sx, sy] in view points: added back so
+        // content mirrors in scroll-content coordinates while the container carries the offset.
+        let mut scrollers: Vec<(usize, [f64; 2])> = Vec::new();
         // End of an emitted control whose subtree is walked for nested interactive descendants, so
         // its own non-interactive content isn't duplicated beside the control.
         let mut control_end: usize = 0;
@@ -468,19 +478,19 @@ impl RuntimeCore {
             // A page hands every horizontal viewport to the DOM: iOS scrolls it natively, at the
             // compositor's rate, with axis locking, momentum and text selection.
             if self.host.page.is_some() && n.scroll_axes == crate::el::ScrollAxes::X {
-                let rect = self.mirror_rect(i, 0.0);
+                let rect = self.mirror_rect(i, [0.0, 0.0]);
                 let shift = self.scroll.scrolls.get(&n.id).map_or(0.0, |st| st.x.shift());
                 let mut item = A11yItem::new("scroll_x", &n.path, rect);
                 item.tag = Some("div");
                 item.parent = parent;
                 out.push(item);
                 open.push((end, out.len() - 1));
-                scrollers.push((end, shift));
+                scrollers.push((end, [shift, 0.0]));
                 last_flow_parent = None;
                 i += 1;
                 continue;
             }
-            let shift: f64 = scrollers.iter().map(|&(_, offset)| offset).sum();
+            let shift = scrollers.iter().fold([0.0f64; 2], |acc, &(_, off)| [acc[0] + off[0], acc[1] + off[1]]);
             let rect = self.mirror_rect(i, shift);
             let push = |out: &mut Vec<A11yItem>, mut item: A11yItem| {
                 item.parent = parent;
@@ -501,14 +511,25 @@ impl RuntimeCore {
                 .then(|| roles::container_tag(n.role))
                 .flatten()
                 .or((labelled_group || live_group).then_some("div"));
-            if !in_control && let Some(tag) = container_tag {
+            let app_scroll = self.host.page.is_none() && n.scroll.is_some();
+            if !in_control && (container_tag.is_some() || app_scroll) {
                 let mut item = A11yItem::new("group", &n.path, rect);
-                item.tag = Some(tag);
+                item.tag = Some(container_tag.unwrap_or("div"));
                 item.role = roles::container_aria(n.role).or(labelled_group.then_some("group"));
                 item.live = live;
                 item.id = anchor_id(n.key.as_deref());
                 item.text = self.mirror_name(i).unwrap_or_default();
                 item.description = self.mirror_description(i);
+                if app_scroll {
+                    let [sx, sy] = self.scroll.scrolls.get(&n.id).map_or([0.0, 0.0], |st| {
+                        self.content_to_window(i, [st.drawn_x, st.drawn.y()])
+                    });
+                    item.scroll = Some([
+                        patch::clean_zero(round1((f64::from(sx) * f64::from(zoom)) as f32)),
+                        patch::clean_zero(round1((f64::from(sy) * f64::from(zoom)) as f32)),
+                    ]);
+                    scrollers.push((end, [f64::from(sx), f64::from(sy)]));
+                }
                 push(&mut out, item);
                 open.push((end, out.len() - 1));
                 last_flow_parent = None;
@@ -727,17 +748,57 @@ impl RuntimeCore {
             .collect()
     }
 
-    /// Returns updated JSON only when layout commits, viewport, zoom or scroll positions changed.
-    /// Whether only scrolling moved the mirror since it was last built: nothing committed and the
-    /// zoom is the same.
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    pub(crate) fn web_a11y_scrolled_only(&self, mirror: &A11yMirror) -> bool {
-        mirror.commits == self.commit.commits && mirror.zoom == self.zoom().to_bits()
-            && !mirror.json.is_empty() && mirror.scroll_digest != self.scroll_digest()
+    #[inline]
+    fn mirror_viewport(&self) -> (u32, u32) {
+        (self.viewport.0.to_bits(), if self.host.page.is_some() { 0 } else { self.viewport.1.to_bits() })
     }
 
+    /// Cheap O(1) stamp check: true when the mirror has not been built yet or commits, viewport,
+    /// zoom, scroll offsets, or motion moved since the last build.
+    pub(crate) fn web_a11y_needs_sync(&self, mirror: &A11yMirror) -> bool {
+        if !mirror.built { return true; }
+        let vp = self.mirror_viewport();
+        let zoom = self.zoom().to_bits();
+        let sd = self.scroll_digest();
+        let moving = self.animating;
+        let follow = moving != mirror.moving || (moving && self.clock - mirror.built_at >= MOVING_EVERY);
+        mirror.commits != self.commit.commits || mirror.viewport != vp || mirror.zoom != zoom || mirror.scroll_digest != sd || follow
+    }
+
+    /// Whether only scrolling or a `CommitWhy::VIRTUAL` window shift dirtied the mirror since it
+    /// was last built (no non-virtual commit, no viewport/zoom change).
+    pub(crate) fn web_a11y_virtual_only_scroll(&self, mirror: &A11yMirror) -> bool {
+        mirror.built
+            && mirror.non_virtual_commits == self.commit.non_virtual_commits
+            && mirror.viewport == self.mirror_viewport()
+            && mirror.zoom == self.zoom().to_bits()
+            && (mirror.scroll_digest != self.scroll_digest() || mirror.commits != self.commit.commits)
+    }
+
+    /// Builds and diffs the mirror against what was previously sent, returning a compact
+    /// incremental patch JSON (`{ "p": 1, "d"?, "u"?, "o"? }`) or `None` when nothing changed.
+    pub(crate) fn web_a11y_patch<'a>(&self, mirror: &'a mut A11yMirror) -> Option<&'a str> {
+        if !self.web_a11y_needs_sync(mirror) {
+            return None;
+        }
+        mirror.moving = self.animating;
+        mirror.built_at = self.clock;
+        mirror.commits = self.commit.commits;
+        mirror.non_virtual_commits = self.commit.non_virtual_commits;
+        mirror.viewport = self.mirror_viewport();
+        mirror.zoom = self.zoom().to_bits();
+        mirror.scroll_digest = self.scroll_digest();
+        mirror.built = true;
+        let items = self.web_a11y_items();
+        let patch = mirror.patch.diff(&items)?;
+        mirror.patch_json = serde_json::to_string(&patch).unwrap_or_else(|_| r#"{"p":1}"#.into());
+        Some(&mirror.patch_json)
+    }
+
+    /// Returns updated full-snapshot JSON only when layout commits, viewport, zoom or scroll
+    /// positions changed.
     pub(crate) fn web_a11y<'a>(&self, mirror: &'a mut A11yMirror) -> Option<&'a str> {
-        let vp = (self.viewport.0.to_bits(), if self.host.page.is_some() { 0 } else { self.viewport.1.to_bits() });
+        let vp = self.mirror_viewport();
         let zoom = self.zoom().to_bits();
         let sd = self.scroll_digest();
         // Motion moves drawn boxes without a commit: follow it while it runs, and once more where it stops.
@@ -749,9 +810,11 @@ impl RuntimeCore {
         mirror.moving = moving;
         mirror.built_at = self.clock;
         mirror.commits = self.commit.commits;
+        mirror.non_virtual_commits = self.commit.non_virtual_commits;
         mirror.viewport = vp;
         mirror.zoom = zoom;
         mirror.scroll_digest = sd;
+        mirror.built = true;
         let values: Vec<Value> = self.web_a11y_items().iter().map(A11yItem::to_json).collect();
         let next = serde_json::to_string(&values).unwrap_or_else(|_| "[]".into());
         if mirror.json == next {

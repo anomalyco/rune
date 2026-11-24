@@ -28,9 +28,11 @@ extern "C" {
     #[wasm_bindgen(js_name = focusA11y)]
     fn focus_a11y(handle: &JsValue, json: &str);
     #[wasm_bindgen(js_name = scheduleA11y)]
-    fn schedule_a11y(handle: &JsValue);
+    fn schedule_a11y(handle: &JsValue, attempt: u32, delay_ms: u32);
     #[wasm_bindgen(js_name = scheduleA11yIdle)]
-    fn schedule_a11y_idle(handle: &JsValue);
+    fn schedule_a11y_idle(handle: &JsValue, attempt: u32, timeout_ms: u32);
+    #[wasm_bindgen(js_name = cancelA11y)]
+    fn cancel_a11y(handle: &JsValue);
     #[wasm_bindgen(js_name = syncSecondary)]
     fn sync_secondary(handle: &JsValue, claim: &str);
     #[wasm_bindgen(js_name = syncWheel)]
@@ -76,12 +78,11 @@ pub(super) struct Bridge {
     scroll_x: Vec<(String, f32, bool)>,
     /// The IME area the page's text field was last put at.
     caret: Option<[f32; 4]>,
-    /// When the mirror was last rebuilt, for the scroll throttle (`sync_input`).
-    a11y_at: Option<crate::time::Instant>,
     /// `Tx::announce`'s calls the page's live regions have said.
     announced: u32,
-    /// The mirror's first build (`sync_input`): not yet asked for, waiting for idle time, built.
-    a11y_first: First,
+    /// Explicit state machine scheduling deferred/off-rAF mirror flushes.
+    a11y_seq: crate::machine::Seq,
+    a11y_schedule: crate::runtime::web_a11y::schedule::ScheduleState,
     /// The slot families the mirror's text was last set in.
     families: (String, String),
 }
@@ -112,7 +113,7 @@ impl Bridge {
         let handle = mount(canvas, callback.as_ref().unchecked_ref(), embedded, fit_height, document);
         Self { handle, _callback: callback, dispose_viewport, mods: ModifiersState::empty(), is_mac: is_mac(), control_click: false,
             mirror: Default::default(), a11y: Default::default(),
-            copy_cache: String::new(), fit_height, document, page: None, scroll_x: Vec::new(), caret: None, a11y_at: None, announced: 0, a11y_first: First::Unasked, families: Default::default() }
+            copy_cache: String::new(), fit_height, document, page: None, scroll_x: Vec::new(), caret: None, announced: 0, a11y_seq: Default::default(), a11y_schedule: Default::default(), families: Default::default() }
     }
 
     /// The first frame is on screen: a page swaps its static export for the live mirror.
@@ -157,26 +158,19 @@ impl Running {
             self.input.families = (sans.to_owned(), mono.to_owned());
             sync_families(&self.input.handle, sans, mono);
         }
-        // While the app scrolls, the mirror follows at most every 150 ms (and once when it stops),
-        // not every frame: rebuilding and restyling every item each frame was most of a scroll
-        // frame's JavaScript. A page's mirror is in document coordinates and doesn't move.
-        let now = crate::time::Instant::now();
-        // An app's first mirror is every item a new element the browser lays out (13 ms of layout
-        // on OpenCode's Home): it waits for the page's idle time, so a click or key that came
-        // with the first frame is handled first. A page's mirror is its document, so it doesn't.
-        if !self.input.document && self.input.a11y_first != First::Built {
-            if self.input.a11y_first == First::Unasked {
-                self.input.a11y_first = First::Waiting;
-                schedule_a11y_idle(&self.input.handle);
-            }
-        } else if !self.input.document && rt.web_a11y_scrolled_only(&self.input.a11y)
-            && self.input.a11y_at.is_some_and(|at| now.duration_since(at).as_secs_f64() < 0.15)
-        {
-            schedule_a11y(&self.input.handle);
-        } else if let Some(json) = rt.web_a11y(&mut self.input.a11y) {
-            sync_a11y(&self.input.handle, json);
-            self.input.a11y_at = Some(now);
-        }
+        // Defer mirror builds while scrolling and flush off rAF in app mode; document mode keeps
+        // synchronous first-frame and commit updates with incremental patches.
+        let dirty = rt.web_a11y_needs_sync(&self.input.a11y);
+        let scrolling = rt.scrolling() || rt.web_a11y_virtual_only_scroll(&self.input.a11y);
+        let non_virtual_commit = rt.commit.non_virtual_commits != self.input.a11y.non_virtual_commits();
+        self.run_a11y_schedule(crate::runtime::web_a11y::schedule::ScheduleEvent::Frame {
+            now: crate::time::Instant::now(),
+            document: self.input.document,
+            dirty,
+            scrolling,
+            non_virtual_commit,
+        });
+        let rt = self.app.rt();
         // An app's focus, for a reader: the browser's focus stays on the canvas or its text field.
         if !self.input.document && let Some(focus) = rt.web_a11y_focus(&mut self.input.a11y) {
             focus_a11y(&self.input.handle, focus);
@@ -211,6 +205,28 @@ impl Running {
             self.input.scroll_x = next;
         }
         if focus { activate(&self.input.handle); }
+    }
+
+    fn run_a11y_schedule(&mut self, event: crate::runtime::web_a11y::schedule::ScheduleEvent) {
+        use crate::runtime::web_a11y::schedule::{ScheduleEffect, step};
+        for effect in step(&mut self.input.a11y_seq, &mut self.input.a11y_schedule, event) {
+            match effect {
+                ScheduleEffect::FlushNow => {
+                    if let Some(json) = self.app.rt().web_a11y_patch(&mut self.input.a11y) {
+                        sync_a11y(&self.input.handle, json);
+                    }
+                }
+                ScheduleEffect::ScheduleSettle { attempt, delay } => {
+                    schedule_a11y(&self.input.handle, attempt.0, delay.as_millis().min(u32::MAX as u128) as u32);
+                }
+                ScheduleEffect::ScheduleIdle { attempt, timeout } => {
+                    schedule_a11y_idle(&self.input.handle, attempt.0, timeout.as_millis().min(u32::MAX as u128) as u32);
+                }
+                ScheduleEffect::CancelTimers => {
+                    cancel_a11y(&self.input.handle);
+                }
+            }
+        }
     }
 
     /// The page's field takes the focused field's context from the model now (web_edit_context);
@@ -255,8 +271,36 @@ impl Running {
             self.sync_input(false);
             return true;
         }
+        match event["kind"].as_str() {
+            Some("a11y_settle") => {
+                let attempt = crate::machine::Attempt(event["attempt"].as_u64().unwrap_or(0) as u32);
+                let scrolling = self.app.rt().scrolling();
+                self.run_a11y_schedule(crate::runtime::web_a11y::schedule::ScheduleEvent::SettleDue {
+                    attempt,
+                    now: crate::time::Instant::now(),
+                    scrolling,
+                });
+                return false;
+            }
+            Some("a11y_idle") => {
+                let attempt = crate::machine::Attempt(event["attempt"].as_u64().unwrap_or(0) as u32);
+                let scrolling = self.app.rt().scrolling();
+                self.run_a11y_schedule(crate::runtime::web_a11y::schedule::ScheduleEvent::IdleDue {
+                    attempt,
+                    now: crate::time::Instant::now(),
+                    scrolling,
+                });
+                return false;
+            }
+            Some("a11y_flush") => {
+                self.run_a11y_schedule(crate::runtime::web_a11y::schedule::ScheduleEvent::ConsumerDemand);
+                return false;
+            }
+            _ => {}
+        }
         self.full_redraw = true;
         let mut activate = false;
+        let mut flush_a11y = false;
         // What a person typed or pressed through the page's own elements is input too, for
         // `rune::last_input` (an app holds background work while someone types).
         if matches!(event["kind"].as_str(), Some("edit" | "preedit" | "selection" | "key" | "paste" | "a11y_press" | "a11y_link")) {
@@ -374,20 +418,13 @@ impl Running {
                 }
             }
             Some("key") => activate = self.app.web_key(event),
-            Some("a11y_press" | "a11y_link") => { let _ = self.app.rt_mut().web_a11y_action(event); }
+            Some("a11y_press" | "a11y_link") => { let _ = self.app.rt_mut().web_a11y_action(event); flush_a11y = true; }
             // The page's menu (`showMenu`) was picked from or dismissed.
             Some("menu") => {
                 if self.app.resolve_popup(event["id"].as_str()).is_err() { self.app.resolve_popup(None).ok(); }
             }
             // The browser's menu takes this right-click (bridge.js): its release opens none of Rune's.
             Some("secondary_browser") => { self.app.rt_mut().secondary_abandon(); return false; }
-            // The scroll throttle's last word: the mirror where the scroll stopped.
-            Some("a11y_due") => {
-                self.input.a11y_first = First::Built;
-                self.input.a11y_at = None;
-                self.sync_input(false);
-                return false;
-            }
             // The page scrolled: draw the band in view, and hover what is now under the pointer.
             // The redraw that follows the event draws it; nothing commits.
             Some("scroll") => {
@@ -458,6 +495,9 @@ impl Running {
         self.apply_frame_requests(window);
         self.clipboard.flush_core(self.app.rt_mut());
         self.sync_input(activate);
+        if flush_a11y {
+            self.run_a11y_schedule(crate::runtime::web_a11y::schedule::ScheduleEvent::ConsumerDemand);
+        }
         true
     }
 
@@ -597,6 +637,3 @@ impl Running {
         true
     }
 }
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum First { Unasked, Waiting, Built }
