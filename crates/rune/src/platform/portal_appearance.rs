@@ -3,7 +3,9 @@
 //! `reduced-motion`, plus `org.gnome.desktop.interface` `enable-animations` for portals such as
 //! `xdg-desktop-portal-gtk` and older GNOME that expose animations there). winit reports no theme
 //! on Wayland unless the app set one, so hosts ask here before falling back to dark. One worker
-//! thread reads the settings once and follows `SettingChanged`, falling back once on that worker
+//! thread, started when the event loop is made (`begin`), so that a portal that is up has
+//! answered before the first window asks, reads the settings once and follows `SettingChanged`,
+//! falling back once on that worker
 //! to `kdeglobals` or GSettings when the portal answers neither motion key; any change asks every
 //! window to redraw, which rereads the cached atomics without touching disk or D-Bus on the UI
 //! thread.
@@ -110,7 +112,7 @@ fn record_fallback_reduced_motion(slot: &AtomicU8, reduced: bool) -> bool {
 #[cfg(all(target_os = "linux", feature = "dbus"))]
 mod dbus {
     use futures_lite::StreamExt;
-    use std::{sync::{Arc, Mutex, OnceLock, Weak, atomic::{AtomicU8, Ordering}, mpsc}, time::Duration};
+    use std::{sync::{Arc, Mutex, OnceLock, Weak, atomic::{AtomicU8, Ordering}, mpsc}, time::{Duration, Instant}};
     use winit::window::Window;
     use zbus::{Connection, Proxy, zvariant::{OwnedValue, Value}};
 
@@ -126,8 +128,9 @@ mod dbus {
     const REDUCED_MOTION_KEY: &str = "reduced-motion";
     const GNOME_INTERFACE_NAMESPACE: &str = "org.gnome.desktop.interface";
     const ENABLE_ANIMATIONS_KEY: &str = "enable-animations";
-    /// How long the first window waits for the portal's first answer, as sctk-adwaita does for its
-    /// frame; a slower answer redraws the windows when it arrives.
+    /// How long the portal has for its first answer, from when the worker starts, before the
+    /// first window stops waiting for it (as sctk-adwaita waits for its frame's); a slower answer
+    /// redraws the windows when it arrives.
     const FIRST_ANSWER: Duration = Duration::from_millis(100);
     /// Connecting, D-Bus activation of the portal and the first read.
     const RPC_TIMEOUT: Duration = Duration::from_secs(10);
@@ -135,19 +138,38 @@ mod dbus {
     static SCHEME: AtomicU8 = AtomicU8::new(UNKNOWN);
     static MOTION: AtomicU8 = AtomicU8::new(0);
     static WATCH: OnceLock<()> = OnceLock::new();
+    /// The worker's first answer on its way, and when the worker started: the first ask takes
+    /// it and waits for what is left of `FIRST_ANSWER`; an ask meanwhile waits behind it.
+    static FIRST: Mutex<Option<(mpsc::Receiver<()>, Instant)>> = Mutex::new(None);
+
+    /// Starts the worker, if it isn't started, without waiting for it. An event loop calls this
+    /// before it is built: the worker's connection, its reads and its fallback (which loads
+    /// GSettings) then run beside the app's setup, not in the first window's creation.
+    pub(crate) fn begin() {
+        WATCH.get_or_init(start);
+    }
+
+    /// The first ask: waits for the worker's first answer, until `FIRST_ANSWER` after it started.
+    fn first_answer() {
+        WATCH.get_or_init(start);
+        let mut first = FIRST.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((answer, started)) = first.take() {
+            answer.recv_timeout(FIRST_ANSWER.saturating_sub(started.elapsed())).ok();
+        }
+    }
     static WINDOWS: Mutex<Vec<Weak<Window>>> = Mutex::new(Vec::new());
 
     /// Some(true) when the desktop prefers dark, Some(false) light (including portal `0` "no
     /// preference", which GNOME's Default style reports), or None when no portal has answered.
     pub(crate) fn dark() -> Option<bool> {
-        WATCH.get_or_init(start);
+        first_answer();
         stored_dark(SCHEME.load(Ordering::Relaxed))
     }
 
     /// Whether the desktop asks for reduced motion, cached from the Settings portal (or a
     /// one-shot off-UI-thread fallback when the portal answers neither motion key).
     pub(crate) fn reduced_motion() -> bool {
-        WATCH.get_or_init(start);
+        first_answer();
         resolved_reduced_motion(MOTION.load(Ordering::Relaxed))
     }
 
@@ -208,7 +230,7 @@ mod dbus {
         let worker = std::thread::Builder::new().name("rune-appearance-portal".into()).spawn(move || {
             async_io::block_on(watch(ready));
         });
-        if worker.is_ok() { first.recv_timeout(FIRST_ANSWER).ok(); }
+        if worker.is_ok() { *FIRST.lock().unwrap_or_else(|e| e.into_inner()) = Some((first, Instant::now())); }
     }
 
     async fn read_setting(portal: &Proxy<'_>, namespace: &str, key: &str) -> Result<OwnedValue, bool> {
@@ -268,7 +290,7 @@ mod dbus {
 }
 
 #[cfg(all(target_os = "linux", feature = "dbus"))]
-pub(crate) use dbus::{dark, follow, reduced_motion};
+pub(crate) use dbus::{begin, dark, follow, reduced_motion};
 
 #[cfg(test)]
 #[path = "portal_appearance_tests.rs"]

@@ -106,6 +106,10 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
         builder.with_default_menu(false);
         crate::native_menu::bar_waits();
     }
+    // The desktop's light or dark preference, asked for on its own thread from here: the first
+    // window waits for the answer, and by then has it (`portal_appearance::begin`).
+    #[cfg(all(target_os = "linux", feature = "dbus"))]
+    crate::platform::portal_appearance::begin();
     let event_loop = builder.build().inspect_err(|_| crate::render::discard_prewarm()).map_err(event_loop_error)?;
     #[cfg(target_os = "macos")]
     if !beside.session() {
