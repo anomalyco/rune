@@ -846,3 +846,123 @@ fn a_drag_past_slop_suppresses_on_press_while_clicks_and_plain_buttons_still_pre
     rt.frame(0.0);
     assert_eq!(rt.state.plain_presses, 1, "a plain on_press button still fires after moving inside it");
 }
+
+#[test]
+fn tx_cancel_pointer_from_on_drag_ends_capture_without_reentrancy_and_ignores_later_moves() {
+    #[derive(Default)]
+    struct S {
+        phases: Vec<(Phase, bool)>,
+        hovers: Vec<bool>,
+        in_handler: bool,
+        reentered: bool,
+        cancel_on_move: bool,
+    }
+    fn view(_: &S, _: &mut Cx<S>) -> El {
+        col().w_full().h_full().child(
+            el().key("tile").size(100.0, 60.0)
+                .on_hover_change(|s: &mut S, inside, _| s.hovers.push(inside))
+                .on_drag(|s: &mut S, d: &mut Drag, tx| {
+                    if s.in_handler { s.reentered = true; }
+                    s.in_handler = true;
+                    s.phases.push((d.phase, d.cancelled()));
+                    if s.cancel_on_move && d.phase == Phase::Move && d.dx >= 10.0 {
+                        s.cancel_on_move = false;
+                        tx.cancel_pointer();
+                    }
+                    s.in_handler = false;
+                }),
+        )
+    }
+    let mut rt = Runtime::new(S { cancel_on_move: true, ..S::default() }, view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let (x, y) = rt.find("tile").unwrap();
+
+    rt.pointer_move(x, y);
+    rt.pointer_down(x, y);
+    rt.pointer_move(x + 12.0, y);
+    // A second move already queued in the same frame must not fire after cancel_pointer.
+    rt.pointer_move(x + 24.0, y);
+    rt.frame(0.0);
+
+    assert!(!rt.state.reentered, "cancel_pointer must run after the calling handler returns");
+    assert!(!rt.pressing(), "capture cleared after tx.cancel_pointer");
+    assert_eq!(rt.pointer(), None, "hover cleared as pointer_leave");
+    assert!(!rt.has_pending_input(), "cancelled Up and hover leave already drained in this frame");
+    assert_eq!(rt.state.phases, [(Phase::Down, false), (Phase::Move, false), (Phase::Up, true)]);
+    assert_eq!(rt.state.hovers, [true, false]);
+
+    // Compositor leave and pointer returning with no button held must not fire on_drag.
+    rt.pointer_leave();
+    rt.pointer_move(x + 40.0, y + 20.0);
+    rt.pointer_up(x + 40.0, y + 20.0);
+    rt.frame(0.0);
+    assert!(!rt.pressing());
+    assert_eq!(rt.state.phases, [(Phase::Down, false), (Phase::Move, false), (Phase::Up, true)]);
+}
+
+#[test]
+fn tx_cancel_pointer_from_update_and_poll_and_runtime_cancel_pointer() {
+    #[derive(Default)]
+    struct S {
+        phases: Vec<(Phase, bool)>,
+        presses: u32,
+        cancel_in_poll: bool,
+    }
+    fn view(_: &S, _: &mut Cx<S>) -> El {
+        col().w_full().h_full()
+            .child(el().key("tile").size(100.0, 60.0)
+                .on_drag(|s: &mut S, d: &mut Drag, _| s.phases.push((d.phase, d.cancelled()))))
+            .child(el().key("btn").size(100.0, 40.0)
+                .on_press(|s: &mut S| s.presses += 1))
+    }
+    let mut rt = Runtime::new(S::default(), view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.poll = Some(|s, _, tx| {
+        if std::mem::take(&mut s.cancel_in_poll) {
+            tx.cancel_pointer();
+        }
+        false
+    });
+    rt.frame(0.0);
+
+    // 1. Calling tx.cancel_pointer when idle schedules no work.
+    assert!(!rt.update_if(|_, tx| { tx.cancel_pointer(); false }));
+    assert!(!rt.has_pending_input());
+
+    // 2. Calling tx.cancel_pointer from update_if while dragging ends capture and marks stale.
+    let (x, y) = rt.find("tile").unwrap();
+    rt.pointer_move(x, y);
+    rt.pointer_down(x, y);
+    rt.pointer_move(x + 12.0, y);
+    rt.frame(0.0);
+    assert!(rt.pressing());
+    assert!(rt.update_if(|_, tx| { tx.cancel_pointer(); false }));
+    assert!(!rt.pressing());
+    assert_eq!(rt.pointer(), None);
+    rt.pointer_move(x + 40.0, y);
+    rt.frame(0.0);
+    assert_eq!(rt.state.phases, [(Phase::Down, false), (Phase::Move, false), (Phase::Up, true)]);
+
+    // 3. Calling tx.cancel_pointer from poll ends an active drag in that same frame.
+    rt.state.phases.clear();
+    rt.pointer_move(x, y);
+    rt.pointer_down(x, y);
+    rt.frame(0.0);
+    assert!(rt.pressing());
+    rt.state.cancel_in_poll = true;
+    rt.pointer_move(x + 20.0, y);
+    rt.frame(0.016);
+    assert!(!rt.pressing());
+    assert_eq!(rt.state.phases, [(Phase::Down, false), (Phase::Up, true)]);
+
+    // 4. Direct Runtime::cancel_pointer cancels a plain press so releasing does not click.
+    let (bx, by) = rt.find("btn").unwrap();
+    rt.pointer_move(bx, by);
+    rt.pointer_down(bx, by);
+    assert!(rt.pressing());
+    rt.cancel_pointer();
+    assert!(!rt.pressing());
+    assert_eq!(rt.pointer(), None);
+    rt.pointer_up(bx, by);
+    rt.frame(0.0);
+    assert_eq!(rt.state.presses, 0);
+}

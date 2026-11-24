@@ -28,4 +28,38 @@ impl Tx {
     /// Whether the drag handler is hearing the repeat it asked for with
     /// [`Tx::drag_repeat_after`]; false for the hand's moves and outside drag handlers.
     pub fn drag_repeat(&self) -> bool { self.drag_repeat }
+
+    /// Cancel any active pointer capture, drag or hover once this handler finishes, delivering a
+    /// cancelled [`Phase::Up`](crate::Phase::Up) ([`Drag::cancelled`](crate::Drag::cancelled))
+    /// without re-entering the calling handler and clearing press, secondary, tint, autoscroll
+    /// and hover state, as [`Runtime::cancel_pointer`](crate::Runtime::cancel_pointer) does.
+    ///
+    /// Call this when an app hands the pointer over to a system drag or external grab from an
+    /// `on_drag` or other handler so Rune does not stay pressing after the compositor takes the
+    /// pointer. Does nothing when no pointer capture or hover is active.
+    ///
+    /// ```
+    /// # use rune::{Cx, Drag, El, Env, Phase, Runtime, col, el};
+    /// # #[derive(Default)] struct S { phases: Vec<(Phase, bool)> }
+    /// # fn view(_: &S, _: &mut Cx<S>) -> El {
+    /// col().size(200.0, 100.0).child(
+    ///     el().key("tile").size(100.0, 60.0).on_drag(|s: &mut S, d: &mut Drag, tx| {
+    ///         s.phases.push((d.phase, d.cancelled()));
+    ///         if d.phase == Phase::Move && d.dx >= 10.0 {
+    ///             tx.cancel_pointer();
+    ///         }
+    ///     }),
+    /// )
+    /// # }
+    /// # let mut rt = Runtime::new(S::default(), view, (200.0, 100.0), Env::new(true, 1.0));
+    /// # rt.frame(0.0);
+    /// # let (x, y) = rt.find("tile").unwrap();
+    /// # rt.pointer_move(x, y);
+    /// # rt.pointer_down(x, y);
+    /// # rt.pointer_move(x + 12.0, y);
+    /// # rt.frame(0.0);
+    /// # assert!(!rt.pressing());
+    /// # assert_eq!(rt.state.phases, [(Phase::Down, false), (Phase::Move, false), (Phase::Up, true)]);
+    /// ```
+    pub fn cancel_pointer(&mut self) { self.cancel_pointer = true; }
 }

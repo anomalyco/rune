@@ -564,3 +564,106 @@ fn focused_input_on_key_intercepts_paste_and_edit_chords_before_editor() {
     }
     assert_eq!(rt.state.app_keys, app_before, "editor-handled chords must not reach app.on_key");
 }
+
+#[test]
+fn runtime_key_with_delivers_physical_key_base_and_matches_keybind() {
+    #[derive(Default)]
+    struct Seen {
+        keys: Vec<(Key, Option<PhysicalKeyCode>, Option<char>, bool, bool)>,
+    }
+    fn view(_: &Seen, _: &mut Cx<Seen>) -> El { col().size(300.0, 200.0) }
+    let mut rt = Runtime::new(Seen::default(), view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.on_key = Some(|s, ev, tx| {
+        let matched = crate::Keybind::new("j").matches_tx(ev, tx);
+        s.keys.push((ev.key.clone(), tx.physical_key(), tx.key_base(), tx.key_repeat(), matched));
+        true
+    });
+    rt.frame(0.0);
+
+    // Non-ASCII layout ("о" on the J key) with explicit base character.
+    rt.key_with(
+        KeyEvent { key: Key::Text("о".into()), mods: Mods::default() },
+        PhysicalKeyCode::KeyJ,
+        Some('j'),
+    );
+    // Same press without a base character still matches via physical_key fallback.
+    rt.key_with(
+        KeyEvent { key: Key::Text("о".into()), mods: Mods::default() },
+        PhysicalKeyCode::KeyJ,
+        None,
+    );
+    // Plain Runtime::key stays unchanged: neither physical_key nor key_base is set.
+    rt.key(KeyEvent { key: Key::Text("о".into()), mods: Mods::default() });
+    rt.frame(0.0);
+
+    assert_eq!(rt.state.keys, [
+        (Key::Text("о".into()), Some(PhysicalKeyCode::KeyJ), Some('j'), false, true),
+        (Key::Text("о".into()), Some(PhysicalKeyCode::KeyJ), None, false, true),
+        (Key::Text("о".into()), None, None, false, false),
+    ]);
+}
+
+#[test]
+fn runtime_physical_key_input_delivers_repeats_releases_and_physical_handlers() {
+    #[derive(Default)]
+    struct Seen {
+        consume: bool,
+        physical: Vec<PhysicalInput>,
+        downs: Vec<(Key, Option<PhysicalKeyCode>, Option<char>, bool)>,
+        ups: Vec<(Key, Option<PhysicalKeyCode>, Option<char>)>,
+    }
+    fn view(_: &Seen, _: &mut Cx<Seen>) -> El {
+        col().size(300.0, 200.0)
+            .on_key_up(|s: &mut Seen, ev, tx| {
+                s.ups.push((ev.key.clone(), tx.physical_key(), tx.key_base()));
+                true
+            })
+            .child(el().key("cap").size(100.0, 40.0).focusable(true)
+                .on_physical_input(|s: &mut Seen, ev, _| {
+                    s.physical.push(*ev);
+                    s.consume
+                }))
+    }
+    let mut rt = Runtime::new(Seen::default(), view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.on_key = Some(|s, ev, tx| {
+        s.downs.push((ev.key.clone(), tx.physical_key(), tx.key_base(), tx.key_repeat()));
+        true
+    });
+    rt.frame(0.0);
+
+    let mods = Mods { alt: true, ..Mods::default() };
+    rt.physical_key_input(
+        PhysicalInput::Key { key: PhysicalKeyCode::KeyA, mods, pressed: true, repeat: false },
+        KeyEvent { key: Key::Text("å".into()), mods },
+        Some('a'),
+    );
+    rt.physical_key_input(
+        PhysicalInput::Key { key: PhysicalKeyCode::KeyA, mods, pressed: true, repeat: true },
+        KeyEvent { key: Key::Text("å".into()), mods },
+        Some('a'),
+    );
+    rt.physical_key_input(
+        PhysicalInput::Key { key: PhysicalKeyCode::KeyA, mods, pressed: false, repeat: false },
+        KeyEvent { key: Key::Text("å".into()), mods },
+        Some('a'),
+    );
+    rt.frame(0.0);
+
+    assert_eq!(rt.state.downs, [
+        (Key::Text("å".into()), Some(PhysicalKeyCode::KeyA), Some('a'), false),
+        (Key::Text("å".into()), Some(PhysicalKeyCode::KeyA), Some('a'), true),
+    ]);
+    assert_eq!(rt.state.ups, [
+        (Key::Text("å".into()), Some(PhysicalKeyCode::KeyA), Some('a')),
+    ]);
+
+    // Focused physical handler sees the event first and blocks logical fallback when consumed.
+    click(&mut rt, "cap");
+    rt.frame(0.0);
+    rt.state.consume = true;
+    let press = PhysicalInput::Key { key: PhysicalKeyCode::KeyJ, mods: Mods::default(), pressed: true, repeat: false };
+    rt.physical_key_input(press, KeyEvent { key: Key::Text("j".into()), mods: Mods::default() }, Some('j'));
+    rt.frame(0.0);
+    assert!(matches!(rt.state.physical.last(), Some(PhysicalInput::Key { key: PhysicalKeyCode::KeyJ, pressed: true, repeat: false, .. })));
+    assert_eq!(rt.state.downs.len(), 2, "consumed physical event must not fall through to on_key");
+}

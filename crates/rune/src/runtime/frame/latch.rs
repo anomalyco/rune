@@ -23,7 +23,8 @@ impl RuntimeCore {
         stall.end_named("an `update` closure");
         let stale = changed || one.frame_work() || one.window_frame.is_some() || one.srgb_blend.is_some_and(|b| b != self.paint.srgb_blend()) || one.font_smoothing.is_some_and(|m| m != self.text.font_smoothing())
             || self.changes_families(&one)
-            || (one.blur && self.kbd.focus.path().is_some());
+            || (one.blur && self.kbd.focus.path().is_some())
+            || (one.cancel_pointer && self.has_pointer_activity());
         let minimize = if ordered {
             let asked = one.minimize_order;
             self.run_pick_reads(app, &mut one);
@@ -122,6 +123,7 @@ impl RuntimeCore {
         if let Some(srgb) = tx.srgb_blend.take() { self.set_srgb_blend(srgb); }
         if let Some(rewind) = tx.rewind.take() { self.motion.set_rewind(rewind); }
         self.latch_focus(tx);
+        if std::mem::take(&mut tx.cancel_pointer) { self.cancel_pointer(); }
         if let Some(title) = tx.title.take() { self.host.window_title.set(title); }
         if let Some((text, how)) = tx.announce.take() { self.host.announcement.say(text, how); }
         if let Some(mut request) = tx.window_frame.take() {

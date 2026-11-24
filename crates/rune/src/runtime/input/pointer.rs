@@ -116,6 +116,16 @@ impl RuntimeCore {
         self.pointer.window_moved(dx, dy);
     }
 
+    /// Whether any pointer hover, capture, drag-out, autoscroll, touch-hold or file drag is active.
+    pub(in crate::runtime) fn has_pointer_activity(&self) -> bool {
+        self.pointer.pos.is_some()
+            || self.pointer_captured()
+            || self.pointer.drag_out_request.is_some()
+            || self.pointer.autoscroll_armed()
+            || self.pointer.touch_hold_deadline().is_some()
+            || self.dragging_files()
+    }
+
     pub(crate) fn cancel_pointer(&mut self) {
         // differs from dev: a cancelled press cannot pair with a click after refocusing.
         self.cancel_touch_hold();
