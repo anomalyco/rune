@@ -216,15 +216,76 @@ impl OverlayCore {
             !gpu.is_lost() && gpu.device.features().contains(features & gpu.adapter.features())
         }).map(|gpu| (gpu, true)));
         let reused = pooled.and_then(|(gpu, translucent)| make(&gpu.instance).filter(|s| crate::render::translucency::serves(&gpu, s, features, translucent)).map(|s| (gpu, s)));
+        let (w, h) = ((self.at.size.0 * scale).round() as u32, (self.at.size.1 * scale).round() as u32);
+        let srgb_blend = app.rt().srgb_blend();
+        let make_surface = |instance: &wgpu::Instance| make(instance).ok_or_else(|| "could not create its GPU surface".to_owned());
+        let setup_surface = |gpu: &Gpu, surface: &wgpu::Surface<'_>| -> Result<_, crate::render::SurfaceSetupError> {
+            let (mut config, translucent) = crate::window::surface_config(surface, &gpu.adapter, (w, h), srgb_blend)
+                .ok_or_else(|| crate::render::SurfaceSetupError::unsupported("the GPU adapter can't present to this overlay"))?;
+            let info = gpu.adapter.get_info();
+            match translucent {
+                Some(mode) => config.alpha_mode = mode,
+                // Windows composites an overlay's pixels only through DirectComposition; drawn
+                // opaque on its window they never show.
+                None if cfg!(target_os = "windows") => {
+                    return Err(crate::render::SurfaceSetupError::unsupported(format!(
+                        "{:?} on {} can't composite transparent pixels; Windows overlays need DX12 with DirectComposition",
+                        info.backend, info.name
+                    )));
+                }
+                None => {}
+            }
+            // A surface the driver refuses costs this overlay alone, never the app's other windows
+            // (hex#979). On a live device with an automatic pick, the fallback chain tries the next
+            // adapter before giving up.
+            let prefix = format!("could not configure its GPU surface on {:?} {}", info.backend, info.name);
+            crate::window::configure_checked(surface, gpu, &config)
+                .map_err(|error| crate::render::SurfaceSetupError::from_configure(&prefix, error))?;
+            Ok((config, translucent.is_none()))
+        };
         let mut prewarmed = None;
-        let surface = match reused {
-            Some((gpu, surface)) => { self.gpu = Some(gpu); surface }
+        let (surface, (config, opaque_fallback)) = match reused {
+            Some((gpu, surface)) => match setup_surface(&gpu, &surface) {
+                Ok(configured) => { self.gpu = Some(gpu); (surface, configured) }
+                Err(err) => {
+                    if crate::gpu::fallback::decide(Gpu::env_fallback_policy(), err.kind) == crate::gpu::fallback::Decision::Stop {
+                        if err.kind == crate::gpu::fallback::Failure::DeviceLost {
+                            self.gpu = None;
+                            self.renderer = None;
+                            *self.gpu_pool.borrow_mut() = Weak::default();
+                        }
+                        self.fail(err.message);
+                        return None;
+                    }
+                    let instance = gpu.instance.clone();
+                    let first_info = gpu.adapter.get_info();
+                    let excluded = Gpu::candidate_info(0, &gpu.adapter, Some(&surface));
+                    drop((surface, gpu));
+                    self.gpu = None;
+                    self.renderer = None;
+                    *self.gpu_pool.borrow_mut() = Weak::default();
+                    let (gpu, surface, configured) = match Gpu::for_surface_setup_excluding(
+                        instance, excluded, first_info, err.message, features, true, make_surface, setup_surface,
+                    ) {
+                        Ok(made) => made,
+                        Err(err) => {
+                            self.fail(err.message);
+                            return None;
+                        }
+                    };
+                    let gpu = Arc::new(gpu);
+                    *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
+                    crate::render::surface_gpu(&gpu);
+                    self.gpu = Some(gpu);
+                    (surface, configured)
+                }
+            },
             None => {
-                let made = Gpu::for_surface(features, true, |instance| make(instance).ok_or_else(|| "could not create its GPU surface".to_owned()));
-                let (gpu, surface, renderer) = match made {
+                let made = Gpu::for_surface_setup(features, true, make_surface, setup_surface);
+                let (gpu, surface, renderer, configured) = match made {
                     Ok(made) => made,
-                    Err(error) => {
-                        self.fail(error);
+                    Err(err) => {
+                        self.fail(err.message);
                         return None;
                     }
                 };
@@ -235,32 +296,16 @@ impl OverlayCore {
                 *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
                 crate::render::surface_gpu(&gpu);
                 self.gpu = Some(gpu);
-                surface
+                (surface, configured)
             }
         };
         let gpu = self.gpu.clone()?;
-        let (w, h) = ((self.at.size.0 * scale).round() as u32, (self.at.size.1 * scale).round() as u32);
         let rt = app.rt_mut();
-        let (mut config, translucent) = crate::window::surface_config(&surface, &gpu.adapter, (w, h), rt.srgb_blend())?;
-        match translucent {
-            Some(mode) => config.alpha_mode = mode,
-            // Windows composites an overlay's pixels only through DirectComposition; drawn
-            // opaque on its window they never show.
-            None if cfg!(target_os = "windows") => {
-                let info = gpu.adapter.get_info();
-                self.fail(format!("{:?} on {} can't composite transparent pixels; Windows overlays need DX12 with DirectComposition", info.backend, info.name));
-                return None;
-            }
-            None => eprintln!("transparency unavailable for overlay {}; drawing it opaque", self.name),
+        if opaque_fallback {
+            eprintln!("transparency unavailable for overlay {}; drawing it opaque", self.name);
         }
         let info = gpu.adapter.get_info();
         *self.shared.surface.lock().unwrap() = Some(format!("{:?} on {} ({:?}), {:?}, {:?}", info.backend, info.name, info.device_type, config.alpha_mode, config.format));
-        // A surface the driver refuses costs this overlay alone, never the app's other windows
-        // (hex#979). The surface drops before its backing.
-        if let Err(error) = crate::window::configure(&surface, &gpu, &config) {
-            self.fail(format!("could not configure its GPU surface on {:?} {}: {error}", info.backend, info.name));
-            return None;
-        }
         #[cfg(target_os = "macos")]
         crate::platform::macos::pin_contents_top_left(&surface);
         let target_format = if rt.srgb_blend() { config.format.remove_srgb_suffix() } else { config.format };
