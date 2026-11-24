@@ -113,5 +113,5 @@ finish browser-async work (a `fetch`) from its own callback through the `Complet
 ## Example
 
 `examples/luau-panel`: a header, a pulse driven by `task.wait`, a signal and a 1,000-row virtual
-list. `cargo run -p luau-panel`; `cargo run -p luau-panel --bin luau-bench --profile perf`
+list. `cargo run -p luau-panel --bin luau-panel`; `cargo run -p luau-panel --bin luau-bench --profile perf`
 measures idle frames, memo hits, a 20-row rebuild, list scrolling and hot reload.

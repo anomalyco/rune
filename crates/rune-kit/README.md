@@ -161,7 +161,7 @@ selectable text so a selected command line looks like a selected field:
 `text(cmd).selectable(true).selection_color(k.selection())`. `rune-text--selectable-help` in the
 gallery shows both, with an icon button explained by `.help`.
 
-Button (10 variants × 3 sizes × 5 states), IconButton, Switch (compact, standard), Checkbox,
+Button (10 variants × 5 `ControlSize` sizes × 5 states), IconButton, Switch (compact, standard), Checkbox,
 RadioGroup/RadioItem, TextInput, TextArea, TextField (older), Field, Select (inline and field
 triggers, grouped), Dialog, Popover, Menu (compact and standard, checkbox/radio items, submenus,
 context menus via `.at(x, y)`), Tooltip (compact, standard, large), HoverCard, Toast and
@@ -379,10 +379,13 @@ source each time, and earlier blocks stay mounted.
   and file header lines. Set colours with `MarkdownStyle::diff` and `diff_hunk`. Line text
   keeps the body colour unless `diff_text(added, removed)` or `diff_text_tint(0.5)` (toward the
   theme's green and red) colours it.
-- **```` ```mermaid ````** (feature `mermaid`, backed by `rune-mermaid`) draws flowcharts,
-  sequence diagrams and state diagrams natively, with no JS or webview, themed through
-  `MarkdownStyle::diagram*`. Layout runs once per source and is cached. Anything outside the
-  supported subset (listed in `rune-mermaid`) shows as its plain code block. `rune_kit::mermaid::render(src, &style)` draws one on its own.
+- **```` ```mermaid ````** (feature `mermaid`, backed by `rune-mermaid`) draws 17 Mermaid
+  diagram types natively (flowcharts, sequence, state, class, ER, gantt, pie, mindmap, timeline,
+  user journey, git graph, quadrant, XY chart, sankey, block, requirement and C4), with no JS or
+  webview, themed through `MarkdownStyle::diagram*`. While a fence streams in, it lays out
+  complete lines without reshuffling earlier nodes, then settles once complete; finished layouts are
+  cached per source. Anything outside the supported subset (listed in `rune-mermaid`) shows as its
+  plain code block. `rune_kit::mermaid::render(src, &style)` draws one on its own.
 - **`selectable(true)`** lets people select and copy the text as one selection: a drag runs from
   a paragraph through list items into a code block, Shift-click extends, Cmd+A selects the
   whole Markdown and Cmd+C copies the text as drawn, as a web browser does: a newline between
@@ -483,17 +486,22 @@ Known differences, and why:
 - **Glyph advances.** Chromium on Linux rounds each glyph advance to a device pixel (no subpixel
   positioning); Rune keeps Parley's fractional advances and rounds text boxes up to a device pixel.
   Words differ by up to ~0.5 pt, which adds up along wrapped rows (button variants).
-- **Antialiasing.** Rune's greyscale atlas with luminance dilation vs Chromium's FreeType/Skia
-  rasteriser: stems differ by a fraction of a pixel; diff images show text outlines.
-- **Blending.** Rune blends in linear light; translucent tokens are re-solved per backdrop
-  (`Kit::on`), exact over the surface they were solved for and close elsewhere. CSS group opacity
-  (disabled controls) is per-layer opacity in Rune, so text over a dimmed fill is slightly lighter.
+- **Antialiasing.** On Linux, Rune defaults to `WindfoilChromium` (undilated GPU outline box
+  coverage on quarter-pixel pens with Skia's text gamma) vs Chromium's FreeType `hintslight` on
+  whole-pixel pens (`FontSmoothing::Hinted`): stems and subpixel alignment differ slightly; diff
+  images show text outlines.
+- **Blending.** Rune blends in sRGB by default, matching the browser; only windows that opt into
+  linear-light blending (`App::srgb_blend(false)`) re-solve translucent tokens per backdrop
+  (`Kit::on` / `rune::theme::for_blend`), exact over the surface they were solved for and close
+  elsewhere. Disabled controls use isolated layer opacity (`El::layer_opacity`), matching CSS group
+  opacity.
 - **Focus.** Controls support keyboard focus rings, Tab, activation and arrow-key roving.
-  Dialog traps focus and restores the opener; popover/select opening autofocus is still separate.
+  Dialog, Menu and Select trap focus and restore the trigger on close; Popover restores the trigger
+  on close while leaving opening autofocus to the caller.
 - **Motion.** Spinner pulses use fixed seeds in the web's randomized timing ranges; Loader rotates
   every 900 ms. Both use Rune's clock and hold a static pose under reduced motion. Indeterminate
   progress remains static. Transitions use springs rather than CSS easing curves.
-- **Not drawn.** The textarea resize grip, hover-card trigger underline, scrollbars.
+- **Not drawn.** The textarea resize grip, hover-card trigger underline.
 - **Story quirks mirrored on purpose.** Solid ignores `defaultValue` on the v2 inputs (the web shows
   placeholders), the Basic and NonCollapsible accordions render closed, and the menu Rich story's
   `settings`/`save`/`print` icons fall back to `plus`. `components-popover--inline` and the
