@@ -1,0 +1,1 @@
+- `rune-kit` text fields: `TextInput`, `TextArea` and `TextField` now forward `on_secondary_press` and `on_input_paste` to their inner editor (skipped when disabled); `TextArea` and `TextField` gain `description` (joined before `error` on `TextField`), `TextField` gains `on_submit`, and secondary presses on a `role("textbox")` wrapper's padding route to its inner editor.

@@ -99,7 +99,9 @@ to diff.
 
 `TextInput::on_key` intercepts a focused field's keys before editing; `on_change` runs after
 text changes and receives a `Tx`, for filtering and exact debounce wakes. `TextInput`, `TextArea`
-and `TextField` also accept `.decorations(spans)` (or `.spans(spans)`) and `.rich_style(style)` for
+and `TextField` forward `on_secondary_press` (replacing the default field context menu) and
+`on_input_paste` (intercepting pastes before plain-text insertion, skipped when disabled), as well
+as `on_submit` and accessible `description`. They also accept `.decorations(spans)` (or `.spans(spans)`) and `.rich_style(style)` for
 attributed `TextEdit` marks, paragraph blocks and per-frame syntax highlights, and
 `.pill_style(f)` / `.pill_icon(f)` / `.pill_colors(bg, fg)` for `@` mention pills (build the edit with
 `TextEdit::rich()` for formatting keys and rich paste; see
@@ -147,16 +149,18 @@ let password = Field::new()
 - `Field` draws the visible label, optional `.info()` icon (pair with a `Tooltip` if needed) and
   wrapped `.prefix()` / `.suffix()` help lines, and exposes them as the outer group's accessible
   name and description.
-- `TextInput::label` and `TextInput::description` (and `TextArea::label`) are accessibility-only
-  and are not drawn. Still pass `.label(..)` on the inner `TextInput` so assistive technology
-  names the editor itself rather than falling back to the placeholder.
+- `TextInput::label`, `TextInput::description`, `TextArea::label` and `TextArea::description`
+  are accessibility-only and are not drawn. Still pass `.label(..)` on the inner `TextInput` or
+  `TextArea` so assistive technology names the editor itself rather than falling back to the
+  placeholder.
 - `TextInput` and `TextArea` default to a 280 pt width; pass `.width(None)` so they fill `Field`.
 - Mark validation errors with `.invalid(true)` on the inner control alongside error text (in
   `.suffix(..)` or an assertive error element beneath the control, plus `.description(..)` on the
-  `TextInput` when the error should also be read as the editor's description).
+  `TextInput` or `TextArea` when the error should also be read as the editor's description).
 - `TextField` is the older self-contained labelled field (`components/text-field`): it draws a
-  label and an assertive wrapped `.error()` line, but has no `secure`, `on_change`, `on_submit`
-  or help text. Prefer `Field` + `TextInput` / `TextArea` for new forms.
+  label and an assertive wrapped `.error()` line, and forwards `description`, `on_submit`,
+  `on_secondary_press` and `on_input_paste`, but has no `secure`, `on_change` or visible help
+  text. Prefer `Field` + `TextInput` / `TextArea` for new forms.
 
 `k.selection()` is the selection highlight TextInput and TextArea draw. Pass it to Rune's
 selectable text so a selected command line looks like a selected field:

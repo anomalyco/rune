@@ -17,8 +17,8 @@ pub static INFO: Icon = Icon {
 /// Wrap [`crate::TextInput`], [`crate::TextArea`] or [`crate::Select`] in `Field` for new forms
 /// instead of the older [`crate::TextField`]:
 ///
-/// - [`crate::TextInput::label`] and [`crate::TextInput::description`] (and
-///   [`crate::TextArea::label`]) are accessibility-only and are not drawn; still pass `.label(..)`
+/// - [`crate::TextInput::label`], [`crate::TextInput::description`], [`crate::TextArea::label`]
+///   and [`crate::TextArea::description`] are accessibility-only and are not drawn; still pass `.label(..)`
 ///   on the inner control so assistive technology names the editor itself.
 /// - [`crate::TextInput`] and [`crate::TextArea`] default to a 280 pt width; pass `.width(None)`
 ///   to fill the `Field`.

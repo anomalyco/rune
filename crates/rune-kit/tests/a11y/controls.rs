@@ -362,6 +362,96 @@ fn fields_name_their_editor_and_describe_their_help_and_errors() {
     assert_eq!(node(node(&rt.accessibility_json(), "search"), "input")["value"], "Ada");
 }
 
+#[test]
+fn kit_fields_attach_description_to_their_inner_editor_node() {
+    fn view(s: &App, _: &mut Cx<App>) -> El {
+        let k = kit();
+        col()
+            .gap(8.0)
+            .child(
+                TextInput::new(&s.edit)
+                    .label("Filename")
+                    .description("Name is taken")
+                    .on_edit(|s: &mut App| &mut s.edit)
+                    .build(&k)
+                    .key("ti"),
+            )
+            .child(
+                TextArea::new(&s.edit)
+                    .label("Notes")
+                    .description("Markdown supported")
+                    .on_edit(|s: &mut App| &mut s.edit)
+                    .build(&k)
+                    .key("ta"),
+            )
+            .child(
+                TextField::new("Alias", &s.edit)
+                    .description("Lowercase letters only")
+                    .on_edit(|s: &mut App| &mut s.edit)
+                    .build(&k)
+                    .key("tf-desc"),
+            )
+            .child(
+                TextField::new("Slug", &s.edit)
+                    .description("Lowercase letters only")
+                    .error("Already in use")
+                    .on_edit(|s: &mut App| &mut s.edit)
+                    .build(&k)
+                    .key("tf-both"),
+            )
+            .child(
+                TextField::new("Path", &s.edit)
+                    .description("Must be relative.")
+                    .error("Starts with /")
+                    .on_edit(|s: &mut App| &mut s.edit)
+                    .build(&k)
+                    .key("tf-period"),
+            )
+            .child(
+                TextField::new("Empty", &s.edit)
+                    .description("")
+                    .error("Required")
+                    .on_edit(|s: &mut App| &mut s.edit)
+                    .build(&k)
+                    .key("tf-empty-desc"),
+            )
+            .child(
+                TextArea::new(&s.edit)
+                    .label("الملاحظات")
+                    .description("أدخل التفاصيل هنا")
+                    .on_edit(|s: &mut App| &mut s.edit)
+                    .build(&k)
+                    .key("ta-rtl"),
+            )
+    }
+
+    let rt = mount(App::default(), view);
+    let tree = rt.accessibility_json();
+
+    for (outer_key, expected_role, expected_desc) in [
+        ("ti", "text-input", "Name is taken"),
+        ("ta", "multiline-text-input", "Markdown supported"),
+        ("tf-desc", "text-input", "Lowercase letters only"),
+        ("tf-both", "text-input", "Lowercase letters only. Already in use"),
+        ("tf-period", "text-input", "Must be relative. Starts with /"),
+        ("tf-empty-desc", "text-input", "Required"),
+        ("ta-rtl", "multiline-text-input", "أدخل التفاصيل هنا"),
+    ] {
+        let outer = node(&tree, outer_key);
+        assert!(
+            outer["description"].is_null(),
+            "{outer_key}: description must not land on outer wrapper: {outer}"
+        );
+        let inner = node(outer, "input");
+        assert_eq!(inner["role"], expected_role, "{outer_key}: inner role");
+        assert_eq!(
+            inner["description"].as_str(),
+            Some(expected_desc),
+            "{outer_key}: description on inner editor"
+        );
+    }
+}
+
 fn recorder(s: &App, _: &mut Cx<App>) -> El {
     let k = kit();
     col()
