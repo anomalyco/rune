@@ -215,6 +215,43 @@ pub(super) fn textarea_composer(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
         .child(text(status).key("composer-status").font(k.ty.small).color(k.c.text_muted).wrap())
 }
 
+/// `TextArea::line_home_end(bool)` and `Shift+Insert` paste: opt-in visual line Home/End for
+/// macOS code editors alongside standard Shift+Insert paste on Linux and Windows.
+pub(super) fn textarea_code_keys(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let line_home_end = !s.is("code-keys-native");
+    let edit = &s.edits[11];
+    let mode = if line_home_end { "line_home_end(true)" } else { "line_home_end(false) (native macOS)" };
+    let status = format!(
+        "Mode: {mode} · Caret: {}..{} · Shift+Insert pastes on Linux/Windows.",
+        edit.anchor, edit.focus
+    );
+    grid(12.0, 340.0)
+        .child(
+            Checkbox::new(line_home_end)
+                .label("Line-based Home / End on macOS")
+                .on_toggle(flip("code-keys-native"))
+                .build(k)
+                .key("code-keys-toggle"),
+        )
+        .child(
+            Field::new()
+                .label("Code editor")
+                .control(
+                    TextArea::new(edit)
+                        .label("Code editor")
+                        .description("Home and End jump to visual line edges when enabled; Cmd+Home/End jump to document ends")
+                        .width(None)
+                        .rows(4)
+                        .line_home_end(line_home_end)
+                        .on_edit(|s: &mut G| &mut s.edits[11])
+                        .build(k)
+                        .key("code-keys-area"),
+                )
+                .build(k),
+        )
+        .child(text(status).key("code-keys-status").font(k.ty.small).color(k.c.text_muted).wrap())
+}
+
 pub(super) fn field_text_input(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     grid(0.0, 280.0).child(
         Field::new()

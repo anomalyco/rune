@@ -99,6 +99,9 @@ pub struct TextEdit {
     revealed: bool,
     /// Mirrors the field's `El::single_line()`; the runtime sets it before each edit.
     line_mode: LineMode,
+    /// Opt-in macOS code-editor mode: plain `Home`/`End` move to the current visual line's edges
+    /// instead of the document's ends. Off by default.
+    line_home_end: bool,
     /// Formatting keys and rich paste are on (see [`TextEdit::rich`]).
     rich: bool,
     /// The mark kinds this field keeps, one bit per [`Mark::kind_order`]; `None` keeps all.
@@ -254,6 +257,7 @@ impl TextEdit {
             secure: false,
             revealed: false,
             line_mode: LineMode::Default,
+            line_home_end: false,
             rich: false,
             allowed_marks: None,
             allowed_blocks: None,
@@ -293,6 +297,39 @@ impl TextEdit {
 
     pub fn is_rich(&self) -> bool {
         self.rich
+    }
+
+    /// Whether plain `Home` and `End` (and `Shift+Home` / `Shift+End`) move to the current visual
+    /// line's edges on macOS instead of the document's ends. Off (`false`) by default so native
+    /// macOS navigation stays unchanged; on Windows and Linux plain `Home` and `End` always move
+    /// to the current visual line's edges.
+    pub fn line_home_end(&self) -> bool {
+        self.line_home_end
+    }
+
+    /// Opt into visual line-based `Home` and `End` on macOS (keeping `Cmd+Home`/`Cmd+End`,
+    /// `Ctrl+Home`/`Ctrl+End`, and `Cmd+Up`/`Cmd+Down` on the document's ends).
+    ///
+    /// ```
+    /// # use rune_edit::TextEdit;
+    /// let mut edit = TextEdit::new("first\nsecond");
+    /// edit.set_line_home_end(true);
+    /// assert!(edit.line_home_end());
+    /// ```
+    pub fn set_line_home_end(&mut self, on: bool) {
+        self.line_home_end = on;
+    }
+
+    /// Builder form of [`set_line_home_end`](Self::set_line_home_end).
+    ///
+    /// ```
+    /// # use rune_edit::TextEdit;
+    /// let edit = TextEdit::new("first\nsecond").with_line_home_end(true);
+    /// assert!(edit.line_home_end());
+    /// ```
+    pub fn with_line_home_end(mut self, on: bool) -> Self {
+        self.line_home_end = on;
+        self
     }
 
     /// Keep only these kinds of inline mark, for a field whose storage can't hold the rest (an

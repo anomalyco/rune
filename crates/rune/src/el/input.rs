@@ -23,6 +23,7 @@ pub struct InputSpec {
     pub(crate) caret_inked: bool,
     pub(crate) selection_inked: bool,
     pub(crate) revealed_override: Option<bool>,
+    pub(crate) line_home_end_override: Option<bool>,
     pub(crate) decorations: Vec<Span>,
     /// [`El::strike`] ranges over `edit.text`, mapped onto the drawn text with the spans.
     pub(crate) decoration_strikes: Vec<(u32, u32, Option<Color>)>,
@@ -91,6 +92,7 @@ pub fn text_input(edit: &TextEdit, style: TextStyle) -> El {
         caret_inked: false,
         selection_inked: false,
         revealed_override: None,
+        line_home_end_override: None,
         decorations: Vec::new(),
         decoration_strikes: Vec::new(),
         line_fills: Vec::new(),
@@ -198,6 +200,24 @@ impl El {
             self.sync_input_rich();
         } else if let Some(text) = &mut self.text {
             text.cold.secure_revealed = revealed;
+        }
+        self
+    }
+    /// Use visual line start/end for plain `Home` and `End` (and `Shift+Home` / `Shift+End`) on
+    /// macOS instead of document start/end, keeping `Cmd+Home`/`Cmd+End`, `Ctrl+Home`/`Ctrl+End`,
+    /// and `Cmd+Up`/`Cmd+Down` on the document's ends. Off by default (`false`) so native macOS
+    /// text navigation is unchanged; on Windows and Linux plain `Home` and `End` already move to
+    /// the current visual line's edges.
+    ///
+    /// ```no_run
+    /// # use rune::{TextEdit, TextStyle, text_input};
+    /// let code = TextEdit::new("first\nsecond");
+    /// let editor = text_input(&code, TextStyle::new(13.0, 400.0).mono()).line_home_end(true);
+    /// ```
+    pub fn line_home_end(mut self, on: bool) -> Self {
+        if let Some(input) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
+            input.edit.set_line_home_end(on);
+            input.line_home_end_override = Some(on);
         }
         self
     }

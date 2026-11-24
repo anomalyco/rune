@@ -244,11 +244,11 @@ impl TextEdit {
                 let i = if line { self.line_edge(layout, true) } else if word { self.next_word(self.focus) } else { next_char(&self.text, self.focus) };
                 self.move_h((i, parley::Affinity::Downstream), m.shift, true, layout);
             }
-            // Home and End go to the text's ends on macOS. Elsewhere they go to the line's
-            // edge, and with Ctrl to the text's ends.
+            // Home and End go to the text's ends on macOS unless `line_home_end` opts into
+            // visual line edges (keeping Cmd+Home/End and Ctrl+Home/End on the text's ends).
+            // Elsewhere they go to the line's edge, and with Ctrl to the text's ends.
             Key::Home | Key::End => {
-                let end = ev.key == Key::End;
-                let i = if cfg!(target_os = "macos") || m.ctrl { if end { self.text.len() } else { 0 } } else { self.line_edge(layout, end) };
+                let i = self.home_end_target(layout, ev.key == Key::End, m, cfg!(target_os = "macos"));
                 self.set(i, m.shift)
             }
             Key::Up | Key::Down => {
@@ -373,6 +373,17 @@ impl TextEdit {
                 (i, parley::Affinity::Downstream)
             }
         })
+    }
+
+    /// Target byte offset for `Key::Home` (`!end`) or `Key::End` (`end`) with modifiers `m` on
+    /// `macos`: document start/end by default on macOS, or visual line start/end when
+    /// `line_home_end` is enabled and neither Cmd nor Ctrl is held.
+    pub(crate) fn home_end_target(&self, layout: Option<TextFlow<'_>>, end: bool, m: Mods, macos: bool) -> usize {
+        if m.ctrl || (macos && (m.cmd || !self.line_home_end)) {
+            if end { self.text.len() } else { 0 }
+        } else {
+            self.line_edge(layout, end)
+        }
     }
 
     fn line_edge(&self, layout: Option<TextFlow<'_>>, end: bool) -> usize {
@@ -551,3 +562,7 @@ impl TextEdit {
         EditOutcome::default()
     }
 }
+
+#[cfg(test)]
+#[path = "input_tests.rs"]
+mod tests;

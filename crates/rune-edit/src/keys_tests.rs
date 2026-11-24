@@ -187,3 +187,38 @@ fn is_command_chord_matches_platform_alt_and_altgr_conventions() {
         assert_eq!(ev.is_command_chord(), ev.is_command_chord_on(KeyPlatform::current()), "{ev:?}");
     }
 }
+
+#[test]
+fn edit_command_recognizes_shift_insert_paste_off_macos_only() {
+    let ins = |mods: Mods| KeyEvent { key: Key::Insert, mods };
+    let cases = [
+        // Shift+Insert pastes on Windows and Linux, never on macOS.
+        (ins(Mods { shift: true, ..Mods::default() }), [None, Some('v'), Some('v')]),
+        // Bare Insert is not a paste shortcut on any platform.
+        (ins(Mods::default()), [None, None, None]),
+        // Extra modifiers leave Insert for apps to bind.
+        (ins(Mods { shift: true, ctrl: true, cmd: true, ..Mods::default() }), [None, None, None]),
+        (ins(Mods { shift: true, ctrl: true, ..Mods::default() }), [None, None, None]),
+        (ins(Mods { shift: true, cmd: true, ..Mods::default() }), [None, None, None]),
+        (ins(Mods { shift: true, alt: true, ..Mods::default() }), [None, None, None]),
+        (ins(Mods { shift: true, logo: true, ..Mods::default() }), [None, None, None]),
+        (ins(Mods { ctrl: true, cmd: true, ..Mods::default() }), [None, None, None]),
+        (ins(Mods { alt: true, ..Mods::default() }), [None, None, None]),
+        (ins(Mods { logo: true, ..Mods::default() }), [None, None, None]),
+        // Existing Key::Command chords keep their rules on every platform.
+        (KeyEvent { key: Key::Command('v'), mods: Mods::default() }, [Some('v'), Some('v'), Some('v')]),
+        (KeyEvent { key: Key::Command('v'), mods: Mods { shift: true, ..Mods::default() } }, [None, None, None]),
+        (KeyEvent { key: Key::Command('z'), mods: Mods { shift: true, ..Mods::default() } }, [Some('z'), Some('z'), Some('z')]),
+        (KeyEvent { key: Key::Command('v'), mods: Mods { alt: true, ..Mods::default() } }, [None, None, None]),
+    ];
+    for (ev, want) in cases {
+        for (idx, platform) in PLATFORMS.into_iter().enumerate() {
+            assert_eq!(
+                ev.edit_command_on(platform),
+                want[idx],
+                "{ev:?} on {platform:?}"
+            );
+        }
+        assert_eq!(ev.edit_command(), ev.edit_command_on(KeyPlatform::current()), "{ev:?}");
+    }
+}

@@ -503,3 +503,188 @@ fn clipboard_requests_follow_handler_order_and_are_consumed_once() {
     rt.frame(1.0 / 120.0);
     assert_eq!(rt.copy_request.take().as_deref(), Some("response"));
 }
+
+#[test]
+fn shift_insert_pastes_into_focused_field_and_root_off_macos_only() {
+    use crate::edit::{Key, KeyEvent, Mods, TextEdit};
+    #[derive(Default)]
+    struct State {
+        field: TextEdit,
+        root_pasted: String,
+        intercept_insert: bool,
+        seen_input_keys: Vec<KeyEvent>,
+        seen_app_keys: Vec<KeyEvent>,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        col()
+            .size(240.0, 120.0)
+            .on_paste(|s: &mut State, text, _| s.root_pasted = text.to_owned())
+            .child(
+                crate::text_input(&s.field, crate::TextStyle::new(14.0, 400.0))
+                    .key("field")
+                    .size(200.0, 32.0)
+                    .on_edit(|s: &mut State| &mut s.field)
+                    .on_input_key(|s: &mut State, ev, _| {
+                        s.seen_input_keys.push(ev.clone());
+                        s.intercept_insert && ev.key == Key::Insert
+                    }),
+            )
+            .child(
+                crate::text_input(&TextEdit::new("inert"), crate::TextStyle::new(14.0, 400.0))
+                    .key("inert")
+                    .size(200.0, 32.0)
+                    .inert(),
+            )
+    }
+    let m = crate::clipboard::memory();
+    m.set_text("😀");
+    let mut rt = Runtime::new(State::default(), view, (240.0, 120.0), Env::new(true, 1.0));
+    rt.on_key = Some(|s, ev, _| {
+        s.seen_app_keys.push(ev.clone());
+        false
+    });
+    rt.use_clipboard(&m);
+    rt.frame(0.0);
+
+    let shift_ins = KeyEvent { key: Key::Insert, mods: Mods { shift: true, ..Mods::default() } };
+
+    // Focused field: Shift+Insert pastes off macOS, ignored on macOS (reaches app.on_key).
+    rt.update(|s, _| s.field.focused = true);
+    rt.frame(0.0);
+    rt.key(shift_ins.clone());
+    rt.frame(0.0);
+    rt.frame(0.0);
+    if cfg!(target_os = "macos") {
+        assert_eq!(rt.state.field.text, "");
+        assert_eq!(rt.state.seen_app_keys.last(), Some(&shift_ins));
+    } else {
+        assert_eq!(rt.state.field.text, "😀");
+        assert!(rt.state.seen_app_keys.is_empty(), "consumed paste does not reach app.on_key");
+    }
+
+    // Bare Insert and extra modifiers never paste on any platform.
+    rt.state.field.clear();
+    rt.state.seen_app_keys.clear();
+    for ev in [
+        KeyEvent::from(Key::Insert),
+        KeyEvent { key: Key::Insert, mods: Mods { shift: true, ctrl: true, cmd: true, ..Mods::default() } },
+        KeyEvent { key: Key::Insert, mods: Mods { shift: true, alt: true, ..Mods::default() } },
+        KeyEvent { key: Key::Insert, mods: Mods { shift: true, logo: true, ..Mods::default() } },
+    ] {
+        rt.key(ev.clone());
+        rt.frame(0.0);
+        rt.frame(0.0);
+        assert_eq!(rt.state.field.text, "", "{ev:?} must not paste");
+        assert_eq!(rt.state.seen_app_keys.last(), Some(&ev), "{ev:?} reaches app.on_key");
+    }
+
+    // on_input_key returning true intercepts Shift+Insert before paste.
+    rt.state.intercept_insert = true;
+    rt.state.seen_app_keys.clear();
+    rt.key(shift_ins.clone());
+    rt.frame(0.0);
+    rt.frame(0.0);
+    assert_eq!(rt.state.field.text, "");
+    assert!(rt.state.seen_app_keys.is_empty());
+
+    // Blurred: Shift+Insert reaches root on_paste off macOS only (when app.on_key declines).
+    rt.state.intercept_insert = false;
+    rt.update(|s, _| s.field.focused = false);
+    rt.frame(0.0);
+    rt.key(shift_ins.clone());
+    rt.frame(0.0);
+    rt.frame(0.0);
+    if cfg!(target_os = "macos") {
+        assert_eq!(rt.state.root_pasted, "");
+    } else {
+        assert_eq!(rt.state.root_pasted, "😀");
+    }
+}
+
+#[test]
+fn el_line_home_end_syncs_to_model_and_preserves_model_setting() {
+    use crate::edit::{Key, KeyEvent, Mods, TextEdit};
+    struct State {
+        managed: TextEdit,
+        model_owned: TextEdit,
+        opt_in: bool,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        col()
+            .size(120.0, 200.0)
+            .child(
+                crate::text_input(&s.managed, crate::TextStyle::new(14.0, 400.0))
+                    .key("managed")
+                    .w(90.0)
+                    .line_home_end(s.opt_in)
+                    .on_edit(|s: &mut State| &mut s.managed),
+            )
+            .child(
+                crate::text_input(&s.model_owned, crate::TextStyle::new(14.0, 400.0))
+                    .key("model-owned")
+                    .w(90.0)
+                    .on_edit(|s: &mut State| &mut s.model_owned),
+            )
+    }
+    let mut managed = TextEdit::new("first\nsecond");
+    managed.set_caret(2);
+    managed.focused = true;
+    let model_owned = TextEdit::new("one\ntwo").with_line_home_end(true);
+    let mut rt = Runtime::new(
+        State { managed, model_owned, opt_in: true },
+        view,
+        (120.0, 200.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    assert!(rt.state.managed.line_home_end(), "El::line_home_end(true) syncs into TextEdit");
+    assert!(rt.state.model_owned.line_home_end(), "omitting El::line_home_end preserves model flag");
+
+    // Plain End moves to end of line 1 ("first"), then typing inserts before '\n'.
+    rt.key(KeyEvent::from(Key::End));
+    rt.key(KeyEvent::from(Key::Text("!".into())));
+    rt.frame(0.0);
+    assert_eq!(rt.state.managed.text, "first!\nsecond");
+
+    // Shift+Home selects back to line 1 start.
+    rt.key(KeyEvent { key: Key::Home, mods: Mods { shift: true, ..Mods::default() } });
+    rt.frame(0.0);
+    assert_eq!(rt.state.managed.selected(), "first!");
+
+    // Document-end chord (Cmd+End on macOS, Ctrl+End elsewhere) jumps to the end of the text.
+    let doc_end_mods = if cfg!(target_os = "macos") {
+        Mods { cmd: true, ..Mods::default() }
+    } else {
+        Mods { ctrl: true, cmd: true, ..Mods::default() }
+    };
+    rt.key(KeyEvent { key: Key::End, mods: doc_end_mods });
+    rt.frame(0.0);
+    assert_eq!(rt.state.managed.focus, rt.state.managed.text.len());
+
+    // Toggling El::line_home_end(false) syncs back to false and restores macOS document End.
+    rt.update(|s, _| {
+        s.opt_in = false;
+        s.managed.set_caret(2);
+    });
+    rt.frame(0.0);
+    assert!(!rt.state.managed.line_home_end());
+    rt.key(KeyEvent::from(Key::End));
+    rt.frame(0.0);
+    if cfg!(target_os = "macos") {
+        assert_eq!(rt.state.managed.focus, rt.state.managed.text.len());
+    } else {
+        assert_eq!(rt.state.managed.focus, 6);
+    }
+
+    // Focusing model_owned without El::line_home_end keeps its model-level true flag.
+    rt.update(|s, _| {
+        s.managed.focused = false;
+        s.model_owned.focused = true;
+        s.model_owned.set_caret(1);
+    });
+    rt.frame(0.0);
+    assert!(rt.state.model_owned.line_home_end());
+    rt.key(KeyEvent::from(Key::End));
+    rt.frame(0.0);
+    assert_eq!(rt.state.model_owned.focus, 3);
+}
