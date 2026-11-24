@@ -32,11 +32,9 @@ impl Host {
     /// Whether this window is decorated at all on Wayland, and so may have a client-side frame:
     /// what the surface is asked for, without asking winit which decorations the compositor
     /// settled on (`client_frame`).
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     pub(in crate::window) fn rounds_corners(&self) -> bool {
-        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        return self.wayland && !self.options.borderless;
-        #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
-        false
+        self.wayland && !self.options.borderless
     }
 
     /// The radius, in device pixels, the window's client-side frame leaves the content's bottom

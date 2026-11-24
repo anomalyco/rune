@@ -320,7 +320,7 @@ fn dispatch_native(request: PathRequest) -> Result<(), OpenPathError> {
                     use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
                     // SAFETY: STA COM initialization for this dedicated worker thread; Shell APIs
                     // (`SHOpenFolderAndSelectItems`, `ShellExecuteW`) expect an STA apartment.
-                    drop(unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) });
+                    unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.ok().ok();
                     while let Ok(req) = rx.recv() {
                         let verb = req.action.verb();
                         let display = req.path.display().to_string();

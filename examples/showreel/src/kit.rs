@@ -19,7 +19,6 @@ pub fn ca(hex: u32, a: f32) -> Color {
 
 pub const BG: u32 = 0x0b0b0d;
 pub const PANEL: u32 = 0x141417;
-pub const RAISED: u32 = 0x1b1b1f;
 pub const TEXT: u32 = 0xededef;
 pub const MUTED: u32 = 0x9a9aa3;
 pub const FAINT: u32 = 0x5f5f68;

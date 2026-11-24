@@ -114,7 +114,7 @@ fn a_poll_hears_each_visibility_change_once() {
     let mut sight = Sight::Seen;
     let mut minimized = false;
     // What the host does on `WindowEvent::Occluded`, a minimise and a restore.
-    let mut step = |rt: &mut Runtime<Seen>, sight: Sight, minimized: bool| {
+    let step = |rt: &mut Runtime<Seen>, sight: Sight, minimized: bool| {
         rt.set_live_visible(!sight.covered() && !minimized);
         let woken = rt.wake_deadline().is_some_and(|due| due <= rt.clock);
         if woken { covered_step(rt); }

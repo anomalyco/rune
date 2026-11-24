@@ -32,7 +32,7 @@ impl Repeat {
     }
 }
 
-pub(in crate::runtime) enum Event<'a> {
+enum Event<'a> {
     /// `path`'s drag handler asked for a repeat due at this clock time.
     Arm { path: &'a str, due: f64 },
     /// The release or a cancel ends the repeat.
@@ -43,14 +43,14 @@ pub(in crate::runtime) enum Event<'a> {
 }
 
 #[derive(Debug, PartialEq)]
-pub(in crate::runtime) enum Effect {
+enum Effect {
     /// `path`'s drag hears the pointer again.
     Fire(String),
     /// Wake at this clock time, when the repeat is due.
     WakeAt(f64),
 }
 
-pub(in crate::runtime) fn step(seq: &mut Seq, state: &mut Repeat, event: Event) -> Effects<Effect> {
+fn step(seq: &mut Seq, state: &mut Repeat, event: Event) -> Effects<Effect> {
     match event {
         Event::Arm { path, due } => {
             let attempt = seq.next();

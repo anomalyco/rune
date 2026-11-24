@@ -509,6 +509,20 @@ impl SurfaceHealth {
         matches!(self, Self::Ready { .. })
     }
 
+    /// Consumes a due retry attempt when not suspended and returns whether to reconfigure now.
+    pub(crate) fn drain_retry(
+        &mut self,
+        seq: &mut crate::machine::Seq,
+        retry_due: &mut Option<crate::machine::Attempt>,
+        suspended: bool,
+    ) -> bool {
+        if suspended { return false; }
+        let Some(attempt) = retry_due.take() else { return false };
+        self.step(seq, SurfaceHealthEvent::RetryDue(attempt))
+            .into_iter()
+            .any(|e| matches!(e, SurfaceHealthEffect::Configure))
+    }
+
     pub(crate) fn step(
         &mut self,
         seq: &mut crate::machine::Seq,

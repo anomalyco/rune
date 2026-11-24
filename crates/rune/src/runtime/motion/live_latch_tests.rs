@@ -79,7 +79,6 @@ enum Ev {
     Take,
     LatchBegin,
     LatchEnd(bool),
-    Subs(bool),
 }
 
 /// Run one sequence through both, comparing after every step.
@@ -129,7 +128,6 @@ fn walk(events: &[Ev]) {
                 let b = reading_new.then(|| new.latch_end(active));
                 (a, b)
             }
-            Ev::Subs(has) => { dev.subs = has; (None, None) }
         };
         assert_eq!(answer_dev, answer_new, "answer differed after {event:?} at step {i} of {events:?}");
         assert_eq!(dev.visible, new.visible(), "visible differed after {event:?} at step {i} of {events:?}");

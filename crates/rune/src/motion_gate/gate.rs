@@ -1,7 +1,9 @@
 //! Running an app's cells and reporting their findings against its allowlist.
 
 
-use super::check::{Finding, RULES, Recording, check, dump, sheet};
+use super::check::{Finding, RULES, Recording, check, dump};
+#[cfg(not(target_arch = "wasm32"))]
+use super::check::sheet;
 
 /// A finding that is the design: `(kind, element contains, cell contains, why)`, the first three
 /// matched as substrings ("" for any). Every row needs its reason.
