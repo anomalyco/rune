@@ -22,6 +22,7 @@ use std::time::Duration;
 use rune::tok::{self, Theme, motion, radius, type_};
 mod hover_press;
 mod loops_press;
+mod press_pointer;
 
 use rune::{Align, App, AppSpec, Color, Cx, El, ElementInfo, Family, OverlaySpec, Play, Playground, ScreenEdge, ScrollSpec, Stage, Story, TextStyle, Tx, col, el, row, text};
 
@@ -663,6 +664,12 @@ fn main() {
                         .variant("Closed", |_| {})
                         .variant("Popup blocking", |s| { s.popup_open = true; s.pass_through = false; })
                         .variant("Pass-through cover", |s| { s.popup_open = true; s.pass_through = true; }),
+                )
+                .story(
+                    Story::new("Controls/Buttons/Press cursor & bounds", press_pointer::PressPointerDemo::default, press_pointer::view)
+                        .trigger('c', "Toggle press_cursor", |s, _| s.pointer_default = !s.pointer_default)
+                        .variant("Pointer cursor on", |_| {})
+                        .variant("Default cursor (off)", |s| s.pointer_default = false),
                 )
                 .story(
                     Story::new("Controls/Motion/Loops & press offset", loops_press::LoopsPressDemo::default, loops_press::view)

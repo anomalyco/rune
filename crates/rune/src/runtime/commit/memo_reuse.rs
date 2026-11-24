@@ -342,6 +342,7 @@ fn same_handlers(
         on_focus_change,
         on_focus_within_change,
         hover_delay,
+        hover_tracks_bounds,
         on_pointer_move,
         gestures,
         on_drag,
@@ -394,6 +395,7 @@ fn same_handlers(
         && opt_rc_eq(&a.on_focus_change, on_focus_change)
         && opt_rc_eq(&a.on_focus_within_change, on_focus_within_change)
         && a.hover_delay == *hover_delay
+        && a.hover_tracks_bounds == *hover_tracks_bounds
         && opt_rc_eq(&a.on_pointer_move, on_pointer_move)
         && same_gestures(&a.gestures, gestures)
         && opt_rc_eq(&a.on_drag, on_drag)

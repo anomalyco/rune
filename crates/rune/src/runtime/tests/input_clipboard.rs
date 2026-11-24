@@ -492,14 +492,14 @@ fn clipboard_requests_follow_handler_order_and_are_consumed_once() {
     let input = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("input")).unwrap().path.clone();
     rt.set_focus(Some(input), true);
     let copy_key = KeyEvent { key: Key::Command('c'), mods: Mods { cmd: true, ..Mods::default() } };
-    rt.frame.queue.push(Action::Press(button.clone(), crate::PointerButton::Primary, false));
+    rt.frame.queue.push(Action::Press(button.clone(), crate::PointerButton::Primary, false, None));
     rt.frame.queue.push(Action::Key { ev: copy_key.clone(), repeat: false, stage: false });
     rt.frame(1.0 / 120.0);
     assert_eq!(rt.copy_request.take().as_deref(), Some("héllo 👋"));
     rt.frame(1.0 / 120.0);
     assert!(rt.copy_request.is_none());
     rt.frame.queue.push(Action::Key { ev: copy_key, repeat: false, stage: false });
-    rt.frame.queue.push(Action::Press(button, crate::PointerButton::Primary, false));
+    rt.frame.queue.push(Action::Press(button, crate::PointerButton::Primary, false, None));
     rt.frame(1.0 / 120.0);
     assert_eq!(rt.copy_request.take().as_deref(), Some("response"));
 }

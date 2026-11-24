@@ -24,10 +24,10 @@ pub(in crate::runtime) enum Action {
     DrawnLayout(String, [f32; 4], bool),
     /// `El::on_visible`: the element came on screen or left it.
     Visible(String, bool),
-    Press(String, crate::PointerButton, bool), // true for a touch tap
-    DoublePress(String),
+    Press(String, crate::PointerButton, bool, Option<PointerEvent>), // true for a touch tap
+    DoublePress(String, Option<PointerEvent>),
     /// `El::on_middle_press`.
-    MiddlePress(String),
+    MiddlePress(String, Option<PointerEvent>),
     /// A text's link and the button that clicked it (the primary or the middle).
     Link(String, usize, crate::PointerButton),
     /// `El::on_link_secondary`: the text, its link and the press.
@@ -160,8 +160,8 @@ pub(in crate::runtime) fn live_only_handler(action: &Action) -> Option<&'static 
         Action::HoverChange(..) => "on_hover_change",
         Action::SelectionChange(..) => "on_selection_change",
         Action::Press(..) => "on_press",
-        Action::DoublePress(_) => "on_double_press",
-        Action::MiddlePress(_) => "on_middle_press",
+        Action::DoublePress(..) => "on_double_press",
+        Action::MiddlePress(..) => "on_middle_press",
         Action::Link(..) => "on_link",
         Action::LinkSecondary(..) => "on_link_secondary",
         Action::SecondaryPress(..) => "on_secondary_press",
@@ -182,7 +182,7 @@ pub(in crate::runtime) fn live_only_handler(action: &Action) -> Option<&'static 
 #[cfg(debug_assertions)]
 pub(in crate::runtime) fn action_path(action: &Action) -> Option<&str> {
     match action {
-        Action::PointerMove(path, _) | Action::DrawnLayout(path, ..) | Action::Layout(path, _) | Action::Hover(path) | Action::HoverChange(path, _) | Action::SelectionChange(path, _) | Action::Press(path, ..) | Action::DoublePress(path) | Action::MiddlePress(path)
+        Action::PointerMove(path, _) | Action::DrawnLayout(path, ..) | Action::Layout(path, _) | Action::Hover(path) | Action::HoverChange(path, _) | Action::SelectionChange(path, _) | Action::Press(path, ..) | Action::DoublePress(path, ..) | Action::MiddlePress(path, ..)
         | Action::Link(path, ..) | Action::LinkSecondary(path, ..) | Action::SecondaryPress(path, _) | Action::Drag(path, ..) | Action::DragRepeat(path, ..) | Action::DragStart(path)
         | Action::DragEnd(path, _) | Action::Visible(path, _) => Some(path),
         Action::Wheel { chain, .. } => chain.as_deref().and_then(|c| c.first()).map(String::as_str),
@@ -451,24 +451,27 @@ impl RuntimeCore {
                 one.select_from_change = one.select.is_some();
                 true
             }
-            Action::Press(path, button, touch) => {
+            Action::Press(path, button, touch, point) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_press.clone()) else { return false };
                 log_event!(self, "press {path}");
                 one.button = button;
                 one.touch_tap = touch;
+                one.press_point = point;
                 f(app.states(), &mut one);
                 true
             }
-            Action::DoublePress(path) => {
+            Action::DoublePress(path, point) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_double_press.clone()) else { return false };
                 log_event!(self, "double press {path}");
+                one.press_point = point;
                 f(app.states(), &mut one);
                 true
             }
-            Action::MiddlePress(path) => {
+            Action::MiddlePress(path, point) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_middle_press.clone()) else { return false };
                 log_event!(self, "middle press {path}");
                 one.button = crate::PointerButton::Middle;
+                one.press_point = point;
                 f(app.states(), &mut one);
                 true
             }
@@ -603,7 +606,7 @@ impl RuntimeCore {
         self.frame.queue.len() != before
     }
     pub(crate) fn queue_a11y_press(&mut self, path: String) {
-        self.frame.queue.push(Action::Press(path, crate::PointerButton::Primary, false));
+        self.frame.queue.push(Action::Press(path, crate::PointerButton::Primary, false, None));
     }
     pub(crate) fn queue_a11y_secondary_press(&mut self, path: String, ev: PointerEvent) {
         self.frame.queue.push(Action::SecondaryPress(path, ev));

@@ -24,6 +24,8 @@ pub(crate) struct ViewDefaults {
     pub(crate) focus_ring: Option<crate::el::Outline>,
     /// [`Cx::help_look`].
     pub(crate) help: Option<super::HelpLook>,
+    /// [`Cx::press_cursor`].
+    pub(crate) press_cursor: Option<crate::el::Cursor>,
     /// [`Cx::web_focus`].
     pub(crate) web_focus: bool,
     /// [`Cx::force_focus_rings`].
@@ -111,6 +113,7 @@ impl CxCore {
         self.defaults.focus_ring = Some(crate::el::Outline { width, offset, color });
     }
     pub(crate) fn help_look(&mut self, look: crate::HelpLook) { self.defaults.help = Some(look); }
+    pub(crate) fn press_cursor(&mut self, cursor: crate::el::Cursor) { self.defaults.press_cursor = Some(cursor); }
     pub(crate) fn force_focus_rings(&mut self) { self.defaults.force_focus_rings = true; }
     pub(crate) fn web_focus(&mut self) { self.defaults.web_focus = true; }
     pub(crate) fn titlebar_height(&mut self, points: f32) { self.titlebar.height = Some(points.max(1.0)); }
@@ -262,6 +265,28 @@ impl<S> Cx<S> {
     /// of AppKit's. Set it on every run of the view.
     #[inline(always)]
     pub fn help_look(&mut self, look: crate::HelpLook) { self.core.help_look(look); }
+    /// Default cursor for pressable elements (those with [`El::on_press`](crate::El::on_press)
+    /// or [`El::on_double_press`](crate::El::on_double_press)) that do not set their own
+    /// [`El::cursor`](crate::El::cursor): e.g. `Cursor::Pointer` for a web-style pointing hand
+    /// over buttons, menu items and clickable rows. Wins over a cursor inherited from an
+    /// ancestor, while an element's own `.cursor(..)` still wins, [`El::disabled`](crate::El::disabled)
+    /// / [`El::aria_disabled`](crate::El::aria_disabled) controls show `Cursor::Default`, and
+    /// text fields and links keep their own cursors. Off by default. Set it on every run of the
+    /// view.
+    ///
+    /// ```
+    /// # use rune::{Cursor, Cx, El, Env, Runtime, col, el};
+    /// fn view(_: &(), cx: &mut Cx<()>) -> El {
+    ///     cx.press_cursor(Cursor::Pointer);
+    ///     col().size(120.0, 40.0).child(el().size(120.0, 40.0).on_press(|_: &mut ()| {}))
+    /// }
+    /// # let mut rt = Runtime::new((), view, (120.0, 40.0), Env::new(true, 1.0));
+    /// # rt.frame(0.0);
+    /// # rt.pointer_move(20.0, 20.0);
+    /// # assert_eq!(rt.cursor(), Cursor::Pointer);
+    /// ```
+    #[inline(always)]
+    pub fn press_cursor(&mut self, cursor: crate::el::Cursor) { self.core.press_cursor(cursor); }
     /// Every control that can take focus draws its keyboard focus ring (and its focus fill) as
     /// if the keyboard had focused it, whether or not it has focus: a developer tool for checking
     /// focus styles at a glance, as forcing `:focus` and `:focus-visible` on every focusable

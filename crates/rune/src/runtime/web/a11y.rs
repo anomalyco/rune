@@ -1075,7 +1075,7 @@ impl RuntimeCore {
                 let Some(i) = self.live(path) else { return false };
                 if self.tree.nodes[i].a11y.disabled || !self.allowed(i) { return false; }
                 if self.tree.nodes[i].handlers.on_press.is_some() {
-                    self.frame.queue.push(Action::Press(path.to_owned(), crate::PointerButton::Primary, false));
+                    self.frame.queue.push(Action::Press(path.to_owned(), crate::PointerButton::Primary, false, None));
                     true
                 } else {
                     self.queue_a11y_delegate(i, accesskit::Action::Click)

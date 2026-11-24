@@ -203,7 +203,11 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   takes focus, and `ElementInfo::inert` reports it (a document drawn under an editor's canvas).
 - **Cursors**: `.cursor(Cursor::Pointer)` and the other system shapes (including
   `ResizeColumn`, `ResizeRow`, bidirectional `ResizeEw` / `ResizeNs`, and diagonal
-  `ResizeNwse` / `ResizeNesw`); children inherit their nearest ancestor's.
+  `ResizeNwse` / `ResizeNesw`); children inherit their nearest ancestor's. Set
+  `cx.press_cursor(Cursor::Pointer)` on `Cx` for a view-wide opt-in default cursor over pressable
+  elements (`on_press` / `on_double_press`) that set no cursor of their own; it wins over
+  inherited ancestor cursors while explicit `.cursor(..)`, `disabled`/`aria_disabled` controls
+  (`Cursor::Default`), text fields (`Cursor::Text`) and links keep their own cursors.
   `Cursor::Image(CursorImage::png(include_bytes!("pencil.png"), [2.0, 30.0]))`
   shows an app's own PNG, drawn at 2x, with its hot spot in points from the top-left. The OS
   draws it, so it keeps up with the pointer and reaches the window's edge, where a view drawn
@@ -656,8 +660,16 @@ top-left, which is what popups and context menus anchor to.
 | `Cx::anchor_placement`, `memo::anchor_placement` | resolved `(Side, Align)` of an anchored overlay after RTL mirroring and flipping; re-runs only when the resolved placement changes | physical side/align |
 | `context_menu`, `PopupAnchor::from(PointerPress)` | the anchor they take | window |
 
-`on_press`, `on_double_press`, `on_hover`, `on_hover_change`, `on_focus_change`,
-`on_focus_within_change`, `on_visible`, `on_visible_any`, `on_mount`, `on_drop_files` and `on_drop_hover` give no point; a tooltip (`El::help`) anchors itself to the element as drawn.
+`on_press_tx`, `on_background_press_tx`, `on_double_press_tx`, and `on_middle_press` expose
+the pointer activation position through `tx.press_point() -> Option<PointerEvent>` (element-local
+`x`/`y` and window `window_x`/`window_y` on mouse or touch activation, `None` on keyboard or
+assistive-technology activation and outside press handlers). Add `.hover_tracks_bounds()` to an
+element to make `on_hover_change` and hover/press paint tracks follow whether a held press is
+currently inside its clipped/`press_scale`-compensated hit bounds and inside the window (including
+on coordinate-less pointer-leave) without ending capture or changing ancestor defaults. `on_hover`,
+`on_hover_change`, `on_focus_change`, `on_focus_within_change`, `on_visible`, `on_visible_any`,
+`on_mount`, `on_drop_files` and `on_drop_hover` give no press point (use `tx.drop_point()` for
+file drops); a tooltip (`El::help`) anchors itself to the element as drawn.
 `on_pointer_move` and `on_secondary_press` stay in window points, as apps written against
 them expect. `El::on_mount(|s, tx| ..)` runs once when an element mounts into the tree, in the
 same frame before drawing (unlike `on_visible`/`on_visible_any` and `on_layout`/`on_layout_any`, which run after paint): state
