@@ -43,6 +43,8 @@ pub(crate) struct HostState {
     pub(crate) minimize: crate::window::Minimize,
     /// Links handlers asked to open that this runtime left unopened (`Runtime::take_url_requests`).
     url_requests: Vec<String>,
+    /// Local paths handlers asked to open or reveal that this runtime left unopened (`Runtime::take_path_requests`).
+    path_requests: Vec<crate::open_path::PathRequest>,
     /// True when attached to a live window, overlay or web canvas, not a headless or scripted run.
     pub(crate) open_urls_natively: bool,
     /// Pop-up menus asked for (`Tx::popup_menu`) and not yet answered, oldest first.
@@ -87,6 +89,7 @@ impl HostState {
             fit: Default::default(),
             minimize: Default::default(),
             url_requests: Vec::new(),
+            path_requests: Vec::new(),
             open_urls_natively: false,
             popups: Default::default(),
             file_dialog: Default::default(),
@@ -121,6 +124,18 @@ impl HostState {
     #[inline]
     pub(crate) fn push_url_request(&mut self, url: String) {
         self.url_requests.push(url);
+    }
+
+    /// Takes the local path requests handlers asked to open or reveal that this runtime didn't
+    /// execute natively: all of them in a headless run or test, none in a window.
+    #[inline]
+    pub(crate) fn take_path_requests(&mut self) -> Vec<crate::open_path::PathRequest> {
+        std::mem::take(&mut self.path_requests)
+    }
+
+    #[inline]
+    pub(crate) fn push_path_request(&mut self, request: crate::open_path::PathRequest) {
+        self.path_requests.push(request);
     }
 
     #[inline]

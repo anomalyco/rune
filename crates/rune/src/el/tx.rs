@@ -89,6 +89,7 @@ pub struct Tx {
     /// `Tx::announce`: what a screen reader says after this handler.
     pub(crate) announce: Option<(String, crate::LiveRegion)>,
     pub(crate) open_urls: Vec<crate::open_url::Link>,
+    pub(crate) open_paths: Vec<crate::open_path::PathRequest>,
     pub(crate) trace: Option<TraceCalls>,
     pub(crate) popups: Vec<crate::popup_menu::Call>,
     pub(crate) file_dialogs: Vec<crate::file_dialog::Call>,

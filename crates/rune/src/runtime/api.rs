@@ -421,6 +421,21 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     pub fn take_url_requests(&mut self) -> Vec<String> { self.core_mut().host.take_url_requests() }
 
+    /// Takes the local path open and reveal requests queued by [`Tx::open_path`] and
+    /// [`Tx::reveal_path`] that this runtime didn't execute natively (all of them in headless runs
+    /// and tests, none in a live desktop window).
+    ///
+    /// ```no_run
+    /// use std::path::PathBuf;
+    /// use rune::{Env, PathAction, PathRequest, Runtime, el};
+    ///
+    /// let mut rt = Runtime::new((), |_, _| el(), (40.0, 40.0), Env::new(true, 1.0));
+    /// rt.update(|_, tx| { tx.reveal_path("/tmp/notes.txt").unwrap(); });
+    /// assert_eq!(rt.take_path_requests(), [PathRequest { path: PathBuf::from("/tmp/notes.txt"), action: PathAction::Reveal }]);
+    /// ```
+    #[inline(always)]
+    pub fn take_path_requests(&mut self) -> Vec<crate::PathRequest> { self.core_mut().host.take_path_requests() }
+
     #[cfg(feature = "hot")]
     #[inline(always)]
     pub(crate) fn hot_scrolls(&self) -> Vec<(String, f64)> { self.core().hot_scrolls() }
