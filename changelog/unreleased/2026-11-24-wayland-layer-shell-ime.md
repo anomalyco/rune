@@ -1,0 +1,1 @@
+- Wayland layer-shell overlays: added `zwp_text_input_v3` input-method support (preedit, commit, and candidate cursor rectangles) for `KeyPolicy::OnDemand` overlays, matching winit Wayland windows.

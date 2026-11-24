@@ -512,6 +512,18 @@ impl OverlayCore {
             }
             Input::Focus(focused) => {
                 app.window_focus(focused);
+                if !focused && self.options.keys == KeyPolicy::OnDemand {
+                    self.ime.clear();
+                    if let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut()
+                        && let Some(ime) = layer.sync_ime(crate::input::host_events::ImeStep {
+                            cancel: false,
+                            set_allowed: Some(false),
+                            cursor_area: None,
+                        })
+                    {
+                        crate::input::host_events::ime_core(app.rt_mut(), None, ime);
+                    }
+                }
                 app.rt_mut().ignore_minimize("an overlay");
                 if matches!(app.rt_mut().shell_request.take(), Some(crate::el::Shell::Close)) {
                     self.hide(app);
@@ -529,6 +541,10 @@ impl OverlayCore {
                 self.dirty |= app.physical_with_fallback(event, fallback.filter(|_| keep));
                 return;
             }
+            Input::Ime(ime) if self.options.keys == KeyPolicy::OnDemand => {
+                deliver_layer_ime(app.rt_mut(), &mut self.ime, ime);
+            }
+            Input::Ime(_) => return,
         }
         self.dirty = true;
     }
@@ -545,15 +561,26 @@ impl OverlayCore {
     }
 
     /// Syncs OS IME allowance and cursor area for overlays that accept on-demand keyboard focus.
-    fn sync_ime(&mut self, app: &mut dyn OverlayApp) {
-        if self.options.keys == KeyPolicy::OnDemand
-            && let Some(window) = self.surface.live().and_then(|l| l.backing.window())
-        {
-            #[cfg(target_os = "macos")]
-            let focused = self.panel.as_ref().map_or_else(|| window.has_focus(), |p| p.is_key());
-            #[cfg(not(target_os = "macos"))]
-            let focused = window.has_focus();
-            crate::input::host_events::sync_ime(window, app.rt_mut(), &mut self.ime, focused);
+    /// Returns true when the sync queued an immediate IME state event for the runtime.
+    fn sync_ime(&mut self, app: &mut dyn OverlayApp) -> bool {
+        if self.options.keys != KeyPolicy::OnDemand { return false; }
+        let Some(live) = self.surface.live_mut() else { return false };
+        match &mut live.backing {
+            Backing::Window(window) => {
+                #[cfg(target_os = "macos")]
+                let focused = self.panel.as_ref().map_or_else(|| window.has_focus(), |p| p.is_key());
+                #[cfg(not(target_os = "macos"))]
+                let focused = window.has_focus();
+                crate::input::host_events::sync_ime(window, app.rt_mut(), &mut self.ime, focused);
+                false
+            }
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            Backing::Layer(layer) => {
+                let focused = layer.has_keyboard_focus();
+                sync_layer_ime(app.rt_mut(), &mut self.ime, focused, |step| layer.sync_ime(step))
+            }
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            Backing::Xwayland(_) => false,
         }
     }
 
@@ -598,7 +625,7 @@ impl OverlayCore {
     fn unchanged_frame(&mut self, app: &mut dyn OverlayApp) -> bool {
         super::input::drop_window_requests(app.rt_mut());
         self.clipboard.flush_core(app.rt_mut());
-        self.sync_ime(app);
+        let ime_queued = self.sync_ime(app);
         // Hit regions paint nothing, so a frame can change only them (a full-screen drawing
         // surface turning on); no presentation follows to commit them.
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -606,11 +633,11 @@ impl OverlayCore {
         #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
         self.publish_regions(app.rt());
         self.meter.redraw(true);
-        self.dirty = false;
-        self.idle = true;
-        self.runtime_idle = true;
-        self.meter.set_pacing(self.pacing_state(false));
-        false
+        self.dirty = ime_queued;
+        self.idle = !ime_queued;
+        self.runtime_idle = !ime_queued;
+        self.meter.set_pacing(self.pacing_state(ime_queued));
+        ime_queued
     }
 
     /// Records whether the shown panel is on screen. Occluded, it stops its display link,
@@ -723,6 +750,43 @@ impl OverlayCore {
 )]
 fn layer_resize_scale(rt: &RuntimeCore) -> f32 {
     rt.window_scale()
+}
+
+/// Routes a layer-shell IME event into the runtime, invalidating `ImeSync`'s cached cursor area
+/// on `Enabled`/`Disabled` just like `host_events::ime` does for winit windows.
+#[cfg_attr(
+    not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))),
+    allow(dead_code)
+)]
+fn deliver_layer_ime(
+    rt: &mut RuntimeCore,
+    ime_sync: &mut crate::input::host_events::ImeSync,
+    ime: crate::Ime,
+) {
+    if matches!(ime, crate::Ime::Enabled | crate::Ime::Disabled) {
+        ime_sync.invalidate_area();
+    }
+    crate::input::host_events::ime_core(rt, None, ime);
+}
+
+/// Computes the next `ImeStep` for a layer-shell overlay, hands it to `apply`, and forwards any
+/// immediate `Ime::Enabled`/`Disabled` transition into `rt`.
+#[cfg_attr(
+    not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))),
+    allow(dead_code)
+)]
+fn sync_layer_ime(
+    rt: &mut RuntimeCore,
+    ime_sync: &mut crate::input::host_events::ImeSync,
+    focused: bool,
+    apply: impl FnOnce(crate::input::host_events::ImeStep) -> Option<crate::Ime>,
+) -> bool {
+    let step = crate::input::host_events::ime_sync_step(rt, ime_sync, focused);
+    if let Some(ime) = apply(step) {
+        crate::input::host_events::ime_core(rt, None, ime);
+        return true;
+    }
+    false
 }
 
 #[cfg(test)]
