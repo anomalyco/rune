@@ -365,7 +365,12 @@ selection, sort and column widths in a `TableState`. `TableColumn::new(id, title
 over the rows, and a drag on a header edge resizes a column within its bounds (a double-click
 resets it). A header click calls `on_sort(column, direction)` and the app sorts; the header
 shows the direction. Cells come from `cell(|s, i, column| Cell::text(..))`; text cut short
-shows its whole text as a tooltip. `zebra(true)` stripes rows. The keys are the arrows, Page
+shows its whole text as a tooltip. `row(|s, i, el| ..)` customises each mounted row element after
+the table's own styling and press handlers (for example `El::on_secondary_press` context menus
+without dropping `Cell::text`'s truncation tooltip). `zebra(true)` stripes rows,
+`stick_bottom(true)` keeps appended rows in view while scrolled to the end, and
+`cursor_outline(false)` hides the 1 pt multi-select cursor outline when rows draw their own mark
+(`rune-table--options` in the gallery shows all three). The keys are the arrows, Page
 Up and Down, Home, End, Return (`on_open`), and in a multi-select table Shift and Cmd-A. Roles
 are `grid`, `row`, `columnheader` and `gridcell`. 100,000 rows scroll at 0.4 ms a frame (p50)
 and 3.4 ms when rows mount (p95) (`--test integration table::`).
