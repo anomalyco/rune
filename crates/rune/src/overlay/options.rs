@@ -154,6 +154,7 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub options: OverlayOptions,
     pub on_key: Option<fn(&mut T, &crate::KeyEvent, &mut crate::Tx) -> bool>,
     pub on_created: Option<Box<dyn FnMut(OverlayCreated)>>,
+    pub(crate) on_availability: Option<fn(&mut T, crate::Availability, &mut crate::Tx)>,
     pub(crate) poll: Option<fn(&mut T, f64, &mut crate::Tx) -> bool>,
     pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<T>>>,
     pub(crate) setup: Option<fn(&mut T, crate::Waker)>,
@@ -224,6 +225,30 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// `release_gpu_when_hidden`), so a window number in a capture filter stays current.
     /// Use `prewarm: true` to create at startup rather than waiting for `show()`.
     pub fn on_created(mut self, f: impl FnMut(OverlayCreated) + 'static) -> Self { self.on_created = Some(Box::new(f)); self }
+    /// Called on the event thread whenever this overlay's [`Availability`](crate::Availability)
+    /// changes (for example `Unknown` to `Available` once created, `Available` to `Unavailable`
+    /// when a surface fails or a Wayland compositor closes it, or `Unavailable` to `Available`
+    /// when a later show succeeds).
+    ///
+    /// Repeated transitions to the same [`Availability`](crate::Availability) are ignored, and
+    /// dropping the overlay does not invoke `f`. Inside `f`, [`OverlayHandle::availability`](crate::OverlayHandle::availability)
+    /// and [`OverlayHandle::failure`](crate::OverlayHandle::failure) already report the new state.
+    ///
+    /// ```no_run
+    /// use rune::{Availability, OverlayOptions, OverlaySpec, el};
+    ///
+    /// let overlay = OverlaySpec::new("status", (240.0, 44.0), |_: &(), _| el())
+    ///     .options(OverlayOptions::default())
+    ///     .on_availability(|_, availability, _tx| {
+    ///         if availability == Availability::Unavailable {
+    ///             // React to surface loss without a polling timer.
+    ///         }
+    ///     });
+    /// ```
+    pub fn on_availability(mut self, f: fn(&mut T, crate::Availability, &mut crate::Tx)) -> Self {
+        self.on_availability = Some(f);
+        self
+    }
     /// Showing doesn't settle motion: what the state started while hidden plays from the
     /// first visible frame, such as a notification stack's first card entering. By default
     /// an unretained overlay shows settled, at its target.
@@ -261,7 +286,7 @@ impl<T: 'static> OverlaySpec<T> {
 
     pub fn options(self, options: OverlayOptions) -> ConfiguredOverlay<T> {
         ConfiguredOverlay {
-            spec: self, options, on_key: None, on_created: None, poll: None, compositor: None,
+            spec: self, options, on_key: None, on_created: None, on_availability: None, poll: None, compositor: None,
             setup: None, runtime: crate::app::RuntimeConfig::default(), font_smoothing: None, macos_level: None,
             animate_reveal: false, release_after: None,
         }

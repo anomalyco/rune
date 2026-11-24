@@ -40,7 +40,7 @@ impl OverlayCore {
             // Retained alpha-zero hosts already have pixels. A hidden update must reach
             // the surface before exposing it, rather than flashing the old frame.
             if !fading { self.refresh_for_reveal_at(app, crate::time::now()); }
-            self.show_window(&window, fade);
+            self.show_window(app, &window, fade);
             // A retained macOS panel drew while hidden during prewarm and does not mark itself
             // dirty on reveal, so exposing its retained pixels is the first visible present.
             if frame::retained_reveal_presents(self.retained(), self.dirty, self.surface.live().is_some()) {
@@ -109,19 +109,59 @@ impl OverlayCore {
                 }
                 self.ready(app, showing);
             }
-            None => if self.shared.failure.lock().unwrap().is_none() {
-                self.fail("the platform could not create its window or surface".into());
-            } else {
-                self.set_availability(Availability::Unavailable);
-            },
+            None => {
+                let has_failure = self.shared.failure.lock().unwrap().is_some();
+                if !has_failure {
+                    self.fail(app, "the platform could not create its window or surface".into());
+                } else {
+                    self.set_availability_notify(app, Availability::Unavailable);
+                }
+            }
         }
+    }
+
+    /// Updates availability via atomic swap and invokes `ConfiguredOverlay::on_availability`
+    /// only when the value actually changed.
+    pub(super) fn set_availability_notify(&mut self, app: &mut dyn OverlayApp, a: Availability) -> bool {
+        let next = Self::availability_code(a);
+        let prev = self.shared.availability.swap(next, Ordering::AcqRel);
+        if prev == next {
+            return false;
+        }
+        if app.notify_availability(a) {
+            self.clipboard.flush_core(app.rt_mut());
+            app.rt_mut().schedule_pending_wakes();
+            self.dirty = true;
+        }
+        true
+    }
+
+    /// Marks the overlay `Unavailable` and keeps why, for `OverlayHandle::failure`, then fires
+    /// `ConfiguredOverlay::on_availability` when availability changed.
+    pub(super) fn fail(&mut self, app: &mut dyn OverlayApp, reason: String) {
+        eprintln!("rune: overlay {} can't show: {reason}", self.name);
+        *self.shared.failure.lock().unwrap() = Some(reason);
+        self.set_availability_notify(app, Availability::Unavailable);
+    }
+
+    /// Handles a Wayland layer surface closed by the compositor (`zwlr_layer_surface_v1.closed`)
+    /// or a fatal display connection failure: hides and drops the surface like a refused GPU
+    /// surface, records why in `OverlayHandle::failure`, and notifies `on_availability`.
+    #[cfg_attr(
+        not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))),
+        allow(dead_code)
+    )]
+    pub(super) fn layer_closed(&mut self, app: &mut dyn OverlayApp, reason: Option<&str>) {
+        let reason = reason.unwrap_or("compositor closed layer surface").to_owned();
+        self.surface_refused(app, reason);
     }
 
     /// The window exists, with its surface or parked: the overlay can show. A prewarmed one
     /// warms what it has (parked, only the view); one that makes its surface for each show
     /// draws its own first frame instead.
     pub(super) fn ready(&mut self, app: &mut dyn OverlayApp, showing: bool) {
-        self.set_availability(Availability::Available);
+        self.shared.failure.lock().unwrap().take();
+        self.set_availability_notify(app, Availability::Available);
         if !self.animate_reveal { app.rt_mut().settle_all(); }
         self.dirty = true;
         self.idle = true;
@@ -383,7 +423,7 @@ impl OverlayCore {
         let window = match event_loop.create_window(attrs) {
             Ok(window) => Arc::new(window),
             Err(error) => {
-                self.fail(format!("could not create its window: {error}"));
+                self.fail(app, format!("could not create its window: {error}"));
                 return None;
             }
         };
@@ -426,7 +466,7 @@ impl OverlayCore {
                 match crate::platform::win32::OverlayWindow::new(&window, self.interactive, &self.options, wake) {
                     Ok(native) => self.native = Some(native),
                     Err(error) => {
-                        self.fail(error);
+                        self.fail(app, error);
                         return None;
                     }
                 }

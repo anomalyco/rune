@@ -2447,13 +2447,19 @@ above every app, never keyboard-focused, never activating the app, on the top or
 of the primary display, centred or `inset` points from a side. Clicks pass through unless
 `interactive`. `show()`, `hide()`, `place(edge, margin)`, `set_align(align, inset)`,
 `resize(size)` and `update(|t, tx| ..)` work from any thread; `availability()` reports
-`Unavailable` where the platform can't do it. An overlay is one more host on the event loop
+`Unavailable` where the platform can't do it, and `ConfiguredOverlay::on_availability` fires
+on transitions (`Unknown` / `Available` / `Unavailable`) with `OverlayHandle::availability()`
+and `OverlayHandle::failure()` already updated, so apps can react without polling. An overlay
+is one more host on the event loop
 (it shares the GPU pool) but never keeps the loop alive alone.
 
 - Wayland: a `zwlr_layer_shell_v1` surface on winit's display (overlay layer, exclusive zone 0),
   supporting pointer and touch input, `KeyPolicy::OnDemand` keyboard interactivity (layer-shell v4),
   and per-monitor `wl_output` placement, with buffer scale from `preferred_buffer_scale`; hidden
-  means destroyed.
+  means destroyed. When the compositor closes the layer surface (`zwlr_layer_surface_v1.closed`)
+  or the display connection fails, the overlay hides, marks itself `Availability::Unavailable`
+  with `failure()` populated, and fires `on_availability`; a later successful `show()`
+  clears `failure()` and transitions back to `Availability::Available`.
 - X11: an override-redirect notification window, empty input shape unless interactive.
 - macOS: winit's view (and the Metal layer wgpu draws into) moves into a non-activating
   `NSPanel` (`NonactivatingPanel`, `becomesKeyOnlyIfNeeded`) at status level (25) on every

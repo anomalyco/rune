@@ -108,11 +108,15 @@ pub struct OverlaySpec<T: 'static> {
 }
 
 /// Whether the platform could show the overlay, known after its first `show`.
+///
+/// Use [`ConfiguredOverlay::on_availability`](crate::ConfiguredOverlay::on_availability) to react
+/// to transitions without polling [`OverlayHandle::availability`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Availability {
     Unknown,
     Available,
-    /// Wayland without layer-shell, or its window, surface or show failed (`OverlayHandle::failure`).
+    /// Wayland without layer-shell, a Wayland compositor close or display connection failure, or a
+    /// window, surface or show failure (`OverlayHandle::failure`).
     Unavailable,
 }
 
@@ -563,20 +567,17 @@ impl OverlayCore {
         }
     }
 
-    fn set_availability(&self, a: Availability) {
-        let v = match a {
+    pub(super) fn availability_code(a: Availability) -> u8 {
+        match a {
             Availability::Unknown => 0,
             Availability::Available => 1,
             Availability::Unavailable => 2,
-        };
-        self.shared.availability.store(v, Ordering::Release);
+        }
     }
 
-    /// Marks the overlay `Unavailable` and keeps why, for `OverlayHandle::failure`.
-    fn fail(&self, reason: String) {
-        eprintln!("rune: overlay {} can't show: {reason}", self.name);
-        *self.shared.failure.lock().unwrap() = Some(reason);
-        self.set_availability(Availability::Unavailable);
+    /// Silent availability store (used on `Drop` so dropping never invokes user callbacks).
+    pub(super) fn set_availability(&self, a: Availability) {
+        self.shared.availability.store(Self::availability_code(a), Ordering::Release);
     }
 
     pub(super) fn accent_changed(&mut self, rt: &mut RuntimeCore, accent: crate::SystemAccent) {
@@ -648,9 +649,10 @@ impl OverlayCore {
     }
 
     /// Puts the window on screen without focusing it or activating the app.
-    fn show_window(&mut self, window: &Window, fade: Duration) {
+    fn show_window(&mut self, app: &mut dyn OverlayApp, window: &Window, fade: Duration) {
         #[cfg(target_os = "macos")]
         if let Some(panel) = &self.panel {
+            let _ = app;
             panel.show(fade);
             return;
         }
@@ -660,13 +662,19 @@ impl OverlayCore {
             let _ = window;
             if let Some(native) = &mut self.native {
                 match native.show() {
-                    Ok(()) => if self.shared.failure.lock().unwrap().take().is_some() { self.set_availability(Availability::Available) },
-                    Err(error) => self.fail(error),
+                    Ok(()) => {
+                        let recovered = self.shared.failure.lock().unwrap().take().is_some();
+                        if recovered { self.set_availability_notify(app, Availability::Available); }
+                    }
+                    Err(error) => self.fail(app, error),
                 }
             }
         }
         #[cfg(not(target_os = "windows"))]
-        window.set_visible(true);
+        {
+            let _ = app;
+            window.set_visible(true);
+        }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if let Some(x11) = &self.x11 { x11.show(self.options.level); }
     }
@@ -780,6 +788,10 @@ impl OverlayCore {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "overlay/availability_tests.rs"]
+mod availability_tests;
 
 #[cfg(test)]
 #[path = "overlay/tests.rs"]

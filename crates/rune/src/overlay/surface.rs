@@ -270,7 +270,7 @@ impl OverlayCore {
                                 app.release_compositor_gpu();
                                 *self.gpu_pool.borrow_mut() = Weak::default();
                             }
-                            self.fail(err.message);
+                            self.fail(app, err.message);
                             return None;
                         }
                         let instance = gpu.instance.clone();
@@ -287,7 +287,7 @@ impl OverlayCore {
                         ) {
                             Ok(made) => made,
                             Err(err) => {
-                                self.fail(err.message);
+                                self.fail(app, err.message);
                                 return None;
                             }
                         };
@@ -314,7 +314,7 @@ impl OverlayCore {
                 let (gpu, surface, configured) = match made {
                     Ok(made) => made,
                     Err(err) => {
-                        self.fail(err.message);
+                        self.fail(app, err.message);
                         return None;
                     }
                 };
@@ -431,7 +431,7 @@ impl OverlayCore {
     pub(super) fn surface_refused(&mut self, app: &mut dyn OverlayApp, reason: String) {
         self.hide(app);
         self.release();
-        self.fail(reason);
+        self.fail(app, reason);
     }
 
     /// Drops the surface and every native owner of its window; the next show makes new ones.

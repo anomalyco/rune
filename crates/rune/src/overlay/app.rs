@@ -34,6 +34,8 @@ pub(super) trait OverlayApp {
     fn with_driver(&mut self, f: &mut dyn FnMut(&mut RuntimeCore, &mut dyn AppDriver));
     fn has_poll(&self) -> bool;
     fn run_setup(&mut self, waker: Waker);
+    /// Runs the configured `on_availability` callback, returning whether one was installed.
+    fn notify_availability(&mut self, availability: super::Availability) -> bool;
     /// Drains queued typed updates into `rt`, returning `(queued, updated)`.
     fn drain_updates(&mut self) -> (bool, bool);
     fn has_compositor(&self) -> bool;
@@ -154,6 +156,7 @@ pub(super) struct TypedOverlayApp<T: 'static> {
     pub(super) rt: Runtime<T>,
     pub(super) compositor: Option<Box<dyn Compositor<T>>>,
     pub(super) setup: Option<fn(&mut T, Waker)>,
+    pub(super) on_availability: Option<fn(&mut T, super::Availability, &mut Tx)>,
     pub(super) shared: Arc<Shared<T>>,
 }
 
@@ -173,6 +176,17 @@ impl<T: 'static> OverlayApp for TypedOverlayApp<T> {
         if let Some(setup) = self.setup.take() {
             setup(&mut self.rt.state, waker);
         }
+    }
+
+    fn notify_availability(&mut self, availability: super::Availability) -> bool {
+        let Some(f) = self.on_availability else { return false };
+        self.rt.update(|state, tx| {
+            #[cfg(feature = "hot")]
+            crate::hot::patched_or_original!("callback", f, state, availability, tx);
+            #[cfg(not(feature = "hot"))]
+            f(state, availability, tx);
+        });
+        true
     }
 
     fn drain_updates(&mut self) -> (bool, bool) {
@@ -234,7 +248,7 @@ fn build_parts<S, T: 'static>(
     app_font_smoothing: crate::FontSmoothing,
 ) -> (OverlayCore, TypedOverlayApp<T>, OverlayHandle<T>, bool) {
     let ConfiguredOverlay {
-        spec, options, on_key, on_created, poll, compositor, setup, mut runtime, font_smoothing,
+        spec, options, on_key, on_created, on_availability, poll, compositor, setup, mut runtime, font_smoothing,
         macos_level, animate_reveal, release_after,
     } = configured;
     let inherits_font_smoothing = font_smoothing.is_none();
@@ -265,7 +279,7 @@ fn build_parts<S, T: 'static>(
         animate_reveal,
         release_after,
     );
-    let typed = TypedOverlayApp { rt, compositor, setup, shared: shared.clone() };
+    let typed = TypedOverlayApp { rt, compositor, setup, on_availability, shared: shared.clone() };
     (core, typed, OverlayHandle { shared }, inherits_font_smoothing)
 }
 
@@ -295,6 +309,7 @@ pub(super) struct Overlay<T: 'static> {
     pub(super) rt: Runtime<T>,
     pub(super) compositor: Option<Box<dyn Compositor<T>>>,
     pub(super) setup: Option<fn(&mut T, Waker)>,
+    pub(super) on_availability: Option<fn(&mut T, super::Availability, &mut Tx)>,
     pub(super) shared: Arc<Shared<T>>,
 }
 
@@ -314,6 +329,7 @@ struct BorrowOverlayApp<'a, T: 'static> {
     rt: &'a mut Runtime<T>,
     compositor: &'a mut Option<Box<dyn Compositor<T>>>,
     setup: &'a mut Option<fn(&mut T, Waker)>,
+    on_availability: Option<fn(&mut T, super::Availability, &mut Tx)>,
     shared: &'a Arc<Shared<T>>,
 }
 
@@ -328,6 +344,16 @@ impl<T: 'static> OverlayApp for BorrowOverlayApp<'_, T> {
     fn has_poll(&self) -> bool { self.rt.poll.is_some() }
     fn run_setup(&mut self, waker: Waker) {
         if let Some(setup) = self.setup.take() { setup(&mut self.rt.state, waker); }
+    }
+    fn notify_availability(&mut self, availability: super::Availability) -> bool {
+        let Some(f) = self.on_availability else { return false };
+        self.rt.update(|state, tx| {
+            #[cfg(feature = "hot")]
+            crate::hot::patched_or_original!("callback", f, state, availability, tx);
+            #[cfg(not(feature = "hot"))]
+            f(state, availability, tx);
+        });
+        true
     }
     fn drain_updates(&mut self) -> (bool, bool) {
         let updates = std::mem::take(&mut *self.shared.updates.lock().unwrap());
@@ -377,6 +403,7 @@ macro_rules! with_app {
             rt: &mut $self.rt,
             compositor: &mut $self.compositor,
             setup: &mut $self.setup,
+            on_availability: $self.on_availability,
             shared: &$self.shared,
         };
         $body
@@ -387,8 +414,8 @@ macro_rules! with_app {
 impl<T: 'static> Overlay<T> {
     pub(super) fn new<S>(configured: impl Into<ConfiguredOverlay<T>>, state: T, app: &AppSpec<S>) -> (Self, OverlayHandle<T>) {
         let (core, typed, handle, _) = build_parts(configured.into(), state, app, crate::FontSmoothing::default());
-        let TypedOverlayApp { rt, compositor, setup, shared } = typed;
-        (Overlay { core, rt, compositor, setup, shared }, handle)
+        let TypedOverlayApp { rt, compositor, setup, on_availability, shared } = typed;
+        (Overlay { core, rt, compositor, setup, on_availability, shared }, handle)
     }
 
     pub(super) fn wake_deadline(&self) -> Option<Instant> { self.core.wake_deadline(self.rt.core()) }
@@ -405,6 +432,11 @@ impl<T: 'static> Overlay<T> {
     pub(super) fn wake_due(&mut self, now: Instant) { with_app!(self, |core, app| core.wake_due(&mut app, now)) }
     pub(super) fn note_presented_with(&mut self, now: Instant, low: bool) { self.core.note_presented_with(now, low) }
     pub(super) fn hide(&mut self) { with_app!(self, |core, app| core.hide(&mut app)) }
+    pub(super) fn ready(&mut self, showing: bool) { with_app!(self, |core, app| core.ready(&mut app, showing)) }
+    pub(super) fn fail(&mut self, reason: String) { with_app!(self, |core, app| core.fail(&mut app, reason)) }
+    pub(super) fn set_availability_notify(&mut self, a: super::Availability) -> bool { with_app!(self, |core, app| core.set_availability_notify(&mut app, a)) }
+    pub(super) fn surface_refused(&mut self, reason: String) { with_app!(self, |core, app| core.surface_refused(&mut app, reason)) }
+    pub(super) fn layer_closed(&mut self, reason: Option<&str>) { with_app!(self, |core, app| core.layer_closed(&mut app, reason)) }
     pub(super) fn drop_hidden_images(&mut self) { with_app!(self, |core, app| core.drop_hidden_images(&mut app)) }
     pub(super) fn hide_fading(&mut self, fade: Duration) { with_app!(self, |core, app| core.hide_fading(&mut app, fade)) }
     pub(super) fn presence_due(&mut self, now: Instant) { with_app!(self, |core, app| core.presence_due(&mut app, now)) }

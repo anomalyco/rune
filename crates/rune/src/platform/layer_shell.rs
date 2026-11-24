@@ -621,6 +621,8 @@ pub(crate) struct LayerSurface {
     layer: ZwlrLayerSurfaceV1,
     surface: WlSurface,
     display: NonNull<std::ffi::c_void>,
+    /// Why the surface closed when a fatal display error ended it; `None` for compositor `closed`.
+    close_reason: Option<String>,
 }
 
 struct ConfigureDriver<'a> {
@@ -774,7 +776,7 @@ impl LayerSurface {
             text_input,
             ..State::default()
         };
-        let mut this = LayerSurface { namespace: namespace.to_owned(), conn, globals: Some(globals), seat_global, regions: std::cell::RefCell::new(Some(Vec::new())), compositor, shell, output, seat, options: options.clone(), queue, state, layer, surface, display: display.display };
+        let mut this = LayerSurface { namespace: namespace.to_owned(), conn, globals: Some(globals), seat_global, regions: std::cell::RefCell::new(Some(Vec::new())), compositor, shell, output, seat, options: options.clone(), queue, state, layer, surface, display: display.display, close_reason: None };
         this.place(at);
         this.surface.commit();
         match wait_for_configure(&this.conn, &mut this.queue, &mut this.state, configure_wait::TIMEOUT) {
@@ -947,6 +949,12 @@ impl LayerSurface {
         !self.state.readiness.closed()
     }
 
+    /// Why the surface closed when a fatal display error ended it; `None` for a clean compositor
+    /// `zwlr_layer_surface_v1.closed` event.
+    pub fn close_reason(&self) -> Option<&str> {
+        self.close_reason.as_deref()
+    }
+
     /// True when the surface is still live and libwayland's private event queue already holds
     /// unread events (for example from a mid-turn `wl_display` read during swapchain acquire,
     /// present, or a roundtrip). Checks the queue in memory without syscalls by immediately
@@ -1029,10 +1037,12 @@ impl LayerSurface {
         self.state.reset_text_input_gone();
         self.state.input.clear();
         if !was_closed {
-            match reason {
-                Some(reason) => eprintln!("rune: Wayland layer surface '{}' closed: the display connection failed: {reason}", self.namespace),
-                None => eprintln!("rune: Wayland layer surface '{}' closed: the display connection failed", self.namespace),
-            }
+            let msg = match reason {
+                Some(reason) => format!("the display connection failed: {reason}"),
+                None => "the display connection failed".to_owned(),
+            };
+            eprintln!("rune: Wayland layer surface '{}' closed: {msg}", self.namespace);
+            self.close_reason = Some(msg);
         }
     }
 
