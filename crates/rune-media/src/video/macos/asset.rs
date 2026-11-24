@@ -16,7 +16,7 @@ use objc2_av_foundation::{
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{CGBitmapContextCreate, CGColorSpace, CGContext, CGImage, CGImageAlphaInfo, CGImageByteOrderInfo, kCGColorSpaceSRGB};
-use objc2_core_media::{CMTime, CMTimeFlags};
+use objc2_core_media::{CMTime, CMTimeFlags, kCMTimePositiveInfinity};
 use objc2_foundation::{NSDictionary, NSNumber, NSString, NSURL};
 
 /// The source's lowercase extension, if any.
@@ -210,6 +210,10 @@ pub(super) fn cm(seconds: f64) -> CMTime {
 }
 pub(super) fn zero() -> CMTime {
     CMTime { value: 0, timescale: 1, flags: CMTimeFlags::Valid, epoch: 0 }
+}
+pub(super) fn positive_infinity() -> CMTime {
+    // SAFETY: `kCMTimePositiveInfinity` is an immutable static CoreMedia `CMTime` constant.
+    unsafe { kCMTimePositiveInfinity }
 }
 
 /// Blocks until the asset's tracks load (a network fetch for URLs).

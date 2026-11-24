@@ -11,17 +11,19 @@ fn playing(pos: f64) -> (Phase, Anchor) {
 
 #[test]
 fn a_clip_opens_where_it_was_parked() {
-    let mut phase = Phase::Idle { at: 3.0 };
-    assert_eq!(effects(&mut phase, Event::Open { play: true }), vec![Effect::Open { at: 3.0 }]);
-    assert_eq!(phase, Phase::Opening { at: 3.0, play: true });
+    let mut phase = Phase::Idle { at: 3.0, seek: None };
+    assert_eq!(effects(&mut phase, Event::Open { play: true }), vec![Effect::Open { at: 3.0, exact: true }]);
+    assert_eq!(phase, Phase::Opening { at: 3.0, play: true, seeking: false });
+    assert!(!phase.is_seeking());
     assert_eq!(effects(&mut phase, Event::Opened), vec![]);
-    assert_eq!(phase, Phase::Buffering { at: 3.0, play: true });
+    assert_eq!(phase, Phase::Buffering { at: 3.0, play: true, seeking: false });
+    assert!(!phase.is_seeking());
 }
 
 #[test]
 fn the_first_picture_starts_the_clock_of_a_playing_clip() {
     let target = rune_core::time::now();
-    let mut phase = Phase::Buffering { at: 3.0, play: true };
+    let mut phase = Phase::Buffering { at: 3.0, play: true, seeking: false };
     let clock = Anchor { at: target, pos: 3.5, rate: 2.0 };
     assert_eq!(effects(&mut phase, Event::Shown { pts: 3.0, target, lead: 0.5, rate: 2.0 }), vec![Effect::Clock(Some(clock))]);
     assert_eq!(phase, Phase::Playing { clock });
@@ -29,7 +31,7 @@ fn the_first_picture_starts_the_clock_of_a_playing_clip() {
 
 #[test]
 fn the_first_picture_holds_on_a_paused_clip() {
-    let mut phase = Phase::Buffering { at: 3.0, play: false };
+    let mut phase = Phase::Buffering { at: 3.0, play: false, seeking: false };
     assert_eq!(effects(&mut phase, Event::Shown { pts: 3.02, target: rune_core::time::now(), lead: 0.0, rate: 1.0 }), vec![]);
     assert_eq!(phase, Phase::Paused { at: 3.02 });
 }
@@ -44,15 +46,17 @@ fn a_pause_stops_the_clock_at_the_picture_on_screen() {
 #[test]
 fn a_seek_while_playing_stops_the_clock_and_plays_on_from_the_target() {
     let (mut phase, _) = playing(5.0);
-    assert_eq!(effects(&mut phase, Event::Seek { to: 9.0 }), vec![Effect::Clock(None), Effect::Seek { to: 9.0 }]);
-    assert_eq!(phase, Phase::Buffering { at: 9.0, play: true });
+    assert_eq!(effects(&mut phase, Event::Seek { to: 9.0, exact: true }), vec![Effect::Clock(None), Effect::Seek { to: 9.0, exact: true }]);
+    assert_eq!(phase, Phase::Buffering { at: 9.0, play: true, seeking: true });
+    assert!(phase.is_seeking());
 }
 
 #[test]
 fn a_seek_while_paused_or_ended_waits_for_its_picture_paused() {
     for mut phase in [Phase::Paused { at: 5.0 }, Phase::Ended { at: 5.0 }] {
-        assert_eq!(effects(&mut phase, Event::Seek { to: 9.0 }), vec![Effect::Seek { to: 9.0 }]);
-        assert_eq!(phase, Phase::Buffering { at: 9.0, play: false });
+        assert_eq!(effects(&mut phase, Event::Seek { to: 9.0, exact: true }), vec![Effect::Seek { to: 9.0, exact: true }]);
+        assert_eq!(phase, Phase::Buffering { at: 9.0, play: false, seeking: true });
+        assert!(phase.is_seeking());
     }
 }
 
@@ -60,7 +64,8 @@ fn a_seek_while_paused_or_ended_waits_for_its_picture_paused() {
 fn a_stall_holds_the_clock_until_the_next_picture() {
     let (mut phase, _) = playing(5.0);
     assert_eq!(effects(&mut phase, Event::Stalled { at: 5.1 }), vec![Effect::Clock(None)]);
-    assert_eq!(phase, Phase::Buffering { at: 5.1, play: true });
+    assert_eq!(phase, Phase::Buffering { at: 5.1, play: true, seeking: false });
+    assert!(!phase.is_seeking());
 }
 
 #[test]
@@ -74,7 +79,7 @@ fn the_last_picture_ends_a_playing_clip() {
 fn a_released_decoder_parks_the_clip_at_its_picture() {
     let mut phase = Phase::Paused { at: 5.0 };
     assert_eq!(effects(&mut phase, Event::Released { at: 5.0 }), vec![Effect::Clock(None)]);
-    assert_eq!(phase, Phase::Idle { at: 5.0 });
+    assert_eq!(phase, Phase::Idle { at: 5.0, seek: None });
 }
 
 #[test]
@@ -86,24 +91,62 @@ fn a_failed_clip_stays_failed() {
 
 #[test]
 fn a_playing_seek_the_decoder_ends_with_no_picture_ends_where_it_was_asked_to_stand() {
-    let mut phase = Phase::Buffering { at: 9.99, play: true };
+    let mut phase = Phase::Buffering { at: 9.99, play: true, seeking: true };
     assert_eq!(effects(&mut phase, Event::Ended { at: 9.99 }), vec![]);
     assert_eq!(phase, Phase::Ended { at: 9.99 });
+    assert!(!phase.is_seeking());
 }
 
 #[test]
 fn a_paused_seek_the_decoder_ends_with_no_picture_holds_there() {
-    let mut phase = Phase::Buffering { at: 9.99, play: false };
+    let mut phase = Phase::Buffering { at: 9.99, play: false, seeking: true };
     assert_eq!(effects(&mut phase, Event::Ended { at: 9.99 }), vec![]);
     assert_eq!(phase, Phase::Paused { at: 9.99 });
+    assert!(!phase.is_seeking());
 }
 
 #[test]
 fn a_seek_while_parked_forgets_the_picture_and_opens_at_the_target() {
-    let mut phase = Phase::Idle { at: 3.0 };
-    assert_eq!(effects(&mut phase, Event::Seek { to: 7.5 }), vec![Effect::Seek { to: 7.5 }]);
-    assert_eq!(phase, Phase::Idle { at: 7.5 });
-    assert_eq!(effects(&mut phase, Event::Open { play: false }), vec![Effect::Open { at: 7.5 }]);
+    let mut phase = Phase::Idle { at: 3.0, seek: None };
+    assert_eq!(effects(&mut phase, Event::Seek { to: 7.5, exact: true }), vec![Effect::Seek { to: 7.5, exact: true }]);
+    assert_eq!(phase, Phase::Idle { at: 7.5, seek: Some(SeekMode::Exact) });
+    assert!(phase.is_seeking());
+    assert_eq!(effects(&mut phase, Event::Open { play: false }), vec![Effect::Open { at: 7.5, exact: true }]);
+    assert_eq!(phase, Phase::Opening { at: 7.5, play: false, seeking: true });
+    assert!(phase.is_seeking());
+}
+
+#[test]
+fn seek_fast_propagates_exact_false_and_tracks_is_seeking_until_shown() {
+    let now = rune_core::time::now();
+    // Parked -> seek_fast -> Open -> Opened -> Shown.
+    let mut phase = Phase::Idle { at: 1.0, seek: None };
+    assert!(!phase.is_seeking());
+    assert_eq!(effects(&mut phase, Event::Seek { to: 6.4, exact: false }), vec![Effect::Seek { to: 6.4, exact: false }]);
+    assert_eq!(phase, Phase::Idle { at: 6.4, seek: Some(SeekMode::Keyframe) });
+    assert!(phase.is_seeking());
+    assert_eq!(effects(&mut phase, Event::Open { play: false }), vec![Effect::Open { at: 6.4, exact: false }]);
+    assert_eq!(phase, Phase::Opening { at: 6.4, play: false, seeking: true });
+    assert!(phase.is_seeking());
+    assert_eq!(effects(&mut phase, Event::Opened), vec![]);
+    assert_eq!(phase, Phase::Buffering { at: 6.4, play: false, seeking: true });
+    assert!(phase.is_seeking());
+    assert_eq!(effects(&mut phase, Event::Shown { pts: 5.0, target: now, lead: 0.0, rate: 1.0 }), vec![]);
+    assert_eq!(phase, Phase::Paused { at: 5.0 });
+    assert!(!phase.is_seeking());
+
+    // Playing -> seek_fast -> Play/Pause preserve seeking -> Shown clears it.
+    let (mut phase, _) = playing(2.0);
+    assert_eq!(effects(&mut phase, Event::Seek { to: 7.5, exact: false }), vec![Effect::Clock(None), Effect::Seek { to: 7.5, exact: false }]);
+    assert_eq!(phase, Phase::Buffering { at: 7.5, play: true, seeking: true });
+    assert_eq!(effects(&mut phase, Event::Pause { at: 7.5 }), vec![]);
+    assert_eq!(phase, Phase::Buffering { at: 7.5, play: false, seeking: true });
+    assert!(phase.is_seeking());
+    assert_eq!(effects(&mut phase, Event::Play { target: now, lead: 0.0, rate: 1.0 }), vec![]);
+    assert_eq!(phase, Phase::Buffering { at: 7.5, play: true, seeking: true });
+    assert!(phase.is_seeking());
+    assert_eq!(effects(&mut phase, Event::Shown { pts: 6.0, target: now, lead: 0.0, rate: 1.0 }), vec![Effect::Clock(Some(Anchor { at: now, pos: 6.0, rate: 1.0 }))]);
+    assert!(!phase.is_seeking());
 }
 
 #[test]

@@ -258,6 +258,13 @@ pub(super) fn apply(shared: &Arc<Shared>) {
     }
 }
 
+pub(super) fn is_seeking(shared: &Shared) -> bool {
+    if !playback_enabled() {
+        return false;
+    }
+    shared.ctl.lock().unwrap().is_seeking()
+}
+
 /// Audio, on the main thread: what a live player (`Control::live`) reports now, while it plays.
 /// `live`: the player's own position is the one to read (`Control::live`).
 #[allow(unsafe_code)]

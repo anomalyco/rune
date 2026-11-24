@@ -2161,9 +2161,14 @@ tap.play();
 ```
 
 - **Controls and state**: `play` (from the start after `Ended`), `pause`, `seek` (clamped),
-  `set_rate`, `set_looping`, `set_muted`, `set_volume`, `set_output_device` (`output_device`);
-  `state()` is `Loading`, `Ready`, `Playing`, `Ended`
-  or `Failed(message)`, plus `time()`, `duration()`, `natural_size()` and `has_sound()`
+  `seek_fast` (keyframe-only scrub preview: keeps the first keyframe returned by Media Foundation
+  on Windows and reports its timestamp via `time()`, uses `kCMTimePositiveInfinity` tolerances on
+  macOS `AVPlayer`, and acts like `seek` headless or elsewhere), `set_rate`, `set_looping`,
+  `set_muted`, `set_volume`, `set_output_device` (`output_device`); `state()` is `Loading`,
+  `Ready`, `Playing`, `Ended` or `Failed(message)`, plus `is_playing()`, `is_seeking()` (true
+  while a `seek` or `seek_fast` waits for its picture or audio position to land; `false`
+  headless or on unsupported backends), `time()`, `duration()`, `natural_size()` and
+  `has_sound()`
   (whether the clip has a sound track it can play, as a page's controls grey their mute
   button without one; `None` until the clip's facts are read).
 - **Sound**: `Player::file`/`url`/`new` make videos, which start muted. `Player::audio` makes

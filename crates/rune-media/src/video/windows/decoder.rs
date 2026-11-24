@@ -89,6 +89,12 @@ impl Landing {
         Self { skip_before, passed: None, kept: false, went_back: false }
     }
 
+    /// Keeps the first decoded picture returned after `mf::seek` without decoding forward to a
+    /// target time.
+    pub(super) fn keyframe() -> Self {
+        Self::at(f64::NEG_INFINITY)
+    }
+
     /// Whether the picture at clip second `time` is kept: the one nearest the target, and all
     /// after it. `frame` is the seconds a picture lasts.
     pub(super) fn keeps(&mut self, time: f64, frame: f64) -> bool {
@@ -205,8 +211,10 @@ pub(super) fn superseded(pos: f64, pts: f64, frame: f64, since: Option<Duration>
 pub(super) struct Job {
     pub source: MediaSource,
     pub kind: Kind,
-    /// Clip seconds to start at, and that start's generation.
+    /// Clip seconds to start at, whether that start is exact (vs keyframe-only), and that
+    /// start's generation.
     pub start: f64,
+    pub exact: bool,
     pub generation: u32,
     pub looping: bool,
     pub sound: Option<f32>,
@@ -422,8 +430,9 @@ impl Decoder {
 
     fn decode(&mut self, pipe: &Pipe, job: &Job) -> Result<(), String> {
         let mut generation = job.generation;
-        // Pictures before a seek's target are decoded only to reach it.
-        let mut landing = Landing::at(job.start);
+        // Pictures before a seek's target are decoded only to reach it; a keyframe seek keeps the
+        // first picture returned after seeking.
+        let mut landing = if job.exact { Landing::at(job.start) } else { Landing::keyframe() };
         // Added to stream times: the loops so far times the duration.
         let mut epoch = 0.0;
         // Unwrapped timestamps of audio read/pushed and video kept since open, seek or loop.
@@ -431,7 +440,7 @@ impl Decoder {
         let mut audio_end: Option<f64> = None;
         let mut last_video_pts: Option<f64> = None;
         // Unwrapped media time before which decoded audio samples are dropped on push.
-        let mut audio_skip_before = job.start;
+        let mut audio_skip_before = if job.exact || self.video.is_none() { job.start } else { f64::NEG_INFINITY };
         let mut first = true;
         let mut waiting_since = rune_core::time::now();
         // Audio-only or active sound drain: the clip's end, until the clock passes it.
@@ -451,15 +460,15 @@ impl Decoder {
                         end_due = None;
                         // The source moves with the inbox unlocked: the UI thread never waits
                         // for it.
-                        s = pipe.land_seeks(s, |to, g| {
-                            generation = g;
-                            landing = Landing::at(to);
+                        s = pipe.land_seeks(s, |ask| {
+                            generation = ask.generation;
+                            landing = if ask.exact { Landing::at(ask.to) } else { Landing::keyframe() };
                             epoch = 0.0;
                             audio_pts = None;
                             audio_end = None;
                             last_video_pts = None;
-                            audio_skip_before = to;
-                            mf::seek(&self.reader, to)?;
+                            audio_skip_before = if ask.exact || self.video.is_none() { ask.to } else { f64::NEG_INFINITY };
+                            mf::seek(&self.reader, ask.to)?;
                             self.reopen_streams();
                             if let Some(q) = &self.audio_queue {
                                 q.flush();
@@ -591,6 +600,9 @@ impl Decoder {
                     // copied, not queued, not presented.
                     let keep = landing.keeps(read.time, self.facts.meta.frame);
                     if keep {
+                        if audio_skip_before.is_infinite() {
+                            audio_skip_before = pts;
+                        }
                         last_video_pts = Some(last_video_pts.map_or(pts, |prev| prev.max(pts)));
                     }
                     if keep && !self.late_on_layer(pipe, job, pts) {

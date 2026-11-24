@@ -32,6 +32,10 @@ pub(super) fn drive(_: &Arc<Shared>) {}
 
 pub(super) fn preload(_: &Arc<Shared>) {}
 
+pub(super) fn is_seeking(_: &Shared) -> bool {
+    false
+}
+
 pub(super) fn live_time(_: &Shared, _: bool) -> Option<f64> {
     None
 }

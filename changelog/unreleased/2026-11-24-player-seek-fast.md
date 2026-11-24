@@ -1,0 +1,1 @@
+- Media playback: added `Player::seek_fast` (keyframe-only scrubbing on Windows Media Foundation and `kCMTimePositiveInfinity` tolerance seeks on macOS `AVPlayer`) and `Player::is_seeking` to check whether a seek is still waiting for its picture or position to land.

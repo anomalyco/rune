@@ -30,7 +30,7 @@ pub(super) trait Port {
     fn set_muted(&mut self, muted: bool);
     fn set_volume(&mut self, volume: f32);
     fn set_output_device(&mut self, uid: Option<&str>);
-    fn seek_to(&mut self, at: f64);
+    fn seek_to(&mut self, at: f64, exact: bool);
     fn set_rate(&mut self, rate: f32);
     fn restart(&mut self, rate: f32);
     /// The item time for this frame, and the new frame's item time if one reached the surface.
@@ -75,7 +75,7 @@ pub(super) fn carry(c: &mut Control, port: &mut impl Port, effects: Effects<Effe
             Effect::SetMuted(muted) => port.set_muted(muted),
             Effect::SetVolume(volume) => port.set_volume(volume),
             Effect::SetOutputDevice => port.set_output_device(c.output_device.as_deref()),
-            Effect::SeekTo(at) => port.seek_to(at),
+            Effect::SeekTo { at, exact } => port.seek_to(at, exact),
             Effect::SetRate(rate) => port.set_rate(rate),
             Effect::Restart(rate) => port.restart(rate),
         }

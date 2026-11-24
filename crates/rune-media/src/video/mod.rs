@@ -377,7 +377,24 @@ impl Player {
     }
     /// Jump to `seconds` (clamped to the clip). Keeps playing if it was playing.
     pub fn seek(&self, seconds: f64) {
-        self.send(Event::Seek(seconds));
+        self.send(Event::Seek { to: seconds, exact: true });
+    }
+    /// Jump to the nearest keyframe at or before `seconds` (clamped to the clip), skipping the
+    /// decode of intermediate frames up to the target. Use while dragging a scrub bar, then call
+    /// [`seek`](Self::seek) on release for the exact frame.
+    ///
+    /// On Windows (Media Foundation) this keeps the first keyframe returned by the source reader
+    /// and reports that keyframe's timestamp through [`time`](Self::time) once it lands; on macOS
+    /// (`AVPlayer`) it seeks with infinite tolerances (`kCMTimePositiveInfinity`). Headless runs
+    /// and other backends treat it as [`seek`](Self::seek). Keeps playing if it was playing.
+    ///
+    /// ```no_run
+    /// let clip = rune_media::Player::file("capture.mp4");
+    /// clip.seek_fast(12.5);
+    /// clip.seek(12.5);
+    /// ```
+    pub fn seek_fast(&self, seconds: f64) {
+        self.send(Event::Seek { to: seconds, exact: false });
     }
     /// Playback speed while playing; 1 is normal. Negative and non-finite rates are ignored.
     pub fn set_rate(&self, rate: f32) {
@@ -428,6 +445,22 @@ impl Player {
     /// Whether `play` is in effect (also true while loading after `play`).
     pub fn is_playing(&self) -> bool {
         self.shared.ctl.lock().unwrap().playing()
+    }
+    /// Whether a [`seek`](Self::seek) or [`seek_fast`](Self::seek_fast) is still waiting for its
+    /// picture (or position, for audio) to land.
+    ///
+    /// Returns `false` once the target picture has been shown, if the clip has failed, and in
+    /// headless runs or on unsupported backends.
+    ///
+    /// ```no_run
+    /// let clip = rune_media::Player::file("capture.mp4");
+    /// clip.seek_fast(12.5);
+    /// if !clip.is_seeking() {
+    ///     clip.seek_fast(13.0);
+    /// }
+    /// ```
+    pub fn is_seeking(&self) -> bool {
+        backend::is_seeking(&self.shared)
     }
     /// Playback position in seconds. Video: as of the last drawn frame (or the last `seek`).
     /// Audio: read from the player when called on the main thread while it plays.
@@ -726,6 +759,19 @@ impl Meta {
     }
 }
 
+/// A seek recorded on the handle, waiting to be carried out.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Seek {
+    pub at: f64,
+    pub exact: bool,
+}
+
+impl Seek {
+    pub(super) const fn exact(at: f64) -> Self {
+        Self { at, exact: true }
+    }
+}
+
 /// A clip's state, stepped by [`phases::step`].
 #[derive(Clone, Debug)]
 pub(crate) struct Control {
@@ -738,7 +784,7 @@ pub(crate) struct Control {
     pub output_device: Option<String>,
     pub(super) output_generation: u64,
     /// A seek not yet carried out, by a player, a poster, a decoder or the headless clock.
-    seek: Option<f64>,
+    seek: Option<Seek>,
     // Reported by pulls and ticks.
     pub time: f64,
     pub duration: Option<f64>,
@@ -751,6 +797,8 @@ pub(crate) struct Control {
     posters: Seq,
     /// The time the current poster attempt asked for; None once a player took over.
     poster_at: Option<f64>,
+    /// The poster attempt started for a paused seek, until its frame lands or is overtaken.
+    poster_seeking: Option<rune_core::machine::Attempt>,
     generation: u64,
     frame_id: u64,
     /// Headless: the frame index on the surface.
@@ -776,6 +824,7 @@ impl Default for Control {
             stage: Stage::default(),
             posters: Seq::default(),
             poster_at: None,
+            poster_seeking: None,
             generation: 0,
             frame_id: 0,
             shown: None,

@@ -61,6 +61,30 @@ fn a_failed_clip_scrolling_across_the_clip_edge_commits_nothing() {
     assert_eq!(rt.stats.commits, commits, "scrolling across the edge commits nothing");
 }
 
+#[test]
+fn seek_fast_and_is_seeking_work_through_rune_reexport_and_keep_idle_paused_window_still() {
+    let v = Video::file(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/rgbw.mp4"));
+    let mut rt = crate::Runtime::new(v.clone(), view, (32.0, 18.0), crate::Env::new(true, 2.0));
+    rt.frame(0.0);
+    assert!(!v.is_seeking());
+    v.seek_fast(0.6);
+    assert!(!v.is_seeking(), "headless runs report is_seeking() == false");
+    rt.frame(0.0);
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        assert_eq!(v.state(), PlayerState::Ready);
+        assert!((v.time() - 0.6).abs() < 1e-6, "{}", v.time());
+        assert!(!rt.frame(0.2), "a paused clip after seek_fast requests no frames");
+    }
+    v.seek(0.3);
+    rt.frame(0.0);
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        assert!((v.time() - 0.3).abs() < 1e-6, "{}", v.time());
+        assert!(!v.is_seeking());
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod headless {
     use super::*;

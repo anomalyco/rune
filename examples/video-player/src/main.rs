@@ -1,7 +1,8 @@
 //! Play a movie or audio file, or a URL. `cargo run -p video-player -- clip.mov` opens a video
-//! looping and muted; tap to pause or resume. An audio file (mp3, m4a, wav) shows a progress
-//! bar and waits for a tap, since audio is audible. With no argument it plays the four-frame
-//! test clip. `-- --snap out.png --at 0.6` renders the frame at 0.6 s headless. Pass
+//! looping and muted; tap to pause or resume. Drag the scrub bar to preview keyframes with
+//! `Player::seek_fast` and land on the exact frame with `Player::seek` on release. An audio file
+//! (mp3, m4a, wav) waits for a tap, since audio is audible. With no argument it plays the
+//! four-frame test clip. `-- --snap out.png --at 0.6` renders the frame at 0.6 s headless. Pass
 //! `--output-device <uid>` to route audio to a specific device UID on macOS.
 //!
 //! Keys: space plays or pauses, m mutes, v turns the volume to 0 and back, d toggles the chosen
@@ -11,16 +12,22 @@
 #![forbid(unsafe_code)]
 
 use rune::tok::{self, type_};
-use rune::{AppSpec, Cx, El, Key, KeyEvent, Player, PlayerState, SurfaceFit, Tx, Waker, col, el, row, text};
+use rune::{AppSpec, Cx, Drag, El, Key, KeyEvent, Phase, Player, PlayerState, SurfaceFit, Tx, Waker, col, el, text};
 use std::time::Duration;
 
 const WIDTH: f32 = 480.0;
+const SCRUB_H: f32 = 20.0;
+const KNOB: f32 = 12.0;
+const TRACK_H: f32 = 4.0;
 const AUDIO: &[&str] = &["mp3", "m4a", "aac", "wav", "aif", "aiff", "flac", "ogg"];
 
 struct Viewer {
     clip: Player,
     hidden: bool,
     preferred_output: Option<String>,
+    scrub_target: Option<f64>,
+    last_time: f64,
+    last_seeking: bool,
 }
 
 fn parse_args(args: &[String]) -> (Option<String>, Option<String>) {
@@ -58,7 +65,7 @@ fn state() -> Viewer {
     if let Some(uid) = preferred_output.as_deref() {
         clip.set_output_device(Some(uid));
     }
-    Viewer { clip, hidden: false, preferred_output }
+    Viewer { clip, hidden: false, preferred_output, scrub_target: None, last_time: 0.0, last_seeking: false }
 }
 
 /// The clip calls the waker when it loads, ends or fails, so the label follows.
@@ -66,12 +73,19 @@ fn setup(s: &mut Viewer, waker: Waker) {
     s.clip.set_waker(waker);
 }
 
-/// Audio progress: re-run the view about 30 times a second while it plays, and never otherwise.
+/// Scrub bar and seeking status: poll about 30 times a second while playing or waiting on a seek,
+/// and stop asking for frames once idle.
 fn poll(s: &mut Viewer, _: f64, tx: &mut Tx) -> bool {
-    if s.clip.is_audio() && s.clip.is_playing() {
+    let playing = s.clip.is_playing();
+    let seeking = s.clip.is_seeking();
+    if playing || seeking {
         tx.wake_after(Duration::from_millis(33));
     }
-    s.clip.is_audio()
+    let time = s.clip.time();
+    let changed = (time - s.last_time).abs() > 1e-3 || seeking != s.last_seeking;
+    s.last_time = time;
+    s.last_seeking = seeking;
+    changed
 }
 
 fn toggle(s: &mut Viewer) {
@@ -98,9 +112,83 @@ fn on_key(s: &mut Viewer, event: &KeyEvent, _: &mut Tx) -> bool {
     true
 }
 
+fn scrub_bar(s: &Viewer, t: &tok::Theme) -> El {
+    let duration = s.clip.duration().filter(|d| *d > 0.0).unwrap_or(0.0);
+    let shown_time = s.scrub_target.unwrap_or_else(|| s.clip.time()).clamp(0.0, duration.max(0.0));
+    let progress = if duration > 0.0 { (shown_time / duration).clamp(0.0, 1.0) as f32 } else { 0.0 };
+    let travel = WIDTH - KNOB;
+    let step = if duration > 0.0 { (duration / 20.0).clamp(0.1, 5.0) } else { 1.0 };
+    let to_time = move |x: f32, dur: f64| f64::from(((x - KNOB / 2.0) / travel).clamp(0.0, 1.0)) * dur;
+    let value_text = if duration > 0.0 {
+        format!("{shown_time:.2} / {duration:.2} s")
+    } else {
+        format!("{shown_time:.2} s")
+    };
+    el().key("scrub")
+        .role("slider")
+        .label("Playback position")
+        .range_value(shown_time, 0.0, duration.max(1e-6))
+        .range_step(step)
+        .a11y_value(value_text)
+        .on_step(move |s: &mut Viewer, steps, _| {
+            let dur = s.clip.duration().filter(|d| *d > 0.0).unwrap_or(0.0);
+            if dur > 0.0 {
+                let next = (s.clip.time() + steps as f64 * step).clamp(0.0, dur);
+                s.clip.seek(next);
+            }
+        })
+        .on_set_value(|s: &mut Viewer, value, _| s.clip.seek(value))
+        .size(WIDTH, SCRUB_H)
+        .on_drag(move |s: &mut Viewer, d: &mut Drag, tx| {
+            let Some(dur) = s.clip.duration().filter(|d| *d > 0.0) else { return };
+            let target = to_time(d.x, dur);
+            match d.phase {
+                Phase::Down => {
+                    d.data = s.clip.time() as f32;
+                    s.scrub_target = Some(target);
+                    s.clip.seek_fast(target);
+                }
+                Phase::Move => {
+                    s.scrub_target = Some(target);
+                    s.clip.seek_fast(target);
+                    tx.instant();
+                }
+                Phase::Up => {
+                    s.scrub_target = None;
+                    let final_time = if d.cancelled() { f64::from(d.data) } else { target };
+                    s.clip.seek(final_time);
+                }
+            }
+        })
+        .child(
+            el().key("scrub-track")
+                .size(WIDTH, TRACK_H)
+                .absolute(0.0, (SCRUB_H - TRACK_H) / 2.0)
+                .radius(TRACK_H / 2.0)
+                .fill(t.control_track)
+                .a11y_hidden(),
+        )
+        .child(
+            el().key("scrub-fill")
+                .size(KNOB / 2.0 + progress * travel, TRACK_H)
+                .absolute(0.0, (SCRUB_H - TRACK_H) / 2.0)
+                .radius(TRACK_H / 2.0)
+                .fill(t.indicator)
+                .a11y_hidden(),
+        )
+        .child(
+            el().key("scrub-knob")
+                .size(KNOB, KNOB)
+                .absolute(progress * travel, (SCRUB_H - KNOB) / 2.0)
+                .radius(KNOB / 2.0)
+                .fill(t.indicator)
+                .a11y_hidden(),
+        )
+}
+
 fn view(s: &Viewer, _: &mut Cx<Viewer>) -> El {
     let t = tok::theme(true);
-    let label = match s.clip.state() {
+    let base_label = match s.clip.state() {
         PlayerState::Loading => "Loading".to_string(),
         PlayerState::Playing => "Playing, tap to pause".to_string(),
         PlayerState::Ready => "Paused, tap to play".to_string(),
@@ -108,29 +196,24 @@ fn view(s: &Viewer, _: &mut Cx<Viewer>) -> El {
         PlayerState::Failed(e) => e,
         _ => String::new(),
     };
-    let media = if s.clip.is_audio() {
-        let progress = s.clip.duration().filter(|d| *d > 0.0).map_or(0.0, |d| (s.clip.time() / d) as f32);
-        row()
-            .key("progress")
-            .w(WIDTH)
-            .h(4.0)
-            .radius(2.0)
-            .fill(t.control_track)
-            .child(el().w(WIDTH * progress.clamp(0.0, 1.0)).h(4.0).radius(2.0).fill(t.indicator))
+    let label = if s.clip.is_seeking() {
+        format!("{base_label} · Seeking")
+    } else if let Some(dur) = s.clip.duration().filter(|d| *d > 0.0) {
+        let shown = s.scrub_target.unwrap_or_else(|| s.clip.time());
+        format!("{base_label} · {shown:.2} / {dur:.2} s")
     } else {
-        let (w, h) = s.clip.natural_size().unwrap_or((16, 9));
-        let frame = el().key("video").w(WIDTH).h(WIDTH * h as f32 / w as f32).radius(10.0);
-        if s.hidden { frame } else { frame.video(&s.clip, SurfaceFit::Fit) }
+        base_label
     };
-    let mut root = col()
-        .w_full()
-        .h_full()
-        .center()
-        .gap(12.0)
-        .fill(t.bg)
-        .on_press(toggle)
-        .child(media)
-        .child(text(label).font(type_::BODY).color(t.text_secondary));
+    let mut root = col().w_full().h_full().center().gap(12.0).fill(t.bg);
+    if !s.clip.is_audio() {
+        let (w, h) = s.clip.natural_size().unwrap_or((16, 9));
+        let frame = el().key("video").w(WIDTH).h(WIDTH * h as f32 / w as f32).radius(10.0).on_press(toggle);
+        let media = if s.hidden { frame } else { frame.video(&s.clip, SurfaceFit::Fit) };
+        root = root.child(media);
+    }
+    root = root
+        .child(scrub_bar(s, &t))
+        .child(text(label).font(type_::BODY).color(t.text_secondary).on_press(toggle));
     if let Some(uid) = s.clip.output_device() {
         root = root.child(text(format!("Output: {uid}")).font(type_::LABEL).color(t.text_secondary));
     } else if s.preferred_output.is_some() {
@@ -140,5 +223,8 @@ fn view(s: &Viewer, _: &mut Cx<Viewer>) -> El {
 }
 
 fn main() {
-    rune::run(AppSpec { setup: Some(setup), poll: Some(poll), on_key: Some(on_key), ..AppSpec::new("Video player", (520.0, 340.0), state, view) });
+    rune::run(AppSpec { setup: Some(setup), poll: Some(poll), on_key: Some(on_key), ..AppSpec::new("Video player", (520.0, 360.0), state, view) });
 }
+
+#[cfg(test)]
+mod tests;

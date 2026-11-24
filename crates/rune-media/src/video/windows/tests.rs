@@ -83,7 +83,7 @@ impl Rig {
     /// A playing clip showing the picture at 2 s, with its clock started at `start`.
     fn plays_from_two(&self, start: Instant) {
         self.edit(phases::Event::Play);
-        self.stand(Phase::Buffering { at: 2.0, play: true }, None);
+        self.stand(Phase::Buffering { at: 2.0, play: true, seeking: false }, None);
         self.decodes(2.0);
         self.show(start);
         assert_eq!(self.phase(), Phase::Playing { clock: Anchor { at: start, pos: 2.0, rate: 1.0 } });
@@ -115,7 +115,7 @@ impl Rig {
 
     /// What the decoder is asked for: a seek, sound and looping. Read out before it's compared,
     /// so a failed assertion never unwinds with the inbox locked.
-    fn asked(&self) -> (Option<(f64, u32)>, Option<f32>, bool) {
+    fn asked(&self) -> (Option<SeekAsk>, Option<f32>, bool) {
         let inbox = self.pipe.lock();
         (inbox.seek, inbox.sound, inbox.looping)
     }
@@ -222,8 +222,8 @@ fn a_paused_clip_whose_held_picture_left_the_queue_decodes_it_again() {
     rig.reconcile();
     rig.pipe.lock().frames.clear();
     rig.window_draws();
-    assert_eq!(rig.phase(), Phase::Buffering { at: 5.0, play: false });
-    assert_eq!(rig.asked().0, Some((5.0, rig.generation())));
+    assert_eq!(rig.phase(), Phase::Buffering { at: 5.0, play: false, seeking: true });
+    assert_eq!(rig.asked().0, Some(SeekAsk { to: 5.0, generation: rig.generation(), exact: true }));
     // Its picture lands as any seek's does.
     rig.pipe.lock().seek = None;
     rig.decodes(5.0);
@@ -250,7 +250,7 @@ fn a_clip_let_go_while_its_surface_is_behind_opens_again_when_drawn() {
     layer(&rig.player.shared, None);
     rig.pipe.lock().news.push(News::Parked);
     rig.reconcile();
-    assert_eq!(rig.phase(), Phase::Idle { at: 5.0 });
+    assert_eq!(rig.phase(), Phase::Idle { at: 5.0, seek: None });
     assert!(rig.native().wants_decoder(false, Kind::Video));
 }
 
@@ -258,9 +258,9 @@ fn a_clip_let_go_while_its_surface_is_behind_opens_again_when_drawn() {
 fn a_paused_seek_the_decoder_ends_with_no_picture_stops_buffering_and_holds() {
     let rig = rig();
     rig.stand(Phase::Paused { at: 2.0 }, Some(2.0));
-    rig.edit(phases::Event::Seek(9.99));
+    rig.edit(phases::Event::Seek { to: 9.99, exact: true });
     rig.reconcile();
-    assert_eq!(rig.phase(), Phase::Buffering { at: 9.99, play: false });
+    assert_eq!(rig.phase(), Phase::Buffering { at: 9.99, play: false, seeking: true });
     rig.decoder_ends();
     rig.show(rune_core::time::now());
     assert_eq!(rig.phase(), Phase::Paused { at: 9.99 });
@@ -279,12 +279,12 @@ fn a_playing_seek_the_decoder_ends_with_no_picture_ends_the_clip() {
     rig.edit(phases::Event::Play);
     rig.stand(Phase::Paused { at: 2.0 }, Some(2.0));
     rig.native().playing = false;
-    rig.edit(phases::Event::Seek(9.99));
+    rig.edit(phases::Event::Seek { to: 9.99, exact: true });
     rig.reconcile();
-    assert_eq!(rig.phase(), Phase::Buffering { at: 9.99, play: true });
+    assert_eq!(rig.phase(), Phase::Buffering { at: 9.99, play: true, seeking: true });
     // Still waiting while the decoder hasn't said it ended.
     rig.show(rune_core::time::now());
-    assert_eq!(rig.phase(), Phase::Buffering { at: 9.99, play: true });
+    assert_eq!(rig.phase(), Phase::Buffering { at: 9.99, play: true, seeking: true });
     rig.decoder_ends();
     rig.show(rune_core::time::now());
     assert_eq!(rig.phase(), Phase::Ended { at: 9.99 });
@@ -295,11 +295,11 @@ fn a_playing_seek_the_decoder_ends_with_no_picture_ends_the_clip() {
 #[test]
 fn a_seek_on_a_parked_paused_clip_forgets_its_picture_so_it_opens_when_drawn() {
     let rig = rig();
-    rig.stand(Phase::Idle { at: 3.0 }, Some(3.0));
+    rig.stand(Phase::Idle { at: 3.0, seek: None }, Some(3.0));
     rig.native().pipe = None;
-    rig.edit(phases::Event::Seek(7.5));
+    rig.edit(phases::Event::Seek { to: 7.5, exact: true });
     rig.reconcile();
-    assert_eq!(rig.phase(), Phase::Idle { at: 7.5 });
+    assert_eq!(rig.phase(), Phase::Idle { at: 7.5, seek: Some(machine::SeekMode::Exact) });
     // No picture on screen is what opens a paused clip in the frame that draws it.
     assert_eq!(rig.native().shown, None);
 }
@@ -307,10 +307,10 @@ fn a_seek_on_a_parked_paused_clip_forgets_its_picture_so_it_opens_when_drawn() {
 #[test]
 fn a_clip_let_go_while_it_waits_for_a_seeks_picture_opens_again_at_the_seek() {
     let rig = rig();
-    rig.stand(Phase::Buffering { at: 7.5, play: false }, None);
+    rig.stand(Phase::Buffering { at: 7.5, play: false, seeking: true }, None);
     rig.pipe.lock().news.push(News::Parked);
     rig.reconcile();
-    assert_eq!(rig.phase(), Phase::Idle { at: 7.5 });
+    assert_eq!(rig.phase(), Phase::Idle { at: 7.5, seek: None });
 }
 
 #[test]
@@ -320,7 +320,7 @@ fn a_clip_that_hasnt_opened_yet_keeps_the_sound_its_decoder_was_asked_for() {
     rig.native().facts = None;
     rig.pipe.lock().sound = Some(1.0);
     rig.player.shared.ctl.lock().unwrap().muted = false;
-    rig.stand(Phase::Opening { at: 0.0, play: false }, None);
+    rig.stand(Phase::Opening { at: 0.0, play: false, seeking: false }, None);
     rig.reconcile();
     assert_eq!(rig.asked().1, Some(1.0));
     // Looping still reaches the decoder before it opens.
@@ -507,7 +507,7 @@ fn layer_showing_reports_playing_layer_without_mutating_state_and_false_after_pa
     r.stand(Phase::Playing { clock: Anchor { at: start, pos: 2.0, rate: 1.0 } }, Some(2.0));
     assert!(r.window_layers().showing);
     assert!(layer_showing(&r.player.shared, SIZE));
-    r.edit(phases::Event::Seek(5.0));
+    r.edit(phases::Event::Seek { to: 5.0, exact: true });
     r.reconcile();
     assert!(!layer_showing(&r.player.shared, SIZE));
 
@@ -520,4 +520,76 @@ fn layer_showing_reports_playing_layer_without_mutating_state_and_false_after_pa
     rig_end.show(start + Duration::from_secs(10));
     assert!(matches!(rig_end.phase(), Phase::Ended { .. }));
     assert!(!layer_showing(&rig_end.player.shared, SIZE));
+}
+
+#[test]
+fn seek_fast_asks_for_keyframe_reports_keyframe_time_and_tracks_is_seeking() {
+    let rig = rig();
+    rig.stand(Phase::Paused { at: 1.0 }, Some(1.0));
+    assert!(!rig.player.is_seeking());
+
+    // Fast seek while paused: is_seeking() turns true immediately (even before reconcile).
+    rig.player.seek_fast(5.7);
+    assert!(rig.player.is_seeking());
+    assert_eq!(rig.player.state(), PlayerState::Ready);
+    rig.reconcile();
+    assert!(rig.player.is_seeking());
+    assert_eq!(rig.phase(), Phase::Buffering { at: 5.7, play: false, seeking: true });
+    assert_eq!(rig.asked().0, Some(SeekAsk { to: 5.7, generation: rig.generation(), exact: false }));
+
+    // A stale picture from an earlier generation does not satisfy the seek.
+    let stale_gen = rig.generation().wrapping_sub(1);
+    rig.pipe.lock().push(picture(stale_gen, 1.1));
+    rig.show(rune_core::time::now());
+    assert!(rig.player.is_seeking(), "stale generation picture must not clear is_seeking");
+
+    // The keyframe for the current seek generation lands at 4.0 s: time reports 4.0 and seeking clears.
+    rig.decodes(4.0);
+    rig.show(rune_core::time::now());
+    assert!(!rig.player.is_seeking());
+    assert_eq!(rig.phase(), Phase::Paused { at: 4.0 });
+    assert_eq!(rig.player.time(), 4.0);
+    assert_eq!(rig.on_surface(), Some(40));
+
+    // Exact seek on scrub release replaces with exact=true and lands at 5.7 s.
+    rig.player.seek(5.7);
+    rig.reconcile();
+    assert!(rig.player.is_seeking());
+    assert_eq!(rig.asked().0, Some(SeekAsk { to: 5.7, generation: rig.generation(), exact: true }));
+    rig.decodes(5.7);
+    rig.show(rune_core::time::now());
+    assert!(!rig.player.is_seeking());
+    assert_eq!(rig.player.time(), 5.7);
+    assert_eq!(rig.on_surface(), Some(57));
+}
+
+#[test]
+fn seek_fast_while_playing_resumes_from_keyframe_and_stalls_do_not_report_seeking() {
+    let rig = rig();
+    let start = rune_core::time::now();
+    rig.plays_from_two(start);
+    assert!(!rig.player.is_seeking());
+
+    // A playback stall enters Buffering with seeking == false.
+    rig.show(start + Duration::from_secs(2));
+    assert!(matches!(rig.phase(), Phase::Buffering { play: true, seeking: false, .. }));
+    assert!(!rig.player.is_seeking(), "playback stalls must not report is_seeking");
+
+    // Recover playback, then issue seek_fast while playing.
+    rig.decodes(2.1);
+    rig.show(start + Duration::from_secs(2));
+    assert!(matches!(rig.phase(), Phase::Playing { .. }));
+
+    rig.player.seek_fast(7.4);
+    rig.reconcile();
+    assert!(rig.player.is_seeking());
+    assert_eq!(rig.player.state(), PlayerState::Playing);
+    assert_eq!(rig.asked().0, Some(SeekAsk { to: 7.4, generation: rig.generation(), exact: false }));
+
+    let landed_at = start + Duration::from_secs(3);
+    rig.decodes(6.0);
+    rig.show(landed_at);
+    assert!(!rig.player.is_seeking());
+    assert_eq!(rig.player.time(), 6.0);
+    assert_eq!(rig.phase(), Phase::Playing { clock: Anchor { at: landed_at, pos: 6.0, rate: 1.0 } });
 }
