@@ -592,6 +592,52 @@ pub(super) fn markdown_code(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     col().w(620.0).child(Markdown::new(CODE).build(k))
 }
 
+/// Editorial prose measure, accent-tinted inline code, tighter margins, and square code/diff cards.
+const STYLED_MARKDOWN: &str = r#"# Editorial measure
+
+Top-level paragraphs stay capped at a comfortable reading width (`prose_width`) while wide fences and tables use the full column. Ordinary `inline_code_text` picks up the accent tint, whereas [`linked_code`](https://rune.dev) keeps its link colour.
+
+## Margins and square fences
+
+- Lists and nested code stay inside the prose measure.
+- Tighter `paragraph_margin` and `heading_margin` pull related sections closer.
+
+> Quoted remarks also follow the prose cap while full-bleed blocks below span the column.
+
+```rust
+pub fn render(style: &MarkdownStyle, src: &str) -> El {
+    Markdown::new(src).style(style.clone()).build(&Kit::neutral(false))
+}
+```
+
+```diff
+@@ -1,3 +1,3 @@
+-let style = MarkdownStyle::from_kit(k);
++let style = MarkdownStyle::from_kit(k).prose_width(440.0).code_block_radius(0.0);
+```
+
+| Option | Effect | Scope |
+|---|---|---|
+| `prose_width(440.0)` | Caps top-level prose measure | Paragraphs, headings, lists, quotes |
+| `inline_code_text(ink)` | Colours inline code glyphs | Plain inline code chips |
+| `code_block_radius(0.0)` | Square corners on cards | Fenced code and diff blocks |
+"#;
+
+pub(super) fn markdown_styled(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let ink = k.c.text_accent;
+    let style = MarkdownStyle::from_kit(k)
+        .prose_width(440.0)
+        .inline_code_bg(ink.alpha(0.12))
+        .inline_code_text(ink)
+        .paragraph_margin(0.0, 10.0)
+        .heading_margin(1, 16.0, 8.0)
+        .heading_margin(2, 16.0, 6.0)
+        .image_margin(12.0, 12.0)
+        .code_block_radius(0.0)
+        .table_full_width(true);
+    col().w(680.0).child(Markdown::new(STYLED_MARKDOWN).style(style).on_link(|_: &mut G, _| {}).build(k))
+}
+
 pub(super) fn markdown_walkthrough(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     col().w(680.0).child(Markdown::new(WALKTHROUGH).on_link(|_: &mut G, _| {}).build(k))
 }

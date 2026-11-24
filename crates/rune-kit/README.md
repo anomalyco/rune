@@ -446,12 +446,19 @@ source each time, and earlier blocks stay mounted.
   text in source UTF-8 byte ranges across inline markers, tables and code blocks without
   reshaping text (`Highlight::new()` and `Highlight::current()`, scrolled to with
   `Tx::scroll_into_view` by `Markdown::highlight_key(index)` or `.key(..)`).
+- **Layout, margins and inline/fence styling.** `MarkdownStyle::prose_width(points)` caps
+  top-level paragraphs, headings, lists and quotes at a readable measure while code blocks, diffs,
+  diagrams, tables, images and rules keep the full column width; `inline_code_text(color)` colours
+  ordinary inline code glyphs without changing code inside links or `Markdown::code_link`;
+  `paragraph_margin`, `heading_margin(level, top, bottom)` and `image_margin` override vertical
+  block spacing while preserving CSS margin collapsing and list-item rules; and
+  `code_block_radius(radius)` overrides the 6 pt corner radius on fenced code and diff cards.
 
 `Tooltip::label(..).render(&TooltipStyle::neutral(dark), &mut layer)` builds a tooltip without
 a kit. `TooltipStyle::max_width(w)` caps its width; `label`, `text` and a `.wrap()` text `child` wrap at it. The
 app owns `open`, so the hover delay is a `wake_after` in its hover handler; `El::help(text)` is
 the delayed, self-dismissing system tooltip when the look needn't match. The gallery's `rune-markdown--walkthrough`, `rune-markdown--diagrams`,
-`rune-markdown--table-styles` and `rune-markdown--code` scenes show every feature.
+`rune-markdown--table-styles`, `rune-markdown--code` and `rune-markdown--styled` scenes show every feature.
 
 ## Diff
 

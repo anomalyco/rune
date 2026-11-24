@@ -1,0 +1,1 @@
+- `rune-kit`: added `MarkdownStyle::prose_width`, `inline_code_text`, `paragraph_margin`, `heading_margin`, `image_margin`, and `code_block_radius` builders with exact backward-compatible defaults and style-hash invalidation for settled-block memoization.
