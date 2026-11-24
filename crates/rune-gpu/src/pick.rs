@@ -70,6 +70,21 @@ impl Pick {
         matches!(self.reason, Reason::EnvName | Reason::EnvPower)
     }
 
+    /// Fallback policy for this pick: a user-named adapter (`WGPU_ADAPTER_NAME`) is pinned and
+    /// never replaced; automatic choices may fall back on persistent adapter/surface failures.
+    pub fn policy(&self) -> crate::fallback::Policy {
+        if self.reason == Reason::EnvName {
+            crate::fallback::Policy::Pinned
+        } else {
+            crate::fallback::Policy::Automatic
+        }
+    }
+
+    /// The compositor's main device as a PCI address, if known (Linux Wayland).
+    pub fn compositor(&self) -> Option<&str> {
+        self.compositor.as_deref()
+    }
+
     /// Whether `info` is an adapter on the compositor's device.
     pub fn on_compositor_device(&self, info: &wgpu::AdapterInfo) -> bool {
         self.compositor.as_deref().is_some_and(|pci| same_pci(pci, &info.device_pci_bus_id))
@@ -300,15 +315,18 @@ fn by_display(displays: &[(u32, u32)], adapters: &[(wgpu::AdapterInfo, bool)]) -
     })
 }
 
+/// Fallback policy derived from the process environment (`WGPU_ADAPTER_NAME` pins the adapter).
+pub fn env_policy() -> crate::fallback::Policy {
+    if rune_core::env::var("WGPU_ADAPTER_NAME").is_some() {
+        crate::fallback::Policy::Pinned
+    } else {
+        crate::fallback::Policy::Automatic
+    }
+}
+
 /// `PowerPreference::LowPower`'s order; a software adapter comes last.
 pub fn power_rank(device: wgpu::DeviceType) -> u8 {
-    match device {
-        wgpu::DeviceType::IntegratedGpu => 0,
-        wgpu::DeviceType::DiscreteGpu => 1,
-        wgpu::DeviceType::VirtualGpu => 2,
-        wgpu::DeviceType::Other => 3,
-        wgpu::DeviceType::Cpu => 4,
-    }
+    crate::fallback::power_rank(device)
 }
 
 /// The PCI vendor of the GPU driving the primary display, which `pick` chooses for a window:
@@ -331,7 +349,7 @@ pub fn find_display_vendor_soon() {
 /// display's first.
 #[cfg(target_os = "windows")]
 #[allow(unsafe_code)]
-fn display_devices() -> Vec<(u32, u32)> {
+pub fn display_devices() -> Vec<(u32, u32)> {
     use windows_sys::Win32::Graphics::Gdi::{DISPLAY_DEVICE_ATTACHED_TO_DESKTOP, DISPLAY_DEVICE_PRIMARY_DEVICE, DISPLAY_DEVICEW, EnumDisplayDevicesW};
     let mut found = Vec::new();
     for index in 0.. {
@@ -353,7 +371,7 @@ fn display_devices() -> Vec<(u32, u32)> {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn display_devices() -> Vec<(u32, u32)> {
+pub fn display_devices() -> Vec<(u32, u32)> {
     Vec::new()
 }
 
@@ -395,7 +413,7 @@ fn gpu_log() -> bool {
 
 /// The compositor's main device as a PCI address, asked once per process.
 #[cfg(target_os = "linux")]
-fn compositor_pci() -> Option<String> {
+pub fn compositor_pci() -> Option<String> {
     static PCI: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     PCI.get_or_init(|| {
         let (major, minor) = dev_numbers(&dmabuf::main_device()?)?;
@@ -405,7 +423,7 @@ fn compositor_pci() -> Option<String> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn compositor_pci() -> Option<String> {
+pub fn compositor_pci() -> Option<String> {
     None
 }
 

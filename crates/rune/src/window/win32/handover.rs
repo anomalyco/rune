@@ -18,11 +18,11 @@ use super::cpu_frame::{Cpu, Shown};
 use crate::platform::win32::dcomp_handover::Handover;
 use crate::platform::win32::dib::{Dib, free_later};
 use crate::render::cpu_boot::HalfRounding;
-use crate::render::{Gpu, Renderer};
+use crate::render::{Gpu, Renderer, SurfaceSetupError};
 use crate::time::Instant;
 use crate::window::WakeEvent;
 use crate::window::host::{CompositorFrame, Host};
-use crate::window::surface::{Win, acquire, configure, drawable_size, max_surface_dim, reblend_core, rebuild_renderer_core, surface_config};
+use crate::window::surface::{Win, acquire, configure_checked, drawable_size, max_surface_dim, reblend_core, rebuild_renderer_core, surface_config};
 
 /// Where a window's frames go. Windows that need the GPU from their first frame (a compositor,
 /// a translucent window, an overlay) are `Gpu` from the start, as on every other platform.
@@ -445,11 +445,18 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
     let visual = handover.visual();
     // SAFETY: the visual stays alive while the surface does: the surface takes its own reference
     // to it, and the window keeps the `Handover` as long as it keeps the surface.
-    let (gpu, surface, renderer) = Gpu::for_surface(features, false,
-        |instance| unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual)) }.map_err(|e| e.to_string()))?;
-    let size = drawable_size(None, size, max_surface_dim(Some(&gpu)));
-    let (config, _) = surface_config(&surface, &gpu.adapter, size, srgb).ok_or("the GPU can't present to this window")?;
-    configure(&surface, &gpu, &config)?;
+    let (gpu, surface, renderer, config) = Gpu::for_surface_setup(
+        features,
+        false,
+        |instance| unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual)) }.map_err(|e| e.to_string()),
+        |gpu, surface| {
+            let size = drawable_size(None, size, max_surface_dim(Some(gpu)));
+            let (config, _) = surface_config(surface, &gpu.adapter, size, srgb)
+                .ok_or_else(|| SurfaceSetupError::unsupported("the GPU can't present to this window"))?;
+            configure_checked(surface, gpu, &config).map_err(|error| SurfaceSetupError::from_configure("", error))?;
+            Ok(config)
+        },
+    ).map_err(|e| e.message)?;
     let target_format = if srgb { config.format.remove_srgb_suffix() } else { config.format };
     let mut renderer = renderer.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));
     let instances = std::mem::take(&mut *latest.lock().unwrap_or_else(|e| e.into_inner()));

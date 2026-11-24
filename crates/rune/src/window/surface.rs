@@ -16,7 +16,9 @@ pub(in crate::window) mod redraw;
 pub(in crate::window) mod win;
 
 pub(crate) use backoff::{Backoff, BackoffEffect, BackoffEvent};
-pub(crate) use configure::configure;
+pub(crate) use configure::{ConfigureError, configure, configure_checked};
+#[cfg(test)]
+pub(crate) use configure::{ConfigureErrorKind, classify_scope_error};
 #[cfg(target_arch = "wasm32")]
 pub(crate) use configure::configure_then;
 #[cfg(target_os = "macos")]

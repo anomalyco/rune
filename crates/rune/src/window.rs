@@ -53,9 +53,10 @@ pub(crate) use keys::{key_base, map_key_event, map_mods};
 pub(crate) use state::frame;
 pub(crate) use state::{Life, Minimize, MinimizeEvent, Sight};
 pub(crate) use surface::{
-    Backoff, BackoffEffect, BackoffEvent, HiddenPace, Missed, Presented, TIMER_FRAME,
-    acquire_checked, configure, reblend_core, rebuild_renderer_core,
-    poll_timer_deadline_core, surface_config, timer_deadline_core, timer_wants_frame_core,
+    Backoff, BackoffEffect, BackoffEvent, ConfigureError, HiddenPace, Missed,
+    Presented, TIMER_FRAME, acquire_checked, configure, configure_checked, reblend_core,
+    rebuild_renderer_core, poll_timer_deadline_core, surface_config, timer_deadline_core,
+    timer_wants_frame_core,
 };
 #[cfg(target_arch = "wasm32")]
 pub(crate) use surface::configure_then;
@@ -63,6 +64,7 @@ pub(crate) use surface::configure_then;
 pub(crate) use surface::native::Prime;
 #[cfg(test)]
 pub(crate) use surface::{
+    ConfigureErrorKind, classify_scope_error,
     HIDDEN_REFRESH, OCCLUDED_MAX, OCCLUDED_RETRY, TIMEOUT_RETRY, TIMER_FRAME_STALL, TimerFrame,
     timer_deadline, timer_wants_frame, wall_wake_deadline,
 };

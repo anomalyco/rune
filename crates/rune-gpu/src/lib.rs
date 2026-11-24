@@ -6,6 +6,7 @@
 
 pub mod backend;
 pub mod configure;
+pub mod fallback;
 pub mod health;
 #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
 pub mod metal;
