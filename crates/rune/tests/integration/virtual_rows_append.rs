@@ -1,7 +1,5 @@
 use std::borrow::Cow;
 use std::cell::Cell;
-use std::time::Instant;
-
 use rune::{Cx, El, Env, GrowthSpec, Runtime, ScrollSpec, col, memo, text};
 
 thread_local! {
@@ -95,7 +93,7 @@ fn virtual_rows_append_time() {
             });
             rt.frame(1.0 / 120.0);
         }
-        let start = Instant::now();
+        let start = rune::time::now();
         for _ in 0..FRAMES {
             rt.update(|s, _| {
                 let next = s.keys.len();

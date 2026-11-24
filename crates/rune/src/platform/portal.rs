@@ -114,9 +114,10 @@ mod dbus {
     pub(crate) async fn register_app_id(conn: &Connection) {
         let Some(app_id) = registry_app_id(crate::tooling::app_id()) else { return };
         let options: HashMap<&str, Value<'_>> = HashMap::new();
-        let _ = conn
+        conn
             .call_method(Some(DEST), PATH, Some(REGISTRY_INTERFACE), REGISTRY_METHOD, &(app_id, options))
-            .await;
+            .await
+            .ok();
     }
 
     /// Whether `e` indicates that the XDG desktop portal service or interface is absent or

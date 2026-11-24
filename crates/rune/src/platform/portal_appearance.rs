@@ -358,7 +358,7 @@ mod dbus {
         let worker = std::thread::Builder::new().name("rune-appearance-portal".into()).spawn(move || {
             async_io::block_on(watch(ready));
         });
-        if worker.is_ok() { *FIRST.lock().unwrap_or_else(|e| e.into_inner()) = Some((first, Instant::now())); }
+        if worker.is_ok() { *FIRST.lock().unwrap_or_else(|e| e.into_inner()) = Some((first, crate::time::now())); }
     }
 
     async fn read_setting(portal: &Proxy<'_>, namespace: &str, key: &str) -> Result<OwnedValue, bool> {

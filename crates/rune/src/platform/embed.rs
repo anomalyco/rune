@@ -31,7 +31,7 @@ pub fn prewarm() {
     STARTED.get_or_init(|| {
         std::thread::Builder::new().name("rune-embed-prewarm".into()).spawn(|| {
             if let Ok(gpu) = shared_gpu() {
-                let _ = Renderer::try_new(&gpu.device, wgpu::TextureFormat::Bgra8Unorm);
+                Renderer::try_new(&gpu.device, wgpu::TextureFormat::Bgra8Unorm).ok();
             }
         }).ok();
     });

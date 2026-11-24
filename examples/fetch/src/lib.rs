@@ -93,7 +93,7 @@ fn fetch_target(state: &mut State, initial: bool) {
 fn view(state: &State, cx: &mut Cx<State>) -> El {
     let t = tok::theme(cx.system_dark());
     let [top, right, bottom, left] = cx.safe_area();
-    let field = text_input(&state.target, type_::BODY).key("target")
+    let field = text_input(&state.target, type_::BODY).key("target").label("JSON URL or path")
         .placeholder("JSON URL or path", t.text_secondary).color(t.text)
         .grow(1.0).h(44.0).padding(12.0).radius(10.0).fill(t.card)
         .on_edit(|s: &mut State| &mut s.target)

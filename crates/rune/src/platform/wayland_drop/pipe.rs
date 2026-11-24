@@ -43,7 +43,7 @@ impl Drop for SignalOnDrop {
 /// Waits up to `bound` for `done` to fire, then performs a real `JoinHandle::join`.
 pub(super) fn join_bounded(handle: std::thread::JoinHandle<()>, done: &DoneFlag, bound: Duration) -> bool {
     if done.wait_bound(bound) {
-        let _ = handle.join();
+        handle.join().ok();
         true
     } else {
         false
@@ -244,7 +244,10 @@ pub(super) fn make_pipe() -> Option<(OwnedFd, OwnedFd)> {
     }
     // SAFETY: `fds[0]` is the read end we own exclusively.
     let flags = unsafe { libc::fcntl(fds[0], libc::F_GETFL) };
-    if flags < 0 || unsafe { libc::fcntl(fds[0], libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+    // SAFETY: `fds[0]` is the read end we own exclusively.
+    let set_ok = flags >= 0 && unsafe { libc::fcntl(fds[0], libc::F_SETFL, flags | libc::O_NONBLOCK) } >= 0;
+    if !set_ok {
+        // SAFETY: both descriptors were just created above and are not yet wrapped in `OwnedFd`.
         unsafe {
             libc::close(fds[0]);
             libc::close(fds[1]);

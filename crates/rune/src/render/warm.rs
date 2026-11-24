@@ -51,7 +51,7 @@ pub(super) fn live() -> Option<Arc<Gpu>> {
 pub(super) fn warm(features: wgpu::Features, prepare: Option<Box<dyn FnOnce(&wgpu::Device) + Send>>) {
     if let Some(gpu) = live() {
         if let Some(prepare) = prepare {
-            let _ = WarmSlot::spawn_attached(&SLOT, "rune-gpu-warm", move || prepare(&gpu.device));
+            WarmSlot::spawn_attached(&SLOT, "rune-gpu-warm", move || prepare(&gpu.device)).ok();
         }
         return;
     }

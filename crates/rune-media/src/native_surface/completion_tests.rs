@@ -48,7 +48,7 @@ fn drop_waits_for_in_flight_poll_then_exits_without_polling_again() {
         let _ = &witness;
         polls_for.fetch_add(1, Ordering::SeqCst);
         entered_tx.send(()).ok();
-        let _ = release_rx.recv();
+        release_rx.recv().ok();
         // Report work still pending; shutdown must still exit without another poll.
         Ok(wgpu::PollStatus::Poll)
     });
@@ -87,7 +87,7 @@ fn drop_wakes_worker_sleeping_between_polls() {
 
     worker.wake();
     polled_rx.recv_timeout(Duration::from_secs(5)).expect("first poll");
-    let started = std::time::Instant::now();
+    let started = rune_core::time::now();
     drop(worker);
     assert!(released.load(Ordering::SeqCst));
     assert!(started.elapsed() < Duration::from_secs(2), "drop should wake and join promptly");
@@ -124,8 +124,8 @@ fn lost_device_exits_worker_and_releases_device() {
     worker.wake();
     worker.wait_polling();
     // Wait briefly for the worker to exit on Lost even before drop.
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while !released.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+    let deadline = rune_core::time::now() + Duration::from_secs(5);
+    while !released.load(Ordering::SeqCst) && rune_core::time::now() < deadline {
         std::thread::sleep(Duration::from_millis(1));
     }
     assert!(released.load(Ordering::SeqCst), "lost device must exit worker and release device");
@@ -160,7 +160,7 @@ fn caller_unwind_joins_worker_without_aborting() {
     let worker = CompletionWorker::spawn_with(move || {
         let _ = &witness;
         entered_tx.send(()).ok();
-        let _ = release_rx.recv();
+        release_rx.recv().ok();
         Ok(wgpu::PollStatus::QueueEmpty)
     });
 
@@ -199,8 +199,8 @@ fn dropping_worker_from_inside_poll_callback_does_not_self_join_deadlock() {
     *slot.lock().unwrap() = Some(worker);
     waker.wake();
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while !released.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+    let deadline = rune_core::time::now() + Duration::from_secs(5);
+    while !released.load(Ordering::SeqCst) && rune_core::time::now() < deadline {
         std::thread::sleep(Duration::from_millis(1));
     }
     assert!(released.load(Ordering::SeqCst), "worker dropped from its own callback must exit cleanly");
@@ -218,7 +218,7 @@ fn rewake_during_active_poll_runs_another_poll_before_parking() {
         let n = polls_for.fetch_add(1, Ordering::SeqCst) + 1;
         if n == 1 {
             first_tx.send(()).ok();
-            let _ = continue_rx.recv();
+            continue_rx.recv().ok();
         } else if n == 2 {
             second_tx.send(()).ok();
         }
@@ -245,7 +245,7 @@ fn drop_joins_completion_thread(with_timestamps: bool) {
     surface.set_observer(Arc::new(move |t| {
         if t.completed_at.is_some() {
             entered_tx.send(std::thread::current().id()).ok();
-            let _ = release_rx.lock().unwrap().recv();
+            release_rx.lock().unwrap().recv().ok();
         }
     }));
 
@@ -279,11 +279,11 @@ fn drop_joins_completion_thread(with_timestamps: bool) {
     let (released_tx, released_rx) = mpsc::channel();
     let releaser = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(50));
-        released_tx.send(std::time::Instant::now()).ok();
+        released_tx.send(rune_core::time::now()).ok();
         release_tx.send(()).ok();
     });
     drop(renderer);
-    let dropped = std::time::Instant::now();
+    let dropped = rune_core::time::now();
     releaser.join().expect("releaser thread");
     let released = released_rx.recv().expect("the observer was let go");
 
@@ -450,7 +450,7 @@ fn read_worker_drop_waits_for_in_flight_wait_and_skips_queued_items() {
         waits_for.fetch_add(1, Ordering::SeqCst);
         if id == 1 {
             entered_tx.send(()).ok();
-            let _ = release_rx.recv();
+            release_rx.recv().ok();
         }
         ControlFlow::Continue(())
     })
@@ -496,7 +496,7 @@ fn read_worker_lost_device_exits_releases_device_and_rejects_further_sends() {
         waits_for.fetch_add(1, Ordering::SeqCst);
         if id == 1 {
             entered_tx.send(()).ok();
-            let _ = release_rx.recv();
+            release_rx.recv().ok();
         }
         ControlFlow::Break(())
     })
@@ -541,7 +541,7 @@ fn read_worker_panic_releases_device_and_drop_does_not_panic() {
     let worker = ReadWorker::spawn("test-dmabuf-read", move |(_id, _item): (u32, DeviceWitness)| {
         let _ = &witness;
         entered_tx.send(()).ok();
-        let _ = release_rx.recv();
+        release_rx.recv().ok();
         panic!("simulated on_read panic");
     })
     .unwrap();
@@ -567,7 +567,7 @@ fn read_worker_caller_unwind_joins_worker_without_aborting() {
     let worker = ReadWorker::spawn("test-dmabuf-read", move |(): ()| {
         let _ = &witness;
         entered_tx.send(()).ok();
-        let _ = release_rx.recv();
+        release_rx.recv().ok();
         ControlFlow::Continue(())
     })
     .unwrap();
@@ -604,7 +604,7 @@ fn read_worker_self_drop_from_callback_does_not_deadlock() {
         waits_for.fetch_add(1, Ordering::SeqCst);
         if id == 1 {
             entered_tx.send(()).ok();
-            let _ = release_rx.recv();
+            release_rx.recv().ok();
             // Drop the worker from inside its own callback (e.g. an on_read closure).
             slot_for.lock().unwrap().take();
         }
@@ -659,7 +659,7 @@ fn read_worker_device_notifies_on_read_and_drop_joins_in_flight_callback() {
                     assert!(result.is_ok(), "submitted copy should succeed: {result:?}");
                     let current = std::thread::current();
                     entered_tx.send((current.id(), current.name().map(str::to_owned))).ok();
-                    let _ = release_rx.recv();
+                    release_rx.recv().ok();
                 }),
             ))
             .is_ok()

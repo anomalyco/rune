@@ -37,7 +37,6 @@ impl TreeItem {
         }
     }
     /// A file tree's row: the node's name and its folder or file icon ([`super::file_icon`]). A
-    /// tree styled [`TreeStyle::chevron_only_folders`] leaves the folder icon out. A
     /// tree styled [`TreeStyle::chevron_only_folders`] leaves the folder icon out.
     pub fn file<D>(node: &FileNode<D>, row: &TreeRow) -> TreeItem {
         TreeItem::new(node.name.clone()).icon(node.icon(row.expanded == Some(true)))

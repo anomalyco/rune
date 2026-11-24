@@ -126,7 +126,7 @@ impl BusyGpu {
             gpu.queue.submit([enc.finish()])
         };
         let time = |bind: &wgpu::BindGroup| {
-            let started = std::time::Instant::now();
+            let started = crate::time::now();
             let index = submit(bind);
             gpu.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: Some(Duration::from_secs(5)) })
                 .expect("calibration submission completed");
@@ -201,7 +201,7 @@ fn drop_overlay_core_polls_shared_device_without_blocking() {
         let mut overlay = make();
         overlay.core.gpu = Some(busy.gpu.clone());
         overlay.core.renderer = Some(Renderer::new(&busy.gpu.device, OFFSCREEN_FORMAT));
-        let started = std::time::Instant::now();
+        let started = crate::time::now();
         let (chunks, sibling_done) = busy.submit_busy(planned);
         drop(overlay);
         assert!(!busy.gpu.is_lost());
@@ -249,7 +249,7 @@ fn drop_hidden_images_and_park_do_not_block_on_busy_shared_gpu_and_retire_on_lat
         #[cfg(feature = "test-gpu-counters")]
         assert!(busy.gpu.device.get_internal_counters().hal.textures.read() > base_textures);
 
-        let started = std::time::Instant::now();
+        let started = crate::time::now();
         let (chunks, sibling_done) = busy.submit_busy(planned);
         overlay.drop_hidden_images();
         overlay.rt.state = None;
@@ -259,7 +259,7 @@ fn drop_hidden_images_and_park_do_not_block_on_busy_shared_gpu_and_retire_on_lat
         assert!(weak_px.upgrade().is_none(), "tree no longer pins Pixels after hide");
         if !sibling_done.load(Ordering::Acquire) {
             assert!(overlay.wake_deadline().is_some(), "busy shared GPU schedules deferred retirement");
-            let wait = std::time::Instant::now();
+            let wait = crate::time::now();
             while let Some(due) = overlay.wake_deadline() {
                 assert!(wait.elapsed() < Duration::from_secs(5), "deferred retirement did not finish");
                 std::thread::sleep(Duration::from_millis(2));
@@ -291,7 +291,7 @@ fn drop_hidden_images_and_park_do_not_block_on_busy_shared_gpu_and_retire_on_lat
             if with_renderer {
                 overlay.core.renderer = Some(Renderer::new(&busy.gpu.device, OFFSCREEN_FORMAT));
             }
-            let started = std::time::Instant::now();
+            let started = crate::time::now();
             let (chunks, sibling_done) = busy.submit_busy(planned);
             overlay.core.park();
             assert!(!busy.gpu.is_lost());
@@ -300,7 +300,7 @@ fn drop_hidden_images_and_park_do_not_block_on_busy_shared_gpu_and_retire_on_lat
             assert_eq!(Arc::strong_count(&busy.gpu), 1, "park releases strong Arc<Gpu> even while retire is pending");
             if !sibling_done.load(Ordering::Acquire) {
                 assert!(overlay.wake_deadline().is_some(), "busy park schedules deferred retirement");
-                let wait = std::time::Instant::now();
+                let wait = crate::time::now();
                 while let Some(due) = overlay.wake_deadline() {
                     assert!(wait.elapsed() < Duration::from_secs(5), "deferred park retirement did not finish");
                     std::thread::sleep(Duration::from_millis(2));

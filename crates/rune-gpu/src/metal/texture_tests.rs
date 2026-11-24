@@ -636,13 +636,15 @@ fn lazy_clear_render_pass_load_and_store_ops() {
     let v_dc = t_dc.create_view(&Default::default());
     let mut enc = device.create_command_encoder(&Default::default());
     {
+        // SAFETY: this test explicitly verifies `LoadOp::DontCare` on an uninitialized texture.
+        let load = wgpu::LoadOp::DontCare(unsafe { wgpu::LoadOpDontCare::enabled() });
         let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &v_dc,
                 resolve_target: None,
                 depth_slice: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::DontCare(unsafe { wgpu::LoadOpDontCare::enabled() }), store: wgpu::StoreOp::Store },
+                ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
             })],
             ..Default::default()
         });

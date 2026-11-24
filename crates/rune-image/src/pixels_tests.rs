@@ -281,7 +281,7 @@ fn pixels_set_does_not_wait_for_atlas_copy_and_copy_stays_consistent() {
             return;
         }
         producer_px.set(w, h, second_pixel.repeat((w * h) as usize));
-        let _ = done_tx.send(());
+        done_tx.send(()).ok();
     });
 
     let mut atlas = ImageAtlas::default();
@@ -351,7 +351,7 @@ fn pixels_set_resize_during_copy_finishes_old_frame_and_next_place_resizes() {
         let producer = std::thread::spawn(move || {
             if mid_rx.recv().is_err() { return; }
             producer_px.set(new_w, new_h, new_px.repeat((new_w * new_h) as usize));
-            let _ = done_tx.send(());
+            done_tx.send(()).ok();
         });
 
         let placed = atlas.place_at_with_copy_hook(&px, [old_w as f32, old_h as f32], None, |line| {
@@ -414,7 +414,7 @@ fn pixels_concurrent_sets_during_copy_stay_bounded_to_one_extra_frame() {
         assert_eq!(w1_producer.strong_count(), 1);
         assert_eq!(w4.strong_count(), 1);
 
-        let _ = done_tx.send(());
+        done_tx.send(()).ok();
     });
 
     let mut atlas = ImageAtlas::default();
@@ -484,7 +484,7 @@ fn pixels_set_reuses_arc_in_place_when_unshared_and_during_coalesced_updates() {
         producer_px.set(w, h, [40u8, 2, 3, 255].repeat((w * h) as usize));
         assert_eq!(producer_px.rgba_arc_ptr().unwrap() as usize, second_addr);
 
-        let _ = done_tx.send(());
+        done_tx.send(()).ok();
         second_addr
     });
 
@@ -659,7 +659,7 @@ fn pixels_replace_during_concurrent_atlas_copy_returns_empty_and_drops_old_after
         let b3 = vec![30u8; len];
         let returned = producer_px.replace(w, h, b3);
         assert_eq!((returned.as_ptr(), returned.capacity()), (ptr2, cap2));
-        let _ = done_tx.send(());
+        done_tx.send(()).ok();
     });
 
     let mut atlas = ImageAtlas::default();

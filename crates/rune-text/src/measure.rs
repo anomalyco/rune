@@ -575,7 +575,7 @@ mod tests {
                 // Spin-wait (Windows sleep has coarse ~1-15ms granularity) so the update lands
                 // right inside TextSystem construction across rounds.
                 let delay = std::time::Duration::from_micros((round % 16) * 40);
-                let t0 = std::time::Instant::now();
+                let t0 = rune_core::time::now();
                 while t0.elapsed() < delay {
                     std::hint::spin_loop();
                 }

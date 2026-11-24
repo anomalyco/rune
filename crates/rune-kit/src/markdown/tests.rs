@@ -670,9 +670,9 @@ fn wide_gfm_tables_cap_columns_and_hostile_nesting_stays_bounded() {
     let cols = 500usize;
     let (mut head, mut delim, mut row) = (String::from("|"), String::from("|"), String::from("|"));
     for i in 0..cols {
-        let _ = write!(head, " h{i} |");
+        write!(head, " h{i} |").unwrap();
         delim.push_str("---|");
-        let _ = write!(row, " v{i} |");
+        write!(row, " v{i} |").unwrap();
     }
     let table_src = format!("{head}\n{delim}\n{row}\n");
     let blocks = parse(&table_src);

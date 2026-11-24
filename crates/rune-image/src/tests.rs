@@ -375,7 +375,7 @@ fn rgba_into_is_latest_wins_against_set_replace_and_newer_rgba_into() {
     let decoded = Arc::new(mip_chain(2, 1, &[255, 0, 0, 255, 255, 0, 0, 255]).unwrap());
     assert!(!px.store_mips_if_current(stale_ticket, decoded));
     // The worker may already have skipped the job and dropped gate1 before decoding.
-    let _ = release1.send(());
+    release1.send(()).ok();
     wait_dropped(&weak1);
     assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty), "superseded rgba_into must not wake cache");
     assert_eq!(px.size(), (2, 1));
@@ -390,7 +390,7 @@ fn rgba_into_is_latest_wins_against_set_replace_and_newer_rgba_into() {
     cache.rgba_into(&px2, 16, 16, [0, 0, 255, 255].repeat(16 * 16));
     rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
     assert_eq!(px2.size(), (16, 16));
-    let _ = release2.send(());
+    release2.send(()).ok();
     wait_dropped(&weak2);
     assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty), "stale gated rgba_into must not wake cache");
     assert_eq!(px2.size(), (16, 16), "stale gated rgba_into must not overwrite newer rgba_into");
@@ -407,7 +407,7 @@ fn rgba_into_is_latest_wins_against_set_replace_and_newer_rgba_into() {
     let weak3 = Arc::downgrade(&raw3);
     let _ = cache.rgba_into_gated(&dropped, 128, 128, raw3, gate3);
     drop(dropped);
-    let _ = release3.send(());
+    release3.send(()).ok();
     wait_dropped(&weak3);
     assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty), "dropped target must not wake cache");
 }

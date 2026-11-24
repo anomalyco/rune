@@ -231,7 +231,7 @@ impl watch_loop::Driver for WaylandWatchDriver {
         };
         self.wake.wake();
         let state = lock.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = cond.wait_timeout_while(state, Duration::from_millis(100), |s| s.count == before && !s.stopped);
+        cond.wait_timeout_while(state, Duration::from_millis(100), |s| s.count == before && !s.stopped).ok();
     }
 }
 
@@ -444,12 +444,12 @@ impl QueueState {
 
     fn start_read(&mut self, seat_name: u32, offer: OfferId, attempt: Attempt, phase: ReadPhase) {
         let Some(wl_offer) = self.offers.get(&offer) else {
-            let _ = self.reply_tx.send(WorkerReply { seat: seat_name, attempt, outcome: ReadOutcome::Error });
+            self.reply_tx.send(WorkerReply { seat: seat_name, attempt, outcome: ReadOutcome::Error }).ok();
             self.wakers.wake();
             return;
         };
         let (Some((read_fd, write_fd)), Some(cancel)) = (make_pipe(), CancelToken::new()) else {
-            let _ = self.reply_tx.send(WorkerReply { seat: seat_name, attempt, outcome: ReadOutcome::Error });
+            self.reply_tx.send(WorkerReply { seat: seat_name, attempt, outcome: ReadOutcome::Error }).ok();
             self.wakers.wake();
             return;
         };
@@ -477,7 +477,7 @@ impl QueueState {
                 self.readers.insert(attempt, ActiveReader { cancel, done, thread: Some(thread) });
             }
             Err(_) => {
-                let _ = self.reply_tx.send(WorkerReply { seat: seat_name, attempt, outcome: ReadOutcome::Error });
+                self.reply_tx.send(WorkerReply { seat: seat_name, attempt, outcome: ReadOutcome::Error }).ok();
                 self.wakers.wake();
             }
         }
@@ -700,7 +700,7 @@ impl Controller {
             state.bind_seat(globals.registry(), &qh, name, version);
         }
         state.needs_flush = false;
-        let _ = queue.flush();
+        queue.flush().ok();
         let watch = WaylandWatch::spawn(conn.clone(), wakers);
         Some(Self { conn, globals: Some(globals), queue, state, reply_rx, watch })
     }
@@ -722,7 +722,7 @@ impl Controller {
         }
         if self.state.needs_flush {
             self.state.needs_flush = false;
-            let _ = self.queue.flush();
+            self.queue.flush().ok();
         }
     }
 

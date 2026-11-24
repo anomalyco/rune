@@ -69,7 +69,7 @@ fn slot_keeps_waiting_and_owed_across_resize_reconfigure() {
 
     // A frame was presented and the swap chain is full: take registers a wait.
     slot.presented();
-    assert_eq!(slot.take(Some(sem.0), move || { let _ = tx.send(()); }), Take::Later);
+    assert_eq!(slot.take(Some(sem.0), move || { tx.send(()).ok(); }), Take::Later);
     assert!(slot.waiting());
 
     // A resize calls `ResizeBuffers` on the same swap chain: `reconfigured(true)` keeps the

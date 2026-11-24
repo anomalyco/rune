@@ -66,7 +66,7 @@ async fn request<B: serde::Serialize + Type>(
         method,
         body,
         RequestTimeouts { rpc: RPC_TIMEOUT, response: Some(CONSENT_TIMEOUT) },
-        async { let _ = cancel.recv().await; },
+        async { cancel.recv().await.ok(); },
     ).await.map_err(|err| match err {
         RequestError::Dbus(e) => dbus_error(e),
         RequestError::Unavailable => ShortcutError::Unsupported,
@@ -155,7 +155,7 @@ async fn apply_effects(
                 let (conn, portal, done_tx) = (conn.clone(), portal.clone(), done_tx.clone());
                 let task = local.spawn(async move {
                     let result = bind_set(&conn, &portal, &shortcuts, cancel_rx).await;
-                    let _ = done_tx.try_send((attempt, result));
+                    done_tx.try_send((attempt, result)).ok();
                 });
                 *in_flight = Some((attempt, cancel_tx, task));
             }

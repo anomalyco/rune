@@ -655,5 +655,5 @@ async fn sleep_turn(delay: Duration) {
             resolve.call0(&wasm_bindgen::JsValue::UNDEFINED).ok();
         }
     });
-    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+    wasm_bindgen_futures::JsFuture::from(promise).await.ok();
 }

@@ -2,7 +2,7 @@ use super::frame_cpu_ms;
 
 #[cfg(all(windows, target_arch = "x86_64"))]
 fn burn_cpu_ms(ms: u64) {
-    let start = std::time::Instant::now();
+    let start = crate::time::now();
     let mut acc = 0u64;
     while start.elapsed() < std::time::Duration::from_millis(ms) {
         acc = acc.wrapping_add(std::hint::black_box(1));

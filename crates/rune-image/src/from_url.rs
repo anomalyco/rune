@@ -2,7 +2,9 @@
 //! own codecs (`createImageBitmap`, so WebP and AVIF too) off the main thread, and the straight
 //! RGBA lands through the same mip path as `ImageCache::rgba`. On native a URL without a scheme
 //! is a path and a `file:` URL names one; both load like `ImageCache::file`.
-use super::{Decoded, Image, ImageCache, ImageError, Input, icon_pixels, maybe_downsample_rgba, mip_chain, mip_chain_with_intrinsic, svg_rgba_with_size};
+use super::{Decoded, Image, ImageCache, ImageError, Input, icon_pixels, maybe_downsample_rgba, mip_chain};
+#[cfg(any(feature = "svg", target_arch = "wasm32"))]
+use super::{mip_chain_with_intrinsic, svg_rgba_with_size};
 #[cfg(any(test, target_arch = "wasm32"))]
 use super::MAX_SIDE;
 #[cfg(target_arch = "wasm32")]
@@ -75,6 +77,7 @@ pub(super) enum Fetched {
     /// Straight-alpha sRGB RGBA8 the browser decoded.
     Rgba(u32, u32, Vec<u8>),
     /// SVG or SVGZ bytes, which Rune rasterizes at `px`.
+    #[cfg(any(feature = "svg", target_arch = "wasm32"))]
     Svg(Vec<u8>),
 }
 
@@ -88,9 +91,12 @@ pub(super) fn land(url: &str, fetched: Fetched, px: u32) -> Result<Decoded, Imag
 /// mips (used by [`ImageCache::load_scaled`] on web).
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn land_scaled(url: &str, fetched: Fetched, px: u32, max_raster_px: Option<u32>) -> Result<Decoded, ImageError> {
+    #[cfg(not(any(feature = "svg", target_arch = "wasm32")))]
+    let _ = px;
     match fetched {
         Fetched::Rgba(w, h, bytes) => maybe_downsample_rgba(w, h, bytes, max_raster_px)
             .and_then(|(w, h, bytes)| mip_chain(w, h, &bytes)),
+        #[cfg(any(feature = "svg", target_arch = "wasm32"))]
         Fetched::Svg(bytes) => svg_rgba_with_size(&bytes, px)
             .and_then(|(w, h, intrinsic, bytes)| mip_chain_with_intrinsic(w, h, &bytes, Some(intrinsic))),
     }

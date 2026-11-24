@@ -109,7 +109,7 @@ fn kill_worker(st: &mut WebSandbox) {
         w.terminate();
     }
     if let Some(url) = st.blob_url.take() {
-        let _ = Url::revoke_object_url(&url);
+        Url::revoke_object_url(&url).ok();
     }
     st.ready = false;
     st._on_msg = None;
@@ -146,7 +146,7 @@ fn ensure_worker(cell: &Rc<RefCell<WebSandbox>>) -> bool {
         return false;
     };
     let Ok(worker) = Worker::new(&url) else {
-        let _ = Url::revoke_object_url(&url);
+        Url::revoke_object_url(&url).ok();
         return false;
     };
 
@@ -163,14 +163,14 @@ fn ensure_worker(cell: &Rc<RefCell<WebSandbox>>) -> bool {
     worker.set_onerror(Some(on_err.as_ref().unchecked_ref()));
 
     let init = Object::new();
-    let _ = Reflect::set(&init, &JsValue::from_str("kind"), &JsValue::from_str("init"));
+    Reflect::set(&init, &JsValue::from_str("kind"), &JsValue::from_str("init")).ok();
     let buf = Uint8Array::from(wasm.as_slice()).buffer();
-    let _ = Reflect::set(&init, &JsValue::from_str("wasm"), &buf);
+    Reflect::set(&init, &JsValue::from_str("wasm"), &buf).ok();
     let transfer = Array::new();
     transfer.push(&buf);
     if worker.post_message_with_transfer(&init, &transfer).is_err() {
         worker.terminate();
-        let _ = Url::revoke_object_url(&url);
+        Url::revoke_object_url(&url).ok();
         return false;
     }
 
@@ -208,10 +208,10 @@ fn pump(cell: &Rc<RefCell<WebSandbox>>) {
         return;
     };
     let msg = Object::new();
-    let _ = Reflect::set(&msg, &JsValue::from_str("kind"), &JsValue::from_str("eval"));
-    let _ = Reflect::set(&msg, &JsValue::from_str("id"), &JsValue::from_f64(f64::from(job.id)));
+    Reflect::set(&msg, &JsValue::from_str("kind"), &JsValue::from_str("eval")).ok();
+    Reflect::set(&msg, &JsValue::from_str("id"), &JsValue::from_f64(f64::from(job.id))).ok();
     let tex_buf = Uint8Array::from(job.key.src.as_bytes()).buffer();
-    let _ = Reflect::set(&msg, &JsValue::from_str("tex"), &tex_buf);
+    Reflect::set(&msg, &JsValue::from_str("tex"), &tex_buf).ok();
     let transfer = Array::new();
     transfer.push(&tex_buf);
     if worker.post_message_with_transfer(&msg, &transfer).is_err() {

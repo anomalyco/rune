@@ -383,7 +383,7 @@ mod shutdown_machine {
         );
 
         gate.wait_entered();
-        let started = std::time::Instant::now();
+        let started = crate::time::now();
         let outcome = slot.shutdown(Duration::from_millis(60));
         assert!(started.elapsed() >= Duration::from_millis(50), "must wait up to the bound");
         assert_eq!(outcome, ShutdownOutcome::TimedOut { remaining: 1 });

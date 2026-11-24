@@ -27,9 +27,9 @@ fn fallback_instance_descriptor_allows_noncompliant_adapters() {
 #[test]
 #[ignore]
 fn dx12_presentation_system_env_child() {
-    let expected = match std::env::var("RUNE_TEST_EXPECT_SWAPCHAIN").as_deref() {
-        Ok("hwnd") => wgpu::Dx12SwapchainKind::DxgiFromHwnd,
-        Ok("visual") => wgpu::Dx12SwapchainKind::DxgiFromVisual,
+    let expected = match crate::env::var("RUNE_TEST_EXPECT_SWAPCHAIN").as_deref() {
+        Some("hwnd") => wgpu::Dx12SwapchainKind::DxgiFromHwnd,
+        Some("visual") => wgpu::Dx12SwapchainKind::DxgiFromVisual,
         other => panic!("unexpected RUNE_TEST_EXPECT_SWAPCHAIN: {other:?}"),
     };
     assert_eq!(Gpu::dx12_swapchain_kind(), expected);
@@ -397,10 +397,10 @@ fn configure_error_classification_separates_oom_from_refusal() {
 fn with_error_scopes_captures_error_and_leaves_real_device_stack_clean() {
     let Some(gpu) = Gpu::test_headless_or_noop() else { return };
     let ((), errors) = rune_gpu::health::with_error_scopes(&gpu.device, || {
-        let _ = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        drop(gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("intentionally-invalid-scope-test"),
             source: wgpu::ShaderSource::Wgsl("@vertex fn vs() -> @builtin(position) vec4<f32> { return missing_ident; }".into()),
-        });
+        }));
     });
     assert!(errors.validation.is_some(), "validation scope must capture invalid WGSL");
     assert!(errors.memory.is_none());
@@ -570,7 +570,7 @@ fn exhausting_every_adapter_on_rejected_shader_reaches_window_error_and_try_run(
 fn headless_run_rejected_shader_child() {
     use super::super::shader_check;
     let _turn = crate::tooling::headless_run::test_turn();
-    let path = std::env::var("RUNE_TEST_HEADLESS_SNAP").expect("snap path env");
+    let path = crate::env::var("RUNE_TEST_HEADLESS_SNAP").expect("snap path env");
     shader_check::with_uber_shaders_refused(true, || {
         crate::tooling::run_windows_with_args(
             crate::RunOptions::default(),
@@ -591,7 +591,7 @@ fn try_run_headless_returns_error_instead_of_exiting_process() {
         "rune-try-run-headless-err-{}.png",
         std::process::id(),
     ));
-    let _ = std::fs::remove_file(&snap);
+    std::fs::remove_file(&snap).ok();
     let err = shader_check::with_uber_shaders_refused(true, || {
         crate::tooling::try_run_windows_with_args(
             crate::RunOptions::default(),
@@ -618,7 +618,7 @@ fn headless_run_exits_nonzero_when_every_adapter_rejects_classic_shader() {
         "rune-rejected-shader-headless-{}.png",
         std::process::id(),
     ));
-    let _ = std::fs::remove_file(&snap);
+    std::fs::remove_file(&snap).ok();
     let output = std::process::Command::new(exe)
         .args([
             "--exact",
@@ -789,8 +789,9 @@ fn gpu_memory_policy_defaults_to_memory_usage_and_maps_to_wgpu_hints() {
     assert_manual(GpuMemoryPolicy::Manual { block_size: (4 * MIB)..(8 * MIB) }, (4 * MIB)..(8 * MIB));
     assert_manual(GpuMemoryPolicy::Manual { block_size: (4 * MIB)..(4 * MIB) }, (4 * MIB)..(4 * MIB));
     assert_manual(GpuMemoryPolicy::Manual { block_size: 0..0 }, 1..1);
-    assert_manual(GpuMemoryPolicy::Manual { block_size: (16 * MIB)..(4 * MIB) }, (16 * MIB)..(16 * MIB));
-    assert_manual(GpuMemoryPolicy::Manual { block_size: u64::MAX..0 }, u64::MAX..u64::MAX);
+    let range = |start, end| std::ops::Range { start, end };
+    assert_manual(GpuMemoryPolicy::Manual { block_size: range(16 * MIB, 4 * MIB) }, (16 * MIB)..(16 * MIB));
+    assert_manual(GpuMemoryPolicy::Manual { block_size: range(u64::MAX, 0) }, u64::MAX..u64::MAX);
 }
 
 #[test]
@@ -825,7 +826,7 @@ fn gpu_memory_policy_child() {
     use crate::GpuMemoryPolicy;
     const MIB: u64 = 1024 * 1024;
 
-    let mode = std::env::var("RUNE_TEST_GPU_MEMORY_POLICY").expect("policy test mode");
+    let mode = crate::env::var("RUNE_TEST_GPU_MEMORY_POLICY").expect("policy test mode");
     let expected_block = match mode.as_str() {
         "default" => 8 * MIB,
         "manual-setter" => {

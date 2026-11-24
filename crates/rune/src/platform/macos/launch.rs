@@ -93,7 +93,7 @@ pub(crate) fn begin(takes_activation: bool) -> Result<Beside, String> {
     let asked = std::thread::Builder::new().name("rune-launch-session".into()).spawn(move || {
         interactive();
         let session = window_server_session();
-        let _ = found.send(session);
+        found.send(session).ok();
         if session { return; }
         // Without a session AppKit may never come back to the loop that reads the answer.
         std::thread::sleep(Duration::from_secs(2));

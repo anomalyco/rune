@@ -18,7 +18,7 @@ fn temp_dir(label: &str) -> PathBuf {
         std::process::id(),
         label
     ));
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ok();
     std::fs::create_dir_all(&dir).expect("create temp test dir");
     dir
 }
@@ -26,7 +26,7 @@ fn temp_dir(label: &str) -> PathBuf {
 struct TempDirGuard(PathBuf);
 impl Drop for TempDirGuard {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        std::fs::remove_dir_all(&self.0).ok();
     }
 }
 

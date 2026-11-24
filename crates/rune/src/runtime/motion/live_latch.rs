@@ -183,9 +183,14 @@ thread_local! {
 
 /// Key for `FrameState::live_subscriptions`. Compiles to a plain `u64` outside tests; in tests,
 /// equality comparisons count lookups so regression tests prove `subscribe_live` is linear.
-#[derive(Clone, Copy, Debug, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Eq)]
 #[repr(transparent)]
 pub(super) struct SourceKey(pub(super) u64);
+
+impl std::hash::Hash for SourceKey {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) { self.0.hash(state); }
+}
 
 #[cfg(not(test))]
 impl PartialEq for SourceKey {

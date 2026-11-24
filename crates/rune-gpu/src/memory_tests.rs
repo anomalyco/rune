@@ -53,12 +53,13 @@ fn manual_range_normalizes_zero_inverted_and_huge_bounds() {
         to_wgpu_hints(&GpuMemoryPolicy::Manual { block_size: 0..(8 * MIB) }),
         1..(8 * MIB),
     );
+    let range = |start, end| Range { start, end };
     assert_manual_range(
-        to_wgpu_hints(&GpuMemoryPolicy::Manual { block_size: (16 * MIB)..(4 * MIB) }),
+        to_wgpu_hints(&GpuMemoryPolicy::Manual { block_size: range(16 * MIB, 4 * MIB) }),
         (16 * MIB)..(16 * MIB),
     );
     assert_manual_range(
-        to_wgpu_hints(&GpuMemoryPolicy::Manual { block_size: u64::MAX..0 }),
+        to_wgpu_hints(&GpuMemoryPolicy::Manual { block_size: range(u64::MAX, 0) }),
         u64::MAX..u64::MAX,
     );
     assert_manual_range(

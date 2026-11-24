@@ -280,7 +280,7 @@ fn a_mebibyte_of_code_spans_or_open_parens_scans_in_one_pass() {
         k += 1;
     }
     let parens = "\\( ".repeat((1 << 20) / 3);
-    let t = std::time::Instant::now();
+    let t = rune::time::now();
     assert!(maths(&spans).is_empty());
     assert!(maths(&parens).is_empty());
     assert!(t.elapsed() < std::time::Duration::from_secs(30), "{:?}", t.elapsed());

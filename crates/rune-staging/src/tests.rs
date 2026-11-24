@@ -20,8 +20,8 @@ fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
     let adapter = match block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) {
         Ok(adapter) => adapter,
         Err(error) => {
-            if std::env::var("RUNE_ALLOW_NO_GPU")
-                .is_ok_and(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes"))
+            if std::env::var_os("RUNE_ALLOW_NO_GPU")
+                .is_some_and(|v| matches!(v.to_str(), Some("1" | "true" | "TRUE" | "yes")))
             {
                 eprintln!("skipped: no GPU adapter: {error} (RUNE_ALLOW_NO_GPU=1)");
                 return None;

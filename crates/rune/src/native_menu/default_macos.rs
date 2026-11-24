@@ -379,8 +379,8 @@ pub(crate) fn sync_standard(app: &NSApplication) {
         unsafe { system_edit_last(&edit) };
     }
     let mut claimed = HashSet::new();
-    // SAFETY: main thread; reading retained menus.
     if let Some(root) = app.mainMenu() {
+        // SAFETY: main thread; reading retained menus.
         unsafe {
             for i in 0..root.numberOfItems() {
                 if let Some(sub) = root.itemAtIndex(i).and_then(|top| top.submenu()) {

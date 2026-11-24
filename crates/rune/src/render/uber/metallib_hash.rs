@@ -5,7 +5,7 @@ pub(super) const UBER_WGSL_BLAKE3: &str = "68bfc21d9a885dc46f8dc73f29f2da740203b
 pub(super) const UBER_ABI_FNV64: u64 = 0xb462b40a6abf4cf1;
 #[cfg(all(test, target_os = "macos"))]
 pub(super) const UBER_MSL_OPTIONS_FNV64: u64 = 0x0eaa2a2ef8dcd514;
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 pub(super) const UBER_MSL_BLAKE3: &str = "743e169765c27aa0666921073c5842f90480220a37c15a9adbfb8ea88ff00225";
 #[cfg(test)]
 pub(super) const UBER_METALLIB_FNV64: u64 = 0x75f9e3eb623261ce;

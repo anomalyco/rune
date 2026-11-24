@@ -88,6 +88,7 @@ fn view(s: &Background, cx: &mut Cx<Background>) -> El {
                 .child(
                     text_input(&s.note, type_::BODY)
                         .key("note")
+                        .label("Note")
                         .color(t.text)
                         .on_edit(|s: &mut Background| &mut s.note),
                 ),

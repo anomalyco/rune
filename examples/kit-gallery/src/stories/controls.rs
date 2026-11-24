@@ -153,7 +153,7 @@ pub(super) fn switch_sizes(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
         ("Large", ControlSize::Large), ("Extra large", ControlSize::ExtraLarge)];
     col().gap(12.0).children(sizes.into_iter().map(|(name, size)| {
         let key = format!("size-{name}");
-        let sw = |on: bool, st: State| Switch::new(on).control_size(size).state(st).build(k);
+        let sw = |on: bool, st: State| Switch::new(on).label(name).hide_label().control_size(size).state(st).build(k);
         row().gap(12.0).center_y()
             .child(caption(k, name).w(80.0))
             .child(Switch::new(s.is(&key)).control_size(size).label(name).hide_label().on_toggle(move |s: &mut G| s.flip(&key)).build(k))
@@ -173,8 +173,8 @@ pub(super) fn switch_web(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
         .children(states.into_iter().map(|(name, st)| {
             row().gap(16.0).center_y()
                 .child(caption(k, name).w(80.0))
-                .child(Switch::new(false).web().state(st).build(k))
-                .child(Switch::new(true).web().state(st).build(k))
+                .child(Switch::new(false).web().label(format!("{name} off")).hide_label().state(st).build(k))
+                .child(Switch::new(true).web().label(format!("{name} on")).hide_label().state(st).build(k))
         }))
 }
 

@@ -436,7 +436,7 @@ fn serve(
                 session::Effect::Read { attempt, want, deadline } => {
                     #[cfg(test)]
                     if let Some(tx) = on_reading {
-                        let _ = tx.send(());
+                        tx.send(()).ok();
                     }
                     let ev = if stop.is_set() {
                         session::Event::Stopped

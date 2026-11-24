@@ -35,14 +35,14 @@ fn track(allocs: usize, bytes: isize) {
 ///
 /// SAFETY: `p` must be live and initialized for at least `WATCH_LEN.min(l.size())` bytes.
 unsafe fn check_watch(p: *mut u8, l: Layout) {
-    let _ = WATCH_PTR.try_with(|w| {
+    WATCH_PTR.try_with(|w| {
         if w.get() == 0 || w.get() != p as usize { return; }
         w.set(0);
         let len = WATCH_LEN.try_with(Cell::get).unwrap_or(0).min(l.size());
         // SAFETY: caller upholds `p..p+len` is live and initialized before dealloc/realloc.
         let zeroed = unsafe { std::slice::from_raw_parts(p, len) }.iter().all(|&b| b == 0);
         WATCH_RESULT.try_with(|r| r.set(if zeroed { ReleaseCheck::Zeroed } else { ReleaseCheck::Dirty })).ok();
-    });
+    }).ok();
 }
 // SAFETY: forwards to the system allocator, counting calls and bytes on this thread.
 unsafe impl GlobalAlloc for Counting {

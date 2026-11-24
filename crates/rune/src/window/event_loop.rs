@@ -334,12 +334,12 @@ fn finish_run_returns_startup_window_error_when_the_loop_exits_cleanly() {
 #[test]
 fn finish_run_resumes_a_captured_panic_ahead_of_exit_status_and_startup_errors() {
     let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = finish_run(
+        finish_run(
             Err(winit::error::EventLoopError::ExitFailure(71)),
             Some("Protocol error 2"),
             Some("startup error".into()),
             Some(Box::new("original callback panic")),
-        );
+        )
     })).expect_err("captured panic must unwind out of finish_run");
     assert_eq!(err.downcast_ref::<&str>(), Some(&"original callback panic"));
 }
