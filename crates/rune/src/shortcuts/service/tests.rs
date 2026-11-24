@@ -170,3 +170,88 @@ fn a_backend_retires_before_its_chord_stops_naming_an_owner() {
     assert!(!NATIVE.lock().unwrap().iter().any(|(.., s, _)| *s == shortcut), "the claim went with the registration");
     assert_eq!(*RETIRED_WITH_CLAIM.lock().unwrap(), vec![true], "the backend saw its chord still claimed while it was alive");
 }
+
+static BATCHES: Mutex<Vec<Vec<(String, Option<String>, Option<String>)>>> = Mutex::new(Vec::new());
+
+struct BatchRecorder;
+
+impl Backend for BatchRecorder {
+    fn register(&mut self, _: ShortcutId, shortcut: &Shortcut) -> Result<(), ShortcutError> {
+        BATCHES.lock().unwrap().push(vec![(shortcut.to_string(), None, None)]);
+        Ok(())
+    }
+    fn register_with(&mut self, _: ShortcutId, shortcut: &Shortcut, details: &super::super::ShortcutDetails) -> Result<(), ShortcutError> {
+        BATCHES.lock().unwrap().push(vec![(shortcut.to_string(), details.id.clone(), details.description.clone())]);
+        Ok(())
+    }
+    fn register_batch(&mut self, items: &[(ShortcutId, Shortcut, super::super::ShortcutDetails)]) -> Vec<Result<(), ShortcutError>> {
+        BATCHES.lock().unwrap().push(
+            items.iter().map(|(_, s, d)| (s.to_string(), d.id.clone(), d.description.clone())).collect()
+        );
+        vec![Ok(()); items.len()]
+    }
+    fn unregister(&mut self, _: ShortcutId) -> Result<(), ShortcutError> { Ok(()) }
+}
+
+fn connect_batch(_: bool, _: Sink) -> Result<NativeBackend, ShortcutError> { Ok(Box::new(BatchRecorder)) }
+
+#[test]
+fn startup_global_shortcuts_register_in_one_batch() {
+    BATCHES.lock().unwrap().clear();
+    let app = App::new(AppSpec::new("Batch", (10.0, 10.0), || (), |_, _| el()))
+        .global_shortcut("ctrl+alt+shift+f9", |_, _| {})
+        .global_shortcut_named("ctrl+alt+shift+f10", "quick-panel", "Open quick panel", |_, _| {});
+    let handle = app.handle();
+    let guard = Guard::attach_with(&app.shared, Arc::new(|| {}), false, true, connect_batch);
+    let runtime_id = handle
+        .register_shortcut_named("ctrl+alt+shift+f12".parse().unwrap(), "capture", "Capture screen", |_, _| {})
+        .unwrap();
+    let recorded = BATCHES.lock().unwrap().clone();
+    handle.unregister_shortcut(runtime_id).unwrap();
+    drop(guard);
+    assert_eq!(recorded.len(), 2, "expected one startup batch plus one runtime call, got: {recorded:?}");
+    assert_eq!(
+        recorded[0],
+        vec![
+            ("ctrl+alt+shift+f9".into(), None, None),
+            ("ctrl+alt+shift+f10".into(), Some("quick-panel".into()), Some("Open quick panel".into())),
+        ]
+    );
+    assert_eq!(
+        recorded[1],
+        vec![("ctrl+alt+shift+f12".into(), Some("capture".into()), Some("Capture screen".into()))]
+    );
+}
+
+#[test]
+fn startup_batch_records_partial_failures_and_preserves_error_order() {
+    struct Partial;
+    impl Backend for Partial {
+        fn register(&mut self, _: ShortcutId, _: &Shortcut) -> Result<(), ShortcutError> { Ok(()) }
+        fn register_batch(&mut self, items: &[(ShortcutId, Shortcut, super::super::ShortcutDetails)]) -> Vec<Result<(), ShortcutError>> {
+            items.iter().map(|(_, s, _)| {
+                if s.to_string() == "ctrl+alt+shift+f13" { Err(ShortcutError::PermissionDenied) } else { Ok(()) }
+            }).collect()
+        }
+        fn unregister(&mut self, _: ShortcutId) -> Result<(), ShortcutError> { Ok(()) }
+    }
+    fn connect_partial(_: bool, _: Sink) -> Result<NativeBackend, ShortcutError> { Ok(Box::new(Partial)) }
+
+    let app = App::new(AppSpec::new("Partial", (10.0, 10.0), || 0u32, |_: &u32, _| el()))
+        .global_shortcut("bad+", |s, _| *s += 1)
+        .global_shortcut("ctrl+alt+shift+f12", |s, _| *s += 10)
+        .global_shortcut("ctrl+alt+shift+f13", |s, _| *s += 100)
+        .global_shortcut("ctrl+alt+shift+f12", |s, _| *s += 1000);
+    let handle = app.handle();
+    let guard = Guard::attach_with(&app.shared, Arc::new(|| {}), false, true, connect_partial);
+    let errors = handle.take_shortcut_errors();
+    assert_eq!(errors.len(), 3, "expected InvalidAccelerator, PermissionDenied, Conflict in order: {errors:?}");
+    assert!(matches!(errors[0], ShortcutError::InvalidAccelerator(_)));
+    assert_eq!(errors[1], ShortcutError::PermissionDenied);
+    assert_eq!(errors[2], ShortcutError::Conflict);
+    // Only the accepted shortcut stays registered and owned.
+    assert_eq!(handle.shortcut_owner(&"ctrl+alt+shift+f12".parse().unwrap()).as_deref(), Some("Partial"));
+    assert_eq!(handle.shortcut_owner(&"ctrl+alt+shift+f13".parse().unwrap()), None);
+    assert_eq!(app.shared.shortcuts.handlers.lock().unwrap().len(), 1);
+    drop(guard);
+}
