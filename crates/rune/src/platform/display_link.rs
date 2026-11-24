@@ -2,6 +2,10 @@
 //! acquisition may return immediately even with FIFO presentation enabled. The exception is a
 //! frame after rest, such as the first after a key press: it draws at once (`rested`).
 //!
+//! When a visible window settles idle after presenting, the link coasts briefly (`LinkState::Coasting`,
+//! ~150 ms) without waking the main thread, drawing, or presenting, so trackpad wheel deltas and
+//! steady `NativeSurface` pushes resume without cold `CVDisplayLinkStop`/`Start` stalls.
+//!
 //! Low Power Mode caps a ProMotion panel at 60 Hz while CVDisplayLink, CADisplayLink and
 //! NSScreen all still report 120 Hz. Submitting on every tick then fills the drawable queue
 //! with a few fast frames before backpressure settles it at 60 Hz, so pace at the cap instead.
@@ -11,31 +15,83 @@
 use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use objc2_core_foundation::CFRetained;
 use objc2_core_video::{CVDisplayLink, CVGetCurrentHostTime, CVGetHostClockFrequency, CVOptionFlags, CVReturn, CVTime, CVTimeFlags, CVTimeStamp, CVTimeStampFlags};
 use winit::{platform::macos::MonitorHandleExtMacOS, window::Window};
 
+use super::display_link_machine::{DisplayLinkCore, LinkEffect, pacing_of};
+pub(crate) use super::display_link_machine::Opportunity;
+
+const INITIAL_PERIOD_NS: u64 = 1_000_000_000 / 60;
+const MODE_ACTIVE: u8 = 0;
+const MODE_EXPIRED: u8 = 1;
+
+fn coast_code(ticks_left: u8) -> u8 { ticks_left.saturating_add(MODE_EXPIRED) }
+
 struct Callback {
     target: AtomicU64,
     period_ns: AtomicU64,
+    /// `MODE_ACTIVE` (0) = active wakes; `MODE_EXPIRED` (1) = coasting expired, stop pending;
+    /// `n + 1` = coasting with `n` ticks left.
+    coast: AtomicU8,
+    /// Coalesces active-mode wakes until the main thread consumes `target`.
+    wake_pending: AtomicBool,
     wake: crate::runtime::Waker,
     host_frequency: f64,
+}
+
+impl Callback {
+    fn arm_active(&self) {
+        self.coast.store(MODE_ACTIVE, Ordering::SeqCst);
+        self.wake_pending.store(false, Ordering::SeqCst);
+    }
+
+    fn arm_coast(&self, ticks_left: u8) {
+        self.coast.store(coast_code(ticks_left), Ordering::SeqCst);
+        self.wake_pending.store(false, Ordering::SeqCst);
+    }
+
+    fn coast_expired(&self) -> bool {
+        self.coast.load(Ordering::Acquire) == MODE_EXPIRED
+    }
+
+    /// Clears `wake_pending` before reading `target` so a tick arriving after this read is
+    /// guaranteed to wake the main thread.
+    fn take_target(&self) -> u64 {
+        self.wake_pending.store(false, Ordering::SeqCst);
+        self.target.swap(0, Ordering::SeqCst)
+    }
+
+    fn reset(&self) {
+        self.coast.store(MODE_ACTIVE, Ordering::Relaxed);
+        self.wake_pending.store(false, Ordering::Relaxed);
+        self.target.store(0, Ordering::Relaxed);
+    }
+
+    /// Handles one CoreVideo tick on the callback thread; returns whether to wake the main thread.
+    fn on_tick(&self, target: u64) -> bool {
+        self.target.store(target, Ordering::SeqCst);
+        let prev = self.coast.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |m| {
+            (m > MODE_EXPIRED).then(|| m - 1)
+        });
+        match prev {
+            Ok(m) => m - 1 == MODE_EXPIRED,
+            Err(MODE_ACTIVE) => !self.wake_pending.swap(true, Ordering::SeqCst),
+            Err(_) => false,
+        }
+    }
 }
 
 pub(crate) struct DisplayLink {
     link: CFRetained<CVDisplayLink>,
     // Stable allocation, retained until stop has joined the callback thread.
     callback: Box<Callback>,
-    last_present: Option<Instant>,
-    last_target: Option<Instant>,
+    core: DisplayLinkCore,
     display: Option<u32>,
-    capped: bool,
-    running: bool,
 }
 
-const LOW_POWER_FRAME: Duration = Duration::from_nanos(1_000_000_000 / 60);
 static CREATE_FAILED: AtomicBool = AtomicBool::new(false);
 /// The last creation's CoreVideo status (0 once one succeeds), and when it failed.
 static LAST_FAILURE: Mutex<Option<(i32, Instant)>> = Mutex::new(None);
@@ -47,13 +103,7 @@ pub(crate) fn failure() -> Option<i32> { LAST_FAILURE.lock().unwrap().map(|(stat
 
 /// How a surface's frames are paced, from its display link (or the lack of one).
 pub(crate) fn pacing(link: Option<&DisplayLink>, moving: bool) -> crate::frame::surface_stats::Pacing {
-    use crate::frame::surface_stats::Pacing;
-    match (link, failure()) {
-        (Some(link), _) if link.running() => Pacing::DisplayLink,
-        (None, Some(status)) => Pacing::Failed(status),
-        _ if moving => Pacing::Unpaced,
-        _ => Pacing::Idle,
-    }
+    pacing_of(link.map(|link| link.core.state()), failure(), moving)
 }
 
 #[link(name = "CoreGraphics", kind = "framework")]
@@ -84,21 +134,27 @@ unsafe extern "C-unwind" fn tick(
     } else {
         CVGetCurrentHostTime() + (callback.period_ns.load(Ordering::Relaxed) as f64 * 1e-9 * callback.host_frequency) as u64
     };
-    let pending = callback.target.swap(target, Ordering::Release) != 0;
     // Coalesce a backed-up event loop; missed refreshes never become a catch-up burst.
     // Never call Window::request_redraw here: winit synchronously waits on the main
     // thread on macOS, which can itself be waiting in CVDisplayLinkStop.
-    if !pending { (callback.wake)(); }
+    if callback.on_tick(target) { (callback.wake)(); }
     0
 }
 
 impl DisplayLink {
-    pub(crate) fn running(&self) -> bool { self.running }
-    pub(crate) fn refresh_hz(&self) -> f64 { 1.0 / self.frame_period().as_secs_f64() }
+    /// True only while actively driving redraws (`LinkState::Active`); false while `Coasting` or `Stopped`.
+    pub(crate) fn paced(&self) -> bool { self.core.paced() }
 
-    fn frame_period(&self) -> Duration {
+    pub(crate) fn refresh_hz(&self) -> f64 {
         let period = Duration::from_nanos(self.callback.period_ns.load(Ordering::Relaxed));
-        if self.capped { period.max(LOW_POWER_FRAME) } else { period }
+        let mut core = self.core.clone();
+        core.set_period(period);
+        core.refresh_hz()
+    }
+
+    fn sync_period(&mut self) {
+        let ns = self.callback.period_ns.load(Ordering::Relaxed);
+        self.core.set_period(Duration::from_nanos(ns));
     }
 
     pub(crate) fn new(window: &Window, wake: crate::runtime::Waker) -> Option<Self> {
@@ -117,14 +173,21 @@ impl DisplayLink {
         let link = unsafe { CFRetained::from_raw(NonNull::new(raw)?) };
         let mut callback = Box::new(Callback {
             target: AtomicU64::new(0),
-            period_ns: AtomicU64::new(1_000_000_000 / 60),
+            period_ns: AtomicU64::new(INITIAL_PERIOD_NS),
+            coast: AtomicU8::new(MODE_ACTIVE),
+            wake_pending: AtomicBool::new(false),
             wake,
             host_frequency: CVGetHostClockFrequency(),
         });
         // SAFETY: `tick` matches `CVDisplayLinkOutputCallback`, and `callback` stays at a stable heap address until `DisplayLink::drop` stops the link.
         let status = unsafe { link.set_output_callback(Some(tick), (&mut *callback as *mut Callback).cast()) };
         if status != 0 { eprintln!("display link callback failed: {status}"); return None; }
-        let mut pacing = Self { link, callback, last_present: None, last_target: None, display: None, capped: false, running: false };
+        let mut pacing = Self {
+            link,
+            callback,
+            core: DisplayLinkCore::new(Duration::from_nanos(INITIAL_PERIOD_NS)),
+            display: None,
+        };
         pacing.update_display(window);
         Some(pacing)
     }
@@ -145,23 +208,37 @@ impl DisplayLink {
             if let Some(display) = display { self.link.set_current_cg_display(display); }
             self.display = display;
         }
-        if (changed || !self.running)
+        if (changed || !self.core.hardware_running())
             && let Some(ns) = nominal_period_ns(self.link.nominal_output_video_refresh_period())
                 .or_else(|| monitor.as_ref().and_then(|m| m.refresh_rate_millihertz()).and_then(millihertz_period_ns))
         {
             self.callback.period_ns.store(ns, Ordering::Relaxed);
+            self.core.set_period(Duration::from_nanos(ns));
         }
-        self.capped = low_power_caps(self.display);
+        self.core.set_capped(low_power_caps(self.display));
     }
 
-    /// Starts the link if it was stopped; false if Core Video refused to start it.
+    /// Starts or resumes the link into `Active`; false if Core Video refused `CVDisplayLinkStart`.
     pub(crate) fn start(&mut self) -> bool {
-        if !self.running {
-            let status = self.link.start();
-            if status != 0 { eprintln!("display link start failed: {status}"); return false; }
-            self.running = true;
-            // Power state can change while idle; each burst rechecks it.
-            self.capped = low_power_caps(self.display);
+        self.sync_period();
+        for effect in self.core.start() {
+            match effect {
+                LinkEffect::StartLink => {
+                    self.callback.arm_active();
+                    let status = self.link.start();
+                    if status != 0 {
+                        eprintln!("display link start failed: {status}");
+                        self.core.start_failed();
+                        return false;
+                    }
+                    // Power state can change while idle; each burst rechecks it.
+                    self.core.set_capped(low_power_caps(self.display));
+                }
+                LinkEffect::ResumeActive => {
+                    self.callback.arm_active();
+                }
+                LinkEffect::ArmCoast { .. } | LinkEffect::WakeToStop | LinkEffect::StopLink => {}
+            }
         }
         true
     }
@@ -171,35 +248,65 @@ impl DisplayLink {
     /// during rendering can queue the next opportunity.
     pub(crate) fn next_frame(&mut self) -> Opportunity {
         if !self.start() { return Opportunity::Now; }
-        let host_target = self.callback.target.swap(0, Ordering::Acquire);
+        let host_target = self.callback.take_target();
         let now = crate::time::now();
         let tick = (host_target != 0).then(|| target_time(now, CVGetCurrentHostTime(), host_target, self.callback.host_frequency));
-        let next = opportunity(tick, self.last_present, self.last_target, now, self.frame_period());
-        match next {
-            Opportunity::Tick(target) => self.last_target = Some(target),
-            Opportunity::Now => self.last_target = Some(now),
-            Opportunity::Wait => {}
-        }
-        next
+        self.sync_period();
+        self.core.claim(tick, now)
     }
 
     /// Whether a frame that may draw nothing (a timer's, on a resting surface) can decide that
-    /// before starting the link: it's stopped, and `next_frame` would answer `Now` whenever
-    /// asked from here on, so starting it once the frame turns out to draw paces it the same.
+    /// before starting or resuming the link: it's not actively pacing, and `next_frame` would
+    /// answer `Now` whenever asked from here on.
     pub(crate) fn defers_start(&self, now: Instant) -> bool {
-        defers_start(self.running, self.last_present, self.last_target, now, self.frame_period())
+        let mut core = self.core.clone();
+        core.set_period(Duration::from_nanos(self.callback.period_ns.load(Ordering::Relaxed)));
+        core.defers_start(now)
     }
 
     /// The tick after `now`, as if the link were running.
-    pub(crate) fn tick_after(&self, now: Instant) -> Instant { now + self.frame_period() }
-
-    pub(crate) fn presented(&mut self, at: Instant) {
-        self.last_present = Some(at);
+    pub(crate) fn tick_after(&self, now: Instant) -> Instant {
+        let mut core = self.core.clone();
+        core.set_period(Duration::from_nanos(self.callback.period_ns.load(Ordering::Relaxed)));
+        core.tick_after(now)
     }
 
+    pub(crate) fn presented(&mut self, at: Instant) { self.core.presented(at); }
+
+    /// Keeps an active link coasting briefly (~150 ms) with zero draws and zero presents after
+    /// a visible window settles idle. A stopped link stays stopped.
+    pub(crate) fn coast(&mut self) {
+        self.sync_period();
+        for effect in self.core.coast() {
+            if let LinkEffect::ArmCoast { ticks_left } = effect {
+                self.callback.arm_coast(ticks_left);
+            }
+        }
+    }
+
+    /// Stops a coasting link once its keep-alive tick budget hits zero (zero redraws).
+    pub(crate) fn stop_expired(&mut self) -> bool {
+        let expired = self.callback.coast_expired();
+        let mut stopped = false;
+        for effect in self.core.stop_if_expired(expired) {
+            if effect == LinkEffect::StopLink {
+                self.link.stop();
+                self.callback.reset();
+                stopped = true;
+            }
+        }
+        stopped
+    }
+
+    /// Hard-stops the link immediately (occlusion, hide, minimize, backoff, zero resize,
+    /// prewarm, device loss, or drop).
     pub(crate) fn stop(&mut self) {
-        if self.running { self.link.stop(); self.running = false; }
-        self.callback.target.store(0, Ordering::Relaxed);
+        for effect in self.core.stop() {
+            if effect == LinkEffect::StopLink {
+                self.link.stop();
+            }
+        }
+        self.callback.reset();
     }
 }
 
@@ -229,135 +336,17 @@ fn target_time(now: Instant, host_now: u64, host_target: u64, frequency: f64) ->
     if host_target >= host_now { now + delta } else { now - delta }
 }
 
-/// When a surface's next frame draws.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Opportunity {
-    /// On this tick, which presents at its target.
-    Tick(Instant),
-    /// At once, aimed at no tick (`rested`).
-    Now,
-    /// On a later tick.
-    Wait,
-}
-
-impl Opportunity {
-    /// The frame's target presentation time if it draws now (`None` when aimed at no tick), or
-    /// `None` when it waits.
-    pub(crate) fn target(self) -> Option<Option<Instant>> {
-        match self {
-            Self::Tick(target) => Some(Some(target)),
-            Self::Now => Some(None),
-            Self::Wait => None,
-        }
-    }
-}
-
-/// A fresh tick wins. Without one, a surface that has rested draws at once rather than wait
-/// for the link to start or tick, which after idle took one to two refreshes.
-fn opportunity(tick: Option<Instant>, last: Option<Instant>, last_target: Option<Instant>, now: Instant, period: Duration) -> Opportunity {
-    // A late render followed by an on-time tick must skip, not submit two frames
-    // together. Also discard stale callbacks after main-thread stalls.
-    match tick {
-        Some(target) if permits(last, last_target, target, now, period) => Opportunity::Tick(target),
-        _ if rested(last, last_target, now, period) => Opportunity::Now,
-        _ => Opportunity::Wait,
-    }
-}
-
-fn permits(last: Option<Instant>, last_target: Option<Instant>, target: Instant, now: Instant, period: Duration) -> bool {
-    let half = period / 2;
-    now < target && last_target.is_none_or(|last| target >= last + period * 3 / 4)
-        && last.is_none_or(|last| now.saturating_duration_since(last) >= half)
-}
-
-/// Whether the last frame has surely reached the display: its target has passed, and a whole
-/// refresh has gone by since it was submitted, plus half of one for the GPU. Another frame then
-/// can't queue behind it, so one at once costs no pacing: it shows at the next refresh.
-fn rested(last: Option<Instant>, last_target: Option<Instant>, now: Instant, period: Duration) -> bool {
-    last_target.is_none_or(|target| target <= now)
-        && last.is_none_or(|last| now.saturating_duration_since(last) >= period * 3 / 2)
-}
-
-/// A stopped link has no tick waiting (`stop` clears it), so a rested surface's next frame is
-/// `Now` until the link starts: deciding first costs it no pacing.
-fn defers_start(running: bool, last: Option<Instant>, last_target: Option<Instant>, now: Instant, period: Duration) -> bool {
-    !running && rested(last, last_target, now, period)
-}
-
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use super::*;
 
     #[test]
-    fn a_frame_defers_starting_the_link_only_when_it_would_draw_at_once_anyway() {
+    fn target_time_converts_future_and_past_host_timestamps() {
         let t = crate::time::now();
         let ms = |n| t + Duration::from_millis(n);
-        let period = Duration::from_millis(8);
-        // A timer 33 ms after the last frame: whenever it starts the link, it draws at once.
-        assert!(defers_start(false, Some(ms(100)), Some(ms(104)), ms(133), period));
-        for later in [133, 134, 150, 500] {
-            assert_eq!(opportunity(None, Some(ms(100)), Some(ms(104)), ms(later), period), Opportunity::Now);
-        }
-        assert!(defers_start(false, None, None, ms(0), period));
-        // The last frame may still be queued: start the link now and wait for its tick.
-        assert!(!defers_start(false, Some(ms(100)), Some(ms(100)), ms(105), period));
-        assert!(!defers_start(false, Some(ms(100)), Some(ms(130)), ms(120), period));
-        // A running link already paces the surface.
-        assert!(!defers_start(true, Some(ms(100)), Some(ms(104)), ms(133), period));
-    }
-    #[test]
-    fn late_frames_and_idle_restarts_cannot_catch_up_in_a_burst() {
-        let t = crate::time::now();
-        let ms = |n| t + Duration::from_millis(n);
-        let period = Duration::from_millis(16);
-        assert!(permits(None, None, ms(16), ms(1), period));
-        assert!(!permits(Some(ms(15)), Some(ms(16)), ms(32), ms(17), period));
-        assert!(!permits(Some(ms(15)), Some(ms(16)), ms(32), ms(33), period));
-        assert!(!permits(Some(ms(15)), Some(ms(32)), ms(32), ms(30), period));
-        assert!(permits(Some(ms(15)), Some(ms(16)), ms(32), ms(30), period));
-        assert!(!permits(Some(ms(100)), Some(ms(112)), ms(128), ms(102), period));
         assert_eq!(target_time(t, 100, 116, 1000.0), ms(16));
         assert_eq!(target_time(ms(32), 132, 116, 1000.0), ms(16));
-    }
-
-    #[test]
-    fn a_capped_period_skips_ticks_between_frames() {
-        let t = crate::time::now();
-        let ms = |n| t + Duration::from_millis(n);
-        let capped = Duration::from_millis(16);
-        assert!(!permits(Some(ms(0)), Some(ms(8)), ms(16), ms(9), capped));
-        assert!(permits(Some(ms(2)), Some(ms(8)), ms(24), ms(17), capped));
-        assert!(permits(Some(ms(2)), Some(ms(8)), ms(16), ms(9), Duration::from_millis(8)));
-    }
-
-    #[test]
-    fn input_at_rest_draws_without_waiting_for_a_tick() {
-        let t = crate::time::now();
-        let ms = |n| t + Duration::from_millis(n);
-        let period = Duration::from_millis(8);
-        // The link just started after idle: no tick yet, the last frame long gone.
-        assert_eq!(opportunity(None, Some(ms(0)), Some(ms(8)), ms(500), period), Opportunity::Now);
-        assert_eq!(opportunity(None, None, None, ms(0), period), Opportunity::Now);
-        // A stale tick after a stall doesn't hold a rested surface either.
-        assert_eq!(opportunity(Some(ms(400)), Some(ms(0)), Some(ms(8)), ms(500), period), Opportunity::Now);
-        // A fresh tick keeps its target.
-        assert_eq!(opportunity(Some(ms(510)), Some(ms(0)), Some(ms(8)), ms(500), period), Opportunity::Tick(ms(510)));
-    }
-
-    #[test]
-    fn a_frame_still_on_its_way_to_the_display_waits_for_a_tick() {
-        let t = crate::time::now();
-        let ms = |n| t + Duration::from_millis(n);
-        let period = Duration::from_millis(8);
-        // Submitted under a refresh and a half ago: it may still be queued.
-        assert_eq!(opportunity(None, Some(ms(100)), Some(ms(100)), ms(111), period), Opportunity::Wait);
-        assert_eq!(opportunity(None, Some(ms(100)), Some(ms(100)), ms(112), period), Opportunity::Now);
-        // Its target hasn't passed.
-        assert_eq!(opportunity(None, Some(ms(100)), Some(ms(130)), ms(120), period), Opportunity::Wait);
-        // A Low Power cap stretches the period, and with it the rest.
-        assert_eq!(opportunity(None, Some(ms(100)), Some(ms(100)), ms(118), Duration::from_millis(16)), Opportunity::Wait);
-        // While moving, a rejected tick right after a frame waits for the next one.
-        assert_eq!(opportunity(Some(ms(116)), Some(ms(100)), Some(ms(108)), ms(102), period), Opportunity::Wait);
     }
 
     #[test]
@@ -371,5 +360,39 @@ mod tests {
         assert_eq!(nominal_period_ns(CVTime { timeValue: 1, timeScale: 0, flags: 0 }), None);
         assert_eq!(millihertz_period_ns(120_000), Some(ns_120));
         assert_eq!(millihertz_period_ns(0), None);
+    }
+
+    #[test]
+    fn callback_coasting_refreshes_target_silently_and_wakes_once_on_expiry() {
+        let cb = Callback {
+            target: AtomicU64::new(0),
+            period_ns: AtomicU64::new(INITIAL_PERIOD_NS),
+            coast: AtomicU8::new(MODE_ACTIVE),
+            wake_pending: AtomicBool::new(false),
+            wake: Arc::new(|| {}),
+            host_frequency: 1_000_000_000.0,
+        };
+        // Active mode coalesces wakes until take_target consumes them.
+        assert!(cb.on_tick(100));
+        assert!(!cb.on_tick(200));
+        assert_eq!(cb.take_target(), 200);
+        assert!(cb.on_tick(300));
+
+        // Coasting for 3 ticks keeps refreshing target without waking until tick 3.
+        cb.arm_coast(3);
+        assert!(!cb.coast_expired());
+        assert!(!cb.on_tick(400));
+        assert!(!cb.coast_expired());
+        assert!(!cb.on_tick(500));
+        assert!(!cb.coast_expired());
+        assert!(cb.on_tick(600), "final coasting tick sends one wake to stop");
+        assert!(cb.coast_expired());
+        assert!(!cb.on_tick(700), "further ticks after expiry send no extra wakes");
+
+        // Resuming Active before stop_expired preserves the fresh target and re-arms wakes.
+        cb.arm_active();
+        assert!(!cb.coast_expired());
+        assert_eq!(cb.take_target(), 700);
+        assert!(cb.on_tick(800), "next active tick wakes cleanly with no lost wake");
     }
 }

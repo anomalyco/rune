@@ -23,6 +23,9 @@ pub(in crate::window) enum Redraw {
     Idle,
     /// The system was asked for a paint at `at`, which hasn't come yet.
     Asked { at: Instant },
+    /// The system was asked for a paint, and a display tick or synchronous draw already drew
+    /// that work before `RedrawRequested` arrived (macOS).
+    Satisfied,
     /// The window paints, and nothing has asked for another frame since it started.
     Painting,
     /// The window paints, and wants the next frame.
@@ -35,6 +38,10 @@ pub(in crate::window) enum Redraw {
 pub(in crate::window) enum RedrawEvent {
     /// Something asks for a frame: an input, a wake, a timer, the frame that just drew.
     Ask(Instant),
+    /// A frame drew outside `RedrawRequested` (macOS `DisplayTick` or synchronous resize): an
+    /// already-queued `RedrawRequested` is stale unless something asks again.
+    #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+    DrewOutsidePaint,
     /// A paint starts.
     Paint,
     /// The paint ends.
@@ -62,7 +69,9 @@ impl Redraw {
             (Painting | PaintingAgain, Ask(_)) => (PaintingAgain, E::None),
             // The first ask's time is how long it has waited.
             (Asked { at }, Ask(_)) => (Asked { at }, E::Request),
-            (Idle | Wants, Ask(now)) => (Asked { at: now }, E::Request),
+            (Idle | Satisfied | Wants, Ask(now)) => (Asked { at: now }, E::Request),
+            (Asked { .. }, DrewOutsidePaint) => (Satisfied, E::None),
+            (state, DrewOutsidePaint) => (state, E::None),
             (_, Paint) => (Painting, E::None),
             (Painting, Painted) => (Idle, E::None),
             (PaintingAgain, Painted) => (Wants, E::None),
@@ -70,6 +79,17 @@ impl Redraw {
             (Wants, TurnEnds { now, .. }) => (Asked { at: now }, E::Request),
             (Asked { at }, TurnEnds { now, paints: true }) if now >= at + STARVE => (Painting, E::PaintNow),
             (state, TurnEnds { .. }) => (state, E::None),
+        }
+    }
+
+    /// Consumes a macOS `RedrawRequested` on entry to `paint`, returning `true` when that
+    /// `RedrawRequested` was already satisfied by a prior `DisplayTick` or synchronous draw.
+    #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+    pub(in crate::window) fn take_on_paint(self) -> (Redraw, bool) {
+        match self {
+            Redraw::Satisfied => (Redraw::Idle, true),
+            Redraw::Asked { .. } | Redraw::Idle => (Redraw::Idle, false),
+            other => (other, false),
         }
     }
 }

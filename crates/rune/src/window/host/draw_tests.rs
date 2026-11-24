@@ -459,3 +459,147 @@ fn rebinding_does_not_commit_when_poll_fails_or_device_is_lost() {
     assert!(!should_commit_rebind(&lost, false), "must not commit when the rebinding wait reports PollFailed::Lost");
     assert!(!should_commit_rebind(&lost, true));
 }
+
+#[test]
+fn wheel_scroll_settles_into_coasting_with_zero_idle_draws_and_drops_stale_redraw_requested() {
+    use std::time::Duration;
+    use crate::frame::surface_stats::{Pacing, SurfaceMeter, read};
+    use crate::machine::Effects;
+    use crate::platform::display_link_machine::{DisplayLinkCore, LinkEffect, LinkState, Opportunity, pacing_of};
+    use crate::window::surface::{Redraw, RedrawEvent, timer_deadline_core};
+    use crate::{ScrollSpec, Spring, WheelEvent, col};
+
+    fn list_view(_: &(), _: &mut Cx<()>) -> El {
+        col().w_full().h_full().motion(Spring::NONE).child(
+            col()
+                .key("list")
+                .w_full()
+                .h(400.0)
+                .scroll(ScrollSpec { stick_bottom: false })
+                .children((0..80).map(|i| el().key(format!("r{i}")).w_full().h(40.0))),
+        )
+    }
+
+    let t0 = crate::time::now();
+    let period = Duration::from_nanos(1_000_000_000 / 120);
+    let config = surface_config();
+    let mut rt = Runtime::new((), list_view, (600.0, 400.0), Env::new(false, 2.0));
+    rt.wall_start = Some(t0);
+    rt.frame(0.0);
+
+    let mut presented = None;
+    let mut core = DisplayLinkCore::new(period);
+    let mut redraw = Redraw::Idle;
+    let mut meter = SurfaceMeter::new("main", Arc::default());
+    let shared_stats = meter.shared();
+    let mut draws = 0u32;
+    let mut presents = 0u32;
+    let mut hw_starts = 0u32;
+    let mut hw_stops = 0u32;
+
+    // Wheel event #1 arrives at rest and queues a RedrawRequested.
+    let t1 = t0 + Duration::from_millis(20);
+    rt.wheel_event(WheelEvent::new(0.0, -12.0).at(300.0, 200.0).precise(true));
+    let (next, _) = redraw.step(RedrawEvent::Ask(t1));
+    redraw = next;
+    assert!(matches!(redraw, Redraw::Asked { .. }));
+
+    // Paint consumes RedrawRequested, starts the link once, draws, presents, and settles idle -> Coasting.
+    let (next, satisfied) = redraw.take_on_paint();
+    redraw = next;
+    assert!(!satisfied);
+    assert_eq!(core.start(), Effects::one(LinkEffect::StartLink));
+    hw_starts += 1;
+    assert_eq!(core.claim(None, t1), Opportunity::Now);
+    let moving = rt.frame(period.as_secs_f64());
+    assert!(!moving, "precise wheel delta leaves nothing moving on the next frame (#775)");
+    draws += 1;
+    presents += 1;
+    let submitted1 = t1 + Duration::from_micros(900);
+    core.presented(submitted1);
+    let idle = Presented::settle_core(&mut presented, rt.core(), &config, moving, None, true, false);
+    assert!(idle, "Presented::settle_core marks a wheel frame idle");
+    assert_eq!(core.coast(), Effects::one(LinkEffect::ArmCoast { ticks_left: 18 }));
+    meter.set_pacing(pacing_of(Some(core.state()), None, false));
+    assert_eq!(read(&shared_stats).pacing, Pacing::Idle, "SurfaceMeter reports Pacing::Idle while Coasting");
+    assert!(!core.paced(), "paced() is false while Coasting so wake_deadline still fires timers");
+
+    // A timer armed while Coasting must still be exposed by wake_deadline (not suppressed by paced()).
+    rt.update_if(|_, tx| { tx.wake_after(Duration::from_millis(80)); false });
+    rt.core_mut().schedule_pending_wakes();
+    let timer_due = timer_deadline_core(rt.core()).filter(|_| !core.paced());
+    assert!(timer_due.is_some(), "wake_deadline must fire timers normally during Coasting");
+
+    // Simulate DisplayTick winning the race against a queued RedrawRequested from Wheel event #2:
+    // 1. Wheel #2 arrives -> Redraw::Asked; link is bumped to Active and waits for the tick.
+    let t2 = t1 + Duration::from_millis(3);
+    rt.wheel_event(WheelEvent::new(0.0, -12.0).at(300.0, 200.0).precise(true));
+    let (next, _) = redraw.step(RedrawEvent::Ask(t2));
+    redraw = next;
+    assert_eq!(core.start(), Effects::one(LinkEffect::ResumeActive), "Coasting -> Active skips CVDisplayLinkStart");
+    assert_eq!(core.claim(None, t2), Opportunity::Wait);
+
+    // 2. DisplayTick arrives BEFORE winit drains RedrawRequested: draws & presents wheel #2,
+    //    marks Redraw::Satisfied, and settles back into Coasting.
+    let t_tick = t1 + period;
+    assert!(core.paced());
+    assert_eq!(core.claim(Some(t_tick + period), t_tick), Opportunity::Tick(t_tick + period));
+    let moving = rt.frame(period.as_secs_f64());
+    draws += 1;
+    presents += 1;
+    let (next, _) = redraw.step(RedrawEvent::DrewOutsidePaint);
+    redraw = next;
+    assert_eq!(redraw, Redraw::Satisfied);
+    core.presented(t_tick + Duration::from_micros(900));
+    let idle = Presented::settle_core(&mut presented, rt.core(), &config, moving, None, true, false);
+    assert!(idle);
+    assert_eq!(core.coast(), Effects::one(LinkEffect::ArmCoast { ticks_left: 18 }));
+
+    // 3. The stale RedrawRequested arrives: paint consumes Satisfied and skips redraw while resting
+    //    and clean, so Coasting is NOT bumped back to Active and no duplicate frame draws.
+    let (next, satisfied) = redraw.take_on_paint();
+    redraw = next;
+    assert!(satisfied, "stale RedrawRequested after DisplayTick must be recognized as satisfied");
+    let skip_stale = satisfied
+        && presented.is_some()
+        && !rt.core().stale()
+        && !rt.core().live_pending()
+        && !rt.core().has_pending_input()
+        && rt.core().host.window_frame.is_none();
+    assert!(skip_stale, "stale RedrawRequested must be skipped without touching pacing");
+    assert_eq!(core.state(), LinkState::Coasting { ticks_left: 18 });
+    assert_eq!(draws, 2);
+    assert_eq!(presents, 2);
+
+    // 4. A system RedrawRequested while Idle is NOT skipped, and a new Ask clears Satisfied.
+    let (next, satisfied) = redraw.take_on_paint();
+    redraw = next;
+    assert!(!satisfied, "a system RedrawRequested while Idle must draw normally");
+    let (next, _) = redraw.step(RedrawEvent::Ask(t_tick));
+    let (next, _) = next.step(RedrawEvent::DrewOutsidePaint);
+    assert_eq!(next, Redraw::Satisfied);
+    let (next, _) = next.step(RedrawEvent::Ask(t_tick + Duration::from_millis(1)));
+    let (_, satisfied) = next.take_on_paint();
+    assert!(!satisfied, "a new request_redraw after DisplayTick clears Satisfied and draws");
+
+    // 5. All 18 coasting ticks fire with zero draws and zero presents; tick 18 sends WakeToStop
+    //    and stop_if_expired stops the link with zero draws and zero presents.
+    let mut expiry_wakes = 0u32;
+    for _ in 0..18 {
+        for effect in core.coast_tick() {
+            if effect == LinkEffect::WakeToStop {
+                expiry_wakes += 1;
+                assert!(!core.paced(), "DisplayTick on expiry must not call redraw()");
+                for stop in core.stop_if_expired(true) {
+                    if stop == LinkEffect::StopLink { hw_stops += 1; }
+                }
+            }
+        }
+    }
+    assert_eq!(expiry_wakes, 1);
+    assert_eq!(hw_starts, 1);
+    assert_eq!(hw_stops, 1);
+    assert_eq!(core.state(), LinkState::Stopped);
+    assert_eq!(draws, 2, "coasting and expiry must draw nothing");
+    assert_eq!(presents, 2, "coasting and expiry must present nothing");
+}

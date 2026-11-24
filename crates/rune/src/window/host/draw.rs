@@ -23,7 +23,7 @@ use crate::window::surface::{
     reblend_core,
 };
 #[cfg(target_os = "macos")]
-use crate::window::surface::{TIMER_FRAME, configure};
+use crate::window::surface::{RedrawEvent, TIMER_FRAME, configure};
 #[cfg(target_os = "windows")]
 use crate::window::win32::{covered_draw::CoveredDrawEvent, slot};
 #[cfg(target_os = "windows")]
@@ -310,7 +310,7 @@ impl FrameHost for WindowFrame<'_> {
         let deferred = false;
         #[cfg(target_os = "macos")]
         let target = if hidden || self.resizing || deferred { None } else if let Some(pacing) = &mut l.native.pacing {
-            if l.native.prime.presumes() && !pacing.running() {
+            if l.native.prime.presumes() && !pacing.paced() {
                 None
             } else {
                 let Some(target) = pacing.next_frame().target() else { return Gate::Skip };
@@ -456,6 +456,13 @@ impl FrameHost for WindowFrame<'_> {
     fn on_unchanged(&mut self, _info: &StepInfo) {
         let Some(l) = self.host.win.as_mut() else { return };
         sync_platform_core(l, self.host.app.rt_mut(), &mut self.host.secure_input, &mut self.host.ime, self.host.ime_waits, &self.host.clipboard);
+        #[cfg(target_os = "macos")]
+        l.redraw_step(RedrawEvent::DrewOutsidePaint);
+        // When `deferred` is true, the link was already `Stopped` or `Coasting`: leave a coasting
+        // countdown running without aborting or extending it.
+        #[cfg(target_os = "macos")]
+        if !self.state.deferred { l.stop_pacing(); }
+        #[cfg(not(target_os = "macos"))]
         l.stop_pacing();
         self.host.meter.set_pacing(l.pacing_state(false));
         self.host.frame_reports.unchanged(self.state.target);
@@ -658,6 +665,7 @@ impl FrameHost for WindowFrame<'_> {
         self.host.meter.presented();
         #[cfg(target_os = "macos")]
         if let Some(l) = self.host.win.as_mut() {
+            l.redraw_step(RedrawEvent::DrewOutsidePaint);
             if let Some(pacing) = &mut l.native.pacing { pacing.presented(submitted); }
             // A display link that couldn't be made while the displays slept: they're back.
             if !self.state.hidden && l.native.pacing.is_none() && !self.host.pacing_waits {
@@ -708,8 +716,11 @@ impl FrameHost for WindowFrame<'_> {
             #[cfg(not(target_os = "macos"))]
             l.request_redraw();
             self.host.meter.set_pacing(l.pacing_state(true));
-        } else {
+        } else if self.state.hidden {
             l.stop_pacing();
+            self.host.meter.set_pacing(l.pacing_state(false));
+        } else {
+            l.coast_pacing();
             self.host.meter.set_pacing(l.pacing_state(false));
         }
         self.state.profile.flush(self.host, info.animating, next_tick);
